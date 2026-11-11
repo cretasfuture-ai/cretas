@@ -694,6 +694,15 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return mr;
     }
 
+    /** 加行锁读领料单 (PESSIMISTIC_WRITE, 带工厂与未删除过滤), 并触发明细懒加载。 */
+    private FactoryMaterialRequisition lockById(String factoryId, String id) {
+        FactoryMaterialRequisition mr = repository.findByIdAndFactoryIdForUpdate(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "领料单不存在: " + id)
+                        .withHint("请刷新领料单列表后重新选择").withHintTarget("id"));
+        mr.getItems().size();
+        return mr;
+    }
+
     @Override
     public FactoryMaterialRequisition getDetailForPicking(String factoryId, String id,
                                                           com.cretas.aims.security.AuthenticatedActor actor) {
@@ -940,7 +949,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @Override
     @Transactional
     public FactoryMaterialRequisition transferToFactory(String factoryId, String id, Long operatorId) {
-        FactoryMaterialRequisition mr = getById(factoryId, id);
+        // 排查 2026-11-10 C3: 与取消同一把行锁 —— 不锁时「取消」读到备料中、「调拨」同时把料搬走, 后提交的取消
+        //   把单子改成已取消, 料却悬在生产仓 (领料单没有乐观锁版本列, 后写覆盖前写)。
+        FactoryMaterialRequisition mr = lockById(factoryId, id);
         assertStatus(mr, Status.PICKING);
         ProductionPlan plan = productionPlanRepository
                 .findByIdAndFactoryId(mr.getProductionPlanId(), factoryId)
@@ -1870,7 +1881,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     @Override
     @Transactional
     public FactoryMaterialRequisition cancel(String factoryId, String id, Long operatorId, String reason) {
-        FactoryMaterialRequisition mr = getById(factoryId, id);
+        // 排查 2026-11-10 C3: 先锁领料单行再判状态 (与调拨同一把锁), 并发调拨提交后这里读到的就是已调拨
+        FactoryMaterialRequisition mr = lockById(factoryId, id);
         if (mr.getStatus() == Status.CLOSED || mr.getStatus() == Status.CANCELLED) {
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许取消")
                     .withHint("请刷新领料单列表查看最新状态");

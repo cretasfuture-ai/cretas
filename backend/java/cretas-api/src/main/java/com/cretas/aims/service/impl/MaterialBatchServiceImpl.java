@@ -1929,7 +1929,11 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      */
     private void assertIssuable(String factoryId, MaterialBatch batch, String productionPlanId) {
         boolean planClaimed = productionPlanId != null && !productionPlanId.isBlank();
-        com.cretas.aims.entity.ProductionPlan plan = !planClaimed || productionPlanRepository == null ? null
+        if (planClaimed && productionPlanRepository == null) {
+            // ⛔ 拿不到计划就判不了归属 —— 不当「没关联计划」放过去
+            throw new IllegalStateException("生产计划仓储未注入, 无法核对领料归属 (排查 A4/A5)");
+        }
+        com.cretas.aims.entity.ProductionPlan plan = !planClaimed ? null
                 : productionPlanRepository.findById(productionPlanId)
                         .filter(p -> factoryId.equals(p.getFactoryId())).orElse(null);
         String mainCategory = batch.getMaterialTypeId() == null || materialTypeRepository == null ? null
@@ -1976,9 +1980,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
         assertMaterialBatchUsable(batch);
-        // 排查 2026-11-10 A5: 归属与计划级领料同一道守卫 (AI 出库工具也改走本方法)。
-        // 带计划按计划判; 不带计划时客户所有的料不许领 —— 领出去就认不出是给哪个客户订单用的。
-        assertIssuable(factoryId, batch, productionPlanId);
 
         // 输入边界 (edge-case 审计 2026-06-24): 领料量必须 > 0。否则负数会绕过下面的
         // remaining<quantity 检查, 撞 DB 约束被脱敏成通用 409 "操作未能完成"。与 adjust/disposal/
@@ -1987,6 +1988,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "领料数量必须大于0")
                     .withHint("请输入大于 0 的领料数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A5: 归属与计划级领料同一道守卫 (AI 出库工具也改走本方法)。
+        // 带计划按计划判; 不带计划时客户所有的料不许领 —— 领出去就认不出是给哪个客户订单用的。
+        assertIssuable(factoryId, batch, productionPlanId);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足")
@@ -2452,8 +2456,6 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // C-B2: 食品安全防呆 — 过期/报废/不良品批次不可投产。
         assertMaterialBatchUsable(batch);
-        // 排查 2026-11-10 A4: 归属与 use / reserve 同一道 (AI material_batch_consume 也走这里)
-        assertIssuable(factoryId, batch, productionPlanId);
 
         // 输入边界 (edge-case 审计 2026-06-24, reviewer ISSUE-3): 消耗量必须 > 0。否则负数会绕过下面的
         // reservedQuantity<quantity 检查 (任何正预留 > 负数), 把 usedQuantity/reservedQuantity 向反向写坏账。
@@ -2462,6 +2464,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "消耗数量必须大于0")
                     .withHint("请输入大于 0 的消耗数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A4: 归属与 use / reserve 同一道 (AI material_batch_consume 也走这里)
+        assertIssuable(factoryId, batch, productionPlanId);
 
         runConfiguredValidation(factoryId, "CONSUME",
                 java.util.Map.of("batchId", batchId, "quantity", quantity));
