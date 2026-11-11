@@ -117,3 +117,16 @@ describe('开批次被缺料闸拦下的接线 (源码闸, 纪律排查 A12)', (
     });
   }
 });
+
+describe('调度完成计划 (源码闸, 纪律排查 A6 同形 —— 独立审查 #1596)', () => {
+  const src = readFileSync(resolve(__dirname, '../../../screens/dispatcher/plan/PlanDetailScreen.tsx'), 'utf-8');
+  it('不再拿计划量当实际产量提交', () => {
+    expect(src).not.toMatch(/completeProduction\(planId, plan\?\.quantity/);
+    expect(src).toContain('testID="complete-plan-actual"');
+    expect(src).toMatch(/completeProduction\(\s*planId, actualValue/);
+  });
+  it('超产被拦时接着问原因, 带原因重提', () => {
+    expect(src).toContain("blockedMessage(e, 'PRODUCTION_OVER_PLAN_REASON_REQUIRED')");
+    expect(src).toContain('completing.reasonPrompt ? completing.reason.trim() : undefined');
+  });
+});

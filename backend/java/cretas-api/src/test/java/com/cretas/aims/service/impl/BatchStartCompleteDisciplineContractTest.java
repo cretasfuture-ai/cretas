@@ -172,6 +172,16 @@ class BatchStartCompleteDisciplineContractTest {
     }
 
     @Test
+    void aBatchOnADraftPlanIsGatedToo() {
+        // 草稿 / 待审批同样「还没开工」, 不能借批次绕过缺料闸 (独立审查 #1596)
+        blockStartOnShortage(true);
+        plan.setStatus(ProductionPlanStatus.PREPARED);
+        assertThatThrownBy(() -> service.startProduction(F, "1885", 7))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(ShortageStartGate.CODE));
+    }
+
+    @Test
     void aBatchWithoutAPlanHasNoShortageToCheck() {
         blockStartOnShortage(true);
         batch.setProductionPlanId(null);
@@ -225,6 +235,18 @@ class BatchStartCompleteDisciplineContractTest {
 
         assertThat(done.getStatus()).isEqualTo(ProductionBatchStatus.COMPLETED);
         assertThat(done.getCustomFields()).doesNotContainKey("overPlan");
+    }
+
+    @Test
+    void unitAliasesAreTheSameUnitSoAnOverPlanStillNeedsAReason() {
+        // 计划按「公斤」、产出按「kg」: 同一个单位 (单位契约归一码), 超了照样要原因 —— 不能因为字面不同就放过
+        inProgress();
+        batch.setPlannedUnit("公斤");
+        batch.setUnit("kg");
+        assertThatThrownBy(() -> service.completeProduction(F, "1885",
+                new BigDecimal("120"), new BigDecimal("120"), BigDecimal.ZERO))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("PRODUCTION_OVER_PLAN_REASON_REQUIRED"));
     }
 
     @Test

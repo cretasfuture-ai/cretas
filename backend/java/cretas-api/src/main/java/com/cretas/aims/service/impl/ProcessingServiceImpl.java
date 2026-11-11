@@ -219,7 +219,9 @@ public class ProcessingServiceImpl implements ProcessingService {
 
         return productionBatchRepository.save(batch);
     }
+    @Transactional(rollbackFor = Exception.class)
     public ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId) {
+        // 自调用不经代理, 4 参的 @Transactional 不生效 ⇒ 这里也要声明 (缺料闸里有加锁查询)
         return startProduction(factoryId, batchId, supervisorId, null);
     }
 
@@ -230,7 +232,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         log.info("开始生产: factoryId={}, batchId={}, supervisorId={}, forced={}", factoryId, batchId, supervisorId,
                 forceStartReason != null && !forceStartReason.isBlank());
         Long id = parseBatchId(batchId);
-        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
+        // 锁批次行: 两个并发开工不会都读到 PLANNED (独立审查 #1596)
+        ProductionBatch batch = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
         if (ProductionBatchStatus.PLANNED != batch.getStatus()) {
             throw new BusinessException(409, "批次状态不允许开始生产: " + batch.getStatus())
@@ -291,8 +294,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         ProductionBatch locked = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
         BigDecimal planned = locked.getPlannedQuantity();
-        boolean sameUnit = locked.getPlannedUnit() == null || locked.getPlannedUnit().isBlank()
-                || locked.getUnit() == null || locked.getPlannedUnit().trim().equalsIgnoreCase(locked.getUnit().trim());
+        // 同一个单位才比: 与效率计算同一份判据 (千克 ≡ 公斤 ≡ kg; 没记计划单位时看所挂计划的单位; 不知道就不比)
+        boolean sameUnit = locked.quantityComparableWithPlan();
         boolean completable = locked.getStatus() == ProductionBatchStatus.IN_PROGRESS
                 || locked.getStatus() == ProductionBatchStatus.PAUSED;   // 不能完工的由下面原有的 409 说清状态
         boolean overPlan = completable && actualQuantity != null && planned != null && planned.signum() > 0 && sameUnit
@@ -324,6 +327,13 @@ public class ProcessingServiceImpl implements ProcessingService {
         return completeProduction(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
     }
 
+    /** 计划处于这些状态时批次开工不再过缺料闸; 其余 (待处理 / 草稿 / 待审批 …) 都算「还没开工」(独立审查 #1596)。 */
+    private static final java.util.Set<com.cretas.aims.entity.enums.ProductionPlanStatus> PLAN_ALREADY_STARTED_OR_CLOSED =
+            java.util.EnumSet.of(com.cretas.aims.entity.enums.ProductionPlanStatus.IN_PROGRESS,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.PAUSED,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.COMPLETED,
+                    com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+
     /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
     private void checkShortageGateForBatchStart(String factoryId, ProductionBatch batch, String forceStartReason) {
         if (shortageStartGate == null || batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
@@ -332,8 +342,8 @@ public class ProcessingServiceImpl implements ProcessingService {
         com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findById(batch.getProductionPlanId())
                 .filter(p -> factoryId.equals(p.getFactoryId()))
                 .orElse(null);
-        if (plan == null || plan.getStatus() != com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING) {
-            return;
+        if (plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
+            return; // 计划已开工 (当时已过闸 / 已强制并留痕) 或已结束: 不再让每个批次重问
         }
         shortageStartGate.check(factoryId, plan, forceStartReason, com.cretas.aims.utils.SecurityUtils.currentUserId());
     }
