@@ -356,6 +356,9 @@ def evaluate(variant, table, splits, out):
         preds = preds_for(out, variant, 'validation', splits['validation']) if name == 'validation' else (
             preds_for(out, variant, 'adjudicated_validation', rows) if name == 'adjudicated_validation' else
             preds_for(out, variant, 'validation', splits['validation']) + preds_for(out, variant, 'adjudicated_validation', splits['adjudicated_validation']))
+        if not rows:                 # pool mode keeps adjudicated rows inside the normal splits
+            res[name] = dict(counts=cs.counts(rows), empty=True)
+            continue
         s = cs.score_policy(preds, rows, table, policy)
         strict = cs.score_policy(preds, rows, table, pol['strict_policy']) if pol.get('strict_policy') else None
         classed = cs.score_classed(preds, rows, table, pol['classed_policy']) if pol.get('classed_policy') else None
@@ -367,7 +370,7 @@ def evaluate(variant, table, splits, out):
                          by_act_read=cs.breakdown(preds, rows, table, policy, lambda r: r['dialogue_act'] + '|' + cs.read_bucket(r)),
                          direct_errors=[dict(id=r['id'], utterance=r['utterance'], gold_act=r['dialogue_act'], gold=r['intent'], **cs.decide(p, r, table, policy))
                                         for p, r in zip(preds, rows) if cs.decide(p, r, table, policy)['direct'] and not cs.is_correct(cs.decide(p, r, table, policy), r)])
-    agreed_train = [r for r in splits['train'] if not r['adjudicated']]
+    agreed_train = [r for r in splits['train'] if not r['adjudicated'] and r.get('hard_weight', 1.0)]
     tp = preds_for(out, variant, 'train', agreed_train)
     res['train_agreed'] = dict(raw=cs.summarize_raw(tp, agreed_train), direct=cs.score_policy(tp, agreed_train, table, policy))
     cal_preds = preds_for(out, variant, 'calibration', splits['calibration'])
@@ -474,6 +477,7 @@ def main():
     ap.add_argument('--mode', choices=['known', 'unseen', 'pool'], default='known')
     ap.add_argument('--pool', type=Path, help='mode=pool: distill_v4 pool-v4.jsonl')
     ap.add_argument('--label-version', type=int, choices=[1, 3], default=3)
+    ap.add_argument('--epochs', type=int, help='fit: override HP epochs (v2 uses 4: v1 calibration plateaued at epoch 2-3)')
     a = ap.parse_args()
     import distill_common as dc
     table = dc.build_intent_table()
@@ -488,7 +492,7 @@ def main():
     save_json(a.out / 'inputs.json', dict(mode=a.mode, frozen=cs.FROZEN, extra={p: cs.sha256_file(p) for p in a.extra},
                                           split_salt=cs.SPLIT_SALT, near_jaccard=cs.NEAR_JACCARD))
     if a.cmd == 'fit':
-        fit(a.variant, table, splits, a.out, a.seed)
+        fit(a.variant, table, splits, a.out, a.seed, epochs=a.epochs)
     elif a.cmd == 'compare':
         compare(table, splits, a.out, a.variants.split(','))
     elif a.cmd == 'calibrate':
