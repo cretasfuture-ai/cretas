@@ -95,6 +95,11 @@ def _guess_provider(host: str, authorization_header: Optional[str] = None) -> st
     so smart_bi_llm_usage could not tell C's burn/latency/errors apart. tencent
     (TokenHub) shares no host with dashscope but was also unattributed. Both fixed."""
     h = host.lower()
+    # 2026-11-12 (LLM-PROVIDER-SWITCH): the two paid providers that now carry every slot.
+    if "api.openai.com" in h:
+        return "openai"
+    if "api.anthropic.com" in h:
+        return "anthropic"
     # Tencent TokenHub — OpenAI-compatible, its own host.
     if "tokenhub" in h or "tencentmaas" in h:
         return "tencent"

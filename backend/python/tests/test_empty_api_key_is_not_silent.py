@@ -83,9 +83,10 @@ def _reset_warned():
 #:       打桩那个函数等于绕过了正要验的那一层
 #:    ② `monkeypatch.setattr(R, "_provider_config", ...)` 会让
 #:       `test_mutation_targets_are_reachable` 的棘轮从 25 涨到 26(实测)
-def _call_with_empty_key(monkeypatch, account="aliyun_a_vl"):
-    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "")     # 存在, 但值为空
-    monkeypatch.setenv("LLM_ALIYUN_A_BASE_URL", "https://example.invalid/v1")
+# 2026-11-12: 阿里云停用(点名它只会 no_candidates, 走不到空 key 那一支), 主语换成在用的 openai。
+def _call_with_empty_key(monkeypatch, account="openai"):
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "")     # 存在, 但值为空
+    monkeypatch.setenv("LLM_OPENAI_BASE_URL", "https://example.invalid/v1")
     # 链钉死到那个账号 ⇒ 一定走到「空 key」那一支
     payload = {"messages": [{"role": "user", "content": "x"}], "max_tokens": 8}
     with pytest.raises(RuntimeError) as ei:
@@ -125,11 +126,11 @@ def test_healthy_key_leaves_no_such_trace(monkeypatch, caplog):
     出现了的话，上面两条断言在任何情况下都成立 ⇒ 不区分好坏。
     """
     # 阳性对照也走 setenv: 给一个**非空**的假 key ⇒ 走到真发请求那一步再失败
-    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "sk-" + "k" * 20)
-    monkeypatch.setenv("LLM_ALIYUN_A_BASE_URL", "https://example.invalid/v1")
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "sk-" + "k" * 20)
+    monkeypatch.setenv("LLM_OPENAI_BASE_URL", "https://example.invalid/v1")
     payload = {"messages": [{"role": "user", "content": "x"}], "max_tokens": 8}
     with caplog.at_level(logging.WARNING):
         with pytest.raises(Exception) as ei:   # 连不上 example.invalid，必然失败
-            asyncio.run(R.call_chain(R.SLOT.CHAT, payload, chain=["aliyun_a_vl"]))
+            asyncio.run(R.call_chain(R.SLOT.CHAT, payload, chain=["openai"]))
     assert "empty_api_key" not in str(ei.value)
     assert not [r for r in caplog.records if "API key 为空" in r.message]

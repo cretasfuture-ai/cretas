@@ -8,6 +8,12 @@ Some entries have owner-approved pay-as-you-go billing. Warehouse-only visual
 candidates require LLM_WAREHOUSE_CANDIDATES_ENABLED=1; the DeepSeek candidate
 retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
+🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 裁定「暂时全部停用阿里云的模型」): 每个槽 = OpenAI / Anthropic
+两家付费便宜模型互为兜底(`_FAST_TEXT_POOL` / `_QUALITY_TEXT_POOL` / `_STRICT_JSON_POOL`), 然后本地
+local_canada/qwen3:8b; 阿里云条目保留但整体停用(`_DISABLED_ACCOUNTS`)。Anthropic 走原生 Messages API
+(`common.llm_anthropic` 翻译, 先脱敏再翻译); 意图细选走 OpenAI Decisions(`call_decision_choice`)。
+⚠️ 下面 10-07 那段描述的是停用之前的账号格局, 存档。
+
 ⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
 「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
 今天在册的只有 aliyun_a_vl / aliyun_b_vl 两个云账号(2026-11-03 aliyun_c 下线, Steve 裁定)加
@@ -67,6 +73,8 @@ from common.llm_client import (
 )
 from common.llm_egress_text import StreamRestorer
 from common.llm_anthropic import UntranslatableRequest as _UntranslatableRequest
+from common.llm_anthropic import stream_event as _anthropic_stream_event
+from common.llm_anthropic import to_messages_request as _anthropic_request
 # ⛔ 模块级 import: 放在函数里的话, import 失败会被那个 `except Exception:
 #    logger.debug(...)` 吞掉 —— 记账**静默停摆**而没有任何信号。
 #    llm_budget 不 import llm_router, 无循环依赖。
@@ -3043,10 +3051,9 @@ async def _call_chain_stream_attempts(
         held_tokens: Optional[dict] = None
         stream_in = stream_out = 0
         if is_anthropic:
-            from common.llm_anthropic import stream_event, to_messages_request
             try:
                 redacted, held_tokens = await client.redact_chat_payload(req_payload)
-                stream_body = to_messages_request(
+                stream_body = _anthropic_request(
                     redacted, model,
                     thinking_off_wanted=(_SLOT_PARAMS.get(slot) or {}).get("enable_thinking") is False)
             except EgressRedactionError:
@@ -3093,7 +3100,7 @@ async def _call_chain_stream_attempts(
                 logger.info(f"[llm_router_stream] slot={slot.value} streaming via {account}/{model}")
 
                 # 发出去的代号 (公司名 / 人名 / 号码 / 保密产品名) 边收边换回真名; 代号可能被拆在两段增量里
-                restorer = StreamRestorer(held_tokens if is_anthropic else current_egress_tokens())
+                restorer = StreamRestorer((held_tokens or {}) if is_anthropic else current_egress_tokens())
 
                 async for line in resp.aiter_lines():
                     line = line.strip()
@@ -3115,7 +3122,7 @@ async def _call_chain_stream_attempts(
                         continue
 
                     if is_anthropic:
-                        text, usage_update, err_label = stream_event(obj)
+                        text, usage_update, err_label = _anthropic_stream_event(obj)
                         if usage_update:
                             stream_in = usage_update.get("input", stream_in)
                             stream_out = usage_update.get("output", stream_out)
