@@ -183,15 +183,17 @@ def fit(variant, table, splits, out, seed=20261111, epochs=None):
             with torch.autocast('cuda', dtype=torch.float16):
                 act, tgt = model(enc['input_ids'].to(dev), enc['attention_mask'].to(dev), enc['token_type_ids'].to(dev),
                                  pos.to(dev), cid.to(dev), cm.to(dev))
-            act_y = torch.tensor([cs.ACT_ID[r['dialogue_act']] for r in rows], device=dev)
-            l_act = F.cross_entropy(act, act_y, reduction='none')
+            act_y = torch.tensor([cs.ACT_ID.get(r['dialogue_act'], 0) for r in rows], device=dev)
+            hw = torch.tensor([float(r.get('hard_weight', 1.0)) for r in rows], device=dev)
+            l_act = F.cross_entropy(act, act_y, reduction='none') * hw
             logp = F.log_softmax(tgt, -1)
             l_ce = F.nll_loss(logp, torch.tensor(gold, device=dev), reduction='none')
             q = torch.tensor(soft, device=dev)
             l_kl = (q * (torch.log(q.clamp(min=1e-8)) - logp)).sum(-1)
             u = torch.tensor(use, device=dev, dtype=torch.float)
             a = HP['kl_alpha'] * u
-            l_t = a * l_kl + (1 - a) * l_ce
+            # hard rows: alpha*KL + (1-alpha)*CE; soft-only rows (hard_weight 0): KL only, CE weight 0
+            l_t = torch.where(hw > 0, a * l_kl + (1 - a) * l_ce, u * l_kl)
             loss = (w * (l_act + HP['target_weight'] * l_t)).sum() / w.sum()
             opt.zero_grad()
             scaler.scale(loss).backward()
@@ -301,6 +303,7 @@ def calibrate(variant, table, splits, out):
     t_tgt, nll_t1, nll_t = cs.fit_temperature([p['target_logits'] for p in preds], [cs.target_index(r) for r in rows])
     policy, grid = cs.select_policy(preds, rows, table, t_act, t_tgt)
     strict, _ = cs.select_policy(preds, rows, table, t_act, t_tgt, hard='nonread_gold_direct')
+    classed = cs.select_classed(preds, rows, table, t_act, t_tgt)
     frontier = {}
     for g in grid:
         if g['write_gold_direct'] == 0 and g['accuracy'] is not None:
@@ -315,6 +318,8 @@ def calibrate(variant, table, splits, out):
                                fitted=cs.ece([p['target_logits'] for p in preds], [cs.target_index(r) for r in rows], t_tgt)),
                policy=policy, selection_rule='max coverage s.t. accuracy>=0.98, 0 direct on write gold, 0 predicted write (calibration only)',
                strict_policy=strict, strict_rule='same, plus 0 direct on no-target (clarify/cancel without a task) gold',
+               classed_policy=classed, classed_rule='per risk class (sensitive_intents.py): ordinary error<=2%, sensitive 95% upper bound<=0.5% else never, write never',
+               classed_calibration_score=cs.score_classed(preds, rows, table, classed),
                strict_calibration_score=cs.score_policy(preds, rows, table, strict) if strict else None,
                calibration_score=cs.score_policy(preds, rows, table, policy) if policy else None,
                frontier=sorted(frontier.values(), key=lambda g: -g['accuracy']),
@@ -353,7 +358,9 @@ def evaluate(variant, table, splits, out):
             preds_for(out, variant, 'validation', splits['validation']) + preds_for(out, variant, 'adjudicated_validation', splits['adjudicated_validation']))
         s = cs.score_policy(preds, rows, table, policy)
         strict = cs.score_policy(preds, rows, table, pol['strict_policy']) if pol.get('strict_policy') else None
+        classed = cs.score_classed(preds, rows, table, pol['classed_policy']) if pol.get('classed_policy') else None
         res[name] = dict(counts=cs.counts(rows), raw=cs.summarize_raw(preds, rows), direct=s, direct_strict=strict,
+                         direct_classed=classed, recall=cs.recall_at_k(preds, rows),
                          by_act=cs.breakdown(preds, rows, table, policy, lambda r: r['dialogue_act']),
                          by_read=cs.breakdown(preds, rows, table, policy, cs.read_bucket),
                          by_family=cs.breakdown(preds, rows, table, policy, lambda r: r['family']),
@@ -464,12 +471,18 @@ def main():
     ap.add_argument('--seed', type=int, default=20261111)
     ap.add_argument('--out', type=Path, default=cs.MODELS / 'student-v1')
     ap.add_argument('--extra', action='append', default=[], help='two-teacher-agreed top-up jsonl (pooled in mode=known)')
-    ap.add_argument('--mode', choices=['known', 'unseen'], default='known')
+    ap.add_argument('--mode', choices=['known', 'unseen', 'pool'], default='known')
+    ap.add_argument('--pool', type=Path, help='mode=pool: distill_v4 pool-v4.jsonl')
+    ap.add_argument('--label-version', type=int, choices=[1, 3], default=3)
     a = ap.parse_args()
     import distill_common as dc
     table = dc.build_intent_table()
-    splits = cs.load_splits(extra=a.extra, mode=a.mode)
-    a.out = a.out / a.mode
+    if a.mode == 'pool':
+        splits = cs.load_pool(a.pool, a.label_version)
+        a.out = a.out.parent / 'student-v2' / ('pool-v%d' % a.label_version)
+    else:
+        splits = cs.load_splits(extra=a.extra, mode=a.mode)
+        a.out = a.out / a.mode
     save_json(a.out / 'data-counts.json', {k: cs.counts(v) for k, v in splits.items()})
     write_jsonl(a.out / 'split-manifest.jsonl', [dict(id=r['id'], split=k, target=cs.target_key(r)) for k, v in splits.items() for r in v])
     save_json(a.out / 'inputs.json', dict(mode=a.mode, frozen=cs.FROZEN, extra={p: cs.sha256_file(p) for p in a.extra},
