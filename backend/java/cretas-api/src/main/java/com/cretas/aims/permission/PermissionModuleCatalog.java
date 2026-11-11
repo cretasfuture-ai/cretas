@@ -85,6 +85,7 @@ public final class PermissionModuleCatalog {
         m.put("approval_quality_disposition", "质检处置审批");
         m.put("approval_price_adjustment", "改价审批");
         m.put("approval_refund", "退款审批");
+        m.put("approval_bom_price_adjustment", "BOM调价审批");
         LABELS = Collections.unmodifiableMap(m);
     }
 
