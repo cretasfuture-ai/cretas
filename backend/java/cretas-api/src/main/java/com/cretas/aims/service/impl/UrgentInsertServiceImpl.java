@@ -1339,20 +1339,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         if (!FORCE_INSERT_MODULE.equals(instance.getModuleCode())
                 || !planId.equals(instance.getBusinessEntityId())) {
             throw new BusinessException(409, "审批实例与强制插单计划不匹配")
-                    .withCode("FORCE_INSERT_WORKFLOW_MISMATCH");
+                    .withCode("FORCE_INSERT_WORKFLOW_MISMATCH")
+                    .withHint("请刷新审批中心待办, 从这张强制插单自己的审批记录进入后再处理");
         }
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
             // 已被并发的另一次审批走完: 不重复插入/释放, 也不能对后来者报「成功」(驳回的人会以为驳回了)。
             // 同一个幂等键的重试由 OaActionIdempotencyService 返回首次结果, 到不了这里。
             throw new BusinessException(409, "这条强制插单审批已被处理（结果：" + instance.getStatus() + "），请刷新待办")
-                    .withCode("FORCE_INSERT_ALREADY_DECIDED");
+                    .withCode("FORCE_INSERT_ALREADY_DECIDED")
+                    .withHint("别人已经处理了这条审批; 刷新待办查看结果, 不用再操作");
         }
         // 入口的节点 / 处理人校验是在锁外读的实例上做的: 多级画布里并发的另一次审批可能已把实例推到下一个节点,
         // 那个节点不一定还是这个人能批 ⇒ 锁内按最新实例再判一次。
         if (expectedNodeId != null && (instance.getCurrentNodeIds() == null
                 || !instance.getCurrentNodeIds().contains(expectedNodeId))) {
             throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
-                    .withCode("OA_TASK_NODE_CHANGED");
+                    .withCode("OA_TASK_NODE_CHANGED")
+                    .withHint("这条审批已经走到下一步; 刷新待办, 如果下一步仍是你处理再重新操作");
         }
         User actor = userRepository.findById(actorId)
                 .orElseThrow(() -> new EntityNotFoundException("User", actorId));
@@ -1595,6 +1598,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         factoryId, FORCE_INSERT_MODULE, plan.getId(), context, userId)
                 .orElseThrow(() -> new BusinessException(409, "强制插单审批流程刚被停用，请重新提交")
                         .withCode("FORCE_INSERT_WORKFLOW_NOT_CONFIGURED")
+                        .withHint("请重新提交这张强制插单; 如果本厂不再需要审批, 会直接排入")
                         .withHintTarget("OA 工作流配置"));
         ApprovalWorkflowInstance.InstanceStatus status = instance.getStatus();
         if (status == ApprovalWorkflowInstance.InstanceStatus.REJECTED

@@ -186,7 +186,8 @@ public class ApprovalActionExecuteTool extends AbstractBusinessTool {
             // (UrgentInsertServiceImpl#applyWorkflowAction) 做这件事; 这里直接推进流程会让实例「已批准」
             // 而计划永远待审批、时段永远被占。
             throw new BusinessException(409, "强制插单请在审批中心处理，AI 助手不能直接审批")
-                    .withCode("FORCE_INSERT_APPROVAL_VIA_OA");
+                    .withCode("FORCE_INSERT_APPROVAL_VIA_OA")
+                    .withHint("请到「审批中心 / 我的待办」里找到这张强制插单批准或驳回");
         }
 
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
