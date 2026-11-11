@@ -575,9 +575,15 @@ public class YieldReportServiceImpl implements YieldReportService {
                                     .withHint(actionHint)
                                     .withSeverity("BLOCKING");
                         }
-                        // forceSubmit=true: 记录告警, 正常保存
-                        log.warn("[A4-超收] factory={} batch={} task={} target={} cumulative={} maxAllowed={} force=true",
-                                factoryId, batchId, t.getId(), target, cumulative, maxAllowed);
+                        // 纪律排查 A10: 强制提交必须写原因并留痕 (同配比偏离 / 回料超限), 只有一个布尔值不算数
+                        Map<String, Object> fields = r.getCustomFields() == null
+                                ? new LinkedHashMap<>() : new LinkedHashMap<>(r.getCustomFields());
+                        fields.put("overReceipt", com.cretas.aims.service.yield.OverReceiptForceReason.auditOrRefuse(
+                                req.getForceSubmitReason(), target, maxAllowed, cumulative, projection.outputUnit()));
+                        r.setCustomFields(fields);
+                        String forceReason = req.getForceSubmitReason().strip();
+                        log.warn("[A4-超收] factory={} batch={} task={} target={} cumulative={} maxAllowed={} force=true reason={}",
+                                factoryId, batchId, t.getId(), target, cumulative, maxAllowed, forceReason);
                     }
                 }
             }

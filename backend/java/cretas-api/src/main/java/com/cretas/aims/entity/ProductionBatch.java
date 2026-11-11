@@ -562,6 +562,14 @@ public class ProductionBatch extends BaseEntity {
      * </ul>
      * 「同一个单位」按单位契约的归一码判 (千克 ≡ 公斤 ≡ kg), ⛔ 不比原始字符串。
      */
+    /**
+     * 实际产量能不能和计划量直接比 (同一个单位, 按单位契约归一码判) —— 与效率计算同一份判据。
+     * 纪律排查 A8 批次完工超产判断用它, ⛔ 不在服务里另写一份字符串比较 (独立审查 #1596)。
+     */
+    public boolean quantityComparableWithPlan() {
+        return efficiencyComparable();
+    }
+
     private boolean efficiencyComparable() {
         if (plannedUnit != null) {
             return sameUnitCode(plannedUnit, unit);
