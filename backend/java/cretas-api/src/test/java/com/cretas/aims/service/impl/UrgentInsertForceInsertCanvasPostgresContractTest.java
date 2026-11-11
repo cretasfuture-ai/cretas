@@ -159,7 +159,7 @@ class UrgentInsertForceInsertCanvasPostgresContractTest {
             f.setId(factory);
             f.setName(factory);
             em.persist(f);
-            submitter = persistUser("dispatcher");
+            submitter = persistUser("production_manager");
             approverA = persistUser("production_manager");
             approverB = persistUser("production_manager");
             ProductType p = new ProductType();
@@ -203,6 +203,11 @@ class UrgentInsertForceInsertCanvasPostgresContractTest {
 
             @Override
             public Optional<ApprovalWorkflow> getActiveByDecisionType(String factoryId, DecisionType type) {
+                return Optional.of(canvas);
+            }
+
+            @Override
+            public Optional<ApprovalWorkflow> getById(String factoryId, String id) {
                 return Optional.of(canvas);
             }
         };
@@ -279,7 +284,7 @@ class UrgentInsertForceInsertCanvasPostgresContractTest {
                     try {
                         go.await(5, TimeUnit.SECONDS);
                         tx(() -> service.applyWorkflowAction(factory, planId, instanceId, (Long) a[0],
-                                "production_manager", (HistoryAction) a[1], (String) a[2]));
+                                "production_manager", APPROVAL_NODE, (HistoryAction) a[1], (String) a[2]));
                         outcomes.add("OK_" + a[1]);
                     } catch (BusinessException e) {
                         outcomes.add("BUSINESS_" + e.getErrorCode());
@@ -373,7 +378,8 @@ class UrgentInsertForceInsertCanvasPostgresContractTest {
         String[] f = pendingForceInsert();
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> tx(() -> service.applyWorkflowAction(
-                        factory, f[0], f[2], submitter, "dispatcher", HistoryAction.APPROVE, "我自己批")))
+                        factory, f[0], f[2], submitter, "production_manager", APPROVAL_NODE,
+                        HistoryAction.APPROVE, "我自己批")))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN"));
 

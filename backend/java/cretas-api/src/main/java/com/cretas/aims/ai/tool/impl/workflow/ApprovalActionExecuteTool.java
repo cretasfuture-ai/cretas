@@ -181,6 +181,14 @@ public class ApprovalActionExecuteTool extends AbstractBusinessTool {
             throw new BusinessException(403, "工作流实例不属于当前工厂");
         }
 
+        if ("FORCE_INSERT".equals(instance.getModuleCode())) {
+            // 1551-11: 强制插单的批准要同时把计划排入、驳回要释放时段, 只有 OA 审批中心的业务适配器
+            // (UrgentInsertServiceImpl#applyWorkflowAction) 做这件事; 这里直接推进流程会让实例「已批准」
+            // 而计划永远待审批、时段永远被占。
+            throw new BusinessException(409, "强制插单请在审批中心处理，AI 助手不能直接审批")
+                    .withCode("FORCE_INSERT_APPROVAL_VIA_OA");
+        }
+
         if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
             // 幂等: 已 ended → 409 actionHint
             String hint = String.format(

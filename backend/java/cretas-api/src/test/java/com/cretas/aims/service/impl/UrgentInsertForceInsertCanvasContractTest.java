@@ -130,6 +130,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         approvalChain = mock(ApprovalChainService.class);
         engine = mock(WorkflowEngineService.class);
         settings = mock(FactorySettingsRepository.class);
+        when(engine.canTransition(any(), any())).thenReturn(true);
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.ofEntries(
                 Map.entry(UrgentInsertScheduleService.class, scheduler),
                 Map.entry(UserRepository.class, users),
@@ -323,7 +324,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         ProductionPlan plan = pendingCanvasPlan("P-1", "INST-1");
         transitionEndsIn("INST-1", "P-1", InstanceStatus.APPROVED);
 
-        service.applyWorkflowAction(F, "P-1", "INST-1", APPROVER, "production_manager",
+        service.applyWorkflowAction(F, "P-1", "INST-1", APPROVER, "production_manager", null,
                 HistoryAction.APPROVE, "同意");
 
         verify(engine).transitionNode("INST-1", APPROVER, "production_manager", HistoryAction.APPROVE, "同意");
@@ -337,7 +338,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         ProductionPlan plan = pendingCanvasPlan("P-2", "INST-2");
         transitionEndsIn("INST-2", "P-2", InstanceStatus.RUNNING);
 
-        service.applyWorkflowAction(F, "P-2", "INST-2", APPROVER, "production_manager",
+        service.applyWorkflowAction(F, "P-2", "INST-2", APPROVER, "production_manager", null,
                 HistoryAction.APPROVE, "一级同意");
 
         verify(engine).transitionNode(eq("INST-2"), any(), any(), eq(HistoryAction.APPROVE), any());
@@ -350,7 +351,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         ProductionPlan plan = pendingCanvasPlan("P-3", "INST-3");
         transitionEndsIn("INST-3", "P-3", InstanceStatus.REJECTED);
 
-        service.applyWorkflowAction(F, "P-3", "INST-3", APPROVER, "production_manager",
+        service.applyWorkflowAction(F, "P-3", "INST-3", APPROVER, "production_manager", null,
                 HistoryAction.REJECT, "产能不够");
 
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
@@ -365,7 +366,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         pendingCanvasPlan("P-4", "INST-4");
 
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-4", "INST-4", APPROVER,
-                "production_manager", HistoryAction.REJECT, "  "))
+                "production_manager", null, HistoryAction.REJECT, "  "))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_REJECT_REASON_REQUIRED"));
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
         assertThat(slot.getStatus()).isEqualTo("selected");
@@ -377,7 +378,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         when(engine.getInstance(F, "INST-5"))
                 .thenReturn(Optional.of(instance("INST-5", "P-5", InstanceStatus.APPROVED)));
 
-        assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-5", "INST-5", APPROVER, "production_manager",
+        assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-5", "INST-5", APPROVER, "production_manager", null,
                 HistoryAction.REJECT, "不同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_ALREADY_DECIDED"));
 
@@ -392,7 +393,7 @@ class UrgentInsertForceInsertCanvasContractTest {
                 .thenReturn(Optional.of(instance("INST-6", "OTHER-PLAN", InstanceStatus.RUNNING)));
 
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-6", "INST-6", APPROVER,
-                "production_manager", HistoryAction.APPROVE, "同意"))
+                "production_manager", null, HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_WORKFLOW_MISMATCH"));
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
     }
@@ -403,17 +404,79 @@ class UrgentInsertForceInsertCanvasContractTest {
         plan.setStatus(ProductionPlanStatus.CANCELLED);
 
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-7", "INST-7", APPROVER,
-                "production_manager", HistoryAction.APPROVE, "同意"))
+                "production_manager", null, HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_NOT_PENDING"));
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
 
         // 驳回只结束审批: 时段早已随取消释放, 现在 selected 的可能是别的计划占着
         transitionEndsIn("INST-7", "P-7", InstanceStatus.REJECTED);
-        service.applyWorkflowAction(F, "P-7", "INST-7", APPROVER, "production_manager",
+        service.applyWorkflowAction(F, "P-7", "INST-7", APPROVER, "production_manager", null,
                 HistoryAction.REJECT, "计划已取消");
         verify(engine).transitionNode(eq("INST-7"), any(), any(), eq(HistoryAction.REJECT), any());
         assertThat(slot.getStatus()).isEqualTo("selected");
         verify(slots, never()).save(any());
+    }
+
+    @Test
+    void aNodeThatMovedOnUnderTheLockIsAConflictNotAnApprovalOfTheNextNode() {
+        pendingCanvasPlan("P-14", "INST-14");
+        ApprovalWorkflowInstance moved = instance("INST-14", "P-14", InstanceStatus.RUNNING);
+        moved.setCurrentNodeIds(new java.util.ArrayList<>(List.of("level_2")));
+        when(engine.getInstance(F, "INST-14")).thenReturn(Optional.of(moved));
+
+        assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-14", "INST-14", APPROVER,
+                "production_manager", "level_1", HistoryAction.APPROVE, "同意"))
+                .satisfies(e -> assertThat(code(e)).isEqualTo("OA_TASK_NODE_CHANGED"));
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void anActorNotOnTheCurrentNodeIsRefusedUnderTheLock() {
+        pendingCanvasPlan("P-15", "INST-15");
+        when(engine.canTransition(any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-15", "INST-15", APPROVER,
+                "production_manager", null, HistoryAction.APPROVE, "同意"))
+                .satisfies(e -> assertThat(code(e)).isEqualTo("OA_TASK_FORBIDDEN"));
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+    }
+
+    // ------------------------------------------------------------------ 按当前审批流重新发起
+
+    @Test
+    void restartThatApprovesOnCreationSchedulesThePlan() {
+        ProductionPlan plan = pendingCanvasPlan("P-16", "INST-16");
+        when(engine.restartWithCurrentDefinition(F, "INST-16", 1309L, "画布改过"))
+                .thenReturn(instance("INST-16B", "P-16", InstanceStatus.APPROVED));
+
+        service.restartWorkflowBinding(F, "INST-16", 1309L, "画布改过");
+
+        verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(1309L));
+        assertThat(plan.getApprovalStatus()).isEqualTo(ProductionPlan.ApprovalStatus.APPROVED);
+    }
+
+    @Test
+    void restartThatRejectsOnCreationRollsBackInsteadOfStrandingThePlan() {
+        pendingCanvasPlan("P-17", "INST-17");
+        when(engine.restartWithCurrentDefinition(F, "INST-17", 1309L, "画布改过"))
+                .thenReturn(instance("INST-17B", "P-17", InstanceStatus.REJECTED));
+
+        assertThatThrownBy(() -> service.restartWorkflowBinding(F, "INST-17", 1309L, "画布改过"))
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_WORKFLOW_TERMINAL_ON_START"));
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void restartThatStillWaitsChangesNothing() {
+        ProductionPlan plan = pendingCanvasPlan("P-18", "INST-18");
+        when(engine.restartWithCurrentDefinition(F, "INST-18", 1309L, "画布改过"))
+                .thenReturn(instance("INST-18B", "P-18", InstanceStatus.RUNNING));
+
+        service.restartWorkflowBinding(F, "INST-18", 1309L, "画布改过");
+
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+        assertThat(plan.isPendingApproval()).isTrue();
     }
 
     // ------------------------------------------------------------------ 本人审批 (#1580)
@@ -424,7 +487,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
 
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-8", "INST-8", SUBMITTER,
-                "factory_super_admin", HistoryAction.APPROVE, "我自己批"))
+                "factory_super_admin", null, HistoryAction.APPROVE, "我自己批"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN"));
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
@@ -436,12 +499,12 @@ class UrgentInsertForceInsertCanvasContractTest {
         when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
 
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-9", "INST-9", SUBMITTER,
-                "factory_super_admin", HistoryAction.APPROVE, ""))
+                "factory_super_admin", null, HistoryAction.APPROVE, ""))
                 .satisfies(e -> assertThat(code(e)).isEqualTo(FactorySelfApprovalGate.REASON_REQUIRED));
         verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
 
         transitionEndsIn("INST-9", "P-9", InstanceStatus.APPROVED);
-        service.applyWorkflowAction(F, "P-9", "INST-9", SUBMITTER, "factory_super_admin",
+        service.applyWorkflowAction(F, "P-9", "INST-9", SUBMITTER, "factory_super_admin", null,
                 HistoryAction.APPROVE, "本厂只有我一个人能审批");
 
         verify(engine).transitionNode("INST-9", SUBMITTER, "factory_super_admin", HistoryAction.APPROVE,
@@ -456,7 +519,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
         transitionEndsIn("INST-10", "P-10", InstanceStatus.APPROVED);
 
-        service.applyWorkflowAction(F, "P-10", "INST-10", APPROVER, "production_manager",
+        service.applyWorkflowAction(F, "P-10", "INST-10", APPROVER, "production_manager", null,
                 HistoryAction.APPROVE, "同意");
 
         verify(scheduler).apply(any(), any(), any(), any(), eq(APPROVER));

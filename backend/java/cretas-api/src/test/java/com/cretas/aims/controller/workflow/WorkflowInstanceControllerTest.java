@@ -541,7 +541,7 @@ class WorkflowInstanceControllerTest {
                 com.cretas.aims.dto.production.ProductionPlanDTO.builder().approvalStatus("APPROVED").build();
         when(urgentInsertService.applyWorkflowAction(
                 eq(FACTORY_ID), eq("plan-fi-1"), eq("inst-fi"), eq(110L),
-                eq("production_manager"), eq(HistoryAction.APPROVE), eq("客户急单, 同意")))
+                eq("production_manager"), eq("approval_pm"), eq(HistoryAction.APPROVE), eq("客户急单, 同意")))
                 .thenReturn(plan);
         ApprovalWorkflowInstance approved = buildInstance(
                 "inst-fi", "wf-fi", "FORCE_INSERT", "plan-fi-1", List.of(), 109L);
@@ -559,7 +559,7 @@ class WorkflowInstanceControllerTest {
         assertEquals("plan-fi-1", response.getData().get("businessEntityId"));
         verify(urgentInsertService).applyWorkflowAction(
                 FACTORY_ID, "plan-fi-1", "inst-fi", 110L,
-                "production_manager", HistoryAction.APPROVE, "客户急单, 同意");
+                "production_manager", "approval_pm", HistoryAction.APPROVE, "客户急单, 同意");
     }
 
     @Test

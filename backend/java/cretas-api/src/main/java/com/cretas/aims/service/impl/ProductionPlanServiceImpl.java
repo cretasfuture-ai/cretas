@@ -3355,6 +3355,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(409, "只能开始待处理的生产计划")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
+        // 1551-11: 待审批的强制插单还没排进去 (批准那一刻才排入并顺延), 不能先开工
+        if (plan.isPendingApproval()) {
+            throw new BusinessException(409, "这张强制插单还在审批中，批准后才能开工")
+                    .withCode("PLAN_PENDING_APPROVAL")
+                    .withHint("请等审批人在审批中心批准");
+        }
 
         // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
         //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;

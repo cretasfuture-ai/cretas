@@ -135,7 +135,11 @@ public interface UrgentInsertService {
      */
     ProductionPlanDTO applyWorkflowAction(
             String factoryId, String planId, String workflowInstanceId, Long actorId, String actorRole,
-            com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction action, String notes);
+            String expectedNodeId, com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction action, String notes);
+
+    /** 1551-11: 强制插单实例「按当前审批流重新发起」, 新实例创建即终态时投影回计划 (通过排入 / 其余回滚)。 */
+    com.cretas.aims.entity.workflow.ApprovalWorkflowInstance restartWorkflowBinding(
+            String factoryId, String workflowInstanceId, Long operatorId, String reason);
 
     /**
      * 获取待审批的强制插单列表

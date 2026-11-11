@@ -1155,6 +1155,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             savedPlan.approve(null, "审批流程自动通过", "审批画布在提交时按条件直接通过");
             savedPlan = productionPlanRepository.save(savedPlan);
             pendingApproval = false;
+            decisionAuditService.logApproval(factoryId, "ProductionPlan", savedPlan.getId(),
+                    com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED,
+                    "审批画布在提交时按条件直接通过 (实例 " + workflowInstance.getId() + ")",
+                    null, "审批流程自动通过");
         }
 
         // 不需要审批的强制插入立即排入; 需要审批的等批准那一刻再排 (approveForceInsert / applyWorkflowAction)
@@ -1318,7 +1322,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Transactional
     public ProductionPlanDTO applyWorkflowAction(
             String factoryId, String planId, String workflowInstanceId, Long actorId, String actorRole,
-            ApprovalHistory.HistoryAction action, String notes) {
+            String expectedNodeId, ApprovalHistory.HistoryAction action, String notes) {
         log.info("OA 审批强制插单: planId={}, instanceId={}, action={}", planId, workflowInstanceId, action);
         if (action != ApprovalHistory.HistoryAction.APPROVE && action != ApprovalHistory.HistoryAction.REJECT) {
             throw new BusinessException(400, "强制插单审批只支持批准或驳回").withHintTarget("action");
@@ -1342,6 +1346,19 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             // 同一个幂等键的重试由 OaActionIdempotencyService 返回首次结果, 到不了这里。
             throw new BusinessException(409, "这条强制插单审批已被处理（结果：" + instance.getStatus() + "），请刷新待办")
                     .withCode("FORCE_INSERT_ALREADY_DECIDED");
+        }
+        // 入口的节点 / 处理人校验是在锁外读的实例上做的: 多级画布里并发的另一次审批可能已把实例推到下一个节点,
+        // 那个节点不一定还是这个人能批 ⇒ 锁内按最新实例再判一次。
+        if (expectedNodeId != null && (instance.getCurrentNodeIds() == null
+                || !instance.getCurrentNodeIds().contains(expectedNodeId))) {
+            throw new BusinessException(409, "审批节点已变化，请刷新待办后重试")
+                    .withCode("OA_TASK_NODE_CHANGED");
+        }
+        User actor = userRepository.findById(actorId)
+                .orElseThrow(() -> new EntityNotFoundException("User", actorId));
+        if (!workflowEngine.canTransition(instance, actor)) {
+            throw new BusinessException(403, "您不属于当前审批节点的处理角色")
+                    .withCode("OA_TASK_FORBIDDEN");
         }
 
         boolean planStillPending = plan.isPendingApproval() && plan.getStatus() != ProductionPlanStatus.CANCELLED;
@@ -1380,18 +1397,14 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                 workflowInstanceId, actorId, actorRole, action, auditNotes);
 
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
-            User approver = userRepository.findById(actorId)
-                    .orElseThrow(() -> new EntityNotFoundException("User", actorId));
-            return applyDecision(factoryId, plan, actorId, approver, true, auditNotes, approvedSlot);
+            return applyDecision(factoryId, plan, actorId, actor, true, auditNotes, approvedSlot);
         }
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
             if (!planStillPending) {
                 // 计划早已取消 (时段已经释放, 可能已被别的计划占用): 只结束审批, 不再动计划和时段
                 return productionPlanMapper.toDTO(plan);
             }
-            User approver = userRepository.findById(actorId)
-                    .orElseThrow(() -> new EntityNotFoundException("User", actorId));
-            return applyDecision(factoryId, plan, actorId, approver, false, auditNotes, null);
+            return applyDecision(factoryId, plan, actorId, actor, false, auditNotes, null);
         }
         if (selfDecision.selfApproved()) {
             // 多级画布的中间节点由本人批: 也要留痕 (不只最后一个节点)
@@ -1399,6 +1412,52 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             plan = productionPlanRepository.save(plan);
         }
         return productionPlanMapper.toDTO(plan);
+    }
+
+    /**
+     * 1551-11: 「按当前审批流重新发起」(缺陷 27 恢复入口) 对强制插单走这里: 新实例在创建时就走到终态时,
+     * 通过 ⇒ 当场排入; 驳回 / 取消 / 超时 ⇒ 整体回滚 (原实例保持不变), 不留下「流程结束、计划永远待审批」。
+     */
+    @Override
+    @Transactional
+    public ApprovalWorkflowInstance restartWorkflowBinding(
+            String factoryId, String workflowInstanceId, Long operatorId, String reason) {
+        resourceWriteLock.lockFactory(factoryId);
+        ApprovalWorkflowInstance current = workflowEngine.getInstance(factoryId, workflowInstanceId)
+                .orElseThrow(() -> new BusinessException(404, "OA 审批实例不存在"));
+        if (!FORCE_INSERT_MODULE.equals(current.getModuleCode())) {
+            throw new BusinessException(400, "不是强制插单审批实例").withCode("FORCE_INSERT_WORKFLOW_MISMATCH");
+        }
+        String planId = current.getBusinessEntityId();
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
+        ApprovalWorkflowInstance restarted = workflowEngine.restartWithCurrentDefinition(
+                factoryId, workflowInstanceId, operatorId, reason);
+        ApprovalWorkflowInstance.InstanceStatus status = restarted.getStatus();
+        if (status == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
+            if (!plan.isPendingApproval() || plan.getStatus() == ProductionPlanStatus.CANCELLED) {
+                return restarted;
+            }
+            InsertSlot slot = findClaimedSlotOrThrow(factoryId, plan);
+            plan.approve(null, "审批流程自动通过", "按当前审批流重新发起后按条件直接通过");
+            plan.setStatus(ProductionPlanStatus.PENDING);
+            checkWorkers(factoryId, slot);
+            scheduleService.apply(factoryId, slot, plan, null, operatorId);
+            productionPlanRepository.save(plan);
+            decisionAuditService.logApproval(factoryId, "ProductionPlan", planId,
+                    com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED,
+                    "按当前审批流重新发起后按条件直接通过 (实例 " + restarted.getId() + ")",
+                    null, "审批流程自动通过");
+        } else if (status == ApprovalWorkflowInstance.InstanceStatus.REJECTED
+                || status == ApprovalWorkflowInstance.InstanceStatus.CANCELLED
+                || status == ApprovalWorkflowInstance.InstanceStatus.TIMEOUT) {
+            throw new BusinessException(409, "当前强制插单审批流程在发起时就进入了 " + status + " 态，未重新发起")
+                    .withCode("FORCE_INSERT_WORKFLOW_TERMINAL_ON_START")
+                    .withHint("请工厂管理员检查强制插单审批画布; 原审批保持不变")
+                    .withHintTarget("OA 工作流配置");
+        }
+        return restarted;
     }
 
     /** 本人审批留痕: 写在计划审批意见与 OA 审批记录的前缀。 */
@@ -1450,10 +1509,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             plan.reject(approverId, approver.getFullName(), comment);
             plan.setStatus(ProductionPlanStatus.CANCELLED);
 
-            // 释放这张计划占的时段 (同一开始时间 + 同一产线; 原来只比开始时间, 会放掉别的产线同一时刻的时段)
+            // 释放这张计划占的时段 (同一开始时间 + 同一产线; 原来只比开始时间, 会放掉别的产线同一时刻的时段)。
+            // 计划没记产线 (旧数据) 时退回只比开始时间, 与改动前一致。
             insertSlotRepository.findByFactoryIdAndStatus(factoryId, "selected").stream()
                     .filter(s -> Objects.equals(s.getStartTime(), plan.getStartTime())
-                            && Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId()))
+                            && (plan.getSuggestedProductionLineId() == null
+                                || Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId())))
                     .findFirst()
                     .ifPresent(slot -> {
                         slot.setStatus("available");
