@@ -317,8 +317,17 @@ def label_context(row, table):
     return json.dumps(dict(state=row['state'], utterance=row['utterance'], candidates=cands), ensure_ascii=False)
 
 
+ACT_HELP_V3_CLARIFY = ('NEED_CLARIFY=可能是写操作、或者目标本身两可时先问用户；'
+                       '只读、而且合理默认不会误导的，判执行（NEW_TASK/CHANGE_PARAM），不要先问。')
+
+
 def act_help():
-    return ACT_HELP + (rubric_rules_text(RUBRIC) if RUBRIC is not None else '')
+    """v3 rubric (Steve's standard) replaces the generic 'unclear -> ask' definition; v1 keeps it verbatim."""
+    base = ACT_HELP
+    if RUBRIC is not None and RUBRIC.get('version') == 3:
+        base = ACT_HELP.replace('NEED_CLARIFY=信息不足以判断要做什么、指代不明或口径含糊，必须先问用户。', ACT_HELP_V3_CLARIFY)
+        assert base != ACT_HELP, 'ACT_HELP NEED_CLARIFY wording changed; update the v3 replacement'
+    return base + (rubric_rules_text(RUBRIC) if RUBRIC is not None else '')
 
 
 def luna_payload(row, table):

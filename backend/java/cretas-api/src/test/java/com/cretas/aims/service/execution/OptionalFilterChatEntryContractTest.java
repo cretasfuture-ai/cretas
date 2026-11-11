@@ -103,21 +103,26 @@ class OptionalFilterChatEntryContractTest {
 
         assertThat(run(tool, "ORDER_LIST", "查询已确认的销售订单", null).getStatus()).isEqualTo("SUCCESS");
 
-        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.CONFIRMED), isNull(), isNull(), anyInt(), anyInt());
+        // 没说时间: 默认最近 7 天 (Steve 2026-11-12 口径 1)
+        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.CONFIRMED),
+                eq(java.time.LocalDate.now().minusDays(6)), eq(java.time.LocalDate.now()), anyInt(), anyInt());
         verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
         verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
     }
 
     @Test
-    void noStatusSaidMeansTheUnfilteredList() throws Exception {
+    void noStatusSaidMeansNoStatusFilter() throws Exception {
         SalesService sales = mock(SalesService.class);
-        when(sales.getSalesOrders(anyString(), anyInt(), anyInt())).thenReturn(PageResponse.of(List.of(), 1, 20, 0L));
+        when(sales.getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt()))
+                .thenReturn(PageResponse.of(List.of(), 1, 20, 0L));
         OrderListTool tool = withMapper(new OrderListTool(sales));
 
         assertThat(run(tool, "ORDER_LIST", "查询销售订单", null).getStatus()).isEqualTo("SUCCESS");
 
-        verify(sales).getSalesOrders(eq(F), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt());
+        // 没说状态 = 不按状态筛; 没说时间 = 默认最近 7 天 (Steve 2026-11-12 口径 1)
+        verify(sales).getSalesOrdersFiltered(eq(F), isNull(), eq(java.time.LocalDate.now().minusDays(6)),
+                eq(java.time.LocalDate.now()), anyInt(), anyInt());
+        verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
     }
 
     @Test

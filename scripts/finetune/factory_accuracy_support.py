@@ -15,7 +15,9 @@ BOUNDARIES=Path(__file__).parent/'data/factory_semantic_boundaries.json'
 def source_inventory(catalog):
     """Read actual Tool descriptors and source hashes without starting Java/DB."""
     from tool_access_modes import scan  # one scanner for both pipelines (superclasses, comments)
-    modes=scan()
+    # 扫同一棵树: 描述与参数从 WORK 读, 读写属性也必须从 WORK 读 (默认参数指向本仓, 与 WORK 不同时会张冠李戴)
+    tool_root=WORK/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool'
+    modes=scan(tool_root,tool_root/'impl')
     tools={}
     for path in (WORK/'backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl').rglob('*.java'):
         source=path.read_text(encoding='utf-8')
