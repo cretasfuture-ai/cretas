@@ -462,11 +462,42 @@ class YieldReportServiceImplTest {
         req.setOutputQuantity(new BigDecimal("31"));
         req.setOutputUnit("kg");
         req.setForceSubmit(true);
+        req.setForceSubmitReason("原料出成偏高, 已复称");
 
         Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
 
         assertThat(out.get("reportId")).isEqualTo(99L);
-        verify(reportRepo).save(any(ProductionReport.class));
+        // 纪律排查 A10: 强制超收的原因随报工留痕
+        org.mockito.ArgumentCaptor<ProductionReport> saved = org.mockito.ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(saved.capture());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> audit = (Map<String, Object>) saved.getValue().getCustomFields().get("overReceipt");
+        assertThat(audit).containsEntry("reason", "原料出成偏高, 已复称");
+        assertThat((BigDecimal) audit.get("cumulative")).isEqualByComparingTo("131");
+    }
+
+    @Test
+    void submitReport_overLimit_forceWithoutReason_refusedAndNothingSaved() {
+        // 纪律排查 A10: 只有 forceSubmit=true 不算数, 强制超收必须写原因
+        WorkProcess wp = WorkProcess.builder().id("WP-01").factoryId("F006")
+                .unit("kg").standardYieldMax(new BigDecimal("1.0000")).build();
+        setupOverReceiptBase(wp);
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(
+                ProductionReport.builder().outputQuantity(new BigDecimal("100")).build()
+        ));
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal("100"));
+        req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal("31"));
+        req.setOutputUnit("kg");
+        req.setForceSubmit(true);
+        req.setForceSubmitReason("   ");
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        be -> assertThat(be.getErrorCode()).isEqualTo("OVER_RECEIPT_REASON_REQUIRED"));
+        verify(reportRepo, never()).save(any(ProductionReport.class));
     }
 
     @Test

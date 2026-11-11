@@ -92,9 +92,11 @@ public class ProcessingController {
     public ApiResponse<ProductionBatch> startProduction(
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @PathVariable @Parameter(description = "批次ID", example = "123") String batchId,
-            @RequestParam @Parameter(description = "负责人ID", example = "1") Integer supervisorId) {
+            @RequestParam @Parameter(description = "负责人ID", example = "1") Integer supervisorId,
+            @RequestParam(required = false) @Parameter(description = "缺料未解决时强制开工的原因 (工厂开了缺料拦开工才需要)")
+            String forceStartReason) {
         log.info("开始生产: factoryId={}, batchId={}", factoryId, batchId);
-        ProductionBatch result = processingService.startProduction(factoryId, batchId, supervisorId);
+        ProductionBatch result = processingService.startProduction(factoryId, batchId, supervisorId, forceStartReason);
         return ApiResponse.success(result);
     }
 
@@ -138,10 +140,12 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "批次ID", example = "123") String batchId,
             @RequestParam @Parameter(description = "实际产量", example = "100.5") BigDecimal actualQuantity,
             @RequestParam @Parameter(description = "良品数量", example = "98.0") BigDecimal goodQuantity,
-            @RequestParam @Parameter(description = "不良品数量", example = "2.5") BigDecimal defectQuantity) {
+            @RequestParam @Parameter(description = "不良品数量", example = "2.5") BigDecimal defectQuantity,
+            @RequestParam(required = false) @Parameter(description = "实际产量超过批次计划量时的超产原因")
+            String overPlanReason) {
         log.info("完成生产: factoryId={}, batchId={}, actualQuantity={}", factoryId, batchId, actualQuantity);
-        ProductionBatch result = processingService.completeProduction(
-                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity);
+        ProductionBatch result = processingService.completeProductionWithReason(
+                factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, overPlanReason);
         return ApiResponse.success(result);
     }
 

@@ -84,9 +84,13 @@ const factoryId = computed(() => authStore.factoryId);
 const { allowSelfApproval } = useSelfApprovalSwitch(factoryId);
 /** 盘点审批在本厂允许本人审批时要给原因框; 本人是发起人时必填, 其余 (可能是录入/提交人) 由后端判。 */
 function stocktakeSelfApprovalMode(row: PendingApproval): 'none' | 'required' | 'optional' {
-  if (row.moduleCode !== 'INVENTORY_ADJUSTMENT' || !allowSelfApproval.value) return 'none';
+  if (!allowSelfApproval.value) return 'none';
   const me = authStore.user?.username;
-  return me && row.initiatedByUsername && row.initiatedByUsername === me ? 'required' : 'optional';
+  const isInitiator = Boolean(me && row.initiatedByUsername && row.initiatedByUsername === me);
+  // 1551-11: 强制插单的提交人就是发起人; 不是本人时不需要原因框
+  if (row.moduleCode === 'FORCE_INSERT') return isInitiator ? 'required' : 'none';
+  if (row.moduleCode !== 'INVENTORY_ADJUSTMENT') return 'none';
+  return isInitiator ? 'required' : 'optional';
 }
 const loading = ref(false);
 const operatingId = ref('');
@@ -100,6 +104,8 @@ const size = ref(20);
 const ACTIONABLE_MODULE_CODES = new Set([
   'PURCHASE_ORDER', 'SALES_ORDER', 'INVENTORY_TRANSFER', 'INVENTORY_ADJUSTMENT',
   'PRODUCTION_REPORT_CORRECTION',
+  // 1551-11: 强制插单 —— 后端 executeDomainAction 有 FORCE_INSERT 分支 (#1591)
+  'FORCE_INSERT',
 ]);
 const moduleCode = ref('');
 const focusedInstanceId = ref('');
@@ -186,7 +192,9 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
       } else {
         const result = await ElMessageBox.prompt(
           approveConfirmMessage(row)
-            + (selfMode === 'required'
+            + (selfMode === 'required' && row.moduleCode === 'FORCE_INSERT'
+              ? '<p style="margin-top:8px;color:#E6A23C">这张强制插单是你自己提交的。本厂已允许本人审批：必须写明本人审批原因，审批记录会标注为本人审批。</p>'
+              : selfMode === 'required'
               ? '<p style="margin-top:8px;color:#E6A23C">这张盘点是你自己发起的。本厂已允许本人审批：有盘盈盘亏时必须写明本人审批原因，审批记录会标注为本人审批。</p>'
               : '<p style="margin-top:8px;color:#909399">如果你是这张盘点的录入人或提交人且有盘盈盘亏，必须写明本人审批原因（本厂已允许本人审批）；不是本人可不填。</p>'),
           '通过前请确认单据信息',
