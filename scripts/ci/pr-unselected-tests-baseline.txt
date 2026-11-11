@@ -13,7 +13,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/synthetic/SyntheticData
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/AbstractBusinessToolPreviewSafetyTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/BusinessTypeScopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/NegationTwinPolicyTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/ToolAccessModeDeclarationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/ToolExecutionTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/ToolExecutionThreeStateTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/ToolExecutorPreviewSafetyTest.java

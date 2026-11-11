@@ -40,6 +40,51 @@ def test_table_read_write_from_tool_declarations(table):
     assert dc.derive_read_only(None, None, table) is None
 
 
+def test_every_label_has_a_resolved_access_mode(table):
+    # F-pre: the two former scanner misses (comment in method / inherited) now read as their Java READ
+    assert not [c for c, v in table.items() if v['access_mode'] == 'UNRESOLVED']
+    assert table['GATE_DIAGNOSE_BATCH']['access_mode'] == 'READ'
+    assert table['PAGINATION_PREVIOUS']['access_mode'] == 'READ'
+
+
+def test_unresolved_label_refuses_to_build(monkeypatch):
+    import tool_access_modes as tam
+    real = tam.scan
+    monkeypatch.setattr(tam, 'scan', lambda: {k: (dict(v, mode='DYNAMIC') if k == 'gate_diagnose_batch' else v)
+                                              for k, v in real().items()})
+    with pytest.raises(dc.UnresolvedAccessMode):
+        dc.build_intent_table()
+    assert dc.build_intent_table(allow_unresolved=True)['GATE_DIAGNOSE_BATCH']['read_only'] is None
+
+
+def test_report_separates_no_target_from_unresolved():
+    plan = dict(dialogue_act='NEED_CLARIFY', intent=None)
+    assert dp.ro_bucket(dict(read_only=None, state=None, generator_plan=plan)) == 'no_target'
+    assert dp.ro_bucket(dict(read_only=None, state=dict(prev_intent='X'), generator_plan=plan)) == 'unresolved'
+    assert dp.ro_bucket(dict(read_only=True, state=None, generator_plan=plan)) == 'read_only'
+
+
+def test_rubric_is_fresh_and_both_teachers_get_it(table, monkeypatch):
+    import build_clarify_rubric as br
+    assert br.main.__module__ == 'build_clarify_rubric'
+    monkeypatch.setattr(sys, 'argv', ['x', '--check'])
+    assert br.main() == 0, 'clarify_rubric.json is stale: rerun build_clarify_rubric.py'
+    rub = dp.load_rubric(Path(__file__).parent / 'clarify_rubric.json')
+    assert rub['intents']['BATCH_FULL_TRACE']['must_ask'][0]['param'] == 'batchNumber'
+    assert all(r['source'] for r in rub['rules'])
+    row = raw_row(table)
+    monkeypatch.setattr(dp, 'RUBRIC', None)
+    plain_t, plain_l = dp.terra_payload(row, table), dp.luna_payload(row, table)
+    monkeypatch.setattr(dp, 'RUBRIC', rub)
+    t, l = dp.terra_payload(row, table), dp.luna_payload(row, table)
+    assert 'G1_ACTION_UNCLEAR' in t['instructions'] and 'G1_ACTION_UNCLEAR' not in plain_t['instructions']
+    assert 'G1_ACTION_UNCLEAR' in l['questions'][0]['instructions']
+    assert t['input'] == l['input'] and '"access"' in t['input'] and '"access"' not in plain_t['input']
+    # independence: neither teacher's payload carries the other's answer or the generator plan
+    for p in (t, l):
+        assert 'generator_plan' not in str(p) and 'luna' not in p.get('input', '') and 'terra' not in p.get('input', '')
+
+
 def test_raw_schema_accepts_and_rejects(table):
     ok = raw_row(table)
     dc.validate_sample(ok, table, 'raw')
@@ -89,6 +134,19 @@ def test_agreement_and_review_queue(table, tmp_path):
     assert {x['review_reason'] for x in queue} == {'disagree_act', 'invalid_luna'}
     dc.validate_sample(silver[0], table, 'labeled')
     assert abs(sum(silver[0]['teacher_probs'].values()) - 1) < 1e-3
+
+
+def test_dedupe_drops_only_same_words_same_task(table, tmp_path):
+    import argparse
+    a_row = raw_row(table, id='a', utterance='换成上个月的')
+    same = raw_row(table, id='b', utterance='换成上个月的 ')          # same normalized words, same prev task
+    other_task = raw_row(table, id='c', utterance='换成上个月的',
+                         state=dict(a_row['state'], prev_intent=a_row['candidates'][1]))
+    dc.write_jsonl(tmp_path / 'old.jsonl', [a_row])
+    dc.write_jsonl(tmp_path / 'new.jsonl', [same, other_task])
+    dp.cmd_dedupe(argparse.Namespace(input=tmp_path / 'new.jsonl', against=[tmp_path / 'old.jsonl'],
+                                     output=tmp_path / 'out.jsonl'), table)
+    assert [r['id'] for r in dc.read_jsonl(tmp_path / 'out.jsonl')] == ['c']
 
 
 def test_split_never_crosses_families():
@@ -175,3 +233,45 @@ def test_sealed_fingerprint_hit_and_absent_file(tmp_path):
     assert index.check(text) == 'sealed_holdout'                 # punctuation/space/case-insensitive
     assert index.check('今天冷库温度如何呢') is None
     assert lk.load_sealed_hashes(tmp_path / 'missing.jsonl') is None   # reported as not provided, never as empty
+
+
+def test_claude_teacher_sees_exactly_what_terra_sees(table, monkeypatch):
+    import distill_claude_teacher as ct
+    monkeypatch.setattr(dp, 'RUBRIC', dp.load_rubric(Path(__file__).parent / 'clarify_rubric.json'))
+    row = raw_row(table)
+    t, c = dp.terra_payload(row, table), ct.claude_request(row, table)
+    assert c['system'] == t['instructions'] and c['messages'] == [dict(role='user', content=t['input'])]
+    assert c['model'] == 'claude-fable-5-2'
+    assert 'luna' not in str(c) and 'terra' not in str(c) and 'generator_plan' not in str(c)
+    ok = dict(ok=True, fallback=False, stop_reason='end_turn', model='claude-fable-5-2',
+              text='{"dialogue_act": "NEED_CLARIFY", "intent": "%s"}' % dc.NONE_KEY)
+    assert ct.parse(ok, row)[2] is None
+    assert ct.parse(dict(ok, fallback=True, model='claude-opus-4-8'), row)[2].startswith('served_by_fallback')
+    assert ct.parse(dict(ok, stop_reason='refusal'), row)[2] == 'stop:refusal'
+
+
+def test_adjudication_is_two_of_three_and_kept_apart(table, tmp_path, monkeypatch):
+    import argparse
+    import distill_claude_teacher as ct
+    base = raw_row(table)
+    prev = base['state']['prev_intent']
+    def q(id, luna, terra):
+        tt = lambda a, i: dict(dialogue_act=a, intent=i, issue=None)
+        return dict(base, id=id, dialogue_act=None, intent=None, agreement=False, review_reason='disagree_act',
+                    teachers=dict(luna=tt(*luna), terra=tt(*terra)), teacher_probs={})
+    queue = [q('a', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None)),      # claude sides with terra
+             q('b', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None)),      # claude says a third thing
+             q('c', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None))]      # claude call failed
+    dc.write_jsonl(tmp_path / 'queue.jsonl', queue)
+    dc.write_jsonl(tmp_path / 'silver.jsonl', [])
+    cl = lambda a, i, issue=None: dict(model='claude-fable-5-2', dialogue_act=a, intent=i, issue=issue)
+    dc.write_jsonl(tmp_path / 'claude-labels.jsonl', [dict(id='a', claude=cl('NEED_CLARIFY', None)),
+                                                     dict(id='b', claude=cl('CANCEL', None)),
+                                                     dict(id='c', claude=cl(None, None, 'call_failed'))])
+    ct.cmd_adjudicate(argparse.Namespace(work=tmp_path, queue=tmp_path / 'queue.jsonl', silver=tmp_path / 'silver.jsonl',
+                                         silver_split_from=[]), table)
+    adj = dc.read_jsonl(tmp_path / 'silver-adjudicated.jsonl')
+    assert [r['id'] for r in adj] == ['a'] and adj[0]['dialogue_act'] == 'NEED_CLARIFY'
+    assert adj[0]['adjudication']['sided_with'] == 'terra' and adj[0]['agreement'] is False
+    assert {r['id'] for r in dc.read_jsonl(tmp_path / 'review-queue-after-claude.jsonl')} == {'b', 'c'}
+    assert not (tmp_path / 'silver.jsonl').read_text(encoding='utf-8')   # unanimous silver untouched
