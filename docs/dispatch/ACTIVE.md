@@ -26,7 +26,6 @@
 
 
 
-- `DISCIPLINE-BATCH-20261111` — `in-progress` — Owner organizer `local_a8a574b9` — Base `a89e8c70f9`(prod) — 纪律18条收尾：#1585–#1597已上线；待合#1598(B类权限)、库存账A4/A5/A9/C3/C6(local_49fcd6f0)；两者合完一次发布并核对线上，再交Steve统一验收与139↔47 VPC对等连接。
 - `PROTO-UNIFIED-20261111` — `in-progress` — Owner `local_f2ec35f8` — Base `9bfd4ed652` — 三套原型（味美/六膳门/黑湖成本）融合成统一原型终版：融合代理改源码（唯一写者），A–D 四条只读规格线写 unified-spec；规格与融合落地后再分配实现 scope。仓库外，不碰生产/仓库代码。详见archive/2026-11-11-proto-unified.md。
 
 - `CLAUDE-TASKS-ACCEPTANCE-20261105` — `blocked` — Owner `01a1a954/root` — Base `898877a2a981159291b16c523f99f822d7c4a2f0` — 软件修复/发布/实收47通过，2原成本豁免；仅S6-10业务代表与QA本人试点签署未提供，禁止代签。代码scope/生产锁/设备均释放；证据及对象保留见archive/2026-11-06-tasks-business-final-closeout.md。
@@ -135,7 +134,6 @@
 
 
 
-- `DISCIPLINE-BATCH-20261111`：合并/发布只归organizer；#1598分支`codex/claude-discipline-b5-b14-perm-not-role`归local_a95f0af1；库存账分支`claude/inventory-ledger-a4-a5-a9-c3-c6`归local_49fcd6f0。
 - `PROTO-UNIFIED-20261111`：仓库外 `Documents/Cretas-admin-双角色完整原型-20261028/samples-v5/`；源码与数据只归融合代理，`unified-spec/{A,B,C,D}-*.md` 各归一条规格线；仓库内只占 archive/2026-11-11-proto-unified.md。
 - `FEAT-LINEAGE-SOURCE-INDIVIDUAL-NODE-20260915`：`service/lineage/LineageGraphAssembler` 与 lineage DTO 加法式、RN `screens/traceability/**`；⛔ 不碰 SourceIndividual 实体/迁移/vision/recorder。
 - `DEMO-SHENGLONG-TENANT-SEED-20260915`：仅新建 `scripts/e2e/shenglong-demo/**`；⛔ 不改后端/前端代码、不 SQL 直插、凭证不入库。
