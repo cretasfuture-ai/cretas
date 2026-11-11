@@ -75,6 +75,10 @@ class ShortageRescheduleServiceContractTest {
             mock(MaterialPackagingHierarchyRepository.class), mock(MaterialPackagingSpecRepository.class)));
     private final EntityManager entityManager = mock(EntityManager.class);
     private ShortageRescheduleService service;
+    /** 工厂开关 production.capacity.package_unit_mode; 空 = 迁移全局默认 NONE。 */
+    private final Map<String, String> discipline = new HashMap<>();
+    private final com.cretas.aims.repository.ProductTypeRepository productTypes =
+            mock(com.cretas.aims.repository.ProductTypeRepository.class);
 
     private ShortageCase theCase;
     private SalesOrder order;
@@ -91,7 +95,8 @@ class ShortageRescheduleServiceContractTest {
     @BeforeEach
     void setUp() {
         service = new ShortageRescheduleService(cases, lines, events, actions, proposals, schedules, plans,
-                productionLines, orders, capacity, lineLocks, units, entityManager);
+                productionLines, orders, capacity, lineLocks, units, entityManager,
+                com.cretas.aims.service.discipline.DisciplineFixtures.policy(discipline), productTypes);
 
         theCase = new ShortageCase();
         theCase.setId("C1");
@@ -604,5 +609,107 @@ class ShortageRescheduleServiceContractTest {
                 .isInstanceOf(BusinessException.class).hasMessageContaining("只有来自销售订单");
         verify(orders, never()).findById(anyString());
         verify(proposals, never()).saveAndFlush(any());
+    }
+
+    // ------------------------------------------- 工厂开关: 包装单位 (袋 / 盒) 计划换线的产能核对 (2026-11-11)
+
+    private void planInBags() {
+        busyLines.add("L1");
+        pp.setPlannedUnit("袋");
+        pp.setWorkflowOutputUnitsByProduct(new LinkedHashMap<>(Map.of("P1", "袋")));
+        task.getDailyAllocations().put("unit", "袋");
+    }
+
+    private com.cretas.aims.entity.ProductType bagProduct(BigDecimal net, String netUnit) {
+        com.cretas.aims.entity.ProductType p = new com.cretas.aims.entity.ProductType();
+        p.setId("P1");
+        p.setName("酱牛肉");
+        p.setUnit("袋");
+        p.setNetContentQuantity(net);
+        p.setNetContentUnit(netUnit);
+        when(productTypes.findByIdAndFactoryId("P1", "F1")).thenReturn(Optional.of(p));
+        return p;
+    }
+
+    @Test
+    void packageModeNoneKeepsBagPlansOnTheSameLineOnly() {
+        planInBags();
+        when(capacity.checkCapacity(eq("F1"), eq("P1"), any(), eq("袋"), anyString(), any(), any()))
+                .thenReturn(ResourceCheckResult.unverified("CAPACITY", "产能未验证: 产线产能只按 件 / kg / 批 配置", new BigDecimal("100")));
+
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+
+        assertThat(candidate(p, ShortageRescheduleService.OTHER_LINE).get("applicable")).isEqualTo(false);
+        verify(capacity, never()).checkCapacityInPackageUnit(anyString(), anyString(), any(), anyString(), any(), anyString(), any(), any());
+        verify(capacity, never()).checkCapacity(anyString(), anyString(), any(), eq("KG"), anyString(), any(), any());
+        verifyNoInteractions(productTypes);
+    }
+
+    @Test
+    void packageModeNetContentConvertsBagsToKilogramsAndChecksKgCapacity() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "NET_CONTENT");
+        planInBags();
+        bagProduct(new BigDecimal("500"), "g");
+
+        RescheduleProposal p = service.propose("F1", "C1", PLANNER);
+
+        Map<String, Object> other = candidate(p, ShortageRescheduleService.OTHER_LINE);
+        assertThat(other.get("applicable")).isEqualTo(true);
+        assertThat(firstMove(other).get("toLineId")).isEqualTo("L2");
+        // 100 袋 × 500 g = 50 kg
+        verify(capacity).checkCapacity(eq("F1"), eq("P1"), argThat(q -> q.compareTo(new BigDecimal("50")) == 0),
+                eq("KG"), eq("L2"), any(), any());
+    }
+
+    @Test
+    void packageModeNetContentWithoutNetContentStaysUnverifiedAndSaysWhy() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "NET_CONTENT");
+        planInBags();
+        bagProduct(null, null);
+
+        Map<String, Object> other = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.OTHER_LINE);
+
+        assertThat(other.get("applicable")).isEqualTo(false);
+        assertThat(String.valueOf(other.get("notes"))).contains("没有填净含量");
+        verify(capacity, never()).checkCapacity(anyString(), anyString(), any(), eq("KG"), anyString(), any(), any());
+    }
+
+    @Test
+    void packageModeNetContentRefusesAVolumeNetContent() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "NET_CONTENT");
+        planInBags();
+        bagProduct(new BigDecimal("500"), "ml");
+
+        Map<String, Object> other = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.OTHER_LINE);
+
+        assertThat(other.get("applicable")).isEqualTo(false);
+        assertThat(String.valueOf(other.get("notes"))).contains("不是质量单位");
+    }
+
+    @Test
+    void packageModeFactoryUnitChecksCapacityConfiguredInTheFactorysOwnUnit() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "FACTORY_UNIT");
+        planInBags();
+        when(capacity.checkCapacityInPackageUnit(eq("F1"), eq("P1"), any(), eq("袋"), any(), eq("L2"), any(), any()))
+                .thenReturn(ResourceCheckResult.available("CAPACITY", new BigDecimal("300"), new BigDecimal("100"), "二号线 每小时 50 袋"));
+        when(capacity.checkCapacityInPackageUnit(eq("F1"), eq("P1"), any(), eq("袋"), any(), eq("L3"), any(), any()))
+                .thenReturn(ResourceCheckResult.unverified("CAPACITY", "未配", new BigDecimal("100")));
+
+        Map<String, Object> other = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.OTHER_LINE);
+
+        assertThat(other.get("applicable")).isEqualTo(true);
+        assertThat(firstMove(other).get("toLineId")).isEqualTo("L2");
+        verify(capacity, never()).checkCapacity(anyString(), anyString(), any(), eq("袋"), anyString(), any(), any());
+    }
+
+    @Test
+    void packageModeDoesNotChangeKgPlans() {
+        discipline.put(com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "NET_CONTENT");
+        busyLines.add("L1");
+
+        Map<String, Object> other = candidate(service.propose("F1", "C1", PLANNER), ShortageRescheduleService.OTHER_LINE);
+
+        assertThat(other.get("applicable")).isEqualTo(true);
+        verifyNoInteractions(productTypes);
     }
 }

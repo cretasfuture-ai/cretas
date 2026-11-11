@@ -26,8 +26,11 @@ import java.time.LocalDateTime;
 @Where(clause = "deleted_at IS NULL")
 public class ProductionLineCapacityConfig extends BaseEntity {
 
-    /** 件 / 千克 / 批。 */
-    public enum CapacityUnit { PIECE, KG, BATCH }
+    /**
+     * 件 / 千克 / 批; PACKAGE = 工厂自己的包装单位 (如 袋 / 盒), 具体单位名在 {@link #packageUnit},
+     * 只在工厂开关 {@code production.capacity.package_unit_mode = FACTORY_UNIT} 时可写 (2026-11-11)。
+     */
+    public enum CapacityUnit { PIECE, KG, BATCH, PACKAGE }
 
     /** 写入入口: 对话建厂 / 工厂配置页。 */
     public enum Source { CONVERSATIONAL_BUILD, FACTORY_CONFIG }
@@ -51,6 +54,10 @@ public class ProductionLineCapacityConfig extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "capacity_unit", length = 16, nullable = false)
     private CapacityUnit capacityUnit;
+
+    /** 仅 {@link CapacityUnit#PACKAGE} 行有值: 工厂自己的单位名 (袋 / 盒 …)。 */
+    @Column(name = "package_unit", length = 20)
+    private String packageUnit;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "source", length = 32, nullable = false)

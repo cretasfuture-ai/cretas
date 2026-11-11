@@ -42,4 +42,19 @@ class ThresholdRoleListValidationContractTest {
         assertThat(ThresholdKeys.validateSemantics(key, "BLOCK")).isNull();
         assertThat(ThresholdKeys.validateSemantics(key, "BLCOK")).isNotNull();
     }
+
+    @Test
+    @DisplayName("开关类 key (缺料收尾 / 包装单位产能): 只认登记的代码, 大小写不敏感; 打错字被拒")
+    void switchKeysOnlyKnownValues() {
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "auto")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "MANUAL")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "AUTOMATIC"))
+                .contains("MANUAL").contains("AUTO");
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "net_content")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "FACTORY_UNIT")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "BAG")).isNotNull();
+        // 换线产能会挡住换线方案 ⇒ 闸门类 (短缓存); 缺料自动关闭不挡动作 ⇒ 不登记
+        assertThat(ThresholdKeys.isGating(ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE)).isTrue();
+        assertThat(ThresholdKeys.isGating(ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE)).isFalse();
+    }
 }
