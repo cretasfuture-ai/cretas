@@ -79,6 +79,16 @@ class PlanAndBatchCompletionNeedsActualQuantityContractTest {
     }
 
     @Test
+    void evenIfTheQuestionWereSkippedThePlannedQuantityIsNeverUsedAsTheActualOne() throws Exception {
+        // 第二道防线: 绕过 validateRequiredParams 直接执行, 也 ⛔ 不拿计划量 100 当实际产量
+        planTool.doExecute("F006", params("planId", "PP-1", "status", "COMPLETED", "plannedQuantity", 100), context);
+
+        verify(planService, never()).completeProduction(eq("F006"), eq("PP-1"),
+                org.mockito.ArgumentMatchers.argThat(q -> q != null && q.compareTo(new BigDecimal("100")) == 0),
+                any(), any());
+    }
+
+    @Test
     void startingAPlanCarriesTheForceStartReasonOnlyWhenTheUserGaveOne() throws Exception {
         planTool.doExecute("F006", params("planId", "PP-1", "status", "IN_PROGRESS"), context);
         verify(planService).startProduction("F006", "PP-1", 7L, null);
