@@ -220,6 +220,13 @@ public class FactoryDisciplinePolicy {
                 ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE);
     }
 
+    // ===================== 插单一律走审批 (1551-11, 2026-11-11) =====================
+
+    /** 只有显式 1 才开 (默认 0 = 原行为: 只有预览判定需要审批的插单走画布); 写错的值按关。 */
+    public boolean urgentInsertAlwaysApproval(String factoryId) {
+        return thresholds.getInteger(factoryId, ThresholdKeys.PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL, 0) == 1;
+    }
+
     // ===================== 销售单财务批准后取消 (2026-11-11) =====================
 
     /** 只有显式 1 才开 (默认 0 = 原行为: 批准后只能驳回 / 退款); 写错的值按关。 */

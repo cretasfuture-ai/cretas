@@ -940,7 +940,9 @@ public class SchedulingController {
         log.info("确认紧急插单: factoryId={}, slotId={}, productTypeId={}, userId={}",
                 factoryId, request.getSlotId(), request.getProductTypeId(), userId);
         com.cretas.aims.dto.production.ProductionPlanDTO plan = urgentInsertService.confirmInsert(factoryId, userId, request);
-        return ApiResponse.success("插单成功", plan);
+        // 1551-11: 工厂开了「插单一律走审批」时, 普通插单也会进审批 —— 文案不能说「插单成功」
+        return ApiResponse.success("PENDING".equals(plan.getApprovalStatus())
+                ? "插单已提交审批，批准后才会排入" : "插单成功", plan);
     }
 
     /**
