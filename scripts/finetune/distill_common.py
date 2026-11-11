@@ -58,18 +58,19 @@ def sha256_file(path):
 
 
 # ---------------------------------------------------------------- intent table
-def build_intent_table():
+def build_intent_table(allow_unresolved=False):
     """code -> dict(name, description, family, route_type, access_mode, read_only).
 
     access_mode comes from each Tool's declared ``getAccessMode()`` (the CI-enforced binary
-    declaration), read via the same source inventory the offline experiments use. A SKILL
-    intent is read-only only if every bound tool declares READ. Anything unresolved is
-    ``read_only=None`` — never guessed.
+    declaration, ``ToolAccessModeDeclarationTest``), read by ``tool_access_modes.scan`` which
+    follows superclasses and ignores comments. A SKILL intent is read-only only if every bound
+    tool declares READ. Fail closed: if any training-label intent cannot be resolved to READ or
+    WRITE the table refuses to build (``UnresolvedAccessMode``) instead of guessing.
     """
     sys.path.insert(0, str(CATALOG_PY))
     sys.path.insert(0, str(Path(__file__).parent))
     from ai import factory_catalog as fc
-    from factory_accuracy_support import source_inventory
+    from tool_access_modes import scan
     cat = fc.get_catalog()
     labels = fc.training_catalog_labels(cat)
     rows = cat['canonical']
@@ -78,8 +79,7 @@ def build_intent_table():
         r = rows[code]
         tools.update(r.get('skill_tools') or [] if r.get('route_type') == 'SKILL' else [r.get('tool_name')])
     tools.discard(None)
-    inv = source_inventory({'canonical_intents': [{'tool_name': t} for t in sorted(tools)]})
-    mode = {r['tool_name']: r['tool_contract'].get('declared_access_mode', 'UNRESOLVED') for r in inv}
+    mode = {k: v['mode'] for k, v in scan().items()}
     table = {}
     for code in labels:
         r = rows[code]
@@ -93,7 +93,14 @@ def build_intent_table():
             access, ro = 'UNRESOLVED', None
         table[code] = dict(code=code, name=r.get('intent_name') or code, description=r.get('description') or '',
                            family=family_of(code), route_type=r.get('route_type'), access_mode=access, read_only=ro)
+    bad = {c: v for c, v in table.items() if v['access_mode'] == 'UNRESOLVED'}
+    if bad and not allow_unresolved:
+        raise UnresolvedAccessMode('intents without a resolvable Tool access mode: ' + ', '.join(sorted(bad)))
     return table
+
+
+class UnresolvedAccessMode(RuntimeError):
+    """A training-label intent whose Tool read/write declaration cannot be read from source."""
 
 
 def family_of(code):
@@ -145,10 +152,13 @@ def validate_sample(row, table, stage='labeled'):
 
     stage 'raw': generated, not yet labeled.  'labeled': both teachers agreed (silver train).
     'review': teachers disagreed; ``agreement`` False and labels are per-teacher only.
+    'adjudicated': teachers disagreed and an independent third teacher matched exactly one of them
+    (2 of 3); ``agreement`` False, ``adjudication.rule == '2_of_3'``, label checked like 'labeled'.
     """
-    if stage not in ('raw', 'labeled', 'review'):
+    if stage not in ('raw', 'labeled', 'review', 'adjudicated'):
         raise SchemaError('bad stage')
-    allowed = RAW_KEYS if stage == 'raw' else LABEL_KEYS | {'split', 'review_reason'}
+    allowed = RAW_KEYS if stage == 'raw' else LABEL_KEYS | {'split', 'review_reason'} | (
+        {'adjudication'} if stage == 'adjudicated' else set())
     extra = set(row) - allowed
     if extra:
         raise SchemaError('unexpected keys: ' + ','.join(sorted(extra)))
@@ -176,6 +186,8 @@ def validate_sample(row, table, stage='labeled'):
         raise SchemaError('labeled (train) rows must have agreement=true')
     if stage == 'review' and row['agreement'] is not False:
         raise SchemaError('review rows must have agreement=false')
+    if stage == 'adjudicated' and (row['agreement'] is not False or (row.get('adjudication') or {}).get('rule') != '2_of_3'):
+        raise SchemaError('adjudicated rows must have agreement=false and adjudication.rule=2_of_3')
     if set(row['teachers']) != {'luna', 'terra'}:
         raise SchemaError('teachers must hold exactly luna and terra, each independent')
     for t in row['teachers'].values():
@@ -186,7 +198,7 @@ def validate_sample(row, table, stage='labeled'):
         raise SchemaError('teacher_probs keys must be candidates or ' + NONE_KEY)
     if probs and not (0.97 <= sum(probs.values()) <= 1.03) or any(not 0 <= v <= 1 for v in probs.values()):
         raise SchemaError('teacher_probs must be a distribution')
-    if stage == 'labeled':
+    if stage in ('labeled', 'adjudicated'):
         check_label(row['dialogue_act'], row['intent'], row['state'], cands)
         if row['read_only'] != derive_read_only(row['intent'], row['state'], table):
             raise SchemaError('read_only disagrees with the Tool access mode table')

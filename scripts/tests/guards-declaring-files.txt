@@ -32,3 +32,4 @@ test-public-repo-hosted-only.sh
 test-backup-copy-retention.sh
 test-pr-test-selection-ratchet.sh
 test-java-gate-shards-cover-selector.sh
+test-tool-access-mode-scanner.sh
