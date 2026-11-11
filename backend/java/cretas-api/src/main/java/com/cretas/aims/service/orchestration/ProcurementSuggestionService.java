@@ -96,6 +96,54 @@ public class ProcurementSuggestionService {
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
 
+    /** 预填供应商用 (2026-11-11)。可选注入: 只为不改这个类既有的构造签名 (单测 @InjectMocks)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SupplierMaterialRepository supplierMaterialRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.SupplierRepository supplierRepository;
+
+    /** 「最近一次采购」不算的单: 还没采购的草稿、取消、财务驳回。 */
+    static final java.util.Set<PurchaseOrderStatus> NOT_A_PURCHASE = java.util.EnumSet.of(
+            PurchaseOrderStatus.DRAFT, PurchaseOrderStatus.CANCELLED, PurchaseOrderStatus.FINANCE_REJECTED);
+
+    /**
+     * 自动采购草稿的供应商 (交接单第二节, 2026-11-11): 按顺序取, 取不到就留空, ⛔ 不猜。
+     * <ol>
+     *   <li>原料的默认供应商: 本厂对这个原料标了「首选」且启用的供应关系 (uk_supplier_material_one_preferred 保证至多一条);</li>
+     *   <li>最近一次真实采购这个原料的供应商 (草稿 / 取消 / 财务驳回不算)。</li>
+     * </ol>
+     * 两种来源都要求供应商仍在合作、且对这个原料的供应关系仍启用 —— 否则预填了也提交不了
+     * (提交会 409 供应关系未启用), 那比留空更糟。
+     */
+    String resolveDraftSupplier(String factoryId, String materialTypeId) {
+        if (supplierMaterialRepository == null || supplierRepository == null
+                || materialTypeId == null || materialTypeId.isBlank()) {
+            return null;
+        }
+        for (com.cretas.aims.entity.SupplierMaterial relation : supplierMaterialRepository
+                .findByFactoryIdAndMaterialTypeIdOrderByActiveDescPreferredDescCreatedAtDesc(factoryId, materialTypeId)) {
+            if (Boolean.TRUE.equals(relation.getActive()) && Boolean.TRUE.equals(relation.getPreferred())
+                    && supplierUsable(factoryId, relation.getSupplierId(), materialTypeId)) {
+                return relation.getSupplierId();
+            }
+        }
+        List<String> recent = purchaseOrderRepository.findRecentSupplierIdsForMaterial(
+                factoryId, materialTypeId, NOT_A_PURCHASE, org.springframework.data.domain.PageRequest.of(0, 1));
+        if (!recent.isEmpty() && supplierUsable(factoryId, recent.get(0), materialTypeId)) {
+            return recent.get(0);
+        }
+        return null;
+    }
+
+    private boolean supplierUsable(String factoryId, String supplierId, String materialTypeId) {
+        if (supplierId == null || supplierId.isBlank()) return false;
+        boolean active = supplierRepository.findByIdAndFactoryId(supplierId, factoryId)
+                .map(supplier -> Boolean.TRUE.equals(supplier.getIsActive()))
+                .orElse(false);
+        return active && supplierMaterialRepository
+                .existsByFactoryIdAndSupplierIdAndMaterialTypeIdAndActiveTrue(factoryId, supplierId, materialTypeId);
+    }
+
     /**
      * 根据原辅料短缺清单，为每种短缺物料生成一张草稿采购订单。
      *
@@ -153,9 +201,9 @@ public class ProcurementSuggestionService {
             po.setStatus(PurchaseOrderStatus.DRAFT);
             po.setPurchaseType(PurchaseType.DIRECT);
             po.setRemark("系统自动生成 - 生产计划[" + productionPlanId + "]原辅料缺口采购建议");
-            // supplierId 未知 → 留 NULL(外键允许), 由采购员在提交前补真实供应商。
+            // 默认供应商 → 最近一次采购的供应商 → 都没有就留 NULL (外键允许), 由采购员提交前补。
             // ⛔ 不要填占位字符串: 见上方常量位置的说明, 那会 100% 撞 fk_po_supplier。
-            po.setSupplierId(null);
+            po.setSupplierId(resolveDraftSupplier(factoryId, sf.getMaterialTypeId()));
             po.setCreatedBy(createdBy);
             po.setTotalAmount(BigDecimal.ZERO);
             po.setTaxAmount(BigDecimal.ZERO);
