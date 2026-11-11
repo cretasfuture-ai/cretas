@@ -1333,7 +1333,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.setReceiptQuantity(batch.getReceiptQuantity().add(qtyAdjustment));
 
         if (newQuantity.compareTo(BigDecimal.ZERO) == 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
 
         batch = materialBatchRepository.save(batch);
@@ -1372,7 +1373,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
 
-        batch.setStatus(MaterialBatchStatus.USED_UP);
+        // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+        batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         // 注意: currentQuantity 是计算属性，不能直接设置
         // 标记为用完：设置 usedQuantity = receiptQuantity - reservedQuantity
         batch.setUsedQuantity(batch.getReceiptQuantity().subtract(batch.getReservedQuantity()));
@@ -1463,7 +1465,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         batch.assertConsumptionInvariant();
 
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) == 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
 
         materialBatchRepository.save(batch);

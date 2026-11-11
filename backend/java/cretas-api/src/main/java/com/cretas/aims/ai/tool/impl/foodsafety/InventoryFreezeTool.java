@@ -10,14 +10,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * 冻结库存批次 Tool (WRITE + Preview, BLOCKING) — Sprint 8 P3 Phase B (食品召回闭环 step 5a).
@@ -32,7 +31,7 @@ import java.util.Set;
  *   <li>INSPECTING 是现成的扣留状态: {@link MaterialBatchStatus#blocksProduction()} 拦投产, CCP 偏离扣留
  *       ({@code QcDeviationHold}) 也是把 AVAILABLE 改成 INSPECTING; 解除走「质检放行」(放行留记录), 或判不合格。</li>
  *   <li>已经不可投产的批次 (质检中 / 不良品 / 过期 / 报废) <b>不改状态</b>: 冻结不能把「不合格」覆盖成别的状态,
- *       否则冻结就成了洗白不合格的途径。已用完 / 已耗尽的批次没有库存可扣, 也不改。</li>
+ *       否则冻结就成了洗白不合格的途径。货架实物为 0 (已用完) 没有东西可扣, 也不改; 已耗尽 (全被预留, 货还在) 照样冻结。</li>
  * </ul>
  *
  * <p>防呆:
@@ -40,7 +39,7 @@ import java.util.Set;
  *   <li>R1: preview 显批次当前数量 + 状态, BLOCKING (modal 必须确认)</li>
  *   <li>R2: message 含 batchNumber + 当前数量 (上下文)</li>
  *   <li>R3: reason 必填非空 (validateRequiredParams 强制)</li>
- *   <li>R4: 已扣住 / 本来就不可投产 / 没库存 → 返 status=ALREADY_BLOCKED 不重写</li>
+ *   <li>R4: 已扣住 / 本来就不可投产 / 货架实物为 0 → 返 status=ALREADY_BLOCKED 不重写</li>
  *   <li>error sticky: BusinessException severity=BLOCKING</li>
  * </ul>
  *
@@ -53,14 +52,8 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
     /** 冻结写入的状态: 质检中 (挡投产, 只能经质检放行解除)。 */
     public static final MaterialBatchStatus HOLD_STATUS = MaterialBatchStatus.INSPECTING;
 
-    /** 可以被冻结的状态: 批次此刻能被领用 / 预留 / 投产。其余一律不改。 */
-    static final Set<MaterialBatchStatus> FREEZABLE = EnumSet.of(
-            MaterialBatchStatus.AVAILABLE,
-            MaterialBatchStatus.IN_STOCK,
-            MaterialBatchStatus.FRESH,
-            MaterialBatchStatus.FROZEN,
-            MaterialBatchStatus.RESERVED,
-            MaterialBatchStatus.PRODUCING_RESERVED);
+    /** 怎么解除 (质检中能被放行的入口都由质检权限把着; 本厂若配了允许手动放行, 手动放行也要过角色与原因)。 */
+    static final String RELEASE_HINT = "解除须经质检放行 (「质量管理 → 质检放行」或质量主管放行)";
 
     @Autowired
     private MaterialBatchRepository materialBatchRepository;
@@ -144,17 +137,24 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         return st == null ? "未知" : st.getDisplayName();
     }
 
-    /** 不改状态的原因; null = 可以冻结。 */
+    /**
+     * 不改状态的原因; null = 可以冻结。
+     *
+     * <p>按<b>货架实物</b>判有没有东西可扣, 不按状态: 已耗尽 (DEPLETED) 只是全被预留了, 货还在架上, 预留转消耗
+     * 照样能投产 —— 召回时恰恰要扣住它 (独立审查 H1)。实物为 0 (已用完) 才没东西可扣。
+     */
     static String notFreezableReason(MaterialBatch batch) {
         MaterialBatchStatus st = batch.getStatus();
-        if (st != null && FREEZABLE.contains(st)) {
-            return null;
-        }
         if (st != null && st.blocksProduction()) {
             return String.format("批次 %s 当前是「%s」, 本来就不能用于生产/出货, 不改状态 (冻结不覆盖「%s」)",
                     batch.getBatchNumber(), label(st), label(st));
         }
-        return String.format("批次 %s 当前是「%s」, 没有可冻结的库存, 不改状态", batch.getBatchNumber(), label(st));
+        BigDecimal physical = batch.getPhysicalQuantity();
+        if (physical == null || physical.signum() <= 0) {
+            return String.format("批次 %s 当前是「%s」, 货架上没有实物, 没有可冻结的库存, 不改状态",
+                    batch.getBatchNumber(), label(st));
+        }
+        return null;
     }
 
     /**
@@ -198,7 +198,7 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         result.put("targetStatus", HOLD_STATUS.name());
         result.put("message", String.format(
                 "🚨 [BLOCKING] 确认冻结 → 批次 %s, %s %s, 原状态「%s」→「%s」. "
-                        + "冻结后此批次不能领用投产/出货, 解除须在「质量管理 → 质检放行」放行. 冻结理由: %s",
+                        + "冻结后此批次不能领用投产/出货, " + RELEASE_HINT + ". 冻结理由: %s",
                 batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit(),
                 label(batch.getStatus()), label(HOLD_STATUS), reason));
         return result;
@@ -256,7 +256,7 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
 
         String message = String.format(
                 "✅ 已冻结批次 %s (%s %s), 原状态「%s」→「%s」. 此批次不能领用投产/出货, "
-                        + "解除须在「质量管理 → 质检放行」放行",
+                        + RELEASE_HINT,
                 batchNumber, batch.getReceiptQuantity(), batch.getQuantityUnit(),
                 label(prevStatus), label(HOLD_STATUS));
         return buildSimpleResult(message, data);

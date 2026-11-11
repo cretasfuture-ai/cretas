@@ -1940,7 +1940,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         BigDecimal wksUsed = wks.getUsedQuantity() != null ? wks.getUsedQuantity() : BigDecimal.ZERO;
         wks.setUsedQuantity(wksUsed.add(qty));
         if (wks.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            wks.setStatus(MaterialBatchStatus.DEPLETED);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            wks.setStatus(MaterialBatchStatus.whenExhausted(wks.getStatus(), MaterialBatchStatus.DEPLETED));
         }
         materialBatchRepository.save(wks);
 
@@ -2198,7 +2199,8 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
             BigDecimal used = wks.getUsedQuantity() != null ? wks.getUsedQuantity() : BigDecimal.ZERO;
             wks.setUsedQuantity(used.add(draw));
             if (wks.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                wks.setStatus(MaterialBatchStatus.DEPLETED);
+                // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+                wks.setStatus(MaterialBatchStatus.whenExhausted(wks.getStatus(), MaterialBatchStatus.DEPLETED));
             }
             materialBatchRepository.save(wks);
             remaining = remaining.subtract(draw);

@@ -7835,7 +7835,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setUsedQuantity(zeroIfNull(batch.getUsedQuantity()).add(qty));
         batch.setLastUsedAt(LocalDateTime.now());
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
         materialBatchRepository.save(batch);
         inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");
@@ -9960,7 +9961,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 🔒 全局兜底: 增加 usedQuantity 后断言 used+reserved≤receipt, 防超扣 (误伤-proof 后置校验)
         batch.assertConsumptionInvariant();
         if (batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-            batch.setStatus(MaterialBatchStatus.USED_UP);
+            // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+            batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
         }
         materialBatchRepository.save(batch);
         inventoryLowStockEventPublisher.publishIfLowStock(factoryId, batch, "OUT");

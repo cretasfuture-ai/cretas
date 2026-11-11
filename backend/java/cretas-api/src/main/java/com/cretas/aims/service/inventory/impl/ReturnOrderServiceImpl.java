@@ -1452,7 +1452,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             // 批次扣空 → 标 USED_UP (与领料/报损一致, FEFO 查询自动排除)。
             if (batch.getCurrentQuantity() != null
                     && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                batch.setStatus(MaterialBatchStatus.USED_UP);
+                // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+                batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
             }
             materialBatchRepository.save(batch);
 

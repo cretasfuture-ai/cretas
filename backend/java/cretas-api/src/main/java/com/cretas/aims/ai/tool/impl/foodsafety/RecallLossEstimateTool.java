@@ -145,8 +145,8 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
             // 兜底: 查本厂被冻结工具扣住的批次 (粗略, 可能含其他事件的冻结)。
             // ⛔ 不再按 FROZEN 状态全量取: FROZEN 是「冻品」正常库存, 全算进召回损失会把整个冻库估成损失。
             List<MaterialBatch> allFrozen = java.util.stream.Stream.concat(
-                            materialBatchRepository.findByStatus(InventoryFreezeTool.HOLD_STATUS).stream(),
-                            materialBatchRepository.findByStatus(MaterialBatchStatus.FROZEN).stream())
+                            materialBatchRepository.findByFactoryIdAndStatus(factoryId, InventoryFreezeTool.HOLD_STATUS).stream(),
+                            materialBatchRepository.findByFactoryIdAndStatus(factoryId, MaterialBatchStatus.FROZEN).stream())
                     .filter(b -> factoryId.equals(b.getFactoryId()))
                     .filter(b -> InventoryFreezeTool.isHeldForRecall(b, false))
                     .collect(Collectors.toList());

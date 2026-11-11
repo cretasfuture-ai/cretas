@@ -156,17 +156,32 @@ class InventoryFreezeToolTest {
     }
 
     @Test
-    @DisplayName("UT-IF-05c: 已用完 / 已耗尽 → 没库存可扣, 不改状态")
-    void exhaustedBatchIsNotTouched() throws Exception {
-        for (MaterialBatchStatus st : new MaterialBatchStatus[]{MaterialBatchStatus.USED_UP,
-                MaterialBatchStatus.DEPLETED}) {
-            MaterialBatch mb = batchIn(st);
-            Map<String, Object> result = invoke("doExecute", FACTORY_ID,
-                    Map.of("batchNumber", BATCH, "reason", "召回"), ctx());
-            assertEquals("ALREADY_BLOCKED", result.get("status"));
-            assertEquals(st, mb.getStatus());
-        }
+    @DisplayName("UT-IF-05c: 已用完 (货架实物 0) → 没东西可扣, 不改状态")
+    void usedUpBatchIsNotTouched() throws Exception {
+        MaterialBatch mb = batchIn(MaterialBatchStatus.USED_UP);
+        mb.setUsedQuantity(new BigDecimal("50"));
+        Map<String, Object> result = invoke("doExecute", FACTORY_ID,
+                Map.of("batchNumber", BATCH, "reason", "召回"), ctx());
+        assertEquals("ALREADY_BLOCKED", result.get("status"));
+        assertEquals(MaterialBatchStatus.USED_UP, mb.getStatus());
         verify(materialBatchRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UT-IF-05e: 已耗尽 (全被预留, 货还在架上, 预留转消耗照样能投产) → 照样冻结, 冻结后挡投产 (审查 H1)")
+    void depletedButPhysicallyPresentBatchIsFrozen() throws Exception {
+        MaterialBatch mb = batchIn(MaterialBatchStatus.DEPLETED);
+        mb.setReservedQuantity(new BigDecimal("50"));
+        assertEquals(0, mb.getCurrentQuantity().signum(), "阳性对照: 可用量 0");
+        assertTrue(mb.getPhysicalQuantity().signum() > 0, "阳性对照: 实物还在");
+        assertFalse(mb.getStatus().blocksProduction(), "阳性对照: 已耗尽不挡投产");
+
+        Map<String, Object> preview = invoke("doPreview", FACTORY_ID,
+                Map.of("batchNumber", BATCH, "reason", "召回"), ctx());
+        assertEquals(true, preview.get("canDo"));
+        invoke("doExecute", FACTORY_ID, Map.of("batchNumber", BATCH, "reason", "召回"), ctx());
+        assertTrue(mb.getStatus().blocksProduction(), "实际状态 " + mb.getStatus());
+        verify(materialBatchRepository, times(1)).save(any(MaterialBatch.class));
     }
 
     @Test

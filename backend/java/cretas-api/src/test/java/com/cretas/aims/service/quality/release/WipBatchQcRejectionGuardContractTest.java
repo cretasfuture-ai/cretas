@@ -360,6 +360,26 @@ class WipBatchQcRejectionGuardContractTest {
     }
 
     @Test
+    @DisplayName("两步洗白 第 1 步 (出库路径): 不良品 / 质检中 (冻结扣住) 的批次出库到 0 → 保持原状态, 不写成已用完 (审查 H2)")
+    void drainingABlockedBatchKeepsItsStatus() {
+        ReflectionTestUtils.setField(warehouse, "inventoryLowStockEventPublisher",
+                mock(com.cretas.aims.service.alerts.InventoryLowStockEventPublisher.class));
+        for (MaterialBatchStatus st : List.of(MaterialBatchStatus.DEFECTIVE, MaterialBatchStatus.INSPECTING)) {
+            batch.setStatus(st);
+            batch.setReceiptQuantity(new java.math.BigDecimal("10"));
+            batch.setUsedQuantity(java.math.BigDecimal.ZERO);
+            warehouse.useBatchQuantity(F, "WIP-1", new java.math.BigDecimal("10"));
+            assertThat(batch.getCurrentQuantity()).as("%s", st).isEqualByComparingTo("0");
+            assertThat(batch.getStatus()).as("数量用尽不能盖掉「%s」", st.getDisplayName()).isEqualTo(st);
+        }
+        // 阴性对照: 可用批次用尽照常是已用完
+        batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        batch.setUsedQuantity(java.math.BigDecimal.ZERO);
+        warehouse.useBatchQuantity(F, "WIP-1", new java.math.BigDecimal("10"));
+        assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.USED_UP);
+    }
+
+    @Test
     @DisplayName("数量恢复的共用判定: 质检判不合格 / 超时判废 → DEFECTIVE; 复检放行后 / 没判过 → AVAILABLE; 仓储缺失报错")
     void statusWhenRestoredFollowsLatestVerdict() {
         assertThat(MaterialQcRejectionGuard.statusWhenRestored(records, timeLimits, batch))
@@ -367,10 +387,11 @@ class WipBatchQcRejectionGuardContractTest {
         timeLimitRejected(LocalDateTime.now().minusHours(1));
         assertThat(MaterialQcRejectionGuard.statusWhenRestored(records, timeLimits, batch))
                 .isEqualTo(MaterialBatchStatus.DEFECTIVE);
-        history.add(0, record(QcReleaseRecord.Decision.RELEASED, LocalDateTime.now()));
+        history.add(0, record(QcReleaseRecord.Decision.RELEASED, LocalDateTime.now().minusMinutes(30)));
         assertThat(MaterialQcRejectionGuard.statusWhenRestored(records, timeLimits, batch))
                 .isEqualTo(MaterialBatchStatus.AVAILABLE);
-        qcRejected();
+        // 复检放行之后又被判不合格 (时间更晚, 与仓储 ORDER BY releasedAt DESC 同序排在最前)
+        history.add(0, record(QcReleaseRecord.Decision.REJECTED, LocalDateTime.now()));
         assertThat(MaterialQcRejectionGuard.statusWhenRestored(records, timeLimits, batch))
                 .isEqualTo(MaterialBatchStatus.DEFECTIVE);
         assertThatThrownBy(() -> MaterialQcRejectionGuard.statusWhenRestored(null, timeLimits, batch))
