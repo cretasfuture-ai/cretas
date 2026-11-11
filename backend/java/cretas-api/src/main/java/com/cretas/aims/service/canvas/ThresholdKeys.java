@@ -295,6 +295,15 @@ public final class ThresholdKeys {
     public static final String PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL = "production.urgent_insert.always_approval";
 
     /**
+     * 客供料收货能不能超收 (A15, Steve 2026-11-11 拍板: 单独做成工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 原行为: 客供料实收不能超过剩余待收, 多 1 克也拦。
+     * 开 = 与采购收货同一个超收上限 (OverReceiveLimit: 工厂设置 purchaseOverReceiveRate > 全局属性 > 不限制)。
+     * 挡得住一个现场动作 (多收) ⇒ 闸门类。
+     */
+    public static final String INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE =
+            "inventory.customer_supplied.allow_over_receive";
+
+    /**
      * 「袋」「盒」等包装单位的计划换线时怎么核对目标线产能 (2026-11-11 Steve 裁定: 做成工厂开关)。
      * NONE (默认) = 产线产能只认 件 / kg / 批, 包装单位计划判「产能未验证」只能同线顺延 (= 原行为);
      * NET_CONTENT = 按产品净含量把包装单位折成 kg 再核对 kg 产能 (净含量没填 / 不是质量单位 ⇒ 仍未验证, 不猜);
@@ -375,7 +384,8 @@ public final class ThresholdKeys {
             CREDIT_PERMISSION_OVERRIDE,
             SALES_ORDER_CANCEL_AFTER_APPROVAL,
             SALES_PERMISSION_CANCEL_APPROVED_ORDER,
-            PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL
+            PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL,
+            INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE
     );
 
     /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
