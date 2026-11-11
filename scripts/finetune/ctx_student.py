@@ -232,8 +232,8 @@ def serialize_candidates(row, table, desc_chars=0):
 
 
 def target_index(row):
-    """Index into candidates + [NONE]."""
-    if row['intent'] is None:
+    """Index into candidates + [NONE] (soft-only rows have no hard target: NONE, masked by hard_weight)."""
+    if row['intent'] is None or row['intent'] not in row['candidates']:
         return len(row['candidates'])
     return row['candidates'].index(row['intent'])
 
@@ -246,9 +246,12 @@ def soft_target(row):
 
 
 def use_soft(row):
-    """Luna's distribution is a teacher only when Luna was not the outvoted teacher."""
+    """Luna's distribution is a teacher only when Luna was not the outvoted teacher, and not when it
+    was produced under rubric v1 for a row now carrying a different v3 label (soft_stale)."""
     adj = row.get('adjudication')
-    return not (adj and adj.get('sided_with') == 'terra')
+    if adj and adj.get('sided_with') == 'terra':
+        return False
+    return not (row.get('soft_stale') and row.get('label_version') == 'v3')
 
 
 # ---------------------------------------------------------------- math
@@ -432,3 +435,133 @@ def summarize_raw(preds, rows):
 def counts(rows):
     return dict(n=len(rows), acts=dict(Counter(r['dialogue_act'] for r in rows)),
                 read=dict(Counter(read_bucket(r) for r in rows)), families=len({r['family'] for r in rows}))
+
+
+# ---------------------------------------------------------------- v2: per-risk-class gate (Steve 2026-11-12)
+def decide_classed(pred, row, table, cpol):
+    """cpol = dict(t_act, t_target, ordinary=thresholds|None, sensitive=thresholds|None).
+    The predicted target's risk class picks the thresholds; a class set to None never goes direct;
+    write targets never go direct."""
+    from sensitive_intents import risk_class
+    d = decide(pred, row, table, dict(t_act=cpol['t_act'], t_target=cpol['t_target'], act_min=0, target_min=0, write_max=1))
+    cls = risk_class(d['intent'], table)
+    th = cpol.get(cls) if cls in ('ordinary', 'sensitive') else None
+    d['risk_class'] = cls
+    d['direct'] = bool(th) and d['direct'] and d['p_act'] >= th['act_min'] and d['p_target'] >= th['target_min'] \
+        and d['write_mass'] <= th['write_max']
+    return d
+
+
+def score_classed(preds, rows, table, cpol):
+    from sensitive_intents import risk_class
+    out = dict(read_only_n=0, read_only_direct=0, direct=0, correct=0, write_gold_direct=0, predicted_write_direct=0,
+               nonread_gold_direct=0)
+    per = {c: dict(gold_n=0, gold_direct=0, direct=0, errors=0) for c in ('ordinary', 'sensitive')}
+    for p, r in zip(preds, rows):
+        d = decide_classed(p, r, table, cpol)
+        gold_cls = risk_class(r['intent'], table) if r['read_only'] is True else None
+        if r['read_only'] is True:
+            out['read_only_n'] += 1
+            out['read_only_direct'] += d['direct']
+            if gold_cls in per:
+                per[gold_cls]['gold_n'] += 1
+                per[gold_cls]['gold_direct'] += d['direct']
+        if not d['direct']:
+            continue
+        ok = is_correct(d, r)
+        out['direct'] += 1
+        out['correct'] += ok
+        out['write_gold_direct'] += r['read_only'] is False
+        out['nonread_gold_direct'] += r['read_only'] is not True
+        out['predicted_write_direct'] += table[d['intent']]['read_only'] is not True
+        per[d['risk_class']]['direct'] += 1
+        per[d['risk_class']]['errors'] += not ok
+    for c, v in per.items():
+        v['coverage'] = v['gold_direct'] / v['gold_n'] if v['gold_n'] else None
+        v['coverage_ci'] = wilson(v['gold_direct'], v['gold_n'])
+        v['error_rate'] = v['errors'] / v['direct'] if v['direct'] else None
+        v['error_ci'] = wilson(v['errors'], v['direct'])
+    out['coverage'] = out['read_only_direct'] / out['read_only_n'] if out['read_only_n'] else 0.0
+    out['coverage_ci'] = wilson(out['read_only_direct'], out['read_only_n'])
+    out['accuracy'] = out['correct'] / out['direct'] if out['direct'] else None
+    out['accuracy_ci'] = wilson(out['correct'], out['direct'])
+    out['by_class'] = per
+    return out
+
+
+def select_classed(preds, rows, table, t_act, t_target, grid=POLICY_GRID):
+    """Each class independently: max coverage of that class's gold read rows subject to its error cap,
+    zero direct on write gold and zero predicted writes. Ordinary: point error rate <= 2%.
+    Sensitive: the 95% upper bound of the error rate must be <= 0.5% ('prove it'), else never direct."""
+    from sensitive_intents import ERROR_CAP
+    cpol = dict(t_act=t_act, t_target=t_target, ordinary=None, sensitive=None)
+    chosen = {}
+    for cls in ('ordinary', 'sensitive'):
+        best = None
+        for am in grid['act_min']:
+            for tm in grid['target_min']:
+                for wm in grid['write_max']:
+                    th = dict(act_min=am, target_min=tm, write_max=wm)
+                    s = score_classed(preds, rows, table, dict(cpol, **{cls: th}))
+                    v = s['by_class'][cls]
+                    if not v['direct'] or s['write_gold_direct'] or s['predicted_write_direct']:
+                        continue
+                    err = v['error_ci'][1] if cls == 'sensitive' else v['error_rate']
+                    if err > ERROR_CAP[cls]:
+                        continue
+                    key = (v['coverage'] or 0, -v['error_rate'], am, tm, -wm)
+                    if best is None or key > best[0]:
+                        best = (key, th, v)
+        chosen[cls] = best[1] if best else None
+    return dict(cpol, **chosen)
+
+
+def recall_at_k(preds, rows, ks=(1, 3, 5, 10, 20)):
+    """Rank of the gold intent among the student's candidate scores (NONE excluded). Rows without a
+    gold intent are skipped. 'not_in_candidates' counts gold intents missing from the candidate list
+    (by construction 0 in generated data: the upstream recall is not measured here)."""
+    hit = Counter()
+    n = missing = 0
+    for p, r in zip(preds, rows):
+        if not r.get('intent'):
+            continue
+        n += 1
+        if r['intent'] not in r['candidates']:
+            missing += 1
+            continue
+        scores = p['target_logits'][:len(r['candidates'])]
+        g = r['candidates'].index(r['intent'])
+        rank = 1 + sum(s > scores[g] for s in scores)
+        for k in ks:
+            hit[k] += rank <= k
+    return dict(n=n, not_in_candidates=missing, recall={k: hit[k] / n if n else None for k in ks},
+                ranked_wrong_at_1=(n - missing - hit[1]), max_candidates=max((len(r['candidates']) for r in rows), default=0))
+
+
+def load_pool(path, version=3, split_field='split_known'):
+    """Student-v2 pool (distill_v4.py dataset) -> the same splits dict as load_splits.
+
+    Each row is flattened to one label set (v1 or v3 view); hard_weight=0 rows (teachers disagreed)
+    train on the soft label only and are left out of validation/calibration, which need a label.
+    v2-adjudicated rows keep weight 0.5."""
+    import distill_v4 as v4
+    import distill_common as dc
+    v4.TABLE_REF[0] = v4.TABLE_REF[0] or dc.build_intent_table()
+    out = {s: [] for s in SPLIT_NAMES}
+    dropped = Counter()
+    for r in read_jsonl(path):
+        v = v4.label_view(r, version)
+        if v is None:
+            dropped['no_label_set'] += 1
+            continue
+        v = dict(v, weight=ADJUDICATED_WEIGHT if r.get('batch') == 'v2-adjudicated' else 1.0, adjudicated=r.get('batch') == 'v2-adjudicated')
+        sp = r[split_field]
+        if sp != 'train' and not v['hard_weight']:
+            dropped['soft_only_in_' + sp] += 1
+            continue
+        if not v['hard_weight'] and not v.get('teacher_probs'):
+            dropped['no_label'] += 1
+            continue
+        out[sp].append(v)
+    load_pool.dropped = dict(dropped)
+    return out
