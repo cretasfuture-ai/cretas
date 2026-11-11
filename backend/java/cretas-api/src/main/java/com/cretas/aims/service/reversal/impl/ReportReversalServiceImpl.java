@@ -226,6 +226,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     /**
+     * 纪律排查 C5: 撤回一个生产批次只作废它自己产出的成品。成品表只挂计划 id, 归属按血缘边判
+     * (与质检放行同一份判据 {@link com.cretas.aims.service.quality.PlanGoodsOwnership})。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
+
+    /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
      * 超出此窗口 → 退回完整审批流。
@@ -277,6 +284,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .withHint("请确认出货记录后处理退货再申请撤回");
             }
             refuseWhileInterimSessionCovers(factoryId, batchId, batch.getProductionPlanId());
+            // 纪律排查 C5 (审查 F4): 成品归属分不清的, 提交时就说, 不等审批人批了才在执行时 409
+            goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, batch.getProductionPlanId()),
+                    batch.getProductionPlanId());
         }
 
         // G3: 幂等检查
@@ -779,10 +790,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
-        // ③ 将对应 FinishedGoodsBatch 标记 REVERSED (如有)
+        // ③ 将【本批次产出的】FinishedGoodsBatch 标记 REVERSED (如有)
+        // 纪律排查 C5: 成品只挂计划 id; 以前按计划把全部成品都作废, 同计划别的批次 (没撤回) 的成品跟着作废。
+        // 归属与质检放行同一份判据 (血缘优先, 没有血缘时单批计划 / 批号相同算确定); 分不清就拒绝, ⛔ 不整计划作废、不猜。
         if (log_.getPlanId() != null) {
-            List<FinishedGoodsBatch> fgbs =
-                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId());
+            List<FinishedGoodsBatch> fgbs = goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId()),
+                    log_.getPlanId());
             for (FinishedGoodsBatch fgb : fgbs) {
                 fgb.setStatus(FinishedGoodsBatch.Status.REVERSED);
                 fgb.setReversalLogId(logId);
@@ -3125,5 +3139,76 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     : SemiFinishedInventory.Status.DEPLETED);
         }
         wipRepo.save(sfi);
+    }
+
+    /**
+     * 纪律排查 C5: 计划下的成品里, 只挑出这个生产批次产出的那些。
+     * <ul>
+     *   <li>计划只有一个生产批次 (或没有别的批次) ⇒ 全部是它的 (与修复前一致);</li>
+     *   <li>多批次 ⇒ 按 {@link com.cretas.aims.service.quality.PlanGoodsOwnership}: 血缘边优先, 没有血缘时批号相同算它的;</li>
+     *   <li>有成品分不清归属 / 血缘指向计划外 / 一批成品由几个生产批次合出 ⇒ 409 {@code FG_OWNERSHIP_UNCLEAR},
+     *       一条都不作废 (整计划作废会误伤没撤回的批次, 只作废一部分会留下说不清的账)。</li>
+     * </ul>
+     */
+    private List<FinishedGoodsBatch> goodsProducedByThisBatch(String factoryId, Long batchId,
+                                                              List<FinishedGoodsBatch> planGoods, String planId) {
+        // 审查 F1: 已经作废的成品 (如先撤销小结时作废的合产批) 不再参与归属, 也不会被再作废一次
+        List<FinishedGoodsBatch> live = planGoods == null ? List.of() : planGoods.stream()
+                .filter(fg -> !FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))
+                .toList();
+        if (live.isEmpty()) {
+            return List.of();
+        }
+        // 审查 F2: 取消的批次没有产出, 不算「同计划别的批次」(与结单撤回的范围校验同口径)
+        List<ProductionBatch> planBatches = batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        planBatches = planBatches == null ? List.of() : planBatches.stream()
+                .filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED || batchId.equals(b.getId()))
+                .toList();
+        boolean otherBatches = planBatches.stream().anyMatch(b -> b.getId() != null && !b.getId().equals(batchId));
+        if (!otherBatches) {
+            return refuseIfShipped(batchId, live);
+        }
+        planGoods = live;
+        if (batchLineageEdgeRepository == null) {
+            throw new BusinessException(503, "成品归属判断服务未就绪, 无法只撤回本批次的成品")
+                    .withCode("FG_OWNERSHIP_UNAVAILABLE")
+                    .withHint("请稍后重试; 仍不行请联系管理员");
+        }
+        com.cretas.aims.service.quality.PlanGoodsOwnership.Ownership ownership =
+                com.cretas.aims.service.quality.PlanGoodsOwnership.attribute(
+                        batchLineageEdgeRepository, factoryId, planGoods, planBatches);
+        String why = ownership.outsidePlan() != null ? ownership.outsidePlan() : ownership.unknown();
+        List<FinishedGoodsBatch> mine = new ArrayList<>();
+        for (FinishedGoodsBatch fg : planGoods) {
+            Set<Long> owners = ownership.of(fg);
+            if (owners.contains(batchId) && owners.size() > 1 && why == null) {
+                why = "成品批 " + fg.getBatchNumber() + " 由本批次和同计划别的生产批次一起产出";
+            }
+            if (owners.contains(batchId)) {
+                mine.add(fg);
+            }
+        }
+        if (why != null) {
+            throw new BusinessException(409, "撤回批次 " + batchId + " 时分不清同计划的成品哪些是它产出的: " + why)
+                    .withCode("FG_OWNERSHIP_UNCLEAR")
+                    .withHint("同一计划有多个生产批次, 成品只能作废本批次产出的那部分; 请先补齐成品的生产批次来源 (血缘), "
+                            + "或联系管理员核对后再撤回")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(String.valueOf(batchId));
+        }
+        return refuseIfShipped(batchId, mine);
+    }
+
+    /** 要作废的成品里已经出过货的 ⇒ 不作废 (提交时的 G2 之后才出货的那种; 出过货只能走退货)。 */
+    private static List<FinishedGoodsBatch> refuseIfShipped(Long batchId, List<FinishedGoodsBatch> goods) {
+        for (FinishedGoodsBatch fg : goods) {
+            if (fg.getShippedQuantity() != null && fg.getShippedQuantity().signum() > 0) {
+                throw new BusinessException(409, String.format(
+                        "批次 %d 的成品 %s 已出货, 无法整单撤回", batchId, fg.getBatchNumber()))
+                        .withCode("FG_SHIPPED")
+                        .withHint("请确认出货记录后处理退货再申请撤回");
+            }
+        }
+        return goods;
     }
 }
