@@ -187,9 +187,12 @@ class ProcessingApiClient {
   }
 
   // 4. 开始生产
-  async startProduction(batchId: string, supervisorId: number, factoryId?: string): Promise<ApiResponse<ProcessingBatch>> {
+  async startProduction(
+    batchId: string, supervisorId: number, factoryId?: string, forceStartReason?: string,
+  ): Promise<ApiResponse<ProcessingBatch>> {
+    // forceStartReason: 本厂开了「缺料时拦开工」被 409 SHORTAGE_CASE_OPEN 拦下后, 用户选了原因才带 (纪律排查 A12)
     return await apiClient.post(`${this.getPath(factoryId)}/batches/${batchId}/start`, null, {
-      params: { supervisorId }
+      params: forceStartReason ? { supervisorId, forceStartReason } : { supervisorId },
     });
   }
 
