@@ -1,3 +1,32 @@
+# Python decision-layer evaluation (INTENT-DISTILL line E, runs on main)
+
+Development regression only. It does not run the sealed acceptance set.
+
+- `decision_layer_eval.py` runs `ai.orchestrator.Orchestrator.match` from the checked-out source with real
+  models, through `decision_eval_transport.py`:
+  - the generative calls (purpose, shortlist, merged understanding) go to `gpt-5.4-mini`;
+  - Choice and the clarify Predicate go to Luna Decisions, using the production prompt builders.
+
+  This is the 11-07 Codex model setup. It is not the prod provider chain: prod DECISION is aliyun qwen through `llm_router`.
+- Candidate retrieval is empty (no local vector index or rerank) and the exact phrase registry is not loaded.
+  Every turn therefore uses the LLM shortlist. Both versions run under the same conditions.
+- Every call is reserved against a USD cap before it is sent. It is then recorded with its label, tokens and
+  latency in `<out>/calls.jsonl`, and each turn in `<out>/turns.jsonl`.
+- Inputs are private and stay outside Git:
+  - the locked 24-dialogue corpus from 11-07 (`--corpus-m`, closed loop: history is the system's own previous outcomes);
+  - a stratified sample of v2 distillation rows with a task state (`--corpus-c`), which gives both clarify
+    directions a denominator;
+  - the F006 catalog from the 11-07 probe.
+- `decision_calibrate.py` records, in one pass per item, the merged output, the Luna Choice distribution and a
+  Luna Predicate. `decision_policy.py` replays clarify and Choice policies over those records offline.
+  `backend/python/tests/test_ai_decision_policy_mirror.py` pins that replay to the real orchestrator.
+- `decision_eval_score.py --run name=turns.jsonl ...` reports, per run and as mean/min/max over runs:
+  - calls per turn (by label), p50/p95 wall time and tokens;
+  - goal, coarse dialogue action, false clarify and missed clarify kept apart, and cancel;
+  - for the merged version, the declared dialogue act and the parameter reading.
+
+  Executed parameters (bound by Java) and the real result are not measured by this harness.
+
 # Status on main: what runs here and what needs the candidate
 
 Offline scoring (runs on main, covered by tests, no model/network/DB):
