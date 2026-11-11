@@ -133,7 +133,7 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
             for (String bn : batchNumbers) {
                 Optional<MaterialBatch> mb = materialBatchRepository
                         .findByFactoryIdAndBatchNumber(factoryId, bn);
-                if (mb.isPresent() && mb.get().getStatus() == MaterialBatchStatus.FROZEN) {
+                if (mb.isPresent() && InventoryFreezeTool.isHeldForRecall(mb.get(), true)) {
                     BigDecimal val = computeBatchValue(mb.get());
                     if (val != null) {
                         frozenInventoryValue = frozenInventoryValue.add(val);
@@ -142,10 +142,13 @@ public class RecallLossEstimateTool extends AbstractBusinessTool {
                 }
             }
         } else {
-            // 兜底: 查 factory 全部 FROZEN 批次 (粗略, 可能含其他事件的冻结)
-            List<MaterialBatch> allFrozen = materialBatchRepository
-                    .findByStatus(MaterialBatchStatus.FROZEN).stream()
+            // 兜底: 查本厂被冻结工具扣住的批次 (粗略, 可能含其他事件的冻结)。
+            // ⛔ 不再按 FROZEN 状态全量取: FROZEN 是「冻品」正常库存, 全算进召回损失会把整个冻库估成损失。
+            List<MaterialBatch> allFrozen = java.util.stream.Stream.concat(
+                            materialBatchRepository.findByStatus(InventoryFreezeTool.HOLD_STATUS).stream(),
+                            materialBatchRepository.findByStatus(MaterialBatchStatus.FROZEN).stream())
                     .filter(b -> factoryId.equals(b.getFactoryId()))
+                    .filter(b -> InventoryFreezeTool.isHeldForRecall(b, false))
                     .collect(Collectors.toList());
             for (MaterialBatch mb : allFrozen) {
                 BigDecimal val = computeBatchValue(mb);

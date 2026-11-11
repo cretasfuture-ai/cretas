@@ -25,6 +25,7 @@ import java.math.BigDecimal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * 🔴 关单退料漏判 DEPLETED → 库存永久冻结 回归测试.
@@ -67,6 +68,13 @@ class FactoryMaterialRequisitionRestoreBatchStatusTest {
 
     @InjectMocks
     private FactoryMaterialRequisitionServiceImpl service;
+
+    @org.junit.jupiter.api.BeforeEach
+    void injectVerdictRepositories() {
+        // 交接单 11-11 二.1: 数量恢复前问一次判没判过不合格 (两个仓储必注入; 空桩 = 没判过)
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "qcReleaseRecordRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "processTimeLimitEventRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
+    }
 
     private MaterialBatch newBatch(MaterialBatchStatus status, String receipt, String used, String reserved) {
         MaterialBatch batch = new MaterialBatch();
@@ -116,6 +124,25 @@ class FactoryMaterialRequisitionRestoreBatchStatusTest {
         assertEquals(new BigDecimal("60"), batch.getUsedQuantity());
         assertEquals(MaterialBatchStatus.AVAILABLE, batch.getStatus());
         verify(materialBatchRepository).save(batch);
+    }
+
+    @Test
+    @DisplayName("交接单 11-11 二.1: 质检判过不合格、被出库盖成 USED_UP 的批次退料回来 → 仍是不良品, 不是可用")
+    void rejectedBatchRestoredByReturnStaysDefective() {
+        MaterialBatch batch = newBatch(MaterialBatchStatus.USED_UP, "100", "100", "0");
+        batch.setSourceDocType(com.cretas.aims.service.quality.release.QcInspectionGuard.WIP_SOURCE_DOC_TYPE);
+        com.cretas.aims.repository.quality.QcReleaseRecordRepository qc =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class);
+        when(qc.findByTarget(FACTORY_ID, com.cretas.aims.entity.quality.QcReleaseRecord.TargetType.WIP_MATERIAL_BATCH,
+                "batch-001")).thenReturn(java.util.List.of(com.cretas.aims.entity.quality.QcReleaseRecord.builder()
+                .decision(com.cretas.aims.entity.quality.QcReleaseRecord.Decision.REJECTED)
+                .releasedAt(java.time.LocalDateTime.now()).build()));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "qcReleaseRecordRepository", qc);
+
+        invokeRestore(batch, newItem(), "40");
+
+        assertEquals(new BigDecimal("60"), batch.getUsedQuantity());
+        assertEquals(MaterialBatchStatus.DEFECTIVE, batch.getStatus());
     }
 
     @Test

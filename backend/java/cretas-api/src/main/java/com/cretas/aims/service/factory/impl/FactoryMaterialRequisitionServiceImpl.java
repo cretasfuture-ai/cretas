@@ -71,6 +71,17 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private com.cretas.aims.service.workflow.PlanInputShareResolver planInputShareResolver;
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
+
+    /**
+     * 交接单 11-11 二.1: 数量恢复把「已用完 / 已耗尽」翻回能用之前, 问一次这批是不是判过不合格
+     * ({@code MaterialQcRejectionGuard#statusWhenRestored})。field-inject 不改既有构造器; 走到恢复分支却没注入时
+     * 闸直接报错, ⛔ 不当「没判过」恢复成可用。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionMaterialReturnRepository productionMaterialReturnRepository;
 
@@ -1377,6 +1388,16 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 ProductionInventoryOwnershipGuard.assertMaterialBatchAllowed(
                         plan, source, resolveMaterialMainCategory(factoryId, it.getMaterialTypeId()),
                         it.getId());
+                // 交接单 11-11 二.1: 划出会新建一条 AVAILABLE 的生产仓批次。来源是不良品 / 质检中 / 过期 / 报废时,
+                // 这一步等于把不可投产的料换个批号变成可用 —— 与 use / consume 同一道状态判断, 在动库存之前拦。
+                if (source.getStatus() != null && source.getStatus().blocksProduction()) {
+                    throw new BusinessException(409, String.format("领料调拨失败: 物料 %s 批次 %s %s",
+                            materialLabel(it), source.getBatchNumber(), source.getStatus().productionBlockedReason()))
+                            .withCode("PRODUCTION_REQUISITION_BATCH_NOT_USABLE")
+                            .withHint(source.getStatus().productionBlockedHint())
+                            .withHintTarget(it.getId())
+                            .withSeverity("BLOCKING");
+                }
                 BigDecimal available = source.getCurrentQuantity();
                 if (available.compareTo(moveQty) < 0) {
                     throw new BusinessException(409, String.format(
@@ -2083,7 +2104,9 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         // FEFO/FIFO 查询硬编码 status='AVAILABLE' 捞不到, 库存被冻结不可用 (2026-07 F006 事故: 10 批 67.40kg 冻结)。
         if ((batch.getStatus() == MaterialBatchStatus.USED_UP || batch.getStatus() == MaterialBatchStatus.DEPLETED)
                 && batch.getCurrentQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            // 判过不合格的批次退料回来仍是不良品 (交接单 11-11 二.1)
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, batch));
         }
         materialBatchRepository.save(batch);
     }

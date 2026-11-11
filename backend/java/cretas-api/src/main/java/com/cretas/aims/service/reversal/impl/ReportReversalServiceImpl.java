@@ -124,6 +124,17 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     @org.springframework.beans.factory.annotation.Autowired
     private ProductionPlanRepository productionPlanRepository;
 
+    /**
+     * 交接单 11-11 二.1: 数量恢复把「已用完 / 已耗尽」翻回能用之前, 问一次这批是不是判过不合格
+     * ({@code MaterialQcRejectionGuard#statusWhenRestored})。field-inject 不改既有构造器; 走到恢复分支却没注入时
+     * 闸直接报错, ⛔ 不当「没判过」恢复成可用。prod Spring 恒注入。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private SalesOrderItemRepository salesOrderItemRepository;
 
@@ -2757,7 +2768,9 @@ public class ReportReversalServiceImpl implements ReportReversalService {
         if (newUsed.compareTo(BigDecimal.ZERO) == 0
                 && (MaterialBatchStatus.USED_UP == batch.getStatus()
                     || MaterialBatchStatus.DEPLETED == batch.getStatus())) {
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            // 判过不合格的批次撤回后仍是不良品 (交接单 11-11 二.1)
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, batch));
         }
         materialBatchRepository.save(batch);
         return true;

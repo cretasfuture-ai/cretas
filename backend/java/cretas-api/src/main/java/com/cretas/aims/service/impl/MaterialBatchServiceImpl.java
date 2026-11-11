@@ -197,6 +197,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private com.cretas.aims.repository.quality.QcReleaseRecordRepository qcReleaseRecordRepository;
 
+    /** 工序超时复检判废 (缺口 14) 也是「判了不合格」: 与质检放行记录一起进 MaterialQcRejectionGuard。必注入。 */
+    @Autowired
+    private com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository processTimeLimitEventRepository;
+
     /** 更正原因落库列是 varchar(255) —— 与 material_batch_adjustments.reason 对齐。 */
     private static final int CORRECTION_REASON_MAX_LENGTH = 255;
 
@@ -2250,7 +2254,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         // D-S411-04 M2: 质检放行判了不合格的原料, 仓库页不能改回可用 (与处置放行 / 放行决策工具同一判定)
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
-                qcReleaseRecordRepository, batch, status);
+                qcReleaseRecordRepository, processTimeLimitEventRepository, batch, status);
 
         MaterialBatchStatus before = batch.getStatus();
         boolean release = com.cretas.aims.service.discipline.MaterialBatchReleaseGuard.isRelease(before, status);
@@ -2304,6 +2308,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // (releaseBatchReservation 是【查】已有 usage 行, 查不到只是静默跳过, 不会 500,
         //  在那里加校验属于另一种行为改变, 本次不动。)
         validateProductionPlanRef(productionPlanId);
+
+        // 交接单 11-11 二.1: 预留是为投产占料, 与 use / consume 同一道状态闸。不拦的话, 不良品 / 质检中 / 冻结扣住的
+        // 批次被预留满就变成 DEPLETED (结论被数量状态盖掉), 之后 consume 只看 DEPLETED 不挡投产 ⇒ 不合格料进了生产。
+        assertMaterialBatchUsable(batch);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足以预留")
@@ -2371,7 +2379,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 注意: getRemainingQuantity() 现在是计算属性
         if (batch.getStatus() == MaterialBatchStatus.DEPLETED &&
             batch.getRemainingQuantity().compareTo(BigDecimal.ZERO) > 0) {
-            batch.setStatus(MaterialBatchStatus.AVAILABLE);
+            // 判过不合格的批次释放预留后仍是不良品 (交接单 11-11 二.1)
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.statusWhenRestored(
+                    qcReleaseRecordRepository, processTimeLimitEventRepository, batch));
         }
 
         materialBatchRepository.save(batch);
