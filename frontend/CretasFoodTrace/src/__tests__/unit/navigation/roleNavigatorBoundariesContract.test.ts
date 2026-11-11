@@ -19,14 +19,14 @@ const readCode = (relativePath: string) => read(relativePath)
   .replace(/\/\/.*/g, ' ');
 
 describe('role-specific mobile navigator boundaries', () => {
-  it('keeps the factory boss on overview, analysis and account only (no empty approvals tab)', () => {
+  it('keeps the factory boss on overview, analysis and account (todo tab only via the backend gate)', () => {
     const source = readCode('navigation/BossNavigator.tsx');
     expect(source).toContain('BossOverviewStack');
-    // 2026-08-15 (Steve 拍板): 移除「审批」tab —— 它对工厂超管永远是空的。
-    // 后端 ROLE_TYPES 只有 finance_manager / cashier; 且 prod 实测
-    // approval_workflow_instances 0 行, 配了链的两家从来没有过采购单。
-    // 留一个永远空的入口比没有入口更糟。OA 待办中心 = 财务/出纳专用。
+    // 2026-08-15 (Steve 拍板) 移除过「审批」tab, 理由是它对工厂超管永远是空的 (当时后端只有财务/出纳有待办)。
+    // 2026-11-11 #1611 起待办按权限出数, 厂长拿到全部类型 (含强制插单审批), 「永远空」的前提不在了。
+    // 守的性质不变: 不出一个永远空的入口 —— 现在由后端 /my-todos/types 判定, 不再写死「这个岗位没有」(B4)。
     expect(source).not.toContain('OATodoStackNavigator');
+    expect(source).toContain("todoTabScreen(Tab, todoEntry, 'boss-tab-oa-todo')");
     expect(source).toContain('SmartBIStackNavigator');
     expect(source).toContain('MobileAccountScreen');
     expect(source).not.toContain('FAManagementStackNavigator');
@@ -72,5 +72,38 @@ describe('role-specific mobile navigator boundaries', () => {
     const source = read('navigation/RestrictedRoleNavigator.tsx');
     expect(source).toContain('不会自动开放通用业务入口');
     expect(source).toContain('退出登录');
+  });
+
+  /**
+   * B4 (2026-11-12): 「待办」入口谁看得到只由后端 /my-todos/types 决定 (useMyTodoEntry + todoTabScreen)。
+   * 岗位导航器里不许再直接挂 OATodoStackNavigator, 也不许按岗位名开关它 —— 那就是在 App 里抄一份权限映射。
+   * 例外只有财务导航器 (财务/出纳默认就有能办的待办, 首页卡片也指向它的 FinanceTodoTab)。
+   */
+  const ROLE_NAVIGATORS_WITH_TODO_GATE = [
+    ['navigation/BossNavigator.tsx', 'boss'],
+    ['navigation/HRTabNavigator.tsx', 'hr'],
+    ['navigation/WorkshopSupervisorTabNavigator.tsx', 'ws'],
+    ['navigation/WarehouseManagerTabNavigator.tsx', 'wh'],
+    ['navigation/WarehouseWorkerNavigator.tsx', 'warehouse-worker'],
+    ['navigation/DispatcherTabNavigator.tsx', 'dispatcher'],
+    ['navigation/ProductionManagerNavigator.tsx', 'production-manager'],
+    ['navigation/OperationsNavigator.tsx', 'operations'],
+    ['navigation/QualityInspectorNavigator.tsx', 'qi'],
+    ['navigation/EquipmentAdminNavigator.tsx', 'equipment-admin'],
+    ['navigation/QualityManagerNavigator.tsx', 'quality-manager'],
+    ['navigation/OperatorNavigator.tsx', 'operator'],
+    ['navigation/SalesManagerNavigator.tsx', 'sm'],
+    ['navigation/ProcurementManagerNavigator.tsx', 'pm'],
+    ['navigation/ViewerNavigator.tsx', 'vw'],
+    ['navigation/MainNavigator.tsx', 'main'],
+  ] as const;
+
+  it.each(ROLE_NAVIGATORS_WITH_TODO_GATE)('%s registers the todo tab only through the backend gate', (file, prefix) => {
+    const code = readCode(file);
+    expect(code).toContain('useMyTodoEntry()');
+    expect(code.match(/todoTabScreen\(/g) ?? []).toHaveLength(1);
+    expect(code).toContain(`todoTabScreen(Tab, todoEntry, '${prefix}-tab-oa-todo')`);
+    expect(code).not.toContain('OATodoStackNavigator');
+    expect(code).not.toMatch(/isFinanceOrCashier/);
   });
 });

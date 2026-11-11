@@ -121,4 +121,37 @@ class MyTodoControllerNoFinanceGateContractTest {
         verify(aggregator, never()).listTodosForUser(anyString(), any());
         verify(aggregator, never()).listTodos(anyString(), anyString());
     }
+
+    @Test
+    @DisplayName("B4 能办类型: 按库里的用户出, token 里的岗位不作数; 没有财务权限也 200")
+    void typesReachUserAggregation() throws Exception {
+        User user = qualityManagerWithoutAnyPermission(F);
+        when(aggregator.availableTypesForUser(F, user))
+                .thenReturn(java.util.Set.of(TodoItemDTO.TodoType.FORCE_INSERT_APPROVAL));
+
+        mvc().perform(get("/api/mobile/" + F + "/my-todos/types")
+                        .requestAttr("userId", 7L)
+                        .requestAttr("role", "finance_manager"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data[0]").value("FORCE_INSERT_APPROVAL"));
+
+        verify(aggregator).availableTypesForUser(eq(F), eq(user));
+        verify(aggregator, never()).availableTypes(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("B4 能办类型: 库里的用户不属于路径工厂 → 空数组 (App 不显示待办入口), 聚合层不被调用")
+    void typesForUserOfAnotherFactoryAreEmpty() throws Exception {
+        qualityManagerWithoutAnyPermission("F999");
+
+        mvc().perform(get("/api/mobile/" + F + "/my-todos/types")
+                        .requestAttr("userId", 7L)
+                        .requestAttr("role", "quality_manager"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data").isArray())
+                .andExpect(jsonPath("$.data").isEmpty());
+
+        verify(aggregator, never()).availableTypesForUser(anyString(), any());
+    }
 }

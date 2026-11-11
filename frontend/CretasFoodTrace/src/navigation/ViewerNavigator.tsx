@@ -33,6 +33,8 @@ import FinishedGoodsListScreen from "../screens/factory-admin/inventory/Finished
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<any>();
 const SalesViewStack = createNativeStackNavigator<any>();
@@ -66,6 +68,7 @@ function PurchaseViewStackNavigator() {
 }
 
 export function ViewerNavigator() {
+  const todoEntry = useMyTodoEntry();
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
@@ -120,6 +123,7 @@ export function ViewerNavigator() {
         }}
       />
 
+      {todoTabScreen(Tab, todoEntry, 'vw-tab-oa-todo')}
       <Tab.Screen
         name="VWProfileTab"
         component={ProfileStackNavigator}

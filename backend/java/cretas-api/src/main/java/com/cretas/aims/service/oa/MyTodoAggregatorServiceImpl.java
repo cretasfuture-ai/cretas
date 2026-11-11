@@ -25,6 +25,10 @@ import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.service.PermissionService;
+import com.cretas.aims.service.ApprovalWorkflowService;
+import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.config.ApprovalWorkflow;
+import com.cretas.aims.entity.config.ApprovalWorkflowNode;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -35,6 +39,7 @@ import com.cretas.aims.service.inventory.SupplierDeliveryNoteService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -94,6 +99,14 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     /** 按权限出数用; 同上是字段注入 (本类多构造器, 不动构造器参数)。缺失 = 所有人都没有待办, 不放开。 */
     @Autowired(required = false)
     private PermissionService permissionService;
+
+    /**
+     * 「能办哪些待办」判强制插单时要看本厂启用中的插单审批画布点没点名这个岗位 (B4)。
+     * {@code @Lazy}: 审批画布服务的依赖链很长, 不让它和本类形成启动期环; 拿不到 = 只认当前确有待审实例。
+     */
+    @Lazy
+    @Autowired(required = false)
+    private ApprovalWorkflowService approvalWorkflowService;
 
     // ─── Config ────────────────────────────────────────────────────────────
 
@@ -228,6 +241,82 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             }
         }
         return out;
+    }
+
+    // ─── 能办的待办类型 (App 决定显不显示待办入口, B4) ───────────────────────
+
+    @Override
+    public Set<TodoType> availableTypes(String factoryId, String callerRole) {
+        return narrowToNamedApprover(factoryId, callerRole, typesFor(factoryId, callerRole));
+    }
+
+    @Override
+    public Set<TodoType> availableTypesForUser(String factoryId, com.cretas.aims.entity.User user) {
+        if (user == null) {
+            return Collections.emptySet();
+        }
+        return narrowToNamedApprover(factoryId, user.getRoleCode(), typesForUser(factoryId, user));
+    }
+
+    /**
+     * 强制插单的门槛 {@code production:read_write} 默认给了操作员、车间主任、班组长等 9 个岗位, 但真正能批的是
+     * 审批画布节点 {@code approverRoles} 点名的岗位 (列表取数 {@link #fetchForceInsertApproval} 就按这个过滤)。
+     * 只按权限判, 操作员的 App 会多出一个永远空的待办入口。所以这一类再要求: 厂长 (审批引擎兜底同口径),
+     * 或本厂启用中的插单审批画布里有审批节点点名了这个岗位, 或此刻确有一条在等这个岗位批的实例 (旧版本画布上的实例)。
+     * 读不到 → 这一类不算 (宁可少给入口, 不给空入口)。
+     */
+    private Set<TodoType> narrowToNamedApprover(String factoryId, String role, Set<TodoType> types) {
+        if (!types.contains(TodoType.FORCE_INSERT_APPROVAL) || isForceInsertApprover(factoryId, role)) {
+            return types;
+        }
+        Set<TodoType> narrowed = new LinkedHashSet<>(types);
+        narrowed.remove(TodoType.FORCE_INSERT_APPROVAL);
+        return narrowed;
+    }
+
+    private boolean isForceInsertApprover(String factoryId, String role) {
+        if (role == null || role.isBlank()) {
+            return false;
+        }
+        if (com.cretas.aims.entity.enums.FactoryUserRole.factory_super_admin.name().equals(role)) {
+            return true;
+        }
+        try {
+            if (approvalWorkflowService != null) {
+                ApprovalWorkflow active = approvalWorkflowService
+                        .getActiveByDecisionType(factoryId, DecisionType.FORCE_INSERT).orElse(null);
+                if (active != null && namesApproverRole(
+                        approvalWorkflowService.deserializeNodes(active.getNodesJson()), role)) {
+                    return true;
+                }
+            }
+            return !fetchForceInsertApproval(factoryId, role).isEmpty();
+        } catch (RuntimeException failure) {
+            log.warn("[MyTodoAggregator] 插单审批画布读取失败, 不给插单待办入口 factoryId={} role={}: {}",
+                    factoryId, role, failure.getMessage());
+            return false;
+        }
+    }
+
+    /** 与 {@code WorkflowEngineServiceImpl#findPendingForRole} 同一判据: approval 节点的 approverRoles 逐项 equals。 */
+    private static boolean namesApproverRole(List<ApprovalWorkflowNode> nodes, String role) {
+        if (nodes == null) {
+            return false;
+        }
+        for (ApprovalWorkflowNode node : nodes) {
+            if (node == null || !"approval".equals(node.getType()) || node.getConfig() == null) {
+                continue;
+            }
+            Object roles = node.getConfig().get("approverRoles");
+            if (roles instanceof List<?> roleList) {
+                for (Object r : roleList) {
+                    if (r != null && role.equals(String.valueOf(r))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     // ─── API ───────────────────────────────────────────────────────────────
