@@ -219,4 +219,64 @@ class ReversalVoidsOnlyThisBatchGoodsContractTest {
                         e -> assertThat(e.getErrorCode()).isEqualTo("FG_OWNERSHIP_UNCLEAR"));
         assertThat(joint.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
     }
+
+    // ---------------------------------------------- 独立审查 (#1597) 的回归
+
+    @Test
+    void anAlreadyVoidedJointLotNoLongerBlocksTheReversal() {
+        // F1: 先撤销小结 (合产批被作废、血缘边仍在), 再按提示撤回本批次 —— 不能因为那个已作废的合产批而 409
+        batch(MINE, "PB-1924");
+        batch(OTHER, "PB-1925");
+        FinishedGoodsBatch voidedJoint = goods("fg-joint", "FG-plan-c5-S1-p");
+        voidedJoint.setStatus(FinishedGoodsBatch.Status.REVERSED);
+        voidedJoint.setReversalLogId(7L);
+        edge(MINE, voidedJoint);
+        edge(OTHER, voidedJoint);
+        FinishedGoodsBatch mine = goods("fg-mine", "FG-plan-c5-S2-p");
+        edge(MINE, mine);
+
+        service.executeReversal(LOG_ID, F);
+
+        assertThat(mine.getStatus()).isEqualTo(FinishedGoodsBatch.Status.REVERSED);
+        assertThat(voidedJoint.getReversalLogId()).as("已作废的不再被改写").isEqualTo(7L);
+    }
+
+    @Test
+    void aCancelledSiblingBatchDoesNotMakeASingleBatchPlanAmbiguous() {
+        // F2: 取消的批次没有产出, 不算「同计划别的批次」
+        batch(MINE, "PB-1924");
+        batch(OTHER, "PB-1925").setStatus(ProductionBatchStatus.CANCELLED);
+        FinishedGoodsBatch received = goods("fg-recv", "FG-plan-c5");   // 结单入库批, 没有血缘、批号对不上
+
+        service.executeReversal(LOG_ID, F);
+
+        assertThat(received.getStatus()).isEqualTo(FinishedGoodsBatch.Status.REVERSED);
+    }
+
+    @Test
+    void goodsShippedAfterSubmissionAreNotVoidedAtExecution() {
+        batch(MINE, "PB-1924");
+        batch(OTHER, "PB-1925");
+        FinishedGoodsBatch mine = goods("fg-mine", "FG-plan-c5-S1-p");
+        mine.setShippedQuantity(new BigDecimal("2"));
+        edge(MINE, mine);
+
+        assertThatThrownBy(() -> service.executeReversal(LOG_ID, F))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo("FG_SHIPPED"));
+        assertThat(mine.getStatus()).isEqualTo(FinishedGoodsBatch.Status.AVAILABLE);
+    }
+
+    @Test
+    void unclearOwnershipIsRefusedAtSubmissionNotOnlyAfterApproval() {
+        ProductionBatch me = batch(MINE, "PB-1924");
+        batch(OTHER, "PB-1925");
+        goods("fg-a", "FG-plan-c5-S1-p");
+        goods("fg-b", "FG-plan-c5-S2-p");
+        when(batchRepo.findByIdAndFactoryId(MINE, F)).thenReturn(Optional.of(me));
+
+        assertThatThrownBy(() -> service.submitReversal(F, MINE, 7L, "报错了"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("FG_OWNERSHIP_UNCLEAR"));
+        verify(reversalLogRepo, never()).save(any(ReportReversalLog.class));
+    }
 }

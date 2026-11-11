@@ -284,6 +284,10 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                         .withHint("请确认出货记录后处理退货再申请撤回");
             }
             refuseWhileInterimSessionCovers(factoryId, batchId, batch.getProductionPlanId());
+            // 纪律排查 C5 (审查 F4): 成品归属分不清的, 提交时就说, 不等审批人批了才在执行时 409
+            goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, batch.getProductionPlanId()),
+                    batch.getProductionPlanId());
         }
 
         // G3: 幂等检查
@@ -3148,15 +3152,23 @@ public class ReportReversalServiceImpl implements ReportReversalService {
      */
     private List<FinishedGoodsBatch> goodsProducedByThisBatch(String factoryId, Long batchId,
                                                               List<FinishedGoodsBatch> planGoods, String planId) {
-        if (planGoods == null || planGoods.isEmpty()) {
+        // 审查 F1: 已经作废的成品 (如先撤销小结时作废的合产批) 不再参与归属, 也不会被再作废一次
+        List<FinishedGoodsBatch> live = planGoods == null ? List.of() : planGoods.stream()
+                .filter(fg -> fg.getStatus() != FinishedGoodsBatch.Status.REVERSED)
+                .toList();
+        if (live.isEmpty()) {
             return List.of();
         }
+        // 审查 F2: 取消的批次没有产出, 不算「同计划别的批次」(与结单撤回的范围校验同口径)
         List<ProductionBatch> planBatches = batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId);
-        boolean otherBatches = planBatches != null
-                && planBatches.stream().anyMatch(b -> b.getId() != null && !b.getId().equals(batchId));
+        planBatches = planBatches == null ? List.of() : planBatches.stream()
+                .filter(b -> b.getStatus() != ProductionBatchStatus.CANCELLED || batchId.equals(b.getId()))
+                .toList();
+        boolean otherBatches = planBatches.stream().anyMatch(b -> b.getId() != null && !b.getId().equals(batchId));
         if (!otherBatches) {
-            return planGoods;
+            return refuseIfShipped(batchId, live);
         }
+        planGoods = live;
         if (batchLineageEdgeRepository == null) {
             throw new BusinessException(503, "成品归属判断服务未就绪, 无法只撤回本批次的成品")
                     .withCode("FG_OWNERSHIP_UNAVAILABLE")
@@ -3184,6 +3196,19 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     .withSeverity("BLOCKING")
                     .withHintTarget(String.valueOf(batchId));
         }
-        return mine;
+        return refuseIfShipped(batchId, mine);
+    }
+
+    /** 要作废的成品里已经出过货的 ⇒ 不作废 (提交时的 G2 之后才出货的那种; 出过货只能走退货)。 */
+    private static List<FinishedGoodsBatch> refuseIfShipped(Long batchId, List<FinishedGoodsBatch> goods) {
+        for (FinishedGoodsBatch fg : goods) {
+            if (fg.getShippedQuantity() != null && fg.getShippedQuantity().signum() > 0) {
+                throw new BusinessException(409, String.format(
+                        "批次 %d 的成品 %s 已出货, 无法整单撤回", batchId, fg.getBatchNumber()))
+                        .withCode("FG_SHIPPED")
+                        .withHint("请确认出货记录后处理退货再申请撤回");
+            }
+        }
+        return goods;
     }
 }
