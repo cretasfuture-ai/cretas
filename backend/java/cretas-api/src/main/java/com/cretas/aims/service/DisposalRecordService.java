@@ -252,23 +252,34 @@ public class DisposalRecordService implements IDisposalRecordService {
     }
 
     /**
-     * 报废审批角色守卫 (F-BUG-5)。
+     * 报废审批权限守卫 (F-BUG-5; 纪律排查 B8: 按权限, 不按岗位名)。
      *
      * <p>转录硬约束: 仓库报损/报废须财务审批。此前 controller 仅 {@code @RequirePermission
-     * ("warehouse:read_write")} → 仓管员可自批报废扣库存。改为强制财务/工厂管理员角色,
-     * 对齐 {@link com.cretas.aims.service.factory.impl.FactoryStocktakeServiceImpl}。
+     * ("warehouse:read_write")} → 仓管员可自批报废扣库存。现在要求持「报废审批」权限
+     * ({@link PermissionService#DISPOSAL_APPROVE_PERMISSION}): 默认财务经理 + 厂长 (= 改动前写死的名单),
+     * 工厂可在阈值设置里改岗位名单。App 的审批按钮读同一份判断 (见 DisposalController 的 approval-permission 端点),
+     * 不再各留一份名单。
      *
-     * <p>角色码为小写 (JWT/request attribute "role" 携带 factory_super_admin 等)。
+     * <p>权限服务缺失 (只可能出现在手工构造的单测) 一律拒绝, 不放行。
      */
-    private static final java.util.Set<String> DISPOSAL_APPROVAL_ROLES = java.util.Set.of(
-            "finance_manager", "factory_super_admin", "platform_super_admin", "platform_admin");
+    @Autowired(required = false)
+    private PermissionService permissionService;
 
-    private void assertApprovalRole(String requestRole) {
-        String normalized = requestRole == null ? "" : requestRole.toLowerCase();
-        if (!DISPOSAL_APPROVAL_ROLES.contains(normalized)) {
-            throw new BusinessException(403,
-                    "报废审批需要财务经理或工厂管理员角色，当前角色：" + requestRole)
-                    .withHint("请联系财务经理 (finance_manager) 或工厂超管审批");
+    @Override
+    public boolean canApprove(String factoryId, String role) {
+        // 平台账号 (改动前名单里的 platform_admin / platform_super_admin) 保持可审批; 用 PlatformRoleBoundary 判, 不再点名岗位字符串。
+        if (com.cretas.aims.security.PlatformRoleBoundary.isPlatformTier(role)) {
+            return true;
+        }
+        return permissionService != null
+                && permissionService.roleHasConfiguredPermission(
+                        factoryId, role, PermissionService.DISPOSAL_APPROVE_PERMISSION);
+    }
+
+    private void assertApprovalRole(String factoryId, String requestRole) {
+        if (!canApprove(factoryId, requestRole)) {
+            throw new BusinessException(403, "当前账号没有「报废审批」权限，当前角色：" + requestRole)
+                    .withHint("默认由财务经理或工厂管理员审批; 工厂管理员可在阈值设置里把「报废审批」授给其他岗位");
         }
     }
 
@@ -302,7 +313,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Transactional
     public DisposalRecord approveDisposal(String factoryId, Long id, Integer approverId,
             String approverName, String requestRole) {
-        assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
+        assertApprovalRole(factoryId, requestRole);  // F-BUG-5: 报废审批权限守卫
         disposalCostAccountingService.lockFactory(factoryId);
         DisposalRecord record = findForMutation(factoryId, id);
         assertSingleInventoryTarget(record);
@@ -611,7 +622,7 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Transactional
     public DisposalRecord rejectDisposal(String factoryId, Long id, Integer approverId,
             String approverName, String reason, String requestRole) {
-        assertApprovalRole(requestRole);  // F-BUG-5: 财务角色守卫
+        assertApprovalRole(factoryId, requestRole);  // F-BUG-5: 报废审批权限守卫
         DisposalRecord record = findForMutation(factoryId, id);
 
         if (!"PENDING".equals(record.getStatus())) {

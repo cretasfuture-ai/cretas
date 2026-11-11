@@ -78,6 +78,8 @@ public final class ThresholdKeys {
     public static final String INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN = "inventory.permission.material_type_maintain";
     /** 报损审批 (通过/驳回/看待审) 的岗位 → 默认只有厂长 (空) */
     public static final String INVENTORY_PERMISSION_WASTAGE_APPROVE = "inventory.permission.wastage_approve";
+    /** 报废审批 (通过/驳回) 的岗位 → 默认 finance_manager (改动前写死的名单), 厂长恒有 */
+    public static final String INVENTORY_PERMISSION_DISPOSAL_APPROVE = "inventory.permission.disposal_approve";
     /** 信用特批 (超信用额度被拦截时放行) 的岗位 → 默认只有厂长 (空) */
     public static final String CREDIT_PERMISSION_OVERRIDE = "credit.permission.override";
 
@@ -364,6 +366,7 @@ public final class ThresholdKeys {
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            INVENTORY_PERMISSION_DISPOSAL_APPROVE,
             CREDIT_PERMISSION_OVERRIDE,
             SALES_ORDER_CANCEL_AFTER_APPROVAL,
             SALES_PERMISSION_CANCEL_APPROVED_ORDER
@@ -373,6 +376,7 @@ public final class ThresholdKeys {
     public static final java.util.Set<String> ROLE_LIST_KEYS = java.util.Set.of(
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
+            INVENTORY_PERMISSION_DISPOSAL_APPROVE,
             CREDIT_PERMISSION_OVERRIDE,
             SALES_PERMISSION_CANCEL_APPROVED_ORDER,
             PRODUCTION_NOTIFY_SCHEDULE_CREATED,

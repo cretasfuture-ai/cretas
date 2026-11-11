@@ -630,6 +630,9 @@ public class PermissionServiceImpl implements PermissionService {
                     com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE, ""),
             CREDIT_OVERRIDE_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.CREDIT_PERMISSION_OVERRIDE, ""),
+            DISPOSAL_APPROVE_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_DISPOSAL_APPROVE,
+                    "finance_manager"),
             SALES_ORDER_CANCEL_APPROVED_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER, ""));
 

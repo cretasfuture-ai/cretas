@@ -45,6 +45,12 @@ public interface PermissionService {
     /** 报损审批 (通过/驳回/看待审列表)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE)。 */
     String WASTAGE_APPROVE_PERMISSION = "wastage:approve";
 
+    /**
+     * 报废审批 (通过 / 驳回)。默认财务经理 + 厂长 (= 改动前写死的名单), 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.INVENTORY_PERMISSION_DISPOSAL_APPROVE)。App 与后端共用这一份判断。
+     */
+    String DISPOSAL_APPROVE_PERMISSION = "disposal:approve";
+
     /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
     String CREDIT_OVERRIDE_PERMISSION = "credit:override";
 

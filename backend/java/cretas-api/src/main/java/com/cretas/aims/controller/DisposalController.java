@@ -55,6 +55,20 @@ public class DisposalController {
 
     private final DisposalRecordService disposalRecordService;
 
+    /**
+     * 当前账号能不能审批报废 —— App 审批按钮的唯一依据 (不再各留一份角色名单)。
+     * 与 approve / reject 的后端守卫读同一份判断 ({@code DisposalRecordService#canApprove})。
+     * 硬约束 8 登记: 本类 14 个端点 + 本条新增 1 个 = 15; 本条故意只挂模块 + alsoAllowRoles, 不加 @RequirePermission:
+     * 它只回答「我能不能审批」, 谁都可以问。
+     */
+    @GetMapping("/approval-permission")
+    @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
+    @Operation(summary = "当前账号是否有报废审批权限")
+    public ResponseEntity<?> getApprovalPermission(@PathVariable String factoryId, HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(Map.of("success", true, "data",
+                Map.of("canApprove", disposalRecordService.canApprove(factoryId, extractRole(httpRequest)))));
+    }
+
     @GetMapping("/{id}/vouchers")
     @RequirePermission({"finance:read", "finance:read_write"})
     @RequireModule(value = "quality_inspection", alsoAllowRoles = APPROVER_ROLE)
