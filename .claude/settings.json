@@ -14,6 +14,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "bash .claude/tools/sync-main-claude.sh",
             "timeout": 40
           },
@@ -21,6 +26,28 @@
             "type": "command",
             "command": "bash .claude/tools/worktree-hygiene.sh --auto",
             "timeout": 20
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-touch.sh",
+            "timeout": 10
           }
         ]
       }

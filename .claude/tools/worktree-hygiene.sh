@@ -54,9 +54,11 @@ recent() { # 120 分钟内 HEAD 动过(提交/切分支)。⛔ 不看 index: git
   [ "${WH_NO_RECENT:-0}" = 1 ] && return 1
   local g; g=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
   local win=120
-  if [ "$mode" = "--auto" ]; then   # --auto 已要求「PR 已合并 + 干净」, 不再叠时间窗(否则刚合并的会白占名额); 想加保护用 WH_RECENT_MIN=<分钟>
-    [ -n "${WH_RECENT_MIN:-}" ] || return 1
-    win="$WH_RECENT_MIN"
+  if [ "$mode" = "--auto" ]; then
+    # --auto 不看提交时间(已合并+干净的 worktree 提交时间必然是旧的, 用它判断「在不在用」会误杀正在收尾的会话, 2026-11-11 实测删掉了当前会话自己的目录)。
+    # 看会话活动标记: worktree-touch.sh 在 SessionStart/每条消息/每轮结束时 touch <gitdir>/wh-active; 标记在 WH_ACTIVE_MIN(默认 360)分钟内 = 有会话在用。
+    [ -n "$(find "$g/wh-active" -mmin -"${WH_ACTIVE_MIN:-360}" 2>/dev/null)" ]
+    return
   fi
   [ -n "$(find "$g/HEAD" -mmin -"$win" 2>/dev/null)" ]
 }
