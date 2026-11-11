@@ -204,6 +204,11 @@ public class IntentExecutionOrchestrator {
     @Autowired
     private IntentPermissionGate intentPermissionGate;
 
+    // INTENT-DISTILL D2: 低置信澄清的候选与 SSE 同一个按权限过滤的服务。裸构造的单测里为 null ⇒ 只给「重新描述」
+    // (fail closed), ⛔ 不回落旧的未过滤候选或默认业务按钮。
+    @Autowired(required = false)
+    private ClarificationCandidateService clarificationCandidateService;
+
     @Autowired
     private com.cretas.aims.repository.config.AIIntentConfigRepository intentConfigRepository;
 
@@ -571,7 +576,7 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                 && !Boolean.TRUE.equals(request.getForceExecute())) {
-            return buildClarificationResponse(matchResult, factoryId);
+            return buildClarificationResponse(matchResult, factoryId, userId, userRole, request.getMode());
         }
 
         // 2b. 通用咨询/闲聊
@@ -2341,17 +2346,16 @@ public class IntentExecutionOrchestrator {
 
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
-        AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
+        return buildClarificationResponse(matchResult, factoryId, null, null, null);
+    }
 
-        // Sprint 12: enrich clarification message with inline candidate intent names so the
-        // formattedText itself carries the choices (not just suggestedActions UI buttons).
-        // Audit gate requires NEED_CLARIFICATION to include specific 2+ choice question
-        // visible in formattedText / message — bare "请确认您想要执行的操作" fails.
-        String clarificationMessage = matchResult.getClarificationQuestion();
-        if (clarificationMessage == null || clarificationMessage.isEmpty()) {
-            clarificationMessage = buildClarificationWithChoices(candidateActions, factoryId);
-        }
+    IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
+                                                     Long userId, String userRole, String mode) {
+        AIIntentConfig matchedIntent = matchResult.getBestMatch();
+        List<IntentExecuteResponse.SuggestedAction> candidateActions =
+                buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
+        // 与 SSE 同一份话术: 有业务候选就列出来; 一个都没有就明确说没有, 不用默认业务按钮凑数。
+        String clarificationMessage = ClarificationCandidateService.clarificationMessage(candidateActions);
 
         Map<String, Object> metadata = new HashMap<>();
         if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
@@ -2398,10 +2402,9 @@ public class IntentExecutionOrchestrator {
         }
 
         if (matchResult.getTopCandidates() != null && !matchResult.getTopCandidates().isEmpty()) {
-            List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(matchResult, factoryId);
-            // Sprint 12: enrich weak-signal message with inline candidate intent names.
-            String weakSignalMsg = "我不太确定您想执行什么操作。" + buildChoicesLine(candidateActions)
-                    + "请回复对应序号, 或更详细地描述您的需求 (例如指定时段 / 物料 / 批次)。";
+            List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(
+                    matchResult, factoryId, userId, userRole, request == null ? null : request.getMode());
+            String weakSignalMsg = ClarificationCandidateService.clarificationMessage(candidateActions);
             IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
                     .intentRecognized(false).status("NEED_CLARIFICATION")
                     .message(weakSignalMsg).formattedText(weakSignalMsg)
@@ -2472,15 +2475,6 @@ public class IntentExecutionOrchestrator {
      * <p>Audit close-gate row "NEED_CLARIFICATION contains specific 2+ choices" requires
      * the user-facing text to enumerate the candidate intents inline.
      */
-    private String buildClarificationWithChoices(List<IntentExecuteResponse.SuggestedAction> candidateActions,
-                                                  String factoryId) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("您的请求可能匹配多个操作, 请选择您实际想做的:");
-        sb.append(buildChoicesLine(ensureMinChoices(candidateActions, 2, factoryId)));
-        sb.append("回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。");
-        return sb.toString();
-    }
-
     /**
      * Sprint 12 close-gate row "NEED_CLARIFICATION returns specific 2-or-3-choice question"
      * requires ≥2 data choices in the user-visible text. When the candidate set has <2
@@ -2684,37 +2678,18 @@ public class IntentExecutionOrchestrator {
         return normalized;
     }
 
-    private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult, String factoryId) {
-        List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
-        // C1: drop candidates whose owning intent's business_type is incompatible with this
-        // factory's domain (e.g. a RESTAURANT tenant must not see 查询原料库存 manufacturing options).
-        String factoryDomain = resolveFactoryDomainSafe(factoryId);
-        if (matchResult.getTopCandidates() != null) {
-            for (IntentMatchResult.CandidateIntent candidate : matchResult.getTopCandidates()) {
-                if (actions.size() >= 3) break;
-                if (!isCandidateCompatible(factoryId, factoryDomain, candidate.getIntentCode())) {
-                    continue; // business-type mismatch — skip noise
-                }
-                actions.add(ClarificationCandidateService.toSelectAction(
-                        factoryId, candidate.getIntentCode(), candidate.getIntentName(),
-                        candidate.getDescription(), candidate.getConfidence()));
-            }
+    /**
+     * 澄清候选: 与 SSE 同一个服务 ({@link ClarificationCandidateService}) —— 按当前工厂配置、业态、模式、
+     * 意图权限与一线受众逐个核过才出; 业务候选为 0 时只有「重新描述」(明确失败), 不再回落未过滤的
+     * 识别候选或默认业务按钮 (INTENT-DISTILL D2)。
+     */
+    private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult,
+                                                                          String factoryId, Long userId,
+                                                                          String userRole, String mode) {
+        if (clarificationCandidateService == null) {
+            return ClarificationCandidateService.rephraseOnly();
         }
-        // C1: if filtering left ZERO data candidates (all incompatible with this domain), fall
-        // back to factory-aware defaults so the user still gets actionable options (never empty).
-        if (actions.isEmpty()) {
-            for (IntentExecuteResponse.SuggestedAction d : buildDefaultSuggestions(factoryId)) {
-                String code = d.getActionCode();
-                if ("REPHRASE".equals(code) || "SHOW_INTENTS".equals(code)) continue;
-                actions.add(d);
-            }
-        }
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("REPHRASE").actionName("重新描述").build());
-        actions.add(IntentExecuteResponse.SuggestedAction.builder()
-                .actionCode("SHOW_INTENTS").actionName("查看所有可用操作")
-                .endpoint("/api/mobile/" + factoryId + "/ai-intents").build());
-        return actions;
+        return clarificationCandidateService.buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
     }
 
     /**

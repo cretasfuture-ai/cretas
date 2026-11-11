@@ -33,6 +33,15 @@ import java.util.Set;
 public class ClarificationCandidateService {
 
     private static final int MAX_BUSINESS_CHOICES = 3;
+    /**
+     * 不是业务目标的选项: 「其他 / 域外」「能力不支持」「继续上次 / 翻页」。它们可以出现在澄清里,
+     * 但不占业务候选的名额, 也不能单独构成一次澄清 (INTENT-DISTILL D2)。
+     * ⛔ 不按 intent_category=SYSTEM 判: 那一类里还有排产模式、功能开关等真业务。
+     */
+    static final Set<String> NON_BUSINESS_OPTIONS = Set.of(
+            "OUT_OF_DOMAIN", "UNSUPPORTED_CAPABILITY",
+            "CONTEXT_CONTINUE", "CONTINUE_LAST_OPERATION", "SYSTEM_RESUME_LAST_ACTION",
+            "PAGINATION_NEXT", "PAGINATION_PREVIOUS", "NAVIGATION_NEXT_PAGE", "NAVIGATION_PREVIOUS_PAGE");
     private static final String MODE_READ = "READ";
 
     private final IntentConfigManagementService configService;
@@ -80,6 +89,7 @@ public class ClarificationCandidateService {
             String userRole,
             String mode) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
+        List<IntentExecuteResponse.SuggestedAction> conversationOptions = new ArrayList<>();
         Set<String> seenCodes = new HashSet<>();
 
         if (matchResult != null && hasIdentity(factoryId, userId, userRole)) {
@@ -91,6 +101,7 @@ public class ClarificationCandidateService {
             List<IntentMatchResult.CandidateIntent> candidates = matchResult.getTopCandidates();
             if (candidates != null) {
                 for (IntentMatchResult.CandidateIntent candidate : candidates) {
+                    // 预算只按业务候选算: 「其他 / 不支持 / 继续 / 翻页」这类选项不占业务名额 (INTENT-DISTILL D2)
                     if (actions.size() >= MAX_BUSINESS_CHOICES) {
                         break;
                     }
@@ -110,9 +121,25 @@ public class ClarificationCandidateService {
                             || !FrontlineReadAudience.offeredTo(code, userRole)) {
                         continue;
                     }
+                    if (NON_BUSINESS_OPTIONS.contains(code)) {
+                        if (conversationOptions.size() < MAX_BUSINESS_CHOICES) {
+                            conversationOptions.add(toSelectAction(config, factoryId, candidate));
+                        }
+                        continue;
+                    }
                     actions.add(toSelectAction(config, factoryId, candidate));
                 }
             }
+        }
+
+        // 业务候选为 0: 明确说没有可安全提供的业务选项 (只给「重新描述」), 不拿会话类选项或默认按钮顶替。
+        if (actions.isEmpty()) {
+            return rephraseOnly();
+        }
+        // 会话类选项只排在业务候选之后、补剩余名额
+        for (IntentExecuteResponse.SuggestedAction option : conversationOptions) {
+            if (actions.size() >= MAX_BUSINESS_CHOICES) break;
+            actions.add(option);
         }
 
         // This is the only fallback that does not claim a business operation can run.
@@ -123,9 +150,48 @@ public class ClarificationCandidateService {
         return actions;
     }
 
-    private List<IntentExecuteResponse.SuggestedAction> rephraseOnly() {
+    static List<IntentExecuteResponse.SuggestedAction> rephraseOnly() {
         return List.of(IntentExecuteResponse.SuggestedAction.builder()
                 .actionCode("REPHRASE").actionName("重新描述").build());
+    }
+
+    /**
+     * 澄清话术: 普通入口与 SSE 同一份 (原在 SseStreamingService)。没有可选的业务候选时明确说没有,
+     * 不拿默认业务按钮凑数。
+     */
+    static String clarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
+        String choices = choicesLine(actions);
+        if (choices.isBlank()) {
+            return "当前没有可安全提供的业务选项，请重新描述您的需求。";
+        }
+        // 只剩一个选项时不说「可能匹配多个操作」—— 2026-10-06 真机: 一个按钮配「请选择」读起来像坏了。
+        List<IntentExecuteResponse.SuggestedAction> intentChoices = actions.stream()
+                .filter(x -> x != null && "SELECT_INTENT".equals(x.getActionCode())
+                        && x.getActionName() != null && !x.getActionName().isBlank())
+                .toList();
+        if (intentChoices.size() == 1) {
+            return "您是要「" + intentChoices.get(0).getActionName() + "」吗？点下面确认；不是的话请换个说法。";
+        }
+        return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
+    }
+
+    private static String choicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
+        if (actions == null || actions.isEmpty()) {
+            return "";
+        }
+        StringBuilder line = new StringBuilder("\n");
+        int index = 1;
+        for (IntentExecuteResponse.SuggestedAction action : actions) {
+            if (action == null || !"SELECT_INTENT".equals(action.getActionCode())
+                    || action.getActionName() == null || action.getActionName().isBlank()) {
+                continue;
+            }
+            line.append(index++).append(". ").append(action.getActionName()).append("\n");
+            if (index > 3) {
+                break;
+            }
+        }
+        return index == 1 ? "" : line.toString();
     }
 
     private boolean hasIdentity(String factoryId, Long userId, String userRole) {

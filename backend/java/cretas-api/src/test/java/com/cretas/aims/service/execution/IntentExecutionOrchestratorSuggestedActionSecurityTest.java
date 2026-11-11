@@ -81,8 +81,14 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
         when(configService.resolveBusinessDomain(FACTORY_ID)).thenReturn("FACTORY");
         AIIntentConfig config = new AIIntentConfig();
         config.setIntentCode(INTENT_CODE);
+        config.setIntentName("Material query");
         config.setBusinessType("FACTORY");
+        config.setIsActive(true);
         when(configService.getIntentByCode(FACTORY_ID, INTENT_CODE)).thenReturn(Optional.of(config));
+        when(configService.hasPermission(FACTORY_ID, INTENT_CODE, "factory_super_admin")).thenReturn(true);
+        // INTENT-DISTILL D2: 普通入口与 SSE 共用同一个按权限过滤的候选服务
+        ReflectionTestUtils.setField(orchestrator, "clarificationCandidateService", new ClarificationCandidateService(
+                configService, mock(IntentPermissionGate.class), null, new com.cretas.aims.ai.tool.WriteGuardService()));
 
         IntentMatchResult matchResult = IntentMatchResult.builder()
                 .topCandidates(List.of(IntentMatchResult.CandidateIntent.builder()
@@ -95,7 +101,7 @@ class IntentExecutionOrchestratorSuggestedActionSecurityTest {
         @SuppressWarnings("unchecked")
         List<IntentExecuteResponse.SuggestedAction> actions =
                 (List<IntentExecuteResponse.SuggestedAction>) ReflectionTestUtils.invokeMethod(
-                        orchestrator, "buildCandidateActions", matchResult, FACTORY_ID);
+                        orchestrator, "buildCandidateActions", matchResult, FACTORY_ID, 1L, "factory_super_admin", null);
 
         IntentExecuteResponse.SuggestedAction selectIntent = actions.stream()
                 .filter(action -> "SELECT_INTENT".equals(action.getActionCode()))
