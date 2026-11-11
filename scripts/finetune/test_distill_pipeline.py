@@ -136,6 +136,19 @@ def test_agreement_and_review_queue(table, tmp_path):
     assert abs(sum(silver[0]['teacher_probs'].values()) - 1) < 1e-3
 
 
+def test_dedupe_drops_only_same_words_same_task(table, tmp_path):
+    import argparse
+    a_row = raw_row(table, id='a', utterance='换成上个月的')
+    same = raw_row(table, id='b', utterance='换成上个月的 ')          # same normalized words, same prev task
+    other_task = raw_row(table, id='c', utterance='换成上个月的',
+                         state=dict(a_row['state'], prev_intent=a_row['candidates'][1]))
+    dc.write_jsonl(tmp_path / 'old.jsonl', [a_row])
+    dc.write_jsonl(tmp_path / 'new.jsonl', [same, other_task])
+    dp.cmd_dedupe(argparse.Namespace(input=tmp_path / 'new.jsonl', against=[tmp_path / 'old.jsonl'],
+                                     output=tmp_path / 'out.jsonl'), table)
+    assert [r['id'] for r in dc.read_jsonl(tmp_path / 'out.jsonl')] == ['c']
+
+
 def test_split_never_crosses_families():
     rows = [dict(family='F%d' % (i % 9), id=str(i)) for i in range(300)]
     assign = dp.split_families(rows)

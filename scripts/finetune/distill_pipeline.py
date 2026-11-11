@@ -217,6 +217,17 @@ def cmd_generate(a, table):
     print('GENERATED', len(uniq), 'rejected', dict(rejected))
 
 
+def cmd_dedupe(a, table):
+    """Drop rows of --input whose (utterance, prev_intent, family) key already exists in any --against file."""
+    from flywheel_reviewed import normalized
+    key = lambda r: (normalized(r['utterance']), (r['state'] or {}).get('prev_intent'), r['family'])
+    seen = {key(r) for f in a.against for r in read_jsonl(f)}
+    rows = read_jsonl(a.input)
+    keep = [r for r in rows if key(r) not in seen]
+    write_jsonl(a.output, keep)
+    print('DEDUPE in=%d against=%d kept=%d dropped=%d' % (len(rows), len(seen), len(keep), len(rows) - len(keep)))
+
+
 # ------------------------------------------------------------------ label
 RUBRIC = None     # set by --rubric: clarify_rubric.json, given identically to both teachers
 
@@ -439,7 +450,9 @@ def ro_bucket(r):
         return 'read_only'
     if r['read_only'] is False:
         return 'write'
-    target = (r.get('generator_plan') or {}).get('intent') or (r.get('state') or {}).get('prev_intent')
+    # an assembled row carries the teachers' label; only unlabeled rows fall back to the plan
+    intent = r.get('intent') if 'dialogue_act' in r and r.get('dialogue_act') else (r.get('generator_plan') or {}).get('intent')
+    target = intent or (r.get('state') or {}).get('prev_intent')
     return 'unresolved' if target else 'no_target'
 
 
@@ -449,9 +462,13 @@ def cmd_report(a, table):
     silver = read_jsonl(work / 'silver.jsonl')
     queue = read_jsonl(work / 'review-queue.jsonl')
     ag = {r['id'] for r in silver}
-    by_act, by_ro = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0])
+    by_act, by_ro, by_both = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0])
+    by_label = defaultdict(lambda: defaultdict(int))
+    for r in silver:
+        by_label[r['dialogue_act']][ro_bucket(r)] += 1
     for r in labeled:
-        for bucket, key in ((by_act, r['generator_plan']['dialogue_act']), (by_ro, ro_bucket(r))):
+        act = r['generator_plan']['dialogue_act']
+        for bucket, key in ((by_act, act), (by_ro, ro_bucket(r)), (by_both, '%s|%s' % (act, ro_bucket(r)))):
             bucket[key][1] += 1
             bucket[key][0] += r['id'] in ag
     maxp = [max(r['teacher_probs'].values()) for r in silver]
@@ -473,6 +490,11 @@ def cmd_report(a, table):
         agreement_overall=rate(len(silver), len(labeled)),
         agreement_by_generator_dialogue_act={k: dict(n=v[1], agreed=v[0], rate=rate(*v)) for k, v in sorted(by_act.items())},
         agreement_by_read_only={k: dict(n=v[1], agreed=v[0], rate=rate(*v)) for k, v in sorted(by_ro.items())},
+        agreement_by_generator_act_and_read_only={k: dict(n=v[1], agreed=v[0], rate=rate(*v)) for k, v in sorted(by_both.items())},
+        silver_label_counts_by_act_and_read_only={k: dict(v) for k, v in sorted(by_label.items())},
+        silver_families=len({r['family'] for r in silver}),
+        lane_spend_upper_usd=round(spend + sum(x.get('price_upper_usd', 0) for d in getattr(a, 'extra_spent', [])
+                                               for x in read_jsonl(Path(d) / 'api-results.jsonl')), 4),
         review_reasons=dict(reasons),
         luna_max_prob_on_agreed=dict(n=len(maxp), median=round(statistics.median(maxp), 4) if maxp else None,
                                      share_below_0_6=rate(sum(p < .6 for p in maxp), len(maxp))),
@@ -491,7 +513,8 @@ def cmd_report(a, table):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('stage', choices=['generate', 'label', 'assemble', 'split', 'report', 'validate'])
+    ap.add_argument('stage', choices=['generate', 'dedupe', 'label', 'assemble', 'split', 'report', 'validate'])
+    ap.add_argument('--against', action='append', default=[], help='dedupe: earlier jsonl files (repeatable)')
     ap.add_argument('--work', required=True, help='evidence directory outside git (ledger + receipts live here)')
     ap.add_argument('--cap', type=float, default=10.0, help='hard USD upper-bound cap for this lane')
     ap.add_argument('--seed', default='distill-20261111')

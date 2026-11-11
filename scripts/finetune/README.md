@@ -221,7 +221,9 @@ GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前
 
 样本字段：`utterance` 当前句；`state` 上轮任务状态（`prev_intent`、`confirmed_params[{name,value,source}]`，source 为 explicit_turn / confirmed / default，`pending_fields`、`last_action`；全新会话为 null）；`candidates` 候选意图 ID；`dialogue_act` 取 NEW_TASK / CHANGE_PARAM / PAGE / CANCEL / NEED_CLARIFY；`intent`（CANCEL 与 NEED_CLARIFY 必须为空，CHANGE_PARAM 与 PAGE 必须等于 `state.prev_intent`）；`teacher_probs` Luna Choice 对候选（加 `__NONE__`）的归一化概率；`teachers` 两位老师各自的结论；`agreement`；`family`（意图编码的业务域前缀，切分按它，同族不跨集合）；`read_only`；`generator_plan`（生成时的计划，仅作诊断，不是标签）。`validate_sample` 对 raw / labeled / review 三个阶段分别校验。
 
-`read_only` 取自 Tool 源码里声明的 `getAccessMode()`（CI 强制全量覆盖的二值声明，未声明按 WRITE）；SKILL 意图要求绑定的全部 Tool 都是 READ 才算只读；解析不出的（目前 `GATE_DIAGNOSE_BATCH`、`PAGINATION_PREVIOUS`）记 null、不作生成目标、不猜。没有意图的样本按 `state.prev_intent` 对应任务取值，二者都没有则为 null。
+`read_only` 取自 Tool 源码里声明的 `getAccessMode()`（CI 强制全量覆盖的二值声明，未声明按 WRITE）；SKILL 意图要求绑定的全部 Tool 都是 READ 才算只读。源码由 `tool_access_modes.py` 读取（去注释、沿父类查找、常量工具名；方法体不是单一 `return AccessMode.X;` 记 DYNAMIC，整条继承链都没声明记 UNDECLARED，二者都不当 READ）；任何训练标签意图解析不出读写，`build_intent_table` 直接报错拒绝建表，不猜（F-pre 之前 `GATE_DIAGNOSE_BATCH`、`PAGINATION_PREVIOUS` 因注释和继承被误读为未解析，Java 里二者都声明 READ）。闸：Java `ToolAccessModeDeclarationTest`（PR fast-contracts 选中）+ `scripts/tests/test-tool-access-mode-scanner.sh`。没有意图的样本按 `state.prev_intent` 对应任务取值，二者都没有则为 null，报告里记为 `no_target`（不适用），与 `unresolved` 分开。
+
+澄清判定标准：`clarify_rubric.json` 由 `build_clarify_rubric.py` 从源码生成（`--check` 检查是否过期）：8 条判定规则（引用 `backend/python/ai/matcher/decision.py` 与本管线动作定义的行号）；每个只读意图的 `must_ask`（必填且无默认值）/ `defaults` / `optional` 取自绑定 Tool 的 `getParametersSchema()`、`getRequiredParameters()` 并带 文件:行号；18 组易混口径，只能引用真实标签意图。`label --rubric clarify_rubric.json` 把同一份标准给 Luna 和 Terra，二者仍各自独立、互不看对方结论和生成计划。`--rubric-mode brief` 是压缩措辞，实测在难例上一致率更低（见下），扩充用 full。
 
 生成：`gpt-5.4`（强模型，独立于两位老师）按语义族逐组写 6 条一组的多轮样本（续句改参数、翻页或取消、切换目标、含糊需澄清、一对「查/改只差一两个字」的全新会话对照），生成时只看到本族意图，不看任何受保护集合；偏离计划的条目直接丢弃。标注：Luna Choice（Decisions API，两道题：对话动作、意图，带概率）与 Terra（Responses，结构化输出）各自独立调用，互相看不到对方，也看不到生成计划。两者的对话动作和意图都一致、且都满足标签规则 ⇒ 银标训练集；不一致、或任一方违反标签规则 ⇒ `review-queue.jsonl`，只给人工审核，不进训练集，label 字段置空。老师一致不是人工真值，验收集另建。第一批 100 条标注后一致率低于 70% 会自动停止（退出码 3），不靠放宽判定凑数。
 
@@ -245,3 +247,9 @@ GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前
 独立验收集：`distill_leak_check.py` 另用 `--sealed-fingerprints`（默认 `Cretas意图独立验收-20261111/sealed/fingerprints.jsonl`，只读其中的 `hash` 字段，算法 sha256(NFKC→lower→去掉空白与非字母数字字符 的 UTF-8)，不打开 sealed 下任何其他文件）；文件不存在时照常检查并打印「独立验收集指纹未提供」，不静默跳过。试点补跑命中 26 条并已剔除。
 
 读数见 `pilot-report.json`。要点：老师一致率 76.0%；NEED_CLARIFY 只有 47.2% 一致（Luna 倾向直接选一个意图、Terra 倾向要求澄清），所以银标集里「该澄清」的样本偏少，这是学生训练时必须单独补审的部分，不能把银标集当作澄清判定的代表。
+
+### v2（F-前置：读写来源 + 澄清标准 + 扩充，数据在仓外 `Cretas意图蒸馏-20261111\v2\`，路径与 SHA256 见该目录 README.md）
+
+- 澄清标准后，试点那 89 条计划为澄清的样本一致率 47.2% → 83.2%（样本内，标准按这批调过）；新生成、未参与调整的 238 条计划为澄清的样本 81.5%（样本外）。`agreed()` 未改。
+- 已标注 1790 条（试点 clean 551 + 新生成去重后 1318，再经防泄漏剔除 79），银标 1479、审核队列 311，总一致率 82.6%；只读 83.3% / 写 81.0% / 无目标意图 85.4%。按语义族切 train 1044 / validation 218 / calibration 217。
+- 花费上界 14.79 美元（本线上限 15）。目标约 3000 条未达到：带标准后标注上界约 0.0058 美元/条，可用 `generate --start 345` 续跑。
