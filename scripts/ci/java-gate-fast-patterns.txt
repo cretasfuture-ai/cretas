@@ -30,3 +30,5 @@ WorkflowInstanceControllerTest
 InventoryFreezeToolTest
 FactoryMaterialRequisitionRestoreBatchStatusTest
 FactoryMaterialRequisitionTransferIntegrationTest
+# INTENT-DISTILL-20261111 F-pre: 每个注册工具必须声明读写 (缺失即红); 本地模型对只读意图直出的安全前提, 原先只在 nightly 跑
+ToolAccessModeDeclarationTest
