@@ -119,4 +119,13 @@ public class IntentExecuteRequest {
      * null 视为 OPERATE (向后兼容, 老客户端零破坏)。
      */
     private String mode;
+
+    /**
+     * 服务端解析好的识别用最近对话 (INTENT-DISTILL-20261111 A 线)。由
+     * {@code RecognitionHistoryResolver} 在入口写入一次, 普通入口与 SSE 入口读同一份。
+     * 只在服务端内部用: HTTP 调用方不能写它 (不能伪造「我没有上下文」或塞进别人的历史)。
+     * null = 尚未解析 (裸构造的旧单测), 退回只读 {@code context.recentTurns}。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<Map<String, String>> recognitionHistory;
 }

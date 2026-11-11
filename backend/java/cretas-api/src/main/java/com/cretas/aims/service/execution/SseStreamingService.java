@@ -133,6 +133,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.client.PythonAiMatcherClient pythonAiMatcherClient;
 
+    /** 识别用最近对话的唯一来源 (与普通入口共用)。裸构造的单测缺席时只读 App 的 recentTurns。 */
+    @Autowired(required = false)
+    private RecognitionHistoryResolver recognitionHistoryResolver;
+
     /** Optional for bare SSE tests; required in the real Spring path for server-owned sessions. */
     @Autowired(required = false)
     private com.cretas.aims.service.ConversationMemoryService conversationMemoryService;
@@ -316,6 +320,10 @@ public class SseStreamingService {
                     || sessionContext.getSessionId() == null || sessionContext.getSessionId().isBlank())) {
                 streamTerminalResponse(emitter, sessionOwnershipFailureResponse(), startTime);
                 return;
+            }
+            // 识别用最近对话: 与普通入口同一个解析器 (App 的 recentTurns 优先, 否则本人会话记忆里的用户话)
+            if (recognitionHistoryResolver != null) {
+                recognitionHistoryResolver.materialize(factoryId, trustedFactoryActor ? userId : null, request);
             }
 
             // 1. 开始事件
@@ -690,37 +698,15 @@ public class SseStreamingService {
     }
 
     /** 最近几轮对话最多带几轮、每轮最多几个字 —— 只为消歧, 不是完整会话。 */
-    static final int MAX_RECENT_TURNS = 4;
-    static final int MAX_TURN_CHARS = 200;
+    static final int MAX_RECENT_TURNS = RecognitionHistoryResolver.MAX_RECENT_TURNS;
+    static final int MAX_TURN_CHARS = RecognitionHistoryResolver.MAX_TURN_CHARS;
 
     /**
-     * App 随请求带来的 {@code context.recentTurns}: 只认 role=user/assistant 的非空文本,
-     * 截断到 {@link #MAX_TURN_CHARS} 字, 取最后 {@link #MAX_RECENT_TURNS} 轮。格式不对的条目丢弃。
+     * 本轮识别用的最近对话: 入口已解析就用解析结果 (与普通入口同一份),
+     * 否则退回只读 App 带来的 {@code context.recentTurns}。见 {@link RecognitionHistoryResolver}。
      */
     static java.util.List<Map<String, String>> recentTurns(IntentExecuteRequest request) {
-        if (request == null || request.getContext() == null) {
-            return java.util.Collections.emptyList();
-        }
-        Object raw = request.getContext().get("recentTurns");
-        if (!(raw instanceof java.util.Collection<?> items)) {
-            return java.util.Collections.emptyList();
-        }
-        java.util.List<Map<String, String>> out = new java.util.ArrayList<>();
-        for (Object item : items) {
-            if (!(item instanceof Map<?, ?> m)) {
-                continue;
-            }
-            Object role = m.get("role");
-            Object content = m.get("content");
-            if (!("user".equals(role) || "assistant".equals(role)) || !(content instanceof String text)
-                    || text.isBlank()) {
-                continue;
-            }
-            String trimmed = text.strip();
-            out.add(Map.of("role", (String) role,
-                    "content", trimmed.length() > MAX_TURN_CHARS ? trimmed.substring(0, MAX_TURN_CHARS) : trimmed));
-        }
-        return out.size() > MAX_RECENT_TURNS ? out.subList(out.size() - MAX_RECENT_TURNS, out.size()) : out;
+        return RecognitionHistoryResolver.effective(request);
     }
 
     /**

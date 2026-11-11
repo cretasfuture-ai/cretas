@@ -81,6 +81,9 @@ public class IntentExecutionOrchestrator {
     private com.cretas.aims.service.intent.ControlledPurchaseTaskExecutionService controlledPurchase;
     @Autowired(required = false)
     private FactoryFollowUpService factoryFollowUpService;
+    /** 识别用最近对话的唯一来源 (与 SSE 入口共用)。单测直接构造时缺席, 退回只读 context.recentTurns。 */
+    @Autowired(required = false)
+    private RecognitionHistoryResolver recognitionHistoryResolver;
     /**
      * AI 数据访问审计: 一次意图执行一条; 期间的工具调用 / 成本分析并进这一条 (同一线程, 请求外也合并)。
      * 单测直接构造时不记录。
@@ -509,8 +512,15 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 0.5. 语义缓存
-        if (userInput != null && !userInput.isEmpty()) {
+        // 0.45. 识别用最近对话 —— 与 SSE 入口同一个解析器、同一份结果 (INTENT-DISTILL-20261111 A 线)。
+        //       Web 不发 recentTurns, 由本人会话记忆里的用户话补上; 只有身份已证明的调用者才读记忆。
+        boolean trustedRecognizer = hasTrustedConversationIdentity(factoryId, userId, request.getSessionId());
+        List<Map<String, String>> recognitionHistory = recognitionHistoryResolver != null
+                ? recognitionHistoryResolver.materialize(factoryId, trustedRecognizer ? userId : null, request)
+                : RecognitionHistoryResolver.effective(request);
+
+        // 0.5. 语义缓存 —— 带上下文的轮次不读 (缓存键只有工厂 + 原话, 与 SSE 一致)
+        if (recognitionHistory.isEmpty() && userInput != null && !userInput.isEmpty()) {
             handleSemanticCache(factoryId, userInput, request);
         }
 
@@ -523,12 +533,18 @@ public class IntentExecutionOrchestrator {
                 // spec §8.2 洞②: 把 tab 模式带进识别层, 让写意图在咨询 tab 根本不进候选集,
                 // 而不是靠下面 #4.4 的"识别后拦"。bestMatch 仍会保留写意图, 那是有意的 ——
                 // 拦截卡需要它来渲染"请切换到【操作】页"的导航。
-                Long recognizerUserId = hasTrustedConversationIdentity(
-                        factoryId, userId, request.getSessionId()) ? userId : null;
+                Long recognizerUserId = trustedRecognizer ? userId : null;
                 String recognizerSessionId = recognizerUserId == null ? null : request.getSessionId();
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId));
+                java.util.Set<String> filterPermissions =
+                        resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId);
+                // 无上下文时调用形状与改动前完全一致 (8 参版在实现里就是「历史为空」的 9 参版)
+                matchResult = recognitionHistory.isEmpty()
+                        ? aiIntentService.recognizeIntentWithConfidence(
+                                request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), filterPermissions)
+                        : aiIntentService.recognizeIntentWithConfidence(
+                                request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), filterPermissions, recognitionHistory);
             } catch (LlmSchemaValidationException e) {
                 log.warn("LLM Schema 验证失败: type={}, message={}", e.getFailureType(), e.getMessage());
                 return buildValidationFailureResponse(factoryId, request.getUserInput(), e);
@@ -2856,7 +2872,9 @@ public class IntentExecutionOrchestrator {
                     return;
                 }
             }
-            if ("COMPLETED".equals(response.getStatus()) && request.getUserInput() != null) {
+            // 带上下文的结果不写入按原话缓存 (SSE 现有行为, 普通入口一致)
+            if ("COMPLETED".equals(response.getStatus()) && request.getUserInput() != null
+                    && RecognitionHistoryResolver.effective(request).isEmpty()) {
                 semanticCacheService.cacheResult(factoryId, request.getUserInput(), matchResult, response);
             }
         } catch (Exception e) {
