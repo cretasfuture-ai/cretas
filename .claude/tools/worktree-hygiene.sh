@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# worktree 体检 + 清理。上限 9 个（含主仓库）。规则见 .claude/rules/worktree-and-main-only-deploy.md「铁律 4」。
+# worktree 体检 + 清理。上限 30 个（含主仓库；2026-11-11 由 9 调整）。规则见 .claude/rules/worktree-and-main-only-deploy.md「铁律 4」。
 #
 #   .claude/tools/worktree-hygiene.sh --check                 只报数与分类, 不动任何东西 (退出码: 0=未超限, 3=超限)
 #   .claude/tools/worktree-hygiene.sh --apply [--keep <路径>]...   收缩到上限以内
@@ -10,7 +10,7 @@
 #   其余: 有未提交改动 -> 先在它自己的分支上 WIP commit (detached 且有改动 -> 跳过并报告, 不替它建分支)
 #         -> 摘 junction (只摘链接) -> git worktree remove (⛔ 绝不加 --force) -> 删不掉就报告, 不强删
 set -u
-MAX=9
+MAX=30
 mode="${1:-}"; shift || true
 keeps=()
 while [ $# -gt 0 ]; do
