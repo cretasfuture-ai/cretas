@@ -85,6 +85,7 @@ class UrgentInsertForceInsertCanvasContractTest {
     private FactorySettingsRepository settings;
     private com.cretas.aims.service.discipline.FactoryDisciplinePolicy discipline;
     private com.cretas.aims.service.ApprovalWorkflowService workflows;
+    private com.cretas.aims.service.DecisionAuditService audit;
     private UrgentInsertServiceImpl service;
     private InsertSlot slot;
 
@@ -134,6 +135,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         settings = mock(FactorySettingsRepository.class);
         discipline = mock(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class);
         workflows = mock(com.cretas.aims.service.ApprovalWorkflowService.class);
+        audit = mock(com.cretas.aims.service.DecisionAuditService.class);
         when(engine.canTransition(any(), any())).thenReturn(true);
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.ofEntries(
                 Map.entry(UrgentInsertScheduleService.class, scheduler),
@@ -152,7 +154,8 @@ class UrgentInsertForceInsertCanvasContractTest {
                 Map.entry(FactorySelfApprovalGate.class, new FactorySelfApprovalGate(settings)),
                 Map.entry(FactorySettingsRepository.class, settings),
                 Map.entry(com.cretas.aims.service.discipline.FactoryDisciplinePolicy.class, discipline),
-                Map.entry(com.cretas.aims.service.ApprovalWorkflowService.class, workflows)));
+                Map.entry(com.cretas.aims.service.ApprovalWorkflowService.class, workflows),
+                Map.entry(com.cretas.aims.service.DecisionAuditService.class, audit)));
     }
 
     // ------------------------------------------------------------------ fixtures
@@ -353,6 +356,12 @@ class UrgentInsertForceInsertCanvasContractTest {
         ArgumentCaptor<ProductionPlan> saved = ArgumentCaptor.forClass(ProductionPlan.class);
         verify(plans, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
         assertThat(saved.getValue().isPendingApproval()).isTrue();
+        // 审计标明「普通插单因开关转入」, 不与真正的强制插单混算
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ctx = ArgumentCaptor.forClass(Map.class);
+        verify(audit).logForceInsert(eq(F), eq("ProductionPlan"), anyString(), ctx.capture(), any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), eq(SUBMITTER), any(), any());
+        assertThat(ctx.getValue()).containsEntry("routedBy", UrgentInsertServiceImpl.ROUTED_BY_ALWAYS_APPROVAL);
     }
 
     @Test

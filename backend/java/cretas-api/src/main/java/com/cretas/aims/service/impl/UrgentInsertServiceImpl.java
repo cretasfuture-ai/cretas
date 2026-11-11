@@ -1034,7 +1034,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 走与强制插单同一条路 (建画布实例, 批准后才排入并顺延)。开关默认关 = 原行为; 没有画布时开了也不生效。
         if (alwaysRequiresCanvasApproval(factoryId)) {
             log.info("插单一律走审批: 普通插单转入画布审批 factoryId={}, slotId={}", factoryId, request.getSlotId());
-            return forceInsert(factoryId, userId, request);
+            return doForceInsert(factoryId, userId, request, ROUTED_BY_ALWAYS_APPROVAL);
         }
 
         PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
@@ -1102,7 +1102,18 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @Override
     @Transactional
     public ProductionPlanDTO forceInsert(String factoryId, Long userId, ConfirmUrgentInsertRequest request) {
-        log.info("强制紧急插单: factoryId={}, slotId={}", factoryId, request.getSlotId());
+        return doForceInsert(factoryId, userId, request, null);
+    }
+
+    /** 审计里标明「这张是普通插单, 因工厂开关『插单一律走审批』转入审批」, 不与真正的强制插单混算。 */
+    static final String ROUTED_BY_ALWAYS_APPROVAL = "ALWAYS_APPROVAL_SWITCH";
+
+    /**
+     * @param routedBy 非空 = 普通插单被转入这条路 (目前只有 {@link #ROUTED_BY_ALWAYS_APPROVAL}); 记进审计上下文
+     */
+    private ProductionPlanDTO doForceInsert(String factoryId, Long userId, ConfirmUrgentInsertRequest request,
+                                            String routedBy) {
+        log.info("强制紧急插单: factoryId={}, slotId={}, routedBy={}", factoryId, request.getSlotId(), routedBy);
 
         PreviewValidation validation = validatePreviewAndFreshResources(factoryId, request);
         InsertSlot slot = validation.slot();
@@ -1189,6 +1200,9 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         inputContext.put("impactedPlans", parseImpactedPlans(slot.getImpactedPlans()));
         inputContext.put("customerOrderNumber", request.getCustomerOrderNumber());
         inputContext.put("forceInsertReason", request.getNotes());
+        if (routedBy != null) {
+            inputContext.put("routedBy", routedBy);
+        }
         if (workflowInstance != null) {
             inputContext.put("workflowInstanceId", workflowInstance.getId());
             inputContext.put("workflowStatus", String.valueOf(workflowInstance.getStatus()));
