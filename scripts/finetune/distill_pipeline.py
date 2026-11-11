@@ -26,7 +26,8 @@ from distill_common import (ACTS, GENERATOR, INTENT_ACTS, LUNA, NO_INTENT_ACTS, 
                             read_jsonl, validate_sample, write_jsonl)
 
 SOURCE = 'INTENT-DISTILL-20261111'
-SLOTS = ('change_param', 'page_or_cancel', 'switch_task', 'need_clarify', 'contrast_read', 'contrast_write')
+SLOTS = ('change_param', 'page_or_cancel', 'switch_task', 'need_clarify', 'contrast_read', 'contrast_write',
+         'fresh_task_a', 'fresh_task_b')
 
 ACT_HELP = ('对话动作定义：NEW_TASK=开始一个新任务或换了目标（哪怕和上一轮同领域）；'
             'CHANGE_PARAM=沿用上一轮任务，只改参数/口径/对象（如“换成上个月的”“只看二车间”）；'
@@ -93,8 +94,8 @@ def plan_call(k, fams, table, seed):
     if reads and writes:
         slots.append(dict(slot='contrast_read', act='NEW_TASK', prev=None, intent=rng.choice(reads)))
         slots.append(dict(slot='contrast_write', act='NEW_TASK', prev=None, intent=rng.choice(writes)))
-    else:   # no read/write contrast available in this family: plain fresh-session tasks
-        for s in ('contrast_read', 'contrast_write'):
+    else:   # no read/write pair in this family: plain fresh-session tasks, never a fake write verb
+        for s in ('fresh_task_a', 'fresh_task_b'):
             slots.append(dict(slot=s, act='NEW_TASK', prev=None, intent=pick(cs)))
     others = [c for f, v in fams.items() if f != fam for c in v]
     return dict(call=k, family=fam, family_intents=cs, slots=slots, distractors=rng.sample(others, 3))
@@ -119,6 +120,7 @@ def gen_prompt(plan, table):
         '3. change_param：只改参数/口径，不说任务名；page_or_cancel：PAGE 是翻页类说法，CANCEL 是放弃类说法；'
         'switch_task：换成 planned_intent 对应的新任务，说清楚新对象；need_clarify：口径含糊，在本领域多个意图都说得通，不能判断要做什么。\n'
         '4. contrast_read 与 contrast_write 是一对：两句话字面只差一两个字，但前者是只读查询，后者是新建/修改/删除/确认类动作（按各自 planned_intent 的真实含义写）；两句都是全新会话。\n'
+        'fresh_task_a / fresh_task_b：全新会话里按 planned_intent 的真实含义直接提出需求（它是查询就说查询、是办理就说办理），不要硬造查/改对照。\n'
         '5. 不要写标准答案以外的任何解释。样本之间不要互相复述。')
 
 
@@ -187,7 +189,7 @@ def gen_one(client, plan, table, seed):
 
 def cmd_generate(a, table):
     fams = eligible_families(table)
-    client = DollarClient(a.work, a.cap)
+    client = DollarClient(a.work, a.cap, extra_spent_roots=a.extra_spent)
     plans = [plan_call(k, fams, table, a.seed) for k in range(a.start, a.start + a.calls)]
     rows, rejected = [], defaultdict(int)
     try:
@@ -216,18 +218,67 @@ def cmd_generate(a, table):
 
 
 # ------------------------------------------------------------------ label
+RUBRIC = None     # set by --rubric: clarify_rubric.json, given identically to both teachers
+
+
+def load_rubric(path):
+    rub = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not rub.get('rules') or not rub.get('intents'):
+        raise SystemExit('rubric has no rules/intents: %s' % path)
+    return rub
+
+
+RUBRIC_MODE = 'full'   # 'brief': same rules in compact wording (cost); both teachers always get the same mode
+
+
+def rubric_rules_text(rub):
+    if RUBRIC_MODE == 'brief':
+        rules = '；'.join('%s→%s：%s' % (r['id'][:2], r['label'], r['brief']) for r in rub['rules'])
+        return ('澄清判定标准（两位标注者同一份，按顺序检查）：' + rules +
+                '。候选字段：access=READ查询/WRITE改数据；must_ask=缺了要问；defaults=缺了用默认不问；confusions=易混口径。')
+    rules = '；'.join('%s（判 %s）：%s%s' % (r['id'], r['label'], r['rule'], (' ' + r['note']) if r.get('note') else '')
+                     for r in rub['rules'])
+    return ('澄清判定标准（两位标注者使用同一份，按顺序检查）：' + rules +
+            '。候选的 must_ask=必填且无默认值、缺了要问；defaults=缺了用默认值、不问；optional=可不填；'
+            'access=READ 只读查询 / WRITE 会改数据；confusions=易混口径，按 resolve_when 判断，分不清才问。')
+
+
+def rubric_candidate(c, table, rub):
+    out = dict(access='READ' if table[c]['read_only'] else 'WRITE')
+    e = rub['intents'].get(c)
+    brief = RUBRIC_MODE == 'brief'
+    if e:
+        if e['must_ask'] or not brief:
+            out['must_ask'] = [x['param'] + ('：' + x['description'][:30] if x['description'] and not brief else '')
+                               for x in e['must_ask']]
+        if e['defaults'] or not brief:
+            out['defaults'] = [x['param'] for x in e['defaults']]
+        cf = [x for x in rub['confusions'] if x['id'] in e.get('confusions', [])]
+        if cf:
+            out['confusions'] = [dict(term=x['term'], resolve_when=x['resolve_when']) if brief else
+                                 dict(term=x['term'], resolve_when=x['resolve_when'], question=x['question']) for x in cf]
+    return out
+
+
 def label_context(row, table):
-    return json.dumps(dict(
-        state=row['state'], utterance=row['utterance'],
-        candidates=[dict(id=c, name=table[c]['name'], description=table[c]['description'][:80]) for c in row['candidates']]),
-        ensure_ascii=False)
+    cands = []
+    for c in row['candidates']:
+        d = dict(id=c, name=table[c]['name'], description=table[c]['description'][:80])
+        if RUBRIC is not None:
+            d.update(rubric_candidate(c, table, RUBRIC))
+        cands.append(d)
+    return json.dumps(dict(state=row['state'], utterance=row['utterance'], candidates=cands), ensure_ascii=False)
+
+
+def act_help():
+    return ACT_HELP + (rubric_rules_text(RUBRIC) if RUBRIC is not None else '')
 
 
 def luna_payload(row, table):
     choices = [dict(value=c, description=table[c]['name'] + '：' + table[c]['description'][:60]) for c in row['candidates']]
     choices.append(dict(value=NONE_KEY, description='不选意图（取消，或需要澄清）'))
     return dict(model=LUNA, input=label_context(row, table), questions=[
-        dict(type='choice', name='dialogue_act', instructions='判断当前这句话在对话中的动作。' + ACT_HELP,
+        dict(type='choice', name='dialogue_act', instructions='判断当前这句话在对话中的动作。' + act_help(),
              choices=[dict(value=x, description=x) for x in ACTS]),
         dict(type='choice', name='intent', instructions='只依据 state 与 utterance 选择意图。' + INTENT_HELP, choices=choices)])
 
@@ -237,8 +288,8 @@ def terra_payload(row, table):
         dialogue_act=dict(type='string', enum=list(ACTS)), intent=dict(type='string', enum=row['candidates'] + [NONE_KEY])))
     return dict(model=TERRA, service_tier='default', store=False, reasoning=dict(effort='low'),
                 instructions='你是食品工厂 ERP 对话意图的标注教师。依据 state（上一轮任务状态）、utterance（当前句）与候选意图判断对话动作和意图。'
-                             + ACT_HELP + INTENT_HELP + '只输出 JSON。',
-                input=label_context(row, table), max_output_tokens=300,
+                             + act_help() + INTENT_HELP + '只输出 JSON。',
+                input=label_context(row, table), max_output_tokens=300 if RUBRIC is None else 600,
                 text=dict(format=dict(type='json_schema', name='distill_label', strict=True, schema=schema)))
 
 
@@ -258,7 +309,8 @@ def parse_terra(body):
 
 def label_one(client, row, table):
     luna = parse_luna(client.call('luna:' + row['id'], 'decisions', luna_payload(row, table)))
-    terra = parse_terra(client.call('terra:' + row['id'], 'responses', terra_payload(row, table), max_output_tokens=300))
+    terra = parse_terra(client.call('terra:' + row['id'], 'responses', terra_payload(row, table),
+                                    max_output_tokens=300 if RUBRIC is None else 600))
     return dict(row, luna=luna, terra=terra)
 
 
@@ -276,9 +328,9 @@ def conclude(t, state, cands):
 
 
 def cmd_label(a, table):
-    rows = read_jsonl(Path(a.work) / 'clean.jsonl')[:a.limit]
-    out_path = Path(a.work) / 'labeled-raw.jsonl'
-    client = DollarClient(a.work, a.cap)
+    rows = read_jsonl(Path(a.input) if a.input else Path(a.work) / 'clean.jsonl')[:a.limit]
+    out_path = Path(a.output) if a.output else Path(a.work) / 'labeled-raw.jsonl'
+    client = DollarClient(a.work, a.cap, extra_spent_roots=a.extra_spent)
     done, agree_n = [], 0
     try:
         with ThreadPoolExecutor(a.concurrency) as ex:
@@ -376,6 +428,21 @@ def rate(num, den):
     return None if not den else round(num / den, 4)
 
 
+def ro_bucket(r):
+    """read_only None has two different meanings; keep them apart in every report.
+
+    no_target: no intent and no previous task (e.g. a fresh-session NEED_CLARIFY) — read/write
+    does not apply. unresolved: there is a target intent but its access mode is unknown, which
+    build_intent_table now refuses, so this bucket must stay empty.
+    """
+    if r['read_only'] is True:
+        return 'read_only'
+    if r['read_only'] is False:
+        return 'write'
+    target = (r.get('generator_plan') or {}).get('intent') or (r.get('state') or {}).get('prev_intent')
+    return 'unresolved' if target else 'no_target'
+
+
 def cmd_report(a, table):
     work = Path(a.work)
     labeled = read_jsonl(work / 'labeled-raw.jsonl')
@@ -384,7 +451,7 @@ def cmd_report(a, table):
     ag = {r['id'] for r in silver}
     by_act, by_ro = defaultdict(lambda: [0, 0]), defaultdict(lambda: [0, 0])
     for r in labeled:
-        for bucket, key in ((by_act, r['generator_plan']['dialogue_act']), (by_ro, {True: 'read_only', False: 'write', None: 'unresolved'}[r['read_only']])):
+        for bucket, key in ((by_act, r['generator_plan']['dialogue_act']), (by_ro, ro_bucket(r))):
             bucket[key][1] += 1
             bucket[key][0] += r['id'] in ag
     maxp = [max(r['teacher_probs'].values()) for r in silver]
@@ -435,8 +502,18 @@ def main():
     ap.add_argument('--concurrency', type=int, default=4)
     ap.add_argument('--file', help='validate: jsonl to check')
     ap.add_argument('--schema-stage', default='labeled')
+    ap.add_argument('--extra-spent', action='append', default=[],
+                    help='other work dirs of this lane whose receipts count against --cap (repeatable)')
+    ap.add_argument('--rubric', help='label: clarify_rubric.json given identically to both teachers')
+    ap.add_argument('--rubric-mode', choices=['full', 'brief'], default='full',
+                    help='label: rubric wording in the prompt (brief = same rules, fewer tokens)')
+    ap.add_argument('--input', help='label: rows to label (default <work>/clean.jsonl)')
+    ap.add_argument('--output', help='label: output jsonl (default <work>/labeled-raw.jsonl)')
     a = ap.parse_args()
     table = build_intent_table()
+    if a.rubric:
+        globals()['RUBRIC'] = load_rubric(a.rubric)
+        globals()['RUBRIC_MODE'] = a.rubric_mode
     if a.stage == 'validate':
         rows = read_jsonl(a.file)
         for r in rows:

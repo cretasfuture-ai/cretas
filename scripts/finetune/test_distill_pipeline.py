@@ -40,6 +40,51 @@ def test_table_read_write_from_tool_declarations(table):
     assert dc.derive_read_only(None, None, table) is None
 
 
+def test_every_label_has_a_resolved_access_mode(table):
+    # F-pre: the two former scanner misses (comment in method / inherited) now read as their Java READ
+    assert not [c for c, v in table.items() if v['access_mode'] == 'UNRESOLVED']
+    assert table['GATE_DIAGNOSE_BATCH']['access_mode'] == 'READ'
+    assert table['PAGINATION_PREVIOUS']['access_mode'] == 'READ'
+
+
+def test_unresolved_label_refuses_to_build(monkeypatch):
+    import tool_access_modes as tam
+    real = tam.scan
+    monkeypatch.setattr(tam, 'scan', lambda: {k: (dict(v, mode='DYNAMIC') if k == 'gate_diagnose_batch' else v)
+                                              for k, v in real().items()})
+    with pytest.raises(dc.UnresolvedAccessMode):
+        dc.build_intent_table()
+    assert dc.build_intent_table(allow_unresolved=True)['GATE_DIAGNOSE_BATCH']['read_only'] is None
+
+
+def test_report_separates_no_target_from_unresolved():
+    plan = dict(dialogue_act='NEED_CLARIFY', intent=None)
+    assert dp.ro_bucket(dict(read_only=None, state=None, generator_plan=plan)) == 'no_target'
+    assert dp.ro_bucket(dict(read_only=None, state=dict(prev_intent='X'), generator_plan=plan)) == 'unresolved'
+    assert dp.ro_bucket(dict(read_only=True, state=None, generator_plan=plan)) == 'read_only'
+
+
+def test_rubric_is_fresh_and_both_teachers_get_it(table, monkeypatch):
+    import build_clarify_rubric as br
+    assert br.main.__module__ == 'build_clarify_rubric'
+    monkeypatch.setattr(sys, 'argv', ['x', '--check'])
+    assert br.main() == 0, 'clarify_rubric.json is stale: rerun build_clarify_rubric.py'
+    rub = dp.load_rubric(Path(__file__).parent / 'clarify_rubric.json')
+    assert rub['intents']['BATCH_FULL_TRACE']['must_ask'][0]['param'] == 'batchNumber'
+    assert all(r['source'] for r in rub['rules'])
+    row = raw_row(table)
+    monkeypatch.setattr(dp, 'RUBRIC', None)
+    plain_t, plain_l = dp.terra_payload(row, table), dp.luna_payload(row, table)
+    monkeypatch.setattr(dp, 'RUBRIC', rub)
+    t, l = dp.terra_payload(row, table), dp.luna_payload(row, table)
+    assert 'G1_ACTION_UNCLEAR' in t['instructions'] and 'G1_ACTION_UNCLEAR' not in plain_t['instructions']
+    assert 'G1_ACTION_UNCLEAR' in l['questions'][0]['instructions']
+    assert t['input'] == l['input'] and '"access"' in t['input'] and '"access"' not in plain_t['input']
+    # independence: neither teacher's payload carries the other's answer or the generator plan
+    for p in (t, l):
+        assert 'generator_plan' not in str(p) and 'luna' not in p.get('input', '') and 'terra' not in p.get('input', '')
+
+
 def test_raw_schema_accepts_and_rejects(table):
     ok = raw_row(table)
     dc.validate_sample(ok, table, 'raw')
