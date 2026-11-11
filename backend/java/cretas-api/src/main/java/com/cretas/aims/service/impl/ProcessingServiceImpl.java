@@ -1002,6 +1002,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                                          List<Map<String, Object>> consumptions, Long userId) {
         log.info("记录原材料消耗: factoryId={}, productionBatchId={}, userId={}", factoryId, productionBatchId, userId);
         ProductionBatch productionBatch = getBatchById(factoryId, productionBatchId);
+        // 排查 2026-11-10 A4: 与其它领料入口同一套硬拦 (状态 + 归属)。批次挂了计划按计划判归属;
+        // 挂的计划查不到 (别厂 / 已删) 一律拒绝, 不退化成「无计划」口径。
+        String planId = productionBatch.getProductionPlanId();
+        ProductionPlan issuePlan = planId == null ? null : productionPlanRepository.findById(planId)
+                .filter(p -> factoryId.equals(p.getFactoryId())).orElse(null);
 
         // N+1 修复：使用缓存 Map 避免重复查询
         Map<String, MaterialBatch> batchCache = new HashMap<>();
@@ -1015,6 +1020,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             MaterialBatch materialBatch = batchCache.computeIfAbsent(materialBatchId,
                     id -> materialBatchRepository.findByIdAndFactoryId(id, factoryId)
                             .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在: " + id)));
+
+            com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(materialBatch);
+            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertIssuable(
+                    issuePlan, planId != null, materialBatch,
+                    rawMaterialTypeRepository.findById(materialBatch.getMaterialTypeId() == null ? "" : materialBatch.getMaterialTypeId())
+                            .filter(t -> factoryId.equals(t.getFactoryId()))
+                            .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null),
+                    "materialBatchId");
 
             // 检查库存
             if (materialBatch.getRemainingQuantity().compareTo(quantity) < 0) {

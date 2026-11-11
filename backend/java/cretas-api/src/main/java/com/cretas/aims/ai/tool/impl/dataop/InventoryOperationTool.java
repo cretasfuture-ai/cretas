@@ -61,6 +61,11 @@ public class InventoryOperationTool extends AbstractBusinessTool {
         quantity.put("description", "出库数量（出库时需要）");
         properties.put("quantity", quantity);
 
+        Map<String, Object> planId = new HashMap<>();
+        planId.put("type", "string");
+        planId.put("description", "领给哪个生产计划（出库时可选）。客户来料必须关联对应计划");
+        properties.put("productionPlanId", planId);
+
         Map<String, Object> confirmed = new HashMap<>();
         confirmed.put("type", "boolean");
         confirmed.put("description", "是否已确认（清零时需要）");
@@ -97,7 +102,10 @@ public class InventoryOperationTool extends AbstractBusinessTool {
                     quantity = new BigDecimal(qtyObj.toString());
                 }
 
-                materialBatchService.useBatchQuantity(factoryId, batchId, quantity);
+                // 排查 2026-11-10 A5: 与 POST /material-batches/{id}/use 同一套领料服务 (状态 + 归属 + 消耗留痕)。
+                // ⛔ 不再调 useBatchQuantity: 它只比数量, 不查状态归属、不记消耗。
+                materialBatchService.useBatchMaterial(factoryId, batchId, quantity,
+                        getString(params, "productionPlanId"), getUserId(context), "AI 库存出库");
 
                 Map<String, Object> result = new LinkedHashMap<>();
                 result.put("batchId", batchId);

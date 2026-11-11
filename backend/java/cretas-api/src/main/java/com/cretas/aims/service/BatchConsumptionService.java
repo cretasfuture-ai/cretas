@@ -21,6 +21,9 @@ public interface BatchConsumptionService {
      */
     void autoConsumeForBatch(ProductionBatch batch);
 
+    /** 排查 2026-11-10 A9: 自动扣料没扣成 / 没扣全时挂待办 (ACTIVE 生产告警), 独立事务。 */
+    void raiseAutoConsumeAlert(ProductionBatch batch, String level, String description);
+
     /**
      * 差异调整：修改某种物料的实际消耗量
      *

@@ -1919,12 +1919,29 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
      * 已排除 INSPECTING, 此处补防"显式传 INSPECTING batchId"的旁路 (use/consume 直接按 id 取批次)。</p>
      */
     private void assertMaterialBatchUsable(MaterialBatch batch) {
-        MaterialBatchStatus st = batch.getStatus();
-        if (st != null && st.blocksProduction()) {
-            throw new BusinessException(409, st.productionBlockedMessage())
-                    .withHint(st.productionBlockedHint())
-                    .withDiagnosis(com.cretas.aims.service.gate.MaterialBatchStateGate.diagnose(batch).orElseThrow());
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(batch);
+    }
+
+    /**
+     * 排查 2026-11-10 A4/A5: use / reserve / consume 三个兄弟端点 (及走它们的 AI 工具) 共用的归属判断 ——
+     * 带计划按计划判 ({@link com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard#assertMaterialBatchAllowed}),
+     * 不带计划时客户所有的料不许领。物料大类取本厂物料类型, 拿不到传 null (守卫按最严格口径)。
+     */
+    private void assertIssuable(String factoryId, MaterialBatch batch, String productionPlanId) {
+        boolean planClaimed = productionPlanId != null && !productionPlanId.isBlank();
+        if (planClaimed && productionPlanRepository == null) {
+            // ⛔ 拿不到计划就判不了归属 —— 不当「没关联计划」放过去
+            throw new IllegalStateException("生产计划仓储未注入, 无法核对领料归属 (排查 A4/A5)");
         }
+        com.cretas.aims.entity.ProductionPlan plan = !planClaimed ? null
+                : productionPlanRepository.findById(productionPlanId)
+                        .filter(p -> factoryId.equals(p.getFactoryId())).orElse(null);
+        String mainCategory = batch.getMaterialTypeId() == null || materialTypeRepository == null ? null
+                : materialTypeRepository.findById(batch.getMaterialTypeId())
+                        .filter(t -> factoryId.equals(t.getFactoryId()))
+                        .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+        com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertIssuable(
+                plan, planClaimed, batch, mainCategory, "batchId");
     }
 
     @Override
@@ -1957,6 +1974,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Transactional
     public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
                                              String productionPlanId, Long operatorId, String notes) {
+        // AI 工具可能传空串: 当没关联计划, 否则 "" 会写进消耗行的计划外键 (独立审查 L7)
+        if (productionPlanId != null && productionPlanId.isBlank()) {
+            productionPlanId = null;
+        }
         validateProductionPlanRef(productionPlanId);
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
@@ -1971,6 +1992,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "领料数量必须大于0")
                     .withHint("请输入大于 0 的领料数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A5: 归属与计划级领料同一道守卫 (AI 出库工具也改走本方法)。
+        // 带计划按计划判; 不带计划时客户所有的料不许领 —— 领出去就认不出是给哪个客户订单用的。
+        assertIssuable(factoryId, batch, productionPlanId);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足")
@@ -2315,6 +2339,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 交接单 11-11 二.1: 预留是为投产占料, 与 use / consume 同一道状态闸。不拦的话, 不良品 / 质检中 / 冻结扣住的
         // 批次被预留满就变成 DEPLETED (结论被数量状态盖掉), 之后 consume 只看 DEPLETED 不挡投产 ⇒ 不合格料进了生产。
         assertMaterialBatchUsable(batch);
+        // 排查 2026-11-10 A4: 归属与 use / consume 同一道 (原来预留不查归属, 客户来料能被占给别的计划)
+        assertIssuable(factoryId, batch, productionPlanId);
 
         if (batch.getRemainingQuantity().compareTo(quantity) < 0) {
             throw new BusinessException(409, "批次剩余数量不足以预留")
@@ -2442,6 +2468,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(400, "消耗数量必须大于0")
                     .withHint("请输入大于 0 的消耗数量").withHintTarget("quantity");
         }
+        // 排查 2026-11-10 A4: 归属与 use / reserve 同一道 (AI material_batch_consume 也走这里)
+        assertIssuable(factoryId, batch, productionPlanId);
 
         runConfiguredValidation(factoryId, "CONSUME",
                 java.util.Map.of("batchId", batchId, "quantity", quantity));

@@ -97,6 +97,10 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
 
     @BeforeEach
     void setup() {
+        // 排查 C3: cancel / transferToFactory 改成加行锁读 (findByIdAndFactoryIdForUpdate); 桩照非锁版本作答
+        org.mockito.Mockito.lenient().when(repository.findByIdAndFactoryIdForUpdate(
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(inv -> repository.findByIdAndFactoryIdAndDeletedAtIsNull(inv.getArgument(0), inv.getArgument(1)));
         batchStore.clear();
         ProductionPlan companyPlan = new ProductionPlan();
         companyPlan.setId(PLAN_ID);
@@ -1069,6 +1073,106 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertEquals(Status.CLOSED, mr.getStatus());
         assertEquals(new BigDecimal("2.00"), mr.getItems().get(0).getReturnedQty());
         verify(materialConsumptionRepository, never()).countUnsettledConsumptionByBatchIds(any(), any());
+    }
+
+    @Test
+    @DisplayName("排查 C6: 结单族计划 (CUSTOMER_ORDER) 逐道录入消耗 4 (未结单, 生产仓还没扣) 时关单 → 409 先结单; 不按全额 10 退回原料仓")
+    void close_nonStockPlan_withPendingClerkConsumption_isBlocked_noPhantomReturn() {
+        // 领料 10 → 逐道录入消耗 4 (ClerkProcessEntry.writeConsumption: 写 MaterialConsumption, interimSettledAt IS NULL,
+        // 不扣 WKS.usedQuantity; 结单 settleProduction 才扣)。此刻 WKS 现存仍是 10。
+        // 修复前: 守卫只看存货生产计划, 结单族直接按 WKS 现存 10 全额退回原料仓 ⇒ 原料仓多出已经用掉的 4。
+        batchStore.put("raw-1", batch("raw-1", "MAT-001", WH_LOGISTICS, "100.00", "10.00", "3.00"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "0.00", "3.00"));
+
+        FactoryMaterialRequisition mr = new FactoryMaterialRequisition();
+        mr.setId(MR_ID);
+        mr.setFactoryId(FACTORY_ID);
+        mr.setRequisitionNo("MR-C6");
+        mr.setProductionPlanId(PLAN_ID);
+        mr.setStatus(Status.ISSUED);
+        mr.setSourceWarehouseId(WH_LOGISTICS);
+        mr.setTargetWarehouseId(WH_WORKSHOP);
+        FactoryMaterialRequisitionItem it = new FactoryMaterialRequisitionItem();
+        it.setId("it-1");
+        it.setRequisition(mr);
+        it.setMaterialTypeId("MAT-001");
+        it.setMaterialName("Material A");
+        it.setUnit("kg");
+        it.setIssuedQty(new BigDecimal("10.00"));
+        it.setBatchNumbers(new ArrayList<>(List.of(mutableRow("raw-1", "10.00", "wks-1"))));
+        List<FactoryMaterialRequisitionItem> items = new ArrayList<>();
+        items.add(it);
+        mr.setItems(items);
+
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        stubPlanSourceType(PlanSourceType.CUSTOMER_ORDER);
+        // 生产仓批次上有 4 待扣 (逐道录入, 还没结单) —— 与盘点同一个查询口径 (只算逐道录入的延迟扣减行)
+        List<Object[]> pending = new ArrayList<>();
+        pending.add(new Object[]{"wks-1", new BigDecimal("4.00")});
+        when(materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(FACTORY_ID, List.of("wks-1")))
+                .thenReturn(pending);
+
+        com.cretas.aims.repository.ProductionSettlementRepository settlements =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionSettlementRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "productionSettlementRepository", settlements);
+
+        BusinessException ex = assertThrows(BusinessException.class,
+                () -> service.close(FACTORY_ID, MR_ID, OPERATOR, List.of()));
+        assertEquals("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLEMENT", ex.getErrorCode());
+        assertTrue(ex.getMessage().contains("结单"), ex.getMessage());
+        assertNotNull(ex.getActionHint());
+
+        assertEquals(Status.ISSUED, mr.getStatus());
+        assertEquals(new BigDecimal("10.00"), batchStore.get("raw-1").getUsedQuantity(), "原料仓不能多出已用掉的料");
+        assertEquals(new BigDecimal("10.00"), batchStore.get("wks-1").getCurrentQuantity(), "生产仓不能被划空");
+        verify(productionMaterialReturnRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("排查 C6 阴性对照: 计划已结单 (结单不能再做) 却还挂着未打戳的消耗行 → 不拦关单, 否则永久死路 (prod MR20261104-0002 同形)")
+    void close_nonStockPlan_alreadySettled_isNotDeadlocked() {
+        batchStore.put("batch-1", batch("batch-1", "MAT-001", WH_LOGISTICS, "10.00", "10.00", "3.00"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "8.00", "3.00"));
+        FactoryMaterialRequisition mr = buildMrInIssued(
+                new BigDecimal("10.00"), new BigDecimal("8.00"),
+                new BigDecimal("0.00"), new BigDecimal("0.00"), "wks-1", null);
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubPlanSourceType(PlanSourceType.CUSTOMER_ORDER);
+        List<Object[]> pending = new ArrayList<>();
+        pending.add(new Object[]{"wks-1", new BigDecimal("0.46")});
+        when(materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(FACTORY_ID, List.of("wks-1")))
+                .thenReturn(pending);
+        com.cretas.aims.repository.ProductionSettlementRepository settlements =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionSettlementRepository.class);
+        when(settlements.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.ProductionSettlement()));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "productionSettlementRepository", settlements);
+
+        service.close(FACTORY_ID, MR_ID, OPERATOR, List.of());
+        assertEquals(Status.CLOSED, mr.getStatus());
+    }
+
+    @Test
+    @DisplayName("排查 C3: 料已调到生产仓 (已调拨 / 已签收 / 生产中) 的领料单不能取消 → 409 指向关单退料; 阴性对照: 备料中照常取消")
+    void cancel_afterTransfer_isBlocked() {
+        for (Status st : List.of(Status.TRANSFERRED, Status.ISSUED, Status.IN_USE)) {
+            FactoryMaterialRequisition mr = buildMrInPicking();
+            mr.setStatus(st);
+            when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.cancel(FACTORY_ID, MR_ID, OPERATOR, "不要了"), st.name());
+            assertEquals("PRODUCTION_REQUISITION_CANCEL_AFTER_TRANSFER", ex.getErrorCode(), st.name());
+            assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("关单"), st.name());
+            assertEquals(st, mr.getStatus(), st.name());
+        }
+        verify(repository, never()).save(any());
+
+        FactoryMaterialRequisition picking = buildMrInPicking();
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(picking));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        service.cancel(FACTORY_ID, MR_ID, OPERATOR, "不要了");
+        assertEquals(Status.CANCELLED, picking.getStatus());
     }
 
     // ==================== builders ====================
