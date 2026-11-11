@@ -46,7 +46,7 @@ function locateDispositionView(): string {
 }
 
 describe('不良品处置页面可达性', () => {
-  it('同时注册路由和审批角色菜单入口', () => {
+  it('同时注册路由和按质检权限出现的菜单入口', () => {
     const routerSource = readFileSync(locateRouterFile(), 'utf8');
     const qualityMenu = menuConfig.find((item) => item.path === '/quality');
     const disposition = qualityMenu?.children?.find((item) => item.path === '/quality/disposition');
@@ -54,12 +54,9 @@ describe('不良品处置页面可达性', () => {
     expect(routerSource).toContain("path: 'disposition'");
     expect(routerSource).toContain("component: () => import('@/views/quality/disposition/list.vue')");
     expect(disposition?.title).toBe('不良品处置');
-    expect(disposition?.roles).toEqual([
-      'quality_manager',
-      'factory_super_admin',
-      'platform_admin',
-      'permission_admin',
-    ]);
+    // B14: 入口按质检模块权限出现, 不再写死审批岗位
+    expect(disposition?.roles).toBeUndefined();
+    expect(disposition?.module).toBe('quality');
   });
 
   it('如实说明审批后的库存桥接和返工边界', () => {
