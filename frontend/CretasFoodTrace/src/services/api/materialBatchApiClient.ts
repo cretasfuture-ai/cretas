@@ -165,7 +165,7 @@ class MaterialBatchApiClient {
   }
 
   // 10. 使用批次材料（旧接口，保留兼容）
-  async useBatch(batchId: string, quantity: number, productionPlanId?: number, factoryId?: string): Promise<ApiResponse<MaterialBatch>> {
+  async useBatch(batchId: string, quantity: number, productionPlanId?: string, factoryId?: string): Promise<ApiResponse<MaterialBatch>> {
     return await apiClient.post(`${this.getPath(factoryId)}/${batchId}/use`, null, {
       params: { quantity, productionPlanId }
     });

@@ -17,6 +17,16 @@ import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import com.cretas.aims.service.alerts.InventoryLowStockEventPublisher;
+import com.cretas.aims.entity.enums.DataScope;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
+import com.cretas.aims.security.DataScopeContext;
+import com.cretas.aims.security.DataScopeResolver;
+import org.mockito.Mockito;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -69,8 +79,28 @@ class MaterialIssueEntryGateContractTest {
     private final ProductionBatchRepository productionBatches = mock(ProductionBatchRepository.class);
     private final RawMaterialTypeRepository materialTypes = mock(RawMaterialTypeRepository.class);
 
+    /** 数据范围: 真实的 assertCanAccess / assertActorCanAccess 判定逻辑, 只把「查用户角色」这一步桩掉。 */
+    private final DataScopeResolver scopeResolver = mock(DataScopeResolver.class, Mockito.CALLS_REAL_METHODS);
+    private static final AuthenticatedActor AI_CALLER =
+            new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 42L, F, "warehouse_manager");
+    private AuthenticatedActor.ActorScope actorScope;
+
     private MaterialBatch batch;
     private ProductionPlan companyPlan;
+
+    private void scopeOf42(DataScope scope) {
+        Mockito.doReturn(DataScopeContext.builder().userId(42L).factoryId(F).roleCode("warehouse_manager")
+                .scope(scope).column("created_by").build()).when(scopeResolver).resolve(42L);
+        Mockito.doReturn(List.of(42L)).when(scopeResolver).resolveCreatedByChain(any());
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (actorScope != null) {
+            actorScope.close();
+        }
+        RequestContextHolder.resetRequestAttributes();
+    }
 
     @BeforeEach
     void setUp() {
@@ -85,6 +115,10 @@ class MaterialIssueEntryGateContractTest {
         batch.setUnitPrice(new BigDecimal("2"));
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
         batch.setOwnership(InventoryOwnership.COMPANY_OWNED);
+        batch.setCreatedBy(7L);
+        // 默认: AI 异步线程上绑定了调用者 42, 全厂数据范围 (仓管主管) —— 其余用例不受数据范围影响
+        scopeOf42(DataScope.ALL);
+        actorScope = AuthenticatedActor.trustedAsyncScope(AI_CALLER);
         when(batches.findById("MB-1")).thenReturn(Optional.of(batch));
         when(batches.findByIdAndFactoryId("MB-1", F)).thenReturn(Optional.of(batch));
         when(batches.findByIdAndFactoryIdForUpdate("MB-1", F)).thenReturn(Optional.of(batch));
@@ -109,6 +143,7 @@ class MaterialIssueEntryGateContractTest {
         ReflectionTestUtils.setField(svc, "materialTypeRepository", materialTypes);
         ReflectionTestUtils.setField(svc, "productionPlanRepository", plans);
         ReflectionTestUtils.setField(svc, "inventoryLowStockEventPublisher", mock(InventoryLowStockEventPublisher.class));
+        ReflectionTestUtils.setField(svc, "dataScopeResolver", scopeResolver);
         return svc;
     }
 
@@ -211,6 +246,57 @@ class MaterialIssueEntryGateContractTest {
         execute(operationTool(svc), Map.of("batchId", "MB-1", "operationType", "OUTBOUND",
                 "quantity", new BigDecimal("3")));
         assertThat(batch.getUsedQuantity()).isEqualByComparingTo("8");
+    }
+
+    // ───────────── #1606 审查 L8: AI 出库的数据范围 (原 useBatchQuantity 有, 改走领料服务时丢了) ─────────────
+
+    private void assertBothToolsRefused(MaterialBatchServiceImpl svc, int status) {
+        assertThatThrownBy(() -> execute(outboundTool(svc), Map.of("materialName", "猪肉",
+                "quantity", new BigDecimal("5"), "batchId", "MB-1")))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(status));
+        assertThatThrownBy(() -> execute(operationTool(svc), Map.of("batchId", "MB-1",
+                "operationType", "OUTBOUND", "quantity", new BigDecimal("5"))))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(status));
+        assertThat(batch.getUsedQuantity()).as("库存不动").isEqualByComparingTo("0");
+        verify(consumptions, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("L8 异步 AI 线程: 只能看自己记录的账号, AI 出库别人建的批次 → 403, 库存不动, 不记消耗")
+    void aiOutboundOutsideDataScopeIsRefused_async() {
+        scopeOf42(DataScope.SELF);
+        assertBothToolsRefused(realWarehouseService(), 403);
+    }
+
+    @Test
+    @DisplayName("L8 HTTP 同步 AI 请求: 路由不是 material_batches 资源也照样判数据范围 → 403")
+    void aiOutboundOutsideDataScopeIsRefused_http() {
+        scopeOf42(DataScope.SELF);
+        actorScope.close();
+        actorScope = null;
+        MockHttpServletRequest req = new MockHttpServletRequest("POST", "/api/mobile/F006/ai/execute");
+        req.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, AI_CALLER);
+        RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(req));
+        assertBothToolsRefused(realWarehouseService(), 403);
+    }
+
+    @Test
+    @DisplayName("L8 没有调用身份 (既不在请求里也没绑可信身份) → 401, 不出库")
+    void aiOutboundWithoutIdentityIsRefused() {
+        actorScope.close();
+        actorScope = null;
+        assertBothToolsRefused(realWarehouseService(), 401);
+    }
+
+    @Test
+    @DisplayName("L8 阳性: 只能看自己记录的账号, AI 出库自己建的批次照常扣库存并记消耗")
+    void aiOutboundInsideSelfScopeProceeds() throws Exception {
+        scopeOf42(DataScope.SELF);
+        batch.setCreatedBy(42L);
+        execute(outboundTool(realWarehouseService()), Map.of("materialName", "猪肉",
+                "quantity", new BigDecimal("5"), "batchId", "MB-1"));
+        assertThat(batch.getUsedQuantity()).isEqualByComparingTo("5");
+        verify(consumptions).save(any());
     }
 
     @Test

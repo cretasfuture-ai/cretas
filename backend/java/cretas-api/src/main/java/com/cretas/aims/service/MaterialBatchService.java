@@ -262,6 +262,18 @@ public interface MaterialBatchService {
                                               String productionPlanId, Long operatorId, String notes) {
         return useBatchMaterial(factoryId, batchId, quantity, productionPlanId, operatorId);
     }
+
+    /**
+     * AI 出库工具专用的数据范围检查 (#1606 审查 L8): 当前账号的数据范围 (只能看自己 / 本部门 …) 里没有这批料就拒绝。
+     *
+     * <p>⚠️ 不能复用 {@code DataScopeResolver.requireRecordAccess}: 它只在路由被拦截器标成
+     * {@code material_batches} 资源时才判, AI 对话的路由不是, 那道检查在 AI 路径上从来没生效过。
+     * 这里按调用身份直接判: HTTP 请求里的身份, 或 AI 异步线程上绑定的可信身份; 两者都没有就拒绝 (fail-closed)。
+     * 默认实现拒绝, 只有真实现覆写 —— 测试桩没实现时不会被当成放行。
+     */
+    default void assertToolRecordAccess(String factoryId, String batchId) {
+        throw new com.cretas.aims.exception.BusinessException(503, "数据范围检查未实现，访问已停止");
+    }
      /**
      * 设置批次数量到绝对值 (newQuantity = param, NOT current + param).
      *

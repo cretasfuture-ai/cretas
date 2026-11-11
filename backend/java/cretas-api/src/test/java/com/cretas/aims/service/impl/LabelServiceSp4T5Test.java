@@ -148,6 +148,26 @@ class LabelServiceSp4T5Test {
     }
 
     @Test
+    @DisplayName("#1606 后续: 扫码返回库存归属, 扫码出库页据此提前说明客户来料走领料单")
+    void scanLabel_returnsOwnership() {
+        String labelCode = "QR-F006-20261112-OWN";
+        Label label = new Label();
+        label.setId("label-id-own");
+        label.setFactoryId(FACTORY_ID);
+        label.setLabelCode(labelCode);
+        label.setBatchType("MATERIAL");
+        label.setBatchId(BATCH_ID);
+        label.setStatus("ACTIVE");
+        when(labelRepository.findByLabelCodeAndDeletedAtIsNull(labelCode)).thenReturn(Optional.of(label));
+        when(materialBatchRepository.findByIdAndFactoryId(BATCH_ID, FACTORY_ID)).thenReturn(Optional.of(batch));
+
+        batch.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        assertEquals("CUSTOMER_OWNED", labelService.scanLabel(FACTORY_ID, labelCode).getOwnership());
+        batch.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED);
+        assertEquals("COMPANY_OWNED", labelService.scanLabel(FACTORY_ID, labelCode).getOwnership());
+    }
+
+    @Test
     @DisplayName("T5-S2: 标签不存在 → 抛 RuntimeException")
     void scanLabel_notFound() {
         when(labelRepository.findByLabelCodeAndDeletedAtIsNull("UNKNOWN-CODE"))

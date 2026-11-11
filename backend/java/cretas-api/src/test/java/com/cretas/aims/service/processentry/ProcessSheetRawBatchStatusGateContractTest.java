@@ -209,4 +209,26 @@ class ProcessSheetRawBatchStatusGateContractTest {
         assertThat(ok).isNotNull();
         assertThat(consumptionRepo.count()).isGreaterThan(before);
     }
+
+    @Test
+    @DisplayName("#1606 审查 M4: 工厂备料计划的报工, 原料来源是客户所有的料 → 409, 不写消耗; 阳性: 公司料照常保存")
+    void customerOwnedRawOnFactoryPlanIsRejected() {
+        MaterialBatch raw = materialBatchRepo.findById(rawBatchId).orElseThrow();
+        raw.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        raw.setOwnerCustomerId("GATE-CUST-A");
+        materialBatchRepo.saveAndFlush(raw);
+        long before = consumptionRepo.count();
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> saveXiuyou("gate-owner-bad"))
+                .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("CUSTOMER_OWNED_MATERIAL_FORBIDDEN");
+                });
+        assertThat(consumptionRepo.count()).isEqualTo(before);
+
+        raw.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED);
+        raw.setOwnerCustomerId(null);
+        materialBatchRepo.saveAndFlush(raw);
+        assertThat(saveXiuyou("gate-owner-ok")).isNotNull();
+        assertThat(consumptionRepo.count()).isGreaterThan(before);
+    }
 }

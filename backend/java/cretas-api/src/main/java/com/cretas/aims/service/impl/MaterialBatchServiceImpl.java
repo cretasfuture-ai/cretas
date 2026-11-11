@@ -1439,6 +1439,23 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     }
 
     @Override
+    public void assertToolRecordAccess(String factoryId, String batchId) {
+        MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));
+        if (dataScopeResolver == null) {
+            throw new BusinessException(503, "数据范围组件未就绪，访问已停止");
+        }
+        if (org.springframework.web.context.request.RequestContextHolder.getRequestAttributes() != null) {
+            dataScopeResolver.assertCanAccess(factoryId, batch.getCreatedBy());
+            return;
+        }
+        com.cretas.aims.security.AuthenticatedActor actor =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution().orElse(null);
+        // actor 为 null 时 assertActorCanAccess 抛 401: AI 工具都是用户发起的, 没有身份就不出库
+        dataScopeResolver.assertActorCanAccess(factoryId, batch.getCreatedBy(), actor);
+    }
+
+    @Override
     @Transactional
     public void useBatchQuantity(String factoryId, String batchId, BigDecimal quantity) {
         MaterialBatch batch = materialBatchRepository.findById(batchId)

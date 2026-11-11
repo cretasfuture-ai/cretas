@@ -43,12 +43,23 @@ import { materialBatchApiClient } from '../../../services/api/materialBatchApiCl
 import { handleError } from '../../../utils/errorHandler';
 
 type Nav = NativeStackNavigationProp<WHOutboundStackParamList, 'WHOutboundIssue'>;
+
+/**
+ * 客户来料 (代加工客户送来的料) 不能在这里直接出库: 它只能领给该客户订单的生产计划, 本页不选计划
+ * (后端 /use 无计划领客户料返回 409 CUSTOMER_OWNED_MATERIAL_REQUIRES_PLAN)。
+ * Steve 2026-11-12 定 B: 一识别出客户料就在填数量之前说明, 不让走到提交才失败; 客户料仍只走领料单。
+ * 分工: 领料单由生产按计划开, 仓管在电脑网页「仓储管理 → 领料单」上做出库 (备料 → 确认领料 → 调拨,
+ * 后端 warehouse:read_write 即可); App 里没有仓管侧的领料单页面, 所以这里指向电脑网页。
+ */
+export const CUSTOMER_OWNED_OUTBOUND_TITLE = '这是客户来料，不能直接扫码出库';
+export const CUSTOMER_OWNED_OUTBOUND_HINT =
+  '请按生产开的领料单出库：在电脑网页打开「仓储管理 → 领料单」，找到对应的单子，先点「备料」（已备料的跳过），再点「确认领料」和「调拨」。没有领料单的，请联系生产计划员先开单。';
 type RouteProps = RouteProp<WHOutboundStackParamList, 'WHOutboundIssue'>;
 
 export default function WHOutboundIssueScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<RouteProps>();
-  const { batchId, batchNumber, materialName, remainingQuantity, quantityUnit } = route.params;
+  const { batchId, batchNumber, materialName, remainingQuantity, quantityUnit, ownership } = route.params;
 
   const [quantity, setQuantity] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -56,12 +67,14 @@ export default function WHOutboundIssueScreen() {
   const unit = quantityUnit || 'kg';
   // 防呆 Rule 6: 剩余量为 0 (或缺失) 时 honest-fail, 不允许进入录入
   const depleted = !(remainingQuantity > 0);
+  // 客户来料: 不显示数量输入和出库按钮, 只说明该去哪出库 (防呆 Rule 1: 事前说明, 不是提交后报错)
+  const customerOwned = ownership === 'CUSTOMER_OWNED';
 
   const qtyNum = Number(quantity);
   const qtyValid = quantity.trim() !== '' && Number.isFinite(qtyNum) && qtyNum > 0;
   // 防呆 Rule 1: 出库数量硬上限 = 剩余量, 超出直接不可提交 (非提交后才报错)
   const overLimit = qtyValid && qtyNum > remainingQuantity;
-  const canSubmit = !depleted && qtyValid && !overLimit && !submitting;
+  const canSubmit = !depleted && !customerOwned && qtyValid && !overLimit && !submitting;
 
   const handleQuantityChange = useCallback((text: string) => {
     setQuantity(text.replace(/[^0-9.]/g, ''));
@@ -131,7 +144,15 @@ export default function WHOutboundIssueScreen() {
             </Card.Content>
           </Card>
 
-          {depleted ? (
+          {customerOwned ? (
+            // 客户来料: 本页不出库, 说明「发生了什么 + 怎么办」(ux-flow 错误文案双句式)
+            <Card style={[styles.card, styles.depletedCard]} testID="wh-outbound-customer-owned">
+              <Card.Content>
+                <Text style={styles.depletedTitle}>{CUSTOMER_OWNED_OUTBOUND_TITLE}</Text>
+                <Text style={styles.customerHint}>{CUSTOMER_OWNED_OUTBOUND_HINT}</Text>
+              </Card.Content>
+            </Card>
+          ) : depleted ? (
             // 防呆 Rule 6 honest-fail: 剩余量为 0, 明确告知且不可继续, 不静默失败
             <Card style={[styles.card, styles.depletedCard]}>
               <Card.Content>
@@ -170,15 +191,23 @@ export default function WHOutboundIssueScreen() {
         </ScrollView>
 
         <View style={styles.footer}>
-          <Button
-            mode="contained"
-            onPress={handleSubmit}
-            loading={submitting}
-            disabled={!canSubmit}
-            icon="check"
-          >
-            {submitting ? '提交中...' : '确认出库'}
-          </Button>
+          {customerOwned ? (
+            // Dead-end 改导航 (防呆 Rule 5): 唯一主操作是回去继续扫下一件
+            <Button mode="contained" onPress={() => navigation.goBack()} icon="qrcode-scan" testID="wh-outbound-back-to-scan">
+              返回继续扫码
+            </Button>
+          ) : (
+            <Button
+              mode="contained"
+              onPress={handleSubmit}
+              loading={submitting}
+              disabled={!canSubmit}
+              icon="check"
+              testID="wh-outbound-submit"
+            >
+              {submitting ? '提交中...' : '确认出库'}
+            </Button>
+          )}
         </View>
       </SafeAreaView>
     </KeyboardAvoidingView>
@@ -202,6 +231,7 @@ const styles = StyleSheet.create({
   depletedCard: { backgroundColor: '#fff3e0', borderLeftWidth: 3, borderLeftColor: '#f57c00' },
   depletedTitle: { fontSize: 14, fontWeight: '600', color: '#e65100', marginBottom: 4 },
   depletedHint: { fontSize: 12, color: '#8d6e63', lineHeight: 18 },
+  customerHint: { fontSize: 15, color: '#5d4037', lineHeight: 22 },
 
   field: { backgroundColor: 'transparent' },
   hint: { fontSize: 12, color: '#718096', marginTop: 6 },

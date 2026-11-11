@@ -119,6 +119,28 @@ public final class ProductionInventoryOwnershipGuard {
     }
 
     /**
+     * 报工 / 小结时原料来源批次的归属判断 (#1606 独立审查 M4 后续): 工序表、逐道录入的原料投入,
+     * 以及中途小结过账的消耗行, 与领料同一口径 ({@link #assertMaterialBatchAllowed})。
+     *
+     * <p>生产形成的在制 / 副产批次 ({@link #isProducedIntermediate}) 不在这里判: 它们的
+     * {@code ownership} 列不随计划打戳 (prod 2026-11-12 只读: F006 48 行、LIUSHANMEN 18 行在制消耗,
+     * 全是 COMPANY_OWNED, 含 LIUSHANMEN 来料加工计划的), 跨客户由 {@link IntermediateOwnershipGuard} 管。
+     */
+    public static void assertRawSourceAllowed(ProductionPlan plan, MaterialBatch batch,
+                                              String materialMainCategory, String hintTarget) {
+        if (isProducedIntermediate(batch)) {
+            return;
+        }
+        assertMaterialBatchAllowed(plan, batch, materialMainCategory, hintTarget);
+    }
+
+    /** 生产形成的在制半成品 (带 productTypeId) 或副产批次。 */
+    public static boolean isProducedIntermediate(MaterialBatch batch) {
+        return batch != null
+                && (!isBlank(batch.getProductTypeId()) || batch.getByproductSourceReportId() != null);
+    }
+
+    /**
      * 辅料/包材(含调料, 经 {@link MaterialMainCategory} 归一到「辅料」大类)在来料加工计划下
      * 允许用工厂自有库存。RAW(「原料」)不在此列 —— 那是这条规则存在的全部理由(客户主料的
      * 归属守卫必须原样保留)。

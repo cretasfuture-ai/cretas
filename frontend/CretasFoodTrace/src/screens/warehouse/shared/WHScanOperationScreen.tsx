@@ -128,6 +128,7 @@ export function WHScanOperationScreen() {
               materialName: label.materialName ?? undefined,
               remainingQuantity: remaining,
               quantityUnit: label.quantityUnit ?? undefined,
+              ownership: label.ownership ?? undefined,
             });
             return;
           }
