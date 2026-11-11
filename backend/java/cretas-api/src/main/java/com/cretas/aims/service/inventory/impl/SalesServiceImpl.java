@@ -146,6 +146,16 @@ public class SalesServiceImpl implements SalesService {
     private com.cretas.aims.service.PermissionService permissionService;
 
     /**
+     * 财务批准后取消 (工厂开关, 2026-11-11)。字段注入 + 可选, 不打断直接 new 的既有测试;
+     * 没注入时等价于开关关闭 (原行为)。@Lazy: 它依赖生产计划服务。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private ApprovedSalesOrderCancellation approvedSalesOrderCancellation;
+
+    private static final ThreadLocal<String> LAST_CANCEL_SUMMARY = new ThreadLocal<>();
+
+    /**
      * 阈值中心读取器（可选注入）。
      *
      * <p>{@code null}（单元测试直接 {@code new SalesServiceImpl(...)}，无 Spring 上下文）时
@@ -2623,15 +2633,33 @@ public class SalesServiceImpl implements SalesService {
     @Loggable(module = "SALES_ORDER", action = "CANCEL", entityType = "SalesOrder",
               entityIdParam = "orderId")
     public SalesOrder cancelOrder(String factoryId, String orderId, String reason) {
+        return cancelOrder(factoryId, orderId, reason, null);
+    }
+
+    @Override
+    @Transactional
+    @Loggable(module = "SALES_ORDER", action = "CANCEL", entityType = "SalesOrder",
+              entityIdParam = "orderId")
+    public SalesOrder cancelOrder(String factoryId, String orderId, String reason, Long operatorUserId) {
+        LAST_CANCEL_SUMMARY.remove();
         // getSalesOrderById 内部做 factoryId 租户隔离校验 (不属于该工厂 → 403).
         SalesOrder order = getSalesOrderById(factoryId, orderId);
+        ApprovedSalesOrderCancellation.Outcome downstream = null;
         // R39 BUG-8 fix: was only blocking COMPLETED → FINANCE_APPROVED+/PROCESSING/SHIPPED/CANCELLED
         // could be cancelled, breaking AR + production_plan invariants. Use whitelist.
         if (!com.cretas.aims.domain.OrderUsageWhitelists.SO_CANCELLABLE.contains(order.getStatus())) {
-            throw new BusinessException(409,
-                    "当前订单状态(" + order.getStatus().getDisplayName() + ")不允许取消。"
-                  + "财务批准后请通过驳回/退款流程处理")
-                    .withHint("请刷新订单列表查看最新状态");
+            boolean approvedPath = order.getStatus() == SalesOrderStatus.FINANCE_APPROVED
+                    && approvedSalesOrderCancellation != null
+                    && approvedSalesOrderCancellation.enabled(factoryId);
+            if (!approvedPath) {
+                throw new BusinessException(409,
+                        "当前订单状态(" + order.getStatus().getDisplayName() + ")不允许取消。"
+                      + "财务批准后请通过驳回/退款流程处理")
+                        .withHint("请刷新订单列表查看最新状态");
+            }
+            // 工厂开关开了: 锁销售单 (建发货单 / 登记收款拿同一把锁)、锁后重读状态、连带取消下游; 任何一步被拦整单回滚
+            downstream = approvedSalesOrderCancellation.cancelDownstream(factoryId, orderId, reason, operatorUserId);
+            order = downstream.lockedOrder();
         }
         order.setStatus(SalesOrderStatus.CANCELLED);
         // E-FP-2 (fool-proof Rule 3): 取消原因追加到 remark, 无专用字段故复用 remark 追溯.
@@ -2639,6 +2667,12 @@ public class SalesServiceImpl implements SalesService {
             String existing = order.getRemark();
             String tag = "[取消原因: " + reason.trim() + "]";
             order.setRemark(existing == null || existing.isBlank() ? tag : existing + " " + tag);
+        }
+        if (downstream != null) {
+            String existing = order.getRemark();
+            String tag = "[财务批准后取消]";
+            order.setRemark(existing == null || existing.isBlank() ? tag : existing + " " + tag);
+            LAST_CANCEL_SUMMARY.set(downstream.describe());
         }
         log.info("取消销售订单: orderId={}, orderNumber={}, reason={}",
                 orderId, order.getOrderNumber(), reason);
@@ -2654,6 +2688,19 @@ public class SalesServiceImpl implements SalesService {
             log.error("发布SalesOrderCancelledEvent失败(不影响取消): SO={}", saved.getId(), e);
         }
         return saved;
+    }
+
+    @Override
+    public boolean mayCancelApprovedOrders(String factoryId, Long userId) {
+        return approvedSalesOrderCancellation != null
+                && approvedSalesOrderCancellation.currentUserMayCancelApproved(factoryId, userId);
+    }
+
+    @Override
+    public String lastCancelSummary() {
+        String v = LAST_CANCEL_SUMMARY.get();
+        LAST_CANCEL_SUMMARY.remove();
+        return v;
     }
 
     /**

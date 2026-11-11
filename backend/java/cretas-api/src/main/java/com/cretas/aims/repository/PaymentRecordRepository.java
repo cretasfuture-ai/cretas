@@ -17,6 +17,13 @@ public interface PaymentRecordRepository extends JpaRepository<PaymentRecord, St
 
     java.util.Optional<PaymentRecord> findByIdAndFactoryIdAndDeletedAtIsNull(String id, String factoryId);
 
+    /** 本单上未驳回、未删除的收款登记条数 (财务批准后取消前的闸: 有就只能走退款)。 */
+    @org.springframework.data.jpa.repository.Query("SELECT COUNT(p) FROM PaymentRecord p WHERE p.factoryId = :factoryId "
+            + "AND p.salesOrderId = :salesOrderId AND p.deletedAt IS NULL "
+            + "AND p.status <> com.cretas.aims.entity.enums.PaymentRecordStatus.REJECTED")
+    long countLiveBySalesOrder(@org.springframework.data.repository.query.Param("factoryId") String factoryId,
+                               @org.springframework.data.repository.query.Param("salesOrderId") String salesOrderId);
+
     Page<PaymentRecord> findByFactoryIdAndDeletedAtIsNull(String factoryId, Pageable pageable);
 
     Page<PaymentRecord> findByFactoryIdAndStatusAndDeletedAtIsNull(String factoryId, PaymentRecordStatus status, Pageable pageable);

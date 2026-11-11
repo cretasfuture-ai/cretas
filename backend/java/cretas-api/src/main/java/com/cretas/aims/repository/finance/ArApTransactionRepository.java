@@ -422,6 +422,11 @@ public interface ArApTransactionRepository extends JpaRepository<ArApTransaction
     boolean existsLegacyArInvoiceWithoutSource(@Param("factoryId") String factoryId,
                                                @Param("salesOrderId") String salesOrderId);
 
+    /** 本单上还有效的应收 / 收款流水条数 (财务批准后取消前的闸: 有就只能走退款)。 */
+    @Query("SELECT COUNT(t) FROM ArApTransaction t WHERE t.factoryId = :factoryId "
+            + "AND t.salesOrderId = :salesOrderId AND t.deletedAt IS NULL")
+    long countLiveBySalesOrder(@Param("factoryId") String factoryId, @Param("salesOrderId") String salesOrderId);
+
     boolean existsByFactoryIdAndSalesOrderIdAndTransactionType(
             String factoryId, String salesOrderId, ArApTransactionType transactionType);
 

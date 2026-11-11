@@ -658,6 +658,17 @@ public class SalesController {
         return ApiResponse.success("销售订单已确认", order);
     }
 
+    @GetMapping("/orders/cancel-policy")
+    @Operation(summary = "当前用户能否取消财务已批准的销售订单 (本厂开关 + 权限)")
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read", "procurement:read"})
+    public ApiResponse<java.util.Map<String, Object>> cancelPolicy(
+            @PathVariable @NotBlank String factoryId,
+            HttpServletRequest httpRequest) {
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        return ApiResponse.success("获取成功",
+                java.util.Map.of("canCancelApproved", salesService.mayCancelApprovedOrders(factoryId, userId)));
+    }
+
     @PostMapping("/orders/{orderId}/cancel")
     @Operation(summary = "取消销售订单")
     @RequirePermission("sales:read_write")
@@ -666,9 +677,13 @@ public class SalesController {
             @PathVariable @NotBlank String orderId,
             // E-FP-2 (fool-proof Rule 3): 取消原因 — 前端 el-select 标准原因 (客户撤单/原料缺货/
             // 质量问题/排程冲突/价格分歧/其他)。required=false 以保持向后兼容 (旧调用方不传).
-            @RequestParam(required = false) String reason) {
-        SalesOrder order = salesService.cancelOrder(factoryId, orderId, reason);
-        return ApiResponse.success("销售订单已取消", order);
+            @RequestParam(required = false) String reason,
+            HttpServletRequest httpRequest) {
+        // 财务已批准的订单: 本厂开了「批准后可取消」时按操作人权限判 (sales.permission.cancel_approved_order)
+        Long userId = (Long) httpRequest.getAttribute("userId");
+        SalesOrder order = salesService.cancelOrder(factoryId, orderId, reason, userId);
+        String summary = salesService.lastCancelSummary();
+        return ApiResponse.success(summary != null ? summary : "销售订单已取消", order);
     }
 
     /**

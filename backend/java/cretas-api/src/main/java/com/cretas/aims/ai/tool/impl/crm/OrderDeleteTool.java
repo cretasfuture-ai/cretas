@@ -76,7 +76,8 @@ public class OrderDeleteTool extends AbstractBusinessTool {
             salesService.deleteDraft(factoryId, order.getId(), userId);
             result.put("message", "销售订单 " + order.getOrderNumber() + " 已删除");
         } else if ("CANCEL".equalsIgnoreCase(operation)) {
-            SalesOrder cancelled = salesService.cancelOrder(factoryId, order.getId(), reason);
+            // 带上操作人: 财务已批准的单只有本厂开了开关且此人有权限时才能取消 (2026-11-11)
+            SalesOrder cancelled = salesService.cancelOrder(factoryId, order.getId(), reason, userId);
             result.put("order", cancelled);
             result.put("message", "销售订单 " + order.getOrderNumber() + " 已取消");
         } else {

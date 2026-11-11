@@ -120,6 +120,25 @@ public interface SalesService {
     SalesOrder cancelOrder(String factoryId, String orderId, String reason);
 
     /**
+     * 带操作人的取消。财务已批准的订单只有在本厂开了 sales.order.cancel_after_approval、操作人有
+     * 「取消已批准销售单」权限、写了原因时才能取消, 并连带取消自动生成的生产计划与未开工排程。
+     * 默认实现 = 不带操作人 (批准后的订单会被拒), 给测试替身用。
+     */
+    default SalesOrder cancelOrder(String factoryId, String orderId, String reason, Long operatorUserId) {
+        return cancelOrder(factoryId, orderId, reason);
+    }
+
+    /** 本厂开了「财务批准后可取消」且当前用户有权限 ⇒ true (网页据此决定已批准订单上显不显示取消)。默认 false。 */
+    default boolean mayCancelApprovedOrders(String factoryId, Long userId) {
+        return false;
+    }
+
+    /** 最近一次 {@link #cancelOrder} 在当前线程上的连带取消说明 (没有连带 = null)。给控制器拼回执用。 */
+    default String lastCancelSummary() {
+        return null;
+    }
+
+    /**
      * 短交结案 (2026-09-04 owner 拍板): PARTIAL_DELIVERED 订单剩余数量确认不再发货，
      * 显式关闭为终态 {@code SalesOrderStatus.SHORT_CLOSED}。
      *

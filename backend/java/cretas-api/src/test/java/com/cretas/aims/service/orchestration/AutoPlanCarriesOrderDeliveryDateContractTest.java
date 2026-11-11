@@ -148,4 +148,26 @@ class AutoPlanCarriesOrderDeliveryDateContractTest {
         assertThat(plan.getExpectedCompletionDate()).isNull();
         assertThat(plan.getPlannedDate()).isNull();
     }
+
+    @Test
+    @DisplayName("异步联动跑起来时订单已被取消 (财务批准后取消开关) → 不预留、不建计划")
+    void aCancelledOrderGetsNoReservationAndNoPlan() {
+        SalesOrder order = new SalesOrder();
+        order.setId(SO_ID);
+        order.setFactoryId(FACTORY);
+        order.setMaterialSupplyMode(MaterialSupplyMode.FACTORY_SUPPLIED);
+        order.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_APPROVED);
+        when(salesOrderRepository.findById(SO_ID)).thenReturn(Optional.of(order));
+        // 不加锁读到的还是已批准; 拿到行锁后读到的是取消已提交的状态 —— 判断必须看锁后的那次
+        SalesOrder locked = new SalesOrder();
+        locked.setId(SO_ID);
+        locked.setFactoryId(FACTORY);
+        locked.setStatus(com.cretas.aims.entity.enums.SalesOrderStatus.CANCELLED);
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate(SO_ID, FACTORY)).thenReturn(Optional.of(locked));
+
+        orchestrator.onSalesOrderFinanceApproved(new SalesOrderFinanceApprovedEvent(this, FACTORY, SO_ID, 1309L));
+
+        verify(inventoryMatchingService, org.mockito.Mockito.never()).checkAvailability(any(), any());
+        verify(productionPlanRepository, org.mockito.Mockito.never()).saveAndFlush(any(ProductionPlan.class));
+    }
 }

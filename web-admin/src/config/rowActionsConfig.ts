@@ -37,7 +37,9 @@ export const STATUS_ACTIONS_MAP: Readonly<Record<EntityType, Readonly<Record<str
     CONFIRMED: ['submit-for-review', 'convert-to-production', 'convert-to-purchase', 'print-pdf'],
     APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'undo-approval', 'cancel'],
     PENDING_FINANCE_REVIEW: [],
-    FINANCE_APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf', 'cancel'],
+    // 'cancel' 拿掉 (2026-11-11): 财务批准后能不能取消是工厂开关 + 权限 (sales.order.cancel_after_approval),
+    // 由 sales/orders/list.vue 按后端 cancel-policy 决定显不显示; 写死在这里, 开关关着时就是一个必然 409 的按钮。
+    FINANCE_APPROVED: ['convert-to-production', 'convert-to-purchase', 'print-pdf'],
     FINANCE_REJECTED: ['edit'],
     PROCESSING: ['print-pdf'],
     IN_PRODUCTION: ['print-pdf'],

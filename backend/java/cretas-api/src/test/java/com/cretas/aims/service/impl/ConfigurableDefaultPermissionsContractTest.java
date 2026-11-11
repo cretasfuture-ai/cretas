@@ -116,4 +116,16 @@ class ConfigurableDefaultPermissionsContractTest {
         configure(ThresholdKeys.CREDIT_PERMISSION_OVERRIDE, "sales_manager");
         assertThat(both(FactoryUserRole.sales_manager, code)).isTrue();
     }
+
+    @Test
+    @DisplayName("取消已批准销售单: 默认只给厂长 (销售经理 / 财务经理都不行), 配了财务经理才行")
+    void cancelApprovedSalesOrder_defaultsAndConfiguration() {
+        String code = PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION;
+        assertThat(both(FactoryUserRole.factory_super_admin, code)).isTrue();
+        assertThat(both(FactoryUserRole.sales_manager, code)).isFalse();
+        assertThat(both(FactoryUserRole.finance_manager, code)).isFalse();
+        configure(ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER, "finance_manager");
+        assertThat(both(FactoryUserRole.finance_manager, code)).isTrue();
+        assertThat(both(FactoryUserRole.sales_manager, code)).isFalse();
+    }
 }

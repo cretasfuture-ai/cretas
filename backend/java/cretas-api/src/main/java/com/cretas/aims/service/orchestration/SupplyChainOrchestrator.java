@@ -196,6 +196,18 @@ public class SupplyChainOrchestrator {
                         event.getFactoryId(), event.getSalesOrderId());
                 return;
             }
+            // 财务批准后取消 (工厂开关, 2026-11-11): 本联动是异步的, 订单可能在它跑起来之前已被取消 ——
+            // 已取消就不再预留库存、不再建生产计划。拿销售单行锁再判 (取消也先拿这把锁): 要么取消先提交、这里看到已取消;
+            // 要么这里先拿到锁、建完计划提交后取消才看得到这些计划。批准事务自己也持这把锁, 这里会等它提交后再读。
+            com.cretas.aims.entity.enums.SalesOrderStatus lockedStatus = salesOrderRepository
+                    .findByIdAndFactoryIdForUpdate(event.getSalesOrderId(), event.getFactoryId())
+                    .map(SalesOrder::getStatus)
+                    .orElse(sourceOrder.getStatus());
+            if (lockedStatus == com.cretas.aims.entity.enums.SalesOrderStatus.CANCELLED) {
+                log.info("销售订单已取消，跳过供应链联动: factoryId={}, SO={}",
+                        event.getFactoryId(), event.getSalesOrderId());
+                return;
+            }
             if (sourceOrder.getMaterialSupplyMode() == MaterialSupplyMode.CUSTOMER_SUPPLIED) {
                 if (sourceOrder.getCustomerStockFulfillmentMode()
                         == CustomerStockFulfillmentMode.PRESTOCKED) {
