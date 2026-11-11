@@ -48,7 +48,7 @@ public class PlatformRolePermissionController {
         "work_report","inventory","report","rd","production_report_correction",
         // 纪律排查 B1–B3/B11/B15 审批权限码 (Steve 2026-11-10): 各厂可改授给哪些岗位; 默认见 PermissionServiceImpl.APPROVAL_*
         "approval_report_reversal","approval_stocktake","approval_quality_disposition",
-        "approval_price_adjustment","approval_refund",
+        "approval_price_adjustment","approval_refund","approval_bom_price_adjustment",
         // 2026-09-07 清单收敛刀 B (owner: 以 L1 模块码为准): prod L1 有 5 行 operations, 写白名单却没有它 ⇒
         // step-2 页面上 operations 列写不进去 (400 无效模块)。⚠️ 与 FactoryRoleModuleOverrideController 那份逐字相同, 闸钉着。
         "operations");

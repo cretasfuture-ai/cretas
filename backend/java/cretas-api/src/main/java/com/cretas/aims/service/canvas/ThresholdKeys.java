@@ -110,6 +110,13 @@ public final class ThresholdKeys {
     /** 生产建议默认 lead time (天). Hard-coded default = 7. */
     public static final String SHORTAGE_DEFAULT_PRODUCTION_LEAD_DAYS = "shortage.production_lead_days";
 
+    /**
+     * 缺料实例缺口补到 0 之后怎么收尾 (2026-11-11 Steve 裁定: 做成工厂开关)。字符串, MANUAL (默认) / AUTO。
+     * MANUAL = 停在「缺口已解决」, 由生产主管手工关闭 (= 原行为); AUTO = 系统直接关闭并留痕。认不出 = MANUAL。
+     * 读到旧值不挡任何用户动作 (只是晚一点自动关) ⇒ 故意不登记为闸门类 key。
+     */
+    public static final String SHORTAGE_CASE_CLOSE_MODE = "shortage.case.close_mode";
+
     // ==================== AI 复杂度路由 (AI) ====================
 
     /** Fast mode 阈值. Hard-coded default = 0.3. */
@@ -267,6 +274,14 @@ public final class ThresholdKeys {
     /** A14 补录窗口天数. Default = 2 (T-2)。 */
     public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
 
+    /**
+     * 「袋」「盒」等包装单位的计划换线时怎么核对目标线产能 (2026-11-11 Steve 裁定: 做成工厂开关)。
+     * NONE (默认) = 产线产能只认 件 / kg / 批, 包装单位计划判「产能未验证」只能同线顺延 (= 原行为);
+     * NET_CONTENT = 按产品净含量把包装单位折成 kg 再核对 kg 产能 (净含量没填 / 不是质量单位 ⇒ 仍未验证, 不猜);
+     * FACTORY_UNIT = 产线产能可以按工厂自己的包装单位配置 (如 袋/小时), 计划单位与之等价才核对。认不出 = NONE。
+     */
+    public static final String PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE = "production.capacity.package_unit_mode";
+
     // ==================== 闸门类阈值登记 (GATING) ====================
 
     /**
@@ -323,6 +338,7 @@ public final class ThresholdKeys {
             PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
             PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
             PRODUCTION_BACKDATE_MAX_DAYS,
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE,
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
@@ -356,6 +372,10 @@ public final class ThresholdKeys {
             return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))
                     ? null : "超信用额度检查模式只能是 OFF / WARN / BLOCK";
         }
+        String enumError = validateEnumValue(thresholdKey, value);
+        if (enumError != null) {
+            return enumError;
+        }
         if (ROLE_LIST_KEYS.contains(thresholdKey)) {
             for (String code : value.split(",")) {
                 String c = code.trim();
@@ -375,6 +395,20 @@ public final class ThresholdKeys {
             }
         }
         return null;
+    }
+
+    /** 取值是固定几个代码的开关类 key → 允许的值 (保存时校验, 打错字不再静默按默认)。 */
+    private static final java.util.Map<String, java.util.List<String>> ENUM_VALUES = java.util.Map.of(
+            SHORTAGE_CASE_CLOSE_MODE, java.util.List.of("MANUAL", "AUTO"),
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"));
+
+    private static String validateEnumValue(String thresholdKey, String value) {
+        java.util.List<String> allowed = ENUM_VALUES.get(thresholdKey);
+        if (allowed == null) {
+            return null;
+        }
+        String v = value.trim().toUpperCase(java.util.Locale.ROOT);
+        return allowed.contains(v) ? null : thresholdKey + " 只能是 " + String.join(" / ", allowed);
     }
 
     /**

@@ -308,7 +308,7 @@ class BomRecipeServiceImplUomGuardTest {
     @DisplayName("updateItem: cross-dimension 个 vs kg-canonical → BlockedException")
     void updateItem_crossDimension_blocked() {
         BomRecipeItem existingItem = buildExistingItem(1L, MAT_PORK);
-        when(itemRepo.findById(1L)).thenReturn(Optional.of(existingItem));
+        when(itemRepo.findByIdForUpdate(1L)).thenReturn(Optional.of(existingItem));
 
         BomRecipeItemDTO dto = bomItemDto(MAT_PORK, "个", new BigDecimal("100"));
         assertThatThrownBy(() -> service.updateItem(FACTORY, 1L, dto))
@@ -320,7 +320,7 @@ class BomRecipeServiceImplUomGuardTest {
     @DisplayName("updateItem: same dimension g vs kg-canonical → ALLOWED")
     void updateItem_sameDimension_allowed() {
         BomRecipeItem existingItem = buildExistingItem(2L, MAT_PORK);
-        when(itemRepo.findById(2L)).thenReturn(Optional.of(existingItem));
+        when(itemRepo.findByIdForUpdate(2L)).thenReturn(Optional.of(existingItem));
         when(itemRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         BomRecipeItemDTO dto = bomItemDto(MAT_PORK, "g", new BigDecimal("500"));

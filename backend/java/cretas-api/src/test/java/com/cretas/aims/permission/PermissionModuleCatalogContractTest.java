@@ -76,7 +76,9 @@ class PermissionModuleCatalogContractTest {
             "approval_stocktake", "approval_stocktake",
             "approval_quality_disposition", "approval_quality_disposition",
             "approval_price_adjustment", "approval_price_adjustment",
-            "approval_refund", "approval_refund");
+            "approval_refund", "approval_refund",
+            // D-S5-09 (2026-11-11): BOM 调价审批码, 新建, 此前不存在
+            "approval_bom_price_adjustment", "approval_bom_price_adjustment");
 
     @Test
     @DisplayName("覆盖面: 表里的码只能是「17 个既有 case」或「显式登记的新增」, 加码不登记就红")
