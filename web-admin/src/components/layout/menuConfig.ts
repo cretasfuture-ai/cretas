@@ -348,13 +348,14 @@ const rawMenuConfig: MenuItem[] = [
       { path: '/quality/defects', title: '工序质检不良', icon: '', module: 'quality' },
       // Sprint4-H Q-RETURN-1: 质检退回单 (上游退回, 不含客户销售退货)
       { path: '/quality/returns', title: '质检退回单', icon: '', module: 'quality' },
+      // 纪律排查 B14 (Steve 2026-11-10): 不良品处置 / 批次召回按「质检模块权限」出入口, 不再另加岗位白名单。
+      // 后端这两组接口的门槛就是 quality:read / quality:read_write (召回后端本来没有岗位限制),
+      // 前端多叠的一层岗位名单只会把有质检权限的人挡在外面。要收紧就改权限配置, 不在这里写岗位名。
       {
         path: '/quality/disposition', title: '不良品处置', icon: '', module: 'quality', groupLabel: '处置闭环',
-        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       {
         path: '/quality/recalls', title: '批次召回', icon: '', module: 'quality',
-        roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin'],
       },
       { path: '/quality/disposals', title: '废弃处理', icon: '', module: 'quality' },
       // S4 缺料异常: 质检放行会减少缺口, 质检也要能看; 与生产组同一页面, 本组自己的路由 (面包屑=质量管理)

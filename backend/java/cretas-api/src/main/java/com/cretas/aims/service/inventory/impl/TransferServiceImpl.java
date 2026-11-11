@@ -63,8 +63,6 @@ public class TransferServiceImpl implements TransferService {
 
     private static final Logger log = LoggerFactory.getLogger(TransferServiceImpl.class);
 
-    /** 唯一允许自审批的角色 —— 见 allowsSuperAdminSelfApproval 的说明。 */
-    private static final String SUPER_ADMIN_ROLE = "factory_super_admin";
 
     private final InternalTransferRepository transferRepository;
     private final InternalTransferItemRepository transferItemRepository;
@@ -1156,7 +1154,7 @@ public class TransferServiceImpl implements TransferService {
                     .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
                             && !Objects.equals(user.getId(), initiatorUserId));
             if (!hasIndependentAssignee
-                    && !allowsSuperAdminSelfApproval(factoryId, roles, initiatorUserId)) {
+                    && !allowsSoleApproverSelfApproval(factoryId, roles, initiatorUserId)) {
                 throw new BusinessException(422, "库存调拨 OA 节点没有独立的可用审批人: "
                         + (node.getLabel() == null ? nodeId : node.getLabel()))
                         .withCode("TRANSFER_APPROVER_ASSIGNEE_REQUIRED")
@@ -1166,27 +1164,28 @@ public class TransferServiceImpl implements TransferService {
     }
 
     /**
-     * 工厂总监自审批例外。
+     * 唯一审批人自审批例外 (纪律排查 B10: 跟随 OA 配置, 不认角色名)。
      *
-     * 职责分离(发起人 != 审批人)是默认铁律, 但小工厂常常只有一个 factory_super_admin ——
-     * 审批节点又只认这个角色时, 他发起的调拨永远批不掉, 调拨单会永久卡在草稿。实测某工厂
-     * 因此一个多月没走通过一次调拨。
+     * 职责分离(发起人 != 审批人)是默认铁律, 但小工厂常常只有一个人够格审当前节点 ——
+     * 例如只有一个 factory_super_admin 而节点只认这个角色, 他发起的调拨永远批不掉, 调拨单会永久卡在草稿。
+     * 实测某工厂因此一个多月没走通过一次调拨。
      *
-     * 例外只对 factory_super_admin 开, 且必须满足两个条件:
-     *   1. 该节点的 approverRoles 里确实包含 factory_super_admin —— 否则超管就能越过
-     *      "本该由仓管批"的节点, 那是绕过审批而不是解死锁;
-     *   2. 发起人本人就是这个工厂的 factory_super_admin。
+     * 调用方已经确认「本厂没有别的有效账号属于该节点的 approverRoles」。例外只在下面条件成立时放行:
+     *   发起人本人是本厂有效账号, 且他的岗位就在该节点的 approverRoles 里 ——
+     *   节点点名的是谁, 例外就给谁 (厂长只是常见情形之一, 代码里不再点名)。
      *
-     * 其它角色一律维持"必须有第二双眼睛"。
+     * 节点没点名他的岗位 (如节点指定仓管、发起人是厂长) 不放行: 那是绕过审批而不是解死锁。
      */
-    private boolean allowsSuperAdminSelfApproval(String factoryId,
-                                                 List<String> approverRoles,
-                                                 Long initiatorUserId) {
+    private boolean allowsSoleApproverSelfApproval(String factoryId,
+                                                   List<String> approverRoles,
+                                                   Long initiatorUserId) {
         if (initiatorUserId == null || userRepository == null) return false;
-        if (approverRoles.stream().noneMatch(SUPER_ADMIN_ROLE::equalsIgnoreCase)) return false;
-        return userRepository.findByFactoryIdAndRoleCode(factoryId, SUPER_ADMIN_ROLE).stream()
-                .anyMatch(user -> Boolean.TRUE.equals(user.getIsActive())
-                        && Objects.equals(user.getId(), initiatorUserId));
+        return userRepository.findById(initiatorUserId)
+                .filter(user -> Boolean.TRUE.equals(user.getIsActive())
+                        && factoryId != null && factoryId.equals(user.getFactoryId())
+                        && user.getRoleCode() != null)
+                .map(user -> approverRoles.stream().anyMatch(user.getRoleCode().trim()::equalsIgnoreCase))
+                .orElse(false);
     }
 
     private void projectWorkflowState(InternalTransfer transfer,

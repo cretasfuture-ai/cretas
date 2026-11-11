@@ -52,7 +52,9 @@ public class TodoItemDTO {
         SALES_PRICE_ADJUSTMENT,
         WASTAGE_APPROVAL,
         /** 已审批付款请求（出纳执行付款） */
-        PAYMENT_DISBURSE
+        PAYMENT_DISBURSE,
+        /** 强制插单待审批（OA 审批实例，当前节点审批岗位含调用方岗位） */
+        FORCE_INSERT_APPROVAL
     }
 
     /** 待办类型 */

@@ -26,11 +26,12 @@ import java.util.List;
  * <p>角色从 {@code request.getAttribute("role")} 取（JwtAuthInterceptor 在拦截器层设置）。
  * **禁止**使用 SecurityContext — 该项目 SecurityContext 永远为空（C1 孪生坑）。
  *
- * <p>角色映射（聚合层决定，Controller 仅透传）:
+ * <p>待办按权限出数（聚合层决定，Controller 仅透传; 见 MyTodoAggregatorServiceImpl#TYPE_PERMISSIONS）:
  * <ul>
- *   <li>finance_manager → {采购财审, 销售财审, 价格异常, 盘点审批, 退货财审, 售价调整, 报损审批}</li>
- *   <li>cashier → {已审付款}</li>
- *   <li>其他 → 空列表（HTTP 200，非 403）</li>
+ *   <li>默认 finance_manager → {采购财审, 销售财审, 价格异常, 盘点审批, 退货财审, 售价调整}（报损审批随「报损审批」权限, 默认只给厂长）</li>
+ *   <li>默认 cashier → {已审付款}</li>
+ *   <li>厂长 → 全部类型（含强制插单审批）; 其它岗位按自己的权限</li>
+ *   <li>没有任何相关权限 → 空列表（HTTP 200，非 403）</li>
  * </ul>
  *
  * <p>🔒 红线: 权限/角色过滤在 {@link MyTodoAggregatorService} 层实现；

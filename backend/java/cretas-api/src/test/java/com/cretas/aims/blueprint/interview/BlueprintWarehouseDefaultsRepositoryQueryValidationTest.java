@@ -106,7 +106,8 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
                 customerRepository, rawMaterialRepository, purchaseOrderRepository, productionPlanRepository,
                 deliveryRepository, supplierMaterialRepository,
                 userRepository, materialPackagingSpecRepository, supplierPurchaseSpecRepository,
-                org.mockito.Mockito.mock(com.cretas.aims.service.unit.UnitContractService.class));
+                org.mockito.Mockito.mock(com.cretas.aims.service.unit.UnitContractService.class),
+                realPermissions());
         Factory factory = new Factory();
         factory.setId(F);
         factory.setName("blueprint warehouses");
@@ -225,5 +226,12 @@ class BlueprintWarehouseDefaultsRepositoryQueryValidationTest {
     private static Check check(List<BusinessDomain> rows, String domain, String code) {
         return rows.stream().filter(row -> domain.equals(row.domain())).findFirst().orElseThrow()
                 .checks().stream().filter(row -> code.equals(row.code())).findFirst().orElseThrow();
+    }
+
+    /** 真实的权限矩阵 (不是桩): 仓库层返回「成功的空结果」, 落到内置矩阵判定。 */
+    private static com.cretas.aims.service.impl.PermissionServiceImpl realPermissions() {
+        com.cretas.aims.service.impl.PermissionServiceImpl service = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(service);
+        return service;
     }
 }

@@ -81,6 +81,7 @@ class DisposalRecordServiceCrossTenantTest {
                 fgBatchRepo, fgAdjustmentLogRepo);
         ReflectionTestUtils.setField(service, "returnedGoodsCostResolver", returnedGoodsCostResolver);
         ReflectionTestUtils.setField(service, "disposalCostAccountingService", disposalCostAccountingService);
+        ReflectionTestUtils.setField(service, "permissionService", new com.cretas.aims.service.impl.PermissionServiceImpl());
     }
 
     private DisposalRecord record(long id, String factoryId) {

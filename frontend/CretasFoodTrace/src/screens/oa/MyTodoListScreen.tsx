@@ -134,6 +134,7 @@ const TODO_TYPE_LABEL: Record<TodoType, string> = {
   RETURN_FINANCE_REVIEW: '退货财审',
   WASTAGE_APPROVAL: '报损审批',
   PAYMENT_DISBURSE: '付款确认',
+  FORCE_INSERT_APPROVAL: '强制插单审批',
 };
 
 const TODO_TYPE_COLOR: Record<TodoType, string> = {
@@ -144,6 +145,7 @@ const TODO_TYPE_COLOR: Record<TodoType, string> = {
   RETURN_FINANCE_REVIEW: '#AD1457',
   WASTAGE_APPROVAL: '#7A4A00',
   PAYMENT_DISBURSE: '#C62828',
+  FORCE_INSERT_APPROVAL: '#00695C',
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -331,6 +333,14 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
         case 'PAYMENT_DISBURSE':
           resp = await todoApprovalApiClient.paymentMarkPaid(item.refId);
           break;
+        case 'FORCE_INSERT_APPROVAL':
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法审批', '这条强制插单待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            setApproving(false);
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'APPROVE', item.expectedNodeId);
+          break;
         default:
           appAlert('未知操作', `不支持的待办类型: ${item.type}`);
           setApproving(false);
@@ -398,6 +408,13 @@ function TodoCard({ item, onApproveSuccess, onNavigateDetail }: TodoCardProps) {
           // 付款不支持驳回（出纳只能付款）
           appAlert('不支持驳回', '付款确认操作不支持驳回，请联系财务经理');
           return;
+        case 'FORCE_INSERT_APPROVAL':
+          if (!item.instanceId || !item.expectedNodeId) {
+            appAlert('无法驳回', '这条强制插单待办缺少 OA 审批实例信息，请下拉刷新后重试');
+            return;
+          }
+          resp = await todoApprovalApiClient.oaAction(item.instanceId, 'REJECT', item.expectedNodeId, reason);
+          break;
         default:
           appAlert('未知操作', `不支持的待办类型: ${item.type}`);
           return;

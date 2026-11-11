@@ -28,7 +28,8 @@ export type TodoType =
   | 'STOCKTAKE_APPROVAL'       // 盘点任务待财务审批
   | 'RETURN_FINANCE_REVIEW'    // 退货单待财务审批
   | 'WASTAGE_APPROVAL'         // 报损单待审批
-  | 'PAYMENT_DISBURSE';        // 已审批付款请求（出纳执行）
+  | 'PAYMENT_DISBURSE'         // 已审批付款请求（出纳执行）
+  | 'FORCE_INSERT_APPROVAL';   // 强制插单待审批（OA 实例, 当前节点审批岗位含自己）
 
 export interface TodoItemDTO {
   type: TodoType;
@@ -42,7 +43,7 @@ export interface TodoItemDTO {
   submittedAt: string;   // ISO datetime string
   needDetail: boolean;
   detailPath: string | null;
-  /** OA 审批实例 ID —— 仅 OA 驱动的类型有值(当前: PURCHASE_FINANCE_REVIEW) */
+  /** OA 审批实例 ID —— 仅 OA 驱动的类型有值(PURCHASE_FINANCE_REVIEW / STOCKTAKE_APPROVAL / FORCE_INSERT_APPROVAL) */
   instanceId?: string | null;
   /** 当前节点 ID(乐观锁), 调 OA 动作端点必带 */
   expectedNodeId?: string | null;

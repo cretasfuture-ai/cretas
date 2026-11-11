@@ -252,6 +252,8 @@ const TOP_KEYS_BY_TYPE: Record<TodoType, string[]> = {
   RETURN_FINANCE_REVIEW: ['returnNumber', 'returnType', 'counterpartyId', 'totalAmount', 'reason'],
   WASTAGE_APPROVAL: ['reportNo', 'trackType', 'warehouseId', 'materialBatchId', 'wastageQty', 'wastageReason', 'reasonDetail'],
   PAYMENT_DISBURSE: ['requestNumber', 'purchaseOrderNumber', 'supplierName', 'amount', 'settlementTypeDisplayName'],
+  // 强制插单待办 needDetail=false, 在列表里直接通过 / 驳回, 不进详情页; 这里只为满足类型完整性
+  FORCE_INSERT_APPROVAL: [],
 };
 
 // Fields to skip (too verbose or shown elsewhere)

@@ -11,6 +11,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.SupplierMaterialPurchaseSpecRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.material.MaterialPackagingSpecRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.unit.UnitContractService;
 import com.cretas.aims.service.unit.UnitNormalizationResult;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
@@ -56,10 +57,13 @@ public class FactoryBusinessReadinessReader {
     static final Set<String> PURCHASE_CAPABILITIES = Set.of("materials", "supplier-receiving");
     static final Set<String> PRODUCTION_CAPABILITIES = Set.of("processes", "routes", "bom", "workflow");
     static final Set<String> SHIPPING_CAPABILITIES = Set.of("products");
-    /** Day-to-day post holders, i.e. someone besides the factory super admin who can do the work. */
-    static final List<String> PURCHASE_ROLES = List.of("procurement_manager", "warehouse_manager");
-    static final List<String> PRODUCTION_ROLES = List.of("workshop_supervisor", "operator");
-    static final List<String> SHIPPING_ROLES = List.of("sales_manager", "warehouse_manager");
+    /**
+     * 「有人能干这件事」按权限判断, 不按岗位名 (Steve 2026-11-10 纪律 B5): 厂长亲自下单 / 报工 / 发货的一人厂也算就绪。
+     * 任一权限命中即可; 原来点名的岗位 (采购经理 / 仓储主管 / 车间主管 / 操作员 / 销售经理) 都拥有其中至少一项。
+     */
+    static final List<String> PURCHASE_PERMISSIONS = List.of("procurement:read_write", "warehouse:read_write");
+    static final List<String> PRODUCTION_PERMISSIONS = List.of("work_report:read_write");
+    static final List<String> SHIPPING_PERMISSIONS = List.of("sales:read_write", "warehouse:read_write");
 
     private final WarehouseResolver warehouses;
     private final FactoryWarehouseRepository factoryWarehouses;
@@ -74,6 +78,7 @@ public class FactoryBusinessReadinessReader {
     private final MaterialPackagingSpecRepository materialPackagingSpecs;
     private final SupplierMaterialPurchaseSpecRepository supplierPurchaseSpecs;
     private final UnitContractService unitContracts;
+    private final PermissionService permissions;
 
     public List<BusinessDomain> read(String factoryId, List<CapabilityView> capabilities,
             List<ProductRuntime> runtime) {
@@ -89,7 +94,7 @@ public class FactoryBusinessReadinessReader {
                 warehouse("PURCHASE_INBOUND_WAREHOUSE", "采购入库仓可用", factoryId,
                         warehouses::resolvePurchaseInboundWh),
                 purchasePackaging(factoryId),
-                postHolder("PURCHASE_POST_HOLDER", "有采购岗位账号可下单收货", factoryId, PURCHASE_ROLES));
+                postHolder("PURCHASE_POST_HOLDER", "有人具备下单收货权限", factoryId, PURCHASE_PERMISSIONS));
         BusinessDomain purchaseDomain = domain("PURCHASE", "采购", PURCHASE_CAPABILITIES, capabilities, checks,
                 List.of("采购价格（供应商规格价、含税参考价）在下单时校验，此处不检查",
                         "按基本单位采购无需包装换算，只核对按包装采购的供应关系",
@@ -117,7 +122,7 @@ public class FactoryBusinessReadinessReader {
                 warehouse("WORKSHOP_WAREHOUSE", "生产成品/报工仓可用", factoryId, warehouses::resolveWorkshopId),
                 warehouse("PRODUCTION_RAW_WAREHOUSE", "生产领料仓可用", factoryId,
                         warehouses::resolveProductionRawWh),
-                postHolder("PRODUCTION_POST_HOLDER", "有车间主管或操作员账号可报工", factoryId, PRODUCTION_ROLES));
+                postHolder("PRODUCTION_POST_HOLDER", "有人具备报工权限", factoryId, PRODUCTION_PERMISSIONS));
         BusinessDomain productionDomain = domain("PRODUCTION", "生产", PRODUCTION_CAPABILITIES, capabilities, checks,
                 List.of("建厂能力目录不含研发业务，不要求研发仓",
                         "岗位账号只核对是否存在有效的车间岗位，不核对班组编排和每个账号的具体菜单权限"),
@@ -139,7 +144,7 @@ public class FactoryBusinessReadinessReader {
                         runtime.size() + " 个在用成品", "PRODUCTS", "SKU 管理"),
                 warehouse("SALES_OUTBOUND_WAREHOUSE", "销售出货仓可用", factoryId,
                         warehouses::resolveSalesOutboundWh),
-                postHolder("SHIPPING_POST_HOLDER", "有销售或仓管岗位账号可发货", factoryId, SHIPPING_ROLES));
+                postHolder("SHIPPING_POST_HOLDER", "有人具备发货权限", factoryId, SHIPPING_PERMISSIONS));
         BusinessDomain shippingDomain = domain("SHIPPING", "发货", SHIPPING_CAPABILITIES, capabilities, checks,
                 List.of("按箱销售的箱规在下单时明确选择，此处不要求每个成品都有箱规",
                         "岗位账号只核对是否存在有效的销售/仓管岗位，不核对每个账号的具体菜单权限"),
@@ -308,18 +313,18 @@ public class FactoryBusinessReadinessReader {
         return leftCode.equals(rightCode);
     }
 
-    /** At least one active account of this factory holds one of the day-to-day roles. */
-    private Check postHolder(String code, String label, String factoryId, List<String> roles) {
+    /** 本厂至少有一个有效账号具备其中一项权限 (含厂长); 不看岗位名。读不出来 = UNKNOWN, 不当 MISSING。 */
+    private Check postHolder(String code, String label, String factoryId, List<String> permissionCodes) {
         String remedyKey = "USERS";
         String remedyLabel = "用户与角色管理";
         try {
-            long holders = roles.stream()
-                    .flatMap(role -> users.findByFactoryIdAndRoleCode(factoryId, role).stream())
+            long holders = users.findByFactoryIdAndIsActive(factoryId, true).stream()
                     .filter(user -> Boolean.TRUE.equals(user.getIsActive()))
+                    .filter(user -> permissionCodes.stream().anyMatch(permission -> permissions.hasPermission(user, permission)))
                     .map(User::getId).distinct().count();
             return new Check(code, label, holders > 0 ? "MET" : "MISSING",
-                    holders > 0 ? "当前 " + holders + " 个有效岗位账号"
-                            : "没有人担任 " + String.join(" / ", roles) + " 岗位",
+                    holders > 0 ? "当前 " + holders + " 个有效账号具备该权限"
+                            : "没有任何有效账号具备权限 " + String.join(" / ", permissionCodes),
                     remedyKey, remedyLabel);
         } catch (RuntimeException failure) {
             log.warn("factory readiness check {} unreadable: {}", code, failure.getMessage());
