@@ -30,7 +30,14 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         return Map.of("type", "object", "properties", Map.of(
                 "startDate", Map.of("type", "string", "format", "date"),
                 "endDate", Map.of("type", "string", "format", "date"),
-                "limit", Map.of("type", "integer", "minimum", 1, "maximum", 100)
+                "limit", Map.of("type", "integer", "minimum", 1, "maximum", 100),
+                // 只按销售金额排序。点名按数量 / 销量排时明确说不支持, 不悄悄按金额返回 (INTENT-DISTILL D1)
+                "metric", Map.of("type", "string", "enum", List.of("amount"), "default", "amount",
+                        "description", "排序口径，目前只支持 amount (销售金额)",
+                        com.cretas.aims.ai.tool.UnsupportedOptionGuard.OPTION_WORDS,
+                        Map.of("amount", List.of("金额", "销售额")),
+                        com.cretas.aims.ai.tool.UnsupportedOptionGuard.UNSUPPORTED,
+                        Map.of("quantity", Map.of("label", "销售数量", "words", List.of("数量", "销量", "件数"))))
         ), "required", List.of("startDate", "endDate"));
     }
 
@@ -43,6 +50,10 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         LocalDate start = parseDate(getString(params, "startDate"), "startDate");
         LocalDate end = parseDate(getString(params, "endDate"), "endDate");
         if (start.isAfter(end)) throw new IllegalArgumentException("startDate不能晚于endDate");
+        String metric = getString(params, "metric");
+        if (metric != null && !metric.isBlank() && !"amount".equalsIgnoreCase(metric.trim())) {
+            throw new IllegalArgumentException("产品销售排行只支持按销售金额排序，不支持按" + metric + "排序");
+        }
         int limit = getInteger(params, "limit", 20);
         List<SalesOrderItemRepository.SalesRankingRow> rows = rankingService.rank(factoryId, start, end);
         List<Map<String, Object>> ranking = new ArrayList<>();
