@@ -23,7 +23,7 @@ import static org.mockito.Mockito.when;
  * 1551-11: AI 审批工具直接推进流程, 不走业务适配器 —— 对强制插单会让实例「已批准」而计划永远待审批、
  * 时段永远被占。强制插单只能在 OA 审批中心处理 (UrgentInsertServiceImpl#applyWorkflowAction)。
  */
-class ApprovalActionExecuteToolForceInsertTest {
+class ApprovalActionExecuteToolForceInsertContractTest {
 
     private ApprovalActionExecuteTool tool(ApprovalWorkflowInstance instance, WorkflowEngineService engine) {
         ApprovalActionExecuteTool tool = new ApprovalActionExecuteTool();
