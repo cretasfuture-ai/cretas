@@ -16,6 +16,11 @@
             "type": "command",
             "command": "bash .claude/tools/sync-main-claude.sh",
             "timeout": 40
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/tools/worktree-hygiene.sh --auto",
+            "timeout": 20
           }
         ]
       }
