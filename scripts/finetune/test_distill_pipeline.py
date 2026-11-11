@@ -275,3 +275,17 @@ def test_adjudication_is_two_of_three_and_kept_apart(table, tmp_path, monkeypatc
     assert adj[0]['adjudication']['sided_with'] == 'terra' and adj[0]['agreement'] is False
     assert {r['id'] for r in dc.read_jsonl(tmp_path / 'review-queue-after-claude.jsonl')} == {'b', 'c'}
     assert not (tmp_path / 'silver.jsonl').read_text(encoding='utf-8')   # unanimous silver untouched
+
+
+def test_targeted_plan_is_about_the_target(table):
+    reads = sorted(c for c, v in table.items() if v['read_only'] is True)
+    writes = sorted(c for c, v in table.items() if v['read_only'] is False)
+    for target in (reads[0], writes[0]):
+        p = dp.plan_targeted(2000, target, table, 'seed')
+        assert p['target'] == target and all(s['slot'] in dp.SLOTS for s in p['slots'])
+        assert all(s['intent'] in (target, None) for s in p['slots'])
+        last = p['slots'][-1]
+        assert (last['act'], last['intent']) == (('PAGE', target) if table[target]['read_only'] else ('CANCEL', None))
+        assert len(set(p['family_intents'][:8]) | set(p['distractors'])) >= 7
+        assert 'fresh_task_c' in dp.gen_prompt(p, table)
+    assert 'fresh_task_c' not in dp.gen_prompt(dp.plan_call(0, dp.eligible_families(table), table, 's'), table)
