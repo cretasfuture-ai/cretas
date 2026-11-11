@@ -1,6 +1,6 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-10-16（复用已隔离的任务 worktree；离线期与 CI 判读叙事存档在 `docs/rules-casebook/worktree-and-main-only-deploy-cases.md`）
+**最后更新**: 2026-11-11（Steve：worktree 上限 9 → 30；此前 2026-10-16 复用已隔离的任务 worktree；离线期与 CI 判读叙事存档在 `docs/rules-casebook/worktree-and-main-only-deploy-cases.md`）
 **触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
 
 ## ⛔ 四条铁律
@@ -44,11 +44,13 @@ git fetch origin main && git checkout --detach origin/main      # 或 clean 的 
 
 `deploy-backend.sh` 上传到**固定的共享 jar 路径**，多个 session 各自从 feature 分支部署 = last-write-wins 互相覆盖（5/30 事故原形）。根治：prod = main，所有工作 merge 进 main 再部署。`deploy-backend.sh` 的 idle readiness 三态：`UP:*` 健康 / `TIMEOUT`、`RESTART_LIMIT:*` 真失败 / 空串是 ssh 断线**没量到**（脚本先重试再独立核验；2026-09-02 曾把断线判死回滚）。单组件入口与逃生路见 `deploy-backend` skill。
 
-### 4. worktree 总数 ≤ 9，开新的之前先体检，做完顺手收自己的
+### 4. worktree 总数 ≤ 30，开新的之前先体检，做完顺手收自己的
+
+（2026-11-11 Steve 把上限从 9 调到 30：多会话并行批次常态下同时在用的目录就有二十多个，9 个会逼着删别人正在用的目录。）
 
 2026-10-07 清理前仓库挂着 76 个 worktree（大半是已合并的、一批是没合并却没人管的），目录占盘、`node_modules` 删起来按分钟算，还有 junction 穿透的风险。铁律 1 要求「每个任务一个 worktree」，没有对应的收口，数量只会涨。
 
-- **开新 worktree 之前**：`bash .claude/tools/worktree-hygiene.sh --check`。总数 > 9（脚本返回 3）就先 `--apply`，再开。先用 `list_sessions` 把 `isRunning` 的 session 的 cwd 用 `--keep <路径>` 传进去。
+- **开新 worktree 之前**：`bash .claude/tools/worktree-hygiene.sh --check`。总数 > 30（脚本返回 3）就先 `--apply`，再开。先用 `list_sessions` 把 `isRunning` 的 session 的 cwd 用 `--keep <路径>` 传进去。
 - **任务做完 / PR 合并后**：把**自己**这个 worktree 收掉（从主仓库目录执行，不要在要删的目录里执行）：`bash .claude/tools/worktree-hygiene.sh --apply`；它会 WIP commit 脏改动、摘 junction、不加 `--force` 地移除，分支保留。
 - 脚本保留：主仓库 / 当前所在 / `.codex/worktrees` / `--keep` / locked / 近 120 分钟有动静的。没合并的分支**不删**，分支本身就是备份，最后汇报「分支名 / 领先几个提交 / 有没有开着的 PR」。
 - 兜底：每周二 8 点定时任务 `cretas-worktree-cleanup` 再扫一遍。
@@ -80,7 +82,7 @@ ssh root@47.100.235.168 "unzip -p /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar 'B
 | 任务完成 | PR 或 fastlane → origin/main；先 `git diff origin/main...HEAD --stat` 确认 scope |
 | 部署 prod | 合并前候选树 `--phase build --stage-backend` → 合并 → clean 的 origin/main 树 `--phase deploy`（绝不从 feature 分支；不跑 prewarm） |
 | 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |
-| 开新 worktree 前 / 任务做完 | `bash .claude/tools/worktree-hygiene.sh --check`（> 9 先 `--apply`）；做完收掉自己的（铁律 4） |
+| 开新 worktree 前 / 任务做完 | `bash .claude/tools/worktree-hygiene.sh --check`（> 30 先 `--apply`）；做完收掉自己的（铁律 4） |
 | 清理 | `scripts/safe-worktree-remove.sh`（⛔ 不 `mklink /J` 共享 node_modules，见 concurrent-edit-safety） |
 | GitHub 不可用 | 合进本地 `main` → detached worktree + `SKIP_GIT_CHECK=1` → 恢复后各分支走 PR |
 
