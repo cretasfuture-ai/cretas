@@ -53,7 +53,11 @@ fi
 recent() { # 120 分钟内 HEAD 动过(提交/切分支)。⛔ 不看 index: git status 本身会刷新 index mtime, 体检自己就会把全部判成「近期活动」
   [ "${WH_NO_RECENT:-0}" = 1 ] && return 1
   local g; g=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
-  local win=120; [ "$mode" = "--auto" ] && win="${WH_RECENT_MIN:-1440}"   # --auto 不知道哪些会话在跑, 窗口放宽到 24 小时
+  local win=120
+  if [ "$mode" = "--auto" ]; then   # --auto 已要求「PR 已合并 + 干净」, 不再叠时间窗(否则刚合并的会白占名额); 想加保护用 WH_RECENT_MIN=<分钟>
+    [ -n "${WH_RECENT_MIN:-}" ] || return 1
+    win="$WH_RECENT_MIN"
+  fi
   [ -n "$(find "$g/HEAD" -mmin -"$win" 2>/dev/null)" ]
 }
 is_keep() {
