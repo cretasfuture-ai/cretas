@@ -202,3 +202,35 @@ def test_ensemble_is_geometric_mean_and_requires_alignment():
     assert cs.softmax(e['target_logits'])[0] == pytest.approx(cs.softmax([1.0, 0.0])[0])
     with pytest.raises(ValueError, match='aligned'):
         cs.ensemble([a, [dict(b[0], id='y')]])
+
+
+def test_classed_gate_caps_ordinary_at_2pct_and_sensitive_needs_proof(monkeypatch):
+    import sensitive_intents as si
+    table = dict(TABLE, S1=dict(name='工资', description='工资', read_only=True))
+    monkeypatch.setitem(si.SENSITIVE_ALL, 'S1', 'test')
+    cands = ['R1', 'R2', 'W1', 'S1']
+    ok = [row(id='o%d' % i, candidates=cands) for i in range(100)]
+    bad = [row(id='x%d' % i, candidates=cands, intent='R2') for i in range(3)]        # 3 confident errors on ordinary
+    sens = [row(id='s%d' % i, candidates=cands, intent='S1') for i in range(40)]
+    rows = ok + bad + sens
+    preds = [logits('NEW_TASK', 0, n=4)] * 103 + [logits('NEW_TASK', 3, n=4)] * 40
+    pol = cs.select_classed(preds, rows, table, 1.0, 1.0)
+    assert pol['ordinary'] is None                       # 3/103 = 2.9% > 2% at every threshold (same confidence)
+    assert pol['sensitive'] is None                      # 40/40 right but upper bound of 0/40 is > 0.5%
+    s = cs.score_classed(preds[:100] + preds[103:], ok + sens, table, dict(t_act=1.0, t_target=1.0, ordinary=dict(act_min=.5, target_min=.5, write_max=1), sensitive=None))
+    assert s['by_class']['ordinary']['direct'] == 100 and s['by_class']['sensitive']['direct'] == 0
+
+
+def test_classed_gate_never_directs_write_targets():
+    p = logits('NEW_TASK', 2, strength=50)
+    th = dict(act_min=0, target_min=0, write_max=1.0)
+    d = cs.decide_classed(p, row(intent='W1', read_only=False), TABLE, dict(t_act=1, t_target=1, ordinary=th, sensitive=th))
+    assert d['risk_class'] == 'write' and not d['direct']
+
+
+def test_recall_at_k_ranks_gold_among_candidates():
+    rows = [row(id='a'), row(id='b', intent='R2'), row(id='c', intent=None, dialogue_act='NEED_CLARIFY')]
+    preds = [dict(act_logits=[0] * 5, target_logits=[3, 2, 1, 0]), dict(act_logits=[0] * 5, target_logits=[3, 2, 1, 0]),
+             dict(act_logits=[0] * 5, target_logits=[0, 0, 0, 9])]
+    r = cs.recall_at_k(preds, rows, ks=(1, 2))
+    assert r['n'] == 2 and r['recall'] == {1: 0.5, 2: 1.0} and r['ranked_wrong_at_1'] == 1 and r['not_in_candidates'] == 0
