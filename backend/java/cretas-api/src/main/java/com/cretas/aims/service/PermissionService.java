@@ -51,6 +51,21 @@ public interface PermissionService {
      */
     String DISPOSAL_APPROVE_PERMISSION = "disposal:approve";
 
+    /**
+     * 付款执行 (出纳点「已付款」)。默认出纳 + 厂长, 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.FINANCE_PERMISSION_PAYMENT_DISBURSE)。目前用于「我的待办」按权限聚合付款待办;
+     * 付款接口本身的门槛 (finance:read_write) 不变。
+     */
+    String PAYMENT_DISBURSE_PERMISSION = "payment:disburse";
+
+    /**
+     * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的<b>通用</b>权限判定: 与 {@link #hasPermission} 走同一条解析链
+     * (可配置岗位名单 / 模块权限 / 审批码), 只是不叠加个人覆盖。「我的待办」按角色聚合用。默认实现 false (测试替身用)。
+     */
+    default boolean roleHasPermission(String factoryId, String roleCode, String permissionCode) {
+        return false;
+    }
+
     /** 信用特批 (超信用额度被拦截时放行下单)。默认只给厂长, 工厂可在阈值设置里加岗位 (ThresholdKeys.CREDIT_PERMISSION_OVERRIDE)。 */
     String CREDIT_OVERRIDE_PERMISSION = "credit:override";
 
