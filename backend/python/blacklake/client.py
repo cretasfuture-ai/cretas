@@ -76,7 +76,7 @@ class BlacklakeConnector:
                 self.factory_verified = True
         if token:
             return token
-        result = self._send(LOGIN, {"type": 0, "phone": self.settings.phone,
+        result = self._send(LOGIN, {**self.settings.login_body_identity,
                                   "password": hashlib.sha3_224(
                                       self.settings.password.encode("utf-8")).hexdigest()})
         if result is None:
