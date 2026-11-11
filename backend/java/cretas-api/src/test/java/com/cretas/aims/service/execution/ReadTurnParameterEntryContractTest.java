@@ -110,6 +110,7 @@ class ReadTurnParameterEntryContractTest {
     private final LocalDate lastMonthEnd = lastMonthStart.withDayOfMonth(lastMonthStart.lengthOfMonth());
     private final LocalDate thisMonthStart = today.withDayOfMonth(1);
     private final LocalDate thisMonthEnd = today.withDayOfMonth(today.lengthOfMonth());
+    private final LocalDate lastWeekStart = today.minusDays(6);
 
     // ------------------------------------------------------------------ 只改时间, 状态沿用
 
@@ -191,9 +192,11 @@ class ReadTurnParameterEntryContractTest {
 
         assertThat(first.getStatus()).as(first.getMessage()).isIn("SUCCESS", "COMPLETED");
         assertThat(second.getStatus()).as(second.getMessage()).isIn("SUCCESS", "COMPLETED");
-        verify(h.sales).getSalesOrders(FACTORY, 1, 3);
-        verify(h.sales).getSalesOrders(FACTORY, 2, 3);
-        verify(h.sales, never()).getSalesOrders(anyString(), anyInt(), eq(20));
+        // 没说时间 = 默认最近 7 天 (口径 1); 第二页沿用同一窗口
+        verify(h.sales).getSalesOrdersFiltered(eq(FACTORY), isNull(), eq(lastWeekStart), eq(today), eq(1), eq(3));
+        verify(h.sales).getSalesOrdersFiltered(eq(FACTORY), isNull(), eq(lastWeekStart), eq(today), eq(2), eq(3));
+        verify(h.sales, never()).getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), eq(20));
+        verify(h.sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
         List<String> pageOne = orderNumbers(first);
         List<String> pageTwo = orderNumbers(second);
         assertThat(pageOne).containsExactly("SO-1", "SO-2", "SO-3");
@@ -220,8 +223,8 @@ class ReadTurnParameterEntryContractTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Entry.class)
-    @DisplayName("「不是金额，是数量」: 排行只支持金额, 明确说不支持, 不悄悄再按金额返回")
-    void unsupportedQuantityMetricIsRefusedInsteadOfSilentlyRankingByAmount(Entry entry) throws Exception {
+    @DisplayName("口径 6「不是金额，是数量」: 开头说明暂时只能按金额排, 同时给出按金额的排行 (时间沿用上一轮)")
+    void unsupportedQuantityMetricStatesTheLimitAndStillRanksByAmount(Entry entry) throws Exception {
         Harness h = new Harness(entry);
         h.recognize("上个月产品销售排行", h.salesRanking);
         h.recognize("不是金额，是数量", h.salesRanking);
@@ -229,14 +232,83 @@ class ReadTurnParameterEntryContractTest {
 
         IntentExecuteResponse first = h.say("上个月产品销售排行");
         IntentExecuteResponse corrected = h.say("不是金额，是数量");
-        // 阴性对照: 同时点名金额 (按金额排、顺带看数量) 照常执行
+        // 阴性对照: 同时点名金额 (按金额排、顺带看数量) 照常执行, 不加限制说明
         IntentExecuteResponse both = h.say("上个月产品销售数量和金额排行");
 
         assertThat(first.getStatus()).as(first.getMessage()).isIn("SUCCESS", "COMPLETED");
-        assertThat(corrected.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
-        assertThat(corrected.getMessage()).contains("不支持按销售数量");
+        assertThat(corrected.getStatus()).as(corrected.getMessage()).isIn("SUCCESS", "COMPLETED");
+        assertThat(corrected.getMessage()).startsWith("「产品销售排行」暂时只能按金额排，不能按销售数量排");
+        assertThat(corrected.getFormattedText()).startsWith("「产品销售排行」暂时只能按金额排，不能按销售数量排");
+        assertThat(String.valueOf(corrected.getResultData())).contains("冻品A");
+        assertThat(notices(corrected)).singleElement().satisfies(notice -> assertThat(notice)
+                .containsEntry("kind", "UNSUPPORTED_OPTION").containsEntry("parameter", "metric")
+                .containsEntry("requested", "quantity").containsEntry("applied", "amount"));
+        assertThat(sources(corrected)).containsEntry("startDate", "INHERITED").containsEntry("endDate", "INHERITED");
         assertThat(both.getStatus()).as(both.getMessage()).isIn("SUCCESS", "COMPLETED");
-        verify(h.ranking, times(2)).rank(eq(FACTORY), eq(lastMonthStart), eq(lastMonthEnd));
+        assertThat(both.getMetadata()).doesNotContainKey("readNotices");
+        assertThat(both.getMessage()).doesNotContain("暂时只能");
+        verify(h.ranking, times(3)).rank(eq(FACTORY), eq(lastMonthStart), eq(lastMonthEnd));
+    }
+
+    // ------------------------------------------------------------------ 口径 1 / 7: 默认时间与默认条数
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("口径 1+7「看看已确认的销售订单」: 没说时间按最近 7 天、每页 20 条, 回复写明时间与总条数")
+    void unsaidTimeDefaultsToTheLastSevenDaysAndTwentyRowsWithTheTotal(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("看看已确认的销售订单", h.orderList);
+
+        IntentExecuteResponse response = h.say("看看已确认的销售订单");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isIn("SUCCESS", "COMPLETED");
+        verify(h.sales).getSalesOrdersFiltered(eq(FACTORY), eq(SalesOrderStatus.CONFIRMED),
+                eq(lastWeekStart), eq(today), eq(1), eq(20));
+        assertThat(sources(response)).containsEntry("startDate", "DEFAULT").containsEntry("endDate", "DEFAULT")
+                .containsEntry("size", "DEFAULT").containsEntry("status", "CURRENT_TURN");
+        String window = lastWeekStart + " 至 " + today;
+        String expectedHead = "没说时间，按最近 7 天（" + window + "）查询。\n共 45 条，这里是第 1–20 条（每页 20 条）";
+        assertThat(response.getMessage()).startsWith(expectedHead);
+        assertThat(response.getFormattedText()).startsWith(expectedHead);
+        assertThat(notices(response)).extracting(n -> n.get("kind"))
+                .containsExactly("DEFAULT_TIME_RANGE", "PAGED_RESULT");
+        assertThat(notices(response).get(1)).containsEntry("total", 45L).containsEntry("size", 20);
+        assertThat(orderNumbers(response)).hasSize(20);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("口径 1 阴性对照: 说了时间就按说的时间, 不加默认时间说明")
+    void saidTimeIsNotReplacedByTheDefault(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("查上个月的销售订单", h.orderList);
+
+        IntentExecuteResponse response = h.say("查上个月的销售订单");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isIn("SUCCESS", "COMPLETED");
+        verify(h.sales).getSalesOrdersFiltered(eq(FACTORY), isNull(), eq(lastMonthStart), eq(lastMonthEnd),
+                eq(1), eq(20));
+        assertThat(sources(response)).containsEntry("startDate", "CURRENT_TURN");
+        assertThat(notices(response)).extracting(n -> n.get("kind")).containsExactly("PAGED_RESULT");
+        assertThat(response.getMessage()).doesNotContain("没说时间");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("口径 7: 工具默认 10 条的列表 (原料批次) 在对话里也按 20 条一页; 不声明默认时间的工具不补时间")
+    void listToolsWithASmallerDefaultPageAlsoShowTwenty(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("查原料批次", h.materialBatches);
+
+        IntentExecuteResponse response = h.say("查原料批次");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isIn("SUCCESS", "COMPLETED");
+        ArgumentCaptor<PageRequest> page = ArgumentCaptor.forClass(PageRequest.class);
+        ArgumentCaptor<MaterialBatchListFilter> filter = ArgumentCaptor.forClass(MaterialBatchListFilter.class);
+        verify(h.materials).getMaterialBatchList(eq(FACTORY), page.capture(), filter.capture());
+        assertThat(page.getValue().getSize()).isEqualTo(20);
+        assertThat(filter.getValue().receiptFrom()).isNull();
+        assertThat(sources(response)).containsEntry("size", "DEFAULT");
     }
 
     // ------------------------------------------------------------------ helpers
@@ -247,6 +319,14 @@ class ReadTurnParameterEntryContractTest {
         Object readQuery = response.getMetadata().get(ReadTurnParameters.METADATA_KEY);
         assertThat(readQuery).as("metadata.readQuery").isInstanceOf(Map.class);
         return (Map<String, Object>) ((Map<String, Object>) readQuery).get("sources");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> notices(IntentExecuteResponse response) {
+        assertThat(response.getMetadata()).as("metadata of %s", response.getStatus()).isNotNull();
+        Object notices = response.getMetadata().get("readNotices");
+        assertThat(notices).as("metadata.readNotices").isInstanceOf(List.class);
+        return (List<Map<String, Object>>) notices;
     }
 
     @SuppressWarnings("unchecked")
@@ -354,6 +434,12 @@ class ReadTurnParameterEntryContractTest {
             ReflectionTestUtils.setField(dispatch, "queryPreprocessorService", new QueryPreprocessorServiceImpl(
                     new TimeNormalizationRules(), new ColloquialMappings(), null, null, mapper, null, null));
             ReflectionTestUtils.setField(dispatch, "conversationMemoryService", memory);
+            com.cretas.aims.service.impl.ResultFormatterServiceImpl formatter =
+                    new com.cretas.aims.service.impl.ResultFormatterServiceImpl();
+            com.cretas.aims.security.PriceFieldResponseAdvice priceView =
+                    mock(com.cretas.aims.security.PriceFieldResponseAdvice.class);
+            when(priceView.maskedViewFor(any(), any())).thenAnswer(call -> call.getArgument(0));
+            ReflectionTestUtils.setField(formatter, "priceView", priceView);
 
             IntentPermissionGate gate = mock(IntentPermissionGate.class);
             when(gate.check(any(), any(), anyString())).thenReturn(IntentPermissionGate.PermissionCheck.allowed());
@@ -375,6 +461,7 @@ class ReadTurnParameterEntryContractTest {
                 when(config.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
                 ReflectionTestUtils.setField(orchestrator, "configService", config);
                 ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
+                ReflectionTestUtils.setField(orchestrator, "resultFormatterService", formatter);
                 ReflectionTestUtils.setField(orchestrator, "recognitionHistoryResolver",
                         new RecognitionHistoryResolver(memory));
                 OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
@@ -399,6 +486,7 @@ class ReadTurnParameterEntryContractTest {
                 ReflectionTestUtils.setField(sse, "businessTypeGate", businessTypeGate);
                 ReflectionTestUtils.setField(sse, "intentPermissionGate", gate);
                 ReflectionTestUtils.setField(sse, "conversationMemoryService", memory);
+                ReflectionTestUtils.setField(sse, "resultFormatterService", formatter);
                 org.mockito.Mockito.doAnswer(call -> {
                     events.add(new Object[]{call.getArgument(1), call.getArgument(2)});
                     return null;
@@ -413,16 +501,16 @@ class ReadTurnParameterEntryContractTest {
                     page(call.getArgument(4, Integer.class), call.getArgument(5, Integer.class)));
         }
 
-        /** 10 张订单 SO-1..SO-10, 按 (页码, 每页条数) 切出真实窗口。 */
+        /** 45 张订单 SO-1..SO-45, 按 (页码, 每页条数) 切出真实窗口。 */
         private static PageResponse<SalesOrder> page(int page, int size) {
-            List<SalesOrder> rows = IntStream.rangeClosed((page - 1) * size + 1, Math.min(10, page * size))
+            List<SalesOrder> rows = IntStream.rangeClosed((page - 1) * size + 1, Math.min(45, page * size))
                     .mapToObj(n -> {
                         SalesOrder order = new SalesOrder();
                         order.setId("id-" + n);
                         order.setOrderNumber("SO-" + n);
                         return order;
                     }).toList();
-            return PageResponse.of(rows, page, size, 10L);
+            return PageResponse.of(rows, page, size, 45L);
         }
 
         private static AIIntentConfig intent(String code, String name, String tool) {

@@ -136,4 +136,11 @@ public class IntentExecuteRequest {
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private Map<String, Object> readTurnSnapshot;
+
+    /**
+     * 服务端专用 (Steve 2026-11-12 口径): 本次只读执行用了什么默认、替换了什么做不到的口径,
+     * 由 ToolDispatchService 写入, 成功后进响应 {@code metadata.readNotices} 并加在回复开头。客户端传不进来。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private java.util.List<Map<String, Object>> readTurnNotices;
 }

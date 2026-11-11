@@ -111,12 +111,16 @@ class DateFilterChatEntryContractTest {
     }
 
     @Test
-    void theSameSentenceWithoutATimeIsNotDateFiltered() throws Exception {
+    void theSameSentenceWithoutATimeUsesTheStatedSevenDayDefault() throws Exception {
         SalesService sales = salesReturning();
-        run(withMapper(new OrderListTool(sales)), "ORDER_LIST", "CRM", "查询销售订单", true, "factory_super_admin");
+        IntentExecuteResponse response = run(withMapper(new OrderListTool(sales)), "ORDER_LIST", "CRM", "查询销售订单",
+                true, "factory_super_admin");
 
-        verify(sales).getSalesOrders(eq(F), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrdersFiltered(anyString(), any(), any(), any(), anyInt(), anyInt());
+        // Steve 2026-11-12 口径 1: 没说时间 = 最近 7 天, 回复写明 (以前是不限时间、返回全部订单)
+        verify(sales).getSalesOrdersFiltered(eq(F), isNull(), eq(LocalDate.now().minusDays(6)), eq(LocalDate.now()),
+                anyInt(), anyInt());
+        verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
+        assertThat(String.valueOf(response.getMessage())).startsWith("没说时间，按最近 7 天");
     }
 
     @Test
@@ -132,8 +136,8 @@ class DateFilterChatEntryContractTest {
 
         IntentExecuteResponse allowed = run(tool, "ORDER_LIST", "CRM", "查询待财务审核的销售订单", true, "finance_manager");
         assertThat(allowed.getStatus()).as(allowed.getMessage()).isEqualTo("SUCCESS");
-        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.PENDING_FINANCE_REVIEW), isNull(), isNull(),
-                anyInt(), anyInt());
+        verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.PENDING_FINANCE_REVIEW),
+                eq(LocalDate.now().minusDays(6)), eq(LocalDate.now()), anyInt(), anyInt());
     }
 
     // ------------------------------------------------------------------ 质检记录 / 出货记录

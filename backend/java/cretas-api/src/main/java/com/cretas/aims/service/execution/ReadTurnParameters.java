@@ -19,8 +19,8 @@ import java.util.regex.Pattern;
  *
  * <p>固定顺序: <b>本轮用户明确说的 &gt; 本会话已确认的同一目标 &gt; 系统默认值</b>。
  * <ul>
- *   <li>默认值从不在这里写进参数: 工具自己在缺参时补 (合并之后补缺), 这里只把它记成 DEFAULT 来源,
- *       所以默认值不可能盖掉本轮或沿用的值。</li>
+ *   <li>默认值只在合并之后补缺 (Steve 2026-11-12 口径 1 / 7 的默认最近 7 天、每页 20 条由 ToolDispatchService
+ *       写入, 其余由工具自己补), 记成 DEFAULT 来源, 所以默认值不可能盖掉本轮或沿用的值; 默认值也不被下一轮沿用。</li>
  *   <li>沿用只发生在<b>同一目标</b> (同意图 + 同工具) 且本轮至少明确改了一个条件时;
  *       换目标不沿用任何条件; 本轮什么条件都没说就是一次新的查询, 也不沿用。</li>
  *   <li>页码只有一个来源: 本轮原话里的「第 N 页」, 或服务端翻页 (上一页的服务端页码 ± 1);
@@ -117,9 +117,14 @@ final class ReadTurnParameters {
                     || !(raw.get("params") instanceof Map<?, ?> params)) {
                 return Optional.empty();
             }
+            // 上一轮按默认补的值 (默认最近 7 天、默认每页 20 条) 不是「已确认的条件」: 不沿用, 本轮缺了再按默认补
+            Map<?, ?> previousSources = raw.get("sources") instanceof Map<?, ?> s ? s : Map.of();
             Map<String, Object> copy = new LinkedHashMap<>();
             params.forEach((k, v) -> {
-                if (k instanceof String key && isScalar(v)) copy.put(key, v);
+                if (k instanceof String key && isScalar(v)
+                        && !Source.DEFAULT.name().equals(previousSources.get(key))) {
+                    copy.put(key, v);
+                }
             });
             return Optional.of(new Snapshot(intentCode, toolName, copy));
         }
