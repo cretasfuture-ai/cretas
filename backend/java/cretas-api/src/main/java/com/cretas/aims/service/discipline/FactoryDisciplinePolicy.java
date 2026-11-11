@@ -150,6 +150,40 @@ public class FactoryDisciplinePolicy {
         return v < 0 ? fallback : v;
     }
 
+    // ===================== 缺料实例收尾 (2026-11-11) =====================
+
+    public enum ShortageCloseMode {
+        /** 停在「缺口已解决」, 生产主管手工关闭 (默认, = 原行为)。 */
+        MANUAL,
+        /** 缺口补到 0 时系统直接关闭并留痕。 */
+        AUTO
+    }
+
+    /** 认不出 / 没配 = MANUAL (保持原行为; 自动关闭是工厂主动选的)。 */
+    public ShortageCloseMode shortageCloseMode(String factoryId) {
+        String raw = thresholds.getString(factoryId, ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE, "MANUAL");
+        return parseEnum(ShortageCloseMode.class, raw, ShortageCloseMode.MANUAL, factoryId,
+                ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE);
+    }
+
+    // ===================== 包装单位计划换线的产能核对 (2026-11-11) =====================
+
+    public enum PackageUnitCapacityMode {
+        /** 只认 件 / kg / 批, 包装单位判未验证 (默认, = 原行为)。 */
+        NONE,
+        /** 按产品净含量折成 kg 再核对 kg 产能。 */
+        NET_CONTENT,
+        /** 产线产能可按工厂自己的包装单位配置。 */
+        FACTORY_UNIT
+    }
+
+    /** 认不出 / 没配 = NONE (保持原行为, 不猜不换算)。 */
+    public PackageUnitCapacityMode packageUnitCapacityMode(String factoryId) {
+        String raw = thresholds.getString(factoryId, ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, "NONE");
+        return parseEnum(PackageUnitCapacityMode.class, raw, PackageUnitCapacityMode.NONE, factoryId,
+                ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE);
+    }
+
     private static <E extends Enum<E>> E parseEnum(Class<E> type, String raw, E strictest,
                                                    String factoryId, String key) {
         if (raw == null || raw.isBlank()) {
