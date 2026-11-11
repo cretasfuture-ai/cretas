@@ -56,7 +56,9 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         }
         String formatted = format(view);
         if (formatted != null && !formatted.isEmpty()) {
-            response.setFormattedText(formatted);
+            // 只读执行写明的默认 / 被替换的口径 (metadata.readNotices) 不能被重新格式化冲掉 (Steve 2026-11-12 口径)
+            response.setFormattedText(com.cretas.aims.ai.tool.ReadReplyNotices.prefix(formatted,
+                    com.cretas.aims.ai.tool.ReadReplyNotices.texts(response.getMetadata())));
         }
         return response;
     }
