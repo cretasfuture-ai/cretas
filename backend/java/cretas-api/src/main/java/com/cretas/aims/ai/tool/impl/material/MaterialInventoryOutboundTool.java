@@ -67,6 +67,11 @@ public class MaterialInventoryOutboundTool extends AbstractBusinessTool {
         batchId.put("description", "指定出库的批次ID（可选，不指定则按FIFO自动选择）");
         properties.put("batchId", batchId);
 
+        Map<String, Object> planId = new HashMap<>();
+        planId.put("type", "string");
+        planId.put("description", "领给哪个生产计划（可选）。客户来料必须关联对应计划");
+        properties.put("productionPlanId", planId);
+
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("materialName", "quantity"));
 
@@ -99,8 +104,11 @@ public class MaterialInventoryOutboundTool extends AbstractBusinessTool {
         result.put("operation", "OUTBOUND");
 
         if (batchId != null) {
-            // 指定批次出库
-            materialBatchService.useBatchQuantity(factoryId, batchId, quantity);
+            // 指定批次出库。排查 2026-11-10 A5: 走与 POST /material-batches/{id}/use 同一套领料服务 ——
+            // 状态硬拦 (待检/过期/报废/不良品) + 归属 + 消耗留痕 (谁、给哪个计划、原因)。
+            // ⛔ 不再调 useBatchQuantity: 它只比数量, 不查状态归属、不记消耗。
+            materialBatchService.useBatchMaterial(factoryId, batchId, quantity,
+                    getString(params, "productionPlanId"), getUserId(context), "AI 出库: " + reason);
             result.put("batchId", batchId);
             result.put("status", "COMPLETED");
             result.put("message", String.format("出库成功：%s %s 单位（批次: %s，原因: %s）",

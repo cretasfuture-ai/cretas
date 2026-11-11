@@ -9919,6 +9919,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryIdForUpdate(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
 
+        // 排查 2026-11-10 A4: 状态硬拦 (待检 / 过期 / 报废 / 不良品), 与其它领料入口同一份判断
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(batch);
         // 单发调用点(每次一个 batchId), 单行查询即可, 不需要批量。
         assertMaterialBatchOwnershipMatchesPlan(
                 plan, batch, resolveMaterialMainCategory(factoryId, batch.getMaterialTypeId()), "原料领用");

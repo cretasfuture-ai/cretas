@@ -4161,6 +4161,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                         rawMb.getQuantityUnit(),
                         "原料批次");
                 ensureRawMaterialWarehouse(factoryId, planId, rawMb);
+                // 排查 2026-11-10 A4 (清点补出的同类入口): 报工原料来源同样不许是待检 / 过期 / 报废 / 不良品
+                com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(rawMb);
                 edges.add(new ResolvedEdge(
                         rawMb,
                         storageQuantity,

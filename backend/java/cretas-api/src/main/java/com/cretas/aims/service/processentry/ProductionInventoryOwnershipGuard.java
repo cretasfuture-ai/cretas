@@ -92,6 +92,33 @@ public final class ProductionInventoryOwnershipGuard {
     }
 
     /**
+     * 领料 / 投料 / AI 出库入口共用的归属判断 (排查 2026-11-10 A4/A5)。
+     *
+     * @param plan        领给的生产计划; 没有计划传 null
+     * @param planClaimed 调用方声称关联了计划 (传了计划 id) —— 声称了却查不到 (不存在 / 别厂) 一律拒绝,
+     *                    ⛔ 不退化成「无计划」口径放过去
+     */
+    public static void assertIssuable(ProductionPlan plan, boolean planClaimed, MaterialBatch batch,
+                                      String materialMainCategory, String hintTarget) {
+        if (plan != null) {
+            assertMaterialBatchAllowed(plan, batch, materialMainCategory, hintTarget);
+            return;
+        }
+        if (planClaimed) {
+            throw new BusinessException(404, "关联的生产计划不存在或不属于本厂")
+                    .withCode("PRODUCTION_MATERIAL_PLAN_NOT_FOUND")
+                    .withHint("请确认生产计划; 不关联计划时请不要传计划")
+                    .withHintTarget(hintTarget);
+        }
+        if (batch != null && batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
+            throw new BusinessException(409, "批次 " + batch.getBatchNumber() + " 是客户所有的料, 不关联生产计划不能领用")
+                    .withCode("CUSTOMER_OWNED_MATERIAL_REQUIRES_PLAN")
+                    .withHint("客户来料只能领给该客户订单的生产计划: 请关联对应计划后再领, 或改选公司自有批次")
+                    .withHintTarget(hintTarget);
+        }
+    }
+
+    /**
      * 辅料/包材(含调料, 经 {@link MaterialMainCategory} 归一到「辅料」大类)在来料加工计划下
      * 允许用工厂自有库存。RAW(「原料」)不在此列 —— 那是这条规则存在的全部理由(客户主料的
      * 归属守卫必须原样保留)。

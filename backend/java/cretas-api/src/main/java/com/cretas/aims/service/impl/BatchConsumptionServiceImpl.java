@@ -56,6 +56,19 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.LineageEdgeRecorder lineageEdgeRecorder;
 
+    /**
+     * 排查 2026-11-10 A9: 自动扣料没扣成 (无实际产量 / 某批扣失败 / 缺料) 时挂一条 ACTIVE 生产告警当待办,
+     * ⛔ 不再只写日志。字段注入不改构造器 (单测按位置参数 new); 要挂待办却没注入时直接报错。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.ProductionAlertRepository productionAlertRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher alertEventPublisher;
+
+    /** 告警类型: 批次完工自动扣料没扣 / 没扣全, 需要人工按实际领用补录。 */
+    public static final String ALERT_AUTO_CONSUME = "AUTO_BOM_CONSUME_PENDING";
+
     @Override
     // REQUIRES_NEW: 自动扣料失败必须真正"不影响后续流程". 调用方 onBatchCompleted 是 @Transactional,
     // 若本方法用默认 REQUIRED 会加入同一事务, 任一 save 失败(FK/缺料 shortfall 等)就把整个事务标记
@@ -69,12 +82,13 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         // (prod E2E 抓到: 凡有 BOM 的成品 plain-complete 都不会自动建成品批次). 用批次主管/创建人兜底.
         Long recordedBy = batch.getSupervisorId() != null ? batch.getSupervisorId()
                 : (batch.getCreatedBy() != null ? batch.getCreatedBy() : 1L);
-        BigDecimal productionQty = batch.getActualQuantity() != null
-                ? batch.getActualQuantity()
-                : batch.getPlannedQuantity();
+        // 排查 2026-11-10 A9: 只按实际产量扣。⛔ 不拿计划量冒充实际 —— 没有实际产量就不扣, 挂待办让人按实际领用补录。
+        BigDecimal productionQty = batch.getActualQuantity();
 
         if (productionQty == null || productionQty.compareTo(BigDecimal.ZERO) <= 0) {
-            log.warn("批次无产出数量，跳过自动扣料: batchId={}", batch.getId());
+            log.warn("批次没有实际产量, 不自动扣料, 已挂待办: batchId={}", batch.getId());
+            raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
+                    + " 完工时没有填实际产量, 系统没有按配方自动扣料。请补填实际产量后按实际领用补录消耗 (未扣料, 成本未计)");
             return;
         }
 
@@ -118,7 +132,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
             BigDecimal plannedQtyForType = req != null ? req.getRequiredQuantity() : BigDecimal.ZERO;
 
             for (MaterialAllocation alloc : allocations) {
-                try {
+                {
                     // 扣减物料批次库存
                     materialBatchService.useBatchQuantity(
                             factoryId, alloc.getMaterialBatchId(), alloc.getAllocatedQuantity());
@@ -153,12 +167,9 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
 
                     // 同一物料类型的后续批次，plannedQuantity置0（计划量只在首条记录上）
                     plannedQtyForType = BigDecimal.ZERO;
-
-                } catch (Exception e) {
-                    log.error("自动扣料失败: batchId={}, materialBatch={}, error={}",
-                            batch.getId(), alloc.getMaterialBatchId(), e.getMessage());
-                    // 单个物料批次扣减失败不中断整体流程
                 }
+                // 排查 2026-11-10 A9: 某批扣失败 ⇒ 异常直接抛出, 本方法 REQUIRES_NEW 事务整段回滚 (不留「扣一半」),
+                // 调用方 SupplyChainOrchestrator 捕获后挂待办 (raiseAutoConsumeAlert)。⛔ 不再 catch 后只写日志继续。
             }
         }
 
@@ -184,12 +195,22 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         //
         //   要保留"计划要多少 / 实际差多少"的台账, 是独立需求, 应该有自己的表
         //   (不复用 material_consumptions 这张"实际消耗"表), 交由 owner 决定。
+        StringBuilder shortText = new StringBuilder();
         for (var shortfall : checkResult.getShortfalls()) {
             log.warn("BOM自动扣料缺料(未记消耗, 未计成本): batchId={}, materialTypeId={}, 名称={}, "
                             + "需={}, 可用={}, 缺={}",
                     batch.getId(), shortfall.getMaterialTypeId(), shortfall.getMaterialTypeName(),
                     shortfall.getRequiredQuantity(), shortfall.getAvailableQuantity(),
                     shortfall.getShortfallQuantity());
+            shortText.append(shortText.length() == 0 ? "" : "; ")
+                    .append(shortfall.getMaterialTypeName() != null ? shortfall.getMaterialTypeName() : shortfall.getMaterialTypeId())
+                    .append(" 缺 ").append(shortfall.getShortfallQuantity());
+        }
+        if (shortText.length() > 0) {
+            // 排查 2026-11-10 A9: 缺料部分没扣、成本没计 —— 挂待办, ⛔ 不只写日志
+            raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
+                    + " 按配方自动扣料时库存不足, 以下物料没有扣 (成本未计): " + shortText
+                    + "。请按实际领用补录消耗");
         }
 
         // 5. 更新批次物料成本：读取本批次、本工厂已持久化的 signed totalCost，
@@ -207,6 +228,32 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         log.info("自动扣料完成: batchId={}, 物料种类={}, 总成本={}",
                 batch.getId(), allocationsByType.size() + checkResult.getShortfalls().size(),
                 totalMaterialCost);
+    }
+
+    /**
+     * 自动扣料没扣成 / 没扣全的待办 (ACTIVE 生产告警)。REQUIRES_NEW: 调用方的扣料事务回滚了也要留下这条。
+     * 仓储没注入直接报错 —— 待办挂不上就等于又回到「只写日志」。
+     */
+    @Override
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void raiseAutoConsumeAlert(ProductionBatch batch, String level, String description) {
+        if (productionAlertRepository == null) {
+            throw new IllegalStateException("生产告警仓储未注入, 自动扣料待办挂不上 (排查 A9)");
+        }
+        com.cretas.aims.entity.ProductionAlert saved = productionAlertRepository.save(
+                com.cretas.aims.entity.ProductionAlert.builder()
+                        .factoryId(batch.getFactoryId())
+                        .alertType(ALERT_AUTO_CONSUME)
+                        .level(level)
+                        .status("ACTIVE")
+                        .metricName("auto_bom_consumption")
+                        .batchId(batch.getId())
+                        .description(description)
+                        .build());
+        if (alertEventPublisher != null) {
+            alertEventPublisher.publishEvent(new com.cretas.aims.event.ProductionAlertEvent(this, saved.getId(),
+                    saved.getFactoryId(), saved.getAlertType(), saved.getLevel(), saved.getDescription()));
+        }
     }
 
     @Override

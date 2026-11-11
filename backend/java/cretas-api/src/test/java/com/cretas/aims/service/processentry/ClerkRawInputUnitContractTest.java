@@ -198,6 +198,25 @@ class ClerkRawInputUnitContractTest {
                 .isEqualByComparingTo("5");
     }
 
+    @Test
+    @DisplayName("排查 A4 (清点补出): 逐道录入的原料来源是待检 / 过期 / 报废 / 不良品 → 409 带提示, 不写消耗")
+    void blockedRawBatchIsRejected() {
+        for (MaterialBatchStatus st : List.of(MaterialBatchStatus.INSPECTING, MaterialBatchStatus.EXPIRED,
+                MaterialBatchStatus.SCRAPPED, MaterialBatchStatus.DEFECTIVE)) {
+            stubRawBatch("RAW-" + st.name(), "kg", "500");
+            materialBatchRepo.findByIdAndFactoryId("RAW-" + st.name(), FACTORY).orElseThrow().setStatus(st);
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> recordSingleRawInput("BLOCKED-" + st.name(), "RAW-" + st.name(), "5"))
+                    .as("%s", st)
+                    .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                        assertThat(e.getCode()).isEqualTo(409);
+                        assertThat(e.getErrorCode()).isEqualTo("MATERIAL_BATCH_" + st.name());
+                        assertThat(e.getActionHint()).isNotBlank();
+                    });
+        }
+        verify(consumptionRepo, org.mockito.Mockito.never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
     // ─────────────────────────────────────────────────────────────
     // helpers
     // ─────────────────────────────────────────────────────────────

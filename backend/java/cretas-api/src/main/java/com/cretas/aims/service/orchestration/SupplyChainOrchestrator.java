@@ -426,7 +426,11 @@ public class SupplyChainOrchestrator {
                     batchConsumptionService.autoConsumeForBatch(batch);
                     log.info("自动扣料成功: batchId={}", batch.getId());
                 } catch (Exception e) {
-                    log.error("自动扣料失败(不影响后续流程): batchId={}", batch.getId(), e);
+                    log.error("自动扣料失败(已整段回滚, 挂待办; 不影响后续流程): batchId={}", batch.getId(), e);
+                    // 排查 2026-11-10 A9: 扣料事务整段回滚 (一克没扣), 挂待办让人按实际领用补录, ⛔ 不只写日志
+                    batchConsumptionService.raiseAutoConsumeAlert(batch, "CRITICAL", "批次 " + batch.getBatchNumber()
+                            + " 完工自动扣料失败, 已整单撤销 (库存未扣、成本未计): " + e.getMessage()
+                            + "。请检查批次后按实际领用补录消耗");
                 }
             }
 

@@ -1755,6 +1755,36 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                 materialBatchRepository.findByIdAndFactoryIdForUpdate(wksId, factoryId);
             }
         }
+        // 排查 2026-11-10 C6: 结单族 (非存货生产) 计划同样有「已报工、还没扣生产仓」的窗口 —— 逐道录入
+        //   (ClerkProcessEntry.writeConsumption) 写消耗但不扣 WKS.usedQuantity, 结单 (settleProduction) 才扣并打戳。
+        //   这时关单会按 WKS 现存 (= 全额) 退回原料仓, 原料仓多出已经用掉的料。
+        //   口径用盘点同一个查询 sumUnsettledConsumptionGroupedByBatch: 只算逐道录入的延迟扣减行 (productionBatchId ∈
+        //   process_sheet_rows), 即时扣减的老消耗行不算; 结单打戳后天然落在谓词外, 结单后关单不受影响。
+        if (!isInterimSettlePlan(factoryId, mr.getProductionPlanId())
+                && mr.getProductionPlanId() != null && !mr.getProductionPlanId().isBlank()) {
+            List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
+            if (!workshopBatchIds.isEmpty()) {
+                if (materialConsumptionRepository == null) {
+                    throw new IllegalStateException("消耗仓储未注入, 无法判断关单前是否还有未结单的报工消耗 (排查 C6)");
+                }
+                BigDecimal pending = BigDecimal.ZERO;
+                for (Object[] row : materialConsumptionRepository
+                        .sumUnsettledConsumptionGroupedByBatch(factoryId, workshopBatchIds)) {
+                    if (row != null && row.length > 1 && row[1] instanceof BigDecimal q) {
+                        pending = pending.add(q);
+                    }
+                }
+                if (pending.signum() > 0) {
+                    throw new BusinessException(409, String.format(
+                            "关单失败: 本领料单的料还有 %s 已报工但计划还没结单, 现在关单会把已经用掉的料退回原料仓",
+                            pending.stripTrailingZeros().toPlainString()))
+                            .withCode("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLEMENT")
+                            .withHint("请先在「生产计划 → 结单」按实际领用结单, 再回到本单关单退料")
+                            .withHintTarget(mr.getId())
+                            .withSeverity("BLOCKING");
+                }
+            }
+        }
         if (isInterimSettlePlan(factoryId, mr.getProductionPlanId())) {
             List<String> workshopBatchIds = collectWorkshopBatchIds(mr);
             if (!workshopBatchIds.isEmpty() && materialConsumptionRepository != null) {
@@ -1844,6 +1874,21 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         if (mr.getStatus() == Status.CLOSED || mr.getStatus() == Status.CANCELLED) {
             throw new BusinessException(409, "状态 " + mr.getStatus() + " 不允许取消")
                     .withHint("请刷新领料单列表查看最新状态");
+        }
+        // 排查 2026-11-10 C3: 料已经调到生产仓 (已调拨 / 已签收 / 生产中) 就不许取消。
+        //   原来取消只改状态不退料 ⇒ 料悬在生产仓、原料仓少了, 之后关单又 409 (已取消不能关), 没有出路。
+        //   不选「取消时自动退料」: 退多少要扣掉已报工消耗、还要先小结 —— 那套判断只在关单里有一份
+        //   (close: 锁生产仓批次 → 数未结消耗 → 按现存退料 → 划平生产仓), 在取消里再写一份必然漂 (形态 D)。
+        //   所以引导走关单退料这一条已验证的路。
+        if (mr.getStatus() == Status.TRANSFERRED || mr.getStatus() == Status.ISSUED
+                || mr.getStatus() == Status.IN_USE) {
+            throw new BusinessException(409, "领料单 " + mr.getRequisitionNo() + " 的料已调拨到生产仓, 不能取消")
+                    .withCode("PRODUCTION_REQUISITION_CANCEL_AFTER_TRANSFER")
+                    .withHint(mr.getStatus() == Status.TRANSFERRED
+                            ? "料已调到生产仓: 请先签收, 再「关单」把没用掉的料退回原料仓"
+                            : "料已在生产仓: 请用「关单」把没用掉的料退回原料仓 (有未小结的报工要先小结)")
+                    .withHintTarget(mr.getId())
+                    .withSeverity("BLOCKING");
         }
         mr.setStatus(Status.CANCELLED);
         mr.setRemarks((mr.getRemarks() == null ? "" : mr.getRemarks() + " | ") + "取消原因: " + reason);
