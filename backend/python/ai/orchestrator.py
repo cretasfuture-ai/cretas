@@ -40,10 +40,12 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import CLARIFY_KEY, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.decision import CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, RequestPurpose, intent_text
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
+# 合并理解判为取消 (CANCEL): 不执行, 也不追问。
+CANCEL_REPLY = "好的，这件事先不办了。需要时再告诉我。"
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +153,13 @@ class Orchestrator:
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
 
         retriever = self.candidate_retriever or self.semantic_matcher
+        if getattr(self.config, "decision_merged", False):
+            merged = await self._match_merged(query, factoryId, businessType, role, visible_intents, history,
+                                              retriever, by_code, timing, t0)
+            if merged is not None:
+                return merged
+            # 合并调用拿不到合法输出 ⇒ 回落下面原来的分开调用 (留痕, 不猜)
+            timing["mergedFallback"] = 1
         # Determine the speech act separately from choosing a related function.
         # This generates a semantic disposition, not confidence or execution permission.
         # organizer 2026-10-09: 与候选召回、决策选择并行跑 (串行时 p50 684→1124ms); 只在用到结论时才 await。
@@ -165,27 +174,7 @@ class Orchestrator:
                 return None
             purpose = await purpose_task
             timing["requestPurposeMs"] = int((time.time() - purpose_started) * 1000)
-            if purpose == RequestPurpose.CURRENT:
-                return None
-            result = IntentMatchResultDto.empty(userInput=query)
-            result.matchMethod = MatchMethod.LLM
-            result.questionType = QuestionType.CONVERSATIONAL
-            # Java recognizes this as an explicit no-business-action conclusion,
-            # rather than falling back to its legacy keyword/vector guesses.
-            timing["decisionNone"] = 1
-            if purpose == RequestPurpose.INFORMATION_ONLY:
-                timing["requestPurposeInformation"] = 1
-                result.requiresConfirmation = True
-                result.clarificationQuestion = "您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
-            else:
-                timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"] = 1
-                result.requiresConfirmation = True
-                result.clarificationQuestion = ("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
-                                                if purpose is not None else
-                                                "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
-            timing["totalMs"] = int((time.time() - t0) * 1000)
-            result.timingMs = timing
-            return result
+            return self._purpose_result(purpose, query, timing, t0)
 
         # ===== ② 候选 (重排路): 向量 Top-N → 微调重排 → 前 K, 0 token =====
         # 带对话历史的轮次不走这条: 重排只看这一句, LLM 粗选能看到前文。
@@ -236,6 +225,126 @@ class Orchestrator:
             return purpose_result
         if not probs:
             return None
+        return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0)
+
+    async def _match_merged(self, query, factoryId, businessType, role, visible_intents, history,
+                            retriever, by_code, timing, t0) -> Optional[IntentMatchResultDto]:
+        """合并理解 (1 次) → 只在需要时 Choice (第 2 次)。返回 None = 合并输出不可用, 调用方走分开调用。
+
+        Choice 触发条件 (INTENT-DISTILL E, 门槛来由见 config / PR 回执):
+          - 本轮要先问 (clarify_probability >= decision_clarify_threshold): 按钮要真实概率排序;
+          - 没有 target, 或 target 把握 < decision_choice_below。
+        「给出了 alternatives」**不**触发: 开发集上它几乎每轮都有 (ORDER_LIST 旁边总挂着 ORDER_STATUS),
+        触发后 Choice 的分布很平、过不了 0.8 自动门槛, 72% 的轮次变成多余的澄清。
+        调了 Choice 且不是先问: Choice 首选 == 合并 target ⇒ 两个独立判断一致, 执行; 否则按原 Choice 规则
+        (以上都不是 / 先问清楚 / 置信不够出按钮)。
+        其余轮次直接按合并输出的 target 交给 Java; 权限过滤 / 读写判定 / 参数落地校验仍在 Java 侧照旧执行。
+        """
+        t = time.time()
+        sem_task = asyncio.ensure_future(retriever.match(query, factoryId=factoryId, businessType=businessType))
+        u = await self.decision_matcher.understand(query, role, visible_intents, history)
+        timing["understandMs"] = int((time.time() - t) * 1000)
+        if u is None:
+            sem_task.cancel()
+            return None
+        try:
+            sem = await sem_task
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision: candidate retrieval failed: %s", ex)
+            sem = []
+        timing["merged"] = 1
+        timing["mergedAct"] = DIALOGUE_ACTS.index(u.act)
+        timing["mergedConfidence"] = int(round(u.confidence * 1000))
+        timing["mergedClarifyP"] = int(round(u.clarify_probability * 1000))
+        # 「先不查了」类: 模型常同时判 purpose=INFORMATION_ONLY (否定), 先认取消, 否则会被改成追问
+        if u.act == "CANCEL":
+            timing["mergedCancel"] = 1
+            return self._none_result(query, timing, t0, CANCEL_REPLY)
+        purpose_result = self._purpose_result(u.purpose, query, timing, t0)
+        if purpose_result is not None:
+            return purpose_result
+        codes: List[str] = []
+        for c in list(u.candidates) + list(u.alternatives) + [s.intentCode for s in sem]:
+            if c in by_code and c not in codes:
+                codes.append(c)
+            if len(codes) >= self.config.decision_k:
+                break
+        if not codes:
+            return None
+        clarify = u.clarify_probability >= self.config.decision_clarify_threshold
+        need_choice = (clarify or u.target is None or u.target not in by_code
+                       or u.confidence < self.config.decision_choice_below)
+        if need_choice:
+            t = time.time()
+            probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
+                                                       special_options=True)
+            timing["decisionMs"] = int((time.time() - t) * 1000)
+            timing["choiceCalled"] = 1
+            if not probs:
+                return None
+            if clarify:
+                timing["mergedClarify"] = 1
+                probs = {k: v for k, v in probs.items() if k not in (NONE_KEY, CLARIFY_KEY)}
+                probs[CLARIFY_KEY] = 1.0  # 先问的结论来自合并输出; Choice 只给按钮排序
+                return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
+            real = {k: v for k, v in probs.items() if k not in (NONE_KEY, CLARIFY_KEY)}
+            if not (u.target and real and max(real, key=real.get) == u.target):
+                return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
+            timing["choiceAgrees"] = 1
+        else:
+            timing["choiceSkipped"] = 1
+        row = by_code[u.target]
+        cand = CandidateIntentDto(
+            intentCode=u.target, intentName=row.get("intent_name") or u.target,
+            intentCategory=row.get("intent_category"), confidence=round(float(u.confidence), 4),
+            matchMethod=MatchMethod.LLM, description=row.get("description"),
+        )
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.LLM,
+                                  visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+
+    @staticmethod
+    def _purpose_result(purpose: Optional[RequestPurpose], query: str, timing: Dict[str, int],
+                        t0: float) -> Optional[IntentMatchResultDto]:
+        """purpose != CURRENT ⇒「先问清楚」的结论; CURRENT ⇒ None。分开调用与合并调用共用这一份。"""
+        if purpose == RequestPurpose.CURRENT:
+            return None
+        result = IntentMatchResultDto.empty(userInput=query)
+        result.matchMethod = MatchMethod.LLM
+        result.questionType = QuestionType.CONVERSATIONAL
+        # Java recognizes this as an explicit no-business-action conclusion,
+        # rather than falling back to its legacy keyword/vector guesses.
+        timing["decisionNone"] = 1
+        if purpose == RequestPurpose.INFORMATION_ONLY:
+            timing["requestPurposeInformation"] = 1
+            result.requiresConfirmation = True
+            result.clarificationQuestion = "您想了解哪个功能的操作步骤，或需要我现在处理什么？请再说明一下。"
+        else:
+            timing["requestPurposeUnresolved" if purpose is not None else "requestPurposeUnavailable"] = 1
+            result.requiresConfirmation = True
+            result.clarificationQuestion = ("您是在讨论操作方法，还是希望我现在查询或办理？请再说明一下。"
+                                            if purpose is not None else
+                                            "系统暂时无法确认您的请求，请稍后重试。当前不会进行业务操作。")
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        result.timingMs = timing
+        return result
+
+    def _none_result(self, query: str, timing: Dict[str, int], t0: float,
+                     message: str = NONE_REPLY) -> IntentMatchResultDto:
+        timing["decisionNone"] = 1
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        result = IntentMatchResultDto.empty(userInput=query)
+        result.matchMethod = MatchMethod.LLM
+        result.questionType = QuestionType.CONVERSATIONAL
+        result.conversationMessage = message
+        result.timingMs = timing
+        return result
+
+    def _result_from_probs(self, probs: Dict[str, float], special: bool, query: str, by_code: Dict[str, Any],
+                           visible_intents: List[Dict[str, Any]], timing: Dict[str, int],
+                           t0: float) -> IntentMatchResultDto:
+        """Choice 概率 -> 结论 (以上都不是 / 先问清楚 / 置信不够出按钮 / 执行)。两条路径共用。"""
+        probs = dict(probs)
         p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
         p_clarify = float(probs.pop(CLARIFY_KEY, 0.0) or 0.0)
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
@@ -245,14 +354,7 @@ class Orchestrator:
             timing["decisionClarifyP"] = int(round(p_clarify * 1000))
         # 「以上都不是」最大且过半 → 明确判无对应功能: 不执行、不回落旧路径猜一个 (Java 认 decisionNone)
         if special and p_none >= 0.5 and p_none > top_real and p_none >= p_clarify:
-            timing["decisionNone"] = 1
-            timing["totalMs"] = int((time.time() - t0) * 1000)
-            result = IntentMatchResultDto.empty(userInput=query)
-            result.matchMethod = MatchMethod.LLM
-            result.questionType = QuestionType.CONVERSATIONAL
-            result.conversationMessage = NONE_REPLY
-            result.timingMs = timing
-            return result
+            return self._none_result(query, timing, t0)
         # 「需要先问清楚」最大 → 一律出按钮 (不管真实第一名的概率是多少)
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
         if force_clarify:
