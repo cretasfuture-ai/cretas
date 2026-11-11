@@ -264,3 +264,11 @@ GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前
 - `ctx_student_report.py`：从 `evaluation.json` 生成表格。
 - `distill_pipeline.py generate --targets <意图清单> --per-target N`：定向补数据（每个意图 3 句全新会话 + 切换 + 改参数 + 翻页/取消）。
 - 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_pipeline.py`（不需要 GPU、权重和网络）。
+
+## 学生 v2 数据与分类门槛（INTENT-DISTILL-20261111）
+
+- `distill_v4.py`：定向生成（Claude Sonnet；覆盖翻页、换说法续句、写转只读、澄清/新任务对照）。硬标签由两位老师标（`claude-opus-5-5`@low 为主，`gpt-6-sol`@medium 为辅），`gpt-6-luna` 出软标签；`--teachers main|second` 可以分批补标，按 id 合并。`dataset` 把 v1、v3 两套标签放进同一个数据池，两位老师意见不一的样本只用软标签（`hard_weight=0`），并写上 `split_known` 和 `split_family` 两种切分。
+- `build_clarify_rubric.py --version 3` 生成 `clarify_rubric_v3.json`，依据是 Steve 8 问的口径规则；v1 的 `clarify_rubric.json` 不变。
+- `sensitive_intents.py`：直出风险分三类（普通只读错误率 ≤ 2%；敏感只读的 95% 上界 ≤ 0.5%，否则不直出；写入一律不直出）；`check_complete` 防止新增的只读意图漏分类。
+- `ctx_student_train.py --mode pool --pool pool-v4.jsonl --label-version 1|3`；评测时额外报分类门槛（`direct_classed`）和 `Recall@k`。
+- 离线测试：`python -m pytest scripts/finetune/test_ctx_student.py scripts/finetune/test_distill_v4.py`。
