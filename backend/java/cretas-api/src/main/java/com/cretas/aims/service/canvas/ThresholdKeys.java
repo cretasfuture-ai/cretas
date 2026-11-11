@@ -99,6 +99,8 @@ public final class ThresholdKeys {
     public static final String PRODUCTION_NOTIFY_AI_SCHEDULING = "production.notify.ai_scheduling";
     /** 低库存双向报警 → 默认 warehouse_manager,procurement_manager */
     public static final String INVENTORY_NOTIFY_LOW_STOCK = "inventory.notify.low_stock";
+    /** 动态质检表有项目不合格但不判整张不合格 (交质量经理决定) → 默认 quality_manager (2026-11-11) */
+    public static final String QUALITY_NOTIFY_INSPECTION_REVIEW = "quality.notify.inspection_review";
 
     // ==================== BOM (BOM) ====================
 
@@ -282,6 +284,15 @@ public final class ThresholdKeys {
      */
     public static final String PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE = "production.capacity.package_unit_mode";
 
+    /**
+     * 动态质检表里哪些项不合格才判整张 FAIL (2026-11-11 Steve 裁定: 做成工厂开关, 默认 B)。字符串:
+     * ANY_ITEM = 任一项不合格整张 FAIL (原行为); MINOR_FOR_REVIEW (默认) = 关键 / 主要项不合格整张 FAIL,
+     * 只有次要项不合格时判「条件合格」并标出这些项, 交质量经理决定; CRITICAL_ONLY = 只有关键项不合格才整张 FAIL,
+     * 主要 / 次要项交质量经理决定。认不出 = ANY_ITEM (最严)。没标严重程度的项按关键项算。
+     * 读到旧值 = 该 FAIL 的判成条件合格 (或反过来) ⇒ 登记为闸门类 key。
+     */
+    public static final String QUALITY_INSPECTION_FAIL_SCOPE = "quality.inspection.fail_scope";
+
     // ==================== 闸门类阈值登记 (GATING) ====================
 
     /**
@@ -339,6 +350,7 @@ public final class ThresholdKeys {
             PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
             PRODUCTION_BACKDATE_MAX_DAYS,
             PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE,
+            QUALITY_INSPECTION_FAIL_SCOPE,
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
@@ -356,7 +368,8 @@ public final class ThresholdKeys {
             PRODUCTION_NOTIFY_URGENT_INSERT,
             PRODUCTION_NOTIFY_EFFICIENCY_WARNING,
             PRODUCTION_NOTIFY_AI_SCHEDULING,
-            INVENTORY_NOTIFY_LOW_STOCK);
+            INVENTORY_NOTIFY_LOW_STOCK,
+            QUALITY_NOTIFY_INSPECTION_REVIEW);
 
     /**
      * 保存阈值前的按 key 校验: 岗位名单里每一项必须是真实存在的岗位码 (空串 = 只有厂长, 合法);
@@ -400,7 +413,8 @@ public final class ThresholdKeys {
     /** 取值是固定几个代码的开关类 key → 允许的值 (保存时校验, 打错字不再静默按默认)。 */
     private static final java.util.Map<String, java.util.List<String>> ENUM_VALUES = java.util.Map.of(
             SHORTAGE_CASE_CLOSE_MODE, java.util.List.of("MANUAL", "AUTO"),
-            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"));
+            PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"),
+            QUALITY_INSPECTION_FAIL_SCOPE, java.util.List.of("ANY_ITEM", "MINOR_FOR_REVIEW", "CRITICAL_ONLY"));
 
     private static String validateEnumValue(String thresholdKey, String value) {
         java.util.List<String> allowed = ENUM_VALUES.get(thresholdKey);

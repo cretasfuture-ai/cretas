@@ -26,7 +26,7 @@ class ThresholdRoleListValidationContractTest {
     @Test
     @DisplayName("所有接收人 / 权限名单 key 都在校验范围内; 其它 key 不受影响")
     void everyRoleListKeyIsCovered() {
-        assertThat(ThresholdKeys.ROLE_LIST_KEYS).hasSize(10); // 阳性对照: 集合没被清空
+        assertThat(ThresholdKeys.ROLE_LIST_KEYS).hasSize(11); // 阳性对照: 集合没被清空 (+ 质检待决定通知 2026-11-11)
         for (String key : ThresholdKeys.ROLE_LIST_KEYS) {
             assertThat(ThresholdKeys.validateSemantics(key, "nobody")).as(key).isNotNull();
             assertThat(ThresholdKeys.validateSemantics(key, "warehouse_manager,factory_super_admin")).as(key).isNull();
@@ -56,5 +56,15 @@ class ThresholdRoleListValidationContractTest {
         // 换线产能会挡住换线方案 ⇒ 闸门类 (短缓存); 缺料自动关闭不挡动作 ⇒ 不登记
         assertThat(ThresholdKeys.isGating(ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE)).isTrue();
         assertThat(ThresholdKeys.isGating(ThresholdKeys.SHORTAGE_CASE_CLOSE_MODE)).isFalse();
+    }
+
+    @Test
+    @DisplayName("质检整张判不合格范围: 只认 ANY_ITEM / MINOR_FOR_REVIEW / CRITICAL_ONLY, 且是闸门类")
+    void inspectionFailScopeOnlyKnownValues() {
+        String key = ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE;
+        assertThat(ThresholdKeys.validateSemantics(key, "minor_for_review")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(key, "CRITICAL_ONLY")).isNull();
+        assertThat(ThresholdKeys.validateSemantics(key, "MINOR")).isNotNull();
+        assertThat(ThresholdKeys.isGating(key)).isTrue();
     }
 }
