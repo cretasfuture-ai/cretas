@@ -1,6 +1,5 @@
 package com.cretas.aims.controller.oa;
 
-import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.oa.TodoItemDTO;
 import com.cretas.aims.service.oa.MyTodoAggregatorService;
@@ -37,14 +36,19 @@ import java.util.List;
  * <p>🔒 红线: 权限/角色过滤在 {@link MyTodoAggregatorService} 层实现；
  * 本 Controller 不做额外过滤。0 改现有审批端点。
  *
+ * <p>2026-11-11 (纪律排查 B13 线上验收): 去掉类上的 {@code @RequirePermission(finance:read / read_write)}。
+ * 待办已按权限逐类出数 (强制插单审批随排产 / 生产权限、报损随「报损审批」权限), 而这道财务门槛让
+ * 没有财务权限的岗位 (线上实测: F006 质量经理) 整个接口 403, 按权限聚合对他们不生效, 也和上面
+ * 「没有任何相关权限 → 空列表 (200)」的约定相反。租户仍由 JwtAuthInterceptor 按路径 factoryId 校验,
+ * 每一类待办能不能出, 只由聚合层的 TYPE_PERMISSIONS 决定。
+ *
  * @since 2026-06-12 (OA 待办聚合 B3)
  */
 @Slf4j
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/my-todos")
 @RequiredArgsConstructor
-@Tag(name = "OA 我的待办", description = "RN OA 待办中心 — 财务/出纳待审批聚合")
-@RequirePermission({"finance:read", "finance:read_write"})
+@Tag(name = "OA 我的待办", description = "OA 待办中心 — 按调用方权限聚合的待审批事项")
 public class MyTodoController {
 
     private final MyTodoAggregatorService myTodoAggregatorService;
