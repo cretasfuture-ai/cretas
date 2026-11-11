@@ -1112,6 +1112,10 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         when(materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(FACTORY_ID, List.of("wks-1")))
                 .thenReturn(pending);
 
+        com.cretas.aims.repository.ProductionSettlementRepository settlements =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionSettlementRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "productionSettlementRepository", settlements);
+
         BusinessException ex = assertThrows(BusinessException.class,
                 () -> service.close(FACTORY_ID, MR_ID, OPERATOR, List.of()));
         assertEquals("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLEMENT", ex.getErrorCode());
@@ -1122,6 +1126,31 @@ class FactoryMaterialRequisitionTransferIntegrationTest {
         assertEquals(new BigDecimal("10.00"), batchStore.get("raw-1").getUsedQuantity(), "原料仓不能多出已用掉的料");
         assertEquals(new BigDecimal("10.00"), batchStore.get("wks-1").getCurrentQuantity(), "生产仓不能被划空");
         verify(productionMaterialReturnRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("排查 C6 阴性对照: 计划已结单 (结单不能再做) 却还挂着未打戳的消耗行 → 不拦关单, 否则永久死路 (prod MR20261104-0002 同形)")
+    void close_nonStockPlan_alreadySettled_isNotDeadlocked() {
+        batchStore.put("raw-1", batch("raw-1", "MAT-001", WH_LOGISTICS, "100.00", "10.00", "3.00"));
+        batchStore.put("wks-1", batch("wks-1", "MAT-001", WH_WORKSHOP, "10.00", "8.00", "3.00"));
+        FactoryMaterialRequisition mr = buildMrInIssued(
+                new BigDecimal("10.00"), new BigDecimal("8.00"),
+                new BigDecimal("0.00"), new BigDecimal("0.00"), "wks-1", null);
+        when(repository.findByIdAndFactoryIdAndDeletedAtIsNull(MR_ID, FACTORY_ID)).thenReturn(Optional.of(mr));
+        when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        stubPlanSourceType(PlanSourceType.CUSTOMER_ORDER);
+        List<Object[]> pending = new ArrayList<>();
+        pending.add(new Object[]{"wks-1", new BigDecimal("0.46")});
+        when(materialConsumptionRepository.sumUnsettledConsumptionGroupedByBatch(FACTORY_ID, List.of("wks-1")))
+                .thenReturn(pending);
+        com.cretas.aims.repository.ProductionSettlementRepository settlements =
+                org.mockito.Mockito.mock(com.cretas.aims.repository.ProductionSettlementRepository.class);
+        when(settlements.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(new com.cretas.aims.entity.ProductionSettlement()));
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "productionSettlementRepository", settlements);
+
+        service.close(FACTORY_ID, MR_ID, OPERATOR, List.of());
+        assertEquals(Status.CLOSED, mr.getStatus());
     }
 
     @Test

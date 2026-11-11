@@ -255,8 +255,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                                         ri.getMaterialBatchId(), factoryId)
                                 .orElseThrow(() -> new BusinessException(404,
                                         "原料批次不存在: " + ri.getMaterialBatchId()));
-                        // 排查 2026-11-10 A4 (清点补出的同类入口): 逐道录入的原料来源同样不许是待检 / 过期 / 报废 / 不良品
-                        com.cretas.aims.service.gate.MaterialBatchStateGate.assertUsable(rawMb);
+                        // 排查 2026-11-10 A4 (清点补出的同类入口): 逐道录入的原料来源不许是待检 / 报废 / 不良品
+                        // (事后补录: 领出后才过期的不拦, 见 assertReportable)
+                        com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(rawMb);
                         // ⛔ 刻意<b>不做单位换算</b>: ri.getQuantity() 按契约已经是 rawMb 自己的
                         //    库存单位 (RawInput 连 unit 字段都没有, 见 ProcessChainEntryRequest.RawInput)。
                         //    这里原样入边 → MaterialConsumption.quantity → 小结时

@@ -72,6 +72,10 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
     private final FactoryWarehouseRepository warehouseRepository;
     private final MaterialBatchRepository materialBatchRepository;
 
+    /** 排查 C6: 关单前判断计划还能不能结单。字段注入不改构造器; 要用时没注入直接报错。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionSettlementRepository productionSettlementRepository;
+
     /**
      * 交接单 11-11 二.1: 数量恢复把「已用完 / 已耗尽」翻回能用之前, 问一次这批是不是判过不合格
      * ({@code MaterialQcRejectionGuard#statusWhenRestored})。field-inject 不改既有构造器; 走到恢复分支却没注入时
@@ -1785,12 +1789,12 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
                         pending = pending.add(q);
                     }
                 }
-                if (pending.signum() > 0) {
+                if (pending.signum() > 0 && settlementStillPending(factoryId, mr.getProductionPlanId())) {
                     throw new BusinessException(409, String.format(
                             "关单失败: 本领料单的料还有 %s 已报工但计划还没结单, 现在关单会把已经用掉的料退回原料仓",
                             pending.stripTrailingZeros().toPlainString()))
                             .withCode("PRODUCTION_REQUISITION_CLOSE_BEFORE_SETTLEMENT")
-                            .withHint("请先在「生产计划 → 结单」按实际领用结单, 再回到本单关单退料")
+                            .withHint("请先在「生产计划 → 结单」按实际领用结单 (别的计划在本单生产仓批次上报的工也要先结单 / 小结), 再回到本单关单退料")
                             .withHintTarget(mr.getId())
                             .withSeverity("BLOCKING");
                 }
@@ -2020,6 +2024,29 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
      * IS NULL} 消耗才代表「待小结、尚未落库扣减」; 非此族 (结单路径即时扣减、永不盖戳) 的 null 戳消耗早已扣减,
      * 不可当作待结算而阻止关单。planId 缺失 / 计划查不到 → 保守视为「非小结族」(无待结算窗口 → 守卫不触发)。
      */
+    /**
+     * 排查 C6: 本计划还能结单 (没有结单记录、没取消) 才拦关单 —— 拦了要有出路。
+     * 已结单的计划还挂着未打戳的消耗行 (prod 实测: MR20261104-0002 的计划已结单, 仍有 3 行未打戳; 跨计划投料或老数据),
+     * 结单不能再做 (PRODUCTION_ALREADY_SETTLED), 这时再拦就是永久死路 (与 #1215 首版误伤同形) ⇒ 不拦, 按原逻辑关单并记日志。
+     */
+    private boolean settlementStillPending(String factoryId, String productionPlanId) {
+        if (productionSettlementRepository == null || productionPlanRepository == null) {
+            throw new IllegalStateException("结单/计划仓储未注入, 无法判断关单前是否还能结单 (排查 C6)");
+        }
+        boolean cancelled = productionPlanRepository.findByIdAndFactoryId(productionPlanId, factoryId)
+                .map(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED)
+                .orElse(true);
+        if (cancelled) {
+            return false;
+        }
+        boolean settled = productionSettlementRepository
+                .findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, productionPlanId).isPresent();
+        if (settled) {
+            log.warn("关单: 计划 {} 已结单, 生产仓批次上仍有未打戳的报工消耗 (不拦, 按现存退料)", productionPlanId);
+        }
+        return !settled;
+    }
+
     private boolean isInterimSettlePlan(String factoryId, String productionPlanId) {
         if (productionPlanId == null || productionPlanId.isBlank() || productionPlanRepository == null) {
             return false;

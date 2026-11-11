@@ -66,6 +66,18 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private org.springframework.context.ApplicationEventPublisher alertEventPublisher;
 
+    /**
+     * 经 Spring 代理调自己的 {@link #raiseAutoConsumeAlert} —— 本类内部直接调用会绕过代理,
+     * REQUIRES_NEW 不生效, 待办会跟着扣料事务一起回滚 (独立审查 M5)。单测没注入时退回直接调用。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private BatchConsumptionService self;
+
+    private BatchConsumptionService alerts() {
+        return self != null ? self : this;
+    }
+
     /** 告警类型: 批次完工自动扣料没扣 / 没扣全, 需要人工按实际领用补录。 */
     public static final String ALERT_AUTO_CONSUME = "AUTO_BOM_CONSUME_PENDING";
 
@@ -86,8 +98,13 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         BigDecimal productionQty = batch.getActualQuantity();
 
         if (productionQty == null || productionQty.compareTo(BigDecimal.ZERO) <= 0) {
+            // 产品没配 BOM 本来就不会自动扣料 —— 那种情况不挂待办 (独立审查 M6: 误报的待办会让人不再信它)
+            if (bomExpansionService.expandBOM(factoryId, batch.getProductTypeId(), BigDecimal.ONE).isEmpty()) {
+                log.info("批次没有实际产量且产品无 BOM, 不自动扣料: batchId={}", batch.getId());
+                return;
+            }
             log.warn("批次没有实际产量, 不自动扣料, 已挂待办: batchId={}", batch.getId());
-            raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
+            alerts().raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
                     + " 完工时没有填实际产量, 系统没有按配方自动扣料。请补填实际产量后按实际领用补录消耗 (未扣料, 成本未计)");
             return;
         }
@@ -208,7 +225,7 @@ public class BatchConsumptionServiceImpl implements BatchConsumptionService {
         }
         if (shortText.length() > 0) {
             // 排查 2026-11-10 A9: 缺料部分没扣、成本没计 —— 挂待办, ⛔ 不只写日志
-            raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
+            alerts().raiseAutoConsumeAlert(batch, "WARNING", "批次 " + batch.getBatchNumber()
                     + " 按配方自动扣料时库存不足, 以下物料没有扣 (成本未计): " + shortText
                     + "。请按实际领用补录消耗");
         }

@@ -13,6 +13,19 @@ public final class MaterialBatchStateGate {
      * 写路径的硬拦 (唯一一份): 批次状态本身禁止投产 (待检 / 过期 / 报废 / 不良品) 就 409。
      * 领料 / 投料 / 消耗记录 / AI 出库都调这一个 (排查 2026-11-10 A4/A5: 两个领料接口和 AI 出库原来只比数量)。
      */
+    /**
+     * 事后报工 (工序表 / 逐道录入) 用的口径: 拦待检 / 报废 / 不良品, <b>不拦过期</b>。
+     * 生产仓批次继承来源效期, 凌晨 02:00 的过期任务会把「昨天已经领出、已经用掉」的批次翻成已过期 ——
+     * 第二天补录这笔已经发生的消耗不该被拦 (拦了消耗就记不上, 结单少扣、关单当成没用退回)。
+     * 过期料的食品安全闸在领料 / 划出那一步 (独立审查 M2)。
+     */
+    public static void assertReportable(MaterialBatch batch) {
+        if (batch != null && batch.getStatus() == MaterialBatchStatus.EXPIRED) {
+            return;
+        }
+        assertUsable(batch);
+    }
+
     public static void assertUsable(MaterialBatch batch) {
         MaterialBatchStatus st = batch == null ? null : batch.getStatus();
         if (st != null && st.blocksProduction()) {

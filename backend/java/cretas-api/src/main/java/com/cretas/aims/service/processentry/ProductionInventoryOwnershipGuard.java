@@ -113,7 +113,7 @@ public final class ProductionInventoryOwnershipGuard {
         if (batch != null && batch.getOwnership() == InventoryOwnership.CUSTOMER_OWNED) {
             throw new BusinessException(409, "批次 " + batch.getBatchNumber() + " 是客户所有的料, 不关联生产计划不能领用")
                     .withCode("CUSTOMER_OWNED_MATERIAL_REQUIRES_PLAN")
-                    .withHint("客户来料只能领给该客户订单的生产计划: 请关联对应计划后再领, 或改选公司自有批次")
+                    .withHint("客户来料只能领给该客户订单的生产计划: 请走「生产计划 → 领料单」领料, 或改选公司自有批次")
                     .withHintTarget(hintTarget);
         }
     }

@@ -1974,6 +1974,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Transactional
     public MaterialBatchDTO useBatchMaterial(String factoryId, String batchId, BigDecimal quantity,
                                              String productionPlanId, Long operatorId, String notes) {
+        // AI 工具可能传空串: 当没关联计划, 否则 "" 会写进消耗行的计划外键 (独立审查 L7)
+        if (productionPlanId != null && productionPlanId.isBlank()) {
+            productionPlanId = null;
+        }
         validateProductionPlanRef(productionPlanId);
         MaterialBatch batch = materialBatchRepository.findByIdAndFactoryId(batchId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("原材料批次不存在"));

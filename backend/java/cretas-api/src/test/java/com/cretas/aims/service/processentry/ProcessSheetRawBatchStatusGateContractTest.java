@@ -184,11 +184,11 @@ class ProcessSheetRawBatchStatusGateContractTest {
     }
 
     @Test
-    @DisplayName("原料来源是待检 / 过期 / 报废 / 不良品 → 409 带提示, 不写消耗; 阴性对照: 可用照常保存")
+    @DisplayName("原料来源是待检 / 报废 / 不良品 → 409 带提示, 不写消耗; 阴性对照: 领出后才过期的照常保存")
     void blockedRawBatchIsRejected() {
         MaterialBatch raw = materialBatchRepo.findById(rawBatchId).orElseThrow();
         long before = consumptionRepo.count();
-        for (MaterialBatchStatus st : List.of(MaterialBatchStatus.INSPECTING, MaterialBatchStatus.EXPIRED,
+        for (MaterialBatchStatus st : List.of(MaterialBatchStatus.INSPECTING,
                 MaterialBatchStatus.SCRAPPED, MaterialBatchStatus.DEFECTIVE)) {
             raw.setStatus(st);
             materialBatchRepo.saveAndFlush(raw);
@@ -202,7 +202,8 @@ class ProcessSheetRawBatchStatusGateContractTest {
         }
         assertThat(consumptionRepo.count()).isEqualTo(before);
 
-        raw.setStatus(MaterialBatchStatus.AVAILABLE);
+        // 审查 M2: 生产仓批次凌晨被翻成已过期, 第二天补录已经发生的消耗不该被拦
+        raw.setStatus(MaterialBatchStatus.EXPIRED);
         materialBatchRepo.saveAndFlush(raw);
         ProcessSheetRowResult ok = saveXiuyou("gate-ok");
         assertThat(ok).isNotNull();

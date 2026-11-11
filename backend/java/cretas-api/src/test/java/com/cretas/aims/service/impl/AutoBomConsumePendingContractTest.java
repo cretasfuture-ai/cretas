@@ -122,10 +122,20 @@ class AutoBomConsumePendingContractTest {
     void noActualQuantityDoesNotDeductAndRaisesPending() {
         service.autoConsumeForBatch(batch);
 
-        verify(bom, never()).expandBOM(anyString(), anyString(), any());
+        verify(bom, never()).expandBOM(F, "PT-1", new BigDecimal("100"));   // 不拿计划量展开
+        verify(bom, never()).checkMaterialAvailability(anyString(), any());
         verify(materialBatchService, never()).useBatchQuantity(anyString(), anyString(), any());
         verify(consumptions, never()).save(any());
         assertThat(onlyAlert().getDescription()).contains("QA-PB-777").contains("实际产量");
+    }
+
+    @Test
+    @DisplayName("没有实际产量但产品本来就没有 BOM → 不挂待办 (审查 M6: 误报的待办会让人不再信它)")
+    void noActualQuantityAndNoBomRaisesNothing() {
+        when(bom.expandBOM(eq(F), eq("PT-1"), any(BigDecimal.class))).thenReturn(List.of());
+        service.autoConsumeForBatch(batch);
+        verify(alerts, never()).save(any());
+        verify(materialBatchService, never()).useBatchQuantity(anyString(), anyString(), any());
     }
 
     @Test

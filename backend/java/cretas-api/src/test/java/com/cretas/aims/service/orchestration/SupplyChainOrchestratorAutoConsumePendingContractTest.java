@@ -92,6 +92,17 @@ class SupplyChainOrchestratorAutoConsumePendingContractTest {
     }
 
     @Test
+    @DisplayName("待办本身挂失败也不能把批次完工后面的流程 (成品入库 / 计划进度) 一起打断 (审查 M5)")
+    void alertFailureDoesNotBreakTheRestOfCompletion() {
+        doThrow(new IllegalStateException("扣料失败")).when(batchConsumptionService).autoConsumeForBatch(batch);
+        doThrow(new IllegalStateException("告警仓储挂了")).when(batchConsumptionService)
+                .raiseAutoConsumeAlert(any(), anyString(), anyString());
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> orchestrator.onBatchCompleted(new BatchCompletedEvent(this, batch)));
+        verify(batchConsumptionService).raiseAutoConsumeAlert(eq(batch), eq("CRITICAL"), anyString());
+    }
+
+    @Test
     @DisplayName("阴性对照: 自动扣料成功 → 不挂待办")
     void successRaisesNothing() {
         orchestrator.onBatchCompleted(new BatchCompletedEvent(this, batch));
