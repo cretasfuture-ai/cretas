@@ -102,6 +102,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     private final ProcessSheetRowRepository processSheetRowRepository;
     @Autowired
     private QualityCheckItemBindingRepository qualityCheckItemBindingRepository;
+    /** 批次级开工与计划级同一道缺料闸 (纪律排查 A8)。字段注入, 不打断按构造器装配的既有测试; 没注入 = 不过闸。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
     /**
      * 动态质检表哪些项不合格才判整张 FAIL (工厂开关 quality.inspection.fail_scope, 2026-11-11)。字段注入, 不打断按构造器装配的既有测试;
      * 没注入 (单测直接 new) 时按 Steve 裁定的默认 MINOR_FOR_REVIEW。
@@ -217,7 +220,15 @@ public class ProcessingServiceImpl implements ProcessingService {
         return productionBatchRepository.save(batch);
     }
     public ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId) {
-        log.info("开始生产: factoryId={}, batchId={}, supervisorId={}", factoryId, batchId, supervisorId);
+        return startProduction(factoryId, batchId, supervisorId, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ProductionBatch startProduction(String factoryId, String batchId, Integer supervisorId,
+                                           String forceStartReason) {
+        log.info("开始生产: factoryId={}, batchId={}, supervisorId={}, forced={}", factoryId, batchId, supervisorId,
+                forceStartReason != null && !forceStartReason.isBlank());
         Long id = parseBatchId(batchId);
         ProductionBatch batch = productionBatchRepository.findByIdAndFactoryId(id, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
@@ -225,6 +236,10 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "批次状态不允许开始生产: " + batch.getStatus())
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 纪律排查 A8: 批次级开工与计划级同口径。手工 / AI 建的批次可以挂在一个还没开工的计划上
+        // (POST /processing/batches 带 productionPlanId), 直接开批次就绕过了计划开工的缺料闸。
+        // 只在计划还没开工时过闸: 计划已开工 = 当时已过闸或已强制开工并留痕, 不再让每个批次重问一遍。
+        checkShortageGateForBatchStart(factoryId, batch, forceStartReason);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setStartTime(LocalDateTime.now());
         batch.setSupervisorId(supervisorId != null ? supervisorId.longValue() : null);
@@ -262,8 +277,65 @@ public class ProcessingServiceImpl implements ProcessingService {
     @Transactional(rollbackFor = Exception.class)
     public ProductionBatch completeProduction(String factoryId, String batchId, BigDecimal actualQuantity,
                                              BigDecimal goodQuantity, BigDecimal defectQuantity) {
-        // 默认重载: 不改批次成品单位 (沿用 batch.unit)
+        // 对外的 5 参入口同样要超产原因 (没带 ⇒ 超产时 409); 报工结清的自动完工走 6 参 (finishedUnit) 重载
+        return completeProductionWithReason(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public ProductionBatch completeProductionWithReason(String factoryId, String batchId, BigDecimal actualQuantity,
+                                                        BigDecimal goodQuantity, BigDecimal defectQuantity,
+                                                        String overPlanReason) {
+        // 纪律排查 A8: 与计划级直接完工同口径 —— 实际产量超过批次计划量 (同单位) 必须说明原因
+        Long id = parseBatchId(batchId);
+        ProductionBatch locked = productionBatchRepository.findByIdAndFactoryIdForUpdate(id, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("批次不存在"));
+        BigDecimal planned = locked.getPlannedQuantity();
+        boolean sameUnit = locked.getPlannedUnit() == null || locked.getPlannedUnit().isBlank()
+                || locked.getUnit() == null || locked.getPlannedUnit().trim().equalsIgnoreCase(locked.getUnit().trim());
+        boolean completable = locked.getStatus() == ProductionBatchStatus.IN_PROGRESS
+                || locked.getStatus() == ProductionBatchStatus.PAUSED;   // 不能完工的由下面原有的 409 说清状态
+        boolean overPlan = completable && actualQuantity != null && planned != null && planned.signum() > 0 && sameUnit
+                && actualQuantity.compareTo(planned) > 0;
+        String reason = overPlanReason == null ? null : overPlanReason.trim();
+        if (overPlan && (reason == null || reason.isEmpty())) {
+            String unit = locked.getUnit() == null ? "" : " " + locked.getUnit();
+            throw new BusinessException(409, "批次 " + locked.getBatchNumber() + " 实际产量超过计划产量, 必须填写超产原因")
+                    .withCode("PRODUCTION_OVER_PLAN_REASON_REQUIRED")
+                    .withHint("计划 " + planned.stripTrailingZeros().toPlainString() + unit + ", 实际 "
+                            + actualQuantity.stripTrailingZeros().toPlainString() + unit + "; 请填写超产原因后再完成")
+                    .withHintTarget("超产原因");
+        }
+        if (overPlan) {
+            String line = "超产原因: " + reason + " (计划 " + planned.stripTrailingZeros().toPlainString()
+                    + ", 实际 " + actualQuantity.stripTrailingZeros().toPlainString() + ")";
+            locked.setNotes(locked.getNotes() != null && !locked.getNotes().isBlank()
+                    ? locked.getNotes() + "\n" + line : line);
+            Map<String, Object> fields = locked.getCustomFields() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(locked.getCustomFields());
+            Map<String, Object> audit = new LinkedHashMap<>();
+            audit.put("plannedQuantity", planned);
+            audit.put("actualQuantity", actualQuantity);
+            audit.put("reason", reason);
+            audit.put("recordedAt", LocalDateTime.now().toString());
+            fields.put("overPlan", audit);
+            locked.setCustomFields(fields);
+        }
         return completeProduction(factoryId, batchId, actualQuantity, goodQuantity, defectQuantity, null);
+    }
+
+    /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
+    private void checkShortageGateForBatchStart(String factoryId, ProductionBatch batch, String forceStartReason) {
+        if (shortageStartGate == null || batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
+            return;
+        }
+        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findById(batch.getProductionPlanId())
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElse(null);
+        if (plan == null || plan.getStatus() != com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING) {
+            return;
+        }
+        shortageStartGate.check(factoryId, plan, forceStartReason, com.cretas.aims.utils.SecurityUtils.currentUserId());
     }
 
     @Override

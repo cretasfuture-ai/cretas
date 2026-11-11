@@ -81,6 +81,16 @@ public class BatchStatusChangeTool extends AbstractBusinessTool {
         supervisorId.put("description", "主管ID（开始生产时可选）");
         properties.put("supervisorId", supervisorId);
 
+        Map<String, Object> forceStartReason = new HashMap<>();
+        forceStartReason.put("type", "string");
+        forceStartReason.put("description", "开始生产时: 缺料还没解决、用户明确要求仍然开工的原因; 用户没说就不要填");
+        properties.put("forceStartReason", forceStartReason);
+
+        Map<String, Object> overPlanReason = new HashMap<>();
+        overPlanReason.put("type", "string");
+        overPlanReason.put("description", "完成时: 实际产量超过计划产量的原因; 用户没说就不要填");
+        properties.put("overPlanReason", overPlanReason);
+
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("batchId", "operation"));
 
@@ -92,9 +102,29 @@ public class BatchStatusChangeTool extends AbstractBusinessTool {
         return Arrays.asList("batchId", "operation");
     }
 
+    /**
+     * 纪律排查 A6 同形: 「完成」必须有实际产量和合格品数量, 没说就追问 —— ⛔ 不按空值完工
+     * (空值完工会让成品数量为空 / 被下游按计划量兜底, 等于假数据)。
+     */
+    @Override
+    protected List<String> validateRequiredParams(Map<String, Object> params) {
+        List<String> missing = new java.util.ArrayList<>(super.validateRequiredParams(params));
+        Object op = params.get("operation");
+        if (op != null && "complete".equalsIgnoreCase(op.toString().trim())) {
+            for (String p : List.of("actualQuantity", "goodQuantity")) {
+                if (params.get(p) == null || params.get(p).toString().isBlank()) {
+                    missing.add(p);
+                }
+            }
+        }
+        return missing;
+    }
+
     @Override
     protected String getParameterQuestion(String paramName) {
         return switch (paramName) {
+            case "actualQuantity" -> "这批实际做出来多少？请说实际产量和单位。";
+            case "goodQuantity" -> "其中合格品有多少？";
             case "batchId" -> "请提供批次ID或批次号。";
             case "operation" -> "请指定操作：start(开始)、pause(暂停)、resume(恢复)、complete(完成)、cancel(取消)。";
             default -> super.getParameterQuestion(paramName);
@@ -112,7 +142,8 @@ public class BatchStatusChangeTool extends AbstractBusinessTool {
                 case "start" -> {
                     Long supervisorId = getLong(params, "supervisorId");
                     Integer supervisorIdInt = supervisorId != null ? supervisorId.intValue() : null;
-                    yield processingService.startProduction(factoryId, batchId, supervisorIdInt);
+                    yield processingService.startProduction(factoryId, batchId, supervisorIdInt,
+                            getString(params, "forceStartReason"));
                 }
                 case "pause" -> processingService.pauseProduction(factoryId, batchId, reason);
                 case "resume" -> processingService.resumeProduction(factoryId, batchId);
@@ -120,7 +151,9 @@ public class BatchStatusChangeTool extends AbstractBusinessTool {
                     BigDecimal actualQty = getBigDecimal(params, "actualQuantity");
                     BigDecimal goodQty = getBigDecimal(params, "goodQuantity");
                     BigDecimal defectQty = getBigDecimal(params, "defectQuantity");
-                    yield processingService.completeProduction(factoryId, batchId, actualQty, goodQty, defectQty);
+                    // 纪律排查 A6 同形: 完成必须有实际产量, 没说就追问 (validateRequiredParams), ⛔ 不按空值 / 计划量完工
+                    yield processingService.completeProductionWithReason(factoryId, batchId, actualQty, goodQty,
+                            defectQty, getString(params, "overPlanReason"));
                 }
                 case "cancel" -> processingService.cancelProduction(factoryId, batchId, reason);
                 default -> throw new IllegalArgumentException("不支持的操作类型: " + operation);

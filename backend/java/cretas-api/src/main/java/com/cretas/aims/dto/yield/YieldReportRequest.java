@@ -25,6 +25,8 @@ public class YieldReportRequest {
     private Integer workMinutes;          // 本道工时(分钟), 选填
     private Integer workerCount;          // 本道人数, 选填 (张权 G4: "用了多少人")
     private Boolean forceSubmit;          // A4 超收软告警后强制提交
+    /** 纪律排查 A10: 强制超收提交的原因 (forceSubmit=true 且确实超收时必填, 留痕在 customFields.overReceipt)。 */
+    private String forceSubmitReason;
     /** 跨批来源 (张权 A3), 见 ProductionReport.sourceBatchRefs 形状 */
     private List<Map<String, Object>> sourceBatchRefs;
     private String reporterName;
