@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from ai.matcher.candidates import BlendRetriever
 from ai.matcher.decision import (
     CLARIFY_KEY, LETTERS, NONE_KEY, SPECIAL_OPTIONS, DecisionMatcher, build_choice_messages, intent_text,
 )
@@ -45,6 +46,44 @@ class BudgetStop(RuntimeError):
     pass
 
 
+class QuotaWait(BudgetStop):
+    """Today's free-token group is used up: stop and resume after 00:00 UTC (Beijing 08:00)."""
+
+
+# Daily free-token groups (organizer 2026-11-11): never spill into paid usage.
+DAILY_GROUP_LIMIT = {'gpt-5.4-2026-03-05': 1_000_000, 'gpt-5.4-mini-2026-03-17': 10_000_000}
+GROUP_SAFETY = 0.9  # other sessions share the groups and are only partly visible here
+
+
+def _quota_group(model: str) -> str:
+    import sys as _sys
+    root = pathlib.Path(__file__).resolve().parents[2] / 'scripts' / 'finetune'
+    if str(root) not in _sys.path:
+        _sys.path.insert(0, str(root))
+    from factory_quota_accounting import quota_group  # read-only use; the module is owned by line F
+    return quota_group(model)
+
+
+def _utc_day(ts: float) -> str:
+    import datetime as _dt
+    return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).date().isoformat()
+
+
+def _row_tokens(row: Dict[str, Any]) -> int:
+    u = row.get('usage') or {}
+    return int((u.get('prompt_tokens', u.get('input_tokens', 0)) or 0) + (u.get('completion_tokens', u.get('output_tokens', 0)) or 0))
+
+
+def _row_day(row: Dict[str, Any]) -> Optional[str]:
+    if isinstance(row.get('at'), (int, float)):
+        return _utc_day(row['at'])
+    resp = row.get('response') if isinstance(row.get('response'), dict) else {}
+    created = row.get('response_created_at') or resp.get('created_at') or resp.get('created')
+    if isinstance(created, (int, float)):
+        return _utc_day(created)
+    return row.get('day')
+
+
 def _read_key_file(path: pathlib.Path) -> Dict[str, str]:
     out = {}
     for line in path.read_text(encoding='utf-8-sig').splitlines():
@@ -57,7 +96,8 @@ def _read_key_file(path: pathlib.Path) -> Dict[str, str]:
 class Ledger:
     """Reserve-before-send budget; spent survives restarts through ``calls.jsonl``."""
 
-    def __init__(self, root: pathlib.Path, cap_usd: float, key_file: pathlib.Path, concurrency: int = 8):
+    def __init__(self, root: pathlib.Path, cap_usd: float, key_file: pathlib.Path, concurrency: int = 8,
+                 quota_roots=()):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self.cap = cap_usd
@@ -78,6 +118,23 @@ class Ledger:
             for line in self.calls_path.read_text(encoding='utf-8').splitlines():
                 self.spent += json.loads(line).get('price_upper_usd', 0.0)
         self.extra_spent = 0.0
+        # UTC-day free-group usage: this ledger + every other ledger passed in (E runs, F teacher runs).
+        self.group_used: Dict[tuple, int] = {}
+        files = [self.calls_path] + [pathlib.Path(q) for q in quota_roots]
+        for f in files:
+            if not f.exists():
+                continue
+            for line in f.read_text(encoding='utf-8').splitlines():
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not row.get('model') or not row.get('usage'):
+                    continue
+                day = _row_day(row)
+                if day is None:
+                    raise BudgetStop('ledger row without UTC day evidence in ' + str(f))
+                key = (day, _quota_group(row['model']))
+                self.group_used[key] = self.group_used.get(key, 0) + _row_tokens(row)
 
     @staticmethod
     def cost(model: str, usage: Dict[str, Any]) -> float:
@@ -91,7 +148,15 @@ class Ledger:
         encoded = json.dumps(payload, ensure_ascii=False)
         i, o = PRICES[model]
         reserve = (len(encoded.encode('utf-8')) * i + max_out * o) / 1e6
+        group = _quota_group(model)
+        day = _utc_day(time.time())
+        reserve_tokens = len(encoded.encode('utf-8')) // 2 + max_out
         with self.lock:
+            used = self.group_used.get((day, group), 0)
+            if used + reserve_tokens > DAILY_GROUP_LIMIT[group] * GROUP_SAFETY:
+                raise QuotaWait('free group %s used %d tokens on UTC %s (limit %d x %.1f); resume after 00:00 UTC'
+                                % (group, used, day, DAILY_GROUP_LIMIT[group], GROUP_SAFETY))
+            self.group_used[(day, group)] = used + reserve_tokens
             if self.spent + self.extra_spent + reserve > self.cap:
                 raise BudgetStop('cap %.2f reached (spent %.4f)' % (self.cap, self.spent + self.extra_spent))
             self.spent += reserve
@@ -118,6 +183,7 @@ class Ledger:
             raise
         finally:
             with self.lock:
+                self.group_used[(day, group)] = self.group_used.get((day, group), 0) - reserve_tokens + _row_tokens(rec)
                 self.spent += rec['price_upper_usd'] - reserve
                 line = json.dumps(rec, ensure_ascii=False)
                 if self._key and self._key in line:
@@ -229,4 +295,100 @@ def decision_type(ledger: Ledger, chat_model: str = MINI, effort: str = 'low'):
     return EvalDecision
 
 
-__all__ = ['Ledger', 'BudgetStop', 'decision_type', 'TURN', 'UNDERSTOOD', 'LABEL', 'MINI', 'LUNA', '_usage_tokens']
+def qwen_decision_type():
+    """DecisionMatcher on the production ``llm_router`` DECISION chain (qwen), traced per call.
+
+    Nothing is swapped: prompts, egress redaction and the provider chain are production. The
+    wrapper only records label, model, tokens and latency of each call into the turn sink.
+    """
+
+    class QwenDecision(DecisionMatcher):
+        async def _call(self, payload, body_validator=None, content_validator=None):
+            label = LABEL.get()
+            rec: Dict[str, Any] = dict(at=time.time(), label=label, model='llm_router:decision', endpoint='call_chain')
+            t = time.perf_counter()
+            try:
+                body = await DecisionMatcher._call(self, payload, body_validator, content_validator)
+                rec['latency_ms'] = round((time.perf_counter() - t) * 1000, 1)
+                rec['model'] = 'llm_router:' + str(body.get('model') or 'decision')
+                rec['usage'] = body.get('usage') or {}
+                return body
+            except Exception as ex:  # noqa: BLE001
+                rec['latency_ms'] = round((time.perf_counter() - t) * 1000, 1)
+                rec['error'] = type(ex).__name__ + ': ' + str(ex)[:200]
+                raise
+            finally:
+                turn = TURN.get()
+                if turn is not None:
+                    turn.append(rec)
+
+        request_purpose = labelled('purpose')(DecisionMatcher.request_purpose)
+        shortlist = labelled('shortlist')(DecisionMatcher.shortlist)
+        choose = labelled('choice')(DecisionMatcher.choose)
+
+    return QwenDecision
+
+
+def load_llm_env(path: str) -> None:
+    """Export only ``LLM_*`` keys from a local .env into this process (values never printed)."""
+    import os
+    for line in pathlib.Path(path).read_text(encoding='utf-8-sig').splitlines():
+        if '=' in line and not line.lstrip().startswith('#'):
+            k, v = line.split('=', 1)
+            k, v = k.strip(), v.strip().strip('"').strip("'")
+            if k.startswith('LLM_') and v:
+                os.environ[k] = v
+
+
+class SnapshotRetriever(BlendRetriever):
+    """Prod candidate stage replayed from ``retrieval_snapshot_remote.py`` output.
+
+    ``match()`` returns the BlendRetriever top-20; ``match(top_k=pool)`` returns the rerank
+    top-10 first, then blend, so ``SnapshotRerank`` reproduces the prod rerank order. A query
+    whose rerank call failed in the snapshot returns ``None`` from the rerank stub, which makes
+    the orchestrator fall back to the LLM shortlist exactly as prod does.
+    """
+
+    def __init__(self, snapshot: Dict[str, Any]):  # noqa: super not called: no pool, replay only
+        self.pool, self.top_k, self.blend = None, 20, 0.35
+        self.snapshot = snapshot
+        self.last_rerank: Dict[str, int] = {}
+
+    def _rows(self, query):
+        rec = self.snapshot.get(query)
+        if rec is None:
+            raise KeyError('query not in retrieval snapshot: ' + query[:40])
+        return rec
+
+    async def match(self, query, factoryId=None, businessType=None, top_k=None):
+        from ai.dto import CandidateIntentDto, MatchMethod
+        rec = self._rows(query)
+        blend = [(c, s) for c, s in rec.get('blend') or []]
+        if top_k is None:
+            items = blend
+        else:
+            rr = rec.get('rerank') or []
+            self.last_rerank[query] = len(rr)
+            seen, items = set(), []
+            for c, s in [(c, s) for c, s in rr] + blend:
+                if c not in seen:
+                    seen.add(c)
+                    items.append((c, s))
+            items = items[:top_k]
+        return [CandidateIntentDto(intentCode=c, confidence=float(s), matchMethod=MatchMethod.SEMANTIC) for c, s in items]
+
+
+class SnapshotRerank:
+    def __init__(self, retriever: SnapshotRetriever):
+        self.retriever = retriever
+        self.query = None
+
+    async def scores(self, query, docs):
+        rec = self.retriever._rows(query)
+        if not rec.get('rerank'):
+            return None
+        n = len(rec['rerank'])
+        return [float(100 - i) if i < n else -1.0 for i in range(len(docs))]
+
+
+__all__ = ['Ledger', 'BudgetStop', 'QuotaWait', 'decision_type', 'TURN', 'UNDERSTOOD', 'LABEL', 'MINI', 'LUNA', '_usage_tokens']

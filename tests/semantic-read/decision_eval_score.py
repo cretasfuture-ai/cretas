@@ -13,6 +13,8 @@ Per turn:
   action    coarse dialogue action derived from outcomes the same way for every version:
             NEW_TASK / CONTINUE (change parameter or page) / CANCEL / NEED_CLARIFY.
   model_act fine-grained act declared by the merged understanding (merged runs only).
+  params    part M, executed turns: page/size/status bound by main's Java binders
+            (``apply_param_probe.py`` -> ``params_ok``) equal the gold. None when not executed.
   model_params  status/size/page read by the merged understanding vs gold (part M only).
             On main these three are bound by Java (ReadTurnParameters / StatusFilter) from the
             utterance; model values are candidates only, so this is a reading metric, not the
@@ -137,7 +139,8 @@ def score_rows(rows, vocab):
                             action=None if obs is None else obs == coarse(gold_act),
                             cancel_ok=(kind == 'NONE') if exp == 'NONE' else None,
                             model_act=None if u is None else u.get('act') == gold_act,
-                            model_params=mp, n_calls=r['n_calls'], labels=[c['label'] for c in r['calls']],
+                            model_params=mp, params=r.get('params_ok') if part == 'M' else None,
+                            n_calls=r['n_calls'], labels=[c['label'] for c in r['calls']],
                             wall_ms=r['wall_ms'], tokens_in=sum(c['in_tokens'] for c in r['calls']),
                             tokens_cached=sum(c['cached_tokens'] for c in r['calls']),
                             tokens_out=sum(c['out_tokens'] for c in r['calls']), error=r.get('error'),
@@ -185,7 +188,7 @@ def summarize(scored):
             tokens_in_per_turn=round(sum(r['tokens_in'] for r in rows) / len(rows)),
             tokens_cached_per_turn=round(sum(r['tokens_cached'] for r in rows) / len(rows)),
             tokens_out_per_turn=round(sum(r['tokens_out'] for r in rows) / len(rows)),
-            goal=rate(rows, 'goal'), exec_ok=rate(rows, 'exec_ok'), action=rate(rows, 'action'),
+            goal=rate(rows, 'goal'), exec_ok=rate(rows, 'exec_ok'), params=rate(rows, 'params'), action=rate(rows, 'action'),
             false_clarify=rate(rows, 'false_clarify'), missed_clarify=rate(rows, 'missed_clarify'),
             cancel_ok=rate(rows, 'cancel_ok'), model_act=rate(rows, 'model_act'),
             model_params=dict(ok=sum(mp), n=len(mp), by_key={k: f'{sum(v)}/{len(v)}' for k, v in mp_by.items()}),
@@ -217,7 +220,7 @@ def compare(per_run):
     """{version: {run: summary}} -> {version: {part: {metric: mean/min/max}}}."""
     metrics = ('calls_per_turn', 'calls_max', 'turns_over_2_calls', 'p50_ms', 'p95_ms', 'tokens_in_per_turn',
                'tokens_out_per_turn', 'fallback_or_error')
-    rates = ('goal', 'exec_ok', 'action', 'false_clarify', 'missed_clarify', 'cancel_ok', 'model_act')
+    rates = ('goal', 'exec_ok', 'params', 'action', 'false_clarify', 'missed_clarify', 'cancel_ok', 'model_act')
     out = {}
     for version, runs in per_run.items():
         out[version] = {}

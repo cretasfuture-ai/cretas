@@ -36,7 +36,8 @@ sys.path.insert(0, str(HERE))
 
 from ai.config import AIConfig  # noqa: E402
 from ai.orchestrator import Orchestrator  # noqa: E402
-from decision_eval_transport import TURN, UNDERSTOOD, BudgetStop, Ledger, _usage_tokens, decision_type  # noqa: E402
+from decision_eval_transport import (TURN, UNDERSTOOD, BudgetStop, Ledger, SnapshotRerank, SnapshotRetriever,  # noqa: E402
+                                     _usage_tokens, decision_type, load_llm_env, qwen_decision_type)
 
 ROLE = 'factory_super_admin'
 
@@ -179,8 +180,9 @@ def source_hashes():
 
 
 def make_config(a):
-    return AIConfig(decision_business_types='FACTORY', decision_special_options=True, decision_candidates='shortlist',
-                    decision_timeout_s=90.0, **json.loads(a.config_json or '{}'))
+    return AIConfig(decision_business_types='FACTORY', decision_special_options=True,
+                    decision_candidates='rerank' if a.retrieval_snapshot else 'shortlist',
+                    decision_timeout_s=float(a.timeout), **json.loads(a.config_json or '{}'))
 
 
 async def main_async(a):
@@ -190,13 +192,26 @@ async def main_async(a):
         raise SystemExit('refusing to overwrite a completed run: ' + str(out))
     rows = load_catalog(a.catalog)
     names = {r['intent_code']: r.get('intent_name') or r['intent_code'] for r in rows}
-    ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency)
-    ledger.extra_spent = sum(
-        sum(json.loads(line).get('price_upper_usd', 0.0) for line in pathlib.Path(p).read_text('utf-8').splitlines())
-        for p in a.spent_from if pathlib.Path(p).exists())
     config = make_config(a)
-    engine = Orchestrator(Empty(), Empty(), Empty(), decision_matcher=decision_type(ledger)(timeout_s=90),
-                          candidate_retriever=Empty(), config=config)
+    if a.arm == 'qwen':
+        load_llm_env(a.llm_env)
+        ledger = None
+        matcher = qwen_decision_type()(timeout_s=float(a.timeout), k=config.decision_k)
+    else:
+        ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency,
+                        quota_roots=a.quota_from)
+        ledger.extra_spent = sum(
+            sum(json.loads(line).get('price_upper_usd', 0.0) for line in pathlib.Path(p).read_text('utf-8').splitlines())
+            for p in a.spent_from if pathlib.Path(p).exists())
+        matcher = decision_type(ledger)(timeout_s=90)
+    if a.retrieval_snapshot:
+        snap = json.loads(pathlib.Path(a.retrieval_snapshot).read_text('utf-8'))['results']
+        retriever = SnapshotRetriever(snap)
+        rerank = SnapshotRerank(retriever)
+    else:
+        retriever, rerank = Empty(), None
+    engine = Orchestrator(Empty(), Empty(), Empty(), decision_matcher=matcher, candidate_retriever=retriever,
+                          config=config, rerank_client=rerank)
     corpus_m = json.loads(pathlib.Path(a.corpus_m).read_text('utf-8'))['dialogues'] if a.corpus_m else []
     if a.m_limit:
         corpus_m = corpus_m[: a.m_limit]
@@ -206,7 +221,8 @@ async def main_async(a):
                     corpus_m=a.corpus_m, corpus_c=a.corpus_c, c_per_act=per_act, c_ids=[r['id'] for r in corpus_c],
                     m_ids=[d['id'] for d in corpus_m], catalog=a.catalog, catalog_rows=len(rows), role=ROLE,
                     runs=a.runs, label=a.label, started=time.time(),
-                    retrieval='EMPTY (LLM shortlist only; no vector index, no rerank, exact registry not loaded)')
+                    arm=a.arm, retrieval=('PROD SNAPSHOT ' + a.retrieval_snapshot) if a.retrieval_snapshot else
+                    'EMPTY (LLM shortlist only; no vector index, no rerank, exact registry not loaded)')
     (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), 'utf-8')
     fh = (out / 'turns.jsonl').open('a', encoding='utf-8')
 
@@ -226,12 +242,13 @@ async def main_async(a):
             jobs = [guarded(run_dialogue(engine, rows, names, d, run_id, sink)) for d in corpus_m]
             jobs += [guarded(run_c_row(engine, rows, names, r, run_id, sink)) for r in corpus_c]
             await asyncio.gather(*jobs)
-            print('run %s done, spent<=%.3f USD' % (run_id, ledger.spent), flush=True)
+            print('run %s done, spent<=%s USD' % (run_id, 'n/a (qwen)' if ledger is None else '%.3f' % ledger.spent), flush=True)
     finally:
         fh.close()
-        await ledger.close()
+        if ledger is not None:
+            await ledger.close()
         manifest['finished'] = time.time()
-        manifest['spent_upper_usd'] = ledger.spent
+        manifest['spent_upper_usd'] = None if ledger is None else ledger.spent
         (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2, default=str), 'utf-8')
 
 
@@ -253,6 +270,12 @@ def main():
     p.add_argument('--parallel', type=int, default=4, help='dialogues / rows in flight')
     p.add_argument('--config-json', help='extra AIConfig fields as JSON')
     p.add_argument('--resume', action='store_true')
+    p.add_argument('--arm', choices=('mini', 'qwen'), default='mini',
+                   help='mini = OpenAI eval transport; qwen = production llm_router DECISION chain')
+    p.add_argument('--llm-env', default=r'C:/Users/Steve/my-prototype-logistics/backend/python/.env')
+    p.add_argument('--retrieval-snapshot', help='retrieval_snapshot_remote.py output; enables the prod rerank path')
+    p.add_argument('--timeout', default='90')
+    p.add_argument('--quota-from', nargs='*', default=[], help='other ledgers counted against the daily free groups')
     a = p.parse_args()
     asyncio.run(main_async(a))
 
