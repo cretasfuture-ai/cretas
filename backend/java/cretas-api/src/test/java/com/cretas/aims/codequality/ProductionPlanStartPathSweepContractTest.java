@@ -75,6 +75,10 @@ class ProductionPlanStartPathSweepContractTest {
                 assertThat(bodiesOf(lines, method))
                         .as(e.getKey() + "#" + method + " 是开工入口, 必须调用 shortageStartGate.check(")
                         .anyMatch(body -> body.contains("shortageStartGate.check("));
+                // 1551-11: 待审批的强制插单 (批准那一刻才排入) 不能经任何开工入口先开工
+                assertThat(bodiesOf(lines, method))
+                        .as(e.getKey() + "#" + method + " 是开工入口, 必须调用 PendingApprovalStartGuard.check(")
+                        .anyMatch(body -> body.contains("PendingApprovalStartGuard.check("));
             }
         }
     }
