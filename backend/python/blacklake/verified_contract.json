@@ -7,7 +7,8 @@
   "login_success_code": 200,
   "token_path": "data",
   "login_factory_claim": "orgId",
-  "auth_expired_codes": [],
+  "auth_expired_codes": ["401"],
+  "auth_expired_evidence": "OpenAPI接入说明 登录接口调用频次控制: token失效时返回 code=\"401\", subCode=USER_VERIFICATION_ERROR (2026-11-12 read); HTTP 401 is also treated as expired",
   "resources": {
     "project": {
       "mapping_verified": true, "window_verified": true, "updated_only_verified": true,

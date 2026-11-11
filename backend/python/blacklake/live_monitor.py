@@ -14,6 +14,7 @@ import uuid
 from .contracts import BlacklakeError
 from .full_archive import Archive, digest
 from .lineage_probe import TASK_FIELDS, OUTPUT_FIELDS, minimized
+from .live_extras import EXTRA_BUDGET, RESERVE as EXTRA_RESERVE, collect_extras
 from .period_projection import instant
 from .stock_reconciliation import reconcile
 
@@ -335,10 +336,14 @@ def collect(v, previous=None, max_requests=1000):
                     if any(r.get('lastProductCode')!=p['productCode'] for r in rows):raise BlacklakeError('LIVE_BOM_PARENT_UNVERIFIED')
                     bom.extend(rows)
                 data['bom']=minimized(bom);ref_at=now()
+            # Read-only supplements (cost, quality, sales/purchase, finance, outsource, logs): own
+            # per-cycle budget after the existing resources, low frequency; see live_extras.py.
+            extra_state,_=collect_extras(archive,client,data,prior.get('extraState'),projects,
+                                         budget=max(0,min(EXTRA_BUDGET,max_requests-requests-EXTRA_RESERVE)))
             if client.factory_verified is not True:raise BlacklakeError('LIVE_FACTORY_NOT_VERIFIED')
             client.coordination.check_lease()
         return {'data':data,'controls':controls,'parentHashes':{str(p['id']):digest(p) for p in projects},
-                'referenceAt':ref_at,'materialAt':material_at,
+                'referenceAt':ref_at,'materialAt':material_at,'extraState':extra_state,
                 'observedAt':{'workOrders':work_at,'stock':stock_at},
                 'counts':{k:len(rows) for k,rows in data.items()},'pairsNotReturned':len(pairs)-len(seen)},requests
     except Exception as e:

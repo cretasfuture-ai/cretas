@@ -214,7 +214,14 @@ def test_unverified_contract_and_unapproved_origin(tmp_path):
     with pytest.raises(BlacklakeError, match="TIMEZONE"):
         timestamp("2026-10-31T00:00:00")
     assert set(ENDPOINTS) == {"project", "project_expand", "task", "output", "product", "process",
-                             "routing", "materials", "stock_order", "stock", "warehouse", "unit", "bom"}
+                             "routing", "materials", "stock_order", "stock", "warehouse", "unit", "bom",
+                             # 2026-11-12 read-only supplements (live_extras.py), each probed with one page.
+                             "project_cost", "project_cost_detail", "inspection_item", "inspection_spec",
+                             "inspection_order", "inspection_result", "collaborative_task", "sale_order",
+                             "purchase_order", "purchase_requirement", "customer", "vendor", "vendor_price",
+                             "customer_price", "receivable", "receipt", "payable", "payment", "customer_ledger",
+                             "vendor_ledger", "invoicing", "outsource_task", "outsource_deliver_return",
+                             "outsource_receive_return", "equipment", "owner_project", "operation_log"}
 
 
 def test_documented_nested_pagination_does_not_mutate_request():
@@ -329,3 +336,69 @@ def test_verified_empty_output_null_requires_explicit_zero_total():
     assert list(c.pages("output", {})) == [[]]
     with pytest.raises(BlacklakeError, match="PAGINATION_SHAPE"):
         list(c.pages("project", {}))
+
+
+def _verified_client(handler, co):
+    import base64
+    from pathlib import Path
+    import blacklake
+    real = load_contract(str(Path(blacklake.__file__).parent / "verified_contract.json"))
+    return BlacklakeConnector(settings(), real, co, transport=httpx.MockTransport(handler))
+
+
+def _jwt(org="factory-test"):
+    import base64
+    claims = base64.urlsafe_b64encode(json.dumps({"orgId": org}).encode()).decode().rstrip("=")
+    return "h." + claims + ".s"
+
+
+# Documented token-invalid reply (OpenAPI接入说明, 登录接口调用频次控制): HTTP 200 with business code "401".
+EXPIRED = {"code": "401", "data": None, "subCode": "USER_VERIFICATION_ERROR", "msg": "用户认证失败"}
+
+
+@pytest.mark.parametrize("expired", [httpx.Response(200, json=EXPIRED), httpx.Response(401, json=EXPIRED)])
+def test_documented_token_invalid_reply_relogs_once_and_retries_same_request(expired):
+    co = Coordination()
+    co.token, co.factory = "invalidated-by-web-login", "factory-test"
+    calls, replies = [], [expired, httpx.Response(200, json={"code": "01000000", "data": []})]
+
+    def handler(request):
+        calls.append((request.url.path, request.headers.get("x-auth"), request.content))
+        if request.url.path.endswith("_login"):
+            return httpx.Response(200, json={"statusCode": 200, "data": _jwt()})
+        return replies.pop(0)
+
+    assert _verified_client(handler, co).query("product", {"page": {"pageNum": 1}})["code"] == "01000000"
+    assert [p.rsplit("/", 1)[-1] for p, _, _ in calls] == ["queryList2", "_login", "queryList2"]
+    assert calls[0][1] == "invalidated-by-web-login" and calls[2][1] == _jwt() and calls[0][2] == calls[2][2]
+    assert co.token == _jwt()
+
+
+def test_token_still_invalid_after_one_relogin_is_exhausted_without_login_loop():
+    co = Coordination()
+    co.token, co.factory = "invalidated-by-web-login", "factory-test"
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if request.url.path.endswith("_login"):
+            return httpx.Response(200, json={"statusCode": 200, "data": _jwt()})
+        return httpx.Response(200, json=EXPIRED)
+
+    with pytest.raises(BlacklakeError, match="AUTH_REFRESH_EXHAUSTED"):
+        _verified_client(handler, co).query("product", {})
+    assert sum(p.endswith("_login") for p in calls) == 1 and len(calls) == 3
+
+
+def test_other_business_errors_are_not_mistaken_for_token_expiry():
+    co = Coordination()
+    co.token, co.factory = "valid", "factory-test"
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        return httpx.Response(200, json={"code": "01000002", "msg": "参数错误"})
+
+    with pytest.raises(BlacklakeError, match="UPSTREAM_BUSINESS_ERROR:01000002"):
+        _verified_client(handler, co).query("product", {})
+    assert not any(p.endswith("_login") for p in calls)
