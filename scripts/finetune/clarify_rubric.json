@@ -2,7 +2,7 @@
  "version": 1,
  "batch": "INTENT-DISTILL-20261111",
  "generated_by": "scripts/finetune/build_clarify_rubric.py",
- "source_head": "386077fdc6c720c0c341d4a037abab405b18f041",
+ "source_head": "86e1203fb0c7b06277dc0a5e51ce67311eff29a3",
  "purpose": "Luna 与 Terra 各自独立依据本标准判断 NEED_CLARIFY；只读意图的参数来自 Java Tool 源码。老师一致仍只是银标。",
  "rules": [
   {
@@ -805,7 +805,7 @@
  "stats": {
   "read_intents": 173,
   "with_must_ask": 42,
-  "with_defaults": 107,
+  "with_defaults": 108,
   "with_no_params": 23,
   "confusions": 18
  },
@@ -3673,7 +3673,7 @@
     {
      "param": "size",
      "description": "每页数量",
-     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:47",
+     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:48",
      "default": "20"
     }
    ],
@@ -3681,24 +3681,24 @@
     {
      "param": "endDate",
      "description": "订单日期结束 (含), YYYY-MM-DD",
-     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:59"
+     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:61"
     },
     {
      "param": "startDate",
      "description": "订单日期开始 (含), YYYY-MM-DD",
-     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:58"
+     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:60"
     },
     {
      "param": "status",
      "description": "销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED",
-     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:51"
+     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:53"
     }
    ],
    "schema_source": [
     "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:41"
    ],
    "required_source": [
-    "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:67"
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/crm/OrderListTool.java:69"
    ],
    "confusions": [
     "C_ORDER_KIND"
@@ -4102,7 +4102,14 @@
      "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/factorycatalog/ProductSalesRankingTool.java:31"
     }
    ],
-   "defaults": [],
+   "defaults": [
+    {
+     "param": "metric",
+     "description": "排序口径，目前只支持 amount (销售金额)",
+     "source": "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/factorycatalog/ProductSalesRankingTool.java:35",
+     "default": "amount"
+    }
+   ],
    "optional": [
     {
      "param": "limit",
@@ -4114,7 +4121,7 @@
     "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/factorycatalog/ProductSalesRankingTool.java:29"
    ],
    "required_source": [
-    "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/factorycatalog/ProductSalesRankingTool.java:37"
+    "backend/java/cretas-api/src/main/java/com/cretas/aims/ai/tool/impl/factorycatalog/ProductSalesRankingTool.java:44"
    ],
    "confusions": [
     "C_RANKING_OBJECT",
