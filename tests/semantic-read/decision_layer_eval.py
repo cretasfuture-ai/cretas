@@ -36,7 +36,7 @@ sys.path.insert(0, str(HERE))
 
 from ai.config import AIConfig  # noqa: E402
 from ai.orchestrator import Orchestrator  # noqa: E402
-from decision_eval_transport import TURN, BudgetStop, Ledger, _usage_tokens, decision_type  # noqa: E402
+from decision_eval_transport import TURN, UNDERSTOOD, BudgetStop, Ledger, _usage_tokens, decision_type  # noqa: E402
 
 ROLE = 'factory_super_admin'
 
@@ -104,8 +104,8 @@ def assistant_line(kind, intent, names, result):
 
 
 async def run_turn(engine, rows, query, history):
-    calls = []
-    token = TURN.set(calls)
+    calls, understood = [], []
+    token, utoken = TURN.set(calls), UNDERSTOOD.set(understood)
     t = time.perf_counter()
     error = None
     try:
@@ -117,35 +117,35 @@ async def run_turn(engine, rows, query, history):
         result, error = None, type(ex).__name__ + ': ' + str(ex)[:200]
     finally:
         TURN.reset(token)
+        UNDERSTOOD.reset(utoken)
     wall = round((time.perf_counter() - t) * 1000, 1)
     call_rows = []
     for c in calls:
         tin, tout, cached = _usage_tokens(c.get('usage') or {})
         call_rows.append(dict(label=c['label'], model=c['model'], in_tokens=tin, out_tokens=tout,
                               cached_tokens=cached, latency_ms=c.get('latency_ms'), error=c.get('error')))
-    return result, error, wall, call_rows
+    return result, error, wall, call_rows, (understood[-1] if understood else None)
 
 
-def turn_row(base, result, error, wall, calls):
+def turn_row(base, result, error, wall, calls, und=None):
     if result is None:
         kind, intent, top = 'ERROR', None, []
-        timing, extra = {}, {}
+        timing = {}
     else:
         kind, intent, top = outcome_of(result)
         timing = result.timingMs or {}
-        extra = getattr(result, '_eval_extra', None) or {}
     return dict(base, outcome=kind, intent=intent, top=top[:5], error=error, wall_ms=wall, calls=calls,
-                n_calls=len(calls), timing=timing, extra=extra,
+                n_calls=len(calls), timing=timing, understand=und,
                 confidence=None if result is None else result.confidence)
 
 
 async def run_dialogue(engine, rows, names, plan, run_id, sink):
     history = []
     for i, turn in enumerate(plan['turns']):
-        result, error, wall, calls = await run_turn(engine, rows, turn['input'], list(history))
+        result, error, wall, calls, und = await run_turn(engine, rows, turn['input'], list(history))
         row = turn_row(dict(run=run_id, part='M', case_id=plan['id'], turn=i + 1, input=turn['input'],
                             gold_intent=turn['intent'], gold_params=turn['parameters'], gold_basis=turn.get('basis'),
-                            gold_act=turn.get('action'), history_len=len(history)), result, error, wall, calls)
+                            gold_act=turn.get('action'), history_len=len(history)), result, error, wall, calls, und)
         sink(row)
         history.append({'role': 'user', 'content': turn['input']})
         if result is not None:
@@ -154,11 +154,11 @@ async def run_dialogue(engine, rows, names, plan, run_id, sink):
 
 async def run_c_row(engine, rows, names, item, run_id, sink):
     history = render_state(item.get('state'), names)
-    result, error, wall, calls = await run_turn(engine, rows, item['utterance'], history)
+    result, error, wall, calls, und = await run_turn(engine, rows, item['utterance'], history)
     sink(turn_row(dict(run=run_id, part='C', case_id=item['id'], turn=1, input=item['utterance'],
                        gold_intent=item.get('intent'), gold_act=item['dialogue_act'],
                        prev_intent=(item.get('state') or {}).get('prev_intent'), read_only=item.get('read_only'),
-                       history_len=len(history)), result, error, wall, calls))
+                       history_len=len(history)), result, error, wall, calls, und))
 
 
 def git_head():

@@ -47,6 +47,13 @@ class AIConfig:
     rerank_timeout_s: float = 0.6
     rerank_pool_k: int = 50
     rerank_top_k: int = 10
+    # 合并理解 (INTENT-DISTILL E, 2026-11-11): 「目的 + 粗选 (+ 对话动作 / 参数 / 是否先问)」一次结构化调用,
+    # Choice (读概率) 只在需要时才调。缺省关, 行为与旧版一致; 门槛的来由见 ai/matcher/decision.py 的 E 线说明。
+    decision_merged: bool = False
+    # 合并输出的 clarify_probability >= 此值 ⇒ 这一轮先问 (按钮澄清)。
+    decision_clarify_threshold: float = 0.5
+    # 合并输出的 target 把握 < 此值, 或给出了同样说得通的 alternatives ⇒ 才调 Choice。
+    decision_choice_below: float = 0.8  # 开发集 [0.7,0.8) 档直出只对 1/4, 交给 Choice 复核
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -80,6 +87,9 @@ class AIConfig:
             rerank_timeout_s=float(os.environ.get("AI_RERANK_TIMEOUT_MS", "600")) / 1000.0,
             rerank_pool_k=int(os.environ.get("AI_RERANK_POOL_K", "50")),
             rerank_top_k=int(os.environ.get("AI_RERANK_TOP_K", "10")),
+            decision_merged=os.environ.get("AI_DECISION_MERGED", "0").strip().lower() in ("1", "true", "yes", "on"),
+            decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
+            decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
         )
 
 

@@ -38,6 +38,7 @@ PRICES = {MINI: (1.0, 6.0), LUNA: (0.25, 0.0)}
 
 LABEL: contextvars.ContextVar[str] = contextvars.ContextVar('decision_eval_label', default='unlabelled')
 TURN: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar('decision_eval_turn', default=None)
+UNDERSTOOD: contextvars.ContextVar[Optional[list]] = contextvars.ContextVar('decision_eval_understood', default=None)
 
 
 class BudgetStop(RuntimeError):
@@ -171,7 +172,14 @@ def decision_type(ledger: Ledger, chat_model: str = MINI, effort: str = 'low'):
         request_purpose = labelled('purpose')(DecisionMatcher.request_purpose)
         shortlist = labelled('shortlist')(DecisionMatcher.shortlist)
         if hasattr(DecisionMatcher, 'understand'):
-            understand = labelled('understand')(DecisionMatcher.understand)
+            @labelled('understand')
+            async def understand(self, *args, **kwargs):
+                u = await DecisionMatcher.understand(self, *args, **kwargs)
+                sink = UNDERSTOOD.get()
+                if sink is not None:
+                    import dataclasses
+                    sink.append(None if u is None else dict(dataclasses.asdict(u), purpose=u.purpose.value))
+                return u
 
         @labelled('choice')
         async def choose(self, query, role, options, history=None, special_options=False):
@@ -221,4 +229,4 @@ def decision_type(ledger: Ledger, chat_model: str = MINI, effort: str = 'low'):
     return EvalDecision
 
 
-__all__ = ['Ledger', 'BudgetStop', 'decision_type', 'TURN', 'LABEL', 'MINI', 'LUNA', '_usage_tokens']
+__all__ = ['Ledger', 'BudgetStop', 'decision_type', 'TURN', 'UNDERSTOOD', 'LABEL', 'MINI', 'LUNA', '_usage_tokens']

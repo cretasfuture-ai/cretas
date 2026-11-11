@@ -221,6 +221,127 @@ def build_purpose_messages(query: str, role: Optional[str],
             {"role":"user", "content":f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
 
 
+# ===== 合并理解 (INTENT-DISTILL E, 2026-11-11) =====
+# 「请求目的 / 候选粗选 / 对话动作 / 参数理解 / 是否要先问」原来是 2-3 次分开的生成调用
+# (目的 ‖ 粗选, 之后再选), 合成一次结构化输出。⛔ 输出只是候选: 权限过滤、读写判定、
+# 参数落地校验仍在 Java 侧照旧执行; 这里给出的参数只带原话证据, 不替 Java 绑定。
+DIALOGUE_ACTS = ("NEW_TASK", "CHANGE_PARAM", "PAGE", "CANCEL", "NEED_CLARIFY")
+PARAM_SOURCES = ("explicit_turn", "confirmed", "default")
+UNDERSTAND_RULES = (
+    "对话动作：NEW_TASK=开始新任务或换了目标；CHANGE_PARAM=沿用上一轮任务，只改条件/口径/对象，"
+    "或回答系统正在追问的字段；PAGE=对上一轮结果翻页；CANCEL=放弃当前任务（算了/不查了/先别弄）；"
+    "NEED_CLARIFY=必须先问用户才能办。"
+    "需要先问的情形：只有含糊动词（弄/处理/整/搞/安排），说不出是查看还是新建、修改、审批，"
+    "而这个对象既有查询功能又有改数据的功能；两个以上含义不同的功能都说得通且上文排除不了；"
+    "用「这个/那批/这单」指代对象但上文对不上；系统正在追问某个字段，这句话却没有给出它；"
+    "说法命中易混口径且没有限定词能分开。"
+    "不需要问的情形：功能确定，缺的只是有默认值的条件（时间范围、条数、排序、页码），直接办；"
+    "上文能对上的续句，按上一轮任务续接：CHANGE_PARAM 和 PAGE 的 target 就是上一轮在办的那个功能，"
+    "翻页、改页码、改每页条数由系统换算，不需要目录里有翻页功能，也不要因此去问。"
+    "动词决定读写方向：查询类与新建/修改/删除/确认类差一两个字意图就完全不同，不要替用户补出没说的操作意愿。"
+)
+
+
+def build_understand_messages(query: str, role: Optional[str], visible: List[Dict[str, Any]],
+                              size: int = 8, history: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, str]]:
+    """一次调用的提示词。目录放 system 最前面 (与粗选同一份静态前缀, 吃隐式缓存), 规则随后。"""
+    catalog = "\n".join(
+        _catalog_line(r) for r in sorted(visible, key=lambda r: str(r.get("intent_code")))
+    )
+    system = (
+        "你是食品加工厂业务系统的对话理解器。下面是全部意图目录（代码｜名称）：\n" + catalog + "\n\n"
+        + REQUEST_PURPOSE_RULES
+        + "purpose：CURRENT=当前请求业务事实或办理操作（礼貌、委婉、间接的真实请求也算；已确定要办但缺参数也算）；"
+          "INFORMATION_ONLY=只咨询教程、讨论未触发的条件/建议/愿望、否定或汇报已完成的事；"
+          "UNRESOLVED=无法判断当前是否要办理或指代不明。"
+        + UNDERSTAND_RULES
+        + "只输出一个 JSON 对象，字段："
+          '"purpose"；"dialogue_act"（' + "/".join(DIALOGUE_ACTS) + '）；'
+          f'"candidates"（目录里的代码，最多 {size} 个，按可能性从高到低，都不像就给空数组）；'
+          '"target"（最应该交给的代码，CANCEL 或拿不准时给 null）；'
+          '"confidence"（0 到 1，你对 target 就是用户要的功能有多大把握）；'
+          '"alternatives"（除 target 外同样说得通、含义不同的代码，没有就给空数组）；'
+          '"clarify_probability"（0 到 1，这一轮必须先问用户才能办的可能性）；'
+          '"clarify_reason"（一句话，不需要问就给空串）；'
+          '"parameters"（数组，每项 {"name":条件名,"value":值,"source":"explicit_turn|confirmed|default",'
+          '"evidence":本轮原话里对应的原文片段，source 不是 explicit_turn 时给空串}；'
+          "explicit_turn=这句话明确说了，confirmed=沿用上文已确认的值，default=用户没说、按默认值；"
+          "只列这句话或上文真的涉及的条件，不要编造）。"
+    )
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": f"{role_line(role)}\n{history_block(history)}用户说：{query}"}]
+
+
+@dataclass
+class Understanding:
+    purpose: "RequestPurpose"
+    act: str
+    candidates: List[str]
+    target: Optional[str]
+    confidence: float
+    alternatives: List[str]
+    clarify_probability: float
+    clarify_reason: str
+    parameters: List[Dict[str, str]]
+
+
+def _unit(v: Any) -> Optional[float]:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(float(v)):
+        return None
+    return float(v) if 0.0 <= float(v) <= 1.0 else None
+
+
+def parse_understanding(raw: str, visible_codes: set, size: int = 8) -> Optional[Understanding]:
+    """严格解析: 字段缺失 / 类型不对 / 概率越界 -> None (调用方按「拿不到」处理, 不猜)。
+
+    目录外的代码直接丢掉 (不让模型凭空造一个意图码); 证据不在原话里的参数由 Java 落地校验处理,
+    这里只做形状检查。
+    """
+    txt = (raw or "").strip().strip("`")
+    if txt[:4].lower() == "json":
+        txt = txt[4:]
+    try:
+        obj = json.loads(txt.strip())
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(obj, dict):
+        return None
+    try:
+        purpose = RequestPurpose(obj.get("purpose"))
+    except (ValueError, TypeError):
+        return None
+    act = obj.get("dialogue_act")
+    conf, p_clarify = _unit(obj.get("confidence")), _unit(obj.get("clarify_probability"))
+    cands, alts, params = obj.get("candidates"), obj.get("alternatives", []), obj.get("parameters", [])
+    if act not in DIALOGUE_ACTS or conf is None or p_clarify is None:
+        return None
+    if not isinstance(cands, list) or not isinstance(alts, list) or not isinstance(params, list):
+        return None
+    target = obj.get("target")
+    target = str(target) if target not in (None, "") else None
+    if target is not None and target not in visible_codes:
+        target = None
+    out: List[str] = []
+    for c in ([target] if target else []) + [str(x) for x in cands]:
+        if c in visible_codes and c not in out:
+            out.append(c)
+    clean_params: List[Dict[str, str]] = []
+    for p in params:
+        if not isinstance(p, dict) or not p.get("name"):
+            continue
+        src = p.get("source") if p.get("source") in PARAM_SOURCES else None
+        if src is None:
+            continue
+        clean_params.append({"name": str(p["name"])[:40], "value": str(p.get("value", ""))[:80], "source": src,
+                             "evidence": str(p.get("evidence") or "")[:80]})
+    return Understanding(
+        purpose=purpose, act=act, candidates=out[:size], target=target, confidence=conf,
+        alternatives=[str(a) for a in alts if str(a) in visible_codes and str(a) != target][:size],
+        clarify_probability=p_clarify, clarify_reason=str(obj.get("clarify_reason") or "")[:120],
+        parameters=clean_params[:12],
+    )
+
+
 class DecisionMatcher:
     def __init__(self, timeout_s: float = 6.0, k: int = 20, shortlist_size: int = 8):
         self.timeout_s = timeout_s
@@ -256,6 +377,24 @@ class DecisionMatcher:
         except Exception as ex:  # noqa: BLE001
             logger.warning("request purpose unavailable: %s",str(ex)[:200])
             return None
+
+    async def understand(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
+                         history: Optional[List[Dict[str, Any]]] = None) -> Optional[Understanding]:
+        """一次结构化调用代替「目的 + 粗选」两次; 拿不到合法输出 -> None (调用方回落旧的分开调用)。"""
+        codes = {str(r.get("intent_code")) for r in visible}
+
+        def valid(content: str) -> Optional[str]:
+            return None if parse_understanding(content, codes, self.shortlist_size) is not None else "bad_understanding_json"
+
+        payload = {"messages": build_understand_messages(query, role, visible, self.shortlist_size, history),
+                   "max_tokens": 600, "response_format": {"type": "json_object"}}
+        try:
+            body = await self._call(payload, content_validator=valid)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision understand failed: %s", str(ex)[:300])
+            return None
+        content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        return parse_understanding(content, codes, self.shortlist_size)
 
     async def shortlist(self, query: str, role: Optional[str], visible: List[Dict[str, Any]],
                         history: Optional[List[Dict[str, Any]]] = None) -> Optional[List[str]]:
