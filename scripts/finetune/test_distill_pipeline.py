@@ -233,3 +233,45 @@ def test_sealed_fingerprint_hit_and_absent_file(tmp_path):
     assert index.check(text) == 'sealed_holdout'                 # punctuation/space/case-insensitive
     assert index.check('今天冷库温度如何呢') is None
     assert lk.load_sealed_hashes(tmp_path / 'missing.jsonl') is None   # reported as not provided, never as empty
+
+
+def test_claude_teacher_sees_exactly_what_terra_sees(table, monkeypatch):
+    import distill_claude_teacher as ct
+    monkeypatch.setattr(dp, 'RUBRIC', dp.load_rubric(Path(__file__).parent / 'clarify_rubric.json'))
+    row = raw_row(table)
+    t, c = dp.terra_payload(row, table), ct.claude_request(row, table)
+    assert c['system'] == t['instructions'] and c['messages'] == [dict(role='user', content=t['input'])]
+    assert c['model'] == 'claude-fable-5-2'
+    assert 'luna' not in str(c) and 'terra' not in str(c) and 'generator_plan' not in str(c)
+    ok = dict(ok=True, fallback=False, stop_reason='end_turn', model='claude-fable-5-2',
+              text='{"dialogue_act": "NEED_CLARIFY", "intent": "%s"}' % dc.NONE_KEY)
+    assert ct.parse(ok, row)[2] is None
+    assert ct.parse(dict(ok, fallback=True, model='claude-opus-4-8'), row)[2].startswith('served_by_fallback')
+    assert ct.parse(dict(ok, stop_reason='refusal'), row)[2] == 'stop:refusal'
+
+
+def test_adjudication_is_two_of_three_and_kept_apart(table, tmp_path, monkeypatch):
+    import argparse
+    import distill_claude_teacher as ct
+    base = raw_row(table)
+    prev = base['state']['prev_intent']
+    def q(id, luna, terra):
+        tt = lambda a, i: dict(dialogue_act=a, intent=i, issue=None)
+        return dict(base, id=id, dialogue_act=None, intent=None, agreement=False, review_reason='disagree_act',
+                    teachers=dict(luna=tt(*luna), terra=tt(*terra)), teacher_probs={})
+    queue = [q('a', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None)),      # claude sides with terra
+             q('b', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None)),      # claude says a third thing
+             q('c', ('CHANGE_PARAM', prev), ('NEED_CLARIFY', None))]      # claude call failed
+    dc.write_jsonl(tmp_path / 'queue.jsonl', queue)
+    dc.write_jsonl(tmp_path / 'silver.jsonl', [])
+    cl = lambda a, i, issue=None: dict(model='claude-fable-5-2', dialogue_act=a, intent=i, issue=issue)
+    dc.write_jsonl(tmp_path / 'claude-labels.jsonl', [dict(id='a', claude=cl('NEED_CLARIFY', None)),
+                                                     dict(id='b', claude=cl('CANCEL', None)),
+                                                     dict(id='c', claude=cl(None, None, 'call_failed'))])
+    ct.cmd_adjudicate(argparse.Namespace(work=tmp_path, queue=tmp_path / 'queue.jsonl', silver=tmp_path / 'silver.jsonl',
+                                         silver_split_from=[]), table)
+    adj = dc.read_jsonl(tmp_path / 'silver-adjudicated.jsonl')
+    assert [r['id'] for r in adj] == ['a'] and adj[0]['dialogue_act'] == 'NEED_CLARIFY'
+    assert adj[0]['adjudication']['sided_with'] == 'terra' and adj[0]['agreement'] is False
+    assert {r['id'] for r in dc.read_jsonl(tmp_path / 'review-queue-after-claude.jsonl')} == {'b', 'c'}
+    assert not (tmp_path / 'silver.jsonl').read_text(encoding='utf-8')   # unanimous silver untouched
