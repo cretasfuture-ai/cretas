@@ -11,8 +11,10 @@ Usage:
   distill_leak_check.py --in raw.jsonl --out clean.jsonl --dropped dropped.jsonl --report r.json
 """
 import argparse
+import hashlib
 import json
 import sys
+import unicodedata
 from collections import defaultdict
 from pathlib import Path
 
@@ -42,6 +44,25 @@ DEFAULT_PROTECTED = [
     DOCS / 'Cretas意图教师复核-20261105/probes.jsonl',
     DOCS / 'Cretas意图架构只读审计-20261105',          # directory: scanned recursively
 ]
+
+
+SEALED_FINGERPRINTS = DOCS / 'Cretas意图独立验收-20261111/sealed/fingerprints.jsonl'
+NOT_PROVIDED = '独立验收集指纹未提供'
+
+
+def fingerprint(text):
+    """sha256(NFKC -> lower -> drop whitespace and non-alphanumerics, UTF-8): the sealed set's MANIFEST algorithm."""
+    n = ''.join(c for c in unicodedata.normalize('NFKC', text).lower() if c.isalnum())
+    return hashlib.sha256(n.encode('utf-8')).hexdigest()
+
+
+def load_sealed_hashes(path):
+    """Only the ``hash`` field of fingerprints.jsonl is read; no question text exists there and
+    no other file under sealed/ may be opened. Returns None when the file is absent."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    return {json.loads(x)['hash'] for x in path.read_text(encoding='utf-8').splitlines() if x.strip()}
 
 
 def _cjk(s):
@@ -84,6 +105,12 @@ def _bigrams(t):
 
 
 class ProtectedIndex:
+    sealed_hashes = None   # set by attach_sealed(); None means "not provided", never "empty"
+
+    def attach_sealed(self, hashes):
+        self.sealed_hashes = hashes
+        return self
+
     def __init__(self, texts, manifest=None):
         uniq = sorted({normalized(t) for t in texts if normalized(t)})
         self.texts = uniq
@@ -114,6 +141,8 @@ class ProtectedIndex:
         n = normalized(text)
         if not n:
             raise ValueError('Empty utterance')
+        if self.sealed_hashes and fingerprint(text) in self.sealed_hashes:
+            return 'sealed_holdout'
         if n in self.exact:
             return 'exact'
         if self.overlap.overlaps({'text': text}):
@@ -163,16 +192,22 @@ def main():
     ap.add_argument('--dropped')
     ap.add_argument('--report')
     ap.add_argument('--protected', nargs='*', default=None)
+    ap.add_argument('--sealed-fingerprints', default=str(SEALED_FINGERPRINTS))
     a = ap.parse_args()
     if a.self_test:
         print('SELF_TEST', json.dumps(self_test(), ensure_ascii=False))
         return
     index = ProtectedIndex.from_sources(a.protected or DEFAULT_PROTECTED)
+    sealed = load_sealed_hashes(a.sealed_fingerprints)
+    if sealed is None:
+        print(NOT_PROVIDED, '(' + a.sealed_fingerprints + ')')   # never skip silently
+    index.attach_sealed(sealed)
     rows = read_jsonl(a.src)
     clean, dropped, reasons = filter_samples(rows, index)
     write_jsonl(a.out, clean)
     write_jsonl(a.dropped, dropped)
     report = dict(checked=len(rows), clean=len(clean), dropped=len(dropped), reasons=reasons,
+                  sealed_holdout=(NOT_PROVIDED if sealed is None else dict(fingerprints=len(sealed), hits=reasons.get('sealed_holdout', 0))),
                   protected_texts=len(index.texts), protected_sources=index.manifest,
                   method='exact + char-ratio>=.85 + bigram-jaccard>=.6; surface similarity, not embeddings',
                   self_test=self_test(index))

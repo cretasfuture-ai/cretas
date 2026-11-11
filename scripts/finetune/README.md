@@ -233,13 +233,15 @@ GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前
 
 | 文件 | SHA256 |
 |---|---|
-| silver.jsonl（383 条银标） | 12a2ed7ec8eefca0f8aa139b6bfffd923f0f17aacf36d425c0f40620a947fd53 |
-| silver-train.jsonl | 206407c52b6dc0e7f88b135b3e5bc62f4e1fc459eae73c10bb8f06e395246244 |
-| silver-validation.jsonl | 1c72fe1c5e56876a42899d12ad73aa2076821077a6d13c24cec220ca0ab1ca9d |
-| silver-calibration.jsonl | a7c1a9e04a7de154ced88c311d13c1ed7c50fd22b9cd1174783dda53004b9c4a |
-| review-queue.jsonl（117 条人工审核） | 5ec696447cd822d1a63df61e89cb3dcd053cc283299ef6ec37ff078d22d45d93 |
-| labeled-raw.jsonl（两位老师原始结论） | 9edd5f7040a7a2876c691b72ecf29f1f85dcadc632250788ca8934d460f01f0b |
-| raw.jsonl / clean.jsonl | 4e903c2796e80a28b75ee9cc6a89f2f0edb57bb5851641d0fc1f5e90d3cc3f69 / 5f9accd1d22bc7150b8a0a15bded3c3225805d1e43e5f431e88c3b99258bbfae |
-| pilot-report.json | d3e8e8acb3e009e5f803e7d94b874af1b7e420d9d99557993359a6c0a83f76af |
+| silver.jsonl（380 条银标） | 35bb760f25def54a028ac6f1eb0fec661ab031e6f79216317a3bc9743bbbc69e |
+| silver-train.jsonl | d7c7b89e946a19c0e169f5c589e359599bf2fa930784c4301b6d886b2bb3ff4c |
+| silver-validation.jsonl | b9fd5b313245fdc73c554f1eb83a6c651b452aaef1461d7fecb904e3dc8554cf |
+| silver-calibration.jsonl | b10883eea52fd86675bbc444c27a1021d5ea9d855f0ce17168cd3132d90a04fc |
+| review-queue.jsonl（120 条人工审核） | 989dad436bf79a2b61fcc8a87c90a4145ef70bc26075c1446b5388395f1fb818 |
+| labeled-raw.jsonl（两位老师原始结论） | 7e1e30ed98733c41bfeb52ba8a840cb4b6b2aef94c74f4039c5463b5c01ba3e9 |
+| raw.jsonl / clean.jsonl | 4e903c2796e80a28b75ee9cc6a89f2f0edb57bb5851641d0fc1f5e90d3cc3f69 / 2ac0acdd11a6ce4b157f8553ea228610dbd7acb8ca65df338fa8b8c208a1ebc7 |
+| pilot-report.json | e51d919f686acd39902daa6cc2fbb4bd4587e3bfbf5164f931575388f23e135b |
 
-读数见 `pilot-report.json`。要点：老师一致率 76.6%；NEED_CLARIFY 只有 44.7% 一致（Luna 倾向直接选一个意图、Terra 倾向要求澄清），所以银标集里「该澄清」的样本偏少，这是学生训练时必须单独补审的部分，不能把银标集当作澄清判定的代表。
+独立验收集：`distill_leak_check.py` 另用 `--sealed-fingerprints`（默认 `Cretas意图独立验收-20261111/sealed/fingerprints.jsonl`，只读其中的 `hash` 字段，算法 sha256(NFKC→lower→去掉空白与非字母数字字符 的 UTF-8)，不打开 sealed 下任何其他文件）；文件不存在时照常检查并打印「独立验收集指纹未提供」，不静默跳过。试点补跑命中 26 条并已剔除。
+
+读数见 `pilot-report.json`。要点：老师一致率 76.0%；NEED_CLARIFY 只有 47.2% 一致（Luna 倾向直接选一个意图、Terra 倾向要求澄清），所以银标集里「该澄清」的样本偏少，这是学生训练时必须单独补审的部分，不能把银标集当作澄清判定的代表。

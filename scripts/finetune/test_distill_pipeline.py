@@ -165,3 +165,13 @@ def test_rejected_call_stops_run(tmp_path):
         c.call('a', 'decisions', dict(model=dc.LUNA, input='x', questions=[]))
     with pytest.raises(dc.ApiStop):
         c.call('b', 'decisions', dict(model=dc.LUNA, input='y', questions=[]))   # run stays stopped
+
+
+def test_sealed_fingerprint_hit_and_absent_file(tmp_path):
+    text = '查询 库存，A-1！'
+    fp = tmp_path / 'fingerprints.jsonl'
+    fp.write_text('{"hash": "%s", "family": "x"}' % lk.fingerprint('查询库存a1'), encoding='utf-8')
+    index = lk.ProtectedIndex(['完全无关的一句话']).attach_sealed(lk.load_sealed_hashes(fp))
+    assert index.check(text) == 'sealed_holdout'                 # punctuation/space/case-insensitive
+    assert index.check('今天冷库温度如何呢') is None
+    assert lk.load_sealed_hashes(tmp_path / 'missing.jsonl') is None   # reported as not provided, never as empty
