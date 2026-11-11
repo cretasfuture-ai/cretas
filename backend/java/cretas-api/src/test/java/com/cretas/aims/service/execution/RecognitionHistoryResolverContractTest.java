@@ -19,7 +19,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-class RecognitionHistoryResolverTest {
+class RecognitionHistoryResolverContractTest {
 
     private static ConversationMessage user(String text, LocalDateTime at) {
         return ConversationMessage.builder().role(ConversationMessage.Role.USER).content(text).timestamp(at).build();
