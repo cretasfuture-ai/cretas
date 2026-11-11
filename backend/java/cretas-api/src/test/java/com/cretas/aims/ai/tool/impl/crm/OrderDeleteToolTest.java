@@ -22,7 +22,7 @@ class OrderDeleteToolTest {
         order.setId("SO-ID-1");
         order.setOrderNumber("SO-001");
         when(salesService.getSalesOrderById("F001", "SO-ID-1")).thenReturn(order);
-        when(salesService.cancelOrder("F001", "SO-ID-1", "客户取消")).thenReturn(order);
+        when(salesService.cancelOrder("F001", "SO-ID-1", "客户取消", 7L)).thenReturn(order);
 
         Map<String, Object> result = new OrderDeleteTool(salesService, repository)
                 .doExecute("F001", Map.of(
@@ -32,6 +32,7 @@ class OrderDeleteToolTest {
 
         assertThat(result.get("source")).isEqualTo("sales_orders");
         assertThat(result.get("order")).isSameAs(order);
-        verify(salesService).cancelOrder("F001", "SO-ID-1", "客户取消");
+        // 带上操作人: 财务已批准的单要按此人的权限判 (2026-11-11)
+        verify(salesService).cancelOrder("F001", "SO-ID-1", "客户取消", 7L);
     }
 }

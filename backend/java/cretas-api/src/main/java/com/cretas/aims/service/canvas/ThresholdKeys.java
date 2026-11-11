@@ -228,6 +228,16 @@ public final class ThresholdKeys {
      */
     public static final String SALES_DELIVERY_OVER_SHIP_RATE = "sales.delivery.over_ship_rate";
 
+    /**
+     * 销售单财务批准后能不能取消 (2026-11-11 Steve 裁定: 做成工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关
+     * (= 原行为: 只能驳回 / 退款)。开了以后有 {@link #SALES_PERMISSION_CANCEL_APPROVED_ORDER} 权限的人可带原因取消,
+     * 并连带取消自动生成的生产计划和未开工排程。挡得住 / 放得过一个用户动作 ⇒ 闸门类。
+     */
+    public static final String SALES_ORDER_CANCEL_AFTER_APPROVAL = "sales.order.cancel_after_approval";
+
+    /** 「取消已批准销售单」的岗位名单 (逗号分隔岗位码) → 默认只有厂长 (空)。 */
+    public static final String SALES_PERMISSION_CANCEL_APPROVED_ORDER = "sales.permission.cancel_approved_order";
+
     // ==================== 财务分析 (FINANCE) ====================
 
     /** 账龄 90+ 天占比红色预警阈值 (%). Hard-coded default = 20. */
@@ -354,7 +364,9 @@ public final class ThresholdKeys {
             CREDIT_CHECK_MODE,
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
-            CREDIT_PERMISSION_OVERRIDE
+            CREDIT_PERMISSION_OVERRIDE,
+            SALES_ORDER_CANCEL_AFTER_APPROVAL,
+            SALES_PERMISSION_CANCEL_APPROVED_ORDER
     );
 
     /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
@@ -362,6 +374,7 @@ public final class ThresholdKeys {
             INVENTORY_PERMISSION_MATERIAL_TYPE_MAINTAIN,
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
             CREDIT_PERMISSION_OVERRIDE,
+            SALES_PERMISSION_CANCEL_APPROVED_ORDER,
             PRODUCTION_NOTIFY_SCHEDULE_CREATED,
             PRODUCTION_NOTIFY_SCHEDULE_CONFIRMED,
             PRODUCTION_NOTIFY_SCHEDULE_DELAYED,

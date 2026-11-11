@@ -26,7 +26,7 @@ class ThresholdRoleListValidationContractTest {
     @Test
     @DisplayName("所有接收人 / 权限名单 key 都在校验范围内; 其它 key 不受影响")
     void everyRoleListKeyIsCovered() {
-        assertThat(ThresholdKeys.ROLE_LIST_KEYS).hasSize(11); // 阳性对照: 集合没被清空 (+ 质检待决定通知 2026-11-11)
+        assertThat(ThresholdKeys.ROLE_LIST_KEYS).hasSize(12); // 阳性对照: 集合没被清空 (+ 质检待决定通知 + 取消已批准销售单, 2026-11-11)
         for (String key : ThresholdKeys.ROLE_LIST_KEYS) {
             assertThat(ThresholdKeys.validateSemantics(key, "nobody")).as(key).isNotNull();
             assertThat(ThresholdKeys.validateSemantics(key, "warehouse_manager,factory_super_admin")).as(key).isNull();

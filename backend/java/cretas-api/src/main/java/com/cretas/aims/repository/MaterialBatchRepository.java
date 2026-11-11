@@ -400,6 +400,20 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
             @Param("excludedWarehouseId") String excludedWarehouseId,
             @Param("today") java.time.LocalDate today);
 
+    /**
+     * 挂在这张销售单上、还在厂里的客供料批次数 (财务批准后取消前的闸, 2026-11-11)。已报废 / 已用完 / 已耗尽的不算
+     * (报废走的是只改状态不改数量的处置, 不排除就永远拦着)。过期 / 不良品仍是客户的货、还在厂里, 照算。
+     */
+    @Query("SELECT COUNT(m) FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
+           "AND m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED " +
+           "AND m.sourceSalesOrderId = :salesOrderId " +
+           "AND m.status NOT IN (com.cretas.aims.entity.enums.MaterialBatchStatus.SCRAPPED, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.USED_UP, " +
+           "com.cretas.aims.entity.enums.MaterialBatchStatus.DEPLETED) " +
+           "AND (m.receiptQuantity - m.usedQuantity) > 0")
+    long countCustomerOwnedWithStockForSalesOrder(@Param("factoryId") String factoryId,
+                                                  @Param("salesOrderId") String salesOrderId);
+
     /** Customer-owned FEFO candidates are isolated to the same customer and sales order. */
     @Query("SELECT m FROM MaterialBatch m WHERE m.factoryId = :factoryId " +
            "AND m.materialTypeId = :materialTypeId " +

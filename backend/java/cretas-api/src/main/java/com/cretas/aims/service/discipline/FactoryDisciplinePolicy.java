@@ -220,6 +220,13 @@ public class FactoryDisciplinePolicy {
                 ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE);
     }
 
+    // ===================== 销售单财务批准后取消 (2026-11-11) =====================
+
+    /** 只有显式 1 才开 (默认 0 = 原行为: 批准后只能驳回 / 退款); 写错的值按关。 */
+    public boolean cancelApprovedSalesOrderAllowed(String factoryId) {
+        return thresholds.getInteger(factoryId, ThresholdKeys.SALES_ORDER_CANCEL_AFTER_APPROVAL, 0) == 1;
+    }
+
     private static <E extends Enum<E>> E parseEnum(Class<E> type, String raw, E strictest,
                                                    String factoryId, String key) {
         if (raw == null || raw.isBlank()) {

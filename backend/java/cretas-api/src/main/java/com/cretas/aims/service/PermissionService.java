@@ -49,6 +49,12 @@ public interface PermissionService {
     String CREDIT_OVERRIDE_PERMISSION = "credit:override";
 
     /**
+     * 取消财务已批准的销售单 (工厂开了 sales.order.cancel_after_approval 才用得上)。默认只给厂长,
+     * 工厂可在阈值设置里加岗位 (ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER)。
+     */
+    String SALES_ORDER_CANCEL_APPROVED_PERMISSION = "sales_order:cancel_approved";
+
+    /**
      * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的判定, 与 {@link #hasPermission} 对上面三个权限码是<b>同一套</b>
      * 逻辑 (厂长恒有; 其余按工厂阈值里配的岗位名单, 没配用默认名单), 不会给出不同结论。
      * 其它权限码一律 false。默认实现 false (测试替身用)。

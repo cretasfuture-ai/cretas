@@ -189,6 +189,22 @@ const kanbanColumns = computed(() =>
   Object.entries(statusMap).map(([status, v]: [string, { text: string }]) => ({ status, label: v.text }))
 );
 
+/**
+ * 财务已批准的订单能不能取消: 本厂开了 sales.order.cancel_after_approval 且当前用户有权限 (后端判, 2026-11-11)。
+ * 读不到就当不能 —— 不给一个必然 409 的按钮。
+ */
+const canCancelApproved = ref(false);
+async function loadCancelPolicy() {
+  if (!factoryId.value) return;
+  try {
+    const res = await get<{ canCancelApproved: boolean }>(`/${factoryId.value}/sales/orders/cancel-policy`);
+    canCancelApproved.value = !!(res?.success && res.data?.canCancelApproved);
+  } catch (error) {
+    console.error('[SalesOrders] load cancel policy failed:', error);
+    canCancelApproved.value = false;
+  }
+}
+
 /** UX-A2: secondary-action dropdown ("操作 ▾") shown last in row toolbar. */
 function rowActionsFor(row: TableRow) {
   const baseActions = computeRowActions(
@@ -202,7 +218,7 @@ function rowActionsFor(row: TableRow) {
   if (status === 'DRAFT') {
     secondaryActions.push({ id: 'edit', icon: '✎', label: '编辑订单', aiHint: '修改这张销售订单' });
   }
-  if (['DRAFT', 'CONFIRMED'].includes(status)) {
+  if (['DRAFT', 'CONFIRMED'].includes(status) || (status === 'FINANCE_APPROVED' && canCancelApproved.value)) {
     secondaryActions.push({
       id: 'cancel', icon: '×', label: '取消订单', danger: true,
       requiresConfirm: true, aiHint: '取消这张销售订单',
@@ -952,7 +968,7 @@ async function loadGoldSummary() {
 
 onMounted(() => {
   loadData(); loadCustomers(); loadProducts(); loadSalesEmployees();
-  loadGoldSummary(); loadWarehouses(); loadSuppliedMaterialOptions();
+  loadGoldSummary(); loadWarehouses(); loadSuppliedMaterialOptions(); loadCancelPolicy();
   window.addEventListener('beforeunload', handleBeforeUnload);
 });
 onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeUnload); });
@@ -1823,6 +1839,11 @@ function openCancelDialog(ids: string[]) {
   cancelDialogVisible.value = true;
 }
 
+// 财务已批准的订单: 只有本厂开了「批准后可取消」且有权限才能取消, 会连带取消自动生成的生产计划和未开工排程 (2026-11-11)
+const pendingCancelHasApproved = computed(() =>
+  tableData.value.some((r) => pendingCancelIds.value.includes(String(r.id)) && String(r.status) === 'FINANCE_APPROVED')
+);
+
 // 最终原因: 选"其他"用 textarea 内容, 否则用 dropdown 选项.
 const resolvedCancelReason = computed<string>(() =>
   cancelReasonCode.value === '其他' ? cancelReasonOther.value.trim() : cancelReasonCode.value
@@ -1847,7 +1868,8 @@ async function submitCancel(): Promise<void> {
         undefined,
         { params: { reason } }
       );
-      if (res?.success) { ElMessage.success('取消成功'); }
+      // 后端说清连带取消了哪些生产计划 / 排程, 原样给用户看
+      if (res?.success) { ElMessage.success(res.message || '取消成功'); }
       else { ElMessage.error(res?.message || '取消失败'); return; }
     } else {
       const results = await Promise.allSettled(
@@ -3320,6 +3342,14 @@ function handleMergePurchase() {
       width="460px"
       destroy-on-close
     >
+      <el-alert
+        v-if="pendingCancelHasApproved"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+        title="订单已经财务批准：取消后会一并取消它自动生成的生产计划和未开工的排程；已开工、已发货或已有收款的订单不能这样取消。本厂需在「业务阈值」开启 sales.order.cancel_after_approval，且你有对应权限。"
+      />
       <el-form label-width="90px">
         <el-form-item label="取消原因" required>
           <el-select v-model="cancelReasonCode" placeholder="请选择取消原因" style="width:100%">
