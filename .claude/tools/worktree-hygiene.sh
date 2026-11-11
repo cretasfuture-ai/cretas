@@ -15,6 +15,11 @@
 #         / locked 的 / 近 120 分钟内 HEAD 动过的(提交/切分支 = 多半有人在用; WH_NO_RECENT=1 可关闭)
 #   其余: 有未提交改动 -> 先在它自己的分支上 WIP commit (detached 且有改动 -> 跳过并报告, 不替它建分支)
 #         -> 摘 junction (只摘链接) -> git worktree remove (⛔ 绝不加 --force) -> 删不掉就报告, 不强删
+#
+# 占用探测 (--apply 与 --auto 删除前都做, 2026-11-11): 先把目录改名再改回。Windows 上目录或其任一子目录是某个进程的
+#   当前目录时改名会失败 ⇒ 判为「占用中」, 一个文件都不删。原因: git worktree remove 是先删文件、最后删目录;
+#   会话正在用的目录会被删光内容、只剩一个删不掉的空壳 (2026-11-11 organizer 会话与推送排查会话都是这样丢了工作目录)。
+#   活动标记与时间窗口只是推断, 这一步问的是操作系统。Linux/macOS 上改名不受当前目录限制, 探测恒为「未占用」, 只靠前面的判据。
 set -u
 MAX=30
 mode="${1:-}"; shift || true
@@ -28,6 +33,13 @@ common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 2
 main_wt=$(dirname "$common")
 here=$(git rev-parse --show-toplevel)
 norm() { echo "$1" | tr -d '\r' | sed 's#\\#/#g' | tr 'A-Z' 'a-z'; }
+in_use() { # 0 = 有进程占用 (或无法确认), 1 = 可以删。见文件头「占用探测」。
+  local p="${1%/}" probe="${1%/}.wh-probe-$$"
+  [ -d "$p" ] || return 1
+  mv "$p" "$probe" 2>/dev/null || return 0
+  mv "$probe" "$p" 2>/dev/null || { echo "⚠️ 占用探测改名后还原失败, 请手工改回: $probe -> $p"; return 0; }
+  return 1
+}
 git -C "$main_wt" worktree prune
 mapfile -t paths < <(git -C "$main_wt" worktree list --porcelain | awk '/^worktree /{sub(/^worktree /,""); print}')
 count=${#paths[@]}
@@ -120,6 +132,7 @@ fi
 
 if [ "${WH_DRY:-0}" = 1 ]; then echo "WH_DRY=1: 只列出, 不删 (${#removable[@]} 个可回收)"; exit 0; fi
 for p in "${removable[@]}"; do
+  if in_use "$p"; then echo "KEEP(占用中) $p"; continue; fi   # 先问操作系统, 再动任何东西 (含 WIP commit)
   if [ -n "$(git -C "$p" status --porcelain)" ]; then
     br=$(git -C "$p" branch --show-current)
     [ -z "$br" ] && { echo "SKIP(detached 有改动) $p"; continue; }
