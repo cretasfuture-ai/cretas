@@ -57,6 +57,10 @@ class WorkflowBomRevisionRepositoryQueryValidationTest {
                         "F-JPA", "FAMILY-NONE", BomRecipe.Status.ACTIVE))
                 .isEmpty();
         assertThat(recipeRepository.lockByIdAndFactoryId("BOM-NONE", "F-JPA")).isEmpty();
+        // N1: 整族配方头按 id 升序加锁 (调价批准 / 包材成本更正共用)
+        assertThat(recipeRepository.findBomFamilyIdByIdAndFactoryId("BOM-NONE", "F-JPA")).isEmpty();
+        assertThat(recipeRepository.lockFamilyByFactoryIdAndBomFamilyIdOrderById("F-JPA", "FAMILY-NONE"))
+                .isEmpty();
         assertThat(seasoningRepository
                 .findByRecipeIdAndWorkflowProcessNodeIdOrderBySeqAsc("BOM-NONE", "process-node"))
                 .isEmpty();
