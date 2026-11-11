@@ -8,7 +8,6 @@ import json
 
 from ai import registry
 from ai.config import AIConfig
-from ai.dto import CandidateIntentDto, MatchMethod
 from ai.matcher.decision import (
     CLARIFY_KEY,
     NONE_KEY,
@@ -103,12 +102,13 @@ def test_parse_understanding_rejects_shape_errors_instead_of_guessing():
     assert parse_understanding(json.dumps({**ok, "target": "MADE_UP"}), CODES).target is None
 
 
-def test_understand_prompt_shares_the_cached_catalog_prefix_with_shortlist():
+def test_understand_prompt_carries_the_same_catalog_block_as_shortlist():
+    """目录块逐字相同 (同一个 _catalog_line), 合并调用不会悄悄换一份目录口径。"""
     a = build_understand_messages("看订单", "operator", ROWS)[0]["content"]
     b = build_shortlist_messages("看订单", "operator", ROWS)[0]["content"]
-    catalog_end = b.index("\n\n")
-    assert a[:catalog_end] == b[:catalog_end].replace("意图粗筛器", "对话理解器")[:catalog_end] or \
-        a.split("\n", 1)[1][:catalog_end] == b.split("\n", 1)[1][:catalog_end]
+    block = b.split("：\n", 1)[1].split("\n\n", 1)[0]
+    assert "ORDER_LIST｜订单列表（订单）" in block
+    assert a.split("：\n", 1)[1].startswith(block + "\n\n")
 
 
 # ---------------------------------------------------------------- orchestration

@@ -51,6 +51,7 @@ class AIConfig:
     # Choice (读概率) 只在需要时才调。缺省关, 行为与旧版一致; 门槛的来由见 ai/matcher/decision.py 的 E 线说明。
     decision_merged: bool = False
     # 合并输出的 clarify_probability >= 此值 ⇒ 这一轮先问 (按钮澄清)。
+    # 0.5 取自开发集平台 [0.3, 0.7] 的中点: 该区间内两个方向的错误数都不变 (见 PR 回执), 不靠门槛压某一方向。
     decision_clarify_threshold: float = 0.5
     # 合并输出的 target 把握 < 此值, 或给出了同样说得通的 alternatives ⇒ 才调 Choice。
     decision_choice_below: float = 0.8  # 开发集 [0.7,0.8) 档直出只对 1/4, 交给 Choice 复核

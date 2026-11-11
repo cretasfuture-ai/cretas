@@ -22,7 +22,7 @@ import pathlib
 import random
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 import httpx
 
