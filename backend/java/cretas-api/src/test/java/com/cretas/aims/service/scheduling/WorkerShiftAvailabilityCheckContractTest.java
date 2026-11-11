@@ -53,7 +53,7 @@ class WorkerShiftAvailabilityCheckContractTest {
     @BeforeEach
     void setUp() {
         check = new WorkerShiftAvailabilityCheck(shiftAssignments, shifts, users,
-                leaveRequests, workerAssignments);
+                leaveRequests, workerAssignments, realPermissions());
         when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(worker(1L, "operator")));
         // Invalid/missing roster tests deliberately stop before these optional fact reads.
         lenient().when(leaveRequests.findOverlappingActive(eq(FACTORY), any(Long.class), any(), any())).thenReturn(List.of());
@@ -131,6 +131,38 @@ class WorkerShiftAvailabilityCheckContractTest {
         verify(shiftAssignments).findByFactoryIdAndWorkDateBetween(FACTORY,
                 START.toLocalDate().minusDays(1), START.toLocalDate());
         verify(leaveRequests).findOverlappingActive(FACTORY, 1L, START.toLocalDate(), START.toLocalDate());
+    }
+
+    /** B6: 厂长亲自上线 (有排班) 要算可派人手, 不能因为岗位名不在 5 个名单里被丢掉。 */
+    @Test
+    void factoryHeadWithAShiftCountsAsAvailableWorker() {
+        when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(worker(9L, "factory_super_admin")));
+        when(shifts.findByIdAndFactoryId("DAY", FACTORY))
+                .thenReturn(Optional.of(shift("DAY", LocalTime.of(8, 0), LocalTime.of(16, 0), false)));
+        when(shiftAssignments.findByFactoryIdAndWorkDateBetween(
+                FACTORY, START.toLocalDate().minusDays(1), END.toLocalDate()))
+                .thenReturn(List.of(assignment(9L, START.toLocalDate(), "DAY", ShiftAssignmentStatus.SCHEDULED)));
+
+        var result = check.check(FACTORY, START, END, 1);
+
+        assertThat(result.available()).isTrue();
+        assertThat(result.availableWorkerIds()).containsExactly(9L);
+    }
+
+    /** B6 阴性对照: 同样有排班但没有报工权限的岗位 (人事) 不算人手; 没排班的厂长也不算 (要「报工权限 + 有排班」两样)。 */
+    @Test
+    void personWithoutReportingPermissionOrWithoutShiftDoesNotCount() {
+        when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(
+                worker(3L, "hr_admin"), worker(9L, "factory_super_admin")));
+        // 只有人事有排班; 厂长没有排班记录
+        when(shiftAssignments.findByFactoryIdAndWorkDateBetween(
+                FACTORY, START.toLocalDate().minusDays(1), END.toLocalDate()))
+                .thenReturn(List.of(assignment(3L, START.toLocalDate(), "DAY", ShiftAssignmentStatus.SCHEDULED)));
+
+        var result = check.check(FACTORY, START, END, 1);
+
+        assertThat(result.availableWorkerIds()).isEmpty();
+        assertThat(result.available()).isFalse();
     }
 
     @Test
@@ -285,5 +317,12 @@ class WorkerShiftAvailabilityCheckContractTest {
         leave.setEndDate(END.toLocalDate());
         leave.setStatus(status);
         return leave;
+    }
+
+    /** 真实的权限矩阵 (不是桩): 仓库层返回「成功的空结果」, 落到内置矩阵判定。 */
+    private static com.cretas.aims.service.impl.PermissionServiceImpl realPermissions() {
+        com.cretas.aims.service.impl.PermissionServiceImpl service = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(service);
+        return service;
     }
 }

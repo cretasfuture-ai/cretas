@@ -52,7 +52,7 @@ class FactoryBusinessReadinessReaderContractTest {
             mock(com.cretas.aims.service.unit.UnitContractService.class);
     private final FactoryBusinessReadinessReader reader = new FactoryBusinessReadinessReader(resolver, warehouses,
             suppliers, customers, raws, purchases, plans, deliveries, relations, users, packagingSpecs,
-            purchaseSpecs, units);
+            purchaseSpecs, units, realPermissions());
     private final List<ProductRuntime> live = List.of(new ProductRuntime("p1", "盒装", "PUBLISHED", 7L, 1, "b", 1, "匹配"));
     private final List<CapabilityView> all = List.of(included("materials"), included("processes"), included("products"));
 
@@ -62,9 +62,8 @@ class FactoryBusinessReadinessReaderContractTest {
         when(relations.findByFactoryIdAndSupplierIdOrderByActiveDescPreferredDescCreatedAtDesc("FA", "S1"))
                 .thenReturn(List.of(relation("S1", "M1", true)));
         when(customers.countByFactoryIdAndIsActive("FA", true)).thenReturn(2L);
-        for (String role : List.of("procurement_manager", "workshop_supervisor", "sales_manager")) {
-            when(users.findByFactoryIdAndRoleCode("FA", role)).thenReturn(List.of(holder(role)));
-        }
+        when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(
+                holder("procurement_manager"), holder("workshop_supervisor"), holder("sales_manager")));
         when(resolver.resolvePurchaseInboundWh("FA")).thenReturn("wh-log");
         when(resolver.resolveSalesOutboundWh("FA")).thenReturn("wh-log");
         when(resolver.resolveProductionRawWh("FA")).thenReturn("wh-log");
@@ -145,19 +144,55 @@ class FactoryBusinessReadinessReaderContractTest {
     @Test void aDomainWithNobodyInThePostIsMissingAndInactiveHoldersDoNotCount() {
         var inactive = holder("procurement_manager");
         inactive.setIsActive(false);
-        when(users.findByFactoryIdAndRoleCode("FA", "procurement_manager")).thenReturn(List.of(inactive));
-        when(users.findByFactoryIdAndRoleCode("FA", "warehouse_manager")).thenReturn(List.of());
-        when(users.findByFactoryIdAndRoleCode("FA", "workshop_supervisor")).thenReturn(List.of());
-        when(users.findByFactoryIdAndRoleCode("FA", "operator")).thenReturn(List.of());
+        // 采购 / 生产两个岗位的人停用了或不在, 只剩销售经理在岗
+        when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(inactive, holder("sales_manager")));
         var rows = reader.read("FA", all, live);
         assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").state()).isEqualTo("MISSING");
         assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").remedyKey()).isEqualTo("USERS");
         assertThat(check(domain(rows, "PRODUCTION"), "PRODUCTION_POST_HOLDER").state()).isEqualTo("MISSING");
         assertThat(check(domain(rows, "SHIPPING"), "SHIPPING_POST_HOLDER").state())
                 .as("销售经理仍在岗").isEqualTo("MET");
-        when(users.findByFactoryIdAndRoleCode("FA", "sales_manager")).thenThrow(new IllegalStateException("db"));
+        when(users.findByFactoryIdAndIsActive("FA", true)).thenThrow(new IllegalStateException("db"));
         assertThat(check(domain(reader.read("FA", all, live), "SHIPPING"), "SHIPPING_POST_HOLDER").state())
                 .isEqualTo("UNKNOWN");
+    }
+
+    /** B5: 一人厂 (只有厂长) 具备下单 / 报工 / 发货权限, 三个检查都应该是 MET, 不能永远「未就绪」。 */
+    @Test void aOnePersonFactoryWhereOnlyTheFactoryHeadExistsIsReady() {
+        when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(holder("factory_super_admin")));
+        var rows = reader.read("FA", all, live);
+        assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").state()).isEqualTo("MET");
+        assertThat(check(domain(rows, "PRODUCTION"), "PRODUCTION_POST_HOLDER").state()).isEqualTo("MET");
+        assertThat(check(domain(rows, "SHIPPING"), "SHIPPING_POST_HOLDER").state()).isEqualTo("MET");
+    }
+
+    /** B5 阴性对照: 没有相关权限的岗位 (人事 / 财务) 不算有人能干这件事。 */
+    @Test void holdersWithoutTheRelevantPermissionDoNotCount() {
+        when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(
+                holder("hr_admin"), holder("quality_inspector")));
+        var rows = reader.read("FA", all, live);
+        assertThat(check(domain(rows, "PURCHASE"), "PURCHASE_POST_HOLDER").state()).isEqualTo("MISSING");
+        assertThat(check(domain(rows, "PRODUCTION"), "PRODUCTION_POST_HOLDER").state()).isEqualTo("MISSING");
+        assertThat(check(domain(rows, "SHIPPING"), "SHIPPING_POST_HOLDER").state()).isEqualTo("MISSING");
+    }
+
+    /** B5: 原来点名的岗位全部仍然算 (默认等于现有名单, 上线后行为不变)。 */
+    @Test void everyRoleNamedByTheOldListStillCounts() {
+        for (String role : List.of("procurement_manager", "warehouse_manager")) {
+            when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(holder(role)));
+            assertThat(check(domain(reader.read("FA", all, live), "PURCHASE"), "PURCHASE_POST_HOLDER").state())
+                    .as(role).isEqualTo("MET");
+        }
+        for (String role : List.of("workshop_supervisor", "operator")) {
+            when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(holder(role)));
+            assertThat(check(domain(reader.read("FA", all, live), "PRODUCTION"), "PRODUCTION_POST_HOLDER").state())
+                    .as(role).isEqualTo("MET");
+        }
+        for (String role : List.of("sales_manager", "warehouse_manager")) {
+            when(users.findByFactoryIdAndIsActive("FA", true)).thenReturn(List.of(holder(role)));
+            assertThat(check(domain(reader.read("FA", all, live), "SHIPPING"), "SHIPPING_POST_HOLDER").state())
+                    .as(role).isEqualTo("MET");
+        }
     }
 
     @Test void independentSuppliersAndMaterialsWithoutAValidRelationshipAreNotReadyToPurchase() {
@@ -259,5 +294,12 @@ class FactoryBusinessReadinessReaderContractTest {
     }
     private static Check check(BusinessDomain domain, String code) {
         return domain.checks().stream().filter(row -> code.equals(row.code())).findFirst().orElseThrow();
+    }
+
+    /** 真实的权限矩阵 (不是桩): 仓库层返回「成功的空结果」, 落到内置矩阵判定。 */
+    private static com.cretas.aims.service.impl.PermissionServiceImpl realPermissions() {
+        com.cretas.aims.service.impl.PermissionServiceImpl service = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(service);
+        return service;
     }
 }
