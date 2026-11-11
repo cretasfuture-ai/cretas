@@ -184,6 +184,42 @@ public class FactoryDisciplinePolicy {
                 ThresholdKeys.PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE);
     }
 
+    // ===================== 动态质检表整张判 FAIL 的范围 (2026-11-11) =====================
+
+    public enum InspectionFailScope {
+        /** 任一项不合格整张 FAIL (原行为; 也是认不出时的最严口径)。 */
+        ANY_ITEM,
+        /** 关键 / 主要项不合格整张 FAIL; 只有次要项不合格 ⇒ 条件合格, 交质量经理决定 (默认)。 */
+        MINOR_FOR_REVIEW,
+        /** 只有关键项不合格整张 FAIL; 主要 / 次要项不合格 ⇒ 条件合格, 交质量经理决定。 */
+        CRITICAL_ONLY;
+
+        /** 这个严重程度的项不合格, 是否判整张 FAIL。没标严重程度 (null) 按关键项算 —— 不知道多严重就按最严。 */
+        public boolean failsWholeSheet(com.cretas.aims.entity.enums.QualitySeverity severity) {
+            if (severity == null || severity == com.cretas.aims.entity.enums.QualitySeverity.CRITICAL) {
+                return true;
+            }
+            return switch (this) {
+                case ANY_ITEM -> true;
+                case MINOR_FOR_REVIEW -> severity != com.cretas.aims.entity.enums.QualitySeverity.MINOR;
+                case CRITICAL_ONLY -> false;
+            };
+        }
+    }
+
+    /** 默认 = Steve 裁定的 MINOR_FOR_REVIEW (= 迁移全局默认行); 写错的值按最严 ANY_ITEM。 */
+    public static final InspectionFailScope DEFAULT_INSPECTION_FAIL_SCOPE = InspectionFailScope.MINOR_FOR_REVIEW;
+
+    public InspectionFailScope inspectionFailScope(String factoryId) {
+        String raw = thresholds.getString(factoryId, ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE,
+                DEFAULT_INSPECTION_FAIL_SCOPE.name());
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_INSPECTION_FAIL_SCOPE;
+        }
+        return parseEnum(InspectionFailScope.class, raw, InspectionFailScope.ANY_ITEM, factoryId,
+                ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE);
+    }
+
     private static <E extends Enum<E>> E parseEnum(Class<E> type, String raw, E strictest,
                                                    String factoryId, String key) {
         if (raw == null || raw.isBlank()) {

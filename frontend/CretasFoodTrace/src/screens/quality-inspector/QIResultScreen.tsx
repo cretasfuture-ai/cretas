@@ -31,7 +31,7 @@ export default function QIResultScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<RouteProps>();
   const insets = useSafeAreaInsets();
-  const { recordId, passed, dispositionRequired } = route.params;
+  const { recordId, passed, dispositionRequired, reviewItems } = route.params;
   const [record, setRecord] = useState<QualityRecord | null>(null);
 
   useEffect(() => {
@@ -49,7 +49,12 @@ export default function QIResultScreen() {
     : isFullyPassed
       ? t('result.inspectionPassed')
       : t('result.inspectionFailed');
-  const resultDescription = isConditional
+  // 动态质检表: 只有按本厂设置不判整批不合格的项目不合格 ⇒ 说清是哪几项、由谁决定。
+  // 批次之前已判不合格 (dispositionRequired) 时以那句为准, 不再说「不判整批不合格」。
+  const flaggedForReview = isConditional && !dispositionRequired && !!reviewItems && reviewItems.length > 0;
+  const resultDescription = flaggedForReview
+    ? `${(reviewItems ?? []).join('、')} 不合格。按本厂设置不判整批不合格，已通知质量经理决定。`
+    : isConditional
     ? '该批次存在不合格样本，完成处置审批前不得进入包装或出货流程'
     : isFullyPassed
       ? t('result.passedDescription')
@@ -152,7 +157,9 @@ export default function QIResultScreen() {
             <View style={styles.nextStepText}>
               <Text style={styles.nextStepTitle}>{t('result.needsHandling')}</Text>
               <Text style={styles.nextStepDesc}>
-                {isConditional
+                {flaggedForReview
+                  ? '你不用再操作：质量经理会看这几项，决定放行还是处置。可以继续检下一批。'
+                  : isConditional
                   ? '请提交隔离、返工、报废或有条件放行处置，并等待审批'
                   : t('result.pleaseIsolateBatch')}
               </Text>
@@ -160,7 +167,7 @@ export default function QIResultScreen() {
           </View>
         )}
 
-        {canDispose && record && Number.isFinite(Number(record.batchId)) && (
+        {canDispose && !flaggedForReview && record && Number.isFinite(Number(record.batchId)) && (
           <View style={styles.dispositionContainer}>
             <DispositionSuggestion
               batchId={Number(record.batchId)}
