@@ -24,7 +24,7 @@ def main():
         act = (r.get('understand') or {}).get('act') or r.get('act')
         feed.append(json.dumps(dict(case=r['run'] + '|' + r['case_id'], intent=r.get('intent'), sentence=r['input'],
                                     act=act, outcome=r['outcome']), ensure_ascii=False))
-    proc = subprocess.run(['java', '-Dfile.encoding=UTF-8', '-cp', a.classpath,
+    proc = subprocess.run(['java', '-Dfile.encoding=UTF-8', '-Dstdout.encoding=UTF-8', '-cp', a.classpath,
                            'com.cretas.aims.service.execution.ReadParamProbe'],
                           input='\n'.join(feed) + '\n', capture_output=True, text=True, encoding='utf-8')
     if proc.returncode != 0:
