@@ -32,6 +32,8 @@ import SupplierManagementScreen from "../screens/management/SupplierManagementSc
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 type ProcurementPurchaseStackParamList = {
   PurchaseOrderList: undefined;
   PurchaseOrderCreate: undefined;
@@ -84,6 +86,7 @@ function SupplierStackNavigator() {
 }
 
 export function ProcurementManagerNavigator() {
+  const todoEntry = useMyTodoEntry();
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
@@ -141,6 +144,7 @@ export function ProcurementManagerNavigator() {
         }}
       />
 
+      {todoTabScreen(Tab, todoEntry, 'pm-tab-oa-todo')}
       <Tab.Screen
         name="PMProfileTab"
         component={ProfileStackNavigator}

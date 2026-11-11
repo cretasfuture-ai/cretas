@@ -4,6 +4,7 @@
  * 端点:
  *   GET /api/mobile/{factoryId}/my-todos          → ApiResponse<List<TodoItemDTO>>
  *   GET /api/mobile/{factoryId}/my-todos/count     → ApiResponse<Integer>
+ *   GET /api/mobile/{factoryId}/my-todos/types     → ApiResponse<TodoType[]>（能办的类型，决定入口显不显示）
  *
  * 审批动作: 调各域现有端点（不重写）。
  *
@@ -79,6 +80,14 @@ class MyTodoApiClient {
   /** 获取我的待办列表（按角色过滤） */
   async getMyTodos(factoryId?: string): Promise<{ success: boolean; data: TodoItemDTO[]; message?: string }> {
     return apiClient.get(this.getBasePath(factoryId));
+  }
+
+  /**
+   * 我「能办」的待办类型（B4 App 按权限拼界面）。非空 = 显示「待办」入口（此刻 0 条也显示），空 = 不显示。
+   * 判断全在后端（按本人权限 + 个人覆盖 + 插单审批画布点名），App 不抄一份岗位/权限映射。
+   */
+  async getMyTodoTypes(factoryId?: string): Promise<{ success: boolean; data: TodoType[]; message?: string }> {
+    return apiClient.get(this.getBasePath(factoryId) + '/types');
   }
 
   /** 获取待办数量（RN 导航 tab 徽标用） */

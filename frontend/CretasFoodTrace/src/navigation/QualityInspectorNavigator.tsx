@@ -28,6 +28,8 @@ import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspe
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
 import { useFrontlineAIEntryEnabled } from '../hooks/useFrontlineAIEntry';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 const RootStack = createNativeStackNavigator();
@@ -136,6 +138,7 @@ export default function QualityInspectorNavigator() {
 }
 
 function QualityInspectorTabNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
   const bottomInset = Math.max(insets.bottom, 6);
 
@@ -183,6 +186,7 @@ function QualityInspectorTabNavigator() {
         component={RecordsStack}
         options={{ tabBarLabel: '拍检记录', tabBarButtonTestID: 'qi-tab-records' }}
       />
+      {todoTabScreen(Tab, todoEntry, 'qi-tab-oa-todo')}
       <Tab.Screen
         name="QIProfileTab"
         component={ProfileStack}
