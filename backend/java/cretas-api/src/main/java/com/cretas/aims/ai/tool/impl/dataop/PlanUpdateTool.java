@@ -75,6 +75,19 @@ public class PlanUpdateTool extends AbstractBusinessTool {
         plannedQuantity.put("minimum", 0);
         properties.put("plannedQuantity", plannedQuantity);
 
+        // 纪律排查 A6: 完工时的实际产量 —— 与计划数量是两回事, ⛔ 不能拿计划数量顶替
+        Map<String, Object> actualQuantity = new HashMap<>();
+        actualQuantity.put("type", "number");
+        actualQuantity.put("description", "实际产量 (把计划改成已完成时必须有, 用户说的实际做了多少; 用户没说就不要填)");
+        actualQuantity.put("minimum", 0);
+        properties.put("actualQuantity", actualQuantity);
+
+        // 纪律排查 A12: 工厂开了「缺料时拦开工」时, 用户明确说了「缺料也要开工」及原因才填
+        Map<String, Object> forceStartReason = new HashMap<>();
+        forceStartReason.put("type", "string");
+        forceStartReason.put("description", "把计划改成执行中 (开工) 时: 缺料还没解决、用户明确要求仍然开工的原因; 用户没说就不要填");
+        properties.put("forceStartReason", forceStartReason);
+
         // startDate: 开始日期（可选）
         Map<String, Object> startDate = new HashMap<>();
         startDate.put("type", "string");
@@ -125,12 +138,25 @@ public class PlanUpdateTool extends AbstractBusinessTool {
         return Collections.singletonList("planId");
     }
 
+    /** 纪律排查 A6: 改成「已完成」必须先问到实际产量 —— 没说就追问, ⛔ 不拿计划量当实际产量入成品库。 */
+    @Override
+    protected List<String> validateRequiredParams(Map<String, Object> params) {
+        List<String> missing = new java.util.ArrayList<>(super.validateRequiredParams(params));
+        Object status = params.get("status");
+        if (status != null && "COMPLETED".equalsIgnoreCase(status.toString().trim())
+                && (params.get("actualQuantity") == null || params.get("actualQuantity").toString().isBlank())) {
+            missing.add("actualQuantity");
+        }
+        return missing;
+    }
+
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = new HashMap<>();
         questions.put("planId", "请问您要更新哪个生产计划？请提供计划ID或计划编号。");
         questions.put("status", "请问要将计划状态设置为什么？（如：执行中、已暂停、已完成等）");
         questions.put("plannedQuantity", "请问计划数量要调整为多少？");
+        questions.put("actualQuantity", "这个计划实际做出来多少？请说实际产量（不是计划数量）。");
         questions.put("startDate", "请问新的开始日期是什么时候？（格式：YYYY-MM-DD）");
         questions.put("endDate", "请问新的结束日期是什么时候？（格式：YYYY-MM-DD）");
         questions.put("priority", "请问优先级要设置为什么？（LOW/NORMAL/HIGH/URGENT）");
@@ -147,6 +173,8 @@ public class PlanUpdateTool extends AbstractBusinessTool {
         displayNames.put("planId", "生产计划ID");
         displayNames.put("status", "计划状态");
         displayNames.put("plannedQuantity", "计划数量");
+        displayNames.put("actualQuantity", "实际产量");
+        displayNames.put("forceStartReason", "强制开工原因");
         displayNames.put("startDate", "开始日期");
         displayNames.put("endDate", "结束日期");
         displayNames.put("priority", "优先级");
@@ -165,6 +193,8 @@ public class PlanUpdateTool extends AbstractBusinessTool {
         String planId = getString(params, "planId");
         String status = getString(params, "status");
         BigDecimal plannedQuantity = getBigDecimal(params, "plannedQuantity");
+        BigDecimal actualQuantity = getBigDecimal(params, "actualQuantity");
+        String forceStartReason = getString(params, "forceStartReason");
         String startDate = getString(params, "startDate");
         String endDate = getString(params, "endDate");
         String priority = getString(params, "priority");
@@ -184,13 +214,16 @@ public class PlanUpdateTool extends AbstractBusinessTool {
         // 状态变更走专用方法
         if (status != null) {
             updated = switch (status.toUpperCase()) {
-                case "IN_PROGRESS" -> productionPlanService.startProduction(factoryId, planId);
+                // A12: 缺料闸拦下时服务端 409 说清缺什么; 用户明确给了强制开工原因才带上 (原因记入缺料实例)
+                case "IN_PROGRESS" -> productionPlanService.startProduction(factoryId, planId, getUserId(context),
+                        forceStartReason);
                 case "PAUSED" -> productionPlanService.pauseProduction(factoryId, planId);
                 // completedBy 用会话里那个真人 (getUserId(context)); 拿不到就传 null。
                 // ⛔ 不兜底一个写死的 id —— 下游 ProductionCompletedEvent 的监听器原来就是
                 //    这么写死了 0L 的, 而 prod 的 users 表里没有 id=0。
+                // A6: 实际产量只取用户说的实际产量 (validateRequiredParams 已保证有); ⛔ 不拿计划数量顶替
                 case "COMPLETED" -> productionPlanService.completeProduction(factoryId, planId,
-                        plannedQuantity != null ? plannedQuantity : existing.getPlannedQuantity(),
+                        actualQuantity,
                         getUserId(context),
                         // A7: 超产时服务端要原因; 用户在对话里给的 reason 原样带过去, 没给就由服务端 409 追问
                         reason);

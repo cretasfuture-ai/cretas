@@ -56,6 +56,12 @@ public class ProcessingBatchStartTool extends AbstractBusinessTool {
         supervisorId.put("description", "生产负责人ID，必须指定当前负责人");
         properties.put("supervisorId", supervisorId);
 
+        // 纪律排查 A12: 工厂开了「缺料时拦开工」时, 用户明确说了「缺料也要开工」及原因才填
+        Map<String, Object> forceStartReason = new HashMap<>();
+        forceStartReason.put("type", "string");
+        forceStartReason.put("description", "缺料还没解决、用户明确要求仍然开工时的原因; 用户没说就不要填");
+        properties.put("forceStartReason", forceStartReason);
+
         schema.put("properties", properties);
         schema.put("required", Arrays.asList("batchId", "supervisorId"));
 
@@ -76,7 +82,8 @@ public class ProcessingBatchStartTool extends AbstractBusinessTool {
         Integer supervisorId = getInteger(params, "supervisorId");
 
         // 2. 调用服务开始生产
-        ProductionBatch batch = processingService.startProduction(factoryId, batchId, supervisorId);
+        ProductionBatch batch = processingService.startProduction(factoryId, batchId, supervisorId,
+                getString(params, "forceStartReason"));
 
         // 3. 构建返回结果
         Map<String, Object> result = new HashMap<>();
