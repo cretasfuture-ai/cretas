@@ -234,6 +234,10 @@ class MyTodoAggregatorServiceTest {
                 service, "workflowEngineService", workflowEngineService);
         org.springframework.test.util.ReflectionTestUtils.setField(
                 service, "purchaseOrderRepository", purchaseOrderRepository);
+        // 待办按权限出数 (B13): 用真实的权限判定, 不是桩
+        com.cretas.aims.service.impl.PermissionServiceImpl permissions = new com.cretas.aims.service.impl.PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(permissions);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "permissionService", permissions);
     }
 
     /**
@@ -333,6 +337,14 @@ class MyTodoAggregatorServiceTest {
             report.setSubmittedBy(42L);
             report.setSubmittedAt(NOW.minusMinutes(15));
 
+            // B9: 报损审批默认只给厂长; 这个工厂把「报损审批」授给了财务经理, 他的待办里才出报损
+            var thresholds = org.mockito.Mockito.mock(com.cretas.aims.service.canvas.ThresholdResolverService.class);
+            when(thresholds.getString(eq(FACTORY_ID),
+                    eq(com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE), any()))
+                    .thenReturn("finance_manager");
+            org.springframework.test.util.ReflectionTestUtils.setField(
+                    org.springframework.test.util.ReflectionTestUtils.getField(service, "permissionService"),
+                    "thresholdResolver", thresholds);
             when(wastageReportService.listPending(eq(FACTORY_ID), eq("finance_manager"), any(Pageable.class)))
                     .thenReturn(new PageImpl<>(List.of(report)));
             when(warehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull("WH-001", FACTORY_ID))

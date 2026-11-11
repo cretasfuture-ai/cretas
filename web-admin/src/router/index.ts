@@ -852,8 +852,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: {
               requiresAuth: true,
               title: '不良品处置',
-              module: 'quality',
-              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+              // B14: 按质检模块权限放行 (后端 quality:read / read_write), 不再叠岗位白名单
+              module: 'quality'
             }
           },
           {
@@ -863,8 +863,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             meta: {
               requiresAuth: true,
               title: '批次召回',
-              module: 'quality',
-              roles: ['quality_manager', 'factory_super_admin', 'platform_admin', 'permission_admin']
+              // B14: 按质检模块权限放行 (后端 quality:read / read_write, 召回后端本来没有岗位限制)
+              module: 'quality'
             }
           },
           {

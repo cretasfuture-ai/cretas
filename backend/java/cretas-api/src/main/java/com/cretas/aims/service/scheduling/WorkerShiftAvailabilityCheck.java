@@ -14,6 +14,7 @@ import com.cretas.aims.repository.WorkerAssignmentRepository;
 import com.cretas.aims.repository.hr.AttendanceShiftRepository;
 import com.cretas.aims.repository.hr.EmployeeShiftAssignmentRepository;
 import com.cretas.aims.repository.hr.LeaveRequestRepository;
+import com.cretas.aims.service.PermissionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -51,14 +52,15 @@ public class WorkerShiftAvailabilityCheck {
     public static final String NO_SCHEDULE_DATA = "人员未核对：没有排班数据";
     private static final String INSUFFICIENT = "人员不足：已验证可用人员不足";
     private static final String AVAILABLE = "人员排班可用：已验证人数满足需求";
-    private static final Set<String> PRODUCTION_ROLES = Set.of(
-            "operator", "yield_operator", "workshop_supervisor", "team_leader", "group_leader");
+    /** 能算作「可派人手」的权限: 有报工权限即可 (按权限, 不按岗位名; 厂长亲自上线也算)。 */
+    public static final String REPORTING_PERMISSION = "work_report:read_write";
 
     private final EmployeeShiftAssignmentRepository shiftAssignments;
     private final AttendanceShiftRepository shifts;
     private final UserRepository users;
     private final LeaveRequestRepository leaveRequests;
     private final WorkerAssignmentRepository workerAssignments;
+    private final PermissionService permissions;
 
     @Transactional(readOnly = true)
     public Result check(String factoryId, LocalDateTime start, LocalDateTime end,
@@ -94,6 +96,19 @@ public class WorkerShiftAvailabilityCheck {
             }
         }
 
+        // 谁具备报工权限: 一次算好。权限配置读不到 (仓库异常) = 人员未验证, 不能把异常抛成 500 也不能当没人
+        Set<Long> reporters = new java.util.HashSet<>();
+        try {
+            for (User user : userById.values()) {
+                if (permissions.hasPermission(user, REPORTING_PERMISSION)) {
+                    reporters.add(user.getId());
+                }
+            }
+        } catch (RuntimeException failure) {
+            log.warn("人员核验读取失败: factoryId={}, source=permission, type={}", factoryId, failure.getClass().getSimpleName());
+            return Result.unverified(required, UNVERIFIED);
+        }
+
         Map<Long, Candidate> candidates = new HashMap<>();
         Map<String, Optional<AttendanceShift>> shiftCache = new HashMap<>();
         boolean unknownFact = false;
@@ -115,7 +130,7 @@ public class WorkerShiftAvailabilityCheck {
                 continue;
             }
             Candidate candidate = candidates.computeIfAbsent(userId, ignored -> new Candidate(user));
-            if (!productionRole(user)) {
+            if (!reporters.contains(user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(user, start, end);
@@ -182,7 +197,7 @@ public class WorkerShiftAvailabilityCheck {
         Set<Long> available = new LinkedHashSet<>();
         boolean unknownCandidate = unknownFact;
         for (Candidate candidate : candidates.values()) {
-            if (!productionRole(candidate.user)) {
+            if (!reporters.contains(candidate.user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(candidate.user, start, end);
@@ -321,10 +336,6 @@ public class WorkerShiftAvailabilityCheck {
 
     private static boolean validWindow(LocalDateTime start, LocalDateTime end) {
         return start.isBefore(end) && !end.isAfter(start.plusDays(7));
-    }
-
-    private static boolean productionRole(User user) {
-        return user != null && PRODUCTION_ROLES.contains(user.getRoleCode());
     }
 
     private static EmploymentEvidence employmentEvidence(User user, LocalDateTime start, LocalDateTime end) {

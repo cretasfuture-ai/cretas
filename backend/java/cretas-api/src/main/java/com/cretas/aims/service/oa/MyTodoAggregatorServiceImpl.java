@@ -24,6 +24,7 @@ import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
 import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.inventory.PaymentRequestService;
 import com.cretas.aims.service.inventory.PurchaseService;
@@ -46,13 +47,10 @@ import java.util.stream.Collectors;
 /**
  * 我的待办聚合服务实现 — RN OA 待办中心后端。
  *
- * <p>角色映射（常量，不可变）:
- * <ul>
- *   <li>finance_manager → {PURCHASE_FINANCE_REVIEW, SALES_FINANCE_REVIEW, PRICE_ANOMALY,
- *       STOCKTAKE_APPROVAL, RETURN_FINANCE_REVIEW, SALES_PRICE_ADJUSTMENT, WASTAGE_APPROVAL}</li>
- *   <li>cashier → {PAYMENT_DISBURSE}</li>
- *   <li>其他 → 空集合</li>
- * </ul>
+ * <p>按权限出数 (纪律排查 B13, Steve 2026-11-10; 不再按角色名写死「只有财务经理 / 出纳有待办」):
+ * 每类待办对应一组权限 (任一即可, 见 {@link #TYPE_PERMISSIONS}), 调用方的岗位具备其中一项才出这一类。
+ * 默认值下 finance_manager / cashier / 厂长拿到的就是原来的那几类; 其它岗位按自己的权限拿到相应的类,
+ * 没有任何相关权限的岗位仍然是空集合。
  *
  * <p>fail-soft 原则: 每个域查询都包在独立 try/catch 中，单域失败 log warn + 该类型返空，
  * 不影响其他域正常返回，不拖垮整体请求（符合 .claude/rules 禁降级假数据规范）。
@@ -92,6 +90,10 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
 
     @Autowired(required = false)
     private PurchaseOrderRepository purchaseOrderRepository;
+
+    /** 按权限出数用; 同上是字段注入 (本类多构造器, 不动构造器参数)。缺失 = 所有人都没有待办, 不放开。 */
+    @Autowired(required = false)
+    private PermissionService permissionService;
 
     // ─── Config ────────────────────────────────────────────────────────────
 
@@ -161,32 +163,66 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         this.detailThreshold = detailThreshold;
     }
 
-    // ─── Role → TodoType mapping ───────────────────────────────────────────
+    // ─── TodoType → 所需权限 (任一即可) ─────────────────────────────────────
 
-    private static final Map<String, Set<TodoType>> ROLE_TYPES;
+    /**
+     * 每类待办要求调用方具备的权限 (任一)。门槛取各类审批 / 处理接口自己的门槛, 所以「列表里出现 = 点进去能办」:
+     * <ul>
+     *   <li>采购 / 销售财审、价格异常、退货财审: {@code finance:read_write} (这些接口的 @RequirePermission)</li>
+     *   <li>盘点差异 / 改价: 各自的审批码 {@code approval_xxx:approve} (谁能批由权限配置决定)</li>
+     *   <li>报损: {@code wastage:approve}; 付款: {@code payment:disburse} (默认出纳); 都是可配置岗位名单的权限码</li>
+     *   <li>强制插单: 排程 / 生产读写 (插单审批接口的门槛), 再叠加 OA 当前节点的审批岗位</li>
+     * </ul>
+     */
+    static final Map<TodoType, List<String>> TYPE_PERMISSIONS;
 
     static {
-        Map<String, Set<TodoType>> m = new HashMap<>();
-        m.put("finance_manager", Collections.unmodifiableSet(
-                new LinkedHashSet<>(Arrays.asList(
-                        TodoType.PURCHASE_FINANCE_REVIEW,
-                        TodoType.SALES_FINANCE_REVIEW,
-                        TodoType.PRICE_ANOMALY,
-                        TodoType.STOCKTAKE_APPROVAL,
-                        TodoType.RETURN_FINANCE_REVIEW,
-                        TodoType.SALES_PRICE_ADJUSTMENT,
-                        TodoType.WASTAGE_APPROVAL))));
-        m.put("cashier", Collections.unmodifiableSet(
-                new LinkedHashSet<>(Arrays.asList(
-                        TodoType.PAYMENT_DISBURSE))));
-        ROLE_TYPES = Collections.unmodifiableMap(m);
+        Map<TodoType, List<String>> m = new java.util.EnumMap<>(TodoType.class);
+        m.put(TodoType.PURCHASE_FINANCE_REVIEW, List.of("finance:read_write"));
+        m.put(TodoType.SALES_FINANCE_REVIEW, List.of("finance:read_write"));
+        m.put(TodoType.PRICE_ANOMALY, List.of("finance:read_write"));
+        m.put(TodoType.STOCKTAKE_APPROVAL, List.of(
+                com.cretas.aims.service.workflow.ApprovalAuthority.code(
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_STOCKTAKE)));
+        m.put(TodoType.RETURN_FINANCE_REVIEW, List.of("finance:read_write"));
+        m.put(TodoType.SALES_PRICE_ADJUSTMENT, List.of(
+                com.cretas.aims.service.workflow.ApprovalAuthority.code(
+                        com.cretas.aims.service.impl.PermissionServiceImpl.APPROVAL_PRICE_ADJUSTMENT)));
+        m.put(TodoType.WASTAGE_APPROVAL, List.of(PermissionService.WASTAGE_APPROVE_PERMISSION));
+        m.put(TodoType.PAYMENT_DISBURSE, List.of(PermissionService.PAYMENT_DISBURSE_PERMISSION));
+        m.put(TodoType.FORCE_INSERT_APPROVAL, List.of("scheduling:read_write", "production:read_write"));
+        TYPE_PERMISSIONS = Collections.unmodifiableMap(m);
+    }
+
+    /** 调用方岗位在本厂具备权限的待办类型 (保持枚举声明顺序)。 */
+    private Set<TodoType> typesFor(String factoryId, String callerRole) {
+        if (permissionService == null || callerRole == null || callerRole.isBlank()) {
+            return Collections.emptySet();
+        }
+        Set<TodoType> out = new LinkedHashSet<>();
+        for (TodoType type : TodoType.values()) {
+            List<String> codes = TYPE_PERMISSIONS.get(type);
+            if (codes == null) continue;
+            try {
+                for (String code : codes) {
+                    if (permissionService.roleHasPermission(factoryId, callerRole, code)) {
+                        out.add(type);
+                        break;
+                    }
+                }
+            } catch (RuntimeException failure) {
+                // fail-soft: 权限配置读不到时这一类待办不出 (宁可少给不多给), 不影响其它类
+                log.warn("[MyTodoAggregator] 权限读取失败, 跳过 type={} factoryId={}: {}", type, factoryId, failure.getMessage());
+            }
+        }
+        return out;
     }
 
     // ─── API ───────────────────────────────────────────────────────────────
 
     @Override
     public List<TodoItemDTO> listTodos(String factoryId, String callerRole) {
-        Set<TodoType> types = ROLE_TYPES.getOrDefault(callerRole, Collections.emptySet());
+        Set<TodoType> types = typesFor(factoryId, callerRole);
         if (types.isEmpty()) {
             return Collections.emptyList();
         }
@@ -227,7 +263,46 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
             case SALES_PRICE_ADJUSTMENT  -> fetchSalesPriceAdjustment(factoryId);
             case WASTAGE_APPROVAL        -> fetchWastageApproval(factoryId, callerRole);
             case PAYMENT_DISBURSE        -> fetchPaymentDisburse(factoryId);
+            case FORCE_INSERT_APPROVAL   -> fetchForceInsertApproval(factoryId, callerRole);
         };
+    }
+
+    // ── 强制插单审批 ─────────────────────────────────────────────────────
+
+    /**
+     * 强制插单待审批 —— 与采购财审同一口径: 问 OA, 取「当前活动节点的 approverRoles 含调用方岗位」的 RUNNING 实例。
+     * 审批动作走通用的 OA 实例端点 (instanceId + expectedNodeId), 与盘点审批一样, App 不需要单独的审批接口。
+     */
+    private List<TodoItemDTO> fetchForceInsertApproval(String factoryId, String callerRole) {
+        if (workflowEngineService == null || callerRole == null || callerRole.isBlank()) {
+            return Collections.emptyList();
+        }
+        Page<ApprovalWorkflowInstance> page = workflowEngineService.findPendingForRole(
+                factoryId, callerRole, "FORCE_INSERT", PageRequest.of(0, 200));
+        if (page == null || page.getContent() == null || page.getContent().isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<TodoItemDTO> todos = new ArrayList<>();
+        for (ApprovalWorkflowInstance inst : page.getContent()) {
+            String planId = inst.getBusinessEntityId();
+            if (planId == null || planId.isBlank()) continue;
+            todos.add(TodoItemDTO.builder()
+                    .type(TodoType.FORCE_INSERT_APPROVAL)
+                    .refId(planId)
+                    .refNumber(planId)
+                    .title("强制插单审批 — " + planId)
+                    .amount(null)
+                    .counterparty("")
+                    .submittedBy(inst.getInitiatedBy() != null ? String.valueOf(inst.getInitiatedBy()) : null)
+                    .submittedAt(inst.getInitiatedAt())
+                    .needDetail(false)
+                    .detailPath(null)
+                    .instanceId(inst.getId())
+                    .expectedNodeId(inst.getCurrentNodeIds() == null || inst.getCurrentNodeIds().isEmpty()
+                            ? null : inst.getCurrentNodeIds().get(0))
+                    .build());
+        }
+        return todos;
     }
 
     // ── 采购财审 ─────────────────────────────────────────────────────────

@@ -45,10 +45,12 @@ class TransferSuperAdminSelfApprovalTest {
 
     private TransferServiceImpl service;
 
-    private static User user(Long id, boolean active) {
+    private static User user(Long id, boolean active, String role) {
         User user = new User();
         user.setId(id);
         user.setIsActive(active);
+        user.setFactoryId(FACTORY_ID);
+        user.setRoleCode(role);
         return user;
     }
 
@@ -61,13 +63,12 @@ class TransferSuperAdminSelfApprovalTest {
 
     private boolean allowsSelfApproval(List<String> roles, Long initiatorId) {
         return Boolean.TRUE.equals(ReflectionTestUtils.invokeMethod(
-                service, "allowsSuperAdminSelfApproval", FACTORY_ID, roles, initiatorId));
+                service, "allowsSoleApproverSelfApproval", FACTORY_ID, roles, initiatorId));
     }
 
     @Test
     void soleSuperAdminMayApproveOwnTransfer() {
-        when(userRepository.findByFactoryIdAndRoleCode(FACTORY_ID, SUPER_ADMIN))
-                .thenReturn(List.of(user(ADMIN_ID, true)));
+        when(userRepository.findById(ADMIN_ID)).thenReturn(java.util.Optional.of(user(ADMIN_ID, true, SUPER_ADMIN)));
 
         assertTrue(allowsSelfApproval(List.of(SUPER_ADMIN), ADMIN_ID),
                 "全厂唯一的工厂总监发起的调拨必须能自己批, 否则永久卡在草稿");
@@ -75,8 +76,7 @@ class TransferSuperAdminSelfApprovalTest {
 
     @Test
     void superAdminCannotBypassNodeMeantForAnotherRole() {
-        when(userRepository.findByFactoryIdAndRoleCode(FACTORY_ID, WAREHOUSE_MANAGER))
-                .thenReturn(List.of());
+        when(userRepository.findById(ADMIN_ID)).thenReturn(java.util.Optional.of(user(ADMIN_ID, true, SUPER_ADMIN)));
 
         // 节点指定仓库主管审批时, 超管自审批就不是"解死锁"而是"绕过审批"
         assertFalse(allowsSelfApproval(List.of(WAREHOUSE_MANAGER), ADMIN_ID),
@@ -85,8 +85,7 @@ class TransferSuperAdminSelfApprovalTest {
 
     @Test
     void nonSuperAdminInitiatorStillNeedsSecondPairOfEyes() {
-        when(userRepository.findByFactoryIdAndRoleCode(FACTORY_ID, SUPER_ADMIN))
-                .thenReturn(List.of(user(ADMIN_ID, true)));
+        when(userRepository.findById(OTHER_ID)).thenReturn(java.util.Optional.of(user(OTHER_ID, true, WAREHOUSE_MANAGER)));
 
         assertFalse(allowsSelfApproval(List.of(SUPER_ADMIN), OTHER_ID),
                 "发起人不是工厂总监时, 职责分离照旧生效");
@@ -94,8 +93,7 @@ class TransferSuperAdminSelfApprovalTest {
 
     @Test
     void deactivatedSuperAdminDoesNotUnlockSelfApproval() {
-        when(userRepository.findByFactoryIdAndRoleCode(FACTORY_ID, SUPER_ADMIN))
-                .thenReturn(List.of(user(ADMIN_ID, false)));
+        when(userRepository.findById(ADMIN_ID)).thenReturn(java.util.Optional.of(user(ADMIN_ID, false, SUPER_ADMIN)));
 
         assertFalse(allowsSelfApproval(List.of(SUPER_ADMIN), ADMIN_ID),
                 "停用账号不该解锁任何审批路径");
