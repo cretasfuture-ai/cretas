@@ -47,7 +47,7 @@ class BudgetStop(RuntimeError):
 
 
 class QuotaWait(BudgetStop):
-    """Today's free-token group is used up: stop and resume after 00:00 UTC (Beijing 08:00)."""
+    """Kept for callers that catch it; the ledger no longer raises it (paid usage continues instead)."""
 
 
 # Daily free-token groups (organizer 2026-11-11): never spill into paid usage.
@@ -155,16 +155,15 @@ class Ledger:
         reserve_tokens = len(encoded.encode('utf-8')) // 2 + max_out
         with self.lock:
             used = self.group_used.get((day, group), 0)
-            if not self.paid and used + reserve_tokens > DAILY_GROUP_LIMIT[group] * GROUP_SAFETY:
-                raise QuotaWait('free group %s used %d tokens on UTC %s (limit %d x %.1f); resume after 00:00 UTC'
-                                % (group, used, day, DAILY_GROUP_LIMIT[group], GROUP_SAFETY))
+            # Free group first; once it is used up, continue on paid usage (Steve 2026-11-11: never stop to
+            # wait for the free quota). The USD cap below still applies; each row says which it used.
+            billing = 'paid' if (self.paid or used + reserve_tokens > DAILY_GROUP_LIMIT[group] * GROUP_SAFETY)                 else 'free_group'
             self.group_used[(day, group)] = used + reserve_tokens
             if self.spent + self.extra_spent + reserve > self.cap:
                 raise BudgetStop('cap %.2f reached (spent %.4f)' % (self.cap, self.spent + self.extra_spent))
             self.spent += reserve
         label = LABEL.get()
-        rec: Dict[str, Any] = dict(at=time.time(), label=label, model=model, endpoint=endpoint,
-                                   billing='paid' if self.paid else 'free_group')
+        rec: Dict[str, Any] = dict(at=time.time(), label=label, model=model, endpoint=endpoint, billing=billing)
         t = time.perf_counter()
         try:
             async with self.sem:
