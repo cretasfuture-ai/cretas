@@ -25,6 +25,9 @@ public interface IDisposalRecordService {
      */
     DisposalRecord createDisposalRecord(DisposalRecord record);
 
+    /** 这个角色在本厂有没有「报废审批」权限 (App 的审批按钮读它, 与 approve / reject 的后端守卫是同一份判断)。 */
+    boolean canApprove(String factoryId, String role);
+
     /**
      * 审批报废记录 (通过 → APPROVED, 触发库存扣减)。
      *

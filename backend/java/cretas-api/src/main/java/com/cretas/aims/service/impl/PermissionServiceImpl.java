@@ -589,9 +589,11 @@ public class PermissionServiceImpl implements PermissionService {
         String action = parts[1];
 
         // 缓存查询 (5min TTL)
+        // 岗位也进缓存键: 无 id 的探针账号 (roleHasPermission) 只靠岗位区分, 不带岗位会把 A 岗位的答案发给 B 岗位
         String cacheKey = (user.getId() == null ? "0" : user.getId())
             + ":" + permissionCode
-            + ":" + (user.getFactoryId() == null ? "" : user.getFactoryId());
+            + ":" + (user.getFactoryId() == null ? "" : user.getFactoryId())
+            + ":" + role.name();
         long now = System.currentTimeMillis();
         long[] exp = resolveCache.get(cacheKey);
         if (exp != null && exp[0] > now) {
@@ -630,6 +632,11 @@ public class PermissionServiceImpl implements PermissionService {
                     com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_WASTAGE_APPROVE, ""),
             CREDIT_OVERRIDE_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.CREDIT_PERMISSION_OVERRIDE, ""),
+            PAYMENT_DISBURSE_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.FINANCE_PERMISSION_PAYMENT_DISBURSE, "cashier"),
+            DISPOSAL_APPROVE_PERMISSION, new ConfigurablePermission(
+                    com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_DISPOSAL_APPROVE,
+                    "finance_manager"),
             SALES_ORDER_CANCEL_APPROVED_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER, ""));
 
@@ -655,6 +662,38 @@ public class PermissionServiceImpl implements PermissionService {
             }
         }
         return false;
+    }
+
+    @Override
+    public boolean roleHasPermission(String factoryId, String roleCode, String permissionCode) {
+        if (permissionCode == null || roleCode == null || roleCode.isBlank()) {
+            return false;
+        }
+        final FactoryUserRole probeRole;
+        try {
+            probeRole = FactoryUserRole.valueOf(roleCode.trim().toLowerCase());
+        } catch (IllegalArgumentException unknownRole) {
+            return false;
+        }
+        // 用一个没有 id 的探针账号走 hasPermission 的同一条链: 不叠加个人覆盖 (overrides 对空 id 返回空)。
+        // 只覆写读取方法, 不写 User 的角色字段 (不是「写用户角色」的路径)。
+        User probe = new User() {
+            @Override
+            public FactoryUserRole getRoleEnum() {
+                return probeRole;
+            }
+
+            @Override
+            public String getFactoryId() {
+                return factoryId;
+            }
+
+            @Override
+            public String getRoleCode() {
+                return probeRole.name();
+            }
+        };
+        return hasPermission(probe, permissionCode);
     }
 
     @Override

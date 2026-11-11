@@ -66,6 +66,17 @@ class DisposalRecordApiClient {
   }
 
   /**
+   * 当前账号能不能审批报废 (按「报废审批」权限判断, 与后端 approve / reject 的守卫是同一份判断)。
+   * GET /api/mobile/{factoryId}/disposal-records/approval-permission
+   * ⛔ 读不到就抛, 由调用方按「不能审批」处理, 不要默认 true。
+   */
+  async getApprovalPermission(factoryId?: string): Promise<boolean> {
+    const response = await apiClient.get<any>(`${this.getPath(factoryId)}/approval-permission`);
+    const data = response?.data ?? response;
+    return data?.canApprove === true;
+  }
+
+  /**
    * 1. 获取报废记录列表（分页）
    * GET /api/mobile/{factoryId}/disposal-records
    */

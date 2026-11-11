@@ -26,11 +26,11 @@ import { PermissionGatedAction } from '../../components/permission/PermissionGat
 const disposalLogger = logger.createContextLogger('DisposalManagement');
 
 /** 「这项归谁」——⛔ 不要退回「无权限」, 那没告诉用户任何事。 */
-export const DISPOSAL_APPROVE_REASON = '报废审批归工厂超管，你可以填写和提交，审批要请超管来做。';
+export const DISPOSAL_APPROVE_REASON = '你的岗位没有「报废审批」权限，可以填写和提交，审批要请有权限的人（默认财务经理、厂长）来做。';
 
 /**
  * 报废记录管理页面
- * 权限：factory_super_admin、platform_admin
+ * 权限：审批按钮由后端「报废审批」权限决定（默认财务经理、厂长），不在 App 里写岗位名单
  * 功能：报废记录CRUD、审批流程
  */
 export default function DisposalRecordManagementScreen() {
@@ -52,7 +52,8 @@ export default function DisposalRecordManagementScreen() {
   const isPermissionAdmin = roleCode === 'permission_admin';
   const isDepartmentAdmin = roleCode === 'department_admin';
   const canManage = isPlatformAdmin || isSuperAdmin || isPermissionAdmin || isDepartmentAdmin;
-  const canApprove = isPlatformAdmin || isSuperAdmin;
+  // 审批权限只信后端 (approval-permission 端点); 读不到 = 不能审批, 不默认放开
+  const [canApprove, setCanApprove] = useState(false);
 
   // 表单数据
   const [formData, setFormData] = useState<Partial<CreateDisposalRequest>>({
@@ -90,6 +91,12 @@ export default function DisposalRecordManagementScreen() {
       });
 
       setDisposals(response.data || []);
+      try {
+        setCanApprove(await disposalRecordApiClient.getApprovalPermission(user?.factoryId));
+      } catch (permissionError) {
+        setCanApprove(false);
+        disposalLogger.error('读取报废审批权限失败, 按不能审批处理', permissionError as Error);
+      }
       disposalLogger.info('报废记录加载成功', {
         count: response.data?.length || 0,
       });
