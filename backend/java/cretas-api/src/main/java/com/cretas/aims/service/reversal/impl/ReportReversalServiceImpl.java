@@ -3154,7 +3154,7 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                                                               List<FinishedGoodsBatch> planGoods, String planId) {
         // 审查 F1: 已经作废的成品 (如先撤销小结时作废的合产批) 不再参与归属, 也不会被再作废一次
         List<FinishedGoodsBatch> live = planGoods == null ? List.of() : planGoods.stream()
-                .filter(fg -> fg.getStatus() != FinishedGoodsBatch.Status.REVERSED)
+                .filter(fg -> !FinishedGoodsBatch.Status.REVERSED.equals(fg.getStatus()))
                 .toList();
         if (live.isEmpty()) {
             return List.of();

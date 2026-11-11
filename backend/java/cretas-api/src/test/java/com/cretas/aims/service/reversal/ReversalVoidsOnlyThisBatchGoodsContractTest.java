@@ -228,7 +228,8 @@ class ReversalVoidsOnlyThisBatchGoodsContractTest {
         batch(MINE, "PB-1924");
         batch(OTHER, "PB-1925");
         FinishedGoodsBatch voidedJoint = goods("fg-joint", "FG-plan-c5-S1-p");
-        voidedJoint.setStatus(FinishedGoodsBatch.Status.REVERSED);
+        // 用未 intern 的新字符串: Postgres 读出来的状态就是这样, 引用比较 (!=) 在这里会把它当成「未作废」
+        voidedJoint.setStatus(new String(FinishedGoodsBatch.Status.REVERSED));
         voidedJoint.setReversalLogId(7L);
         edge(MINE, voidedJoint);
         edge(OTHER, voidedJoint);
