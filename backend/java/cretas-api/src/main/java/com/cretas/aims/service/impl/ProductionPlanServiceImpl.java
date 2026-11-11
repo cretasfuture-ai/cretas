@@ -3355,6 +3355,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             throw new BusinessException(409, "只能开始待处理的生产计划")
                     .withHint("请刷新生产计划列表查看最新状态");
         }
+        // 1551-11: 待审批的强制插单还没排进去 (批准那一刻才排入并顺延), 不能先开工
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
 
         // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
         //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;
@@ -10411,6 +10413,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // S4-08: 到这里计划一定是待处理, 转批次会把它翻成生产中 = 开工 —— 与 startProduction 过同一道缺料闸
         //    (2026-11-03 验收 D-S410-01: 网页「逐道录入」「下发 APP 报工」都先调 create-batch, 曾绕过闸)。
         //    startProduction 不经过这里 (它直接调 materializeBatchForPlan), 所以同一次开工不会被记两次。
+        // 1551-11: 同理, 待审批的强制插单不能经这里开工
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
         if (shortageStartGate != null) {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }

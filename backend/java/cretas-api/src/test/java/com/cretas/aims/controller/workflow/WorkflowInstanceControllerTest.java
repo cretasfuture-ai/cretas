@@ -527,6 +527,42 @@ class WorkflowInstanceControllerTest {
                 "warehouse_manager", HistoryAction.APPROVE, "同意");
     }
     @Test
+    @DisplayName("1551-11: 强制插单 OA 动作走插单适配器, 审批意见原样传下去")
+    void force_insert_action_delegates_to_urgent_insert_adapter() {
+        com.cretas.aims.service.UrgentInsertService urgentInsertService =
+                org.mockito.Mockito.mock(com.cretas.aims.service.UrgentInsertService.class);
+        ReflectionTestUtils.setField(controller, "urgentInsertService", urgentInsertService);
+        mockAuth(110L, "f006_production_mgr", "production_manager");
+        ApprovalWorkflowInstance running = buildInstance(
+                "inst-fi", "wf-fi", "FORCE_INSERT", "plan-fi-1", List.of("approval_pm"), 109L);
+        when(workflowEngine.getInstance(FACTORY_ID, "inst-fi")).thenReturn(Optional.of(running));
+        when(workflowEngine.canTransition(eq(running), any(User.class))).thenReturn(true);
+        com.cretas.aims.dto.production.ProductionPlanDTO plan =
+                com.cretas.aims.dto.production.ProductionPlanDTO.builder().approvalStatus("APPROVED").build();
+        when(urgentInsertService.applyWorkflowAction(
+                eq(FACTORY_ID), eq("plan-fi-1"), eq("inst-fi"), eq(110L),
+                eq("production_manager"), eq("approval_pm"), eq(HistoryAction.APPROVE), eq("客户急单, 同意")))
+                .thenReturn(plan);
+        ApprovalWorkflowInstance approved = buildInstance(
+                "inst-fi", "wf-fi", "FORCE_INSERT", "plan-fi-1", List.of(), 109L);
+        approved.setStatus(InstanceStatus.APPROVED);
+        when(workflowEngine.getLatestInstance(FACTORY_ID, "FORCE_INSERT", "plan-fi-1"))
+                .thenReturn(Optional.of(approved));
+
+        ApiResponse<Map<String, Object>> response = controller.executeAction(
+                FACTORY_ID, "inst-fi", AUTH_HEADER,
+                new WorkflowInstanceController.WorkflowActionRequest(
+                        "APPROVE", "客户急单, 同意", "idem-fi-1", "approval_pm"));
+
+        assertEquals("APPROVED", response.getData().get("workflowStatus"));
+        assertEquals("APPROVED", response.getData().get("businessStatus"));
+        assertEquals("plan-fi-1", response.getData().get("businessEntityId"));
+        verify(urgentInsertService).applyWorkflowAction(
+                FACTORY_ID, "plan-fi-1", "inst-fi", 110L,
+                "production_manager", "approval_pm", HistoryAction.APPROVE, "客户急单, 同意");
+    }
+
+    @Test
     @DisplayName("纪律排查 B2: 盘点 OA 动作走盘点适配器, 审批意见原样作为 notes (= 本人审批原因) 传下去")
     void inventory_adjustment_action_delegates_to_stocktake_adapter_with_notes() {
         mockAuth(109L, "f006_admin", "factory_super_admin");
