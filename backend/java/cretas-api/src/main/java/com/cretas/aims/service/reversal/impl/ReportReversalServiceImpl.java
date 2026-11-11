@@ -226,6 +226,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
     private com.cretas.aims.service.inventory.FinishedGoodsFeedService finishedGoodsFeedService;
 
     /**
+     * 纪律排查 C5: 撤回一个生产批次只作废它自己产出的成品。成品表只挂计划 id, 归属按血缘边判
+     * (与质检放行同一份判据 {@link com.cretas.aims.service.quality.PlanGoodsOwnership})。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.lineage.BatchLineageEdgeRepository batchLineageEdgeRepository;
+
+    /**
      * SP12 快速撤回时间窗口 (分钟)。
      * 在此窗口内, 本人提交 + 无下游消费 → 快速撤回无需审批。
      * 超出此窗口 → 退回完整审批流。
@@ -779,10 +786,13 @@ public class ReportReversalServiceImpl implements ReportReversalService {
             }
         }
 
-        // ③ 将对应 FinishedGoodsBatch 标记 REVERSED (如有)
+        // ③ 将【本批次产出的】FinishedGoodsBatch 标记 REVERSED (如有)
+        // 纪律排查 C5: 成品只挂计划 id; 以前按计划把全部成品都作废, 同计划别的批次 (没撤回) 的成品跟着作废。
+        // 归属与质检放行同一份判据 (血缘优先, 没有血缘时单批计划 / 批号相同算确定); 分不清就拒绝, ⛔ 不整计划作废、不猜。
         if (log_.getPlanId() != null) {
-            List<FinishedGoodsBatch> fgbs =
-                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId());
+            List<FinishedGoodsBatch> fgbs = goodsProducedByThisBatch(factoryId, batchId,
+                    fgbRepo.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(factoryId, log_.getPlanId()),
+                    log_.getPlanId());
             for (FinishedGoodsBatch fgb : fgbs) {
                 fgb.setStatus(FinishedGoodsBatch.Status.REVERSED);
                 fgb.setReversalLogId(logId);
@@ -3125,5 +3135,55 @@ public class ReportReversalServiceImpl implements ReportReversalService {
                     : SemiFinishedInventory.Status.DEPLETED);
         }
         wipRepo.save(sfi);
+    }
+
+    /**
+     * 纪律排查 C5: 计划下的成品里, 只挑出这个生产批次产出的那些。
+     * <ul>
+     *   <li>计划只有一个生产批次 (或没有别的批次) ⇒ 全部是它的 (与修复前一致);</li>
+     *   <li>多批次 ⇒ 按 {@link com.cretas.aims.service.quality.PlanGoodsOwnership}: 血缘边优先, 没有血缘时批号相同算它的;</li>
+     *   <li>有成品分不清归属 / 血缘指向计划外 / 一批成品由几个生产批次合出 ⇒ 409 {@code FG_OWNERSHIP_UNCLEAR},
+     *       一条都不作废 (整计划作废会误伤没撤回的批次, 只作废一部分会留下说不清的账)。</li>
+     * </ul>
+     */
+    private List<FinishedGoodsBatch> goodsProducedByThisBatch(String factoryId, Long batchId,
+                                                              List<FinishedGoodsBatch> planGoods, String planId) {
+        if (planGoods == null || planGoods.isEmpty()) {
+            return List.of();
+        }
+        List<ProductionBatch> planBatches = batchRepo.findByFactoryIdAndProductionPlanId(factoryId, planId);
+        boolean otherBatches = planBatches != null
+                && planBatches.stream().anyMatch(b -> b.getId() != null && !b.getId().equals(batchId));
+        if (!otherBatches) {
+            return planGoods;
+        }
+        if (batchLineageEdgeRepository == null) {
+            throw new BusinessException(503, "成品归属判断服务未就绪, 无法只撤回本批次的成品")
+                    .withCode("FG_OWNERSHIP_UNAVAILABLE")
+                    .withHint("请稍后重试; 仍不行请联系管理员");
+        }
+        com.cretas.aims.service.quality.PlanGoodsOwnership.Ownership ownership =
+                com.cretas.aims.service.quality.PlanGoodsOwnership.attribute(
+                        batchLineageEdgeRepository, factoryId, planGoods, planBatches);
+        String why = ownership.outsidePlan() != null ? ownership.outsidePlan() : ownership.unknown();
+        List<FinishedGoodsBatch> mine = new ArrayList<>();
+        for (FinishedGoodsBatch fg : planGoods) {
+            Set<Long> owners = ownership.of(fg);
+            if (owners.contains(batchId) && owners.size() > 1 && why == null) {
+                why = "成品批 " + fg.getBatchNumber() + " 由本批次和同计划别的生产批次一起产出";
+            }
+            if (owners.contains(batchId)) {
+                mine.add(fg);
+            }
+        }
+        if (why != null) {
+            throw new BusinessException(409, "撤回批次 " + batchId + " 时分不清同计划的成品哪些是它产出的: " + why)
+                    .withCode("FG_OWNERSHIP_UNCLEAR")
+                    .withHint("同一计划有多个生产批次, 成品只能作废本批次产出的那部分; 请先补齐成品的生产批次来源 (血缘), "
+                            + "或联系管理员核对后再撤回")
+                    .withSeverity("BLOCKING")
+                    .withHintTarget(String.valueOf(batchId));
+        }
+        return mine;
     }
 }
