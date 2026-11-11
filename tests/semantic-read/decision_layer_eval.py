@@ -199,7 +199,7 @@ async def main_async(a):
         matcher = qwen_decision_type()(timeout_s=float(a.timeout), k=config.decision_k)
     else:
         ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency,
-                        quota_roots=a.quota_from)
+                        quota_roots=a.quota_from, paid=a.paid)
         ledger.extra_spent = sum(
             sum(json.loads(line).get('price_upper_usd', 0.0) for line in pathlib.Path(p).read_text('utf-8').splitlines())
             for p in a.spent_from if pathlib.Path(p).exists())
@@ -276,6 +276,7 @@ def main():
     p.add_argument('--retrieval-snapshot', help='retrieval_snapshot_remote.py output; enables the prod rerank path')
     p.add_argument('--timeout', default='90')
     p.add_argument('--quota-from', nargs='*', default=[], help='other ledgers counted against the daily free groups')
+    p.add_argument('--paid', action='store_true', help='use paid usage (USD cap still applies); rows tagged billing=paid')
     a = p.parse_args()
     asyncio.run(main_async(a))
 

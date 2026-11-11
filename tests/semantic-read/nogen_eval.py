@@ -22,7 +22,7 @@ ROOT = HERE.parents[1]
 sys.path.insert(0, str(ROOT / 'backend' / 'python'))
 sys.path.insert(0, str(HERE))
 
-from decision_eval_transport import (TURN, BudgetStop, Ledger, _usage_tokens, decision_type,  # noqa: E402
+from decision_eval_transport import (TURN, BudgetStop, Ledger, _usage_tokens,  # noqa: E402
                                      load_llm_env, qwen_decision_type)
 from decision_layer_eval import load_c, load_catalog, render_state, source_hashes, git_head  # noqa: E402
 from nogen_pipeline import (LunaBackend, QwenBackend, candidates, clarify_question, decide, load_rubric,  # noqa: E402
@@ -97,7 +97,7 @@ async def main_async(a):
                names=names, rubric=load_rubric(pathlib.Path(a.rubric)), max_options=a.max_options)
     ledger = None
     if a.backend == 'luna':
-        ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency, quota_roots=a.quota_from)
+        ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency, quota_roots=a.quota_from, paid=a.paid)
         backend = LunaBackend(ledger)
     else:
         load_llm_env(a.llm_env)
@@ -173,6 +173,7 @@ def main():
     p.add_argument('--cap', type=float, default=30.0)
     p.add_argument('--key-file', default=str(pathlib.Path.home() / '.codex/secrets/cretas-openai-eval.env'))
     p.add_argument('--quota-from', nargs='*', default=[])
+    p.add_argument('--paid', action='store_true', help='use paid usage (USD cap still applies); rows tagged billing=paid')
     p.add_argument('--llm-env', default=r'C:/Users/Steve/my-prototype-logistics/backend/python/.env')
     p.add_argument('--timeout', default='10')
     p.add_argument('--concurrency', type=int, default=8)

@@ -97,7 +97,7 @@ class Ledger:
     """Reserve-before-send budget; spent survives restarts through ``calls.jsonl``."""
 
     def __init__(self, root: pathlib.Path, cap_usd: float, key_file: pathlib.Path, concurrency: int = 8,
-                 quota_roots=()):
+                 quota_roots=(), paid: bool = False):
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self.cap = cap_usd
@@ -118,6 +118,8 @@ class Ledger:
             for line in self.calls_path.read_text(encoding='utf-8').splitlines():
                 self.spent += json.loads(line).get('price_upper_usd', 0.0)
         self.extra_spent = 0.0
+        # paid=True (organizer 2026-11-11, Steve): skip the free-group stop, keep the USD cap, tag every row.
+        self.paid = paid
         # UTC-day free-group usage: this ledger + every other ledger passed in (E runs, F teacher runs).
         self.group_used: Dict[tuple, int] = {}
         files = [self.calls_path] + [pathlib.Path(q) for q in quota_roots]
@@ -153,7 +155,7 @@ class Ledger:
         reserve_tokens = len(encoded.encode('utf-8')) // 2 + max_out
         with self.lock:
             used = self.group_used.get((day, group), 0)
-            if used + reserve_tokens > DAILY_GROUP_LIMIT[group] * GROUP_SAFETY:
+            if not self.paid and used + reserve_tokens > DAILY_GROUP_LIMIT[group] * GROUP_SAFETY:
                 raise QuotaWait('free group %s used %d tokens on UTC %s (limit %d x %.1f); resume after 00:00 UTC'
                                 % (group, used, day, DAILY_GROUP_LIMIT[group], GROUP_SAFETY))
             self.group_used[(day, group)] = used + reserve_tokens
@@ -161,7 +163,8 @@ class Ledger:
                 raise BudgetStop('cap %.2f reached (spent %.4f)' % (self.cap, self.spent + self.extra_spent))
             self.spent += reserve
         label = LABEL.get()
-        rec: Dict[str, Any] = dict(at=time.time(), label=label, model=model, endpoint=endpoint)
+        rec: Dict[str, Any] = dict(at=time.time(), label=label, model=model, endpoint=endpoint,
+                                   billing='paid' if self.paid else 'free_group')
         t = time.perf_counter()
         try:
             async with self.sem:

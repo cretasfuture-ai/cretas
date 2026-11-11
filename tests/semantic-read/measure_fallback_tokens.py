@@ -58,11 +58,11 @@ async def main_async(a):
             with llm_caller_context('e_fallback_measure'), utterance_egress():
                 return await call_chain(SLOT.CHAT, p, timeout=20, total_timeout=20)
     else:
-        ledger = Ledger(pathlib.Path(a.out).parent, a.cap, pathlib.Path(a.key_file), quota_roots=a.quota_from)
+        ledger = Ledger(pathlib.Path(a.out).parent, a.cap, pathlib.Path(a.key_file), quota_roots=a.quota_from, paid=a.paid)
 
         async def call(p):
             req = dict(model='gpt-5.4-mini-2026-03-17', messages=p['messages'], tools=p['tools'],
-                       tool_choice='auto', reasoning_effort='low', max_completion_tokens=600)
+                       tool_choice='auto', reasoning_effort='none', max_completion_tokens=600)
             return await ledger.post('chat/completions', req, 600)
     for r in rows:
         tool = schemas.get(r['tool'])
@@ -100,6 +100,7 @@ def main():
     p.add_argument('--cap', type=float, default=1.0)
     p.add_argument('--key-file', default=str(pathlib.Path.home() / '.codex/secrets/cretas-openai-eval.env'))
     p.add_argument('--quota-from', nargs='*', default=[])
+    p.add_argument('--paid', action='store_true', help='use paid usage (USD cap still applies); rows tagged billing=paid')
     asyncio.run(main_async(p.parse_args()))
 
 

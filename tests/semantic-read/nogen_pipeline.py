@@ -23,7 +23,6 @@ import json
 import math
 import pathlib
 import random
-import time
 from typing import Any, Dict, List, Optional
 
 from ai.matcher.decision import (
@@ -129,7 +128,12 @@ class LunaBackend:
             dict(type='predicate', name='needs_clarification',
                  instructions='系统这一轮是否必须先问用户才能办理（true=必须先问）。' + CLARIFY_RULES),
         ])
-        body = await self.ledger.post('decisions', payload, 0)
+        from decision_eval_transport import LABEL
+        tok = LABEL.set('decision')
+        try:
+            body = await self.ledger.post('decisions', payload, 0)
+        finally:
+            LABEL.reset(tok)
         ans = {a.get('name'): a for a in body.get('answers', [])}
         intent = {p['value']: float(p['probability']) for p in ans['intent']['probabilities']}
         act = {p['value']: float(p['probability']) for p in ans['dialogue_act']['probabilities']}
