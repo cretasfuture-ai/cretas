@@ -41,10 +41,13 @@ class SelfApprovalCarrierContractTest {
     /** 刻意独立: 不得委托(要改先改 spec)。 */
     private static final List<String> INDEPENDENT = List.of(
             "com/cretas/aims/service/factory/impl/FactoryStocktakeServiceImpl.java",
-            "com/cretas/aims/service/reversal/impl/ReportReversalServiceImpl.java");
+            "com/cretas/aims/service/reversal/impl/ReportReversalServiceImpl.java",
+            // 1551-11: 强制插单画布审批 —— 走工厂「允许本人审批」开关 (FactorySelfApprovalGate, #1580),
+            // 与盘点同类; 不委托 OA 节点点名例外的 SelfApprovalPolicy
+            "com/cretas/aims/service/impl/UrgentInsertServiceImpl.java");
 
-    /** 已登记的承载点总数: 采购/销售/调拨各 1 + 盘点 2 + 冲销 1。 */
-    private static final int REGISTERED_CARRIERS = 6;
+    /** 已登记的承载点总数: 采购/销售/调拨各 1 + 盘点 2 + 冲销 1 + 强制插单 1。 */
+    private static final int REGISTERED_CARRIERS = 7;
 
     /** 只匹配真实抛错构造, 避开注释里提到该码的情况。 */
     private static final Pattern CARRIER_PATTERN =

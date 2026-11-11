@@ -1174,10 +1174,14 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         inputContext.put("impactedPlans", parseImpactedPlans(slot.getImpactedPlans()));
         inputContext.put("customerOrderNumber", request.getCustomerOrderNumber());
         inputContext.put("forceInsertReason", request.getNotes());
+        if (workflowInstance != null) {
+            inputContext.put("workflowInstanceId", workflowInstance.getId());
+            inputContext.put("workflowStatus", String.valueOf(workflowInstance.getStatus()));
+        }
 
-        // 创建决策审计记录（含规则版本追踪）
-        Optional<ApprovalChainConfig> matchedConfig = approvalChainService.findMatchingConfig(
-                factoryId, DecisionType.FORCE_INSERT, approvalContext);
+        // 创建决策审计记录（含规则版本追踪）。走画布的不再挂旧版审批链: 决定权在画布, 挂旧规则会误导审计
+        Optional<ApprovalChainConfig> matchedConfig = workflowInstance != null ? Optional.empty()
+                : approvalChainService.findMatchingConfig(factoryId, DecisionType.FORCE_INSERT, approvalContext);
 
         if (matchedConfig.isPresent()) {
             ApprovalChainConfig config = matchedConfig.get();
