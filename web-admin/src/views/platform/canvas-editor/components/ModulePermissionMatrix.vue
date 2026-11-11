@@ -106,7 +106,7 @@ const modules = [
   'work_report', 'inventory', 'report', 'rd', 'restaurant', 'production_report_correction',
   // 纪律排查 B1–B3/B11/B15 审批权限码 (Steve 2026-11-10「审批人按权限」)
   'approval_report_reversal', 'approval_stocktake', 'approval_quality_disposition',
-  'approval_price_adjustment', 'approval_refund',
+  'approval_price_adjustment', 'approval_refund', 'approval_bom_price_adjustment',
 ];
 
 const loading = ref(false);

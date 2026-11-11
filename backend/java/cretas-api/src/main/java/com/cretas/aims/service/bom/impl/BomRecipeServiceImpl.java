@@ -2154,7 +2154,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权更正其他工厂的 BOM 成本");
         }
-        BomRecipe recipe = recipeRepo.lockByIdAndFactoryId(item.getRecipeId(), factoryId)
+        // N1: 与调价批准同一锁序 —— 行 -> 整族配方头 (按 id 升序)。
+        BomRecipe recipe = com.cretas.aims.service.bom.BomRecipeHeadLocks
+                .lockWithFamily(recipeRepo, factoryId, item.getRecipeId())
                 .orElseThrow(() -> bomError(404, "BOM 配方不存在", "BOM_RECIPE_MISSING",
                         "请刷新后重新打开 BOM。", "bomRecipe"));
         if (recipe.getStatus() != BomRecipe.Status.ACTIVE || !Boolean.TRUE.equals(recipe.getIsCurrent())) {

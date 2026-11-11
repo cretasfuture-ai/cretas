@@ -155,7 +155,7 @@ function isRestaurantCode(m: string): boolean {
  * 这里只登记后端真的声明成审批码的那几个 (见下面「审批码登记不放过模块漂移」), 不是按前缀一刀切。
  */
 const APPROVAL_CODES = ['approval_report_reversal', 'approval_stocktake', 'approval_quality_disposition',
-  'approval_price_adjustment', 'approval_refund'];
+  'approval_price_adjustment', 'approval_refund', 'approval_bom_price_adjustment'];
 
 /** 内部码: owner 裁定「降为内部码并登记」, 不参与收敛比对 */
 const INTERNAL_CODES = new Set(['production_report_correction', '__permissions__', ...APPROVAL_CODES]);

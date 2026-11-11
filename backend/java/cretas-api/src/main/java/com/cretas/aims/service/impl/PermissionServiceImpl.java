@@ -122,11 +122,13 @@ public class PermissionServiceImpl implements PermissionService {
     public static final String APPROVAL_QUALITY_DISPOSITION = "approval_quality_disposition";
     public static final String APPROVAL_PRICE_ADJUSTMENT = "approval_price_adjustment";
     public static final String APPROVAL_REFUND = "approval_refund";
+    /** BOM 调价建议 (采购价变动 → 配方行价) 的批准 / 驳回 (D-S5-09, 2026-11-11)。 */
+    public static final String APPROVAL_BOM_PRICE_ADJUSTMENT = "approval_bom_price_adjustment";
 
     /** 五个审批权限码 (模块码), 按审批类型。 */
     public static final List<String> APPROVAL_MODULES = List.of(
             APPROVAL_REPORT_REVERSAL, APPROVAL_STOCKTAKE, APPROVAL_QUALITY_DISPOSITION,
-            APPROVAL_PRICE_ADJUSTMENT, APPROVAL_REFUND);
+            APPROVAL_PRICE_ADJUSTMENT, APPROVAL_REFUND, APPROVAL_BOM_PRICE_ADJUSTMENT);
 
     /**
      * 没有 L2 / L1 配置时, 这几个审批码的默认 = 「这些模块里任一是 read_write」(改动前接口上的门槛原样)。
@@ -147,12 +149,23 @@ public class PermissionServiceImpl implements PermissionService {
             APPROVAL_REPORT_REVERSAL, "production",
             APPROVAL_QUALITY_DISPOSITION, "quality");
 
+    /**
+     * BOM 调价审批 (D-S5-09, 2026-11-11) 的默认: 改动前的门槛是 production / rd / finance 任一 read_write,
+     * 但 production:read_write 含操作员、班组长等一线岗位 —— 与上面「不把审批权顺手发给一线」相悖。
+     * 所以默认 = 兜底矩阵里登记的岗位 (改动前能批的岗位去掉一线: 调度 / 部门管理员 / 生产经理 / 销售经理 /
+     * 财务经理 / 权限管理员, 超管恒有) <b>且</b> 这三个模块里任一有效级别仍是 read_write (某厂把它降成只读
+     * 后, 以前批不了的现在也批不了)。一线岗位要批, 由工厂在「谁能审批」里显式授权。
+     */
+    static final Map<String, List<String>> APPROVAL_DEFAULT_REQUIRES_ANY_MODULE = Map.of(
+            APPROVAL_BOM_PRICE_ADJUSTMENT, List.of("production", "rd", "finance"));
+
     private static void initPermissionMatrix() {
         // factory_super_admin: 所有模块读写
         Map<String, String> superAdminPerms = new HashMap<>();
         ALL_MODULES.forEach(m -> superAdminPerms.put(m, "read_write"));
         // 审批码默认: 质检处置特批旧名单含 permission_admin (它与超管共用这张表), 撤回 / 盘点的旧名单不含 ⇒ 只放这一个
         superAdminPerms.put(APPROVAL_QUALITY_DISPOSITION, "read_write");
+        superAdminPerms.put(APPROVAL_BOM_PRICE_ADJUSTMENT, "read_write");   // 权限管理员共用这张表, 改动前能批
         PERMISSION_MATRIX.put(FactoryUserRole.factory_super_admin, superAdminPerms);
 
         // platform_admin: 平台级, 同 super_admin (所有模块读写)
@@ -178,6 +191,7 @@ public class PermissionServiceImpl implements PermissionService {
         dispatcherPerms.put("inventory", "read");
         dispatcherPerms.put("report", "read");
         dispatcherPerms.put("rd", "read_write");  // 调度协调 RD 样品到生产
+        dispatcherPerms.put(APPROVAL_BOM_PRICE_ADJUSTMENT, "read_write");   // 部门管理员共用这张表
         PERMISSION_MATRIX.put(FactoryUserRole.dispatcher, dispatcherPerms);
 
         // production_manager (生产经理): 2026-08-21 从 dispatcher 拆出独立权限对象.
@@ -202,6 +216,7 @@ public class PermissionServiceImpl implements PermissionService {
         productionManagerPerms.put("sales", "read");
         // 报工撤回审批默认 (旧名单: factory_super_admin / production_manager)
         productionManagerPerms.put(APPROVAL_REPORT_REVERSAL, "read_write");
+        productionManagerPerms.put(APPROVAL_BOM_PRICE_ADJUSTMENT, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.production_manager, productionManagerPerms);
 
         // production_clerk (生产文员): 2026-08-21 新增. owner 原话「蹲在电脑前审核报工数据、
@@ -359,6 +374,7 @@ public class PermissionServiceImpl implements PermissionService {
         // 按他的说法多半也该收, 但那是 27 角色矩阵那一轮的事。见迁移 V20261030_09。
         salesPerms.put("report", "read");
         salesPerms.put("rd", "read_write");  // 销售驱动 RD 需求/样品
+        salesPerms.put(APPROVAL_BOM_PRICE_ADJUSTMENT, "read_write");   // 改动前经 rd:read_write 能批
         PERMISSION_MATRIX.put(FactoryUserRole.sales_manager, salesPerms);
 
         // operations_coordinator: 只写运营协调单；其它业务模块只读，不获得库存/订单/生产执行权。
@@ -386,6 +402,7 @@ public class PermissionServiceImpl implements PermissionService {
         financePerms.put("rd", "read");  // 定价参考
         // 盘点差异审批默认 (旧名单: finance_manager / factory_super_admin / platform_admin)
         financePerms.put(APPROVAL_STOCKTAKE, "read_write");
+        financePerms.put(APPROVAL_BOM_PRICE_ADJUSTMENT, "read_write");
         PERMISSION_MATRIX.put(FactoryUserRole.finance_manager, financePerms);
 
         // viewer: 所有模块只读
@@ -1022,6 +1039,11 @@ public class PermissionServiceImpl implements PermissionService {
         }
         String prerequisite = APPROVAL_DEFAULT_REQUIRES_MODULE.get(module);
         if (prerequisite != null && !"read_write".equals(denormalizeLevel(sourceLevel.apply(prerequisite)))) {
+            return null;
+        }
+        List<String> anyOf = APPROVAL_DEFAULT_REQUIRES_ANY_MODULE.get(module);
+        if (anyOf != null && anyOf.stream()
+                .noneMatch(source -> "read_write".equals(denormalizeLevel(sourceLevel.apply(source))))) {
             return null;
         }
         return granted;
