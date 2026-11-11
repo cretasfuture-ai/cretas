@@ -8,7 +8,7 @@
  * 读供应商下拉的 disabled —— ⛔ 不只测纯函数: 纯函数对了而模板没接上, 是本仓反复出现的形状。
  *
  * 阴性对照:
- * - 已有供应商的草稿: 下拉仍锁 (保持原行为)。
+ * - 已有供应商的草稿: 下拉可用, 换成另一家后明细改绑到新供应关系 (2026-11-11 起; 此前一直锁死)。
  * - 已提交的单: 编辑弹窗根本不打开 (后端也只放行 DRAFT), 下拉不可达。
  */
 import { flushPromises, shallowMount } from '@vue/test-utils';
@@ -231,8 +231,17 @@ describe('D-S411R-01 编辑采购草稿补录供应商 (挂载真实 list.vue)',
     expect(warning.attributes('title')).toContain('QA-S4-1029-盐料');
   });
 
-  it('阴性对照: 已有供应商的草稿, 供应商下拉仍锁', async () => {
-    routeGet(autoDraft({ supplierId: SUPPLIER.id }));
+  it('已有供应商的草稿: 下拉可用, 换成另一家后明细改绑新供应关系与价、数量不变', async () => {
+    const OTHER_RELATION = { ...SALT_RELATION, id: 'rel-salt-2', defaultPurchasePrice: 5.5 };
+    harness.listSupplierMaterials.mockImplementation(async (_factoryId: string, supplierId: string) =>
+      supplierId === 'sup-salt-2' ? [OTHER_RELATION] : [SALT_RELATION]);
+    routeGet(autoDraft({
+      supplierId: SUPPLIER.id,
+      items: [{
+        supplierMaterialId: 'rel-salt', materialTypeId: 'mat-salt', materialName: 'QA-S4-1029-盐料',
+        quantity: 56.74, unit: 'kg', priceUnit: 'kg', unitPrice: 6, taxRate: 13,
+      }],
+    }));
     const wrapper = mountList();
     await flushPromises();
     const vm = wrapper.vm as unknown as Vm;
@@ -243,8 +252,20 @@ describe('D-S411R-01 编辑采购草稿补录供应商 (挂载真实 list.vue)',
     expect(vm.dialogVisible).toBe(true);
     const select = supplierSelect(wrapper);
     expect(select.exists()).toBe(true);
-    expect(select.attributes('disabled')).toBe('true');
+    expect(select.attributes('disabled')).toBe('false');
+    // 已有供应商就不是「补录」, 不出「还没有供应商」的提示
     expect(wrapper.find('[data-testid="purchase-draft-supplier-backfill-hint"]').exists()).toBe(false);
+
+    vm.form.supplierId = 'sup-salt-2';
+    await vm.onSupplierChange();
+    await flushPromises();
+
+    expect(harness.listSupplierMaterials).toHaveBeenLastCalledWith('F006', 'sup-salt-2');
+    expect(vm.form.items).toHaveLength(1);
+    const [line] = vm.form.items;
+    expect(line.supplierMaterialId).toBe('rel-salt-2');
+    expect(line.unitPrice).toBe(5.5);
+    expect(line.quantity).toBe(56.74);
   });
 
   it('阴性对照: 已提交的单不进编辑弹窗, 供应商下拉不可达', async () => {

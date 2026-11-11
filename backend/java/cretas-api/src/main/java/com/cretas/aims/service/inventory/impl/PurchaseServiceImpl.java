@@ -1898,10 +1898,28 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (request.getSupplierId() != null) {
             // Validate supplier only when changed
             requireActiveSupplier(factoryId, request.getSupplierId());
+            boolean supplierChanged = !Objects.equals(order.getSupplierId(), request.getSupplierId());
             order.setSupplierId(request.getSupplierId());
             if (request.getItems() == null) {
+                List<PurchaseOrderItem> rebound = new ArrayList<>();
                 for (PurchaseOrderItem existingItem : purchaseOrderItemRepository.findByPurchaseOrderId(orderId)) {
                     assertSupplierMaterialActive(factoryId, request.getSupplierId(), existingItem.getMaterialTypeId());
+                    // 草稿换供应商而没带明细: 行上还挂着旧供应商的供应关系 / 包装规格 / 行价, 提交会被
+                    // SUPPLIER_MATERIAL_IDENTITY_INVALID 拦住 (或带着旧价)。改绑到新供应商对这个原料的那一条
+                    // 供应关系 ((工厂, 供应商, 原料) 唯一, 不是猜), 清掉旧规格与旧价, 提交时按新供应关系回解价格。
+                    if (supplierChanged && existingItem.getSupplierMaterialId() != null) {
+                        existingItem.setSupplierMaterialId(supplierMaterialRepository
+                                .findByFactoryIdAndSupplierIdAndMaterialTypeId(
+                                        factoryId, request.getSupplierId(), existingItem.getMaterialTypeId())
+                                .map(com.cretas.aims.entity.SupplierMaterial::getId)
+                                .orElse(null));
+                        existingItem.setPurchasePackagingSpecId(null);
+                        existingItem.setUnitPrice(BigDecimal.ZERO);
+                        rebound.add(existingItem);
+                    }
+                }
+                if (!rebound.isEmpty()) {
+                    purchaseOrderItemRepository.saveAll(rebound);
                 }
             }
         }

@@ -50,6 +50,20 @@ public interface PurchaseOrderRepository extends JpaRepository<PurchaseOrder, St
                                 @Param("dateStr") String dateStr);
 
     /**
+     * 某原料最近几次真实采购的供应商 (新的在前): 自动采购草稿预填供应商的第二来源 (2026-11-11)。
+     * 排除草稿 (还没采购)、已取消、财务驳回 (都不算一次采购), 只取有供应商的单。
+     */
+    @Query("SELECT po.supplierId FROM PurchaseOrder po, PurchaseOrderItem i "
+            + "WHERE i.purchaseOrderId = po.id AND po.factoryId = :factoryId "
+            + "AND i.materialTypeId = :materialTypeId AND i.deletedAt IS NULL "
+            + "AND po.supplierId IS NOT NULL AND po.status NOT IN :excludedStatuses "
+            + "ORDER BY po.orderDate DESC, po.createdAt DESC, po.id DESC")
+    List<String> findRecentSupplierIdsForMaterial(@Param("factoryId") String factoryId,
+                                                  @Param("materialTypeId") String materialTypeId,
+                                                  @Param("excludedStatuses") java.util.Collection<PurchaseOrderStatus> excludedStatuses,
+                                                  Pageable pageable);
+
+    /**
      * Sprint 6 W2-B (RBAC DataScope SELF) — 仅查当前用户创建的采购单.
      * Used by {@link com.cretas.aims.service.inventory.PurchaseService#getPurchaseOrders} when
      * {@link com.cretas.aims.security.DataScopeContext#current()} scope is SELF.
