@@ -4144,6 +4144,16 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     // Edge resolution (factory-scoped 🔒)
     // ─────────────────────────────────────────────────────────────
 
+    private void assertRawSourceOwnership(String factoryId, String planId, MaterialBatch rawMb) {
+        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
+        String mainCategory = rawMaterialTypeRepository == null || rawMb.getMaterialTypeId() == null ? null
+                : rawMaterialTypeRepository.findByIdAndFactoryId(rawMb.getMaterialTypeId(), factoryId)
+                        .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+        com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                plan, rawMb, mainCategory, "原料批次");
+    }
+
     private List<ResolvedEdge> resolveEdges(String factoryId, String planId, ProcessSheetRowRequest req) {
         List<ResolvedEdge> edges = new ArrayList<>();
 
@@ -4164,6 +4174,8 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 // 排查 2026-11-10 A4 (清点补出的同类入口): 报工原料来源不许是待检 / 报废 / 不良品
                 // (事后补录: 领出后才过期的不拦, 见 assertReportable)
                 com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(rawMb);
+                // #1606 审查 M4: 原料来源的归属与领料同一口径 (客户料只进该客户订单的计划, 公司计划不吃客户料)
+                assertRawSourceOwnership(factoryId, planId, rawMb);
                 edges.add(new ResolvedEdge(
                         rawMb,
                         storageQuantity,

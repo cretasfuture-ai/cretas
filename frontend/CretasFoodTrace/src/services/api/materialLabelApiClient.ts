@@ -27,6 +27,8 @@ export interface MaterialBatchLabelScanResponse {
   receiptQuantity?: number | null;
   remainingQuantity?: number | null;
   quantityUnit?: string | null;
+  /** 库存归属: COMPANY_OWNED / CUSTOMER_OWNED (客户来料)。缺值为 null。 */
+  ownership?: 'COMPANY_OWNED' | 'CUSTOMER_OWNED' | null;
   batchCreatedAt?: string | null;
   labelCreatedAt?: string | null;
 }

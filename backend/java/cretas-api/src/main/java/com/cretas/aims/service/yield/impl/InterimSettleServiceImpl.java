@@ -116,6 +116,10 @@ public class InterimSettleServiceImpl implements InterimSettleService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.factory.FactoryMaterialRequisitionRepository requisitionRepository;
 
+    /** 小结过账前原料归属判断取物料大类 (#1606 审查 M4); required=false 理由同上, 未注入按最严格口径。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
     /** 小结 SFI 投料 (§② A) 的 WIP_CONSUME 写边点; required=false 理由同上。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.lineage.SemiFeedLineageRecorder semiFeedLineageRecorder;
@@ -224,11 +228,16 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             materialBatchRepository.findByIdAndFactoryIdForUpdate(lockId, factoryId);
         }
         refuseConsumptionOnClosedRequisitionBatch(factoryId, unposted);
+        Map<String, String> mainCategoryCache = new HashMap<>();
         for (MaterialConsumption mc : unposted) {
             MaterialBatch src = materialBatchRepository
                     .findByIdAndFactoryIdForUpdate(mc.getBatchId(), factoryId)
                     .orElseThrow(() -> new BusinessException(404,
                             "消耗来源批次不存在或无权访问: " + mc.getBatchId()));
+            // #1606 审查 M4: 过账前按领料同一口径再判一次原料归属 —— 录入时已拦过, 这里兜住
+            // 录入闸上线前记下的行和其他写消耗行的入口 (客户料不许记进公司计划 / 别的客户的计划)。
+            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                    plan, src, mainCategoryOf(factoryId, src, mainCategoryCache), "小结原料批次");
             // MES↔ERP Fix #6: 负库存守卫 (honest-fail). 延迟扣减设计下, 同一批次可被本计划多道
             //   报工累计投料 → 小结累加扣减时若 Σ投料 > 批次可用 (超投), 会把 currentQuantity 扣成负
             //   (幻库存: 半成品/成品凭空产出而原料不足)。此前仅事后置 USED_UP, 从不拦截负库存 → 静默腐蚀。
@@ -996,6 +1005,16 @@ public class InterimSettleServiceImpl implements InterimSettleService {
 
     private static BigDecimal nz(BigDecimal v) {
         return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** 物料大类 (原料/辅料/包材); 查不到为 null = 按最严格口径。 */
+    private String mainCategoryOf(String factoryId, MaterialBatch batch, Map<String, String> cache) {
+        String typeId = batch.getMaterialTypeId();
+        if (rawMaterialTypeRepository == null || typeId == null) {
+            return null;
+        }
+        return cache.computeIfAbsent(typeId, id -> rawMaterialTypeRepository.findByIdAndFactoryId(id, factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null));
     }
 
     /**

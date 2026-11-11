@@ -366,6 +366,8 @@ public class LabelServiceImpl implements LabelService {
                     .receiptQuantity(receiptQty)
                     .remainingQuantity(remainingQty)
                     .quantityUnit(batch.getQuantityUnit())
+                    // #1606 后续 (Steve 11-12 选 B): 扫码出库页一识别出客户来料就提前说明走领料单, 不让走到提交才 409
+                    .ownership(batch.getOwnership() != null ? batch.getOwnership().name() : null)
                     .batchCreatedAt(batch.getCreatedAt());
         }
 
