@@ -776,34 +776,15 @@ public class SseStreamingService {
                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
         boolean previous = isPreviousPaginationRequest(request);
-        IntentExecuteResponse refusal = paginationRefusal(previous, "当前会话没有可继续的成功列表查询。");
-        if (conversationMemoryService == null || request.getSessionId() == null
-                || request.getSessionId().isBlank() || userId == null || factoryId == null) {
-            streamTerminalResponse(emitter, refusal, startTime);
+        // 页码与条件的唯一一份规则, 普通入口用同一个 (INTENT-DISTILL D1)
+        ReadPaginationSupport.Plan plan = ReadPaginationSupport.plan(previous, conversationMemoryService,
+                toolRegistry, writeGuardService, code -> resolveStreamingIntentByCode(factoryId, code),
+                factoryId, userId, request);
+        if (plan.refused()) {
+            streamTerminalResponse(emitter, plan.refusal(), startTime);
             return;
         }
-
-        ConversationContext owner = conversationMemoryService.getContext(request.getSessionId());
-        if (owner == null || !factoryId.equals(owner.getFactoryId()) || !userId.equals(owner.getUserId())) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "当前会话不属于当前用户或工厂，无法翻页。"), startTime);
-            return;
-        }
-        Map<String, Object> metadata = latestPaginationMetadata(owner);
-        if (metadata == null) {
-            streamTerminalResponse(emitter, refusal, startTime);
-            return;
-        }
-        String intentCode = stringValue(metadata.get("intentCode"));
-        if (intentCode == null || intentCode.isBlank()) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询没有可复用的服务端意图。"), startTime);
-            return;
-        }
-        Optional<AIIntentConfig> intentOpt = resolveStreamingIntentByCode(factoryId, intentCode);
-        if (intentOpt.isEmpty()) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询已不可用，无法安全翻页。"), startTime);
-            return;
-        }
-        AIIntentConfig intent = intentOpt.get();
+        AIIntentConfig intent = plan.intent();
         if (SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())) {
             String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
             if (admissionDenied != null) {
@@ -811,122 +792,13 @@ public class SseStreamingService {
                 return;
             }
         }
-        Optional<ToolExecutor> toolOpt = intent.getToolName() == null
-                ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
-        if (toolOpt.isEmpty() || toolOpt.get().getAccessMode() != ToolExecutor.AccessMode.READ
-                || (writeGuardService != null && writeGuardService.isWriteTool(toolOpt.get()))
-                || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询不是受支持的只读列表，无法翻页。"), startTime);
-            return;
-        }
-        Integer pageBase = paginationPageBase(toolOpt.get());
-
-        Map<String, Object> replayContext = new LinkedHashMap<>();
-        Object filters = metadata.get("filters");
-        if (filters instanceof Map<?, ?> filterMap) {
-            for (Map.Entry<?, ?> entry : filterMap.entrySet()) {
-                String key = entry.getKey() == null ? null : String.valueOf(entry.getKey());
-                if (key != null && entry.getValue() != null
-                        && !Set.of("page", "pageBase", "paginationReplay").contains(key)) {
-                    replayContext.put(key, entry.getValue());
-                }
-            }
-        }
-        Integer currentPage = strictPageValue(metadata.get("page"));
-        if (currentPage == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询页码基准未知，无法安全翻页。"), startTime);
-            return;
-        }
-        boolean hasMorePresent = metadata.containsKey("hasMore");
-        Boolean hasMore = hasMorePresent ? strictBooleanValue(metadata.get("hasMore")) : null;
-        if (hasMorePresent && hasMore == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据中的 hasMore 无效，无法安全翻页。"), startTime);
-            return;
-        }
-        boolean totalPagesPresent = metadata.containsKey("totalPages");
-        Long totalPages = totalPagesPresent ? strictTotalPagesValue(metadata.get("totalPages")) : null;
-        if (totalPagesPresent && totalPages == null) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据中的总页数无效，无法安全翻页。"), startTime);
-            return;
-        }
-        if (pageBase == null) {
-            if (previous) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "上次查询页码基准未知，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!hasMorePresent || !Boolean.TRUE.equals(hasMore)) {
-                streamTerminalResponse(emitter, paginationRefusal(previous,
-                        hasMorePresent ? "已经是最后一页，没有更多数据。" : "分页元数据缺少 hasMore，无法安全翻页。"), startTime);
-                return;
-            }
-        } else if (totalPages != null) {
-            long lastPage = pageBase == 0 ? totalPages - 1L : totalPages;
-            if (totalPages <= 0 || currentPage < pageBase || (long) currentPage > lastPage) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "当前页码超出服务端分页范围，无法安全翻页。"), startTime);
-                return;
-            }
-            boolean atTail = currentPage == lastPage;
-            if (hasMore != null && hasMore != !atTail) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "分页元数据与总页数不一致，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!previous && atTail) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "已经是最后一页，没有更多数据。"), startTime);
-                return;
-            }
-        } else {
-            if (currentPage < pageBase) {
-                streamTerminalResponse(emitter, paginationRefusal(previous, "当前页码超出服务端分页范围，无法安全翻页。"), startTime);
-                return;
-            }
-            if (!previous) {
-                if (!hasMorePresent) {
-                    streamTerminalResponse(emitter, paginationRefusal(previous,
-                            "分页元数据缺少 hasMore 和总页数，无法安全翻页。"), startTime);
-                    return;
-                }
-                if (Boolean.FALSE.equals(hasMore)) {
-                    streamTerminalResponse(emitter, paginationRefusal(previous,
-                            "已经是最后一页，没有更多数据。"), startTime);
-                    return;
-                }
-            }
-        }
-        if (!previous && currentPage == Integer.MAX_VALUE) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "下一页页码超出可支持范围，无法安全翻页。"), startTime);
-            return;
-        }
-        int targetPage = previous ? currentPage - 1 : currentPage + 1;
-        if (previous && targetPage < pageBase) {
-            streamTerminalResponse(emitter, paginationRefusal(previous, "已经是第一页，没有上一页。"), startTime);
-            return;
-        }
-        replayContext.put("page", targetPage);
-        Object size = metadata.get("size");
-        if (size != null) replayContext.put("size", size);
-        replayContext.put("paginationReplay", true);
-        String queryInput = stringValue(metadata.get("queryInput"));
-        if (queryInput == null || queryInput.isBlank()) queryInput = "列表查询";
-        IntentExecuteRequest replay = IntentExecuteRequest.builder()
-                .userInput(queryInput)
-                .intentCode(intentCode)
-                .context(replayContext)
-                .sessionId(request.getSessionId())
-                .mode(request.getMode())
-                .build();
-        IntentMatchResult replayMatch = IntentMatchResult.builder()
-                .bestMatch(intent)
-                .confidence(1.0d)
-                .matchMethod(IntentMatchResult.MatchMethod.EXACT)
-                .requiresConfirmation(false)
-                .build();
         sendSseEvent(emitter, "intent_recognized", Map.of(
-                "intentCode", intentCode,
-                "intentName", intent.getIntentName() == null ? intentCode : intent.getIntentName(),
+                "intentCode", intent.getIntentCode(),
+                "intentName", intent.getIntentName() == null ? intent.getIntentCode() : intent.getIntentName(),
                 "confidence", 1.0d,
                 "matchMethod", "SERVER_SESSION"));
-        executeAndStreamResult(emitter, factoryId, replay, intent, userId, userRole,
-                startTime, replayMatch, factoryPackRoute);
+        executeAndStreamResult(emitter, factoryId, plan.replay(), intent, userId, userRole,
+                startTime, plan.match(), factoryPackRoute);
     }
 
     private IntentExecuteResponse paginationRefusal(String message) {
@@ -934,14 +806,7 @@ public class SseStreamingService {
     }
 
     private IntentExecuteResponse paginationRefusal(boolean previous, String message) {
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode(previous ? "PAGINATION_PREVIOUS" : "PAGINATION_NEXT")
-                .status("PAGINATION_REFUSED")
-                .message(message)
-                .formattedText(message)
-                .executedAt(LocalDateTime.now())
-                .build();
+        return ReadPaginationSupport.refusal(previous, message);
     }
 
     private boolean isPreviousPaginationRequest(IntentExecuteRequest request) {
@@ -950,89 +815,6 @@ public class SseStreamingService {
                 || "NAVIGATION_PREVIOUS_PAGE".equalsIgnoreCase(request.getIntentCode())) return true;
         String input = request.getUserInput() == null ? "" : request.getUserInput().trim();
         return Set.of("上一页", "翻到上一页").contains(input);
-    }
-
-    private Integer strictPageValue(Object value) {
-        if (value instanceof Number number) {
-            try {
-                BigDecimal decimal = new BigDecimal(number.toString());
-                if (decimal.signum() < 0
-                        || decimal.compareTo(BigDecimal.valueOf(Integer.MAX_VALUE)) > 0) return null;
-                return decimal.intValueExact();
-            } catch (ArithmeticException | NumberFormatException ignored) {
-                return null;
-            }
-        }
-        if (value instanceof String text) {
-            try {
-                int parsed = Integer.parseInt(text.trim());
-                return parsed < 0 ? null : parsed;
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    private Boolean strictBooleanValue(Object value) {
-        return value instanceof Boolean booleanValue ? booleanValue : null;
-    }
-
-    private Long strictTotalPagesValue(Object value) {
-        if (value instanceof Number number) {
-            try {
-                BigDecimal decimal = new BigDecimal(number.toString());
-                if (decimal.signum() < 0 || decimal.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0) {
-                    return null;
-                }
-                return decimal.longValueExact();
-            } catch (ArithmeticException | NumberFormatException ignored) {
-                return null;
-            }
-        }
-        if (value instanceof String text) {
-            try {
-                long parsed = Long.parseLong(text.trim());
-                return parsed < 0 ? null : parsed;
-            } catch (NumberFormatException ignored) {
-                return null;
-            }
-        }
-        return null;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Integer paginationPageBase(ToolExecutor executor) {
-        if (executor == null) return null;
-        Map<String, Object> schema;
-        try {
-            schema = executor.getParametersSchema();
-        } catch (RuntimeException ignored) {
-            return null;
-        }
-        if (schema == null || !(schema.get("properties") instanceof Map<?, ?> properties)) return null;
-        Object rawPage = properties.get("page");
-        if (!(rawPage instanceof Map<?, ?> pageSchema)) return null;
-        Integer minimum = strictPageValue(pageSchema.get("minimum"));
-        if (minimum == null || (minimum != 0 && minimum != 1)) return null;
-        if (pageSchema.containsKey("default")) {
-            Integer defaultPage = strictPageValue(pageSchema.get("default"));
-            if (defaultPage == null || defaultPage < minimum) return null;
-        }
-        return minimum;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> latestPaginationMetadata(ConversationContext context) {
-        List<ConversationMessage> messages = context.getRecentMessages();
-        if (messages == null) return null;
-        for (int i = messages.size() - 1; i >= 0; i--) {
-            ConversationMessage message = messages.get(i);
-            if (message.getRole() != ConversationMessage.Role.ASSISTANT || message.getMetadata() == null) continue;
-            Object raw = message.getMetadata().get("pagination");
-            if (raw instanceof Map<?, ?> map) return new LinkedHashMap<>((Map<String, Object>) map);
-        }
-        return null;
     }
 
     private String stringValue(Object value) {
@@ -1637,6 +1419,12 @@ public class SseStreamingService {
         return picked;
     }
 
+    private static Map<String, Object> copyStringKeyed(Map<?, ?> map) {
+        Map<String, Object> copy = new LinkedHashMap<>();
+        map.forEach((k, v) -> { if (k != null) copy.put(String.valueOf(k), v); });
+        return copy;
+    }
+
     private void persistSuccessfulReadPagination(String factoryId, Long userId,
                                                  IntentExecuteRequest request,
                                                  AIIntentConfig intent, String toolName,
@@ -1653,9 +1441,12 @@ public class SseStreamingService {
                 || (writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
             return;
         }
-        Map<String, Object> pagination = buildPaginationMetadata(request, intent, toolName,
-                executor.get(), response.getResultData());
-        if (pagination == null) return;
+        Map<String, Object> readQuery = response.getMetadata() != null
+                && response.getMetadata().get(ReadTurnParameters.METADATA_KEY) instanceof Map<?, ?> rq
+                ? copyStringKeyed(rq) : null;
+        Map<String, Object> pagination = ReadPaginationSupport.buildMetadata(request, intent.getIntentCode(), toolName,
+                executor.get(), response.getResultData(), readQuery);
+        if (pagination == null && readQuery == null) return;
 
         try {
             ConversationContext owner = conversationMemoryService.getOrCreateContext(
@@ -1666,7 +1457,8 @@ public class SseStreamingService {
             ConversationMessage assistant = ConversationMessage.assistant(
                     response.getMessage() == null ? "查询完成" : response.getMessage(), intent.getIntentCode());
             Map<String, Object> messageMetadata = new LinkedHashMap<>();
-            messageMetadata.put("pagination", pagination);
+            if (pagination != null) messageMetadata.put(ReadPaginationSupport.METADATA_KEY, pagination);
+            if (readQuery != null) messageMetadata.put(ReadTurnParameters.METADATA_KEY, readQuery);
             assistant.setMetadata(messageMetadata);
             conversationMemoryService.addMessage(request.getSessionId(), assistant);
             conversationMemoryService.updateLastIntent(request.getSessionId(), intent.getIntentCode());
@@ -1674,72 +1466,6 @@ public class SseStreamingService {
             log.warn("SSE 对话记忆持久化失败: factoryId={}, userId={}, failureType={}",
                     factoryId, userId, e.getClass().getSimpleName());
         }
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> buildPaginationMetadata(IntentExecuteRequest request,
-                                                        AIIntentConfig intent, String toolName,
-                                                        ToolExecutor executor,
-                                                        Object rawResultData) {
-        Map<String, Object> pageData = findPageMap(rawResultData);
-        if (pageData == null) return null;
-        Object pageValue = pageData.containsKey("currentPage")
-                ? pageData.get("currentPage") : pageData.get("page");
-        if (pageValue == null) return null;
-        Integer pageNumber = strictPageValue(pageValue);
-        if (pageNumber == null) return null;
-        Map<String, Object> metadata = new LinkedHashMap<>();
-        metadata.put("intentCode", intent.getIntentCode());
-        metadata.put("toolName", toolName);
-        metadata.put("queryInput", request.getUserInput());
-        metadata.put("page", pageNumber);
-        Integer pageBase = paginationPageBase(executor);
-        if (pageBase != null && (pageBase == 0 || pageBase == 1)) metadata.put("pageBase", pageBase);
-        Object size = firstValue(pageData, "size", "pageSize", "limit");
-        if (size == null && request.getContext() != null) {
-            size = firstValue(request.getContext(), "size", "pageSize", "limit");
-        }
-        if (size != null) metadata.put("size", size);
-        Object hasMore = pageData.get("hasMore");
-        if (hasMore != null) metadata.put("hasMore", hasMore);
-        Object totalPages = pageData.get("totalPages");
-        if (totalPages != null) metadata.put("totalPages", totalPages);
-
-        Object conditions = firstValue(pageData, "queryConditions", "filters", "filter");
-        if (conditions instanceof Map<?, ?> conditionMap) {
-            metadata.put("filters", copyMap(conditionMap));
-        } else if (request.getContext() != null) {
-            Map<String, Object> requestFilters = new LinkedHashMap<>();
-            for (Map.Entry<String, Object> entry : request.getContext().entrySet()) {
-                if (entry.getValue() != null && !Set.of("page", "pageBase", "size", "paginationReplay").contains(entry.getKey())) {
-                    requestFilters.put(entry.getKey(), entry.getValue());
-                }
-            }
-            if (!requestFilters.isEmpty()) metadata.put("filters", requestFilters);
-        }
-        return metadata;
-    }
-
-    @SuppressWarnings("unchecked")
-    private Map<String, Object> findPageMap(Object raw) {
-        if (!(raw instanceof Map<?, ?> map)) return null;
-        Map<String, Object> candidate = copyMap(map);
-        if (candidate.containsKey("currentPage") || candidate.containsKey("page")) return candidate;
-        Object nested = candidate.get("data");
-        return nested instanceof Map<?, ?> ? findPageMap(nested) : null;
-    }
-
-    private Object firstValue(Map<String, Object> map, String... keys) {
-        for (String key : keys) if (map.containsKey(key)) return map.get(key);
-        return null;
-    }
-
-    private Map<String, Object> copyMap(Map<?, ?> map) {
-        Map<String, Object> copy = new LinkedHashMap<>();
-        for (Map.Entry<?, ?> entry : map.entrySet()) {
-            if (entry.getKey() != null) copy.put(String.valueOf(entry.getKey()), entry.getValue());
-        }
-        return copy;
     }
 
     /**

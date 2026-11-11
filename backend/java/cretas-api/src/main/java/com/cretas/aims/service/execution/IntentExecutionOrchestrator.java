@@ -720,7 +720,10 @@ public class IntentExecutionOrchestrator {
         String toolName = intent.getToolName();
         IntentExecuteResponse response;
 
-        if (toolName != null && !toolName.isEmpty()) {
+        IntentExecuteResponse paginationReplay = executePaginationReplay(factoryId, request, intent, userId, userRole);
+        if (paginationReplay != null) {
+            response = paginationReplay;
+        } else if (toolName != null && !toolName.isEmpty()) {
             Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(toolName);
             if (toolOpt.isPresent()) {
                 long count = branchToolDirect.incrementAndGet();
@@ -960,7 +963,10 @@ public class IntentExecutionOrchestrator {
         String toolName = intent.getToolName();
         IntentExecuteResponse response;
 
-        if (toolName != null && !toolName.isEmpty()) {
+        IntentExecuteResponse paginationReplay = executePaginationReplay(factoryId, request, intent, userId, userRole);
+        if (paginationReplay != null) {
+            response = paginationReplay;
+        } else if (toolName != null && !toolName.isEmpty()) {
             Optional<ToolExecutor> toolOpt = toolRegistry.getExecutor(toolName);
             if (toolOpt.isPresent()) {
                 response = toolDispatchService.executeWithTool(toolOpt.get(), factoryId, request, intent, userId, userRole, null);
@@ -2921,8 +2927,10 @@ public class IntentExecutionOrchestrator {
             String userInput = request.getUserInput();
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";
             conversationMemoryService.addMessage(sessionId, ConversationMessage.user(userInput));
-            conversationMemoryService.addMessage(sessionId, ConversationMessage.assistant(assistantMessage));
-            {}
+            ConversationMessage assistant = ConversationMessage.assistant(assistantMessage);
+            Map<String, Object> readMetadata = readTurnMemoryMetadata(request, response);
+            if (!readMetadata.isEmpty()) assistant.setMetadata(readMetadata);
+            conversationMemoryService.addMessage(sessionId, assistant);
             // Extract entities from response data
             extractAndUpdateEntitySlots(sessionId, response, intentResult);
             if (intentResult != null && intentResult.getBestMatch() != null) {
@@ -2931,6 +2939,51 @@ public class IntentExecutionOrchestrator {
         } catch (Exception e) {
             log.warn("Failed to update conversation memory: sessionId={}, error={}", sessionId, e.getMessage());
         }
+    }
+
+    /**
+     * INTENT-DISTILL D1: 成功的只读查询把「本次实际执行的参数与来源」(readQuery) 和服务端分页元数据挂在助手消息上,
+     * 与 SSE 入口写进同一份会话记忆 —— 下一轮续句沿用、「下一页」翻页都只从这里取。
+     */
+    private Map<String, Object> readTurnMemoryMetadata(IntentExecuteRequest request, IntentExecuteResponse response) {
+        if (response == null || response.getMetadata() == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))
+                || !(response.getMetadata().get(ReadTurnParameters.METADATA_KEY) instanceof Map<?, ?> readQuery)
+                || !(readQuery.get("intentCode") instanceof String intentCode)
+                || !(readQuery.get("toolName") instanceof String toolName)) {
+            return Map.of();
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        Map<String, Object> copy = new LinkedHashMap<>();
+        readQuery.forEach((k, v) -> { if (k != null) copy.put(String.valueOf(k), v); });
+        metadata.put(ReadTurnParameters.METADATA_KEY, copy);
+        Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
+        if (executor.isPresent() && executor.get().getAccessMode() == ToolExecutor.AccessMode.READ) {
+            Map<String, Object> pagination = ReadPaginationSupport.buildMetadata(request, intentCode, toolName,
+                    executor.get(), response.getResultData(), copy);
+            if (pagination != null) metadata.put(ReadPaginationSupport.METADATA_KEY, pagination);
+        }
+        return metadata;
+    }
+
+    /**
+     * 普通入口的「下一页 / 上一页」: 与 SSE 同一份翻页规划 ({@link ReadPaginationSupport}), 以前这里落到
+     * PaginationNextTool, 只回一句「正在加载」而没有数据。目标意图照常过意图级权限, 工具级权限在派发里再判。
+     *
+     * @return null = 不是翻页意图, 照原路径执行
+     */
+    private IntentExecuteResponse executePaginationReplay(String factoryId, IntentExecuteRequest request,
+                                                          AIIntentConfig intent, Long userId, String userRole) {
+        if (intent == null || !ReadPaginationSupport.isPaginationIntent(intent.getIntentCode())) return null;
+        ReadPaginationSupport.Plan plan = ReadPaginationSupport.plan(
+                ReadPaginationSupport.isPreviousIntent(intent.getIntentCode()), conversationMemoryService,
+                toolRegistry, writeGuardService, code -> getIntentByCodeWithPlatformFallback(factoryId, code),
+                factoryId, userId, request);
+        if (plan.refused()) return plan.refusal();
+        IntentExecuteResponse denied = checkIntentPermission(plan.intent(), factoryId, userId, userRole);
+        if (denied != null) return denied;
+        return toolDispatchService.executeWithTool(plan.tool(), factoryId, plan.replay(), plan.intent(),
+                userId, userRole, plan.match());
     }
 
     @SuppressWarnings("unchecked")

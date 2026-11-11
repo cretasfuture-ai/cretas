@@ -128,4 +128,12 @@ public class IntentExecuteRequest {
      */
     @com.fasterxml.jackson.annotation.JsonIgnore
     private java.util.List<Map<String, String>> recognitionHistory;
+
+    /**
+     * 服务端专用 (INTENT-DISTILL D1): 本次只读工具执行时每个参数的最终取值与来源
+     * (本轮 / 沿用 / 默认 / 服务端翻页), 由 ToolDispatchService 合并参数时写入、成功后放进
+     * 响应 {@code metadata.readQuery}。客户端传不进来。
+     */
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    private Map<String, Object> readTurnSnapshot;
 }
