@@ -23,7 +23,7 @@ import static org.assertj.core.api.Assertions.catchThrowableOfType;
  *
  * <p>原表 (V20261028_102) 有 {@code CHECK (received_quantity <= expected_quantity)}: 应用层放行的每一笔超收
  * 在提交时都会被数据库拒绝。Mockito 单测看不到约束, H2 create-drop 也不会建它, 只有执行<b>真实迁移文件</b>才量得到。
- * 本测试在一次性库的独立 schema 里按顺序执行 V20261028_102 与 V20261111_61:
+ * 本测试在一次性库的独立 schema 里按顺序执行 V20261028_102 与 V20261112_21:
  * 之前超收被拒 (阳性对照, 证明约束真的在), 之后超收写得进去, 负数仍被拒。
  *
  * <p>开关: {@code CRETAS_WORKFLOW_PG_VERIFY=true} + {@code CRETAS_WORKFLOW_PG_URL} (见 {@link DisposablePostgresTargetGuard})。
@@ -112,7 +112,7 @@ class CustomerSuppliedReceivedQuantityConstraintPostgresContractTest {
         assertThat(before.getMessage()).contains("chk_sosmr_received_quantity");
         assertThat(receivedQuantity()).isEqualTo("4");
 
-        runMigration("V20261111_61__customer_supplied_received_may_exceed_expected.sql");
+        runMigration("V20261112_21__customer_supplied_received_may_exceed_expected.sql");
 
         assertThatCode(() -> setReceived("11")).doesNotThrowAnyException();
         assertThat(receivedQuantity()).isEqualTo("11");
@@ -127,8 +127,8 @@ class CustomerSuppliedReceivedQuantityConstraintPostgresContractTest {
     @Test
     void migrationIsIdempotentOnARepeatedRun() throws Exception {
         runMigration("V20261028_102__sales_order_supplied_material_requirements.sql");
-        runMigration("V20261111_61__customer_supplied_received_may_exceed_expected.sql");
-        assertThatCode(() -> runMigration("V20261111_61__customer_supplied_received_may_exceed_expected.sql"))
+        runMigration("V20261112_21__customer_supplied_received_may_exceed_expected.sql");
+        assertThatCode(() -> runMigration("V20261112_21__customer_supplied_received_may_exceed_expected.sql"))
                 .doesNotThrowAnyException();
         insertTask();
         assertThatCode(() -> setReceived("12.5")).doesNotThrowAnyException();
