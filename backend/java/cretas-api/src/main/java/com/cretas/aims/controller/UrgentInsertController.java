@@ -104,7 +104,9 @@ public class UrgentInsertController {
         Map<String, Object> response = new HashMap<>();
         response.put("success", true);
         response.put("data", plan);
-        response.put("message", "紧急插单成功，已创建生产计划");
+        // 1551-11: 工厂开了「插单一律走审批」时, 普通插单也会进审批 —— 不能说「已创建生产计划」就完事
+        response.put("message", "PENDING".equals(plan.getApprovalStatus())
+                ? "紧急插单已提交审批，批准后才会排入" : "紧急插单成功，已创建生产计划");
 
         return ResponseEntity.ok(response);
     }

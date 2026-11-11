@@ -287,6 +287,14 @@ public final class ThresholdKeys {
     public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
 
     /**
+     * 插单是否一律走审批 (1551-11, Steve 2026-11-11 拍板: 工厂开关, 默认关)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 原行为: 只有预览判定需要审批 (影响高/严重) 的插单走强制插单审批, 其余直接排入。
+     * 开 = 本厂有启用的强制插单 (FORCE_INSERT) 审批画布时, 所有插单 (含低影响的普通插单) 都先进审批, 批准后才排入;
+     * 没有启用画布时开了也不生效 (没人来批)。挡得住一个用户动作 (直接排入) ⇒ 闸门类。
+     */
+    public static final String PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL = "production.urgent_insert.always_approval";
+
+    /**
      * 「袋」「盒」等包装单位的计划换线时怎么核对目标线产能 (2026-11-11 Steve 裁定: 做成工厂开关)。
      * NONE (默认) = 产线产能只认 件 / kg / 批, 包装单位计划判「产能未验证」只能同线顺延 (= 原行为);
      * NET_CONTENT = 按产品净含量把包装单位折成 kg 再核对 kg 产能 (净含量没填 / 不是质量单位 ⇒ 仍未验证, 不猜);
@@ -366,7 +374,8 @@ public final class ThresholdKeys {
             INVENTORY_PERMISSION_WASTAGE_APPROVE,
             CREDIT_PERMISSION_OVERRIDE,
             SALES_ORDER_CANCEL_AFTER_APPROVAL,
-            SALES_PERMISSION_CANCEL_APPROVED_ORDER
+            SALES_PERMISSION_CANCEL_APPROVED_ORDER,
+            PRODUCTION_URGENT_INSERT_ALWAYS_APPROVAL
     );
 
     /** 值是「逗号分隔岗位码」的 key (权限岗位名单 + 通知接收人)。保存时按 FactoryUserRole 校验, 打错字不再静默失效。 */
