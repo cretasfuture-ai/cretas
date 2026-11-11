@@ -220,6 +220,16 @@ public class FactoryDisciplinePolicy {
                 ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE);
     }
 
+    // ===================== 客供料收货能不能超收 (A15, 2026-11-11) =====================
+
+    /**
+     * 只有显式 1 才开 (默认 0 = 原行为: 客供料多收 1 克也拦); 写错的值按关。
+     * 开了之后的上限不在这里, 与采购收货共用 PurchaseOverReceivePolicy / OverReceiveLimit。
+     */
+    public boolean customerSuppliedOverReceiveAllowed(String factoryId) {
+        return thresholds.getInteger(factoryId, ThresholdKeys.INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE, 0) == 1;
+    }
+
     // ===================== 插单一律走审批 (1551-11, 2026-11-11) =====================
 
     /** 只有显式 1 才开 (默认 0 = 原行为: 只有预览判定需要审批的插单走画布); 写错的值按关。 */
