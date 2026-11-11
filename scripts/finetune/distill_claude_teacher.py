@@ -27,7 +27,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from distill_common import ACTS, NONE_KEY, ApiStop, SchemaError, append_jsonl, build_intent_table, check_label, read_jsonl, write_jsonl  # noqa: E402
+from distill_common import (ACTS, NONE_KEY, ApiStop, SchemaError, append_jsonl, build_intent_table, check_label, read_jsonl,
+                            validate_sample, write_jsonl)  # noqa: E402
 import distill_pipeline as dp  # noqa: E402
 
 CLAUDE = 'claude-fable-5-2'
@@ -186,6 +187,7 @@ def cmd_adjudicate(a, table):
             row.pop('review_reason', None)
             if assign:
                 row['split'] = assign.get(r['family'], 'train')
+            validate_sample(row, table, 'adjudicated')
             adjudicated.append(row)
             why['adjudicated_with_' + match[0]] += 1
         else:
