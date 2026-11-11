@@ -130,6 +130,29 @@ class MyTodoPermissionAggregationContractTest {
         assertThat(item.isNeedDetail()).isFalse();
     }
 
+    /** 独立审查 #1: 无 id 的探针账号只靠岗位区分, 缓存键里没有岗位时, 财务经理的「有」会被质检员读走。 */
+    @Test
+    @DisplayName("🔴 同一个服务实例上先问财务经理再问质检员: 财务经理的答案不能被缓存发给质检员 (反过来也一样)")
+    void cachedAnswerOfOneRoleIsNeverServedToAnotherRole() {
+        assertThat(typesFor("finance_manager")).contains(TodoType.PURCHASE_FINANCE_REVIEW);
+        assertThat(typesFor("quality_inspector")).isEmpty();
+        assertThat(typesFor("finance_manager")).contains(TodoType.PURCHASE_FINANCE_REVIEW);
+        // 反方向: 先问没有权限的, 再问有权限的, 有权限的不能被缓存的「没有」盖住
+        assertThat(typesFor("hr_admin")).doesNotContain(TodoType.PURCHASE_FINANCE_REVIEW);
+        assertThat(typesFor("finance_manager")).contains(TodoType.PURCHASE_FINANCE_REVIEW);
+    }
+
+    @Test
+    @DisplayName("权限配置读不到 (仓库异常) 时 listTodos 不抛 500: 该类待办不出, 其它照常")
+    void unreadablePermissionConfigDoesNotBreakTheWholeList() {
+        com.cretas.aims.service.PermissionService broken = mock(com.cretas.aims.service.PermissionService.class);
+        when(broken.roleHasPermission(anyString(), anyString(), anyString()))
+                .thenThrow(new com.cretas.aims.exception.BusinessException(503, "权限配置暂时无法读取"));
+        ReflectionTestUtils.setField(service, "permissionService", broken);
+
+        assertThat(service.listTodos(F, "finance_manager")).isEmpty();
+    }
+
     @Test
     @DisplayName("阴性: 没有排程 / 生产权限的岗位不会去查强制插单 (质检员), 也不出这类待办")
     void noForceInsertForRolesWithoutSchedulingPermission() {

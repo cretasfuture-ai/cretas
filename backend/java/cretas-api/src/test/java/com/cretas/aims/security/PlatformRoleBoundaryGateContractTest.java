@@ -81,6 +81,7 @@ class PlatformRoleBoundaryGateContractTest {
             Map.entry("controller/FormAssistantController", IN_FACTORY),
             Map.entry("security/DataScopeResolver", IN_FACTORY),
             Map.entry("security/RoleDataScopeService", IN_FACTORY),
+            Map.entry("service/DisposalRecordService", IN_FACTORY),
             Map.entry("service/agentops/AgentOpsService", IN_FACTORY),
             Map.entry("service/factory/impl/FactoryStocktakeServiceImpl", IN_FACTORY),
             Map.entry("service/factory/impl/SemiFinishedStocktakeServiceImpl", IN_FACTORY),

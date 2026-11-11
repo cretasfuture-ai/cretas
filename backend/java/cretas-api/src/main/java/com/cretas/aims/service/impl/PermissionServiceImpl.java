@@ -589,9 +589,11 @@ public class PermissionServiceImpl implements PermissionService {
         String action = parts[1];
 
         // 缓存查询 (5min TTL)
+        // 岗位也进缓存键: 无 id 的探针账号 (roleHasPermission) 只靠岗位区分, 不带岗位会把 A 岗位的答案发给 B 岗位
         String cacheKey = (user.getId() == null ? "0" : user.getId())
             + ":" + permissionCode
-            + ":" + (user.getFactoryId() == null ? "" : user.getFactoryId());
+            + ":" + (user.getFactoryId() == null ? "" : user.getFactoryId())
+            + ":" + role.name();
         long now = System.currentTimeMillis();
         long[] exp = resolveCache.get(cacheKey);
         if (exp != null && exp[0] > now) {

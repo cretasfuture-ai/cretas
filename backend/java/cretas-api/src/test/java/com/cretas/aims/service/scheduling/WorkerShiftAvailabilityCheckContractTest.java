@@ -133,6 +133,24 @@ class WorkerShiftAvailabilityCheckContractTest {
         verify(leaveRequests).findOverlappingActive(FACTORY, 1L, START.toLocalDate(), START.toLocalDate());
     }
 
+    /** 独立审查 #5: 权限配置读不到时是「人员未验证」, 不能把异常抛出去, 也不能当成没人。 */
+    @Test
+    void unreadablePermissionConfigIsUnverifiedNotAnException() {
+        com.cretas.aims.service.PermissionService broken = org.mockito.Mockito.mock(com.cretas.aims.service.PermissionService.class);
+        when(broken.hasPermission(any(User.class), any()))
+                .thenThrow(new com.cretas.aims.exception.BusinessException(503, "权限配置暂时无法读取"));
+        WorkerShiftAvailabilityCheck brokenCheck = new WorkerShiftAvailabilityCheck(shiftAssignments, shifts, users,
+                leaveRequests, workerAssignments, broken);
+        when(shiftAssignments.findByFactoryIdAndWorkDateBetween(
+                FACTORY, START.toLocalDate().minusDays(1), END.toLocalDate()))
+                .thenReturn(List.of(assignment(1L, START.toLocalDate(), "DAY", ShiftAssignmentStatus.SCHEDULED)));
+
+        var result = brokenCheck.check(FACTORY, START, END, 1);
+
+        assertThat(result.verified()).isFalse();
+        assertThat(result.message()).startsWith("人员未验证");
+    }
+
     /** B6: 厂长亲自上线 (有排班) 要算可派人手, 不能因为岗位名不在 5 个名单里被丢掉。 */
     @Test
     void factoryHeadWithAShiftCountsAsAvailableWorker() {

@@ -265,10 +265,13 @@ public class DisposalRecordService implements IDisposalRecordService {
     @Autowired(required = false)
     private PermissionService permissionService;
 
+    private static final java.util.Set<String> LEGACY_PLATFORM_APPROVERS =
+            java.util.Set.of("platform_super_admin", "platform_admin");
+
     @Override
     public boolean canApprove(String factoryId, String role) {
-        // 平台账号 (改动前名单里的 platform_admin / platform_super_admin) 保持可审批; 用 PlatformRoleBoundary 判, 不再点名岗位字符串。
-        if (com.cretas.aims.security.PlatformRoleBoundary.isPlatformTier(role)) {
+        // 平台账号: 只认改动前名单里的这两个 (不扩到 developer / auditor 等整个平台层)
+        if (role != null && LEGACY_PLATFORM_APPROVERS.contains(role.trim().toLowerCase())) {
             return true;
         }
         return permissionService != null

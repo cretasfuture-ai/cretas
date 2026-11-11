@@ -203,11 +203,16 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         for (TodoType type : TodoType.values()) {
             List<String> codes = TYPE_PERMISSIONS.get(type);
             if (codes == null) continue;
-            for (String code : codes) {
-                if (permissionService.roleHasPermission(factoryId, callerRole, code)) {
-                    out.add(type);
-                    break;
+            try {
+                for (String code : codes) {
+                    if (permissionService.roleHasPermission(factoryId, callerRole, code)) {
+                        out.add(type);
+                        break;
+                    }
                 }
+            } catch (RuntimeException failure) {
+                // fail-soft: 权限配置读不到时这一类待办不出 (宁可少给不多给), 不影响其它类
+                log.warn("[MyTodoAggregator] 权限读取失败, 跳过 type={} factoryId={}: {}", type, factoryId, failure.getMessage());
             }
         }
         return out;

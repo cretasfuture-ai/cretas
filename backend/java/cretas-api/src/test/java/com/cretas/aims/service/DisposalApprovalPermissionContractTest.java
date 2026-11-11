@@ -63,6 +63,10 @@ class DisposalApprovalPermissionContractTest {
         // 改动前名单里的平台账号仍然能审批
         assertThat(service.canApprove(FACTORY, "platform_admin")).isTrue();
         assertThat(service.canApprove(FACTORY, "platform_super_admin")).isTrue();
+        // 阴性对照: 平台层的其它账号 (开发 / 审计 / 运维) 不因本次改动获得报废审批
+        for (String other : new String[]{"developer", "auditor", "system_admin", "operation_admin", "super_admin"}) {
+            assertThat(service.canApprove(FACTORY, other)).as(other).isFalse();
+        }
     }
 
     @Test

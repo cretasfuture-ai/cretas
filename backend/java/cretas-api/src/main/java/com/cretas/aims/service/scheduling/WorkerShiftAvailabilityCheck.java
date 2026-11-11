@@ -96,6 +96,19 @@ public class WorkerShiftAvailabilityCheck {
             }
         }
 
+        // 谁具备报工权限: 一次算好。权限配置读不到 (仓库异常) = 人员未验证, 不能把异常抛成 500 也不能当没人
+        Set<Long> reporters = new java.util.HashSet<>();
+        try {
+            for (User user : userById.values()) {
+                if (permissions.hasPermission(user, REPORTING_PERMISSION)) {
+                    reporters.add(user.getId());
+                }
+            }
+        } catch (RuntimeException failure) {
+            log.warn("人员核验读取失败: factoryId={}, source=permission, type={}", factoryId, failure.getClass().getSimpleName());
+            return Result.unverified(required, UNVERIFIED);
+        }
+
         Map<Long, Candidate> candidates = new HashMap<>();
         Map<String, Optional<AttendanceShift>> shiftCache = new HashMap<>();
         boolean unknownFact = false;
@@ -117,7 +130,7 @@ public class WorkerShiftAvailabilityCheck {
                 continue;
             }
             Candidate candidate = candidates.computeIfAbsent(userId, ignored -> new Candidate(user));
-            if (!productionRole(user)) {
+            if (!reporters.contains(user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(user, start, end);
@@ -184,7 +197,7 @@ public class WorkerShiftAvailabilityCheck {
         Set<Long> available = new LinkedHashSet<>();
         boolean unknownCandidate = unknownFact;
         for (Candidate candidate : candidates.values()) {
-            if (!productionRole(candidate.user)) {
+            if (!reporters.contains(candidate.user.getId())) {
                 continue;
             }
             EmploymentEvidence employment = employmentEvidence(candidate.user, start, end);
@@ -323,10 +336,6 @@ public class WorkerShiftAvailabilityCheck {
 
     private static boolean validWindow(LocalDateTime start, LocalDateTime end) {
         return start.isBefore(end) && !end.isAfter(start.plusDays(7));
-    }
-
-    private boolean productionRole(User user) {
-        return user != null && permissions.hasPermission(user, REPORTING_PERMISSION);
     }
 
     private static EmploymentEvidence employmentEvidence(User user, LocalDateTime start, LocalDateTime end) {
