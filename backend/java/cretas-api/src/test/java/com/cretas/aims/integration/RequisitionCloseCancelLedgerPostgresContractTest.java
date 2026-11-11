@@ -639,7 +639,8 @@ class RequisitionCloseCancelLedgerPostgresContractTest {
             release.countDown();
             cancel.get(30, TimeUnit.SECONDS);
             Throwable outcome = transfer.get(30, TimeUnit.SECONDS);
-            assertThat(outcome).as("调拨等到锁后读到已取消, 必须拒绝").isInstanceOf(BusinessException.class);
+            assertThat(outcome).as("调拨等到锁后读到已取消, 必须按状态拒绝").isInstanceOfSatisfying(BusinessException.class,
+                    e -> assertThat(e.getMessage()).contains("当前 CANCELLED"));
             assertThat(requisitionStatus(f)).isEqualTo("CANCELLED");
             assertThat(available(f.sourceBatchId())).as("料没被搬走").isEqualByComparingTo("100");
             assertThat(workshopBatchesOf(f)).as("生产仓没有建批次").isZero();

@@ -1626,7 +1626,13 @@ class ClerkProcessEntryServiceImplTest {
     @DisplayName("T19: 客户自带料无单价 → 按已知 0 计, 批次成本仍完整")
     void t19_customerOwnedUnpricedMaterialIsKnownZero() {
         stubNoIdempotency("T19-KEY");
-        stubPlan();
+        // 客供料只能进同一客户的来料加工计划 (#1606 审查 M4: 逐道录入原料来源按领料口径判归属)
+        ProductionPlan customerPlan = new ProductionPlan();
+        customerPlan.setId(PLAN_ID);
+        customerPlan.setFactoryId(FACTORY);
+        customerPlan.setMaterialSupplyMode(com.cretas.aims.entity.enums.MaterialSupplyMode.CUSTOMER_SUPPLIED);
+        customerPlan.setCustomerId("CUST-T19");
+        when(planRepository.findByIdAndFactoryId(PLAN_ID, FACTORY)).thenReturn(Optional.of(customerPlan));
         stubWarehouse();
         stubBatchSave();
         stubMbSave();
@@ -1636,6 +1642,7 @@ class ClerkProcessEntryServiceImplTest {
 
         MaterialBatch customerRaw = rawMb("RAW-T19-C", FACTORY, null);
         customerRaw.setOwnership(com.cretas.aims.entity.enums.InventoryOwnership.CUSTOMER_OWNED);
+        customerRaw.setOwnerCustomerId("CUST-T19");
         when(materialBatchRepo.findByIdAndFactoryId("RAW-T19-C", FACTORY)).thenReturn(Optional.of(customerRaw));
         BatchEntry finished = finishedBatch("FIN-T19", "PT-PRODUCT", List.of(
                 rawStep(1, "3.2", "16", List.of(rawInput("RAW-T19-C", "3.2")))));

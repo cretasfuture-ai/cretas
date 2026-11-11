@@ -134,10 +134,16 @@ public final class ProductionInventoryOwnershipGuard {
         assertMaterialBatchAllowed(plan, batch, materialMainCategory, hintTarget);
     }
 
-    /** 生产形成的在制半成品 (带 productTypeId) 或副产批次。 */
+    /**
+     * 生产形成的在制半成品 / 副产批次: 带 productTypeId、带副产来源报工, 或单据类型是生产批次
+     * ({@code QcInspectionGuard.WIP_SOURCE_DOC_TYPE}, 与 IntermediateOwnershipGuard / 结单同一识别口径;
+     * 较早的在制批次把产出身份写在 materialTypeId 里, productTypeId 为空, 只能靠单据类型认出来)。
+     */
     public static boolean isProducedIntermediate(MaterialBatch batch) {
         return batch != null
-                && (!isBlank(batch.getProductTypeId()) || batch.getByproductSourceReportId() != null);
+                && (!isBlank(batch.getProductTypeId()) || batch.getByproductSourceReportId() != null
+                || com.cretas.aims.service.quality.release.QcInspectionGuard.WIP_SOURCE_DOC_TYPE
+                        .equals(batch.getSourceDocType()));
     }
 
     /**

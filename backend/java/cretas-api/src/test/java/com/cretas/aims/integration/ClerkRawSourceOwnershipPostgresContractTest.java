@@ -220,6 +220,21 @@ class ClerkRawSourceOwnershipPostgresContractTest {
         assertRecorded(plan, rawBatch("M4-MT-RAW", InventoryOwnership.CUSTOMER_OWNED, "CUST-A", "SO-A"));
     }
 
+    /**
+     * 生产形成的在制批次 (公司归属, 不随计划打戳) 作为投入不按原料判 —— prod LIUSHANMEN 来料加工计划上就有这种行。
+     * 两种识别: 带 productTypeId 的, 以及较早只有单据类型 PRODUCTION_BATCH 的。
+     */
+    @Test
+    void customerSuppliedPlan_acceptsProducedWipBatches() {
+        String plan = plan(MaterialSupplyMode.CUSTOMER_SUPPLIED, "CUST-A", "SO-A");
+        String wip = rawBatch("M4-MT-RAW", InventoryOwnership.COMPANY_OWNED, null, null);
+        jdbc.update("update material_batches set product_type_id = 'M4-FIN' where id = ?", wip);
+        assertRecorded(plan, wip);
+        String legacyWip = rawBatch("M4-MT-RAW", InventoryOwnership.COMPANY_OWNED, null, null);
+        jdbc.update("update material_batches set source_doc_type = 'PRODUCTION_BATCH' where id = ?", legacyWip);
+        assertRecorded(plan, legacyWip);
+    }
+
     /** 物料大类真的从物料字典读到了: 来料加工计划里, 公司自有的辅料照常放行 (大类读不到就会按原料拦下)。 */
     @Test
     void customerSuppliedPlan_acceptsCompanyAuxiliary() {

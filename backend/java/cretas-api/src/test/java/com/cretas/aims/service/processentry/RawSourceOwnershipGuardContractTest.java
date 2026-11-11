@@ -52,6 +52,15 @@ class RawSourceOwnershipGuardContractTest {
                 customerPlan(), wip, null, "t")).doesNotThrowAnyException();
     }
 
+    /** 较早的在制批次: productTypeId 为空, 只有单据类型 PRODUCTION_BATCH 认得出 (独立审查 MED2)。 */
+    @Test
+    void legacyWipBatchRecognisedBySourceDocTypeIsNotJudgedAsRaw() {
+        MaterialBatch legacyWip = companyBatch();
+        legacyWip.setSourceDocType("PRODUCTION_BATCH");
+        assertThatCode(() -> ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                customerPlan(), legacyWip, null, "t")).doesNotThrowAnyException();
+    }
+
     @Test
     void byproductBatchOnCustomerPlanIsNotJudgedAsRaw() {
         MaterialBatch bp = companyBatch();

@@ -4146,7 +4146,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
 
     private void assertRawSourceOwnership(String factoryId, String planId, MaterialBatch rawMb) {
         com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findByIdAndFactoryId(planId, factoryId)
-                .orElse(null);
+                .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
         String mainCategory = rawMaterialTypeRepository == null || rawMb.getMaterialTypeId() == null ? null
                 : rawMaterialTypeRepository.findByIdAndFactoryId(rawMb.getMaterialTypeId(), factoryId)
                         .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
