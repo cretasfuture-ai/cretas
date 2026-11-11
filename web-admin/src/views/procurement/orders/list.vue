@@ -317,7 +317,7 @@ const supplierLocked = computed(() => isSupplierLockedInEditor({
   orderStatus: editingOrderStatus.value,
   originalSupplierId: editingOriginalSupplierId.value,
 }));
-/** 正在给「原本没有供应商」的草稿补录供应商 —— 换供应商时保留明细, 按原料重新对应。 */
+/** 正在编辑草稿的供应商 (补录或更换) —— 换供应商时保留明细, 按原料重新对应到新供应商。 */
 const backfillingDraftSupplier = computed(() => isEditing.value && !supplierLocked.value);
 /** 补录供应商后, 该供应商不供应 (或供应关系不唯一) 的草稿原料, 需用户处理。 */
 const unmatchedDraftMaterials = ref<string[]>([]);

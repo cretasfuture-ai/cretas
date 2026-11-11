@@ -58,6 +58,37 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
             @Param("recipeId") String recipeId,
             @Param("factoryId") String factoryId);
 
+    /**
+     * 只取配方的 BOM Family id (标量, 不把配方实体读进持久化上下文), 供
+     * {@link com.cretas.aims.service.bom.BomRecipeHeadLocks} 先定位整族再按固定顺序加锁。
+     */
+    @Query("""
+            select recipe.bomFamilyId
+              from BomRecipe recipe
+             where recipe.id = :recipeId
+               and recipe.factoryId = :factoryId
+            """)
+    Optional<String> findBomFamilyIdByIdAndFactoryId(
+            @Param("recipeId") String recipeId,
+            @Param("factoryId") String factoryId);
+
+    /**
+     * 按配方 id 升序锁住同一 BOM Family 的全部配方头 (N1)。改一个成员的行价会重算并改写全族的配方头,
+     * 两个成员同时调价若各自先锁自己的头、再去写对方的头就会互等; 全族按同一顺序加锁则不会。
+     * PostgreSQL 的 FOR UPDATE 在排序之后逐行加锁, 所以 ORDER BY 就是加锁顺序。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("""
+            select recipe
+              from BomRecipe recipe
+             where recipe.factoryId = :factoryId
+               and recipe.bomFamilyId = :bomFamilyId
+             order by recipe.id asc
+            """)
+    List<BomRecipe> lockFamilyByFactoryIdAndBomFamilyIdOrderById(
+            @Param("factoryId") String factoryId,
+            @Param("bomFamilyId") String bomFamilyId);
+
     /** 取产品当前 BOM (is_current=TRUE, 不论 DRAFT/ACTIVE) — picker 软过滤用, 定义即生效无需激活仪式. */
     Optional<BomRecipe> findByFactoryIdAndProductTypeIdAndIsCurrentTrue(
             String factoryId, String productTypeId);

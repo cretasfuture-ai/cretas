@@ -270,4 +270,48 @@ class LineCapacityEquipmentCheckContractTest {
         assertThat(equipmentStatus(device(1, F, "idle"), device(2, "F-OTHER", "idle"))).isEqualTo("MISSING");
         assertThat(equipmentStatus(device(1, F, "idle"), device(2, F, null))).isEqualTo("MISSING");
     }
+
+    // ------------------------------------------- 包装单位产能 (工厂开关 FACTORY_UNIT, 2026-11-11)
+
+    private void packageConfig(String lineId, String perHour, String packageUnit) {
+        config(lineId, null, perHour, CapacityUnit.PACKAGE);
+        configRows.get(configRows.size() - 1).setPackageUnit(packageUnit);
+    }
+
+    @Test
+    void packageIsNeverAcceptedAsAGenericOrderUnit() {
+        assertThat(LineCapacityEquipmentCheck.parseUnit("PACKAGE")).isNull();
+        assertThat(LineCapacityEquipmentCheck.parseUnit("package")).isNull();
+        assertThat(LineCapacityEquipmentCheck.parseUnit("KG")).isEqualTo(CapacityUnit.KG);
+    }
+
+    @Test
+    void aPackageRowDoesNotCountForAKgOrderAndAKgRowDoesNotCountForABagOrder() {
+        line("L1", "包装线", ProductionLine.LineStatus.active);
+        packageConfig("L1", "100", "袋");
+
+        assertThat(LineCapacityEquipmentCheck.status(capacity("50", "KG", null))).isEqualTo("MISSING");
+
+        configRows.clear();
+        config("L1", null, "100", CapacityUnit.KG);
+        ResourceCheckResult r = check.checkCapacityInPackageUnit(F, PT, new BigDecimal("50"), "袋", String::equals, null, START, END);
+        assertThat(LineCapacityEquipmentCheck.status(r)).isEqualTo("MISSING");
+        assertThat(r.getMessage()).contains("袋");
+    }
+
+    @Test
+    void aBagOrderIsCheckedAgainstBagCapacityOnlyWhenTheUnitsAreEquivalent() {
+        line("L1", "包装线", ProductionLine.LineStatus.active);
+        packageConfig("L1", "100", "袋");   // 2 小时最多 200 袋
+
+        ResourceCheckResult ok = check.checkCapacityInPackageUnit(F, PT, new BigDecimal("150"), "袋", String::equals, null, START, END);
+        assertThat(LineCapacityEquipmentCheck.status(ok)).isEqualTo("READY");
+        assertThat(ok.getMessage()).contains("袋");
+
+        ResourceCheckResult tooMany = check.checkCapacityInPackageUnit(F, PT, new BigDecimal("250"), "袋", String::equals, null, START, END);
+        assertThat(LineCapacityEquipmentCheck.status(tooMany)).isEqualTo("CONFLICT");
+
+        ResourceCheckResult box = check.checkCapacityInPackageUnit(F, PT, new BigDecimal("10"), "盒", String::equals, null, START, END);
+        assertThat(LineCapacityEquipmentCheck.status(box)).isEqualTo("MISSING");
+    }
 }

@@ -1146,8 +1146,12 @@ export function updateSchedulingSettings(factoryId: string, settings: Partial<Sc
 
 // ==================== S4 产线产能与产品所需设备 ====================
 
-/** 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。 */
-export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH';
+/**
+ * 产能单位: 件 / 千克 / 批。插单只认与订单同单位的配置, 不换算。
+ * PACKAGE = 本厂自己的包装单位 (袋 / 盒 …), 单位名在 packageUnit; 只有工厂把
+ * production.capacity.package_unit_mode 设成 FACTORY_UNIT 时后端才接受 (2026-11-11)。
+ */
+export type CapacityUnit = 'PIECE' | 'KG' | 'BATCH' | 'PACKAGE';
 
 export interface LineCapacityConfig {
   id: number;
@@ -1156,6 +1160,8 @@ export interface LineCapacityConfig {
   productTypeId: string | null;
   capacityPerHour: number;
   capacityUnit: CapacityUnit;
+  /** 仅 PACKAGE 行有值: 本厂自己的单位名 */
+  packageUnit: string | null;
   source: 'CONVERSATIONAL_BUILD' | 'FACTORY_CONFIG';
   /** 谁配的: 工厂用户或平台管理员 (对话建厂) */
   actorType: 'FACTORY_USER' | 'PLATFORM_ADMIN';
@@ -1181,7 +1187,8 @@ export function setLineCapacity(factoryId: string, data: {
   productionLineId: string;
   productTypeId?: string | null;
   capacityPerHour: number;
-  capacityUnit: CapacityUnit;
+  /** PIECE / KG / BATCH, 或本厂包装单位名 (如「袋」, 须开 FACTORY_UNIT) */
+  capacityUnit: string;
 }) {
   return put<LineCapacityConfig>(`/${factoryId}/scheduling/line-capacity/capacity`, data);
 }

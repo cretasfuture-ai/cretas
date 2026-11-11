@@ -162,6 +162,40 @@ class PermissionServiceImplApprovalCodesContractTest {
     }
 
     @Test
+    @DisplayName("BOM 调价审批默认 = 旧门槛 (production / rd / finance 任一读写) 去掉一线岗位, 每个岗位逐个断言")
+    void bomPriceAdjustmentDefaultIsTheOldGateMinusFrontline() {
+        int granted = 0;
+        for (FactoryUserRole role : liveFactoryRoles()) {
+            boolean oldGate = service.hasPermission(user(role, F), "production:read_write")
+                    || service.hasPermission(user(role, F), "rd:read_write")
+                    || service.hasPermission(user(role, F), "finance:read_write");
+            boolean expected = oldGate && !FRONTLINE.contains(role);
+            assertThat(can(role, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT))
+                    .as("BOM 调价 %s (旧门槛 %s)", role, oldGate).isEqualTo(expected);
+            if (expected) granted++;
+        }
+        // 阳性对照: 不是空名单; 一线确实是旧门槛放行而新默认拦下的 (否则「去掉一线」这句是空话)
+        assertThat(granted).isGreaterThanOrEqualTo(4);
+        assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isTrue();
+        assertThat(can(FactoryUserRole.finance_manager, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isTrue();
+        assertThat(service.hasPermission(user(FactoryUserRole.operator, F), "production:read_write")).isTrue();
+        assertThat(can(FactoryUserRole.operator, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isFalse();
+    }
+
+    @Test
+    @DisplayName("BOM 调价审批: 工厂把生产经理的 production 降成只读 → 默认不再能批; 显式授权给操作员 → 能批")
+    void bomPriceAdjustmentDefaultFollowsTheModuleLevelAndCanBeGrantedExplicitly() {
+        fakeL2.put(F, new HashMap<>(Map.of(
+                "production_manager", Map.of("production", "r"),
+                "operator", Map.of(PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT, "rw"))));
+        assertThat(can(FactoryUserRole.production_manager, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isFalse();
+        assertThat(can(FactoryUserRole.operator, F, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isTrue();
+        // 别的厂仍是默认
+        assertThat(can(FactoryUserRole.production_manager, OTHER, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isTrue();
+        assertThat(can(FactoryUserRole.operator, OTHER, PermissionServiceImpl.APPROVAL_BOM_PRICE_ADJUSTMENT)).isFalse();
+    }
+
+    @Test
     @DisplayName("一线岗位 (操作员 / 质检员 / 班组长 …) 五个审批码默认一个都没有")
     void frontlineRolesHoldNoApprovalCodeByDefault() {
         for (FactoryUserRole role : FRONTLINE) {

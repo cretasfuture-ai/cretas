@@ -91,8 +91,8 @@ describe('isSupplierLockedInEditor (D-S411R-01)', () => {
     }
   });
 
-  it('草稿但已有供应商: 仍锁 (保持原行为)', () => {
-    expect(isSupplierLockedInEditor({ isEditing: true, orderStatus: 'DRAFT', originalSupplierId: 'sup-1' })).toBe(true);
+  it('草稿且已有供应商: 不锁, 可以换 (2026-11-11 交接单第二节)', () => {
+    expect(isSupplierLockedInEditor({ isEditing: true, orderStatus: 'DRAFT', originalSupplierId: 'sup-1' })).toBe(false);
   });
 
   it('非草稿一律锁, 即使没有供应商 (纵深防御)', () => {

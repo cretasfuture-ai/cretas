@@ -248,7 +248,9 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         // D-S5-10: 历史 (归档) 版本的成本不回写。配方头必须在工艺保密检查【之前】加锁读 ——
         // 保密检查按配方定位产品, 会无锁 findById 把配方读进上下文, 之后再 FOR UPDATE 拿到的是那份旧对象,
         // 并发激活新版本把它归档时这里仍会读成 ACTIVE (审查 A)。锁序与 BOM 成本更正一致: 先行后头。
-        BomRecipe recipe = recipeRepository.lockByIdAndFactoryId(item.getRecipeId(), factoryId).orElse(null);
+        // N1: 锁的是整族配方头 (按 id 升序), 不只是这一个 —— 重算会改写同族所有成员的头。
+        BomRecipe recipe = com.cretas.aims.service.bom.BomRecipeHeadLocks
+                .lockWithFamily(recipeRepository, factoryId, item.getRecipeId()).orElse(null);
         // 工艺保密 (写入侧): 批准会改写配方行的单价与行成本 (行成本 = 用量 × 单价), 属于改配方, 要编辑权
         if (processSecretGuard != null) {
             processSecretGuard.requireRecipe(factoryId, item.getRecipeId(),
@@ -306,6 +308,52 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         auditRepository.save(audit);
 
         return proposalRepository.save(proposal);
+    }
+
+    /** 驳回原因上限 (approval_comment 是 TEXT, 这里只防误贴整段日志)。 */
+    static final int REJECT_REASON_MAX_LENGTH = 500;
+    public static final String ERROR_REJECT_REASON_REQUIRED = "BOM_PRICE_PROPOSAL_REJECT_REASON_REQUIRED";
+
+    @Override
+    @Transactional
+    public BomPriceAdjustmentProposal reject(String factoryId, Long proposalId, Long rejectorId, String reason) {
+        if (rejectorId == null) {
+            throw new BusinessException(401, "无法识别驳回人，请重新登录");
+        }
+        String trimmed = reason == null ? "" : reason.trim();
+        if (trimmed.isEmpty()) {
+            throw new BusinessException(400, "驳回调价建议必须填写原因")
+                    .withCode(ERROR_REJECT_REASON_REQUIRED)
+                    .withHintTarget("reason");
+        }
+        if (trimmed.length() > REJECT_REASON_MAX_LENGTH) {
+            throw new BusinessException(400, "驳回原因不能超过 " + REJECT_REASON_MAX_LENGTH + " 字")
+                    .withHintTarget("reason");
+        }
+        // 与批准、确认入库同一锁序: 先锁物料, 再锁建议。只锁建议的话, 收货路径 (已持物料锁) 原地改写这条
+        // PENDING 建议时会撞上乐观锁, 让一次正常的确认入库失败。
+        String materialTypeId = proposalRepository.findMaterialTypeIdByIdAndFactoryId(proposalId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("BOM调价建议不存在: " + proposalId));
+        lockLiveMaterial(factoryId, materialTypeId);
+        BomPriceAdjustmentProposal proposal = proposalRepository.lockByIdAndFactoryId(proposalId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("BOM调价建议不存在: " + proposalId));
+        if (proposal.getStatus() != Status.PENDING) {
+            throw new BusinessException(409, "只有待审批的BOM调价建议可以驳回");
+        }
+        // 驳回不改配方行、不写调价审计 (审计记的是行价的前后值); 结论留在建议行上
+        proposal.setStatus(Status.REJECTED);
+        proposal.setApprovedBy(rejectorId);
+        proposal.setApprovedAt(LocalDateTime.now());
+        proposal.setApprovalComment(trimmed);
+        log.info("BOM price adjustment proposal rejected: proposalId={}, factoryId={}, rejectorId={}",
+                proposalId, factoryId, rejectorId);
+        return proposalRepository.save(proposal);
+    }
+
+    @Override
+    public BomPriceAdjustmentProposal get(String factoryId, Long proposalId) {
+        return proposalRepository.findByIdAndFactoryId(proposalId, factoryId)
+                .orElseThrow(() -> new ResourceNotFoundException("BOM调价建议不存在: " + proposalId));
     }
 
     private BusinessException stale() {
