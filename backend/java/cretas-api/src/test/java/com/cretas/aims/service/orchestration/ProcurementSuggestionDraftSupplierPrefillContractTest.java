@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
  * 原料的默认 (首选) 供应商 → 最近一次真实采购的供应商 → 都取不到就留空, ⛔ 不猜。
  * 读数取的是真正写进 {@code purchaseOrderRepository.save} 的那张单 (产品真实入口 generateSuggestions)。
  */
-class ProcurementSuggestionDraftSupplierPrefillTest {
+class ProcurementSuggestionDraftSupplierPrefillContractTest {
 
     private static final String F = "F006";
     private static final String MAT = "RMT-QA-salt";
