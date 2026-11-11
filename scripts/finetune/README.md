@@ -213,3 +213,33 @@ A: 减小 `--batch-size` (如 4) 或增加 `--freeze-layers`
 配额核算按UTC日期和官方共享模型组进行（北京时间08:00重置）；组内多个模型合计，两个组独立。分组快照在 `factory_quota_accounting.py`，不代表模型当前可调用或项目已加入免费计划。旧回执缺日期时，需要与原文件SHA绑定的 `.utc-days.json` 证据，不能按目录名猜日期；未知分组/日期明确停止。跨UTC日需等待在途请求完成后重建client，已完成请求按原payload缓存复用。停止时排空在途请求，避免仅因提前关闭HTTP连接造成未知状态。
 
 GPT6.1 Terra→GPT6 Luna的源码规则教师影子试验：12条独立探针前后均12/12，未证明净增益，未接入当前模型/路由；12条全部入保护名单。GPT6 Luna按当前帮助表保守纳入100万组；Terra免费归属未列明，单列付费预留。具体额度、缓存写入计价更正和main冻结事项见 `docs/dispatch/archive/2026-11-05-intent-quota-teacher.md`。
+
+
+## 带上下文的蒸馏数据管线（INTENT-DISTILL-20261111，P3）
+
+学生要学的是「状态 + 当前句 → 对话动作 + 意图」，不是「单句 → 标签」。管线只生成与标注数据，不训练、不换线上模型、不碰 `backend/` 与 prod 数据。代码：`distill_common.py`（样本 schema 校验、Tool 读写表、带美元上限的可续跑 API 客户端）、`distill_leak_check.py`（防泄漏）、`distill_pipeline.py`（generate / label / assemble / split / report / validate）、`test_distill_pipeline.py`（离线测试，`python -m pytest scripts/finetune/test_distill_pipeline.py`）。
+
+样本字段：`utterance` 当前句；`state` 上轮任务状态（`prev_intent`、`confirmed_params[{name,value,source}]`，source 为 explicit_turn / confirmed / default，`pending_fields`、`last_action`；全新会话为 null）；`candidates` 候选意图 ID；`dialogue_act` 取 NEW_TASK / CHANGE_PARAM / PAGE / CANCEL / NEED_CLARIFY；`intent`（CANCEL 与 NEED_CLARIFY 必须为空，CHANGE_PARAM 与 PAGE 必须等于 `state.prev_intent`）；`teacher_probs` Luna Choice 对候选（加 `__NONE__`）的归一化概率；`teachers` 两位老师各自的结论；`agreement`；`family`（意图编码的业务域前缀，切分按它，同族不跨集合）；`read_only`；`generator_plan`（生成时的计划，仅作诊断，不是标签）。`validate_sample` 对 raw / labeled / review 三个阶段分别校验。
+
+`read_only` 取自 Tool 源码里声明的 `getAccessMode()`（CI 强制全量覆盖的二值声明，未声明按 WRITE）；SKILL 意图要求绑定的全部 Tool 都是 READ 才算只读；解析不出的（目前 `GATE_DIAGNOSE_BATCH`、`PAGINATION_PREVIOUS`）记 null、不作生成目标、不猜。没有意图的样本按 `state.prev_intent` 对应任务取值，二者都没有则为 null。
+
+生成：`gpt-5.4`（强模型，独立于两位老师）按语义族逐组写 6 条一组的多轮样本（续句改参数、翻页或取消、切换目标、含糊需澄清、一对「查/改只差一两个字」的全新会话对照），生成时只看到本族意图，不看任何受保护集合；偏离计划的条目直接丢弃。标注：Luna Choice（Decisions API，两道题：对话动作、意图，带概率）与 Terra（Responses，结构化输出）各自独立调用，互相看不到对方，也看不到生成计划。两者的对话动作和意图都一致、且都满足标签规则 ⇒ 银标训练集；不一致、或任一方违反标签规则 ⇒ `review-queue.jsonl`，只给人工审核，不进训练集，label 字段置空。老师一致不是人工真值，验收集另建。第一批 100 条标注后一致率低于 70% 会自动停止（退出码 3），不靠放宽判定凑数。
+
+防泄漏：`python distill_leak_check.py --in raw.jsonl --out clean.jsonl --dropped dropped.jsonl --report r.json` 对 35 / 796 / 1637 评测集、冻结的 holdout 登记、教师探针和已打开的多轮开发对话（`Cretas意图架构只读审计-20261105` 下全部文件）做精确匹配加近邻匹配（字符比率 ≥ .85，沿用 `OverlapIndex`；再加字符二元组 Jaccard ≥ .6 兜底），命中即剔除并计数；任一受保护来源缺失直接报错而不是静默缩小范围。`--self-test` 与报告里的 `self_test` 主动构造精确命中与近邻命中并断言被拦。注意：这是字面相似度，不是向量语义近邻；真正的语义近邻需要另行用嵌入复核。
+
+预算：`DollarClient` 每次调用前按保守上界预留，超过 `--cap`（本线 10 美元）立即停；账本 `api-ledger.json` 与回执 `api-results.jsonl`（不含密钥）在 `--work` 目录，已有回执同 payload 命中缓存、失败回执和未决预留永不自动重发。价格是上界（Terra 按缓存写入价、生成模型按最高输出价、Luna Decisions 只计输入），不是发票。
+
+第一批试点（500 条，数据在仓外 `C:\Users\Steve\Documents\Cretas意图蒸馏-20261111\`，Git 不收）：
+
+| 文件 | SHA256 |
+|---|---|
+| silver.jsonl（383 条银标） | 12a2ed7ec8eefca0f8aa139b6bfffd923f0f17aacf36d425c0f40620a947fd53 |
+| silver-train.jsonl | 206407c52b6dc0e7f88b135b3e5bc62f4e1fc459eae73c10bb8f06e395246244 |
+| silver-validation.jsonl | 1c72fe1c5e56876a42899d12ad73aa2076821077a6d13c24cec220ca0ab1ca9d |
+| silver-calibration.jsonl | a7c1a9e04a7de154ced88c311d13c1ed7c50fd22b9cd1174783dda53004b9c4a |
+| review-queue.jsonl（117 条人工审核） | 5ec696447cd822d1a63df61e89cb3dcd053cc283299ef6ec37ff078d22d45d93 |
+| labeled-raw.jsonl（两位老师原始结论） | 9edd5f7040a7a2876c691b72ecf29f1f85dcadc632250788ca8934d460f01f0b |
+| raw.jsonl / clean.jsonl | 4e903c2796e80a28b75ee9cc6a89f2f0edb57bb5851641d0fc1f5e90d3cc3f69 / 5f9accd1d22bc7150b8a0a15bded3c3225805d1e43e5f431e88c3b99258bbfae |
+| pilot-report.json | d3e8e8acb3e009e5f803e7d94b874af1b7e420d9d99557993359a6c0a83f76af |
+
+读数见 `pilot-report.json`。要点：老师一致率 76.6%；NEED_CLARIFY 只有 44.7% 一致（Luna 倾向直接选一个意图、Terra 倾向要求澄清），所以银标集里「该澄清」的样本偏少，这是学生训练时必须单独补审的部分，不能把银标集当作澄清判定的代表。
