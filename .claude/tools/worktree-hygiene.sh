@@ -3,6 +3,12 @@
 #
 #   .claude/tools/worktree-hygiene.sh --check                 只报数与分类, 不动任何东西 (退出码: 0=未超限, 3=超限)
 #   .claude/tools/worktree-hygiene.sh --apply [--keep <路径>]...   收缩到上限以内
+#   .claude/tools/worktree-hygiene.sh --auto [--keep <路径>]...    按「活干完了」自动回收(挂在 SessionStart hook 上, 2026-11-11)
+#
+# --auto: 只回收【干净 + 已完成】的 worktree, 与总数无关。已完成 = 分支的 PR 已 MERGED 且 PR 头 == 该 worktree HEAD
+#   (squash 合并后 git 看不出已合并, 所以问 gh; 合并后又加了提交的不算完成), 或 HEAD 已是 origin/main 的祖先。
+#   .codex/worktrees 不再整体豁免, 同样按此判据; 有任何改动(含未跟踪)一律不动; 不 WIP commit; 分支保留。
+#   前台只打一行数量/超限提示就返回, 回收在后台跑, 日志 <git-common-dir>/worktree-hygiene.log; gh 不可用则不回收。
 #
 # --apply 的处理 (每个 worktree 独立判断, 分支一律保留, 不删本地分支, 不 push):
 #   保留: 主仓库 / 当前所在 worktree / .codex/worktrees 下的(Codex 的) / --keep 指定的(调用方先用 list_sessions 把 isRunning 的 cwd 传进来)
@@ -16,7 +22,7 @@ keeps=()
 while [ $# -gt 0 ]; do
   case "$1" in --keep) keeps+=("$(cd "$2" 2>/dev/null && pwd -W 2>/dev/null || echo "$2")"); shift 2;; *) shift;; esac
 done
-[ "$mode" = "--check" ] || [ "$mode" = "--apply" ] || { sed -n 2,14p "$0"; exit 2; }
+[ "$mode" = "--check" ] || [ "$mode" = "--apply" ] || [ "$mode" = "--auto" ] || { sed -n 2,14p "$0"; exit 2; }
 
 common=$(git rev-parse --path-format=absolute --git-common-dir) || exit 2
 main_wt=$(dirname "$common")
@@ -26,17 +32,35 @@ git -C "$main_wt" worktree prune
 mapfile -t paths < <(git -C "$main_wt" worktree list --porcelain | awk '/^worktree /{sub(/^worktree /,""); print}')
 count=${#paths[@]}
 echo "worktree 总数: $count (上限 $MAX)"
+if [ "$mode" = "--auto" ]; then
+  [ "$count" -gt "$MAX" ] && echo "⚠️ worktree 数 $count 超过 $MAX: 后台正在回收已完成的; 仍超限请先收掉自己已合并的 worktree 再开新的"
+  if [ "${WH_BG:-0}" != 1 ]; then   # 前台: 起后台任务就返回, 不拖会话启动
+    logf="$common/worktree-hygiene.log"
+    fwd=(); for k in "${keeps[@]:-}"; do [ -n "$k" ] && fwd+=(--keep "$k"); done
+    ( WH_BG=1 nohup bash "$0" --auto "${fwd[@]:-}" >>"$logf" 2>&1 & ) >/dev/null 2>&1
+    exit 0
+  fi
+  lock="$common/worktree-hygiene.lock"
+  find "$lock" -maxdepth 0 -mmin +90 -exec rmdir {} \; 2>/dev/null   # 陈旧锁
+  mkdir "$lock" 2>/dev/null || { echo "另一个回收在跑, 退出"; exit 0; }
+  trap 'rmdir "$lock" 2>/dev/null' EXIT
+  echo "=== auto $(date '+%F %T') ==="
+  merged_map=$(gh pr list --state merged --limit 500 --json headRefName,headRefOid --jq '.[]|.headRefName+" "+.headRefOid' 2>/dev/null)     || { echo "gh 不可用, 本次不回收"; exit 0; }
+  [ -n "$merged_map" ] || { echo "gh 返回空(没量到), 本次不回收"; exit 0; }
+  git -C "$main_wt" fetch -q origin main 2>/dev/null || echo "fetch 失败, 用本地 origin/main"
+fi
 
 recent() { # 120 分钟内 HEAD 动过(提交/切分支)。⛔ 不看 index: git status 本身会刷新 index mtime, 体检自己就会把全部判成「近期活动」
   [ "${WH_NO_RECENT:-0}" = 1 ] && return 1
   local g; g=$(git -C "$1" rev-parse --absolute-git-dir 2>/dev/null) || return 1
-  [ -n "$(find "$g/HEAD" -mmin -120 2>/dev/null)" ]
+  local win=120; [ "$mode" = "--auto" ] && win="${WH_RECENT_MIN:-1440}"   # --auto 不知道哪些会话在跑, 窗口放宽到 24 小时
+  [ -n "$(find "$g/HEAD" -mmin -"$win" 2>/dev/null)" ]
 }
 is_keep() {
   local p; p=$(norm "$1")
   [ "$p" = "$(norm "$main_wt")" ] && return 0
   [ "$p" = "$(norm "$here")" ] && return 0
-  case "$p" in */.codex/worktrees/*) return 0;; esac   # Codex 自己的 worktree, 不归这里管
+  [ "$mode" != "--auto" ] && case "$p" in */.codex/worktrees/*) return 0;; esac   # Codex 自己的 worktree: --check/--apply 不管; --auto 按完成判据管
   for k in "${keeps[@]:-}"; do [ -n "$k" ] && [ "$p" = "$(norm "$k")" ] && return 0; done
   return 1
 }
@@ -47,9 +71,18 @@ for p in "${paths[@]}"; do
   if is_keep "$p"; then echo "KEEP(保护)   $p"; continue; fi
   if echo "$locked_set" | grep -Fxq "$p"; then echo "KEEP(locked) $p"; continue; fi
   if recent "$p"; then echo "KEEP(近期活动) $p"; continue; fi
-  dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+  dirty=0; [ "$mode" = "--auto" ] || dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')   # --auto 先判完成再查脏(git status 在大树上要几秒)
   br=$(git -C "$p" branch --show-current 2>/dev/null)
   ahead=$(git -C "$p" rev-list --count origin/main..HEAD 2>/dev/null || echo '?')
+  if [ "$mode" = "--auto" ]; then
+    head_sha=$(git -C "$p" rev-parse HEAD 2>/dev/null)
+    done_=0
+    [ "$ahead" = 0 ] && done_=1
+    [ -n "$br" ] && echo "$merged_map" | grep -Fxq "$br $head_sha" && done_=1
+    [ "$done_" = 1 ] || { echo "KEEP(未完成) $p branch=${br:-DETACHED} ahead=$ahead"; continue; }
+    dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    [ "$dirty" = 0 ] || { echo "KEEP(有改动) $p"; continue; }
+  fi
   echo "REMOVABLE    $p  branch=${br:-DETACHED} ahead=$ahead dirty=$dirty"
   removable+=("$p")
 done
@@ -60,6 +93,7 @@ if [ "$mode" = "--check" ]; then
   exit 0
 fi
 
+if [ "${WH_DRY:-0}" = 1 ]; then echo "WH_DRY=1: 只列出, 不删 (${#removable[@]} 个可回收)"; exit 0; fi
 for p in "${removable[@]}"; do
   if [ -n "$(git -C "$p" status --porcelain)" ]; then
     br=$(git -C "$p" branch --show-current)

@@ -53,7 +53,8 @@ git fetch origin main && git checkout --detach origin/main      # 或 clean 的 
 - **开新 worktree 之前**：`bash .claude/tools/worktree-hygiene.sh --check`。总数 > 30（脚本返回 3）就先 `--apply`，再开。先用 `list_sessions` 把 `isRunning` 的 session 的 cwd 用 `--keep <路径>` 传进去。
 - **任务做完 / PR 合并后**：把**自己**这个 worktree 收掉（从主仓库目录执行，不要在要删的目录里执行）：`bash .claude/tools/worktree-hygiene.sh --apply`；它会 WIP commit 脏改动、摘 junction、不加 `--force` 地移除，分支保留。
 - 脚本保留：主仓库 / 当前所在 / `.codex/worktrees` / `--keep` / locked / 近 120 分钟有动静的。没合并的分支**不删**，分支本身就是备份，最后汇报「分支名 / 领先几个提交 / 有没有开着的 PR」。
-- 兜底：每周二 8 点定时任务 `cretas-worktree-cleanup` 再扫一遍。
+- **自动回收（2026-11-11，根治「只涨不收」）**：上限数字不是根因——创建不受控（桌面应用/Codex 每会话自动建）、回收靠人想起来、squash 合并后 git 看不出已合并、Codex 的 worktree 被整体豁免，所以会一直涨（当天 90 个，约六成对应的 PR 早已合并）。现在回收按「活干完了」触发，与总数无关：`worktree-hygiene.sh --auto` 挂在 SessionStart hook（后台跑，日志 `<git-common-dir>/worktree-hygiene.log`），只回收**干净且已完成**的 worktree（分支 PR 已 MERGED 且 PR 头 == worktree HEAD，或 HEAD 已是 origin/main 祖先；Codex 的同样适用；近 24 小时 HEAD 动过、有任何改动、locked、当前所在的一律不动；gh 不可用则不回收；分支保留）。organizer 合并 PR 后也跑一次。上限 30 退为兜底：超限时会话开头会提示。
+- 定时任务 `cretas-worktree-cleanup` 已停用（每次要起一个 Claude 会话，成本高于 hook），回收以 SessionStart hook 为准。
 - ⛔ 不对带 junction 的目录用 `git worktree remove --force`；⛔ 不替 detached 且有改动的 worktree 擅自建分支（脚本会跳过并报告）。
 
 ## 必须在 prod 验证 feature 时
