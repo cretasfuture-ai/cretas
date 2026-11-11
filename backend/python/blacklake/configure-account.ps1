@@ -55,7 +55,7 @@ $save.Add_Click({
             $secretBytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
         [System.IO.File]::WriteAllBytes($secretPath, $encrypted)
         $passwordInput.Clear()
-        [System.Windows.Forms.MessageBox]::Show('已加密保存。可以返回聊天告知配置完成。', '保存完成') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show(('已加密保存到：' + $secretPath + '。可以返回聊天告知配置完成。'), '保存完成') | Out-Null
         $form.Close()
     } finally {
         [Array]::Clear($secretBytes, 0, $secretBytes.Length)
