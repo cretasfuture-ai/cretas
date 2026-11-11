@@ -64,6 +64,8 @@ class SchedulingResourceConcurrencyPostgresContractTest {
     @Autowired ProductEquipmentRequirementRepository requirements;
     @Autowired ProductionLineCapacityConfigRepository capacities;
     @Autowired JdbcTemplate jdbc;
+    @org.springframework.boot.test.mock.mockito.MockBean
+    com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
     private String factory, product, line, slot;
     private Long actor, machine;
     private ConfirmUrgentInsertRequest request;

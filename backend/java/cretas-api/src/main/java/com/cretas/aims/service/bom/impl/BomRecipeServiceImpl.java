@@ -2072,6 +2072,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipeItem addItem(String factoryId, String recipeId, BomRecipeItemDTO dto) {
+        // N1: 先按 id 锁整族配方头再读 —— 重算会读同族别的成员的行并改写全族的头
+        com.cretas.aims.service.bom.BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, recipeId);
         BomRecipe recipe = loadRecipe(factoryId, recipeId);
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(
@@ -2100,7 +2102,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipeItem updateItem(String factoryId, Long itemId, BomRecipeItemDTO dto) {
-        BomRecipeItem item = itemRepo.findById(itemId)
+        // N1 锁序 (与调价批准 / 包材成本更正同一顺序): 行 FOR UPDATE -> 整族配方头 (按 id) -> 再读配方头
+        BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
                 .orElseThrow(() -> bomError(404,
                         "这条 BOM 明细行不存在，可能已被其他人删除",
                         "BOM_ITEM_MISSING",
@@ -2110,6 +2113,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
+        com.cretas.aims.service.bom.BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, item.getRecipeId());
         BomRecipe recipe = loadRecipe(factoryId, item.getRecipeId());
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(
@@ -2154,7 +2158,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权更正其他工厂的 BOM 成本");
         }
-        BomRecipe recipe = recipeRepo.lockByIdAndFactoryId(item.getRecipeId(), factoryId)
+        // N1: 与调价批准同一锁序 —— 行 -> 整族配方头 (按 id 升序)。
+        BomRecipe recipe = com.cretas.aims.service.bom.BomRecipeHeadLocks
+                .lockWithFamily(recipeRepo, factoryId, item.getRecipeId())
                 .orElseThrow(() -> bomError(404, "BOM 配方不存在", "BOM_RECIPE_MISSING",
                         "请刷新后重新打开 BOM。", "bomRecipe"));
         if (recipe.getStatus() != BomRecipe.Status.ACTIVE || !Boolean.TRUE.equals(recipe.getIsCurrent())) {
@@ -2221,7 +2227,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public void deleteItem(String factoryId, Long itemId) {
-        BomRecipeItem item = itemRepo.findById(itemId)
+        // N1 锁序 (与调价批准 / 包材成本更正同一顺序): 行 FOR UPDATE -> 整族配方头 (按 id) -> 再读配方头
+        BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
                 .orElseThrow(() -> bomError(404,
                         "这条 BOM 明细行不存在，可能已被其他人删除",
                         "BOM_ITEM_MISSING",
@@ -2231,6 +2238,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         if (!factoryId.equals(item.getFactoryId())) {
             throw new IllegalArgumentException("配方项不属于该工厂");
         }
+        com.cretas.aims.service.bom.BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, item.getRecipeId());
         BomRecipe recipe = loadRecipe(factoryId, item.getRecipeId());
         if (recipe.getStatus() != BomRecipe.Status.DRAFT) {
             throw new IllegalStateException(

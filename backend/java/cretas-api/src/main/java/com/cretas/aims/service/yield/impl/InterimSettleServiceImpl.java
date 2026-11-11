@@ -254,7 +254,8 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             src.setUsedQuantity(newUsed);
             src.setLastUsedAt(now);
             if (src.getCurrentQuantity() != null && src.getCurrentQuantity().compareTo(BigDecimal.ZERO) <= 0) {
-                src.setStatus(MaterialBatchStatus.USED_UP);
+                // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+                src.setStatus(MaterialBatchStatus.whenExhausted(src.getStatus(), MaterialBatchStatus.USED_UP));
             }
             materialBatchRepository.save(src);
             mc.setInterimSettledAt(now);

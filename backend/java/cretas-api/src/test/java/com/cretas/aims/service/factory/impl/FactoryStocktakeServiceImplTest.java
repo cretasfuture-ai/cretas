@@ -100,6 +100,9 @@ class FactoryStocktakeServiceImplTest {
 
     @BeforeEach
     void setUp() {
+        // 交接单 11-11 二.1: 数量恢复前问一次判没判过不合格 (两个仓储必注入; 空桩 = 没判过)
+        ReflectionTestUtils.setField(service, "qcReleaseRecordRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository", org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         ReflectionTestUtils.setField(service, "inventoryLowStockEventPublisher", inventoryLowStockEventPublisher);
         // voucherService 是 @Autowired(required=false) 字段, @InjectMocks 走构造器注入不会填充它 → 手动注入
         ReflectionTestUtils.setField(service, "voucherService", voucherService);

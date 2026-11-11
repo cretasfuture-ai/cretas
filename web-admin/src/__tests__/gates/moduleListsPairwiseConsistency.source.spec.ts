@@ -155,7 +155,7 @@ function isRestaurantCode(m: string): boolean {
  * 这里只登记后端真的声明成审批码的那几个 (见下面「审批码登记不放过模块漂移」), 不是按前缀一刀切。
  */
 const APPROVAL_CODES = ['approval_report_reversal', 'approval_stocktake', 'approval_quality_disposition',
-  'approval_price_adjustment', 'approval_refund'];
+  'approval_price_adjustment', 'approval_refund', 'approval_bom_price_adjustment'];
 
 /** 内部码: owner 裁定「降为内部码并登记」, 不参与收敛比对 */
 const INTERNAL_CODES = new Set(['production_report_correction', '__permissions__', ...APPROVAL_CODES]);
@@ -300,11 +300,11 @@ describe('module lists converge to L1 (ratchet, source-scan)', () => {
     ).toBeLessThanOrEqual(DEVIATION_BASELINE);
   });
 
-  it('审批码登记不放过模块漂移: 登记的就是后端声明的那 5 个审批码, 且都不是 L1 业务模块', () => {
+  it('审批码登记不放过模块漂移: 登记的就是后端声明的那 6 个审批码, 且都不是 L1 业务模块', () => {
     // 后端唯一来源: PermissionServiceImpl 的 APPROVAL_* 常量
     const java = read(resolve(JAVA, 'service/impl/PermissionServiceImpl.java'));
     const declared = [...java.matchAll(/String APPROVAL_[A-Z_]+ = "(approval_[a-z_]+)";/g)].map((m) => m[1]).sort();
-    expect(declared.length).toBe(5);
+    expect(declared.length).toBe(6);   // D-S5-09 新增 approval_bom_price_adjustment
     expect([...APPROVAL_CODES].sort()).toEqual(declared);
     // 真模块不能借这个口子豁免: 登记的审批码一个都不在 L1 轴上
     expect(APPROVAL_CODES.filter((c) => L1_ALL.has(c))).toEqual([]);

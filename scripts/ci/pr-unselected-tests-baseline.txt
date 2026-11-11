@@ -63,7 +63,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/Fo
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/FoodSampleTraceToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/HaccpCheckpointReviewToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/IngredientNutritionFactQueryToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/InventoryFreezeToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/NutritionLabelGenerateToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/NutritionLabelLookupToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/foodsafety/RecallLossEstimateToolTest.java
@@ -684,8 +683,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/WarehouseI
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/WarehouseResolverTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/FactoryMaterialRequisitionGenerateFromPlanTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/FactoryMaterialRequisitionInputShareSourceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/FactoryMaterialRequisitionRestoreBatchStatusTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/FactoryMaterialRequisitionTransferIntegrationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/FactoryStocktakeServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/RequisitionBatchRowShapeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/factory/impl/SaltedWarehouseServiceImplTest.java

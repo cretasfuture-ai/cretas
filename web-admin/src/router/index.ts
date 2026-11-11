@@ -432,6 +432,14 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/bom/EcnList.vue'),
             meta: { requiresAuth: true, title: '工程变更通知', module: 'production' }
           },
+          {
+            // D-S5-09 (2026-11-11): BOM 调价建议 列表 / 详情 / 批准 / 驳回。
+            // 能看: production / rd / finance 可读 (后端同口径); 批准 / 驳回按钮看 approval_bom_price_adjustment。
+            path: 'bom/price-adjustments',
+            name: 'BomPriceAdjustmentList',
+            component: () => import('@/views/production/bom/PriceAdjustmentList.vue'),
+            meta: { requiresAuth: true, title: 'BOM调价建议', module: 'production' }
+          },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 报工审批 hub ——
           // 合并报工审批/撤回审批 2 个视角为一个入口 (el-tabs), 见
           // views/production/approval-hub/index.vue。⛔ 路径不变, 仍是

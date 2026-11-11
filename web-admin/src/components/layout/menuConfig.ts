@@ -261,6 +261,8 @@ const rawMenuConfig: MenuItem[] = [
       // —— 判据见 workflow/__tests__/bomMenuRetired.source.spec.ts。
       // (副产 2026-08-07 阶段 2 起是工序上的真实产出节点, 不再是 BOM 的一类 cell。)
       { path: '/production/bom/ecns', title: '工程变更通知', icon: '', module: 'production' },
+      // D-S5-09: 采购价变动生成的 BOM 调价建议在这里批准 / 驳回 (此前只能调接口)
+      { path: '/production/bom/price-adjustments', title: 'BOM调价建议', icon: '', module: 'production' },
       // 2026-09-02 同上收拢: 生产分析 hub = 车间实时生产报表 + 生产数据分析 +
       // BOM达成率分析 + 工序投入产出对比 + 人效双口径对比 + 成品出厂核算。
       // 6 个旧路径 (/analytics/production-report、/production-analytics/production、

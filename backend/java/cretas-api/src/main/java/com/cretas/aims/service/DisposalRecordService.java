@@ -407,7 +407,8 @@ public class DisposalRecordService implements IDisposalRecordService {
             batch.setUsedQuantity(usedAfter.setScale(2, RoundingMode.HALF_UP));
             batch.setLastUsedAt(LocalDateTime.now());
             if (availableAfter.compareTo(BigDecimal.ZERO) <= 0) {
-                batch.setStatus(MaterialBatchStatus.USED_UP);
+                // 交接单 11-11 二.1: 数量用尽不盖掉质量结论 (不良品/质检中/过期/报废保持原状态)
+                batch.setStatus(MaterialBatchStatus.whenExhausted(batch.getStatus(), MaterialBatchStatus.USED_UP));
             }
             materialBatchRepository.save(batch);
 

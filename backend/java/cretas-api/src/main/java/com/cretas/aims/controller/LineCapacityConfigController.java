@@ -56,12 +56,12 @@ public class LineCapacityConfigController {
     }
 
     public record CapacityView(Long id, String productionLineId, String productTypeId, BigDecimal capacityPerHour,
-                               String capacityUnit, String source, String actorType, Long configuredBy,
-                               LocalDateTime effectiveFrom) {
+                               String capacityUnit, String packageUnit, String source, String actorType,
+                               Long configuredBy, LocalDateTime effectiveFrom) {
         static CapacityView of(ProductionLineCapacityConfig c) {
             return new CapacityView(c.getId(), c.getProductionLineId(), c.getProductTypeId(), c.getCapacityPerHour(),
-                    c.getCapacityUnit().name(), c.getSource().name(), c.getActorType().name(), c.getConfiguredBy(),
-                    c.getEffectiveFrom());
+                    c.getCapacityUnit().name(), c.getPackageUnit(), c.getSource().name(), c.getActorType().name(),
+                    c.getConfiguredBy(), c.getEffectiveFrom());
         }
     }
 

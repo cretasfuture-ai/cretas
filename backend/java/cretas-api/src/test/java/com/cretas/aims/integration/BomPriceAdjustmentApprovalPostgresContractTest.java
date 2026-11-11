@@ -358,6 +358,145 @@ class BomPriceAdjustmentApprovalPostgresContractTest {
                 .satisfies(price -> assertThat(price).isEqualByComparingTo("0.9"));
     }
 
+    // ---------------------------------------------------------------- D-S5-09: 驳回
+
+    @Test
+    void rejectRecordsWhoWhenAndWhyAndLeavesTheRecipeLineUntouched() {
+        long line = line("RJ-V4", 4, BomRecipe.Status.ACTIVE, "3");
+        long proposal = proposal("RJ-V4", line, "0.7501");
+
+        service.reject(factory, proposal, 11L, "  QA-供应商临时涨价, 下批回落  ");
+
+        Map<String, Object> p = jdbc.queryForMap("select status, approved_by, approved_at, approval_comment "
+                + "from bom_price_adjustment_proposals where id = ?", proposal);
+        assertThat(p.get("status")).isEqualTo("REJECTED");
+        assertThat(((Number) p.get("approved_by")).longValue()).isEqualTo(11L);
+        assertThat(p.get("approved_at")).isNotNull();
+        assertThat(p.get("approval_comment")).isEqualTo("QA-供应商临时涨价, 下批回落");
+        // 阴性对照: 配方行、配方头、调价审计一个都没动
+        assertThat((BigDecimal) itemRow(line).get("unit_price")).isEqualByComparingTo("0.5");
+        assertThat((BigDecimal) headRow("RJ-V4").get("total_material_cost")).isEqualByComparingTo("1.5");
+        assertThat(auditCount()).isZero();
+        // 驳回之后不能再批
+        BusinessException approveAfter = catchThrowableOfType(
+                () -> service.approve(factory, proposal, 9L, "late"), BusinessException.class);
+        assertThat(approveAfter).isNotNull();
+        assertThat(approveAfter.getCode()).isEqualTo(409);
+        assertThat((BigDecimal) itemRow(line).get("unit_price")).isEqualByComparingTo("0.5");
+    }
+
+    @Test
+    void rejectWithoutAReasonIsRefusedAndTheProposalStaysPending() {
+        long line = line("RJ-V5", 5, BomRecipe.Status.ACTIVE, "1");
+        long proposal = proposal("RJ-V5", line, "0.7501");
+
+        for (String blank : java.util.Arrays.asList(null, "", "   ")) {
+            BusinessException refused = catchThrowableOfType(
+                    () -> service.reject(factory, proposal, 11L, blank), BusinessException.class);
+            assertThat(refused).as("原因=%s", blank).isNotNull();
+            assertThat(refused.getCode()).isEqualTo(400);
+            assertThat(refused.getErrorCode()).isEqualTo(BomPriceAdjustmentServiceImpl.ERROR_REJECT_REASON_REQUIRED);
+        }
+        Map<String, Object> p = proposalRow(proposal);
+        assertThat(p.get("status")).isEqualTo("PENDING");
+        assertThat(p.get("approved_by")).isNull();
+    }
+
+    @Test
+    void rejectOfAnApprovedProposalIsRefusedAndTheApprovalStands() {
+        long line = line("RJ-V6", 6, BomRecipe.Status.ACTIVE, "1");
+        long proposal = proposal("RJ-V6", line, "0.7501");
+        service.approve(factory, proposal, 9L, "ok");
+
+        BusinessException refused = catchThrowableOfType(
+                () -> service.reject(factory, proposal, 11L, "QA-晚了"), BusinessException.class);
+
+        assertThat(refused).isNotNull();
+        assertThat(refused.getCode()).isEqualTo(409);
+        Map<String, Object> p = proposalRow(proposal);
+        assertThat(p.get("status")).isEqualTo("APPROVED");
+        assertThat(((Number) p.get("approved_by")).longValue()).isEqualTo(9L);
+        assertThat((BigDecimal) itemRow(line).get("unit_price")).isEqualByComparingTo("0.7501");
+    }
+
+    @Test
+    void anotherFactoryCannotReadOrRejectTheProposal() {
+        long line = line("RJ-V7", 7, BomRecipe.Status.ACTIVE, "1");
+        long proposal = proposal("RJ-V7", line, "0.7501");
+
+        assertThat(catchThrowableOfType(() -> service.get("OTHER-" + factory, proposal),
+                com.cretas.aims.exception.ResourceNotFoundException.class)).isNotNull();
+        assertThat(catchThrowableOfType(() -> service.reject("OTHER-" + factory, proposal, 11L, "QA-越权"),
+                com.cretas.aims.exception.ResourceNotFoundException.class)).isNotNull();
+        assertThat(proposalRow(proposal).get("status")).isEqualTo("PENDING");
+        assertThat(service.get(factory, proposal).getId()).isEqualTo(proposal);
+    }
+
+    // ---------------------------------------------------------------- N1: 同族两个成员同时调价
+
+    /**
+     * N1 (#1578 审查): 联产品共享投入按比例分摊, 改任一成员的行价都会重算并改写全族配方头。
+     * 两个成员 (各自一条共享投入行、不同物料, 所以物料锁不互斥) 同时批准: 两个事务都停在保密检查
+     * (配方头已加锁之后) 汇合, 再各自去重算全族。只锁自己那个头时, 甲持 A 等 B、乙持 B 等 A, PG 判死锁回滚一方;
+     * 全族按 id 升序加锁后, 后到的一方在第一个头上排队, 两个都成功, 全族成本 = 两次调价都生效后的值。
+     */
+    @Test
+    void twoMembersOfOneFamilyApprovedConcurrentlyBothSucceedWithoutDeadlock() throws Exception {
+        String secondMaterial = material + "-B";
+        tx.executeWithoutResult(status -> {
+            RawMaterialType type = new RawMaterialType();
+            type.setId(secondMaterial);
+            type.setFactoryId(factory);
+            type.setCode("RAW-B-" + factory);
+            type.setName("QA-N1-原料B");
+            type.setCategory("原料");
+            type.setUnit("个");
+            type.setIsByproduct(false);
+            type.setSelfSupplied(false);
+            type.setIsActive(true);
+            type.setCreatedBy(1L);
+            type.setUnitPrice(new BigDecimal("0.5"));
+            type.setMovingAvgPrice(new BigDecimal("0.7501"));
+            materials.saveAndFlush(type);
+        });
+        String familyId = "FAM-" + factory;
+        long lineA = familyLine("FAM-A", familyId, "T-A", material);
+        long lineB = familyLine("FAM-B", familyId, "T-B", secondMaterial);
+        long proposalA = proposal("FAM-A", lineA, "0.7501");
+        long proposalB = familyProposal("FAM-B", lineB, secondMaterial);
+        assertThat((BigDecimal) headRow("FAM-A").get("total_material_cost"))
+                .as("批准前: 共享池 (0.5 + 0.5) × 50%").isEqualByComparingTo("0.5");
+
+        CyclicBarrier bothInside = new CyclicBarrier(2);
+        java.util.concurrent.atomic.AtomicInteger rendezvousMet = new java.util.concurrent.atomic.AtomicInteger();
+        doAnswer(inv -> {
+            try {
+                bothInside.await(3, TimeUnit.SECONDS);
+                rendezvousMet.incrementAndGet();
+            } catch (Exception timedOut) {
+                // 另一方被族锁挡在外面进不来 —— 正是期望的串行; 继续
+            }
+            return null;
+        }).when(accessService).require(any(), any(), any(), any(), any());
+
+        Future<Throwable> first = pool.submit(() -> attempt(() -> service.approve(factory, proposalA, 9L, "A")));
+        Future<Throwable> second = pool.submit(() -> attempt(() -> service.approve(factory, proposalB, 10L, "B")));
+        List<Throwable> outcomes = java.util.Arrays.asList(
+                first.get(60, TimeUnit.SECONDS), second.get(60, TimeUnit.SECONDS));
+
+        assertThat(outcomes).as("两个批准都成功, 没有一方被 PG 判死锁回滚; outcomes=" + outcomes)
+                .containsOnlyNulls();
+        assertThat(rendezvousMet.get()).as("两个事务不可能同时持有各自的配方头进到保密检查").isZero();
+        assertThat((BigDecimal) itemRow(lineA).get("unit_price")).isEqualByComparingTo("0.7501");
+        assertThat((BigDecimal) itemRow(lineB).get("unit_price")).isEqualByComparingTo("0.7501");
+        // 后提交的那次重算看得到先提交的那一行: 共享池 0.7501 + 0.7501, 各分 50%
+        assertThat((BigDecimal) headRow("FAM-A").get("total_material_cost")).isEqualByComparingTo("0.7501");
+        assertThat((BigDecimal) headRow("FAM-B").get("total_material_cost")).isEqualByComparingTo("0.7501");
+        assertThat(proposalRow(proposalA).get("status")).isEqualTo("APPROVED");
+        assertThat(proposalRow(proposalB).get("status")).isEqualTo("APPROVED");
+        assertThat(auditCount()).isEqualTo(2);
+    }
+
     // ---- helpers ----
 
     private static void runOnce(AtomicReference<Runnable> hook) {
@@ -443,6 +582,52 @@ class BomPriceAdjustmentApprovalPostgresContractTest {
             p.setSourceType(BomPriceAdjustmentProposal.SourceType.PURCHASE_RECEIVE);
             return proposals.saveAndFlush(p).getId();
         });
+    }
+
+    /** 同一 BOM Family 的 ACTIVE 成员, 一条共享投入行 (非包材、无成本范围 = 全族分摊), 分摊比例 50%。 */
+    private long familyLine(String tag, String familyId, String terminal, String materialId) {
+        String recipeId = recipeId(tag);
+        return tx.execute(s -> {
+            BomRecipe bom = new BomRecipe();
+            bom.setId(recipeId);
+            bom.setFactoryId(factory);
+            bom.setRecipeCode("CODE-" + tag + "-" + factory);
+            bom.setProductTypeId("SKU-" + tag + "-" + factory);
+            bom.setProductName("product " + tag);
+            bom.setVersion(1);
+            bom.setIsCurrent(true);
+            bom.setOutputQuantityPerUnit(BigDecimal.ONE);
+            bom.setOutputUnit("个");
+            bom.setStatus(BomRecipe.Status.ACTIVE);
+            bom.setBomFamilyId(familyId);
+            bom.setTargetTerminalNodeId(terminal);
+            bom.setCostAllocationRatio(new BigDecimal("50"));
+            bom.setTotalMaterialCost(new BigDecimal("0.5"));
+            bom.setTotalCost(new BigDecimal("0.5"));
+            recipes.saveAndFlush(bom);
+            BomRecipeItem item = new BomRecipeItem();
+            item.setRecipeId(recipeId);
+            item.setFactoryId(factory);
+            item.setMaterialTypeId(materialId);
+            item.setMaterialName("QA-N1-共享投入");
+            item.setStandardQuantity(BigDecimal.ONE);
+            item.setYieldRate(new BigDecimal("100.00"));
+            item.setUnit("个");
+            item.setQuantityToPriceFactor(BigDecimal.ONE);
+            item.setMaterialCategory("RAW_MATERIAL");
+            item.setSortOrder(0);
+            item.setIsOptional(false);
+            item.setPerPortion(false);
+            item.setUnitPrice(new BigDecimal("0.5"));
+            item.setItemCost(item.computeItemCost());
+            return items.saveAndFlush(item).getId();
+        });
+    }
+
+    private long familyProposal(String tag, long lineId, String materialId) {
+        long id = proposal(tag, lineId, "0.7501");
+        jdbc.update("update bom_price_adjustment_proposals set material_type_id = ? where id = ?", materialId, id);
+        return id;
     }
 
     private Map<String, Object> itemRow(long id) {

@@ -65,6 +65,8 @@ class BatchReleaseDisciplineContractTest {
         // D-S411-04: 质检判过不合格的原料不能改回可用 —— 这里没有质检放行记录
         ReflectionTestUtils.setField(service, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));
+        ReflectionTestUtils.setField(service, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         return b;
     }
 
@@ -251,6 +253,8 @@ class BatchReleaseDisciplineContractTest {
                 new MaterialBatchReleaseGuard(DisciplineFixtures.defaults(), releases));
         ReflectionTestUtils.setField(tool, "qcReleaseRecordRepository",
                 mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class));
+        ReflectionTestUtils.setField(tool, "processTimeLimitEventRepository",
+                org.mockito.Mockito.mock(com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository.class));
         return tool;
     }
 

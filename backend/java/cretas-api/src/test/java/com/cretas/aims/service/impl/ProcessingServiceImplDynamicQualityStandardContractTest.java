@@ -334,4 +334,143 @@ class ProcessingServiceImplDynamicQualityStandardContractTest {
                 request(revisionA, "binding-temp", "item-temp", 3, "5"), 1557L));
         verify(qualityInspectionService, never()).createInspection(anyString(), any(QualityInspection.class));
     }
+
+    // ------------------------------------------- 工厂开关 quality.inspection.fail_scope (2026-11-11)
+
+    private QualityInspection submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity severity, String scope) {
+        binding.getQualityCheckItem().setSeverity(severity);
+        // 阈值中心桩: 只回答这一个 key; scope == null = 没有任何行 (按代码默认 = 迁移默认)
+        com.cretas.aims.service.canvas.ThresholdResolverService thresholds =
+                mock(com.cretas.aims.service.canvas.ThresholdResolverService.class);
+        lenient().when(thresholds.getString(eq(FACTORY), eq(com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_INSPECTION_FAIL_SCOPE), any()))
+                .thenAnswer(inv -> scope != null ? scope : inv.getArgument(2));
+        ReflectionTestUtils.setField(service, "disciplinePolicy",
+                new com.cretas.aims.service.discipline.FactoryDisciplinePolicy(thresholds));
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        DynamicQualityInspectionRequest failing = request(revision, "binding-temp", "item-temp", 3, "15");
+        failing.setNotes("中心温度超标");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH, failing, 1557L);
+        lastResult = result;
+        return (QualityInspection) result.get("inspection");
+    }
+
+    private Map<String, Object> lastResult;
+
+    @Test
+    void defaultScopeMinorOnlyFailureIsConditionalAndFlaggedForTheQualityManager() {
+        QualityInspection saved = submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, null);
+
+        assertEquals("CONDITIONAL", saved.getResult());
+        // 计数跟整张结论走: 不判整张不合格 ⇒ 合格率 100, 处置建议才不会按 0% 给「报废」(独立审查 F1)
+        assertEquals(BigDecimal.ZERO, saved.getFailCount());
+        assertEquals(0, new BigDecimal("100").compareTo(saved.getPassRate()));
+        Map<?, ?> snapshot = (Map<?, ?>) saved.getCustomFields();
+        assertEquals(true, snapshot.get("reviewRequired"));
+        assertEquals(List.of("中心温度"), snapshot.get("reviewItems"));
+        assertEquals("MINOR_FOR_REVIEW", snapshot.get("failScope"));
+        Map<?, ?> item = (Map<?, ?>) ((List<?>) snapshot.get("items")).get(0);
+        assertEquals("FAIL", item.get("status"));
+        assertEquals("MINOR", item.get("severity"));
+        assertEquals(true, item.get("reviewRequired"));
+        assertEquals(true, lastResult.get("reviewRequired"));
+        assertTrue(((String) lastResult.get("reviewMessage")).contains("质量经理"));
+    }
+
+    @Test
+    void defaultScopeMajorFailureStillFailsTheWholeSheet() {
+        QualityInspection saved = submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MAJOR, null);
+        assertEquals("FAIL", saved.getResult());
+        assertNull(((Map<?, ?>) saved.getCustomFields()).get("reviewRequired"));
+        assertNull(lastResult.get("reviewRequired"));
+    }
+
+    @Test
+    void defaultScopeCriticalOrUnratedFailureFailsTheWholeSheet() {
+        assertEquals("FAIL", submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.CRITICAL, null).getResult());
+        assertEquals("FAIL", submitOutOfRange(null, null).getResult());
+    }
+
+    @Test
+    void anyItemScopeRestoresTheOldRuleMinorFailureFailsTheSheet() {
+        QualityInspection saved = submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, "ANY_ITEM");
+        assertEquals("FAIL", saved.getResult());
+        assertNull(((Map<?, ?>) saved.getCustomFields()).get("reviewRequired"));
+    }
+
+    @Test
+    void criticalOnlyScopeSendsMajorFailureToReviewButCriticalAndUnratedStillFail() {
+        assertEquals("CONDITIONAL", submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MAJOR, "CRITICAL_ONLY").getResult());
+        assertEquals("FAIL", submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.CRITICAL, "CRITICAL_ONLY").getResult());
+        assertEquals("FAIL", submitOutOfRange(null, "CRITICAL_ONLY").getResult());
+    }
+
+    @Test
+    void anUnrecognisedScopeIsReadAsTheStrictestRule() {
+        assertEquals("FAIL", submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, "LENIENT").getResult());
+    }
+
+    @Test
+    void reviewOnlySheetNotifiesTheConfiguredQualityManagerButAFailDoesNot() {
+        com.cretas.aims.service.NotificationService notifications = mock(com.cretas.aims.service.NotificationService.class);
+        ReflectionTestUtils.setField(service, "reviewNotificationService", notifications);
+
+        submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, null);
+        verify(notifications).sendByPolicy(eq(FACTORY),
+                eq(com.cretas.aims.service.canvas.ThresholdKeys.QUALITY_NOTIFY_INSPECTION_REVIEW),
+                eq(List.of(com.cretas.aims.entity.enums.FactoryUserRole.quality_manager)),
+                contains("PB-1885"), contains("中心温度"), any(), eq("QUALITY_INSPECTION_REVIEW"), any());
+
+        org.mockito.Mockito.clearInvocations(notifications);
+        submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MAJOR, null);   // 整张 FAIL: 走原来的告警, 不发这条
+        verify(notifications, never()).sendByPolicy(any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void insideATransactionTheNotificationWaitsForCommitAndRunsInItsOwnNewTransaction() {
+        com.cretas.aims.service.NotificationService notifications = mock(com.cretas.aims.service.NotificationService.class);
+        org.springframework.transaction.PlatformTransactionManager txm = mock(org.springframework.transaction.PlatformTransactionManager.class);
+        when(txm.getTransaction(any())).thenReturn(new org.springframework.transaction.support.SimpleTransactionStatus());
+        ReflectionTestUtils.setField(service, "reviewNotificationService", notifications);
+        ReflectionTestUtils.setField(service, "reviewNotificationTx", txm);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, null);
+            // 提交前一条都不发 (质检事务可能回滚)
+            verify(notifications, never()).sendByPolicy(any(), any(), any(), any(), any(), any(), any(), any());
+
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+
+            org.mockito.ArgumentCaptor<org.springframework.transaction.TransactionDefinition> def =
+                    org.mockito.ArgumentCaptor.forClass(org.springframework.transaction.TransactionDefinition.class);
+            verify(txm).getTransaction(def.capture());
+            // 原事务已提交: 必须新开 (REQUIRES_NEW), 否则通知行加入一个不再提交的事务而静默丢失 (复审 A1)
+            assertEquals(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW,
+                    def.getValue().getPropagationBehavior());
+            verify(notifications).sendByPolicy(eq(FACTORY), any(), any(), any(), any(), any(), any(), any());
+            verify(txm).commit(any());
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void aFailingNotificationDoesNotFailTheSubmission() {
+        com.cretas.aims.service.NotificationService notifications = mock(com.cretas.aims.service.NotificationService.class);
+        when(notifications.sendByPolicy(any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("通知服务挂了"));
+        ReflectionTestUtils.setField(service, "reviewNotificationService", notifications);
+
+        assertEquals("CONDITIONAL", submitOutOfRange(com.cretas.aims.entity.enums.QualitySeverity.MINOR, null).getResult());
+    }
+
+    @Test
+    void aPassingMinorItemIsStillAPlainPass() {
+        binding.getQualityCheckItem().setSeverity(com.cretas.aims.entity.enums.QualitySeverity.MINOR);
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH,
+                request(revision, "binding-temp", "item-temp", 3, "5"), 1557L);
+        assertEquals("PASS", ((QualityInspection) result.get("inspection")).getResult());
+        assertNull(result.get("reviewRequired"));
+    }
 }
