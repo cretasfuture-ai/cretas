@@ -79,6 +79,14 @@ public class SalesOrderSuppliedMaterialRequirementService {
     private final MaterialBatchMapper materialBatchMapper;
     private final AttachmentRepository attachmentRepository;
 
+    /**
+     * A15 (工厂纪律排查 2026-11-10, Steve 11-11 开工): 客供料收货的超收上限与采购收货同一个口径 ——
+     * 工厂设置 inventorySettings.purchaseOverReceiveRate > 全局属性 > 不限制 (梯子只在 OverReceiveLimit.resolve)。
+     * 可选注入只为不改既有构造签名 (切片测试); 拿不到时按 0 容差处理 (保持改动前的行为, 不放宽)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.PurchaseOverReceivePolicy overReceivePolicy;
+
     @Transactional
     public List<SalesOrderSuppliedMaterialRequirement> createForOrder(
             SalesOrder order,
@@ -348,10 +356,23 @@ public class SalesOrderSuppliedMaterialRequirementService {
                         .withHintTarget("unit");
             }
         }
-        if (request.getReceivedQuantity().compareTo(requirement.getRemainingQuantity()) > 0) {
-            throw new BusinessException(409, "本次实收数量超过任务剩余待收数量")
+        OverReceiveLimit overReceiveLimit = overReceivePolicy != null
+                ? overReceivePolicy.effectiveLimit(factoryId)
+                : OverReceiveLimit.of(BigDecimal.ZERO, "customer-supplied:policy-unavailable");
+        BigDecimal alreadyReceived = requirement.getReceivedQuantity() != null
+                ? requirement.getReceivedQuantity() : BigDecimal.ZERO;
+        BigDecimal maxCumulative = overReceiveLimit.maxAllowed(requirement.getExpectedQuantity());
+        if (maxCumulative != null
+                && alreadyReceived.add(request.getReceivedQuantity()).compareTo(maxCumulative) > 0) {
+            BigDecimal maxThisTime = maxCumulative.subtract(alreadyReceived).max(BigDecimal.ZERO);
+            String unit = requirement.getUnit() == null ? "" : requirement.getUnit();
+            throw new BusinessException(409, "本次实收数量超过客供料可收上限（应收 "
+                    + plainQty(requirement.getExpectedQuantity()) + unit + "，已收 " + plainQty(alreadyReceived) + unit
+                    + "，含 " + overReceiveLimit.percentLabel() + " 超收本次最多 " + plainQty(maxThisTime) + unit + "）")
                     .withCode("CUSTOMER_SUPPLIED_RECEIPT_EXCEEDS_REMAINING")
-                    .withHint("剩余待收 " + requirement.getRemainingQuantity() + requirement.getUnit());
+                    .withHint("请按本次最多可收的数量收货，多出的部分请与客户确认后另行处理；"
+                            + "客供料的超收上限与采购收货共用同一个工厂设置，若本厂应当允许多收，请联系管理员调整")
+                    .withHintTarget("receivedQuantity");
         }
         if (request.getProductionDate() != null && request.getExpireDate() != null
                 && request.getExpireDate().isBefore(request.getProductionDate())) {
@@ -708,5 +729,9 @@ public class SalesOrderSuppliedMaterialRequirementService {
                 "salesOrderItemId 不属于当前销售订单: " + salesOrderItemId)
                 .withCode("CUSTOMER_SUPPLIED_ORDER_ITEM_INVALID")
                 .withHintTarget("salesOrderItemId");
+    }
+
+    private static String plainQty(BigDecimal value) {
+        return value == null ? "0" : value.stripTrailingZeros().toPlainString();
     }
 }

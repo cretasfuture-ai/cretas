@@ -3083,17 +3083,27 @@ public class SalesServiceImpl implements SalesService {
                 }
                 requestedByOrderItem.merge(source.getId(), requestedQuantity, BigDecimal::add);
             }
+            // A16 (工厂纪律排查 2026-11-10, Steve 11-11 开工): 新建发货单与确认发货走【同一个】超发上限 ——
+            // 累计安排量 (已有有效发货单 + 本次) <= 订单量 x (1 + 超发上限)。原来新建是 0 容差, 称重货
+            // (订 10 kg 称出 10.3 kg) 连单都开不出来, 而确认发货时却允许按上限多发。
+            // 上限不限制 (阈值中心停用、也没配全局属性) 时新建同样不设上限 —— 与确认发货一致。
+            final OverReceiveLimit createOverShipLimit = resolveOverShipLimit(factoryId);
             for (Map.Entry<Long, BigDecimal> requestedLine : requestedByOrderItem.entrySet()) {
                 SalesOrderItem source = sourceOrderItemsById.get(requestedLine.getKey());
                 BigDecimal ordered = source.getQuantity() != null ? source.getQuantity() : BigDecimal.ZERO;
                 BigDecimal arranged = arrangedByOrderItem.getOrDefault(source.getId(), BigDecimal.ZERO);
-                BigDecimal remaining = ordered.subtract(arranged).max(BigDecimal.ZERO);
-                if (requestedLine.getValue().compareTo(remaining) > 0) {
+                BigDecimal maxCumulative = createOverShipLimit.maxAllowed(ordered);
+                if (maxCumulative != null && arranged.add(requestedLine.getValue()).compareTo(maxCumulative) > 0) {
+                    String unit = UnitDisplayNames.display(source.getUnit());
+                    BigDecimal remaining = maxCumulative.subtract(arranged).max(BigDecimal.ZERO);
                     throw new BusinessException(409,
-                            "发货数量超过订单行剩余可安排数量（剩余 " + remaining
-                                    + UnitDisplayNames.display(source.getUnit()) + "）")
+                            "发货数量超过订单行剩余可安排数量（订单 " + plainQty(ordered) + unit
+                                    + "，已安排 " + plainQty(arranged) + unit
+                                    + "，含 " + createOverShipLimit.percentLabel() + " 超发最多还能安排 "
+                                    + plainQty(remaining) + unit + "）")
                             .withCode("DELIVERY_QUANTITY_EXCEEDS_REMAINING")
-                            .withHint("请刷新订单后按剩余可安排数量创建发货单")
+                            .withHint("请按最多还能安排的数量创建发货单；若本厂应当允许多发，"
+                                    + "在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限")
                             .withHintTarget("deliveredQuantity");
                 }
             }
@@ -3960,6 +3970,9 @@ public class SalesServiceImpl implements SalesService {
         if (actualQuantities != null && !actualQuantities.isEmpty()) {
             // ⚠️ 循环外解析一次 —— 逐行解析会逐行打 DB/缓存, 且同一次确认里上限可能读出两个值
             final OverReceiveLimit overShipLimit = resolveOverShipLimit(factoryId);
+            // A16: 新建也允许按上限多安排之后, 单看「实发 <= 本单计划 x (1+上限)」会叠成 (1+上限)^2 ——
+            // 确认时再按订单行累计校验一次: 其他有效发货单 + 本次实发 <= 订单量 x (1+上限)。
+            final OrderLineOverShipLedger orderLineLedger = orderLineOverShipLedger(factoryId, record, overShipLimit);
             for (SalesDeliveryItem item : record.getItems()) {
                 String itemIdKey = item.getId() == null ? null : String.valueOf(item.getId());
                 if (itemIdKey == null) continue;
@@ -3978,6 +3991,7 @@ public class SalesServiceImpl implements SalesService {
                     //    ⛔ 它永不抛异常 —— 留痕失败不许把 409 变成 500。
                     try {
                         assertWithinOverShipCap(item, itemIdKey, actual, overShipLimit);
+                        assertWithinOrderLineOverShipCap(orderLineLedger, item, itemIdKey, actual, overShipLimit);
                     } catch (BusinessException capViolation) {
                         recordBlockedOverShipAttempt(factoryId, record, item, actual,
                                 overShipLimit, capViolation, userId);
@@ -4038,6 +4052,76 @@ public class SalesServiceImpl implements SalesService {
      * @param limit 本次确认生效的上限（{@link #resolveOverShipLimit} 解析，非 null；
      *              {@code isUnlimited()} 时直接放行）
      */
+    /** 确认发货时按订单行累计校验超发用的账本: 订单行 -> 订单量 / 其他有效发货单已安排量。 */
+    private record OrderLineOverShipLedger(Map<Long, SalesOrderItem> orderItems,
+                                           Map<Long, BigDecimal> arrangedByOthers) {
+    }
+
+    /**
+     * 只在【有上限】且发货单挂着销售订单时建账; 否则返回 null (不做累计校验)。
+     * 先锁订单 (与新建发货单同一把锁), 两张发货单同时确认时累计量不会被各算一遍。
+     */
+    private OrderLineOverShipLedger orderLineOverShipLedger(String factoryId, SalesDeliveryRecord record,
+                                                            OverReceiveLimit limit) {
+        if (limit == null || limit.isUnlimited() || record.getSalesOrderId() == null
+                || record.getSalesOrderId().isBlank()) {
+            return null;
+        }
+        // 子发货单 / 分批出运记录的量已经算在它的主单里 (effectiveMasterDeliveries 只认主单),
+        // 对它按订单行再累计一遍会把主单与自己重复计入 —— 只对主单做累计校验。
+        if (record.getParentDeliveryId() != null || "SHIPMENT".equals(record.getRecordRole())) {
+            return null;
+        }
+        salesOrderRepository.findByIdAndFactoryIdForUpdate(record.getSalesOrderId(), factoryId);
+        Map<Long, SalesOrderItem> orderItems = new HashMap<>();
+        salesOrderItemRepository.findBySalesOrderId(record.getSalesOrderId())
+                .forEach(item -> orderItems.put(item.getId(), item));
+        Map<Long, BigDecimal> arrangedByOthers = effectiveMasterDeliveries(
+                deliveryRecordRepository.findBySalesOrderId(record.getSalesOrderId()).stream()
+                        .filter(d -> factoryId.equals(d.getFactoryId()))
+                        .filter(d -> !Objects.equals(d.getId(), record.getId()))
+                        .toList()).stream()
+                .flatMap(delivery -> delivery.getItems().stream())
+                .filter(item -> item.getSalesOrderItemId() != null)
+                .collect(Collectors.groupingBy(SalesDeliveryItem::getSalesOrderItemId,
+                        Collectors.reducing(BigDecimal.ZERO,
+                                item -> item.getDeliveredQuantity() != null ? item.getDeliveredQuantity() : BigDecimal.ZERO,
+                                BigDecimal::add)));
+        return new OrderLineOverShipLedger(orderItems, arrangedByOthers);
+    }
+
+    /** A16: 其他有效发货单 + 本次实发 <= 订单量 x (1+上限)。与新建发货单是同一个上限、同一个算术。 */
+    private void assertWithinOrderLineOverShipCap(OrderLineOverShipLedger ledger, SalesDeliveryItem item,
+                                                  String itemIdKey, BigDecimal actual, OverReceiveLimit limit) {
+        if (ledger == null || item.getSalesOrderItemId() == null) {
+            return;
+        }
+        SalesOrderItem source = ledger.orderItems().get(item.getSalesOrderItemId());
+        if (source == null || source.getQuantity() == null) {
+            return;   // 没有订单量就没有基准 (同 assertWithinOverShipCap 对 planned==null 的处理)
+        }
+        BigDecimal maxCumulative = limit.maxAllowed(source.getQuantity());
+        BigDecimal others = ledger.arrangedByOthers().getOrDefault(item.getSalesOrderItemId(), BigDecimal.ZERO);
+        if (maxCumulative == null || others.add(actual).compareTo(maxCumulative) <= 0) {
+            return;
+        }
+        String unit = UnitDisplayNames.display(item.getUnit());
+        BigDecimal maxThisLine = maxCumulative.subtract(others).max(BigDecimal.ZERO);
+        throw new BusinessException(409, String.format(
+                "实发数量超出超发上限: 发货行 %s 所属订单行订 %s%s, 其他发货单已安排 %s%s, 本次实发 %s%s, 本次最多可发 %s%s (含 %s 超发)",
+                itemIdKey, plainQty(source.getQuantity()), unit, plainQty(others), unit, plainQty(actual), unit,
+                plainQty(maxThisLine), unit, limit.percentLabel()))
+                .withCode("DELIVERY_QUANTITY_EXCEEDS_OVER_SHIP_CAP")
+                .withHint("同一订单行所有发货单合计不能超过订单量加超发上限。请按实际装车量填写,"
+                        + " 或联系业务员追加订单量后再发。"
+                        + " 若本厂应当允许发更多, 在「系统设置 → 业务阈值配置 → 销售」调高发货超发上限。")
+                .withHintTarget("actualQuantities");
+    }
+
+    private static String plainQty(BigDecimal value) {
+        return value == null ? "0" : value.stripTrailingZeros().toPlainString();
+    }
+
     private void assertWithinOverShipCap(SalesDeliveryItem item, String itemIdKey,
             BigDecimal actual, OverReceiveLimit limit) {
         if (limit == null || limit.isUnlimited()) {
