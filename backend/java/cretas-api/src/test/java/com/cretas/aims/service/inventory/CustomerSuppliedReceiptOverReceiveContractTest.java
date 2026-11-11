@@ -41,8 +41,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * A15 (工厂纪律排查 2026-11-10): 客供料收货原来多 1 克都拦 (只认剩余待收), 而采购收货有工厂级超收上限。
- * 现在客供料与采购同一个口径: 累计实收 ≤ 应收 × (1 + 采购超收上限), 上限取值走
+ * A15 (工厂纪律排查 2026-11-10; Steve 2026-11-11 拍板做成工厂开关 inventory.customer_supplied.allow_over_receive, 默认关)。
+ * 开关关 (默认): 原行为, 客供料多收 1 克都拦, 根本不看采购超收上限。
+ * 开关开: 与采购同一个口径, 累计实收 ≤ 应收 × (1 + 采购超收上限), 上限取值走
  * {@link PurchaseOverReceivePolicy#effectiveLimit(String)} (工厂设置 > 全局属性 > 不限制)。
  * 驱动产品真入口 {@code receive}。
  */
@@ -61,6 +62,7 @@ class CustomerSuppliedReceiptOverReceiveContractTest {
     @Mock MaterialBatchMapper materialBatchMapper;
     @Mock AttachmentRepository attachmentRepository;
     @Mock PurchaseOverReceivePolicy overReceivePolicy;
+    @Mock com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     private SalesOrderSuppliedMaterialRequirementService service;
     private SalesOrderSuppliedMaterialRequirement requirement;
@@ -72,6 +74,9 @@ class CustomerSuppliedReceiptOverReceiveContractTest {
                 warehouseInventoryGuardService, unitContractService, materialBatchRepository, materialBatchMapper,
                 attachmentRepository);
         ReflectionTestUtils.setField(service, "overReceivePolicy", overReceivePolicy);
+        ReflectionTestUtils.setField(service, "disciplinePolicy", disciplinePolicy);
+        // 下面「与采购同口径」的用例都在开关【开】时成立; 关的情况见末尾的 SwitchOff 用例
+        when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenReturn(true);
 
         requirement = new SalesOrderSuppliedMaterialRequirement();
         requirement.setId("task-qa-a15");
@@ -183,5 +188,75 @@ class CustomerSuppliedReceiptOverReceiveContractTest {
         limit(null);
         assertThat(receive("50")).isNull();
         assertThat(requirement.getReceivedQuantity()).isEqualByComparingTo("54");
+    }
+
+    // ---------------------------------------------------------------- 开关关 (默认) = 原行为
+
+    @Test
+    @DisplayName("开关关 (默认): 采购超收配了 10% 也不管用 —— 再收 6.01 (超剩余 6) 就拦, 且根本不去读采购上限")
+    void switchOffKeepsZeroToleranceEvenWhenPurchaseAllowsMore() {
+        when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenReturn(false);
+        limit("0.10");
+
+        Throwable blocked = receive("6.01");
+
+        assertThat(blocked).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) blocked).getErrorCode()).isEqualTo("CUSTOMER_SUPPLIED_RECEIPT_EXCEEDS_REMAINING");
+        assertThat(((BusinessException) blocked).getMessage()).isEqualTo("本次实收数量超过任务剩余待收数量");
+        assertThat(((BusinessException) blocked).getActionHint()).contains("剩余待收 6").contains("客供料允许超收");
+        assertThat(requirement.getReceivedQuantity()).isEqualByComparingTo("4");
+        verify(overReceivePolicy, never()).effectiveLimit(any());
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("开关关: 恰好收满剩余 (6) 照常入库, 任务完成 —— 关的是「超收」, 不是收货")
+    void switchOffStillReceivesUpToTheRemaining() {
+        when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenReturn(false);
+        limit(null);
+
+        assertThat(receive("6")).isNull();
+        assertThat(requirement.getReceivedQuantity()).isEqualByComparingTo("10");
+        assertThat(requirement.getStatus()).isEqualTo(SalesOrderSuppliedMaterialRequirementStatus.COMPLETED);
+    }
+
+    @Test
+    @DisplayName("开关关 + 采购不限制 (LIUSHANMEN 现状): 仍是多 1 克就拦 —— 默认关时上线后行为不变")
+    void switchOffWithUnlimitedPurchaseStillBlocks() {
+        when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenReturn(false);
+        limit(null);
+
+        assertThat(receive("6.01")).isInstanceOf(BusinessException.class);
+        assertThat(requirement.getReceivedQuantity()).isEqualByComparingTo("4");
+    }
+
+    @Test
+    @DisplayName("开关读不到 (阈值中心出错) → 按关 (更严), 不是 500, 也不放宽")
+    void unreadableSwitchFailsClosed() {
+        when(disciplinePolicy.customerSuppliedOverReceiveAllowed("F006")).thenThrow(new IllegalStateException("db down"));
+        limit(null);
+
+        Throwable blocked = receive("6.01");
+        assertThat(blocked).isInstanceOf(BusinessException.class);
+        assertThat(((BusinessException) blocked).getCode()).isEqualTo(409);
+    }
+
+    @Test
+    @DisplayName("开关的读法: 只有显式 1 才开; 0 / 2 / 没配 (兜底 0) 都是关; 读的是 inventory.customer_supplied.allow_over_receive")
+    void switchIsOnlyOnForAnExplicitOne() {
+        com.cretas.aims.service.canvas.ThresholdResolverService hub =
+                org.mockito.Mockito.mock(com.cretas.aims.service.canvas.ThresholdResolverService.class);
+        com.cretas.aims.service.discipline.FactoryDisciplinePolicy real =
+                new com.cretas.aims.service.discipline.FactoryDisciplinePolicy(hub);
+        String key = com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_CUSTOMER_SUPPLIED_ALLOW_OVER_RECEIVE;
+        assertThat(key).isEqualTo("inventory.customer_supplied.allow_over_receive");
+        assertThat(com.cretas.aims.service.canvas.ThresholdKeys.GATING_KEYS).contains(key);
+
+        when(hub.getInteger("F006", key, 0)).thenReturn(1);
+        assertThat(real.customerSuppliedOverReceiveAllowed("F006")).isTrue();
+        when(hub.getInteger("F006", key, 0)).thenReturn(0);
+        assertThat(real.customerSuppliedOverReceiveAllowed("F006")).isFalse();
+        when(hub.getInteger("F006", key, 0)).thenReturn(2);
+        assertThat(real.customerSuppliedOverReceiveAllowed("F006")).isFalse();
     }
 }
