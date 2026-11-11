@@ -160,8 +160,180 @@ public class ToolDispatchService {
         // 深层外发 (抽参、纠错、选工具、消歧…) 不带工厂参数: 按本次路径上认定的工厂脱敏 —— 平台账号替某厂
         // 操作时也按那家工厂的保密产品名换代号 (Steve 2026-10-29, LlmEgressGuard.analysing)
         try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
-            return executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            if (request != null) request.setReadTurnSnapshot(null);
+            IntentExecuteResponse response = executeWithToolInScope(tool, factoryId, request, intent, userId, userRole, matchResult);
+            attachReadQuery(request, response);
+            return response;
         }
+    }
+
+    // ==================== INTENT-DISTILL D1: 只读参数来源与分页 ====================
+
+    /**
+     * 本轮来源: 请求 context、本轮原话的状态 / 分页、(上一步已放好的) 本轮原话时间。工具声明了不支持的口径
+     * 而原话点名了它、或原话要分页而工具不支持分页时, 直接返回明确的拒绝, 不执行。
+     */
+    private IntentExecuteResponse prepareReadTurn(ToolExecutor tool, AIIntentConfig intent,
+                                                  IntentExecuteRequest request, String userInputToUse,
+                                                  Map<String, Object> params,
+                                                  Map<String, ReadTurnParameters.Source> sources,
+                                                  java.util.Set<String> doNotInherit) {
+        Map<String, Object> schema = tool.getParametersSchema();
+        Map<?, ?> properties = ReadTurnParameters.properties(schema);
+        boolean replay = request.getContext() != null
+                && Boolean.TRUE.equals(request.getContext().get(ReadPaginationSupport.REPLAY_KEY));
+        if (replay) {
+            // 服务端翻页重放: 条件全部来自上一轮已执行的参数, 页码由服务端算出; 不再从旧原话里重新读页码
+            String pageKey = ReadTurnParameters.pageKey(properties);
+            properties.keySet().forEach(k -> {
+                if (k instanceof String key && params.get(key) != null) {
+                    sources.put(key, key.equals(pageKey) ? ReadTurnParameters.Source.SERVER_PAGE
+                            : ReadTurnParameters.Source.INHERITED);
+                }
+            });
+            return null;
+        }
+        if (request.getContext() != null) {
+            request.getContext().keySet().forEach(key -> {
+                if (properties.containsKey(key) && params.get(key) != null) {
+                    sources.put(key, ReadTurnParameters.Source.CURRENT_TURN);
+                }
+            });
+        }
+        if (params.get(com.cretas.aims.ai.tool.TimeRangeFilter.SAID) != null) {
+            for (String key : List.of("startDate", "endDate")) {
+                if (properties.containsKey(key) && params.get(key) != null) {
+                    sources.put(key, ReadTurnParameters.Source.CURRENT_TURN);
+                }
+            }
+        }
+
+        String capability = intent != null && intent.getIntentName() != null ? intent.getIntentName() : tool.getToolName();
+        Optional<com.cretas.aims.ai.tool.UnsupportedOptionGuard.Refusal> unsupported =
+                com.cretas.aims.ai.tool.UnsupportedOptionGuard.check(schema, request.getUserInput());
+        if (unsupported.isPresent()) {
+            return readTurnRefusal(intent, "UNSUPPORTED_CAPABILITY", unsupported.get().message(capability));
+        }
+
+        Map<String, Object> statusProperty = com.cretas.aims.ai.tool.StatusFilter.statusProperty(schema);
+        if (statusProperty != null && params.get("status") == null) {
+            try {
+                com.cretas.aims.ai.tool.StatusFilter.fromSentence(statusProperty, userInputToUse)
+                        .ifPresent(code -> {
+                            params.put("status", code);
+                            sources.put("status", ReadTurnParameters.Source.CURRENT_TURN);
+                        });
+            } catch (RuntimeException unrecognizedStatus) {
+                // 说了状态却认不出: 不拿上一轮的状态顶替, 交给工具按原话报同一个错
+                doNotInherit.add("status");
+            }
+        }
+
+        ReadTurnParameters.PageWords words = ReadTurnParameters.pageWords(request.getUserInput());
+        if (words.mentioned()) {
+            String pageKey = ReadTurnParameters.pageKey(properties);
+            String sizeKey = ReadTurnParameters.sizeKey(properties);
+            if ((words.page() != null && pageKey == null) || (words.size() != null && sizeKey == null)) {
+                return readTurnRefusal(intent, "PAGINATION_REFUSED", "「" + capability + "」不支持"
+                        + (words.page() != null ? "按页码查看" : "指定每页条数") + "；未执行查询。");
+            }
+            String outOfRange = words.page() == null ? null : boundViolation(properties.get(pageKey), words.page(), "页码");
+            if (outOfRange == null && words.size() != null) {
+                outOfRange = boundViolation(properties.get(sizeKey), words.size(), "每页条数");
+            }
+            if (outOfRange != null) return readTurnRefusal(intent, "PAGINATION_REFUSED", outOfRange + "；未执行查询。");
+            if (words.page() != null) {
+                params.put(pageKey, words.page());
+                sources.put(pageKey, ReadTurnParameters.Source.CURRENT_TURN);
+            }
+            if (words.size() != null) {
+                params.put(sizeKey, words.size());
+                sources.put(sizeKey, ReadTurnParameters.Source.CURRENT_TURN);
+            }
+        }
+        return null;
+    }
+
+    /** 模型 / 学习规则不写页码与每页条数 (程序按本轮原话或服务端翻页绑定); 其余抽到的键记为本轮来源。 */
+    private static Map<String, Object> withoutModelPaging(Map<String, Object> extracted,
+                                                          Map<String, ReadTurnParameters.Source> sources) {
+        if (extracted == null || extracted.isEmpty()) return extracted == null ? new HashMap<>() : extracted;
+        Map<String, Object> kept = new HashMap<>();
+        extracted.forEach((key, value) -> {
+            if (key == null || ReadTurnParameters.isPagingKey(key)) return;
+            kept.put(key, value);
+            sources.putIfAbsent(key, ReadTurnParameters.Source.CURRENT_TURN);
+        });
+        return kept;
+    }
+
+    private void completeReadTurn(ToolExecutor tool, AIIntentConfig intent, String factoryId, Long userId,
+                                  IntentExecuteRequest request, Map<String, Object> params,
+                                  Map<String, ReadTurnParameters.Source> sources, java.util.Set<String> doNotInherit) {
+        Map<?, ?> properties = ReadTurnParameters.properties(tool.getParametersSchema());
+        if (properties.isEmpty() || intent == null) return;
+        boolean replay = request.getContext() != null
+                && Boolean.TRUE.equals(request.getContext().get(ReadPaginationSupport.REPLAY_KEY));
+        if (!replay && conversationMemoryService != null && request.getSessionId() != null
+                && !request.getSessionId().isBlank() && userId != null) {
+            try {
+                Optional<ReadTurnParameters.Snapshot> previous = ReadTurnParameters.latest(
+                        conversationMemoryService.getContext(request.getSessionId()), factoryId, userId,
+                        LocalDateTime.now());
+                java.util.Set<String> inherited = ReadTurnParameters.inherit(params, sources, properties,
+                        previous.orElse(null), intent.getIntentCode(), tool.getToolName(), doNotInherit);
+                if (inherited.contains("startDate") && inherited.contains("endDate")) {
+                    params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID,
+                            params.get("startDate") + "~" + params.get("endDate"));
+                }
+                if (!inherited.isEmpty()) {
+                    log.info("只读续句沿用同一目标的已确认条件: intent={}, keys={}", intent.getIntentCode(), inherited);
+                }
+            } catch (RuntimeException memoryUnavailable) {
+                // 读不到会话记忆 = 不沿用 (按本轮原话执行), 不阻断查询
+                log.warn("只读续句读取会话记忆失败, 不沿用旧条件: {}", memoryUnavailable.getClass().getSimpleName());
+            }
+        }
+        ReadTurnParameters.markDefaults(params, sources, properties);
+        request.setReadTurnSnapshot(ReadTurnParameters.snapshot(
+                intent.getIntentCode(), tool.getToolName(), request.getUserInput(), params, sources, properties));
+    }
+
+    private static String boundViolation(Object definition, int value, String label) {
+        if (!(definition instanceof Map<?, ?> field)) return null;
+        if (field.get("minimum") instanceof Number min && value < min.longValue()) {
+            return label + "不能小于 " + min.longValue();
+        }
+        if (field.get("maximum") instanceof Number max && value > max.longValue()) {
+            return label + "最多 " + max.longValue();
+        }
+        return null;
+    }
+
+    private static IntentExecuteResponse readTurnRefusal(AIIntentConfig intent, String status, String message) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent != null ? intent.getIntentCode() : null)
+                .intentName(intent != null ? intent.getIntentName() : null)
+                .intentCategory(intent != null ? intent.getIntentCategory() : null)
+                .status(status)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /** 成功的只读执行: 每个最终参数的值与来源进响应 metadata.readQuery (两个入口据此写会话记忆)。 */
+    private static void attachReadQuery(IntentExecuteRequest request, IntentExecuteResponse response) {
+        if (request == null || response == null || request.getReadTurnSnapshot() == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return;
+        }
+        Map<String, Object> metadata = response.getMetadata() == null
+                ? new HashMap<>() : new HashMap<>(response.getMetadata());
+        metadata.put(ReadTurnParameters.METADATA_KEY, request.getReadTurnSnapshot());
+        response.setMetadata(metadata);
     }
 
     private IntentExecuteResponse executeWithToolInScope(ToolExecutor tool, String factoryId,
@@ -430,6 +602,17 @@ public class ToolDispatchService {
                 }
             }
 
+            // 2.65. INTENT-DISTILL D1: 只读查询的参数来源 (本轮 > 同一目标已确认 > 默认) 与程序绑定的分页
+            boolean readTurn = !writeOperation && !boundConfirmation
+                    && tool.getAccessMode() == ToolExecutor.AccessMode.READ;
+            Map<String, ReadTurnParameters.Source> readSources = new java.util.LinkedHashMap<>();
+            java.util.Set<String> readDoNotInherit = new java.util.HashSet<>();
+            if (readTurn) {
+                IntentExecuteResponse refusal = prepareReadTurn(tool, intent, request, userInputToUse, params,
+                        readSources, readDoNotInherit);
+                if (refusal != null) return refusal;
+            }
+
             // 2.7. 优先使用已学习的规则提取参数
             Map<String, Object> parametersSchema = tool.getParametersSchema();
             @SuppressWarnings("unchecked")
@@ -447,6 +630,7 @@ public class ToolDispatchService {
                 if (!missingParams.isEmpty()) {
                     ruleExtractedParams = parameterExtractionLearningService.extractWithLearnedRules(
                             factoryId, intent.getIntentCode(), userInputToUse, missingParams);
+                    if (readTurn) ruleExtractedParams = withoutModelPaging(ruleExtractedParams, readSources);
 
                     if (!ruleExtractedParams.isEmpty()) {
                         params.putAll(ruleExtractedParams);
@@ -458,6 +642,7 @@ public class ToolDispatchService {
             // 2.8. LLM 提取剩余参数
             Map<String, Object> llmExtractedParams = boundConfirmation ? new HashMap<>()
                     : extractParametersWithLLM(factoryId, userInputToUse, tool, params);
+            if (readTurn) llmExtractedParams = withoutModelPaging(llmExtractedParams, readSources);
             if (!llmExtractedParams.isEmpty() && isFollowUpConfirmation(request)) {
                 // 追问确认按钮带来的参数是用户在按钮上看见并点了的 (「领用 30 公斤」);
                 // 补缺参时 LLM 从原话「再加十公斤」里读出的 10 不许把它改掉。
@@ -475,6 +660,12 @@ public class ToolDispatchService {
                 } catch (Exception e) {
                     log.warn("参数提取规则学习失败: {}", e.getMessage());
                 }
+            }
+
+            // 2.95. INTENT-DISTILL D1: 本轮来源都已就位, 再按同一目标补本轮没说的已确认条件; 默认值只记来源,
+            // 由工具在缺参时补 (合并之后补缺, 不会盖掉本轮或沿用的值)
+            if (readTurn) {
+                completeReadTurn(tool, intent, factoryId, userId, request, params, readSources, readDoNotInherit);
             }
 
             // Learned rules, LLM extraction and resolved references are all untrusted inputs.

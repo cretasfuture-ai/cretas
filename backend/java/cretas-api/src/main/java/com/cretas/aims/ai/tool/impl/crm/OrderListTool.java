@@ -43,10 +43,12 @@ public class OrderListTool extends AbstractBusinessTool {
         properties.put("page", Map.of(
                 "type", "integer",
                 "description", "页码（从1开始）",
+                "minimum", 1,
                 "default", 1));
         properties.put("size", Map.of(
                 "type", "integer",
                 "description", "每页数量",
+                "minimum", 1, "maximum", 100,
                 "default", 20));
         properties.put("status", StatusFilter.property("销售订单状态，例如 DRAFT、CONFIRMED、PROCESSING、COMPLETED、CANCELLED", StatusFilter.wordsOf(SalesOrderStatus.class, SalesOrderStatus::getDisplayName, java.util.Map.of(
                 SalesOrderStatus.PENDING_FINANCE_REVIEW, List.of("待审核"),
