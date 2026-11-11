@@ -130,6 +130,14 @@ public interface UrgentInsertService {
             String factoryId, String planId, Long approverId, boolean approved, String comment);
 
     /**
+     * 1551-11: OA 审批中心对强制插单画布实例的批准 / 驳回。画布走完「通过」才插入并顺延排程,
+     * 走到「驳回」作废计划并释放时段; 中间节点只推进流程。
+     */
+    ProductionPlanDTO applyWorkflowAction(
+            String factoryId, String planId, String workflowInstanceId, Long actorId, String actorRole,
+            com.cretas.aims.entity.workflow.ApprovalHistory.HistoryAction action, String notes);
+
+    /**
      * 获取待审批的强制插单列表
      *
      * @param factoryId 工厂ID

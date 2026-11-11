@@ -24,6 +24,10 @@ import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.entity.config.ApprovalChainConfig;
 import com.cretas.aims.entity.config.ApprovalChainConfig.DecisionType;
+import com.cretas.aims.entity.workflow.ApprovalHistory;
+import com.cretas.aims.entity.workflow.ApprovalWorkflowInstance;
+import com.cretas.aims.service.workflow.FactorySelfApprovalGate;
+import com.cretas.aims.service.workflow.WorkflowEngineService;
 import com.cretas.aims.service.ApprovalChainService;
 import com.cretas.aims.service.DecisionAuditService;
 import com.cretas.aims.service.ImpactAnalysisService;
@@ -92,6 +96,13 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final PlatformTransactionManager transactionManager;
     /** A2: 缺料插单读和开工缺料同一个工厂开关 (block_start_on_open_shortage)。 */
     private final com.cretas.aims.repository.FactorySettingsRepository settingsRepository;
+    /** 1551-11: 强制插单审批画布运行时 (实例创建 + 节点推进)。 */
+    private final WorkflowEngineService workflowEngine;
+    /** #1580: 工厂「允许本人审批」开关。 */
+    private final FactorySelfApprovalGate selfApprovalGate;
+
+    /** 画布审批实例的 moduleCode, 与 DecisionTypeMetadataRegistry 里 FORCE_INSERT 的登记一致。 */
+    static final String FORCE_INSERT_MODULE = "FORCE_INSERT";
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -1131,8 +1142,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // Sprint 3 Track-F (C-LINKARRAY-1): unified BusinessLink for force-insert path.
         linkUrgentInsertPlan(factoryId, savedPlan, userId);
 
-        // 不需要审批的强制插入立即排入; 需要审批的等批准那一刻再排 (approveForceInsert)
-        UrgentInsertScheduleService.Proposal applied = needsApproval ? null : scheduleService.apply(
+        // 1551-11: 本厂启用了强制插单审批画布 ⇒ 建画布审批实例, 谁来批、几级由画布定;
+        // 批准/驳回只走 OA 审批中心 (applyWorkflowAction), 直接审批入口对这类计划拒绝。
+        // 没有画布 (requiresApproval=false) 时维持原状: 高/严重影响走直接审批, 其余直接排入。
+        ApprovalWorkflowInstance workflowInstance = configuredRequiresApproval
+                ? startForceInsertWorkflow(factoryId, savedPlan, approvalContext, request, userId)
+                : null;
+        boolean pendingApproval = needsApproval;
+        if (workflowInstance != null
+                && workflowInstance.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
+            // 画布在创建时就走到了「通过」(工厂自己配的条件分支), 没有人要审 ⇒ 现在排入。
+            savedPlan.approve(null, "审批流程自动通过", "审批画布在提交时按条件直接通过");
+            savedPlan = productionPlanRepository.save(savedPlan);
+            pendingApproval = false;
+        }
+
+        // 不需要审批的强制插入立即排入; 需要审批的等批准那一刻再排 (approveForceInsert / applyWorkflowAction)
+        UrgentInsertScheduleService.Proposal applied = pendingApproval ? null : scheduleService.apply(
                 factoryId, slot, savedPlan, validation.preview().getScheduleFingerprint(), userId);
 
         // 准备审计日志上下文
@@ -1191,7 +1217,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         // 发送强制插单推送通知
         try {
-            String message = needsApproval
+            String message = pendingApproval
                     ? String.format("强制插单已提交审批: %s，计划数量: %s", savedPlan.getPlanNumber(), request.getPlannedQuantity())
                     : String.format("强制插单已创建: %s，计划数量: %s", savedPlan.getPlanNumber(), request.getPlannedQuantity());
 
@@ -1203,13 +1229,19 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             );
 
             // 如果需要审批，同时发送到工厂通知审批人
-            if (needsApproval) {
+            if (pendingApproval) {
                 Map<String, Object> pushData = new HashMap<>();
                 pushData.put("type", "force_insert_approval");
                 pushData.put("planId", savedPlan.getId());
                 pushData.put("planNumber", savedPlan.getPlanNumber());
                 pushData.put("impactLevel", validation.preview().getImpactLevel());
-                pushData.put("screen", "ForceInsertApprovalScreen");
+                if (workflowInstance != null) {
+                    // 画布审批: 在 OA 审批中心处理, 不是直接审批页
+                    pushData.put("workflowInstanceId", workflowInstance.getId());
+                    pushData.put("moduleCode", FORCE_INSERT_MODULE);
+                } else {
+                    pushData.put("screen", "ForceInsertApprovalScreen");
+                }
                 pushNotificationService.sendToFactory(
                         factoryId,
                         "强制插单待审批",
@@ -1251,51 +1283,171 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         log.info("审批强制插单: planId={}, approved={}", planId, approved);
         resourceWriteLock.lockFactory(factoryId);
 
+        ProductionPlan plan = loadPendingForceInsert(factoryId, planId);
+
+        // 1551-11: 走画布审批的计划只能在 OA 审批中心处理 —— 否则这条直接入口就绕过了
+        // 画布里配的审批人、级数和「允许本人审批」开关。
+        Optional<ApprovalWorkflowInstance> canvasInstance =
+                workflowEngine.getLatestInstance(factoryId, FORCE_INSERT_MODULE, planId);
+        if (canvasInstance != null && canvasInstance.isPresent()) {
+            throw new BusinessException(409, "这张强制插单走的是审批流程，请到审批中心处理")
+                    .withCode("FORCE_INSERT_APPROVAL_VIA_OA")
+                    .withHint("在「审批中心 / 我的待办」里找到这张单子批准或驳回")
+                    .withHintTarget("审批中心");
+        }
+
+        User approver = userRepository.findById(approverId)
+                .orElseThrow(() -> new EntityNotFoundException("User", approverId));
+        InsertSlot approvedSlot = approved ? findClaimedSlotOrThrow(factoryId, plan) : null;
+        return applyDecision(factoryId, plan, approverId, approver, approved, comment, approvedSlot);
+    }
+
+    /**
+     * 1551-11: OA 审批中心对强制插单画布实例的批准/驳回 (由统一 OA 动作入口调用)。
+     *
+     * <p>审批人是谁由画布节点定 (入口已用 {@code canTransition} 校验); 提交人本人审批遵守
+     * 工厂「允许本人审批」开关 ({@link com.cretas.aims.service.workflow.FactorySelfApprovalGate}),
+     * 开着时 OA 审批意见就是本人审批原因, 记进审批意见留痕。画布走完「通过」才插入并顺延排程;
+     * 走到「驳回」就作废计划、释放占用的时段。多级画布中间节点只推进流程, 计划保持待审批。
+     */
+    @Override
+    @Transactional
+    public ProductionPlanDTO applyWorkflowAction(
+            String factoryId, String planId, String workflowInstanceId, Long actorId, String actorRole,
+            ApprovalHistory.HistoryAction action, String notes) {
+        log.info("OA 审批强制插单: planId={}, instanceId={}, action={}", planId, workflowInstanceId, action);
+        if (action != ApprovalHistory.HistoryAction.APPROVE && action != ApprovalHistory.HistoryAction.REJECT) {
+            throw new BusinessException(400, "强制插单审批只支持批准或驳回").withHintTarget("action");
+        }
+        // 与直接审批、确认插单、排程写入用同一把工厂锁: 两个审批人同时点、审批与取消同时发生都串行
+        resourceWriteLock.lockFactory(factoryId);
+
+        ProductionPlan plan = productionPlanRepository.findById(planId)
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
+        // 锁内重读实例: 入口在锁外读到的状态可能已经被并发的另一次审批推进了
+        ApprovalWorkflowInstance instance = workflowEngine.getInstance(factoryId, workflowInstanceId)
+                .orElseThrow(() -> new BusinessException(404, "OA 审批实例不存在"));
+        if (!FORCE_INSERT_MODULE.equals(instance.getModuleCode())
+                || !planId.equals(instance.getBusinessEntityId())) {
+            throw new BusinessException(409, "审批实例与强制插单计划不匹配")
+                    .withCode("FORCE_INSERT_WORKFLOW_MISMATCH");
+        }
+        if (instance.getStatus() != ApprovalWorkflowInstance.InstanceStatus.RUNNING) {
+            // 已被并发的另一次审批走完: 原样返回, 不重复插入/释放
+            return productionPlanMapper.toDTO(plan);
+        }
+
+        boolean planStillPending = plan.isPendingApproval() && plan.getStatus() != ProductionPlanStatus.CANCELLED;
+        if (action == ApprovalHistory.HistoryAction.APPROVE && !planStillPending) {
+            throw new BusinessException(409, "该计划已不在待审批状态（可能已被取消），不能批准")
+                    .withCode("FORCE_INSERT_NOT_PENDING")
+                    .withHint("如需结束这条审批，请驳回");
+        }
+        String trimmedNotes = notes == null ? null : notes.trim();
+        if (action == ApprovalHistory.HistoryAction.REJECT && (trimmedNotes == null || trimmedNotes.isEmpty())) {
+            throw new BusinessException(422, "驳回强制插单必须填写原因")
+                    .withCode("FORCE_INSERT_REJECT_REASON_REQUIRED")
+                    .withHintTarget("审批意见");
+        }
+
+        // 纪律排查 B1–B3 / #1580: 提交人本人批准 —— 开关关 ⇒ 拦; 开 ⇒ 必须写原因并留痕。
+        boolean actorIsMaker = action == ApprovalHistory.HistoryAction.APPROVE
+                && (Objects.equals(plan.getCreatedBy(), actorId) || Objects.equals(plan.getForceInsertBy(), actorId));
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                        selfApprovalGate, factoryId, actorIsMaker, trimmedNotes);
+        if (selfDecision.forbidden()) {
+            throw new BusinessException(409, "提交强制插单的人不能审批自己的插单")
+                    .withCode("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
+        }
+        String auditNotes = selfDecision.selfApproved()
+                ? SELF_APPROVAL_MARK + selfDecision.reason()
+                : trimmedNotes;
+
+        // 批准前先确认时段还在 (读在任何写入之前); 中间节点也查, 免得一路批到最后才发现排不进去
+        InsertSlot approvedSlot = action == ApprovalHistory.HistoryAction.APPROVE
+                ? findClaimedSlotOrThrow(factoryId, plan) : null;
+
+        ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
+                workflowInstanceId, actorId, actorRole, action, auditNotes);
+
+        if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
+            User approver = userRepository.findById(actorId)
+                    .orElseThrow(() -> new EntityNotFoundException("User", actorId));
+            return applyDecision(factoryId, plan, actorId, approver, true, auditNotes, approvedSlot);
+        }
+        if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
+            if (!planStillPending) {
+                // 计划早已取消 (时段已经释放, 可能已被别的计划占用): 只结束审批, 不再动计划和时段
+                return productionPlanMapper.toDTO(plan);
+            }
+            User approver = userRepository.findById(actorId)
+                    .orElseThrow(() -> new EntityNotFoundException("User", actorId));
+            return applyDecision(factoryId, plan, actorId, approver, false, auditNotes, null);
+        }
+        if (selfDecision.selfApproved()) {
+            // 多级画布的中间节点由本人批: 也要留痕 (不只最后一个节点)
+            plan.setApprovalComment(auditNotes);
+            plan = productionPlanRepository.save(plan);
+        }
+        return productionPlanMapper.toDTO(plan);
+    }
+
+    /** 本人审批留痕: 写在计划审批意见与 OA 审批记录的前缀。 */
+    static final String SELF_APPROVAL_MARK = "【本人审批】";
+
+    private ProductionPlan loadPendingForceInsert(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
                 .orElseThrow(() -> new EntityNotFoundException("ProductionPlan", planId));
-        UrgentInsertScheduleService.Proposal approvalSchedule = null;
-        List<String> approvalWarnings = List.of();
-
-        // 验证工厂归属
         if (!factoryId.equals(plan.getFactoryId())) {
             throw new RuntimeException("无权审批该计划");
         }
-
-        // 验证计划状态
         if (!plan.isPendingApproval()) {
             throw new RuntimeException("该计划不在待审批状态");
         }
+        return plan;
+    }
 
-        // 获取审批人信息
-        User approver = userRepository.findById(approverId)
-                .orElseThrow(() -> new EntityNotFoundException("User", approverId));
+    /** 这张待审批计划占着的那个时段 (同一开始时间 + 同一产线); 找不到 = 排不进去。 */
+    private InsertSlot findClaimedSlotOrThrow(String factoryId, ProductionPlan plan) {
+        return insertSlotRepository.findByFactoryIdAndStatus(factoryId, "selected").stream()
+                .filter(s -> Objects.equals(s.getStartTime(), plan.getStartTime())
+                        && Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId()))
+                .findFirst()
+                .orElseThrow(() -> new BusinessException(409, "找不到这张计划占用的时段，无法排入")
+                        .withCode("INSERT_APPROVAL_SLOT_MISSING")
+                        .withHint("到插单时段列表确认该时段状态后重试"));
+    }
+
+    /**
+     * 批准 = 按最新数据重算并排入 (顺延被挤计划); 驳回 = 作废计划并释放时段。直接审批与画布审批共用。
+     */
+    private ProductionPlanDTO applyDecision(String factoryId, ProductionPlan plan, Long approverId, User approver,
+                                            boolean approved, String comment, InsertSlot approvedSlot) {
+        String planId = plan.getId();
+        UrgentInsertScheduleService.Proposal approvalSchedule = null;
+        List<String> approvalWarnings = List.of();
 
         if (approved) {
-            // 批准
             plan.approve(approverId, approver.getFullName(), comment);
             // 批准后可以开始执行
             plan.setStatus(ProductionPlanStatus.PENDING);
             log.info("强制插单已批准: planId={}", planId);
             // 缺口 17 第 2 项: 批准那一刻按最新数据重算并排入 (审批可能隔了很久, 没有预览指纹可比)。
             // 排不进去则批准整体失败回滚, 计划仍待审批, 不会出现「批准了但没排进去」。
-            InsertSlot approvedSlot = insertSlotRepository.findByFactoryIdAndStatus(factoryId, "selected").stream()
-                    .filter(s -> Objects.equals(s.getStartTime(), plan.getStartTime())
-                            && Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId()))
-                    .findFirst()
-                    .orElseThrow(() -> new BusinessException(409, "找不到这张计划占用的时段，无法排入")
-                            .withCode("INSERT_APPROVAL_SLOT_MISSING")
-                            .withHint("到插单时段列表确认该时段状态后重试"));
             // 人员读在排程写入之前, 读失败就在写任何东西之前失败
             approvalWarnings = uncheckedWarnings(checkWorkers(factoryId, approvedSlot));
             approvalSchedule = scheduleService.apply(factoryId, approvedSlot, plan, null, approverId);
         } else {
-            // 拒绝
             plan.reject(approverId, approver.getFullName(), comment);
             plan.setStatus(ProductionPlanStatus.CANCELLED);
 
-            // 释放时段
+            // 释放这张计划占的时段 (同一开始时间 + 同一产线; 原来只比开始时间, 会放掉别的产线同一时刻的时段)
             insertSlotRepository.findByFactoryIdAndStatus(factoryId, "selected").stream()
-                    .filter(s -> s.getStartTime().equals(plan.getStartTime()))
+                    .filter(s -> Objects.equals(s.getStartTime(), plan.getStartTime())
+                            && Objects.equals(s.getProductionLineId(), plan.getSuggestedProductionLineId()))
                     .findFirst()
                     .ifPresent(slot -> {
                         slot.setStatus("available");
@@ -1350,6 +1502,45 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         }
         approvalDto.setUncheckedWarnings(approvalWarnings);
         return approvalDto;
+    }
+
+    /**
+     * 1551-11: 为待审批的强制插单建画布审批实例。
+     *
+     * <p>画布在提交时就走到「通过」(工厂配的条件分支) ⇒ 返回 APPROVED, 调用方当场排入;
+     * 走到驳回 / 取消 / 超时 ⇒ 只可能是画布配错了, 整个提交回滚 (时段不占、计划不建)。
+     * 画布在判断之后、建实例之前被停用 ⇒ 409, 同样回滚, 让提交人重试。
+     */
+    private ApprovalWorkflowInstance startForceInsertWorkflow(
+            String factoryId, ProductionPlan plan, Map<String, Object> approvalContext,
+            ConfirmUrgentInsertRequest request, Long userId) {
+        Map<String, Object> context = new HashMap<>(approvalContext);
+        context.put("planId", plan.getId());
+        context.put("planNumber", plan.getPlanNumber());
+        context.put("productTypeId", request.getProductTypeId());
+        context.put("plannedQuantity", request.getPlannedQuantity() == null
+                ? null : request.getPlannedQuantity().toPlainString());
+        context.put("plannedUnit", plan.getPlannedUnit());
+        context.put("productionLineId", plan.getSuggestedProductionLineId());
+        context.put("startTime", plan.getStartTime() == null ? null : plan.getStartTime().toString());
+        context.put("forceInsertReason", request.getNotes());
+        ApprovalWorkflowInstance instance = workflowEngine.startWorkflowIfConfigured(
+                        factoryId, FORCE_INSERT_MODULE, plan.getId(), context, userId)
+                .orElseThrow(() -> new BusinessException(409, "强制插单审批流程刚被停用，请重新提交")
+                        .withCode("FORCE_INSERT_WORKFLOW_NOT_CONFIGURED")
+                        .withHintTarget("OA 工作流配置"));
+        ApprovalWorkflowInstance.InstanceStatus status = instance.getStatus();
+        if (status == ApprovalWorkflowInstance.InstanceStatus.REJECTED
+                || status == ApprovalWorkflowInstance.InstanceStatus.CANCELLED
+                || status == ApprovalWorkflowInstance.InstanceStatus.TIMEOUT) {
+            throw new BusinessException(409, "强制插单审批流程配置有问题：提交时就进入了 " + status + " 态")
+                    .withCode("FORCE_INSERT_WORKFLOW_TERMINAL_ON_START")
+                    .withHint("请工厂管理员检查强制插单审批画布, 确认提交后会进入审批节点或直接通过")
+                    .withHintTarget("OA 工作流配置");
+        }
+        log.info("强制插单进入画布审批: planId={}, instanceId={}, status={}",
+                plan.getId(), instance.getId(), status);
+        return instance;
     }
 
     /**
