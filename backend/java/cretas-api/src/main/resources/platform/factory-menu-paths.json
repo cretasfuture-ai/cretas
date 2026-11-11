@@ -85,6 +85,7 @@
     "/production/approval",
     "/production/batches",
     "/production/bom/ecns",
+    "/production/bom/price-adjustments",
     "/production/cost-deviation-cases",
     "/production/cost-variance",
     "/production/delivery-risks",

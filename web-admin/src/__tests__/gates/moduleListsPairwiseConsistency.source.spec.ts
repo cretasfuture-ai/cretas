@@ -300,11 +300,11 @@ describe('module lists converge to L1 (ratchet, source-scan)', () => {
     ).toBeLessThanOrEqual(DEVIATION_BASELINE);
   });
 
-  it('审批码登记不放过模块漂移: 登记的就是后端声明的那 5 个审批码, 且都不是 L1 业务模块', () => {
+  it('审批码登记不放过模块漂移: 登记的就是后端声明的那 6 个审批码, 且都不是 L1 业务模块', () => {
     // 后端唯一来源: PermissionServiceImpl 的 APPROVAL_* 常量
     const java = read(resolve(JAVA, 'service/impl/PermissionServiceImpl.java'));
     const declared = [...java.matchAll(/String APPROVAL_[A-Z_]+ = "(approval_[a-z_]+)";/g)].map((m) => m[1]).sort();
-    expect(declared.length).toBe(5);
+    expect(declared.length).toBe(6);   // D-S5-09 新增 approval_bom_price_adjustment
     expect([...APPROVAL_CODES].sort()).toEqual(declared);
     // 真模块不能借这个口子豁免: 登记的审批码一个都不在 L1 轴上
     expect(APPROVAL_CODES.filter((c) => L1_ALL.has(c))).toEqual([]);
