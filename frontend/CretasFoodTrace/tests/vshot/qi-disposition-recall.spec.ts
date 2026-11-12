@@ -24,13 +24,19 @@ const SHOTS = process.env.VSHOT_OUT ?? 'test-results/qi-disposition-recall';
 type Levels = Record<string, string>;
 const INSPECTOR: Levels = { dashboard: 'r', production: 'r', quality: 'rw', work_report: 'r' };
 
+/** 真机 11-12 的长批次号: 曾把右上角状态标签挤出屏。 */
+const LONG = 'PB-PLAN-1794052204519-793732FC-24081';
+// ⚠️ 标签被挤出屏只在 Android 上出现: RN-web 的 Text 默认会收缩换行, 修复前的页面在这里也不溢出
+// (11-12 实测: 用 origin/main 的旧页面跑同一组 boundingBox, 标签右边界同样 370/412)。
+// 所以这里只看长批次号能完整显示, 不拿浏览器布局当「不溢出」的证据; 布局由 Jest 结构断言 + 真机复验。
+
 const ok = (data: unknown) => ({ code: 200, success: true, message: 'ok', data });
 
 const CANDIDATES = [
   {
     id: 'QA-INSP-B14-1', productionBatchId: 9101, inspectorId: 9001, inspectorName: 'QA 质检员',
     inspectionDate: '2026-11-12', sampleSize: 20, passCount: 14, failCount: 6, passRate: 70,
-    result: 'FAIL', notes: '外包装破损 6 袋', batchNumber: 'QA-B14-001', productName: 'QA-卤猪蹄 200g',
+    result: 'FAIL', notes: '外包装破损 6 袋', batchNumber: LONG, productName: 'QA-卤猪蹄 200g',
   },
   {
     id: 'QA-INSP-B14-2', productionBatchId: 9102, inspectorId: 9001, sampleSize: 10, passCount: 9, failCount: 1,
@@ -38,7 +44,8 @@ const CANDIDATES = [
   },
 ];
 const PENDING = [{
-  id: 'QA-DISP-1', entityId: 'QA-INSP-B14-9', productionBatchId: 9109, batchNumber: 'QA-B14-009',
+  // 与真机一致: 后端 pending 不回 batchNumber, 只回 productionBatchId; App 按 entityId 从待处置列表对上
+  id: 'QA-DISP-1', entityId: 'QA-INSP-B14-1', productionBatchId: 9101, batchNumber: null,
   decisionMade: 'SCRAP', reason: '微生物/安全指标超标', executorId: 9001, executorName: 'QA 质检员',
   approvalLevel: 'QUALITY_HEAD', createdAt: '2026-11-12T09:00:00',
 }];
@@ -57,7 +64,7 @@ const EVALUATION = {
   inspectionSummary: { passRate: 70 },
 };
 const RECALLS = [{
-  id: 7001, eventCode: 'QA-RC-B14-1', batchId: 9101, batchNumber: 'QA-B14-001', productName: 'QA-卤猪蹄 200g',
+  id: 7001, eventCode: 'QA-RC-B14-1', batchId: 9101, batchNumber: LONG, productName: 'QA-卤猪蹄 200g',
   status: 'FROZEN', reason: '客户投诉：包装破损',
 }];
 const RECALL_DETAIL = {
@@ -125,7 +132,7 @@ test('质检员: 两页能打开, 看不到报废审批按钮', async ({ page })
   await page.screenshot({ path: `${SHOTS}/01-home-entries.png` });
 
   await page.getByTestId('qi-home-disposition').click();
-  await expect(page.getByText('QA-B14-001').first()).toBeVisible();
+  await expect(page.getByText(LONG).first()).toBeVisible();
   await page.screenshot({ path: `${SHOTS}/02-disposition-candidates.png` });
 
   await page.getByTestId('qi-disposition-candidate-QA-INSP-B14-1').click();
@@ -136,7 +143,10 @@ test('质检员: 两页能打开, 看不到报废审批按钮', async ({ page })
 
   await page.getByTestId('qi-disposition-tab-pending').click();
   await expect(page.getByTestId('qi-disposition-pending-QA-DISP-1')).toBeVisible();
-  await expect(page.getByText('QA-B14-009')).toBeVisible();
+  const pendingCard = page.getByTestId('qi-disposition-pending-QA-DISP-1');
+  await expect(pendingCard.getByText(LONG)).toBeVisible();
+  await expect(pendingCard.getByText('QA-卤猪蹄 200g')).toBeVisible();
+  await expect(pendingCard.getByText('批次 #9101')).toHaveCount(0);
   await expect(page.getByTestId('qi-disposition-approve-QA-DISP-1')).toHaveCount(0);
   await expect(page.getByTestId('qi-disposition-reject-QA-DISP-1')).toHaveCount(0);
   await expect(page.getByTestId('qi-disposition-approve-hint')).toBeVisible();

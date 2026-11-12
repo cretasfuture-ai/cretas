@@ -143,9 +143,9 @@ export default function QIRecallDetailScreen() {
       testID="qi-recall-detail-screen"
     >
       <View style={shared.card}>
-        <View style={[shared.row, { justifyContent: 'space-between' }]}>
-          <Text style={shared.cardTitle}>{detail.batchNumber}</Text>
-          <View style={[shared.tag, { backgroundColor: closed ? '#EDF7EE' : '#FFF1E6' }]}>
+        <View style={shared.titleRow}>
+          <Text style={[shared.cardTitle, shared.titleInRow]}>{detail.batchNumber}</Text>
+          <View style={[shared.tag, shared.tagInRow, { backgroundColor: closed ? '#EDF7EE' : '#FFF1E6' }]}>
             <Text style={[shared.tagText, { color: closed ? '#1B8A3A' : '#C05621' }]}>{recallStatusText(detail.status)}</Text>
           </View>
         </View>

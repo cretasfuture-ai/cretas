@@ -6,7 +6,7 @@
 import fs from 'fs';
 import path from 'path';
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render, waitFor, within } from '@testing-library/react-native';
 
 import QIHomeScreen from '../../../screens/quality-inspector/QIHomeScreen';
 import QIDispositionScreen from '../../../screens/quality-inspector/QIDispositionScreen';
@@ -17,6 +17,8 @@ import {
   canWriteQualityClosure,
 } from '../../../utils/qualityClosurePermissions';
 import type { User } from '../../../types/auth';
+import { resolvePendingBatch } from '../../../screens/quality-inspector/qualityClosureShared';
+import type { DispositionCandidate, PendingDisposition } from '../../../services/api/qualityDispositionApiClient';
 
 const mockNavigate = jest.fn();
 let mockUser: User | null = null;
@@ -156,6 +158,79 @@ describe('处置页审批按钮: 按 approval_quality_disposition', () => {
     expect(await view.findByTestId('qi-disposition-approve-D-1')).toBeTruthy();
     expect(view.getByTestId('qi-disposition-reject-D-1')).toBeTruthy();
     expect(view.queryByTestId('qi-disposition-approve-hint')).toBeNull();
+  });
+});
+
+// 真机 11-12: /quality-disposition/pending 不回 batchNumber (后端 DTO 字段从未赋值), 卡片显示成「批次 #11132」
+const LONG_BATCH = 'PB-PLAN-1794052204519-793732FC-24081';
+const candidate = (over: Partial<DispositionCandidate>): DispositionCandidate => ({
+  id: 'QI-X', productionBatchId: 1, inspectorId: 1, sampleSize: 1, passCount: 0, failCount: 1, result: 'FAIL', ...over,
+});
+const pendingRow = (over: Partial<PendingDisposition>): PendingDisposition => ({
+  id: 'D-9', entityId: 'QI-11132', productionBatchId: 11132, batchNumber: null, decisionMade: 'SCRAP', createdAt: '', ...over,
+});
+
+describe('等待审批卡片显示批次号 + 品名, 不显示内部 ID (Rule 2)', () => {
+  it('按质检记录 ID 对上', () => {
+    const r = resolvePendingBatch(pendingRow({}), [
+      candidate({ id: 'QI-11132', productionBatchId: 11132, batchNumber: LONG_BATCH, productName: 'QA-AC6-20261107-D19-KG' }),
+    ]);
+    expect(r).toEqual({ title: LONG_BATCH, productName: 'QA-AC6-20261107-D19-KG', matched: true });
+  });
+
+  it('质检记录 ID 对不上时按生产批次 ID 对上', () => {
+    const r = resolvePendingBatch(pendingRow({ entityId: 'QI-OTHER' }), [
+      candidate({ id: 'QI-1', productionBatchId: 11132, batchNumber: LONG_BATCH, productName: '品名甲' }),
+    ]);
+    expect(r.title).toBe(LONG_BATCH);
+    expect(r.matched).toBe(true);
+  });
+
+  it('都对不上: 如实显示系统编号并标明没查到, 不拿别的批次顶替', () => {
+    const r = resolvePendingBatch(pendingRow({}), [candidate({ id: 'QI-2', productionBatchId: 999, batchNumber: 'QA-OTHER' })]);
+    expect(r).toEqual({ title: '批次 #11132', productName: null, matched: false });
+  });
+
+  it('屏上: 显示长批次号和品名, 没有「批次 #11132」', async () => {
+    mockUser = factoryUser('quality_inspector', { ...INSPECTOR });
+    mockCandidates.mockResolvedValue([
+      candidate({ id: 'QI-11132', productionBatchId: 11132, batchNumber: LONG_BATCH, productName: 'QA-AC6-20261107-D19-KG' }),
+    ]);
+    mockPending.mockResolvedValue([pendingRow({ reason: '变质/异味：QA-ACPT-20261112-QI-app' })]);
+    const view = render(<QIDispositionScreen />);
+    await waitFor(() => expect(mockPending).toHaveBeenCalled());
+    fireEvent.press(view.getByTestId('qi-disposition-tab-pending'));
+    await view.findByTestId('qi-disposition-pending-D-9');
+    // 待处置页签也有同一批次, 所以按卡片范围看
+    const card = view.getByTestId('qi-disposition-pending-D-9');
+    const { getByText, queryByText } = within(card);
+    expect(getByText(LONG_BATCH)).toBeTruthy();
+    expect(getByText('QA-AC6-20261107-D19-KG')).toBeTruthy();
+    expect(queryByText('批次 #11132')).toBeNull();
+  });
+
+  it('屏上阴性对照: 对不上时显示编号 + 「批次号没查到」提示', async () => {
+    mockUser = factoryUser('quality_inspector', { ...INSPECTOR });
+    mockCandidates.mockResolvedValue([]);
+    mockPending.mockResolvedValue([pendingRow({})]);
+    const view = render(<QIDispositionScreen />);
+    await waitFor(() => expect(mockPending).toHaveBeenCalled());
+    fireEvent.press(view.getByTestId('qi-disposition-tab-pending'));
+    expect(await view.findByText('批次 #11132')).toBeTruthy();
+    expect(view.getByText('批次号没查到，这里显示的是系统编号')).toBeTruthy();
+  });
+});
+
+describe('长批次号不把右上角状态标签挤出屏 (真机 11-12)', () => {
+  const srcRoot = path.resolve(__dirname, '../../../');
+  it.each([
+    ['screens/quality-inspector/QIDispositionScreen.tsx', 2],
+    ['screens/quality-inspector/QIRecallScreen.tsx', 1],
+    ['screens/quality-inspector/QIRecallDetailScreen.tsx', 1],
+  ])('%s: 标题可收缩 (titleInRow) 且标签不收缩 (tagInRow), 共 %i 处', (rel, n) => {
+    const src = fs.readFileSync(path.join(srcRoot, rel), 'utf8');
+    expect(src.split('shared.titleInRow').length - 1).toBe(n);
+    expect(src.split('shared.tagInRow').length - 1).toBe(n);
   });
 });
 

@@ -36,6 +36,7 @@ import {
   LoadingBlock,
   actionLabel,
   approverText,
+  resolvePendingBatch,
   resultText,
   shared,
 } from './qualityClosureShared';
@@ -104,7 +105,7 @@ export default function QIDispositionScreen() {
   };
 
   const onApprove = (row: PendingDisposition) => {
-    const title = `批准${actionLabel(row.decisionMade)} — ${row.batchNumber ?? '批次 #' + (row.productionBatchId ?? '-')}`;
+    const title = `批准${actionLabel(row.decisionMade)} — ${resolvePendingBatch(row, candidates).title}`;
     if (user && row.executorId === user.id) {
       // 本人审批 (纪律排查 B3): 申请人就是审批人时必须写原因, 由后端按工厂配置决定允不允许
       appPrompt(title, '这条处置是你自己提交的，批准需要写明原因。', (reason) => {
@@ -120,7 +121,7 @@ export default function QIDispositionScreen() {
 
   const onReject = (row: PendingDisposition) => {
     appPrompt(
-      `驳回${actionLabel(row.decisionMade)} — ${row.batchNumber ?? '批次 #' + (row.productionBatchId ?? '-')}`,
+      `驳回${actionLabel(row.decisionMade)} — ${resolvePendingBatch(row, candidates).title}`,
       '请写明驳回原因，申请人会看到。',
       (comment) => { void submitApproval(row, false, comment); },
       { placeholder: '驳回原因', testID: 'qi-disposition-reject-reason' },
@@ -150,9 +151,9 @@ export default function QIDispositionScreen() {
           testID={`qi-disposition-candidate-${row.id}`}
         >
           <View>
-            <View style={[shared.row, { justifyContent: 'space-between' }]}>
-              <Text style={shared.cardTitle} numberOfLines={1}>{row.batchNumber || `批次 #${row.productionBatchId}`}</Text>
-              <View style={[shared.tag, { backgroundColor: failed ? '#FDECEC' : '#FFF6E5' }]}>
+            <View style={shared.titleRow}>
+              <Text style={[shared.cardTitle, shared.titleInRow]} numberOfLines={2}>{row.batchNumber || `批次 #${row.productionBatchId}`}</Text>
+              <View style={[shared.tag, shared.tagInRow, { backgroundColor: failed ? '#FDECEC' : '#FFF6E5' }]}>
                 <Text style={[shared.tagText, { color: failed ? QI_COLORS.danger : '#B7791F' }]}>{resultText(row.result)}</Text>
               </View>
             </View>
@@ -186,14 +187,17 @@ export default function QIDispositionScreen() {
         )}
         {pending.map((row) => {
           const action = ACTION_TEXT[row.decisionMade];
+          const batch = resolvePendingBatch(row, candidates);
           return (
             <View key={row.id} style={shared.card} testID={`qi-disposition-pending-${row.id}`}>
-              <View style={[shared.row, { justifyContent: 'space-between' }]}>
-                <Text style={shared.cardTitle} numberOfLines={1}>{row.batchNumber || `批次 #${row.productionBatchId ?? '-'}`}</Text>
-                <View style={[shared.tag, { backgroundColor: '#F1F5F9' }]}>
+              <View style={shared.titleRow}>
+                <Text style={[shared.cardTitle, shared.titleInRow]} numberOfLines={2}>{batch.title}</Text>
+                <View style={[shared.tag, shared.tagInRow, { backgroundColor: '#F1F5F9' }]}>
                   <Text style={[shared.tagText, { color: action?.color ?? QI_COLORS.text }]}>{actionLabel(row.decisionMade)}</Text>
                 </View>
               </View>
+              {batch.productName ? <Text style={shared.cardSub}>{batch.productName}</Text> : null}
+              {!batch.matched ? <Text style={shared.note}>批次号没查到，这里显示的是系统编号</Text> : null}
               {row.reason ? <Text style={shared.cardSub}>原因：{row.reason}</Text> : null}
               <Text style={shared.cardSub}>
                 申请人：{row.executorName || (row.executorId != null ? `编号 #${row.executorId}` : '-')} · 等待{approverText(row.approvalLevel)}审批
