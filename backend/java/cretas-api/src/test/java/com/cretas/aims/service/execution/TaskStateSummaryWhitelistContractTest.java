@@ -102,11 +102,10 @@ class TaskStateSummaryWhitelistContractTest {
         ConversationSession report = session("PROCESSING_BATCH_COMPLETE", Map.of());
         ConversationSession receive = session("MATERIAL_RECEIVE", Map.of());
         List<ConversationSession> stack = List.of(receive, report); // 栈顶在前
-        java.util.function.Function<String, Optional<String>> phrases = s -> switch (s) {
-            case "报工" -> Optional.of("PROCESSING_BATCH_COMPLETE");
-            case "查库存" -> Optional.of("MATERIAL_INVENTORY_QUERY");
-            default -> Optional.empty();
-        };
+        // 与 IntentKnowledgeBase.matchPhrase 一样按「包含」命中 —— 否定 / 顺带值那两道闸要靠自己挡住, 不能靠短语表恰好不认
+        java.util.function.Function<String, Optional<String>> phrases = s -> s.contains("报工")
+                ? Optional.of("PROCESSING_BATCH_COMPLETE")
+                : s.contains("库存") ? Optional.of("MATERIAL_INVENTORY_QUERY") : Optional.empty();
         java.util.function.Function<String, String> names = code -> switch (code) {
             case "PROCESSING_BATCH_COMPLETE" -> "完成工序";
             case "MATERIAL_RECEIVE" -> "原料入库";
@@ -125,9 +124,11 @@ class TaskStateSummaryWhitelistContractTest {
         // S1: 顺带了值 / 编号 → 不恢复, 免得值被吞
         assertThat(TaskContinuationRule.resumeTarget("继续完成工序任务1830", stack, phrases, names)).isEmpty();
         assertThat(TaskContinuationRule.resumeTarget("继续报工B-1827", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("继续报工1830", stack, phrases, names)).isEmpty();
         // S1: 否定 → 不恢复
         assertThat(TaskContinuationRule.resumeTarget("继续？算了别报工了", stack, phrases, names)).isEmpty();
         assertThat(TaskContinuationRule.resumeTarget("回到刚才的，不要了", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("继续，别报工了", stack, phrases, names)).isEmpty();
         // 说的是栈里没有的事 / 太长 / 不带恢复说法的别的话 → 不恢复
         assertThat(TaskContinuationRule.resumeTarget("继续查库存", stack, phrases, names)).isEmpty();
         assertThat(TaskContinuationRule.resumeTarget("继续看看今天所有车间的订单情况", stack, phrases, names)).isEmpty();

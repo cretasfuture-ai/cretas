@@ -869,6 +869,28 @@ class SseStreamingServiceSlotContinuationTest {
                 eq(ROLE), any(), any(), any(), any(), anyMap());
     }
 
+    /**
+     * 终审 S1 (只有「同轮不恢复」这一道挡): 「继续完成工序」本身是合格的恢复说法 (恢复说法 + 栈里任务的名称),
+     * 但它是在任务正问着参数时说的 —— 先被判为打断、挂起, 同一轮里不许再把它恢复。
+     */
+    @Test
+    void aValidResumeSentenceSaidWhileTheTaskIsOpenOnlySuspendsInThatTurn() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("继续完成工序", h.query);
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续完成工序").sessionId(sessionId).build());
+
+        assertThat(next.getStatus()).isNotEqualTo("NEED_MORE_INFO");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        verify(h.aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), any(), anyMap());
+    }
+
     /** 阴性对照: 恢复说法 + 栈里没有的事 (「继续查工序任务」) 不恢复, 当新话识别; 挂起的任务原样留着。 */
     @Test
     void resumeWordsAboutSomethingElseDoNotResumeTheSuspendedTask() throws Exception {

@@ -180,10 +180,27 @@ class OrdinaryEntryTaskStateContractTest {
     }
 
     @Test
-    @DisplayName("S1: 否定说法不恢复 (「继续？算了，别报工了」)")
+    @DisplayName("S1 (只有「同轮不恢复」这一道挡): 任务正问着时说「继续完成工序」→ 只挂起, 这一轮不恢复")
+    void aValidResumeSentenceSaidWhileTheTaskIsOpenOnlySuspendsInThatTurn() {
+        IntentExecuteResponse response = execute("继续完成工序");
+
+        assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
+        verify(aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), anyList(), anyMap());
+
+        // 下一轮再说同一句 (这时没有正在问的任务) → 恢复
+        assertThat(execute("继续完成工序").getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("S1: 否定说法不恢复 (「继续，别报工了」; 短语表按包含命中「报工」也不行)")
     void negationDoesNotResume() {
+        when(knowledgeBase.matchPhrase(anyString())).thenAnswer(inv ->
+                String.valueOf((Object) inv.getArgument(0)).contains("报工") ? Optional.of(INTENT) : Optional.empty());
         execute("先看下库存，回头再报工");
-        IntentExecuteResponse response = execute("继续，算了别报工了");
+        IntentExecuteResponse response = execute("继续，别报工了");
         assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
     }
