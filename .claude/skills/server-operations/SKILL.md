@@ -5,14 +5,14 @@ description: cretas 服务器运维：6 台机器地图、SSH 登录、systemd �
 
 # 服务器运维
 
-**最后更新**: 2026-10-05（部署入口并入 `deploy-backend`；补两槽 JVM 配置，更正 heap dump 的说法）
+**最后更新**: 2026-11-12（139 到期停用，网关并入 47；此前：2026-10-05 部署入口并入 `deploy-backend`）
 
 ## 全局服务器地图（6 台）
 
 | # | 地址 | 规格 | 角色 | 登录 | 权威文档 |
 |---|---|---|---|---|---|
-| 1 | `47.100.235.168` | 8C / 16GB / 100GB | **cretas 主** Java + Python + PG + Redis | `root` 默认 key | 本文件 |
-| 2 | `139.196.165.140` | 4C / 8GB / 40GB | **cretas 网关** Nginx + Web-Admin + Showcase + Mall | `root` 默认 key | 本文件 |
+| 1 | `47.100.235.168` | 8C / 16GB / 100GB | **cretas 主** Java + Python + PG + Redis；**2026-11-12 起兼网关**（系统 nginx `/etc/nginx/conf.d/gw-*.conf`） | `root` 默认 key | 本文件 |
+| 2 | `139.196.165.140` | 4C / 8GB / 40GB | **已停用**：2026-11-12 0 点包年到期被欠费锁定，Steve 定不续费；网关已并入 47 | — | 本文件 |
 | 3 | `106.14.165.234` | 2C / 3.5GB / 40GB | **vita-test** API 8085 + MySQL + 宝塔 | `root` + `~/.ssh/id_rsa` | `D:\pomelox` 的 deploy skill |
 | 4 | `101.132.17.37` | 2C / 7.4GB / 40GB | **vita-prod** API (vitaglobal.icu) + MySQL | `root` + `~/.ssh/id_ed25519_prod` | `D:\pomelox` 的 deploy skill |
 | 5 | `52.196.123.155` | 2C / 0.9GB / 38GB | **东京 tokyo-a** VPN 主节点 + 制品缓存 | `ubuntu` + `~/.ssh/ai-egress-tokyo-windows_ed25519` 或 `LightsailDefaultKeyPair-ap-northeast-1.pem` | 无 |
@@ -29,8 +29,9 @@ description: cretas 服务器运维：6 台机器地图、SSH 登录、systemd �
 prod Java 在 `10010` / `10020` 之间交替 active。照着文档里的 `10010` 直接 curl，打到的可能正是停用的那一槽。哪槽在跑只看网关 upstream：
 
 ```bash
-ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.conf'
-# 例: server 47.100.235.168:10020;  # ACTIVE=10020 — auto-synced by deploy-backend.sh
+ssh root@47.100.235.168 'cat /www/server/panel/vhost/nginx/_upstream_cretas.conf'
+# 例: server 127.0.0.1:10020;  # ACTIVE=10020 — auto-synced by deploy-backend.sh
+# (2026-11-12 起网关在 47 本机, upstream 用回环; 47 访问自己的公网 IP 不通)
 ```
 
 别 grep `/www/server/panel/vhost/nginx/` 整个目录，只看 `*.conf`：目录里混着历史 `.conf.bak*`。2026-08-19 曾据此数出 6 处「转发到 10010」，而生效配置里一处都没有，差点报成「生产挂了」。
@@ -56,9 +57,9 @@ ssh root@139.196.165.140 'cat /www/server/panel/vhost/nginx/_upstream_cretas.con
 | Embedding gRPC | **47** | `/www/wwwroot/cretas/embedding-service/` | 9090 |
 | ONNX 模型 | **47** | `/www/wwwroot/cretas/models/gte-base-zh-finetuned-onnx-fixed/` | |
 | PostgreSQL / Redis | **47** | systemd | localhost only |
-| **Web-Admin** | **139** | `/www/wwwroot/web-admin/` | 139:8086 / admin.cretaceousfuture.com |
-| **Showcase** | **139** | `/www/wwwroot/showcase/cretaceousfuture/`（本地 `platform/`） | www.cretaceousfuture.com |
-| Nginx 网关 | **139** | 宝塔 Nginx | API / Python → 47 |
+| **Web-Admin** | **47** | `/www/wwwroot/web-admin/`（test: `web-admin-test/`） | admin.cretaceousfuture.com；本机 127.0.0.1:8086 / 8097 供发布脚本核对 |
+| **Showcase** | **47** | `/www/wwwroot/showcase/cretaceousfuture/`（本地 `platform/`） | www.cretaceousfuture.com（www 同时是 App 的 API 入口） |
+| Nginx 网关 | **47** | 系统 nginx，`/etc/nginx/conf.d/gw-*.conf`（仓库副本 `ops/nginx-gw-47/`）；证书 Let's Encrypt `/etc/letsencrypt/live/cretas-gw/`（certbot 自动续期 + reload 钩子） | admin / www / 根域名 / api / ota / centerapi(410) / download / aiassist |
 | 餐饮平台模拟器 | **139** | `/www/wwwroot/mock-platform/`（服务 `cretas-mock-platform`，绑 `127.0.0.1:9200`，nginx 反代 `/mock/`） | 139/mock/ |
 | Mall 后端 | — | 已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 | — |
 
