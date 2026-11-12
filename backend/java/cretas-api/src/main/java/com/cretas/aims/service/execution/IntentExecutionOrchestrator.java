@@ -1498,14 +1498,21 @@ public class IntentExecutionOrchestrator {
             if (taskStateService != null && taskStateService.isEnabled() && pending.isPresent()
                     && pending.get().isParameterCollectionMode()
                     && pending.get().getStatus() == ConversationSession.SessionStatus.ACTIVE
-                    && !pending.get().isExpired()
-                    && taskStateService.classify(pending.get(), request.getUserInput(),
-                            text -> knowledgeBase.matchPhrase(text).isPresent())
-                        == TaskContinuationRule.Action.INTERRUPT) {
-                log.info("[TaskState] 普通入口: 这句不像在回答缺参问题, 挂起后正常识别: session={}",
-                        pending.get().getSessionId());
-                taskStateService.interrupt(factoryId, userId, pending.get());
-                return null;
+                    && !pending.get().isExpired()) {
+                TaskContinuationRule.Action action = taskStateService.classify(pending.get(), request.getUserInput(),
+                        text -> knowledgeBase.matchPhrase(text).isPresent(), knowledgeBase::matchPhrase,
+                        intentNames(factoryId));
+                if (action == TaskContinuationRule.Action.REPEAT) {
+                    // 「继续完成工序」时它正问着: 不挂起、不另起一份同意图的收集, 把这一问再问一遍
+                    return taskContinueResponse(pending.get(),
+                            ConversationTaskStateService.repeatMessage(pending.get(), intentNames(factoryId)));
+                }
+                if (action == TaskContinuationRule.Action.INTERRUPT) {
+                    log.info("[TaskState] 普通入口: 这句不像在回答缺参问题, 挂起后正常识别: session={}",
+                            pending.get().getSessionId());
+                    taskStateService.interrupt(factoryId, userId, pending.get());
+                    return null;
+                }
             }
             ConversationService.ConversationResponse conversationResp =
                     conversationService.continueConversation(
@@ -1575,8 +1582,7 @@ public class IntentExecutionOrchestrator {
         try {
             resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
                     knowledgeBase::matchPhrase,
-                    code -> aiIntentService.getIntentByCode(factoryId, code)
-                            .map(AIIntentConfig::getIntentName).orElse(null));
+                    intentNames(factoryId));
         } catch (Exception e) {
             log.warn("[TaskState] 恢复失败, 按新话识别: {}", e.getMessage());
             return null;
@@ -1584,7 +1590,11 @@ public class IntentExecutionOrchestrator {
         if (resumed.isEmpty()) {
             return null;
         }
-        ConversationSession session = resumed.get().session();
+        return taskContinueResponse(resumed.get().session(), resumed.get().message());
+    }
+
+    /** 恢复 / 重问的回复 (格式同会话延续): 带回那个会话的 id, 下一句照常续轮。 */
+    private static IntentExecuteResponse taskContinueResponse(ConversationSession session, String message) {
         Map<String, Object> metadata = new HashMap<>();
         metadata.put("sessionId", session.getSessionId());
         metadata.put("currentRound", session.getCurrentRound());
@@ -1595,12 +1605,18 @@ public class IntentExecutionOrchestrator {
                 .intentRecognized(true)
                 .intentCode(session.getKnownIntentCode())
                 .status("CONVERSATION_CONTINUE")
-                .message(resumed.get().message())
-                .formattedText(resumed.get().message())
+                .message(message)
+                .formattedText(message)
                 .sessionId(session.getSessionId())
                 .metadata(metadata)
                 .executedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /** 意图码 → 名称与配置的关键词 (与 SSE 同一个来源: 本厂可见的意图配置)。 */
+    private java.util.function.Function<String, List<String>> intentNames(String factoryId) {
+        return code -> aiIntentService.getIntentByCode(factoryId, code)
+                .map(ConversationTaskStateService::namesOf).orElse(List.of());
     }
 
     private IntentExecuteResponse handleEarlyQuestionTypeDetection(String factoryId, String userInput,

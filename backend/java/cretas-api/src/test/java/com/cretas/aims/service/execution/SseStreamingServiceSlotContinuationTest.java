@@ -870,25 +870,56 @@ class SseStreamingServiceSlotContinuationTest {
     }
 
     /**
-     * 终审 S1 (只有「同轮不恢复」这一道挡): 「继续完成工序」本身是合格的恢复说法 (恢复说法 + 栈里任务的名称),
-     * 但它是在任务正问着参数时说的 —— 先被判为打断、挂起, 同一轮里不许再把它恢复。
+     * 终审 S1 (只有「同轮不恢复」这一道挡): A 挂着、B 正问着时说「继续完成工序」(A 的名字)。B 先被判为打断、挂起,
+     * 同一轮里不许再把 A 恢复 (这一轮的话照常识别)。
      */
     @Test
-    void aValidResumeSentenceSaidWhileTheTaskIsOpenOnlySuspendsInThatTurn() throws Exception {
+    void aValidResumeOfAnotherTaskSaidWhileOneIsOpenOnlySuspendsInThatTurn() throws Exception {
         Harness h = new Harness();
         h.enableTaskState(true);
         h.recognizes("做完了，产量0", h.complete);
         h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("开始做个工序", h.start);
+        h.extracts("开始做个工序", h.startTool, Map.of());
         h.recognizesWithTaskState("继续完成工序", h.query);
-        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+        String taskA = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+        String taskB = h.execute(IntentExecuteRequest.builder().userInput("开始做个工序").sessionId(taskA).build())
+                .getSessionId();
+        assertThat(taskB).as("B 是另起的一份收集").isNotEqualTo(taskA);
+        assertThat(h.sessions.get(taskA).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
 
         IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
-                .userInput("继续完成工序").sessionId(sessionId).build());
+                .userInput("继续完成工序").sessionId(taskB).build());
 
         assertThat(next.getStatus()).isNotEqualTo("NEED_MORE_INFO");
-        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        assertThat(h.sessions.get(taskB).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        assertThat(h.sessions.get(taskA).getStatus()).as("A 这一轮没被恢复")
+                .isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
         verify(h.aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
                 eq(ROLE), any(), any(), any(), any(), anyMap());
+    }
+
+    /** NIT3: 任务正问着时说「继续完成工序」(它自己的名字) → 只把这一问再问一遍, 不挂起、不另起一份同意图的收集。 */
+    @Test
+    void continuingTheOpenTaskItselfRepeatsTheQuestion() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+        int sessionsBefore = h.sessions.size();
+
+        IntentExecuteResponse again = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续完成工序").sessionId(sessionId).build());
+
+        assertThat(again.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(again.getSessionId()).isEqualTo(sessionId);
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.ACTIVE);
+        assertThat(h.sessions).as("没有另起一份收集").hasSize(sessionsBefore);
+        verify(h.aiIntentService, never()).recognizeIntentWithConfidence(eq("继续完成工序"), anyString(), anyInt(),
+                any(), any(), any(), any(), any(), any());
+        verify(h.toolDispatchService, never()).executeWithTool(eq(h.completeTool), any(), any(), any(), any(),
+                any(), any());
     }
 
     /** 阴性对照: 恢复说法 + 栈里没有的事 (「继续查工序任务」) 不恢复, 当新话识别; 挂起的任务原样留着。 */

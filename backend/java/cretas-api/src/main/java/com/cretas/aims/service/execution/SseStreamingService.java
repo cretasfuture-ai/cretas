@@ -1227,8 +1227,24 @@ public class SseStreamingService {
         List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
                 session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
         // 续轮规则与普通入口共用一份 (TaskContinuationRule): 不像回答 = 打断。开关开时挂起待恢复, 关时取消 (旧行为)
-        if (TaskContinuationRule.forActive(request.getUserInput(), pending,
-                text -> knowledgeBase.matchPhrase(text).isPresent()) == TaskContinuationRule.Action.INTERRUPT) {
+        TaskContinuationRule.Action action = taskStateService != null
+                ? taskStateService.classify(session, request.getUserInput(),
+                        text -> knowledgeBase.matchPhrase(text).isPresent(), knowledgeBase::matchPhrase,
+                        intentNames(factoryId))
+                : TaskContinuationRule.forActive(request.getUserInput(), pending,
+                        text -> knowledgeBase.matchPhrase(text).isPresent());
+        if (action == TaskContinuationRule.Action.REPEAT) {
+            // 「继续完成工序」时它正问着: 不挂起、不另起一份同意图的收集, 把这一问再问一遍 (会话 id 不变)
+            String message = ConversationTaskStateService.repeatMessage(session, intentNames(factoryId));
+            streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                    .intentRecognized(true).intentCode(session.getKnownIntentCode())
+                    .status("NEED_MORE_INFO").message(message).formattedText(message)
+                    .sessionId(slotSessionId)
+                    .metadata(Map.of("taskResumed", true, "sessionId", slotSessionId))
+                    .executedAt(LocalDateTime.now()).build(), startTime);
+            return true;
+        }
+        if (action == TaskContinuationRule.Action.INTERRUPT) {
             log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 打断后正常识别: session={}, pending={}",
                     slotSessionId, pending.stream().map(p -> p.getName()).toList());
             if (taskStateService != null) {
@@ -1335,8 +1351,7 @@ public class SseStreamingService {
         try {
             resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
                     knowledgeBase::matchPhrase,
-                    code -> aiIntentService.getIntentByCode(factoryId, code)
-                            .map(AIIntentConfig::getIntentName).orElse(null));
+                    intentNames(factoryId));
         } catch (Exception e) {
             log.warn("[SSE][TaskResume] 恢复失败, 按新话识别: {}", e.getMessage());
             return false;
@@ -1356,6 +1371,12 @@ public class SseStreamingService {
                 .executedAt(LocalDateTime.now())
                 .build(), startTime);
         return true;
+    }
+
+    /** 意图码 → 名称与配置的关键词 (与普通入口同一个来源: 本厂可见的意图配置)。 */
+    private java.util.function.Function<String, List<String>> intentNames(String factoryId) {
+        return code -> aiIntentService.getIntentByCode(factoryId, code)
+                .map(ConversationTaskStateService::namesOf).orElse(List.of());
     }
 
     /** 请求点名的、本人本厂的、仍在收集参数且没超时的会话。查询失败一律当没有。 */
