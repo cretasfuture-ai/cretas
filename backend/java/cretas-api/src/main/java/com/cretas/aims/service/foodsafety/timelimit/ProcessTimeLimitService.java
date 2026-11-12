@@ -386,7 +386,7 @@ public class ProcessTimeLimitService {
         }
         return new BusinessException(409, message)
                 .withCode(CODE_EXCEEDED)
-                .withHint("请通知质检员在" + RELEASE_PATH + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
+                .withHint("请通知质检员在 " + RELEASE_PATH + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
                 .withSeverity("BLOCKING")
                 .withHintTarget(e.source().batchNumber())
                 .withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis.of(

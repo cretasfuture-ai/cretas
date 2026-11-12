@@ -202,6 +202,9 @@ class ProcessTimeLimitServiceContractTest {
         assertEquals(409, e.getCode());
         assertEquals(ProcessTimeLimitService.CODE_EXCEEDED, e.getErrorCode());
         assertTrue(e.getMessage().contains("W-1") && e.getMessage().contains("已超时 35 分钟"), e.getMessage());
+        // 验收 2026-11-12: 提示里「在」和「App」之间曾少空格; 钉住整句 (质检员按这句去找处置入口)
+        assertEquals("请通知质检员在 App 首页「超时处置」或网页「质量管理 → 质检放行 → 超时处置」"
+                + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次", e.getActionHint());
 
         ArgumentCaptor<ProcessTimeLimitEvent> event = ArgumentCaptor.forClass(ProcessTimeLimitEvent.class);
         verify(writer).openIfAbsent(event.capture());
