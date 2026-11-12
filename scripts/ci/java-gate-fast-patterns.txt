@@ -32,3 +32,5 @@ FactoryMaterialRequisitionRestoreBatchStatusTest
 FactoryMaterialRequisitionTransferIntegrationTest
 # INTENT-DISTILL-20261111 F-pre: 每个注册工具必须声明读写 (缺失即红); 本地模型对只读意图直出的安全前提, 原先只在 nightly 跑
 ToolAccessModeDeclarationTest
+# INTENT-DISTILL-20261111 第二批任务状态: 「先看库存回头再报工」挂起/恢复跑在真实流式入口上的回归在这个类里
+SseStreamingServiceSlotContinuationTest

@@ -664,7 +664,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStrea
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceFactoryPackRouteTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceFollowUpTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceRecentTurnsTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/SseStreamingServiceSlotContinuationTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ToolDispatchDailyWritePreviewTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ToolDispatchServiceBuildNoToolResponseTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/execution/ToolDispatchServiceDishReferenceTest.java

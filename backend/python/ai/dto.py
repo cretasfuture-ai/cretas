@@ -430,6 +430,9 @@ class IntentMatchRequest(_CamelBase):
     # OPERATE+userPermissions 剔除无权限写意图; None=老客户端不过滤。
     mode: Optional[str] = None
     userPermissions: Optional[List[str]] = None
+    # INTENT-DISTILL-20261111 第二批: 服务端任务状态摘要 (Java TaskStateSummary, 值已脱敏)。
+    # 只加字段; None = 老客户端 / 开关关。进提示词前再按白名单清洗一次 (decision.sanitize_task_state)。
+    taskState: Optional[Dict[str, Any]] = None
 
 
 T = TypeVar("T")

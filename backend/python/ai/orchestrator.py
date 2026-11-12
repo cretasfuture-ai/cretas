@@ -41,6 +41,7 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
+from ai.matcher.decision import with_task_state
 from ai.db import _is_write_row
 from ai.matcher.decision import CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, RequestPurpose, intent_text
 from ai.matcher.fallback_combo import HOPS, FallbackDecision, FallbackThresholds, run_fallback
@@ -92,8 +93,12 @@ class Orchestrator:
         history: List[Dict[str, Any]],
         min_confidence: float,
         enable_llm: bool = True,
+        task_state: Optional[Dict[str, Any]] = None,
     ) -> IntentMatchResultDto:
-        """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。"""
+        """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。
+
+        ``task_state``: 服务端任务状态摘要 (Java TaskStateSummary 白名单), 只给决策层提示词; 旧 5-8 级不用。
+        """
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
         # tenant-owned non-restaurant custom rows.
@@ -107,7 +112,7 @@ class Orchestrator:
             fallback_reason = None
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history)
+                                                    history, task_state=task_state)
             except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
@@ -141,6 +146,7 @@ class Orchestrator:
         role: str,
         visible_intents: List[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
+        task_state: Optional[Dict[str, Any]] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -150,6 +156,11 @@ class Orchestrator:
         """
         t0 = time.time()
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
+        # 最近对话只看真实轮次 (计数、是否跳过重排); 提示词里用接上了任务状态的那份 (白名单清洗在 with_task_state)
+        turns = history
+        history = with_task_state(turns, task_state)
+        if len(history) > len(turns or []):
+            timing["taskState"] = 1
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
             exit_metrics.set_decision_none_reason("decision_no_visible_intents")
@@ -202,7 +213,7 @@ class Orchestrator:
         codes = None
         if (getattr(self.config, "decision_candidates", "shortlist") == "rerank" and self.rerank_client is not None
                 and isinstance(retriever, BlendRetriever)):
-            if history:
+            if turns:
                 timing["rerankSkippedHistory"] = 1
             else:
                 codes = await self._rerank_candidates(query, factoryId, businessType, retriever, by_code, timing)

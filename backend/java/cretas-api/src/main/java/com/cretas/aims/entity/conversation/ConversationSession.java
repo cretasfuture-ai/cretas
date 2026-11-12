@@ -43,6 +43,9 @@ import java.util.Optional;
 public class ConversationSession {
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    /** 任务状态里有 LocalDateTime: 认 java.time, 写成 ISO 字符串。 */
+    private static final ObjectMapper TASK_STATE_MAPPER = new ObjectMapper().findAndRegisterModules()
+            .disable(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
 
     /**
      * 会话ID (UUID)
@@ -141,6 +144,22 @@ public class ConversationSession {
     private String candidatesJson;
 
     /**
+     * 任务状态 (INTENT-DISTILL-20261111 第二批): 挂起时刻与每个已收集参数的来源。
+     * 只对参数收集会话有意义; 为空 = 旧行为 (没有挂起过、来源未记)。见 {@link TaskState}。
+     */
+    @Column(name = "task_state_json", columnDefinition = "TEXT")
+    private String taskStateJson;
+
+    /**
+     * 乐观锁版本号 (INTENT-DISTILL-20261111 第二批终审 S3): 同一会话的并发请求 (挂起 / 恢复 / 补参数)
+     * 各自整行保存时, 后到的旧副本不能覆盖先到的结果。已有行由迁移补 0。
+     * 新建时保持 null: Spring Data 按「版本为 null = 新行」走 persist (默认 0 会被当成已有行去 merge)。
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
+
+    /**
      * 最后识别的置信度
      */
     @Column(name = "last_confidence")
@@ -220,7 +239,13 @@ public class ConversationSession {
         /** 用户取消 */
         CANCELLED,
         /** 达到最大轮次仍未识别 */
-        MAX_ROUNDS_REACHED
+        MAX_ROUNDS_REACHED,
+        /**
+         * 参数收集被别的话打断、挂起待恢复 (任务栈里的一层)。不算活跃: 不被
+         * cancelActiveSessionsForUser 清掉, 也不被缺参续轮当成「正在问」。
+         * 过期 / 被挤出栈底时转 TIMEOUT / CANCELLED。见 ConversationTaskStateService。
+         */
+        SUSPENDED
     }
 
     // ========== 对话消息类 ==========
@@ -554,6 +579,7 @@ public class ConversationSession {
             }
         }
         setRequiredParameters(required);
+        markParameterSource(name, ParameterSource.USER);
         this.lastActiveAt = LocalDateTime.now();
     }
 
@@ -585,6 +611,90 @@ public class ConversationSession {
             this.finalIntentCode = this.knownIntentCode;
         }
         this.lastConfidence = 1.0; // 参数收集完成置信度为 100%
+    }
+
+    // ========== 任务状态 (挂起 / 恢复) ==========
+
+    /** 参数来源: 用户说的 / 系统默认 / 从上一轮沿用。 */
+    public enum ParameterSource { USER, DEFAULT, INHERITED }
+
+    /**
+     * 服务端持有的任务状态, 存在 {@code task_state_json}。只放服务端自己要用的东西:
+     * 挂起时刻 (算过期、排栈序) 与每个参数的来源。参数值本身仍在 collected_parameters_json, 不复制。
+     * ⛔ 这里的内容不外发; 给识别层的只有 TaskStateSummary 白名单里的字段。
+     */
+    @Data
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class TaskState {
+        private int version = 1;
+        /** 最近一次被挂起的时刻; null = 没挂起过。 */
+        private LocalDateTime suspendedAt;
+        /** 参数名 → 来源。 */
+        private Map<String, ParameterSource> sources = new HashMap<>();
+    }
+
+    public TaskState getTaskState() {
+        if (taskStateJson == null || taskStateJson.isBlank()) {
+            return new TaskState();
+        }
+        try {
+            TaskState state = TASK_STATE_MAPPER.readValue(taskStateJson, TaskState.class);
+            if (state.getSources() == null) {
+                state.setSources(new HashMap<>());
+            }
+            return state;
+        } catch (JsonProcessingException e) {
+            return new TaskState();
+        }
+    }
+
+    public void setTaskState(TaskState state) {
+        try {
+            this.taskStateJson = state == null ? null : TASK_STATE_MAPPER.writeValueAsString(state);
+        } catch (JsonProcessingException e) {
+            this.taskStateJson = null;
+        }
+    }
+
+    /** 记下一个参数的来源 (只记来源, 值在 collected_parameters_json)。 */
+    public void markParameterSource(String name, ParameterSource source) {
+        if (name == null || source == null) {
+            return;
+        }
+        TaskState state = getTaskState();
+        state.getSources().put(name, source);
+        setTaskState(state);
+    }
+
+    /** 挂起: 只有仍在收集参数的活跃会话能挂起。 */
+    public boolean suspend(LocalDateTime now) {
+        if (status != SessionStatus.ACTIVE || !isParameterCollectionMode()) {
+            return false;
+        }
+        TaskState state = getTaskState();
+        state.setSuspendedAt(now);
+        setTaskState(state);
+        this.status = SessionStatus.SUSPENDED;
+        // 挂起时刻也记进 last_active_at: 定时清理按它收掉过期的挂起行 (SQL 读不到 JSON 里的时刻)
+        this.lastActiveAt = now;
+        return true;
+    }
+
+    /** 恢复: 回到活跃, 从现在起重新计超时。轮次不变 (挂起前问到哪一步就接着问)。 */
+    public boolean resumeFromSuspension(LocalDateTime now) {
+        if (status != SessionStatus.SUSPENDED) {
+            return false;
+        }
+        this.status = SessionStatus.ACTIVE;
+        this.lastActiveAt = now;
+        return true;
+    }
+
+    /** 挂起时刻; 没挂起过 = null。 */
+    public LocalDateTime getSuspendedAt() {
+        return getTaskState().getSuspendedAt();
     }
 
     /**

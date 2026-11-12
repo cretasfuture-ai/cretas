@@ -152,6 +152,20 @@ public interface AIIntentService {
                 mode, userPermissions);
     }
 
+    /**
+     * 带任务状态摘要的识别 (INTENT-DISTILL-20261111 第二批)。{@code taskState} 只能是
+     * {@link com.cretas.aims.service.execution.TaskStateSummary} 产出的白名单结构; 非空时同样不读不写原话缓存。
+     * 默认实现忽略它 (不支持的实现行为不变)。
+     */
+    default IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions,
+                                                            java.util.List<java.util.Map<String, String>> history,
+                                                            java.util.Map<String, Object> taskState) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions, history);
+    }
+
     // ==================== 多意图识别 ====================
 
     /**

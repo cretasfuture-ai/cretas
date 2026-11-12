@@ -22,6 +22,7 @@ import json
 import logging
 import math
 import random
+import re
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -111,11 +112,80 @@ MAX_TURN_CHARS = 200
 _SPEAKER = {"user": "用户", "assistant": "系统"}
 
 
+# ===== 任务状态 (INTENT-DISTILL-20261111 第二批) =====
+# 字段白名单写死, 与 Java TaskStateSummary.TOP_KEYS / TASK_KEYS 一致; 白名单外的字段一律丢掉, 不进提示词。
+TASK_STATE_TOP_KEYS = frozenset({"tasks"})
+TASK_STATE_TASK_KEYS = frozenset({"level", "intentCode", "params"})
+TASK_STATE_ROLE = "task_state"
+MAX_TASK_STATE_TASKS = 4
+MAX_TASK_STATE_PARAMS = 8
+MAX_TASK_STATE_VALUE_CHARS = 40
+_TASK_INTENT = re.compile(r"^[A-Z][A-Z0-9_]{1,79}$")
+_TASK_PARAM_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,39}$")
+
+
+def sanitize_task_state(state: Any) -> List[Dict[str, Any]]:
+    """按白名单重建任务列表; 结构不对的整层丢掉。返回 [] = 不带任务状态。"""
+    if not isinstance(state, dict):
+        return []
+    tasks = state.get("tasks")
+    if not isinstance(tasks, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for task in tasks[:MAX_TASK_STATE_TASKS]:
+        if not isinstance(task, dict):
+            continue
+        level, code, params = task.get("level"), task.get("intentCode"), task.get("params")
+        if not isinstance(level, int) or isinstance(level, bool) or level < 0:
+            continue
+        if not isinstance(code, str) or not _TASK_INTENT.match(code):
+            continue
+        clean: Dict[str, Any] = {}
+        for k, v in (params.items() if isinstance(params, dict) else []):
+            if len(clean) >= MAX_TASK_STATE_PARAMS:
+                break
+            if not isinstance(k, str) or not _TASK_PARAM_KEY.match(k):
+                continue
+            if isinstance(v, bool):
+                clean[k] = "是" if v else "否"
+            elif isinstance(v, (int, float, str)):
+                clean[k] = " ".join(str(v).split())[:MAX_TASK_STATE_VALUE_CHARS]
+        out.append({"level": level, "intentCode": code, "params": clean})
+    return out
+
+
+def task_state_text(state: Any) -> str:
+    """清洗后的任务状态 -> 提示词片段 (只有意图码、参数键值、层级); 没有任务时空串。"""
+    tasks = sanitize_task_state(state)
+    if not tasks:
+        return ""
+    lines = []
+    for t in sorted(tasks, key=lambda x: x["level"]):
+        where = "正在做" if t["level"] == 0 else f"被打断挂起（第{t['level']}层）"
+        filled = "，".join(f"{k}={v}" for k, v in t["params"].items()) or "无"
+        lines.append(f"{where}：{t['intentCode']}，已填 {filled}")
+    return "任务状态（服务端记录，只用来判断这句话是不是在接着做某件事）：\n" + "\n".join(lines) + "\n"
+
+
+def with_task_state(history: Optional[List[Dict[str, Any]]], state: Any) -> List[Dict[str, Any]]:
+    """把任务状态作为一条特殊记录接在最近对话后面: 所有提示词都经 history_block, 不用改各处签名。"""
+    turns = list(history or [])
+    text = task_state_text(state)
+    if text:
+        turns.append({"role": TASK_STATE_ROLE, "content": text})
+    return turns
+
+
 def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
     """最近对话 -> 提示词片段; 没有可用的轮次时返回空串 (提示词与不带上下文时逐字相同)。"""
     lines: List[str] = []
+    state_text = ""
     for turn in history or []:
         if not isinstance(turn, dict):
+            continue
+        if turn.get("role") == TASK_STATE_ROLE:
+            # 已在 with_task_state 里按白名单渲染过; 不占最近对话的轮数
+            state_text = str(turn.get("content") or "")
             continue
         who = _SPEAKER.get(str(turn.get("role") or ""))
         text = " ".join(str(turn.get("content") or "").split())[:MAX_TURN_CHARS]
@@ -123,8 +193,8 @@ def history_block(history: Optional[List[Dict[str, Any]]]) -> str:
             lines.append(f"{who}：{text}")
     lines = lines[-MAX_HISTORY_TURNS:]
     if not lines:
-        return ""
-    return "最近对话（只用来理解下面这句话指的是什么）：\n" + "\n".join(lines) + "\n"
+        return state_text
+    return "最近对话（只用来理解下面这句话指的是什么）：\n" + "\n".join(lines) + "\n" + state_text
 
 
 def build_shortlist_messages(query: str, role: Optional[str], visible: List[Dict[str, Any]],
@@ -544,4 +614,6 @@ class DecisionMatcher:
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
            "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
-           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block"]
+           "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block",
+           "sanitize_task_state", "task_state_text", "with_task_state", "TASK_STATE_TOP_KEYS",
+           "TASK_STATE_TASK_KEYS", "TASK_STATE_ROLE"]

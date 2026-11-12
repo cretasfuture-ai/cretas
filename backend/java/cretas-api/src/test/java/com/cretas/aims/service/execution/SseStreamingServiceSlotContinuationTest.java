@@ -762,6 +762,156 @@ class SseStreamingServiceSlotContinuationTest {
         }
     }
 
+    // ==================== 任务状态: 挂起 / 恢复 (INTENT-DISTILL-20261111 第二批) ====================
+
+    /**
+     * 「先看库存, 回头再报工」: 报工问到一半插一句查询 → 报工挂起 (已填的产量还在) → 查询照常 →
+     * 「好了，继续完成工序」回到报工、只接着问缺的任务号 (不执行) → 「1827」补齐 → 只出确认卡。
+     * 跑在 App 实际走的流式入口 executeStreamAsync 上。
+     */
+    @Test
+    void interruptedWriteTaskIsSuspendedAndResumedWithItsParametersThenStillNeedsConfirmation() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("先看下库存，回头再报工", h.query);
+        when(h.knowledgeBase.matchPhrase("完成工序")).thenReturn(Optional.of("WORK_PROCESS_TASK_COMPLETE"));
+
+        // 第 1 轮: 报工缺任务号, 建参数收集会话
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        // 第 2 轮: 插一句查询 → 报工挂起 (不是取消), 查询照常识别执行
+        IntentExecuteResponse inventory = h.execute(IntentExecuteRequest.builder()
+                .userInput("先看下库存，回头再报工").sessionId(sessionId).build());
+        assertThat(inventory.getIntentCode()).isEqualTo("PROCESS_TASK_QUERY");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        assertThat(h.sessions.get(sessionId).getCollectedParameters()).containsEntry("actualQuantity", "0");
+        // 识别层拿到的任务状态摘要: 只有层级 / 意图码 / 参数键值
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> summary = ArgumentCaptor.forClass(Map.class);
+        verify(h.aiIntentService).recognizeIntentWithConfidence(eq("先看下库存，回头再报工"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), any(), summary.capture());
+        assertThat(summary.getValue()).containsOnlyKeys("tasks");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> tasks = (List<Map<String, Object>>) summary.getValue().get("tasks");
+        assertThat(tasks).hasSize(1);
+        assertThat(tasks.get(0)).containsOnlyKeys("level", "intentCode", "params")
+                .containsEntry("level", 1).containsEntry("intentCode", "WORK_PROCESS_TASK_COMPLETE")
+                .containsEntry("params", Map.of("actualQuantity", "已填"));
+
+        // 第 3 轮: 回到报工 —— 同一个会话回到 ACTIVE, 只问缺的任务号, 什么都没执行
+        IntentExecuteResponse resumed = h.execute(IntentExecuteRequest.builder()
+                .userInput("好了，继续完成工序").sessionId(sessionId).build());
+        assertThat(resumed.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(resumed.getSessionId()).isEqualTo(sessionId);
+        assertThat(resumed.getIntentCode()).isEqualTo("WORK_PROCESS_TASK_COMPLETE");
+        assertThat(resumed.getMessage()).contains("完成工序").contains("actualQuantity：0").contains("不会直接提交");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.ACTIVE);
+        verify(h.toolDispatchService, never()).executeWithTool(eq(h.completeTool), any(), any(), any(), any(),
+                any(), any());
+        verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
+                eq("好了，继续完成工序"), anyString(), anyInt(), any(), any(), any(), any(), any(), any());
+
+        // 第 4 轮: 补齐任务号 → 带着挂起前的产量走写路径, 结果仍然只是确认卡
+        IntentExecuteResponse confirm = h.execute(IntentExecuteRequest.builder()
+                .userInput("1827").sessionId(sessionId).build());
+        ArgumentCaptor<IntentExecuteRequest> sent = ArgumentCaptor.forClass(IntentExecuteRequest.class);
+        verify(h.toolDispatchService).executeWithTool(eq(h.completeTool), eq(F), sent.capture(), eq(h.complete),
+                eq(USER), eq(ROLE), any());
+        assertThat(sent.getValue().getContext()).containsEntry("taskId", "1827").containsEntry("actualQuantity", "0");
+        assertThat(confirm.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+    }
+
+    /** 阴性对照: 开关关着 = 改动前的行为 (打断即取消, 之后说「继续」也回不去, 不带摘要)。 */
+    @Test
+    void withTaskStateOffAnInterruptCancelsAndNothingResumes() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(false);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizes("先看下库存，回头再报工", h.query);
+        h.recognizes("好了，继续完成工序", h.query);
+        when(h.knowledgeBase.matchPhrase("完成工序")).thenReturn(Optional.of("WORK_PROCESS_TASK_COMPLETE"));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        h.execute(IntentExecuteRequest.builder().userInput("先看下库存，回头再报工").sessionId(sessionId).build());
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.CANCELLED);
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("好了，继续完成工序").sessionId(sessionId).build());
+        assertThat(next.getIntentCode()).isEqualTo("PROCESS_TASK_QUERY");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.CANCELLED);
+        verify(h.aiIntentService, never()).recognizeIntentWithConfidence(
+                anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any(), anyMap());
+    }
+
+    /**
+     * 终审 S1: 正在问参数时, 打断它的那一句不会在同一轮里把它恢复。「继续完成工序任务1830」既像恢复又带了一个值,
+     * 同一轮恢复 = 只回一句「还需要任务号」, 1830 被吞掉。应当: 挂起, 这句当新话识别。
+     */
+    @Test
+    void theInterruptingSentenceDoesNotResumeInTheSameTurn() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("继续完成工序任务1830", h.query);
+        when(h.knowledgeBase.matchPhrase(anyString())).thenReturn(Optional.of("WORK_PROCESS_TASK_COMPLETE"));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续完成工序任务1830").sessionId(sessionId).build());
+
+        assertThat(next.getStatus()).isNotEqualTo("NEED_MORE_INFO");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        verify(h.aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序任务1830"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), any(), anyMap());
+    }
+
+    /**
+     * 终审 S1 (只有「同轮不恢复」这一道挡): 「继续完成工序」本身是合格的恢复说法 (恢复说法 + 栈里任务的名称),
+     * 但它是在任务正问着参数时说的 —— 先被判为打断、挂起, 同一轮里不许再把它恢复。
+     */
+    @Test
+    void aValidResumeSentenceSaidWhileTheTaskIsOpenOnlySuspendsInThatTurn() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("继续完成工序", h.query);
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续完成工序").sessionId(sessionId).build());
+
+        assertThat(next.getStatus()).isNotEqualTo("NEED_MORE_INFO");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        verify(h.aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), any(), anyMap());
+    }
+
+    /** 阴性对照: 恢复说法 + 栈里没有的事 (「继续查工序任务」) 不恢复, 当新话识别; 挂起的任务原样留着。 */
+    @Test
+    void resumeWordsAboutSomethingElseDoNotResumeTheSuspendedTask() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("先看下库存，回头再报工", h.query);
+        h.recognizesWithTaskState("继续查工序任务", h.query);
+        when(h.knowledgeBase.matchPhrase("查工序任务")).thenReturn(Optional.of("PROCESS_TASK_QUERY"));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+        h.execute(IntentExecuteRequest.builder().userInput("先看下库存，回头再报工").sessionId(sessionId).build());
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续查工序任务").sessionId(sessionId).build());
+
+        assertThat(next.getIntentCode()).isEqualTo("PROCESS_TASK_QUERY");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+    }
+
+
     private static final class Harness {
         final AIIntentService aiIntentService = mock(AIIntentService.class);
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);
@@ -797,6 +947,8 @@ class SseStreamingServiceSlotContinuationTest {
                 List.of("batchId", "quantity"));
         final AIIntentConfig use = intent("MATERIAL_BATCH_USE", "领用原料", useTool);
         final ConversationServiceImpl conversations;
+        /** 会话表 (内存), 任务状态服务与会话服务共用同一份。 */
+        ConversationSessionRepository repo;
         /** 知识库 (桩): 默认什么短语都不认; 要模拟「这是一条已知命令」就 stub matchPhrase (prod 的短语表里有「上班打卡」)。 */
         final IntentKnowledgeBase knowledgeBase = mock(IntentKnowledgeBase.class);
         /** 本厂的一线开放记录 (内存), 由真 FrontlineAiWriteGrantService 读。 */
@@ -812,8 +964,9 @@ class SseStreamingServiceSlotContinuationTest {
             SemanticCacheService semanticCache = mock(SemanticCacheService.class);
             when(semanticCache.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
 
+            repo = inMemorySessions();
             conversations = new ConversationServiceImpl(
-                    inMemorySessions(), mock(AIIntentConfigRepository.class), null, conversationLlm);
+                    repo, mock(AIIntentConfigRepository.class), null, conversationLlm);
             ReflectionTestUtils.setField(conversations, "maxRounds", 5);
             ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
             ReflectionTestUtils.setField(conversations, "confidenceThreshold", 0.7);
@@ -869,6 +1022,12 @@ class SseStreamingServiceSlotContinuationTest {
                 sessions.put(s.getSessionId(), s);
                 return s;
             });
+            when(repo.findSuspendedByFactoryAndUser(anyString(), anyLong()))
+                    .thenAnswer(inv -> sessions.values().stream()
+                            .filter(s -> s.getStatus() == ConversationSession.SessionStatus.SUSPENDED
+                                    && s.getFactoryId().equals(inv.getArgument(0))
+                                    && s.getUserId().equals(inv.getArgument(1)))
+                            .toList());
             when(repo.findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong()))
                     .thenAnswer(inv -> Optional.ofNullable(sessions.get((String) inv.getArgument(0)))
                             .filter(s -> s.getFactoryId().equals(inv.getArgument(1))
@@ -882,6 +1041,24 @@ class SseStreamingServiceSlotContinuationTest {
                     .thenAnswer(inv -> IntentExecuteResponse.builder().intentRecognized(true)
                             .intentCode(intent.getIntentCode()).status(status).message("该操作会写入/修改数据，执行前需要确认。")
                             .build());
+        }
+
+        /** 打开任务状态 (挂起 / 恢复 / 摘要), 用与会话服务同一张会话表。 */
+        ConversationTaskStateService enableTaskState(boolean enabled) {
+            ConversationTaskStateService taskState = new ConversationTaskStateService(repo);
+            taskState.setEnabled(enabled);
+            ReflectionTestUtils.setField(service, "taskStateService", taskState);
+            return taskState;
+        }
+
+        /** 带任务状态摘要的识别 (10 参版) 也按同一个结果回。 */
+        void recognizesWithTaskState(String input, AIIntentConfig intent) {
+            when(aiIntentService.recognizeIntentWithConfidence(
+                    eq(input), eq(F), eq(3), eq(USER), eq(ROLE), any(), any(), any(), any(), anyMap()))
+                    .thenReturn(IntentMatchResult.builder().userInput(input).bestMatch(intent).confidence(0.95)
+                            .matchMethod(IntentMatchResult.MatchMethod.LLM).isStrongSignal(true)
+                            .requiresConfirmation(false)
+                            .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         }
 
         void recognizes(String input, AIIntentConfig intent) {
