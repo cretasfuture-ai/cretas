@@ -145,7 +145,6 @@ class BareUnitEqualityRatchetContractTest {
             "com/cretas/aims/service/yield/CostReconcileService.java|unit|baseUnit",
             "com/cretas/aims/service/yield/OrderCostBreakdownService.java|normalizeUnit(left)|normalizeUnit(right)",
             "com/cretas/aims/service/yield/impl/InterimSettleServiceImpl.java|agg.unit|unit",
-            "com/cretas/aims/service/yield/impl/YieldAnalysisServiceImpl.java|inUnit|outUnit",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|first.getInputUnit()|last.getOutputUnit()",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|firstInputUnit|stepOutUnit",
             "com/cretas/aims/service/yield/impl/YieldCalculationServiceImpl.java|inUnit|outUnit",
