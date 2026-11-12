@@ -6,6 +6,7 @@ The queue shares the existing cross-process local-model FIFO and usage ledger.
 from copy import deepcopy
 import hashlib
 import json
+from common.process_secret_harness import with_process_secret_harness
 from pathlib import Path
 import sqlite3
 import time
@@ -155,7 +156,7 @@ nextStep只写核对动作和资料，owner从allowedOwners选择。已经给出
     instructions['outputJsonSchema']=schema
     result=analyst.AnalystPayload(model=model,stream=False,think=False,format=schema,keep_alive='60s',
         options={'temperature':0,'num_ctx':16384,'num_predict':7000},
-        messages=[{'role':'system','content':system},{'role':'user','content':json.dumps(instructions,ensure_ascii=False)}])
+        messages=[{'role':'system','content':with_process_secret_harness(system)},{'role':'user','content':json.dumps(instructions,ensure_ascii=False)}])
     return result
 
 def validate(raw,items):

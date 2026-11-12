@@ -8,6 +8,7 @@ from collections import OrderedDict
 from copy import deepcopy
 import hashlib
 import json
+from common.process_secret_harness import with_process_secret_harness
 import re
 import time
 import os
@@ -18,7 +19,7 @@ from .analysis_playbook import VERSION,SECTIONS,HAZARDS,SYSTEM_PROMPT,curriculum
 _cache=OrderedDict()
 OWNERS={'生产','仓库','财务','生产/仓库','生产/财务','财务/仓库','主数据/生产','数据管理员'}
 OWNER_ALIASES={'仓库/生产':'生产/仓库','财务/生产':'生产/财务','仓库/财务':'财务/仓库','生产/主数据':'主数据/生产'}
-FIELDS={'sectionId','evidenceRefs','whatItMeans','whyItMatters','hypotheses','nextStep','owner','cannotConclude','followupQuestion','considerations'}
+ANALYST_SECTION_FIELDS={'sectionId','evidenceRefs','whatItMeans','whyItMatters','hypotheses','nextStep','owner','cannotConclude','followupQuestion','considerations'}
 HAZARD_WORDS={
     'MATERIAL_MIX':(r'材料|半成品',r'组合|用量|耗量|折算|估值'),
     'UNIT_CONVERSION':(r'单位|规格|换算',r'核|确认'),
@@ -98,7 +99,7 @@ def payload_for(pack,review_facts,model,repair=None):
     if repair:data['validationFeedback']=repair
     return AnalystPayload(model=model,stream=False,think=False,format='json',keep_alive='60s',
         options={'temperature':0,'num_ctx':16384,'num_predict':6000},
-        messages=[{'role':'system','content':SYSTEM_PROMPT},{'role':'user','content':json.dumps(data,ensure_ascii=False)}])
+        messages=[{'role':'system','content':with_process_secret_harness(SYSTEM_PROMPT)},{'role':'user','content':json.dumps(data,ensure_ascii=False)}])
 
 
 def validate(value,pack,review_facts):
@@ -109,7 +110,7 @@ def validate(value,pack,review_facts):
     if not isinstance(value['sections'],list) or len(value['sections'])!=len(pack['sectionIds']):raise ValueError('ANALYST_SECTION_COVERAGE')
     evidence={fact['id']:fact for fact in pack['facts']};seen=set();sections=[]
     for section in value['sections']:
-        if not isinstance(section,dict) or set(section)!=FIELDS:raise ValueError('ANALYST_SECTION_SCHEMA')
+        if not isinstance(section,dict) or set(section)!=ANALYST_SECTION_FIELDS:raise ValueError('ANALYST_SECTION_SCHEMA')
         sid=section['sectionId']
         if sid not in pack['sectionIds'] or sid in seen:raise ValueError('ANALYST_SECTION_ID')
         seen.add(sid);refs=section['evidenceRefs']

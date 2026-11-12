@@ -7,6 +7,7 @@ import asyncio
 from collections import OrderedDict
 import hashlib
 import json
+from common.process_secret_harness import with_process_secret_harness
 import math
 import os
 import subprocess
@@ -112,7 +113,7 @@ def provider_config():
 def payload_for(facts,model):
     return {'model':model,'stream':False,'think':False,'format':'json','keep_alive':'60s',
             'options':{'temperature':0,'num_ctx':4096,'num_predict':1800},
-            'messages':[{'role':'system','content':'Select evidence-bound review actions. Never invent data or causes. Return only JSON {"reviews":[{"alertId":"...","check":"...","priority":"high or normal"}]}. Each check must belong to the allowedChecks for that alert.'},
+            'messages':[{'role':'system','content':with_process_secret_harness('Select evidence-bound review actions. Never invent data or causes. Return only JSON {"reviews":[{"alertId":"...","check":"...","priority":"high or normal"}]}. Each check must belong to the allowedChecks for that alert.')},
                         {'role':'user','content':json.dumps({'facts':facts,'checks':CHECKS},ensure_ascii=False)}]}
 
 def infer(payload,config):

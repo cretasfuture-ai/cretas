@@ -392,8 +392,10 @@ def test_full_archive_schema_rejects_truncate_grant(full_archive, database):
         admin.close()
 
 
-def test_full_offline_context_never_loads_source_account_or_cache(monkeypatch):
+def test_full_offline_context_never_loads_source_account_or_cache(monkeypatch, tmp_path):
     import blacklake.full_verify as module
+    # Secret loading is stubbed below; set LOCALAPPDATA so Linux CI has a path to name.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     loaded = []
 
     def load(path):

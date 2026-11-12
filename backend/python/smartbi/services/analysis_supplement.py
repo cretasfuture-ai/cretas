@@ -4,6 +4,7 @@ from copy import deepcopy
 from collections import Counter
 import hashlib
 import json
+from common.process_secret_harness import with_process_secret_harness
 import os
 from pathlib import Path
 import re
@@ -13,7 +14,7 @@ from .analysis_evidence import build
 from . import local_analyst as analyst
 
 SCHEMA='smartbi-analysis-supplement/1'
-FIELDS={'factId','whatItMeans','nextStep','cannotConclude','owner'}
+SUPPLEMENT_FACT_FIELDS={'factId','whatItMeans','nextStep','cannotConclude','owner'}
 KINDS={
     'weighted_unit_cost':'同一单位下的账面材料加人工成本；不是完整制造成本，也不能跨产品规格直接比较。',
     'product_coverage':'分别看可核算工单比例及同单位良品产量覆盖；缺失不能当零，也不能外推全厂。',
@@ -59,7 +60,7 @@ def plan(job,facts,*,exhaustive=False):
 
 
 def validate_review(raw,fact,full):
-    if not isinstance(raw,dict) or set(raw)!=FIELDS or raw['factId']!=fact['id']:
+    if not isinstance(raw,dict) or set(raw)!=SUPPLEMENT_FACT_FIELDS or raw['factId']!=fact['id']:
         raise ValueError('SUPPLEMENT_FACT_ID_OR_SCHEMA')
     texts=[raw.get(k) for k in ('whatItMeans','nextStep','cannotConclude')]
     if any(isinstance(t,str) and re.search(r'[零一二三四五六七八九十百千万两]+(?:个|条|张|次|组|项|笔|名|份|样本)',t) for t in texts):
@@ -97,7 +98,7 @@ def payload(full,batch,model,feedback=None,previous=None):
         'riskDefinitions':HAZARDS,'allowedOwners':sorted(analyst.OWNERS),
         'requiredRiskWording':{f['id']:[RISK_WORDING.get(c,HAZARDS.get(c,c)) for c in f['considerations']] for f in batch},
         'validationFeedback':feedback,
-        'previousRejectedReviews':[{k:r[k][:1000] for k in FIELDS if isinstance(r.get(k),str)}
+        'previousRejectedReviews':[{k:r[k][:1000] for k in SUPPLEMENT_FACT_FIELDS if isinstance(r.get(k),str)}
             for r in (previous if isinstance(previous,list) else [])
             if isinstance(r,dict) and isinstance(r.get('factId'),str) and r['factId'] in ids],
         'repairInstructions':'若有校验反馈，只改写本批未通过项。previousRejectedReviews是未通过的草稿，不是已确认事实。'
@@ -113,8 +114,8 @@ def payload(full,batch,model,feedback=None,previous=None):
         '每个事实的considerations风险都必须在正文解释，不能断言原因已确认。每个文字字段不少于四字且不超过两百四十字。'}
     return analyst.AnalystPayload(model=model,stream=False,think=False,format='json',keep_alive='60s',
         options={'temperature':0,'num_ctx':16384,'num_predict':6000},messages=[
-            {'role':'system','content':'你是工厂生产与成本复核助手。只根据提供的匿名程序统计给核对建议。'
-             '不编造金额、数量、采购价或业务因果。只返回JSON对象 {"reviews":[逐条核对结果]}。'},
+            {'role':'system','content':with_process_secret_harness('你是工厂生产与成本复核助手。只根据提供的匿名程序统计给核对建议。'
+             '不编造金额、数量、采购价或业务因果。只返回JSON对象 {"reviews":[逐条核对结果]}。')},
             {'role':'user','content':json.dumps(data,ensure_ascii=False)}])
 
 
