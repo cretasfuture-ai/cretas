@@ -47,8 +47,25 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - **边做边写状态**：在飞任务、PR 号、CI 监视、卡点、待裁决随时写进 `ACTIVE.md`，不只留在对话里。目标是任何时刻换会话都不丢东西。
 - **主规则：一批一个会话**。本批合并、发布、归档、释放 scope 后即收口：写交接，然后**直接用 start_session 开新 organizer 会话接手，不问用户**（Steve 2026-11-11：「你直接开新的 chat，不用问我了」）。start_session 不可用时才向用户说一行「本批已收口，请在桌面端开新会话，交接在 <路径>」。开完用 get_session 核对 model/effort（start_session 开更高模型会被静默忽略）。
 - **兜底：被压缩过**。本会话发生过自动压缩时，不打断手上的步骤，到下一个合并或归档点就收口。
-- **兜底：上下文 ≥ 600K**。没压缩也一样：到下一个合并或归档点就收口（2026-11-11 实测 organizer 会话跑到 834K 才换，规则只看批次、没有数值触发）。没有程序替你监控，自己在合并点看一眼上下文大小。
+- **按上下文换会话（Steve 2026-11-13，取代原「≥ 600K」兜底）**：**300K 软线**——到下一个任务边界（PR 合并 / 一件事做完）就收口，不再开新的一件事；**400K 硬线**——到下一个安全停止点就收口，即使这件事没做完。依据：用本周 67 个会话回放，300K 省约 39%、本周换 130 次，400K 省约 30%、换 74 次，再收紧到 250K 只多省 5 个点却多换 78 次。`.claude/hooks/session-health.js`（UserPromptSubmit）会在越线时提醒，执行会话同样适用。
 - **交接**写到 `~/.claude/context-handoff/handoff/<YYYYMMDD>-<批次>.md`（不进仓库），≤ 15 行：本批状态与 ACTIVE 条目 ID / 在飞执行会话（会话 ID + 在做什么）/ 仍在挂的 PR 监视（PR 号 + 停止条件）/ 合并排队顺序 / 待用户裁决 / Base SHA / 下一步第一个动作。
-- **新 organizer 开场三步**：读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视。
+- 🔴 **交班后老 organizer 不再转发**（Steve 2026-11-13）：执行会话是谁开的，它每轮结束的通知就发给谁，交班后老 organizer 仍会被一次次叫醒、带着几十万上下文转发给新 organizer。本周 organizer 花费 $550 里有 $271（49%）是被别的会话消息/通知唤醒的回合，单个交过班的 organizer 被唤醒 246 次。所以收口顺序固定为：
+  1. 写交接 → `start_session` 开新 organizer，拿到它的 `local_…` id；
+  2. 给每个在飞执行会话发一条 SendMessage：「organizer 已换成 <新 id>，之后完成/阻塞向它汇报」，并把这些会话的 id 和在做什么写进交接；
+  3. 对每个在飞执行会话调 `detach_session`，它就不再通知老 organizer（被拒的——与别的会话共用 worktree 或用户挪过的——记进交接，由新 organizer 知会）；
+  4. 老 organizer 就此停手，不再回应后续通知，告诉用户可以归档。新 organizer 收不到这些会话的自动结束通知，所以它们完成/阻塞时必须主动 SendMessage，新 organizer 也要为它们的 PR 重新挂监视。
+- 🔴 **新 organizer 只开出卡片时**（2026-11-13 三个 organizer 同时撞上）：被别的会话消息/通知叫醒的回合里，`start_session` 会被应用改成等 Steve 点击的提案卡片，拿不到新 id。这时：
+  - 第 2、3 步**先不做**：执行会话保持挂在老 organizer 名下，老 organizer 的 CI 监视**不停**——否则会出现没人盯的 PR（当天 #1652 在重跑 CI 却无人看守）。
+  - 立刻用一句话告诉 Steve：「新 organizer 是卡片 <task_id>，请点开；点开前本会话继续守着 <在飞 PR 列表>」。
+  - 新 organizer 开出来后由它在开场时通知各执行会话改向它汇报，并 SendMessage 老 organizer；老 organizer 收到后再做第 3 步 detach、停掉监视、停手。
+  - 能选时机就把收口放在 Steve 自己发消息的那一轮（那一轮里 `start_session` 能直接开）。
+- **会话命名**（Steve 2026-11-13）：侧边栏要一眼看出是什么。新 organizer 开出来第一件事用 `set_session_title` 改名为「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后把老 organizer 改名为「[已交班→第 N+1 任] <原名>」；执行会话用「<批次>·<线名>：<做什么>」。
+- **新 organizer 开场**：按上面的命名规则改名 → 读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视 → 通知在飞执行会话改向自己汇报，并告诉老 organizer 可以 detach、停手 → **归档老 organizer**。
+- **自动归档老 organizer**（Steve 2026-11-13：交班后老 organizer 直接归档，不用再问）：老 organizer 回复已 detach、已停手（或用 `list_sessions` 核对它名下已没有在飞执行会话）后，新 organizer 对它调 `archive_session`，reason 写「已交班给 <新 id>」。注意：
+  - 先 detach 再归档：归档会连带归档挂在它名下、空闲且没有开着 PR 的执行会话，在飞的必须先由它 detach；
+  - 被置顶的会话归档不掉：先用侧边栏工具 `set_pinned` 取消置顶，没有这个工具就在回执里告诉 Steve 手动取消；
+  - 正在跑（回合中、有后台任务）的会话会被拒：到下一个合并点再试一次，还不行就报给 Steve；
+  - 归档会清理它的 worktree：交接写在 `~/.claude/context-handoff/handoff/`（仓库外）才不会丢；
+  - 更早的几任 organizer 一并核对：名下没有在飞执行会话的也一起归档。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。
 - 换会话时顺带按任务换模型/effort（缓存本来就要重建）；不在长会话中途单独换模型。

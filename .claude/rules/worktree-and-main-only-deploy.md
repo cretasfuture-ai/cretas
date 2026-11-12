@@ -21,7 +21,7 @@ merge 前 `git diff origin/main...HEAD --stat` 确认只有你的文件；夹带
 
 | 变更 | 通道 |
 |---|---|
-| `docs/**.md`、`.claude/**`、根 `*.md`、`.gitignore` | **fastlane 直推**：`./scripts/deploy/publish-main-fastlane.sh --base-sha <完整 40 位 SHA> --confirm YES-DIRECT-MAIN`（先 `--dry-run`）。fast-forward only、禁 force push、推前 re-fetch 证明 origin/main 未前进；分支名必须 `codex/*` |
+| `docs/**.md`、`.claude/**`、根 `*.md`、`.gitignore` | **fastlane**：`./scripts/deploy/publish-main-fastlane.sh --base-sha <完整 40 位 SHA> --confirm YES-DIRECT-MAIN`（先 `--dry-run`）。2026-11-13 起 main 设了必需检查、GitHub 拒收直推，脚本默认改为「推分支 → 开 PR → 等检查全部结束无红 → `--match-head-commit` 合并 → 等 MERGED」，文档类 PR 上多数闸判为跳过，通常几分钟；禁 force push、开始前证明 origin/main 未前进；分支名必须 `codex/*`。`FASTLANE_PUBLISH_MODE=direct` 只给本地夹具/离线 main |
 | 其余（含 `docs/dispatch/**`、配置文件）| fastlane 须带 `--task-id <本批任务ID>`（ID 必须以词边界出现在 `docs/dispatch/` 下），否则门禁按「全局零未完成任务」判定而恒拒 |
 | backend / web-admin 代码 | **PR**（Python Gate / Web Admin Gate / Secret regression 按 paths 跑；PR 号是台账锚点） |
 | AGENTS.md / `.agents/skills/*` / `.codex/rules/*` / workflows / `scripts/deploy/*` / 迁移 / entity / repository / security | **强制 PR**（fastlane 列为高风险自动拒绝；`.claude/` 豁免而 `.agents/`、`.codex/` 高风险，三个目录名很像） |

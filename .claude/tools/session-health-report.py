@@ -38,6 +38,7 @@ def scan(path):
     turns = 0
     cost = 0.0
     coord_calls = 0
+    seen_ids = set()
     organizer = False
     first_ts = last_ts = None
     with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -71,6 +72,13 @@ def scan(path):
             u = msg.get("usage")
             if not u:
                 continue
+            # 同一条回复会按内容块(思考/文字/工具调用)拆成多行, 每行带同一份 usage; 按 message.id 只计一次。
+            # 2026-11-13 实测最大的会话 7013 行只对应 3531 条回复, 不去重则轮数和成本虚高约一倍(上下文峰值不受影响)。
+            mid = msg.get("id")
+            if mid:
+                if mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
             ctx = (u.get("input_tokens") or 0) + (u.get("cache_creation_input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
             if ctx <= 0:
                 continue
