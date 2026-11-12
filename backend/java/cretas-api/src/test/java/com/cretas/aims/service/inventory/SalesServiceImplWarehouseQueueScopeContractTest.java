@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * 真正的行过滤只在 {@code warehouseQueuePage} 里。三态:
  * 归属集合非空 → 只走按归属过滤的查询并传入该集合; 空 → 空页且不查库; null(全工厂) → 原工厂查询。
  */
-class SalesServiceImplWarehouseQueueScopeTest {
+class SalesServiceImplWarehouseQueueScopeContractTest {
     private static final String FACTORY = "F006";
 
     private final SalesDeliveryRecordRepository deliveries = mock(SalesDeliveryRecordRepository.class);
