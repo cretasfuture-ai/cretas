@@ -156,7 +156,16 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 #: 🔴 2026-10-07 Steve 复审裁定「清掉死通道, 大模型后备只留我们自己的阿里云账号」:
 #:    aistore ×3(401, 09-13 已过期)/ deepseek ×2(401)/ zhipu ×1(429)整体删除,
 #:    同样**直接替换, ⛔ 不留注释**(理由同上)。读数见 llm_router 的 `_REGISTRY_AUDIT_PROBE`。
+#: 🔴 2026-11-12 (LLM-PROVIDER-SWITCH): 新增 6 条付费条目(当天评测密钥探针, 读数见 `_REGISTRY_AUDIT_PROBE`)。
+#:    它们**默认不进任何链**(Steve 同日定: 长期是阿里云 + 本地; 付费两家只在配了出口时可选启用),
+#:    在册是为了启用那天计费护栏已经认得它们。
 _FROZEN_REGISTRY = {
+    ("anthropic", "claude-haiku-5-5"): None,
+    ("anthropic", "claude-sonnet-5-5"): None,
+    ("openai", "gpt-5.4-nano"): None,
+    ("openai", "gpt-5.4-mini"): None,
+    ("openai", "gpt-4.1-mini"): None,
+    ("openai", "gpt-6-luna"): None,
     # 2026-09-29 A 账号同源带图探针通过；owner 要求先用有限额模型。
     # ⚠️ 2026-10-07 探针: kimi-k3 / qwen3.8-27b / qwen3.8-max-0902 当天 403 quota ——
     #    原样保留, 已报 owner 裁定(brief: aliyun 条目死了只报告)。
@@ -238,7 +247,10 @@ def test_absolute_last_mechanism_still_sinks_its_members(monkeypatch):
     """
     from unittest import mock
 
-    slot = llm_router.SLOT.CHAT
+    # 2026-11-12: CHAT 现在本地优先(链头由 `_LOCAL_FIRST_SLOTS` 后处理挪过), 用阿里云优先的 INSIGHTS
+    #    才测得到排序键本身。
+    slot = llm_router.SLOT.INSIGHTS
+    assert slot not in llm_router._LOCAL_FIRST_SLOTS
     with mock.patch.object(llm_router, "_today",
                            lambda: llm_router._CAPABILITY_MEASURED_AT):
         assert llm_router._capability_stale() is False
@@ -276,16 +288,21 @@ def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
     # 阴性对照: 判定函数必须**判得出**一个非阿里云条目, 否则下面全绿没有意义。
     assert _non_aliyun([("zhipu", "glm-4.5-air"), ("aliyun_a_vl", "x")]) == [
         ("zhipu", "glm-4.5-air")]
-    assert _non_aliyun(llm_router._SAFE_MODELS) == []
-    assert _non_aliyun(llm_router._MINIMAL_SAFE_SET) == []
+    # 2026-11-12: 付费两家可以**在册**(计费护栏认得它们), 但默认**不在任何链上** —— 链上仍然只有我们的。
+    paid = llm_router._PAID_ACCOUNTS
+    assert _non_aliyun(p for p in llm_router._SAFE_MODELS if p[0] not in paid) == []
+    assert _non_aliyun(p for p in llm_router._MINIMAL_SAFE_SET if p[0] not in paid) == []
     for slot, chain in llm_router.SLOT_MODELS.items():
         assert _non_aliyun(chain) == [], f"{slot.value} 链上有非阿里云条目"
-    assert set(llm_router.DEFAULT_CHAIN) <= _OUR_ACCOUNTS
-    # 2026-11-03: 本地兜底进了册, 且在每个文本槽的链尾(结构键 `_ABSOLUTE_LAST` 保证)。
-    assert ("local_canada", "qwen3:8b") in llm_router._SAFE_MODELS
+    assert set(llm_router.DEFAULT_CHAIN) <= _OUR_ACCOUNTS | paid
+    # 2026-11-03: 本地兜底进了册; 2026-11-12 起本地优先的槽它在链头, 其余文本槽它在链尾。
+    local = ("local_canada", "qwen3:8b")
+    assert local in llm_router._SAFE_MODELS
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
-            assert chain[-1] == ("local_canada", "qwen3:8b"), f"{slot.value} 链尾不是本地兜底: {chain}"
+        if slot in llm_router._NO_TEXT_TAIL_SLOTS:
+            continue
+        where = 0 if slot in llm_router._LOCAL_FIRST_SLOTS else -1
+        assert chain[where] == local, f"{slot.value}: 本地不在应在的位置({where}): {chain}"
     assert llm_router._SAFE_MODELS, "注册表空了 —— 上面几条恒真"
 
 
@@ -426,3 +443,58 @@ def test_aliyun_c_is_gone_from_registry_chains_and_provider_config(monkeypatch):
         asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_c_vl"]))
     assert "no_candidates" in str(ei.value), str(ei.value)
     assert calls == []
+
+
+# ── 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 同日定稿) ───────────────────────────────────────────
+#: 人写的「本地优先」槽 —— 与 llm_router 的 `_LOCAL_FIRST_SLOT_NAMES` 来源不同(这里抄的是当天实测表的结论)。
+_MEASURED_LOCAL_COMPETENT = {"chat", "simple_text", "chart", "mapper"}
+_WAREHOUSE_GATES = (None, "warehouse_candidates_not_enabled", "warehouse_v41_not_enabled")
+
+
+def test_aliyun_and_local_only_by_default_and_local_first_where_measured_competent(monkeypatch):
+    """长期格局 = 阿里云 + 本地; 本地够用的槽本地第一、阿里云第二; 付费两家默认不进任何链。
+
+    阴性对照 ①: 只配出口 + key、不开 LLM_PAID_GENERATIVE, 生成链仍然没有付费两家(只有 Luna 细选可用)。
+    阴性对照 ②: 再开 LLM_PAID_GENERATIVE=1, 付费两家**会**出现且排在阿里云与本地之后 ——
+    证明「默认没有」来自启用条件, 而不是池里本来就没有它们。
+    """
+    for name in ("LLM_EGRESS_PROXY", "LLM_PAID_GENERATIVE"):
+        monkeypatch.delenv(name, raising=False)
+    local = ("local_canada", "qwen3:8b")
+    assert llm_router.decision_choice_enabled() is False
+    for slot in llm_router.SLOT:
+        chain = llm_router._build_chain(slot)
+        assert chain, f"{slot.value} 是空链"
+        assert not [p for p in chain if p[0] in llm_router._PAID_ACCOUNTS], f"{slot.value}: {chain}"
+        assert any(p[0].startswith("aliyun") for p in chain), f"{slot.value} 没有阿里云: {chain}"
+        assert all(llm_router._refuse_reason(*p) in _WAREHOUSE_GATES for p in chain), chain
+        if slot.value in _MEASURED_LOCAL_COMPETENT:
+            assert chain[0] == local and chain[1][0].startswith("aliyun"), f"{slot.value}: {chain}"
+        elif slot not in llm_router._NO_TEXT_TAIL_SLOTS:
+            assert chain[0][0].startswith("aliyun") and chain[-1] == local, f"{slot.value}: {chain}"
+        else:
+            assert local not in chain, f"{slot.value}: 本地不该进识图 / 读概率槽: {chain}"
+    assert {s.value for s in llm_router._LOCAL_FIRST_SLOTS} == _MEASURED_LOCAL_COMPETENT
+
+    monkeypatch.setenv("LLM_EGRESS_PROXY", "socks5h://127.0.0.1:11438")
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("LLM_ANTHROPIC_API_KEY", "k")
+    assert llm_router.decision_choice_enabled() is True
+    assert not [p for s in llm_router.SLOT for p in llm_router._build_chain(s)
+                if p[0] in llm_router._PAID_ACCOUNTS], "没开 LLM_PAID_GENERATIVE 就进了生成链"
+    monkeypatch.setenv("LLM_PAID_GENERATIVE", "1")
+    chat = llm_router._build_chain(llm_router.SLOT.CHAT)
+    paid_idx = [i for i, p in enumerate(chat) if p[0] in llm_router._PAID_ACCOUNTS]
+    ours_idx = [i for i, p in enumerate(chat) if p[0] not in llm_router._PAID_ACCOUNTS]
+    assert paid_idx and min(paid_idx) > max(ours_idx), f"付费两家必须排在阿里云与本地之后: {chat}"
+
+
+def test_disabled_account_mechanism_still_works(monkeypatch):
+    """`_DISABLED_ACCOUNTS` 今天是空集; 机制必须仍然有效(放进一个账号, 它就从每条链消失并被拒)。"""
+    assert llm_router._DISABLED_ACCOUNTS == frozenset()
+    before = {p for s in llm_router.SLOT for p in llm_router._build_chain(s)}
+    assert any(p[0] == "aliyun_b_vl" for p in before)
+    monkeypatch.setattr(llm_router, "_DISABLED_ACCOUNTS", frozenset({"aliyun_b_vl"}))
+    after = {p for s in llm_router.SLOT for p in llm_router._build_chain(s)}
+    assert not any(p[0] == "aliyun_b_vl" for p in after)
+    assert llm_router._refuse_reason("aliyun_b_vl", "qwen3.8-flash") == "provider_disabled"

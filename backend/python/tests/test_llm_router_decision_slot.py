@@ -21,7 +21,9 @@ from common.llm_router import SLOT
 def test_decision_pool_is_exactly_the_verified_entries_in_written_order():
     chain = llm_router.SLOT_MODELS[SLOT.DECISION]
     assert chain, "DECISION 链为空 —— 意图决策层会整体回落旧路径"
-    expected = [p for p in llm_router._LOGPROB_ORDER if p in llm_router._LOGPROB_VERIFIED]
+    # 2026-11-12: 登记表里的付费候选(openai/gpt-4.1-mini)默认不进链, 只在可选启用时追加。
+    expected = [p for p in llm_router._LOGPROB_ORDER
+                if p in llm_router._LOGPROB_VERIFIED and p[0] not in llm_router._PAID_ACCOUNTS]
     assert chain == expected
     for pair in chain:
         assert pair in llm_router._SAFE_MODELS, f"{pair} 有能力证据但不在计费白名单"
@@ -34,7 +36,7 @@ def test_decision_pool_rejects_an_unverified_pair(monkeypatch):
     head = llm_router._LOGPROB_ORDER[0]
     trimmed = {k: v for k, v in llm_router._LOGPROB_VERIFIED.items() if k != head}
     pool = [p for p in llm_router._LOGPROB_ORDER if p in trimmed]
-    assert head not in pool and len(pool) == len(llm_router.SLOT_MODELS[SLOT.DECISION]) - 1
+    assert head not in pool and len(pool) == len(llm_router._LOGPROB_VERIFIED) - 1
 
 
 def test_decision_has_no_text_floor():
@@ -42,7 +44,8 @@ def test_decision_has_no_text_floor():
     # 2026-10-07: 原断言「zhipu 不在 DECISION 链上」—— zhipu 出局后它恒真。
     #    改成直接比: 链 == 登记表筛出的池, 一条都没被追加(文本地板的成员
     #    aliyun_*_vl qwen3.8-flash 有两条同时在池里, 所以不能只看「地板成员在不在」)。
-    expected = [p for p in llm_router._LOGPROB_ORDER if p in llm_router._LOGPROB_VERIFIED]
+    expected = [p for p in llm_router._LOGPROB_ORDER
+                if p in llm_router._LOGPROB_VERIFIED and p[0] not in llm_router._PAID_ACCOUNTS]
     assert llm_router.SLOT_MODELS[SLOT.DECISION] == expected
     assert ("aliyun_b_vl", "qwen3.8-flash") not in llm_router.SLOT_MODELS[SLOT.DECISION], (
         "文本地板里不在 logprob 登记表的那条被追加进来了")

@@ -84,11 +84,20 @@ async def _probe(client: httpx.AsyncClient, account: str, model: str,
         "max_tokens": 200,
     }, account)
     payload = r._apply_slot_params(slot, account, model, normalized)
+    # 2026-11-12: 鉴权头按供应商取(Anthropic 是 x-api-key); Anthropic 走与生产同一个翻译层
+    # (common.llm_anthropic), 只是不经脱敏客户端 —— 探针内容是固定的合成提示词。
+    url = base.rstrip("/") + "/chat/completions"
+    if account == "anthropic":
+        from common.llm_anthropic import to_messages_request
+        url = base.rstrip("/") + "/v1/messages"
+        payload = to_messages_request(
+            payload, model,
+            thinking_off_wanted=(r._SLOT_PARAMS.get(slot) or {}).get("enable_thinking") is False)
     try:
         resp = await client.post(
-            base.rstrip("/") + "/chat/completions",
+            url,
             json=payload,
-            headers={"Authorization": f"Bearer {key}"},
+            headers=r._auth_headers(account, key),
             timeout=90.0,
         )
     except Exception as exc:  # noqa: BLE001 — 网络层任何异常都算 error
@@ -97,7 +106,11 @@ async def _probe(client: httpx.AsyncClient, account: str, model: str,
     content = ""
     if 200 <= resp.status_code < 300:
         try:
-            content = (json.loads(body)["choices"][0]["message"].get("content") or "")
+            parsed = json.loads(body)
+            if account == "anthropic":
+                from common.llm_anthropic import to_chat_completion
+                parsed = to_chat_completion(parsed)
+            content = (parsed["choices"][0]["message"].get("content") or "")
         except Exception:  # noqa: BLE001
             content = ""
     return classify_probe_result(resp.status_code, body, content), f"{resp.status_code}"

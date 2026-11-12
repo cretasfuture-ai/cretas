@@ -103,6 +103,17 @@ class _RedactingLLMClient:
             )
             raise EgressRedactionError(type(e).__name__) from e
 
+    async def redact_chat_payload(self, json_payload: Any) -> Any:
+        """Redact an OpenAI chat-shaped payload exactly as a ``/chat/completions`` post would.
+
+        For providers whose wire format is NOT ``/chat/completions`` (Anthropic ``/v1/messages``,
+        OpenAI ``/v1/decisions``, 2026-11-12): the router redacts the chat-shaped payload here
+        FIRST and only then translates it, so the same choke point covers every egress. Posting the
+        translated body afterwards goes through ``post`` with a non-chat URL, which is a passthrough.
+        Returns ``(payload, tokens)``; sets the same egress-token context as ``post``. Fail-closed.
+        """
+        return await self._redact("/chat/completions", json_payload)
+
     async def post(self, url: Any, *, json: Any = None, **kwargs: Any):  # noqa: A002
         json, tokens = await self._redact(url, json)
         response = await self._inner.post(url, json=json, **kwargs)
@@ -243,11 +254,13 @@ def reset_prefetched_names(token: "contextvars.Token") -> None:
     _prefetched_names.reset(token)
 
 
-def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:
-    """非流式回答: 把本次发出去的代号换回真名 (去括号 / 全角括号等改写也认)。JSON 先解析再逐个字符串换,
-    真名带引号也不会弄坏 JSON; 解析不了按纯文本换。"""
-    if not tokens or not isinstance(response, httpx.Response):
-        return response
+def restore_json(node: Any, tokens: dict) -> Any:
+    """把本次发出去的代号在一个已解析的 JSON 结构里换回真名 (与 ``_restored_response`` 同一套规则)。
+
+    2026-11-12: Anthropic 适配层把 ``/v1/messages`` 的回答翻译成 OpenAI 形状后用它还原 ——
+    那条路不经过 ``post`` 的 ``/chat/completions`` 分支, 必须显式还原。"""
+    if not tokens:
+        return node
     import json as _json
     from common.llm_egress_text import restore
 
@@ -264,8 +277,19 @@ def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response
             return [_deep(x) for x in node]
         return restore(node, tokens) if isinstance(node, str) else node
 
+    return _deep(node)
+
+
+def _restored_response(response: httpx.Response, tokens: dict) -> httpx.Response:
+    """非流式回答: 把本次发出去的代号换回真名 (去括号 / 全角括号等改写也认)。JSON 先解析再逐个字符串换,
+    真名带引号也不会弄坏 JSON; 解析不了按纯文本换。"""
+    if not tokens or not isinstance(response, httpx.Response):
+        return response
+    import json as _json
+    from common.llm_egress_text import restore
+
     try:
-        body = _json.dumps(_deep(response.json()), ensure_ascii=False).encode("utf-8")
+        body = _json.dumps(restore_json(response.json(), tokens), ensure_ascii=False).encode("utf-8")
     except ValueError:
         body = (restore(response.text, tokens) or "").encode("utf-8")
     headers = {k: v for k, v in response.headers.items()
@@ -373,11 +397,55 @@ async def init_llm_client(base_url: str, api_key: str) -> None:
             logger.warning(f"LLM client warmup failed (non-fatal): {e}")
 
 
+# ── 出境代理 (2026-11-12, LLM-PROVIDER-SWITCH) ──────────────────────────────────────────
+# prod 47 在国内: api.anthropic.com 403(地区封锁)、api.openai.com 超时。这两家经加拿大 Mac mini 的反向
+# SOCKS 出口走(47 上只监听 127.0.0.1, 见 docs/ops/local-llm-canada-mini.md)。
+#   LLM_EGRESS_PROXY  例: socks5h://127.0.0.1:11438   (socks5h = 远端解析域名; 需要 socksio)
+# 只给付费两家用(由 llm_router 按账号选客户端); 没配 = 不建代理客户端, 行为与以前完全相同。
+# 代理客户端同样包在脱敏层里、挂同一个 metrics hook —— 换的只是出口, ⛔ 不是绕开脱敏。
+_proxied_client: Optional[httpx.AsyncClient] = None
+_proxied_wrapper: "Optional[_RedactingLLMClient]" = None
+_proxied_url: str = ""
+
+
+def egress_proxy_url() -> str:
+    import os
+    return (os.getenv("LLM_EGRESS_PROXY") or "").strip()
+
+
+def get_llm_proxied_http_client() -> "_RedactingLLMClient":
+    """经 ``LLM_EGRESS_PROXY`` 出境的共享客户端(同样脱敏)。没配代理时返回普通共享客户端。"""
+    global _proxied_client, _proxied_wrapper, _proxied_url
+    url = egress_proxy_url()
+    if not url:
+        return get_llm_http_client()
+    if _proxied_client is None or _proxied_url != url:
+        from common.llm_metrics import metrics_response_hook
+        _proxied_client = httpx.AsyncClient(
+            proxy=url,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30),
+            timeout=httpx.Timeout(120.0),
+            event_hooks={"response": [metrics_response_hook]},
+        )
+        _proxied_url = url
+        _proxied_wrapper = None
+        scheme = url.split("://", 1)[0]
+        logger.info("Egress-proxied LLM HTTP client created (scheme=%s)", scheme)
+    if _proxied_wrapper is None or _proxied_wrapper._inner is not _proxied_client:
+        _proxied_wrapper = _RedactingLLMClient(_proxied_client)
+    return _proxied_wrapper
+
+
 async def close_llm_client() -> None:
     """Close the shared LLM HTTP client. Call during application shutdown."""
-    global _client, _wrapper
+    global _client, _wrapper, _proxied_client, _proxied_wrapper, _proxied_url
     if _client is not None:
         await _client.aclose()
         _client = None
         _wrapper = None
         logger.info("Shared LLM HTTP client closed")
+    if _proxied_client is not None:
+        await _proxied_client.aclose()
+        _proxied_client = None
+        _proxied_wrapper = None
+        _proxied_url = ""
