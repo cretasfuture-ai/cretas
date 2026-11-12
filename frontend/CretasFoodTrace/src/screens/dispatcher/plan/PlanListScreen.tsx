@@ -8,7 +8,7 @@
  * - 新建计划入口
  */
 
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, FlatList, TouchableOpacity,
   RefreshControl, ActivityIndicator, Alert, Modal,
@@ -21,7 +21,7 @@ import { DISPATCHER_THEME } from '../../../types/dispatcher';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { RowActionBottomSheet, StickyFooterSummary } from '../../../components/list';
 import { useRowActions, type RowContext } from '../../../hooks/useRowActions';
-import { useListSummary } from '../../../hooks/useListSummary';
+import { summarizePlans } from './planListSummary';
 import { formatSummaryForAI } from '../../../utils/aiSummaryContext';
 import { safePrint } from '../../../services/api/printApiClient';
 
@@ -69,6 +69,8 @@ interface PlanItem {
   productName?: string;
   plannedQuantity?: number;
   actualQuantity?: number;
+  plannedUnit?: string;
+  productUnit?: string;
   plannedDate?: string;
   planDate?: string;
   status?: string;
@@ -204,13 +206,12 @@ export default function PlanListScreen() {
 
   useFocusEffect(useCallback(() => { loadPlans(1); }, [loadPlans]));
 
-  // U-FOOTER-1
-  const summaryRequest = useMemo(
-    () => ({ filterConditions: activeTab !== 'all' ? { status: activeTab } : {} }),
-    [activeTab],
+  // U-FOOTER-1: 底部汇总按屏上这份列表算, 跟着页签和搜索走 (2026-11-12 验收: 原来筛选后仍是全部 156 条)。
+  // 后端 list-summary 表达不了本屏的前端筛选 (待执行 = PLANNED+PENDING / 去旧草稿 / 搜计划名), 见 planListSummary.ts。
+  const summary = useMemo(
+    () => ({ entityType: 'productionPlan', stats: summarizePlans(plans) }),
+    [plans],
   );
-  const { summary, refresh: refreshSummary } = useListSummary('productionPlan', summaryRequest);
-  useEffect(() => { refreshSummary(); }, [refreshSummary, refreshing]);
 
   const onRefresh = () => { setRefreshing(true); loadPlans(1, true); };
   const onEndReached = () => { if (plans.length > 0 && plans.length < total) loadPlans(page + 1); };
@@ -418,14 +419,14 @@ export default function PlanListScreen() {
       </View>
 
       <StickyFooterSummary
-        stats={summary?.stats ?? []}
-        loading={summary == null && !loading}
+        stats={summary.stats}
+        loading={loading && plans.length === 0}
         onAIAnalyze={() =>
           navigation.dispatch(CommonActions.navigate('FAAITab', {
             screen: 'AIChat',
             params: {
               entityType: 'PRODUCTION_PLAN',
-              initialMessage: `分析当前生产计划列表${formatSummaryForAI(summary, { filter: { status: activeTab } })}`,
+              initialMessage: `分析当前生产计划列表${formatSummaryForAI(summary, { filter: { status: activeTab, keyword: search.trim() } })}`,
             },
           }))
         }
