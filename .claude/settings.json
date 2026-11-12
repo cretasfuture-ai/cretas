@@ -74,6 +74,11 @@
             "type": "command",
             "command": "bash .claude/tools/worktree-after-merge.sh",
             "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/tools/exec-bit-after-commit.sh",
+            "timeout": 15
           }
         ]
       }
