@@ -61,9 +61,9 @@ ok() { pass=$((pass + 1)); echo "  ok - $*"; }
 # 行尾 ` # ...` 也是注释), workflow 的 pull_request 不再带 paths。
 # ⚠️ push 那段刻意**不带 paths**(见该 workflow 注释), ⛔ 不要把「没有 paths」读成触发面 ——
 #    那在语义上等于「全部都在触发面里」, 会让这道闸恒绿。
-grep -vE '^[[:space:]]*(#|$)' "$TRIGGER" | tr -d '\r' \
-    | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' \
-    | grep -v '^$' > "$TMP/paths.txt" || true
+# 单条 sed、不过管道: 读不到文件时 rc 不会被管道尾吞掉。
+sed -E -e 's/\r$//' -e '/^[[:space:]]*(#|$)/d' -e 's/[[:space:]]+#.*$//' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e '/^$/d' "$TRIGGER" > "$TMP/paths.txt" \
+    || fail "读不了 $TRIGGER —— **没量到**"
 # ⚠️ 取反模式 (`!`) 本闸的覆盖判定不支持: 出现就判没量到, ⛔ 不静默当成正向模式。
 if grep -q '^!' "$TMP/paths.txt"; then
     fail "触发路径清单里出现取反模式, 本闸的覆盖判定不支持 —— **没量到**, ⛔ 不当成没问题"

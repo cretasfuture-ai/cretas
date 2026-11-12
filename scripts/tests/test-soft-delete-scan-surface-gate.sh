@@ -138,7 +138,8 @@ TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/soft-delete-scan-surface.txt"
 [ -s "$TRIGGER" ] || fail "B: 找不到 $TRIGGER"
 grep -qF 'scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/soft-delete-scan-surface.txt' "$WORKFLOW" \
     || fail "B: workflow 没有用 changed-paths.py 读触发清单 —— 清单与真实触发面脱钩, 后面的读数作废"
-PATHS_BLOCK=$(grep -vE '^[[:space:]]*(#|$)' "$TRIGGER" | tr -d '\r' | sed -E 's/[[:space:]]+#.*$//' || true)
+# 单条 sed、不过管道: 读不到文件时 rc 不会被管道尾吞掉 (test-pipeline-tail-swallows-rc.sh)。
+PATHS_BLOCK=$(sed -E -e 's/\r$//' -e '/^[[:space:]]*(#|$)/d' -e 's/[[:space:]]+#.*$//' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e '/^$/d' "$TRIGGER") || fail "B: 读不了 $TRIGGER"
 PATHS_COUNT=$(printf '%s\n' "$PATHS_BLOCK" | grep -c . || true)
 echo "READING: PATHS_ENTRIES=$PATHS_COUNT"
 [ "$PATHS_COUNT" -ge 5 ] \
