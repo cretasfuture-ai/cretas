@@ -79,7 +79,8 @@ def test_request_purpose_in_real_match_entry(monkeypatch,query,model_choice,matc
         return await call_next(request)
     app.include_router(api.router)
     app.state.ai_orchestrator=Orchestrator(retriever,None,None,decision_matcher=dec,
-        candidate_retriever=retriever,config=AIConfig(decision_business_types='FACTORY',decision_special_options=True))
+        candidate_retriever=retriever,config=AIConfig(decision_business_types='FACTORY',decision_special_options=True,
+            decision_fallback='legacy'))  # 守说话意图接线; 假模型只认旧选择器, 组合退路另测
     response=TestClient(app).post('/api/ai/intent/match',json={
         'query':query,'factoryId':'F006','businessType':'FACTORY','userId':'1686','role':'operator','history':[]},
         headers={'X-Factory-Id':'F006'})
@@ -139,7 +140,8 @@ def test_purpose_runs_concurrently_with_chooser(monkeypatch):
         return await call_next(request)
     app.include_router(api.router)
     app.state.ai_orchestrator=Orchestrator(retriever,None,None,decision_matcher=dec,
-        candidate_retriever=retriever,config=AIConfig(decision_business_types='FACTORY',decision_special_options=True))
+        candidate_retriever=retriever,config=AIConfig(decision_business_types='FACTORY',decision_special_options=True,
+            decision_fallback='legacy'))  # 守说话意图接线; 假模型只认旧选择器, 组合退路另测
     response=TestClient(app).post('/api/ai/intent/match',json={
         'query':'请查当前原料的可用库存','factoryId':'F006','businessType':'FACTORY','userId':'1686','role':'operator','history':[]},
         headers={'X-Factory-Id':'F006'})

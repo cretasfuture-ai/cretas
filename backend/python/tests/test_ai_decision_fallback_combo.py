@@ -203,6 +203,19 @@ def test_cancel_act_is_not_executed_and_not_asked(monkeypatch, _isolate):
     assert res.timingMs["decisionNone"] == 1
 
 
+def test_request_purpose_guard_still_wins_over_the_fallback(monkeypatch, _isolate):
+    """交际目的不是「现在办」(问教程) ⇒ 退路选出的只读意图也不采用, 与 Luna 路径同一道闸。"""
+    _aliyun(monkeypatch, _isolate, dist=ALI_READ)
+
+    class InfoOnly(ScriptedMatcher):
+        async def request_purpose(self, query, role, history=None):
+            return RequestPurpose.INFORMATION_ONLY
+    res = _run(InfoOnly(act=NEW, qwen_intent=QWEN_READ), query="订单列表在哪个菜单里看")
+    assert res.bestMatch is None and res.requiresConfirmation is True
+    assert res.timingMs["requestPurposeInformation"] == 1
+    # 阳性对照: 同一输入、目的是 CURRENT ⇒ 退路照常执行 (见 test_luna_not_enabled_goes_straight_to_combo...)
+
+
 # ── 跳 2: 阿里云挂了 → 整轮 qwen ───────────────────────────────────────────────────────────────────────
 def test_aliyun_failure_falls_to_qwen_only_and_counts_the_reason(monkeypatch, _isolate):
     _aliyun(monkeypatch, _isolate, raises=_boom("rate_limited"))
