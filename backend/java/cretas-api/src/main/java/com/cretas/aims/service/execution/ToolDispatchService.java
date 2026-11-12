@@ -1304,18 +1304,7 @@ public class ToolDispatchService {
                 params = controlledPurchase.previewParameters(factoryId, params);
             }
 
-            String argumentsJson = objectMapper.writeValueAsString(params);
-            ToolCall toolCall = ToolCall.of(
-                    java.util.UUID.randomUUID().toString(),
-                    tool.getToolName(),
-                    argumentsJson
-            );
-
-            Map<String, Object> context = TrustedExecutionContext.merge(
-                    null, factoryId, userId, userRole);
-            context.put("intentConfig", intent);
-
-            String resultJson = tool.preview(toolCall, context);
+            String resultJson = runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
 
             IntentExecuteResponse previewResponse = IntentExecuteResponse.builder()
                     .intentRecognized(true)
@@ -1428,6 +1417,22 @@ public class ToolDispatchService {
     static final String PREVIEW_BLOCKED = "PREVIEW_BLOCKED";
 
     // ==================== 写入确认: 对象与状态绑定 (Fable 审阅 §8.2 / 建议 5) ====================
+
+    /**
+     * 本类唯一的工具预览调用点: 预览铸凭据 ({@link #executeToolPreview}) 与确认前重读状态
+     * ({@link #recheckPreviewState}) 都走这里 —— 直调 ToolExecutor 的位置受
+     * {@code ToolExecutionArchitectureTest} 棘轮约束, 只许收不许增。参数已由调用方按可信主体收口。
+     */
+    private String runReadOnlyPreview(ToolExecutor tool, AIIntentConfig intent, Map<String, Object> params,
+                                      String factoryId, Long userId, String userRole) throws Exception {
+        ToolCall toolCall = ToolCall.of(
+                java.util.UUID.randomUUID().toString(),
+                tool.getToolName(),
+                objectMapper.writeValueAsString(params));
+        Map<String, Object> context = TrustedExecutionContext.merge(null, factoryId, userId, userRole);
+        context.put("intentConfig", intent);
+        return tool.preview(toolCall, context);
+    }
 
     static final String WRITE_OUTCOME_UNKNOWN_MESSAGE = "操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。";
 
@@ -1629,12 +1634,8 @@ public class ToolDispatchService {
             Map<String, Object> params = new HashMap<>(
                     claimedParameters != null ? claimedParameters : Map.of());
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
-            Map<String, Object> context = TrustedExecutionContext.merge(null, factoryId, userId, userRole);
-            context.put("intentConfig", intent);
-            String resultJson = tool.preview(
-                    ToolCall.of(java.util.UUID.randomUUID().toString(), tool.getToolName(),
-                            objectMapper.writeValueAsString(params)),
-                    context);
+            // 与铸凭据时同一个预览入口 (同样的可信上下文、同样的参数形状), 不另开一条直调工具的路径
+            String resultJson = runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
             previewData = objectMapper.readValue(resultJson,
                     new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
         } catch (Exception e) {
