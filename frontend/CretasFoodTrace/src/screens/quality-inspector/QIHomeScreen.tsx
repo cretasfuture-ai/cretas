@@ -15,7 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 import { useAuthStore } from '../../store/authStore';
 import { FrontlineAIEntry } from '../../components/ai/FrontlineAIEntry';
-import { canOpenQualityClosure } from '../../utils/qualityClosurePermissions';
+import { canOpenQualityClosure, canViewTimeoutEvents } from '../../utils/qualityClosurePermissions';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
@@ -25,6 +25,8 @@ export default function QIHomeScreen() {
   const user = useAuthStore((state) => state.user);
   // 纪律排查 B14: 不良品处置 / 批次召回按 quality 模块权限出现 (与网页同口径), ⛔ 不按岗位名
   const showQualityClosure = canOpenQualityClosure(user);
+  // 缺口 14: 超时处置清单与后端 GET /process-time-limits/events 同一门槛 (quality / production 任一可读)
+  const showTimeout = canViewTimeoutEvents(user);
 
   return (
     <ScrollView
@@ -141,6 +143,28 @@ export default function QIHomeScreen() {
               <View style={styles.actionCopy}>
                 <Text style={styles.actionTitle}>不良品处置</Text>
                 <Text style={styles.actionHint}>不合格批次选放行、返工或报废，需要审批的自动送审</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
+            </View>
+          </TouchableRipple>
+        )}
+
+        {showTimeout && (
+          <TouchableRipple
+            style={styles.actionCard}
+            onPress={() => navigation.navigate('QITimeout')}
+            borderless={false}
+            accessibilityRole="button"
+            accessibilityLabel="超时处置"
+            testID="qi-home-timeout"
+          >
+            <View style={styles.actionContent}>
+              <View style={[styles.actionIcon, styles.closureActionIcon]}>
+                <MaterialCommunityIcons name="clock-alert-outline" size={30} color="#B7791F" />
+              </View>
+              <View style={styles.actionCopy}>
+                <Text style={styles.actionTitle}>超时处置</Text>
+                <Text style={styles.actionHint}>超时被拦下的料，复检后放行或判不合格</Text>
               </View>
               <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
             </View>
