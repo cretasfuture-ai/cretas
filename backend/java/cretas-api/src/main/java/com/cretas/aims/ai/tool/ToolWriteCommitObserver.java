@@ -13,7 +13,8 @@ import org.springframework.transaction.TransactionExecutionListener;
  * {@code outcomeUnknown=true}, 确认流程记「结果不明」并提示先核对。</p>
  *
  * <p>挂在 JPA 事务管理器上 (见 {@code PrimaryDataSourceConfig} / {@code SmartBIPostgresDataSourceConfig}),
- * 只数<b>新开</b>且<b>提交成功</b>的事务 —— 加入外层事务的不算 (外层提交时才算一次)。
+ * 只数<b>新开</b>、<b>非只读</b>且<b>提交成功</b>的事务 —— 加入外层事务的不算 (外层提交时才算一次),
+ * 只读事务 (仓库查询自带的) 不算。
  * 不覆盖: 不经事务管理器的自动提交 JDBC、其它线程上的写入、外部系统 (短信、摄像头) 的副作用;
  * 这几类由 {@link AbstractBusinessTool} 对「非业务拒绝的异常」一律按可能已写处理来兜底。</p>
  */
@@ -33,7 +34,9 @@ public final class ToolWriteCommitObserver implements TransactionExecutionListen
 
     @Override
     public void afterCommit(TransactionExecution transaction, Throwable commitFailure) {
-        if (commitFailure == null && transaction.isNewTransaction()) {
+        // 只读事务也会回调 afterCommit (SimpleJpaRepository.findById 无外层事务时自己开一个只读事务):
+        // 「先查一次再业务拒绝」什么都没写, 不能被算成「可能已写」
+        if (commitFailure == null && transaction.isNewTransaction() && !transaction.isReadOnly()) {
             COMMITS.get()[0]++;
         }
     }

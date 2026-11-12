@@ -1261,7 +1261,10 @@ public class IntentExecutionOrchestrator {
                     ? previewTokenService.resolveClaimOutcomeUnknown(confirmToken, claimId, resolution)
                     : previewTokenService.resolveClaim(confirmToken, claimId, toolSucceeded, resolution);
             if (outcomeUnknown) {
-                return outcomeUnknownResponse(intentCode);
+                // 「先核对、勿重复提交」永远在前; 派发层带来的出错原因 (如有) 接在后面, 用户要知道为什么停下
+                String reason = failureReason(response);
+                return outcomeUnknownResponse(intentCode,
+                        reason == null ? OUTCOME_UNKNOWN_MESSAGE : OUTCOME_UNKNOWN_MESSAGE + "出错原因：" + reason);
             }
             if (!resolved) {
                 log.error("确认状态完成失败: claimFingerprint={}",
@@ -1328,14 +1331,34 @@ public class IntentExecutionOrchestrator {
     static final String OUTCOME_UNKNOWN_MESSAGE =
             "操作结果暂时无法确认（可能已经写入）。请先在业务页面核对这条记录，确认没有写入再重新发起，勿直接重复提交。";
 
+    private static final String FAILURE_REASON_MARK = "出错原因：";
+
+    /** 派发层结果不明回执里「出错原因：」后面那段 (工具给的真实原因); 没有就 null。 */
+    private static String failureReason(IntentExecuteResponse response) {
+        String message = response == null ? null : response.getMessage();
+        if (message == null) {
+            return null;
+        }
+        int at = message.indexOf(FAILURE_REASON_MARK);
+        if (at < 0) {
+            return null;
+        }
+        String reason = message.substring(at + FAILURE_REASON_MARK.length()).trim();
+        return reason.isEmpty() ? null : reason;
+    }
+
     private static IntentExecuteResponse outcomeUnknownResponse(String intentCode) {
+        return outcomeUnknownResponse(intentCode, OUTCOME_UNKNOWN_MESSAGE);
+    }
+
+    private static IntentExecuteResponse outcomeUnknownResponse(String intentCode, String message) {
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(intentCode)
                 .status(OUTCOME_UNKNOWN)
                 .aiMode("WRITE")
-                .message(OUTCOME_UNKNOWN_MESSAGE)
-                .formattedText(OUTCOME_UNKNOWN_MESSAGE)
+                .message(message)
+                .formattedText(message)
                 .metadata(Map.of("retryable", false))
                 .executedAt(LocalDateTime.now())
                 .build();

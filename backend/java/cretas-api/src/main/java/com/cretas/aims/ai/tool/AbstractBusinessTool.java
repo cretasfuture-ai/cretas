@@ -122,12 +122,20 @@ public abstract class AbstractBusinessTool extends AbstractTool {
         } catch (Exception e) {
             logExecutionFailure(toolCall, e);
             // 脱敏处理：不暴露具体异常信息
-            return markOutcome(buildSanitizedErrorResult(e), businessStarted || committedSince(commitsBefore));
+            String sanitized = buildSanitizedErrorResult(e);
+            boolean possiblyWritten = businessStarted || committedSince(commitsBefore);
+            // 脱敏后的通用话是「操作执行失败，请稍后重试」—— 和「可能已写入、勿重复提交」放一起会诱导重做, 换成中性原因
+            return markOutcome(possiblyWritten ? buildErrorResult(UNEXPECTED_FAILURE_REASON) : sanitized,
+                    possiblyWritten);
         }
     }
 
     /** 结果里的标记: 这次失败发生时写入可能已经落下 (由确认流程记「结果不明」, 不许按失败重做)。 */
     public static final String OUTCOME_UNKNOWN_FLAG = "outcomeUnknown";
+
+    public static final String OUTCOME_UNKNOWN_NOTICE_FIELD = "outcomeUnknownNotice";
+
+    static final String UNEXPECTED_FAILURE_REASON = "执行过程中出现异常";
 
     static final String OUTCOME_UNKNOWN_ERROR =
             "操作结果暂时无法确认（可能已经写入），请先在业务页面核对，勿重复提交";
@@ -144,8 +152,9 @@ public abstract class AbstractBusinessTool extends AbstractTool {
         try {
             com.fasterxml.jackson.databind.JsonNode node = objectMapper.readTree(errorJson);
             if (node instanceof com.fasterxml.jackson.databind.node.ObjectNode object) {
+                // 原始出错原因留在 error 里 (用户要知道为什么停下), 结果不明另起一个字段说
                 object.put(OUTCOME_UNKNOWN_FLAG, true);
-                object.put("error", OUTCOME_UNKNOWN_ERROR);
+                object.put(OUTCOME_UNKNOWN_NOTICE_FIELD, OUTCOME_UNKNOWN_ERROR);
                 return objectMapper.writeValueAsString(object);
             }
         } catch (Exception markFailure) {

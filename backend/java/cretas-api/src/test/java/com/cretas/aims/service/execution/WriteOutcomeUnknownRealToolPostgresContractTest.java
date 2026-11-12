@@ -129,7 +129,7 @@ class WriteOutcomeUnknownRealToolPostgresContractTest {
         jdbc.execute("CREATE TABLE IF NOT EXISTS confirm_test_ledger (note VARCHAR(64))");
         jdbc.execute("DELETE FROM confirm_test_ledger");
 
-        tool = new StockOutTool(new TransactionTemplate(transactionManager), jdbc);
+        tool = new StockOutTool(new TransactionTemplate(transactionManager), jdbc, repository);
         ReflectionTestUtils.setField(tool, "objectMapper", mapper);
 
         ToolRegistry registry = mock(ToolRegistry.class);
@@ -176,9 +176,38 @@ class WriteOutcomeUnknownRealToolPostgresContractTest {
         assertThat(ledgerRows()).as("第一步真的提交了").isEqualTo(1);
 
         tool.mode = Mode.COMMIT_THEN_BUSINESS_REJECT;
-        assertThat(execute()).as("提交之后的业务异常也不是「确定没写」")
+        Map<String, Object> afterCommit = execute();
+        assertThat(afterCommit).as("提交之后的业务异常也不是「确定没写」")
                 .containsEntry(AbstractBusinessTool.OUTCOME_UNKNOWN_FLAG, true);
+        assertThat(String.valueOf(afterCommit.get("error"))).as("原始出错原因保留").contains("第二步记账失败");
         assertThat(ledgerRows()).isEqualTo(2);
+    }
+
+    /**
+     * 阴性对照 (终审意见): 先经 Spring Data 仓库读一次 (findById 无外层事务时自己开一个只读事务并「提交」),
+     * 再业务拒绝 —— 什么都没写, 必须是确定失败、带真实原因, 不能被只读提交算成「可能已写」。
+     */
+    @Test
+    void repositoryReadThenBusinessRejectionIsADefiniteFailureWithItsRealReason() throws Exception {
+        tool.mode = Mode.READ_THEN_REJECT;
+        Map<String, Object> result = execute();
+        assertThat(result).containsEntry("success", false).doesNotContainKey(AbstractBusinessTool.OUTCOME_UNKNOWN_FLAG);
+        assertThat(String.valueOf(result.get("error"))).contains("样品不存在或已处置");
+        assertThat(tool.reads).as("确实经仓库读过 (只读事务真的开过)").isEqualTo(1);
+        assertThat(ledgerRows()).isZero();
+    }
+
+    @Test
+    void confirmOfAToolThatOnlyReadThenRejectedRecordsFailedWithTheRealReason() {
+        ConfirmationProof proof = preview();
+        tool.mode = Mode.READ_THEN_REJECT;
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof, USER, ROLE);
+
+        assertThat(response.getStatus()).isNotEqualTo("OUTCOME_UNKNOWN");
+        assertThat(response.getMessage()).contains("样品不存在或已处置");
+        assertThat(status(proof)).isEqualTo(TokenStatus.FAILED);
+        assertThat(ledgerRows()).isZero();
     }
 
     @Test
@@ -212,6 +241,8 @@ class WriteOutcomeUnknownRealToolPostgresContractTest {
         IntentExecuteResponse first = orchestrator.confirm(FACTORY, proof, USER, ROLE);
 
         assertThat(first.getStatus()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(first.getMessage()).as("结果不明也带上出错原因, 但不能叫人重试")
+                .contains("核对").contains("出错原因").doesNotContain("请稍后重试");
         assertThat(status(proof)).isEqualTo(TokenStatus.OUTCOME_UNKNOWN);
         assertThat(ledgerRows()).isEqualTo(1);
 
@@ -274,19 +305,23 @@ class WriteOutcomeUnknownRealToolPostgresContractTest {
         return config;
     }
 
-    enum Mode { OK, COMMIT_THEN_FAIL, COMMIT_THEN_BUSINESS_REJECT, REJECT_BEFORE_WRITE, UNEXPECTED_BEFORE_WRITE }
+    enum Mode { OK, COMMIT_THEN_FAIL, COMMIT_THEN_BUSINESS_REJECT, REJECT_BEFORE_WRITE, UNEXPECTED_BEFORE_WRITE,
+        READ_THEN_REJECT }
 
     /** 真实的 AbstractBusinessTool 子类: 第一步走真实事务提交一行台账, 第二步按 mode 出错。 */
     static final class StockOutTool extends AbstractBusinessTool {
         static final String NAME = "stock_out_update";
         private final TransactionTemplate tx;
         private final JdbcTemplate jdbc;
+        private final IntentPreviewTokenRepository readRepository;
         volatile Mode mode = Mode.OK;
         volatile int executions;
+        volatile int reads;
 
-        StockOutTool(TransactionTemplate tx, JdbcTemplate jdbc) {
+        StockOutTool(TransactionTemplate tx, JdbcTemplate jdbc, IntentPreviewTokenRepository readRepository) {
             this.tx = tx;
             this.jdbc = jdbc;
+            this.readRepository = readRepository;
         }
 
         @Override public String getToolName() { return NAME; }
@@ -319,6 +354,12 @@ class WriteOutcomeUnknownRealToolPostgresContractTest {
             executions++;
             if (mode == Mode.REJECT_BEFORE_WRITE) {
                 throw new BusinessException(409, "库存不足，未出库");
+            }
+            if (mode == Mode.READ_THEN_REJECT) {
+                // 和 FoodSampleDisposeTool 一样: 先按 ID 查 (仓库方法自带只读事务), 查不到就业务拒绝
+                readRepository.findById(-1L);
+                reads++;
+                throw new BusinessException(404, "样品不存在或已处置，未执行");
             }
             if (mode == Mode.UNEXPECTED_BEFORE_WRITE) {
                 throw new IllegalStateException("downstream connection reset");

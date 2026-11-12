@@ -917,7 +917,7 @@ public class ToolDispatchService {
                         // 不是失败, 是结果不明 —— 不重试、不进纠错、不报失败
                         log.error("Write tool reported a possibly-committed failure; outcome unknown: tool={}",
                                 tool.getToolName());
-                        return writeOutcomeUnknownResponse(intent, tool);
+                        return writeOutcomeUnknownResponse(intent, tool, extractToolFailureMessage(resultJson));
                     }
                     String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
@@ -1438,11 +1438,20 @@ public class ToolDispatchService {
 
     /** 写操作结果不明 (可能已写入): 统一回执, 确认流程据此把凭据记 OUTCOME_UNKNOWN。 */
     private static IntentExecuteResponse writeOutcomeUnknownResponse(AIIntentConfig intent, ToolExecutor tool) {
+        return writeOutcomeUnknownResponse(intent, tool, null);
+    }
+
+    /** 带上工具给的出错原因: 结果不明时用户仍要知道它为什么停下。 */
+    private static IntentExecuteResponse writeOutcomeUnknownResponse(AIIntentConfig intent, ToolExecutor tool,
+                                                                     String reason) {
+        String message = reason == null || reason.isBlank()
+                ? WRITE_OUTCOME_UNKNOWN_MESSAGE
+                : WRITE_OUTCOME_UNKNOWN_MESSAGE + "出错原因：" + reason;
         return IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .status("OUTCOME_UNKNOWN").aiMode("WRITE")
-                .message(WRITE_OUTCOME_UNKNOWN_MESSAGE)
-                .formattedText(WRITE_OUTCOME_UNKNOWN_MESSAGE)
+                .message(message)
+                .formattedText(message)
                 .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
                 .executedAt(LocalDateTime.now()).build();
     }
