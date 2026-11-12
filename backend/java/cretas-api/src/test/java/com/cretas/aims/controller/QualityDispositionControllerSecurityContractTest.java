@@ -54,6 +54,8 @@ class QualityDispositionControllerSecurityContractTest {
     private NotificationService notificationService;
     @Mock
     private PushNotificationService pushNotificationService;
+    @Mock
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
 
     @Test
     void executeRejectsClientSuppliedExecutorThatDiffersFromJwtUser() {
@@ -285,5 +287,42 @@ class QualityDispositionControllerSecurityContractTest {
         assertEquals(400, error.getCode());
         assertEquals("该处置动作无需审批，请直接执行", error.getMessage());
         verify(decisionAuditLogRepository, never()).save(any());
+    }
+
+    @Test
+    void pendingListCarriesBatchNumberAndProductNameFromOneBatchedLookup() {
+        // 验收 2026-11-12: 待处置列表 batchNumber 从未赋值, App/网页只能显示「批次 #11132」
+        DecisionAuditLog own = DecisionAuditLog.builder().id("a-1").entityType("QualityInspection")
+                .entityId("qi-1").decisionMade("SCRAP").build();
+        DecisionAuditLog foreign = DecisionAuditLog.builder().id("a-2").entityType("QualityInspection")
+                .entityId("qi-2").decisionMade("REWORK").build();
+        DecisionAuditLog noBatch = DecisionAuditLog.builder().id("a-3").entityType("QualityInspection")
+                .entityId("qi-3").decisionMade("HOLD").build();
+        when(decisionAuditLogRepository.findQualityPendingApprovals("F006", null))
+                .thenReturn(java.util.List.of(own, foreign, noBatch));
+        when(qualityInspectionRepository.findAllById(any())).thenReturn(java.util.List.of(
+                QualityInspection.builder().id("qi-1").productionBatchId(11132L).build(),
+                QualityInspection.builder().id("qi-2").productionBatchId(11133L).build(),
+                QualityInspection.builder().id("qi-3").build()));
+        com.cretas.aims.entity.ProductionBatch ownBatch = com.cretas.aims.entity.ProductionBatch.builder()
+                .id(11132L).factoryId("F006").batchNumber("PB-QA-20261112-01").productName("QA-卤牛肉").build();
+        com.cretas.aims.entity.ProductionBatch otherFactory = com.cretas.aims.entity.ProductionBatch.builder()
+                .id(11133L).factoryId("F999").batchNumber("PB-OTHER").productName("别厂品").build();
+        when(productionBatchRepository.findAllById(any())).thenReturn(java.util.List.of(ownBatch, otherFactory));
+
+        java.util.List<com.cretas.aims.dto.quality.PendingDispositionDTO> list =
+                controller.getPendingDispositions("F006", null).getData();
+
+        assertEquals(3, list.size());
+        assertEquals(11132L, list.get(0).getProductionBatchId());
+        assertEquals("PB-QA-20261112-01", list.get(0).getBatchNumber());
+        assertEquals("QA-卤牛肉", list.get(0).getProductName());
+        // 别厂批次不借用, 查不到就留空 (不编)
+        assertEquals(11133L, list.get(1).getProductionBatchId());
+        assertNull(list.get(1).getBatchNumber());
+        assertNull(list.get(1).getProductName());
+        assertNull(list.get(2).getBatchNumber());
+        // 批量查一次, 不是每条一次 (N+1)
+        verify(productionBatchRepository, times(1)).findAllById(any());
     }
 }

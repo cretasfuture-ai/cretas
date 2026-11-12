@@ -47,6 +47,11 @@ public class PendingDispositionDTO {
     private String batchNumber;
 
     /**
+     * 品名 (生产批次 product_name, 查不到为空)
+     */
+    private String productName;
+
+    /**
      * 处置动作
      */
     private String decisionMade;
