@@ -394,6 +394,12 @@ export type QualityInspectorStackParamList = {
   QIProfile: undefined;
   QISettings: undefined;
   QIClockIn: undefined;
+  // 纪律排查 B14 App 端: 不良品处置 / 批次召回 (入口按 quality 模块权限, 见 utils/qualityClosurePermissions)
+  QIDisposition: undefined;
+  QIDispositionExecute: { candidate: import('../services/api/qualityDispositionApiClient').DispositionCandidate };
+  QIRecall: undefined;
+  QIRecallCreate: undefined;
+  QIRecallDetail: { recallId: string };
 };
 
 // ============================================
