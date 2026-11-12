@@ -128,7 +128,8 @@ public class ProcessTimeLimitService {
     }
 
     private static final String TRANSFER_IN_DOC = "TRANSFER_IN";
-    private static final String RELEASE_PATH = "质量管理 → 质检放行 → 超时处置";
+    /** 质检员在哪里处置: App 首页卡片 (质检员不登网页, MOBILE_ONLY_ROLES) 或网页页签。 */
+    private static final String RELEASE_PATH = "App 首页「超时处置」或网页「质量管理 → 质检放行 → 超时处置」";
     private static final int CONCLUSION_MAX = 2000;
     private static final int LINEAGE_DEPTH_CAP = 8;
     private static final DateTimeFormatter TIME_TEXT = DateTimeFormatter.ofPattern("MM-dd HH:mm");
@@ -385,7 +386,7 @@ public class ProcessTimeLimitService {
         }
         return new BusinessException(409, message)
                 .withCode(CODE_EXCEEDED)
-                .withHint("请通知质检员在「" + RELEASE_PATH + "」复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
+                .withHint("请通知质检员在" + RELEASE_PATH + "复检放行或判不合格，处置后再领；也可以改选没有超时的批次")
                 .withSeverity("BLOCKING")
                 .withHintTarget(e.source().batchNumber())
                 .withDiagnosis(com.cretas.aims.service.gate.GateDiagnosis.of(

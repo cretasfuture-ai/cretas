@@ -30,6 +30,8 @@ import QIDispositionExecuteScreen from '../screens/quality-inspector/QIDispositi
 import QIRecallScreen from '../screens/quality-inspector/QIRecallScreen';
 import QIRecallCreateScreen from '../screens/quality-inspector/QIRecallCreateScreen';
 import QIRecallDetailScreen from '../screens/quality-inspector/QIRecallDetailScreen';
+import QITimeoutScreen from '../screens/quality-inspector/QITimeoutScreen';
+import QITimeoutDecisionScreen from '../screens/quality-inspector/QITimeoutDecisionScreen';
 import { QI_COLORS, QualityInspectorStackParamList } from '../types/qualityInspector';
 // 一线 AI 助手 (Line B 2026-10-05): 复用 FA 端 AIChatScreen, 熔断开关关掉时连路由都不注册
 import AIChatScreen from '../screens/factory-admin/ai-analysis/AIChatScreen';
@@ -61,6 +63,9 @@ function HomeStack() {
       <HomeStackNavigator.Screen name="QIRecall" component={QIRecallScreen} options={{ title: '批次召回' }} />
       <HomeStackNavigator.Screen name="QIRecallCreate" component={QIRecallCreateScreen} options={{ title: '发起召回' }} />
       <HomeStackNavigator.Screen name="QIRecallDetail" component={QIRecallDetailScreen} options={{ title: '召回详情' }} />
+      {/* 食品 DAG 缺口 14: 超时处置 (网页同名页签搬到 App, 质检员不登网页) */}
+      <HomeStackNavigator.Screen name="QITimeout" component={QITimeoutScreen} options={{ title: '超时处置' }} />
+      <HomeStackNavigator.Screen name="QITimeoutDecision" component={QITimeoutDecisionScreen} options={{ title: '处置超时的料' }} />
     </HomeStackNavigator.Navigator>
   );
 }

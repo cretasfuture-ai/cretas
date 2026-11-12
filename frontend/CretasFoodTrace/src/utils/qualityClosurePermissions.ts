@@ -9,6 +9,8 @@
  *   - 入口 (列表 / 详情只读)      quality:read 或 quality:read_write   (网页 B14 同口径: module 'quality')
  *   - 提交处置 / 发起召回 / 记录   quality:read_write
  *   - 批准 / 驳回处置             approval_quality_disposition:approve (= 该码 read_write)
+ *   - 超时处置清单 / 记录 (缺口 14) quality 或 production 任一可读  (ProcessTimeLimitController GET /events)
+ *   - 复检放行 / 判不合格          quality:read_write                (POST /events/{id}/decision)
  */
 import type { User } from '../types/auth';
 import { hasModulePermission } from './permissionHelper';
@@ -34,4 +36,16 @@ export function canWriteQualityClosure(user: User | null | undefined): boolean {
 /** 能否批准 / 驳回质检处置 (含报废)。质检员默认没有 ⇒ 不显示审批按钮。 */
 export function canApproveQualityDisposition(user: User | null | undefined): boolean {
   return hasReadWrite(user, QUALITY_DISPOSITION_APPROVAL_MODULE);
+}
+
+export const PRODUCTION_MODULE = 'production';
+
+/** 首页「超时处置」入口: 与后端 GET /process-time-limits/events 同一门槛 (quality / production 任一可读)。 */
+export function canViewTimeoutEvents(user: User | null | undefined): boolean {
+  return hasModulePermission(user, QUALITY_MODULE, 'read') || hasModulePermission(user, PRODUCTION_MODULE, 'read');
+}
+
+/** 「复检放行 / 判不合格」: 与后端 POST /events/{id}/decision 同一门槛 (quality:read_write)。 */
+export function canDecideTimeoutEvent(user: User | null | undefined): boolean {
+  return hasReadWrite(user, QUALITY_MODULE);
 }
