@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 
 import psycopg2
-import redis
 
 from .bootstrap import shape
 from .client import BlacklakeConnector
@@ -27,6 +26,9 @@ def context():
         raise BlacklakeError("TEST_DATABASE_READINESS_NOT_VERIFIED")
     connection = psycopg2.connect(db["runtime_dsn"])
     store = PostgresStore(connection, settings)
+    # Imported here: only the local collector needs Redis; analysis modules
+    # (and the CI test environment) import this file without it.
+    import redis
     cache = redis.Redis.from_url(cache_url())
     coordination = RedisCoordination(cache, settings.account_key)
     contract = load_contract(str(Path(__file__).parent / "verified_contract.json"))
