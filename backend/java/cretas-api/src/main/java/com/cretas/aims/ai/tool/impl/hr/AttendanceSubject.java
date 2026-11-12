@@ -82,8 +82,7 @@ final class AttendanceSubject {
     static void addNameParameter(Map<String, Object> properties) {
         Map<String, Object> name = new java.util.HashMap<>();
         name.put("type", "string");
-        name.put("description", "员工姓名（如「张三」）。按姓名查时同名的员工会全部列出并标明部门/车间；"
-                + "知道 userId 时优先传 userId");
+        name.put("description", "员工姓名（如「张三」）。按姓名查时同名的员工会全部列出并标明部门/车间");
         properties.put(NAME_PARAM, name);
     }
 

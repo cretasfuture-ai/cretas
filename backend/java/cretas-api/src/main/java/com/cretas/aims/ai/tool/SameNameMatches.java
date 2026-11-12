@@ -75,10 +75,15 @@ public final class SameNameMatches {
             return null;
         }
         List<?> listed = marker.get("listed") instanceof List<?> l ? l : List.of();
+        // 人: 「2 位叫「张三」的员工」; 物/单位按名称搜索 (可能是包含匹配): 「2 个名称匹配「华联」的客户」
+        boolean person = kind.contains("员工");
+        String unit = person ? "位" : "个";
         StringBuilder sb = new StringBuilder();
-        sb.append("本厂有 ").append(total).append(" 位叫「").append(name).append("」的").append(kind);
+        sb.append("本厂有 ").append(total).append(" ").append(unit)
+                .append(person ? "叫「" : "名称匹配「").append(name).append("」的").append(kind);
         if (total > listed.size()) {
-            sb.append("，这里列出前 ").append(listed.size()).append(" 位；想看其他的请说得更具体一些（比如车间或工号）");
+            sb.append("，这里列出前 ").append(listed.size()).append(" ").append(unit)
+                    .append("；想看其他的请说得更具体一些（").append(person ? "比如车间或工号" : "比如完整名称或编码").append("）");
         } else {
             sb.append("，都列出来了");
         }
