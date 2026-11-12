@@ -209,6 +209,7 @@ _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
     ("openai", "gpt-5.4-mini"): "ok 200 ×3: insights 1.05s / reasoning 0.99s / vl 1.04s / warehouse_vl 1.27s, 合法 JSON 三标签全对",
     ("openai", "gpt-4.1-mini"): "ok 200 ×3: chart·mapper 0.96s 合法 JSON / decision 读 logprobs 0.81s 首 token 正确",
     ("openai", "gpt-6-luna"): "ok 200 ×3: Decisions 单选 0.39s(最慢 0.91s), 原生概率正确选项 0.90",
+    ("aliyun_b_vl", "decision-model-preview"): "ok 200: 11-12 同口径对比 993+238 轮(2 并发+1s 间隔 197/197 成功; 8 并发 429 Allocated quota exceeded), 往返 p50 266–319ms, 意图 top-1 83.0%; 本 PR 经本函数冒烟见 PR 描述",
     # ── 停用(未探测: 本机无阿里云密钥, 且 Steve 已裁定停用) ──
     # ── 阿里云 + 本地: 2026-11-12 在 47 上经本分支路由实测(合成内容, 每项 5 次), 见 PR 描述实测表 ──
     ("aliyun_a_vl", "qwen3.8-flash"): "ok 200 ×5/项: chat 1.17s / mapper 0.92s / chart 0.81s / insights 10/10 无错 / 粗选 8/8 目的 8/8 / 工具 9/9",
@@ -477,6 +478,11 @@ _SAFE_MODELS: Dict[Tuple[str, str], Optional[datetime.date]] = {
     ("openai", "gpt-5.4-mini"): None,
     ("openai", "gpt-4.1-mini"): None,           # 非推理: 严格 JSON / temperature 0 / logprobs 都原生支持
     ("openai", "gpt-6-luna"): None,             # 只走 Decisions API(`call_openai_decision`), 不进任何 chat 链
+    # 2026-11-12 阿里云专用决策模型(SystemOne 接口, B 账号工作区; INTENT-DISTILL 批次 2, Steve「按这个组合当退路
+    # 接上去」)。只走 `call_aliyun_decision_choice`, 不进任何 chat 链。控制台标「预览版、输入限时免费」, 到期日未知
+    # (None ≠ 永不过期)。⛔ 故意不进 `_MINIMAL_SAFE_SET`: registry 超龄时它被拒 ⇒ 这一跳计数跳过、整轮落到 qwen,
+    # 是 fail-safe 方向。
+    ("aliyun_b_vl", "decision-model-preview"): None,
     # 2026-11-03 本地模型兜底(Steve:「换模型 用aurora或者加拿大macmini的模型」→ 加拿大 Mac mini):
     # 自有机器上的 ollama qwen3:8b, 经 47 loopback:11437 反向隧道 + bearer 代理。
     # 没有计费面(None = 无到期概念, 不是「额度未知」): 机器离线时请求在连接层失败 → 下一跳 /
@@ -3028,6 +3034,149 @@ async def call_decision_choice(
             "completion_tokens": usage.get("output_tokens") or 0,
             "prompt_tokens_details": usage.get("input_tokens_details") or {}}})
         logger.info(f"[llm_router] decision OK via {cb_key}")
+        return dist
+    finally:
+        reset_prefetched_names(names_token)
+
+
+# ---------------------------------------------------------------------------
+# 阿里云专用决策模型 decision-model-preview (SystemOne 接口) —— Luna 之后的组合退路里「选意图」那一半
+# (INTENT-DISTILL 批次 2, 2026-11-12; 读数见 Documents/Cretas意图蒸馏-20261111/decision-model-compare-20261112.md)
+# ---------------------------------------------------------------------------
+#: 计费护栏按这一对查(`_SAFE_MODELS`); key 是 B 账号的 LLM_ALIYUN_B_API_KEY(A 账号 key 对这个工作区 403)。
+ALIYUN_DECISION_PAIR: Tuple[str, str] = ("aliyun_b_vl", "decision-model-preview")
+#: 端点只认工作区专属地址(…/compatible-mode/v1/systemone), 没有通用默认 ⇒ 空 = 这一跳不发请求、计数跳过。
+ALIYUN_DECISION_URL_ENV = "LLM_ALIYUN_DECISION_URL"
+#: 实测 8 并发即 429「Allocated quota exceeded」, 2 并发 + 间隔全成功 ⇒ 每个 worker 同时最多 2 个请求。
+ALIYUN_DECISION_MAX_INFLIGHT_ENV = "LLM_ALIYUN_DECISION_MAX_INFLIGHT"
+_ALIYUN_DECISION_SEMAPHORES: Dict[int, asyncio.Semaphore] = {}
+
+
+def aliyun_decision_enabled() -> bool:
+    """配了端点且 B 账号 key 非空。读 env(不缓存)。"""
+    if not (os.getenv(ALIYUN_DECISION_URL_ENV) or "").strip():
+        return False
+    return bool(_provider_config(ALIYUN_DECISION_PAIR[0])[1])
+
+
+def _aliyun_decision_semaphore() -> asyncio.Semaphore:
+    """每个事件循环一把(uvicorn 每 worker 一个循环; 测试里 asyncio.run 每次新循环)。"""
+    loop = asyncio.get_running_loop()
+    sem = _ALIYUN_DECISION_SEMAPHORES.get(id(loop))
+    if sem is None:
+        try:
+            n = max(1, int((os.getenv(ALIYUN_DECISION_MAX_INFLIGHT_ENV) or "2").strip() or 2))
+        except ValueError:
+            n = 2
+        sem = asyncio.Semaphore(n)
+        _ALIYUN_DECISION_SEMAPHORES.clear()  # 旧循环的锁不再有用
+        _ALIYUN_DECISION_SEMAPHORES[id(loop)] = sem
+    return sem
+
+
+def _systemone_choice(body: Dict[str, Any], name: str, values: List[str]) -> Optional[Dict[str, float]]:
+    """SystemOne 响应 -> {选项: 概率}; 形状不对 / 概率非法 / 选项集合对不上 -> None (⛔ 不补、不归一化)。"""
+    import math
+    ans = ((body or {}).get("answers") or {}).get(name) if isinstance((body or {}).get("answers"), dict) else None
+    probs = ans.get("probabilities") if isinstance(ans, dict) else None
+    if not isinstance(probs, dict):
+        return None
+    out: Dict[str, float] = {}
+    for k, v in probs.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1:
+            return None
+        out[str(k)] = float(v)
+    return out if set(out) == set(values) else None
+
+
+async def call_aliyun_decision_choice(
+    state: str,
+    choices: List[Tuple[str, str]],
+    *,
+    name: str = "intent",
+    timeout: float = 2.0,
+) -> Dict[str, float]:
+    """单选题交给阿里云 decision-model-preview, 返回每个选项的概率。
+
+    ``state`` 是要外发的正文(身份行 + 上文 + 用户原话 + 候选清单), 先经共享客户端**同一个脱敏出口**
+    (与 Luna / chat 链同一套规则); ``choices`` = [(选项值, 说明)], 说明是我们自己的功能目录文字。
+    接口不认问题级说明字段, 规则只能写进选项说明(实测)。
+
+    失败一律抛 :class:`LLMChainExhausted`(调用方走下一跳), ⛔ 不编概率、不默认第一项。
+    护栏与 Luna 同一套: `_refuse_reason` / 熔断 / 额度跳过 / 空 key; 外加每 worker 并发上限(默认 2)。
+    429 = 限流: 进熔断(连续 2 次 → 60 秒跳过); 带额度耗尽特征的 403/429 → 长跳过(`_is_quota_exhausted`)。
+    ``timeout`` 含排队等并发名额的时间。
+    """
+    account, model = ALIYUN_DECISION_PAIR
+    slot_label = "aliyun_decision"
+    cb_key = f"{account}/{model}"
+    url = (os.getenv(ALIYUN_DECISION_URL_ENV) or "").strip()
+    if not url:
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: not_configured"])
+    refuse = _refuse_reason(account, model)
+    if refuse:
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: {refuse}"])
+    if _cb_should_skip(cb_key):
+        raise LLMChainExhausted(slot_label, [f"{account}: cb_open"])
+    if _quota_should_skip(cb_key):
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: quota_skip"])
+    _base_url, api_key = _provider_config(account)
+    if not api_key:
+        errors: List[str] = []
+        _note_empty_key("llm_router_aliyun_decision", account, errors)
+        raise LLMChainExhausted(slot_label, errors or [f"{cb_key}: empty_key"])
+    values = [v for v, _d in choices]
+    if not values or len(set(values)) != len(values):
+        raise ValueError("decision choices must be non-empty and unique")
+
+    names_token = await prefetch_names_for_request()
+    try:
+        client = _client_for(account)
+        redacted, _tokens = await client.redact_chat_payload(
+            {"model": model, "messages": [{"role": "user", "content": state}]})
+        clean_state = "\n".join(str(m.get("content") or "") for m in redacted["messages"])
+        body = {"model": model, "state": clean_state,
+                "questions": {name: {"type": "choice", "criteria": {v: d for v, d in choices}}}}
+
+        async def _send():
+            async with _aliyun_decision_semaphore():
+                return await client.post(url, headers=_auth_headers(account, api_key), json=body,
+                                         timeout=httpx.Timeout(timeout))
+        try:
+            resp = await asyncio.wait_for(_send(), timeout=timeout)
+        except EgressRedactionError:
+            raise
+        except asyncio.TimeoutError:
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: timeout"])
+        except Exception as e:  # noqa: BLE001
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: {type(e).__name__}"])
+        if not (200 <= resp.status_code < 300):
+            _cb_record_failure(cb_key)
+            if _is_quota_exhausted(resp.status_code, resp.text):
+                _quota_record_exhausted(cb_key)
+                raise LLMChainExhausted(slot_label, [f"{cb_key}: quota {resp.status_code}"])
+            if resp.status_code == 429:
+                logger.warning(f"[llm_router] aliyun decision rate limited (429): {resp.text[:200]}")
+                raise LLMChainExhausted(slot_label, [f"{cb_key}: rate_limited"])
+            logger.error(f"[llm_router] aliyun decision http {resp.status_code}: {resp.text[:200]}")
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: http {resp.status_code}"])
+        try:
+            parsed = resp.json()
+        except ValueError:
+            parsed = {}
+        dist = _systemone_choice(parsed, name, values)
+        if dist is None:
+            _cb_record_failure(cb_key)
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: invalid_choice_distribution"])
+        _cb_record_success(cb_key)
+        _quota_record_success(cb_key)
+        usage = parsed.get("usage") or {}
+        _log_cache_and_record_budget(slot_label, account, model, {"usage": {
+            "prompt_tokens": usage.get("input_tokens") or 0,
+            "completion_tokens": usage.get("output_tokens") or 0}})
+        logger.info(f"[llm_router] aliyun decision OK via {cb_key} ({parsed.get('latency_ms')}ms model)")
         return dist
     finally:
         reset_prefetched_names(names_token)
