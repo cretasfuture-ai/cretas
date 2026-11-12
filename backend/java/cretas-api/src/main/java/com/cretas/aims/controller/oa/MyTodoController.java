@@ -68,24 +68,35 @@ public class MyTodoController {
      * </ul>
      */
     private List<TodoItemDTO> todosFor(String factoryId, HttpServletRequest request) {
+        return forCaller(factoryId, request,
+                role -> myTodoAggregatorService.listTodos(factoryId, role),
+                user -> myTodoAggregatorService.listTodosForUser(factoryId, user),
+                List.of());
+    }
+
+    /** 「按谁出数」的唯一判定, 列表 / 条数 / 能办类型三个端点共用, 不各写一份。 */
+    private <T> T forCaller(String factoryId, HttpServletRequest request,
+                            java.util.function.Function<String, T> byPlatformRole,
+                            java.util.function.Function<User, T> byFactoryUser,
+                            T none) {
         AuthenticatedActor actor = AuthenticatedActor.current(request).orElse(null);
         if (actor != null && actor.isPlatformAdmin()) {
             if (!actor.hasFactoryBypass()) {
-                return List.of();
+                return none;
             }
-            return myTodoAggregatorService.listTodos(factoryId, (String) request.getAttribute("role"));
+            return byPlatformRole.apply((String) request.getAttribute("role"));
         }
         Long userId = actor != null ? actor.id() : toLong(request.getAttribute("userId"));
         if (userId == null) {
-            return List.of();
+            return none;
         }
         User user = userRepository.findById(userId).orElse(null);
         if (user == null || !Objects.equals(factoryId, user.getFactoryId())) {
             log.warn("[MyTodo] 用户读不到或不属于路径工厂, 返回空待办: userId={} factoryId={}", userId, factoryId);
-            return List.of();
+            return none;
         }
-        log.debug("[MyTodo] todos factoryId={} userId={} role={}", factoryId, userId, user.getRoleCode());
-        return myTodoAggregatorService.listTodosForUser(factoryId, user);
+        log.debug("[MyTodo] factoryId={} userId={} role={}", factoryId, userId, user.getRoleCode());
+        return byFactoryUser.apply(user);
     }
 
     private static Long toLong(Object raw) {
@@ -148,5 +159,28 @@ public class MyTodoController {
             HttpServletRequest request) {
         int count = todosFor(factoryId, request).size();
         return ApiResponse.success("待办数量查询成功", count);
+    }
+
+    // ─── 能办的待办类型 (App 待办入口) ─────────────────────────────────────────
+
+    /**
+     * 返回调用方「能办」的待办类型 (B4 App 按权限拼界面)。App 只凭它决定显不显示「待办」入口:
+     * 非空 = 显示 (此刻 0 条也显示, 入口不随条数忽隐忽现), 空 = 不显示。App 里不再抄一份岗位 / 权限映射。
+     *
+     * <p>与列表同一个按谁出数的判定 ({@link #forCaller}), 同一张权限表; 强制插单另要求岗位被插单审批画布点名。
+     */
+    @GetMapping("/types")
+    @Operation(
+            summary = "获取我能办的待办类型",
+            description = "按调用方权限返回能办的待办类型 (不查条数), App 用来决定是否显示待办入口。"
+                    + " 没有任何相关权限时返回空数组 (200)。")
+    public ApiResponse<List<TodoItemDTO.TodoType>> listMyTodoTypes(
+            @PathVariable @NotBlank String factoryId,
+            HttpServletRequest request) {
+        java.util.Set<TodoItemDTO.TodoType> types = forCaller(factoryId, request,
+                role -> myTodoAggregatorService.availableTypes(factoryId, role),
+                user -> myTodoAggregatorService.availableTypesForUser(factoryId, user),
+                java.util.Set.of());
+        return ApiResponse.success("待办类型查询成功", List.copyOf(types == null ? java.util.Set.of() : types));
     }
 }

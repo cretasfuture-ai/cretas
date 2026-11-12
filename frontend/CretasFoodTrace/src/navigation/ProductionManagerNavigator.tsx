@@ -5,6 +5,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ProductionPlanManagementScreen from '../screens/processing/ProductionPlanManagementScreen';
 import MobileAccountScreen from '../screens/common/MobileAccountScreen';
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator();
 
@@ -13,6 +15,7 @@ const Tab = createBottomTabNavigator();
  * 手机端只查看生产计划与进度；排产、结单和入库留在 PC/对应岗位。
  */
 export default function ProductionManagerNavigator() {
+  const todoEntry = useMyTodoEntry();
   const insets = useSafeAreaInsets();
 
   return (
@@ -40,6 +43,7 @@ export default function ProductionManagerNavigator() {
           ),
         }}
       />
+      {todoTabScreen(Tab, todoEntry, 'production-manager-tab-oa-todo')}
       <Tab.Screen
         name="ProductionManagerProfileTab"
         component={MobileAccountScreen}

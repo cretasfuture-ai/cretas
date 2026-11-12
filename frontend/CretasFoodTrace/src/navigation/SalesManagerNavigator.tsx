@@ -29,6 +29,8 @@ import CustomerManagementScreen from "../screens/management/CustomerManagementSc
 // 个人中心
 import ProfileStackNavigator from "./ProfileStackNavigator";
 import { screenErrorBoundary } from '../components/common/ScreenErrorBoundary';
+import { useMyTodoEntry } from '../hooks/useMyTodos';
+import { todoTabScreen } from './todoTab';
 
 const Tab = createBottomTabNavigator<any>();
 const SalesStack = createNativeStackNavigator<any>();
@@ -64,6 +66,7 @@ function CustomerStackNavigator() {
 }
 
 export function SalesManagerNavigator() {
+  const todoEntry = useMyTodoEntry();
   return (
     <Tab.Navigator screenLayout={screenErrorBoundary}
       screenOptions={{
@@ -121,6 +124,7 @@ export function SalesManagerNavigator() {
         }}
       />
 
+      {todoTabScreen(Tab, todoEntry, 'sm-tab-oa-todo')}
       <Tab.Screen
         name="SMProfileTab"
         component={ProfileStackNavigator}

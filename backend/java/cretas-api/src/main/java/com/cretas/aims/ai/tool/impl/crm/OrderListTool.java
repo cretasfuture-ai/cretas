@@ -62,6 +62,8 @@ public class OrderListTool extends AbstractBusinessTool {
         return Map.of(
                 "type", "object",
                 "properties", properties,
+                // 没说时间 = 最近 7 天, 回复写明 (Steve 2026-11-12 口径 1; 只在对话只读链路上补, REST 列表不受影响)
+                TimeRangeFilter.DEFAULT_RECENT_DAYS, 7,
                 "required", Collections.emptyList());
     }
 

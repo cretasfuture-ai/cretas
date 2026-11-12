@@ -493,21 +493,128 @@ class RequisitionCloseCancelLedgerPostgresContractTest {
     // 排查 2026-11-10 C3: 取消与调拨并发 —— 取消必须拿同一把领料单行锁, 读到对方提交后的「已调拨」
     // =====================================================================================
 
+    // =====================================================================================
+    // #1606 独立审查 M4: 中途小结过账前按领料同一口径判原料归属 (真库, 真小结)
+    // =====================================================================================
+
+    /** 存货生产 (走小结) + 成品道录入行 + 一行未小结的原料消耗 (生产仓批次)。 */
+    private Fixture byStockReportedOn(InventoryOwnership ownership) {
+        Fixture f = orderPlanIssuedAndClerkReported("30");
+        jdbc.update("update production_plans set source_type = 'SAFETY_STOCK' where id = ?", f.planId());
+        jdbc.update("update material_batches set ownership = ?, owner_customer_id = ? where id = ?",
+                ownership.name(), ownership == InventoryOwnership.CUSTOMER_OWNED ? "CUST-X" : null, f.workshopBatchId());
+        return f;
+    }
+
+    private BigDecimal unsettledConsumption(Fixture f) {
+        return jdbc.queryForObject("select coalesce(sum(quantity), 0) from material_consumptions where batch_id = ? "
+                + "and interim_settled_at is null and deleted_at is null", BigDecimal.class, f.workshopBatchId());
+    }
+
     @Test
-    void c3_cancelWaitsForConcurrentTransferLock_andThenRefuses() throws Exception {
-        Fixture f = issued(false);
-        jdbc.update("update factory_material_requisitions set status = 'PICKING' where id = ?", f.requisitionId());
+    void m4_interimSettle_companyPlanWithCustomerOwnedSource_isRefused_nothingPosted() {
+        Fixture f = byStockReportedOn(InventoryOwnership.CUSTOMER_OWNED);
+        assertThatThrownBy(() -> interimSettle.interimSettle(F, f.planId(), OPERATOR))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("CUSTOMER_OWNED_MATERIAL_FORBIDDEN"));
+        assertThat(available(f.workshopBatchId())).as("客户料没被扣").isEqualByComparingTo("100");
+        assertThat(unsettledConsumption(f)).as("消耗行仍未小结").isEqualByComparingTo("30");
+    }
+
+    /** 阳性对照: 同一夹具换成公司料, 小结照常扣 30 —— 上一条的拒绝不是夹具或小结本身坏了。 */
+    @Test
+    void m4_interimSettle_companyPlanWithCompanySource_posts() {
+        Fixture f = byStockReportedOn(InventoryOwnership.COMPANY_OWNED);
+        interimSettle.interimSettle(F, f.planId(), OPERATOR);
+        assertThat(available(f.workshopBatchId())).isEqualByComparingTo("70");
+        assertThat(unsettledConsumption(f)).isEqualByComparingTo("0");
+    }
+
+    // #1606 独立审查 L10: 原用例用「拿锁 + 改状态」模拟调拨, 只证明了取消会等锁, 证明不了调拨本身加了锁。
+    //   下面两条都走真实的 transferToFactory (锁领料单 → 按已拣批次从原料仓划出 → 生产仓建批次 → 推到已调拨)。
+
+    /** 备料中 (PICKING) 的领料单: 已确认拣货 100, 料还在原料仓源批次上 (可用 100), 尚未调拨。 */
+    private Fixture picked() {
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        return tx.execute(state -> {
+            ProductionPlan plan = new ProductionPlan();
+            plan.setId("PLAN-C3-" + suffix);
+            plan.setFactoryId(F);
+            plan.setPlanNumber("C3-" + suffix);
+            plan.setProductTypeId("FG-1");
+            plan.setPlannedQuantity(new BigDecimal("100"));
+            plan.setPlannedUnit("kg");
+            plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+            plan.setCreatedBy(OPERATOR);
+            plans.save(plan);
+
+            MaterialBatch source = materialBatch("SRC-C3-" + suffix, RAW_WH, "100", "0", MaterialBatchStatus.AVAILABLE);
+            materialBatches.save(source);
+
+            FactoryMaterialRequisition mr = new FactoryMaterialRequisition();
+            mr.setFactoryId(F);
+            mr.setRequisitionNo("MR-C3-" + suffix);
+            mr.setProductionPlanId(plan.getId());
+            mr.setSourceWarehouseId(RAW_WH);
+            mr.setTargetWarehouseId(WORKSHOP_WH);
+            mr.setStatus(FactoryMaterialRequisition.Status.PICKING);
+            mr.setRequestedBy(OPERATOR);
+            mr = requisitions.save(mr);
+
+            FactoryMaterialRequisitionItem item = new FactoryMaterialRequisitionItem();
+            item.setRequisition(mr);
+            item.setMaterialTypeId("MT-1");
+            item.setMaterialName("牛肉");
+            item.setRequiredQty(new BigDecimal("100"));
+            item.setPickedQty(new BigDecimal("100"));
+            item.setUnit("kg");
+            Map<String, Object> row = new HashMap<>();
+            row.put("batchId", source.getId());
+            row.put("batchNo", source.getBatchNumber());
+            row.put("qty", new BigDecimal("100"));
+            item.setBatchNumbers(new ArrayList<>(List.of(row)));
+            mr.getItems().add(item);
+            mr = requisitions.save(mr);
+            return new Fixture(plan.getId(), null, mr.getId(), mr.getItems().get(0).getId(), source.getId(), null);
+        });
+    }
+
+    private int workshopBatchesOf(Fixture f) {
+        return jdbc.queryForObject("select count(*) from material_batches where source_doc_type = 'MATERIAL_REQUISITION' "
+                + "and source_doc_id = ? and deleted_at is null", Integer.class, f.requisitionId());
+    }
+
+    /** 阳性对照: 这份夹具真调拨能走通 (料从原料仓搬到生产仓), 之后取消返回 409 —— 下一条用例的拒绝不是夹具坏了。 */
+    @Test
+    void c3_realTransferMovesMaterial_thenCancelIsRefused() {
+        Fixture f = picked();
+        requisitionService.transferToFactory(F, f.requisitionId(), OPERATOR);
+        assertThat(requisitionStatus(f)).isEqualTo("TRANSFERRED");
+        assertThat(available(f.sourceBatchId())).as("原料仓源批次已划出").isEqualByComparingTo("0");
+        assertThat(workshopBatchesOf(f)).as("生产仓建了批次").isEqualTo(1);
+
+        assertThatThrownBy(() -> requisitionService.cancel(F, f.requisitionId(), OPERATOR, "调拨后取消"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("PRODUCTION_REQUISITION_CANCEL_AFTER_TRANSFER"));
+        assertThat(requisitionStatus(f)).isEqualTo("TRANSFERRED");
+    }
+
+    /**
+     * 取消先拿到领料单行锁 (未提交), 真实调拨随后开始: 调拨必须在读单子时就等这把锁, 等到取消提交后读到「已取消」并拒绝。
+     * 调拨不加锁时它会读到「备料中」, 把料搬去生产仓, 最后的整行 UPDATE 再把「已取消」覆盖成「已调拨」——
+     * 单子被取消了、料却已经搬走 (C3 原形)。
+     */
+    @Test
+    void c3_realTransferWaitsForCancelLock_andThenRefuses() throws Exception {
+        Fixture f = picked();
 
         ExecutorService pool = Executors.newFixedThreadPool(2);
         CountDownLatch lockHeld = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         try {
-            // T1 = 调拨: 拿领料单行锁, 把单子推到「已调拨」, 拿着锁等放行再提交
-            Future<?> transfer = pool.submit(() -> tx.executeWithoutResult(s -> {
-                FactoryMaterialRequisition mr = requisitions.findByIdAndFactoryIdForUpdate(f.requisitionId(), F)
-                        .orElseThrow();
-                mr.setStatus(FactoryMaterialRequisition.Status.TRANSFERRED);
-                requisitions.saveAndFlush(mr);
+            // T1 = 取消 (真实服务), 外层事务拿着行锁不提交, 等放行
+            Future<?> cancel = pool.submit(() -> tx.executeWithoutResult(s -> {
+                requisitionService.cancel(F, f.requisitionId(), OPERATOR, "并发取消");
                 lockHeld.countDown();
                 try {
                     release.await(30, TimeUnit.SECONDS);
@@ -517,24 +624,26 @@ class RequisitionCloseCancelLedgerPostgresContractTest {
             }));
             assertThat(lockHeld.await(30, TimeUnit.SECONDS)).isTrue();
 
-            // T2 = 取消: 修复前不加锁, 读到「备料中」立刻把单子改成已取消
-            Future<Throwable> cancel = pool.submit(() -> {
+            // T2 = 真实调拨
+            Future<Throwable> transfer = pool.submit(() -> {
                 try {
-                    requisitionService.cancel(F, f.requisitionId(), OPERATOR, "并发取消");
+                    requisitionService.transferToFactory(F, f.requisitionId(), OPERATOR);
                     return null;
                 } catch (Throwable t) {
                     return t;
                 }
             });
             Thread.sleep(1500);
-            assertThat(cancel.isDone()).as("取消必须等调拨的行锁 (修复前不等, 直接读到备料中)").isFalse();
+            assertThat(transfer.isDone()).as("调拨要等取消的行锁").isFalse();
 
             release.countDown();
-            transfer.get(30, TimeUnit.SECONDS);
-            Throwable outcome = cancel.get(30, TimeUnit.SECONDS);
-            assertThat(outcome).isInstanceOfSatisfying(BusinessException.class,
-                    e -> assertThat(e.getErrorCode()).isEqualTo("PRODUCTION_REQUISITION_CANCEL_AFTER_TRANSFER"));
-            assertThat(requisitionStatus(f)).isEqualTo("TRANSFERRED");
+            cancel.get(30, TimeUnit.SECONDS);
+            Throwable outcome = transfer.get(30, TimeUnit.SECONDS);
+            assertThat(outcome).as("调拨等到锁后读到已取消, 必须按状态拒绝").isInstanceOfSatisfying(BusinessException.class,
+                    e -> assertThat(e.getMessage()).contains("当前 CANCELLED"));
+            assertThat(requisitionStatus(f)).isEqualTo("CANCELLED");
+            assertThat(available(f.sourceBatchId())).as("料没被搬走").isEqualByComparingTo("100");
+            assertThat(workshopBatchesOf(f)).as("生产仓没有建批次").isZero();
         } finally {
             release.countDown();
             pool.shutdownNow();

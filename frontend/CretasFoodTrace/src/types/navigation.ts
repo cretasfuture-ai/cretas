@@ -782,6 +782,8 @@ export type WHOutboundStackParamList = {
     materialName?: string;
     remainingQuantity: number;
     quantityUnit?: string;
+    /** 扫码识别的库存归属; CUSTOMER_OWNED 时本页不让直接出库, 改为说明走领料单 */
+    ownership?: 'COMPANY_OWNED' | 'CUSTOMER_OWNED' | null;
   };
 };
 

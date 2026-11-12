@@ -104,6 +104,8 @@ public class InventoryOperationTool extends AbstractBusinessTool {
 
                 // 排查 2026-11-10 A5: 与 POST /material-batches/{id}/use 同一套领料服务 (状态 + 归属 + 消耗留痕)。
                 // ⛔ 不再调 useBatchQuantity: 它只比数量, 不查状态归属、不记消耗。
+                // #1606 审查 L8: 数据范围 (只能动自己范围内的批次) —— 原 useBatchQuantity 有这一步, 改走领料服务时丢了
+                materialBatchService.assertToolRecordAccess(factoryId, batchId);
                 materialBatchService.useBatchMaterial(factoryId, batchId, quantity,
                         getString(params, "productionPlanId"), getUserId(context), "AI 库存出库");
 

@@ -116,6 +116,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processentry.ByproductBatchMaterializer byproductBatchMaterializer;
+    /** 原料来源归属判断取物料大类 (#1606 审查 M4)。required=false: 未注入按最严格口径 (等同原料)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
     /**
      * F3: 逐工序自定义字段 schema 校验 —— chain 路径 (recordChain) 复用与 sheet 路径同一诚实-400 契约。
      * null-tolerant (测试 @InjectMocks 未注入时 skip 校验; 校验只在 step.customFields 非空时触发, 极少查库)。
@@ -187,9 +190,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
 
         // SP-D Fix 2: 跨租户守卫 — planId 必须归属本 factoryId
         // null-tolerant: planRepository 为 null 时 (测试 @InjectMocks 未注入) 跳过, 不 NPE.
-        if (planRepository != null &&
-                planRepository.findByIdAndFactoryId(planId, factoryId).isEmpty()) {
-            throw new BusinessException(404, "生产计划不存在: " + planId);
+        com.cretas.aims.entity.ProductionPlan ownerPlan = null;
+        if (planRepository != null) {
+            ownerPlan = planRepository.findByIdAndFactoryId(planId, factoryId)
+                    .orElseThrow(() -> new BusinessException(404, "生产计划不存在: " + planId));
         }
 
         // 1. 幂等检查
@@ -258,6 +262,12 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                         // 排查 2026-11-10 A4 (清点补出的同类入口): 逐道录入的原料来源不许是待检 / 报废 / 不良品
                         // (事后补录: 领出后才过期的不拦, 见 assertReportable)
                         com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(rawMb);
+                        // #1606 审查 M4: 原料来源的归属与领料同一口径 (客户料只进该客户订单的计划)。
+                        // planRepository 只在手工构造的旧单测里为 null (同上方跨租户守卫), prod 恒注入。
+                        if (planRepository != null) {
+                            com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
+                                    ownerPlan, rawMb, rawMainCategory(factoryId, rawMb), "原料批次");
+                        }
                         // ⛔ 刻意<b>不做单位换算</b>: ri.getQuantity() 按契约已经是 rawMb 自己的
                         //    库存单位 (RawInput 连 unit 字段都没有, 见 ProcessChainEntryRequest.RawInput)。
                         //    这里原样入边 → MaterialConsumption.quantity → 小结时
@@ -1283,6 +1293,15 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * 跨模式定位报工步对应的 WorkProcess: 优先按工序名 (legacy+workflow 通用), 名字不唯一时按
      * processOrder (legacy 链) 消歧; 名字缺失回退 processOrder。解析不到返 null。
      */
+    /** 物料大类 (原料/辅料/包材); 查不到传 null = 按最严格口径。 */
+    private String rawMainCategory(String factoryId, MaterialBatch rawMb) {
+        if (rawMaterialTypeRepository == null || rawMb.getMaterialTypeId() == null) {
+            return null;
+        }
+        return rawMaterialTypeRepository.findByIdAndFactoryId(rawMb.getMaterialTypeId(), factoryId)
+                .map(com.cretas.aims.entity.RawMaterialType::getMainCategory).orElse(null);
+    }
+
     /**
      * 解析 BOM/调料配方归属的成品 SKU —— 取所属生产计划的产品。
      *
