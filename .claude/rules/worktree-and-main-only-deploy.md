@@ -1,90 +1,26 @@
 # Worktree 隔离 + 只从 main 部署 prod (HARD RULE)
 
-**最后更新**: 2026-11-11（Steve：worktree 上限 9 → 30；此前 2026-10-16 复用已隔离的任务 worktree；离线期与 CI 判读叙事存档在 `docs/rules-casebook/worktree-and-main-only-deploy-cases.md`）
-**触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖, 总营收回归 ¥0。
+**最后更新**: 2026-11-13（瘦身：命令、合入通道分档表、离线部署、自动回收细节移到 `deploy-backend` skill 的 `references/main-only-deploy-details.md`；事故叙事与瘦身前原文在 `docs/rules-casebook/`）
+**触发事故**: 2026-05-30 青花椒 RBAC 修复在 prod 被并发 session 的 Java 部署覆盖，总营收回归 ¥0。
 
 ## ⛔ 四条铁律
 
-### 1. 永远不在主工作目录直接干活
+1. **永远不在主工作目录 `C:\Users\Steve\my-prototype-logistics` 干活**（含文档、规则、台账）。代码任务先核验现有 worktree 的路径、分支/HEAD、scope、唯一 Owner，复用合格的本任务副本；没有才新建，**永远 off `origin/main`**：`git worktree add -b codex/claude-<task> ../cretas-<task> origin/main`。只读/调研不新建。
+2. **完成 → 推上 origin/main**，不在 feature 分支累积部署。merge 前 `git diff origin/main...HEAD --stat` 确认只有你的文件，夹带别人的就 cherry-pick 到干净 worktree 重做；squash 合并后本地分支必须重开（measurement-and-wiring 硬约束 7）。通道：`docs/**.md`、`.claude/**`、根 `*.md` 走 fastlane（`publish-main-fastlane.sh`，会自动走 PR 并等检查全绿）；backend / web-admin 代码走 PR；AGENTS.md、`.agents/`、`.codex/`、workflows、`scripts/deploy/*`、迁移、entity、repository、security **强制 PR**。分档以脚本 `--dry-run` 为准，完整分档表与参数见 deploy-backend skill 的 `references/main-only-deploy-details.md`。**任何通道都必须推上 origin/main 后才可部署。**
+3. **prod 永远从 main 构建/部署，绝不从 feature 分支**：合并前在候选 worktree `release-cretas.sh --phase build ... --stage-backend YES-STAGE`；合并后在 clean 的 `origin/main` 树 `--phase deploy ... --confirm-prod YES-PROD`；⛔ 不跑 prewarm；判据 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次。`deploy-backend.sh` 上传到固定共享 jar 路径，多 session 各自从 feature 分支部署会互相覆盖。完整命令见 deploy-backend skill。必须在 prod 验 feature 分支时，验完立即 merge main + 从 main 重部并核对运行 jar 含修复。
+4. **worktree 总数 ≤ 30，开新的之前先体检，做完收自己的**：开新前 `bash .claude/tools/worktree-hygiene.sh --check`（> 30 先 `--apply`，用 `list_sessions` 把 `isRunning` 的 cwd 用 `--keep` 传进去）；任务做完/PR 合并后从主仓库目录执行 `--apply` 收掉自己的（会 WIP commit 脏改动、摘 junction、不 `--force`，分支保留）。SessionStart hook 的 `--auto` 会自动回收「干净且已完成」的 worktree（细节见 skill reference）。⛔ 不对带 junction 的目录 `git worktree remove --force`；⛔ 不替 detached 且有改动的 worktree 擅自建分支。
 
-主目录 `C:\Users\Steve\my-prototype-logistics` 被多个并发 session 共享，不能在其中混入代码改动。代码任务先核验现有 worktree 的路径、分支/HEAD、scope 与唯一 Owner，复用合格的本任务副本；无可复用副本时才新建，**永远 off `origin/main`**（off 别的 feature 分支会夹带 sister 的 commit）。只读/调研不新建。⛔ 主目录不混入任何改动（含文档、规则、台账）——要改就在本任务的 worktree 里改，已有合格副本就复用，不因为是纯文档而重建。
+## GitHub 不可用时
 
-```bash
-git worktree add -b codex/claude-<task> ../cretas-<task> origin/main
-```
-
-### 2. 完成 → 推上 origin/main（不在 feature 分支上累积部署）
-
-merge 前 `git diff origin/main...HEAD --stat` 确认只有你的文件；夹带 sister 文件就 cherry-pick 到干净的 origin/main worktree 重做。squash 合并之后本地分支必须重开（measurement-and-wiring 硬约束 7）。
-
-**合入通道双轨**（2026-07-28 Steve 拍板）：
-
-| 变更 | 通道 |
-|---|---|
-| `docs/**.md`、`.claude/**`、根 `*.md`、`.gitignore` | **fastlane**：`./scripts/deploy/publish-main-fastlane.sh --base-sha <完整 40 位 SHA> --confirm YES-DIRECT-MAIN`（先 `--dry-run`）。2026-11-13 起 main 设了必需检查、GitHub 拒收直推，脚本默认改为「推分支 → 开 PR → 等检查全部结束无红 → `--match-head-commit` 合并 → 等 MERGED」，文档类 PR 上多数闸判为跳过，通常几分钟；禁 force push、开始前证明 origin/main 未前进；分支名必须 `codex/*`。`FASTLANE_PUBLISH_MODE=direct` 只给本地夹具/离线 main |
-| 其余（含 `docs/dispatch/**`、配置文件）| fastlane 须带 `--task-id <本批任务ID>`（ID 必须以词边界出现在 `docs/dispatch/` 下），否则门禁按「全局零未完成任务」判定而恒拒 |
-| backend / web-admin 代码 | **PR**（Python Gate / Web Admin Gate / Secret regression 按 paths 跑；PR 号是台账锚点） |
-| AGENTS.md / `.agents/skills/*` / `.codex/rules/*` / workflows / `scripts/deploy/*` / 迁移 / entity / repository / security | **强制 PR**（fastlane 列为高风险自动拒绝；`.claude/` 豁免而 `.agents/`、`.codex/` 高风险，三个目录名很像） |
-
-分档是脚本说了算，拿真实 commit 跑一次 `--dry-run` 看 `FASTLANE_READY` 还是 `FASTLANE REJECTED: <原因>`。底线：**任何通道都必须推上 origin/main 后才可部署**，省的是 PR 仪式往返，不是 push 本身。
-
-看 CI 结论：`gh` 时间戳是 UTC；PR 上的 `failure` 先查是不是 `cancelled`（`concurrency: cancel-in-progress` 让 push 与 pull_request 互相取消）；判「某个闸还在不在」看 yml 文件，不看 `gh workflow list`。
-
-### 3. prod 永远从 main 构建 / 部署，绝不从 feature 分支
-
-```bash
-# 合并【前】在候选 worktree: 先 build + 预传 (硬规则 2026-09-15; manifest 按 backend tree 复用, 合并后部署 ≈1 min)
-./scripts/deploy/release-cretas.sh --phase build --base-sha '<Base SHA>' --tests '<tests>' --stage-backend YES-STAGE
-# 合并后:
-git fetch origin main && git checkout --detach origin/main      # 或 clean 的 main worktree
-./scripts/deploy/release-cretas.sh --phase deploy --base-sha '<Base SHA>' --tests '<同上选择器>' --no-prefer-ci-artifact --confirm-prod YES-PROD
-# ⛔ 不跑 prewarm-main-artifact.sh: CI 制品车道在本组织不通 (无 attestation + 制品存储配额), 等 420s 纯浪费
-# 判据: DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好 1 次 (不出现本身就是失败信号)
-```
-
-`deploy-backend.sh` 上传到**固定的共享 jar 路径**，多个 session 各自从 feature 分支部署 = last-write-wins 互相覆盖（5/30 事故原形）。根治：prod = main，所有工作 merge 进 main 再部署。`deploy-backend.sh` 的 idle readiness 三态：`UP:*` 健康 / `TIMEOUT`、`RESTART_LIMIT:*` 真失败 / 空串是 ssh 断线**没量到**（脚本先重试再独立核验；2026-09-02 曾把断线判死回滚）。单组件入口与逃生路见 `deploy-backend` skill。
-
-### 4. worktree 总数 ≤ 30，开新的之前先体检，做完顺手收自己的
-
-（2026-11-11 Steve 把上限从 9 调到 30：多会话并行批次常态下同时在用的目录就有二十多个，9 个会逼着删别人正在用的目录。）
-
-2026-10-07 清理前仓库挂着 76 个 worktree（大半是已合并的、一批是没合并却没人管的），目录占盘、`node_modules` 删起来按分钟算，还有 junction 穿透的风险。铁律 1 要求「每个任务一个 worktree」，没有对应的收口，数量只会涨。
-
-- **开新 worktree 之前**：`bash .claude/tools/worktree-hygiene.sh --check`。总数 > 30（脚本返回 3）就先 `--apply`，再开。先用 `list_sessions` 把 `isRunning` 的 session 的 cwd 用 `--keep <路径>` 传进去。
-- **任务做完 / PR 合并后**：把**自己**这个 worktree 收掉（从主仓库目录执行，不要在要删的目录里执行）：`bash .claude/tools/worktree-hygiene.sh --apply`；它会 WIP commit 脏改动、摘 junction、不加 `--force` 地移除，分支保留。
-- 脚本保留：主仓库 / 当前所在 / `.codex/worktrees` / `--keep` / locked / 近 120 分钟有动静的。没合并的分支**不删**，分支本身就是备份，最后汇报「分支名 / 领先几个提交 / 有没有开着的 PR」。
-- **自动回收（2026-11-11，根治「只涨不收」）**：上限数字不是根因——创建不受控（桌面应用/Codex 每会话自动建）、回收靠人想起来、squash 合并后 git 看不出已合并、Codex 的 worktree 被整体豁免，所以会一直涨（当天 90 个，约六成对应的 PR 早已合并）。现在回收按「活干完了」触发，与总数无关：`worktree-hygiene.sh --auto` 挂在 SessionStart hook（后台跑，日志 `<git-common-dir>/worktree-hygiene.log`），只回收**干净且已完成**的 worktree（分支 PR 已 MERGED 且 PR 头 == worktree HEAD，或 HEAD 已是 origin/main 祖先；Codex 的同样适用；有任何改动、locked、当前所在、`--keep` 指定的、**会话活动标记在近 6 小时内的**一律不动（标记由 `worktree-touch.sh` 在 SessionStart/每条消息/每轮结束时更新；不用提交时间判断——已合并的 worktree 提交时间必然是旧的，2026-11-11 实测靠它的缺位把当前会话自己的目录删了）；会话停用 6 小时后才回收；没有标记的（Codex 会话不跑 Claude hook、hook 上线前的旧会话）改看 HEAD/index 的 mtime，同一 6 小时窗；每次回收还会清「空壳」（git 删完内容却因目录被占用删不掉留下的未登记空目录，只删完全为空的）；本会话执行 `gh pr merge` / `publish-main-fastlane.sh`（非 dry-run）后由 PostToolUse hook（`worktree-after-merge.sh`）立刻触发一次回收，GitHub 网页上合并的则等下一个会话启动。已知不覆盖：无 PR 但内容已被别的 PR 吸收的 detached worktree、合并后又加了提交的分支，这两类要人看；gh 不可用则不回收；分支保留）。organizer 合并 PR 后也跑一次。上限 30 退为兜底：超限时会话开头会提示。
-- 定时任务 `cretas-worktree-cleanup` 已停用（每次要起一个 Claude 会话，成本高于 hook），回收以 SessionStart hook 为准。
-- ⛔ 不对带 junction 的目录用 `git worktree remove --force`；⛔ 不替 detached 且有改动的 worktree 擅自建分支（脚本会跳过并报告）。
-
-## 必须在 prod 验证 feature 时
-
-测试环境的当前分配见 `server-operations` skill 的服务器地图（YOLO 只在本机 Windows/RTX）。若必须在 prod 验 feature 分支：验完**立即 merge 到 main + 从 main 重部**，然后核对运行中的 jar 含你的修复：
-
-```bash
-ssh root@47.100.235.168 "unzip -p /www/wwwroot/cretas/aims-0.0.1-SNAPSHOT.jar 'BOOT-INF/classes/.../YourClass.class' | strings | grep -c '<ASCII 修复标记>'"
-```
-
-## 🔌 GitHub 不可用时：本地 `main` 是唯一汇合点
-
-铁律 3 的意图（prod = 所有人都汇合过的点）照样成立，载体从 `origin/main` 换成本地 `main`。所有 worktree 共享同一个 `.git`，本地 merge 不需要网络。
-
-1. 汇合点固定用本地 `main`，不新造整合分支；只有占着 `main` 的那个 worktree 能往上合（天然串行）。动它之前**单独跑一次** `git status --porcelain` 看结果再决定，别和 merge 压进同一条命令。要看「我要动哪些文件」问自己的 commit（`git show --name-only --format= <分支>`），⛔ 不用 `git diff --name-only main..<分支>`（答案取决于基底，会把本地 main 领先的文件全算成你的）。
-2. 部署从 detached worktree：`git worktree add --detach ../cretas-deploy-offline $(git rev-parse main)`，然后 `SKIP_GIT_CHECK=1 ./scripts/deploy/deploy-backend.sh --env prod`（web-admin 同理）。逃生门只在「已合进本地 main + 从 main 部署」前提下用；`check_git_sync` 离线时只 WARN，「部署入口全被闸挡住」是不完整的结论。
-3. 合并后、部署前跑迁移撞号闸：`mvn -o test -Dtest='FlywayVersionUniquenessTest,*RepositoryQueryValidationTest'`（git 对 Flyway 撞号一个字不报）。
-4. 每次离线部署记账：部署了哪个本地 commit、含哪些分支、跑了哪些迁移，写进当天 handoff。
-5. 恢复后清单**现算**：`bash scripts/offline-recovery-manifest.sh --commands`，各 feature 分支分别 push → PR → CI；全部合完再 `git checkout main && git reset --hard origin/main`。⛔ 不 `git push origin main`（绕过 CI 一次推十几个 commit）；⛔ 不用 `%(ahead-behind:origin/main)` 筛分支（squash 让老分支永远 ahead，实测筛出 869 条而真动过的 28 条），判据是提交时间晚于 origin/main 冻结时刻。
+本地 `main` 是唯一汇合点；部署从 detached worktree + `SKIP_GIT_CHECK=1`；恢复后各分支走 PR，⛔ 不 `git push origin main`。完整五步协议见 skill reference。
 
 ## 速查
 
 | 场景 | 做法 |
 |---|---|
-| 开始代码任务 | 核验并复用本任务隔离副本；没有合格副本才从 `origin/main` 新建 |
-| 任务完成 | PR 或 fastlane → origin/main；先 `git diff origin/main...HEAD --stat` 确认 scope |
-| 部署 prod | 合并前候选树 `--phase build --stage-backend` → 合并 → clean 的 origin/main 树 `--phase deploy`（绝不从 feature 分支；不跑 prewarm） |
-| 必须 prod 验 feature | 验完立即 merge main + 从 main 重部 + 核对运行 jar 含修复 |
-| 开新 worktree 前 / 任务做完 | `bash .claude/tools/worktree-hygiene.sh --check`（> 30 先 `--apply`）；做完收掉自己的（铁律 4） |
-| 清理 | `scripts/safe-worktree-remove.sh`（⛔ 不 `mklink /J` 共享 node_modules，见 concurrent-edit-safety） |
-| GitHub 不可用 | 合进本地 `main` → detached worktree + `SKIP_GIT_CHECK=1` → 恢复后各分支走 PR |
+| 开始代码任务 | 复用本任务副本；没有才从 `origin/main` 新建 |
+| 任务完成 | PR 或 fastlane → origin/main；先 `git diff origin/main...HEAD --stat` |
+| 部署 prod | 合并前 `--phase build --stage-backend` → 合并 → clean origin/main 树 `--phase deploy` |
+| 清理 | `scripts/safe-worktree-remove.sh`（⛔ 不 `mklink /J` 共享 node_modules） |
 
-关联: `concurrent-edit-safety.md`、`deploy-backend` skill、memory `feedback_concurrent_deploy_r2_path_collision`。
+关联: `concurrent-edit-safety.md`、`deploy-backend` skill。
