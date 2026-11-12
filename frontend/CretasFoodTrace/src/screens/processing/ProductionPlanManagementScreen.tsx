@@ -35,12 +35,10 @@ import { CustomerSelector } from '../../components/common/CustomerSelector';
 import { MaterialBatchSelector, SelectedBatch, AvailableBatch } from '../../components/common/MaterialBatchSelector';
 import { MaterialBatch } from '../../services/api/materialBatchApiClient';
 import { handleError, getErrorMsg } from '../../utils/errorHandler';
-import { settlementRequiredNotice } from '../../utils/settlementRequired';
 import { logger } from '../../utils/logger';
 import { formatDate, parseYmdOrToday } from '../../utils/formatters';
 import { settleAllIndependently } from '../../utils/settleAllIndependently';
 import {
-  canCompleteProductionPlan,
   canCreateProductionPlan,
 } from '../../utils/productionPlanPermissions';
 
@@ -98,7 +96,6 @@ export default function ProductionPlanManagementScreen() {
 
   // 可以创建生产计划的角色
   const canCreatePlan = canCreateProductionPlan(roleCode, isReadOnly);
-  const canCompletePlan = canCompleteProductionPlan(roleCode, isReadOnly);
 
   // 调试日志
   productionPlanLogger.debug('权限检查', {
@@ -106,7 +103,6 @@ export default function ProductionPlanManagementScreen() {
     roleCode,
     isReadOnly,
     canCreatePlan,
-    canCompletePlan,
     factoryUserRole: user?.factoryUser?.role,
   });
 
@@ -181,13 +177,6 @@ export default function ProductionPlanManagementScreen() {
   const [stockLoading, setStockLoading] = useState(false);
   const [stockError, setStockError] = useState<string | null>(null);
 
-  // 完成生产对话框状态
-  const [showCompleteDialog, setShowCompleteDialog] = useState(false);
-  const [completingPlan, setCompletingPlan] = useState<ProductionPlan | null>(null);
-  const [actualQuantity, setActualQuantity] = useState('');
-  // 纪律排查 A7: 直接完工超产必须填原因 (服务端 PRODUCTION_OVER_PLAN_REASON_REQUIRED)
-  const [overPlanReason, setOverPlanReason] = useState('');
-  const [completeLoading, setCompleteLoading] = useState(false);
   const [materialAdvisories, setMaterialAdvisories] = useState<Record<string, ProductionPlanMaterialAdvisory>>({});
 
   useEffect(() => {
@@ -612,60 +601,6 @@ export default function ProductionPlanManagementScreen() {
     }
   };
 
-  // 打开完成生产对话框
-  const openCompleteDialog = (plan: ProductionPlan) => {
-    setCompletingPlan(plan);
-    setActualQuantity(plan.plannedQuantity?.toString() || '');
-    setOverPlanReason('');
-    setShowCompleteDialog(true);
-  };
-
-  // 处理完成生产
-  const handleCompleteProduction = async () => {
-    if (!completingPlan) return;
-
-    const actualQty = parseFloat(actualQuantity);
-    if (isNaN(actualQty) || actualQty <= 0) {
-      appAlert('错误', '请输入有效的实际产量');
-      return;
-    }
-    const planned = completingPlan.plannedQuantity ?? 0;
-    const overPlan = planned > 0 && actualQty > planned;
-    if (overPlan && !overPlanReason.trim()) {
-      appAlert('需要超产原因', `实际产量比计划多 ${(actualQty - planned).toFixed(2)}，请先填写超产原因`);
-      return;
-    }
-
-    try {
-      setCompleteLoading(true);
-      const response = await productionPlanApiClient.completeProduction(
-        completingPlan.id,
-        actualQty,
-        undefined,
-        overPlan ? overPlanReason.trim() : undefined,
-      );
-
-      if (response.success) {
-        appAlert('成功', `生产已完成，实际产量: ${actualQty} kg`);
-        setShowCompleteDialog(false);
-        setCompletingPlan(null);
-        setActualQuantity('');
-        setOverPlanReason('');
-        loadPlans();
-      }
-    } catch (error) {
-      productionPlanLogger.error('完成生产失败', error, {
-        planId: completingPlan.id,
-        actualQuantity: actualQty,
-      });
-      // A7: 本厂要求先结单 → 说清去网页端哪里结单, 不弹原始错误; 弹窗保留不清空
-      const settlement = settlementRequiredNotice(error, completingPlan.planNumber || completingPlan.id);
-      appAlert(settlement ? settlement.title : '错误', settlement ? settlement.message : (getErrorMsg(error) || '操作失败'));
-    } finally {
-      setCompleteLoading(false);
-    }
-  };
-
   const getStatusColor = (status: string) => {
     const s = status?.toLowerCase();
     switch (s) {
@@ -1014,31 +949,6 @@ export default function ProductionPlanManagementScreen() {
                       </Text>
                     </Card.Content>
                   </Card>
-                )}
-
-                {/* Actions */}
-                {canCompletePlan && plan.status?.toLowerCase() === 'pending' && (
-                  <Button
-                    mode="contained"
-                    icon="check"
-                    onPress={() => openCompleteDialog(plan)}
-                    style={styles.actionButton}
-                  >
-                    完成生产
-                  </Button>
-                )}
-
-                {canCompletePlan && plan.status?.toLowerCase() === 'in_progress' && (
-                  <View style={styles.actionRow}>
-                    <Button
-                      mode="contained"
-                      icon="check"
-                      onPress={() => openCompleteDialog(plan)}
-                      style={styles.actionButton}
-                    >
-                      完成生产
-                    </Button>
-                  </View>
                 )}
 
                 {!isReadOnly && plan.status?.toLowerCase() === 'completed' && (
@@ -1455,119 +1365,6 @@ export default function ProductionPlanManagementScreen() {
         </Modal>
       </Portal>
 
-      {/* 完成生产对话框 */}
-      <Portal>
-        <Modal
-          visible={canCompletePlan && showCompleteDialog}
-          onDismiss={() => {
-            setShowCompleteDialog(false);
-            setCompletingPlan(null);
-            setActualQuantity('');
-          }}
-          contentContainerStyle={styles.completeModalContent}
-        >
-          <Text style={styles.modalTitle}>完成生产</Text>
-
-          {completingPlan && (
-            <View style={styles.completeInfo}>
-              {(() => {
-                const completeAdvisory = materialAdvisories[completingPlan.id];
-                return completeAdvisory?.hasWarning ? (
-                  <Text style={styles.batchWarningHint}>
-                    {completeAdvisory.message}
-                  </Text>
-                ) : null;
-              })()}
-
-              <Text style={styles.completeInfoLabel}>计划单号:</Text>
-              <Text style={styles.completeInfoValue}>
-                {completingPlan.planNumber || completingPlan.id}
-              </Text>
-
-              <Text style={styles.completeInfoLabel}>产品类型:</Text>
-              <Text style={styles.completeInfoValue}>
-                {completingPlan.productType?.name
-                  || productTypes.find((product) => product.id === completingPlan.productTypeId)?.name
-                  || completingPlan.productTypeId}
-              </Text>
-
-              <Text style={styles.completeInfoLabel}>计划产量:</Text>
-              <Text style={styles.completeInfoValue}>
-                {completingPlan.plannedQuantity} kg
-              </Text>
-            </View>
-          )}
-
-          <TextInput
-            label="实际产量 (kg) *"
-            value={actualQuantity}
-            onChangeText={setActualQuantity}
-            mode="outlined"
-            style={styles.input}
-            keyboardType="decimal-pad"
-            placeholder="输入实际完成的产量"
-          />
-
-          {completingPlan && parseFloat(actualQuantity) > 0 && (
-            <View style={styles.yieldInfo}>
-              <Text style={styles.yieldInfoText}>
-                完成率: {((parseFloat(actualQuantity) / (completingPlan.plannedQuantity || 1)) * 100).toFixed(1)}%
-              </Text>
-            </View>
-          )}
-
-          {completingPlan
-            && (completingPlan.plannedQuantity ?? 0) > 0
-            && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0) && (
-            <View testID="complete-over-plan-reason">
-              <Text style={styles.batchWarningHint}>
-                实际比计划多 {(parseFloat(actualQuantity) - (completingPlan.plannedQuantity ?? 0)).toFixed(2)}，必须写超产原因
-              </Text>
-              <TextInput
-                label="超产原因 *"
-                value={overPlanReason}
-                onChangeText={setOverPlanReason}
-                mode="outlined"
-                style={styles.input}
-                placeholder="例如：客户追加 / 投料多出"
-                maxLength={500}
-              />
-            </View>
-          )}
-
-          <View style={styles.modalActions}>
-            <Button
-              mode="outlined"
-              onPress={() => {
-                setShowCompleteDialog(false);
-                setCompletingPlan(null);
-                setActualQuantity('');
-              }}
-              style={styles.modalButton}
-              disabled={completeLoading}
-            >
-              取消
-            </Button>
-            <Button
-              mode="contained"
-              onPress={handleCompleteProduction}
-              style={styles.modalButton}
-              loading={completeLoading}
-              disabled={
-                completeLoading
-                || !actualQuantity
-                || (!!completingPlan
-                  && (completingPlan.plannedQuantity ?? 0) > 0
-                  && parseFloat(actualQuantity) > (completingPlan.plannedQuantity ?? 0)
-                  && !overPlanReason.trim())
-              }
-            >
-              确认完成
-            </Button>
-          </View>
-        </Modal>
-      </Portal>
-
       {/* FAB - 只有管理员可以创建 */}
       {canCreatePlan && (
         <FAB
@@ -1823,41 +1620,6 @@ const styles = StyleSheet.create({
     margin: 20,
     borderRadius: 8,
     maxHeight: '90%',
-  },
-  completeModalContent: {
-    backgroundColor: 'white',
-    padding: 20,
-    margin: 20,
-    borderRadius: 8,
-  },
-  completeInfo: {
-    marginBottom: 16,
-    padding: 12,
-    backgroundColor: '#F5F5F5',
-    borderRadius: 8,
-  },
-  completeInfoLabel: {
-    fontSize: 12,
-    color: '#666',
-    marginBottom: 4,
-  },
-  completeInfoValue: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#333',
-    marginBottom: 12,
-  },
-  yieldInfo: {
-    padding: 12,
-    backgroundColor: '#E3F2FD',
-    borderRadius: 8,
-    marginBottom: 16,
-    alignItems: 'center',
-  },
-  yieldInfoText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1976D2',
   },
   modalTitle: {
     fontSize: 20,

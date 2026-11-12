@@ -14,7 +14,6 @@ jest.mock('../../../services/api/productionPlanApiClient', () => ({
     getProductionPlanById: (...args: unknown[]) => mockGetProductionPlanById(...args),
     getMaterialAdvisory: (...args: unknown[]) => mockGetMaterialAdvisory(...args),
     cancelProductionPlan: jest.fn(),
-    completeProduction: jest.fn(),
   },
 }));
 

@@ -17,13 +17,38 @@ export function isPlatformWorkspaceRoute(path: string): boolean {
 // 白名单路由 - 不需要登录
 const whiteList = ['/login', '/403', '/404', '/mobile-only', '/demo'];
 
-// Mobile 专属角色 - 不允许登录 Web 端
-// 参考原型文档: docs/prd/prototype/index.html - 14角色权限矩阵
-const MOBILE_ONLY_ROLES = [
-  'operator',
-  'quality_inspector',
-  'warehouse_worker'
-];
+// 网页后台准入: 按权限, 不按岗位名 (2026-11-12 Steve 口径 B14「谁能做按权限、不按岗位名;
+// 拦不拦由工厂配置」)。原来写死 MOBILE_ONLY_ROLES = operator/quality_inspector/warehouse_worker,
+// 质检员明明有 quality 模块权限 (网页「质量管理」的处置/超时处置) 也被挡在外面。
+//
+// 现在: 工厂账号的**权威权限快照** (L4 用户覆盖 → L2 工厂 → L1 平台, 与后端 @RequirePermission
+// 同一条链) 里只要有任一业务模块可用, 就能进网页; 菜单/路由照旧逐页按模块过滤 (下面那几道闸
+// 一道没动)。要让某个岗位只用 App, 工厂把它的业务模块配成 '-' 即可 —— 那是配置, 不是代码。
+//
+// dashboard 不算: 每个角色都有 dashboard:'r' (工作台落地页), 把它算进来这道闸就恒真。
+const LANDING_ONLY_MODULES: ReadonlySet<string> = new Set(['dashboard', '*']);
+
+interface WebAccessPermissionView {
+  currentPermissions: Record<string, unknown>;
+  userModuleAccess?: Record<string, { override?: string | null } | undefined>;
+  canAccess: (module: ModuleName) => boolean;
+}
+
+/**
+ * 「这个工厂账号的权限里有没有任一网页业务模块」—— 网页后台准入的唯一判定。
+ * 用 permission store 自己的 `canAccess` (含 L4 DENY/GRANT 覆盖), 不在这里另抄一份权限语义。
+ */
+export function hasAnyWebBusinessModule(perm: WebAccessPermissionView): boolean {
+  const candidates = new Set<string>(Object.keys(perm.currentPermissions || {}));
+  for (const [code, row] of Object.entries(perm.userModuleAccess || {})) {
+    if (row?.override === 'GRANT') candidates.add(code);
+  }
+  for (const module of candidates) {
+    if (LANDING_ONLY_MODULES.has(module)) continue;
+    if (perm.canAccess(module as ModuleName)) return true;
+  }
+  return false;
+}
 
 // 角色路由白名单 — 限制特定角色只能访问指定路径前缀
 // 防止通过 URL 直接访问超出菜单范围的路由
@@ -195,18 +220,18 @@ export function setupRouterGuards(router: Router) {
       await permissionStore.loadFromDb();
     }
 
-    // 检查是否是 Mobile 专属角色 (一线员工: 操作员、质检员、仓库工人)
-    // 这些角色只能使用移动端 App，不能登录 Web 管理后台
-    if (MOBILE_ONLY_ROLES.includes(authStore.currentRole)) {
+    // 网页后台准入 (按权限, 见 hasAnyWebBusinessModule)。只在**权威快照读到了**时判:
+    // 读失败时快照是空的 (fail-closed), 那时把人踢去「请用 App」等于把一次网络抖动说成
+    // 「你没有网页权限」—— 读失败照旧由下面逐页的模块闸 403, 不在这里替它下结论。
+    // 平台账号不走这里 (上面已按平台工作区/只读查看分流); 演示租户跳过 DB 读, 同样不判。
+    if (!authStore.isPlatform && permissionStore.isDbLoaded
+        && !hasAnyWebBusinessModule(permissionStore)) {
       // 先把角色取出来再清登录态 —— clearAuth() 之后 currentRole 恒为
       // 'unactivated' (auth.ts: `if (!u) return 'unactivated'`), 而
       // mobile-only.vue 的「移动端支持的功能」整张清单是按 query.role 分支的,
-      // 拿不到真实角色就只剩两条无条件项, 等于告诉一线工人「请用 App」却漏掉
-      // 他的本职工作。守卫见 guards.mobileOnlyRole.spec.ts。
+      // 拿不到真实角色就只剩两条无条件项。守卫见 guards.mobileOnlyRole.spec.ts。
       const blockedRole = authStore.currentRole;
-      // 清除登录状态
       authStore.clearAuth();
-      // 跳转到 Mobile 专属提示页面
       next({ path: '/mobile-only', query: { role: blockedRole } });
       return;
     }

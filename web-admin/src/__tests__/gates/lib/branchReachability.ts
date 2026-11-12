@@ -19,7 +19,7 @@
  * ## ⛔ 权限语义不复制一份（与 RN 侧同一条纪律）
  *
  * 分析器**不重写** `PERMISSION_MATRIX`、不重写 `canAccess` 的兜底规则、
- * 也不重写 `guards.ts` 里那七道闸（MOBILE_ONLY_ROLES / ROLE_PATH_WHITELIST /
+ * 也不重写 `guards.ts` 里那七道闸（网页准入 hasAnyWebBusinessModule / ROLE_PATH_WHITELIST /
  * module / modulesAll / hideForFactoryTypes / restaurantRoles / roles）。
  *
  *  · **可达性**：把 `setupRouterGuards` 挂到一个**假 router** 上，截获它注册的
@@ -1588,7 +1588,7 @@ export function buildHarness(): Promise<Harness> {
 /** 跑一次**生产守卫**，回答「这个主体能不能进这条路由」。 */
 export async function guardAllows(h: Harness, p: Principal, route: RouteEntry): Promise<boolean> {
   setActivePinia(p.pinia);
-  // MOBILE_ONLY_ROLES 那一支会 clearAuth() —— 每次调用前把身份放回去，
+  // 网页准入那一支 (hasAnyWebBusinessModule) 会 clearAuth() —— 每次调用前把身份放回去，
   // 否则同一主体的后续路由会被「未登录」而不是「被闸拦下」解释。
   p.auth.user = syntheticUser(p.role, p.factoryType, p.isPlatform);
   let arg: unknown = '__NOT_CALLED__';

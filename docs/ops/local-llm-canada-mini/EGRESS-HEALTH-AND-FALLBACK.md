@@ -71,7 +71,7 @@ Luna（OpenAI Decisions，线上意图决策）只经 `LLM_EGRESS_PROXY` 出境�
 
 ## 5. 告警到哪里（缺口照实写）
 
-仓库里**没有推送渠道**：`scripts/cron/alert-digest.sh` 是骨架，未进 crontab，没有 webhook（2026-09-06 owner 裁定等企微/钉钉机器人）。所以现在能保证的是：
+仓库里**没有推送渠道**：没有 webhook（2026-09-06 owner 裁定等企微/钉钉机器人）。2026-11-12 起 `scripts/cron/alert-digest.sh` 已进 47 root crontab（每日 09:00，`ALERT_SINK=stdout` → `logs/alert-digest.cron.log`），`--check-state` 每 10 分钟跑（→ `logs/llm-egress-check.cron.log`）。所以现在能保证的是：
 
 1. `/metrics`：`llm_egress_probe_up{egress,layer}`、`llm_egress_consecutive_failures`、`llm_egress_active`、`llm_egress_switch_total`、`llm_egress_probe_instrument_dead_total`、`llm_egress_probe_last_run_timestamp_seconds`。
 2. 状态文件 `/www/wwwroot/cretas/logs/llm-egress-state.json`：`last_run` 每轮必更新。
@@ -79,7 +79,7 @@ Luna（OpenAI Decisions，线上意图决策）只经 `LLM_EGRESS_PROXY` 出境�
 4. journal：固定前缀 `LLM_EGRESS_ALERT {json}`（WARNING）。
 5. 服务外的「探针还活着吗」：`python -m common.llm_egress_health --check-state`，状态文件不在或超过 `max(120s, 5×间隔)` 没更新 ⇒ rc=2，并往告警文件写一行 `LLM EGRESS STALE`。
 
-要做到「有人一定知道」，还差一个推送渠道（webhook）和把 `alert-digest.sh` 排进 crontab，这两样要 Steve 决定。
+要做到「有人一定知道」，还差一个推送渠道（webhook）：给了 URL 后把 crontab 那行改成 `ALERT_SINK=webhook ALERT_WEBHOOK_URL=…`。
 
 ## 6. 服务器侧改动（2026-11-12）
 
