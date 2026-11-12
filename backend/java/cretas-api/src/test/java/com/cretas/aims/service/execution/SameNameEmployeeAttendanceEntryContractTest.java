@@ -110,6 +110,8 @@ class SameNameEmployeeAttendanceEntryContractTest {
 
     @Autowired TestEntityManager em;
     @Autowired UserRepository users;
+    @Autowired com.cretas.aims.repository.permission.PlatformRolePermissionRepository platformRolePermissions;
+    @Autowired com.cretas.aims.repository.config.FactoryModuleConfigRepository factoryModuleConfigs;
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Entry.class)
@@ -216,6 +218,95 @@ class SameNameEmployeeAttendanceEntryContractTest {
         verify(h.clock, never()).getClockHistory(anyString(), eq(colleague.getId()), any(), any(), any());
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("真实权限判定 (ToolRbacGuard + PermissionServiceImpl): hr_admin 能按姓名列出两个张三")
+    void realPermissionHrAdminGetsTheSameNameList(Entry entry) throws Exception {
+        factories();
+        User caller = user(FACTORY, "hr-real", "人事王", "人事部", null, "hr_admin");
+        user(FACTORY, "zs-a", "张三", "加工一车间", "011");
+        user(FACTORY, "zs-b", "张三", "包装车间", "027");
+        flush();
+
+        Harness h = new Harness(entry, caller.getId(), null, AuthenticatedActorType.FACTORY_USER);
+        IntentExecuteResponse r = h.say("查一下张三这周的考勤", "张三");
+
+        assertThat(r.getFormattedText()).as(r.getMessage()).contains("本厂有 2 位叫「张三」的员工")
+                .contains("加工一车间").contains("包装车间");
+        verify(h.clock, org.mockito.Mockito.times(2))
+                .getClockHistory(eq(FACTORY), anyLong(), any(), any(), any(PageRequest.class));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("真实权限判定: operator 没有 hr:read, 被拒且看不出有几个同名的人")
+    void realPermissionOperatorIsRefused(Entry entry) throws Exception {
+        factories();
+        User caller = user(FACTORY, "op-real", "操作员小李", "加工一车间", "050", "operator");
+        user(FACTORY, "zs-a", "张三", "加工一车间", "011");
+        user(FACTORY, "zs-b", "张三", "包装车间", "027");
+        flush();
+
+        Harness h = new Harness(entry, caller.getId(), null, AuthenticatedActorType.FACTORY_USER);
+        IntentExecuteResponse r = h.say("查一下张三这周的考勤", "张三");
+
+        assertThat(r.getStatus()).isNotIn("SUCCESS", "COMPLETED");
+        assertThat(r.getMessage() + " | " + r.getFormattedText()).contains("hr:read")
+                .doesNotContain("2 位").doesNotContain("包装车间");
+        verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("平台账号 (数字 id 与一个 hr_admin 工厂用户相同): 不按姓名找人")
+    void platformActorCannotLookUpByName(Entry entry) throws Exception {
+        factories();
+        // users 表里这个 id 是 hr_admin; 平台账号拿同一个数字 id 进来, 不能借他的 hr:read
+        User sameIdFactoryUser = user(FACTORY, "hr-collide", "人事王", "人事部", null, "hr_admin");
+        user(FACTORY, "zs-a", "张三", "加工一车间", "011");
+        user(FACTORY, "zs-b", "张三", "包装车间", "027");
+        flush();
+
+        Harness h = new Harness(entry, sameIdFactoryUser.getId(), null, AuthenticatedActorType.PLATFORM_ADMIN);
+        IntentExecuteResponse r = h.say("查一下张三这周的考勤", "张三");
+
+        assertThat(r.getMessage() + " | " + r.getFormattedText())
+                .doesNotContain("2 位").doesNotContain("包装车间").doesNotContain("加工一车间");
+        verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("没有 hr:read, 模型把「我」填进姓名: 按本人查 (不变成 403)")
+    void selfWordQueriesTheCaller(Entry entry) throws Exception {
+        factories();
+        User caller = user(FACTORY, "op-self", "操作员小李", "加工一车间", "050", "operator");
+        flush();
+
+        Harness h = new Harness(entry, caller.getId(), null, AuthenticatedActorType.FACTORY_USER);
+        IntentExecuteResponse r = h.say("查我今天打卡", "我");
+
+        assertThat(r.getStatus()).as(r.getMessage()).isIn("SUCCESS", "COMPLETED");
+        verify(h.clock).getClockHistory(eq(FACTORY), eq(caller.getId()), any(), any(), any(PageRequest.class));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("本厂没有这个人: 明确说没找到 (外厂同名不算)")
+    void noMatchSaysSo(Entry entry) throws Exception {
+        factories();
+        User caller = user(FACTORY, "hr-caller", "人事王", "人事部", null);
+        user(OTHER_FACTORY, "ww-x", "王五", "外厂车间", "099");
+        flush();
+
+        Harness h = new Harness(entry, caller.getId(), true);
+        IntentExecuteResponse r = h.say("查一下王五这周的考勤", "王五");
+
+        assertThat(r.getFormattedText()).as(r.getMessage()).contains("本厂没有找到叫「王五」的在职员工")
+                .doesNotContain("外厂车间");
+        verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private void factories() {
@@ -233,7 +324,13 @@ class SameNameEmployeeAttendanceEntryContractTest {
     }
 
     private User user(String factoryId, String username, String fullName, String department, String code) {
+        return user(factoryId, username, fullName, department, code, null);
+    }
+
+    private User user(String factoryId, String username, String fullName, String department, String code,
+                      String roleCode) {
         User u = new User();
+        u.setRoleCode(roleCode);
         u.setFactoryId(factoryId);
         u.setUsername(username);
         u.setPasswordHash("test-only");
@@ -253,6 +350,7 @@ class SameNameEmployeeAttendanceEntryContractTest {
     private final class Harness {
         private final Entry entry;
         private final long callerId;
+        private final AuthenticatedActorType actorType;
         private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         private final List<Object[]> events = new ArrayList<>();
         private final AIIntentService recognizer = mock(AIIntentService.class);
@@ -266,8 +364,14 @@ class SameNameEmployeeAttendanceEntryContractTest {
         private int sseResults;
 
         Harness(Entry entry, long callerId, boolean hrReader) throws Exception {
+            this(entry, callerId, (Boolean) hrReader, AuthenticatedActorType.FACTORY_USER);
+        }
+
+        /** hrReader == null: 真的 ToolRbacGuard + PermissionServiceImpl, 按库里的 roleCode 判 hr:read。 */
+        Harness(Entry entry, long callerId, Boolean hrReader, AuthenticatedActorType actorType) throws Exception {
             this.entry = entry;
             this.callerId = callerId;
+            this.actorType = actorType;
             ConversationMemoryRepository repository = mock(ConversationMemoryRepository.class);
             when(repository.findBySessionId(anyString())).thenAnswer(call ->
                     Optional.ofNullable(rows.get(call.getArgument(0, String.class))));
@@ -282,8 +386,20 @@ class SameNameEmployeeAttendanceEntryContractTest {
             ReflectionTestUtils.setField(memory, "expireMinutes", 60);
             memory.getOrCreateContext(FACTORY, callerId, "same-name-session");
 
-            ToolRbacGuard guard = mock(ToolRbacGuard.class);
-            when(guard.hasAnyPermission(any(), eq("hr:read"))).thenReturn(hrReader);
+            ToolRbacGuard guard;
+            if (hrReader == null) {
+                guard = new ToolRbacGuard();
+                ReflectionTestUtils.setField(guard, "userRepository", users);
+                // 真的权限服务, 配置层用本测试上下文里真的 JPA 仓储 (表为空 = 走平台默认矩阵)
+                com.cretas.aims.service.impl.PermissionServiceImpl permissions =
+                        new com.cretas.aims.service.impl.PermissionServiceImpl();
+                ReflectionTestUtils.setField(permissions, "platformRepo", platformRolePermissions);
+                ReflectionTestUtils.setField(permissions, "factoryConfigRepo", factoryModuleConfigs);
+                ReflectionTestUtils.setField(guard, "permissionService", permissions);
+            } else {
+                guard = mock(ToolRbacGuard.class);
+                when(guard.hasAnyPermission(any(), eq("hr:read"))).thenReturn(hrReader);
+            }
             AttendanceHistoryTool tool = new AttendanceHistoryTool();
             ReflectionTestUtils.setField(tool, "objectMapper", mapper);
             ReflectionTestUtils.setField(tool, "timeClockService", clock);
@@ -394,7 +510,7 @@ class SameNameEmployeeAttendanceEntryContractTest {
             IntentExecuteRequest request = IntentExecuteRequest.builder().userInput(utterance)
                     .sessionId("same-name-session").context(context).build();
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
-                    new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, callerId, FACTORY, ROLE))) {
+                    new AuthenticatedActor(actorType, callerId, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
                     return orchestrator.execute(FACTORY, request, callerId, ROLE);
                 }

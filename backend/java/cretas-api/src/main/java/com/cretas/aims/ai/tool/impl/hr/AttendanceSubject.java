@@ -78,6 +78,17 @@ final class AttendanceSubject {
         return caller != null && requestedId.trim().equals(String.valueOf(caller));
     }
 
+    /** 指调用者本人的说法; 填进姓名时按本人查, 不当成一个叫「我」的员工。 */
+    static final java.util.Set<String> SELF_WORDS = java.util.Set.of("我", "本人", "自己", "我自己", "俺", "咱", "我本人");
+
+    private static boolean boundFactoryUser(String factoryId, Long caller) {
+        return caller != null && com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .filter(a -> java.util.Objects.equals(a.id(), caller))
+                .filter(a -> java.util.Objects.equals(a.factoryId(), factoryId))
+                .isPresent();
+    }
+
     /** 给考勤读工具的参数 schema 加上「员工姓名」。 */
     static void addNameParameter(Map<String, Object> properties) {
         Map<String, Object> name = new java.util.HashMap<>();
@@ -106,16 +117,26 @@ final class AttendanceSubject {
             return null;
         }
         String name = requestedName.trim();
+        // 「查我今天打卡」: 模型可能把「我/本人」填进姓名 —— 这是在说调用者自己, 走原来的本人路径 (resolve)
+        if (SELF_WORDS.contains(name)) {
+            return null;
+        }
+        Long caller = callerId(context);
+        // 🔴 按姓名在本厂找人只给「绑定在本厂的工厂用户」: 平台 token 可进任意工厂路径, 而 ToolRbacGuard 按 id 在
+        // users 表加载人 —— 平台账号 id 撞上某个工厂用户 id 时, hr:read 会按一个不相干的人来判。
+        if (!boundFactoryUser(factoryId, caller)) {
+            throw new BusinessException(403, "按姓名查员工考勤需要本厂员工账号登录。");
+        }
         List<User> matches;
         if (rbacGuard != null && rbacGuard.hasAnyPermission(context, "hr:read")) {
             matches = users.findActiveByFactoryIdAndExactFullName(factoryId, name);
         } else {
-            Long caller = callerId(context);
-            User self = caller == null ? null : users.findByIdAndFactoryId(caller, factoryId).orElse(null);
-            if (self == null || !name.equals(self.getFullName())) {
-                throw new BusinessException(403, DENIED);
+            User self = users.findByIdAndFactoryId(caller, factoryId).orElse(null);
+            if (self != null && (name.equals(self.getFullName()) || name.equals(self.getUsername()))) {
+                return null;   // 说的就是自己 (姓名或账号名): 本人路径
             }
-            matches = List.of(self);
+            // 没有 hr:read 又不是本人: 拒绝, 而且在任何同名查询之前拒绝 —— 不泄露有几个同名的人
+            throw new BusinessException(403, DENIED);
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
