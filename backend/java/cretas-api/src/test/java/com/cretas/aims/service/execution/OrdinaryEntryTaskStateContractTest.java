@@ -88,7 +88,7 @@ class OrdinaryEntryTaskStateContractTest {
         SemanticCacheService semanticCache = mock(SemanticCacheService.class);
         when(semanticCache.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
         ConversationSessionRepository repo = inMemorySessions();
-        ConversationServiceImpl conversations = new ConversationServiceImpl(
+        conversations = new ConversationServiceImpl(
                 repo, mock(AIIntentConfigRepository.class), null, mock(DashScopeClient.class));
         ReflectionTestUtils.setField(conversations, "maxRounds", 5);
         ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
@@ -136,6 +136,14 @@ class OrdinaryEntryTaskStateContractTest {
     }
 
     private String sessionId;
+    private ConversationServiceImpl conversations;
+
+    /** 另起一份参数收集 (与 SlotFillingService 建的同形), 返回会话 id。 */
+    private String startCollection(String intentCode, String intentName) {
+        return conversations.startParameterCollection(F, USER, intentCode, intentName,
+                List.of(ConversationService.RequiredParameter.builder().name("taskId").label("工序任务ID")
+                        .type("INTEGER").build()), List.of(), Map.of()).getSessionId();
+    }
 
     @Test
     @DisplayName("四轮同一个旧 sessionId: 打断+查询 → 「继续」恢复 → 「1827」补齐 → 显式意图 (产量 0 不丢)")
@@ -180,18 +188,40 @@ class OrdinaryEntryTaskStateContractTest {
     }
 
     @Test
-    @DisplayName("S1 (只有「同轮不恢复」这一道挡): 任务正问着时说「继续完成工序」→ 只挂起, 这一轮不恢复")
-    void aValidResumeSentenceSaidWhileTheTaskIsOpenOnlySuspendsInThatTurn() {
-        IntentExecuteResponse response = execute("继续完成工序");
+    @DisplayName("S1 (只有「同轮不恢复」这一道挡): B 正问着、A 挂着时说「继续完成工序」(A 的名字) → B 挂起, 这一轮不恢复 A")
+    void aValidResumeOfAnotherTaskSaidWhileOneIsOpenOnlySuspendsInThatTurn() {
+        execute("先看下库存，回头再报工");                                  // A 挂起
+        String taskB = startCollection("WORK_PROCESS_TASK_START", "开始工序");  // B 正问着
+
+        IntentExecuteResponse response = execute("继续完成工序", taskB);
 
         assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
-        assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
+        assertThat(sessions.get(taskB).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
+        assertThat(sessions.get(sessionId).getStatus()).as("A 这一轮没被恢复").isEqualTo(SessionStatus.SUSPENDED);
         verify(aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
                 eq(ROLE), any(), any(), any(), anyList(), anyMap());
 
-        // 下一轮再说同一句 (这时没有正在问的任务) → 恢复
-        assertThat(execute("继续完成工序").getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        // 下一轮再说同一句 (这时没有正在问的任务) → 恢复 A
+        IntentExecuteResponse next = execute("继续完成工序", taskB);
+        assertThat(next.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(next.getSessionId()).isEqualTo(sessionId);
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
+    }
+
+    @Test
+    @DisplayName("NIT3: 任务正问着时说「继续完成工序」(它自己的名字) → 只重问这一项, 不挂起、不另起一份同意图的收集")
+    void continuingTheOpenTaskItselfRepeatsTheQuestion() {
+        IntentExecuteResponse response = execute("继续完成工序");
+
+        assertThat(response.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getSessionId()).isEqualTo(sessionId);
+        assertThat(response.getMessage()).contains("工序任务ID");
+        assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
+        assertThat(sessions).as("没有另起一份收集").hasSize(1);
+        verify(aiIntentService, never()).recognizeIntentWithConfidence(eq("继续完成工序"), anyString(), anyInt(),
+                any(), any(), any(), any(), any(), anyList(), anyMap());
+        verify(aiIntentService, never()).recognizeIntentWithConfidence(eq("继续完成工序"), anyString(), anyInt(),
+                any(), any(), any(), any(), any());
     }
 
     @Test
@@ -278,9 +308,13 @@ class OrdinaryEntryTaskStateContractTest {
     }
 
     private IntentExecuteResponse execute(String input) {
+        return execute(input, sessionId);
+    }
+
+    private IntentExecuteResponse execute(String input, String sid) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
-            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sid)
                     .build(), USER, ROLE);
         }
     }

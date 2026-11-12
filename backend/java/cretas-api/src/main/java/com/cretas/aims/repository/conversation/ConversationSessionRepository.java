@@ -70,7 +70,8 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
     @Query("UPDATE ConversationSession s SET " +
            "s.status = 'TIMEOUT', " +
            "s.completedAt = :now, " +
-           "s.updatedAt = :now " +
+           "s.updatedAt = :now, " +
+           "s.version = s.version + 1 " +
            "WHERE s.status = 'SUSPENDED' " +
            "AND s.lastActiveAt < :expireTime")
     int expireSuspendedSessions(
@@ -148,7 +149,8 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
     @Query("UPDATE ConversationSession s SET " +
            "s.status = 'TIMEOUT', " +
            "s.completedAt = :now, " +
-           "s.updatedAt = :now " +
+           "s.updatedAt = :now, " +
+           "s.version = s.version + 1 " +
            "WHERE s.status = 'ACTIVE' " +
            "AND s.lastActiveAt < :expireTime")
     int expireInactiveSessions(
@@ -163,7 +165,8 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
     @Query("UPDATE ConversationSession s SET " +
            "s.status = 'CANCELLED', " +
            "s.completedAt = :now, " +
-           "s.updatedAt = :now " +
+           "s.updatedAt = :now, " +
+           "s.version = s.version + 1 " +
            "WHERE s.factoryId = :factoryId " +
            "AND s.userId = :userId " +
            "AND s.status = 'ACTIVE'")
