@@ -105,6 +105,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             if (emptyFiltered != null) {
                 return emptyFiltered;
             }
+            // 口径规则 8: 名字命中多个 (或 0 个) 时列出全部并标区分字段, 不走各意图模板 (模板会把列表吞成「查询成功」)
+            String sameName = com.cretas.aims.ai.tool.SameNameMatches.reply(resultData);
+            if (sameName != null) {
+                return sameName;
+            }
             // 用户说了时间, 这个工具却不能按时间筛: 回复开头说出来, 再给不限时间的结果 (⛔ 不静默当成按时间查过)
             String timeNotice = com.cretas.aims.ai.tool.TimeRangeFilter.notAppliedNotice(resultData);
             if (timeNotice != null) {

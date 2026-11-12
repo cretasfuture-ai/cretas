@@ -34,6 +34,9 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private com.cretas.aims.ai.tool.ToolRbacGuard rbacGuard;
 
+    @Autowired
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     @Override
     public String getToolName() {
         return "attendance_history";
@@ -57,6 +60,7 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
         userId.put("type", "string");
         userId.put("description", "用户ID，不传则查询当前登录用户");
         properties.put("userId", userId);
+        AttendanceSubject.addNameParameter(properties);
 
         // startDate: 开始日期（可选）
         Map<String, Object> startDate = new HashMap<>();
@@ -102,9 +106,6 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
-        // The App binds the subject to the logged-in user; another employee only for hr readers (AttendanceSubject).
-        Long userId = AttendanceSubject.resolve(getString(params, "userId"), context, rbacGuard);
-
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         LocalDate startDate = (startDateStr != null && !startDateStr.isEmpty())
@@ -115,6 +116,20 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
         int page = getInteger(params, "page", 1);
         int size = getInteger(params, "size", 10);
         PageRequest pageRequest = PageRequest.of(page, size);
+
+        // 口径规则 8: 没指定别人的 userId 而给了姓名 → 同名的都列出来 (权限 + 工厂范围见 AttendanceSubject.runByName)
+        String requestedId = getString(params, "userId");
+        if (AttendanceSubject.nameMayDecide(requestedId, context)) {
+            Map<String, Object> byName = AttendanceSubject.runByName(getString(params, AttendanceSubject.NAME_PARAM),
+                    factoryId, context, rbacGuard, userRepository,
+                    id -> timeClockService.getClockHistory(factoryId, id, startDate, endDate, pageRequest),
+                    data -> "这段时间共 " + (data instanceof PageResponse<?> r ? r.getTotalElements() : 0) + " 条打卡记录");
+            if (byName != null) {
+                return byName;
+            }
+        }
+        // The App binds the subject to the logged-in user; another employee only for hr readers (AttendanceSubject).
+        Long userId = AttendanceSubject.resolve(getString(params, "userId"), context, rbacGuard);
 
         try {
             PageResponse<TimeClockRecord> response = timeClockService.getClockHistory(
