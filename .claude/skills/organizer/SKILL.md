@@ -56,14 +56,14 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   2. `start_session` 开新 organizer（Opus、medium，用 `title` 起名「Organizer｜<批次>｜第 N+1 任｜<MM-DD>」），开完 `get_session` 核对模型。
      - 如果只开出卡片（被别的会话消息叫醒的回合里会这样）：立刻告诉 Steve「新 organizer 是卡片 <task_id>，请点开；点开前本会话继续守着 <在飞 PR>」。能选时机就在 Steve 自己发消息的那一轮收口，那一轮能直接开。
   3. 在新 organizer 发来「已接手」之前：**不 detach、不停 CI 监视、不停手**。不要替新 organizer 给执行线转述它的 id。
-  4. 收到新 organizer 的接手回执后，**用自己的完整上下文逐项核对**（不只是对照交接文件——漏写进文件的事只有你记得），回复它：「完整」，或列出漏掉的项。然后对自己名下在飞执行线逐个 `detach_session`（被拒的写明原因），停掉自己的监视，改名「[已交班→第 N+1 任] <原名>」，停手。
+  4. 收到新 organizer 的接手回执后，**用自己的完整上下文逐项核对**（不只是对照交接文件——漏写进文件的事只有你记得），回复它：「完整」，或列出漏掉的项。然后对自己名下在飞执行线逐个 `detach_session`（被拒的写明原因），**连新 organizer 本身也 detach**（用 `start_session` 直接开出的新 organizer 挂在你名下，你被归档时空闲的它会被连带归档；卡片开出的不挂靠，不受影响），停掉自己的监视，改名「[已交班→第 N+1 任] <原名>」，最后发一句「已 detach、已停手」给新 organizer，停手。
 
   **新 organizer（接手方）**
   1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）。
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
   3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，之后完成/阻塞/PR 号直接回复这条消息的发件人」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
-  5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：在飞执行线必须已经由它 detach，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。
+  5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。
   6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
   - **会话命名**：organizer「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后的老 organizer「[已交班→第 N+1 任] <原名>」；执行会话「<批次>·<线名>：<做什么>」。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。
