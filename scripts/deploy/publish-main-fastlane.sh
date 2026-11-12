@@ -15,8 +15,12 @@ Usage: publish-main-fastlane.sh --base-sha <sha> --confirm YES-DIRECT-MAIN
        [--remote origin] [--task-id <ID>]
        [--allow-high-risk YES-HIGH-RISK-REVIEWED] [--dry-run]
 
-Fast-forward a reviewed codex/* branch directly to main without a PR. The
-command never force-pushes. Production deployment remains a separate step.
+Publish a reviewed codex/* branch to main. Since 2026-11-13 main requires status
+checks, so the default mode pushes the branch, opens (or reuses) a PR, waits for
+every check to finish with no failure, then merges it with --match-head-commit.
+FASTLANE_PUBLISH_MODE=direct keeps the old fast-forward push (local fixtures /
+offline main only). The command never force-pushes. Production deployment
+remains a separate step.
 Docs-only batches (docs/, .claude/, *.md; not touching docs/dispatch/) skip
 the ACTIVE ledger gate; high-risk path gating always applies.
 
@@ -182,19 +186,89 @@ preflight="$ROOT_DIR/scripts/deploy/release-preflight.sh"
 [[ -x "$preflight" || -f "$preflight" ]] || fail "release preflight is missing"
 bash "$preflight" --allow-non-main --skip-fetch
 
-echo "FASTLANE_READY branch=$branch base=$BASE_SHA head=$head_sha"
+# 发布方式 (2026-11-13 Steve 拍板: fastlane 改走 PR):
+#   pr     (默认) main 设了必需检查 (之后还会开合并队列), GitHub 拒收直推 main。
+#          推分支 -> 开/复用 PR -> 等全部检查结束且无红 -> gh pr merge --match-head-commit -> 等 MERGED。
+#          文档类 PR 上大部分闸会被 changes 作业判为跳过, 通常几分钟就结束。
+#   direct 旧行为 (直推 main), 只给本地夹具测试和 GitHub 不可用时的离线 main 用; 对 GitHub 上的 main 会被规则拒收。
+MODE="${FASTLANE_PUBLISH_MODE:-pr}"
+[[ "$MODE" == pr || "$MODE" == direct ]] || fail "FASTLANE_PUBLISH_MODE must be pr or direct (got $MODE)"
+
+echo "FASTLANE_READY branch=$branch base=$BASE_SHA head=$head_sha mode=$MODE"
 if [[ "$DRY_RUN" == "1" ]]; then
-    echo "FASTLANE_DRY_RUN: git push $REMOTE HEAD:refs/heads/main"
+    if [[ "$MODE" == direct ]]; then
+        echo "FASTLANE_DRY_RUN: git push $REMOTE HEAD:refs/heads/main"
+    else
+        echo "FASTLANE_DRY_RUN: git push $REMOTE HEAD:refs/heads/$branch; PR -> wait checks -> merge"
+    fi
     exit 0
 fi
 
-# Deliberately omit --force/--force-with-lease. A concurrent main advance must
-# make this push fail instead of rewriting shared history.
-git push "$REMOTE" HEAD:refs/heads/main
-git fetch "$REMOTE" main --quiet
-published_main=$(git rev-parse "$REMOTE/main")
-[[ "$published_main" == "$head_sha" ]] \
-    || fail "post-push origin/main mismatch: expected $head_sha, found $published_main"
+if [[ "$MODE" == direct ]]; then
+    # Deliberately omit --force/--force-with-lease. A concurrent main advance must
+    # make this push fail instead of rewriting shared history.
+    git push "$REMOTE" HEAD:refs/heads/main
+    git fetch "$REMOTE" main --quiet
+    published_main=$(git rev-parse "$REMOTE/main")
+    [[ "$published_main" == "$head_sha" ]] \
+        || fail "post-push origin/main mismatch: expected $head_sha, found $published_main"
 
-bash "$preflight" --skip-fetch
-echo "FASTLANE_PUBLISHED main=$published_main"
+    bash "$preflight" --skip-fetch
+    echo "FASTLANE_PUBLISHED main=$published_main"
+    exit 0
+fi
+
+command -v gh >/dev/null 2>&1 || fail "gh CLI is required: main requires status checks, so publishing goes through a PR"
+POLL="${FASTLANE_POLL_SECONDS:-20}"
+SETTLE="${FASTLANE_SETTLE_SECONDS:-45}"
+CHECK_TIMEOUT="${FASTLANE_CHECK_TIMEOUT:-2400}"
+
+# 同样不带 --force: 远端同名分支历史分叉时让它失败, 不改写别人的东西。
+git push --quiet "$REMOTE" "HEAD:refs/heads/$branch" \
+    || fail "push of $branch failed (remote branch diverged?)"
+
+pr=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number // empty')
+if [[ -z "$pr" ]]; then
+    title=$(git log -1 --format=%s "$head_sha")
+    body="fastlane 发布 (scripts/deploy/publish-main-fastlane.sh): base=$BASE_SHA head=$head_sha。等全部检查结束且无红后由脚本合并。"
+    pr_url=$(gh pr create --base main --head "$branch" --title "$title" --body "$body") \
+        || fail "gh pr create failed"
+    pr="${pr_url##*/}"
+fi
+[[ "$pr" =~ ^[0-9]+$ ]] || fail "could not create or find the PR for $branch (got '$pr')"
+echo "FASTLANE_PR=$pr"
+
+# 刚推完时检查还没全部登记, 先等一会儿再判「全部结束」, 否则会把半张清单当成全绿。
+sleep "$SETTLE"
+deadline=$(( $(date +%s) + CHECK_TIMEOUT ))
+while :; do
+    status_line=$(gh pr view "$pr" --json headRefOid,statusCheckRollup \
+        --jq '"\(.headRefOid) \([.statusCheckRollup[]|select(.status!="COMPLETED")]|length) \([.statusCheckRollup[]|select(.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .conclusion=="TIMED_OUT" or .conclusion=="ACTION_REQUIRED" or .conclusion=="STARTUP_FAILURE")]|length) \(.statusCheckRollup|length)"') \
+        || fail "could not read check status of PR #$pr"
+    read -r pr_head pending bad total <<<"$status_line"
+    [[ "$pr_head" == "$head_sha" ]] || fail "PR #$pr head moved to $pr_head (expected $head_sha); not merging"
+    [[ "$bad" == 0 ]] || fail "PR #$pr has $bad failing/cancelled check(s); not merging"
+    if [[ "$total" -gt 0 && "$pending" == 0 ]]; then
+        break
+    fi
+    [[ $(date +%s) -lt $deadline ]] || fail "PR #$pr checks did not finish within ${CHECK_TIMEOUT}s (pending=$pending total=$total)"
+    sleep "$POLL"
+done
+echo "FASTLANE_CHECKS_GREEN pr=$pr total=$total"
+
+gh pr merge "$pr" --squash --match-head-commit "$head_sha" || fail "gh pr merge failed for PR #$pr"
+
+# 开了合并队列时 merge 只是入队, 要等 GitHub 报 MERGED。
+deadline=$(( $(date +%s) + CHECK_TIMEOUT ))
+while :; do
+    state=$(gh pr view "$pr" --json state --jq .state) || fail "could not read state of PR #$pr"
+    [[ "$state" == MERGED ]] && break
+    [[ "$state" == OPEN ]] || fail "PR #$pr ended as $state"
+    [[ $(date +%s) -lt $deadline ]] || fail "PR #$pr not merged within ${CHECK_TIMEOUT}s (still queued?)"
+    sleep "$POLL"
+done
+merge_sha=$(gh pr view "$pr" --json mergeCommit --jq .mergeCommit.oid) || fail "could not read merge commit of PR #$pr"
+git fetch "$REMOTE" main --quiet
+git merge-base --is-ancestor "$merge_sha" "$REMOTE/main" \
+    || fail "merge commit $merge_sha of PR #$pr is not on $REMOTE/main"
+echo "FASTLANE_PUBLISHED main=$merge_sha pr=$pr"
