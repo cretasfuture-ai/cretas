@@ -351,6 +351,48 @@ describe('AIChatScreen 写操作确认卡', () => {
     expect(mockConfirmIntent).toHaveBeenCalledTimes(1);
   });
 
+  it('结果不明 (OUTCOME_UNKNOWN): 标题「结果待核对」不说「没有执行成功」, 不给重新生成 (防双写)', async () => {
+    mockConfirmIntent.mockResolvedValue({
+      status: 'OUTCOME_UNKNOWN',
+      message: '操作结果暂时无法确认（可能已经写入）。请先在业务页面核对这条记录，确认没有写入再重新发起，勿直接重复提交。',
+    });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-notice')).toBeTruthy());
+    expect(screen.getByText('「仓管快速入库」结果待核对')).toBeTruthy();
+    expect(screen.queryByText('「仓管快速入库」没有执行成功')).toBeNull();
+    expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('可能已经写入');
+    expect(screen.queryByTestId('ai-confirm-regenerate')).toBeNull();
+    expect(screen.queryByTestId('ai-confirm-execute')).toBeNull();
+  });
+
+  it('预览之后被改过 (PREVIEW_STALE): 说清这次没执行 + 哪个字段变了, 给「重新生成预览」', async () => {
+    mockConfirmIntent.mockResolvedValue({
+      status: 'PREVIEW_STALE',
+      message: '预览之后「已收数量」已被改动（与预览时的改前值不一致），本次未执行。请重新预览后再确认。',
+    });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-regenerate')).toBeTruthy());
+    expect(screen.getByText('「仓管快速入库」情况有变化，这次没有执行')).toBeTruthy();
+    expect(flattenText(screen.getByTestId('ai-confirm-notice'))).toContain('「已收数量」');
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-regenerate')); });
+    await waitFor(() => expect(mockPreviewIntent).toHaveBeenCalledTimes(2));
+    expect(mockConfirmIntent).toHaveBeenCalledTimes(1);
+  });
+
+  it('同一张确认已执行过 (ALREADY_EXECUTED): 收起成「已执行（没有重复执行）」, 不是失败', async () => {
+    mockConfirmIntent.mockResolvedValue({ status: 'ALREADY_EXECUTED', message: '这次确认已经执行过，没有重复执行。' });
+    const screen = await openReadyCard();
+    await act(async () => { fireEvent.press(screen.getByTestId('ai-confirm-execute')); });
+
+    await waitFor(() => expect(screen.getByTestId('ai-confirm-collapsed')).toBeTruthy());
+    expect(flattenText(screen.getByTestId('ai-confirm-collapsed'))).toContain('已执行（没有重复执行）');
+    expect(screen.queryByTestId('ai-confirm-notice')).toBeNull();
+  });
+
   it('确认时网络断开: 明确说「无法确认是否已执行」, 不给一键重试 (防双写)', async () => {
     mockConfirmIntent.mockRejectedValue(Object.assign(new Error('Network Error'), { request: {} }));
     const screen = await openReadyCard();

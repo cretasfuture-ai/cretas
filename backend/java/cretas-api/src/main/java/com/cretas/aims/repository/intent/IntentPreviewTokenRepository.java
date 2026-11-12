@@ -66,17 +66,38 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
                           @Param("pendingStatus") TokenStatus pendingStatus,
                           @Param("executingStatus") TokenStatus executingStatus);
 
-    /** Only the current lease owner can resolve an executing token. */
+    /**
+     * Only the current lease owner can resolve its token. Besides EXECUTING, the owner may still
+     * settle a lease that reconciliation already marked OUTCOME_UNKNOWN (the owner was merely slow):
+     * the owner knows the real outcome, reconciliation only knew that nobody reported one.
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :resolvedStatus, " +
            "t.resolvedAt = :resolvedAt, t.resolutionMessage = :message " +
-           "WHERE t.token = :token AND t.claimId = :claimId AND t.status = :executingStatus")
+           "WHERE t.token = :token AND t.claimId = :claimId " +
+           "AND (t.status = :executingStatus OR t.status = :unknownStatus)")
     int resolveClaim(@Param("token") String token,
                      @Param("claimId") String claimId,
                      @Param("executingStatus") TokenStatus executingStatus,
+                     @Param("unknownStatus") TokenStatus unknownStatus,
                      @Param("resolvedStatus") TokenStatus resolvedStatus,
                      @Param("resolvedAt") LocalDateTime resolvedAt,
                      @Param("message") String message);
+
+    /**
+     * Reconciliation of leases nobody resolved (process died / hung mid-execution): EXECUTING rows
+     * claimed before the cutoff become OUTCOME_UNKNOWN. They are never returned to PENDING, so a
+     * reconciled token can never be claimed and executed again.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = :unknownStatus, " +
+           "t.resolvedAt = :now, t.resolutionMessage = :message " +
+           "WHERE t.status = :executingStatus AND t.claimedAt < :claimedBefore")
+    int reconcileStaleExecuting(@Param("claimedBefore") LocalDateTime claimedBefore,
+                                @Param("now") LocalDateTime now,
+                                @Param("message") String message,
+                                @Param("executingStatus") TokenStatus executingStatus,
+                                @Param("unknownStatus") TokenStatus unknownStatus);
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :expiredStatus, " +

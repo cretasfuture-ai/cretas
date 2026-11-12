@@ -17,6 +17,7 @@ import {
   isPreviewExpired,
   previewNote,
   previewRows,
+  confirmCardTitle,
   quoteIntent,
   remainingSeconds,
   EXPIRED_NOTICE,
@@ -108,7 +109,7 @@ export function AIWriteConfirmCard({ state, onConfirm, onCancel, onRegenerate }:
   return (
     <View testID="ai-confirm-card" style={[styles.card, destructive ? tone.dangerCard : tone.card]}>
       <Text variant="titleMedium" style={tone.onSurface}>
-        {state.phase === 'blocked' ? `${intentLabel}暂时不能执行` : state.phase === 'failed' ? `${intentLabel}没有执行成功` : `${intentLabel}请确认`}
+        {confirmCardTitle(state)}
       </Text>
 
       {showActions && state.action?.description ? (

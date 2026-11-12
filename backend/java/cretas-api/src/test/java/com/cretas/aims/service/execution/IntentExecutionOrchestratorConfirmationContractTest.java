@@ -84,6 +84,93 @@ class IntentExecutionOrchestratorConfirmationContractTest {
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
         FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
+        when(dispatchService.recheckPreviewState(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(ToolDispatchService.ConfirmStateCheck.ok());
+    }
+
+    // ==================== 写入确认三洞 (Fable 审阅 §8.2/§8.3) ====================
+
+    @Test
+    void staleStateRecheckRefusesBeforeAnyBusinessDispatch() {
+        ToolExecutor tool = configuredTool();
+        when(dispatchService.recheckPreviewState(eq(tool), any(), any(), any(), eq(FACTORY), eq(USER), eq(ROLE)))
+                .thenReturn(ToolDispatchService.ConfirmStateCheck.reject(
+                        ToolDispatchService.ConfirmStateCheck.STATE_CHANGED, java.util.List.of("数量"),
+                        "预览之后「数量」已被改动"));
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo(IntentExecutionOrchestrator.PREVIEW_STALE);
+        verify(dispatchService, never()).executeWithTool(any(), any(), any(), any(), any(), any(), any());
+        verify(tokenService).resolveClaim(eq(TOKEN), eq(CLAIM), eq(false), any());
+        verify(tokenService, never()).resolveClaimOutcomeUnknown(any(), any(), any());
+    }
+
+    @Test
+    void notComparableToolIsSentToTheBusinessPageNotBackToTheSamePreview() {
+        ToolExecutor tool = configuredTool();
+        when(dispatchService.recheckPreviewState(eq(tool), any(), any(), any(), eq(FACTORY), eq(USER), eq(ROLE)))
+                .thenReturn(ToolDispatchService.ConfirmStateCheck.reject(
+                        ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE, java.util.List.of(),
+                        ToolDispatchService.NOT_COMPARABLE_MESSAGE));
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo(IntentExecutionOrchestrator.CONFIRM_NOT_SUPPORTED);
+        assertThat(((Map<?, ?>) response.getResultData()).get("needsRepreview")).isEqualTo(false);
+        verify(dispatchService, never()).executeWithTool(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void toolOutcomeUnknownIsRecordedAsUnknownNeverAsFailed() {
+        ToolExecutor tool = configuredTool();
+        when(dispatchService.executeWithTool(eq(tool), eq(FACTORY), any(), any(), eq(USER), eq(ROLE), eq(null)))
+                .thenReturn(IntentExecuteResponse.builder().status("OUTCOME_UNKNOWN").message("timeout").build());
+        when(tokenService.resolveClaimOutcomeUnknown(TOKEN, CLAIM, "timeout")).thenReturn(true);
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo("OUTCOME_UNKNOWN");
+        assertThat(response.getMessage()).contains("核对");
+        verify(tokenService).resolveClaimOutcomeUnknown(TOKEN, CLAIM, "timeout");
+        verify(tokenService, never()).resolveClaim(any(), any(), org.mockito.ArgumentMatchers.anyBoolean(), any());
+    }
+
+    @Test
+    void exceptionAfterToolInvocationIsUnknownButBeforeInvocationIsFailed() {
+        ToolExecutor tool = configuredTool();
+        when(dispatchService.executeWithTool(eq(tool), eq(FACTORY), any(), any(), eq(USER), eq(ROLE), eq(null)))
+                .thenThrow(new IllegalStateException("connection reset"));
+
+        IntentExecuteResponse unknown = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(unknown.getStatus()).isEqualTo("OUTCOME_UNKNOWN");
+        verify(tokenService).resolveClaimOutcomeUnknown(eq(TOKEN), eq(CLAIM), any());
+        verify(tokenService, never()).resolveClaim(eq(TOKEN), eq(CLAIM), eq(false), any());
+
+        // 对照: 工具还没被调用就出错 (确认前核对抛异常) —— 什么都没写, 记失败
+        when(dispatchService.recheckPreviewState(any(), any(), any(), any(), any(), any(), any()))
+                .thenThrow(new IllegalStateException("recheck broke"));
+        IntentExecuteResponse failed = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+        assertThat(failed.getStatus()).isEqualTo("FAILED");
+        verify(tokenService).resolveClaim(eq(TOKEN), eq(CLAIM), eq(false), any());
+    }
+
+    @Test
+    void replayOfAnAlreadyHandledTokenNeverDispatchesAndIsNeverReportedAsPlainFailure() {
+        for (TokenStatus existing : new TokenStatus[]{TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN,
+                TokenStatus.CONFIRMED}) {
+            when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST))
+                    .thenReturn(ClaimResult.alreadyHandled("令牌已被处理: " + existing, existing));
+
+            IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+            assertThat(response.getStatus()).as(existing.name())
+                    .isEqualTo(existing == TokenStatus.CONFIRMED
+                            ? IntentExecutionOrchestrator.ALREADY_EXECUTED : "OUTCOME_UNKNOWN");
+            assertThat(response.getMessage()).contains("没有重复执行");
+        }
+        verifyNoInteractions(dispatchService, toolRegistry, aiIntentService);
     }
 
     @Test
