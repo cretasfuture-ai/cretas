@@ -1,7 +1,7 @@
 /**
  * 后端拦下来、要操作员说一个原因才能继续的几种情况 (纪律排查 A12 / A10), 前端只负责在被 409 拦下后收原因再重提。
  * ⛔ 不在前端预判要不要原因 —— 开不开缺料拦截、超没超收容差都是后端按本厂设置算的。
- * 后端用 409 + errorCode; 这里按形状取, 不依赖 axios 类型 (同 reworkRatio.ts / settlementRequired.ts)。
+ * 后端用 409 + errorCode; 这里按形状取, 不依赖 axios 类型 (同 reworkRatio.ts)。
  */
 
 export const REASON_OTHER = '其他';

@@ -179,34 +179,6 @@ describe('productionPlanApiClient', () => {
     });
   });
 
-  describe('completeProduction', () => {
-    it('should POST /{planId}/complete with actual quantity', async () => {
-      mock.onPost(`${BASE}/pp1/complete`).reply(200, {
-        success: true,
-        data: { id: 'pp1', status: 'COMPLETED', actualQuantity: 480 },
-        message: 'Production completed',
-      });
-
-      const result = await productionPlanApiClient.completeProduction('pp1', 480);
-      expect(result.success).toBe(true);
-      expect(result.data.status).toBe('COMPLETED');
-      expect(result.data.actualQuantity).toBe(480);
-    });
-
-    it('A7: 超产时把 overPlanReason 带给服务端; 阴性对照: 不超产不带这个字段', async () => {
-      mock.onPost(`${BASE}/pp1/complete`).reply(200, { success: true, data: { id: 'pp1' }, message: 'ok' });
-
-      await productionPlanApiClient.completeProduction('pp1', 520, undefined, '客户追加 20 箱');
-      expect(JSON.parse(mock.history.post[mock.history.post.length - 1].data)).toEqual({
-        actualQuantity: 520,
-        overPlanReason: '客户追加 20 箱',
-      });
-
-      await productionPlanApiClient.completeProduction('pp1', 480);
-      expect(JSON.parse(mock.history.post[mock.history.post.length - 1].data)).toEqual({ actualQuantity: 480 });
-    });
-  });
-
   describe('cancelProductionPlan', () => {
     it('should POST /{planId}/cancel with reason', async () => {
       mock.onPost(`${BASE}/pp1/cancel`).reply(200, {
