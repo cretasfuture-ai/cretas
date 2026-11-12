@@ -51,3 +51,72 @@ export function summarizePlans(plans: SummarizablePlan[]): SummaryStat[] {
   });
   return stats;
 }
+
+// ==================== 分页加载 (2026-11-12: 原来只取第一页 100 条) ====================
+
+export const PLAN_PAGE_SIZE = 100;
+
+export interface FilterablePlan {
+  id: string;
+  status?: string;
+  createdAt?: string;
+  planNumber?: string;
+  productTypeName?: string;
+  planName?: string;
+}
+
+const STATUS_GROUPS: Record<string, string[]> = {
+  PLANNED: ['PLANNED', 'PENDING'],
+  IN_PROGRESS: ['IN_PROGRESS'],
+  COMPLETED: ['COMPLETED'],
+  CANCELLED: ['CANCELLED'],
+};
+
+/**
+ * 本屏的筛选 (原样搬自 PlanListScreen.loadPlans, 只是改成对「已加载的全部页」做):
+ * 去掉一天前的草稿 → 页签 (待执行 = PLANNED+PENDING) → 搜索 (计划名 / 产品名 / 计划号) → 草稿置顶, 其余按创建时间倒序。
+ */
+export function filterPlans<T extends FilterablePlan>(items: T[], tab: string, search: string, nowMs: number): T[] {
+  const oneDayAgo = new Date(nowMs - 24 * 60 * 60 * 1000).toISOString();
+  let out = items.filter((i) => (i.status || '').toUpperCase() !== 'DRAFT' || (i.createdAt || '') >= oneDayAgo);
+  const targets = tab !== 'all' ? STATUS_GROUPS[tab] : undefined;
+  if (targets) out = out.filter((i) => targets.includes((i.status || '').toUpperCase()));
+  const q = search.trim().toLowerCase();
+  if (q) {
+    out = out.filter((i) =>
+      (i.planName || '').toLowerCase().includes(q)
+      || (i.productTypeName || '').toLowerCase().includes(q)
+      || (i.planNumber || '').toLowerCase().includes(q));
+  }
+  return [...out].sort((a, b) => {
+    const ad = (a.status || '').toUpperCase() === 'DRAFT' ? 0 : 1;
+    const bd = (b.status || '').toUpperCase() === 'DRAFT' ? 0 : 1;
+    if (ad !== bd) return ad - bd;
+    return (b.createdAt || '').localeCompare(a.createdAt || '');
+  });
+}
+
+/** 第 1 页替换, 之后的页追加; 翻页期间有新计划插到最前面时, 同一条可能在两页都出现 → 按 id 去重。 */
+export function mergePlanPage<T extends { id: string }>(existing: T[], incoming: T[], page: number): T[] {
+  if (page <= 1) return incoming;
+  const seen = new Set(existing.map((p) => p.id));
+  return [...existing, ...incoming.filter((p) => !seen.has(p.id))];
+}
+
+/**
+ * 还有没加载的计划吗。serverTotal 是后端全部计划数 (未筛选); 读不到 total 时按「这一页满了就可能还有」判断。
+ */
+export function hasMorePlans(loadedCount: number, serverTotal: number | null, lastPageSize: number): boolean {
+  // 空页 = 到底了 (去重后数量可能永远差几条, 不能只看 total, 否则会一直翻空页)
+  if (lastPageSize === 0) return false;
+  if (serverTotal != null) return loadedCount < serverTotal;
+  return lastPageSize >= PLAN_PAGE_SIZE;
+}
+
+/** 没加载完时, 汇总与计数要写明只算了已加载的 (null = 已全部加载, 不用提示)。 */
+export function coverageNote(loadedCount: number, serverTotal: number | null, more: boolean): string | null {
+  if (!more) return null;
+  return serverTotal != null
+    ? `已加载 ${loadedCount} / 共 ${serverTotal} 条计划，汇总只算已加载的`
+    : `已加载 ${loadedCount} 条计划，后面还有，汇总只算已加载的`;
+}

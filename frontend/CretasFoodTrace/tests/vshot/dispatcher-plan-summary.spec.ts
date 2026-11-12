@@ -71,3 +71,41 @@ test('搜索「猪蹄」后底部汇总只算这两条', async ({ page }) => {
   await page.screenshot({ path: `${SHOTS}/02-search-pork.png` });
   expect(writes.filter((w) => !w.includes('/auth/'))).toEqual([]);
 });
+
+test('150 条计划: 先显示「已加载 100 / 共 150」, 加载剩余后汇总算全部', async ({ page }) => {
+  test.setTimeout(10 * 60_000);
+  const many = Array.from({ length: 150 }, (_, i) => ({
+    id: `QA-M${i + 1}`, planNumber: `QA-MANY-${String(i + 1).padStart(3, '0')}`, productTypeName: `QA-分页样本-${i + 1}`,
+    plannedQuantity: 1, actualQuantity: 0, plannedUnit: 'kg', status: 'PENDING', plannedDate: today,
+    createdAt: new Date(Date.now() - i * 60000).toISOString(),
+  }));
+  const pagesAsked: string[] = [];
+  await stub(page);
+  await page.route(/\/production-plans(\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url());
+    const p = Number(url.searchParams.get('page') ?? '1');
+    const size = Number(url.searchParams.get('size') ?? '20');
+    pagesAsked.push(`${p}/${size}`);
+    await route.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify(ok({ content: many.slice((p - 1) * size, p * size), totalElements: many.length })),
+    });
+  });
+  await page.goto(APP, { waitUntil: 'domcontentloaded' });
+  await waitForApp(page);
+  await login(page, 'qa_dispatcher', 'stub');
+  await navRefReady(page);
+  await page.evaluate(() => (globalThis as unknown as { __CRETAS_NAV__: { navigate: (n: string, p?: unknown) => void } })
+    .__CRETAS_NAV__.navigate('PlanTab', { screen: 'PlanList' }));
+  const coverage = page.getByTestId('plan-list-coverage');
+  await expect(coverage).toContainText('已加载 100 / 共 150 条计划', { timeout: 60_000 });
+  await expect(page.getByTestId('sticky-footer-summary')).toContainText('100');
+  await page.screenshot({ path: `${SHOTS}/03-150-plans-first-page.png` });
+
+  await page.getByTestId('plan-list-load-all').click();
+  await expect(coverage).toHaveCount(0);
+  await expect(page.getByTestId('sticky-footer-summary')).toContainText('150');
+  // 调度首页自己也读一次计划 (size=200), 只看列表页的请求 (size=100)
+  expect(pagesAsked.filter((x) => x.endsWith('/100'))).toEqual(['1/100', '2/100']);
+  await page.screenshot({ path: `${SHOTS}/04-150-plans-all-loaded.png` });
+});
