@@ -29,6 +29,7 @@ import {
   WarehouseDeliveryRecord,
 } from '../../../services/api/warehouseDeliveryApiClient';
 import { handleError } from '../../../utils/errorHandler';
+import { scopeHintOf } from '../../../utils/dataScopeNotice';
 import { displayUnit } from '../../../utils/packagingUnitConversion';
 import { formatDateTime } from '../../../utils/formatters';
 import { FrontlineAIEntry } from '../../../components/ai/FrontlineAIEntry';
@@ -130,6 +131,8 @@ export function WHDeliveryConfirmListScreen() {
   const [selectedStatus, setSelectedStatus] = useState<DeliveryStatusFilter>('all');
   const [query, setQuery] = useState('');
   const [loadError, setLoadError] = useState<ReturnType<typeof describeDeliveryListFailure> | null>(null);
+  // 工厂给本岗位配置的数据范围比「全工厂」窄时, 后端在成功响应里带说明 (actionHint)。
+  const [scopeHint, setScopeHint] = useState<string | null>(null);
 
   const PAGE_SIZE = 20;
 
@@ -194,6 +197,10 @@ export function WHDeliveryConfirmListScreen() {
       }
     }
 
+    const hintSource = [pendingResult, historyResult]
+      .map((result) => (result.status === 'fulfilled' ? scopeHintOf(result.value) : null))
+      .find((hint): hint is string => hint != null);
+    if (!append) setScopeHint(hintSource ?? null);
     if (failures.length === 0) {
       setLoadError(null);
     } else {
@@ -286,6 +293,13 @@ export function WHDeliveryConfirmListScreen() {
             2026-08-21 收敛: 原来是与下方发货单卡片同权重的整行按钮, 而它是旧流程、
             不是仓管的主操作 (主操作是点卡片确认发货) —— 降级成文本链接, 不占独立按钮位。
             ⛔ 不删这条路径: 部分历史单据仍要靠它查/登记。 */}
+        {scopeHint && (
+          <Surface style={styles.noticeCard} elevation={1} testID="wh-outbound-scope-notice">
+            <MaterialCommunityIcons name="account-lock-outline" size={20} color="#1976d2" />
+            <Text style={styles.noticeText}>{scopeHint}</Text>
+          </Surface>
+        )}
+
         <View style={styles.actionBar}>
           <TouchableRipple
             onPress={() => navigation.navigate('WHOutboundList')}

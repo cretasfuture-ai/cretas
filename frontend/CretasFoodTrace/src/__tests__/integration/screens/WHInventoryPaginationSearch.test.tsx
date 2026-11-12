@@ -710,4 +710,41 @@ describe('WHInventoryListScreen pagination and search contract', () => {
 
     await act(async () => { currentPage.resolve(page([], 1)); });
   });
+
+  // 2026-11-13 F006 真机: 仓库工人(数据范围「仅本人」)全厂统计被路由闸拒绝, 底栏写「可下拉重试」——
+  // 重试永远不会好。按语义码 DATA_SCOPE_UNSUPPORTED 改为说明原因和找谁调整; 其它失败仍提示重试。
+  function scopeRefusal(status: number, errorCode?: string) {
+    return Object.assign(new Error('当前数据范围不支持此快捷查询或批量操作，请使用主列表'), {
+      isAxiosError: true,
+      response: { status, data: { success: false, errorCode, actionHint: 'hint' } },
+    });
+  }
+
+  it('explains a data-scope refusal of factory-wide stats instead of offering a retry that cannot succeed', async () => {
+    setupStore(actor('F006', 1555, 'warehouse_worker'));
+    getBatches.mockResolvedValue(page([batch('mine', 'MINE-001', '本人入库批次')], 1));
+    getStatistics.mockRejectedValue(scopeRefusal(403, 'DATA_SCOPE_UNSUPPORTED'));
+    getSummary.mockRejectedValue(scopeRefusal(403, 'DATA_SCOPE_UNSUPPORTED'));
+
+    const view = render(<WHInventoryListScreen />);
+
+    await waitFor(() => expect(view.getByText('本人入库批次')).toBeTruthy());
+    await waitFor(() => expect(view.getByTestId('wh-inventory-scope-notice')).toBeTruthy());
+    expect(view.getByText(/角色权限 → 数据范围/)).toBeTruthy();
+    await waitFor(() => expect(view.getByTestId('sticky-footer-empty').props.children).toBe('全工厂合计不在你的数据范围内'));
+    expect(view.queryByText('统计暂不可用，可下拉重试')).toBeNull();
+  });
+
+  it('keeps the retry wording for an ordinary stats failure (negative control)', async () => {
+    setupStore(actor('F006', 1555, 'warehouse_worker'));
+    getBatches.mockResolvedValue(page([batch('mine', 'MINE-001', '本人入库批次')], 1));
+    getStatistics.mockRejectedValue(scopeRefusal(500));
+    getSummary.mockRejectedValue(scopeRefusal(403, 'SOMETHING_ELSE'));
+
+    const view = render(<WHInventoryListScreen />);
+
+    await waitFor(() => expect(view.getByText('本人入库批次')).toBeTruthy());
+    await waitFor(() => expect(view.getByTestId('sticky-footer-empty').props.children).toBe('统计暂不可用，可下拉重试'));
+    expect(view.queryByTestId('wh-inventory-scope-notice')).toBeNull();
+  });
 });

@@ -50,6 +50,7 @@ import {
   canonicalUnit,
 } from "../../../utils/packagingUnitConversion";
 import { handleError } from "../../../utils/errorHandler";
+import { INVENTORY_SCOPE_NOTICE, isDataScopeRefusal } from "../../../utils/dataScopeNotice";
 import { logger } from "../../../utils/logger";
 import { formatNumberWithCommas, formatDate } from "../../../utils/formatters";
 import {  } from "react-native";
@@ -267,6 +268,8 @@ function InventorySummaryFooter({
 
   const currentSummary = visible && !loading && !summaryError ? summary : null;
   const summaryUnavailable = visible && !loading && summaryError != null;
+  // 全厂合计被「数据范围」拒绝时重试永远不会好, 不提示下拉重试 (库存页顶部另有说明)。
+  const summaryOutOfScope = summaryUnavailable && isDataScopeRefusal(summaryError);
   const visibleSummary = useMemo(() => {
     if (!currentSummary) return null;
     const ownerCanViewPrice = canViewPrice(ownerActor);
@@ -291,7 +294,9 @@ function InventorySummaryFooter({
       )}
       loading={loading || (visible && summaryLoading && visibleSummary == null && !summaryError)}
       empty={summaryUnavailable || (!loading && visibleSummary == null && !summaryLoading)}
-      emptyText={summaryUnavailable ? '统计暂不可用，可下拉重试' : undefined}
+      emptyText={summaryOutOfScope
+        ? '全工厂合计不在你的数据范围内'
+        : summaryUnavailable ? '统计暂不可用，可下拉重试' : undefined}
       onAIAnalyze={aiAvailable && visibleSummary != null ? handleAIAnalyze : undefined}
     />
   );
@@ -425,6 +430,8 @@ export function WHInventoryListScreen() {
   const [statsOwner, setStatsOwner] = useState<typeof user>(user);
   const [statsOwnerTag, setStatsOwnerTag] = useState<string>(ownerTag);
   const [statsOwnerEpoch, setStatsOwnerEpoch] = useState(authEpoch);
+  /** 全厂统计被「数据范围不支持」拒绝 ⇒ 列表是按岗位数据范围过滤过的。 */
+  const [statsOutOfScope, setStatsOutOfScope] = useState(false);
   const [hierarchyOwner, setHierarchyOwner] = useState<typeof user>(user);
   const [hierarchyOwnerTag, setHierarchyOwnerTag] = useState<string>(ownerTag);
   const [hierarchyOwnerEpoch, setHierarchyOwnerEpoch] = useState(authEpoch);
@@ -435,6 +442,8 @@ export function WHInventoryListScreen() {
   const visibleInventoryStats = statsOwner === user && statsOwnerTag === ownerTag && statsOwnerEpoch === authEpoch
     ? inventoryStats
     : null;
+  const visibleStatsOutOfScope = statsOwner === user && statsOwnerTag === ownerTag && statsOwnerEpoch === authEpoch
+    && statsOutOfScope;
   const visibleHierarchyMap = hierarchyOwner === user && hierarchyOwnerTag === ownerTag && hierarchyOwnerEpoch === authEpoch
     ? hierarchyMap
     : {};
@@ -644,6 +653,7 @@ export function WHInventoryListScreen() {
       } else {
         setInventoryStats(null);
       }
+      setStatsOutOfScope(statsResult.status === 'rejected' && isDataScopeRefusal(statsResult.reason));
       setStatsOwner(requestActor);
       setStatsOwnerTag(requestOwnerTag);
       setStatsOwnerEpoch(requestAuthEpoch);
@@ -801,6 +811,12 @@ export function WHInventoryListScreen() {
         }
         showsVerticalScrollIndicator={false}
       >
+        {visibleStatsOutOfScope && (
+          <View style={styles.scopeNotice} testID="wh-inventory-scope-notice">
+            <MaterialCommunityIcons name="account-lock-outline" size={20} color="#1976d2" />
+            <Text style={styles.scopeNoticeText}>{INVENTORY_SCOPE_NOTICE}</Text>
+          </View>
+        )}
         {/* 快捷操作 */}
         <View style={styles.quickActions}>
           {quickActions.map((action) => (
@@ -1118,6 +1134,22 @@ export function WHInventoryListScreen() {
 }
 
 const styles = StyleSheet.create({
+  scopeNotice: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 8,
+    backgroundColor: "#e3f2fd",
+  },
+  scopeNoticeText: {
+    flex: 1,
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#0d47a1",
+  },
   aiEntryDock: { paddingHorizontal: 16, paddingVertical: 8 },
   container: {
     flex: 1,

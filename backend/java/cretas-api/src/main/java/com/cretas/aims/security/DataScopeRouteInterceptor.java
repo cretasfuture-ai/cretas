@@ -17,6 +17,10 @@ import java.util.*;
 public class DataScopeRouteInterceptor implements HandlerInterceptor {
     private final DataScopeResolver resolver;
     private final JdbcTemplate jdbc;
+    /** Lets clients explain a scope refusal instead of offering a retry that cannot succeed. */
+    public static final String DATA_SCOPE_UNSUPPORTED="DATA_SCOPE_UNSUPPORTED";
+    public static final String SCOPE_CONFIG_HINT="你的岗位数据范围不是「全工厂」，这里汇总的是全工厂数据，所以不能查看；"
+            + "需要的话请工厂总监在网页后台「角色权限 → 数据范围」调整本岗位。";
     public static final String RESOURCE_ATTRIBUTE=DataScopeRouteInterceptor.class.getName()+".resource";
     private record Resource(String root,String table,List<String> keys) {}
     private static final List<Resource> RESOURCES=List.of(
@@ -135,6 +139,10 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         if (request.getMethod().equals("GET") && path.equals("warehouse/receiving/tasks")
                 && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.warehouse.WarehouseReceivingController.class)
                 && rowScopeSupported((HandlerMethod) handler)) return true;
+        // The warehouse delivery queue filters by source-document owner in its repository query.
+        if (request.getMethod().equals("GET") && Set.of("warehouse/deliveries/pending","warehouse/deliveries/history").contains(path)
+                && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.warehouse.WarehouseDeliveryController.class)
+                && rowScopeSupported((HandlerMethod) handler)) return true;
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.
@@ -185,6 +193,7 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
             // Child creation checks the locked parent in the service before its first write.
             if (path.equals(resource.root()) && request.getMethod().equals("POST")) return true;
         }
-        throw new BusinessException(403,"当前数据范围不支持此快捷查询或批量操作，请使用主列表");
+        throw new BusinessException(403,"当前数据范围不支持此快捷查询或批量操作，请使用主列表")
+                .withCode(DATA_SCOPE_UNSUPPORTED).withHint(SCOPE_CONFIG_HINT);
     }
 }

@@ -497,6 +497,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
 
+    /** Factory row policy for the warehouse delivery queue (optional for test ctor). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.BusinessRowScope businessRowScope;
+
     /** T126 Phase 1: 成品库存调整日志 Repository (optional for test ctor). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.inventory.FinishedGoodsAdjustmentLogRepository finishedGoodsAdjustmentLogRepository;
@@ -3904,12 +3908,10 @@ public class SalesServiceImpl implements SalesService {
     @Override
     public PageResponse<SalesDeliveryRecord> getPendingWarehouseDeliveries(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
-                factoryId,
-                List.of(SalesDeliveryStatus.DRAFT,
+        List<SalesDeliveryStatus> statuses = List.of(SalesDeliveryStatus.DRAFT,
                         SalesDeliveryStatus.PENDING_WAREHOUSE_CONFIRM,
-                        SalesDeliveryStatus.PICKED),
-                pageRequest);
+                        SalesDeliveryStatus.PICKED);
+        Page<SalesDeliveryRecord> result = warehouseQueuePage(factoryId, statuses, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
 
@@ -3917,15 +3919,30 @@ public class SalesServiceImpl implements SalesService {
     @Transactional(readOnly = true)
     public PageResponse<SalesDeliveryRecord> getWarehouseDeliveryHistory(String factoryId, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<SalesDeliveryRecord> result = deliveryRecordRepository.findByFactoryIdAndStatusIn(
-                factoryId,
-                List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
+        List<SalesDeliveryStatus> statuses = List.of(SalesDeliveryStatus.PARTIALLY_SHIPPED,
                         SalesDeliveryStatus.SHIPPED,
                         SalesDeliveryStatus.DELIVERED,
                         SalesDeliveryStatus.CANCELLED,
-                        SalesDeliveryStatus.RETURNED),
-                pageRequest);
+                        SalesDeliveryStatus.RETURNED);
+        Page<SalesDeliveryRecord> result = warehouseQueuePage(factoryId, statuses, pageRequest);
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    /**
+     * Warehouse queue rows the caller may see. Whole-factory scope keeps the factory query; a
+     * narrower factory-configured scope lists only deliveries whose source order (or, for a
+     * standalone delivery, customer) was created inside that scope, matching the confirm guard.
+     */
+    private Page<SalesDeliveryRecord> warehouseQueuePage(String factoryId, List<SalesDeliveryStatus> statuses,
+                                                         PageRequest pageRequest) {
+        List<Long> creators = com.cretas.aims.security.BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        if (creators == null) {
+            return deliveryRecordRepository.findByFactoryIdAndStatusIn(factoryId, statuses, pageRequest);
+        }
+        if (creators.isEmpty()) {
+            return new org.springframework.data.domain.PageImpl<>(List.of(), pageRequest, 0);
+        }
+        return deliveryRecordRepository.findByFactoryIdAndStatusInAndOwnerIn(factoryId, statuses, creators, pageRequest);
     }
 
     /**
