@@ -5,7 +5,7 @@ description: 全栈部署工作流。当用户说"部署"、"deploy"、"发布"�
 
 # 部署
 
-prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不可用时的离线协议见 `.claude/rules/worktree-and-main-only-deploy.md`。常规部署验证绿就部，不再请示（Steve 2026-08-21）；判据照常一条不省。服务器上的东西放在哪、怎么查，见 `server-operations` skill。
+prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因见 `.claude/rules/worktree-and-main-only-deploy.md`；合入通道分档、完整发布命令、部署后核对、GitHub 不可用时的离线协议见 `references/main-only-deploy-details.md`。常规部署验证绿就部，不再请示（Steve 2026-08-21）；判据照常一条不省。服务器上的东西放在哪、怎么查，见 `server-operations` skill。
 
 ## 统一发布入口（Java / Web）
 
@@ -39,7 +39,7 @@ prod 只从 clean 且 `HEAD == origin/main` 的树部署，原因和 GitHub 不�
 ## 蓝绿 / 锁 / 并行
 
 - prod Java 在 `10010` / `10020` 之间交替 active，部署或核对前先读网关 upstream，不要假设哪一槽长期停用。命令和坑见 `server-operations` 的「蓝绿双槽」一节。
-- `deploy-backend.sh` 的 idle readiness 三态（空串是 ssh 断线没量到，不是挂了）见 `worktree-and-main-only-deploy.md` 铁律 3。
+- `deploy-backend.sh` 的 idle readiness 三态（空串是 ssh 断线没量到，不是挂了）见 `references/main-only-deploy-details.md`。
 - 三把本机锁 `cretas-release` / `cretas-backend-deploy` / `cretas-web-admin-deploy`。被拒时拒绝信息会区分「真并发」和「孤儿子进程按着锁」，处置步骤见 `references/lock-and-history.md`。不要 `rm` 锁文件：flock 模式下那只会造出第二把互不可见的锁。
 - 默认串行；只有显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`，且迁移 / Entity / Security / 跨端契约风险检测全部未命中时才并行。
 
