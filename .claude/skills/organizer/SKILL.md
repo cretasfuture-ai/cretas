@@ -54,6 +54,12 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   2. 给每个在飞执行会话发一条 SendMessage：「organizer 已换成 <新 id>，之后完成/阻塞向它汇报」，并把这些会话的 id 和在做什么写进交接；
   3. 对每个在飞执行会话调 `detach_session`，它就不再通知老 organizer（被拒的——与别的会话共用 worktree 或用户挪过的——记进交接，由新 organizer 知会）；
   4. 老 organizer 就此停手，不再回应后续通知，告诉用户可以归档。新 organizer 收不到这些会话的自动结束通知，所以它们完成/阻塞时必须主动 SendMessage，新 organizer 也要为它们的 PR 重新挂监视。
-- **新 organizer 开场三步**：读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视。
+- 🔴 **新 organizer 只开出卡片时**（2026-11-13 三个 organizer 同时撞上）：被别的会话消息/通知叫醒的回合里，`start_session` 会被应用改成等 Steve 点击的提案卡片，拿不到新 id。这时：
+  - 第 2、3 步**先不做**：执行会话保持挂在老 organizer 名下，老 organizer 的 CI 监视**不停**——否则会出现没人盯的 PR（当天 #1652 在重跑 CI 却无人看守）。
+  - 立刻用一句话告诉 Steve：「新 organizer 是卡片 <task_id>，请点开；点开前本会话继续守着 <在飞 PR 列表>」。
+  - 新 organizer 开出来后由它在开场时通知各执行会话改向它汇报，并 SendMessage 老 organizer；老 organizer 收到后再做第 3 步 detach、停掉监视、停手。
+  - 能选时机就把收口放在 Steve 自己发消息的那一轮（那一轮里 `start_session` 能直接开）。
+- **会话命名**（Steve 2026-11-13）：侧边栏要一眼看出是什么。新 organizer 开出来第一件事用 `set_session_title` 改名为「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后把老 organizer 改名为「[已交班→第 N+1 任] <原名>」；执行会话用「<批次>·<线名>：<做什么>」。
+- **新 organizer 开场**：按上面的命名规则改名 → 读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视 → 通知在飞执行会话改向自己汇报，并告诉老 organizer 可以 detach、停手。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。
 - 换会话时顺带按任务换模型/effort（缓存本来就要重建）；不在长会话中途单独换模型。
