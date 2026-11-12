@@ -68,8 +68,9 @@ class PreviewTokenServiceConcurrencyTest {
             assertThat(java.util.List.of(firstResult, secondResult))
                     .filteredOn(result -> !result.isSuccess())
                     .singleElement()
-                    .satisfies(result -> assertThat(result.getMessage())
-                            .containsAnyOf("其他确认请求", "已被处理"));
+                    // 输家按凭据真实状态回答: 赢家还在执行 (EXECUTING) 或已经落定 (CONFIRMED), 不是笼统「失败」
+                    .satisfies(result -> assertThat(result.getExistingStatus())
+                            .isIn(TokenStatus.EXECUTING, TokenStatus.CONFIRMED));
 
             ClaimResult winner = firstResult.isSuccess() ? firstResult : secondResult;
             assertThat(service.resolveClaim(token.getToken(), winner.getClaimId(), true, "done")).isTrue();

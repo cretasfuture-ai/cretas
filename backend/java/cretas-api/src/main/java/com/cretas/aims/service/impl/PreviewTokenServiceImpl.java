@@ -35,6 +35,10 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     private final IntentPreviewTokenRepository tokenRepository;
     private final ObjectMapper objectMapper;
 
+    /** 执行中的凭据超过这么多分钟没回报结果就判「结果不明」。写工具不自动重试, 正常执行在秒级。 */
+    @org.springframework.beans.factory.annotation.Value("${cretas.ai.preview-token.executing-stale-minutes:10}")
+    private long executingStaleMinutes = 10;
+
     @Override
     @Transactional
     public IntentPreviewToken createBoundToken(BoundTokenRequest request) {
@@ -235,7 +239,7 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
         if (existing.getStatus() != TokenStatus.PENDING) {
             log.warn("确认认领失败: tokenFingerprint={}, reason=status-{}",
                     tokenFingerprint, existing.getStatus());
-            return ClaimResult.failure("令牌已被处理: " + existing.getStatus());
+            return ClaimResult.alreadyHandled(claimRefusalMessage(existing.getStatus()), existing.getStatus());
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -284,8 +288,20 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
                 existing.getExecutionMode(), claimId, now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING);
         if (claimed != 1) {
-            log.warn("确认认领失败: tokenFingerprint={}, reason=concurrent-or-stale", tokenFingerprint);
-            return ClaimResult.failure("令牌已被其他确认请求处理");
+            // 0 行: 可能是并发的另一次点击刚认领走 (EXECUTING / 已完成), 也可能是同时被新预览取消、刚好过期。
+            // 重读真实状态再回答 —— 一律说「执行中」会把「已取消请重新预览」的用户误导去干等。
+            TokenStatus actual = tokenRepository.findByToken(token)
+                    .map(IntentPreviewToken::getStatus).orElse(null);
+            log.warn("确认认领失败: tokenFingerprint={}, reason=concurrent-or-stale, actual={}",
+                    tokenFingerprint, actual);
+            if (actual == null) {
+                return ClaimResult.failure("令牌无效或已过期");
+            }
+            if (actual == TokenStatus.PENDING) {
+                // 仍是待确认却没认领到: 绑定条件不再成立 (多为刚过期), 让用户重新预览
+                return ClaimResult.alreadyHandled("令牌已过期，请重新发起预览", TokenStatus.PENDING);
+            }
+            return ClaimResult.alreadyHandled(claimRefusalMessage(actual), actual);
         }
 
         Optional<IntentPreviewToken> claimedTokenOpt = tokenRepository.findByTokenAndClaimIdAndStatus(
@@ -332,13 +348,60 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
         if (token == null || token.isBlank() || claimId == null || claimId.isBlank()) {
             return false;
         }
-        TokenStatus resolvedStatus = success ? TokenStatus.CONFIRMED : TokenStatus.FAILED;
+        return resolveLease(token, claimId, success ? TokenStatus.CONFIRMED : TokenStatus.FAILED, message);
+    }
+
+    @Override
+    @Transactional
+    public boolean resolveClaimOutcomeUnknown(String token, String claimId, String message) {
+        if (token == null || token.isBlank() || claimId == null || claimId.isBlank()) {
+            return false;
+        }
+        return resolveLease(token, claimId, TokenStatus.OUTCOME_UNKNOWN, message);
+    }
+
+    private boolean resolveLease(String token, String claimId, TokenStatus resolvedStatus, String message) {
         int updated = tokenRepository.resolveClaim(
-                token, claimId, TokenStatus.EXECUTING, resolvedStatus,
+                token, claimId, TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN, resolvedStatus,
                 LocalDateTime.now(), truncateMessage(message));
         log.info("确认令牌完成: tokenFingerprint={}, claimFingerprint={}, status={}, updated={}",
                 fingerprint(token), fingerprint(claimId), resolvedStatus, updated);
         return updated == 1;
+    }
+
+    /** 认领被拒时给用户的话: 按凭据真实状态说, 不笼统说「已处理」。 */
+    static String claimRefusalMessage(TokenStatus status) {
+        return switch (status) {
+            case EXECUTING -> "这次确认正在执行中，请勿重复提交";
+            case CONFIRMED -> "这次确认已经执行过";
+            case OUTCOME_UNKNOWN -> "这次确认的结果待核对，请勿重复提交";
+            case CANCELLED -> "这个预览已被新的预览替代或已取消，请重新发起预览";
+            case EXPIRED -> "令牌已过期，请重新发起预览";
+            case FAILED -> "这次确认已结束（未执行成功），请重新发起预览";
+            default -> "令牌已被处理: " + status;
+        };
+    }
+
+    static final String RECONCILED_MESSAGE =
+            "执行中断(超过对账时限未回报结果)，结果不明：请先在业务页面核对是否已写入，勿重复提交";
+
+    /**
+     * 停在 EXECUTING 超过 {@code executingStaleMinutes} 的凭据判为「结果不明」。
+     * 不判「已成功」: 凭据与业务写入之间没有可靠的关联键 (工具调用记录的参数哈希含执行期上下文,
+     * 按时间窗/工具名去猜会把别人的写入认成这一次的), 宁可要人核对, 也不报一个可能是假的成功。
+     */
+    @Override
+    @Transactional
+    @Scheduled(fixedRate = 60000, initialDelay = 60000)
+    public int reconcileStaleExecutingTokens() {
+        LocalDateTime now = LocalDateTime.now();
+        int reconciled = tokenRepository.reconcileStaleExecuting(
+                now.minusMinutes(Math.max(1, executingStaleMinutes)), now, RECONCILED_MESSAGE,
+                TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN);
+        if (reconciled > 0) {
+            log.warn("对账: {} 张停在执行中的确认凭据判为结果不明 (超过 {} 分钟)", reconciled, executingStaleMinutes);
+        }
+        return reconciled;
     }
 
     @Override

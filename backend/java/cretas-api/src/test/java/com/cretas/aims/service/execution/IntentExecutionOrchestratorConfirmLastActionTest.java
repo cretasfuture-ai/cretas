@@ -167,6 +167,8 @@ class IntentExecutionOrchestratorConfirmLastActionTest {
                 .intentCode("WORK_PROCESS_TASK_START").toolName("work_process_task_start")
                 .descriptorVersion("1.0.0").executionMode(ToolExecutionMode.EXECUTE)
                 .status(TokenStatus.EXECUTING).expiresAt(LocalDateTime.now().plusMinutes(5))
+                // 预览时记下的改前值; 确认时重跑预览比对一致才执行 (写入确认状态绑定)
+                .currentValues("{\"状态\":\"待开始\"}")
                 .build();
         return ClaimResult.success(token, CLAIM, new HashMap<>(Map.of("taskId", 1827)));
     }
@@ -210,7 +212,8 @@ class IntentExecutionOrchestratorConfirmLastActionTest {
         @Override
         public String preview(ToolCall toolCall, Map<String, Object> context) {
             previewCount++;
-            return "{\"success\":true,\"data\":{\"taskId\":1827,\"canDo\":true}}";
+            return "{\"success\":true,\"data\":{\"taskId\":1827,\"canDo\":true,"
+                    + "\"currentValues\":{\"状态\":\"待开始\"}}}";
         }
 
         @Override

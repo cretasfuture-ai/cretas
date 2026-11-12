@@ -143,11 +143,17 @@ public class SalesDeliveryBatchAllocateTool extends AbstractBusinessTool {
             throw new BusinessException(409, "productTypeId或requiredQty与该发货明细不一致，已拒绝跨行推荐")
                     .withHint("请使用该发货明细真实的产品ID和待发货数量后重试预览");
         }
+        Object recommendations = allocationService.recommendFifo(factoryId, deliveryItemId,
+                productTypeId, requiredQty, deliveryItem.getUnit(), deliveryItem.getSourceWarehouseCode());
+        // 改前值 (确认前状态核对): 发货数量或 FIFO 可分配批次在预览之后变了, 用户看到的分配就不是会执行的分配
+        Map<String, Object> currentValues = new java.util.LinkedHashMap<>();
+        currentValues.put("发货数量", deliveryItem.getDeliveredQuantity());
+        currentValues.put("可分配批次", recommendations);
         return Map.of("status", "PREVIEW", "deliveryItemId", deliveryItemId,
-                "recommendations", allocationService.recommendFifo(factoryId, deliveryItemId,
-                        productTypeId, requiredQty, deliveryItem.getUnit(), deliveryItem.getSourceWarehouseCode()),
+                "recommendations", recommendations,
                 "willWrite", false,
-                "message", "这是库存推荐，确认执行后才会真实分配");
+                "message", "这是库存推荐，确认执行后才会真实分配",
+                "currentValues", currentValues);
     }
 
     private void requireDeliveryLineUnits(String factoryId, SalesDeliveryItem item, Map<String,Object> params) {

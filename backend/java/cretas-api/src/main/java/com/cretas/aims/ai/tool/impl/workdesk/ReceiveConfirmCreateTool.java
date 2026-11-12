@@ -226,6 +226,11 @@ public class ReceiveConfirmCreateTool extends AbstractBusinessTool {
         result.put("remainingCap", remainingCap);
         result.put("yourProposedQty", proposed);
         result.put("receiveStatus", receiveStatus);
+        // 改前值 (确认前状态核对): 这一行在预览之后又被收过货就不按旧预览入库
+        Map<String, Object> currentValues = new LinkedHashMap<>();
+        currentValues.put("已收数量", alreadyReceived);
+        currentValues.put("待收数量", pending);
+        result.put("currentValues", currentValues);
 
         // 4. 校验顺序: 数量 → 状态 → 幂等
         if (proposed.compareTo(BigDecimal.ZERO) <= 0) {
