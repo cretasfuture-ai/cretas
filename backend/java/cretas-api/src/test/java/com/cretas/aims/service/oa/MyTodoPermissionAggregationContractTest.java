@@ -130,6 +130,45 @@ class MyTodoPermissionAggregationContractTest {
         assertThat(item.isNeedDetail()).isFalse();
     }
 
+    @Test
+    @DisplayName("强制插单待办显示计划号和数量, 不显示内部 ID; 外厂同 ID 的计划不采用 (2026-11-12 线上验收)")
+    void forceInsertTodoShowsPlanNumberNotInternalId() {
+        ApprovalWorkflowInstance mine = ApprovalWorkflowInstance.builder()
+                .id("inst-1").factoryId(F).moduleCode("FORCE_INSERT").businessEntityId("plan-uuid-1")
+                .status(ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>(List.of("pm_approval")))
+                .initiatedAt(LocalDateTime.of(2026, 11, 12, 12, 20)).build();
+        ApprovalWorkflowInstance foreign = ApprovalWorkflowInstance.builder()
+                .id("inst-2").factoryId(F).moduleCode("FORCE_INSERT").businessEntityId("plan-uuid-2")
+                .status(ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                .currentNodeIds(new ArrayList<>(List.of("pm_approval")))
+                .initiatedAt(LocalDateTime.of(2026, 11, 12, 12, 21)).build();
+        when(workflowEngine.findPendingForRole(eq(F), eq("factory_super_admin"), eq("FORCE_INSERT"), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(mine, foreign)));
+        com.cretas.aims.entity.ProductionPlan plan = new com.cretas.aims.entity.ProductionPlan();
+        plan.setId("plan-uuid-1");
+        plan.setFactoryId(F);
+        plan.setPlanNumber("URGENT-1794457236699-0F73");
+        plan.setPlannedQuantity(new java.math.BigDecimal("5.00"));
+        plan.setPlannedUnit("kg");
+        com.cretas.aims.entity.ProductionPlan other = new com.cretas.aims.entity.ProductionPlan();
+        other.setId("plan-uuid-2");
+        other.setFactoryId("F-OTHER");
+        other.setPlanNumber("URGENT-OTHER-FACTORY");
+        com.cretas.aims.repository.ProductionPlanRepository plans = mock(com.cretas.aims.repository.ProductionPlanRepository.class);
+        when(plans.findAllById(any())).thenReturn(List.of(plan, other));
+        ReflectionTestUtils.setField(service, "productionPlanRepository", plans);
+
+        List<TodoItemDTO> todos = service.listTodos(F, "factory_super_admin");
+
+        TodoItemDTO a = todos.stream().filter(t -> "plan-uuid-1".equals(t.getRefId())).findFirst().orElseThrow();
+        assertThat(a.getRefNumber()).isEqualTo("URGENT-1794457236699-0F73");
+        assertThat(a.getTitle()).isEqualTo("强制插单审批 — URGENT-1794457236699-0F73 · 5 kg").doesNotContain("plan-uuid-1");
+        TodoItemDTO b = todos.stream().filter(t -> "plan-uuid-2".equals(t.getRefId())).findFirst().orElseThrow();
+        assertThat(b.getRefNumber()).isEqualTo("plan-uuid-2");
+        assertThat(b.getTitle()).doesNotContain("URGENT-OTHER-FACTORY");
+    }
+
     /** 独立审查 #1: 无 id 的探针账号只靠岗位区分, 缓存键里没有岗位时, 财务经理的「有」会被质检员读走。 */
     @Test
     @DisplayName("🔴 同一个服务实例上先问财务经理再问质检员: 财务经理的答案不能被缓存发给质检员 (反过来也一样)")
