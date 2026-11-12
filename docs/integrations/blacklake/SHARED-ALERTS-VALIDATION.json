@@ -1,0 +1,83 @@
+{
+  "task_id": "BLACKLAKE-READONLY-20261103",
+  "slice_base_sha": "907c3fc7907f64a7c438971f19904fded66eedc7",
+  "date": "2026-11-03",
+  "backend": {
+    "command": "python -m blacklake.test_local",
+    "exit_code": 0,
+    "passed": 257,
+    "skipped": 0,
+    "postgres": "real isolated SCRAM",
+    "redis": "real password protected"
+  },
+  "frontend": {
+    "target_tests_passed": 17,
+    "typecheck_exit": 0,
+    "build_exit": 0,
+    "build_mode": "smartbi-alerts"
+  },
+  "acceptance": {
+    "real_synthetic_excel_pg": true,
+    "real_java_jwt": true,
+    "inline_api_rule_parity": true,
+    "db_overview_before_aggregate": true,
+    "browser_shared_panel": true,
+    "mobile_viewport": 390,
+    "foreign_upload_status": 404,
+    "missing_jwt_status": 401,
+    "factory_override_status": 403,
+    "unknown_cost_finance_authority_restricted": true,
+    "blacklake_27b_representatives": 15
+  },
+  "local_model_benchmark": {
+    "synthetic_facts": 4,
+    "8b": "schema failure",
+    "27b": "4 of 4 passed",
+    "deep_causal_quality_verified": false
+  },
+  "production_deployed": false,
+  "source_business_writes": 0,
+  "normal_java_upload_workflow_verified": false,
+  "limitations": [
+    "Test Java cost authority endpoint absent; protected cost uploads remain restricted",
+    "Financial scope not explicitly full; protected finance uploads remain restricted",
+    "No automatic full data-sync connector conversion or production migration",
+    "Local model benchmark only checks small bounded structured actions"
+  ],
+  "verified_files": {
+    "backend/python/auth_middleware.py": "14dab2aac39b98701ee46cc489d5a17f859d4cd5eb2a5214397ddedd519d13e1",
+    "backend/python/blacklake/local_cost_ai.py": "3da82216a74d77d1a2177bc2a5e7d6b49ed449aa5d641393ef4d3a62fc6af262",
+    "backend/python/blacklake/smartbi_api.py": "3b52142c40e354201fc0de6824ea113c0f39a27262d01861b39a2be26d1e7c17",
+    "backend/python/blacklake/smartbi_store.py": "87a7b421bc180c6001804ee290e3f48471efd3c7ef2228a1709438d1ad3bf5f8",
+    "backend/python/blacklake/test_local.py": "fa9bb49c4216d41e9a2fb58381e3fe4f736913ecd590f54f21a51476ac2fb1ac",
+    "backend/python/main.py": "e8c2963e08edc911648fdafba104c7effee68da13fd5174978f24f2b9de26e5c",
+    "backend/python/smartbi/api/analysis.py": "155b4b0694a5dfb4ddf9c5d40bb297deae17567e5d009c921fa54318808066e5",
+    "backend/python/smartbi/api/db_analysis.py": "a1ef99c0fc144790ab541fa7d95c8330d128b3b314106cb8bc54ac662b574b7e",
+    "backend/python/smartbi/api/excel_async.py": "49cd955476e7d09da698ec9b4abb263f4addf6dc55177ed97e7e440bd79ce80f",
+    "backend/python/tests/test_blacklake_cost_alerts.py": "6f782b5b59a55d727c038c66f3a36a1c29f92ad2c4e61477b91e53acd12434ae",
+    "web-admin/src/views/smart-bi/BlacklakeTestEntry.vue": "59a9a8f80ba8b4da5dce3e34a6a44809559e42b3bda165b577cd55739f3d5e33",
+    "web-admin/src/views/smart-bi/SmartBIAnalysis.vue": "b2ad3cb55548c018ebb8a9c8606ce3f7ead5c88abebd492332e55571dee40ef3",
+    "web-admin/vite.config.ts": "bfa19be18ebc4f83b1f0bf45e2892e07fa0bd16c61d69a37b8d98c6d9050c45e",
+    ".env.smartbi-alerts.example": "f89ade25eadfa32e8cc9a4611d721aa2007963140640ed55c4e54811482d353b",
+    "backend/python/smartbi/api/alert_analysis_route.py": "39da9ba3f87cd3abbd1e95a514b5a154823ac8471ed5a46f08e0c7ba1a6a0813",
+    "backend/python/smartbi/api/data_alerts.py": "55f4106f78de2788c26fcb75120b6b1fcabc396d176bcf299df3b530e2c79d00",
+    "backend/python/smartbi/services/alert_actions.py": "d654e4b5e8980199b2803797c0ce9ddbe8df79545ff1c7620811869c1965fc21",
+    "backend/python/smartbi/services/alert_ai_coordination.py": "29b9af005e44c19b16ed6be8e1065b85b7982d28b0f5663bda56ef86f8193f9f",
+    "backend/python/smartbi/services/alert_datasets.py": "192953b0bda025b650f0438fd2cce1fe555669c4d8b38c3547918f89a3224acb",
+    "backend/python/smartbi/services/alert_local_ai.py": "a44a131585451ca809b425865e44000ffc8db35854276158c03165fa90d1b797",
+    "backend/python/smartbi/services/dataset_alerts.py": "e2eb577ca94138afdf3264c3141a0d3d8719c399f57c187467cf6dcd53a582a9",
+    "backend/python/smartbi_alerts_acceptance.py": "e6a897255eee3da868687e02e17762986b33536fcb3eae9ff4d71b2e20942472",
+    "backend/python/smartbi_alerts_testenv.py": "8a896b31b1f57ea37a2a1b1b3933c1f5006b2d3f96ca52c545631a1e13e883b0",
+    "backend/python/smartbi_db_alerts_acceptance.py": "d18f48d0168de276a5606540561e367f678f67ac344e374bd27b07dd94d45a62",
+    "backend/python/smartbi_local_model_benchmark.py": "2818a9196edf224099e290145ed9d6bfb4ecec79ad348f37438d70086b5f3493",
+    "backend/python/tests/test_smartbi_dataset_alerts.py": "00772e6ad2d77f5fea29c0d6d11cf01968e674b41e5eeba48bce65eb8fd5a85c",
+    "backend/python/tests/test_smartbi_shared_alerts.py": "a074a3c6741c64455b861c44809a56fc4a74886c7d6ffb4556da159a27754842",
+    "web-admin/scripts/smartbi-alerts-acceptance.mjs": "9804596538aad76ab68ac505423c3903b58b7b8c7549b53dbf181dcadf365f3d",
+    "web-admin/smartbi-data-alerts.html": "f839427286a4968c117285ee9c29cba9444f5fe00c6a4d8900e185b9fbf23195",
+    "web-admin/src/api/smartbi/data-alerts.ts": "02f65f2d708f53529cec424c0add576981e287ce92fb974cb5afb1ab15d0accb",
+    "web-admin/src/components/smartbi/DataAlertsPanel.vue": "d4d980108d0a177884ebb0a8686e994a4d3f6d355c91612f530a351c95094341",
+    "web-admin/src/components/smartbi/__tests__/DataAlertsPanel.spec.ts": "dd1697a55ce9a12ef2cd3c8b57b340c6650629558d8b506a6f0353fd1ce63433",
+    "web-admin/src/smartbi-alerts-main.ts": "5631d7e9a5575a6f804db4bddb107e7710d2c427fd7363e54ddb94fc27daccb1",
+    "web-admin/src/views/smart-bi/SharedAlertsTestView.vue": "1855132dbb3f8fa44b79820abaf9ad1cbc1072798d6afc6884982e2107815c02"
+  }
+}

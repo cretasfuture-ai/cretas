@@ -1,0 +1,88 @@
+{
+  "task_id": "BLACKLAKE-READONLY-20261103",
+  "slice_base_sha": "837bfb7b6500167a3e2634a374f592ea5f24ea7c",
+  "source_hashes": {
+    "backend/python/blacklake/presentation.py": "5484f5d518be4c31d1ea4245a36aacbd1a91122d019485d2379782ab2c7bbb05",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeCostIntelligence.vue": "9257b6cdbe5d35e353546f70c788363bf961de118981c1bf86f7467337948b3e",
+    "web-admin/src/views/smart-bi/__tests__/blacklakeComparison.spec.ts": "09c182b03be7e43c296166b7568cd1b7dc43be7a0986e228c37cb0118341f3c5",
+    "web-admin/src/views/smart-bi/__tests__/blacklakePresentation.spec.ts": "c814747928fb883d4db635f5ada092304580353d5cbca446f182841bbf12fc9e",
+    "web-admin/src/views/smart-bi/__tests__/blacklakePrototypeAnalysis.spec.ts": "d9471721e3c18565ef76bf3b36660275380289fd9d92854817701cdbb3e18978",
+    "web-admin/src/views/smart-bi/blacklakeComparison.ts": "77ca75d875012972c4b01455cd15b8a9aec1ce55479496cfee19fc5b5b290137",
+    "web-admin/src/views/smart-bi/blacklakePresentation.ts": "c8d13e6e70f4a98a782782e86171f33e30ef756ea87ab75a2a127d6be6705da0",
+    "backend/python/blacklake/section_insights.py": "6afe075d8b10d741cc5e47c59c05b56e5378dd564088000d30444ea8535e97c3",
+    "backend/python/blacklake/smartbi_api.py": "636daa931f89b1ad6dce444ae77fd54885b0df291143a529979f10fd5ba36be0",
+    "backend/python/tests/test_blacklake_sections.py": "6a2c5efa0dc252a9a44dd86ed20b8cbc3effd3a2deb2143f8de08a818f064201",
+    "web-admin/scripts/blacklake-prototype-acceptance.mjs": "a7893341f20df59dd46931f148f217745856af33707c9d2108fe996de8c8f62e",
+    "web-admin/src/api/smartbi/blacklake.ts": "cc2395fe0a60ba4e79f44403c0d1e5c6400f12aada1ed977ad77eee5e50a96d6",
+    "web-admin/src/components/smartbi/DynamicChartRenderer.vue": "e714a0fc61f156c1bcb67e863a4ccc35fe9400d0adc20eb6372be90f685054f4",
+    "web-admin/src/components/smartbi/PrototypeSectionInsight.vue": "cd35b3b00945140e2b11f513e2786f53d5c74e5f4514365b1ff02d7d85209c18",
+    "web-admin/src/components/smartbi/SectionInsight.vue": "b6f9bde6ba9acae8c382203c9fcf4d388bc502616812f3c27549fa05db5eea79",
+    "web-admin/src/components/smartbi/__tests__/DynamicChartRenderer.presentation.spec.ts": "50e142b8f4e6880498d9e1d8cf448233755506ad24c7987dc03f561dcecb7c49",
+    "web-admin/src/components/smartbi/__tests__/PrototypeSectionInsight.spec.ts": "6f652e4485ef803339c0bd86cb31492808391a9a02e1c485ab05634db26f79c9",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeAnalysis.vue": "fa7782dca5cbc03f2672342ffd31b5b58d55fb6b4de4b29bf1ade9b0f9b45f56",
+    "web-admin/src/views/smart-bi/BlacklakePrototypeCostAlerts.vue": "940bbc3c972f7ee07ff37331597c577e8c0abdd5f412d62fd7b3ac7df87a0033"
+  },
+  "backend": {
+    "xml": "validation/pytest-sections-final.xml",
+    "skipped": 0,
+    "exit_code": 0,
+    "command": "python -m blacklake.test_local",
+    "passed": 269,
+    "log": "validation/pytest-sections-final.log"
+  },
+  "frontend": {
+    "passed": 50,
+    "files": 11,
+    "log": "validation/plain-frontend-delivery.log",
+    "exit_code": 0
+  },
+  "typecheck": {
+    "literal_role_type_errors": "fixed without runtime behavior change",
+    "command": "node --max-old-space-size=6144 node_modules/vue-tsc/bin/vue-tsc.js -b",
+    "log": "validation/plain-typecheck-delivery.log",
+    "initial_default_heap_failure": "retained in validation/plain-typecheck.log",
+    "exit_code": 0
+  },
+  "builds": {
+    "default_prototype_chunks_absent": true,
+    "isolated_exit_code": 0,
+    "default_log": "validation/plain-default-build.log",
+    "default_exit_code": 0,
+    "default_legacy_blacklake_chunk_exists": true,
+    "isolated_log": "validation/plain-build-verified.log",
+    "default_local_preview_strings_absent": true,
+    "default_prototype_html_absent": true
+  },
+  "browser": {
+    "password_inputs": 0,
+    "independent_sections": 7,
+    "empty_note_blocked": true,
+    "receipt": "outputs/plain-20261104/browser-acceptance.json",
+    "mixed_name_groups_excluded": 1,
+    "long_visible_decimal_values": 0,
+    "direct_entry": true,
+    "surface": "user in-app browser",
+    "real_order_links": true,
+    "console_errors": 0,
+    "deep_comparison_switch": true,
+    "gap_page_checked": true,
+    "focused_alert": true
+  },
+  "snapshot": {
+    "collected_at_beijing": "2026-11-03 17:21:49",
+    "cost_eligible": 16,
+    "source_refreshed_this_slice": false,
+    "orders": 109,
+    "cost_blocked": 93
+  },
+  "source_business_writes": 0,
+  "new_followup_records_this_slice": 0,
+  "ai_review": "Reused fact-matched local 27B review cache; no claim of new full inference",
+  "delivery": {
+    "pr": 1390,
+    "production_deployed": false,
+    "merged": false,
+    "draft": true
+  },
+  "evidence_root": "%LOCALAPPDATA%/Cretas/Blacklake"
+}
