@@ -43,10 +43,12 @@ EOF
     printf '%s\n' "$repo"
 }
 
+# 旧用例验的是闸 (确认串/脏树/ACTIVE/过期 base/高风险/CRLF), 发布动作用 direct 模式落到本地裸仓;
+# PR 模式 (默认) 在文件末尾用假 gh 单独验。
 run_fastlane() {
     local repo="$1"
     shift
-    (cd "$repo" && bash scripts/deploy/publish-main-fastlane.sh "$@")
+    (cd "$repo" && FASTLANE_PUBLISH_MODE=direct bash scripts/deploy/publish-main-fastlane.sh "$@")
 }
 
 success_repo=$(create_fixture success)
@@ -184,4 +186,66 @@ if grep -Ev '^\s*#' "$FASTLANE" | grep -Eq 'git push.*(--force|--force-with-leas
     fail "fastlane script contains a force-push path"
 fi
 
-echo "PASS: direct-main fastlane guards confirmation, cleanliness, ACTIVE, stale base, risk, CRLF, and no-force push"
+# ---- PR 模式 (默认): 假 gh 记录调用; merge 时把裸仓 main 指到 PR 头, 模拟 GitHub 合并 ----
+FAKE_BIN="$TMP_ROOT/fake-bin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/gh" <<'EOF'
+#!/usr/bin/env bash
+# 只认 fastlane 用到的几种调用; 状态放在 $FAKE_GH_DIR。
+set -euo pipefail
+echo "$*" >> "$FAKE_GH_DIR/calls.log"
+head=$(git rev-parse HEAD)
+case "$1 $2" in
+    "pr list") echo "" ;;
+    "pr create") echo "https://github.example/o/r/pull/77" ;;
+    "pr view")
+        case "$*" in
+            *statusCheckRollup*) echo "$head 0 ${FAKE_BAD:-0} 3" ;;
+            *mergeCommit*) echo "$head" ;;
+            *state*) if [[ -f "$FAKE_GH_DIR/merged" ]]; then echo MERGED; else echo OPEN; fi ;;
+        esac ;;
+    "pr merge")
+        remote=$(git remote get-url origin)
+        git --git-dir="$remote" update-ref refs/heads/main "$head"
+        touch "$FAKE_GH_DIR/merged" ;;
+    *) echo "fake gh: unexpected call: $*" >&2; exit 9 ;;
+esac
+EOF
+chmod +x "$FAKE_BIN/gh"
+
+run_pr_mode() {
+    local repo="$1"
+    shift
+    (cd "$repo" && PATH="$FAKE_BIN:$PATH" FASTLANE_SETTLE_SECONDS=0 FASTLANE_POLL_SECONDS=0 \
+        bash scripts/deploy/publish-main-fastlane.sh "$@")
+}
+
+pr_repo=$(create_fixture prmode)
+pr_base=$(git -C "$pr_repo" rev-parse origin/main)
+pr_head=$(git -C "$pr_repo" rev-parse HEAD)
+export FAKE_GH_DIR="$TMP_ROOT/gh-ok"
+mkdir -p "$FAKE_GH_DIR"
+run_pr_mode "$pr_repo" --base-sha "$pr_base" --confirm YES-DIRECT-MAIN > "$TMP_ROOT/pr.log"
+[[ "$(git --git-dir="$TMP_ROOT/prmode-remote.git" rev-parse main)" == "$pr_head" ]] \
+    || fail "PR mode did not land the head on main"
+[[ "$(git --git-dir="$TMP_ROOT/prmode-remote.git" rev-parse codex/fixture)" == "$pr_head" ]] \
+    || fail "PR mode did not push the branch"
+grep -Fq "FASTLANE_PUBLISHED main=$pr_head pr=77" "$TMP_ROOT/pr.log" || fail "PR mode receipt missing"
+grep -Eq "^pr merge 77 --squash --match-head-commit $pr_head$" "$FAKE_GH_DIR/calls.log" \
+    || fail "PR mode did not merge with --match-head-commit"
+
+# 有红检查: 不许合并, main 不动 (阴性对照)
+red_repo=$(create_fixture prred)
+red_base=$(git -C "$red_repo" rev-parse origin/main)
+export FAKE_GH_DIR="$TMP_ROOT/gh-red"
+mkdir -p "$FAKE_GH_DIR"
+if FAKE_BAD=1 run_pr_mode "$red_repo" --base-sha "$red_base" --confirm YES-DIRECT-MAIN > "$TMP_ROOT/prred.log" 2>&1; then
+    fail "PR mode merged despite a failing check"
+fi
+[[ "$(git --git-dir="$TMP_ROOT/prred-remote.git" rev-parse main)" == "$red_base" ]] \
+    || fail "PR mode moved main despite a failing check"
+if grep -q "^pr merge" "$FAKE_GH_DIR/calls.log"; then
+    fail "PR mode called gh pr merge despite a failing check"
+fi
+
+echo "PASS: fastlane guards confirmation, cleanliness, ACTIVE, stale base, risk, CRLF, no-force push; PR mode merges only after green checks"
