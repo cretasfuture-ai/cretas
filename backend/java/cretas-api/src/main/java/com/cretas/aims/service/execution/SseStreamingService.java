@@ -443,11 +443,13 @@ public class SseStreamingService {
             // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
             // 任务状态 (终审 S1): 这一轮开始时有没有正在问参数的任务。有 → 这一轮要么回答它、要么打断它,
             // 不在同一轮里再恢复 (同一句话既打断又恢复 = 原地吞话)。
-            boolean openTaskAtStart = !factoryPackConstrained
-                    && openSlotSession(factoryId, userId, request).isPresent();
+            // 只查一次会话: 续轮用的就是这一份 (再查一次会读到另一份 —— 中间可能已被别的请求改过)
+            Optional<com.cretas.aims.entity.conversation.ConversationSession> openAtStart = factoryPackConstrained
+                    ? Optional.empty() : openSlotSession(factoryId, userId, request);
+            boolean openTaskAtStart = openAtStart.isPresent();
             if (!factoryPackConstrained
                     && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
-                            factoryPackRoute)) {
+                            factoryPackRoute, openAtStart)) {
                 return;
             }
             // 任务状态: 没有正在问的任务时, 「继续报工」「接着刚才的」回到被挂起的那个 (只找回参数、接着问, 不执行)
@@ -1209,11 +1211,10 @@ public class SseStreamingService {
      */
     private boolean streamSlotContinuation(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
                                            Long userId, String userRole, long startTime,
-                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
+                                           FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                           Optional<com.cretas.aims.entity.conversation.ConversationSession> open)
             throws IOException {
-        Optional<com.cretas.aims.entity.conversation.ConversationSession> open =
-                openSlotSession(factoryId, userId, request);
-        if (open.isEmpty()) {
+        if (open == null || open.isEmpty()) {
             return false;
         }
         com.cretas.aims.entity.conversation.ConversationSession session = open.get();
