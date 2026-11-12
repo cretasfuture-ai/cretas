@@ -159,6 +159,19 @@ public interface ToolExecutor {
     }
 
     /**
+     * 确认前状态核对 (INTENT-DISTILL 写入确认, Fable 审阅 §8.2): 用户点确认时服务端重跑一次预览,
+     * 把这次读到的改前值 ({@code currentValues}) 与铸凭据时记下的改前值逐字段比对, 不一致就拒绝执行。
+     *
+     * <p>预览给不出改前值的工具没法比对, 默认按「无法核对」拒绝确认 (fail-closed)。只有
+     * <b>只新建记录、不修改任何已有业务行</b> 的工具可以覆盖为 true: 它没有「别人在这期间改过」的对象,
+     * 确认时仍会重跑预览, 预览不再通过 (前提条件变了) 照样拒绝。改动已有记录的工具 ⛔ 不许返回 true,
+     * 应该在预览里给出 currentValues。</p>
+     */
+    default boolean previewCreatesNewRecordOnly() {
+        return false;
+    }
+
+    /**
      * 预览执行结果（不实际执行操作）
      *
      * 默认实现必须 fail closed。支持预览的工具需要显式覆盖本方法，避免“预览”请求

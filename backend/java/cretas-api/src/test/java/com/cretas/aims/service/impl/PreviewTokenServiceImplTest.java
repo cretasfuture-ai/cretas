@@ -127,10 +127,10 @@ class PreviewTokenServiceImplTest {
     @Test
     void resolutionWritesTerminalSuccessOrFailureOnlyThroughLeaseOwner() {
         when(repository.resolveClaim(
-                eq("t"), eq("c-success"), eq(TokenStatus.EXECUTING),
+                eq("t"), eq("c-success"), eq(TokenStatus.EXECUTING), eq(TokenStatus.OUTCOME_UNKNOWN),
                 eq(TokenStatus.CONFIRMED), any(), eq("done"))).thenReturn(1);
         when(repository.resolveClaim(
-                eq("t"), eq("c-fail"), eq(TokenStatus.EXECUTING),
+                eq("t"), eq("c-fail"), eq(TokenStatus.EXECUTING), eq(TokenStatus.OUTCOME_UNKNOWN),
                 eq(TokenStatus.FAILED), any(), eq("tool failed"))).thenReturn(1);
 
         assertThat(service.resolveClaim("t", "c-success", true, "done")).isTrue();

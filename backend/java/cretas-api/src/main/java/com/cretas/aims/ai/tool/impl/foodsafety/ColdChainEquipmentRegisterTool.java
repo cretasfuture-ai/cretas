@@ -129,6 +129,12 @@ public class ColdChainEquipmentRegisterTool extends AbstractBusinessTool {
         return true;
     }
 
+    /** 只新建记录、不改已有业务行 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。 */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
+
     @Override
     public ToolExecutor.ActionType getActionType() {
         return ToolExecutor.ActionType.WRITE;

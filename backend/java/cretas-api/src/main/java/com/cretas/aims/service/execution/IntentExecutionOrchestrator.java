@@ -1083,6 +1083,10 @@ public class IntentExecutionOrchestrator {
                         userId,
                         confirmationProof.commandDigest());
         if (!claimResult.isSuccess()) {
+            IntentExecuteResponse replay = replayedConfirmationResponse(claimResult.getExistingStatus());
+            if (replay != null) {
+                return replay;
+            }
             return IntentExecuteResponse.builder()
                     .status("FAILED")
                     .message(claimResult.getMessage())
@@ -1093,6 +1097,8 @@ public class IntentExecutionOrchestrator {
         var token = claimResult.getToken();
         String claimId = claimResult.getClaimId();
         String intentCode = token.getIntentCode();
+        // 工具一旦被调用, 之后的任何异常都可能发生在写入提交之后 → 只能记「结果不明」, 不能记失败
+        boolean toolInvoked = false;
 
         try {
             if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(intentCode)) {
@@ -1182,6 +1188,30 @@ public class IntentExecutionOrchestrator {
                 return confirmControlledPurchase(factoryId, token, claimId, confirmationProof, intentConfig, userId, userRole);
             }
 
+            // 确认时比对状态 (Fable 审阅 §8.2): 重读对象当前的改前值, 与预览时记下的比对;
+            // 预览之后有人改过 / 前提已不成立 / 无法核对 → 本次不执行, 让用户重新预览。
+            ToolDispatchService.ConfirmStateCheck stateCheck = toolDispatchService.recheckPreviewState(
+                    tool, intentConfig, token.getCurrentValues(), claimResult.getParameters(),
+                    factoryId, userId, userRole);
+            if (!stateCheck.proceed()) {
+                previewTokenService.resolveClaim(confirmToken, claimId, false,
+                        "确认前状态核对未通过(" + stateCheck.code() + "): " + stateCheck.message());
+                Map<String, Object> stale = new HashMap<>();
+                stale.put("reason", stateCheck.code());
+                stale.put("changedFields", stateCheck.changedFields());
+                stale.put("needsRepreview", true);
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intentCode)
+                        .status(PREVIEW_STALE)
+                        .message(stateCheck.message())
+                        .formattedText(stateCheck.message())
+                        .resultData(stale)
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+
             Map<String, Object> context = claimResult.getParameters() != null
                     ? com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(
                             claimResult.getParameters())
@@ -1213,22 +1243,31 @@ public class IntentExecutionOrchestrator {
                     .context(context)
                     .build();
 
+            toolInvoked = true;
             IntentExecuteResponse response = toolDispatchService.executeWithTool(
                     tool, factoryId, execRequest, intentConfig, userId, userRole, null);
             boolean toolSucceeded = response != null
                     && ("SUCCESS".equals(response.getStatus())
                         || "COMPLETED".equals(response.getStatus()));
+            // 工具执行中抛异常 / 超时时 executeWithTool 不重试写操作, 回的是 OUTCOME_UNKNOWN:
+            // 写入可能已提交, 凭据记「结果不明」而不是「失败」(失败会诱导用户重新预览再写一遍)。
+            boolean outcomeUnknown = response == null || OUTCOME_UNKNOWN.equals(response.getStatus());
             String resolution = response == null
                     ? "工具未返回执行结果"
                     : (response.getMessage() != null ? response.getMessage() : response.getStatus());
-            boolean resolved = previewTokenService.resolveClaim(
-                    confirmToken, claimId, toolSucceeded, resolution);
+            boolean resolved = outcomeUnknown
+                    ? previewTokenService.resolveClaimOutcomeUnknown(confirmToken, claimId, resolution)
+                    : previewTokenService.resolveClaim(confirmToken, claimId, toolSucceeded, resolution);
+            if (outcomeUnknown) {
+                return outcomeUnknownResponse(intentCode);
+            }
             if (!resolved) {
                 log.error("确认状态完成失败: claimFingerprint={}",
                         com.cretas.aims.ai.tool.gateway.ToolCommandDigest.tokenFingerprint(claimId));
                 return IntentExecuteResponse.builder()
-                        .status("FAILED")
-                        .message("执行结果状态记录失败，请勿重复提交并联系管理员")
+                        .status(OUTCOME_UNKNOWN)
+                        .aiMode("WRITE")
+                        .message("执行结果状态记录失败，请先在业务页面核对结果，勿重复提交")
                         .executedAt(LocalDateTime.now())
                         .build();
             }
@@ -1248,6 +1287,17 @@ public class IntentExecutionOrchestrator {
                     .build();
 
         } catch (Exception e) {
+            if (toolInvoked) {
+                try {
+                    previewTokenService.resolveClaimOutcomeUnknown(confirmToken, claimId,
+                            "执行异常, 结果不明: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
+                } catch (Exception resolutionError) {
+                    log.error("确认结果不明状态写入异常: factoryId={}, error={}",
+                            factoryId, resolutionError.getMessage());
+                }
+                log.error("确认执行异常, 结果不明: factoryId={}, error={}", factoryId, e.getMessage(), e);
+                return outcomeUnknownResponse(intentCode);
+            }
             try {
                 previewTokenService.resolveClaim(confirmToken, claimId, false,
                         "执行异常: " + com.cretas.aims.util.ErrorSanitizer.sanitize(e));
@@ -1263,6 +1313,66 @@ public class IntentExecutionOrchestrator {
                     .executedAt(LocalDateTime.now())
                     .build();
         }
+    }
+
+    static final String OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN";
+    /** 确认前状态核对没过: 什么都没执行, 需要重新预览。 */
+    static final String PREVIEW_STALE = "PREVIEW_STALE";
+    /** 同一张凭据已经执行成功过: 这次没有重复执行。 */
+    static final String ALREADY_EXECUTED = "ALREADY_EXECUTED";
+
+    static final String OUTCOME_UNKNOWN_MESSAGE =
+            "操作结果暂时无法确认（可能已经写入）。请先在业务页面核对这条记录，确认没有写入再重新发起，勿直接重复提交。";
+
+    private static IntentExecuteResponse outcomeUnknownResponse(String intentCode) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intentCode)
+                .status(OUTCOME_UNKNOWN)
+                .aiMode("WRITE")
+                .message(OUTCOME_UNKNOWN_MESSAGE)
+                .formattedText(OUTCOME_UNKNOWN_MESSAGE)
+                .metadata(Map.of("retryable", false))
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
+     * 同一张凭据再次点确认 (重复点击 / 超时后重发): 凭据早已不是待确认, 认领被拒, 工具不会再执行。
+     * 按凭据此刻的状态如实回答, 不笼统回「失败」: 执行中 / 结果不明 / 已成功 都不能诱导用户重做。
+     */
+    static IntentExecuteResponse replayedConfirmationResponse(
+            com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus existing) {
+        if (existing == null) {
+            return null;
+        }
+        String message;
+        String status;
+        switch (existing) {
+            case EXECUTING -> {
+                status = OUTCOME_UNKNOWN;
+                message = "这次确认已经在执行中，没有重复执行。请稍后在业务页面核对结果，勿重复提交。";
+            }
+            case OUTCOME_UNKNOWN -> {
+                status = OUTCOME_UNKNOWN;
+                message = "这次确认的结果待核对（可能已经写入），没有重复执行。请先在业务页面核对，勿重复提交。";
+            }
+            case CONFIRMED -> {
+                status = ALREADY_EXECUTED;
+                message = "这次确认已经执行过，没有重复执行。";
+            }
+            default -> {
+                return null;
+            }
+        }
+        return IntentExecuteResponse.builder()
+                .status(status)
+                .aiMode("WRITE")
+                .message(message)
+                .formattedText(message)
+                .metadata(Map.of("retryable", false))
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     // ==================== 内部路由方法 ====================

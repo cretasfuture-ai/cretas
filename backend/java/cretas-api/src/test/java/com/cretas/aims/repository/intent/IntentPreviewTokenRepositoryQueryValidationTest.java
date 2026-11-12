@@ -60,19 +60,57 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
                 token.getToken(), "claim-owner", TokenStatus.EXECUTING))
                 .isPresent();
         assertThat(repository.resolveClaim(
-                token.getToken(), "stale-owner", TokenStatus.EXECUTING,
+                token.getToken(), "stale-owner", TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN,
                 TokenStatus.FAILED, now, "stale")).isZero();
         assertThat(repository.resolveClaim(
-                token.getToken(), "claim-owner", TokenStatus.EXECUTING,
+                token.getToken(), "claim-owner", TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN,
                 TokenStatus.CONFIRMED, now, "done")).isEqualTo(1);
         assertThat(repository.resolveClaim(
-                token.getToken(), "claim-owner", TokenStatus.EXECUTING,
+                token.getToken(), "claim-owner", TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN,
                 TokenStatus.FAILED, now, "late overwrite")).isZero();
 
         assertThat(repository.findByToken(token.getToken()))
                 .get()
                 .extracting(IntentPreviewToken::getStatus)
                 .isEqualTo(TokenStatus.CONFIRMED);
+    }
+
+    @Test
+    void reconciliationOnlyTouchesStaleExecutingLeasesAndOwnerCanStillSettle() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        IntentPreviewToken stale = persistBound("token-stale", now.plusMinutes(5));
+        IntentPreviewToken fresh = persistBound("token-fresh", now.plusMinutes(5));
+        IntentPreviewToken pending = persistBound("token-pending", now.plusMinutes(5));
+        claim(stale, "claim-stale", now.minusMinutes(30));
+        claim(fresh, "claim-fresh", now);
+
+        assertThat(repository.reconcileStaleExecuting(now.minusMinutes(10), now, "reconciled",
+                TokenStatus.EXECUTING, TokenStatus.OUTCOME_UNKNOWN)).isEqualTo(1);
+
+        assertThat(repository.findByToken(stale.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus).isEqualTo(TokenStatus.OUTCOME_UNKNOWN);
+        assertThat(repository.findByToken(fresh.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus).isEqualTo(TokenStatus.EXECUTING);
+        assertThat(repository.findByToken(pending.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus).isEqualTo(TokenStatus.PENDING);
+        // a reconciled token is not PENDING, so it can never be claimed again
+        assertThat(repository.claimForExecution(
+                stale.getToken(), stale.getFactoryId(), stale.getTenantId(), stale.getUserId(),
+                stale.getCommandDigest(), stale.getParametersHash(), stale.getToolName(),
+                stale.getDescriptorVersion(), stale.getExecutionMode(), "claim-again", now, now,
+                TokenStatus.PENDING, TokenStatus.EXECUTING)).isZero();
+        assertThat(repository.resolveClaim(stale.getToken(), "someone-else", TokenStatus.EXECUTING,
+                TokenStatus.OUTCOME_UNKNOWN, TokenStatus.CONFIRMED, now, "x")).isZero();
+        assertThat(repository.resolveClaim(stale.getToken(), "claim-stale", TokenStatus.EXECUTING,
+                TokenStatus.OUTCOME_UNKNOWN, TokenStatus.CONFIRMED, now, "late owner")).isEqualTo(1);
+    }
+
+    private void claim(IntentPreviewToken token, String claimId, LocalDateTime claimedAt) {
+        assertThat(repository.claimForExecution(
+                token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
+                token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
+                token.getDescriptorVersion(), token.getExecutionMode(), claimId, claimedAt,
+                LocalDateTime.now(), TokenStatus.PENDING, TokenStatus.EXECUTING)).isEqualTo(1);
     }
 
     @Test

@@ -1357,6 +1357,7 @@ public class ToolDispatchService {
                             previewData, "currentValues", "currentValue", "current");
                     Map<String, Object> tokenNewValues = extractPreviewSection(
                             previewData, "newValues", "newValue", "proposed");
+                    PreviewSubject subject = previewSubject(tool, params, previewData);
                     com.cretas.aims.entity.intent.IntentPreviewToken boundToken =
                             previewTokenService.createBoundToken(
                                     new PreviewTokenService.BoundTokenRequest(
@@ -1364,9 +1365,9 @@ public class ToolDispatchService {
                                             intent.getIntentCode(), intent.getIntentName(),
                                             tool.getToolName(), tool.getVersion(),
                                             ToolExecutionMode.EXECUTE,
-                                            null, null, null,
+                                            subject.entityType(), subject.entityId(), subject.operation(),
                                             params,
-                                            tokenCurrentValues != null ? tokenCurrentValues : java.util.Map.of(),
+                                            priorStateSnapshot(tool, previewData),
                                             tokenNewValues != null ? tokenNewValues : java.util.Map.of(),
                                             300));
                     if (com.cretas.aims.service.intent.PurchaseTaskGrantService.CANONICAL_TOOL.equals(tool.getToolName())) {
@@ -1447,6 +1448,236 @@ public class ToolDispatchService {
      * <p>⚠️ previewData 为 null (预览体不是 JSON 对象) 时判不了, 维持原行为 (照常铸 token)。
      */
     @SuppressWarnings("unchecked")
+    // ==================== 写入确认: 对象与状态绑定 (Fable 审阅 §8.2 / 建议 5) ====================
+
+    /** 凭据上的对象: 类型、ID、操作。新建型工具没有已存在的对象, ID 记 {@link #NEW_RECORD_ENTITY_ID}。 */
+    record PreviewSubject(String entityType, String entityId, String operation) { }
+
+    static final String NEW_RECORD_ENTITY_ID = "NEW";
+
+    private static final java.util.Set<String> PRINCIPAL_PARAMETER_KEYS = java.util.Set.of(
+            "factoryId", "factory_id", "tenantId", "tenant_id", "userId", "user_id");
+
+    /**
+     * 铸凭据时把对象类型与对象 ID 填上 (以前三个都传 null, 对象只作为参数的一部分进了哈希)。
+     * 类型: 预览自报的 entityType, 否则就是工具名 (工具即对象种类); ID: 预览自报的 entityId,
+     * 否则按工具声明的必填参数顺序取第一个以 Id / No 结尾的值 (主体参数); 新建型工具取 NEW。
+     */
+    PreviewSubject previewSubject(ToolExecutor tool, Map<String, Object> params, Map<String, Object> previewData) {
+        String entityType = previewText(previewData, "entityType");
+        if (entityType == null) {
+            entityType = tool.getToolName();
+        }
+        String entityId = previewText(previewData, "entityId");
+        if (entityId == null && params != null) {
+            for (String key : requiredParameterNames(tool)) {
+                if (key == null || PRINCIPAL_PARAMETER_KEYS.contains(key)
+                        || !(key.endsWith("Id") || key.endsWith("No"))) {
+                    continue;
+                }
+                Object value = params.get(key);
+                if (value != null && !String.valueOf(value).isBlank()) {
+                    entityId = String.valueOf(value);
+                    break;
+                }
+            }
+        }
+        if (entityId == null && tool.previewCreatesNewRecordOnly()) {
+            entityId = NEW_RECORD_ENTITY_ID;
+        }
+        String operation = tool.getActionType() != null ? tool.getActionType().name() : null;
+        return new PreviewSubject(truncate(entityType, 50), truncate(entityId, 100), truncate(operation, 20));
+    }
+
+    private static List<String> requiredParameterNames(ToolExecutor tool) {
+        Map<String, Object> schema;
+        try {
+            schema = tool.getParametersSchema();
+        } catch (RuntimeException e) {
+            return List.of();
+        }
+        if (schema != null && schema.get("required") instanceof List<?> required) {
+            List<String> names = new ArrayList<>();
+            for (Object item : required) {
+                if (item instanceof String name) {
+                    names.add(name);
+                }
+            }
+            return names;
+        }
+        return List.of();
+    }
+
+    private static String previewText(Map<String, Object> previewData, String key) {
+        if (previewData == null) {
+            return null;
+        }
+        Object value = previewData.get(key);
+        if (value == null && previewData.get("data") instanceof Map<?, ?> nested) {
+            value = nested.get(key);
+        }
+        return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value);
+    }
+
+    private static String truncate(String value, int max) {
+        return value == null || value.length() <= max ? value : value.substring(0, max);
+    }
+
+    private static final java.util.regex.Pattern PRIOR_STATE_KEY = java.util.regex.Pattern.compile("^current(ly)?[A-Z].*");
+
+    /**
+     * 预览给出的改前值快照, 铸凭据时存进凭据、确认时重算后比对, 两处必须用同一条规则。
+     * <ol>
+     *   <li>预览的 {@code currentValues} (或 currentValue / current) —— 工具明确给出的改前值;</li>
+     *   <li>没有时, 改动已有记录的工具取预览里以 {@code current} 开头的字段 (currentStatus、currentEnabled、
+     *       currentQuantity…): 状态流转类工具普遍这样报改前状态, 只是没包成 currentValues;</li>
+     *   <li>都没有 → 空 (新建型放行, 其余无法核对)。</li>
+     * </ol>
+     * 新建型工具不取第 2 类: 那类字段在新建工具里多半是旁证 (如「当前已有 N 条」), 不是被改对象的状态。
+     * 返回值不为 null; 只进凭据, 不改确认卡上展示的改前/改后。
+     */
+    Map<String, Object> priorStateSnapshot(ToolExecutor tool, Map<String, Object> previewData) {
+        Map<String, Object> explicit = extractPreviewSection(previewData, "currentValues", "currentValue", "current");
+        if (explicit != null) {
+            return explicit;
+        }
+        if (previewData == null || tool.previewCreatesNewRecordOnly()) {
+            return Map.of();
+        }
+        Map<String, Object> data = previewData.get("data") instanceof Map<?, ?> nested
+                ? (Map<String, Object>) nested : previewData;
+        Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        data.forEach((key, value) -> {
+            if (key != null && PRIOR_STATE_KEY.matcher(key).matches()) {
+                snapshot.put(key, value);
+            }
+        });
+        return snapshot;
+    }
+
+    /** 确认前状态核对的结论。{@code proceed=false} 时本次确认不得执行工具。 */
+    record ConfirmStateCheck(boolean proceed, String code, List<String> changedFields, String message) {
+        static final String STATE_CHANGED = "STATE_CHANGED";
+        static final String PRECONDITION_CHANGED = "PRECONDITION_CHANGED";
+        static final String NOT_COMPARABLE = "NOT_COMPARABLE";
+
+        static ConfirmStateCheck ok() {
+            return new ConfirmStateCheck(true, "OK", List.of(), null);
+        }
+
+        static ConfirmStateCheck reject(String code, List<String> fields, String message) {
+            return new ConfirmStateCheck(false, code, fields == null ? List.of() : List.copyOf(fields), message);
+        }
+    }
+
+    /**
+     * 确认时重读对象当前状态: 用凭据里绑定的参数重跑一次<b>只读</b>预览, 拿这次的改前值
+     * ({@code currentValues}) 与铸凭据时记下的改前值逐字段比对。
+     * <ul>
+     *   <li>预览不再通过 (业务前提变了) → 拒绝, 带预览给的原因;</li>
+     *   <li>有字段不一致 (预览之后有人改过) → 拒绝, 写明哪些字段变了;</li>
+     *   <li>两次都给不出改前值: 只新建记录的工具 ({@link ToolExecutor#previewCreatesNewRecordOnly()}) 放行,
+     *       其余一律按「无法核对」拒绝 (fail-closed);</li>
+     *   <li>预览本身抛异常 → 拒绝 (什么都没执行, 不是「结果不明」)。</li>
+     * </ul>
+     * 本方法不执行任何写操作; 比对与执行之间的毫秒级窗口仍由各工具自己的业务校验兜底。
+     */
+    ConfirmStateCheck recheckPreviewState(ToolExecutor tool, AIIntentConfig intent,
+                                          String storedCurrentValuesJson,
+                                          Map<String, Object> claimedParameters,
+                                          String factoryId, Long userId, String userRole) {
+        Map<String, Object> stored;
+        try {
+            stored = storedCurrentValuesJson == null || storedCurrentValuesJson.isBlank()
+                    ? Map.of()
+                    : objectMapper.readValue(storedCurrentValuesJson,
+                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+        } catch (Exception e) {
+            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+                    "预览时记录的改前值无法读取，本次未执行。请重新预览后再确认。");
+        }
+        if (stored == null) {
+            stored = Map.of();
+        }
+        if (!tool.supportsPreview()) {
+            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+                    "这个操作无法在确认前核对对象当前状态，本次未执行。请到业务页面操作。");
+        }
+
+        Map<String, Object> previewData;
+        try {
+            Map<String, Object> params = new HashMap<>(
+                    claimedParameters != null ? claimedParameters : Map.of());
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+            Map<String, Object> context = TrustedExecutionContext.merge(null, factoryId, userId, userRole);
+            context.put("intentConfig", intent);
+            String resultJson = tool.preview(
+                    ToolCall.of(java.util.UUID.randomUUID().toString(), tool.getToolName(),
+                            objectMapper.writeValueAsString(params)),
+                    context);
+            previewData = objectMapper.readValue(resultJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+        } catch (Exception e) {
+            log.warn("确认前重读状态失败, 拒绝执行: tool={}, error={}", tool.getToolName(), e.getMessage());
+            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+                    "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
+        }
+        if (previewData == null) {
+            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+                    "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
+        }
+
+        IntentExecuteResponse blocked = blockedPreviewResponse(previewData, intent);
+        if (blocked != null) {
+            return ConfirmStateCheck.reject(ConfirmStateCheck.PRECONDITION_CHANGED, List.of(),
+                    "预览之后情况有变化，现在不能执行：" + blocked.getMessage() + " 本次未执行。");
+        }
+
+        Map<String, Object> fresh = priorStateSnapshot(tool, previewData);
+        if (stored.isEmpty() && fresh.isEmpty()) {
+            if (tool.previewCreatesNewRecordOnly()) {
+                return ConfirmStateCheck.ok();
+            }
+            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+                    "这个操作的预览没有给出可核对的改前值，无法确认对象在预览之后没被改动，本次未执行。"
+                            + "请重新预览确认最新情况，或到业务页面操作。");
+        }
+
+        List<String> changed = changedFields(stored, fresh);
+        if (!changed.isEmpty()) {
+            String fields = changed.stream().map(f -> "「" + f + "」").collect(java.util.stream.Collectors.joining(""));
+            return ConfirmStateCheck.reject(ConfirmStateCheck.STATE_CHANGED, changed,
+                    "预览之后" + fields + "已被改动（与预览时的改前值不一致），本次未执行。请重新预览后再确认。");
+        }
+        return ConfirmStateCheck.ok();
+    }
+
+    private List<String> changedFields(Map<String, Object> stored, Map<String, Object> fresh) {
+        java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>(stored.keySet());
+        keys.addAll(fresh.keySet());
+        List<String> changed = new ArrayList<>();
+        for (String key : keys) {
+            if (!stored.containsKey(key) || !fresh.containsKey(key)) {
+                changed.add(key);
+                continue;
+            }
+            com.fasterxml.jackson.databind.JsonNode left = objectMapper.valueToTree(stored.get(key));
+            com.fasterxml.jackson.databind.JsonNode right = objectMapper.valueToTree(fresh.get(key));
+            if (!left.equals(NUMERIC_AWARE, right)) {
+                changed.add(key);
+            }
+        }
+        return changed;
+    }
+
+    /** 12.5 与 12.50、5 与 5.0 算同一个值: 序列化往返会改数字的表示, 不能让它被读成「改过」。 */
+    private static final java.util.Comparator<com.fasterxml.jackson.databind.JsonNode> NUMERIC_AWARE = (a, b) -> {
+        if (a.isNumber() && b.isNumber()) {
+            return a.decimalValue().compareTo(b.decimalValue());
+        }
+        return a.equals(b) ? 0 : 1;
+    };
+
     IntentExecuteResponse blockedPreviewResponse(Map<String, Object> previewData, AIIntentConfig intent) {
         if (previewData == null) {
             return null;

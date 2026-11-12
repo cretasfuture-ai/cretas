@@ -37,7 +37,9 @@ class ConfirmedWriteFollowUpContractTest {
         var token=IntentPreviewToken.builder().token("local-proof").factoryId("F006").tenantId("F006").userId(7L)
             .intentCode(code).toolName(intent.getToolName()).descriptorVersion("1.0.0")
             .executionMode(ToolExecutionMode.EXECUTE).status(IntentPreviewToken.TokenStatus.EXECUTING)
-            .expiresAt(LocalDateTime.now().plusMinutes(5)).build();
+            .expiresAt(LocalDateTime.now().plusMinutes(5))
+            // 改前值按生产铸凭据的同一规则从真实工具的预览取 (确认时会重跑预览比对)
+            .currentValues(recordedPriorState(dispatch,h,intent.getToolName(),params)).build();
         when(tokens.claimToken("local-proof","F006",7L,DIGEST))
             .thenReturn(PreviewTokenService.ClaimResult.success(token,"local-claim",params));
         when(tokens.resolveClaim(eq("local-proof"),eq("local-claim"),anyBoolean(),any())).thenReturn(resolve);
@@ -48,6 +50,19 @@ class ConfirmedWriteFollowUpContractTest {
         var response=orchestrator.confirm("F006",new ConfirmationProof("local-proof",DIGEST,Instant.now().plusSeconds(300)),7L,h.role);
         System.out.println("OBS confirm role="+h.role+" status="+response.getStatus()+" followUps="+response.getFollowUps());
         return response;
+    }
+
+    String recordedPriorState(ToolDispatchService dispatch,SseFactoryFollowUpContractTest.Harness h,String toolName,
+                              Map<String,Object> params) {
+        try {
+            var tool=h.registry.getExecutor(toolName).orElseThrow();
+            Map<String,Object> args=new java.util.HashMap<>(params);
+            TrustedExecutionContext.enforcePrincipal(args,"F006",7L,h.role);
+            Map<String,Object> context=TrustedExecutionContext.merge(null,"F006",7L,h.role);
+            String json=tool.preview(com.cretas.aims.ai.dto.ToolCall.of("p",toolName,h.mapper.writeValueAsString(args)),context);
+            Map<String,Object> preview=h.mapper.readValue(json,new com.fasterxml.jackson.core.type.TypeReference<Map<String,Object>>(){});
+            return h.mapper.writeValueAsString(dispatch.priorStateSnapshot(tool,preview));
+        } catch (Exception e) { throw new IllegalStateException(e); }
     }
 
     Map<String,Object> qualityParams() { return Map.of("qualityInspectionId","Q-D","defectType","APPEARANCE","quantity",2); }
@@ -126,7 +141,8 @@ class ConfirmedWriteFollowUpContractTest {
         try(var h=new SseFactoryFollowUpContractTest.Harness("quality_inspector")) {
             var suggestions=spy((FactoryFollowUpService)h.suggestions);
             var response=confirm(h,"QUALITY_DEFECT_RECORD",qualityParams(),suggestions,false);
-            assertThat(response.getStatus()).isEqualTo("FAILED");
+            // 写入已落下 (下面 save 被调用) 而凭据状态没记上: 不能回「失败」诱导重做, 回「结果不明」(写入确认三洞 #2)
+            assertThat(response.getStatus()).isEqualTo("OUTCOME_UNKNOWN");
             assertThat(response.getFollowUps()).isNullOrEmpty();
             verify(suggestions,never()).suggest(anyString(),anyLong(),anyString(),any(),anyString());
             verify(h.defects).save(any(QualityDefect.class));
