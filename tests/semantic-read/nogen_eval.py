@@ -25,8 +25,42 @@ sys.path.insert(0, str(HERE))
 from decision_eval_transport import (TURN, BudgetStop, Ledger, _usage_tokens,  # noqa: E402
                                      load_llm_env, qwen_decision_type)
 from decision_layer_eval import load_c, load_catalog, render_state, source_hashes, git_head  # noqa: E402
-from nogen_pipeline import (LunaBackend, QwenBackend, candidates, clarify_question, decide, load_rubric,  # noqa: E402
-                            rubric_notes)
+from nogen_pipeline import (LunaBackend, QwenBackend, candidates, clarify_question, decide, decide_v3,  # noqa: E402
+                            load_rubric, rubric_notes)
+
+
+def load_v4(path, split, per_act, seed):
+    """pool-v4 rows in the C format, gold = rubric-v3 view (v3 label when its teachers agreed, else v1;
+    rows whose v3 teachers disagreed are excluded). ``split`` is ``split_known``."""
+    import collections
+    import random
+    rows = []
+    for line in pathlib.Path(path).read_text('utf-8').splitlines():
+        if not line.strip():
+            continue
+        r = json.loads(line)
+        if r.get('split_known') != split:
+            continue
+        v3 = r.get('v3')
+        if isinstance(v3, dict):
+            if not v3.get('agreed'):
+                continue
+            act, intent, gold_src = v3.get('dialogue_act'), v3.get('intent'), 'v3'
+        else:
+            act, intent, gold_src = r.get('dialogue_act'), r.get('intent'), 'v1'
+        if act is None:
+            continue
+        rows.append(dict(id=r['id'], utterance=r['utterance'], state=r.get('state'), dialogue_act=act, intent=intent,
+                         read_only=r.get('read_only'), gold_src=gold_src))
+    by = collections.defaultdict(list)
+    for r in rows:
+        by[r['dialogue_act']].append(r)
+    out = []
+    for act in sorted(by):
+        pool = sorted(by[act], key=lambda r: r['id'])
+        random.Random(seed + act).shuffle(pool)
+        out += pool[: per_act.get(act, per_act.get('*', 0))]
+    return sorted(out, key=lambda r: r['id'])
 
 
 def call_rows(calls):
@@ -67,7 +101,11 @@ async def one_turn(backend, ctx, query, history, prev_intent, thresholds):
         if rec['signals'] is None:
             rec.update(outcome='ERROR', intent=None, top=[], act=None)
         else:
-            d = decide(rec['signals'], *thresholds, prev_intent=prev_intent)
+            if ctx['policy'] == 'v3':
+                d = decide_v3(rec['signals'], thresholds[0], thresholds[1], prev_intent=prev_intent,
+                              modes=ctx['modes'], margin_t=ctx['margin_t'])
+            else:
+                d = decide(rec['signals'], *thresholds, prev_intent=prev_intent)
             rec.update(outcome=d['outcome'], intent=d['intent'] if d['outcome'] == 'EXECUTE' else None,
                        top=d['top'], act=d['act'], reason=d['reason'])
             if d['outcome'] == 'CLARIFY':
@@ -98,16 +136,27 @@ async def main_async(a):
     ledger = None
     if a.backend == 'luna':
         ledger = Ledger(out, a.cap, pathlib.Path(a.key_file), concurrency=a.concurrency, quota_roots=a.quota_from, paid=a.paid)
-        backend = LunaBackend(ledger)
+        backend = LunaBackend(ledger, predicate=a.predicate)
     else:
         load_llm_env(a.llm_env)
         backend = QwenBackend(qwen_decision_type()(timeout_s=float(a.timeout)))
     thresholds = None if a.mode == 'record' else (a.clarify_t, a.exec_t)
+    ctx['policy'], ctx['margin_t'] = a.policy, a.margin_t
+    if a.policy == 'v3':
+        sys.path.insert(0, str(ROOT / 'scripts' / 'finetune'))
+        import tool_access_modes
+        scan = tool_access_modes.scan()
+        ctx['modes'] = {c: ('NO_TOOL' if not r.get('tool_name') else scan.get(r['tool_name'], {}).get('mode', 'UNDECLARED'))
+                        for c, r in by_code.items()}
     corpus_m = json.loads(pathlib.Path(a.corpus_m).read_text('utf-8'))['dialogues'] if a.corpus_m else []
-    corpus_c = load_c(a.corpus_c, json.loads(a.c_per_act), a.seed) if a.corpus_c else []
+    if a.corpus_v4:
+        corpus_c = load_v4(a.corpus_v4, a.v4_split, json.loads(a.c_per_act), a.seed)
+    else:
+        corpus_c = load_c(a.corpus_c, json.loads(a.c_per_act), a.seed) if a.corpus_c else []
     manifest = dict(head=git_head(), source_hashes=source_hashes(), backend=a.backend, mode=a.mode,
                     thresholds=thresholds, corpus_m=a.corpus_m, corpus_c=a.corpus_c, c_ids=[r['id'] for r in corpus_c],
-                    rubric=a.rubric, retrieval_snapshot=a.retrieval_snapshot, max_options=a.max_options, runs=a.runs, label=a.label, started=time.time())
+                    rubric=a.rubric, retrieval_snapshot=a.retrieval_snapshot, max_options=a.max_options, predicate=a.predicate,
+                    policy=a.policy, margin_t=a.margin_t, corpus_v4=a.corpus_v4, v4_split=a.v4_split, runs=a.runs, label=a.label, started=time.time())
     (out / 'manifest.json').write_text(json.dumps(manifest, ensure_ascii=False, indent=2), 'utf-8')
     fh = target.open('a', encoding='utf-8')
 
@@ -179,6 +228,11 @@ def main():
     p.add_argument('--concurrency', type=int, default=8)
     p.add_argument('--parallel', type=int, default=6)
     p.add_argument('--max-options', type=int, default=18)
+    p.add_argument('--predicate', choices=('v1', 'v3', 'both'), default='v1', help='Luna clarify Predicate wording')
+    p.add_argument('--policy', choices=('v1', 'v3'), default='v1', help='decision rule (v3 = Steve 2026-11-12 policy)')
+    p.add_argument('--margin-t', type=float, default=0.3)
+    p.add_argument('--corpus-v4', help='pool-v4.jsonl (rubric-v3 gold view) instead of --corpus-c')
+    p.add_argument('--v4-split', default='validation')
     asyncio.run(main_async(p.parse_args()))
 
 
