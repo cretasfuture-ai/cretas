@@ -79,6 +79,18 @@ class ConfirmStateRecheckContractTest {
     }
 
     @Test
+    void scalarListsFromUnorderedQueriesCompareAsSetsButAChangedMemberStillCounts() throws Exception {
+        String recorded = "{\"currentlySubscribedDeviceIds\":[\"cam-1\",\"cam-2\"]}";
+        ToolExecutor reordered = tool("{\"success\":true,\"data\":{\"canDo\":true,"
+                + "\"currentlySubscribedDeviceIds\":[\"cam-2\",\"cam-1\"]}}", false);
+        assertThat(recheck(reordered, recorded).proceed()).as("查询没有 ORDER BY: 顺序不是状态").isTrue();
+
+        ToolExecutor changed = tool("{\"success\":true,\"data\":{\"canDo\":true,"
+                + "\"currentlySubscribedDeviceIds\":[\"cam-1\",\"cam-3\"]}}", false);
+        assertThat(recheck(changed, recorded).changedFields()).containsExactly("currentlySubscribedDeviceIds");
+    }
+
+    @Test
     void noComparablePriorValuesFailsClosedUnlessTheToolOnlyCreatesNewRecords() throws Exception {
         String preview = "{\"success\":true,\"data\":{\"canDo\":true,\"name\":\"新规则\",\"currentActiveProcedures\":3}}";
 

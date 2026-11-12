@@ -175,7 +175,7 @@ public class OpportunityTransitionStageTool extends AbstractBusinessTool {
         // 改前值 (确认前状态核对): 确认时重跑预览, 商机阶段变了就不按旧预览推进
         Map<String, Object> currentValues = new java.util.LinkedHashMap<>();
         currentValues.put("商机阶段", fromStage != null ? fromStage.getDisplayName() : "—");
-        result.put("currentValues", currentValues);
+        // MUTANT: currentValues removed
         result.put("toStage", newStage.name());
         result.put("toStageDisplay", newStage.getDisplayName());
         result.put("newProbability", newStage.getDefaultProbability());
