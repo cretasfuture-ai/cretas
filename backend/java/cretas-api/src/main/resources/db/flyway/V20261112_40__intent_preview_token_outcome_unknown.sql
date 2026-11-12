@@ -10,7 +10,3 @@ ALTER TABLE intent_preview_tokens
     ADD CONSTRAINT ck_ipt_atomic_status
     CHECK (status IN ('PENDING', 'EXECUTING', 'CONFIRMED', 'FAILED', 'CANCELLED', 'EXPIRED', 'OUTCOME_UNKNOWN'));
 
--- 对账按 (status, claimed_at) 扫停在执行中的凭据; 只索引 EXECUTING 行, 平时几乎为空。
-CREATE INDEX IF NOT EXISTS idx_ipt_executing_claimed_at
-    ON intent_preview_tokens (claimed_at)
-    WHERE status = 'EXECUTING';

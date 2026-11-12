@@ -16,14 +16,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * V20261112_60 on real PostgreSQL after V20261028_75: OUTCOME_UNKNOWN becomes a legal token status,
+ * V20261112_40 on real PostgreSQL after V20261028_75: OUTCOME_UNKNOWN becomes a legal token status,
  * unknown statuses stay rejected, the EXECUTING-needs-a-claim check survives, and the script re-runs.
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class IntentPreviewTokenOutcomeUnknownMigrationPostgresContractTest {
 
     private static final String BASE = "db/flyway/V20261028_75__intent_preview_token_atomic_confirmation.sql";
-    private static final String MIGRATION = "db/flyway/V20261112_60__intent_preview_token_outcome_unknown.sql";
+    private static final String MIGRATION = "db/flyway/V20261112_40__intent_preview_token_outcome_unknown.sql";
 
     @Test
     void outcomeUnknownIsAcceptedAndEverythingElseStaysConstrained() throws Exception {
@@ -56,10 +56,10 @@ class IntentPreviewTokenOutcomeUnknownMigrationPostgresContractTest {
                     "INSERT INTO intent_preview_tokens (token, factory_id, user_id, intent_code, status, expires_at)"
                             + " VALUES ('t-no-claim', 'F1', 7, 'X', 'EXECUTING', now())"),
                     "EXECUTING without a claim is still refused");
-            try (ResultSet row = statement.executeQuery("SELECT count(*) FROM pg_indexes WHERE schemaname = '"
-                    + schema + "' AND indexname = 'idx_ipt_executing_claimed_at'")) {
+            try (ResultSet row = statement.executeQuery("SELECT count(*) FROM pg_constraint WHERE conrelid ="
+                    + " 'intent_preview_tokens'::regclass AND conname IN ('ck_ipt_atomic_status', 'ck_ipt_executing_claim')")) {
                 assertTrue(row.next());
-                assertEquals(1, row.getInt(1));
+                assertEquals(2, row.getInt(1), "status check replaced in place, executing-claim check untouched");
             }
         } finally {
             try (Connection connection = DriverManager.getConnection(url, user, password);
