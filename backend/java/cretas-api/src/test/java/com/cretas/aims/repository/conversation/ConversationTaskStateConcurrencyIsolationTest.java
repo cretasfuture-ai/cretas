@@ -147,6 +147,29 @@ class ConversationTaskStateConcurrencyIsolationTest {
                 .isEqualTo(SessionStatus.CANCELLED);
     }
 
+    /** 另两条批量更新 (定时过期 ACTIVE / 过期 SUSPENDED) 同样要涨版本号, 各自有只靠它挡的样本。 */
+    @Test
+    void bulkExpiriesBumpTheVersionToo() {
+        ConversationSession activeRow = active("INTENT_IDLE");
+        ConversationSession staleActive = repository.findById(activeRow.getSessionId()).orElseThrow();
+        ConversationSession suspendedRow = active("INTENT_PARKED");
+        service.interrupt(factory, USER, repository.findById(suspendedRow.getSessionId()).orElseThrow());
+        ConversationSession staleSuspended = repository.findById(suspendedRow.getSessionId()).orElseThrow();
+        LocalDateTime cutoff = LocalDateTime.now().plusSeconds(1);
+
+        assertThat(inTx(() -> repository.expireInactiveSessions(cutoff, LocalDateTime.now()))).isGreaterThanOrEqualTo(1);
+        assertThat(inTx(() -> repository.expireSuspendedSessions(cutoff, LocalDateTime.now()))).isGreaterThanOrEqualTo(1);
+
+        assertThat(repository.findById(activeRow.getSessionId()).orElseThrow().getVersion())
+                .as("expireInactiveSessions 涨版本").isEqualTo(staleActive.getVersion() + 1);
+        assertThat(repository.findById(suspendedRow.getSessionId()).orElseThrow().getVersion())
+                .as("expireSuspendedSessions 涨版本").isEqualTo(staleSuspended.getVersion() + 1);
+        staleActive.addCollectedParameter("taskId", "1827");
+        assertThatThrownBy(() -> repository.save(staleActive)).isInstanceOf(ObjectOptimisticLockingFailureException.class);
+        assertThat(repository.findById(activeRow.getSessionId()).orElseThrow().getStatus()).isEqualTo(SessionStatus.TIMEOUT);
+        assertThat(repository.findById(suspendedRow.getSessionId()).orElseThrow().getStatus()).isEqualTo(SessionStatus.TIMEOUT);
+    }
+
     private ConversationSession active(String intent) {
         ConversationSession s = ConversationSession.createForParameterCollection(factory, USER, intent,
                 new ArrayList<>(List.of(RequiredParameter.builder().name("taskId").label("任务号")
