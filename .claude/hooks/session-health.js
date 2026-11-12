@@ -15,7 +15,11 @@
  *
  * 安静: 同一级别每个会话只提醒一次; L2 之后每再涨 100K 提醒一次。
  * 失败策略: 全程 fail-silent, 任何异常都输出空, 不影响会话。
- * 卸载: 删 settings.json 里 hooks.UserPromptSubmit 中指向本文件的那一项。
+ * organizer (标题以「Organizer｜」开头): 首次运行时注入 organizer SKILL.md「交班流程」原文, 过线提醒也带上。
+ * 接线: 项目 settings 的 UserPromptSubmit (原有) + 用户级 ~/.claude/settings.json 的 SessionStart / PostToolUse(*),
+ *   用户级 command 指向主目录副本。organizer 多数回合被消息叫醒, 不一定经过 UserPromptSubmit; worktree 里新加的
+ *   项目级 PostToolUse 2026-11-13 实测在新会话不触发, 所以挂用户级。状态文件去重, 多处挂载不会重复提醒。
+ * 卸载: 删 settings.json 里 hooks.UserPromptSubmit 中指向本文件的那一项, 以及用户级 SessionStart/PostToolUse 那两项。
  * 调阈值: 改下面 CONFIG, 或设环境变量 SESSION_HEALTH_SOFT_K / SESSION_HEALTH_HARD_K / SESSION_HEALTH_MAX_COMPACT。
  */
 'use strict';
@@ -30,6 +34,51 @@ const CONFIG = {
   maxCompactions: Number(process.env.SESSION_HEALTH_MAX_COMPACT) || 2,     // 压缩 >= 此数即 L2
   reRemindStep: 100 * 1000,
 };
+
+// organizer 识别: 读桌面应用本机会话记录, 按 cliSessionId 找标题 (与 archive-guard 同一数据源)
+function sessionStoreRoot() {
+  if (process.env.CRETAS_CCD_SESSION_STORE) return process.env.CRETAS_CCD_SESSION_STORE;
+  const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+  return path.join(appData, 'Claude', 'claude-code-sessions');
+}
+function sessionTitle(cliId) {
+  const root = sessionStoreRoot();
+  if (!fs.existsSync(root)) return null;
+  for (const a of fs.readdirSync(root)) {
+    const da = path.join(root, a);
+    if (!fs.statSync(da).isDirectory()) continue;
+    for (const b of fs.readdirSync(da)) {
+      const db = path.join(da, b);
+      if (!fs.statSync(db).isDirectory()) continue;
+      for (const f of fs.readdirSync(db)) {
+        if (!/^local_.*\.json$/.test(f)) continue;
+        const p = path.join(db, f);
+        let s;
+        try { s = fs.readFileSync(p, 'utf8'); } catch (_) { continue; }
+        if (!s.includes(cliId)) continue;
+        try { const r = JSON.parse(s); if (r.cliSessionId === cliId) return r.title || ''; } catch (_) { /* 半截文件 */ }
+      }
+    }
+  }
+  return null;
+}
+const isOrganizerTitle = (t) => typeof t === 'string' && /^Organizer[｜|]/.test(t);
+
+// 交班流程原文: 运行时从 organizer SKILL.md 截取, 不另抄一份 (形态 D)
+function handoverSection() {
+  const p = process.env.CRETAS_ORGANIZER_SKILL || path.join(__dirname, '..', 'skills', 'organizer', 'SKILL.md');
+  let s;
+  try { s = fs.readFileSync(p, 'utf8'); } catch (_) { return null; }
+  const start = s.indexOf('🔴 **交班流程**');
+  if (start < 0) return null;
+  const end = s.indexOf('\n- **', start + 10);
+  return s.slice(start, end > start ? end : undefined).trim();
+}
+function organizerBlock(why) {
+  const sec = handoverSection();
+  if (!sec) return `[organizer] ${why}。⚠️ 没量到: 从 .claude/skills/organizer/SKILL.md 截不到「交班流程」一节, 请手动读 origin/main 上的这一节。`;
+  return `[organizer] ${why}。交班流程原文 (organizer SKILL.md, 每一步都要做, 会话 id 只用系统给的):\n${sec}`;
+}
 
 const ROOT = path.join(os.homedir(), '.claude', 'context-handoff');
 const STATE_DIR = path.join(ROOT, 'health');
@@ -95,9 +144,22 @@ function main(input) {
   else if (level === 2 && ctx >= st.remindedAt + CONFIG.reRemindStep && st.remindedAt > 0) speak = true;
 
   if (speak) { st.level = level; st.remindedAt = ctx; }
+
+  // organizer: 第一次识别出来时注入一次交班流程; 过线提醒时也带上
+  const now = Date.now();
+  if (st.org !== true && now - (st.orgCheckedAt || 0) > 10 * 60 * 1000) {
+    st.orgCheckedAt = now;
+    const title = sessionTitle(sid);
+    if (title !== null) st.org = isOrganizerTitle(title);
+  }
+  let brief = null;
+  if (st.org === true && !st.briefed) {
+    st.briefed = true;
+    brief = organizerBlock('本会话是 organizer: 交班 (含被交班) 时照下面做');
+  }
   fs.writeFileSync(sp + '.tmp', JSON.stringify(st), 'utf8');
   fs.renameSync(sp + '.tmp', sp);
-  if (!speak) return null;
+  if (!speak) return brief;
 
   const k = (n) => Math.round(n / 1000) + 'K';
   const handoff = path.join(HANDOFF_DIR, sid.slice(0, 8) + '.md').replace(/\\/g, '/');
@@ -117,7 +179,9 @@ function main(input) {
     '到下一个安全停止点就收口，即使这件事还没做完：先把正在跑的一步做完（不在半截停下，不留未提交的半成品），再写交接换会话。',
     ...how,
   ];
-  return (level === 2 ? hard : soft).join('\n');
+  const text = (level === 2 ? hard : soft).join('\n');
+  if (st.org === true) return text + '\n' + organizerBlock('organizer 到线了, 交班按下面的流程走 (上面「交接 ≤ 15 行」同样适用)');
+  return brief ? brief + '\n' + text : text;
 }
 
 let buf = '';
@@ -128,8 +192,10 @@ process.stdin.on('end', () => {
     const input = JSON.parse(buf || '{}');
     const text = main(input);
     if (text) {
+      // 同时挂在 UserPromptSubmit / PostToolUse / SessionStart: organizer 多数回合是被消息/通知叫醒的, 不一定经过 UserPromptSubmit
+      const ev = ['UserPromptSubmit', 'PostToolUse', 'SessionStart'].includes(input.hook_event_name) ? input.hook_event_name : 'UserPromptSubmit';
       process.stdout.write(JSON.stringify({
-        hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: text },
+        hookSpecificOutput: { hookEventName: ev, additionalContext: text },
       }));
     }
   } catch (_) { /* fail-silent */ }
