@@ -270,8 +270,47 @@ class SameNameEmployeeAttendanceEntryContractTest {
         Harness h = new Harness(entry, sameIdFactoryUser.getId(), null, AuthenticatedActorType.PLATFORM_ADMIN);
         IntentExecuteResponse r = h.say("查一下张三这周的考勤", "张三");
 
+        // 两个入口在会话身份绑定处就拒绝了平台账号 (措辞是入口的); 工具里那道闸在下一条单独钉住
+        assertThat(r.getStatus()).isNotIn("SUCCESS", "COMPLETED");
         assertThat(r.getMessage() + " | " + r.getFormattedText())
                 .doesNotContain("2 位").doesNotContain("包装车间").doesNotContain("加工一车间");
+        verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
+    }
+
+    /**
+     * 工具这一层的闸 (纵深): 即便有别的入口把平台账号带到考勤工具, 按姓名找人也必须是绑定本厂的工厂用户。
+     * 入口已在前面拒绝, 所以这一条直接调工具 —— 去掉 boundFactoryUser 检查 (变异 M4) 时本条变红。
+     * 权限判定是真的 ToolRbacGuard + PermissionServiceImpl: users 表里同一个 id 是 hr_admin, 本该放行。
+     */
+    @org.junit.jupiter.api.Test
+    @DisplayName("工具层: 平台账号 id 撞上 hr_admin 工厂用户, 不能借他的 hr:read 按姓名找人")
+    void toolRefusesPlatformActorEvenWhenTheSameIdIsAnHrAdmin() throws Exception {
+        factories();
+        User sameIdFactoryUser = user(FACTORY, "hr-collide", "人事王", "人事部", null, "hr_admin");
+        user(FACTORY, "zs-a", "张三", "加工一车间", "011");
+        user(FACTORY, "zs-b", "张三", "包装车间", "027");
+        flush();
+        Harness h = new Harness(Entry.ORDINARY, sameIdFactoryUser.getId(), null, AuthenticatedActorType.FACTORY_USER);
+        AttendanceHistoryTool tool = (AttendanceHistoryTool) h.registry.getExecutor("attendance_history").orElseThrow();
+        Map<String, Object> params = new HashMap<>();
+        params.put("employeeName", "张三");
+        params.put("userId", sameIdFactoryUser.getId());
+        Map<String, Object> context = Map.of("userId", sameIdFactoryUser.getId(), "factoryId", FACTORY);
+
+        // 阳性对照: 同样的调用, 工厂用户身份 → 两个张三都查 (证明下面的拒绝不是权限判定本身失败)
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.FACTORY_USER, sameIdFactoryUser.getId(), FACTORY, "hr_admin"))) {
+            Object ok = ReflectionTestUtils.invokeMethod(tool, "doExecute", FACTORY, new HashMap<>(params), context);
+            assertThat(String.valueOf(((Map<?, ?>) ok).get("message"))).contains("本厂有 2 位叫「张三」的员工");
+        }
+        org.mockito.Mockito.clearInvocations(h.clock);
+
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(new AuthenticatedActor(
+                AuthenticatedActorType.PLATFORM_ADMIN, sameIdFactoryUser.getId(), FACTORY, "platform_admin"))) {
+            org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                            ReflectionTestUtils.invokeMethod(tool, "doExecute", FACTORY, new HashMap<>(params), context))
+                    .hasMessageContaining("本厂员工账号");
+        }
         verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
     }
 
@@ -355,7 +394,7 @@ class SameNameEmployeeAttendanceEntryContractTest {
         private final List<Object[]> events = new ArrayList<>();
         private final AIIntentService recognizer = mock(AIIntentService.class);
         private final SemanticCacheService semanticCache = mock(SemanticCacheService.class);
-        private final ToolRegistry registry = mock(ToolRegistry.class);
+        final ToolRegistry registry = mock(ToolRegistry.class);
         final TimeClockService clock = mock(TimeClockService.class);
         private final Map<String, ConversationMemory> rows = new HashMap<>();
         private final AIIntentConfig attendance;
