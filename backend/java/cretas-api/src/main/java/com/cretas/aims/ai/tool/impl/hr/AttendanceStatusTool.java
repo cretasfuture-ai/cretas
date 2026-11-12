@@ -30,6 +30,9 @@ public class AttendanceStatusTool extends AbstractBusinessTool {
     @Autowired(required = false)
     private com.cretas.aims.ai.tool.ToolRbacGuard rbacGuard;
 
+    @Autowired
+    private com.cretas.aims.repository.UserRepository userRepository;
+
     @Override
     public String getToolName() {
         return "attendance_status";
@@ -53,6 +56,7 @@ public class AttendanceStatusTool extends AbstractBusinessTool {
         userId.put("type", "string");
         userId.put("description", "用户ID，不传则查询当前登录用户");
         properties.put("userId", userId);
+        AttendanceSubject.addNameParameter(properties);
 
         // date: 日期（可选，默认今天）
         Map<String, Object> date = new HashMap<>();
@@ -74,6 +78,17 @@ public class AttendanceStatusTool extends AbstractBusinessTool {
 
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
+        // 口径规则 8: 没指定别人的 userId 而给了姓名 → 同名的都列出来 (权限 + 工厂范围见 AttendanceSubject.runByName)
+        String requestedId = getString(params, "userId");
+        if (AttendanceSubject.nameMayDecide(requestedId, context)) {
+            Map<String, Object> byName = AttendanceSubject.runByName(getString(params, AttendanceSubject.NAME_PARAM),
+                    factoryId, context, rbacGuard, userRepository,
+                    id -> timeClockService.getClockStatus(factoryId, id),
+                    data -> AttendanceSubject.statusSummary(data));
+            if (byName != null) {
+                return byName;
+            }
+        }
         // The App binds the subject to the logged-in user; another employee only for hr readers (AttendanceSubject).
         Long userId = AttendanceSubject.resolve(getString(params, "userId"), context, rbacGuard);
 
