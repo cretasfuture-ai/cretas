@@ -286,6 +286,7 @@ _OWN_CLIENT = re.compile(r"(?<![A-Za-z_])(?:httpx\.)?(?:Async)?Client\(|httpx\.(
                          r"|aiohttp\.ClientSession\(|(?:Async)?OpenAI\(|urlopen\(")
 # 自己建 HTTP 客户端、又提到外部模型地址的模块: 每个都要有理由
 REGISTERED = {
+    "common/llm_egress_health.py": "出口健康探针: 只 GET /v1/models (无请求体、不含任何业务内容, 不计费), 2026-11-12",
     "common/llm_client.py": "出境口本身 (内层真实客户端)",
     "food_kb/services/reranker.py": "重排接口不走 /chat/completions: 在发出前按同一套规则脱敏 (本文件有测试)",
     "common/vl_client.py": "视觉模型, 只发图片 + 固定提示词; 全仓没有调用方",
