@@ -191,6 +191,11 @@ public class IntentExecutionOrchestrator {
     @Autowired(required = false)
     private IntentAccessModeFilter intentAccessModeFilter;
 
+    // 旧出口计数 (INTENT-DISTILL-20261111): 短语直达不经决策模型定意图, 这里只计数不改行为。
+    // required=false: 裸构造的单测为 null = no-op。
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.LegacyIntentExitMetrics legacyExitMetrics;
+
     // C1 clarification business-type filter (restaurant-chat-qa): resolve the factory's business
     // domain + each candidate intent's business_type so the NEED_CLARIFICATION choice list never
     // shows manufacturing options (查询原料库存 / 查询生产批次) to a RESTAURANT tenant.
@@ -464,7 +469,22 @@ public class IntentExecutionOrchestrator {
                     userInput,
                     factoryId,
                     factoryPackConstrained ? "FACTORY" : null);
-            if (earlyPhraseMatch != null && earlyPhraseMatch.hasMatch()) {
+            boolean phraseHit = earlyPhraseMatch != null && earlyPhraseMatch.hasMatch();
+            if (legacyExitMetrics != null) {
+                if (phraseHit) {
+                    AIIntentConfig hitIntent = earlyPhraseMatch.getBestMatch();
+                    legacyExitMetrics.recordExit(
+                            com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE,
+                            "java_phrase_shortcut", factoryId,
+                            com.cretas.aims.service.intent.LegacyIntentExitMetrics.rw(hitIntent,
+                                    () -> isWriteIntentDeclarationAware(hitIntent)),
+                            "precedes_decision");
+                } else {
+                    legacyExitMetrics.recordPass(
+                            com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE);
+                }
+            }
+            if (phraseHit) {
                 AIIntentConfig phraseIntent = earlyPhraseMatch.getBestMatch();
                 // R20c: 餐饮租户的 OUT_OF_DOMAIN 短语 ("今天天气怎么样") 不在此
                 // 短路 — 放行到 tiered 反转, Python 给餐饮语境的域外诚实拒答;

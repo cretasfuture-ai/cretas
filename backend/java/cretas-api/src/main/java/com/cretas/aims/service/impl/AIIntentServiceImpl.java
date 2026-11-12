@@ -176,6 +176,33 @@ public class AIIntentServiceImpl implements AIIntentService {
     private MeterRegistry meterRegistry;
 
     /**
+     * 旧出口计数 (INTENT-DISTILL-20261111): 只计数、只打日志, 不改结果。required=false: 裸构造的单测为 null = no-op。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.LegacyIntentExitMetrics legacyExitMetrics;
+
+    private void exitPass(String site) {
+        if (legacyExitMetrics != null) {
+            legacyExitMetrics.recordPass(site);
+        }
+    }
+
+    private void exitHit(String site, String exit, String factoryId, IntentMatchResult result, String reason) {
+        if (legacyExitMetrics == null) {
+            return;
+        }
+        AIIntentConfig best = result == null ? null : result.getBestMatch();
+        String rw = com.cretas.aims.service.intent.LegacyIntentExitMetrics.rw(best,
+                () -> accessModeFilter == null ? unknownWrite() : accessModeFilter.isWriteIntent(best));
+        legacyExitMetrics.recordExit(site, exit, factoryId, rw, reason);
+    }
+
+    /** accessModeFilter 没注入时不猜读写: 抛出 ⇒ rw=unknown。 */
+    private static boolean unknownWrite() {
+        throw new IllegalStateException("no access mode filter");
+    }
+
+    /**
      * Phase 2B-α (T24): record one stage-hit increment.
      *
      * <p>No-op if MeterRegistry isn't autowired (test environments). Defensive
@@ -356,6 +383,8 @@ public class AIIntentServiceImpl implements AIIntentService {
                 && (earlyPhrase.get().getClarificationQuestion() == null
                     || earlyPhrase.get().getClarificationQuestion().isBlank())) {
             recordStageHit(earlyPhrase.get().getMatchMethod().name());
+            exitHit(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_EARLY_PHRASE,
+                    "java_early_phrase", factoryId, earlyPhrase.get(), "precedes_decision");
             return applyAccessModeFilter(applyRoleRepick(earlyPhrase.get(), userInput, factoryId, userId, userRole),
                     factoryId, mode, userPermissions);
         }
@@ -363,14 +392,18 @@ public class AIIntentServiceImpl implements AIIntentService {
         // shouldUsePythonMatcher(factoryId) honours both the master flag and
         // the Phase 2B canary whitelist (#73 §1.4) so stage 2/3 can dispatch
         // to Python only for whitelisted factoryIds.
+        exitPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_EARLY_PHRASE);
         boolean pythonCandidate = shouldUsePythonMatcher(factoryId) && pythonClient != null
                 && intentResultCache != null && userInput != null && factoryId != null;
+        // 旧出口计数: 下面走到 Java 旧管线时, 这是「为什么没用 Python 决策层的结果」
+        String legacyReason = pythonCandidate ? "python_empty" : "python_disabled";
         // 2026-10-07: Python /api/ai/intent/match 的 userId 是必填项。没有调用者身份时发出去的请求
         // 必然 422, 而且会被熔断器记成一次失败 (拖累其它租户的正常识别)。⛔ 不用 0 / 空串顶替身份 ——
         // 明确选择: 不调 Python, 走权威的旧路径, 并留一条可观测的告警 + 计数。
         if (pythonCandidate && userId == null) {
             log.warn("识别请求没有调用者 userId, 跳过 Python 匹配直接走旧路径: factoryId={}", factoryId);
             recordStageHit("PYTHON_SKIPPED_NO_USER");
+            legacyReason = "no_user";
         }
         if (pythonCandidate && userId != null) {
             String role = userRole != null ? userRole : "";
@@ -399,6 +432,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                 if (cached != null) {
                     log.debug("IntentResultCache hit for query='{}' factoryId={}", userInput, factoryId);
                     recordStageHit("PYTHON_CACHE_HIT");
+                    exitPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_PIPELINE);
                     // 缓存键不含 mode, 存的是未过滤结果 —— 过滤只能发生在返回前, 且必须产出副本,
                     // 否则咨询 tab 的一次剔除会把缓存对象改掉, 串到操作 tab。
                     return applyAccessModeFilter(
@@ -477,6 +511,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                                 cachePutEx.getMessage());
                     }
                     recordStageHit("PYTHON_MATCH");
+                    exitPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_PIPELINE);
                     // 先缓存未过滤结果 (上面), 再对返回值做 mode 过滤 —— 顺序不能反。
                     return applyAccessModeFilter(
                             applyRoleRepick(pyResult, userInput, factoryId, userId, userRole),
@@ -486,6 +521,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                 // 回落旧路径会让它去猜一个意图 (「先别入库」被猜成入库)。不缓存, 原样返回。
                 if (isDecisionNone(pyResult)) {
                     recordStageHit("PYTHON_DECISION_NONE");
+                    exitPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_PIPELINE);
                     return pyResult;
                 }
                 log.info("Python matcher returned empty for query='{}' — falling back to legacy pipeline",
@@ -493,10 +529,13 @@ public class AIIntentServiceImpl implements AIIntentService {
             } catch (Exception e) {
                 log.warn("Python matcher exception for query='{}' — falling back to legacy pipeline: {}",
                         userInput, e.getMessage());
+                legacyReason = com.cretas.aims.service.intent.LegacyIntentExitMetrics.exceptionReason(
+                        "python_exception", e);
             }
             } else {
                 log.debug("Restaurant contextual reference bypasses Python matcher/cache: query='{}', sessionId={}",
                         userInput, sessionId);
+                legacyReason = "restaurant_context";
             }
         }
         // ===== END Python branch =====
@@ -513,6 +552,10 @@ public class AIIntentServiceImpl implements AIIntentService {
         } else {
             recordStageHit("NONE");
         }
+        exitHit(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_PIPELINE,
+                "java_legacy_" + (legacyResult != null && legacyResult.getMatchMethod() != null
+                        ? legacyResult.getMatchMethod().name() : "NONE"),
+                factoryId, legacyResult, legacyReason);
         // legacy pipeline 也必须过滤: Python 分支默认关闭 (canary 白名单), 绝大多数流量走这里,
         // 只在 Python 侧过滤等于没接线。
         return applyAccessModeFilter(
