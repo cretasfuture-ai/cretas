@@ -37,6 +37,11 @@
             "type": "command",
             "command": "bash .claude/tools/worktree-touch.sh",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/session-health.js",
+            "timeout": 10
           }
         ]
       }
