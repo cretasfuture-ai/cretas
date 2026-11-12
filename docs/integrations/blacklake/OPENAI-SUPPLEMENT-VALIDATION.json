@@ -1,0 +1,154 @@
+{
+  "taskId": "SMARTBI-TEACHER-FLYWHEEL-20261104",
+  "baseSha": "f9c68ca574c807428b4e33f8b5b1a54b18959197",
+  "validatedCodeHead": "77d237af248ae8725618e07394d8f94d95932bff",
+  "profile": "manufacturing-analyst/2026-11-04.9",
+  "sourceHashes": {
+    "backend/python/blacklake/analyst_archive.py": "75486491489f1eba70210e78340d18fa90501be184d848ee20901568accbd10e",
+    "backend/python/blacklake/analyst_supplement.py": "770de38bad5424025c3dd39356666d9037b451e7f8386c76a795298109318f92",
+    "backend/python/blacklake/smartbi_api.py": "bc7975bbdabfbbaafe46b3a59174dd86548790ef2590ff996b033f16e9dfa465",
+    "backend/python/blacklake/smartbi_app.py": "fad5b1edf7261045dc382d196470a8b367bd1829ea28982e9922b8afd40f147e",
+    "backend/python/smartbi/services/analysis_distillation.py": "37e150c8ef36b7a3860a6385441e27004b9b626264dbacbbf86dbb74b1051562",
+    "backend/python/smartbi/services/analysis_evidence.py": "c53ae6cc9be908c7821ff79bcc4bb770f78e5662cca2dd203dc51dae177fe4c3",
+    "backend/python/smartbi/services/analysis_methods.py": "dd22845fb8a4fd1dc7685f96744e00d9185fdbe87b0d29ea2de098cb1a8dd48e",
+    "backend/python/smartbi/services/analysis_playbook.py": "4828bf1c9de9b4507919ae70382cb9859e4cfc308c050ce1115b77928a6173d4",
+    "backend/python/smartbi/services/analyst_flywheel.py": "1c01546bdb7eadb8c4ffc1ca13025272d44f4214cdb4bc81c7622984c3e3ca5a",
+    "backend/python/smartbi/services/local_analyst.py": "42d68813e3be893d6c39642b1651219b1d484a7652050dfc75191b3d07c41b87",
+    "backend/python/tests/test_analyst_archive.py": "c0a3e3f74a0d9310360b28938d184005fa15abe09c9705bc96bb740fb88f190c",
+    "backend/python/tests/test_analyst_comparison_context.py": "b0c1a3f9ead2f927906112f5041c193312e817cf53276233411d0eb851de2789",
+    "backend/python/tests/test_analyst_flywheel.py": "c94e70219490d3b8eb6bbe89e3b6c14ddea4dcfa2d20e80311c42922098c200e",
+    "backend/python/tests/test_analyst_partial_followup.py": "9fa1637c0197efee3cff02525d5f2e613f0246abdebfa6b99ba85c0efb81df6e",
+    "backend/python/tests/test_analyst_supplement.py": "825bd06cb94a6e107f8a3a2ae13d8b737fbd1267eb1753bf5be84bf8eae4cb4e",
+    "backend/python/tests/test_blacklake_period_app.py": "7e5df0d054b650b8cd1702428da703adc27eabdd9266baea0ede8c74cf362d17",
+    "backend/python/tests/test_smartbi_analysis_distillation.py": "6c2ab4a9b31c7373c2ef79bac245399b9a3279efd45ae3ddd66b98e27103be6f",
+    "backend/python/tests/test_smartbi_local_analyst.py": "dd34174eda0d4cd6a147cc66ccc7993faf2f09b33e3ae83180c00568e30b0e39"
+  },
+  "sameSourceFingerprintRunAndRules": true,
+  "backendIntegration": {
+    "passed": 359,
+    "skipped": 0,
+    "realPostgreSQLScram": true,
+    "realRedis": true
+  },
+  "additionalTests": {
+    "passed": 19,
+    "finalAffectedTestsAfterLastSourceFix": 33
+  },
+  "teacher": {
+    "syntheticEgressOnly": true,
+    "openaiCalls": 12,
+    "openaiStandardPriceEstimateUsd": "0.3413050",
+    "allTeacherCalls": 44,
+    "allTeacherConservativeUsd": 1.838147,
+    "unknownReservations": 0,
+    "decisions": {
+      "batchAtHalf": {
+        "matched": 4,
+        "cases": 8,
+        "falsePositives": 4
+      },
+      "singleAtHalf": {
+        "matched": 7,
+        "cases": 8,
+        "falseNegative": "asserted",
+        "probability": 0.45
+      },
+      "onlineGateEnabled": false
+    },
+    "selectedTeacherMaterial": "astra-medium, with sol-high cross-check; operator-reviewed methods only",
+    "paidAccountInvoiceVerified": false,
+    "longTermCloudRouteEnabled": false
+  },
+  "real27B": {
+    "success": true,
+    "profile": "manufacturing-analyst/2026-11-04.9",
+    "status": "ready",
+    "aiStatus": "partial",
+    "sections": 7,
+    "validation": {
+      "allSections": true,
+      "evidenceScope": true,
+      "numbersBoundByProgram": true,
+      "requiredRisks": true,
+      "schema": true
+    },
+    "usage": {
+      "durationSeconds": 188.978502583,
+      "estimated": false,
+      "inputTokens": 10138,
+      "outputTokens": 2467,
+      "requestIds": [
+        "2689ce6a92a240a6ae7856afeab268ea"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 12605
+    },
+    "currentRequestUsage": {
+      "durationSeconds": 188.978502583,
+      "estimated": false,
+      "inputTokens": 10138,
+      "outputTokens": 2467,
+      "requestIds": [
+        "2689ce6a92a240a6ae7856afeab268ea"
+      ],
+      "source": "ollama_response",
+      "totalTokens": 12605
+    },
+    "modelCalls": 1,
+    "repairAttempts": 0,
+    "validationFeedback": null,
+    "sourceBusinessWrites": 0,
+    "sourceRefreshed": false
+  },
+  "sampling": {
+    "omittedAnalysisFacts": 14,
+    "fullRecordSemanticReview": false
+  },
+  "modelColdBackup": {
+    "allBlobsVerified": true,
+    "totalBytes": 17741872154,
+    "files": 5,
+    "model": "qwen3.8:27b",
+    "quantization": "Q4_K_M",
+    "inferenceRunOnWindows": false,
+    "sourceWrites": 0,
+    "byteExactManifestVerified": true,
+    "manifestSha256": "aaee06c39dcf2437cde036998d960e1fc1494b8191be7cc9657d01e509097813",
+    "ollamaServerVersion": "0.40.6",
+    "targetHostInferenceVerified": false,
+    "blobChecksumsFromCompletedCopy": true
+  },
+  "localArchiveProof": "D:/CretasSmartBILab/local-analyst-distillation/archive-acceptance.json",
+  "runtime": {
+    "previewPort": 8095,
+    "webPort": 5178,
+    "original8093SchedulerUnchanged": true,
+    "previewSchedulerEnabled": false
+  },
+  "git": {
+    "localCommitted": true,
+    "pushSucceeded": false,
+    "pushFailures": 2,
+    "remoteHead": "f9c68ca574c807428b4e33f8b5b1a54b18959197",
+    "draftPr": 1390,
+    "merged": false
+  },
+  "productionDeployed": false,
+  "productionBusinessWrites": 0,
+  "sourceRefreshed": false,
+  "localAnalysisMetadataWrites": true,
+  "previewAcceptance": {
+    "pending": 0,
+    "nativeInAppFollowupPassed": true,
+    "savedReportTokenTotal": 63354,
+    "aiStatus": "partial",
+    "followupNewTokens": 0,
+    "transient403RootCauseConfirmed": false,
+    "oneTransient403Observed": true,
+    "apiAndProxyReadbackPassed": true,
+    "original29ReportsPreserved": true,
+    "sections": 7,
+    "allReportsReady": 32,
+    "profile": "manufacturing-analyst/2026-11-04.9"
+  }
+}

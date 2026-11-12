@@ -1,0 +1,120 @@
+{
+  "date": "2026-11-03",
+  "base_head": "6b7aed9945190069ae95e12086ba4a2f162a1816",
+  "source_sha256": {
+    "backend/python/smartbi/services/cost_data_alerts.py": "c593ed5296773063a12e74c3d81c69bcd8a58d4a1cf0ba0fcd5bb9b47f9e7260",
+    "backend/python/blacklake/cost_review.py": "64eba7e2f5d1593ae091e7dcf2aec8c8eff5ff8a5ced8bab2294b76526a8e24d",
+    "backend/python/blacklake/local_cost_ai.py": "ecb4449301815a67336f5ad1179a90e480ff4a84f3e6e4da9329e179aab8db9c",
+    "backend/python/blacklake/smartbi_store.py": "37430f9baaa21e8f289fa7f2d69aa2b07640ca2214e73fc453347c1731a58d45",
+    "backend/python/blacklake/smartbi_acceptance.py": "87e40ead6da66844fb5bbb0ce47b3819baaf76dca17fa64c45934e69c4a7a1eb",
+    "backend/python/blacklake/test_local.py": "50f5195d8fdf4a18813b0499709c049451e0fcb315c70fd2c60aafda2aa88bf1",
+    "backend/python/tests/test_blacklake_cost_alerts.py": "f429263a08f8deb3b68354681631e42200199bc86411ecc711282ae91aed2114",
+    "web-admin/src/api/smartbi/blacklake.ts": "b65b83422a329636c424f2b2ec0baeb8933869c6205b913aa9da91cfbe8b5d46",
+    "web-admin/src/views/smart-bi/BlacklakeAnalysis.vue": "a2b7db0e8f646adaf3f5bd0595e4c5d0bc6e9d9b1600abe601a9de52ca75b661",
+    "web-admin/src/views/smart-bi/BlacklakeCostAlerts.vue": "c52fb9778ff8756b0cb857a0edb166f70f5e93a28a552469a3449f1171a2ebf0",
+    "web-admin/src/views/smart-bi/__tests__/blacklakeCostAlerts.spec.ts": "22d2c5af702a24b1635b60545d438856326c9c69d917bb3be6676591332ca538",
+    "web-admin/scripts/blacklake-acceptance.mjs": "f7c435e48dcdf5d23bc84987815f30eb2edfe30152d227b5124559e9a34de5b5"
+  },
+  "dataset": {
+    "run_id": "38dd7d78-6dff-4352-a12b-ff5318761a30",
+    "records": 1879,
+    "cost_alerts": {
+      "projects": 109,
+      "costEligible": 16,
+      "costBlocked": 93,
+      "alerts": 143,
+      "byFamily": {
+        "data_quality": 115,
+        "readiness": 23,
+        "business_signal": 5
+      },
+      "byType": {
+        "MATERIAL_VALUE_ZERO": 39,
+        "LABOR_WITH_HOURS_ZERO": 1,
+        "NOT_FINISHED": 18,
+        "FINISHED_GOOD_INVALID": 21,
+        "MATERIAL_LINK_MISSING": 24,
+        "LABOR_SHARE_HIGH": 3,
+        "MATERIAL_SHARE_LOW": 1,
+        "LABOR_COVERAGE_MISSING": 2,
+        "MATERIAL_VALUE_PARTIAL_ZERO": 24,
+        "INPUT_ONLY_CONSUMABLES": 1,
+        "LABOR_ZERO_UNVERIFIED": 1,
+        "PEER_SAMPLE_SMALL": 5,
+        "PRODUCT_NAME_CONFLICT": 1,
+        "UNIT_COST_SPREAD": 1,
+        "CURRENCY_UNVERIFIED": 1
+      },
+      "uniqueFlaggedProjects": 105
+    },
+    "eligible_reconciled": 16,
+    "blocked_alert_coverage": 93
+  },
+  "tests": {
+    "python": {
+      "command": "python -m blacklake.test_local",
+      "exit_code": 0,
+      "passed": 178,
+      "skipped": 0,
+      "database_auth": "SCRAM",
+      "cache": "authenticated Redis"
+    },
+    "frontend": {
+      "command": "npx vitest run src/views/smart-bi/__tests__/blacklakeCostAlerts.spec.ts src/views/smart-bi/__tests__/blacklakeSession.spec.ts",
+      "exit_code": 0,
+      "passed": 9
+    },
+    "typecheck": {
+      "command": "NODE_OPTIONS=--max-old-space-size=8192 npx vue-tsc -b",
+      "exit_code": 0
+    },
+    "build": {
+      "command": "NODE_OPTIONS=--max-old-space-size=8192 npx vite build --mode blacklake",
+      "exit_code": 0
+    }
+  },
+  "api": {
+    "authorized": 200,
+    "unauthenticated": 401,
+    "foreign_factory": 403,
+    "viewer": 403,
+    "write_method": 405,
+    "foreign_or_unscoped_database_rows": 0,
+    "reader_write_privileges": false
+  },
+  "ui": {
+    "success": true,
+    "pageErrors": [],
+    "httpFailures": [],
+    "blockedMutationAttempts": [],
+    "actualBusinessWrites": 0,
+    "costAlertsVerified": true,
+    "localAiVerified": true,
+    "costReviewUnitCounts": [
+      8,
+      6,
+      2
+    ],
+    "documentOverflow": false
+  },
+  "local_ai": {
+    "host": "canada-mini",
+    "model": "qwen3:8b",
+    "reviewed_representative_types": 15,
+    "source_records_sent": 0,
+    "external_provider_calls": 0,
+    "provenance_bound": true
+  },
+  "risk_review": "No remaining functional blocker; nullable identity fix also covered by component test",
+  "retained_failures": [
+    "initial 4GB typecheck heap exhausted; final 8GB checks passed",
+    "initial scoped-slot test stub error; corrected stub and final 9 passed",
+    "three UI selector failures retained separately; final actual UI passed"
+  ],
+  "limits": [
+    "Business completeness and historical valuation await factory verification",
+    "No production deployment or migration",
+    "Generic engine currently wired only to Blacklake test adapter",
+    "No verified end-to-end lot genealogy"
+  ]
+}
