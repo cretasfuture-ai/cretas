@@ -2,7 +2,7 @@
 """常驻规则闸（2026-11-13）：
 
 1. 字节预算：CLAUDE.md + 所有不带 `paths:` frontmatter 的 `.claude/rules/*.md`（每个会话开场都加载、
-   每轮重读）总和 <= 预算（默认 40000 字节）。超了不是「再压一压」就完事：要把内容挪到按路径加载 /
+   每轮重读）总和 <= 预算（默认 30000 字节(2026-11-13 实测 27062, 留约 10% 余量)）。超了不是「再压一压」就完事：要把内容挪到按路径加载 /
    skill / 案例库，或把规则加 `paths:`。
 2. 登记：`.claude/rules/` 下每个规则文件的文件名必须出现在 CLAUDE.md（常驻清单或按路径加载清单）。
    CLAUDE.md 的清单是手工维护的，漏登记 = 这条规则不会被人想起（measurement-and-wiring 形态 B）。
@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-DEFAULT_BUDGET = 40000
+DEFAULT_BUDGET = 30000
 
 
 def has_paths_frontmatter(text: str) -> bool:
