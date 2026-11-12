@@ -1,3 +1,10 @@
+---
+paths:
+  - ".github/workflows/**"
+  - "tools/ci/**"
+  - "scripts/ci/**"
+---
+
 # CI runner 路由：全部 GitHub 托管（仓库已 public）
 
 ## 🔴 现行（2026-10-25，owner 决定）
