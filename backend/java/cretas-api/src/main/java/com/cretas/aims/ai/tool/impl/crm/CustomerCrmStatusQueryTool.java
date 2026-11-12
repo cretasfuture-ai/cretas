@@ -79,10 +79,26 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
             if (matches != null && matches.size() == 1) {
                 customer = matches.get(0);
             } else if (matches != null && matches.size() > 1) {
-                return buildSimpleResult(
-                        String.format("找到 %d 个匹配 \"%s\" 的客户, 请提供 customerId 或更精确的名称",
-                                matches.size(), customerName),
-                        Map.of("matches", matches.size(), "candidates", matches));
+                // 口径规则 8 (INTENT-DISTILL-20261111): 只读查询名字命中多个时不先问、不只取第一个 ——
+                // 全部列出 (前 5 个), 每个标出客户编码与 CRM 状态。
+                List<Map<String, Object>> rows = new java.util.ArrayList<>();
+                List<com.cretas.aims.ai.tool.SameNameMatches.Match> listed = new java.util.ArrayList<>();
+                for (CustomerDTO c : matches.subList(0,
+                        Math.min(com.cretas.aims.ai.tool.SameNameMatches.LIST_LIMIT, matches.size()))) {
+                    Map<String, Object> row = statusData(c);
+                    rows.add(row);
+                    listed.add(new com.cretas.aims.ai.tool.SameNameMatches.Match(c.getId(), c.getName(),
+                            c.getCustomerCode() != null ? "客户编码 " + c.getCustomerCode() : "客户ID " + c.getId(), row.get("customerStatus") + "，" + row.get("importance")));
+                }
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("customerName", customerName);
+                data.put("matchCount", matches.size());
+                data.put("customers", rows);
+                Map<String, Object> result = new java.util.HashMap<>();
+                result.put("data", data);
+                com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "客户", customerName, matches.size(), listed);
+                result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
+                return result;
             }
         }
 
@@ -90,7 +106,19 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
             return buildSimpleResult("未找到客户, 请确认 customerId 或 customerName", null);
         }
 
-        // 防呆 R2: result 全身份信息 — name + customerCode + 4 CRM 字段 + 2 开票默认.
+        Map<String, Object> data = statusData(customer);
+
+        return buildSimpleResult(
+                String.format("客户 %s (%s) — %s, %s",
+                        customer.getName(),
+                        customer.getCustomerCode(),
+                        data.get("customerStatus"),
+                        data.get("importance")),
+                data);
+    }
+
+    /** 防呆 R2: result 全身份信息 — name + customerCode + 4 CRM 字段 + 2 开票默认. */
+    private static Map<String, Object> statusData(CustomerDTO customer) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("customerId", customer.getId());
         data.put("customerCode", customer.getCustomerCode());
@@ -113,14 +141,7 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
         data.put("defaultInvoiceType", customer.getDefaultInvoiceType() != null
                 ? customer.getDefaultInvoiceType().getDisplayName()
                 : "未设 (默认普通发票)");
-
-        return buildSimpleResult(
-                String.format("客户 %s (%s) — %s, %s",
-                        customer.getName(),
-                        customer.getCustomerCode(),
-                        data.get("customerStatus"),
-                        data.get("importance")),
-                data);
+        return data;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

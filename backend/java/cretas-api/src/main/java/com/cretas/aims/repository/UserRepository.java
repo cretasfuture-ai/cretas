@@ -393,6 +393,19 @@ public interface UserRepository extends JpaRepository<User, Long> {
                                            Pageable pageable);
 
     /**
+     * 口径规则 8 (INTENT-DISTILL-20261111): 按姓名<b>精确</b>找本厂在职员工, 同名的全部返回 (按 id 排序)。
+     *
+     * <p>🔴 这是一个按姓名查人的数据出口: 只许在调用者有人事读权限时调用 (见 AttendanceSubject),
+     * 且 {@code factoryId} 必须来自可信上下文 —— 跨工厂一条都不能出, 由
+     * {@code UserRepositoryQueryValidationTest#findActiveByExactFullNameIsScopedToTheFactory} 钉住。
+     * 不用 {@link #searchUsers} 的双向模糊: 「张三」不能把「张三丰」算成同名。
+     */
+    @Query("SELECT u FROM User u WHERE u.factoryId = :factoryId AND u.fullName = :fullName " +
+           "AND u.isActive = true ORDER BY u.id ASC")
+    List<User> findActiveByFactoryIdAndExactFullName(@Param("factoryId") String factoryId,
+                                                     @Param("fullName") String fullName);
+
+    /**
      * 批量查询多个用户 - 解决 N+1 查询问题
      * @param ids 用户ID集合
      * @return 用户列表
