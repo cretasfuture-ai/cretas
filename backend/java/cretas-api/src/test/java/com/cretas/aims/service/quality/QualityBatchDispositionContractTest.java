@@ -261,7 +261,7 @@ class QualityBatchDispositionContractTest {
         ruleService = new QualityDispositionRuleServiceImpl(approvalChain, auditService, users, guard);
         ReflectionTestUtils.setField(ruleService, "dispositionInventoryService", bridge);
 
-        controller = new QualityDispositionController(guard, ruleService, inspectionRepo, auditRepo,
+        controller = new QualityDispositionController(guard, ruleService, inspectionRepo, auditRepo, batchRepo,
                 mock(StateMachineService.class), mock(NotificationService.class), mock(PushNotificationService.class));
 
         batch = productionBatch(100L, "PB-PLAN-1793087414891-94ECD656-88763", "SKU-1", QualityStatus.PENDING_INSPECTION);

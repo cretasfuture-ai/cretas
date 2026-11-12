@@ -84,6 +84,7 @@ public class QualityDispositionController {
     private final QualityDispositionRuleService qualityDispositionRuleService;
     private final QualityInspectionRepository qualityInspectionRepository;
     private final DecisionAuditLogRepository decisionAuditLogRepository;
+    private final com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
     private final StateMachineService stateMachineService;
     private final NotificationService notificationService;
     private final PushNotificationService pushNotificationService;
@@ -542,6 +543,17 @@ public class QualityDispositionController {
                 qualityInspectionRepository.findAllById(entityIds).stream()
                         .collect(Collectors.toMap(QualityInspection::getId, Function.identity()));
 
+        // 批次号 / 品名: 一次批量查生产批次 (只认本厂的, 查不到就留空, 不编)
+        Set<Long> batchIds = inspectionMap.values().stream()
+                .map(QualityInspection::getProductionBatchId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Map<Long, com.cretas.aims.entity.ProductionBatch> batchMap = batchIds.isEmpty() ? Collections.emptyMap() :
+                productionBatchRepository.findAllById(batchIds).stream()
+                        .filter(b -> factoryId.equals(b.getFactoryId()))
+                        .collect(Collectors.toMap(com.cretas.aims.entity.ProductionBatch::getId,
+                                Function.identity(), (x, y) -> x));
+
         List<PendingDispositionDTO> pendingList = pendingLogs.stream()
                 .map(auditLog -> {
                     PendingDispositionDTO dto = new PendingDispositionDTO();
@@ -561,6 +573,12 @@ public class QualityDispositionController {
                         QualityInspection inspection = inspectionMap.get(auditLog.getEntityId());
                         if (inspection != null) {
                             dto.setProductionBatchId(inspection.getProductionBatchId());
+                            com.cretas.aims.entity.ProductionBatch batch = inspection.getProductionBatchId() == null
+                                    ? null : batchMap.get(inspection.getProductionBatchId());
+                            if (batch != null) {
+                                dto.setBatchNumber(batch.getBatchNumber());
+                                dto.setProductName(batch.getProductName());
+                            }
                         }
                     }
 
