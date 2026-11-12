@@ -45,7 +45,7 @@ function goToLogin() {
           <el-tag type="info" size="large">{{ roleName }}</el-tag>
         </p>
         <p class="description">
-          您的角色被设置为<strong>移动端专属</strong>，<br />
+          您的账号目前没有开通任何网页功能（由工厂权限配置决定），<br />
           请使用 <strong>白垩纪AI Agent App</strong> 进行操作。
         </p>
       </div>
