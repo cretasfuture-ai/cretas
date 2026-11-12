@@ -60,7 +60,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - 新 organizer 开出来后由它在开场时通知各执行会话改向它汇报，并 SendMessage 老 organizer；老 organizer 收到后再做第 3 步 detach、停掉监视、停手。
   - 能选时机就把收口放在 Steve 自己发消息的那一轮（那一轮里 `start_session` 能直接开）。
 - **会话命名**（Steve 2026-11-13）：侧边栏要一眼看出是什么。新 organizer 开出来第一件事用 `set_session_title` 改名为「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后把老 organizer 改名为「[已交班→第 N+1 任] <原名>」；执行会话用「<批次>·<线名>：<做什么>」。
-- **新 organizer 开场**：按上面的命名规则改名 → 读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视 → 通知在飞执行会话改向自己汇报，并告诉老 organizer 可以 detach、停手 → **归档老 organizer**。
+- **新 organizer 开场**：先 `get_session self` 取自己的真实 `local_…` id（⛔ 不要从交接文件里抄 id：2026-11-13 意图批次的新 organizer 抄了前任的 id 通知执行线，汇报全发到了老 organizer）→ 按上面的命名规则改名 → 读交接 → 对照 `ACTIVE.md` 与真实 Git/PR 状态核对（交接只是线索，以实际为准）→ 重新挂 PR 监视 → 通知在飞执行会话改向自己汇报，并告诉老 organizer 可以 detach、停手 → **归档老 organizer**。
 - **自动归档老 organizer**（Steve 2026-11-13：交班后老 organizer 直接归档，不用再问）：老 organizer 回复已 detach、已停手（或用 `list_sessions` 核对它名下已没有在飞执行会话）后，新 organizer 对它调 `archive_session`，reason 写「已交班给 <新 id>」。注意：
   - 先 detach 再归档：归档会连带归档挂在它名下、空闲且没有开着 PR 的执行会话，在飞的必须先由它 detach；
   - 被置顶的会话归档不掉：先用侧边栏工具 `set_pinned` 取消置顶，没有这个工具就在回执里告诉 Steve 手动取消；
