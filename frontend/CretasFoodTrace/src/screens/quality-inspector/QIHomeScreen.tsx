@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { QI_COLORS, QualityInspectorStackParamList } from '../../types/qualityInspector';
 import { useAuthStore } from '../../store/authStore';
 import { FrontlineAIEntry } from '../../components/ai/FrontlineAIEntry';
+import { canOpenQualityClosure } from '../../utils/qualityClosurePermissions';
 
 type NavigationProp = NativeStackNavigationProp<QualityInspectorStackParamList>;
 
@@ -22,6 +23,8 @@ export default function QIHomeScreen() {
   const navigation = useNavigation<NavigationProp>();
   const insets = useSafeAreaInsets();
   const user = useAuthStore((state) => state.user);
+  // 纪律排查 B14: 不良品处置 / 批次召回按 quality 模块权限出现 (与网页同口径), ⛔ 不按岗位名
+  const showQualityClosure = canOpenQualityClosure(user);
 
   return (
     <ScrollView
@@ -121,6 +124,50 @@ export default function QIHomeScreen() {
             <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
           </View>
         </TouchableRipple>
+
+        {showQualityClosure && (
+          <TouchableRipple
+            style={styles.actionCard}
+            onPress={() => navigation.navigate('QIDisposition')}
+            borderless={false}
+            accessibilityRole="button"
+            accessibilityLabel="不良品处置"
+            testID="qi-home-disposition"
+          >
+            <View style={styles.actionContent}>
+              <View style={[styles.actionIcon, styles.closureActionIcon]}>
+                <MaterialCommunityIcons name="clipboard-alert-outline" size={30} color="#B7791F" />
+              </View>
+              <View style={styles.actionCopy}>
+                <Text style={styles.actionTitle}>不良品处置</Text>
+                <Text style={styles.actionHint}>不合格批次选放行、返工或报废，需要审批的自动送审</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
+            </View>
+          </TouchableRipple>
+        )}
+
+        {showQualityClosure && (
+          <TouchableRipple
+            style={styles.actionCard}
+            onPress={() => navigation.navigate('QIRecall')}
+            borderless={false}
+            accessibilityRole="button"
+            accessibilityLabel="批次召回"
+            testID="qi-home-recall"
+          >
+            <View style={styles.actionContent}>
+              <View style={[styles.actionIcon, styles.closureActionIcon]}>
+                <MaterialCommunityIcons name="truck-delivery-outline" size={30} color="#B7791F" />
+              </View>
+              <View style={styles.actionCopy}>
+                <Text style={styles.actionTitle}>批次召回</Text>
+                <Text style={styles.actionHint}>查看召回进度，记录客户联系和退货</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
+            </View>
+          </TouchableRipple>
+        )}
       </View>
 
       {/* 一线 AI 助手入口: 排在两项本职任务之后, 次级样式。组件自己判角色+熔断开关 */}
@@ -160,6 +207,7 @@ const styles = StyleSheet.create({
   },
   photoActionIcon: { backgroundColor: '#FFF0EC' },
   recordActionIcon: { backgroundColor: '#EAF3FF' },
+  closureActionIcon: { backgroundColor: '#FFF6E5' },
   actionCopy: { flex: 1, marginHorizontal: 14 },
   actionTitle: { color: QI_COLORS.text, fontSize: 18, fontWeight: '800' },
   actionHint: { marginTop: 5, color: QI_COLORS.textSecondary, fontSize: 13, lineHeight: 19 },
