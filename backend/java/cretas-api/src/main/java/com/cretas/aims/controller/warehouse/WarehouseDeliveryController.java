@@ -40,7 +40,17 @@ public class WarehouseDeliveryController {
     private final SalesService salesService;
     private final MobileService mobileService;
 
+    /** Optional so slice tests keep their constructor; production always has it. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.security.BusinessRowScope businessRowScope;
+
+    /** Shown above the queue when the factory gave this role a narrower-than-factory data scope. */
+    public static final String SCOPED_QUEUE_HINT =
+            "按工厂给你的岗位配置的数据范围显示：只列出你（或你可查看的同事）创建的销售单、客户对应的发货单。"
+            + "需要处理全工厂发货，请工厂总监在网页后台「角色权限 → 数据范围」把本岗位改为「全工厂」。";
+
     @GetMapping("/pending")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "待仓库确认发货单列表",
             description = "返回 status IN (DRAFT, PENDING_WAREHOUSE_CONFIRM, PICKED) 的发货单")
     @RequirePermission({"warehouse:read_write", "warehouse:read"})
@@ -49,7 +59,7 @@ public class WarehouseDeliveryController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getPendingWarehouseDeliveries(factoryId, page, size);
-        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
+        return withScopeHint(factoryId, ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result)));
     }
 
     /**
@@ -58,6 +68,7 @@ public class WarehouseDeliveryController {
      * never query the sales-delivery table directly by an unscoped id or status.
      */
     @GetMapping("/history")
+    @com.cretas.aims.security.RowScopeSupported
     @Operation(summary = "已完成发货历史",
             description = "返回本工厂已发货、已签收、已取消或退回的发货单，只读")
     @RequireModule("warehouse")
@@ -67,7 +78,7 @@ public class WarehouseDeliveryController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageResponse<SalesDeliveryRecord> result = salesService.getWarehouseDeliveryHistory(factoryId, page, size);
-        return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
+        return withScopeHint(factoryId, ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result)));
     }
 
     /**
@@ -109,6 +120,13 @@ public class WarehouseDeliveryController {
         SalesDeliveryRecord record = salesService.warehouseConfirmDelivery(
                 factoryId, deliveryId, actualQuantities, userId);
         return ApiResponse.success("发货确认成功, 成品库存已扣减", SalesDeliveryResponseCopies.record(record));
+    }
+
+    private <T> ApiResponse<T> withScopeHint(String factoryId, ApiResponse<T> response) {
+        if (businessRowScope != null && businessRowScope.recordCreatorIds(factoryId) != null) {
+            response.setActionHint(SCOPED_QUEUE_HINT);
+        }
+        return response;
     }
 
     private Long extractUserId(String authorization) {
