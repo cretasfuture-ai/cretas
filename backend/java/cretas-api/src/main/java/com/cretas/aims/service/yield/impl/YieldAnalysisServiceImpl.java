@@ -1,8 +1,11 @@
 package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
+import com.cretas.aims.dto.yield.ProcessYieldAggDTO.IncomparableReason;
 import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -23,6 +26,13 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
     private final ProductionReportRepository reportRepo;
     private final ProcessSecretAggregateExclusions aggregateExclusions;
 
+    /** 一侧 (投入或产出) 的单位读数: 没有单位 / 唯一单位 / 混杂。 */
+    private record Side(String display, boolean mixed) {
+        static final Side NONE = new Side(null, false);
+        static final Side MIXED = new Side(null, true);
+        boolean known() { return display != null; }
+    }
+
     @Override
     public List<ProcessYieldAggDTO> aggregateByProcess(String factoryId, LocalDate startDate, LocalDate endDate, String productTypeId) {
         // audit SQL-1: sentinel 避 PG null 参数类型推断失败
@@ -41,34 +51,77 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         for (Map<String, Object> r : rows) {
             BigDecimal totalInput = toBig(r.get("total_input"));
             BigDecimal totalOutput = toBig(r.get("total_output"));
-            String inUnit = asStr(r.get("input_unit"));
-            String rawOutUnit = asStr(r.get("output_unit"));
-            // output_unit 未配置(null/空)视为与投入同单位 — 多数工序不声明 output_unit,
-            // 仅 kg→盒 等单位转换工序才设。否则同单位工序会被误判不可比 → 出成率恒显 "—"。
-            String outUnit = (rawOutUnit == null || rawOutUnit.isEmpty()) ? inUnit : rawOutUnit;
-            boolean comparable = Objects.equals(inUnit, outUnit);
+            int reportCount = toInt(r.get("report_count"));
+            // 单位按报工实际所记 (SQL 已退回工序标准、剔除空串与 'unitless' 占位)。
+            // 2026-11-12 验收: 只看工序标准单位时, 定量包装报工 kg/袋 → 袋/盒 被判同单位, 转化率 333%~500%。
+            Side in = side(r, "input", reportCount);
+            Side out = side(r, "output", reportCount);
 
             BigDecimal conversionRate = null;
             BigDecimal wastageRate = null;
-            if (comparable && totalInput.compareTo(BigDecimal.ZERO) > 0) {
-                conversionRate = totalOutput.multiply(HUNDRED).divide(totalInput, 1, RoundingMode.HALF_UP);
-                BigDecimal waste = totalInput.subtract(totalOutput).multiply(HUNDRED)
-                        .divide(totalInput, 1, RoundingMode.HALF_UP);
-                wastageRate = waste.max(BigDecimal.ZERO);
+            IncomparableReason reason;
+            if (in.mixed() || out.mixed()) {
+                reason = IncomparableReason.MIXED_UNITS;
+            } else if (!in.known() || !out.known()) {
+                // 没有单位就不能断定两侧同单位 —— 不相除, 不出假百分比
+                reason = IncomparableReason.NO_UNIT;
+            } else {
+                // 同单位原样返回; 不同单位只走内置科学换算 (kg↔g 等), 计数/包装单位之间没有可靠换算
+                BigDecimal outputInInputTerms = FgQuantityUnitConverter.convert(totalOutput,
+                        code(out.display()), code(in.display()), null);
+                if (outputInInputTerms == null) {
+                    reason = IncomparableReason.UNIT_MISMATCH;
+                } else if (totalInput.compareTo(BigDecimal.ZERO) <= 0) {
+                    reason = IncomparableReason.NO_INPUT;
+                } else {
+                    reason = null;
+                    conversionRate = outputInInputTerms.multiply(HUNDRED).divide(totalInput, 1, RoundingMode.HALF_UP);
+                    BigDecimal waste = totalInput.subtract(outputInInputTerms).multiply(HUNDRED)
+                            .divide(totalInput, 1, RoundingMode.HALF_UP);
+                    wastageRate = waste.max(BigDecimal.ZERO);
+                }
             }
 
             result.add(ProcessYieldAggDTO.builder()
                     .processName(asStr(r.get("process_name")))
-                    .inputQuantity(totalInput.setScale(2, RoundingMode.HALF_UP))
-                    .outputQuantity(totalOutput.setScale(2, RoundingMode.HALF_UP))
+                    // 一侧单位混杂时, 那一侧的合计本身不成立 (0.5 kg + 3 袋), 不给数字
+                    .inputQuantity(in.mixed() ? null : totalInput.setScale(2, RoundingMode.HALF_UP))
+                    .outputQuantity(out.mixed() ? null : totalOutput.setScale(2, RoundingMode.HALF_UP))
                     .conversionRate(conversionRate)
                     .wastageRate(wastageRate)
-                    .unit(inUnit)
-                    .unitComparable(comparable)
+                    .unit(in.display())
+                    .inputUnit(in.display())
+                    .outputUnit(out.display())
+                    .unitComparable(reason == null)
+                    .incomparableReason(reason)
                     .batchCount(toInt(r.get("batch_count")))
                     .build());
         }
         return result;
+    }
+
+    /**
+     * 一侧单位: 全部报工都没单位 → NONE; 部分报工没单位 → MIXED (合计里混了不知单位的量);
+     * 只有一种, 或两种写法归一后是同一个码 (kg / 千克) → 唯一; 否则 MIXED。
+     */
+    private static Side side(Map<String, Object> r, String prefix, int reportCount) {
+        int known = toInt(r.get(prefix + "_unit_known"));
+        if (known == 0) return Side.NONE;
+        if (known < reportCount) return Side.MIXED;
+        String lowest = asStr(r.get(prefix + "_unit_min"));
+        String highest = asStr(r.get(prefix + "_unit_max"));
+        int kinds = toInt(r.get(prefix + "_unit_kinds"));
+        if (kinds == 1 || kinds == 2 && sameCanonical(lowest, highest)) return new Side(lowest, false);
+        return Side.MIXED;
+    }
+
+    private static String code(String raw) {
+        return UnitContractServiceImpl.crossLanguageCode(raw);
+    }
+
+    /** 两种写法归一后是否同一个码 (形参故意不叫 unit: 闸 BareUnitEqualityRatchet 只认单位命名的变量)。 */
+    private static boolean sameCanonical(String left, String right) {
+        return left != null && right != null && Objects.equals(code(left), code(right));
     }
 
     private static BigDecimal toBig(Object v) {
