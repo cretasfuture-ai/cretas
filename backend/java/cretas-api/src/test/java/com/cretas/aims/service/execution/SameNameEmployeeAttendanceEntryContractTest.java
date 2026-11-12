@@ -346,6 +346,25 @@ class SameNameEmployeeAttendanceEntryContractTest {
         verify(h.clock, never()).getClockHistory(anyString(), anyLong(), any(), any(), any());
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("账号名只在本人没填姓名时才算本人: 有姓名时说账号名被拒, 没姓名时按本人查")
+    void accountNameCountsAsSelfOnlyWithoutFullName(Entry entry) throws Exception {
+        factories();
+        User named = user(FACTORY, "lsm001", "操作员小李", "加工一车间", "050", "operator");
+        User unnamed = user(FACTORY, "baogong007", null, "包装车间", "051", "operator");
+        flush();
+
+        IntentExecuteResponse refused = new Harness(entry, named.getId(), null, AuthenticatedActorType.FACTORY_USER)
+                .say("查一下lsm001的考勤", "lsm001");
+        assertThat(refused.getStatus()).isNotIn("SUCCESS", "COMPLETED");
+
+        Harness h = new Harness(entry, unnamed.getId(), null, AuthenticatedActorType.FACTORY_USER);
+        IntentExecuteResponse self = h.say("查一下baogong007的考勤", "baogong007");
+        assertThat(self.getStatus()).as(self.getMessage()).isIn("SUCCESS", "COMPLETED");
+        verify(h.clock).getClockHistory(eq(FACTORY), eq(unnamed.getId()), any(), any(), any(PageRequest.class));
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private void factories() {

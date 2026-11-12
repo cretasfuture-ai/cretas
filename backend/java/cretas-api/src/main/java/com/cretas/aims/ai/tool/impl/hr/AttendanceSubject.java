@@ -132,8 +132,8 @@ final class AttendanceSubject {
             matches = users.findActiveByFactoryIdAndExactFullName(factoryId, name);
         } else {
             User self = users.findByIdAndFactoryId(caller, factoryId).orElse(null);
-            if (self != null && (name.equals(self.getFullName()) || name.equals(self.getUsername()))) {
-                return null;   // 说的就是自己 (姓名或账号名): 本人路径
+            if (self != null && isOwnName(self, name)) {
+                return null;   // 说的就是自己: 本人路径
             }
             // 没有 hr:read 又不是本人: 拒绝, 而且在任何同名查询之前拒绝 —— 不泄露有几个同名的人
             throw new BusinessException(403, DENIED);
@@ -203,6 +203,15 @@ final class AttendanceSubject {
 
     private static String hhmm(java.time.LocalDateTime t) {
         return String.format("%02d:%02d", t.getHour(), t.getMinute());
+    }
+
+    /** 本人的姓名; 账号名只在没有填姓名时才算 (账号名常是 baogong001 这类, 不该和别人的姓名撞)。 */
+    private static boolean isOwnName(User self, String name) {
+        String full = self.getFullName();
+        if (full != null && !full.isBlank()) {
+            return name.equals(full);
+        }
+        return name.equals(self.getUsername());
     }
 
     private static String displayName(User u) {
