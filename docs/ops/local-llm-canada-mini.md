@@ -62,3 +62,36 @@
 ## 6. 周期复审
 
 注册表每 21 天复审一次（`_REGISTRY_AUDIT_DATE`）。本条目会被每日探针 `scripts/cron/probe-llm-registry.sh`（47 crontab，每天 03:17 CST）一并探测，经隧道真请求一次；非 ok 即进告警。
+
+## 出境 SOCKS 出口：OpenAI / Anthropic 经 mini 出网（2026-11-12，LLM-PROVIDER-SWITCH）
+
+47 在国内，直连两家都不行：`api.anthropic.com` 返回 403（地区封锁），`api.openai.com` 超时。所以在 mini 上开一个出口，两家的请求从这里出去。
+
+- **47 侧（organizer 已改，已备份）**
+  - `Match User cretas-llm-canada` 的 `PermitListen` 改为 `127.0.0.1:11437 127.0.0.1:11438`。
+  - `authorized_keys` 加了 `permitlisten="127.0.0.1:11438"`。
+  - 其余不变：`AllowTcpForwarding remote`、`PermitOpen none`、`GatewayPorts no`。
+- **mini 侧**：新增独立的 launchd 任务 `com.cretas.llm-egress`，跑 `~/cretas-llm/egress-tunnel.sh`。
+  - 它做一次反向动态转发 `-R 127.0.0.1:11438`，SOCKS 出口在 mini，47 上只监听回环。
+  - 用户和密钥与 11437 的隧道相同。
+  - **单独开一个进程的原因**：`tunnel.sh` 带了 `ExitOnForwardFailure`。如果把 11438 合进去，11438 被拒时 11437 会一起断，本地模型也就没了。
+  - 两个文件的参考副本：`local-llm-canada-mini/egress-tunnel.sh`、`com.cretas.llm-egress.plist.example`。
+- **应用**（在 mini 上，以 rex 执行）：
+
+  ```
+  cp egress-tunnel.sh ~/cretas-llm/
+  chmod 700 ~/cretas-llm/egress-tunnel.sh
+  cp com.cretas.llm-egress.plist.example ~/Library/LaunchAgents/com.cretas.llm-egress.plist
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.cretas.llm-egress.plist
+  ```
+
+- **服务配置**：`.env.prod` 里设 `LLM_EGRESS_PROXY=socks5h://127.0.0.1:11438`。只有 openai 和 anthropic 两家走它，见 `common/llm_router.py` 的 `_EGRESS_PROXY_ACCOUNTS`。
+- **判活**（在 47 上）：
+
+  ```
+  curl -s -o /dev/null -w '%{http_code} %{time_total}\n' --socks5-hostname 127.0.0.1:11438 https://api.openai.com/v1/models
+  ```
+
+  - 返回 `401`：连通，只是没带密钥。
+  - 换成 `https://api.anthropic.com/v1/models` 同样判。
+  - 返回 `000` 并且 `curl: (7)`（连接被拒）：隧道断了。这时请求会明确报错，不会挂死。
