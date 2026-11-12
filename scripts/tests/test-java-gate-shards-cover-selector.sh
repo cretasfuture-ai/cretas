@@ -116,15 +116,39 @@ if lost:
     problems.append("PG 清单丢了这些类(同一 PR 里也要改 floor 并写理由): %s" % lost)
 
 # M5: 汇总 job 必须 always() + 非 success 就 exit 1; 否则分片红了汇总被跳过, 跳过的必需检查按通过算。
+# 2026-11-12 (合并队列准备): 汇总 job 的 needs 变成列表 [changes, <shard>] ⇒ 用 YAML 解析 needs,
+#   ⛔ 不再用 "needs: <shard>" 子串 (列表写法下恒假, 字符串写法下又可能被注释喂饱)。
+import yaml
+jobs_yaml = (yaml.safe_load(wf) or {}).get("jobs") or {}
+
+
+def needs_of(job_cfg):
+    n = (job_cfg or {}).get("needs")
+    if n is None:
+        return []
+    return [n] if isinstance(n, str) else list(n)
+
+
 def agg_ok(blk):
     return bool(re.search(r"^    if:.*always\(\)", blk, re.M)) and "exit 1" in blk and '= "success"' in blk
+
+
 for agg, shard in (("fast-contracts", "fast-contracts-shard"), ("postgres-reversal-concurrency", "postgres-reversal-concurrency-shard")):
     blk = job_block(agg)
-    if "needs: " + shard not in blk or not agg_ok(blk):
+    if agg not in jobs_yaml:
+        sys.exit("FAIL: YAML 解析出的 jobs 里没有 %s —— 仪器和 workflow 对不上了" % agg)
+    needs = needs_of(jobs_yaml[agg])
+    print("READING: %s needs=%s" % (agg, needs))
+    if shard not in needs or not agg_ok(blk):
         problems.append("%s 汇总 job 必须 needs %s、if 含 always()、非 success 就 exit 1" % (agg, shard))
     if agg_ok(blk.replace("always()", "")):
         problems.append("%s: 阴性对照失效: 去掉 always() 没被判红" % agg)
-    print("  ok - %s 汇总 job: always() + success 白名单 (阴性对照: 去掉 always() 会红)" % agg)
+    # 阴性对照: needs 里拿掉分片 (字符串与列表两种写法) 必须判红
+    if shard in needs_of({"needs": [x for x in needs if x != shard]}) or shard in needs_of({"needs": "changes"}):
+        problems.append("%s: 阴性对照失效: needs 拿掉 %s 没被判红" % (agg, shard))
+    if shard not in needs_of({"needs": shard}) or shard not in needs_of({"needs": ["changes", shard]}):
+        problems.append("%s: 阳性对照失效: needs 的字符串/列表写法没被识别" % agg)
+    print("  ok - %s 汇总 job: needs 含 %s + always() + success 白名单 (阴性对照: 去掉 always() / 拿掉分片 needs 都会红)" % (agg, shard))
 
 if problems:
     for p in problems:

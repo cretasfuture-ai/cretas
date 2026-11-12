@@ -1,0 +1,21 @@
+# fresh-db-progress.yml 的 pull_request 触发路径 (2026-11-12 从 workflow 的 on.pull_request.paths 原样搬来)。
+# 由该 workflow 的 changes 作业经 scripts/ci/changed-paths.py 判定; 语义同 GitHub Actions paths:
+# `**` 跨目录, `*` 不跨 `/`, `!` 取反 (按顺序, 最后命中者为准)。一行一个 glob, `#` 起注释。
+# ⛔ 不要为了让某个 PR 跳过闸而删模式; 加模式与原 paths 同一规矩 (闸读什么, 什么就进触发面)。
+
+# 被测对象: 迁移本身
+backend/java/cretas-api/src/main/resources/db/**
+# 仪器: 跑批脚本与基线
+scripts/testing/fresh-db-gate.sh
+scripts/testing/fresh-db-startup-outcome.sh
+scripts/testing/fresh-db-above-baseline-floor.txt
+ops/db-baseline/**
+docker-compose.fresh-db.yml
+scripts/ci/fresh-db-runner-preflight.sh
+scripts/tests/test-public-repo-hosted-only.sh
+# 自指: 改本文件的 PR 也要跑一次(否则触发面改坏了没人知道)
+.github/workflows/fresh-db-progress.yml
+
+# 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/fresh-db-progress.txt

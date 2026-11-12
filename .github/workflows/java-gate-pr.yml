@@ -14,31 +14,52 @@ name: Java Gate
 # `java-full-ready` 全量负责最终候选覆盖；两者缺一不可。
 
 on:
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/java-gate-pr.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'backend/java/cretas-api/**'
-      - '.github/workflows/java-gate-pr.yml'
-      - '.github/workflows/java-full-nightly.yml'
-      - 'scripts/ci/java-test-ratchet.py'
-      - 'scripts/ci/run-with-test-postgres.sh'
-      - 'scripts/ci/shard-tests.py'
-      - 'scripts/ci/java-gate-shard-weights.txt'
-      - 'scripts/ci/java-gate-fast-patterns.txt'
-      - 'scripts/ci/java-gate-pg-tests.txt'
-      - 'scripts/ci/test-activity-events-migration.sh'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: java-pr-gate-${{ github.event.pull_request.number }}
+  # merge_group 下没有 pull_request.number: 若只用它, 所有队列运行同组互相取消 ⇒ 回落到 github.ref
+  # (队列分支 gh-readonly-queue/... 每个合并组唯一)。
+  group: java-pr-gate-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/java-gate-pr.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
+
   fast-contracts-shard:
+    needs: changes
     # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    # merge_group 下没有标签 ⇒ !contains(...) 为真, 队列里照跑快速门禁。
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-fast-patterns.txt 按类名哈希取模分 4 片并行;
     # 原 job 名 fast-contracts 由下面的汇总 job 保留 (分支保护/各会话判据不变)。
     name: fast-contracts-shard (${{ matrix.shard }}/4)
@@ -169,6 +190,8 @@ jobs:
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
   postgres-reversal-concurrency-shard:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     name: postgres-reversal-concurrency-shard (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
@@ -302,10 +325,13 @@ jobs:
         run: bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" bash "$GITHUB_WORKSPACE/scripts/ci/test-activity-events-migration.sh"
 
   # 汇总 job: 保留原 job 名, 分支保护的必需检查与各会话判据不变。任一分片不是 success 就红
-  # (被取消 / 被跳过都算红; 唯一例外: java-full-ready 标签时分片整体 skipped, 汇总也跳过)。
+  # (被取消 / 被跳过都算红; 例外: java-full-ready 标签时分片整体 skipped, 汇总也跳过;
+  #  changes 判定本 PR 没改 Java 触发路径 (run=false) 时汇总也跳过 —— 跳过的必需检查算通过)。
+  # ⚠️ 判 `!= 'false'` 而不是 `== 'true'`: changes 作业自己失败 (输出为空) 时汇总照跑, 此时分片
+  #    结论不是 success ⇒ 红; ⛔ 不让判定仪器坏掉变成整道闸被跳过。
   fast-contracts:
-    needs: fast-contracts-shard
-    if: ${{ always() && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    needs: [changes, fast-contracts-shard]
+    if: ${{ always() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -317,8 +343,8 @@ jobs:
           [ "$RESULT" = "success" ] || { echo "::error::fast-contracts 分片结论是 $RESULT, 不是 success"; exit 1; }
 
   postgres-reversal-concurrency:
-    needs: postgres-reversal-concurrency-shard
-    if: ${{ always() }}
+    needs: [changes, postgres-reversal-concurrency-shard]
+    if: ${{ always() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -331,6 +357,8 @@ jobs:
 
 
   final-full-suite:
-    if: ${{ contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    needs: changes
+    # 仅 java-full-ready 标签时运行 (merge_group 下没有标签 ⇒ 不跑, 队列跑快速门禁)。
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     uses: ./.github/workflows/java-full-nightly.yml
     # 不传 write_baseline：PR 永远不许改已知红基线。

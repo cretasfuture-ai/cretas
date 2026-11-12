@@ -1,0 +1,23 @@
+# rn-gate.yml 的 pull_request 触发路径 (2026-11-12 从 workflow 的 on.pull_request.paths 原样搬来)。
+# 由该 workflow 的 changes 作业经 scripts/ci/changed-paths.py 判定; 语义同 GitHub Actions paths:
+# `**` 跨目录, `*` 不跨 `/`, `!` 取反 (按顺序, 最后命中者为准)。一行一个 glob, `#` 起注释。
+# ⛔ 不要为了让某个 PR 跳过闸而删模式; 加模式与原 paths 同一规矩 (闸读什么, 什么就进触发面)。
+
+frontend/CretasFoodTrace/**
+.github/workflows/rn-gate.yml
+# 🔴 2026-08-27: 下面这些是 RN 的契约测试用 readFileSync **真读**的后端源码
+# (transferEnumLabels / editBatchAccountFieldsLockContract / warehouseBatchAllocation
+#  等，做枚举标签、字段锁、批次分配口径的两份一致比对)。
+# 建元判据闸当天实测: 7 个文件被读着, 而触发面里一个都没有 ——
+# 一个**只改 Java 枚举**的 PR 恰好是这几道闸要守的那类漂移, 而它们看不见它。
+# ⚠️ 以后新增读后端源码的测试, 必须同步加到这里, 否则
+#    frontend/CretasFoodTrace/src/__tests__/gates/gateTriggerSurfaceCoversWhatItReads.test.ts 会红。
+backend/java/cretas-api/src/main/java/com/cretas/aims/entity/enums/**
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java
+backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java
+
+# 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/rn-gate.txt

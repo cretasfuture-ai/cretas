@@ -39,18 +39,25 @@ class JavaPrGateTieringContractTest {
     void everyPrHeadRunsFastAndPostgresGates() throws IOException {
         String workflow = read(PR_GATE);
 
+        // 2026-11-12 (merge queue prep): pull_request carries no paths; a `changes` job decides per PR and
+        // every gate job needs it. merge_group has no PR number, so the group falls back to github.ref
+        // (otherwise every queue run would share one group and cancel the others).
         assertThat(workflow)
                 .contains("types: [opened, synchronize, reopened, labeled]")
-                .containsOnlyOnce("group: java-pr-gate-${{ github.event.pull_request.number }}")
+                .contains("merge_group:")
+                .containsOnlyOnce("group: java-pr-gate-${{ github.event.pull_request.number || github.ref }}")
                 .containsSubsequence("fast-contracts-shard:",
-                        "if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}",
+                        "needs: changes",
+                        "if: ${{ !cancelled() && needs.changes.outputs.run != 'false'"
+                                + " && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}",
                         "ref: ${{ github.event.pull_request.head.sha }}")
                 .contains("java-gate-fast-patterns.txt")
-                .contains("  fast-contracts:\n    needs: fast-contracts-shard")
+                .contains("  fast-contracts:\n    needs: [changes, fast-contracts-shard]")
                 .containsSubsequence("postgres-reversal-concurrency-shard:",
+                        "needs: changes",
                         "ref: ${{ github.event.pull_request.head.sha }}")
                 .contains("java-gate-pg-tests.txt")
-                .contains("  postgres-reversal-concurrency:\n    needs: postgres-reversal-concurrency-shard")
+                .contains("  postgres-reversal-concurrency:\n    needs: [changes, postgres-reversal-concurrency-shard]")
                 .contains("bash \"$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh\" \"$MVN\" -B test")
                 .doesNotContain("localhost:5432/$DB");
 
@@ -85,7 +92,10 @@ class JavaPrGateTieringContractTest {
         String workflow = read(PR_GATE);
         Pattern labeledFullJob = Pattern.compile(
                 "final-full-suite:\\s*\\n"
-                        + "\\s*if: \\$\\{\\{ contains\\(github\\.event\\.pull_request\\.labels\\.\\*\\.name, "
+                        + "\\s*needs: changes\\s*\\n"
+                        + "(?:\\s*#[^\\n]*\\n)*"
+                        + "\\s*if: \\$\\{\\{ !cancelled\\(\\) && needs\\.changes\\.outputs\\.run != 'false' && "
+                        + "contains\\(github\\.event\\.pull_request\\.labels\\.\\*\\.name, "
                         + "'java-full-ready'\\) \\}\\}\\s*\\n"
                         + "\\s*uses: \\.\\/.github/workflows/java-full-nightly\\.yml",
                 Pattern.MULTILINE);
@@ -95,7 +105,7 @@ class JavaPrGateTieringContractTest {
                 .isTrue();
         assertThat(workflow)
                 .as("the final candidate must not waste a third runner slot on tests already inside the full suite")
-                .contains("if: ${{ !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}");
+                .contains("&& !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}");
         assertThat(workflow)
                 .contains("synchronize")
                 .contains("cancel-in-progress: true");

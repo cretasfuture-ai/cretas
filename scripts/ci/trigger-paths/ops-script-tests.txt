@@ -1,0 +1,91 @@
+# ops-script-tests.yml 的 pull_request 触发路径 (2026-11-12 从 workflow 的 on.pull_request.paths 原样搬来)。
+# 由该 workflow 的 changes 作业经 scripts/ci/changed-paths.py 判定; 语义同 GitHub Actions paths:
+# `**` 跨目录, `*` 不跨 `/`, `!` 取反 (按顺序, 最后命中者为准)。一行一个 glob, `#` 起注释。
+# ⛔ 不要为了让某个 PR 跳过闸而删模式; 加模式与原 paths 同一规矩 (闸读什么, 什么就进触发面)。
+
+# ⚠️ scripts/** 是整面 —— test-pipeline-tail-swallows-rc.sh 扫的是**所有** .sh,
+#    只列子目录的话, 改 scripts/ota/ 或 scripts/migrations/ 的 PR 触发不到这道闸。
+scripts/**
+scripts/tests/**
+scripts/ci/run-script-tests.sh
+scripts/ci/run-with-test-postgres.sh
+scripts/tests/known-failing.txt
+scripts/cron/**
+scripts/check-soft-delete-orphans.sh
+scripts/deploy/server-script-inventory.conf
+# 🔴 2026-09-06 补: 这 48 个用例守的**被测对象**原本一个都不在 paths 里 ——
+#    改 scripts/deploy/*.sh 或 scripts/lib/deploy-common.sh 的 PR, 这道闸
+#    一次都不跑。那正是它自己刚照出来的那类缺陷(形态 B: 机制在, 没接上):
+#    · release-java-preflight.sh 少一个执行位 ⇒ 发布链 rc=126
+#    · acquire_deploy_lock 在判定前截断锁文件 ⇒ 锁永久卡住
+#    两处都在 scripts/deploy|lib 下, 改它们的那个 PR 不会触发本闸。
+#    ⚠️ 这里加宽的是**本闸自己的** paths, ⛔ 不是往别人的 workflow 里塞
+#    (2026-08-28 教训: 给别人加宽 glob 会把那边的阴性对照变成恒真式)。
+scripts/deploy/**
+scripts/lib/**
+# 🔴 2026-09-07: test-fresh-db-progress-ratchet.sh 声明 `# GUARDS=scripts/testing/…`,
+#    而 scripts/testing/ 原本不在触发面里 —— 这一条是**新装的 GUARDS 闸自己抓出来的**
+#    (它上线后第一次真用, 就红在加它的那个 PR 上)。⛔ 修法是加 paths, 不是改小声明。
+scripts/testing/**
+# 🔴 2026-09-07: test-fresh-db-baseline-contract.sh 声明依赖采集脚本与两个 pg profile
+#    (它钉的正是「基线不许变成一条 Flyway 迁移」那两条禁令)。同样是**新装的 GUARDS 闸
+#    自己抓出来的** —— 它第二次真用, 又红在加它的那个 PR 上。⛔ 修法是加 paths。
+scripts/ops/**
+# 🔴 2026-09-07: test-fresh-db-baseline-replays.sh(离线验证器)读的就是这个目录 ——
+#    改基线的 PR 必须触发它, 否则「基线被改坏了」与「没问题」读数相同。
+#    ⚠️ 这是那道 GUARDS 闸**第三次**抓住加它的那个 PR 自己。
+ops/db-baseline/**
+backend/java/cretas-api/src/main/resources/application-pg.properties
+backend/java/cretas-api/src/main/resources/application-pg-prod.properties
+# 🔴 2026-09-07: test-java-gate-selector-covers-gate-classes.sh 的**被测对象**是
+#    「测试类的名字」—— 它要拦的正是「有人新加了一道闸, 但名字逃出 java-gate-pr 的
+#    -Dtest」。那种 PR 只动 Java 测试源码, 不带这道闸就等于闸装了但那一族 PR 触发不到
+#    (同一个洞今天第三次了: #713 是 java-gate-pr.yml, #723 是 web-dist.yml)。
+#    ⚠️ 刻意只写**测试源目录**, ⛔ 不是整个 backend/java/** —— 改主代码不需要重跑这
+#    2 分 53 秒的跑批, 而新增/改名测试类必须。
+backend/java/cretas-api/src/test/java/**
+# 三个用例现在断言 ci.yml / java-artifact.yml 的结构(打包住在哪、push paths
+# 覆不覆盖整棵 backend 树、制品保留几天), 所以改这两个文件也要跑一遍。
+.github/workflows/ci.yml
+.github/workflows/java-artifact.yml
+# 🔴 2026-09-07 补: test-release-ci-artifact-prewarm.sh 第 9 节现在对 web-dist.yml
+#    **也**做断言(`Ship attestation bundle …` 这一步必须恰好 1 个 —— 改了名就把 web
+#    车道那段签名检查变成恒 unknown)。被断言的文件不在触发面里, 就是 #713 那个 P0 的
+#    形状: 只动它的 PR 触发不到这道闸, 而「没跑」与「跑了没问题」读数完全相同。
+.github/workflows/web-dist.yml
+# 🔴 2026-10-03: test-fresh-db-startup-outcome.sh 钉着这个工作流的 rc=2 分支
+#    (启动超时 ⇒ 没量到, ⛔ 不与迁移失败同一个红) —— 改它的 PR 必须触发那道闸。
+.github/workflows/fresh-db-progress.yml
+.github/workflows/ops-script-tests.yml
+# 🔴 2026-09-07 P0 的直接教训: `test-ci-gate-runs-merge-result.sh` 断言的正是下面这几个
+#    文件的结构(三处 head.sha pin / 内联 merge 步骤 / ⛔ 不许用本地 composite action),
+#    而它们**一个都不在这份 paths 里** ⇒ 一个**只动 `.github/actions/`** 的 PR 让那道闸
+#    一次都没触发, 于是「删了 action 却留着三处 uses:」这种会让全仓 CI 停摆的状态,
+#    在 PR 上是**全绿**的。⇒ 闸断言谁的结构, 谁就必须在触发面里(形态 B)。
+#    ⚠️ `.github/actions/**` 现在是空目录也要留着 —— 它正是那次出事的路径。
+.github/workflows/java-gate-pr.yml
+.github/workflows/java-full-nightly.yml
+.github/actions/**
+# 2026-10-25: test-public-repo-hosted-only.sh 钉「全部 job 走托管 + 原自建 job 带超时 + Java 显式堆」
+#    (取代 2026-09-15 的 8G runner / 自托管超时两道闸; 仓库转 public, 自建 runner 退役)。
+.github/workflows/jpa-gate-main.yml
+.github/workflows/tool-inventory-gate.yml
+backend/java/cretas-api/pom.xml
+.github/workflows/rn-gate.yml
+.github/workflows/web-admin-gate.yml
+.github/workflows/python-gate.yml
+.github/workflows/crosslang-contract-gate.yml
+.github/workflows/source-hygiene.yml
+.github/workflows/soft-delete-scan-surface.yml
+.github/workflows/secret-regression.yml
+.github/workflows/scheduler-canary.yml
+.github/workflows/artifact-reaper.yml
+.github/workflows/reap-orphan-testenvs.yml
+
+# 2026-11-12 新增 (不是从原 paths 搬来的): test-merge-queue-ready.sh 断言 11 个 PR workflow 的
+#    merge_group 触发 / changes 作业结构 (GUARDS=.github/workflows/*.yml), 改任一 workflow 都要跑它。
+.github/workflows/*.yml
+
+# 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
+scripts/ci/changed-paths.py
+scripts/ci/trigger-paths/ops-script-tests.txt
