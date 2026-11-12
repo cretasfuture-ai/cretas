@@ -912,6 +912,13 @@ public class ToolDispatchService {
                     long executionTime = System.currentTimeMillis() - startTime;
                     totalExecutionTime += executionTime;
                     boolean toolSucceeded = isToolResultSuccessful(resultJson);
+                    if (writeOperation && !toolSucceeded && isOutcomeUnknownResult(resultJson)) {
+                        // 工具把异常吞成了 {success:false}, 但出错前已经有写入提交 (AbstractBusinessTool 标的):
+                        // 不是失败, 是结果不明 —— 不重试、不进纠错、不报失败
+                        log.error("Write tool reported a possibly-committed failure; outcome unknown: tool={}",
+                                tool.getToolName());
+                        return writeOutcomeUnknownResponse(intent, tool);
+                    }
                     String toolFailureMessage = toolSucceeded ? null : extractToolFailureMessage(resultJson);
 
                     // 只有显式 Boolean true 才能审计为成功；无法确认的结果不得进入成功缓存。
@@ -1041,12 +1048,7 @@ public class ToolDispatchService {
                         // The tool may already have committed. Read-side self correction must
                         // never replay a write or turn an uncertain outcome into a retry prompt.
                         log.error("Write tool outcome unknown; not retried: tool={}", tool.getToolName(), e);
-                        return IntentExecuteResponse.builder()
-                                .intentRecognized(true).intentCode(intent.getIntentCode())
-                                .status("OUTCOME_UNKNOWN").aiMode("WRITE")
-                                .message("操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。")
-                                .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
-                                .executedAt(LocalDateTime.now()).build();
+                        return writeOutcomeUnknownResponse(intent, tool);
                     }
 
                     String errorMsg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
@@ -1425,30 +1427,36 @@ public class ToolDispatchService {
     /** 预览被业务规则拦下 (canDo=false) 或预览本身失败 (success=false) 时的状态。 */
     static final String PREVIEW_BLOCKED = "PREVIEW_BLOCKED";
 
-    /**
-     * 预览没通过时给出的回执; 预览通过 (或判不了) 返回 {@code null}。
-     *
-     * <p>判据与两端客户端此前各自在前端做的那一份相同 (RN {@code blockedPreviewReason}):
-     * <ul>
-     *   <li>{@code {success:false, error|message}} —— 工具预览失败 / 缺参数</li>
-     *   <li>{@code {success:true, data:{canDo:false, message}}} —— 业务边界 (超收 / 状态不对 …)</li>
-     * </ul>
-     *
-     * <p>回执形状 (字段不变, 只是状态与 confirmableAction 不同):
-     * <ul>
-     *   <li>{@code status}: 工具说缺参数 → {@code NEED_MORE_INFO} (带 clarificationQuestions,
-     *       与执行路径 {@link #parseToolResultToResponse} 的映射一致); 其余 → {@link #PREVIEW_BLOCKED}</li>
-     *   <li>{@code message / formattedText}: 原因原文 —— web {@code AIQuery} 对非卡片状态渲染 message,
-     *       RN 卡片对非 PREVIEW 状态渲染 formattedText ?? message。⚠️ 若仍回 {@code PREVIEW} 而无
-     *       confirmableAction, 两端都只会显示一句通用的「暂不支持一键确认」, 原因丢失</li>
-     *   <li>{@code resultData}: 完整预览体, 不丢细节</li>
-     *   <li>{@code confirmableAction}: 恒为 null —— 没有票就没有确认按钮</li>
-     * </ul>
-     *
-     * <p>⚠️ previewData 为 null (预览体不是 JSON 对象) 时判不了, 维持原行为 (照常铸 token)。
-     */
-    @SuppressWarnings("unchecked")
     // ==================== 写入确认: 对象与状态绑定 (Fable 审阅 §8.2 / 建议 5) ====================
+
+    static final String WRITE_OUTCOME_UNKNOWN_MESSAGE = "操作结果暂时无法确认，请先在业务页面核对记录，勿重复提交。";
+
+    /** 写操作结果不明 (可能已写入): 统一回执, 确认流程据此把凭据记 OUTCOME_UNKNOWN。 */
+    private static IntentExecuteResponse writeOutcomeUnknownResponse(AIIntentConfig intent, ToolExecutor tool) {
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true).intentCode(intent.getIntentCode())
+                .status("OUTCOME_UNKNOWN").aiMode("WRITE")
+                .message(WRITE_OUTCOME_UNKNOWN_MESSAGE)
+                .formattedText(WRITE_OUTCOME_UNKNOWN_MESSAGE)
+                .metadata(Map.of("toolName", tool.getToolName(), "retryable", false))
+                .executedAt(LocalDateTime.now()).build();
+    }
+
+    private boolean isOutcomeUnknownResult(String resultJson) {
+        if (resultJson == null) {
+            return false;
+        }
+        try {
+            return flaggedOutcomeUnknown(objectMapper.readTree(resultJson));
+        } catch (Exception unparsable) {
+            return false;
+        }
+    }
+
+    private static boolean flaggedOutcomeUnknown(com.fasterxml.jackson.databind.JsonNode payload) {
+        return payload != null && payload.isObject()
+                && payload.path(com.cretas.aims.ai.tool.AbstractBusinessTool.OUTCOME_UNKNOWN_FLAG).asBoolean(false);
+    }
 
     /** 凭据上的对象: 类型、ID、操作。新建型工具没有已存在的对象, ID 记 {@link #NEW_RECORD_ENTITY_ID}。 */
     record PreviewSubject(String entityType, String entityId, String operation) { }
@@ -1555,11 +1563,23 @@ public class ToolDispatchService {
         return snapshot;
     }
 
+    static final String NOT_COMPARABLE_MESSAGE =
+            "这个操作暂时不能在助手里确认：系统无法核对这条记录在预览之后有没有被别人改过，本次未执行。请到对应的业务页面办理。";
+
     /** 确认前状态核对的结论。{@code proceed=false} 时本次确认不得执行工具。 */
     record ConfirmStateCheck(boolean proceed, String code, List<String> changedFields, String message) {
         static final String STATE_CHANGED = "STATE_CHANGED";
         static final String PRECONDITION_CHANGED = "PRECONDITION_CHANGED";
         static final String NOT_COMPARABLE = "NOT_COMPARABLE";
+
+        /** 重新预览能解决的才让用户重新预览; 无法核对的不能 (会原地打转)。 */
+        boolean repreviewHelps() {
+            return STATE_CHANGED.equals(code) || PRECONDITION_CHANGED.equals(code)
+                    || REREAD_FAILED.equals(code);
+        }
+
+        /** 确认时重读失败 (预览抛异常 / 记录的改前值读不出): 一时的, 重新预览可以。 */
+        static final String REREAD_FAILED = "REREAD_FAILED";
 
         static ConfirmStateCheck ok() {
             return new ConfirmStateCheck(true, "OK", List.of(), null);
@@ -1593,7 +1613,7 @@ public class ToolDispatchService {
                     : objectMapper.readValue(storedCurrentValuesJson,
                             new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
         } catch (Exception e) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
                     "预览时记录的改前值无法读取，本次未执行。请重新预览后再确认。");
         }
         if (stored == null) {
@@ -1601,7 +1621,7 @@ public class ToolDispatchService {
         }
         if (!tool.supportsPreview()) {
             return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
-                    "这个操作无法在确认前核对对象当前状态，本次未执行。请到业务页面操作。");
+                    NOT_COMPARABLE_MESSAGE);
         }
 
         Map<String, Object> previewData;
@@ -1619,11 +1639,11 @@ public class ToolDispatchService {
                     new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
         } catch (Exception e) {
             log.warn("确认前重读状态失败, 拒绝执行: tool={}, error={}", tool.getToolName(), e.getMessage());
-            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
                     "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
         }
         if (previewData == null) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
+            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
                     "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
         }
 
@@ -1638,9 +1658,9 @@ public class ToolDispatchService {
             if (tool.previewCreatesNewRecordOnly()) {
                 return ConfirmStateCheck.ok();
             }
+            // ⛔ 不回「请重新预览」: 重新预览还是给不出改前值, 用户会在同一张卡上死循环
             return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
-                    "这个操作的预览没有给出可核对的改前值，无法确认对象在预览之后没被改动，本次未执行。"
-                            + "请重新预览确认最新情况，或到业务页面操作。");
+                    NOT_COMPARABLE_MESSAGE);
         }
 
         List<String> changed = changedFields(stored, fresh);
@@ -1663,11 +1683,43 @@ public class ToolDispatchService {
             }
             com.fasterxml.jackson.databind.JsonNode left = objectMapper.valueToTree(stored.get(key));
             com.fasterxml.jackson.databind.JsonNode right = objectMapper.valueToTree(fresh.get(key));
-            if (!left.equals(NUMERIC_AWARE, right)) {
+            if (!sameValue(left, right)) {
                 changed.add(key);
             }
         }
         return changed;
+    }
+
+    /**
+     * 同一个值: 数字按数值比; 元素全是标量的数组按多重集合比 —— 「当前已订阅的设备」这类列表来自没有
+     * ORDER BY 的查询, 顺序不是状态, 按顺序比会把没人动过的记录误判成「被改过」。元素是对象的数组仍按顺序比
+     * (FIFO 推荐批次之类, 顺序就是内容)。
+     */
+    private static boolean sameValue(com.fasterxml.jackson.databind.JsonNode left,
+                                     com.fasterxml.jackson.databind.JsonNode right) {
+        if (left.isArray() && right.isArray() && left.size() == right.size()
+                && allScalars(left) && allScalars(right)) {
+            return sortedScalars(left).equals(sortedScalars(right));
+        }
+        return left.equals(NUMERIC_AWARE, right);
+    }
+
+    private static boolean allScalars(com.fasterxml.jackson.databind.JsonNode array) {
+        for (com.fasterxml.jackson.databind.JsonNode item : array) {
+            if (item.isContainerNode()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static List<String> sortedScalars(com.fasterxml.jackson.databind.JsonNode array) {
+        List<String> values = new ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode item : array) {
+            values.add(item.isNumber() ? item.decimalValue().stripTrailingZeros().toPlainString() : item.toString());
+        }
+        java.util.Collections.sort(values);
+        return values;
     }
 
     /** 12.5 与 12.50、5 与 5.0 算同一个值: 序列化往返会改数字的表示, 不能让它被读成「改过」。 */
@@ -1678,6 +1730,29 @@ public class ToolDispatchService {
         return a.equals(b) ? 0 : 1;
     };
 
+    /**
+     * 预览没通过时给出的回执; 预览通过 (或判不了) 返回 {@code null}。
+     *
+     * <p>判据与两端客户端此前各自在前端做的那一份相同 (RN {@code blockedPreviewReason}):
+     * <ul>
+     *   <li>{@code {success:false, error|message}} —— 工具预览失败 / 缺参数</li>
+     *   <li>{@code {success:true, data:{canDo:false, message}}} —— 业务边界 (超收 / 状态不对 …)</li>
+     * </ul>
+     *
+     * <p>回执形状 (字段不变, 只是状态与 confirmableAction 不同):
+     * <ul>
+     *   <li>{@code status}: 工具说缺参数 → {@code NEED_MORE_INFO} (带 clarificationQuestions,
+     *       与执行路径 {@link #parseToolResultToResponse} 的映射一致); 其余 → {@link #PREVIEW_BLOCKED}</li>
+     *   <li>{@code message / formattedText}: 原因原文 —— web {@code AIQuery} 对非卡片状态渲染 message,
+     *       RN 卡片对非 PREVIEW 状态渲染 formattedText ?? message。⚠️ 若仍回 {@code PREVIEW} 而无
+     *       confirmableAction, 两端都只会显示一句通用的「暂不支持一键确认」, 原因丢失</li>
+     *   <li>{@code resultData}: 完整预览体, 不丢细节</li>
+     *   <li>{@code confirmableAction}: 恒为 null —— 没有票就没有确认按钮</li>
+     * </ul>
+     *
+     * <p>⚠️ previewData 为 null (预览体不是 JSON 对象) 时判不了, 维持原行为 (照常铸 token)。
+     */
+    @SuppressWarnings("unchecked")
     IntentExecuteResponse blockedPreviewResponse(Map<String, Object> previewData, AIIntentConfig intent) {
         if (previewData == null) {
             return null;
@@ -2039,6 +2114,8 @@ public class ToolDispatchService {
             Long userId,
             String userRole) {
         String toolName = selectedTool.getToolName();
+        boolean writeTool = writeGuardService != null && writeGuardService.isWriteTool(selectedTool);
+        boolean gatewayInvoked = false;
         try {
             String expectedVersion = "material_stock_summary".equals(toolName)
                     || (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName))
@@ -2063,7 +2140,13 @@ public class ToolDispatchService {
                     Optional.empty(),
                     Optional.empty(),
                     Instant.now().plusSeconds(30));
+            gatewayInvoked = true;
             ToolExecutionResult gatewayResult = toolExecutionGateway.execute(command);
+            if (writeTool && (gatewayResult.status() == com.cretas.aims.ai.tool.gateway.ToolExecutionStatus.OUTCOME_UNKNOWN
+                    || flaggedOutcomeUnknown(gatewayResult.payload()))) {
+                log.error("Gateway write outcome unknown: tool={}, status={}", toolName, gatewayResult.status());
+                return writeOutcomeUnknownResponse(intent, selectedTool);
+            }
 
             IntentExecuteResponse response;
             if (gatewayResult.payload().isObject()
@@ -2096,6 +2179,10 @@ public class ToolDispatchService {
             // A selected migration call never re-enters legacy cache/retry/correction paths.
             log.error("D11B Gateway migration execution failed: tool={}",
                     toolName, gatewayFailure);
+            if (writeTool && gatewayInvoked) {
+                // 网关已经开始执行写工具后才抛: 写入可能已落下, 不能报失败
+                return writeOutcomeUnknownResponse(intent, selectedTool);
+            }
             return IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())

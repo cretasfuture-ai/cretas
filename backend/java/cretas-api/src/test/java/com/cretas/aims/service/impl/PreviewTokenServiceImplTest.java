@@ -3,6 +3,7 @@ package com.cretas.aims.service.impl;
 import com.cretas.aims.ai.tool.gateway.ToolCommandDigest;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
 import com.cretas.aims.entity.intent.IntentPreviewToken;
+import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.entity.intent.IntentPreviewToken.TokenStatus;
 import com.cretas.aims.repository.intent.IntentPreviewTokenRepository;
 import com.cretas.aims.service.PreviewTokenService.BoundTokenRequest;
@@ -89,7 +90,9 @@ class PreviewTokenServiceImplTest {
                 .contains("确认凭据");
 
         bound.setStatus(TokenStatus.CONFIRMED);
-        assertThat(service.claimToken("bound", "F001", 9L).getMessage()).contains("已被处理");
+        PreviewTokenService.ClaimResult processed = service.claimToken("bound", "F001", 9L);
+        assertThat(processed.getMessage()).contains("已经执行过");
+        assertThat(processed.getExistingStatus()).isEqualTo(TokenStatus.CONFIRMED);
 
         IntentPreviewToken expired = boundToken("expired", LocalDateTime.now().minusSeconds(1));
         when(repository.findByToken("expired")).thenReturn(Optional.of(expired));
@@ -176,6 +179,21 @@ class PreviewTokenServiceImplTest {
                 "order_create", "1.4.0", mode, "ORDER", "O1", "CREATE",
                 Map.of("amount", new java.math.BigDecimal("1.00"), "label", "x"),
                 Map.of(), Map.of(), 300);
+    }
+
+    @Test
+    void zeroRowClaimRereadsTheRealStatusInsteadOfAssumingExecuting() throws Exception {
+        IntentPreviewToken pending = boundToken("raced", LocalDateTime.now().plusMinutes(5));
+        IntentPreviewToken cancelled = boundToken("raced", LocalDateTime.now().plusMinutes(5));
+        cancelled.setStatus(TokenStatus.CANCELLED);
+        // 第一次读还是待确认; 原子认领 0 行 (同时被新预览取消); 重读看到 CANCELLED
+        when(repository.findByToken("raced")).thenReturn(Optional.of(pending), Optional.of(cancelled));
+
+        PreviewTokenService.ClaimResult result = service.claimToken("raced", "F001", 9L);
+
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getExistingStatus()).isEqualTo(TokenStatus.CANCELLED);
+        assertThat(result.getMessage()).contains("重新发起预览").doesNotContain("执行中");
     }
 
     private IntentPreviewToken boundToken(String token, LocalDateTime expiresAt) throws Exception {

@@ -162,10 +162,12 @@ public interface ToolExecutor {
      * 确认前状态核对 (INTENT-DISTILL 写入确认, Fable 审阅 §8.2): 用户点确认时服务端重跑一次预览,
      * 把这次读到的改前值 ({@code currentValues}) 与铸凭据时记下的改前值逐字段比对, 不一致就拒绝执行。
      *
-     * <p>预览给不出改前值的工具没法比对, 默认按「无法核对」拒绝确认 (fail-closed)。只有
-     * <b>只新建记录、不修改任何已有业务行</b> 的工具可以覆盖为 true: 它没有「别人在这期间改过」的对象,
-     * 确认时仍会重跑预览, 预览不再通过 (前提条件变了) 照样拒绝。改动已有记录的工具 ⛔ 不许返回 true,
-     * 应该在预览里给出 currentValues。</p>
+     * <p>预览给不出改前值的工具没法比对, 默认按「无法核对」拒绝确认 (fail-closed, 回「请到业务页面操作」,
+     * 不回「请重新预览」—— 重新预览还是给不出, 会变成死循环)。只有<b>只新建记录</b>的工具可以覆盖为 true:
+     * 它没有「别人在这期间改过」的对象, 确认时仍会重跑预览, 预览不再通过 (前提条件变了) 照样拒绝。
+     * 执行时按当时数据重算的派生值 (如移动平均价) 或提交后系统按当时数据跑的后续动作 (如自动排程) 不算改已有行;
+     * 用户在预览里看过、执行会照着改的已有记录 (状态、数量、已收、分配) ⛔ 不许返回 true, 应该在预览里给出
+     * currentValues。闸: {@code WriteToolPriorStateDeclarationContractTest}。</p>
      */
     default boolean previewCreatesNewRecordOnly() {
         return false;

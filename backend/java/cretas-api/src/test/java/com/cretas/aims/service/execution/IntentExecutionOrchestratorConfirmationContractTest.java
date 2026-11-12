@@ -107,6 +107,21 @@ class IntentExecutionOrchestratorConfirmationContractTest {
     }
 
     @Test
+    void notComparableToolIsSentToTheBusinessPageNotBackToTheSamePreview() {
+        ToolExecutor tool = configuredTool();
+        when(dispatchService.recheckPreviewState(eq(tool), any(), any(), any(), eq(FACTORY), eq(USER), eq(ROLE)))
+                .thenReturn(ToolDispatchService.ConfirmStateCheck.reject(
+                        ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE, java.util.List.of(),
+                        ToolDispatchService.NOT_COMPARABLE_MESSAGE));
+
+        IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
+
+        assertThat(response.getStatus()).isEqualTo(IntentExecutionOrchestrator.CONFIRM_NOT_SUPPORTED);
+        assertThat(((Map<?, ?>) response.getResultData()).get("needsRepreview")).isEqualTo(false);
+        verify(dispatchService, never()).executeWithTool(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
     void toolOutcomeUnknownIsRecordedAsUnknownNeverAsFailed() {
         ToolExecutor tool = configuredTool();
         when(dispatchService.executeWithTool(eq(tool), eq(FACTORY), any(), any(), eq(USER), eq(ROLE), eq(null)))

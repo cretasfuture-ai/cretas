@@ -128,6 +128,31 @@ class ExecutionReconciliationRepositoryQueryValidationTest {
         statistics.setStatisticsEnabled(false);
     }
 
+    /**
+     * 写入确认三洞: 对账在几分钟内就把停住的 EXECUTING 改成 OUTCOME_UNKNOWN, 确认流程也会直接标 OUTCOME_UNKNOWN。
+     * 只数 30 分钟以上 EXECUTING 的话这个报告恒为 0 —— 结果不明 (回看窗口内标记的) 必须被报出来。
+     */
+    @Test void recentOutcomeUnknownTokensAreReportedAndOldOnesAgeOut() {
+        LocalDateTime now = LocalDateTime.now();
+        Long recent = token("unknown-recent", IntentPreviewToken.TokenStatus.OUTCOME_UNKNOWN, now.minusMinutes(20));
+        Long old = token("unknown-old", IntentPreviewToken.TokenStatus.OUTCOME_UNKNOWN, now.minusDays(3));
+        token("confirmed", IntentPreviewToken.TokenStatus.CONFIRMED, now.minusMinutes(20));
+        for (Object[] row : new Object[][]{{recent, now.minusMinutes(5)}, {old, now.minusDays(3)}}) {
+            entityManager.createNativeQuery("UPDATE intent_preview_tokens SET resolved_at = :at WHERE id = :id")
+                    .setParameter("at", row[1]).setParameter("id", row[0]).executeUpdate();
+        }
+        entityManager.createNativeQuery("UPDATE intent_preview_tokens SET resolved_at = :at WHERE token = 'opaque-confirmed'")
+                .setParameter("at", now.minusMinutes(5)).executeUpdate();
+        testEntityManager.clear();
+
+        var snapshot = new ExecutionReconciliationReporter(entityManager, 30).report(now);
+
+        assertThat(snapshot.status()).isEqualTo("FOUND");
+        assertThat(snapshot.executingTokens()).isZero();
+        assertThat(snapshot.outcomeUnknownTokens()).isEqualTo(1L);
+        assertThat(snapshot.samples()).containsExactly("F-RC:unknown-token:" + recent);
+    }
+
     @Test void nothingStaleIsClean() {
         token("fresh", IntentPreviewToken.TokenStatus.EXECUTING, LocalDateTime.now());
         testEntityManager.flush();

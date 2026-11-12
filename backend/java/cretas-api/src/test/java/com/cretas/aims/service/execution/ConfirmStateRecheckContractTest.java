@@ -85,6 +85,9 @@ class ConfirmStateRecheckContractTest {
         var modifying = recheck(tool("{\"success\":true,\"data\":{\"canDo\":true,\"name\":\"x\"}}", false), "{}");
         assertThat(modifying.proceed()).isFalse();
         assertThat(modifying.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE);
+        // 无法核对的工具重新预览还是一样: 不许把用户送回同一张卡 (死循环), 只指去业务页面
+        assertThat(modifying.repreviewHelps()).isFalse();
+        assertThat(modifying.message()).doesNotContain("重新预览").contains("业务页面");
 
         ToolExecutor creator = tool(preview, true);
         assertThat(dispatch.priorStateSnapshot(creator, mapper.readValue(preview, Map.class)))
@@ -113,7 +116,8 @@ class ConfirmStateRecheckContractTest {
         var check = recheck(tool, "{\"状态\":\"可用\"}");
 
         assertThat(check.proceed()).isFalse();
-        assertThat(check.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE);
+        assertThat(check.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.REREAD_FAILED);
+        assertThat(check.repreviewHelps()).as("一时读不到: 重新预览可以").isTrue();
     }
 
     @Test

@@ -1199,11 +1199,13 @@ public class IntentExecutionOrchestrator {
                 Map<String, Object> stale = new HashMap<>();
                 stale.put("reason", stateCheck.code());
                 stale.put("changedFields", stateCheck.changedFields());
-                stale.put("needsRepreview", true);
+                stale.put("needsRepreview", stateCheck.repreviewHelps());
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intentCode)
-                        .status(PREVIEW_STALE)
+                        // 重新预览能解决 → PREVIEW_STALE (前端给「重新生成预览」);
+                        // 无法核对的工具重新预览还是一样 → CONFIRM_NOT_SUPPORTED (只给去业务页面), 不能原地打转
+                        .status(stateCheck.repreviewHelps() ? PREVIEW_STALE : CONFIRM_NOT_SUPPORTED)
                         .message(stateCheck.message())
                         .formattedText(stateCheck.message())
                         .resultData(stale)
@@ -1318,6 +1320,8 @@ public class IntentExecutionOrchestrator {
     static final String OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN";
     /** 确认前状态核对没过: 什么都没执行, 需要重新预览。 */
     static final String PREVIEW_STALE = "PREVIEW_STALE";
+    /** 这个工具给不出可核对的改前值, 不能在助手里确认: 什么都没执行, 重新预览也没用, 去业务页面。 */
+    static final String CONFIRM_NOT_SUPPORTED = "CONFIRM_NOT_SUPPORTED";
     /** 同一张凭据已经执行成功过: 这次没有重复执行。 */
     static final String ALREADY_EXECUTED = "ALREADY_EXECUTED";
 

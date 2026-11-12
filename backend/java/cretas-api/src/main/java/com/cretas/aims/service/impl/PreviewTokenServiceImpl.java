@@ -239,7 +239,7 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
         if (existing.getStatus() != TokenStatus.PENDING) {
             log.warn("确认认领失败: tokenFingerprint={}, reason=status-{}",
                     tokenFingerprint, existing.getStatus());
-            return ClaimResult.alreadyHandled("令牌已被处理: " + existing.getStatus(), existing.getStatus());
+            return ClaimResult.alreadyHandled(claimRefusalMessage(existing.getStatus()), existing.getStatus());
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -288,9 +288,20 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
                 existing.getExecutionMode(), claimId, now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING);
         if (claimed != 1) {
-            log.warn("确认认领失败: tokenFingerprint={}, reason=concurrent-or-stale", tokenFingerprint);
-            // 并发的另一次点击刚认领走: 它正在执行, 这一次按「执行中」回, 不让用户以为失败而重做
-            return ClaimResult.alreadyHandled("令牌已被其他确认请求处理", TokenStatus.EXECUTING);
+            // 0 行: 可能是并发的另一次点击刚认领走 (EXECUTING / 已完成), 也可能是同时被新预览取消、刚好过期。
+            // 重读真实状态再回答 —— 一律说「执行中」会把「已取消请重新预览」的用户误导去干等。
+            TokenStatus actual = tokenRepository.findByToken(token)
+                    .map(IntentPreviewToken::getStatus).orElse(null);
+            log.warn("确认认领失败: tokenFingerprint={}, reason=concurrent-or-stale, actual={}",
+                    tokenFingerprint, actual);
+            if (actual == null) {
+                return ClaimResult.failure("令牌无效或已过期");
+            }
+            if (actual == TokenStatus.PENDING) {
+                // 仍是待确认却没认领到: 绑定条件不再成立 (多为刚过期), 让用户重新预览
+                return ClaimResult.alreadyHandled("令牌已过期，请重新发起预览", TokenStatus.PENDING);
+            }
+            return ClaimResult.alreadyHandled(claimRefusalMessage(actual), actual);
         }
 
         Optional<IntentPreviewToken> claimedTokenOpt = tokenRepository.findByTokenAndClaimIdAndStatus(
@@ -356,6 +367,19 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
         log.info("确认令牌完成: tokenFingerprint={}, claimFingerprint={}, status={}, updated={}",
                 fingerprint(token), fingerprint(claimId), resolvedStatus, updated);
         return updated == 1;
+    }
+
+    /** 认领被拒时给用户的话: 按凭据真实状态说, 不笼统说「已处理」。 */
+    static String claimRefusalMessage(TokenStatus status) {
+        return switch (status) {
+            case EXECUTING -> "这次确认正在执行中，请勿重复提交";
+            case CONFIRMED -> "这次确认已经执行过";
+            case OUTCOME_UNKNOWN -> "这次确认的结果待核对，请勿重复提交";
+            case CANCELLED -> "这个预览已被新的预览替代或已取消，请重新发起预览";
+            case EXPIRED -> "令牌已过期，请重新发起预览";
+            case FAILED -> "这次确认已结束（未执行成功），请重新发起预览";
+            default -> "令牌已被处理: " + status;
+        };
     }
 
     static final String RECONCILED_MESSAGE =
