@@ -409,8 +409,18 @@ _proxied_url: str = ""
 
 
 def egress_proxy_url() -> str:
-    import os
-    return (os.getenv("LLM_EGRESS_PROXY") or "").strip()
+    """付费两家此刻走的代理。配了 ``LLM_EGRESS_PROXY_FALLBACK`` 时由出口健康探针选当前通的那条
+    (common.llm_egress_health, 2026-11-12); 没配备用 = ``LLM_EGRESS_PROXY`` 原值, 与以前完全一样。"""
+    from common.llm_egress_health import active_proxy_url
+    return active_proxy_url()
+
+
+def _close_later(client: httpx.AsyncClient) -> None:
+    import asyncio
+    try:
+        asyncio.get_running_loop().create_task(client.aclose())
+    except RuntimeError:  # 没有运行中的事件循环 (同步测试): 交给 GC
+        pass
 
 
 def get_llm_proxied_http_client() -> "_RedactingLLMClient":
@@ -421,6 +431,10 @@ def get_llm_proxied_http_client() -> "_RedactingLLMClient":
         return get_llm_http_client()
     if _proxied_client is None or _proxied_url != url:
         from common.llm_metrics import metrics_response_hook
+        if _proxied_client is not None:  # 出口切换: 旧连接池关掉 (在跑的请求用完各自的连接)
+            _close_later(_proxied_client)
+            logger.warning("Egress proxy changed: rebuilding proxied LLM client (scheme=%s)",
+                           url.split("://", 1)[0])
         _proxied_client = httpx.AsyncClient(
             proxy=url,
             limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30),

@@ -17,7 +17,7 @@ import contextvars
 import json
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -56,6 +56,68 @@ def _payload_message_text(payload: Dict[str, Any]) -> str:
                 if isinstance(p, dict) and isinstance(p.get("text"), str):
                     parts.append(p["text"])
     return "".join(parts)
+
+
+#: 外发字段记录里不算「正文」的键 (模型名 / 开关类, 不是用户或业务内容)
+_NON_CONTENT_KEYS = frozenset({"model", "stream", "temperature", "top_p", "max_tokens", "logprobs",
+                               "top_logprobs", "n", "seed", "type", "name", "value", "role",
+                               "enable_thinking", "response_format", "partial"})
+
+
+def _payload_field_summary(payload: Any, body_bytes: int) -> List[str]:
+    """外发请求的字段名 + 字节数 (2026-11-12, INTENT-DISTILL-20261111 Luna 出口线)。
+
+    返回 ``["<路径>:<UTF-8 字节数>", ...]`` (列表元素统一写成 ``[]``, 同一路径的字节数相加, 按路径排序),
+    末尾一条 ``__body__:<整个请求体字节数>``。⛔ 只记字段名和长度, 不记任何值。
+    用途: Luna (/v1/decisions: input / questions[].instructions / questions[].choices[].description) 和
+    阿里云决策 (SystemOne: state / questions.<名>.criteria.<选项>) 都不是 messages 形状, 以前审计行里
+    prompt_chars=0、哈希是空串的哈希 —— 事后查不出外发了什么。
+    """
+    sizes: Dict[str, int] = {}
+
+    def walk(v: Any, path: str, depth: int) -> None:
+        if depth > 8:
+            sizes[path or "$"] = sizes.get(path or "$", 0) + len(json.dumps(v, ensure_ascii=False).encode("utf-8"))
+            return
+        if isinstance(v, dict):
+            # SystemOne 的 questions.<问题名>.criteria.<选项值>: 键是选项值(意图代码), 不当路径展开
+            if path.endswith(".criteria") or path.endswith("questions"):
+                for vv in v.values():
+                    walk(vv, f"{path}.*", depth + 1)
+                return
+            for k, vv in v.items():
+                walk(vv, f"{path}.{k}" if path else str(k), depth + 1)
+        elif isinstance(v, list):
+            for vv in v:
+                walk(vv, f"{path}[]", depth + 1)
+        elif isinstance(v, str):
+            sizes[path] = sizes.get(path, 0) + len(v.encode("utf-8"))
+        else:
+            sizes[path] = sizes.get(path, 0) + len(json.dumps(v).encode("utf-8"))
+
+    try:
+        walk(payload, "", 0)
+    except Exception:  # noqa: BLE001 - 审计不能拖垮主路径
+        return [f"__body__:{body_bytes}"]
+    return [f"{k}:{n}" for k, n in sorted(sizes.items())] + [f"__body__:{body_bytes}"]
+
+
+def _payload_content_text(payload: Any) -> str:
+    """非 messages 形状 (Decisions / SystemOne) 的正文: 所有字符串叶子按出现顺序拼起来, 跳过模型名之类。"""
+    parts: List[str] = []
+
+    def walk(v: Any, key: str) -> None:
+        if isinstance(v, dict):
+            for k, vv in v.items():
+                walk(vv, str(k))
+        elif isinstance(v, list):
+            for vv in v:
+                walk(vv, key)
+        elif isinstance(v, str) and key not in _NON_CONTENT_KEYS:
+            parts.append(v)
+
+    walk(payload, "")
+    return chr(10).join(parts)
 
 
 class llm_caller_context:
@@ -209,6 +271,18 @@ async def metrics_response_hook(response: httpx.Response) -> None:
             )
             meta = _egress_redaction_meta.get()
             msg_text = _payload_message_text(payload)
+            if not msg_text and isinstance(payload, dict) and not payload.get("messages"):
+                msg_text = _payload_content_text(payload)
+            body_bytes = len(request.content or b"")
+            field_keys = _payload_field_summary(payload, body_bytes)
+            if provider == "openai" or "/systemone" in url or "/decisions" in url:
+                # 决策模型外发 (Luna / 阿里云决策): journal 也留一行, ⛔ 只有字段名/字节数/哈希/租户
+                logger.info("[egress-audit] decision egress %s", json.dumps({
+                    "provider": provider, "model": model, "factory": _llm_factory.get(),
+                    "caller": _llm_caller.get(), "sanitized": bool(getattr(meta, "sanitized", False)),
+                    "redacted_count": int(getattr(meta, "redacted_count", 0) or 0),
+                    "chars": len(msg_text), "sha256_12": sha256_of(msg_text)[:12],
+                    "fields": field_keys, "status": response.status_code}, ensure_ascii=False))
             record_egress(EgressAuditRecord(
                 call_site=_llm_caller.get(),
                 provider=provider,
@@ -218,6 +292,7 @@ async def metrics_response_hook(response: httpx.Response) -> None:
                 sanitized=bool(getattr(meta, "sanitized", False)),
                 redacted_count=int(getattr(meta, "redacted_count", 0) or 0),
                 redacted_fields=list(getattr(meta, "redacted_fields", []) or []),
+                sent_field_keys=field_keys,
                 data_window=_llm_data_window.get(),
                 prompt_chars=len(msg_text),
                 prompt_sha256=sha256_of(msg_text),
