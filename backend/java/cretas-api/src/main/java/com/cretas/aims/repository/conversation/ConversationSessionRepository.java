@@ -53,6 +53,19 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
     }
 
     /**
+     * 本人本厂被挂起的参数收集任务 (任务栈, INTENT-DISTILL-20261111 第二批)。
+     * 栈序 (按挂起时刻) 与过期由 ConversationTaskStateService 在内存里排 —— 挂起时刻存在 task_state_json 里。
+     */
+    @Query("SELECT s FROM ConversationSession s " +
+           "WHERE s.factoryId = :factoryId " +
+           "AND s.userId = :userId " +
+           "AND s.status = 'SUSPENDED'")
+    List<ConversationSession> findSuspendedByFactoryAndUser(
+        @Param("factoryId") String factoryId,
+        @Param("userId") Long userId
+    );
+
+    /**
      * 检查用户是否有活跃会话
      */
     @Query("SELECT COUNT(s) > 0 FROM ConversationSession s " +

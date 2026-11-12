@@ -94,7 +94,7 @@ def build_prompt(
     if history:
         lines.append("")
         lines.append("最近对话:")
-        for turn in history[-5:]:
+        for turn in [t for t in history if t.get("role") in ("user", "assistant")][-5:]:
             role = turn.get("role", "?")
             content = turn.get("content", "")
             lines.append(f"  {role}: {content}")

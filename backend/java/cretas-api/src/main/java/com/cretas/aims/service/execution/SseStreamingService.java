@@ -154,6 +154,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.service.ConversationService conversationService;
 
+    /** 任务状态 (挂起 / 恢复 / 识别摘要)。缺席时 (裸构造的单测) 被打断 = 取消, 行为同旧版。 */
+    @Autowired(required = false)
+    private ConversationTaskStateService taskStateService;
+
     /** Optional in bare SSE tests; required by the real supplier comparison resolution path. */
     @Autowired(required = false)
     private AIIntentConfigRepository intentConfigRepository;
@@ -442,6 +446,11 @@ public class SseStreamingService {
                             factoryPackRoute)) {
                 return;
             }
+            // 任务状态: 没有正在问的任务时, 「继续报工」「报工」回到被挂起的那个 (只找回参数、接着问, 不执行)
+            if (!factoryPackConstrained && trustedFactoryActor
+                    && streamTaskResume(emitter, factoryId, request, userId, startTime)) {
+                return;
+            }
             if (!factoryPackConstrained
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
@@ -509,9 +518,16 @@ public class SseStreamingService {
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 Long recognizerUserId = trustedFactoryActor ? userId : null;
                 String recognizerSessionId = trustedFactoryActor ? request.getSessionId() : null;
-                matchResult = aiIntentService.recognizeIntentWithConfidence(
-                        userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                        request.getMode(), null, recentTurns(request));
+                // 任务状态摘要 (白名单, 见 TaskStateSummary): 开关关 / 没有任务时为空, 调用形状与改动前相同
+                Map<String, Object> taskState = taskStateService != null && trustedFactoryActor
+                        ? taskStateService.summary(factoryId, userId, request.getSessionId()) : Map.of();
+                matchResult = taskState.isEmpty()
+                        ? aiIntentService.recognizeIntentWithConfidence(
+                                userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), null, recentTurns(request))
+                        : aiIntentService.recognizeIntentWithConfidence(
+                                userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), null, recentTurns(request), taskState);
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -1205,11 +1221,16 @@ public class SseStreamingService {
         }
         List<com.cretas.aims.entity.conversation.ConversationSession.RequiredParameter> pending =
                 session.getRequiredParameters().stream().filter(p -> !p.isCollected()).toList();
-        if (!SlotAnswerRule.looksLikeAnswer(request.getUserInput(), pending,
-                text -> knowledgeBase.matchPhrase(text).isPresent())) {
-            log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 关闭会话后正常识别: session={}, pending={}",
+        // 续轮规则与普通入口共用一份 (TaskContinuationRule): 不像回答 = 打断。开关开时挂起待恢复, 关时取消 (旧行为)
+        if (TaskContinuationRule.forActive(request.getUserInput(), pending,
+                text -> knowledgeBase.matchPhrase(text).isPresent()) == TaskContinuationRule.Action.INTERRUPT) {
+            log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 打断后正常识别: session={}, pending={}",
                     slotSessionId, pending.stream().map(p -> p.getName()).toList());
-            conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            if (taskStateService != null) {
+                taskStateService.interrupt(factoryId, userId, session);
+            } else {
+                conversationService.cancelConversation(factoryId, userId, slotSessionId);
+            }
             return false;
         }
         Optional<AIIntentConfig> target = session.getKnownIntentCode() == null
@@ -1283,6 +1304,44 @@ public class SseStreamingService {
                 .message(message)
                 .formattedText(message)
                 .sessionId(slotSessionId)
+                .executedAt(LocalDateTime.now())
+                .build(), startTime);
+        return true;
+    }
+
+    /**
+     * 任务状态 (INTENT-DISTILL-20261111 第二批): 回到被挂起的任务。规则见 {@link TaskContinuationRule#resumeTarget},
+     * 与普通入口共用 {@link ConversationTaskStateService#tryResume}。恢复只流出「回到 X, 还需要 …」,
+     * 带回那个会话的 id, 下一句照常走缺参续轮; 补齐后走显式意图, 写操作只出确认卡。
+     */
+    private boolean streamTaskResume(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                     Long userId, long startTime) throws IOException {
+        if (taskStateService == null || !taskStateService.isEnabled() || userId == null
+                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+            return false;
+        }
+        Optional<ConversationTaskStateService.Resumed> resumed;
+        try {
+            resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
+                    knowledgeBase::matchPhrase,
+                    code -> aiIntentService.getIntentByCode(factoryId, code)
+                            .map(AIIntentConfig::getIntentName).orElse(null));
+        } catch (Exception e) {
+            log.warn("[SSE][TaskResume] 恢复失败, 按新话识别: {}", e.getMessage());
+            return false;
+        }
+        if (resumed.isEmpty()) {
+            return false;
+        }
+        com.cretas.aims.entity.conversation.ConversationSession session = resumed.get().session();
+        streamTerminalResponse(emitter, IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(session.getKnownIntentCode())
+                .status("NEED_MORE_INFO")
+                .message(resumed.get().message())
+                .formattedText(resumed.get().message())
+                .sessionId(session.getSessionId())
+                .metadata(Map.of("taskResumed", true, "sessionId", session.getSessionId()))
                 .executedAt(LocalDateTime.now())
                 .build(), startTime);
         return true;

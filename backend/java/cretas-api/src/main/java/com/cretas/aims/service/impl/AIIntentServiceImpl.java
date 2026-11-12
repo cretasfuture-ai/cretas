@@ -370,8 +370,23 @@ public class AIIntentServiceImpl implements AIIntentService {
                                                             Long userId, String userRole, String sessionId,
                                                             String mode, java.util.Set<String> userPermissions,
                                                             List<Map<String, String>> history) {
+        return recognizeIntentWithConfidence(userInput, factoryId, topN, userId, userRole, sessionId,
+                mode, userPermissions, history, Map.of());
+    }
+
+    /**
+     * INTENT-DISTILL-20261111 第二批: 10 参版是真正的实现。{@code taskState} 是 TaskStateSummary 的白名单结构,
+     * 参数值与原话一起过同一道外发脱敏后下发 Python {@code taskState} 字段; 非空 = 带上下文, 不读不写原话缓存。
+     */
+    @Override
+    public IntentMatchResult recognizeIntentWithConfidence(String userInput, String factoryId, int topN,
+                                                            Long userId, String userRole, String sessionId,
+                                                            String mode, java.util.Set<String> userPermissions,
+                                                            List<Map<String, String>> history,
+                                                            Map<String, Object> taskState) {
         List<Map<String, String>> turns = history == null ? Collections.emptyList() : history;
-        boolean contextual = !turns.isEmpty();
+        Map<String, Object> taskSummary = taskState == null ? Map.of() : taskState;
+        boolean contextual = !turns.isEmpty() || !taskSummary.isEmpty();
         Optional<IntentMatchResult> earlyPhrase = pipelineService.recognizeExpectedEarlyPhrase(
                 userInput, factoryId, userId, sessionId, java.util.Set.of("QUALITY_CHECK_QUERY", "REPORT_TRENDS"));
         if (earlyPhrase.isPresent() && earlyPhrase.get().hasMatch()
@@ -462,6 +477,10 @@ public class AIIntentServiceImpl implements AIIntentService {
                 for (Map<String, String> turn : userTurns) {
                     egressTexts.add(turn.get("content"));
                 }
+                // 任务状态里的字符串值 (编号 / 数字) 排在原话与历史之后, 同一次脱敏 (代号前后一致)
+                List<String> taskValues = com.cretas.aims.service.execution.TaskStateEgress.stringValues(taskSummary);
+                int taskValueOffset = egressTexts.size();
+                egressTexts.addAll(taskValues);
                 com.cretas.aims.service.consent.LlmEgressRedactor.Result redacted =
                         llmEgressGuard.texts(PYTHON_MATCH_EGRESS_SITE, factoryId, Map.of(), egressTexts);
                 if (redacted.refused()) {
@@ -481,6 +500,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .role(role)
                         .businessType(businessType)
                         .history(sentTurns)
+                        .taskState(com.cretas.aims.service.execution.TaskStateEgress.withRedactedValues(taskSummary, redacted::text, taskValueOffset))
                         // spec §8.2 洞②接线: 这两个字段自 Phase 2B-α 起就存在且有 javadoc
                         // ("READ=剔除写意图候选 | OPERATE=按 userPermissions 剔除无权限写意图"),
                         // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。

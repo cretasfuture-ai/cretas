@@ -28,6 +28,7 @@ from ai.dto import (
     IntentMatchResultDto,
 )
 from ai.embedding import _request_embedding_cache
+from ai.matcher.decision import with_task_state
 from ai.orchestrator import Orchestrator
 
 logger = logging.getLogger(__name__)
@@ -138,7 +139,8 @@ async def _do_match(
         userId=body.userId,
         role=body.role,
         visible_intents=visible_rows,
-        history=body.history,
+        # 任务状态接在最近对话后面 (白名单清洗在 with_task_state 里); 没有时与改动前逐字相同
+        history=with_task_state(body.history, body.taskState),
         min_confidence=min_confidence,
         enable_llm=enable_llm,
     )

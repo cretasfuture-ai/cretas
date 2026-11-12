@@ -100,6 +100,10 @@ public class IntentExecutionOrchestrator {
     private final SemanticCacheService semanticCacheService;
     private final RuleEngineService ruleEngineService;
     private final ConversationService conversationService;
+
+    /** 任务状态 (挂起 / 恢复 / 识别摘要, INTENT-DISTILL-20261111 第二批)。缺席 = 旧行为。 */
+    @Autowired(required = false)
+    private ConversationTaskStateService taskStateService;
     private final ConversationMemoryService conversationMemoryService;
     private final ObjectMapper objectMapper;
     private final DashScopeClient dashScopeClient;
@@ -527,6 +531,14 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 0.27 任务状态: 没有正在问的任务时, 「继续报工」「报工」回到被挂起的那个 (与 SSE 同一条规则, 只找回参数、不执行)
+        if (!factoryPackConstrained) {
+            IntentExecuteResponse resumed = handleTaskResume(factoryId, request, userId);
+            if (resumed != null) {
+                return resumed;
+            }
+        }
+
         // 0.3. 早期问题类型检测
         if (!factoryPackConstrained
                 && !negationVetoWrite && userInput != null && !userInput.isEmpty()) {
@@ -563,7 +575,14 @@ public class IntentExecutionOrchestrator {
                 java.util.Set<String> filterPermissions =
                         resolveUserPermissionsForFiltering(request.getMode(), userId, factoryId);
                 // 无上下文时调用形状与改动前完全一致 (8 参版在实现里就是「历史为空」的 9 参版)
-                matchResult = recognitionHistory.isEmpty()
+                // 任务状态摘要 (白名单, 见 TaskStateSummary): 开关关 / 没有任务时为空, 调用形状不变
+                Map<String, Object> taskState = taskStateService != null && recognizerUserId != null
+                        ? taskStateService.summary(factoryId, userId, request.getSessionId()) : Map.of();
+                matchResult = !taskState.isEmpty()
+                        ? aiIntentService.recognizeIntentWithConfidence(
+                                request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
+                                request.getMode(), filterPermissions, recognitionHistory, taskState)
+                        : recognitionHistory.isEmpty()
                         ? aiIntentService.recognizeIntentWithConfidence(
                                 request.getUserInput(), factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
                                 request.getMode(), filterPermissions)
@@ -1462,6 +1481,20 @@ public class IntentExecutionOrchestrator {
                 IntentExecuteResponse denied = checkIntentPermission(canonical.get(), factoryId, userId, userRole);
                 if (denied != null) return denied;
             }
+            // 任务状态开着时与 SSE 用同一条续轮规则 (TaskContinuationRule): 不像在回答缺参问题 = 打断 →
+            // 挂起这个任务, 这句话按新话识别。关着时保持旧行为 (一律交给旧任务抽参, 审阅 5.2 缺口 5)。
+            if (taskStateService != null && taskStateService.isEnabled() && pending.isPresent()
+                    && pending.get().isParameterCollectionMode()
+                    && pending.get().getStatus() == ConversationSession.SessionStatus.ACTIVE
+                    && !pending.get().isExpired()
+                    && taskStateService.classify(pending.get(), request.getUserInput(),
+                            text -> knowledgeBase.matchPhrase(text).isPresent())
+                        == TaskContinuationRule.Action.INTERRUPT) {
+                log.info("[TaskState] 普通入口: 这句不像在回答缺参问题, 挂起后正常识别: session={}",
+                        pending.get().getSessionId());
+                taskStateService.interrupt(factoryId, userId, pending.get());
+                return null;
+            }
             ConversationService.ConversationResponse conversationResp =
                     conversationService.continueConversation(
                             factoryId, userId, request.getSessionId(), request.getUserInput());
@@ -1517,6 +1550,45 @@ public class IntentExecutionOrchestrator {
             log.error("会话延续失败: sessionId={}, error={}", request.getSessionId(), e.getMessage(), e);
             return null;
         }
+    }
+
+    /** 回到被挂起的任务 (与 SSE {@code streamTaskResume} 同一个服务方法)。回复格式同会话延续。 */
+    private IntentExecuteResponse handleTaskResume(String factoryId, IntentExecuteRequest request, Long userId) {
+        if (taskStateService == null || !taskStateService.isEnabled() || userId == null
+                || request.getUserInput() == null || request.getUserInput().isBlank()
+                || !hasBoundSupplierFactoryActor(factoryId, userId)) {
+            return null;
+        }
+        Optional<ConversationTaskStateService.Resumed> resumed;
+        try {
+            resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
+                    knowledgeBase::matchPhrase,
+                    code -> aiIntentService.getIntentByCode(factoryId, code)
+                            .map(AIIntentConfig::getIntentName).orElse(null));
+        } catch (Exception e) {
+            log.warn("[TaskState] 恢复失败, 按新话识别: {}", e.getMessage());
+            return null;
+        }
+        if (resumed.isEmpty()) {
+            return null;
+        }
+        ConversationSession session = resumed.get().session();
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("sessionId", session.getSessionId());
+        metadata.put("currentRound", session.getCurrentRound());
+        metadata.put("maxRounds", session.getMaxRounds());
+        metadata.put("status", session.getStatus().name());
+        metadata.put("taskResumed", true);
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(session.getKnownIntentCode())
+                .status("CONVERSATION_CONTINUE")
+                .message(resumed.get().message())
+                .formattedText(resumed.get().message())
+                .sessionId(session.getSessionId())
+                .metadata(metadata)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     private IntentExecuteResponse handleEarlyQuestionTypeDetection(String factoryId, String userInput,

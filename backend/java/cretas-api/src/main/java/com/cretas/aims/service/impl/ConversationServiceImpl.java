@@ -175,6 +175,8 @@ public class ConversationServiceImpl implements ConversationService {
                 }
             }
             session.setCollectedParameters(collected);
+            // 任务状态: 首句抽到的也是用户说的 (见 ConversationSession.TaskState)
+            collected.keySet().forEach(k -> session.markParameterSource(k, ConversationSession.ParameterSource.USER));
         }
 
         sessionRepository.save(session);
