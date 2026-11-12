@@ -444,6 +444,67 @@ class DecisionMatcher:
         content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         return parse_shortlist(content, codes, self.shortlist_size)
 
+    def _choice_setup(self, query: str, options: List[Dict[str, Any]], special_options: bool):
+        """固定打乱后的选项表 (出口固定排最后) 与特殊选项个数; 选项为空 -> None。Luna / qwen / 阿里云共用。"""
+        if not options:
+            return None
+        n_special = len(SPECIAL_OPTIONS) if special_options else 0
+        opts = options[: self.k - n_special]
+        opts = opts[:]
+        random.Random(query).shuffle(opts)  # 固定打乱, 消除「爱选第一个」(与评测一致)
+        if n_special:
+            opts = opts + SPECIAL_OPTIONS  # 出口固定排在最后
+        return opts, n_special
+
+    @staticmethod
+    def _by_code(probs: Dict[str, float], opts: List[Dict[str, Any]], n_special: int) -> Dict[str, float]:
+        """{字母: 概率} -> {意图码 / NONE_KEY / CLARIFY_KEY: 概率}; 没给到的选项记 0 (⛔ 不归一化)。"""
+        n = len(opts)
+        out: Dict[str, float] = {}
+        for i, (L, r) in enumerate(zip(LETTERS, opts)):
+            code = str(r["intent_code"])
+            if i >= n - n_special:
+                code = _SPECIAL_KEYS[code]
+            out[code] = probs.get(L, 0.0)
+        return out
+
+    async def choose_luna(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                          history: Optional[List[Dict[str, Any]]] = None,
+                          special_options: bool = False) -> Optional[Dict[str, float]]:
+        """只问 Luna (OpenAI Decisions)。没启用 / 失败 -> None; 失败原因留在
+        ``legacy_exit_metrics.get_luna_failure_reason()`` (没启用时为 None), 由调用方决定下一跳。"""
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        exit_metrics.set_luna_failure_reason(None)
+        setup = self._choice_setup(query, options, special_options)
+        if setup is None:
+            return None
+        opts, n_special = setup
+        messages = build_choice_messages(query, role, opts, history)
+        probs = await self._choose_native(messages, LETTERS[:len(opts)], opts)
+        if probs is None:
+            return None
+        exit_metrics.record_luna_outcome(None, None)  # 只有问了 Luna 且拿到概率才会走到这里
+        return self._by_code(probs, opts, n_special)
+
+    async def choose_qwen(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
+                          history: Optional[List[Dict[str, Any]]] = None,
+                          special_options: bool = False) -> Dict[str, float]:
+        """阿里云 qwen 读首 token logprobs (DECISION 链)。拿不到 -> 抛异常 (调用方计原因、走下一跳)。"""
+        setup = self._choice_setup(query, options, special_options)
+        if setup is None:
+            raise ValueError("no options")
+        opts, n_special = setup
+        n = len(opts)
+
+        def has_probs(body: Dict[str, Any]) -> Optional[str]:
+            return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
+
+        payload = {"messages": build_choice_messages(query, role, opts, history), "max_tokens": 1,
+                   "logprobs": True, "top_logprobs": 5}
+        body = await self._call(payload, body_validator=has_probs)
+        return self._by_code(letter_probs(body, n) or {}, opts, n_special)
+
     async def choose(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
                      history: Optional[List[Dict[str, Any]]] = None,
                      special_options: bool = False) -> Optional[Dict[str, float]]:
@@ -452,52 +513,32 @@ class DecisionMatcher:
         special_options=True 时追加「以上都不是 / 需要先问清楚」两个选项, 它们的概率以
         NONE_KEY / CLARIFY_KEY 返回; 真实候选的概率**不重新归一化** —— 模型放在这两个出口上的
         把握会把真实候选的置信度拉低, 让「拿不准」自然落到按钮澄清。
+
+        这是 ``AI_DECISION_FALLBACK=legacy`` (与合并理解路径) 用的旧链: Luna → qwen 读 logprobs。
+        组合退路 (缺省) 由 orchestrator 用 ``choose_luna`` + ``ai.matcher.fallback_combo`` 自己串。
         """
         if not options:
             return None
-        n_special = len(SPECIAL_OPTIONS) if special_options else 0
-        opts = options[: self.k - n_special]
-        if len(opts) == 1 and not n_special:
-            return {str(opts[0]["intent_code"]): 1.0}
-        opts = opts[:]
-        random.Random(query).shuffle(opts)  # 固定打乱, 消除「爱选第一个」(与评测一致)
-        if n_special:
-            opts = opts + SPECIAL_OPTIONS  # 出口固定排在最后
-        n = len(opts)
-
-        def has_probs(body: Dict[str, Any]) -> Optional[str]:
-            return None if letter_probs(body, n) else "no_option_letter_in_top_logprobs"
-
-        messages = build_choice_messages(query, role, opts, history)
-        letters = LETTERS[:n]
+        if len(options[: self.k]) == 1 and not special_options:
+            return {str(options[0]["intent_code"]): 1.0}
         # 2026-11-12 (LLM-PROVIDER-SWITCH): 有出口时先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
         # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。没出口 / 拿不到就走下面的
         # 阿里云 qwen 读 logprobs 链, 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
         from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
 
-        exit_metrics.set_luna_failure_reason(None)
-        probs = await self._choose_native(messages, letters, opts)
-        luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没问 Luna, 或 Luna 给出了概率
-        if probs is not None:  # 只有问了 Luna 且拿到概率才会走到这里
-            exit_metrics.record_luna_outcome(None, None)
-        if probs is None:
-            payload = {"messages": messages, "max_tokens": 1, "logprobs": True, "top_logprobs": 5}
-            try:
-                body = await self._call(payload, body_validator=has_probs)
-            except Exception as ex:  # noqa: BLE001
-                logger.warning("decision choose failed: %s", str(ex)[:300])
-                if luna_reason is not None:
-                    exit_metrics.record_luna_outcome(luna_reason, "failed_" + exit_metrics.classify_exception(ex))
-                return None
-            probs = letter_probs(body, n) or {}
+        out = await self.choose_luna(query, role, options, history, special_options)
+        if out is not None:
+            return out
+        luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没问 Luna
+        try:
+            out = await self.choose_qwen(query, role, options, history, special_options)
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision choose failed: %s", str(ex)[:300])
             if luna_reason is not None:
-                exit_metrics.record_luna_outcome(luna_reason, "ok" if probs else "no_probs")
-        out: Dict[str, float] = {}
-        for i, (L, r) in enumerate(zip(LETTERS, opts)):
-            code = str(r["intent_code"])
-            if i >= n - n_special:
-                code = _SPECIAL_KEYS[code]
-            out[code] = probs.get(L, 0.0)
+                exit_metrics.record_luna_outcome(luna_reason, "failed_" + exit_metrics.classify_exception(ex))
+            return None
+        if luna_reason is not None:
+            exit_metrics.record_luna_outcome(luna_reason, "ok" if any(out.values()) else "no_probs")
         return out
 
 

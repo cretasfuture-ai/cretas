@@ -41,7 +41,9 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
+from ai.db import _is_write_row
 from ai.matcher.decision import CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.fallback_combo import HOPS, FallbackDecision, FallbackThresholds, run_fallback
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
@@ -233,7 +235,24 @@ class Orchestrator:
         # ===== ② 决策: 读概率 =====
         t = time.time()
         special = bool(getattr(self.config, "decision_special_options", False))
-        if special:
+        fallback = None
+        if getattr(self.config, "decision_fallback", "legacy") == "combo":
+            # Luna → 组合退路 (阿里云意图 ‖ qwen 动作/先问 → qwen 单用 → 保守先问 → 按钮), 见 fallback_combo
+            options = [by_code[c] for c in codes]
+            if len(options) == 1 and not special:
+                probs = {codes[0]: 1.0}
+            else:
+                probs = await self.decision_matcher.choose_luna(query, role, options, history,
+                                                                special_options=special)
+            if probs is None:
+                luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没启用 Luna
+                modes = {c: ("WRITE" if _is_write_row(by_code[c]) else "READ") for c in codes}
+                fallback = await run_fallback(self.decision_matcher, query, role, options, history, modes,
+                                              FallbackThresholds.from_env())
+                exit_metrics.record_fallback(fallback.hop, fallback.outcome, fallback.failures)
+                if luna_reason is not None:
+                    exit_metrics.record_luna_outcome(luna_reason, "fallback_" + fallback.hop)
+        elif special:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history,
                                                        special_options=True)
         else:
@@ -243,6 +262,8 @@ class Orchestrator:
         purpose_result = await purpose_block()
         if purpose_result is not None:
             return purpose_result
+        if fallback is not None:
+            return self._result_from_fallback(fallback, query, by_code, visible_intents, timing, t0)
         if not probs:
             exit_metrics.set_decision_none_reason(
                 "decision_no_probs_" + (exit_metrics.get_luna_failure_reason() and "after_luna" or "qwen_only"))
@@ -397,6 +418,56 @@ class Orchestrator:
                                   visible_intents=visible_intents,
                                   min_confidence=1.01 if force_clarify else self.config.decision_auto_threshold,
                                   timing=timing)
+
+    def _result_from_fallback(self, fb: FallbackDecision, query: str, by_code: Dict[str, Any],
+                              visible_intents: List[Dict[str, Any]], timing: Dict[str, int],
+                              t0: float) -> IntentMatchResultDto:
+        """退路结论 -> 结果。只有「只读目标 + EXECUTE」交给 Java 直接办; 其余一律按钮 (requiresConfirmation)。
+
+        写目标在退路上**一律不自动执行**: decide_v3 的 write_to_confirm 在这里也转成按钮 (首个按钮就是那个写意图,
+        点了之后 Java 照常走写确认)。比 Luna 路径多一次点击, 换来退路上不存在「写意图直通 Java」这条路。
+        """
+        timing.update(fb.timing)
+        timing["fallbackHop"] = HOPS.index(fb.hop) + 1  # 1 combo / 2 qwen_only / 3 intent_ask / 4 buttons
+        for side in sorted(fb.failures):
+            timing["fallbackFail_" + side] = 1
+        if fb.clarify_p is not None:
+            timing["fallbackClarifyP"] = int(round(fb.clarify_p * 1000))
+        if fb.act in DIALOGUE_ACTS:
+            timing["fallbackAct"] = DIALOGUE_ACTS.index(fb.act)
+        if fb.outcome == "NONE":
+            return self._none_result(query, timing, t0, CANCEL_REPLY if fb.reason == "act_cancel" else NONE_REPLY)
+        if fb.outcome == "EXECUTE" and fb.intent in by_code and not _is_write_row(by_code[fb.intent]):
+            row = by_code[fb.intent]
+            cand = CandidateIntentDto(
+                intentCode=fb.intent, intentName=row.get("intent_name") or fb.intent,
+                intentCategory=row.get("intent_category"),
+                confidence=round(float(fb.intent_probs.get(fb.intent, 0.0)), 4),
+                matchMethod=MatchMethod.LLM, description=row.get("description"),
+            )
+            timing["totalMs"] = int((time.time() - t0) * 1000)
+            return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.LLM,
+                                      visible_intents=visible_intents, min_confidence=0.0, timing=timing)
+        if fb.outcome == "EXECUTE":
+            timing["fallbackWriteHeld"] = 1
+        if fb.hop == "buttons":
+            timing["fallbackNoSignal"] = 1  # 置信度一律 0: 没有任何模型给出概率, ⛔ 不编
+        codes: List[str] = []
+        for c in ([fb.intent] if fb.intent else []) + list(fb.top):
+            if c in by_code and c not in codes:
+                codes.append(c)
+        candidates = []
+        for c in codes[:5]:
+            row = by_code[c]
+            candidates.append(CandidateIntentDto(
+                intentCode=c, intentName=row.get("intent_name") or c, intentCategory=row.get("intent_category"),
+                confidence=round(float(fb.intent_probs.get(c, 0.0)), 4),
+                matchMethod=MatchMethod.LLM, description=row.get("description"),
+            ))
+        timing["decisionClarify"] = 1
+        timing["totalMs"] = int((time.time() - t0) * 1000)
+        return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
+                                  visible_intents=visible_intents, min_confidence=1.01, timing=timing)
 
     async def _rerank_candidates(self, query, factoryId, businessType, retriever, by_code, timing):
         """向量 Top-N → 重排 → 前 K 个意图码; 任何一步拿不到结果 → None (调用方走 LLM 粗选)。"""

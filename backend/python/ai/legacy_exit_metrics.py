@@ -10,12 +10,16 @@
     py_legacy_llm      Stage 8 旧 LLM 匹配 (不是决策层, 没有读概率与门槛)
     py_legacy_none     旧四级也没答出来 (交回 Java, Java 会再走自己的旧管线)
   Luna -> 千问 回落 (decision.DecisionMatcher.choose)。
+  Luna 之后的组合退路 (ai/matcher/fallback_combo.py, 批次 2): 每一跳命中、每一边失败原因、最终落到哪一跳。
 
 读数 (同一进程 /metrics, Prometheus 文本格式, 每个 uvicorn worker 各一份):
   intent_legacy_exit_total{exit, factory, rw, reason}
   intent_legacy_exit_site_requests_total{site}         分母: 到达可能回落的那一点的请求数
   intent_decision_luna_fallback_total{reason, qwen_outcome}
   intent_decision_luna_requests_total                  分母: 真的去问了 Luna 的次数
+  intent_decision_fallback_total{hop, outcome}          退路最终落在哪一跳 (combo / qwen_only / intent_ask / buttons)
+  intent_decision_fallback_side_failure_total{side, reason}
+                                                       退路里哪一边、为什么失败 (aliyun_intent / qwen_act / qwen_intent)
 
 告警: 没有现成的告警渠道 (2026-11-12 核对仓库: 无 webhook / 钉钉 / 企微接线), 所以超阈值时只打一条
 固定前缀的 WARNING 结构化日志 ``INTENT_LEGACY_EXIT_ALERT {json}``, 由日志 grep 捕获。
@@ -62,8 +66,19 @@ try:  # pragma: no cover - 依赖缺失时退化为 no-op
         "intent_decision_luna_requests_total",
         "Decision choices that actually asked Luna (rate denominator)",
     )
+    FALLBACK_HOP = Counter(
+        "intent_decision_fallback_total",
+        "Rounds decided by the post-Luna fallback chain, by the hop that produced the decision",
+        ["hop", "outcome"],
+    )
+    FALLBACK_SIDE_FAILURE = Counter(
+        "intent_decision_fallback_side_failure_total",
+        "One side of the post-Luna fallback chain failed or was skipped",
+        ["side", "reason"],
+    )
 except Exception:  # noqa: BLE001
     LEGACY_EXIT = LEGACY_SITE_REQUESTS = LUNA_FALLBACK = LUNA_REQUESTS = None
+    FALLBACK_HOP = FALLBACK_SIDE_FAILURE = None
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +106,10 @@ def get_luna_failure_reason() -> Optional[str]:
     return _luna_failure_reason.get()
 
 
-_KNOWN_CHAIN_REASONS = ("timeout", "cb_open", "quota_skip", "not_enabled", "invalid_choice_distribution")
+_KNOWN_CHAIN_REASONS = ("timeout", "cb_open", "quota_skip", "not_enabled", "invalid_choice_distribution",
+                        # 批次 2 阿里云决策一跳 (call_aliyun_decision_choice) 与计费护栏的拒绝原因
+                        "rate_limited", "not_configured", "empty_api_key", "not_allowlisted", "registry_stale",
+                        "provider_disabled", "expired")
 
 
 def classify_exception(ex: BaseException) -> str:
@@ -183,6 +201,12 @@ PY_LEGACY_ALARM = RateAlarm("py_decision_fallback", _env_float("AI_LEGACY_EXIT_A
                             _window_s(), _min_samples())
 LUNA_ALARM = RateAlarm("luna_to_qwen_fallback", _env_float("AI_LEGACY_EXIT_ALERT_LUNA_FALLBACK_RATE", 0.10),
                        _window_s(), _min_samples())
+# 退路降级 (批次 2): 退路轮次里没落在 combo 的比例 (qwen_only / intent_ask / buttons)。阈值沿用 Luna 回落的 10%
+# 与同一窗口 / 最小样本 —— 同一个道理: 偶发一次属正常, 一成轮次都在降级基本就是某一边整体挂了。
+# 阿里云没配端点时每一轮都是 qwen_only ⇒ 计数照记, 但 not_configured 不算故障、不进告警分子 (配置使然)。
+FALLBACK_ALARM = RateAlarm("decision_fallback_degraded",
+                           _env_float("AI_LEGACY_EXIT_ALERT_FALLBACK_DEGRADED_RATE", 0.10),
+                           _window_s(), _min_samples())
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +300,31 @@ def record_luna_outcome(fallback_reason: Optional[str], qwen_outcome: Optional[s
         logger.debug("luna alarm failed", exc_info=True)
 
 
+def record_fallback(hop: str, outcome: str, failures: Optional[Dict[str, str]] = None) -> None:
+    """退路一轮结束: 最终落在哪一跳 + 各边失败原因。阿里云 not_configured 的 qwen_only 不进告警分子。"""
+    failures = failures or {}
+    try:
+        if FALLBACK_HOP is not None:
+            FALLBACK_HOP.labels(hop=hop, outcome=outcome).inc()
+        if FALLBACK_SIDE_FAILURE is not None:
+            for side, reason in failures.items():
+                FALLBACK_SIDE_FAILURE.labels(side=side, reason=reason).inc()
+        logger.info("intent decision fallback: hop=%s outcome=%s failures=%s", hop, outcome,
+                    json.dumps(failures, ensure_ascii=False, sort_keys=True))
+    except Exception:  # noqa: BLE001
+        logger.debug("fallback counter failed", exc_info=True)
+    try:
+        configured_away = hop == "qwen_only" and failures == {"aliyun_intent": "not_configured"}
+        FALLBACK_ALARM.observe(hit=hop != "combo" and not configured_away)
+    except Exception:  # noqa: BLE001
+        logger.debug("fallback alarm failed", exc_info=True)
+
+
 __all__ = [
     "ALERT_LOG_PREFIX", "RateAlarm", "classify_exception", "legacy_exit_name",
     "record_legacy_exit", "record_decision_site_request", "observe_decision_answered",
-    "record_luna_request", "record_luna_outcome",
+    "record_luna_request", "record_luna_outcome", "record_fallback",
     "set_decision_none_reason", "get_decision_none_reason",
     "set_luna_failure_reason", "get_luna_failure_reason",
-    "PY_LEGACY_ALARM", "LUNA_ALARM",
+    "PY_LEGACY_ALARM", "LUNA_ALARM", "FALLBACK_ALARM",
 ]

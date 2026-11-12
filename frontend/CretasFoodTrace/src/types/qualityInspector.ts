@@ -400,6 +400,9 @@ export type QualityInspectorStackParamList = {
   QIRecall: undefined;
   QIRecallCreate: undefined;
   QIRecallDetail: { recallId: string };
+  // 食品 DAG 缺口 14 App 端: 超时处置 (入口按 quality / production 可读, 处置按 quality 读写)
+  QITimeout: undefined;
+  QITimeoutDecision: { event: import('../services/api/processTimeLimitApi').ProcessTimeLimitEvent };
 };
 
 // ============================================
