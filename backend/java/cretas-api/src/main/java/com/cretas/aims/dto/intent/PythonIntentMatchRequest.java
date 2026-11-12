@@ -49,6 +49,12 @@ public class PythonIntentMatchRequest {
      */
     private java.util.List<String> userPermissions;
 
+    /**
+     * INTENT-DISTILL-20261111 第二批: 任务状态摘要 (只含 tasks[].level / intentCode / params, 值已脱敏)。
+     * null = 不带 (开关关 / 没有任务), 请求体与改动前相同。白名单见 TaskStateSummary / TaskStateEgress。
+     */
+    private Map<String, Object> taskState;
+
     @Data
     @Builder
     @NoArgsConstructor

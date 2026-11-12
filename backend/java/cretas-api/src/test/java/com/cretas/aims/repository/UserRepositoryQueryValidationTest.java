@@ -116,6 +116,46 @@ class UserRepositoryQueryValidationTest {
         assertThat(both.getTotalElements()).isZero();
     }
 
+    /**
+     * 口径规则 8 的按姓名找人出口: 精确同名、只限本厂、只限在职、软删不出现。
+     * 去掉 factory_id 条件 (变异) 时, 外厂的张三会混进来, 本条变红。
+     */
+    @Test
+    void findActiveByExactFullNameIsScopedToTheFactory() {
+        persistFactory("F-JPA-NAME-A", "JPA same-name gate A");
+        persistFactory("F-JPA-NAME-B", "JPA same-name gate B");
+        User a1 = persistNamed("F-JPA-NAME-A", "name-a1", "张三", true);
+        User a2 = persistNamed("F-JPA-NAME-A", "name-a2", "张三", true);
+        persistNamed("F-JPA-NAME-A", "name-a3", "张三丰", true);
+        persistNamed("F-JPA-NAME-A", "name-a4", "张三", false);
+        persistNamed("F-JPA-NAME-B", "name-b1", "张三", true);
+        User deleted = persistNamed("F-JPA-NAME-A", "name-a5", "张三", true);
+        entityManager.flush();
+        entityManager.getEntityManager().createNativeQuery("UPDATE users SET deleted_at = NOW() WHERE id = :id")
+                .setParameter("id", deleted.getId()).executeUpdate();
+        entityManager.clear();
+
+        assertThat(repository.findActiveByFactoryIdAndExactFullName("F-JPA-NAME-A", "张三"))
+                .extracting(User::getUsername)
+                .containsExactly("name-a1", "name-a2");
+        assertThat(a1.getId()).isLessThan(a2.getId());
+        // 阳性对照: 另一个工厂确实有「张三」, 只是不该被 A 厂查到
+        assertThat(repository.findActiveByFactoryIdAndExactFullName("F-JPA-NAME-B", "张三"))
+                .extracting(User::getUsername).containsExactly("name-b1");
+        assertThat(repository.findActiveByFactoryIdAndExactFullName("F-JPA-NAME-A", "李四")).isEmpty();
+    }
+
+    private User persistNamed(String factoryId, String username, String fullName, boolean active) {
+        User user = new User();
+        user.setFactoryId(factoryId);
+        user.setUsername(username);
+        user.setPasswordHash("test-only");
+        user.setIsActive(active);
+        user.setFullName(fullName);
+        entityManager.persist(user);
+        return user;
+    }
+
     private void persistFactory(String id, String name) {
         Factory factory = new Factory();
         factory.setId(id);
