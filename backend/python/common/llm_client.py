@@ -376,11 +376,7 @@ async def init_llm_client(base_url: str, api_key: str) -> None:
     logger.info("Shared LLM HTTP client created (pool: 20 max, 10 keepalive, metrics hook)")
 
     # Warmup: send a minimal request to establish connection + TLS
-    # 2026-11-12: 阿里云已在路由里整体停用(Steve 裁定) —— 启动预热不再向 DashScope 发 qwen 请求;
-    # 预热对新的两家没有意义(经代理、按需建连), 所以这里只在 base_url 不是 DashScope 时才发。
-    if api_key and "dashscope" in (base_url or "").lower():
-        logger.info("LLM client warmup skipped: DashScope is disabled in the router (2026-11-12)")
-    elif api_key:
+    if api_key:
         try:
             resp = await _client.post(
                 f"{base_url}/chat/completions",

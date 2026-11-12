@@ -49,7 +49,7 @@ def _run_liveness(monkeypatch, tmp_path, pairs, behavior):
 
 
 def test_liveness_probe_executes_exact_pair_and_all_three_profiles_offline(monkeypatch, tmp_path):
-    pair = ("anthropic", "claude-haiku-5-5")  # = 存活探针的阳性对照(2026-11-12 起)
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
 
     def good(_pair, _slot, payload):
         content = "{}" if "Return one JSON object" in payload["messages"][1]["content"] else "factory ok"
@@ -63,7 +63,7 @@ def test_liveness_probe_executes_exact_pair_and_all_three_profiles_offline(monke
 
 
 def test_liveness_probe_distinguishes_partial_and_instrument_failure(monkeypatch, tmp_path):
-    pair = ("anthropic", "claude-haiku-5-5")  # = 存活探针的阳性对照(2026-11-12 起)
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
     partial = ("factory_partial", "factory-model")
 
     def one_failed(target, _slot, payload):
@@ -83,7 +83,7 @@ def test_liveness_probe_distinguishes_partial_and_instrument_failure(monkeypatch
 
 
 def test_liveness_probe_rejects_orphan_malformed_json_and_output_failure(monkeypatch, tmp_path):
-    pair = ("anthropic", "claude-haiku-5-5")  # = 存活探针的阳性对照(2026-11-12 起)
+    pair = ("aliyun_a_vl", "qwen3.8-flash")
     orphan = ("orphan", "not-on-chain")
     malformed = ("malformed", "malformed-model")
 
@@ -156,9 +156,9 @@ def test_minimal_safe_set_is_subset_of_safe_models():
 #: 🔴 2026-10-07 Steve 复审裁定「清掉死通道, 大模型后备只留我们自己的阿里云账号」:
 #:    aistore ×3(401, 09-13 已过期)/ deepseek ×2(401)/ zhipu ×1(429)整体删除,
 #:    同样**直接替换, ⛔ 不留注释**(理由同上)。读数见 llm_router 的 `_REGISTRY_AUDIT_PROBE`。
-#: 🔴 2026-11-12 Steve 裁定「暂时全部停用阿里云的模型, 改用 OpenAI 和 Claude 的便宜模型」:
-#:    新增 6 条付费条目(当天评测密钥探针, 读数见 `_REGISTRY_AUDIT_PROBE`); 阿里云条目**保留**
-#:    (停用由 `_DISABLED_ACCOUNTS` 表达, 不是删条目)。
+#: 🔴 2026-11-12 (LLM-PROVIDER-SWITCH): 新增 6 条付费条目(当天评测密钥探针, 读数见 `_REGISTRY_AUDIT_PROBE`)。
+#:    它们**默认不进任何链**(Steve 同日定: 长期是阿里云 + 本地; 付费两家只在配了出口时可选启用),
+#:    在册是为了启用那天计费护栏已经认得它们。
 _FROZEN_REGISTRY = {
     ("anthropic", "claude-haiku-5-5"): None,
     ("anthropic", "claude-sonnet-5-5"): None,
@@ -247,22 +247,19 @@ def test_absolute_last_mechanism_still_sinks_its_members(monkeypatch):
     """
     from unittest import mock
 
-    slot = llm_router.SLOT.CHAT
+    # 2026-11-12: CHAT 现在本地优先(链头由 `_LOCAL_FIRST_SLOTS` 后处理挪过), 用阿里云优先的 INSIGHTS
+    #    才测得到排序键本身。
+    slot = llm_router.SLOT.INSIGHTS
+    assert slot not in llm_router._LOCAL_FIRST_SLOTS
     with mock.patch.object(llm_router, "_today",
                            lambda: llm_router._CAPABILITY_MEASURED_AT):
         assert llm_router._capability_stale() is False
         base = llm_router._build_chain(slot)
         assert len(base) >= 2, f"CHAT 链不足两条, 无法构造本用例: {base}"
         victim = base[0]
-        tail = set(llm_router._TEXT_TAIL)
-        assert victim not in tail and len([p for p in base if p not in tail]) >= 2, (
-            f"CHAT 链头应是池内条目且池内至少两条, 否则沉底看不出来: {base}")
         monkeypatch.setattr(llm_router, "_ABSOLUTE_LAST", frozenset({victim}))
         sunk = llm_router._build_chain(slot)
-    # 2026-11-12: 池内条目(两家付费)排在地板(`_TEXT_TAIL`)之前是结构键第 1 位;
-    #    `_ABSOLUTE_LAST` 是第 2 位 —— 它把成员沉到**同一档**(池内)的最后。
-    non_tail = [p for p in sunk if p not in tail]
-    assert non_tail[-1] == victim, f"_ABSOLUTE_LAST 成员 {victim} 没有被沉底: {sunk}"
+    assert sunk[-1] == victim, f"_ABSOLUTE_LAST 成员 {victim} 没有被沉底: {sunk}"
     assert sorted(sunk) == sorted(base), "沉底不许增删条目"
 
 
@@ -282,40 +279,6 @@ def _non_aliyun(pairs):
     return sorted({p for p in pairs if p[0] not in _OUR_ACCOUNTS})
 
 
-#: 2026-11-12 Steve 裁定后**允许出现在链上**的账号 —— 人写的名单, 与 llm_router 的
-#: `DEFAULT_CHAIN` / `_DISABLED_ACCOUNTS` 来源不同, 不是恒真式。
-_ACCOUNTS_ON_CHAINS_SINCE_2026_11_12 = frozenset({"openai", "anthropic", "local_canada"})
-
-
-def _aliyun_on(pairs):
-    return sorted({p for p in pairs if str(p[0]).startswith("aliyun")})
-
-
-def test_aliyun_is_off_every_chain_after_the_2026_11_12_ruling(monkeypatch):
-    """Steve 2026-11-12:「暂时全部停用阿里云的模型」。四处都要成立, 缺一处就是一条后门:
-    每个槽的实际链 / DEFAULT_CHAIN / `_refuse_reason`(点名也发不出去) / VL 的 env 选择器。
-
-    阴性对照: 把阿里云从 `_DISABLED_ACCOUNTS` 拿掉重建链, 它**必须**重新出现在链上 ——
-    证明是这道停用机制在挡, 而不是池里本来就没有它(那样上面的断言恒真)。
-    """
-    assert _aliyun_on([("aliyun_a_vl", "x"), ("openai", "y")]) == [("aliyun_a_vl", "x")]
-    for slot, chain in llm_router.SLOT_MODELS.items():
-        assert _aliyun_on(chain) == [], f"{slot.value} 链上还有阿里云: {chain}"
-        assert {a for a, _m in chain} <= _ACCOUNTS_ON_CHAINS_SINCE_2026_11_12, (slot, chain)
-        assert chain, f"{slot.value} 是空链"
-    assert not [a for a in llm_router.DEFAULT_CHAIN if a.startswith("aliyun")]
-    for pair in llm_router._SAFE_MODELS:
-        if pair[0].startswith("aliyun"):
-            assert llm_router._refuse_reason(*pair) == "provider_disabled", pair
-    # 两家互为兜底: 每个槽的链上同时有 openai 与 anthropic
-    for slot, chain in llm_router.SLOT_MODELS.items():
-        assert {"openai", "anthropic"} <= {a for a, _m in chain}, f"{slot.value} 只有一家: {chain}"
-    # 阴性对照
-    monkeypatch.setattr(llm_router, "_DISABLED_ACCOUNTS", frozenset())
-    revived = {p for s in llm_router.SLOT for p in llm_router._build_chain(s)}
-    assert _aliyun_on(revived), "去掉停用名单后阿里云没有回到链上 —— 上面的断言可能恒真"
-
-
 def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
     """Steve 2026-10-07:「大模型后备只留我们自己的阿里云账号」。
 
@@ -325,20 +288,21 @@ def test_only_our_aliyun_accounts_remain_after_the_2026_10_07_ruling():
     # 阴性对照: 判定函数必须**判得出**一个非阿里云条目, 否则下面全绿没有意义。
     assert _non_aliyun([("zhipu", "glm-4.5-air"), ("aliyun_a_vl", "x")]) == [
         ("zhipu", "glm-4.5-air")]
-    # 🔴 2026-11-12 起本条的主语(「链上只有阿里云」)被 Steve 新裁定取代(形态 C‴):
-    #    仍然成立的是「10-07 清出的 aistore / deepseek / zhipu 没有回来」, 只断言这一半;
-    #    新的账号格局由上一条 test_aliyun_is_off_every_chain_after_the_2026_11_12_ruling 钉。
-    allowed = _OUR_ACCOUNTS | {"openai", "anthropic"}
-    assert sorted({p for p in llm_router._SAFE_MODELS if p[0] not in allowed}) == []
-    assert sorted({p for p in llm_router._MINIMAL_SAFE_SET if p[0] not in allowed}) == []
+    # 2026-11-12: 付费两家可以**在册**(计费护栏认得它们), 但默认**不在任何链上** —— 链上仍然只有我们的。
+    paid = llm_router._PAID_ACCOUNTS
+    assert _non_aliyun(p for p in llm_router._SAFE_MODELS if p[0] not in paid) == []
+    assert _non_aliyun(p for p in llm_router._MINIMAL_SAFE_SET if p[0] not in paid) == []
     for slot, chain in llm_router.SLOT_MODELS.items():
-        assert sorted({p for p in chain if p[0] not in allowed}) == [], f"{slot.value} 链上有已清出的账号"
-    assert set(llm_router.DEFAULT_CHAIN) <= allowed
-    # 2026-11-03: 本地兜底进了册, 且在每个文本槽的链尾(结构键 `_ABSOLUTE_LAST` 保证)。
-    assert ("local_canada", "qwen3:8b") in llm_router._SAFE_MODELS
+        assert _non_aliyun(chain) == [], f"{slot.value} 链上有非阿里云条目"
+    assert set(llm_router.DEFAULT_CHAIN) <= _OUR_ACCOUNTS | paid
+    # 2026-11-03: 本地兜底进了册; 2026-11-12 起本地优先的槽它在链头, 其余文本槽它在链尾。
+    local = ("local_canada", "qwen3:8b")
+    assert local in llm_router._SAFE_MODELS
     for slot, chain in llm_router.SLOT_MODELS.items():
-        if slot not in llm_router._NO_TEXT_TAIL_SLOTS:
-            assert chain[-1] == ("local_canada", "qwen3:8b"), f"{slot.value} 链尾不是本地兜底: {chain}"
+        if slot in llm_router._NO_TEXT_TAIL_SLOTS:
+            continue
+        where = 0 if slot in llm_router._LOCAL_FIRST_SLOTS else -1
+        assert chain[where] == local, f"{slot.value}: 本地不在应在的位置({where}): {chain}"
     assert llm_router._SAFE_MODELS, "注册表空了 —— 上面几条恒真"
 
 
@@ -385,13 +349,11 @@ def test_removed_channel_cannot_be_revived_by_env_alone(monkeypatch, account, ke
     assert calls == [], f"已删通道居然发出了请求: {calls}"
 
     # 必然读数: 在册账号走同一条路必须真的发请求并拿到答案。
-    # (2026-11-12: 阿里云停用, 对照换成在用的 openai —— 与 CHAT 链上它的型号对上)
-    monkeypatch.setenv("LLM_OPENAI_API_KEY", "key_openai_fake")
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
     llm_router._CB_FAILURES.clear()
     llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
-    got = asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["openai"]))
-    openai_model = next(m for a, m in llm_router.SLOT_MODELS[llm_router.SLOT.CHAT] if a == "openai")
-    assert calls and calls[0][1] == openai_model, f"阳性对照没发出请求: {calls}"
+    got = asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_a_vl"]))
+    assert calls and calls[0][1] == "qwen3.8-flash", f"阳性对照没发出请求: {calls}"
     assert got["choices"][0]["message"]["content"] == "在册账号正常返回"
 
 
@@ -481,3 +443,58 @@ def test_aliyun_c_is_gone_from_registry_chains_and_provider_config(monkeypatch):
         asyncio.run(llm_router.call_chain(llm_router.SLOT.CHAT, payload, chain=["aliyun_c_vl"]))
     assert "no_candidates" in str(ei.value), str(ei.value)
     assert calls == []
+
+
+# ── 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 同日定稿) ───────────────────────────────────────────
+#: 人写的「本地优先」槽 —— 与 llm_router 的 `_LOCAL_FIRST_SLOT_NAMES` 来源不同(这里抄的是当天实测表的结论)。
+_MEASURED_LOCAL_COMPETENT = {"chat", "simple_text", "chart", "mapper"}
+_WAREHOUSE_GATES = (None, "warehouse_candidates_not_enabled", "warehouse_v41_not_enabled")
+
+
+def test_aliyun_and_local_only_by_default_and_local_first_where_measured_competent(monkeypatch):
+    """长期格局 = 阿里云 + 本地; 本地够用的槽本地第一、阿里云第二; 付费两家默认不进任何链。
+
+    阴性对照 ①: 只配出口 + key、不开 LLM_PAID_GENERATIVE, 生成链仍然没有付费两家(只有 Luna 细选可用)。
+    阴性对照 ②: 再开 LLM_PAID_GENERATIVE=1, 付费两家**会**出现且排在阿里云与本地之后 ——
+    证明「默认没有」来自启用条件, 而不是池里本来就没有它们。
+    """
+    for name in ("LLM_EGRESS_PROXY", "LLM_PAID_GENERATIVE"):
+        monkeypatch.delenv(name, raising=False)
+    local = ("local_canada", "qwen3:8b")
+    assert llm_router.decision_choice_enabled() is False
+    for slot in llm_router.SLOT:
+        chain = llm_router._build_chain(slot)
+        assert chain, f"{slot.value} 是空链"
+        assert not [p for p in chain if p[0] in llm_router._PAID_ACCOUNTS], f"{slot.value}: {chain}"
+        assert any(p[0].startswith("aliyun") for p in chain), f"{slot.value} 没有阿里云: {chain}"
+        assert all(llm_router._refuse_reason(*p) in _WAREHOUSE_GATES for p in chain), chain
+        if slot.value in _MEASURED_LOCAL_COMPETENT:
+            assert chain[0] == local and chain[1][0].startswith("aliyun"), f"{slot.value}: {chain}"
+        elif slot not in llm_router._NO_TEXT_TAIL_SLOTS:
+            assert chain[0][0].startswith("aliyun") and chain[-1] == local, f"{slot.value}: {chain}"
+        else:
+            assert local not in chain, f"{slot.value}: 本地不该进识图 / 读概率槽: {chain}"
+    assert {s.value for s in llm_router._LOCAL_FIRST_SLOTS} == _MEASURED_LOCAL_COMPETENT
+
+    monkeypatch.setenv("LLM_EGRESS_PROXY", "socks5h://127.0.0.1:11438")
+    monkeypatch.setenv("LLM_OPENAI_API_KEY", "k")
+    monkeypatch.setenv("LLM_ANTHROPIC_API_KEY", "k")
+    assert llm_router.decision_choice_enabled() is True
+    assert not [p for s in llm_router.SLOT for p in llm_router._build_chain(s)
+                if p[0] in llm_router._PAID_ACCOUNTS], "没开 LLM_PAID_GENERATIVE 就进了生成链"
+    monkeypatch.setenv("LLM_PAID_GENERATIVE", "1")
+    chat = llm_router._build_chain(llm_router.SLOT.CHAT)
+    paid_idx = [i for i, p in enumerate(chat) if p[0] in llm_router._PAID_ACCOUNTS]
+    ours_idx = [i for i, p in enumerate(chat) if p[0] not in llm_router._PAID_ACCOUNTS]
+    assert paid_idx and min(paid_idx) > max(ours_idx), f"付费两家必须排在阿里云与本地之后: {chat}"
+
+
+def test_disabled_account_mechanism_still_works(monkeypatch):
+    """`_DISABLED_ACCOUNTS` 今天是空集; 机制必须仍然有效(放进一个账号, 它就从每条链消失并被拒)。"""
+    assert llm_router._DISABLED_ACCOUNTS == frozenset()
+    before = {p for s in llm_router.SLOT for p in llm_router._build_chain(s)}
+    assert any(p[0] == "aliyun_b_vl" for p in before)
+    monkeypatch.setattr(llm_router, "_DISABLED_ACCOUNTS", frozenset({"aliyun_b_vl"}))
+    after = {p for s in llm_router.SLOT for p in llm_router._build_chain(s)}
+    assert not any(p[0] == "aliyun_b_vl" for p in after)
+    assert llm_router._refuse_reason("aliyun_b_vl", "qwen3.8-flash") == "provider_disabled"

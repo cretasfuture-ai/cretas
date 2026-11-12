@@ -21,14 +21,10 @@ from common.llm_router import SLOT
 def test_decision_pool_is_exactly_the_verified_entries_in_written_order():
     chain = llm_router.SLOT_MODELS[SLOT.DECISION]
     assert chain, "DECISION 链为空 —— 意图决策层会整体回落旧路径"
-    # 2026-11-12: 读概率候选(停用账号滤掉)在前, 另一家的生成型候选在后。
-    logprob = [p for p in llm_router._LOGPROB_ORDER
-               if p in llm_router._LOGPROB_VERIFIED and p[0] not in llm_router._DISABLED_ACCOUNTS]
-    expected = logprob + list(llm_router._DECISION_GENERATIVE_TAIL)
+    # 2026-11-12: 登记表里的付费候选(openai/gpt-4.1-mini)默认不进链, 只在可选启用时追加。
+    expected = [p for p in llm_router._LOGPROB_ORDER
+                if p in llm_router._LOGPROB_VERIFIED and p[0] not in llm_router._PAID_ACCOUNTS]
     assert chain == expected
-    assert logprob, "没有任何可用的读概率候选 —— 细选的回落链为空"
-    # 两家互为兜底: 粗选 / 交际目的的生成调用不因单家故障整槽全挂
-    assert {a for a, _m in chain} >= {"openai", "anthropic"}
     for pair in chain:
         assert pair in llm_router._SAFE_MODELS, f"{pair} 有能力证据但不在计费白名单"
         # registry 超龄时也必须可用, 否则 21 天后决策层静默死掉(与 VL 同一个坑)
@@ -40,8 +36,7 @@ def test_decision_pool_rejects_an_unverified_pair(monkeypatch):
     head = llm_router._LOGPROB_ORDER[0]
     trimmed = {k: v for k, v in llm_router._LOGPROB_VERIFIED.items() if k != head}
     pool = [p for p in llm_router._LOGPROB_ORDER if p in trimmed]
-    full = [p for p in llm_router._LOGPROB_ORDER if p in llm_router._LOGPROB_VERIFIED]
-    assert head not in pool and len(pool) == len(full) - 1
+    assert head not in pool and len(pool) == len(llm_router._LOGPROB_VERIFIED) - 1
 
 
 def test_decision_has_no_text_floor():
@@ -49,10 +44,11 @@ def test_decision_has_no_text_floor():
     # 2026-10-07: 原断言「zhipu 不在 DECISION 链上」—— zhipu 出局后它恒真。
     #    改成直接比: 链 == 登记表筛出的池, 一条都没被追加(文本地板的成员
     #    aliyun_*_vl qwen3.8-flash 有两条同时在池里, 所以不能只看「地板成员在不在」)。
-    # 2026-11-12: 链 = 读概率池 + 生成型尾巴, 文本地板(本地 qwen3:8b)一条都没被追加。
-    chain = llm_router.SLOT_MODELS[SLOT.DECISION]
-    assert not set(chain) & set(llm_router._TEXT_TAIL), (
-        f"文本地板被追加进 DECISION: {set(chain) & set(llm_router._TEXT_TAIL)}")
+    expected = [p for p in llm_router._LOGPROB_ORDER
+                if p in llm_router._LOGPROB_VERIFIED and p[0] not in llm_router._PAID_ACCOUNTS]
+    assert llm_router.SLOT_MODELS[SLOT.DECISION] == expected
+    assert ("aliyun_b_vl", "qwen3.8-flash") not in llm_router.SLOT_MODELS[SLOT.DECISION], (
+        "文本地板里不在 logprob 登记表的那条被追加进来了")
 
 
 def test_empty_content_is_not_invalid_for_decision_but_is_for_mapper():
@@ -99,9 +95,6 @@ def test_body_validator_moves_past_a_200_without_logprobs(monkeypatch):
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: client)
     monkeypatch.setattr(llm_router, "_provider_config", lambda account: ("http://x", "k"))
     monkeypatch.setattr(llm_router, "_log_cache_and_record_budget", lambda *a, **k: None)
-    # 2026-11-12: 两跳都用 /chat/completions 形状的在册候选(机制与供应商无关)
-    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.DECISION,
-                        [("openai", "gpt-4.1-mini"), ("openai", "gpt-5.4-nano")])
     for key in list(llm_router._CB_FAILURES):
         llm_router._CB_FAILURES.pop(key, None)
 

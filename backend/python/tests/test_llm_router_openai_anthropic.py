@@ -29,6 +29,8 @@ def _clean(monkeypatch):
         d.clear()
     monkeypatch.setenv("LLM_ANTHROPIC_API_KEY", "ak-fake")
     monkeypatch.setenv("LLM_OPENAI_API_KEY", "ok-fake")
+    # 2026-11-12: 付费两家是可选启用的; 本文件测的是启用之后的行为, 所以把出口配上
+    monkeypatch.setenv("LLM_EGRESS_PROXY", "socks5h://127.0.0.1:11438")
     monkeypatch.setattr(llm_router, "_log_cache_and_record_budget", lambda *a, **k: None)
     yield
     for d in (llm_router._CB_FAILURES, llm_router._CB_LAST_FAIL, llm_router._QUOTA_EXHAUSTED_UNTIL):
@@ -81,6 +83,7 @@ class _Inner:
 def _install(monkeypatch, inner):
     wrapper = llm_client._RedactingLLMClient(inner)
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: wrapper)
+    monkeypatch.setattr(llm_router, "get_llm_proxied_http_client", lambda: wrapper)
     return inner
 
 
@@ -253,10 +256,16 @@ def test_every_paid_pair_has_a_probe_reading_and_vision_slots_use_verified_pairs
             assert pair in llm_router._VISION_VERIFIED, f"{slot.value}: {pair} 没有识图证据"
 
 
-def test_vl_env_cannot_pick_unverified_or_disabled_pairs(monkeypatch):
-    monkeypatch.setattr(llm_router, "_VL_CHAIN", [("openai", "gpt-5.4-nano"),          # 未登记识图
-                                                  ("aliyun_a_vl", "qwen3.8-flash"),     # 停用
-                                                  ("openai", "gpt-4.1-mini")])          # 合格
+def test_vl_env_cannot_pick_unverified_disabled_or_unenabled_paid_pairs(monkeypatch):
+    chain = [("openai", "gpt-5.4-nano"),          # 未登记识图
+             ("aliyun_a_vl", "qwen3.8-flash"),     # 合格(阿里云)
+             ("openai", "gpt-4.1-mini")]           # 登记了识图, 但付费: 只在可选启用时可选
+    monkeypatch.setattr(llm_router, "_VL_CHAIN", chain)
+    monkeypatch.delenv("LLM_PAID_GENERATIVE", raising=False)
+    assert llm_router._vl_pool() == [("aliyun_a_vl", "qwen3.8-flash")]
+    monkeypatch.setenv("LLM_PAID_GENERATIVE", "1")       # 出口 + key 由 fixture 配好
+    assert llm_router._vl_pool() == [("aliyun_a_vl", "qwen3.8-flash"), ("openai", "gpt-4.1-mini")]
+    monkeypatch.setattr(llm_router, "_DISABLED_ACCOUNTS", frozenset({"aliyun_a_vl"}))
     assert llm_router._vl_pool() == [("openai", "gpt-4.1-mini")]
     monkeypatch.setattr(llm_router, "_VL_CHAIN", [("openai", "gpt-5.4-nano")])
     assert llm_router._vl_pool() == []
@@ -303,12 +312,30 @@ def test_decision_choice_rejects_a_bad_distribution(monkeypatch, rows):
         asyncio.run(llm_router.call_decision_choice(_MSGS, _CHOICES))
 
 
-def test_decision_choice_without_key_sends_nothing(monkeypatch):
-    monkeypatch.delenv("LLM_OPENAI_API_KEY")
+@pytest.mark.parametrize("unset", ["LLM_OPENAI_API_KEY", "LLM_EGRESS_PROXY"])
+def test_decision_choice_without_key_or_egress_sends_nothing(monkeypatch, unset):
+    """2026-11-12: 没有加拿大出口或没有 key 时 Luna 不可用 —— 不发请求, 直接让调用方走阿里云读概率链。"""
+    monkeypatch.delenv(unset)
     inner = _install(monkeypatch, _Inner(answer={}))
-    with pytest.raises(llm_router.LLMChainExhausted, match="empty_api_key"):
+    assert llm_router.decision_choice_enabled() is False
+    with pytest.raises(llm_router.LLMChainExhausted, match="not_enabled"):
         asyncio.run(llm_router.call_decision_choice(_MSGS, _CHOICES))
     assert inner.posts == []
+
+
+def test_matcher_skips_native_choice_entirely_when_not_enabled(monkeypatch):
+    from ai.matcher.decision import DecisionMatcher
+    monkeypatch.delenv("LLM_EGRESS_PROXY")
+    called = []
+
+    async def native(*a, **k):
+        called.append(1)
+        return {}
+
+    monkeypatch.setattr(llm_router, "call_decision_choice", native)
+    rows = [{"intent_code": "A1", "intent_name": "甲"}, {"intent_code": "B1", "intent_name": "乙"}]
+    assert asyncio.run(DecisionMatcher()._choose_native([], "AB", rows)) is None
+    assert called == []
 
 
 def test_decision_choice_pair_is_billing_registered_but_on_no_chat_chain():

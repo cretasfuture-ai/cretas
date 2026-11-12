@@ -39,11 +39,9 @@ from common.llm_router import SLOT, call_chain
 
 # 2026-10-07: aistore / deepseek 清出注册表(Steve 复审裁定), 夹具换成在册的阿里云两个
 # 逻辑账号 —— 正好也是 10-06 那次生产事故里**真的回了 200 + tool_calls** 的两跳。
-# 2026-11-12: 阿里云停用(`_DISABLED_ACCOUNTS`), 两跳换成在用的 /chat/completions 形状候选;
-# 不换的话每一跳都被 provider_disabled 拒掉, 本文件的「回退」用例会空转着变绿。
-_CHAIN = [("openai", "gpt-4.1-mini"), ("local_canada", "qwen3:8b")]
+_CHAIN = [("aliyun_a_vl", "qwen3.8-flash"), ("aliyun_b_vl", "qwen3.8-flash")]
 #: 两跳同一个 DashScope 端点, 只能按 Authorization 里的 key 认账号。
-_KEY_TO_ACCOUNT = {"key_a_fake": "openai", "key_b_fake": "local_canada"}
+_KEY_TO_ACCOUNT = {"key_a_fake": "aliyun_a_vl", "key_b_fake": "aliyun_b_vl"}
 
 _TOOLS = [
     {
@@ -102,9 +100,9 @@ def _chain(monkeypatch):
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
     llm_router._QUOTA_EXHAUSTED_UNTIL.clear()
-    monkeypatch.setenv("LLM_OPENAI_API_KEY", "key_a_fake")
-    monkeypatch.setenv("LLM_LOCAL_CANADA_API_KEY", "key_b_fake")
-    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 11, 12))
+    monkeypatch.setenv("LLM_ALIYUN_A_API_KEY", "key_a_fake")
+    monkeypatch.setenv("LLM_ALIYUN_B_API_KEY", "key_b_fake")
+    monkeypatch.setattr(llm_router, "_today", lambda: datetime.date(2026, 10, 7))
     monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.CHAT, _CHAIN)
     yield
     llm_router._CB_FAILURES.clear()
@@ -130,8 +128,8 @@ _GOOD_TEXT = _resp(200, payload=_completion("今日入库3批，均合格。"))
 async def test_empty_content_with_tool_calls_is_accepted_on_first_provider(monkeypatch):
     qwen_like = _completion("", _qwen_tool_call())
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=qwen_like),
-        "local_canada":_GOOD_TEXT,
+        "aliyun_a_vl":_resp(200, payload=qwen_like),
+        "aliyun_b_vl":_GOOD_TEXT,
     })
 
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS, "tool_choice": "auto"})
@@ -149,7 +147,7 @@ async def test_empty_content_with_tool_calls_is_accepted_on_first_provider(monke
 async def test_dict_arguments_are_also_well_formed(monkeypatch):
     """部分兼容网关把 arguments 直接给对象而不是 JSON 串 —— 同样是合法的。"""
     body = _completion("", _qwen_tool_call(arguments={"taskId": 1827}))
-    client = _install(monkeypatch, {"openai":_resp(200, payload=body), "local_canada":_GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_a_vl":_resp(200, payload=body), "aliyun_b_vl":_GOOD_TEXT})
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert result == body
     assert client.call_log == [_CHAIN[0]]
@@ -159,8 +157,8 @@ async def test_dict_arguments_are_also_well_formed(monkeypatch):
 async def test_control_empty_content_without_tool_calls_still_falls_back(monkeypatch):
     """对照: 正文空、也没有 tool_calls (带 tools 的请求) —— 仍判 empty, 落下一跳。"""
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=_completion("")),
-        "local_canada":_GOOD_TEXT,
+        "aliyun_a_vl":_resp(200, payload=_completion("")),
+        "aliyun_b_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert client.call_log == _CHAIN, f"空答案必须回退到第二家, 实际 {client.call_log}"
@@ -171,8 +169,8 @@ async def test_control_empty_content_without_tool_calls_still_falls_back(monkeyp
 async def test_control_normal_chat_empty_content_still_rejected(monkeypatch):
     """对照: 普通聊天 (没要 tools) 的空正文照旧拒。"""
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=_completion("")),
-        "local_canada":_GOOD_TEXT,
+        "aliyun_a_vl":_resp(200, payload=_completion("")),
+        "aliyun_b_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG})
     assert client.call_log == _CHAIN
@@ -183,8 +181,8 @@ async def test_control_normal_chat_empty_content_still_rejected(monkeypatch):
 async def test_control_tool_calls_without_a_tools_request_do_not_rescue_empty_content(monkeypatch):
     """对照: 没要 tools 却带回 tool_calls + 空正文 —— 不是调用方要的东西, 仍拒。"""
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=_completion("", _qwen_tool_call())),
-        "local_canada":_GOOD_TEXT,
+        "aliyun_a_vl":_resp(200, payload=_completion("", _qwen_tool_call())),
+        "aliyun_b_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG})
     assert client.call_log == _CHAIN
@@ -211,8 +209,8 @@ async def test_control_tool_calls_without_a_tools_request_do_not_rescue_empty_co
 async def test_control_malformed_tool_calls_are_rejected(monkeypatch, bad_calls):
     """对照: 畸形 tool_calls 不能被当成合法答案 (否则「放宽」变成「什么都收」)。"""
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=_completion("", bad_calls)),
-        "local_canada":_GOOD_TEXT,
+        "aliyun_a_vl":_resp(200, payload=_completion("", bad_calls)),
+        "aliyun_b_vl":_GOOD_TEXT,
     })
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert client.call_log == _CHAIN, f"畸形 tool_calls 应回退, 实际 {client.call_log}"
@@ -223,7 +221,7 @@ async def test_control_malformed_tool_calls_are_rejected(monkeypatch, bad_calls)
 async def test_non_empty_content_behaviour_is_unchanged(monkeypatch):
     """既有行为不动: 带 tools 但正文有字 —— 照旧按正文收。"""
     body = _completion("好的，我来开始。", _qwen_tool_call())
-    client = _install(monkeypatch, {"openai":_resp(200, payload=body), "local_canada":_GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_a_vl":_resp(200, payload=body), "aliyun_b_vl":_GOOD_TEXT})
     result = await call_chain(SLOT.CHAT, {"messages": _MSG, "tools": _TOOLS})
     assert result == body
     assert client.call_log == [_CHAIN[0]]
@@ -250,7 +248,7 @@ def _tool_call_body() -> Dict[str, Any]:
 
 def test_endpoint_returns_tool_calls_to_the_caller(monkeypatch):
     qwen_like = _completion("", _qwen_tool_call())
-    client = _install(monkeypatch, {"openai":_resp(200, payload=qwen_like), "local_canada":_GOOD_TEXT})
+    client = _install(monkeypatch, {"aliyun_a_vl":_resp(200, payload=qwen_like), "aliyun_b_vl":_GOOD_TEXT})
 
     resp = _http_client().post("/api/llm/tool-call", json=_tool_call_body())
 
@@ -268,15 +266,15 @@ def test_endpoint_exhaustion_is_an_explicit_503_not_a_bare_500(monkeypatch):
     对照 (同一个测试里): 同一个端点, 一家给出合法答案 -> 200。
     """
     # 必收对照先跑: 证明这条路在「有答案」时是通的, 下面的 503 才有意义
-    _install(monkeypatch, {"openai":_resp(200, payload=_completion("", _qwen_tool_call())),
-                           "local_canada":_GOOD_TEXT})
+    _install(monkeypatch, {"aliyun_a_vl":_resp(200, payload=_completion("", _qwen_tool_call())),
+                           "aliyun_b_vl":_GOOD_TEXT})
     assert _http_client().post("/api/llm/tool-call", json=_tool_call_body()).status_code == 200
 
     llm_router._CB_FAILURES.clear()
     llm_router._CB_LAST_FAIL.clear()
     client = _install(monkeypatch, {
-        "openai":_resp(200, payload=_completion("")),              # 空答案
-        "local_canada":_resp(401, "invalid api key"),                   # 死 key
+        "aliyun_a_vl":_resp(200, payload=_completion("")),              # 空答案
+        "aliyun_b_vl":_resp(401, "invalid api key"),                   # 死 key
     })
     resp = _http_client().post("/api/llm/tool-call", json=_tool_call_body())
 
@@ -311,8 +309,8 @@ def test_endpoint_redaction_failure_is_an_explicit_503_and_nothing_egresses(monk
     """
     from common.llm_client import _RedactingLLMClient
 
-    inner = _Client({"openai": _resp(200, payload=_completion("", _qwen_tool_call())),
-                     "local_canada": _GOOD_TEXT})
+    inner = _Client({"aliyun_a_vl": _resp(200, payload=_completion("", _qwen_tool_call())),
+                     "aliyun_b_vl": _GOOD_TEXT})
     monkeypatch.setattr(llm_router, "get_llm_http_client", lambda: _RedactingLLMClient(inner))
     assert _http_client().post("/api/llm/tool-call", json=_tool_call_body()).status_code == 200
 

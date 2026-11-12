@@ -18,8 +18,7 @@ from collections import defaultdict
 from common import llm_router as R
 from common.process_secret_harness import with_process_secret_harness
 
-# 2026-11-12: 阿里云停用(LLM-PROVIDER-SWITCH), 对照换成文本槽链头 Claude Haiku 5.5。
-POSITIVE_CONTROL = ("anthropic", "claude-haiku-5-5")
+POSITIVE_CONTROL = ("aliyun_a_vl", "qwen3.8-flash")
 N_QUERIES = 2
 PROFILE_REPS = [
     (R.SLOT.REVIEW, "A text"),

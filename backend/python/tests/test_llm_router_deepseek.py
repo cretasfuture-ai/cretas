@@ -37,8 +37,7 @@ def test_the_staleness_cliff_is_real_for_a_model_outside_the_minimal_set(monkeyp
     「在 _SAFE_MODELS 但不在 _MINIMAL_SAFE_SET」的条目 —— 2026-10-07 两张表仍然
     相等(8/8), 这样的真实条目不存在。
     """
-    # 2026-11-12: ghost 挂在在用账号上(阿里云已停用, 会先被 provider_disabled 拒, 测不到 stale 闸)
-    ghost = ("openai", "__not-in-minimal-set__")
+    ghost = ("aliyun_a_vl", "__not-in-minimal-set__")
     monkeypatch.setitem(llm_router._SAFE_MODELS, ghost, datetime.date(2099, 1, 1))
     assert ghost not in llm_router._MINIMAL_SAFE_SET
     stale = (llm_router._REGISTRY_AUDIT_DATE

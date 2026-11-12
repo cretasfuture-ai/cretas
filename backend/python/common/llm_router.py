@@ -8,11 +8,12 @@ Some entries have owner-approved pay-as-you-go billing. Warehouse-only visual
 candidates require LLM_WAREHOUSE_CANDIDATES_ENABLED=1; the DeepSeek candidate
 retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 
-🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 裁定「暂时全部停用阿里云的模型」): 每个槽 = OpenAI / Anthropic
-两家付费便宜模型互为兜底(`_FAST_TEXT_POOL` / `_QUALITY_TEXT_POOL` / `_STRICT_JSON_POOL`), 然后本地
-local_canada/qwen3:8b; 阿里云条目保留但整体停用(`_DISABLED_ACCOUNTS`)。Anthropic 走原生 Messages API
-(`common.llm_anthropic` 翻译, 先脱敏再翻译); 意图细选走 OpenAI Decisions(`call_decision_choice`)。
-⚠️ 下面 10-07 那段描述的是停用之前的账号格局, 存档。
+🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 定稿「长期是阿里云模型配合本地模型」): 链 = 阿里云 + 本地
+local_canada/qwen3:8b; 实测本地胜任的槽(`_LOCAL_FIRST_SLOTS`: chat / simple_text / chart / mapper)本地第一,
+其余阿里云第一、本地兜底。本地一跳有并发上限(`_LOCAL_MAX_INFLIGHT`), 忙时直接换阿里云不排队。
+OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `common.llm_anthropic`), 但**默认不进任何链**:
+只在配了出口 `LLM_EGRESS_PROXY` + key 时可选启用(意图细选 Luna = `call_decision_choice`;
+生成链另需 `LLM_PAID_GENERATIVE=1`, 追加在阿里云与本地之后)。
 
 ⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
 「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
@@ -189,10 +190,10 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
 #    warehouse_vl 整链 LLMChainExhausted) ──
 # ⇒ 新增 openai / anthropic 两个**付费**账号(owner 2026-11-12 授权付费使用; 生产密钥须是不共享数据的
 #   付费项目, 评测密钥不得上生产)。准入证据 = 当天本机评测密钥对合成内容的探针(见 `_REGISTRY_AUDIT_PROBE`)。
-# ⇒ aliyun_a_vl / aliyun_b_vl **条目保留、整体停用**(`_DISABLED_ACCOUNTS`): 不进任何链, `_refuse_reason`
-#   判 provider_disabled, 恢复 = 从 `_DISABLED_ACCOUNTS` 删掉该账号 + 重新探针。
-# ⇒ 本地 local_canada/qwen3:8b 仍是文本槽最后一跳(是否也停由 organizer 问 Steve)。
-_REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 12)  # 11-12 复审: +6 (openai/anthropic), aliyun 停用
+# ⇒ 同日 Steve 改口:「长期是阿里云模型配合本地模型」—— 阿里云**不停**; 本地够用的槽本地优先(实测见
+#   `_LOCAL_FIRST_SLOTS`), 付费两家默认不进链(见 `_PAID_ACCOUNTS`)。aliyun_b 当天 403(额度用尽),
+#   要 Steve 在控制台开按量付费, 代码不处理。
+_REGISTRY_AUDIT_DATE = datetime.date(2026, 11, 12)  # 11-12 复审: +6 (openai/anthropic, 默认不进链)
 #: 复审当天对**注册表每一条**的探针读数(值是读数本身, ⛔ 不是布尔)。
 #: 由 test_registry_audit_has_a_probe_reading_for_every_entry 钉住两件事:
 #:   ① 键集合 == `_SAFE_MODELS` 的键集合 —— 新增/保留一条却没有当天读数 ⇒ 红;
@@ -209,14 +210,15 @@ _REGISTRY_AUDIT_PROBE: Dict[Tuple[str, str], str] = {
     ("openai", "gpt-4.1-mini"): "ok 200 ×3: chart·mapper 0.96s 合法 JSON / decision 读 logprobs 0.81s 首 token 正确",
     ("openai", "gpt-6-luna"): "ok 200 ×3: Decisions 单选 0.39s(最慢 0.91s), 原生概率正确选项 0.90",
     # ── 停用(未探测: 本机无阿里云密钥, 且 Steve 已裁定停用) ──
-    ("aliyun_a_vl", "qwen3.8-flash"): "停用 2026-11-12(免费额度用尽, Steve 裁定); 11-03 读数 ok 200",
-    ("aliyun_a_vl", "qwen3.7-flash"): "停用 2026-11-12; 11-03 读数 ok 200",
-    ("aliyun_a_vl", "deepseek-v4.1-flash"): "停用 2026-11-12; 11-03 读数 ok 200(仓库专用)",
-    ("aliyun_b_vl", "qwen3.8-flash"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
-    ("aliyun_a_vl", "kimi-k3"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
-    ("aliyun_a_vl", "qwen3.8-27b"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
-    ("aliyun_a_vl", "qwen3.8-max-0902"): "停用 2026-11-12; 11-03 读数 quota 403 FreeTierOnly",
-    ("local_canada", "qwen3:8b"): "未重测(本机到 47 隧道不可达); 沿用 11-03 读数 ok 200 0.63s —— 回执单列, organizer 问 Steve 是否也停",
+    # ── 阿里云 + 本地: 2026-11-12 在 47 上经本分支路由实测(合成内容, 每项 5 次), 见 PR 描述实测表 ──
+    ("aliyun_a_vl", "qwen3.8-flash"): "ok 200 ×5/项: chat 1.17s / mapper 0.92s / chart 0.81s / insights 10/10 无错 / 粗选 8/8 目的 8/8 / 工具 9/9",
+    ("aliyun_a_vl", "qwen3.7-flash"): "ok 200 (chat 0.73s); 读 logprobs 链头, 11-12 未单测 logprobs",
+    ("aliyun_a_vl", "deepseek-v4.1-flash"): "未重测(仓库专用); 11-03 读数 ok 200",
+    ("aliyun_b_vl", "qwen3.8-flash"): "quota 403 —— 免费额度用尽, 需 Steve 在控制台开按量付费",
+    ("aliyun_a_vl", "kimi-k3"): "未重测; 11-03 读数 quota 403 FreeTierOnly(需开按量付费)",
+    ("aliyun_a_vl", "qwen3.8-27b"): "未重测; 11-03 读数 quota 403 FreeTierOnly(本就不在自动池)",
+    ("aliyun_a_vl", "qwen3.8-max-0902"): "未重测; 11-03 读数 quota 403 FreeTierOnly(需开按量付费)",
+    ("local_canada", "qwen3:8b"): "ok 200 ×5/项: chat 0.52s / mapper 0.81s / chart 0.92s 全对 / 工具 9/9 / 流式首字 0.16s; insights 8/10(1 次说错事实) / 粗选 4/8 目的 6/8 / 无 logprobs",
 }
 # 2026-08-09 三账号控制台截图 ∩ 生产探针(经 _apply_slot_params, 判据为非空
 # content)全量核对。判据: 控制台显示有余量 ∩ 探针通过 —— 单边证据一律不收
@@ -346,7 +348,49 @@ _DECISION_GENERATIVE_TAIL: List[Tuple[str, str]] = [
 #   ① `_build_chain` 把这些账号从每个槽的链里滤掉;
 #   ② `_refuse_reason` 对它们返回 "provider_disabled"(调用方用 chain= 点名也发不出去)。
 # 恢复 = 从这里删掉账号 + 当天重新探针 + 更新 `_REGISTRY_AUDIT_PROBE`。
-_DISABLED_ACCOUNTS: frozenset = frozenset({"aliyun_a_vl", "aliyun_b_vl"})
+# 🔴 2026-11-12 同日改口(Steve:「长期是阿里云模型配合本地模型」): 阿里云**恢复**, 本集合清空。
+#    机制保留 —— 以后要停某个账号, 往这里加名字即可(由 test_disabled_account_mechanism_still_works 钉住)。
+_DISABLED_ACCOUNTS: frozenset = frozenset()
+
+# ── 付费两家 (OpenAI / Anthropic) 是**可选启用**的, 默认不进任何链 (Steve 2026-11-12) ─────────────
+# 它们在产品里不是常规生成模型(是训练用的老师); 唯一计划内的用途是意图细选的 GPT-6 Luna。
+# prod 47 在国内直连不通, 必须经 `LLM_EGRESS_PROXY`(加拿大 mini 出口)。⇒ 启用条件:
+#   · Luna 细选 (`call_decision_choice`):  LLM_EGRESS_PROXY 已配 且 LLM_OPENAI_API_KEY 非空
+#   · 生成链里的付费备选(追加在阿里云+本地之后): 以上 且 LLM_PAID_GENERATIVE=1
+# 没配时链与「阿里云 + 本地」完全一致(golden 快照钉住)。
+_PAID_ACCOUNTS: frozenset = frozenset({"openai", "anthropic"})
+
+
+def _paid_provider_enabled(account: str) -> bool:
+    """出口已配且该家 key 非空。读 env(不缓存), 由调用方决定何时求值。"""
+    if account not in _PAID_ACCOUNTS:
+        return False
+    if not (os.getenv("LLM_EGRESS_PROXY") or "").strip():
+        return False
+    key_env = {"openai": "LLM_OPENAI_API_KEY", "anthropic": "LLM_ANTHROPIC_API_KEY"}[account]
+    return bool((os.getenv(key_env) or "").strip())
+
+
+def _paid_generative_enabled(account: str) -> bool:
+    return _paid_provider_enabled(account) and (os.getenv("LLM_PAID_GENERATIVE") or "").strip() == "1"
+
+
+def decision_choice_enabled() -> bool:
+    """意图细选能不能先问 Luna(有出口 + 有 key)。没有 -> 直接走阿里云 qwen 读概率链。"""
+    return _paid_provider_enabled(DECISION_CHOICE_PAIR[0])
+
+
+# ── 本地优先 (Steve 2026-11-12:「本地模型够用的地方优先用本地」) ───────────────────────────────
+# 只放**实测胜任**的槽 —— 2026-11-12 在 47 上经本分支路由、合成内容、每项 5 次(INSIGHTS 10 次)实测:
+#   CHAT 文本 5/5 0.52s · MAPPER 字段映射全对 5/5 0.81s · CHART 合法 JSON 且坐标轴对 5/5 0.92s
+#   (阿里云 qwen3.8-flash 同题: 1.17s / 0.92s / 0.81s, 全对)。SIMPLE_TEXT 与 CHAT 同档。
+# ⛔ 不放的槽与理由(同一轮读数):
+#   INSIGHTS 10 次里 1 次说错事实(「9 月销量峰值」, 真值 11 月), 阿里云 10/10 无错 ⇒ 阿里云第一;
+#   REVIEW / REASONING 同属长篇解读档, 跟随 INSIGHTS; DECISION 粗选 top3 4/8、交际目的 6/8
+#   (阿里云 8/8、8/8), 且 mini 代理丢弃 logprobs ⇒ 不进 DECISION; VL / WAREHOUSE_VL 本地没有看图模型。
+_LOCAL_FIRST_SLOTS: frozenset = frozenset()  # 在 SLOT 定义之后填, 见下方 _LOCAL_FIRST_SLOT_NAMES
+_LOCAL_FIRST_SLOT_NAMES: Tuple[str, ...] = ("chat", "simple_text", "chart", "mapper")
+_LOCAL_PAIR: Tuple[str, str] = ("local_canada", "qwen3:8b")
 
 # 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
 # ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
@@ -363,7 +407,8 @@ _PRICE_PER_MTOK: Dict[Tuple[str, str], Tuple[float, float]] = {
 # VL 槽位的候选链**可配**(Steve 2026-09-15 定的机制, 2026-11-12 改成「账号/模型」对的列表):
 # 换模型/调顺序 = 改 `.env.prod` 一行 + 重启, ⛔ 不用改代码、不用重新发版。
 #
-#   LLM_VL_CHAIN  缺省 anthropic/claude-haiku-5-5,openai/gpt-5.4-mini   (逗号分隔, 按书写顺序)
+#   LLM_VL_CHAIN  缺省 aliyun_a_vl/qwen3.8-flash,aliyun_b_vl/qwen3.8-flash   (逗号分隔, 按书写顺序;
+#                 与 11-12 之前 LLM_VL_ACCOUNTS/LLM_VL_MODEL 的缺省值同一条链; 付费两家只在启用时可选)
 #
 # 2026-11-12: 原来的 LLM_VL_ACCOUNTS + LLM_VL_MODEL 只能表达「多个账号轮转同一个模型」(阿里云三账号
 #    轮转 qwen3.8-flash 的形状); 两家供应商各用各的型号时它表达不了 ⇒ 换成一个变量。旧的两个变量
@@ -374,7 +419,7 @@ _PRICE_PER_MTOK: Dict[Tuple[str, str], Tuple[float, float]] = {
 #    一个写错的型号就可能指向贵的 SKU。停用账号(`_DISABLED_ACCOUNTS`)同样选不进来。
 # ⇒ 没有任何组合选得中时, VL 池**留空**并 ERROR 日志点名,
 #   表现是「VL 无候选」这条**明确失败**路径, ⛔ 不是静默降级。
-_VL_DEFAULT_CHAIN = "anthropic/claude-haiku-5-5,openai/gpt-5.4-mini"
+_VL_DEFAULT_CHAIN = "aliyun_a_vl/qwen3.8-flash,aliyun_b_vl/qwen3.8-flash"
 
 
 def _parse_pairs(raw: str) -> List[Tuple[str, str]]:
@@ -399,7 +444,8 @@ def _vl_pool() -> List[Tuple[str, str]]:
 
     选不出来就返回空池(明确失败), ⛔ 不猜、⛔ 不降级。
     """
-    usable = [p for p in _VL_CHAIN if p in _VISION_VERIFIED and p[0] not in _DISABLED_ACCOUNTS]
+    usable = [p for p in _VL_CHAIN if p in _VISION_VERIFIED and p[0] not in _DISABLED_ACCOUNTS
+              and (p[0] not in _PAID_ACCOUNTS or _paid_generative_enabled(p[0]))]
     if usable:
         skipped = [f"{a}/{m}" for a, m in _VL_CHAIN if (a, m) not in usable]
         if skipped:
@@ -1528,9 +1574,9 @@ _QUALITY_TIER_POOL: List[Tuple[str, str]] = [
 # 每个槽只声明「够资格」的候选。⛔ 这里的顺序**不是**最终链顺序 ——
 # 它只在「同一到期日」时生效(_build_chain 用稳定排序), 表达的是质量优先级。
 # 跨到期日的先后由 _build_chain 按到期日升序算, 人不要在这里排。
-# ══ 2026-11-12 两家付费主力 (LLM-PROVIDER-SWITCH) ═══════════════════════════════
-# 每个槽 = 一家主模型 + 另一家备选(单家故障不全挂), 然后是 `_TEXT_TAIL`(阿里云停用被滤掉后只剩
-# 本地 qwen3:8b)。选型依据见 PR 描述的「每槽选型」表; 读数见 `_REGISTRY_AUDIT_PROBE`。
+# ══ 2026-11-12 付费两家的**可选**备选 (LLM-PROVIDER-SWITCH) ════════════════════════════
+# 默认不进链: `_build_chain` 先把它们从池里拿出来, 只有 `_paid_generative_enabled` 为真时才追加在
+# 阿里云 + 本地之后。下面的分档是当天探针的结论(读数见 `_REGISTRY_AUDIT_PROBE`), 留作启用时的顺序。
 #   快档 (CHAT / SIMPLE_TEXT)        Claude Haiku 5.5 → GPT-5.4 nano
 #   质量档 (INSIGHTS / REVIEW / REASONING) Claude Haiku 5.5 → GPT-5.4 mini
 #   严格 JSON (CHART / MAPPER)        GPT-4.1 mini → Claude Haiku 5.5
@@ -1675,6 +1721,21 @@ _NO_TEXT_TAIL_SLOTS: frozenset = frozenset({SLOT.VL, SLOT.WAREHOUSE_VL, SLOT.DEC
 
 
 def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
+    """一个槽的最终链 = 阿里云 + 本地的基础链(排序见 `_sort_base_entries`) → 本地优先的槽把本地挪到链头
+    → 付费两家(仅可选启用时)追加在最后。2026-11-12 Steve 定的格局, 见 `_PAID_ACCOUNTS` / `_LOCAL_FIRST_SLOTS`。"""
+    entries = list(_SLOT_POOLS[slot])
+    if slot not in _NO_TEXT_TAIL_SLOTS:
+        entries += _TEXT_TAIL
+    entries = [p for p in entries if p[0] not in _DISABLED_ACCOUNTS]
+    paid = [p for p in entries if p[0] in _PAID_ACCOUNTS]
+    chain = _sort_base_entries([p for p in entries if p[0] not in _PAID_ACCOUNTS])
+    if slot in _LOCAL_FIRST_SLOTS and _LOCAL_PAIR in chain:
+        chain = [_LOCAL_PAIR] + [p for p in chain if p != _LOCAL_PAIR]
+    extra = [p for p in paid if _paid_generative_enabled(p[0])]
+    return _dedup_chain(chain + extra)
+
+
+def _sort_base_entries(entries: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
     """排序键 = (地板置底, 实测能力档, 到期日)。
 
     只有**有证据支撑**的那一档进排序键:
@@ -1709,11 +1770,6 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
 
     稳定排序: 键全平手时保持 _SLOT_POOLS 里人写的顺序(= 人审的质量优先级)。
     """
-    entries = list(_SLOT_POOLS[slot])
-    if slot not in _NO_TEXT_TAIL_SLOTS:
-        entries += _TEXT_TAIL
-    # 2026-11-12: 停用账号(阿里云)整体不进链 —— 条目留在池/地板里只为恢复时不用重写。
-    entries = [p for p in entries if p[0] not in _DISABLED_ACCOUNTS]
     if _capability_stale():
         return _dedup_chain(sorted(entries, key=lambda p: _expiry_of(*p)))
     tail_set = frozenset(_TEXT_TAIL)
@@ -1743,6 +1799,7 @@ def _build_chain(slot: SLOT) -> List[Tuple[str, str]]:
         _latency_band(*p), _expiry_of(*p))))
 
 
+_LOCAL_FIRST_SLOTS = frozenset(SLOT(n) for n in _LOCAL_FIRST_SLOT_NAMES)
 SLOT_MODELS: Dict[SLOT, List[Tuple[str, str]]] = {s: _build_chain(s) for s in SLOT}
 
 
@@ -2247,11 +2304,35 @@ DEFAULT_CHAIN: List[str] = [
     #    什么, 而**删机制的账是在重新要用的时候才结的**: #580 删 deepseek
     #    时注释写「entire removal was 1 file」, 这次加回来才发现少了
     #    thinking 注入那一半, 差点 DOA。
-    # 2026-11-12: OpenAI / Anthropic 两家付费主力; 阿里云两个逻辑账号停用(`_DISABLED_ACCOUNTS`)。
-    "anthropic", "openai",
+    # 2026-11-12: OpenAI / Anthropic 只在可选启用时出现在链上(见 `_PAID_ACCOUNTS`)。
+    "aliyun_a_vl", "aliyun_b_vl", "anthropic", "openai",
     # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
     "local_canada",
 ]
+
+
+# ── 本地一跳的并发上限 (2026-11-12): mini 只有一台, ollama 对 qwen3:8b 实际是串行的 ──────────
+# 47 上实测并发 4 个 CHAT: 墙钟 2.05s, 逐个 0.52 / 1.01 / 1.52 / 2.05s —— 第 N 个多等 N×0.5s 排队。
+# ⇒ 每个 worker 同一时刻最多 `LLM_LOCAL_MAX_INFLIGHT`(默认 1; prod 2 个 worker = 最多 2 个在途)个本地请求;
+#   占满时**不排队**, 直接记 `local_busy` 换下一跳(阿里云)。不记熔断: 忙不是故障。
+# 单次尝试另有上限 `LLM_LOCAL_ATTEMPT_TIMEOUT_S`(默认 8s; 实测最慢 1.33s): mini 卡住时不把整条链的预算吃光。
+_LOCAL_ACCOUNT = "local_canada"
+_LOCAL_MAX_INFLIGHT = max(1, int((os.getenv("LLM_LOCAL_MAX_INFLIGHT") or "1").strip() or 1))
+_LOCAL_ATTEMPT_TIMEOUT_S = float((os.getenv("LLM_LOCAL_ATTEMPT_TIMEOUT_S") or "8").strip() or 8)
+_local_inflight = 0
+
+
+def _local_try_acquire() -> bool:
+    global _local_inflight
+    if _local_inflight >= _LOCAL_MAX_INFLIGHT:
+        return False
+    _local_inflight += 1
+    return True
+
+
+def _local_release() -> None:
+    global _local_inflight
+    _local_inflight = max(0, _local_inflight - 1)
 
 
 #: 经 ``LLM_EGRESS_PROXY`` 出境的账号(2026-11-12: prod 在国内, 直连这两家 403 / 超时)。
@@ -2678,6 +2759,13 @@ async def _call_chain_attempts(
         )
         headers = _auth_headers(account, api_key)
         client = _client_for(account)
+        holds_local = False
+        if account == _LOCAL_ACCOUNT:
+            if not _local_try_acquire():
+                logger.info(f"[llm_router] slot={slot.value} {account}/{model} busy — trying next candidate")
+                errors.append(f"{account}/{model}: local_busy")
+                continue
+            holds_local = True
 
         try:
             logger.debug(f"[llm_router] slot={slot.value} try {account}/{model}")
@@ -2690,6 +2778,8 @@ async def _call_chain_attempts(
                     candidate_index + 1,
                 ),
             )
+            if holds_local:
+                request_timeout = min(request_timeout, _LOCAL_ATTEMPT_TIMEOUT_S)
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -2818,6 +2908,9 @@ async def _call_chain_attempts(
             )
             errors.append(f"{account}/{model}: {type(e).__name__}")
             continue
+        finally:
+            if holds_local:
+                _local_release()
 
     raise LLMChainExhausted(slot.value, errors)
 
@@ -2870,6 +2963,9 @@ async def call_decision_choice(
     account, model = DECISION_CHOICE_PAIR
     slot_label = "decision_choice"
     cb_key = f"{account}/{model}"
+    if not decision_choice_enabled():
+        # 没有出口(LLM_EGRESS_PROXY)或没有 key: 不发请求, 调用方直接走阿里云 qwen 读概率链
+        raise LLMChainExhausted(slot_label, [f"{cb_key}: not_enabled"])
     refuse = _refuse_reason(account, model)
     if refuse:
         raise LLMChainExhausted(slot_label, [f"{cb_key}: {refuse}"])
@@ -3058,6 +3154,12 @@ async def _call_chain_stream_attempts(
         )
         headers = _auth_headers(account, api_key)
         client = _client_for(account)
+        holds_local = False
+        if account == _LOCAL_ACCOUNT:
+            if not _local_try_acquire():
+                errors.append(f"{account}/{model}: local_busy")
+                continue
+            holds_local = True
         # Anthropic: redact the chat-shaped payload here (same choke point), translate, and stream
         # /v1/messages; the shared client treats that URL as passthrough, so we hold the egress
         # tokens ourselves for the StreamRestorer below.
@@ -3089,7 +3191,7 @@ async def _call_chain_stream_attempts(
                 stream_url,
                 headers=headers,
                 json=stream_body,
-                timeout=httpx.Timeout(timeout),
+                timeout=httpx.Timeout(min(timeout, _LOCAL_ATTEMPT_TIMEOUT_S) if holds_local else timeout),
             ) as resp:
                 # Pre-stream error branch — fallback before content yielded
                 if resp.status_code >= 400:
@@ -3293,6 +3395,9 @@ async def _call_chain_stream_attempts(
             )
             errors.append(f"{account}/{model}: {type(e).__name__}")
             continue
+        finally:
+            if holds_local:
+                _local_release()
 
     raise RuntimeError(
         f"[llm_router_stream] All providers exhausted for {slot.value}: {'; '.join(errors)}"

@@ -1,9 +1,10 @@
 """第②层: 读概率决策 (decision-model 模式)。
 
-2026-11-12: 细选先走 OpenAI Decisions (gpt-6-luna, 原生全选项概率, `call_decision_choice`),
-失败再回落下面第 2 步的读 logprobs 链 (SLOT.DECISION, gpt-4.1-mini)。粗选仍是 SLOT.DECISION 的短 JSON 生成。
+2026-11-12: 配了加拿大出口(LLM_EGRESS_PROXY)+ OpenAI key 时, 细选先走 OpenAI Decisions
+(gpt-6-luna, 原生全选项概率, `call_decision_choice`), 失败再回落下面第 2 步的读 logprobs 链;
+没配时与原来完全一样, 只走阿里云 qwen 读 logprobs 链。粗选仍是 SLOT.DECISION 的短 JSON 生成。
 
-两次快调用, 都走 SLOT.DECISION (原 qwen3.7-flash 链头, 阿里云已停用):
+两次快调用, 都走 SLOT.DECISION (qwen3.7-flash 链头):
   1. 粗选: 全目录 (代码｜名称) -> 最多 8 个候选 (短 JSON 生成; 目录是静态前缀, 吃隐式缓存)
   2. 细选: 候选 (粗选 + 向量补足, 最多 20 个) 编成字母 A-T, 前缀续写「答案：」,
      max_tokens=1, 读首 token 的 top_logprobs -> 每个候选一个概率
@@ -367,7 +368,10 @@ class DecisionMatcher:
         """Decisions API 的原生选项概率 {字母: 概率}; 任何失败 -> None (由调用方回落读 logprobs 链)。"""
         from common.llm_metrics import llm_caller_context  # type: ignore
         from common.llm_redactor import utterance_egress  # type: ignore
-        from common.llm_router import call_decision_choice  # type: ignore
+        from common.llm_router import call_decision_choice, decision_choice_enabled  # type: ignore
+
+        if not decision_choice_enabled():
+            return None  # 没有加拿大出口 / 没有 key: 就是线上原来的阿里云 qwen 读概率链, 不白等一跳
 
         # 选项说明与 E 线评测同形 (意图码：完整说明); 单次上限留出一半预算给回落链 (Luna 实测中位 0.37s)
         choices = [(L, f"{r['intent_code']}：{intent_text(r)}") for L, r in zip(letters, opts)]
@@ -459,9 +463,9 @@ class DecisionMatcher:
 
         messages = build_choice_messages(query, role, opts, history)
         letters = LETTERS[:n]
-        # 2026-11-12 (LLM-PROVIDER-SWITCH): 先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
-        # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。拿不到就回落下面的
-        # 读 logprobs 链(gpt-4.1-mini), 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
+        # 2026-11-12 (LLM-PROVIDER-SWITCH): 有出口时先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
+        # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。没出口 / 拿不到就走下面的
+        # 阿里云 qwen 读 logprobs 链, 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
         probs = await self._choose_native(messages, letters, opts)
         if probs is None:
             payload = {"messages": messages, "max_tokens": 1, "logprobs": True, "top_logprobs": 5}
