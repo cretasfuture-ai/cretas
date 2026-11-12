@@ -270,3 +270,35 @@ def test_metrics_hook_records_decision_egress_fields(monkeypatch, url, body):
     assert rec.prompt_chars > 0 and rec.prompt_sha256 != llm_egress_audit.sha256_of("")
     assert rec.sent_field_keys[-1] == f"__body__:{n}"
     assert "秘密原文" not in json.dumps(rec.sent_field_keys, ensure_ascii=False)
+
+
+def test_check_state_rc_three_states(tmp_path):
+    """cron 从服务外面看: 状态文件不在 / 陈旧 ⇒ rc=2 且告警文件多一行 STALE (探针没在跑也要喊)。"""
+    assert eh.check_state(str(tmp_path), now=1000.0) == 2
+    st = {"active": "primary", "last_run": 1000.0, "rounds": 3,
+          "egresses": {"primary": {"last": {"up": True}}}}
+    (tmp_path / eh.STATE_FILE).write_text(json.dumps(st), encoding="utf-8")
+    assert eh.check_state(str(tmp_path), now=1010.0) == 0
+    st["egresses"]["primary"]["last"]["up"] = False
+    (tmp_path / eh.STATE_FILE).write_text(json.dumps(st), encoding="utf-8")
+    assert eh.check_state(str(tmp_path), now=1010.0) == 1
+    assert eh.check_state(str(tmp_path), now=1000.0 + 3600) == 2
+    lines = (tmp_path / eh.ALERT_FILE).read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2 and all(l.startswith("LLM EGRESS STALE ") for l in lines)
+
+
+def test_proxy_down_when_listener_is_not_socks():
+    """端口后面是别的服务 (例如 HTTP): 回的不是 05 00 ⇒ proxy 层 bad_handshake, 不去探上游。"""
+    async def main():
+        async def handler(reader, writer):
+            await reader.read(3)
+            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+            await writer.drain()
+            writer.close()
+        server = await asyncio.start_server(handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        async with server:
+            return await eh.probe_egress("primary", f"socks5h://127.0.0.1:{port}", timeout=1.0)
+    r = asyncio.run(main())
+    assert r.layers["tunnel"].up and not r.layers["proxy"].up
+    assert r.layers["proxy"].outcome == "bad_handshake" and r.layers["upstream"].outcome == "skipped"

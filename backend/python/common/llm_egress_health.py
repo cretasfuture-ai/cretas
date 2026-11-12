@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
@@ -430,7 +431,7 @@ def _try_lock(path: str):
 
 
 async def _loop() -> None:
-    interval = _env_float("LLM_EGRESS_PROBE_INTERVAL_S", 30.0)
+    interval = _env_float("LLM_EGRESS_PROBE_INTERVAL_S", 15.0)
     tick = max(1.0, interval / 3)
     d = state_dir()
     while True:
@@ -495,7 +496,11 @@ def _main(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(description="LLM egress three-layer probe")
     p.add_argument("--record", action="store_true",
                    help="update shared state + alert file like the service does (default: read-only probe)")
+    p.add_argument("--check-state", action="store_true",
+                   help="cron: read the service's shared state; rc=2 + alert line if the probe went silent")
     args = p.parse_args(argv)
+    if args.check_state:
+        return check_state()
     if args.record:
         rc, state = asyncio.run(run_round())
         print(json.dumps({"rc": rc, "state": state}, ensure_ascii=False, indent=1))
@@ -512,6 +517,32 @@ def _main(argv: Optional[List[str]] = None) -> int:
     for r in readings:
         print(json.dumps({"egress": r.name, **r.to_json()}, ensure_ascii=False))
     return 0 if all(r.up for r in readings) else 1
+
+
+def check_state(dir_: Optional[str] = None, now: Optional[float] = None) -> int:
+    """给 cron 用的「探针还活着吗」(硬约束 9): 服务挂了 / 探针循环死了, 状态文件的 last_run 就不再前进,
+    而服务里的告警也就不会再喊 —— 这一步从服务外面看。
+    rc=0 当前出口通 / rc=1 当前出口不通 / rc=2 状态文件不在或已陈旧 (探针没在跑), 后者写一行 STALE 告警。"""
+    d = dir_ or state_dir()
+    t = time.time() if now is None else now
+    limit = max(120.0, 5 * _env_float("LLM_EGRESS_PROBE_INTERVAL_S", 15.0))
+    st = _read_state(os.path.join(d, STATE_FILE))
+    age = t - float(st.get("last_run") or 0)
+    if not st or age > limit:
+        msg = (f"{ALERT_FILE_PREFIX} STALE {time.strftime('%Y-%m-%d %H:%M:%S')} "
+               f"state={'missing' if not st else f'age={int(age)}s'} limit={int(limit)}s "
+               f"— 探针没在跑 (cretas-python 挂了或探针循环死了), 出口状况未知, ⛔ 不要读成「没问题」\n")
+        print(msg.strip())
+        try:
+            with open(os.path.join(d, ALERT_FILE), "a", encoding="utf-8", newline="") as f:
+                f.write(msg)
+        except Exception as ex:  # noqa: BLE001
+            print(f"cannot write alert file: {type(ex).__name__}", file=sys.stderr)
+        return 2
+    active = st.get("active")
+    up = bool(((st.get("egresses") or {}).get(active) or {}).get("last", {}).get("up"))
+    print(json.dumps({"active": active, "active_up": up, "age_s": int(age), "rounds": st.get("rounds")}))
+    return 0 if up else 1
 
 
 async def _gather(egresses: List[Tuple[str, str]]) -> List[EgressReading]:
