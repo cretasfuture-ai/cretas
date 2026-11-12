@@ -27,7 +27,8 @@ import java.util.regex.Pattern;
  *         <li>恢复说法之后只剩虚词 (「继续」「接着刚才的吧」) → 恢复栈顶。</li>
  *         <li>恢复说法之后剩下的部分含数字 / 字母 (像是在顺带给值或编号: 「继续完成工序任务1830」) 或超过
  *             {@link #MAX_NAMED_CHARS} 字 → 不恢复, 当新话识别, 免得值被吞掉。</li>
- *         <li>剩下的部分 = 栈里某个任务的意图名称 (规范化后整句相等), 或按已审核短语表指向那个任务的意图
+ *         <li>剩下的部分 = 栈里某个任务的意图名称或它配置的关键词之一 (规范化后整句相等;
+ *             「报工」是 WORK_PROCESS_TASK_COMPLETE 配置的关键词, 见 V20261101_48), 或按已审核短语表指向那个任务的意图
  *             → 恢复那个任务; 对不上栈里任何任务 → 不恢复。</li>
  *       </ul>
  *       「回头」不算恢复说法: 「回头再报工」是在说以后。<b>调用方另须保证: 本轮刚打断过一个任务时不恢复</b>
@@ -38,7 +39,11 @@ import java.util.regex.Pattern;
  */
 public final class TaskContinuationRule {
 
-    public enum Action { ANSWER, INTERRUPT }
+    /**
+     * ANSWER = 在回答; INTERRUPT = 换了话题, 挂起它; REPEAT = 说的是「继续 + 这个任务本身」
+     * (「继续完成工序」时它正问着) —— 不挂起、不另起一份收集, 只把当前这一问再问一遍。
+     */
+    public enum Action { ANSWER, INTERRUPT, REPEAT }
 
     /** 恢复说法之后点名一个任务最多几个字 (「完成工序」「原料入库」); 再长多半是在说一件新事。 */
     static final int MAX_NAMED_CHARS = 8;
@@ -66,11 +71,11 @@ public final class TaskContinuationRule {
     /**
      * @param stack        被挂起的任务, 栈顶在前 (最近挂起的在前)
      * @param phraseIntent 一句话按已审核短语表指向的意图码; 没有 = empty
-     * @param intentName   意图码 → 名称 (「完成工序」); 拿不到 = null
+     * @param intentNames  意图码 → 名称与配置的关键词 (名称在前, 例如 [完成工序, 报工, 做完了, …]); 拿不到 = 空
      */
     public static Optional<ConversationSession> resumeTarget(String input, List<ConversationSession> stack,
                                                              Function<String, Optional<String>> phraseIntent,
-                                                             Function<String, String> intentName) {
+                                                             Function<String, List<String>> intentNames) {
         if (input == null || input.isBlank() || stack == null || stack.isEmpty()) {
             return Optional.empty();
         }
@@ -87,9 +92,10 @@ public final class TaskContinuationRule {
             return Optional.empty();
         }
         for (ConversationSession task : stack) {
-            String name = name(intentName, task.getKnownIntentCode());
-            if (name != null && rest.equals(normalize(RESUME_FILLER.matcher(name).replaceAll("")))) {
-                return Optional.of(task);
+            for (String name : names(intentNames, task.getKnownIntentCode())) {
+                if (name != null && rest.equals(normalize(RESUME_FILLER.matcher(name).replaceAll("")))) {
+                    return Optional.of(task);
+                }
             }
         }
         Optional<String> code = phrase(phraseIntent, rest);
@@ -103,12 +109,13 @@ public final class TaskContinuationRule {
         return text == null ? "" : PUNCTUATION.matcher(text).replaceAll("");
     }
 
-    private static String name(Function<String, String> intentName, String code) {
-        if (intentName == null || code == null) return null;
+    private static List<String> names(Function<String, List<String>> intentNames, String code) {
+        if (intentNames == null || code == null) return List.of();
         try {
-            return intentName.apply(code);
+            List<String> names = intentNames.apply(code);
+            return names == null ? List.of() : names;
         } catch (RuntimeException e) {
-            return null;
+            return List.of();
         }
     }
 

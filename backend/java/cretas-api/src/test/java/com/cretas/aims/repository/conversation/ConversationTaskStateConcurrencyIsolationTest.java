@@ -96,7 +96,7 @@ class ConversationTaskStateConcurrencyIsolationTest {
 
         service.interrupt(factory, USER, repository.findById(saved.getSessionId()).orElseThrow());
         Optional<ConversationTaskStateService.Resumed> resumed = inTx(() ->
-                service.tryResume(factory, USER, "继续", s -> Optional.empty(), c -> "完成工序"));
+                service.tryResume(factory, USER, "继续", s -> Optional.empty(), c -> List.of("完成工序")));
         assertThat(resumed).isPresent();
 
         // 慢的那个请求拿着最早的 ACTIVE 副本来打断 —— 不能把刚恢复的任务又挂起 / 覆盖
@@ -126,6 +126,48 @@ class ConversationTaskStateConcurrencyIsolationTest {
         assertThat(repository.findById(old.getSessionId()).orElseThrow().getStatus()).isEqualTo(SessionStatus.TIMEOUT);
         assertThat(repository.findById(fresh.getSessionId()).orElseThrow().getStatus())
                 .isEqualTo(SessionStatus.SUSPENDED);
+    }
+
+    /** NIT2: 批量 JPQL 更新也要涨版本号 —— 否则被批量取消 / 过期的行, 会被手里拿着旧副本的请求整行写回 ACTIVE。 */
+    @Test
+    void bulkUpdatesBumpTheVersionSoAStaleCopyCannotRevive() {
+        ConversationSession saved = active("PROCESSING_BATCH_COMPLETE");
+        ConversationSession stale = repository.findById(saved.getSessionId()).orElseThrow();
+        Long before = stale.getVersion();
+
+        int cancelled = inTx(() -> repository.cancelActiveSessionsForUser(factory, USER, LocalDateTime.now()));
+
+        assertThat(cancelled).isEqualTo(1);
+        ConversationSession now = repository.findById(saved.getSessionId()).orElseThrow();
+        assertThat(now.getStatus()).isEqualTo(SessionStatus.CANCELLED);
+        assertThat(now.getVersion()).isEqualTo(before + 1);
+        stale.addCollectedParameter("taskId", "1827");
+        assertThatThrownBy(() -> repository.save(stale)).isInstanceOf(ObjectOptimisticLockingFailureException.class);
+        assertThat(repository.findById(saved.getSessionId()).orElseThrow().getStatus())
+                .isEqualTo(SessionStatus.CANCELLED);
+    }
+
+    /** 另两条批量更新 (定时过期 ACTIVE / 过期 SUSPENDED) 同样要涨版本号, 各自有只靠它挡的样本。 */
+    @Test
+    void bulkExpiriesBumpTheVersionToo() {
+        ConversationSession activeRow = active("INTENT_IDLE");
+        ConversationSession staleActive = repository.findById(activeRow.getSessionId()).orElseThrow();
+        ConversationSession suspendedRow = active("INTENT_PARKED");
+        service.interrupt(factory, USER, repository.findById(suspendedRow.getSessionId()).orElseThrow());
+        ConversationSession staleSuspended = repository.findById(suspendedRow.getSessionId()).orElseThrow();
+        LocalDateTime cutoff = LocalDateTime.now().plusSeconds(1);
+
+        assertThat(inTx(() -> repository.expireInactiveSessions(cutoff, LocalDateTime.now()))).isGreaterThanOrEqualTo(1);
+        assertThat(inTx(() -> repository.expireSuspendedSessions(cutoff, LocalDateTime.now()))).isGreaterThanOrEqualTo(1);
+
+        assertThat(repository.findById(activeRow.getSessionId()).orElseThrow().getVersion())
+                .as("expireInactiveSessions 涨版本").isEqualTo(staleActive.getVersion() + 1);
+        assertThat(repository.findById(suspendedRow.getSessionId()).orElseThrow().getVersion())
+                .as("expireSuspendedSessions 涨版本").isEqualTo(staleSuspended.getVersion() + 1);
+        staleActive.addCollectedParameter("taskId", "1827");
+        assertThatThrownBy(() -> repository.save(staleActive)).isInstanceOf(ObjectOptimisticLockingFailureException.class);
+        assertThat(repository.findById(activeRow.getSessionId()).orElseThrow().getStatus()).isEqualTo(SessionStatus.TIMEOUT);
+        assertThat(repository.findById(suspendedRow.getSessionId()).orElseThrow().getStatus()).isEqualTo(SessionStatus.TIMEOUT);
     }
 
     private ConversationSession active(String intent) {

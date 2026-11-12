@@ -71,7 +71,7 @@ class ConversationTaskStateIsolationTest {
         assertThat(repository.findActiveByFactoryAndUser(factory, 7L)).as("挂起的不算活跃").isEmpty();
 
         Optional<ConversationTaskStateService.Resumed> resumed = service.tryResume(factory, 7L, "继续",
-                s -> Optional.empty(), code -> "报工");
+                s -> Optional.empty(), code -> List.of("报工"));
         flushAndClear();
 
         assertThat(resumed).isPresent();
@@ -98,7 +98,7 @@ class ConversationTaskStateIsolationTest {
         assertThat(service.summary(factory, 7L, null).toString())
                 .contains("INTENT_A").contains("INTENT_B").doesNotContain("INTENT_X").doesNotContain("INTENT_Y");
         // 别人的挂起任务恢复不到我这里
-        assertThat(service.tryResume(factory, 9L, "继续", s -> Optional.empty(), c -> c)).isEmpty();
+        assertThat(service.tryResume(factory, 9L, "继续", s -> Optional.empty(), c -> List.of(c))).isEmpty();
 
         // 栈深上限: 再挂两个, 最早的被丢弃
         for (String code : List.of("INTENT_C", "INTENT_D")) {
