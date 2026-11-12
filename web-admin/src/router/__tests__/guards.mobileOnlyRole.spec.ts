@@ -146,9 +146,11 @@ describe('网页后台准入按权限判, 不按岗位名', () => {
     expect(path).toBe('/mobile-only');
   });
 
-  it('阳性: L4 用户级 GRANT 开出一个模块 ⇒ 能进', async () => {
+  it('阳性: L4 用户级 GRANT 开出一个快照里没有的模块 ⇒ 能进', async () => {
+    // 快照里故意不放 quality 这个键: GRANT 必须靠 userModuleAccess 那一路被看见,
+    // 否则 (快照里已有 quality:'-') 这条断言测不到 GRANT 分支 (变异 M4 曾存活)。
     permState.userModuleAccess = { quality: { override: 'GRANT' } };
-    const { path } = await land('operator', { ...ALL_DASH });
+    const { path } = await land('operator', { dashboard: 'r' });
     expect(path).toBe('/dashboard');
   });
 
