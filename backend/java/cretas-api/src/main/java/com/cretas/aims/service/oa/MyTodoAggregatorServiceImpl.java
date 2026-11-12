@@ -96,6 +96,10 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
     @Autowired(required = false)
     private PurchaseOrderRepository purchaseOrderRepository;
 
+    /** 强制插单待办显示计划号 (2026-11-12 线上验收: 标题曾是计划的内部 ID)。缺失时退回内部 ID, 不影响出数。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
+
     /** 按权限出数用; 同上是字段注入 (本类多构造器, 不动构造器参数)。缺失 = 所有人都没有待办, 不放开。 */
     @Autowired(required = false)
     private PermissionService permissionService;
@@ -399,15 +403,31 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
         if (page == null || page.getContent() == null || page.getContent().isEmpty()) {
             return Collections.emptyList();
         }
+        // 计划号 + 数量: 只读本厂的计划 (按 ID 查到后再核 factoryId, 外厂的同 ID 不采用)
+        Map<String, com.cretas.aims.entity.ProductionPlan> plans = new HashMap<>();
+        if (productionPlanRepository != null) {
+            List<String> ids = page.getContent().stream().map(ApprovalWorkflowInstance::getBusinessEntityId)
+                    .filter(id -> id != null && !id.isBlank()).distinct().toList();
+            productionPlanRepository.findAllById(ids).forEach(p -> {
+                if (factoryId.equals(p.getFactoryId())) plans.put(p.getId(), p);
+            });
+        }
         List<TodoItemDTO> todos = new ArrayList<>();
         for (ApprovalWorkflowInstance inst : page.getContent()) {
             String planId = inst.getBusinessEntityId();
             if (planId == null || planId.isBlank()) continue;
+            com.cretas.aims.entity.ProductionPlan plan = plans.get(planId);
+            String planNumber = plan != null && plan.getPlanNumber() != null && !plan.getPlanNumber().isBlank()
+                    ? plan.getPlanNumber() : planId;
+            String quantity = plan != null && plan.getPlannedQuantity() != null
+                    ? " · " + plan.getPlannedQuantity().stripTrailingZeros().toPlainString()
+                      + (plan.getPlannedUnit() == null ? "" : " " + plan.getPlannedUnit())
+                    : "";
             todos.add(TodoItemDTO.builder()
                     .type(TodoType.FORCE_INSERT_APPROVAL)
                     .refId(planId)
-                    .refNumber(planId)
-                    .title("强制插单审批 — " + planId)
+                    .refNumber(planNumber)
+                    .title("强制插单审批 — " + planNumber + quantity)
                     .amount(null)
                     .counterparty("")
                     .submittedBy(inst.getInitiatedBy() != null ? String.valueOf(inst.getInitiatedBy()) : null)
