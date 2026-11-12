@@ -87,7 +87,8 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
                 + "process_order INTEGER NOT NULL, deleted_at TIMESTAMP)");
         jdbcTemplate.execute("CREATE TABLE production_reports (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "batch_id BIGINT, work_process_task_id BIGINT, report_type VARCHAR(20), report_date DATE, "
-                + "input_quantity NUMERIC(12,2), output_quantity NUMERIC(12,2), deleted_at TIMESTAMP)");
+                + "input_quantity NUMERIC(12,2), output_quantity NUMERIC(12,2), deleted_at TIMESTAMP, "
+                + "input_unit VARCHAR(20), output_unit VARCHAR(20))");
         jdbcTemplate.execute("CREATE TABLE process_sheet_rows (id BIGINT PRIMARY KEY, factory_id VARCHAR(50) NOT NULL, "
                 + "plan_id VARCHAR(64) NOT NULL, batch_id BIGINT, batch_number VARCHAR(100), row_payload JSONB NOT NULL, "
                 + "row_status VARCHAR(20) NOT NULL, interim_settled_at TIMESTAMP, deleted_at TIMESTAMP)");
@@ -124,6 +125,11 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
         assertThat(all).hasSize(1);
         assertThat(new BigDecimal(all.get(0).get("total_input").toString())).isEqualByComparingTo("230");
         assertThat(((Number) all.get(0).get("batch_count")).intValue()).isEqualTo(2);
+        // 报工没记单位 → 退回工序标准 kg; 三条报工全部「记了单位」(退回后), 只有一种
+        assertThat(all.get(0).get("input_unit_min")).isEqualTo("kg");
+        assertThat(((Number) all.get(0).get("input_unit_kinds")).intValue()).isEqualTo(1);
+        assertThat(((Number) all.get(0).get("input_unit_known")).intValue()).isEqualTo(3);
+        assertThat(((Number) all.get(0).get("report_count")).intValue()).isEqualTo(3);
 
         List<Map<String, Object>> withoutHiddenPlan = repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", NONE,
                 List.of("plan-hidden"));
@@ -134,6 +140,52 @@ class ProcessSecretAggregateExclusionPostgresRepositoryQueryValidationTest {
 
         // 按产品排除照旧
         assertThat(repository.aggregateYieldByProcess(FACTORY, FROM, TO, "", List.of("Q-OPEN"), NONE)).isEmpty();
+    }
+
+    /**
+     * 2026-11-12 网页验收: 工序汇总单位要按报工实际所记 (不是只看工序标准), 'unitless' 占位与空串算「没有单位」,
+     * 产出两处都没记时退回投入单位。用另一个工厂号, 不碰上面那组保密排除的读数。
+     */
+    @Test
+    void byProcessAggregateReportsTheUnitsActuallyRecordedPerSide() {
+        String f = "IT-UNIT";
+        // 定量包装: 工序标准 kg→kg, 但两条报工实际记的是 kg→袋、袋→盒
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-PACK', '定量包装', 'kg', NULL, NULL)");
+        // 腌制: 新建工序的占位单位 unitless, 报工也没记
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-PICKLE', '腌制', 'unitless', NULL, NULL)");
+        // 清洗: 报工只记投入 kg, 产出没记, 工序也没声明产出单位 → 产出按投入单位
+        jdbcTemplate.update("INSERT INTO work_processes VALUES ('WP-WASH', '清洗', '', '', NULL)");
+        long id = 100;
+        for (Object[] r : new Object[][]{
+                {"WP-PACK", 1, "10", "kg", "40", "袋"},
+                {"WP-PACK", 1, "20", "袋", "5", "盒"},
+                {"WP-PICKLE", 2, "0.2", null, "0.1", "unitless"},
+                {"WP-WASH", 3, "100", "kg", "90", " "}}) {
+            id++;
+            jdbcTemplate.update("INSERT INTO production_batches VALUES (?, 'plan-unit')", id);
+            jdbcTemplate.update("INSERT INTO work_process_tasks VALUES (?, ?, ?, ?, 'Q-OPEN', ?, NULL)",
+                    id, f, id, r[0], r[1]);
+            jdbcTemplate.update("INSERT INTO production_reports VALUES (?, ?, ?, ?, 'YIELD', DATE '2026-11-12', ?, ?, NULL, ?, ?)",
+                    id, f, id, id, new BigDecimal((String) r[2]), new BigDecimal((String) r[4]), r[3], r[5]);
+        }
+
+        List<Map<String, Object>> rows = repository.aggregateYieldByProcess(f, FROM, TO, "", NONE, NONE);
+        assertThat(rows).extracting(m -> m.get("process_name")).containsExactly("定量包装", "腌制", "清洗");
+
+        Map<String, Object> pack = rows.get(0);
+        assertThat(((Number) pack.get("input_unit_kinds")).intValue()).isEqualTo(2);
+        assertThat(((Number) pack.get("output_unit_kinds")).intValue()).isEqualTo(2);
+        assertThat(((Number) pack.get("report_count")).intValue()).isEqualTo(2);
+
+        Map<String, Object> pickle = rows.get(1);
+        assertThat(((Number) pickle.get("input_unit_known")).intValue()).isZero();
+        assertThat(((Number) pickle.get("output_unit_known")).intValue()).isZero();
+        assertThat(pickle.get("input_unit_min")).isNull();
+
+        Map<String, Object> wash = rows.get(2);
+        assertThat(wash.get("input_unit_min")).isEqualTo("kg");
+        assertThat(wash.get("output_unit_min")).isEqualTo("kg");
+        assertThat(((Number) wash.get("output_unit_known")).intValue()).isEqualTo(1);
     }
 
     @Test
