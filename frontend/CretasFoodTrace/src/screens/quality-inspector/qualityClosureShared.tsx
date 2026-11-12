@@ -9,6 +9,35 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { QI_COLORS } from '../../types/qualityInspector';
 import type { DispositionAction } from '../../types/qualityDisposition';
+import type { DispositionCandidate, PendingDisposition } from '../../services/api/qualityDispositionApiClient';
+
+/**
+ * 等待审批卡片的批次身份 (fool-proof Rule 2: 批次号 + 品名, 不显示内部 ID)。
+ * 后端 /quality-disposition/pending 只回 productionBatchId (PendingDispositionDTO.batchNumber 从未赋值),
+ * 所以用已加载的待处置列表对上: 先按质检记录 ID (entityId), 再按生产批次 ID。
+ * 对不上就如实显示「批次 #ID」并标明没查到批次号, ⛔ 不编。
+ */
+export function resolvePendingBatch(
+  row: PendingDisposition,
+  candidates: DispositionCandidate[],
+): { title: string; productName: string | null; matched: boolean } {
+  if (row.batchNumber) {
+    const byBatch = candidates.find((c) => c.productionBatchId === row.productionBatchId);
+    return { title: row.batchNumber, productName: byBatch?.productName ?? null, matched: true };
+  }
+  const hit = candidates.find((c) => c.id === row.entityId)
+    ?? (row.productionBatchId != null
+      ? candidates.find((c) => c.productionBatchId === row.productionBatchId && !!c.batchNumber)
+      : undefined);
+  if (hit?.batchNumber) {
+    return { title: hit.batchNumber, productName: hit.productName ?? null, matched: true };
+  }
+  return {
+    title: row.productionBatchId != null ? `批次 #${row.productionBatchId}` : '批次未知',
+    productName: hit?.productName ?? null,
+    matched: false,
+  };
+}
 
 export function LoadingBlock({ text = '正在读取…' }: { text?: string }) {
   return (
@@ -112,6 +141,10 @@ export const shared = StyleSheet.create({
   cardTitle: { fontSize: 18, fontWeight: '800', color: QI_COLORS.text },
   cardSub: { marginTop: 4, fontSize: 14, color: QI_COLORS.textSecondary, lineHeight: 20 },
   row: { flexDirection: 'row', alignItems: 'center' },
+  /** 标题 + 右上角状态标签: 长批次号在标题里换行, 标签保持完整 (真机 PB-PLAN-… 把标签挤出屏)。 */
+  titleRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  titleInRow: { flex: 1, flexShrink: 1, marginRight: 10 },
+  tagInRow: { flexShrink: 0, marginTop: 2 },
   tag: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 10, alignSelf: 'flex-start' },
   tagText: { fontSize: 13, fontWeight: '700' },
   sectionTitle: { marginTop: 8, marginBottom: 10, fontSize: 16, fontWeight: '800', color: QI_COLORS.text },

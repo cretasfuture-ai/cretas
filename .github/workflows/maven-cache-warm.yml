@@ -1,0 +1,63 @@
+name: Maven cache warm (main)
+
+# 给 java-gate-pr.yml 的各分片准备一份【完整】的 Maven 本地仓库缓存。
+# 为什么单独一条: setup-java 的 `cache: maven` key 存在就不会再保存; main 上那份只有 158MB、缺测试期依赖,
+# 实测 2026-11-12 Java Gate 每片仍从 central 现下 1160 个文件（约 2 分钟 x 8 片）。
+# PR 的缓存只在该 PR 内可见, 其它 PR 看不到, 所以必须在 main 上写。
+# 这里真跑一个最小测试, 让 surefire provider 和测试期依赖都解析进缓存, 再保存。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/java/cretas-api/pom.xml'
+      - '.github/workflows/maven-cache-warm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-cache-warm
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # actions/cache 一个动作包办: 开头还原, 作业成功后保存。key 已存在 -> cache-hit=true -> 跳过构建。
+      - name: Maven repository cache
+        id: m2
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+
+      - name: Resolve compile, test and surefire dependencies
+        if: steps.m2.outputs.cache-hit != 'true'
+        working-directory: backend/java/cretas-api
+        env:
+          MAVEN_OPTS: -Xmx2g
+        run: |
+          set -euo pipefail
+          MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
+          # 选一个必定存在的纯契约类, 只为触发编译 + surefire provider 下载。
+          TEST=$(python3 -c "
+          import re
+          names=[l.strip() for l in open('$GITHUB_WORKSPACE/scripts/ci/java-gate-fast-patterns.txt',encoding='utf-8') if l.strip() and not l.startswith('#') and '*' not in l]
+          print(names[0] if names else '')
+          ")
+          echo "READING: warm_test_class=${TEST:-NONE}"
+          [ -n "$TEST" ] || { echo "::error::fast 清单里没有不带通配符的类名, 暖缓存没法选测试"; exit 1; }
+          "$MVN" -B test -Dtest="$TEST" -Dsurefire.failIfNoSpecifiedTests=false -Dspring.profiles.active=test \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx3g"
+          du -sm ~/.m2/repository | sed 's/^/READING: m2_size_mb=/'
