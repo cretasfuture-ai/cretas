@@ -7,6 +7,7 @@ import {
   blockedPreviewReason,
   classifyConfirmError,
   classifyConfirmResponse,
+  confirmCardTitle,
   isPreviewExpired,
   previewRows,
   remainingSeconds,
@@ -137,6 +138,33 @@ describe('classifyConfirmResponse', () => {
   it('对照: 没有 status 的空响应不是成功', () => {
     expect(classifyConfirmResponse(undefined, 'x').kind).toBe('failed');
     expect(classifyConfirmResponse({ success: true }, 'x').kind).toBe('failed');
+  });
+});
+
+describe('写入确认三洞: 已执行过 / 结果不明 / 已变化 / 无法核对 分开处理', () => {
+  it('ALREADY_EXECUTED (同一张确认已执行成功过) → done 成功态, 不是失败', () => {
+    const o = classifyConfirmResponse({ status: 'ALREADY_EXECUTED', message: '这次确认已经执行过，没有重复执行。' }, '开始工序');
+    expect(o).toEqual(expect.objectContaining({ kind: 'done', executed: true, doneLabel: '已执行（没有重复执行）' }));
+  });
+  it('OUTCOME_UNKNOWN (可能已写入) → 结果待核对, ⛔ 不给重新生成 (会写两遍)', () => {
+    const o = classifyConfirmResponse({ status: 'OUTCOME_UNKNOWN', message: '操作结果暂时无法确认（可能已经写入）。请先核对。' }, '开始工序');
+    expect(o).toEqual(expect.objectContaining({ kind: 'failed', failureKind: 'unknown', canRegenerate: false }));
+    expect(o.kind === 'failed' && o.notice).toContain('核对');
+  });
+  it('PREVIEW_STALE (预览之后被别人改过) → 给「重新生成预览」, 原因原文显示', () => {
+    const o = classifyConfirmResponse({ status: 'PREVIEW_STALE', message: '预览之后「负责人」已被改动（与预览时的改前值不一致），本次未执行。请重新预览后再确认。' }, '开始工序');
+    expect(o).toEqual(expect.objectContaining({ kind: 'failed', failureKind: 'stale', canRegenerate: true }));
+    expect(o.kind === 'failed' && o.notice).toContain('「负责人」');
+  });
+  it('对照: CONFIRM_NOT_SUPPORTED (无法核对) 不给重新生成 —— 重新预览还是一样, 只指去业务页面', () => {
+    const o = classifyConfirmResponse({ status: 'CONFIRM_NOT_SUPPORTED', message: '这个操作暂时不能在助手里确认……请到对应的业务页面办理。' }, '开始工序');
+    expect(o).toEqual(expect.objectContaining({ kind: 'failed', failureKind: 'rejected', canRegenerate: false }));
+  });
+  it('卡片标题按原因说: 结果不明不说「没有执行成功」, 已变化说清这次没执行', () => {
+    const base: WriteConfirmState = { ...preparing(), intentName: '开始工序', phase: 'failed' };
+    expect(confirmCardTitle({ ...base, failureKind: 'unknown' })).toBe('「开始工序」结果待核对');
+    expect(confirmCardTitle({ ...base, failureKind: 'stale' })).toBe('「开始工序」情况有变化，这次没有执行');
+    expect(confirmCardTitle({ ...base, failureKind: 'rejected' })).toBe('「开始工序」没有执行成功');
   });
 });
 

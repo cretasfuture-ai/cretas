@@ -72,10 +72,15 @@ public class InventoryGainInboundTool extends AbstractBusinessTool {
     protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) {
         Evidence evidence = verifyApprovedPositive(factoryId, getString(params, "stocktakeId"));
+        // 改前值 (确认前状态核对): 盘点单在预览之后被应用 / 改动就不按旧预览入库
+        Map<String, Object> currentValues = new java.util.LinkedHashMap<>();
+        currentValues.put("盘点单状态", String.valueOf(evidence.detail().getStatus()));
+        currentValues.put("盘盈行数", evidence.diff().getSurplusCount());
         return Map.of("status", "PREVIEW", "stocktakeId", evidence.detail().getId(),
                 "diffLines", evidence.diff().getDiffLines(),
                 "surplusCount", evidence.diff().getSurplusCount(),
-                "willWrite", true, "requiresApproved", true);
+                "willWrite", true, "requiresApproved", true,
+                "currentValues", currentValues);
     }
 
     @Override public AccessMode getAccessMode() { return AccessMode.WRITE; }

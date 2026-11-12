@@ -129,6 +129,20 @@ public interface PreviewTokenService {
     boolean resolveClaim(String token, String claimId, boolean success, String message);
 
     /**
+     * The tool was invoked but its outcome cannot be established (exception / timeout after the
+     * call started). Marks the lease OUTCOME_UNKNOWN — never FAILED, because the write may have
+     * committed and a "failed" label invites a second, duplicate write.
+     */
+    boolean resolveClaimOutcomeUnknown(String token, String claimId, String message);
+
+    /**
+     * Reconciles EXECUTING leases older than the configured window into OUTCOME_UNKNOWN (scheduled).
+     *
+     * @return number of reconciled tokens
+     */
+    int reconcileStaleExecutingTokens();
+
+    /**
      * 取消令牌 (Cancel 阶段)
      *
      * @param token 令牌值
@@ -300,6 +314,8 @@ public interface PreviewTokenService {
         private IntentPreviewToken token;
         private String claimId;
         private Map<String, Object> parameters;
+        /** On failure: the token's status when the claim was refused (null if not found / not owned). */
+        private IntentPreviewToken.TokenStatus existingStatus;
 
         public static ClaimResult success(IntentPreviewToken token, String claimId,
                                           Map<String, Object> parameters) {
@@ -314,6 +330,10 @@ public interface PreviewTokenService {
 
         public static ClaimResult failure(String message) {
             return ClaimResult.builder().success(false).message(message).build();
+        }
+
+        public static ClaimResult alreadyHandled(String message, IntentPreviewToken.TokenStatus status) {
+            return ClaimResult.builder().success(false).message(message).existingStatus(status).build();
         }
     }
 

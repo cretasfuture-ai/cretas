@@ -35,7 +35,11 @@ export type WriteConfirmPhase =
   /** 确认失败 */
   | 'failed';
 
-export type WriteConfirmFailureKind = 'expired' | 'permission' | 'network' | 'rejected';
+/**
+ * - unknown: 结果不明 (可能已经写入) —— 只让用户去核对, ⛔ 不给重试 / 重新生成 (会双写)
+ * - stale: 预览之后记录被别人改过 / 前提不成立 —— 什么都没执行, 给「重新生成预览」看最新情况
+ */
+export type WriteConfirmFailureKind = 'expired' | 'permission' | 'network' | 'rejected' | 'unknown' | 'stale';
 
 export interface WriteConfirmState {
   phase: WriteConfirmPhase;
@@ -97,6 +101,8 @@ const HIDDEN_KEYS = new Set([
  * 不在表里的键隐藏 —— ⛔ 不把英文内部字段泄漏给一线用户。
  */
 const KEY_LABELS: Record<string, string> = {
+  // 预览给出的改前值 (写入确认前状态核对): 没有 newValues 的预览按键值行显示, 这一行要有中文名
+  currentValues: '当前状态',
   orderNumber: '单号',
   supplierName: '供应商',
   materialName: '物料',
@@ -328,6 +334,21 @@ export function isPreviewExpired(state: WriteConfirmState, nowMs: number): boole
   return left !== null && left <= 0;
 }
 
+/**
+ * 卡片标题。失败态按原因分开说: 结果不明不能说成「没有执行成功」(用户会重做, 可能写两遍);
+ * 已变化说清「这次没有执行」, 下面给「重新生成预览」。
+ */
+export function confirmCardTitle(state: WriteConfirmState): string {
+  const label = quoteIntent(state.intentName);
+  if (state.phase === 'blocked') return `${label}暂时不能执行`;
+  if (state.phase === 'failed') {
+    if (state.failureKind === 'unknown') return `${label}结果待核对`;
+    if (state.failureKind === 'stale') return `${label}情况有变化，这次没有执行`;
+    return `${label}没有执行成功`;
+  }
+  return `${label}请确认`;
+}
+
 export const EXPIRED_NOTICE = '预览已过期（没有执行任何操作）。请点「重新生成预览」后再确认。';
 
 /** 确认接口返回 (HTTP 200) → 结果分类。 */
@@ -359,6 +380,41 @@ export function classifyConfirmResponse(
       kind: 'failed',
       failureKind: 'permission',
       notice: permissionNotice(intentName, backendMessage),
+      canRegenerate: false,
+    };
+  }
+  // 写入确认三洞 (后端 IntentExecutionOrchestrator): 这三种不能笼统归成「没有执行成功」——
+  // 已执行过当失败 / 结果不明当失败, 用户都会重做一遍 (双写); 已变化要给「重新生成预览」。
+  if (status === 'ALREADY_EXECUTED') {
+    return {
+      kind: 'done',
+      executed: true,
+      content: backendMessage ?? `${quoteIntent(intentName)}已经执行过，这次没有重复执行。`,
+      doneLabel: '已执行（没有重复执行）',
+    };
+  }
+  if (status === 'OUTCOME_UNKNOWN') {
+    return {
+      kind: 'failed',
+      failureKind: 'unknown',
+      notice: backendMessage
+        ?? `无法确认${quoteIntent(intentName)}是否已经执行。请先到对应页面核对结果，确认没有执行再重新说一遍，勿重复提交。`,
+      canRegenerate: false,
+    };
+  }
+  if (status === 'PREVIEW_STALE') {
+    return {
+      kind: 'failed',
+      failureKind: 'stale',
+      notice: backendMessage ?? '预览之后情况有变化，本次没有执行。请点「重新生成预览」看最新情况后再确认。',
+      canRegenerate: true,
+    };
+  }
+  if (status === 'CONFIRM_NOT_SUPPORTED') {
+    return {
+      kind: 'failed',
+      failureKind: 'rejected',
+      notice: backendMessage ?? MANUAL_FALLBACK,
       canRegenerate: false,
     };
   }
