@@ -139,7 +139,16 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
+
+      # Maven 仓库缓存由 maven-cache-warm.yml 在 main 上跑过一次真实 mvn test 后写入（key 含 pom 哈希）。
+      # 不再用 setup-java 的 `cache: maven`: 它的 key 一旦存在就不可覆盖, main 上那份 158MB 只含部分依赖,
+      # 实测 2026-11-12 每片仍要从 central 现下 1160 个文件（约 2 分钟）。命中不了就退化成现状, 不会更慢。
+      - name: Restore Maven repository (warmed on main)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+          restore-keys: maven-gate-
 
       - name: Compile all Java tests and run high-signal gates
         working-directory: backend/java/cretas-api
@@ -262,7 +271,13 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven
+
+      - name: Restore Maven repository (warmed on main)
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
+          restore-keys: maven-gate-
 
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
