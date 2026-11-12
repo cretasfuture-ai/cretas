@@ -23,8 +23,6 @@ import {
   RefreshControl,
   Alert,
   ActivityIndicator,
-  Modal,
-  TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -35,8 +33,6 @@ import { useTranslation } from 'react-i18next';
 import { isAxiosError } from 'axios';
 import { productionPlanApiClient } from '../../../services/api/productionPlanApiClient';
 import { safePrint } from '../../../services/api/printApiClient';
-import { settlementRequiredNotice } from '../../../utils/settlementRequired';
-import { blockedMessage } from '../../../utils/requiredReason';
 import type { DispatcherStackParamList } from '../../../navigation/DispatcherNavigator';
 
 type NavigationProp = NativeStackNavigationProp<DispatcherStackParamList, 'PlanDetail'>;
@@ -361,47 +357,6 @@ export default function PlanDetailScreen() {
     );
   };
 
-  // 完成计划 —— 纪律排查 A6 同形 (独立审查 #1596): 以前直接把「计划量」当实际产量提交, 成品按它入库 (假数据)。
-  // 现在必须由人填实际产量; 超过计划时后端 409 要超产原因, 这里接着问, 不重填产量。
-  const [completing, setCompleting] = useState<{
-    actual: string; reason: string; reasonPrompt: string | null; submitting: boolean;
-  } | null>(null);
-
-  const handleCompletePlan = () => {
-    setCompleting({ actual: '', reason: '', reasonPrompt: null, submitting: false });
-  };
-
-  const actualValue = completing ? Number(completing.actual) : NaN;
-  const actualValid = !!completing && completing.actual.trim() !== '' && Number.isFinite(actualValue) && actualValue >= 0;
-
-  const submitCompletePlan = async () => {
-    if (!completing || !actualValid || completing.submitting) return;
-    if (completing.reasonPrompt && !completing.reason.trim()) return;
-    setCompleting({ ...completing, submitting: true });
-    try {
-      await productionPlanApiClient.completeProduction(
-        planId, actualValue, undefined, completing.reasonPrompt ? completing.reason.trim() : undefined,
-      );
-      setCompleting(null);
-      Alert.alert('成功', '计划已完成');
-      loadPlanData();
-    } catch (e) {
-      const overPlan = blockedMessage(e, 'PRODUCTION_OVER_PLAN_REASON_REQUIRED');
-      if (overPlan) {
-        setCompleting({ ...completing, submitting: false, reasonPrompt: overPlan });
-        return;
-      }
-      setCompleting(null);
-      // A7: 本厂要求先结单 → 说清去网页端哪里结单, 不弹原始错误
-      const settlement = settlementRequiredNotice(e, plan?.planNumber || planId);
-      if (settlement) {
-        Alert.alert(settlement.title, settlement.message);
-      } else {
-        Alert.alert('错误', e instanceof Error ? e.message : '完成失败');
-      }
-    }
-  };
-
   // 渲染原料匹配卡片
   const renderMaterialCard = (material: MaterialMatch) => (
     <View
@@ -704,78 +659,10 @@ export default function PlanDetailScreen() {
         )}
       </View>
 
-      {/* 完成计划: 填实际产量 (不再拿计划量顶替) */}
-      <Modal visible={completing != null} transparent animationType="fade" onRequestClose={() => setCompleting(null)}>
-        <View style={completeStyles.backdrop}>
-          <View style={completeStyles.card} testID="complete-plan-modal">
-            <Text style={completeStyles.title}>完成计划 {plan?.planNumber ?? ''}</Text>
-            <Text style={completeStyles.hint}>
-              计划量 {plan?.quantity ?? '-'} {plan?.productUnit ?? ''}；请填这次实际做出来的量
-            </Text>
-            <TextInput
-              testID="complete-plan-actual"
-              value={completing?.actual ?? ''}
-              onChangeText={(t) => completing && setCompleting({ ...completing, actual: t, reasonPrompt: null })}
-              keyboardType="numeric"
-              placeholder="实际产量"
-              editable={!completing?.submitting}
-              style={completeStyles.input}
-            />
-            {completing?.reasonPrompt ? (
-              <>
-                <Text style={completeStyles.warn} testID="complete-plan-reason-prompt">{completing.reasonPrompt}</Text>
-                <TextInput
-                  testID="complete-plan-reason"
-                  value={completing.reason}
-                  onChangeText={(t) => setCompleting({ ...completing, reason: t })}
-                  placeholder="超产原因"
-                  maxLength={200}
-                  editable={!completing.submitting}
-                  style={completeStyles.input}
-                />
-              </>
-            ) : null}
-            <View style={completeStyles.actions}>
-              <TouchableOpacity testID="complete-plan-cancel" style={[completeStyles.btn, completeStyles.cancel]}
-                onPress={() => setCompleting(null)} disabled={completing?.submitting}>
-                <Text style={completeStyles.cancelText}>取消</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                testID="complete-plan-confirm"
-                style={[completeStyles.btn, completeStyles.confirm,
-                  (!actualValid || (!!completing?.reasonPrompt && !completing.reason.trim()) || completing?.submitting)
-                    && completeStyles.disabled]}
-                disabled={!actualValid || (!!completing?.reasonPrompt && !completing.reason.trim()) || completing?.submitting}
-                onPress={submitCompletePlan}
-              >
-                <Text style={completeStyles.confirmText}>确定完成</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }
 
-const completeStyles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
-  card: { backgroundColor: '#fff', borderRadius: 12, padding: 16 },
-  title: { fontSize: 18, fontWeight: '700', color: '#303133' },
-  hint: { marginTop: 8, fontSize: 14, color: '#606266', lineHeight: 20 },
-  warn: { marginTop: 10, fontSize: 14, color: '#f56c6c', lineHeight: 20 },
-  input: {
-    marginTop: 10, minHeight: 48, borderWidth: 1, borderColor: '#dcdfe6', borderRadius: 8,
-    paddingHorizontal: 10, fontSize: 18,
-  },
-  actions: { marginTop: 14, flexDirection: 'row', gap: 8 },
-  btn: { flex: 1, minHeight: 48, justifyContent: 'center', alignItems: 'center', borderRadius: 8 },
-  cancel: { borderWidth: 1, borderColor: '#dcdfe6', backgroundColor: '#fff' },
-  cancelText: { fontSize: 15, color: '#606266' },
-  confirm: { backgroundColor: '#409eff' },
-  disabled: { backgroundColor: '#a0cfff' },
-  confirmText: { fontSize: 15, color: '#fff', fontWeight: '700' },
-});
 
 const styles = StyleSheet.create({
   container: {

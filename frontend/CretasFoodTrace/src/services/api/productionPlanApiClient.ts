@@ -290,18 +290,8 @@ class ProductionPlanApiClient {
     return await apiClient.post(`${this.getPath(factoryId)}/${planId}/start`);
   }
 
-  // 7. 完成生产 (直接完工; 实际产量超过计划时服务端要求 overPlanReason —— 纪律排查 A7)
-  async completeProduction(
-    planId: string,
-    actualQuantity: number,
-    factoryId?: string,
-    overPlanReason?: string,
-  ): Promise<ApiResponse<ProductionPlan>> {
-    return await apiClient.post(`${this.getPath(factoryId)}/${planId}/complete`, {
-      actualQuantity,
-      ...(overPlanReason ? { overPlanReason } : {}),
-    });
-  }
+  // 7. 完成生产: ⛔ App 不提供 (2026-11-12)。结单 / 完工只在 PC 网页做; 手机上没有入口,
+  //    以前两处没接线的完工弹窗连同这个调用一起删掉了。钉在 productionPlanMobileBoundaryContract.test.ts。
 
   // 8. 取消生产计划
   async cancelProductionPlan(planId: string, reason?: string, factoryId?: string): Promise<ApiResponse<ProductionPlan>> {
