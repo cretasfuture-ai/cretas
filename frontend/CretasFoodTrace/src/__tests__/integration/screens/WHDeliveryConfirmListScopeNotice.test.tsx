@@ -26,7 +26,7 @@ import { handleError } from '../../../utils/errorHandler';
 const getPending = jest.mocked(warehouseDeliveryApiClient.getPendingDeliveries);
 const getHistory = jest.mocked(warehouseDeliveryApiClient.getDeliveryHistory);
 
-const HINT = '按工厂给你的岗位配置的数据范围显示：只列出你（或你可查看的同事）创建的销售单、客户对应的发货单。'
+const HINT = '按你岗位当前的数据范围显示：只列出你（或你可查看的同事）创建的销售单、客户对应的发货单。'
   + '需要处理全工厂发货，请工厂总监在网页后台「角色权限 → 数据范围」把本岗位改为「全工厂」。';
 
 function emptyPage(actionHint?: string) {
