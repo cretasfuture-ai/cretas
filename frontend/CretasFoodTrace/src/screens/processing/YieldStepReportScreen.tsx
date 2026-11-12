@@ -17,7 +17,7 @@ import MaterialBatchPicker, {
 } from '../../components/processing/MaterialBatchPicker';
 import RawTimeLimitNotice from '../../components/processing/RawTimeLimitNotice';
 import WipBatchPicker, {
-  WipSelection, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
+  WipSelection, wipDisplayTitle, wipFreeQuantity, wipPendingQuantity, wipQcBlockReason,
 } from '../../components/processing/WipBatchPicker';
 import BlendRatioCard from '../../components/processing/BlendRatioCard';
 import {
@@ -3047,6 +3047,7 @@ const YieldStepReportScreen: React.FC = () => {
               {needsWipPicker ? (
                 <WipBatchPicker
                   batchId={batchId}
+                  batchNumber={batchNumber}
                   taskId={currentTask?.id}
                   selectedSourceWipNo={selectedWip?.sourceWipNo ?? null}
                   onChange={setSelectedWip}
@@ -3061,7 +3062,9 @@ const YieldStepReportScreen: React.FC = () => {
                     {wipAvailable <= 0 ? ' (已领空, 请确认上道是否还需报工产出)' : ' (本道最多领这么多)'}
                   </Text>
                   {yieldLimits?.sourceWipNo ? (
-                    <Text style={styles.wipBannerSub}>来源批次 {yieldLimits.sourceWipNo}</Text>
+                    <Text style={styles.wipBannerSub}>
+                      来源批次 {wipDisplayTitle({ intermediateBatchNo: yieldLimits.sourceWipNo, processOrder: null }, { batchId, batchNumber }).title}
+                    </Text>
                   ) : null}
                 </View>
               ) : null}
