@@ -55,6 +55,11 @@ class AIConfig:
     decision_clarify_threshold: float = 0.5
     # 合并输出的 target 把握 < 此值, 或给出了同样说得通的 alternatives ⇒ 才调 Choice。
     decision_choice_below: float = 0.8  # 开发集 [0.7,0.8) 档直出只对 1/4, 交给 Choice 复核
+    # Luna 没启用 / 失败 / 超时之后的退路 (INTENT-DISTILL 批次 2, Steve 2026-11-12 拍板接上):
+    #   "combo"  = 阿里云选意图 ‖ qwen 判动作与是否先问 → qwen 单用 → 保守先问 → 候选按钮 (ai/matcher/fallback_combo.py);
+    #   "legacy" = 旧链 Luna → qwen 读 logprobs → _result_from_probs (回滚用)。
+    # 退路自己的阈值与 Luna 的 decision_auto_threshold 分开, 见 fallback_combo.FallbackThresholds (AI_DECISION_FALLBACK_*)。
+    decision_fallback: str = "combo"
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -91,6 +96,7 @@ class AIConfig:
             decision_merged=os.environ.get("AI_DECISION_MERGED", "0").strip().lower() in ("1", "true", "yes", "on"),
             decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
             decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
+            decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
         )
 
 

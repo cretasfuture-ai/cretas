@@ -29,7 +29,8 @@ ROWS = [
 ]
 CODES = {r["intent_code"] for r in ROWS}
 MERGED = AIConfig(decision_business_types="FACTORY", decision_special_options=True, decision_merged=True,
-                  decision_clarify_threshold=0.5, decision_choice_below=0.8)
+                  decision_clarify_threshold=0.5, decision_choice_below=0.8,
+                  decision_fallback="legacy")  # 合并失败后回到的分开调用走旧链; 组合退路另有测试
 
 
 def u(**kw):
@@ -189,7 +190,7 @@ def test_unusable_merged_output_falls_back_to_split_calls_and_says_so(monkeypatc
 
 def test_flag_off_keeps_the_old_split_path(monkeypatch):
     _no_registry(monkeypatch)
-    off = AIConfig(decision_business_types="FACTORY", decision_special_options=True)
+    off = AIConfig(decision_business_types="FACTORY", decision_special_options=True, decision_fallback="legacy")
     assert off.decision_merged is False
     dec = FakeDecision(u(), probs={"ORDER_LIST": 0.95, NONE_KEY: 0.03, CLARIFY_KEY: 0.02})
     run(dec, cfg=off)
