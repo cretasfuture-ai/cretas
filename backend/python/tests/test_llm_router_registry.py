@@ -166,6 +166,9 @@ _FROZEN_REGISTRY = {
     ("openai", "gpt-5.4-mini"): None,
     ("openai", "gpt-4.1-mini"): None,
     ("openai", "gpt-6-luna"): None,
+    # 2026-11-12 阿里云 decision-model-preview(B 账号工作区, 只走 call_aliyun_decision_choice, 不进任何链):
+    #    Luna 之后组合退路的「选意图」一半; 证据 = 当天同口径对比 1231 轮实调(读数见 _REGISTRY_AUDIT_PROBE)。
+    ("aliyun_b_vl", "decision-model-preview"): None,
     # 2026-09-29 A 账号同源带图探针通过；owner 要求先用有限额模型。
     # ⚠️ 2026-10-07 探针: kimi-k3 / qwen3.8-27b / qwen3.8-max-0902 当天 403 quota ——
     #    原样保留, 已报 owner 裁定(brief: aliyun 条目死了只报告)。

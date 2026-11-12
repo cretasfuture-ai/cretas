@@ -31,7 +31,8 @@ ROWS = [
     {"id": "3", "intent_code": "MATERIAL_BATCH_QUERY", "intent_name": "原料批次查询", "description": "查原料库存",
      "keywords": '["库存"]', "intent_category": "MATERIAL", "is_active": True},
 ]
-CFG = AIConfig(decision_business_types="FACTORY", decision_auto_threshold=0.7)
+# 本文件守的是旧链 (Luna → qwen 读 logprobs → _result_from_probs); 组合退路在 test_ai_decision_fallback_combo.py
+CFG = AIConfig(decision_business_types="FACTORY", decision_auto_threshold=0.7, decision_fallback="legacy")
 
 
 class FakeSemantic:

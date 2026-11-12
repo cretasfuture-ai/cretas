@@ -24,7 +24,8 @@ ROWS = [
         ("ORDER_TODAY", "今日订单", "今天的订单"),
     ])
 ]
-CFG = AIConfig(decision_business_types="FACTORY", decision_auto_threshold=0.7)
+# 守候选来源 (重排 / 粗选); 假决策器只有旧 choose, 组合退路另测 (test_ai_decision_fallback_combo.py)
+CFG = AIConfig(decision_business_types="FACTORY", decision_auto_threshold=0.7, decision_fallback="legacy")
 CFG_RERANK = replace(CFG, decision_candidates="rerank", rerank_pool_k=50, rerank_top_k=2)
 
 
