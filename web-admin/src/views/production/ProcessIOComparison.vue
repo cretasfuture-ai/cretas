@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { balanceProcessLabel } from './balanceProcessLabel';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
 import {
   averageScopeNote,
   formatQuantity,
@@ -307,12 +308,12 @@ function handleReset() {
         <el-table-column prop="processName" label="工序名称" min-width="150" show-overflow-tooltip />
         <el-table-column label="投入量" width="150" align="right">
           <template #default="{ row }">
-            {{ formatQuantity(row.inputQuantity, row.inputUnit) }}
+            {{ formatQuantity(row.inputQuantity, displayProcessUnit(row.inputUnit)) }}
           </template>
         </el-table-column>
         <el-table-column label="产出量" width="150" align="right">
           <template #default="{ row }">
-            {{ formatQuantity(row.outputQuantity, row.outputUnit) }}
+            {{ formatQuantity(row.outputQuantity, displayProcessUnit(row.outputUnit)) }}
           </template>
         </el-table-column>
         <el-table-column label="转化率" width="160" align="center">

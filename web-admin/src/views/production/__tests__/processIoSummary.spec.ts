@@ -62,6 +62,7 @@ describe('单位显示: unitless 不再原样露给用户, 也不猜成 kg', () 
     expect(formatQuantity(0.2, null)).toBe('0.2（无单位）');
     expect(formatQuantity(0.2, 'unitless')).not.toContain('kg');
     expect(formatQuantity(12.5, 'kg')).toBe('12.5 kg');
+    expect(formatQuantity(3, 'box')).toBe('3 盒');   // 英文码走 displayProcessUnit
   });
   it('一侧单位混杂 (数量 null) 不给假合计', () => {
     expect(formatQuantity(null, null)).toBe('多种单位，未合计');

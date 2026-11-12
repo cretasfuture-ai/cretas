@@ -7,6 +7,8 @@
  *    平均转化率 / 平均损耗率只用能比的工序算, 并写明参与了几道。
  */
 
+import { displayProcessUnit } from '@/utils/processSheetUnits';
+
 export type IncomparableReason = 'UNIT_MISMATCH' | 'MIXED_UNITS' | 'NO_UNIT' | 'NO_INPUT';
 
 export interface ProcessYieldAgg {
@@ -23,11 +25,11 @@ export interface ProcessYieldAgg {
   batchCount: number;
 }
 
-/** 'unitless' / 空串 / null 都算「没有单位」, 返回 null; 否则返回去空白的单位。 */
+/** 'unitless' / 空串 / null 都算「没有单位」, 返回 null; 否则返回给用户看的单位 (box → 盒 等走 displayProcessUnit)。 */
 export function realUnit(unit: string | null | undefined): string | null {
   const t = (unit ?? '').trim();
   if (!t || t.toLowerCase() === 'unitless') return null;
-  return t;
+  return displayProcessUnit(t) || null;
 }
 
 /** 数量 + 单位。没有单位写「无单位」; 数量为 null (一侧单位混杂) 写「多种单位，未合计」。 */
