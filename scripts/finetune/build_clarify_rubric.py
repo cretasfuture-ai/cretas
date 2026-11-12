@@ -31,6 +31,7 @@ from distill_common import ROOT, build_intent_table  # noqa: E402
 from tool_access_modes import TOOL_IMPL, strip_comments  # noqa: E402
 
 OUT = HERE / 'clarify_rubric.json'
+OUT_V3 = HERE / 'clarify_rubric_v3.json'
 DECISION_PY = 'backend/python/ai/matcher/decision.py'
 PIPELINE_PY = 'scripts/finetune/distill_pipeline.py'
 
@@ -95,6 +96,63 @@ BRIEFS = {
     'G8_PENDING_NOT_ANSWERED': 'pending_fields 不为空，句子没给出其中任何字段的值，只是含糊催促/重复任务 → NEED_CLARIFY（不是 CHANGE_PARAM）',
 }
 assert set(BRIEFS) == {r['id'] for r in RULES}, 'every rule needs exactly one brief'
+
+# v3 (2026-11-12): Steve's product policy, answered in plain words to 8 policy questions
+# (Documents/Cretas意图蒸馏-20261111/steve-policy-rules-20261112.md). Principles: read-only requests
+# whose reasonable default cannot mislead are EXECUTED and the answer states the default; requests
+# that may be a write, or whose target is genuinely two-way, are ASKED; what the system cannot do is
+# said plainly together with the closest result it can give. v1 labels stay alongside; the
+# independent acceptance set and shadow runs decide. Not fitted to any reviewed item set.
+STEVE_V3 = 'Steve 产品口径 8 问（2026-11-12，steve-policy-rules-20261112.md）'
+RULES_V3 = [
+    dict(id='C1_VAGUE_VERB', label='NEED_CLARIFY',
+         rule='只有含糊动词（弄一下/处理一下/搞一下/整一下），没说要做什么：先问要做什么（回复里给几个常用操作）。'
+              '例：正在看某批次质检结果时说“弄一下”→ 问。',
+         source=[STEVE_V3 + ' 第 4 条']),
+    dict(id='C2_READ_OR_WRITE_TWO_WAY', label='NEED_CLARIFY',
+         rule='这句话既可能是查询、也可能是录入/新建/修改（查还是改只差一个字），且没有别的词能分清：先问是查还是要录入。'
+              '例：“录下草莓酸奶下周要多少”→ 问是查需求量还是录入一个数。动词明确是写（录入/新建/提交/审批/入库……）且没有查询读法时不问，按写操作选，执行前系统会再确认。',
+         source=[STEVE_V3 + ' 第 5 条']),
+    dict(id='C3_OBJECT_SWITCH_TWO_WAY', label='NEED_CLARIFY',
+         rule='接着上一轮，只换了查询对象（“那原料呢”“那客户呢”），而新对象在候选里对应两种以上意思不同的查询，上文也定不下是哪一种：先问。'
+              '例：刚查完上月订单，说“那原料呢”→ 问看原料库存，还是看上个月的原料入库。',
+         source=[STEVE_V3 + ' 第 3 条']),
+    dict(id='C4_TARGET_UNKNOWN', label='NEED_CLARIFY',
+         rule='用“这个/那个/它”指代，句子里没有具体业务名词，state 里也对不上任何对象，看不出要做哪件事：先问。'
+              '必填参数缺了、又没有合理默认（不是时间、条数、范围这类能默认的）也先问。',
+         source=[STEVE_V3 + ' 总原则“目标本身两可的，先问”', _line_of(DECISION_PY, '缺了关键信息必须先问用户')]),
+    dict(id='C5_PENDING_NOT_ANSWERED', label='NEED_CLARIFY',
+         rule='state.pending_fields 不为空，当前句没有给出其中任何字段的值，也没有换任务或取消：继续追问该字段。',
+         source=[_line_of(DECISION_PY, '缺了关键信息必须先问用户'), _line_of(PIPELINE_PY, "'CHANGE_PARAM=沿用上一轮任务")]),
+    dict(id='E1_READ_WITH_DEFAULTS', label='NEW_TASK',
+         rule='只读查询、缺的参数有合理默认且不会误导：直接执行，回复里写明用了什么默认。'
+              '没说时间默认最近 7 天；“过期”只指已经过期（不混入快过期）；结果多时先给最近 20 条并写明总条数。',
+         source=[STEVE_V3 + ' 第 1、2、7 条']),
+    dict(id='E2_SAME_NAME_LIST_ALL', label='NEW_TASK',
+         rule='同名的人或物（两个张三）：不追问，按查询执行，把同名的都列出来并标明车间/部门。',
+         source=[STEVE_V3 + ' 第 8 条']),
+    dict(id='E3_CANNOT_DO_GIVE_CLOSEST', label='NEW_TASK',
+         rule='功能明确但要的口径系统做不到（如按数量排销量而工具只支持按金额）：不追问，选该功能执行，回复里说明做不到并给出最接近的结果。',
+         source=[STEVE_V3 + ' 第 6 条']),
+    dict(id='E4_CONTINUATION', label='CHANGE_PARAM',
+         rule='state.prev_intent 存在，当前句给出了新的参数值或口径（含回答 pending_fields）、任务没变：CHANGE_PARAM 沿用 prev_intent，不问。'
+              '只换对象且两可时按 C3。',
+         source=[_line_of(PIPELINE_PY, "'CHANGE_PARAM=沿用上一轮任务")]),
+]
+BRIEFS_V3 = {
+    'C1_VAGUE_VERB': '只有“弄一下/处理一下”这类含糊动词、没说做什么 → 问要做什么',
+    'C2_READ_OR_WRITE_TWO_WAY': '查还是录入/改两种读法都通（如“录下…要多少”）→ 问；明确的写动词不问，按写选',
+    'C3_OBJECT_SWITCH_TWO_WAY': '接着上轮只换对象（“那原料呢”），新对象有两种以上不同查询、上文定不下 → 问',
+    'C4_TARGET_UNKNOWN': '只有“这个/那个”、无业务名词、state 对不上 → 问；必填参数缺且无合理默认 → 问',
+    'C5_PENDING_NOT_ANSWERED': 'pending_fields 不为空、没回答也没换任务 → 继续追问',
+    'E1_READ_WITH_DEFAULTS': '只读且默认不会误导 → 执行：没说时间=最近7天；“过期”=已过期；结果多先20条写总数',
+    'E2_SAME_NAME_LIST_ALL': '同名的人/物 → 不问，都列出来标明车间',
+    'E3_CANNOT_DO_GIVE_CLOSEST': '口径做不到（如按数量排）→ 不问，执行该功能并说明，给最接近结果',
+    'E4_CONTINUATION': '有 prev_intent、给了新参数/口径、任务没变 → CHANGE_PARAM',
+}
+assert set(BRIEFS_V3) == {r['id'] for r in RULES_V3}, 'every v3 rule needs exactly one brief'
+for _r in RULES_V3:
+    _r['brief'] = BRIEFS_V3[_r['id']]
 for _r in RULES:
     _r['brief'] = BRIEFS[_r['id']]
 
@@ -353,7 +411,7 @@ def _has_default_text(desc):
     return bool(desc) and bool(re.search(r'默认|缺省|不填(?:则|时|就)|不传(?:则|时)|为空(?:则|时)', desc))
 
 
-def build():
+def build(version=1):
     sys.path.insert(0, str(ROOT / 'backend' / 'python'))
     from ai import factory_catalog as fc
     table = build_intent_table()
@@ -414,17 +472,20 @@ def build():
                  with_no_params=sum(not (v['must_ask'] or v['defaults'] or v['optional']) for v in intents.values()),
                  confusions=len(confusions))
     return dict(
-        version=1, batch='INTENT-DISTILL-20261111', generated_by='scripts/finetune/build_clarify_rubric.py',
+        version=version, batch='INTENT-DISTILL-20261111', generated_by='scripts/finetune/build_clarify_rubric.py',
         source_head=head,
-        purpose='Luna 与 Terra 各自独立依据本标准判断 NEED_CLARIFY；只读意图的参数来自 Java Tool 源码。老师一致仍只是银标。',
-        rules=RULES, confusions=confusions, stats=stats, intents=intents)
+        purpose=('Luna 与 Terra 各自独立依据本标准判断 NEED_CLARIFY；只读意图的参数来自 Java Tool 源码。老师一致仍只是银标。' if version == 1 else
+                 'v3（Steve 口径）：只有缺了必填且无合理默认、或对象确实指不定时才 NEED_CLARIFY，其余按默认执行；老师一致仍只是银标。'),
+        rules=RULES if version == 1 else RULES_V3, confusions=confusions, stats=stats, intents=intents)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--version', type=int, choices=[1, 3], default=1)
     a = ap.parse_args()
-    rub = build()
+    rub = build(a.version)
+    OUT = globals()['OUT'] if a.version == 1 else OUT_V3
     body = json.dumps({k: v for k, v in rub.items() if k != 'source_head'}, ensure_ascii=False, indent=1, sort_keys=False)
     if a.check:
         cur = json.loads(OUT.read_text(encoding='utf-8')) if OUT.exists() else {}
