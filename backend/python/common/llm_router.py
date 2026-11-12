@@ -68,6 +68,8 @@ from common.llm_client import (
     EgressRedactionError,
     current_egress_tokens,
     get_llm_http_client,
+    get_llm_proxied_http_client,
+    egress_proxy_url,
     prefetch_names_for_request,
     reset_prefetched_names,
 )
@@ -2252,6 +2254,18 @@ DEFAULT_CHAIN: List[str] = [
 ]
 
 
+#: 经 ``LLM_EGRESS_PROXY`` 出境的账号(2026-11-12: prod 在国内, 直连这两家 403 / 超时)。
+#: 其它账号(local_canada / 停用的阿里云)照旧直连 —— 本地隧道不能再绕一圈代理。
+_EGRESS_PROXY_ACCOUNTS: frozenset = frozenset({"openai", "anthropic"})
+
+
+def _client_for(account: str) -> Any:
+    """该账号用哪个共享客户端: 付费两家且配了代理 → 代理客户端; 否则普通共享客户端。"""
+    if account in _EGRESS_PROXY_ACCOUNTS and egress_proxy_url():
+        return get_llm_proxied_http_client()
+    return get_llm_http_client()
+
+
 def _auth_headers(account: str, api_key: str) -> Dict[str, str]:
     """Per-provider auth headers. Anthropic uses ``x-api-key`` + a version header; OpenAI may pin a
     project (``LLM_OPENAI_PROJECT_ID``) so usage lands on the non-data-sharing paid project."""
@@ -2663,6 +2677,7 @@ async def _call_chain_attempts(
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
         headers = _auth_headers(account, api_key)
+        client = _client_for(account)
 
         try:
             logger.debug(f"[llm_router] slot={slot.value} try {account}/{model}")
@@ -2873,7 +2888,7 @@ async def call_decision_choice(
 
     names_token = await prefetch_names_for_request()
     try:
-        client = get_llm_http_client()
+        client = _client_for(account)
         clean = [m for m in messages if not (isinstance(m, dict) and m.get("partial"))]
         redacted, _tokens = await client.redact_chat_payload({"model": model, "messages": clean})
         system = "\n".join(str(m.get("content") or "") for m in redacted["messages"] if m.get("role") == "system")
@@ -3042,6 +3057,7 @@ async def _call_chain_stream_attempts(
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
         headers = _auth_headers(account, api_key)
+        client = _client_for(account)
         # Anthropic: redact the chat-shaped payload here (same choke point), translate, and stream
         # /v1/messages; the shared client treats that URL as passthrough, so we hold the egress
         # tokens ourselves for the StreamRestorer below.

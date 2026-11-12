@@ -376,7 +376,11 @@ async def init_llm_client(base_url: str, api_key: str) -> None:
     logger.info("Shared LLM HTTP client created (pool: 20 max, 10 keepalive, metrics hook)")
 
     # Warmup: send a minimal request to establish connection + TLS
-    if api_key:
+    # 2026-11-12: 阿里云已在路由里整体停用(Steve 裁定) —— 启动预热不再向 DashScope 发 qwen 请求;
+    # 预热对新的两家没有意义(经代理、按需建连), 所以这里只在 base_url 不是 DashScope 时才发。
+    if api_key and "dashscope" in (base_url or "").lower():
+        logger.info("LLM client warmup skipped: DashScope is disabled in the router (2026-11-12)")
+    elif api_key:
         try:
             resp = await _client.post(
                 f"{base_url}/chat/completions",
@@ -397,11 +401,55 @@ async def init_llm_client(base_url: str, api_key: str) -> None:
             logger.warning(f"LLM client warmup failed (non-fatal): {e}")
 
 
+# ── 出境代理 (2026-11-12, LLM-PROVIDER-SWITCH) ──────────────────────────────────────────
+# prod 47 在国内: api.anthropic.com 403(地区封锁)、api.openai.com 超时。这两家经加拿大 Mac mini 的反向
+# SOCKS 出口走(47 上只监听 127.0.0.1, 见 docs/ops/local-llm-canada-mini.md)。
+#   LLM_EGRESS_PROXY  例: socks5h://127.0.0.1:11438   (socks5h = 远端解析域名; 需要 socksio)
+# 只给付费两家用(由 llm_router 按账号选客户端); 没配 = 不建代理客户端, 行为与以前完全相同。
+# 代理客户端同样包在脱敏层里、挂同一个 metrics hook —— 换的只是出口, ⛔ 不是绕开脱敏。
+_proxied_client: Optional[httpx.AsyncClient] = None
+_proxied_wrapper: "Optional[_RedactingLLMClient]" = None
+_proxied_url: str = ""
+
+
+def egress_proxy_url() -> str:
+    import os
+    return (os.getenv("LLM_EGRESS_PROXY") or "").strip()
+
+
+def get_llm_proxied_http_client() -> "_RedactingLLMClient":
+    """经 ``LLM_EGRESS_PROXY`` 出境的共享客户端(同样脱敏)。没配代理时返回普通共享客户端。"""
+    global _proxied_client, _proxied_wrapper, _proxied_url
+    url = egress_proxy_url()
+    if not url:
+        return get_llm_http_client()
+    if _proxied_client is None or _proxied_url != url:
+        from common.llm_metrics import metrics_response_hook
+        _proxied_client = httpx.AsyncClient(
+            proxy=url,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10, keepalive_expiry=30),
+            timeout=httpx.Timeout(120.0),
+            event_hooks={"response": [metrics_response_hook]},
+        )
+        _proxied_url = url
+        _proxied_wrapper = None
+        scheme = url.split("://", 1)[0]
+        logger.info("Egress-proxied LLM HTTP client created (scheme=%s)", scheme)
+    if _proxied_wrapper is None or _proxied_wrapper._inner is not _proxied_client:
+        _proxied_wrapper = _RedactingLLMClient(_proxied_client)
+    return _proxied_wrapper
+
+
 async def close_llm_client() -> None:
     """Close the shared LLM HTTP client. Call during application shutdown."""
-    global _client, _wrapper
+    global _client, _wrapper, _proxied_client, _proxied_wrapper, _proxied_url
     if _client is not None:
         await _client.aclose()
         _client = None
         _wrapper = None
         logger.info("Shared LLM HTTP client closed")
+    if _proxied_client is not None:
+        await _proxied_client.aclose()
+        _proxied_client = None
+        _proxied_wrapper = None
+        _proxied_url = ""
