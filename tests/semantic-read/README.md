@@ -42,6 +42,13 @@ Offline scoring (runs on main, covered by tests, no model/network/DB):
   the turns whose verdict differs between runs. Runs from different source versions
   (`run-manifest.json` base_head + source/class hashes) are labelled and flagged; they are not
   silently pooled. A single run is never a conclusion.
+- `strict_scoring.py holdout|eline ...` re-scores recorded traces under the strict rules of the
+  Fable review (suggestion 4): pass / fail / **unmeasured** per turn (unmeasured is its own column,
+  never a pass), whole-session success, reads and writes reported apart (write gate and write
+  target), parameters checked key by key (unchecked gold keys are unmeasured), intent equivalence
+  reported both ways, identical runs declared as one effective sample, 95% Wilson intervals.
+  Old-vs-new tables for the holdout run and the E-line dev runs: `STRICT_SCORING.md`. Use it for
+  headline numbers; `holdout_score.py` / `decision_eval_score.py` stay as they were for diagnostics.
 - Tests: `python -m pytest tests/semantic-read -q`. The gold corpus has no clarification-expected
   turn, so `missed_clarify` has denominator 0 there; a turn may carry `expect_clarify: true`
   or an explicit `action` field and the scorer honours both.
