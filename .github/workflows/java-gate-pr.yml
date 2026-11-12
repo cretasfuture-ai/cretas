@@ -23,6 +23,7 @@ on:
       - 'scripts/ci/java-test-ratchet.py'
       - 'scripts/ci/run-with-test-postgres.sh'
       - 'scripts/ci/shard-tests.py'
+      - 'scripts/ci/java-gate-shard-weights.txt'
       - 'scripts/ci/java-gate-fast-patterns.txt'
       - 'scripts/ci/java-gate-pg-tests.txt'
       - 'scripts/ci/test-activity-events-migration.sh'
