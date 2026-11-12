@@ -8,8 +8,8 @@
 // 并列出这些子会话。想连带归档的, 先逐个单独归档子会话, 再归档父会话。
 //
 // 接线: 挂在用户级 ~/.claude/settings.json 的 PreToolUse (command 指向主目录副本)。
-// ⛔ 不要挂在项目 .claude/settings.json: 用户级已有 PreToolUse (派发闸) 时, 项目级的 PreToolUse
-// 实测不生效 (2026-11-13 探针: 新会话里项目级 PreToolUse 连 Bash 都没触发, 同文件的 Stop/SessionStart 正常)。
+// ⛔ 不要挂在项目 .claude/settings.json: 2026-11-13 实测 worktree 里新加的项目级 PreToolUse/PostToolUse
+// 在新会话里都不触发 (原因未证实, 同文件原有的 Stop/SessionStart 正常); 用户级热加载且必触发。
 //
 // 三态 (measurement-and-wiring 形态 E):
 //   放行   = 读到会话记录, 目标名下没有挂着的子会话
