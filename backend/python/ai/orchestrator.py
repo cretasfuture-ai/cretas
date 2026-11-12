@@ -25,6 +25,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
+from ai import legacy_exit_metrics as exit_metrics
 from ai import registry as registry_module
 from ai.config import default_config
 from ai.db import row_to_dto
@@ -97,21 +98,38 @@ class Orchestrator:
         visible_intents = filter_runtime_rows(visible_intents)
         if (self.decision_matcher is not None and enable_llm
                 and self.config.decision_enabled_for(businessType)):
+            # 旧出口计数 (INTENT-DISTILL-20261111): 只计数、只打日志, 不改结果
+            exit_metrics.record_decision_site_request()
+            exit_metrics.set_decision_none_reason(None)
+            exit_metrics.set_luna_failure_reason(None)
+            fallback_reason = None
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
                                                     history)
-            except Exception:
+            except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
+                fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
                 result = None
             if result is not None:
+                exit_metrics.observe_decision_answered()
                 return result
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
             # 回落要留痕: 「三层答的」与「三层没答出来、旧路径答的」在结果上必须分得开
             legacy.timingMs = {**(legacy.timingMs or {}), "decisionFallback": 1}
+            exit_metrics.record_legacy_exit(
+                legacy, factoryId,
+                fallback_reason or exit_metrics.get_decision_none_reason() or "decision_returned_none",
+                visible_intents)
             return legacy
-        return await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
-                                        history, min_confidence, enable_llm)
+        legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
+                                          history, min_confidence, enable_llm)
+        # 决策层没对这个业态 / 这次请求开 ⇒ 旧四级就是主路径 (配置使然, 不进告警分子)
+        exit_metrics.record_legacy_exit(
+            legacy, factoryId,
+            "llm_disabled" if (self.decision_matcher is not None and not enable_llm) else "decision_not_enabled",
+            visible_intents, observe_alarm=False)
+        return legacy
 
     async def _match_decision(
         self,
@@ -132,6 +150,7 @@ class Orchestrator:
         timing: Dict[str, int] = {"decisionLayer": 1, "historyTurns": len(history or [])}
         by_code = {str(r.get("intent_code")): r for r in visible_intents}
         if not by_code:
+            exit_metrics.set_decision_none_reason("decision_no_visible_intents")
             return None
 
         # ===== ① 精确表: 归一化后整句相等, 只认 APPROVED =====
@@ -208,6 +227,7 @@ class Orchestrator:
                 if len(codes) >= self.config.decision_k:
                     break
         if not codes:
+            exit_metrics.set_decision_none_reason("decision_no_candidates")
             return await purpose_block()
 
         # ===== ② 决策: 读概率 =====
@@ -224,6 +244,8 @@ class Orchestrator:
         if purpose_result is not None:
             return purpose_result
         if not probs:
+            exit_metrics.set_decision_none_reason(
+                "decision_no_probs_" + (exit_metrics.get_luna_failure_reason() and "after_luna" or "qwen_only"))
             return None
         return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0)
 

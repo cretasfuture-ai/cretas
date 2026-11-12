@@ -375,13 +375,20 @@ class DecisionMatcher:
 
         # 选项说明与 E 线评测同形 (意图码：完整说明); 单次上限留出一半预算给回落链 (Luna 实测中位 0.37s)
         choices = [(L, f"{r['intent_code']}：{intent_text(r)}") for L, r in zip(letters, opts)]
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        exit_metrics.record_luna_request()
         try:
             with llm_caller_context("ai_decision"), utterance_egress():
-                return await call_decision_choice(messages, choices, name="intent",
+                dist = await call_decision_choice(messages, choices, name="intent",
                                                   timeout=min(3.0, self.timeout_s / 2))
         except Exception as ex:  # noqa: BLE001
             logger.warning("decision native choice unavailable, falling back to logprobs: %s", str(ex)[:300])
+            exit_metrics.set_luna_failure_reason(exit_metrics.classify_exception(ex))
             return None
+        if dist is None:
+            exit_metrics.set_luna_failure_reason("no_probs")
+        return dist
 
     async def request_purpose(self, query: str, role: Optional[str],
                               history: Optional[List[Dict[str, Any]]] = None) -> Optional[RequestPurpose]:
@@ -466,15 +473,25 @@ class DecisionMatcher:
         # 2026-11-12 (LLM-PROVIDER-SWITCH): 有出口时先问 OpenAI Decisions(gpt-6-luna) —— 原生全选项概率,
         # 一次调用; E 线同一套考题实测意图执行对 73.8%, 读 logprobs 的千问 64.7%。没出口 / 拿不到就走下面的
         # 阿里云 qwen 读 logprobs 链, 都拿不到 -> None。概率**不重新归一化**(与原契约一致)。
+        from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
+
+        exit_metrics.set_luna_failure_reason(None)
         probs = await self._choose_native(messages, letters, opts)
+        luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没问 Luna, 或 Luna 给出了概率
+        if probs is not None:  # 只有问了 Luna 且拿到概率才会走到这里
+            exit_metrics.record_luna_outcome(None, None)
         if probs is None:
             payload = {"messages": messages, "max_tokens": 1, "logprobs": True, "top_logprobs": 5}
             try:
                 body = await self._call(payload, body_validator=has_probs)
             except Exception as ex:  # noqa: BLE001
                 logger.warning("decision choose failed: %s", str(ex)[:300])
+                if luna_reason is not None:
+                    exit_metrics.record_luna_outcome(luna_reason, "failed_" + exit_metrics.classify_exception(ex))
                 return None
             probs = letter_probs(body, n) or {}
+            if luna_reason is not None:
+                exit_metrics.record_luna_outcome(luna_reason, "ok" if probs else "no_probs")
         out: Dict[str, float] = {}
         for i, (L, r) in enumerate(zip(LETTERS, opts)):
             code = str(r["intent_code"])
