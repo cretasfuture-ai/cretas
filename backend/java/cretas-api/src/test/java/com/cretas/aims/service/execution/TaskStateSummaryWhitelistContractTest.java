@@ -106,10 +106,11 @@ class TaskStateSummaryWhitelistContractTest {
         java.util.function.Function<String, Optional<String>> phrases = s -> s.contains("报工")
                 ? Optional.of("PROCESSING_BATCH_COMPLETE")
                 : s.contains("库存") ? Optional.of("MATERIAL_INVENTORY_QUERY") : Optional.empty();
-        java.util.function.Function<String, String> names = code -> switch (code) {
-            case "PROCESSING_BATCH_COMPLETE" -> "完成工序";
-            case "MATERIAL_RECEIVE" -> "原料入库";
-            default -> null;
+        // 名称在前、配置的关键词在后 (ConversationTaskStateService.namesOf 的形状); 真实数据见 TaskResumeRealIntentDataPostgresContractTest
+        java.util.function.Function<String, List<String>> names = code -> switch (code) {
+            case "PROCESSING_BATCH_COMPLETE" -> List.of("完成工序", "报工", "做完了");
+            case "MATERIAL_RECEIVE" -> List.of("原料入库");
+            default -> List.of();
         };
         // 恢复说法 + 只剩虚词 → 栈顶
         assertThat(TaskContinuationRule.resumeTarget("继续", stack, phrases, names)).contains(receive);
@@ -118,6 +119,12 @@ class TaskStateSummaryWhitelistContractTest {
         assertThat(TaskContinuationRule.resumeTarget("好了，继续完成工序", stack, phrases, names)).contains(report);
         assertThat(TaskContinuationRule.resumeTarget("回到原料入库吧", stack, phrases, names)).contains(receive);
         assertThat(TaskContinuationRule.resumeTarget("继续报工", stack, phrases, names)).contains(report);
+        // 「报工」靠的是意图配置的关键词, 不是短语表: 短语表不认、只有名称时不恢复; 有关键词时恢复
+        java.util.function.Function<String, Optional<String>> noPhrases = x -> Optional.empty();
+        assertThat(TaskContinuationRule.resumeTarget("回到刚才的报工", stack, noPhrases,
+                code -> List.of("完成工序"))).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("回到刚才的报工", stack, noPhrases, names)).contains(report);
+        assertThat(TaskContinuationRule.resumeTarget("继续做完了", stack, noPhrases, names)).contains(report);
         // N1: 只说意图短语 / 名称, 没有恢复说法 → 不恢复 (那是一次新请求)
         assertThat(TaskContinuationRule.resumeTarget("报工", stack, phrases, names)).isEmpty();
         assertThat(TaskContinuationRule.resumeTarget("完成工序", stack, phrases, names)).isEmpty();

@@ -102,12 +102,42 @@ public class ConversationTaskStateService {
     public record Resumed(ConversationSession session, String message) {
     }
 
-    /** 正在问参数时, 这句话是在回答它还是打断它 —— 两个入口都只调这里 ({@link TaskContinuationRule})。 */
+    /**
+     * 正在问参数时, 这句话是在回答它、打断它, 还是「继续 + 这个任务本身」(REPEAT: 只把这一问再问一遍,
+     * 不挂起、也不另起一份同意图的收集) —— 两个入口都只调这里 ({@link TaskContinuationRule})。
+     */
     public TaskContinuationRule.Action classify(ConversationSession active, String input,
-                                                Predicate<String> isKnownCommand) {
+                                                Predicate<String> isKnownCommand,
+                                                Function<String, Optional<String>> phraseIntent,
+                                                Function<String, List<String>> intentNames) {
         List<RequiredParameter> pending = active.getRequiredParameters().stream()
                 .filter(p -> !p.isCollected()).toList();
-        return TaskContinuationRule.forActive(input, pending, isKnownCommand);
+        TaskContinuationRule.Action action = TaskContinuationRule.forActive(input, pending, isKnownCommand);
+        if (action == TaskContinuationRule.Action.INTERRUPT && enabled
+                && TaskContinuationRule.resumeTarget(input, List.of(active), phraseIntent, intentNames).isPresent()) {
+            return TaskContinuationRule.Action.REPEAT;
+        }
+        return action;
+    }
+
+    /** REPEAT 时回给用户的话: 与恢复时同一句 (回到 X, 已记下…, 还需要…)。不改任何状态。 */
+    public static String repeatMessage(ConversationSession active, Function<String, List<String>> intentNames) {
+        return resumeMessage(active, intentNames);
+    }
+
+    /** 意图配置 → 名称在前、配置的关键词在后 (恢复说法按这些整句比对)。 */
+    public static List<String> namesOf(com.cretas.aims.entity.config.AIIntentConfig config) {
+        if (config == null) return List.of();
+        List<String> names = new ArrayList<>();
+        if (config.getIntentName() != null && !config.getIntentName().isBlank()) names.add(config.getIntentName());
+        try {
+            for (String keyword : config.getKeywordsList()) {
+                if (keyword != null && !keyword.isBlank()) names.add(keyword.strip());
+            }
+        } catch (RuntimeException ignored) {
+            // 关键词解析不了就只用名称
+        }
+        return names;
     }
 
     /**
@@ -166,16 +196,16 @@ public class ConversationTaskStateService {
     @Transactional
     public Optional<Resumed> tryResume(String factoryId, Long userId, String input,
                                        Function<String, Optional<String>> phraseIntent,
-                                       Function<String, String> intentName) {
+                                       Function<String, List<String>> intentNames) {
         if (!enabled) return Optional.empty();
         List<ConversationSession> stack = stack(factoryId, userId);
-        Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent, intentName);
+        Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent, intentNames);
         if (target.isEmpty()) return Optional.empty();
         ConversationSession session = target.get();
         // 同一时刻只留一个在问的任务 (与 startParameterCollection 同口径); 挂起的不受影响
         sessions.cancelActiveSessionsForUser(factoryId, userId, clock.get());
         if (!session.resumeFromSuspension(clock.get())) return Optional.empty();
-        String message = resumeMessage(session, intentName);
+        String message = resumeMessage(session, intentNames);
         session.addAssistantMessage(message);
         sessions.save(session);
         log.info("[TaskState] 恢复任务: session={}, intent={}", session.getSessionId(), session.getKnownIntentCode());
@@ -217,11 +247,12 @@ public class ConversationTaskStateService {
         }
     }
 
-    static String resumeMessage(ConversationSession session, Function<String, String> intentName) {
+    static String resumeMessage(ConversationSession session, Function<String, List<String>> intentNames) {
         String code = session.getKnownIntentCode();
         String name = null;
         try {
-            name = intentName == null ? null : intentName.apply(code);
+            List<String> names = intentNames == null ? null : intentNames.apply(code);
+            name = names == null || names.isEmpty() ? null : names.get(0);
         } catch (RuntimeException ignored) {
             // 名字只是给人看的, 拿不到就用意图码
         }
