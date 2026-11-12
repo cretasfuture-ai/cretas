@@ -22,24 +22,11 @@ name: Soft-delete scan surface
 #    scripts/tests/test-soft-delete-scan-surface-gate.sh 把这两者钉在一起。
 
 on:
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/soft-delete-scan-surface.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      # 生成器扫描的两个根 —— 与 ENTITY_ROOT / REPOSITORY_ROOT 逐一对应
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/repository/**'
-      # 🔴 扫描根**之外**的整棵树也要触发 —— 否则「有人在新子树里加了个软删实体」这件事
-      #    在 PR 上一次都不会被看见(而那正是 test-soft-delete-scan-root-covers-entities.sh
-      #    唯一要守的东西: logistics/entity/ 那 11 个就是这么长出来的, 谁都没红过)。
-      #    ⚠️ 上面两条**不能**因为这条更宽就删掉: 它们是与生成器扫描根逐一对应的锚点,
-      #       test-soft-delete-scan-surface-gate.sh 按它们比对(⛔ 别为了"去重"把锚点删了)。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/**'
-      # 生成器本身与它的两份产出/输入快照
-      - 'scripts/check-soft-delete-orphans.sh'
-      - 'scripts/cron/soft-delete-orphans.sql'
-      - 'scripts/cron/soft-delete-orphans.hasdel.txt'
-      # 本文件与它跑的那个用例
-      - '.github/workflows/soft-delete-scan-surface.yml'
-      - 'scripts/tests/test-soft-delete-orphans-sql-drift.sh'
+  merge_group:
+    types: [checks_requested]
   workflow_dispatch:
 
 # ⚠️ 这里**只有** pull_request, 没有 `push: main` —— main 侧的覆盖靠 `ops-script-tests.yml`:
@@ -56,7 +43,33 @@ permissions:
   contents: read
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/soft-delete-scan-surface.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/soft-delete-scan-surface.txt
+
   scan-surface-in-sync:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # ⛔ 字面量 —— `${{ vars.X }}` 在 runs-on 里求值为空(见 .claude/rules/ci-runner-routing.md)。
     #
     # 2026-09-09：与 ops-script-tests 一起纳入统一切换表。

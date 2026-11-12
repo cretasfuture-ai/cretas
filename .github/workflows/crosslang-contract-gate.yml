@@ -37,12 +37,11 @@ on:
       - 'backend/java/cretas-api/src/main/java/**'
       - 'backend/python/**'
       - '.github/workflows/crosslang-contract-gate.yml'
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/crosslang-contract-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      - 'web-admin/src/**'
-      - 'backend/java/cretas-api/src/main/java/**'
-      - 'backend/python/**'
-      - '.github/workflows/crosslang-contract-gate.yml'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: crosslang-contract-gate-${{ github.ref }}
@@ -52,7 +51,33 @@ permissions:
   contents: read
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/crosslang-contract-gate.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/crosslang-contract-gate.txt
+
   field-names:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # 与 web-admin-gate 同一台 runner。runner 路由见 .claude/rules/ci-runner-routing.md,
     # ⛔ 别用 `${{ vars.X }}` —— 实测在 runs-on 里求值为空。
     runs-on: ubuntu-latest

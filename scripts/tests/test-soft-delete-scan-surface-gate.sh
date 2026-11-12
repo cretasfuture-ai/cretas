@@ -131,16 +131,19 @@ echo "READING: GENERATOR_SCAN_ROOTS=$ENTITY_REL,$REPO_REL"
 # ⚠️ 只在**解析出来的 `paths:` 块**里找, ⛔ 不 grep 整个 workflow 文件 ——
 #    将来某条注释里出现字面量 `com/cretas/aims/entity/**`, 下面两组就会恒真
 #    (与本文件后面那处 `|| true` 检查同一个坑: 那里已经先 sed 剥了注释, 这里补齐, 免得用得不均匀)。
-PATHS_BLOCK=$(awk '
-    /^[[:space:]]*paths:[[:space:]]*$/ { inb = 1; next }
-    inb && /^[[:space:]]*-[[:space:]]/ { sub(/#.*$/, ""); print; next }
-    inb && /^[[:space:]]*#/           { next }          # 块内的整行注释: 跳过, 不算条目
-    inb && NF                          { inb = 0 }      # 块结束(下一个键)
-' "$WORKFLOW")
+# 2026-11-12 起 (合并队列准备) pull_request 触发面在 scripts/ci/trigger-paths/soft-delete-scan-surface.txt,
+# workflow 的 pull_request 不再带 paths, 由 changes 作业经 changed-paths.py 读这份清单判定。
+# ⇒ 先证明接线 (workflow 真的读这份清单), 再只在清单的**非注释行**里找。
+TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/soft-delete-scan-surface.txt"
+[ -s "$TRIGGER" ] || fail "B: 找不到 $TRIGGER"
+grep -qF 'scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/soft-delete-scan-surface.txt' "$WORKFLOW" \
+    || fail "B: workflow 没有用 changed-paths.py 读触发清单 —— 清单与真实触发面脱钩, 后面的读数作废"
+# 单条 sed、不过管道: 读不到文件时 rc 不会被管道尾吞掉 (test-pipeline-tail-swallows-rc.sh)。
+PATHS_BLOCK=$(sed -E -e 's/\r$//' -e '/^[[:space:]]*(#|$)/d' -e 's/[[:space:]]+#.*$//' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e '/^$/d' "$TRIGGER") || fail "B: 读不了 $TRIGGER"
 PATHS_COUNT=$(printf '%s\n' "$PATHS_BLOCK" | grep -c . || true)
 echo "READING: PATHS_ENTRIES=$PATHS_COUNT"
 [ "$PATHS_COUNT" -ge 5 ] \
-    || fail "B: 解析 on.pull_request.paths 只得到 $PATHS_COUNT 条 —— 解析器和 workflow 对不上了, 后面两组的读数作废"
+    || fail "B: 解析触发清单只得到 $PATHS_COUNT 条 —— 解析器和 workflow 对不上了, 后面两组的读数作废"
 
 in_paths() { printf '%s\n' "$PATHS_BLOCK" | grep -q -- "$1"; }
 
@@ -169,7 +172,9 @@ ok "跑的是权威检查本身, 且 rc 没被吞"
 # ⛔ 不许把这些路径塞进 ops-script-tests 的 paths(2026-08-28: 加宽别人的 glob 会把那边的
 # 阴性对照变成恒真式)。这里断言实体路径**没有**出现在那个 workflow 里。
 OPS_WF="$ROOT_DIR/.github/workflows/ops-script-tests.yml"
-if [ -f "$OPS_WF" ] && grep -q "com/cretas/aims/$ENTITY_REL" "$OPS_WF"; then
+OPS_TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/ops-script-tests.txt"
+if { [ -f "$OPS_WF" ] && grep -q "com/cretas/aims/$ENTITY_REL" "$OPS_WF"; } \
+   || { [ -f "$OPS_TRIGGER" ] && grep -q "com/cretas/aims/$ENTITY_REL" "$OPS_TRIGGER"; }; then
     fail "B: 实体路径被塞进了 ops-script-tests.yml 的 paths —— 新闸该有自己的 workflow"
 fi
 ok "没有往 ops-script-tests 的 paths 里塞东西"

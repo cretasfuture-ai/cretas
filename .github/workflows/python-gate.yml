@@ -76,13 +76,11 @@ on:
       - 'scripts/ci/run-with-test-postgres.sh'
       - 'scripts/ci/check_factory_evaluator_provenance.py'
       - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/python-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      - 'backend/python/**'
-      - '.github/workflows/python-gate.yml'
-      - 'scripts/ci/run-with-test-postgres.sh'
-      - 'scripts/ci/check_factory_evaluator_provenance.py'
-      - 'scripts/cron/time-phrase-backlog-daily.sh'   # 闸读它/执行它 —— 触发面必须覆盖它
+  merge_group:
+    types: [checks_requested]
   # 手动触发 —— 2026-08-26 加。
   # 本闸此前在 GitHub 上被 disabled_manually, 停用期间攒了 8 条红(其中 1 条是真的
   # 产品退化: 第二个 `mismatch == …` 身份比较长了出来)。清完重新启用时发现:
@@ -97,7 +95,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/python-gate.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/python-gate.txt
+
   pytest:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
     #    统一切换(一次改全部已接入的工作流并断言各处一致)。
     #    见 `.claude/rules/ci-runner-routing.md`。

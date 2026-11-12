@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=.github/workflows/java-gate-pr.yml,.github/workflows/java-full-nightly.yml,.github/actions/**
+# GUARDS=.github/workflows/java-gate-pr.yml,.github/workflows/java-full-nightly.yml,.github/actions/**,scripts/ci/trigger-paths/ops-script-tests.txt
 # Java 闸必须跑在【PR 合进 base 之后】的树上, 不是 PR 分支自己。
 #
 # ═══════════════════════════════════════════════════════════════════════════
@@ -201,7 +201,15 @@ cd "$ROOT_DIR"
 #    注释里(实测把 3 数成 9) —— 又是「闸把自己的文本数进去」。只数 checkout 的 `ref:` 那一行。
 PINS=$(grep -cE '^[[:space:]]*ref:.*pull_request\.head\.sha' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
 CALLS=$(grep -c 'name: Merge PR base into head' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
-DEPTH=$(grep -cE '^[[:space:]]*fetch-depth: 0[[:space:]]*$' "$GATE" "$NIGHTLY" | awk -F: '{s+=$2} END {print s+0}' || true)
+# 2026-11-12: java-gate-pr.yml 新增的 changes 作业 (合并队列准备) 也有一处 `fetch-depth: 0`, 但它不 pin
+#    head.sha、不合 base —— 它只算 diff。⇒ 只数**与 head.sha pin 同在一个 checkout 步骤里**的 fetch-depth: 0
+#    (这正是本组要钉的性质: 每个 pin 的 checkout 都是全历史), ⛔ 不是全文件计数。
+DEPTH=$(awk '
+    function flush() { if (pin && depth) n++; pin = 0; depth = 0 }
+    /^[[:space:]]*-[[:space:]]/                          { flush() }
+    /^[[:space:]]*ref:.*pull_request\.head\.sha/         { pin = 1 }
+    /^[[:space:]]*fetch-depth: 0[[:space:]]*$/           { depth = 1 }
+    END { flush(); print n + 0 }' "$GATE" "$NIGHTLY")
 echo "READING: HEAD_SHA_PINS=$PINS INLINE_MERGE_STEPS=$CALLS FETCH_DEPTH0=$DEPTH (三者必须相等且为 3)"
 
 # 🔴 回归闸(2026-09-07 P0): ⛔ 这一步不许再写成本地 composite action。
@@ -270,14 +278,16 @@ ok "非 pull_request 事件整步跳过"
 # 不含被断言的文件, 那么**只动那些文件**的 PR 根本不会触发它。
 # 实测代价: 一个只动 `.github/actions/` 的 commit(删了 action 却留着三处 `uses:`)在 PR 上全绿,
 # 而它会让**每一个** PR 的 Java 闸 9 秒红。⇒ 闸断言谁的结构, 谁就必须在触发面里。
+# 2026-11-12 起 ops-script-tests 的 pull_request 触发面在 scripts/ci/trigger-paths/ops-script-tests.txt
+# (workflow 的 pull_request 不再带 paths, 由 changes 作业读这份清单判定)。
 OPS_WF="$ROOT_DIR/.github/workflows/ops-script-tests.yml"
+OPS_TRIGGER="$ROOT_DIR/scripts/ci/trigger-paths/ops-script-tests.txt"
 [ -s "$OPS_WF" ] || fail "C: 找不到 $OPS_WF"
-OPS_PATHS=$(awk '
-    /^[[:space:]]*paths:[[:space:]]*$/ { inb = 1; next }
-    inb && /^[[:space:]]*-[[:space:]]/ { sub(/#.*$/, ""); print; next }
-    inb && /^[[:space:]]*#/            { next }
-    inb && NF                          { inb = 0 }
-' "$OPS_WF")
+[ -s "$OPS_TRIGGER" ] || fail "C: 找不到 $OPS_TRIGGER"
+grep -qF 'scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/ops-script-tests.txt' "$OPS_WF" \
+    || fail "C: ops-script-tests.yml 没有用 changed-paths.py 读触发清单 —— 清单与真实触发面脱钩, 下面的读数作废"
+# 单条 sed、不过管道: 读不到文件时 rc 不会被管道尾吞掉 (test-pipeline-tail-swallows-rc.sh)。
+OPS_PATHS=$(sed -E -e 's/\r$//' -e '/^[[:space:]]*(#|$)/d' -e 's/[[:space:]]+#.*$//' -e 's/^[[:space:]]+//' -e 's/[[:space:]]+$//' -e '/^$/d' "$OPS_TRIGGER") || fail "C: 读不了 $OPS_TRIGGER"
 echo "READING: OPS_SCRIPT_TESTS_PATHS=$(printf '%s
 ' "$OPS_PATHS" | grep -c . || true)"
 # ⚠️ `.github/actions/**` 也要在这个循环里 —— 本测试对它**也有断言**(⛔ 不许用本地 composite
@@ -286,7 +296,7 @@ echo "READING: OPS_SCRIPT_TESTS_PATHS=$(printf '%s
 for guarded in .github/workflows/java-gate-pr.yml .github/workflows/java-full-nightly.yml \
                '.github/actions/**'; do
     printf '%s
-' "$OPS_PATHS" | grep -qF "$guarded"         || fail "C: 本测试断言 $guarded 的结构, 但 ops-script-tests.yml 的 paths 不含它 ⇒ 只动它的 PR 触发不到这道闸(那正是 P0 的形状)"
+' "$OPS_PATHS" | grep -qF "$guarded"         || fail "C: 本测试断言 $guarded 的结构, 但 ops-script-tests 的触发清单不含它 ⇒ 只动它的 PR 触发不到这道闸(那正是 P0 的形状)"
 done
 ok "被本测试断言的两个 workflow 与 .github/actions/** 都在 ops-script-tests 的触发面里"
 

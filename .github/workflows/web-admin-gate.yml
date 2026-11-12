@@ -111,106 +111,44 @@ on:
       # permissionGateMatchesBackend.spec.ts 读它, 断言前端菜单/路由的 module 与后端
       # @RequirePermission 是同一个权限码 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/permission/PermissionMatrixController.java'
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/web-admin-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      - 'web-admin/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/blueprint/interview/InterviewDefaults.java'
-      - '.github/workflows/web-admin-gate.yml'
-      # 🔴 2026-08-14: unitDisplayContract.spec.ts 直接读**后端**权威表源码比对
-      # (backend/.../UnitContractServiceImpl.java), 它的文档写着「后端加了新单位而前端
-      # 没跟, 这里就会红」—— 而触发条件只有 web-admin/**, 对这个场景恰好是瞎的。
-      # 实测: #2628 只改了那个 Java 文件, 本闸没被触发, 38 条红藏了一整晚。
-      # 闸的触发面必须覆盖它读的东西, 否则它守的正是它看不见的那类改动。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/unit/impl/UnitContractServiceImpl.java'
-      # 🔴 2026-08-28: rawWorkflowOwnerAnchorMatchesBackend.source.spec.ts 读**这个** Java
-      # 文件里的 anchor.setName("__RAW_WORKFLOW_OWNER__"…) 字面量, 钉住前端那份不漂。
-      # Java 单方面改前缀而闸不跑 ⇒ 前端安静地不再过滤, 客户重新看到
-      # 「PLAN-… · __RAW_WORKFLOW_OWNER__RMT_…」当成产品名(2026-08-28 f006 实拍)。
-      # ⚠️ 只加**这一个确切文件**, ⛔ 不用 backend/**/*.java 之类的宽 glob ——
-      #   #253 实测宽 glob 会把 gateTriggerSurfaceCoversWhatItReads 的阴性对照
-      #   (「匹配器过宽 —— 连没被引用的文件都判成已覆盖了」)变成恒真式。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/ProductProcessWorkflowServiceImpl.java'
-      # 🔴 2026-09-01: WorkflowSpecialOutputChooser.spec.ts 读**这三个** Java 文件。
-      # 前两个是副产/回料各自的判据类, 证明选择器里留的不是没人读的假选项。
-      # 第三个是产品文案的真假所系: UI 上写着不良品「照常报工入库存着」, 它成立的唯一
-      # 理由是 workflowOutputOptions **只把副产滤掉** —— 没有标记的半成品产出照常进
-      # 报工选项。哪天有人给不良品也加一道过滤, 那句话就变成假话, 那条断言会红。
-      # ⚠️ 只加这三个确切文件, ⛔ 不用 backend/**/*.java 之类的宽 glob(见上一条的理由)。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowByproductNodes.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/workflow/WorkflowReworkNodes.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/wip/impl/WipInventoryServiceImpl.java'
-      # 🔴 2026-08-28: dispositionFiltersAtTheSource.source.spec.ts 读**这个** controller 的
-      # `getInspections` 签名, 钉住「前端传的 result, 后端得真的声明」——
-      # Spring 对未声明的请求参数静默忽略, 于是「待处置质检」屏显示全部质检记录且每条两遍。
-      # 后端单方面删掉那个 @RequestParam 而闸不跑 ⇒ 缺陷原样回来。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessingController.java'
-      # 🔴 2026-08-26: productionProgressWallAccess.spec.ts 读**后端**源码比对
-      # (@RequireModule 的模块码 + ProductionModuleRegistry 的 permissionModule 映射),
-      # 钉的是「菜单挂的模块 == 后端闸要的模块」两份一致。同上一条一样的道理:
-      # 只触发 web-admin/** 时, 一个**只改 Java** 的 PR 恰好是它看不见的那类改动 ——
-      # 而那正是它要守的漂移。闸的触发面必须覆盖它读的东西。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProductionProgressDashboardController.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/ProductionModuleRegistry.java'
-      # 🔴 2026-09-01: reportApprovalMenuMatchesBackendRoles.spec.ts 读这两个文件, 钉的是
-      # 「报工审批菜单放行的角色 == 后端实际放行的角色全集」。生产实测: 质量经理菜单里
-      # 看得见本页, GET 却 403, 页面把它渲染成「待审批 0」——而真实待办有 26 条。
-      # 一个**只改 @RequireRole 名单**(或只改 PLATFORM_ADMIN_ROLES 绕过集)的 PR
-      # 恰好是它看不见的那类改动, 而那正是它要守的漂移。
-      # ⛔ 逐文件登记, 不用 controller/** 这种宽 glob —— 2026-08-28 有人为补触发面加宽 glob,
-      #    把另一道闸「证明自己不过宽」的阴性对照变成了恒真式。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/ProcessWorkReportingController.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/config/RequireRoleInterceptor.java'
-      # 🔴 2026-09-06: moduleListsPairwiseConsistency.source.spec.ts 读这四个文件里的模块清单
-      # 字面量 (ALL_MODULES / 两份 ALLOWED_MODULES / DISPLAY_MODULES), 与 web-admin 的 4 份两两
-      # 比对并钉棘轮。一个**只往 Java 清单加模块**的 PR 恰好是它要守的漂移, 不登记它就看不见。
-      # ⛔ 逐文件登记, 不用宽 glob (理由见上)。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/platform/PlatformRolePermissionController.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/FactoryRoleModuleOverrideController.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RoleController.java'
-      # 刀 D (#715): 模块码 -> 中文名的唯一来源。moduleListsPairwiseConsistency 读它,
-      #   断言「轴上每个码都有中文名」—— 没有就会在角色权限页上给用户看英文裸码。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/permission/PermissionModuleCatalog.java'
-      # 🔴 2026-09-06 v2: 同一道闸的轴换成 L1 (RN 侧从 prod 只读导出的快照), 读这个 JSON。
-      #    刷新快照 = 轴变了 = 偏离读数变了, 不登记它就是「改了轴而闸不跑」。
-      - 'frontend/CretasFoodTrace/src/utils/permissionMatrix.l1Snapshot.json'
-      # 🔴 2026-09-04: materialTypeWriteRolesMatchBackend.spec.ts 读这两个文件, 钉的是
-      # 「MATERIAL_TYPE_WRITE_ROLES == RawMaterialTypeController@RequireRole ∪
-      # PLATFORM_ADMIN_ROLES」——与上面报工审批那条同一形状: 只改 @RequireRole 角色名单
-      # 的 PR 恰好是它要守的漂移, 不登记这两条它就看不见。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/RawMaterialTypeController.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/MaterialPackagingHierarchyController.java'
-      # 🔴 2026-08-29: floorPlanLimitsMatchBackend.spec.ts 读 WarehouseLayoutController
-      # 里的体量上限常量, 钉的是「前端那份不许和后端漂开」。只改后端上限的 PR
-      # 恰好是它要守的那类改动 —— 不列在这里, 它就永远看不见。
-      # ⛔ 逐个文件列, 不用宽 glob: `src/main/java/**` 会把另一道元闸
-      # 「证明自己不过宽」的阴性对照变成恒真式(2026-08-28 实测踩过)。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/WarehouseLayoutController.java'
-      # 🔴 2026-08-27: 下面这些是 enumDisplayCoverage / salesStatusLabelsMatchBackend /
-      # bomContractsSurvivingPageDeletion / seasoningProcessCategory 这几个 spec 用
-      # readJava(...) **真读**的后端源码。建元判据闸当天实测: 24 个文件被读着,
-      # 而触发面里一个都没有 —— 改它们不会触发本闸, 本闸只在「顺带被别的改动带起来」时才跑。
-      # ⚠️ 以后新增 readJava(...) 必须同步加到这里, 否则
-      #    web-admin/src/router/__tests__/gateTriggerSurfaceCoversWhatItReads.spec.ts 会红。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/constant/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/dto/bom/BomCostSummaryDTO.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/BomServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/bom/impl/BomRecipeServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/production/ProductionDocumentTraceService.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/trace/BusinessDocumentTraceService.java'
-      # statisticsFieldNamesMatchBackend.source.spec.ts 读它, 断言前端 KPI 字段名 == 后端 stats.put 的键
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/QualityCheckItemServiceImpl.java'
-      # permissionGateMatchesBackend.spec.ts 读它, 断言前端菜单/路由的 module 与后端
-      # @RequirePermission 是同一个权限码 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/controller/permission/PermissionMatrixController.java'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: web-admin-gate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/web-admin-gate.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/web-admin-gate.txt
+
   vitest:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # 2026-08-26: 组织 Actions 免费额度(2000 分钟/月)用尽后, 托管 runner 起不来
     #   —— job 2~4 秒、0 个 step、无日志地失败。改用自建 runner(139, 4 核/7G)。
     # ⚠️ 用具体标签 `cretas` 而不是裸 `self-hosted`: 将来多一台 runner 时

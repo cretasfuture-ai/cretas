@@ -50,29 +50,44 @@ on:
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
       - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
+  # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
+  # scripts/ci/trigger-paths/rn-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
-    paths:
-      - 'frontend/CretasFoodTrace/**'
-      - '.github/workflows/rn-gate.yml'
-      # 🔴 2026-08-27: 下面这些是 RN 的契约测试用 readFileSync **真读**的后端源码
-      # (transferEnumLabels / editBatchAccountFieldsLockContract / warehouseBatchAllocation
-      #  等，做枚举标签、字段锁、批次分配口径的两份一致比对)。
-      # 建元判据闸当天实测: 7 个文件被读着, 而触发面里一个都没有 ——
-      # 一个**只改 Java 枚举**的 PR 恰好是这几道闸要守的那类漂移, 而它们看不见它。
-      # ⚠️ 以后新增读后端源码的测试, 必须同步加到这里, 否则
-      #    frontend/CretasFoodTrace/src/__tests__/gates/gateTriggerSurfaceCoversWhatItReads.test.ts 会红。
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/entity/enums/**'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/MaterialBatchServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/impl/PermissionServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/inventory/impl/SalesServiceImpl.java'
-      - 'backend/java/cretas-api/src/main/java/com/cretas/aims/service/sales/impl/SalesDeliveryBatchAllocationServiceImpl.java'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: rn-gate-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
+  #   清单: scripts/ci/trigger-paths/rn-gate.txt (原 on.pull_request.paths 原样搬过去)。
+  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
+  # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
+  # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
+          fetch-depth: 0
+          filter: blob:none
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/rn-gate.txt
+
   jest:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     # 2026-08-26: 组织 Actions 免费额度(2000 分钟/月)用尽后, 托管 runner 起不来
     #   —— job 2~4 秒、0 个 step、无日志地失败。改用自建 runner(139, 4 核/7G)。
     # ⚠️ 用具体标签 `cretas` 而不是裸 `self-hosted`: 将来多一台 runner 时

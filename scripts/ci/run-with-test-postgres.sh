@@ -7,7 +7,17 @@ set -euo pipefail
 # The package auto-starts a 5432 cluster; this helper uses its own cluster on a free port.
 if [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] && [ ! -x /usr/lib/postgresql/17/bin/initdb ]; then
     sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y >/dev/null
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-17-pgvector >/dev/null; then
+        # 2026-11-12 实测: PGDG 先发了要求 postgresql-17 (> 17.12) 的 pgvector, 服务端包还没跟上,
+        # apt 依赖无解 (exit 100), 全部 PG 闸在装库这步就红。服务端照装, pgvector 改从官方源码按已装版本编译。
+        echo "::warning::PGDG 的 postgresql-17-pgvector 与 postgresql-17 暂时不匹配, 改为源码编译 pgvector"
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q postgresql-17 postgresql-server-dev-17 build-essential >/dev/null
+        pgv_src=$(mktemp -d "${RUNNER_TEMP:-/tmp}/pgvector.XXXXXX")
+        git clone -q --depth 1 --branch v0.8.0 https://github.com/pgvector/pgvector.git "$pgv_src"
+        make -s -C "$pgv_src" PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config >/dev/null
+        sudo make -s -C "$pgv_src" PG_CONFIG=/usr/lib/postgresql/17/bin/pg_config install >/dev/null
+        rm -rf -- "$pgv_src"
+    fi
 fi
 for candidate in "${CRETAS_CI_PG_BIN:-}" /usr/lib/postgresql/17/bin /opt/homebrew/opt/postgresql@17/bin; do
     if [ -n "$candidate" ] && [ -x "$candidate/initdb" ]; then export PATH="$candidate:$PATH"; break; fi
