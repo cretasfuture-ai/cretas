@@ -1,0 +1,66 @@
+{
+  "wire_verified": true,
+  "verified_on": "2026-11-03",
+  "evidence": "Official dynamic document and real read-only probes; see docs/integrations/blacklake/REPORT.md",
+  "code_path": "code",
+  "login_code_path": "statusCode",
+  "login_success_code": 200,
+  "token_path": "data",
+  "login_factory_claim": "orgId",
+  "auth_expired_codes": ["401"],
+  "auth_expired_evidence": "OpenAPI接入说明 登录接口调用频次控制: token失效时返回 code=\"401\", subCode=USER_VERIFICATION_ERROR (2026-11-12 read); HTTP 401 is also treated as expired",
+  "resources": {
+    "project": {
+      "mapping_verified": true, "window_verified": true, "updated_only_verified": true,
+      "window_basis": "updated", "items_path": "data", "total_path": "page.total",
+      "page_key": "page.pageNum", "size_key": "page.pageSize", "first_page": 1,
+      "max_window_days": 7, "source_timezone": "Asia/Shanghai", "time_format": "local_seconds",
+      "window_start_key": "updatedAtGte", "window_end_key": "updatedAtLte",
+      "factory_path": null, "scope_evidence": "login", "id_path": "id", "updated_path": "updateTime",
+      "base_body": {},
+      "fields": {"project_code": "projectCode", "product_id": "productCode", "status": "status",
+        "planned": "planAmount", "actual": "actualAmount", "good": "numberofGoodProducts",
+        "defective": "numberofDefectives", "unit": "projectUnit", "planned_end": "planEndTime",
+        "actual_end": "actualEndTime", "event_time": "planStartTime"}
+    },
+    "task": {
+      "mapping_verified": true, "window_verified": true, "updated_only_verified": false,
+      "window_basis": "parent_snapshot", "required_any": [["projectCode", "projectIds"]],
+      "items_path": "data", "total_path": "page.total", "page_key": "page.pageNum", "size_key": "page.pageSize",
+      "first_page": 1, "max_window_days": 7, "source_timezone": "Asia/Shanghai", "time_format": "local_seconds",
+      "window_start_key": "updatedAtGte", "window_end_key": "updatedAtLte",
+      "factory_path": "orgId", "id_path": "id", "updated_path": "updatedAt", "base_body": {},
+      "fields": {"project_id": "projectId", "project_code": "projectCode", "product_id": "productCode",
+        "process_id": "processId", "status": "processStatus", "planned": "planAmount",
+        "good": "fineAmount", "defective": "defectsAmount", "approved_good": "approvedFineAmount",
+        "duration_seconds": "outputDurationForSecond", "labor_cost": "sumOutputSalary",
+        "planned_end": "processEndTime", "actual_end": "processEndRealTime"}
+    },
+    "output": {
+      "mapping_verified": true, "window_verified": true, "updated_only_verified": true,
+      "window_basis": "updated", "items_path": "data", "total_path": "page.total",
+      "page_key": "page.pageNum", "size_key": "page.pageSize", "first_page": 1,
+      "max_window_days": 7, "source_timezone": "Asia/Shanghai", "time_format": "local_seconds",
+      "window_start_key": "updatedAtGte", "window_end_key": "updatedAtLte",
+      "factory_path": null, "scope_evidence": "login", "id_path": "id", "updated_path": "updatedAt", "base_body": {},
+      "fields": {"project_id": "projectId", "project_code": "projectCode", "task_id": "taskId",
+        "product_id": "productCode", "process_id": "processId", "good": "numberofgoodProducts",
+        "defective": "numberofDefectives", "unit": "stockUnit", "approval_status": "approvalStatus",
+        "event_time": "endtimeofReport"}
+    },
+    "stock_order": {
+      "mapping_verified": true, "window_verified": true, "updated_only_verified": false,
+      "window_basis": "event", "items_path": "data.data", "total_path": "data.total",
+      "page_key": "page.pageNum", "size_key": "page.pageSize", "first_page": 1,
+      "max_window_days": 7, "source_timezone": "Asia/Shanghai", "time_format": "local_seconds",
+      "window_start_key": "bizAtStart", "window_end_key": "bizAtEnd",
+      "factory_path": null, "scope_evidence": "login", "id_path": "id", "updated_path": "updatedAt", "base_body": {},
+      "fields": {"order_type": "orderType", "biz_type": "bizType", "approval_status": "orderStatus", "event_time": "bizAt"},
+      "details": {"path": "orderDetails", "id_path": "id", "fields": {
+        "product_id": "productCode", "unit": "unitName", "quantity": "qty", "stock_change": "changeQty",
+        "material_cost_signed": "changedCostAmountSigned", "cost_unit_price": "costUnitPrice",
+        "associated_order_id": "associatedBizOrderId", "associated_order_code": "associatedBizOrderCode",
+        "associated_order_type": "associatedBizOrderType"}}
+    }
+  }
+}
