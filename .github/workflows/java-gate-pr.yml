@@ -179,10 +179,14 @@ jobs:
     # 25 -> 40 (2026-11-04): 近 29 次实测 job 总耗时 17-22 分(成功), 3 次 25.x 分被取消且 0 失败用例;
     # 慢的那次 checkout 占 6.2 分(常态 0.3 分, 偶发 2-4 分, 是拉取抖动不是测试变慢)。
     timeout-minutes: 40
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB). -DreuseForks=false gives each test class a fresh JVM, as
-    # Aurora's Maven wrapper did: one shared fork accumulated Spring contexts and OOMed at 6g.
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB). 2026-11-12 起共用一个测试 JVM (不再 -DreuseForks=false):
+    # 实测 run 43212152997 每个 PG 分片 17~22 次 Spring 启动、合计 308~473 秒, 占分片 9~14 分钟的一半。
+    # 当年改成每类新 JVM 是因为共用 JVM 在 6g 下累积上下文 OOM; 现在用 10g。
+    # ⛔ 不压 spring.test.context.cache.maxSize: 试验 run 43215916062 压到 4 后, 上下文被中途淘汰,
+    #    4 片共 95 个测试报 SQL 错 (同库被别的上下文关闭/改动)。保持默认上限, 不中途淘汰。
+    # 机器上还跑着 PostgreSQL 和 Maven 本身 (MAVEN_OPTS 2g), 所以不用 12g。
     env:
-      CRETAS_JAVA_FORK_XMX: 6g
+      CRETAS_JAVA_FORK_XMX: 10g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -294,7 +298,6 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" "$MVN" -B test \
             -Dtest="$TESTS" \
             -Dspring.profiles.active=test \
-            -DreuseForks=false \
             -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
 
       - name: Prove activity event migration and committed JDBC writes
