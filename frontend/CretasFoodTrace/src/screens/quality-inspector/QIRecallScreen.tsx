@@ -101,9 +101,9 @@ export default function QIRecallScreen() {
               testID={`qi-recall-row-${row.id}`}
             >
               <View>
-                <View style={[shared.row, { justifyContent: 'space-between' }]}>
-                  <Text style={shared.cardTitle} numberOfLines={1}>{row.batchNumber}</Text>
-                  <View style={[shared.tag, { backgroundColor: closed ? '#EDF7EE' : '#FFF1E6' }]}>
+                <View style={shared.titleRow}>
+                  <Text style={[shared.cardTitle, shared.titleInRow]} numberOfLines={2}>{row.batchNumber}</Text>
+                  <View style={[shared.tag, shared.tagInRow, { backgroundColor: closed ? '#EDF7EE' : '#FFF1E6' }]}>
                     <Text style={[shared.tagText, { color: closed ? '#1B8A3A' : '#C05621' }]}>{recallStatusText(row.status)}</Text>
                   </View>
                 </View>
