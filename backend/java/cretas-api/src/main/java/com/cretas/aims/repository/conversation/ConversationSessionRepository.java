@@ -65,6 +65,19 @@ public interface ConversationSessionRepository extends JpaRepository<Conversatio
         @Param("userId") Long userId
     );
 
+    /** 定时清理: 挂起超过期限 (挂起时 last_active_at = 挂起时刻) 的任务转 TIMEOUT。 */
+    @Modifying
+    @Query("UPDATE ConversationSession s SET " +
+           "s.status = 'TIMEOUT', " +
+           "s.completedAt = :now, " +
+           "s.updatedAt = :now " +
+           "WHERE s.status = 'SUSPENDED' " +
+           "AND s.lastActiveAt < :expireTime")
+    int expireSuspendedSessions(
+        @Param("expireTime") LocalDateTime expireTime,
+        @Param("now") LocalDateTime now
+    );
+
     /**
      * 检查用户是否有活跃会话
      */

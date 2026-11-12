@@ -846,6 +846,29 @@ class SseStreamingServiceSlotContinuationTest {
                 anyString(), anyString(), anyInt(), any(), any(), any(), any(), any(), any(), anyMap());
     }
 
+    /**
+     * 终审 S1: 正在问参数时, 打断它的那一句不会在同一轮里把它恢复。「继续完成工序任务1830」既像恢复又带了一个值,
+     * 同一轮恢复 = 只回一句「还需要任务号」, 1830 被吞掉。应当: 挂起, 这句当新话识别。
+     */
+    @Test
+    void theInterruptingSentenceDoesNotResumeInTheSameTurn() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("做完了，产量0", h.complete);
+        h.extracts("做完了，产量0", h.completeTool, Map.of("actualQuantity", 0));
+        h.recognizesWithTaskState("继续完成工序任务1830", h.query);
+        when(h.knowledgeBase.matchPhrase(anyString())).thenReturn(Optional.of("WORK_PROCESS_TASK_COMPLETE"));
+        String sessionId = h.execute(IntentExecuteRequest.builder().userInput("做完了，产量0").build()).getSessionId();
+
+        IntentExecuteResponse next = h.execute(IntentExecuteRequest.builder()
+                .userInput("继续完成工序任务1830").sessionId(sessionId).build());
+
+        assertThat(next.getStatus()).isNotEqualTo("NEED_MORE_INFO");
+        assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        verify(h.aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序任务1830"), eq(F), eq(3), eq(USER),
+                eq(ROLE), any(), any(), any(), any(), anyMap());
+    }
+
     /** 阴性对照: 恢复说法 + 栈里没有的事 (「继续查工序任务」) 不恢复, 当新话识别; 挂起的任务原样留着。 */
     @Test
     void resumeWordsAboutSomethingElseDoNotResumeTheSuspendedTask() throws Exception {

@@ -151,6 +151,15 @@ public class ConversationSession {
     private String taskStateJson;
 
     /**
+     * 乐观锁版本号 (INTENT-DISTILL-20261111 第二批终审 S3): 同一会话的并发请求 (挂起 / 恢复 / 补参数)
+     * 各自整行保存时, 后到的旧副本不能覆盖先到的结果。已有行由迁移补 0。
+     * 新建时保持 null: Spring Data 按「版本为 null = 新行」走 persist (默认 0 会被当成已有行去 merge)。
+     */
+    @Version
+    @Column(name = "version")
+    private Long version;
+
+    /**
      * 最后识别的置信度
      */
     @Column(name = "last_confidence")
@@ -668,6 +677,8 @@ public class ConversationSession {
         state.setSuspendedAt(now);
         setTaskState(state);
         this.status = SessionStatus.SUSPENDED;
+        // 挂起时刻也记进 last_active_at: 定时清理按它收掉过期的挂起行 (SQL 读不到 JSON 里的时刻)
+        this.lastActiveAt = now;
         return true;
     }
 

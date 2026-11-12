@@ -47,7 +47,7 @@ import java.util.function.Supplier;
 public class ConversationTaskStateService {
 
     static final int MAX_DEPTH = 3;
-    static final Duration SUSPENDED_MAX_AGE = Duration.ofMinutes(30);
+    public static final Duration SUSPENDED_MAX_AGE = Duration.ofMinutes(30);
 
     private final ConversationSessionRepository sessions;
 
@@ -72,6 +72,24 @@ public class ConversationTaskStateService {
         return enabled;
     }
 
+    /**
+     * 这一轮开始时, 请求点名的会话是不是一个正在问参数的任务 (本人本厂、ACTIVE、没过期)。
+     * 是 → 这一轮不做恢复 (终审 S1: 同一句话既打断又恢复 = 原地吞话)。查询失败按「是」处理 (宁可不恢复)。
+     */
+    @Transactional(readOnly = true)
+    public boolean hasOpenTask(String factoryId, Long userId, String sessionId) {
+        if (factoryId == null || userId == null || sessionId == null || sessionId.isBlank()) return false;
+        try {
+            return sessions.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId)
+                    .filter(ConversationSession::isParameterCollectionMode)
+                    .filter(s -> s.getStatus() == SessionStatus.ACTIVE && !s.isExpired())
+                    .isPresent();
+        } catch (RuntimeException e) {
+            log.warn("[TaskState] 查正在问的任务失败, 本轮不恢复: {}", e.getMessage());
+            return true;
+        }
+    }
+
     void setEnabled(boolean enabled) {
         this.enabled = enabled;
     }
@@ -92,7 +110,13 @@ public class ConversationTaskStateService {
         return TaskContinuationRule.forActive(input, pending, isKnownCommand);
     }
 
-    /** 被打断: 开关开 → 挂起进栈; 关 → 取消 (旧行为)。 */
+    /**
+     * 被打断: 开关开 → 挂起进栈; 关 → 取消 (旧行为)。
+     *
+     * <p>会话行带乐观锁版本号 (终审 S3): 传进来的 {@code session} 若已被同一会话的并发请求改过
+     * (例如另一请求刚补了参数或已挂起 / 恢复), 保存抛 ObjectOptimisticLockingFailureException,
+     * 不会用旧值覆盖。调用方接住后按「这句话当新话识别」处理。
+     */
     @Transactional
     public void interrupt(String factoryId, Long userId, ConversationSession session) {
         LocalDateTime now = clock.get();
@@ -145,7 +169,7 @@ public class ConversationTaskStateService {
                                        Function<String, String> intentName) {
         if (!enabled) return Optional.empty();
         List<ConversationSession> stack = stack(factoryId, userId);
-        Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent);
+        Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent, intentName);
         if (target.isEmpty()) return Optional.empty();
         ConversationSession session = target.get();
         // 同一时刻只留一个在问的任务 (与 startParameterCollection 同口径); 挂起的不受影响

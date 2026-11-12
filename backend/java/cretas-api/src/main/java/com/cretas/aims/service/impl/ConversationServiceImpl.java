@@ -442,6 +442,9 @@ public class ConversationServiceImpl implements ConversationService {
     public int processExpiredSessions() {
         LocalDateTime expireTime = LocalDateTime.now().minusMinutes(timeoutMinutes);
         int count = sessionRepository.expireInactiveSessions(expireTime, LocalDateTime.now());
+        // 挂起的任务 (任务栈) 另有自己的期限 (INTENT-DISTILL-20261111 第二批)
+        count += sessionRepository.expireSuspendedSessions(LocalDateTime.now().minus(
+                com.cretas.aims.service.execution.ConversationTaskStateService.SUSPENDED_MAX_AGE), LocalDateTime.now());
         if (count > 0) {
             log.info("处理过期会话: count={}", count);
         }

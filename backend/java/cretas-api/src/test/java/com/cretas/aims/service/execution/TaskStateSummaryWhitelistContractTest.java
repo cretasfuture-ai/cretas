@@ -107,15 +107,34 @@ class TaskStateSummaryWhitelistContractTest {
             case "查库存" -> Optional.of("MATERIAL_INVENTORY_QUERY");
             default -> Optional.empty();
         };
-        assertThat(TaskContinuationRule.resumeTarget("报工", stack, phrases)).contains(report);
-        assertThat(TaskContinuationRule.resumeTarget("好了，继续报工", stack, phrases)).contains(report);
-        assertThat(TaskContinuationRule.resumeTarget("继续", stack, phrases)).contains(receive);
-        assertThat(TaskContinuationRule.resumeTarget("接着刚才的吧", stack, phrases)).contains(receive);
-        // 说的是栈里没有的事 / 不带恢复说法的别的话 → 不恢复
-        assertThat(TaskContinuationRule.resumeTarget("继续查库存", stack, phrases)).isEmpty();
-        assertThat(TaskContinuationRule.resumeTarget("继续看看今天的订单", stack, phrases)).isEmpty();
-        assertThat(TaskContinuationRule.resumeTarget("今天的订单", stack, phrases)).isEmpty();
-        assertThat(TaskContinuationRule.resumeTarget("继续", List.of(), phrases)).isEmpty();
+        java.util.function.Function<String, String> names = code -> switch (code) {
+            case "PROCESSING_BATCH_COMPLETE" -> "完成工序";
+            case "MATERIAL_RECEIVE" -> "原料入库";
+            default -> null;
+        };
+        // 恢复说法 + 只剩虚词 → 栈顶
+        assertThat(TaskContinuationRule.resumeTarget("继续", stack, phrases, names)).contains(receive);
+        assertThat(TaskContinuationRule.resumeTarget("接着刚才的吧", stack, phrases, names)).contains(receive);
+        // 恢复说法 + 栈里任务的名称 (整句相等) 或短语表指向它 → 那个任务
+        assertThat(TaskContinuationRule.resumeTarget("好了，继续完成工序", stack, phrases, names)).contains(report);
+        assertThat(TaskContinuationRule.resumeTarget("回到原料入库吧", stack, phrases, names)).contains(receive);
+        assertThat(TaskContinuationRule.resumeTarget("继续报工", stack, phrases, names)).contains(report);
+        // N1: 只说意图短语 / 名称, 没有恢复说法 → 不恢复 (那是一次新请求)
+        assertThat(TaskContinuationRule.resumeTarget("报工", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("完成工序", stack, phrases, names)).isEmpty();
+        // S1: 顺带了值 / 编号 → 不恢复, 免得值被吞
+        assertThat(TaskContinuationRule.resumeTarget("继续完成工序任务1830", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("继续报工B-1827", stack, phrases, names)).isEmpty();
+        // S1: 否定 → 不恢复
+        assertThat(TaskContinuationRule.resumeTarget("继续？算了别报工了", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("回到刚才的，不要了", stack, phrases, names)).isEmpty();
+        // 说的是栈里没有的事 / 太长 / 不带恢复说法的别的话 → 不恢复
+        assertThat(TaskContinuationRule.resumeTarget("继续查库存", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("继续看看今天所有车间的订单情况", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("今天的订单", stack, phrases, names)).isEmpty();
+        assertThat(TaskContinuationRule.resumeTarget("继续", List.of(), phrases, names)).isEmpty();
+        // 「回头」不是恢复说法
+        assertThat(TaskContinuationRule.resumeTarget("回头再报工", stack, phrases, names)).isEmpty();
     }
 
     private static ConversationSession session(String intent, Map<String, String> collected) {

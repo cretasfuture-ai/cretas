@@ -109,3 +109,40 @@ def test_request_body_only_adds_an_optional_field():
     base = {"query": "报工", "factoryId": "F002", "userId": "1", "role": "operator", "businessType": "FACTORY"}
     assert IntentMatchRequest.model_validate(base).taskState is None
     assert IntentMatchRequest.model_validate({**base, "taskState": STATE}).taskState == STATE
+
+
+# ---------------- N3: 任务状态是独立字段, 不算最近对话 ----------------
+
+def test_task_state_reaches_decision_prompts_but_not_history_count_or_legacy():
+    import asyncio
+    from tests.test_ai_decision_layer import CFG, FakeDecision, ROWS, _orch
+    from ai import registry
+
+    registry.set_registry(registry.RegistrySnapshot())
+    dec = FakeDecision(["CLOCK_OUT"], {"CLOCK_OUT": 0.95})
+    res = asyncio.run(_orch(dec).match(
+        query="好了", factoryId="F006", businessType="FACTORY", userId="u", role="operator",
+        visible_intents=ROWS, history=[], min_confidence=0.7, enable_llm=True, task_state=STATE))
+    # 两个决策提示词都看到了任务状态 (清洗后渲染的那一条)
+    assert [stage for stage, _ in dec.seen_history] == ["shortlist", "choose"]
+    for _, seen in dec.seen_history:
+        assert [t["role"] for t in seen] == [decision.TASK_STATE_ROLE]
+        assert "PROCESSING_BATCH_COMPLETE" in seen[0]["content"]
+    # 最近对话轮数不被任务状态算进去
+    assert res.timingMs.get("historyTurns") == 0
+    assert res.timingMs.get("taskState") == 1
+    assert CFG is not None
+
+
+def test_without_task_state_decision_prompts_are_unchanged():
+    import asyncio
+    from tests.test_ai_decision_layer import FakeDecision, ROWS, _orch
+    from ai import registry
+
+    registry.set_registry(registry.RegistrySnapshot())
+    dec = FakeDecision(["CLOCK_OUT"], {"CLOCK_OUT": 0.95})
+    res = asyncio.run(_orch(dec).match(
+        query="好了", factoryId="F006", businessType="FACTORY", userId="u", role="operator",
+        visible_intents=ROWS, history=[], min_confidence=0.7, enable_llm=True))
+    assert dec.seen_history == [("shortlist", []), ("choose", [])]
+    assert "taskState" not in (res.timingMs or {})

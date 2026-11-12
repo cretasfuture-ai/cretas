@@ -8,3 +8,7 @@
 --       WHERE status = 'SUSPENDED';
 ALTER TABLE IF EXISTS conversation_sessions
     ADD COLUMN IF NOT EXISTS task_state_json TEXT;
+
+-- 乐观锁版本号 (终审 S3): 同一会话的并发请求整行保存时, 后到的旧副本不能覆盖先到的结果。已有行补 0。
+ALTER TABLE IF EXISTS conversation_sessions
+    ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;

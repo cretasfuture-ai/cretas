@@ -520,6 +520,11 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 任务状态 (终审 S1): 这一轮开始时请求点名的会话是不是正在问参数的任务。是 → 本轮不做恢复
+        // (同一句话既打断又恢复 = 原地吞话, 「完成工序任务1830」的 1830 会丢)。
+        boolean openTaskAtStart = taskStateService != null && taskStateService.isEnabled()
+                && taskStateService.hasOpenTask(factoryId, userId, request.getSessionId());
+
         // Parameter-filling continuations stay in Java when the semantic-first
         // restaurant path is disabled or the request is an operational write.
         if (!factoryPackConstrained
@@ -531,8 +536,9 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 0.27 任务状态: 没有正在问的任务时, 「继续报工」「报工」回到被挂起的那个 (与 SSE 同一条规则, 只找回参数、不执行)
-        if (!factoryPackConstrained) {
+        // 0.27 任务状态: 没有正在问的任务时, 「继续报工」「接着刚才的」回到被挂起的那个
+        //      (与 SSE 同一条规则, 只找回参数、不执行)。本轮刚打断过任务 / 否定说法 (别报工了) 不恢复。
+        if (!factoryPackConstrained && !openTaskAtStart && !negationVetoWrite) {
             IntentExecuteResponse resumed = handleTaskResume(factoryId, request, userId);
             if (resumed != null) {
                 return resumed;
@@ -1470,6 +1476,12 @@ public class IntentExecutionOrchestrator {
         try {
             Optional<ConversationSession> pending = conversationService.getSession(
                     factoryId, userId, request.getSessionId());
+            // 终审 B1: 请求带的是一个已挂起的任务 (Web 打断后仍带旧 sessionId) —— 不能交给 continueConversation
+            // (canContinue=false → 「对话状态异常」, 恢复那一步也走不到)。交回正常流程: 0.27 恢复 / 正常识别。
+            if (pending.isPresent()
+                    && pending.get().getStatus() == ConversationSession.SessionStatus.SUSPENDED) {
+                return null;
+            }
             if (pending.isPresent()
                     && SupplierComparisonReadIntent.CODE.equals(pending.get().getKnownIntentCode())) {
                 AIIntentConfig supplier = AIIntentConfig.builder()

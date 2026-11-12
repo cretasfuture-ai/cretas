@@ -441,13 +441,17 @@ public class SseStreamingService {
             // → 确认按钮 (不执行)。在早期问题类型检测之前 —— 否则「好了」会被当闲聊流式回复;
             // 显式意图码 (点了按钮回来) 已在上面处理, 不会再进这里。能力包受限路由与餐饮租户不走。
             // 2026-10-06 缺参续轮在它前面: 上一轮刚问了「请提供工序任务ID」, 「1827」是在回答那个问题。
+            // 任务状态 (终审 S1): 这一轮开始时有没有正在问参数的任务。有 → 这一轮要么回答它、要么打断它,
+            // 不在同一轮里再恢复 (同一句话既打断又恢复 = 原地吞话)。
+            boolean openTaskAtStart = !factoryPackConstrained
+                    && openSlotSession(factoryId, userId, request).isPresent();
             if (!factoryPackConstrained
                     && streamSlotContinuation(emitter, factoryId, request, userId, userRole, startTime,
                             factoryPackRoute)) {
                 return;
             }
-            // 任务状态: 没有正在问的任务时, 「继续报工」「报工」回到被挂起的那个 (只找回参数、接着问, 不执行)
-            if (!factoryPackConstrained && trustedFactoryActor
+            // 任务状态: 没有正在问的任务时, 「继续报工」「接着刚才的」回到被挂起的那个 (只找回参数、接着问, 不执行)
+            if (!factoryPackConstrained && trustedFactoryActor && !openTaskAtStart
                     && streamTaskResume(emitter, factoryId, request, userId, startTime)) {
                 return;
             }
@@ -1227,7 +1231,13 @@ public class SseStreamingService {
             log.info("[SSE][SlotContinuation] 这句不像在回答缺参问题, 打断后正常识别: session={}, pending={}",
                     slotSessionId, pending.stream().map(p -> p.getName()).toList());
             if (taskStateService != null) {
-                taskStateService.interrupt(factoryId, userId, session);
+                try {
+                    taskStateService.interrupt(factoryId, userId, session);
+                } catch (RuntimeException concurrent) {
+                    // 乐观锁 (终审 S3): 同一会话的并发请求刚改过这一行 —— 不拿旧副本覆盖, 这句照常当新话识别
+                    log.warn("[SSE][SlotContinuation] 挂起时会话已被并发修改, 不覆盖: session={}, error={}",
+                            slotSessionId, concurrent.getMessage());
+                }
             } else {
                 conversationService.cancelConversation(factoryId, userId, slotSessionId);
             }
