@@ -80,14 +80,35 @@ class SalesOrderStatusLockPostgresContractTest {
         factory = "SOL-" + UUID.randomUUID().toString().substring(0, 8);
         orderId = UUID.randomUUID().toString();
         tx().executeWithoutResult(s -> {
+            // created_by 有外键指向 users: 先建工厂和真实用户, 不能写死 id=1
+            com.cretas.aims.entity.Factory f = new com.cretas.aims.entity.Factory();
+            f.setId(factory);
+            f.setName(factory);
+            em.persist(f);
+            com.cretas.aims.entity.User user = new com.cretas.aims.entity.User();
+            user.setFactoryId(factory);
+            user.setUsername("sol-" + UUID.randomUUID());
+            user.setPasswordHash("unused-test-fixture");
+            user.setRoleCode("factory_super_admin");
+            em.persist(user);
+            em.flush();
+            com.cretas.aims.entity.Customer customer = new com.cretas.aims.entity.Customer();
+            customer.setId("C-" + orderId);
+            customer.setFactoryId(factory);
+            customer.setCode("C-" + orderId.substring(0, 8));
+            customer.setCustomerCode("C-" + orderId.substring(0, 8));
+            customer.setName("sol customer");
+            customer.setCreatedBy(user.getId());
+            em.persist(customer);
+            em.flush();
             SalesOrder so = new SalesOrder();
             so.setId(orderId);
             so.setFactoryId(factory);
             so.setOrderNumber("SO-" + orderId.substring(0, 8));
-            so.setCustomerId("C-1");
+            so.setCustomerId(customer.getId());
             so.setOrderDate(LocalDate.now());
             so.setStatus(SalesOrderStatus.FINANCE_APPROVED);
-            so.setCreatedBy(1L);
+            so.setCreatedBy(user.getId());
             em.persist(so);
         });
     }
@@ -115,7 +136,7 @@ class SalesOrderStatusLockPostgresContractTest {
             // 创建计划的事务先把销售单读进持久化上下文 (旧状态), 再去拿锁读状态
             SalesOrder stale = orders.findById(orderId).orElseThrow();
             creatorStarted.countDown();
-            String locked = orders.lockStatusForUpdate(orderId).orElseThrow();
+            String locked = orders.lockStatusForUpdate(orderId, factory).orElseThrow();
             assertThat(stale.getStatus()).as("持久化上下文里的旧副本不能当作锁内真值").isNotNull();
             return locked;
         }), pool);
@@ -134,7 +155,7 @@ class SalesOrderStatusLockPostgresContractTest {
         CountDownLatch creatorHoldsLock = new CountDownLatch(1);
         CountDownLatch creatorMayCommit = new CountDownLatch(1);
         CompletableFuture<String> creator = CompletableFuture.supplyAsync(() -> tx().execute(s -> {
-            String status = orders.lockStatusForUpdate(orderId).orElseThrow();
+            String status = orders.lockStatusForUpdate(orderId, factory).orElseThrow();
             creatorHoldsLock.countDown();
             await(creatorMayCommit);
             return status;
@@ -153,13 +174,19 @@ class SalesOrderStatusLockPostgresContractTest {
         canceller.get(10, TimeUnit.SECONDS);
         assertThat(committedStatus()).isEqualTo("CANCELLED");
         // 取消提交之后再来锁内读: 看到的是已取消
-        String after = tx().execute(s -> orders.lockStatusForUpdate(orderId).orElseThrow());
+        String after = tx().execute(s -> orders.lockStatusForUpdate(orderId, factory).orElseThrow());
         assertThat(after).isEqualTo("CANCELLED");
     }
 
     @Test
+    void anotherFactorysOrderIsNeverLockedOrRead() {
+        java.util.Optional<String> foreign = tx().execute(s -> orders.lockStatusForUpdate(orderId, "OTHER-" + factory));
+        assertThat(foreign).isEmpty();
+    }
+
+    @Test
     void aMissingOrderReadsAsEmptyNotAsApproved() {
-        java.util.Optional<String> none = tx().execute(s -> orders.lockStatusForUpdate("no-such-order"));
+        java.util.Optional<String> none = tx().execute(s -> orders.lockStatusForUpdate("no-such-order", factory));
         assertThat(none).isEmpty();
     }
 

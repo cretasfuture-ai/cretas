@@ -158,7 +158,7 @@ public class ApprovedSalesOrderCancellation {
             }
             if (!purchasesLeftLive.isEmpty()) {
                 sb.append("；缺料采购单 ").append(String.join("、", purchasesLeftLive))
-                        .append(" 已审批或已到货, 没有自动取消，请采购自行处理");
+                        .append(" 没有自动取消（只自动取消草稿和已提交的），请采购自行处理");
             }
             return sb.toString();
         }

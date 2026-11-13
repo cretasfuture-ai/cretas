@@ -1181,6 +1181,13 @@ def _factory_switch_thresholds(description: str):
                 skipped.append('允许多收的比例:' + ans)
     return (out, skipped)
 
+def _merge_switch_thresholds(model_thresholds, switch_items):
+    """模型输出的阈值 + 用户回答解析出的开关。开关 key 一律先从模型输出里剔掉, 再写入用户回答的值:
+    用户选「按系统默认」/没问到时, 模型自己编的开关值不能漏进来。"""
+    switch_keys = {key for _pat, key, _opts in _FACTORY_SWITCHES} | {'production.receipt.over_receive_rate'}
+    kept = [t for t in (model_thresholds or []) if not (isinstance(t, dict) and t.get('key') in switch_keys)]
+    return kept + list(switch_items or [])
+
 def _validate_factory_init(obj: object) -> str:
     """返回空串表示合规, 否则返回**具体**的不合规原因。
 
@@ -1409,9 +1416,9 @@ async def generate_configuration(request: FactoryInitRequest):
         if _bal_ans and '默认' not in _bal_ans and _bal_ans not in ('没有', '不用') and 'materialBalanceWarnPct' not in policy:
             parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', ['物料平衡提醒线:' + _bal_ans], '这条提醒线没对上「先黄后红、两个百分数」', '先说提醒线再说报警线，像「差5%提醒、差15%报警」；也可以建完厂在工厂配置里补')
         switch_items, switch_skipped = _factory_switch_thresholds(request.factory_description)
-        if switch_items:
-            _keys = {t['key'] for t in switch_items}
-            parsed['suggestedData']['thresholds'] = [t for t in (parsed['suggestedData'].get('thresholds') or []) if not (isinstance(t, dict) and t.get('key') in _keys)] + switch_items
+        _merged = _merge_switch_thresholds(parsed['suggestedData'].get('thresholds'), switch_items)
+        if _merged or 'thresholds' in parsed['suggestedData']:
+            parsed['suggestedData']['thresholds'] = _merged
         logger.info('Factory init: 厂规开关(问到的)=%s', switch_items)
         if switch_skipped:
             parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('模块开关', switch_skipped, '这条多收比例没对上「已选按比例多收」或不是一个 0-100 的百分数', '先在上一题选「多收不超过一定比例可以收」，再说像「5%」这样的比例；也可以建完厂在业务阈值里补')

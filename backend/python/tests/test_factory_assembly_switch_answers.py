@@ -85,3 +85,24 @@ def test_labels_and_option_texts_match_the_java_interview():
             assert f'"{prefix}"' in java, (label, prefix)
     assert '"允许多收的比例"' in java
     assert re.search(r'"按系统默认"', java)
+
+
+def test_model_invented_switch_values_never_leak_when_the_user_chose_the_default():
+    model = [{"key": "sales.order.cancel_after_approval", "value": "1"},
+             {"key": "production.receipt.over_receive_rate", "value": "0.5"},
+             {"key": "inventory.turnover.red", "value": "6"}]
+    # 用户没问到 / 选按系统默认: 开关 key 一个都不留, 其它阈值原样保留
+    assert g._merge_switch_thresholds(model, []) == [{"key": "inventory.turnover.red", "value": "6"}]
+    # 用户明确选了: 用户的值覆盖模型的
+    items, _ = g._factory_switch_thresholds("财务批准后的销售订单还能不能取消：不能取消，只能走驳回或退款\n")
+    merged = g._merge_switch_thresholds(model, items)
+    assert {"key": "sales.order.cancel_after_approval", "value": "0"} in merged
+    assert {"key": "sales.order.cancel_after_approval", "value": "1"} not in merged
+    assert {"key": "production.receipt.over_receive_rate", "value": "0.5"} not in merged
+    assert g._merge_switch_thresholds(None, []) == []
+
+
+def test_the_wiring_uses_the_merge_even_when_no_switch_was_answered():
+    import inspect
+    src = inspect.getsource(g.generate_configuration)
+    assert "_merge_switch_thresholds(parsed['suggestedData'].get('thresholds'), switch_items)" in src

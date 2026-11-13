@@ -2185,7 +2185,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 行不存在返回 null (调用方此前已按 id 读到过这张单, 视为状态未知而拦下)。
      */
     private SalesOrderStatus lockSalesOrderStatus(SalesOrder so) {
-        String locked = salesOrderRepository.lockStatusForUpdate(so.getId()).orElse(null);
+        String locked = salesOrderRepository.lockStatusForUpdate(so.getId(), so.getFactoryId()).orElse(null);
         if (locked == null) {
             return null;
         }
@@ -2256,7 +2256,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             deduped.subList(1, deduped.size()).stream()
                     .filter(id -> id != null && !id.isBlank())
                     .sorted()
-                    .forEach(id -> salesOrderRepository.lockStatusForUpdate(id));
+                    .forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
             for (int i = 1; i < deduped.size(); i++) {
                 String extraSoId = deduped.get(i);
                 if (extraSoId == null || extraSoId.isBlank()) continue;
@@ -9356,6 +9356,12 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         boolean belongsToCancelledOrder = viaSalesOrderId != null && factoryId.equals(plan.getFactoryId())
                 && viaSalesOrderId.equals(plan.getSourceOrderId());
         if (belongsToCancelledOrder) {
+            // 方法是 public, 不信任调用方: 计划的行范围改由销售单的行范围承担, 这里复核取消人看得到这张销售单
+            SalesOrder via = salesOrderRepository.findById(viaSalesOrderId)
+                    .filter(o -> factoryId.equals(o.getFactoryId()))
+                    .orElseThrow(() -> new BusinessException(403, "无权操作该生产计划")
+                            .withHint("关联的销售订单不存在或不属于该工厂"));
+            BusinessRowScope.requireOwner(businessRowScope, factoryId, via.getCreatedBy());
             log.info("随销售单取消计划, 行范围以销售单为准: factoryId={}, planId={}, SO={}, 操作人={}",
                     factoryId, planId, viaSalesOrderId, operatorId);
         } else {

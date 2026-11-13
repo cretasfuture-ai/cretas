@@ -259,7 +259,7 @@ class SalesOrderCancelTailContractTest {
         ShortageCaseActionService.DraftsCancelled r = svc.cancelDraftsForCancelledOrder(c, "客户撤单", BOSS_ACTOR);
 
         assertThat(r.cancelled()).containsExactly("PO-D", "PO-S");
-        assertThat(r.keptLive()).containsExactly("PO-A", "PO-P");      // 已审批 / 已部分到货: 有供应商承诺, 不自动撤
+        assertThat(r.keptLive()).containsExactly("PO-A（已审批）", "PO-P（部分到货）");   // 按实际状态说      // 已审批 / 已部分到货: 有供应商承诺, 不自动撤
         verify(purchase).cancelOrder(F, "P-DRAFT");
         verify(purchase).cancelOrder(F, "P-SUB");
         verify(purchase, never()).cancelOrder(F, "P-APP");
@@ -268,7 +268,7 @@ class SalesOrderCancelTailContractTest {
         ArgumentCaptor<ShortageCaseEvent> ev = ArgumentCaptor.forClass(ShortageCaseEvent.class);
         verify(events).save(ev.capture());
         assertThat(ev.getValue().getTriggerReason()).isEqualTo("PURCHASE_DRAFTS_CANCELLED_WITH_ORDER");
-        assertThat(ev.getValue().getDetail()).contains("客户撤单").contains("PO-D").contains("PO-S").contains("PO-A").contains("PO-P");
+        assertThat(ev.getValue().getDetail()).contains("客户撤单").contains("PO-D").contains("PO-S").contains("PO-A（已审批）").contains("PO-P（部分到货）").doesNotContain("已到货");
         assertThat(ev.getValue().getActorId()).isEqualTo(BOSS);
     }
 

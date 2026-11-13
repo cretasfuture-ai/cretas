@@ -263,7 +263,7 @@ public class ShortageCaseActionService {
                 purchaseService.cancelOrder(c.getFactoryId(), po.getId());
                 cancelled.add(label);
             } else {
-                keptLive.add(label);
+                keptLive.add(label + "（" + po.getStatus().getDisplayName() + "）");
             }
         }
         if (!cancelled.isEmpty() || !keptLive.isEmpty()) {
@@ -272,7 +272,7 @@ public class ShortageCaseActionService {
                 detail.append("；已一并取消未审批的缺料采购单 ").append(String.join("、", cancelled));
             }
             if (!keptLive.isEmpty()) {
-                detail.append("；采购单 ").append(String.join("、", keptLive)).append(" 已审批或已到货, 未自动取消, 需采购自行处理");
+                detail.append("；采购单 ").append(String.join("、", keptLive)).append(" 未自动取消（只自动取消草稿和已提交的; 走审批流或已审批以后的单有供应商承诺）, 需采购自行处理");
             }
             event(c, c.getStage(), c.getStage(), "PURCHASE_DRAFTS_CANCELLED_WITH_ORDER", detail.toString(), actor);
         }

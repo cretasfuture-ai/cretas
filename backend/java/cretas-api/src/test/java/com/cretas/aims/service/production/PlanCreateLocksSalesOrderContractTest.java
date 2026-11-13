@@ -71,7 +71,7 @@ class PlanCreateLocksSalesOrderContractTest {
     @Test
     void theOrderIsLockedFirstAndTheLockedStatusDecides() {
         // 锁内读到的是别的事务刚提交的 CANCELLED
-        when(orders.lockStatusForUpdate("SO-1")).thenReturn(Optional.of("CANCELLED"));
+        when(orders.lockStatusForUpdate("SO-1", F)).thenReturn(Optional.of("CANCELLED"));
 
         assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(service, "validateAndEnrichSalesOrderSource", F, request()))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
@@ -80,19 +80,19 @@ class PlanCreateLocksSalesOrderContractTest {
                 });
         InOrder o = inOrder(orders);
         o.verify(orders).findById("SO-1");
-        o.verify(orders).lockStatusForUpdate("SO-1");
+        o.verify(orders).lockStatusForUpdate("SO-1", F);
     }
 
     @Test
     void anApprovedOrderPassesWhenTheLockedStatusIsStillApproved() {
-        when(orders.lockStatusForUpdate("SO-1")).thenReturn(Optional.of("FINANCE_APPROVED"));
+        when(orders.lockStatusForUpdate("SO-1", F)).thenReturn(Optional.of("FINANCE_APPROVED"));
         // 到「快照归属合同」之前的状态校验应通过; 之后的步骤与本测试无关, 只关心没有 409 无法排产
         try {
             ReflectionTestUtils.invokeMethod(service, "validateAndEnrichSalesOrderSource", F, request());
         } catch (BusinessException e) {
             assertThat(e.getMessage()).doesNotContain("无法排产");
         }
-        org.mockito.Mockito.verify(orders).lockStatusForUpdate("SO-1");
+        org.mockito.Mockito.verify(orders).lockStatusForUpdate("SO-1", F);
     }
 
     @Test
@@ -100,7 +100,7 @@ class PlanCreateLocksSalesOrderContractTest {
         SalesOrderItem item = new SalesOrderItem();
         item.setSalesOrderId("SO-1");
         when(items.findById(7L)).thenReturn(Optional.of(item));
-        when(orders.lockStatusForUpdate("SO-1")).thenReturn(Optional.of("CANCELLED"));
+        when(orders.lockStatusForUpdate("SO-1", F)).thenReturn(Optional.of("CANCELLED"));
         CreateProductionPlanRequest r = request();
         r.setSourceOrderId(null);
         r.setSourceOrderItemId("7");
@@ -111,7 +111,7 @@ class PlanCreateLocksSalesOrderContractTest {
 
     @Test
     void aRowThatVanishedUnderTheLockIsRefusedNotTreatedAsApproved() {
-        when(orders.lockStatusForUpdate("SO-1")).thenReturn(Optional.empty());
+        when(orders.lockStatusForUpdate("SO-1", F)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(service, "validateAndEnrichSalesOrderSource", F, request()))
                 .isInstanceOf(BusinessException.class);

@@ -44,6 +44,7 @@ class PlanCancelViaSalesOrderScopeContractTest {
     private final ProductionPlanRepository plans = mock(ProductionPlanRepository.class);
     private final ProductionBatchRepository batches = mock(ProductionBatchRepository.class);
     private final BusinessRowScope scope = mock(BusinessRowScope.class);
+    private final SalesOrderRepository salesOrders = mock(SalesOrderRepository.class);
     private ProductionPlanServiceImpl service;
 
     @BeforeEach
@@ -52,13 +53,23 @@ class PlanCancelViaSalesOrderScopeContractTest {
                 mock(MaterialConsumptionRepository.class), mock(ProductionPlanBatchUsageRepository.class),
                 mock(ProductTypeRepository.class), mock(ProductionPlanMapper.class), mock(ConversionRepository.class),
                 mock(SchedulingService.class), mock(com.cretas.aims.repository.ProductionLineRepository.class),
-                mock(UserRepository.class), mock(ExcelUtil.class), mock(SalesOrderRepository.class),
+                mock(UserRepository.class), mock(ExcelUtil.class), salesOrders,
                 mock(SalesOrderItemRepository.class));
         ReflectionTestUtils.setField(service, "businessRowScope", scope);
         // 取消人只看得到自己 (id=5) 创建的行
         when(scope.creatorIds(F)).thenReturn(List.of(5L));
+        lenient().when(salesOrders.findById("SO-1")).thenReturn(Optional.of(order("SO-1", F, 5L)));   // 取消人自己的单
+        lenient().when(salesOrders.findById("SO-FOREIGN-OWNER")).thenReturn(Optional.of(order("SO-FOREIGN-OWNER", F, 99L)));
         lenient().when(plans.save(any(ProductionPlan.class))).thenAnswer(i -> i.getArgument(0));
         lenient().when(batches.findByFactoryIdAndProductionPlanId(any(), any())).thenReturn(Collections.emptyList());
+    }
+
+    private static com.cretas.aims.entity.inventory.SalesOrder order(String id, String factory, Long createdBy) {
+        com.cretas.aims.entity.inventory.SalesOrder o = new com.cretas.aims.entity.inventory.SalesOrder();
+        o.setId(id);
+        o.setFactoryId(factory);
+        o.setCreatedBy(createdBy);
+        return o;
     }
 
     private ProductionPlan plan(String id, String sourceOrderId, Long createdBy) {
@@ -90,6 +101,16 @@ class PlanCancelViaSalesOrderScopeContractTest {
         service.cancelProductionPlan(F, "PP-1", "客户撤单", 5L, "SO-1");
 
         assertThat(p.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+    }
+
+    @Test
+    void theOrderItselfMustBeInTheCancellersRowScopeBecausePlanScopeIsTakenOverByIt() {
+        // 方法是 public, 不信任调用方: 订单不在取消人范围内 (别人的单) 时, 带订单 id 也放不过去
+        ProductionPlan p = plan("PP-4", "SO-FOREIGN-OWNER", 99L);
+
+        assertThatThrownBy(() -> service.cancelProductionPlan(F, "PP-4", "客户撤单", 5L, "SO-FOREIGN-OWNER"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
+        assertThat(p.getStatus()).isEqualTo(ProductionPlanStatus.PENDING);
     }
 
     @Test
