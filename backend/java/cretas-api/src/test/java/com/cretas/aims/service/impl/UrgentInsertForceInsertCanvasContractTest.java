@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -736,6 +737,40 @@ class UrgentInsertForceInsertCanvasContractTest {
 
         assertThat(plan.getApprovalComment()).isEqualTo("同意");
         verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(APPROVER));
+    }
+
+    @Test
+    void directSelfApprovalIsRecordedStructurallyOnThePlanAndInTheDecisionAuditLog() {
+        // 红线 4 直接入口 (#1686): 判据是结构化字段, 不是意见前缀; 计划落库 + 决策日志都要 self_approved=true + 原因
+        ProductionPlan plan = pendingCanvasPlan("P-21S", "INST-21S");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-21S")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+
+        service.approveForceInsert(F, "P-21S", SUBMITTER, true, "  夜班只有我在  ");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("夜班只有我在");
+        verify(plans, atLeastOnce()).save(plan);
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-21S"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "夜班只有我在"), eq(SUBMITTER), any(),
+                eq(true), eq("夜班只有我在"));
+    }
+
+    @Test
+    void directApprovalByAnotherPersonIsNotStructurallySelfApprovedEvenWithTheSwitchOn() {
+        // 阴性对照: 开关开着, 但审批人不是提交人 ⇒ self_approved=false、原因为空
+        ProductionPlan plan = pendingCanvasPlan("P-22S", "INST-22S");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-22S")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+
+        service.approveForceInsert(F, "P-22S", APPROVER, true, "同意");
+
+        assertThat(plan.isSelfApproved()).isFalse();
+        assertThat(plan.getSelfApprovalReason()).isNull();
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-22S"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("同意"), eq(APPROVER), any(), eq(false), isNull());
     }
 
     @Test
