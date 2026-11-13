@@ -34,6 +34,7 @@ public class CostDeviationCaseWriter {
     private final ShortageCaseEventRepository eventRepository;
     private final CostDeviationCaseDetailRepository detailRepository;
     private final UserRepository userRepository;
+    private final CostDeviationOwnerResolver ownerResolver;
 
     /** UNKNOWN 不进这里: 算不出既不开实例, 也不改已开实例的读数。 */
     @Transactional
@@ -80,8 +81,9 @@ public class CostDeviationCaseWriter {
         c.setSourceType(r.sourceType());
         c.setSourceId(r.planId());
         c.setStage(ShortageCase.Stage.DETECTED);
-        c.setOwnerRole(r.sourceType() == ShortageCase.SourceType.COST_VARIANCE
-                ? ROLE_FINANCE : ShortageCaseService.ROLE_PRODUCTION);
+        CostDeviationOwnerResolver.Owner owner = ownerResolver.resolve(factoryId, r.sourceType());
+        c.setOwnerRole(owner.role());
+        c.setOwnerUserId(owner.userId());
         c.setGapLineCount(r.deviatedCount());
         c.setInputFingerprint(r.fingerprint());
         c.setLastRefreshedAt(now);
@@ -101,6 +103,9 @@ public class CostDeviationCaseWriter {
         d.setSummary(r.summary());
         detailRepository.save(d);
         event(saved, ShortageCaseEvent.EventType.CREATED, saved.getStage(), trigger, r.summary(), null);
+        event(saved, ShortageCaseEvent.EventType.NOTE, saved.getStage(), "OWNER_ASSIGNED_BY_CONFIG",
+                "按工厂配置派给 " + (owner.userId() != null ? "指定负责人 (用户 " + owner.userId() + ")" : "岗位 " + owner.role())
+                        + " [" + owner.source() + "]", null);
     }
 
     @Transactional
