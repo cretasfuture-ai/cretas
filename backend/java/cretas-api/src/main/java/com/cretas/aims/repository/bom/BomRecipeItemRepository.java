@@ -100,6 +100,13 @@ public interface BomRecipeItemRepository extends JpaRepository<BomRecipeItem, Lo
     @Query("SELECT i FROM BomRecipeItem i WHERE i.id = :id AND i.deletedAt IS NULL")
     Optional<BomRecipeItem> findByIdForUpdate(@Param("id") Long id);
 
+    /**
+     * 只取明细行所属配方 id (标量, 不把行读进持久化上下文) —— 锁序「整族配方头 → 明细行」要先知道锁哪一族
+     * ({@link com.cretas.aims.service.bom.BomRecipeHeadLocks})。
+     */
+    @Query("SELECT i.recipeId FROM BomRecipeItem i WHERE i.id = :id AND i.deletedAt IS NULL")
+    Optional<String> findRecipeIdById(@Param("id") Long id);
+
     /** 删除某 recipe 的所有 items (clone 前清空, 或 admin tooling). */
     void deleteByRecipeId(String recipeId);
 
