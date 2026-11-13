@@ -9,7 +9,8 @@ const { T, reload } = useToday();
 onMounted(() => { void reload(); });
 watch(() => [auth.factoryId, auth.user?.id], () => { void reload(); });
 
-const day = computed(() => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10));
+// 北京时间当天（不用 UTC 截断：noUtcDayTruncation 闸）
+const day = computed(() => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()));
 const doBlocks = computed(() => [T.s.approve, T.s.receiving, T.s.unordered, T.s.salesOrders]);
 const watchBlocks = computed(() => [T.s.risk, T.s.expiry]);
 </script>
