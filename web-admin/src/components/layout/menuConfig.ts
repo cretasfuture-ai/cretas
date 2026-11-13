@@ -11,6 +11,8 @@ export interface MenuItem {
   allowedFactoryTypes?: string[];
   /** Require a concrete non-platform factory context before showing this item. */
   requiresFactoryContext?: boolean;
+  /** 报废审批资格 (disposal:approve): 菜单按后端 approval-permission 判, 不按岗位名。 */
+  requiresDisposalApproval?: boolean;
   children?: MenuItem[];
   groupLabel?: string;
   /** Backend-authoritative feature gate for platform-only assembly surfaces. */
@@ -53,7 +55,7 @@ export const financeManagerMenu: MenuItem[] = [
   // 工厂财务只保留本职工作台。销售/采购审批统一在个人 OA，财务菜单不再重复挂审批索引。
   { path: '/finance/ar-ap', title: '应收应付', icon: 'Wallet', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/adjustments', title: '调整审批', icon: 'Checked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
-  { path: '/finance/disposal-approvals', title: '报废审批', icon: 'DocumentChecked', module: 'finance', roles: ['finance_manager', 'factory_super_admin', 'platform_admin'], hideForFactoryTypes: ['RESTAURANT'] },
+  { path: '/finance/disposal-approvals', title: '报废审批', icon: 'DocumentChecked', module: 'finance', requiresDisposalApproval: true, hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/invoices?status=REQUESTED', title: '销售开票', icon: 'Tickets', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/purchase-invoices', title: '采购收票', icon: 'DocumentChecked', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
   { path: '/finance/payments', title: '收款管理', icon: 'Money', module: 'finance', hideForFactoryTypes: ['RESTAURANT'] },
@@ -450,7 +452,7 @@ const rawMenuConfig: MenuItem[] = [
     children: [
       { path: '/finance/adjustments', title: '调整审批', icon: '', module: 'finance', groupLabel: '审核队列' },
       { path: '/finance/disposal-approvals', title: '报废审批', icon: '', module: 'finance',
-        roles: ['finance_manager', 'factory_super_admin', 'platform_admin'] },
+        requiresDisposalApproval: true },
       { path: '/finance/costs', title: '财务概览', icon: '', module: 'finance', groupLabel: '财务核算' },
       { path: '/finance/three-statements', title: '财务报表', icon: '', module: 'finance' },
       { path: '/finance/reports', title: '财务分析(Excel)', icon: '', module: 'finance' },

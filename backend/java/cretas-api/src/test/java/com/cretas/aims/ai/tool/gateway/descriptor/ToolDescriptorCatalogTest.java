@@ -155,6 +155,11 @@ class ToolDescriptorCatalogTest {
         // listed (with the exact codes) in ai/tool/gated-data-declared.tsv, which GatedDataToolAiPathPermissionTest
         // checks against the real declarations.
         Map<String, Set<String>> s6Declared = s6DeclaredCodes();
+        // 2026-11-13: order_approval 源码 getRequiredPermissions() 声明 approval_quality_disposition:approve
+        // (#1580 纪律排查加的审批权限门; #1625 已把清册 yaml 补齐, ToolDescriptorInventoryDriftTest 逐字段一致)。
+        // 夜间全量自 11-10 起因这里仍要求 LEGACY 工具权限为空而红。显式登记精确权限码, 不放宽「其它 LEGACY 必须为空」。
+        Map<String, Set<String>> legacyDeclaredAfterDisciplineAudit = Map.of(
+                "order_approval", Set.of("approval_quality_disposition:approve"));
         assertThat(catalog.inventory().descriptors())
                 .filteredOn(entry -> entry.provenance() == DescriptorProvenance.LEGACY_INFERRED)
                 .allSatisfy(entry -> {
@@ -176,6 +181,9 @@ class ToolDescriptorCatalogTest {
                         assertThat(entry.requiredPermissions()).containsExactly("finance:read_write");
                     } else if (legacyToolsWithPriceViewPermission.contains(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactly("procurement:price:view");
+                    } else if (legacyDeclaredAfterDisciplineAudit.containsKey(entry.toolName())) {
+                        assertThat(entry.requiredPermissions()).containsExactlyInAnyOrderElementsOf(
+                                legacyDeclaredAfterDisciplineAudit.get(entry.toolName()));
                     } else if (s6Declared.containsKey(entry.toolName())) {
                         assertThat(entry.requiredPermissions()).containsExactlyInAnyOrderElementsOf(
                                 s6Declared.get(entry.toolName()));

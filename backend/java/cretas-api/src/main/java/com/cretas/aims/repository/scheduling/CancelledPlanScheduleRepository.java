@@ -34,7 +34,7 @@ public interface CancelledPlanScheduleRepository extends Repository<LineSchedule
      */
     @Modifying(flushAutomatically = true)
     @Query("UPDATE LineSchedule ls SET ls.status = :cancelled, ls.adjustmentReason = :reason, "
-            + "ls.lastAdjustmentTime = :now "
+            + "ls.lastAdjustmentTime = :now, ls.version = ls.version + 1 "
             + "WHERE " + CancelledPlanScheduleFilter.NOT_STARTED + " "
             + "AND ls.planId IN (SELECT sp.id FROM SchedulingPlan sp WHERE sp.factoryId = :factoryId) "
             + "AND " + OWNED_BY_PLAN + " "

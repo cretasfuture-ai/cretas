@@ -65,6 +65,11 @@ public class LineScheduleServiceImpl implements LineScheduleService {
     @Transactional
     public LineScheduleDTO updateSchedule(String factoryId, String scheduleId, UpdateScheduleRequest request) {
         LineSchedule schedule = findScopedSchedule(factoryId, scheduleId);
+        // 客户端回传了它读到的版本号: 与库里不一致 = 它读完之后别人改过, 拒绝 (⛔ 不覆盖、不自动重试)。
+        // 抛与 Hibernate 版本冲突同一个异常, 统一由 GlobalExceptionHandler 转成 409「排程已被别人修改，请刷新后再改」。
+        if (request.getVersion() != null && !request.getVersion().equals(schedule.getVersion())) {
+            throw new org.springframework.orm.ObjectOptimisticLockingFailureException(LineSchedule.class, scheduleId);
+        }
 
         if (request.getSequenceOrder() != null) {
             schedule.setSequenceOrder(request.getSequenceOrder());
@@ -82,7 +87,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             schedule.setDelayReason(request.getNotes());
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -117,7 +122,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             planRepository.markInProgressIfConfirmed(factoryId, schedule.getPlan().getId());
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -143,7 +148,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             }
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
         return enrichScheduleDTO(schedule);
     }
 
@@ -231,7 +236,7 @@ public class LineScheduleServiceImpl implements LineScheduleService {
             log.error("效率计算失败: scheduleId={}", scheduleId, e);
         }
 
-        schedule = scheduleRepository.save(schedule);
+        schedule = scheduleRepository.saveAndFlush(schedule); // 当场刷库: 版本冲突在这里抛, 返回的版本号是新的
 
         // ========== 紧急状态监控 (基于完成概率) ==========
         try {

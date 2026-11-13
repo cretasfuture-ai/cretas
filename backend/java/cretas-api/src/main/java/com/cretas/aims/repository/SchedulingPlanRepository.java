@@ -64,7 +64,7 @@ public interface SchedulingPlanRepository extends JpaRepository<SchedulingPlan, 
      * (枚举用绑定参数: JPQL 里写内部枚举的全限定字面量 Hibernate 解析不了。)
      */
     @Modifying(flushAutomatically = true)
-    @Query("UPDATE LineSchedule ls SET ls.status = :to, ls.adjustmentReason = :reason "
+    @Query("UPDATE LineSchedule ls SET ls.status = :to, ls.adjustmentReason = :reason, ls.version = ls.version + 1 "
             + "WHERE ls.planId = :planId AND ls.status = :from AND ls.actualStartTime IS NULL")
     int voidRowsNotStarted(@Param("planId") String planId, @Param("reason") String reason,
                            @Param("from") LineSchedule.ScheduleStatus from, @Param("to") LineSchedule.ScheduleStatus to);

@@ -177,6 +177,7 @@ export default function WHOutboundIssueScreen() {
                   placeholder={`最多可出 ${remainingQuantity} ${unit}`}
                   error={overLimit}
                   disabled={submitting}
+                  testID="wh-outbound-quantity"
                 />
                 <Text style={[styles.hint, overLimit && styles.hintError]}>
                   {overLimit

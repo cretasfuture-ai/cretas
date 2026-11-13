@@ -33,7 +33,7 @@ function mockCreateNavigator() {
 }
 jest.mock('@react-navigation/bottom-tabs', () => ({ createBottomTabNavigator: mockCreateNavigator }));
 jest.mock('@react-navigation/native-stack', () => ({ createNativeStackNavigator: mockCreateNavigator }));
-jest.mock('../../../hooks/useMyTodos', () => ({ useMyTodoCount: () => ({ count: 0 }) }));
+jest.mock('../../../hooks/useMyTodos', () => ({ useMyTodoEntry: () => ({ visible: true, count: 0 }) }));
 jest.mock('../../../navigation/OperatingReportStackNavigator', () => () => null);
 jest.mock('../../../navigation/AnalyticsReportStackNavigator', () => () => null);
 jest.mock('../../../navigation/OATodoStackNavigator', () => () => null);

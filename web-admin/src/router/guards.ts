@@ -323,6 +323,17 @@ export function setupRouterGuards(router: Router) {
       return;
     }
 
+    // 报废审批资格 (disposal:approve): 与后端 approve/reject 守卫同一份判断; 读不到按没有处理。
+    if (to.meta.requiresDisposalApproval === true) {
+      const { useDisposalApprovalStore } = await import('@/store/modules/disposalApproval');
+      const approval = useDisposalApprovalStore();
+      await approval.ensureLoaded(authStore.factoryId || '', String(authStore.user?.id ?? ''));
+      if (!approval.canApprove) {
+        next('/403');
+        return;
+      }
+    }
+
     // 检查角色权限（如果路由指定了 roles）
     const allowedRoles = to.meta.roles as string[] | undefined;
     if (allowedRoles && allowedRoles.length > 0) {

@@ -150,6 +150,8 @@ export interface LineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
 }
 
 export interface WorkerAssignment {
@@ -275,6 +277,8 @@ interface SchedulingWireLineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -319,6 +323,7 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     planNumber: wire.planNumber ?? null,
     taskTimeline: wire.taskTimeline ?? null,
     dailyAllocations: wire.dailyAllocations ?? null,
+    version: wire.version,
   };
 }
 
@@ -770,6 +775,8 @@ export function updateSchedule(
     plannedStartTime?: string;
     plannedEndTime?: string;
     sequenceOrder?: number;
+    /** 读到的排程版本号; 别人在这之后改过, 后端返回 409「排程已被别人修改，请刷新后再改」。 */
+    version?: number;
   }
 ) {
   return put<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`, data)
