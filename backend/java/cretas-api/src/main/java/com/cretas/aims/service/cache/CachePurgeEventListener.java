@@ -3,6 +3,8 @@ package com.cretas.aims.service.cache;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -16,6 +18,13 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * <p>The {@code fallbackExecution=true} ensures the listener runs even when there's no
  * transaction context (e.g. when published from a {@code @PostConstruct} or test code that
  * doesn't open a transaction).
+ *
+ * <p>{@code NOT_SUPPORTED} must stay: at AFTER_COMMIT the publisher's just-committed transaction is
+ * still bound to the thread, so {@code purge}'s {@code @Transactional} (REQUIRED) would join it and the
+ * {@code @Modifying} DELETE would throw {@code TransactionRequiredException} ("Executing an update/delete
+ * query"), which the catch below turns into a warn: the config is saved, the stale cache survives.
+ * Suspending lets {@code purge} open and commit its own transaction. Guarded by
+ * {@code CachePurgeEventListenerAfterCommitContractTest}.
  *
  * <p>Wiring for sister chats:
  * <pre>
@@ -38,6 +47,7 @@ public class CachePurgeEventListener {
     private final CachePurgeService cachePurgeService;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public void onCachePurgeRequested(CachePurgeEvent event) {
         try {
             int deleted = cachePurgeService.purge(event);
