@@ -65,5 +65,41 @@ assert(t5 && t5.additionalContext.includes('硬线 400K') && t5.additionalContex
 const t6 = run('org-3', transcript('d', 100000), 'SessionStart', path.join(tmp, 'nope.md'));
 assert(t6 && /没量到/.test(t6.additionalContext) && t6.hookEventName === 'SessionStart', 'T6: 截不到流程要说没量到');
 
+// 过硬线后的交接回读
+const hdir = path.join(home, '.claude', 'context-handoff', 'handoff');
+fs.mkdirSync(hdir, { recursive: true });
+const stateOf = (sid) => JSON.parse(fs.readFileSync(path.join(home, '.claude', 'context-handoff', 'health', sid + '.json'), 'utf8'));
+rec('exec-2', '执行线 2');
+rec('exec-3', '执行线 3');
+rec('exec-4', '执行线 4');
+
+// T7 阳性: 过硬线后又涨 35K, handoff/ 里只有硬线前的旧文件 (阴性干扰) -> 回读提醒一次, 再涨不重复
+const old = path.join(hdir, 'old-batch.md');
+fs.writeFileSync(old, 'x');
+const past = new Date(Date.now() - 3600 * 1000);
+fs.utimesSync(old, past, past);
+run('exec-2', transcript('e', 100000));
+const t7a = run('exec-2', transcript('e', 410000));
+assert(t7a && t7a.additionalContext.includes('硬线 400K'), 'T7: 先拿到硬线提醒');
+assert.strictEqual(run('exec-2', transcript('e', 420000)), null, 'T7: 涨不到 30K 不回读提醒');
+const t7b = run('exec-2', transcript('e', 445000));
+assert(t7b && t7b.additionalContext.includes('还没看到交接文件'), 'T7: 涨 35K 无新交接应回读提醒');
+assert.strictEqual(run('exec-2', transcript('e', 470000)), null, 'T7: 回读提醒只说一次');
+
+// T8 阴性: 硬线后写了交接 (按批次名, 不是 sid 名) -> 不提醒, 状态记 handoffSeenAt
+run('exec-3', transcript('f', 100000));
+run('exec-3', transcript('f', 410000));
+fs.writeFileSync(path.join(hdir, '20261113-some-batch.md'), 'handoff');
+assert.strictEqual(run('exec-3', transcript('f', 445000)), null, 'T8: 已写交接 (任意名) 不提醒');
+assert(stateOf('exec-3').handoffSeenAt > 0, 'T8: 状态里应记下看到交接的时间');
+
+// T9 变异对照: 交接文件 mtime 早于硬线 -> 不算写了
+run('exec-4', transcript('g', 100000));
+run('exec-4', transcript('g', 410000));
+const f9 = path.join(hdir, '20261113-some-batch.md');
+fs.utimesSync(f9, past, past);
+const t9 = run('exec-4', transcript('g', 445000));
+assert(t9 && t9.additionalContext.includes('还没看到交接文件'), 'T9: 硬线之前的交接不算');
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log('session-health organizer: 6/6 passed');
+console.log('session-health: 9/9 passed');
