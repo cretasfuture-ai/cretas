@@ -207,6 +207,9 @@ export interface LineSchedule {
   // 工人分配
   workerAssignments?: WorkerAssignment[];
 
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
+
   createdAt: string;
   updatedAt: string;
 }
