@@ -188,7 +188,7 @@ public class CanvasAIController {
                       "criticalLimitMin": <number or null>, "criticalLimitMax": <number or null>, "unit": "<℃/min/...>"|null }
                   ],
                   "processParams": [
-                    { "label": "<process parameter name, e.g. 油温/炒制时间/绞碎孔径>", "unit": "<℃/min/mm/%/...>"|null,
+                    { "label": "<process parameter name, e.g. 油温/炒制时间/绞碎孔径>", "unit": "<℃/min/mm/percent/...>"|null,
                       "standardValue": <number or null>, "min": <number or null>, "max": <number or null> }
                   ],
                   "seasonings": [
