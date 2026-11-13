@@ -320,6 +320,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /** S4-08 开工前的缺料闸 (工厂开关默认关). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞). required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
 
     /** 工序间 / 投料时限 (缺口 14)。 */
     @Autowired(required = false)
@@ -3384,7 +3387,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
         // 1551-11: 待审批的强制插单还没排进去 (批准那一刻才排入并顺延), 不能先开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
 
         // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
         //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;
@@ -9621,36 +9624,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 不碰其它批次的任务 (即便同一 productTypeId)。终态任务 (COMPLETED/SKIPPED/CANCELLED) 不变。
      */
     private void cancelPlanBatchesAndTasks(String factoryId, String planId, List<ProductionBatch> planBatches) {
-        if (planBatches == null || planBatches.isEmpty()) {
-            return;
-        }
-        for (ProductionBatch batch : planBatches) {
-            if (batch.getId() == null) {
-                continue;
-            }
-            // 空批次 / 活跃批次 → CANCELLED (已 CANCELLED/COMPLETED 不动)
-            if (batch.getStatus() != ProductionBatchStatus.CANCELLED
-                    && batch.getStatus() != ProductionBatchStatus.COMPLETED) {
-                batch.setStatus(ProductionBatchStatus.CANCELLED);
-                productionBatchRepository.save(batch);
-            }
-            if (workProcessTaskRepository == null) {
-                continue; // 单测无注入 → 跳过 (有注入的测试覆盖级联)
-            }
-            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks = workProcessTaskRepository
-                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batch.getId());
-            int closedCount = 0;
-            for (com.cretas.aims.entity.workprocess.WorkProcessTask task : tasks) {
-                if (!task.getStatus().isTerminal()) {
-                    task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.CANCELLED);
-                    closedCount++;
-                }
-            }
-            if (closedCount > 0) {
-                workProcessTaskRepository.saveAll(tasks);
-                log.info("R1 级联取消 {} 个工序任务: planId={}, batchId={}", closedCount, planId, batch.getId());
-            }
-        }
+        // 唯一一份级联在 PlanBatchCascade (驳回强制插单也用它)
+        com.cretas.aims.service.production.PlanBatchCascade.cancelBatchesAndTasks(
+                factoryId, planId, planBatches, productionBatchRepository, workProcessTaskRepository);
     }
 
     /**
@@ -10531,7 +10507,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    (2026-11-03 验收 D-S410-01: 网页「逐道录入」「下发 APP 报工」都先调 create-batch, 曾绕过闸)。
         //    startProduction 不经过这里 (它直接调 materializeBatchForPlan), 所以同一次开工不会被记两次。
         // 1551-11: 同理, 待审批的强制插单不能经这里开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
         if (shortageStartGate != null) {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }
