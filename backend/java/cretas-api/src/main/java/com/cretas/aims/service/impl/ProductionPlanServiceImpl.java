@@ -6188,6 +6188,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     output.getQuantityUnit());
             FinishedGoodsBatch batch = createFinishedGoodsForOutputLine(
                     plan, settlement, output, receiptDeltaByKey.get(key), receivedBy);
+            publishFinishedGoodsCreatedAfterCommit(plan, batch, receiptDeltaByKey.get(key));
             output.setFinishedGoodsBatchId(batch.getId());
             output.setReceiptIdempotencyKey(request.getIdempotencyKey());
             output.setReceivedBy(receivedBy);
@@ -7528,8 +7529,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (ids.isEmpty()) {
             return java.util.Map.of();
         }
-        return rawMaterialTypeRepository.findByIdIn(ids).stream()
+        List<com.cretas.aims.entity.RawMaterialType> found = rawMaterialTypeRepository.findByIdIn(ids).stream()
                 .filter(rmt -> factoryId.equals(rmt.getFactoryId()))
+                .toList();
+        // 🔴 原来 Collectors.toMap(..., getMainCategory) 遇到 main_category 为 null 的物料直接 NPE (结单 500)。
+        //    大类决定客供料计划下该走公司库存还是客户血缘 (库存归属口径), ⛔ 不悄悄兜成「原料」或「辅料」当真实数据 ——
+        //    明确报错, 说清是哪个物料、去哪补。
+        List<String> missing = found.stream()
+                .filter(rmt -> rmt.getMainCategory() == null || rmt.getMainCategory().isBlank())
+                .map(rmt -> rmt.getName() != null ? rmt.getName() : rmt.getId())
+                .toList();
+        if (!missing.isEmpty()) {
+            throw new BusinessException(409, "物料「" + String.join("、", missing) + "」缺少物料大类, 不能结单")
+                    .withCode("MATERIAL_MAIN_CATEGORY_MISSING")
+                    .withHint("请到 物料档案 里为这些物料补上大类 (原料 / 辅料 / 包材) 后重新结单")
+                    .withHintTarget("物料大类");
+        }
+        return found.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         com.cretas.aims.entity.RawMaterialType::getId,
                         com.cretas.aims.entity.RawMaterialType::getMainCategory,
@@ -8943,7 +8959,39 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
         recordProductionToFinishedLineage(saved, received, receivedBy, "SETTLEMENT_WAREHOUSE_RECEIPT", null);
+        publishFinishedGoodsCreatedAfterCommit(plan, saved, received);
         return saved;
+    }
+
+    /**
+     * 仓库确认实收建出成品后发「成品已生成」事件 (结单后入库路径原先漏发, 触发链/出库监听收不到)。
+     *
+     * <p>事务提交后才发: 回滚的入库不发; 无事务上下文 (单测/脚本) 则立即发。
+     * 幂等重放在建成品之前已返回, 所以同一次入库只会走到这里一次。
+     */
+    private void publishFinishedGoodsCreatedAfterCommit(ProductionPlan plan, FinishedGoodsBatch batch,
+                                                        BigDecimal quantity) {
+        if (applicationEventPublisher == null || batch == null) {
+            return;
+        }
+        final com.cretas.aims.event.FinishedGoodsCreatedEvent event =
+                new com.cretas.aims.event.FinishedGoodsCreatedEvent(
+                        this, batch.getFactoryId(), plan.getSourceOrderId(), batch.getProductTypeId(),
+                        quantity, batch.getId(), "PRODUCTION");
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        applicationEventPublisher.publishEvent(event);
+                    } catch (RuntimeException ex) {
+                        log.warn("发布 FinishedGoodsCreatedEvent 失败 batch={}: {}", batch.getId(), ex.getMessage());
+                    }
+                }
+            });
+        } else {
+            applicationEventPublisher.publishEvent(event);
+        }
     }
 
     /**
@@ -9412,12 +9460,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setCancelledAt(LocalDateTime.now());
         productionPlanRepository.save(plan);
 
+        // 取消一张还在待审批的强制插单: 它的画布审批实例也要结束, 不留悬空的待办 (审批人点开只会 409)
+        cancelPendingForceInsertWorkflow(factoryId, plan, cancellationReason, operatorId);
+
         // R1 (2026-06-14): 按批次定向级联关闭 WorkProcessTask (新表), 取代旧的"按产品类型全关 ProcessTask"。
         // 旧逻辑 findByFactoryIdAndProductTypeId 会把同产品另一并行活跃批次的任务一并 CLOSED (六扇门 6.1+6.2 场景误伤)。
         cancelPlanBatchesAndTasks(factoryId, planId, planBatches);
 
         log.info("取消生产计划: planId={}, operatorId={}, reason={}, batches={}",
                 planId, operatorId, cancellationReason, planBatches != null ? planBatches.size() : 0);
+    }
+
+    /** 强制插单画布的 module code (与 UrgentInsertServiceImpl.FORCE_INSERT_MODULE 一致) */
+    private static final String FORCE_INSERT_WORKFLOW_MODULE = "FORCE_INSERT";
+
+    /**
+     * 计划取消时一并结束它还在跑的强制插单审批实例 (CANCELLED + CANCEL history 记原因/操作人)。
+     * 没有实例 / 实例已结束 = 什么都不做; 引擎缺失 (单测环境) 同理。
+     */
+    private void cancelPendingForceInsertWorkflow(String factoryId, ProductionPlan plan, String reason, Long operatorId) {
+        if (workflowEngine == null || !Boolean.TRUE.equals(plan.getIsForceInserted())) {
+            return;
+        }
+        workflowEngine.getCurrentInstance(factoryId, FORCE_INSERT_WORKFLOW_MODULE, plan.getId())
+                .ifPresent(instance -> workflowEngine.cancel(instance.getId(), operatorId,
+                        "计划已取消，审批同步结束：" + reason));
     }
 
     /**

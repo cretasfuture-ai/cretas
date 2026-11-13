@@ -77,7 +77,7 @@ describe('role-specific mobile navigator boundaries', () => {
   /**
    * B4 (2026-11-12): 「待办」入口谁看得到只由后端 /my-todos/types 决定 (useMyTodoEntry + todoTabScreen)。
    * 岗位导航器里不许再直接挂 OATodoStackNavigator, 也不许按岗位名开关它 —— 那就是在 App 里抄一份权限映射。
-   * 例外只有财务导航器 (财务/出纳默认就有能办的待办, 首页卡片也指向它的 FinanceTodoTab)。
+   * 财务导航器 (B4 第二期) 同样只认 /types, 但保留自己的路由名 FinanceTodoTab (首页「待办审批」卡指向它), 见本组最后一条。
    */
   const ROLE_NAVIGATORS_WITH_TODO_GATE = [
     ['navigation/BossNavigator.tsx', 'boss'],
@@ -96,6 +96,9 @@ describe('role-specific mobile navigator boundaries', () => {
     ['navigation/ProcurementManagerNavigator.tsx', 'pm'],
     ['navigation/ViewerNavigator.tsx', 'vw'],
     ['navigation/MainNavigator.tsx', 'main'],
+    // B4 第二期 (2026-11-13)
+    ['navigation/FactoryAdminTabNavigator.tsx', 'fa'],
+    ['navigation/RestrictedRoleNavigator.tsx', 'restricted'],
   ] as const;
 
   it.each(ROLE_NAVIGATORS_WITH_TODO_GATE)('%s registers the todo tab only through the backend gate', (file, prefix) => {
@@ -105,5 +108,12 @@ describe('role-specific mobile navigator boundaries', () => {
     expect(code).toContain(`todoTabScreen(Tab, todoEntry, '${prefix}-tab-oa-todo')`);
     expect(code).not.toContain('OATodoStackNavigator');
     expect(code).not.toMatch(/isFinanceOrCashier/);
+  });
+
+  it('finance navigator gates its FinanceTodoTab by the same backend entry, not unconditionally', () => {
+    const code = readCode('navigation/FinanceNavigator.tsx');
+    expect(code).toContain('useMyTodoEntry()');
+    expect(code).not.toContain('useMyTodoCount');
+    expect(code).toMatch(/\{todoEntry\.visible && \(\s*<Tab\.Screen\s+name="FinanceTodoTab"/);
   });
 });

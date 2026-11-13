@@ -511,6 +511,7 @@ public class WorkflowInstanceController {
             String expectedNodeId) {
         String businessEntityId;
         String businessStatus;
+        Map<String, Object> extra = null;
         if ("PURCHASE_ORDER".equals(instance.getModuleCode())) {
             PurchaseOrder order = purchaseService.applyWorkflowAction(
                     factoryId,
@@ -586,6 +587,15 @@ public class WorkflowInstanceController {
             businessEntityId = instance.getBusinessEntityId();
             businessStatus = plan.getApprovalStatus() != null ? String.valueOf(plan.getApprovalStatus())
                     : plan.getStatus() == null ? "UNKNOWN" : String.valueOf(plan.getStatus());
+            // 批准走完画布那一刻才真正排入: 把排进哪条线、哪天、挤了谁带回给审批人 (之前被这里丢掉了)
+            extra = new java.util.LinkedHashMap<>();
+            if (plan.getScheduleOutcome() != null) {
+                extra.put("scheduleOutcome", jsonSafe(plan.getScheduleOutcome()));
+                extra.put("productionLineId", plan.getSuggestedProductionLineId());
+                extra.put("productionLineName", plan.getSuggestedProductionLineName());
+                extra.put("planNumber", plan.getPlanNumber());
+                extra.put("uncheckedWarnings", jsonSafe(plan.getUncheckedWarnings()));
+            }
         } else {
             throw new BusinessException(422, "该业务域尚未迁移到统一 OA 动作适配器")
                     .withCode("OA_DOMAIN_ADAPTER_REQUIRED");
@@ -593,11 +603,35 @@ public class WorkflowInstanceController {
         ApprovalWorkflowInstance updated = workflowEngine.getLatestInstance(
                 factoryId, instance.getModuleCode(), instance.getBusinessEntityId())
                 .orElse(instance);
-        return Map.of(
-                "instanceId", updated.getId(),
-                "workflowStatus", updated.getStatus().name(),
-                "businessEntityId", businessEntityId,
-                "businessStatus", businessStatus);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("instanceId", updated.getId());
+        result.put("workflowStatus", updated.getStatus().name());
+        result.put("businessEntityId", businessEntityId);
+        result.put("businessStatus", businessStatus);
+        if (extra != null) {
+            extra.values().removeIf(java.util.Objects::isNull);
+            result.putAll(extra);
+        }
+        return result;
+    }
+
+    /**
+     * 动作结果会原样写进幂等账本的 JSON 列, 那里的序列化器不一定认 java.time —— 日期一律转成 ISO 字符串,
+     * 否则「审批已通过但账本写不进去」会把整次审批回滚。
+     */
+    static Object jsonSafe(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> out = new java.util.LinkedHashMap<>();
+            map.forEach((k, v) -> out.put(String.valueOf(k), jsonSafe(v)));
+            return out;
+        }
+        if (value instanceof java.util.Collection<?> items) {
+            return items.stream().map(WorkflowInstanceController::jsonSafe).collect(java.util.stream.Collectors.toList());
+        }
+        if (value instanceof java.time.temporal.TemporalAccessor || value instanceof java.time.Duration) {
+            return value.toString();
+        }
+        return value;
     }
 
     public record WorkflowActionRequest(
