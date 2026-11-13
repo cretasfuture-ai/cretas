@@ -206,6 +206,19 @@ const businessRoutes: RouteRecordRaw[] = [
         //     看得见这个看板、点进去必 403。与 /rd、/transfer 同形。
         meta: { requiresAuth: true, title: '生产进度看板', icon: 'Monitor', module: 'production' }
       },
+      // P3：顶层「今天」「待办」。只读聚合，各来源按自己的模块权限读；入口与个人 OA 同判据 module: 'dashboard'
+      {
+        path: 'today',
+        name: 'TodayPage',
+        component: () => import('@/views/today/TodayPage.vue'),
+        meta: { requiresAuth: true, title: '今天', icon: 'Sunny', module: 'dashboard' }
+      },
+      {
+        path: 'todo',
+        name: 'TodoPage',
+        component: () => import('@/views/today/TodoPage.vue'),
+        meta: { requiresAuth: true, title: '待办', icon: 'Finished', module: 'dashboard' }
+      },
       {
         path: 'dashboard/widgets',
         name: 'WidgetDemoDashboard',

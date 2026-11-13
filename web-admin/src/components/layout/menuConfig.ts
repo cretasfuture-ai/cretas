@@ -743,7 +743,8 @@ export const platformWorkspacePaths: string[] = platformMenuConfig
 //     「自身 + 祖先链」权限字段，数量也要相等。
 //
 // 本批的取舍（P2 brief 要求写清）：
-//   · 顶层「今天 /today」「待办 /todo」「发现的问题 /issues」三页要到 P3/P4 才有，本批**不显示**。
+//   · 顶层「今天 /today」「待办 /todo」P3 已加（TOP_ENTRIES）；「发现的问题 /issues」要到 P4 才有，**不显示**。
+//   · （P2 原文：三页要到 P3/P4 才有，当时不显示。）
 //     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
 //     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
 //   · 「数字班组」组本批不出现（M4）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
@@ -833,6 +834,17 @@ const SETTINGS_LEAF_PATHS = ['/quality/vision-training'] as const;
 
 const MOVED_OUT = new Set<string>([...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS]);
 
+/**
+ * P3：顶层独立入口「今天」「待办」。两页只读聚合各来源接口，自己没有数据权限；
+ * 每个来源在页面里按各自模块权限决定读不读（权限不够的来源不发请求、写明原因），所以入口本身对所有工厂账号开放，
+ * 与「个人 OA」同判据（module: 'dashboard'，人人都有）。新增项的权限字段在 menuPermissionParity 里列为预期新增。
+ * 「发现的问题 /issues」要到 P4 才有，仍不显示。
+ */
+const TOP_ENTRIES: MenuItem[] = [
+  { path: '/today', title: '今天', icon: 'Sunny', module: 'dashboard', section: 'top' },
+  { path: '/todo', title: '待办', icon: 'Finished', module: 'dashboard', section: 'top' },
+];
+
 function buildGroupedMenu(): MenuItem[] {
   const overview = container('#group/overview', '概览', 'House', [
     mustLocate('/dashboard').node,
@@ -867,7 +879,7 @@ function buildGroupedMenu(): MenuItem[] {
     ...SETTINGS_LEAF_PATHS.map((p) => ({ ...moveLeaf(p), icon: 'Aim', section: 'settings' as const })),
     { ...takeGroup('/system', MOVED_OUT), section: 'settings' as const },
   ];
-  return [...all, ...settings];
+  return [...TOP_ENTRIES, ...all, ...settings];
 }
 
 /** FACTORY / CENTRAL_KITCHEN（及未带工厂类型的工厂账号）用的原型分组侧栏。 */
