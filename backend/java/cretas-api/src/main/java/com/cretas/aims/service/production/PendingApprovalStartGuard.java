@@ -11,11 +11,16 @@ import com.cretas.aims.exception.BusinessException;
  * <ul>
  *   <li>{@code ProductionPlanServiceImpl#startProduction} — 计划开工 (网页 / App / AI 的 PlanUpdateTool);</li>
  *   <li>{@code ProductionPlanServiceImpl#createBatchFromPlan} — 网页「逐道录入 / 下发 APP 报工」;</li>
- *   <li>{@code ClerkProcessEntryServiceImpl#createProductionBatch} — 文员录入回写计划状态;</li>
+ *   <li>{@code ClerkProcessEntryServiceImpl#createProductionBatch} — 文员录入 ({@code recordChain}) 与工序表
+ *       ({@code ProcessSheetServiceImpl} 直接调 {@code materializeBatch}) 建批次; 不论计划当前什么状态都判
+ *       (计划被驳回后是 CANCELLED, 不能只在「待处理」时判);</li>
  *   <li>{@code ProcessingServiceImpl#startProduction} — 批次开工 (POST /processing/batches/{id}/start、
- *       AI 的 ProcessingBatchStartTool / BatchStatusChangeTool): 手工批次挂在待审批计划上时。</li>
+ *       AI 的 ProcessingBatchStartTool / BatchStatusChangeTool);</li>
+ *   <li>{@code ProcessingServiceImpl#resumeProduction} — 批次恢复生产 (兜住计划后来被驳回 / 取消的存量)。</li>
  * </ul>
- * 普通计划 {@code requiresApproval=false}, 不受影响。调用方必须在任何写入之前调用, 被拦不留半截状态。
+ * 拦三种: 待审批 ({@link #CODE})、已驳回或已取消 ({@link #CODE_CLOSED})。普通计划不受影响。
+ * 调用方必须在任何写入之前、且不放在条件 / lambda 里无条件调用, 被拦不留半截状态
+ * (结构闸 {@code BatchStartApprovalGuardAstContractTest})。
  */
 public final class PendingApprovalStartGuard {
 
@@ -34,7 +39,7 @@ public final class PendingApprovalStartGuard {
             return;
         }
         // 独立审查 B1 双保险: 驳回 = 计划作废; 驳回路径会级联作废未开工批次, 这里兜住存量 (驳回早于级联上线的批次)。
-        // 计划开工入口在这之前已要求「待处理」, 走到这里的只有批次开工 / 文员录入这类挂在计划上的入口。
+        // 计划开工入口在这之前已要求「待处理」, 走到这里的只有批次开工 / 恢复 / 文员录入这类挂在计划上的入口。
         if (plan.isRejected() || plan.getStatus() == ProductionPlanStatus.CANCELLED) {
             String name = plan.getApproverName();
             throw new BusinessException(409, plan.isRejected()

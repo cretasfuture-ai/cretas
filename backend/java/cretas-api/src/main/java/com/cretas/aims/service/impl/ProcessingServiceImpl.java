@@ -280,6 +280,9 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "只有暂停中的批次可以恢复生产")
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11 (独立审查): 修复前绕过审批开工、后来计划被驳回 / 取消的存量批次, 暂停后不能再恢复生产
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                linkedPlanOf(factoryId, batch), forceInsertApproverDescriber);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setNotes(batch.getNotes() != null ? batch.getNotes() + "\n恢复生产: " + LocalDateTime.now() : "恢复生产: " + LocalDateTime.now());
         return productionBatchRepository.save(batch);

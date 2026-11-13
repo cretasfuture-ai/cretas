@@ -220,6 +220,31 @@ class BatchStartPendingApprovalGuardTest {
         verify(productionBatchRepository, never()).save(any());
     }
 
+    /** 存量: 修复前绕过审批开工、后来计划被驳回的批次, 暂停后不能再恢复生产。 */
+    @Test
+    void pausedBatchOfARejectedPlanCannotResume() {
+        plan.markAsForceInsert(1L, "客户急单", true);
+        plan.reject(9L, "QA生产经理", "产能已满");
+        plan.setStatus(ProductionPlanStatus.CANCELLED);
+        batch.setStatus(ProductionBatchStatus.PAUSED);
+        when(productionBatchRepository.findByIdAndFactoryId(4401L, F)).thenReturn(Optional.of(batch));
+
+        assertThatThrownBy(() -> service.resumeProduction(F, "4401"))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo(PendingApprovalStartGuard.CODE_CLOSED));
+        assertThat(batch.getStatus()).isEqualTo(ProductionBatchStatus.PAUSED);
+        verify(productionBatchRepository, never()).save(any());
+    }
+
+    @Test
+    void negativeControlPausedBatchOfAnOrdinaryPlanResumes() {
+        plan.setStatus(ProductionPlanStatus.IN_PROGRESS);
+        batch.setStatus(ProductionBatchStatus.PAUSED);
+        when(productionBatchRepository.findByIdAndFactoryId(4401L, F)).thenReturn(Optional.of(batch));
+
+        assertThat(service.resumeProduction(F, "4401").getStatus()).isEqualTo(ProductionBatchStatus.IN_PROGRESS);
+    }
+
     @Test
     void afterApprovalTheSameBatchStarts() {
         plan.markAsForceInsert(1L, "客户急单", true);
