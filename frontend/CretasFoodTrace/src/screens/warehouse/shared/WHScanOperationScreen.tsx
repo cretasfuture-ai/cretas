@@ -57,6 +57,13 @@ interface PurchaseOrderLookup {
 // 🔴 2026-08-17 删掉了 AlertPrompt / AlertWithPrompt 两个类型 —— 它们只为 Alert.prompt 存在,
 // 而那是 iOS 独有 API。手动输入改用本组件自己的 Dialog(见 handleManualInput)。
 
+/** 识别成功后的去向说明 —— 按模式写: 入库跳收货录入页 (2 字段), 出库跳出库确认页 (只填出库数量)。 */
+export function scanSuccessTip(mode: "inbound" | "outbound"): string {
+  return mode === "inbound"
+    ? "识别成功后自动跳入库录入页 (仅 2 字段)"
+    : "识别成功后自动跳出库确认页 (只填出库数量)";
+}
+
 const SCAN_COOLDOWN_MS = 2000; // 同一扫码冷却, 防 onBarcodeScanned 高频重复触发
 
 function formatMaterialLabel(label: MaterialBatchLabelScanResponse): string {
@@ -299,7 +306,7 @@ export function WHScanOperationScreen() {
           </View>
           <View style={styles.tipItem}>
             <MaterialCommunityIcons name="check-circle" size={16} color="#4CAF50" />
-            <Text style={styles.tipText}>识别成功后自动跳入库录入页 (仅 2 字段)</Text>
+            <Text style={styles.tipText}>{scanSuccessTip(mode)}</Text>
           </View>
           <View style={styles.tipItem}>
             <MaterialCommunityIcons name="check-circle" size={16} color="#4CAF50" />

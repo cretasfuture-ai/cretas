@@ -5,6 +5,7 @@ import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
+import { useDisposalApprovalStore } from '@/store/modules/disposalApproval';
 import { useWorkspaceStore } from '@/store/modules/workspace';
 import { useNavigationVisibilityStore, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
 import { usePlatformFactoryContextStore, isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
@@ -34,6 +35,7 @@ const appStore = useAppStore();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const taskBadges = useTaskBadgeStore();
+const disposalApproval = useDisposalApprovalStore();
 const workspace = useWorkspaceStore();
 const navigationVisibility = useNavigationVisibilityStore();
 const factoryView = usePlatformFactoryContextStore();
@@ -269,6 +271,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
   if (item.assemblyFeature && !assemblyEnabled) {
     return false;
   }
+  if (item.requiresDisposalApproval && !disposalApproval.canApprove) return false;
   if (!item.roles || item.roles.length === 0) {
     return canAccess;
   }
@@ -384,6 +387,16 @@ watch(
 );
 
 watch(() => route.path, () => scheduleBadgeRefresh());
+
+// 报废审批入口按后端 approval-permission 判 (disposal:approve); 没有 finance 模块的人不问 (不发必 403 的请求)。
+watch(
+  () => [authStore.factoryId, authStore.user?.id, permissionStore.canAccess('finance')] as const,
+  ([factoryId, userId, hasFinance]) => {
+    if (factoryView.isViewingFactory || !hasFinance) { disposalApproval.reset(); return; }
+    void disposalApproval.ensureLoaded(String(factoryId || ''), String(userId ?? ''));
+  },
+  { immediate: true },
+);
 
 onMounted(() => {
   stopBadgeTimer = startVisibleBadgeRefresh(
