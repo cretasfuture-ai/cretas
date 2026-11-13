@@ -38,3 +38,5 @@ SseStreamingServiceSlotContinuationTest
 ToolDescriptorInventoryDriftTest
 # 清册统计/权限登记闸: 夜间全量自 11-10 起因 order_approval 红 3 次, 不在 PR 门禁所以无人拦; 纳入
 ToolDescriptorCatalogTest
+# 强制插单收尾 (并行网关按岗位推进节点): 并行分支用例写在引擎测试类里, 原先不在 PR 选择范围
+WorkflowEngineServiceImplTest
