@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
+import { factoryMenuForType, groupedMenuConfig, menuTrail } from './menuConfig';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft, VideoPlay } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
@@ -26,6 +27,19 @@ const factoryView = usePlatformFactoryContextStore();
 // ⇒ 路由可以用 meta.breadcrumbParent 显式声明「我在导航里的上一级叫什么」,
 //   面包屑以它为准。⛔ 不改 URL(存量深链/书签), 也不搬菜单(业务归属是对的)。
 const breadcrumbs = computed(() => {
+  // P2：原型分组侧栏下，面包屑按菜单树取「组 › 项 › 子项」，与用户在侧栏里点的名字一致。
+  // 平台侧栏、财务主管专用菜单、餐饮/物流（原分组）仍走路由 meta.title。
+  const useGroupedLayout = !authStore.isPlatform
+    && authStore.currentRole !== 'finance_manager'
+    && factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) === groupedMenuConfig;
+  const trail = useGroupedLayout ? menuTrail(groupedMenuConfig, route.fullPath) : null;
+  if (trail && trail.length > 1) {
+    return trail.map((node, index) => ({
+      // 只有叶子可点；分组/展示分组不是路由
+      path: index === trail.length - 1 ? route.path : '',
+      title: node.title,
+    }));
+  }
   const matched = route.matched.filter(r => r.meta.title);
   const override = route.meta.breadcrumbParent as string | undefined;
   if (!override) {
@@ -96,9 +110,9 @@ async function handleLogout() {
       <!-- 面包屑（移动端隐藏） -->
       <el-breadcrumb v-if="!appStore.isMobile" separator="/">
         <el-breadcrumb-item
-          v-for="item in breadcrumbs"
-          :key="item.path"
-          :to="item.path"
+          v-for="(item, index) in breadcrumbs"
+          :key="`${index}-${item.title}`"
+          :to="item.path || undefined"
         >
           {{ item.title }}
         </el-breadcrumb-item>
