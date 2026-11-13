@@ -471,6 +471,41 @@ public class ConversationSession {
         return session;
     }
 
+    /** 澄清选项会话的标记 (存在 knownIntentCode 里: 此时意图未定, 该列没有别的用途)。 */
+    public static final String CLARIFICATION_CHOICE_MARK = "__CLARIFICATION_CHOICE__";
+
+    /**
+     * 这是「澄清选项会话」: 服务端给用户列了 1/2/3 个候选 (NEED_CLARIFICATION), 记下候选和原话,
+     * 好让下一句「1」「完成工序」能对上号。不走 LLM 多轮对话。
+     */
+    public boolean isClarificationChoice() {
+        return sessionMode == SessionMode.INTENT_RECOGNITION
+                && CLARIFICATION_CHOICE_MARK.equals(knownIntentCode);
+    }
+
+    /** 创建澄清选项会话 (候选顺序 = 用户看到的序号顺序)。 */
+    public static ConversationSession createForClarificationChoice(
+            String factoryId, Long userId, String originalInput,
+            List<CandidateIntent> options, String shownMessage) {
+        ConversationSession session = ConversationSession.builder()
+                .factoryId(factoryId)
+                .userId(userId)
+                .originalInput(originalInput)
+                .currentRound(1)
+                .maxRounds(5)
+                .status(SessionStatus.ACTIVE)
+                .sessionMode(SessionMode.INTENT_RECOGNITION)
+                .knownIntentCode(CLARIFICATION_CHOICE_MARK)
+                .timeoutMinutes(10)
+                .build();
+        session.addUserMessage(originalInput);
+        if (shownMessage != null && !shownMessage.isBlank()) {
+            session.addAssistantMessage(shownMessage);
+        }
+        session.setCandidates(options);
+        return session;
+    }
+
     /**
      * 创建参数收集会话
      *
