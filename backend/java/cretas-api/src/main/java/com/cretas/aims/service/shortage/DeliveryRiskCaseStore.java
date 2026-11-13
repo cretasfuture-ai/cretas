@@ -157,7 +157,7 @@ public class DeliveryRiskCaseStore {
     @Transactional
     public void cancelWithSalesOrder(ShortageCase c, String reason, ActorRef actor) {
         if (c.getSourceType() != SourceType.DELIVERY_RISK || c.getClosedAt() != null) {
-            throw new BusinessException(409, "实例已结束或不是交付风险实例");
+            throw new BusinessException(409, "实例已结束或不是交付风险实例").withHint("已结束的实例只能查看, 不需要再处理");
         }
         Stage from = c.getStage();
         c.setStage(Stage.CANCELLED);
