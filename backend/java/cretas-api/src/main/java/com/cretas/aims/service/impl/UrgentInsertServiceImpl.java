@@ -112,6 +112,12 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
 
+    /** 1551-11 红线 1 B1: 驳回时级联作废挂在计划上的未开工批次。字段注入, 不打断按构造器装配的既有单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
+
     @Override
     @Transactional
     public List<InsertSlotDTO> getAvailableSlots(String factoryId, GetInsertSlotsRequest request) {
@@ -1530,6 +1536,36 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     }
 
     /**
+     * 1551-11 红线 1 独立审查 B1: 驳回 = 作废计划, 挂在它上面还没开工的手工 / AI 批次随之作废 (与取消计划同一个级联
+     * {@link com.cretas.aims.service.production.PlanBatchCascade}), 否则批次留在 PLANNED 还能开工。
+     * 已开工的批次 (修复前绕过审批开的存量) 不在这里动: 有报工 / 投料要走报工撤回, 只记 WARN 留给人处理。
+     */
+    private void cancelUnstartedBatchesOfRejectedPlan(String factoryId, ProductionPlan plan) {
+        if (productionBatchRepository == null) {
+            return; // 单测按构造器装配、没注入仓库
+        }
+        List<com.cretas.aims.entity.ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+        List<com.cretas.aims.entity.ProductionBatch> unstarted = new ArrayList<>();
+        List<String> started = new ArrayList<>();
+        for (com.cretas.aims.entity.ProductionBatch b : batches) {
+            if (b.getStatus() == com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED
+                    || b.getStatus() == com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNING) {
+                unstarted.add(b);
+            } else if (b.getStatus() != com.cretas.aims.entity.enums.ProductionBatchStatus.CANCELLED
+                    && b.getStatus() != com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED) {
+                started.add(b.getBatchNumber());
+            }
+        }
+        com.cretas.aims.service.production.PlanBatchCascade.cancelBatchesAndTasks(
+                factoryId, plan.getId(), unstarted, productionBatchRepository, workProcessTaskRepository);
+        if (!started.isEmpty()) {
+            log.warn("驳回强制插单时发现已开工批次 (修复前绕过审批开工的存量), 未自动作废, 需走报工撤回: planId={}, batches={}",
+                    plan.getId(), started);
+        }
+    }
+
+    /**
      * 批准 = 按最新数据重算并排入 (顺延被挤计划); 驳回 = 作废计划并释放时段。直接审批与画布审批共用。
      */
     private ProductionPlanDTO applyDecision(String factoryId, ProductionPlan plan, Long approverId, User approver,
@@ -1564,6 +1600,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         insertSlotRepository.save(slot);
                     });
 
+            cancelUnstartedBatchesOfRejectedPlan(factoryId, plan);
             log.info("强制插单已拒绝: planId={}", planId);
         }
 

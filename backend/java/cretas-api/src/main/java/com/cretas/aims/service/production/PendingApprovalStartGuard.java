@@ -1,6 +1,7 @@
 package com.cretas.aims.service.production;
 
 import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.exception.BusinessException;
 
 /**
@@ -19,6 +20,8 @@ import com.cretas.aims.exception.BusinessException;
 public final class PendingApprovalStartGuard {
 
     public static final String CODE = "PLAN_PENDING_APPROVAL";
+    /** 所挂计划已驳回 / 已取消。 */
+    public static final String CODE_CLOSED = "PLAN_REJECTED_OR_CANCELLED";
 
     private PendingApprovalStartGuard() {}
 
@@ -27,14 +30,30 @@ public final class PendingApprovalStartGuard {
      * @param approvers 说清「在等谁」的只读查询; null (单测直接 new 的服务) 时用通用说法
      */
     public static void check(ProductionPlan plan, ForceInsertApproverDescriber approvers) {
-        if (plan == null || !plan.isPendingApproval()) {
+        if (plan == null) {
+            return;
+        }
+        // 独立审查 B1 双保险: 驳回 = 计划作废; 驳回路径会级联作废未开工批次, 这里兜住存量 (驳回早于级联上线的批次)。
+        // 计划开工入口在这之前已要求「待处理」, 走到这里的只有批次开工 / 文员录入这类挂在计划上的入口。
+        if (plan.isRejected() || plan.getStatus() == ProductionPlanStatus.CANCELLED) {
+            String name = plan.getApproverName();
+            throw new BusinessException(409, plan.isRejected()
+                    ? "计划 " + labelOf(plan) + " 的强制插单已被驳回"
+                            + (name == null || name.isBlank() ? "" : "（驳回人：" + name + "）") + "，不能开工"
+                    : "计划 " + labelOf(plan) + " 已取消，不能开工")
+                    .withCode(CODE_CLOSED)
+                    .withHint("这个批次请作废，或重新建批次挂到有效的计划上");
+        }
+        if (!plan.isPendingApproval()) {
             return;
         }
         String waitingFor = approvers == null ? ForceInsertApproverDescriber.DIRECT_APPROVAL : approvers.describe(plan);
-        String planLabel = plan.getPlanNumber() != null && !plan.getPlanNumber().isBlank()
-                ? plan.getPlanNumber() : plan.getId();
-        throw new BusinessException(409, "计划 " + planLabel + " 是强制插单，还在等" + waitingFor + "，批准后才能开工")
+        throw new BusinessException(409, "计划 " + labelOf(plan) + " 是强制插单，还在等" + waitingFor + "，批准后才能开工")
                 .withCode(CODE)
                 .withHint("请等审批通过后再开工；批准前这张插单还没排进产线，先开工会和被它顺延的计划冲突");
+    }
+
+    private static String labelOf(ProductionPlan plan) {
+        return plan.getPlanNumber() != null && !plan.getPlanNumber().isBlank() ? plan.getPlanNumber() : plan.getId();
     }
 }

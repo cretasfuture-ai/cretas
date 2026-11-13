@@ -176,6 +176,50 @@ class BatchStartPendingApprovalGuardTest {
         verify(productionBatchRepository, never()).save(any());
     }
 
+    /** 独立审查 B1 (b): 驳回早于级联上线、批次还留在 PLANNED 的存量 —— 驳回后再开工必须被拦, 且不写任何东西。 */
+    @Test
+    void batchOnARejectedForceInsertIsRefusedWithoutAnyWrite() {
+        plan.markAsForceInsert(1L, "客户急单", true);
+        plan.reject(9L, "QA生产经理", "产能已满");
+        plan.setStatus(ProductionPlanStatus.CANCELLED);
+
+        assertThatThrownBy(() -> service.startProduction(F, "4401", 7, "缺的料下午到"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo(PendingApprovalStartGuard.CODE_CLOSED);
+                    assertThat(e.getMessage()).contains("QA-URG-0001").contains("已被驳回").contains("QA生产经理");
+                });
+        assertThat(batch.getStatus()).isEqualTo(ProductionBatchStatus.PLANNED);
+        verify(productionBatchRepository, never()).save(any());
+        verify(caseEvents, never()).save(any());
+    }
+
+    @Test
+    void batchOnACancelledPlanIsRefused() {
+        plan.setStatus(ProductionPlanStatus.CANCELLED);
+
+        assertThatThrownBy(() -> service.startProduction(F, "4401", 7))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PendingApprovalStartGuard.CODE_CLOSED);
+                    assertThat(e.getMessage()).contains("QA-URG-0001").contains("已取消");
+                });
+        verify(productionBatchRepository, never()).save(any());
+    }
+
+    /** 查审批进度出错只影响措辞: 照样拦, 用通用说法。 */
+    @Test
+    void describerFailureFallsBackToGenericWordingAndStillBlocks() {
+        plan.markAsForceInsert(1L, "客户急单", true);
+        when(workflowEngine.getCurrentInstance(any(), any(), any())).thenThrow(new IllegalStateException("db down"));
+
+        assertThatThrownBy(() -> service.startProduction(F, "4401", 7))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo(PendingApprovalStartGuard.CODE);
+                    assertThat(e.getMessage()).contains("QA-URG-0001").contains("还在等审批人批准");
+                });
+        verify(productionBatchRepository, never()).save(any());
+    }
+
     @Test
     void afterApprovalTheSameBatchStarts() {
         plan.markAsForceInsert(1L, "客户急单", true);

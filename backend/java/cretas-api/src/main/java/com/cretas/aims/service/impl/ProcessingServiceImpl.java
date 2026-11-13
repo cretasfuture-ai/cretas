@@ -244,12 +244,12 @@ public class ProcessingServiceImpl implements ProcessingService {
         }
         // 1551-11: 批次挂在待审批的强制插单上 (手工 / AI 建批带 productionPlanId) ⇒ 与计划开工同一道审批闸。
         //    放在缺料闸 (会写缺料实例的强制原因) 和任何状态写入之前, 被拦不留半截状态。
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
-                linkedPlanOf(factoryId, batch), forceInsertApproverDescriber);
+        com.cretas.aims.entity.ProductionPlan linkedPlan = linkedPlanOf(factoryId, batch);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(linkedPlan, forceInsertApproverDescriber);
         // 纪律排查 A8: 批次级开工与计划级同口径。手工 / AI 建的批次可以挂在一个还没开工的计划上
         // (POST /processing/batches 带 productionPlanId), 直接开批次就绕过了计划开工的缺料闸。
         // 只在计划还没开工时过闸: 计划已开工 = 当时已过闸或已强制开工并留痕, 不再让每个批次重问一遍。
-        checkShortageGateForBatchStart(factoryId, batch, forceStartReason);
+        checkShortageGateForBatchStart(factoryId, linkedPlan, forceStartReason);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setStartTime(LocalDateTime.now());
         batch.setSupervisorId(supervisorId != null ? supervisorId.longValue() : null);
@@ -352,14 +352,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     }
 
     /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
-    private void checkShortageGateForBatchStart(String factoryId, ProductionBatch batch, String forceStartReason) {
-        if (shortageStartGate == null || batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
-            return;
-        }
-        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findById(batch.getProductionPlanId())
-                .filter(p -> factoryId.equals(p.getFactoryId()))
-                .orElse(null);
-        if (plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
+    private void checkShortageGateForBatchStart(String factoryId, com.cretas.aims.entity.ProductionPlan plan,
+                                                String forceStartReason) {
+        if (shortageStartGate == null || plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
             return; // 计划已开工 (当时已过闸 / 已强制并留痕) 或已结束: 不再让每个批次重问
         }
         shortageStartGate.check(factoryId, plan, forceStartReason, com.cretas.aims.utils.SecurityUtils.currentUserId());

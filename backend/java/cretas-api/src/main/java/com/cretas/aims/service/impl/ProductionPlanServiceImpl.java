@@ -9557,36 +9557,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 不碰其它批次的任务 (即便同一 productTypeId)。终态任务 (COMPLETED/SKIPPED/CANCELLED) 不变。
      */
     private void cancelPlanBatchesAndTasks(String factoryId, String planId, List<ProductionBatch> planBatches) {
-        if (planBatches == null || planBatches.isEmpty()) {
-            return;
-        }
-        for (ProductionBatch batch : planBatches) {
-            if (batch.getId() == null) {
-                continue;
-            }
-            // 空批次 / 活跃批次 → CANCELLED (已 CANCELLED/COMPLETED 不动)
-            if (batch.getStatus() != ProductionBatchStatus.CANCELLED
-                    && batch.getStatus() != ProductionBatchStatus.COMPLETED) {
-                batch.setStatus(ProductionBatchStatus.CANCELLED);
-                productionBatchRepository.save(batch);
-            }
-            if (workProcessTaskRepository == null) {
-                continue; // 单测无注入 → 跳过 (有注入的测试覆盖级联)
-            }
-            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks = workProcessTaskRepository
-                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batch.getId());
-            int closedCount = 0;
-            for (com.cretas.aims.entity.workprocess.WorkProcessTask task : tasks) {
-                if (!task.getStatus().isTerminal()) {
-                    task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.CANCELLED);
-                    closedCount++;
-                }
-            }
-            if (closedCount > 0) {
-                workProcessTaskRepository.saveAll(tasks);
-                log.info("R1 级联取消 {} 个工序任务: planId={}, batchId={}", closedCount, planId, batch.getId());
-            }
-        }
+        // 唯一一份级联在 PlanBatchCascade (驳回强制插单也用它)
+        com.cretas.aims.service.production.PlanBatchCascade.cancelBatchesAndTasks(
+                factoryId, planId, planBatches, productionBatchRepository, workProcessTaskRepository);
     }
 
     /**
