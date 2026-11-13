@@ -34,8 +34,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/LegacyToolMigrationManifestLoaderTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/RuntimeToolDescriptorRegistryTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/RuntimeToolPolicyLoaderTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/ToolDescriptorCatalogTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/descriptor/ToolDescriptorInventoryDriftTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/gateway/mcp/MCPExternalPolicyTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderDeleteToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/crm/OrderListToolTest.java
