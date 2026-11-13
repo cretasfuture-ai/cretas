@@ -449,6 +449,11 @@ public class ProcessingServiceImpl implements ProcessingService {
                 if (materialBatchId == null) continue;
                 MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId).orElse(null);
                 if (mb == null) continue;
+                // 扣留中的批次状态不动, 只把扣留记录跟着进在制 (放行后回生产预留, 完工时再正常释放)
+                if (com.cretas.aims.service.quality.release.MaterialBatchHoldService.followWip(mb, true)) {
+                    materialBatchRepository.save(mb);
+                    continue;
+                }
                 if (mb.getStatus() == MaterialBatchStatus.RESERVED || mb.getStatus() == MaterialBatchStatus.AVAILABLE) {
                     mb.setStatus(MaterialBatchStatus.PRODUCING_RESERVED);
                     materialBatchRepository.save(mb);
@@ -485,19 +490,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                 if (materialBatchId == null) continue;
                 MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(materialBatchId, factoryId).orElse(null);
                 if (mb == null) continue;
+                // B1: 扣留期间工序完工/取消 — 状态仍是质检中不动, 但扣留记录改成离开在制后的状态,
+                // 否则放行会还原成生产预留, 此后再没有路径把它翻回来 (库存搁死在在制列表)
+                if (com.cretas.aims.service.quality.release.MaterialBatchHoldService.followWip(mb, false)) {
+                    materialBatchRepository.save(mb);
+                    flipped++;
+                    continue;
+                }
                 if (mb.getStatus() != MaterialBatchStatus.PRODUCING_RESERVED) continue;
 
-                MaterialBatchStatus next;
-                BigDecimal current = mb.getCurrentQuantity();
-                BigDecimal reserved = mb.getReservedQuantity() != null ? mb.getReservedQuantity() : BigDecimal.ZERO;
-                if (current.compareTo(BigDecimal.ZERO) <= 0) {
-                    next = MaterialBatchStatus.DEPLETED;
-                } else if (reserved.compareTo(BigDecimal.ZERO) > 0) {
-                    next = MaterialBatchStatus.RESERVED;
-                } else {
-                    next = MaterialBatchStatus.AVAILABLE;
-                }
-                mb.setStatus(next);
+                mb.setStatus(com.cretas.aims.service.quality.release.MaterialBatchHoldService.wipExitStatus(mb));
                 materialBatchRepository.save(mb);
                 flipped++;
             }
