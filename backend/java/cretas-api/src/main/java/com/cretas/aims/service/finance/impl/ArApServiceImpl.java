@@ -54,6 +54,13 @@ public class ArApServiceImpl implements ArApService {
     @Autowired(required = false)
     private FinanceRowScopeQuery financeRowScopeQuery;
 
+    /**
+     * 纪律排查红线 4 (2026-11-13): 应收/应付手工调整的审批/驳回接入工厂级「允许本人审批」开关,
+     * 与改价、退款、盘点等单据同一个判定处。未注入 (手工构造的单测) = 开关关, 四眼照旧。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate selfApprovalGate;
+
     /** Batch approval/rejection must open one independent transaction per item. */
     @Autowired(required = false)
     private PlatformTransactionManager transactionManager;
@@ -961,7 +968,8 @@ public class ArApServiceImpl implements ArApService {
 
     @Override
     @Transactional
-    public ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy) {
+    public ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy,
+                                             String selfApprovalReason) {
         requireActor(approvedBy);
         ArApTransaction txn = financeRowScopeQuery != null
                 ? financeRowScopeQuery.requireTransactionAccess(factoryId, transactionId)
@@ -991,12 +999,8 @@ public class ArApServiceImpl implements ArApService {
             throw new BusinessException(409, "非调整类型交易不可审批: " + txn.getTransactionType())
                     .withHint("仅 AR/AP 调整类型交易需要审批, 请刷新交易列表");
         }
-        // 4-eyes principle: approver must differ from submitter
-        if (txn.getOperatedBy() != null && txn.getOperatedBy().equals(approvedBy)) {
-            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
-                    .withHint("请使用其他账号审批")
-                    .withHintTarget("审批人");
-        }
+        // 4-eyes principle: approver must differ from submitter —— 除非工厂开了「允许本人审批」且写了原因
+        ensureAdjustmentFourEyes(factoryId, txn, approvedBy, selfApprovalReason, "请使用其他账号审批");
 
         BigDecimal amount = txn.getAmount();
         BigDecimal newBalance;
@@ -1047,11 +1051,8 @@ public class ArApServiceImpl implements ArApService {
                     .withHint("请刷新调整列表查看最新状态")
                     .withHintTarget("调整记录");
         }
-        if (txn.getOperatedBy() != null && txn.getOperatedBy().equals(approvedBy)) {
-            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
-                    .withHint("请使用其他账号驳回")
-                    .withHintTarget("审批人");
-        }
+        // 本人驳回同受开关管 (与退款驳回同口径): 驳回原因即本人审批原因
+        ensureAdjustmentFourEyes(factoryId, txn, approvedBy, reason, "请使用其他账号驳回");
 
         // 余额不动. 在 remark 末尾追加驳回原因, 历史可追溯.
         String existingRemark = txn.getRemark() != null ? txn.getRemark() : "";
@@ -1070,6 +1071,33 @@ public class ArApServiceImpl implements ArApService {
                 transactionId, factoryId, approvedBy, reason);
         return transactionRepository.save(txn);
     }
+
+    /**
+     * 应收/应付调整的四眼判定 (approve / reject 共用一处)。
+     *
+     * <p>提交人 = {@code operatedBy}。开关关 ⇒ 原 403 文案不变 (另加错误码 {@link #ADJUSTMENT_FOUR_EYES}
+     * 供前端分辨); 开关开 ⇒ 必须写原因 (gate 抛 422), 放行后在调整记录上留痕。
+     * 必须在任何余额 / 状态写入之前调用。
+     */
+    private void ensureAdjustmentFourEyes(String factoryId, ArApTransaction txn, Long actorId,
+                                          String selfApprovalReason, String otherAccountHint) {
+        boolean actorIsMaker = txn.getOperatedBy() != null && txn.getOperatedBy().equals(actorId);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decision =
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                        selfApprovalGate, factoryId, actorIsMaker, selfApprovalReason);
+        if (decision.forbidden()) {
+            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
+                    .withCode(ADJUSTMENT_FOUR_EYES)
+                    .withHint(otherAccountHint + "; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
+                    .withHintTarget("审批人");
+        }
+        txn.setSelfApproved(decision.selfApproved());
+        txn.setSelfApprovalReason(decision.selfApproved() ? decision.reason() : null);
+    }
+
+    /** 应收/应付调整: 提交人审批/驳回自己的调整 (开关关时)。 */
+    public static final String ADJUSTMENT_FOUR_EYES = "AR_AP_ADJUSTMENT_FOUR_EYES";
 
     private static void rejectRefundReversalSource(String sourceType) {
         if (com.cretas.aims.service.voucher.ReturnRefundReversalEvidence.SOURCE.equals(sourceType)) {
@@ -1240,7 +1268,8 @@ public class ArApServiceImpl implements ArApService {
      */
     @Override
     public java.util.Map<String, Object> batchApproveAdjustments(
-            String factoryId, java.util.List<String> transactionIds, Long approvedBy) {
+            String factoryId, java.util.List<String> transactionIds, Long approvedBy,
+            String selfApprovalReason) {
         if (transactionIds == null || transactionIds.isEmpty()) {
             throw new BusinessException(400, "批量审批 ID 列表不能为空")
                     .withHint("请选择至少 1 条交易").withHintTarget("ids");
@@ -1256,7 +1285,7 @@ public class ArApServiceImpl implements ArApService {
         for (String id : transactionIds) {
             try {
                 itemTransaction.execute(status -> {
-                    approveAdjustment(factoryId, id, approvedBy);
+                    approveAdjustment(factoryId, id, approvedBy, selfApprovalReason);
                     return null;
                 });
                 approvedCount++;
