@@ -9460,12 +9460,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setCancelledAt(LocalDateTime.now());
         productionPlanRepository.save(plan);
 
+        // 取消一张还在待审批的强制插单: 它的画布审批实例也要结束, 不留悬空的待办 (审批人点开只会 409)
+        cancelPendingForceInsertWorkflow(factoryId, plan, cancellationReason, operatorId);
+
         // R1 (2026-06-14): 按批次定向级联关闭 WorkProcessTask (新表), 取代旧的"按产品类型全关 ProcessTask"。
         // 旧逻辑 findByFactoryIdAndProductTypeId 会把同产品另一并行活跃批次的任务一并 CLOSED (六扇门 6.1+6.2 场景误伤)。
         cancelPlanBatchesAndTasks(factoryId, planId, planBatches);
 
         log.info("取消生产计划: planId={}, operatorId={}, reason={}, batches={}",
                 planId, operatorId, cancellationReason, planBatches != null ? planBatches.size() : 0);
+    }
+
+    /** 强制插单画布的 module code (与 UrgentInsertServiceImpl.FORCE_INSERT_MODULE 一致) */
+    private static final String FORCE_INSERT_WORKFLOW_MODULE = "FORCE_INSERT";
+
+    /**
+     * 计划取消时一并结束它还在跑的强制插单审批实例 (CANCELLED + CANCEL history 记原因/操作人)。
+     * 没有实例 / 实例已结束 = 什么都不做; 引擎缺失 (单测环境) 同理。
+     */
+    private void cancelPendingForceInsertWorkflow(String factoryId, ProductionPlan plan, String reason, Long operatorId) {
+        if (workflowEngine == null || !Boolean.TRUE.equals(plan.getIsForceInserted())) {
+            return;
+        }
+        workflowEngine.getCurrentInstance(factoryId, FORCE_INSERT_WORKFLOW_MODULE, plan.getId())
+                .ifPresent(instance -> workflowEngine.cancel(instance.getId(), operatorId,
+                        "计划已取消，审批同步结束：" + reason));
     }
 
     /**
