@@ -105,6 +105,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     /** 批次级开工与计划级同一道缺料闸 (纪律排查 A8)。字段注入, 不打断按构造器装配的既有测试; 没注入 = 不过闸。 */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批; 只影响措辞。字段注入理由同上, 没注入时用通用说法 (拦截照常)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
     /**
      * 动态质检表哪些项不合格才判整张 FAIL (工厂开关 quality.inspection.fail_scope, 2026-11-11)。字段注入, 不打断按构造器装配的既有测试;
      * 没注入 (单测直接 new) 时按 Steve 裁定的默认 MINOR_FOR_REVIEW。
@@ -239,10 +242,14 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "批次状态不允许开始生产: " + batch.getStatus())
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11: 批次挂在待审批的强制插单上 (手工 / AI 建批带 productionPlanId) ⇒ 与计划开工同一道审批闸。
+        //    放在缺料闸 (会写缺料实例的强制原因) 和任何状态写入之前, 被拦不留半截状态。
+        com.cretas.aims.entity.ProductionPlan linkedPlan = linkedPlanOf(factoryId, batch);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(linkedPlan, forceInsertApproverDescriber);
         // 纪律排查 A8: 批次级开工与计划级同口径。手工 / AI 建的批次可以挂在一个还没开工的计划上
         // (POST /processing/batches 带 productionPlanId), 直接开批次就绕过了计划开工的缺料闸。
         // 只在计划还没开工时过闸: 计划已开工 = 当时已过闸或已强制开工并留痕, 不再让每个批次重问一遍。
-        checkShortageGateForBatchStart(factoryId, batch, forceStartReason);
+        checkShortageGateForBatchStart(factoryId, linkedPlan, forceStartReason);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setStartTime(LocalDateTime.now());
         batch.setSupervisorId(supervisorId != null ? supervisorId.longValue() : null);
@@ -273,6 +280,9 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "只有暂停中的批次可以恢复生产")
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11 (独立审查): 修复前绕过审批开工、后来计划被驳回 / 取消的存量批次, 暂停后不能再恢复生产
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                linkedPlanOf(factoryId, batch), forceInsertApproverDescriber);
         batch.setStatus(ProductionBatchStatus.IN_PROGRESS);
         batch.setNotes(batch.getNotes() != null ? batch.getNotes() + "\n恢复生产: " + LocalDateTime.now() : "恢复生产: " + LocalDateTime.now());
         return productionBatchRepository.save(batch);
@@ -334,15 +344,20 @@ public class ProcessingServiceImpl implements ProcessingService {
                     com.cretas.aims.entity.enums.ProductionPlanStatus.COMPLETED,
                     com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
 
-    /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
-    private void checkShortageGateForBatchStart(String factoryId, ProductionBatch batch, String forceStartReason) {
-        if (shortageStartGate == null || batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
-            return;
+    /** 批次所挂的本厂计划; 没挂 / 跨厂 / 查不到 ⇒ null。 */
+    private com.cretas.aims.entity.ProductionPlan linkedPlanOf(String factoryId, ProductionBatch batch) {
+        if (batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
+            return null;
         }
-        com.cretas.aims.entity.ProductionPlan plan = productionPlanRepository.findById(batch.getProductionPlanId())
+        return productionPlanRepository.findById(batch.getProductionPlanId())
                 .filter(p -> factoryId.equals(p.getFactoryId()))
                 .orElse(null);
-        if (plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
+    }
+
+    /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
+    private void checkShortageGateForBatchStart(String factoryId, com.cretas.aims.entity.ProductionPlan plan,
+                                                String forceStartReason) {
+        if (shortageStartGate == null || plan == null || PLAN_ALREADY_STARTED_OR_CLOSED.contains(plan.getStatus())) {
             return; // 计划已开工 (当时已过闸 / 已强制并留痕) 或已结束: 不再让每个批次重问
         }
         shortageStartGate.check(factoryId, plan, forceStartReason, com.cretas.aims.utils.SecurityUtils.currentUserId());
