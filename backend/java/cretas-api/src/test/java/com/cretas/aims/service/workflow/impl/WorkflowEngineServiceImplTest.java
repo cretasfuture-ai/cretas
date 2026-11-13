@@ -476,6 +476,90 @@ class WorkflowEngineServiceImplTest {
         assertNotNull(after2.getCompletedAt());
     }
 
+    /** 并行两条分支, 分别归不同岗位: branch_a→role_a, branch_b→role_b (branch_a 排在 currentNodeIds 前面)。 */
+    private ApprovalWorkflowInstance startTwoRoleParallel() {
+        wireInstanceLookup();
+        buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("fan", "parallel", null),
+                        node("branch_a", "approval", Map.of("approverRoles", List.of("role_a"))),
+                        node("branch_b", "approval", Map.of("approverRoles", List.of("role_b"))),
+                        node("merge", "join", Map.of("mode", "ALL")),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "fan", null, 0, null),
+                        edge("e2", "fan", "branch_a", null, 0, null),
+                        edge("e3", "fan", "branch_b", null, 1, null),
+                        edge("e4", "branch_a", "merge", null, 0, null),
+                        edge("e5", "branch_b", "merge", null, 0, null),
+                        edge("e6", "merge", "end_ok", null, 0, null)),
+                "start");
+        ApprovalWorkflowInstance inst = engine.startWorkflow(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-PAR", Map.of(), INITIATOR_ID);
+        assertEquals(List.of("branch_a", "branch_b"), inst.getCurrentNodeIds(), "前提: branch_a 排在最前面");
+        return inst;
+    }
+
+    @Test
+    @DisplayName("parallel: branch_b 的审批人批准时推进的是 branch_b, 不是排在最前面的 branch_a")
+    void parallel_actor_advances_own_branch_not_first() {
+        ApprovalWorkflowInstance inst = startTwoRoleParallel();
+
+        ApprovalWorkflowInstance after = engine.transitionNode(
+                inst.getId(), APPROVER_ID, "role_b", HistoryAction.APPROVE, "b ok");
+
+        assertEquals(List.of("branch_a"), after.getCurrentNodeIds(),
+                "role_b 批的是 branch_b; branch_a 仍等 role_a");
+        ArgumentCaptor<ApprovalHistory> cap = ArgumentCaptor.forClass(ApprovalHistory.class);
+        verify(historyRepository, atLeastOnce()).save(cap.capture());
+        assertTrue(cap.getAllValues().stream().anyMatch(h ->
+                        h.getAction() == HistoryAction.APPROVE && "branch_b".equals(h.getNodeId())),
+                "APPROVE 记在 branch_b 上");
+    }
+
+    @Test
+    @DisplayName("parallel: 显式指定节点推进该节点; 指定别的分支的节点被拒; 不在 active 里 409")
+    void parallel_explicit_node_is_honoured_and_guarded() {
+        ApprovalWorkflowInstance inst = startTwoRoleParallel();
+
+        BusinessException forbidden = assertThrows(BusinessException.class,
+                () -> engine.transitionNode(inst.getId(), APPROVER_ID, "role_a",
+                        HistoryAction.APPROVE, "越权", "branch_b"));
+        assertEquals("OA_TASK_FORBIDDEN", forbidden.getErrorCode());
+        assertEquals(List.of("branch_a", "branch_b"), inst.getCurrentNodeIds());
+
+        BusinessException stale = assertThrows(BusinessException.class,
+                () -> engine.transitionNode(inst.getId(), APPROVER_ID, "role_a",
+                        HistoryAction.APPROVE, "过期", "merge"));
+        assertEquals("OA_TASK_NODE_CHANGED", stale.getErrorCode());
+
+        ApprovalWorkflowInstance after = engine.transitionNode(inst.getId(), APPROVER_ID, "factory_super_admin",
+                HistoryAction.APPROVE, "超管", "branch_b");
+        assertEquals(List.of("branch_a"), after.getCurrentNodeIds());
+    }
+
+    @Test
+    @DisplayName("parallel: 没有匹配角色时仍退回第一个 active 节点 (与旧行为一致)")
+    void parallel_unmatched_role_falls_back_to_first() {
+        ApprovalWorkflowInstance inst = startTwoRoleParallel();
+
+        ApprovalWorkflowInstance after = engine.transitionNode(
+                inst.getId(), APPROVER_ID, "factory_super_admin", HistoryAction.APPROVE, "超管");
+
+        assertEquals(List.of("branch_b"), after.getCurrentNodeIds());
+    }
+
+    @Test
+    @DisplayName("parallel: 待办给的 expectedNodeId 是该岗位负责的节点")
+    void parallel_resolveActiveNodeForRole_picks_the_roles_node() {
+        ApprovalWorkflowInstance inst = startTwoRoleParallel();
+
+        assertEquals("branch_b", engine.resolveActiveNodeForRole(inst, "role_b"));
+        assertEquals("branch_a", engine.resolveActiveNodeForRole(inst, "role_a"));
+        assertEquals("branch_a", engine.resolveActiveNodeForRole(inst, "someone_else"));
+    }
+
     @Test
     @DisplayName("cancel_writes_history: cancel → CANCELLED + CANCEL history row")
     void cancel_writes_history() {

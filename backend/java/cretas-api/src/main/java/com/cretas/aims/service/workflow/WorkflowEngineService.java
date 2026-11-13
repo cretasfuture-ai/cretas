@@ -116,6 +116,26 @@ public interface WorkflowEngineService {
                                             String notes);
 
     /**
+     * 推进指定节点 —— 并行网关下有多个 active 节点时, 调用方必须说清推进的是哪一个。
+     *
+     * <p>{@code fromNodeId} 非空: 必须是当前 active 节点之一, 否则 409 {@code OA_TASK_NODE_CHANGED}。
+     * 为空: 与 5 参版本一致, 按操作人角色在 active 节点里找自己负责的那个
+     * (只有一个 active 节点时就是它; 没有匹配 / 无角色时退回第一个)。
+     */
+    ApprovalWorkflowInstance transitionNode(String instanceId,
+                                            Long actorId,
+                                            String actorRole,
+                                            HistoryAction action,
+                                            String notes,
+                                            String fromNodeId);
+
+    /**
+     * 实例当前 active 节点里「该角色负责的那个」(并行网关有多个时); 单节点 / 没有匹配返回第一个节点, 无节点返回 null。
+     * 待办列表用它给出正确的 expectedNodeId。
+     */
+    String resolveActiveNodeForRole(ApprovalWorkflowInstance instance, String role);
+
+    /**
      * 业务实体查实例 — PurchaseService.findInstanceByPO 用 (B.6).
      *
      * <p>同一 (factoryId, moduleCode, businessEntityId) 理论上至多 1 active.
