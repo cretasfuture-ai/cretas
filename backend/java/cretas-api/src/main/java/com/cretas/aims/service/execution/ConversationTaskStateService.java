@@ -21,6 +21,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -139,6 +140,12 @@ public class ConversationTaskStateService {
         return resumeMessage(active, intentNames);
     }
 
+    /** 同上, 参数名按 {@code paramLabels} 给人看的名字说 (见 {@link #toolParamLabels})。 */
+    public static String repeatMessage(ConversationSession active, Function<String, List<String>> intentNames,
+                                       BiFunction<String, String, String> paramLabels) {
+        return resumeMessage(active, intentNames, paramLabels);
+    }
+
     /** 意图配置 → 名称在前、配置的关键词在后 (恢复说法按这些整句比对)。 */
     public static List<String> namesOf(com.cretas.aims.entity.config.AIIntentConfig config) {
         if (config == null) return List.of();
@@ -211,6 +218,15 @@ public class ConversationTaskStateService {
     public Optional<Resumed> tryResume(String factoryId, Long userId, String input,
                                        Function<String, Optional<String>> phraseIntent,
                                        Function<String, List<String>> intentNames) {
+        return tryResume(factoryId, userId, input, phraseIntent, intentNames, null);
+    }
+
+    /** 同上, 恢复那句话里参数名按 {@code paramLabels} 给人看的名字说。 */
+    @Transactional
+    public Optional<Resumed> tryResume(String factoryId, Long userId, String input,
+                                       Function<String, Optional<String>> phraseIntent,
+                                       Function<String, List<String>> intentNames,
+                                       BiFunction<String, String, String> paramLabels) {
         if (!isEnabledFor(factoryId)) return Optional.empty();
         List<ConversationSession> stack = stack(factoryId, userId);
         Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent, intentNames);
@@ -219,7 +235,7 @@ public class ConversationTaskStateService {
         // 同一时刻只留一个在问的任务 (与 startParameterCollection 同口径); 挂起的不受影响
         sessions.cancelActiveSessionsForUser(factoryId, userId, clock.get());
         if (!session.resumeFromSuspension(clock.get())) return Optional.empty();
-        String message = resumeMessage(session, intentNames);
+        String message = resumeMessage(session, intentNames, paramLabels);
         session.addAssistantMessage(message);
         sessions.save(session);
         log.info("[TaskState] 恢复任务: session={}, intent={}", session.getSessionId(), session.getKnownIntentCode());
@@ -262,6 +278,18 @@ public class ConversationTaskStateService {
     }
 
     static String resumeMessage(ConversationSession session, Function<String, List<String>> intentNames) {
+        return resumeMessage(session, intentNames, null);
+    }
+
+    /**
+     * 恢复 / 重问时对用户说的话。参数一律用给人看的名字 (F006 实测缺陷 2: 以前会写成「已记下 actualQuantity：100」):
+     * 会话里存的标签 → 工具参数说明 ({@code paramLabels}) → 常用参数表, 取第一个不是字段名的, 截掉括号/逗号后的补充说明。
+     * 三处都只有字段名的参数不列名字, 只说「另有 N 项已记下」—— 回复里永远不出现驼峰字段名。
+     *
+     * @param paramLabels (意图码, 参数名) → 工具参数说明, 可空
+     */
+    static String resumeMessage(ConversationSession session, Function<String, List<String>> intentNames,
+                                BiFunction<String, String, String> paramLabels) {
         String code = session.getKnownIntentCode();
         String name = null;
         try {
@@ -274,22 +302,101 @@ public class ConversationTaskStateService {
                 .append("」。");
         List<String> filled = new ArrayList<>();
         List<String> missing = new ArrayList<>();
+        int unnamedFilled = 0;
+        int unnamedMissing = 0;
         java.util.Set<String> required = new java.util.HashSet<>();
         session.getRequiredParameters().forEach(p -> required.add(p.getName()));
-        session.getCollectedParameters().forEach((k, v) -> {
-            if (!required.contains(k)) filled.add(k + "：" + v);
-        });
+        for (Map.Entry<String, String> e : session.getCollectedParameters().entrySet()) {
+            if (required.contains(e.getKey())) continue;
+            String label = displayLabel(code, e.getKey(), null, paramLabels);
+            if (label == null) unnamedFilled++;
+            else filled.add(label + "：" + e.getValue());
+        }
         for (RequiredParameter p : session.getRequiredParameters()) {
-            String label = p.getLabel() == null || p.getLabel().isBlank() ? p.getName() : p.getLabel();
+            String label = displayLabel(code, p.getName(), p.getLabel(), paramLabels);
             if (p.isCollected()) {
-                filled.add(label + "：" + p.getValue());
+                if (label == null) unnamedFilled++;
+                else filled.add(label + "：" + p.getValue());
+            } else if (label == null) {
+                unnamedMissing++;
             } else {
                 missing.add(label);
             }
         }
+        if (unnamedFilled > 0) filled.add((filled.isEmpty() ? "" : "另有 ") + unnamedFilled + " 项信息");
+        if (unnamedMissing > 0) missing.add((missing.isEmpty() ? "" : "另 ") + unnamedMissing + " 项信息");
         if (!filled.isEmpty()) sb.append("已记下 ").append(String.join("，", filled)).append("。");
         if (!missing.isEmpty()) sb.append("还需要：").append(String.join("、", missing)).append("。");
         sb.append("填好后会先给您确认，不会直接提交。");
         return sb.toString();
+    }
+
+    /** 字段名长相 (actualQuantity / task_id): 只要是 ASCII 标识符就不给用户看。 */
+    private static final java.util.regex.Pattern FIELD_NAME = java.util.regex.Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
+
+    /** 工具没写说明时的兜底 (与 AbstractBusinessTool#getParameterDisplayName 同口径的人话)。 */
+    private static final Map<String, String> COMMON_LABELS = Map.ofEntries(
+            Map.entry("actualQuantity", "实际产量"),
+            Map.entry("taskId", "工序任务"),
+            Map.entry("quantity", "数量"),
+            Map.entry("batchId", "批次号"),
+            Map.entry("batchNumber", "批次号"),
+            Map.entry("materialTypeId", "原材料"),
+            Map.entry("productionPlanId", "生产计划"),
+            Map.entry("supplierId", "供应商"),
+            Map.entry("reason", "原因"),
+            Map.entry("notes", "备注"),
+            Map.entry("status", "状态"));
+
+    /** 给人看的参数名; 三个来源都只有字段名时返回 null (调用方只计数, 不列名字)。 */
+    static String displayLabel(String intentCode, String name, String storedLabel,
+                               BiFunction<String, String, String> paramLabels) {
+        String fromTool = null;
+        if (paramLabels != null && name != null) {
+            try {
+                fromTool = paramLabels.apply(intentCode, name);
+            } catch (RuntimeException ignored) {
+                // 说明只是给人看的, 拿不到就看下一个来源
+            }
+        }
+        for (String candidate : new String[]{storedLabel, fromTool, name == null ? null : COMMON_LABELS.get(name)}) {
+            String shortened = shortLabel(candidate);
+            if (shortened != null) return shortened;
+        }
+        return null;
+    }
+
+    /** 「实际产量（一个数字，单位按…）」→「实际产量」; 空或字段名 → null。 */
+    static String shortLabel(String raw) {
+        if (raw == null) return null;
+        String s = raw.strip();
+        int cut = s.length();
+        for (char c : new char[]{'（', '(', '，', ',', '。', '；', ';', '：', ':', ' '}) {
+            int i = s.indexOf(c);
+            if (i >= 0 && i < cut) cut = i;
+        }
+        s = s.substring(0, cut).strip();
+        if (s.isEmpty() || FIELD_NAME.matcher(s).matches()) return null;
+        return s;
+    }
+
+    /**
+     * (意图码, 参数名) → 绑定工具的参数说明 (工具 schema 的 description)。两个入口共用, 拿不到返回 null。
+     */
+    public static BiFunction<String, String, String> toolParamLabels(
+            Function<String, Optional<com.cretas.aims.entity.config.AIIntentConfig>> intentByCode,
+            com.cretas.aims.ai.tool.ToolRegistry toolRegistry) {
+        return (intentCode, param) -> {
+            if (intentByCode == null || toolRegistry == null || intentCode == null || param == null) return null;
+            String toolName = intentByCode.apply(intentCode)
+                    .map(com.cretas.aims.entity.config.AIIntentConfig::getToolName).orElse(null);
+            if (toolName == null || toolName.isBlank()) return null;
+            return toolRegistry.getExecutor(toolName).map(tool -> {
+                Map<String, Object> schema = tool.getParametersSchema();
+                if (schema == null || !(schema.get("properties") instanceof Map<?, ?> props)) return null;
+                return props.get(param) instanceof Map<?, ?> def && def.get("description") instanceof String d
+                        ? d : null;
+            }).orElse(null);
+        };
     }
 }

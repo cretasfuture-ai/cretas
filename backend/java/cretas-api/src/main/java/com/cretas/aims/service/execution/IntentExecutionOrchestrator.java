@@ -468,6 +468,33 @@ public class IntentExecutionOrchestrator {
 
             {}
         }
+        // 任务状态 (终审 S1): 这一轮开始时请求点名的会话是不是正在问参数的任务。是 → 本轮不做恢复
+        // (同一句话既打断又恢复 = 原地吞话, 「完成工序任务1830」的 1830 会丢)。开关关时不查库, 恒 false。
+        boolean openTaskAtStart = taskStateService != null && taskStateService.isEnabledFor(factoryId)
+                && taskStateService.hasOpenTask(factoryId, userId, request.getSessionId());
+
+        // 0.19 任务状态让路 (F006 实测缺陷 1, 与 SSE 同序): 开关开时, 下面的短语快捷通道不能抢在任务判断之前。
+        //   - 正在问参数 → 先 classify: 回答这一问 / 打断 (挂起后这句照常走短语或识别) / 「继续 X」重问;
+        //   - 没有在问的 → 挂起的任务 + 恢复说法 (「继续报工」) 先恢复, 不被短语表执行成 CONTEXT_CONTINUE。
+        // 开关关: 两个分支都不进, 执行顺序与改动前逐字相同。
+        boolean taskContinuationTried = false;
+        boolean taskResumeTried = false;
+        if (yieldPhraseShortcutToTaskState(factoryId, factoryPackConstrained)) {
+            if (openTaskAtStart) {
+                taskContinuationTried = true;
+                IntentExecuteResponse taskTurn = handleConversationContinuation(factoryId, request, userId, userRole);
+                if (taskTurn != null) {
+                    return taskTurn;
+                }
+            } else if (!negationVetoWrite) {
+                taskResumeTried = true;
+                IntentExecuteResponse resumedFirst = handleTaskResume(factoryId, request, userId);
+                if (resumedFirst != null) {
+                    return resumedFirst;
+                }
+            }
+        }
+
         if (!negationVetoWrite && userInput != null && !userInput.isEmpty()) {
             IntentMatchResult earlyPhraseMatch = tryOrchestratorPhraseShortcut(
                     userInput,
@@ -520,14 +547,10 @@ public class IntentExecutionOrchestrator {
             }
         }
 
-        // 任务状态 (终审 S1): 这一轮开始时请求点名的会话是不是正在问参数的任务。是 → 本轮不做恢复
-        // (同一句话既打断又恢复 = 原地吞话, 「完成工序任务1830」的 1830 会丢)。
-        boolean openTaskAtStart = taskStateService != null && taskStateService.isEnabledFor(factoryId)
-                && taskStateService.hasOpenTask(factoryId, userId, request.getSessionId());
-
         // Parameter-filling continuations stay in Java when the semantic-first
         // restaurant path is disabled or the request is an operational write.
-        if (!factoryPackConstrained
+        // (0.19 已经替正在问的任务跑过一次的, 不再跑第二次: 打断后会话已挂起)
+        if (!factoryPackConstrained && !taskContinuationTried
                 && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
             IntentExecuteResponse conversationResponse = handleConversationContinuation(
                     factoryId, request, userId, userRole);
@@ -538,7 +561,7 @@ public class IntentExecutionOrchestrator {
 
         // 0.27 任务状态: 没有正在问的任务时, 「继续报工」「接着刚才的」回到被挂起的那个
         //      (与 SSE 同一条规则, 只找回参数、不执行)。本轮刚打断过任务 / 否定说法 (别报工了) 不恢复。
-        if (!factoryPackConstrained && !openTaskAtStart && !negationVetoWrite) {
+        if (!factoryPackConstrained && !openTaskAtStart && !negationVetoWrite && !taskResumeTried) {
             IntentExecuteResponse resumed = handleTaskResume(factoryId, request, userId);
             if (resumed != null) {
                 return resumed;
@@ -1505,7 +1528,7 @@ public class IntentExecutionOrchestrator {
                 if (action == TaskContinuationRule.Action.REPEAT) {
                     // 「继续完成工序」时它正问着: 不挂起、不另起一份同意图的收集, 把这一问再问一遍
                     return taskContinueResponse(pending.get(),
-                            ConversationTaskStateService.repeatMessage(pending.get(), intentNames(factoryId)));
+                            ConversationTaskStateService.repeatMessage(pending.get(), intentNames(factoryId), paramLabels(factoryId)));
                 }
                 if (action == TaskContinuationRule.Action.INTERRUPT) {
                     log.info("[TaskState] 普通入口: 这句不像在回答缺参问题, 挂起后正常识别: session={}",
@@ -1571,6 +1594,14 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    /**
+     * 短语快捷通道 (#0.2 Sprint12-CacheFix / Round7-EarlyPhrase) 要不要先给任务状态让路。
+     * 只在开关对本厂打开、且不是工厂包约束请求时让路; 关着时恒 false, 执行顺序与改动前相同。
+     */
+    boolean yieldPhraseShortcutToTaskState(String factoryId, boolean factoryPackConstrained) {
+        return !factoryPackConstrained && taskStateService != null && taskStateService.isEnabledFor(factoryId);
+    }
+
     /** 回到被挂起的任务 (与 SSE {@code streamTaskResume} 同一个服务方法)。回复格式同会话延续。 */
     private IntentExecuteResponse handleTaskResume(String factoryId, IntentExecuteRequest request, Long userId) {
         if (taskStateService == null || !taskStateService.isEnabledFor(factoryId) || userId == null
@@ -1582,7 +1613,7 @@ public class IntentExecutionOrchestrator {
         try {
             resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
                     knowledgeBase::matchPhrase,
-                    intentNames(factoryId));
+                    intentNames(factoryId), paramLabels(factoryId));
         } catch (Exception e) {
             log.warn("[TaskState] 恢复失败, 按新话识别: {}", e.getMessage());
             return null;
@@ -1614,6 +1645,12 @@ public class IntentExecutionOrchestrator {
     }
 
     /** 意图码 → 名称与配置的关键词 (与 SSE 同一个来源: 本厂可见的意图配置)。 */
+    /** (意图码, 参数名) → 绑定工具的参数说明, 恢复/重问时不把字段名说给用户 (两个入口同一个来源)。 */
+    private java.util.function.BiFunction<String, String, String> paramLabels(String factoryId) {
+        return ConversationTaskStateService.toolParamLabels(
+                code -> aiIntentService.getIntentByCode(factoryId, code), toolRegistry);
+    }
+
     private java.util.function.Function<String, List<String>> intentNames(String factoryId) {
         return code -> aiIntentService.getIntentByCode(factoryId, code)
                 .map(ConversationTaskStateService::namesOf).orElse(List.of());
