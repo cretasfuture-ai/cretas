@@ -8,94 +8,63 @@
  * ============================================================ */
 :root {
   /* ---- Brand / Theme Colors ---- */
-  --primary-color: #1B65A8;
-  --color-primary: #1B65A8;
-  --color-primary-light: #2B7EC1;
-  --color-primary-dark: #14507F;
-  --color-success: #36B37E;
-  --color-warning: #FFAB00;
-  --color-danger: #FF5630;
-  --color-info: #6B778C;
-  --success-color: #36B37E;
-  --warning-color: #FFAB00;
-  --danger-color: #FF5630;
-  --info-color: #6B778C;
+  /* P1（MIGRATION-PLAN）：旧语义 token 一律指向 Cretas System v1 的 --cs-*（src/styles/tokens.css），不再各写一份色值 */
+  --primary-color: var(--cs-primary);
+  --color-primary: var(--cs-primary);
+  --color-primary-light: color-mix(in srgb, var(--cs-primary) 80%, #fff);
+  --color-primary-dark: var(--cs-primary-hover);
+  --color-success: var(--cs-success);
+  --color-warning: var(--cs-warning);
+  --color-danger: var(--cs-danger);
+  --color-info: var(--cs-muted);
+  --success-color: var(--cs-success);
+  --warning-color: var(--cs-warning);
+  --danger-color: var(--cs-danger);
+  --info-color: var(--cs-muted);
 
   /* ---- Text ---- */
-  --text-color-primary: #1A2332;
-  --text-color-regular: #4A5568;
-  --text-color-secondary: #7A8599;
-  --text-color-placeholder: #A0AEC0;
-  --color-text-primary: #1A2332;
-  --color-text-regular: #4A5568;
-  --color-text-secondary: #7A8599;
-  --color-text-placeholder: #A0AEC0;
+  --text-color-primary: var(--cs-text);
+  --text-color-regular: var(--cs-muted);
+  --text-color-secondary: var(--cs-muted);
+  --text-color-placeholder: color-mix(in srgb, var(--cs-muted) 60%, #fff);
+  --color-text-primary: var(--cs-text);
+  --color-text-regular: var(--cs-muted);
+  --color-text-secondary: var(--cs-muted);
+  --color-text-placeholder: color-mix(in srgb, var(--cs-muted) 60%, #fff);
 
   /* ---- Background ---- */
-  --bg-color: #F4F6F9;
-  --bg-color-page: #F4F6F9;
-  --bg-color-overlay: #ffffff;
-  --color-bg-page: #F4F6F9;
-  --color-bg-card: #ffffff;
-  --color-bg-hover: #EDF2F7;
+  --bg-color: var(--cs-bg);
+  --bg-color-page: var(--cs-bg);
+  --bg-color-overlay: var(--cs-surface);
+  --color-bg-page: var(--cs-bg);
+  --color-bg-card: var(--cs-surface);
+  --color-bg-hover: var(--cs-primary-soft);
 
   /* ---- Border ---- */
-  --border-color: #E2E8F0;
-  --border-color-light: #EDF2F7;
-  --border-color-lighter: #F4F6F9;
-  --color-border: #E2E8F0;
-  --color-border-light: #EDF2F7;
-  --color-border-lighter: #F4F6F9;
+  --border-color: var(--cs-border);
+  --border-color-light: color-mix(in srgb, var(--cs-border) 75%, #fff);
+  --border-color-lighter: color-mix(in srgb, var(--cs-border) 55%, #fff);
+  --color-border: var(--cs-border);
+  --color-border-light: color-mix(in srgb, var(--cs-border) 75%, #fff);
+  --color-border-lighter: color-mix(in srgb, var(--cs-border) 55%, #fff);
 
   /* ---- Data Visualization ---- */
-  --color-positive: #36B37E;
-  --color-negative: #FF5630;
+  --color-positive: var(--cs-success);
+  --color-negative: var(--cs-danger);
 
   /* ---- Chart Palette ---- */
-  --chart-color-1: #1B65A8;
+  --chart-color-1: var(--cs-primary);
   --chart-color-2: #36B37E;
   --chart-color-3: #FFAB00;
   --chart-color-4: #FF5630;
   --chart-color-5: #6B778C;
 
-  /* ---- Element Plus CSS Variable Overrides ---- */
-  --el-color-primary: #1B65A8;
-  --el-color-primary-light-3: #4A8DC4;
-  --el-color-primary-light-5: #8DB2D4;
-  --el-color-primary-light-7: #BDD3E7;
-  --el-color-primary-light-8: #D3E2EF;
-  --el-color-primary-light-9: #E9F0F7;
-  --el-color-primary-dark-2: #165286;
-  --el-color-success: #36B37E;
-  --el-color-success-light-3: #6DC9A0;
-  --el-color-success-light-5: #9BD9BF;
-  --el-color-success-light-9: #EAFAF2;
-  --el-color-warning: #FFAB00;
-  --el-color-warning-light-3: #FFC247;
-  --el-color-warning-light-5: #FFD580;
-  --el-color-warning-light-9: #FFF8E6;
-  --el-color-danger: #FF5630;
-  --el-color-danger-light-3: #FF8A6D;
-  --el-color-danger-light-5: #FFAB98;
-  --el-color-danger-light-9: #FFF0EC;
-  --el-color-info: #6B778C;
-  --el-text-color-primary: #1A2332;
-  --el-text-color-regular: #4A5568;
-  --el-text-color-secondary: #7A8599;
-  --el-text-color-placeholder: #A0AEC0;
-  --el-border-color: #E2E8F0;
-  --el-border-color-light: #EDF2F7;
-  --el-border-color-lighter: #F4F6F9;
-  --el-bg-color: #ffffff;
-  --el-bg-color-page: #F4F6F9;
-  --el-fill-color-light: #F4F6F9;
-  --el-font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  /* Element Plus 变量（--el-*）已移到 src/styles/element-plus-theme.css 并映射到 --cs-*：
+   * 这里原来的 :root 覆盖被晚加载的 element-plus/dist/index.css 盖掉，线上从未生效（P1 实测 #409eff）。 */
 
   /* ---- Typography ---- */
-  --font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI',
-    Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --font-family-base: 'Noto Sans SC', -apple-system, BlinkMacSystemFont,
-    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-family: var(--cs-font-family);
+  --font-family-base: var(--cs-font-family);
   --font-family-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Fira Code', monospace;
 
   --font-size-xs: 10px;
@@ -194,27 +163,7 @@
   --box-shadow-base: 0 2px 12px rgba(0, 0, 0, 0.4);
   --box-shadow-light: 0 2px 8px rgba(0, 0, 0, 0.3);
 
-  /* Element Plus dark overrides */
-  --el-color-primary: #4A9FE5;
-  --el-color-primary-light-3: #6BB5F0;
-  --el-color-primary-light-5: #8DC8F5;
-  --el-color-primary-light-7: #B0D9F8;
-  --el-color-primary-light-8: #C5E3FA;
-  --el-color-primary-light-9: #1E3A5F;
-  --el-color-primary-dark-2: #2B7EC1;
-  --el-text-color-primary: #E8ECF1;
-  --el-text-color-regular: #C8CDD5;
-  --el-text-color-secondary: #9CA3AF;
-  --el-text-color-placeholder: #6B7280;
-  --el-border-color: #2D3748;
-  --el-border-color-light: #243044;
-  --el-border-color-lighter: #1A2332;
-  --el-bg-color: #1A2332;
-  --el-bg-color-page: #0F1420;
-  --el-bg-color-overlay: #1E293B;
-  --el-fill-color-light: #243044;
-  --el-fill-color-blank: #1A2332;
-  --el-mask-color: rgba(0, 0, 0, 0.6);
+  /* Element Plus 暗色变量已移到 src/styles/element-plus-theme.css（html:root[data-theme=dark]），这里的 :root 特异性盖不过 Element Plus */
 }
 
 /* ============================================================

@@ -17,11 +17,13 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram
+  Histogram, StarFilled
 } from '@element-plus/icons-vue';
-import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { factoryMenuForType, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import MenuSearch from './MenuSearch.vue';
+import { PINNED_MENU_LIMIT, pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
@@ -229,6 +231,17 @@ const iconMap: Record<string, any> = {
 // the computed depend on factoryType, the disabled-module set, currentRole and
 // the (DB-or-fallback) permission level for the module — so any of them
 // changing reliably re-runs the filter.
+// P2：侧栏节点可见性 = 节点自身判据（canSeeMenuItem）+ 原型分组带来的两条规则。
+// 每次都先跑 canSeeMenuItem(item)，让它的响应式读取（见 AppSidebar.reactivity.spec）照常注册。
+function canSeeMenuNode(item: MenuItem): boolean {
+  const own = canSeeMenuItem(item);
+  // 纯展示分组不带判据，可见性只由子项决定（filterMenuItem 里子项全隐藏则整组隐藏）。
+  if (item.container) return true;
+  // 从原分组搬出来的叶子，原父组也必须可见（与搬家前「父组隐藏 ⇒ 子项隐藏」等价）。
+  const ancestorsVisible = (item.guardAncestors ?? []).map((ancestor) => canSeeMenuItem(ancestor)).every(Boolean);
+  return own && ancestorsVisible;
+}
+
 function canSeeMenuItem(item: MenuItem): boolean {
   // Keep the auth identity read eager for Vue dependency tracking; a factory
   // view context only overrides the effective tenant below.
@@ -280,7 +293,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
 
 function filterMenuItem(item: MenuItem): MenuItem | null {
   if (factoryView.isViewingFactory && !item.children?.length && !isFactoryViewPageRoute(item.path)) return null;
-  if (!canSeeMenuItem(item)) return null;
+  if (!canSeeMenuNode(item)) return null;
   if (!item.children?.length) return item;
 
   const filteredChildren = item.children
@@ -296,7 +309,7 @@ function filterMenuItem(item: MenuItem): MenuItem | null {
 const filteredMenu = computed(() => {
   const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
     ? platformMenuConfig
-    : roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
+    : roleCode.value === 'finance_manager' ? financeManagerMenu : factoryMenuForType(effectiveFactoryType.value);
   const demoMenu = factoryView.isViewingFactory ? [] : getF006DemoMenu(effectiveFactoryId.value, roleCode.value);
   return [...demoMenu, ...sourceMenu]
     .map(item => filterMenuItem(item))
@@ -305,9 +318,46 @@ const filteredMenu = computed(() => {
 
 function collectVisiblePaths(items: readonly MenuItem[]): string[] {
   return items.flatMap((item) => [
-    item.path,
+    // container 的 path 是 '#group/...' 不是路由，不发布；搬出来的叶子把原父组路径一起发布（与搬家前一致）
+    ...(item.container ? [] : [item.path]),
+    ...(item.guardAncestors ?? []).map((ancestor) => ancestor.path),
     ...(item.children ? collectVisiblePaths(item.children) : []),
   ]);
+}
+
+// P2「常用」：浏览器本地按「账号 id + 工厂 id」存 path；只显示当前侧栏看得见的项（权限仍由上面判）。
+const pinnedMenu = usePinnedMenu();
+watch(
+  () => [authStore.user?.id, effectiveFactoryId.value] as const,
+  ([userId, factoryId]) => pinnedMenu.bind(pinnedMenuStorageKey(userId, factoryId)),
+  { immediate: true },
+);
+function visibleLeaves(items: readonly MenuItem[]): MenuItem[] {
+  return items.flatMap((item) => (item.children?.length ? visibleLeaves(item.children) : [item]));
+}
+// 侧栏过滤后的可见叶子交给「常用」：顶栏星标只能钉这些（审查 #1692 第 4 条）。
+watch(
+  () => (authStore.isPlatform && !factoryView.isViewingFactory ? [] : visibleLeaves(filteredMenu.value).map((leaf) => leaf.path)),
+  (paths) => pinnedMenu.setVisibleLeafPaths(paths),
+  { immediate: true },
+);
+const pinnedItems = computed<MenuItem[]>(() => {
+  if (authStore.isPlatform && !factoryView.isViewingFactory) return [];
+  const byPath = new Map(visibleLeaves(filteredMenu.value).map((leaf) => [leaf.path, leaf]));
+  return pinnedMenu.pinned.value
+    .map((path) => byPath.get(path))
+    .filter((leaf): leaf is MenuItem => !!leaf)
+    .slice(-PINNED_MENU_LIMIT);
+});
+const PINNED_INDEX_PREFIX = 'pin:';
+
+/** 侧栏分区标题：在每个分区的第一项前显示一次（「全部功能」「设置」；top 分区无标题）。 */
+function sectionTitleBefore(index: number): string {
+  const items = filteredMenu.value;
+  const section: MenuSection | undefined = items[index]?.section;
+  if (!section) return '';
+  if (index > 0 && items[index - 1]?.section === section) return '';
+  return MENU_SECTION_TITLES[section];
 }
 
 const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
@@ -444,22 +494,36 @@ function findOpenParents(path: string, items: MenuItem[], parents: string[] = []
  * ⚠️ 阈值是**顶级可见项数**，⛔ 不是角色名 —— 按角色写死会漏掉以后新增的角色，
  *    而且同一个角色在不同工厂启用的模块数也不一样（菜单还按 module 启停过滤）。
  */
-const FLATTEN_WHEN_TOP_LEVEL_AT_MOST = 4;
+/**
+ * P2 改组后的阈值（审查 #1692 第 3 条）：原来数**顶级可见项**（≤ 4 铺开）。改组后顶级多了
+ * 「概览」「主数据」这类展示分组，同一个销售主管顶级从 3–5 项变成 5–6 项，铺开整体失效；
+ * 而且「工作台」嵌在「概览」里，只开顶级也还要再点一次。
+ * ⇒ 改数**可见叶子数**（真正能点的页面），≤ 24 就整棵树（含嵌套分组）全部铺开。
+ *   依据：本地实测单部门角色的可见叶子——销售主管、采购经理都在 24 以内（整页滚动可看完）；
+ *   车间主任这类跨部门管理角色 60+，铺开反而找不到东西，保持「只展开当前所在组」。
+ *   仍然 ⛔ 不按角色名写死（同一角色在不同工厂启用的模块不同）。
+ */
+const FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST = 24;
 
 // ⚠️ 铺开态下必须把 el-menu 的 unique-opened 关掉（模板里 :unique-opened="!shouldFlatten"）：
 //    它强制「同时只能展开一个」，会把 defaultOpeneds 里除第一个以外的全部收起来，
 //    于是 defaultOpeneds 看起来生效了、实际只开了一个。
-const shouldFlatten = computed(() => filteredMenu.value.length <= FLATTEN_WHEN_TOP_LEVEL_AT_MOST);
+const shouldFlatten = computed(() => visibleLeaves(filteredMenu.value).length <= FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST);
+
+function allGroupPaths(items: readonly MenuItem[]): string[] {
+  return items.flatMap((m) => (m.children?.length ? [m.path, ...allGroupPaths(m.children)] : []));
+}
 
 const defaultOpeneds = computed(() => {
   if (shouldFlatten.value) {
-    // 全铺开：把所有有子项的顶级项都列进去。
-    return filteredMenu.value.filter((m) => m.children?.length).map((m) => m.path);
+    // 全铺开：所有层级的分组都列进去（「概览 › 工作台」这种嵌套的也开）。
+    return allGroupPaths(filteredMenu.value);
   }
   return findOpenParents(route.path, filteredMenu.value) ?? [];
 });
 
-function handleSelect(path: string) {
+function handleSelect(index: string) {
+  const path = index.startsWith(PINNED_INDEX_PREFIX) ? index.slice(PINNED_INDEX_PREFIX.length) : index;
   const target = router.resolve(path);
   void router.push(workspace.menuRoute({
     path: target.path,
@@ -497,6 +561,14 @@ function handleSelect(path: string) {
       </span>
     </div>
 
+    <!-- P2 菜单搜索（Ctrl+K），只搜当前侧栏可见项 -->
+    <MenuSearch
+      :menu="filteredMenu"
+      :collapsed="isCollapsedSidebar"
+      :title-for-item="titleForItem"
+      @select="handleSelect"
+    />
+
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
       <el-menu
@@ -511,9 +583,42 @@ function handleSelect(path: string) {
         active-text-color="#ffffff"
         @select="handleSelect"
       >
+        <template v-if="pinnedItems.length">
+          <div
+            class="menu-section-title"
+            :class="{ 'is-collapsed': isCollapsedSidebar }"
+            :aria-hidden="isCollapsedSidebar"
+            role="presentation"
+          >常用</div>
+          <el-menu-item
+            v-for="pin in pinnedItems"
+            :key="`pin-${pin.path}`"
+            :index="`${PINNED_INDEX_PREFIX}${pin.path}`"
+            :aria-label="`常用：${titleForItem(pin)}`"
+            class="pinned-menu-item"
+          >
+            <el-icon><StarFilled /></el-icon>
+            <template #title>
+              <span class="menu-title-copy">{{ titleForItem(pin) }}</span>
+              <button
+                type="button"
+                class="pinned-remove"
+                :aria-label="`从常用移除：${titleForItem(pin)}`"
+                title="从常用移除"
+                @click.stop="pinnedMenu.toggle(pin.path)"
+              >×</button>
+            </template>
+          </el-menu-item>
+        </template>
+        <template v-for="(item, index) in filteredMenu" :key="item.path">
+        <div
+          v-if="sectionTitleBefore(index)"
+          class="menu-section-title"
+          :class="{ 'is-collapsed': isCollapsedSidebar }"
+          :aria-hidden="isCollapsedSidebar"
+          role="presentation"
+        >{{ sectionTitleBefore(index) }}</div>
         <SidebarMenuNode
-          v-for="item in filteredMenu"
-          :key="item.path"
           :item="item"
           :collapsed="isCollapsedSidebar"
           :icon-map="iconMap"
@@ -521,6 +626,7 @@ function handleSelect(path: string) {
           :badge-for-item="badgeForItem"
           :level="1"
         />
+        </template>
       </el-menu>
     </el-scrollbar>
   </aside>
@@ -532,7 +638,7 @@ function handleSelect(path: string) {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 220px;
+  width: var(--cs-sidebar, 220px);
   background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
   transition: width 0.3s ease-in-out;
   z-index: 100;
@@ -540,7 +646,7 @@ function handleSelect(path: string) {
   flex-direction: column;
 
   &.is-collapsed {
-    width: 64px;
+    width: var(--cs-sidebar-collapsed, 64px);
   }
 }
 
@@ -611,6 +717,45 @@ function handleSelect(path: string) {
 .sidebar-menu-wrap {
   flex: 1;
   padding: 8px;
+}
+
+// P2「常用」项：右侧移除按钮悬停才出现
+:deep(.pinned-menu-item) {
+  .pinned-remove {
+    margin-left: auto;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--cs-duration-fast, 140ms);
+  }
+  &:hover .pinned-remove,
+  .pinned-remove:focus-visible { opacity: 1; color: #fff; }
+}
+
+// P2 原型侧栏分区标题（「全部功能」「设置」）
+.menu-section-title {
+  padding: 14px 12px 6px;
+  font-size: var(--cs-font-small, 12px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.42);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  transition: opacity 140ms ease-out;
+
+  &:first-child { padding-top: 4px; }
+
+  &.is-collapsed {
+    opacity: 0;
+    height: 8px;
+    padding: 0;
+  }
 }
 
 // Keep the icon at the same x position in both layouts. Scope label rules to
@@ -718,7 +863,7 @@ function handleSelect(path: string) {
       height: 50%;
       width: 3px;
       border-radius: 0 3px 3px 0;
-      background: #2B7EC1;
+      background: var(--cs-primary, #1b65a8);
     }
   }
 

@@ -6,7 +6,9 @@
 // 先同步导入 Vue 核心（无依赖）
 import { createApp } from 'vue';
 import App from './App.vue';
+import './styles/tokens.css';
 import './style.css';
+import './styles/element-plus-theme.css';
 import { registerEChartsTheme } from './utils/echarts-theme';
 import { installClientErrorReporter } from './utils/clientErrorReporter';
 import { installPlatformFactoryViewNetworkGuard } from './utils/platformFactoryViewNetwork';
