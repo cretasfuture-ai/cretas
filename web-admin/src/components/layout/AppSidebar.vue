@@ -19,9 +19,10 @@ import {
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
   Histogram
 } from '@element-plus/icons-vue';
-import { menuConfig, platformMenuConfig, financeManagerMenu, type MenuItem } from './menuConfig';
+import { factoryMenuForType, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
+import MenuSearch from './MenuSearch.vue';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
@@ -229,6 +230,17 @@ const iconMap: Record<string, any> = {
 // the computed depend on factoryType, the disabled-module set, currentRole and
 // the (DB-or-fallback) permission level for the module — so any of them
 // changing reliably re-runs the filter.
+// P2：侧栏节点可见性 = 节点自身判据（canSeeMenuItem）+ 原型分组带来的两条规则。
+// 每次都先跑 canSeeMenuItem(item)，让它的响应式读取（见 AppSidebar.reactivity.spec）照常注册。
+function canSeeMenuNode(item: MenuItem): boolean {
+  const own = canSeeMenuItem(item);
+  // 纯展示分组不带判据，可见性只由子项决定（filterMenuItem 里子项全隐藏则整组隐藏）。
+  if (item.container) return true;
+  // 从原分组搬出来的叶子，原父组也必须可见（与搬家前「父组隐藏 ⇒ 子项隐藏」等价）。
+  const ancestorsVisible = (item.guardAncestors ?? []).map((ancestor) => canSeeMenuItem(ancestor)).every(Boolean);
+  return own && ancestorsVisible;
+}
+
 function canSeeMenuItem(item: MenuItem): boolean {
   // Keep the auth identity read eager for Vue dependency tracking; a factory
   // view context only overrides the effective tenant below.
@@ -280,7 +292,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
 
 function filterMenuItem(item: MenuItem): MenuItem | null {
   if (factoryView.isViewingFactory && !item.children?.length && !isFactoryViewPageRoute(item.path)) return null;
-  if (!canSeeMenuItem(item)) return null;
+  if (!canSeeMenuNode(item)) return null;
   if (!item.children?.length) return item;
 
   const filteredChildren = item.children
@@ -296,7 +308,7 @@ function filterMenuItem(item: MenuItem): MenuItem | null {
 const filteredMenu = computed(() => {
   const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
     ? platformMenuConfig
-    : roleCode.value === 'finance_manager' ? financeManagerMenu : menuConfig;
+    : roleCode.value === 'finance_manager' ? financeManagerMenu : factoryMenuForType(effectiveFactoryType.value);
   const demoMenu = factoryView.isViewingFactory ? [] : getF006DemoMenu(effectiveFactoryId.value, roleCode.value);
   return [...demoMenu, ...sourceMenu]
     .map(item => filterMenuItem(item))
@@ -305,9 +317,20 @@ const filteredMenu = computed(() => {
 
 function collectVisiblePaths(items: readonly MenuItem[]): string[] {
   return items.flatMap((item) => [
-    item.path,
+    // container 的 path 是 '#group/...' 不是路由，不发布；搬出来的叶子把原父组路径一起发布（与搬家前一致）
+    ...(item.container ? [] : [item.path]),
+    ...(item.guardAncestors ?? []).map((ancestor) => ancestor.path),
     ...(item.children ? collectVisiblePaths(item.children) : []),
   ]);
+}
+
+/** 侧栏分区标题：在每个分区的第一项前显示一次（「全部功能」「设置」；top 分区无标题）。 */
+function sectionTitleBefore(index: number): string {
+  const items = filteredMenu.value;
+  const section: MenuSection | undefined = items[index]?.section;
+  if (!section) return '';
+  if (index > 0 && items[index - 1]?.section === section) return '';
+  return MENU_SECTION_TITLES[section];
 }
 
 const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
@@ -497,6 +520,14 @@ function handleSelect(path: string) {
       </span>
     </div>
 
+    <!-- P2 菜单搜索（Ctrl+K），只搜当前侧栏可见项 -->
+    <MenuSearch
+      :menu="filteredMenu"
+      :collapsed="isCollapsedSidebar"
+      :title-for-item="titleForItem"
+      @select="handleSelect"
+    />
+
     <!-- 菜单 -->
     <el-scrollbar class="sidebar-menu-wrap" @wheel.stop>
       <el-menu
@@ -511,9 +542,15 @@ function handleSelect(path: string) {
         active-text-color="#ffffff"
         @select="handleSelect"
       >
+        <template v-for="(item, index) in filteredMenu" :key="item.path">
+        <div
+          v-if="sectionTitleBefore(index)"
+          class="menu-section-title"
+          :class="{ 'is-collapsed': isCollapsedSidebar }"
+          :aria-hidden="isCollapsedSidebar"
+          role="presentation"
+        >{{ sectionTitleBefore(index) }}</div>
         <SidebarMenuNode
-          v-for="item in filteredMenu"
-          :key="item.path"
           :item="item"
           :collapsed="isCollapsedSidebar"
           :icon-map="iconMap"
@@ -521,6 +558,7 @@ function handleSelect(path: string) {
           :badge-for-item="badgeForItem"
           :level="1"
         />
+        </template>
       </el-menu>
     </el-scrollbar>
   </aside>
@@ -532,7 +570,7 @@ function handleSelect(path: string) {
   top: 0;
   left: 0;
   bottom: 0;
-  width: 220px;
+  width: var(--cs-sidebar, 220px);
   background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
   transition: width 0.3s ease-in-out;
   z-index: 100;
@@ -540,7 +578,7 @@ function handleSelect(path: string) {
   flex-direction: column;
 
   &.is-collapsed {
-    width: 64px;
+    width: var(--cs-sidebar-collapsed, 64px);
   }
 }
 
@@ -611,6 +649,27 @@ function handleSelect(path: string) {
 .sidebar-menu-wrap {
   flex: 1;
   padding: 8px;
+}
+
+// P2 原型侧栏分区标题（「全部功能」「设置」）
+.menu-section-title {
+  padding: 14px 12px 6px;
+  font-size: var(--cs-font-small, 12px);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.42);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  transition: opacity 140ms ease-out;
+
+  &:first-child { padding-top: 4px; }
+
+  &.is-collapsed {
+    opacity: 0;
+    height: 8px;
+    padding: 0;
+  }
 }
 
 // Keep the icon at the same x position in both layouts. Scope label rules to
@@ -718,7 +777,7 @@ function handleSelect(path: string) {
       height: 50%;
       width: 3px;
       border-radius: 0 3px 3px 0;
-      background: #2B7EC1;
+      background: var(--cs-primary, #1b65a8);
     }
   }
 
