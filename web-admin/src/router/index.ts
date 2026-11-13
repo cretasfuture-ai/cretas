@@ -1577,7 +1577,8 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
               requiresAuth: true,
               title: '报废审批',
               module: 'finance',
-              roles: ['finance_manager', 'factory_super_admin', 'platform_admin']
+              // 按报废审批权限 (disposal:approve) 判, 不按岗位名: 守卫读后端 approval-permission
+              requiresDisposalApproval: true
             }
           },
           {
