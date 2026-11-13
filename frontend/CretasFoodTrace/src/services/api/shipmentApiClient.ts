@@ -16,6 +16,8 @@ export interface ShipmentRecord {
   factoryId: string;
   shipmentNumber: string;
   customerId: string;
+  /** 后端按 customerId 补的客户名; 查不到时为空 (前端不得回落显示 customerId) */
+  customerName?: string | null;
   orderNumber?: string;
   productName: string;
   quantity: number;
