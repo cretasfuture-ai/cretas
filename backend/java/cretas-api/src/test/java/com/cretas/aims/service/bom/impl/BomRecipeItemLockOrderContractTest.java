@@ -36,7 +36,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class BomRecipeItemLockOrderTest {
+class BomRecipeItemLockOrderContractTest {
 
     private static final String F = "F006";
     private static final String FAMILY = "FAM-LOCK-ORDER";
