@@ -34,3 +34,5 @@ FactoryMaterialRequisitionTransferIntegrationTest
 ToolAccessModeDeclarationTest
 # INTENT-DISTILL-20261111 第二批任务状态: 「先看库存回头再报工」挂起/恢复跑在真实流式入口上的回归在这个类里
 SseStreamingServiceSlotContinuationTest
+# 工具清册漂移闸: 源码 ToolExecutor ↔ tool-descriptors.yaml 逐字段比对。原先只在 tool-inventory-gate.yml (合并后) 跑, #1580 起在 main 红了数天无人知; 纳入 PR 门禁 (#1625 已修清册)
+ToolDescriptorInventoryDriftTest
