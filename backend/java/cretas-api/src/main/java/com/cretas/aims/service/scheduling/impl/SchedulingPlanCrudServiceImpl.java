@@ -72,7 +72,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     @Override
     @Transactional
     public SchedulingPlanDTO createPlan(String factoryId, CreateSchedulingPlanRequest request, Long userId) {
-        validateExplicitSchedules(factoryId, request);
+        Set<String> productionPlanIds = validateExplicitSchedules(factoryId, request);
         List<LineSchedule> schedules = new ArrayList<>();
         if (request.getSchedules() != null) {
             for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
@@ -89,7 +89,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             }
         }
         return persistPlan(factoryId, request.getPlanDate(), request.getPlanName(), request.getNotes(),
-                schedules, userId, SOURCE_MANUAL);
+                schedules, productionPlanIds, userId, SOURCE_MANUAL);
     }
 
     /**
@@ -108,7 +108,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             throw new BusinessException("自动排程没有可落库的排程");
         }
         List<LineSchedule> schedules = new ArrayList<>();
-        Map<String, String> planNumbers = new HashMap<>();
+        Set<String> productionPlanIds = new HashSet<>();
         for (AutoScheduleItem item : items) {
             if (item == null) {
                 throw new BusinessException("排程明细不能为空");
@@ -134,7 +134,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             com.cretas.aims.entity.ProductionPlan productionPlan = productionPlanRepository
                     .findByIdAndFactoryId(item.productionPlanId(), factoryId)
                     .orElseThrow(() -> new BusinessException("生产计划不存在或不属于当前工厂: " + item.productionPlanId()));
-            planNumbers.put(productionPlan.getId(), productionPlan.getPlanNumber());
+            productionPlanIds.add(productionPlan.getId());
             if (item.batchId() != null) {
                 batchRepository.findByIdAndFactoryId(item.batchId(), factoryId)
                         .orElseThrow(() -> new BusinessException("批次不存在或不属于当前工厂: " + item.batchId()));
@@ -150,16 +150,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             schedule.setDailyAllocations(item.dailyAllocations());
             schedules.add(schedule);
         }
-        // 先锁生产计划再建 / 重开当天的调度计划 (与取消生产计划同一加锁顺序): 引擎读计划之后它可能刚被取消,
-        // 取消已提交就不再给它写排程行; 取消还在进行就等它, 等到的是已取消 → 同样拒绝。
-        String closed = com.cretas.aims.service.scheduling.ProductionPlanScheduleLock
-                .lockAndFindClosed(productionPlanRepository, factoryId, planNumbers.keySet());
-        if (closed != null) {
-            throw new BusinessException(409, "生产计划「" + planNumbers.get(closed) + "」刚被取消或已完成，本次排程未保存")
-                    .withCode("SCHEDULE_PLAN_CLOSED")
-                    .withHint("重新生成排程，已取消 / 已完成的计划不会再排");
-        }
-        return persistPlan(factoryId, planDate, planName, notes, schedules, userId, SOURCE_AUTO);
+        return persistPlan(factoryId, planDate, planName, notes, schedules, productionPlanIds, userId, SOURCE_AUTO);
     }
 
     static final String SOURCE_AUTO = "自动排程";
@@ -173,8 +164,19 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
     private record ClaimedDay(SchedulingPlan plan, boolean reopened, int voidedRows, int keptRows) {
     }
 
+    /**
+     * 排程落库的唯一入口: 手工新建 ({@link #createPlan}) 与自动 / AI 生成 ({@link #createAutoSchedulePlan}, 经
+     * DailyCapacityScheduleGenerator) 都走这里, ⛔ 不各写一份加锁。
+     *
+     * <p>先锁涉及的生产计划 (手工 = 批次所属的计划; 自动 = 每条排程的计划), 按 id 排序逐个 FOR UPDATE, 锁内读已提交的
+     * 状态复核: 已取消 / 已完成 → 409 拒绝, 一行都不写。之后才建 / 重开当天的调度计划。加锁顺序固定为
+     * 「生产计划 (按 id) → 日调度计划 → 排程行」, 与取消生产计划的级联一致, 不会互相等成死锁。
+     * 读计划之后、写排程之前计划被取消: 取消已提交 → 锁内读到已取消拒绝; 取消还没提交 → 在锁上等它, 等到的同样是已取消。
+     */
     private SchedulingPlanDTO persistPlan(String factoryId, LocalDate planDate, String planName, String notes,
-                                          List<LineSchedule> schedules, Long userId, String source) {
+                                          List<LineSchedule> schedules, Collection<String> productionPlanIds,
+                                          Long userId, String source) {
+        lockProductionPlansOrReject(factoryId, productionPlanIds, source);
         ClaimedDay claimed = claimDayPlan(factoryId, planDate, planName, notes, userId, source);
         SchedulingPlan plan = claimed.plan();
 
@@ -232,6 +234,26 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
             dto.setWarnings(new ArrayList<>(List.of(reopenWarning(claimed))));
         }
         return dto;
+    }
+
+    /** 锁住要写排程的生产计划并在锁内复核状态; 已取消 / 已完成就拒绝 (见 {@link #persistPlan})。 */
+    private void lockProductionPlansOrReject(String factoryId, Collection<String> productionPlanIds, String source) {
+        if (productionPlanIds == null || productionPlanIds.isEmpty()) {
+            return;
+        }
+        String closed = com.cretas.aims.service.scheduling.ProductionPlanScheduleLock
+                .lockAndFindClosed(productionPlanRepository, factoryId, productionPlanIds);
+        if (closed == null) {
+            return;
+        }
+        String planNumber = productionPlanRepository.findByIdAndFactoryId(closed, factoryId)
+                .map(com.cretas.aims.entity.ProductionPlan::getPlanNumber)
+                .orElse(closed);
+        throw new BusinessException(409, "生产计划「" + planNumber + "」刚被取消或已完成，本次排程未保存")
+                .withCode("SCHEDULE_PLAN_CLOSED")
+                .withHint(SOURCE_AUTO.equals(source)
+                        ? "重新生成排程，已取消 / 已完成的计划不会再排"
+                        : "请刷新后重新选择批次，已取消 / 已完成的生产计划不能再排");
     }
 
     /** 给用户看的一句: 这一天原来的调度计划已取消, 本次重开了它。 */
@@ -346,9 +368,11 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         return raw.contains("unique") || raw.contains("duplicate key");
     }
 
-    private void validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
+    /** 校验手工排程明细; 返回这些批次所属的生产计划 id (落库前要锁住复核, 见 {@link #persistPlan})。 */
+    private Set<String> validateExplicitSchedules(String factoryId, CreateSchedulingPlanRequest request) {
+        Set<String> productionPlanIds = new HashSet<>();
         if (request.getSchedules() == null || request.getSchedules().isEmpty()) {
-            return; // Preserve the existing empty draft compatibility path.
+            return productionPlanIds; // Preserve the existing empty draft compatibility path.
         }
         for (CreateSchedulingPlanRequest.ScheduleItem item : request.getSchedules()) {
             if (item == null) {
@@ -381,7 +405,11 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                     && batch.getStatus() != ProductionBatchStatus.PLANNING) {
                 throw new BusinessException("批次当前状态不可排程: " + batch.getStatus());
             }
+            if (batch.getProductionPlanId() != null && !batch.getProductionPlanId().isBlank()) {
+                productionPlanIds.add(batch.getProductionPlanId());
+            }
         }
+        return productionPlanIds;
     }
 
     @Override

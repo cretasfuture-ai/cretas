@@ -78,7 +78,7 @@ class LineScheduleTenantBoundaryContractTest {
         schedule.setStatus(LineSchedule.ScheduleStatus.pending);
         schedule.getPlan().setStatus(SchedulingPlan.PlanStatus.confirmed);
         when(scheduleRepository.findById("S-1")).thenReturn(Optional.of(schedule));
-        when(scheduleRepository.save(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(scheduleRepository.saveAndFlush(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(assignmentRepository.findByScheduleId("S-1")).thenReturn(Collections.emptyList());
         // 开工先锁日调度计划, 按锁住后读到的最新状态决定要不要推进到「进行中」
         when(planRepository.lockStatusForUpdate("P-1", "F-LOCAL")).thenReturn(Optional.of("confirmed"));
@@ -91,7 +91,7 @@ class LineScheduleTenantBoundaryContractTest {
 
         assertThat(schedule.getStatus()).isEqualTo(LineSchedule.ScheduleStatus.completed);
         assertThat(schedule.getCompletedQuantity()).isEqualTo(10);
-        verify(scheduleRepository, times(4)).save(schedule);
+        verify(scheduleRepository, times(4)).saveAndFlush(schedule);
         // 「已确认 → 进行中」只写状态列 (按本厂限定), 不整行保存锁之前读到的旧日计划实体
         org.mockito.InOrder order = inOrder(planRepository, scheduleRepository);
         order.verify(planRepository).lockStatusForUpdate("P-1", "F-LOCAL");
@@ -107,7 +107,7 @@ class LineScheduleTenantBoundaryContractTest {
         // 实体是锁之前读的「已确认」, 锁住后读到的最新状态已经是「进行中」: 以最新的为准, 不再写
         schedule.getPlan().setStatus(SchedulingPlan.PlanStatus.confirmed);
         when(scheduleRepository.findById("S-1")).thenReturn(Optional.of(schedule));
-        when(scheduleRepository.save(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(scheduleRepository.saveAndFlush(any(LineSchedule.class))).thenAnswer(invocation -> invocation.getArgument(0));
         when(assignmentRepository.findByScheduleId("S-1")).thenReturn(Collections.emptyList());
         when(planRepository.lockStatusForUpdate("P-1", "F-LOCAL")).thenReturn(Optional.of("in_progress"));
 
