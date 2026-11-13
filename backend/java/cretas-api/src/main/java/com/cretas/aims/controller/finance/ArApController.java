@@ -188,11 +188,19 @@ public class ArApController {
             @RequestBody(required = false) Map<String, Object> body) {
         Long approverId = extractUserId(authorization);
         // 红线 4: 提交人本人审批时的原因; 不是本人时不传, 无 body 与改动前一致
-        String selfApprovalReason = body != null && body.get("selfApprovalReason") != null
-                ? body.get("selfApprovalReason").toString() : null;
+        String selfApprovalReason = selfApprovalReasonFrom(body);
         ArApTransaction transaction = arApService.approveAdjustment(
                 factoryId, transactionId, approverId, selfApprovalReason);
         return ApiResponse.success("调整已审批通过", projectTransaction(factoryId, transaction));
+    }
+
+    /**
+     * 红线 4: 本人审批原因只接受字符串。对象/数字/数组用 {@code toString()} 会变成 "{}"、"1" 之类的非空串,
+     * 绕过「原因必填」; 非字符串一律按没写原因处理 (本人审批时由开关抛 422 SELF_APPROVAL_REASON_REQUIRED)。
+     */
+    static String selfApprovalReasonFrom(Map<String, Object> body) {
+        Object raw = body == null ? null : body.get("selfApprovalReason");
+        return raw instanceof String text ? text : null;
     }
 
     /**
@@ -268,8 +276,7 @@ public class ArApController {
         Long approverId = extractUserId(authorization);
         @SuppressWarnings("unchecked")
         java.util.List<String> ids = (java.util.List<String>) body.get("ids");
-        String selfApprovalReason = body.get("selfApprovalReason") != null
-                ? body.get("selfApprovalReason").toString() : null;
+        String selfApprovalReason = selfApprovalReasonFrom(body);
         Map<String, Object> result = arApService.batchApproveAdjustments(
                 factoryId, ids, approverId, selfApprovalReason);
         return ApiResponse.success("批量审批完成", result);

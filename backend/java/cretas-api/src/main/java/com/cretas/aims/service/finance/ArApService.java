@@ -256,8 +256,9 @@ public interface ArApService {
     /**
      * R29 P2 batch approve: process up to 100 PENDING adjustment ids, returning
      * per-id outcome. Atomic at the row level (each id is its own @Transactional
-     * via approveAdjustment). 4-eyes still enforced — submitter ids are skipped
-     * with reason "审批人不能与提交人相同 (4 眼原则)".
+     * via approveAdjustment). 提交人本人的条目按工厂「允许本人审批」开关逐条处理 (红线 4):
+     * 开关关 ⇒ 该条失败 (4 眼原则), 不影响别人的条目; 开关开 ⇒ 需本人审批原因, 有原因则通过并留痕
+     * self_approved + 原因, 没原因该条以 422 SELF_APPROVAL_REASON_REQUIRED 失败。本重载不带原因。
      */
     default java.util.Map<String, Object> batchApproveAdjustments(
             String factoryId, java.util.List<String> transactionIds, Long approvedBy) {

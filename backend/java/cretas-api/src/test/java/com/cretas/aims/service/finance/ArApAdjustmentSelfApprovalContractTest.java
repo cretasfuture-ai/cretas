@@ -232,6 +232,41 @@ class ArApAdjustmentSelfApprovalContractTest {
         assertThat(txn.getSelfApprovalReason()).isEqualTo("本厂只有我一个人");
     }
 
+    @Test
+    @DisplayName("审批接口: selfApprovalReason 不是字符串 (对象/数字/数组) ⇒ 按没写原因 422, 不靠 toString() 混过必填")
+    void nonStringSelfApprovalReasonIsTreatedAsMissing() {
+        switchOn(true);
+        ArApTransaction txn = pending("TX-API-NS");
+        var api = controller();
+
+        for (Object bogus : new Object[]{Map.of(), Map.of("text", "x"), 1, 0L, List.of("本厂只有我")}) {
+            java.util.Map<String, Object> body = new java.util.HashMap<>();
+            body.put("selfApprovalReason", bogus);
+            assertThatThrownBy(() -> api.approveAdjustment(F, "TX-API-NS", "Bearer t", body))
+                    .as(String.valueOf(bogus))
+                    .satisfies(e -> {
+                        assertThat(code(e)).isEqualTo(FactorySelfApprovalGate.REASON_REQUIRED);
+                        assertThat(((BusinessException) e).getCode()).isEqualTo(422);
+                    });
+        }
+        assertNothingWritten(txn);
+    }
+
+    @Test
+    @DisplayName("批量审批接口: selfApprovalReason 不是字符串 ⇒ 本人条目按缺原因失败, 不留痕")
+    void batchNonStringSelfApprovalReasonFailsOwnItems() {
+        switchOn(true);
+        ArApTransaction txn = pending("TX-API-BNS");
+
+        var result = controller().batchApproveAdjustments(F, "Bearer t",
+                Map.of("ids", List.of("TX-API-BNS"), "selfApprovalReason", Map.of()));
+
+        assertThat(result.getData()).containsEntry("approvedCount", 0).containsEntry("failedCount", 1);
+        assertThat(txn.getApprovalStatus()).isEqualTo(ArApApprovalStatus.PENDING);
+        assertThat(txn.isSelfApproved()).isFalse();
+        assertThat(txn.getSelfApprovalReason()).isNull();
+    }
+
     // ------------------------------------------------------------------ 驳回
 
     @Test
