@@ -1513,7 +1513,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     /**
      * 本人审批的<b>给人看</b>的标记: 写在计划审批意见与 OA 审批记录的前缀。
      * 判据是结构化字段 {@code production_plans.self_approved / self_approval_reason} 与
-     * {@code decision_audit_logs.self_approved / self_approval_reason} (红线 4, V20261113_47);
+     * {@code decision_audit_logs.self_approved / self_approval_reason} (红线 4, V20261114_01);
      * 存量只有前缀的行用 scripts/migrations/2026-11-13-production-plan-self-approval-backfill.sql 回填。
      */
     static final String SELF_APPROVAL_MARK = "【本人审批】";

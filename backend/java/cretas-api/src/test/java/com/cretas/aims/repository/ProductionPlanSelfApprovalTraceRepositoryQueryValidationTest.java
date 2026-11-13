@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * CRETAS_WORKFLOW_PG_URL 时在 PG 上跑)。
  *
  * <ul>
- *   <li>{@code production_plans.self_approved / self_approval_reason} (V20261113_47) 能写能按字段查;</li>
+ *   <li>{@code production_plans.self_approved / self_approval_reason} (V20261114_01) 能写能按字段查;</li>
  *   <li>{@code DecisionAuditServiceImpl.logApproval(..., selfApproved, reason)} 把两列写进
  *       {@code decision_audit_logs} (V20261110_47), 旧 7 参版本写 false/null;</li>
  *   <li>迁移里加的列名 = 实体 {@code @Column} 名 (两份必须一致)。</li>
@@ -144,10 +144,10 @@ class ProductionPlanSelfApprovalTraceRepositoryQueryValidationTest {
     }
 
     @Test
-    @DisplayName("迁移 V20261113_47 加的列 = ProductionPlan 实体的 @Column 名")
+    @DisplayName("迁移 V20261114_01 加的列 = ProductionPlan 实体的 @Column 名")
     void migrationColumnsMatchEntityColumns() throws IOException, NoSuchFieldException {
         String sql = Files.readString(Path.of(
-                "src/main/resources/db/flyway/V20261113_47__production_plan_self_approval_trace.sql"),
+                "src/main/resources/db/flyway/V20261114_01__production_plan_self_approval_trace.sql"),
                 StandardCharsets.UTF_8);
         for (String field : new String[]{"selfApproved", "selfApprovalReason"}) {
             String column = ProductionPlan.class.getDeclaredField(field)

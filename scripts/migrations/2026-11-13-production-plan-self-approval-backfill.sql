@@ -1,6 +1,6 @@
 -- 红线 4 (2026-11-13): 强制插单「本人审批」存量留痕回填 —— 从审批意见前缀「【本人审批】」回填结构化字段。
 --
--- 前提: 已执行 flyway V20261113_47 (production_plans.self_approved / self_approval_reason)。
+-- 前提: 已执行 flyway V20261114_01 (production_plans.self_approved / self_approval_reason)。
 --   decision_audit_logs 的两列由 V20261110_47 提供。
 --
 -- ⛔ 本脚本不随发布自动执行, 也不要在生产直接跑: 由 organizer 决定何时、对哪个库手工执行。

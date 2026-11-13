@@ -1,4 +1,4 @@
--- V20261113_47__production_plan_self_approval_trace.sql
+-- V20261114_01__production_plan_self_approval_trace.sql
 --
 -- 纪律排查红线 4 (2026-11-13): 强制插单「本人审批」留痕结构化。
 --
