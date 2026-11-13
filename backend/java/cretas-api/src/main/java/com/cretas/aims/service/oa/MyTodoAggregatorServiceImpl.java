@@ -435,8 +435,11 @@ public class MyTodoAggregatorServiceImpl implements MyTodoAggregatorService {
                     .needDetail(false)
                     .detailPath(null)
                     .instanceId(inst.getId())
+                    // 并行网关: 给调用方岗位负责的那个节点, 不是永远第一个
                     .expectedNodeId(inst.getCurrentNodeIds() == null || inst.getCurrentNodeIds().isEmpty()
-                            ? null : inst.getCurrentNodeIds().get(0))
+                            ? null
+                            : java.util.Optional.ofNullable(workflowEngineService.resolveActiveNodeForRole(inst, callerRole))
+                                    .orElse(inst.getCurrentNodeIds().get(0)))
                     .build());
         }
         return todos;

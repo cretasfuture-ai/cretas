@@ -46,8 +46,8 @@ class SelfApprovalCarrierContractTest {
             // 与盘点同类; 不委托 OA 节点点名例外的 SelfApprovalPolicy
             "com/cretas/aims/service/impl/UrgentInsertServiceImpl.java");
 
-    /** 已登记的承载点总数: 采购/销售/调拨各 1 + 盘点 2 + 冲销 1 + 强制插单 1。 */
-    private static final int REGISTERED_CARRIERS = 7;
+    /** 已登记的承载点总数: 采购/销售/调拨各 1 + 盘点 2 + 冲销 1 + 强制插单 2 (画布审批 + 无画布的直接审批入口, 同一开关同一语义)。 */
+    private static final int REGISTERED_CARRIERS = 8;
 
     /** 只匹配真实抛错构造, 避开注释里提到该码的情况。 */
     private static final Pattern CARRIER_PATTERN =
