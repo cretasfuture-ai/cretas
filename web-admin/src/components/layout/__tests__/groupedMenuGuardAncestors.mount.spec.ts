@@ -191,3 +191,26 @@ describe('P2b「数据与分析」对工厂默认显示、按厂可关（真挂�
     });
   }
 });
+
+describe('P3 顶层入口「今天」「待办」（真挂载）', () => {
+  it('工厂超管、一线单部门角色都看得到，且排在全部功能分组之前', async () => {
+    for (const [role, mods] of [['factory_super_admin', undefined], ['sales_manager', ['dashboard', 'sales']], ['warehouse_worker', ['dashboard', 'warehouse']]] as const) {
+      pinia = createPinia();
+      setActivePinia(pinia);
+      identity(role, mods as string[] | undefined);
+      const titles = await sidebarTitles();
+      expect(titles, role).toContain('今天');
+      expect(titles, role).toContain('待办');
+      expect(titles.indexOf('今天'), role).toBeLessThan(titles.indexOf('待办'));
+      expect(titles.indexOf('待办'), role).toBeLessThan(titles.findIndex((t) => t === '概览'));
+    }
+  });
+
+  it('阴性对照：餐饮 / 物流仍用原分组，没有这两个入口', async () => {
+    const { factoryMenuForType } = await import('../menuConfig');
+    const flat = (items: { title: string; children?: unknown[] }[]): string[] => items.flatMap((i) => [i.title, ...flat((i.children ?? []) as never)]);
+    expect(flat(factoryMenuForType('RESTAURANT') as never)).not.toContain('今天');
+    expect(flat(factoryMenuForType('LOGISTICS') as never)).not.toContain('待办');
+    expect(flat(factoryMenuForType('FACTORY') as never)).toEqual(expect.arrayContaining(['今天', '待办']));
+  });
+});

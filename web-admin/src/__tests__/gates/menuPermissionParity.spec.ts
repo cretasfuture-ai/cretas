@@ -99,7 +99,18 @@ function applyExpectedChanges(base: Map<string, Guard[]>): Map<string, Guard[]> 
 
 const before = applyExpectedChanges(snapshot);
 
-describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项相等（P2b 只多出 EXPECTED_CHANGES 列的那几条）', () => {
+/**
+ * P3 预期新增的叶子（改前快照里没有）：顶层「今天」「待办」。权限字段逐字列在这里——
+ * 两页只读聚合，入口与个人 OA 同判据（module: 'dashboard'，无 roles / 工厂类型限制）。
+ * 其余叶子仍要和快照逐项相等；新增叶子多一个、少一个、字段多一项（比如手滑加了 roles）都会红。
+ */
+const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
+  '/today': [{ path: '/today', module: 'dashboard' }],
+  '/todo': [{ path: '/todo', module: 'dashboard' }],
+};
+const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
+
+describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项相等（P2b 只多出 EXPECTED_CHANGES 列的那几条；P3 只多出 EXPECTED_ADDITIONS 的 今天/待办）', () => {
   it('阳性对照：快照真的读到了（否则下面是空集上的恒真式）', () => {
     expect(baseline.leafCount).toBeGreaterThan(150);
     expect(snapshot.size).toBe(baseline.leafCount);
@@ -127,8 +138,10 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
     expect(before.get('/scheduling/logistics/workbench')?.at(-1)).toMatchObject({ hideForFactoryTypes: ['FACTORY'] });
   });
 
-  it('原型分组侧栏（groupedMenuConfig）：叶子数量相等、path 集合相等、每条链逐项相等', () => {
-    const after = leafChains(groupedMenuConfig);
+  it('原型分组侧栏（groupedMenuConfig）：除预期新增外，叶子数量相等、path 集合相等、每条链逐项相等', () => {
+    const all = leafChains(groupedMenuConfig);
+    const after = all.filter((c) => !ADDED.has(c.path));
+    expect(all.length - after.length, '预期新增的叶子都在（缺一个也算红）').toBe(ADDED.size);
     expect(after.length, '叶子数量（同一 path 出现两次也会被这里抓到）').toBe(baseline.leafCount);
     const afterMap = byPath(after);
     expect([...afterMap.keys()].sort()).toEqual([...before.keys()].sort());
@@ -136,6 +149,14 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
       .filter(([path, chain]) => JSON.stringify(afterMap.get(path)) !== JSON.stringify(chain))
       .map(([path, chain]) => `${path}\n  改前 ${JSON.stringify(chain)}\n  改后 ${JSON.stringify(afterMap.get(path))}`);
     expect(diffs, diffs.join('\n')).toEqual([]);
+  });
+
+  it('P3 预期新增项：权限字段与登记的完全一致，且不与快照里已有的 path 重名', () => {
+    const added = byPath(leafChains(groupedMenuConfig).filter((c) => ADDED.has(c.path)));
+    for (const [path, chain] of Object.entries(EXPECTED_ADDITIONS)) {
+      expect(before.has(path), `${path} 不应在改前快照里`).toBe(false);
+      expect(added.get(path), path).toEqual(chain);
+    }
   });
 
   it('原分组（餐饮/物流仍在用的 menuConfig）与快照完全相同', () => {
@@ -159,17 +180,18 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
     }
   });
 
-  it('分区与组顺序按原型：全部功能（概览→个人 OA→采购→销售→生产→仓储→质量→数据与分析→保留模块）→ 设置', () => {
+  it('分区与组顺序按原型：今天/待办 → 全部功能（概览→个人 OA→采购→销售→生产→仓储→质量→数据与分析→保留模块）→ 设置', () => {
     expect(groupedMenuConfig.map((m) => `${m.section}:${m.title}`)).toEqual([
+      'top:今天', 'top:待办',
       'all:概览', 'all:个人 OA', 'all:采购管理', 'all:销售管理', 'all:生产管理', 'all:仓储管理', 'all:质量管理', 'all:数据与分析',
       'all:研发管理', 'all:人事管理', 'all:设备管理', 'all:财务管理', 'all:智能调度',
       'settings:主数据', 'settings:视觉质检训练', 'settings:系统管理',
     ]);
   });
 
-  it('本批不出现的入口：今天/待办/发现的问题（P3/P4）、数字班组（M4）、M7 四页', () => {
+  it('本批不出现的入口：发现的问题（P4）、数字班组（M4）、M7 四页', () => {
     const paths = leafChains(groupedMenuConfig).map((c) => c.path);
-    for (const p of ['/today', '/todo', '/issues', '/crew', '/crew/ledger', '/crew/onboard',
+    for (const p of ['/issues', '/crew', '/crew/ledger', '/crew/onboard',
       '/lsm/outsource', '/lsm/customer-prices', '/warehouse/inventory-adjustments', '/collab/tasks']) {
       expect(paths, p).not.toContain(p);
     }
