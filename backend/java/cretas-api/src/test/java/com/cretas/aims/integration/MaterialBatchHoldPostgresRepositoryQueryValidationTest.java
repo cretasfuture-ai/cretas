@@ -173,6 +173,27 @@ class MaterialBatchHoldPostgresRepositoryQueryValidationTest {
     }
 
     @Test
+    void holdWithoutAuditNoteIsNotCountedAsSupply() {
+        // CCP 偏离扣留 / 冷链转待检 / 仓库页改质检中 走 hold(), 不写冻结审计备注, 只靠 hold_prior_status 识别
+        String token = suffix();
+        String typeId = saveRawType("RMT-N-" + token);
+        String id = saveRawBatch(typeId, "QA-N-" + token, MaterialBatchStatus.AVAILABLE, "40", "0", "0");
+        tx.executeWithoutResult(s -> {
+            MaterialBatch b = materialBatches.findById(id).orElseThrow();
+            MaterialBatchHoldService.hold(b);
+            materialBatches.save(b);
+        });
+        assertThat(statusOf(id)).isEqualTo("INSPECTING");
+        assertThat(priorOf(id)).isEqualTo("AVAILABLE");
+        assertThat(jdbc.queryForObject("select coalesce(notes,'') from material_batches where id = ?", String.class, id))
+                .doesNotContain(MaterialBatchHoldService.FREEZE_AUDIT_MARK);
+        assertThat(supply.sumInspectingQuantity(FACTORY, typeId)).isEqualByComparingTo("0");
+        // 阳性对照: 同一批清掉扣留记录 = 首检中, 照数
+        jdbc.update("update material_batches set hold_prior_status = null where id = ?", id);
+        assertThat(supply.sumInspectingQuantity(FACTORY, typeId)).isEqualByComparingTo("40");
+    }
+
+    @Test
     void concurrentFreezesHoldOnceAndSecondSeesItAlreadyHeld() throws Exception {
         String token = suffix();
         String typeId = saveRawType("RMT-C-" + token);
