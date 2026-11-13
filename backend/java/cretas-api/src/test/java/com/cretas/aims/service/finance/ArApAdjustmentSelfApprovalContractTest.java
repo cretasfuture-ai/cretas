@@ -188,6 +188,50 @@ class ArApAdjustmentSelfApprovalContractTest {
         verify(settings, never()).findAllowSelfApprovalByFactoryId(F);
     }
 
+    // ------------------------------------------------------------------ 产品入口 (控制器 → 服务 → 开关)
+
+    private com.cretas.aims.controller.finance.ArApController controller() {
+        com.cretas.aims.service.MobileService mobile = mock(com.cretas.aims.service.MobileService.class);
+        when(mobile.getUserFromToken(any()))
+                .thenReturn(com.cretas.aims.dto.user.UserDTO.builder().id(MAKER).build());
+        return new com.cretas.aims.controller.finance.ArApController(service,
+                new com.fasterxml.jackson.databind.ObjectMapper(), mobile,
+                mock(com.cretas.aims.service.config.FactoryConfigService.class),
+                mock(com.cretas.aims.service.inventory.OpeningInventoryService.class));
+    }
+
+    @Test
+    @DisplayName("审批接口: body.selfApprovalReason 一路传到开关, 本人审批留痕; 不带 body 时开关开也要原因")
+    void approveEndpointCarriesSelfApprovalReasonToTheGate() {
+        switchOn(true);
+        ArApTransaction txn = pending("TX-API");
+        var api = controller();
+
+        assertThatThrownBy(() -> api.approveAdjustment(F, "TX-API", "Bearer t", null))
+                .satisfies(e -> assertThat(code(e)).isEqualTo(FactorySelfApprovalGate.REASON_REQUIRED));
+        assertNothingWritten(txn);
+
+        api.approveAdjustment(F, "TX-API", "Bearer t", Map.of("selfApprovalReason", "本厂只有我一个人"));
+
+        assertThat(txn.getApprovalStatus()).isEqualTo(ArApApprovalStatus.APPROVED);
+        assertThat(txn.isSelfApproved()).isTrue();
+        assertThat(txn.getSelfApprovalReason()).isEqualTo("本厂只有我一个人");
+    }
+
+    @Test
+    @DisplayName("批量审批接口: body.selfApprovalReason 一路传到每条本人条目")
+    void batchApproveEndpointCarriesSelfApprovalReason() {
+        switchOn(true);
+        ArApTransaction txn = pending("TX-API-B");
+
+        var result = controller().batchApproveAdjustments(F, "Bearer t",
+                Map.of("ids", List.of("TX-API-B"), "selfApprovalReason", "本厂只有我一个人"));
+
+        assertThat(result.getData()).containsEntry("approvedCount", 1);
+        assertThat(txn.isSelfApproved()).isTrue();
+        assertThat(txn.getSelfApprovalReason()).isEqualTo("本厂只有我一个人");
+    }
+
     // ------------------------------------------------------------------ 驳回
 
     @Test
