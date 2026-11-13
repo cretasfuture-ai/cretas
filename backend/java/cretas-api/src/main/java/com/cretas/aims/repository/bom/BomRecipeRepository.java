@@ -73,11 +73,6 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
             @Param("factoryId") String factoryId);
 
     /**
-     * 按配方 id 升序锁住同一 BOM Family 的全部配方头 (N1)。改一个成员的行价会重算并改写全族的配方头,
-     * 两个成员同时调价若各自先锁自己的头、再去写对方的头就会互等; 全族按同一顺序加锁则不会。
-     * PostgreSQL 的 FOR UPDATE 在排序之后逐行加锁, 所以 ORDER BY 就是加锁顺序。
-     */
-    /**
      * 目标配方及其同族成员的产品 id (标量)。激活 / 整表更新要先按产品 id 升序锁产品行, 再锁整族配方头
      * (锁序见 {@link com.cretas.aims.service.bom.BomRecipeHeadLocks})。
      */
@@ -107,6 +102,11 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
             @Param("productTypeId") String productTypeId,
             @Param("status") Status status);
 
+    /**
+     * 按配方 id 升序锁住同一 BOM Family 的全部配方头 (N1)。改一个成员的行价会重算并改写全族的配方头,
+     * 两个成员同时调价若各自先锁自己的头、再去写对方的头就会互等; 全族按同一顺序加锁则不会。
+     * PostgreSQL 的 FOR UPDATE 在排序之后逐行加锁, 所以 ORDER BY 就是加锁顺序。
+     */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("""
             select recipe
