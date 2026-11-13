@@ -55,6 +55,9 @@ export function hasAnyWebBusinessModule(perm: WebAccessPermissionView): boolean 
 const ROLE_PATH_WHITELIST: Record<string, string[]> = {
   finance_manager: [
     '/dashboard',
+    // P3：顶层「今天」「待办」入口，只读聚合；各来源按自己的模块权限读，不放开其它路径
+    '/today',
+    '/todo',
     // Personal OA is the only write surface for finance approval actions.
     // Keep it inside the finance-manager path allowlist; task visibility and
     // action authority are still enforced by the workflow API per factory,

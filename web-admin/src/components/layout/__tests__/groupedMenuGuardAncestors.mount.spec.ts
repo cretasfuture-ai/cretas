@@ -24,15 +24,16 @@ vi.mock('@/api/permissionApi', () => permissionApi);
 
 let pinia: ReturnType<typeof createPinia>;
 let disabledMenuPaths: string[] = [];
+let extraFeatures: Record<string, unknown>[] = [];
 
-function identity(role: string, onlyModules?: string[]) {
+function identity(role: string, onlyModules?: string[], factoryType = 'FACTORY') {
   const user: User = {
     id: 87, username: 'local-test', email: '', isActive: true, createdAt: '2026-11-13', updatedAt: '2026-11-13',
-    userType: 'factory', factoryUser: { role, factoryId: 'P2-UNIT', factoryType: 'FACTORY', permissions: [] },
+    userType: 'factory', factoryUser: { role, factoryId: 'P2-UNIT', factoryType, permissions: [] },
   } as User;
   useAuthStore().setUser(user);
   const p = usePermissionStore();
-  p.setRole(role, 'P2-UNIT', 'FACTORY', 87, { skipDbLoad: true });
+  p.setRole(role, 'P2-UNIT', factoryType, 87, { skipDbLoad: true });
   p.dbPermissions = onlyModules
     // 模拟库里只开了这几个模块的账号（与 prod 上 QA 销售主管实测一致：只看得到销售相关）
     ? Object.fromEntries(Object.keys(p.currentPermissions).map((m) => [m, onlyModules.includes(m) ? 'rw' : '-'])) as typeof p.currentPermissions
@@ -66,12 +67,13 @@ beforeEach(() => {
   setActivePinia(pinia);
   vi.clearAllMocks();
   disabledMenuPaths = [];
+  extraFeatures = [];
   permissionApi.getPlatformPermissions.mockResolvedValue([]);
   permissionApi.getFactoryOverride.mockResolvedValue({});
   permissionApi.getUserModuleAccess.mockResolvedValue([]);
   api.get.mockImplementation(async (url: string) => {
     if (String(url).endsWith('/feature-config')) {
-      return { success: true, message: '', data: [{ moduleId: 'p2_test', enabled: true, config: { disabledMenuPaths } }] };
+      return { success: true, message: '', data: [{ moduleId: 'p2_test', enabled: true, config: { disabledMenuPaths } }, ...extraFeatures] };
     }
     return { success: true, message: '', data: [] };
   });
@@ -126,5 +128,89 @@ describe('「全部铺开」按可见叶子数（审查 #1692 第 3 条，08-21 
     expect(all).toBeGreaterThan(5);
     // 只展开当前所在组（/dashboard 在「概览」里），其余收起
     expect(opened).toBeLessThanOrEqual(1);
+  });
+});
+
+/**
+ * P2b（迁移方案 M3）：「数据与分析」组对工厂默认显示，按厂可关（真挂载侧栏）。
+ * 关的两档：只写 showInSidebar=false ⇒ 原 /smart-bi 组的叶子消失；
+ * 平台「工厂菜单」页关 analytics（后端同时写 menuVisible=false + showInSidebar=false）⇒ 整组消失。
+ */
+const SMART_BI_LEAVES = ['经营驾驶舱', 'AI 问答 / 数据分析', '经营分析'];
+
+describe('P2b「数据与分析」对工厂默认显示、按厂可关（真挂载）', () => {
+  it('阳性：FACTORY 工厂超管，没有任何 analytics 配置时整组可见，含原 /smart-bi 的页', async () => {
+    identity('factory_super_admin');
+    const titles = await sidebarTitles();
+    expect(titles).toContain('数据与分析');
+    for (const t of SMART_BI_LEAVES) expect(titles, t).toContain(t);
+    // 叶子自身的工厂隐藏不受影响
+    expect(titles).not.toContain('收入管理报表');
+  });
+
+  it('阴性：该厂 showInSidebar=false ⇒ 原 /smart-bi 的页全部消失，别的组照常', async () => {
+    identity('factory_super_admin');
+    extraFeatures = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }];
+    const titles = await sidebarTitles();
+    for (const t of SMART_BI_LEAVES) expect(titles, t).not.toContain(t);
+    expect(titles).toContain('生产管理');
+  });
+
+  it('阴性：平台关掉该厂 analytics（menuVisible=false + showInSidebar=false）⇒「数据与分析」整组消失', async () => {
+    identity('factory_super_admin');
+    extraFeatures = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false, menuVisible: false, disabledMenuPaths: [] } }];
+    const titles = await sidebarTitles();
+    expect(titles).not.toContain('数据与分析');
+    for (const t of [...SMART_BI_LEAVES, 'AI经营报告']) expect(titles, t).not.toContain(t);
+    expect(titles).toContain('生产管理');
+    expect(titles).toContain('主数据');
+  });
+
+  it('旧别名 smartbi 行写 showInSidebar=false 也能关', async () => {
+    identity('factory_super_admin');
+    extraFeatures = [{ moduleId: 'smartbi', enabled: true, config: { showInSidebar: false } }];
+    const titles = await sidebarTitles();
+    for (const t of SMART_BI_LEAVES) expect(titles, t).not.toContain(t);
+  });
+
+  it('模块权限照旧：没有 analytics 模块的账号仍看不到这一组', async () => {
+    identity('sales_manager', ['dashboard', 'sales']);
+    const titles = await sidebarTitles();
+    expect(titles).not.toContain('数据与分析');
+    for (const t of SMART_BI_LEAVES) expect(titles, t).not.toContain(t);
+  });
+
+  for (const type of ['RESTAURANT', 'LOGISTICS']) {
+    it(`${type}：这个开关只管工厂，showInSidebar=false 不改变它的侧栏`, async () => {
+      identity('factory_super_admin', undefined, type);
+      const plain = await sidebarTitles();
+      extraFeatures = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }];
+      const withOff = await sidebarTitles();
+      expect(plain.length).toBeGreaterThan(0);
+      expect(withOff).toEqual(plain);
+    });
+  }
+});
+
+describe('P3 顶层入口「今天」「待办」（真挂载）', () => {
+  it('工厂超管、一线单部门角色都看得到，且排在全部功能分组之前', async () => {
+    for (const [role, mods] of [['factory_super_admin', undefined], ['sales_manager', ['dashboard', 'sales']], ['warehouse_worker', ['dashboard', 'warehouse']]] as const) {
+      pinia = createPinia();
+      setActivePinia(pinia);
+      identity(role, mods as string[] | undefined);
+      const titles = await sidebarTitles();
+      expect(titles, role).toContain('今天');
+      expect(titles, role).toContain('待办');
+      expect(titles.indexOf('今天'), role).toBeLessThan(titles.indexOf('待办'));
+      expect(titles.indexOf('待办'), role).toBeLessThan(titles.findIndex((t) => t === '概览'));
+    }
+  });
+
+  it('阴性对照：餐饮 / 物流仍用原分组，没有这两个入口', async () => {
+    const { factoryMenuForType } = await import('../menuConfig');
+    const flat = (items: { title: string; children?: unknown[] }[]): string[] => items.flatMap((i) => [i.title, ...flat((i.children ?? []) as never)]);
+    expect(flat(factoryMenuForType('RESTAURANT') as never)).not.toContain('今天');
+    expect(flat(factoryMenuForType('LOGISTICS') as never)).not.toContain('待办');
+    expect(flat(factoryMenuForType('FACTORY') as never)).toEqual(expect.arrayContaining(['今天', '待办']));
   });
 });
