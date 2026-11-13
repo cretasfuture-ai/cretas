@@ -110,6 +110,22 @@ public interface DecisionAuditService {
     );
 
     /**
+     * 记录审批决策, 带本人审批结构化留痕 (红线 4): {@code selfApproved} = 这一次决定由提交人本人做出
+     * (工厂开了 allow_self_approval), 此时 {@code selfApprovalReason} 必须非空。
+     */
+    DecisionAuditLog logApproval(
+            String factoryId,
+            String entityType,
+            String entityId,
+            ApprovalStatus status,
+            String approvalComment,
+            Long approverId,
+            String approverName,
+            boolean selfApproved,
+            String selfApprovalReason
+    );
+
+    /**
      * 记录AI分析决策
      */
     DecisionAuditLog logAIAnalysis(
