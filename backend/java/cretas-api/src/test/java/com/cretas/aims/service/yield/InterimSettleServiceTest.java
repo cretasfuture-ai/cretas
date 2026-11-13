@@ -314,6 +314,41 @@ class InterimSettleServiceTest {
     }
 
     @Test
+    @DisplayName("#1590 遗留: 录入之后来源批次被冻结 (质检中) / 判不合格 → 小结拒绝从它扣料过账, 中文原因; 过期照扣")
+    void interimSettleRefusesHeldOrDefectiveSourceBatch() {
+        ProcessSheetRow r1 = row(1L, 1, "CLK-W-1", reqNonFinished(1, "CLK-W-1", new BigDecimal("100"), null));
+        when(rowRepository.findByFactoryIdAndPlanId(FACTORY, PLAN_ID)).thenReturn(List.of(r1));
+        for (com.cretas.aims.entity.enums.MaterialBatchStatus st : new com.cretas.aims.entity.enums.MaterialBatchStatus[]{
+                com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE}) {
+            MaterialConsumption rawC = consumption("RB1", new BigDecimal("100"));
+            when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY), any()))
+                    .thenReturn(new ArrayList<>(List.of(rawC)));
+            MaterialBatch rb1 = materialBatch("RB1", new BigDecimal("200"));
+            rb1.setBatchNumber("QA-RB1");
+            rb1.setStatus(st);
+            when(materialBatchRepository.findByIdAndFactoryIdForUpdate("RB1", FACTORY)).thenReturn(Optional.of(rb1));
+
+            assertThatThrownBy(() -> service.interimSettle(FACTORY, PLAN_ID, 7L))
+                    .as(st.name())
+                    .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                        assertThat(e.getCode()).isEqualTo(409);
+                        assertThat(e.getMessage()).contains("QA-RB1").contains(st.getDisplayName());
+                    });
+            assertThat(rb1.getUsedQuantity()).as(st.name()).isEqualByComparingTo("0");
+        }
+        // 阳性对照: 过期批次 (凌晨任务翻的) 补记已发生的消耗照扣, 与报工录入同一口径
+        MaterialConsumption rawC = consumption("RB1", new BigDecimal("100"));
+        when(consumptionRepository.findByFactoryIdAndProductionBatchIdInAndInterimSettledAtIsNull(eq(FACTORY), any()))
+                .thenReturn(new ArrayList<>(List.of(rawC)));
+        MaterialBatch expired = materialBatch("RB1", new BigDecimal("200"));
+        expired.setStatus(com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED);
+        when(materialBatchRepository.findByIdAndFactoryIdForUpdate("RB1", FACTORY)).thenReturn(Optional.of(expired));
+        service.interimSettle(FACTORY, PLAN_ID, 7L);
+        assertThat(expired.getUsedQuantity()).isEqualByComparingTo("100");
+    }
+
+    @Test
     @DisplayName("部分被同小结消耗: 终点产出60, 同小结下游投40 → SFI IN 净20 (不漏入残留)")
     void partialWithinSessionNetStock() {
         // 道A(CLK-W-A, output 60) + 道B(CLK-B-A, finished, feed 40 from A) 同一小结

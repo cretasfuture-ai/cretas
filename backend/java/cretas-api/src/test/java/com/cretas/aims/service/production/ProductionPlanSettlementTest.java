@@ -593,6 +593,50 @@ class ProductionPlanSettlementTest {
     }
 
     @Test
+    @DisplayName("#1590 遗留: 结单实际领用的原料批次已被冻结 (质检中) / 判不合格 → 409 中文原因, 不扣料; 过期照扣")
+    void settleProduction_heldOrDefectiveRawBatch_rejectedWithChineseReason() {
+        for (com.cretas.aims.entity.enums.MaterialBatchStatus st : new com.cretas.aims.entity.enums.MaterialBatchStatus[]{
+                com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.DEFECTIVE,
+                com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED}) {
+            ProductionPlan plan = plan();
+            when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+            when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndIdempotencyKeyAndDeletedAtIsNull(
+                    FACTORY_ID, PLAN_ID, "idem-1")).thenReturn(Optional.empty());
+            when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdAndDeletedAtIsNull(
+                    FACTORY_ID, PLAN_ID)).thenReturn(Optional.empty());
+            MaterialBatch batch = materialBatch();
+            batch.setStatus(st);
+            SemiFinishedInventory wip = wip();
+            when(materialBatchRepository.findByIdAndFactoryId("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-1", FACTORY_ID)).thenReturn(Optional.of(batch));
+            when(semiFinishedInventoryRepository.findByIdForUpdate(7L)).thenReturn(Optional.of(wip));
+            when(warehouseResolver.resolveLogisticsId(FACTORY_ID)).thenReturn("WH-LOG-ID");
+            stubCurrentBom("RM-1");
+            when(materialBatchRepository.save(any(MaterialBatch.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(semiFinishedInventoryRepository.save(any(SemiFinishedInventory.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionSettlementRepository.save(any(ProductionSettlement.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionPlanRepository.save(any(ProductionPlan.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(productionSettlementConsumptionRepository.saveAll(anyList()))
+                    .thenAnswer(inv -> assignSettlementConsumptionIds(inv.getArgument(0)));
+            when(productionSettlementLaborRepository.saveAll(anyList())).thenAnswer(inv -> inv.getArgument(0));
+
+            if (st == com.cretas.aims.entity.enums.MaterialBatchStatus.EXPIRED) {
+                // 阳性对照: 过期由领料那一步把关, 结单补记已经发生的领用照扣 (与报工 assertReportable 同口径)
+                service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L);
+                assertEquals(new BigDecimal("16"), batch.getUsedQuantity());
+                continue;
+            }
+            BigDecimal usedBefore = batch.getUsedQuantity();
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L), st.name());
+            assertEquals(409, ex.getCode(), st.name());
+            assertTrue(ex.getMessage().contains(st.getDisplayName()), ex.getMessage());
+            assertEquals(0, batch.getUsedQuantity().compareTo(usedBefore), "不扣料: " + batch.getUsedQuantity());
+        }
+    }
+
+    @Test
     @DisplayName("结单原料批次在无关仓库 (成品仓/研发库) 时拒绝扣料")
     void settleProduction_rawBatchInUnrelatedWarehouse_rejected() {
         // 无关仓库 = 非原料仓/物流仓 (isRawOrLogisticsWarehouse=false) 且非生产仓 (isWorkshopWarehouse=false),

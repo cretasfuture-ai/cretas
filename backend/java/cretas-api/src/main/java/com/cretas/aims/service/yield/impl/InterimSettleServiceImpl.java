@@ -238,6 +238,9 @@ public class InterimSettleServiceImpl implements InterimSettleService {
             // 录入闸上线前记下的行和其他写消耗行的入口 (客户料不许记进公司计划 / 别的客户的计划)。
             com.cretas.aims.service.processentry.ProductionInventoryOwnershipGuard.assertRawSourceAllowed(
                     plan, src, mainCategoryOf(factoryId, src, mainCategoryCache), "小结原料批次");
+            // #1590 遗留: 过账前再判一次批次状态 (报工录入同一口径 assertReportable: 拦质检中 / 不良品 / 报废, 不拦过期) ——
+            // 录入之后这批被冻结 / 判不合格, 小结不能照样从它扣料过账
+            com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(src);
             // MES↔ERP Fix #6: 负库存守卫 (honest-fail). 延迟扣减设计下, 同一批次可被本计划多道
             //   报工累计投料 → 小结累加扣减时若 Σ投料 > 批次可用 (超投), 会把 currentQuantity 扣成负
             //   (幻库存: 半成品/成品凭空产出而原料不足)。此前仅事后置 USED_UP, 从不拦截负库存 → 静默腐蚀。
