@@ -1467,6 +1467,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        // #1590 遗留: 通用扣减原语也过状态闸 (调用方目前都先按「可用」筛过, 这里兜住以后直接按 id 调的路径)
+        assertMaterialBatchUsable(batch);
 
         // 检查可用数量是否充足
         if (batch.getCurrentQuantity().compareTo(quantity) < 0) {
@@ -2308,10 +2310,16 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             }
             materialBatchReleaseGuard.assertManualReleaseAllowed(factoryId, batch, status, change);
         }
-        batch.setStatus(status);
+        // #1590 遗留 M5: 改成「质检中」= 扣留, 记下原状态; 改成「可用」= 解除扣留, 还原扣留前状态。
+        // 与冻结工具 / 质检放行同一个实现 (MaterialBatchHoldService), ⛔ 不在这里直接 setStatus。
+        if (status == com.cretas.aims.service.quality.release.MaterialBatchHoldService.HOLD_STATUS) {
+            com.cretas.aims.service.quality.release.MaterialBatchHoldService.hold(batch);
+        } else {
+            batch.setStatus(com.cretas.aims.service.quality.release.MaterialBatchHoldService.releaseTarget(batch, status));
+        }
         batch = materialBatchRepository.save(batch);
         if (release) {
-            materialBatchReleaseGuard.recordIfRelease(factoryId, batch, before, status, change.channel(),
+            materialBatchReleaseGuard.recordIfRelease(factoryId, batch, before, batch.getStatus(), change.channel(),
                     change.reason(), null, change.operatorId(), change.operatorRole());
         }
         // 仓库页把「质检中」改成「可用」是一次放行, 改成不合格 / 鲜品等是离开质检中: 缺料实例都要跟着刷新,
