@@ -96,7 +96,8 @@ public class WorkflowProcessParamMaterializer {
                 } else if (!"number".equals(String.valueOf(field.get("type")).trim())) {
                     throw new BusinessException(409, "工序「" + processName(node) + "」已有同名字段「" + label
                             + "」且不是数字类型, 不能写入工艺标准")
-                            .withCode("WORKFLOW_PROCESS_PARAM_TYPE_CONFLICT");
+                            .withCode("WORKFLOW_PROCESS_PARAM_TYPE_CONFLICT")
+                            .withHint("到工序管理页把该字段类型改成数字, 或给画布上的工艺参数改个名字后再发布");
                 }
                 List<String> diffs = new ArrayList<>();
                 for (String k : WorkProcessCustomFieldSchema.STANDARD_KEYS) {
