@@ -11,11 +11,12 @@ describe('factory operating report menu entry', () => {
     expect(adjustments).toBeDefined();
     expect(adjustments?.hideForFactoryTypes).toEqual(['RESTAURANT']);
   });
-  it('factory super admin has a visible report entry while other hidden analytics remain hidden', () => {
+  it('factory super admin has a visible report entry; the analytics group is default-visible (P2b / M3)', () => {
     const reports = menuConfig.find(item => item.path === '/analytics/ai-reports');
     expect(reports?.roles).toContain('factory_super_admin');
     expect(reports?.hideForFactoryTypes).not.toContain('FACTORY');
     expect(reports?.hideForFactoryTypes).toContain('RESTAURANT');
-    expect(menuConfig.find(item => item.path === '/smart-bi')?.hideForFactoryTypes).toContain('FACTORY');
+    // P2b：对工厂默认显示，按厂关闭走 feature-config showInSidebar === false（factoryMenuVisibility）
+    expect(menuConfig.find(item => item.path === '/smart-bi')?.hideForFactoryTypes ?? []).not.toContain('FACTORY');
   });
 });

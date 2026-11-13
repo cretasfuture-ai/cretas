@@ -607,11 +607,13 @@ const rawMenuConfig: MenuItem[] = [
     // 「经营分析」(BusinessAnalysisHub, 4 tab) — 菜单项移除, 由 redirect 桥接。
     // 删 AI分析报告 (#9)。AI 运维 3 项收 platform_admin/permission_admin 门控 (移 admin 区)。
     // 经营驾驶舱置顶主入口。各页后端不变 (部分页 Java reports + Python 混合)。
-    // 🔴 2026-08-22 owner:「数据分析全部隐藏, 工厂暂时用不着」
-    // ⇒ 整组对**工厂租户**隐藏(餐饮不受影响 —— 那是另一个体系)。
-    // ⚠️ 菜单级隐藏, ⛔ 不等于关权限: analytics 模块未动, 手输 URL 仍进得去。
-    //    owner 说的是**暂时**, 所以选可逆的这一档。
-    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics', hideForFactoryTypes: ['FACTORY'],
+    // 2026-08-22 owner 曾令「数据分析全部隐藏, 工厂暂时用不着」(hideForFactoryTypes: ['FACTORY'])。
+    // P2b（迁移方案 M3，2026-11-14 Steve 定）：对工厂**默认显示，按厂可关**。
+    //   关 = feature-config analytics 行 config.showInSidebar === false（平台「工厂菜单」页写入），
+    //   判据在 factoryMenuVisibility.isFactoryAnalyticsGroupHidden；模块/角色判据不变。
+    //   路由 meta 从来没对工厂挡这些页（只挡菜单），所以放出菜单不会「看得见点不开」。
+    // 闸 menuPermissionParity.spec.ts 的 EXPECTED_CHANGES 逐条列了这次变化的 14 个叶子。
+    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
    
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
@@ -745,8 +747,8 @@ export const platformWorkspacePaths: string[] = platformMenuConfig
 //     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
 //     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
 //   · 「数字班组」组本批不出现（M4）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
-//   · 「数据与分析」对工厂默认显示（M3）会改变可见性，不在本批（本批权限逐项相等）；
-//     现在仍是原来的工厂级开关（feature-config showInSidebar）。
+//   · 「数据与分析」对工厂默认显示（M3）在 P2b 落地：/smart-bi 去掉 hideForFactoryTypes FACTORY，
+//     按厂关闭改为 feature-config showInSidebar === false；闸里 EXPECTED_CHANGES 白名单逐条列出。
 //   · 餐饮 / 物流工厂与平台侧栏不在原型范围（MIGRATION-PLAN 1.4）：继续用原分组，只换 token 与外壳。
 //   · 财务主管专用菜单 financeManagerMenu 不动（P9 财务换外壳时再看）。
 // ============================================================================

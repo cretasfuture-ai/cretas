@@ -53,16 +53,78 @@ function byPath(chains: LeafChain[]): Map<string, Guard[]> {
   return new Map(chains.map((c) => [c.path, c.chain]));
 }
 
-const before = byPath(baseline.leaves as LeafChain[]);
+const snapshot = byPath(baseline.leaves as LeafChain[]);
 
-describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项相等', () => {
+/**
+ * P2b（迁移方案 M3）：快照之后**唯一**允许的权限字段变化 —— 逐条列出，不用通配。
+ * 「数据与分析」原组 /smart-bi 去掉 hideForFactoryTypes: ['FACTORY']（对工厂默认显示，按厂可关
+ * 改由 feature-config showInSidebar === false 判，见 factoryMenuVisibility.ts）。
+ * 受影响的就是祖先链里带 /smart-bi 的这 14 个叶子；它们链上的 /smart-bi 一节去掉该字段，
+ * 链上其它节（含叶子自身，如 revenue-report 自己的 FACTORY 隐藏）逐项不变。
+ * 白名单外任何叶子有变化 ⇒ 红；白名单内叶子没按预期变（漏改）⇒ 也红。
+ */
+const EXPECTED_CHANGES: ReadonlyArray<{ leaf: string; ancestor: string; field: keyof MenuItem; from: unknown; to: unknown }> = [
+  '/smart-bi/dashboard',
+  '/smart-bi/analysis',
+  '/smart-bi/analysis-hub',
+  '/smart-bi/revenue-report',
+  '/analytics/alert-dashboard',
+  '/analytics/supply-chain',
+  '/smart-bi/upload',
+  '/smart-bi/query-templates',
+  '/smart-bi/data-completeness',
+  '/smart-bi/mapping-review',
+  '/analytics/overview',
+  '/smart-bi/food-kb-feedback',
+  '/smart-bi/fallback-log',
+  '/smart-bi/calibration',
+].map((leaf) => ({ leaf, ancestor: '/smart-bi', field: 'hideForFactoryTypes' as const, from: ['FACTORY'], to: undefined }));
+
+/** 快照 + 白名单 = 这次之后应有的链。白名单里写的「改前」值必须与快照一致，否则白名单本身写错了。 */
+function applyExpectedChanges(base: Map<string, Guard[]>): Map<string, Guard[]> {
+  const out = new Map([...base.entries()].map(([k, chain]) => [k, chain.map((g) => ({ ...g }))]));
+  for (const c of EXPECTED_CHANGES) {
+    const chain = out.get(c.leaf);
+    if (!chain) throw new Error(`EXPECTED_CHANGES: 快照里没有叶子 ${c.leaf}`);
+    const node = chain.find((g) => g.path === c.ancestor);
+    if (!node) throw new Error(`EXPECTED_CHANGES: ${c.leaf} 的链上没有 ${c.ancestor}`);
+    if (JSON.stringify(node[c.field]) !== JSON.stringify(c.from)) {
+      throw new Error(`EXPECTED_CHANGES: ${c.leaf} › ${c.ancestor}.${String(c.field)} 改前应为 ${JSON.stringify(c.from)}，快照是 ${JSON.stringify(node[c.field])}`);
+    }
+    if (c.to === undefined) delete node[c.field];
+    else node[c.field] = c.to;
+  }
+  return out;
+}
+
+const before = applyExpectedChanges(snapshot);
+
+describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项相等（P2b 只多出 EXPECTED_CHANGES 列的那几条）', () => {
   it('阳性对照：快照真的读到了（否则下面是空集上的恒真式）', () => {
     expect(baseline.leafCount).toBeGreaterThan(150);
+    expect(snapshot.size).toBe(baseline.leafCount);
     expect(before.size).toBe(baseline.leafCount);
     // #1679 的字段在快照里
-    expect(before.get('/finance/disposal-approvals')?.at(-1)).toMatchObject({ requiresDisposalApproval: true });
+    expect(snapshot.get('/finance/disposal-approvals')?.at(-1)).toMatchObject({ requiresDisposalApproval: true });
     // 被搬家的叶子在快照里带着原父组
-    expect(before.get('/system/products')?.map((g) => g.path)).toEqual(['/production', '/system/products']);
+    expect(snapshot.get('/system/products')?.map((g) => g.path)).toEqual(['/production', '/system/products']);
+  });
+
+  it('P2b 白名单恰好覆盖快照里所有「祖先链带 /smart-bi FACTORY 隐藏」的叶子，且只动这一个字段', () => {
+    const affected = [...snapshot.entries()]
+      .filter(([, chain]) => chain.some((g) => g.path === '/smart-bi' && JSON.stringify(g.hideForFactoryTypes) === '["FACTORY"]'))
+      .map(([path]) => path).sort();
+    expect(affected).toHaveLength(14);
+    expect(EXPECTED_CHANGES.map((c) => c.leaf).sort()).toEqual(affected);
+    // 白名单只把这 14 条链上 /smart-bi 一节的 hideForFactoryTypes 去掉，别的都与快照一样
+    const changed = [...snapshot.entries()]
+      .filter(([path, chain]) => JSON.stringify(before.get(path)) !== JSON.stringify(chain))
+      .map(([path]) => path).sort();
+    expect(changed).toEqual(affected);
+    // 叶子自身的工厂隐藏不在白名单里：收入管理报表仍对工厂隐藏
+    expect(before.get('/smart-bi/revenue-report')?.at(-1)).toMatchObject({ hideForFactoryTypes: ['FACTORY'] });
+    // 物流调度的 FACTORY 隐藏不受影响
+    expect(before.get('/scheduling/logistics/workbench')?.at(-1)).toMatchObject({ hideForFactoryTypes: ['FACTORY'] });
   });
 
   it('原型分组侧栏（groupedMenuConfig）：叶子数量相等、path 集合相等、每条链逐项相等', () => {
