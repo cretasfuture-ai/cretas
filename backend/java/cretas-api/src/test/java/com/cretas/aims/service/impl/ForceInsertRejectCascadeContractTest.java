@@ -22,6 +22,8 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -47,10 +49,15 @@ class ForceInsertRejectCascadeContractTest {
 
     @BeforeEach
     void setUp() {
+        // 本人审批判定: 审批人不是提交人 => 非本人 (gate 为 null 时 service fail-closed, 为 mock 不打桩返回 null)
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate selfGate = mock(com.cretas.aims.service.workflow.FactorySelfApprovalGate.class);
+        when(selfGate.decide(anyString(), anyBoolean(), any()))
+                .thenReturn(com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision.NOT_SELF);
         service = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class, Map.of(
                 ProductionPlanRepository.class, plans, UserRepository.class, users,
                 InsertSlotRepository.class, slots,
-                SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class)));
+                SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class),
+                com.cretas.aims.service.workflow.FactorySelfApprovalGate.class, selfGate));
         ReflectionTestUtils.setField(service, "productionBatchRepository", batches);
         ReflectionTestUtils.setField(service, "workProcessTaskRepository", tasks);
 
