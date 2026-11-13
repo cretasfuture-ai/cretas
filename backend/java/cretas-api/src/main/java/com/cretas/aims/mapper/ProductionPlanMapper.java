@@ -174,6 +174,8 @@ public class ProductionPlanMapper {
         dto.setApproverName(plan.getApproverName());
         dto.setApprovedAt(plan.getApprovedAt());
         dto.setApprovalComment(plan.getApprovalComment());
+        dto.setSelfApproved(plan.isSelfApproved());
+        dto.setSelfApprovalReason(plan.getSelfApprovalReason());
         dto.setForceInsertReason(plan.getForceInsertReason());
         dto.setForceInsertBy(plan.getForceInsertBy());
         dto.setForceInsertedAt(plan.getForceInsertedAt());

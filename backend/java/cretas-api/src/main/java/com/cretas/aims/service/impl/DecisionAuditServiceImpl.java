@@ -233,6 +233,27 @@ public class DecisionAuditServiceImpl implements DecisionAuditService {
             Long approverId,
             String approverName
     ) {
+        return logApproval(factoryId, entityType, entityId, status, approvalComment,
+                approverId, approverName, false, null);
+    }
+
+    @Override
+    @Transactional
+    public DecisionAuditLog logApproval(
+            String factoryId,
+            String entityType,
+            String entityId,
+            ApprovalStatus status,
+            String approvalComment,
+            Long approverId,
+            String approverName,
+            boolean selfApproved,
+            String selfApprovalReason
+    ) {
+        if (selfApproved && (selfApprovalReason == null || selfApprovalReason.isBlank())) {
+            // 调用方应已经过 FactorySelfApprovalGate (原因必填); 走到这里说明接线错了, 不写一条没有原因的本人审批
+            throw new IllegalArgumentException("本人审批留痕缺原因: " + entityType + "/" + entityId);
+        }
         DecisionAuditLog auditLog = DecisionAuditLog.builder()
                 .decisionType(DecisionType.APPROVAL)
                 .factoryId(factoryId)
@@ -243,6 +264,8 @@ public class DecisionAuditServiceImpl implements DecisionAuditService {
                 .approverId(approverId)
                 .approverName(approverName)
                 .approvedAt(LocalDateTime.now())
+                .selfApproved(selfApproved)
+                .selfApprovalReason(selfApproved ? selfApprovalReason.trim() : null)
                 .decisionMade(String.format("审批结果: %s", status.name()))
                 .executionMode(ExecutionMode.MANUAL)
                 .build();
