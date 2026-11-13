@@ -1,6 +1,7 @@
 package com.cretas.aims.service.bom;
 
 import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
@@ -19,7 +20,14 @@ import java.util.Set;
  *
  * <p><b>全局锁序</b> (所有写配方族的路径都按这个方向, 不会成环):</p>
  * <ol>
- *   <li>产品行 {@code products FOR UPDATE} —— 只有分配版本 / 激活 / 整表更新的路径拿; 拿多个时按产品 id 升序。</li>
+ *   <li>产品行 {@code products FOR UPDATE} —— 只有分配版本 / 激活 / 整表更新的路径拿; 激活 / 整表更新拿多个时按产品 id 升序。
+ *       ⚠️ <b>还不是全局升序</b>: {@code initializeFamilyAndInputSkeletons} 与 {@code rebindDraftFamilyToExactRevision}
+ *       在已持有请求产品 P (+ 头锁) 之后, 才为新增的联产 SKU Q 锁产品行 —— 联产输出要先按 P 解析工艺图才知道,
+ *       没法低成本提前一次性收集。若另一事务同时激活一个含 P、Q 且 Q &lt; P 的族 (先锁 Q 再等 P), 两边可成环,
+ *       PG 判死锁回滚其中一方 (整个事务回滚, 不写坏数据, 用户重试即可)。窗口很窄: 两处在锁 Q 之前都先查
+ *       「Q 已有草稿」并 409 (BOM_FAMILY_EXISTING_DRAFT_CONFLICT), 而激活 / 整表更新只作用于草稿族 ——
+ *       成环要求含 Q 的草稿族恰好在这次检查之后才提交、并在本事务锁 Q 之前被另一事务激活。
+ *       收敛办法 (未做, 已登记): 先解析工艺图拿到全部输出 SKU, 再按 id 升序一次锁全部产品。</li>
  *   <li>物料 → 调价建议 (调价批准; 与确认入库同向)。</li>
  *   <li><b>整族配方头</b>, 按配方 id 升序一次锁住 ({@link #lockWithFamily})。</li>
  *   <li>明细行 {@code bom_recipe_items FOR UPDATE}。</li>
@@ -38,6 +46,9 @@ import java.util.Set;
 public final class BomRecipeHeadLocks {
 
     private static final Object HELD_KEY = new Object();
+
+    /** 重算时本事务没有持有该族的锁 (多为加锁前后被并发改绑): 409, 用户刷新重试。 */
+    public static final String FAMILY_LOCK_STALE = "BOM_FAMILY_LOCK_STALE";
 
     private BomRecipeHeadLocks() {
     }
@@ -84,9 +95,15 @@ public final class BomRecipeHeadLocks {
         Set<String> held = heldSet(false);
         String key = keyOf(changed);
         if (held == null || !held.contains(key)) {
-            throw new IllegalStateException("BOM 成本重算前没有按锁序锁住整族配方头: recipe=" + changed.getId()
+            // 运行时最常见的成因是加锁前后配方被并发改绑到别的族 (见 lockWithFamily 的回退分支): 对用户是
+            // 「别人刚改过, 重试即可」, 所以给 409 而不是通用 500。技术细节留在 cause 里进日志。
+            IllegalStateException detail = new IllegalStateException(
+                    "BOM 成本重算前没有按锁序锁住整族配方头: recipe=" + changed.getId()
                     + ", family=" + changed.getBomFamilyId()
                     + " (先调用 BomRecipeHeadLocks.lockWithFamily, 见类注释)");
+            throw new BusinessException(409, "配方已被别人改动，请刷新后重试", detail)
+                    .withCode(FAMILY_LOCK_STALE)
+                    .withHint("刷新配方页面后重新操作；若反复出现，请联系管理员");
         }
     }
 
