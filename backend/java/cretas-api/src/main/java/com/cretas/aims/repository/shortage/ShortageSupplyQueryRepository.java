@@ -16,10 +16,29 @@ import java.util.List;
 @org.springframework.stereotype.Repository
 public interface ShortageSupplyQueryRepository extends Repository<ShortageCaseLine, Long> {
 
-    /** 本厂、公司自有、质检中的剩余量 (放行后才会变成可用)。 */
+    /**
+     * 本厂、公司自有、<b>首检中</b>的剩余量 (收货 / 产出后等质检放行, 放行后才会变成可用)。
+     *
+     * <p>#1590 遗留 M3: 被扣留的质检中 (冻结 / CCP 偏离扣留 / 冷链转待检 / 仓库页改成质检中) 不算 ——
+     * 那是本来就在库里、因为可疑被拦下的货, 不是正在到来的供应; 算进来会让缺料实例以为缺口有着落
+     * (阶段停在「等供应」、负责人转给质检), 实际上那批货多半要报废。判据: 记了扣留前状态
+     * ({@code holdPriorStatus}); 本列上线前冻结的老数据没有这一列, 认冻结工具写在备注里的审计标记。
+     * 状态口径 (只此一处): 只数 INSPECTING; 不良品 / 过期 / 报废 / 已用完是永远不会变成可用的货, 一律不算;
+     * 可用 / 鲜品 / 冻品 等已在库可用的量由库存检查算进「已放行」, 不在这里。
+     *
+     * <p>已知口径缺口 (这里如实写明, 不在本查询里猜):
+     * <ul>
+     *   <li><b>送回复检</b> (不良品 / 过期 / 报废改回质检中, 见 {@code MaterialBatchHoldService#hold}) 故意不记扣留前状态
+     *       (复检放行只能放成可用, 不能还原成不良品), 所以在这里与首检分不开, <b>会被算作供应</b>;</li>
+     *   <li>本列上线前由 CCP 偏离扣留 / 冷链转待检扣成质检中的老批次, 既没有扣留前状态也没有冻结审计备注, 同样<b>会被算作供应</b>。</li>
+     * </ul>
+     * 要把这两类排除, 需要另加「复检」标记 (CHECK 只允许可用类的扣留前状态, 不能拿它记不良品), 属于后续项。
+     */
     @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) FROM MaterialBatch m "
             + "WHERE m.factoryId = :factoryId AND m.materialTypeId = :materialTypeId "
             + "AND m.status = com.cretas.aims.entity.enums.MaterialBatchStatus.INSPECTING "
+            + "AND m.holdPriorStatus IS NULL "
+            + "AND (m.notes IS NULL OR m.notes NOT LIKE '%[FREEZE by user=%') "
             + "AND (m.ownership IS NULL OR m.ownership = com.cretas.aims.entity.enums.InventoryOwnership.COMPANY_OWNED) "
             + "AND (m.receiptQuantity - m.usedQuantity - m.reservedQuantity) > 0")
     BigDecimal sumInspectingQuantity(@Param("factoryId") String factoryId,

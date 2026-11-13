@@ -364,16 +364,24 @@ class WipBatchQcRejectionGuardContractTest {
     void drainingABlockedBatchKeepsItsStatus() {
         ReflectionTestUtils.setField(warehouse, "inventoryLowStockEventPublisher",
                 mock(com.cretas.aims.service.alerts.InventoryLowStockEventPublisher.class));
+        ReflectionTestUtils.setField(warehouse, "materialBatchAdjustmentRepository",
+                mock(com.cretas.aims.repository.MaterialBatchAdjustmentRepository.class));
         for (MaterialBatchStatus st : List.of(MaterialBatchStatus.DEFECTIVE, MaterialBatchStatus.INSPECTING)) {
             batch.setStatus(st);
             batch.setReceiptQuantity(new java.math.BigDecimal("10"));
             batch.setUsedQuantity(java.math.BigDecimal.ZERO);
-            warehouse.useBatchQuantity(F, "WIP-1", new java.math.BigDecimal("10"));
+            // #1590 遗留: 领用类扣减 (useBatchQuantity) 现在直接拒绝挡投产的批次; 数量用尽保留状态这条性质
+            // 改在仍允许扣挡投产批次的盘点调整路径上守 (报废 / 报损 / 盘亏同属这一类)
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                    () -> warehouse.useBatchQuantity(F, "WIP-1", new java.math.BigDecimal("10")))
+                    .as("%s", st).isInstanceOf(com.cretas.aims.exception.BusinessException.class);
+            warehouse.applyBatchQuantityDelta(F, "WIP-1", new java.math.BigDecimal("-10"), "QA 盘亏");
             assertThat(batch.getCurrentQuantity()).as("%s", st).isEqualByComparingTo("0");
             assertThat(batch.getStatus()).as("数量用尽不能盖掉「%s」", st.getDisplayName()).isEqualTo(st);
         }
         // 阴性对照: 可用批次用尽照常是已用完
         batch.setStatus(MaterialBatchStatus.AVAILABLE);
+        batch.setReceiptQuantity(new java.math.BigDecimal("10"));
         batch.setUsedQuantity(java.math.BigDecimal.ZERO);
         warehouse.useBatchQuantity(F, "WIP-1", new java.math.BigDecimal("10"));
         assertThat(batch.getStatus()).isEqualTo(MaterialBatchStatus.USED_UP);
