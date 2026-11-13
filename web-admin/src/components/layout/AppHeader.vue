@@ -5,6 +5,8 @@ import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import { factoryMenuForType, groupedMenuConfig, menuTrail } from './menuConfig';
+import { usePinnedMenu } from './pinnedMenu';
+import { Star, StarFilled } from '@element-plus/icons-vue';
 import { ElMessageBox, ElMessage } from 'element-plus';
 import { Fold, Expand, User, SwitchButton, Refresh, Moon, Sunny, Box, ArrowLeft, VideoPlay } from '@element-plus/icons-vue';
 import ReminderBell from '@/components/notifications/ReminderBell.vue';
@@ -26,6 +28,16 @@ const factoryView = usePlatformFactoryContextStore();
 //
 // ⇒ 路由可以用 meta.breadcrumbParent 显式声明「我在导航里的上一级叫什么」,
 //   面包屑以它为准。⛔ 不改 URL(存量深链/书签), 也不搬菜单(业务归属是对的)。
+// P2「常用」：当前页是原型分组侧栏里的一个菜单项时，可在面包屑旁加入/移出常用（存本机浏览器）。
+const pinnedMenu = usePinnedMenu();
+const pinnablePath = computed<string | null>(() => {
+  if (authStore.isPlatform || authStore.currentRole === 'finance_manager' || !pinnedMenu.currentKey.value) return null;
+  if (factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) !== groupedMenuConfig) return null;
+  const trail = menuTrail(groupedMenuConfig, route.fullPath);
+  return trail ? trail[trail.length - 1].path : null;
+});
+const currentPinned = computed(() => !!pinnablePath.value && pinnedMenu.isPinned(pinnablePath.value));
+
 const breadcrumbs = computed(() => {
   // P2：原型分组侧栏下，面包屑按菜单树取「组 › 项 › 子项」，与用户在侧栏里点的名字一致。
   // 平台侧栏、财务主管专用菜单、餐饮/物流（原分组）仍走路由 meta.title。
@@ -117,6 +129,18 @@ async function handleLogout() {
           {{ item.title }}
         </el-breadcrumb-item>
       </el-breadcrumb>
+      <el-tooltip v-if="!appStore.isMobile && pinnablePath" :content="currentPinned ? '从常用移除' : '加入常用（保存在这台电脑的浏览器里）'" placement="bottom">
+        <button
+          type="button"
+          class="pin-toggle"
+          :class="{ 'is-pinned': currentPinned }"
+          :aria-pressed="currentPinned"
+          :aria-label="currentPinned ? '从常用移除' : '加入常用'"
+          @click="pinnedMenu.toggle(pinnablePath!)"
+        >
+          <el-icon><StarFilled v-if="currentPinned" /><Star v-else /></el-icon>
+        </button>
+      </el-tooltip>
     </div>
 
     <div class="header-right">
@@ -194,6 +218,22 @@ async function handleLogout() {
   position: sticky;
   top: 0;
   z-index: 99;
+}
+
+.pin-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 8px;
+  border: 0;
+  border-radius: var(--cs-radius-sm, 6px);
+  background: transparent;
+  color: var(--cs-muted, #526278);
+  cursor: pointer;
+  &:hover, &:focus-visible { background: var(--cs-primary-soft, #edf4fb); color: var(--cs-primary, #1b65a8); outline: none; }
+  &.is-pinned { color: var(--cs-warning, #885910); }
 }
 
 .header-left {

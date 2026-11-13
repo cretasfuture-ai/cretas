@@ -17,12 +17,13 @@ import {
   House, Operation, Box, Checked, ShoppingCart, Goods,
   User, Monitor, Money, Setting, DataAnalysis, Calendar,
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
-  Histogram
+  Histogram, StarFilled
 } from '@element-plus/icons-vue';
 import { factoryMenuForType, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
 import MenuSearch from './MenuSearch.vue';
+import { pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
@@ -324,6 +325,25 @@ function collectVisiblePaths(items: readonly MenuItem[]): string[] {
   ]);
 }
 
+// P2「常用」：浏览器本地按「账号 id + 工厂 id」存 path；只显示当前侧栏看得见的项（权限仍由上面判）。
+const pinnedMenu = usePinnedMenu();
+watch(
+  () => [authStore.user?.id, effectiveFactoryId.value] as const,
+  ([userId, factoryId]) => pinnedMenu.bind(pinnedMenuStorageKey(userId, factoryId)),
+  { immediate: true },
+);
+function visibleLeaves(items: readonly MenuItem[]): MenuItem[] {
+  return items.flatMap((item) => (item.children?.length ? visibleLeaves(item.children) : [item]));
+}
+const pinnedItems = computed<MenuItem[]>(() => {
+  if (authStore.isPlatform && !factoryView.isViewingFactory) return [];
+  const byPath = new Map(visibleLeaves(filteredMenu.value).map((leaf) => [leaf.path, leaf]));
+  return pinnedMenu.pinned.value
+    .map((path) => byPath.get(path))
+    .filter((leaf): leaf is MenuItem => !!leaf);
+});
+const PINNED_INDEX_PREFIX = 'pin:';
+
 /** 侧栏分区标题：在每个分区的第一项前显示一次（「全部功能」「设置」；top 分区无标题）。 */
 function sectionTitleBefore(index: number): string {
   const items = filteredMenu.value;
@@ -482,7 +502,8 @@ const defaultOpeneds = computed(() => {
   return findOpenParents(route.path, filteredMenu.value) ?? [];
 });
 
-function handleSelect(path: string) {
+function handleSelect(index: string) {
+  const path = index.startsWith(PINNED_INDEX_PREFIX) ? index.slice(PINNED_INDEX_PREFIX.length) : index;
   const target = router.resolve(path);
   void router.push(workspace.menuRoute({
     path: target.path,
@@ -542,6 +563,33 @@ function handleSelect(path: string) {
         active-text-color="#ffffff"
         @select="handleSelect"
       >
+        <template v-if="pinnedItems.length">
+          <div
+            class="menu-section-title"
+            :class="{ 'is-collapsed': isCollapsedSidebar }"
+            :aria-hidden="isCollapsedSidebar"
+            role="presentation"
+          >常用</div>
+          <el-menu-item
+            v-for="pin in pinnedItems"
+            :key="`pin-${pin.path}`"
+            :index="`${PINNED_INDEX_PREFIX}${pin.path}`"
+            :aria-label="`常用：${titleForItem(pin)}`"
+            class="pinned-menu-item"
+          >
+            <el-icon><StarFilled /></el-icon>
+            <template #title>
+              <span class="menu-title-copy">{{ titleForItem(pin) }}</span>
+              <button
+                type="button"
+                class="pinned-remove"
+                :aria-label="`从常用移除：${titleForItem(pin)}`"
+                title="从常用移除"
+                @click.stop="pinnedMenu.toggle(pin.path)"
+              >×</button>
+            </template>
+          </el-menu-item>
+        </template>
         <template v-for="(item, index) in filteredMenu" :key="item.path">
         <div
           v-if="sectionTitleBefore(index)"
@@ -649,6 +697,24 @@ function handleSelect(path: string) {
 .sidebar-menu-wrap {
   flex: 1;
   padding: 8px;
+}
+
+// P2「常用」项：右侧移除按钮悬停才出现
+:deep(.pinned-menu-item) {
+  .pinned-remove {
+    margin-left: auto;
+    padding: 0 4px;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity var(--cs-duration-fast, 140ms);
+  }
+  &:hover .pinned-remove,
+  .pinned-remove:focus-visible { opacity: 1; color: #fff; }
 }
 
 // P2 原型侧栏分区标题（「全部功能」「设置」）
