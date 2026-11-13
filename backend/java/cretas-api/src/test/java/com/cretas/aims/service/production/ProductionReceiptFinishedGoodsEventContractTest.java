@@ -204,4 +204,115 @@ class ProductionReceiptFinishedGoodsEventContractTest {
 
         verify(applicationEventPublisher, never()).publishEvent(any(FinishedGoodsCreatedEvent.class));
     }
+
+    // ── 工作流逐行路径: 每个终端产出行一次事件, 数量 = 本次增量 ──────────────────────────
+    private ProductionWarehouseReceiptRequest stubWorkflowTwoOutputs() {
+        ProductionPlan plan = new ProductionPlan();
+        plan.setId(PLAN_ID);
+        plan.setFactoryId(FACTORY_ID);
+        plan.setPlanNumber("P-EVT");
+        plan.setProductTypeId("RAW-OWNER");
+        plan.setSourceOrderId("SO-1");
+        plan.setPlannedQuantity(new BigDecimal("100"));
+        plan.setStatus(ProductionPlanStatus.COMPLETED);
+        plan.setWorkflowSelectionMode(com.cretas.aims.entity.ProductionBatch.WorkflowSelectionMode.WORKFLOW);
+        plan.setSelectedWorkflowId(44L);
+        plan.setSelectedWorkflowVersion(3);
+        plan.setSelectedWorkflowRevisionId(4403L);
+        plan.setSelectedWorkflowRevisionHash("revision-hash-v3");
+        plan.setSelectedBomFamilyId("family-v3");
+        plan.setSelectedBomRecipeIdsByProduct(java.util.Map.of("FG-SKU-A", "bom-a", "FG-SKU-B", "bom-b"));
+        plan.setSelectedBomVersionsByProduct(java.util.Map.of("FG-SKU-A", 2, "FG-SKU-B", 2));
+        plan.setWorkflowOutputUnitsByProduct(java.util.Map.of("FG-SKU-A", "kg", "FG-SKU-B", "box"));
+        plan.setTargetFinishedGoodIds(List.of("FG-SKU-A", "FG-SKU-B"));
+        when(productionPlanRepository.findByIdAndFactoryId(PLAN_ID, FACTORY_ID)).thenReturn(Optional.of(plan));
+
+        ProductionSettlement settlement = new ProductionSettlement();
+        settlement.setId("settlement-evt");
+        settlement.setFactoryId(FACTORY_ID);
+        settlement.setProductionPlanId(PLAN_ID);
+        settlement.setPlanNumber("P-EVT");
+        settlement.setPlannedQuantity(new BigDecimal("100"));
+        settlement.setPlanStatusAfter(ProductionPlanStatus.COMPLETED);
+        settlement.setPostingStatus("PENDING_WAREHOUSE_RECEIPT");
+        when(productionSettlementRepository.findByFactoryIdAndProductionPlanIdForUpdate(FACTORY_ID, PLAN_ID))
+                .thenReturn(Optional.of(settlement));
+        when(productionSettlementOutputLineRepository.lockByFactoryIdAndSettlementId(FACTORY_ID, "settlement-evt"))
+                .thenReturn(List.of(
+                        outputLine("FG-SKU-A", "FG-A-001", "kg", "bom-a", "8"),
+                        outputLine("FG-SKU-B", "FG-B-001", "box", "bom-b", "3")));
+        when(productTypeRepository.findByIdAndFactoryId(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.eq(FACTORY_ID)))
+                .thenAnswer(inv -> {
+                    com.cretas.aims.entity.ProductType pt = new com.cretas.aims.entity.ProductType();
+                    pt.setId(inv.getArgument(0));
+                    pt.setFactoryId(FACTORY_ID);
+                    pt.setName(inv.getArgument(0));
+                    return Optional.of(pt);
+                });
+        when(finishedGoodsBatchRepository.save(any(FinishedGoodsBatch.class))).thenAnswer(inv -> {
+            FinishedGoodsBatch b = inv.getArgument(0);
+            b.setId("fg-" + b.getProductTypeId());
+            return b;
+        });
+        ProductionWarehouseReceiptRequest request = new ProductionWarehouseReceiptRequest();
+        request.setIdempotencyKey("receipt-wf-1");
+        request.setOutputLines(List.of(
+                ProductionWarehouseReceiptRequest.ReceiptLine.builder().productTypeId("FG-SKU-A")
+                        .batchNumber("FG-A-001").receivedQuantity(new BigDecimal("8")).quantityUnit("kg").build(),
+                ProductionWarehouseReceiptRequest.ReceiptLine.builder().productTypeId("FG-SKU-B")
+                        .batchNumber("FG-B-001").receivedQuantity(new BigDecimal("3")).quantityUnit("box").build()));
+        return request;
+    }
+
+    private com.cretas.aims.entity.ProductionSettlementOutputLine outputLine(
+            String productTypeId, String batchNumber, String unit, String recipeId, String qty) {
+        com.cretas.aims.entity.ProductionSettlementOutputLine line =
+                com.cretas.aims.entity.ProductionSettlementOutputLine.create();
+        line.setFactoryId(FACTORY_ID);
+        line.setSettlementId("settlement-evt");
+        line.setProductionPlanId(PLAN_ID);
+        line.setProductTypeId(productTypeId);
+        line.setReportedBatchNumber(batchNumber);
+        line.setReportedQuantity(new BigDecimal(qty));
+        line.setQuantityUnit(unit);
+        line.setBomFamilyId("family-v3");
+        line.setBomRecipeId(recipeId);
+        line.setBomRecipeVersion(2);
+        line.setTargetTerminalNodeId("terminal-" + productTypeId);
+        line.setOutputRole(com.cretas.aims.entity.bom.BomRecipe.OutputRole.MAIN);
+        line.setCostAllocationRatio(BigDecimal.ONE);
+        return line;
+    }
+
+    @Test
+    @DisplayName("工作流逐行入库: 提交后每个产出行恰好一次事件, 数量是本次增量")
+    void workflowReceiptPublishesOncePerOutputLineWithDelta() {
+        ProductionWarehouseReceiptRequest request = stubWorkflowTwoOutputs();
+        TransactionSynchronizationManager.initSynchronization();
+        service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID, request, 11L);
+
+        verify(applicationEventPublisher, never()).publishEvent(any(FinishedGoodsCreatedEvent.class));
+        TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+
+        ArgumentCaptor<FinishedGoodsCreatedEvent> captor = ArgumentCaptor.forClass(FinishedGoodsCreatedEvent.class);
+        verify(applicationEventPublisher, times(2)).publishEvent(captor.capture());
+        java.util.Map<String, BigDecimal> byProduct = new java.util.HashMap<>();
+        captor.getAllValues().forEach(e -> byProduct.put(e.getProductTypeId(), e.getQuantity()));
+        assertEquals(2, byProduct.size());
+        assertEquals(0, new BigDecimal("8").compareTo(byProduct.get("FG-SKU-A")));
+        assertEquals(0, new BigDecimal("3").compareTo(byProduct.get("FG-SKU-B")));
+    }
+
+    @Test
+    @DisplayName("工作流逐行入库回滚不发事件")
+    void workflowReceiptRollbackPublishesNothing() {
+        ProductionWarehouseReceiptRequest request = stubWorkflowTwoOutputs();
+        TransactionSynchronizationManager.initSynchronization();
+        service.confirmWarehouseReceipt(FACTORY_ID, PLAN_ID, request, 11L);
+
+        TransactionSynchronizationManager.getSynchronizations().forEach(
+                s -> s.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+        verify(applicationEventPublisher, never()).publishEvent(any(FinishedGoodsCreatedEvent.class));
+    }
 }
