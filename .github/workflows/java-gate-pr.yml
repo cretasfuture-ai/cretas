@@ -171,7 +171,12 @@ jobs:
           key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
           restore-keys: maven-gate-
 
+      # 兜底 (2026-11-13): 分片偶发在 Spring 上下文启动后静默卡死, 拖满 job 超时。
+      # 1) 主兜底在 fork 里: src/test 的 IdleWatchdogTestExecutionListener, 7 分钟没有任何 JUnit 事件就
+      #    打线程转储并 halt fork ⇒ surefire 报失败 (不是跳过)。
+      # 2) 这里的 step 超时是第二道: 正常一片 ≤16 分钟 (含编译/下依赖), 25 分钟必然是卡死。
       - name: Compile all Java tests and run high-signal gates
+        timeout-minutes: 25
         working-directory: backend/java/cretas-api
         env:
           MAVEN_OPTS: -Xmx2g
