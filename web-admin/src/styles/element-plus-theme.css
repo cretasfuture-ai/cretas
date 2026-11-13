@@ -1,0 +1,121 @@
+/*
+ * Element Plus → Cretas System v1（--cs-*）映射（MIGRATION-PLAN P1）。
+ *
+ * 为什么用 `html:root`（特异性 0,1,1）而不是 `:root`（0,1,0）：
+ * main.ts 在 bootstrap 里 **动态** import 'element-plus/dist/index.css'，它晚于本文件进入页面，
+ * 自带 `:root { --el-color-primary:#409eff; ... }`。同特异性后到者赢，所以 style.css 里原来那段
+ * `:root { --el-color-primary:#1B65A8 }` 在线上从未生效（2026-11-13 本地实测 computed = #409eff）。
+ * 提一级特异性才能稳定盖过 Element Plus 默认值，与加载先后无关。
+ *
+ * 浅色派生（light-3/5/7/8）按 Element Plus 自己的算法（与白色按 30/50/70/80% 混合）用 color-mix
+ * 从 --cs-* 现算，light-9 直接用原型的 *-soft；dark-2 = 与黑色 20% 混合。改主色只改 tokens.css。
+ */
+html:root {
+  --el-color-primary: var(--cs-primary);
+  --el-color-primary-light-3: color-mix(in srgb, var(--cs-primary) 70%, #fff);
+  --el-color-primary-light-5: color-mix(in srgb, var(--cs-primary) 50%, #fff);
+  --el-color-primary-light-7: color-mix(in srgb, var(--cs-primary) 30%, #fff);
+  --el-color-primary-light-8: color-mix(in srgb, var(--cs-primary) 20%, #fff);
+  --el-color-primary-light-9: var(--cs-primary-soft);
+  --el-color-primary-dark-2: var(--cs-primary-hover);
+
+  --el-color-success: var(--cs-success);
+  --el-color-success-light-3: color-mix(in srgb, var(--cs-success) 70%, #fff);
+  --el-color-success-light-5: color-mix(in srgb, var(--cs-success) 50%, #fff);
+  --el-color-success-light-7: color-mix(in srgb, var(--cs-success) 30%, #fff);
+  --el-color-success-light-8: color-mix(in srgb, var(--cs-success) 20%, #fff);
+  --el-color-success-light-9: var(--cs-success-soft);
+  --el-color-success-dark-2: color-mix(in srgb, var(--cs-success) 80%, #000);
+
+  --el-color-warning: var(--cs-warning);
+  --el-color-warning-light-3: color-mix(in srgb, var(--cs-warning) 70%, #fff);
+  --el-color-warning-light-5: color-mix(in srgb, var(--cs-warning) 50%, #fff);
+  --el-color-warning-light-7: color-mix(in srgb, var(--cs-warning) 30%, #fff);
+  --el-color-warning-light-8: color-mix(in srgb, var(--cs-warning) 20%, #fff);
+  --el-color-warning-light-9: var(--cs-warning-soft);
+  --el-color-warning-dark-2: color-mix(in srgb, var(--cs-warning) 80%, #000);
+
+  --el-color-danger: var(--cs-danger);
+  --el-color-danger-light-3: color-mix(in srgb, var(--cs-danger) 70%, #fff);
+  --el-color-danger-light-5: color-mix(in srgb, var(--cs-danger) 50%, #fff);
+  --el-color-danger-light-7: color-mix(in srgb, var(--cs-danger) 30%, #fff);
+  --el-color-danger-light-8: color-mix(in srgb, var(--cs-danger) 20%, #fff);
+  --el-color-danger-light-9: var(--cs-danger-soft);
+  --el-color-danger-dark-2: color-mix(in srgb, var(--cs-danger) 80%, #000);
+
+  /* Element Plus 的 ElMessage.error / el-alert type=error 读 --el-color-error，不读 danger */
+  --el-color-error: var(--cs-danger);
+  --el-color-error-light-3: color-mix(in srgb, var(--cs-danger) 70%, #fff);
+  --el-color-error-light-5: color-mix(in srgb, var(--cs-danger) 50%, #fff);
+  --el-color-error-light-7: color-mix(in srgb, var(--cs-danger) 30%, #fff);
+  --el-color-error-light-8: color-mix(in srgb, var(--cs-danger) 20%, #fff);
+  --el-color-error-light-9: var(--cs-danger-soft);
+  --el-color-error-dark-2: color-mix(in srgb, var(--cs-danger) 80%, #000);
+
+  --el-color-info: var(--cs-muted);
+  --el-color-info-light-3: color-mix(in srgb, var(--cs-muted) 70%, #fff);
+  --el-color-info-light-5: color-mix(in srgb, var(--cs-muted) 50%, #fff);
+  --el-color-info-light-7: color-mix(in srgb, var(--cs-muted) 30%, #fff);
+  --el-color-info-light-8: color-mix(in srgb, var(--cs-muted) 20%, #fff);
+  --el-color-info-light-9: var(--cs-surface-subtle);
+  --el-color-info-dark-2: color-mix(in srgb, var(--cs-muted) 80%, #000);
+
+  --el-text-color-primary: var(--cs-text);
+  --el-text-color-regular: var(--cs-muted);
+  --el-text-color-secondary: var(--cs-muted);
+  --el-text-color-placeholder: color-mix(in srgb, var(--cs-muted) 60%, #fff);
+  --el-text-color-disabled: color-mix(in srgb, var(--cs-muted) 45%, #fff);
+
+  --el-border-color: var(--cs-border);
+  --el-border-color-light: color-mix(in srgb, var(--cs-border) 75%, #fff);
+  --el-border-color-lighter: color-mix(in srgb, var(--cs-border) 55%, #fff);
+  --el-border-color-extra-light: color-mix(in srgb, var(--cs-border) 35%, #fff);
+
+  --el-bg-color: var(--cs-surface);
+  --el-bg-color-page: var(--cs-bg);
+  --el-bg-color-overlay: var(--cs-surface);
+  --el-fill-color-light: var(--cs-surface-subtle);
+  --el-fill-color-lighter: var(--cs-surface-subtle);
+
+  --el-border-radius-base: var(--cs-radius-sm);
+  --el-font-family: var(--cs-font-family);
+  --el-font-size-base: var(--cs-font);
+  --el-box-shadow-light: var(--cs-shadow);
+}
+
+/* 暗色：保留 style.css 原有暗色值，只把特异性提到能盖过 Element Plus 的同一级 */
+html:root[data-theme='dark'] {
+  --el-color-primary: #4A9FE5;
+  --el-color-primary-light-3: #6BB5F0;
+  --el-color-primary-light-5: #8DC8F5;
+  --el-color-primary-light-7: #B0D9F8;
+  --el-color-primary-light-8: #C5E3FA;
+  --el-color-primary-light-9: #1E3A5F;
+  --el-color-primary-dark-2: #2B7EC1;
+  --el-text-color-primary: #E8ECF1;
+  --el-text-color-regular: #C8CDD5;
+  --el-text-color-secondary: #9CA3AF;
+  --el-text-color-placeholder: #6B7280;
+  --el-border-color: #2D3748;
+  --el-border-color-light: #243044;
+  --el-border-color-lighter: #1A2332;
+  --el-bg-color: #1A2332;
+  --el-bg-color-page: #0F1420;
+  --el-bg-color-overlay: #1E293B;
+  --el-fill-color-light: #243044;
+  --el-fill-color-lighter: #243044;
+  --el-fill-color-blank: #1A2332;
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+}
+
+/* 原型 design-system.css 里对 Element Plus 组件的少量收口（.ydwm-modern 段落，去掉作用域前缀） */
+.el-button { font-weight: 500; }
+.el-table {
+  --el-table-header-bg-color: var(--cs-surface-subtle);
+  --el-table-border-color: var(--cs-border);
+  --el-table-row-hover-bg-color: var(--cs-primary-soft);
+}
+.el-table th.el-table__cell { color: var(--cs-muted); font-weight: 500; }
+.el-dialog, .el-drawer { --el-dialog-border-radius: var(--cs-radius-lg); }
+.el-dialog__title, .el-drawer__title { font-weight: 650; color: var(--cs-text); }
+.el-message { border-radius: 8px; box-shadow: var(--cs-shadow); }
