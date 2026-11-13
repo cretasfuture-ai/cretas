@@ -11,6 +11,7 @@ import { WHInboundStackParamList } from '../../../types/navigation';
 import { purchaseApiClient, PurchaseOrder } from '../../../services/api/purchaseApiClient';
 import { useAuthStore } from '../../../store/authStore';
 import { handleError } from '../../../utils/errorHandler';
+import { isDataScopeRefusal, scopeHintOf, scopeRefusalHintOf } from '../../../utils/dataScopeNotice';
 import { warehouseReceivingApiClient } from '../../../services/api/warehouseReceivingApiClient';
 import { FrontlineAIEntry } from '../../../components/ai/FrontlineAIEntry';
 import {
@@ -66,6 +67,8 @@ export default function WHInboundListScreen() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterStatus>('all');
   const [loadError, setLoadError] = useState<string | null>(null);
+  // 岗位数据范围比「全工厂」窄时的说明: scoped = 后端已按范围过滤并给了说明; refused = 某个来源被范围闸拒绝。
+  const [scopeNotice, setScopeNotice] = useState<{ kind: 'scoped' | 'refused'; text: string } | null>(null);
   const [statusHasMore, setStatusHasMore] = useState<Partial<Record<PurchaseOrder['status'], boolean>>>(() =>
     Object.fromEntries(INBOUND_ORDER_STATUSES.map((status) => [status, true])) as Partial<Record<PurchaseOrder['status'], boolean>>,
   );
@@ -103,26 +106,47 @@ export default function WHInboundListScreen() {
         ]),
       ]);
       const arrivalResult = arrivalResults?.[0];
+      // 数据范围拒绝 (DATA_SCOPE_UNSUPPORTED) 重试永远不会好: 不算加载失败、不进待重试来源、不弹错误窗,
+      // 只在页面上说明原因和找谁调整。
+      const refusalHints: string[] = [];
       const fulfilled = results.filter(
         (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof purchaseApiClient.getOrdersByStatus>>> =>
           result.status === 'fulfilled',
       );
-      const firstFailure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+      const firstFailure = results.find(
+        (result): result is PromiseRejectedResult => result.status === 'rejected' && !isDataScopeRefusal(result.reason),
+      );
+      const scopeRefusedCount = results.filter(
+        (result) => result.status === 'rejected' && isDataScopeRefusal(result.reason),
+      ).length;
       // On append, exhausted sources are intentionally absent from requests;
       // compare with the actual request set rather than all four statuses.
-      const statusLoadFailed = fulfilled.length !== requests.length;
-      const arrivalLoadFailed = !append && (!arrivalResult || arrivalResult.status === 'rejected');
+      const statusLoadFailed = fulfilled.length + scopeRefusedCount !== requests.length;
+      const arrivalScopeRefused = arrivalResult?.status === 'rejected' && isDataScopeRefusal(arrivalResult.reason);
+      if (arrivalScopeRefused) refusalHints.push(scopeRefusalHintOf(arrivalResult.reason) ?? '');
+      const arrivalLoadFailed = !append && !arrivalScopeRefused && (!arrivalResult || arrivalResult.status === 'rejected');
       const hasLoadFailure = statusLoadFailed || arrivalLoadFailed;
       const arrivalTasks = arrivalResult?.status === 'fulfilled' ? (arrivalResult.value?.data || []) : [];
       const pageOrders: PurchaseOrder[] = [];
+      const successHints: string[] = [];
       results.forEach((result, index) => {
         const request = requests[index];
         const status = request?.status;
         if (!status) return;
         if (result.status !== 'fulfilled') {
+          if (isDataScopeRefusal(result.reason)) {
+            delete failedStatusesRef.current[status];
+            statusHasMoreRef.current[status] = false;
+            setStatusHasMore((previous) => ({ ...previous, [status]: false }));
+            statusTotalsRef.current[status] = { totalElements: 0, content: [] };
+            refusalHints.push(scopeRefusalHintOf(result.reason) ?? '');
+            return;
+          }
           failedStatusesRef.current[status] = request.page;
           return;
         }
+        const successHint = scopeHintOf(result.value);
+        if (successHint) successHints.push(successHint);
         delete failedStatusesRef.current[status];
         statusPagesRef.current[status] = request.page;
         const hasMorePage = request.page < (result.value.data.totalPages ?? request.page);
@@ -132,6 +156,13 @@ export default function WHInboundListScreen() {
         pageOrders.push(...(result.value?.data?.content || []));
       });
       const nextOrders = sortReceivingOrders(pageOrders);
+      if (!append) {
+        const refusal = refusalHints.find((hint) => hint.trim() !== '');
+        const hint = successHints[0];
+        setScopeNotice(refusal
+          ? { kind: 'refused', text: refusal }
+          : hint ? { kind: 'scoped', text: hint } : null);
+      }
       if (!hasLoadFailure && !append) {
         setOrders(nextOrders);
         setUnorderedInboundCount(arrivalTasks.length);
@@ -247,6 +278,18 @@ export default function WHInboundListScreen() {
             生产成品入库
           </Button>
         </View>
+
+        {scopeNotice && (
+          <Surface style={styles.noticeCard} elevation={1} testID="wh-inbound-scope-notice">
+            <MaterialCommunityIcons name="account-lock-outline" size={20} color="#1976d2" />
+            <View style={styles.noticeBody}>
+              {scopeNotice.kind === 'refused' && (
+                <Text style={styles.noticeTitle}>部分入库任务不在你的数据范围内</Text>
+              )}
+              <Text style={styles.noticeText}>{scopeNotice.text}</Text>
+            </View>
+          </Surface>
+        )}
 
         <Searchbar placeholder="搜索订单号 / 物料 / 供应商" value={query} onChangeText={setQuery} style={styles.search} />
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
@@ -377,6 +420,10 @@ const styles = StyleSheet.create({
   actionText: { color: '#2E7D32', fontSize: 14, fontWeight: '700' },
   doneText: { color: '#757575' },
   empty: { backgroundColor: '#FFF', borderRadius: 12, padding: 30, alignItems: 'center', gap: 10 },
+  noticeCard: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, marginHorizontal: 16, marginBottom: 12, padding: 12, borderRadius: 10, backgroundColor: '#E3F2FD' },
+  noticeBody: { flex: 1, gap: 4 },
+  noticeTitle: { color: '#0D47A1', fontSize: 15, fontWeight: '700' },
+  noticeText: { color: '#0D47A1', fontSize: 14, lineHeight: 21 },
   warning: { backgroundColor: '#FFF8E1', borderRadius: 12, padding: 16, marginBottom: 12, gap: 6 },
   emptyTitle: { color: '#666', fontSize: 15, fontWeight: '600' },
   errorTitle: { color: '#C62828', fontSize: 16, fontWeight: '700' },
