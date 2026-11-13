@@ -49,7 +49,7 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
      */
     @org.springframework.data.jpa.repository.Modifying
     @Query("UPDATE LineSchedule ls SET ls.status = :cancelled, ls.adjustmentReason = :reason, "
-            + "ls.lastAdjustmentTime = :now WHERE ls.planId = :planId AND ls.status IN :notStarted "
+            + "ls.lastAdjustmentTime = :now, ls.version = ls.version + 1 WHERE ls.planId = :planId AND ls.status IN :notStarted "
             + "AND ls.actualStartTime IS NULL")
     int voidNotStartedRows(@Param("planId") String planId,
                            @Param("notStarted") java.util.Collection<LineSchedule.ScheduleStatus> notStarted,
