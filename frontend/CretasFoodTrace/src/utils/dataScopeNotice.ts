@@ -19,6 +19,16 @@ export function isDataScopeRefusal(error: unknown): boolean {
   return error.response?.status === 403 && data?.errorCode === DATA_SCOPE_UNSUPPORTED;
 }
 
+/** 范围拒绝里后端给的「原因 + 找谁调整」(actionHint 优先, 没有则用 message)。不是范围拒绝返回 null。 */
+export function scopeRefusalHintOf(error: unknown): string | null {
+  if (!isDataScopeRefusal(error) || !isAxiosError(error)) return null;
+  const data = error.response?.data as { actionHint?: unknown; message?: unknown } | undefined;
+  const hint = typeof data?.actionHint === 'string' ? data.actionHint.trim() : '';
+  if (hint) return hint;
+  const message = typeof data?.message === 'string' ? data.message.trim() : '';
+  return message || '你的岗位数据范围不是「全工厂」，这部分内容不能查看；需要的话请工厂总监在网页后台「角色权限 → 数据范围」调整本岗位。';
+}
+
 /** 成功响应里后端给的范围说明 (受限范围时才有)。 */
 export function scopeHintOf(response: unknown): string | null {
   if (response == null || typeof response !== 'object') return null;

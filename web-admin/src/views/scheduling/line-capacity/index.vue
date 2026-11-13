@@ -404,7 +404,7 @@ async function saveEquipment() {
         </el-form-item>
         <el-form-item v-if="capacityForm.capacityUnit === 'PACKAGE'" label="本厂单位" required>
           <el-input v-model="capacityForm.packageUnit" maxlength="20" placeholder="与下单用的单位一致，如：袋" style="width: 200px" />
-          <div class="unit-hint">需先在「业务阈值」把 production.capacity.package_unit_mode 设为 FACTORY_UNIT，否则保存会被拒绝</div>
+          <div class="unit-hint">本厂还没开启按「袋/盒」配产能，保存会被拒绝。请先到「业务阈值配置」页的「生产」分类，找到描述以「按「袋」「盒」等包装单位下单的计划」开头的那一项，把取值改为 FACTORY_UNIT 后再保存</div>
         </el-form-item>
         <el-form-item label="每小时产能" required>
           <el-input-number v-model="capacityForm.capacityPerHour" :min="0.001" :precision="3" :step="10" controls-position="right" />

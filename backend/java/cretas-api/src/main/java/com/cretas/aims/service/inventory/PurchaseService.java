@@ -41,6 +41,13 @@ public interface PurchaseService {
 
     PageResponse<PurchaseOrder> getPurchaseOrdersByStatus(String factoryId, PurchaseOrderStatus status, int page, int size);
 
+    /**
+     * Same status list restricted to orders created by {@code owners} (the caller's visible
+     * creator chain). An empty owner list returns an empty page without querying.
+     */
+    PageResponse<PurchaseOrder> getPurchaseOrdersByStatusOwnedBy(String factoryId, PurchaseOrderStatus status,
+                                                                 List<Long> owners, int page, int size);
+
     /** W-12 fix: filter by linked sales order id (for SO detail "关联采购" tab). */
     PageResponse<PurchaseOrder> getPurchaseOrdersBySalesOrder(String factoryId, String salesOrderId, int page, int size);
 
