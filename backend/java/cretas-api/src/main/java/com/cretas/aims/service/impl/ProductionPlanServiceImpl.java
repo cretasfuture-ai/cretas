@@ -320,6 +320,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /** S4-08 开工前的缺料闸 (工厂开关默认关). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞). required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
 
     /** 工序间 / 投料时限 (缺口 14)。 */
     @Autowired(required = false)
@@ -3356,7 +3359,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
         // 1551-11: 待审批的强制插单还没排进去 (批准那一刻才排入并顺延), 不能先开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
 
         // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
         //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;
@@ -10464,7 +10467,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    (2026-11-03 验收 D-S410-01: 网页「逐道录入」「下发 APP 报工」都先调 create-batch, 曾绕过闸)。
         //    startProduction 不经过这里 (它直接调 materializeBatchForPlan), 所以同一次开工不会被记两次。
         // 1551-11: 同理, 待审批的强制插单不能经这里开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
         if (shortageStartGate != null) {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }

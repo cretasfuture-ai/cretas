@@ -106,7 +106,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 画布审批实例的 moduleCode, 与 DecisionTypeMetadataRegistry 里 FORCE_INSERT 的登记一致。 */
-    static final String FORCE_INSERT_MODULE = "FORCE_INSERT";
+    static final String FORCE_INSERT_MODULE = com.cretas.aims.service.production.ForceInsertApproverDescriber.MODULE;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)

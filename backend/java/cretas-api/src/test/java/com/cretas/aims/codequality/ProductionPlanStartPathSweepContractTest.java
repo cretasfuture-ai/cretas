@@ -44,6 +44,76 @@ class ProductionPlanStartPathSweepContractTest {
             "ProductionPlanServiceImpl", List.of("startProduction", "createBatchFromPlan"),
             "ClerkProcessEntryServiceImpl", List.of("createProductionBatch"));
 
+    /**
+     * 1551-11: 批次级开工 (批次 PLANNED → IN_PROGRESS) 不翻计划状态, 上面的扫描看不到它; 但手工 / AI 批次可以挂在
+     * 待审批的强制插单上, 直接开批次就绕过了审批。这些入口方法自己要过 PendingApprovalStartGuard。
+     */
+    private static final Map<String, List<String>> BATCH_START_ENTRY_METHODS = Map.of(
+            "ProcessingServiceImpl", List.of("startProduction"));
+
+    /** 把批次设成 IN_PROGRESS 的每一处 → 处置 (同 SITES: 多一处少一处都红)。 */
+    private static final Map<String, String> BATCH_SITES = Map.of(
+            "ProcessingServiceImpl#startProduction",
+            "GATED: 批次开工, 过 PendingApprovalStartGuard + 缺料闸",
+            "ProcessingServiceImpl#resumeProduction",
+            "NOT_GATED: 已暂停 → 生产中, 批次早已开过工",
+            "ClerkProcessEntryServiceImpl#createProductionBatch",
+            "GATED: 文员录入, 计划待处理时过审批闸与缺料闸",
+            "ReportReversalServiceImpl#reopenPlanAndBatchAfterSettlementReversal",
+            "NOT_GATED: 结算冲销后重开, 不是开工");
+
+    private static final Pattern SET_BATCH_IN_PROGRESS = Pattern.compile(
+            "\\.setStatus\\(\\s*(?:com\\.cretas\\.aims\\.entity\\.enums\\.)?ProductionBatchStatus\\.IN_PROGRESS\\s*\\)");
+
+    @Test
+    void everyPlaceThatSetsABatchInProgressIsClassifiedAndBatchStartsPassTheApprovalGuard() throws IOException {
+        Map<String, Integer> found = new TreeMap<>();
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            for (Path p : files.filter(f -> f.toString().endsWith(".java")).toList()) {
+                List<String> lines = Files.readAllLines(p, StandardCharsets.UTF_8);
+                String cls = p.getFileName().toString().replace(".java", "");
+                for (int i = 0; i < lines.size(); i++) {
+                    if (SET_BATCH_IN_PROGRESS.matcher(lines.get(i)).find()) {
+                        found.merge(cls + "#" + enclosingMethod(lines, i), 1, Integer::sum);
+                    }
+                }
+            }
+        }
+        assertThat(found.keySet())
+                .as("新增或挪动了把批次设成 IN_PROGRESS 的地方: 判断它是不是开工, 是就接上 PendingApprovalStartGuard, 然后登记进 BATCH_SITES")
+                .containsExactlyInAnyOrderElementsOf(BATCH_SITES.keySet());
+
+        for (Map.Entry<String, List<String>> e : BATCH_START_ENTRY_METHODS.entrySet()) {
+            List<String> lines = Files.readAllLines(find(e.getKey()), StandardCharsets.UTF_8);
+            for (String method : e.getValue()) {
+                assertThat(bodiesOf(lines, method))
+                        .as(e.getKey() + "#" + method + " 是批次开工入口, 必须调用 PendingApprovalStartGuard.check(")
+                        .anyMatch(body -> body.contains("PendingApprovalStartGuard.check("));
+            }
+        }
+    }
+
+    /** 形态 D: 「待审批不能开工」只在守卫里判一次, 入口不许各写一份 isPendingApproval()。 */
+    @Test
+    void pendingApprovalIsJudgedOnlyInTheGuard() throws IOException {
+        List<String> offenders = new java.util.ArrayList<>();
+        try (Stream<Path> files = Files.walk(Path.of("src/main/java"))) {
+            for (Path p : files.filter(f -> f.toString().endsWith(".java")).toList()) {
+                String name = p.getFileName().toString();
+                if (name.equals("PendingApprovalStartGuard.java") || name.equals("ProductionPlan.java")
+                        // 审批流本身 (批准 / 驳回 / 取消前看计划还在不在待审批), 不是开工判定
+                        || name.equals("UrgentInsertServiceImpl.java")) {
+                    continue;
+                }
+                if (Files.readString(p, StandardCharsets.UTF_8).contains("isPendingApproval()")) {
+                    offenders.add(name);
+                }
+            }
+        }
+        assertThat(offenders).as("开工入口请调用 PendingApprovalStartGuard.check(plan, describer), 不要自己判 isPendingApproval()")
+                .isEmpty();
+    }
+
     private static final Pattern SET_IN_PROGRESS = Pattern.compile(
             "\\.setStatus\\(\\s*(?:com\\.cretas\\.aims\\.entity\\.enums\\.)?ProductionPlanStatus\\.IN_PROGRESS\\s*\\)");
     private static final Pattern METHOD = Pattern.compile(

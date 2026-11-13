@@ -105,6 +105,9 @@ public class ProcessingServiceImpl implements ProcessingService {
     /** 批次级开工与计划级同一道缺料闸 (纪律排查 A8)。字段注入, 不打断按构造器装配的既有测试; 没注入 = 不过闸。 */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批; 只影响措辞。字段注入理由同上, 没注入时用通用说法 (拦截照常)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
     /**
      * 动态质检表哪些项不合格才判整张 FAIL (工厂开关 quality.inspection.fail_scope, 2026-11-11)。字段注入, 不打断按构造器装配的既有测试;
      * 没注入 (单测直接 new) 时按 Steve 裁定的默认 MINOR_FOR_REVIEW。
@@ -239,6 +242,10 @@ public class ProcessingServiceImpl implements ProcessingService {
             throw new BusinessException(409, "批次状态不允许开始生产: " + batch.getStatus())
                     .withHint("请刷新批次列表查看最新状态");
         }
+        // 1551-11: 批次挂在待审批的强制插单上 (手工 / AI 建批带 productionPlanId) ⇒ 与计划开工同一道审批闸。
+        //    放在缺料闸 (会写缺料实例的强制原因) 和任何状态写入之前, 被拦不留半截状态。
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                linkedPlanOf(factoryId, batch), forceInsertApproverDescriber);
         // 纪律排查 A8: 批次级开工与计划级同口径。手工 / AI 建的批次可以挂在一个还没开工的计划上
         // (POST /processing/batches 带 productionPlanId), 直接开批次就绕过了计划开工的缺料闸。
         // 只在计划还没开工时过闸: 计划已开工 = 当时已过闸或已强制开工并留痕, 不再让每个批次重问一遍。
@@ -333,6 +340,16 @@ public class ProcessingServiceImpl implements ProcessingService {
                     com.cretas.aims.entity.enums.ProductionPlanStatus.PAUSED,
                     com.cretas.aims.entity.enums.ProductionPlanStatus.COMPLETED,
                     com.cretas.aims.entity.enums.ProductionPlanStatus.CANCELLED);
+
+    /** 批次所挂的本厂计划; 没挂 / 跨厂 / 查不到 ⇒ null。 */
+    private com.cretas.aims.entity.ProductionPlan linkedPlanOf(String factoryId, ProductionBatch batch) {
+        if (batch.getProductionPlanId() == null || batch.getProductionPlanId().isBlank()) {
+            return null;
+        }
+        return productionPlanRepository.findById(batch.getProductionPlanId())
+                .filter(p -> factoryId.equals(p.getFactoryId()))
+                .orElse(null);
+    }
 
     /** A8: 批次挂在没开工的计划上时, 过与计划开工同一道缺料闸 (原因记入缺料实例)。 */
     private void checkShortageGateForBatchStart(String factoryId, ProductionBatch batch, String forceStartReason) {

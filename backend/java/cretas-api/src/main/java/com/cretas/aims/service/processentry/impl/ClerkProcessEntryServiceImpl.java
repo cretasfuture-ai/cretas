@@ -149,6 +149,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞); 字段注入理由同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
 
     /**
      * D-W-01: 建批时判「计划单位与产出单位是不是同一个」(kg / 千克 / 公斤 是同一个)。同上字段注入
@@ -705,7 +708,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
                     .filter(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING)
                     .ifPresent(p -> {
                         // 1551-11: 待审批的强制插单还没排进去, 文员录入也不能把它翻成生产中 (整次录入回滚)
-                        com.cretas.aims.service.production.PendingApprovalStartGuard.check(p);
+                        com.cretas.aims.service.production.PendingApprovalStartGuard.check(p, forceInsertApproverDescriber);
                         // S4-08: 这里也会把计划翻成生产中, 所以与开工入口过同一道缺料闸 (开关默认关 = N1);
                         //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
                         if (shortageStartGate != null) {
