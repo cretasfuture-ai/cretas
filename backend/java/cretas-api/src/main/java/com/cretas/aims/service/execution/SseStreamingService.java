@@ -365,6 +365,13 @@ public class SseStreamingService {
             // 回来 (此前 App 把按钮上的名字当一句新话再识别一遍, 原话里的数量等信息就丢了)。
             // 显式码只换掉「识别」这一步: 权限码 / 审批 / 业态门 / W0 写确认 / 咨询页拦写
             // 全部照常在 executeAndStreamResult 及其下游执行。查意图只认在用未删的。
+            // 澄清选项的文字回复 (「1」「完成工序」) = 点了那个按钮: 换成「原话 + 选中的意图码」, 走下面的显式意图路径
+            // (普通入口同一个方法, 见 ClarificationCandidateService.applyChoicePick)
+            if (!factoryPackConstrained && trustedFactoryActor
+                    && ClarificationCandidateService.applyChoicePick(conversationService, request, factoryId, userId)) {
+                log.info("[SSE] 澄清选项文字回复已按选中处理: session={}, intent={}",
+                        request.getSessionId(), request.getIntentCode());
+            }
             Optional<AIIntentConfig> explicitIntent =
                     request.getIntentCode() == null || request.getIntentCode().isBlank()
                             ? Optional.empty()
@@ -609,6 +616,11 @@ public class SseStreamingService {
                     && !Boolean.TRUE.equals(request.getForceExecute())) {
                 IntentExecuteResponse clarificationResponse = buildClarificationResponseForStream(
                         matchResult, factoryId, userId, userRole, request.getMode());
+                if (trustedFactoryActor) {
+                    clarificationResponse = ClarificationCandidateService.attachChoiceSession(
+                            conversationService, clarificationResponse, factoryId, userId,
+                            userInput != null && !userInput.isBlank() ? userInput : matchResult.getUserInput());
+                }
                 sendSseEvent(emitter, "result", clarificationResponse);
                 sendSseEvent(emitter, "complete", Map.of(
                         "status", "NEED_CLARIFICATION",

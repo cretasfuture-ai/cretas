@@ -356,8 +356,6 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
-        {}
-
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
             return factoryPackConstrained
@@ -547,6 +545,17 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 澄清选项的文字回复 (「1」「完成工序」) = 点了那个按钮: 换成「原话+选中的意图码」走显式意图路径。
+        // 放在短语快捷通道之后: 短语命中的整句话已在上面返回, 不多查一次会话表 (开关关时执行顺序与查询量不变);
+        // 「1」「第一个」这类序号不在短语表里, 照样走到这里 (SSE 入口同一个方法, 见 applyChoicePick)。
+        if (!factoryPackConstrained && !negationVetoWrite && hasNamedSession(request)
+                && hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())
+                && ClarificationCandidateService.applyChoicePick(conversationService, request, factoryId, userId)) {
+            log.info("澄清选项文字回复已按选中处理: session={}, intent={}",
+                    request.getSessionId(), request.getIntentCode());
+            return executeWithExplicitIntent(factoryId, request, userId, userRole);
+        }
+
         // Parameter-filling continuations stay in Java when the semantic-first
         // restaurant path is disabled or the request is an operational write.
         // (0.19 已经替正在问的任务跑过一次的, 不再跑第二次: 打断后会话已挂起)
@@ -644,7 +653,9 @@ public class IntentExecutionOrchestrator {
         if (!factoryPackConstrained
                 && matchResult.hasMatch() && Boolean.TRUE.equals(matchResult.getRequiresConfirmation())
                 && !Boolean.TRUE.equals(request.getForceExecute())) {
-            return buildClarificationResponse(matchResult, factoryId, userId, userRole, request.getMode());
+            return ClarificationCandidateService.attachChoiceSession(conversationService,
+                    buildClarificationResponse(matchResult, factoryId, userId, userRole, request.getMode()),
+                    factoryId, userId, choiceSourceInput(matchResult, request));
         }
 
         // 2b. 通用咨询/闲聊
@@ -665,7 +676,9 @@ public class IntentExecutionOrchestrator {
         if (!matchResult.hasMatch()) {
             return factoryPackConstrained
                     ? buildFactoryPackNoMatch(factoryPackRoute, "recognizer-no-match")
-                    : buildNoMatchResponse(matchResult, factoryId, request, userId, userRole);
+                    : ClarificationCandidateService.attachChoiceSession(conversationService,
+                            buildNoMatchResponse(matchResult, factoryId, request, userId, userRole),
+                            factoryId, userId, choiceSourceInput(matchResult, request));
         }
 
         AIIntentConfig intent = matchResult.getBestMatch();
@@ -2638,6 +2651,14 @@ public class IntentExecutionOrchestrator {
     }
 
 
+
+    /** 澄清选项会话记的「原话」: 请求原话优先 (识别层可能改写过 matchResult 里的), 缺则回落识别结果。 */
+    private static String choiceSourceInput(IntentMatchResult matchResult, IntentExecuteRequest request) {
+        if (request != null && request.getUserInput() != null && !request.getUserInput().isBlank()) {
+            return request.getUserInput();
+        }
+        return matchResult == null ? null : matchResult.getUserInput();
+    }
 
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId) {
         return buildClarificationResponse(matchResult, factoryId, null, null, null);
