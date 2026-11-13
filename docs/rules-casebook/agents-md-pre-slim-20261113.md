@@ -1,0 +1,328 @@
+# AGENTS.md
+
+## Codex 自动执行路由
+
+- 先读共享正文 `.claude/rules/execution-and-verification.md`：默认 `DIRECT`，有实际并行/隔离/独立证据收益才委派；模型/effort 使用用户当前选择，不设型号资格或切换门禁。
+- Codex 不加载/镜像 Claude-only organizer；仅按需要使用 `.codex/agents/`。清晰实现可直接交 `cretas_executor`；真实未知才交 `cretas_scout`；高噪声独立验证交 `cretas_test_runner`；高风险终审用 `cretas_risk_reviewer`，短检查本体完成。
+- 当前协调者保留范围/接口裁决、diff/证据核对、最终验证、合并/发布责任。模型选型技能仅在用户询问时使用；生产、权限、数据、JPA 与 dispatch 门禁保留。
+
+This file provides guidance to Codex when working with this repository.
+
+## Project Overview
+
+**白垩纪食品溯源系统 (Cretas Food Traceability System)**
+
+| 组件 | 技术栈 |
+|------|--------|
+| **后端** | Java 21 + Spring Boot 3.2.12 + PostgreSQL + JPA (Hibernate 6) |
+| **前端** | Expo 53+ + TypeScript + React Navigation 7+ |
+| **AI服务** | Python + LLM API |
+
+---
+
+## Quick Reference
+
+### 端口配置
+
+| Service | Port | URL |
+|---------|------|-----|
+| React Native | 3010 | `http://localhost:3010` |
+| Cretas 后端 (Java) | 10010 / 10020 | prod 蓝绿槽交替使用；开发机经 SSH tunnel 访问，public direct access is closed |
+| Python 服务 | 8083 | `http://localhost:8083` |
+| Embedding 服务 | 9090 | gRPC |
+| Mall 后端 | — | 已停用：2026-07-26 起 Java 已停，centerapi 返回 410，47:8080 与 139:8080 无服务；匿名路由和 Druid 修好前不得重启 |
+| PostgreSQL | 5432 | `localhost:5432` |
+| Redis | 6379 | `localhost:6379` |
+| FRP | 7501 | 内网穿透 |
+
+### 测试账号 / 凭证
+真值**不进 tracked 文件**。无论当前仓库可见性如何，所有 tracked 内容一律按公开仓库标准处理。真值保存在主工作区的以下 gitignored 文件；新 worktree 中通常不存在，应从主工作区只读使用，禁止复制到 tracked 文件：
+- `.codex/rules/aliyun-credentials.md` — 阿里云 AK/SK、服务器 SSH/宝塔、安全组操作
+- `.codex/rules/db-credentials.md` — 数据库 / 服务密码
+- `.codex/rules/test-credentials.md` — 测试账号 + E2E 约定
+
+格式占位见 `.env.test.example`。**禁止把这些真值复制进任何会提交的文件。**
+
+---
+
+## Development Commands
+
+### 前端 (React Native)
+```bash
+cd frontend/CretasFoodTrace
+npm start                    # Start Expo
+npx expo start --clear      # Clear cache
+```
+
+### 后端 (Java - Spring Boot)
+```bash
+cd backend/java/cretas-api
+mvn clean package -DskipTests    # Build
+mvn spring-boot:run              # Run locally
+```
+
+### 后端 (Python - FastAPI)
+```bash
+cd backend/python
+pip install -r requirements.txt  # 安装依赖
+uvicorn main:app --port 8083     # 启动服务
+```
+
+### 部署到服务器
+
+GitHub 不可用时按 `.claude/rules/worktree-and-main-only-deploy.md` 的离线协议执行（本地 `main` 汇合、detached worktree + `SKIP_GIT_CHECK=1` 部署、恢复后各分支走 PR）；GitHub 可用时下方常规规则生效。
+
+```bash
+# 正常 Java/Web 发布优先使用统一入口；Base SHA 必须来自 dispatch 登记
+# 候选 worktree 只构建可信制品：
+./scripts/deploy/release-cretas.sh \
+  --phase build \
+  --base-sha '<登记的 Base SHA>' \
+  --tests '<本次目标测试>' \
+  --stage-backend YES-STAGE  # 仅当用户要求合并后部署；只预上传，不安装/重启/切流
+
+# ⛔ 不跑 prewarm-main-artifact.sh，deploy 阶段必须带 --no-prefer-ci-artifact（脚本默认仍是开）：
+# CI 制品车道在本组织不通（私有仓无 attestation + 组织制品存储配额已满），等它只会白等再回落本地 Maven。
+# 加速靠 build 阶段的 manifest 复用：两阶段 --tests 完全一致、build 到合并之间无别的后端改动落 main，
+# deploy 阶段即 build=reused、零 Maven，约 1 分钟。
+
+# 合入后在 clean exact origin/main worktree 自动检测范围、复用 manifest 并安全串行发布：
+./scripts/deploy/release-cretas.sh \
+  --phase deploy \
+  --base-sha '<登记的 Base SHA>' \
+  --tests '<本次目标测试>' \
+  --no-prefer-ci-artifact \
+  --confirm-prod YES-PROD
+
+# 成败判据只看这一条：DEPLOY_EXIT=0 且日志里 RELEASE_FINAL_STATUS 恰好出现 1 次。
+# RELEASE_FINAL_STATUS 不出现本身就是失败信号（收尾 printf 在 set -e 下被掐掉）；
+# 后台任务通知里的 exit code 不可信。被 exact-main 闸拒绝时是【静默】的：
+# 构建 BUILD SUCCESS、测试全绿、然后戛然而止，回执里 deploy_mode=none。
+# 处理：git fetch && git checkout --detach origin/main 拉最新重跑即可。
+
+# `release-jar-manifest.sh`、`deploy-backend.sh`、`deploy-web-admin.sh`
+# 保留为明确的单组件发布和故障排查入口；不要由 Agent 自行拼接成普通全栈发布流程。
+
+# 或使用 `deploy-backend` skill
+```
+
+**发布输出里这两条是预期的，不是异常**（2026-07-30 起）：
+
+- `Compiling 1 source file` — 测试编译只编 `--tests` 命中的类（原先编全部 1146 个测试源，耗 41.4s 只为跑一个类）。不传 `-Dcretas.testIncludes` 时仍是全编，即旧行为。若命中不到目标类，surefire 找不到测试会**直接失败**，不会产出跳过测试的制品。
+- `切换后健康轮次 1/3` — 切流后稳定观察由 5 轮改为 3 轮（覆盖 ~36s）。**auto-rollback 未改动**：任一轮非 200/active 仍会切回旧 upstream 并从备份恢复 jar。
+
+**从 GitHub 取制品送上服务器**（`GitHub → 东京 Lightsail → 上海 OSS → ECS 内网`，制品字节完全不经过本机）由 `scripts/deploy/Publish-GitHubArtifactViaLightsailOss.ps1` 编排。⚠️ **2026-09-15 起它不在常规发布路径上**：`release-cretas.sh` 的 `--prefer-ci-artifact` 在脚本里仍默认开，但这条 CI 制品车道在本组织不通（私有仓无 attestation、组织制品存储配额已满），所以常规发布一律带 `--no-prefer-ci-artifact`、不跑 `prewarm-main-artifact.sh`，加速只靠合并前 `--phase build --stage-backend YES-STAGE` 的 manifest 复用（来历见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。手工传 `-AssetId` / `-ArtifactId` 直接调 ps1 仅作排查与将来车道修通后的重新启用。输出里 `transport_verified` 与 `deployable_trust_verified` 是两件事，后者只在 manifest 的 tree 与测试选择器都对得上时才为 true。详见 `scripts/deploy/RELEASE-ARTIFACT-TRANSPORT.md`。
+
+---
+
+## Server Operations
+
+- `47.100.235.168`：Java、Python、Embedding、PostgreSQL、Redis。
+- `139.196.165.140`：Nginx 网关、Web Admin、Showcase、Mall。
+- 生产 Java 使用 `10010`/`cretas-backend` 与 `10020`/`cretas-backend-green` 蓝绿交替；任何检查或操作前先读取真实 upstream，禁止按固定槽位判断 active。
+
+### 只读状态检查
+```bash
+ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
+ssh root@47.100.235.168 "systemctl status cretas-backend cretas-backend-green cretas-python cretas-embedding --no-pager"
+```
+
+常规发布和切流必须使用本仓库发布入口；手工重启仅用于明确的故障处置，并先确认 active 槽位。
+
+---
+
+## LIUSHANMEN VisionLab 本地主机计算规则（2026-09-07）
+
+1. **统一在本地主机执行**：原图去重、候选检测、困难样本筛查、批量推理、YOLO 训练、ONNX 导出、保护集/独立正常集回归、parity 和延迟测试全部使用上海 Windows/RTX 3060。本地 Python 默认 `B:\anaconda3\python.exe`，数据根目录为 `D:\CretasVisionLab`。
+2. **禁止 Mac 派工或回退**：Mac mini 已留给其他任务。不得通过 `canada-mini`、`codex-mac`、SSH/SFTP、远程任务或 CI runner 向 Mac 发送本任务的照片、模型、筛查或测试。资源不足时减少批量、顺序执行或记录阻塞，不得自动改用 Mac。本规则覆盖旧双机文档、历史 handoff 和技能中的 Mac 测试建议。
+3. **本地入口**：日常流程使用 `scripts/windows/liushanmen-vision-lab.ps1`；目标测试使用 `scripts/windows/test-yolo-local.ps1`。Python CLI 在创建状态、采集或启动计算前校验本地执行策略，拒绝 macOS、远程执行配置和 MPS。自动任务保持原有暂停/启用状态，修改路由不等于启动训练。
+4. **真值与门禁不变**：原图和人工 JSON 保持不变。AI/Mac 历史输出仅为候选或历史证据，不能成为人工真值；训练分组、去重、保护集、正常集、导出一致性和延迟门禁全部保留，任何回退均保留现有生产模型。
+5. **生产通道不变**：允许原有受控生产只读采集；本地训练通过全部门禁后才上传正式模型。GitHub 只传代码和允许的非敏感制品，不传工厂原图或人工审核照片。不删除远端历史数据、SSH 配置或影响 Mac 上其他任务。
+6. **公共 CI 不是远程算力许可**：本任务不得重新启用 Mac runner。共享 CI 路由由对应 Owner 协调，不能以本地目标测试冒充必需 CI 已通过。详见 `docs/ops/yolo-local-compute.md`。
+
+---
+
+## Architecture
+
+### 后端目录结构
+```
+backend/
+├── java/                          # Java 服务
+│   ├── cretas-api/                # 主后端 (Spring Boot, prod 端口 10010/10020)
+│   │   └── src/main/java/com/cretas/aims/
+│   │       ├── controller/        # REST API
+│   │       ├── entity/            # JPA 实体
+│   │       ├── service/           # 业务逻辑
+│   │       │   ├── impl/          # Service 实现
+│   │       │   └── skill/         # Skill 编排层
+│   │       ├── ai/                # AI 意图系统
+│   │       │   ├── tool/          # Tool-Skill 架构，Spring 自动注册 ToolExecutor
+│   │       │   │   ├── ToolExecutor.java
+│   │       │   │   ├── AbstractBusinessTool.java
+│   │       │   │   ├── ToolRegistry.java
+│   │       │   │   └── impl/{domain}/  # 按领域分包
+│   │       │   └── dto/           # AI DTO
+│   │       ├── repository/        # 数据访问
+│   │       └── config/            # 配置类
+│   └── embedding-service/         # 向量嵌入服务 (gRPC, 端口 9090)
+│
+└── python/                        # Python 服务 (FastAPI, 端口 8083)
+    ├── main.py                    # 统一入口
+    ├── smartbi/                   # SmartBI 数据分析模块
+    │   ├── api/                   # API 路由
+    │   └── services/              # 业务逻辑
+    └── efficiency_recognition/    # 人效识别模块
+        ├── api/                   # API 路由
+        └── services/              # VL 分析服务
+```
+
+### 前端结构
+```
+frontend/CretasFoodTrace/src/
+├── screens/       # 页面组件
+├── components/    # UI 组件
+├── services/api/  # API 客户端
+├── store/         # Zustand 状态
+├── navigation/    # 路由配置
+└── types/         # TypeScript 类型
+```
+
+### API 路径
+
+**Java 后端 (prod 10010/10020)**
+- 基础路径: `/api/mobile/*`
+- 认证: `/api/mobile/auth/*`
+- 业务: `/api/mobile/{factoryId}/*`
+
+**Python 服务 (8083)**
+- 路由真值以 `backend/python/main.py` 注册结果和运行时 OpenAPI 为准；不要在 AGENTS.md 维护易漂移的完整路径清单。
+- 主要命名空间包括 `/api/smartbi/*`、`/api/efficiency/*`，以及兼容性的 `/api/forecast`、`/api/chart`、`/api/analysis` 等。
+
+---
+
+## Key Patterns
+
+### 代码质量原则
+
+规范文件的权威版本在 `.claude/rules/`（Claude 与 Codex 共用一份；`.codex/rules/` 下同名文件只是指针，`ci-runner-routing.md` 例外为逐字副本，由 `scripts/ci/check_shared_agent_rules.py` 钉住）。Codex 直接读：
+- `.claude/rules/ai-intent-tool-skill-architecture.md` - **AI Tool-Skill 架构规范（核心）**
+- `.claude/rules/coding-conventions.md` - API 响应 / TypeScript 类型 / 字段命名 / JWT（原四条已合并）
+- `.claude/rules/database-entity-sync.md` - 数据库同步
+- `.claude/rules/concurrent-edit-safety.md` - **并发编辑安全（共享脚本修改前必读）**
+- `.claude/rules/worktree-and-main-only-deploy.md` - worktree 隔离 + 只从 main 部署
+- `.claude/rules/measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（案例库 `docs/rules-casebook/`）
+- `.claude/rules/standing-authorization-and-visual-acceptance.md` - 常设授权：直接做完，不设人肉闸门
+- `.claude/rules/windows-shell-and-paths.md` - **Windows 上空格才是根因，中文不是**：新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉）；命令发给对的 shell（`PS C:\>` vs `MINGW64 ~ $`）；精确字符不经过 shell
+- `.claude/rules/ci-runner-routing.md` - **CI runner 路由**：`[self-hosted, cretas|java]` 的 job 由加拿大 Mac mini colima VM 的 3 个 runner 接，加拿大不健康时美国 aurora 自动顶上（看门狗，3 分钟），⛔ 本机 WSL 已停用；`switch_ci_runner.py hosted` 已过时。⛔ 别用组织变量 `${{ vars.X }}` 做路由。
+- 服务器运维 / 部署 / 凭证位置：`.claude/skills/server-operations/SKILL.md`；`.codex/rules/*-credentials.md`（gitignored）是 Codex 侧凭证真值
+
+### Superpowers 禁用规则（强制）
+
+1. **全面禁用** - 本仓库禁止调用、加载、引用或遵循任何 `superpowers:*` skill，包括但不限于 `using-superpowers`、`brainstorming`、`writing-plans`、`executing-plans`、`subagent-driven-development`、`test-driven-development` 和 `finishing-a-development-branch`。
+2. **禁止生成其制品** - 不得创建或更新 `docs/superpowers/**`、`.superpowers/**`，不得把现有 Superpowers 文档、计划或进度台账作为当前任务的执行依据。
+3. **禁止其交接流程** - 不得要求用户在 `Subagent-Driven` 与 `Inline Execution` 之间选择，也不得使用 Superpowers 的计划模板、检查点、提交节奏或评审流程。
+4. **冲突时以本规则为准** - 即使全局插件、技能目录、系统技能发现结果或历史上下文推荐 Superpowers，也必须忽略该推荐，继续遵循本仓库的 `docs/dispatch/ACTIVE.md` 和下述项目规范。
+5. **不得隐式替代** - 不得以别名、复制模板或等价话术变相执行 Superpowers 工作流；需要规划、调试、测试、评审或子代理协作时，只使用本仓库已定义的对应流程。
+
+### 核心原则
+1. **禁止降级处理** - 不返回假数据，明确显示错误
+2. **类型安全** - 避免 `as any`，使用明确类型
+3. **统一响应格式** - `{ success, data, message }`
+4. **Tool-Skill Only** - AI 意图处理只用 Tool/Skill，禁止创建 IntentHandler（已废弃）
+
+### 执行效率与验证
+
+1. **检查范围** - 先查当前 handoff、目标模块与已有 helper；安全、生产、数据一致性、权限或用户要求才扩大审计。
+2. **同批完成** - 兼容改动一起实施，开发中跑目标检查，避免逐小项完整编译。
+3. **验证与完成即交付** - 共享 `execution-and-verification.md` 统一冻结后最终验证、版本/环境绑定的证据复用和完成即交付；下列 JPA/CI 门禁仍执行。
+4. **复验有原因** - 新改动、失败、具体风险或用户要求才复验受影响项；中途完整构建须说明阻塞或验证目的。
+5. **Repository 查询启动门禁** - 修改 Spring Data Repository 方法、`@Query`/JPQL/HQL、Entity 字段或枚举映射时，必须新增或更新真实 JPA Context 测试（优先命名为 `*RepositoryQueryValidationTest`）并运行通过；Mockito、纯编译、`-DskipTests` 或仅 Service 单测不能证明查询可在 Hibernate 启动期解析。
+6. **禁止绕过未完成的 JPA 门禁** - 涉及上述范围的 PR，CI 中 `JPA repository query startup gate` 必须完成并通过后才可合并。CI 因基础设施异常无法完成时，只有在同一 commit 本地运行等价真实 JPA Context 测试并取得成功证据后，协调者才可说明原因并请求/执行管理员合并；没有该证据不得以紧急发布为由绕过。
+7. **闸的命名约定（决定它跑不跑）** - CI 在 push 上只执行一个窄选择器（`ci.yml` 的 `TARGET_TESTS`）。**新写的闸必须以 `*ContractTest` 或 `*StartupGuardTest` 结尾**，否则它只会被编译、不会被执行 —— 「CI 绿」对它等于没有背书。判据是机械的：*凡是会去读 `src/main` 下源码的测试，类名必须落在选择器的匹配面里*，由 `GateSelectorCoverageContractTest` 钉住（存量 29 个已冻结成棘轮，只许变短，⛔ 不许把新的塞进那份名单）。
+8. **别拿 CI 绿当未执行测试的证据** - 说「这条测试进 CI 了」之前，先找到会执行它的那一行 `run:`，并确认它的 `if:` 与触发事件。仓里多数 workflow 是 `workflow_dispatch`（不会自动跑），`daily-integration.yml` 亦然；Java 侧除选择器命中的那些之外，**没有任何定时全量**。需要背书就用 `release-cretas.sh --tests` 把它挂进制品。
+
+### 开发流程去浪费
+
+1. **Worktree 生命周期** - 代码改动前先检查 `git worktree list` 和 `docs/dispatch/ACTIVE.md`；只读、调研、纯文档任务不新建 worktree。默认不自动删除；用户明确要求清理时，仅删除路径已核验、工作区干净且已由祖先关系、补丁等价或 merged PR 证明进入 `origin/main` 的 worktree。
+2. **窄范围排查** - 先读取当前 handoff、目标模块和已有测试 helper；无命中才扩大搜索。禁止默认全仓递归扫描、整段 CI 日志倾倒或重建已有 E2E 脚手架。
+3. **真值与交接** - `origin/main` 和精简 ACTIVE 是当前状态真值；本地旧文档、旧会话和 feature worktree 不可覆盖它们。完成项进入带日期归档，ACTIVE 不累积历史。
+4. **测试与浏览器纪律** - 同一 worktree 的 Maven 目标测试顺序执行；优先复用 helper。浏览器/设备验证须隔离配置并限制并发；没有文件、截图或断言进展时停止或切到更快的 Expo/Web 路径。
+5. **发布证据复用** - 统一入口已经调用 `scripts/deploy/verify-release.sh` 并把只读证据写入结构化回执；回执完整且成功时不得再手工重复相同 upstream、systemd、健康和 Web 哈希检查，只补任务特有且回执未覆盖的断言。回执缺失或失败时才单独运行验证脚本；不得以脚本退出码替代真实线上验证。
+6. **受控无 PR 快速通道** - PR 仍是默认路径。只有用户明确要求“不做 PR/直接发 main”、本批只有一个协调者且已在 clean `codex/*` worktree 完成 scope 审查和目标验证时，才可使用 `scripts/deploy/publish-main-fastlane.sh` 快进推送。必须锁定登记的 Base SHA、在同一最终 commit 归档 ACTIVE 并释放 scope、推送前重新 fetch 且证明 `origin/main` 未前进；禁止 force push。非 docs 批次必须传准确的 `--task-id <本批任务 ID>`：ACTIVE 常驻数十条他人在飞任务，不传时门禁要求「全局零未完成任务」，该条件实际上永远不成立，会把每一次合法直推都拒成 PR；`--task-id` 只检查在飞区是否仍有匹配该 ID 的未完成行，使无关任务不再阻塞。脚本会要求该 ID 以词边界形式真实出现在 `docs/dispatch/`（ACTIVE 或归档），拼错或不存在的 ID 会被拒绝而非静默放行（PR #1962）；但脚本只能证明 ID 存在，不能证明归档内容正确，调用方仍须在同一 commit 归档自己的批次并释放 scope。脚本任一门禁失败即回退为一次 PR，不得手工绕过。迁移、Entity/Repository/Security、共享发布脚本等高风险 scope 默认仍走 PR；只有用户明确授权且必需深度门禁已通过时才可传入高风险覆盖口令。合入 main 与生产部署仍是两个独立状态。
+
+### 子代理协作约束
+
+1. **单一台账写者** - 只有当前协调者可以修改 `docs/dispatch/ACTIVE.md`；子代理不得直接修改台账，只能回传结构化回执。台账每条 ≤ 300 字、只留在飞行、不开 `###` 增量段（`scripts/ci/check_dispatch_active.py` 钉住，Source Hygiene 与 fastlane 都跑）；判据读数与增量日志写 `docs/dispatch/archive/`，派活时才读台账。
+2. **派工前置条件** - 每个交给代码子代理的任务必须先登记唯一任务 ID、`Base SHA`、允许修改的文件/目录 scope 锁、Owner 与验收命令；没有 scope 锁不得启动代码子代理。`DIRECT` 任务不为形式登记子任务，但仍须遵守现有 worktree、scope 和验证门禁。
+3. **固定状态机** - 任务状态只使用 `queued`、`claimed`、`in-progress`、`review`、`merged`、`blocked`。合并完成时，协调者必须在同一收尾中将任务归档并释放 scope 锁。
+4. **结构化回执** - 子代理完成或阻塞时必须返回：任务 ID、base SHA、实际修改文件、验证命令与结果、commit/PR、阻塞原因、下一动作。协调者在 commit、合并或发布前核对适用回执；缺少这些字段不得进入 review，也不得用口头“已完成”替代证据。
+5. **弹性 WIP** - 不限制一个任务累计使用的代理数量，默认并发为最多 2 个代码执行代理和 2 个只读/测试代理，并按波次回收已完成线程。实际并发不得超过当前运行时可用槽位，也不得为了占满槽位拆分没有独立价值的工作。
+6. **临时扩容** - 当任务具备明确且互不重叠的文件、生成物、构建目录和命令资源 scope，且已登记任务 ID、Base SHA、Owner、验收命令、扩容理由和释放条件时，可提高到最多 4 个并发代码执行代理；只读/测试代理使用剩余运行时槽位。出现共享文件、lockfile、迁移版本、同一 Maven `target/`、接口未定或合并冲突风险时立即串行化。
+7. **单层编排** - 子代理不得生成孙代理。发现新的独立工作流时返回 `EXPANSION_REQUEST`，由协调者静默决定是否开启下一代理或下一波次，无需用户重复确认。
+8. **上下文节制** - 默认使用 `fork_turns="none"` 和共享规则规定的简短任务包；引用已有设计、规则和证据，不重复规划。强耦合任务最多携带最近少量回合；完整历史只允许一个接管/诊断代理使用，不得多个完整历史代理并行。
+9. **避免交接浪费** - 清晰任务由一个执行者连续完成窄范围定位、实施和目标验证；不得固定执行“Scout→Analyst→Critic→Integrator”链。只有歧义、独立证据或高风险审查真实存在时才增加角色。
+10. **验证责任分层** - 执行子代理只跑改动范围内的目标测试；协调者核对 scope、diff、commit/PR 和证据。普通任务不固定增加 Reviewer；只有权限、迁移、生产、数据一致性或跨模块高风险任务才追加深度终审。
+11. **通知与等待** - 只在完成、阻塞、范围/契约变化或需裁决时通知；确需等待 CI/PR 时用一个有截止条件的等待/监视，不叠加逐线追问和固定轮询。DIRECT 不创建形式化分发卡或子任务；必要的 scope、worktree、交接登记仍保留。
+
+### 跨 Chat 与长上下文
+
+1. 遵循全局 `~/.codex/AGENTS.md` 的 compaction 安全交接规则；当前 Chat 是阶段协调者，不是永久 Organizer。持久真值放在 `AGENTS.md`、精简 `ACTIVE.md`、Git 和结构化测试/发布回执，不依赖长对话记忆。
+2. 同一原子操作继续留在当前 Chat；阶段转换、独立结果或长上下文在安全检查点使用桌面版新 Chat。上下文重置优先创建新 Chat 并发送精简 handoff，不用复制完整历史的 fork 来节省 token。
+3. 用户已对当前 Goal/任务明确授权直接交接时，协调者可在安全检查点创建并发送新 Chat；没有该授权时只提供可复制 prompt。创建仍在准备时不得把 `clientThreadId` 当作可用 `threadId`。
+4. handoff 必须包含目标/完成标准、阶段、已确认事实、仓库/worktree/branch/Base SHA、实际修改、验证结果、未完成项、权限边界、禁止重复的昂贵操作和下一动作。新 Chat 必须重新核验仓库与运行时真值。
+5. 新 Chat 接管后，旧 Chat 不得继续写同一 scope。测试、构建、CI 等待、部署/切流、迁移、事务、生产写入、回滚、合并中间态或仍在写共享 scope 时不得交接，先取得明确结果或安全停止点。
+
+### Worktree 跨 Chat 交接登记（强制）
+
+1. 跨 Chat 转移 worktree 写 Owner 时，源协调者必须维护本机登记表 `C:\Users\Steve\.codex\worktree-handoffs.json`，记录源/目标 `threadId`、任务名、worktree 绝对路径、branch、HEAD/Base SHA、PR/CI 状态、保留证据与处置状态；登记内容不得包含账号、令牌、密码等凭据。
+2. 仅取得 `clientThreadId` 不算完成交接。必须等目标 Chat 取得真实 `threadId`，并回读确认目标 worktree、branch 和唯一写 Owner 后，才能把目标标为 `KEEP_ACTIVE`，再将源标为 `REVIEW_AFTER_MERGE`、`REVIEW_EMPTY_PATH` 或继续保护。源 Chat 随后不得继续写同一 scope。
+3. 目标 Chat 完成或再次交接时，必须更新最终 HEAD、PR/merge/CI 状态、证据路径和 disposition。编辑登记表时先读取并保留其他任务条目，写后用 `ConvertFrom-Json` 或等价方式验证，禁止整文件盲写覆盖并发记录。
+4. 登记表只表示主机上的交接与保护状态，不替代 `origin/main`、Git、PR/CI 或 `docs/dispatch/ACTIVE.md`，也不构成删除授权。`KEEP_ACTIVE` 是硬保护信号；`REVIEW_*` 只允许清理任务优先审计。真正清理仍须实时核验绝对路径、worktree/branch/HEAD、工作区无修改和未跟踪文件、无进程/锁/ACTIVE/open PR/受保护证据，并以 fresh `origin/main` 的祖先关系、merged PR 或补丁等价证明改动已入主线；任一项不成立即保留。
+
+### 发布与 E2E 去重复
+
+1. **统一发布入口** - 预期合并后立即部署时，合并前在候选 worktree 跑 `./scripts/deploy/release-cretas.sh --phase build --base-sha '<dispatch Base SHA>' --tests '<tests>' --stage-backend YES-STAGE`（只构建 + 预上传，不安装、不重启、不切流；ACTIVE 归档与 scope 释放进同一个最终 commit）；合并后立即从 clean exact `origin/main` 跑 `--phase deploy --tests '<同一选择器>' --no-prefer-ci-artifact --confirm-prod YES-PROD`（⛔ 不跑 `prewarm-main-artifact.sh`：CI 制品车道在本组织不通；两阶段选择器一致且 build 到合并之间无别的后端改动落 main 时 deploy 阶段 `build="reused"`，约 1 分钟）。成败判据只看 `DEPLOY_EXIT=0` 且 `RELEASE_FINAL_STATUS` 恰好 1 次；回执 `build="reused"` / `build_count=0` 是正常成功；deploy 阶段不比对测试选择器，宣称「本次 selector 已门禁」前读 manifest 的 `target_tests`。开始生产发布后不再合入无关 PR，直到回执完成。
+2. **不要手工拼发布** - manifest / tree-cache 复用、SHA-256 与 JAR 完整性、exact-main 复检、Web dist 缓存与四方哈希、蓝绿切流观察与自动回滚都由脚本强制：不复制、不削弱、不手工重做。`deploy-backend.sh` / `deploy-web-admin.sh` / `release-jar-manifest.sh` / `release-web-manifest.sh` 只作单组件与排查入口；缓存或校验失败只回退一次本地构建，不 retry；禁止为等 CI 制品原地空等（不跑 prewarm、不开 `--prefer-ci-artifact`）。默认安全串行；并行发布仅限两侧任意切换顺序均 API 兼容的独立发布，且显式 `--parallel-if-independent YES-INDEPENDENT-SERVICES`（或 `deploy-cretas-parallel.sh --confirm-prod YES-PROD --confirm-independent-services YES-INDEPENDENT-SERVICES`）；跨端接口、迁移、认证契约一律串行。
+3. **蓝绿槽位** - 见 Server Operations 节：部署 / 核对前读真实 upstream，禁止假设某槽永久停用；相同制品 no-op 仍要读 upstream 并验证 active systemd 与健康。
+4. **问题前移** - SKU、Workflow、报工单位或历史快照改动，合并前必须覆盖生产形态数据，包括旧 `g/box/case`、中文基本单位和多包装规格。
+5. **生产验收责任** - Codex 常规发布默认完成服务级验收（真实 upstream、systemd/端口、直连健康、网关 HTTP、Web 四方哈希；`verify-release.sh` 回执完整且成功时不重复手工检查）。完整线上只读业务验收与 F006 只读 UI E2E 由用户/QA 执行，用户明确要求时才由 Codex 运行，且生产只读模式的业务写请求必须为 0。脚本/选择器失败与产品失败分开记录；共享前置条件未变时只重跑失败场景。
+6. **全量 CI 分层** - 改动相关目标测试和必需门禁必须通过；已确认的全量测试基线噪声单独治理，不用重复本地全量构建代替，也不隐瞒其状态。
+7. **生产 Web Playwright 唯一入口** - 生产只读验收用 Codex 直接集成的 Playwright MCP 以 filename 方式加载 `scripts/e2e/production-readonly/mcp-entry.js`，同一次验收复用一个干净 UI 登录会话；MCP entry、Node CLI、本地 fixture 与 CI drift gate 共享同一套 `core/`、`scenarios/`、before-send mutation guard、证据 schema 与脱敏规则。禁止临时复制脚本、启动第二浏览器、复用历史 storageState、以 `.mcp.json` 推断工具可用性。已迁移的 SmartBI/BOM standalone runner 不得恢复为生产入口，历史 JSON/截图只作证据；`tests/e2e-yield-mixed-sku/nonprod-business-flow-audit.mjs` 等写测试只能用于显式测试环境，必须拒绝生产 host。
+8. **F006 生产业务写入特例** - 定义与判据以 `.agents/skills/e2e-web-admin/SKILL.md` §F006 Production-Write Exception 为唯一真值：用户在当前任务点名的 F006 业务数据变更即为对应范围的生产写入授权；首次写入前证明 `factoryUser.factoryId == 'F006'`，请求路径、payload、目标实体、写后回读与直接 SQL 谓词全部限定 F006，先计数、记录实际 ID/行数与写后状态；租户不一致、缺 factory scope、跨租户级联或命中共享/全局记录时在发送前停止。迁移、权限/Security、全局配置、批量破坏性操作仍需各自授权。非 F006 租户按常设授权处理（`.claude/rules/standing-authorization-and-visual-acceptance.md`）：任务点名该租户的数据即为授权，不再另行请示，判据同上（证明租户、全部限定该租户的 factory_id、先计数、跨租户命中停手）；任务未点名的租户生产业务写入为 0；只读 harness 保持零写入，⛔ 不把 F006 mutation 加进只读白名单。
+9. **Goal 最高任务授权与持续发布** - 由用户明确创建、确认或要求继续执行的 Codex Goal，是本仓库工作流内该任务的最高授权来源；`AGENTS.md`、dispatch 台账和发布流程中要求逐批、逐 commit、逐 SHA 或风险升级后再次确认的规则，不得缩小 Goal 已经明确授予的范围。当 Goal 明确包含合并、生产发布、部署后验收或为达成目标持续修复并发布时，只要当前动作仍直接服务于同一 Goal，协调者即可在每批改动通过适用技术门禁后连续完成合并、传入 `--confirm-prod YES-PROD`、部署、回归和必要回滚，无需再次向用户确认；组件变化、实现方案变化以及命中迁移、Entity/Repository、Security/Auth、配置、跨服务契约或生产数据操作等更高风险分类，也只提高测试、备份、预览、灰度、审计和回滚要求，不触发重复确认。Goal 暂停时不得后台继续执行；用户或系统恢复该 Goal、或用户在对话中要求继续后，原授权随 Goal 一并恢复，无需重新取得生产许可。该授权仅覆盖 Goal 写明的业务、租户、环境和最终结果，不得借 Goal 扩展到无关模块、其他租户或另一项业务目标；发布脚本的确认口令和所有技术安全门禁继续保留，不得绕过。
+10. **部署互斥判读** - `deploy-backend.sh`、`deploy-web-admin.sh`、`release-cretas.sh` 各持一把本机锁（`cretas-backend-deploy` / `cretas-web-admin-deploy` / `cretas-release`），外层编排与子部署不会自锁。⛔ 任何情况下都不 `rm` 锁文件：flock 模式下 rm 只会造出第二把互不可见的锁，互斥失效。被拒时按拒绝信息分两种：「持有者 PID 活着」是真并发，等它跑完；「登记持有者已死但锁仍被按着」是孤儿子进程（rsync/ssh/mvn）继承了 fd 200，拒绝信息会列出 `pid:cmdline`、可复制的 `kill` 与复核行 —— 先确认这些孤儿不再写生产制品、用 `ps` 复核 PID 未被复用，再 kill 并跑复核行后重发（详见 `.claude/skills/deploy-backend/references/lock-and-history.md`）。
+
+生产只读验收通过条件同时要求 `actualBusinessWrites == 0` 且 blocked mutation attempts 为 0。受控写入只适用于任务专用路径，生产只读 harness 无论哪个租户都保持零写入；非 F006 租户按常设授权，任务未点名的租户生产业务写入为 0。
+
+### UX Flow Gate（低技术素养用户屏幕）
+
+任何涉及以下角色/路径/功能的 RN 屏幕设计，必须在提出设计方案或实施计划前调用 `ux-flow` skill：
+
+- **角色词**：operator、操作员、仓管、warehouse_worker、quality_inspector、质检员
+- **路径词**：screens/processing、screens/warehouse、screens/quality-inspector
+- **功能词**：报工、入库、出库、盘点、质检、扫码收货、发货
+
+`ux-flow` Phase 1 产出的「UX Flow Analysis」章节是 spec 的强制组成部分，缺失则不得进入实施规划。
+
+详见 `.agents/skills/ux-flow/SKILL.md`。
+
+---
+
+## Troubleshooting
+
+### 健康检查
+```bash
+ssh root@139.196.165.140 "cat /www/server/panel/vhost/nginx/_upstream_cretas.conf"
+ssh root@47.100.235.168 "curl -s http://localhost:10010/api/mobile/health; curl -s http://localhost:10020/api/mobile/health"
+ssh root@47.100.235.168 "curl -s http://localhost:8083/health"
+```
+
+开发机访问 Java 后端请先读取 upstream，再把本地 `10010` 映射到当前 active 槽；例如 active 为 `10020`：
+```bash
+ssh -L 10010:localhost:10020 root@47.100.235.168
+```
+
+### 缓存问题
+```bash
+npx expo start --clear
+```
