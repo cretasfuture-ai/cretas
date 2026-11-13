@@ -291,6 +291,9 @@ public class CostDeviationCaseController {
                 .orElseThrow(() -> new BusinessException(404, "异常不存在或不属于本厂"));
     }
 
+    /** 产品名没存 (产品已删除或查不到) 时列表上的如实说法, 不显示空白或内部占位。 */
+    static final String PRODUCT_MISSING_LABEL = "产品已删除或不存在";
+
     private CaseView view(ShortageCase c, CostDeviationCaseDetail d, boolean mask) {
         String owner = c.getOwnerUserId() == null ? null
                 : userRepository.findByIdAndFactoryId(c.getOwnerUserId(), c.getFactoryId())
@@ -302,7 +305,7 @@ public class CostDeviationCaseController {
             default -> c.getStage().label();
         };
         return new CaseView(c.getId(), c.getSourceType().name(), cost ? "成本差异" : "物料损耗", d.getPlanId(),
-                d.getPlanNumber(), d.getProductName(), c.getStage().name(), stageLabel, c.getOwnerRole(),
+                d.getPlanNumber(), d.getProductName() != null ? d.getProductName() : PRODUCT_MISSING_LABEL, c.getStage().name(), stageLabel, c.getOwnerRole(),
                 c.getOwnerUserId(), owner, d.getMetricPct(), d.getThresholdPct(),
                 mask ? null : d.getAmountVariance(), mask, d.getUnknownItemCount(), d.getSummary(),
                 d.getBelowThresholdAt(), d.getResolutionCode() == null ? null : d.getResolutionCode().name(),

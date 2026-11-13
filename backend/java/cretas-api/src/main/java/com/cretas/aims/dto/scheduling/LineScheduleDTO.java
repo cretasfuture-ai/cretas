@@ -40,6 +40,8 @@ public class LineScheduleDTO {
     private String notes;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /** 乐观锁版本号; 改排程 (PUT /schedules/{id}) 时原样回传。 */
+    private Long version;
 
     // 关联数据
     private List<WorkerAssignmentDTO> workerAssignments;
@@ -73,6 +75,7 @@ public class LineScheduleDTO {
         dto.setNotes(entity.getDelayReason());
         dto.setCreatedAt(entity.getCreatedAt());
         dto.setUpdatedAt(entity.getUpdatedAt());
+        dto.setVersion(entity.getVersion());
 
         // 计算完成率
         if (entity.getPlannedQuantity() != null && entity.getPlannedQuantity() > 0

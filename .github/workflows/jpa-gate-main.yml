@@ -63,6 +63,15 @@ on:
       - 'backend/java/cretas-api/src/main/resources/db/**'
       - 'backend/java/cretas-api/pom.xml'
   workflow_dispatch:
+    inputs:
+      simulate_result:
+        description: "调试用：failure / cancelled 时跳过真实闸, 直接用该结论走通知路径, 验证 issue 真能开（留空=正常跑）"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+  issues: write
 
 concurrency:
   group: jpa-gate-${{ github.ref }}
@@ -73,6 +82,7 @@ concurrency:
 jobs:
   jpa-gate:
     name: JPA repository query startup gate
+    if: ${{ github.event.inputs.simulate_result == '' }}
     # ⛔ 不要手工改这一行 —— 它由 `python scripts/ci/switch_ci_runner.py hosted|self-hosted`
     #    统一切换(一次改全部已接入的工作流并断言各处一致)。
     #    见 `.claude/rules/ci-runner-routing.md`。
@@ -155,3 +165,38 @@ jobs:
           name: jpa-gate-surefire-reports
           path: backend/java/cretas-api/target/surefire-reports/
           retention-days: 7
+
+  # 红了要能被看见: 失败 -> 开/更新固定标题 issue; 绿 -> 自动关闭。
+  # 三态(硬约束 4): success=没问题 / failure=有问题 / 其它(cancelled、skipped、没出结论)=没量到,
+  # 也开 issue, 措辞不同 —— 「没量到」不能被当成「绿」把旧 issue 关掉。
+  # 做法与 sop-corpus-staleness.yml 一致(固定标题 issue, 不引入外部服务、不新增 secret)。
+  notify:
+    name: Open/close failure issue
+    needs: jpa-gate
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_TITLE: "[auto] main 上 JPA repository 查询启动闸变红"
+      GATE_RESULT: ${{ github.event.inputs.simulate_result != '' && github.event.inputs.simulate_result || needs.jpa-gate.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Open / update / close
+        shell: bash
+        run: |
+          set -u
+          existing=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$ISSUE_TITLE\" in:title" --json number --jq '.[0].number // empty') || { echo "INSTRUMENT DEAD: gh issue list failed"; exit 2; }
+          echo "GATE_RESULT=$GATE_RESULT existing=${existing:-none}"
+          case "$GATE_RESULT" in
+            success)
+              if [ -n "$existing" ]; then
+                gh issue close "$existing" -R "$GITHUB_REPOSITORY" --comment "闸已恢复绿色（commit $GITHUB_SHA, $RUN_URL），自动关闭。"
+              fi;;
+            failure)
+              body="🔴 JPA repository 查询启动闸在 main 上失败。commit: $GITHUB_SHA；run: $RUN_URL。查 surefire-reports 制品；修好后下一次绿会自动关闭本 issue。"
+              if [ -n "$existing" ]; then gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"; else gh issue create -R "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"; fi;;
+            *)
+              body="⚠️ 没量到：闸结论为 '$GATE_RESULT'（取消/跳过/未出结论），不能当成绿。commit: $GITHUB_SHA；run: $RUN_URL。"
+              if [ -n "$existing" ]; then gh issue comment "$existing" -R "$GITHUB_REPOSITORY" --body "$body"; else gh issue create -R "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body "$body"; fi;;
+          esac
