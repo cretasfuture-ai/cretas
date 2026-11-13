@@ -54,6 +54,10 @@ public class ConversationTaskStateService {
     @Value("${cretas.ai.task-state.enabled:false}")
     private boolean enabled;
 
+    /** 按工厂白名单 (逗号分隔工厂 ID, 默认空): 全局关时只对名单内的工厂生效。 */
+    @Value("${cretas.ai.task-state.factories:}")
+    private String factoriesCsv = "";
+
     @Autowired(required = false)
     private ConversationMemoryService conversationMemoryService;
 
@@ -68,8 +72,14 @@ public class ConversationTaskStateService {
         this.sessions = sessions;
     }
 
-    public boolean isEnabled() {
-        return enabled;
+    /** 全局开 或 工厂在白名单内。唯一的开关判定入口: 所有调用点都按本次请求/会话的 factoryId 问这里。 */
+    public boolean isEnabledFor(String factoryId) {
+        if (enabled) return true;
+        if (factoryId == null || factoryId.isBlank() || factoriesCsv == null || factoriesCsv.isBlank()) return false;
+        for (String id : factoriesCsv.split(",")) {
+            if (factoryId.equals(id.strip())) return true;
+        }
+        return false;
     }
 
     /**
@@ -94,6 +104,10 @@ public class ConversationTaskStateService {
         this.enabled = enabled;
     }
 
+    void setFactories(String factoriesCsv) {
+        this.factoriesCsv = factoriesCsv;
+    }
+
     void setConversationMemoryService(ConversationMemoryService memory) {
         this.conversationMemoryService = memory;
     }
@@ -113,7 +127,7 @@ public class ConversationTaskStateService {
         List<RequiredParameter> pending = active.getRequiredParameters().stream()
                 .filter(p -> !p.isCollected()).toList();
         TaskContinuationRule.Action action = TaskContinuationRule.forActive(input, pending, isKnownCommand);
-        if (action == TaskContinuationRule.Action.INTERRUPT && enabled
+        if (action == TaskContinuationRule.Action.INTERRUPT && isEnabledFor(active.getFactoryId())
                 && TaskContinuationRule.resumeTarget(input, List.of(active), phraseIntent, intentNames).isPresent()) {
             return TaskContinuationRule.Action.REPEAT;
         }
@@ -150,7 +164,7 @@ public class ConversationTaskStateService {
     @Transactional
     public void interrupt(String factoryId, Long userId, ConversationSession session) {
         LocalDateTime now = clock.get();
-        if (!enabled || !session.suspend(now)) {
+        if (!isEnabledFor(factoryId) || !session.suspend(now)) {
             session.cancel();
             sessions.save(session);
             return;
@@ -197,7 +211,7 @@ public class ConversationTaskStateService {
     public Optional<Resumed> tryResume(String factoryId, Long userId, String input,
                                        Function<String, Optional<String>> phraseIntent,
                                        Function<String, List<String>> intentNames) {
-        if (!enabled) return Optional.empty();
+        if (!isEnabledFor(factoryId)) return Optional.empty();
         List<ConversationSession> stack = stack(factoryId, userId);
         Optional<ConversationSession> target = TaskContinuationRule.resumeTarget(input, stack, phraseIntent, intentNames);
         if (target.isEmpty()) return Optional.empty();
@@ -219,7 +233,7 @@ public class ConversationTaskStateService {
      */
     @Transactional
     public Map<String, Object> summary(String factoryId, Long userId, String sessionId) {
-        if (!enabled || factoryId == null || userId == null) return Map.of();
+        if (!isEnabledFor(factoryId) || factoryId == null || userId == null) return Map.of();
         try {
             TaskStateSummary.Current current = null;
             if (sessionId != null && !sessionId.isBlank()) {

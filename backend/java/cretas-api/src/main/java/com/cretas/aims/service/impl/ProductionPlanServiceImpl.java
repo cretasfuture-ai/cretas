@@ -6188,6 +6188,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     output.getQuantityUnit());
             FinishedGoodsBatch batch = createFinishedGoodsForOutputLine(
                     plan, settlement, output, receiptDeltaByKey.get(key), receivedBy);
+            publishFinishedGoodsCreatedAfterCommit(plan, batch, receiptDeltaByKey.get(key));
             output.setFinishedGoodsBatchId(batch.getId());
             output.setReceiptIdempotencyKey(request.getIdempotencyKey());
             output.setReceivedBy(receivedBy);
@@ -7528,8 +7529,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         if (ids.isEmpty()) {
             return java.util.Map.of();
         }
-        return rawMaterialTypeRepository.findByIdIn(ids).stream()
+        List<com.cretas.aims.entity.RawMaterialType> found = rawMaterialTypeRepository.findByIdIn(ids).stream()
                 .filter(rmt -> factoryId.equals(rmt.getFactoryId()))
+                .toList();
+        // 🔴 原来 Collectors.toMap(..., getMainCategory) 遇到 main_category 为 null 的物料直接 NPE (结单 500)。
+        //    大类决定客供料计划下该走公司库存还是客户血缘 (库存归属口径), ⛔ 不悄悄兜成「原料」或「辅料」当真实数据 ——
+        //    明确报错, 说清是哪个物料、去哪补。
+        List<String> missing = found.stream()
+                .filter(rmt -> rmt.getMainCategory() == null || rmt.getMainCategory().isBlank())
+                .map(rmt -> rmt.getName() != null ? rmt.getName() : rmt.getId())
+                .toList();
+        if (!missing.isEmpty()) {
+            throw new BusinessException(409, "物料「" + String.join("、", missing) + "」缺少物料大类, 不能结单")
+                    .withCode("MATERIAL_MAIN_CATEGORY_MISSING")
+                    .withHint("请到 物料档案 里为这些物料补上大类 (原料 / 辅料 / 包材) 后重新结单")
+                    .withHintTarget("物料大类");
+        }
+        return found.stream()
                 .collect(java.util.stream.Collectors.toMap(
                         com.cretas.aims.entity.RawMaterialType::getId,
                         com.cretas.aims.entity.RawMaterialType::getMainCategory,
@@ -8945,7 +8961,39 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         batch.setRemark("生产结单仓库确认入库: " + settlement.getPlanNumber());
         FinishedGoodsBatch saved = finishedGoodsBatchRepository.save(batch);
         recordProductionToFinishedLineage(saved, received, receivedBy, "SETTLEMENT_WAREHOUSE_RECEIPT", null);
+        publishFinishedGoodsCreatedAfterCommit(plan, saved, received);
         return saved;
+    }
+
+    /**
+     * 仓库确认实收建出成品后发「成品已生成」事件 (结单后入库路径原先漏发, 触发链/出库监听收不到)。
+     *
+     * <p>事务提交后才发: 回滚的入库不发; 无事务上下文 (单测/脚本) 则立即发。
+     * 幂等重放在建成品之前已返回, 所以同一次入库只会走到这里一次。
+     */
+    private void publishFinishedGoodsCreatedAfterCommit(ProductionPlan plan, FinishedGoodsBatch batch,
+                                                        BigDecimal quantity) {
+        if (applicationEventPublisher == null || batch == null) {
+            return;
+        }
+        final com.cretas.aims.event.FinishedGoodsCreatedEvent event =
+                new com.cretas.aims.event.FinishedGoodsCreatedEvent(
+                        this, batch.getFactoryId(), plan.getSourceOrderId(), batch.getProductTypeId(),
+                        quantity, batch.getId(), "PRODUCTION");
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    try {
+                        applicationEventPublisher.publishEvent(event);
+                    } catch (RuntimeException ex) {
+                        log.warn("发布 FinishedGoodsCreatedEvent 失败 batch={}: {}", batch.getId(), ex.getMessage());
+                    }
+                }
+            });
+        } else {
+            applicationEventPublisher.publishEvent(event);
+        }
     }
 
     /**
