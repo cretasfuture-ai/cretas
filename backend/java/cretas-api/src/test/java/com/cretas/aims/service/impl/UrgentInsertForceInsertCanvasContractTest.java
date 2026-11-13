@@ -604,11 +604,43 @@ class UrgentInsertForceInsertCanvasContractTest {
                 UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批");
         assertThat(plan.getApprovalComment()).isEqualTo(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批");
         verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(SUBMITTER));
+        // 红线 4: 结构化留痕 —— 计划上和这一次的审批决策日志上都要有 self_approved + 原因 (不只是意见前缀)
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("本厂只有我一个人能审批");
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-9"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批"), eq(SUBMITTER), any(),
+                eq(true), eq("本厂只有我一个人能审批"));
+    }
+
+    @Test
+    void aSelfApprovedIntermediateNodeIsRecordedStructurallyAndSurvivesTheNextApprover() {
+        ProductionPlan plan = pendingCanvasPlan("P-9B", "INST-9B");
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+        transitionEndsIn("INST-9B", "P-9B", InstanceStatus.RUNNING);
+
+        service.applyWorkflowAction(F, "P-9B", "INST-9B", SUBMITTER, "factory_super_admin", null,
+                HistoryAction.APPROVE, "  一级只有我  ");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("一级只有我");
+        verify(plans).save(plan);
+
+        // 二级由别人批走完: 计划上「审批链里有过本人审批」不被覆盖; 这一次的决策日志不是本人审批
+        transitionEndsIn("INST-9B", "P-9B", InstanceStatus.APPROVED);
+        service.applyWorkflowAction(F, "P-9B", "INST-9B", APPROVER, "production_manager", null,
+                HistoryAction.APPROVE, "二级同意");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("一级只有我");
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-9B"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("二级同意"), eq(APPROVER), any(), eq(false), isNull());
     }
 
     @Test
     void anotherApproverIsNotSelfApprovalEvenWithTheSwitchOff() {
-        pendingCanvasPlan("P-10", "INST-10");
+        ProductionPlan plan = pendingCanvasPlan("P-10", "INST-10");
         when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
         transitionEndsIn("INST-10", "P-10", InstanceStatus.APPROVED);
 
@@ -616,6 +648,12 @@ class UrgentInsertForceInsertCanvasContractTest {
                 HistoryAction.APPROVE, "同意");
 
         verify(scheduler).apply(any(), any(), any(), any(), eq(APPROVER));
+        // 别人批的: 不打本人审批标记 (阴性对照)
+        assertThat(plan.isSelfApproved()).isFalse();
+        assertThat(plan.getSelfApprovalReason()).isNull();
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-10"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("同意"), eq(APPROVER), any(), eq(false), isNull());
     }
 
     // ------------------------------------------------------------------ 直接审批入口

@@ -315,6 +315,12 @@ public class ProductionPlanDTO {
     @Schema(description = "审批备注/理由")
     private String approvalComment;
 
+    /** 红线 4: 审批链里有过提交人本人审批 (结构化留痕; 审批意见里的「【本人审批】」前缀只是给人看的)。 */
+    private Boolean selfApproved;
+
+    /** 红线 4: 本人审批原因。 */
+    private String selfApprovalReason;
+
     @Schema(description = "强制插单原因")
     private String forceInsertReason;
 

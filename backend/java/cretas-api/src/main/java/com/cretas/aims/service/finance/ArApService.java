@@ -206,11 +206,24 @@ public interface ArApService {
      * (controller enforces 'finance:approve_adjustment'). Approver must differ from
      * operatedBy (4-eyes principle).
      */
-    ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy);
+    default ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy) {
+        return approveAdjustment(factoryId, transactionId, approvedBy, null);
+    }
+
+    /**
+     * 同上, 带本人审批原因 (纪律排查红线 4, 2026-11-13): 提交人 = 审批人时, 工厂开了「允许本人审批」
+     * 才放行, 且必须写原因; 放行后在调整记录上标 {@code selfApproved} 并保存原因。开关关 ⇒ 四眼照旧拒绝。
+     * 不是本人时忽略 {@code selfApprovalReason}。
+     */
+    ArApTransaction approveAdjustment(String factoryId, String transactionId, Long approvedBy,
+                                      String selfApprovalReason);
 
     /**
      * R23 audit C2: reject a PENDING adjustment. No balance change; row persists with
      * approval_status=REJECTED + approver + reject reason in remark (appended).
+     *
+     * <p>提交人驳回自己的调整同样受「允许本人审批」开关管 (与退款驳回同口径): 开关关 ⇒ 拒绝;
+     * 开 ⇒ 驳回原因即本人审批原因, 必填, 并留痕。
      */
     ArApTransaction rejectAdjustment(String factoryId, String transactionId, Long approvedBy, String reason);
 
@@ -246,8 +259,15 @@ public interface ArApService {
      * via approveAdjustment). 4-eyes still enforced — submitter ids are skipped
      * with reason "审批人不能与提交人相同 (4 眼原则)".
      */
+    default java.util.Map<String, Object> batchApproveAdjustments(
+            String factoryId, java.util.List<String> transactionIds, Long approvedBy) {
+        return batchApproveAdjustments(factoryId, transactionIds, approvedBy, null);
+    }
+
+    /** 批量审批, 带本人审批原因: 只对其中「提交人 = 审批人」的条目生效, 其余条目忽略。 */
     java.util.Map<String, Object> batchApproveAdjustments(
-            String factoryId, java.util.List<String> transactionIds, Long approvedBy);
+            String factoryId, java.util.List<String> transactionIds, Long approvedBy,
+            String selfApprovalReason);
 
     /**
      * R29 P2 batch reject: same shape as batch approve. Reason applies to all.

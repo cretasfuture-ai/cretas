@@ -175,7 +175,8 @@ public class ArApController {
      * R23 audit C2: approve a PENDING adjustment. Applies amount delta to counterparty
      * balance + flips approval_status to APPROVED. Requires elevated permission
      * 'finance:approve_adjustment' (distinct from 'finance:read_write' that submits).
-     * Approver must differ from submitter (4-eyes principle, enforced in service).
+     * Approver must differ from submitter (4-eyes principle, enforced in service) —— 除非工厂开了
+     * 「允许本人审批」, 此时 body {@code {"selfApprovalReason": "..."}} 必填 (红线 4)。
      */
     @RequirePermission("finance:approve_adjustment")
     @PostMapping("/adjustment/{transactionId}/approve")
@@ -183,9 +184,14 @@ public class ArApController {
     public ApiResponse<ArApTransaction> approveAdjustment(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String transactionId,
-            @RequestHeader("Authorization") String authorization) {
+            @RequestHeader("Authorization") String authorization,
+            @RequestBody(required = false) Map<String, Object> body) {
         Long approverId = extractUserId(authorization);
-        ArApTransaction transaction = arApService.approveAdjustment(factoryId, transactionId, approverId);
+        // 红线 4: 提交人本人审批时的原因; 不是本人时不传, 无 body 与改动前一致
+        String selfApprovalReason = body != null && body.get("selfApprovalReason") != null
+                ? body.get("selfApprovalReason").toString() : null;
+        ArApTransaction transaction = arApService.approveAdjustment(
+                factoryId, transactionId, approverId, selfApprovalReason);
         return ApiResponse.success("调整已审批通过", projectTransaction(factoryId, transaction));
     }
 
@@ -262,7 +268,10 @@ public class ArApController {
         Long approverId = extractUserId(authorization);
         @SuppressWarnings("unchecked")
         java.util.List<String> ids = (java.util.List<String>) body.get("ids");
-        Map<String, Object> result = arApService.batchApproveAdjustments(factoryId, ids, approverId);
+        String selfApprovalReason = body.get("selfApprovalReason") != null
+                ? body.get("selfApprovalReason").toString() : null;
+        Map<String, Object> result = arApService.batchApproveAdjustments(
+                factoryId, ids, approverId, selfApprovalReason);
         return ApiResponse.success("批量审批完成", result);
     }
 
