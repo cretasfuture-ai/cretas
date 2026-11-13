@@ -522,7 +522,7 @@ public class IntentExecutionOrchestrator {
 
         // 任务状态 (终审 S1): 这一轮开始时请求点名的会话是不是正在问参数的任务。是 → 本轮不做恢复
         // (同一句话既打断又恢复 = 原地吞话, 「完成工序任务1830」的 1830 会丢)。
-        boolean openTaskAtStart = taskStateService != null && taskStateService.isEnabled()
+        boolean openTaskAtStart = taskStateService != null && taskStateService.isEnabledFor(factoryId)
                 && taskStateService.hasOpenTask(factoryId, userId, request.getSessionId());
 
         // Parameter-filling continuations stay in Java when the semantic-first
@@ -1495,7 +1495,7 @@ public class IntentExecutionOrchestrator {
             }
             // 任务状态开着时与 SSE 用同一条续轮规则 (TaskContinuationRule): 不像在回答缺参问题 = 打断 →
             // 挂起这个任务, 这句话按新话识别。关着时保持旧行为 (一律交给旧任务抽参, 审阅 5.2 缺口 5)。
-            if (taskStateService != null && taskStateService.isEnabled() && pending.isPresent()
+            if (taskStateService != null && taskStateService.isEnabledFor(factoryId) && pending.isPresent()
                     && pending.get().isParameterCollectionMode()
                     && pending.get().getStatus() == ConversationSession.SessionStatus.ACTIVE
                     && !pending.get().isExpired()) {
@@ -1573,7 +1573,7 @@ public class IntentExecutionOrchestrator {
 
     /** 回到被挂起的任务 (与 SSE {@code streamTaskResume} 同一个服务方法)。回复格式同会话延续。 */
     private IntentExecuteResponse handleTaskResume(String factoryId, IntentExecuteRequest request, Long userId) {
-        if (taskStateService == null || !taskStateService.isEnabled() || userId == null
+        if (taskStateService == null || !taskStateService.isEnabledFor(factoryId) || userId == null
                 || request.getUserInput() == null || request.getUserInput().isBlank()
                 || !hasBoundSupplierFactoryActor(factoryId, userId)) {
             return null;

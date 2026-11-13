@@ -90,8 +90,9 @@ public final class CostDeviationEvaluator {
                                    int deviated, int unknown, String summary) {
         // 指纹不含阈值: 改阈值不等于事实变了, 已下结论的实例不因此重开
         String fp = sha256(type + "|" + planId + "|" + plain(metric) + "|" + plain(amount) + "|" + deviated + "|" + unknown);
-        return new Reading(type, planId, planNumber, productName, outcome, metric, threshold, amount, deviated, unknown,
-                summary, fp);
+        // 不论哪条路径来的名字, 内部占位 (__RAW_WORKFLOW_OWNER__…) 一律不落库: 查不到真实产品就存 null
+        return new Reading(type, planId, planNumber, displayProduct(productName), outcome, metric, threshold, amount,
+                deviated, unknown, summary, fp);
     }
 
     private static String plain(BigDecimal v) {

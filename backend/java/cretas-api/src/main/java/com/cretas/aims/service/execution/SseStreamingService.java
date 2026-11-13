@@ -1343,7 +1343,7 @@ public class SseStreamingService {
      */
     private boolean streamTaskResume(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
                                      Long userId, long startTime) throws IOException {
-        if (taskStateService == null || !taskStateService.isEnabled() || userId == null
+        if (taskStateService == null || !taskStateService.isEnabledFor(factoryId) || userId == null
                 || request.getUserInput() == null || request.getUserInput().isBlank()) {
             return false;
         }

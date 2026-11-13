@@ -29,7 +29,9 @@ public class ShipmentRecordService {
      * 根据ID获取出货记录
      */
     public Optional<ShipmentRecord> getById(String id) {
-        return shipmentRecordRepository.findById(id);
+        Optional<ShipmentRecord> found = shipmentRecordRepository.findById(id);
+        found.ifPresent(r -> fillCustomerNames(java.util.List.of(r)));
+        return found;
     }
 
     /**
@@ -107,14 +109,18 @@ public class ShipmentRecordService {
      * 按客户查询
      */
     public List<ShipmentRecord> getByCustomer(String factoryId, String customerId) {
-        return shipmentRecordRepository.findByFactoryIdAndCustomerIdOrderByShipmentDateDesc(factoryId, customerId);
+        List<ShipmentRecord> result = shipmentRecordRepository.findByFactoryIdAndCustomerIdOrderByShipmentDateDesc(factoryId, customerId);
+        fillCustomerNames(result);
+        return result;
     }
 
     /**
      * 按日期范围查询
      */
     public List<ShipmentRecord> getByDateRange(String factoryId, LocalDate startDate, LocalDate endDate) {
-        return shipmentRecordRepository.findByFactoryIdAndDateRange(factoryId, startDate, endDate);
+        List<ShipmentRecord> result = shipmentRecordRepository.findByFactoryIdAndDateRange(factoryId, startDate, endDate);
+        fillCustomerNames(result);
+        return result;
     }
 
     /**
@@ -142,7 +148,9 @@ public class ShipmentRecordService {
      * 根据ID和工厂ID获取出货记录（工厂隔离）
      */
     public Optional<ShipmentRecord> getByIdAndFactoryId(String id, String factoryId) {
-        return shipmentRecordRepository.findByIdAndFactoryId(id, factoryId);
+        Optional<ShipmentRecord> found = shipmentRecordRepository.findByIdAndFactoryId(id, factoryId);
+        found.ifPresent(r -> fillCustomerNames(java.util.List.of(r)));
+        return found;
     }
 
     /**
