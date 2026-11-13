@@ -49,7 +49,7 @@ import static org.mockito.Mockito.when;
  * 现在释放入口把扣留记录改成离开在制后的状态, 放行就回到那个状态。
  */
 @ExtendWith(MockitoExtension.class)
-class ProcessingServiceImplHeldWipReleaseTest {
+class ProcessingServiceImplHeldWipReleaseContractTest {
 
     @Mock private ProductionBatchRepository productionBatchRepository;
     @Mock private MaterialBatchRepository materialBatchRepository;

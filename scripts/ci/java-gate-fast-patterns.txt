@@ -38,3 +38,8 @@ SseStreamingServiceSlotContinuationTest
 ToolDescriptorInventoryDriftTest
 # 清册统计/权限登记闸: 夜间全量自 11-10 起因 order_approval 红 3 次, 不在 PR 门禁所以无人拦; 纳入
 ToolDescriptorCatalogTest
+# #1590 遗留出库闸 / 过账提示 (#1689): 盐化扣量、小结、结单、通用扣减原语拦已挡投产批次的回归写在这四个类里, 原先不在 PR 选择范围
+SaltedWarehouseServiceImplTest
+InterimSettleServiceTest
+ProductionPlanSettlementTest
+MaterialBatchServiceImplLowStockEventTest

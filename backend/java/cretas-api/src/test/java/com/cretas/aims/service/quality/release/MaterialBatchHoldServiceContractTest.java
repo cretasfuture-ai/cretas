@@ -13,7 +13,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * #1590 遗留 M5: 扣留记下原状态, 放行还原; 判不合格 / 报废不受影响; 离开质检中就清掉记录。
  * 真库上的读写与并发见 {@code MaterialBatchHoldPostgresContractTest}。
  */
-class MaterialBatchHoldServiceTest {
+class MaterialBatchHoldServiceContractTest {
 
     private static MaterialBatch batch(MaterialBatchStatus st, String receipt, String used, String reserved) {
         MaterialBatch b = new MaterialBatch();
