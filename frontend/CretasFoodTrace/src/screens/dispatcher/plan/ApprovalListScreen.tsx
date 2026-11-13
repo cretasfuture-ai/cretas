@@ -28,6 +28,17 @@ import { useNavigation } from '@react-navigation/native';
 import { DISPATCHER_THEME, ProductionPlanDTO } from '../../../types/dispatcher';
 import { schedulingApiClient } from '../../../services/api/schedulingApiClient';
 import ApprovalConfirmDialog from '../../../components/approval/ApprovalConfirmDialog';
+import { myTodoApiClient, todoApprovalApiClient, TodoItemDTO } from '../../../services/api/myTodoApiClient';
+
+/** 我在这张画布审批上的待办入口 (OA 实例 + 我负责的节点), 来自「我的待办」 */
+type WorkflowTodoRef = Pick<TodoItemDTO, 'instanceId' | 'expectedNodeId'>;
+
+/** 后端 4xx 的 message 原样展示 (防呆 4 位一体): 409 已被处理 / 403 不是审批人 都带着下一步提示 */
+function serverMessage(error: unknown): string | null {
+  const msg = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+  if (typeof msg === 'string' && msg.length > 0) return msg;
+  return error instanceof Error && error.message ? error.message : null;
+}
 
 export default function ApprovalListScreen() {
   const navigation = useNavigation<any>();
@@ -36,6 +47,8 @@ export default function ApprovalListScreen() {
   const [pendingApprovals, setPendingApprovals] = useState<ProductionPlanDTO[]>([]);
   const [selectedPlan, setSelectedPlan] = useState<ProductionPlanDTO | null>(null);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
+  // planId -> 我在该计划画布审批上的待办; 没有 = 这张走画布但当前不是我的节点
+  const [workflowTodos, setWorkflowTodos] = useState<Record<string, WorkflowTodoRef>>({});
 
   useEffect(() => {
     loadPendingApprovals();
@@ -47,6 +60,24 @@ export default function ApprovalListScreen() {
       const response = await schedulingApiClient.getPendingApprovals();
       if (response.success && response.data) {
         setPendingApprovals(response.data);
+        // 走画布的计划批准/驳回只能打 OA 动作入口 (直接审批入口恒 409); 当前节点要从「我的待办」取
+        if (response.data.some(p => p.approvalWorkflowInstanceId)) {
+          try {
+            const todos = await myTodoApiClient.getMyTodos();
+            const byPlan: Record<string, WorkflowTodoRef> = {};
+            for (const t of todos.data ?? []) {
+              if (t.type === 'FORCE_INSERT_APPROVAL' && t.instanceId) {
+                byPlan[t.refId] = { instanceId: t.instanceId, expectedNodeId: t.expectedNodeId };
+              }
+            }
+            setWorkflowTodos(byPlan);
+          } catch (todoError) {
+            console.error('Failed to load workflow todos:', todoError);
+            setWorkflowTodos({});
+          }
+        } else {
+          setWorkflowTodos({});
+        }
       } else {
         Alert.alert('错误', response.message ?? '加载失败');
       }
@@ -69,14 +100,33 @@ export default function ApprovalListScreen() {
     }
   }, []);
 
+  /**
+   * 批准/驳回。走画布的计划 → OA 统一动作入口 (与「我的待办」同一条, 后端按画布节点校验审批人);
+   * 没有画布的计划 → 原直接审批入口。
+   */
+  const submitDecision = async (
+    plan: ProductionPlanDTO,
+    action: 'APPROVE' | 'REJECT',
+    notes?: string,
+  ): Promise<{ success: boolean; message?: string }> => {
+    if (plan.approvalWorkflowInstanceId) {
+      const ref = workflowTodos[plan.id];
+      if (!ref?.instanceId || !ref.expectedNodeId) {
+        // 不会走到这里: 卡片对这种计划不开对话框; 兜底也不静默
+        throw new Error('这张插单当前不在你的审批节点上');
+      }
+      return todoApprovalApiClient.oaAction(ref.instanceId, action, ref.expectedNodeId, notes);
+    }
+    return action === 'APPROVE'
+      ? schedulingApiClient.approveForceInsert(plan.id, notes)
+      : schedulingApiClient.rejectForceInsert(plan.id, notes);
+  };
+
   const handleApprove = async (comment?: string) => {
     if (!selectedPlan) return;
 
     try {
-      const response = await schedulingApiClient.approveForceInsert(
-        selectedPlan.id,
-        comment
-      );
+      const response = await submitDecision(selectedPlan, 'APPROVE', comment);
 
       if (response.success) {
         Alert.alert('成功', `计划 ${selectedPlan.planNumber} 已批准`, [
@@ -94,7 +144,7 @@ export default function ApprovalListScreen() {
       }
     } catch (error) {
       console.error('Failed to approve:', error);
-      Alert.alert('错误', '审批失败，请重试');
+      Alert.alert('错误', serverMessage(error) ?? '审批失败，请重试');
       throw error;
     }
   };
@@ -103,10 +153,7 @@ export default function ApprovalListScreen() {
     if (!selectedPlan) return;
 
     try {
-      const response = await schedulingApiClient.rejectForceInsert(
-        selectedPlan.id,
-        reason
-      );
+      const response = await submitDecision(selectedPlan, 'REJECT', reason);
 
       if (response.success) {
         Alert.alert('成功', `计划 ${selectedPlan.planNumber} 已拒绝`, [
@@ -124,12 +171,20 @@ export default function ApprovalListScreen() {
       }
     } catch (error) {
       console.error('Failed to reject:', error);
-      Alert.alert('错误', '拒绝失败，请重试');
+      Alert.alert('错误', serverMessage(error) ?? '拒绝失败，请重试');
       throw error;
     }
   };
 
   const openApprovalDialog = (plan: ProductionPlanDTO) => {
+    if (plan.approvalWorkflowInstanceId && !workflowTodos[plan.id]) {
+      // 画布审批, 但当前节点不是我: 不给按钮, 说清楚去哪看 (防呆 Rule 5)
+      Alert.alert(
+        '这张插单走审批流程',
+        '它由审批流程里指定的审批人处理，当前还没轮到你（或你不是审批人）。轮到你时会出现在「我的待办」里。'
+      );
+      return;
+    }
     setSelectedPlan(plan);
     setShowApprovalDialog(true);
   };
@@ -229,7 +284,9 @@ export default function ApprovalListScreen() {
         {/* 待审批标签 */}
         <View style={styles.pendingBadge}>
           <MaterialCommunityIcons name="clock-alert" size={14} color="#fa8c16" />
-          <Text style={styles.pendingText}>待审批</Text>
+          <Text style={styles.pendingText}>
+            {plan.approvalWorkflowInstanceId && !workflowTodos[plan.id] ? '审批流程处理中' : '待审批'}
+          </Text>
         </View>
       </TouchableOpacity>
     );

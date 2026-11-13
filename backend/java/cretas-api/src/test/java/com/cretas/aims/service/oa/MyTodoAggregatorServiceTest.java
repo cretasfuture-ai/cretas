@@ -430,6 +430,52 @@ class MyTodoAggregatorServiceTest {
     }
 
     @Nested
+    @DisplayName("强制插单待办: expectedNodeId 按岗位给出 (并行网关)")
+    class ForceInsertExpectedNode {
+
+        private com.cretas.aims.entity.workflow.ApprovalWorkflowInstance parallelInstance() {
+            return com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.builder()
+                    .id("inst-fi").factoryId(FACTORY_ID).moduleCode("FORCE_INSERT").businessEntityId("plan-1")
+                    .status(com.cretas.aims.entity.workflow.ApprovalWorkflowInstance.InstanceStatus.RUNNING)
+                    .currentNodeIds(new java.util.ArrayList<>(List.of("node_a", "node_b")))
+                    .initiatedAt(NOW).build();
+        }
+
+        private TodoItemDTO forceInsertTodo() {
+            return service.listTodos(FACTORY_ID, "factory_super_admin").stream()
+                    .filter(t -> t.getType() == TodoType.FORCE_INSERT_APPROVAL)
+                    .findFirst().orElseThrow(() -> new AssertionError("应有一条强制插单待办"));
+        }
+
+        @Test
+        @DisplayName("引擎说该岗位负责 node_b ⇒ 待办给 node_b, 不是排第一的 node_a")
+        void todoCarriesTheNodeTheEngineResolvedForTheRole() {
+            var inst = parallelInstance();
+            when(workflowEngineService.findPendingForRole(eq(FACTORY_ID), eq("factory_super_admin"),
+                    eq("FORCE_INSERT"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(inst)));
+            when(workflowEngineService.resolveActiveNodeForRole(inst, "factory_super_admin")).thenReturn("node_b");
+
+            TodoItemDTO todo = forceInsertTodo();
+
+            assertThat(todo.getInstanceId()).isEqualTo("inst-fi");
+            assertThat(todo.getExpectedNodeId()).isEqualTo("node_b");
+        }
+
+        @Test
+        @DisplayName("引擎没给出节点 (null) ⇒ 退回第一个 active 节点, 不是 null")
+        void todoFallsBackToTheFirstActiveNodeWhenTheEngineGivesNone() {
+            var inst = parallelInstance();
+            when(workflowEngineService.findPendingForRole(eq(FACTORY_ID), eq("factory_super_admin"),
+                    eq("FORCE_INSERT"), any(Pageable.class)))
+                    .thenReturn(new PageImpl<>(List.of(inst)));
+            when(workflowEngineService.resolveActiveNodeForRole(inst, "factory_super_admin")).thenReturn(null);
+
+            assertThat(forceInsertTodo().getExpectedNodeId()).isEqualTo("node_a");
+        }
+    }
+
+    @Nested
     @DisplayName("RN-R1: 待办 counterparty 必须给人话名称")
     class ReadableCounterparty {
 
