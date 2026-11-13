@@ -23,7 +23,7 @@ import { factoryMenuForType, platformMenuConfig, financeManagerMenu, MENU_SECTIO
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
 import MenuSearch from './MenuSearch.vue';
-import { pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
+import { PINNED_MENU_LIMIT, pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
   hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
@@ -335,12 +335,19 @@ watch(
 function visibleLeaves(items: readonly MenuItem[]): MenuItem[] {
   return items.flatMap((item) => (item.children?.length ? visibleLeaves(item.children) : [item]));
 }
+// 侧栏过滤后的可见叶子交给「常用」：顶栏星标只能钉这些（审查 #1692 第 4 条）。
+watch(
+  () => (authStore.isPlatform && !factoryView.isViewingFactory ? [] : visibleLeaves(filteredMenu.value).map((leaf) => leaf.path)),
+  (paths) => pinnedMenu.setVisibleLeafPaths(paths),
+  { immediate: true },
+);
 const pinnedItems = computed<MenuItem[]>(() => {
   if (authStore.isPlatform && !factoryView.isViewingFactory) return [];
   const byPath = new Map(visibleLeaves(filteredMenu.value).map((leaf) => [leaf.path, leaf]));
   return pinnedMenu.pinned.value
     .map((path) => byPath.get(path))
-    .filter((leaf): leaf is MenuItem => !!leaf);
+    .filter((leaf): leaf is MenuItem => !!leaf)
+    .slice(-PINNED_MENU_LIMIT);
 });
 const PINNED_INDEX_PREFIX = 'pin:';
 
@@ -487,17 +494,30 @@ function findOpenParents(path: string, items: MenuItem[], parents: string[] = []
  * ⚠️ 阈值是**顶级可见项数**，⛔ 不是角色名 —— 按角色写死会漏掉以后新增的角色，
  *    而且同一个角色在不同工厂启用的模块数也不一样（菜单还按 module 启停过滤）。
  */
-const FLATTEN_WHEN_TOP_LEVEL_AT_MOST = 4;
+/**
+ * P2 改组后的阈值（审查 #1692 第 3 条）：原来数**顶级可见项**（≤ 4 铺开）。改组后顶级多了
+ * 「概览」「主数据」这类展示分组，同一个销售主管顶级从 3–5 项变成 5–6 项，铺开整体失效；
+ * 而且「工作台」嵌在「概览」里，只开顶级也还要再点一次。
+ * ⇒ 改数**可见叶子数**（真正能点的页面），≤ 24 就整棵树（含嵌套分组）全部铺开。
+ *   依据：本地实测单部门角色的可见叶子——销售主管、采购经理都在 24 以内（整页滚动可看完）；
+ *   车间主任这类跨部门管理角色 60+，铺开反而找不到东西，保持「只展开当前所在组」。
+ *   仍然 ⛔ 不按角色名写死（同一角色在不同工厂启用的模块不同）。
+ */
+const FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST = 24;
 
 // ⚠️ 铺开态下必须把 el-menu 的 unique-opened 关掉（模板里 :unique-opened="!shouldFlatten"）：
 //    它强制「同时只能展开一个」，会把 defaultOpeneds 里除第一个以外的全部收起来，
 //    于是 defaultOpeneds 看起来生效了、实际只开了一个。
-const shouldFlatten = computed(() => filteredMenu.value.length <= FLATTEN_WHEN_TOP_LEVEL_AT_MOST);
+const shouldFlatten = computed(() => visibleLeaves(filteredMenu.value).length <= FLATTEN_WHEN_VISIBLE_LEAVES_AT_MOST);
+
+function allGroupPaths(items: readonly MenuItem[]): string[] {
+  return items.flatMap((m) => (m.children?.length ? [m.path, ...allGroupPaths(m.children)] : []));
+}
 
 const defaultOpeneds = computed(() => {
   if (shouldFlatten.value) {
-    // 全铺开：把所有有子项的顶级项都列进去。
-    return filteredMenu.value.filter((m) => m.children?.length).map((m) => m.path);
+    // 全铺开：所有层级的分组都列进去（「概览 › 工作台」这种嵌套的也开）。
+    return allGroupPaths(filteredMenu.value);
   }
   return findOpenParents(route.path, filteredMenu.value) ?? [];
 });

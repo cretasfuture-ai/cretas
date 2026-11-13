@@ -25,11 +25,16 @@ const inputRef = ref<{ focus: () => void } | null>(null);
 
 const entries = computed<Entry[]>(() => {
   const out: Entry[] = [];
+  const seen = new Set<string>();
   const walk = (items: readonly MenuItem[], parents: string[]) => {
     for (const item of items) {
       const title = props.titleForItem(item);
       if (item.children?.length) walk(item.children, [...parents, title]);
-      else out.push({ path: item.path, title, trail: parents.join(' › ') });
+      // 同一 path 只留第一处（F006 演示菜单与正式菜单可能同路径；审查 #1692 第 5 条）
+      else if (!seen.has(item.path)) {
+        seen.add(item.path);
+        out.push({ path: item.path, title, trail: parents.join(' › ') });
+      }
     }
   };
   walk(props.menu, []);

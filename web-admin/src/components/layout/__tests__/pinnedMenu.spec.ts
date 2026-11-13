@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PINNED_MENU_LIMIT,
+  PINNED_MENU_STORE_CAP,
+  addPinnedPath,
   pinnedMenuStorageKey,
   readPinnedPaths,
   usePinnedMenu,
@@ -46,6 +48,7 @@ describe('pinnedMenu（常用，本机浏览器存储）', () => {
     expect(writePinnedPaths(k, ['/a'])).toBe(false);
     const pm = usePinnedMenu();
     pm.bind(pinnedMenuStorageKey(9, 'X'));
+    pm.setVisibleLeafPaths(['/a']);
     expect(() => pm.toggle('/a')).not.toThrow();
   });
 
@@ -53,6 +56,7 @@ describe('pinnedMenu（常用，本机浏览器存储）', () => {
     const pm = usePinnedMenu();
     const k = pinnedMenuStorageKey(7, 'F006');
     pm.bind(k);
+    pm.setVisibleLeafPaths(['/x', ...Array.from({ length: PINNED_MENU_LIMIT + 3 }, (_, i) => `/p${i}`)]);
     pm.toggle('/x');
     expect(pm.isPinned('/x')).toBe(true);
     expect(readPinnedPaths(k)).toEqual(['/x']);
@@ -71,5 +75,29 @@ describe('pinnedMenu（常用，本机浏览器存储）', () => {
     expect(pm.pinned.value).toEqual(['/only-100']);
     pm.bind(pinnedMenuStorageKey(101, 'F006'));
     expect(pm.pinned.value).toEqual([]);
+  });
+
+  it('侧栏看不见的页不能钉（审查 #1692 第 4 条）', () => {
+    const pm = usePinnedMenu();
+    pm.bind(pinnedMenuStorageKey(8, 'F006'));
+    pm.setVisibleLeafPaths(['/seen']);
+    expect(pm.canPin('/hidden')).toBe(false);
+    pm.toggle('/hidden');
+    expect(pm.isPinned('/hidden')).toBe(false);
+    pm.toggle('/seen');
+    expect(pm.isPinned('/seen')).toBe(true);
+  });
+
+  it('已钉但暂时看不见的不占名额、也不被删；总数有上限', () => {
+    const visible = new Set(Array.from({ length: PINNED_MENU_LIMIT + 1 }, (_, i) => `/v${i}`));
+    let list = ['/hidden-a', '/hidden-b'];
+    for (const p of visible) list = addPinnedPath(list, p, visible);
+    expect(list.filter((p) => visible.has(p))).toHaveLength(PINNED_MENU_LIMIT);
+    expect(list).toContain('/hidden-a');
+    expect(list).toContain('/hidden-b');
+    expect(list).not.toContain('/v0'); // 看得见的满了丢最早的
+    let many: string[] = [];
+    for (let i = 0; i < PINNED_MENU_STORE_CAP + 5; i++) many = addPinnedPath(many, `/h${i}`, new Set());
+    expect(many).toHaveLength(PINNED_MENU_STORE_CAP);
   });
 });

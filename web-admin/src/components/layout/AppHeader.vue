@@ -30,11 +30,14 @@ const factoryView = usePlatformFactoryContextStore();
 //   面包屑以它为准。⛔ 不改 URL(存量深链/书签), 也不搬菜单(业务归属是对的)。
 // P2「常用」：当前页是原型分组侧栏里的一个菜单项时，可在面包屑旁加入/移出常用（存本机浏览器）。
 const pinnedMenu = usePinnedMenu();
+// 只有「当前路由正好是侧栏里看得见的一个菜单叶子」才能钉（详情子路由不算；看不见的不算）。
 const pinnablePath = computed<string | null>(() => {
   if (authStore.isPlatform || authStore.currentRole === 'finance_manager' || !pinnedMenu.currentKey.value) return null;
   if (factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) !== groupedMenuConfig) return null;
   const trail = menuTrail(groupedMenuConfig, route.fullPath);
-  return trail ? trail[trail.length - 1].path : null;
+  const leaf = trail?.[trail.length - 1];
+  if (!leaf || leaf.path.split(/[?#]/)[0] !== route.path) return null;
+  return pinnedMenu.canPin(leaf.path) ? leaf.path : null;
 });
 const currentPinned = computed(() => !!pinnablePath.value && pinnedMenu.isPinned(pinnablePath.value));
 
@@ -46,11 +49,15 @@ const breadcrumbs = computed(() => {
     && factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) === groupedMenuConfig;
   const trail = useGroupedLayout ? menuTrail(groupedMenuConfig, route.fullPath) : null;
   if (trail && trail.length > 1) {
-    return trail.map((node, index) => ({
-      // 只有叶子可点；分组/展示分组不是路由
-      path: index === trail.length - 1 ? route.path : '',
-      title: node.title,
-    }));
+    const leaf = trail[trail.length - 1];
+    const isLeafItself = leaf.path.split(/[?#]/)[0] === route.path;
+    // 分组/展示分组不是路由，不可点
+    const crumbs = trail.slice(0, -1).map((node) => ({ path: '', title: node.title }));
+    if (isLeafItself) return [...crumbs, { path: '', title: leaf.title }];
+    // 详情等子路由（/sales/orders/:id）：菜单那一级可点回列表，末项补当前路由标题（审查 #1692 第 1 条）
+    const routeTitle = [...route.matched].reverse().find((r) => typeof r.meta.title === 'string' && r.meta.title)?.meta.title as string | undefined;
+    const tail = routeTitle && routeTitle !== leaf.title ? [{ path: '', title: routeTitle }] : [];
+    return [...crumbs, { path: leaf.path, title: leaf.title }, ...tail];
   }
   const matched = route.matched.filter(r => r.meta.title);
   const override = route.meta.breadcrumbParent as string | undefined;
