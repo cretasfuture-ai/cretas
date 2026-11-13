@@ -6,7 +6,10 @@
    skill / 案例库，或把规则加 `paths:`。
 2. 登记：`.claude/rules/` 下每个规则文件的文件名必须出现在 CLAUDE.md（常驻清单或按路径加载清单）。
    CLAUDE.md 的清单是手工维护的，漏登记 = 这条规则不会被人想起（measurement-and-wiring 形态 B）。
-3. 可执行位（--exec-bit-base <ref>）：比较 <ref> 与 HEAD 的树，任何文件 100755 -> 100644 报红。
+3. Codex 常驻 AGENTS.md 字节预算（2026-11-13）：仓库根 AGENTS.md 每个 Codex 会话整份加载，
+   默认预算 13200 字节（瘦身后实测 11985 +10% 取整）；`--agents-budget` 可覆盖。文件不存在 => rc=2（没量到）。
+   超了把内容挪到 docs/ops/codex-agents-reference.md、skill reference 或案例库，不要硬压。
+4. 可执行位（--exec-bit-base <ref>）：比较 <ref> 与 HEAD 的树，任何文件 100755 -> 100644 报红。
    `git commit -- <paths>` 在 core.fileMode=false 下会静默丢掉暂存的 +x，本机绿、CI 才红。
    有意去掉可执行位的路径写进 scripts/ci/exec-bit-allowlist.txt（一行一个）。
 
@@ -19,6 +22,7 @@ import sys
 from pathlib import Path
 
 DEFAULT_BUDGET = 30000
+DEFAULT_AGENTS_BUDGET = 13200
 
 
 def has_paths_frontmatter(text: str) -> bool:
@@ -51,6 +55,20 @@ def check_budget(root: Path, budget: int):
             "或给规则加 paths: 按路径加载" % (total, budget, ", ".join("%s=%d" % t for t in top))
         )
     return total, rows, problems
+
+
+def check_agents(root: Path, budget: int):
+    f = root / "AGENTS.md"
+    if not f.is_file():
+        raise RuntimeError("找不到 AGENTS.md（没量到）")
+    size = f.stat().st_size
+    problems = []
+    if size > budget:
+        problems.append(
+            "AGENTS.md %d 字节 > 预算 %d：它每个 Codex 会话整份加载。把非 Codex 专属或不必常驻的内容挪进 "
+            "docs/ops/codex-agents-reference.md / skill reference / docs/rules-casebook，AGENTS.md 只留硬约束摘要加指针" % (size, budget)
+        )
+    return size, problems
 
 
 def check_registry(root: Path):
@@ -93,6 +111,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
     ap.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
+    ap.add_argument("--agents-budget", type=int, default=DEFAULT_AGENTS_BUDGET)
     ap.add_argument("--exec-bit-base", default=None, help="比较该 ref 与 HEAD 的可执行位变化")
     ap.add_argument("--skip-rules", action="store_true", help="只做可执行位检查")
     a = ap.parse_args(argv)
@@ -102,7 +121,9 @@ def main(argv=None):
         if not a.skip_rules:
             total, rows, p1 = check_budget(root, a.budget)
             names, p2 = check_registry(root)
-            problems += p1 + p2
+            asize, p4 = check_agents(root, a.agents_budget)
+            problems += p1 + p2 + p4
+            print("agents-md: %d 字节 / 预算 %d" % (asize, a.agents_budget))
             print("resident-rules: 常驻 %d 字节 / 预算 %d（%d 项）；规则文件 %d 个均检查登记" % (total, a.budget, len(rows), len(names)))
         if a.exec_bit_base:
             seen, p3 = check_exec_bit(root, a.exec_bit_base)
