@@ -150,6 +150,94 @@ public class ClarificationCandidateService {
         return actions;
     }
 
+    /**
+     * 把这次澄清列出的选项落成一个会话, 并把会话 id 写进响应 (顶层 sessionId + metadata.sessionId)。
+     * 没有它, 用户回「1」「完成工序」时服务端不知道「1」是哪一项 (prod 2026-11-13: 首轮澄清不建会话,
+     * 回复「1」被当成新话走了闲聊)。普通入口与 SSE 共用这一个方法。
+     *
+     * <p>选项顺序 = {@link #choicesLine} 里用户看到的序号 (只有 SELECT_INTENT、最多 3 个)。
+     * 响应里已经带了会话 id (旧的 LLM 多轮会话) / 没有可选项 / 缺身份 / 建不出来 ⇒ 原样返回、不带会话。
+     */
+    static IntentExecuteResponse attachChoiceSession(
+            com.cretas.aims.service.ConversationService conversationService, IntentExecuteResponse response,
+            String factoryId, Long userId, String userInput) {
+        if (conversationService == null || response == null || userId == null
+                || userInput == null || userInput.isBlank()
+                || (response.getSessionId() != null && !response.getSessionId().isBlank())
+                || (response.getMetadata() != null && response.getMetadata().get("sessionId") != null)
+                || response.getSuggestedActions() == null) {
+            return response;
+        }
+        List<com.cretas.aims.service.ConversationService.CandidateInfo> options = new ArrayList<>();
+        for (IntentExecuteResponse.SuggestedAction action : response.getSuggestedActions()) {
+            if (action == null || !"SELECT_INTENT".equals(action.getActionCode())
+                    || action.getActionName() == null || action.getActionName().isBlank()
+                    || action.getParameters() == null
+                    || !(action.getParameters().get("intentCode") instanceof String code) || code.isBlank()) {
+                continue;
+            }
+            options.add(com.cretas.aims.service.ConversationService.CandidateInfo.builder()
+                    .intentCode(code).intentName(action.getActionName()).build());
+            if (options.size() >= 3) {
+                break;
+            }
+        }
+        if (options.isEmpty()) {
+            return response;
+        }
+        String sessionId = conversationService.startClarificationChoice(
+                factoryId, userId, userInput, options, response.getMessage());
+        if (sessionId == null || sessionId.isBlank()) {
+            return response;
+        }
+        java.util.Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        if (response.getMetadata() != null) {
+            metadata.putAll(response.getMetadata());
+        }
+        metadata.put("sessionId", sessionId);
+        response.setMetadata(metadata);
+        response.setSessionId(sessionId);
+        return response;
+    }
+
+    /**
+     * 把「用户回了选项序号/名字」改写成「点了那个按钮」: 原话 + 选中的意图码 + clarificationSelection 上下文
+     * (RN 点按钮就是这样发的, 见 AIChatScreen)。之后两个入口走各自已有的显式意图路径 —— 权限 / 审批 /
+     * 业态门 / W0 写确认全部照常。没选中返回 false, 请求原样不动。
+     */
+    static boolean applyChoicePick(com.cretas.aims.service.ConversationService conversationService,
+                                   com.cretas.aims.dto.ai.IntentExecuteRequest request,
+                                   String factoryId, Long userId) {
+        if (conversationService == null || request == null || userId == null
+                || (request.getIntentCode() != null && !request.getIntentCode().isBlank())
+                || request.getSessionId() == null || request.getSessionId().isBlank()
+                || request.getUserInput() == null || request.getUserInput().isBlank()
+                // 长句不可能是在选序号/选项名: 不查会话表
+                || request.getUserInput().strip().length() > com.cretas.aims.service.ClarificationChoiceMatcher.MAX_REPLY_CHARS) {
+            return false;
+        }
+        java.util.Optional<com.cretas.aims.service.ConversationService.ClarificationPick> pick;
+        try {
+            pick = conversationService.resolveClarificationChoice(
+                    factoryId, userId, request.getSessionId(), request.getUserInput());
+        } catch (RuntimeException e) {
+            return false;
+        }
+        if (pick == null || pick.isEmpty()) {
+            return false;
+        }
+        java.util.Map<String, Object> context = new HashMap<>();
+        if (request.getContext() != null) {
+            context.putAll(request.getContext());
+        }
+        context.put("clarificationSelection", Boolean.TRUE);
+        context.put("clarificationCandidates", pick.get().getCandidateCodes());
+        request.setContext(context);
+        request.setIntentCode(pick.get().getIntentCode());
+        request.setUserInput(pick.get().getOriginalInput());
+        return true;
+    }
+
     static List<IntentExecuteResponse.SuggestedAction> rephraseOnly() {
         return List.of(IntentExecuteResponse.SuggestedAction.builder()
                 .actionCode("REPHRASE").actionName("重新描述").build());
