@@ -63,6 +63,8 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
     @Mock private com.cretas.aims.service.bom.BomRecipeService bomRecipeService;
 
     private BomPriceAdjustmentServiceImpl service;
+    /** item() 造出的行 → 所属配方 id; 供 findRecipeIdById 桥接 (不能在 item() 里打桩: 它常在别的 when(...) 里被调用)。 */
+    private final java.util.Map<Long, String> recipeIdByItem = new java.util.HashMap<>();
 
     @BeforeEach
     void setUp() {
@@ -84,6 +86,9 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         when(proposalRepository.save(any(BomPriceAdjustmentProposal.class))).thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class))).thenAnswer(inv -> inv.getArgument(0));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        // 红线 3 锁序「整族配方头 → 行」: 批准先只取行所属配方 id (标量) 定位要锁的族
+        when(itemRepository.findRecipeIdById(any())).thenAnswer(inv ->
+                Optional.ofNullable(recipeIdByItem.get(inv.<Long>getArgument(0))));
     }
 
     // ---------------------------------------------------------------- a) 生成端
@@ -219,8 +224,9 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
                 itemRepository, recipeRepository, guard);
         order.verify(materialRepository).lockByFactoryIdAndIdIn(F, List.of(MAT));
         order.verify(proposalRepository).lockByIdAndFactoryId(287L, F);
-        order.verify(itemRepository).findByIdForUpdate(1604L);
+        // 红线 3: 先头后行 (与激活 / 整表更新 / 草稿明细编辑同一方向), 两者都在保密检查之前
         order.verify(recipeRepository).lockByIdAndFactoryId("R-RW-V4", F);
+        order.verify(itemRepository).findByIdForUpdate(1604L);
         order.verify(guard).requireRecipe(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq("R-RW-V4"),
                 any(), any());
     }
@@ -337,6 +343,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         item.setStandardQuantity(BigDecimal.ONE);
         item.setYieldRate(new BigDecimal("100.00"));
         item.setUnitPrice(new BigDecimal(unitPrice));
+        recipeIdByItem.put(id, recipeId);
         return item;
     }
 

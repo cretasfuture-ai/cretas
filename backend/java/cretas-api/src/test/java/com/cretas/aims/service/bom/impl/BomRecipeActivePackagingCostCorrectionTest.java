@@ -96,6 +96,9 @@ class BomRecipeActivePackagingCostCorrectionTest {
 
         when(itemRepo.findByIdForUpdate(680L)).thenReturn(Optional.of(item));
         when(recipeRepo.lockByIdAndFactoryId("R1", "LIUSHANMEN")).thenReturn(Optional.of(recipe));
+        // 红线 3 锁序「整族配方头 → 行」: 先只取行所属配方 id 定位要锁的族, 加锁后再按 id 读头
+        when(itemRepo.findRecipeIdById(680L)).thenReturn(Optional.of("R1"));
+        when(recipeRepo.findById("R1")).thenReturn(Optional.of(recipe));
         when(materialTypeRepo.findByIdAndFactoryId("M1", "LIUSHANMEN")).thenReturn(Optional.of(material));
         when(itemRepo.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
         when(recipeRepo.save(any(BomRecipe.class))).thenAnswer(inv -> inv.getArgument(0));
