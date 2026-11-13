@@ -1336,9 +1336,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         boolean actorIsMaker = approved
                 && (Objects.equals(plan.getCreatedBy(), approverId) || Objects.equals(plan.getForceInsertBy(), approverId));
         String trimmedComment = comment == null ? null : comment.trim();
-        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
-                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
-                        selfApprovalGate, factoryId, actorIsMaker, trimmedComment);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision = decideSelfApproval(factoryId, actorIsMaker, trimmedComment);
         if (selfDecision.forbidden()) {
             throw new BusinessException(409, "提交强制插单的人不能审批自己的插单")
                     .withCode("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN")
@@ -1419,9 +1417,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 纪律排查 B1–B3 / #1580: 提交人本人批准 —— 开关关 ⇒ 拦; 开 ⇒ 必须写原因并留痕。
         boolean actorIsMaker = action == ApprovalHistory.HistoryAction.APPROVE
                 && (Objects.equals(plan.getCreatedBy(), actorId) || Objects.equals(plan.getForceInsertBy(), actorId));
-        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
-                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
-                        selfApprovalGate, factoryId, actorIsMaker, trimmedNotes);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision = decideSelfApproval(factoryId, actorIsMaker, trimmedNotes);
         if (selfDecision.forbidden()) {
             throw new BusinessException(409, "提交强制插单的人不能审批自己的插单")
                     .withCode("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN")
@@ -1516,6 +1512,21 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
             return false;
         }
         return switchOn && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.FORCE_INSERT).isPresent();
+    }
+
+    /**
+     * 本人审批判定。fail-closed: 判定组件没给出结论 (返回 null) 时抛 500 拒绝, 既不 NPE, 也绝不当成放行。
+     */
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decideSelfApproval(
+            String factoryId, boolean actorIsMaker, String reason) {
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decision = com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                selfApprovalGate, factoryId, actorIsMaker, reason);
+        if (decision == null) {
+            throw new BusinessException(500, "无法判定是否本人审批, 为安全起见已拒绝本次审批")
+                    .withCode("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE")
+                    .withHint("请稍后重试; 持续出现请联系技术支持");
+        }
+        return decision;
     }
 
     /** 本人审批留痕: 写在计划审批意见与 OA 审批记录的前缀。 */

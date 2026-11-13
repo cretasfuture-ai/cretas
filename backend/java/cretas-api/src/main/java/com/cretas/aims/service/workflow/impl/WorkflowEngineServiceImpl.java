@@ -544,7 +544,7 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
         if (requestedFromNodeId == null) {
             // 并行网关: 多个 active 节点时推进「操作人负责的那个」, 不是永远推第一个。
             fromNodeId = pickActiveNodeForRole(instance.getCurrentNodeIds(), graph, actorRole, fromNodeId);
-        } else if (!nodeAllowsRole(graph.nodesById.get(requestedFromNodeId), actorRole)) {
+        } else if (!nodeAllowsActor(graph.nodesById.get(requestedFromNodeId), actorId, actorRole)) {
             // 显式指定节点时, 不能替别的分支的审批人批 (超管兜底除外)
             throw new BusinessException(403, "您不属于该审批节点的处理角色")
                     .withCode("OA_TASK_FORBIDDEN");
@@ -1580,18 +1580,28 @@ public class WorkflowEngineServiceImpl implements WorkflowEngineService {
 
     // ==================== Internal helpers ====================
 
-    /** 节点配了 approverRoles 且不含操作人角色 ⇒ false; 超管 / 节点没配角色 / 非 approval 节点 ⇒ true (不在这里收紧)。 */
-    private boolean nodeAllowsRole(ApprovalWorkflowNode node, String actorRole) {
-        if (node == null || actorRole == null || actorRole.isBlank()
-                || FactoryUserRole.factory_super_admin.name().equals(actorRole)
-                || !"approval".equals(node.getType()) || node.getConfig() == null) {
+    /**
+     * 显式指定节点推进时的放行判据 —— 默认拒绝:
+     * 超管放行; 系统动作 (无操作人: 自动/超时) 放行; 否则必须是 approval 节点, 且
+     * 操作人角色在 approverRoles 里, 或操作人 id 在 approverUserIds 里 (画布「按人点名」)。
+     * 节点什么都没配 ⇒ 只有超管能推, 不能被别的分支的人带着 fromNodeId 批掉。
+     */
+    private boolean nodeAllowsActor(ApprovalWorkflowNode node, Long actorId, String actorRole) {
+        if (node == null || (actorId == null && (actorRole == null || actorRole.isBlank()))
+                || FactoryUserRole.factory_super_admin.name().equals(actorRole)) {
             return true;
+        }
+        if (!"approval".equals(node.getType()) || node.getConfig() == null) {
+            return false;
         }
         Object roles = node.getConfig().get("approverRoles");
-        if (!(roles instanceof List<?> roleList) || roleList.isEmpty()) {
+        if (actorRole != null && roles instanceof List<?> roleList
+                && roleList.stream().anyMatch(r -> r != null && actorRole.equals(String.valueOf(r)))) {
             return true;
         }
-        return roleList.stream().anyMatch(r -> r != null && actorRole.equals(String.valueOf(r)));
+        Object users = node.getConfig().get("approverUserIds");
+        return actorId != null && users instanceof List<?> userList
+                && userList.stream().anyMatch(u -> u != null && String.valueOf(actorId).equals(String.valueOf(u)));
     }
 
     @Override

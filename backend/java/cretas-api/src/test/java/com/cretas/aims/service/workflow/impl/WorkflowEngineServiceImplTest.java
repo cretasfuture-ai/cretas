@@ -560,6 +560,107 @@ class WorkflowEngineServiceImplTest {
         assertEquals("branch_a", engine.resolveActiveNodeForRole(inst, "someone_else"));
     }
 
+    /** 并行三条分支: branch_a→role_a, branch_named→只按人点名(approverUserIds=[777]), branch_open→什么都没配。 */
+    private ApprovalWorkflowInstance startMixedParallel() {
+        wireInstanceLookup();
+        buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("fan", "parallel", null),
+                        node("branch_a", "approval", Map.of("approverRoles", List.of("role_a"))),
+                        node("branch_named", "approval", Map.of("approverUserIds", List.of("777"))),
+                        node("branch_open", "approval", Map.of()),
+                        node("merge", "join", Map.of("mode", "ALL")),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "fan", null, 0, null),
+                        edge("e2", "fan", "branch_a", null, 0, null),
+                        edge("e3", "fan", "branch_named", null, 1, null),
+                        edge("e4", "fan", "branch_open", null, 2, null),
+                        edge("e5", "branch_a", "merge", null, 0, null),
+                        edge("e6", "branch_named", "merge", null, 0, null),
+                        edge("e7", "branch_open", "merge", null, 0, null),
+                        edge("e8", "merge", "end_ok", null, 0, null)),
+                "start");
+        ApprovalWorkflowInstance inst = engine.startWorkflow(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-MIX", Map.of(), INITIATOR_ID);
+        assertEquals(3, inst.getCurrentNodeIds().size());
+        return inst;
+    }
+
+    @Test
+    @DisplayName("显式指定节点默认拒绝: 节点没配角色/人 ⇒ 别分支的人 403, 只有超管能推")
+    void explicit_node_without_any_approver_config_is_denied_to_other_branch_actor() {
+        ApprovalWorkflowInstance inst = startMixedParallel();
+
+        BusinessException denied = assertThrows(BusinessException.class,
+                () -> engine.transitionNode(inst.getId(), APPROVER_ID, "role_a",
+                        HistoryAction.APPROVE, "越权", "branch_open"));
+        assertEquals("OA_TASK_FORBIDDEN", denied.getErrorCode());
+        assertTrue(inst.getCurrentNodeIds().contains("branch_open"), "被拒后节点仍在等审批");
+
+        // 阳性对照: 超管能推同一个节点 (证明上面的拒绝来自判据, 不是节点本身推不动)
+        ApprovalWorkflowInstance after = engine.transitionNode(inst.getId(), APPROVER_ID, "factory_super_admin",
+                HistoryAction.APPROVE, "超管", "branch_open");
+        assertFalse(after.getCurrentNodeIds().contains("branch_open"));
+    }
+
+    @Test
+    @DisplayName("显式指定节点: 只按人点名的节点按操作人 id 放行, 角色对但不在名单里 403")
+    void explicit_node_named_by_user_id_is_matched_by_actor_id() {
+        ApprovalWorkflowInstance inst = startMixedParallel();
+
+        BusinessException denied = assertThrows(BusinessException.class,
+                () -> engine.transitionNode(inst.getId(), 778L, "role_a",
+                        HistoryAction.APPROVE, "不在名单", "branch_named"));
+        assertEquals("OA_TASK_FORBIDDEN", denied.getErrorCode());
+
+        ApprovalWorkflowInstance after = engine.transitionNode(inst.getId(), 777L, "any_role",
+                HistoryAction.APPROVE, "点名人", "branch_named");
+        assertFalse(after.getCurrentNodeIds().contains("branch_named"));
+        assertTrue(after.getCurrentNodeIds().contains("branch_a"));
+    }
+
+    @Test
+    @DisplayName("同一角色挂在多个并行节点: 每次只推一个, 第二次推下一个")
+    void same_role_on_two_parallel_nodes_advances_one_at_a_time() {
+        wireInstanceLookup();
+        buildWorkflow(
+                List.of(
+                        node("start", "start", null),
+                        node("fan", "parallel", null),
+                        node("branch_a", "approval", Map.of("approverRoles", List.of("role_x"))),
+                        node("branch_b", "approval", Map.of("approverRoles", List.of("role_x"))),
+                        node("merge", "join", Map.of("mode", "ALL")),
+                        node("end_ok", "end", Map.of("outcome", "APPROVED"))),
+                List.of(
+                        edge("e1", "start", "fan", null, 0, null),
+                        edge("e2", "fan", "branch_a", null, 0, null),
+                        edge("e3", "fan", "branch_b", null, 1, null),
+                        edge("e4", "branch_a", "merge", null, 0, null),
+                        edge("e5", "branch_b", "merge", null, 0, null),
+                        edge("e6", "merge", "end_ok", null, 0, null)),
+                "start");
+        ApprovalWorkflowInstance inst = engine.startWorkflow(
+                FACTORY_ID, "PURCHASE_ORDER", "PO-SAME", Map.of(), INITIATOR_ID);
+        List<ApprovalHistory> historyBuffer = new ArrayList<>();
+        when(historyRepository.findByFactoryIdAndInstanceIdOrderByCreatedAtAsc(anyString(), anyString()))
+                .thenReturn(historyBuffer);
+        when(historyRepository.save(any(ApprovalHistory.class))).thenAnswer(inv -> {
+            historyBuffer.add(inv.getArgument(0));
+            return inv.getArgument(0);
+        });
+
+        ApprovalWorkflowInstance first = engine.transitionNode(
+                inst.getId(), APPROVER_ID, "role_x", HistoryAction.APPROVE, "第一次");
+        assertEquals(List.of("branch_b"), first.getCurrentNodeIds(), "第一次只推走第一个节点");
+        assertEquals(InstanceStatus.RUNNING, first.getStatus());
+
+        ApprovalWorkflowInstance second = engine.transitionNode(
+                inst.getId(), APPROVER_ID, "role_x", HistoryAction.APPROVE, "第二次");
+        assertEquals(InstanceStatus.APPROVED, second.getStatus(), "第二次推走下一个, 汇合后通过");
+    }
+
     @Test
     @DisplayName("cancel_writes_history: cancel → CANCELLED + CANCEL history row")
     void cancel_writes_history() {

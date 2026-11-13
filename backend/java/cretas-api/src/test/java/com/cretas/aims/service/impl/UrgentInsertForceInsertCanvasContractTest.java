@@ -745,4 +745,39 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThat(pending.get(0).getApprovalWorkflowInstanceId()).isEqualTo("INST-25");
         assertThat(pending.get(1).getApprovalWorkflowInstanceId()).as("没有画布的计划不带实例").isNull();
     }
+
+    @Test
+    void whenTheSelfApprovalGateGivesNoVerdictBothEntrancesRefuseInsteadOfNpeOrPassing() {
+        FactorySelfApprovalGate silent = mock(FactorySelfApprovalGate.class); // decide(...) 未打桩 ⇒ null
+        UrgentInsertServiceImpl failClosed = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class,
+                Map.ofEntries(
+                        Map.entry(UserRepository.class, userRepoWith(APPROVER)),
+                        Map.entry(InsertSlotRepository.class, slots),
+                        Map.entry(ProductionPlanRepository.class, plans),
+                        Map.entry(SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class)),
+                        Map.entry(UrgentInsertScheduleService.class, scheduler),
+                        Map.entry(WorkflowEngineService.class, engine),
+                        Map.entry(FactorySelfApprovalGate.class, silent)));
+        ProductionPlan plan = pendingCanvasPlan("P-30", "INST-30");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-30")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> failClosed.approveForceInsert(F, "P-30", APPROVER, true, "同意"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE"));
+        assertThatThrownBy(() -> failClosed.applyWorkflowAction(F, "P-30", "INST-30", APPROVER,
+                "production_manager", null, HistoryAction.APPROVE, "同意"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE"));
+
+        assertThat(plan.isPendingApproval()).as("没批成, 计划仍待审批").isTrue();
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
+        assertThat(slot.getStatus()).isEqualTo("selected");
+    }
+
+    private UserRepository userRepoWith(long id) {
+        UserRepository repo = mock(UserRepository.class);
+        when(repo.findById(id)).thenReturn(Optional.of(user(id, "生产经理")));
+        return repo;
+    }
 }
