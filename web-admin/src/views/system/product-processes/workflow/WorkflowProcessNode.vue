@@ -407,6 +407,15 @@
           aria-label="单位"
           @change="onParamUnit(index, $event)"
         />
+        <label class="ccp-field" data-testid="param-overwrite">
+          <input
+            type="checkbox"
+            :checked="param.overwriteConfirmed === true"
+            :disabled="!canWrite"
+            @change="onParamOverwrite(index, $event)"
+          />
+          确认覆盖工序已有标准（工序是各产品共用的）
+        </label>
         <div v-if="processParamContradiction(param)" class="ccp-error" data-testid="param-contradict">{{ processParamContradiction(param) }}</div>
       </div>
       <div v-for="item in pendingList" :key="item.code" class="pending-row" data-testid="pending-row">
@@ -571,6 +580,9 @@ function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', even
   const parsed = raw === '' ? Number.NaN : Number(raw);
   // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0)
   patchParam(index, { [key]: Number.isFinite(parsed) ? parsed : null });
+}
+function onParamOverwrite(index: number, event: Event): void {
+  patchParam(index, { overwriteConfirmed: (event.target as HTMLInputElement | null)?.checked === true });
 }
 function onParamUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();

@@ -636,13 +636,17 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         }
         bomWorkflowRevisionService.requireActiveBomPinsRevision(factoryId, productTypeId, revision);
+        // 画布工序上的工艺标准参数(AI 听来的油温范围等) → 工序 customFieldSchema; 只在发布(=人已确认)时写。
+        // 放在 CCP 台账之前: 它可能因「要覆盖已有标准但未确认」409, 先判先抛, 不留下任何半截写入
+        // (整个方法在事务里, 抛异常会连同 CCP 台账与草稿状态一起回滚)。
+        if (processParamMaterializer != null) {
+            processParamMaterializer.materialize(factoryId, productTypeId, definition,
+                    find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED)
+                            .map(this::toDTO).orElse(null));
+        }
         // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
         if (ccpMaterializer != null) {
             ccpMaterializer.materialize(factoryId, productTypeId, definition);
-        }
-        // 画布工序上的工艺标准参数(AI 听来的油温范围等) → 工序 customFieldSchema; 同样只在发布(=人已确认)时写
-        if (processParamMaterializer != null) {
-            processParamMaterializer.materialize(factoryId, definition);
         }
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         draft.setUnitReviewRequired(false);

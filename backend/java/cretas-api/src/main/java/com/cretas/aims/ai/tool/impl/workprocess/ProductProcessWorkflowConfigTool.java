@@ -349,13 +349,14 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         if (!(value instanceof List<?> params)) return false;
         for (Object raw : params) {
             if (!(raw instanceof Map<?, ?> param)
-                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max"))
+                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max", "overwriteConfirmed"))
                     || readNonBlankString(param.get("label")) == null
                     || !isOptionalFiniteNumber(param, "standardValue")
                     || !isOptionalFiniteNumber(param, "min")
                     || !isOptionalFiniteNumber(param, "max")
                     || !isOptionalNullableString(param, "unit")
-                    || !isOptionalNullableString(param, "id")) return false;
+                    || !isOptionalNullableString(param, "id")
+                    || (param.get("overwriteConfirmed") != null && !(param.get("overwriteConfirmed") instanceof Boolean))) return false;
             Object unit = param.get("unit");
             if (unit instanceof String u && u.trim().length() > WorkProcessCustomFieldSchema.UNIT_MAX_LENGTH) return false;
         }

@@ -175,6 +175,8 @@ export interface WorkflowProcessParam {
   standardValue?: number | null;
   min?: number | null;
   max?: number | null;
+  /** 人在画布上确认「覆盖工序已有的标准」；没有它，发布会在要改已有值时 409。 */
+  overwriteConfirmed?: boolean;
 }
 
 export function processParamsOf(data: Record<string, unknown> | undefined): WorkflowProcessParam[] {
