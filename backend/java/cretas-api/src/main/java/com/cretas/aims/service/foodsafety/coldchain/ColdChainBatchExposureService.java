@@ -412,7 +412,7 @@ public class ColdChainBatchExposureService {
                             : "当前状态「" + statusLabel(m.getStatus()) + "」不能转待检");
                 }
                 previous = m.getStatus().name();
-                m.setStatus(MaterialBatchStatus.INSPECTING);
+                com.cretas.aims.service.quality.release.MaterialBatchHoldService.hold(m);   // 记下扣留前状态 (#1590 遗留 M5)
                 materialBatchRepo.save(m);
                 held = MaterialBatchStatus.INSPECTING.name();
             }
