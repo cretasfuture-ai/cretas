@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "虽然设备的OEE看起来不错，但是计划外停机的次数明显增加了。我想看看这个月每台设备的停机原因分布"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"虽然设备的OEE看起来不错，但是计划外停机的次数明显增加了。我想看看这个月每台设备的停机原因分布\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ALERT_BY_EQUIPMENT\",\n  \"intentName\": \"按设备告警\",\n  \"intentCategory\": \"ALERT\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"告警检查完成：当前没有未处理的告警，所有设备运行正常。\",\n  \"formattedText\": \"告警检查完成：当前没有未处理的告警，所有设备运行正常。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"queryConditions\": {},\n    \"totalPages\": 0,\n    \"hasMore\": false,\n    \"currentPage\": 1,\n    \"content\": [],\n    \"totalElements\": 0\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:24.6412429\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "告警检查完成：当前没有未处理的告警，所有设备运行正常。"
+  }
+]

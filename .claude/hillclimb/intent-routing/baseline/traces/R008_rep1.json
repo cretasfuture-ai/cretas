@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "不合格品的处置选项有哪些？各自的适用场景是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"不合格品的处置选项有哪些？各自的适用场景是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"QUALITY_DISPOSITION_EVALUATE\",\n  \"intentName\": \"处置评估\",\n  \"intentCategory\": \"QUALITY\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.7657195876387329,\n  \"matchMethod\": \"SEMANTIC\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 处置评估 — 根据质检结果智能评估处置方案\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 查询原料库存\\n2. 处置评估 — 根据质检结果智能评估处置方案\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:41.6460884\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"处置评估\",\n      \"description\": \"根据质检结果智能评估处置方案\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"QUALITY_DISPOSITION_EVALUATE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 查询原料库存\n2. 处置评估 — 根据质检结果智能评估处置方案\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

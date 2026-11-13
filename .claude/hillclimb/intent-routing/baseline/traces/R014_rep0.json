@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "先进先出原则在实际操作中如何执行？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"先进先出原则在实际操作中如何执行？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"MATERIAL_FIFO_RECOMMEND\",\n  \"intentName\": \"FIFO推荐\",\n  \"intentCategory\": \"MATERIAL\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"NEED_MORE_INFO\",\n  \"message\": \"为了完成操作，还需要以下信息：\\n1. 请问您需要哪种原材料？说原料名称就行\\n\\n请直接告诉我，我来帮您处理。\",\n  \"formattedText\": \"为了完成操作，还需要以下信息：\\n1. 请问您需要哪种原材料？说原料名称就行\\n\\n请直接告诉我，我来帮您处理。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:49.8786603\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"toolName\": \"material_fifo_recommend\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "为了完成操作，还需要以下信息：\n1. 请问您需要哪种原材料？说原料名称就行\n\n请直接告诉我，我来帮您处理。"
+  }
+]

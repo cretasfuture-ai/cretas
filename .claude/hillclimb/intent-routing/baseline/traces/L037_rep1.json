@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那几个人今天怎么样？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那几个人今天怎么样？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"ANALYSIS_COMPLETED\",\n  \"message\": \"您好！由于当前系统暂未集成实时人员数据（如考勤、绩效等），我无法直接查看到“那几个人”今天的出勤、工作状态或具体表现。\\n\\n不过，结合您关注的**整体业务**场景，建议您从以下**人员管理维度**进行快速评估：\\n\\n1. **出勤情况**：建议查看今日考勤记录，关注是否有缺勤、迟到或早退。食品车间对人员健康要求严格，若有人因病缺勤，需注意是否影响关键岗位（如关键控制点）的监控。\\n2. **岗位人效**：若涉及生产或质检岗位，可对比当日产量/质检批次数与人员配置，评估是否存在人员冗余或效率瓶颈。\\n3. **食品安全合规**：重点确认相关岗位人员是否完成今日健康检查、工服洁净、手部消毒等流程，确保符合食品安全要求。\\n\\n**建议行动**：\\n- 若您有具体工号或岗位信息，请提供，我可帮您结合生产报表进行交叉分析。\\n- 或直接查看**日报/周报**中“人员出勤率”与“培训覆盖率”指标，判断整体人力健康度。\\n\\n如后续系统接入人员数据，我将能为您提供更精准的“今日人员画像”。\",\n  \"formattedText\": \"您好！由于当前系统暂未集成实时人员数据（如考勤、绩效等），我无法直接查看到“那几个人”今天的出勤、工作状态或具体表现。\\n\\n不过，结合您关注的**整体业务**场景，建议您从以下**人员管理维度**进行快速评估：\\n\\n1. **出勤情况**：建议查看今日考勤记录，关注是否有缺勤、迟到或早退。食品车间对人员健康要求严格，若有人因病缺勤，需注意是否影响关键岗位（如关键控制点）的监控。\\n2. **岗位人效**：若涉及生产或质检岗位，可对比当日产量/质检批次数与人员配置，评估是否存在人员冗余或效率瓶颈。\\n3. **食品安全合规**：重点确认相关岗位人员是否完成今日健康检查、工服洁净、手部消毒等流程，确保符合食品安全要求。\\n\\n**建议行动**：\\n- 若您有具体工号或岗位信息，请提供，我可帮您结合生产报表进行交叉分析。\\n- 或直接查看**日报/周报**中“人员出勤率”与“培训覆盖率”指标，判断整体人力健康度。\\n\\n如后续系统接入人员数据，我将能为您提供更精准的“今日人员画像”。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:35.2190077\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"analysisTopic\": \"OVERALL_BUSINESS\",\n    \"processingMode\": \"ANALYSIS\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您好！由于当前系统暂未集成实时人员数据（如考勤、绩效等），我无法直接查看到“那几个人”今天的出勤、工作状态或具体表现。\n\n不过，结合您关注的**整体业务**场景，建议您从以下**人员管理维度**进行快速评估：\n\n1. **出勤情况**：建议查看今日考勤记录，关注是否有缺勤、迟到或早退。食品车间对人员健康要求严格，若有人因病缺勤，需注意是否影响关键岗位（如关键控制点）的监控。\n2. **岗位人效**：若涉及生产或质检岗位，可对比当日产量/质检批次数与人员配置，评估是否存在人员冗余或效率瓶颈。\n3. **食品安全合规**：重点确认相关岗位人员是否完成今日健康检查、工服洁净、手部消毒等流程，确保符合食品安全要求。\n\n**建议行动**：\n- 若您有具体工号或岗位信息，请提供，我可帮您结合生产报表进行交叉分析。\n- 或直接查看**日报/周报**中“人员出勤率”与“培训覆盖率”指标，判断整体人力健康度。\n\n如后续系统接入人员数据，我将能为您提供更精准的“今日人员画像”。"
+  }
+]

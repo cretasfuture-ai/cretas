@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "BRCGS认证的审核要点是什么？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"BRCGS认证的审核要点是什么？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"COMPLETED\",\n  \"message\": \"BRCGS认证审核聚焦于食品安全管理体系的有效性。核心要点包括：**HACCP计划**的完整性，需验证所有关键控制点（CCP）的监控与纠偏记录；**供应商管理**，须有批准清单、风险评估及持续审核证据；**现场卫生**，涵盖虫害控制、设备清洁验证及过敏原管理；**可追溯性**，需成功完成至少每年两次的追溯模拟演练；**文件记录**，确保所有记录（如温度、巡检）真实且保存合规。通过审核的秘诀在于日常严格执行标准，尤其在CCP监控、异物控制和培训记录上不留漏洞。\",\n  \"formattedText\": \"BRCGS认证审核聚焦于食品安全管理体系的有效性。核心要点包括：**HACCP计划**的完整性，需验证所有关键控制点（CCP）的监控与纠偏记录；**供应商管理**，须有批准清单、风险评估及持续审核证据；**现场卫生**，涵盖虫害控制、设备清洁验证及过敏原管理；**可追溯性**，需成功完成至少每年两次的追溯模拟演练；**文件记录**，确保所有记录（如温度、巡检）真实且保存合规。通过审核的秘诀在于日常严格执行标准，尤其在CCP监控、异物控制和培训记录上不留漏洞。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:12.2107197\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "BRCGS认证审核聚焦于食品安全管理体系的有效性。核心要点包括：**HACCP计划**的完整性，需验证所有关键控制点（CCP）的监控与纠偏记录；**供应商管理**，须有批准清单、风险评估及持续审核证据；**现场卫生**，涵盖虫害控制、设备清洁验证及过敏原管理；**可追溯性**，需成功完成至少每年两次的追溯模拟演练；**文件记录**，确保所有记录（如温度、巡检）真实且保存合规。通过审核的秘诀在于日常严格执行标准，尤其在CCP监控、异物控制和培训记录上不留漏洞。"
+  }
+]

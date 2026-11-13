@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "带鱼的标准储存温度是多少？保质期一般多长时间？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"带鱼的标准储存温度是多少？保质期一般多长时间？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"COLD_CHAIN_MONITORING\",\n  \"intentName\": \"冷链温控监测\",\n  \"intentCategory\": \"WORKDESK\",\n  \"sensitivityLevel\": null,\n  \"confidence\": 0.8296972915307558,\n  \"matchMethod\": \"SEMANTIC\",\n  \"status\": \"NEED_CLARIFICATION\",\n  \"message\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 冷链温控监测 — 冷链温控 Workdesk — AI 编排 24h 温度状态 + 报警 (per GB 14881)\\n2. 产品更新 — 更新产品类型信息，如名称、规格等\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"formattedText\": \"您的请求可能匹配多个操作, 请选择您实际想做的:\\n1. 冷链温控监测 — 冷链温控 Workdesk — AI 编排 24h 温度状态 + 报警 (per GB 14881)\\n2. 产品更新 — 更新产品类型信息，如名称、规格等\\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:39.412974\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": [\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"冷链温控监测\",\n      \"description\": \"冷链温控 Workdesk — AI 编排 24h 温度状态 + 报警 (per GB 14881)\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"COLD_CHAIN_MONITORING\"\n      }\n    },\n    {\n      \"actionCode\": \"SELECT_INTENT\",\n      \"actionName\": \"产品更新\",\n      \"description\": \"更新产品类型信息，如名称、规格等\",\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents/execute\",\n      \"parameters\": {\n        \"intentCode\": \"PRODUCT_UPDATE\"\n      }\n    },\n    {\n      \"actionCode\": \"REPHRASE\",\n      \"actionName\": \"重新描述\",\n      \"description\": null,\n      \"endpoint\": null,\n      \"parameters\": null\n    },\n    {\n      \"actionCode\": \"SHOW_INTENTS\",\n      \"actionName\": \"查看所有可用操作\",\n      \"description\": null,\n      \"endpoint\": \"/api/mobile/EVAL01/ai-intents\",\n      \"parameters\": null\n    }\n  ],\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": null,\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您的请求可能匹配多个操作, 请选择您实际想做的:\n1. 冷链温控监测 — 冷链温控 Workdesk — AI 编排 24h 温度状态 + 报警 (per GB 14881)\n2. 产品更新 — 更新产品类型信息，如名称、规格等\n回复对应序号, 或更详细描述需求 (例如指定时段 / 物料 / 批次 / 客户)。"
+  }
+]

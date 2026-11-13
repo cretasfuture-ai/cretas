@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "虽然张师傅这个月全勤，但是他的加班时长好像超标了。帮我查一下他这个月的加班明细，另外也看看其他加班超过40小时的员工"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"虽然张师傅这个月全勤，但是他的加班时长好像超标了。帮我查一下他这个月的加班明细，另外也看看其他加班超过40小时的员工\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_STATS\",\n  \"intentName\": \"考勤统计\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"考勤统计 (2026-09-01 至 2026-09-11): , 出勤率 0.0%\",\n  \"formattedText\": \"考勤统计 (2026-09-01 至 2026-09-11): , 出勤率 0.0%\\n\\n\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": {\n      \"lateDays\": 0,\n      \"totalWorkMinutes\": 0,\n      \"expectedDays\": 9,\n      \"totalDays\": 0,\n      \"totalWorkHours\": 0.0,\n      \"earlyLeaveDays\": 0,\n      \"attendanceRate\": 0.0,\n      \"totalOvertimeMinutes\": 0,\n      \"absentDays\": 9,\n      \"totalOvertimeHours\": 0.0,\n      \"normalDays\": 0\n    },\n    \"message\": \"考勤统计 (2026-09-01 至 2026-09-11): , 出勤率 0.0%\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:24.4206553\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "考勤统计 (2026-09-01 至 2026-09-11): , 出勤率 0.0%\n\n"
+  }
+]

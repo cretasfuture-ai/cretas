@@ -1,0 +1,13 @@
+{
+  "description": "baseline: origin/main a1428f8611, prod intent config snapshot 2026-09-11, embedding grpc",
+  "target": "tools",
+  "env": {
+    "repo_sha": "a1428f8611",
+    "base_url": "http://localhost:10010",
+    "factory": "EVAL01",
+    "cases_file": ".claude/hillclimb/intent-routing/cases.jsonl",
+    "n_cases": 200,
+    "reps": 2,
+    "started_at": "2026-09-11T18:02:23"
+  }
+}

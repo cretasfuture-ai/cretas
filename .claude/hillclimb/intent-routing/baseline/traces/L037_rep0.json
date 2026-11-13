@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "那几个人今天怎么样？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"那几个人今天怎么样？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": false,\n  \"intentCode\": null,\n  \"intentName\": null,\n  \"intentCategory\": null,\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"ANALYSIS_COMPLETED\",\n  \"message\": \"您好！关于“那几个人今天怎么样？”，由于当前系统未接入实时人员考勤与行为数据，我无法直接获取具体人员状态。但基于您提供的**人员维度**指标（出勤率、人效、培训覆盖率），我可以提供以下分析框架和建议：\\n\\n**当前可参考的分析：**\\n- 假设工厂近期出勤率稳定在95%以上，且人效达标，那今天大概率运行正常。\\n- 若存在培训覆盖率不足或近期有人员变动，需特别关注关键岗位（如CCP监控员）的在岗情况。\\n\\n**建议行动：**\\n1. **立即核实**：请向生产主管或HR部门确认今日出勤记录、请假及轮班情况。\\n2. **系统对接建议**：建议后续将**考勤系统**与AI Agent对接，我将能实时回答“今日出勤率”、“缺勤人员”、“关键岗位在岗”等具体问题。\\n3. **风险预警**：若涉及食品安全关键控制点（CCP）岗位缺人，需启动紧急备岗流程，确保监控完整。\\n\\n如需进一步分析生产或质量情况（如今天产量、良品率），请告知具体维度，我将为您调取数据。\",\n  \"formattedText\": \"您好！关于“那几个人今天怎么样？”，由于当前系统未接入实时人员考勤与行为数据，我无法直接获取具体人员状态。但基于您提供的**人员维度**指标（出勤率、人效、培训覆盖率），我可以提供以下分析框架和建议：\\n\\n**当前可参考的分析：**\\n- 假设工厂近期出勤率稳定在95%以上，且人效达标，那今天大概率运行正常。\\n- 若存在培训覆盖率不足或近期有人员变动，需特别关注关键岗位（如CCP监控员）的在岗情况。\\n\\n**建议行动：**\\n1. **立即核实**：请向生产主管或HR部门确认今日出勤记录、请假及轮班情况。\\n2. **系统对接建议**：建议后续将**考勤系统**与AI Agent对接，我将能实时回答“今日出勤率”、“缺勤人员”、“关键岗位在岗”等具体问题。\\n3. **风险预警**：若涉及食品安全关键控制点（CCP）岗位缺人，需启动紧急备岗流程，确保监控完整。\\n\\n如需进一步分析生产或质量情况（如今天产量、良品率），请告知具体维度，我将为您调取数据。\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": null,\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:01:23.5002004\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": null,\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"analysisTopic\": \"OVERALL_BUSINESS\",\n    \"processingMode\": \"ANALYSIS\"\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "您好！关于“那几个人今天怎么样？”，由于当前系统未接入实时人员考勤与行为数据，我无法直接获取具体人员状态。但基于您提供的**人员维度**指标（出勤率、人效、培训覆盖率），我可以提供以下分析框架和建议：\n\n**当前可参考的分析：**\n- 假设工厂近期出勤率稳定在95%以上，且人效达标，那今天大概率运行正常。\n- 若存在培训覆盖率不足或近期有人员变动，需特别关注关键岗位（如CCP监控员）的在岗情况。\n\n**建议行动：**\n1. **立即核实**：请向生产主管或HR部门确认今日出勤记录、请假及轮班情况。\n2. **系统对接建议**：建议后续将**考勤系统**与AI Agent对接，我将能实时回答“今日出勤率”、“缺勤人员”、“关键岗位在岗”等具体问题。\n3. **风险预警**：若涉及食品安全关键控制点（CCP）岗位缺人，需启动紧急备岗流程，确保监控完整。\n\n如需进一步分析生产或质量情况（如今天产量、良品率），请告知具体维度，我将为您调取数据。"
+  }
+]

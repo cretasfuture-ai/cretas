@@ -1,0 +1,19 @@
+[
+  {
+    "role": "user",
+    "content": "并非所有员工都不满意新的排班，只是希望能看到更长期的计划。能不能显示下个月的初步排班表？"
+  },
+  {
+    "role": "tool_call",
+    "name": "POST /ai-intents/execute",
+    "content": "{\n  \"userInput\": \"并非所有员工都不满意新的排班，只是希望能看到更长期的计划。能不能显示下个月的初步排班表？\",\n  \"previewOnly\": false,\n  \"login_as\": \"factory_admin1\"\n}"
+  },
+  {
+    "role": "tool_result",
+    "content": "{\n  \"intentRecognized\": true,\n  \"intentCode\": \"ATTENDANCE_TODAY\",\n  \"intentName\": \"今日打卡记录\",\n  \"intentCategory\": \"HR\",\n  \"sensitivityLevel\": null,\n  \"confidence\": null,\n  \"matchMethod\": null,\n  \"status\": \"SUCCESS\",\n  \"message\": \"查询成功\",\n  \"formattedText\": \"查询成功\\n\\n\",\n  \"clarificationQuestions\": null,\n  \"missingParameters\": null,\n  \"quotaCost\": null,\n  \"validationViolations\": null,\n  \"recommendations\": null,\n  \"resultData\": {\n    \"data\": null,\n    \"message\": \"查询成功\"\n  },\n  \"affectedEntities\": null,\n  \"executedAt\": \"2026-09-11T18:02:25.0997199\",\n  \"requiresApproval\": null,\n  \"approvalRequestId\": null,\n  \"approvalChainId\": null,\n  \"suggestedActions\": null,\n  \"confirmableAction\": null,\n  \"aiMode\": \"READ\",\n  \"requiredPermission\": null,\n  \"metadata\": {\n    \"cached\": true\n  },\n  \"fromCache\": null,\n  \"cacheHitType\": null,\n  \"sessionId\": null,\n  \"conversationRound\": null,\n  \"maxConversationRounds\": null,\n  \"multiIntentResult\": null,\n  \"subResults\": null,\n  \"validationResultInfo\": null\n}"
+  },
+  {
+    "role": "assistant",
+    "content": "查询成功\n\n"
+  }
+]
