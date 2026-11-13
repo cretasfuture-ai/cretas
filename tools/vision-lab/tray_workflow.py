@@ -461,6 +461,10 @@ def refresh_candidate_parity(
 
 
 def train_candidate(config: dict[str, Any], dataset: dict[str, Any], repo_root: Path) -> dict[str, Any]:
+    from tray_training_selection import validate_training_selection
+
+    data_yaml = Path(dataset["data_yaml"]).resolve()
+    validate_training_selection(data_yaml.parent, data_yaml)
     os.environ["YOLO_OFFLINE"] = "true"
     from ultralytics import YOLO
     tray = config["tray_active_learning"]
