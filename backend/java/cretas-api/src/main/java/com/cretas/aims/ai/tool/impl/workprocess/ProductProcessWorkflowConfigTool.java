@@ -352,7 +352,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         if (!(value instanceof List<?> params)) return false;
         for (Object raw : params) {
             if (!(raw instanceof Map<?, ?> param)
-                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max", "overwriteConfirmed", "confirmedFor"))
+                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max", "overwriteConfirmed", "confirmedFor", "confirmedBase"))
                     || readNonBlankString(param.get("label")) == null
                     || !isOptionalFiniteNumber(param, "standardValue")
                     || !isOptionalFiniteNumber(param, "min")
@@ -425,6 +425,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                 Map<Object, Object> copy = new LinkedHashMap<>(m);
                 copy.remove("overwriteConfirmed");
                 copy.remove("confirmedFor");
+                copy.remove("confirmedBase");
                 cleaned.add(copy);
             } else {
                 cleaned.add(raw);

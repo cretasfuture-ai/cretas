@@ -178,6 +178,8 @@ export interface WorkflowProcessParam {
   /** 人在画布上确认「覆盖工序已有的标准」；没有它，发布会在要改已有值时 409。 */
   overwriteConfirmed?: boolean;
   /** 勾选那一刻的数值快照；之后数值/单位任何改动都让确认作废（后端同样比对）。 */
+  /** 服务端存草稿时盖的已发布版本号（前端不写、不读）：确认只在一次发布内有效。 */
+  confirmedBase?: number;
   confirmedFor?: { unit?: string | null; standardValue?: number | null; min?: number | null; max?: number | null };
 }
 

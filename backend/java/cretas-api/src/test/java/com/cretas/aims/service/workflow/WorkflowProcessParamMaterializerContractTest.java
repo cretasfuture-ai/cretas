@@ -173,6 +173,7 @@ class WorkflowProcessParamMaterializerContractTest {
         Map<String, Object> snapshot = new LinkedHashMap<>();
         for (String k : List.of("unit", "standardValue", "min", "max")) snapshot.put(k, param.get(k));
         param.put("overwriteConfirmed", true);
+        param.put("confirmedBase", 0); // 服务端存草稿时盖的已发布版本号; 这些用例没有上一版 = 0
         param.put("confirmedFor", snapshot);
     }
 
@@ -278,5 +279,33 @@ class WorkflowProcessParamMaterializerContractTest {
         assertThrows(BusinessException.class,
                 () -> materializer.materialize("F006", "PT-1", definition(List.of(hotter)), null, 7L));
         verify(repository, never()).save(any());
+    }
+
+    @Test
+    void aConfirmationRestoredFromAnOlderVersionIsNotANewConfirmation() {
+        // v1 当年确认 160→170 发布(章=0)。之后又发布了 v2; 工序页被改成 150; 恢复 v1 为草稿再发布:
+        // 画布 170 与上一版(v2 的 165)不同, 快照 170 与画布一致, 但章(0)≠上一版已发布版本(2) → 不得静默改成 170
+        Map<String, Object> processNow = manualOil();
+        processNow.put("max", 150);
+        processNow.put("min", 140);
+        when(repository.findByFactoryIdAndId("F006", "WP-CHAO"))
+                .thenReturn(Optional.of(process(new ArrayList<>(List.of(processNow)))));
+        Map<String, Object> restored = oilTemp();
+        restored.put("max", 170);
+        confirm(restored); // confirmedBase=0, 快照 = 170
+
+        Map<String, Object> v2Param = oilTemp();
+        v2Param.put("max", 165);
+        ProductProcessWorkflowDTO previous = definition(List.of(v2Param));
+        previous.setVersion(2);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> materializer.materialize("F006", "PT-1", definition(List.of(restored)), previous, 7L));
+        assertEquals(WorkflowProcessParamMaterializer.OVERWRITE_UNCONFIRMED, e.getErrorCode());
+        verify(repository, never()).save(any());
+
+        // 阳性对照: 章与上一版版本一致(同一次发布周期内勾的)才生效
+        restored.put("confirmedBase", 2);
+        assertEquals(1, materializer.materialize("F006", "PT-1", definition(List.of(restored)), previous, 7L));
     }
 }

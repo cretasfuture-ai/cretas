@@ -104,7 +104,7 @@ public class WorkflowProcessParamMaterializer {
                     Object old = field.get(k);
                     if (v != null && old != null && !sameValue(old, v)) diffs.add(k + " " + old + "→" + v);
                 }
-                boolean confirmed = confirmationStillValid(param);
+                boolean confirmed = confirmationStillValid(param, previousPublished);
                 if (!diffs.isEmpty() && !confirmed) {
                     unconfirmed.add("工序「" + processName(node) + "」参数「" + label + "」: " + String.join("，", diffs));
                     touchedProcessIds.add(wp);
@@ -144,11 +144,19 @@ public class WorkflowProcessParamMaterializer {
      * 确认只对「人勾选那一刻看到的数值」有效: 勾选时前端记下 confirmedFor(单位/标准值/上下限快照),
      * 之后数值/单位任何一处改动(含旧勾留存)快照就对不上, 确认作废, 必须重新勾。
      * AI 补丁路径会把这两个键丢弃, 所以它打不出一个有效确认。
+     * 另外 confirmedBase(服务端存草稿时盖章)必须等于上一版已发布版本: 确认只在一次发布内有效。
      * 局限: 快照绑的是画布上的拟写入值, 不是工序在勾选时的现值; 勾选之后到发布之前有人在工序管理页改了现值, 不会重新要求确认。
      */
-    private static boolean confirmationStillValid(Map<?, ?> param) {
+    private static boolean confirmationStillValid(Map<?, ?> param, ProductProcessWorkflowDTO previousPublished) {
         if (!Boolean.TRUE.equals(param.get(OVERWRITE_CONFIRMED_KEY))
                 || !(param.get("confirmedFor") instanceof Map<?, ?> snapshot)) {
+            return false;
+        }
+        // 只在一次发布内有效: 服务端存草稿时盖的「已发布版本号」必须等于上一版已发布版本
+        // (没有上一版 = 0)。历史版本恢复回来的旧勾、期间别人又发布过的旧勾, 都对不上。
+        int expectedBase = previousPublished == null || previousPublished.getVersion() == null
+                ? 0 : previousPublished.getVersion();
+        if (!(param.get("confirmedBase") instanceof Number base) || base.intValue() != expectedBase) {
             return false;
         }
         for (String k : WorkProcessCustomFieldSchema.STANDARD_KEYS) {

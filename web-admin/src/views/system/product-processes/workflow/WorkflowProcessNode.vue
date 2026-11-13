@@ -575,7 +575,7 @@ function patchParam(index: number, patch: Partial<WorkflowProcessParam>): void {
   const editsValue = ['unit', 'standardValue', 'min', 'max'].some((k) => k in patch);
   const next = paramList.value.map((param, i) => (i === index
     // 改数值/单位 = 之前的「确认覆盖」作废, 要重新勾
-    ? { ...param, ...(editsValue ? { overwriteConfirmed: false, confirmedFor: undefined } : {}), ...patch }
+    ? { ...param, ...(editsValue ? { overwriteConfirmed: false, confirmedFor: undefined, confirmedBase: undefined } : {}), ...patch }
     : param));
   emit('update', { processParams: next } as Partial<ProcessNodeData>);
 }
@@ -591,9 +591,10 @@ function onParamOverwrite(index: number, event: Event): void {
   patchParam(index, checked && param
     ? {
         overwriteConfirmed: true,
+        confirmedBase: undefined,
         confirmedFor: { unit: param.unit ?? null, standardValue: param.standardValue ?? null, min: param.min ?? null, max: param.max ?? null },
       }
-    : { overwriteConfirmed: false, confirmedFor: undefined });
+    : { overwriteConfirmed: false, confirmedFor: undefined, confirmedBase: undefined });
 }
 function onParamUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
