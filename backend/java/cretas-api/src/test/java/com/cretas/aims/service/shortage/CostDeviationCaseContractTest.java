@@ -101,7 +101,8 @@ class CostDeviationCaseContractTest {
     private final ShortageCaseRepository cases = mock(ShortageCaseRepository.class);
     private final CostDeviationCaseDetailRepository details = mock(CostDeviationCaseDetailRepository.class);
     private final CostDeviationCaseWriter writer = new CostDeviationCaseWriter(cases,
-            mock(ShortageCaseEventRepository.class), details, mock(UserRepository.class));
+            mock(ShortageCaseEventRepository.class), details, mock(UserRepository.class),
+            mock(CostDeviationOwnerResolver.class, inv -> new CostDeviationOwnerResolver.Owner("finance_manager", null, "DEFAULT")));
 
     private Reading deviated() {
         return CostDeviationEvaluator.evaluateCost(variance("9", 0), FIVE);
@@ -192,7 +193,8 @@ class CostDeviationCaseContractTest {
         MaterialBalanceService balance = mock(MaterialBalanceService.class);
         CostDeviationCaseWriter w = mock(CostDeviationCaseWriter.class);
         var result = new CostDeviationScanService(settings, batches, mock(PlanCostVarianceService.class), balance,
-                mock(ProcessSecretLlmCostScope.class), w).scan("F1", "T");
+                mock(ProcessSecretLlmCostScope.class), w, mock(CostDeviationNotifier.class),
+                CostDeviationScanDefaults.none()).scan("F1", "T");
         assertThat(result.varianceConfigured()).isFalse();
         assertThat(result.balanceConfigured()).isFalse();
         assertThat(result.evaluated()).isZero();

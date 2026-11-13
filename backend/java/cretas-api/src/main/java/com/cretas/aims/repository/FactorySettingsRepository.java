@@ -101,6 +101,16 @@ public interface FactorySettingsRepository extends JpaRepository<FactorySettings
     int updateCostDeviationThresholds(@Param("factoryId") String factoryId, @Param("variance") java.math.BigDecimal variance,
                                       @Param("balance") java.math.BigDecimal balance);
 
+    /** 异常负责人配置 [成本岗位, 成本人, 平衡岗位, 平衡人] (V20261114_11), 各自可空。 */
+    @Query("SELECT f.costDeviationVarianceOwnerRole, f.costDeviationVarianceOwnerUserId, f.costDeviationBalanceOwnerRole, f.costDeviationBalanceOwnerUserId FROM FactorySettings f WHERE f.factoryId = :factoryId")
+    java.util.List<Object[]> findCostDeviationOwnersByFactoryId(@Param("factoryId") String factoryId);
+
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE FactorySettings f SET f.costDeviationVarianceOwnerRole = :vRole, f.costDeviationVarianceOwnerUserId = :vUser, f.costDeviationBalanceOwnerRole = :bRole, f.costDeviationBalanceOwnerUserId = :bUser WHERE f.factoryId = :factoryId")
+    int updateCostDeviationOwners(@Param("factoryId") String factoryId, @Param("vRole") String vRole,
+                                  @Param("vUser") Long vUser, @Param("bRole") String bRole, @Param("bUser") Long bUser);
+
     /** 配了任一告警阈值的工厂; 定时扫描只扫它们。 */
     @Query("SELECT f.factoryId FROM FactorySettings f WHERE f.costDeviationVariancePct IS NOT NULL OR f.costDeviationBalancePct IS NOT NULL")
     java.util.List<String> findFactoryIdsWithCostDeviationThresholds();
