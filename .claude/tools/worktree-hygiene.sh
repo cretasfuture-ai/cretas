@@ -58,14 +58,20 @@ if [ "$mode" = "--auto" ]; then
   trap 'rmdir "$lock" 2>/dev/null' EXIT
   echo "=== auto $(date '+%F %T') ==="
   sweep_shells() { # 清「空壳」: git worktree remove 删完内容却因目录被占用删不掉时留下的空目录。只删【未登记 + 完全为空】的, 非空的不碰。
-    local d reg n=0
+    local d reg n=0 held=0 seen_f="$common/worktree-hygiene.held-shells" seen="" now_held=""
+    # 同一个空壳每轮都报会刷屏 (11-13 实测 3 个空壳各报约 90 次): 首次报一行, 之后只计数; 删掉后从清单里移除
+    seen=$(cat "$seen_f" 2>/dev/null)
     reg=$(for x in "${paths[@]}"; do norm "$x"; done)
     for d in "$main_wt"/.claude/worktrees/*/ "${shell_candidates[@]:-}"; do
       d="${d%/}"; [ -n "$d" ] && [ -d "$d" ] || continue
       echo "$reg" | grep -Fxq "$(norm "$d")" && continue
       [ -z "$(ls -A "$d" 2>/dev/null)" ] || continue
-      rmdir "$d" 2>/dev/null && { echo "SWEPT 空壳 $d"; n=$((n+1)); } || echo "空壳仍被占用: $d"
+      if rmdir "$d" 2>/dev/null; then echo "SWEPT 空壳 $d"; n=$((n+1)); continue; fi
+      now_held+="$d"$'\n'; held=$((held+1))
+      printf '%s\n' "$seen" | grep -Fxq "$d" || echo "空壳仍被占用(首次): $d"
     done
+    printf '%s' "$now_held" > "$seen_f" 2>/dev/null
+    [ "$held" -gt 0 ] && echo "空壳仍被占用 共 $held 个 (首次之外不逐条重复)"
   }
   shell_candidates=()
   sweep_shells

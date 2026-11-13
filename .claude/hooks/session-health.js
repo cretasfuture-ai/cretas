@@ -33,7 +33,19 @@ const CONFIG = {
   hardTokens: (Number(process.env.SESSION_HEALTH_HARD_K) || 400) * 1000,   // L2
   maxCompactions: Number(process.env.SESSION_HEALTH_MAX_COMPACT) || 2,     // 压缩 >= 此数即 L2
   reRemindStep: 100 * 1000,
+  handoffNagStep: 30 * 1000, // 过硬线后再涨这么多还没交接文件, 回读提醒一次
 };
+
+// hardAt 之后 handoff/ 下有没有新写的交接 (任何名字的 .md, mtime >= hardAt)。返回 mtime(ms) 或 0
+function handoffWrittenSince(since) {
+  let names;
+  try { names = fs.readdirSync(HANDOFF_DIR); } catch (_) { return 0; }
+  for (const n of names) {
+    if (!n.endsWith('.md')) continue;
+    try { const m = fs.statSync(path.join(HANDOFF_DIR, n)).mtimeMs; if (m >= since) return m; } catch (_) { /* 刚删 */ }
+  }
+  return 0;
+}
 
 // organizer 识别: 读桌面应用本机会话记录, 按 cliSessionId 找标题 (与 archive-guard 同一数据源)
 function sessionStoreRoot() {
@@ -143,7 +155,23 @@ function main(input) {
   if (level > st.level) speak = true;
   else if (level === 2 && ctx >= st.remindedAt + CONFIG.reRemindStep && st.remindedAt > 0) speak = true;
 
-  if (speak) { st.level = level; st.remindedAt = ctx; }
+  if (speak) {
+    st.level = level; st.remindedAt = ctx;
+    if (level === 2) { st.hardAt = st.hardAt || Date.now(); st.handoffNagged = false; }
+  }
+
+  // 过硬线后回读一次: 上下文又涨了 handoffNagStep 还没看到交接文件就再提醒一次 (11-13 8 小时检查: 硬线提醒后的会话无从核对交接写没写)。
+  // 交接不一定按 <sid8>.md 命名 (organizer 常按批次名写), 所以 hardAt 之后 handoff/ 下任何新写的 .md 都算写了。
+  let nag = null;
+  if (!speak && level === 2 && st.hardAt && !st.handoffSeenAt && !st.handoffNagged && ctx >= st.remindedAt + CONFIG.handoffNagStep) {
+    const seen = handoffWrittenSince(st.hardAt);
+    if (seen) st.handoffSeenAt = seen;
+    else {
+      st.handoffNagged = true;
+      const hp = path.join(HANDOFF_DIR, sid.slice(0, 8) + '.md').replace(/\\/g, '/');
+      nag = `[session-health] 过硬线提醒后上下文又涨了 ${Math.round((ctx - st.remindedAt) / 1000)}K（现约 ${Math.round(ctx / 1000)}K），还没看到交接文件（${hp}，或硬线提醒之后 handoff/ 下新写的任何 .md）。做完手上这一步就写交接，然后换会话；已写在别处就把它挪到这个目录。`;
+    }
+  }
 
   // organizer: 第一次识别出来时注入一次交班流程; 过线提醒时也带上
   const now = Date.now();
@@ -159,7 +187,7 @@ function main(input) {
   }
   fs.writeFileSync(sp + '.tmp', JSON.stringify(st), 'utf8');
   fs.renameSync(sp + '.tmp', sp);
-  if (!speak) return brief;
+  if (!speak) return [brief, nag].filter(Boolean).join('\n') || null;
 
   const k = (n) => Math.round(n / 1000) + 'K';
   const handoff = path.join(HANDOFF_DIR, sid.slice(0, 8) + '.md').replace(/\\/g, '/');
