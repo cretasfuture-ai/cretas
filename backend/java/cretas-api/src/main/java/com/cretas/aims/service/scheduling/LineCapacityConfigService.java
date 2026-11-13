@@ -85,7 +85,7 @@ public class LineCapacityConfigService {
                         ? "请填写具体的包装单位 (如 袋、盒), 或 PIECE (件) / KG (千克) / BATCH (批)"
                         : "产能单位只能是 PIECE (件) / KG (千克) / BATCH (批)")
                         .withHint(allowPackage ? "包装单位要和计划下单用的单位一致"
-                                : "要按 袋 / 盒 等本厂单位配产能, 先在「业务阈值」把 production.capacity.package_unit_mode 改为 FACTORY_UNIT");
+                                : "要按 袋 / 盒 等本厂单位配产能, 先到「业务阈值配置」页的「生产」分类，找到描述以「按「袋」「盒」等包装单位下单的计划」开头的那一项，把取值改为 FACTORY_UNIT");
             }
             if (raw.length() > PACKAGE_UNIT_MAX) {
                 throw new BusinessException(400, "包装单位名太长 (最多 " + PACKAGE_UNIT_MAX + " 个字)");
