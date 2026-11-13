@@ -143,6 +143,10 @@ public class DataScopeRouteInterceptor implements HandlerInterceptor {
         if (request.getMethod().equals("GET") && Set.of("warehouse/deliveries/pending","warehouse/deliveries/history").contains(path)
                 && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.warehouse.WarehouseDeliveryController.class)
                 && rowScopeSupported((HandlerMethod) handler)) return true;
+        // The receiving list's status query filters purchase orders by creator (PurchaseController#listOrdersByStatus).
+        if (request.getMethod().equals("GET") && path.equals("purchase/orders/by-status")
+                && ((HandlerMethod) handler).getBeanType().equals(com.cretas.aims.controller.inventory.PurchaseController.class)
+                && rowScopeSupported((HandlerMethod) handler)) return true;
         // These retired endpoints only return 410 with a migration hint; they cannot create records.
         if (request.getMethod().equals("POST") && Set.of("finance/invoices/request", "finance/invoices/request-from-order").contains(path)) return true;
         // The payment service checks the locked source order before its first write.

@@ -29,7 +29,10 @@ describe('入库首页任务真值', () => {
   });
 
   it('实际请求来源任一路失败就显式报错，不用残缺结果冒充完整计数', () => {
-    expect(inbound).toContain('fulfilled.length !== requests.length');
+    // 数据范围拒绝 (DATA_SCOPE_UNSUPPORTED) 不算加载失败 (重试不会好, 改为说明);
+    // 其余任一路失败仍显式报错。行为由 integration/screens/WHInboundListScopeNotice.test.tsx 的 500 阴性对照守住。
+    expect(inbound).toContain('fulfilled.length + scopeRefusedCount !== requests.length');
+    expect(inbound).toContain("result.status === 'rejected' && isDataScopeRefusal(result.reason)");
     expect(inbound).toContain('入库任务加载失败');
   });
 

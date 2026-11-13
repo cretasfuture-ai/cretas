@@ -655,6 +655,22 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PurchaseOrder> getPurchaseOrdersByStatusOwnedBy(String factoryId, PurchaseOrderStatus status,
+                                                                        List<Long> owners, int page, int size) {
+        if (owners == null) {
+            throw new IllegalArgumentException("owners must not be null; whole-factory scope uses getPurchaseOrdersByStatus");
+        }
+        if (owners.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, 0L);
+        }
+        Page<PurchaseOrder> result = purchaseOrderRepository.findByFactoryIdAndStatusAndCreatedByInOrderByCreatedAtDesc(
+                factoryId, status, owners, PageRequest.of(page - 1, size));
+        hydrateSalesOrderNumbers(result.getContent());
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     public PageResponse<PurchaseOrder> getPurchaseOrdersBySalesOrder(String factoryId, String salesOrderId, int page, int size) {
         // W-12 fix: SO detail page's "关联采购" tab needs this filter
         PageRequest pageRequest = PageRequest.of(page - 1, size, Sort.by(Sort.Direction.DESC, "createdAt"));
