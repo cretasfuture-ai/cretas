@@ -26,7 +26,7 @@ import MenuSearch from './MenuSearch.vue';
 import { PINNED_MENU_LIMIT, pinnedMenuStorageKey, usePinnedMenu } from './pinnedMenu';
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
-  hasFactoryAnalyticsSidebarOptIn, canShowOptedInFactoryAnalytics,
+  isFactoryAnalyticsSidebarTurnedOff, isFactoryAnalyticsGroupHidden,
   getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
 } from './factoryMenuVisibility';
 import { secrecyFromFeatureConfig, secrecyHiddenMenuPaths } from '@/api/factorySecrecy';
@@ -54,7 +54,7 @@ const workspaceFactoryType = computed(() => resolveWorkspaceFactoryType(
 
 // R19: Canvas module enable/disable — hide disabled modules from sidebar
 const disabledModuleCodes = ref<string[]>([]);
-const factoryAnalyticsMenuEnabled = ref(false);
+const factoryAnalyticsTurnedOff = ref(false);
 const hiddenFactoryMenuPaths = ref<string[]>([]);
 const hiddenFactoryMenuModules = ref<string[]>([]);
 // Backend-authoritative assembly switch. Keep the default closed until the
@@ -121,7 +121,7 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 // `filteredMenu`) recompute automatically.
 async function fetchDisabledModules(factoryId: string) {
   const token = navigationVisibility.beginLoading();
-  factoryAnalyticsMenuEnabled.value = false;
+  factoryAnalyticsTurnedOff.value = false;
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
   hiddenFactoryMenuModules.value = [];
@@ -151,7 +151,7 @@ async function fetchDisabledModules(factoryId: string) {
       navigationVisibility.markErrorIfCurrent(token);
       return;
     }
-    factoryAnalyticsMenuEnabled.value = hasFactoryAnalyticsSidebarOptIn(featuresPayload.data);
+    factoryAnalyticsTurnedOff.value = isFactoryAnalyticsSidebarTurnedOff(featuresPayload.data);
     // 工厂级保密配置 (平台设置, 只读): 「工艺保密」不是明确开启 (=== true) 时隐藏工艺保密菜单
     const secrecyFlags = secrecyFromFeatureConfig(featuresPayload.data);
     hiddenFactoryMenuPaths.value = [
@@ -250,14 +250,14 @@ function canSeeMenuItem(item: MenuItem): boolean {
   const disabledSet = disabledSidebarModules.value;
   const currentRole = permissionStore.currentRole;
   const canAccess = permissionStore.canAccess(item.module);
-  const factoryAnalyticsVisible = canShowOptedInFactoryAnalytics(
-    factoryType, item.path, factoryAnalyticsMenuEnabled.value,
+  const factoryAnalyticsHidden = isFactoryAnalyticsGroupHidden(
+    factoryType, item.path, factoryAnalyticsTurnedOff.value,
   );
   const assemblyEnabled = factoryAssemblyEnabled.value;
   const hiddenByFactory = isFactoryMenuHidden(item.path, hiddenFactoryMenuPaths.value);
   const hiddenByModule = hiddenFactoryMenuModules.value.includes(item.module);
 
-  if (hiddenByFactory || hiddenByModule) return false;
+  if (hiddenByFactory || hiddenByModule || factoryAnalyticsHidden) return false;
 
   const itemFactoryType = item.requiresFactoryContext ? workspaceFactoryType.value : factoryType;
   if (item.allowedFactoryTypes && !item.allowedFactoryTypes.includes(itemFactoryType)) return false;
@@ -274,7 +274,7 @@ function canSeeMenuItem(item: MenuItem): boolean {
     }
   }
 
-  if (item.hideForFactoryTypes?.includes(factoryType) && !factoryAnalyticsVisible) {
+  if (item.hideForFactoryTypes?.includes(factoryType)) {
     return false;
   }
   // R19: Canvas module enable/disable — hide disabled modules
