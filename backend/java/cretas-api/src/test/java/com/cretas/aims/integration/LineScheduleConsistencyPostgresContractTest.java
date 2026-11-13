@@ -79,6 +79,12 @@ import static org.assertj.core.api.Assertions.assertThat;
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.PostgreSQLDialect",
         "management.endpoint.health.validate-group-membership=false",
         "spring.datasource.hikari.data-source-properties.stringtype=unspecified",
+        // 与生产 (application-pg-prod.properties / application-pg.properties) 同一套 JDBC 批量写配置: 批量路径上
+        // Hibernate 抛的是不带实体名的 StaleStateException, 冲突识别必须在这条路径上验 (独立审查 B1)
+        "spring.jpa.properties.hibernate.jdbc.batch_size=100",
+        "spring.jpa.properties.hibernate.order_inserts=true",
+        "spring.jpa.properties.hibernate.order_updates=true",
+        "spring.jpa.properties.hibernate.jdbc.batch_versioned_data=true",
         "spring.datasource.hikari.maximum-pool-size=8"
 })
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
