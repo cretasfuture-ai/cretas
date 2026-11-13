@@ -12,6 +12,7 @@ expect() { # name want_rc got_rc
 mk() { # dir
   mkdir -p "$1/.claude/rules" "$1/scripts/ci"
   printf '# CLAUDE\n- `a.md` - 常驻\n- `b.md` - 按路径\n' > "$1/CLAUDE.md"
+  printf '# AGENTS\nhi\n' > "$1/AGENTS.md"
   printf '# a\nhello\n' > "$1/.claude/rules/a.md"
   printf -- '---\npaths:\n  - "x/**"\n---\n# b\n' > "$1/.claude/rules/b.md"
   printf '#!/bin/sh\n' > "$1/scripts/run.sh"
@@ -37,6 +38,13 @@ printf 'scripts/run.sh\n' > "$T/ok/scripts/ci/exec-bit-allowlist.txt"
 "$PY" "$CHK" --root "$T/ok" --skip-rules --exec-bit-base no-such-ref >/dev/null 2>&1; expect "bad ref is rc=2" 2 $?
 # 8 没量到: 空仓库
 mkdir -p "$T/empty"; "$PY" "$CHK" --root "$T/empty" >/dev/null 2>&1; expect "no samples is rc=2" 2 $?
+# 8b AGENTS.md 字节预算: 超预算 rc=1 / 缺文件 rc=2 / 正常 rc=0
+"$PY" "$CHK" --root "$T/ok" --agents-budget 5 >/dev/null 2>&1; expect "agents over budget fails" 1 $?
+"$PY" "$CHK" --root "$T/ok" --agents-budget 100 >/dev/null 2>&1; expect "agents under budget passes" 0 $?
+mv "$T/ok/AGENTS.md" "$T/ok/AGENTS.md.bak"; "$PY" "$CHK" --root "$T/ok" >/dev/null 2>&1; expect "agents missing is rc=2" 2 $?
+mv "$T/ok/AGENTS.md.bak" "$T/ok/AGENTS.md"
+# 阳性对照: 违规输出里真的点名 AGENTS.md (不是被别的预算顶红)
+"$PY" "$CHK" --root "$T/ok" --agents-budget 5 2>&1 | grep -q "AGENTS.md .* > 预算 5"; expect "agents violation names AGENTS.md" 0 $?
 # 9 真实仓库当前状态通过
 "$PY" "$CHK" --root "$ROOT_DIR" >/dev/null 2>&1; expect "real repo passes" 0 $?
 [ "$fails" = 0 ] && echo "PASS: check_resident_rules" || { echo "FAIL: $fails"; exit 1; }
