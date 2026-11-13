@@ -133,6 +133,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowCcpMaterializer ccpMaterializer;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowProcessParamMaterializer processParamMaterializer;
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ProductProcessWorkflowDTO> getEditorDefinition(
@@ -636,6 +639,10 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
         if (ccpMaterializer != null) {
             ccpMaterializer.materialize(factoryId, productTypeId, definition);
+        }
+        // 画布工序上的工艺标准参数(AI 听来的油温范围等) → 工序 customFieldSchema; 同样只在发布(=人已确认)时写
+        if (processParamMaterializer != null) {
+            processParamMaterializer.materialize(factoryId, definition);
         }
         draft.setStatus(ProductProcessWorkflow.Status.PUBLISHED);
         draft.setUnitReviewRequired(false);

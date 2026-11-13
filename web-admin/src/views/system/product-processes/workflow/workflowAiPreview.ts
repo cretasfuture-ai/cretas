@@ -22,7 +22,7 @@ const labels: Record<string, string> = {
   subsequentPotRatio: '后续锅比例', injectionAmount: '注射量',
   inputShares: '主料份额', percent: '份额 %', reworkSources: '回料来源', output: '回料产出', rework: '是否回料',
   costAllocationMethod: '成本分摊方式', fixedCostShare: '成本分摊份额 %',
-  ccps: '控制点', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
+  ccps: '控制点', processParams: '工艺参数', standardValue: '标准值', min: '下限', max: '上限', hazardType: '危害类型', criticalLimitMin: '下限', criticalLimitMax: '上限',
 };
 const owns = (value: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(value, key);
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);

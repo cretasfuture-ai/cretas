@@ -187,6 +187,10 @@ public class CanvasAIController {
                     { "name": "<CCP name, e.g. 中心温度>", "hazardType": "BIOLOGICAL"|"CHEMICAL"|"PHYSICAL"|null,
                       "criticalLimitMin": <number or null>, "criticalLimitMax": <number or null>, "unit": "<℃/min/...>"|null }
                   ],
+                  "processParams": [
+                    { "label": "<process parameter name, e.g. 油温/炒制时间/绞碎孔径>", "unit": "<℃/min/mm/%/...>"|null,
+                      "standardValue": <number or null>, "min": <number or null>, "max": <number or null> }
+                  ],
                   "seasonings": [
                     { "name": "<seasoning/auxiliary material name>", "dosagePerKgG": <grams per kg of input>,
                       "subsequentPotRatio": <optional 0-100, ONLY for 熟制 steps> }
@@ -224,6 +228,13 @@ public class CanvasAIController {
             - "ccps" (optional) = 关键控制点 on this step (e.g. "卤制要测中心温度" → {"name":"中心温度"}).
               ⚠️ NEVER invent limits, units or hazard types the user did not say. Use null for anything not
               stated — the frontend marks null fields 待确认 and a person must fill them before publishing.
+            - "processParams" (optional) = 工艺标准参数 the user states for this step as numbers
+              (e.g. "油温 150–160℃" → {"label":"油温","unit":"℃","min":150,"max":160};
+              "炒制 20 分钟" → {"label":"炒制时间","unit":"min","standardValue":20}). A range gives min/max;
+              a single figure gives standardValue. Convert unit words (度/摄氏度→℃, 分钟→min). This is NOT a
+              CCP: use "ccps" only when the user says 关键控制点/CCP/安全限值. ⚠️ NEVER invent numbers or
+              units the user did not say; use null — the frontend marks incomplete params 待确认 and
+              nothing is written to the work process until a person confirms and publishes.
             - "seasonings" (optional) = 调料/辅料 INPUT amounts for this step. dosagePerKgG MUST be > 0.
             - "subsequentPotRatio" (0-100) is ONLY meaningful on 熟制 steps; "injectionAmount" (> 0) is
               ONLY meaningful on 注射 steps. Do NOT emit them on other步骤 —— the frontend rejects
