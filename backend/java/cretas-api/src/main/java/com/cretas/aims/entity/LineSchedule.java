@@ -125,6 +125,15 @@ public class LineSchedule {
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
+    /**
+     * 乐观锁版本号 (V20261113_83): 两个人同时改同一条排程, 后提交的拿到冲突 (409「排程已被别人修改，请刷新后再改」),
+     * 不再后写覆盖先写。批量作废的 JPQL UPDATE 不经过实体, 在语句里自己 +1 (LineScheduleRepository 等三处)。
+     * 新建时为 null, 持久化时 Hibernate 置 0。
+     */
+    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
     @com.fasterxml.jackson.annotation.JsonIgnore
     @OneToMany(mappedBy = "schedule", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
     private List<WorkerAssignment> workerAssignments;

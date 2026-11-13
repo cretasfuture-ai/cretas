@@ -497,12 +497,62 @@ public class GlobalExceptionHandler {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleOptimisticLockException(Exception e) {
         log.warn("乐观锁冲突: {}", e.getMessage());
+        if (isLineScheduleConflict(e)) {
+            return ApiResponse.errorWithCode(
+                    409,
+                    "OPTIMISTIC_LOCK_CONFLICT",
+                    LINE_SCHEDULE_CONFLICT_MESSAGE,
+                    "请刷新排程，看过别人的修改后再改",
+                    "warning");
+        }
         return ApiResponse.errorWithCode(
                 409,
                 "OPTIMISTIC_LOCK_CONFLICT",
                 "数据已被其他用户修改，请刷新后重试",
                 "请刷新页面查看最新数据后再编辑",
                 "warning");
+    }
+
+    /** 产线排程 (line_schedules, @Version) 被别人先改了: 给用户看得懂的一句。 */
+    public static final String LINE_SCHEDULE_CONFLICT_MESSAGE = "排程已被别人修改，请刷新后再改";
+
+    /**
+     * JDBC 批量写 (生产 hibernate.jdbc.batch_size=100 + batch_versioned_data=true) 下 Hibernate 抛的是不带实体名的
+     * {@link org.hibernate.StaleStateException}, 只在消息里带执行的 SQL:
+     * {@code "Batch update returned unexpected row count ...; statement executed: update line_schedules set ... where id=? and version=?"}。
+     * 表名取实体的 {@code @Table}, 不另写一份; 表名后必须紧跟 {@code set}, 前缀相同的别的表 (如 line_schedules_xxx) 不算。
+     */
+    private static final java.util.regex.Pattern LINE_SCHEDULE_BATCH_UPDATE = java.util.regex.Pattern.compile(
+            "statement executed:\\s*update\\s+\"?"
+                    + java.util.regex.Pattern.quote(com.cretas.aims.entity.LineSchedule.class
+                            .getAnnotation(jakarta.persistence.Table.class).name())
+                    + "\"?\\s+set\\s",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 冲突的是不是排程行: 看异常带的实体名 / 实体、原因链上 Hibernate 的 StaleObjectStateException,
+     * 以及批量写路径上不带实体名的 StaleStateException (按它执行的 UPDATE 语句的表名认)。
+     */
+    public static boolean isLineScheduleConflict(Throwable e) {
+        String lineSchedule = com.cretas.aims.entity.LineSchedule.class.getName();
+        for (Throwable t = e; t != null; t = t.getCause() == t ? null : t.getCause()) {
+            if (t instanceof ObjectOptimisticLockingFailureException ex
+                    && lineSchedule.equals(ex.getPersistentClassName())) {
+                return true;
+            }
+            if (t instanceof OptimisticLockException ex
+                    && ex.getEntity() instanceof com.cretas.aims.entity.LineSchedule) {
+                return true;
+            }
+            if (t instanceof org.hibernate.StaleObjectStateException ex && lineSchedule.equals(ex.getEntityName())) {
+                return true;
+            }
+            if (t instanceof org.hibernate.StaleStateException ex && !(t instanceof org.hibernate.StaleObjectStateException)
+                    && ex.getMessage() != null && LINE_SCHEDULE_BATCH_UPDATE.matcher(ex.getMessage()).find()) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
