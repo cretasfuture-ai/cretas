@@ -8,6 +8,7 @@ import com.cretas.aims.entity.conversation.ConversationSession.SessionStatus;
 import com.cretas.aims.entity.learning.LearnedExpression;
 import com.cretas.aims.repository.config.AIIntentConfigRepository;
 import com.cretas.aims.repository.conversation.ConversationSessionRepository;
+import com.cretas.aims.service.ClarificationChoiceMatcher;
 import com.cretas.aims.service.ConversationService;
 import com.cretas.aims.service.ExpressionLearningService;
 import com.cretas.aims.service.consent.LlmEgressGuard;
@@ -198,6 +199,79 @@ public class ConversationServiceImpl implements ConversationService {
 
     @Override
     @Transactional
+    public String startClarificationChoice(String factoryId, Long userId, String originalInput,
+                                           List<CandidateInfo> options, String shownMessage) {
+        if (factoryId == null || userId == null || originalInput == null || originalInput.isBlank()
+                || options == null || options.isEmpty()) {
+            return null;
+        }
+        try {
+            List<CandidateIntent> candidates = options.stream()
+                    .filter(o -> o != null && o.getIntentCode() != null && o.getIntentName() != null)
+                    .map(o -> CandidateIntent.builder().intentCode(o.getIntentCode())
+                            .intentName(o.getIntentName()).confidence(o.getConfidence()).build())
+                    .collect(Collectors.toList());
+            if (candidates.isEmpty()) {
+                return null;
+            }
+            ConversationSession session = ConversationSession.createForClarificationChoice(
+                    factoryId, userId, originalInput, candidates, shownMessage);
+            session.setMaxRounds(maxRounds);
+            session.setTimeoutMinutes(timeoutMinutes);
+            ConversationSession saved = sessionRepository.save(session);
+            String id = saved != null && saved.getSessionId() != null ? saved.getSessionId() : session.getSessionId();
+            log.info("澄清选项会话已创建: sessionId={}, options={}", id,
+                    candidates.stream().map(CandidateIntent::getIntentCode).toList());
+            return id;
+        } catch (RuntimeException e) {
+            log.warn("创建澄清选项会话失败, 本次澄清不带会话: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    @Override
+    @Transactional
+    public Optional<ClarificationPick> resolveClarificationChoice(
+            String factoryId, Long userId, String sessionId, String userReply) {
+        if (sessionId == null || sessionId.isBlank() || userReply == null || userReply.isBlank()) {
+            return Optional.empty();
+        }
+        Optional<ConversationSession> found =
+                sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
+        if (found.isEmpty()) {
+            return Optional.empty();
+        }
+        ConversationSession session = found.get();
+        if (!session.isClarificationChoice() || session.getStatus() != SessionStatus.ACTIVE) {
+            return Optional.empty();
+        }
+        if (session.isExpired()) {
+            session.timeout();
+            sessionRepository.save(session);
+            return Optional.empty();
+        }
+        List<CandidateIntent> candidates = session.getCandidates();
+        int index = ClarificationChoiceMatcher.match(userReply, candidates);
+        if (index < 0) {
+            // 没在选: 用户换话了, 旧选项作废, 免得之后一个「1」被它截走
+            session.cancel();
+            sessionRepository.save(session);
+            return Optional.empty();
+        }
+        String code = candidates.get(index).getIntentCode();
+        session.addUserMessage(userReply);
+        session.complete(code, 1.0);
+        sessionRepository.save(session);
+        log.info("澄清选项已选中: session={}, reply={}, intent={}", sessionId, truncate(userReply, 30), code);
+        return Optional.of(ClarificationPick.builder()
+                .intentCode(code)
+                .originalInput(session.getOriginalInput())
+                .candidateCodes(candidates.stream().map(CandidateIntent::getIntentCode).toList())
+                .build());
+    }
+
+    @Override
+    @Transactional
     public ConversationResponse continueConversation(
             String factoryId, Long userId, String sessionId, String userReply) {
         log.info("继续多轮对话: session={}, reply={}", sessionId, truncate(userReply, 50));
@@ -234,6 +308,19 @@ public class ConversationServiceImpl implements ConversationService {
                     .status(session.getStatus())
                     .completed(session.getStatus() == SessionStatus.COMPLETED)
                     .message(getStatusMessage(session.getStatus()))
+                    .build();
+        }
+
+        // 澄清选项会话只认「选哪一项」(resolveClarificationChoice); 走到这里说明没选 → 不交给 LLM 多轮聊天,
+        // 返回 CANCELLED 让调用方当一句新话正常识别
+        if (session.isClarificationChoice()) {
+            session.cancel();
+            sessionRepository.save(session);
+            return ConversationResponse.builder()
+                    .sessionId(sessionId)
+                    .status(SessionStatus.CANCELLED)
+                    .completed(false)
+                    .message("澄清选项已作废")
                     .build();
         }
 

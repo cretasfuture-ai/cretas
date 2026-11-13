@@ -76,6 +76,25 @@ public interface ConversationService {
     }
 
     /**
+     * 记下一次 NEED_CLARIFICATION 给用户列的选项 (按用户看到的序号顺序) 和原话, 返回会话 id。
+     * 之后用户回「1」「完成工序」时由 {@link #resolveClarificationChoice} 对上号。
+     * 不取消用户已有的会话 (进行中的缺参任务不能被一次澄清冲掉)。建不出来返回 null (调用方照旧不带会话)。
+     */
+    default String startClarificationChoice(String factoryId, Long userId, String originalInput,
+                                            List<CandidateInfo> options, String shownMessage) {
+        return null;
+    }
+
+    /**
+     * 这句回复是不是在回答某个澄清选项会话。对上: 会话记为完成并返回「选中的意图 + 原话」, 调用方按
+     * 「点了按钮」处理; 没对上 (用户换话了): 会话作废, 返回空。不是澄清选项会话 / 找不到 / 过期 → 空。
+     */
+    default Optional<ClarificationPick> resolveClarificationChoice(
+            String factoryId, Long userId, String sessionId, String userReply) {
+        return Optional.empty();
+    }
+
+    /**
      * 继续多轮对话
      *
      * 自动根据会话模式 (INTENT_RECOGNITION 或 PARAMETER_COLLECTION) 处理用户回复。
@@ -186,6 +205,17 @@ public interface ConversationService {
         private String intentName;
         private Double confidence;
         private String description;
+    }
+
+    /** 澄清选择的结果: 选中的意图、当时的原话、当时列出的全部候选码 (给学习样本用)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    class ClarificationPick {
+        private String intentCode;
+        private String originalInput;
+        private List<String> candidateCodes;
     }
 
     /**
