@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
  * 全局关 + 名单含 A → A 开、B 关; 全局关 + 名单空 → 全关; 全局开 → 都开。
  * 除了判定本身, 还验证真实入口 (tryResume / summary) 对未入名单的工厂一次仓库都不碰。
  */
-class ConversationTaskStateFactoryAllowlistTest {
+class ConversationTaskStateFactoryAllowlistContractTest {
 
     ConversationSessionRepository repo;
     ConversationTaskStateService service;
