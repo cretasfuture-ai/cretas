@@ -44,9 +44,15 @@ class InventoryFreezeToolTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
+    @Mock
+    private jakarta.persistence.EntityManager entityManager;
+
     @BeforeEach
     void setUp() throws Exception {
         injectField(tool, "objectMapper", objectMapper);
+        // 冻结走真的扣留服务 (#1590 遗留 M5: 冻结 / 解冻唯一实现), 仓储与实体管理器是桩
+        injectField(tool, "holdService",
+                new com.cretas.aims.service.quality.release.MaterialBatchHoldService(materialBatchRepository, entityManager));
     }
 
     @Test
@@ -86,7 +92,11 @@ class InventoryFreezeToolTest {
         mb.setStatus(status);
         mb.setReceiptQuantity(new BigDecimal("50"));
         mb.setQuantityUnit("kg");
+        mb.setId("MB-" + BATCH);
         when(materialBatchRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, BATCH))
+                .thenReturn(Optional.of(mb));
+        // 冻结在锁内重新加载 (MaterialBatchHoldService.freeze); 预览不走这一步
+        org.mockito.Mockito.lenient().when(materialBatchRepository.findByIdAndFactoryIdForUpdate("MB-" + BATCH, FACTORY_ID))
                 .thenReturn(Optional.of(mb));
         return mb;
     }
@@ -152,6 +162,10 @@ class InventoryFreezeToolTest {
         MaterialBatch mb = batchIn(MaterialBatchStatus.FROZEN);
         invoke("doExecute", FACTORY_ID, Map.of("batchNumber", BATCH, "reason", "召回"), ctx());
         assertTrue(mb.getStatus().blocksProduction(), "实际状态 " + mb.getStatus());
+        // M5: 冻结前是冻品 ⇒ 记下来, 放行时回冻品 (不是一律放成「可用」)
+        assertEquals(MaterialBatchStatus.FROZEN, mb.getHoldPriorStatus());
+        assertEquals(MaterialBatchStatus.FROZEN, com.cretas.aims.service.quality.release.MaterialBatchHoldService
+                .releaseTarget(mb, MaterialBatchStatus.AVAILABLE));
         verify(materialBatchRepository, times(1)).save(any(MaterialBatch.class));
     }
 
