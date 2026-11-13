@@ -11,7 +11,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @DisplayName("澄清选项回复匹配: 序号 / 选项名认, 新话不认")
-class ClarificationChoiceMatcherTest {
+class ClarificationChoiceMatcherContractTest {
 
     private static final List<CandidateIntent> OPTIONS = List.of(
             CandidateIntent.builder().intentCode("WORK_PROCESS_TASK_COMPLETE").intentName("完成工序").build(),

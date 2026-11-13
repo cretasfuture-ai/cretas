@@ -211,7 +211,9 @@ public class ClarificationCandidateService {
         if (conversationService == null || request == null || userId == null
                 || (request.getIntentCode() != null && !request.getIntentCode().isBlank())
                 || request.getSessionId() == null || request.getSessionId().isBlank()
-                || request.getUserInput() == null || request.getUserInput().isBlank()) {
+                || request.getUserInput() == null || request.getUserInput().isBlank()
+                // 长句不可能是在选序号/选项名: 不查会话表
+                || request.getUserInput().strip().length() > com.cretas.aims.service.ClarificationChoiceMatcher.MAX_REPLY_CHARS) {
             return false;
         }
         java.util.Optional<com.cretas.aims.service.ConversationService.ClarificationPick> pick;

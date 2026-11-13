@@ -17,6 +17,8 @@ import java.util.regex.Pattern;
 public final class ClarificationChoiceMatcher {
 
     static final int MAX_EXTRA_CHARS = 4;
+    /** 选项名 (≤3 项、各自很短) + 修饰字之上的回复必不是在选, 调用方据此免查会话。 */
+    public static final int MAX_REPLY_CHARS = 20;
     private static final Pattern PUNCT = Pattern.compile("[\\s。．.,，、!！?？:：;；~～]+");
     private static final Pattern ORDINAL = Pattern.compile(
             "^(?:我)?(?:就)?(?:选择|选|要|是)?第?([0-9一二三四五])(?:个|项|条|号)?(?:吧|啊|呀|的)?$");

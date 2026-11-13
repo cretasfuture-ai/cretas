@@ -356,15 +356,6 @@ public class IntentExecutionOrchestrator {
             return sessionAdmissionDeniedResponse();
         }
 
-        // 澄清选项的文字回复 (「1」「完成工序」) = 点了那个按钮: 换成「原话 + 选中的意图码」, 走下面的显式意图路径
-        // (SSE 入口同一个方法, 见 ClarificationCandidateService.applyChoicePick)
-        if (!factoryPackConstrained && hasNamedSession(request)
-                && hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())
-                && ClarificationCandidateService.applyChoicePick(conversationService, request, factoryId, userId)) {
-            log.info("澄清选项文字回复已按选中处理: session={}, intent={}",
-                    request.getSessionId(), request.getIntentCode());
-        }
-
         // 0. 显式意图代码
         if (request.getIntentCode() != null && !request.getIntentCode().isEmpty()) {
             return factoryPackConstrained
@@ -552,6 +543,17 @@ public class IntentExecutionOrchestrator {
                         factoryId, phraseRequest, userId, userRole, factoryPackRoute);
                 }
             }
+        }
+
+        // 澄清选项的文字回复 (「1」「完成工序」) = 点了那个按钮: 换成「原话+选中的意图码」走显式意图路径。
+        // 放在短语快捷通道之后: 短语命中的整句话已在上面返回, 不多查一次会话表 (开关关时执行顺序与查询量不变);
+        // 「1」「第一个」这类序号不在短语表里, 照样走到这里 (SSE 入口同一个方法, 见 applyChoicePick)。
+        if (!factoryPackConstrained && !negationVetoWrite && hasNamedSession(request)
+                && hasTrustedConversationIdentity(factoryId, userId, request.getSessionId())
+                && ClarificationCandidateService.applyChoicePick(conversationService, request, factoryId, userId)) {
+            log.info("澄清选项文字回复已按选中处理: session={}, intent={}",
+                    request.getSessionId(), request.getIntentCode());
+            return executeWithExplicitIntent(factoryId, request, userId, userRole);
         }
 
         // Parameter-filling continuations stay in Java when the semantic-first
