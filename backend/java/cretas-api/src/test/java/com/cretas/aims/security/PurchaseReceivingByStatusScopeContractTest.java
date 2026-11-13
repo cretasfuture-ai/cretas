@@ -122,7 +122,87 @@ class PurchaseReceivingByStatusScopeContractTest {
         verify(service, never()).getPurchaseOrdersByStatusOwnedBy(anyString(), any(), anyList(), anyInt(), anyInt());
     }
 
+    /**
+     * Each half of the guard must hold on its own: a PurchaseController method without the annotation
+     * (bean type right, annotation missing) and an annotated method on another bean (annotation right,
+     * bean type wrong) are both refused on the by-status path.
+     */
+    @Test
+    void beanTypeAndAnnotationAreEachRequired() throws Exception {
+        scope(DataScope.SELF, List.of(1555L));
+        var interceptor = new DataScopeRouteInterceptor(resolver, jdbc);
+
+        HandlerMethod unannotatedOnPurchaseController = new HandlerMethod(controller(mock(PurchaseService.class)),
+                PurchaseController.class.getMethod("listOrders", String.class, String.class, int.class, int.class,
+                        jakarta.servlet.http.HttpServletRequest.class));
+        assertThat(unannotatedOnPurchaseController.hasMethodAnnotation(RowScopeSupported.class)).isFalse();
+        assertThatThrownBy(() -> interceptor.preHandle(get("purchase/orders/by-status"), new MockHttpServletResponse(),
+                unannotatedOnPurchaseController))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(403);
+                    assertThat(e.getErrorCode()).isEqualTo(DataScopeRouteInterceptor.DATA_SCOPE_UNSUPPORTED);
+                });
+
+        HandlerMethod annotatedOnOtherBean = new HandlerMethod(new AnnotatedProbe(), AnnotatedProbe.class.getMethod("run"));
+        assertThatThrownBy(() -> interceptor.preHandle(get("purchase/orders/by-status"), new MockHttpServletResponse(),
+                annotatedOnOtherBean))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
+    }
+
+    @Test
+    void postOnTheByStatusPathIsStillRefusedForScopedUsers() throws Exception {
+        scope(DataScope.SELF, List.of(1555L));
+        var interceptor = new DataScopeRouteInterceptor(resolver, jdbc);
+        HandlerMethod byStatus = new HandlerMethod(controller(mock(PurchaseService.class)), byStatusMethod());
+        MockHttpServletRequest post = get("purchase/orders/by-status");
+        post.setMethod("POST");
+
+        assertThatThrownBy(() -> interceptor.preHandle(post, new MockHttpServletResponse(), byStatus))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(403);
+                    assertThat(e.getErrorCode()).isEqualTo(DataScopeRouteInterceptor.DATA_SCOPE_UNSUPPORTED);
+                });
+    }
+
+    /** CUSTOM scope resolves to an empty creator chain: real service returns an empty page and never queries. */
+    @Test
+    void customScopeWithEmptyChainReturnsEmptyPageWithoutAnyFactoryQuery() throws Exception {
+        var orders = mock(com.cretas.aims.repository.inventory.PurchaseOrderRepository.class);
+        var service = new com.cretas.aims.service.inventory.impl.PurchaseServiceImpl(orders,
+                mock(com.cretas.aims.repository.inventory.PurchaseOrderItemRepository.class),
+                mock(com.cretas.aims.repository.inventory.PurchaseReceiveRecordRepository.class),
+                mock(com.cretas.aims.repository.SupplierRepository.class), null, null, null, null, null, null);
+        PurchaseController controller = controller(service);
+        scope(DataScope.CUSTOM, List.of());
+        MockHttpServletRequest request = get("purchase/orders/by-status");
+        bind(request);
+
+        ApiResponse<PageResponse<PurchaseOrder>> response = controller.listOrdersByStatus(
+                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, 1, 20, "Bearer t", request);
+
+        assertThat(response.getData().getContent()).isEmpty();
+        assertThat(response.getData().getTotalElements()).isZero();
+        assertThat(response.getActionHint()).isEqualTo(PurchaseController.SCOPED_RECEIVING_HINT);
+        org.mockito.Mockito.verifyNoInteractions(orders);
+    }
+
+    /** Missing row-scope component inside a request fails closed (503) instead of listing the whole factory. */
+    @Test
+    void missingRowScopeComponentFailsClosedWith503() {
+        PurchaseService service = mock(PurchaseService.class);
+        PurchaseController controller = new PurchaseController(service, null, null, null, null, null, null);
+        MockHttpServletRequest request = get("purchase/orders/by-status");
+        bind(request);
+
+        assertThatThrownBy(() -> controller.listOrdersByStatus(
+                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, 1, 20, "Bearer t", request))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
+        org.mockito.Mockito.verifyNoInteractions(service);
+    }
+
     static class UnscopedProbe { public void run() {} }
+
+    static class AnnotatedProbe { @RowScopeSupported public void run() {} }
 
     private PurchaseController controller(PurchaseService service) {
         PurchaseController controller = new PurchaseController(service, null, null, null, null, null, null);
