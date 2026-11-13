@@ -177,6 +177,8 @@ export interface WorkflowProcessParam {
   max?: number | null;
   /** 人在画布上确认「覆盖工序已有的标准」；没有它，发布会在要改已有值时 409。 */
   overwriteConfirmed?: boolean;
+  /** 勾选那一刻的数值快照；之后数值/单位任何改动都让确认作废（后端同样比对）。 */
+  confirmedFor?: { unit?: string | null; standardValue?: number | null; min?: number | null; max?: number | null };
 }
 
 export function processParamsOf(data: Record<string, unknown> | undefined): WorkflowProcessParam[] {

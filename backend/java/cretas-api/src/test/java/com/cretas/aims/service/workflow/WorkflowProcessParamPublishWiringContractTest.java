@@ -44,6 +44,16 @@ class WorkflowProcessParamPublishWiringContractTest {
     }
 
     @Test
+    void publishServiceHasTheMaterializerInjectedByAutowiring() throws Exception {
+        // required=false 时没注入会静默跳过落库: 至少钉住字段存在、类型对、带 @Autowired
+        var field = com.cretas.aims.service.impl.ProductProcessWorkflowServiceImpl.class
+                .getDeclaredField("processParamMaterializer");
+        assertTrue(field.getType() == WorkflowProcessParamMaterializer.class);
+        assertTrue(field.isAnnotationPresent(org.springframework.beans.factory.annotation.Autowired.class),
+                "字段必须带 @Autowired, 否则 Spring 不会注入, 落库静默不发生");
+    }
+
+    @Test
     void theMaterializerIsAnInjectedSpringComponent() throws Exception {
         String src = read("service/workflow/WorkflowProcessParamMaterializer.java");
         assertTrue(src.contains("@Component"), "必须是 Spring 组件, 否则 Autowired(required=false) 永远是 null、落库静默不发生");

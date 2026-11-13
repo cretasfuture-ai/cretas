@@ -572,7 +572,11 @@ function onCcpNumber(index: number, key: 'criticalLimitMin' | 'criticalLimitMax'
 }
 const paramList = computed(() => processParamsOf(props.data as unknown as Record<string, unknown>));
 function patchParam(index: number, patch: Partial<WorkflowProcessParam>): void {
-  const next = paramList.value.map((param, i) => (i === index ? { ...param, ...patch } : param));
+  const editsValue = ['unit', 'standardValue', 'min', 'max'].some((k) => k in patch);
+  const next = paramList.value.map((param, i) => (i === index
+    // 改数值/单位 = 之前的「确认覆盖」作废, 要重新勾
+    ? { ...param, ...(editsValue ? { overwriteConfirmed: false, confirmedFor: undefined } : {}), ...patch }
+    : param));
   emit('update', { processParams: next } as Partial<ProcessNodeData>);
 }
 function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', event: Event): void {
@@ -582,7 +586,14 @@ function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', even
   patchParam(index, { [key]: Number.isFinite(parsed) ? parsed : null });
 }
 function onParamOverwrite(index: number, event: Event): void {
-  patchParam(index, { overwriteConfirmed: (event.target as HTMLInputElement | null)?.checked === true });
+  const checked = (event.target as HTMLInputElement | null)?.checked === true;
+  const param = paramList.value[index];
+  patchParam(index, checked && param
+    ? {
+        overwriteConfirmed: true,
+        confirmedFor: { unit: param.unit ?? null, standardValue: param.standardValue ?? null, min: param.min ?? null, max: param.max ?? null },
+      }
+    : { overwriteConfirmed: false, confirmedFor: undefined });
 }
 function onParamUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();

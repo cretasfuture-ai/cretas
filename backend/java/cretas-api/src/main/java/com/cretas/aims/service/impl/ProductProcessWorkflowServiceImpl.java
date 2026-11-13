@@ -642,7 +642,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         if (processParamMaterializer != null) {
             processParamMaterializer.materialize(factoryId, productTypeId, definition,
                     find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED)
-                            .map(this::toDTO).orElse(null));
+                            .map(this::toDTO).orElse(null), operatorId);
         }
         // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
         if (ccpMaterializer != null) {

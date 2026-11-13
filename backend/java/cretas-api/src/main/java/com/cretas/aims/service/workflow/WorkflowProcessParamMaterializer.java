@@ -6,6 +6,7 @@ import com.cretas.aims.entity.WorkProcess;
 import com.cretas.aims.entity.workprocess.WorkProcessCustomFieldSchema;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.ProductProcessWorkflowRepository;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.WorkProcessRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,10 +54,11 @@ public class WorkflowProcessParamMaterializer {
 
     private final WorkProcessRepository repository;
     private final ProductProcessWorkflowRepository workflowRepository;
+    private final ProductTypeRepository productTypeRepository;
 
     /** @return 写入(新增或更新)的参数条数 */
     public int materialize(String factoryId, String productTypeId, ProductProcessWorkflowDTO definition,
-                           ProductProcessWorkflowDTO previousPublished) {
+                           ProductProcessWorkflowDTO previousPublished, Long operatorId) {
         int written = 0;
         List<String> unconfirmed = new ArrayList<>();
         Set<String> touchedProcessIds = new LinkedHashSet<>();
@@ -102,15 +104,15 @@ public class WorkflowProcessParamMaterializer {
                     Object old = field.get(k);
                     if (v != null && old != null && !sameValue(old, v)) diffs.add(k + " " + old + "→" + v);
                 }
-                boolean confirmed = Boolean.TRUE.equals(param.get(OVERWRITE_CONFIRMED_KEY));
+                boolean confirmed = confirmationStillValid(param);
                 if (!diffs.isEmpty() && !confirmed) {
                     unconfirmed.add("工序「" + processName(node) + "」参数「" + label + "」: " + String.join("，", diffs));
                     touchedProcessIds.add(wp);
                     continue;
                 }
                 if (!diffs.isEmpty()) {
-                    log.warn("PROCESS_PARAM_OVERWRITE_CONFIRMED factory={} product={} workProcess={} label={} diffs={}",
-                            factoryId, productTypeId, wp, label, diffs);
+                    log.warn("PROCESS_PARAM_OVERWRITE_CONFIRMED factory={} operator={} product={} workProcess={} label={} diffs={}",
+                            factoryId, operatorId, productTypeId, wp, label, diffs);
                 }
                 for (String k : WorkProcessCustomFieldSchema.STANDARD_KEYS) {
                     Object v = normalized(param.get(k));
@@ -136,6 +138,25 @@ public class WorkflowProcessParamMaterializer {
             log.info("workflow publish materialized {} process params factory={}", written, factoryId);
         }
         return written;
+    }
+
+    /**
+     * 确认只对「人勾选那一刻看到的数值」有效: 勾选时前端记下 confirmedFor(单位/标准值/上下限快照),
+     * 之后数值/单位任何一处改动(含旧勾留存)快照就对不上, 确认作废, 必须重新勾。
+     * AI 补丁路径会把这两个键丢弃, 所以它打不出一个有效确认。
+     * 局限: 快照绑的是画布上的拟写入值, 不是工序在勾选时的现值; 勾选之后到发布之前有人在工序管理页改了现值, 不会重新要求确认。
+     */
+    private static boolean confirmationStillValid(Map<?, ?> param) {
+        if (!Boolean.TRUE.equals(param.get(OVERWRITE_CONFIRMED_KEY))
+                || !(param.get("confirmedFor") instanceof Map<?, ?> snapshot)) {
+            return false;
+        }
+        for (String k : WorkProcessCustomFieldSchema.STANDARD_KEYS) {
+            Object a = normalized(snapshot.get(k));
+            Object b = normalized(param.get(k));
+            if (a == null ? b != null : (b == null || !sameValue(a, b))) return false;
+        }
+        return true;
     }
 
     /** 同一工序节点上同名参数, 与上一次发布时画布上的值完全一样 = 本次没改, 不写。 */
@@ -178,7 +199,17 @@ public class WorkflowProcessParamMaterializer {
             log.warn("process param other-product lookup failed factory={}: {}", factoryId, e.toString());
             return "（其他产品是否共用该工序未能查出，请人工核对）";
         }
-        return products.isEmpty() ? "" : "。同样使用这些工序的其他已发布产品: " + String.join("、", products);
+        if (products.isEmpty()) return "";
+        List<String> names = new ArrayList<>();
+        try {
+            Map<String, String> byId = new LinkedHashMap<>();
+            productTypeRepository.findByFactoryIdAndIdIn(factoryId, products)
+                    .forEach(p -> byId.put(p.getId(), p.getName()));
+            for (String id : products) names.add(byId.getOrDefault(id, id));
+        } catch (RuntimeException e) {
+            names.addAll(products);
+        }
+        return "。同样使用这些工序的其他已发布产品: " + String.join("、", names);
     }
 
     private static Object normalized(Object v) {

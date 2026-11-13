@@ -259,6 +259,9 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             if (data.containsKey(key) && !isAllowedFieldValue(key, data.get(key))) return null;
         }
         Map<String, Object> result = copyKnownValues(data, PROCESS_DATA_KEYS);
+        if (result.containsKey("processParams")) {
+            result.put("processParams", withoutOverwriteConfirmation(result.get("processParams")));
+        }
         result.put("ports", sanitizedPorts);
         result.put("conversionRule", sanitizedRule);
         return result;
@@ -349,7 +352,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         if (!(value instanceof List<?> params)) return false;
         for (Object raw : params) {
             if (!(raw instanceof Map<?, ?> param)
-                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max", "overwriteConfirmed"))
+                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max", "overwriteConfirmed", "confirmedFor"))
                     || readNonBlankString(param.get("label")) == null
                     || !isOptionalFiniteNumber(param, "standardValue")
                     || !isOptionalFiniteNumber(param, "min")
@@ -405,7 +408,29 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         String nodeId = readNonBlankString(patch.get("nodeId"));
         String path = readNonBlankString(patch.get("path"));
         if (nodeId == null || !isAllowedFieldPath(path) || !isAllowedFieldValue(path, patch.get("value"))) return null;
-        return linkedMap("op", "SET_NODE_FIELD", "nodeId", nodeId, "path", path, "value", patch.get("value"));
+        Object value = "processParams".equals(path)
+                ? withoutOverwriteConfirmation(patch.get("value")) : patch.get("value");
+        return linkedMap("op", "SET_NODE_FIELD", "nodeId", nodeId, "path", path, "value", value);
+    }
+
+    /**
+     * 「确认覆盖工序已有标准」只能由人在画布上勾选。AI 补丁里带来的 overwriteConfirmed / confirmedFor
+     * 一律丢弃(校验里允许它出现只是为了 AI 原样回传现有参数时不被整条拒绝, 不是放行它)。
+     */
+    private Object withoutOverwriteConfirmation(Object params) {
+        if (!(params instanceof List<?> list)) return params;
+        List<Object> cleaned = new java.util.ArrayList<>();
+        for (Object raw : list) {
+            if (raw instanceof Map<?, ?> m) {
+                Map<Object, Object> copy = new LinkedHashMap<>(m);
+                copy.remove("overwriteConfirmed");
+                copy.remove("confirmedFor");
+                cleaned.add(copy);
+            } else {
+                cleaned.add(raw);
+            }
+        }
+        return cleaned;
     }
 
     /**

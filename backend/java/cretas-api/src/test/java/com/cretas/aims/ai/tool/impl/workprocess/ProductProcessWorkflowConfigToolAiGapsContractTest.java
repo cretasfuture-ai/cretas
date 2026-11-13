@@ -131,6 +131,24 @@ class ProductProcessWorkflowConfigToolAiGapsContractTest {
     }
 
     @Test
+    void anAiPatchCanNeverCarryTheOverwriteConfirmation() throws Exception {
+        // 「确认覆盖工序已有标准」只能由人勾。AI 补丁带 true 要被丢弃(参数本身仍可进入待确认)
+        Map<String, Object> param = new LinkedHashMap<>();
+        param.put("label", "油温");
+        param.put("unit", "℃");
+        param.put("min", 150);
+        param.put("max", 170);
+        param.put("overwriteConfirmed", true);
+        param.put("confirmedFor", Map.of("unit", "℃", "min", 150, "max", 170));
+        Map<String, Object> envelope = preview(def(), List.of(setField("process:1", "processParams", List.of(param))));
+        assertTrue(ok(envelope), "参数本身合法, 补丁应通过: " + envelope);
+        String out = objectMapper.writeValueAsString(envelope);
+        assertTrue(out.contains("油温"), "参数应保留: " + out);
+        assertFalse(out.contains("overwriteConfirmed"), "AI 带来的确认必须被丢弃: " + out);
+        assertFalse(out.contains("confirmedFor"), "AI 带来的确认快照必须被丢弃: " + out);
+    }
+
+    @Test
     void pendingConfirmationsAreAcceptedOnlyAsCodeAndLabel() throws Exception {
         assertTrue(ok(preview(def(), List.of(setField("process:1", "pendingConfirmations",
                 List.of(Map.of("code", "SHARE", "label", "主料份额待核对")))))));
