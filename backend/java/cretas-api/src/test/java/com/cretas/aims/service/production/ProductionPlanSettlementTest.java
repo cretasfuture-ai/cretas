@@ -632,6 +632,8 @@ class ProductionPlanSettlementTest {
                     () -> service.settleProduction(FACTORY_ID, PLAN_ID, baseRequest(), 10L), st.name());
             assertEquals(409, ex.getCode(), st.name());
             assertTrue(ex.getMessage().contains(st.getDisplayName()), ex.getMessage());
+            assertTrue(ex.getActionHint() != null && ex.getActionHint().contains("撤销") && ex.getActionHint().contains("质检放行"),
+                    "过账场景提示要说清怎么解: " + ex.getActionHint());
             assertEquals(0, batch.getUsedQuantity().compareTo(usedBefore), "不扣料: " + batch.getUsedQuantity());
         }
     }

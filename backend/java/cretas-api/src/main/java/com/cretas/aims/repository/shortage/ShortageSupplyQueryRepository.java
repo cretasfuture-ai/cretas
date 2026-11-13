@@ -25,6 +25,14 @@ public interface ShortageSupplyQueryRepository extends Repository<ShortageCaseLi
      * ({@code holdPriorStatus}); 本列上线前冻结的老数据没有这一列, 认冻结工具写在备注里的审计标记。
      * 状态口径 (只此一处): 只数 INSPECTING; 不良品 / 过期 / 报废 / 已用完是永远不会变成可用的货, 一律不算;
      * 可用 / 鲜品 / 冻品 等已在库可用的量由库存检查算进「已放行」, 不在这里。
+     *
+     * <p>已知口径缺口 (这里如实写明, 不在本查询里猜):
+     * <ul>
+     *   <li><b>送回复检</b> (不良品 / 过期 / 报废改回质检中, 见 {@code MaterialBatchHoldService#hold}) 故意不记扣留前状态
+     *       (复检放行只能放成可用, 不能还原成不良品), 所以在这里与首检分不开, <b>会被算作供应</b>;</li>
+     *   <li>本列上线前由 CCP 偏离扣留 / 冷链转待检扣成质检中的老批次, 既没有扣留前状态也没有冻结审计备注, 同样<b>会被算作供应</b>。</li>
+     * </ul>
+     * 要把这两类排除, 需要另加「复检」标记 (CHECK 只允许可用类的扣留前状态, 不能拿它记不良品), 属于后续项。
      */
     @Query("SELECT COALESCE(SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), 0) FROM MaterialBatch m "
             + "WHERE m.factoryId = :factoryId AND m.materialTypeId = :materialTypeId "

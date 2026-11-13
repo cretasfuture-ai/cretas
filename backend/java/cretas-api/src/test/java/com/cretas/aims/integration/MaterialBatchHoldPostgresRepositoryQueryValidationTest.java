@@ -173,6 +173,35 @@ class MaterialBatchHoldPostgresRepositoryQueryValidationTest {
     }
 
     @Test
+    void reservationsThatEndedDuringTheHoldAreNotRestoredOnRelease() {
+        // #1689 终审 B1: 扣留期间工序完工 / 预留取消, 放行不能还原成已不成立的生产预留 / 已预留
+        String token = suffix();
+        String typeId = saveRawType("RMT-W-" + token);
+        String wip = saveRawBatch(typeId, "QA-W-" + token, MaterialBatchStatus.PRODUCING_RESERVED, "50", "20", "0");
+        String res = saveRawBatch(typeId, "QA-R-" + token, MaterialBatchStatus.RESERVED, "50", "0", "10");
+        String keep = saveRawBatch(typeId, "QA-K-" + token, MaterialBatchStatus.RESERVED, "50", "0", "10");
+        for (String n : new String[]{"QA-W-", "QA-R-", "QA-K-"}) {
+            assertThat(holds.freeze(FACTORY, n + token, "QA 召回演练", USER_ID).held()).isTrue();
+        }
+        tx.executeWithoutResult(s -> {
+            MaterialBatch w = materialBatches.findById(wip).orElseThrow();
+            assertThat(MaterialBatchHoldService.followWip(w, false)).isTrue();   // 工序完工 (在制释放入口同一调用)
+            materialBatches.save(w);
+            MaterialBatch r = materialBatches.findById(res).orElseThrow();
+            r.setReservedQuantity(java.math.BigDecimal.ZERO);                      // 预留取消
+            materialBatches.save(r);
+        });
+        assertThat(priorOf(wip)).isEqualTo("AVAILABLE");
+        for (String id : new String[]{wip, res, keep}) {
+            releases.decide(FACTORY, new QcReleaseService.DecisionCommand(
+                    QcReleaseRecord.TargetType.RAW_MATERIAL_BATCH, id, "RELEASED", "排查无问题"), USER_ID, "质检员");
+        }
+        assertThat(statusOf(wip)).isEqualTo("AVAILABLE");
+        assertThat(statusOf(res)).isEqualTo("AVAILABLE");
+        assertThat(statusOf(keep)).isEqualTo("RESERVED");   // 阳性对照: 预留仍在 → 回已预留
+    }
+
+    @Test
     void holdWithoutAuditNoteIsNotCountedAsSupply() {
         // CCP 偏离扣留 / 冷链转待检 / 仓库页改质检中 走 hold(), 不写冻结审计备注, 只靠 hold_prior_status 识别
         String token = suffix();

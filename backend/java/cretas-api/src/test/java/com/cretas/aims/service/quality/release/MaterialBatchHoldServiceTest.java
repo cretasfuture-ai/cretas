@@ -106,4 +106,34 @@ class MaterialBatchHoldServiceTest {
         assertThat(MaterialBatchHoldService.notHoldableReason(batch(MaterialBatchStatus.DEPLETED, "5", "0", "5")))
                 .isNull();
     }
+
+    @Test
+    @DisplayName("已预留 → 冻结 → 预留取消 (预留量 0) → 放行 = 可用; 阳性对照: 预留仍在 → 回已预留")
+    void reservedPriorRecomputedFromCurrentReservation() {
+        MaterialBatch cancelled = batch(MaterialBatchStatus.RESERVED, "50", "0", "10");
+        MaterialBatchHoldService.hold(cancelled);
+        assertThat(cancelled.getHoldPriorStatus()).isEqualTo(MaterialBatchStatus.RESERVED);
+        cancelled.setReservedQuantity(BigDecimal.ZERO);   // 扣留期间预留被取消
+        assertThat(MaterialBatchHoldService.releaseTarget(cancelled, MaterialBatchStatus.AVAILABLE))
+                .isEqualTo(MaterialBatchStatus.AVAILABLE);
+
+        MaterialBatch still = batch(MaterialBatchStatus.RESERVED, "50", "0", "10");
+        MaterialBatchHoldService.hold(still);
+        assertThat(MaterialBatchHoldService.releaseTarget(still, MaterialBatchStatus.AVAILABLE))
+                .isEqualTo(MaterialBatchStatus.RESERVED);
+    }
+
+    @Test
+    @DisplayName("离开在制口径: 可用为 0 → 已耗尽; 仍有预留 → 已预留; 否则可用; 没有扣留记录的不跟进")
+    void wipExitStatusAndFollowWip() {
+        assertThat(MaterialBatchHoldService.wipExitStatus(batch(MaterialBatchStatus.PRODUCING_RESERVED, "50", "50", "0")))
+                .isEqualTo(MaterialBatchStatus.DEPLETED);
+        assertThat(MaterialBatchHoldService.wipExitStatus(batch(MaterialBatchStatus.PRODUCING_RESERVED, "50", "0", "5")))
+                .isEqualTo(MaterialBatchStatus.RESERVED);
+        assertThat(MaterialBatchHoldService.wipExitStatus(batch(MaterialBatchStatus.PRODUCING_RESERVED, "50", "0", "0")))
+                .isEqualTo(MaterialBatchStatus.AVAILABLE);
+        MaterialBatch first = batch(MaterialBatchStatus.INSPECTING, "50", "0", "0");
+        assertThat(MaterialBatchHoldService.followWip(first, false)).isFalse();
+        assertThat(first.getHoldPriorStatus()).isNull();
+    }
 }

@@ -334,6 +334,8 @@ class InterimSettleServiceTest {
                     .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
                         assertThat(e.getCode()).isEqualTo(409);
                         assertThat(e.getMessage()).contains("QA-RB1").contains(st.getDisplayName());
+                        // 过账场景的提示: 录入后才判的, 说清怎么解 (等放行 / 撤销报工)
+                        assertThat(e.getActionHint()).contains("报工录入之后").contains("撤销").contains("质检放行");
                     });
             assertThat(rb1.getUsedQuantity()).as(st.name()).isEqualByComparingTo("0");
         }

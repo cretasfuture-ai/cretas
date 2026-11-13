@@ -7847,7 +7847,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
                 batch, batch.getBatchNumber(), "实际领用");
         // #1590 遗留: 原料批次同样按报工口径判状态 (拦质检中含冻结扣住 / 不良品 / 报废, 不拦过期 —— 过期由领料那一步把关)
-        com.cretas.aims.service.gate.MaterialBatchStateGate.assertReportable(batch);
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertPostable(batch);
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 

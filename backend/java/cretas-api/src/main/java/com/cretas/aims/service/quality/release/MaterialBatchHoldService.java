@@ -118,7 +118,8 @@ public class MaterialBatchHoldService {
     /**
      * 放行时真正该写的状态。请求不是「可用」(判不合格 / 报废 / 指定状态) 或批次没有扣留记录 ⇒ 原样返回请求。
      * 有扣留记录 ⇒ 按扣留前状态还原, 数量状态按<b>当前</b>数量重算 (扣留期间数量可能变了):
-     * 实物为 0 → 已用完; 可用为 0 → 已耗尽; 否则扣留前是已耗尽 → 可用, 其余回扣留前状态。
+     * 实物为 0 → 已用完; 可用为 0 → 已耗尽; 否则扣留前是已耗尽 → 可用; 扣留前已预留但预留量已为 0 → 可用;
+     * 其余回扣留前状态 (生产预留由 {@link #followWip} 在在制结束时改写, 见下)。
      */
     public static MaterialBatchStatus releaseTarget(MaterialBatch batch, MaterialBatchStatus requested) {
         if (batch == null || requested != MaterialBatchStatus.AVAILABLE
@@ -137,7 +138,49 @@ public class MaterialBatchHoldService {
         if (prior == MaterialBatchStatus.DEPLETED || prior == MaterialBatchStatus.USED_UP || prior.blocksProduction()) {
             return MaterialBatchStatus.AVAILABLE;
         }
+        // 已预留: 扣留期间预留可能被取消, 预留量已为 0 就不能再挂「已预留」(按可用筛的领料/FEFO/调拨都看不到它)
+        if (prior == MaterialBatchStatus.RESERVED && !positive(batch.getReservedQuantity())) {
+            return MaterialBatchStatus.AVAILABLE;
+        }
+        // 生产预留: 在制关联结束 (工序完工 / 取消) 时 followWip 已把扣留记录改成离开在制后的状态;
+        // 这里还是生产预留 ⇒ 在制关联仍在, 原样还原
         return prior;
+    }
+
+    /**
+     * 离开在制 (工序完工 / 取消) 时物料批次该回的状态: 可用为 0 → 已耗尽; 仍有预留 → 已预留; 否则可用。
+     * 与 {@code ProcessingServiceImpl#releaseLinkedMaterialBatchesFromWip} 共用这一份口径。
+     */
+    public static MaterialBatchStatus wipExitStatus(MaterialBatch batch) {
+        if (!positive(batch.getCurrentQuantity())) {
+            return MaterialBatchStatus.DEPLETED;
+        }
+        return positive(batch.getReservedQuantity()) ? MaterialBatchStatus.RESERVED : MaterialBatchStatus.AVAILABLE;
+    }
+
+    /**
+     * 被扣留的批次在扣留期间进入 / 离开在制: 状态仍是质检中不动, 只把扣留记录 (放行时要还原的状态) 跟着改,
+     * 免得放行后还原成一个已经不成立的状态。进入在制 (已预留 / 可用 → 生产预留), 离开在制 (生产预留 →
+     * {@link #wipExitStatus})。返回是否改了 (调用方负责保存)。没有扣留记录的批次不动。
+     */
+    public static boolean followWip(MaterialBatch batch, boolean entering) {
+        if (batch == null || batch.getStatus() != HOLD_STATUS || batch.getHoldPriorStatus() == null) {
+            return false;
+        }
+        MaterialBatchStatus prior = batch.getHoldPriorStatus();
+        if (entering && (prior == MaterialBatchStatus.RESERVED || prior == MaterialBatchStatus.AVAILABLE)) {
+            batch.setHoldPriorStatus(MaterialBatchStatus.PRODUCING_RESERVED);
+            return true;
+        }
+        if (!entering && prior == MaterialBatchStatus.PRODUCING_RESERVED) {
+            batch.setHoldPriorStatus(wipExitStatus(batch));
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean positive(BigDecimal v) {
+        return v != null && v.signum() > 0;
     }
 
     /** 这批是不是被扣留的 (而不是首检中)。老数据没有扣留前状态, 冻结工具的审计标记也算。 */
