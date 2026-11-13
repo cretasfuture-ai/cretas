@@ -148,6 +148,10 @@ class UrgentInsertMaterialPlanContractTest {
         // A2: 缺料拦插单读和开工缺料同一个工厂开关; 这里的缺料用例按「开关开、没填原因」验证拦截
         com.cretas.aims.repository.FactorySettingsRepository settingsRepo = mock(com.cretas.aims.repository.FactorySettingsRepository.class);
         when(settingsRepo.findBlockStartOnOpenShortageByFactoryId(anyString())).thenReturn(true);
+        // 本人审批判定: 这些用例的审批人不是提交人 ⇒ 非本人 / 放行 (gate 是 mock, 不打桩会返回 null)
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate selfGate = mock(com.cretas.aims.service.workflow.FactorySelfApprovalGate.class);
+        when(selfGate.decide(anyString(), org.mockito.ArgumentMatchers.anyBoolean(), any()))
+                .thenReturn(com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision.NOT_SELF);
         users = mock(com.cretas.aims.repository.UserRepository.class);
         com.cretas.aims.entity.User operator = new com.cretas.aims.entity.User();
         operator.setFullName("测试人");
@@ -166,6 +170,7 @@ class UrgentInsertMaterialPlanContractTest {
                 Map.entry(SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class)),
                 Map.entry(UrgentInsertMaterialAssessor.class, assessor),
                 Map.entry(ObjectMapper.class, new ObjectMapper()),
+                Map.entry(com.cretas.aims.service.workflow.FactorySelfApprovalGate.class, selfGate),
                 Map.entry(com.cretas.aims.repository.FactorySettingsRepository.class, settingsRepo)));
     }
 
