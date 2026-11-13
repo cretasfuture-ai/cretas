@@ -1235,7 +1235,7 @@ public class SseStreamingService {
                         text -> knowledgeBase.matchPhrase(text).isPresent());
         if (action == TaskContinuationRule.Action.REPEAT) {
             // 「继续完成工序」时它正问着: 不挂起、不另起一份同意图的收集, 把这一问再问一遍 (会话 id 不变)
-            String message = ConversationTaskStateService.repeatMessage(session, intentNames(factoryId));
+            String message = ConversationTaskStateService.repeatMessage(session, intentNames(factoryId), paramLabels(factoryId));
             streamTerminalResponse(emitter, IntentExecuteResponse.builder()
                     .intentRecognized(true).intentCode(session.getKnownIntentCode())
                     .status("NEED_MORE_INFO").message(message).formattedText(message)
@@ -1351,7 +1351,7 @@ public class SseStreamingService {
         try {
             resumed = taskStateService.tryResume(factoryId, userId, request.getUserInput(),
                     knowledgeBase::matchPhrase,
-                    intentNames(factoryId));
+                    intentNames(factoryId), paramLabels(factoryId));
         } catch (Exception e) {
             log.warn("[SSE][TaskResume] 恢复失败, 按新话识别: {}", e.getMessage());
             return false;
@@ -1374,6 +1374,12 @@ public class SseStreamingService {
     }
 
     /** 意图码 → 名称与配置的关键词 (与普通入口同一个来源: 本厂可见的意图配置)。 */
+    /** (意图码, 参数名) → 绑定工具的参数说明, 恢复/重问时不把字段名说给用户 (两个入口同一个来源)。 */
+    private java.util.function.BiFunction<String, String, String> paramLabels(String factoryId) {
+        return ConversationTaskStateService.toolParamLabels(
+                code -> aiIntentService.getIntentByCode(factoryId, code), toolRegistry);
+    }
+
     private java.util.function.Function<String, List<String>> intentNames(String factoryId) {
         return code -> aiIntentService.getIntentByCode(factoryId, code)
                 .map(ConversationTaskStateService::namesOf).orElse(List.of());

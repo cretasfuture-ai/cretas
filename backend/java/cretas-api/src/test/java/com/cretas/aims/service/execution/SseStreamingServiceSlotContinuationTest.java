@@ -806,7 +806,9 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(resumed.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(resumed.getSessionId()).isEqualTo(sessionId);
         assertThat(resumed.getIntentCode()).isEqualTo("WORK_PROCESS_TASK_COMPLETE");
-        assertThat(resumed.getMessage()).contains("完成工序").contains("actualQuantity：0").contains("不会直接提交");
+        // F006 实测缺陷 2: 参数说给人听的名字, 不再外露字段名 actualQuantity
+        assertThat(resumed.getMessage()).contains("完成工序").contains("实际产量：0").contains("不会直接提交")
+                .doesNotContain("actualQuantity");
         assertThat(h.sessions.get(sessionId).getStatus()).isEqualTo(ConversationSession.SessionStatus.ACTIVE);
         verify(h.toolDispatchService, never()).executeWithTool(eq(h.completeTool), any(), any(), any(), any(),
                 any(), any());
