@@ -312,7 +312,9 @@ public class QcReleaseService {
                         assertNotFromScrapped(scrapped, Set.of(source), what);
                     }
                 }
-                w.setStatus(release ? MaterialBatchStatus.AVAILABLE : MaterialBatchStatus.DEFECTIVE);
+                // #1590 遗留 M5: 被扣留 (冻结 / 偏离扣留) 的在制批次放行时还原扣留前状态
+                w.setStatus(release ? MaterialBatchHoldService.releaseTarget(w, MaterialBatchStatus.AVAILABLE)
+                        : MaterialBatchStatus.DEFECTIVE);
                 materialBatchRepo.save(w);
                 record.batchNumber(w.getBatchNumber()).productTypeId(w.getProductTypeId())
                         .quantity(w.getCurrentQuantity()).unit(w.getQuantityUnit());
@@ -358,7 +360,7 @@ public class QcReleaseService {
                 }
                 if (release) {
                     // 纪律排查 A3: 质检放行页放行原料同样写放行台账 (与 qc_release_records 互补: 那张表只管质检放行页)
-                    materialBatchReleaseGuard.recordIfRelease(factoryId, r, rawBefore, rawTarget,
+                    materialBatchReleaseGuard.recordIfRelease(factoryId, r, rawBefore, r.getStatus(),
                             com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE,
                             cmd.conclusion(), null, userId, null);
                 }

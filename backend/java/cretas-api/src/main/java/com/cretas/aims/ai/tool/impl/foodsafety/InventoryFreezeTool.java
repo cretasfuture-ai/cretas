@@ -4,14 +4,12 @@ import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
-import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.service.quality.release.MaterialBatchHoldService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
-import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,17 +47,21 @@ import java.util.Optional;
 @Component
 public class InventoryFreezeTool extends AbstractBusinessTool {
 
-    /** 冻结写入的状态: 质检中 (挡投产, 只能经质检放行解除)。 */
-    public static final MaterialBatchStatus HOLD_STATUS = MaterialBatchStatus.INSPECTING;
+    /** 冻结写入的状态: 质检中 (挡投产, 只能经质检放行解除)。与其它扣留入口同一个值。 */
+    public static final MaterialBatchStatus HOLD_STATUS = MaterialBatchHoldService.HOLD_STATUS;
 
     /** 怎么解除 (质检中能被放行的入口都由质检权限把着; 本厂若配了允许手动放行, 手动放行也要过角色与原因)。 */
-    static final String RELEASE_HINT = "解除须经质检放行 (「质量管理 → 质检放行」或质量主管放行)";
+    static final String RELEASE_HINT = "解除须经质检放行 (「质量管理 → 质检放行」或质量主管放行), 放行后回到冻结前的状态";
 
     @Autowired
     private MaterialBatchRepository materialBatchRepository;
 
+    /** 冻结 / 解冻的唯一实现 (#1590 遗留 M5): 记下冻结前状态, 放行时还原。 */
+    @Autowired
+    private MaterialBatchHoldService holdService;
+
     /** 冻结时写进 notes 的审计标记 (召回损失估算据此认出「被冻结工具扣住」的批次)。 */
-    public static final String AUDIT_MARK = "[FREEZE by user=";
+    public static final String AUDIT_MARK = MaterialBatchHoldService.FREEZE_AUDIT_MARK;
 
     /**
      * 这批是不是被召回冻结扣住的 (召回损失估算用)。
@@ -144,17 +146,7 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
      * 照样能投产 —— 召回时恰恰要扣住它 (独立审查 H1)。实物为 0 (已用完) 才没东西可扣。
      */
     static String notFreezableReason(MaterialBatch batch) {
-        MaterialBatchStatus st = batch.getStatus();
-        if (st != null && st.blocksProduction()) {
-            return String.format("批次 %s 当前是「%s」, 本来就不能用于生产/出货, 不改状态 (冻结不覆盖「%s」)",
-                    batch.getBatchNumber(), label(st), label(st));
-        }
-        BigDecimal physical = batch.getPhysicalQuantity();
-        if (physical == null || physical.signum() <= 0) {
-            return String.format("批次 %s 当前是「%s」, 货架上没有实物, 没有可冻结的库存, 不改状态",
-                    batch.getBatchNumber(), label(st));
-        }
-        return null;
+        return MaterialBatchHoldService.notHoldableReason(batch);
     }
 
     /**
@@ -214,35 +206,20 @@ public class InventoryFreezeTool extends AbstractBusinessTool {
         log.info("inventory_freeze — factory={} batch={} reason={} userId={}",
                 factoryId, batchNumber, reason, userId);
 
-        Optional<MaterialBatch> opt = materialBatchRepository
-                .findByFactoryIdAndBatchNumber(factoryId, batchNumber);
-        if (opt.isEmpty()) {
-            throw new BusinessException(404,
-                    String.format("批次 %s 不存在, 无法冻结", batchNumber))
-                    .withSeverity("BLOCKING");
-        }
-
-        MaterialBatch batch = opt.get();
-        MaterialBatchStatus prevStatus = batch.getStatus();
+        // 冻结与其它扣留入口走同一个服务方法: 加行锁、记下冻结前状态 (放行时还原)、写审计行
+        MaterialBatchHoldService.FreezeResult r = holdService.freeze(factoryId, batchNumber, reason, userId);
+        MaterialBatch batch = r.batch();
+        MaterialBatchStatus prevStatus = r.previousStatus();
 
         // R4 + 防洗白: 不可投产 / 没库存的批次一律不改状态 (绕过 preview 直接执行也一样)
-        String blocked = notFreezableReason(batch);
-        if (blocked != null) {
+        if (!r.held()) {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("status", "ALREADY_BLOCKED");
             result.put("batchNumber", batchNumber);
             result.put("currentStatus", prevStatus != null ? prevStatus.name() : null);
-            result.put("message", "ℹ️ " + blocked);
+            result.put("message", "ℹ️ " + r.reason());
             return result;
         }
-
-        // 状态更新 + audit notes (NOTE: 仅写 status + 在 notes 追加 audit 行)
-        batch.setStatus(HOLD_STATUS);
-        String existingNotes = batch.getNotes() != null ? batch.getNotes() : "";
-        String auditLine = String.format("[%s] " + AUDIT_MARK + "%s] %s (prev=%s)",
-                LocalDateTime.now(), userId, reason, prevStatus);
-        batch.setNotes(existingNotes.isEmpty() ? auditLine : existingNotes + "\n" + auditLine);
-        materialBatchRepository.save(batch);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("batchNumber", batchNumber);
