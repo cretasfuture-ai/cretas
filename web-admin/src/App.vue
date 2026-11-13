@@ -21,16 +21,12 @@ html, body, #app {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--cs-font-family);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Element Plus 自定义变量 */
-:root {
-  --el-color-primary: #409eff;
-  --el-border-radius-base: 4px;
-}
+/* Element Plus 变量统一在 src/styles/element-plus-theme.css 映射到 --cs-*（P1），这里不再写死 */
 
 /* 滚动条样式 */
 ::-webkit-scrollbar {
