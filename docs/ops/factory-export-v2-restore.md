@@ -60,6 +60,18 @@ external FK dependency, unsupported sensitive CHECK/unique shape, or target
 system mismatch is a hard refusal. Constraints are never disabled and missing
 rows from another tenant are never copied to satisfy an FK.
 
+An external FK whose selected tenant rows all contain NULL is a schema-only
+dependency, not missing reference data. The producer proves the zero count in
+the same read-only snapshot. The CLI independently requires the exact FK,
+factory and same-schema descriptor, plus an explicit NULL in every canonical
+JSON child row. Missing/forged proof, a non-NULL value or cross-schema parent
+still refuses before mutation. Parent columns, PK/UNIQUE definitions, indexes
+and triggers remain independently compared against the protected schema archive;
+no shared parent rows enter the package or become tenant-owned.
+FK parent identifiers, schema, ordinal column pairing and update/delete rules
+are read from PostgreSQL catalogs, independently of table ownership. Export
+does not grant privileges to make metadata visible; business-row RLS remains.
+
 Both empty destinations are checked before the first schema restore. Rows and
 migration rows share a transaction per database. PostgreSQL sequence changes
 and external `pg_restore` stages cannot form a cross-database transaction: on

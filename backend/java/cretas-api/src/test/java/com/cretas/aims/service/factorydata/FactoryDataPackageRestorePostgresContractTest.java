@@ -89,6 +89,10 @@ class FactoryDataPackageRestorePostgresContractTest {
                 + "INSERT INTO sales_orders (id, factory_id, created_by, note) VALUES (10, '" + FACTORY + "', 1, 'A-RESTORE'), (20, 'FB_RESTORE', 3, 'B-SECRET');"
                 + "CREATE TABLE share_links(token varchar(64) PRIMARY KEY, factory_id varchar(64) NOT NULL, note text);"
                 + "INSERT INTO share_links VALUES ('link-a','" + FACTORY + "','A-link'),('link-b','" + FACTORY + "','B-link'),('link-other','FB_RESTORE','other-link');"
+                + "CREATE TABLE factory_templates(id bigint PRIMARY KEY, template_name varchar(100), base_config jsonb);"
+                + "INSERT INTO factory_templates VALUES(1,'global-template-secret','{\"global\":true}'),(2,'other-global-secret','{}');"
+                + "CREATE TABLE factory_configurations(id bigint PRIMARY KEY,factory_id varchar(64),template_id bigint REFERENCES factory_templates(id));"
+                + "INSERT INTO factory_configurations VALUES(101,'" + FACTORY + "',NULL),(102,'" + FACTORY + "',NULL),(103,'FB_RESTORE',2);"
                 + "CREATE TABLE IF NOT EXISTS flyway_schema_history (installed_rank int, version varchar(50), description varchar(200),"
                 + "type varchar(20), script varchar(200), checksum int, installed_by varchar(100), installed_on timestamp, execution_time int, success boolean);"
                 + "INSERT INTO flyway_schema_history VALUES (1, 'source-1', 'restore source', 'SQL', 'Vsource.sql', 7, 'ci', now(), 4, true);");
@@ -151,6 +155,18 @@ class FactoryDataPackageRestorePostgresContractTest {
         assertThat(links.get(0).get("token").asText()).matches("r[0-9a-f]{32}")
                 .isNotEqualTo(links.get(1).get("token").asText());
         assertThat(links.get(1).get("token").asText()).matches("r[0-9a-f]{32}");
+        assertThat(files).doesNotContainKey("cretas/json/factory_templates.json");
+        assertThat(files.values().stream().map(value -> new String(value, StandardCharsets.UTF_8))
+                .collect(java.util.stream.Collectors.joining()))
+                .doesNotContain("global-template-secret", "other-global-secret");
+        JsonNode configurations = json.readTree(files.get("cretas/json/factory_configurations.json"));
+        assertThat(configurations.size()).isEqualTo(2);
+        configurations.forEach(configuration -> assertThat(configuration.get("template_id").isNull()).isTrue());
+        JsonNode external = json.readTree(files.get("cretas/metadata/schema.json")).get("externalReferences");
+        assertThat(external.size()).isEqualTo(1);
+        assertThat(external.get(0).get("action").asText()).isEqualTo("SCHEMA_ONLY_ZERO_REFERENCES");
+        assertThat(external.get(0).get("factoryId").asText()).isEqualTo(FACTORY);
+        assertThat(external.get(0).get("referencingRows").asLong()).isZero();
         assertThat(typed.get("int_values").get(0).longValue()).isEqualTo(9007199254740993L);
         assertThat(typed.get("text_values").get(1).asText()).isEqualTo("beta");
         assertThat(typed.get("payload").asText()).isEqualTo("\\x00ff10");
@@ -170,6 +186,68 @@ class FactoryDataPackageRestorePostgresContractTest {
         if ("true".equalsIgnoreCase(System.getenv("CRETAS_WORKFLOW_CLI_VERIFY"))) {
             assertThat(typed.get("embedding").asText()).isEqualTo("[0.1,-2,3.25]");
         }
+    }
+
+    @Test
+    void compositeForeignKeyMetadataPairsParentColumnsByOrdinal() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path=" + q(sourceSchema) + ";"
+                + "CREATE TABLE ordinal_parent(left_id bigint,right_id bigint,factory_id varchar(64),PRIMARY KEY(left_id,right_id));"
+                + "CREATE TABLE ordinal_child(id bigint PRIMARY KEY,factory_id varchar(64),first_ref bigint,second_ref bigint,"
+                + "FOREIGN KEY(first_ref,second_ref) REFERENCES ordinal_parent(right_id,left_id));"
+                + "INSERT INTO ordinal_parent VALUES(10,20,'" + FACTORY + "');"
+                + "INSERT INTO ordinal_child VALUES(1,'" + FACTORY + "',20,10)");
+        var parent = new FactoryDataScope.TableScope("ordinal_parent", FactoryDataCatalog.Category.BUSINESS,
+                List.of("factory_id"), null, 0);
+        parent.setPredicateRows(1);
+        var child = new FactoryDataScope.TableScope("ordinal_child", FactoryDataCatalog.Category.BUSINESS,
+                List.of("factory_id"), "id", 0);
+        child.addKey("1");
+        try (Connection connection = source.getConnection()) {
+            connection.setAutoCommit(false);
+            connection.setReadOnly(true);
+            var snapshot = FactoryDataSchemaMetadata.capture(connection, FactoryDataCatalog.Database.CRETAS,
+                    sourceSchema, List.of(parent, child), FACTORY);
+            @SuppressWarnings("unchecked")
+            var constraints = (List<Map<String, Object>>) snapshot.schema().get("constraints");
+            var foreign = constraints.stream().filter(row -> "FOREIGN KEY".equals(row.get("type"))).toList();
+            assertThat(foreign).hasSize(2);
+            assertThat(foreign).anySatisfy(row -> {
+                assertThat(row.get("column")).isEqualTo("first_ref");
+                assertThat(row.get("referencedColumn")).isEqualTo("right_id");
+                assertThat(row.get("referencedSchema")).isEqualTo(sourceSchema);
+            }).anySatisfy(row -> {
+                assertThat(row.get("column")).isEqualTo("second_ref");
+                assertThat(row.get("referencedColumn")).isEqualTo("left_id");
+            });
+            connection.rollback();
+        }
+    }
+
+    @Test
+    void crossSchemaSameNamedParentWithNullReferencesRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        String externalSchema = sourceSchema + "_external";
+        exec(source, "CREATE SCHEMA " + q(externalSchema));
+        try {
+            exec(source, "SET search_path=" + q(sourceSchema) + ";"
+                    + "UPDATE factory_configurations SET template_id=NULL;"
+                    + "ALTER TABLE factory_configurations DROP CONSTRAINT factory_configurations_template_id_fkey;"
+                    + "CREATE TABLE " + q(externalSchema) + ".users(id bigint PRIMARY KEY);"
+                    + "ALTER TABLE factory_configurations ADD FOREIGN KEY(template_id) REFERENCES "
+                    + q(externalSchema) + ".users(id)");
+            assertExportRefusedBeforeManifest("跨 schema");
+        } finally {
+            exec(source, "DROP SCHEMA " + q(externalSchema) + " CASCADE");
+        }
+    }
+
+    @Test
+    void actualExternalReferenceStillRefusesBeforeManifest() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema)
+                + ";UPDATE factory_configurations SET template_id=1 WHERE id=101 AND factory_id='" + FACTORY + "'");
+        assertExportRefusedBeforeManifest("外部外键");
     }
 
     @Test
@@ -330,6 +408,19 @@ class FactoryDataPackageRestorePostgresContractTest {
             assertThat(happy.exitCode()).isZero();
             assertThat(happy.receipt().get("status").asText()).isEqualTo("RESTORED_AND_VERIFIED");
             assertReceiptDatabaseIds(happy.receipt(), happyDatabaseIds);
+            try (Connection restored = dataSource(jdbc.replaceAll("/[^/?]+(\\?|$)", "/" + cretasTarget + "$1")).getConnection();
+                 Statement statement = restored.createStatement()) {
+                statement.execute("SET search_path=" + q(sourceSchema));
+                try (ResultSet result = statement.executeQuery("SELECT count(*) FROM factory_templates")) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.getLong(1)).isZero();
+                }
+                try (ResultSet result = statement.executeQuery("SELECT count(*) FROM factory_configurations WHERE factory_id='"
+                        + FACTORY + "' AND template_id IS NULL")) {
+                    assertThat(result.next()).isTrue();
+                    assertThat(result.getLong(1)).isEqualTo(2);
+                }
+            }
 
             // Keep the original package and Cretas baseline, but bind a fresh
             // SmartBI archive whose catalog has one extra CHECK constraint.
