@@ -4,6 +4,7 @@ import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.service.shortage.DailyReconcileRunner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -24,6 +25,7 @@ public class CostDeviationScanScheduler {
     private final DailyReconcileRunner runner;
 
     @Scheduled(cron = "${cretas.cost-deviation-scan.cron:0 40 6 * * ?}")
+    @SchedulerLock(name = "CostDeviationScanScheduler.scanConfiguredFactories", lockAtMostFor = "PT30M", lockAtLeastFor = "PT5M")
     public void scanConfiguredFactories() {
         List<String> factoryIds = factoryRepository.findAllActiveFactoryIds();
         log.info("每日差异核对开始: 启用工厂 {} 个", factoryIds.size());

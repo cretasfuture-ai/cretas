@@ -135,6 +135,61 @@ class DailyReconcileEndToEndContractTest {
     }
 
     @Test
+    void dailyScan_configuredOwnerNoLongerInFactory_fallsBackToDefaultRole() {
+        thresholds(new BigDecimal("5"), null);
+        when(users.findByIdAndFactoryId(7L, "F1")).thenReturn(Optional.empty()); // 配置的人已离厂 / 不属本厂
+
+        scheduler.scanConfiguredFactories();
+
+        assertThat(savedCases).hasSize(1);
+        assertThat(savedCases.get(0).getOwnerUserId()).isNull();
+        assertThat(savedCases.get(0).getOwnerRole()).isEqualTo("finance_manager");
+        verify(notifications).notifyRole(eq1("F1"), eq1("finance_manager"), any(), any());
+        verify(notifications, never()).notifyUser(any(), any(), any(), any());
+        assertThat(new CostDeviationOwnerResolver(settings, users).resolve("F1", ShortageCase.SourceType.COST_VARIANCE).source())
+                .isEqualTo("DEFAULT_USER_GONE");
+    }
+
+    @Test
+    void dailyScan_oneFactoryScanThrows_othersStillRecorded() {
+        when(factories.findAllActiveFactoryIds()).thenReturn(List.of("F1", "F2"));
+        when(settings.findCostDeviationThresholdsByFactoryId("F1")).thenThrow(new IllegalStateException("boom"));
+        when(settings.findCostDeviationThresholdsByFactoryId("F2")).thenReturn(List.<Object[]>of(new Object[]{null, null}));
+
+        scheduler.scanConfiguredFactories();
+
+        assertThat(savedRuns).extracting(DailyReconcileRun::getFactoryId).containsExactly("F1", "F2");
+        assertThat(savedRuns.get(0).getStatus()).isEqualTo(DailyReconcileRun.Status.FAILED);
+        assertThat(savedRuns.get(0).getNotMeasuredReason()).contains("boom");
+        assertThat(savedRuns.get(1).getStatus()).isEqualTo(DailyReconcileRun.Status.NOT_MEASURED);
+    }
+
+    @Test
+    void dailyScan_runRecordWriteFailsForOneFactory_othersStillRecorded() {
+        when(factories.findAllActiveFactoryIds()).thenReturn(List.of("F1", "F2"));
+        when(settings.findCostDeviationThresholdsByFactoryId(anyString()))
+                .thenReturn(List.<Object[]>of(new Object[]{null, null}));
+        doAnswer(i -> {
+            DailyReconcileRun r = i.getArgument(0);
+            if ("F1".equals(r.getFactoryId())) throw new IllegalStateException("db down");
+            savedRuns.add(r);
+            return r;
+        }).when(runs).save(any());
+
+        scheduler.scanConfiguredFactories();
+
+        assertThat(savedRuns).extracting(DailyReconcileRun::getFactoryId).containsExactly("F2");
+    }
+
+    @Test
+    void scheduler_isLockedAcrossBlueGreenSlots() throws Exception {
+        var m = CostDeviationScanScheduler.class.getMethod("scanConfiguredFactories");
+        var lock = m.getAnnotation(net.javacrumbs.shedlock.spring.annotation.SchedulerLock.class);
+        assertThat(lock).isNotNull();
+        assertThat(lock.name()).isEqualTo("CostDeviationScanScheduler.scanConfiguredFactories");
+    }
+
+    @Test
     void dailyScan_noThresholds_recordsNotMeasured_neverNormal() {
         thresholds(null, null);
 
