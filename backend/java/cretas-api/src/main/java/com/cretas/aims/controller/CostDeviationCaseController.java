@@ -37,6 +37,10 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import com.cretas.aims.entity.shortage.DailyReconcileRun;
+import com.cretas.aims.repository.shortage.DailyReconcileRunRepository;
+import com.cretas.aims.service.shortage.CostDeviationExplanation;
+import com.cretas.aims.service.shortage.CostDeviationOwnerResolver;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -69,6 +73,8 @@ public class CostDeviationCaseController {
     private final PriceMaskResolver priceMaskResolver;
     private final ProcessSecretLlmCostScope costScope;
     private final UnitContractService unitContractService;
+    private final CostDeviationOwnerResolver ownerResolver;
+    private final DailyReconcileRunRepository runRepository;
 
     public record CaseView(String id, String sourceType, String sourceLabel, String planId, String planNumber,
                            String productName, String stage, String stageLabel, String ownerRole, Long ownerUserId,
@@ -95,6 +101,18 @@ public class CostDeviationCaseController {
     public record AssignRequest(Long ownerUserId) {
     }
 
+    public record OwnerConfigView(String varianceRole, Long varianceUserId, String balanceRole, Long balanceUserId,
+                                  String varianceDefaultRole, String balanceDefaultRole) {
+    }
+
+    public record OwnerConfigRequest(String varianceRole, Long varianceUserId, String balanceRole, Long balanceUserId) {
+    }
+
+    private static OwnerConfigView ownerView(CostDeviationOwnerResolver.OwnerConfig c) {
+        return new OwnerConfigView(c.varianceRole(), c.varianceUserId(), c.balanceRole(), c.balanceUserId(),
+                CostDeviationOwnerResolver.DEFAULT_VARIANCE_ROLE, CostDeviationOwnerResolver.DEFAULT_BALANCE_ROLE);
+    }
+
     public record ResolveRequest(CostDeviationCaseDetail.Resolution resolution, String note) {
     }
 
@@ -112,6 +130,29 @@ public class CostDeviationCaseController {
     public ApiResponse<ThresholdView> putThresholds(@PathVariable String factoryId, @RequestBody ThresholdRequest body) {
         var t = scanService.saveThresholds(factoryId, body.variancePct(), body.balancePct());
         return ApiResponse.success(new ThresholdView(t.variancePct(), t.balancePct()));
+    }
+
+    @RequirePermission({"finance:read", "finance:read_write", "procurement:price:view", "production:read", "production:read_write"})
+    @GetMapping("/owners")
+    @Operation(summary = "异常负责人配置", description = "null = 未配置, 回退默认岗位 (成本→财务经理, 平衡→生产经理)")
+    public ApiResponse<OwnerConfigView> getOwners(@PathVariable String factoryId) {
+        return ApiResponse.success(ownerView(ownerResolver.config(factoryId)));
+    }
+
+    @RequireRole({"factory_super_admin", "permission_admin", "finance_manager"})
+    @PutMapping("/owners")
+    @Operation(summary = "设置异常负责人", description = "指定到人 (须属于本厂) 或只指定岗位; 传 null 清除")
+    public ApiResponse<OwnerConfigView> putOwners(@PathVariable String factoryId, @RequestBody OwnerConfigRequest body) {
+        var c = ownerResolver.saveConfig(factoryId, new CostDeviationOwnerResolver.OwnerConfig(
+                body.varianceRole(), body.varianceUserId(), body.balanceRole(), body.balanceUserId()));
+        return ApiResponse.success(ownerView(c));
+    }
+
+    @RequirePermission({"finance:read", "finance:read_write", "procurement:price:view", "production:read", "production:read_write"})
+    @GetMapping("/daily-runs")
+    @Operation(summary = "每日核对运行记录", description = "最近 30 次, 含「没量到」及原因")
+    public ApiResponse<List<DailyReconcileRun>> dailyRuns(@PathVariable String factoryId) {
+        return ApiResponse.success("获取成功", runRepository.findByFactoryIdOrderByStartedAtDesc(factoryId, PageRequest.of(0, 30)));
     }
 
     @RequirePermission({"finance:read_write", "production:read_write"})
@@ -181,6 +222,7 @@ public class CostDeviationCaseController {
         }
         body.put("varianceEvidence", variance);
         body.put("balanceEvidence", balance);
+        body.put("explanation", CostDeviationExplanation.build(c.getSourceType(), d, variance, balance, mask));
         body.put("impact", impact(factoryId, d, variance, balance, batches.size(), mask));
         body.put("verifyPath", verifyPath(c.getSourceType(), factoryId, d.getPlanId(), balance));
         body.put("events", eventRepository.findByCaseIdOrderByIdAsc(c.getId()).stream()
