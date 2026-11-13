@@ -2065,8 +2065,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHint("销售订单不属于该工厂, 请选择本工厂的订单").withHintTarget("sourceOrderId");
                 }
                 BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-                // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
-                assertSalesOrderFinanceApproved(so, "sourceOrderId");
+                // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产 (状态在销售单行锁内复核)
+                assertSalesOrderFinanceApproved(so, "sourceOrderId", lockSalesOrderStatus(so));
                 snapshotSalesOwnershipContract(request, so,
                         so.getProcessingMode(), so.getMaterialSupplyMode(), "sourceOrderId");
                 if ((request.getSourceCustomerName() == null || request.getSourceCustomerName().isBlank())
@@ -2097,8 +2097,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新销售订单列表后重新选择").withHintTarget("sourceOrderItemId");
         }
         BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-        // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
-        assertSalesOrderFinanceApproved(so, "sourceOrderItemId");
+        // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产 (状态在销售单行锁内复核)
+        assertSalesOrderFinanceApproved(so, "sourceOrderItemId", lockSalesOrderStatus(so));
 
         // A line-level override is the finest-grained sales truth. Legacy lines
         // without a snapshot inherit the authoritative order-header contract.
@@ -2173,7 +2173,30 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * @param hintTarget 防呆提示定位字段 (sourceOrderId 或 sourceOrderItemId)
      */
     private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget) {
-        SalesOrderStatus status = so.getStatus();
+        assertSalesOrderFinanceApproved(so, hintTarget, so.getStatus());
+    }
+
+    /**
+     * 锁住销售单行并返回已提交的最新状态 (手工建计划 / 合并计划读状态前必须先走这里)。
+     * 锁顺序: 销售单 → 生产计划 → 日调度计划, 与取消订单 (先锁销售单再取消计划) 和插单
+     * ({@link com.cretas.aims.service.scheduling.ProductionPlanScheduleLock}, 计划 → 日调度计划) 一致;
+     * 同一次请求里要锁多张销售单时按 id 排序 (见 {@link #normalizeAndValidateSourceOrderIds})。
+     * 取消先提交 → 这里读到 CANCELLED, 校验失败; 建计划先提交 → 取消随后看得见这张新计划并连带取消。
+     * 行不存在返回 null (调用方此前已按 id 读到过这张单, 视为状态未知而拦下)。
+     */
+    private SalesOrderStatus lockSalesOrderStatus(SalesOrder so) {
+        String locked = salesOrderRepository.lockStatusForUpdate(so.getId()).orElse(null);
+        if (locked == null) {
+            return null;
+        }
+        try {
+            return SalesOrderStatus.valueOf(locked);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget, SalesOrderStatus status) {
         boolean approved = status == SalesOrderStatus.FINANCE_APPROVED
                 || status == SalesOrderStatus.PROCESSING
                 || status == SalesOrderStatus.PARTIAL_DELIVERED
@@ -2229,6 +2252,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 对超出主 SO 的额外 SO 做校验 (主 SO 在 validateAndEnrichSalesOrderSource 里已验过)
         if (deduped.size() > 1) {
+            // 两个请求以相反顺序合并同一批销售单时, 按列表顺序加锁会互相等死: 先按 id 排序把行锁全拿到。
+            deduped.subList(1, deduped.size()).stream()
+                    .filter(id -> id != null && !id.isBlank())
+                    .sorted()
+                    .forEach(id -> salesOrderRepository.lockStatusForUpdate(id));
             for (int i = 1; i < deduped.size(); i++) {
                 String extraSoId = deduped.get(i);
                 if (extraSoId == null || extraSoId.isBlank()) continue;
@@ -2244,7 +2272,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("sourceOrderIds");
                 }
                 BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-                assertSalesOrderFinanceApproved(so, "sourceOrderIds");
+                assertSalesOrderFinanceApproved(so, "sourceOrderIds", lockSalesOrderStatus(so));
                 assertCompatibleOwnershipContract(plan, so, extraSoId);
             }
         }
@@ -9316,9 +9344,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId) {
+        cancelProductionPlan(factoryId, planId, reason, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId,
+                                     String viaSalesOrderId) {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
             .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-        requireVisiblePlan(factoryId, plan);
+        boolean belongsToCancelledOrder = viaSalesOrderId != null && factoryId.equals(plan.getFactoryId())
+                && viaSalesOrderId.equals(plan.getSourceOrderId());
+        if (belongsToCancelledOrder) {
+            log.info("随销售单取消计划, 行范围以销售单为准: factoryId={}, planId={}, SO={}, 操作人={}",
+                    factoryId, planId, viaSalesOrderId, operatorId);
+        } else {
+            requireVisiblePlan(factoryId, plan);
+        }
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {

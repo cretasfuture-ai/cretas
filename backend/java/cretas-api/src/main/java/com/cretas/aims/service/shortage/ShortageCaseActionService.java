@@ -236,6 +236,49 @@ public class ShortageCaseActionService {
         return c;
     }
 
+    /** 订单取消连带处理缺料采购单的结果: 已取消的单号、没动的单号 (已审批以后的单子有供应商承诺, 留给采购自己处理)。 */
+    public record DraftsCancelled(List<String> cancelled, List<String> keptLive) {
+    }
+
+    /**
+     * 销售订单取消时, 取消这个缺料实例名下还没审批的采购草稿 (草稿 / 已提交待审批), 并在实例上留痕。
+     * 已审批及以后 (有供应商承诺 / 已部分收货) 的采购单不自动撤, 单号写进留痕交给采购。
+     * 调用方已持有销售单行锁和本实例的行锁; 必须先于 {@link #decide} 调用 (decide 的留痕会数「还在走」的采购单)。
+     */
+    @Transactional
+    public DraftsCancelled cancelDraftsForCancelledOrder(ShortageCase c, String reason, ActorRef actor) {
+        List<String> cancelled = new ArrayList<>();
+        List<String> keptLive = new ArrayList<>();
+        for (ShortageCaseAction a : actionRepository.findByCaseIdOrderByIdAsc(c.getId())) {
+            if (a.getActionType() != ShortageCaseAction.ActionType.PURCHASE_DRAFT
+                    || a.getStatus() != ShortageCaseAction.Status.DONE || a.getResultRef() == null) {
+                continue;
+            }
+            PurchaseOrder po = purchaseOrderRepository.findByIdAndFactoryId(a.getResultRef(), c.getFactoryId()).orElse(null);
+            if (po == null || !LIVE_PO.contains(po.getStatus())) {
+                continue;
+            }
+            String label = po.getOrderNumber() != null ? po.getOrderNumber() : po.getId();
+            if (po.getStatus() == PurchaseOrderStatus.DRAFT || po.getStatus() == PurchaseOrderStatus.SUBMITTED) {
+                purchaseService.cancelOrder(c.getFactoryId(), po.getId());
+                cancelled.add(label);
+            } else {
+                keptLive.add(label);
+            }
+        }
+        if (!cancelled.isEmpty() || !keptLive.isEmpty()) {
+            StringBuilder detail = new StringBuilder("销售订单取消: ").append(reason == null ? "" : reason.trim());
+            if (!cancelled.isEmpty()) {
+                detail.append("；已一并取消未审批的缺料采购单 ").append(String.join("、", cancelled));
+            }
+            if (!keptLive.isEmpty()) {
+                detail.append("；采购单 ").append(String.join("、", keptLive)).append(" 已审批或已到货, 未自动取消, 需采购自行处理");
+            }
+            event(c, c.getStage(), c.getStage(), "PURCHASE_DRAFTS_CANCELLED_WITH_ORDER", detail.toString(), actor);
+        }
+        return new DraftsCancelled(cancelled, keptLive);
+    }
+
     private long liveDraftCount(ShortageCase c) {
         return actionRepository.findByCaseIdOrderByIdAsc(c.getId()).stream()
                 .filter(a -> a.getActionType() == ShortageCaseAction.ActionType.PURCHASE_DRAFT
