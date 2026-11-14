@@ -118,6 +118,12 @@ function batchLabel(batch: BatchOption): string {
   return `${batch.batchNumber || `批次 #${batch.id}`}${batch.productName ? ` · ${batch.productName}` : ''}`;
 }
 
+// E-3：批次页的扣留标签读召回事件自己的 eventCode（独立字段 + FROZEN 状态），
+// 不把召回单号塞进检验单号（inspectionNo）；标签与批次号之间留间隔。
+function holdRecalls(items: FactoryRecallSummary[]): FactoryRecallSummary[] {
+  return items.filter((item) => String(item.status || '').toUpperCase() === 'FROZEN' && item.eventCode);
+}
+
 function defaultRecall(items: FactoryRecallSummary[]): FactoryRecallSummary | undefined {
   const activeStatuses = new Set(['OPEN', 'IN_PROGRESS', 'FROZEN', 'PENDING_APPROVAL']);
   return items.find((item) => activeStatuses.has(String(item.status || '').toUpperCase())) || items[0];
@@ -578,6 +584,9 @@ onActivated(() => {
       <el-alert v-if="preview" type="info" :closable="false" class="batch-context">
         <template #title>
           <strong>{{ preview.batchNumber }} · {{ preview.productName }}</strong>
+          <el-tag v-for="hold in holdRecalls(recalls)" :key="hold.eventCode" type="warning" size="small" class="hold-tag" data-testid="recall-hold-tag">
+            扣留中 · {{ hold.eventCode }}
+          </el-tag>
           <span> · 剩余库存 {{ preview.remainingInventory }} {{ preview.unit }}</span>
         </template>
         <template #default>
@@ -765,6 +774,7 @@ onActivated(() => {
 </template>
 
 <style scoped>
+.hold-tag { margin-left: 12px; }
 .recall-page { padding: 20px; }
 .page-card { max-width: 1440px; margin: 0 auto; }
 .page-header, .detail-header, .batch-picker, .close-bar { display: flex; align-items: center; gap: 12px; }

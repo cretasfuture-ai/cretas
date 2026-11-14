@@ -252,7 +252,7 @@ async function handleSync(id: string) {
     padding-bottom: 28px;
     border-bottom: 1px dashed #ebeef5;
     .hero-title { font-size: 20px; font-weight: 600; color: #303133; margin-bottom: 12px; }
-    .hero-desc { font-size: 14px; color: #606266; line-height: 1.8; max-width: 680px; margin: 0 auto; b { color: #409eff; } }
+    .hero-desc { font-size: 14px; color: #606266; line-height: 1.8; max-width: 680px; margin: 0 auto; b { color: var(--el-color-primary); } }
   }
   .brand-list {
     margin-top: 24px;

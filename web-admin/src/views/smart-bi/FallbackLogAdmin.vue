@@ -580,7 +580,7 @@ watch(activeTab, async () => {
 
   .sim-bar-fill {
     height: 100%;
-    background: linear-gradient(to right, #409eff, #67c23a);
+    background: linear-gradient(to right, var(--cs-primary), #67c23a);
     transition: width 0.3s;
   }
   .sim-value {

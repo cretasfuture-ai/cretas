@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { menuConfig, type MenuItem } from '../menuConfig';
+import { configurableMenuConfig, type MenuItem } from '../menuConfig';
 import { getFactoryModuleMenuOptions } from '../factoryMenuVisibility';
 
 describe('platform menu catalog consumed by the backend', () => {
@@ -14,9 +14,9 @@ describe('platform menu catalog consumed by the backend', () => {
         if (item.children) visit(item.children);
       }
     };
-    visit(menuConfig);
+    visit(configurableMenuConfig);
     const expected = Object.fromEntries([...modules].sort().map((moduleId) => [
-      moduleId, getFactoryModuleMenuOptions(menuConfig, moduleId).map((option) => option.path).sort(),
+      moduleId, getFactoryModuleMenuOptions(configurableMenuConfig, moduleId).map((option) => option.path).sort(),
     ]));
     const catalog = JSON.parse(readFileSync(resolve(process.cwd(),
       '../backend/java/cretas-api/src/main/resources/platform/factory-menu-paths.json',
@@ -34,6 +34,8 @@ describe('platform menu catalog consumed by the backend', () => {
     expect(catalog.warehouse).toContain('/warehouse/source-individuals');
     expect(catalog.warehouse).toContain('/warehouse/wastage-reports');
     expect(catalog.production).toContain('/production/bom/ecns');
+    expect(catalog.production).toContain('/production/weigh');
+    expect(catalog.warehouse).toContain('/warehouse/wip-batches');
     expect(catalog.sales).toContain('/sales/vehicles');
   });
 

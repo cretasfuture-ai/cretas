@@ -10,6 +10,9 @@ import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import type { TableRow } from '@/types/api';
 import { TableFooter } from '@/components/list';
+import CsBatchNoSearch from '@/components/cs/CsBatchNoSearch.vue';
+import CsRelativeDate from '@/components/cs/CsRelativeDate.vue';
+import type { RelativeDateKey, RelativeRange } from '@/utils/listFilters';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
@@ -46,6 +49,36 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 
 const searchKeyword = ref('');
 const filterResult = ref('');
+// 批量批次号 (BL21) / 相对日期 (BL23): 匹配与过滤都在后端, 前端只传条件
+const batchNos = ref<string[]>([]);
+const dateKey = ref<RelativeDateKey | ''>('');
+const dateRange = ref<{ from: string; to: string } | null>(null);
+const batchNoSearchRef = ref<InstanceType<typeof CsBatchNoSearch> | null>(null);
+
+async function searchBatchNos(nos: string[]) {
+  if (!factoryId.value) throw new Error('未选择工厂');
+  const res = await get<{ found: string[]; missing: string[] }>(
+    `/${factoryId.value}/processing/quality/inspections/batch-no-check`,
+    { params: { batchNos: nos.join(',') } },
+  );
+  if (!res.success || !res.data) throw new Error(res.message || '批量查询失败');
+  batchNos.value = nos;
+  pagination.value.page = 1;
+  await loadData();
+  return { found: pagination.value.total, missing: res.data.missing };
+}
+
+function clearBatchNos() {
+  batchNos.value = [];
+  pagination.value.page = 1;
+  void loadData();
+}
+
+function onDateChange(range: RelativeRange | null) {
+  dateRange.value = range ? { from: range.from, to: range.to } : null;
+  pagination.value.page = 1;
+  void loadData();
+}
 
 // U-FOOTER-1
 // KPI-vs-list drift fix (2026-07): filterResult MUST be declared BEFORE this
@@ -198,6 +231,9 @@ watch(() => [route.query.batchId, factoryId.value], async () => {
   pagination.value.page = 1;
   searchKeyword.value = '';
   filterResult.value = '';
+  batchNos.value = [];
+  dateKey.value = '';
+  dateRange.value = null;
   dialogVisible.value = false;
   invalidateDynamicRequest();
   if (!hasBatchContext.value) {
@@ -240,7 +276,10 @@ async function loadData() {
         size: pagination.value.size,
         keyword: searchKeyword.value || undefined,
         batchId: scopedBatchId.value || undefined,
-        result: filterResult.value || undefined
+        result: filterResult.value || undefined,
+        batchNos: batchNos.value.length ? batchNos.value.join(',') : undefined,
+        dateFrom: dateRange.value?.from,
+        dateTo: dateRange.value?.to
       }
     });
     if (currentContext !== contextRequest) return;
@@ -266,6 +305,10 @@ function handleSearch() {
 function handleRefresh() {
   searchKeyword.value = '';
   filterResult.value = '';
+  batchNos.value = [];
+  dateKey.value = '';
+  dateRange.value = null;
+  batchNoSearchRef.value?.clearAll();
   pagination.value.page = 1;
   loadData();
 }
@@ -439,6 +482,8 @@ function registerDefect(row: TableRow) {
           style="width: 280px"
           @keyup.enter="handleSearch"
         />
+        <CsBatchNoSearch ref="batchNoSearchRef" label="批次号" :on-search="searchBatchNos" @clear="clearBatchNos" />
+        <CsRelativeDate v-model="dateKey" @change="onDateChange" />
         <el-select v-model="filterResult" placeholder="检测结果" clearable style="width: 150px">
           <el-option label="合格" value="PASS" />
           <el-option label="不合格" value="FAIL" />

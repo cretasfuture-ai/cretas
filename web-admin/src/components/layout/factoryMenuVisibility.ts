@@ -1,5 +1,14 @@
 import type { MenuItem } from './menuConfig';
 
+/** Explicit per-factory opt-in; unrelated tenants retain their existing layout. */
+export function getFactoryMenuProfile(features: unknown): 'wholesale' | undefined {
+  if (!Array.isArray(features)) return undefined;
+  const rows = features.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+  const config = rows.find((row) => row.moduleId === 'dashboard')?.config;
+  return config && typeof config === 'object'
+    && (config as Record<string, unknown>).businessNavigationProfile === 'wholesale' ? 'wholesale' : undefined;
+}
+
 /**
  * P2b（迁移方案 M3，2026-11-14）：「数据与分析」组对工厂**默认显示**，按厂可关。
  * 关 = feature-config 里 analytics（无此行时读旧别名 smartbi）的 config.showInSidebar === false。
@@ -17,13 +26,16 @@ export function isFactoryAnalyticsSidebarTurnedOff(features: unknown): boolean {
     && (config as Record<string, unknown>).showInSidebar === false);
 }
 
+const ANALYTICS_CONTAINER_PATH = '#group/analytics';
+
 /** 只作用于工厂（FACTORY）的 /smart-bi 组；只会多隐藏，从不放宽模块/角色判据。 */
 export function isFactoryAnalyticsGroupHidden(
   factoryType: string,
   path: string,
   turnedOff: boolean,
 ): boolean {
-  return factoryType === 'FACTORY' && path === '/smart-bi' && turnedOff;
+  // P6：原型分组的展示容器 '#group/analytics' 也认同一个开关——搬进来的成本分析 / 物料均价（D1/D6）跟着整组一起关
+  return factoryType === 'FACTORY' && (path === '/smart-bi' || path === ANALYTICS_CONTAINER_PATH) && turnedOff;
 }
 
 export function getDisabledFactoryMenuPaths(features: unknown): string[] {

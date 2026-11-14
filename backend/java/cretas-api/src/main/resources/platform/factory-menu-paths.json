@@ -24,6 +24,9 @@
   "dashboard": [
     "/dashboard",
     "/dashboard/ai-value",
+    "/issues",
+    "/today",
+    "/todo",
     "/workflow/acted",
     "/workflow/copied",
     "/workflow/my-created",
@@ -95,6 +98,7 @@
     "/production/process-hub",
     "/production/shortage-cases",
     "/production/traceability",
+    "/production/weigh",
     "/production/yield-standard",
     "/system/products",
     "/workdesk/production-manager"
@@ -195,6 +199,7 @@
     "/warehouse/storage-locations",
     "/warehouse/unordered-inbound-applications",
     "/warehouse/wastage-reports",
+    "/warehouse/wip-batches",
     "/workdesk/warehouse-keeper"
   ]
 }

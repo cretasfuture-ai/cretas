@@ -655,6 +655,42 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     @Override
+    @DataScope("created_by")
+    public PageResponse<PurchaseOrder> searchPurchaseOrders(String factoryId, PurchaseOrderStatus status, String keyword,
+                                                            LocalDate orderDateFrom, LocalDate orderDateTo,
+                                                            List<Long> owners, int page, int size) {
+        if (orderDateFrom != null && orderDateTo != null && orderDateFrom.isAfter(orderDateTo)) {
+            throw new BusinessException(400, "订单日期范围不成立: 开始 " + orderDateFrom + " 晚于结束 " + orderDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        List<Long> createdBy = owners;
+        if (createdBy == null) {
+            // 与 getPurchaseOrders / getPurchaseOrdersByStatus 同一套 DataScope 口径
+            DataScopeContext dsCtx = DataScopeContext.current();
+            if (dsCtx != null && dsCtx.isFiltered() && dsCtx.getUserId() != null) {
+                com.cretas.aims.entity.enums.DataScope scope = dsCtx.getScope();
+                if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+                    createdBy = List.of(dsCtx.getUserId());
+                } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                        || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+                    createdBy = dataScopeResolver != null
+                            ? dataScopeResolver.resolveCreatedByChain(dsCtx) : List.of(dsCtx.getUserId());
+                    if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
+                }
+            }
+        }
+        if (createdBy != null && createdBy.isEmpty()) {
+            return PageResponse.of(List.of(), page, size, 0L);
+        }
+        String escaped = keyword == null ? null : keyword.trim()
+                .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        Page<PurchaseOrder> result = purchaseOrderRepository.searchListPage(factoryId, createdBy, status, escaped,
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+        hydrateSalesOrderNumbers(result.getContent());
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     @Transactional(readOnly = true)
     public PageResponse<PurchaseOrder> getPurchaseOrdersByStatusOwnedBy(String factoryId, PurchaseOrderStatus status,
                                                                         List<Long> owners, int page, int size) {

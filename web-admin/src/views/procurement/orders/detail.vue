@@ -712,7 +712,7 @@ async function handleDownloadSupplyOrderPdf() {
                 <el-table-column label="说明" width="60" align="center">
                   <template #default="{ row }">
                     <el-tooltip v-if="row.dataSourceHint" :content="row.dataSourceHint" placement="left">
-                      <el-icon style="color: #409eff; cursor: help"><InfoFilled /></el-icon>
+                      <el-icon style="color: var(--cs-primary); cursor: help"><InfoFilled /></el-icon>
                     </el-tooltip>
                     <span v-else>-</span>
                   </template>

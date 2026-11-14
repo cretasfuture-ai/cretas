@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * 实时监控大屏
  * 显示当前生产状态、进度、概率、告警
@@ -181,7 +182,7 @@ function updateProgressChart() {
     itemStyle: {
       color: s.status === 'completed' ? '#67C23A' :
              s.status === 'in_progress' ? '#E6A23C' :
-             s.status === 'delayed' ? '#F56C6C' : '#409EFF'
+             s.status === 'delayed' ? '#F56C6C' : CS_TOKENS.primary
     }
   }));
 
@@ -721,7 +722,7 @@ function getProbabilityColor(prob: number) {
   }
 
   &.info {
-    border-left-color: #409EFF;
+    border-left-color: var(--el-color-primary);
   }
 
   .alert-icon {

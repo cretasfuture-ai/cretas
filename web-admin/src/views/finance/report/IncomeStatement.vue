@@ -297,7 +297,7 @@ onBeforeUnmount(() => { requestSequence++; });
 }
 
 .kpi-value.revenue {
-  color: #409eff;
+  color: var(--el-color-primary);
 }
 
 .kpi-value.gross {

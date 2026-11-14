@@ -1608,6 +1608,53 @@ public class ProcessingServiceImpl implements ProcessingService {
         );
     }
 
+    /** 批量批次号上限, 与前端共享组件一致。 */
+    static final int MAX_BATCH_NOS = 200;
+
+    @Override
+    public PageResponse<Map<String, Object>> searchInspections(
+            String factoryId, String batchId, java.util.List<String> results,
+            LocalDate dateFrom, LocalDate dateTo, String keyword, java.util.List<String> batchNos,
+            PageRequest pageRequest) {
+        if (dateFrom != null && dateTo != null && dateFrom.isAfter(dateTo)) {
+            throw new BusinessException(400, "开始日期不能晚于结束日期");
+        }
+        java.util.List<String> nos = normalizeBatchNos(batchNos);
+        String kw = keyword == null ? null : keyword.replaceAll("[%_\\\\]", "").trim();
+        java.util.List<String> upperResults = results == null ? null
+                : results.stream().map(s -> s.trim().toUpperCase(Locale.ROOT)).filter(s -> !s.isEmpty()).toList();
+        Long batchLongId = batchId == null ? null : parseBatchId(batchId);
+        Page<QualityInspection> page = qualityInspectionRepository.searchForAdminList(
+                factoryId, batchLongId, upperResults, dateFrom, dateTo, kw, nos,
+                org.springframework.data.domain.PageRequest.of(pageRequest.getPage() - 1, pageRequest.getSize()));
+        Map<Long, ProductionBatch> batchesById = productionBatchRepository.findAllById(
+                        page.getContent().stream().map(QualityInspection::getProductionBatchId)
+                                .filter(Objects::nonNull).collect(Collectors.toSet()))
+                .stream().collect(Collectors.toMap(ProductionBatch::getId, Function.identity()));
+        List<Map<String, Object>> maps = page.getContent().stream()
+                .map(i -> convertInspectionToMap(i, batchesById.get(i.getProductionBatchId())))
+                .collect(Collectors.toList());
+        return PageResponse.of(maps, pageRequest.getPage(), pageRequest.getSize(), page.getTotalElements());
+    }
+
+    @Override
+    public java.util.List<String> findInspectedBatchNumbers(String factoryId, java.util.List<String> batchNos) {
+        java.util.List<String> nos = normalizeBatchNos(batchNos);
+        if (nos == null) return java.util.List.of();
+        return qualityInspectionRepository.findBatchNumbersHavingInspection(factoryId, nos);
+    }
+
+    /** 去空白、去重、保序; 空返回 null (= 不按批次号过滤); 超过上限报错, 不静默截断。 */
+    private static java.util.List<String> normalizeBatchNos(java.util.List<String> raw) {
+        if (raw == null) return null;
+        java.util.List<String> out = raw.stream().filter(Objects::nonNull).map(String::trim)
+                .filter(s -> !s.isEmpty()).distinct().toList();
+        if (out.size() > MAX_BATCH_NOS) {
+            throw new BusinessException(400, "一次最多查询 " + MAX_BATCH_NOS + " 个批次号");
+        }
+        return out.isEmpty() ? null : out;
+    }
+
     /**
      * 获取质检详情
      */

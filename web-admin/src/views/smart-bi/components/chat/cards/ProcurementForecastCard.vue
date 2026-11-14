@@ -46,7 +46,7 @@ function formatNum(v: unknown): string {
 .summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; font-size: 13px; color: #606266; }
 .stat { font-weight: 500; }
 .divider { color: #dcdfe6; }
-.revenue { color: #409eff; font-size: 15px; }
+.revenue { color: var(--cs-primary); font-size: 15px; }
 .normal { color: #909399; font-size: 12px; }
 .total-row { margin-top: 10px; padding: 8px 12px; background: #f0f7ff; border-radius: 4px; font-size: 13px; }
 .note { margin-top: 10px; font-size: 12px; color: #909399; font-style: italic; }

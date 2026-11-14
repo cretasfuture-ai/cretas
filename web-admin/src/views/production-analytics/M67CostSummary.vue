@@ -182,10 +182,10 @@ onMounted(load);
 .sum-page { padding: 16px; }
 .sum-header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 16px; }
 .sum-header h2 { margin: 0; }
-.sub { color: #909399; margin: 4px 0 0; font-size: 13px; }
+.sub { color: var(--cs-muted); margin: 4px 0 0; font-size: 13px; }
 .ctrls { display: flex; align-items: center; gap: 8px; }
 .mb { margin-bottom: 16px; }
-.y-ok { color: #67c23a; } .y-low { color: #f56c6c; font-weight: 600; } .y-high { color: #e6a23c; }
+.y-ok { color: var(--cs-success); } .y-low { color: var(--cs-danger); font-weight: 600; } .y-high { color: var(--cs-warning); }
 .wide-table :deep(.el-scrollbar__bar.is-horizontal) { opacity: 1; }
 .cost-partial-tag { margin-left: 6px; cursor: help; }
 </style>

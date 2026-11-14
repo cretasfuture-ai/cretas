@@ -822,25 +822,16 @@ async function loadData() {
       : `/${factoryId.value}/purchase/orders`;
     const params: TableRow = { page: pagination.value.page, size: pagination.value.size };
     if (statusFilter.value) params.status = statusFilter.value;
+    // 关键词(订单号/供应商名) + 订单日期由服务端过滤, 分页总数随之变化 (以前只在当前页 includes, 翻页后搜不到)
+    const kw = searchKeyword.value.trim();
+    if (kw) params.keyword = kw;
+    if (dateRange.value && dateRange.value[0] && dateRange.value[1]) {
+      params.startDate = dateRange.value[0];
+      params.endDate = dateRange.value[1];
+    }
     const response = await get(url, { params });
     if (response.success && response.data) {
-      let rows = response.data.content || [];
-      // Client-side keyword + date filter (Apr 21 2026): backend lacks
-      // keyword param on purchase/orders; filter locally on current page.
-      const kw = searchKeyword.value.trim().toLowerCase();
-      if (kw) {
-        rows = rows.filter((r: TableRow) =>
-          String(r.orderNumber || '').toLowerCase().includes(kw) ||
-          String(r.supplierName || (r.supplier as TableRow)?.name || '').toLowerCase().includes(kw)
-        );
-      }
-      if (dateRange.value && dateRange.value[0] && dateRange.value[1]) {
-        const [from, to] = dateRange.value;
-        rows = rows.filter((r: TableRow) => {
-          const d = String(r.orderDate || '').slice(0, 10);
-          return d && d >= from && d <= to;
-        });
-      }
+      const rows = response.data.content || [];
       tableData.value = rows;
       pagination.value.total = response.data.totalElements || 0;
 

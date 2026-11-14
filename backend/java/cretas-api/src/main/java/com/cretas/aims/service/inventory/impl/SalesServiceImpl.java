@@ -1125,6 +1125,33 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
+    @DataScope("created_by")
+    public PageResponse<SalesOrder> searchSalesOrders(String factoryId, SalesOrderStatus status, String keyword,
+                                                      LocalDate orderDateFrom, LocalDate orderDateTo,
+                                                      int page, int size) {
+        if (orderDateFrom != null && orderDateTo != null && orderDateFrom.isAfter(orderDateTo)) {
+            throw new BusinessException(400, "订单日期范围不成立: 开始 " + orderDateFrom + " 晚于结束 " + orderDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        DataScopeContext dsCtx = DataScopeContext.current();
+        com.cretas.aims.entity.enums.DataScope scope = (dsCtx != null && dsCtx.getUserId() != null)
+                ? dsCtx.getScope() : null;
+        List<Long> createdBy = null;
+        if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+            createdBy = List.of(dsCtx.getUserId());
+        } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+            createdBy = dataScopeResolver != null ? dataScopeResolver.resolveCreatedByChain(dsCtx) : null;
+            if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
+        }
+        String escaped = keyword == null ? null : keyword.trim()
+                .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        Page<SalesOrder> result = salesOrderRepository.searchListPage(factoryId, createdBy, status, escaped,
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
     public PageResponse<SalesOrder> getSalesOrdersByStatus(String factoryId, SalesOrderStatus status, int page, int size) {
         PageRequest pageRequest = PageRequest.of(page - 1, size);
         Page<SalesOrder> result = salesOrderRepository.findByFactoryIdAndStatusOrderByCreatedAtDesc(factoryId, status, pageRequest);

@@ -499,7 +499,7 @@ const handleStartPicking = (row: Requisition) =>
 // 摘要。这段 HTML 走 ElMessageBox 的 dangerouslyUseHTMLString, 没有 Vue 事件绑定,
 // 折叠交互只能用原生 <details>/<summary> (浏览器原生行为, 不需要 JS)。
 function buildItemsSummaryHtml(items: RequisitionItem[], qtyField: 'pickedQty' | 'issuedQty'): string {
-  if (items.length === 0) return '<div style="color:#909399">（无物料行）</div>';
+  if (items.length === 0) return '<div style="color:var(--cs-muted)">（无物料行）</div>';
   const rowHtml = (it: RequisitionItem) => {
     const name = it.materialName || it.materialTypeId || '-';
     const amount = qty(it[qtyField] ?? it.pickedQty);
@@ -509,7 +509,7 @@ function buildItemsSummaryHtml(items: RequisitionItem[], qtyField: 'pickedQty' |
   const { nonZero, zero } = splitZeroQtyRows(items, (it) => toNumber(it[qtyField] ?? it.pickedQty));
   const nonZeroHtml = nonZero.map(rowHtml).join('');
   const zeroHtml = zero.length > 0
-    ? `<details style="margin-top:4px;color:#909399"><summary style="cursor:pointer">另有 ${zero.length} 项本次不领</summary>${zero.map(rowHtml).join('')}</details>`
+    ? `<details style="margin-top:4px;color:var(--cs-muted)"><summary style="cursor:pointer">另有 ${zero.length} 项本次不领</summary>${zero.map(rowHtml).join('')}</details>`
     : '';
   return `<div style="margin-top:8px;max-height:200px;overflow-y:auto">${nonZeroHtml}${zeroHtml}</div>`;
 }
@@ -901,7 +901,7 @@ async function submitCancel() {
               :value="plan.id"
             />
           </el-select>
-          <div v-if="!planOptionsLoading && planOptions.length === 0" style="font-size: 12px; color: #f56c6c; margin-top: 6px">
+          <div v-if="!planOptionsLoading && planOptions.length === 0" style="font-size: 12px; color: var(--cs-danger); margin-top: 6px">
             暂无待生成领料单的生产计划(待执行/进行中)，请先
             <el-button type="primary" link size="small" @click="createDialogVisible = false; router.push('/production/plans')">去创建生产计划</el-button>
           </div>
@@ -917,8 +917,8 @@ async function submitCancel() {
             placeholder="选填，单位 kg"
             style="width: 220px"
           />
-          <span style="margin-left: 8px; font-size: 12px; color: #909399">kg，选填</span>
-          <div style="font-size: 12px; color: #909399; margin-top: 6px">
+          <span style="margin-left: 8px; font-size: 12px; color: var(--cs-muted)">kg，选填</span>
+          <div style="font-size: 12px; color: var(--cs-muted); margin-top: 6px">
             这批计划实际领多少原料，由你现场决定；填了才能按配方比例算出辅料/包材需求量，
             留空则辅料/包材需求量显示「按实际领用」。
           </div>
@@ -1125,7 +1125,7 @@ async function submitCancel() {
 .page-subtitle {
   display: block;
   margin-top: 4px;
-  color: #7a8599;
+  color: var(--cs-muted);
   font-size: 13px;
 }
 
@@ -1167,7 +1167,7 @@ async function submitCancel() {
 }
 
 .danger {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 </style>

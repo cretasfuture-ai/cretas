@@ -78,7 +78,7 @@ class PurchaseReceivingByStatusScopeContractTest {
         bind(request);
 
         ApiResponse<PageResponse<PurchaseOrder>> response = controller.listOrdersByStatus(
-                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, 1, 20, "Bearer t", request);
+                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, null, null, null, 1, 20, "Bearer t", request);
 
         assertThat(response.getData().getContent()).extracting(PurchaseOrder::getId).containsExactly("PO-MINE");
         assertThat(response.getActionHint()).isEqualTo(PurchaseController.SCOPED_RECEIVING_HINT);
@@ -98,7 +98,7 @@ class PurchaseReceivingByStatusScopeContractTest {
         bind(request);
 
         ApiResponse<PageResponse<PurchaseOrder>> response = controller.listOrdersByStatus(
-                FACTORY, PurchaseOrderStatus.CLOSED, 1, 20, "Bearer t", request);
+                FACTORY, PurchaseOrderStatus.CLOSED, null, null, null, 1, 20, "Bearer t", request);
 
         assertThat(response.getData().getContent()).isEmpty();
         verify(service, never()).getPurchaseOrdersByStatus(anyString(), any(), anyInt(), anyInt());
@@ -115,7 +115,7 @@ class PurchaseReceivingByStatusScopeContractTest {
         bind(request);
 
         ApiResponse<PageResponse<PurchaseOrder>> response = controller.listOrdersByStatus(
-                FACTORY, PurchaseOrderStatus.COMPLETED, 1, 20, "Bearer t", request);
+                FACTORY, PurchaseOrderStatus.COMPLETED, null, null, null, 1, 20, "Bearer t", request);
 
         assertThat(response.getActionHint()).isNull();
         verify(service).getPurchaseOrdersByStatus(FACTORY, PurchaseOrderStatus.COMPLETED, 1, 20);
@@ -133,7 +133,8 @@ class PurchaseReceivingByStatusScopeContractTest {
         var interceptor = new DataScopeRouteInterceptor(resolver, jdbc);
 
         HandlerMethod unannotatedOnPurchaseController = new HandlerMethod(controller(mock(PurchaseService.class)),
-                PurchaseController.class.getMethod("listOrders", String.class, String.class, int.class, int.class,
+                PurchaseController.class.getMethod("listOrders", String.class, String.class, String.class,
+                        java.time.LocalDate.class, java.time.LocalDate.class, int.class, int.class,
                         jakarta.servlet.http.HttpServletRequest.class));
         assertThat(unannotatedOnPurchaseController.hasMethodAnnotation(RowScopeSupported.class)).isFalse();
         assertThatThrownBy(() -> interceptor.preHandle(get("purchase/orders/by-status"), new MockHttpServletResponse(),
@@ -178,7 +179,7 @@ class PurchaseReceivingByStatusScopeContractTest {
         bind(request);
 
         ApiResponse<PageResponse<PurchaseOrder>> response = controller.listOrdersByStatus(
-                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, 1, 20, "Bearer t", request);
+                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, null, null, null, 1, 20, "Bearer t", request);
 
         assertThat(response.getData().getContent()).isEmpty();
         assertThat(response.getData().getTotalElements()).isZero();
@@ -195,7 +196,7 @@ class PurchaseReceivingByStatusScopeContractTest {
         bind(request);
 
         assertThatThrownBy(() -> controller.listOrdersByStatus(
-                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, 1, 20, "Bearer t", request))
+                FACTORY, PurchaseOrderStatus.FINANCE_APPROVED, null, null, null, 1, 20, "Bearer t", request))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(503));
         org.mockito.Mockito.verifyNoInteractions(service);
     }
@@ -211,7 +212,7 @@ class PurchaseReceivingByStatusScopeContractTest {
     }
 
     private static java.lang.reflect.Method byStatusMethod() throws NoSuchMethodException {
-        return PurchaseController.class.getMethod("listOrdersByStatus", String.class, PurchaseOrderStatus.class,
+        return PurchaseController.class.getMethod("listOrdersByStatus", String.class, PurchaseOrderStatus.class, String.class, java.time.LocalDate.class, java.time.LocalDate.class,
                 int.class, int.class, String.class, jakarta.servlet.http.HttpServletRequest.class);
     }
 

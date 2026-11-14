@@ -505,7 +505,7 @@ onBeforeUnmount(() => {
 .production-analysis {
   padding: 20px;
   min-height: calc(100vh - 64px);
-  background: #f5f7fa;
+  background: var(--cs-surface-subtle);
 }
 
 .toolbar {

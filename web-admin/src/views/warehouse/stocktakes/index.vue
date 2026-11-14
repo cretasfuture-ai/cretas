@@ -1716,7 +1716,7 @@ onMounted(async () => {
         </el-form-item>
         <el-form-item label="盘点月份" required>
           <el-input v-model="bulkForm.periodMonth" placeholder="YYYY-MM" style="width: 160px" />
-          <span style="margin-left: 8px; color: #909399; font-size: 12px">格式: 2026-06</span>
+          <span style="margin-left: 8px; color: var(--cs-muted); font-size: 12px">格式: 2026-06</span>
         </el-form-item>
         <el-form-item label="期初建账">
           <el-checkbox v-model="bulkForm.openingMode" @change="onOpeningModeChange">
@@ -1724,7 +1724,7 @@ onMounted(async () => {
           </el-checkbox>
         </el-form-item>
         <!-- fool-proof Rule 3: 说人话在前, 会计术语收进可展开的次要说明里 (不是主文案) -->
-        <div v-if="bulkForm.openingMode" style="margin: 0 0 12px 110px; max-width: 760px; color: #606266; font-size: 13px; line-height: 1.7">
+        <div v-if="bulkForm.openingMode" style="margin: 0 0 12px 110px; max-width: 760px; color: var(--cs-muted); font-size: 13px; line-height: 1.7">
           期初建账 = 告诉系统你工厂<b>现在仓库里已经有多少</b>原料/调料，系统从这个数量开始记账。
           只要填 <b>物料 + 数量</b> 就行（单价可以不填，不填就只记数量、不算钱），<b>不会产生要付的钱（应付款）</b>——
           跟「采购入库」不一样，这只是把你已经有的库存"登记"进系统。
@@ -1732,7 +1732,7 @@ onMounted(async () => {
             <template #reference>
               <el-link type="primary" :underline="false" style="font-size: 12px; margin-left: 4px">会计科目说明 ▸</el-link>
             </template>
-            <div style="font-size: 12px; color: #606266; line-height: 1.7">
+            <div style="font-size: 12px; color: var(--cs-muted); line-height: 1.7">
               系统内部会自动记一笔期初凭证：<b>借 1403 原材料 / 贷 4001 实收资本</b>。
               不计入营业外收入（不会虚增本期利润），也不产生采购应付款。
               诚实-null：没填单价的物料只建数量，不计入凭证金额。
@@ -1756,7 +1756,7 @@ onMounted(async () => {
                   </template>
                 </el-table-column>
                 <el-table-column label="物料" min-width="200">
-                  <template #header><span style="color: #f56c6c">*</span> 物料</template>
+                  <template #header><span style="color: var(--cs-danger)">*</span> 物料</template>
                   <template #default="{ row, $index }">
                     <el-select
                       v-model="row.materialTypeId"
@@ -1777,7 +1777,7 @@ onMounted(async () => {
                   </template>
                 </el-table-column>
                 <el-table-column label="数量" width="150">
-                  <template #header><span style="color: #f56c6c">*</span> 数量</template>
+                  <template #header><span style="color: var(--cs-danger)">*</span> 数量</template>
                   <template #default="{ row }">
                     <el-input-number v-model="row.quantity" :min="0" :precision="2" size="small" style="width: 130px" placeholder="期初数量" />
                   </template>
@@ -1811,7 +1811,7 @@ onMounted(async () => {
                 >
                   <el-button :icon="Upload">选择文件</el-button>
                   <template #tip>
-                    <span style="color: #909399; font-size: 12px">仅 .xlsx/.xls，请使用上方「下载当前库存模板」的文件填写「实盘数量」列</span>
+                    <span style="color: var(--cs-muted); font-size: 12px">仅 .xlsx/.xls，请使用上方「下载当前库存模板」的文件填写「实盘数量」列</span>
                   </template>
                 </el-upload>
               </el-form-item>
@@ -1830,7 +1830,7 @@ onMounted(async () => {
           >
             <el-button :icon="Upload">选择文件</el-button>
             <template #tip>
-              <span style="color: #909399; font-size: 12px">仅 .xlsx/.xls，请使用上方导出的模板填写「实盘数量」列</span>
+              <span style="color: var(--cs-muted); font-size: 12px">仅 .xlsx/.xls，请使用上方导出的模板填写「实盘数量」列</span>
             </template>
           </el-upload>
         </el-form-item>
@@ -1874,7 +1874,7 @@ onMounted(async () => {
           <el-table-column label="物料名称" prop="materialName" min-width="130" />
           <el-table-column label="批次号" min-width="170">
             <template #default="{ row }">
-              <span v-if="row.willCreate" style="color: #909399">（新建，自动生成）</span>
+              <span v-if="row.willCreate" style="color: var(--cs-muted)">（新建，自动生成）</span>
               <span v-else>{{ row.batchNumber }}</span>
             </template>
           </el-table-column>
@@ -2038,7 +2038,7 @@ onMounted(async () => {
 
         <!-- 差异预览 (APPROVED / APPLIED / RECOUNT_REQUIRED，均为只读) -->
         <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED' || detailData.status === 'RECOUNT_REQUIRED'" style="margin-top: 20px">
-          <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
+          <div style="font-weight: 600; margin-bottom: 8px; color: var(--cs-primary)">
             盘点差异预览
             <el-text v-if="detailData.status === 'APPLIED'" type="success" style="font-size: 12px; margin-left: 8px">（盘点已完成）</el-text>
             <el-text v-else-if="detailData.status === 'RECOUNT_REQUIRED'" type="warning" style="font-size: 12px; margin-left: 8px">（已归档，只读追溯；不可应用）</el-text>
@@ -2066,7 +2066,7 @@ onMounted(async () => {
             </el-table-column>
             <el-table-column label="差异" prop="differenceQty" width="90" align="right">
               <template #default="{ row }">
-                <span :style="{ color: Number(row.differenceQty) < 0 ? '#f56c6c' : Number(row.differenceQty) > 0 ? '#67c23a' : '' }">
+                <span :style="{ color: Number(row.differenceQty) < 0 ? 'var(--cs-danger)' : Number(row.differenceQty) > 0 ? 'var(--cs-success)' : '' }">
                   {{ row.differenceQty != null ? `${Number(row.differenceQty) > 0 ? '+' : ''}${row.differenceQty}${countDisplayUnit(row.quantityUnit)}` : '—' }}
                 </span>
               </template>
@@ -2159,7 +2159,7 @@ onMounted(async () => {
         <el-table-column label="差异" width="110" align="right">
           <template #default="{ row }">
             <span v-if="revealedDifference(row) !== null">
-              <span :style="{ color: Number(revealedDifference(row)) < 0 ? '#f56c6c' : Number(revealedDifference(row)) > 0 ? '#67c23a' : '' }">
+              <span :style="{ color: Number(revealedDifference(row)) < 0 ? 'var(--cs-danger)' : Number(revealedDifference(row)) > 0 ? 'var(--cs-success)' : '' }">
                 {{ Number(revealedDifference(row)) > 0 ? '+' : '' }}{{ revealedDifference(row) }}{{ countDisplayUnit(row.unit) }}
               </span>
             </span>
@@ -2215,7 +2215,7 @@ onMounted(async () => {
               <span v-if="row.stocktakeQuantity != null">
                 {{ row.stocktakeQuantity }}{{ countDisplayUnit(row.unit) }}
                 <span v-if="row.differenceQuantity != null"
-                      :style="{ color: row.differenceQuantity < 0 ? '#f56c6c' : row.differenceQuantity > 0 ? '#67c23a' : '' }">
+                      :style="{ color: row.differenceQuantity < 0 ? 'var(--cs-danger)' : row.differenceQuantity > 0 ? 'var(--cs-success)' : '' }">
                   （{{ row.differenceQuantity > 0 ? '+' : '' }}{{ row.differenceQuantity }}）
                 </span>
               </span>
@@ -2393,7 +2393,7 @@ onMounted(async () => {
 <style scoped>
 .page-container {
   padding: 20px;
-  background: #F4F6F9;
+  background: var(--cs-bg);
   min-height: 100%;
 }
 .page-header {
@@ -2406,7 +2406,7 @@ onMounted(async () => {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #1B65A8;
+  color: var(--cs-primary);
 }
 .header-actions {
   display: flex;
