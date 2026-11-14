@@ -988,18 +988,12 @@ async function loadData() {
     const effectiveSize = hasClientSideFilters.value ? 200 : pagination.value.size;
     const params: TableRow = { page: pagination.value.page, size: effectiveSize };
     if (statusFilter.value) params.status = statusFilter.value;
+    // 关键词由服务端过滤 (订单号 / 客户 / 销售员 / 备注), 分页总数随之变化; 以前只在当前页 includes, 翻页后的单号搜不到
+    const kw = searchKeyword.value.trim();
+    if (kw) params.keyword = kw;
     const res = await get(url, { params });
     if (res.success && res.data) {
-      let rows = res.data.content || [];
-      // Apr 20 Bug BR-07 fix: 补 keyword 搜索 (订单号 / 客户名)
-      const kw = searchKeyword.value.trim();
-      if (kw) {
-        const lower = kw.toLowerCase();
-        rows = rows.filter((r: TableRow) =>
-          String(r.orderNumber || '').toLowerCase().includes(lower) ||
-          String(r.customerName || '').toLowerCase().includes(lower)
-        );
-      }
+      const rows = res.data.content || [];
       tableData.value = rows;
       pagination.value.total = res.data.totalElements || 0;
 
