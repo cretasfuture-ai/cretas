@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 493
+expectedToolCount: 494
 expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
@@ -126,6 +126,27 @@ descriptors:
       requiredPermissions: true
       version: false
       domainTags: false
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_batch_yield_rank"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportBatchYieldRankTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "production"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: true
+      domainTags: true
     governanceStatus: REVIEW_REQUIRED
   - toolName: "report_cost_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool"
