@@ -157,8 +157,12 @@ ok "off: 不跑, 留痕"
 echo "C2. 两个发布脚本接上了"
 REL="$ROOT_DIR/scripts/deploy/release-cretas.sh"
 PYD="$ROOT_DIR/scripts/deploy/deploy-smartbi-python.sh"
-final_line=$(grep -n "^printf 'RELEASE_FINAL_STATUS=%s\\\\n' \"\$FINAL_STATUS\"$" "$REL" | tail -1 | cut -d: -f1)
-call_line=$(grep -n 'ai_live_probe_after_deploy java' "$REL" | cut -d: -f1)
+# 不经管道 (test-pipeline-tail-swallows-rc): 先落变量, 再用 bash 取最后一行 / 行号
+final_hits=$(grep -n "^printf 'RELEASE_FINAL_STATUS=%s\\\\n' \"\$FINAL_STATUS\"$" "$REL") || fail "release-cretas.sh 找不到 RELEASE_FINAL_STATUS 行"
+final_hits=${final_hits##*$'\n'}
+final_line=${final_hits%%:*}
+call_hits=$(grep -n 'ai_live_probe_after_deploy java' "$REL") || fail "release-cretas.sh 没调用钩子"
+call_line=${call_hits%%:*}
 [ -n "$final_line" ] && [ -n "$call_line" ] || fail "release-cretas.sh 找不到 RELEASE_FINAL_STATUS 行或钩子调用 (final=$final_line call=$call_line)"
 [ "$call_line" -gt "$final_line" ] || fail "钩子必须在最后一次 RELEASE_FINAL_STATUS 之后 (那一行仍恰好 1 次)"
 grep -q 'if \[ "\$JAVA_DEPLOY_OUTCOME" = deployed \]' "$REL" || fail "release-cretas.sh 只在 Java 真部署时跑实测关"
