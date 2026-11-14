@@ -89,16 +89,16 @@ function getVarianceAlert(stage: string): VarianceAlert | undefined {
 
       <div v-if="threePrice" style="display:flex;gap:16px;flex-wrap:wrap">
         <!-- 预报价 -->
-        <el-card style="flex:1;min-width:240px;border:2px solid #409eff" shadow="hover">
+        <el-card style="flex:1;min-width:240px;border:2px solid var(--el-color-primary)" shadow="hover">
           <template #header>
             <div style="display:flex;align-items:center;gap:8px">
-              <el-icon style="color:#409eff;font-size:18px"><Money /></el-icon>
-              <span style="font-weight:600;color:#409eff">预报价</span>
+              <el-icon style="color:var(--el-color-primary);font-size:18px"><Money /></el-icon>
+              <span style="font-weight:600;color:var(--el-color-primary)">预报价</span>
               <el-tag type="info" size="small">PRE</el-tag>
             </div>
           </template>
           <div style="text-align:center;padding:16px 0">
-            <div style="font-size:28px;font-weight:700;color:#409eff">
+            <div style="font-size:28px;font-weight:700;color:var(--el-color-primary)">
               {{ formatPrice(threePrice.preQuote) }}
             </div>
             <div style="color:#909399;font-size:12px;margin-top:8px">研发经验估算</div>

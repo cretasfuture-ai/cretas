@@ -7971,7 +7971,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 .canvas-tool-actions { display: flex; gap: 8px; }
 .canvas-floating-tools.is-batch-selecting {
-  border-color: #409eff;
+  border-color: var(--el-color-primary);
   box-shadow: 0 5px 18px rgb(64 158 255 / 22%);
 }
 .batch-selection-guide {
@@ -8133,7 +8133,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
 }
 @keyframes workflow-selected-cell-glow {
   from {
-    outline-color: #409eff;
+    outline-color: var(--el-color-primary);
     box-shadow: 0 0 0 7px rgb(64 158 255 / 18%), 0 0 20px 5px rgb(22 119 255 / 38%);
     filter: drop-shadow(0 0 6px rgb(22 119 255 / 68%)) drop-shadow(0 0 13px rgb(64 158 255 / 44%));
   }
@@ -8269,7 +8269,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   border: 1px solid #ebeef5; border-radius: 8px; font-size: 13px;
 }
 /* 用户点的是哪一行 —— 抽屉里必须认得出来, 否则一行都定位不到就等于没带 rowId。 */
-.bom-detail-row.is-focused { border-color: #409eff; background: #ecf5ff; }
+.bom-detail-row.is-focused { border-color: var(--el-color-primary); background: #ecf5ff; }
 .bom-detail-row-name { color: #303133; font-weight: 600; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .bom-detail-row-markers { display: flex; gap: 4px; }
 .bom-detail-marker {

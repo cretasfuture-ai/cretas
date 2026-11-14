@@ -548,7 +548,7 @@ async function addTrackingRecord() {
         <el-table-column prop="content" label="追踪内容" min-width="200" show-overflow-tooltip />
         <el-table-column prop="attachment" label="附件" width="100">
           <template #default="{ row }">
-            <a v-if="row.attachment" :href="row.attachment" target="_blank" style="color: #409eff">查看</a>
+            <a v-if="row.attachment" :href="row.attachment" target="_blank" style="color: var(--el-color-primary)">查看</a>
             <span v-else>-</span>
           </template>
         </el-table-column>

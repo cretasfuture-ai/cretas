@@ -371,7 +371,7 @@ function handleBeforeClose(done: () => void): void {
 }
 /* 已选状态不只靠颜色：加粗边框 + 左侧色条 + checkbox 勾选本身(§8)。 */
 .target-card.is-selected {
-  border-color: #409eff; border-left-width: 4px; background: #f2f8ff; font-weight: 650;
+  border-color: var(--el-color-primary); border-left-width: 4px; background: #f2f8ff; font-weight: 650;
 }
 .target-card__check { flex: 1; min-width: 0; }
 .target-card__check :deep(.el-checkbox__label) { min-width: 0; overflow: hidden; }
@@ -396,7 +396,7 @@ function handleBeforeClose(done: () => void): void {
   flex: none; padding: 1px 7px; border: 1px solid #d8e4ef; border-radius: 5px;
   background: #fff; color: #1b65a8; font-size: 11px; cursor: pointer;
 }
-.target-card__locate:hover { border-color: #409eff; background: #ecf5ff; }
+.target-card__locate:hover { border-color: var(--el-color-primary); background: #ecf5ff; }
 .target-card__locate:focus-visible { outline: 2px solid #1b65a8; outline-offset: 1px; }
-.target-card__locate.is-locked { border-color: #409eff; background: #409eff; color: #fff; }
+.target-card__locate.is-locked { border-color: var(--el-color-primary); background: var(--el-color-primary); color: #fff; }
 </style>

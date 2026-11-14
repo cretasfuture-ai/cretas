@@ -674,7 +674,7 @@ function handleAgingTypeChange() { void loadAging(); }
   .stat-sub { font-size: 12px; color: #b1b3b8; }
   &.ar .stat-value { color: #e6a23c; }
   &.ap .stat-value { color: #f56c6c; }
-  &.net .stat-value { color: #409eff; }
+  &.net .stat-value { color: var(--el-color-primary); }
   &.overdue .stat-value { color: #f56c6c; }
 }
 .tab-toolbar { display: flex; gap: 12px; margin-bottom: 16px; }
