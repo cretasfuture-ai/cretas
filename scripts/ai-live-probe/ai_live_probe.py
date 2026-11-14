@@ -328,6 +328,9 @@ def check_turn(expect: Dict[str, Any], resp: Dict[str, Any], prev: Optional[Dict
     for word in expect.get("message_contains", []):
         if word not in message:
             problems.append(f"文案缺「{word}」")
+    for pattern in expect.get("message_regex", []):
+        if not re.search(pattern, message):
+            problems.append(f"文案不匹配 /{pattern}/")
     for word in expect.get("message_not_contains", []):
         if word in message:
             problems.append(f"文案不应含「{word}」")

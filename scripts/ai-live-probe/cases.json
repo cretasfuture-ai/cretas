@@ -35,32 +35,30 @@
       "id": "report_work_suspend_resume",
       "title": "报工挂起后「继续报工」恢复",
       "entries": ["execute", "stream"],
-      "pending": {
-        "execute": "#1715: 普通入口第 1 轮被短语快捷通道 + W0 直接出空确认卡, 没有可挂起的报工任务; #1715 上线后应转 PASS"
-      },
+      "_note": "#1715 上线 (prod Java cb93478e) 后两入口都能挂起恢复; 普通入口恢复轮回 CONVERSATION_CONTINUE, 流式回 NEED_MORE_INFO",
       "turns": [
         {"say": "我要报工，产量100",
          "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"]}},
         {"say": "先看下库存",
          "expect": {"intent": "REPORT_INVENTORY", "status_in": ["SUCCESS", "COMPLETED"]}},
         {"say": "继续报工",
-         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"],
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE",
+                    "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION", "CONVERSATION_CONTINUE"],
                     "message_contains": ["回到刚才"], "message_not_contains": ["上次您查询的是", "actualQuantity", "taskId"]}}
       ]
     },
     {
       "id": "report_work_lists_processes_first",
-      "title": "报工第 1 轮先列可报工序 (不再要「工序任务编号」)",
+      "title": "报工第 1 轮先列可报工序 (不再要「工序任务编号」), 回「1」后出写确认卡",
       "entries": ["execute", "stream"],
-      "pending": {
-        "*": "#1715 未上线: 第 1 轮仍问「工序任务编号」/ 普通入口出空确认卡; 上线后应转 PASS"
-      },
+      "_note": "#1715 上线 (prod Java cb93478e) 后生效。F006 只读评测号能看到 ≥1 道可报工序 (QA- 数据); 只停在写确认卡, 不确认",
       "turns": [
         {"say": "我要报工，产量100",
-         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE",
-                    "status_in": ["NEED_CLARIFICATION", "NEED_MORE_INFO", "WRITE_CONFIRM_REQUIRED", "SUCCESS", "COMPLETED"],
-                    "message_not_contains": ["工序任务编号", "taskId"],
-                    "not_empty_write_card": true}}
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"],
+                    "message_contains": ["哪一道工序"], "message_regex": ["(^|\\n)1\\. \\S"],
+                    "message_not_contains": ["工序任务编号", "taskId"], "need_session_id": true}},
+        {"say": "1",
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["WRITE_CONFIRM_REQUIRED"]}}
       ]
     },
     {
