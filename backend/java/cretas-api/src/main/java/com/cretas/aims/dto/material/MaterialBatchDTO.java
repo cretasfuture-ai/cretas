@@ -189,6 +189,9 @@ public class MaterialBatchDTO {
     @Schema(description = "备注")
     private String notes;
 
+    /** 迁移 P5 (R35): 建批次时已过期、仍确认要建的原因; null = 建时没过期。 */
+    private String expiredOnCreateReason;
+
     /** SP4-A4: 生产厂家编号，用于一物一码标签 */
     @Schema(description = "生产厂家编号 (SP4-A4)")
     private String factoryNumber;

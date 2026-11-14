@@ -54,6 +54,13 @@ public class CustomerMaterialArrivalNoticeService {
     private final MaterialBatchRepository materialBatchRepository;
     private final MaterialBatchMapper materialBatchMapper;
 
+    /** 迁移 P5 R35: 收货日 / 过期判断的「现在」(按北京时间取日期); 不进构造器, 测试用 setter 固定。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
     @Transactional
     public CustomerMaterialArrivalNotice create(String factoryId,
                                                  CreateCustomerMaterialArrivalNoticeRequest request,
@@ -216,11 +223,14 @@ public class CustomerMaterialArrivalNoticeService {
             throw invalid("到期日期不能早于生产日期", "expireDate");
         }
 
-        LocalDate receiptDate = LocalDate.now();
+        LocalDate receiptDate = ExpiredBatchCreationGuard.businessToday(clock);   // 北京时间 (R35 跨日)
         LocalDate expireDate = request.getExpireDate();
         if (expireDate == null && material.getShelfLifeDays() != null) {
             expireDate = receiptDate.plusDays(material.getShelfLifeDays());
         }
+        // 迁移 P5 R35: 到期日已早于今天 ⇒ 允许建, 但必须写原因 (写在任何落库之前)
+        String expiredReason = ExpiredBatchCreationGuard.requireReasonIfExpired(
+                expireDate, receiptDate, request.getExpiredReason());
         String deterministicSuffix = UUID.nameUUIDFromBytes(
                         (factoryId + ":" + idempotencyKey).getBytes(StandardCharsets.UTF_8))
                 .toString().replace("-", "").substring(0, 12).toUpperCase();
@@ -262,6 +272,7 @@ public class CustomerMaterialArrivalNoticeService {
         batch.setBoxCount(request.getBoxCount());
         batch.setOriginPlace(trimToNull(request.getOriginPlace()));
         batch.setNotes(trimToNull(request.getNotes()));
+        batch.setExpiredOnCreateReason(expiredReason);
         batch.setCreatedBy(userId);
 
         MaterialBatch saved;

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -47,7 +48,7 @@ const loading = ref(false);
 
 // 调色板 — 班次 → 颜色 (deterministic by index)
 const SHIFT_COLORS = [
-  { bg: '#ecf5ff', border: '#409eff', text: '#1d6dc7' }, // 蓝
+  { bg: '#ecf5ff', border: CS_TOKENS.primary, text: '#1d6dc7' }, // 蓝
   { bg: '#f0f9eb', border: '#67c23a', text: '#3a8a17' }, // 绿
   { bg: '#fdf6ec', border: '#e6a23c', text: '#a36314' }, // 橙
   { bg: '#fef0f0', border: '#f56c6c', text: '#a83232' }, // 红
@@ -782,7 +783,7 @@ function onSelectionChange(rows: EmployeeRow[]) {
 
 .day-cell.clickable:hover {
   filter: brightness(0.95);
-  outline: 1px dashed #409eff;
+  outline: 1px dashed var(--el-color-primary);
 }
 
 .day-cell.weekend-cell:not(.has-assignment) {

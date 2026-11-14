@@ -663,7 +663,7 @@ async function handleSubmit() {
   line-height: 1.6;
   color: #606266;
   background: #ecf5ff;
-  border-left: 4px solid #409eff;
+  border-left: 4px solid var(--el-color-primary);
 }
 
 .plan-list {
@@ -682,7 +682,7 @@ async function handleSubmit() {
   cursor: pointer;
 
   &.selected {
-    border-color: #409eff;
+    border-color: var(--el-color-primary);
     background: rgba(64, 158, 255, 0.05);
   }
 
@@ -695,7 +695,7 @@ async function handleSubmit() {
     border: 1px solid #dcdfe6;
     border-radius: 50%;
     font-size: 12px;
-    color: #409eff;
+    color: var(--el-color-primary);
   }
 
   .batch-info {
@@ -762,7 +762,7 @@ async function handleSubmit() {
   gap: 4px;
   min-width: 0;
 
-  .suggestion { color: #409eff; }
+  .suggestion { color: var(--el-color-primary); }
 }
 
 .capacity-input {
@@ -806,11 +806,11 @@ async function handleSubmit() {
   transition: all 0.2s;
 
   &:hover {
-    border-color: #409EFF;
+    border-color: var(--el-color-primary);
   }
 
   &.active {
-    border-color: #409EFF;
+    border-color: var(--el-color-primary);
     background: rgba(64, 158, 255, 0.05);
   }
 
@@ -942,7 +942,7 @@ async function handleSubmit() {
   }
 
   &.selected {
-    border-color: #409EFF;
+    border-color: var(--el-color-primary);
     background: rgba(64, 158, 255, 0.05);
   }
 
@@ -985,7 +985,7 @@ async function handleSubmit() {
   margin-top: 16px;
 
   strong {
-    color: #409EFF;
+    color: var(--el-color-primary);
     font-size: 18px;
   }
 }

@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool.impl.workprocess;
 
+import com.cretas.aims.entity.workprocess.WorkProcessCustomFieldSchema;
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractTool;
 import com.cretas.aims.constant.SeasoningProcessCategory;
@@ -35,7 +36,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             // 阶段 4: BOM 字段进入 AI 可改范围
             "materialBindings", "injectionAmount",
             // 缺口 20: AI 配回料规则 / CCP 控制点 / 说不清的待确认项(同一份画布节点 data)
-            "reworkPolicy", "ccpPoints", "pendingConfirmations");
+            "reworkPolicy", "ccpPoints", "processParams", "pendingConfirmations");
 
     private static final Set<String> CCP_POINT_KEYS = Set.of(
             "id", "name", "hazardType", "criticalLimitMin", "criticalLimitMax", "unit",
@@ -69,7 +70,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             "standardTime", "ports", "conversionRule", "reportingRequired",
             "allowMultipleUpstreamSources", "allowFinishedGoodsSource",
             "costAllocationMethod",
-            "reworkPolicy", "ccpPoints", "pendingConfirmations");
+            "reworkPolicy", "ccpPoints", "processParams", "pendingConfirmations");
     private static final Set<String> PORT_KEYS = Set.of(
             "id", "direction", "materialNodeId", "materialName", "skuId",
             "materialKind", "unit", "ordinal", "inputShareRatio", "fixedCostShare");
@@ -254,7 +255,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
         List<Map<String, Object>> sanitizedPorts = sanitizePorts(ports);
         Map<String, Object> sanitizedRule = sanitizeConversionRule(conversionRule);
         if (sanitizedPorts == null || sanitizedRule == null) return null;
-        for (String key : List.of("reworkPolicy", "ccpPoints", "pendingConfirmations")) {
+        for (String key : List.of("reworkPolicy", "ccpPoints", "processParams", "pendingConfirmations")) {
             if (data.containsKey(key) && !isAllowedFieldValue(key, data.get(key))) return null;
         }
         Map<String, Object> result = copyKnownValues(data, PROCESS_DATA_KEYS);
@@ -336,6 +337,27 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             Object min = point.get("criticalLimitMin");
             Object max = point.get("criticalLimitMax");
             if (min instanceof Number a && max instanceof Number b && a.doubleValue() > b.doubleValue()) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 工序标准参数(油温 150-160℃ 这类): 标准值/上下限/单位允许为 null = AI 说不清, 留待人补(发布闸会拦);
+     * 给了就必须合法。落库(写 WorkProcess.customFieldSchema)只发生在发布时。
+     */
+    private boolean isValidProcessParams(Object value) {
+        if (!(value instanceof List<?> params)) return false;
+        for (Object raw : params) {
+            if (!(raw instanceof Map<?, ?> param)
+                    || !hasAllowedKeys(param, Set.of("id", "label", "unit", "standardValue", "min", "max"))
+                    || readNonBlankString(param.get("label")) == null
+                    || !isOptionalFiniteNumber(param, "standardValue")
+                    || !isOptionalFiniteNumber(param, "min")
+                    || !isOptionalFiniteNumber(param, "max")
+                    || !isOptionalNullableString(param, "unit")
+                    || !isOptionalNullableString(param, "id")) return false;
+            Object unit = param.get("unit");
+            if (unit instanceof String u && u.trim().length() > WorkProcessCustomFieldSchema.UNIT_MAX_LENGTH) return false;
         }
         return true;
     }
@@ -473,6 +495,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
             case "isByproduct", "isRework", "isDefective" -> value instanceof Boolean;
             case "reworkPolicy" -> isValidReworkPolicy(value);
             case "ccpPoints" -> isValidCcpPoints(value);
+            case "processParams" -> isValidProcessParams(value);
             case "pendingConfirmations" -> isValidPending(value);
             case "materialBindings" -> value instanceof List<?> bindings && sanitizeMaterialBindings(bindings) != null;
             // 注射量 > 0。同 dosagePerKgG: 0 不是「不注射」, 不注射就不该是注射类工序。
@@ -640,6 +663,7 @@ public class ProductProcessWorkflowConfigTool extends AbstractTool {
                     // 缺口 20
                     || path.equals("reworkPolicy")
                     || path.equals("ccpPoints")
+                    || path.equals("processParams")
                     || path.equals("pendingConfirmations");
         }
         return MATERIAL_NODE_KINDS.contains(kind)

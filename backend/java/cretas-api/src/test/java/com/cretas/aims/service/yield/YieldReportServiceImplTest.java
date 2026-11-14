@@ -135,7 +135,14 @@ class YieldReportServiceImplTest {
         ReflectionTestUtils.setField(svc, "workflowTaskPortRepository", workflowTaskPortRepository);
         ReflectionTestUtils.setField(svc, "workshopReservationService",
                 mock(com.cretas.aims.service.production.WorkshopReportReservationService.class));
+        // 迁移 P5 R36 (时段不晚于现在 5 分钟): 固定「现在」= 北京 2026-11-14 23:59, 不随 CI 跑的时刻漂;
+        // 当天 HH:mm 时段都已发生。跨零点用例另写过去的 businessDate。
+        ReflectionTestUtils.setField(svc, "clock", FIXED_NOW_BJ_2359);
     }
+
+    /** 北京 2026-11-14 23:59 (= UTC 15:59)。 */
+    protected static final java.time.Clock FIXED_NOW_BJ_2359 =
+            java.time.Clock.fixed(java.time.Instant.parse("2026-11-14T15:59:00Z"), java.time.ZoneOffset.UTC);
 
     @Test
     void getYield_netsTransferredWipFromThreeStepMaterialCost() {
@@ -3981,6 +3988,7 @@ class YieldReportServiceImplTest {
         req.setInputQuantity(new BigDecimal("100")); req.setInputUnit("kg");
         req.setOutputQuantity(new BigDecimal("90")); req.setOutputUnit("kg");
         req.setLaborSegments(List.of(seg("22:00", "01:00", 2)));
+        req.setBusinessDate(LocalDate.of(2026, 11, 13));   // 跨零点时段已发生 (R36 固定时钟 = 11-14 23:59)
 
         svc.submitReport("F006", 1L, 5L, req);
 

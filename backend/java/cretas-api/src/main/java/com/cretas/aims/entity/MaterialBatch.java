@@ -167,6 +167,10 @@ public class MaterialBatch extends BaseEntity {
     @Column(name = "notes", columnDefinition = "TEXT")
     private String notes;
 
+    /** 迁移 P5 (R35): 建批次时到期日已早于今天、仍确认要建的原因; null = 建时没过期。 */
+    @Column(name = "expired_on_create_reason", length = 200)
+    private String expiredOnCreateReason;
+
     /**
      * SP4-A4: 生产厂家编号 (factory_number) — 用于一物一码标签.
      * Nullable; 六扇门仓管入库时填写供应商厂家批号.

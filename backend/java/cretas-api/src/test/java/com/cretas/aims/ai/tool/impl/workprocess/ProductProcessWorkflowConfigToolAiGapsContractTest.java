@@ -131,6 +131,24 @@ class ProductProcessWorkflowConfigToolAiGapsContractTest {
     }
 
     @Test
+    void processParamsAreAcceptedButTheRetiredOverwriteConfirmationKeysAreNot() throws Exception {
+        // 参数标准按产品存在画布里, 不再写共享工序标准 ⇒ 已经没有「确认覆盖」这套字段; AI 带来的一律拒绝
+        Map<String, Object> param = new LinkedHashMap<>();
+        param.put("label", "油温");
+        param.put("unit", "℃");
+        param.put("min", 150);
+        param.put("max", 170);
+        Map<String, Object> ok = preview(def(), List.of(setField("process:1", "processParams", List.of(param))));
+        assertTrue(ok(ok), "合法参数补丁应通过: " + ok);
+        assertTrue(objectMapper.writeValueAsString(ok).contains("油温"));
+
+        Map<String, Object> withTick = new LinkedHashMap<>(param);
+        withTick.put("overwriteConfirmed", true);
+        Map<String, Object> rejected = preview(def(), List.of(setField("process:1", "processParams", List.of(withTick))));
+        assertFalse(ok(rejected), "带已废弃的 overwriteConfirmed 的补丁应被拒: " + rejected);
+    }
+
+    @Test
     void pendingConfirmationsAreAcceptedOnlyAsCodeAndLabel() throws Exception {
         assertTrue(ok(preview(def(), List.of(setField("process:1", "pendingConfirmations",
                 List.of(Map.of("code", "SHARE", "label", "主料份额待核对")))))));

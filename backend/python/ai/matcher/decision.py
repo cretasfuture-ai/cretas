@@ -18,6 +18,7 @@ Chooser)。粗选 system 提示至今逐字相同; 之后线上加了最近对�
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -43,6 +44,32 @@ SPECIAL_OPTIONS = [
      "description": "上面有两个以上的功能都说得通，或者缺了关键信息必须先问用户"},
 ]
 _SPECIAL_KEYS = {"NONE": NONE_KEY, "CLARIFY": CLARIFY_KEY}
+# 第三批 (INTENT-DISTILL-20261111, 2026-11-14): Luna 判断题「这一轮是否必须先问」的概率, 和 Choice 分布放在同一个
+# dict 里交给 orchestrator (不是选项, 不进按钮); 没问 / 没拿到就不出现这个键, orchestrator 照旧按 v1 规则。
+ASK_KEY = "__ASK__"
+NON_INTENT_KEYS = frozenset({NONE_KEY, CLARIFY_KEY, ASK_KEY})
+# 判断题说明: 史浩禾 (生产经理/车间主任, 内部唯一答题人) 300 题前 39 题的答案 + Steve 11-12 口径 v3 的折中。
+# 两者冲突时以史浩禾为准 (Steve 2026-11-14); 能按默认展示的只读查询不问 (回复里写明默认, Java 负责)。
+# 读数与逐题差异: Documents/Cretas意图蒸馏-20261111/third-batch-calibrate-20261114.md。改这里要重跑那份校准集。
+ASK_PREDICATE_NAME = "needs_clarification"
+ASK_PREDICATE_RULES = (
+    "判断食品厂业务系统这一轮是否必须先问用户一句才能办理（true=必须先问；false=可以直接办，或续接上一轮，或明确取消）。"
+    "必须先问的情形："
+    "①只有“弄一下/处理一下/整一下/搞一下”这类含糊动词，说不出要查看还是新建、修改、审批、提交；"
+    "②用“这批/这个/那个/这家/这款/这几个/上次那单”指一个具体对象，但这句话和上文都没有说出是哪一个（批次号、编号、名称、哪一次）；"
+    "③要改数据、登记、生成单据、审批、放行、订阅，而要改哪一个、改成什么、数量多少在这句话和上文里没给全；"
+    "④查询和录入/修改两种读法都说得通；"
+    "⑤系统正在追问某个字段，这句话没有回答它，也没有换成别的事；"
+    "⑥要看的范围系统算不了（比如按车间算利润），需要用户换个口径；"
+    "⑦要算的是某一次具体事件（某次召回、某次停线）却没说是哪一次，或者要导出文件却没说范围。"
+    "不用问，直接办：只读查询，对象已经说清（给了编号或名称，或者是“今天/昨晚/全部/各工序/某条产线”这种整体范围），"
+    "缺的只是时间范围、条数、排序这类有默认值的条件（没说时间按最近7天）；上文能对上的续句和纠正（如“我说的是已过期的”）；明确的取消。"
+)
+
+
+def ask_predicate_text(query: str, role: Optional[str], history: Optional[List[Dict[str, Any]]] = None) -> str:
+    """判断题正文: 与粗选 / 合并理解同形 (身份行 + 最近对话/任务状态 + 用户说), 不带候选。"""
+    return f"{role_line(role)}\n{history_block(history)}用户说：{query}"
 INSTR = "用户这句话应该交给下面哪个系统功能来处理？"
 STRICT_SYSTEM = "你是业务系统的请求分类器。只输出一个大写选项字母，不要换行、不要空格、不要任何其他字符。"
 REQUEST_PURPOSE_RULES = (
@@ -460,6 +487,23 @@ class DecisionMatcher:
             exit_metrics.set_luna_failure_reason("no_probs")
         return dist
 
+    async def ask_probability(self, query: str, role: Optional[str],
+                              history: Optional[List[Dict[str, Any]]] = None) -> Optional[float]:
+        """Luna 判断题: 这一轮必须先问的概率。没启用 / 失败 / 形状不对 -> None (⛔ 不编; 调用方按 v1 规则)。"""
+        from common.llm_metrics import llm_caller_context  # type: ignore
+        from common.llm_redactor import utterance_egress  # type: ignore
+        from common.llm_router import call_decision_predicate, decision_choice_enabled  # type: ignore
+
+        if not decision_choice_enabled():
+            return None
+        try:
+            with llm_caller_context("ai_decision"), utterance_egress():
+                return await call_decision_predicate(ASK_PREDICATE_RULES, ask_predicate_text(query, role, history),
+                                                     name=ASK_PREDICATE_NAME, timeout=min(3.0, self.timeout_s / 2))
+        except Exception as ex:  # noqa: BLE001
+            logger.warning("decision ask predicate unavailable: %s", str(ex)[:300])
+            return None
+
     async def request_purpose(self, query: str, role: Optional[str],
                               history: Optional[List[Dict[str, Any]]] = None) -> Optional[RequestPurpose]:
         """Generated semantic disposition, never an invented probability or permission grant.
@@ -540,9 +584,12 @@ class DecisionMatcher:
 
     async def choose_luna(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
                           history: Optional[List[Dict[str, Any]]] = None,
-                          special_options: bool = False) -> Optional[Dict[str, float]]:
+                          special_options: bool = False, ask: bool = False) -> Optional[Dict[str, float]]:
         """只问 Luna (OpenAI Decisions)。没启用 / 失败 -> None; 失败原因留在
-        ``legacy_exit_metrics.get_luna_failure_reason()`` (没启用时为 None), 由调用方决定下一跳。"""
+        ``legacy_exit_metrics.get_luna_failure_reason()`` (没启用时为 None), 由调用方决定下一跳。
+
+        ``ask=True`` 时与 Choice 并行再问一道判断题 (``ask_probability``), 拿到就以 ``ASK_KEY`` 放进返回的 dict;
+        判断题失败不影响 Choice (没有这个键 = orchestrator 照旧按 v1 规则)。"""
         from ai import legacy_exit_metrics as exit_metrics  # 只计数 (INTENT-DISTILL-20261111)
 
         exit_metrics.set_luna_failure_reason(None)
@@ -551,11 +598,19 @@ class DecisionMatcher:
             return None
         opts, n_special = setup
         messages = build_choice_messages(query, role, opts, history)
+        ask_task = asyncio.ensure_future(self.ask_probability(query, role, history)) if ask else None
         probs = await self._choose_native(messages, LETTERS[:len(opts)], opts)
         if probs is None:
+            if ask_task is not None:
+                ask_task.cancel()
             return None
         exit_metrics.record_luna_outcome(None, None)  # 只有问了 Luna 且拿到概率才会走到这里
-        return self._by_code(probs, opts, n_special)
+        out = self._by_code(probs, opts, n_special)
+        if ask_task is not None:
+            p_ask = await ask_task
+            if p_ask is not None:
+                out[ASK_KEY] = p_ask
+        return out
 
     async def choose_qwen(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
                           history: Optional[List[Dict[str, Any]]] = None,
@@ -613,7 +668,8 @@ class DecisionMatcher:
 
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
-           "NONE_KEY", "CLARIFY_KEY", "SPECIAL_OPTIONS",
+           "NONE_KEY", "CLARIFY_KEY", "ASK_KEY", "NON_INTENT_KEYS", "SPECIAL_OPTIONS", "ASK_PREDICATE_RULES",
+           "ask_predicate_text",
            "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block",
            "sanitize_task_state", "task_state_text", "with_task_state", "TASK_STATE_TOP_KEYS",
            "TASK_STATE_TASK_KEYS", "TASK_STATE_ROLE"]

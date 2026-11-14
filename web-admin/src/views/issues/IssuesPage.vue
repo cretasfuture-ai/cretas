@@ -26,21 +26,29 @@ const setTab = (t: Tab) => { void router.replace({ path: '/issues', query: t ===
 const cat = computed(() => CATEGORY_DEFS.find((c) => c.id === tab.value));
 const dispositionsOk = computed(() => S.dispositionState === 'ok');
 const badge = (c: IssueCategory) => categoryBadge(c, S.src, S.issues, S.dispositions, dispositionsOk.value);
+/** R30：数据疑点单列，不进「全部」，也不算进「全部」的数。 */
+const IN_ALL = RENDERED_CATEGORIES.filter((c) => !c.separate);
+const separateIds = new Set(RENDERED_CATEGORIES.filter((c) => c.separate).map((c) => c.id));
 const allBadge = computed(() => {
-  const parts = RENDERED_CATEGORIES.filter((c) => SRC_IDS.some((id) => S.src[id].categories.includes(c.id))).map((c) => badge(c.id));
+  const parts = IN_ALL.filter((c) => SRC_IDS.some((id) => S.src[id].categories.includes(c.id))).map((c) => badge(c.id));
   return parts.some((n) => n === null) ? null : parts.reduce<number>((a, n) => a + (n ?? 0), 0);
 });
 
 const renderedIds = new Set(RENDERED_CATEGORIES.map((c) => c.id));
 const status = (i: Issue) => issueStatus(i, S.dispositions);
 const list = computed(() => S.issues
-  .filter((i) => renderedIds.has(i.category) && (tab.value === 'all' || i.category === tab.value))
+  .filter((i) => renderedIds.has(i.category)
+    && (tab.value === 'all' ? !separateIds.has(i.category) : i.category === tab.value))
   .sort((a, b) => Number(status(a) === 'closed') - Number(status(b) === 'closed')));
 /** 本页签涉及的来源里读失败 / 不适用的，逐条写原因（G-2）。 */
 const srcNotes = computed(() => SRC_IDS.map((id) => S.src[id])
-  .filter((s) => (tab.value === 'all' || s.categories.includes(tab.value)) && (s.state === 'error' || s.state === 'na')));
+  .filter((s) => (tab.value === 'all' ? !s.categories.every((c) => separateIds.has(c)) : s.categories.includes(tab.value))
+    && (s.state === 'error' || s.state === 'na' || (s.id === 'dataSuspect' && tab.value === 'suspect' && /只查了/.test(s.note)))));
 
-const ref0 = (i: Issue): IssueRef => ({ sourceType: i.sourceType, sourceId: i.sourceId, title: i.title, linkPath: i.link });
+const ref0 = (i: Issue): IssueRef => {
+  if (i.sourceType === 'DATA_SUSPECT') throw new Error('数据疑点不能在这里关闭或转待办');
+  return { sourceType: i.sourceType, sourceId: i.sourceId, title: i.title, linkPath: i.link };
+};
 const msg = ref('');
 const rowErr = ref<Record<string, string>>({});
 const busyKey = ref('');
@@ -124,7 +132,8 @@ const conclusionText = (i: Issue) => {
         </div>
         <div class="actions">
           <el-button link type="primary" @click="go(i.link)">{{ i.linkLabel }}</el-button>
-          <template v-if="dispositionsOk">
+          <span v-if="i.readOnly" class="ro" data-testid="issue-readonly">不当异常，不在这里关闭；核对后在原记录更正</span>
+          <template v-else-if="dispositionsOk">
             <el-button v-if="status(i) === 'closed'" size="small" :loading="busyKey === i.key" @click="act(i, 'reopen')">恢复</el-button>
             <template v-else>
               <el-button size="small" data-testid="issue-close" @click="openClose(i)">关闭…</el-button>
@@ -164,6 +173,7 @@ h1 { margin: 0; font-size: var(--cs-type-title); color: var(--cs-text); }
 .sub { margin-top: 4px; color: var(--cs-muted); font-size: var(--cs-type-caption); }
 .state { margin-top: 4px; font-size: var(--cs-type-caption); color: var(--cs-text); }
 .state.conv { color: var(--cs-success); }
+.ro { color: var(--cs-muted); font-size: var(--cs-type-caption); max-width: 180px; }
 .actions { display: flex; gap: 6px; align-items: flex-start; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
 @media (max-width: 640px) { .row { flex-direction: column; } .actions { justify-content: flex-start; } }
 </style>

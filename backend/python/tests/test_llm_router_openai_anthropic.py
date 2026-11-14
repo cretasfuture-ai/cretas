@@ -323,6 +323,45 @@ def test_decision_choice_without_key_or_egress_sends_nothing(monkeypatch, unset)
     assert inner.posts == []
 
 
+def _predicate_answer(prob, kind="predicate", name="needs_clarification"):
+    return {"answers": [{"type": kind, "name": name, "probability": prob}],
+            "usage": {"input_tokens": 40, "output_tokens": 0}}
+
+
+def test_decision_predicate_redacts_and_returns_native_probability(monkeypatch):
+    """第三批: 「这一轮是否必须先问」判断题走同一个出口 / 同一套脱敏, 请求里是 predicate 题, 不是 choice。"""
+    _fake_redactor(monkeypatch)
+    inner = _install(monkeypatch, _Inner(answer=_predicate_answer(0.73)))
+    out = asyncio.run(llm_router.call_decision_predicate("先问规则", f"{REAL} 说：查下这批可可粉"))
+    assert out == 0.73
+    url, body, headers = inner.posts[0]
+    assert url == "https://api.openai.com/v1/decisions" and body["model"] == "gpt-6-luna"
+    assert TOKEN in body["input"] and REAL not in json.dumps(body, ensure_ascii=False)
+    assert body["questions"] == [{"type": "predicate", "name": "needs_clarification", "instructions": "先问规则"}]
+
+
+@pytest.mark.parametrize("answer", [
+    _predicate_answer(1.2),                      # 越界
+    _predicate_answer(True),                     # 布尔冒充
+    _predicate_answer(None),                     # 缺概率
+    _predicate_answer(0.4, kind="choice"),       # 题型对不上
+    _predicate_answer(0.4, name="other"),        # 题名对不上
+    {"answers": []},
+])
+def test_decision_predicate_rejects_a_bad_answer(monkeypatch, answer):
+    _install(monkeypatch, _Inner(answer=answer))
+    with pytest.raises(llm_router.LLMChainExhausted, match="invalid_predicate_probability"):
+        asyncio.run(llm_router.call_decision_predicate("先问规则", "查下这批可可粉"))
+
+
+def test_decision_predicate_without_egress_sends_nothing(monkeypatch):
+    monkeypatch.delenv("LLM_EGRESS_PROXY")
+    inner = _install(monkeypatch, _Inner(answer=_predicate_answer(0.5)))
+    with pytest.raises(llm_router.LLMChainExhausted, match="not_enabled"):
+        asyncio.run(llm_router.call_decision_predicate("先问规则", "查下这批可可粉"))
+    assert inner.posts == []
+
+
 def test_matcher_skips_native_choice_entirely_when_not_enabled(monkeypatch):
     from ai.matcher.decision import DecisionMatcher
     monkeypatch.delenv("LLM_EGRESS_PROXY")

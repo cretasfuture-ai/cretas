@@ -267,6 +267,10 @@ public class ProductionReport {
     @Column(name = "source_wip_no", length = 64)
     private String sourceWipNo;
 
+    /** 迁移 P5 (R34): 称重皮重 kg。outputQuantity 仍存良品净重 (= 毛重 − 皮重); null = 没录皮重, 不当 0。 */
+    @Column(name = "tare_weight", precision = 12, scale = 2)
+    private BigDecimal tareWeight;
+
     /** 三阶段报工 (单元1): 报工阶段标记 INPUT/SEGMENT/OUTPUT; null = 旧式整合报工 (向后兼容)。
      *  INPUT=投入(领料), SEGMENT=时段工时(可重复累加), OUTPUT=完工产出。
      *  同 work_process_task 多条报工经 calculateSteps 自动 SUM 得整道。 */
