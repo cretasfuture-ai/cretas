@@ -68,4 +68,10 @@ public interface BomVersionRepository extends JpaRepository<BomVersion, String> 
 
     /** Versions tied to an ECN (cascade approval via ECN). */
     List<BomVersion> findByEcnId(String ecnId);
+
+    /**
+     * 同上, 按配方 id (再按版本 id) 升序 —— ECN 级联审批逐个版本写配方头 (markCurrentVersion 锁该行),
+     * 按配方 id 升序与族锁同向, 两张 ECN 并发审批也不会交叉成环。排序交给 PG (与族锁同一比较规则)。
+     */
+    List<BomVersion> findByEcnIdOrderByBomRecipeIdAscIdAsc(String ecnId);
 }
