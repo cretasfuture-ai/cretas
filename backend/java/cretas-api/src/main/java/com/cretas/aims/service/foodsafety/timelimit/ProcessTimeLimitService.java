@@ -16,6 +16,7 @@ import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
 import com.cretas.aims.entity.workprocess.WorkProcessTask;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.processentry.IntermediateOwnershipGuard;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
@@ -153,6 +154,8 @@ public class ProcessTimeLimitService {
     private final WarehouseResolver warehouseResolver;
     private final ProductProcessWorkflowRevisionRepository revisionRepository;
     private final ObjectMapper objectMapper;
+    /** 缺口 16: 时限列表 = 这道可领来源清单, 别的客户的半成品 / 在制批不出现在这里 (领用闸同一口径)。 */
+    private final IntermediateOwnershipGuard ownershipGuard;
 
     /**
      * 逐道录入是延迟扣减: 已录入还没小结的量账上还在。按笔判可领量时要减掉, 否则两行各领一次就把超时的料领走了。
@@ -437,17 +440,20 @@ public class ProcessTimeLimitService {
     public List<SourceStatus> statusForTask(String factoryId, Long taskId) {
         WorkProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, taskId)
                 .orElseThrow(() -> new BusinessException(404, "工序任务不存在: " + taskId));
-        return statusOf(factoryId, consumerOfTask(factoryId, task), null);
+        return statusOf(factoryId, consumerOfTask(factoryId, task), null,
+                ownershipGuard.ofProductionBatch(factoryId, task.getProductionBatchId()));
     }
 
     /** 同上, 按计划 + 工序序。web 逐道录入用。 */
     @Transactional(readOnly = true)
     public List<SourceStatus> statusForPlan(String factoryId, String planId, Integer processOrder) {
         Consumer consumer = consumerOfPlan(factoryId, planId);
-        return consumer == null ? List.of() : statusOf(factoryId, consumer, processOrder);
+        return consumer == null ? List.of()
+                : statusOf(factoryId, consumer, processOrder, ownershipGuard.ofPlanId(factoryId, planId));
     }
 
-    private List<SourceStatus> statusOf(String factoryId, Consumer consumer, Integer processOrder) {
+    private List<SourceStatus> statusOf(String factoryId, Consumer consumer, Integer processOrder,
+                                        IntermediateOwnershipGuard.Owner listOwner) {
         List<WorkflowTaskPort> limited = consumer.limited();
         if (consumer.task() != null) {
             limited = limited.stream()
@@ -462,8 +468,12 @@ public class ProcessTimeLimitService {
         }
         LocalDateTime now = now();
         List<SourceStatus> out = new ArrayList<>();
+        Map<Long, Optional<IntermediateOwnershipGuard.Owner>> wipOwners = new HashMap<>();
         for (WorkflowTaskPort port : limited) {
             for (Source source : candidates(factoryId, port)) {
+                if (!visibleTo(factoryId, listOwner, source, wipOwners)) {
+                    continue;
+                }
                 out.add(evaluate(factoryId, source, port, consumer, now).status());
             }
         }
@@ -478,6 +488,48 @@ public class ProcessTimeLimitService {
                     .ifPresent(t -> ids.add(taskId));
         }
         return ids;
+    }
+
+    /**
+     * 缺口 16 (2026-11-14 F006 验收): 这张列表在逐道录入里就是「这道能领哪些料」, 此前不看归属 ——
+     * 客户 A 的在制批一放行就会出现在客户 B 计划的列表里 (保存时才被 {@link IntermediateOwnershipGuard} 409)。
+     * 现在: 客户所有的半成品 / 在制批只给同一客户的计划看; 公司自有的维持原样 (不在本修复范围,
+     * 领用闸对「公司自有 → 代工计划」同样 409, 列表是否也收掉由 organizer 定)。
+     * 在制批归属从产出它的生产批次的计划现算 (与领用闸同口径); 算不出 (批次 / 计划已不存在) ⇒ 不列出 —— 领用闸同样会拒。
+     */
+    private boolean visibleTo(String factoryId, IntermediateOwnershipGuard.Owner listOwner, Source source,
+                              Map<Long, Optional<IntermediateOwnershipGuard.Owner>> wipOwners) {
+        IntermediateOwnershipGuard.Owner material;
+        if (TargetType.SEMI_FINISHED.equals(source.type())) {
+            material = IntermediateOwnershipGuard.ofSemi(source.semi());
+        } else if (TargetType.WIP_MATERIAL_BATCH.equals(source.type())) {
+            Optional<IntermediateOwnershipGuard.Owner> owner = wipOwner(factoryId, source.material(), wipOwners);
+            if (owner.isEmpty()) {
+                return false;
+            }
+            material = owner.get();
+        } else {
+            return true;   // 原料 / 成品: 归属另有闸, 本修复不动
+        }
+        return !material.isCustomer() || IntermediateOwnershipGuard.sameOwner(listOwner, material);
+    }
+
+    private Optional<IntermediateOwnershipGuard.Owner> wipOwner(
+            String factoryId, MaterialBatch batch, Map<Long, Optional<IntermediateOwnershipGuard.Owner>> cache) {
+        Long productionBatchId;
+        try {
+            productionBatchId = Long.valueOf(batch.getSourceDocId());
+        } catch (NumberFormatException | NullPointerException e) {
+            return Optional.empty();
+        }
+        return cache.computeIfAbsent(productionBatchId, id -> {
+            try {
+                return Optional.of(ownershipGuard.ofProductionBatch(factoryId, id));
+            } catch (BusinessException e) {
+                log.warn("时限列表: 在制批 {} 的归属算不出, 不列出: {}", batch.getBatchNumber(), e.getMessage());
+                return Optional.empty();
+            }
+        });
     }
 
     private List<Source> candidates(String factoryId, WorkflowTaskPort port) {
