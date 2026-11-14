@@ -57,12 +57,19 @@ export function fillCalendarDays<T extends { statDate: string }>(
   const byDate = new Map(points.map((p) => [p.statDate, p]));
   const dates = [...byDate.keys()].sort();
   const out: Array<{ date: string; point: T | null }> = [];
-  const cursor = new Date(`${dates[0]}T00:00:00Z`);
-  const last = new Date(`${dates[dates.length - 1]}T00:00:00Z`);
+  // 全程用本地日历日（getFullYear/getMonth/getDate）：toISOString 会按 UTC 截断，
+  // 东八区 0–8 点会退到前一天。
+  const parse = (key: string) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  };
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const cursor = parse(dates[0]);
+  const last = parse(dates[dates.length - 1]);
   while (cursor <= last) {
-    const key = cursor.toISOString().slice(0, 10);
+    const key = `${cursor.getFullYear()}-${pad(cursor.getMonth() + 1)}-${pad(cursor.getDate())}`;
     out.push({ date: key, point: byDate.get(key) ?? null });
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
+    cursor.setDate(cursor.getDate() + 1);
   }
   return out;
 }

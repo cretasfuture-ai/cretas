@@ -72,6 +72,16 @@ describe('成本分析: 无数据日断开不连线', () => {
     expect(filled.map((d) => d.point?.v ?? null)).toEqual([1, null, 2, null, 3]);
   });
 
+  it('日期键取本地日历日，东八区凌晨不退一天（含夏令时切换日不重复/不丢）', () => {
+    const originalTz = process.env.TZ;
+    for (const tz of ['Asia/Shanghai', 'America/Toronto', 'UTC']) {
+      process.env.TZ = tz;
+      const days = fillCalendarDays([{ statDate: '2026-03-07' }, { statDate: '2026-03-10' }]).map((d) => d.date);
+      expect(days).toEqual(['2026-03-07', '2026-03-08', '2026-03-09', '2026-03-10']);
+    }
+    process.env.TZ = originalTz;
+  });
+
   it('空数组返回空数组；跨月不丢日', () => {
     expect(fillCalendarDays([])).toEqual([]);
     expect(fillCalendarDays([{ statDate: '2026-02-27' }, { statDate: '2026-03-02' }]).length).toBe(4);
