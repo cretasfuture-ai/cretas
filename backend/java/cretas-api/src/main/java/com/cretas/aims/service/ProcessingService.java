@@ -164,6 +164,18 @@ public interface ProcessingService {
      */
     PageResponse<Map<String, Object>> getInspections(
             String factoryId, String batchId, java.util.List<String> results, PageRequest pageRequest);
+    /**
+     * web-admin 列表用: 在结果过滤之外再按关键词 / 日期区间 / 批量批次号过滤, 全部在分页之前由数据库完成。
+     */
+    PageResponse<Map<String, Object>> searchInspections(
+            String factoryId, String batchId, java.util.List<String> results,
+            LocalDate dateFrom, LocalDate dateTo, String keyword, java.util.List<String> batchNos,
+            PageRequest pageRequest);
+
+    /**
+     * 批量批次号查询: 返回本厂内至少有一条质检记录的批次号集合 (精确匹配), 其余视为未找到。
+     */
+    java.util.List<String> findInspectedBatchNumbers(String factoryId, java.util.List<String> batchNos);
      /**
      * 获取质检详情
       */

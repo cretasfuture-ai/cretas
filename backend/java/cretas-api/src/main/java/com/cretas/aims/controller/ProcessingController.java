@@ -464,7 +464,13 @@ public class ProcessingController {
             @RequestParam(defaultValue = "20") @Parameter(description = "每页大小", example = "20") Integer size,
             @RequestParam(required = false)
             @Parameter(description = "检测结果过滤, 逗号分隔 (PASS / FAIL / CONDITIONAL / PENDING)", example = "FAIL,CONDITIONAL")
-            String result) {
+            String result,
+            @RequestParam(required = false) @Parameter(description = "关键词: 质检编号前缀或生产批次号包含") String keyword,
+            @RequestParam(required = false) @Parameter(description = "批量批次号, 逗号/空白分隔, 精确匹配, 最多 200 个") String batchNos,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            @Parameter(description = "检验日期起 yyyy-MM-dd (含)") java.time.LocalDate dateFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
+            @Parameter(description = "检验日期止 yyyy-MM-dd (含)") java.time.LocalDate dateTo) {
         // 🔴 2026-08-28: `result` 此前**没有声明**, 而前端「不良品处置」屏一直在传它。
         //   Spring 静默忽略未声明的请求参数 ⇒ 那个屏的两次调用(FAIL / CONDITIONAL)完全相同,
         //   拿到同一份全量列表并拼接 ⇒ 每条渲染两遍, 且 PASS 的行也混了进来。
@@ -477,7 +483,26 @@ public class ProcessingController {
         PageRequest pageRequest = new PageRequest();
         pageRequest.setPage(page);
         pageRequest.setSize(size);
-        PageResponse<Map<String, Object>> body = processingService.getInspections(factoryId, batchId, results, pageRequest);
+        java.util.List<String> nos = (batchNos == null || batchNos.isBlank()) ? null
+                : java.util.Arrays.stream(batchNos.split("[,，\\s]+")).toList();
+        PageResponse<Map<String, Object>> body = processingService.searchInspections(
+                factoryId, batchId, results, dateFrom, dateTo, keyword, nos, pageRequest);
+        return ApiResponse.success(body);
+    }
+
+    /**
+     * 批量批次号查询: 哪些批次号在本厂有质检记录 (找到), 哪些没有 (未找到)。只读。
+     */
+    @GetMapping("/quality/inspections/batch-no-check")
+    @Operation(summary = "批量批次号核对", description = "返回 found / missing 两个批次号列表")
+    public ApiResponse<Map<String, Object>> checkInspectionBatchNos(
+            @PathVariable String factoryId, @RequestParam String batchNos) {
+        java.util.List<String> nos = java.util.Arrays.stream(batchNos.split("[,，\\s]+"))
+                .map(String::trim).filter(s -> !s.isEmpty()).distinct().toList();
+        java.util.Set<String> found = new java.util.HashSet<>(processingService.findInspectedBatchNumbers(factoryId, nos));
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("found", nos.stream().filter(found::contains).toList());
+        body.put("missing", nos.stream().filter(n -> !found.contains(n)).toList());
         return ApiResponse.success(body);
     }
 
