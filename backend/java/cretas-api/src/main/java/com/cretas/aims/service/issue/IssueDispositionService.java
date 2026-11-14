@@ -118,7 +118,8 @@ public class IssueDispositionService {
         Prepared p = prepare(factoryId, actor, ref);
         IssueDisposition d = p.row();
         if (d.getStatus() == Status.CLOSED) {
-            throw new BusinessException(409, "这条问题已经关闭; 要改结论, 先恢复再关闭");
+            throw new BusinessException(409, "这条问题已经关闭; 要改结论, 先恢复再关闭")
+                    .withHint("该问题已关闭，要改结论请先点「恢复」，再重新关闭并选结论");
         }
         requireAssigneeOrAdmin(d, actor, p.user(), "关闭");
         applyRef(d, p, actor);
@@ -138,11 +139,14 @@ public class IssueDispositionService {
         Prepared p = prepare(factoryId, actor, ref);
         IssueDisposition d = p.row();
         if (d.getStatus() == Status.CLOSED) {
-            throw new BusinessException(409, "这条问题已关闭, 先恢复再转待办");
+            throw new BusinessException(409, "这条问题已关闭, 先恢复再转待办")
+                    .withHint("该问题已关闭，要转成待办请先点「恢复」");
         }
         if (d.getStatus() == Status.CONVERTED) {
-            throw new BusinessException(409, Objects.equals(d.getAssigneeUserId(), actor.id())
-                    ? "这条问题已经是你的待办" : "这条问题已经转给别人做待办");
+            boolean mine = Objects.equals(d.getAssigneeUserId(), actor.id());
+            throw new BusinessException(409, mine ? "这条问题已经是你的待办" : "这条问题已经转给别人做待办")
+                    .withHint(mine ? "这条已在你的「待办 › 指派给我」里，去那里处理即可"
+                            : "这条待办已转给别人，请联系被指派的人或管理员处理");
         }
         applyRef(d, p, actor);
         d.setStatus(Status.CONVERTED);
@@ -156,13 +160,16 @@ public class IssueDispositionService {
     @Transactional
     public IssueDisposition reopen(String factoryId, ActorRef actor, SourceRef ref) {
         SourceType type = parseSourceType(ref.sourceType());
-        IssueDisposition d = repository.findByFactoryIdAndSourceTypeAndSourceId(factoryId, type, requireId(ref.sourceId()))
+        String sourceId = requireId(ref.sourceId());
+        // 先查权限再判状态: 没有处理权限的人一律 403, 不从 404 / 409 里看出处置状态
+        User user = requireWritePermission(actor, type);
+        requireSourceInFactory(factoryId, type, sourceId);
+        IssueDisposition d = repository.findByFactoryIdAndSourceTypeAndSourceId(factoryId, type, sourceId)
                 .orElseThrow(() -> new BusinessException(404, "这条问题没有处置记录, 不用恢复"));
         if (d.getStatus() == Status.OPEN) {
-            throw new BusinessException(409, "这条问题没有关闭或转待办, 不用恢复");
+            throw new BusinessException(409, "这条问题没有关闭或转待办, 不用恢复")
+                    .withHint("这条问题现在就是未处理状态，刷新页面即可看到最新状态");
         }
-        requireSourceInFactory(factoryId, type, d.getSourceId());
-        User user = requireWritePermission(actor, type);
         requireAssigneeOrAdmin(d, actor, user, "恢复");
         if (d.getStatus() == Status.CLOSED) {
             d.setPreviousConclusion(d.getConclusion());
@@ -228,8 +235,10 @@ public class IssueDispositionService {
         if (d.getStatus() != Status.CONVERTED) return;
         if (actor.type() != AuthenticatedActorType.FACTORY_USER) return;
         if (Objects.equals(d.getAssigneeUserId(), actor.id())) return;
-        if (user != null && user.getRoleCode() != null && ADMIN_ROLES.contains(user.getRoleCode())) return;
-        throw new BusinessException(409, "这条问题已转给别人做待办, 只有被指派的人或管理员能" + action);
+        // 角色取值与 User#getRole 一致: roleCode 为空就退回 position
+        if (user != null && user.getRole() != null && ADMIN_ROLES.contains(user.getRole())) return;
+        throw new BusinessException(409, "这条问题已转给别人做待办, 只有被指派的人或管理员能" + action)
+                .withHint("这条待办已转给别人，请联系被指派的人或工厂管理员" + action);
     }
 
     static Conclusion parseConclusion(String code) {

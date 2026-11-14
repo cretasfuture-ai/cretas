@@ -91,7 +91,12 @@ class IssueDispositionRepositoryQueryValidationTest {
     void seed() {
         when(users.findById(any())).thenAnswer(i -> {
             User u = new User();
-            u.setRoleCode(Long.valueOf(73L).equals(i.getArgument(0)) ? "factory_super_admin" : "workshop_supervisor");
+            if (Long.valueOf(73L).equals(i.getArgument(0))) {
+                u.setRoleCode(null);
+                u.setPosition("factory_super_admin");
+            } else {
+                u.setRoleCode("workshop_supervisor");
+            }
             return Optional.of(u);
         });
         when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
@@ -250,6 +255,9 @@ class IssueDispositionRepositoryQueryValidationTest {
         when(permissions.hasAnyPermission(any(User.class), eq("production:read_write"), eq("sales:read_write")))
                 .thenReturn(false);
         assertThatThrownBy(() -> service.close(F1, ME, risk(), "HANDLED", "处理好了"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("没有处理这类问题的权限");
+        // 恢复也先查权限: 没有处置记录时同样是 403, 不是 404 / 409 (不从错误码里看出状态)
+        assertThatThrownBy(() -> service.reopen(F1, ME, risk()))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("没有处理这类问题的权限");
     }
 
