@@ -74,11 +74,6 @@ public final class ScaleSimSupport {
         return proposed("yaohua");
     }
 
-    /** 柯力: 种子 stable 字段下标错 1 位 (指到空格), 这里用对齐样例帧的修正配置。 */
-    public static String proposedKeliFrameFormat() {
-        return proposed("keli");
-    }
-
     private static String proposed(String name) {
         try (var in = ScaleSimSupport.class.getResourceAsStream("/scale-sim/" + name + "-proposed-frame-format.json")) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -103,10 +98,10 @@ public final class ScaleSimSupport {
                 mock(ScaleProtocolTestCaseRepository.class), MAPPER);
     }
 
-    /** 模拟器三条协议的配置: Modbus 取种子; 柯力/耀华用「按样例帧对齐」的拟议配置 (种子本身对不上, 见现状文档与 ScaleSeedConformanceContractTest)。 */
+    /** 模拟器三条协议的配置: 柯力 / Modbus 取种子; 耀华用「按样例帧对齐」的拟议配置 (种子本身对不上, 见现状文档与 ScaleSeedConformanceContractTest)。 */
     public static ScaleProtocolAdapterServiceImpl simAdapter() {
         return adapter(
-                config("KELI_D2008_ASCII", proposedKeliFrameFormat()),
+                config("KELI_D2008_ASCII", seedFrameFormat("proto-keli-d2008-ascii")),
                 config("YAOHUA_XK3190_ASCII", proposedYaohuaFrameFormat()),
                 config("MODBUS_RTU_STANDARD", seedFrameFormat("proto-modbus-rtu-standard")));
     }

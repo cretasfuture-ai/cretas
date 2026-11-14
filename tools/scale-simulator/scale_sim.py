@@ -91,8 +91,14 @@ def scenarios() -> list[dict]:
         note="单位必须带到下游, 下游按 g→kg 换算 (缺口 21)")
     add(K, "overrange", keli_overrange(), False, reject="OVERRANGE")
     add(K, "truncated", keli_frame(124.0)[:6], False, reject="FRAME")
-    add(K, "no_terminator", keli_frame(124.0)[:-2], False, reject="FRAME",
-        note="断流时只收到半帧 (含完整字段但没有 CRLF)")
+    add(K, "cr_only", keli_frame(124.0)[:-2] + b"\r", True, "124.0", "kg", True,
+        note="有的仪表只发 CR 作结尾")
+    add(K, "lf_only", keli_frame(124.0)[:-2] + b"\n", True, "124.0", "kg", True,
+        note="有的仪表只发 LF 作结尾")
+    add(K, "no_terminator", keli_frame(124.0)[:-2], True, "124.0", "kg", True,
+        note="网关已剥掉换行 / 界面试解析没贴尾部: 字段完整就认; 真正的半帧靠字段不全拦住 (见 truncated_before_flag)")
+    add(K, "truncated_before_flag", keli_frame(124.0)[:11], False, reject="FRAME",
+        note="断流只收到 11 字节, 稳定标志没到")
     add(K, "letter_in_digits", b"+00l240 kg S" + CRLF, False, reject="WEIGHT")
     add(K, "blank_weight", b"+       kg S" + CRLF, False, reject="WEIGHT")
     add(K, "bad_sign", b"*001240 kg S" + CRLF, False, reject="SIGN")

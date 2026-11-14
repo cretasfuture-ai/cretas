@@ -113,9 +113,51 @@
   },
   {
     "protocol": "KELI_D2008_ASCII",
+    "scenario": "cr_only",
+    "hex": "2B303031323430206B6720530D",
+    "ascii": "+001240 kg S\r",
+    "expect": {
+      "ok": true,
+      "weight": "124.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "有的仪表只发 CR 作结尾"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "lf_only",
+    "hex": "2B303031323430206B6720530A",
+    "ascii": "+001240 kg S\n",
+    "expect": {
+      "ok": true,
+      "weight": "124.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "有的仪表只发 LF 作结尾"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
     "scenario": "no_terminator",
     "hex": "2B303031323430206B672053",
     "ascii": "+001240 kg S",
+    "expect": {
+      "ok": true,
+      "weight": "124.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "网关已剥掉换行 / 界面试解析没贴尾部: 字段完整就认; 真正的半帧靠字段不全拦住 (见 truncated_before_flag)"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "truncated_before_flag",
+    "hex": "2B303031323430206B6720",
+    "ascii": "+001240 kg ",
     "expect": {
       "ok": false,
       "weight": null,
@@ -123,7 +165,7 @@
       "stable": null,
       "reject": "FRAME"
     },
-    "note": "断流时只收到半帧 (含完整字段但没有 CRLF)"
+    "note": "断流只收到 11 字节, 稳定标志没到"
   },
   {
     "protocol": "KELI_D2008_ASCII",

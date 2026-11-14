@@ -201,20 +201,25 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
      */
     private ScaleDataParseResult parseAsciiFixedFrame(JsonNode format, byte[] rawData) {
         try {
+            String startMarker = frameMarker(format, "startMarker");
+            String endMarker = frameMarker(format, "endMarker");
+            // 配置里声明的起止标记允许含控制字符 (STX/ETX); 其余只放行可打印字符和 CR/LF
             for (byte b : rawData) {
-                boolean ok = b == 0x0D || b == 0x0A || (b >= 0x20 && b <= 0x7E);
+                boolean ok = b == 0x0D || b == 0x0A || (b >= 0x20 && b <= 0x7E)
+                        || startMarker.indexOf((char) (b & 0xFF)) >= 0 || endMarker.indexOf((char) (b & 0xFF)) >= 0;
                 if (!ok) {
                     return ScaleDataParseResult.error("FRAME_INVALID_CHARS", "数据帧含非 ASCII 可打印字符");
                 }
             }
             String ascii = new String(rawData, StandardCharsets.US_ASCII);
 
-            String startMarker = frameMarker(format, "startMarker");
             if (!startMarker.isEmpty() && !ascii.startsWith(startMarker)) {
                 return ScaleDataParseResult.error("FRAME_MARKER", "数据帧缺少起始标记");
             }
-            String endMarker = frameMarker(format, "endMarker");
-            if (!endMarker.isEmpty() && !ascii.endsWith(endMarker)) {
+            // 换行类结束符 (CRLF / CR / LF) 是可选的: 设备可能只发 CR 或 LF, 网关可能已剥掉, 界面试解析也可能没贴尾部。
+            // 少了结尾导致的「半帧」由字段越界检查拦住。其它结束标记 (如 ETX) 仍然必须有。
+            boolean newlineOnlyEnd = !endMarker.isEmpty() && endMarker.chars().allMatch(c -> c == '\r' || c == '\n');
+            if (!endMarker.isEmpty() && !newlineOnlyEnd && !ascii.endsWith(endMarker)) {
                 return ScaleDataParseResult.error("FRAME_MARKER", "数据帧缺少结束标记 (可能只收到半帧)");
             }
 
@@ -224,6 +229,7 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
             String unit = "kg";
             Boolean stable = null;
             char sign = '+';
+            boolean weightNegative = false;
 
             for (JsonNode field : fields) {
                 String name = field.path("name").asText();
@@ -249,11 +255,16 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                         if (weightStr.matches("[OoLl]+")) {
                             return ScaleDataParseResult.error("OVERRANGE", "秤报超量程/溢出: " + weightStr);
                         }
-                        if (!weightStr.matches("\\d+(\\.\\d+)?")) {
+                        // 允许重量域自带符号 ("-12.5") 和 "12." / ".5" 写法
+                        if (!weightStr.matches("[+-]?(\\d+\\.?\\d*|\\.\\d+)")) {
                             return ScaleDataParseResult.error("INVALID_WEIGHT", "无法解析重量值: '" + weightStr + "'");
                         }
+                        if (weightStr.startsWith("-")) {
+                            weightNegative = true;
+                        }
                         int decimalPlaces = field.path("decimalPlaces").asInt(0);
-                        weight = new BigDecimal(weightStr);
+                        weight = new BigDecimal(weightStr.startsWith("+") || weightStr.startsWith("-")
+                                ? weightStr.substring(1) : weightStr);
                         if (decimalPlaces > 0) {
                             weight = weight.movePointLeft(decimalPlaces);
                         }
@@ -276,7 +287,7 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
             }
 
             // 应用符号
-            if (weight != null && sign == '-') {
+            if (weight != null && (sign == '-' || weightNegative)) {
                 weight = weight.negate();
             }
 

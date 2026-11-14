@@ -48,13 +48,13 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 
 | 协议 | 种子配置能否读出自己的样例帧 | 问题 |
 |---|---|---|
-| 柯力 D2008 `KELI_D2008_ASCII` | 否 | `stable` 字段下标写成 10（指到空格），样例里的 `S` 在 11；`frameLength` 写 12，样例帧实际 14 字节。加严前：稳定帧被**静默读成不稳定**；加严后：明确拒绝 |
+| 柯力 D2008 `KELI_D2008_ASCII` | **是（已修）** | 原先 `stable` 下标写成 10（指到空格）、`frameLength` 写 12（样例帧 14 字节），稳定帧被静默读成不稳定；已改成 11 / 14，`ScaleSeedConformanceContractTest.keliSeedReadsItsOwnSampleFrame` 钉住。注意：只改了仓库里的种子 SQL，**库里若已有旧行不会跟着变**，需要有人核对线上 `scale_protocol_configs` 并做数据修正（本 PR 没动库） |
 | 耀华 XK3190 `YAOHUA_XK3190_ASCII` | 否 | 重量域长度/下标与样例帧不一致，加严前读出 1.254 kg + 单位「0」+ 不稳定，**不报错** |
 | 托利多 IND570 `TOLEDO_IND570_ASCII` | 否 | 类型写 `ASCII_VARIABLE` 却用 start/length 字段（没有 delimiter/index），任何输入都没有重量；加严前返回「成功 + 重量 null」 |
 | 通用 Modbus RTU | 部分 | 种子声明 `FLOAT32_ABCD`，实时解析器实际按**有符号 32 位整数 / 100** 读。两者不一致，现场必须先确认秤的寄存器格式 |
 | DIGI | 无配置 | 不存在 |
 
-这几个协议均 `is_verified=false`（柯力、Modbus 为 true 但同样没真机验证过）。**本 PR 没有改种子 / 没有写迁移**：照样例帧猜着改种子没有意义，等真秤抓到真实帧再用迁移修。模拟器测试里柯力、耀华用 `src/test/resources/scale-sim/*-proposed-frame-format.json`（对齐样例帧的拟议配置），Modbus 用种子本身。
+这几个协议均 `is_verified=false`（柯力、Modbus 为 true 但同样没真机验证过）。柯力种子已按它自己的样例帧修正；耀华、托利多、Modbus 数据类型**本 PR 没改**：照样例帧猜着改没有意义，等真秤抓到真实帧再修。模拟器测试里耀华用 `src/test/resources/scale-sim/yaohua-proposed-frame-format.json`（对齐样例帧的拟议配置），柯力、Modbus 用种子本身。
 
 另有两套解析实现：`ScaleProtocolAdapterServiceImpl` 里的内联解析（线上入口，本 PR 加严）和 `service/scale/parser/*FrameParser`（经 `FrameParserFactory`，生产没人调用，只有 `FrameParserTest` 覆盖）。两份会漂，本 PR 没合并，见 G5。
 
@@ -77,10 +77,15 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 
 解析加严（让坏帧被拒绝而不是读成某个数）：
 
-1. ASCII 定长帧：非可打印字符、缺起止标记（半帧）、符号位不是 ±、重量域非纯数字（含 `1E+003`）、稳定标志不在 mapping 里 → 整帧拒绝；`OOOO`/`LLLL` 记为 `OVERRANGE`。
+1. ASCII 定长帧：缺起始标记、符号位不是 ±、重量域不是数字、稳定标志不在 mapping 里、帧里有配置没声明的控制字符 → 整帧拒绝；`OOOO`/`LLLL` 记为 `OVERRANGE`。**以前合法的写法仍然能读**（独立终审后补）：
+   - 配置里声明了 STX / ETX 起止标记的帧（控制字符只在声明的标记位置放行）；
+   - 换行类结尾（CRLF / 只有 CR / 只有 LF / 没有结尾）都接受，真正的半帧靠字段不全拦住；ETX 这类非换行结束标记仍然必须有；
+   - 重量域自带符号（`-12.5`、`+12.5`）以及 `12.`、`.5` 写法；单独的符号字段照旧取负。
 2. Modbus RTU：必须校验 CRC16、字节数与帧长一致；重量按**有符号**32 位读（此前去皮后的负重会读成 42949667.76）。
 3. 任何协议「解析成功但没有重量」→ 拒绝（`NO_WEIGHT`）。
-4. `MqttSubscriber`：称重消息没有数字型 `weight` → 不再当 0 kg 更新最近读数（原样存档）。
-5. `readScaleWeight`：设备明确报 `stable:false` 的读数不进报工（没有 `stable` 字段的设备行为不变）。**这是产品行为变化**，如不要可单独回退这一条。
+4. `MqttSubscriber` / `readScaleWeight`：重量是数字或数字字符串（`"12.50"`）都认；缺失、`"abc"`、`NaN`、`"1e3"` 一律「没读到」，不再当 0 kg。
+5. `readScaleWeight`：设备明确报不稳定的读数不进报工，写法认 `false` / `0` / `"false"` / `"0"` / `"U"` / `"M"` / `"unstable"`（不区分大小写）；没有 `stable` 字段、或写法认不出的设备行为不变。**这是产品行为变化**，如不要可单独回退这一条。
 
-测试：`ScaleSimulatorFixtureParseContractTest`（30 个模拟器场景走线上解析入口）、`ScaleSimulatorEndToEndContractTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleSeedConformanceContractTest`（3 条棘轮）。变异验证：把三处生产代码回退后 45 条里 14 条变红。
+测试（`*ContractTest`，PR 作业会选中）：`ScaleSimulatorFixtureParseContractTest`（33 个模拟器场景走线上解析入口，含 CR / LF / 无结尾变体）、`ScaleSimulatorEndToEndContractTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleParserVariantContractTest`（7 条：STX/ETX、结尾变体、重量域符号、`12.`）、`WorkstationScaleReadingVariantContractTest`（6 条：字符串重量、不稳定的多种写法、MQTT 订阅层）、`ScaleSeedConformanceContractTest`（3 条：柯力种子读自己的样例帧 + 耀华 / 托利多棘轮）。
+
+变异验证：第一轮把三处生产代码回退后 14 条变红；独立终审后的 6 处修复各自单独破坏，对应阳性测试都变红（STX/ETX 1 条、结尾可选 4 条、重量写法 2 条、字符串重量 2 条、不稳定写法 1 条、柯力种子 20 条）。
