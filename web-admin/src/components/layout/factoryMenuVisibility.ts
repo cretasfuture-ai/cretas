@@ -1,5 +1,14 @@
 import type { MenuItem } from './menuConfig';
 
+/** Explicit per-factory opt-in; unrelated tenants retain their existing layout. */
+export function getFactoryMenuProfile(features: unknown): 'wholesale' | undefined {
+  if (!Array.isArray(features)) return undefined;
+  const rows = features.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+  const config = rows.find((row) => row.moduleId === 'dashboard')?.config;
+  return config && typeof config === 'object'
+    && (config as Record<string, unknown>).businessNavigationProfile === 'wholesale' ? 'wholesale' : undefined;
+}
+
 /**
  * P2b（迁移方案 M3，2026-11-14）：「数据与分析」组对工厂**默认显示**，按厂可关。
  * 关 = feature-config 里 analytics（无此行时读旧别名 smartbi）的 config.showInSidebar === false。
