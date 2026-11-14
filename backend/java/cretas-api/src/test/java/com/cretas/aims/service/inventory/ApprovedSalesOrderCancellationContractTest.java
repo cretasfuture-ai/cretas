@@ -124,7 +124,7 @@ class ApprovedSalesOrderCancellationContractTest {
                     assertThat(e.getCode()).isEqualTo(409);
                     assertThat(e.getMessage()).contains("驳回/退款");
                 });
-        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any());
+        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -142,9 +142,9 @@ class ApprovedSalesOrderCancellationContractTest {
 
         ApprovedSalesOrderCancellation.Outcome o = service.cancelDownstream(F, "SO-1", " 客户撤单 ", BOSS);
 
-        verify(planService).cancelProductionPlan(eq(F), eq("A"), eq("销售订单 SO-20261111-001 财务批准后取消: 客户撤单"), eq(BOSS));
-        verify(planService, never()).cancelProductionPlan(eq(F), eq("B"), anyString(), any());
-        verify(planService, never()).cancelProductionPlan(eq(F), eq("M"), anyString(), any());
+        verify(planService).cancelProductionPlan(eq(F), eq("A"), eq("销售订单 SO-20261111-001 财务批准后取消: 客户撤单"), eq(BOSS), eq("SO-1"));
+        verify(planService, never()).cancelProductionPlan(eq(F), eq("B"), anyString(), any(), any());
+        verify(planService, never()).cancelProductionPlan(eq(F), eq("M"), anyString(), any(), any());
         assertThat(o.lockedOrder()).isSameAs(order);
         assertThat(o.cancelledPlanNumbers()).containsExactly("PP-A");
         assertThat(o.manualPlansLeft()).containsExactly("PP-M");
@@ -164,7 +164,7 @@ class ApprovedSalesOrderCancellationContractTest {
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
         assertThatThrownBy(() -> service.cancelDownstream(F, "SO-1", "客户撤单", null))   // 无操作人 (AI 工具旧入口)
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
-        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any());
+        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -202,7 +202,7 @@ class ApprovedSalesOrderCancellationContractTest {
         when(arAp.countLiveBySalesOrder(F, "SO-1")).thenReturn(1L);
         assertThatThrownBy(() -> service.cancelDownstream(F, "SO-1", "客户撤单", BOSS))
                 .isInstanceOf(BusinessException.class);
-        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any());
+        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -219,7 +219,7 @@ class ApprovedSalesOrderCancellationContractTest {
         merged.setSourceOrderIds(new ArrayList<>(List.of("SO-1", "SO-OTHER")));
         assertThatThrownBy(() -> service.cancelDownstream(F, "SO-1", "客户撤单", BOSS))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("合并"));
-        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any());
+        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
@@ -262,7 +262,7 @@ class ApprovedSalesOrderCancellationContractTest {
         order.setInvoicedAmount(new java.math.BigDecimal("10"));
         assertThatThrownBy(() -> service.cancelDownstream(F, "SO-1", "客户撤单", BOSS))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getMessage()).contains("发票"));
-        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any());
+        verify(planService, never()).cancelProductionPlan(anyString(), anyString(), anyString(), any(), any());
     }
 
     @Test
