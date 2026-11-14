@@ -133,26 +133,22 @@ watch(() => route.query.orderId, (q) => {
 
 <template>
   <div class="page" data-testid="outsource-orders">
-    <div class="head">
-      <div>
+    <el-alert v-if="loadFailed" type="error" :closable="false" title="加载失败，下面的列表不代表没有委外单" class="alert" />
+
+    <section class="card">
+      <header class="card-head">
         <h2>委外单</h2>
-        <p class="sub">按委外厂开单，任务行可挂工单工序，也可整单委外。发出的料仍是我方物权，在委外厂结存里逐批可查。</p>
+        <span class="count">共 {{ total }} 条记录</span>
+      </header>
+      <div class="filters">
+        <el-input v-model="keyword" clearable placeholder="搜索委外单号" class="keyword" data-testid="outsource-keyword" @keyup.enter="search" @clear="search">
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+        <el-select v-model="statusFilter" multiple collapse-tags placeholder="全部状态" class="status-select" data-testid="outsource-status" @change="search">
+          <el-option v-for="s in STATUS_OPTIONS" :key="s" :label="ORDER_STATUS_LABEL[s]" :value="s" />
+        </el-select>
+        <el-button :icon="Search" @click="search">搜索</el-button>
       </div>
-    </div>
-
-    <div class="filters">
-      <el-select v-model="statusFilter" multiple collapse-tags placeholder="全部状态" class="status-select" data-testid="outsource-status" @change="search">
-        <el-option v-for="s in STATUS_OPTIONS" :key="s" :label="ORDER_STATUS_LABEL[s]" :value="s" />
-      </el-select>
-      <el-input v-model="keyword" clearable placeholder="委外单号" class="keyword" data-testid="outsource-keyword" @keyup.enter="search" @clear="search">
-        <template #prefix><el-icon><Search /></el-icon></template>
-      </el-input>
-      <el-button type="primary" @click="search">查询</el-button>
-    </div>
-
-    <el-alert v-if="loadFailed" type="error" :closable="false" title="加载失败，下面的列表不代表没有委外单" class="block" />
-
-    <el-card class="block" shadow="never">
       <el-table v-loading="loading" :data="rows" empty-text="没有符合条件的委外单" row-class-name="clickable" @row-click="(r: OutsourceOrderSummary) => openDetail(r.id)">
         <el-table-column prop="orderNo" label="委外单号" min-width="160" />
         <el-table-column label="委外厂" min-width="140"><template #default="{ row }">{{ row.supplierName ?? row.supplierId }}</template></el-table-column>
@@ -185,7 +181,7 @@ watch(() => route.query.orderId, (q) => {
           @size-change="search"
         />
       </div>
-    </el-card>
+    </section>
 
     <el-drawer v-model="detailVisible" size="min(1080px, 92vw)" :title="detail ? `委外单 ${detail.orderNo} — ${detail.supplierName ?? detail.supplierId}` : '委外单'" @closed="onDrawerClosed">
       <div v-if="detailError" class="state error" data-testid="outsource-detail-error">
@@ -264,14 +260,16 @@ watch(() => route.query.orderId, (q) => {
 
 <style scoped>
 .page { padding: var(--cs-space-4); }
-.head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--cs-space-4); margin-bottom: var(--cs-space-3); }
-.head h2 { margin: 0; font-size: var(--cs-type-title); color: var(--cs-text); }
-.sub { margin: var(--cs-space-1) 0 0; color: var(--cs-muted); font-size: var(--cs-font-small); }
-.filters { display: flex; gap: var(--cs-space-2); align-items: center; flex-wrap: wrap; }
-.status-select { width: 220px; }
-.keyword { width: 220px; }
+.alert { margin-bottom: var(--cs-space-3); }
+.card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-lg); box-shadow: var(--cs-shadow); }
+.card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-5) var(--cs-space-5) var(--cs-space-4); border-bottom: 1px solid var(--cs-border); }
+.card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 700; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.status-select { width: 200px; }
+.keyword { width: 280px; }
 .block { margin-top: var(--cs-space-3); }
-.pager { display: flex; justify-content: flex-end; margin-top: var(--cs-space-3); }
+.pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }
 .hint { margin: 0 0 var(--cs-space-2); color: var(--cs-muted); font-size: var(--cs-font-small); }
 .muted { color: var(--cs-muted); }
 .warn { color: var(--cs-warning); font-weight: 600; }
