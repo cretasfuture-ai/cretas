@@ -30,7 +30,7 @@ import static org.mockito.Mockito.lenient;
  * 开单页拿到的 price 是 null, 有权限的照常拿到; 同时钉住 DTO 字段上的 @PriceSensitive 注解本身。
  */
 @ExtendWith(MockitoExtension.class)
-class PriceLookupResultMaskingTest {
+class PriceLookupResultMaskingContractTest {
 
     @Mock private PermissionService permissionService;
     @Mock private UserRepository userRepository;

@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 /** 订单行价格来源: 编辑重建行 / 复制订单不能丢来源 (独立审查 中3)。 */
-class SalesOrderPriceSourceTest {
+class SalesOrderPriceSourceContractTest {
 
     private static SalesOrderItem line(String price, String source, String ref) {
         SalesOrderItem it = new SalesOrderItem();

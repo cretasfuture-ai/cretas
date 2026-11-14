@@ -66,10 +66,12 @@ public class SalesOrderItem extends BaseEntity {
     private BigDecimal unitPrice;
 
     /** 价格来源: CUSTOMER 客户专属价 / GLOBAL 统一价 / LAST_DEAL 最近成交 / MANUAL 手填; 历史行 null=未记录。 */
+    @PriceSensitive
     @Column(name = "price_source", length = 16)
     private String priceSource;
 
     /** 价格来源说明快照 (价目表名称或来源订单号)。 */
+    @PriceSensitive
     @Column(name = "price_ref", length = 200)
     private String priceRef;
 
