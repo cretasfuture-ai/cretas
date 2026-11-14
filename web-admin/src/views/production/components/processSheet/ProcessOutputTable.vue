@@ -386,11 +386,11 @@ function gridStyle(): Record<string, string> {
   gap: 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-io-title b { color: #1677ff; }
 .sp-io-title span:last-child {
-  color: #909399;
+  color: var(--cs-muted);
   font-weight: 400;
   font-size: 11px;
 }
@@ -410,7 +410,7 @@ function gridStyle(): Record<string, string> {
 .sp-io-orphan .el-icon { flex: none; }
 
 .sp-io-table {
-  border: 1px solid #e4e9f2;
+  border: 1px solid var(--cs-border);
   border-radius: 6px;
   overflow-x: auto;
   background: #fff;
@@ -426,14 +426,14 @@ function gridStyle(): Record<string, string> {
 
 .sp-io-head {
   padding: 7px 10px;
-  border-bottom: 1px solid #e4e9f2;
-  background: #f5f7fa;
-  color: #606266;
+  border-bottom: 1px solid var(--cs-border);
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 600;
 }
 
-.sp-io-line { border-top: 1px solid #eef1f6; }
+.sp-io-line { border-top: 1px solid var(--cs-surface-subtle); }
 .sp-io-line:first-of-type { border-top: 0; }
 .sp-port-unselected { opacity: 0.58; }
 
@@ -445,14 +445,14 @@ function gridStyle(): Record<string, string> {
   gap: 6px;
   min-width: 0;
   font-size: 12px;
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-io-num { justify-content: flex-end; font-variant-numeric: tabular-nums; }
 
 .sp-io-product { flex-wrap: wrap; }
 .sp-io-product strong { font-size: 13px; }
-.sp-output-spec { color: #606266; font-size: 12px; }
-.sp-batch-num { color: #909399; font-size: 11px; }
+.sp-output-spec { color: var(--cs-muted); font-size: 12px; }
+.sp-batch-num { color: var(--cs-muted); font-size: 11px; }
 
 /*
   作业时间的控件横跨开始/结束/人数/总工时四列。这里显式重复这四个列宽而不是用 subgrid ——
@@ -487,7 +487,7 @@ function gridStyle(): Record<string, string> {
   border-top: 1px dashed #e9edf3;
   background: #fbfcfe;
 }
-.sp-io-detail-title { margin-bottom: 6px; color: #909399; font-size: 11px; }
+.sp-io-detail-title { margin-bottom: 6px; color: var(--cs-muted); font-size: 11px; }
 .sp-io-detail-fields {
   display: flex;
   flex-wrap: wrap;
@@ -498,11 +498,11 @@ function gridStyle(): Record<string, string> {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 600;
 }
-.sp-io-weight-hint { color: #909399; font-size: 11px; }
+.sp-io-weight-hint { color: var(--cs-muted); font-size: 11px; }
 
 /* 画布绑定的副产: 一条一行, 品名只读在最左, 数量/单价跟在后面。 */
 .sp-byproduct-bound {
@@ -513,7 +513,7 @@ function gridStyle(): Record<string, string> {
   width: 100%;
   padding: 4px 0;
 }
-.sp-byproduct-bound + .sp-byproduct-bound { border-top: 1px dashed #eef1f6; }
+.sp-byproduct-bound + .sp-byproduct-bound { border-top: 1px dashed var(--cs-surface-subtle); }
 .sp-rework-batch { color: #8a5a17; font-size: 12px; }
 .sp-byproduct-name {
   display: inline-flex;
@@ -522,7 +522,7 @@ function gridStyle(): Record<string, string> {
   min-width: 180px;
   padding-bottom: 2px;
   font-size: 12px;
-  color: #303133;
+  color: var(--cs-text);
 }
 
 .sp-inline-input { display: inline-flex; align-items: center; gap: 4px; }
@@ -532,12 +532,12 @@ function gridStyle(): Record<string, string> {
   min-height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #f5f7fa;
-  color: #909399;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 12px;
   white-space: nowrap;
 }
-.sp-readonly { color: #303133; font-size: 12px; }
+.sp-readonly { color: var(--cs-text); font-size: 12px; }
 
 /* 窄屏下让表格自己横向滚动, 不把整页撑宽 */
 @media (max-width: 1366px) {

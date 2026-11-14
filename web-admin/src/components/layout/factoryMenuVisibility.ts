@@ -17,13 +17,16 @@ export function isFactoryAnalyticsSidebarTurnedOff(features: unknown): boolean {
     && (config as Record<string, unknown>).showInSidebar === false);
 }
 
+const ANALYTICS_CONTAINER_PATH = '#group/analytics';
+
 /** 只作用于工厂（FACTORY）的 /smart-bi 组；只会多隐藏，从不放宽模块/角色判据。 */
 export function isFactoryAnalyticsGroupHidden(
   factoryType: string,
   path: string,
   turnedOff: boolean,
 ): boolean {
-  return factoryType === 'FACTORY' && path === '/smart-bi' && turnedOff;
+  // P6：原型分组的展示容器 '#group/analytics' 也认同一个开关——搬进来的成本分析 / 物料均价（D1/D6）跟着整组一起关
+  return factoryType === 'FACTORY' && (path === '/smart-bi' || path === ANALYTICS_CONTAINER_PATH) && turnedOff;
 }
 
 export function getDisabledFactoryMenuPaths(features: unknown): string[] {

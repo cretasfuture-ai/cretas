@@ -377,7 +377,7 @@ defineExpose({ refresh });
     </el-table-column>
     <el-table-column prop="remaining" label="剩余" :width="columnWidth('remaining')" align="right" sortable :render-header="sortableHeader">
       <template #default="{ row }">
-        <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
+        <span :style="{ color: (row.remaining ?? 0) <= 0 ? 'var(--cs-danger)' : 'var(--cs-success)' }">
           {{ reportingQuantity(row, 'remaining') }}
         </span>
       </template>
@@ -436,7 +436,7 @@ defineExpose({ refresh });
 
 .yield-card-scroll-hint {
   margin: 0 0 6px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, var(--cs-muted));
   font-size: 12px;
   text-align: right;
 }
@@ -494,11 +494,11 @@ defineExpose({ refresh });
   }
 
   :deep(.yield-sort-trigger:hover) {
-    color: var(--el-color-primary, #409eff);
+    color: var(--el-color-primary, var(--cs-primary));
   }
 
   :deep(.yield-sort-trigger:focus-visible) {
-    outline: 2px solid var(--el-color-primary, #409eff);
+    outline: 2px solid var(--el-color-primary, var(--cs-primary));
     outline-offset: 2px;
   }
 
@@ -513,7 +513,7 @@ defineExpose({ refresh });
   }
 
   :deep(.yield-header-help:hover) {
-    color: var(--el-color-primary, #409eff);
+    color: var(--el-color-primary, var(--cs-primary));
   }
 }
 
@@ -526,7 +526,7 @@ defineExpose({ refresh });
 }
 
 .yield-card-empty-hint {
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 12px;
   padding: 10px 0;
   text-align: center;

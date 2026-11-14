@@ -820,7 +820,7 @@ function getStatusText(status: string) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -844,12 +844,12 @@ function getStatusText(status: string) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -912,11 +912,11 @@ function getStatusText(status: string) {
   }
 
   :deep(.batch-sort-trigger:hover) {
-    color: var(--el-color-primary, #409eff);
+    color: var(--el-color-primary, var(--cs-primary));
   }
 
   :deep(.batch-sort-trigger:focus-visible) {
-    outline: 2px solid var(--el-color-primary, #409eff);
+    outline: 2px solid var(--el-color-primary, var(--cs-primary));
     outline-offset: 2px;
   }
 }
@@ -930,7 +930,7 @@ function getStatusText(status: string) {
 
 .plan-group-title {
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -944,7 +944,7 @@ function getStatusText(status: string) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 </style>
