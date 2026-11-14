@@ -68,12 +68,15 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0, 1, 2, 3]
-    timeout-minutes: 45
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 12g.
+    # 2026-11-14: 正常一片 ≤16 分钟; 卡死会拖到平台 55 分钟取消。30 分钟必然是异常。
+    timeout-minutes: 30
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 10g.
+    # 2026-11-14: 由 12g 降到 10g。12g 堆 + Maven 2g + 非堆在 16GB 机器上超卖, 疑似换页风暴冻住整台 VM
+    # (日志断流 + fork 内看门狗和步骤超时都不开火); mem-guard.sh 现在每 30 秒打印 MEMGUARD 读数取证。
     # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
     # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
     env:
-      CRETAS_JAVA_FORK_XMX: 12g
+      CRETAS_JAVA_FORK_XMX: 10g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -176,23 +179,36 @@ jobs:
       #    打线程转储并 halt fork ⇒ surefire 报失败 (不是跳过)。
       # 2) 这里的 step 超时是第二道: 正常一片 ≤16 分钟 (含编译/下依赖), 25 分钟必然是卡死。
       - name: Compile all Java tests and run high-signal gates
-        timeout-minutes: 25
+        timeout-minutes: 22
         working-directory: backend/java/cretas-api
         env:
           MAVEN_OPTS: -Xmx2g
         run: |
           set -euo pipefail
+          MVN_OUT="$RUNNER_TEMP/mvn-shard.out"
+          : > "$MVN_OUT"
+          # 内存看门狗: 可用内存见底时在 VM 冻住之前 kill fork, 让构建带着最后一个类名快速失败。
+          bash "$GITHUB_WORKSPACE/scripts/ci/mem-guard.sh" "$MVN_OUT" &
           # 测试 fork 的堆按 runner 取 (2026-10-03): 本机 8G runner 不设 -> 3g; 加拿大 canada-mini-cretas
           # 的 .env 设 6g —— 那边的执行顺序下 3g/4g 都在第 324 个类 OOM, 6g/8g 全过 (实测, 见 PR #874)。
           echo "READING: JAVA_FORK_XMX=${CRETAS_JAVA_FORK_XMX:-3g} runner=${RUNNER_NAME:-?}"
           MVN=$(bash "$GITHUB_WORKSPACE/scripts/ci/resolve-maven.sh")
           TESTS=$(python3 "$GITHUB_WORKSPACE/scripts/ci/shard-tests.py" --list "$GITHUB_WORKSPACE/scripts/ci/java-gate-fast-patterns.txt" --shard "${{ matrix.shard }}" --shards 4 --test-root "$GITHUB_WORKSPACE/backend/java/cretas-api/src/test/java")
           echo "READING: SHARD=${{ matrix.shard }}/4 CLASSES=$(echo "$TESTS" | tr ',' '\n' | wc -l)"
+          # ExitOnOutOfMemoryError: 堆溢出时 fork 立即退出 (而不是半死不活挂着); MaxMetaspaceSize/MaxDirectMemorySize
+          # 给非堆封顶, 让 fork 总占用有上界。
+          rc=0
           "$MVN" -B test \
             -Dtest="$TESTS" \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g}"
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g} -XX:+ExitOnOutOfMemoryError -XX:MaxMetaspaceSize=1g -XX:MaxDirectMemorySize=512m" \
+            2>&1 | tee "$MVN_OUT" || rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::fast-contracts 分片失败 rc=$rc; 最后运行的测试类: $(grep -a 'Running com\.' "$MVN_OUT" | tail -1 | sed 's/.*Running //')"
+            grep -a "OutOfMemoryError\|Terminating due to\|MEMGUARD" "$MVN_OUT" | tail -5 || true
+          fi
+          exit "$rc"
 
   postgres-reversal-concurrency-shard:
     needs: changes
