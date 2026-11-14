@@ -5,7 +5,7 @@
  * 一项任务可以报多笔，每笔只累加，不把任务置完工。写入复用已有逐道报工接口，服务端同口径兜底校验。
  * 数据疑点（出成率 ≥100% / 起止相同 / 单位明显不符）只标「数据疑点 · 找谁核」，不改原值，不进异常。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { get } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -117,7 +117,8 @@ watch(draft, () => { clearServerErr(); savedMsg.value = ''; }, { deep: true });
 
 function fieldOfError(e: ApiError): WeighField | 'form' {
   if (e.code === 'WEIGHING_TIME_IN_FUTURE') return e.message.startsWith('开始') ? 'start' : 'end';
-  if (e.code === 'WEIGHING_TARE_NEGATIVE' || e.code === 'WEIGHING_TARE_EXCEEDS_GROSS') return 'tareKg';
+  if (e.code === 'WEIGHING_TARE_NEGATIVE' || e.code === 'WEIGHING_TARE_EXCEEDS_GROSS'
+    || e.code === 'WEIGHING_TARE_SCALE' || e.code === 'WEIGHING_TARE_UNIT_NOT_MASS') return 'tareKg';
   return 'form';
 }
 
@@ -131,11 +132,14 @@ async function save() {
   saving.value = true;
   try {
     await submitWeighing(factoryId.value, batchId.value, buildPayload(draft, task.value.id, requestId, check.value.netKg));
-    savedMsg.value = `已保存这一笔：投入 ${n2(Number(draft.inputKg))} kg，良品净重 ${n2(check.value.netKg)} kg。可以接着报下一笔。`;
+    const msg = `已保存这一笔：投入 ${n2(Number(draft.inputKg))} kg，良品净重 ${n2(check.value.netKg)} kg。可以接着报下一笔。`;
     requestId = '';
     const keepDate = draft.date;
     Object.assign(draft, freshDraft(), { date: keepDate });
     touched.value = false;
+    // 清空表单会触发上面的 watch(draft) 把提示清掉 ⇒ 等它跑完再显示「已保存」
+    await nextTick();
+    savedMsg.value = msg;
     await loadEntries();
   } catch (e) {
     const where = e instanceof ApiError ? fieldOfError(e) : 'form';

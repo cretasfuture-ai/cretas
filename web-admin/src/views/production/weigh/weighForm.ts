@@ -38,6 +38,12 @@ export interface WeighCheck {
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
 
+/** 小数位数（去掉末尾 0）；'2.50' → 1，'0.125' → 3。 */
+function decimals(v: string): number {
+  const frac = (v ?? '').trim().split('.')[1] ?? '';
+  return frac.replace(/0+$/, '').length;
+}
+
 function num(v: string): number | null | 'bad' {
   const t = (v ?? '').trim();
   if (!t) return null;
@@ -79,6 +85,7 @@ export function checkWeigh(d: WeighDraft, now: Date): WeighCheck {
   const tare = num(d.tareKg);
   if (tare === 'bad') errors.tareKg = '皮重不是数字';
   else if (tare !== null && tare < 0) errors.tareKg = '皮重不能是负数';
+  else if (tare !== null && decimals(d.tareKg) > 2) errors.tareKg = '皮重最多 2 位小数（记到 0.01 kg）';
   else if (tare !== null && typeof gross === 'number' && tare > gross) {
     errors.tareKg = `皮重 ${tare} kg 大于良品毛重 ${gross} kg，请核对`;
   }

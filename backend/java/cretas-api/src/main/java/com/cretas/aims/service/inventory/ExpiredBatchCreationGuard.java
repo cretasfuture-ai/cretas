@@ -2,7 +2,9 @@ package com.cretas.aims.service.inventory;
 
 import com.cretas.aims.exception.BusinessException;
 
+import java.time.Clock;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 
 /**
@@ -14,7 +16,15 @@ public final class ExpiredBatchCreationGuard {
     public static final int REASON_MIN = 2;
     public static final int REASON_MAX = 200;
 
+    /** 「今天」按北京时间 (服务器 JVM 是 UTC, 北京 00:00–08:00 用 LocalDate.now() 会差一天)。 */
+    public static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Shanghai");
+
     private ExpiredBatchCreationGuard() {
+    }
+
+    /** 北京时间的今天。收货日 / 过期判断都用它, ⛔ 不用 {@code LocalDate.now()} (那是服务器时区)。 */
+    public static LocalDate businessToday(Clock clock) {
+        return LocalDate.now(clock.withZone(BUSINESS_ZONE));
     }
 
     /**

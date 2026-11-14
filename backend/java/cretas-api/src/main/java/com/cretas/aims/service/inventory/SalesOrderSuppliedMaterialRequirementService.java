@@ -80,6 +80,13 @@ public class SalesOrderSuppliedMaterialRequirementService {
     private final MaterialBatchMapper materialBatchMapper;
     private final AttachmentRepository attachmentRepository;
 
+    /** 迁移 P5 R35: 收货日 / 过期判断的「现在」(按北京时间取日期); 不进构造器, 测试用 setter 固定。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
     /**
      * A15 (工厂纪律排查 2026-11-10; Steve 2026-11-11 拍板: 单独做成工厂开关, 默认关)。
      * 开关 {@code inventory.customer_supplied.allow_over_receive} 关 (默认) = 原行为, 多 1 克也拦;
@@ -412,7 +419,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
                     .withHint("请在仓储待收货任务中拍照或上传凭证后再确认");
         }
 
-        LocalDate receiptDate = LocalDate.now();
+        LocalDate receiptDate = ExpiredBatchCreationGuard.businessToday(clock);   // 北京时间 (R35 跨日)
         RawMaterialType material = rawMaterialTypeRepository.findById(requirement.getMaterialTypeId())
                 .filter(candidate -> Objects.equals(factoryId, candidate.getFactoryId()))
                 .filter(candidate -> Boolean.TRUE.equals(candidate.getIsActive()))

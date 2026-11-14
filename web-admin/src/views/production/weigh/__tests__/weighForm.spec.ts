@@ -23,6 +23,10 @@ describe('称重表单：皮重与净重', () => {
     expect(checkWeigh(draft({ tareKg: '-1' }), NOW).errors.tareKg).toBe('皮重不能是负数');
     expect(checkWeigh(draft({ inputKg: '0' }), NOW).errors.inputKg).toBe('投入重量要大于 0');
   });
+  it('阴性：皮重 0.125 超过 2 位小数 ⇒ 字段旁报错（服务端同样拒绝，不静默舍入）；0.120 放行', () => {
+    expect(checkWeigh(draft({ tareKg: '0.125' }), NOW).errors.tareKg).toBe('皮重最多 2 位小数（记到 0.01 kg）');
+    expect(checkWeigh(draft({ tareKg: '0.120' }), NOW).errors.tareKg).toBeUndefined();
+  });
   it('皮重不填按 0，提交时 tareWeight 为 null（不回填 0）', () => {
     const c = checkWeigh(draft({ tareKg: '' }), NOW);
     expect(c.netKg).toBe(82.5);

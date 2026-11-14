@@ -52,6 +52,7 @@ class WeighingEntryWiringContractTest {
         r.setWorkProcessTaskId(11L);
         r.setInputQuantity(new BigDecimal("100"));
         r.setOutputQuantity(new BigDecimal("80"));
+        r.setOutputUnit("kg");
         r.setBusinessDate(java.time.LocalDate.of(2026, 11, 14));
         r.setTareWeight(tare == null ? null : new BigDecimal(tare));
         YieldReportRequest.LaborSegment s = new YieldReportRequest.LaborSegment();
@@ -81,12 +82,33 @@ class WeighingEntryWiringContractTest {
     }
 
     @Test
+    @DisplayName("阴性: 皮重 0.125 (超过 2 位小数) ⇒ 400 WEIGHING_TARE_SCALE, 没查任务也没落库")
+    void tareWithThreeDecimalsIsRejected() {
+        assertThatThrownBy(() -> service.submitReport("F1", 5L, 9L, req("09:00", "09:30", "0.125")))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("WEIGHING_TARE_SCALE"));
+        verify(taskRepo, never()).findByFactoryIdAndId(anyString(), anyLong());
+        verify(reportRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("阴性: 良品单位是「盒」还带皮重 ⇒ 400 WEIGHING_TARE_UNIT_NOT_MASS, 没落库")
+    void tareWithCountOutputIsRejected() {
+        YieldReportRequest r = req("09:00", "09:30", "1.5");
+        r.setOutputUnit("盒");
+        assertThatThrownBy(() -> service.submitReport("F1", 5L, 9L, r))
+                .isInstanceOfSatisfying(BusinessException.class,
+                        e -> assertThat(e.getErrorCode()).isEqualTo("WEIGHING_TARE_UNIT_NOT_MASS"));
+        verify(reportRepo, never()).save(any());
+    }
+
+    @Test
     @DisplayName("阳性对照: 时间与皮重都合法 ⇒ 通过 P5 校验, 走到查工序任务 (这里任务不存在 ⇒ 404, 不是 P5 的错)")
     void validEntryPassesP5Checks() {
         assertThatThrownBy(() -> service.submitReport("F1", 5L, 9L, req("09:00", "09:30", "1.5")))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.getErrorCode()).isNotIn("WEIGHING_TIME_IN_FUTURE", "WEIGHING_TARE_NEGATIVE",
-                            "WEIGHING_TARE_EXCEEDS_GROSS");
+                            "WEIGHING_TARE_EXCEEDS_GROSS", "WEIGHING_TARE_SCALE", "WEIGHING_TARE_UNIT_NOT_MASS");
                     assertThat(e.getMessage()).contains("工序任务不存在");
                 });
         verify(taskRepo).findByFactoryIdAndId("F1", 11L);

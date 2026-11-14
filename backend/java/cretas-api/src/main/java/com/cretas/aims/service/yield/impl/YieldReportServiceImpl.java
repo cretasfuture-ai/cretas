@@ -307,7 +307,11 @@ public class YieldReportServiceImpl implements YieldReportService {
             backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "报工");
         }
         // 迁移 P5: 皮重 ≥ 0 且净重不为负; R36 称重起止时间不晚于现在 5 分钟以上 (前端字段旁也提示, 这里兜底)
-        com.cretas.aims.service.yield.WeighingEntryRules.assertTare(req.getTareWeight(), req.getOutputQuantity());
+        com.cretas.aims.service.yield.WeighingEntryRules.assertTare(req.getTareWeight(), req.getOutputQuantity(),
+                req.getTareWeight() == null || com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .describeBuiltIn(req.getOutputUnit())
+                        .map(u -> u.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS)
+                        .orElse(false));
         com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
                 req.getBusinessDate(), req.getLaborSegments(), clock);
         if (req.getWorkProcessTaskId() == null) {

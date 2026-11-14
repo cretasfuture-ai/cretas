@@ -31,7 +31,10 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Optional;
 import java.util.Set;
 
@@ -61,11 +64,18 @@ class ExpiredBatchReasonOnReceiveContractTest {
 
     private CustomerMaterialArrivalNoticeService service;
 
+    /** 固定「现在」= 北京 2026-11-14 12:00 (UTC 04:00), 不随跑测试的时刻漂。 */
+    private static final Clock NOON_BJ = Clock.fixed(Instant.parse("2026-11-14T04:00:00Z"), ZoneOffset.UTC);
+    private static final LocalDate TODAY_BJ = LocalDate.of(2026, 11, 14);
+    /** 北京 2026-11-15 01:30 = UTC 2026-11-14 17:30: UTC 日期还是 14 号, 北京已是 15 号。 */
+    private static final Clock AFTER_MIDNIGHT_BJ = Clock.fixed(Instant.parse("2026-11-14T17:30:00Z"), ZoneOffset.UTC);
+
     @BeforeEach
     void setUp() {
         service = new CustomerMaterialArrivalNoticeService(noticeRepository, customerRepository,
                 rawMaterialTypeRepository, warehouseRepository, warehouseInventoryGuardService,
                 unitContractService, materialBatchRepository, materialBatchMapper);
+        service.setClock(NOON_BJ);
         CustomerMaterialArrivalNotice notice = new CustomerMaterialArrivalNotice();
         notice.setId("NOTICE-1");
         notice.setFactoryId("F006");
@@ -111,7 +121,7 @@ class ExpiredBatchReasonOnReceiveContractTest {
     @Test
     @DisplayName("阴性: 到期日已过、没写原因 ⇒ 409 EXPIRED_BATCH_REASON_REQUIRED, 措辞写明过期天数, 零库存写")
     void expiredWithoutReasonIsRejectedBeforeAnyWrite() {
-        LocalDate expired = LocalDate.now().minusDays(3);
+        LocalDate expired = TODAY_BJ.minusDays(3);
         assertThatThrownBy(() -> service.receive("F006", "NOTICE-1", request(expired, "  "), 7L))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.getCode()).isEqualTo(409);
@@ -125,7 +135,7 @@ class ExpiredBatchReasonOnReceiveContractTest {
     @Test
     @DisplayName("阳性: 到期日已过、写了原因 ⇒ 建批次, 原因 (去首尾空白) 记在批次上")
     void expiredWithReasonIsSavedOnTheBatch() {
-        LocalDate expired = LocalDate.now().minusDays(1);
+        LocalDate expired = TODAY_BJ.minusDays(1);
         service.receive("F006", "NOTICE-1", request(expired, "  客户坚持送来，退货前暂存  "), 7L);
         ArgumentCaptor<MaterialBatch> c = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(materialBatchRepository).saveAndFlush(c.capture());
@@ -136,9 +146,32 @@ class ExpiredBatchReasonOnReceiveContractTest {
     @Test
     @DisplayName("没过期 (今天到期也不算过期) ⇒ 不要求原因; 顺手传了原因也不存")
     void notExpiredNeedsNoReasonAndStoresNone() {
-        service.receive("F006", "NOTICE-1", request(LocalDate.now(), "多传的"), 7L);
+        service.receive("F006", "NOTICE-1", request(TODAY_BJ, "多传的"), 7L);
         ArgumentCaptor<MaterialBatch> c = ArgumentCaptor.forClass(MaterialBatch.class);
         verify(materialBatchRepository).saveAndFlush(c.capture());
         assertThat(c.getValue().getExpiredOnCreateReason()).isNull();
+    }
+
+    @Test
+    @DisplayName("阴性 R35 跨日: 北京 11-15 01:30 (UTC 还是 11-14), 到期日 11-14 ⇒ 已过期 1 天, 不写原因 409, 零库存写")
+    void beijingDateDecidesExpiryAcrossUtcMidnight() {
+        service.setClock(AFTER_MIDNIGHT_BJ);
+        assertThatThrownBy(() -> service.receive("F006", "NOTICE-1", request(TODAY_BJ, null), 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getErrorCode()).isEqualTo("EXPIRED_BATCH_REASON_REQUIRED");
+                    assertThat(e.getMessage()).contains("已过期 1 天");
+                });
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("对照 R35 跨日: 同一时刻到期日 11-15 (北京今天) ⇒ 没过期, 不要原因; 收货日记北京日期 11-15")
+    void sameInstantTodayInBeijingIsNotExpired() {
+        service.setClock(AFTER_MIDNIGHT_BJ);
+        service.receive("F006", "NOTICE-1", request(TODAY_BJ.plusDays(1), null), 7L);
+        ArgumentCaptor<MaterialBatch> c = ArgumentCaptor.forClass(MaterialBatch.class);
+        verify(materialBatchRepository).saveAndFlush(c.capture());
+        assertThat(c.getValue().getExpiredOnCreateReason()).isNull();
+        assertThat(c.getValue().getReceiptDate()).isEqualTo(TODAY_BJ.plusDays(1));
     }
 }

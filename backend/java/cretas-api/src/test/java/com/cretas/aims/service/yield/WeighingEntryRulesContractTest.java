@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 迁移 P5 R36 (时间不晚于现在 5 分钟) 与皮重校验。「现在」= 北京时间 2026-11-14 10:00。 */
-class WeighingEntryRulesTest {
+class WeighingEntryRulesContractTest {
 
     private static final Clock NOW = Clock.fixed(
             ZonedDateTime.of(2026, 11, 14, 10, 0, 0, 0, WeighingEntryRules.FACTORY_ZONE).toInstant(),
@@ -73,12 +73,61 @@ class WeighingEntryRulesTest {
     @Test
     @DisplayName("皮重: 负数 400; 净重为负 (皮重大于毛重) 400; 0 与空放行")
     void tare() {
-        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("-0.5"), BigDecimal.TEN))
+        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("-0.5"), BigDecimal.TEN, true))
                 .hasMessage("皮重不能是负数");
-        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("2"), new BigDecimal("-1")))
+        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("2"), new BigDecimal("-1"), true))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> org.assertj.core.api.Assertions.assertThat(e.getHintTarget()).isEqualTo("tareWeight"));
-        assertThatCode(() -> WeighingEntryRules.assertTare(BigDecimal.ZERO, BigDecimal.TEN)).doesNotThrowAnyException();
-        assertThatCode(() -> WeighingEntryRules.assertTare(null, new BigDecimal("-1"))).doesNotThrowAnyException();
+        assertThatCode(() -> WeighingEntryRules.assertTare(BigDecimal.ZERO, BigDecimal.TEN, true)).doesNotThrowAnyException();
+        assertThatCode(() -> WeighingEntryRules.assertTare(null, new BigDecimal("-1"), false)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("阴性 皮重精度: 0.125 ⇒ 400 WEIGHING_TARE_SCALE (不静默舍入成 0.13); 0.12 / 0.120 放行")
+    void tareMoreThanTwoDecimalsIsRejected() {
+        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("0.125"), BigDecimal.TEN, true))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    org.assertj.core.api.Assertions.assertThat(e.getCode()).isEqualTo(400);
+                    org.assertj.core.api.Assertions.assertThat(e.getErrorCode()).isEqualTo("WEIGHING_TARE_SCALE");
+                    org.assertj.core.api.Assertions.assertThat(e.getActionHint()).contains("0.13");
+                    org.assertj.core.api.Assertions.assertThat(e.getHintTarget()).isEqualTo("tareWeight");
+                });
+        assertThatCode(() -> WeighingEntryRules.assertTare(new BigDecimal("0.12"), BigDecimal.TEN, true)).doesNotThrowAnyException();
+        assertThatCode(() -> WeighingEntryRules.assertTare(new BigDecimal("0.120"), BigDecimal.TEN, true)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("阴性 皮重单位: 良品不是质量单位 (盒) 还带皮重 ⇒ 400 WEIGHING_TARE_UNIT_NOT_MASS")
+    void tareWithNonMassOutputIsRejected() {
+        assertThatThrownBy(() -> WeighingEntryRules.assertTare(new BigDecimal("1"), BigDecimal.TEN, false))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    org.assertj.core.api.Assertions.assertThat(e.getErrorCode()).isEqualTo("WEIGHING_TARE_UNIT_NOT_MASS");
+                    org.assertj.core.api.Assertions.assertThat(e.getActionHint()).isNotBlank();
+                });
+    }
+
+    /** 北京 2026-11-15 00:40 (夜班刚过零点)。 */
+    private static final Clock AFTER_MIDNIGHT = Clock.fixed(
+            ZonedDateTime.of(2026, 11, 15, 0, 40, 0, 0, WeighingEntryRules.FACTORY_ZONE).toInstant(),
+            WeighingEntryRules.FACTORY_ZONE);
+
+    @Test
+    @DisplayName("夜班 R36: 没写报工日期, 00:40 补报 23:00→00:30 或 23:00→23:50 ⇒ 按昨天开始的夜班, 放行")
+    void nightShiftAfterMidnightWithoutBusinessDateIsAllowed() {
+        assertThatCode(() -> WeighingEntryRules.assertNotLaterThanNow(null, seg("23:00", "00:30"), AFTER_MIDNIGHT))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> WeighingEntryRules.assertNotLaterThanNow(null, seg("23:00", "23:50"), AFTER_MIDNIGHT))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("阴性 夜班 R36: 写明报工日期 = 今天 (11-15) 的 23:00 仍是未来 ⇒ 拦; 没写日期但时段超过 12 小时前 ⇒ 仍拦")
+    void nightShiftRollbackOnlyWithoutDateAndWithinLookback() {
+        assertThatThrownBy(() -> WeighingEntryRules.assertNotLaterThanNow(
+                LocalDate.of(2026, 11, 15), seg("23:00", "23:50"), AFTER_MIDNIGHT))
+                .hasMessage("开始时间晚于现在（超过 5 分钟）");
+        // 11-14 10:00 开始 = 14 小时 40 分钟前 > 12 小时 ⇒ 不当夜班, 按今天算就是未来
+        assertThatThrownBy(() -> WeighingEntryRules.assertNotLaterThanNow(null, seg("10:00", "11:00"), AFTER_MIDNIGHT))
+                .isInstanceOf(BusinessException.class);
     }
 }
