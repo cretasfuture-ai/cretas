@@ -56,8 +56,9 @@ final class FlywheelValueMasker {
             "公斤", "千克", "kg", "KG", "毫升", "ml", "mL", "汤匙", "茶匙", "克", "g", "两", "斤", "升", "L", "勺", "片", "粒");
     /** 配方专用单位: 不看语境, 一律 {@code <用量>} (organizer 11-14 三审: 原料表叫「食盐」时「加盐5克」也得抹)。 */
     static final List<String> RECIPE_ONLY_UNITS = List.of("毫升", "ml", "mL", "ML", "汤匙", "茶匙", "克", "g", "勺");
-    /** 单位 g 后面紧跟这些字时是网络制式不是克 (「2g网络」「4g信号」「4g卡」)。「克」不排除。 */
-    static final List<String> NOT_UNIT_AFTER_G = List.of("网", "信号", "卡", "拉");
+    /** 单位 g 后面紧跟这些字时是网络制式不是克 (「2g网络」「4g信号」)。「克」不排除。
+     * 不含「拉」「卡」: 「放盐3g拉匀」「盐3g卡住了」是配方用量 (organizer 11-15 终审复跑); 「4g卡」靠数值前的「手机/网络」判。 */
+    static final List<String> NOT_UNIT_AFTER_G = List.of("网", "信号");
     /** 数值前紧邻 {@link #G_LEAD_WINDOW} 个字里有这些词时, 后面的 g 是网络制式 (「手机是4g的」); 不看整句。 */
     static final List<String> G_LEADS = List.of("手机是", "手机", "网络");
     static final int G_LEAD_WINDOW = 4;

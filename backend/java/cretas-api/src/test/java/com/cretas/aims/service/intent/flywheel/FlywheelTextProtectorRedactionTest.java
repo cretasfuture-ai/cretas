@@ -359,7 +359,11 @@ class FlywheelTextProtectorRedactionTest {
             // 终审复跑: 「克」不排除「拉」; g 只看数值前紧邻 4 字, 不看整句
             "盐3克拉匀|盐<用量>拉匀|3克",
             "放盐3克拉面汤里|放盐<用量>拉面汤里|3克",
-            "手机上记一下味精2g|手机上记一下味精<用量>|2g"
+            "手机上记一下味精2g|手机上记一下味精<用量>|2g",
+            // 终审复跑二: g 后面紧跟「拉」「卡」也是用量
+            "放盐3g拉匀|放盐<用量>拉匀|3g",
+            "味精2g拉面里|味精<用量>拉面里|2g",
+            "盐3g卡住了|盐<用量>卡住了|3g"
     })
     void businessUnitsInRecipeContextAndColonRatiosAreMaskedInEveryColumn(String said, String expected, String gone) {
         List<String> ingredients = List.of("白砂糖", "食盐", "水");
