@@ -325,6 +325,14 @@ public final class ThresholdKeys {
     public static final String QUALITY_INSPECTION_FAIL_SCOPE = "quality.inspection.fail_scope";
 
     /**
+     * AI 助手「先问口径」档位 (INTENT-DISTILL-20261111, Steve 2026-11-14 拍板: 按工厂选)。字符串:
+     * CONSERVATIVE 保守 = 多问 (史浩禾口径); AGGRESSIVE 激进 = 少问 (Steve 300 题口径, 默认)。
+     * 认不出 / 取不到 = AGGRESSIVE 并计数 (IntentAskPolicyResolver)。只改识别层先问还是先办, 写操作照旧逐笔确认
+     * ⇒ 不挡也不放行任何写动作, 不是闸门类。
+     */
+    public static final String AI_INTENT_ASK_POLICY = "ai.intent.ask_policy";
+
+    /**
      * 迁移 P5 数据疑点「单位明显不符」上限 (kg, 小数): 整合 / 称重报工的投入或良品换成 kg 后 ≥ 它 ⇒ 标「像是把克当成了千克」。
      * 默认 5000; 大厂单笔真有 5 吨以上的按厂调大。只标疑点不挡动作 ⇒ 不是闸门类。
      */

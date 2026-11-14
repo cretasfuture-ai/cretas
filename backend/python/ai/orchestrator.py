@@ -46,6 +46,7 @@ from ai.db import _is_write_row
 from ai.matcher.decision import (ASK_KEY, CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, NON_INTENT_KEYS, RequestPurpose,
                                  intent_text)
 from ai.matcher.fallback_combo import HOPS, FallbackDecision, FallbackThresholds, run_fallback
+from ai.ask_policy import AskTier, resolve as resolve_ask_tier
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
 NONE_REPLY = "这句话我没对上系统里的功能，所以先不做任何操作。可以换个说法，或者说「帮助」看看我能做什么。"
@@ -95,10 +96,12 @@ class Orchestrator:
         min_confidence: float,
         enable_llm: bool = True,
         task_state: Optional[Dict[str, Any]] = None,
+        ask_policy: Optional[str] = None,
     ) -> IntentMatchResultDto:
         """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。
 
         ``task_state``: 服务端任务状态摘要 (Java TaskStateSummary 白名单), 只给决策层提示词; 旧 5-8 级不用。
+        ``ask_policy``: 本厂先问档位 (Java 读 factory_thresholds ai.intent.ask_policy), 见 ai/ask_policy.py。
         """
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
@@ -113,7 +116,7 @@ class Orchestrator:
             fallback_reason = None
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history, task_state=task_state)
+                                                    history, task_state=task_state, ask_policy=ask_policy)
             except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
@@ -148,6 +151,7 @@ class Orchestrator:
         visible_intents: List[Dict[str, Any]],
         history: Optional[List[Dict[str, Any]]] = None,
         task_state: Optional[Dict[str, Any]] = None,
+        ask_policy: Optional[str] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -248,15 +252,21 @@ class Orchestrator:
         t = time.time()
         special = bool(getattr(self.config, "decision_special_options", False))
         fallback = None
+        ask_tier = None  # 本厂先问档位; 只有 Luna 主路径 (combo) 用得上
         if getattr(self.config, "decision_fallback", "legacy") == "combo":
             # Luna → 组合退路 (阿里云意图 ‖ qwen 动作/先问 → qwen 单用 → 保守先问 → 按钮), 见 fallback_combo
             options = [by_code[c] for c in codes]
             if len(options) == 1 and not special:
                 probs = {codes[0]: 1.0}
             else:
+                ask_tier, ask_source = resolve_ask_tier(self.config, ask_policy)
+                if ask_tier is not None:
+                    timing["askTier" + ask_tier.name.capitalize()] = 1
+                    if ask_source.startswith("default"):
+                        timing["askPolicyDefaulted"] = 1  # 请求没带 / 认不出档位 ⇒ 默认档 (已计数 + WARNING)
                 probs = await self.decision_matcher.choose_luna(
                     query, role, options, history, special_options=special,
-                    ask=getattr(self.config, "decision_luna_policy", "v1") == "v3")
+                    ask=ask_tier is not None, ask_rules=ask_tier.rules if ask_tier is not None else None)
             if probs is None:
                 luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没启用 Luna
                 modes = {c: ("WRITE" if _is_write_row(by_code[c]) else "READ") for c in codes}
@@ -281,7 +291,8 @@ class Orchestrator:
             exit_metrics.set_decision_none_reason(
                 "decision_no_probs_" + (exit_metrics.get_luna_failure_reason() and "after_luna" or "qwen_only"))
             return None
-        return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0)
+        return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0,
+                                       ask_tier=ask_tier)
 
     async def _match_merged(self, query, factoryId, businessType, role, visible_intents, history,
                             retriever, by_code, timing, t0) -> Optional[IntentMatchResultDto]:
@@ -398,7 +409,7 @@ class Orchestrator:
 
     def _result_from_probs(self, probs: Dict[str, float], special: bool, query: str, by_code: Dict[str, Any],
                            visible_intents: List[Dict[str, Any]], timing: Dict[str, int],
-                           t0: float) -> IntentMatchResultDto:
+                           t0: float, ask_tier: Optional[AskTier] = None) -> IntentMatchResultDto:
         """Choice 概率 -> 结论 (以上都不是 / 先问清楚 / 置信不够出按钮 / 执行)。两条路径共用。"""
         probs = dict(probs)
         p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
@@ -415,21 +426,21 @@ class Orchestrator:
         # 「需要先问清楚」最大 → 一律出按钮 (不管真实第一名的概率是多少)
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
         auto_threshold = self.config.decision_auto_threshold
-        if p_ask is not None and ranked:
-            # 第三批 v3 (Luna 判断题在手): 先问 / 按默认直接办 / 写确认卡, 见 AIConfig.decision_luna_policy
+        if p_ask is not None and ranked and ask_tier is not None:
+            # Luna 判断题在手: 先问 / 按默认直接办 / 写确认卡; 门槛按本厂档位 (ai/ask_policy.py)
             timing["lunaPolicyV3"] = 1
             timing["lunaAskP"] = int(round(float(p_ask) * 1000))
             top_code, p_top = ranked[0]
             p_second = ranked[1][1] if len(ranked) > 1 else 0.0
-            if float(p_ask) >= self.config.luna_ask_threshold:
+            if float(p_ask) >= ask_tier.ask_threshold:
                 timing["lunaAsk"] = 1
                 force_clarify = True
             elif not force_clarify:
                 if _is_write_row(by_code[top_code]):
-                    go = p_top >= self.config.luna_write_threshold and p_top >= p_clarify
+                    go = p_top >= ask_tier.write_threshold and p_top >= p_clarify
                     timing["lunaWriteToConfirm" if go else "lunaWriteWeak"] = 1
                 else:
-                    go = p_top >= self.config.luna_read_threshold or p_top - p_second >= self.config.luna_margin
+                    go = p_top >= ask_tier.read_threshold or p_top - p_second >= ask_tier.margin
                     timing["lunaReadWithDefaults" if go else "lunaTwoWay"] = 1
                 if go:
                     auto_threshold = 0.0  # 只把首选交给 Java: 读按默认执行并写明默认, 写一律走确认卡
