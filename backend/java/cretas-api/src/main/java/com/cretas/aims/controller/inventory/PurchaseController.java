@@ -123,6 +123,9 @@ public class PurchaseController {
     public ApiResponse<PageResponse<PurchaseOrder>> listOrders(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String salesOrderId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate endDate,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
             jakarta.servlet.http.HttpServletRequest httpRequest) {
@@ -139,9 +142,12 @@ public class PurchaseController {
                 return ApiResponse.success("查询成功", PageResponse.of(List.of(), page, size, 0L));
             }
         }
+        boolean hasSearch = (keyword != null && !keyword.isBlank()) || startDate != null || endDate != null;
         PageResponse<PurchaseOrder> result = bySalesOrder
                 ? purchaseService.getPurchaseOrdersBySalesOrder(factoryId, salesOrderId, page, size)
-                : purchaseService.getPurchaseOrders(factoryId, page, size);
+                : hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, null, keyword, startDate, endDate, null, page, size)
+                    : purchaseService.getPurchaseOrders(factoryId, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
@@ -189,6 +195,9 @@ public class PurchaseController {
     public ApiResponse<PageResponse<PurchaseOrder>> listOrdersByStatus(
             @PathVariable @NotBlank String factoryId,
             @RequestParam PurchaseOrderStatus status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate endDate,
             @RequestParam(defaultValue = "1") @Min(value = 1, message = "页码必须大于0") int page,
             @RequestParam(defaultValue = "20") @Min(value = 1, message = "每页大小必须大于0") int size,
             @RequestHeader("Authorization") String authorization,
@@ -216,12 +225,17 @@ public class PurchaseController {
         // filtered here by purchase-order owner (same rule as the receiving-task list). Whole-factory
         // scope (owners == null) keeps the original service call unchanged.
         List<Long> owners = com.cretas.aims.security.BusinessRowScope.recordCreators(businessRowScope, factoryId);
+        boolean hasSearch = (keyword != null && !keyword.isBlank()) || startDate != null || endDate != null;
         if (owners == null) {
-            PageResponse<PurchaseOrder> result = purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
+            PageResponse<PurchaseOrder> result = hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, status, keyword, startDate, endDate, null, page, size)
+                    : purchaseService.getPurchaseOrdersByStatus(factoryId, status, page, size);
             return ApiResponse.success("查询成功", result);
         }
         ApiResponse<PageResponse<PurchaseOrder>> scoped = ApiResponse.success("查询成功",
-                purchaseService.getPurchaseOrdersByStatusOwnedBy(factoryId, status, owners, page, size));
+                hasSearch
+                    ? purchaseService.searchPurchaseOrders(factoryId, status, keyword, startDate, endDate, owners, page, size)
+                    : purchaseService.getPurchaseOrdersByStatusOwnedBy(factoryId, status, owners, page, size));
         scoped.setActionHint(SCOPED_RECEIVING_HINT);
         return scoped;
     }
