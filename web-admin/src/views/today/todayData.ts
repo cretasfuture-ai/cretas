@@ -10,6 +10,7 @@
  *   待收货        GET /{f}/warehouse/receiving/tasks
  *   待审批无订单入库 GET /{f}/task-badges/unordered-inbound
  *   待处理销售订单   GET /{f}/task-badges/sales-orders
+ *   转给我的问题     GET /{f}/issues/dispositions/assigned-to-me（P4「发现的问题」转成待办）
  *
  * G-1：每一路读取带 AbortController 超时（默认 10 s）。超时 ⇒ 这一路 state='error'、写「读取失败」，
  *      并且 inflight 在 finally 里释放，下一次 load() 一定会发新请求（不会被挂起的请求拖住）。
@@ -39,7 +40,7 @@ export interface TSrc {
 
 export type SrcId =
   | 'approve' | 'mine' | 'acted' | 'copied'
-  | 'expiry' | 'risk' | 'receiving' | 'unordered' | 'salesOrders' | 'assigned';
+  | 'expiry' | 'risk' | 'receiving' | 'unordered' | 'salesOrders' | 'assigned' | 'issueTodo';
 
 interface ApiRes { success?: boolean; message?: string; data?: unknown; totalElements?: number; total?: number }
 type Row = Record<string, unknown>;
@@ -69,6 +70,7 @@ const DEF: Record<SrcId, Pick<TSrc, 'title' | 'hint' | 'link' | 'linkLabel'>> = 
   unordered: { title: '待审批的无订单入库申请', hint: '没有采购单就到货、等审批的入库申请', link: '/warehouse/unordered-inbound-applications', linkLabel: '去无订单入库' },
   salesOrders: { title: '待处理销售订单', hint: '按我的数据范围，需要有人动手的销售订单', link: '/sales/orders', linkLabel: '去销售订单' },
   assigned: { title: '指派给我', hint: '交付风险处理实例里负责人是我的', link: '/production/delivery-risks', linkLabel: '去交付风险' },
+  issueTodo: { title: '从「发现的问题」转来的', hint: '我在「发现的问题」里转成自己待办、还没关闭的问题', link: '/issues', linkLabel: '去发现的问题' },
 };
 export const SRC_IDS = Object.keys(DEF) as SrcId[];
 
@@ -265,6 +267,23 @@ export function createTodayLoader(deps: TodayDeps) {
     } catch (e) { fail(id, e); }
   }
 
+  /** 转给我的问题：只返回本人的，不需要额外模块权限（后端按登录人取）。 */
+  async function loadIssueTodo(ctx: TodayContext) {
+    set('issueTodo', { state: 'loading' });
+    try {
+      const res = await read(`/${ctx.factoryId}/issues/dispositions/assigned-to-me`);
+      const rows = asRows(res.data);
+      set('issueTodo', {
+        state: 'ok', count: rows.length, note: '关闭（选结论）后就不在这里了',
+        items: rows.slice(0, 10).map((r): TItem => ({
+          label: String(r.title ?? '问题'),
+          sub: `转为待办 ${String(r.actedAt ?? '').replace('T', ' ').slice(0, 16)}`,
+          to: typeof r.linkPath === 'string' && r.linkPath.startsWith('/') ? r.linkPath : '/issues',
+        })),
+      });
+    } catch (e) { fail('issueTodo', e); }
+  }
+
   /** 读取全部来源。同一 (工厂, 用户) 并发调用复用同一次读取；任何情况下 finally 都释放 inflight。 */
   function load(ctx: TodayContext): Promise<void> {
     const key = `${ctx.factoryId}:${ctx.userId}`;
@@ -288,6 +307,7 @@ export function createTodayLoader(deps: TodayDeps) {
           loadReceiving(ctx),
           loadBadge(ctx, 'unordered', 'unordered-inbound', ['warehouse'], '无订单入库'),
           loadBadge(ctx, 'salesOrders', 'sales-orders', ['sales'], '销售订单'),
+          loadIssueTodo(ctx),
         ]);
         T.loadedAt = Date.now();
       } finally {

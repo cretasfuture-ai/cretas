@@ -660,7 +660,8 @@ public class SalesController {
 
     @GetMapping("/orders/cancel-policy")
     @Operation(summary = "当前用户能否取消财务已批准的销售订单 (本厂开关 + 权限)")
-    @RequirePermission({"sales:read_write", "sales:read", "finance:read", "procurement:read"})
+    @RequirePermission({"sales:read_write", "sales:read", "finance:read", "procurement:read",
+            com.cretas.aims.service.PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION})
     public ApiResponse<java.util.Map<String, Object>> cancelPolicy(
             @PathVariable @NotBlank String factoryId,
             HttpServletRequest httpRequest) {
@@ -671,7 +672,9 @@ public class SalesController {
 
     @PostMapping("/orders/{orderId}/cancel")
     @Operation(summary = "取消销售订单")
-    @RequirePermission("sales:read_write")
+    // 任一即可: 销售写权限, 或「取消已批准销售单」权限 (厂长默认有, 工厂可给别的岗位)。后者没有销售写权限时,
+    // 服务层只放行财务已批准的单 (SalesServiceImpl#cancelOrder → requireSalesWriteForOrdinaryCancel)。
+    @RequirePermission({"sales:read_write", com.cretas.aims.service.PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION})
     public ApiResponse<SalesOrder> cancelOrder(
             @PathVariable @NotBlank String factoryId,
             @PathVariable @NotBlank String orderId,

@@ -30,6 +30,9 @@ function makeGet(overrides: Record<string, Handler> = {}) {
     ]) as never;
     if (url.includes('/warehouse/receiving/tasks')) return ok([{ id: 1 }, { id: 2 }]) as never;
     if (url.includes('/task-badges/')) return ok({ state: 'KNOWN', count: 4 }) as never;
+    if (url.includes('/issues/dispositions/assigned-to-me')) return ok([
+      { title: '缺料 · 订单 SO-1', linkPath: '/production/shortage-cases', actedAt: '2026-11-14T09:00:00' },
+    ]) as never;
     return Promise.reject(new Error(`unexpected ${url}`));
   };
   return { get, calls };
@@ -169,6 +172,21 @@ describe('G-2：页签角标只在读到数时画', () => {
     const L2 = createTodayLoader({ get: b.get as never });
     await L2.load(ctxOf({ canRead: () => false }));
     expect(tabBadge('work', L2.T.s)).toBeNull();
+    // P4：「指派给我」多了「从发现的问题转来的」一路，它只取本人的、不看模块权限 ⇒ 没有模块权限时仍读得到 1 条；
+    // 交付风险那一路不适用、不参与 ⇒ 角标 = 1（「全部不适用 ⇒ 不画」仍由上面 work 页签守着）。
+    expect(L2.T.s.assigned.state).toBe('na');
+    expect(tabBadge('assigned', L2.T.s)).toBe(1);
+  });
+
+  it('P4：「指派给我」含从「发现的问题」转来的；这一路读失败 ⇒ 页签不画数', async () => {
+    const L = createTodayLoader({ get: makeGet().get as never });
+    await L.load(ctxOf());
+    expect(L.T.s.issueTodo.count).toBe(1);
+    expect(L.T.s.issueTodo.items[0]).toMatchObject({ label: '缺料 · 订单 SO-1', to: '/production/shortage-cases' });
+    expect(tabBadge('assigned', L.T.s)).toBe(2 + 1);
+    const L2 = createTodayLoader({ get: makeGet({ '/issues/dispositions/assigned-to-me': () => Promise.reject(new Error('500')) }).get as never });
+    await L2.load(ctxOf());
+    expect(L2.T.s.issueTodo.state).toBe('error');
     expect(tabBadge('assigned', L2.T.s)).toBeNull();
   });
 
