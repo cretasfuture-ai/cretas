@@ -2,6 +2,8 @@ package com.cretas.aims.service.processentry;
 
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
 import com.cretas.aims.dto.processentry.ProcessSheetRowRequest.UpstreamRef;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.SemiFinishedInventory;
 import com.cretas.aims.exception.BusinessException;
@@ -171,6 +173,51 @@ class ProcessSheetReworkOutputEntryTest {
                 eq(FACTORY), any(), eq(MAIN), any(), any(), any(), any(), any(), eq(false), any());
         order.verify(wipInventoryService).postClerkOutput(
                 eq(FACTORY), any(), eq(REWORK), any(), any(), any(), any(), any(), eq(true), any());
+    }
+
+    @Test
+    @DisplayName("Workflow 模式: 客户端传 rework=false, 冻结快照为回料 ⇒ 仍按回料入账且不承载投入")
+    void workflowSnapshotDecidesReworkEvenWhenClientSaysFalse() {
+        WorkflowClerkSheetConfigDTO.PortDescriptor upPort = WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                .workflowPortId("input:semi").materialNodeId("material:up").materialKind("SEMI_FINISHED")
+                .skuId("PT-UP").materialName("上一道半成品").unit("kg").required(true).finished(false).build();
+        WorkflowClerkSheetConfigDTO.PortDescriptor mainPort = WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                .workflowPortId("port-" + MAIN).materialNodeId("material:main").materialKind("SEMI_FINISHED")
+                .skuId(MAIN).materialName("QA-3MIX-半成品").unit("kg").required(false).finished(false)
+                .rework(false).build();
+        WorkflowClerkSheetConfigDTO.PortDescriptor reworkPort = WorkflowClerkSheetConfigDTO.PortDescriptor.builder()
+                .workflowPortId("port-" + REWORK).materialNodeId("material:rework").materialKind("SEMI_FINISHED")
+                .skuId(REWORK).materialName("QA-3MIX-回料").unit("kg").required(false).finished(false)
+                .rework(true).build();
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor desc = WorkflowClerkSheetConfigDTO.ProcessDescriptor.builder()
+                .processOrder(1).processName("腌制").inputs(List.of(upPort))
+                .output(mainPort).outputs(List.of(mainPort, reworkPort)).build();
+        WorkflowClerkSheetService workflow = org.mockito.Mockito.mock(WorkflowClerkSheetService.class);
+        when(workflow.getWorkflowSheetConfig(FACTORY, PLAN_ID)).thenReturn(
+                WorkflowClerkSheetConfigDTO.builder().processes(List.of(desc)).build());
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "workflowClerkSheetService", workflow);
+
+        // 客户端把回料行排在最前、且谎报 rework=false —— 旧模式下它会被当承载行、按普通半成品记
+        ProcessSheetRowRequest req = marinate(line(REWORK, "3", false), line(MAIN, "7", false));
+        req.getUpstreamSources().get(0).setWorkflowPortId("input:semi");
+        req.getUpstreamSources().get(0).setSkuId("PT-UP");
+        SemiFinishedInventory upstream = new SemiFinishedInventory();
+        upstream.setIntermediateBatchNo("SFI-UP");
+        upstream.setProductTypeId("PT-UP");
+        upstream.setUnit("kg");
+        when(wipRepo.findByFactoryIdAndIntermediateBatchNoAndDeletedAtIsNull(FACTORY, "SFI-UP"))
+                .thenReturn(Optional.of(upstream));
+
+        service.saveRow(FACTORY, PLAN_ID, req, 7L);
+
+        InOrder order = inOrder(wipInventoryService);
+        order.verify(wipInventoryService).postClerkOutput(
+                eq(FACTORY), any(), eq(MAIN), eq(new BigDecimal("7")), any(), any(), any(), eq(1), eq(false), any());
+        order.verify(wipInventoryService).postClerkOutput(
+                eq(FACTORY), eq(WipInventoryService.clerkSemiAnchor(PLAN_ID, REWORK)), eq(REWORK),
+                eq(new BigDecimal("3")), any(), any(), any(), eq(1), eq(true), any());
+        verify(wipInventoryService, never()).postClerkOutput(
+                any(), any(), eq(REWORK), any(), any(), any(), any(), any(), eq(false), any());
     }
 
     @Test
