@@ -8,7 +8,8 @@
  *   对账差异      Cretas ↔ 外部软件（黑湖）对账，只在有外部接口授权的工厂出现（MIGRATION-PLAN 4.1）；
  *                授权判定在 P10 才有 ⇒ 本批整类不渲染（不是显示空页签）。
  *   数据缺口      交付风险里「数据不够判断」的订单、每日差异核对最近一次「没量到 / 部分 / 失败」。
- *   （数据疑点 R30 是 P5 的事：只在 CATEGORY_DEFS 留位置，本批不渲染。）
+ *   数据疑点      P5（R30/R34）：称重报工里明显的录入错误（出成率 ≥100%、起止相同、单位明显不符），
+ *                标「找谁核」，不当异常 ⇒ 单列一个页签，不进「全部」、不能在这里关闭 / 转待办，也不改原值。
  *
  * 处置：关闭（必须选结论 + 写一句）/ 转成我的待办 / 恢复，只记在 factory_issue_dispositions，
  *       ⛔ 不改来源单据；来源仍在各自页面按原流程处理。
@@ -22,7 +23,7 @@ import type { IssueDispositionView, IssueSourceType } from '@/api/issues';
 
 export const READ_TIMEOUT_MS = 10_000;
 
-export type IssueCategory = 'report' | 'rule' | 'reconcile' | 'gap';
+export type IssueCategory = 'report' | 'rule' | 'reconcile' | 'gap' | 'suspect';
 export type SrcState = 'idle' | 'loading' | 'ok' | 'na' | 'error';
 
 export interface CategoryDef {
@@ -33,6 +34,8 @@ export interface CategoryDef {
   rendered: boolean;
   /** 没有任何来源时写在页签里的原因。 */
   reason?: string;
+  /** true ⇒ 单列（R30 数据疑点不当异常）：不进「全部」，行上没有关闭 / 转待办。 */
+  separate?: boolean;
 }
 
 export const CATEGORY_DEFS: readonly CategoryDef[] = [
@@ -48,7 +51,10 @@ export const CATEGORY_DEFS: readonly CategoryDef[] = [
     reason: '只在有外部软件接口授权的工厂出现；授权判定在 P10 上线。',
   },
   { id: 'gap', label: '数据缺口', rendered: true, hint: '缺数据、算不出的地方：交付风险数据不够判断、每日差异核对没量到' },
-  // P5：{ id: 'suspect', label: '数据疑点', ... } —— R30，不当异常，只列出来找谁核。
+  {
+    id: 'suspect', label: '数据疑点', rendered: true, separate: true,
+    hint: '最近 14 天称重报工里明显像录错的记录（出成率 ≥100%、开始和结束时间相同、单位明显不符）。不当异常，不改原值；找对应的人核对后在原记录更正。',
+  },
 ] as const;
 
 export const RENDERED_CATEGORIES = CATEGORY_DEFS.filter((c) => c.rendered);
@@ -56,7 +62,8 @@ export const RENDERED_CATEGORIES = CATEGORY_DEFS.filter((c) => c.rendered);
 export interface Issue {
   /** sourceType:sourceId，处置记录按它对上。 */
   key: string;
-  sourceType: IssueSourceType;
+  /** DATA_SUSPECT（P5 数据疑点）没有处置记录，只读。 */
+  sourceType: IssueSourceType | 'DATA_SUSPECT';
   sourceId: string;
   category: IssueCategory;
   /** 来源名（缺料异常 / 交付风险 …），显示成标签。 */
@@ -67,9 +74,11 @@ export interface Issue {
   at?: string;
   link: string;
   linkLabel: string;
+  /** true ⇒ 不能关闭 / 转待办（数据疑点）。 */
+  readOnly?: boolean;
 }
 
-export type SrcId = 'shortage' | 'risk' | 'paramDeviation' | 'costDeviation' | 'coldChain' | 'dailyRun';
+export type SrcId = 'shortage' | 'risk' | 'paramDeviation' | 'costDeviation' | 'coldChain' | 'dailyRun' | 'dataSuspect';
 
 export interface IssueSrc {
   id: SrcId;
@@ -87,6 +96,7 @@ const SRC_DEF: Record<SrcId, Pick<IssueSrc, 'title' | 'categories'>> = {
   costDeviation: { title: '成本 / 损耗异常', categories: ['rule'] },
   coldChain: { title: '冷链超温', categories: ['rule'] },
   dailyRun: { title: '每日差异核对', categories: ['gap'] },
+  dataSuspect: { title: '称重数据疑点', categories: ['suspect'] },
 };
 export const SRC_IDS = Object.keys(SRC_DEF) as SrcId[];
 
@@ -112,7 +122,7 @@ const errMsg = (e: unknown) => (e instanceof Error && e.message ? e.message : '�
 const asRows = (v: unknown): Row[] => (Array.isArray(v) ? (v as Row[]) : []);
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
 const minute = (v: unknown) => str(v).replace('T', ' ').slice(0, 16);
-export const issueKey = (t: IssueSourceType, id: string) => `${t}:${id}`;
+export const issueKey = (t: Issue['sourceType'], id: string) => `${t}:${id}`;
 
 function blank(id: SrcId): IssueSrc {
   return { id, ...SRC_DEF[id], state: 'idle', note: '' };
@@ -242,6 +252,25 @@ export function createIssuesLoader(deps: IssuesDeps) {
     }];
   };
 
+  let suspectTruncated = false;
+  const dataSuspect: Job = async (ctx) => {
+    const d = (await read(`/${ctx.factoryId}/production/data-suspects`, { days: 14 })).data as
+      { items?: Row[]; truncated?: boolean; windowDays?: number } | undefined;
+    suspectTruncated = Boolean(d?.truncated);
+    return asRows(d?.items).map((r) => {
+      const reasons = Array.isArray(r.suspects) ? (r.suspects as unknown[]).map(str) : [];
+      const q = (v: unknown, u: unknown) => (v === null || v === undefined ? '?' : `${str(v)} ${str(u) || ''}`.trim());
+      return {
+        key: issueKey('DATA_SUSPECT', str(r.reportId)), sourceType: 'DATA_SUSPECT', sourceId: str(r.reportId),
+        category: 'suspect', sourceLabel: '称重报工', readOnly: true,
+        title: `数据疑点 · 第 ${str(r.processOrder) || '?'} 道称重 · ${reasons[0] ?? ''}`,
+        summary: [reasons.join('；'), `投入 ${q(r.inputQuantity, r.inputUnit)}，良品 ${q(r.outputQuantity, r.outputUnit)}`].filter(Boolean).join(' · '),
+        owner: str(r.whoToCheck) || undefined, at: str(r.reportDate),
+        link: `/production/weigh?batchId=${str(r.batchId)}&taskId=${str(r.workProcessTaskId)}`, linkLabel: '去称重报工',
+      } satisfies Issue;
+    });
+  };
+
   const JOBS: Record<SrcId, { modules: string[]; job: Job }> = {
     shortage: { modules: ['procurement', 'production', 'warehouse', 'quality', 'sales'], job: shortage },
     risk: { modules: ['production', 'sales', 'procurement'], job: risk },
@@ -249,6 +278,7 @@ export function createIssuesLoader(deps: IssuesDeps) {
     costDeviation: { modules: ['finance', 'production'], job: costDeviation },
     coldChain: { modules: ['quality', 'warehouse'], job: coldChain },
     dailyRun: { modules: ['finance', 'production'], job: dailyRun },
+    dataSuspect: { modules: ['production'], job: dataSuspect },
   };
 
   async function runSource(ctx: IssuesContext, id: SrcId): Promise<Issue[]> {
@@ -260,7 +290,8 @@ export function createIssuesLoader(deps: IssuesDeps) {
     setSrc(id, { state: 'loading', note: '' });
     try {
       const out = await job(ctx);
-      setSrc(id, { state: 'ok', note: `${out.length} 条` });
+      setSrc(id, { state: 'ok', note: id === 'dataSuspect' && suspectTruncated
+        ? `${out.length} 条（最近 14 天称重报工超过 500 条，只查了最近的 500 条，其余没查，不代表没有）` : `${out.length} 条` });
       return out;
     } catch (e) {
       fail(id, e);
