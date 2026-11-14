@@ -34,6 +34,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'toggle-select', portId: string, selected: boolean): void;
   (e: 'open-spec', line: MultiOutputLine): void;
+  /** 回料数量变化 —— 父组件据此把「填了数量」的回料自动选用 (选用联动规则只在父组件)。 */
+  (e: 'output-quantity-change', portId: string, quantity: number | null): void;
 }>();
 
 /** 展开了副产/成本分摊的端口 id。默认全收起 —— 绝大多数报工不填这两项。 */
@@ -311,6 +313,18 @@ function gridStyle(): Record<string, string> {
               class="sp-byproduct-bound"
               data-testid="rework-inline-item"
             >
+              <!--
+                14c (2026-11-14): 回料与主产出同在「至少选一个」组时它默认不选用; 原来这里不渲染
+                复选框, 填了数量也随 selected=false 被提交过滤掉, 报工成功却不入账。
+              -->
+              <el-checkbox
+                v-if="rw.selectorVisible"
+                :model-value="rw.line.selected"
+                :disabled="rw.selectorDisabled"
+                :data-testid="`rework-inline-selected-${rw.line.workflowPortId}`"
+                :aria-label="`选用 ${rw.line.materialName}`"
+                @change="(selected: boolean) => emit('toggle-select', rw.line.workflowPortId, selected)"
+              />
               <span class="sp-byproduct-name">
                 <el-tag size="small" type="warning" data-testid="rework-inline-role">回料</el-tag>
                 <strong>{{ rw.line.materialName }}</strong>
@@ -324,6 +338,7 @@ function gridStyle(): Record<string, string> {
                     controls-position="right"
                     size="small"
                     :data-testid="`rework-inline-quantity-${rw.line.workflowPortId}`"
+                    @update:model-value="(quantity: number | null | undefined) => emit('output-quantity-change', rw.line.workflowPortId, quantity ?? null)"
                     :aria-label="`${rw.line.materialName} 回料产出数量`"
                   />
                   <span class="sp-fixed-unit">{{ rw.unitLabel }}</span>

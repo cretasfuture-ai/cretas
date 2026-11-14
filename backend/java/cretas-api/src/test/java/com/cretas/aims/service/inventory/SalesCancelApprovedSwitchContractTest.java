@@ -122,4 +122,39 @@ class SalesCancelApprovedSwitchContractTest {
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(409));
         verify(cancellation, never()).cancelDownstream(anyString(), anyString(), any(), any());
     }
+
+    @Test
+    @DisplayName("只有「取消已批准销售单」权限的人: 普通状态的单要销售写权限, 被拦时订单一行不改")
+    void ordinaryCancelStillNeedsSalesWriteForACancelApprovedOnlyHolder() {
+        order.setStatus(SalesOrderStatus.DRAFT);
+        org.mockito.Mockito.doThrow(new BusinessException(403, "没有取消销售订单的权限"))
+                .when(cancellation).requireSalesWriteForOrdinaryCancel(F, 7L);
+
+        assertThatThrownBy(() -> service.cancelOrder(F, "SO-1", "客户撤单", 7L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(403));
+        verify(orders, never()).save(any());
+        assertThat(order.getStatus()).isEqualTo(SalesOrderStatus.DRAFT);
+    }
+
+    @Test
+    @DisplayName("财务已批准的单不要求销售写权限: 走批准后取消自己的权限闸, 不被普通闸误拦")
+    void approvedPathDoesNotAskForSalesWrite() {
+        when(cancellation.enabled(F)).thenReturn(true);
+        when(cancellation.cancelDownstream(F, "SO-1", "客户撤单", 7L)).thenReturn(
+                new ApprovedSalesOrderCancellation.Outcome(order, List.of(), 0, 0, List.of(), false));
+
+        assertThat(service.cancelOrder(F, "SO-1", "客户撤单", 7L).getStatus()).isEqualTo(SalesOrderStatus.CANCELLED);
+        verify(cancellation, never()).requireSalesWriteForOrdinaryCancel(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("取消入口对「取消已批准销售单」权限开放 (之前只认 sales:read_write, 配了取消权限的岗位在控制器就 403)")
+    void theCancelEndpointAcceptsTheCancelApprovedPermission() throws Exception {
+        var m = com.cretas.aims.controller.inventory.SalesController.class.getMethod("cancelOrder",
+                String.class, String.class, String.class, jakarta.servlet.http.HttpServletRequest.class);
+        var perms = m.getAnnotation(com.cretas.aims.annotation.RequirePermission.class);
+        assertThat(perms.requireAll()).isFalse();
+        assertThat(perms.value()).contains("sales:read_write",
+                com.cretas.aims.service.PermissionService.SALES_ORDER_CANCEL_APPROVED_PERMISSION);
+    }
 }
