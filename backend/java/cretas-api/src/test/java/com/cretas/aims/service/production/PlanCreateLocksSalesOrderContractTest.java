@@ -143,4 +143,33 @@ class PlanCreateLocksSalesOrderContractTest {
             o.verify(repo).lockStatusForUpdate("SO-B", F);
         }
     }
+
+    @Test
+    void batchCreateFromSalesOrderLocksPrimaryAndExtrasInIdOrderWhicheverIsThePrimary() {
+        for (String[] pair : new String[][]{{"SO-B", "SO-A"}, {"SO-A", "SO-B"}}) {
+            SalesOrderRepository repo = mock(SalesOrderRepository.class);
+            ProductionPlanServiceImpl svc = new ProductionPlanServiceImpl(mock(ProductionPlanRepository.class),
+                    mock(ProductionBatchRepository.class), mock(MaterialBatchRepository.class),
+                    mock(MaterialConsumptionRepository.class), mock(ProductionPlanBatchUsageRepository.class),
+                    mock(ProductTypeRepository.class), mock(ProductionPlanMapper.class), mock(ConversionRepository.class),
+                    mock(SchedulingService.class), mock(com.cretas.aims.repository.ProductionLineRepository.class),
+                    mock(UserRepository.class), mock(ExcelUtil.class), repo, items);
+            com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest r =
+                    new com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest();
+            r.setSourceOrderId(pair[0]);
+            r.setExtraSourceOrderIds(new java.util.ArrayList<>(java.util.List.of(pair[1])));
+            r.setItemIds(new java.util.ArrayList<>());
+
+            try {
+                svc.createPlansFromSalesOrder(F, r, 1L);
+            } catch (RuntimeException expected) {
+                // 主单没有桩出来, 后面报找不到; 只看第一批加锁顺序
+            }
+            InOrder o = inOrder(repo);
+            o.verify(repo).lockStatusForUpdate("SO-A", F);
+            o.verify(repo).lockStatusForUpdate("SO-B", F);
+            // 且这两次预锁都发生在主单行锁读取之前
+            o.verify(repo).findByIdAndFactoryIdForUpdate(pair[0], F);
+        }
+    }
 }

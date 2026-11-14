@@ -2542,6 +2542,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public java.util.List<ProductionPlanDTO> createPlansFromSalesOrder(
             String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest req, Long userId) {
         // 跨租户校验: SO 须属当前工厂
+        // 主单和额外单合在一起按 id 排序先锁: A 以 SO1 为主合并 SO2、B 以 SO2 为主合并 SO1 时,
+        // 先锁主单再按请求顺序锁额外单会互相等死。后面的 findByIdAndFactoryIdForUpdate 是同事务重入。
+        java.util.TreeSet<String> batchLockIds = new java.util.TreeSet<>();
+        if (!isBlank(req.getSourceOrderId())) {
+            batchLockIds.add(req.getSourceOrderId());
+        }
+        if (req.getExtraSourceOrderIds() != null) {
+            req.getExtraSourceOrderIds().stream().filter(id -> !isBlank(id)).forEach(batchLockIds::add);
+        }
+        batchLockIds.forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
         // Lock the SO row so two tabs cannot both observe "no plan" and create
         // duplicate effective plans for the same order line.
         SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(req.getSourceOrderId(), factoryId)
