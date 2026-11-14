@@ -446,7 +446,9 @@ class BomFamilyCostLockOrderPostgresContractTest {
     void approvingABomVersionDoesNotWriteBackAStaleTotalCostCommittedMeanwhile() throws Exception {
         String recipeId = draftWithOneRawLineAtOldPrice();
         assertThat(attempt(() -> recipes.activateRecipe(factory, recipeId, 1L))).isNull();
-        jdbc.update("update bom_recipes set version = 7 where id = ?", recipeId);
+        // 审批前先把两列和 updated_at 拨到与审批结果不同的值, 读回时才能证明「是审批写的」
+        jdbc.update("update bom_recipes set version = 7, is_current = false, "
+                + "updated_at = timestamp '2020-01-01 00:00:00' where id = ?", recipeId);
         String versionId = versions.createDraft(factory, recipeId, 1L).getId();
 
         AtomicReference<Future<?>> concurrent = new AtomicReference<>();
@@ -463,11 +465,29 @@ class BomFamilyCostLockOrderPostgresContractTest {
         assertThat(concurrentCommittedInsideApproval.get())
                 .as("审批已写配方头, 并发写成本要等审批提交").isFalse();
         Map<String, Object> head = jdbc.queryForMap(
-                "select is_current, version, total_cost from bom_recipes where id = ?", recipeId);
-        assertThat(head.get("is_current")).isEqualTo(true);
+                "select is_current, version, total_cost, updated_at > timestamp '2020-01-02' as touched "
+                        + "from bom_recipes where id = ?", recipeId);
+        assertThat(head.get("is_current")).as("审批把 is_current 从 false 改成 true").isEqualTo(true);
         assertThat(head.get("version")).as("当前版本号同步成审批的版本").isEqualTo(1);
+        assertThat(head.get("touched")).as("定向 UPDATE 自己写了 updated_at (native SQL 绕过 @PreUpdate)")
+                .isEqualTo(true);
         assertThat((BigDecimal) head.get("total_cost"))
                 .as("并发提交的成本没被审批用旧值整行写回").isEqualByComparingTo("9.9");
+    }
+
+    /** 定向 UPDATE 是 native SQL, 绕过实体的 @Where(deleted_at IS NULL): 已软删的配方不能被重新标成当前版本。 */
+    @Test
+    void markingTheCurrentVersionLeavesASoftDeletedRecipeUntouched() {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        jdbc.update("update bom_recipes set deleted_at = now(), is_current = false, version = 7 where id = ?", recipeId);
+
+        Integer changed = tx.execute(status -> recipeRepository.markCurrentVersion(recipeId, factory, 3));
+
+        assertThat(changed).as("软删的配方不在更新范围内").isZero();
+        Map<String, Object> head = jdbc.queryForMap(
+                "select is_current, version from bom_recipes where id = ?", recipeId);
+        assertThat(head.get("is_current")).isEqualTo(false);
+        assertThat(head.get("version")).isEqualTo(7);
     }
 
     /**

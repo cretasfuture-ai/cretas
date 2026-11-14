@@ -535,17 +535,16 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * 不会刷新它, 只能 {@code refresh(PESSIMISTIC_WRITE)}。按 id 升序, 与锁整族头的顺序一致, 不成环。</p>
      */
     private void archiveCompetingVersions(String factoryId, List<BomRecipe> family) {
-        Map<String, BomRecipe> competing = new java.util.TreeMap<>();
+        java.util.Set<String> competingIds = new java.util.LinkedHashSet<>();
         for (BomRecipe member : family) {
             for (BomRecipe other : recipeRepo.findCompetingVersionsForActivation(
                     factoryId, member.getProductTypeId(), member.getId(), BomRecipe.Status.ACTIVE)) {
-                competing.putIfAbsent(other.getId(), other);
+                competingIds.add(other.getId());
             }
         }
-        for (BomRecipe other : competing.values()) {
-            if (entityManager != null && entityManager.contains(other)) {
-                entityManager.refresh(other, jakarta.persistence.LockModeType.PESSIMISTIC_WRITE);
-            }
+        // 红线 3 后续: 一条 FOR UPDATE 按 PG 的 ORDER BY id 锁 (与族锁同一比较规则), 加锁前读到的旧对象会被刷新
+        for (BomRecipe other : BomRecipeHeadLocks.lockHeadsInIdOrder(
+                entityManager, recipeRepo, factoryId, competingIds).values()) {
             if (other.getStatus() != BomRecipe.Status.ACTIVE) {
                 continue;   // 加锁等待期间已被别的事务归档
             }

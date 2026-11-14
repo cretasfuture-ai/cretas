@@ -145,7 +145,9 @@ public final class BomRecipeHeadLocks {
      * <ul>
      *   <li>加锁前就被本事务改脏的同族对象: 拒绝 (IllegalStateException, 程序错误)。它在加锁查询前已被
      *       auto-flush 写出 —— 写的是加锁前读到的旧快照加上改动, 盖掉别人在这之间提交的列; 刷新救不回来,
-     *       调用方必须改成先锁再读再改。</li>
+     *       调用方必须改成先锁再读再改。⚠️ <b>这只是兜底, 抓不全</b>: 加锁前已经 flush 过的改动 (本事务早先的
+     *       查询触发的 auto-flush、显式 flush) 之后看起来是干净的; 集合的增删 (如 {@code recipe.getItems().add})
+     *       不在逐字段脏检查里。真正的约束仍是「入口最前面先锁」。</li>
      *   <li>刷新时行已被别的事务删掉: 409 {@link #FAMILY_LOCK_STALE}。Hibernate 在 refresh 找不到行时
      *       已把事务标成只能回滚, 不能吞掉继续 (提交时会变成 UnexpectedRollbackException → 500)。</li>
      * </ul>
@@ -200,10 +202,14 @@ public final class BomRecipeHeadLocks {
     public static Map<String, BomRecipe> lockHeadsInIdOrder(EntityManager entityManager, BomRecipeRepository recipes,
                                                            String factoryId, java.util.Collection<String> recipeIds) {
         List<Candidate> managedBeforeLock = managedFamilyCandidates(entityManager);
-        List<String> ordered = recipeIds.stream().filter(java.util.Objects::nonNull).distinct().sorted().toList();
+        List<String> ids = recipeIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
         Map<String, BomRecipe> locked = new java.util.LinkedHashMap<>();
-        for (String recipeId : ordered) {
-            recipes.lockByIdAndFactoryId(recipeId, factoryId).ifPresent(recipe -> locked.put(recipeId, recipe));
+        if (ids.isEmpty()) {
+            return locked;
+        }
+        // 一条 FOR UPDATE, 顺序由 PG 的 ORDER BY 决定 (与族锁同一比较规则), 不在 Java 里排序
+        for (BomRecipe recipe : recipes.lockByFactoryIdAndIdInOrderById(factoryId, ids)) {
+            locked.put(recipe.getId(), recipe);
         }
         refreshStale(entityManager, managedBeforeLock, List.copyOf(locked.values()));
         return locked;
