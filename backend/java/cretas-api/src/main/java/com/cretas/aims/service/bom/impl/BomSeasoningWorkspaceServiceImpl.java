@@ -22,6 +22,7 @@ import com.cretas.aims.repository.bom.BomRecipeRepository;
 import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
+import com.cretas.aims.service.bom.BomRecipeHeadLocks;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.workflow.PinnedWorkflowGraph;
@@ -71,6 +72,9 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     private final BomItemSubstituteService substituteService;
     private final ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     private final BomRecipeService bomRecipeService;
+
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
 
     @Override
     @Transactional(readOnly = true)
@@ -191,6 +195,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     public SeasoningBindingMutationResponse createBinding(String factoryId, String recipeId,
                                                            String workProcessId,
                                                            SeasoningBindingCreateRequest request) {
+        // 红线 3: 先按 id 升序锁整族配方头, 再读配方 / 调料行 / claimRevision —— 否则 claimRevision 的
+        // UPDATE 会先单独锁住目标头, 之后 calculateCost 才按 id 升序锁整族, 与其它写族路径反向 (PG 判死锁);
+        // 且加锁前无锁读到的配方是旧值。
+        BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepository, factoryId, recipeId);
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
         ResolvedProcess process = validateWorkflow(recipe, factoryId, workProcessId,
                 request.getWorkflowProcessNodeId());
@@ -228,6 +236,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     @Transactional
     public SeasoningBindingMutationResponse updateBinding(String factoryId, String recipeId, Long bindingId,
                                                            SeasoningBindingUpdateRequest request) {
+        // 红线 3: 先按 id 升序锁整族配方头, 再读配方 / 调料行 / claimRevision —— 否则 claimRevision 的
+        // UPDATE 会先单独锁住目标头, 之后 calculateCost 才按 id 升序锁整族, 与其它写族路径反向 (PG 判死锁);
+        // 且加锁前无锁读到的配方是旧值。
+        BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepository, factoryId, recipeId);
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
         BomSeasoningItem binding = loadBindingForWorkspace(recipe, bindingId);
         ResolvedProcess process = validateWorkflow(
@@ -259,6 +271,10 @@ public class BomSeasoningWorkspaceServiceImpl implements BomSeasoningWorkspaceSe
     @Transactional
     public SeasoningBindingMutationResponse deleteBinding(String factoryId, String recipeId, Long bindingId,
                                                            Long expectedRevision) {
+        // 红线 3: 先按 id 升序锁整族配方头, 再读配方 / 调料行 / claimRevision —— 否则 claimRevision 的
+        // UPDATE 会先单独锁住目标头, 之后 calculateCost 才按 id 升序锁整族, 与其它写族路径反向 (PG 判死锁);
+        // 且加锁前无锁读到的配方是旧值。
+        BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepository, factoryId, recipeId);
         BomRecipe recipe = editableRecipe(factoryId, recipeId);
         BomSeasoningItem binding = loadBindingForWorkspace(recipe, bindingId);
         BindingTarget target = resolveBindingTarget(
