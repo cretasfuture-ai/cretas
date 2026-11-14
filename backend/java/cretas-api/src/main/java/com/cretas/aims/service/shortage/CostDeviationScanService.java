@@ -43,7 +43,11 @@ public class CostDeviationScanService {
 
     public record ScanResult(boolean varianceConfigured, boolean balanceConfigured, int evaluated, int created,
                              int refreshed, int unchanged, int alreadyResolved, int within, int failed,
-                             List<UnknownPlan> unknown) {
+                             List<UnknownPlan> unknown, int notified, int notifyFailed, String thresholdSource) {
+    }
+
+    /** source: FACTORY (工厂自己配的) / DEFAULT (系统默认) / MIXED / null (都没有)。 */
+    public record EffectiveThresholds(Thresholds thresholds, String source) {
     }
 
     private final FactorySettingsRepository settingsRepository;
@@ -52,11 +56,24 @@ public class CostDeviationScanService {
     private final MaterialBalanceService balanceService;
     private final ProcessSecretLlmCostScope costScope;
     private final CostDeviationCaseWriter writer;
+    private final CostDeviationNotifier notifier;
+    private final CostDeviationScanDefaults defaults;
 
     public Thresholds thresholds(String factoryId) {
         List<Object[]> rows = settingsRepository.findCostDeviationThresholdsByFactoryId(factoryId);
         if (rows == null || rows.isEmpty()) return new Thresholds(null, null);
         return new Thresholds((BigDecimal) rows.get(0)[0], (BigDecimal) rows.get(0)[1]);
+    }
+
+    /** 工厂配的优先; 没配的那一类回退系统默认; 都没有 = null (没量到)。 */
+    public EffectiveThresholds effectiveThresholds(String factoryId) {
+        Thresholds t = thresholds(factoryId);
+        BigDecimal v = t.variancePct() != null ? t.variancePct() : defaults.variancePct();
+        BigDecimal b = t.balancePct() != null ? t.balancePct() : defaults.balancePct();
+        boolean fromFactory = t.variancePct() != null || t.balancePct() != null;
+        boolean fromDefault = (t.variancePct() == null && v != null) || (t.balancePct() == null && b != null);
+        String source = fromFactory && fromDefault ? "MIXED" : fromFactory ? "FACTORY" : fromDefault ? "DEFAULT" : null;
+        return new EffectiveThresholds(new Thresholds(v, b), source);
     }
 
     /** 传 null = 清除该项 (回到未配置)。 */
@@ -74,14 +91,16 @@ public class CostDeviationScanService {
     }
 
     public ScanResult scan(String factoryId, String trigger) {
-        Thresholds t = thresholds(factoryId);
+        EffectiveThresholds eff = effectiveThresholds(factoryId);
+        Thresholds t = eff.thresholds();
         LocalDate end = LocalDate.now();
         LocalDate start = end.minusDays(LOOKBACK_DAYS);
         Tally tally = new Tally();
         if (t.variancePct() != null) scanVariance(factoryId, start, end, t.variancePct(), trigger, tally);
         if (t.balancePct() != null) scanBalance(factoryId, start, end, t.balancePct(), trigger, tally);
         return new ScanResult(t.variancePct() != null, t.balancePct() != null, tally.evaluated, tally.created,
-                tally.refreshed, tally.unchanged, tally.alreadyResolved, tally.within, tally.failed, tally.unknown);
+                tally.refreshed, tally.unchanged, tally.alreadyResolved, tally.within, tally.failed, tally.unknown,
+                tally.notified, tally.notifyFailed, eff.source());
     }
 
     private void scanVariance(String factoryId, LocalDate start, LocalDate end, BigDecimal threshold, String trigger,
@@ -125,7 +144,10 @@ public class CostDeviationScanService {
         }
         Applied applied = writer.apply(factoryId, r, trigger);
         switch (applied) {
-            case CREATED -> tally.created++;
+            case CREATED -> {
+                tally.created++;
+                notifyOwner(factoryId, r, tally);
+            }
             case REFRESHED, BELOW_THRESHOLD -> tally.refreshed++;
             case UNCHANGED -> tally.unchanged++;
             case ALREADY_RESOLVED -> tally.alreadyResolved++;
@@ -133,7 +155,20 @@ public class CostDeviationScanService {
         }
     }
 
+    /** 派人已在创建时写入; 这里把新异常推到负责人的通知。失败计数, 不回滚、不当已送达。 */
+    private void notifyOwner(String factoryId, Reading r, Tally tally) {
+        try {
+            if (notifier.notifyCreated(factoryId, r.sourceType(), r.planId())) tally.notified++;
+            else tally.notifyFailed++;
+        } catch (RuntimeException ex) {
+            log.error("成本损耗异常推送失败 factory={} plan={}: {}", factoryId, r.planId(), ex.getMessage());
+            tally.notifyFailed++;
+        }
+    }
+
     private static final class Tally {
+        int notified;
+        int notifyFailed;
         int evaluated;
         int created;
         int refreshed;

@@ -539,12 +539,65 @@ public class WorkstationCountingService {
             if (reading == null) {
                 return Optional.empty();
             }
-            return scaleReadingToKg(reading.get("weight").asDouble(),
+            Optional<Double> weight = scaleReadingWeight(reading.get("weight"));
+            if (weight.isEmpty()) {
+                return Optional.empty();
+            }
+            // 秤明确说「不稳定」(称盘还在晃): 这个数不能进报工; 没有 stable 字段的设备照旧按读数用
+            if (isExplicitlyUnstable(reading.get("stable"))) {
+                return Optional.empty();
+            }
+            return scaleReadingToKg(weight.get(),
                     reading.has("unit") ? reading.get("unit").asText() : null);
         } catch (Exception e) {
             log.warn("读取电子秤重量失败: deviceId={}, error={}", scaleDeviceId, e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /**
+     * 读数消息里的 weight 节点 → 数字。数字型直接用; 字符串型 ("12.50", " -3 ", "12.") 也认;
+     * 其余 (缺失 / null / "abc" / NaN / 无穷) 一律「没有重量」, ⛔ 不当 0。
+     */
+    public static Optional<Double> scaleReadingWeight(JsonNode node) {
+        if (node == null || node.isNull() || node.isMissingNode()) {
+            return Optional.empty();
+        }
+        double v;
+        if (node.isNumber()) {
+            v = node.asDouble();
+        } else if (node.isTextual() && node.asText().trim().matches("[+-]?(\\d+\\.?\\d*|\\.\\d+)")) {
+            v = Double.parseDouble(node.asText().trim());
+        } else {
+            return Optional.empty();
+        }
+        return Double.isNaN(v) || Double.isInfinite(v) ? Optional.empty() : Optional.of(v);
+    }
+
+    /**
+     * 设备明确说「不稳定」: false / 0 / "false" / "0" / "U" / "M" / "unstable" (不区分大小写)。
+     * 没有 stable 字段、或写法认不出来 → 不算明确不稳定 (按没有该字段的设备处理)。
+     */
+    public static boolean isExplicitlyUnstable(JsonNode stable) {
+        if (stable == null || stable.isNull() || stable.isMissingNode()) {
+            return false;
+        }
+        if (stable.isBoolean()) {
+            return !stable.asBoolean();
+        }
+        if (stable.isNumber()) {
+            return stable.asDouble() == 0;
+        }
+        if (stable.isTextual()) {
+            String t = stable.asText().trim().toLowerCase(java.util.Locale.ROOT);
+            return t.equals("false") || t.equals("0") || t.equals("u") || t.equals("m") || t.equals("unstable");
+        }
+        return false;
+    }
+
+    /** 有 stable 字段且不是明确的不稳定写法才算稳定 (MqttSubscriber 日志与 readScaleWeight 共用同一口径)。 */
+    public static boolean isStableFlag(JsonNode stable) {
+        return stable != null && !stable.isNull() && !stable.isMissingNode() && !isExplicitlyUnstable(stable);
     }
 
     /** 秤读数 → kg。没写单位按 kg (秤默认); 写了但认不出/不是质量单位 → 没读到, 不猜。 */

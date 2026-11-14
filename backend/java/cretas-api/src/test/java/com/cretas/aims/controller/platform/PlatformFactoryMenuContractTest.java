@@ -147,6 +147,27 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void analyticsIsDefaultVisibleForFactoryAndOnlyExplicitFalseHidesIt() {
+        // P2b (M3): no row at all => FACTORY sees analytics by default
+        assertThat(analyticsVisible()).isTrue();
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("analytics")
+                .moduleName("Analytics").enabled(true).config(new HashMap<>(Map.of("unrelated", "x"))).build();
+        when(repository.findByFactoryIdAndDeletedAtIsNull("F001")).thenReturn(List.of(row));
+        assertThat(analyticsVisible()).isTrue();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", "false")));
+        assertThat(analyticsVisible()).isTrue();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", false)));
+        assertThat(analyticsVisible()).isFalse();
+        row.setConfig(new HashMap<>(Map.of("showInSidebar", false, "menuVisible", false)));
+        assertThat(analyticsVisible()).isFalse();
+    }
+
+    private boolean analyticsVisible() {
+        return service.get("F001").getModules().stream()
+                .filter(module -> "analytics".equals(module.getModuleId())).findFirst().orElseThrow().isVisible();
+    }
+
+    @Test
     void managementControllerRejectsDeveloperAndFactoryActors() {
         when(request.getAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE))
                 .thenReturn(new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, 1L, "PLATFORM", "developer"));

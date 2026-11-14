@@ -85,6 +85,10 @@ public class ApprovedSalesOrderCancellation {
     @Autowired
     @Lazy
     private ShortageCaseActionService shortageCaseActionService;
+    /** 交付风险实例随订单一并取消 (2026-11-13 补)。 */
+    @Autowired
+    @Lazy
+    private com.cretas.aims.service.shortage.DeliveryRiskCaseStore deliveryRiskCaseStore;
     @Autowired
     private EntityManager entityManager;
 
@@ -118,7 +122,15 @@ public class ApprovedSalesOrderCancellation {
 
     /** 连带取消的结果, 说给用户听。 */
     public record Outcome(SalesOrder lockedOrder, List<String> cancelledPlanNumbers, long cancelledSchedules, long keptStartedSchedules,
-                          List<String> manualPlansLeft, boolean shortageCaseCancelled) {
+                          List<String> manualPlansLeft, boolean shortageCaseCancelled, boolean deliveryRiskCancelled,
+                          List<String> purchasesCancelled, List<String> purchasesLeftLive) {
+
+        /** 兼容只关心缺料实例的旧调用。 */
+        public Outcome(SalesOrder lockedOrder, List<String> cancelledPlanNumbers, long cancelledSchedules, long keptStartedSchedules,
+                       List<String> manualPlansLeft, boolean shortageCaseCancelled) {
+            this(lockedOrder, cancelledPlanNumbers, cancelledSchedules, keptStartedSchedules, manualPlansLeft,
+                    shortageCaseCancelled, false, List.of(), List.of());
+        }
 
         public String describe() {
             StringBuilder sb = new StringBuilder("销售订单已取消");
@@ -137,6 +149,16 @@ public class ApprovedSalesOrderCancellation {
             }
             if (shortageCaseCancelled) {
                 sb.append("；本单的缺料处理已一并取消");
+            }
+            if (deliveryRiskCancelled) {
+                sb.append("；本单的交付风险跟踪已一并取消");
+            }
+            if (!purchasesCancelled.isEmpty()) {
+                sb.append("；未审批的缺料采购单 ").append(String.join("、", purchasesCancelled)).append(" 已一并取消");
+            }
+            if (!purchasesLeftLive.isEmpty()) {
+                sb.append("；缺料采购单 ").append(String.join("、", purchasesLeftLive))
+                        .append(" 没有自动取消（只自动取消草稿和已提交的），请采购自行处理");
             }
             return sb.toString();
         }
@@ -162,6 +184,9 @@ public class ApprovedSalesOrderCancellation {
         // 缺料实例紧跟销售单锁住: 缺料重排是「实例 → 计划」的顺序, 这里也先实例后计划, 不交叉等锁
         java.util.Optional<ShortageCase> openCase = shortageCaseRepository.findOpenForUpdate(factoryId,
                 ShortageCase.SourceType.SALES_ORDER, orderId);
+        // 交付风险实例同样紧跟着锁 (实例 → 计划 的顺序不变), 订单取消时一并结束
+        java.util.Optional<ShortageCase> openRisk = shortageCaseRepository.findOpenForUpdate(factoryId,
+                ShortageCase.SourceType.DELIVERY_RISK, orderId);
         if (order.getStatus() != SalesOrderStatus.FINANCE_APPROVED) {
             throw new BusinessException(409, "订单当前是「" + order.getStatus().getDisplayName()
                     + "」, 只有财务已批准、尚未开始执行的订单能这样取消").withHint("请刷新订单列表查看最新状态");
@@ -249,15 +274,27 @@ public class ApprovedSalesOrderCancellation {
         for (ProductionPlan p : toCancel) {
             // 经代理调用: 计划自己的闸 (已开工有报工 / 锁定 / 撤回审批中) 照常拦, 拦了整单回滚;
             // 成功后切面级联作废未开工排程并重算日计划 (CancelledPlanScheduleCascade)
-            productionPlanService.cancelProductionPlan(factoryId, p.getId(), planReason, operatorUserId);
+            // 带上销售单 id: 单子已按取消人的数据范围校验过, 它名下的计划不再按「计划创建人」二次拦
+            productionPlanService.cancelProductionPlan(factoryId, p.getId(), planReason, operatorUserId, order.getId());
             CancelledPlanScheduleCascade.Outcome o = scheduleCascade.summarize(factoryId, p.getId());
             schedules += o.cancelledSchedules();
             keptStarted += o.keptStartedSchedules();
             cancelled.add(p.getPlanNumber() != null ? p.getPlanNumber() : p.getId());
         }
 
+        ActorRef actor = new ActorRef(AuthenticatedActorType.FACTORY_USER, operatorUserId);
+        // 先收缺料采购单再取消实例: 取消留痕里会数「还在走」的采购单, 数的应是收完之后剩下的
+        com.cretas.aims.service.shortage.ShortageCaseActionService.DraftsCancelled drafts = openCase
+                .map(c -> shortageCaseActionService.cancelDraftsForCancelledOrder(c, why, actor))
+                .orElse(new com.cretas.aims.service.shortage.ShortageCaseActionService.DraftsCancelled(List.of(), List.of()));
         boolean shortageCancelled = cancelOpenShortageCase(factoryId, openCase, why, operatorUserId);
-        Outcome outcome = new Outcome(order, cancelled, schedules, keptStarted, manualLeft, shortageCancelled);
+        // 交付风险实例 (source_type = DELIVERY_RISK) 与缺料实例是两条独立的实例, 订单取消后同样没有意义
+        boolean riskCancelled = openRisk.map(c -> {
+            deliveryRiskCaseStore.cancelWithSalesOrder(c, "销售订单财务批准后取消: " + why, actor);
+            return true;
+        }).orElse(false);
+        Outcome outcome = new Outcome(order, cancelled, schedules, keptStarted, manualLeft, shortageCancelled,
+                riskCancelled, drafts.cancelled(), drafts.keptLive());
         log.info("财务批准后取消销售单: factoryId={}, SO={}, 操作人={}, 计划={}, 排程作废={}, 已开工保留={}, 手工计划未动={}",
                 factoryId, order.getId(), operatorUserId, cancelled, schedules, keptStarted, manualLeft);
         return outcome;
@@ -298,6 +335,28 @@ public class ApprovedSalesOrderCancellation {
             entityManager.refresh(entity);
         } else {
             entityManager.refresh(entity, lock);
+        }
+    }
+
+    /**
+     * 普通取消 (非「财务批准后取消」) 仍要销售写权限; 「取消已批准销售单」权限的持有人没有销售写权限时,
+     * 只能走批准后取消这一条路, 不能顺带取消草稿 / 待审的单。
+     */
+    public void requireSalesWriteForOrdinaryCancel(String factoryId, Long operatorUserId) {
+        if (operatorUserId == null) {
+            return;
+        }
+        java.util.Optional<com.cretas.aims.entity.User> factoryUser =
+                userRepository.findByIdAndFactoryId(operatorUserId, factoryId);
+        if (factoryUser.isEmpty()) {
+            // 不在本厂用户表里的操作人 = 带工厂放行的平台管理员 (普通用户在拦截器里已按「本厂用户」校验过)。
+            // 拦截器已按原口径放行他们, 这里不能再把他们当成「没有销售写权限」。
+            return;
+        }
+        boolean allowed = permissionService.hasPermission(factoryUser.get(), "sales:read_write");
+        if (!allowed) {
+            throw new BusinessException(403, "没有取消销售订单的权限")
+                    .withHint("你只有「取消已批准销售单」的权限, 只能取消财务已批准的订单");
         }
     }
 

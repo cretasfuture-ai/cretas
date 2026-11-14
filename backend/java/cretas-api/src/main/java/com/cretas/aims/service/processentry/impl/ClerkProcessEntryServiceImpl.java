@@ -153,6 +153,9 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞); 字段注入理由同上。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
 
     /**
      * D-W-01: 建批时判「计划单位与产出单位是不是同一个」(kg / 千克 / 公斤 是同一个)。同上字段注入
@@ -624,7 +627,20 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
     // Batch creation
     // ─────────────────────────────────────────────────────────────
 
+    /** 批次所挂的本厂计划; 没挂计划 / 单测没注入仓库 / 查不到 ⇒ null (守卫放行)。 */
+    private com.cretas.aims.entity.ProductionPlan ownerPlanOf(MaterializeContext ctx) {
+        if (planRepository == null || ctx.getPlanId() == null) {
+            return null;
+        }
+        return planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId()).orElse(null);
+    }
+
     private ProductionBatch createProductionBatch(MaterializeContext ctx, List<StepEntry> steps) {
+        // 1551-11 (独立审查 B2): 待审批 / 已驳回 / 已取消的计划都不能经文员录入或工序表 (ProcessSheetServiceImpl
+        //    直接调 materializeBatch, 不经 recordChain) 建出生产中批次。必须在下面「计划还是待处理」的过滤之外判:
+        //    驳回后计划是 CANCELLED, 过滤会把它筛掉, 守卫就跑不到。放在本方法任何写入之前。
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(
+                ownerPlanOf(ctx), forceInsertApproverDescriber);
         String batchNumber = ctx.getBatchNumber() != null && !ctx.getBatchNumber().isBlank()
                 ? ctx.getBatchNumber()
                 : generateBatchNumber(ctx.getFactoryId(), ctx.isFinished());
@@ -708,8 +724,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             planRepository.findByIdAndFactoryId(ctx.getPlanId(), ctx.getFactoryId())
                     .filter(p -> p.getStatus() == com.cretas.aims.entity.enums.ProductionPlanStatus.PENDING)
                     .ifPresent(p -> {
-                        // 1551-11: 待审批的强制插单还没排进去, 文员录入也不能把它翻成生产中 (整次录入回滚)
-                        com.cretas.aims.service.production.PendingApprovalStartGuard.check(p);
+                        // 1551-11: 待审批 / 已驳回的判定在本方法开头 (不受这个 PENDING 过滤影响)
                         // S4-08: 这里也会把计划翻成生产中, 所以与开工入口过同一道缺料闸 (开关默认关 = N1);
                         //    拦下时整次录入回滚, 带原因放行时原因记入缺料实例处理记录。
                         if (shortageStartGate != null) {

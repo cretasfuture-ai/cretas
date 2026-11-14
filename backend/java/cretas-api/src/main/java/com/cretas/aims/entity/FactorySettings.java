@@ -283,6 +283,20 @@ public class FactorySettings extends BaseEntity {
     @Column(name = "cost_deviation_balance_pct", precision = 6, scale = 2)
     private java.math.BigDecimal costDeviationBalancePct;
 
+    /** 成本差异异常负责人 (V20261114_11); null = 回退代码默认岗位 */
+    @Column(name = "cost_deviation_variance_owner_role", length = 50)
+    private String costDeviationVarianceOwnerRole;
+
+    @Column(name = "cost_deviation_variance_owner_user_id")
+    private Long costDeviationVarianceOwnerUserId;
+
+    /** 物料平衡异常负责人 (V20261114_11); null = 回退代码默认岗位 */
+    @Column(name = "cost_deviation_balance_owner_role", length = 50)
+    private String costDeviationBalanceOwnerRole;
+
+    @Column(name = "cost_deviation_balance_owner_user_id")
+    private Long costDeviationBalanceOwnerUserId;
+
     // ==================== 审计字段 ====================
     /**
      * 创建人ID

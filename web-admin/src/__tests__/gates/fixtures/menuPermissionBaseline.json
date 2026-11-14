@@ -1,0 +1,2538 @@
+{
+ "note": "改前快照：origin/main 994f2c0a3a（含 #1679）的 menuConfig，每个叶子的「祖先链 + 自身」权限字段。P2 闸 menuPermissionParity.spec.ts 用。⛔ 不要为了让闸变绿重新生成。",
+ "fields": [
+  "module",
+  "roles",
+  "hideForFactoryTypes",
+  "allowedFactoryTypes",
+  "requiresFactoryContext",
+  "requiresDisposalApproval",
+  "assemblyFeature"
+ ],
+ "leafCount": 168,
+ "leaves": [
+  {
+   "path": "/dashboard",
+   "chain": [
+    {
+     "path": "/dashboard",
+     "module": "dashboard",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/workspaces/overview",
+   "chain": [
+    {
+     "path": "/workspaces",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    },
+    {
+     "path": "/workspaces/overview",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    }
+   ]
+  },
+  {
+   "path": "/workspaces/exceptions",
+   "chain": [
+    {
+     "path": "/workspaces",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    },
+    {
+     "path": "/workspaces/exceptions",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    }
+   ]
+  },
+  {
+   "path": "/workspaces/plans-approvals",
+   "chain": [
+    {
+     "path": "/workspaces",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    },
+    {
+     "path": "/workspaces/plans-approvals",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    }
+   ]
+  },
+  {
+   "path": "/workspaces/trace-review",
+   "chain": [
+    {
+     "path": "/workspaces",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    },
+    {
+     "path": "/workspaces/trace-review",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ],
+     "allowedFactoryTypes": [
+      "FACTORY",
+      "CENTRAL_KITCHEN"
+     ],
+     "requiresFactoryContext": true
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/sales-owner",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/sales-owner",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/finance-manager",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/finance-manager",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/quality-manager",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/quality-manager",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/production-manager",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/production-manager",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/warehouse-keeper",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/warehouse-keeper",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/purchaser",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/purchaser",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/workdesk/quality-chief",
+   "chain": [
+    {
+     "path": "/workdesk",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workdesk/quality-chief",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/workflow/pending",
+   "chain": [
+    {
+     "path": "/workflow",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workflow/pending",
+     "module": "dashboard"
+    }
+   ]
+  },
+  {
+   "path": "/workflow/my-created",
+   "chain": [
+    {
+     "path": "/workflow",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workflow/my-created",
+     "module": "dashboard"
+    }
+   ]
+  },
+  {
+   "path": "/workflow/acted",
+   "chain": [
+    {
+     "path": "/workflow",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workflow/acted",
+     "module": "dashboard"
+    }
+   ]
+  },
+  {
+   "path": "/workflow/copied",
+   "chain": [
+    {
+     "path": "/workflow",
+     "module": "dashboard"
+    },
+    {
+     "path": "/workflow/copied",
+     "module": "dashboard"
+    }
+   ]
+  },
+  {
+   "path": "/procurement/requisitions/my",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/requisitions/my",
+     "module": "procurement",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "procurement_manager",
+      "department_admin",
+      "permission_admin",
+      "restaurant_purchaser",
+      "restaurant_owner"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/procurement/requisitions/pending-approval",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/requisitions/pending-approval",
+     "module": "procurement",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "procurement_manager",
+      "department_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/procurement/requisitions",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/requisitions",
+     "module": "procurement",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "procurement_manager",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/procurement/orders",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/orders",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/procurement/ai-purchase",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/ai-purchase",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/procurement/shortage-cases",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/shortage-cases",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/procurement/suppliers",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/suppliers",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/procurement/price-lists",
+   "chain": [
+    {
+     "path": "/procurement",
+     "module": "procurement"
+    },
+    {
+     "path": "/procurement/price-lists",
+     "module": "procurement"
+    }
+   ]
+  },
+  {
+   "path": "/sales/orders",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/orders",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/customers",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/customers",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/shortage-cases",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/shortage-cases",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/delivery-risks",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/delivery-risks",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/shipments",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/shipments",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/returns",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/returns",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/sales/payment-requests",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/payment-requests",
+     "module": "sales",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "sales_manager",
+      "salesperson",
+      "finance_manager",
+      "cashier"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/sales/vehicles",
+   "chain": [
+    {
+     "path": "/sales",
+     "module": "sales"
+    },
+    {
+     "path": "/sales/vehicles",
+     "module": "sales"
+    }
+   ]
+  },
+  {
+   "path": "/finance/adjustments",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/adjustments",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/disposal-approvals",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/disposal-approvals",
+     "module": "finance",
+     "requiresDisposalApproval": true
+    }
+   ]
+  },
+  {
+   "path": "/finance/costs",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/costs",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/three-statements",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/three-statements",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/reports",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/reports",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/ar-ap",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/ar-ap",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/invoices",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/invoices",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/purchase-invoices",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/purchase-invoices",
+     "module": "finance",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin",
+      "finance_manager"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/finance/payments",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/payments",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/voucher-list",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/voucher-list",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/voucher-export",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/voucher-export",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/voucher-template",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/voucher-template",
+     "module": "finance",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin",
+      "finance_manager"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/finance/sku-margin",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/sku-margin",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/cost-variance",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/cost-variance",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/cost-deviation-cases",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/cost-deviation-cases",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/gross-margin-redline",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/gross-margin-redline",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/finance/accounting-period",
+   "chain": [
+    {
+     "path": "/finance",
+     "module": "finance"
+    },
+    {
+     "path": "/finance/accounting-period",
+     "module": "finance"
+    }
+   ]
+  },
+  {
+   "path": "/analytics/ai-reports",
+   "chain": [
+    {
+     "path": "/analytics/ai-reports",
+     "module": "analytics",
+     "roles": [
+      "factory_super_admin",
+      "finance_manager"
+     ],
+     "hideForFactoryTypes": [
+      "RESTAURANT",
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/rd/samples",
+   "chain": [
+    {
+     "path": "/rd",
+     "module": "rd"
+    },
+    {
+     "path": "/rd/samples",
+     "module": "rd"
+    }
+   ]
+  },
+  {
+   "path": "/rd/converted",
+   "chain": [
+    {
+     "path": "/rd",
+     "module": "rd"
+    },
+    {
+     "path": "/rd/converted",
+     "module": "rd"
+    }
+   ]
+  },
+  {
+   "path": "/production/plans",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/plans",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/shortage-cases",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/shortage-cases",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/delivery-risks",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/delivery-risks",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/dashboard/production-progress",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/dashboard/production-progress",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/batches",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/batches",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/traceability",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/traceability",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/yield-standard",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/yield-standard",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/kanban",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/kanban",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/approval",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/approval",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/material-flow",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/material-flow",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/system/products",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/system/products",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/process-hub",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/process-hub",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/bom/ecns",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/bom/ecns",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/bom/price-adjustments",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/bom/price-adjustments",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/analysis-query",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/analysis-query",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/cost-variance",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/cost-variance",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production/cost-deviation-cases",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production/cost-deviation-cases",
+     "module": "production"
+    }
+   ]
+  },
+  {
+   "path": "/production-analytics/cost-summary",
+   "chain": [
+    {
+     "path": "/production",
+     "module": "production"
+    },
+    {
+     "path": "/production-analytics/cost-summary",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/unordered-inbound-applications",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/unordered-inbound-applications",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/materials",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/materials",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/shipments",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/shipments",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/material-requisitions",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/material-requisitions",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/transfer/list",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/transfer/list",
+     "module": "inventory"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/wastage-reports",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/wastage-reports",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/inventory-query",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/inventory-query",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/stocktake-query",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/stocktake-query",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/storage-locations",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/storage-locations",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/material-types",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/material-types",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/source-individuals",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/source-individuals",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/material-segments",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/material-segments",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/warehouse/material-price-trend",
+   "chain": [
+    {
+     "path": "/warehouse",
+     "module": "warehouse"
+    },
+    {
+     "path": "/warehouse/material-price-trend",
+     "module": "warehouse"
+    }
+   ]
+  },
+  {
+   "path": "/quality/inspections",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/inspections",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/release",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/release",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/ccp",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/ccp",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/param-deviation",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/param-deviation",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/cold-chain",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/cold-chain",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/label-qc",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/label-qc",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/vision-training",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/vision-training",
+     "module": "quality",
+     "roles": [
+      "factory_super_admin",
+      "quality_manager"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/quality/defects",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/defects",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/returns",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/returns",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/disposition",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/disposition",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/recalls",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/recalls",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/disposals",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/disposals",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/shortage-cases",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/shortage-cases",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/quality/standards",
+   "chain": [
+    {
+     "path": "/quality",
+     "module": "quality"
+    },
+    {
+     "path": "/quality/standards",
+     "module": "quality"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/dashboard",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/dashboard",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/analysis",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/analysis",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/analysis-hub",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/analysis-hub",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/revenue-report",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/revenue-report",
+     "module": "analytics",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin",
+      "finance_manager",
+      "restaurant_manager",
+      "restaurant_owner"
+     ],
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/analytics/alert-dashboard",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/analytics/alert-dashboard",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/analytics/supply-chain",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/analytics/supply-chain",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/upload",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/upload",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/query-templates",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/query-templates",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/data-completeness",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/data-completeness",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/mapping-review",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/mapping-review",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/analytics/overview",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/analytics/overview",
+     "module": "analytics"
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/food-kb-feedback",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/food-kb-feedback",
+     "module": "analytics",
+     "roles": [
+      "platform_admin",
+      "permission_admin",
+      "factory_super_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/fallback-log",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/fallback-log",
+     "module": "analytics",
+     "roles": [
+      "platform_admin",
+      "permission_admin",
+      "factory_super_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/smart-bi/calibration",
+   "chain": [
+    {
+     "path": "/smart-bi",
+     "module": "analytics",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    },
+    {
+     "path": "/smart-bi/calibration",
+     "module": "analytics",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/analytics/indicators",
+   "chain": [
+    {
+     "path": "/analytics/indicators",
+     "module": "analytics",
+     "roles": [
+      "factory_super_admin",
+      "quality_manager",
+      "finance_manager"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/logs",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/logs",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/settings",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/settings",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/business-thresholds",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/business-thresholds",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/approval-chains",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/approval-chains",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/workflow-designer",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/workflow-designer",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/features",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/features",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/ai-frontline-grants",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/ai-frontline-grants",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/canvas-editor",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/canvas-editor",
+     "module": "system",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/badge-generator",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/badge-generator",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/unit-dictionary",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/unit-dictionary",
+     "module": "system",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/operation-log",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/operation-log",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/process-secret",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/process-secret",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/platform-access-log",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/platform-access-log",
+     "module": "system",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/data-backups",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/data-backups",
+     "module": "system",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/reusable-skills",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/reusable-skills",
+     "module": "system",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/autonomous-writes",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/autonomous-writes",
+     "module": "system",
+     "roles": [
+      "factory_super_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/ops/agent-ops",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/ops/agent-ops",
+     "module": "analytics",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/ai-intents",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/ai-intents",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/tenant-backups",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/tenant-backups",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/skill-tools",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/skill-tools",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/llm-usage",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/llm-usage",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/label-qc-platform-diagnostics",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/label-qc-platform-diagnostics",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/label-qc-tray-crops",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/label-qc-tray-crops",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/encoding-rules",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/encoding-rules",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/ai-quota",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/ai-quota",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/pos",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/pos",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/smartbi-config",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/smartbi-config",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/calibration/list",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/calibration/list",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/data-quality-queue",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/system/data-quality-queue",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/factory-onboarding",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/factory-onboarding",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ],
+     "assemblyFeature": true
+    }
+   ]
+  },
+  {
+   "path": "/factory-review",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/factory-review",
+     "module": "system",
+     "roles": [
+      "platform_admin"
+     ],
+     "assemblyFeature": true
+    }
+   ]
+  },
+  {
+   "path": "/factory-readiness",
+   "chain": [
+    {
+     "path": "/system",
+     "module": "system"
+    },
+    {
+     "path": "/factory-readiness",
+     "module": "system",
+     "roles": [
+      "factory_super_admin"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/logistics/workbench",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/logistics/workbench",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/logistics/records",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/logistics/records",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/logistics/orders",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/logistics/orders",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/logistics/resources",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/logistics/resources",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/logistics/stores",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/logistics/stores",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "FACTORY"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/overview",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/overview",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/plans",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/plans",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/proposal-comparison",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/proposal-comparison",
+     "module": "scheduling",
+     "roles": [
+      "factory_super_admin",
+      "permission_admin"
+     ],
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/realtime",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/realtime",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/workers",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/workers",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/alerts",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/alerts",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/scheduling/settings",
+   "chain": [
+    {
+     "path": "/scheduling",
+     "module": "scheduling"
+    },
+    {
+     "path": "/scheduling/settings",
+     "module": "scheduling",
+     "hideForFactoryTypes": [
+      "LOGISTICS"
+     ]
+    }
+   ]
+  },
+  {
+   "path": "/system/users",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/system/users",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/roles",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/system/roles",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/system/permission-matrix",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/system/permission-matrix",
+     "module": "system"
+    }
+   ]
+  },
+  {
+   "path": "/hr/employees",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/hr/employees",
+     "module": "hr"
+    }
+   ]
+  },
+  {
+   "path": "/hr/departments",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/hr/departments",
+     "module": "hr"
+    }
+   ]
+  },
+  {
+   "path": "/hr/work-types",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/hr/work-types",
+     "module": "hr"
+    }
+   ]
+  },
+  {
+   "path": "/hr/attendance",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/hr/attendance",
+     "module": "hr"
+    }
+   ]
+  },
+  {
+   "path": "/hr/whitelist",
+   "chain": [
+    {
+     "path": "/hr",
+     "module": "hr"
+    },
+    {
+     "path": "/hr/whitelist",
+     "module": "hr"
+    }
+   ]
+  },
+  {
+   "path": "/equipment/list",
+   "chain": [
+    {
+     "path": "/equipment",
+     "module": "equipment"
+    },
+    {
+     "path": "/equipment/list",
+     "module": "equipment"
+    }
+   ]
+  },
+  {
+   "path": "/equipment/maintenance",
+   "chain": [
+    {
+     "path": "/equipment",
+     "module": "equipment"
+    },
+    {
+     "path": "/equipment/maintenance",
+     "module": "equipment"
+    }
+   ]
+  },
+  {
+   "path": "/equipment/alerts",
+   "chain": [
+    {
+     "path": "/equipment",
+     "module": "equipment"
+    },
+    {
+     "path": "/equipment/alerts",
+     "module": "equipment"
+    }
+   ]
+  },
+  {
+   "path": "/dashboard/ai-value",
+   "chain": [
+    {
+     "path": "/dashboard/ai-value",
+     "module": "dashboard",
+     "roles": [
+      "factory_super_admin",
+      "platform_admin",
+      "permission_admin"
+     ]
+    }
+   ]
+  }
+ ]
+}

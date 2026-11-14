@@ -150,6 +150,8 @@ export interface LineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
 }
 
 export interface WorkerAssignment {
@@ -175,12 +177,28 @@ export interface ProductionLine {
   departmentId?: number;
   name: string;
   lineType: string;
+  lineCode?: string;
   minWorkers: number;
-  maxWorkers: number;
-  requiredSkillLevel: number;
+  /** 最多人数; 网页人数配置可清空 */
+  maxWorkers: number | null;
+  /** 插单比较用的「最少人数」(网页人数配置写这一列); 空 = 不比较 */
+  standardWorkers?: number | null;
+  /** 所需技能等级 1-5; 网页人数配置可清空 */
+  requiredSkillLevel: number | null;
   hourlyCapacity: number;
   status: 'active' | 'maintenance' | 'inactive';
   createdAt: string;
+}
+
+/**
+ * 产线人数配置: 整体替换, null = 清空。
+ * insertMinWorkers = 紧急插单比较当天排班用的最少人数 (存 standard_workers, 不够只提示、不拦)。
+ * ⚠️ 不是 ProductionLine.minWorkers (min_workers 列, APS 内部特征, 建表默认 1)。
+ */
+export interface ProductionLineStaffing {
+  insertMinWorkers: number | null;
+  maxWorkers: number | null;
+  requiredSkillLevel: number | null;
 }
 
 export interface SchedulingAlert {
@@ -275,6 +293,8 @@ interface SchedulingWireLineSchedule {
   planNumber?: string | null;
   taskTimeline?: ScheduleTaskTimelineEntry[] | null;
   dailyAllocations?: DailyAllocations | null;
+  /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
+  version?: number;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -319,6 +339,7 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     planNumber: wire.planNumber ?? null,
     taskTimeline: wire.taskTimeline ?? null,
     dailyAllocations: wire.dailyAllocations ?? null,
+    version: wire.version,
   };
 }
 
@@ -770,6 +791,8 @@ export function updateSchedule(
     plannedStartTime?: string;
     plannedEndTime?: string;
     sequenceOrder?: number;
+    /** 读到的排程版本号; 别人在这之后改过, 后端返回 409「排程已被别人修改，请刷新后再改」。 */
+    version?: number;
   }
 ) {
   return put<SchedulingWireLineSchedule>(`/${factoryId}/scheduling/schedules/${scheduleId}`, data)
@@ -1072,6 +1095,13 @@ export function createProductionLine(factoryId: string, data: Partial<Production
  */
 export function updateProductionLine(factoryId: string, lineId: string, data: Partial<ProductionLine>) {
   return put<ProductionLine>(`/${factoryId}/scheduling/production-lines/${lineId}`, data);
+}
+
+/**
+ * 设置产线人数配置 (最少/最多人数、所需技能等级)
+ */
+export function setProductionLineStaffing(factoryId: string, lineId: string, data: ProductionLineStaffing) {
+  return put<ProductionLine>(`/${factoryId}/scheduling/production-lines/${lineId}/staffing`, data);
 }
 
 /**

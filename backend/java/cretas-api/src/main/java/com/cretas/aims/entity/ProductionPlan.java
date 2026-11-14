@@ -553,6 +553,17 @@ public class ProductionPlan extends BaseEntity {
     private String approvalComment;
 
     /**
+     * 本人审批留痕: 强制插单提交人 = 审批人, 工厂开了 allow_self_approval (红线 4, V20261114_01)。
+     * 与撤回/盘点/改价/退款/应收应付的审批记录同名同口径; 审批意见里的「【本人审批】」前缀只是给人看的文字。
+     */
+    @Column(name = "self_approved", nullable = false)
+    private boolean selfApproved = false;
+
+    /** 本人审批原因 (开关开时必填)。 */
+    @Column(name = "self_approval_reason", columnDefinition = "TEXT")
+    private String selfApprovalReason;
+
+    /**
      * 强制插单原因
      */
     @Column(name = "force_insert_reason", length = 500)

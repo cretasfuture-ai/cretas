@@ -153,6 +153,22 @@ public interface WorkProcessTaskService {
             WorkProcessTaskDTO.CompleteRequest request);
 
     /**
+     * 「本人可报」: 这个人能不能给这道工序报完工。{@link #complete} 自己会调同一条判据 (所有入口都过);
+     * AI 预览与「选哪一道」的列表也用它, 三处一个口径。
+     *
+     * <p>口径同 RN 主报工 ({@code YieldReportServiceImpl} → {@code ReportAuthGuard}): 被指派 (任务负责人,
+     * 或工序多负责人表里的人) 或未指派 → 可报; {@code ReportAuthGuard#isSupervisor} 认定的主管 → 本厂任意可报;
+     * 跨厂一律拒。主管身份取自已认证主体 ({@code AuthenticatedActor#fromCurrentExecution}), 不取请求属性,
+     * AI 异步线程上也对。权限体系没有「指派 / 管理」权限点, 主管角色写死在 ReportAuthGuard。
+     *
+     * @throws com.cretas.aims.exception.BusinessException 403 不能报 (中文原因)
+     */
+    void assertCanComplete(String factoryId, WorkProcessTaskDTO task, Long operatorUserId);
+
+    /** 当前已认证主体是不是本厂的报工主管 (可替本厂任意工序报完工); 判据同 {@link #assertCanComplete}。 */
+    boolean isCompletionSupervisor(String factoryId, Long operatorUserId);
+
+    /**
      * 跳过工序: 任意非终态 → SKIPPED, 必填 notes, 限主管.
      */
     WorkProcessTaskDTO skip(

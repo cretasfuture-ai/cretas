@@ -76,6 +76,40 @@ public interface ConversationService {
     }
 
     /**
+     * 记下一次 NEED_CLARIFICATION 给用户列的选项 (按用户看到的序号顺序) 和原话, 返回会话 id。
+     * 之后用户回「1」「完成工序」时由 {@link #resolveClarificationChoice} 对上号。
+     * 不取消用户已有的会话 (进行中的缺参任务不能被一次澄清冲掉)。建不出来返回 null (调用方照旧不带会话)。
+     */
+    default String startClarificationChoice(String factoryId, Long userId, String originalInput,
+                                            List<CandidateInfo> options, String shownMessage) {
+        return null;
+    }
+
+    /**
+     * 这句回复是不是在回答某个澄清选项会话。对上: 会话记为完成并返回「选中的意图 + 原话」, 调用方按
+     * 「点了按钮」处理; 没对上 (用户换话了): 会话作废, 返回空。不是澄清选项会话 / 找不到 / 过期 → 空。
+     */
+    default Optional<ClarificationPick> resolveClarificationChoice(
+            String factoryId, Long userId, String sessionId, String userReply) {
+        return Optional.empty();
+    }
+
+    /**
+     * 给一个正在等回答的参数收集会话挂上「要从这几项里选」的选项 (按用户看到的序号顺序)。
+     * 之后用户回「1」/ 说产品名, {@link #continueConversation} 把选中那项的值填进 {@code paramName},
+     * 不再让模型去「理解」一个数字 (prod 2026-11-14: 「请提供工序任务编号」让一线报内部编号)。
+     * {@code CandidateInfo.intentCode} = 回填的值, {@code intentName} = 给用户看的话, {@code description} = 关键词 (用 | 隔开)。
+     *
+     * {@code paramLabel} = 一线说法的参数名 (「哪一道工序」), 重问 / 恢复任务时用它, 不说「编号」。
+     *
+     * @return 挂上了 true; 会话不存在 / 不是本人本厂的 / 不在收集参数 / 没有这个待填参数 → false (调用方照旧只发追问)
+     */
+    default boolean attachParameterChoices(String factoryId, Long userId, String sessionId,
+                                           String paramName, String paramLabel, List<CandidateInfo> choices) {
+        return false;
+    }
+
+    /**
      * 继续多轮对话
      *
      * 自动根据会话模式 (INTENT_RECOGNITION 或 PARAMETER_COLLECTION) 处理用户回复。
@@ -186,6 +220,17 @@ public interface ConversationService {
         private String intentName;
         private Double confidence;
         private String description;
+    }
+
+    /** 澄清选择的结果: 选中的意图、当时的原话、当时列出的全部候选码 (给学习样本用)。 */
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    class ClarificationPick {
+        private String intentCode;
+        private String originalInput;
+        private List<String> candidateCodes;
     }
 
     /**

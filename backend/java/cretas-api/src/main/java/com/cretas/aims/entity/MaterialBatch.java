@@ -140,6 +140,26 @@ public class MaterialBatch extends BaseEntity {
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
     private MaterialBatchStatus status = MaterialBatchStatus.AVAILABLE;
+
+    /**
+     * 扣留 (冻结 / CCP 偏离扣留 / 冷链转待检 / 仓库页改成质检中) 之前的状态; 解除扣留 (放行) 时据此还原
+     * (#1590 遗留 M5)。只经 {@link com.cretas.aims.service.quality.release.MaterialBatchHoldService} 写。
+     *
+     * <p>不变式: 只有状态是质检中 (INSPECTING) 时才可能非空 —— {@link #setStatus} 改成任何别的状态都会清掉它,
+     * 所以判不合格 / 报废 / 放行之后不会留下一个过期的「原状态」。为空的质检中 = 收货 / 产出后的首检 (不是扣留)。
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "hold_prior_status", length = 32)
+    private MaterialBatchStatus holdPriorStatus;
+
+    /** 见 {@link #holdPriorStatus} 的不变式: 离开质检中就清掉扣留前状态。 */
+    public void setStatus(MaterialBatchStatus status) {
+        this.status = status;
+        if (status != MaterialBatchStatus.INSPECTING) {
+            this.holdPriorStatus = null;
+        }
+    }
+
     @Column(name = "storage_location", length = 100)
     private String storageLocation;
     @Column(name = "quality_certificate", length = 100)

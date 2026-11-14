@@ -130,7 +130,8 @@ class TodoApprovalApiClient {
       `/api/mobile/${this.fid(factoryId)}/workflow/instances/${instanceId}/actions`,
       {
         action,
-        comment: notes,
+        // 后端 WorkflowActionRequest 的字段叫 notes; 发 comment 会被静默丢掉 ⇒ 驳回原因 / 本人审批原因全丢, 强制插单驳回直接 422
+        notes,
         expectedNodeId,
         // 每次点击一个新键。重复点不会重复执行 —— 第一次成功后节点已推进,
         // 第二次会被 expectedNodeId 的乐观锁挡成 409, 而不是批两次。

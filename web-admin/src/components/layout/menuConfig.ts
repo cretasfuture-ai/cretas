@@ -19,7 +19,29 @@ export interface MenuItem {
   assemblyFeature?: boolean;
   /** 真实待办计数 key。接口失败时隐藏，不允许用 0 伪装成功。 */
   badgeKey?: import('@/store/modules/taskBadges').TaskBadgeKey;
+  /**
+   * P2 原型侧栏分区（只在 groupedMenuConfig 的顶层项上出现）：
+   * top = 今天/待办/发现的问题这类独立入口；all = 「全部功能」；settings = 底部「设置」。
+   */
+  section?: MenuSection;
+  /**
+   * P2 纯展示分组（概览 / 数据与分析 / 主数据）：不是路由、本身不带任何权限判据，
+   * 子项全部不可见时整组隐藏。⛔ 不要给 container 加 module/roles —— 判据只在叶子与 guardAncestors 上。
+   */
+  container?: boolean;
+  /**
+   * P2 从原分组搬出来的叶子：原来那几层父分组（去掉 children）。侧栏判可见时这些父分组也必须可见，
+   * 与搬家前「父组被隐藏 ⇒ 子项跟着隐藏」逐项等价（disabledMenuPaths 写父路径、menuVisible、模块开关都算）。
+   */
+  guardAncestors?: MenuItem[];
 }
+
+export type MenuSection = 'top' | 'all' | 'settings';
+export const MENU_SECTION_TITLES: Record<MenuSection, string> = {
+  top: '',
+  all: '全部功能',
+  settings: '设置',
+};
 
 const PLATFORM_ADMIN_ONLY = ['platform_admin'];
 const FACTORY_ASSEMBLY_ROLES = ['platform_admin'];
@@ -585,11 +607,13 @@ const rawMenuConfig: MenuItem[] = [
     // 「经营分析」(BusinessAnalysisHub, 4 tab) — 菜单项移除, 由 redirect 桥接。
     // 删 AI分析报告 (#9)。AI 运维 3 项收 platform_admin/permission_admin 门控 (移 admin 区)。
     // 经营驾驶舱置顶主入口。各页后端不变 (部分页 Java reports + Python 混合)。
-    // 🔴 2026-08-22 owner:「数据分析全部隐藏, 工厂暂时用不着」
-    // ⇒ 整组对**工厂租户**隐藏(餐饮不受影响 —— 那是另一个体系)。
-    // ⚠️ 菜单级隐藏, ⛔ 不等于关权限: analytics 模块未动, 手输 URL 仍进得去。
-    //    owner 说的是**暂时**, 所以选可逆的这一档。
-    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics', hideForFactoryTypes: ['FACTORY'],
+    // 2026-08-22 owner 曾令「数据分析全部隐藏, 工厂暂时用不着」(hideForFactoryTypes: ['FACTORY'])。
+    // P2b（迁移方案 M3，2026-11-14 Steve 定）：对工厂**默认显示，按厂可关**。
+    //   关 = feature-config analytics 行 config.showInSidebar === false（平台「工厂菜单」页写入），
+    //   判据在 factoryMenuVisibility.isFactoryAnalyticsGroupHidden；模块/角色判据不变。
+    //   路由 meta 从来没对工厂挡这些页（只挡菜单），所以放出菜单不会「看得见点不开」。
+    // 闸 menuPermissionParity.spec.ts 的 EXPECTED_CHANGES 逐条列了这次变化的 14 个叶子。
+    path: '/smart-bi', title: '数据与分析', icon: 'TrendCharts', module: 'analytics',
    
     children: [
       // ★ 主入口 (无 groupLabel, 置顶)
@@ -705,3 +729,192 @@ function collectPlatformOnlyItems(items: MenuItem[]): MenuItem[] {
 export const platformWorkspacePaths: string[] = platformMenuConfig
   .flatMap((group) => group.children ?? [])
   .map((item) => item.path);
+
+// ============================================================================
+// P2（MIGRATION-PLAN 第一块 1.2 / DECISIONS 第十八节 M1–M8）：统一原型的侧栏分组。
+//
+// 原则：上面的 rawMenuConfig / menuConfig 一字不改，仍是每个菜单项（path + 权限字段）的唯一来源；
+// 这里只是把同一批对象重新摆位置。
+//   · 整组搬：直接引用原分组对象（权限字段天然相同）。
+//   · 单个叶子搬出原分组：带上 guardAncestors = 原来那几层父分组，侧栏判可见时父组也要过，
+//     所以「关掉父组路径 / 模块 ⇒ 子项跟着消失」的行为不变。
+//   · 新分组（概览 / 数据与分析 / 主数据）是 container：纯展示，本身不带判据。
+// 闸：__tests__/gates/menuPermissionParity.spec.ts 拿改前快照逐项比对每个叶子的
+//     「自身 + 祖先链」权限字段，数量也要相等。
+//
+// 本批的取舍（P2 brief 要求写清）：
+//   · 顶层「今天 /today」「待办 /todo」P3 已加，「发现的问题 /issues」P4 已加（TOP_ENTRIES）；
+//     P4 同时把概览里的「异常中心 /workspaces/exceptions」拿掉（旧路由跳到 /issues），闸里 EXPECTED_REMOVALS 登记。
+//   · （P2 原文：三页要到 P3/P4 才有，当时不显示。）
+//     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
+//     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
+//   · 「数字班组」组本批不出现（M4）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
+//   · 「数据与分析」对工厂默认显示（M3）在 P2b 落地：/smart-bi 去掉 hideForFactoryTypes FACTORY，
+//     按厂关闭改为 feature-config showInSidebar === false；闸里 EXPECTED_CHANGES 白名单逐条列出。
+//   · 餐饮 / 物流工厂与平台侧栏不在原型范围（MIGRATION-PLAN 1.4）：继续用原分组，只换 token 与外壳。
+//   · 财务主管专用菜单 financeManagerMenu 不动（P9 财务换外壳时再看）。
+// ============================================================================
+
+function stripChildren(item: MenuItem): MenuItem {
+  const { children: _children, ...rest } = item;
+  return rest;
+}
+
+interface Located { node: MenuItem; ancestors: MenuItem[] }
+
+function locate(items: readonly MenuItem[], path: string, ancestors: MenuItem[] = []): Located | null {
+  for (const item of items) {
+    if (item.path === path) return { node: item, ancestors };
+    if (item.children?.length) {
+      const hit = locate(item.children, path, [...ancestors, item]);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function mustLocate(path: string): Located {
+  const hit = locate(menuConfig, path);
+  if (!hit) throw new Error(`groupedMenuConfig: 菜单项 ${path} 不在 menuConfig 里（改了 path 要同步这里）`);
+  return hit;
+}
+
+/** 把一个叶子从原分组里拿出来，带上原父组判据。groupLabel（原组内小标题）不带走。 */
+function moveLeaf(path: string): MenuItem {
+  const { node, ancestors } = mustLocate(path);
+  if (node.children?.length) throw new Error(`groupedMenuConfig: ${path} 是分组，整组搬用 takeGroup`);
+  const { groupLabel: _groupLabel, ...leaf } = node;
+  const guards = [...(node.guardAncestors ?? []), ...ancestors.map(stripChildren)];
+  return guards.length ? { ...leaf, guardAncestors: guards } : leaf;
+}
+
+/** 一个分组的全部子项都按 moveLeaf 搬出（父组本身不再出现，但作为 guardAncestors 继续把关）。 */
+function moveAllChildren(groupPath: string): MenuItem[] {
+  const { node } = mustLocate(groupPath);
+  return (node.children ?? []).map((child) => {
+    if (child.children?.length) throw new Error(`groupedMenuConfig: ${child.path} 有下级，不能平铺`);
+    const { node: c, ancestors } = mustLocate(child.path);
+    return { ...c, guardAncestors: [...(c.guardAncestors ?? []), ...ancestors.map(stripChildren)] };
+  });
+}
+
+/** 整组引用，去掉搬走的子项；被搬走的子项若带小标题，交给下一个留下的兄弟。 */
+function takeGroup(path: string, removed: ReadonlySet<string>, overrides: Partial<MenuItem> = {}): MenuItem {
+  const { node } = mustLocate(path);
+  if (!node.children?.length) return { ...node, ...overrides };
+  const kept: MenuItem[] = [];
+  let pendingLabel: string | undefined;
+  for (const child of node.children) {
+    if (removed.has(child.path)) {
+      if (child.groupLabel) pendingLabel = child.groupLabel;
+      continue;
+    }
+    if (pendingLabel && !child.groupLabel) kept.push({ ...child, groupLabel: pendingLabel });
+    else kept.push(child);
+    pendingLabel = undefined;
+  }
+  return { ...node, ...overrides, children: kept };
+}
+
+function container(path: string, title: string, icon: string, children: MenuItem[], section: MenuSection = 'all'): MenuItem {
+  // module 只为满足类型；container 在侧栏 canSeeMenuItem 里直接放行，不按它判。
+  return { path, title, icon, module: 'dashboard', container: true, section, children };
+}
+
+/** 设置 › 主数据：只改菜单位置，路由不变（MIGRATION-PLAN 1.2）。 */
+const MASTER_DATA_PATHS = [
+  '/system/products',
+  '/procurement/suppliers',
+  '/sales/customers',
+  '/warehouse/material-types',
+  '/warehouse/material-segments',
+  '/sales/vehicles',
+  '/unit-dictionary',
+] as const;
+const SETTINGS_LEAF_PATHS = ['/quality/vision-training'] as const;
+
+const MOVED_OUT = new Set<string>([...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS]);
+
+/**
+ * P3：顶层独立入口「今天」「待办」。两页只读聚合各来源接口，自己没有数据权限；
+ * 每个来源在页面里按各自模块权限决定读不读（权限不够的来源不发请求、写明原因），所以入口本身对所有工厂账号开放，
+ * 与「个人 OA」同判据（module: 'dashboard'，人人都有）。新增项的权限字段在 menuPermissionParity 里列为预期新增。
+ * P4：「发现的问题 /issues」同判据——问题从各来源接口读（各按自己的模块权限），处置写入时后端再按来源查权限。
+ */
+const TOP_ENTRIES: MenuItem[] = [
+  { path: '/today', title: '今天', icon: 'Sunny', module: 'dashboard', section: 'top' },
+  { path: '/todo', title: '待办', icon: 'Finished', module: 'dashboard', section: 'top' },
+  { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], section: 'top' },
+];
+
+/** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */
+const REPLACED_BY_ISSUES = new Set<string>(['/workspaces/exceptions']);
+
+function buildGroupedMenu(): MenuItem[] {
+  const overview = container('#group/overview', '概览', 'House', [
+    mustLocate('/dashboard').node,
+    mustLocate('/workdesk').node,
+    takeGroup('/workspaces', REPLACED_BY_ISSUES),
+    mustLocate('/dashboard/ai-value').node,
+  ]);
+  const analytics = container('#group/analytics', '数据与分析', 'DataAnalysis', [
+    mustLocate('/analytics/ai-reports').node,
+    mustLocate('/analytics/indicators').node,
+    ...moveAllChildren('/smart-bi'),
+  ]);
+  const all: MenuItem[] = [
+    overview,
+    takeGroup('/workflow', MOVED_OUT),
+    takeGroup('/procurement', MOVED_OUT),
+    takeGroup('/sales', MOVED_OUT),
+    takeGroup('/production', MOVED_OUT),
+    takeGroup('/warehouse', MOVED_OUT),
+    takeGroup('/quality', MOVED_OUT),
+    analytics,
+    // 原型关掉、正式端保留的模块（第三块）：只换外观与位置
+    takeGroup('/rd', MOVED_OUT),
+    takeGroup('/hr', MOVED_OUT),
+    takeGroup('/equipment', MOVED_OUT),
+    takeGroup('/finance', MOVED_OUT),
+    takeGroup('/scheduling', MOVED_OUT),
+  ].map((item) => ({ ...item, section: 'all' as const }));
+
+  const settings: MenuItem[] = [
+    container('#group/master-data', '主数据', 'Tickets', MASTER_DATA_PATHS.map(moveLeaf), 'settings'),
+    ...SETTINGS_LEAF_PATHS.map((p) => ({ ...moveLeaf(p), icon: 'Aim', section: 'settings' as const })),
+    { ...takeGroup('/system', MOVED_OUT), section: 'settings' as const },
+  ];
+  return [...TOP_ENTRIES, ...all, ...settings];
+}
+
+/** FACTORY / CENTRAL_KITCHEN（及未带工厂类型的工厂账号）用的原型分组侧栏。 */
+export const groupedMenuConfig: MenuItem[] = buildGroupedMenu();
+
+/** 餐饮 / 物流不在原型范围，继续用原分组。 */
+const LEGACY_LAYOUT_FACTORY_TYPES = new Set(['RESTAURANT', 'LOGISTICS']);
+
+export function factoryMenuForType(factoryType: string | null | undefined): MenuItem[] {
+  return factoryType && LEGACY_LAYOUT_FACTORY_TYPES.has(factoryType) ? menuConfig : groupedMenuConfig;
+}
+
+/** 面包屑「组 › 项 › 子项」：按菜单树找当前路径的祖先标题；section 不进面包屑。找不到返回 null。 */
+export function menuTrail(items: readonly MenuItem[], path: string): MenuItem[] | null {
+  const pathname = path.split(/[?#]/)[0];
+  let best: MenuItem[] | null = null;
+  const visit = (nodes: readonly MenuItem[], trail: MenuItem[]) => {
+    for (const node of nodes) {
+      const next = [...trail, node];
+      if (node.children?.length) {
+        visit(node.children, next);
+        continue;
+      }
+      const leafPath = node.path.split(/[?#]/)[0];
+      if (pathname === leafPath || pathname.startsWith(leafPath + '/')) {
+        // 取最长匹配（/finance/invoices 与 /finance/invoices/123 之类）
+        if (!best || leafPath.length > best[best.length - 1].path.split(/[?#]/)[0].length) best = next;
+      }
+    }
+  };
+  visit(items, []);
+  return best;
+}

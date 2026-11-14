@@ -315,6 +315,12 @@ public class ProductionPlanDTO {
     @Schema(description = "审批备注/理由")
     private String approvalComment;
 
+    /** 红线 4: 审批链里有过提交人本人审批 (结构化留痕; 审批意见里的「【本人审批】」前缀只是给人看的)。 */
+    private Boolean selfApproved;
+
+    /** 红线 4: 本人审批原因。 */
+    private String selfApprovalReason;
+
     @Schema(description = "强制插单原因")
     private String forceInsertReason;
 
@@ -374,6 +380,9 @@ public class ProductionPlanDTO {
 
     @Schema(description = "紧急插单确认 / 批准后的排程结果: 插单日期、每个被挤计划的新完成日与交期是否被突破 (仅插单接口返回)")
     private java.util.Map<String, Object> scheduleOutcome;
+
+    @Schema(description = "待审批强制插单对应的审批画布实例 ID (仅待审批列表返回; 非空 = 只能走 OA 动作入口批准/驳回, 直接审批入口会 409)")
+    private String approvalWorkflowInstanceId;
 
     @Schema(description = "确认 / 批准时没能核对的项 (如「人员未核对：没有排班数据」): 照插但如实提示, 不编数、不当 0 (仅插单接口返回)")
     private java.util.List<String> uncheckedWarnings;

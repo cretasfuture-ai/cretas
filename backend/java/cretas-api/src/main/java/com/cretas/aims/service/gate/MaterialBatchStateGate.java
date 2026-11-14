@@ -26,6 +26,23 @@ public final class MaterialBatchStateGate {
         assertUsable(batch);
     }
 
+    /** 过账 (小结 / 结单) 用的提示: 能走到过账, 说明报工录入时这批还能用, 是录入之后才被判不合格或扣留的。 */
+    static final String POSTING_BLOCKED_HINT =
+            "这批在报工录入之后才被判%s：扣留待查的，等「质检放行」放行后再过账；判不合格或报废的，"
+                    + "先在工序表撤销用到这批的报工，改用合格批次重新录入后再过账";
+
+    /**
+     * 小结过账 / 结单实际领用: 与 {@link #assertReportable} 同一口径 (不拦过期),
+     * 只是提示换成过账场景下怎么解 (撤销报工或等放行), 因为这时报工已经录完了。
+     */
+    public static void assertPostable(MaterialBatch batch) {
+        try {
+            assertReportable(batch);
+        } catch (com.cretas.aims.exception.BusinessException e) {
+            throw e.withHint(String.format(POSTING_BLOCKED_HINT, batch.getStatus().getDisplayName()));
+        }
+    }
+
     public static void assertUsable(MaterialBatch batch) {
         MaterialBatchStatus st = batch == null ? null : batch.getStatus();
         if (st != null && st.blocksProduction()) {

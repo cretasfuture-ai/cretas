@@ -2661,6 +2661,11 @@ public class SalesServiceImpl implements SalesService {
                       + "财务批准后请通过驳回/退款流程处理")
                         .withHint("请刷新订单列表查看最新状态");
             }
+        } else if (approvedSalesOrderCancellation != null) {
+            // 取消接口对「取消已批准销售单」权限的持有人也开放入口, 普通状态的单仍须销售写权限
+            approvedSalesOrderCancellation.requireSalesWriteForOrdinaryCancel(factoryId, operatorUserId);
+        }
+        if (!com.cretas.aims.domain.OrderUsageWhitelists.SO_CANCELLABLE.contains(order.getStatus())) {
             // 工厂开关开了: 锁销售单 (建发货单 / 登记收款拿同一把锁)、锁后重读状态、连带取消下游; 任何一步被拦整单回滚
             downstream = approvedSalesOrderCancellation.cancelDownstream(factoryId, orderId, reason, operatorUserId);
             order = downstream.lockedOrder();

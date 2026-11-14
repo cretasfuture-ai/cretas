@@ -148,6 +148,27 @@ public class DeliveryRiskCaseStore {
         return check(c, a, act.getId(), actor);
     }
 
+    /**
+     * 订单取消时结束它还开着的交付风险实例 (调用方已持有销售单行锁): 阶段置「已取消」、写决定台账和事件留痕。
+     * 订单都取消了, 「有没有延期风险」不再有意义, 不要求负责人再写处理结果, 也不做风险重评。
+     *
+     * @param c 调用方已用 {@code findOpenForUpdate(factoryId, DELIVERY_RISK, 订单id)} 锁住的未结束实例
+     */
+    @Transactional
+    public void cancelWithSalesOrder(ShortageCase c, String reason, ActorRef actor) {
+        if (c.getSourceType() != SourceType.DELIVERY_RISK || c.getClosedAt() != null) {
+            throw new BusinessException(409, "实例已结束或不是交付风险实例").withHint("已结束的实例只能查看, 不需要再处理");
+        }
+        Stage from = c.getStage();
+        c.setStage(Stage.CANCELLED);
+        c.setClosedAt(LocalDateTime.now());
+        caseRepository.saveAndFlush(c);
+        ShortageCaseAction act = action(c, ShortageCaseAction.ActionType.DECISION, reason.trim(), actor);
+        act.setDecision(ShortageCaseAction.Decision.CANCEL);
+        actionRepository.saveAndFlush(act);
+        event(c, ShortageCaseEvent.EventType.STAGE_CHANGED, from, c.getStage(), "SALES_ORDER_CANCELLED", reason.trim(), actor);
+    }
+
     private ShortageCase lockOpen(String factoryId, String caseId) {
         return caseRepository.findOpenForUpdate(factoryId, SourceType.DELIVERY_RISK, own(factoryId, caseId).getSourceId())
                 .filter(c -> c.getId().equals(caseId))

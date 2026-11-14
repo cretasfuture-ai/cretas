@@ -1120,6 +1120,74 @@ def _product_policy(description: str, products):
                     p['maxReworkRatioPercent'] = float(nums[0])
     return skipped
 
+_SWITCH_PACKAGE = re.compile('按袋、盒下的计划能不能核对产线产能[：:][ \t]*([^\n]*)')
+
+_SWITCH_SHORTAGE_CLOSE = re.compile('缺料补齐后缺料处理怎么收尾[：:][ \t]*([^\n]*)')
+
+_SWITCH_INSPECTION = re.compile('质检表里次要项不合格怎么判[：:][ \t]*([^\n]*)')
+
+_SWITCH_SALES_CANCEL = re.compile('财务批准后的销售订单还能不能取消[：:][ \t]*([^\n]*)')
+
+_SWITCH_OVER_RECEIVE = re.compile('成品入库实收比报工多怎么办[：:][ \t]*([^\n]*)')
+
+_SWITCH_OVER_RATE = re.compile('允许多收的比例[：:][ \t]*([^\n]*)')
+
+_SWITCH_URGENT = re.compile('插单要不要一律审批[：:][ \t]*([^\n]*)')
+
+_SWITCH_CUSTOMER_OVER = re.compile('客供料收货能不能多收[：:][ \t]*([^\n]*)')
+
+_OVER_RECEIVE_KEY = 'production.receipt.over_receive_mode'
+
+# (题面 label 的正则, 阈值 key, ((选项原文开头, 写入的值), ...)) —— 与 FactoryBuildInterviewService 的选项原文一一对应。
+# ⛔ 只认选项原文开头, 不做同义词归一; 「按系统默认」和没问到 = 不写 (服务端保持现值/全局默认)。
+_FACTORY_SWITCHES = (
+    (_SWITCH_PACKAGE, 'production.capacity.package_unit_mode', (('按产品净含量折成公斤核对', 'NET_CONTENT'), ('产线产能按我们自己的包装单位配置', 'FACTORY_UNIT'))),
+    (_SWITCH_SHORTAGE_CLOSE, 'shortage.case.close_mode', (('补齐后系统自动关闭并留痕', 'AUTO'), ('补齐后由生产主管手工关闭', 'MANUAL'))),
+    (_SWITCH_INSPECTION, 'quality.inspection.fail_scope', (('任一项不合格整张都算不合格', 'ANY_ITEM'), ('次要项不合格交质量经理决定', 'MINOR_FOR_REVIEW'), ('只有关键项不合格整张才算不合格', 'CRITICAL_ONLY'))),
+    (_SWITCH_SALES_CANCEL, 'sales.order.cancel_after_approval', (('能取消，要写原因', '1'), ('不能取消，只能走驳回或退款', '0'))),
+    (_SWITCH_OVER_RECEIVE, _OVER_RECEIVE_KEY, (('不允许多收', 'BLOCK'), ('多收不超过一定比例可以收', 'WITHIN_RATE'), ('可以多收，但要写原因', 'ALWAYS_WITH_REASON'))),
+    (_SWITCH_URGENT, 'production.urgent_insert.always_approval', (('一律审批', '1'), ('只有影响大的才审批', '0'))),
+    (_SWITCH_CUSTOMER_OVER, 'inventory.customer_supplied.allow_over_receive', (('可以多收，按多收规则处理', '1'), ('不能多收', '0'))),
+)
+
+def _factory_switch_thresholds(description: str):
+    """第二批厂规开关 -> 阈值条目 [{'key','value'}]。返回 (条目, 没落上的说法)。
+    多收比例只在明确选了「多收不超过一定比例可以收」时才写, 值是小数 (5% -> 0.05, 与阈值 over_receive_rate 同口径)。"""
+    out = []
+    skipped = []
+    chosen = {}
+    for pat, key, options in _FACTORY_SWITCHES:
+        m = pat.search(description or '')
+        if not m:
+            continue
+        ans = m.group(1).strip()
+        for prefix, value in options:
+            if ans.startswith(prefix):
+                out.append({'key': key, 'value': value})
+                chosen[key] = value
+                break
+    m = _SWITCH_OVER_RATE.search(description or '')
+    if m:
+        ans = m.group(1).strip()
+        if ans and '默认' not in ans and ans not in ('没有', '不用', '不说'):
+            nums = _PCT.findall(ans)
+            if chosen.get(_OVER_RECEIVE_KEY) != 'WITHIN_RATE':
+                skipped.append('允许多收的比例:' + ans)
+            elif len(nums) == 1 and 0 < float(nums[0]) <= 100:
+                from decimal import Decimal
+                rate = (Decimal(nums[0]) / Decimal(100)).quantize(Decimal('0.0001')).normalize()
+                out.append({'key': 'production.receipt.over_receive_rate', 'value': format(rate, 'f')})
+            else:
+                skipped.append('允许多收的比例:' + ans)
+    return (out, skipped)
+
+def _merge_switch_thresholds(model_thresholds, switch_items):
+    """模型输出的阈值 + 用户回答解析出的开关。开关 key 一律先从模型输出里剔掉, 再写入用户回答的值:
+    用户选「按系统默认」/没问到时, 模型自己编的开关值不能漏进来。"""
+    switch_keys = {key for _pat, key, _opts in _FACTORY_SWITCHES} | {'production.receipt.over_receive_rate'}
+    kept = [t for t in (model_thresholds or []) if not (isinstance(t, dict) and t.get('key') in switch_keys)]
+    return kept + list(switch_items or [])
+
 def _validate_factory_init(obj: object) -> str:
     """返回空串表示合规, 否则返回**具体**的不合规原因。
 
@@ -1347,6 +1415,13 @@ async def generate_configuration(request: FactoryInitRequest):
         _bal_ans = _bal.group(1).strip() if _bal else ''
         if _bal_ans and '默认' not in _bal_ans and _bal_ans not in ('没有', '不用') and 'materialBalanceWarnPct' not in policy:
             parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', ['物料平衡提醒线:' + _bal_ans], '这条提醒线没对上「先黄后红、两个百分数」', '先说提醒线再说报警线，像「差5%提醒、差15%报警」；也可以建完厂在工厂配置里补')
+        switch_items, switch_skipped = _factory_switch_thresholds(request.factory_description)
+        _merged = _merge_switch_thresholds(parsed['suggestedData'].get('thresholds'), switch_items)
+        if _merged or 'thresholds' in parsed['suggestedData']:
+            parsed['suggestedData']['thresholds'] = _merged
+        logger.info('Factory init: 厂规开关(问到的)=%s', switch_items)
+        if switch_skipped:
+            parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('模块开关', switch_skipped, '这条多收比例没对上「已选按比例多收」或不是一个 0-100 的百分数', '先在上一题选「多收不超过一定比例可以收」，再说像「5%」这样的比例；也可以建完厂在业务阈值里补')
         policy_skipped = _product_policy(request.factory_description, parsed['suggestedData'].get('productTypes'))
         if policy_skipped:
             parsed['notBuilt'] = (parsed.get('notBuilt') or []) + _not_built('产品类型', policy_skipped, '这条检验/回料说法没对上成品名字或数字', '在「产品类型管理」里手动补；或者用成品清单里的名字再说一遍')
