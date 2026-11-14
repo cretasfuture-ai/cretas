@@ -64,7 +64,7 @@ class BomRecipeItemLockOrderContractTest {
         when(itemRepo.findRecipeIdById(F, 5L)).thenReturn(Optional.of("R-LOCK"));
         when(recipeRepo.findBomFamilyIdByIdAndFactoryId("R-LOCK", F)).thenReturn(Optional.of(FAMILY));
         when(recipeRepo.lockFamilyByFactoryIdAndBomFamilyIdOrderById(F, FAMILY)).thenReturn(List.of(recipe));
-        when(itemRepo.findByIdForUpdate(5L)).thenReturn(Optional.of(item));
+        when(itemRepo.findByIdForUpdate(F, 5L)).thenReturn(Optional.of(item));
         when(recipeRepo.findById("R-LOCK")).thenReturn(Optional.of(recipe));
     }
 
@@ -102,6 +102,6 @@ class BomRecipeItemLockOrderContractTest {
         InOrder order = inOrder(itemRepo, recipeRepo);
         order.verify(itemRepo).findRecipeIdById(F, 5L);
         order.verify(recipeRepo).lockFamilyByFactoryIdAndBomFamilyIdOrderById(F, FAMILY);
-        order.verify(itemRepo).findByIdForUpdate(5L);
+        order.verify(itemRepo).findByIdForUpdate(F, 5L);
     }
 }

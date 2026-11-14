@@ -193,7 +193,7 @@ class ProcessSecretWriteSliceGuardTest {
             item.setStandardQuantity(new BigDecimal("0.3"));
             item.setUnitPrice(new BigDecimal("10"));
             items = mock(BomRecipeItemRepository.class);
-            when(items.findByIdForUpdate(7L)).thenReturn(Optional.of(item));
+            when(items.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(7L))).thenReturn(Optional.of(item));
             when(items.findRecipeIdById(F, 7L)).thenReturn(Optional.of("r-secret"));
             when(items.save(any())).thenAnswer(inv -> inv.getArgument(0));
             RawMaterialType material = new RawMaterialType();
