@@ -37,10 +37,13 @@ import {
   costCoverageText,
   fmtMoney,
   fmtPercent,
+  fillCalendarDays,
   fmtQty,
+  PIE_LABEL_MIN_PERCENT,
   productChartLabels,
   quantityParts,
   summaryYield,
+  summaryYieldMissing,
   unresolvedProductLabel,
 } from './costAnalysisFormat';
 
@@ -154,13 +157,34 @@ function renderCostPie() {
       formatter: ({ name, value, percent }: { name: string; value: number; percent: number }) =>
         `${name}: ¥${fmtMoney(value)} (${percent.toFixed(1)}%)`,
     },
-    legend: { orient: 'vertical', right: '5%', top: 'center', textStyle: { fontSize: 12 } },
+    legend: {
+      orient: 'vertical',
+      right: '4%',
+      top: 'center',
+      textStyle: { fontSize: 12 },
+      // 占比放进图例：小扇区不再挤在图上
+      formatter: (name: string) => {
+        const slice = costPieSlices.value.find(e => e.name === name);
+        const pct = slice && total ? ((slice.value / total) * 100).toFixed(1) : '0.0';
+        return `${name}  ${pct}%`;
+      },
+    },
     series: [{
       type: 'pie',
       radius: ['35%', '62%'],
       center: ['38%', '50%'],
-      data: costPieSlices.value,
-      label: { formatter: '{d}%', fontSize: 12 },
+      data: costPieSlices.value.map(e => (
+        total && (e.value / total) * 100 < PIE_LABEL_MIN_PERCENT
+          ? { ...e, label: { show: false }, labelLine: { show: false } }
+          : e
+      )),
+      label: {
+        fontSize: 12,
+        formatter: ({ percent }: { percent: number }) =>
+          percent >= PIE_LABEL_MIN_PERCENT ? `${percent.toFixed(1)}%` : '',
+      },
+      labelLine: { show: true },
+      labelLayout: { hideOverlap: true },
       emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.2)' } },
     }],
     graphic: [{
@@ -211,19 +235,27 @@ function renderYieldTrend() {
   if (!yieldTrendChart || yieldTrendChart.isDisposed?.()) {
     yieldTrendChart = echarts.init(yieldTrendRef.value, 'cretas');
   }
-  const points = yieldData.value!.trend;
-  const dates = points.map(p => p.statDate.slice(5));
-  const rates = points.map(p => p.avgYieldRate != null ? Number(p.avgYieldRate.toFixed(1)) : null);
-  const minRate = rates.filter((v): v is number => v !== null);
+  // 补成连续日历日：无报工的日子是断点，不连线、不插值（不画不存在的值）。
+  const days = fillCalendarDays(yieldData.value!.trend);
+  const dates = days.map(d => d.date.slice(5));
+  const rates = days.map(d => d.point?.avgYieldRate != null ? Number(d.point.avgYieldRate.toFixed(1)) : null);
+  const known = rates.filter((v): v is number => v !== null);
   yieldTrendChart.setOption({
-    tooltip: { trigger: 'axis', confine: true, formatter: '{b}<br/>出成率: {c}%' },
-    grid: { top: 30, right: 56, bottom: 30, left: 60 },
-    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      formatter: (params: Array<{ name: string; value: number | null }>) =>
+        `${params[0]?.name}<br/>出成率: ${params[0]?.value != null ? `${params[0].value}%` : '当天无报工'}`,
+    },
+    grid: { top: 48, right: 24, bottom: 30, left: 60 },
+    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, hideOverlap: true } },
     yAxis: {
       type: 'value',
       name: '出成率(%)',
-      min: minRate.length ? Math.max(0, Math.min(...minRate) - 5) : 0,
-      max: 100,
+      min: known.length ? Math.max(0, Math.min(...known, 80) - 5) : 0,
+      max: 105,
+      interval: 5,
+      axisLabel: { formatter: (v: number) => (v > 100 ? '' : `${v}`) },
     },
     series: [{
       name: '出成率',
@@ -231,18 +263,15 @@ function renderYieldTrend() {
       data: rates,
       smooth: false,
       connectNulls: false,
+      showSymbol: true,
+      symbolSize: 7,
       itemStyle: { color: '#f5576c' },
-      areaStyle: {
-        color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-          colorStops: [{ offset: 0, color: 'rgba(245,87,108,0.3)' }, { offset: 1, color: 'rgba(245,87,108,0.02)' }] },
-      },
+      lineStyle: { width: 2 },
       markLine: {
-        data: [{ yAxis: 80, name: '基准', lineStyle: { color: '#52c41a', type: 'dashed' }, label: { formatter: '基准 80%' } }],
+        symbol: 'none',
+        data: [{ yAxis: 80, name: '基准', lineStyle: { color: '#52c41a', type: 'dashed' },
+          label: { formatter: '基准 80%', position: 'insideStartTop' } }],
         silent: true,
-      },
-      markPoint: {
-        data: [{ type: 'max', name: '最高' }, { type: 'min', name: '最低' }],
-        symbolSize: 36,
       },
     }],
   });
@@ -254,61 +283,46 @@ function renderProductBar() {
     productBarChart = echarts.init(productBarRef.value, 'cretas');
   }
   const prods = productData.value!.products.slice(0, 10); // top 10
-  // Use productTypeId as label if product name not available (gold uses ID)
   const labels = productChartLabels(prods, id => productLabel(id, prods.find(p => p.productTypeId === id)?.productName));
   const canShow = canViewPrice.value;
-
-  if (canShow) {
-    productBarChart.setOption({
-      tooltip: {
-        trigger: 'axis',
-        confine: true,
-        formatter: (params: Array<{ name: string; value: number; dataIndex?: number }>) => {
-          const p = prods[params[0]?.dataIndex ?? 0];
-          if (!p) return '';
-          return `${productLabel(p.productTypeId, p.productName)}<br/>
-            总成本: ¥${fmtMoney(p.totalCost)}<br/>
-            批次: ${p.batchCount}<br/>
-            实际产出: ${fmtQty(p.totalActualQty)} ${productUnit(p)}<br/>
-            出成率: ${fmtPercent(p.avgYieldRate)}`;
-        },
+  // 横向条形图：产品全名直接可读，不再被 x 轴截断成「演示·酱卤牛肉…」。
+  productBarChart.setOption({
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      confine: true,
+      formatter: (params: Array<{ dataIndex?: number }>) => {
+        const p = prods[params[0]?.dataIndex ?? 0];
+        if (!p) return '';
+        const lines = [
+          productLabel(p.productTypeId, p.productName),
+          ...(canShow ? [`总成本: ¥${fmtMoney(p.totalCost)}`] : []),
+          `批次: ${p.batchCount}`,
+          `实际产出: ${fmtQty(p.totalActualQty)} ${productUnit(p)}`,
+          `出成率: ${fmtPercent(p.avgYieldRate)}`,
+        ];
+        return lines.join('<br/>');
       },
-      grid: { top: 20, right: 20, bottom: 70, left: 70 },
-      xAxis: {
-        type: 'category',
-        data: labels,
-        axisLabel: { rotate: 30, fontSize: 11, overflow: 'truncate', width: 80 },
+    },
+    grid: { top: 16, right: 64, bottom: 28, left: 8, containLabel: true },
+    xAxis: canShow
+      ? { type: 'value', name: '总成本(¥)', axisLabel: { formatter: (v: number) => fmtMoney(v) } }
+      : { type: 'value', name: '出成率(%)', min: 0, max: 100 },
+    yAxis: { type: 'category', inverse: true, data: labels, axisLabel: { fontSize: 12, width: 220, overflow: 'break' } },
+    series: [{
+      type: 'bar',
+      data: prods.map(p => (canShow ? p.totalCost : p.avgYieldRate)),
+      barMaxWidth: 26,
+      itemStyle: { color: canShow ? '#1b65a8' : '#5470c6', borderRadius: [0, 4, 4, 0] },
+      label: {
+        show: true,
+        position: 'right',
+        fontSize: 11,
+        formatter: ({ value }: { value: number | null }) =>
+          value == null ? '未填' : canShow ? `¥${fmtMoney(value)}` : `${value}%`,
       },
-      yAxis: { type: 'value', name: '总成本(¥)', axisLabel: { formatter: (v: number) => fmtMoney(v) } },
-      series: [{
-        type: 'bar',
-        data: prods.map(p => p.totalCost ?? 0),
-        barMaxWidth: 50,
-        itemStyle: {
-          color: { type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [{ offset: 0, color: '#667eea' }, { offset: 1, color: '#764ba2' }] },
-        },
-      }],
-    });
-  } else {
-    // Non-price role: show yield rate only (not sensitive)
-    productBarChart.setOption({
-      tooltip: { trigger: 'axis', confine: true, formatter: '{b}<br/>出成率: {c}%' },
-      grid: { top: 20, right: 20, bottom: 70, left: 60 },
-      xAxis: {
-        type: 'category',
-        data: labels,
-        axisLabel: { rotate: 30, fontSize: 11, overflow: 'truncate', width: 80 },
-      },
-      yAxis: { type: 'value', name: '出成率(%)', min: 0, max: 100 },
-      series: [{
-        type: 'bar',
-        data: prods.map(p => p.avgYieldRate ?? 0),
-        barMaxWidth: 50,
-        itemStyle: { color: '#5470c6' },
-      }],
-    });
-  }
+    }],
+  });
 }
 
 function renderAll() {
@@ -410,12 +424,14 @@ const summaryKpis = computed<Kpi[]>(() => {
     parts: parts.length > 1 ? parts : undefined,
     hint: parts.length > 1 ? '不同单位不合并相加' : undefined,
   });
-  const y = summaryYield(s, costData.value?.rows);
+  const y = summaryYield(s);
   kpis.push({
     key: 'yield',
     label: '平均出成率',
     value: fmtPercent(y),
-    hint: y == null ? '暂无带出成率的批次' : s.yieldBatchCount != null ? `按 ${s.yieldBatchCount} 批加权` : '按批次数加权',
+    hint: summaryYieldMissing(s)
+      ? '缺批次数，后端未更新'
+      : y == null ? '暂无带出成率的批次' : `按 ${s.yieldBatchCount ?? 0} 批加权`,
   });
   if (canViewPrice.value) {
     kpis.push({
@@ -454,41 +470,7 @@ const { insight: costPieInsight, loading: costPieInsightLoading } = useChartInsi
 // 趋势类图（成本趋势 / 出成率趋势）不挂自动洞察：首尾比较得出的「整体下降 99.7%」会把
 // 正常的开工日波动说成异常，客户演示场景下误导大于帮助。
 
-// 4. 产品成本对比柱图 (BAR RANKING, yMetric:cost or pct depending on RBAC)
-const { insight: productInsight, loading: productInsightLoading } = useChartInsight(
-  (): { chart: ChartWithMeta } | null => {
-    const prods = productData.value?.products;
-    if (!prods || prods.length < 2) return null;
-    const top = prods.slice(0, 10);
-    if (canViewPrice.value) {
-      return {
-        chart: {
-          chartType: 'BAR',
-          title: '产品总成本对比',
-          meta: { xDim: 'product', yMetric: 'cost', aggregation: 'sum', domain: 'factory' },
-          config: {
-            xAxis: { data: productChartLabels(top, id => productLabel(id)) },
-            series: [{ type: 'bar', data: top.map(p => p.totalCost ?? 0) }],
-          },
-        },
-      };
-    }
-    // Non-price role: expose yield rate comparison instead
-    return {
-      chart: {
-        chartType: 'BAR',
-        title: '产品出成率对比',
-        meta: { xDim: 'product', yMetric: 'pct', aggregation: 'avg', domain: 'factory' },
-        config: {
-          xAxis: { data: productChartLabels(top, id => productLabel(id)) },
-          series: [{ type: 'bar', data: top.map(p => p.avgYieldRate ?? 0) }],
-        },
-      },
-    };
-  },
-  () => costInsightPerms.value,
-  { factoryId: () => factoryId.value, autoTier2: true },
-);
+// 产品对比图不挂自动洞察：「是末位产品的 7646 倍」这类首尾倍数对客户没有业务意义，还会放大 QA 测试产品的噪声。
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -670,11 +652,6 @@ onBeforeUnmount(() => {
             description="暂无产品成本对比数据"
             :image-size="80"
             class="fca-chart-empty"
-          />
-          <ChartInsight
-            :insight="productInsight"
-            :loading="productInsightLoading"
-            depth="detailed"
           />
         </div>
       </div>

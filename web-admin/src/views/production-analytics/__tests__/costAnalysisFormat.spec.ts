@@ -6,7 +6,9 @@ import {
   fmtQty,
   productChartLabels,
   quantityParts,
+  fillCalendarDays,
   summaryYield,
+  summaryYieldMissing,
   unresolvedProductLabel,
 } from '../costAnalysisFormat';
 
@@ -43,22 +45,36 @@ describe('成本分析: 多单位产出不相加', () => {
   });
 });
 
-describe('成本分析: 汇总出成率按批次加权', () => {
-  it('后端给了加权值就用后端的；明确为 null 就是没有', () => {
+describe('成本分析: 汇总出成率只信后端加权值', () => {
+  it('后端给了值就用，null/NaN/缺失都是 null，前端不自己算', () => {
     expect(summaryYield({ avgYieldRate: 82 })).toBe(82);
-    expect(summaryYield({ avgYieldRate: null }, [{ avgYieldRate: 90, batchCount: 1 }])).toBeNull();
-    expect(summaryYield({ avgYieldRate: Number.NaN }, [])).toBeNull();
+    expect(summaryYield({ avgYieldRate: null })).toBeNull();
+    expect(summaryYield({ avgYieldRate: Number.NaN })).toBeNull();
+    expect(summaryYield({})).toBeNull();
+    expect(summaryYield(undefined)).toBeNull();
   });
 
-  it('后端旧版没有该字段时用日行按批次加权现算，不是按天简单平均', () => {
-    const rows = [
-      { avgYieldRate: 100, batchCount: 1 },
-      { avgYieldRate: 80, batchCount: 9 },
-      { avgYieldRate: null, batchCount: 5 },
-    ];
-    expect(summaryYield({}, rows)).toBe(82); // 简单平均会是 90
-    expect(summaryYield(undefined, [])).toBeNull();
-    expect(summaryYield({}, [{ avgYieldRate: null, batchCount: 3 }])).toBeNull();
+  it('区分「字段缺失（后端未更新）」和「后端明确说没有数据」', () => {
+    expect(summaryYieldMissing({})).toBe(true);
+    expect(summaryYieldMissing({ avgYieldRate: null })).toBe(false);
+    expect(summaryYieldMissing({ avgYieldRate: 80 })).toBe(false);
+  });
+});
+
+describe('成本分析: 无数据日断开不连线', () => {
+  it('补成连续日历日，缺的日子 point 为 null', () => {
+    const filled = fillCalendarDays([
+      { statDate: '2026-10-29', v: 1 },
+      { statDate: '2026-10-31', v: 2 },
+      { statDate: '2026-11-02', v: 3 },
+    ]);
+    expect(filled.map((d) => d.date)).toEqual(['2026-10-29', '2026-10-30', '2026-10-31', '2026-11-01', '2026-11-02']);
+    expect(filled.map((d) => d.point?.v ?? null)).toEqual([1, null, 2, null, 3]);
+  });
+
+  it('空数组返回空数组；跨月不丢日', () => {
+    expect(fillCalendarDays([])).toEqual([]);
+    expect(fillCalendarDays([{ statDate: '2026-02-27' }, { statDate: '2026-03-02' }]).length).toBe(4);
   });
 });
 

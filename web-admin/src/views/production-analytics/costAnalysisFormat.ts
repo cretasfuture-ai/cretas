@@ -34,25 +34,41 @@ export function quantityParts(byUnit: Record<string, number> | undefined | null)
 }
 
 /**
- * 汇总出成率：优先用后端按批次数加权的值；后端还没升级（字段缺失）时，
- * 用日行按批次数加权现算——绝不退回按天简单平均。
+ * 汇总出成率：只读后端按批次数加权的值（单一实现，前端不自己算——两份口径会漂）。
+ * 字段缺失（后端还没升级）时返回 null，由页面如实提示「后端未更新」。
  */
-export function summaryYield(
-  summary: { avgYieldRate?: number | null } | undefined | null,
-  rows?: Array<{ avgYieldRate: number | null; batchCount: number }>,
-): number | null {
+export function summaryYield(summary: { avgYieldRate?: number | null } | undefined | null): number | null {
   const value = summary?.avgYieldRate;
-  if (value != null && Number.isFinite(value)) return value;
-  if (summary && 'avgYieldRate' in summary) return null;
-  let weighted = 0;
-  let batches = 0;
-  for (const row of rows ?? []) {
-    if (row.avgYieldRate == null || !Number.isFinite(row.avgYieldRate) || !row.batchCount) continue;
-    weighted += row.avgYieldRate * row.batchCount;
-    batches += row.batchCount;
-  }
-  return batches ? Math.round((weighted / batches) * 100) / 100 : null;
+  return value == null || !Number.isFinite(value) ? null : value;
 }
+
+/** 后端没返回加权出成率这个字段（区别于「返回了 null = 确实没有数据」）。 */
+export function summaryYieldMissing(summary: object | undefined | null): boolean {
+  return !!summary && !('avgYieldRate' in summary);
+}
+
+/**
+ * 把只含「有数据的日子」的序列补成连续日历日：无数据日为 null（图上断开，不连线、不插值）。
+ */
+export function fillCalendarDays<T extends { statDate: string }>(
+  points: T[],
+): Array<{ date: string; point: T | null }> {
+  if (!points.length) return [];
+  const byDate = new Map(points.map((p) => [p.statDate, p]));
+  const dates = [...byDate.keys()].sort();
+  const out: Array<{ date: string; point: T | null }> = [];
+  const cursor = new Date(`${dates[0]}T00:00:00Z`);
+  const last = new Date(`${dates[dates.length - 1]}T00:00:00Z`);
+  while (cursor <= last) {
+    const key = cursor.toISOString().slice(0, 10);
+    out.push({ date: key, point: byDate.get(key) ?? null });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return out;
+}
+
+/** 饼图扇区占比小于该值时不画外挂标签（挤在一起不可读），占比只在图例里显示。 */
+export const PIE_LABEL_MIN_PERCENT = 2;
 
 /** 产品名未解析（已停用/不在 active 列表）时给可读兜底，而不是整串 UUID。 */
 export function unresolvedProductLabel(productTypeId: string): string {
