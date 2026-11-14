@@ -162,6 +162,63 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(next.get()).as("复用线程时没有残留上一个人").isNull();
     }
 
+    /**
+     * 意图飞轮 (INTENT-DISTILL-20261111): App 走的流式入口 {@code executeStream} 每轮留一条记录, 识别层在工作线程上
+     * 记的痕迹 (阶段 / 识别结果) 进得了这条记录 —— 作用域是在工作线程上打开的; 工厂保密按开着处理时原文不落明文列。
+     */
+    @Test
+    void streamedTurnLeavesOneFlywheelRecordWithTheWorkerThreadsRecognitionTrace() throws Exception {
+        Harness h = new Harness();
+        com.cretas.aims.repository.intent.IntentFlywheelTurnRepository repo =
+                mock(com.cretas.aims.repository.intent.IntentFlywheelTurnRepository.class);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.intent.flywheel.FlywheelTextProtector protector =
+                new com.cretas.aims.service.intent.flywheel.FlywheelTextProtector(
+                        mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class),
+                        mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class),
+                        mock(com.cretas.aims.repository.FactoryFeatureConfigRepository.class), "");
+        com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder recorder =
+                new com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder(repo, protector, new ObjectMapper());
+        ReflectionTestUtils.setField(h.service, "flywheelRecorder", recorder);
+        when(h.aiIntentService.recognizeIntentWithConfidence(
+                anyString(), eq(F), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    IntentMatchResult r = IntentMatchResult.builder().userInput("查询原材料库存").confidence(0.0).build();
+                    // 与 AIIntentServiceImpl 的真实挂点同一组方法
+                    com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteStage("PYTHON_MATCH");
+                    com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteRecognition(r);
+                    return r;
+                });
+
+        var previousRequest = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        var servletRequest = new org.springframework.mock.web.MockHttpServletRequest();
+        servletRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(servletRequest));
+        try {
+            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").sessionId("s-fw").build(),
+                    USER, ROLE);
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(previousRequest);
+        }
+
+        ArgumentCaptor<com.cretas.aims.entity.intent.IntentFlywheelTurn> saved =
+                ArgumentCaptor.forClass(com.cretas.aims.entity.intent.IntentFlywheelTurn.class);
+        verify(repo, org.mockito.Mockito.timeout(10_000)).save(saved.capture());
+        com.cretas.aims.entity.intent.IntentFlywheelTurn t = saved.getValue();
+        assertThat(t.getEntry()).isEqualTo(com.cretas.aims.entity.intent.IntentFlywheelTurn.Entry.STREAM);
+        assertThat(t.getFactoryId()).isEqualTo(F);
+        assertThat(t.getUserId()).isEqualTo(USER);
+        assertThat(t.getSessionId()).isEqualTo("s-fw");
+        assertThat(t.getDecisionPath()).as("工作线程上识别层记的阶段进了记录").contains("PYTHON_MATCH");
+        assertThat(t.getDecisionSource()).isEqualTo("PYTHON_UNTRACED");
+        assertThat(t.getFinalStatus()).isNotBlank();
+        assertThat(t.getSecrecyMode()).isEqualTo(com.cretas.aims.entity.intent.IntentFlywheelTurn.SecrecyMode.REDACTED);
+        assertThat(t.getUserInput()).as("保密按开着: 原文不落明文列").isNull();
+        assertThat(t.getUserInputExport()).isEqualTo("查询原材料库存");
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"上班打卡", "查一下1830号任务"})
     void aNewSentenceWhileTheSessionIsOpenIsRecognisedNormallyAndClosesTheSession(String newSentence)

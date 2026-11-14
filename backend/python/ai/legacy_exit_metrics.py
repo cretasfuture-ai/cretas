@@ -90,8 +90,38 @@ _luna_failure_reason: contextvars.ContextVar[Optional[str]] = contextvars.Contex
     "intent_luna_failure_reason", default=None)
 
 
+# ---------------------------------------------------------------------------
+# 意图飞轮 (INTENT-DISTILL-20261111): 一次识别的决策痕迹, 随识别结果带回 Java (IntentMatchResult.decisionTrace),
+# Java 统一落库。可变 dict: orchestrator 里 gather / create_task 出去的子任务复制的是同一个 dict 的引用,
+# 在子任务里记的也看得见。没有打开 (None) 时下面的记录函数什么都不做。只记, 不参与任何判断。
+# ---------------------------------------------------------------------------
+_decision_trace: contextvars.ContextVar[Optional[Dict[str, Any]]] = contextvars.ContextVar(
+    "intent_decision_trace", default=None)
+
+
+def start_decision_trace() -> Dict[str, Any]:
+    trace: Dict[str, Any] = {}
+    _decision_trace.set(trace)
+    return trace
+
+
+def get_decision_trace() -> Optional[Dict[str, Any]]:
+    return _decision_trace.get()
+
+
+def note_trace(key: str, value: Any) -> None:
+    try:
+        trace = _decision_trace.get()
+        if trace is not None:
+            trace[key] = value
+    except Exception:  # noqa: BLE001
+        logger.debug("decision trace note failed", exc_info=True)
+
+
 def set_decision_none_reason(reason: Optional[str]) -> None:
     _decision_none_reason.set(reason)
+    if reason is not None:
+        note_trace("decisionNoneReason", reason)
 
 
 def get_decision_none_reason() -> Optional[str]:
@@ -257,6 +287,7 @@ def record_legacy_exit(result: Any, factory_id: Optional[str], reason: str, visi
                        observe_alarm: bool = True) -> None:
     try:
         exit_name = legacy_exit_name(result)
+        note_trace("legacyExit", {"exit": exit_name, "reason": reason})
         rw = _rw_of(result, visible_intents)
         if LEGACY_EXIT is not None:
             LEGACY_EXIT.labels(exit=exit_name, factory=str(factory_id or "")[:32], rw=rw, reason=reason).inc()
@@ -279,6 +310,7 @@ def observe_decision_answered() -> None:
 
 
 def record_luna_request() -> None:
+    note_trace("luna", "asked")
     try:
         if LUNA_REQUESTS is not None:
             LUNA_REQUESTS.inc()
@@ -288,6 +320,10 @@ def record_luna_request() -> None:
 
 def record_luna_outcome(fallback_reason: Optional[str], qwen_outcome: Optional[str]) -> None:
     """fallback_reason=None 表示 Luna 直接给出了概率 (只进分母)。"""
+    note_trace("luna", "ok" if fallback_reason is None else "fallback")
+    if fallback_reason is not None:
+        note_trace("lunaFallbackReason", fallback_reason)
+        note_trace("qwenOutcome", qwen_outcome)
     try:
         if fallback_reason is not None and LUNA_FALLBACK is not None:
             LUNA_FALLBACK.labels(reason=fallback_reason, qwen_outcome=qwen_outcome or "unknown").inc()
@@ -303,6 +339,7 @@ def record_luna_outcome(fallback_reason: Optional[str], qwen_outcome: Optional[s
 def record_fallback(hop: str, outcome: str, failures: Optional[Dict[str, str]] = None) -> None:
     """退路一轮结束: 最终落在哪一跳 + 各边失败原因。阿里云 not_configured 的 qwen_only 不进告警分子。"""
     failures = failures or {}
+    note_trace("fallback", {"hop": hop, "outcome": outcome, "failures": dict(failures)})
     try:
         if FALLBACK_HOP is not None:
             FALLBACK_HOP.labels(hop=hop, outcome=outcome).inc()
@@ -326,5 +363,6 @@ __all__ = [
     "record_luna_request", "record_luna_outcome", "record_fallback",
     "set_decision_none_reason", "get_decision_none_reason",
     "set_luna_failure_reason", "get_luna_failure_reason",
+    "start_decision_trace", "get_decision_trace", "note_trace",
     "PY_LEGACY_ALARM", "LUNA_ALARM", "FALLBACK_ALARM",
 ]
