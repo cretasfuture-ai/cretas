@@ -5340,6 +5340,17 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("每日汇总", "PRODUCTION_DAILY_SUMMARY");
         phraseToIntentMapping.put("日报汇总", "PRODUCTION_DAILY_SUMMARY");
 
+        // 一线工人「我要报工 / 报工，产量100」(Steve 2026-11-14): 稳定落到「完成工序(报工)」, 不再被决策层摇摆成
+        // 「您想做哪个: 1. 完成工序 2. 生产耗料查询」。⛔ 不加「报工」两字本身 (≤6 字的输入会被它当成短输入吞掉
+        // 「报工记录 / 报工明细」这类查询); 查询类的「报工情况 / 报工查询 / 报工详情」是更长或同长的既有短语, 不受影响。
+        // 「报产量100」仍是 REPORT_PRODUCTION (产量查询), 这里不动。否定说法 (不要报工) 由两个入口的否决闸先挡。
+        phraseToIntentMapping.put("我要报工", "WORK_PROCESS_TASK_COMPLETE");
+        phraseToIntentMapping.put("我想报工", "WORK_PROCESS_TASK_COMPLETE");
+        phraseToIntentMapping.put("我来报工", "WORK_PROCESS_TASK_COMPLETE");
+        phraseToIntentMapping.put("报工，产量", "WORK_PROCESS_TASK_COMPLETE");
+        phraseToIntentMapping.put("报工,产量", "WORK_PROCESS_TASK_COMPLETE");
+        phraseToIntentMapping.put("报工产量", "WORK_PROCESS_TASK_COMPLETE");
+
         // ALERT 告警诊断/分诊
         phraseToIntentMapping.put("告警分诊", "ALERT_TRIAGE");
         phraseToIntentMapping.put("告警分级", "ALERT_TRIAGE");

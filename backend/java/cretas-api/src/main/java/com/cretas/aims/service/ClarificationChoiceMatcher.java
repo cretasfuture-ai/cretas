@@ -60,6 +60,68 @@ public final class ClarificationChoiceMatcher {
         return hit;
     }
 
+    /** 关键词在 {@code reasoning} 里用这个符号隔开 (见 {@link #matchParameterChoice})。 */
+    public static final String KEYWORD_SEPARATOR = "|";
+    /** 关键词之外还剩的字数上限 (去掉数字和标点后): 「那批报工」「我选这个」算, 一整句新话不算。 */
+    static final int MAX_LEFTOVER_CHARS = 8;
+    /** 剩下的话里出现这些 = 在问别的 / 在否定, 不是在选。 */
+    private static final Pattern NOT_A_PICK = Pattern.compile("查|看看|问|多少|库存|怎么|为什么|吗|取消|不要|别|不是|算了");
+    private static final Pattern DIGITS = Pattern.compile("[0-9]+(?:\\.[0-9]+)?");
+
+    /**
+     * 「选哪一道工序 / 哪一批」这类参数选项的回复匹配: 先按序号 / 选项全名 ({@link #match}),
+     * 再按选项的关键词 (产品名、工序名、批次号, 存在 {@code reasoning} 里, 用 {@value #KEYWORD_SEPARATOR} 隔开):
+     * 回复里出现的关键词越多越像; 并列第一 (同一产品下好几道工序、只说了产品名) 不算选中, 调用方再问一遍。
+     * 关键词之外还带一整句别的话 (「查一下红烧肉库存」) 同样不算, 免得换话题被旧选项截走。
+     *
+     * @return 命中候选的下标; 没对上返回 -1
+     */
+    public static int matchParameterChoice(String reply, List<CandidateIntent> candidates) {
+        int byOrdinalOrName = match(reply, candidates);
+        if (byOrdinalOrName >= 0 || reply == null || candidates == null || candidates.isEmpty()) {
+            return byOrdinalOrName;
+        }
+        String text = PUNCT.matcher(reply).replaceAll("").toLowerCase(Locale.ROOT);
+        if (text.isEmpty()) {
+            return -1;
+        }
+        int best = -1;
+        int bestScore = 0;
+        boolean tie = false;
+        String leftover = text;
+        for (int i = 0; i < candidates.size(); i++) {
+            CandidateIntent c = candidates.get(i);
+            if (c == null || c.getReasoning() == null || c.getReasoning().isBlank()) {
+                continue;
+            }
+            int score = 0;
+            String rest = text;
+            for (String keyword : c.getReasoning().split("\\" + KEYWORD_SEPARATOR)) {
+                String k = PUNCT.matcher(keyword).replaceAll("").toLowerCase(Locale.ROOT);
+                if (k.length() >= 2 && rest.contains(k)) {
+                    score++;
+                    rest = rest.replace(k, "");
+                }
+            }
+            if (score > bestScore) {
+                best = i;
+                bestScore = score;
+                tie = false;
+                leftover = rest;
+            } else if (score == bestScore && score > 0) {
+                tie = true;
+            }
+        }
+        if (best < 0 || tie) {
+            return -1;
+        }
+        String extra = DIGITS.matcher(leftover).replaceAll("");
+        if (extra.length() > MAX_LEFTOVER_CHARS || NOT_A_PICK.matcher(extra).find()) {
+            return -1;
+        }
+        return best;
+    }
+
     private static int ordinalValue(String s) {
         return switch (s) {
             case "一" -> 1;

@@ -1304,6 +1304,16 @@ public class ToolDispatchService {
                 params = controlledPurchase.previewParameters(factoryId, params);
             }
 
+            // 缺「要操作哪一个」(如报工缺工序任务): 不问内部编号, 工具查出本人可选的对象来选 (见 ParameterChoiceResolver)
+            if (tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver resolver
+                    && isBlankParam(params.get(resolver.choiceParameter()))) {
+                IntentExecuteResponse asked = resolveChoiceOrAsk(resolver, tool, factoryId, userId, intent, params,
+                        request.getUserInput());
+                if (asked != null) {
+                    return asked;
+                }
+            }
+
             String resultJson = runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
 
             IntentExecuteResponse previewResponse = IntentExecuteResponse.builder()
@@ -1410,6 +1420,99 @@ public class ToolDispatchService {
                     .formattedText(errorMsg)
                     .executedAt(LocalDateTime.now())
                     .build();
+        }
+    }
+
+    private static boolean isBlankParam(Object value) {
+        return value == null || (value instanceof String s && s.isBlank());
+    }
+
+    /**
+     * 工具说「要操作哪一个」这个参数缺了: 查本人可选的对象。
+     * <ul>
+     *   <li>只有一个 → 直接填进 {@code params}, 返回 null 继续走原有预览 (仍出确认卡, 不自动提交);</li>
+     *   <li>多个 → 返回追问 (列成序号), 并开参数收集会话挂上选项: 已给的产量等参数带着走, 回「1」/ 说产品名即选中;</li>
+     *   <li>一个都没有 → 如实说没有 (不编造), 不出确认卡;</li>
+     *   <li>查询出错 → 返回 null, 退回原有的追问 (不拿假候选顶替)。</li>
+     * </ul>
+     */
+    private IntentExecuteResponse resolveChoiceOrAsk(com.cretas.aims.ai.tool.ParameterChoiceResolver resolver,
+                                                     ToolExecutor tool, String factoryId, Long userId,
+                                                     AIIntentConfig intent, Map<String, Object> params,
+                                                     String userInput) {
+        com.cretas.aims.ai.tool.ParameterChoiceResolver.Resolution resolution;
+        try {
+            resolution = resolver.resolveChoices(factoryId, userId, params, userInput);
+        } catch (Exception e) {
+            log.warn("查本人可选对象失败, 退回原有追问: tool={}, error={}", tool.getToolName(), e.getMessage());
+            return null;
+        }
+        if (resolution == null) {
+            return null;
+        }
+        String param = resolver.choiceParameter();
+        switch (resolution.kind()) {
+            case SINGLE: {
+                if (resolution.choices().size() != 1) {
+                    return null;
+                }
+                params.put(param, resolution.choices().get(0).value());
+                log.info("缺 {} 且本人只有一个可选, 直接带出: tool={}, value={}", param, tool.getToolName(),
+                        resolution.choices().get(0).value());
+                return null;
+            }
+            case NONE:
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status(PREVIEW_BLOCKED)
+                        .message(resolution.message())
+                        .formattedText(resolution.message())
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            case MANY: {
+                if (resolution.choices().isEmpty()) {
+                    return null;
+                }
+                IntentExecuteResponse asked = IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status("NEED_MORE_INFO")
+                        .message(resolution.message())
+                        .formattedText(resolution.message())
+                        .clarificationQuestions(List.of(resolution.message()))
+                        .aiMode("WRITE")
+                        .executedAt(LocalDateTime.now())
+                        .build();
+                Map<String, Object> missing = new HashMap<>();
+                missing.put("missingParameters", List.of(param));
+                openPreviewQuestionSession(tool, factoryId, userId, intent, params, missing, asked);
+                if (asked.getSessionId() != null && conversationService != null) {
+                    List<ConversationService.CandidateInfo> options = new ArrayList<>();
+                    for (com.cretas.aims.ai.tool.ParameterChoiceResolver.Choice c : resolution.choices()) {
+                        options.add(ConversationService.CandidateInfo.builder()
+                                .intentCode(c.value()).intentName(c.label())
+                                .description(String.join(
+                                        com.cretas.aims.service.ClarificationChoiceMatcher.KEYWORD_SEPARATOR, c.keywords()))
+                                .build());
+                    }
+                    if (!conversationService.attachParameterChoices(
+                            factoryId, userId, asked.getSessionId(), param, options)) {
+                        // 没挂上选项 = 回「1」会被当成别的话: 不带会话, 让用户重新说一遍 (不留一个答不对的追问)
+                        log.warn("选项没挂上会话, 追问不带会话: tool={}, session={}", tool.getToolName(), asked.getSessionId());
+                        conversationService.cancelConversation(factoryId, userId, asked.getSessionId());
+                        asked.setSessionId(null);
+                    }
+                }
+                return asked;
+            }
+            default:
+                return null;
         }
     }
 
