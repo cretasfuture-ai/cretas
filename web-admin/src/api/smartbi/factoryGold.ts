@@ -53,6 +53,9 @@ export interface CostStructureRow {
 }
 
 export interface CostStructureSummary {
+  /** 按批次数加权的平均出成率（后端算）；null = 没有任何带出成率的批次 */
+  avgYieldRate?: number | null;
+  yieldBatchCount?: number;
   totalMaterialCost: number | null;
   totalLaborCost: number | null;
   totalEquipmentCost: number | null;
@@ -112,6 +115,8 @@ export interface ProductCostItem {
   totalOtherCost: number | null;
   totalCost: number | null;
   costPerUnit: number | null;
+  /** 有成本的批次数；单位成本只基于这些批次 */
+  costedBatchCount?: number;
 }
 
 export interface ProductCostCompareData {

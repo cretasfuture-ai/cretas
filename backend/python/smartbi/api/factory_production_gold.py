@@ -374,7 +374,16 @@ async def cost_structure(
         vals = [item[key] for item in items if item[key] is not None]
         return round(sum(vals), 2) if vals else None
 
+    # 平均出成率按批次数加权 (简单平均会让 1 批的一天和 10 批的一天等权)。
+    yield_pairs = [(item["avgYieldRate"], item["batchCount"]) for item in items
+                   if item["avgYieldRate"] is not None and item["batchCount"]]
+    yield_batches = sum(count for _, count in yield_pairs)
+    weighted_yield = (round(sum(rate * count for rate, count in yield_pairs) / yield_batches, 2)
+                      if yield_batches else None)
+
     summary = {
+        "avgYieldRate":       weighted_yield,
+        "yieldBatchCount":    yield_batches,
         "totalMaterialCost":  _sum_field("totalMaterialCost"),
         "totalLaborCost":     _sum_field("totalLaborCost"),
         "totalEquipmentCost": _sum_field("totalEquipmentCost"),
@@ -502,6 +511,9 @@ async def product_cost_compare(
         "yieldRateNumerator": 0.0, "yieldRateDenominator": 0,
         "totalMaterialCost": None, "totalLaborCost": None,
         "totalEquipmentCost": None, "totalOtherCost": None, "totalCost": None,
+        # 单位成本口径: 分子只含「有成本」的批次, 分母必须同口径, 否则漏填成本的批次
+        # 会把单位成本拉低 (只有分子少、分母全的偏差)。
+        "costedBatchCount": 0, "costedActualQty": 0.0,
     })
 
     def _null_add(a, b):
@@ -540,6 +552,11 @@ async def product_cost_compare(
             _value(row, "other_cost", "total_other_cost")) if _value(row, "other_cost", "total_other_cost") is not None else None)
         bucket["totalCost"] = _null_add(bucket["totalCost"], float(
             _value(row, "total_cost")) if _value(row, "total_cost") is not None else None)
+        if _value(row, "total_cost") is not None:
+            bucket["costedBatchCount"] += int(_value(row, "batch_count") or 1)
+            actual = _value(row, "actual_qty", "total_actual_qty")
+            if actual is not None:
+                bucket["costedActualQty"] += float(actual)
         # Weighted yield: weight by batch_count
         yield_rate = _value(row, "yield_rate", "avg_yield_rate")
         if yield_rate is not None:
@@ -554,8 +571,8 @@ async def product_cost_compare(
             if bucket["yieldRateDenominator"] > 0 else None
         )
         cost_per_unit: Optional[float] = None
-        if bucket["totalCost"] is not None and bucket["totalActualQty"] and bucket["totalActualQty"] > 0:
-            cost_per_unit = round(bucket["totalCost"] / bucket["totalActualQty"], 4)
+        if bucket["totalCost"] is not None and bucket["costedActualQty"] > 0:
+            cost_per_unit = round(bucket["totalCost"] / bucket["costedActualQty"], 4)
 
         products.append({
             "productTypeId":     pid,
@@ -570,6 +587,7 @@ async def product_cost_compare(
             "totalOtherCost":    round(bucket["totalOtherCost"],     2) if bucket["totalOtherCost"] is not None else None,  # noqa: E501
             "totalCost":         round(bucket["totalCost"],          2) if bucket["totalCost"] is not None else None,
             "costPerUnit":       cost_per_unit,
+            "costedBatchCount":  bucket["costedBatchCount"],
         })
 
     hidden: List[dict] = []
