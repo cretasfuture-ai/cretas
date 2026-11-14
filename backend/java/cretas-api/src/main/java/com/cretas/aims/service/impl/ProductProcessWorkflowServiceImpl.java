@@ -39,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -132,6 +133,9 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workflow.WorkflowCcpMaterializer ccpMaterializer;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.workflow.WorkflowProcessParamMaterializer processParamMaterializer;
 
     @Override
     @Transactional(readOnly = true)
@@ -633,6 +637,13 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
             catalogValidator.validateForPublish(factoryId, productTypeId, definition);
         }
         bomWorkflowRevisionService.requireActiveBomPinsRevision(factoryId, productTypeId, revision);
+        // 画布工序上的工艺参数(AI 听来的油温范围等): 标准值/上下限只存在本产品画布里; 发布时只给工序 schema
+        // 补「只有名字和单位」的可选数字字段(报工页要有输入框)。
+        // 放在 CCP 台账之前: 同名字段不是数字/已被停用时 409, 先判先抛, 不留下任何半截写入
+        // (整个方法在事务里, 抛异常会连同 CCP 台账与草稿状态一起回滚)。
+        if (processParamMaterializer != null) {
+            processParamMaterializer.materialize(factoryId, definition);
+        }
         // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
         if (ccpMaterializer != null) {
             ccpMaterializer.materialize(factoryId, productTypeId, definition);

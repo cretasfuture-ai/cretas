@@ -1172,7 +1172,7 @@ import WorkflowReworkConfigDrawer from './WorkflowReworkConfigDrawer.vue';
 import WorkflowTimeLimitConfigDrawer from './WorkflowTimeLimitConfigDrawer.vue';
 import type { TimeLimitPortRow } from './workflowTimeLimit';
 import type { WorkflowPortTimeLimit } from '@/api/processTimeLimit';
-import { buildCcpPointsFromSpec, listPendingItems } from './workflowPendingConfirmations';
+import { buildCcpPointsFromSpec, buildProcessParamsFromSpec, listPendingItems } from './workflowPendingConfirmations';
 import {
   FUSED_MATERIAL_OWNER_WIDTH,
   FUSED_PROCESS_OWNER_WIDTH,
@@ -7206,6 +7206,8 @@ interface WorkflowSpecStep {
   reworkSources?: Array<{ output?: string; inputRatioPercent?: number | null }>;
   /** 本工序的 CCP 控制点; AI 没说的限值/单位保持空 = 待确认。 */
   ccps?: unknown;
+  /** 本工序的工艺标准参数(油温范围等); 没说清的数值/单位保持空 = 待确认, 发布时才写进工序标准参数。 */
+  processParams?: unknown;
 }
 interface WorkflowSpec { rawMaterials?: string[]; steps?: WorkflowSpecStep[] }
 
@@ -7588,6 +7590,9 @@ async function compileWorkflowSpec(
       const ccpPoints = buildCcpPointsFromSpec(
         String(processData.processName), step.ccps, () => `ccp:${nextCompileGraphId()}`, specNotices);
       if (ccpPoints.length) (processData as Record<string, unknown>).ccpPoints = ccpPoints;
+      const processParams = buildProcessParamsFromSpec(
+        String(processData.processName), step.processParams, () => `param:${nextCompileGraphId()}`, specNotices);
+      if (processParams.length) (processData as Record<string, unknown>).processParams = processParams;
       if (pendingMarks.length) (processData as Record<string, unknown>).pendingConfirmations = pendingMarks;
       processDatas[i] = processData;
       // ── 阶段 4: 规格里的调味参数 ──────────────────────────────────────

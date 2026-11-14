@@ -298,13 +298,13 @@
       控制点的待确认是**结构判据**: 限值/单位/危害类型填上, 红框就自己消失, 没有第二个开关。
     -->
     <section
-      v-if="ccpList.length > 0 || pendingList.length > 0"
+      v-if="ccpList.length > 0 || paramList.length > 0 || pendingList.length > 0"
       class="pending-section nodrag"
       :class="{ 'has-pending': pendingTotal > 0 }"
       data-testid="pending-section"
     >
       <div class="section-title">
-        <span class="section-label">控制点（CCP）与待确认</span>
+        <span class="section-label">控制点（CCP）、工艺参数与待确认</span>
         <span v-if="pendingTotal > 0" class="pending-badge" data-testid="pending-badge">待确认 {{ pendingTotal }}</span>
         <span v-else class="pending-ok" data-testid="pending-ok">已齐全</span>
       </div>
@@ -359,6 +359,56 @@
         />
         <div v-if="ccpLimitsContradict(point)" class="ccp-error" data-testid="ccp-contradict">下限不能大于上限</div>
       </div>
+      <div v-for="(param, index) in paramList" :key="param.id || index" class="ccp-row" data-testid="param-row">
+        <div class="ccp-name">{{ param.label }}</div>
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': processParamMissing(param).includes('range') }"
+          type="text"
+          inputmode="decimal"
+          :value="param.min ?? ''"
+          :disabled="!canWrite"
+          placeholder="下限 待确认"
+          data-testid="param-min"
+          aria-label="下限"
+          @change="onParamNumber(index, 'min', $event)"
+        />
+        <input
+          class="ccp-field ccp-num"
+          :class="{ 'is-missing': processParamMissing(param).includes('range') }"
+          type="text"
+          inputmode="decimal"
+          :value="param.max ?? ''"
+          :disabled="!canWrite"
+          placeholder="上限 待确认"
+          data-testid="param-max"
+          aria-label="上限"
+          @change="onParamNumber(index, 'max', $event)"
+        />
+        <input
+          class="ccp-field ccp-num"
+          type="text"
+          inputmode="decimal"
+          :value="param.standardValue ?? ''"
+          :disabled="!canWrite"
+          placeholder="标准值（可选）"
+          data-testid="param-standard"
+          aria-label="标准值"
+          @change="onParamNumber(index, 'standardValue', $event)"
+        />
+        <input
+          class="ccp-field ccp-unit"
+          :class="{ 'is-missing': processParamMissing(param).includes('unit') }"
+          type="text"
+          :value="param.unit ?? ''"
+          :disabled="!canWrite"
+          placeholder="单位 待确认"
+          data-testid="param-unit"
+          aria-label="单位"
+          @change="onParamUnit(index, $event)"
+        />
+        <div v-if="processParamContradiction(param)" class="ccp-error" data-testid="param-contradict">{{ processParamContradiction(param) }}</div>
+      </div>
       <div v-for="item in pendingList" :key="item.code" class="pending-row" data-testid="pending-row">
         <span class="pending-text">{{ item.label }}</span>
         <button
@@ -402,7 +452,11 @@ import {
   ccpPointsOf,
   pendingConfirmationsOf,
   pendingCountOfProcess,
+  processParamContradiction,
+  processParamMissing,
+  processParamsOf,
   type CcpHazardType,
+  type WorkflowProcessParam,
   type WorkflowCcpPoint,
 } from './workflowPendingConfirmations';
 import type { ProcessNodeData } from './types';
@@ -506,6 +560,21 @@ function onCcpNumber(index: number, key: 'criticalLimitMin' | 'criticalLimitMax'
   const parsed = raw === '' ? Number.NaN : Number(raw);
   // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0: 0 ℃ 是个真实限值, 会让一个没填的限值悄悄变成"已填")
   patchCcp(index, { [key]: Number.isFinite(parsed) ? parsed : null });
+}
+const paramList = computed(() => processParamsOf(props.data as unknown as Record<string, unknown>));
+function patchParam(index: number, patch: Partial<WorkflowProcessParam>): void {
+  const next = paramList.value.map((param, i) => (i === index ? { ...param, ...patch } : param));
+  emit('update', { processParams: next } as Partial<ProcessNodeData>);
+}
+function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  const parsed = raw === '' ? Number.NaN : Number(raw);
+  // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0)
+  patchParam(index, { [key]: Number.isFinite(parsed) ? parsed : null });
+}
+function onParamUnit(index: number, event: Event): void {
+  const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
+  patchParam(index, { unit: raw && raw.length <= 20 ? raw : null });
 }
 function onCcpUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
