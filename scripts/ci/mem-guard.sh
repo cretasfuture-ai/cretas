@@ -10,13 +10,13 @@
 # "The forked VM terminated without properly saying goodbye", Maven 非零退出, 几秒内失败并带着最后一个类名。
 #
 # 用法: mem-guard.sh <mvn 输出文件>   (后台运行; 父进程退出时自行结束)
-# 环境变量: MEMGUARD_MIN_AVAIL_MB (默认 1000) MEMGUARD_INTERVAL (默认 2) MEMGUARD_CONSECUTIVE (默认 3)
+# 环境变量: MEMGUARD_MIN_AVAIL_MB (默认 500; 10g 堆实测正常运行最低到 1192MB) MEMGUARD_INTERVAL (默认 2) MEMGUARD_CONSECUTIVE (默认 3)
 #           MEMGUARD_PRINT_EVERY (默认 30 秒)  MEMGUARD_FORK_PATTERN (默认 surefirebooter)
 #           MEMGUARD_DRY_RUN=1 只打印不 kill (自测用)
 set -u
 
 OUT="${1:?usage: mem-guard.sh <mvn-output-file>}"
-MIN_AVAIL_MB="${MEMGUARD_MIN_AVAIL_MB:-1000}"
+MIN_AVAIL_MB="${MEMGUARD_MIN_AVAIL_MB:-500}"
 INTERVAL="${MEMGUARD_INTERVAL:-2}"
 CONSECUTIVE="${MEMGUARD_CONSECUTIVE:-3}"
 PRINT_EVERY="${MEMGUARD_PRINT_EVERY:-30}"
@@ -25,7 +25,8 @@ PARENT="${MEMGUARD_PARENT_PID:-$PPID}"
 
 meminfo_mb() { awk -v k="$1" '$1==k":" {printf "%d", $2/1024}' /proc/meminfo; }
 last_class() { grep -a "Running com\." "$OUT" 2>/dev/null | tail -1 | sed 's/.*Running //' ; }
-fork_pid() { pgrep -f "$PATTERN" 2>/dev/null | head -1; }
+# surefire 用 `sh -c "... java ... surefirebooter.jar"` 起 fork, pgrep -f 会先命中 sh 壳 (RSS 1MB), 所以只认 comm=java。
+fork_pid() { ps -eo pid=,comm=,args= 2>/dev/null | awk -v p="$PATTERN" '$2=="java" && index($0,p) {print $1; exit}'; }
 
 low=0
 tick=0

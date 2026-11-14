@@ -70,13 +70,14 @@ jobs:
         shard: [0, 1, 2, 3]
     # 2026-11-14: 正常一片 ≤16 分钟; 卡死会拖到平台 55 分钟取消。30 分钟必然是异常。
     timeout-minutes: 30
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 10g.
-    # 2026-11-14: 由 12g 降到 10g。12g 堆 + Maven 2g + 非堆在 16GB 机器上超卖, 疑似换页风暴冻住整台 VM
-    # (日志断流 + fork 内看门狗和步骤超时都不开火); mem-guard.sh 现在每 30 秒打印 MEMGUARD 读数取证。
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 8g.
+    # 2026-11-14: 12g→8g。实测 (PR #1700 MEMGUARD): 10g 堆下 runner 可用内存单调掉到 1.2~1.6GB 且无 swap,
+    # 12g 必然把 16GB 机器吃光 ⇒ 内核 OOM 杀手/整机冻住 (日志断流, fork 内看门狗和步骤超时都不开火)。
+    # mem-guard.sh 每 30 秒打印 MEMGUARD 读数, 可用内存见底时在冻住前杀 fork。
     # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
     # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
     env:
-      CRETAS_JAVA_FORK_XMX: 10g
+      CRETAS_JAVA_FORK_XMX: 8g
     steps:
       - uses: actions/checkout@v4
         with:
