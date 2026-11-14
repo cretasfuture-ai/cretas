@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `WHOLESALE-MENU-20261114` — `in-progress` — Owner Codex/root — Base `f3eee9125b280d1221d71c1c3f2895feafaae628` — scope: 菜单清单/布局、导航快照、相关测试；独占cretas-wholesaler-menu-20261114。修称重单独隐藏、试用租户往来单位归位；其他租户配置不变。验收菜单目标Vitest、PlatformFactoryMenuContractTest、标准发布及试用UI。
+
 - `INTENT-DISTILL-20261111` — `in-progress` — Owner organizer — Base `a89e8c70f997` — 意图提速+本地决策蒸馏。A=`service/execution`+`backend/python/ai`，B=`tests/semantic-read`，C=`scripts/finetune`，G=`tests/semantic-read/HOLDOUT.md`；A/D/E/H 串行。见 archive/2026-11-11-intent-distill-plan.md 与 -pr1476-split-map.md。
 
 

@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { useRouter } from 'vue-router';
-import { menuConfig, type MenuItem } from '@/components/layout/menuConfig';
+import { configurableMenuConfig, type MenuItem } from '@/components/layout/menuConfig';
 import { getFactoryModuleMenuOptions } from '@/components/layout/factoryMenuVisibility';
 import {
   getFactoryMenuConfig,
@@ -41,7 +41,7 @@ const menuModules = computed(() => menuConfigState.value?.modules || []);
 function menuOptions(moduleId: string) {
   // The legacy SmartBI module id is still returned by older feature rows;
   // its web permission/menu id is analytics and must reuse that tree.
-  return getFactoryModuleMenuOptions(menuConfig as readonly MenuItem[], moduleId === 'smartbi' ? 'analytics' : moduleId);
+  return getFactoryModuleMenuOptions(configurableMenuConfig as readonly MenuItem[], moduleId === 'smartbi' ? 'analytics' : moduleId);
 }
 
 async function loadFactories(): Promise<void> {

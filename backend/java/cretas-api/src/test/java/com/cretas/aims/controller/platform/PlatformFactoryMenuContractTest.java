@@ -79,6 +79,30 @@ class PlatformFactoryMenuContractTest {
     }
 
     @Test
+    void weighingCanBeHiddenAsAnExactLeafWhileSkuAndOtherFactoriesAreUntouched() {
+        FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("production")
+                .enabled(true).config(new HashMap<>(Map.of("unrelated", "keep"))).build();
+        when(repository.findByFactoryIdAndModuleIdAndDeletedAtIsNull("F001", "production"))
+                .thenReturn(Optional.of(row));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+
+        service.update("F001", "production", new PlatformFactoryMenuDTO.Update(true, List.of("/production/weigh")));
+
+        assertThat(row.getConfig()).containsEntry("disabledMenuPaths", List.of("/production/weigh"))
+                .containsEntry("menuVisible", true).containsEntry("unrelated", "keep");
+        assertThat(row.getEnabled()).isTrue();
+        verify(repository).save(row);
+        verify(repository, never()).findByFactoryIdAndModuleIdAndDeletedAtIsNull(eq("F002"), anyString());
+        for (String path : List.of("/production/weigh-extra", "/production/weigh/run", "/production/weigh?admin=true")) {
+            assertThatThrownBy(() -> service.update("F001", "production", new PlatformFactoryMenuDTO.Update(true, List.of(path))))
+                    .hasMessageContaining("不受支持");
+        }
+        assertThatThrownBy(() -> service.update("F001", "warehouse", new PlatformFactoryMenuDTO.Update(true, List.of("/production/weigh"))))
+                .hasMessageContaining("不受支持");
+        verify(repository, times(1)).save(any());
+    }
+
+    @Test
     void suppliedFactsComparisonIsConfigurableOnlyAsItsExactSchedulingLeaf() {
         String path = "/scheduling/proposal-comparison";
         FactoryFeatureConfig row = FactoryFeatureConfig.builder().factoryId("F001").moduleId("scheduling")
