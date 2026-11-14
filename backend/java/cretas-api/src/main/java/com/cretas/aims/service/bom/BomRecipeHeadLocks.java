@@ -1,15 +1,26 @@
 package com.cretas.aims.service.bom;
 
 import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.bom.BomRecipeRepository;
+import jakarta.persistence.EntityManager;
+import org.hibernate.engine.spi.EntityEntry;
+import org.hibernate.engine.spi.SessionImplementor;
+import org.hibernate.engine.spi.Status;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 写 BOM Family 成本的锁序唯一入口 (N1 2026-11-11; 红线 3 2026-11-13 扩到全部重算调用方)。
@@ -40,8 +51,11 @@ import java.util.Set;
  * 重算入口用 {@link #requireHeld} 检查 —— 新加一个重算调用方却忘了先加锁, 在真实事务里会直接失败,
  * 而不是静默地用旧数据算成本。没有事务同步的场合 (纯 Mockito 单测) 不登记也不检查。</p>
  *
- * <p>⛔ 调用前不要无锁读过同族配方: 先无锁读进来的托管对象, 之后的 FOR UPDATE 不会刷新它的字段。
- * 所以锁必须放在入口最前面, 不能放进重算里面 (那时行和头都已经读过、甚至改过了)。</p>
+ * <p><b>加锁前已读进来的对象</b>: FOR UPDATE 查询不会刷新持久化上下文里已有的托管对象。外层事务在加锁前
+ * 无锁读过同族配方 (如发布收编的 preflight 先读草稿族头、再进 activateRecipe), 那份对象就是旧值, 重算再整行写回
+ * 会盖掉别人刚提交的改动。所以本事务<b>第一次</b>拿到某族的锁时, 把加锁前就已托管的同族配方头、明细行、调料行
+ * 逐个 {@code refresh} 成加锁后的已提交值 (先 flush 本事务自己的改动, 不丢)。已持有再次加锁时不刷新 ——
+ * 那之后读到的都是锁内的值, 刷新反而会丢本事务未 flush 的改动。入口仍应尽量先锁再读; 刷新是兜底。</p>
  */
 public final class BomRecipeHeadLocks {
 
@@ -53,16 +67,30 @@ public final class BomRecipeHeadLocks {
     private BomRecipeHeadLocks() {
     }
 
-    /** 锁住目标配方所在 Family 的全部配方头 (按 id 升序), 返回目标配方; 不存在则为空。 */
-    public static Optional<BomRecipe> lockWithFamily(BomRecipeRepository recipes, String factoryId, String recipeId) {
+    /**
+     * 锁住目标配方所在 Family 的全部配方头 (按 id 升序), 返回目标配方; 不存在则为空。
+     * 本事务第一次拿这一族时, 把加锁前已托管的同族头 / 行 / 调料行刷新成加锁后的值 (见类注释)。
+     * {@code entityManager} 为 null (纯 Mockito 单测) 时只加锁不刷新。
+     */
+    public static Optional<BomRecipe> lockWithFamily(EntityManager entityManager, BomRecipeRepository recipes,
+                                                     String factoryId, String recipeId) {
+        List<Object> managedBeforeLock = managedFamilyCandidates(entityManager);
         Optional<String> familyId = recipes.findBomFamilyIdByIdAndFactoryId(recipeId, factoryId);
         if (familyId.isEmpty() || familyId.get().isBlank()) {
+            boolean firstAcquisition = !isHeld(recipeKey(factoryId, recipeId));
             Optional<BomRecipe> alone = recipes.lockByIdAndFactoryId(recipeId, factoryId);
-            alone.ifPresent(BomRecipeHeadLocks::registerHeld);
+            alone.ifPresent(recipe -> {
+                registerHeld(recipe);
+                if (firstAcquisition) refreshStale(entityManager, managedBeforeLock, List.of(recipe));
+            });
             return alone;
         }
+        boolean firstAcquisition = !isHeld(familyKey(factoryId, familyId.get()));
         List<BomRecipe> family = recipes.lockFamilyByFactoryIdAndBomFamilyIdOrderById(factoryId, familyId.get());
         registerHeldFamily(factoryId, familyId.get());
+        if (firstAcquisition) {
+            refreshStale(entityManager, managedBeforeLock, family);
+        }
         Optional<BomRecipe> target = family.stream()
                 .filter(member -> recipeId.equals(member.getId()))
                 .findFirst();
@@ -72,8 +100,61 @@ public final class BomRecipeHeadLocks {
         // 读 family id 与加锁之间配方被并发改绑到别的 family: 退回只锁它自己 (族锁仍按序持有, 不会成环);
         // 登记的是它自己, 不是它的新族 —— 重算整族时 requireHeld 会拒绝, 让调用方重试。
         Optional<BomRecipe> moved = recipes.lockByIdAndFactoryId(recipeId, factoryId);
-        moved.ifPresent(recipe -> register(recipeKey(factoryId, recipe.getId())));
+        moved.ifPresent(recipe -> {
+            register(recipeKey(factoryId, recipe.getId()));
+            refreshStale(entityManager, managedBeforeLock, List.of(recipe));
+        });
         return moved;
+    }
+
+    /** 加锁查询之前就已在持久化上下文里的配方头 / 明细行 / 调料行 (按对象身份记)。 */
+    private static List<Object> managedFamilyCandidates(EntityManager entityManager) {
+        if (entityManager == null) {
+            return List.of();
+        }
+        List<Object> managed = new ArrayList<>();
+        for (Map.Entry<Object, EntityEntry> entry : entityManager.unwrap(SessionImplementor.class)
+                .getPersistenceContextInternal().reentrantSafeEntityEntries()) {
+            Object entity = entry.getKey();
+            if (entry.getValue().getStatus() == Status.MANAGED
+                    && (entity instanceof BomRecipe || entity instanceof BomRecipeItem
+                        || entity instanceof BomSeasoningItem)) {
+                managed.add(entity);
+            }
+        }
+        return managed;
+    }
+
+    /** 把加锁前就托管着、且属于刚锁住的这些配方的对象刷新成已提交值; 已被别的事务删掉的行摘出上下文。 */
+    private static void refreshStale(EntityManager entityManager, List<Object> managedBeforeLock,
+                                     List<BomRecipe> locked) {
+        if (entityManager == null || managedBeforeLock.isEmpty() || locked.isEmpty()) {
+            return;
+        }
+        Set<String> lockedIds = locked.stream().map(BomRecipe::getId).collect(Collectors.toSet());
+        Set<Object> stale = Collections.newSetFromMap(new IdentityHashMap<>());
+        for (Object entity : managedBeforeLock) {
+            String owner = entity instanceof BomRecipe recipe ? recipe.getId()
+                    : entity instanceof BomRecipeItem item ? item.getRecipeId()
+                    : ((BomSeasoningItem) entity).getRecipeId();
+            if (owner != null && lockedIds.contains(owner) && entityManager.contains(entity)) {
+                stale.add(entity);
+            }
+        }
+        if (stale.isEmpty()) {
+            return;
+        }
+        entityManager.flush();
+        for (Object entity : stale) {
+            if (!entityManager.contains(entity)) {
+                continue; // 刷新配方头时已级联刷新过 (或已被摘出)
+            }
+            try {
+                entityManager.refresh(entity);
+            } catch (jakarta.persistence.EntityNotFoundException deletedMeanwhile) {
+                entityManager.detach(entity);
+            }
+        }
     }
 
     /**
@@ -105,6 +186,11 @@ public final class BomRecipeHeadLocks {
                     .withCode(FAMILY_LOCK_STALE)
                     .withHint("刷新配方页面后重新操作；若反复出现，请联系管理员");
         }
+    }
+
+    private static boolean isHeld(String key) {
+        Set<String> held = heldSet(false);
+        return held != null && held.contains(key);
     }
 
     private static void registerHeld(BomRecipe recipe) {

@@ -87,8 +87,8 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class))).thenAnswer(inv -> inv.getArgument(0));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
         // 红线 3 锁序「整族配方头 → 行」: 批准先只取行所属配方 id (标量) 定位要锁的族
-        when(itemRepository.findRecipeIdById(any())).thenAnswer(inv ->
-                Optional.ofNullable(recipeIdByItem.get(inv.<Long>getArgument(0))));
+        when(itemRepository.findRecipeIdById(any(), any())).thenAnswer(inv ->
+                Optional.ofNullable(recipeIdByItem.get(inv.<Long>getArgument(1))));
     }
 
     // ---------------------------------------------------------------- a) 生成端

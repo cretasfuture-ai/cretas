@@ -79,7 +79,7 @@ class BomPriceAdjustmentServiceImplTest {
         when(recipeRepository.lockByIdAndFactoryId("R-1", "F006"))
                 .thenReturn(java.util.Optional.of(recipe("R-1", "PT-A", "Meal A")));
         // 红线 3 锁序「整族配方头 → 行」: 批准先只取行所属配方 id 定位要锁的族
-        when(itemRepository.findRecipeIdById(101L)).thenReturn(java.util.Optional.of("R-1"));
+        when(itemRepository.findRecipeIdById("F006", 101L)).thenReturn(java.util.Optional.of("R-1"));
     }
 
     @Test

@@ -141,7 +141,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
         // 红线 3 锁序「产品 → 草稿整族配方头」: 草稿会被对齐骨架 / 改绑 / 归档并重算整族成本, 先锁再读。
         for (String draftId : recipeRepo.findIdsByFactoryIdAndProductTypeIdAndStatus(
                 factoryId, productTypeId, BomRecipe.Status.DRAFT)) {
-            BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, draftId);
+            BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, draftId);
         }
 
         List<BomRecipe> versions = recipeRepo
@@ -1843,7 +1843,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * (或 {@link #lockProductsThenFamily}); 本事务新建的族用 {@link BomRecipeHeadLocks#registerCreatedFamily}。
      */
     private BomRecipe lockFamilyForCostWrite(String factoryId, String recipeId) {
-        BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, recipeId);
+        BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, recipeId);
         return loadRecipe(factoryId, recipeId);
     }
 
@@ -1867,8 +1867,8 @@ public class BomRecipeServiceImpl implements BomRecipeService {
      * 行在两步之间被挪到别的配方 (同族骨架对齐) 时拒绝, 让调用方刷新重试 —— 不在没锁住的族上继续写。
      */
     private BomRecipeItem lockFamilyThenItem(String factoryId, Long itemId) {
-        Optional<String> recipeId = itemRepo.findRecipeIdById(itemId);
-        recipeId.ifPresent(id -> BomRecipeHeadLocks.lockWithFamily(recipeRepo, factoryId, id));
+        Optional<String> recipeId = itemRepo.findRecipeIdById(factoryId, itemId);
+        recipeId.ifPresent(id -> BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, id));
         BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
                 .orElseThrow(() -> bomError(404,
                         "这条 BOM 明细行不存在，可能已被其他人删除",

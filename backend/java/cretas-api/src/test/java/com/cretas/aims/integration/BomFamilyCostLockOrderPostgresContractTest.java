@@ -8,16 +8,23 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.RawMaterialType;
 import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal;
 import com.cretas.aims.entity.bom.BomRecipe;
+import com.cretas.aims.entity.bom.BomRecipeItem;
+import com.cretas.aims.entity.bom.BomSeasoningItem;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomPriceAdjustmentProposalRepository;
+import com.cretas.aims.repository.bom.BomRecipeItemRepository;
+import com.cretas.aims.repository.bom.BomRecipeRepository;
+import com.cretas.aims.repository.bom.BomSeasoningItemRepository;
 import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.BomPriceAdjustmentService;
 import com.cretas.aims.service.bom.BomRecipeService;
+import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.NestedBomCostService;
 import com.cretas.aims.service.bom.impl.BomPriceAdjustmentServiceImpl;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
+import com.cretas.aims.service.bom.impl.BomSeasoningWorkspaceServiceImpl;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.unit.CanonicalUnit;
@@ -97,7 +104,8 @@ class BomFamilyCostLockOrderPostgresContractTest {
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({BomPriceAdjustmentServiceImpl.class, BomRecipeServiceImpl.class, ProcessSecretRecipeGuard.class})
+    @Import({BomPriceAdjustmentServiceImpl.class, BomRecipeServiceImpl.class, BomSeasoningWorkspaceServiceImpl.class,
+            ProcessSecretRecipeGuard.class})
     static class Runtime { }
 
     @DynamicPropertySource
@@ -126,10 +134,16 @@ class BomFamilyCostLockOrderPostgresContractTest {
     @Autowired ProductTypeRepository products;
     @Autowired RawMaterialTypeRepository materials;
     @Autowired BomPriceAdjustmentProposalRepository proposals;
+    @Autowired BomSeasoningWorkspaceService seasoning;
+    @Autowired BomRecipeRepository recipeRepository;
+    @Autowired BomRecipeItemRepository itemRepository;
+    @Autowired BomSeasoningItemRepository seasoningItems;
 
     /** 一次性插桩: 成本重算读每一行时 (isNestedComponent) / 调价批准的保密检查 (族与行都已加锁之后)。 */
     private final AtomicReference<Runnable> costReadHook = new AtomicReference<>();
     private final AtomicReference<Runnable> secretCheckHook = new AtomicReference<>();
+    /** 调料删除在 claimRevision 之后、calculateCost 之前调用替代料服务 (mock) 的那一刻。 */
+    private final AtomicReference<Runnable> seasoningClaimedHook = new AtomicReference<>();
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
     private TransactionTemplate tx;
@@ -148,6 +162,8 @@ class BomFamilyCostLockOrderPostgresContractTest {
                 .when(accessService).require(any(), any(), any(), any(), any());
         doAnswer(inv -> { runOnce(costReadHook); return false; })
                 .when(nestedBomCostService).isNestedComponent(any());
+        doAnswer(inv -> { runOnce(seasoningClaimedHook); return List.of(); })
+                .when(substituteService).replaceForSeasoningItem(any(), any(), any(), any());
         stubUnitsAndWorkflow();
 
         factory = "QA-R3-" + UUID.randomUUID().toString().substring(0, 8);
@@ -247,6 +263,92 @@ class BomFamilyCostLockOrderPostgresContractTest {
         assertConsistentAtNewPrice(recipeId, line, proposal);
     }
 
+    /**
+     * 先读后锁 (发布收编: preflight 先无锁读草稿族头 / 行, 再进激活或重算): 读完之后别的事务提交了行新价与头备注,
+     * 本事务再走真实重算入口。族锁第一次拿到时必须把那份旧的托管头 / 行刷新成已提交值 ——
+     * 否则重算用旧行算出旧成本, 或用旧头整行写回, 把别人刚提交的备注盖掉 (丢失更新)。
+     */
+    @Test
+    void entitiesReadBeforeTheFamilyLockAreRefreshedSoARecomputeDoesNotOverwriteAConcurrentCommit() {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        long line = lineOf(recipeId);
+
+        Throwable outer = attempt(() -> tx.executeWithoutResult(status -> {
+            BomRecipe staleHead = recipeRepository.findById(recipeId).orElseThrow();
+            List<BomRecipeItem> staleLines = itemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId);
+            assertThat(staleHead.getNotes()).as("加锁前读到的是旧头").isNull();
+            assertThat(staleLines).singleElement()
+                    .satisfies(l -> assertThat(l.getUnitPrice()).isEqualByComparingTo("0.5"));
+            try {
+                pool.submit(() -> {
+                    jdbc.update("update bom_recipe_items set unit_price = 0.7501, item_cost = 1.5002 where id = ?", line);
+                    jdbc.update("update bom_recipes set notes = 'R3-并发已提交' where id = ?", recipeId);
+                }).get(30, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            recipes.calculateCost(factory, recipeId);
+        }));
+
+        assertThat(outer).as("重算成功").isNull();
+        Map<String, Object> head = jdbc.queryForMap(
+                "select notes, total_material_cost from bom_recipes where id = ?", recipeId);
+        assertThat(head.get("notes")).as("别人在加锁前提交的头备注没被旧头整行写回盖掉").isEqualTo("R3-并发已提交");
+        assertThat((BigDecimal) head.get("total_material_cost"))
+                .as("头成本按已提交的行新价算 (2 × 0.7501), 不是加锁前读到的旧行 1.0")
+                .isEqualByComparingTo("1.5002");
+    }
+
+    /**
+     * 调料删除 (claimRevision 改写目标头) 与同族另一成员的重算并发。目标成员 id 较大: 旧代码先由 claimRevision 的
+     * UPDATE 单独锁住它, 再在 calculateCost 里按 id 升序锁整族 (先等 id 小的) —— 与按序加锁的重算方向相反,
+     * PG 判死锁回滚一方。现在整族在入口一次按 id 升序锁住, 对方只是排队。
+     */
+    @Test
+    void seasoningDeleteOnTheHigherIdMemberAndARecomputeOfTheLowerIdMemberDoNotDeadlock() throws Exception {
+        String first = draftWithOneRawLineAtOldPrice();
+        String second = draftWithOneRawLineAtOldPrice(secondProduct());
+        String family = jdbc.queryForObject("select bom_family_id from bom_recipes where id = ?", String.class, first);
+        jdbc.update("update bom_recipes set bom_family_id = ? where id = ?", family, second);
+        String low = first.compareTo(second) < 0 ? first : second;
+        String high = low.equals(first) ? second : first;
+        jdbc.update("update bom_recipes set target_terminal_node_id = 't-low' where id = ?", low);
+        jdbc.update("update bom_recipes set target_terminal_node_id = 't-high' where id = ?", high);
+        // 两个成员各自的骨架行原本都指向固定图的同一终点 "terminal", 跟着改成各自的终点
+        jdbc.update("update bom_recipe_items set cost_scope_key = 't-low' where recipe_id = ? and cost_scope_key is not null", low);
+        jdbc.update("update bom_recipe_items set cost_scope_key = 't-high' where recipe_id = ? and cost_scope_key is not null", high);
+        String highProduct = jdbc.queryForObject(
+                "select product_type_id from bom_recipes where id = ?", String.class, high);
+        BomWorkflowRevisionService.CostScopeProfile profile = new BomWorkflowRevisionService.CostScopeProfile(
+                "OUTPUT_EXCLUSIVE", List.of("t-high"), List.of(highProduct));
+        when(bomWorkflowRevisionService.resolveProcessCostProfiles(anyString(), any(BomRecipe.class)))
+                .thenReturn(Map.of("process", profile));
+        long binding = seasoningBinding(high, profile);
+        long revision = jdbc.queryForObject(
+                "select seasoning_revision from bom_recipes where id = ?", Long.class, high);
+
+        AtomicBoolean recomputeFinishedWhileDeleteHeldTheFamily = new AtomicBoolean();
+        AtomicReference<Future<Throwable>> recompute = new AtomicReference<>();
+        seasoningClaimedHook.set(() -> {
+            recompute.set(pool.submit(() -> attempt(() -> recipes.calculateCost(factory, low))));
+            recomputeFinishedWhileDeleteHeldTheFamily.set(completesWithin(recompute.get(), 3));
+        });
+
+        Throwable deleted = pool.submit(() -> attempt(() -> seasoning.deleteBinding(factory, high, binding, revision)))
+                .get(60, TimeUnit.SECONDS);
+        assertThat(recompute.get()).as("插桩触发了: 重算是在调料删除 claimRevision 之后发出的").isNotNull();
+        Throwable recomputed = recompute.get().get(60, TimeUnit.SECONDS);
+
+        assertThat(deleted).as("调料删除成功, 没有被 PG 判死锁").isNull();
+        assertThat(recomputed).as("同族重算成功, 没有被 PG 判死锁").isNull();
+        assertThat(recomputeFinishedWhileDeleteHeldTheFamily.get())
+                .as("调料删除持有整族配方头期间, 重算拿不到族锁, 不可能先提交").isFalse();
+        assertThat(jdbc.queryForObject("select deleted_at is not null from bom_seasoning_items where id = ?",
+                Boolean.class, binding)).isTrue();
+        assertThat(jdbc.queryForObject("select seasoning_revision from bom_recipes where id = ?", Long.class, high))
+                .isEqualTo(revision + 1);
+    }
+
     private void assertConsistentAtNewPrice(String recipeId, long line, long proposal) {
         Map<String, Object> item = jdbc.queryForMap(
                 "select unit_price, item_cost from bom_recipe_items where id = ?", line);
@@ -268,10 +370,14 @@ class BomFamilyCostLockOrderPostgresContractTest {
 
     /** 走真实建配方入口 (新族、工艺骨架行), 再把那一行压回旧价 0.5 × 用量 2, 头成本 1.0。 */
     private String draftWithOneRawLineAtOldPrice() {
+        return draftWithOneRawLineAtOldPrice(product);
+    }
+
+    private String draftWithOneRawLineAtOldPrice(String productTypeId) {
         CreateBomRecipeRequest request = new CreateBomRecipeRequest();
-        request.setProductTypeId(product);
+        request.setProductTypeId(productTypeId);
         BomRecipeItemDTO raw = new BomRecipeItemDTO();
-        raw.setMaterialTypeId(material);
+        raw.setMaterialTypeId("RAW-WF-" + productTypeId);
         raw.setStandardQuantity(new BigDecimal("2"));
         raw.setUnit("kg");
         raw.setMaterialCategory("RAW");
@@ -283,6 +389,58 @@ class BomFamilyCostLockOrderPostgresContractTest {
                 + "item_cost = 1.0 where recipe_id = ?", recipeId);
         jdbc.update("update bom_recipes set total_material_cost = 1.0, total_cost = 1.0 where id = ?", recipeId);
         return recipeId;
+    }
+
+    /** 同厂第二个 SKU 及其工艺原料 (RAW-WF-{产品}), 用来拼一个两成员的族。 */
+    private String secondProduct() {
+        String second = product + "-B";
+        tx.executeWithoutResult(status -> {
+            ProductType sku = new ProductType();
+            sku.setId(second);
+            sku.setFactoryId(factory);
+            sku.setCode("SKU-B-" + factory);
+            sku.setName("QA-R3-成品B");
+            sku.setUnit("盒");
+            sku.setGramsPerUnit(new BigDecimal("500"));
+            sku.setIsActive(true);
+            sku.setCreatedBy(1L);
+            products.saveAndFlush(sku);
+            RawMaterialType raw = new RawMaterialType();
+            raw.setId("RAW-WF-" + second);
+            raw.setFactoryId(factory);
+            raw.setCode("RAW-B-" + factory);
+            raw.setName("QA-R3-原料B");
+            raw.setCategory("RAW");
+            raw.setUnit("kg");
+            raw.setIsByproduct(false);
+            raw.setSelfSupplied(false);
+            raw.setIsActive(true);
+            raw.setIsAbacaPackaging(false);
+            raw.setCreatedBy(1L);
+            raw.setUnitPrice(new BigDecimal("0.5"));
+            raw.setMovingAvgPrice(new BigDecimal("0.7501"));
+            materials.saveAndFlush(raw);
+        });
+        return second;
+    }
+
+    private long seasoningBinding(String recipeId, BomWorkflowRevisionService.CostScopeProfile profile) {
+        return tx.execute(status -> {
+            BomSeasoningItem item = new BomSeasoningItem();
+            item.setRecipeId(recipeId);
+            item.setFactoryId(factory);
+            item.setWorkProcessId("WP-TEST");
+            item.setWorkflowProcessNodeId("process");
+            item.setCostScope(profile.costScope());
+            item.setCostScopeKey(profile.costScopeKey());
+            item.setMaterialTypeId(material);
+            item.setSection("COOKING");
+            item.setSeq(0);
+            item.setName("QA-R3-调料");
+            item.setDosagePerKgG(new BigDecimal("10"));
+            item.setCountInSeasoning(true);
+            return seasoningItems.saveAndFlush(item).getId();
+        });
     }
 
     private long lineOf(String recipeId) {
@@ -359,7 +517,10 @@ class BomFamilyCostLockOrderPostgresContractTest {
         recipe.setWorkflowSchemaVersion(revision.getSchemaVersion());
         recipe.setWorkflowNodesSnapshotJson(revision.getNodesJson());
         recipe.setWorkflowEdgesSnapshotJson(revision.getEdgesJson());
-        recipe.setTargetTerminalNodeId("terminal");
+        if (recipe.getTargetTerminalNodeId() == null) {
+            // 只在第一次绑定时给终点; 两成员族的用例会把成员改成各自的终点, 之后的解析不能把它压回去
+            recipe.setTargetTerminalNodeId("terminal");
+        }
         recipe.setOutputRole(BomRecipe.OutputRole.MAIN);
         recipe.setCostAllocationRatio(new BigDecimal("100"));
 

@@ -76,6 +76,10 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
+    /** 红线 3: 族锁第一次拿到时刷新加锁前已托管的同族对象 (见 BomRecipeHeadLocks); 纯单测为 null。 */
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     @Override
     @Transactional
     public List<BomPriceAdjustmentProposal> generateFromReceive(String factoryId, PurchaseReceiveRecord receiveRecord) {
@@ -242,10 +246,10 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         // 并发激活新版本把它归档时这里仍会读成 ACTIVE (审查 A)。
         // N1: 锁的是整族配方头 (按 id 升序), 不只是这一个 —— 重算会改写同族所有成员的头。
         // 红线 3: 先头后行 (与激活 / 整表更新 / 草稿明细编辑同一方向): 先只取行所属配方 id (标量)。
-        java.util.Optional<String> lineRecipeId = itemRepository.findRecipeIdById(proposal.getRecipeItemId());
+        java.util.Optional<String> lineRecipeId = itemRepository.findRecipeIdById(factoryId, proposal.getRecipeItemId());
         BomRecipe recipe = lineRecipeId
                 .flatMap(id -> com.cretas.aims.service.bom.BomRecipeHeadLocks
-                        .lockWithFamily(recipeRepository, factoryId, id))
+                        .lockWithFamily(entityManager, recipeRepository, factoryId, id))
                 .orElse(null);
         BomRecipeItem item = itemRepository.findByIdForUpdate(proposal.getRecipeItemId())
                 .orElseThrow(() -> new ResourceNotFoundException("BOM行不存在: " + proposal.getRecipeItemId()));
