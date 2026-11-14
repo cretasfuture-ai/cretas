@@ -128,6 +128,27 @@ public class WorkProcessTask extends BaseEntity {
     @Column(name = "notes", length = 500)
     private String notes;
 
+    /** 委外工序: 这道工序由委外厂加工 (由 OutsourceService 在委外单下达时写入, ⛔ 不在别处改)。 */
+    @Column(name = "is_outsourced", nullable = false)
+    @Builder.Default
+    private Boolean isOutsourced = Boolean.FALSE;
+
+    /** 承接这道工序的委外任务行 (outsource_order_lines.id)。 */
+    @Column(name = "outsource_line_id", length = 64)
+    private String outsourceLineId;
+
+    /** 委外厂 (suppliers.id)。 */
+    @Column(name = "outsourcer_supplier_id", length = 191)
+    private String outsourcerSupplierId;
+
+    /** 委外加工费单价 (含税)。 */
+    @Column(name = "outsource_unit_fee", precision = 14, scale = 4)
+    private BigDecimal outsourceUnitFee;
+
+    /** 已发生委外加工费 (实收合格数 × 单价, 退货冲减后净额)。 */
+    @Column(name = "outsource_fee_amount", precision = 14, scale = 2)
+    private BigDecimal outsourceFeeAmount;
+
     public enum Status {
         PENDING,
         IN_PROGRESS,
