@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "上线后自动实测关的固定话术 (INTENT-DISTILL-20261111, 方案第 7 节一级第 3 条)。",
+    "每条 case 在 entries 列出的入口各跑一遍 (execute = 普通 POST /ai-intents/execute, stream = /execute/stream)。",
+    "turns 依次在同一会话里说; sessionId 一律取服务端回的那个 (澄清会话的 id 由服务端生成)。",
+    "expect 字段: status_in / intent / ai_mode / message_contains (全部要有) / message_not_contains (一个都不许有) / min_choices (SELECT_INTENT 候选数下限) / same_intent_across_entries (两个入口最终意图必须相同)。",
+    "pending: {entry 或 '*': 原因}。这一入口没过记 EXPECTED_PENDING 不算失败; 过了记 PENDING_LIFTED (提示去掉标记), 也不算失败。",
+    "⚠️ 走 Luna 的话术 (匹配不上短语表的) 每次上线都会真调一次线上决策模型, 只留必要的那几条。"
+  ],
+  "cases": [
+    {
+      "id": "inventory_both_entries",
+      "title": "查库存: 两个入口同意图 REPORT_INVENTORY",
+      "entries": ["execute", "stream"],
+      "same_intent_across_entries": true,
+      "turns": [
+        {"say": "查库存",
+         "expect": {"status_in": ["SUCCESS", "COMPLETED"], "intent": "REPORT_INVENTORY", "ai_mode": "READ",
+                    "message_contains": ["库存"]}}
+      ]
+    },
+    {
+      "id": "clarify_then_pick_1",
+      "title": "澄清后回「1」选中第一个候选",
+      "entries": ["execute", "stream"],
+      "turns": [
+        {"say": "这个客户的量给我弄一下",
+         "expect": {"status_in": ["NEED_CLARIFICATION"], "min_choices": 2, "need_session_id": true}},
+        {"say": "1",
+         "expect": {"status_in": ["SUCCESS", "COMPLETED"], "intent_from_choice": 1,
+                    "message_not_contains": ["您是在讨论操作方法"]}}
+      ]
+    },
+    {
+      "id": "report_work_suspend_resume",
+      "title": "报工挂起后「继续报工」恢复",
+      "entries": ["execute", "stream"],
+      "pending": {
+        "execute": "#1715: 普通入口第 1 轮被短语快捷通道 + W0 直接出空确认卡, 没有可挂起的报工任务; #1715 上线后应转 PASS"
+      },
+      "turns": [
+        {"say": "我要报工，产量100",
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"]}},
+        {"say": "先看下库存",
+         "expect": {"intent": "REPORT_INVENTORY", "status_in": ["SUCCESS", "COMPLETED"]}},
+        {"say": "继续报工",
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"],
+                    "message_contains": ["回到刚才"], "message_not_contains": ["上次您查询的是", "actualQuantity", "taskId"]}}
+      ]
+    },
+    {
+      "id": "report_work_lists_processes_first",
+      "title": "报工第 1 轮先列可报工序 (不再要「工序任务编号」)",
+      "entries": ["execute", "stream"],
+      "pending": {
+        "*": "#1715 未上线: 第 1 轮仍问「工序任务编号」/ 普通入口出空确认卡; 上线后应转 PASS"
+      },
+      "turns": [
+        {"say": "我要报工，产量100",
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE",
+                    "status_in": ["NEED_CLARIFICATION", "NEED_MORE_INFO", "WRITE_CONFIRM_REQUIRED", "SUCCESS", "COMPLETED"],
+                    "message_not_contains": ["工序任务编号", "taskId"],
+                    "not_empty_write_card": true}}
+      ]
+    },
+    {
+      "id": "report_work_stats_is_query",
+      "title": "「报工产量统计」走查询, 不进报工写操作",
+      "entries": ["execute", "stream"],
+      "same_intent_across_entries": true,
+      "turns": [
+        {"say": "报工产量统计",
+         "expect": {"status_in": ["SUCCESS", "COMPLETED"], "ai_mode": "READ", "intent_not": ["WORK_PROCESS_TASK_COMPLETE"],
+                    "intent_in": ["REPORT_PRODUCTION", "REPORT_WORK_STATS", "WORK_REPORT_QUERY", "PROCESSING_WORK_REPORT_QUERY"]}}
+      ]
+    }
+  ]
+}

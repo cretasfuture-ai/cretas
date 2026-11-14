@@ -986,3 +986,22 @@ if [[ "$DEPLOY_ENV" == "test" || "$DEPLOY_ENV" == "all" ]]; then
     echo "测试: http://${SERVER_IP}:8084/health"
 fi
 echo "=========================================="
+
+# 上线后自动实测关 (INTENT-DISTILL-20261111 方案第 7 节一级第 3 条): 生产部署成功之后, 在 F006
+# 用两个 AI 入口真跑固定话术 + 一条模拟写入真跑, 并核对线上 Python 发布提交 == 本次 RELEASE_COMMIT。
+# 默认 AI_LIVE_PROBE=report 只打印不阻断; =enforce 时没过就报警并以退出码 3 结束; =off 不跑。
+# 说明与凭证约定见 scripts/ai-live-probe/post-deploy-hook.sh。
+if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
+    AI_LIVE_PROBE_HOOK="$PROJECT_ROOT/scripts/ai-live-probe/post-deploy-hook.sh"
+    if [[ -f "$AI_LIVE_PROBE_HOOK" ]]; then
+        # shellcheck source=../ai-live-probe/post-deploy-hook.sh
+        source "$AI_LIVE_PROBE_HOOK"
+        if ! ai_live_probe_after_deploy python "$RELEASE_COMMIT"; then
+            exit 3
+        fi
+    else
+        # 缺钩子 = 没量到, ⛔ 不当成通过; report 模式下只留痕, enforce 模式下照样以 3 结束。
+        echo "AI_LIVE_PROBE_GATE=not-measured (缺 $AI_LIVE_PROBE_HOOK)"
+        if [[ "${AI_LIVE_PROBE:-report}" == "enforce" ]]; then exit 3; fi
+    fi
+fi

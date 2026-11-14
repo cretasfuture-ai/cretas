@@ -1166,3 +1166,23 @@ printf 'RELEASE_JAVA_OUTCOME=%s\n' "$JAVA_DEPLOY_OUTCOME"
 printf 'RELEASE_WEB_OUTCOME=%s\n' "$WEB_DEPLOY_OUTCOME"
 printf 'RELEASE_FINAL_STATUS=%s\n' "$FINAL_STATUS"
 FINAL_STATUS_PRINTED=true
+
+# 上线后自动实测关 (INTENT-DISTILL-20261111 方案第 7 节一级第 3 条; #1706 离线全绿、上线没生效的先例):
+# Java 真的部署了 (outcome=deployed) 才跑 —— 在 F006 用两个 AI 入口跑固定话术 + 一条模拟写入真跑。
+# 放在 RELEASE_FINAL_STATUS 之后: 那一行仍恰好 1 次、语义不变 (部署本身成没成)。
+# 默认 AI_LIVE_PROBE=report 只打印不阻断; =enforce 没过就报警 + 回滚提示并以退出码 3 结束
+# (RELEASE_FINAL_STATUS=deployed 且 DEPLOY_EXIT=3 = 已上线但实测没过); =off 不跑。
+if [ "$JAVA_DEPLOY_OUTCOME" = deployed ] && { [ "$PHASE" = deploy ] || [ "$PHASE" = all ]; }; then
+    AI_LIVE_PROBE_HOOK="$PROJECT_ROOT/scripts/ai-live-probe/post-deploy-hook.sh"
+    if [ -f "$AI_LIVE_PROBE_HOOK" ]; then
+        # shellcheck source=../ai-live-probe/post-deploy-hook.sh
+        source "$AI_LIVE_PROBE_HOOK"
+        if ! ai_live_probe_after_deploy java; then
+            exit 3
+        fi
+    else
+        # 缺钩子 = 没量到, ⛔ 不当成通过; report 模式下只留痕, enforce 模式下照样以 3 结束。
+        printf 'AI_LIVE_PROBE_GATE=not-measured (缺 %s)\n' "$AI_LIVE_PROBE_HOOK"
+        if [ "${AI_LIVE_PROBE:-report}" = enforce ]; then exit 3; fi
+    fi
+fi
