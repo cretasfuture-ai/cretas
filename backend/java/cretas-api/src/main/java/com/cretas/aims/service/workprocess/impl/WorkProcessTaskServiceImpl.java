@@ -31,6 +31,7 @@ import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -86,6 +87,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
+
+    /**
+     * 工序多负责人表 (T121), 「本人可报」用 —— 与 RN 报工 {@code YieldReportServiceImpl} 读的是同一张表。
+     * required=false 同上 (不改构造器); 没注入时只按任务负责人判, 只会更严。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
 
     // ==================== T142: batch assignedToName helper ====================
 
@@ -477,6 +485,9 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         }
 
         WorkProcessTask task = loadOrThrow(factoryId, id);
+        // 本人可报 (先于状态判断: 别人的工序连状态也不透出)。AI 预览 (WorkProcessTaskTransitionPreview#complete) 同序。
+        checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
+                task.getProductWorkProcessId(), operatorUserId);
         assertTransition(task.getStatus(), Status.COMPLETED);
 
         LocalDateTime now = LocalDateTime.now();
@@ -566,6 +577,70 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         WorkProcessTask task = loadOrThrow(factoryId, id);
         taskRepository.delete(task); // BaseEntity @SQLDelete → 软删
         log.info("工序任务 {} 软删", id);
+    }
+
+    @Override
+    public void assertCanComplete(String factoryId, WorkProcessTaskDTO task, Long operatorUserId) {
+        if (task == null) {
+            return;
+        }
+        checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
+                task.getProductWorkProcessId(), operatorUserId);
+    }
+
+    @Override
+    public boolean isCompletionSupervisor(String factoryId, Long operatorUserId) {
+        return com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .filter(a -> a.id().equals(operatorUserId))
+                .filter(a -> factoryId != null && factoryId.equals(a.factoryId()))
+                .map(a -> com.cretas.aims.utils.ReportAuthGuard.isSupervisor(a.role()))
+                .orElse(false);
+    }
+
+    /**
+     * 本人可报 —— 口径见 {@link WorkProcessTaskService#assertCanComplete}。允许集合与 RN 报工同一份
+     * ({@code ReportAuthGuard#buildPermittedSet}: 多负责人表有人就用它, 没有就用任务负责人; 都空 = 未指派, 谁都能报)。
+     */
+    private void checkCanComplete(String factoryId, String taskFactoryId, Long assignedTo,
+                                  Long productWorkProcessId, Long operatorUserId) {
+        Optional<com.cretas.aims.security.AuthenticatedActor> actor =
+                com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution();
+        boolean factoryUserOfOtherFactory = actor
+                .filter(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .map(a -> a.factoryId() != null && !a.factoryId().equals(factoryId))
+                .orElse(false);
+        if ((taskFactoryId != null && !taskFactoryId.equals(factoryId)) || factoryUserOfOtherFactory) {
+            throw new BusinessException(403, "这道工序不是本厂的，不能报完工")
+                    .withHint("请在自己工厂里报工");
+        }
+        if (isCompletionSupervisor(factoryId, operatorUserId)) {
+            return;
+        }
+        Set<Long> permitted = com.cretas.aims.utils.ReportAuthGuard.buildPermittedSet(
+                assignedTo, joinTableAssignees(productWorkProcessId));
+        if (permitted.isEmpty()) {
+            return; // 未指派: 谁都能报 (与 RN 报工、列表「我的 + 未指派」同口径)
+        }
+        // 平台账号的 id 不是 users.id, 不拿它去比负责人 (撞号会误放行)
+        boolean comparableIdentity = actor.map(a -> a.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
+                .orElse(true);
+        if (comparableIdentity && operatorUserId != null && permitted.contains(operatorUserId)) {
+            return;
+        }
+        throw new BusinessException(403, "这道工序不是派给您的，不能替别人报完工")
+                .withHint("请报派给自己的工序；需要替别人报，请找车间主管");
+    }
+
+    private List<Long> joinTableAssignees(Long productWorkProcessId) {
+        // 不注入时 (手工构造的单测) 只按任务负责人判: 比读了多负责人表更严, 不会多放行
+        if (productWorkProcessId == null || pwpAssigneeRepository == null) {
+            return List.of();
+        }
+        return pwpAssigneeRepository.findByProductWorkProcessId(productWorkProcessId).stream()
+                .map(com.cretas.aims.entity.ProductWorkProcessAssignee::getWorkerId)
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
     }
 
     // ==================== Helpers ====================

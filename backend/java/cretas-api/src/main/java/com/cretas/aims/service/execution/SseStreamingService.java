@@ -1544,7 +1544,7 @@ public class SseStreamingService {
      * <p>只带工具 schema 里声明的参数、只带标量。这些值本来就来自这个用户自己的话 / 他点的按钮,
      * /preview 也本来就接受 context; 带回去不给任何新权限 —— 预览端照样重绑主体、照样出确认卡。
      */
-    void attachPreviewParams(IntentExecuteResponse response, IntentExecuteRequest request, ToolExecutor tool) {
+    static void attachPreviewParams(IntentExecuteResponse response, IntentExecuteRequest request, ToolExecutor tool) {
         if (response == null || !"WRITE_CONFIRM_REQUIRED".equals(response.getStatus())
                 || request == null || request.getContext() == null || tool == null) {
             return;

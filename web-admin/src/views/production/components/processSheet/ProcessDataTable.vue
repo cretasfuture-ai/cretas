@@ -1980,6 +1980,21 @@ function onOutputPortToggle(row: SheetRow, portId: string, selected: boolean): v
   setPortSelected(row, portById(portId), selected);
 }
 
+/**
+ * 14c (2026-11-14 F006 QA-3MIX): 回料与主产出同在「至少选一个」组 → 回料默认不选用。
+ * 操作员在回料那格填了数量, 意图就是要它入账 —— 自动选用。
+ *
+ * ⛔ 互相替代 (EXACTLY_ONE) 组不自动选: 那会顺手取消主产出, 由操作员自己勾;
+ *    这时「填了数量却没选用」由 rowCompletenessReason 明确拦下, 不静默丢。
+ */
+function onOutputQuantityChange(row: SheetRow, portId: string, quantity: number | null): void {
+  if (quantity == null || quantity <= 0) return;
+  const line = row.multiOutputs.find((candidate) => candidate.workflowPortId === portId);
+  const port = portById(portId);
+  if (!line || line.selected || !port || portSelectionMode(port) === 'EXACTLY_ONE') return;
+  setPortSelected(row, port, true);
+}
+
 function fieldPrecision(key: string): number {
   if (!isQidiao.value || (key !== 'actualProd' && key !== 'sample')) return 2;
   const unit = processUnits.value.outputUnit.trim().toLowerCase();
@@ -2202,6 +2217,12 @@ function rowCompletenessReason(row: SheetRow): string | null {
     if (row.multiOutputs.length === 0) return '本工序 workflow 未配置产出端口, 无法录入';
     const missing = row.multiOutputs.find((o) => o.selected && (o.quantity == null || o.quantity <= 0));
     if (missing) return `请填写「${missing.materialName}」的产出数量`;
+    // 14c: 提交只发「已选用」的产出 —— 填了数量却没选用的会被过滤掉, 报工照样成功、库存不入账。
+    // ⛔ 不许静默丢: 要么勾上, 要么清空数量。
+    const unselectedFilled = row.multiOutputs.find((o) => !o.selected && o.quantity != null && o.quantity > 0);
+    if (unselectedFilled) {
+      return `「${unselectedFilled.materialName}」填了产出数量但没有勾选「选用」，不会入账；请勾选选用或清空数量`;
+    }
     const incompleteTime = row.multiOutputs.find((o) => o.selected && Boolean(o.startTime) !== Boolean(o.endTime));
     if (incompleteTime) return `请补全「${incompleteTime.materialName}」的开始和结束时间`;
   }
@@ -4120,6 +4141,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             hint="SKU 与单位由 Workflow 固定，不可选择"
             :orphan-byproduct-notice="outputPartition.orphanNotice"
             @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+            @output-quantity-change="(portId: string, quantity: number | null) => onOutputQuantityChange(row, portId, quantity)"
             @open-spec="openSpecDialog"
           />
 
@@ -4907,6 +4929,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     hint="投入按本报工组只扣减一次；SKU 与单位由 Workflow 固定"
                     :orphan-byproduct-notice="outputPartition.orphanNotice"
                     @toggle-select="(portId: string, selected: boolean) => onOutputPortToggle(row, portId, selected)"
+                    @output-quantity-change="(portId: string, quantity: number | null) => onOutputQuantityChange(row, portId, quantity)"
                     @open-spec="openSpecDialog"
                   />
                   <div class="sp-card-submit sp-grid-submit">

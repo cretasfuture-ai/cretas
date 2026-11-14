@@ -1560,11 +1560,28 @@ public class IntentExecutionOrchestrator {
             }
 
             if (conversationResp.isCompleted() && conversationResp.getIntentCode() != null) {
+                Optional<ToolExecutor> writeTool = continuationWriteTool(factoryId, conversationResp.getIntentCode());
+                if (writeTool.isPresent()) {
+                    // 与 SSE streamSlotContinuation 同口径: 本会话 (sessionId+factoryId+userId) 服务端收集的参数
+                    // 并进请求, 盖过同名的客户端字段 (请求体换不成别人的 taskId); 客户端带的确认标记一律剥掉。
+                    // 只对写意图做: 读意图续轮的行为保持原样。
+                    Map<String, Object> context = new HashMap<>();
+                    if (request.getContext() != null) {
+                        context.putAll(request.getContext());
+                    }
+                    conversationService.getSession(factoryId, userId, request.getSessionId())
+                            .map(ConversationSession::getCollectedParameters)
+                            .ifPresent(context::putAll);
+                    request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+                }
                 conversationService.endConversation(
                         factoryId, userId, request.getSessionId(), conversationResp.getIntentCode());
                 request.setIntentCode(conversationResp.getIntentCode());
                 request.setForceExecute(true);
-                return executeWithExplicitIntent(factoryId, request, userId, userRole);
+                IntentExecuteResponse continued = executeWithExplicitIntent(factoryId, request, userId, userRole);
+                // W0 确认卡带上 previewParams (形状同 SSE): App 拿它请求 /preview, 预览照常重绑主体、过本人可报
+                writeTool.ifPresent(tool -> SseStreamingService.attachPreviewParams(continued, request, tool));
+                return continued;
             }
 
             // Conversation continues
@@ -1605,6 +1622,18 @@ public class IntentExecutionOrchestrator {
             log.error("会话延续失败: sessionId={}, error={}", request.getSessionId(), e.getMessage(), e);
             return null;
         }
+    }
+
+    /** 续轮补齐的意图若是写意图且绑了工具, 返回那个工具 (并参与 previewParams 用); 读意图 / 无工具 → empty。 */
+    private Optional<ToolExecutor> continuationWriteTool(String factoryId, String intentCode) {
+        Optional<AIIntentConfig> intent = getIntentByCodeWithPlatformFallback(factoryId, intentCode);
+        if (intent.isEmpty() || intent.get().getToolName() == null || intent.get().getToolName().isBlank()) {
+            return Optional.empty();
+        }
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(intent.get().getToolName());
+        boolean write = writeGuardService.isWriteIntent(intent.get())
+                || tool.map(writeGuardService::isWriteTool).orElse(false);
+        return write ? tool : Optional.empty();
     }
 
     /**

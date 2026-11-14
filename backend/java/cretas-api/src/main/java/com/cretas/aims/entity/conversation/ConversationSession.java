@@ -739,6 +739,16 @@ public class ConversationSession {
         return sessionMode == SessionMode.PARAMETER_COLLECTION;
     }
 
+    /** 待填参数的类型标记: 这个参数是「从列出的几项里选」(见 ConversationService#attachParameterChoices)。 */
+    public static final String CHOICE_PARAM_TYPE = "CHOICE";
+
+    /** 正在等用户从列出的选项里选 (下一个待填参数是选择题, 且选项还在)。 */
+    public boolean isAwaitingChoice() {
+        return isParameterCollectionMode() && getNextPendingParameter()
+                .filter(p -> CHOICE_PARAM_TYPE.equals(p.getType())).isPresent()
+                && !getCandidates().isEmpty();
+    }
+
     // ========== 参数实体类 ==========
 
     /**
