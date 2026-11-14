@@ -1166,3 +1166,26 @@ printf 'RELEASE_JAVA_OUTCOME=%s\n' "$JAVA_DEPLOY_OUTCOME"
 printf 'RELEASE_WEB_OUTCOME=%s\n' "$WEB_DEPLOY_OUTCOME"
 printf 'RELEASE_FINAL_STATUS=%s\n' "$FINAL_STATUS"
 FINAL_STATUS_PRINTED=true
+
+# 上线后自动实测关 (INTENT-DISTILL-20261111 方案第 7 节一级第 3 条; #1706 离线全绿、上线没生效的先例):
+# Java 真的部署了 (outcome=deployed) 才跑 —— 在 F006 用两个 AI 入口跑固定话术 + 一条模拟写入真跑。
+# 放在 RELEASE_FINAL_STATUS 之后: 那一行仍恰好 1 次、语义不变 (部署本身成没成)。
+# 默认 AI_LIVE_PROBE=report 只打印不阻断; =enforce 没过就报警 + 回滚提示并以退出码 3 结束
+# (RELEASE_FINAL_STATUS=deployed 且 DEPLOY_EXIT=3 = 已上线但实测没过); =off 不跑。
+# ⚠️ enforce 下 exit 3 的读法: 终端已打出 RELEASE_FINAL_STATUS=deployed (部署本身成了), 但
+#    on_exit 按 rc≠0 把 release 报告 JSON 的 status 写成 failed —— 两者不矛盾: 前者说「部署发生了」,
+#    后者说「整条发布没过关」。判据看 DEPLOY_EXIT=3 + AI_LIVE_PROBE_GATE=failed|not-measured|error。
+# 钩子跑在发布锁释放之前, 所以钩子内部有整体超时 (见 post-deploy-hook.sh), 挂不住后续发布。
+# source 失败 (钩子缺失 / 语法错) = GATE=error: report 不改退出码, enforce 才 exit 3。
+if [ "$JAVA_DEPLOY_OUTCOME" = deployed ] && { [ "$PHASE" = deploy ] || [ "$PHASE" = all ]; }; then
+    AI_LIVE_PROBE_HOOK="$PROJECT_ROOT/scripts/ai-live-probe/post-deploy-hook.sh"
+    # shellcheck source=../ai-live-probe/post-deploy-hook.sh
+    if [ -f "$AI_LIVE_PROBE_HOOK" ] && source "$AI_LIVE_PROBE_HOOK" && declare -F ai_live_probe_after_deploy >/dev/null; then
+        if ! ai_live_probe_after_deploy java; then
+            exit 3
+        fi
+    else
+        printf 'AI_LIVE_PROBE_GATE=error (钩子缺失或载入失败: %s)\n' "$AI_LIVE_PROBE_HOOK"
+        if [ "${AI_LIVE_PROBE:-report}" = enforce ]; then exit 3; fi
+    fi
+fi
