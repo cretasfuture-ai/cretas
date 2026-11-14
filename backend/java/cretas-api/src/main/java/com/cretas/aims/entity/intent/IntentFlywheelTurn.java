@@ -18,7 +18,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 /**
- * 意图飞轮: 线上 AI 对话每一轮一条 (Flyway V20261114_61; INTENT-DISTILL-20261111)。
+ * 意图飞轮: 线上 AI 对话每一轮一条 (Flyway V20261114_87; INTENT-DISTILL-20261111)。
  * 原文列 ({@link #userInput} / {@link #contextSummary}) 只在 {@link SecrecyMode#PLAIN} 时有值 (迁移里的
  * {@code ck_aift_no_raw_when_secret} 钉住); 训练导出只读 {@code *_export} 列。
  */
