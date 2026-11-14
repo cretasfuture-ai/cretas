@@ -383,13 +383,13 @@ onMounted(loadTree);
 <style scoped>
 .page-wrapper { padding: 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.page-title { font-size: 18px; font-weight: 600; color: #303133; }
+.page-title { font-size: 18px; font-weight: 600; color: var(--cs-text); }
 .page-title-row { display: flex; align-items: center; gap: 4px; }
-.definition-help { color: #909399; }
-.definition-list { display: grid; gap: 12px; line-height: 1.55; color: #606266; }
-.definition-item strong { color: #303133; }
-.definition-example, .field-hint, .deleted-hint { color: #909399; font-size: 12px; }
-.page-subtitle { margin-top: 4px; color: #606266; font-size: 13px; }
+.definition-help { color: var(--cs-muted); }
+.definition-list { display: grid; gap: 12px; line-height: 1.55; color: var(--cs-muted); }
+.definition-item strong { color: var(--cs-text); }
+.definition-example, .field-hint, .deleted-hint { color: var(--cs-muted); font-size: 12px; }
+.page-subtitle { margin-top: 4px; color: var(--cs-muted); font-size: 13px; }
 .header-actions { display: flex; gap: 8px; }
 .empty-alert { margin-bottom: 14px; }
 .empty-alert__hint { margin-top: 6px; color: var(--el-text-color-secondary); font-size: 13px; }

@@ -144,7 +144,7 @@ function removeRow(index: number) {
 
     <div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px">
       <el-button size="small" :icon="Plus" @click="addRow">+ 工时段</el-button>
-      <span style="font-size:12px;color:#606266">
+      <span style="font-size:12px;color:var(--cs-muted)">
         合计时长 <b>{{ elapsedHours.toFixed(2) }} h</b> · 人工工时 <b>{{ personHours.toFixed(2) }} h</b>
       </span>
     </div>

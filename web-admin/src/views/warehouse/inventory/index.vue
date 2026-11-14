@@ -523,7 +523,7 @@ function getStatusText(status: string) {
                     <div style="margin-top: 4px; color: var(--text-color-secondary);">点查看可看附件清单</div>
                   </div>
                 </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, #909399); font-size: 12px;"><QuestionFilled /></el-icon>
+                <el-icon style="cursor: help; color: var(--text-color-secondary, var(--cs-muted)); font-size: 12px;"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
           </template>
@@ -594,7 +594,7 @@ function getStatusText(status: string) {
               {{ (Number(adjustForm.currentQuantity) || 0) + (Number(adjustForm.adjustQuantity) || 0) }}
             </strong>
           </div>
-          <div class="form-tip" style="color: #909399; font-size: 12px; margin-top: 4px;">
+          <div class="form-tip" style="color: var(--cs-muted); font-size: 12px; margin-top: 4px;">
  "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
           </div>
         </el-form-item>
@@ -731,21 +731,21 @@ function getStatusText(status: string) {
   .stat-value {
     font-size: 28px;
     font-weight: 600;
-    color: #409eff;
+    color: var(--cs-primary);
   }
 
   .stat-label {
     font-size: 14px;
-    color: #909399;
+    color: var(--cs-muted);
     margin-top: 8px;
   }
 
   &.warning .stat-value {
-    color: #e6a23c;
+    color: var(--cs-warning);
   }
 
   &.danger .stat-value {
-    color: #f56c6c;
+    color: var(--cs-danger);
   }
 }
 
@@ -756,7 +756,7 @@ function getStatusText(status: string) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -780,12 +780,12 @@ function getStatusText(status: string) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 
@@ -810,29 +810,29 @@ function getStatusText(status: string) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-top: 4px;
 }
 
 // 过期日期高亮
 .expire-expired {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 
 .expire-danger {
-  color: #e6a23c;
+  color: var(--cs-warning);
   font-weight: 500;
 }
 
 .expire-warning {
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 // 详情网格
@@ -850,12 +850,12 @@ function getStatusText(status: string) {
 
 .detail-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 .detail-value {
   font-size: 14px;
-  color: #303133;
+  color: var(--cs-text);
 }
 
 /* 占用说明: 比主数字弱一档, 但 ⛔ 不许弱到看不见 —— 它解释的正是主数字为什么变小。
@@ -865,7 +865,7 @@ function getStatusText(status: string) {
   margin-top: 2px;
   font-size: 12px;
   line-height: 1.3;
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--cs-warning));
   white-space: normal;
 }
 </style>

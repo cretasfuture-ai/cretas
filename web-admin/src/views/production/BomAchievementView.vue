@@ -305,7 +305,7 @@ function handleSizeChange(size: number) {
           <div class="kpi-label">总批次数</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: kpi.avgRate != null ? getRateColor(kpi.avgRate) : '#909399' }">
+          <div class="kpi-value" :style="{ color: kpi.avgRate != null ? getRateColor(kpi.avgRate) : 'var(--cs-muted)' }">
             {{ kpi.avgRate != null ? kpi.avgRate + '%' : '—' }}
           </div>
           <div class="kpi-label">平均达成率</div>
@@ -315,12 +315,12 @@ function handleSizeChange(size: number) {
           <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: #F56C6C">{{ kpi.overConsumptionCount }}</div>
+          <div class="kpi-value" style="color: var(--cs-danger)">{{ kpi.overConsumptionCount }}</div>
           <div class="kpi-label">用量偏差批次数 (偏离计划 &gt;5%)</div>
           <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : '#909399' }">
+          <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : 'var(--cs-muted)' }">
             {{ kpi.minRate != null ? kpi.minRate + '%' : '—' }}
           </div>
           <div class="kpi-label">最低达成率</div>
@@ -451,7 +451,7 @@ function handleSizeChange(size: number) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -477,12 +477,12 @@ function handleSizeChange(size: number) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -513,7 +513,7 @@ function handleSizeChange(size: number) {
 
   .kpi-label {
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 }
 
@@ -532,7 +532,7 @@ function handleSizeChange(size: number) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 
@@ -545,12 +545,12 @@ function handleSizeChange(size: number) {
 }
 
 .variance-over {
-  color: #F56C6C;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 
 .variance-under {
-  color: #67C23A;
+  color: var(--cs-success);
   font-weight: 600;
 }
 
@@ -563,7 +563,7 @@ function handleSizeChange(size: number) {
 .kpi-caliber {
   margin-top: 2px;
   font-size: 11px;
-  color: #909399;
+  color: var(--cs-muted);
   line-height: 1.3;
 }
 </style>

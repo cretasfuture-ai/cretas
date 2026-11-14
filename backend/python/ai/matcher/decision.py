@@ -66,6 +66,19 @@ ASK_PREDICATE_RULES = (
     "缺的只是时间范围、条数、排序这类有默认值的条件（没说时间按最近7天）；上文能对上的续句和纠正（如“我说的是已过期的”）；明确的取消。"
 )
 
+# 激进档 (少问, 默认档; Steve 2026-11-14: 金标以 Steve 自答 300 题为主): 能给合理默认就不问; 写操作动作与对象说得出
+# 就交确认卡 (确认卡本身就是确认); 只有缺了无法默认的关键信息才问。保守档仍用上面的 ASK_PREDICATE_RULES。
+# 档位与门槛见 ai/ask_policy.py; 读数见 Documents/Cretas意图蒸馏-20261111/steve300-calibrate-20261114.md。
+ASK_PREDICATE_RULES_AGGRESSIVE = (
+    "判断食品厂业务系统这一轮是否必须先问用户一句才能办理。只有下面几种情形是 true，其余一律 false："
+    "①查看类的话用“这批/这个/这家/这款/那个/上次那单”指一个具体对象，却没有给编号、名字，也没有原料或产品名，上文也对不上——不知道查哪一个，必须先问（如“这批发到哪了”“这家报价多少”“看看这批检验结果”）。“这批+原料或产品名”（如“看下这批白砂糖”）不用问，列出这种东西的批次即可；"
+    "②只有“弄一下/处理一下/搞一下/整一下/关一下”这类含糊动词，说不出要查看还是新建、修改、审批，上文也没有正在办的事；"
+    "③查看和录入/修改两种读法都说得通（如“录下草莓酸奶下周要多少”）；"
+    "④只有半句（如“快过期的”“上个月的”），上文没有能接上的事；"
+    "⑤要导出、打印某份单据，却没说是哪一份或什么范围（如“把单子打出来”）。"
+    "下面这些都是 false，不要因为细节没给全就问：只读查询说得出要看什么，没说的时间、范围、条数按默认办（最近7天、全部、同名的都列出），结果里写明默认；写操作（登记、录入、新建、审批、放行、冻结、入库、发货、退货、赔付、调整）说得出要做什么——缺的数量、批次、日期、人员由系统先出一张确认单让用户补全、核对，确认单本身就是确认，不另外先问；上文正在办一件事，这句是回答追问、改条件、纠正、换对象、翻页、接着办；问怎么用、反映问题、闲聊、取消。"
+)
+
 
 def ask_predicate_text(query: str, role: Optional[str], history: Optional[List[Dict[str, Any]]] = None) -> str:
     """判断题正文: 与粗选 / 合并理解同形 (身份行 + 最近对话/任务状态 + 用户说), 不带候选。"""
@@ -488,7 +501,8 @@ class DecisionMatcher:
         return dist
 
     async def ask_probability(self, query: str, role: Optional[str],
-                              history: Optional[List[Dict[str, Any]]] = None) -> Optional[float]:
+                              history: Optional[List[Dict[str, Any]]] = None,
+                              rules: Optional[str] = None) -> Optional[float]:
         """Luna 判断题: 这一轮必须先问的概率。没启用 / 失败 / 形状不对 -> None (⛔ 不编; 调用方按 v1 规则)。"""
         from common.llm_metrics import llm_caller_context  # type: ignore
         from common.llm_redactor import utterance_egress  # type: ignore
@@ -498,7 +512,8 @@ class DecisionMatcher:
             return None
         try:
             with llm_caller_context("ai_decision"), utterance_egress():
-                return await call_decision_predicate(ASK_PREDICATE_RULES, ask_predicate_text(query, role, history),
+                return await call_decision_predicate(rules or ASK_PREDICATE_RULES,
+                                                     ask_predicate_text(query, role, history),
                                                      name=ASK_PREDICATE_NAME, timeout=min(3.0, self.timeout_s / 2))
         except Exception as ex:  # noqa: BLE001
             logger.warning("decision ask predicate unavailable: %s", str(ex)[:300])
@@ -584,7 +599,8 @@ class DecisionMatcher:
 
     async def choose_luna(self, query: str, role: Optional[str], options: List[Dict[str, Any]],
                           history: Optional[List[Dict[str, Any]]] = None,
-                          special_options: bool = False, ask: bool = False) -> Optional[Dict[str, float]]:
+                          special_options: bool = False, ask: bool = False,
+                          ask_rules: Optional[str] = None) -> Optional[Dict[str, float]]:
         """只问 Luna (OpenAI Decisions)。没启用 / 失败 -> None; 失败原因留在
         ``legacy_exit_metrics.get_luna_failure_reason()`` (没启用时为 None), 由调用方决定下一跳。
 
@@ -598,7 +614,7 @@ class DecisionMatcher:
             return None
         opts, n_special = setup
         messages = build_choice_messages(query, role, opts, history)
-        ask_task = asyncio.ensure_future(self.ask_probability(query, role, history)) if ask else None
+        ask_task = asyncio.ensure_future(self.ask_probability(query, role, history, ask_rules)) if ask else None
         probs = await self._choose_native(messages, LETTERS[:len(opts)], opts)
         if probs is None:
             if ask_task is not None:
@@ -669,6 +685,7 @@ class DecisionMatcher:
 
 __all__ = ["DecisionMatcher", "Decision", "letter_probs", "parse_shortlist", "build_choice_messages",
            "NONE_KEY", "CLARIFY_KEY", "ASK_KEY", "NON_INTENT_KEYS", "SPECIAL_OPTIONS", "ASK_PREDICATE_RULES",
+           "ASK_PREDICATE_RULES_AGGRESSIVE",
            "ask_predicate_text",
            "build_shortlist_messages", "intent_text", "role_line", "ROLE_LABELS", "history_block",
            "sanitize_task_state", "task_state_text", "with_task_state", "TASK_STATE_TOP_KEYS",

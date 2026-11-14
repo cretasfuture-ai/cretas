@@ -183,7 +183,7 @@ function transferItemName(row: Record<string, unknown>): string {
 }
 function buildTransferItemsSummaryHtml(): string {
   const items = (transfer.value?.items as Record<string, unknown>[] | undefined) || [];
-  if (items.length === 0) return '<div style="color:#909399">（无物料明细）</div>';
+  if (items.length === 0) return '<div style="color:var(--cs-muted)">（无物料明细）</div>';
   const rows = items
     .map((it) => `<div>${transferItemName(it)} × ${it.quantity ?? 0}${displayUnit(it.unit)}</div>`)
     .join('');
@@ -835,20 +835,20 @@ async function submitDecide() {
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
 .page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
+  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid var(--cs-border); }
   :deep(.el-card__body) { flex: 1; padding: 20px; overflow-y: auto; }
 }
 .card-header { display: flex; justify-content: space-between; align-items: center;
   .header-left { display: flex; align-items: center; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
+    .page-title { font-size: 16px; font-weight: 600; color: var(--cs-text); }
   }
   .header-right { display: flex; gap: 8px; }
 }
 // PR #289 §B4 — stock shortage marker for "现有库存" column
-.stock-shortage { color: #f56c6c; font-weight: 600; }
+.stock-shortage { color: var(--cs-danger); font-weight: 600; }
 // 数量后缀的单位: 比数字弱一档, 不跟数字抢注意力, 但保证数字永远不是裸的。
-.unit-suffix { margin-left: 4px; color: #909399; font-size: 12px; }
+.unit-suffix { margin-left: 4px; color: var(--cs-muted); font-size: 12px; }
 // 调拨差异量红色高亮（少收警示）
-.diff-qty { color: #f56c6c; font-weight: 600; }
-.text-muted { color: #909399; font-size: 12px; }
+.diff-qty { color: var(--cs-danger); font-weight: 600; }
+.text-muted { color: var(--cs-muted); font-size: 12px; }
 </style>
