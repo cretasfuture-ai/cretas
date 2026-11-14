@@ -5,6 +5,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -68,29 +71,40 @@ public class ChatBusinessFactGuard {
 
     // ==================== 识别层 ====================
 
-    /** 业务主语: 这些东西的「情况 / 多少」只能查, 不能聊。 */
+    /** 业务主语: 这些东西的「情况 / 多少」只能查, 不能聊。「卖」只认业务用法 (卖萌 / 卖关子不算)。 */
     private static final Pattern QUESTION_SUBJECT = Pattern.compile(
-            "销售|销量|卖|营收|营业额|收入|生意|业绩|利润|毛利|成本|产量|产值|生产|出.{0,3}货|发.{0,3}货"
-                    + "|库存|存货|质检|合格率|良品率|不良|订单|采购|回款|应收|应付|损耗|报废|入库|出库|产能|开工");
+            "销售|销量|卖得|卖了|卖出|卖掉|好卖|畅销|营收|营业额|收入|生意|业绩|利润|毛利|成本|产量|产值|生产"
+                    + "|出.{0,3}货|发.{0,3}货|库存|存货|质检|合格率|良品率|不良|订单|采购|回款|应收|应付|损耗|报废"
+                    + "|入库|出库|产能|开工");
 
-    /** 问情况 / 问数量 / 问变化 (「怎么提高」「如何做」这类咨询不在这里)。 */
+    /** 问情况 / 问数量 / 问变化 (「怎么提高」「如何做」这类咨询不在这里, 也不靠句末问号 / 吗 / 呢判业务)。 */
     private static final Pattern QUESTION_ASK = Pattern.compile(
-            "怎么样|咋样|怎样|情况|多少|几[个件吨单批箱台家笔斤]|好不好|行不行|好吗|多吗|够吗|够不够|多不多|高不高"
-                    + "|了吗|了没|有没有|排名|排行|同比|环比|涨|跌|增长|下降|变化|趋势|表现|[?？]$|吗$|呢$");
+            "怎么样|咋样|怎样|如何|情况|多少|几[个件吨单批箱台家笔斤]|好不好|行不行|好吗|多吗|够吗|够不够|多不多|高不高"
+                    + "|了吗|了没|有没有|有吗|还有|排名|排行|同比|环比|涨|跌|增长|下降|变化|趋势|表现");
+
+    /**
+     * 咨询 / 怎么做类问法: 先于业务问法判定。「怎么 / 怎样 / 如何」后面还跟着动作才是咨询
+     * (「怎么样」「销量如何」「如何？」是在问情况, 不算); 「注意什么 / 建议 / 合适」同理。
+     */
+    private static final Pattern CONSULT = Pattern.compile(
+            "(?:怎么(?!样)|怎样|如何)(?![?？。!！吗呢啊呀，,]|$)|怎么办|注意|建议|办法|合适|适合|温度");
 
     /**
      * 这句话是不是在问业务情况 / 业务数字。是 ⇒ 调用方不许把它交给纯闲聊模型。
-     * 「外卖」这类含「卖」的非业务词先剥掉。
+     * 「外卖」这类含「卖」的非业务词先剥掉; 咨询句 (怎么降低成本 / 如何提高合格率 / 怎么创建订单) 先判非业务。
      */
     public static boolean isBusinessQuestion(String input) {
         if (input == null || input.isBlank()) return false;
         String s = input.toLowerCase().replaceAll("\\s+", "").replace("外卖", "").replace("买卖", "");
+        if (CONSULT.matcher(s).find()) return false;
         return QUESTION_SUBJECT.matcher(s).find() && QUESTION_ASK.matcher(s).find();
     }
 
     // ==================== 输出闸 ====================
 
     private static final Pattern SENTENCE = Pattern.compile("[^。！？!?；;\\n]+");
+    /** 句子 + 它后面的一个分隔符 (拦掉句子时连标点一起删, 剩下的原样拼回)。 */
+    private static final Pattern SENTENCE_WITH_DELIMITER = Pattern.compile("[^。！？!?；;\\n]+[。！？!?；;\\n]?|[。！？!?；;\\n]");
 
     /** 百分比只有出现在业务指标句里才算业务数字 (「湿度 60% 以下」不算)。 */
     private static final Pattern METRIC_WORD = Pattern.compile(
@@ -98,27 +112,46 @@ public class ChatBusinessFactGuard {
                     + "|出货|发货|库存|订单|合格率|良品率|不良率|完成率|达成率|占比|份额|业绩|生意|回款|损耗率|报废率"
                     + "|开工率|利用率|出勤率");
 
-    /** 业务数量单位 (紧跟在数后面)。 */
+    /** 业务数量单位 (紧跟在数后面)。「个」只在不是「个月 / 个原则」这类量词时算。 */
     private static final Pattern QUANTITY_UNIT = Pattern.compile(
-            "^\\s*(件|箱|吨|公斤|千克|kg|斤|单|笔|批|袋|包|瓶|盒|头|只|台|个订单|个客户|家客户|位客户|万件|万箱)");
+            "^\\s*(件|箱|吨|公斤|千克|kg|斤|单|笔|批|袋|包|瓶|盒|头|只|台|个(?!月|小时|原则|步骤|方面|要点|环节|方法|阶段|条|点|人)"
+                    + "|家客户|位客户|万件|万箱)");
 
     /** 金额单位 (紧跟在数后面)。 */
     private static final Pattern MONEY_UNIT = Pattern.compile("^\\s*(元|块|美元|万元|亿元|万块)");
 
     /** 业务主语 (数量单位要和它同句才算业务数字)。 */
     private static final Pattern BUSINESS_SUBJECT = Pattern.compile(
-            "销售|销量|卖|营收|营业额|收入|生意|产量|生产了|产出|出货|发货|库存|订单|入库|出库|采购|客户|回款"
+            "销售|销量|卖得|卖了|卖出|卖掉|营收|营业额|收入|生意|产量|生产了|产出|出货|发货|库存|订单|入库|出库|采购|客户|回款"
                     + "|本月|这个月|这月|今天|今日|本周|这周|上月|上个月|昨天|今年|本季度");
 
-    /** 业务趋势 / 评价断言 (不带数字的业务事实): 时间锚 + 业务主语 + 趋势评价。 */
+    /** 业务指标主语 (不含时间词): 不带单位的裸数字 / 万亿量级要和它同句才算业务数字。 */
+    private static final Pattern METRIC_SUBJECT = Pattern.compile(
+            "销售|销量|卖得|卖了|卖出|卖掉|营收|营业额|收入|利润|毛利|成本|产量|产值|出货|发货|库存|订单|入库|出库"
+                    + "|采购|回款|业绩|生意|合格率|良品率|不良率|完成率|达成率|损耗|报废|产能");
+
+    /** 数字后面没有任何单位 (句末 / 标点 / 「了」「的」/ 多 / 余 / 左右): 「订单 35」「库存还有 200 多」。 */
+    private static final Pattern BARE_AFTER = Pattern.compile(
+            "^\\s*(?:多|余|左右|上下|出头)?\\s*(?:$|[，,。！!？?；;、：:）)]|了|的|吧|呢)");
+
+    /** 业务趋势 / 评价断言 (不带数字的业务事实): 时间锚 + 业务主语 + 趋势评价。同比 / 环比 / 比去年本身就是时间锚。 */
     private static final Pattern TIME_ANCHOR = Pattern.compile(
-            "本月|这个月|这月|今天|今日|本周|这周|上周|上月|上个月|昨天|今年|本季度|最近|近期");
+            "本月|这个月|这月|今天|今日|本周|这周|上周|上月|上个月|昨天|今年|本季度|最近|近期"
+                    + "|同比|环比|比去年|比上年|比上月|比上个月|比上周|比昨天|比上季度|较去年|较上年|较上月|较上个月|较上周|较昨天");
     private static final Pattern FACT_SUBJECT = Pattern.compile(
             "销售|销量|卖得|营收|营业额|收入|利润|毛利|产量|出货|发货|库存|订单|生意|业绩|回款");
     private static final Pattern TREND_WORD = Pattern.compile(
             "增长|下降|上涨|下滑|上升|提升|持平|良好|不错|稳定|向好|偏低|偏高|较好|较差|增加|减少|火爆|低迷");
-    /** 条件句 / 假设句里的趋势词不是在陈述事实 (「如果本月销量下滑, 建议…」)。 */
-    private static final Pattern CONDITIONAL = Pattern.compile("如果|若|假如|一旦|假设|万一|是否|有没有");
+    /** 条件句 / 假设句 / 愿望句里的趋势词不是在陈述事实 (「如果本月销量下滑, 建议…」「想让销量同比增长, 可以…」)。 */
+    private static final Pattern CONDITIONAL = Pattern.compile(
+            "如果|若|假如|一旦|假设|万一|是否|有没有|希望|想要|想让|目标|争取|如何|怎么|怎样|有助于|旨在");
+
+    /** 拦下 GENERAL_QUESTION (咨询) 回复时的提示: 不给销售菜单, 只说明涉及本厂数据要先查。 */
+    public static final String ADVICE_DATA_NOTICE =
+            "提示：这个问题涉及本厂的实际数据，需要先查询真实数据，我不能凭空给出数字或判断。"
+                    + "想看实际情况可以直接说具体的查询，比如「查本月销售」「查库存」。";
+    /** 咨询回复里去掉涉及本厂数据的句子后, 剩下的通用建议前面的说明。 */
+    private static final String ADVICE_KEPT_PREFIX = "（涉及本厂数据的内容需要先查询真实数据，已去掉；以下是通用建议）\n";
 
     /** 只用它的数字抽取 (遮掉日期 / 编码 / 序号的那一套), 不经它的放行与计数。 */
     private final FactoryNumberProvenance numbers = new FactoryNumberProvenance();
@@ -130,23 +163,43 @@ public class ChatBusinessFactGuard {
         this.meterRegistry = meterRegistry;
     }
 
+    /** 一处违规: 命中的规则 + 它所在句子在 reply 里的起点 (拦句用)。 */
+    private record Hit(String rule, int sentenceStart) { }
+
     /**
-     * 判定一段<b>没有工具查询结果支撑</b>的闲聊 / 兜底回复能不能给用户看。
+     * 判定一段<b>没有工具查询结果支撑</b>的闲聊 / 兜底回复能不能给用户看 (闲聊口径: 被拦换固定的「需要先查」菜单)。
      *
      * @param site  调用点名 (进日志与计数器)
      * @param reply 模型写的回复
      */
     public Result check(String site, String reply) {
-        String rule = violation(reply);
-        Result result = rule == null
-                ? new Result(reply, Decision.PASS, null)
-                : new Result(NEED_QUERY_REPLY, Decision.BLOCKED, rule);
+        return check(site, null, reply, false);
+    }
+
+    /**
+     * @param userInput 用户原话: 原话里出现过的数字是用户自己给的, 回复里复述不算编造
+     * @param advice    {@code true} = 这是 GENERAL_QUESTION 咨询回复: 被拦时不回销售菜单, 去掉涉及本厂数据的句子、
+     *                  尽量保留剩下的通用建议, 并说明「涉及本厂数据需先查」
+     */
+    public Result check(String site, String userInput, String reply, boolean advice) {
+        List<Hit> hits = hits(reply, userInput);
+        Result result;
+        if (hits.isEmpty()) {
+            result = new Result(reply, Decision.PASS, null);
+        } else {
+            result = new Result(advice ? adviceWithoutFacts(reply, hits) : NEED_QUERY_REPLY,
+                    Decision.BLOCKED, hits.get(0).rule());
+        }
         return record(site, result, reply);
     }
 
     /** {@link #check} 的文本版本。 */
     public String enforce(String site, String reply) {
         return check(site, reply).text();
+    }
+
+    public String enforce(String site, String userInput, String reply, boolean advice) {
+        return check(site, userInput, reply, advice).text();
     }
 
     /** 某个调用点某种判定的累计次数 (进程内)。 */
@@ -162,33 +215,79 @@ public class ChatBusinessFactGuard {
 
     /** 命中的第一条规则; 没有违规返回 {@code null}。 */
     String violation(String reply) {
-        if (reply == null || reply.isBlank()) return null;
+        List<Hit> hits = hits(reply, null);
+        return hits.isEmpty() ? null : hits.get(0).rule();
+    }
+
+    private List<Hit> hits(String reply, String userInput) {
+        List<Hit> hits = new ArrayList<>();
+        if (reply == null || reply.isBlank()) return hits;
+        List<FactoryNumberProvenance.NumberToken> userNumbers =
+                userInput == null ? List.of() : numbers.extract(userInput);
         for (FactoryNumberProvenance.NumberToken t : numbers.extract(reply)) {
+            if (echoedByUser(t, userNumbers)) continue;
+            int sentenceStart = sentenceStartAt(reply, t.start());
             String sentence = sentenceAt(reply, t.start());
             String before = reply.substring(Math.max(0, t.start() - 2), t.start());
             String after = reply.substring(Math.min(reply.length(), t.end()));
+            String rule = null;
             if (before.contains("¥") || before.contains("￥") || MONEY_UNIT.matcher(after).find()) {
-                return "money:" + t.raw();
+                rule = "money:" + t.raw();
+            } else if (t.percent() && METRIC_WORD.matcher(sentence).find()) {
+                rule = "metric-percent:" + t.raw();
+            } else if (sentence.contains("同比") || sentence.contains("环比")) {
+                rule = "yoy-mom:" + t.raw();
+            } else if (t.multiplier().compareTo(BigDecimal.ONE) > 0 && !t.percent()
+                    && (METRIC_WORD.matcher(sentence).find() || METRIC_SUBJECT.matcher(sentence).find())) {
+                rule = "big-number:" + t.raw(); // 「营收约 35 万」「销售额 120 万左右」: 不带「元」也是金额 / 量级
+            } else if (QUANTITY_UNIT.matcher(after).find() && BUSINESS_SUBJECT.matcher(sentence).find()) {
+                rule = "business-quantity:" + t.raw();
+            } else if (!t.percent() && BARE_AFTER.matcher(after).find() && METRIC_SUBJECT.matcher(sentence).find()) {
+                rule = "business-bare-number:" + t.raw(); // 「产量达到 1200」「库存还有 200 多」
             }
-            if (t.percent() && METRIC_WORD.matcher(sentence).find()) {
-                return "metric-percent:" + t.raw();
-            }
-            if (sentence.contains("同比") || sentence.contains("环比")) {
-                return "yoy-mom:" + t.raw();
-            }
-            if (QUANTITY_UNIT.matcher(after).find() && BUSINESS_SUBJECT.matcher(sentence).find()) {
-                return "business-quantity:" + t.raw();
-            }
+            if (rule != null) hits.add(new Hit(rule, sentenceStart));
         }
         Matcher m = SENTENCE.matcher(reply);
         while (m.find()) {
             String s = m.group();
             if (TIME_ANCHOR.matcher(s).find() && FACT_SUBJECT.matcher(s).find()
                     && TREND_WORD.matcher(s).find() && !CONDITIONAL.matcher(s).find()) {
-                return "business-claim:" + s.strip();
+                hits.add(new Hit("business-claim:" + s.strip(), m.start()));
             }
         }
-        return null;
+        return hits;
+    }
+
+    /** 用户原话里写过同一个数 (含同样的百分号 / 万亿量级) ⇒ 是复述, 不是编造。 */
+    private static boolean echoedByUser(FactoryNumberProvenance.NumberToken t,
+                                        List<FactoryNumberProvenance.NumberToken> userNumbers) {
+        for (FactoryNumberProvenance.NumberToken u : userNumbers) {
+            if (u.value().compareTo(t.value()) == 0) return true;
+        }
+        return false;
+    }
+
+    /** 去掉命中句子, 剩下的通用建议前面加说明; 一句都不剩时只给提示 (不带销售菜单)。 */
+    private String adviceWithoutFacts(String reply, List<Hit> hits) {
+        java.util.Set<Integer> dropped = new java.util.HashSet<>();
+        for (Hit h : hits) dropped.add(h.sentenceStart());
+        StringBuilder kept = new StringBuilder();
+        Matcher m = SENTENCE_WITH_DELIMITER.matcher(reply);
+        while (m.find()) {
+            if (!dropped.contains(m.start())) kept.append(m.group());
+        }
+        String remaining = kept.toString().strip();
+        boolean usable = remaining.codePoints().filter(Character::isLetterOrDigit).count() >= 8
+                && hits(remaining, null).isEmpty();
+        return usable ? ADVICE_KEPT_PREFIX + remaining + "\n\n" + ADVICE_DATA_NOTICE : ADVICE_DATA_NOTICE;
+    }
+
+    private static int sentenceStartAt(String text, int index) {
+        Matcher m = SENTENCE.matcher(text);
+        while (m.find()) {
+            if (index >= m.start() && index < m.end()) return m.start();
+        }
+        return -1;
     }
 
     private static String sentenceAt(String text, int index) {
@@ -210,8 +309,10 @@ public class ChatBusinessFactGuard {
             }
         }
         if (r.decision() == Decision.BLOCKED) {
-            String shown = original.length() > 120 ? original.substring(0, 120) + "…" : original;
-            log.warn("[ChatBusinessFactGuard] site={} decision=BLOCKED rule={} reply='{}'", site, r.rule(), shown);
+            // 不写回复原文 (里面可能有用户或客户信息): 只记命中的规则类别和长度
+            String rule = r.rule() == null ? "?" : r.rule().split(":", 2)[0];
+            log.warn("[ChatBusinessFactGuard] site={} decision=BLOCKED rule={} replyLength={}",
+                    site, rule, original == null ? 0 : original.length());
         }
         return r;
     }

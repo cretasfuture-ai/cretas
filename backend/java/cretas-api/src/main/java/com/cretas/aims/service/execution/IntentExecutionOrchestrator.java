@@ -2310,7 +2310,8 @@ public class IntentExecutionOrchestrator {
                         CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);
             } else {
                 // 没有任何数据进模型: 回复里的业务数字 / 业务事实都没有出处, 不下发 (常识数字照常放行)
-                response = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, response);
+                response = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput, response,
+                        questionType == QuestionType.GENERAL_QUESTION);
             }
             return response;
         } catch (Exception e) {

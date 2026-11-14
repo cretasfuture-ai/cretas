@@ -320,4 +320,64 @@ class SseF006BossMiniContractTest {
                 eq("factory_super_admin"), any());
         verifyNoInteractions(mini, cloud, knowledge);
     }
+
+    private void answerWith(String content) throws Exception {
+        doAnswer(call -> {
+            Consumer<F006BossQuestionClient.Metadata> meta = call.getArgument(5);
+            Consumer<String> tokens = call.getArgument(6);
+            meta.accept(new F006BossQuestionClient.Metadata("mac-mini", "qwen3.8:27b",
+                    call.getArgument(4), CORRELATION));
+            tokens.accept(content.substring(0, content.length() / 2));
+            tokens.accept(content.substring(content.length() / 2));
+            return new F006BossQuestionClient.Answer(content, "mac-mini", "qwen3.8:27b",
+                    "stop", CORRELATION, new F006BossQuestionClient.Usage(1, 1, 2));
+        }).when(mini).stream(anyString(), anyLong(), anyString(), anyString(), anyBoolean(), any(), any(), any());
+    }
+
+    private List<Object> sentPayloads(String event) {
+        return mockingDetails(service).getInvocations().stream()
+                .filter(i -> "sendSseEvent".equals(i.getMethod().getName()) && event.equals(i.getArgument(1)))
+                .map(i -> (Object) i.getArgument(2))
+                .toList();
+    }
+
+    @Test
+    void bossQuestionFabricatedNumbersAreBlockedBeforeAnyTokenAndCounted() throws Exception {
+        com.cretas.aims.ai.grounding.ChatBusinessFactGuard guard =
+                (com.cretas.aims.ai.grounding.ChatBusinessFactGuard)
+                        ReflectionTestUtils.getField(service, "chatBusinessFactGuard");
+        assertThat(mini.shouldRoute("F006", 77L, "factory_super_admin")).as("前提: 走 F006 老板提问通道").isTrue();
+        answerWith("这个月销售额约35万，同比增长 8%，继续保持。");
+
+        execute("F006", 77L, "factory_super_admin", false);
+
+        verify(mini).stream(eq("F006"), eq(77L), eq("factory_super_admin"), eq(QUESTION), eq(false), any(), any(), any());
+        assertThat(guard.total(SseStreamingService.MINI_FACT_GUARD_SITE))
+                .as("必然发生的读数: 闸确实跑了").isEqualTo(1);
+        assertThat(guard.count(SseStreamingService.MINI_FACT_GUARD_SITE,
+                com.cretas.aims.ai.grounding.ChatBusinessFactGuard.Decision.BLOCKED)).isEqualTo(1);
+        assertThat(sentPayloads("token")).as("有 token 下发 (被改写的文本)").isNotEmpty()
+                .allSatisfy(t -> assertThat(String.valueOf(t)).doesNotContain("35万", "8%", "同比"));
+        IntentExecuteResponse response = (IntentExecuteResponse) sentPayloads("result").get(0);
+        assertThat(response.getFormattedText()).doesNotContain("35万", "8%", "同比");
+        assertThat(response.getFormattedText()).contains("先查");
+    }
+
+    @Test
+    void bossQuestionCommonSenseAnswerPassesUnchangedAndProgressIsSentWhileHolding() throws Exception {
+        com.cretas.aims.ai.grounding.ChatBusinessFactGuard guard =
+                (com.cretas.aims.ai.grounding.ChatBusinessFactGuard)
+                        ReflectionTestUtils.getField(service, "chatBusinessFactGuard");
+        answerWith("冷库建议控制在 0-4℃，HACCP 有 7 个原则。");
+
+        execute("F006", 77L, "factory_super_admin", false);
+
+        assertThat(guard.count(SseStreamingService.MINI_FACT_GUARD_SITE,
+                com.cretas.aims.ai.grounding.ChatBusinessFactGuard.Decision.PASS)).isEqualTo(1);
+        assertThat(((IntentExecuteResponse) sentPayloads("result").get(0)).getFormattedText())
+                .isEqualTo("冷库建议控制在 0-4℃，HACCP 有 7 个原则。");
+        assertThat(sentPayloads("progress")).as("攒的期间发 progress").hasSize(1);
+        assertThat(String.valueOf(sentPayloads("progress").get(0)))
+                .contains(SseStreamingService.GENERATING_PROGRESS_MESSAGE);
+    }
 }

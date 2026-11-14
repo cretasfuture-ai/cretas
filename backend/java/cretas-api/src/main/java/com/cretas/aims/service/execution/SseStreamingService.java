@@ -95,6 +95,7 @@ public class SseStreamingService {
 
     static final String CHAT_FACT_GUARD_SITE = "conversational-no-data-stream";
     static final String MINI_FACT_GUARD_SITE = "f006-boss-question";
+    static final String GENERATING_PROGRESS_MESSAGE = "正在生成回答...";
     private final DashScopeConfig dashScopeConfig;
 
     @Autowired(required = false)
@@ -1739,6 +1740,8 @@ public class SseStreamingService {
         StringBuilder held = new StringBuilder();
         com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
                 redacted.streamRestorer(held::append);
+        // 攒的这段时间用户看不到 token: 先发 progress (沿用既有事件类型), 免得首字等待像卡住
+        sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
         try {
             dashScopeClient.chatCompletionStream(aiRequest,
                 restorer,
@@ -1747,7 +1750,8 @@ public class SseStreamingService {
                         restorer.flush();
                         String modelContent = response.getContent() != null
                                 ? redacted.restore(response.getContent()) : held.toString();
-                        String fullContent = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, modelContent);
+                        String fullContent = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput,
+                                modelContent, questionType == QuestionType.GENERAL_QUESTION);
                         if (!fullContent.isEmpty()) {
                             sendSseEvent(emitter, "token", fullContent);
                         }
@@ -1820,6 +1824,7 @@ public class SseStreamingService {
         StringBuilder held = new StringBuilder();
         com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
                 redacted.streamRestorer(held::append);
+        sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
         try {
             var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
@@ -1833,7 +1838,8 @@ public class SseStreamingService {
                         }
                     }, restorer, cancellation);
             restorer.flush();
-            String content = chatBusinessFactGuard.enforce(MINI_FACT_GUARD_SITE, redacted.restore(answer.content()));
+            String content = chatBusinessFactGuard.enforce(MINI_FACT_GUARD_SITE, userInput,
+                    redacted.restore(answer.content()), true);
             if (content != null && !content.isEmpty()) {
                 try {
                     sendSseEvent(emitter, "token", content);

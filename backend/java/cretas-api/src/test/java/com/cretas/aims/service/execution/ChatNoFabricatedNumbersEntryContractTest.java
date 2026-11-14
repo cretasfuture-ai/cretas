@@ -169,6 +169,38 @@ class ChatNoFabricatedNumbersEntryContractTest {
         assertThat(h.guard.count(h.chatSite(), ChatBusinessFactGuard.Decision.PASS)).isEqualTo(1);
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("咨询问题 (GENERAL_QUESTION) 回复里夹了编的数: 去掉那句、保留通用建议、不回销售菜单")
+    void adviceQuestionKeepsGeneralAdviceWhenFabricatedNumberIsDropped(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        String input = "怎么降低成本？";
+        assertThat(ChatBusinessFactGuard.isBusinessQuestion(input)).as("前提: 咨询不是业务问法").isFalse();
+        org.mockito.Mockito.doReturn(QuestionType.GENERAL_QUESTION).when(h.knowledgeBase).detectQuestionType(input);
+        h.chatReplies("降低成本可以从优化采购批量、减少损耗入手。您本月成本同比增长 8%，要重点关注。");
+
+        IntentExecuteResponse shown = h.send(input);
+
+        assertThat(h.chatCalls()).as("阳性对照: 闲聊模型被调用").isEqualTo(1);
+        assertThat(shown.getFormattedText()).contains("优化采购批量").contains("先查询真实数据")
+                .doesNotContain("8%", "同比", "出货记录");
+        assertThat(h.sentTokens()).noneMatch(t -> t.contains("8%") || t.contains("同比"));
+        assertThat(h.guard.count(h.chatSite(), ChatBusinessFactGuard.Decision.BLOCKED)).isEqualTo(1);
+    }
+
+    @org.junit.jupiter.api.Test
+    @DisplayName("流式闲聊: 攒回复的期间先发 progress 事件")
+    void streamingChatSendsProgressWhileHoldingTheReply() throws Exception {
+        Harness h = new Harness(Entry.SSE);
+        h.chatReplies("早上好！冷库记得保持在 0-4℃。");
+
+        h.send("早上好");
+
+        assertThat(h.sentEventTypes()).contains("progress");
+        assertThat(h.sentEventTypes().indexOf("progress")).as("progress 在最终 token 之前")
+                .isLessThan(h.sentEventTypes().indexOf("token"));
+    }
+
     // ------------------------------------------------------------------ harness
 
     private static final class Harness {
@@ -287,6 +319,13 @@ class ChatNoFabricatedNumbersEntryContractTest {
             return org.mockito.Mockito.mockingDetails(sse).getInvocations().stream()
                     .filter(i -> "sendSseEvent".equals(i.getMethod().getName()) && "token".equals(i.getArgument(1)))
                     .map(i -> String.valueOf((Object) i.getArgument(2)))
+                    .toList();
+        }
+
+        List<String> sentEventTypes() {
+            return org.mockito.Mockito.mockingDetails(sse).getInvocations().stream()
+                    .filter(i -> "sendSseEvent".equals(i.getMethod().getName()))
+                    .map(i -> String.valueOf((Object) i.getArgument(1)))
                     .toList();
         }
 
