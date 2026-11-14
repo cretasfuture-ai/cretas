@@ -73,7 +73,7 @@ class AIConfig:
     #   v1 = 旧口径 (回滚); v3 / conservative = 全部工厂保守; v4 / aggressive = 全部工厂激进。
     decision_luna_policy: str = "factory"
     luna_ask_threshold: float = 0.6  # 保守档 (v3)
-    luna_ask_threshold_aggressive: float = 0.8  # 激进档; 来由见 steve300-calibrate-20261114.md
+    luna_ask_threshold_aggressive: float = 0.4  # 激进档; 来由见 steve300-calibrate-20261114.md
     luna_read_threshold: float = 0.15
     luna_margin: float = 0.3
     luna_write_threshold: float = 0.4
@@ -116,7 +116,7 @@ class AIConfig:
             decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
             decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "factory").strip().lower() or "factory"),
             luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.6")),
-            luna_ask_threshold_aggressive=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD_AGGRESSIVE", "0.8")),
+            luna_ask_threshold_aggressive=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD_AGGRESSIVE", "0.4")),
             luna_read_threshold=float(os.environ.get("AI_DECISION_LUNA_READ_THRESHOLD", "0.15")),
             luna_margin=float(os.environ.get("AI_DECISION_LUNA_MARGIN", "0.3")),
             luna_write_threshold=float(os.environ.get("AI_DECISION_LUNA_WRITE_THRESHOLD", "0.4")),

@@ -5,7 +5,7 @@ ask_probability → ai.ask_policy.resolve; 只替换最外层网络 (Luna Choice
 ``call_decision_predicate``) 和目录快照。
 
 守的行为:
-  - 同一句话、同一个判断题概率: 请求带 CONSERVATIVE 的工厂先问, 带 AGGRESSIVE 的工厂直接办 (门槛按档位);
+  - 同一句话: 请求带 CONSERVATIVE 的工厂先问, 带 AGGRESSIVE 的工厂直接办 (判断题规则与门槛都按档位);
   - 判断题规则按档位发 (保守 = ASK_PREDICATE_RULES, 激进 = ASK_PREDICATE_RULES_AGGRESSIVE);
   - 请求没带 / 认不出档位 ⇒ 激进 (默认档), 结果上标 askPolicyDefaulted 并计数 intent_ask_policy_total;
   - 全局开关优先: v3 ⇒ 不管请求带什么都按保守; v1 ⇒ 判断题根本不发;
@@ -70,7 +70,7 @@ def _isolate(monkeypatch, egress_as_factory_request):
 
     async def predicate(instructions, text, *, name="needs_clarification", timeout=6.0):
         state["predicate"].append(instructions)
-        return state["p"]
+        return state["p"](instructions) if callable(state["p"]) else state["p"]
     monkeypatch.setattr(llm_router, "call_decision_choice", choice)
     monkeypatch.setattr(llm_router, "call_decision_predicate", predicate)
 
@@ -116,16 +116,24 @@ def _counter(tier, source):
 
 
 def test_same_sentence_asks_in_conservative_factory_and_executes_in_aggressive(_isolate):
-    """判断题 0.7 落在两档门槛之间 (保守 0.6 <= 0.7 < 激进门槛): 一个先问、一个按默认直接办。"""
-    cfg = AIConfig()
-    assert cfg.luna_ask_threshold <= 0.7 < cfg.luna_ask_threshold_aggressive  # 前提: 0.7 确实夹在两档之间
-    _isolate["p"] = 0.7
+    """同一句话: 判断题按各档规则作答 (保守规则 0.9 / 激进规则 0.1, 形如实测「记客户需求」0.86 / 0.07),
+    保守档的工厂先问, 激进档的工厂按默认直接办。"""
+    _isolate["p"] = lambda rules: 0.9 if rules == ASK_PREDICATE_RULES else 0.1
     cons = _post(ask_policy_value="CONSERVATIVE")
     agg = _post(ask_policy_value="AGGRESSIVE")
     assert _asked(cons) and cons["timingMs"]["lunaAsk"] == 1 and cons["timingMs"]["askTierConservative"] == 1
     assert not _asked(agg) and agg["bestMatch"]["intentCode"] == "MATERIAL_BATCH_QUERY"
     assert agg["timingMs"]["lunaReadWithDefaults"] == 1 and agg["timingMs"]["askTierAggressive"] == 1
     assert "askPolicyDefaulted" not in agg["timingMs"]
+
+
+def test_ask_threshold_follows_the_factory_tier(_isolate):
+    """门槛也按档: 判断题 0.5 夹在激进门槛 (0.4) 与保守门槛 (0.6) 之间 ⇒ 激进档先问、保守档直接办。"""
+    cfg = AIConfig()
+    assert cfg.luna_ask_threshold_aggressive <= 0.5 < cfg.luna_ask_threshold  # 前提: 0.5 确实夹在两档之间
+    _isolate["p"] = 0.5
+    assert _asked(_post(ask_policy_value="AGGRESSIVE"))
+    assert not _asked(_post(ask_policy_value="CONSERVATIVE"))
 
 
 def test_predicate_rules_follow_the_factory_tier(_isolate):
@@ -140,7 +148,7 @@ def test_predicate_rules_follow_the_factory_tier(_isolate):
 @pytest.mark.parametrize("value,source", [(None, "default_missing"), ("MEDIUM", "default_unknown")])
 def test_missing_or_unknown_tier_uses_default_and_is_counted(_isolate, value, source):
     before = _counter("aggressive", source)
-    _isolate["p"] = 0.7
+    _isolate["p"] = 0.2
     data = _post(ask_policy_value=value)
     assert not _asked(data) and data["timingMs"]["askTierAggressive"] == 1  # 默认档 = 激进
     assert data["timingMs"]["askPolicyDefaulted"] == 1
@@ -149,7 +157,7 @@ def test_missing_or_unknown_tier_uses_default_and_is_counted(_isolate, value, so
 
 
 def test_global_switch_overrides_the_factory_tier(_isolate):
-    _isolate["p"] = 0.7
+    _isolate["p"] = lambda rules: 0.9 if rules == ASK_PREDICATE_RULES else 0.1
     forced = _post(ask_policy_value="AGGRESSIVE", decision_luna_policy="v3")
     assert _asked(forced) and forced["timingMs"]["askTierConservative"] == 1
     assert _isolate["predicate"] == [ASK_PREDICATE_RULES]
