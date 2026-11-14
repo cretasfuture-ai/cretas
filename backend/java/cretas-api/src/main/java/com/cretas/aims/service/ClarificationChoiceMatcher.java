@@ -115,7 +115,12 @@ public final class ClarificationChoiceMatcher {
         if (best < 0 || tie) {
             return -1;
         }
-        String extra = DIGITS.matcher(leftover).replaceAll("");
+        // 关键词之外还带了数字 (「卤鸭腿，改成80」) = 同时在说新的数据, 不当成单纯的选择 (否则那个 80 会被悄悄丢掉),
+        // 交回识别按新话处理
+        if (DIGITS.matcher(leftover).find()) {
+            return -1;
+        }
+        String extra = PUNCT.matcher(leftover).replaceAll("");
         if (extra.length() > MAX_LEFTOVER_CHARS || NOT_A_PICK.matcher(extra).find()) {
             return -1;
         }

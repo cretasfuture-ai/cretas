@@ -20,6 +20,11 @@ public interface ParameterChoiceResolver {
     /** 要选的是哪个参数 (如 {@code taskId})。 */
     String choiceParameter();
 
+    /** 一线说法的参数名 (「哪一道工序」), 重问 / 恢复任务时用, 不说「编号」。 */
+    default String choiceLabel() {
+        return "其中一项";
+    }
+
     /**
      * @param params    已抽到的参数 (含已给的产量, 只读)
      * @param userInput 用户原话 (用来按产品名 / 批次 / 工序名缩小范围)
@@ -42,22 +47,26 @@ public interface ParameterChoiceResolver {
         NONE
     }
 
-    /** {@code message} 是给用户的整段话 (MANY / NONE 时用); SINGLE 时 {@code choices} 恰好一项。 */
-    record Resolution(Kind kind, List<Choice> choices, String message) {
+    /**
+     * {@code message} 是给用户的话 (MANY 时是选项清单本身, NONE 时是整段话); SINGLE 时 {@code choices} 恰好一项。
+     * MANY 的 {@code replyHint} 在会话开成功时接在清单后 (「回前面的数字…」), {@code rephraseHint} 在没开成会话时代替它
+     * (回复没人接, 不许再叫用户「回数字」)。
+     */
+    record Resolution(Kind kind, List<Choice> choices, String message, String replyHint, String rephraseHint) {
         public Resolution {
             choices = choices == null ? List.of() : List.copyOf(choices);
         }
 
         public static Resolution single(Choice choice) {
-            return new Resolution(Kind.SINGLE, List.of(choice), null);
+            return new Resolution(Kind.SINGLE, List.of(choice), null, null, null);
         }
 
-        public static Resolution many(List<Choice> choices, String message) {
-            return new Resolution(Kind.MANY, choices, message);
+        public static Resolution many(List<Choice> choices, String message, String replyHint, String rephraseHint) {
+            return new Resolution(Kind.MANY, choices, message, replyHint, rephraseHint);
         }
 
         public static Resolution none(String message) {
-            return new Resolution(Kind.NONE, List.of(), message);
+            return new Resolution(Kind.NONE, List.of(), message, null, null);
         }
     }
 }

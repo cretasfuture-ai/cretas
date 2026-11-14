@@ -123,7 +123,16 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
      * 指派给别人的不出现 (越权); ⛔ 不新写查询。只读。
      */
     @Override
+    public String choiceLabel() {
+        return "哪一道工序";
+    }
+
+    @Override
     public Resolution resolveChoices(String factoryId, Long userId, Map<String, Object> params, String userInput) {
+        if (userId == null) {
+            // 不知道是谁就不查: 传 null 会列全厂的 (口径是「我的 + 未指派」), 宁可按没有处理
+            return Resolution.none("您现在没有进行中的工序任务。要报工的话，请先对要做的那道工序说「开工」。");
+        }
         List<WorkProcessTaskDTO> mine = workProcessTaskService
                 .list(factoryId, com.cretas.aims.entity.workprocess.WorkProcessTask.Status.IN_PROGRESS,
                         null, userId, org.springframework.data.domain.PageRequest.of(0, 50))
@@ -148,8 +157,9 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
         if (candidates.size() > listed.size()) {
             message.append("还有 ").append(candidates.size() - listed.size()).append(" 道没列出，说产品名或工序名可以缩小范围。\n");
         }
-        message.append("回前面的数字，或者直接说产品名、工序名都行。");
-        return Resolution.many(listed, message.toString());
+        return Resolution.many(listed, message.toString().stripTrailing(),
+                "回前面的数字，或者直接说产品名、工序名都行。",
+                "请重新说一遍，带上产品名或工序名，比如「红烧肉切块报工」。");
     }
 
     /** 用户话里已经带了产品名 / 批次号 / 工序名: 先按它缩小候选 (一个都对不上就不缩, 照样让他选)。 */

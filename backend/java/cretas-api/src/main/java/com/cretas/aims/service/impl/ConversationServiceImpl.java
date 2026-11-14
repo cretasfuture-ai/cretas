@@ -270,13 +270,12 @@ public class ConversationServiceImpl implements ConversationService {
                 .build());
     }
 
-    /** 待填参数的类型标记: 这个参数是「从列出的几项里选」, 不是自由文本 / 数字。 */
-    public static final String CHOICE_PARAM_TYPE = "CHOICE";
+    private static final String CHOICE_PARAM_TYPE = ConversationSession.CHOICE_PARAM_TYPE;
 
     @Override
     @Transactional
     public boolean attachParameterChoices(String factoryId, Long userId, String sessionId,
-                                          String paramName, List<CandidateInfo> choices) {
+                                          String paramName, String paramLabel, List<CandidateInfo> choices) {
         if (sessionId == null || sessionId.isBlank() || paramName == null || paramName.isBlank()
                 || choices == null || choices.isEmpty()) {
             return false;
@@ -296,6 +295,9 @@ public class ConversationServiceImpl implements ConversationService {
             for (ConversationSession.RequiredParameter p : required) {
                 if (paramName.equals(p.getName()) && !p.isCollected()) {
                     p.setType(CHOICE_PARAM_TYPE);
+                    if (paramLabel != null && !paramLabel.isBlank()) {
+                        p.setLabel(paramLabel);
+                    }
                     marked = true;
                 }
             }
@@ -321,8 +323,8 @@ public class ConversationServiceImpl implements ConversationService {
     }
 
     /**
-     * 参数收集里这一问是不是「从选项里选」: 是 → 用选项匹配 (序号 / 产品名 / 工序名), 对上就填值, 没对上
-     * 把选项再列一遍 (不交给模型猜); 返回 null 表示这一问不是选择题, 走原来的模型抽参。
+     * 选择题这一问的回复: 对上选项 (序号 / 产品名 / 工序名) 就填值并返回 null (继续原流程);
+     * 没对上 = 不是在回答, 作废选项并返回 CANCELLED (调用方当新话重新识别)。
      */
     private ConversationResponse continueParameterChoice(ConversationSession session, String userReply) {
         Optional<ConversationSession.RequiredParameter> pending = session.getNextPendingParameter()
@@ -333,22 +335,15 @@ public class ConversationServiceImpl implements ConversationService {
         }
         int index = ClarificationChoiceMatcher.matchParameterChoice(userReply, options);
         if (index < 0) {
-            StringBuilder again = new StringBuilder("没对上是哪一项，请回选项前面的数字（比如 1），或者说产品名、工序名：\n");
-            for (int i = 0; i < options.size(); i++) {
-                again.append(i + 1).append(". ").append(options.get(i).getIntentName()).append("\n");
-            }
-            String message = again.toString().stripTrailing();
-            session.addAssistantMessage(message);
+            // 没选中 = 不是在回答这一问 (「不报了」「红烧肉还剩多少」): 旧选项作废, 交回识别当新话, 不消耗轮次、不回「没对上」
+            session.cancel();
             sessionRepository.save(session);
             return ConversationResponse.builder()
                     .sessionId(session.getSessionId())
-                    .currentRound(session.getCurrentRound())
-                    .maxRounds(session.getMaxRounds())
-                    .status(session.getStatus())
+                    .status(SessionStatus.CANCELLED)
                     .completed(false)
-                    .message(message)
+                    .message("选项已作废")
                     .intentCode(session.getKnownIntentCode())
-                    .requiresConfirmation(true)
                     .build();
         }
         session.addCollectedParameter(pending.get().getName(), options.get(index).getIntentCode());
@@ -442,13 +437,11 @@ public class ConversationServiceImpl implements ConversationService {
         }
 
         // 这一问是选择题 (选哪一道工序 …): 用选项匹配, 不让模型去「理解」一个序号
-        boolean choiceQuestion = session.getNextPendingParameter()
-                .filter(p -> CHOICE_PARAM_TYPE.equals(p.getType())).isPresent()
-                && !session.getCandidates().isEmpty();
+        boolean choiceQuestion = session.isAwaitingChoice();
         if (choiceQuestion) {
-            ConversationResponse askAgain = continueParameterChoice(session, userReply);
-            if (askAgain != null) {
-                return askAgain;
+            ConversationResponse notAnAnswer = continueParameterChoice(session, userReply);
+            if (notAnAnswer != null) {
+                return notAnAnswer;
             }
         }
 

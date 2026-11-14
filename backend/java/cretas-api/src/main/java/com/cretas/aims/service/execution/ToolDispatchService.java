@@ -1477,21 +1477,20 @@ public class ToolDispatchService {
                 if (resolution.choices().isEmpty()) {
                     return null;
                 }
+                String body = resolution.message();
                 IntentExecuteResponse asked = IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent.getIntentCode())
                         .intentName(intent.getIntentName())
                         .intentCategory(intent.getIntentCategory())
                         .status("NEED_MORE_INFO")
-                        .message(resolution.message())
-                        .formattedText(resolution.message())
-                        .clarificationQuestions(List.of(resolution.message()))
                         .aiMode("WRITE")
                         .executedAt(LocalDateTime.now())
                         .build();
                 Map<String, Object> missing = new HashMap<>();
                 missing.put("missingParameters", List.of(param));
                 openPreviewQuestionSession(tool, factoryId, userId, intent, params, missing, asked);
+                boolean attached = false;
                 if (asked.getSessionId() != null && conversationService != null) {
                     List<ConversationService.CandidateInfo> options = new ArrayList<>();
                     for (com.cretas.aims.ai.tool.ParameterChoiceResolver.Choice c : resolution.choices()) {
@@ -1501,14 +1500,21 @@ public class ToolDispatchService {
                                         com.cretas.aims.service.ClarificationChoiceMatcher.KEYWORD_SEPARATOR, c.keywords()))
                                 .build());
                     }
-                    if (!conversationService.attachParameterChoices(
-                            factoryId, userId, asked.getSessionId(), param, options)) {
-                        // 没挂上选项 = 回「1」会被当成别的话: 不带会话, 让用户重新说一遍 (不留一个答不对的追问)
+                    attached = conversationService.attachParameterChoices(
+                            factoryId, userId, asked.getSessionId(), param, resolver.choiceLabel(), options);
+                    if (!attached) {
+                        // 没挂上选项 = 回「1」会被当成别的话: 不带会话 (不留一个答不对的追问)
                         log.warn("选项没挂上会话, 追问不带会话: tool={}, session={}", tool.getToolName(), asked.getSessionId());
                         conversationService.cancelConversation(factoryId, userId, asked.getSessionId());
                         asked.setSessionId(null);
                     }
                 }
+                // 回复有人接才叫用户「回数字」; 没会话时只能请他重新说一遍
+                String hint = attached ? resolution.replyHint() : resolution.rephraseHint();
+                String text = hint == null || hint.isBlank() ? body : body + "\n" + hint;
+                asked.setMessage(text);
+                asked.setFormattedText(text);
+                asked.setClarificationQuestions(List.of(text));
                 return asked;
             }
             default:

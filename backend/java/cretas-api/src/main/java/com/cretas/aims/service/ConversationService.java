@@ -100,10 +100,12 @@ public interface ConversationService {
      * 不再让模型去「理解」一个数字 (prod 2026-11-14: 「请提供工序任务编号」让一线报内部编号)。
      * {@code CandidateInfo.intentCode} = 回填的值, {@code intentName} = 给用户看的话, {@code description} = 关键词 (用 | 隔开)。
      *
+     * {@code paramLabel} = 一线说法的参数名 (「哪一道工序」), 重问 / 恢复任务时用它, 不说「编号」。
+     *
      * @return 挂上了 true; 会话不存在 / 不是本人本厂的 / 不在收集参数 / 没有这个待填参数 → false (调用方照旧只发追问)
      */
     default boolean attachParameterChoices(String factoryId, Long userId, String sessionId,
-                                           String paramName, List<CandidateInfo> choices) {
+                                           String paramName, String paramLabel, List<CandidateInfo> choices) {
         return false;
     }
 

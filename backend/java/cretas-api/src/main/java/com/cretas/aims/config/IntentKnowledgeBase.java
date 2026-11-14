@@ -8062,6 +8062,11 @@ public class IntentKnowledgeBase {
             // 规则2: 短语包含匹配 - 短语长度必须 >= 输入长度的40%
             // 规则3: 短语长度 >= 4 的长短语，允许直接包含匹配
             // v21.0: 规则4: 短输入（<=6字）放宽到 phraseLength>=2，因为短输入信息不足以支撑分类器
+            // 「我要报工」这类说法只认整句 / 句首 (后面最多跟产量): 否则「我要报工记录」「查看报工产量」「报工产量统计」
+            // 这些查询会被它抢成完成工序并跳过决策层
+            if (REPORT_WORK_PHRASES.contains(phrase) && !REPORT_WORK_SENTENCE.matcher(normalizedInput).matches()) {
+                continue;
+            }
             boolean matchedInNormal = normalizedInput.contains(phrase);
             boolean matchedInStripped = !matchedInNormal && strippedInput.contains(phrase);
             // v34: 第三层尝试 — 剥离产品名后匹配（如"生产带鱼罐头"→"生产罐头"）
@@ -8091,6 +8096,19 @@ public class IntentKnowledgeBase {
 
         return Optional.empty();
     }
+
+    /** 报工说法 (见 phraseToIntentMapping 里「我要报工」一组): 命中后还要整句符合 {@link #REPORT_WORK_SENTENCE}。 */
+    private static final Set<String> REPORT_WORK_PHRASES = Set.of(
+            "我要报工", "我想报工", "我来报工", "报工，产量", "报工,产量", "报工产量");
+
+    /**
+     * 整句只能是「[我要/我想/我来]报工」+ 可选的「产量/做了」+ 数字 + 可选单位 (+ 语气词):
+     * 「我要报工」「我要报工，产量100」「我想报工，做了100斤」「报工，产量100」。
+     */
+    private static final java.util.regex.Pattern REPORT_WORK_SENTENCE = java.util.regex.Pattern.compile(
+            "^(?:(?:我要|我想|我来|想|要)报工|报工)"
+                    + "(?:[，,、\\s]*(?:产量|做了|做完了?)?\\s*[0-9]+(?:\\.[0-9]+)?\\s*(?:kg|公斤|千克|斤|吨|个|箱|袋|包|件|桶|盒)?)?"
+                    + "[啊吧了的呢]?[。.!！]*$");
 
     // ==================== v11.5: 实体-意图冲突检测 ====================
 

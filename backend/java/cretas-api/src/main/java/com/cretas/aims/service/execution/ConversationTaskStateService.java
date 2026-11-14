@@ -127,7 +127,11 @@ public class ConversationTaskStateService {
                                                 Function<String, List<String>> intentNames) {
         List<RequiredParameter> pending = active.getRequiredParameters().stream()
                 .filter(p -> !p.isCollected()).toList();
-        TaskContinuationRule.Action action = TaskContinuationRule.forActive(input, pending, isKnownCommand);
+        // 选择题 (选哪一道工序): 只有真对上某个选项才算回答, 其它 16 字内的话一律当新话 (打断), 不拿来「再问一遍」
+        TaskContinuationRule.Action action = active.isAwaitingChoice()
+                ? (com.cretas.aims.service.ClarificationChoiceMatcher.matchParameterChoice(input, active.getCandidates()) >= 0
+                        ? TaskContinuationRule.Action.ANSWER : TaskContinuationRule.Action.INTERRUPT)
+                : TaskContinuationRule.forActive(input, pending, isKnownCommand);
         if (action == TaskContinuationRule.Action.INTERRUPT && isEnabledFor(active.getFactoryId())
                 && TaskContinuationRule.resumeTarget(input, List.of(active), phraseIntent, intentNames).isPresent()) {
             return TaskContinuationRule.Action.REPEAT;
@@ -327,6 +331,15 @@ public class ConversationTaskStateService {
         if (unnamedMissing > 0) missing.add((missing.isEmpty() ? "" : "另 ") + unnamedMissing + " 项信息");
         if (!filled.isEmpty()) sb.append("已记下 ").append(String.join("，", filled)).append("。");
         if (!missing.isEmpty()) sb.append("还需要：").append(String.join("、", missing)).append("。");
+        if (session.isAwaitingChoice()) {
+            // 选择题: 恢复时把选项重新列出来 (回「1」才对得上), 不说内部编号
+            List<ConversationSession.CandidateIntent> options = session.getCandidates();
+            sb.append("\n");
+            for (int i = 0; i < options.size(); i++) {
+                sb.append(i + 1).append(". ").append(options.get(i).getIntentName()).append("\n");
+            }
+            sb.append("回前面的数字，或者直接说产品名、工序名。\n");
+        }
         sb.append("填好后会先给您确认，不会直接提交。");
         return sb.toString();
     }

@@ -30,6 +30,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -173,8 +175,8 @@ class WorkProcessReportChoiceContractTest {
     }
 
     @Test
-    @DisplayName("阴性对照: 同一产品下好几道工序、只说产品名 → 对不上, 再列一遍, 不猜")
-    void ambiguousProductNameAsksAgainInsteadOfGuessing() throws Exception {
+    @DisplayName("阴性对照: 同一产品下好几道工序、只说产品名 → 不猜, 当新话交回识别; 说全了(产品+工序)才选中")
+    void ambiguousProductNameIsNotGuessed() throws Exception {
         List<WorkProcessTaskDTO> sameProduct = List.of(
                 task(301, "红烧肉", "B-001", "切块", "100", "0"),
                 task(302, "红烧肉", "B-001", "炖煮", "100", "0"));
@@ -185,27 +187,76 @@ class WorkProcessReportChoiceContractTest {
         ConversationService.ConversationResponse reply =
                 conversations.continueConversation(FACTORY, USER, asked.getSessionId(), "红烧肉");
 
+        assertThat(reply.getStatus()).as("对不上 = 不是在回答, 交回识别").isEqualTo(ConversationSession.SessionStatus.CANCELLED);
         assertThat(reply.isCompleted()).isFalse();
-        assertThat(reply.getMessage()).contains("没对上").contains("1. 红烧肉").contains("2. 红烧肉");
         assertThat(store.get(asked.getSessionId()).getCollectedParameters()).doesNotContainKey("taskId");
-        // 再说「炖煮」就唯一了 (必发生: 不是会话坏了)
-        ConversationService.ConversationResponse again =
-                conversations.continueConversation(FACTORY, USER, asked.getSessionId(), "红烧肉炖煮那道");
-        assertThat(again.isCompleted()).isTrue();
-        assertThat(store.get(asked.getSessionId()).getCollectedParameters()).containsEntry("taskId", "302");
+        // 阳性对照: 产品 + 工序都说了就唯一, 同一套选项能选中 (不是会话坏了)
+        IntentExecuteResponse again = ask("我要报工，产量100");
+        ConversationService.ConversationResponse picked =
+                conversations.continueConversation(FACTORY, USER, again.getSessionId(), "红烧肉炖煮那道");
+        assertThat(picked.isCompleted()).isTrue();
+        assertThat(store.get(again.getSessionId()).getCollectedParameters()).containsEntry("taskId", "302");
+    }
+
+    @ParameterizedTest(name = "选项开着时回「{0}」→ 不是在选, 交回识别")
+    @ValueSource(strings = {"不报了", "算了", "红烧肉还剩多少", "查一下红烧肉库存", "卤鸭腿，改成80"})
+    @DisplayName("阴性对照 (M1): 16 字内的非选择句 (取消 / 问别的 / 同时改数) 不被旧选项截走, 也不回「没对上」")
+    void aNewSentenceIsNotAPickAndTheEntryRuleSaysInterrupt(String reply) throws Exception {
+        two();
+        IntentExecuteResponse asked = ask("我要报工，产量100");
+        ConversationSession session = store.get(asked.getSessionId());
+        assertThat(session.isAwaitingChoice()).as("前提: 选项真的挂在会话上").isTrue();
+
+        ConversationTaskStateService taskState = new ConversationTaskStateService(
+                mock(ConversationSessionRepository.class));
+        assertThat(taskState.classify(session, reply, text -> false, text -> Optional.empty(), code -> List.of()))
+                .as("入口的续轮规则: 不像在选 = 打断").isEqualTo(TaskContinuationRule.Action.INTERRUPT);
+
+        ConversationService.ConversationResponse r =
+                conversations.continueConversation(FACTORY, USER, asked.getSessionId(), reply);
+        assertThat(r.getStatus()).isEqualTo(ConversationSession.SessionStatus.CANCELLED);
+        assertThat(r.getMessage()).doesNotContain("没对上");
+        assertThat(store.get(asked.getSessionId()).getCollectedParameters()).doesNotContainKey("taskId");
+        // 阳性对照: 同一会话上回「2」是算回答的
+        IntentExecuteResponse fresh = ask("我要报工，产量100");
+        assertThat(taskState.classify(store.get(fresh.getSessionId()), "2", text -> false,
+                text -> Optional.empty(), code -> List.of())).isEqualTo(TaskContinuationRule.Action.ANSWER);
     }
 
     @Test
-    @DisplayName("阴性对照: 回的是另一句话(「查一下红烧肉库存」)不被旧选项截走")
-    void aNewSentenceMentioningTheProductIsNotAPick() throws Exception {
+    @DisplayName("没挂上会话时不叫用户「回数字」(回复没人接), 只请他重新说一遍")
+    void withoutASessionTheHintDoesNotPromiseNumberReplies() throws Exception {
+        two();
+        ReflectionTestUtils.setField(dispatch, "conversationService", null);
+
+        IntentExecuteResponse r = ask("我要报工，产量100");
+
+        assertThat(r.getStatus()).isEqualTo("NEED_MORE_INFO");
+        assertThat(r.getSessionId()).isNull();
+        assertThat(r.getMessage()).contains("1. 红烧肉").contains("请重新说一遍").doesNotContain("回前面的数字");
+    }
+
+    @Test
+    @DisplayName("不知道是谁(userId 为空)就不查, 不列全厂的任务")
+    void unknownUserNeverListsTheWholeFactory() {
+        WorkProcessTaskCompleteTool.Resolution r =
+                tool.resolveChoices(FACTORY, null, Map.of("actualQuantity", 100), "我要报工，产量100");
+
+        assertThat(r.kind()).isEqualTo(WorkProcessTaskCompleteTool.Kind.NONE);
+        verify(taskService, never()).list(anyString(), any(), any(), any(), any(Pageable.class));
+    }
+
+    @Test
+    @DisplayName("挂起后「继续报工」重问: 说「哪一道工序」并重新列选项, 不说工序任务编号")
+    void resumeMessageRelistsTheOptionsWithoutTheInternalId() throws Exception {
         two();
         IntentExecuteResponse asked = ask("我要报工，产量100");
 
-        ConversationService.ConversationResponse reply =
-                conversations.continueConversation(FACTORY, USER, asked.getSessionId(), "查一下红烧肉库存");
+        String message = ConversationTaskStateService.resumeMessage(
+                store.get(asked.getSessionId()), code -> List.of("完成工序"));
 
-        assertThat(reply.isCompleted()).isFalse();
-        assertThat(store.get(asked.getSessionId()).getCollectedParameters()).doesNotContainKey("taskId");
+        assertThat(message).contains("哪一道工序").contains("1. 红烧肉").contains("2. 卤鸭腿").contains("回前面的数字")
+                .doesNotContain("编号").doesNotContain("taskId");
     }
 
     // ------------------------------------------------------------------ 只有一个 / 一个都没有 / 话里带了名字

@@ -105,22 +105,30 @@ class ReportWorkPhraseShortcutEntryContractTest {
         assertThat(h.recognitionCalls()).as("短语命中不再去识别").isEmpty();
     }
 
-    @ParameterizedTest(name = "否定说法「{0}」不被短语抢走 (流式)")
-    @CsvSource({"不要报工了", "我不想报工", "别报工"})
-    @DisplayName("阴性对照: 否定说法不走短语快捷通道, 交给识别管线")
-    void negatedReportWorkIsLeftToRecognition(String input) throws Exception {
-        Harness h = new Harness(Entry.SSE);
-        when(h.preprocessor.detectNegationVeto(anyString(), any()))
-                .thenReturn(QueryPreprocessorService.NegationKind.VETO_WRITE);
+    @ParameterizedTest(name = "{0}: 否定/改口的报工句「{1}」不被新短语抢走")
+    @CsvSource({
+            "SSE,我要报工，不对，不要报了", "SSE,我不想报工产量100了", "SSE,我要报工吗", "SSE,我要报工，别提交",
+            "ORDINARY,我要报工，不对，不要报了", "ORDINARY,我不想报工产量100了", "ORDINARY,我要报工吗"})
+    @DisplayName("阴性对照: 含新短语的否定 / 疑问句, 真实否决闸 + 整句收窄后都不走快捷通道, 交给识别管线")
+    void negatedReportWorkIsLeftToRecognition(Entry entry, String input) throws Exception {
+        Harness h = new Harness(entry, true);
+        // 前提 (读数来源: 真实知识库): 若不收窄整句, 这句话会命中新短语 —— 守的是「含新短语」的句子
+        assertThat(h.knowledgeBase.matchPhrase(input, "FACTORY").orElse("(无)")).isNotEqualTo(PHRASE_INTENT);
 
         h.send(input);
 
-        assertThat(h.recognitionCalls()).as("没被短语抢 → 识别被调用 (阳性对照)").containsExactly(input);
-        assertThat(h.executedIntents).doesNotContain(PHRASE_INTENT);
+        assertThat(h.executedIntents).as("没被短语抢成直接执行").doesNotContain(PHRASE_INTENT);
+        if (entry == Entry.SSE) {
+            assertThat(h.recognitionCalls()).as("没被短语抢 → 交给识别 (阳性对照)").containsExactly(input);
+        } else {
+            assertThat(h.ordinaryResponse == null || !"WRITE_CONFIRM_REQUIRED".equals(h.ordinaryResponse.getStatus()))
+                    .as("普通入口没有把否定句当成报工确认").isTrue();
+        }
     }
 
     @ParameterizedTest(name = "查询类说法「{0}」仍不是报工")
-    @CsvSource({"报产量100", "报工情况", "报工查询", "查看报工记录", "报工详情"})
+    @CsvSource({"报产量100", "报工情况", "报工查询", "查看报工记录", "报工详情", "报工产量统计", "查看报工产量",
+            "上周报工产量", "我要报工记录", "我想报工的明细", "我要报工情况", "报工产量多少"})
     @DisplayName("阴性对照: 报产量 (产量查询) / 报工情况 / 报工记录 这些查询说法不被新短语抢成「完成工序」")
     void queryPhrasesAreNotStolenByReportWork(String input) {
         IntentKnowledgeBase kb = new IntentKnowledgeBase();
@@ -137,7 +145,7 @@ class ReportWorkPhraseShortcutEntryContractTest {
         final IntentPermissionGate permissionGate = mock(IntentPermissionGate.class);
         final SemanticCacheService semanticCache = mock(SemanticCacheService.class);
         final IntentKnowledgeBase knowledgeBase = new IntentKnowledgeBase();
-        final QueryPreprocessorService preprocessor = mock(QueryPreprocessorService.class);
+        final QueryPreprocessorService preprocessor;
         final ToolDispatchService toolDispatch = mock(ToolDispatchService.class);
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);
         final ConversationServiceImpl conversations;
@@ -145,7 +153,17 @@ class ReportWorkPhraseShortcutEntryContractTest {
         IntentExecuteResponse ordinaryResponse;
 
         Harness(Entry entry) {
+            this(entry, false);
+        }
+
+        /** realVeto=true: 用真实的否定否决闸 (QueryPreprocessorServiceImpl), 不是桩 —— 删掉闸要红。 */
+        Harness(Entry entry, boolean realVeto) {
             this.entry = entry;
+            this.preprocessor = realVeto
+                    ? new com.cretas.aims.service.impl.QueryPreprocessorServiceImpl(
+                            new com.cretas.aims.config.TimeNormalizationRules(),
+                            new com.cretas.aims.config.ColloquialMappings(), null, null, new ObjectMapper(), null, null)
+                    : mock(QueryPreprocessorService.class);
             knowledgeBase.initDefaults();
             conversations = new ConversationServiceImpl(mock(ConversationSessionRepository.class),
                     mock(AIIntentConfigRepository.class), null, mock(DashScopeClient.class));
@@ -153,8 +171,10 @@ class ReportWorkPhraseShortcutEntryContractTest {
             ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
             ReflectionTestUtils.setField(conversations, "confidenceThreshold", 0.7);
             when(configService.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
-            when(preprocessor.detectNegationVeto(anyString(), any()))
-                    .thenReturn(QueryPreprocessorService.NegationKind.NONE);
+            if (!realVeto) {
+                when(preprocessor.detectNegationVeto(anyString(), any()))
+                        .thenReturn(QueryPreprocessorService.NegationKind.NONE);
+            }
             AIIntentConfig phrase = null;
             AIIntentConfig decision = null;
             for (String[] c : new String[][]{{PHRASE_INTENT, "完成工序", "work_process_task_complete"},
