@@ -593,13 +593,13 @@ function goToPlanList() {
   margin: 0;
   font-size: 18px;
   font-weight: 700;
-  color: var(--el-text-color-primary, #303133);
+  color: var(--el-text-color-primary, var(--cs-text));
 }
 
 .queue-subtitle {
   display: block;
   font-size: 12px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, var(--cs-muted));
   margin-top: 2px;
 }
 
@@ -621,20 +621,20 @@ function goToPlanList() {
   font-size: 14px;
   line-height: 1.4;
   border-radius: 16px;
-  border: 1px solid var(--el-border-color, #dcdfe6);
+  border: 1px solid var(--el-border-color, var(--cs-border));
   background: var(--el-fill-color-blank, #fff);
-  color: var(--el-text-color-regular, #606266);
+  color: var(--el-text-color-regular, var(--cs-muted));
   cursor: pointer;
   transition: border-color 0.2s, background-color 0.2s, color 0.2s;
 }
 
 .status-capsule:hover {
-  border-color: var(--el-color-primary, #409eff);
-  color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
+  color: var(--el-color-primary, var(--cs-primary));
 }
 
 .status-capsule:focus-visible {
-  outline: 2px solid var(--el-color-primary, #409eff);
+  outline: 2px solid var(--el-color-primary, var(--cs-primary));
   outline-offset: 2px;
 }
 
@@ -643,24 +643,24 @@ function goToPlanList() {
 }
 
 .status-capsule.capsule-active {
-  border-color: var(--el-color-primary, #409eff);
-  background: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
+  background: var(--el-color-primary, var(--cs-primary));
   color: #fff;
 }
 
 .status-capsule.capsule-overdue {
-  color: var(--el-color-danger, #f56c6c);
+  color: var(--el-color-danger, var(--cs-danger));
   border-color: var(--el-color-danger-light-5, #fab6b6);
 }
 
 .status-capsule.capsule-overdue:hover {
-  border-color: var(--el-color-danger, #f56c6c);
-  color: var(--el-color-danger, #f56c6c);
+  border-color: var(--el-color-danger, var(--cs-danger));
+  color: var(--el-color-danger, var(--cs-danger));
 }
 
 .status-capsule.capsule-overdue.capsule-active {
-  background: var(--el-color-danger, #f56c6c);
-  border-color: var(--el-color-danger, #f56c6c);
+  background: var(--el-color-danger, var(--cs-danger));
+  border-color: var(--el-color-danger, var(--cs-danger));
   color: #fff;
 }
 
@@ -679,16 +679,16 @@ function goToPlanList() {
 
 .filter-count {
   font-size: 13px;
-  color: var(--el-text-color-secondary, #909399);
+  color: var(--el-text-color-secondary, var(--cs-muted));
 }
 
 // Row overdue / urgent highlighting
 :deep(.row-overdue) {
-  background-color: var(--el-color-danger-light-9, #fef0f0) !important;
+  background-color: var(--el-color-danger-light-9, var(--cs-danger-soft)) !important;
 }
 
 :deep(.row-urgent) {
-  background-color: var(--el-color-warning-light-9, #fdf6ec) !important;
+  background-color: var(--el-color-warning-light-9, var(--cs-warning-soft)) !important;
 }
 
 .date-cell {
@@ -700,7 +700,7 @@ function goToPlanList() {
 }
 
 .material-ok {
-  color: var(--el-color-success, #67c23a);
+  color: var(--el-color-success, var(--cs-success));
   font-size: 14px;
 }
 

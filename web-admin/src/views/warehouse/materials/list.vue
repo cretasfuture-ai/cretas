@@ -1311,14 +1311,14 @@ async function handleGenerateLabel(row: TableRow) {
 
 .field-hint {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   line-height: 1.4;
   margin-top: 4px;
 }
 
 .text-secondary {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 /* 账实字段只读时的说明块 —— 必须同时说清"为什么不能改"和"那去哪改" (防呆: 无 dead-end)。 */
@@ -1326,20 +1326,20 @@ async function handleGenerateLabel(row: TableRow) {
   margin-bottom: 16px;
   padding: 10px 12px;
   border-radius: 4px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
+  background: var(--el-color-warning-light-9, var(--cs-warning-soft));
   border: 1px solid var(--el-color-warning-light-7, #f5dab1);
 
   .locked-hint__title {
     font-size: 13px;
     font-weight: 600;
-    color: var(--el-color-warning, #e6a23c);
+    color: var(--el-color-warning, var(--cs-warning));
     margin-bottom: 4px;
   }
 
   .locked-hint__body {
     font-size: 12px;
     line-height: 1.6;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 
   /* 入库日期那条例外说明: 与上面"去盘点"那条出口分开, 免得被读成同一条路。 */
@@ -1357,7 +1357,7 @@ async function handleGenerateLabel(row: TableRow) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -1381,12 +1381,12 @@ async function handleGenerateLabel(row: TableRow) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -1408,11 +1408,11 @@ async function handleGenerateLabel(row: TableRow) {
   align-items: center;
   margin-bottom: 12px;
   font-size: 13px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .summary-warning {
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--cs-warning));
 }
 
 .nested-batch-table {
@@ -1436,7 +1436,7 @@ async function handleGenerateLabel(row: TableRow) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 </style>

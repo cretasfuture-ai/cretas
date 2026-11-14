@@ -329,7 +329,7 @@ onBeforeUnmount(() => {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -353,12 +353,12 @@ onBeforeUnmount(() => {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -376,12 +376,12 @@ onBeforeUnmount(() => {
 
 .price-value {
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .unit-text {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
   margin-left: 2px;
 }
 
@@ -394,7 +394,7 @@ onBeforeUnmount(() => {
   .chart-title {
     font-size: 13px;
     font-weight: 500;
-    color: var(--text-color-secondary, #606266);
+    color: var(--text-color-secondary, var(--cs-muted));
     margin-bottom: 8px;
   }
 

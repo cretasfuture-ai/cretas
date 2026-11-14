@@ -159,18 +159,18 @@ function hasProcessData(): boolean {
                 v-if="summary.realYieldRate != null"
                 style="font-size: 16px; font-weight: 700;"
                 :style="{
-                  color: summary.realYieldRate >= 80 ? '#67c23a' : summary.realYieldRate >= 60 ? '#e6a23c' : '#f56c6c'
+                  color: summary.realYieldRate >= 80 ? 'var(--cs-success)' : summary.realYieldRate >= 60 ? 'var(--cs-warning)' : 'var(--cs-danger)'
                 }"
               >
                 {{ formatYieldRate(summary.realYieldRate) }}
               </span>
-              <span v-else style="color: #909399; font-size: 13px;">
+              <span v-else style="color: var(--cs-muted); font-size: 13px;">
                 {{ summary.yieldNote || '—' }}
               </span>
             </el-descriptions-item>
             <el-descriptions-item label="总成本" :span="2">
               <span
-                :style="{ color: summary.priceMasked ? '#909399' : 'inherit', fontStyle: summary.priceMasked ? 'italic' : 'normal' }"
+                :style="{ color: summary.priceMasked ? 'var(--cs-muted)' : 'inherit', fontStyle: summary.priceMasked ? 'italic' : 'normal' }"
                 style="font-size: 15px; font-weight: 600;"
               >
                 {{ formatCost(summary.totalCost, summary.priceMasked) }}
@@ -180,13 +180,13 @@ function hasProcessData(): boolean {
               <span
                 v-else-if="summary.totalCost == null && summary.costNote"
                 data-testid="summary-cost-note"
-                style="margin-left: 8px; font-size: 12px; font-weight: 400; color: #e6a23c;"
+                style="margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--cs-warning);"
               >{{ summary.costNote }}</span>
             </el-descriptions-item>
           </el-descriptions>
 
           <!-- 批次明细 -->
-          <div style="margin-bottom: 8px; font-weight: 600; color: #303133;">批次明细（共 {{ summary.batches.length }} 批）</div>
+          <div style="margin-bottom: 8px; font-weight: 600; color: var(--cs-text);">批次明细（共 {{ summary.batches.length }} 批）</div>
           <el-table
             :data="summary.batches"
             border

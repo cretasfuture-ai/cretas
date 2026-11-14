@@ -1994,7 +1994,7 @@ function handleSizeChange(size: number) {
                   contact-text="请联系销售或管理员先添加客户"
                   @action="goCreate('/sales/customers')"
                 />
-                <span v-else style="color: #909399; font-size: 12px">加载中…</span>
+                <span v-else style="color: var(--cs-muted); font-size: 12px">加载中…</span>
               </div>
             </template>
           </el-select>
@@ -2269,12 +2269,12 @@ function handleSizeChange(size: number) {
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-left { display: flex; align-items: baseline; gap: 12px; }
 .page-title { font-size: 18px; font-weight: 600; }
-.data-count { font-size: 13px; color: #909399; }
-.write-role-hint { font-size: 13px; color: #909399; margin-right: 8px; }
-.alias-line { font-size: 12px; color: #909399; }
+.data-count { font-size: 13px; color: var(--cs-muted); }
+.write-role-hint { font-size: 13px; color: var(--cs-muted); margin-right: 8px; }
+.alias-line { font-size: 12px; color: var(--cs-muted); }
 .search-bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
-.supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: #606266; font-size: 13px; }
-.divider-title { font-size: 14px; color: #606266; font-weight: 500; }
+.supplier-relation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; color: var(--cs-muted); font-size: 13px; }
+.divider-title { font-size: 14px; color: var(--cs-muted); font-weight: 500; }
 
 /* T159-A: Code preview row */
 .code-preview-row {
@@ -2291,7 +2291,7 @@ function handleSizeChange(size: number) {
 }
 .code-preview-label {
   min-width: 132px;
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 12px;
 }
 .code-preview-tag {
@@ -2304,7 +2304,7 @@ function handleSizeChange(size: number) {
 }
 .code-preview-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 .material-code-cell {
@@ -2315,7 +2315,7 @@ function handleSizeChange(size: number) {
 }
 
 .material-code-value {
-  color: #303133;
+  color: var(--cs-text);
   font-weight: 600;
   letter-spacing: 0.4px;
   overflow-wrap: anywhere;
@@ -2324,24 +2324,24 @@ function handleSizeChange(size: number) {
 /* T159-A: Field hints */
 .field-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-top: 4px;
   line-height: 1.4;
 }
 .field-hint--manual {
-  color: #e6a23c;
+  color: var(--cs-warning);
 }
 
 .field-hint--error {
-  color: #e6a23c;
+  color: var(--cs-warning);
 }
 
 .field-hint--matched {
-  color: #67c23a;
+  color: var(--cs-success);
 }
 
 .field-hint--error {
-  color: #f56c6c;
+  color: var(--cs-danger);
 }
 
 /* 与 SKU 新建保持相同的动态包装规则编辑体验 */
@@ -2356,8 +2356,8 @@ function handleSizeChange(size: number) {
   margin-top: 8px;
   font-size: 12px;
   line-height: 1.6;
-  color: #67c23a;
-  background: #f0f9eb;
+  color: var(--cs-success);
+  background: var(--cs-success-soft);
   border: 1px solid #e1f3d8;
   border-radius: 4px;
 }
@@ -2366,15 +2366,15 @@ function handleSizeChange(size: number) {
   padding: 10px 12px;
   font-size: 12px;
   line-height: 1.6;
-  color: #606266;
-  background: #f5f7fa;
-  border: 1px solid #ebeef5;
+  color: var(--cs-muted);
+  background: var(--cs-surface-subtle);
+  border: 1px solid var(--cs-border);
   border-radius: 8px;
 }
 .material-packaging-spec-item {
   padding: 10px 12px;
   background: #fafcff;
-  border: 1px solid #e4e7ed;
+  border: 1px solid var(--cs-border);
   border-radius: 8px;
 }
 .spec-conversion-row {
@@ -2385,7 +2385,7 @@ function handleSizeChange(size: number) {
 }
 .packaging-rule-index {
   min-width: 42px;
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 12px;
 }
 .spec-unit-select,
@@ -2396,12 +2396,12 @@ function handleSizeChange(size: number) {
 .conversion-label {
   font-size: 15px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
   min-width: 10px;
 }
 .conversion-equals {
   font-size: 16px;
-  color: #606266;
+  color: var(--cs-muted);
   padding: 0 2px;
 }
 .spec-echo,
@@ -2412,10 +2412,10 @@ function handleSizeChange(size: number) {
   font-size: 12px;
 }
 .spec-echo {
-  color: #67c23a;
+  color: var(--cs-success);
 }
 .spec-same-warn {
-  color: #e6a23c;
+  color: var(--cs-warning);
 }
 .spec-rule-error {
   color: var(--el-color-danger);

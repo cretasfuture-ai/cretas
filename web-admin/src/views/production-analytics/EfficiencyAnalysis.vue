@@ -487,7 +487,7 @@ onBeforeUnmount(() => {
         <el-table-column prop="totalHours" label="总工时(h)" width="100" align="right" />
         <el-table-column prop="efficiency" label="人效(产出/h)" width="120" align="right">
           <template #default="{ row }">
-            <span :style="{ color: row.efficiency >= 10 ? '#67C23A' : row.efficiency >= 5 ? '#E6A23C' : '#F56C6C', fontWeight: 600 }">
+            <span :style="{ color: row.efficiency >= 10 ? 'var(--cs-success)' : row.efficiency >= 5 ? 'var(--cs-warning)' : 'var(--cs-danger)', fontWeight: 600 }">
               {{ row.efficiency }}
             </span>
           </template>
@@ -534,7 +534,7 @@ onBeforeUnmount(() => {
               <template #default="{ row }">
                 <span
                   v-if="row.budgetCost != null && row.actualCost != null"
-                  :style="{ color: row.actualCost > row.budgetCost ? '#F56C6C' : '#67C23A', fontWeight: 600 }"
+                  :style="{ color: row.actualCost > row.budgetCost ? 'var(--cs-danger)' : 'var(--cs-success)', fontWeight: 600 }"
                 >
                   {{ (row.actualCost - row.budgetCost).toFixed(2) }}
                 </span>
@@ -561,7 +561,7 @@ onBeforeUnmount(() => {
 .efficiency-analysis {
   padding: 20px;
   min-height: calc(100vh - 64px);
-  background: #f5f7fa;
+  background: var(--cs-surface-subtle);
 }
 
 .toolbar {

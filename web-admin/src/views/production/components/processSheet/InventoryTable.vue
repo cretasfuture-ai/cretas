@@ -85,7 +85,7 @@ defineExpose({ refresh });
     <el-table-column prop="used" label="已用(kg)" width="90" align="right" />
     <el-table-column prop="remaining" label="剩余(kg)" width="90" align="right">
       <template #default="{ row }">
-        <span :style="{ color: row.remaining <= 0 ? '#f56c6c' : '#67c23a' }">
+        <span :style="{ color: row.remaining <= 0 ? 'var(--cs-danger)' : 'var(--cs-success)' }">
           {{ row.remaining }}
         </span>
       </template>
@@ -103,7 +103,7 @@ defineExpose({ refresh });
       </template>
     </el-table-column>
   </el-table>
-  <div v-if="rows.length === 0 && !loading && !errorMessage" style="text-align:center;color:#909399;padding:12px;font-size:12px">
+  <div v-if="rows.length === 0 && !loading && !errorMessage" style="text-align:center;color:var(--cs-muted);padding:12px;font-size:12px">
     暂无半成品库存；保存当前工序有效产出后会生成批次库存。
   </div>
 </template>

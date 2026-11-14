@@ -109,6 +109,9 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/todo': [{ path: '/todo', module: 'dashboard' }],
   // P4：顶层「发现的问题」，同判据
   '/issues': [{ path: '/issues', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
+  // P6：「在制品」路由早已存在、原菜单无入口；原型分组侧栏挂在「仓储管理」下。
+  // 链 = 「仓储管理」父组（取自改前快照，不手写）+ 叶子自身 module:'warehouse'（取自路由 meta，不加 roles）。
+  '/warehouse/wip-batches': [snapshot.get('/warehouse/materials')![0], { path: '/warehouse/wip-batches', module: 'warehouse' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

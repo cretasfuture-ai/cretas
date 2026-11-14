@@ -396,7 +396,7 @@ onMounted(async () => {
   font-size: 20px;
   font-weight: 600;
   margin: 0;
-  color: #303133;
+  color: var(--cs-text);
 }
 .filter-card {
   margin-bottom: 16px;
@@ -407,24 +407,24 @@ onMounted(async () => {
 .step-detail-block {
   padding: 0 16px;
   background: #f9f9f9;
-  border-top: 1px solid #ebeef5;
+  border-top: 1px solid var(--cs-border);
 }
 .step-detail-header {
   padding: 8px 0 4px;
   font-size: 13px;
   font-weight: 600;
-  color: #606266;
+  color: var(--cs-muted);
 }
 .text-critical {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 .text-warning {
-  color: #e6a23c;
+  color: var(--cs-warning);
   font-weight: 600;
 }
 .text-normal {
-  color: #67c23a;
+  color: var(--cs-success);
 }
 .text-muted {
   color: #c0c4cc;

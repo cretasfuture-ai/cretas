@@ -3544,8 +3544,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             {{ workflowOutput.finished ? '成品' : '半成品' }}
           </el-tag>
         </span>
-        <span v-else style="color:#909399">本工序 workflow 未配置产出端口</span>
-        <span v-if="workflowRawInputsLabel" style="margin-left:12px;color:#606266">
+        <span v-else style="color:var(--cs-muted)">本工序 workflow 未配置产出端口</span>
+        <span v-if="workflowRawInputsLabel" style="margin-left:12px;color:var(--cs-muted)">
           需要原料：{{ workflowRawInputsLabel }}
         </span>
       </template>
@@ -3681,7 +3681,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
           </el-tag>
           <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
-            <el-icon style="color:#e6a23c;cursor:pointer"><Warning /></el-icon>
+            <el-icon style="color:var(--cs-warning);cursor:pointer"><Warning /></el-icon>
           </el-tooltip>
           <span v-if="row.batchNumber" class="sp-card-batchnum">{{ row.batchNumber }}</span>
           <span v-else class="sp-card-batchnum sp-card-batchnum-pending">(保存后生成批次号)</span>
@@ -3867,20 +3867,20 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                      el-select 内部逻辑 (loading || 无选项 → 渲染 #empty) 会在"还在加载"时也显示
                      "暂无可用批次", 让操作员误以为真无库存, 首次打开必闪现空态。 -->
                 <template #loading>
-                  <span style="padding:8px;color:#909399;font-size:12px">
+                  <span style="padding:8px;color:var(--cs-muted);font-size:12px">
                     <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
                   </span>
                 </template>
                 <template #empty>
-                  <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
+                  <span style="padding:8px;color:var(--cs-muted);font-size:12px">暂无可用原料批次，请先入库/领料</span>
                 </template>
               </el-select>
               <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
-              <span v-if="!row.rawBatchId" style="display:block;margin-top:3px;font-size:11px;color:#f56c6c">
+              <span v-if="!row.rawBatchId" style="display:block;margin-top:3px;font-size:11px;color:var(--cs-danger)">
                 请先选择原料批次，再保存此行
               </span>
               <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
-              <span v-if="rawBatchExcludedNoWarehouseCount > 0" style="display:block;margin-top:3px;font-size:11px;color:#e6a23c">
+              <span v-if="rawBatchExcludedNoWarehouseCount > 0" style="display:block;margin-top:3px;font-size:11px;color:var(--cs-warning)">
                 另有 {{ rawBatchExcludedNoWarehouseCount }} 个批次未落仓，无法领用（请先完成入库/领料）
               </span>
             </div>
@@ -4016,7 +4016,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               size="small"
               style="width:100px"
             />
-            <span style="font-size:12px;color:#606266">{{ potSplitHint(row) }}</span>
+            <span style="font-size:12px;color:var(--cs-muted)">{{ potSplitHint(row) }}</span>
           </div>
 
           <div class="sp-card-field sp-card-field-full sp-stage-heading">
@@ -4094,7 +4094,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'remaining'" class="sp-readonly"
-                :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? '#f56c6c' : undefined }">
+                :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? 'var(--cs-danger)' : undefined }">
                 {{ calcRemaining(row) != null ? calcRemaining(row)!.toFixed(2) : '—' }}
               </span>
 
@@ -4111,7 +4111,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
                 {{ formattedWeight(finishedWeightKg(row)) }}
-                <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
+                <small style="display:block;color:var(--cs-muted)">{{ unitNetWeightText() }}</small>
               </span>
 
               <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
@@ -4154,7 +4154,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
             </el-button>
           </div>
           <div v-if="!isPortOutputMode && row.laborExpanded" class="sp-card-field sp-card-field-full sp-card-expand-section">
-            <div style="font-size:12px;font-weight:600;color:#303133;margin-bottom:8px">
+            <div style="font-size:12px;font-weight:600;color:var(--cs-text);margin-bottom:8px">
               工时录入 — {{ row.batchNumber || '(未保存行)' }}
             </div>
             <WorkHoursTable v-model="row.laborSegments" />
@@ -4351,7 +4351,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   size="small"
                 />
               </td>
-              <td class="sp-td" style="color:#606266;font-size:12px">
+              <td class="sp-td" style="color:var(--cs-muted);font-size:12px">
                 {{ settledRowSummary(row) }}
               </td>
               <td class="sp-td sp-td-batch">
@@ -4407,7 +4407,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   {{ row.submissionStatus === 'SUBMITTED' ? '已正式报工' : row.rowStatus === 'DRAFT' ? '草稿' : '新建' }}
                 </el-tag>
                 <el-tooltip v-if="upstreamWarning(row)" :content="upstreamWarning(row)!" placement="top">
-                  <el-icon style="color:#e6a23c;margin-left:3px;cursor:pointer"><Warning /></el-icon>
+                  <el-icon style="color:var(--cs-warning);margin-left:3px;cursor:pointer"><Warning /></el-icon>
                 </el-tooltip>
               </td>
 
@@ -4520,16 +4520,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                       :disabled="rawBatchAvailable(b) <= 0" />
                     <!-- 防呆(load-race 修复): 见卡片视图同款注释 — 独立 #loading slot 防"加载中"误显"暂无" -->
                     <template #loading>
-                      <span style="padding:8px;color:#909399;font-size:12px">
+                      <span style="padding:8px;color:var(--cs-muted);font-size:12px">
                         <el-icon class="is-loading" style="vertical-align:-2px"><Loading /></el-icon> 加载中，请稍候…
                       </span>
                     </template>
                     <template #empty>
-                      <span style="padding:8px;color:#909399;font-size:12px">暂无可用原料批次，请先入库/领料</span>
+                      <span style="padding:8px;color:var(--cs-muted);font-size:12px">暂无可用原料批次，请先入库/领料</span>
                     </template>
                   </el-select>
                   <!-- 防呆: 未选批次时内联红色提示 (Rule 1 + 4位一体: 预先显示边界) -->
-                  <div v-if="!row.rawBatchId" style="margin-top:2px;font-size:11px;color:#f56c6c;white-space:nowrap">
+                  <div v-if="!row.rawBatchId" style="margin-top:2px;font-size:11px;color:var(--cs-danger);white-space:nowrap">
                     请先选择原料批次
                   </div>
                   <!-- 防呆: 未落仓批次已从下拉隐藏, 显式提示原因 (Rule 5: 不做 dead-end) -->
@@ -4537,7 +4537,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                     v-if="rawBatchExcludedNoWarehouseCount > 0"
                     :content="`另有 ${rawBatchExcludedNoWarehouseCount} 个批次未落仓，无法领用（请先完成入库/领料）`"
                     placement="top">
-                    <el-icon style="color:#e6a23c;margin-top:2px;cursor:pointer"><Warning /></el-icon>
+                    <el-icon style="color:var(--cs-warning);margin-top:2px;cursor:pointer"><Warning /></el-icon>
                   </el-tooltip>
                 </td>
                 <td class="sp-td sp-td-num">
@@ -4642,7 +4642,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
                   size="small"
                   style="width:80px"
                 />
-                <div style="margin-top:3px;font-size:11px;color:#606266;white-space:nowrap">
+                <div style="margin-top:3px;font-size:11px;color:var(--cs-muted);white-space:nowrap">
                   {{ potSplitHint(row) }}
                 </div>
               </td>
@@ -4718,7 +4718,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
                   <!-- auto: remaining -->
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'remaining'" class="sp-readonly"
-                    :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? '#f56c6c' : undefined }">
+                    :style="{ color: calcRemaining(row) != null && calcRemaining(row)! <= 0 ? 'var(--cs-danger)' : undefined }">
                     {{ calcRemaining(row) != null ? calcRemaining(row)!.toFixed(2) : '—' }}
                   </span>
 
@@ -4735,7 +4735,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedWeight'" class="sp-readonly">
                     {{ formattedWeight(finishedWeightKg(row)) }}
-                    <small style="display:block;color:#909399">{{ unitNetWeightText() }}</small>
+                    <small style="display:block;color:var(--cs-muted)">{{ unitNetWeightText() }}</small>
                   </span>
 
                   <span v-else-if="col.type === 'auto' && col.autoCalc === 'finishedInboundWeight'" class="sp-readonly">
@@ -5029,8 +5029,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
       title="操作记录"
       width="560px"
       append-to-body>
-      <div style="margin-bottom:8px;font-size:12px;color:#909399">
-        批次: <span style="color:#409eff;font-weight:600">{{ historyBatchLabel }}</span>
+      <div style="margin-bottom:8px;font-size:12px;color:var(--cs-muted)">
+        批次: <span style="color:var(--cs-primary);font-weight:600">{{ historyBatchLabel }}</span>
       </div>
       <div v-loading="historyLoading">
         <el-empty
@@ -5046,11 +5046,11 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
               <el-tag :type="OP_TYPE[h.operation] || 'info'" size="small">
                 {{ OP_LABEL[h.operation] || h.operation }}
               </el-tag>
-              <span v-if="h.operatorId != null" style="font-size:11px;color:#909399">
+              <span v-if="h.operatorId != null" style="font-size:11px;color:var(--cs-muted)">
                 操作人 #{{ h.operatorId }}
               </span>
             </div>
-            <div style="font-size:12px;color:#606266;white-space:pre-wrap;word-break:break-all">
+            <div style="font-size:12px;color:var(--cs-muted);white-space:pre-wrap;word-break:break-all">
               {{ h.diffSummary || '(无变更摘要)' }}
             </div>
           </el-timeline-item>
@@ -5110,7 +5110,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 .sp-table-scroll {
   overflow-x: auto;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--cs-border);
   border-radius: 4px;
 }
 
@@ -5126,10 +5126,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   position: sticky;
   top: 0;
   z-index: 2;
-  background: #f5f7fa;
-  color: #606266;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-weight: 600;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--cs-border);
   padding: 6px 8px;
   white-space: nowrap;
   text-align: left;
@@ -5154,7 +5154,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 /* Body cells */
 .sp-td {
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--cs-border);
   padding: 5px 6px;
   vertical-align: middle;
 }
@@ -5162,7 +5162,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-td-num       { text-align: right; }
 .sp-td-date      {}
 .sp-td-daterange {}
-.sp-td-batch     { color: #409eff; font-weight: 600; font-size: 11px; }
+.sp-td-batch     { color: var(--cs-primary); font-weight: 600; font-size: 11px; }
 .sp-td-labor   { text-align: center; }
 /* 🔴 防呆 Rule 1 (同上): 每行的保存/操作列同样钉在右缘, 与表头 sticky 呼应,
    保证滚到再远也能一眼看到、点到"保存"按钮。 */
@@ -5180,16 +5180,16 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 /* Row alternating background */
 .sp-tr-even { background: #ffffff; }
-.sp-tr-odd  { background: #fafafa; }
+.sp-tr-odd  { background: var(--cs-surface-subtle); }
 .sp-tr-even .sp-td-actions { background: #ffffff; }
-.sp-tr-odd  .sp-td-actions { background: #fafafa; }
-.sp-tr-saved .sp-td-status { background: #f0f9eb; }
-.sp-tr-draft .sp-td-status { background: #fdf6ec; }
+.sp-tr-odd  .sp-td-actions { background: var(--cs-surface-subtle); }
+.sp-tr-saved .sp-td-status { background: var(--cs-success-soft); }
+.sp-tr-draft .sp-td-status { background: var(--cs-warning-soft); }
 
 /* Expand rows */
 .sp-tr-expand td {
   border: none;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--cs-border);
 }
 .sp-td-expand {
   padding: 0 12px 8px;
@@ -5204,18 +5204,18 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 .sp-expand-title {
   font-size: 12px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
   margin-bottom: 8px;
 }
 
 /* Readonly display */
 .sp-readonly {
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 12px;
   display: inline-block;
 }
 .sp-batch-num {
-  color: #409eff;
+  color: var(--cs-primary);
   font-size: 11px;
   word-break: break-all;
 }
@@ -5227,17 +5227,17 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 /* Grid: 已小结 banner row */
 .sp-settled-banner td {
   background: #f0f4ff;
-  border: 1px solid #dcdfe6;
-  border-left: 3px solid #909399;
+  border: 1px solid var(--cs-border);
+  border-left: 3px solid var(--cs-muted);
   padding: 5px 10px;
   font-size: 12px;
-  color: #606266;
+  color: var(--cs-muted);
 }
 
 /* Grid: 已小结 compact rows */
 .sp-tr-settled td {
   background: #fafbfd;
-  color: #909399;
+  color: var(--cs-muted);
   font-style: italic;
 }
 .sp-tr-settled .sp-td-batch {
@@ -5247,8 +5247,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 /* Card: 已小结 collapsible section */
 .sp-settled-section {
   margin-bottom: 10px;
-  border: 1px solid #dcdfe6;
-  border-left: 3px solid #909399;
+  border: 1px solid var(--cs-border);
+  border-left: 3px solid var(--cs-muted);
   border-radius: 4px;
   overflow: hidden;
 }
@@ -5258,7 +5258,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   padding: 8px 12px;
   background: #f0f4ff;
   font-size: 12px;
-  color: #606266;
+  color: var(--cs-muted);
   cursor: pointer;
   user-select: none;
 }
@@ -5274,7 +5274,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 .sp-settled-summary {
   font-size: 12px;
-  color: #606266;
+  color: var(--cs-muted);
   margin-left: 8px;
 }
 .sp-settled-ts {
@@ -5287,7 +5287,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
    Card layout
    ------------------------------------------------------------------------- */
 .sp-card {
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--cs-border);
   border-radius: 6px;
   margin-bottom: 10px;
   overflow: hidden;
@@ -5305,18 +5305,18 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #ebeef5;
+  background: var(--cs-surface-subtle);
+  border-bottom: 1px solid var(--cs-border);
   flex-wrap: wrap;
 }
 .sp-card-idx {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   min-width: 22px;
 }
 .sp-card-batchnum {
   font-size: 11px;
-  color: #409eff;
+  color: var(--cs-primary);
   font-weight: 600;
   word-break: break-all;
 }
@@ -5348,7 +5348,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   flex-direction: column;
   gap: 2px;
   min-width: 0;
-  color: #303133;
+  color: var(--cs-text);
   font-size: 12px;
 }
 
@@ -5447,7 +5447,7 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 .sp-card-label {
   font-size: 11px;
-  color: #909399;
+  color: var(--cs-muted);
   font-weight: 600;
   white-space: nowrap;
 }
@@ -5482,17 +5482,17 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 
 .sp-reporting-date {
   padding-bottom: 8px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--cs-border);
 }
 .sp-port-section-note {
   flex-direction: row;
   align-items: center;
   gap: 8px;
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 12px;
 }
 .sp-port-section-note strong {
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-fixed-unit {
   display: inline-flex;
@@ -5500,8 +5500,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   min-height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #f5f7fa;
-  color: #909399;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 12px;
   white-space: nowrap;
 }
@@ -5510,8 +5510,8 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   align-items: baseline;
   gap: 8px;
   padding-top: 4px;
-  border-top: 1px solid #ebeef5;
-  color: #303133;
+  border-top: 1px solid var(--cs-border);
+  color: var(--cs-text);
   font-size: 12px;
   font-weight: 600;
 }
@@ -5525,20 +5525,20 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   color: #1677ff;
 }
 .sp-stage-heading small {
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 400;
 }
 /* 产出块(含作业时间与副产)的样式已随 ProcessOutputTable 子组件迁走 */
 .sp-port-unselected { opacity: 0.58; }
-.sp-port-selection-hint { color: #909399; font-size: 11px; white-space: nowrap; }
+.sp-port-selection-hint { color: var(--cs-muted); font-size: 11px; white-space: nowrap; }
 
 /*
   投入紧凑表 (卡片模式)。表格模式的投入本来就在真表格的 td 里, 不需要这一套。
   列宽与观感对齐 ProcessOutputTable, 免得同一张卡上下两半长得不像一家。
 */
 .sp-in-table {
-  border: 1px solid #e4e9f2;
+  border: 1px solid var(--cs-border);
   border-radius: 6px;
   overflow-x: auto;
   background: #fff;
@@ -5561,15 +5561,15 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
 }
 .sp-in-head {
   padding: 7px 10px;
-  border-bottom: 1px solid #e4e9f2;
-  background: #f5f7fa;
-  color: #606266;
+  border-bottom: 1px solid var(--cs-border);
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 600;
 }
 .sp-in-row {
   padding: 7px 10px;
-  border-top: 1px solid #eef1f6;
+  border-top: 1px solid var(--cs-surface-subtle);
 }
 .sp-in-row:first-of-type { border-top: 0; }
 .sp-in-cell {
@@ -5578,10 +5578,10 @@ defineExpose({ hasUnsavedRows, refreshSharedInventories });
   gap: 6px;
   min-width: 0;
   font-size: 12px;
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-in-cell :deep(.el-select) { min-width: 0; }
-.sp-in-note { color: #909399; font-size: 11px; }
+.sp-in-note { color: var(--cs-muted); font-size: 11px; }
 /* 投入行的可用量提示 (防呆 Rule 1, 2026-07-30) */
 .sp-in-stock { color: var(--el-text-color-secondary); font-size: 11px; white-space: nowrap; }
 .sp-in-stock-zero { color: var(--el-color-danger); font-weight: 600; }

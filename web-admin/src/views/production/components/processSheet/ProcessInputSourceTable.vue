@@ -195,17 +195,17 @@ function gridStyle(): Record<string, string> {
   gap: 10px;
   font-size: 12px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-src-title b { color: #1677ff; }
 .sp-src-title span:nth-child(2) {
-  color: #909399;
+  color: var(--cs-muted);
   font-weight: 400;
   font-size: 11px;
 }
 
 .sp-src-table {
-  border: 1px solid #e4e9f2;
+  border: 1px solid var(--cs-border);
   border-radius: 6px;
   overflow-x: auto;
   background: #fff;
@@ -221,14 +221,14 @@ function gridStyle(): Record<string, string> {
 
 .sp-src-head {
   padding: 7px 10px;
-  border-bottom: 1px solid #e4e9f2;
-  background: #f5f7fa;
-  color: #606266;
+  border-bottom: 1px solid var(--cs-border);
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 600;
 }
 
-.sp-src-line { border-top: 1px solid #eef1f6; }
+.sp-src-line { border-top: 1px solid var(--cs-surface-subtle); }
 .sp-src-line:first-of-type { border-top: 0; }
 .sp-port-unselected { opacity: 0.58; }
 
@@ -240,7 +240,7 @@ function gridStyle(): Record<string, string> {
   gap: 6px;
   min-width: 0;
   font-size: 12px;
-  color: #303133;
+  color: var(--cs-text);
 }
 .sp-src-product strong { font-size: 13px; }
 .sp-src-batch { flex-wrap: wrap; }
@@ -255,7 +255,7 @@ function gridStyle(): Record<string, string> {
 }
 .sp-src-actions { justify-content: flex-end; }
 
-.sp-src-empty { padding: 8px 10px; color: #909399; font-size: 12px; }
+.sp-src-empty { padding: 8px 10px; color: var(--cs-muted); font-size: 12px; }
 
 .sp-required { margin-right: 2px; color: var(--el-color-danger); font-style: normal; font-weight: 700; }
 
@@ -267,8 +267,8 @@ function gridStyle(): Record<string, string> {
   min-height: 24px;
   padding: 0 8px;
   border-radius: 4px;
-  background: #f5f7fa;
-  color: #909399;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
   font-size: 12px;
   white-space: nowrap;
 }

@@ -651,7 +651,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'wip-batches',
             name: 'WarehouseWipBatches',
             component: () => import('@/views/warehouse/materials/wip-list.vue'),
-            meta: { requiresAuth: true, title: '在制品 (WIP)', module: 'warehouse' }
+            meta: { requiresAuth: true, title: '在制品', module: 'warehouse' }
           },
           {
             path: 'shipments',

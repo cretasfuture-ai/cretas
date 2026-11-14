@@ -595,7 +595,7 @@ onMounted(() => {
 <style scoped>
 .page-container {
   padding: 20px;
-  background: #F4F6F9;
+  background: var(--cs-bg);
   min-height: 100%;
 }
 
@@ -606,13 +606,13 @@ onMounted(() => {
 .page-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1B65A8;
+  color: var(--cs-primary);
   margin: 0 0 4px;
 }
 
 .page-subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--cs-muted);
   margin: 0;
 }
 
@@ -646,19 +646,19 @@ onMounted(() => {
 
 .summary-label {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-bottom: 6px;
 }
 
 .summary-value {
   font-size: 14px;
-  color: #303133;
+  color: var(--cs-text);
   font-weight: 500;
 }
 
 .summary-value--large {
   font-size: 18px;
-  color: #1B65A8;
+  color: var(--cs-primary);
   font-weight: 700;
 }
 

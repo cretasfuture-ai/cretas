@@ -236,7 +236,12 @@ const iconMap: Record<string, any> = {
 function canSeeMenuNode(item: MenuItem): boolean {
   const own = canSeeMenuItem(item);
   // 纯展示分组不带判据，可见性只由子项决定（filterMenuItem 里子项全隐藏则整组隐藏）。
-  if (item.container) return true;
+  if (item.container) {
+    // 「数据与分析」容器认「按厂关掉」开关（只看这一个开关，不套其它判据；其余容器无判据）
+    return !isFactoryAnalyticsGroupHidden(
+      effectiveFactoryType.value || authStore.factoryType, item.path, factoryAnalyticsTurnedOff.value,
+    );
+  }
   // 从原分组搬出来的叶子，原父组也必须可见（与搬家前「父组隐藏 ⇒ 子项隐藏」等价）。
   const ancestorsVisible = (item.guardAncestors ?? []).map((ancestor) => canSeeMenuItem(ancestor)).every(Boolean);
   return own && ancestorsVisible;

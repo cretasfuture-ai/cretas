@@ -245,22 +245,22 @@ function formatKg(val: number | null | undefined): string {
 }
 
 .qty-cell.available {
-  color: #409eff;
+  color: var(--cs-primary);
   font-weight: 600;
 }
 
 .qty-cell.available.zero {
-  color: #909399;
+  color: var(--cs-muted);
   font-weight: 400;
 }
 
 .qty-cell.consumed {
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 .empty-tip {
   text-align: center;
-  color: #909399;
+  color: var(--cs-muted);
   padding: 40px 0;
   font-size: 14px;
 }

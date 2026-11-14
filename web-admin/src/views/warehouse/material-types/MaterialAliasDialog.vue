@@ -154,9 +154,9 @@ async function handleDelete(item: MaterialAliasItem): Promise<void> {
 <style scoped>
 .alias-error { margin-top: 8px; }
 .alias-list { margin: 12px 0; min-height: 48px; }
-.alias-empty { color: #909399; padding: 8px 0; }
+.alias-empty { color: var(--cs-muted); padding: 8px 0; }
 .alias-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
 .alias-text { flex: 1; }
 .alias-add { display: flex; gap: 8px; }
-.alias-too-long { color: #f56c6c; font-size: 12px; margin-top: 4px; }
+.alias-too-long { color: var(--cs-danger); font-size: 12px; margin-top: 4px; }
 </style>

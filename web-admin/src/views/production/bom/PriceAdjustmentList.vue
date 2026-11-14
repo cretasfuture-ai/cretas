@@ -374,7 +374,7 @@ async function submitReject() {
   margin-bottom: 12px;
 }
 .sub {
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 12px;
 }
 .pager {
@@ -388,6 +388,6 @@ async function submitReject() {
 }
 .reject-context {
   margin: 0 0 12px;
-  color: #606266;
+  color: var(--cs-muted);
 }
 </style>
