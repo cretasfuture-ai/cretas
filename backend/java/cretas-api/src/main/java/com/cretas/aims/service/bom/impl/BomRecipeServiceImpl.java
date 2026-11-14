@@ -615,7 +615,9 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     @Override
     @Transactional
     public BomRecipe cloneRecipe(String factoryId, String recipeId) {
-        BomRecipe source = loadRecipe(factoryId, recipeId);
+        // 红线 3 后续: 先按 id 升序锁整个源族再读。之后 cloneRelations 会逐个成员 (主产在前) 锁「源头 + 新克隆」,
+        // 不先锁源族的话, 这个顺序与调价 / 包材更正等按 id 升序锁同一族的路径相反, PG 会判死锁。
+        BomRecipe source = lockFamilyForCostWrite(factoryId, recipeId);
         if (source.getWorkflowRevisionHash() == null) {
             throw bomError(409, "历史 BOM 未固定可证明的 Workflow 修订，不能静默克隆",
                     "BOM_WORKFLOW_LEGACY_MIGRATION_REQUIRED",
@@ -632,7 +634,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
             assertVersionCapacity(factoryId, member.getProductTypeId());
         }
         String newFamilyId = UUID.randomUUID().toString();
-        // 红线 3: 克隆出的是本事务新建的族, 别的事务看不见; 源族只读 (复制它已提交的行), 不加锁。
+        // 红线 3: 克隆出的是本事务新建的族, 别的事务看不见; 源族已在入口按 id 升序锁住 (复制的是锁内的已提交行)。
         BomRecipeHeadLocks.registerCreatedFamily(factoryId, newFamilyId);
         List<BomRecipe> ordered = family.stream()
                 .sorted(Comparator.comparing((BomRecipe member) ->
@@ -1869,7 +1871,7 @@ public class BomRecipeServiceImpl implements BomRecipeService {
     private BomRecipeItem lockFamilyThenItem(String factoryId, Long itemId) {
         Optional<String> recipeId = itemRepo.findRecipeIdById(factoryId, itemId);
         recipeId.ifPresent(id -> BomRecipeHeadLocks.lockWithFamily(entityManager, recipeRepo, factoryId, id));
-        BomRecipeItem item = itemRepo.findByIdForUpdate(itemId)
+        BomRecipeItem item = itemRepo.findByIdForUpdate(factoryId, itemId)
                 .orElseThrow(() -> bomError(404,
                         "这条 BOM 明细行不存在，可能已被其他人删除",
                         "BOM_ITEM_MISSING",

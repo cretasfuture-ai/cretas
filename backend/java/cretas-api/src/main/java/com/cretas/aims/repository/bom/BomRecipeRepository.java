@@ -182,5 +182,22 @@ public interface BomRecipeRepository extends JpaRepository<BomRecipe, String> {
                                @Param("factoryId") String factoryId,
                                @Param("expectedRevision") Long expectedRevision);
 
+    /**
+     * 版本审批同步配方头的「当前版本」两列 —— 定向 UPDATE, 只写这两列。
+     * 配方头没有乐观锁 / @DynamicUpdate, 若读实体再 save, 提交时整行 UPDATE 会把并发重算刚提交的成本列
+     * 用旧值写回 (红线 3 后续)。不清持久化上下文: 审批事务里别的托管对象还要用。
+     */
+    @Modifying(flushAutomatically = true)
+    @Query(value = """
+            UPDATE bom_recipes
+               SET is_current = TRUE,
+                   version = :version
+             WHERE id = :recipeId
+               AND factory_id = :factoryId
+            """, nativeQuery = true)
+    int markCurrentVersion(@Param("recipeId") String recipeId,
+                           @Param("factoryId") String factoryId,
+                           @Param("version") Integer version);
+
     boolean existsByFactoryIdAndRecipeCode(String factoryId, String recipeCode);
 }
