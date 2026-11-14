@@ -10,8 +10,8 @@ import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import type { TableRow } from '@/types/api';
 import { TableFooter } from '@/components/list';
-import BatchNoSearch from '@/components/list/BatchNoSearch.vue';
-import RelativeDateSelect from '@/components/list/RelativeDateSelect.vue';
+import CsBatchNoSearch from '@/components/cs/CsBatchNoSearch.vue';
+import CsRelativeDate from '@/components/cs/CsRelativeDate.vue';
 import type { RelativeDateKey, RelativeRange } from '@/utils/listFilters';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
@@ -53,7 +53,7 @@ const filterResult = ref('');
 const batchNos = ref<string[]>([]);
 const dateKey = ref<RelativeDateKey | ''>('');
 const dateRange = ref<{ from: string; to: string } | null>(null);
-const batchNoSearchRef = ref<InstanceType<typeof BatchNoSearch> | null>(null);
+const batchNoSearchRef = ref<InstanceType<typeof CsBatchNoSearch> | null>(null);
 
 async function searchBatchNos(nos: string[]) {
   if (!factoryId.value) throw new Error('未选择工厂');
@@ -482,8 +482,8 @@ function registerDefect(row: TableRow) {
           style="width: 280px"
           @keyup.enter="handleSearch"
         />
-        <BatchNoSearch ref="batchNoSearchRef" label="批次号" :on-search="searchBatchNos" @clear="clearBatchNos" />
-        <RelativeDateSelect v-model="dateKey" @change="onDateChange" />
+        <CsBatchNoSearch ref="batchNoSearchRef" label="批次号" :on-search="searchBatchNos" @clear="clearBatchNos" />
+        <CsRelativeDate v-model="dateKey" @change="onDateChange" />
         <el-select v-model="filterResult" placeholder="检测结果" clearable style="width: 150px">
           <el-option label="合格" value="PASS" />
           <el-option label="不合格" value="FAIL" />

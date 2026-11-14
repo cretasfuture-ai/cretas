@@ -91,8 +91,7 @@ describe('追溯进入既有质检页面', () => {
     state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : url.endsWith('/batches/9') ? { ...batch, id: 9, batchNumber: 'BOX-9' } : url.endsWith('/quality-form') ? { batchId: String(route.query.batchId), standardRevision: 'legacy-empty', items: [] } : { content: [], totalElements: 0 })));
     const wrapper = mountPage();
     await flushPromises();
-    // 第 0 个是相对日期下拉, 第 1 个才是检测结果
-    wrapper.findAllComponents(ElSelect)[1].vm.$emit('update:modelValue', 'FAIL');
+    wrapper.findAllComponents(ElSelect)[0].vm.$emit('update:modelValue', 'FAIL');
     await clickText(wrapper, '搜索');
     expect(state.get.mock.calls.at(-1)![1].params.result).toBe('FAIL');
     route.query = { batchId: '9' };

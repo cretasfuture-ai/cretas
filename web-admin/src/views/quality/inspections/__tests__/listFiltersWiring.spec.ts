@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { reactive } from 'vue';
-import ElementPlus, { ElSelect } from 'element-plus';
+import ElementPlus from 'element-plus';
 
 const state = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn() }));
 const route = reactive<{ query: Record<string, string> }>({ query: {} });
@@ -24,8 +24,7 @@ function mountPage() {
   });
 }
 function batchTextarea(): HTMLTextAreaElement {
-  const el = document.body.querySelector('[data-testid="batch-no-text"]') as HTMLElement;
-  return (el.tagName === 'TEXTAREA' ? el : el.querySelector('textarea')) as HTMLTextAreaElement;
+  return document.body.querySelector('[data-testid="batch-no-text"]') as HTMLTextAreaElement;
 }
 const listCalls = () => state.get.mock.calls.filter(c => String(c[0]).endsWith('/quality/inspections'));
 
@@ -65,22 +64,23 @@ describe('质检记录列表: 批量批次号 + 相对日期走服务端', () =>
   it('相对日期: 选「今天」带 dateFrom=dateTo=今天(北京), 清除后不再带; 重置清掉全部条件', async () => {
     const wrapper = mountPage();
     await flushPromises();
-    const dateSelect = wrapper.findAllComponents(ElSelect)[0];
-    dateSelect.vm.$emit('update:modelValue', 'today');
-    await flushPromises();
+    const click = async (id: string) => { await wrapper.find(`[data-testid="${id}"]`).trigger('click'); await flushPromises(); };
+    await click('rel-date-today');
     const params = listCalls().at(-1)![1].params;
     expect(params.dateFrom).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(params.dateTo).toBe(params.dateFrom);
+    expect(wrapper.find('[data-testid="rel-date-today"]').attributes('aria-pressed')).toBe('true');
 
-    dateSelect.vm.$emit('update:modelValue', '');
-    await flushPromises();
+    await click('rel-date-all');
     expect(listCalls().at(-1)![1].params.dateFrom).toBeUndefined();
     expect(listCalls().at(-1)![1].params.dateTo).toBeUndefined();
 
-    dateSelect.vm.$emit('update:modelValue', 'week');
-    await flushPromises();
+    await click('rel-date-week');
     const week = listCalls().at(-1)![1].params;
     expect(new Date(week.dateTo).getTime() - new Date(week.dateFrom).getTime()).toBe(6 * 86400000); // 周一至周日
+    await click('rel-date-week'); // 再点已选中的 = 取消
+    expect(listCalls().at(-1)![1].params.dateFrom).toBeUndefined();
+    await click('rel-date-month');
     const reset = wrapper.findAll('button').find(b => b.text() === '重置')!;
     await reset.trigger('click');
     await flushPromises();
@@ -102,7 +102,7 @@ describe('质检记录列表: 批量批次号 + 相对日期走服务端', () =>
     await flushPromises();
     (document.body.querySelector('[data-testid="batch-no-run"]') as HTMLButtonElement).click();
     await flushPromises();
-    expect(document.body.textContent).toContain('一次最多查询 200 个批次号');
+    expect(document.body.querySelector('[data-testid="batch-no-error"]')!.textContent).toContain('一次最多查询 200 个批次号');
     expect(listCalls().at(-1)![1].params.batchNos).toBeUndefined();
     wrapper.unmount();
   });
