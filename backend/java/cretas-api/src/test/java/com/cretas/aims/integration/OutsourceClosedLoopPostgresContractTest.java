@@ -106,7 +106,8 @@ class OutsourceClosedLoopPostgresContractTest {
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({OutsourceService.class, LineageEdgeRecorder.class, LineageEdgeWriter.class, LineageEdgeOutbox.class,
             FinishedBatchProductionAligner.class, WarehouseResolver.class, QcInspectionPolicy.class,
-            ArApServiceImpl.class, QualityReturnOrderServiceImpl.class})
+            ArApServiceImpl.class, QualityReturnOrderServiceImpl.class,
+            com.cretas.aims.service.finance.FinancePaymentReferenceLock.class})
     static class Runtime {
         /** 会计期间闸不在本测试范围: 一律开放。 */
         @Bean
