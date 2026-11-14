@@ -86,7 +86,7 @@ defineExpose({ collect });
 </template>
 
 <style scoped>
-.lead { margin: 0 0 8px; color: #f56c6c; font-size: 14px; font-weight: 600; line-height: 1.5; }
-.hint { margin: 0 0 12px; color: #606266; font-size: 13px; }
-.disabled-reason { color: #f56c6c; font-size: 12px; margin-right: 12px; }
+.lead { margin: 0 0 8px; color: var(--cs-danger); font-size: 14px; font-weight: 600; line-height: 1.5; }
+.hint { margin: 0 0 12px; color: var(--cs-muted); font-size: 13px; }
+.disabled-reason { color: var(--cs-danger); font-size: 12px; margin-right: 12px; }
 </style>

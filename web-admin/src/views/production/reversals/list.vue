@@ -151,8 +151,8 @@ function goToBatch(batchId: number) {
     <!-- 页头 -->
     <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <div>
-        <h2 style="margin:0;font-size:18px;font-weight:600;color:#303133">报工撤回申请</h2>
-        <p style="margin:4px 0 0;font-size:13px;color:#909399">管理生产批次的整单撤回申请与审批</p>
+        <h2 style="margin:0;font-size:18px;font-weight:600;color:var(--cs-text)">报工撤回申请</h2>
+        <p style="margin:4px 0 0;font-size:13px;color:var(--cs-muted)">管理生产批次的整单撤回申请与审批</p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <el-select
@@ -214,14 +214,14 @@ function goToBatch(batchId: number) {
         <!-- 申请原因 -->
         <el-table-column label="申请原因" min-width="180" show-overflow-tooltip>
           <template #default="{ row }">
-            <span style="color:#606266">{{ row.reason || '—' }}</span>
+            <span style="color:var(--cs-muted)">{{ row.reason || '—' }}</span>
           </template>
         </el-table-column>
 
         <!-- 已回退流水数 -->
         <el-table-column label="已回退流水" width="110">
           <template #default="{ row }">
-            <span v-if="row.revertedTxnIds && row.revertedTxnIds.length > 0" style="color:#67C23A;font-weight:500">
+            <span v-if="row.revertedTxnIds && row.revertedTxnIds.length > 0" style="color:var(--cs-success);font-weight:500">
               {{ row.revertedTxnIds.length }} 笔
             </span>
             <span v-else style="color:#C0C4CC">—</span>
@@ -231,21 +231,21 @@ function goToBatch(batchId: number) {
         <!-- 提交人 -->
         <el-table-column label="提交人 ID" width="100">
           <template #default="{ row }">
-            <span style="color:#606266">{{ row.submittedBy || '—' }}</span>
+            <span style="color:var(--cs-muted)">{{ row.submittedBy || '—' }}</span>
           </template>
         </el-table-column>
 
         <!-- 审批人 -->
         <el-table-column label="审批人 ID" width="100">
           <template #default="{ row }">
-            <span style="color:#606266">{{ row.approvedBy || '—' }}</span>
+            <span style="color:var(--cs-muted)">{{ row.approvedBy || '—' }}</span>
           </template>
         </el-table-column>
 
         <!-- 审批时间 -->
         <el-table-column label="审批时间" width="160">
           <template #default="{ row }">
-            <span style="color:#909399;font-size:12px">
+            <span style="color:var(--cs-muted);font-size:12px">
               {{ row.approvedAt ? formatDateTime(row.approvedAt) : '—' }}
             </span>
           </template>
@@ -254,7 +254,7 @@ function goToBatch(batchId: number) {
         <!-- 申请时间 -->
         <el-table-column label="申请时间" width="160">
           <template #default="{ row }">
-            <span style="color:#909399;font-size:12px">
+            <span style="color:var(--cs-muted);font-size:12px">
               {{ formatDateTime(row.createdAt) }}
             </span>
           </template>
@@ -306,7 +306,7 @@ function goToBatch(batchId: number) {
           style="margin-bottom:16px"
         >
           <template #default>
-            <div style="font-size:13px;color:#606266;line-height:1.6;margin-top:4px">
+            <div style="font-size:13px;color:var(--cs-muted);line-height:1.6;margin-top:4px">
               <span v-if="approvalTarget.planId">
                 关联计划: <strong>{{ approvalTarget.planId }}</strong><br>
               </span>
@@ -322,8 +322,8 @@ function goToBatch(batchId: number) {
         <!-- 拒绝时: 原因 dropdown（fool-proof Rule 3） -->
         <template v-if="approvalAction === 'reject'">
           <div style="margin-bottom:8px">
-            <span style="font-size:13px;font-weight:500;color:#303133">驳回原因</span>
-            <span style="color:#F56C6C;margin-left:2px">*</span>
+            <span style="font-size:13px;font-weight:500;color:var(--cs-text)">驳回原因</span>
+            <span style="color:var(--cs-danger);margin-left:2px">*</span>
           </div>
           <el-select
             v-model="rejectReasonSelected"
@@ -356,7 +356,7 @@ function goToBatch(batchId: number) {
         <!-- 批准时: 可选意见 -->
         <template v-else>
           <div style="margin-bottom:8px">
-            <span style="font-size:13px;font-weight:500;color:#303133">审批意见（可选）</span>
+            <span style="font-size:13px;font-weight:500;color:var(--cs-text)">审批意见（可选）</span>
           </div>
           <el-input
             v-model="approvalOpinion"
@@ -397,7 +397,7 @@ function goToBatch(batchId: number) {
 <style scoped>
 .page-container {
   padding: 20px;
-  background: #F4F6F9;
+  background: var(--cs-bg);
   min-height: 100%;
 }
 </style>

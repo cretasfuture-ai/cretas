@@ -297,7 +297,7 @@ function formatDaysCell(days: number | null | undefined): string {
   width: 100%;
   padding: 16px;
   text-align: left;
-  border: 1px solid var(--el-border-color-light, #e4e7ed);
+  border: 1px solid var(--el-border-color-light, var(--cs-border));
   border-radius: 4px;
   background: var(--el-fill-color-blank, #fff);
   cursor: pointer;
@@ -309,18 +309,18 @@ function formatDaysCell(days: number | null | undefined): string {
 }
 
 .summary-card:focus-visible {
-  outline: 2px solid var(--el-color-primary, #409eff);
+  outline: 2px solid var(--el-color-primary, var(--cs-primary));
   outline-offset: 2px;
 }
 
 .summary-card.card-active {
-  border-color: var(--el-color-primary, #409eff);
-  box-shadow: 0 0 0 1px var(--el-color-primary, #409eff) inset;
+  border-color: var(--el-color-primary, var(--cs-primary));
+  box-shadow: 0 0 0 1px var(--el-color-primary, var(--cs-primary)) inset;
 }
 
 .summary-cards .card-label {
   font-size: 14px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-bottom: 8px;
 }
 
@@ -330,14 +330,14 @@ function formatDaysCell(days: number | null | undefined): string {
   line-height: 1.2;
 }
 
-.summary-cards .card-all .card-value { color: #303133; }
-.summary-cards .card-danger .card-value { color: #f56c6c; }
-.summary-cards .card-urgent .card-value { color: #e6a23c; }
-.summary-cards .card-warn .card-value { color: #e6a23c; }
-.summary-cards .card-normal .card-value { color: #67c23a; }
+.summary-cards .card-all .card-value { color: var(--cs-text); }
+.summary-cards .card-danger .card-value { color: var(--cs-danger); }
+.summary-cards .card-urgent .card-value { color: var(--cs-warning); }
+.summary-cards .card-warn .card-value { color: var(--cs-warning); }
+.summary-cards .card-normal .card-value { color: var(--cs-success); }
 
 .days-overdue {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 

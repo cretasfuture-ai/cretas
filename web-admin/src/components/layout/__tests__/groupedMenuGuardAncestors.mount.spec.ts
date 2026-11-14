@@ -166,6 +166,22 @@ describe('P2b「数据与分析」对工厂默认显示、按厂可关（真挂�
     expect(titles).toContain('主数据');
   });
 
+  it('P6 阳性：成本分析三项（D1）、物料均价趋势（D6）在「数据与分析」下，在制品挂在「仓储管理」下', async () => {
+    identity('factory_super_admin');
+    const titles = await sidebarTitles();
+    for (const t of ['成本汇总', '成本损耗异常', '物料均价趋势', '在制品']) expect(titles, t).toContain(t);
+  });
+
+  it('P6 阴性：该厂 showInSidebar=false ⇒ 搬进来的成本分析 / 物料均价跟着消失，在制品（仓储）不受影响', async () => {
+    identity('factory_super_admin');
+    extraFeatures = [{ moduleId: 'analytics', enabled: true, config: { showInSidebar: false } }];
+    const titles = await sidebarTitles();
+    expect(titles).not.toContain('数据与分析');
+    for (const t of ['成本汇总', '物料均价趋势']) expect(titles, t).not.toContain(t);
+    expect(titles).toContain('在制品');
+    expect(titles).toContain('生产管理');
+  });
+
   it('旧别名 smartbi 行写 showInSidebar=false 也能关', async () => {
     identity('factory_super_admin');
     extraFeatures = [{ moduleId: 'smartbi', enabled: true, config: { showInSidebar: false } }];

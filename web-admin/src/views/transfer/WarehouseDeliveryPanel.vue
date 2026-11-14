@@ -41,4 +41,4 @@ async function receive() { if (!delivery.value || submitting.value) return; cons
     </template>
   </el-card>
 </template>
-<style scoped>.warehouse-delivery-panel{margin-top:20px}.panel-header{display:flex;justify-content:space-between;align-items:center}.context{padding:12px 0;color:#606266}.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}</style>
+<style scoped>.warehouse-delivery-panel{margin-top:20px}.panel-header{display:flex;justify-content:space-between;align-items:center}.context{padding:12px 0;color:var(--cs-muted)}.actions{display:flex;justify-content:flex-end;gap:8px;margin-top:16px}</style>

@@ -833,7 +833,36 @@ const MASTER_DATA_PATHS = [
 ] as const;
 const SETTINGS_LEAF_PATHS = ['/quality/vision-training'] as const;
 
-const MOVED_OUT = new Set<string>([...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS]);
+/**
+ * P6：搬进「数据与分析」的生产 / 仓储叶子（只改菜单位置，路由与权限字段不变，原父组作 guardAncestors 继续把关）。
+ *   · 成本分析入口（D1）：成本差异 / 成本损耗异常 / 成本汇总，原在「生产管理」下。
+ *   · 物料均价趋势（D6）：原在「仓储管理」下，放「经营分析」。
+ */
+const COST_ANALYSIS_PATHS = [
+  '/production/cost-variance',
+  '/production/cost-deviation-cases',
+  '/production-analytics/cost-summary',
+] as const;
+const PRICE_TREND_PATH = '/warehouse/material-price-trend';
+
+const MOVED_OUT = new Set<string>([
+  ...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS, ...COST_ANALYSIS_PATHS, PRICE_TREND_PATH,
+]);
+
+/**
+ * P6：「在制品」/warehouse/wip-batches 路由早已存在但原菜单没有入口，只在原型分组侧栏的「仓储管理」里挂一项。
+ * 权限 = 路由自己的 module: 'warehouse'（与「仓储管理」父组同判据），不另加 roles；闸里 EXPECTED_ADDITIONS 登记。
+ * 原分组 menuConfig（餐饮 / 物流在用）不动。
+ */
+const WIP_MENU_ITEM: MenuItem = { path: '/warehouse/wip-batches', title: '在制品', icon: '', module: 'warehouse' };
+
+function warehouseGroupWithWip(): MenuItem {
+  const group = takeGroup('/warehouse', MOVED_OUT);
+  const kids = [...(group.children ?? [])];
+  const at = kids.findIndex((c) => c.path === '/warehouse/materials');
+  kids.splice(at < 0 ? kids.length : at + 1, 0, WIP_MENU_ITEM);
+  return { ...group, children: kids };
+}
 
 /**
  * P3：顶层独立入口「今天」「待办」。两页只读聚合各来源接口，自己没有数据权限；
@@ -850,6 +879,15 @@ const TOP_ENTRIES: MenuItem[] = [
 /** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */
 const REPLACED_BY_ISSUES = new Set<string>(['/workspaces/exceptions']);
 
+/** 「数据与分析」子项：原 /smart-bi 全部子项，经营分析段后插入物料均价趋势（D6），其后接「成本分析」三项（D1）。 */
+function analyticsChildren(): MenuItem[] {
+  const base = moveAllChildren('/smart-bi');
+  const at = base.findIndex((c) => c.path === '/analytics/supply-chain');
+  const cost = COST_ANALYSIS_PATHS.map((p, i) => (i === 0 ? { ...moveLeaf(p), groupLabel: '成本分析' } : moveLeaf(p)));
+  base.splice(at < 0 ? base.length : at + 1, 0, moveLeaf(PRICE_TREND_PATH), ...cost);
+  return base;
+}
+
 function buildGroupedMenu(): MenuItem[] {
   const overview = container('#group/overview', '概览', 'House', [
     mustLocate('/dashboard').node,
@@ -860,7 +898,7 @@ function buildGroupedMenu(): MenuItem[] {
   const analytics = container('#group/analytics', '数据与分析', 'DataAnalysis', [
     mustLocate('/analytics/ai-reports').node,
     mustLocate('/analytics/indicators').node,
-    ...moveAllChildren('/smart-bi'),
+    ...analyticsChildren(),
   ]);
   const all: MenuItem[] = [
     overview,
@@ -868,7 +906,7 @@ function buildGroupedMenu(): MenuItem[] {
     takeGroup('/procurement', MOVED_OUT),
     takeGroup('/sales', MOVED_OUT),
     takeGroup('/production', MOVED_OUT),
-    takeGroup('/warehouse', MOVED_OUT),
+    warehouseGroupWithWip(),
     takeGroup('/quality', MOVED_OUT),
     analytics,
     // 原型关掉、正式端保留的模块（第三块）：只换外观与位置

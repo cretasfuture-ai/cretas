@@ -989,7 +989,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
 .correction-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
 .toolbar-right { display: flex; gap: 8px; }
 .filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.text-warning { color: #e6a23c; font-weight: 600; }
+.text-warning { color: var(--cs-warning); font-weight: 600; }
 .report-detail {
   padding: 12px 24px 18px 24px;
   background: #fafcff;
@@ -1000,7 +1000,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
 .evidence-title {
   font-size: 13px;
   font-weight: 700;
-  color: #303133;
+  color: var(--cs-text);
   margin-bottom: 8px;
 }
 .evidence-media {
@@ -1016,7 +1016,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
   background: #111827;
 }
 .evidence-empty {
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 13px;
 }
 .custom-field-tags {
@@ -1039,7 +1039,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  color: #303133;
+  color: var(--cs-text);
   font-size: 13px;
 }
 .custom-field-tag {
@@ -1055,7 +1055,7 @@ function evidenceImageIndex(urls: string[], url: string): number {
   flex-wrap: wrap;
   gap: 6px 20px;
   font-size: 13px;
-  color: #606266;
+  color: var(--cs-muted);
   margin-top: 4px;
 }
 </style>

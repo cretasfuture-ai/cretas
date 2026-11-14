@@ -230,7 +230,7 @@ async function handleDelete(row: ManufacturerRegistry) {
 
   p {
     margin: 4px 0 0;
-    color: #7a8599;
+    color: var(--cs-muted);
     font-size: 13px;
   }
 }

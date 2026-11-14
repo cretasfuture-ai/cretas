@@ -257,21 +257,21 @@ function handleReset() {
         </el-card>
         <el-card shadow="hover" class="kpi-card">
           <div class="kpi-value" data-testid="kpi-avg-conversion"
-            :style="{ color: kpi.avgConversion == null ? '#909399' : getConversionColor(kpi.avgConversion) }">
+            :style="{ color: kpi.avgConversion == null ? 'var(--cs-muted)' : getConversionColor(kpi.avgConversion) }">
             {{ kpi.avgConversion == null ? '—' : `${kpi.avgConversion}%` }}
           </div>
           <div class="kpi-label">平均转化率</div>
           <div class="kpi-note" data-testid="kpi-scope-note">{{ kpiScopeNote }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" :style="{ color: kpi.avgWastage == null ? '#909399' : '#E6A23C' }">
+          <div class="kpi-value" :style="{ color: kpi.avgWastage == null ? 'var(--cs-muted)' : 'var(--cs-warning)' }">
             {{ kpi.avgWastage == null ? '—' : `${kpi.avgWastage}%` }}
           </div>
           <div class="kpi-label">平均损耗率</div>
           <div class="kpi-note">{{ kpiScopeNote }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: #F56C6C">{{ kpi.lowEfficiencyCount }}</div>
+          <div class="kpi-value" style="color: var(--cs-danger)">{{ kpi.lowEfficiencyCount }}</div>
           <div class="kpi-label">低效工序数 (&lt;80%)</div>
         </el-card>
       </div>
@@ -442,7 +442,7 @@ function handleReset() {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -468,12 +468,12 @@ function handleReset() {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -504,19 +504,19 @@ function handleReset() {
 
   .kpi-label {
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 
   .kpi-note {
     margin-top: 4px;
     font-size: 12px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 }
 
 .incomparable {
   font-size: 12px;
-  color: var(--text-color-secondary, #909399);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .search-bar {
@@ -535,9 +535,9 @@ function handleReset() {
   gap: 20px;
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 
   .legend-item {
     display: flex;
@@ -550,15 +550,15 @@ function handleReset() {
     height: 10px;
     border-radius: 50%;
 
-    &.success { background-color: #67C23A; }
-    &.warning { background-color: #E6A23C; }
-    &.danger { background-color: #F56C6C; }
+    &.success { background-color: var(--cs-success); }
+    &.warning { background-color: var(--cs-warning); }
+    &.danger { background-color: var(--cs-danger); }
   }
 }
 
 .balance-hint {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   align-self: center;
 }
 
@@ -574,13 +574,13 @@ function handleReset() {
     margin-left: 12px;
     font-weight: 400;
     font-size: 12px;
-    color: #909399;
+    color: var(--cs-muted);
   }
 }
 
 .balance-note {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 @media (max-width: 768px) {

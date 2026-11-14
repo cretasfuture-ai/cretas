@@ -456,7 +456,7 @@ async function handleDelete(row: SourceIndividual) {
 
   p {
     margin: 4px 0 0;
-    color: #7a8599;
+    color: var(--cs-muted);
     font-size: 13px;
   }
 }
@@ -480,7 +480,7 @@ async function handleDelete(row: SourceIndividual) {
 
 .field-hint {
   margin-top: 4px;
-  color: #7a8599;
+  color: var(--cs-muted);
   font-size: 12px;
   line-height: 1.5;
 }

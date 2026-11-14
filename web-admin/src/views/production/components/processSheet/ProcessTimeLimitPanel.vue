@@ -318,20 +318,20 @@ defineExpose({ reload });
 }
 .time-limit-panel {
   margin-bottom: 8px;
-  border: 1px solid var(--el-border-color-lighter, #e4e7ed);
+  border: 1px solid var(--el-border-color-lighter, var(--cs-border));
   border-radius: 6px;
   padding: 8px 12px;
   background: var(--el-fill-color-blank, #fff);
   font-size: 13px;
 }
 .time-limit-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
-.time-limit-sub { color: var(--el-text-color-secondary, #909399); font-size: 12px; }
-.time-limit-failed { margin: 0; color: var(--el-color-danger, #f56c6c); }
-.time-limit-owner-notice { margin: 0; color: var(--el-color-warning, #e6a23c); }
+.time-limit-sub { color: var(--el-text-color-secondary, var(--cs-muted)); font-size: 12px; }
+.time-limit-failed { margin: 0; color: var(--el-color-danger, var(--cs-danger)); }
+.time-limit-owner-notice { margin: 0; color: var(--el-color-warning, var(--cs-warning)); }
 .time-limit-table { width: 100%; border-collapse: collapse; }
 .time-limit-table th, .time-limit-table td {
   padding: 3px 12px 3px 0; text-align: left; vertical-align: top; font-variant-numeric: tabular-nums;
 }
-.time-limit-table th { color: var(--el-text-color-secondary, #909399); font-weight: normal; }
+.time-limit-table th { color: var(--el-text-color-secondary, var(--cs-muted)); font-weight: normal; }
 .time-limit-actions { white-space: nowrap; }
 </style>

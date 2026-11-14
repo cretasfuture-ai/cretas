@@ -202,7 +202,7 @@ function kindGlyph(kind: PreviewKind): string {
 .legend-item.is-semi-finished { color: #3d9b5f; }
 .legend-item.is-process { color: #3278d5; }
 .legend-item.is-finished-good { color: #8155cb; }
-.preview-scroll { max-width: min(760px, calc(100vw - 96px)); max-height: 430px; overflow: auto; border: 1px solid #e5eaf0; border-radius: 10px; background: #f8fafc; }
+.preview-scroll { max-width: min(760px, calc(100vw - 96px)); max-height: 430px; overflow: auto; border: 1px solid #e5eaf0; border-radius: 10px; background: var(--cs-surface-subtle); }
 .preview-canvas { position: relative; min-width: 100%; background-image: radial-gradient(#dbe3ed 0.75px, transparent 0.75px); background-size: 16px 16px; }
 .preview-links { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .preview-edge { fill: none; stroke: #7a91ad; stroke-width: 2; opacity: 0.9; }
@@ -219,5 +219,5 @@ function kindGlyph(kind: PreviewKind): string {
 .cell-type { color: #8a96a6; font-size: 10px; line-height: 1.2; }
 .cell-copy strong { overflow: hidden; color: #1f2d3d; font-size: 12px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
 .cell-copy small { color: #718096; font-size: 10px; }
-.preview-empty { display: grid; min-height: 130px; place-items: center; border: 1px dashed #cfd8e3; border-radius: 10px; color: #8a96a6; background: #f8fafc; }
+.preview-empty { display: grid; min-height: 130px; place-items: center; border: 1px dashed #cfd8e3; border-radius: 10px; color: #8a96a6; background: var(--cs-surface-subtle); }
 </style>

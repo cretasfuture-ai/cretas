@@ -671,14 +671,14 @@ onMounted(async () => {
             style="width: 200px"
             placeholder="数量"
           />
-          <div v-if="selectedWastageMax != null" style="font-size:12px;color:#909399;margin-top:4px">
+          <div v-if="selectedWastageMax != null" style="font-size:12px;color:var(--cs-muted);margin-top:4px">
             该批次可用量 {{ selectedWastageMax }}，报损数量不可超过此值
           </div>
           <!-- fool-proof-design Rule 1 (预先显示边界, 2026-07-05): 纯提示, 不改上面的 :max gate。
                只在有未小结生产占用 (货架实物 < 可用量) 时才显示, 避免无意义噪音。 -->
           <div
             v-if="selectedPhysicalAvailable != null && selectedUnsettled > 0"
-            style="font-size:12px;color:#e6a23c;margin-top:4px"
+            style="font-size:12px;color:var(--cs-warning);margin-top:4px"
           >
             可用(货架实物) {{ selectedPhysicalAvailable }}：可用库存 {{ selectedWastageMax }} − 生产已占用（未小结）{{ selectedUnsettled }}
           </div>
@@ -710,12 +710,12 @@ onMounted(async () => {
                 <el-image
                   :src="url"
                   fit="cover"
-                  style="width:72px;height:72px;border-radius:4px;border:1px solid #dcdfe6"
+                  style="width:72px;height:72px;border-radius:4px;border:1px solid var(--cs-border)"
                   :preview-src-list="createForm.photoUrls"
                   :initial-index="i"
                 />
                 <el-icon
-                  style="position:absolute;top:-6px;right:-6px;background:#fff;border-radius:50%;cursor:pointer;color:#f56c6c"
+                  style="position:absolute;top:-6px;right:-6px;background:#fff;border-radius:50%;cursor:pointer;color:var(--cs-danger)"
                   :size="18"
                   @click="removePhoto(i)"
                 ><CircleCloseFilled /></el-icon>
@@ -752,7 +752,7 @@ onMounted(async () => {
 
         <!-- Photo thumbnails: photoUrls is a JSON string from the backend DTO -->
         <div v-if="parsePhotoUrlsFromRow(approveRow.photoUrls).length > 0" style="margin-bottom: 16px">
-          <div style="font-size: 13px; color: #606266; margin-bottom: 6px">照片证据：</div>
+          <div style="font-size: 13px; color: var(--cs-muted); margin-bottom: 6px">照片证据：</div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap">
             <el-image
               v-for="(url, i) in parsePhotoUrlsFromRow(approveRow.photoUrls)"
@@ -814,7 +814,7 @@ onMounted(async () => {
           :src="url"
           :preview-src-list="viewingPhotos"
           fit="contain"
-          style="width: 180px; height: 180px; border: 1px solid #e4e7ed; border-radius: 6px"
+          style="width: 180px; height: 180px; border: 1px solid var(--cs-border); border-radius: 6px"
         >
           <template #error>
             <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #c0c4cc; font-size: 12px">
@@ -833,7 +833,7 @@ onMounted(async () => {
 <style scoped>
 .page-container {
   padding: 20px;
-  background: #F4F6F9;
+  background: var(--cs-bg);
   min-height: 100%;
 }
 .page-header {
@@ -846,7 +846,7 @@ onMounted(async () => {
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #1B65A8;
+  color: var(--cs-primary);
 }
 .header-actions {
   display: flex;

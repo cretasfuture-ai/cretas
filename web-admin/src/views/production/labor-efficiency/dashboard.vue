@@ -581,11 +581,11 @@ onMounted(async () => {
   font-size: 20px;
   font-weight: 600;
   margin: 0;
-  color: #303133;
+  color: var(--cs-text);
 }
 .page-header .subtitle {
   font-size: 13px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 .filter-card {
   margin-bottom: 16px;
@@ -602,7 +602,7 @@ onMounted(async () => {
 .card-title {
   font-size: 14px;
   font-weight: 600;
-  color: #606266;
+  color: var(--cs-muted);
   margin-bottom: 8px;
 }
 .card-rate {
@@ -612,12 +612,12 @@ onMounted(async () => {
 }
 .card-meta {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-bottom: 6px;
 }
 .card-meta .divider {
   margin: 0 6px;
-  color: #dcdfe6;
+  color: var(--cs-border);
 }
 .card-alert {
   min-height: 22px;
@@ -625,27 +625,27 @@ onMounted(async () => {
 .product-group-header {
   font-size: 13px;
   font-weight: 600;
-  color: #606266;
+  color: var(--cs-muted);
   padding: 4px 0 8px;
-  border-bottom: 1px solid #ebeef5;
+  border-bottom: 1px solid var(--cs-border);
   margin-bottom: 8px;
 }
 .drawer-subtitle {
   font-size: 14px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
   margin-bottom: 12px;
 }
 .text-critical {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 .text-warning {
-  color: #e6a23c;
+  color: var(--cs-warning);
   font-weight: 600;
 }
 .text-normal {
-  color: #67c23a;
+  color: var(--cs-success);
 }
 .text-muted {
   color: #c0c4cc;
