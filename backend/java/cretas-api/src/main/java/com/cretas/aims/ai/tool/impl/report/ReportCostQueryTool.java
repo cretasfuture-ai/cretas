@@ -25,7 +25,7 @@ import java.util.*;
  *   <li>只读: 不调模型、不存报告, {@link AccessMode#READ}。</li>
  *   <li>数字全部来自批次成本分项 (原料 / 人工 / 设备 / 其他), 与批次表读数一致; 不估算、不补 0。</li>
  *   <li>成本未算全的批次 ({@code costIncomplete}) 不进合计, 单独说明有几个; 工艺保密产品对无权调用者整批剔除并说明。</li>
- *   <li>单位成本 = 总成本 ÷ 良品(缺则实际)产出数量, 且只在同一单位内求, 不把 盒/袋/kg 加在一起。</li>
+ *   <li>单位成本 = 总成本 ÷ 实际产量 (与成本分析页同口径), 且只在同一单位内求, 不把 盒/袋/kg 加在一起。</li>
  *   <li>和「上一个等长周期」对比, 给出各分项涨跌; 上期没数据就明说, 不给环比。</li>
  *   <li>结构化结果带 {@code charts} (成本构成饼图 + 产品成本柱图), 前端对话直接渲染。</li>
  * </ul>
@@ -122,7 +122,9 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         data.put("batchCount", current.batchCount);
         data.put("costIncompleteBatchCount", current.incompleteBatches);
         data.put("withheldBatchCount", current.withheldBatches);
-        data.put("basis", "已完成批次的成本分项 (原料/人工/设备/其他); 成本未算全的批次不进合计; 单位成本 = 总成本 ÷ 良品(缺则实际)产出数量, 按单位分开算");
+        data.put("previousCostedBatchCount", previous.costedBatches);
+        data.put("previousCostIncompleteBatchCount", previous.incompleteBatches);
+        data.put("basis", "已完成批次的成本分项 (原料/人工/设备/其他); 成本未算全的批次不进合计; 单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量, 按单位分开算 (与成本分析页同口径); 批次按结束日落期");
 
         if (current.batchCount == 0) {
             String msg = "「" + start + " 至 " + end + "」" + (keyword != null ? "没有「" + keyword + "」" : "没有")
@@ -147,7 +149,8 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword,
                                 ProcessSecretLlmCostScope.Excluded secret) {
-        List<ProductionBatch> batches = batchRepository.findBatchesInDateRange(
+        // 与成本分析页同口径: 按批次结束日 (DATE(end_time)) 落期, 半开区间 [start 00:00, end+1 00:00)
+        List<ProductionBatch> batches = batchRepository.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
                 factoryId, start.atStartOfDay(), end.plusDays(1).atStartOfDay());
         Aggregate agg = new Aggregate();
         if (batches == null) {
@@ -187,14 +190,18 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             other = other.add(nz(b.getOtherCost()));
             total = total.add(b.getTotalCost());
             String name = b.getProductName() != null ? b.getProductName() : "(未命名产品)";
-            ProductAgg p = byProduct.computeIfAbsent(name, k -> new ProductAgg());
+            String key = b.getProductTypeId() != null && !b.getProductTypeId().isBlank() ? b.getProductTypeId() : "name:" + name;
+            ProductAgg p = byProduct.computeIfAbsent(key, k -> new ProductAgg());
+            p.productTypeId = b.getProductTypeId();
+            if (p.name == null) p.name = name;
             p.batches++;
             p.total = p.total.add(b.getTotalCost());
-            BigDecimal qty = b.getGoodQuantity() != null && b.getGoodQuantity().signum() > 0 ? b.getGoodQuantity() : b.getActualQuantity();
+            // 单位成本口径 = 成本分析页 (factory_production_gold.py product-cost-compare):
+            // 有成本批次的总成本 ÷ 这些批次的「实际产量」, 按 (产品, 单位) 分开。不用良品数 (页面不用)。
             String unit = b.getUnit() != null ? b.getUnit() : "";
-            if (qty != null && qty.signum() > 0) {
-                p.qtyByUnit.merge(unit, qty, BigDecimal::add);
-                p.costByUnit.merge(unit, b.getTotalCost(), BigDecimal::add);
+            p.costByUnit.merge(unit, b.getTotalCost(), BigDecimal::add);
+            if (b.getActualQuantity() != null) {
+                p.qtyByUnit.merge(unit, b.getActualQuantity(), BigDecimal::add);
             }
         }
 
@@ -231,14 +238,14 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         }
 
         List<Map<String, Object>> productRows(int limit) {
-            List<Map.Entry<String, ProductAgg>> entries = new ArrayList<>(byProduct.entrySet());
-            entries.sort((a, c) -> c.getValue().total.compareTo(a.getValue().total));
+            List<ProductAgg> entries = new ArrayList<>(byProduct.values());
+            entries.sort((a, c) -> c.total.compareTo(a.total));
             List<Map<String, Object>> rows = new ArrayList<>();
-            for (Map.Entry<String, ProductAgg> e : entries) {
+            for (ProductAgg p : entries) {
                 if (rows.size() >= limit) break;
-                ProductAgg p = e.getValue();
                 Map<String, Object> r = new LinkedHashMap<>();
-                r.put("productName", e.getKey());
+                r.put("productTypeId", p.productTypeId);
+                r.put("productName", p.name);
                 r.put("batchCount", p.batches);
                 r.put("totalCost", money(p.total));
                 r.put("unitCosts", p.unitCosts());
@@ -249,6 +256,8 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     }
 
     static final class ProductAgg {
+        String productTypeId;
+        String name;
         int batches;
         BigDecimal total = BigDecimal.ZERO;
         final Map<String, BigDecimal> qtyByUnit = new LinkedHashMap<>();
@@ -258,6 +267,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         List<Map<String, Object>> unitCosts() {
             List<Map<String, Object>> list = new ArrayList<>();
             for (Map.Entry<String, BigDecimal> e : qtyByUnit.entrySet()) {
+                if (e.getValue().signum() <= 0) continue;
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("unit", e.getKey().isEmpty() ? "未标单位" : e.getKey());
                 m.put("quantity", e.getValue().setScale(2, RoundingMode.HALF_UP));
@@ -373,18 +383,20 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         sb.append("。");
         List<Map<String, Object>> rows = cur.productRows(5);
         sb.append("\n各产品（总成本从高到低，前 ").append(rows.size()).append("）：");
-        List<Map.Entry<String, ProductAgg>> entries = new ArrayList<>(cur.byProduct.entrySet());
-        entries.sort((a, c) -> c.getValue().total.compareTo(a.getValue().total));
+        List<ProductAgg> entries = new ArrayList<>(cur.byProduct.values());
+        entries.sort((a, c) -> c.total.compareTo(a.total));
         int n = 0;
-        for (Map.Entry<String, ProductAgg> e : entries) {
+        for (ProductAgg p : entries) {
             if (n++ >= 5) break;
-            sb.append("\n").append(n).append(". ").append(e.getKey()).append("：总成本 ¥").append(money(e.getValue().total))
-                    .append("，").append(e.getValue().batches).append(" 批，单位成本 ").append(e.getValue().unitCostText());
+            sb.append("\n").append(n).append(". ").append(p.name).append("：总成本 ¥").append(money(p.total))
+                    .append("，").append(p.batches).append(" 批，单位成本 ").append(p.unitCostText());
         }
         if (prev.costedBatches == 0) {
             sb.append("\n对比：上一个等长周期（").append(prevStart).append(" 至 ").append(prevEnd).append("）没有成本已算全的批次，无法给涨跌。");
         } else {
-            sb.append("\n对比上一个等长周期（").append(prevStart).append(" 至 ").append(prevEnd).append("）：");
+            sb.append("\n对比上一个等长周期（").append(prevStart).append(" 至 ").append(prevEnd).append("，成本已算全 ")
+                    .append(prev.costedBatches).append(" 个批次").append(prev.incompleteBatches > 0
+                            ? "，另有 " + prev.incompleteBatches + " 个成本未算全未计入" : "").append("）：");
             List<Map<String, Object>> cmp = comparison(cur, prev);
             for (int i = 0; i < cmp.size(); i++) {
                 Map<String, Object> c = cmp.get(i);
@@ -394,7 +406,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             }
             sb.append("。");
         }
-        sb.append("\n口径：只统计已完成批次；单位成本 = 总成本 ÷ 良品(缺则实际)产出数量，按单位分开算。");
+        sb.append("\n口径：只统计已完成批次（按结束日落期）；单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量，按单位分开算，与成本分析页一致。");
         return sb.toString();
     }
 

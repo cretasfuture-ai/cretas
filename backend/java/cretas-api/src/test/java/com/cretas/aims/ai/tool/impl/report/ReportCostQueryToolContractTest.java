@@ -53,8 +53,8 @@ class ReportCostQueryToolContractTest {
         ReflectionTestUtils.setField(tool, "priceView", priceView);
         ReflectionTestUtils.setField(tool, "llmCostScope", ProcessSecretLlmCostScope.standalone());
         // 本期 11-01..11-14 -> thisMonth; 上一个等长周期 10-18..10-31 -> lastPeriod
-        when(repo.findBatchesInDateRange(eq("F1"), eq(LocalDate.of(2026, 11, 1).atStartOfDay()), any())).thenReturn(thisMonth);
-        when(repo.findBatchesInDateRange(eq("F1"), eq(LocalDate.of(2026, 10, 18).atStartOfDay()), any())).thenReturn(lastPeriod);
+        when(repo.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(eq("F1"), eq(LocalDate.of(2026, 11, 1).atStartOfDay()), any())).thenReturn(thisMonth);
+        when(repo.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(eq("F1"), eq(LocalDate.of(2026, 10, 18).atStartOfDay()), any())).thenReturn(lastPeriod);
     }
 
     private ProductionBatch batch(String product, String mat, String lab, String eq, String oth, String good, String unit,
@@ -69,6 +69,7 @@ class ReportCostQueryToolContractTest {
         b.setOtherCost(new BigDecimal(oth));
         b.setTotalCost(new BigDecimal(mat).add(new BigDecimal(lab)).add(new BigDecimal(eq)).add(new BigDecimal(oth)));
         b.setGoodQuantity(new BigDecimal(good));
+        b.setActualQuantity(new BigDecimal(good));
         b.setUnit(unit);
         b.setCostIncomplete(incomplete);
         b.setStartTime(LocalDateTime.of(2026, 11, 5, 8, 0));
@@ -180,5 +181,34 @@ class ReportCostQueryToolContractTest {
         thisMonth.add(batch("酱鸭", "900", "0", "0", "0", "10", "盒", ProductionBatchStatus.COMPLETED, false));
         JsonNode data = run("{\"productName\":\"牛肉\"}").get("data").get("data");
         assertEquals(100.00, data.get("totals").get("totalCost").asDouble(), 0.001);
+    }
+
+    @Test
+    void unitCostDenominatorIsActualQuantityLikeTheCostAnalysisPage_notGoodQuantity() throws Exception {
+        // 页面口径: 成本已算全批次总成本 ÷ 实际产量。good(90) < actual(100): 1000/100 = 10, 不是 1000/90 = 11.11
+        ProductionBatch b = batch("卤牛肉", "1000", "0", "0", "0", "90", "kg", ProductionBatchStatus.COMPLETED, false);
+        b.setActualQuantity(new BigDecimal("100"));
+        thisMonth.add(b);
+        JsonNode unitCost = run("{}").get("data").get("data").get("products").get(0).get("unitCosts").get(0);
+        assertEquals(10.0, unitCost.get("unitCost").asDouble(), 0.0001);
+        assertEquals(100.0, unitCost.get("quantity").asDouble(), 0.0001);
+    }
+
+    @Test
+    void productsGroupByTypeIdAndRowsCarryIt_andPreviousIncompleteIsSaid() throws Exception {
+        ProductionBatch a = batch("卤牛肉", "100", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false);
+        ProductionBatch renamed = batch("卤牛肉(新名)", "100", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false);
+        renamed.setProductTypeId(a.getProductTypeId());   // 同一产品改过名: 仍是一行
+        thisMonth.add(a);
+        thisMonth.add(renamed);
+        lastPeriod.add(batch("卤牛肉", "50", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch("卤牛肉", "50", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, true));   // 上期未算全
+        JsonNode r = run("{}");
+        JsonNode products = r.get("data").get("data").get("products");
+        assertEquals(1, products.size());
+        assertEquals(a.getProductTypeId(), products.get(0).get("productTypeId").asText());
+        assertEquals(2, products.get(0).get("batchCount").asInt());
+        assertEquals(1, r.get("data").get("data").get("previousCostIncompleteBatchCount").asInt());
+        assertTrue(r.get("data").get("message").asText().contains("另有 1 个成本未算全未计入"));
     }
 }
