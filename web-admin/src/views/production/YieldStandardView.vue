@@ -282,6 +282,6 @@ onMounted(loadData);
 .intro-body { line-height: 1.7; font-size: 13px; }
 .yield-table { margin-top: 8px; }
 .current-value { font-weight: 600; }
-.suggestion { color: #909399; font-size: 13px; }
-.empty-hint { padding: 24px; color: #909399; line-height: 1.8; }
+.suggestion { color: var(--cs-muted); font-size: 13px; }
+.empty-hint { padding: 24px; color: var(--cs-muted); line-height: 1.8; }
 </style>

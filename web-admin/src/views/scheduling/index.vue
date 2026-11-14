@@ -591,7 +591,7 @@ function getProbabilityColor(prob: number) {
   }
 
   .alert-action {
-    color: #409EFF;
+    color: var(--el-color-primary);
     cursor: pointer;
   }
 }
@@ -628,7 +628,7 @@ function getProbabilityColor(prob: number) {
 
   .action-icon {
     font-size: 32px;
-    color: #409EFF;
+    color: var(--el-color-primary);
   }
 
   .action-text {

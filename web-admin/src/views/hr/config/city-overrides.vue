@@ -542,7 +542,7 @@ watch(
           />
           <span style="margin-left: 12px;">
             月薪 → 缴基
-            <strong style="color: #409EFF;">
+            <strong style="color: var(--el-color-primary);">
               {{ formatCurrency(previewCappedBase) }}
             </strong>
           </span>

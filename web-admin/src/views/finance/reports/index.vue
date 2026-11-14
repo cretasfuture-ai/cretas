@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -73,7 +74,7 @@ const statCards = computed<Array<{
     value: financeData.value.totalRevenue ?? 0,
     unit: '元',
     icon: Money,
-    color: '#409eff',
+    color: CS_TOKENS.primary,
     format: fmtCurrency
   },
   {
@@ -497,7 +498,7 @@ function handleExport() {
   color: #303133;
   margin-bottom: 16px;
   padding-left: 10px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--el-color-primary);
 }
 
 .cost-value {

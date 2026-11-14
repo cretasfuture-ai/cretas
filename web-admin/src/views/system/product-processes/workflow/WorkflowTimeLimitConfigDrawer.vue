@@ -200,7 +200,7 @@ function handleBeforeClose(done: () => void): void {
 .time-limit-drawer__scope { margin: 0; color: #667085; font-size: 12px; line-height: 1.6; }
 .time-limit-card { padding: 8px 10px; border: 1px solid #e6ebf2; border-radius: 8px; background: #fff; }
 /* 已开不只靠颜色: 开关本身 + 左侧色条 + 展开的表单。 */
-.time-limit-card.is-enabled { border-color: #409eff; border-left-width: 4px; }
+.time-limit-card.is-enabled { border-color: var(--el-color-primary); border-left-width: 4px; }
 .time-limit-card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .time-limit-card__name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

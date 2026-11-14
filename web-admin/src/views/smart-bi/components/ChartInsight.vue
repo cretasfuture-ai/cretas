@@ -198,7 +198,7 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
   padding: 6px 10px;
   margin-top: 4px;
   background: linear-gradient(135deg, #f0f7ff 0%, #f6f9ff 100%);
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--cs-primary);
   border-radius: 0 6px 6px 0;
   font-size: 12px;
   line-height: 1.5;
@@ -224,7 +224,7 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
   flex-shrink: 0;
   font-size: 10px;
   font-weight: 600;
-  color: #409eff;
+  color: var(--cs-primary);
   white-space: nowrap;
   padding-top: 1px;
 }
