@@ -1,0 +1,183 @@
+/*
+ * Cretas System v1 → Element Plus 数据展示层：表格 / 分页 / 页签 / 标签徽章 / 卡片 / 空态 / 描述列表 / 进度 / 骨架。
+ * 来源：design-system.css 的 .cs-table / .cs-tabs / .cs-badge / .cs-surface / .cs-empty / .cs-kpi 与 .ydwm-modern .el-table。
+ * 只取 --cs-* token。选择器 html:root 起头，原因见 controls.css 文件头。
+ */
+
+/* ── 表格（.cs-table）：行高 44（compact 32）/ 表头浅底 500-600 灰字 / 悬停主色浅底 / 行线 1px ── */
+html:root .el-table {
+  --el-table-header-bg-color: var(--cs-surface-subtle);
+  --el-table-header-text-color: var(--cs-muted);
+  --el-table-text-color: var(--cs-text);
+  --el-table-border-color: var(--cs-border);
+  --el-table-border: 1px solid var(--cs-border);
+  --el-table-row-hover-bg-color: var(--cs-primary-soft);
+  --el-table-current-row-bg-color: var(--cs-primary-soft);
+  --el-table-tr-bg-color: var(--cs-surface);
+  --el-table-fixed-box-shadow: var(--cs-shadow);
+  color: var(--cs-text);
+  font-size: var(--cs-font);
+}
+html:root .el-table th.el-table__cell { background: var(--cs-surface-subtle); color: var(--cs-muted); font-weight: 500; }
+html:root .el-table th.el-table__cell > .cell { font-weight: 600; line-height: 20px; white-space: nowrap; }
+html:root .el-table th.el-table__cell > .cell, html:root .el-table td.el-table__cell > .cell { font-size: var(--cs-font); }
+html:root .el-table .el-table__cell { padding: 0; height: var(--cs-row-height); }
+html:root .el-table .cell { padding: 10px 12px; line-height: 24px; }
+html:root .el-table--small .el-table__cell { height: 36px; }
+html:root .el-table--small .cell, html:root .el-table--small .el-table__cell .cell { padding: 6px 12px; }
+html:root .el-table--large .el-table__cell { height: 52px; }
+html:root .el-table td.el-table__cell, html:root .el-table th.el-table__cell.is-leaf { border-bottom: 1px solid var(--cs-border); }
+html:root .el-table__body tr:hover > td.el-table__cell { background: var(--cs-primary-soft); }
+html:root .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell { background: var(--cs-surface-subtle); }
+html:root .el-table--striped .el-table__body tr.el-table__row--striped:hover td.el-table__cell { background: var(--cs-primary-soft); }
+html:root .el-table__body tr.current-row > td.el-table__cell { background: var(--cs-primary-soft); }
+html:root .el-table::before, html:root .el-table--group::after, html:root .el-table--border::after { background-color: var(--cs-border); }
+html:root .el-table--border, html:root .el-table--border .el-table__inner-wrapper::after { border-color: var(--cs-border); }
+html:root .el-table--border { border-radius: var(--cs-radius-sm); }
+html:root .el-table--border .el-table__cell { border-right: 1px solid var(--cs-border); }
+html:root .el-table__empty-block { min-height: 120px; }
+html:root .el-table__empty-text { color: var(--cs-muted); }
+html:root .el-table .el-button.is-link:not(.is-disabled):not(.el-button--danger) { color: var(--cs-primary); font-weight: 400; }
+html:root .el-table .caret-wrapper .sort-caret.ascending { border-bottom-color: color-mix(in srgb, var(--cs-muted) 60%, #fff); }
+html:root .el-table .caret-wrapper .sort-caret.descending { border-top-color: color-mix(in srgb, var(--cs-muted) 60%, #fff); }
+html:root .el-table .ascending .sort-caret.ascending { border-bottom-color: var(--cs-primary); }
+html:root .el-table .descending .sort-caret.descending { border-top-color: var(--cs-primary); }
+/* 数字列右对齐由页面 align="right" 决定，这里只保证等宽数字（tabular-nums 已在 controls.css 设） */
+/* 紧凑密度（data-density=compact，原型 --cs-row-height:32px） */
+html:root [data-density='compact'] .el-table .el-table__cell { height: 32px; padding: 0; }
+html:root [data-density='compact'] .el-table .cell { padding: 4px 12px; line-height: 20px; }
+
+/* ── 分页：32 高按钮 / 6px 圆角 / 当前页 = 主色实心（原型用 Element 默认结构，色板走 token） ── */
+html:root .el-pagination {
+  --el-pagination-font-size: var(--cs-font);
+  --el-pagination-bg-color: var(--cs-surface);
+  --el-pagination-text-color: var(--cs-text);
+  --el-pagination-border-radius: var(--cs-radius-sm);
+  --el-pagination-button-color: var(--cs-text);
+  --el-pagination-button-width: 32px;
+  --el-pagination-button-height: 32px;
+  --el-pagination-button-disabled-color: color-mix(in srgb, var(--cs-muted) 45%, #fff);
+  --el-pagination-button-disabled-bg-color: var(--cs-surface);
+  --el-pagination-hover-color: var(--cs-primary);
+  --el-pagination-font-size-small: var(--cs-font-small);
+  --el-pagination-button-width-small: 28px;
+  --el-pagination-button-height-small: 28px;
+  color: var(--cs-muted);
+  font-weight: 400;
+}
+html:root .el-pagination.is-background .btn-prev, html:root .el-pagination.is-background .btn-next, html:root .el-pagination.is-background .el-pager li {
+  background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); color: var(--cs-text); font-weight: 500; margin: 0 2px;
+}
+html:root .el-pagination.is-background .el-pager li:not(.is-disabled):hover, html:root .el-pagination.is-background .btn-prev:not(:disabled):hover, html:root .el-pagination.is-background .btn-next:not(:disabled):hover { color: var(--cs-primary); border-color: var(--cs-primary); background: var(--cs-primary-soft); }
+html:root .el-pagination.is-background .el-pager li.is-active { background: var(--cs-primary); border-color: var(--cs-primary); color: #fff; }
+html:root .el-pagination .el-pager li { border-radius: var(--cs-radius-sm); font-weight: 500; }
+html:root .el-pagination .el-pager li.is-active { color: var(--cs-primary); font-weight: 700; }
+html:root .el-pagination .el-select { width: 110px; }
+html:root .el-pagination__total, html:root .el-pagination__jump { color: var(--cs-muted); }
+
+/* ── 页签（.cs-tabs）：线条式，间距 16，上下 10px，500 灰字，选中 = 主色字 + 2px 主色下划线 ── */
+html:root .el-tabs { --el-tabs-header-height: 40px; }
+html:root .el-tabs__nav-wrap::after { background-color: var(--cs-border); height: 1px; }
+html:root .el-tabs__item { height: 40px; line-height: 40px; padding: 0 16px 0 0; margin-right: 0; font-size: var(--cs-font); font-weight: 500; color: var(--cs-muted); transition: color var(--cs-duration-fast); }
+html:root .el-tabs__item:nth-child(2) { padding-left: 0; }
+html:root .el-tabs__item:hover { color: var(--cs-primary); }
+html:root .el-tabs__item.is-active { color: var(--cs-primary); }
+html:root .el-tabs__active-bar { height: 2px; background-color: var(--cs-primary); }
+html:root .el-tabs--top .el-tabs__item.is-top:last-child, html:root .el-tabs--top .el-tabs__item.is-top:nth-child(2) { padding-left: 0; }
+html:root .el-tabs--top .el-tabs__item.is-top:last-child { padding-right: 0; }
+html:root .el-tabs__item.is-disabled { opacity: .5; }
+/* card / border-card：保留 Element 结构，只把边色、选中色、圆角换成 token */
+html:root .el-tabs--card > .el-tabs__header { border-bottom-color: var(--cs-border); }
+html:root .el-tabs--card > .el-tabs__header .el-tabs__nav { border-color: var(--cs-border); border-radius: var(--cs-radius-sm) var(--cs-radius-sm) 0 0; }
+html:root .el-tabs--card > .el-tabs__header .el-tabs__item { padding: 0 16px; border-left-color: var(--cs-border); }
+html:root .el-tabs--card > .el-tabs__header .el-tabs__item.is-active { border-bottom-color: var(--cs-surface); }
+html:root .el-tabs--border-card { border-color: var(--cs-border); border-radius: var(--cs-radius-sm); box-shadow: none; background: var(--cs-surface); }
+html:root .el-tabs--border-card > .el-tabs__header { background: var(--cs-surface-subtle); border-bottom-color: var(--cs-border); }
+html:root .el-tabs--border-card > .el-tabs__header .el-tabs__item { padding: 0 16px; }
+html:root .el-tabs--border-card > .el-tabs__header .el-tabs__item.is-active { background: var(--cs-surface); border-right-color: var(--cs-border); border-left-color: var(--cs-border); color: var(--cs-primary); }
+/* 左右排布时的下划线也用主色 */
+html:root .el-tabs--left .el-tabs__item, html:root .el-tabs--right .el-tabs__item { padding: 0 20px; }
+
+/* ── 标签 / 徽章（.cs-badge）：24 高 / 5px 圆角 / 12px 500 / 语义色字 + 语义浅底，无描边 ── */
+html:root .el-tag {
+  --el-tag-border-color: transparent;
+  --el-tag-bg-color: var(--cs-surface-subtle);
+  --el-tag-text-color: var(--cs-muted);
+  --el-tag-hover-color: var(--cs-muted);
+  height: 24px;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 5px;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
+  font-size: var(--cs-font-small);
+  font-weight: 500;
+  line-height: 18px;
+  gap: 6px;
+}
+html:root .el-tag--small { height: 20px; min-height: 20px; padding: 1px 6px; line-height: 18px; }
+html:root .el-tag--large { height: 28px; padding: 4px 10px; font-size: var(--cs-font); }
+html:root .el-tag--primary, html:root .el-tag--info.is-info-tone { --el-tag-bg-color: var(--cs-info-soft); --el-tag-text-color: var(--cs-info); background: var(--cs-info-soft); color: var(--cs-info); }
+html:root .el-tag--success { --el-tag-bg-color: var(--cs-success-soft); --el-tag-text-color: var(--cs-success); background: var(--cs-success-soft); color: var(--cs-success); }
+html:root .el-tag--warning { --el-tag-bg-color: var(--cs-warning-soft); --el-tag-text-color: var(--cs-warning); background: var(--cs-warning-soft); color: var(--cs-warning); }
+html:root .el-tag--danger { --el-tag-bg-color: var(--cs-danger-soft); --el-tag-text-color: var(--cs-danger); background: var(--cs-danger-soft); color: var(--cs-danger); }
+html:root .el-tag--info { --el-tag-bg-color: var(--cs-surface-subtle); --el-tag-text-color: var(--cs-muted); background: var(--cs-surface-subtle); color: var(--cs-muted); }
+/* effect=dark：原型无深色徽章，改成实心语义色（保留可读性） */
+html:root .el-tag--dark.el-tag--primary { background: var(--cs-primary); color: #fff; }
+html:root .el-tag--dark.el-tag--success { background: var(--cs-success); color: #fff; }
+html:root .el-tag--dark.el-tag--warning { background: var(--cs-warning); color: #fff; }
+html:root .el-tag--dark.el-tag--danger { background: var(--cs-danger); color: #fff; }
+html:root .el-tag--dark.el-tag--info { background: var(--cs-muted); color: #fff; }
+html:root .el-tag--plain { background: var(--cs-surface); border: 1px solid currentColor; }
+html:root .el-tag .el-tag__close { color: currentColor; }
+html:root .el-tag .el-tag__close:hover { background: color-mix(in srgb, currentColor 18%, transparent); color: currentColor; }
+html:root .el-badge__content { border: 0; font-weight: 600; background: var(--cs-danger); }
+html:root .el-badge__content--primary { background: var(--cs-primary); }
+html:root .el-badge__content--success { background: var(--cs-success); }
+html:root .el-badge__content--warning { background: var(--cs-warning); }
+
+/* ── 卡片 / 面板（.cs-surface）：白底 1px 边 / 10px 圆角 / 无阴影 / 内边距 20 ── */
+html:root .el-card {
+  --el-card-border-color: var(--cs-border);
+  --el-card-border-radius: var(--cs-radius);
+  --el-card-padding: 20px;
+  --el-card-bg-color: var(--cs-surface);
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius);
+  background: var(--cs-surface);
+  color: var(--cs-text);
+  box-shadow: none;
+}
+html:root .el-card.is-always-shadow, html:root .el-card.is-hover-shadow:hover, html:root .el-card.is-hover-shadow:focus { box-shadow: var(--cs-shadow); }
+html:root .el-card__header { padding: 14px 20px; border-bottom: 1px solid var(--cs-border); font-weight: 600; font-size: var(--cs-type-section); line-height: 1.5; }
+html:root .el-card__body { padding: 20px; }
+html:root .el-card__footer { padding: 12px 20px; border-top: 1px solid var(--cs-border); background: var(--cs-surface-subtle); }
+html:root .el-collapse { --el-collapse-border-color: var(--cs-border); --el-collapse-header-bg-color: var(--cs-surface); --el-collapse-header-text-color: var(--cs-text); --el-collapse-header-height: 44px; --el-collapse-content-bg-color: var(--cs-surface); }
+html:root .el-collapse-item__header { font-weight: 600; font-size: var(--cs-font); }
+html:root .el-divider { border-color: var(--cs-border); }
+
+/* ── 空态（.cs-empty）：32/20 内边距，灰字，标题 16px 主文字色 ── */
+html:root .el-empty { padding: 32px 20px; --el-empty-padding: 32px 20px; --el-empty-description-margin-top: 8px; }
+html:root .el-empty__description p { color: var(--cs-muted); font-size: var(--cs-font); }
+html:root .el-empty__image svg { opacity: .85; }
+
+/* ── 描述列表 / 步骤 / 进度 / 骨架 / 时间线 ── */
+html:root .el-descriptions { --el-descriptions-table-border: 1px solid var(--cs-border); --el-descriptions-item-bordered-label-background: var(--cs-surface-subtle); font-size: var(--cs-font); }
+html:root .el-descriptions__label { color: var(--cs-muted); font-weight: 400; font-size: var(--cs-font); }
+html:root .el-descriptions__cell { color: var(--cs-text); }
+html:root .el-descriptions__title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+html:root .el-progress-bar__outer { background-color: var(--cs-border); }
+html:root .el-progress-bar__inner { background-color: var(--cs-primary); }
+html:root .el-progress__text { color: var(--cs-muted); font-size: var(--cs-font-small) !important; }
+html:root .el-skeleton { --el-skeleton-color: var(--cs-border); --el-skeleton-to-color: color-mix(in srgb, var(--cs-border) 55%, #fff); }
+html:root .el-steps .el-step__title { font-size: var(--cs-font); font-weight: 500; }
+html:root .el-step__head.is-process, html:root .el-step__title.is-process { color: var(--cs-primary); border-color: var(--cs-primary); }
+html:root .el-step__head.is-finish, html:root .el-step__title.is-finish { color: var(--cs-success); border-color: var(--cs-success); }
+html:root .el-link { font-size: var(--cs-font); font-weight: 500; --el-link-text-color: var(--cs-primary); --el-link-hover-text-color: var(--cs-primary-hover); }
+html:root .el-statistic__content { color: var(--cs-text); font-weight: 600; letter-spacing: -.02em; }
+html:root .el-statistic__head { color: var(--cs-muted); font-size: var(--cs-font-small); }
+html:root .el-breadcrumb { font-size: var(--cs-font-small); }
+html:root .el-breadcrumb__inner, html:root .el-breadcrumb__inner a { color: var(--cs-muted); font-weight: 400; }
+html:root .el-breadcrumb__item:last-child .el-breadcrumb__inner { color: var(--cs-text); font-weight: 600; }
+html:root .el-menu { --el-menu-hover-bg-color: var(--cs-primary-soft); }
