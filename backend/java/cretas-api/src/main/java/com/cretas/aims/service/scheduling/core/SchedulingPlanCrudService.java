@@ -41,6 +41,9 @@ public interface SchedulingPlanCrudService {
 
     ProductionLineDTO updateProductionLine(String factoryId, String lineId, ProductionLineDTO request);
 
+    /** 产线人数配置 (最少/最多人数、所需技能等级), 整体替换, null = 清空。 */
+    ProductionLineDTO updateProductionLineStaffing(String factoryId, String lineId, ProductionLineStaffingRequest request);
+
     ProductionLineDTO updateProductionLineStatus(String factoryId, String lineId, String status);
 
     // ==================== Dashboard ====================

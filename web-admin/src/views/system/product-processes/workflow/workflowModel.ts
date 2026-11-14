@@ -495,7 +495,7 @@ const processDataKeys = new Set([
   'allowFinishedGoodsSource', 'reportingSelectionMode', 'reworkPolicy',
   'costAllocationMethod',
   // 缺口 20: AI 说不清、留给人补的项, 与发布闸(后端 WorkflowPendingConfirmations)同一份数据
-  'ccpPoints', 'pendingConfirmations',
+  'ccpPoints', 'processParams', 'pendingConfirmations',
 ]);
 const portKeys = new Set([
   'id', 'direction', 'materialNodeId', 'materialName', 'skuId', 'materialKind', 'unit',
