@@ -92,7 +92,8 @@ class PlanCreateLocksSalesOrderContractTest {
         } catch (BusinessException e) {
             assertThat(e.getMessage()).doesNotContain("无法排产");
         }
-        org.mockito.Mockito.verify(orders).lockStatusForUpdate("SO-1", F);
+        // 预先按 id 排序锁一次 + 读状态时再锁一次 (同事务重入), 所以至少一次
+        org.mockito.Mockito.verify(orders, org.mockito.Mockito.atLeastOnce()).lockStatusForUpdate("SO-1", F);
     }
 
     @Test
