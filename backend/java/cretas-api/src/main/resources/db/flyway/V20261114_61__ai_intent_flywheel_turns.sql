@@ -5,13 +5,16 @@
 -- 明文; 保密厂的原话不能以明文落在任何一个读者看得到的列里, 给它加状态列就得每个读者都记得过滤 (同
 -- training_sample_secrecy_holds 的理由)。这张表除了飞轮写入、导出 / 缺口汇总脚本没有别的读者。
 --
--- 保密 (Steve 2026-11-14: 不按开关整厂排除):
---   secrecy_mode = PLAIN        本厂保密 (a/c/d/e) 全关: user_input / context_summary 存原文;
+-- 保密 (Steve 2026-11-14: 不按开关整厂排除, 保密开的先脱敏再进):
+--   secrecy_mode = PLAIN        本厂保密 (a/c/d/e) 全关: user_input / context_summary 存原文; *_export = 原文
+--                               (只换本厂人员姓名、抹手机 / 证件 / 卡号与工资考勤数值 —— 个人隐私, 不归保密开关管);
 --   secrecy_mode = REDACTED     本厂任一项开着 (或读不到配置, 按开着): 原文列必须为空 (ck_aift_no_raw_when_secret),
---                               原文只能以密文存 (*_cipher, AES-GCM, 密钥 CRETAS_FLYWHEEL_RAW_KEY; 没配密钥就不留);
---   secrecy_mode = TEXT_DROPPED 本厂开着保密但这次脱敏做不了 (名单查不出): 原文、导出文本都不留, 只留决策元数据。
---   *_export 是训练导出唯一读的列: 保密厂 = 出外脱敏 (c) 同一套代号 + 数值抹掉; 保密关的厂 = 原文只把本厂人名 /
---   客户名换代号 (隐私, Steve 2026-11-04 起任何开关都不管)。
+--                               原文只能以密文存 (user_input_cipher, AES-GCM, 密钥 CRETAS_FLYWHEEL_RAW_KEY; 没配密钥就不留);
+--                               *_export = 客户 / 供应商名 -> 客户A / 供应商A (同会话一致), 价格 -> <价格>, 工艺参数 -> <参数>;
+--                               产品名 / 数量按 factory_feature_config(module_id=AI_FLYWHEEL) 单独开, 默认不脱;
+--   secrecy_mode = TEXT_DROPPED 本厂开着保密但这次名单查不出: 原文、导出文本都不留, 只留决策元数据。
+--   名字只按本厂主数据确定性匹配 (不用语义猜); 像称呼但名单里没有的不替换, 次数记在 redaction_json。
+--   *_export 是训练导出唯一读的文本列。
 -- confirm_digest: 这一轮出写确认时确认卡的 commandDigest (摘要, 不含参数原文); 用户点确认 (confirm 入口) 时按它回填 CONFIRMED。
 -- reaction 为空 = 还没判 (导出时按时间窗再推导 ABANDONED / NO_FOLLOWUP / PENDING), ⛔ 不把不知道写成别的值。
 
@@ -31,6 +34,7 @@ CREATE TABLE IF NOT EXISTS ai_intent_flywheel_turns (
     user_input_cipher     TEXT,
     context_summary       TEXT,
     context_export        TEXT,
+    redaction_json        TEXT,
     requested_intent_code VARCHAR(100),
     decision_source       VARCHAR(40)   NOT NULL,
     decision_path         TEXT,

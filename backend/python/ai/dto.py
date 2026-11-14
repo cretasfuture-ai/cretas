@@ -332,6 +332,9 @@ class IntentMatchResultDto(_CamelBase):
     timingMs: Optional[Dict[str, int]] = None
     # 19
     preprocessedQuery: Optional[PreprocessedQueryDto] = None
+    # 20 — 意图飞轮决策痕迹 (INTENT-DISTILL-20261111): 问没问 Luna / 退路哪一跳 / 旧四级出口 / optionSetHash。
+    # 只用于 Java 落飞轮记录, 不参与任何判断; Java 侧 IntentMatchResult.decisionTrace。
+    decisionTrace: Optional[Dict[str, Any]] = None
 
     # ----- Static factory methods (mirror Java IntentMatchResult.empty(...)) -----
 

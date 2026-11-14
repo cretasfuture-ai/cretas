@@ -252,11 +252,13 @@ public class SseStreamingService {
             // 工作线程上的深层外发按路径上的工厂脱敏 (平台账号替某厂对话时同样按那家, Steve 2026-10-29)
             try (var actorScope = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(actor);
                  SecurityUtils.Scope ignored = SecurityUtils.trustedUserIdScope(userId);
-                 var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+                 var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId);
+                 var flywheel = com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.open()) {
                 long startedNanos = System.nanoTime();
                 try {
                     executeStreamAsync(emitter, factoryId, request, userId, userRole, miniCancellation);
                 } finally {
+                    recordStreamedFlywheel(emitter, factoryId, userId, request, flywheel.turn(), startedNanos);
                     recordStreamedFactoryTrace(emitter, factoryId, userId, userRole, startedNanos);
                 }
             }
@@ -1999,6 +2001,39 @@ public class SseStreamingService {
         tree.set("resultData", objectMapper.valueToTree(
                 priceView.maskedViewFor(response.getResultData(), SecurityUtils.currentUserId())));
         return tree;
+    }
+
+    /** 意图飞轮 (INTENT-DISTILL-20261111): 流式入口每轮一条; null = 不记。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder flywheelRecorder;
+
+    /** 在 {@link #recordStreamedFactoryTrace} 取走结果之前读 (只读, 不移除); 从不抛。 */
+    private void recordStreamedFlywheel(SseEmitter emitter, String factoryId, Long userId, IntentExecuteRequest request,
+                                        com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.Turn turn,
+                                        long startedNanos) {
+        if (flywheelRecorder == null) {
+            return;
+        }
+        try {
+            IntentExecuteResponse streamed = lastStreamedResult.get(emitter);
+            String completeStatus = streamedCompleteStatus.get(emitter);
+            String resolvedIntent = streamedIntentCode.get(emitter);
+            // 只抄记录要的四个字段 (状态 / 意图 / 会话 / 确认卡), 不改推出去的那个对象
+            String status = streamed == null ? (completeStatus == null ? "UNKNOWN" : completeStatus) : streamed.getStatus();
+            if ("NO_MATCH".equals(completeStatus) && streamed != null && "NEED_CLARIFICATION".equals(streamed.getStatus())) {
+                status = "NO_MATCH";
+            }
+            IntentExecuteResponse recorded = IntentExecuteResponse.builder()
+                    .status(status)
+                    .intentCode(streamed != null && streamed.getIntentCode() != null ? streamed.getIntentCode() : resolvedIntent)
+                    .sessionId(streamed == null ? null : streamed.getSessionId())
+                    .confirmableAction(streamed == null ? null : streamed.getConfirmableAction())
+                    .build();
+            flywheelRecorder.recordTurn(com.cretas.aims.entity.intent.IntentFlywheelTurn.Entry.STREAM, factoryId, userId,
+                    request, recorded, turn, (System.nanoTime() - startedNanos) / 1_000_000L);
+        } catch (RuntimeException e) {
+            log.warn("[flywheel] 流式入口记录失败 (不影响回答): factory={}, reason={}", factoryId, e.toString());
+        }
     }
 
     /** S6-07: streamed runs (the app's AI chat) leave the same trace as facade runs; never throws. */

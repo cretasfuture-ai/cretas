@@ -13,6 +13,9 @@ import com.cretas.aims.service.execution.DemoConversationScope;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.service.agentops.FactoryAgentTraceRecorder;
+import com.cretas.aims.entity.intent.IntentFlywheelTurn;
+import com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder;
+import com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,14 +52,32 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Autowired(required = false)
     private FactoryAgentTraceRecorder factoryTraceRecorder;
 
+    /** 意图飞轮 (INTENT-DISTILL-20261111): 每轮一条记录; null = 不记 (部分上下文 / 单测直接构造)。 */
+    @Autowired(required = false)
+    private IntentFlywheelRecorder flywheelRecorder;
+
     @Override
     public IntentExecuteResponse execute(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
         long startedNanos = System.nanoTime();
-        IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
+        IntentExecuteResponse response;
+        try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
+            response = orchestrator.execute(factoryId, request, userId, userRole);
+            recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
+        }
         populateConversationRound(factoryId, userId, request, response);
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
+    }
+
+    private void recordFlywheel(String factoryId, Long userId, IntentExecuteRequest request,
+                                IntentExecuteResponse response, IntentFlywheelTurnContext.Turn turn,
+                                long startedNanos) {
+        if (flywheelRecorder == null || (request != null && Boolean.TRUE.equals(request.getPreviewOnly()))) {
+            return;
+        }
+        flywheelRecorder.recordTurn(IntentFlywheelTurn.Entry.NORMAL, factoryId, userId, request, response, turn,
+                (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
     /** S6-07: every real factory run leaves a trace; failures never change the answer. */
@@ -137,6 +158,9 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
                                           Long userId, String userRole) {
         long startedNanos = System.nanoTime();
         IntentExecuteResponse response = orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
+        if (flywheelRecorder != null && confirmationProof != null) {
+            flywheelRecorder.recordConfirm(factoryId, confirmationProof.commandDigest());
+        }
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
     }

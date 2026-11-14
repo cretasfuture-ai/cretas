@@ -23,7 +23,7 @@ import java.util.Map;
  *   <li>{@code CACHE} —— 识别阶段 PYTHON_CACHE_HIT (同一句话上次 Python 的结果);</li>
  *   <li>Python 决策 (阶段 PYTHON_MATCH / PYTHON_DECISION_NONE), 按 Python 带回的 decisionTrace:
  *       旧四级出口 → {@code PY_LEGACY}; 组合退路 hop=combo → {@code ALIYUN_COMBO}, qwen_only → {@code QWEN},
- *       intent_ask → {@code QWEN_ASK}, buttons → {@code BUTTONS_NO_SIGNAL}; Luna 给了概率 → {@code LUNA};
+ *       intent_ask → {@code QWEN_ASK}, buttons → {@code BUTTONS_NO_SIGNAL}; Luna 给了概率 → {@code LUNA}; 说话意图判不了停下追问 (timingMs.requestPurposeUnavailable) → {@code PY_UNAVAILABLE};
  *       其余 (Luna 没开 / 失败后千问读概率链答的) → {@code QWEN}; Python 没带 trace (旧版本) → {@code PYTHON_UNTRACED};</li>
  *   <li>Java 旧管线: 匹配方式 LLM → {@code JAVA_LLM}, 其余 (EXACT / REGEX / KEYWORD / SEMANTIC …) → {@code RULE};</li>
  *   <li>本轮没有走识别 (续上一轮的追问、早退的拒绝) → {@code NO_RECOGNITION}。</li>
@@ -94,7 +94,12 @@ public final class FlywheelDecisionAnalysis {
         if (exits.contains("java_phrase_shortcut") || exits.contains("java_early_phrase")) return "PHRASE_SHORTCUT";
         String last = stages.isEmpty() ? null : stages.get(stages.size() - 1);
         if ("PYTHON_CACHE_HIT".equals(last)) return "CACHE";
-        if ("PYTHON_MATCH".equals(last) || "PYTHON_DECISION_NONE".equals(last)) return pythonSource(trace);
+        if ("PYTHON_MATCH".equals(last) || "PYTHON_DECISION_NONE".equals(last)) {
+            if (r != null && r.getTimingMs() != null && Long.valueOf(1L).equals(r.getTimingMs().get("requestPurposeUnavailable"))) {
+                return "PY_UNAVAILABLE";
+            }
+            return pythonSource(trace);
+        }
         if (last != null && !last.startsWith("PYTHON_")) return "LLM".equals(last) ? "JAVA_LLM" : "RULE";
         if (r != null && r.getMatchMethod() != null) {
             return r.getMatchMethod() == IntentMatchResult.MatchMethod.LLM ? "JAVA_LLM" : "RULE";

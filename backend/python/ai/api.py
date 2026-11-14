@@ -127,6 +127,10 @@ async def _do_match(
     # options has defaults via Field(default_factory) — always non-None.
     # minConfidence default comes from the request envelope (0.70) which
     # mirrors AIConfig.min_confidence_default; honour caller's value as-is.
+    # 意图飞轮: 这次给决策层的候选集合摘要 (同一句话候选集合变了, 蒸馏时不能当同一道题)
+    from ai.legacy_exit_metrics import note_trace
+    note_trace("optionSetHash", option_set_hash(visible_rows))
+
     options = body.options
     min_confidence = options.minConfidence
     enable_llm = options.enableLlmFallback
@@ -144,6 +148,23 @@ async def _do_match(
         min_confidence=min_confidence,
         enable_llm=enable_llm,
     )
+
+
+def option_set_hash(visible_rows) -> str:
+    """候选意图集合的摘要: 可见意图码排序后 sha256 前 16 位。"""
+    import hashlib
+
+    codes = sorted({str(r.get("intent_code") or "") for r in (visible_rows or []) if r.get("intent_code")})
+    return "os-sha256:" + hashlib.sha256(",".join(codes).encode("utf-8")).hexdigest()[:16]
+
+
+def attach_decision_trace(result, trace) -> None:
+    """把这次识别的决策痕迹挂到结果上 (已有的不覆盖); 失败不影响回答。"""
+    try:
+        if result is not None and trace and getattr(result, "decisionTrace", None) is None:
+            result.decisionTrace = dict(trace)
+    except Exception:  # noqa: BLE001
+        logger.debug("attach decision trace failed", exc_info=True)
 
 
 # ======================================================================
@@ -188,7 +209,10 @@ async def match_intent(request: Request, body: IntentMatchRequest):
         # _do_match is the mockable seam — handles orchestrator resolution
         # + DB read + match. Tests patch `ai.api._do_match` directly to
         # bypass app.state wiring.
+        from ai.legacy_exit_metrics import start_decision_trace
+        trace = start_decision_trace()
         result = await _do_match(request, body)
+        attach_decision_trace(result, trace)
         return ApiResponse.ok(
             data=result.model_dump(mode="json"),
             message="OK",

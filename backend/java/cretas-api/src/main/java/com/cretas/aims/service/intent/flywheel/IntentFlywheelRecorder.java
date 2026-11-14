@@ -48,6 +48,8 @@ public class IntentFlywheelRecorder {
     static final String METRIC_TURNS = "cretas.ai.flywheel.turns";
     static final String METRIC_RAW_NOT_KEPT = "cretas.ai.flywheel.raw_not_kept";
     static final String METRIC_REACTIONS = "cretas.ai.flywheel.reactions";
+    /** 像客户 / 单位称呼但本厂名单里没有 (没替换) 的次数。 */
+    static final String METRIC_UNMATCHED = "cretas.ai.flywheel.unmatched_names";
     static final int MAX_TEXT = 2000;
 
     private final IntentFlywheelTurnRepository repository;
@@ -174,11 +176,8 @@ public class IntentFlywheelRecorder {
                 : repository.findTop3ByFactoryIdAndUserIdAndSessionIdAndCreatedAtAfterOrderByIdDesc(
                         d.factoryId(), d.userId(), d.sessionId(), d.at().minus(FlywheelReactionRules.WINDOW));
 
-        List<String> candidateNames = new ArrayList<>();
-        for (Map<String, Object> c : d.decision().candidates()) {
-            candidateNames.add(c.get("name") == null ? "" : String.valueOf(c.get("name")));
-        }
-        FlywheelTextProtector.Protected p = protector.protect(d.factoryId(), clip(d.userInput()), candidateNames);
+        String sessionKey = d.sessionId() == null ? null : d.factoryId() + "|" + d.userId() + "|" + d.sessionId();
+        FlywheelTextProtector.Protected p = protector.protect(d.factoryId(), sessionKey, clip(d.userInput()));
 
         IntentFlywheelTurn t = new IntentFlywheelTurn();
         t.setTurnId(UUID.randomUUID().toString());
@@ -206,7 +205,8 @@ public class IntentFlywheelRecorder {
         t.setDecidedIntentCode(clip(d.decision().intentCode(), 100));
         t.setConfidence(d.decision().confidence() == null || d.decision().confidence().isNaN() ? null
                 : BigDecimal.valueOf(Math.max(0, Math.min(1, d.decision().confidence()))).setScale(4, RoundingMode.HALF_UP));
-        t.setCandidatesJson(candidatesJson(d.decision().candidates(), p));
+        t.setCandidatesJson(d.decision().candidates().isEmpty() ? null : json(d.decision().candidates()));
+        t.setRedactionJson(p.stats().isEmpty() ? null : json(p.stats()));
         t.setFinalStatus(clip(d.finalStatus(), 40));
         t.setResponseIntentCode(clip(d.responseIntentCode(), 100));
         t.setConfirmDigest(clip(d.confirmDigest(), 128));
@@ -217,6 +217,10 @@ public class IntentFlywheelRecorder {
         count("recorded");
         if (p.rawNotKeptReason() != null && meterRegistry != null) {
             meterRegistry.counter(METRIC_RAW_NOT_KEPT, "reason", p.rawNotKeptReason()).increment();
+        }
+        Integer unmatched = p.stats().get("unmatchedNameLike");
+        if (unmatched != null && meterRegistry != null) {
+            meterRegistry.counter(METRIC_UNMATCHED, "mode", p.mode().name()).increment(unmatched);
         }
 
         // 回填上一轮的反应 (同会话、窗口内、还没判过的那一轮)
@@ -252,21 +256,6 @@ public class IntentFlywheelRecorder {
                     .append(text == null ? "<无文本>" : text);
         }
         return clip(sb.toString());
-    }
-
-    private String candidatesJson(List<Map<String, Object>> candidates, FlywheelTextProtector.Protected p) {
-        if (candidates.isEmpty()) {
-            return null;
-        }
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (int i = 0; i < candidates.size(); i++) {
-            Map<String, Object> m = new java.util.LinkedHashMap<>(candidates.get(i));
-            if (p.mode() != SecrecyMode.PLAIN) {
-                m.put("name", i < p.exportCandidateNames().size() ? p.exportCandidateNames().get(i) : null);
-            }
-            out.add(m);
-        }
-        return json(out);
     }
 
     private List<String> candidateCodes(IntentFlywheelTurn prev) {

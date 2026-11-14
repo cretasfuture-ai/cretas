@@ -210,6 +210,7 @@ public class AIIntentServiceImpl implements AIIntentService {
      * primary intent-matching path.
      */
     private void recordStageHit(String stage) {
+        com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteStage(stage);   // 意图飞轮痕迹 (只记)
         if (meterRegistry == null || stage == null) {
             return;
         }
@@ -542,6 +543,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                 if (isDecisionNone(pyResult)) {
                     recordStageHit("PYTHON_DECISION_NONE");
                     exitPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_RECOGNIZE_PIPELINE);
+                    com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteRecognition(pyResult);
                     return pyResult;
                 }
                 log.info("Python matcher returned empty for query='{}' — falling back to legacy pipeline",
@@ -606,6 +608,14 @@ public class AIIntentServiceImpl implements AIIntentService {
      */
     private IntentMatchResult applyAccessModeFilter(IntentMatchResult result, String factoryId,
                                                     String mode, java.util.Set<String> userPermissions) {
+        IntentMatchResult filtered = applyAccessModeFilterUnrecorded(result, factoryId, mode, userPermissions);
+        // 意图飞轮: 识别层交给下游的最终结果 (只记, 不改)
+        com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteRecognition(filtered);
+        return filtered;
+    }
+
+    private IntentMatchResult applyAccessModeFilterUnrecorded(IntentMatchResult result, String factoryId,
+                                                              String mode, java.util.Set<String> userPermissions) {
         result = com.cretas.aims.ai.catalog.FactoryIntentCatalog.filterResult(result);
         if (result == null || mode == null || accessModeFilter == null) {
             return result;

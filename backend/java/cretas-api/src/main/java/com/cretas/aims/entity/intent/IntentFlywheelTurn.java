@@ -100,6 +100,10 @@ public class IntentFlywheelTurn {
     @Column(name = "context_export", columnDefinition = "TEXT")
     private String contextExport;
 
+    /** 脱敏统计 (各类替换 / 像称呼但名单里没有的次数), JSON; 没有替换 = null。 */
+    @Column(name = "redaction_json", columnDefinition = "TEXT")
+    private String redactionJson;
+
     @Column(name = "requested_intent_code", length = 100)
     private String requestedIntentCode;
 
