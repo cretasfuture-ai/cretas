@@ -27,7 +27,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /** 跑在真实工具入口 execute(ToolCall, context) 上; 数字手算对照。 */
-class ReportCostQueryToolTest {
+class ReportCostQueryToolContractTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 11, 14); // 周六
     private final ObjectMapper mapper = new ObjectMapper();

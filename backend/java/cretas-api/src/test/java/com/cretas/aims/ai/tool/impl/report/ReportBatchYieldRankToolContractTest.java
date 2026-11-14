@@ -24,7 +24,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class ReportBatchYieldRankToolTest {
+class ReportBatchYieldRankToolContractTest {
 
     private final ObjectMapper mapper = new ObjectMapper();
     private final List<ProductionBatch> batches = new ArrayList<>();
@@ -77,7 +77,7 @@ class ReportBatchYieldRankToolTest {
         JsonNode r = run("{}");
         JsonNode rows = r.get("data").get("data").get("rows");
         assertEquals("B2", rows.get(0).get("batchNumber").asText());
-        assertEquals(75.00, rows.get(0).get("yieldRatePct").asDouble(), 0.001);
+        assertEquals(75.00, rows.get(0).get("yieldRate").asDouble(), 0.001);
         assertEquals("B3", rows.get(2).get("batchNumber").asText());
         assertTrue(r.get("data").get("message").asText().contains("B2"));
         assertEquals(1, r.get("data").get("data").get("charts").size());
@@ -101,7 +101,7 @@ class ReportBatchYieldRankToolTest {
         add("B4", "卤牛肉", "100", "10", ProductionBatchStatus.IN_PROGRESS);    // 未完成
         JsonNode data = run("{}").get("data").get("data");
         assertEquals(1, data.get("rankedBatchCount").asInt());
-        assertEquals(2, data.get("noYieldBatchCount").asInt());
+        assertEquals(2, data.get("unrankedBatchCount").asInt());
         assertEquals(3, data.get("completedBatchCount").asInt());
     }
 

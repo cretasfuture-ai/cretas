@@ -60,11 +60,11 @@ class ReportCostVarianceReadModeContractTest {
     private static final String F = "F006";
     /** prod platform_role_permissions 的 finance / procurement 级别 (F006 没有这些角色的 L2 覆盖)。 */
     private static final Map<String, Map<String, String>> L1 = Map.of(
-            "factory_super_admin", Map.of("finance", "rw", "procurement", "rw"),
-            "finance_manager", Map.of("finance", "rw", "procurement", "-"),
-            "department_admin", Map.of("finance", "r", "procurement", "r"),
-            "warehouse_manager", Map.of("finance", "-", "procurement", "r"),
-            "viewer", Map.of("finance", "-", "procurement", "r"));
+            "factory_super_admin", Map.of("finance", "rw", "procurement", "rw", "analytics", "rw"),
+            "finance_manager", Map.of("finance", "rw", "procurement", "-", "analytics", "rw"),
+            "department_admin", Map.of("finance", "r", "procurement", "r", "analytics", "r"),
+            "warehouse_manager", Map.of("finance", "-", "procurement", "r", "analytics", "-"),
+            "viewer", Map.of("finance", "-", "procurement", "r", "analytics", "-"));
 
     private final UserRepository users = mock(UserRepository.class);
     private final Map<String, Long> idOf = new HashMap<>();
@@ -154,16 +154,31 @@ class ReportCostVarianceReadModeContractTest {
         assertThat(response.getStatus()).isEqualTo("READ_MODE_WRITE_BLOCKED");
     }
 
-    /** 缺陷原样: 咨询页里「单位成本/成本构成」问 COST_QUERY 被拦成「请切换到操作页」。现在 report_cost_query 只读, 不被写闸拦。 */
-    @ParameterizedTest(name = "{0}: 咨询页里成本查询不被写闸拦")
-    @ValueSource(strings = {"factory_super_admin", "finance_manager", "department_admin"})
-    void costQueryIsNotBlockedInReadMode(String role) {
+    /**
+     * 缺陷原样: 咨询页里「单位成本/成本构成」问 COST_QUERY 被拦成「请切换到操作页」。现在 report_cost_query 只读, 不被写闸拦;
+     * 门槛 analytics:read_write (与 AIController#analyzeTimeRangeCost 同口径, 组织者裁定 2026-10-29) 内的角色能执行,
+     * 门槛外 (viewer / warehouse_manager / 只有 analytics 只读的 department_admin) 被拒 PERMISSION_DENIED。
+     */
+    @ParameterizedTest(name = "{0}: 咨询页里成本查询可执行")
+    @ValueSource(strings = {"factory_super_admin", "finance_manager"})
+    void costQueryRunsForConfiguredRolesInReadMode(String role) {
+        IntentExecuteResponse response = run(costTool(), intent("COST_QUERY", "report_cost_query"), role);
+        assertThat(response.getStatus()).as(response.getMessage()).isNotIn("READ_MODE_WRITE_BLOCKED", "PERMISSION_DENIED");
+    }
+
+    @ParameterizedTest(name = "{0}: 成本查询门槛外被拒")
+    @ValueSource(strings = {"viewer", "warehouse_manager", "department_admin"})
+    void costQueryIsRefusedForUnconfiguredRoles(String role) {
+        IntentExecuteResponse response = run(costTool(), intent("COST_QUERY", "report_cost_query"), role);
+        assertThat(response.getStatus()).isEqualTo("PERMISSION_DENIED");
+    }
+
+    private ReportCostQueryTool costTool() {
         ReportCostQueryTool costTool = new ReportCostQueryTool();
         ReflectionTestUtils.setField(costTool, "batchRepository",
                 mock(com.cretas.aims.repository.ProductionBatchRepository.class));
         ReflectionTestUtils.setField(costTool, "objectMapper", new ObjectMapper().registerModule(new JavaTimeModule()));
-        IntentExecuteResponse response = run(costTool, intent("COST_QUERY", "report_cost_query"), role);
-        assertThat(response.getStatus()).as(response.getMessage()).isNotEqualTo("READ_MODE_WRITE_BLOCKED");
+        return costTool;
     }
 
     /** 门槛外的角色: 对话被拒 (PERMISSION_DENIED), 与 REST GET /reports/cost-variance 的 403 同一组权限。 */

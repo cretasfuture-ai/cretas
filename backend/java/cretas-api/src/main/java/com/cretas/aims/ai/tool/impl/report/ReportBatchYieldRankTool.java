@@ -133,11 +133,13 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                 row.put("actualQuantity", actual);
                 row.put("goodQuantity", good);
                 row.put("unit", b.getUnit());
-                row.put("yieldRatePct", good.multiply(HUNDRED).divide(actual, 2, RoundingMode.HALF_UP));
+                // 键名 yieldRate (百分数) 在 ProcessSecretPayloadScrubber.SINGLE_RUN_ACTUAL_FIELDS: AI 回答按汇总视图处理,
+                // 无工艺保密授权的调用者由裁剪器按配比类隐藏; 保密产品批次在上面已按调用者整批剔除 (双层)。
+                row.put("yieldRate", good.multiply(HUNDRED).divide(actual, 2, RoundingMode.HALF_UP));
                 ranked.add(row);
             }
         }
-        Comparator<Map<String, Object>> byYield = Comparator.comparing(r -> (BigDecimal) r.get("yieldRatePct"));
+        Comparator<Map<String, Object>> byYield = Comparator.comparing(r -> (BigDecimal) r.get("yieldRate"));
         ranked.sort(lowestFirst ? byYield : byYield.reversed());
         List<Map<String, Object>> shown = ranked.size() > limit ? new ArrayList<>(ranked.subList(0, limit)) : ranked;
 
@@ -146,7 +148,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         data.put("order", lowestFirst ? "lowest" : "highest");
         data.put("completedBatchCount", completed);
         data.put("rankedBatchCount", ranked.size());
-        data.put("noYieldBatchCount", noYield);
+        data.put("unrankedBatchCount", noYield);
         data.put("withheldBatchCount", withheld);
         data.put("rows", shown);
         data.put("basis", "出成率 = 良品数量 ÷ 实际产出数量 × 100，由批次数量现算；只统计已完成批次");
@@ -155,7 +157,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
             List<BigDecimal> values = new ArrayList<>();
             for (Map<String, Object> r : shown) {
                 names.add(String.valueOf(r.get("batchNumber")));
-                values.add((BigDecimal) r.get("yieldRatePct"));
+                values.add((BigDecimal) r.get("yieldRate"));
             }
             Map<String, Object> option = new LinkedHashMap<>();
             option.put("tooltip", Map.of("trigger", "axis"));
@@ -183,7 +185,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
             int i = 0;
             for (Map<String, Object> r : shown) {
                 sb.append("\n").append(++i).append(". ").append(r.get("batchNumber")).append("（").append(r.get("productName"))
-                        .append("）：出成率 ").append(r.get("yieldRatePct")).append("%，良品 ").append(stripped(r.get("goodQuantity")))
+                        .append("）：出成率 ").append(r.get("yieldRate")).append("%，良品 ").append(stripped(r.get("goodQuantity")))
                         .append(" / 实际 ").append(stripped(r.get("actualQuantity"))).append(r.get("unit") == null ? "" : String.valueOf(r.get("unit")));
             }
         }
