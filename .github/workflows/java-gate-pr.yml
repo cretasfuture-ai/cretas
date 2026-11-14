@@ -70,14 +70,14 @@ jobs:
         shard: [0, 1, 2, 3]
     # 2026-11-14: 正常一片 ≤16 分钟; 卡死会拖到平台 55 分钟取消。30 分钟必然是异常。
     timeout-minutes: 30
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 8g.
-    # 2026-11-14: 12g→8g。实测 (PR #1700 MEMGUARD): 10g 堆下 runner 可用内存单调掉到 1.2~1.6GB 且无 swap,
-    # 12g 必然把 16GB 机器吃光 ⇒ 内核 OOM 杀手/整机冻住 (日志断流, fork 内看门狗和步骤超时都不开火)。
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 10g.
+    # 2026-11-14: 12g→10g, Maven 2g→1g。实测 (PR #1700 MEMGUARD): 存活堆 >8g (8g 会 GC 死循环后 OOM), 12g 吃光整机
+    # (无 swap ⇒ 日志断流, fork 内看门狗和步骤超时都不开火); 10g 下可用内存最低 1.2GB。
     # mem-guard.sh 每 30 秒打印 MEMGUARD 读数, 可用内存见底时在冻住前杀 fork。
     # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
     # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
     env:
-      CRETAS_JAVA_FORK_XMX: 8g
+      CRETAS_JAVA_FORK_XMX: 10g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -183,7 +183,7 @@ jobs:
         timeout-minutes: 22
         working-directory: backend/java/cretas-api
         env:
-          MAVEN_OPTS: -Xmx2g
+          MAVEN_OPTS: -Xmx1g
         run: |
           set -euo pipefail
           MVN_OUT="$RUNNER_TEMP/mvn-shard.out"
@@ -198,9 +198,9 @@ jobs:
           echo "READING: SHARD=${{ matrix.shard }}/4 CLASSES=$(echo "$TESTS" | tr ',' '\n' | wc -l)"
           # ExitOnOutOfMemoryError: 堆溢出时 fork 立即退出 (而不是半死不活挂着); MaxMetaspaceSize/MaxDirectMemorySize
           # 给非堆封顶, 让 fork 总占用有上界。
-          # 根因 (PR #1700 MEMGUARD 实测): Spring 测试上下文缓存默认留 32 个上下文 (每个带 H2 + 全部实体),
-          # 堆 245 秒涨到 7.2GB、337 秒顶满 8GB, 之后在同一个类上 GC 死循环直到 OOM; 12g 则吃光整机。
-          # 缓存上限压到 6: 被逐出的上下文会被关闭, 代价只是重复启动。
+          # 根因 (PR #1700 MEMGUARD 实测): 共用 fork 的存活堆随 Spring 上下文缓存 (默认 32 个, 每个带 H2 + 全部实体) 涨到
+          # 约 8GB+: 8g 下 337 秒顶满, 之后同一个类上 GC 死循环直到 OOM (3/4 片); 12g 吃光 16GB 整机 (无 swap) 而冻住;
+          # 10g 4/4 片通过但 runner 可用内存只剩 1.2GB。⛔ 不能靠压上下文缓存上限: 见 PG 分片注释, 中途淘汰会让共享库被关。
           rc=0
           "$MVN" -B test \
             -Dtest="$TESTS" \
