@@ -664,6 +664,26 @@ public class SchedulingController {
     }
 
     /**
+     * 产线人数配置: insertMinWorkers 插单最少人数 (存 standard_workers; 插单比较当天排班, 不够只提示不拦; 空 = 不比较)、
+     * 最多人数、所需技能等级 (这两项只保存, 插单不用)。
+     * 整体替换, 传 null = 清空。权限同产线编辑。
+     */
+    @RequirePermission({"scheduling:read_write", "production:read_write"})
+    @RequireModule("scheduling")
+    @PutMapping("/production-lines/{lineId}/staffing")
+    @Operation(summary = "设置产线人数配置", description = "最少人数用于紧急插单比较当天排班人数, 不够只提示不拦; 不填不比较")
+    public ApiResponse<ProductionLineDTO> updateProductionLineStaffing(
+            @Parameter(description = "工厂ID", example = "F001")
+            @PathVariable String factoryId,
+            @Parameter(description = "产线ID", example = "PL-001")
+            @PathVariable String lineId,
+            @RequestBody ProductionLineStaffingRequest request) {
+        log.info("设置产线人数配置: factoryId={}, lineId={}", factoryId, lineId);
+        ProductionLineDTO line = schedulingService.updateProductionLineStaffing(factoryId, lineId, request);
+        return ApiResponse.success("保存成功", line);
+    }
+
+    /**
      * 更新产线状态
      */
     @RequirePermission({"scheduling:read_write", "production:read_write"})
