@@ -23,8 +23,11 @@ import java.util.regex.Pattern;
  *   <li>{@code <时长>}: 数字后跟 分钟 / 小时 / 秒 / 钟头 (「卤45分钟」→「卤<时长>」);</li>
  *   <li>{@code <比例>}: 数字后跟 % / ％, 或「百分之X」(「盐3%」→「<配料><比例>」);</li>
  *   <li>{@code <参数>}: 工艺参数词 ({@link TrainingSampleRules#PARAMETER_MARKERS}) 后面的其余数值;</li>
- *   <li>{@code <用量>}: 数字后跟 克 / 两 / 斤 / 毫升 / 勺 … 且在配方语境里 (小句里有本厂原料名、配方类词, 或数字紧跟在「放 / 加」后面)
- *       (「八角放5克」→「<配料>放<用量>」); 不在配方语境的数量 (「下五十斤卤鸭腿」) 不动;</li>
+ *   <li>{@code <用量>}: 三档单位 (organizer 11-14 三审):
+ *       配方专用单位 (克 / g / 毫升 / ml / 勺 / 茶匙 / 汤匙) 不看语境一律抹 (「加盐5克」「生抽一勺」);
+ *       业务单位 (斤 / 公斤 / kg / 升) 只在小句里有配方类词时算 (「卤水配料放2斤」), 原料名、「放 / 加」不够 (「订单再加20斤」不动);
+ *       其余 (两 / 片 / 粒) 看配方语境: 小句里有本厂原料名、配方类词, 或「放 / 加」在数值前 4 个字以内。
+ *       小句里有入库 / 到货 / 采购 / 领料 / 订单 / 发货 … 业务词时后两档不按配方处理 (「入库鸭腿200公斤」原样);</li>
  *   <li>{@code <配料>}: 本厂原料名 (主数据确定性匹配), 只在含 {@code <用量>} / {@code <比例>} 的小句里换 (配方保密口径: 配料名 + 用量
  *       一起才是配方; 单说「八角到货了」是普通业务话, 不动);</li>
  *   <li>{@code <数量>}: 只在工厂开了「数量脱敏」时, 其余带数量单位的数 (单位保留: 「<数量>斤」)。</li>
@@ -49,6 +52,15 @@ final class FlywheelValueMasker {
     static final List<String> RATIO_AFTER = List.of("%", "％");
     static final List<String> RECIPE_UNITS = List.of(
             "公斤", "千克", "kg", "KG", "毫升", "ml", "mL", "汤匙", "茶匙", "克", "g", "两", "斤", "升", "L", "勺", "片", "粒");
+    /** 配方专用单位: 不看语境, 一律 {@code <用量>} (organizer 11-14 三审: 原料表叫「食盐」时「加盐5克」也得抹)。 */
+    static final List<String> RECIPE_ONLY_UNITS = List.of("毫升", "ml", "mL", "ML", "汤匙", "茶匙", "克", "g", "勺");
+    /** 业务单位: 只在小句里有配方类词 (或参数词, 走 {@code <参数>}) 时才算用量; 原料名 / 「放、加」不够。 */
+    static final List<String> BUSINESS_UNITS = List.of("公斤", "千克", "kg", "KG", "Kg", "斤", "升", "L");
+    /** 小句里有这些业务词 → 不按配方处理 (配方专用单位除外): 「入库鸭腿200公斤」「订单再加20斤」原样。 */
+    static final List<String> BUSINESS_WORDS = List.of(
+            "入库", "到货", "采购", "领料", "出库", "下单", "订单", "发货", "收货", "进货", "退货", "库存", "盘点", "送货", "调拨");
+    /** 「放 / 加」在本小句内、数值前这么多个字以内就算配方语境。 */
+    static final int ADD_WINDOW = 4;
     static final List<String> RECIPE_WORDS = List.of("配方", "配料", "配比", "投料", "用量", "添加", "卤水", "腌料", "调料", "料包", "香料");
     static final List<String> QUANTITY_UNITS = List.of(
             "公斤", "千克", "kg", "KG", "Kg", "斤", "两", "克", "g", "吨", "箱", "件", "袋", "包", "盒", "个", "只",
@@ -167,9 +179,17 @@ final class FlywheelValueMasker {
             if (paramBefore(text, start)) {
                 return new Span(start, end, "参数");
             }
-            String unit = prefix(afterTrim, RECIPE_UNITS);
-            if (unit != null && recipeContext(text, start, beforeTrim, ingredients)) {
+            String unit = recipeOnlyUnit(afterTrim);
+            if (unit != null) {
                 return new Span(start, end + afterGap + unit.length(), "用量");
+            }
+            unit = prefix(afterTrim, RECIPE_UNITS);
+            if (unit != null && !businessClause(text, start)) {
+                boolean recipe = BUSINESS_UNITS.contains(unit) ? recipeWordInClause(text, start)
+                        : recipeContext(text, start, before, ingredients);
+                if (recipe) {
+                    return new Span(start, end + afterGap + unit.length(), "用量");
+                }
             }
         }
         if (scope.quantities() && prefix(afterTrim, QUANTITY_UNITS) != null) {
@@ -241,10 +261,35 @@ final class FlywheelValueMasker {
         return out;
     }
 
-    private static boolean recipeContext(String text, int start, String beforeTrim, Collection<String> ingredients) {
-        if (beforeTrim.endsWith("放") || beforeTrim.endsWith("加") || beforeTrim.endsWith("加入") || beforeTrim.endsWith("放入")) {
-            return true;
+    /** 配方专用单位 (「g / ml」后面紧跟字母的不算: 「5gb」)。 */
+    private static String recipeOnlyUnit(String afterTrim) {
+        String unit = prefix(afterTrim, RECIPE_ONLY_UNITS);
+        if (unit == null) {
+            return null;
         }
+        if (Character.isLetter(unit.charAt(0)) && afterTrim.length() > unit.length()
+                && isAsciiLetter(afterTrim.charAt(unit.length()))) {
+            return null;
+        }
+        return unit;
+    }
+
+    private static boolean isAsciiLetter(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    }
+
+    private static boolean businessClause(String text, int start) {
+        int[] c = clause(text, start);
+        String clause = text.substring(c[0], c[1]);
+        for (String w : BUSINESS_WORDS) {
+            if (clause.contains(w)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean recipeWordInClause(String text, int start) {
         int[] c = clause(text, start);
         String clause = text.substring(c[0], c[1]);
         for (String w : RECIPE_WORDS) {
@@ -252,6 +297,20 @@ final class FlywheelValueMasker {
                 return true;
             }
         }
+        return false;
+    }
+
+    /** {@code before} = 本小句里数值之前的部分 (未去空格)。 */
+    private static boolean recipeContext(String text, int start, String before, Collection<String> ingredients) {
+        String near = before.substring(Math.max(0, before.length() - ADD_WINDOW));
+        if (near.contains("放") || near.contains("加")) {
+            return true;
+        }
+        if (recipeWordInClause(text, start)) {
+            return true;
+        }
+        int[] c = clause(text, start);
+        String clause = text.substring(c[0], c[1]);
         if (ingredients != null) {
             for (String n : ingredients) {
                 if (n != null && !n.isEmpty() && clause.contains(n)) {

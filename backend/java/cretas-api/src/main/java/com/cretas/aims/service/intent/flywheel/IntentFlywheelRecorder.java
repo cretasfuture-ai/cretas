@@ -326,8 +326,12 @@ public class IntentFlywheelRecorder {
         this.demoFactories = parseDemoFactories(csv);
     }
 
+    /** 配置名单之外固定并上 F_DEMO: 防 CRETAS_DEMO_FACTORY_IDS 被设成空串时公开演示进飞轮。 */
+    static final String ALWAYS_DEMO = "F_DEMO";
+
     static java.util.Set<String> parseDemoFactories(String csv) {
         java.util.Set<String> out = new java.util.HashSet<>();
+        out.add(ALWAYS_DEMO);
         if (csv != null) {
             for (String id : csv.split(",")) {
                 if (!id.isBlank()) out.add(id.trim());

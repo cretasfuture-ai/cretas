@@ -108,8 +108,12 @@ public class FlywheelTextProtector {
     static final Pattern NAME_LIKE = Pattern.compile(
             "[老小阿][" + surnames() + "]家|(?<![" + HAN + "])[" + surnames() + "]记|(?<![" + HAN + "])["
                     + surnames() + "]总(?![量额数计成产体部结和监经])|[" + HAN + "]{2,10}(?:有限公司|公司|超市|商行|饭店|酒楼)");
-    static final Pattern PHONE = Pattern.compile("(?<![0-9])1[3-9][0-9]{9}(?![0-9])");
+    /** 手机号: 可带 86 / +86 / 0086 前缀, 中间 3-4-4 可隔空格或横杠 (「+86 138-1234-5678」)。 */
+    static final Pattern PHONE = Pattern.compile(
+            "(?<![0-9])(?:(?:\\+|00)?86[ -]?)?1[3-9][0-9](?:[ -]?[0-9]{4}){2}(?![0-9])");
     static final Pattern ID_CARD = Pattern.compile("(?<![0-9A-Za-z])[0-9]{17}[0-9Xx](?![0-9A-Za-z])");
+    /** 15 位旧身份证 (在手机号之后抹: 「008613812345678」先当手机号)。 */
+    static final Pattern ID_CARD_15 = Pattern.compile("(?<![0-9A-Za-z])[0-9]{15}(?![0-9A-Za-z])");
     static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])[0-9]{16,19}(?![0-9A-Za-z])");
 
     private final FlywheelMasterDataRepository masterData;
@@ -404,6 +408,7 @@ public class FlywheelTextProtector {
         String out = replaceCounting(ID_CARD, text, "<证件号>", stats);
         out = replaceCounting(BANK_CARD, out, "<卡号>", stats);
         out = replaceCounting(PHONE, out, "<电话>", stats);
+        out = replaceCounting(ID_CARD_15, out, "<证件号>", stats);
         if (TrainingSampleRules.utteranceHasPayValue(out)) {
             String masked = TrainingSampleRules.maskNumbers(out);
             if (!masked.equals(out)) {

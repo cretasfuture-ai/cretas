@@ -293,6 +293,80 @@ class FlywheelTextProtectorRedactionTest {
                 .isEqualTo("上海那边要货，客户A也要");
     }
 
+    /**
+     * 三审 中1: 原料表叫「食盐 / 白砂糖」, 话里说「盐 / 白糖」, 小句也没有配方类词 —— 配方专用单位照样抹, 所有列一起
+     * (原文列、导出列; 保密厂另看密文)。
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "加盐5克|加盐<用量>|5克",
+            "白糖30克|白糖<用量>|30克",
+            "生抽一勺|生抽<用量>|一勺",
+            "老抽10ml再说|老抽<用量>再说|10ml",
+            "鸭腿先抹盐，过会儿再加两片姜|鸭腿先抹盐，过会儿再加<用量>姜|两片"
+    })
+    void recipeOnlyUnitsAreMaskedEvenWhenTheIngredientIsNamedDifferentlyInTheMasterData(String said, String expected,
+                                                                                         String gone) {
+        when(master.findIngredientNames(PLAIN)).thenReturn(List.of("食盐", "白砂糖"));
+        when(master.findIngredientNames(SECRET)).thenReturn(List.of("食盐", "白砂糖"));
+
+        FlywheelTextProtector.Protected plain = protector.protect(PLAIN, "u-" + said.hashCode(), said);
+        assertThat(plain.rawInput()).isEqualTo(expected).doesNotContain(gone);
+        assertThat(plain.exportInput()).isEqualTo(expected).doesNotContain(gone);
+
+        FlywheelTextProtector.Protected secret = protector.protect(SECRET, "u-" + said.hashCode(), said);
+        assertThat(secret.exportInput()).doesNotContain(gone);
+        assertThat(protector.decrypt(secret.inputCipher())).isEqualTo(expected);
+    }
+
+    /** 三审 中2 阴性: 业务话里的斤 / 公斤不当配方抹 (原料名、「加」都在也不算); 阳性对照见上「加盐5克」。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "入库鸭腿200公斤", "领料鸭腿50斤", "订单再加20斤", "再加20斤", "八角到货100斤", "采购盐300公斤", "盐出库两斤", "配料入库200公斤", "领料八角5片"})
+    void businessQuantitiesStayAsIsEvenWithIngredientNamesOrAdd(String said) {
+        when(master.findIngredientNames(PLAIN)).thenReturn(List.of("鸭腿", "八角", "盐"));
+
+        FlywheelTextProtector.Protected p = protector.protect(PLAIN, "b-" + said.hashCode(), said);
+
+        assertThat(p.rawInput()).isEqualTo(said);
+        assertThat(p.exportInput()).isEqualTo(said);
+    }
+
+    /** 三审 中2 阳性对照: 业务单位在有配方类词的小句里仍算用量; 「放 / 加」隔两三个字也算配方语境。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "卤水配料放2斤|卤水配料放<用量>",
+            "八角放了个5片|<配料>放了个<用量>"
+    })
+    void businessUnitsCountWithRecipeWordsAndAddWithinFourChars(String said, String expected) {
+        assertThat(protector.protect(PLAIN, "r-" + said.hashCode(), said).rawInput()).isEqualTo(expected);
+    }
+
+    /** 三审 低3: 号码各种写法 + 15 位旧身份证。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "电话8613812345678|电话<电话>",
+            "电话+86 13812345678|电话<电话>",
+            "电话+8613812345678|电话<电话>",
+            "电话008613812345678|电话<电话>",
+            "电话138-1234-5678|电话<电话>",
+            "电话138 1234 5678|电话<电话>",
+            "电话+86 138-1234-5678|电话<电话>",
+            "身份证110101900101123|身份证<证件号>",
+            "身份证11010119900101123X|身份证<证件号>"
+    })
+    void phoneAndIdFormatsAreMasked(String said, String expected) {
+        assertThat(protector.protect(PLAIN, "ph-" + said.hashCode(), said).rawInput()).isEqualTo(expected);
+        assertThat(protector.protect(SECRET, "ph-" + said.hashCode(), said).exportInput()).isEqualTo(expected);
+    }
+
+    /** 低3 阴性: 普通编号 / 数量不当号码抹。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"查一下1830号任务", "批次20261114001", "下五十斤卤鸭腿"})
+    void ordinaryNumbersAreNotTakenForPhones(String said) {
+        assertThat(protector.protect(PLAIN, "on-" + said.hashCode(), said).rawInput()).isEqualTo(said);
+    }
+
     private void options(Map<String, Object> config) {
         FactoryFeatureConfig row = new FactoryFeatureConfig();
         row.setFactoryId(SECRET);

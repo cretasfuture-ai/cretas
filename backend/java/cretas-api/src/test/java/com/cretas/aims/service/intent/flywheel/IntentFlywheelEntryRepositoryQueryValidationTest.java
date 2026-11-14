@@ -298,6 +298,19 @@ class IntentFlywheelEntryRepositoryQueryValidationTest {
         assertThat(turns.findAll()).extracting(IntentFlywheelTurn::getSessionId).containsExactly("sess-pos");
     }
 
+    /** 顺手项: CRETAS_DEMO_FACTORY_IDS 被设成空串, F_DEMO 仍不记; 正常一轮照记 (阳性)。 */
+    @Test
+    void fDemoIsExcludedEvenWhenTheConfiguredListIsEmpty() {
+        recognition.set(null);
+        answer.set(IntentExecuteResponse.builder().status("COMPLETED").build());
+        recorder.setDemoFactoryIds("");
+
+        entry.execute("F_DEMO", request("查库存", null, "demo-empty"), 7L, "viewer");
+        entry.execute(PLAIN, request("正常一句", null, "sess-pos2"), 7L, "sales");
+
+        assertThat(turns.findAll()).extracting(IntentFlywheelTurn::getSessionId).containsExactly("sess-pos2");
+    }
+
     @Test
     void demoFactoryListComesFromTheSharedPropertyWithTheSameFallback() throws Exception {
         java.lang.reflect.Method setter = IntentFlywheelRecorder.class.getDeclaredMethod("setDemoFactoryIds", String.class);
