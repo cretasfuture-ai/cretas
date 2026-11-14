@@ -1428,6 +1428,75 @@ public class ToolDispatchService {
     }
 
     /**
+     * 真实入口在「通用缺参追问」(Slot Filling) 与「W0 写确认」<b>之前</b>先问「要操作哪一个」。
+     *
+     * <p>prod 2026-11-14 F006: #1706 的选项只挂在 {@link #executeToolPreview} 里, 而两个真实入口第一轮都到不了它 ——
+     * 流式先被 7b Slot Filling 截走 (「需要您提供以下信息：1. 请提供工序任务编号」, 回「1」被当成 taskId=1);
+     * 普通入口短语快捷通道 → 显式意图 → W0 直接出空确认卡。这里给两处共用同一个出口 ({@link #resolveChoiceOrAsk}),
+     * 口径与预览完全相同 (本人 + 未指派 + 主管)。
+     *
+     * <ul>
+     *   <li>工具不是 {@link com.cretas.aims.ai.tool.ParameterChoiceResolver} / 已经带了要选的参数 → null (原流程不变);</li>
+     *   <li>多个 → 返回「列出来选」的追问 (开参数收集会话挂选项, 已给的产量带着走); 一个都没有 → 如实说没有;</li>
+     *   <li>只有一个 → 把它和抽到的参数写回 {@code request.context}, 返回 null: 调用方照常往下走,
+     *       写操作仍停在 W0 写确认 (⛔ 这里不出、也不绕过写确认);</li>
+     *   <li>查询失败 → null, 退回原有追问 (不拿假候选顶替)。</li>
+     * </ul>
+     *
+     * @param extract true = 先用与预览同一个抽参方法补参 (普通入口: 还没抽过); 流式入口 7a.5 已抽过传 false
+     */
+    public IntentExecuteResponse askWhichOneBeforeWriteGuard(ToolExecutor tool, String factoryId,
+                                                             IntentExecuteRequest request, AIIntentConfig intent,
+                                                             Long userId, String userRole, boolean extract) {
+        if (!(tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver resolver)
+                || request == null || intent == null || userId == null) {
+            return null;
+        }
+        Map<String, Object> context = request.getContext() == null
+                ? new HashMap<>() : new HashMap<>(request.getContext());
+        if (!isBlankParam(context.get(resolver.choiceParameter()))) {
+            return null;
+        }
+        // 一线没开放的写操作: 不查、不列, 交给原有的拒绝出口 (它们给的才是准确的话)
+        if (frontlineWriteDenied(tool, factoryId, intent, userRole) != null) {
+            return null;
+        }
+        try (var egressFactory = com.cretas.aims.service.consent.LlmEgressGuard.analysing(factoryId)) {
+            Map<String, Object> params = TrustedExecutionContext.merge(context, factoryId, userId, userRole);
+            if (extract) {
+                try {
+                    Map<String, Object> extracted =
+                            extractParametersWithLLM(factoryId, request.getUserInput(), tool, params);
+                    if (extracted != null) {
+                        extracted.forEach(params::putIfAbsent);
+                        extracted.forEach(context::putIfAbsent);
+                    }
+                } catch (Exception e) {
+                    log.warn("写确认前抽参失败 (继续用已有参数): tool={}, error={}", tool.getToolName(), e.getMessage());
+                }
+                if (!isBlankParam(params.get(resolver.choiceParameter()))) {
+                    // 话里本来就带了是哪一个 (「完成 1827 号工序」): 不列, 原流程照常
+                    request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+                    return null;
+                }
+            }
+            TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
+            IntentExecuteResponse asked = resolveChoiceOrAsk(resolver, tool, factoryId, userId, intent, params,
+                    request.getUserInput());
+            if (asked != null) {
+                return asked;
+            }
+            Object picked = params.get(resolver.choiceParameter());
+            if (!isBlankParam(picked)) {
+                // 只有一个: 带出来, 写进 context (W0 确认卡的 previewParams / Slot Filling 都从这里读)
+                context.put(resolver.choiceParameter(), picked);
+            }
+            request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
+            return null;
+        }
+    }
+
+    /**
      * 工具说「要操作哪一个」这个参数缺了: 查本人可选的对象。
      * <ul>
      *   <li>只有一个 → 直接填进 {@code params}, 返回 null 继续走原有预览 (仍出确认卡, 不自动提交);</li>
