@@ -36,6 +36,10 @@ function makeGet(overrides: Record<string, Handler> = {}) {
       { id: 'run1', status: 'MEASURED' },
     ]) as never;
     if (url.includes('/cost-deviation-cases')) return ok([{ id: 'c1', sourceLabel: '成本差异', planNumber: 'PL-1' }]) as never;
+    if (url.includes('/production/data-suspects')) return ok({ windowDays: 14, scanned: 3, truncated: false, items: [
+      { reportId: 901, batchId: 5, workProcessTaskId: 7, processOrder: 2, reportDate: '2026-11-14', inputQuantity: 100, inputUnit: 'kg',
+        outputQuantity: 105, outputUnit: 'kg', suspects: ['出成率 105.00%，达到或超过 100%'], whoToCheck: '车间（核对称重录入）' },
+    ] }) as never;
     if (url.includes('/cold-chain/alerts')) return ok([
       { id: 11, equipmentName: '冷库1', status: 'OPEN' },
       { id: 12, equipmentName: '冷库2', status: 'RESOLVED' },
@@ -74,12 +78,43 @@ describe('发现的问题：分类', () => {
   });
 
   it('对账差异没有外部授权判定（P10）⇒ 整类不渲染；数字员工汇报没有来源 ⇒ 写原因、不画数', async () => {
-    expect(RENDERED_CATEGORIES.map((c) => c.id)).toEqual(['report', 'rule', 'gap']);
-    expect(CATEGORY_DEFS.map((c) => c.label)).toEqual(['数字员工汇报', '规则预警', '对账差异', '数据缺口']);
+    expect(RENDERED_CATEGORIES.map((c) => c.id)).toEqual(['report', 'rule', 'gap', 'suspect']);
+    expect(CATEGORY_DEFS.map((c) => c.label)).toEqual(['数字员工汇报', '规则预警', '对账差异', '数据缺口', '数据疑点']);
     expect(CATEGORY_DEFS.find((c) => c.id === 'report')?.reason).toContain('P8');
     const L = createIssuesLoader({ get: makeGet().get as never });
     await L.load(ctx());
     expect(categoryBadge('report', L.S.src, L.S.issues, L.S.dispositions, true)).toBeNull();
+  });
+});
+
+describe('发现的问题：数据疑点（P5 R30/R34）', () => {
+  it('单列一类、只读（不能关闭 / 转待办）、找谁核、链接回称重页；不混进规则预警 / 数据缺口', async () => {
+    const L = createIssuesLoader({ get: makeGet().get as never });
+    await L.load(ctx());
+    expect(CATEGORY_DEFS.find((c) => c.id === 'suspect')?.separate).toBe(true);
+    const s = L.S.issues.filter((i) => i.category === 'suspect');
+    expect(s.map((i) => i.key)).toEqual(['DATA_SUSPECT:901']);
+    expect(s[0]).toMatchObject({ readOnly: true, owner: '车间（核对称重录入）', link: '/production/weigh?batchId=5&taskId=7' });
+    expect(s[0].summary).toContain('出成率 105.00%');
+    expect(keys(L, 'rule')).not.toContain('DATA_SUSPECT:901');
+    expect(categoryBadge('suspect', L.S.src, L.S.issues, L.S.dispositions, true)).toBe(1);
+  });
+  it('没有生产模块权限 ⇒ 不读数据疑点、标不适用；读失败 ⇒ 不画数', async () => {
+    const a = makeGet();
+    const L = createIssuesLoader({ get: a.get as never });
+    await L.load(ctx({ canRead: (m) => !m.includes('production') || m.length > 1 }));
+    expect(a.calls.some((u) => u.includes('/data-suspects'))).toBe(false);
+    expect(L.S.src.dataSuspect.state).toBe('na');
+    const b = makeGet({ '/production/data-suspects': () => Promise.reject(new Error('boom')) });
+    const L2 = createIssuesLoader({ get: b.get as never });
+    await L2.load(ctx());
+    expect(categoryBadge('suspect', L2.S.src, L2.S.issues, L2.S.dispositions, true)).toBeNull();
+  });
+  it('最近 14 天超过 500 条 ⇒ 写明只查了最近 500 条（不当成「没有」）', async () => {
+    const a = makeGet({ '/production/data-suspects': () => ok({ truncated: true, items: [] }) });
+    const L = createIssuesLoader({ get: a.get as never });
+    await L.load(ctx());
+    expect(L.S.src.dataSuspect.note).toContain('只查了最近的 500 条');
   });
 });
 

@@ -847,6 +847,21 @@ const TOP_ENTRIES: MenuItem[] = [
   { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], section: 'top' },
 ];
 
+/**
+ * P5：生产管理下新加「称重报工 /production/weigh」（原型 R23/R34：逐笔称重、带皮重、数据疑点）。
+ * 只加在原型分组侧栏；原分组 menuConfig（餐饮 / 物流在用）不动。写入走已有报工接口（production:read_write），
+ * 入口与「报工审批」同判据（module: 'production'）。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报工', icon: '', module: 'production' };
+
+function insertAfter(group: MenuItem, afterPath: string, leaf: MenuItem): MenuItem {
+  const children = [...(group.children ?? [])];
+  const at = children.findIndex((c) => c.path === afterPath);
+  if (at < 0) throw new Error(`groupedMenuConfig: ${afterPath} 不在 ${group.path} 下（改了 path 要同步这里）`);
+  children.splice(at + 1, 0, leaf);
+  return { ...group, children };
+}
+
 /** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */
 const REPLACED_BY_ISSUES = new Set<string>(['/workspaces/exceptions']);
 
@@ -867,7 +882,7 @@ function buildGroupedMenu(): MenuItem[] {
     takeGroup('/workflow', MOVED_OUT),
     takeGroup('/procurement', MOVED_OUT),
     takeGroup('/sales', MOVED_OUT),
-    takeGroup('/production', MOVED_OUT),
+    insertAfter(takeGroup('/production', MOVED_OUT), '/production/approval', P5_WEIGH_LEAF),
     takeGroup('/warehouse', MOVED_OUT),
     takeGroup('/quality', MOVED_OUT),
     analytics,

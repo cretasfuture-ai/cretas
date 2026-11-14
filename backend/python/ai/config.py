@@ -60,6 +60,19 @@ class AIConfig:
     #   "legacy" = 旧链 Luna → qwen 读 logprobs → _result_from_probs (回滚用)。
     # 退路自己的阈值与 Luna 的 decision_auto_threshold 分开, 见 fallback_combo.FallbackThresholds (AI_DECISION_FALLBACK_*)。
     decision_fallback: str = "combo"
+    # Luna 主路径的结论口径 (INTENT-DISTILL-20261111 第三批, 2026-11-14, 按史浩禾 39 题校准):
+    #   "v3" = Choice 之外并行问 Luna 一道判断题「这一轮是否必须先问」(decision.ASK_PREDICATE_RULES);
+    #          判断题 >= luna_ask_threshold ⇒ 先问; 否则只读目标首选 >= luna_read_threshold 或领先第二名
+    #          >= luna_margin 就按默认值直接办 (Java 写明默认), 写目标首选 >= luna_write_threshold 才交写确认卡。
+    #          「需要先问清楚」选项比所有真实候选都大时仍然先问 (与 v1 相同)。判断题拿不到 ⇒ 这一轮按 v1。
+    #   "v1" = 旧口径 (回滚用): 首选 >= decision_auto_threshold(0.80) 才执行, 否则出按钮。
+    # 0.80 在 Luna 上几乎从不达到 (11-14 线上 39 题首选最高 0.74 ⇒ 38/38 先问), 这是「过度追问」的主因。
+    # 0.6 / 0.15 / 0.3 / 0.4 的来由见 Documents/Cretas意图蒸馏-20261111/third-batch-calibrate-20261114.md。
+    decision_luna_policy: str = "v3"
+    luna_ask_threshold: float = 0.6
+    luna_read_threshold: float = 0.15
+    luna_margin: float = 0.3
+    luna_write_threshold: float = 0.4
 
     def decision_enabled_for(self, business_type: str) -> bool:
         wanted = {b.strip().upper() for b in self.decision_business_types.split(",") if b.strip()}
@@ -97,6 +110,11 @@ class AIConfig:
             decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
             decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
             decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
+            decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "v3").strip().lower() or "v3"),
+            luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.6")),
+            luna_read_threshold=float(os.environ.get("AI_DECISION_LUNA_READ_THRESHOLD", "0.15")),
+            luna_margin=float(os.environ.get("AI_DECISION_LUNA_MARGIN", "0.3")),
+            luna_write_threshold=float(os.environ.get("AI_DECISION_LUNA_WRITE_THRESHOLD", "0.4")),
         )
 
 
