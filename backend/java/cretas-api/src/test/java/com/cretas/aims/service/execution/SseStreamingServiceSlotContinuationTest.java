@@ -181,7 +181,7 @@ class SseStreamingServiceSlotContinuationTest {
                 new com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder(repo, protector, new ObjectMapper());
         ReflectionTestUtils.setField(h.service, "flywheelRecorder", recorder);
         when(h.aiIntentService.recognizeIntentWithConfidence(
-                anyString(), eq(F), eq(3), eq(USER), eq(ROLE), any(), any(), any(), any()))
+                anyString(), eq(F), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     IntentMatchResult r = IntentMatchResult.builder().userInput("查询原材料库存").confidence(0.0).build();
                     // 与 AIIntentServiceImpl 的真实挂点同一组方法
@@ -190,8 +190,18 @@ class SseStreamingServiceSlotContinuationTest {
                     return r;
                 });
 
-        h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").sessionId("s-fw").build(),
-                USER, ROLE);
+        var previousRequest = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        var servletRequest = new org.springframework.mock.web.MockHttpServletRequest();
+        servletRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(servletRequest));
+        try {
+            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").sessionId("s-fw").build(),
+                    USER, ROLE);
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(previousRequest);
+        }
 
         ArgumentCaptor<com.cretas.aims.entity.intent.IntentFlywheelTurn> saved =
                 ArgumentCaptor.forClass(com.cretas.aims.entity.intent.IntentFlywheelTurn.class);
