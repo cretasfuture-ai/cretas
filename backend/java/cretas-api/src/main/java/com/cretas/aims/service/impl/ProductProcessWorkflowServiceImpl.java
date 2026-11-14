@@ -225,7 +225,6 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         }
 
         entity.setSchemaVersion(definition.getSchemaVersion());
-        stampProcessParamConfirmations(factoryId, productTypeId, definition);
         entity.setNodesJson(writeJson(definition.getNodes()));
         entity.setEdgesJson(writeJson(definition.getEdges()));
         entity.setViewportJson(writeJson(definition.getViewport()));
@@ -239,43 +238,6 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         saved.setForkedFromWorkflowId(forkedFromWorkflowId);
         saved.setForkedFromVersion(forkedFromVersion);
         return saved;
-    }
-
-    /**
-     * 工艺参数「确认覆盖」只在一次发布内有效: 保存草稿时, 服务端给每个带勾却还没有 confirmedBase 的参数盖上
-     * 「当前已发布版本号」。发布时 materializer 要求它等于上一版已发布版本, 所以从历史版本恢复回来的旧勾
-     * (章是当年的版本号)、别人在中间又发布过一版之后的旧勾, 都对不上, 必须重新勾。
-     * 不在发布时抹掉勾: revision 快照与 revisionHash(BOM 配方按它钉版本)必须和已保存草稿逐字一致。
-     * 勾被取消/没勾时清掉 confirmedBase, 重新勾选就会重新盖章。
-     */
-    private void stampProcessParamConfirmations(
-            String factoryId, String productTypeId, ProductProcessWorkflowDTO definition) {
-        if (definition.getNodes() == null) return;
-        int base = find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED)
-                .map(ProductProcessWorkflow::getDefinitionVersion).orElse(0);
-        for (ProductProcessWorkflowDTO.Node node : definition.getNodes()) {
-            if (node == null || node.getData() == null
-                    || !(node.getData().get("processParams") instanceof List<?> params)) {
-                continue;
-            }
-            List<Object> stamped = new java.util.ArrayList<>();
-            for (Object raw : params) {
-                if (raw instanceof Map<?, ?> m) {
-                    Map<Object, Object> copy = new java.util.LinkedHashMap<>(m);
-                    if (Boolean.TRUE.equals(copy.get("overwriteConfirmed"))) {
-                        copy.putIfAbsent("confirmedBase", base);
-                    } else {
-                        copy.remove("confirmedBase");
-                    }
-                    stamped.add(copy);
-                } else {
-                    stamped.add(raw);
-                }
-            }
-            Map<String, Object> data = new java.util.LinkedHashMap<>(node.getData());
-            data.put("processParams", stamped);
-            node.setData(data);
-        }
     }
 
     /**
@@ -679,9 +641,7 @@ public class ProductProcessWorkflowServiceImpl implements ProductProcessWorkflow
         // 放在 CCP 台账之前: 它可能因「要覆盖已有标准但未确认」409, 先判先抛, 不留下任何半截写入
         // (整个方法在事务里, 抛异常会连同 CCP 台账与草稿状态一起回滚)。
         if (processParamMaterializer != null) {
-            processParamMaterializer.materialize(factoryId, productTypeId, definition,
-                    find(factoryId, productTypeId, ProductProcessWorkflow.Status.PUBLISHED)
-                            .map(this::toDTO).orElse(null), operatorId);
+            processParamMaterializer.materialize(factoryId, definition);
         }
         // 画布工序上的 CCP 控制点 → 台账(待确认已在 validateForPublish 拦住, 到这里限值一定齐全)
         if (ccpMaterializer != null) {

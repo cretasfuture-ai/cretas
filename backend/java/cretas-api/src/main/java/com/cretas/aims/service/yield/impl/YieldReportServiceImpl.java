@@ -119,6 +119,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired
     private WorkflowTaskPortRepository workflowTaskPortRepository;
 
+    /** 工艺参数产品标准: 取本任务所属运行时实例(=计划锁定的工艺版本快照)里的画布参数; 未注入 = 旧行为。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository workflowInstanceRepo;
+
     @Autowired
     private com.cretas.aims.service.production.TaskMaterialBatchPickerService taskMaterialBatchPickerService;
 
@@ -461,7 +465,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 工艺参数 (App 产出报工录入): 与 web 工序表同口径 —— 未配置的键 400, 超标不拦, 服务端按当时标准留快照。
         Map<String, Object> processParams = processParamsForReport(req, reportKind, costWp);
         List<Map<String, Object>> paramChecks = processParams == null ? null
-                : ProcessParamCheck.evaluate(costWp.getCustomFieldSchema(), processParams);
+                : ProcessParamCheck.evaluate(standardsSchema(costWp, t), processParams);
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -1313,6 +1317,23 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (byproductMaps != null) m.put("byproducts", byproductMaps);
             return m;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 判超标用的 schema: 工序 customFieldSchema + 本任务所属运行时实例(计划锁定的产品工艺版本)里该工序节点的
+     * 画布参数标准覆盖; 画布没配、找不到实例/节点 → 原 schema(旧行为)。
+     */
+    private List<Map<String, Object>> standardsSchema(WorkProcess wp, WorkProcessTask task) {
+        List<Map<String, Object>> schema = wp == null ? null : wp.getCustomFieldSchema();
+        if (schema == null || workflowInstanceRepo == null
+                || task == null || task.getWorkflowInstanceId() == null) {
+            return schema;
+        }
+        return workflowInstanceRepo.findById(task.getWorkflowInstanceId())
+                .map(inst -> com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(schema,
+                        com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                inst.getNodesJson(), task.getWorkflowNodeId(), task.getWorkProcessId())))
+                .orElse(schema);
     }
 
     /**

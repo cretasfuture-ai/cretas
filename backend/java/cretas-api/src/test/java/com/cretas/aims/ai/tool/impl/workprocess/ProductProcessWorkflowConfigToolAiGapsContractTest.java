@@ -131,47 +131,21 @@ class ProductProcessWorkflowConfigToolAiGapsContractTest {
     }
 
     @Test
-    void anAiPatchCanNeverCarryTheOverwriteConfirmation() throws Exception {
-        // 「确认覆盖工序已有标准」只能由人勾。AI 补丁带 true 要被丢弃(参数本身仍可进入待确认)
+    void processParamsAreAcceptedButTheRetiredOverwriteConfirmationKeysAreNot() throws Exception {
+        // 参数标准按产品存在画布里, 不再写共享工序标准 ⇒ 已经没有「确认覆盖」这套字段; AI 带来的一律拒绝
         Map<String, Object> param = new LinkedHashMap<>();
         param.put("label", "油温");
         param.put("unit", "℃");
         param.put("min", 150);
         param.put("max", 170);
-        param.put("overwriteConfirmed", true);
-        param.put("confirmedFor", Map.of("unit", "℃", "min", 150, "max", 170));
-        param.put("confirmedBase", 0);
-        Map<String, Object> envelope = preview(def(), List.of(setField("process:1", "processParams", List.of(param))));
-        assertTrue(ok(envelope), "参数本身合法, 补丁应通过: " + envelope);
-        String out = objectMapper.writeValueAsString(envelope);
-        assertTrue(out.contains("油温"), "参数应保留: " + out);
-        assertFalse(out.contains("overwriteConfirmed"), "AI 带来的确认必须被丢弃: " + out);
-        assertFalse(out.contains("confirmedFor"), "AI 带来的确认快照必须被丢弃: " + out);
-        assertFalse(out.contains("confirmedBase"), "AI 带来的确认章必须被丢弃: " + out);
-    }
+        Map<String, Object> ok = preview(def(), List.of(setField("process:1", "processParams", List.of(param))));
+        assertTrue(ok(ok), "合法参数补丁应通过: " + ok);
+        assertTrue(objectMapper.writeValueAsString(ok).contains("油温"));
 
-    @Test
-    @SuppressWarnings("unchecked")
-    void anAiUpsertNodeCannotCarryTheOverwriteConfirmationEither() throws Exception {
-        Map<String, Object> param = new LinkedHashMap<>();
-        param.put("label", "油温");
-        param.put("unit", "℃");
-        param.put("min", 150);
-        param.put("max", 170);
-        param.put("overwriteConfirmed", true);
-        param.put("confirmedFor", Map.of("unit", "℃", "min", 150, "max", 170));
-        param.put("confirmedBase", 0);
-        Map<String, Object> node = new LinkedHashMap<>(objectMapper.convertValue(
-                ((List<Map<String, Object>>) def().get("nodes")).get(1), new TypeReference<Map<String, Object>>() {}));
-        Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) node.get("data"));
-        data.put("processParams", List.of(param));
-        node.put("data", data);
-        Map<String, Object> envelope = preview(def(), List.of(Map.of("op", "UPSERT_NODE", "node", node)));
-        assertTrue(ok(envelope), "UPSERT_NODE 本身应通过: " + envelope);
-        String out = objectMapper.writeValueAsString(envelope);
-        assertTrue(out.contains("油温"), "参数应保留: " + out);
-        assertFalse(out.contains("overwriteConfirmed") || out.contains("confirmedFor") || out.contains("confirmedBase"),
-                "UPSERT_NODE 路径也必须丢弃确认: " + out);
+        Map<String, Object> withTick = new LinkedHashMap<>(param);
+        withTick.put("overwriteConfirmed", true);
+        Map<String, Object> rejected = preview(def(), List.of(setField("process:1", "processParams", List.of(withTick))));
+        assertFalse(ok(rejected), "带已废弃的 overwriteConfirmed 的补丁应被拒: " + rejected);
     }
 
     @Test

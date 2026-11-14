@@ -125,6 +125,10 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      */
     private final ProductWorkProcessRepository productWorkProcessRepository;
     private final WorkProcessRepository workProcessRepository;
+
+    /** 工艺参数产品标准: 读计划锁定的工艺版本快照; 未注入 = 旧行为。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository workflowRevisionRepository;
     /** 每道注射工序的绝对注射量配置。 */
     private final BomProcessInjectionConfigRepository bomProcessInjectionConfigRepository;
 
@@ -222,7 +226,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
         for (BatchEntry be : ordered) {
             if (be.getSteps() == null) continue;
             for (StepEntry st : be.getSteps()) {
-                validateStepCustomFields(factoryId, be.getProductTypeId(), st);
+                validateStepCustomFields(factoryId, planId, be.getProductTypeId(), st);
             }
         }
 
@@ -1154,7 +1158,7 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
      * null-tolerant: repos 未注入 (测试 @InjectMocks) / 缺定位信息 / 找不到工序配置 → skip (放行),
      * 与 sheet 路径 {@code ProcessSheetServiceImpl.validateCustomFields} 的兜底语义一致。
      */
-    private void validateStepCustomFields(String factoryId, String productTypeId, StepEntry st) {
+    private void validateStepCustomFields(String factoryId, String planId, String productTypeId, StepEntry st) {
         Map<String, Object> cf = st.getCustomFields();
         if (cf == null || cf.isEmpty()) {
             return; // 无自定义字段 —— 最常见路径, 提前返回避免查库
@@ -1179,7 +1183,25 @@ public class ClerkProcessEntryServiceImpl implements ClerkProcessEntryService {
             return;
         }
         ProcessCustomFieldValidation.checkKeys(wp.getCustomFieldSchema(), cf.keySet(), wp.getProcessName());
-        st.setParamChecks(ProcessParamCheck.evaluate(wp.getCustomFieldSchema(), cf));
+        // 产品标准: 本计划锁定的那一版画布里该工序节点配的参数覆盖同名字段的标准; 没配/没锁定 = 原 schema
+        st.setParamChecks(ProcessParamCheck.evaluate(
+                standardsSchema(factoryId, planId, wp), cf));
+    }
+
+    /** 工序 schema + 计划锁定的产品工艺版本(selectedWorkflowRevision)里同工序唯一节点的画布参数标准。 */
+    private List<Map<String, Object>> standardsSchema(String factoryId, String planId, WorkProcess wp) {
+        List<Map<String, Object>> schema = wp.getCustomFieldSchema();
+        if (schema == null || planId == null || planRepository == null || workflowRevisionRepository == null) {
+            return schema;
+        }
+        return planRepository.findByIdAndFactoryId(planId, factoryId)
+                .map(com.cretas.aims.entity.ProductionPlan::getSelectedWorkflowRevisionId)
+                .flatMap(id -> id == null ? Optional.<com.cretas.aims.entity.ProductProcessWorkflowRevision>empty()
+                        : workflowRevisionRepository.findByIdAndFactoryId(id, factoryId))
+                .map(rev -> com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(schema,
+                        com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                rev.getNodesJson(), null, wp.getId())))
+                .orElse(schema);
     }
 
     /** 将 ProcessChainEntryRequest.Byproduct 列表转换为 jsonb-ready Map 列表 (mirror YieldReportServiceImpl). */

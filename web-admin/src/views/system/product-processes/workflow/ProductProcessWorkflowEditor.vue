@@ -2979,21 +2979,6 @@ async function restorePreviewAsDraft(): Promise<void> {
   // the historical row's lockVersion races or conflicts with an existing DRAFT and can discard
   // the restore intent.
   const historicalGraph = currentDefinition();
-  // 历史版本里带着的「确认覆盖工序已有标准」不能当成新确认: 恢复时一律清掉, 要重新勾
-  historicalGraph.nodes = historicalGraph.nodes.map((node) => {
-    const data = node.data as unknown as Record<string, unknown>;
-    if (node.kind !== 'PROCESS' || !Array.isArray(data.processParams)) return node;
-    return {
-      ...node,
-      data: {
-        ...data,
-        processParams: (data.processParams as Array<Record<string, unknown>>).map((param) => {
-          const { overwriteConfirmed: _o, confirmedFor: _f, confirmedBase: _b, ...rest } = param;
-          return rest;
-        }),
-      } as never,
-    };
-  });
   try {
     const current = await getProductProcessWorkflow(identity.factoryId, identity.productTypeId);
     if (!current.success || !current.data || !definitionMatchesIdentity(current.data, identity)) {

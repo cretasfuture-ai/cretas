@@ -407,15 +407,6 @@
           aria-label="单位"
           @change="onParamUnit(index, $event)"
         />
-        <label class="ccp-field" data-testid="param-overwrite">
-          <input
-            type="checkbox"
-            :checked="param.overwriteConfirmed === true"
-            :disabled="!canWrite"
-            @change="onParamOverwrite(index, $event)"
-          />
-          确认覆盖工序已有标准（工序是各产品共用的）
-        </label>
         <div v-if="processParamContradiction(param)" class="ccp-error" data-testid="param-contradict">{{ processParamContradiction(param) }}</div>
       </div>
       <div v-for="item in pendingList" :key="item.code" class="pending-row" data-testid="pending-row">
@@ -572,11 +563,7 @@ function onCcpNumber(index: number, key: 'criticalLimitMin' | 'criticalLimitMax'
 }
 const paramList = computed(() => processParamsOf(props.data as unknown as Record<string, unknown>));
 function patchParam(index: number, patch: Partial<WorkflowProcessParam>): void {
-  const editsValue = ['unit', 'standardValue', 'min', 'max'].some((k) => k in patch);
-  const next = paramList.value.map((param, i) => (i === index
-    // 改数值/单位 = 之前的「确认覆盖」作废, 要重新勾
-    ? { ...param, ...(editsValue ? { overwriteConfirmed: false, confirmedFor: undefined, confirmedBase: undefined } : {}), ...patch }
-    : param));
+  const next = paramList.value.map((param, i) => (i === index ? { ...param, ...patch } : param));
   emit('update', { processParams: next } as Partial<ProcessNodeData>);
 }
 function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', event: Event): void {
@@ -584,17 +571,6 @@ function onParamNumber(index: number, key: 'min' | 'max' | 'standardValue', even
   const parsed = raw === '' ? Number.NaN : Number(raw);
   // 空或非数 = 回到「待确认」(⛔ 不夹逼成 0)
   patchParam(index, { [key]: Number.isFinite(parsed) ? parsed : null });
-}
-function onParamOverwrite(index: number, event: Event): void {
-  const checked = (event.target as HTMLInputElement | null)?.checked === true;
-  const param = paramList.value[index];
-  patchParam(index, checked && param
-    ? {
-        overwriteConfirmed: true,
-        confirmedBase: undefined,
-        confirmedFor: { unit: param.unit ?? null, standardValue: param.standardValue ?? null, min: param.min ?? null, max: param.max ?? null },
-      }
-    : { overwriteConfirmed: false, confirmedFor: undefined, confirmedBase: undefined });
 }
 function onParamUnit(index: number, event: Event): void {
   const raw = String((event.target as HTMLInputElement | null)?.value ?? '').trim();
