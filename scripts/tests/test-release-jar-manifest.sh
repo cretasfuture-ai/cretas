@@ -250,4 +250,26 @@ printf 'maven_command=$(touch %s/pwned)\n' "$TMP_ROOT" >> "$MANIFEST"
 release_manifest_validate "$MANIFEST" "$FIXTURE_REPO" "$DESTINATION" >/dev/null 2>&1 || true
 [ ! -e "$TMP_ROOT/pwned" ] || fail "manifest parser executed untrusted content"
 
+# Every ServiceLoader provider registered for tests must be compiled even when the
+# release build narrows cretas.testIncludes to a single class; otherwise the surefire
+# fork dies with "Provider ... not found" and the release build fails (#1678 incident).
+REAL_POM="$ROOT_DIR/backend/java/cretas-api/pom.xml"
+SERVICES_DIR="$ROOT_DIR/backend/java/cretas-api/src/test/resources/META-INF/services"
+provider_count=0
+if [ -d "$SERVICES_DIR" ]; then
+    while IFS= read -r provider; do
+        provider=${provider%%#*}
+        provider=$(printf '%s' "$provider" | tr -d '[:space:]')
+        [ -n "$provider" ] || continue
+        provider_count=$((provider_count + 1))
+        provider_file="${provider##*.}.java"
+        provider_pkg_dir=$(printf '%s' "${provider%.*}" | tr '.' '/')
+        [ -f "$ROOT_DIR/backend/java/cretas-api/src/test/java/$provider_pkg_dir/$provider_file" ] \
+            || fail "test service provider $provider has no source under src/test/java"
+        grep -Eq "<include>\*\*/([A-Za-z0-9_]+/)*${provider_file}</include>" "$REAL_POM" \
+            || fail "test service provider $provider is not an always-on <testIncludes> entry in pom.xml"
+    done < <(cat "$SERVICES_DIR"/* 2>/dev/null)
+fi
+echo "test service providers pinned in pom testIncludes: $provider_count"
+
 echo "PASS: release JAR manifest trust, target-test build, fallback, and integrity contracts"
