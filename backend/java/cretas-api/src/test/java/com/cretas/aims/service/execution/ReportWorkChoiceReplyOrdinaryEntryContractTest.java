@@ -78,6 +78,10 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
     private ToolDispatchService toolDispatchService;
     private String sessionId;
     private final List<String> executed = new java.util.ArrayList<>();
+    /** 每次工具分发 (桩) 收到的请求 context, 按调用顺序。 */
+    private final List<Map<String, Object>> dispatchedContexts = new java.util.ArrayList<>();
+    private ConversationServiceImpl conversations;
+    private ToolRegistry toolRegistry;
 
     @BeforeEach
     void setUp() {
@@ -87,12 +91,12 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         SemanticCacheService semanticCache = mock(SemanticCacheService.class);
         when(semanticCache.queryCache(anyString(), anyString())).thenReturn(SemanticCacheHit.miss(0L));
         repo = inMemorySessions();
-        ConversationServiceImpl conversations = new ConversationServiceImpl(
+        conversations = new ConversationServiceImpl(
                 repo, mock(AIIntentConfigRepository.class), null, mock(DashScopeClient.class));
         ReflectionTestUtils.setField(conversations, "maxRounds", 5);
         ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
         ReflectionTestUtils.setField(conversations, "confidenceThreshold", 0.7);
-        ToolRegistry toolRegistry = mock(ToolRegistry.class);
+        toolRegistry = mock(ToolRegistry.class);
         // 短语快捷通道命中后走显式意图 → 这两个意图没绑工具 → buildNoToolResponse。记下是哪个意图被执行了。
         toolDispatchService = mock(ToolDispatchService.class);
         when(toolDispatchService.buildNoToolResponse(any())).thenAnswer(inv -> IntentExecuteResponse.builder()
@@ -160,6 +164,8 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         when(toolDispatchService.executeWithTool(any(), anyString(), any(), any(), any(), any(), any()))
                 .thenAnswer(inv -> {
                     executed.add(((AIIntentConfig) inv.getArgument(3)).getIntentCode());
+                    IntentExecuteRequest req = inv.getArgument(2);
+                    dispatchedContexts.add(req.getContext() == null ? Map.of() : new LinkedHashMap<>(req.getContext()));
                     return IntentExecuteResponse.builder().intentRecognized(true)
                             .intentCode(((AIIntentConfig) inv.getArgument(3)).getIntentCode())
                             .status("WRITE_CONFIRM_REQUIRED").message("需要确认").build();
@@ -207,6 +213,136 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         assertThat(sessions.get(sessionId).getCollectedParameters()).doesNotContainKey("taskId");
         assertThat(sessions.get(sessionId).getStatus()).isNotEqualTo(SessionStatus.COMPLETED);
         assertThat(String.valueOf(r.getMessage())).doesNotContain("没对上");
+    }
+
+    @ParameterizedTest(name = "任务状态开关={0}")
+    @ValueSource(booleans = {true, false})
+    @DisplayName("回「2」后的写确认带 previewParams (taskId=202, 产量 100), 形状同流式; 拿它请求预览, 预览收到的就是这两项")
+    @SuppressWarnings("unchecked")
+    void writeConfirmCarriesTheCollectedParamsToThePreview(boolean taskStateOn) {
+        taskState.setFactories(taskStateOn ? "F006" : "");
+
+        IntentExecuteResponse r = execute("2");
+
+        assertThat(r.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        Map<String, Object> previewParams = (Map<String, Object>) r.getMetadata().get("previewParams");
+        assertThat(previewParams).containsOnly(Map.entry("taskId", "202"), Map.entry("actualQuantity", "100"));
+
+        // App 拿 previewParams 请求 /preview (显式意图 + previewOnly): 工具预览收到的 context 就是会话收集的值
+        IntentExecuteResponse preview = previewWith(INTENT, previewParams);
+        assertThat(preview.getStatus()).isEqualTo("PREVIEW");
+        org.mockito.ArgumentCaptor<IntentExecuteRequest> sent = org.mockito.ArgumentCaptor.forClass(IntentExecuteRequest.class);
+        verify(toolDispatchService).executeToolPreview(any(), eq(F), sent.capture(), any(), eq(USER), eq(ROLE));
+        assertThat(sent.getValue().getContext()).containsEntry("taskId", "202").containsEntry("actualQuantity", "100");
+    }
+
+    @Test
+    @DisplayName("请求体自带别的 taskId / 确认标记: 以会话收集的为准 (202), 确认标记剥掉, 仍停在写确认")
+    @SuppressWarnings("unchecked")
+    void requestBodyCannotOverrideTheCollectedParams() {
+        Map<String, Object> forged = new LinkedHashMap<>(Map.of("taskId", 999, "confirmed", true));
+
+        IntentExecuteResponse r = executeWith("2", forged);
+
+        assertThat(r.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(executed).as("确认标记没被当真, 没有直接执行").isEmpty();
+        assertThat((Map<String, Object>) r.getMetadata().get("previewParams"))
+                .containsEntry("taskId", "202").containsEntry("actualQuantity", "100");
+    }
+
+    @Test
+    @DisplayName("另一个缺参写意图 (登记损耗: 缺批次号) 续轮也带参: previewParams = 批次号 + 已记的数量")
+    @SuppressWarnings("unchecked")
+    void anotherWriteIntentAlsoCarriesItsParams() {
+        String code = "MATERIAL_WASTE_RECORD_CREATE";
+        ToolExecutor waste = mock(ToolExecutor.class);
+        when(waste.getToolName()).thenReturn("material_waste_record_create");
+        when(waste.getAccessMode()).thenReturn(ToolExecutor.AccessMode.WRITE);
+        when(waste.getParametersSchema()).thenReturn(Map.of("type", "object", "properties", Map.of(
+                "batchNumber", Map.of("type", "string", "description", "批次号"),
+                "quantity", Map.of("type", "number", "description", "数量"))));
+        when(toolRegistry.getExecutor("material_waste_record_create")).thenReturn(Optional.of(waste));
+        when(aiIntentService.getIntentByCode(F, code)).thenReturn(Optional.of(AIIntentConfig.builder()
+                .intentCode(code).intentName("登记损耗").intentCategory("MATERIAL").businessType("FACTORY")
+                .sensitivityLevel("LOW").isActive(true).toolName("material_waste_record_create").build()));
+        sessionId = conversations.startParameterCollection(F, USER, code, "登记损耗",
+                List.of(ConversationService.RequiredParameter.builder()
+                        .name("batchNumber").label("批次号").type("STRING").build()),
+                List.of(), Map.of("quantity", 5)).getSessionId();
+
+        IntentExecuteResponse r = execute("B20261006-01");
+
+        assertThat(r.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        assertThat(r.getIntentCode()).isEqualTo(code);
+        assertThat((Map<String, Object>) r.getMetadata().get("previewParams"))
+                .containsOnly(Map.entry("batchNumber", "B20261006-01"), Map.entry("quantity", "5"));
+    }
+
+    @Test
+    @DisplayName("读意图续轮不变: 不并会话参数, 回复不带 previewParams (照常执行工具)")
+    void readIntentContinuationIsUnchanged() {
+        String code = "MATERIAL_BATCH_QUERY";
+        ToolExecutor read = mock(ToolExecutor.class);
+        when(read.getToolName()).thenReturn("material_batch_query");
+        when(read.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+        when(read.getActionType()).thenReturn(ToolExecutor.ActionType.READ);
+        when(read.getParametersSchema()).thenReturn(Map.of("type", "object", "properties", Map.of(
+                "batchNumber", Map.of("type", "string", "description", "批次号"))));
+        when(toolRegistry.getExecutor("material_batch_query")).thenReturn(Optional.of(read));
+        when(aiIntentService.getIntentByCode(F, code)).thenReturn(Optional.of(AIIntentConfig.builder()
+                .intentCode(code).intentName("查批次").intentCategory("MATERIAL").businessType("FACTORY")
+                .sensitivityLevel("LOW").isActive(true).toolName("material_batch_query").build()));
+        org.mockito.Mockito.doAnswer(inv -> {
+                    IntentExecuteRequest req = inv.getArgument(2);
+                    dispatchedContexts.add(req.getContext() == null ? Map.of() : new LinkedHashMap<>(req.getContext()));
+                    return IntentExecuteResponse.builder().intentRecognized(true).intentCode(code)
+                            .status("COMPLETED").message("查到了").build();
+                }).when(toolDispatchService).executeWithTool(eq(read), anyString(), any(), any(), any(), any(), any());
+        sessionId = conversations.startParameterCollection(F, USER, code, "查批次",
+                List.of(ConversationService.RequiredParameter.builder()
+                        .name("batchNumber").label("批次号").type("STRING").build()),
+                List.of(), Map.of()).getSessionId();
+
+        IntentExecuteResponse r = execute("B20261006-01");
+
+        assertThat(r.getStatus()).isEqualTo("COMPLETED");
+        assertThat(dispatchedContexts).as("必发生: 读工具真的被执行了").hasSize(1);
+        assertThat(dispatchedContexts.get(0)).doesNotContainKey("batchNumber");
+        assertThat(r.getMetadata() == null ? Map.of() : r.getMetadata()).doesNotContainKey("previewParams");
+    }
+
+    @Test
+    @DisplayName("任务状态开: 回「不报了」→ 报工会话挂起 (SUSPENDED), 不是完成也不是丢掉")
+    void cancelPhraseSuspendsTheTaskWhenTaskStateIsOn() {
+        taskState.setFactories("F006");
+
+        execute("不报了");
+
+        assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
+        assertThat(sessions.get(sessionId).getCollectedParameters())
+                .as("挂起后已记的产量还在, 恢复时不用重说").containsEntry("actualQuantity", "100");
+    }
+
+    private IntentExecuteResponse previewWith(String intentCode, Map<String, Object> context) {
+        when(toolDispatchService.executeToolPreview(any(), anyString(), any(), any(), any(), any()))
+                .thenReturn(IntentExecuteResponse.builder().intentRecognized(true).intentCode(intentCode)
+                        .status("PREVIEW").message("确认卡").build());
+        ToolExecutor tool = toolRegistry.getExecutor("work_process_task_complete").orElseThrow();
+        when(tool.supportsPreview()).thenReturn(true);
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
+            return orchestrator.executeWithExplicitIntent(F, IntentExecuteRequest.builder().intentCode(intentCode)
+                    .userInput("我要报工，产量100").context(new LinkedHashMap<>(context)).previewOnly(true).build(),
+                    USER, ROLE);
+        }
+    }
+
+    private IntentExecuteResponse executeWith(String input, Map<String, Object> context) {
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
+            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+                    .context(context).build(), USER, ROLE);
+        }
     }
 
     private IntentExecuteResponse execute(String input) {

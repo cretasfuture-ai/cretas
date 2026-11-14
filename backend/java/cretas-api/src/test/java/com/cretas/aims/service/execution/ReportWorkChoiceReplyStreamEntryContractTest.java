@@ -144,6 +144,21 @@ class ReportWorkChoiceReplyStreamEntryContractTest {
         assertThat(String.valueOf(result.getMessage())).doesNotContain("没对上");
     }
 
+    @org.junit.jupiter.api.Test
+    @org.junit.jupiter.api.DisplayName("任务状态开: 回「不报了」→ 报工会话挂起 (SUSPENDED), 已记的产量还在")
+    void cancelPhraseSuspendsTheTaskWhenTaskStateIsOn() throws Exception {
+        Harness h = new Harness();
+        h.enableTaskState(true);
+        h.recognizes("不报了", h.query);
+        h.recognizesWithTaskState("不报了", h.query);
+        String sid = openChoice(h);
+
+        h.execute(IntentExecuteRequest.builder().userInput("不报了").sessionId(sid).build());
+
+        assertThat(h.sessions.get(sid).getStatus()).isEqualTo(ConversationSession.SessionStatus.SUSPENDED);
+        assertThat(h.sessions.get(sid).getCollectedParameters()).containsEntry("actualQuantity", "100");
+    }
+
     private static final class Harness {
         final AIIntentService aiIntentService = mock(AIIntentService.class);
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);

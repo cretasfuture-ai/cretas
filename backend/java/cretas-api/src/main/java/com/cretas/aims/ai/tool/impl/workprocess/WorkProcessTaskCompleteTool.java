@@ -104,7 +104,8 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
                 workProcessTaskService, factoryId,
                 getLong(params, "taskId"),
                 getBigDecimal(params, "actualQuantity"),
-                getString(params, "notes"));
+                getString(params, "notes"),
+                SecurityUtils.currentUserId());
     }
 
     // ==================== 先确定报哪一道, 再记这一轮的产量 (Steve 2026-11-14) ====================
@@ -133,11 +134,18 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
             // 不知道是谁就不查: 传 null 会列全厂的 (口径是「我的 + 未指派」), 宁可按没有处理
             return Resolution.none("您现在没有进行中的工序任务。要报工的话，请先对要做的那道工序说「开工」。");
         }
-        List<WorkProcessTaskDTO> mine = workProcessTaskService
+        // 列表口径 = 报完工的「本人可报」口径 (WorkProcessTaskService#assertCanComplete), 不列点了会被拒的:
+        //   主管 (ReportAuthGuard 认定) → 本厂全部进行中; 其他人 → 「我的 + 未指派」, 再按同一条判据筛
+        //   (未指派但多负责人表里没有他的那道会被筛掉)。
+        boolean supervisor = workProcessTaskService.isCompletionSupervisor(factoryId, userId);
+        List<WorkProcessTaskDTO> found = workProcessTaskService
                 .list(factoryId, com.cretas.aims.entity.workprocess.WorkProcessTask.Status.IN_PROGRESS,
-                        null, userId, org.springframework.data.domain.PageRequest.of(0, 50))
+                        null, supervisor ? null : userId, org.springframework.data.domain.PageRequest.of(0, 50))
                 .getContent();
-        if (mine == null || mine.isEmpty()) {
+        List<WorkProcessTaskDTO> mine = found == null ? List.of() : found.stream()
+                .filter(t -> canComplete(factoryId, t, userId))
+                .toList();
+        if (mine.isEmpty()) {
             return Resolution.none("您现在没有进行中的工序任务。要报工的话，请先对要做的那道工序说「开工」。");
         }
         List<WorkProcessTaskDTO> candidates = narrowByUserInput(mine, userInput);
@@ -160,6 +168,15 @@ public class WorkProcessTaskCompleteTool extends AbstractBusinessTool
         return Resolution.many(listed, message.toString().stripTrailing(),
                 "回前面的数字，或者直接说产品名、工序名都行。",
                 "请重新说一遍，带上产品名或工序名，比如「红烧肉切块报工」。");
+    }
+
+    private boolean canComplete(String factoryId, WorkProcessTaskDTO task, Long userId) {
+        try {
+            workProcessTaskService.assertCanComplete(factoryId, task, userId);
+            return true;
+        } catch (com.cretas.aims.exception.BusinessException refused) {
+            return false;
+        }
     }
 
     /** 用户话里已经带了产品名 / 批次号 / 工序名: 先按它缩小候选 (一个都对不上就不缩, 照样让他选)。 */
