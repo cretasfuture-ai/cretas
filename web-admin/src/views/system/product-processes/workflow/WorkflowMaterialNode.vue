@@ -682,7 +682,7 @@ const kindMark = computed(() => (isRework.value
   padding: 0; border: 1px solid #d8e4ef; border-radius: 6px; background: #fff;
   color: #1b65a8; cursor: pointer; font-size: 14px;
 }
-.quick-edit:hover { border-color: #409eff; background: #eef6ff; }
+.quick-edit:hover { border-color: var(--el-color-primary); background: #eef6ff; }
 .kind-mark {
   display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto;
   border-radius: 7px; color: #2f8a3d; background: #edf9e8; font-weight: 700;

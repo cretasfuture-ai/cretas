@@ -1697,7 +1697,7 @@ async function onCustomFieldsSaved() {
 .produced-by-anchor { color: #909399; }
 .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .workflow-mode-hint { margin: 0 6px 0 4px; color: #909399; cursor: pointer; vertical-align: middle; }
-.workflow-mode-hint:hover, .workflow-mode-hint:focus { color: #409eff; outline: none; }
+.workflow-mode-hint:hover, .workflow-mode-hint:focus { color: var(--el-color-primary); outline: none; }
 .workflow-viewport { position: relative; isolation: isolate; margin-top: 12px; }
 .workflow-section { margin: 0; }
 .legacy-compatibility {
@@ -1808,9 +1808,9 @@ async function onCustomFieldsSaved() {
   user-select: none;
 }
 .linked-item:active { cursor: grabbing; }
-.linked-item:hover { background: #f0f9ff; border-color: #409eff; }
+.linked-item:hover { background: #f0f9ff; border-color: var(--el-color-primary); }
 .linked-item.is-draft { border-style: dashed; border-color: #e6a23c; background: #fffbe6; }
-.linked-item.drag-over { border-color: #409eff; background: #ecf5ff; border-style: solid; }
+.linked-item.drag-over { border-color: var(--el-color-primary); background: #ecf5ff; border-style: solid; }
 
 /* Drag handle */
 .drag-handle {
@@ -1827,7 +1827,7 @@ async function onCustomFieldsSaved() {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  background: #409eff;
+  background: var(--el-color-primary);
   color: #fff;
   display: flex;
   align-items: center;

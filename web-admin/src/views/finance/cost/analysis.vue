@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -43,7 +44,7 @@ const statCards = computed(() => [
     value: costData.value?.totalCost ?? 0,
     unit: '元',
     icon: Money,
-    color: '#409eff'
+    color: CS_TOKENS.primary
   },
   {
     title: '原材料成本',
