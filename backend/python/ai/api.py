@@ -141,6 +141,7 @@ async def _do_match(
         history=body.history,
         # 任务状态单独一个字段 (INTENT-DISTILL-20261111 第二批): 只进决策层提示词, 不占最近对话轮数、不影响重排
         task_state=body.taskState,
+        ask_policy=body.askPolicy,
         min_confidence=min_confidence,
         enable_llm=enable_llm,
     )

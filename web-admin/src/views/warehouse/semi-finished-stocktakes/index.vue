@@ -541,7 +541,7 @@ onMounted(() => loadData());
       <el-form label-width="100px">
         <el-form-item label="盘点月份" required>
           <el-input v-model="initiateForm.periodMonth" placeholder="YYYY-MM" style="width: 160px" />
-          <span style="margin-left: 8px; color: #909399; font-size: 12px">格式: 2026-06</span>
+          <span style="margin-left: 8px; color: var(--cs-muted); font-size: 12px">格式: 2026-06</span>
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="initiateForm.notes" type="textarea" :rows="2" placeholder="可选" />
@@ -574,7 +574,7 @@ onMounted(() => loadData());
         </el-descriptions>
 
         <div v-if="detailData.status === 'APPROVED' || detailData.status === 'APPLIED'" style="margin-top: 20px">
-          <div style="font-weight: 600; margin-bottom: 8px; color: #1B65A8">
+          <div style="font-weight: 600; margin-bottom: 8px; color: var(--cs-primary)">
             盘点差异预览
             <el-text type="warning" style="font-size: 12px; margin-left: 8px">（已审批，应用后校准库存）</el-text>
           </div>
@@ -588,7 +588,7 @@ onMounted(() => loadData());
             </el-table-column>
             <el-table-column label="差异" prop="differenceQty" width="90" align="right">
               <template #default="{ row }">
-                <span :style="{ color: Number(row.differenceQty) < 0 ? '#f56c6c' : Number(row.differenceQty) > 0 ? '#67c23a' : '' }">
+                <span :style="{ color: Number(row.differenceQty) < 0 ? 'var(--cs-danger)' : Number(row.differenceQty) > 0 ? 'var(--cs-success)' : '' }">
                   {{ row.differenceQty != null ? (Number(row.differenceQty) > 0 ? '+' : '') + row.differenceQty : '—' }}
                 </span>
               </template>
@@ -663,7 +663,7 @@ onMounted(() => loadData());
         <el-table-column label="差异" width="110" align="right">
           <template #default="{ row }">
             <span v-if="revealedDifference(row) !== null">
-              <span :style="{ color: Number(revealedDifference(row)) < 0 ? '#f56c6c' : Number(revealedDifference(row)) > 0 ? '#67c23a' : '' }">
+              <span :style="{ color: Number(revealedDifference(row)) < 0 ? 'var(--cs-danger)' : Number(revealedDifference(row)) > 0 ? 'var(--cs-success)' : '' }">
                 {{ Number(revealedDifference(row)) > 0 ? '+' : '' }}{{ revealedDifference(row) }}
               </span>
             </span>
@@ -747,7 +747,7 @@ onMounted(() => loadData());
 <style scoped>
 .page-container {
   padding: 20px;
-  background: #F4F6F9;
+  background: var(--cs-bg);
   min-height: 100%;
 }
 .page-header {
@@ -760,7 +760,7 @@ onMounted(() => loadData());
   margin: 0;
   font-size: 20px;
   font-weight: 600;
-  color: #1B65A8;
+  color: var(--cs-primary);
 }
 .header-actions {
   display: flex;

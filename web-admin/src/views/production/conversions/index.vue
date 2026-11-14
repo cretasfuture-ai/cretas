@@ -358,7 +358,7 @@ async function handleDelete(row: TableRow) {
 
   :deep(.el-card__header) {
     padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 
   :deep(.el-card__body) {
@@ -382,12 +382,12 @@ async function handleDelete(row: TableRow) {
     .page-title {
       font-size: 16px;
       font-weight: 600;
-      color: var(--text-color-primary, #303133);
+      color: var(--text-color-primary, var(--cs-text));
     }
 
     .data-count {
       font-size: 13px;
-      color: var(--text-color-secondary, #909399);
+      color: var(--text-color-secondary, var(--cs-muted));
     }
   }
 }
@@ -407,13 +407,13 @@ async function handleDelete(row: TableRow) {
   display: flex;
   justify-content: flex-end;
   padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   margin-top: 16px;
 }
 
 .form-tip {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-top: 4px;
 }
 </style>

@@ -68,8 +68,12 @@ class AIConfig:
     #   "v1" = 旧口径 (回滚用): 首选 >= decision_auto_threshold(0.80) 才执行, 否则出按钮。
     # 0.80 在 Luna 上几乎从不达到 (11-14 线上 39 题首选最高 0.74 ⇒ 38/38 先问), 这是「过度追问」的主因。
     # 0.6 / 0.15 / 0.3 / 0.4 的来由见 Documents/Cretas意图蒸馏-20261111/third-batch-calibrate-20261114.md。
-    decision_luna_policy: str = "v3"
-    luna_ask_threshold: float = 0.6
+    # 2026-11-14 Steve 拍板「先问口径按工厂选」(ai/ask_policy.py): 缺省 "factory" = 按 Java 传来的工厂档位
+    # (conservative 保守 = 上面的 v3 / aggressive 激进 = 按 Steve 300 题校的规则, 默认档)。全局开关优先:
+    #   v1 = 旧口径 (回滚); v3 / conservative = 全部工厂保守; v4 / aggressive = 全部工厂激进。
+    decision_luna_policy: str = "factory"
+    luna_ask_threshold: float = 0.6  # 保守档 (v3)
+    luna_ask_threshold_aggressive: float = 0.4  # 激进档; 来由见 steve300-calibrate-20261114.md
     luna_read_threshold: float = 0.15
     luna_margin: float = 0.3
     luna_write_threshold: float = 0.4
@@ -110,8 +114,9 @@ class AIConfig:
             decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
             decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
             decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
-            decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "v3").strip().lower() or "v3"),
+            decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "factory").strip().lower() or "factory"),
             luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.6")),
+            luna_ask_threshold_aggressive=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD_AGGRESSIVE", "0.4")),
             luna_read_threshold=float(os.environ.get("AI_DECISION_LUNA_READ_THRESHOLD", "0.15")),
             luna_margin=float(os.environ.get("AI_DECISION_LUNA_MARGIN", "0.3")),
             luna_write_threshold=float(os.environ.get("AI_DECISION_LUNA_WRITE_THRESHOLD", "0.4")),

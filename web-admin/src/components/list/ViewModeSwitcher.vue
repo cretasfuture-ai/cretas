@@ -43,7 +43,8 @@ const iconMap = { table: Grid, grid: Files, kanban: Tickets, timeline: Clock, ca
 
 onMounted(() => {
   const stored = loadViewMode(persistKey.value, props.modelValue);
-  if (stored !== props.modelValue) {
+  // 只认本页暴露的视图：别的页存过「卡片」之类，本页不提供时不能被带过来（销售订单 W6 只留 表格｜看板）。
+  if (stored !== props.modelValue && props.modes.includes(stored)) {
     emit('update:modelValue', stored);
   }
 });

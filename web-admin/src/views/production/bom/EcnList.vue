@@ -660,6 +660,6 @@ onMounted(() => {
   gap: 8px;
 }
 .text-danger {
-  color: var(--el-color-danger, #f56c6c);
+  color: var(--el-color-danger, var(--cs-danger));
 }
 </style>
