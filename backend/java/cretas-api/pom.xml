@@ -619,6 +619,11 @@
                          duplicate maven-compiler-plugin declaration that newer Maven rejects). -->
                     <testIncludes>
                         <include>${cretas.testIncludes}</include>
+                        <!-- Always compiled: listed in src/test/resources/META-INF/services, so the surefire fork
+                             loads it via ServiceLoader even when the release build narrows cretas.testIncludes
+                             to one class (release-jar-manifest.sh). Missing => "Provider ... not found", 0 tests,
+                             BUILD FAILURE. Pinned by scripts/tests/test-release-jar-manifest.sh. -->
+                        <include>**/testsupport/IdleWatchdogTestExecutionListener.java</include>
                     </testIncludes>
                 </configuration>
             </plugin>

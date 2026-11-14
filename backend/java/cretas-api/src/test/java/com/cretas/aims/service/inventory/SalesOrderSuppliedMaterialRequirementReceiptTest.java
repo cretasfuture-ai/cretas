@@ -371,6 +371,45 @@ class SalesOrderSuppliedMaterialRequirementReceiptTest {
         verify(requirementRepository, never()).saveAll(any());
     }
 
+    /**
+     * 迁移 P5 R35 跨日: 服务器是 UTC, 北京时间 11-15 01:30 = UTC 11-14 17:30。到期日 11-14 在北京已过期 1 天,
+     * 用 UTC 日期判会当成「今天到期、没过期」而放行且不留原因。固定时钟卡在这个时刻。
+     */
+    @Test
+    void r35UsesBeijingDateAcrossUtcMidnight() {
+        service.setClock(java.time.Clock.fixed(java.time.Instant.parse("2026-11-14T17:30:00Z"), java.time.ZoneOffset.UTC));
+        CustomerSuppliedMaterialReceiptRequest request = request("receipt-key-r35", "2");
+        request.setExpireDate(java.time.LocalDate.of(2026, 11, 14));
+        SalesOrderSuppliedMaterialRequirement requirement = requirement("4");
+        RawMaterialType material = new RawMaterialType();
+        material.setFactoryId("F006");
+        material.setId("material-1");
+        material.setUnit("kg");
+        material.setCategory("原料");
+        material.setIsActive(true);
+        when(materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceEventKey(
+                "F006", "SALES_ORDER_CUSTOMER_SUPPLIED", "receipt-key-r35"))
+                .thenReturn(Optional.empty());
+        when(requirementRepository.findByIdAndFactoryIdForUpdate("task-1", "F006"))
+                .thenReturn(Optional.of(requirement));
+        when(salesOrderRepository.findByIdAndFactoryIdForUpdate("order-1", "F006"))
+                .thenReturn(Optional.of(approvedOrder()));
+        when(salesOrderItemRepository.findById(726L))
+                .thenReturn(Optional.of(approvedOrderItem()));
+        when(attachmentRepository.countByFactoryIdAndEntityTypeAndEntityId(
+                "F006", Attachment.EntityType.CUSTOMER_SUPPLIED_RECEIPT, "task-1"))
+                .thenReturn(1L);
+        when(rawMaterialTypeRepository.findById("material-1")).thenReturn(Optional.of(material));
+
+        assertThatThrownBy(() -> service.receive("F006", "task-1", request, 1309L))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("EXPIRED_BATCH_REASON_REQUIRED");
+                    assertThat(e.getMessage()).contains("已过期 1 天");
+                });
+        verify(materialBatchRepository, never()).saveAndFlush(any());
+    }
+
     private static CustomerSuppliedMaterialReceiptRequest request(String key, String quantity) {
         CustomerSuppliedMaterialReceiptRequest request = new CustomerSuppliedMaterialReceiptRequest();
         request.setIdempotencyKey(key);

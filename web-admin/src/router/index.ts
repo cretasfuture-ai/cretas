@@ -466,6 +466,13 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/approval-hub/index.vue'),
             meta: { requiresAuth: true, title: '报工审批', module: 'production' }
           },
+          // P5：称重报工（逐笔、带皮重、数据疑点 · 找谁核）。写入复用已有报工接口。
+          {
+            path: 'weigh',
+            name: 'ProductionWeigh',
+            component: () => import('@/views/production/weigh/WeighPage.vue'),
+            meta: { requiresAuth: true, title: '称重报工', module: 'production' }
+          },
           // 2026-09-02 同上收拢: 生产分析 hub —— 合并本文件内的 3 个视角
           // (BOM达成率分析/工序投入产出对比/人效双口径对比) + 另外 3 个视角
           // (车间实时生产报表 in /analytics/*, 生产数据分析/成品出厂核算 in
