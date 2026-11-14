@@ -251,7 +251,7 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
                 .flatMap(id -> com.cretas.aims.service.bom.BomRecipeHeadLocks
                         .lockWithFamily(entityManager, recipeRepository, factoryId, id))
                 .orElse(null);
-        BomRecipeItem item = itemRepository.findByIdForUpdate(proposal.getRecipeItemId())
+        BomRecipeItem item = itemRepository.findByIdForUpdate(factoryId, proposal.getRecipeItemId())
                 .orElseThrow(() -> new ResourceNotFoundException("BOM行不存在: " + proposal.getRecipeItemId()));
         if (!factoryId.equals(item.getFactoryId())) {
             throw new BusinessException(403, "无权审批该BOM调价建议");

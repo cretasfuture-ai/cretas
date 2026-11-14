@@ -94,7 +94,7 @@ class BomRecipeActivePackagingCostCorrectionTest {
         material.setUnit("pcs");
         material.setUnitPrice(new BigDecimal("2.65"));
 
-        when(itemRepo.findByIdForUpdate(680L)).thenReturn(Optional.of(item));
+        when(itemRepo.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(680L))).thenReturn(Optional.of(item));
         when(recipeRepo.lockByIdAndFactoryId("R1", "LIUSHANMEN")).thenReturn(Optional.of(recipe));
         // 红线 3 锁序「整族配方头 → 行」: 先只取行所属配方 id 定位要锁的族, 加锁后再按 id 读头
         when(itemRepo.findRecipeIdById("LIUSHANMEN", 680L)).thenReturn(Optional.of("R1"));
@@ -143,6 +143,6 @@ class BomRecipeActivePackagingCostCorrectionTest {
                 "LIUSHANMEN", 680L, "不应成功", 88L, "production_operator"))
                 .isInstanceOf(BusinessException.class)
                 .hasMessageContaining("财务经理或工厂管理员");
-        verify(itemRepo, never()).findByIdForUpdate(any());
+        verify(itemRepo, never()).findByIdForUpdate(any(), any());
     }
 }

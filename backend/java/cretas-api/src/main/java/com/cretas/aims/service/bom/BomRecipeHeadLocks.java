@@ -74,7 +74,8 @@ public final class BomRecipeHeadLocks {
      */
     public static Optional<BomRecipe> lockWithFamily(EntityManager entityManager, BomRecipeRepository recipes,
                                                      String factoryId, String recipeId) {
-        List<Object> managedBeforeLock = managedFamilyCandidates(entityManager);
+        // ⛔ 必须在任何查询之前: 下面的 JPQL 会先 auto-flush 本事务改脏的配方头, 之后就看不出它曾是脏的了
+        List<Candidate> managedBeforeLock = managedFamilyCandidates(entityManager);
         Optional<String> familyId = recipes.findBomFamilyIdByIdAndFactoryId(recipeId, factoryId);
         if (familyId.isEmpty() || familyId.get().isBlank()) {
             boolean firstAcquisition = !isHeld(recipeKey(factoryId, recipeId));
@@ -107,37 +108,71 @@ public final class BomRecipeHeadLocks {
         return moved;
     }
 
+    /** 加锁查询之前就已托管的配方头 / 明细行 / 调料行, 以及它当时是否已被本事务改脏。 */
+    private record Candidate(Object entity, boolean dirty) {
+    }
+
     /** 加锁查询之前就已在持久化上下文里的配方头 / 明细行 / 调料行 (按对象身份记)。 */
-    private static List<Object> managedFamilyCandidates(EntityManager entityManager) {
+    private static List<Candidate> managedFamilyCandidates(EntityManager entityManager) {
         if (entityManager == null) {
             return List.of();
         }
-        List<Object> managed = new ArrayList<>();
-        for (Map.Entry<Object, EntityEntry> entry : entityManager.unwrap(SessionImplementor.class)
-                .getPersistenceContextInternal().reentrantSafeEntityEntries()) {
+        SessionImplementor session = entityManager.unwrap(SessionImplementor.class);
+        List<Candidate> managed = new ArrayList<>();
+        for (Map.Entry<Object, EntityEntry> entry : session.getPersistenceContextInternal().reentrantSafeEntityEntries()) {
             Object entity = entry.getKey();
             if (entry.getValue().getStatus() == Status.MANAGED
                     && (entity instanceof BomRecipe || entity instanceof BomRecipeItem
                         || entity instanceof BomSeasoningItem)) {
-                managed.add(entity);
+                managed.add(new Candidate(entity, isDirty(session, entry.getValue(), entity)));
             }
         }
         return managed;
     }
 
-    /** 把加锁前就托管着、且属于刚锁住的这些配方的对象刷新成已提交值; 已被别的事务删掉的行摘出上下文。 */
-    private static void refreshStale(EntityManager entityManager, List<Object> managedBeforeLock,
+    private static boolean isDirty(SessionImplementor session, EntityEntry entry, Object entity) {
+        Object[] loaded = entry.getLoadedState();
+        if (loaded == null) {
+            return false; // 只读加载, 不会被写回
+        }
+        int[] dirty = entry.getPersister().findDirty(entry.getPersister().getValues(entity), loaded, entity, session);
+        return dirty != null && dirty.length > 0;
+    }
+
+    /**
+     * 把加锁前就托管着、且属于刚锁住的这些配方的对象刷新成已提交值。
+     *
+     * <ul>
+     *   <li>加锁前就被本事务改脏的同族对象: 拒绝 (IllegalStateException, 程序错误)。它在加锁查询前已被
+     *       auto-flush 写出 —— 写的是加锁前读到的旧快照加上改动, 盖掉别人在这之间提交的列; 刷新救不回来,
+     *       调用方必须改成先锁再读再改。⚠️ <b>这只是兜底, 抓不全</b>: 加锁前已经 flush 过的改动 (本事务早先的
+     *       查询触发的 auto-flush、显式 flush) 之后看起来是干净的; 集合的增删 (如 {@code recipe.getItems().add})
+     *       不在逐字段脏检查里。真正的约束仍是「入口最前面先锁」。</li>
+     *   <li>刷新时行已被别的事务删掉: 409 {@link #FAMILY_LOCK_STALE}。Hibernate 在 refresh 找不到行时
+     *       已把事务标成只能回滚, 不能吞掉继续 (提交时会变成 UnexpectedRollbackException → 500)。</li>
+     * </ul>
+     */
+    private static void refreshStale(EntityManager entityManager, List<Candidate> managedBeforeLock,
                                      List<BomRecipe> locked) {
         if (entityManager == null || managedBeforeLock.isEmpty() || locked.isEmpty()) {
             return;
         }
         Set<String> lockedIds = locked.stream().map(BomRecipe::getId).collect(Collectors.toSet());
         Set<Object> stale = Collections.newSetFromMap(new IdentityHashMap<>());
-        for (Object entity : managedBeforeLock) {
+        for (Candidate candidate : managedBeforeLock) {
+            Object entity = candidate.entity();
             String owner = entity instanceof BomRecipe recipe ? recipe.getId()
                     : entity instanceof BomRecipeItem item ? item.getRecipeId()
                     : ((BomSeasoningItem) entity).getRecipeId();
-            if (owner != null && lockedIds.contains(owner) && entityManager.contains(entity)) {
+            if (owner == null || !lockedIds.contains(owner)) {
+                continue;
+            }
+            if (candidate.dirty()) {
+                throw new IllegalStateException("BOM 配方族在加锁前已被本事务改动, 不能再按锁序写回: "
+                        + entity.getClass().getSimpleName() + " of recipe=" + owner
+                        + " (先调用 BomRecipeHeadLocks.lockWithFamily 再读再改, 见类注释)");
+            }
+            if (entityManager.contains(entity)) {
                 stale.add(entity);
             }
         }
@@ -147,14 +182,37 @@ public final class BomRecipeHeadLocks {
         entityManager.flush();
         for (Object entity : stale) {
             if (!entityManager.contains(entity)) {
-                continue; // 刷新配方头时已级联刷新过 (或已被摘出)
+                continue; // 刷新配方头时已级联刷新过
             }
             try {
                 entityManager.refresh(entity);
             } catch (jakarta.persistence.EntityNotFoundException deletedMeanwhile) {
-                entityManager.detach(entity);
+                throw new BusinessException(409, "配方已被别人改动，请刷新后重试", deletedMeanwhile)
+                        .withCode(FAMILY_LOCK_STALE)
+                        .withHint("刷新配方页面后重新操作；若反复出现，请联系管理员");
             }
         }
+    }
+
+    /**
+     * 锁住若干配方头 (只锁这些行本身, 按配方 id 升序), 并把加锁前已托管的它们刷新成已提交值。
+     * 给只改配方头自身、不重算整族的写入口用 (如标准出成率应用): 配方头没有乐观锁、Hibernate 整行 UPDATE,
+     * 不锁就会把并发重算刚提交的成本列用旧值写回。返回 id → 已锁配方 (不存在 / 不属于本厂的不在其中)。
+     */
+    public static Map<String, BomRecipe> lockHeadsInIdOrder(EntityManager entityManager, BomRecipeRepository recipes,
+                                                           String factoryId, java.util.Collection<String> recipeIds) {
+        List<Candidate> managedBeforeLock = managedFamilyCandidates(entityManager);
+        List<String> ids = recipeIds.stream().filter(java.util.Objects::nonNull).distinct().toList();
+        Map<String, BomRecipe> locked = new java.util.LinkedHashMap<>();
+        if (ids.isEmpty()) {
+            return locked;
+        }
+        // 一条 FOR UPDATE, 顺序由 PG 的 ORDER BY 决定 (与族锁同一比较规则), 不在 Java 里排序
+        for (BomRecipe recipe : recipes.lockByFactoryIdAndIdInOrderById(factoryId, ids)) {
+            locked.put(recipe.getId(), recipe);
+        }
+        refreshStale(entityManager, managedBeforeLock, List.copyOf(locked.values()));
+        return locked;
     }
 
     /**

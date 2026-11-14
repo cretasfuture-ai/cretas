@@ -96,9 +96,11 @@ public interface BomRecipeItemRepository extends JpaRepository<BomRecipeItem, Lo
     List<String> findDistinctCurrentProductTypeIdsByStatus(@Param("factoryId") String factoryId,
                                                            @Param("status") Status status);
 
+    /** 按 id 锁一条明细行, 只在本厂范围内找 (别厂的行既不会被锁住, 也不会暴露「存在但不属于你」)。 */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT i FROM BomRecipeItem i WHERE i.id = :id AND i.deletedAt IS NULL")
-    Optional<BomRecipeItem> findByIdForUpdate(@Param("id") Long id);
+    @Query("SELECT i FROM BomRecipeItem i "
+            + "WHERE i.id = :id AND i.factoryId = :factoryId AND i.deletedAt IS NULL")
+    Optional<BomRecipeItem> findByIdForUpdate(@Param("factoryId") String factoryId, @Param("id") Long id);
 
     /**
      * 只取明细行所属配方 id (标量, 不把行读进持久化上下文) —— 锁序「整族配方头 → 明细行」要先知道锁哪一族

@@ -1,6 +1,7 @@
 package com.cretas.aims.integration;
 
 import com.cretas.aims.dto.ProductProcessWorkflowDTO;
+import com.cretas.aims.dto.bom.BomYieldApplyRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest;
 import com.cretas.aims.dto.bom.CreateBomRecipeRequest.BomRecipeItemDTO;
 import com.cretas.aims.entity.ProductProcessWorkflowRevision;
@@ -10,6 +11,8 @@ import com.cretas.aims.entity.bom.BomPriceAdjustmentProposal;
 import com.cretas.aims.entity.bom.BomRecipe;
 import com.cretas.aims.entity.bom.BomRecipeItem;
 import com.cretas.aims.entity.bom.BomSeasoningItem;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.service.bom.BomRecipeHeadLocks;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.RawMaterialTypeRepository;
 import com.cretas.aims.repository.bom.BomPriceAdjustmentProposalRepository;
@@ -20,11 +23,17 @@ import com.cretas.aims.service.bom.BomItemSubstituteService;
 import com.cretas.aims.service.bom.BomPriceAdjustmentService;
 import com.cretas.aims.service.bom.BomRecipeService;
 import com.cretas.aims.service.bom.BomSeasoningWorkspaceService;
+import com.cretas.aims.service.bom.BomVersionService;
+import com.cretas.aims.service.bom.BomYieldEstimateService;
 import com.cretas.aims.service.bom.BomWorkflowRevisionService;
 import com.cretas.aims.service.bom.NestedBomCostService;
+import com.cretas.aims.service.bom.impl.BomItemSubstituteServiceImpl;
 import com.cretas.aims.service.bom.impl.BomPriceAdjustmentServiceImpl;
 import com.cretas.aims.service.bom.impl.BomRecipeServiceImpl;
 import com.cretas.aims.service.bom.impl.BomSeasoningWorkspaceServiceImpl;
+import com.cretas.aims.service.bom.impl.BomVersionServiceImpl;
+import com.cretas.aims.service.bom.impl.BomYieldEstimateServiceImpl;
+import com.cretas.aims.service.yield.YieldReportService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard;
 import com.cretas.aims.service.unit.CanonicalUnit;
@@ -46,6 +55,7 @@ import org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfi
 import org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.boot.test.mock.mockito.SpyBean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
@@ -105,6 +115,7 @@ class BomFamilyCostLockOrderPostgresContractTest {
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({BomPriceAdjustmentServiceImpl.class, BomRecipeServiceImpl.class, BomSeasoningWorkspaceServiceImpl.class,
+            BomItemSubstituteServiceImpl.class, BomYieldEstimateServiceImpl.class, BomVersionServiceImpl.class,
             ProcessSecretRecipeGuard.class})
     static class Runtime { }
 
@@ -123,7 +134,9 @@ class BomFamilyCostLockOrderPostgresContractTest {
     @MockBean MaterialUomConverter materialUomConverter;
     @MockBean UnitContractService unitContractService;
     @MockBean ProductConfigurationReadinessService readinessService;
-    @MockBean BomItemSubstituteService substituteService;
+    /** 真实替代料服务 (克隆路径的「源头 + 新克隆」锁在它里面), 只给调料删除那一处挂插桩。 */
+    @SpyBean BomItemSubstituteService substituteService;
+    @MockBean YieldReportService yieldReportService;
     @MockBean BomWorkflowRevisionService bomWorkflowRevisionService;
     @MockBean ProductWorkflowResolutionService workflowResolutionService;
 
@@ -135,6 +148,8 @@ class BomFamilyCostLockOrderPostgresContractTest {
     @Autowired RawMaterialTypeRepository materials;
     @Autowired BomPriceAdjustmentProposalRepository proposals;
     @Autowired BomSeasoningWorkspaceService seasoning;
+    @Autowired BomYieldEstimateService yields;
+    @Autowired BomVersionService versions;
     @Autowired BomRecipeRepository recipeRepository;
     @Autowired BomRecipeItemRepository itemRepository;
     @Autowired BomSeasoningItemRepository seasoningItems;
@@ -144,6 +159,8 @@ class BomFamilyCostLockOrderPostgresContractTest {
     private final AtomicReference<Runnable> secretCheckHook = new AtomicReference<>();
     /** 调料删除在 claimRevision 之后、calculateCost 之前调用替代料服务 (mock) 的那一刻。 */
     private final AtomicReference<Runnable> seasoningClaimedHook = new AtomicReference<>();
+    /** 克隆每复制完一个成员的替代关系 (cloneRelations 真实执行之后) 的那一刻。 */
+    private final AtomicReference<Runnable> cloneMemberHook = new AtomicReference<>();
     private final ExecutorService pool = Executors.newFixedThreadPool(3);
 
     private TransactionTemplate tx;
@@ -164,6 +181,8 @@ class BomFamilyCostLockOrderPostgresContractTest {
                 .when(nestedBomCostService).isNestedComponent(any());
         doAnswer(inv -> { runOnce(seasoningClaimedHook); return List.of(); })
                 .when(substituteService).replaceForSeasoningItem(any(), any(), any(), any());
+        doAnswer(inv -> { Object copied = inv.callRealMethod(); runOnce(cloneMemberHook); return copied; })
+                .when(substituteService).cloneRelations(any(), any(), any(), any(), any());
         stubUnitsAndWorkflow();
 
         factory = "QA-R3-" + UUID.randomUUID().toString().substring(0, 8);
@@ -347,6 +366,175 @@ class BomFamilyCostLockOrderPostgresContractTest {
                 Boolean.class, binding)).isTrue();
         assertThat(jdbc.queryForObject("select seasoning_revision from bom_recipes where id = ?", Long.class, high))
                 .isEqualTo(revision + 1);
+    }
+
+    /**
+     * 克隆两成员族 (主产 id 较大, 按主产在前逐个复制) 与同族另一成员的重算并发。旧代码不锁源族, 由
+     * cloneRelations 逐个成员锁「源头 + 新克隆」: 先锁 id 大的主产, 再锁 id 小的成员 —— 与按 id 升序锁整族的
+     * 重算方向相反, PG 判死锁。现在克隆入口先按 id 升序锁住整个源族, 重算只是排队。
+     */
+    @Test
+    void cloningAFamilyWhoseMainOutputHasTheHigherIdAndARecomputeOfTheLowerIdMemberDoNotDeadlock() throws Exception {
+        String first = draftWithOneRawLineAtOldPrice();
+        String second = draftWithOneRawLineAtOldPrice(secondProduct());
+        String family = jdbc.queryForObject("select bom_family_id from bom_recipes where id = ?", String.class, first);
+        jdbc.update("update bom_recipes set bom_family_id = ? where id = ?", family, second);
+        String low = first.compareTo(second) < 0 ? first : second;
+        String high = low.equals(first) ? second : first;
+        jdbc.update("update bom_recipes set target_terminal_node_id = 't-low', output_role = 'CO_PRODUCT' where id = ?", low);
+        jdbc.update("update bom_recipes set target_terminal_node_id = 't-high', output_role = 'MAIN' where id = ?", high);
+        jdbc.update("update bom_recipe_items set cost_scope_key = 't-low' where recipe_id = ? and cost_scope_key is not null", low);
+        jdbc.update("update bom_recipe_items set cost_scope_key = 't-high' where recipe_id = ? and cost_scope_key is not null", high);
+
+        AtomicBoolean recomputeFinishedWhileCloneHeldTheSource = new AtomicBoolean();
+        AtomicReference<Future<Throwable>> recompute = new AtomicReference<>();
+        cloneMemberHook.set(() -> {
+            recompute.set(pool.submit(() -> attempt(() -> recipes.calculateCost(factory, low))));
+            recomputeFinishedWhileCloneHeldTheSource.set(completesWithin(recompute.get(), 3));
+        });
+
+        Throwable cloned = pool.submit(() -> attempt(() -> recipes.cloneRecipe(factory, high)))
+                .get(60, TimeUnit.SECONDS);
+        assertThat(recompute.get()).as("插桩触发了: 重算是在克隆复制完主产之后发出的").isNotNull();
+        Throwable recomputed = recompute.get().get(60, TimeUnit.SECONDS);
+
+        assertThat(cloned).as("克隆成功, 没有被 PG 判死锁").isNull();
+        assertThat(recomputed).as("同族重算成功, 没有被 PG 判死锁").isNull();
+        assertThat(recomputeFinishedWhileCloneHeldTheSource.get())
+                .as("克隆持有整个源族期间, 重算拿不到族锁, 不可能先提交").isFalse();
+        assertThat(jdbc.queryForObject("select count(*) from bom_recipes where bom_family_id <> ? and factory_id = ?",
+                Integer.class, family, factory)).as("克隆出一个两成员的新族").isEqualTo(2);
+    }
+
+    /**
+     * 标准出成率应用只改配方头自身, 但配方头是整行 UPDATE。应用读到配方之后、提交之前, 别的事务 (如调价重算)
+     * 提交了 total_cost: 不锁的话, 应用提交时把旧 total_cost 写回。现在应用前先锁这些配方头, 对方排到应用提交之后。
+     */
+    @Test
+    void applyingAYieldRateDoesNotWriteBackAStaleTotalCostCommittedMeanwhile() throws Exception {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        assertThat(attempt(() -> recipes.activateRecipe(factory, recipeId, 1L))).isNull();
+
+        AtomicReference<Future<?>> concurrent = new AtomicReference<>();
+        AtomicBoolean concurrentCommittedInsideApply = new AtomicBoolean();
+        Throwable applied = attempt(() -> tx.executeWithoutResult(status -> {
+            BomYieldApplyRequest request = new BomYieldApplyRequest();
+            request.setRecipeId(recipeId);
+            request.setYieldRate(new BigDecimal("95"));
+            assertThat(yields.recalculateApply(factory, List.of(request)).getApplied()).isEqualTo(1);
+            concurrent.set(pool.submit(() -> jdbc.update(
+                    "update bom_recipes set total_cost = 9.9, total_material_cost = 9.9 where id = ?", recipeId)));
+            concurrentCommittedInsideApply.set(completesWithin(concurrent.get(), 3));
+        }));
+        concurrent.get().get(60, TimeUnit.SECONDS);
+
+        assertThat(applied).as("出成率应用成功").isNull();
+        assertThat(concurrentCommittedInsideApply.get())
+                .as("应用持有配方头期间, 并发写成本拿不到行锁, 不可能先提交").isFalse();
+        Map<String, Object> head = jdbc.queryForMap(
+                "select overall_yield_rate, total_cost from bom_recipes where id = ?", recipeId);
+        assertThat((BigDecimal) head.get("overall_yield_rate")).isEqualByComparingTo("95");
+        assertThat((BigDecimal) head.get("total_cost"))
+                .as("并发提交的成本没被应用用旧值整行写回").isEqualByComparingTo("9.9");
+    }
+
+    /**
+     * 版本审批同步配方头「当前版本」时, 原来是读实体再 save (整行 UPDATE)。审批读到配方之后别的事务提交了
+     * total_cost, 审批提交时会把旧值写回。现在是定向 UPDATE 只写两列, 对方排到审批提交之后, 成本保留。
+     */
+    @Test
+    void approvingABomVersionDoesNotWriteBackAStaleTotalCostCommittedMeanwhile() throws Exception {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        assertThat(attempt(() -> recipes.activateRecipe(factory, recipeId, 1L))).isNull();
+        // 审批前先把两列和 updated_at 拨到与审批结果不同的值, 读回时才能证明「是审批写的」
+        jdbc.update("update bom_recipes set version = 7, is_current = false, "
+                + "updated_at = timestamp '2020-01-01 00:00:00' where id = ?", recipeId);
+        String versionId = versions.createDraft(factory, recipeId, 1L).getId();
+
+        AtomicReference<Future<?>> concurrent = new AtomicReference<>();
+        AtomicBoolean concurrentCommittedInsideApproval = new AtomicBoolean();
+        Throwable approved = attempt(() -> tx.executeWithoutResult(status -> {
+            versions.approve(factory, versionId, 1L);
+            concurrent.set(pool.submit(() -> jdbc.update(
+                    "update bom_recipes set total_cost = 9.9, total_material_cost = 9.9 where id = ?", recipeId)));
+            concurrentCommittedInsideApproval.set(completesWithin(concurrent.get(), 3));
+        }));
+        concurrent.get().get(60, TimeUnit.SECONDS);
+
+        assertThat(approved).as("版本审批成功").isNull();
+        assertThat(concurrentCommittedInsideApproval.get())
+                .as("审批已写配方头, 并发写成本要等审批提交").isFalse();
+        Map<String, Object> head = jdbc.queryForMap(
+                "select is_current, version, total_cost, updated_at > timestamp '2020-01-02' as touched "
+                        + "from bom_recipes where id = ?", recipeId);
+        assertThat(head.get("is_current")).as("审批把 is_current 从 false 改成 true").isEqualTo(true);
+        assertThat(head.get("version")).as("当前版本号同步成审批的版本").isEqualTo(1);
+        assertThat(head.get("touched")).as("定向 UPDATE 自己写了 updated_at (native SQL 绕过 @PreUpdate)")
+                .isEqualTo(true);
+        assertThat((BigDecimal) head.get("total_cost"))
+                .as("并发提交的成本没被审批用旧值整行写回").isEqualByComparingTo("9.9");
+    }
+
+    /** 定向 UPDATE 是 native SQL, 绕过实体的 @Where(deleted_at IS NULL): 已软删的配方不能被重新标成当前版本。 */
+    @Test
+    void markingTheCurrentVersionLeavesASoftDeletedRecipeUntouched() {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        jdbc.update("update bom_recipes set deleted_at = now(), is_current = false, version = 7 where id = ?", recipeId);
+
+        Integer changed = tx.execute(status -> recipeRepository.markCurrentVersion(recipeId, factory, 3));
+
+        assertThat(changed).as("软删的配方不在更新范围内").isZero();
+        Map<String, Object> head = jdbc.queryForMap(
+                "select is_current, version from bom_recipes where id = ?", recipeId);
+        assertThat(head.get("is_current")).isEqualTo(false);
+        assertThat(head.get("version")).isEqualTo(7);
+    }
+
+    /**
+     * 加锁前读进来的明细行在加锁前被别的事务删掉: 第一次拿族锁时刷新它找不到行。Hibernate 此时已把事务标成只能回滚,
+     * 吞掉继续只会在提交时变成 UnexpectedRollbackException (500); 必须当场按冲突报 409, 让用户刷新重试。
+     */
+    @Test
+    void aLineReadBeforeTheLockAndDeletedMeanwhileIsA409NotARollbackOnCommit() throws Exception {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+        long line = lineOf(recipeId);
+
+        Throwable outcome = attempt(() -> tx.executeWithoutResult(status -> {
+            assertThat(itemRepository.findByRecipeIdOrderBySortOrderAsc(recipeId)).hasSize(1);
+            try {
+                pool.submit(() -> jdbc.update("delete from bom_recipe_items where id = ?", line))
+                        .get(30, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+            recipes.calculateCost(factory, recipeId);
+        }));
+
+        assertThat(outcome).as("按冲突当场拒绝, 不是提交时的 UnexpectedRollbackException")
+                .isInstanceOf(BusinessException.class);
+        BusinessException conflict = (BusinessException) outcome;
+        assertThat(conflict.getCode()).isEqualTo(409);
+        assertThat(conflict.getErrorCode()).isEqualTo(BomRecipeHeadLocks.FAMILY_LOCK_STALE);
+    }
+
+    /**
+     * 加锁前就改脏了同族配方头: 第一次加锁时它会被 auto-flush 按加锁前的旧快照写出, 盖掉这之间别人提交的列,
+     * 刷新也救不回来。必须拒绝 (程序错误), 而不是静默写出。阴性对照见上: 只读不改的同族对象照常刷新放行。
+     */
+    @Test
+    void aFamilyHeadChangedBeforeTheLockIsRefusedInsteadOfFlushedFromAStaleSnapshot() {
+        String recipeId = draftWithOneRawLineAtOldPrice();
+
+        Throwable outcome = attempt(() -> tx.executeWithoutResult(status -> {
+            BomRecipe head = recipeRepository.findById(recipeId).orElseThrow();
+            head.setNotes("R3-加锁前改的");
+            recipes.calculateCost(factory, recipeId);
+        }));
+
+        assertThat(outcome).as("加锁前改脏同族对象 → 拒绝").isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("加锁前已被本事务改动");
+        assertThat(jdbc.queryForObject("select notes from bom_recipes where id = ?", String.class, recipeId))
+                .as("被拒绝的事务整体回滚, 什么都没写出").isNull();
     }
 
     private void assertConsistentAtNewPrice(String recipeId, long line, long proposal) {
