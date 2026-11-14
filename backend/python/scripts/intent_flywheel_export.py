@@ -94,18 +94,24 @@ SECRECY_SQL = ("SELECT f.id, s.item_code, s.enabled FROM factories f"
 
 
 def resolve_secrecy(ids: Sequence[str], rows: Iterable[Tuple[Any, Any, Any]]) -> Dict[str, bool]:
-    """Current secrecy per factory, same rule as Java FlywheelTextProtector.secretFactory: any of a/c/d/e on.
-    No row = default off; factory not in the factories table = on (fail closed, like FactorySecrecyConfig)."""
-    known = set()
-    out: Dict[str, bool] = {}
+    """Current secrecy per factory, same rule as Java FlywheelTextProtector.secretFactory (any of a / c / d / e on).
+    Per-item resolution is the shared one (``common.factory_secrecy.resolve``: no row = default, factory not in
+    the factories table = on, fail closed)."""
+    try:
+        from common import factory_secrecy
+    except ImportError:     # run as a file: python scripts/intent_flywheel_export.py
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from common import factory_secrecy
+
+    stored: Dict[str, Dict[str, Any]] = {}
     for fid, item, enabled in rows:
-        known.add(fid)
-        out.setdefault(fid, False)
-        if item in TEXT_SECRECY_ITEMS and enabled is True:
-            out[fid] = True
+        settings = stored.setdefault(fid, {})
+        if item is not None:
+            settings[item] = enabled
+    out: Dict[str, bool] = {}
     for fid in ids:
-        if fid not in known:
-            out[fid] = True
+        settings = stored.get(fid)      # None = not in the factories table
+        out[fid] = any(factory_secrecy.resolve(settings, code) for code in TEXT_SECRECY_ITEMS)
     return out
 
 
