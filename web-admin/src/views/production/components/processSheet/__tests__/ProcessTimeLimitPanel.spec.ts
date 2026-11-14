@@ -103,6 +103,28 @@ describe('ProcessTimeLimitPanel', () => {
     expect(wrapper.find('[data-testid="process-time-limit-panel"]').exists()).toBe(false);
   });
 
+  it('缺口 16: 计划归属判不出时, 原料照常列出并说明在制品为什么没列', async () => {
+    const notice = '本计划缺客户信息，无法判定在制品归属（代工计划 P-1 缺少客户归属）：在制品和半成品暂不列出，原料照常显示。';
+    state.get.mockResolvedValue({ success: true, data: [status()], message: notice, severity: 'WARNING' });
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.find('[data-testid="time-limit-owner-notice"]').text()).toBe(notice);
+    expect(wrapper.findAll('[data-testid="time-limit-row"]')).toHaveLength(1);
+  });
+
+  it('缺口 16: 只有提示没有行也显示整块; 普通成功的 message 不当提示', async () => {
+    state.get.mockResolvedValue({ success: true, data: [], message: '本计划缺客户信息…', severity: 'WARNING' });
+    const onlyNotice = mountPanel();
+    await flushPromises();
+    expect(onlyNotice.find('[data-testid="time-limit-owner-notice"]').exists()).toBe(true);
+
+    state.get.mockResolvedValue({ success: true, data: [status()], message: '操作成功' });
+    const normal = mountPanel();
+    await flushPromises();
+    expect(normal.find('[data-testid="time-limit-owner-notice"]').exists()).toBe(false);
+    expect(normal.findAll('[data-testid="time-limit-row"]')).toHaveLength(1);
+  });
+
   it('读失败: 就地说明, 不假装没有时限', async () => {
     state.get.mockRejectedValue(new Error('boom'));
     const wrapper = mountPanel();

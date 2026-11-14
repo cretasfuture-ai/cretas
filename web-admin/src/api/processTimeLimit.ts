@@ -111,6 +111,14 @@ const base = (factoryId: string) => `/${factoryId}/process-time-limits`;
 export const getPlanTimeLimits = (factoryId: string, planId: string, processOrder: number) =>
   get<ProcessTimeLimitStatus[]>(`${base(factoryId)}/plans/${planId}`, { params: { processOrder }, _silent: true });
 
+/**
+ * 缺口 16: 领用计划的归属判不出 (旧代工计划缺客户 id) 时, 后端仍返回列表 (原料照常, 在制品/半成品不列),
+ * 原因放在 message, severity = 'WARNING'。没有这种情况返回 null。
+ */
+export function timeLimitOwnershipNotice(res: { message?: string | null; severity?: string | null }): string | null {
+  return res.severity === 'WARNING' && res.message ? res.message : null;
+}
+
 export const startProcessTimeMark = (
   factoryId: string,
   body: {
