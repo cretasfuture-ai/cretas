@@ -14,6 +14,12 @@
        令牌不可重放)。写意图 = WECHAT_CREATE (补录微信记录, 内部备注), 理由见 WRITE_CHOICE。
   3. 版本: 从线上读 (经 ssh): 活动槽端口、运行 jar 的 sha256、Python 最近一次发布提交与启动时刻。
 
+并发与时限
+  写入流程持本机文件锁 (--lock-file, 默认 ~/.cretas/ai-live-probe.lock); 拿不到 = rc=2, 不写。
+  残留清理只删 QA-PROBE- 开头且超过 30 分钟的行 (更新的可能是别处正在跑的实测)。
+  --deadline-seconds (默认 570): 到点不再开新 case / 不再开始写入, 记 rc=2; 已开始的写入照常清理。
+  发布钩子另有 timeout 硬杀 (post-deploy-hook.sh, AI_LIVE_PROBE_TIMEOUT 默认 600)。
+
 退出码 (三态, measurement-and-wiring 硬约束 4)
   0 = 全过 (EXPECTED_PENDING / PENDING_LIFTED 不算失败)
   1 = 有失败 (含清理失败)
@@ -60,6 +66,7 @@ WRITE_CHOICE = (
 )
 
 PASS, FAIL, PENDING, LIFTED = "PASS", "FAIL", "EXPECTED_PENDING", "PENDING_LIFTED"
+NOT_MEASURED = "NOT_MEASURED"
 
 
 class NotMeasured(Exception):
@@ -69,9 +76,10 @@ class NotMeasured(Exception):
 # ───────────────────────────── HTTP ─────────────────────────────
 
 class Http:
-    def __init__(self, base: str, timeout: int = 180):
+    def __init__(self, base: str, timeout: int = 180, deadline: Optional[float] = None):
         self.base = base.rstrip("/")
         self.timeout = timeout
+        self.deadline = deadline  # 整体 deadline (epoch 秒); 单个请求的超时不超过剩余时间
         self.calls = 0
         self.retries = 0
 
@@ -89,7 +97,10 @@ class Http:
             req = urllib.request.Request(self.base + path, data=data, headers=h, method=method)
             self.calls += 1
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                limit = self.timeout
+                if self.deadline is not None:
+                    limit = max(5, min(limit, int(self.deadline - time.time())))
+                with urllib.request.urlopen(req, timeout=limit) as resp:
                     return resp.status, resp.read().decode("utf-8", "replace")
             except urllib.error.HTTPError as exc:
                 return exc.code, exc.read().decode("utf-8", "replace")
@@ -166,8 +177,9 @@ def ssh_run(server: str, command: str, timeout: int = 40) -> Optional[str]:
     if not server:
         return None
     try:
-        proc = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", server, command],
-                              capture_output=True, timeout=timeout)
+        # -n + stdin=DEVNULL: ssh 不读调用方的 stdin (发布脚本里不会被挂住或吞掉别人的输入)
+        proc = subprocess.run(["ssh", "-n", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", server, command],
+                              stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
     except Exception:  # noqa: BLE001
         return None
     if proc.returncode != 0:
@@ -383,8 +395,67 @@ def _wechat_list(http: Http, token: str, customer_id: str) -> List[Dict[str, Any
     return [row for row in data.get("content") or [] if isinstance(row, dict)]
 
 
+LEFTOVER_MIN_AGE_SECONDS = 30 * 60
+
+
+def _row_age_seconds(row: Dict[str, Any]) -> Optional[float]:
+    """按记录时间算年龄 (服务器与发布机同为 CST 本地时间); 解析不了返回 None = 不删。"""
+    for key in ("createdAt", "recordTime", "updatedAt"):
+        raw = row.get(key)
+        if isinstance(raw, list) and len(raw) >= 5:  # Jackson 数组形式 [y, m, d, H, M, (S)]
+            raw = _dt.datetime(*[int(x) for x in raw[:6]])
+        if isinstance(raw, str):
+            try:
+                raw = _dt.datetime.fromisoformat(raw.replace("Z", "")[:19])
+            except ValueError:
+                continue
+        if isinstance(raw, _dt.datetime):
+            return (_dt.datetime.now() - raw.replace(tzinfo=None)).total_seconds()
+    return None
+
+
 def _probe_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [r for r in rows if str(r.get("messageContent") or "").startswith(PREFIX)]
+
+
+class ProbeLock:
+    """写入流程的本机文件锁: 两个实测同时跑时, 后来者 rc=2 退出, ⛔ 不去清别人刚写的 QA-PROBE 行。
+    锁文件超过 LEFTOVER_MIN_AGE_SECONDS 视为崩掉的进程留下的, 回收一次。"""
+
+    def __init__(self, path: str):
+        self.path = path
+        self.held = False
+
+    def acquire(self) -> None:
+        os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
+        for attempt in (1, 2):
+            try:
+                fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    age = time.time() - os.path.getmtime(self.path)
+                    holder = open(self.path, encoding="utf-8").read().strip()
+                except OSError:
+                    age, holder = 0, "?"
+                if attempt == 1 and age > LEFTOVER_MIN_AGE_SECONDS:
+                    try:
+                        os.remove(self.path)
+                    except OSError:
+                        pass
+                    continue
+                raise NotMeasured(f"写入锁 {self.path} 被占用 ({holder}, {int(age)}s 前) —— 另一个实测在跑, 本次不写")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(f"pid={os.getpid()} at={_dt.datetime.now().isoformat(timespec='seconds')}")
+            self.held = True
+            return
+
+    def release(self) -> None:
+        if self.held:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self.held = False
 
 
 def pick_customer(http: Http, token: str) -> Dict[str, Any]:
@@ -419,8 +490,15 @@ def run_write(http: Http, writer: Dict[str, Any], run_id: str, rec: Dict[str, An
     cid, cname = customer["id"], customer.get("name")
     rec["customer"] = {"id": cid, "name": cname, "factoryId": customer.get("factoryId")}
 
-    # 先收掉以前崩掉的 QA-PROBE- 残留 (只删 QA-PROBE- 开头的, 走正规删除路径)
-    leftovers = _probe_rows(_wechat_list(http, token, cid))
+    # 先收掉以前崩掉的 QA-PROBE- 残留: 只删 QA-PROBE- 开头且超过 30 分钟的 (正规删除路径);
+    # 更新的可能是另一台机器上正在跑的实测, 不碰; 时间读不出来也不碰。
+    leftovers = []
+    for row in _probe_rows(_wechat_list(http, token, cid)):
+        age = _row_age_seconds(row)
+        if age is not None and age > LEFTOVER_MIN_AGE_SECONDS:
+            leftovers.append(row)
+        else:
+            rec.setdefault("leftovers_kept", []).append({"id": row.get("id"), "age_s": None if age is None else int(age)})
     for row in leftovers:
         code, env = http.json("DELETE", f"/api/mobile/{FACTORY_ID}/customer/{cid}/wechat-record/{row['id']}", None, token)
         step("leftover_cleanup", code == 200 and env.get("success") is True, record_id=row["id"], http=code)
@@ -505,6 +583,10 @@ def run_write(http: Http, writer: Dict[str, Any], run_id: str, rec: Dict[str, An
             step("回查: 落库字段正确 (INTERNAL / 本 QA 客户 / F006)", fields_ok)
 
         # 6) 令牌不可重放
+        if code is None:
+            # 第 4 步没拿到明确答复: 令牌状态不明, 重放的结果读不出意义 ⇒ 跳过并记「没量到」
+            rec.setdefault("not_measured", []).append("阴性对照④ 重放: 正规确认没拿到明确答复, 跳过")
+            return
         # 重放本身就是在验证「不会二次执行」, 传输层失败时重试一次是安全的
         code, env = confirm(action["confirmToken"], retry=True)
         replay_rejected = code is not None and not (
@@ -530,7 +612,7 @@ def run_write(http: Http, writer: Dict[str, Any], run_id: str, rec: Dict[str, An
             step("清理后回查: 计数回到写前且标记行已消失", len(final_rows) == before and gone, count=len(final_rows))
         except NotMeasured as exc:
             step("清理后回查", False, detail=str(exc))
-    rec["result"] = FAIL if problems else PASS
+    rec["result"] = FAIL if problems else (NOT_MEASURED if rec.get("not_measured") else PASS)
     return rec
 
 
@@ -548,12 +630,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--out-dir", default=os.environ.get("AI_PROBE_OUT_DIR", os.path.expanduser("~/.cretas/ai-live-probe-results")))
     ap.add_argument("--trigger", default=os.environ.get("AI_PROBE_TRIGGER", "manual"), help="谁触发的 (manual / release-cretas / deploy-smartbi-python)")
     ap.add_argument("--expect-python-commit", default="", help="发布脚本传入: 线上 Python 发布提交必须等于它")
+    ap.add_argument("--deadline-seconds", type=int, default=int(os.environ.get("AI_PROBE_DEADLINE_SECONDS", "570")),
+                    help="整体 deadline; 到点不再开新 case / 不再开始写入 (已开始的写入照常清理), 记 rc=2")
+    ap.add_argument("--lock-file", default=os.environ.get("AI_PROBE_LOCK_FILE", os.path.expanduser("~/.cretas/ai-live-probe.lock")),
+                    help="写入流程的本机文件锁; 拿不到 = rc=2")
     args = ap.parse_args(argv)
 
     run_id = _dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
     os.makedirs(args.out_dir, exist_ok=True)
     out_path = os.path.join(args.out_dir, f"ai-live-probe-{run_id}.jsonl")
-    http = Http(args.base)
+    deadline = time.time() + max(1, args.deadline_seconds)
+    http = Http(args.base, deadline=deadline)
+
+    def check_deadline(where: str) -> None:
+        if time.time() > deadline:
+            raise NotMeasured(f"超过整体 deadline {args.deadline_seconds}s ({where} 之前停下) —— 没量完")
     records: List[Dict[str, Any]] = []
 
     def emit(rec: Dict[str, Any]) -> None:
@@ -587,6 +678,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         for case in cases:
             per_entry = {}
             for entry in case["entries"]:
+                check_deadline(f"case {case['id']} ({entry})")
                 rec = run_case(http, reader["token"], case, entry)
                 per_entry[entry] = rec
                 emit(rec)
@@ -601,11 +693,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             wuser, wpwd, wsrc = resolve_write_creds(args.env_file)
             if not wuser:
                 raise NotMeasured(f"缺写入号凭证 (AI_PROBE_WRITE_* 或 {args.env_file})")
+            check_deadline("写入真跑")
             writer = login(http, wuser, wpwd, "写入号")
+            lock = ProbeLock(args.lock_file)
+            lock.acquire()
             wrec: Dict[str, Any] = {}
             try:
                 run_write(http, writer, run_id.replace("-", "")[-12:], wrec)
             finally:
+                lock.release()
                 if wrec:
                     emit(wrec)
     except NotMeasured as exc:
@@ -624,9 +720,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 有断言失败就是 1 (哪怕后面仪器又坏了 —— 失败的读数是真的); 否则仪器问题 / 0 条执行 = 2
     if counts.get(FAIL):
         rc = 1
-    elif rc_reason or not executed:
+    elif rc_reason or not executed or counts.get(NOT_MEASURED):
         rc = 2
-        rc_reason = rc_reason or "0 条执行"
+        rc_reason = rc_reason or ("0 条执行" if not executed else "有步骤没量到 (见 write.not_measured)")
     else:
         rc = 0
     summary = {"type": "summary", "rc": rc, "rc_meaning": {0: "全过", 1: "有失败", 2: "没量到"}[rc],

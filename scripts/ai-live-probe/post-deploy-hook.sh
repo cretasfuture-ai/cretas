@@ -11,6 +11,13 @@
 # 透传给套件的变量: AI_PROBE_BASE / AI_PROBE_SERVER / AI_PROBE_ENV_FILE / AI_PROBE_OUT_DIR
 #   以及凭证 AI_PROBE_READ_* / AI_PROBE_WRITE_* (见 ai_live_probe.py 顶部说明; ⛔ 不打印)。
 #   AI_LIVE_PROBE_ARGS: 追加给套件的参数 (例如 "--no-write")。
+#   AI_LIVE_PROBE_TIMEOUT: 整体超时秒数 (默认 600)。钩子跑在 release-cretas.sh 释放发布锁之前,
+#           挂住会挡住后面所有发布 ⇒ 有 timeout 命令就用它硬杀; 套件自己也有同值的 deadline
+#           (Windows Git Bash 可能没有 timeout)。超时 (124/137) 一律记 rc=2 没量到。
+#
+# ⚠️ release-cretas.sh 下 enforce 失败的读法: 终端已打 RELEASE_FINAL_STATUS=deployed (部署本身成了),
+#    随后 exit 3, on_exit 把 release 报告 JSON 的 status 写成 failed。前者 = 部署发生了,
+#    后者 = 整条发布没过关; 判据看 DEPLOY_EXIT=3 + AI_LIVE_PROBE_GATE。
 #
 # 回执行 (grep 用): AI_LIVE_PROBE_GATE=passed|failed|not-measured|skipped|error
 #                   AI_LIVE_PROBE_RC=<0|1|2>   AI_LIVE_PROBE_RESULT=<结果文件>
@@ -58,7 +65,18 @@ ai_live_probe_after_deploy() {
         if [ -n "$expect_commit" ]; then
             extra+=(--expect-python-commit "$expect_commit")
         fi
-        "$py" -X utf8 "$here/ai_live_probe.py" --trigger "post-deploy-$component" ${extra[@]+"${extra[@]}"} || rc=$?
+        local limit="${AI_LIVE_PROBE_TIMEOUT:-600}"
+        local -a guard=()
+        if command -v timeout >/dev/null 2>&1; then
+            guard=(timeout -k 15 "$limit")
+        fi
+        # 套件内 deadline 比硬超时早 30s, 让它自己收尾 (清理 QA-PROBE 行、写 summary) 再退
+        ${guard[@]+"${guard[@]}"} "$py" -X utf8 "$here/ai_live_probe.py" --trigger "post-deploy-$component" \
+            --deadline-seconds "$(( limit > 60 ? limit - 30 : limit ))" ${extra[@]+"${extra[@]}"} </dev/null || rc=$?
+        if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
+            printf 'AI_LIVE_PROBE_TIMEOUT_HIT=%ss (rc=%s) —— 记为没量到\n' "$limit" "$rc"
+            rc=2
+        fi
     fi
 
     case "$rc" in

@@ -993,15 +993,14 @@ echo "=========================================="
 # 说明与凭证约定见 scripts/ai-live-probe/post-deploy-hook.sh。
 if [[ "$DEPLOY_ENV" == "prod" || "$DEPLOY_ENV" == "all" ]]; then
     AI_LIVE_PROBE_HOOK="$PROJECT_ROOT/scripts/ai-live-probe/post-deploy-hook.sh"
-    if [[ -f "$AI_LIVE_PROBE_HOOK" ]]; then
-        # shellcheck source=../ai-live-probe/post-deploy-hook.sh
-        source "$AI_LIVE_PROBE_HOOK"
+    # source 失败 (钩子缺失 / 语法错) = GATE=error: report 不改退出码, enforce 才 exit 3。
+    # shellcheck source=../ai-live-probe/post-deploy-hook.sh
+    if [[ -f "$AI_LIVE_PROBE_HOOK" ]] && source "$AI_LIVE_PROBE_HOOK" && declare -F ai_live_probe_after_deploy >/dev/null; then
         if ! ai_live_probe_after_deploy python "$RELEASE_COMMIT"; then
             exit 3
         fi
     else
-        # 缺钩子 = 没量到, ⛔ 不当成通过; report 模式下只留痕, enforce 模式下照样以 3 结束。
-        echo "AI_LIVE_PROBE_GATE=not-measured (缺 $AI_LIVE_PROBE_HOOK)"
+        echo "AI_LIVE_PROBE_GATE=error (钩子缺失或载入失败: $AI_LIVE_PROBE_HOOK)"
         if [[ "${AI_LIVE_PROBE:-report}" == "enforce" ]]; then exit 3; fi
     fi
 fi

@@ -558,4 +558,21 @@ assert_log_count 1 'JAVA_BUILD' "$CASE_LOG"
 assert_log_count 1 'ARTIFACTS --tests StartupTest' "$CASE_LOG"
 assert_contains "$CASE_OUTPUT" 'RELEASE_FINAL_STATUS=deployed'
 
+# 上线后实测关钩子 (scripts/ai-live-probe/post-deploy-hook.sh) 载入失败 —— 这里放一个语法错误的钩子:
+# report (默认) 下发布退出码仍为 0、RELEASE_FINAL_STATUS 仍恰好 1 次, 只多一行 GATE=error;
+# enforce 下以 3 结束, RELEASE_FINAL_STATUS 也仍恰好 1 次。⛔ 钩子坏了不许把发布弄红/弄挂 (report)。
+for probe_mode in report enforce; do
+    setup_repo "live_probe_hook_broken_$probe_mode"
+    commit_change backend/java/cretas-api/service/Service.java
+    commit_change scripts/ai-live-probe/post-deploy-hook.sh 'ai_live_probe_after_deploy() { ( ; }'
+    publish_head
+    probe_rc=0
+    AI_LIVE_PROBE=$probe_mode run_release --phase deploy --base-sha "$BASE_SHA" --confirm-prod YES-PROD || probe_rc=$?
+    expected_rc=0; [ "$probe_mode" = enforce ] && expected_rc=3
+    [ "$probe_rc" = "$expected_rc" ] || { cat "$CASE_OUTPUT" >&2; fail "broken live-probe hook ($probe_mode): rc=$probe_rc, expected $expected_rc"; }
+    assert_log_count 1 'RELEASE_FINAL_STATUS=' "$CASE_OUTPUT"
+    assert_contains "$CASE_OUTPUT" 'RELEASE_FINAL_STATUS=deployed'
+    assert_contains "$CASE_OUTPUT" 'AI_LIVE_PROBE_GATE=error'
+done
+
 echo 'PASS: unified Cretas release routing, safety gates, failure receipts, and single-build contract'

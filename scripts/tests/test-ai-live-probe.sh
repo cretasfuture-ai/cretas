@@ -50,7 +50,7 @@ run_probe() {  # 其余参数透传; 设 RC / OUT / RESULT
     AI_PROBE_READ_USERNAME=stub_reader AI_PROBE_READ_PASSWORD=stub-pass \
     AI_PROBE_WRITE_USERNAME=stub_writer AI_PROBE_WRITE_PASSWORD=stub-pass \
         "$PY" -X utf8 "$PROBE" --base "$BASE" --server "" --cases "$TMP/cases.json" \
-        --out-dir "$TMP/results" --env-file "$TMP/none.env" "$@" >"$OUT" 2>&1
+        --out-dir "$TMP/results" --env-file "$TMP/none.env" --lock-file "$TMP/probe.lock" "$@" >"$OUT" 2>&1
     RC=$?
     RESULT=$(sed -n 's/^AI_LIVE_PROBE_RESULT=//p' "$OUT")
     echo "    $(grep -E '^\[summary\]' "$OUT" || echo '(没有 summary 行!)')   rc=$RC"
@@ -124,10 +124,45 @@ grep -q 'BAD 阴性对照①' "$OUT" || fail "应由阴性对照①打红"
 grep -q 'after_cleanup=0' "$OUT" || fail "提前失败也必须把 QA-PROBE 行清掉"
 ok "提前失败: 0 次确认 + 清理干净"
 
+echo "B2. 残留清理 / 结果不明 / 并发锁 / 整体 deadline"
+start_stub leftovers
+run_probe --only __no_such_case__
+expect_rc 0 "只清 30 分钟以前的残留"
+grep -q '^DELETE .*/wechat-record/101$' "$TMP/calls.log" || fail "2 小时前的 QA-PROBE 残留应被删"
+! grep -q '^DELETE .*/wechat-record/102$' "$TMP/calls.log" || fail "刚写的 QA-PROBE 行 (可能是别人在跑) 不许删"
+ok "残留: 旧的删、新的留"
+
+start_stub confirm_drop
+run_probe --only __no_such_case__
+expect_rc 1 "正规确认无答复"
+n_confirm=$(grep -c '^POST /api/mobile/F006/ai-intents/confirm' "$TMP/calls.log")
+[ "$n_confirm" = 2 ] || fail "确认无答复后不许重放 (应 2 次: 伪造 + 正规, 实为 $n_confirm)"
+grep -q '"not_measured"' "$RESULT" || fail "跳过重放要记进 not_measured"
+grep -q 'after_cleanup=0' "$OUT" || fail "结果不明也要按标记清理"
+ok "确认无答复: 不重放、记没量到、照样清理"
+
+start_stub pass
+printf 'pid=999 at=now\n' >"$TMP/probe.lock"
+run_probe --only __no_such_case__
+expect_rc 2 "写入锁被占用"
+grep -q '被占用' "$OUT" || fail "要说明锁被占用"
+! grep -q 'ai-intents/preview' "$TMP/calls.log" || fail "拿不到锁不许开始写入"
+[ -f "$TMP/probe.lock" ] || fail "不许删别人的锁"
+rm -f "$TMP/probe.lock"
+run_probe --only __no_such_case__
+expect_rc 0 "锁释放后照常"
+[ ! -f "$TMP/probe.lock" ] || fail "跑完要释放自己的锁"
+ok "锁: 占用 ⇒ rc=2 且 0 次写入; 自己的锁跑完释放"
+
+start_stub slow
+run_probe --no-write --deadline-seconds 1
+expect_rc 2 "超过整体 deadline"
+grep -q 'deadline' "$OUT" || fail "要说明是 deadline 停下的"
+
 echo "C. 发布钩子"
 mkdir -p "$TMP/hook"
 cp "$HOOK" "$TMP/hook/post-deploy-hook.sh"
-printf 'import sys\nprint("FAKE_PROBE", " ".join(sys.argv[1:]))\nsys.exit(int(__import__("os").environ.get("FAKE_RC", "0")))\n' >"$TMP/hook/ai_live_probe.py"
+printf 'import os, sys, time\nprint("FAKE_PROBE", " ".join(sys.argv[1:]))\ntime.sleep(int(os.environ.get("FAKE_SLEEP", "0")))\nsys.exit(int(os.environ.get("FAKE_RC", "0")))\n' >"$TMP/hook/ai_live_probe.py"
 hook_run() {  # $1=AI_LIVE_PROBE  $2=FAKE_RC ; 设 HRC / HOUT
     HOUT="$TMP/hook.log"
     ( set -euo pipefail; AI_LIVE_PROBE="$1" FAKE_RC="$2"; export AI_LIVE_PROBE FAKE_RC
@@ -153,6 +188,16 @@ ok "enforce: 全过放行"
 hook_run off 1
 [ "$HRC" = 0 ] && grep -q 'AI_LIVE_PROBE_GATE=skipped' "$HOUT" && ! grep -q FAKE_PROBE "$HOUT" || fail "off 不跑且留痕"
 ok "off: 不跑, 留痕"
+if command -v timeout >/dev/null 2>&1; then
+    AI_LIVE_PROBE_TIMEOUT=2 FAKE_SLEEP=20 hook_run report 0
+    [ "$HRC" = 0 ] && grep -q 'AI_LIVE_PROBE_TIMEOUT_HIT=2s' "$HOUT" && grep -q 'AI_LIVE_PROBE_GATE=not-measured' "$HOUT" \
+        || { cat "$HOUT"; fail "整体超时应硬杀并记没量到 (report 不改退出码)"; }
+    ok "整体超时: 2s 硬杀 ⇒ not-measured"
+else
+    echo "  (本机没有 timeout 命令, 只靠套件自己的 deadline —— 见 B2 deadline 用例)"
+fi
+hook_run report 0
+grep -q -- '--deadline-seconds' "$HOUT" || fail "钩子要把 deadline 传给套件"
 
 echo "C2. 两个发布脚本接上了"
 REL="$ROOT_DIR/scripts/deploy/release-cretas.sh"

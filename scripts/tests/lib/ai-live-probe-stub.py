@@ -13,6 +13,9 @@
   forged_accepted    伪造令牌也能确认并落库 ⇒ rc=1 (阴性对照③, 计数那半边)
   forged_says_ok     伪造令牌回「成功」但没落库 ⇒ rc=1 (阴性对照③, 「必须被拒」那半边)
   write_on_say       说话那一轮就落库了 (没等确认) ⇒ rc=1, 且套件不得再去确认
+  leftovers          预置两条 QA-PROBE- 残留: 一条 2 小时前 (该删), 一条刚写 (别人在跑, 不许删)
+  confirm_drop       正规确认写入了但连接被掐断 (无答复) ⇒ rc=1, 且不许再重放
+  slow               每个 AI 请求慢 2 秒 (配合 --deadline-seconds 证明整体 deadline)
 
 端口写到 argv[1] 指定的文件; 每个请求一行写进 argv[2] (方法 + 路径) 供测试数调用次数。
 """
@@ -20,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -54,10 +58,17 @@ def recognize(text, entry):
     return respond_result(None, status="COMPLETED", message="闲聊")
 
 
-def add_row(params):
+def add_row(params, age_seconds=0):
     NEXT_ID[0] += 1
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - age_seconds))
     ROWS.append({"id": NEXT_ID[0], "factoryId": "F006", "customerId": params["customerId"],
-                 "direction": params["direction"], "messageContent": params["messageContent"]})
+                 "direction": params["direction"], "messageContent": params["messageContent"],
+                 "recordTime": stamp, "createdAt": stamp})
+
+
+if MODE == "leftovers":
+    add_row({"customerId": "cust-qa-1", "direction": "INTERNAL", "messageContent": "QA-PROBE-old 残留"}, 7200)
+    add_row({"customerId": "cust-qa-1", "direction": "INTERNAL", "messageContent": "QA-PROBE-fresh 别人在跑"}, 60)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -109,6 +120,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._log()
         body = self._body()
+        if MODE == "slow" and "/ai-intents/" in self.path:
+            time.sleep(2)
         if self.path == "/api/mobile/auth/unified-login":
             if MODE == "bad_login":
                 return self._send(401, {"success": False, "message": "bad"})
@@ -145,6 +158,10 @@ class Handler(BaseHTTPRequestHandler):
             entry["used"] = True
             if MODE != "write_no_persist":
                 add_row(entry["params"])
+            if MODE == "confirm_drop":
+                self.close_connection = True
+                self.connection.shutdown(2)
+                return None
             return self._send(200, {"success": True, "data": {"status": "SUCCESS", "message": "✓ 已补录"}})
         return self._send(404, {"success": False})
 
