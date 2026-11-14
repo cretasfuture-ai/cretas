@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -287,7 +288,7 @@ async function updateGoldBundleCharts() {
     const ww = vm.weekdayWeekend;
     const wwData = ww
       ? [
-          { value: ww.weekdayAvg, itemStyle: { color: '#409EFF' } },
+          { value: ww.weekdayAvg, itemStyle: { color: CS_TOKENS.primary } },
           { value: ww.weekendAvg, itemStyle: { color: '#E6A23C' } },
         ]
       : [];
@@ -451,7 +452,7 @@ function updateGoldChart() {
   const secondMetric = trendSecondMetric.value;
   const secondMeta = secondMetric === 'bills'
     ? { name: '订单数', color: '#E6A23C', data: pts.map(p => p.billCount), unit: '' }
-    : { name: '客单价', color: '#409EFF', data: pts.map(p => p.avgBillValue ?? 0), unit: '元' };
+    : { name: '客单价', color: CS_TOKENS.primary, data: pts.map(p => p.avgBillValue ?? 0), unit: '元' };
   // Series-aware tooltip: 营收 always gets ¥ + thousands + 万; second metric
   // formats per its nature (整数 for bills, 2-decimal ¥ for avg).
   const fmtRevenue = (v: number) => v >= 10000 ? `¥${(v / 10000).toFixed(2)}万` : `¥${v.toLocaleString('zh-CN', { maximumFractionDigits: 0 })}`;
@@ -613,7 +614,7 @@ function updateCharts() {
         smooth: true,
         data: yData,
         areaStyle: { opacity: 0.3 },
-        itemStyle: { color: '#409EFF' }
+        itemStyle: { color: CS_TOKENS.primary }
       }]
     });
     // chart-insight: LINE TREND factory quantity

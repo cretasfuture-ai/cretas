@@ -97,7 +97,7 @@ onMounted(load);
   .kpi {
     .label { color: #909399; font-size: 13px; margin-bottom: 8px; }
     .value { font-size: 22px; font-weight: 600; }
-    &.primary .value { color: #409eff; }
+    &.primary .value { color: var(--cs-primary); }
     &.success .value { color: #67c23a; }
     &.warning .value { color: #e6a23c; }
   }
