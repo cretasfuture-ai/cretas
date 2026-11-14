@@ -44,6 +44,11 @@ const factoryView = usePlatformFactoryContextStore();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
+// 工作区卡：当前工厂编号 + 业态（品牌块已经显示品牌名，这里不重复）
+const WORKSPACE_TYPE_LABEL: Record<string, string> = { FACTORY: '工厂', RESTAURANT: '餐饮', LOGISTICS: '物流' };
+const workspaceName = computed(() => effectiveFactoryId.value || '平台工作区');
+const workspaceSub = computed(() => `${WORKSPACE_TYPE_LABEL[String(effectiveFactoryType.value || '').toUpperCase()] || '企业'} · 当前工作区`);
+const workspaceInitial = computed(() => String(workspaceName.value).slice(0, 1).toUpperCase());
 const effectiveFactoryId = computed(() => factoryView.factoryId || authStore.factoryId);
 const effectiveFactoryType = computed(() => factoryView.context?.factoryType || authStore.factoryType);
 const workspaceFactoryType = computed(() => resolveWorkspaceFactoryType(
@@ -557,12 +562,21 @@ function handleSelect(index: string) {
       'mobile-open': appStore.isMobile && appStore.mobileMenuOpen
     }"
   >
-    <!-- Logo -->
+    <!-- 品牌块（原型：产品 logo + 产品名 + 副标题） -->
     <div class="sidebar-logo">
       <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="logo-icon" />
       <span class="logo-copy" :aria-hidden="isCollapsedSidebar">
         <span class="logo-title">{{ authStore.brandTitle }}</span>
         <span v-if="authStore.brandSubtitle" class="logo-subtitle">{{ authStore.brandSubtitle }}</span>
+      </span>
+    </div>
+
+    <!-- 工作区卡（原型：当前工厂 / 租户）。折叠时隐藏，不占位 -->
+    <div v-if="!isCollapsedSidebar" class="sidebar-workspace" role="group" aria-label="当前工作区">
+      <UAvatar :text="workspaceInitial" size="md" class="workspace-avatar" />
+      <span class="workspace-copy">
+        <strong>{{ workspaceName }}</strong>
+        <small>{{ workspaceSub }}</small>
       </span>
     </div>
 
@@ -584,8 +598,8 @@ function handleSelect(index: string) {
         :collapse-transition="false"
         :unique-opened="!shouldFlatten"
         background-color="transparent"
-        text-color="#ffffffa6"
-        active-text-color="#ffffff"
+        text-color="var(--cs-muted)"
+        active-text-color="var(--cs-primary)"
         @select="handleSelect"
       >
         <template v-if="pinnedItems.length">
@@ -638,13 +652,15 @@ function handleSelect(index: string) {
 </template>
 
 <style lang="scss" scoped>
+/* 原型样张（批发商管理端 V2）：白色侧栏 220px、品牌块 64 高、工作区卡、11px 分组小标题、13px 菜单项、浅蓝选中。全部取 --cs-* */
 .app-sidebar {
   position: fixed;
   top: 0;
   left: 0;
   bottom: 0;
   width: var(--cs-sidebar, 220px);
-  background: linear-gradient(180deg, #0C1929 0%, #132238 60%, #0F1D2E 100%);
+  background: var(--cs-surface);
+  border-right: 1px solid var(--cs-border);
   transition: width 0.3s ease-in-out;
   z-index: 100;
   display: flex;
@@ -660,27 +676,16 @@ function handleSelect(index: string) {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  padding: 0 16px;
-  position: relative;
-
-  // Gradient glow line instead of solid border
-  &::after {
-    content: '';
-    position: absolute;
-    bottom: 0;
-    left: 16px;
-    right: 16px;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(43, 126, 193, 0.4), transparent);
-  }
+  padding: 0 20px;
+  flex: none;
 
   .logo-icon {
     flex-shrink: 0;
     width: 32px;
     height: 32px;
     object-fit: contain;
-    border-radius: 6px;
-    background: #fff;
+    border-radius: 8px;
+    background: var(--cs-surface);
   }
 
   .logo-copy {
@@ -689,7 +694,7 @@ function handleSelect(index: string) {
     display: flex;
     flex-direction: column;
     justify-content: center;
-    line-height: 1.1;
+    line-height: 1.25;
     max-width: 144px;
     overflow: hidden;
     opacity: 1;
@@ -700,8 +705,8 @@ function handleSelect(index: string) {
   }
 
   .logo-title {
-    color: #fff;
-    font-size: 15px;
+    color: var(--cs-text);
+    font-size: 17px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -709,19 +714,64 @@ function handleSelect(index: string) {
   }
 
   .logo-subtitle {
-    margin-top: 3px;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 11px;
-    font-weight: 500;
+    margin-top: 2px;
+    color: var(--cs-muted);
+    font-size: 10px;
+    font-weight: 400;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 }
 
+// 工作区卡：浅底 + 1px 边 + 6px 圆角，边距 14/12/8，内边距 10
+.sidebar-workspace {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 12px 8px;
+  padding: 10px;
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-sm);
+  background: var(--cs-surface-subtle);
+
+  .workspace-avatar {
+    flex: none;
+    border-radius: var(--cs-radius-sm);
+    background: var(--cs-primary-soft);
+    color: var(--cs-primary);
+  }
+
+  .workspace-copy {
+    min-width: 0;
+    display: grid;
+    gap: 2px;
+
+    strong {
+      color: var(--cs-text);
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 17px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    small {
+      color: var(--cs-muted);
+      font-size: 11px;
+      line-height: 17px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+}
+
 .sidebar-menu-wrap {
   flex: 1;
-  padding: 8px;
+  padding: 0 12px 8px;
 }
 
 // P2「常用」项：右侧移除按钮悬停才出现
@@ -731,7 +781,7 @@ function handleSelect(index: string) {
     padding: 0 4px;
     border: 0;
     background: transparent;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--cs-muted);
     font-size: 16px;
     line-height: 1;
     cursor: pointer;
@@ -739,16 +789,15 @@ function handleSelect(index: string) {
     transition: opacity var(--cs-duration-fast, 140ms);
   }
   &:hover .pinned-remove,
-  .pinned-remove:focus-visible { opacity: 1; color: #fff; }
+  .pinned-remove:focus-visible { opacity: 1; color: var(--cs-primary); }
 }
 
-// P2 原型侧栏分区标题（「全部功能」「设置」）
+// 分组小标题（「全部功能」「设置」「业务分组」）：11px 灰字，左右 10px
 .menu-section-title {
-  padding: 14px 12px 6px;
-  font-size: var(--cs-font-small, 12px);
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.42);
+  padding: 14px 10px 5px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--cs-muted);
   white-space: nowrap;
   overflow: hidden;
   user-select: none;
@@ -766,7 +815,13 @@ function handleSelect(index: string) {
 // Keep the icon at the same x position in both layouts. Scope label rules to
 // root items so teleported submenus and their tooltip text remain readable.
 :deep(.sidebar-menu) {
-  --el-menu-base-level-padding: 12px;
+  --el-menu-base-level-padding: 10px;
+  --el-menu-item-height: 34px;
+  --el-menu-sub-item-height: 34px;
+  --el-menu-bg-color: transparent;
+  --el-menu-hover-bg-color: var(--cs-surface-subtle);
+  --el-menu-text-color: var(--cs-muted);
+  --el-menu-active-color: var(--cs-primary);
   width: 100%;
 }
 
@@ -823,75 +878,52 @@ function handleSelect(index: string) {
   }
 }
 
+// 菜单项：13px / 7×10 内边距 / 6px 圆角 / 灰字；悬停浅底；选中 = 主色浅底 + 主色字 + 600
 :deep(.el-menu) {
   border-right: none;
 
   .el-menu-item,
   .el-sub-menu__title {
-    margin: 2px 0;
-    border-radius: 8px;
+    height: 34px;
+    line-height: 20px;
+    margin: 1px 0;
+    padding: 7px 10px;
+    border-radius: var(--cs-radius-sm);
+    font-size: 13px;
+    color: var(--cs-muted);
     cursor: pointer;
-    transition: all 0.2s ease;
+    transition: background-color var(--cs-duration-fast), color var(--cs-duration-fast);
 
     &:hover {
-      background-color: rgba(255, 255, 255, 0.06) !important;
-      color: #fff !important;
+      background-color: var(--cs-surface-subtle) !important;
+      color: var(--cs-text) !important;
     }
 
-    // Icon micro-interaction: subtle scale + 1px lift on hover. Plain CSS
-    // transition (not GSAP) — this is a pure :hover state with no JS-driven
-    // sequencing/stagger/cleanup logic needed, so CSS is cheaper and simpler
-    // than spinning up a GSAP hover handler for every one of ~20 menu items.
-    // GSAP is reserved for useCountUp/vReveal where it earns its keep
-    // (once-only mount tweens, formatted-value tweening). Scale/duration
-    // values intentionally mirror ICON_HOVER_SCALE/ICON_HOVER_DURATION_S in
-    // src/utils/motion/constants.ts so the sidebar reads as the same motion
-    // vocabulary as the rest of the app.
     .el-icon {
-      transition: transform 0.15s ease-out;
-    }
-
-    &:hover .el-icon {
-      transform: scale(1.12) translateY(-1px);
+      margin-right: 10px;
+      font-size: 14px;
+      width: 14px;
+      color: inherit;
     }
   }
+
+  .el-sub-menu__title { padding-right: 28px; }
+  .el-sub-menu__icon-arrow { right: 10px; font-size: 12px; color: var(--cs-muted); }
 
   .el-menu-item.is-active {
-    background-color: rgba(27, 101, 168, 0.25) !important;
-    position: relative;
-
-    &::before {
-      content: '';
-      position: absolute;
-      left: 0;
-      top: 25%;
-      height: 50%;
-      width: 3px;
-      border-radius: 0 3px 3px 0;
-      background: var(--cs-primary, #1b65a8);
-    }
+    background-color: var(--cs-primary-soft) !important;
+    color: var(--cs-primary) !important;
+    font-weight: 600;
   }
 
-  // Nested sub-menu items
+  // 嵌套子菜单：缩进，字号同级
   .el-sub-menu .el-menu-item {
-    margin: 1px 4px;
-    border-radius: 6px;
-    padding-left: 48px !important;
+    margin: 1px 0;
+    padding-left: 34px !important;
   }
 
-  // Reduced motion: no icon transform at all, even instantly on hover —
-  // background/color hover feedback (above) still works, just no motion.
-  @media (prefers-reduced-motion: reduce) {
-    .el-menu-item .el-icon,
-    .el-sub-menu__title .el-icon {
-      transition: none;
-    }
-
-    .el-menu-item:hover .el-icon,
-    .el-sub-menu__title:hover .el-icon {
-      transform: none;
-    }
-  }
+  // 子菜单标题含当前页时只变色，不整块染底
+  .el-sub-menu.is-active > .el-sub-menu__title { color: var(--cs-primary); }
 }
 
 .sidebar-overlay {
@@ -918,11 +950,12 @@ function handleSelect(index: string) {
   }
 }
 
+// 折叠态的弹出子菜单：白底 + 1px 边 + 轻阴影（原先是深色）
 :global(.app-sidebar-menu-popper) {
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
-  border-radius: 8px !important;
-  background: #102033 !important;
-  box-shadow: 0 16px 40px rgba(3, 10, 20, 0.35) !important;
+  border: 1px solid var(--cs-border) !important;
+  border-radius: var(--cs-radius) !important;
+  background: var(--cs-surface) !important;
+  box-shadow: var(--cs-shadow-overlay) !important;
 }
 
 :global(.app-sidebar-menu-popper::before) {

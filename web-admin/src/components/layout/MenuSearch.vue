@@ -5,7 +5,6 @@
  * 结果带「组 › 项」路径，支持中文、全拼、首字母。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
-import { Search } from '@element-plus/icons-vue';
 import type { MenuItem } from './menuConfig';
 import { matchesAnyTextOrPinyin } from '@/utils/pinyinSearch';
 
@@ -96,9 +95,9 @@ defineExpose({ open });
     title="搜索菜单（Ctrl+K）"
     @click="open"
   >
-    <el-icon><Search /></el-icon>
+    <UIcon name="i-lucide-search" class="menu-search-icon" />
     <span v-if="!collapsed" class="menu-search-text">搜索菜单</span>
-    <kbd v-if="!collapsed" class="menu-search-kbd">Ctrl K</kbd>
+    <UKbd v-if="!collapsed" value="Ctrl K" size="sm" />
   </button>
 
   <el-dialog
@@ -141,37 +140,34 @@ defineExpose({ open });
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - 16px);
-  margin: 8px 8px 0;
-  padding: 7px 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  width: calc(100% - 24px);
+  height: 34px;
+  margin: 0 12px 4px;
+  padding: 0 10px;
+  border: 1px solid var(--cs-border);
   border-radius: var(--cs-radius-sm, 6px);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgba(255, 255, 255, 0.62);
+  background: var(--cs-surface);
+  color: var(--cs-muted);
   font: inherit;
   font-size: 13px;
   cursor: pointer;
-  transition: background-color var(--cs-duration-fast, 140ms), color var(--cs-duration-fast, 140ms);
+  transition: background-color var(--cs-duration-fast, 140ms), color var(--cs-duration-fast, 140ms), border-color var(--cs-duration-fast, 140ms);
 }
 .menu-search-trigger:hover,
 .menu-search-trigger:focus-visible {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--cs-primary-soft);
+  border-color: var(--cs-primary);
+  color: var(--cs-primary);
   outline: none;
 }
 .menu-search-trigger.is-collapsed {
   justify-content: center;
-  padding: 7px 0;
+  padding: 0;
+  width: 40px;
+  margin: 0 12px 4px;
 }
+.menu-search-icon { font-size: 14px; flex: none; }
 .menu-search-text { flex: 1; text-align: left; }
-.menu-search-kbd {
-  font-family: inherit;
-  font-size: 11px;
-  padding: 1px 5px;
-  border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  color: rgba(255, 255, 255, 0.5);
-}
 .menu-search-results {
   list-style: none;
   margin: 12px 0 0;

@@ -6,6 +6,7 @@
 // 先同步导入 Vue 核心（无依赖）
 import { createApp } from 'vue';
 import App from './App.vue';
+import './styles/nuxt-ui.css';
 import './styles/tokens.css';
 import './style.css';
 import './styles/element-plus-theme.css';
@@ -35,6 +36,10 @@ async function bootstrap() {
   app.use(ElementPlus.default, {
     locale: zhCn.default,
   });
+
+  // Nuxt UI 4（外壳与新页面用；Element 继续负责高密度业务表格/表单）
+  const nuxtUi = await import('@nuxt/ui/vue-plugin');
+  app.use(nuxtUi.default);
 
   // Bug #312 fix (2026-04-18): monkey-patch ElMessage.error / ElMessage({type:'error'})
   // so all 608 call-sites across 114 files get sticky (duration:0 + showClose:true)

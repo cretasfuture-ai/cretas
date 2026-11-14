@@ -65,11 +65,9 @@ function badgeLabel(value: number | 'unknown' | null): string {
 
 <style scoped>
 .menu-group-label {
-  padding: 8px 12px 4px 36px;
+  padding: 8px 10px 4px 34px;
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.3);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--cs-muted);
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -83,7 +81,6 @@ function badgeLabel(value: number | 'unknown' | null): string {
 
 .menu-group-label:not(:first-child) {
   margin-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
   padding-top: 10px;
 }
 
@@ -107,18 +104,18 @@ function badgeLabel(value: number | 'unknown' | null): string {
   margin-left: auto;
   padding: 0 6px;
   border-radius: 999px;
-  background: #e75555;
-  color: #fff;
+  background: var(--cs-danger-soft);
+  color: var(--cs-danger);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   font-size: 11px;
   line-height: 1;
-  font-weight: 700;
-  box-shadow: 0 0 0 2px rgba(231, 85, 85, 0.14);
+  font-weight: 600;
 }
 
 .menu-task-badge--unknown {
-  background: #909399;
+  background: var(--cs-surface-subtle);
+  color: var(--cs-muted);
 }
 </style>

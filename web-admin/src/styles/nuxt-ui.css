@@ -1,0 +1,59 @@
+/*
+ * Nuxt UI 4 + Tailwind 4 接入层（Vue + Vite，不引 Nuxt 框架）。
+ *
+ * 1. 层序：legacy-reset 最低。旧全局 `* { margin:0; padding:0 }` 放进该层（见 style.css / App.vue），
+ *    否则它是未分层样式、优先级高于所有 Tailwind 层，Nuxt UI 的 padding / margin 工具类会被清零（11-02 评估的坑 1）。
+ *    只引 theme + utilities，不引 Tailwind preflight：preflight 会重置 h1/button/img 等，
+ *    波及 583 个 Element 业务页；Nuxt UI 组件自带需要的样式。
+ * 2. 尺寸：Nuxt UI 的间距/字号是 rem。项目里有 435 处 rem 是按 html 14px 写的，
+ *    所以不改根字号（坑 2 的另一种解法）：把 Tailwind 主题里的 rem 换成 px 等价值（按 16px 基准换算），
+ *    Nuxt UI 保持设计尺寸，旧页面和 Element 都不跟着变大。
+ * 3. 颜色：--ui-* 统一指向 --cs-*（tokens.css 是唯一真值），Nuxt UI 与 Element 同一套变量。
+ */
+@layer legacy-reset, theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+@import '@nuxt/ui';
+
+@theme {
+  --spacing: 4px;
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+}
+
+/* 未分层 + html:root：压过 Nuxt UI 在 base 层里的 :root 取值 */
+html:root {
+  --ui-primary: var(--cs-primary);
+  --ui-color-primary-500: var(--cs-primary);
+  --ui-color-primary-600: var(--cs-primary-hover);
+  --ui-bg: var(--cs-surface);
+  --ui-bg-muted: var(--cs-surface-subtle);
+  --ui-bg-elevated: var(--cs-surface-subtle);
+  --ui-bg-accented: var(--cs-primary-soft);
+  --ui-text: var(--cs-text);
+  --ui-text-highlighted: var(--cs-text);
+  --ui-text-toned: var(--cs-muted);
+  --ui-text-muted: var(--cs-muted);
+  --ui-text-dimmed: color-mix(in srgb, var(--cs-muted) 65%, #fff);
+  --ui-border: var(--cs-border);
+  --ui-border-muted: var(--cs-border);
+  --ui-border-accented: var(--cs-border);
+  --ui-radius: var(--cs-radius-sm);
+}
