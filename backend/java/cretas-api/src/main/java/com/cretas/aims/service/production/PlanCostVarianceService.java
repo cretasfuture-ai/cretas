@@ -869,6 +869,31 @@ public class PlanCostVarianceService {
                 .orElse(null);
     }
 
+    /** 分摊明细里无法解析名字的产出行的如实显示 (⛔ 不显示内部 id, ⛔ 不编名字)。 */
+    static final String UNKNOWN_MATERIAL_NAME = "未知物料（档案里查不到该编号）";
+
+    private static boolean isInternalId(String s) {
+        return s == null || s.isBlank() || s.startsWith("RMT_") || s.startsWith("__RAW_");
+    }
+
+    /**
+     * 多产出分摊明细一行的显示名。产出的 productTypeId 可能是产品档案行, 也可能直接是原料/流程占位 (RMT_…),
+     * 后者在产品档案里查不到, 原先 productName=null 让前端把内部 id 当名字显示 (F006 4 个计划, 2026-11-13 验收)。
+     * 先查产品, 再查原料档案, 都没有如实标「未知物料」。
+     */
+    String outputDisplayName(String factoryId, String productTypeId) {
+        if (productTypeId == null || productTypeId.isBlank()) {
+            return UNKNOWN_MATERIAL_NAME;
+        }
+        String name = productName(factoryId, productTypeId);
+        if (!isInternalId(name)) {
+            return name;
+        }
+        String raw = rawMaterialTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
+                .map(RawMaterialType::getName).orElse(null);
+        return isInternalId(raw) ? UNKNOWN_MATERIAL_NAME : raw;
+    }
+
     /** 缺口 10: 报表注明每道多产出工序用的是哪种分法 (取报工落库的分摊凭证)。 */
     List<PlanCostVarianceDTO.AllocationMethod> allocationMethods(String factoryId, String planId) {
         if (processSheetRowRepository == null) {
@@ -902,7 +927,7 @@ public class PlanCostVarianceService {
             BigDecimal fixed = decimal(p, "workflowFixedCostShare");
             group.getOutputs().add(PlanCostVarianceDTO.AllocationOutput.builder()
                     .productTypeId(p.path("productTypeId").asText(null))
-                    .productName(productName(factoryId, p.path("productTypeId").asText(null)))
+                    .productName(outputDisplayName(factoryId, p.path("productTypeId").asText(null)))
                     .batchNumber(row.getBatchNumber())
                     .costAllocationRatio(decimal(p, "costAllocationRatio"))
                     .workflowFixedCostShare(fixed)
