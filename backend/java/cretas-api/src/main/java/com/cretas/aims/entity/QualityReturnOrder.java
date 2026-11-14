@@ -89,6 +89,14 @@ public class QualityReturnOrder extends BaseEntity {
     @Column(name = "material_id", length = 191)
     private String materialId;
 
+    /** SUBCONTRACT 退回委外: 关联的委外任务行 (outsource_order_lines.id)。ship 时据此扣库存、冲加工费; 为空则拒绝 ship。 */
+    @Column(name = "outsource_line_id", length = 64)
+    private String outsourceLineId;
+
+    /** SUBCONTRACT 退回委外: 被退的收货批次 (该任务行收货产出的批次 id)。 */
+    @Column(name = "source_batch_id", length = 191)
+    private String sourceBatchId;
+
     /** 退回数量 */
     @NotNull
     @Column(name = "quantity", nullable = false, precision = 15, scale = 4)
