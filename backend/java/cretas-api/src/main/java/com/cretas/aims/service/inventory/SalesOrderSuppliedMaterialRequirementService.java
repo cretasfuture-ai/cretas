@@ -431,6 +431,9 @@ public class SalesOrderSuppliedMaterialRequirementService {
         if (expireDate == null && material.getShelfLifeDays() != null) {
             expireDate = receiptDate.plusDays(material.getShelfLifeDays());
         }
+        // 迁移 P5 R35: 到期日已早于今天 ⇒ 允许建, 但必须写原因 (写在任何落库之前)
+        String expiredReason = ExpiredBatchCreationGuard.requireReasonIfExpired(
+                expireDate, receiptDate, request.getExpiredReason());
 
         String deterministicSuffix = UUID.nameUUIDFromBytes(
                         (factoryId + ":" + request.getIdempotencyKey())
@@ -470,6 +473,7 @@ public class SalesOrderSuppliedMaterialRequirementService {
         batch.setBoxCount(request.getBoxCount());
         batch.setOriginPlace(request.getOriginPlace());
         batch.setNotes(request.getNotes());
+        batch.setExpiredOnCreateReason(expiredReason);
         batch.setCreatedBy(userId);
         MaterialBatch savedBatch;
         try {

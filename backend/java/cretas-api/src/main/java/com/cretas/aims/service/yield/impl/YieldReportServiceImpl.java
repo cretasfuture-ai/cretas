@@ -137,6 +137,11 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
 
+    /** 迁移 P5 R36 的「现在」; 测试可替换。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) { this.clock = clock; }
+
     /** Process-parameter deviation case hook; optional for old constructor-based unit fixtures. */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ProcessParamDeviationCaseService processParamDeviationCaseService;
@@ -301,6 +306,10 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (backdateWindowValidator != null) {
             backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "报工");
         }
+        // 迁移 P5: 皮重 ≥ 0 且净重不为负; R36 称重起止时间不晚于现在 5 分钟以上 (前端字段旁也提示, 这里兜底)
+        com.cretas.aims.service.yield.WeighingEntryRules.assertTare(req.getTareWeight(), req.getOutputQuantity());
+        com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
+                req.getBusinessDate(), req.getLaborSegments(), clock);
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -477,6 +486,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
                 // 不良品数 (质量账)。null 原样传 null —— ⛔ 不兜底成 0。
                 .defectQuantity(req.getDefectQuantity())
+                // 迁移 P5: 皮重单独留痕; 产出阶段才有良品, INPUT/SEGMENT 不收
+                .tareWeight((isInput || isSegment) ? null : req.getTareWeight())
                 // 良品数只有在<b>有人清点过不良品</b>时才是真读数。没清点就是不知道 —— ⛔ 不许用产出量顶替。
                 //
                 // 见 V20260826_05/06 与 GoodQuantityIsNotFabricatedContractTest:

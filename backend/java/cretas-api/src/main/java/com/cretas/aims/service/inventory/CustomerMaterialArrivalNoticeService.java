@@ -221,6 +221,9 @@ public class CustomerMaterialArrivalNoticeService {
         if (expireDate == null && material.getShelfLifeDays() != null) {
             expireDate = receiptDate.plusDays(material.getShelfLifeDays());
         }
+        // 迁移 P5 R35: 到期日已早于今天 ⇒ 允许建, 但必须写原因 (写在任何落库之前)
+        String expiredReason = ExpiredBatchCreationGuard.requireReasonIfExpired(
+                expireDate, receiptDate, request.getExpiredReason());
         String deterministicSuffix = UUID.nameUUIDFromBytes(
                         (factoryId + ":" + idempotencyKey).getBytes(StandardCharsets.UTF_8))
                 .toString().replace("-", "").substring(0, 12).toUpperCase();
@@ -262,6 +265,7 @@ public class CustomerMaterialArrivalNoticeService {
         batch.setBoxCount(request.getBoxCount());
         batch.setOriginPlace(trimToNull(request.getOriginPlace()));
         batch.setNotes(trimToNull(request.getNotes()));
+        batch.setExpiredOnCreateReason(expiredReason);
         batch.setCreatedBy(userId);
 
         MaterialBatch saved;
