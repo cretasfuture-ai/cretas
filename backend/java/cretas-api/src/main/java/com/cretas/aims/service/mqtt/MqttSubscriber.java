@@ -136,9 +136,20 @@ public class MqttSubscriber {
         JsonNode weightData = data.get("data");
         if (weightData == null) return;
 
-        double weight = weightData.has("weight") ? weightData.get("weight").asDouble() : 0;
+        JsonNode weightNode = weightData.get("weight");
+        // 数字型和字符串型数字 ("12.50") 都认; 没有 / 非数字 (坏帧、网关出错): 不是 0 公斤。
+        java.util.Optional<Double> weightValue =
+                com.cretas.aims.service.workstation.WorkstationCountingService.scaleReadingWeight(weightNode);
+        if (weightValue.isEmpty()) {
+            log.warn("称重消息没有有效重量字段, 不更新最近读数: device={}, weight={}", deviceId, weightNode);
+            iotDataService.saveDeviceData(factoryId, deviceId, "WEIGHT", data);
+            return;
+        }
+        double weight = weightValue.get();
         String unit = weightData.has("unit") ? weightData.get("unit").asText() : "kg";
-        boolean stable = weightData.has("stable") && weightData.get("stable").asBoolean();
+        // 与 readScaleWeight 同一个判定函数 (S / 1 / true 都是稳定, false / 0 / U / M 是不稳定)
+        boolean stable = com.cretas.aims.service.workstation.WorkstationCountingService
+                .isStableFlag(weightData.get("stable"));
 
         log.info("称重数据: device={}, weight={}{}, stable={}",
                 deviceId, weight, unit, stable);
