@@ -219,7 +219,7 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         if (approverId == null) {
             throw new BusinessException(400, "审批人不能为空");
         }
-        // 🔴 锁序 = 物料 -> 建议 -> 配方行 -> 配方头, 与确认入库 (先锁物料、重算均价、再原地改写 PENDING 建议)
+        // 🔴 锁序 = 物料 -> 建议 -> 整族配方头 -> 配方行 (红线 3 统一, 见 BomRecipeHeadLocks), 与确认入库 (先锁物料、重算均价、再原地改写 PENDING 建议)
         // 同一方向, 不互等。每一行都在【加锁读】时第一次进本事务的持久化上下文: 先无锁读进来的托管对象,
         // 之后的 FOR UPDATE 不会刷新它的字段, 读到的就是旧值 (审查 A/B/C)。所以这里先只取物料 id 这一个标量。
         String materialTypeId = proposalRepository.findMaterialTypeIdByIdAndFactoryId(proposalId, factoryId)
@@ -237,6 +237,16 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
             throw stale();
         }
 
+        // D-S5-10: 历史 (归档) 版本的成本不回写。配方头必须在工艺保密检查【之前】加锁读 ——
+        // 保密检查按配方定位产品, 会无锁 findById 把配方读进上下文, 之后再 FOR UPDATE 拿到的是那份旧对象,
+        // 并发激活新版本把它归档时这里仍会读成 ACTIVE (审查 A)。
+        // N1: 锁的是整族配方头 (按 id 升序), 不只是这一个 —— 重算会改写同族所有成员的头。
+        // 红线 3: 先头后行 (与激活 / 整表更新 / 草稿明细编辑同一方向): 先只取行所属配方 id (标量)。
+        java.util.Optional<String> lineRecipeId = itemRepository.findRecipeIdById(proposal.getRecipeItemId());
+        BomRecipe recipe = lineRecipeId
+                .flatMap(id -> com.cretas.aims.service.bom.BomRecipeHeadLocks
+                        .lockWithFamily(recipeRepository, factoryId, id))
+                .orElse(null);
         BomRecipeItem item = itemRepository.findByIdForUpdate(proposal.getRecipeItemId())
                 .orElseThrow(() -> new ResourceNotFoundException("BOM行不存在: " + proposal.getRecipeItemId()));
         if (!factoryId.equals(item.getFactoryId())) {
@@ -245,12 +255,9 @@ public class BomPriceAdjustmentServiceImpl implements BomPriceAdjustmentService 
         if (!materialTypeId.equals(item.getMaterialTypeId())) {
             throw stale();   // 配方行已换成别的物料: 这条建议说的不再是这一行
         }
-        // D-S5-10: 历史 (归档) 版本的成本不回写。配方头必须在工艺保密检查【之前】加锁读 ——
-        // 保密检查按配方定位产品, 会无锁 findById 把配方读进上下文, 之后再 FOR UPDATE 拿到的是那份旧对象,
-        // 并发激活新版本把它归档时这里仍会读成 ACTIVE (审查 A)。锁序与 BOM 成本更正一致: 先行后头。
-        // N1: 锁的是整族配方头 (按 id 升序), 不只是这一个 —— 重算会改写同族所有成员的头。
-        BomRecipe recipe = com.cretas.aims.service.bom.BomRecipeHeadLocks
-                .lockWithFamily(recipeRepository, factoryId, item.getRecipeId()).orElse(null);
+        if (lineRecipeId.isPresent() && !lineRecipeId.get().equals(item.getRecipeId())) {
+            throw stale();   // 两步之间行被挪到别的产出: 锁住的不是它现在所在的配方
+        }
         // 工艺保密 (写入侧): 批准会改写配方行的单价与行成本 (行成本 = 用量 × 单价), 属于改配方, 要编辑权
         if (processSecretGuard != null) {
             processSecretGuard.requireRecipe(factoryId, item.getRecipeId(),
