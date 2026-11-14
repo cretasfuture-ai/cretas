@@ -7,6 +7,8 @@ import AppSidebar from '../AppSidebar.vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import type { User } from '@/types/auth';
+import { configurableMenuConfig } from '../menuConfig';
+import { getFactoryModuleMenuOptions } from '../factoryMenuVisibility';
 
 /**
  * P2 #1692 审查第 2 条：真挂载侧栏，守 canSeeMenuNode 里「搬出来的叶子要过原父组」这一步。
@@ -80,6 +82,25 @@ beforeEach(() => {
 });
 
 describe('原型分组侧栏：搬出来的叶子仍受原父组判据约束（真挂载）', () => {
+  it('批发配置：往来单位归各业务组，生产叶子关闭仍保留商品和数据分析', async () => {
+    identity('factory_super_admin');
+    disabledMenuPaths = getFactoryModuleMenuOptions(configurableMenuConfig, 'production')
+      .map((item) => item.path).filter((path) => path !== '/system/products');
+    extraFeatures = [{ moduleId: 'dashboard', config: { businessNavigationProfile: 'wholesale' } }];
+    const w = await mountSidebar();
+    const group = (label: string) => w.findAll('.el-sub-menu').find((node) => node.attributes('aria-label') === label)!;
+    expect(group('采购管理').text()).toContain('供应商管理');
+    expect(group('销售管理').text()).toContain('客户管理');
+    expect(group('基础资料').text()).toContain('SKU 管理');
+    expect(group('基础资料').text()).not.toContain('供应商管理');
+    expect(group('基础资料').text()).not.toContain('客户管理');
+    const titles = w.findAll('.menu-title-copy').map((node) => node.text());
+    expect(titles).not.toContain('称重报工');
+    expect(titles).not.toContain('生产管理');
+    expect(titles).toContain('数据与分析');
+    w.unmount();
+  });
+
   it('阳性对照：不关任何路径时「主数据」里有 SKU 管理，「生产管理」组在', async () => {
     identity('factory_super_admin');
     const titles = await sidebarTitles();
