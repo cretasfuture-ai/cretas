@@ -72,6 +72,14 @@ class ReportCostVarianceReadModeContractTest {
     private ToolDispatchService dispatch;
     private ReportCostVarianceTool varianceTool;
 
+    /** 价格可见性 ThreadLocal 不得被本测试留在线程上 (污染同一 fork 里后续测试, 如 PriceSensitiveContextScopeContractTest)。 */
+    @org.junit.jupiter.api.AfterEach
+    void priceContextMustNotLeak() {
+        boolean leaked = com.cretas.aims.security.PriceSensitiveContext.shouldHide("procurement:price:view");
+        com.cretas.aims.security.PriceSensitiveContext.clear();
+        org.junit.jupiter.api.Assertions.assertFalse(leaked, "测试后价格可见性上下文仍是隐藏态 = 泄漏");
+    }
+
     @BeforeEach
     void setUp() {
         PlatformRolePermissionRepository l1 = mock(PlatformRolePermissionRepository.class);
