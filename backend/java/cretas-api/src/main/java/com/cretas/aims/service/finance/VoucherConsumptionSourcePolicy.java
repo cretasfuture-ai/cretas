@@ -71,7 +71,13 @@ public final class VoucherConsumptionSourcePolicy {
             "不带生产计划的手工出库。Owner 2026-08-27 裁定不进凭证 —— 它没有对应的产出可归集",
 
             "ADJUSTMENT",
-            "库存调整(BatchConsumptionServiceImpl), 不是领用。差异应当走盘点那条链路的凭证"
+            "库存调整(BatchConsumptionServiceImpl), 不是领用。差异应当走盘点那条链路的凭证",
+
+            "OUTSOURCE_RECEIVE",
+            "委外收货耗用(OutsourceService): 料的成本随单价转进委外产出批次, 记成「原料发出」会让同一笔料在产出批次被投产时再算一次",
+
+            "OUTSOURCE_LOSS",
+            "委外结单前登记的损耗(OutsourceService, 原因必填): 不是生产领用, 是委外差额的处置, 不归集到产出"
     );
 
     private VoucherConsumptionSourcePolicy() {

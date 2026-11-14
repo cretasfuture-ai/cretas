@@ -112,9 +112,13 @@ public class OutsourceOrderLine extends BaseEntity {
     @Column(name = "version", nullable = false)
     private Long version = 0L;
 
-    /** 剩余应收 = 计划 − 已收合格 − 已收不良 (不小于 0)。返工待收另算。 */
+    /**
+     * 剩余应收 (新料加工部分) = 计划 − 已收合格 − 已收不良 − 返工待收 (不小于 0)。
+     * 退货时合格数已减、返工待收已加, 所以返工待收要扣掉, 否则同一批货被算成「还要新加工」。
+     */
     public BigDecimal remainingToReceive() {
-        BigDecimal r = plannedQuantity.subtract(receivedGoodQuantity).subtract(receivedDefectQuantity);
+        BigDecimal r = plannedQuantity.subtract(receivedGoodQuantity).subtract(receivedDefectQuantity)
+                .subtract(reworkPendingQuantity);
         return r.signum() < 0 ? BigDecimal.ZERO : r;
     }
 }
