@@ -331,12 +331,12 @@ onMounted(() => {
 .pm-cell--fallback { outline: 1px dashed #e6a23c; }
 .pm-cell--override { background: #fef0f0; }
 .pm-cell--l2-off { color: #c0c4cc; }
-.pm-cell--l2-override { border-bottom: 2px solid #409eff; }
+.pm-cell--l2-override { border-bottom: 2px solid var(--el-color-primary); }
 .pm-fallback-mark { display: block; font-size: 9px; color: #e6a23c; }
 .pm-global-warning { color: #e6a23c; }
 .pm-last-write { color: #67c23a; }
 .pm-cell--editable { cursor: pointer; }
-.pm-cell--editable:hover { outline: 1px solid #409eff; }
+.pm-cell--editable:hover { outline: 1px solid var(--el-color-primary); }
 .pm-cell--readonly { cursor: not-allowed; color: #909399; background: #fafafa; }
 .pm-editor { display: flex; gap: 4px; align-items: center; }
 .pm-editor select, .pm-editor input, .pm-editor button { font-size: 12px; }

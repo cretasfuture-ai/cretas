@@ -512,7 +512,7 @@ h1 {
 }
 
 .status-switch button:focus-visible {
-  outline: 2px solid #409eff;
+  outline: 2px solid var(--el-color-primary);
   outline-offset: 1px;
 }
 
