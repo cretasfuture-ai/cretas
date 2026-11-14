@@ -28,7 +28,7 @@ import java.util.regex.Pattern;
  *       其余单位 (斤 / 公斤 / 升 / 两 / 片 / 粒 …) 看配方语境: 小句里有本厂原料名、配方类词, 或「放 / 加」在数值前 4 个字以内
  *       (「加白砂糖2斤」「这锅加水20升」);
  *       小句里有入库 / 到货 / 采购 / 领料 / 订单 / 发货 … 业务词时这一档不按配方处理 (「入库鸭腿200公斤」「订单再加20斤」原样);
- *       g / 克后面紧跟 网 / 信号 / 卡 / 拉, 或小句里说手机 / 网络时的 g, 不是单位;</li>
+ *       g 后面紧跟 网 / 信号 / 卡, 或数值前紧邻 4 个字里有 手机 / 网络 时不是单位; 「克」一律是单位;</li>
  *   <li>{@code <比例>} 另含冒号比例「3:1」(含配方类词 / 参数词 / 原料名的小句里; 「比分3:1」「时间10:30」不动);</li>
  *   <li>{@code <配料>}: 本厂原料名 (主数据确定性匹配), 只在含 {@code <用量>} / {@code <比例>} 的小句里换 (配方保密口径: 配料名 + 用量
  *       一起才是配方; 单说「八角到货了」是普通业务话, 不动);</li>
@@ -56,10 +56,11 @@ final class FlywheelValueMasker {
             "公斤", "千克", "kg", "KG", "毫升", "ml", "mL", "汤匙", "茶匙", "克", "g", "两", "斤", "升", "L", "勺", "片", "粒");
     /** 配方专用单位: 不看语境, 一律 {@code <用量>} (organizer 11-14 三审: 原料表叫「食盐」时「加盐5克」也得抹)。 */
     static final List<String> RECIPE_ONLY_UNITS = List.of("毫升", "ml", "mL", "ML", "汤匙", "茶匙", "克", "g", "勺");
-    /** 配方专用单位 g / 克 后面紧跟这些字时不是单位 (「2g网络」「4g信号」「3克拉」「g卡」)。 */
+    /** 单位 g 后面紧跟这些字时是网络制式不是克 (「2g网络」「4g信号」「4g卡」)。「克」不排除。 */
     static final List<String> NOT_UNIT_AFTER_G = List.of("网", "信号", "卡", "拉");
-    /** 小句里有这些词时, 「数字 + g」是网络制式不是克 (「手机是4g的」)。 */
-    static final List<String> NETWORK_WORDS = List.of("手机", "网络", "信号", "流量", "基站", "路由");
+    /** 数值前紧邻 {@link #G_LEAD_WINDOW} 个字里有这些词时, 后面的 g 是网络制式 (「手机是4g的」); 不看整句。 */
+    static final List<String> G_LEADS = List.of("手机是", "手机", "网络");
+    static final int G_LEAD_WINDOW = 4;
     /** 「一」后面跟这些字是虚词不是数 (「一起」「一样」「一下」…), 不当数值 (否则「1斤一起」被当成单价)。 */
     static final String NOT_NUMBER_AFTER_YI = "起样般下些点直";
     /** 冒号比例「3:1」「3：1」: 只在含配方类词 / 参数词 / 本厂原料名的小句里抹成 {@code <比例>}。 */
@@ -295,18 +296,16 @@ final class FlywheelValueMasker {
                 && isAsciiLetter(afterTrim.charAt(unit.length()))) {
             return null;
         }
-        if (unit.equals("g") || unit.equals("克")) {
+        // 只排除 g (网络制式); 「克」一律是单位 (食品厂没有克拉: 「盐3克拉匀」必须抹)
+        if (unit.equals("g")) {
             String rest = afterTrim.substring(unit.length());
             if (prefix(rest, NOT_UNIT_AFTER_G) != null) {
-                return null;    // 「2g网络」「3克拉」
+                return null;    // 「2g网络」「4g信号」
             }
-            if (unit.equals("g")) {
-                int[] c = clause(text, start);
-                String clause = text.substring(c[0], c[1]);
-                for (String w : NETWORK_WORDS) {
-                    if (clause.contains(w)) {
-                        return null;    // 「手机是4g的」
-                    }
+            String lead = text.substring(Math.max(0, start - G_LEAD_WINDOW), start);
+            for (String w : G_LEADS) {
+                if (lead.contains(w)) {
+                    return null;    // 「手机是4g的」; 只看数值前紧邻几个字, 不看整句 (「手机上记一下味精2g」照抹)
                 }
             }
         }

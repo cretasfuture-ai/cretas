@@ -355,7 +355,11 @@ class FlywheelTextProtectorRedactionTest {
             "这锅加水20升|这锅加<配料><用量>|20升",
             "腌料比例3:1|腌料比例<比例>|3:1",
             "配比3:1|配比<比例>|3:1",
-            "白砂糖和食盐3：1|<配料1>和<配料2><比例>|3：1"
+            "白砂糖和食盐3：1|<配料1>和<配料2><比例>|3：1",
+            // 终审复跑: 「克」不排除「拉」; g 只看数值前紧邻 4 字, 不看整句
+            "盐3克拉匀|盐<用量>拉匀|3克",
+            "放盐3克拉面汤里|放盐<用量>拉面汤里|3克",
+            "手机上记一下味精2g|手机上记一下味精<用量>|2g"
     })
     void businessUnitsInRecipeContextAndColonRatiosAreMaskedInEveryColumn(String said, String expected, String gone) {
         List<String> ingredients = List.of("白砂糖", "食盐", "水");
@@ -377,7 +381,7 @@ class FlywheelTextProtectorRedactionTest {
     /** 终审阴性对照: 业务话、非配方的冒号、g / 克不是单位的说法都原样。 */
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "订单再加20斤", "入库鸭腿200公斤", "比分3:1", "时间10:30", "用2g网络", "手机是4g的", "3克拉", "这个和那个一样"})
+            "订单再加20斤", "入库鸭腿200公斤", "比分3:1", "时间10:30", "用2g网络", "手机是4g的", "这个和那个一样"})
     void finalReviewNegativesStayAsIs(String said) {
         List<String> ingredients = List.of("白砂糖", "食盐", "水", "鸭腿");
         when(master.findIngredientNames(PLAIN)).thenReturn(ingredients);
