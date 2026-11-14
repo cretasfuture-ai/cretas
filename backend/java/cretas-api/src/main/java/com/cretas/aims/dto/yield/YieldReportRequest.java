@@ -103,6 +103,12 @@ public class YieldReportRequest {
     private BigDecimal defectQuantity;
 
     /**
+     * 迁移 P5 称重报工: 皮重 kg (容器 / 托盘)。{@code outputQuantity} 照旧是<b>良品净重</b> (= 良品毛重 − 皮重),
+     * 皮重单独落 production_reports.tare_weight 留痕。null = 没录皮重 (⛔ 不回填 0); 负数 400。
+     */
+    private BigDecimal tareWeight;
+
+    /**
      * 本道的多个半成品产出 (画布 1 进 N 出)。
      *
      * <p>与旧的单个 {@code semiCode}/{@code semiOutputQuantity} <b>并存</b>:

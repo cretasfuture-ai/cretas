@@ -631,6 +631,45 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
         return ProductionLineDTO.fromEntity(line);
     }
 
+    /**
+     * 产线人数配置。整体替换 (null = 清空 = 不比较), 只改本厂的产线。
+     * 插单最少人数 (insertMinWorkers) 存 standard_workers: 紧急插单唯一读这一列比较当天排班人数, 空 = 不比较 (默认行为不变)。
+     * 不写 min_workers (建表 DEFAULT 1, 分不出「没配」, 且被 APS 当特征读), 见 {@link ProductionLineStaffingRequest}。
+     */
+    @Override
+    @Transactional
+    public ProductionLineDTO updateProductionLineStaffing(String factoryId, String lineId,
+                                                          ProductionLineStaffingRequest request) {
+        if (request == null) {
+            throw new BusinessException(400, "人数配置不能为空").withCode("LINE_STAFFING_INVALID");
+        }
+        Integer min = request.getInsertMinWorkers();
+        Integer max = request.getMaxWorkers();
+        Integer skill = request.getRequiredSkillLevel();
+        if ((min != null && min < 0) || (max != null && max < 0)) {
+            throw new BusinessException(400, "人数不能是负数").withCode("LINE_STAFFING_INVALID")
+                    .withHint("最少人数、最多人数填 0 以上的整数，或留空表示不比较");
+        }
+        if (min != null && max != null && min > max) {
+            throw new BusinessException(400, "最少人数 " + min + " 人不能多于最多人数 " + max + " 人")
+                    .withCode("LINE_STAFFING_INVALID")
+                    .withHint("把最少人数改小，或把最多人数改大");
+        }
+        if (skill != null && (skill < 1 || skill > 5)) {
+            throw new BusinessException(400, "所需技能等级只能是 1 到 5 级").withCode("LINE_STAFFING_INVALID")
+                    .withHint("选 1 到 5 级，或留空表示不要求");
+        }
+        resourceWriteLock.lockFactory(factoryId);
+        ProductionLine line = lineRepository.findByIdAndFactoryIdAndDeletedAtIsNull(lineId, factoryId)
+            .orElseThrow(() -> new EntityNotFoundException("ProductionLine", lineId));
+        // 0 与留空同义: 插单遇到 null 或 <= 0 都不比较; 统一存 null, 读回来不会出现「最少 0 人」
+        line.setStandardWorkers(min != null && min > 0 ? min : null);
+        line.setMaxWorkers(max);
+        line.setRequiredSkillLevel(skill);
+        line = lineRepository.save(line);
+        return ProductionLineDTO.fromEntity(line);
+    }
+
     @Override
     @Transactional
     public ProductionLineDTO updateProductionLineStatus(String factoryId, String lineId, String status) {
