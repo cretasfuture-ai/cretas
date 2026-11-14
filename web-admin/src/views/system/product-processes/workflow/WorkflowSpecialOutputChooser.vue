@@ -53,7 +53,7 @@ const options = SPECIAL_OUTPUT_OPTIONS;
   padding: 12px; border: 1px solid #dfe6f2; border-radius: 10px; background: #fff;
   cursor: pointer; text-align: left;
 }
-.chooser-option:hover { border-color: #409eff; background: #f5faff; }
+.chooser-option:hover { border-color: var(--el-color-primary); background: #f5faff; }
 .chooser-option:focus-visible { outline: 2px solid #1b65a8; outline-offset: 2px; }
 .chooser-option__badge {
   flex: none; display: grid; place-items: center; width: 30px; height: 30px;

@@ -979,7 +979,7 @@ function getSchemaDisplayName(nodeType: string) {
   border: 1px solid #e4e7ed; border-radius: 6px;
   cursor: grab; transition: all 0.2s;
 }
-.palette-node:hover { border-color: #409EFF; background: #f0f7ff; }
+.palette-node:hover { border-color: var(--el-color-primary); background: #f0f7ff; }
 
 .node-icon {
   width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
@@ -998,7 +998,7 @@ function getSchemaDisplayName(nodeType: string) {
 
 /* Custom node style */
 .workflow-node {
-  background: #fff; border: 2px solid #409EFF; border-radius: 8px;
+  background: #fff; border: 2px solid var(--el-color-primary); border-radius: 8px;
   min-width: 160px; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); border-left-width: 5px;
 }
 .workflow-node.node-initial { border-style: dashed; border-width: 3px; border-left-width: 6px; }
@@ -1013,7 +1013,7 @@ function getSchemaDisplayName(nodeType: string) {
 .node-body { padding: 6px 12px; font-size: 12px; color: #606266; }
 .node-status { font-family: monospace; color: #909399; }
 .node-type-badge { margin-top: 2px; font-size: 11px; color: #C0C4CC; }
-.node-roles-badge { margin-top: 2px; font-size: 11px; color: #409EFF; }
+.node-roles-badge { margin-top: 2px; font-size: 11px; color: var(--el-color-primary); }
 .node-sla-badge { margin-top: 2px; font-size: 11px; color: #E6A23C; }
 
 /* Right properties - wider */
@@ -1028,7 +1028,7 @@ function getSchemaDisplayName(nodeType: string) {
 .empty-hint p { margin: 4px 0; font-size: 13px; }
 
 .config-section-title {
-  font-size: 13px; font-weight: 600; color: #409EFF;
+  font-size: 13px; font-weight: 600; color: var(--el-color-primary);
   margin-bottom: 12px; padding-bottom: 6px; border-bottom: 1px solid #ebeef5;
 }
 
