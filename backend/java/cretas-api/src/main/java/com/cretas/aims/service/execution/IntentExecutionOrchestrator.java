@@ -786,6 +786,12 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 3.5.9 缺「要操作哪一个」(报工缺工序任务): 先列本人可选的, 再轮到通用缺参追问 (与流式 7a.6 同一个出口)
+        IntentExecuteResponse choiceAsked = askWhichOneBeforeWriteGuard(factoryId, request, intent, userId, userRole);
+        if (choiceAsked != null) {
+            return choiceAsked;
+        }
+
         // 3.6. Slot Filling
         if (canUseStatefulConversation(factoryId, userId, request)
                 && !Boolean.TRUE.equals(request.getSkipSlotFilling()) && slotFillingService != null) {
@@ -989,9 +995,16 @@ public class IntentExecutionOrchestrator {
         if (writeGuardService.isWriteIntent(intent)
                 && !Boolean.TRUE.equals(request.getPreviewOnly())
                 && !writeGuardService.isConfirmed(ctx)) {
+            // 缺「要操作哪一个」(「我要报工，产量100」经短语快捷通道到这里): 先列本人可选的让他选,
+            // 不出一张不知道报哪一道的空确认卡 (prod 2026-11-14 F006)。只有一个时带出来, 仍出下面的确认卡。
+            IntentExecuteResponse choiceAsked = askWhichOneBeforeWriteGuard(
+                    factoryId, request, intent, userId, userRole);
+            if (choiceAsked != null) {
+                return choiceAsked;
+            }
             log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
                     intent.getIntentCode(), request.getForceExecute());
-            return IntentExecuteResponse.builder()
+            IntentExecuteResponse confirmCard = IntentExecuteResponse.builder()
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
                     .intentName(intent.getIntentName())
@@ -1002,6 +1015,10 @@ public class IntentExecutionOrchestrator {
                     .aiMode("WRITE")
                     .executedAt(java.time.LocalDateTime.now())
                     .build();
+            // 选对象类写工具 (报工): 确认卡带上已定下的 taskId / 产量 (形状同 SSE), App 拿它请求 /preview;
+            // 预览照常重绑主体、过本人可报。其它写意图的确认卡不变。
+            choiceResolverTool(intent).ifPresent(tool -> SseStreamingService.attachPreviewParams(confirmCard, request, tool));
+            return confirmCard;
         }
 
         // Approval governs the mutation, not its read-only TCC preview. Keeping
@@ -1622,6 +1639,44 @@ public class IntentExecutionOrchestrator {
             log.error("会话延续失败: sessionId={}, error={}", request.getSessionId(), e.getMessage(), e);
             return null;
         }
+    }
+
+    /** 意图绑的工具是「先选要操作哪一个」那类 (ParameterChoiceResolver, 如报工) 时返回它。 */
+    private Optional<ToolExecutor> choiceResolverTool(AIIntentConfig intent) {
+        if (intent == null || intent.getToolName() == null || intent.getToolName().isBlank()) {
+            return Optional.empty();
+        }
+        return toolRegistry.getExecutor(intent.getToolName())
+                .filter(tool -> tool instanceof com.cretas.aims.ai.tool.ParameterChoiceResolver);
+    }
+
+    /**
+     * 写意图缺「要操作哪一个」: 在通用缺参追问 (3.6 Slot Filling) 与 W0 写确认之前先列本人可选的
+     * ({@link ToolDispatchService#askWhichOneBeforeWriteGuard}, 与流式 7a.6、预览同一个出口)。
+     * 普通入口这时还没抽过参, 由那里抽 (产量保留)。返回 null = 不需要 / 只有一个已带出, 原流程继续。
+     */
+    private IntentExecuteResponse askWhichOneBeforeWriteGuard(String factoryId, IntentExecuteRequest request,
+                                                             AIIntentConfig intent, Long userId, String userRole) {
+        if (Boolean.TRUE.equals(request.getPreviewOnly())
+                || writeGuardService.isConfirmed(request.getContext() != null ? request.getContext() : Map.of())) {
+            return null;
+        }
+        Optional<ToolExecutor> tool = choiceResolverTool(intent);
+        if (tool.isEmpty() || !(writeGuardService.isWriteIntent(intent) || writeGuardService.isWriteTool(tool.get()))) {
+            return null;
+        }
+        IntentExecuteResponse asked;
+        try {
+            asked = toolDispatchService.askWhichOneBeforeWriteGuard(
+                    tool.get(), factoryId, request, intent, userId, userRole, true);
+        } catch (RuntimeException e) {
+            log.warn("列可选对象失败, 照原流程: intentCode={}, error={}", intent.getIntentCode(), e.getMessage());
+            return null;
+        }
+        if (asked != null) {
+            applyAiModeStamp(asked, intent, intent.getToolName());
+        }
+        return asked;
     }
 
     /** 续轮补齐的意图若是写意图且绑了工具, 返回那个工具 (并参与 previewParams 用); 读意图 / 无工具 → empty。 */
