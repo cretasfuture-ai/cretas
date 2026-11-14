@@ -615,17 +615,17 @@ defineExpose({ hasUnsavedRows });
     <!-- Header -->
     <div style="padding:0 4px 12px;flex-shrink:0;display:flex;align-items:flex-start;justify-content:space-between;gap:12px">
       <div>
-        <div style="font-size:15px;font-weight:600;color:#303133">
+        <div style="font-size:15px;font-weight:600;color:var(--cs-text)">
           逐工序报工
-          <span v-if="displayProductName" data-testid="process-sheet-product-name" style="font-weight:400;color:#606266;margin-left:8px">{{ displayProductName }}</span>
-          <span v-if="plannedQuantity" style="font-size:12px;color:#909399;margin-left:8px">
+          <span v-if="displayProductName" data-testid="process-sheet-product-name" style="font-weight:400;color:var(--cs-muted);margin-left:8px">{{ displayProductName }}</span>
+          <span v-if="plannedQuantity" style="font-size:12px;color:var(--cs-muted);margin-left:8px">
             {{ formatWorkflowPlannedOutput(plannedQuantity, plannedUnit, terminalWorkflowOutput) }}
             <el-tooltip content="计划成品数量按产品单位记录；首道投料数量以逐工序报工和配方出成率为准" placement="top">
               <span style="margin-left:3px;cursor:help">?</span>
             </el-tooltip>
           </span>
         </div>
-        <div style="font-size:12px;color:#909399;margin-top:4px">
+        <div style="font-size:12px;color:var(--cs-muted);margin-top:4px">
           每行独立保存 · 保存后自动生成批次号 · 可随时追加
         </div>
       </div>
@@ -656,7 +656,7 @@ defineExpose({ hasUnsavedRows });
       <el-collapse v-model="yieldOverviewActive" style="flex-shrink:0;margin-bottom:8px">
       <el-collapse-item name="yield">
         <template #title>
-          <span style="font-size:12px;font-weight:600;color:#606266">双出成率总览 — 全工序（对上工序 / 对原料）</span>
+          <span style="font-size:12px;font-weight:600;color:var(--cs-muted)">双出成率总览 — 全工序（对上工序 / 对原料）</span>
         </template>
         <YieldCardTable ref="yieldCardRef" :factory-id="factoryId" :plan-id="planId" />
       </el-collapse-item>
@@ -747,7 +747,7 @@ defineExpose({ hasUnsavedRows });
             </section>
           <!-- 半成品库存 — full width below the grid -->
           <aside class="process-entry-inventory" :aria-label="`${proc.label} 半成品库存`">
-            <div style="font-size:12px;font-weight:600;color:#606266;margin-bottom:6px">
+            <div style="font-size:12px;font-weight:600;color:var(--cs-muted);margin-bottom:6px">
               {{ proc.label }} 半成品库存
             </div>
             <InventoryTable
@@ -789,10 +789,10 @@ defineExpose({ hasUnsavedRows });
   justify-content: space-between;
   gap: 12px;
   padding: 8px 12px;
-  border: 1px solid #dcdfe6;
+  border: 1px solid var(--cs-border);
   border-radius: 8px;
   background: #f8fbff;
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 12px;
 }
 .process-entry-context > div {
@@ -801,7 +801,7 @@ defineExpose({ hasUnsavedRows });
   flex-wrap: wrap;
   gap: 8px;
 }
-.process-entry-context strong { color: #303133; }
+.process-entry-context strong { color: var(--cs-text); }
 .process-flow-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1fr) 24px minmax(0, 1fr);
@@ -818,25 +818,25 @@ defineExpose({ hasUnsavedRows });
   border-radius: 10px;
   background: #fff;
 }
-.process-flow-node--input { border-left: 4px solid #409eff; }
-.process-flow-node--process { border-left: 4px solid #e6a23c; }
-.process-flow-node--output { border-left: 4px solid #67c23a; }
+.process-flow-node--input { border-left: 4px solid var(--cs-primary); }
+.process-flow-node--process { border-left: 4px solid var(--cs-warning); }
+.process-flow-node--output { border-left: 4px solid var(--cs-success); }
 .process-flow-node strong {
   overflow: hidden;
-  color: #303133;
+  color: var(--cs-text);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.process-flow-node small { color: #909399; font-size: 11px; }
+.process-flow-node small { color: var(--cs-muted); font-size: 11px; }
 .process-flow-kicker {
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 11px;
   font-weight: 600;
 }
 .process-flow-arrow {
   align-self: center;
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 18px;
   text-align: center;
 }
@@ -850,7 +850,7 @@ defineExpose({ hasUnsavedRows });
 .process-entry-inventory { min-width: 0; }
 .process-entry-inventory {
   padding: 12px;
-  border: 1px solid #ebeef5;
+  border: 1px solid var(--cs-border);
   border-radius: 8px;
   background: #fff;
 }

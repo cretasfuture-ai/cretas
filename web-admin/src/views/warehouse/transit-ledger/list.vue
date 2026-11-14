@@ -320,7 +320,7 @@ watch(factoryId, (v) => {
         <el-empty description="暂无中转挂账记录">
           <template #description>
             <p>当生产报工与仓库实收数量出现超容差差异时，系统将在此生成挂账记录。</p>
-            <p style="color: #909399; font-size: 12px;">容差范围（默认 10kg）内的差异不产生挂账。</p>
+            <p style="color: var(--cs-muted); font-size: 12px;">容差范围（默认 10kg）内的差异不产生挂账。</p>
           </template>
         </el-empty>
       </div>
@@ -341,13 +341,13 @@ watch(factoryId, (v) => {
   margin: 0 0 4px;
   font-size: 20px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
 }
 
 .page-subtitle {
   margin: 0;
   font-size: 13px;
-  color: #606266;
+  color: var(--cs-muted);
 }
 
 .summary-card .summary-item {
@@ -358,17 +358,17 @@ watch(factoryId, (v) => {
 
 .summary-label {
   font-size: 13px;
-  color: #606266;
+  color: var(--cs-muted);
 }
 
 .summary-value {
   font-size: 24px;
   font-weight: 700;
-  color: #303133;
+  color: var(--cs-text);
 }
 
-.summary-value.warning { color: #e6a23c; }
-.summary-value.success { color: #67c23a; }
+.summary-value.warning { color: var(--cs-warning); }
+.summary-value.success { color: var(--cs-success); }
 
 .filter-card :deep(.el-card__body) {
   padding: 12px 16px;
@@ -380,7 +380,7 @@ watch(factoryId, (v) => {
 }
 
 .text-danger {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 

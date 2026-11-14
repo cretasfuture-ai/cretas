@@ -266,12 +266,12 @@ onMounted(() => {
   .page-title {
     font-size: 16px;
     font-weight: 600;
-    color: #303133;
+    color: var(--cs-text);
   }
 
   .hint {
     font-size: 13px;
-    color: #909399;
+    color: var(--cs-muted);
   }
 }
 
@@ -289,7 +289,7 @@ onMounted(() => {
 
   label {
     font-size: 13px;
-    color: #606266;
+    color: var(--cs-muted);
     white-space: nowrap;
   }
 }
@@ -308,20 +308,20 @@ onMounted(() => {
 
 .summary-label {
   font-size: 13px;
-  color: #909399;
+  color: var(--cs-muted);
 }
 
 .summary-value {
   font-size: 22px;
   font-weight: 600;
-  color: #303133;
+  color: var(--cs-text);
 
   &.strong-blue {
-    color: #409eff;
+    color: var(--cs-primary);
   }
 
   &.strong-green {
-    color: #67c23a;
+    color: var(--cs-success);
   }
 }
 </style>
