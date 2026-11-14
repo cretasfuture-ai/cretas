@@ -106,7 +106,7 @@ class WorkflowProcessParamMaterializerContractTest {
         field.put("key", "oil");
         field.put("label", "油温");
         field.put("type", "number");
-        field.put("enabled", false);
+        field.put("enabled", true);
         field.put("unit", "度");
         field.put("min", 100);
         field.put("max", 120);
@@ -118,6 +118,25 @@ class WorkflowProcessParamMaterializerContractTest {
         verify(repository, never()).save(any());
         assertEquals(100, field.get("min"), "别人配好的字段不被改");
         assertEquals("度", field.get("unit"));
+    }
+
+    @Test
+    void aDisabledSameNameFieldBlocksPublishInsteadOfBeingSilentlySkipped() {
+        Map<String, Object> disabled = new LinkedHashMap<>();
+        disabled.put("key", "oil");
+        disabled.put("label", "油温");
+        disabled.put("type", "number");
+        disabled.put("enabled", false);
+        when(repository.findByFactoryIdAndId("F006", "WP-CHAO"))
+                .thenReturn(Optional.of(process(new ArrayList<>(List.of(disabled)))));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> materializer.materialize("F006", definition(List.of(oilTemp()))));
+        assertEquals(409, e.getCode());
+        assertEquals(WorkflowProcessParamMaterializer.FIELD_DISABLED, e.getErrorCode());
+        assertTrue(e.getMessage().contains("已停用"), e.getMessage());
+        verify(repository, never()).save(any());
+        assertEquals(false, disabled.get("enabled"), "不替人重新启用");
     }
 
     @Test

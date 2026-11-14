@@ -31,6 +31,7 @@ import java.util.Optional;
  *
  * <ul>
  *   <li>按 label 匹配已有字段。已有同名数字字段 → 不动(不改别人的字段, 也不覆盖它的单位/标准)。</li>
+ *   <li>已有同名但已停用的数字字段 → 409(不静默放过, 也不替人重新启用)。</li>
  *   <li>已有同名但不是数字的字段 → 409, 不能把它改成数字(会让历史报工值失效)。</li>
  *   <li>幂等: 字段已存在就不再补; 重复发布不会重复。</li>
  *   <li>全部判定通过之后才写库, 任何一项 409 都不会留下半截 schema。</li>
@@ -44,6 +45,7 @@ import java.util.Optional;
 public class WorkflowProcessParamMaterializer {
 
     public static final String TYPE_CONFLICT = "WORKFLOW_PROCESS_PARAM_TYPE_CONFLICT";
+    public static final String FIELD_DISABLED = "WORKFLOW_PROCESS_PARAM_FIELD_DISABLED";
 
     private final WorkProcessRepository repository;
 
@@ -78,6 +80,13 @@ public class WorkflowProcessParamMaterializer {
                         .filter(f -> label.equals(String.valueOf(f.get("label")).trim()))
                         .findFirst().orElse(null);
                 if (field != null) {
+                    if (Boolean.FALSE.equals(field.get("enabled"))) {
+                        // 已停用的同名字段: 报工页不会给输入框, 画布标准也判不到; 不静默放过, 也不替人重新启用
+                        throw new BusinessException(409, "工序「" + processName(node) + "」里同名字段「" + label
+                                + "」已停用, 报工页没有这个参数的输入框")
+                                .withCode(FIELD_DISABLED)
+                                .withHint("到工序管理页重新启用该字段, 或给画布上的工艺参数改个名字后再发布");
+                    }
                     if (!"number".equals(String.valueOf(field.get("type")).trim())) {
                         throw new BusinessException(409, "工序「" + processName(node) + "」已有同名字段「" + label
                                 + "」且不是数字类型, 不能作为工艺参数")

@@ -109,6 +109,17 @@ class YieldReportProductStandardsContractTest {
         assertThat(r.getCustomFields()).doesNotContainKey("paramChecks");
     }
 
+    @Test
+    @DisplayName("租户隔离: 任务指向的实例若不属于本工厂, 它的画布标准不得被采用 (按旧标准判)")
+    void anInstanceOfAnotherFactoryIsNeverUsed() {
+        // 别的工厂的实例里画布标准是 100-120: 若被误采用, 165℃ 会判 HIGH; 本工厂旧标准 100-200 下是 OK
+        WorkProcessTask foreign = taskOn("PT-X", "[" + node("process:1", fry.getId(), "油温", 100, 120) + "]",
+                "YPS-OTHER-FACTORY");
+        assertThat(statusOf(foreign, "oilTemp", 165)).isEqualTo("OK");
+        // 阳性对照: 同样的画布放在本工厂的实例里就会采用 → HIGH
+        assertThat(statusOf(taskB, "oilTemp", 165)).isEqualTo("HIGH");
+    }
+
     // ---------- helpers ----------
 
     @SuppressWarnings("unchecked")
@@ -155,12 +166,16 @@ class YieldReportProductStandardsContractTest {
 
     /** 一个产品 = 一个批次 + 一个运行时实例(锁定的画布快照) + 一个指向该实例节点的工序任务。 */
     private WorkProcessTask taskOn(String productTypeId, String nodesJson) {
+        return taskOn(productTypeId, nodesJson, F);
+    }
+
+    private WorkProcessTask taskOn(String productTypeId, String nodesJson, String instanceFactoryId) {
         ProductionBatch batch = batchRepo.saveAndFlush(ProductionBatch.builder()
                 .factoryId(F).batchNumber("YPS-" + UUID.randomUUID().toString().substring(0, 8))
                 .productTypeId(productTypeId).quantity(new BigDecimal("100")).unit("kg")
                 .status(ProductionBatchStatus.IN_PROGRESS).build());
         ProductionWorkflowInstance instance = instanceRepo.saveAndFlush(ProductionWorkflowInstance.create(
-                F, batch.getId(), productTypeId, 1L, 1, nodesJson, "[]", LocalDateTime.now()));
+                instanceFactoryId, batch.getId(), productTypeId, 1L, 1, nodesJson, "[]", LocalDateTime.now()));
         WorkProcessTask t = new WorkProcessTask();
         t.setFactoryId(F);
         t.setProductionBatchId(batch.getId());
