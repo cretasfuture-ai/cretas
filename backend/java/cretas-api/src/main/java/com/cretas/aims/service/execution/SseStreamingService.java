@@ -699,6 +699,14 @@ public class SseStreamingService {
             }
             prefillWriteToolParameters(factoryId, request, intent);
 
+            // 7a.6 缺「要操作哪一个」(报工缺工序任务): 先列出本人可选的让他选, 再轮到通用缺参追问 ——
+            //      否则 7b 会问「请提供工序任务编号」, 回「1」被当成 taskId=1 (prod 2026-11-14 F006)。
+            //      只有一个时带出来写进 context, 照常往下走, 写操作仍停在 W0 写确认。
+            if (trustedFactoryActor && streamWriteChoiceAsked(emitter, factoryId, request, intent, userId, userRole,
+                    startTime)) {
+                return;
+            }
+
             // 7b. Slot Filling
             if (trustedFactoryActor && !Boolean.TRUE.equals(request.getSkipSlotFilling())
                     && slotFillingService != null) {
@@ -1527,6 +1535,42 @@ public class SseStreamingService {
         extracted.forEach(context::putIfAbsent);
         request.setContext(com.cretas.aims.ai.tool.WriteGuardService.withoutCallerConfirmation(context));
         log.info("[SSE] 写意图抽参: intentCode={}, keys={}", intent.getIntentCode(), extracted.keySet());
+    }
+
+    /**
+     * 7a.6: 写意图缺「要操作哪一个」时先列选项 (见 {@link ToolDispatchService#askWhichOneBeforeWriteGuard})。
+     * 抽参已在 7a.5 做过, 这里不再抽。
+     *
+     * @return true 表示已经流出响应 (选项 / 没有可选的), 调用方必须就地 return
+     */
+    private boolean streamWriteChoiceAsked(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                           AIIntentConfig intent, Long userId, String userRole, long startTime)
+            throws IOException {
+        String toolName = intent.getToolName();
+        if (toolName == null || toolName.isBlank() || writeGuardService == null
+                || Boolean.TRUE.equals(request.getPreviewOnly())) {
+            return false;
+        }
+        Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
+        if (tool.isEmpty() || !(writeGuardService.isWriteTool(tool.get()) || writeGuardService.isWriteIntent(intent))) {
+            return false;
+        }
+        IntentExecuteResponse asked;
+        try {
+            asked = toolDispatchService.askWhichOneBeforeWriteGuard(
+                    tool.get(), factoryId, request, intent, userId, userRole, false);
+        } catch (RuntimeException e) {
+            log.warn("[SSE] 列可选对象失败, 交给 Slot Filling: intentCode={}, error={}",
+                    intent.getIntentCode(), e.getMessage());
+            return false;
+        }
+        if (asked == null) {
+            return false;
+        }
+        log.info("[SSE] 写意图缺要操作的对象, 列出可选项: intentCode={}, status={}, session={}",
+                intent.getIntentCode(), asked.getStatus(), asked.getSessionId());
+        streamTerminalResponse(emitter, asked, startTime);
+        return true;
     }
 
     /** 主体键与确认类键不随确认卡带去预览 (预览端会按 JWT 重新绑定, 这里也不给它们出门的机会)。 */
