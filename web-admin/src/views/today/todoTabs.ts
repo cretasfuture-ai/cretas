@@ -9,7 +9,7 @@ export const TODO_TABS: TodoTab[] = [
     reason: '本页签依赖数字班组（数字员工出预览、等有权限的人确认），数字班组在 P8 才上线，所以现在没有数据来源，不显示数量。',
   },
   { id: 'work', label: '业务待办', sources: ['risk', 'expiry', 'receiving', 'unordered', 'salesOrders'] },
-  { id: 'assigned', label: '指派给我', sources: ['assigned'] },
+  { id: 'assigned', label: '指派给我', sources: ['issueTodo', 'assigned'] },
   { id: 'approve', label: '待我审批', sources: ['approve'] },
   { id: 'mine', label: '我发起的', sources: ['mine'] },
   { id: 'cc', label: '抄送与已处理', sources: ['copied', 'acted'] },
