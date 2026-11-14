@@ -65,6 +65,9 @@ public final class FlywheelReactionRules {
         }
         List<String> candidates = prevCandidates == null ? List.of() : prevCandidates;
         if (clarify) {
+            if (cur.getInputKind() == InputKind.FOLLOWUP) {
+                return new Verdict(Reaction.ANSWERED_CLARIFICATION, null);   // 程序带着参数续上了 (补参 / 参数确认)
+            }
             if (cur.getInputKind() == InputKind.BUTTON) {
                 int idx = candidates.indexOf(cur.getRequestedIntentCode());
                 return idx >= 0 ? new Verdict(Reaction.OPTION_SELECTED, idx + 1)

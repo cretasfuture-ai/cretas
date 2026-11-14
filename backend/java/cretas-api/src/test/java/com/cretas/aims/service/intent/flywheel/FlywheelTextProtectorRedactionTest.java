@@ -49,6 +49,7 @@ class FlywheelTextProtectorRedactionTest {
             when(master.findSupplierNames(f)).thenReturn(List.of("鲜禽供应站"));
             when(master.findProductNames(f)).thenReturn(List.of("卤鸭腿", "酱牛肉"));
             when(people.findPeopleNames(f)).thenReturn(List.of("王小明"));
+            when(master.findIngredientNames(f)).thenReturn(List.of("八角", "桂皮", "盐"));
         }
         when(features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(anyString(), eq(FlywheelTextProtector.OPTIONS_MODULE)))
                 .thenReturn(Optional.empty());
@@ -112,11 +113,46 @@ class FlywheelTextProtectorRedactionTest {
     }
 
     @Test
-    void pricesAndProcessParametersAreMaskedButOrdinaryBusinessWordsStay() {
+    void pricesAndProcessValuesBecomeTypedPlaceholdersButOrdinaryBusinessWordsStay() {
         String out = protector.protect(SECRET, "s2",
                 "老样子，加急，卤鸭腿单价18.5，杀菌温度121度，油温180℃，二十块一斤").exportInput();
 
-        assertThat(out).isEqualTo("老样子，加急，卤鸭腿单价<价格>，杀菌温度<参数>度，油温<参数>℃，<价格>块一斤");
+        assertThat(out).isEqualTo("老样子，加急，卤鸭腿单价<价格1>，杀菌温度<温度1>，油温<温度2>，<价格2>一斤");
+    }
+
+    /** 阳性 (保密厂: 原值不在导出里, 说法骨架还在) + 阳性对照 (保密关的厂原样)。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "卤水里八角放5克、桂皮3克|卤水里<配料1>放<用量1>、<配料2><用量2>|5克,3克,八角,桂皮",
+            "鸭腿炸到180就捞出来|鸭腿炸到<温度>就捞出来|180",
+            "先卤45分钟再焖两个小时|先卤<时长1>再焖<时长2>|45,两个小时",
+            "盐3%|<配料><比例>|3%,盐",
+            "盐放百分之三|<配料>放<比例>|百分之三",
+            "一斤12|一斤<价格>|12",
+            "12一斤|<价格>一斤|12",
+            "每斤12，明天开始|每斤<价格>，明天开始|12",
+            "价格调到12|价格调到<价格>|12",
+            "这批按15卖不行，卖16|这批按<价格1>卖不行，卖<价格2>|15,16",
+            "15/斤|<价格>/斤|15",
+            "¥ 12 一份|<价格> 一份|12",
+            "糖度12，中心温度75|糖度<参数>，中心温度<温度>|75"
+    })
+    void secretFactoryMasksRecipeProcessAndPriceValuesAndKeepsThePhrasing(String said, String expected, String gone) {
+        String out = protector.protect(SECRET, "v-" + said.hashCode(), said).exportInput();
+
+        assertThat(out).isEqualTo(expected);
+        for (String raw : gone.split(",")) {
+            assertThat(out).doesNotContain(raw);
+        }
+        assertThat(protector.protect(PLAIN, "v-" + said.hashCode(), said).exportInput()).isEqualTo(said);
+    }
+
+    /** 阴性: 普通数量 / 产品名 / 业务说法在保密厂默认不动。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "下五十斤卤鸭腿", "八角到货了", "再来两个人帮忙", "第3车间先停", "老样子，加急", "特价下三箱", "等会儿再说"})
+    void ordinaryQuantitiesAndBusinessPhrasesAreNotTouched(String said) {
+        assertThat(protector.protect(SECRET, "n-" + said.hashCode(), said).exportInput()).isEqualTo(said);
     }
 
     @Test

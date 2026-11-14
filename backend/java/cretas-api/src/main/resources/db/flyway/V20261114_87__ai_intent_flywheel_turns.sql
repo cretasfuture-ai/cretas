@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS ai_intent_flywheel_turns (
     CONSTRAINT uk_aift_turn_id UNIQUE (turn_id),
     CONSTRAINT ck_aift_factory CHECK (btrim(factory_id) <> ''),
     CONSTRAINT ck_aift_entry CHECK (entry IN ('NORMAL', 'STREAM')),
-    CONSTRAINT ck_aift_input_kind CHECK (input_kind IN ('TEXT', 'BUTTON')),
+    CONSTRAINT ck_aift_input_kind CHECK (input_kind IN ('TEXT', 'BUTTON', 'FOLLOWUP')),
     CONSTRAINT ck_aift_secrecy_mode CHECK (secrecy_mode IN ('PLAIN', 'REDACTED', 'TEXT_DROPPED')),
     CONSTRAINT ck_aift_no_raw_when_secret CHECK (secrecy_mode = 'PLAIN' OR (user_input IS NULL AND context_summary IS NULL)),
     CONSTRAINT ck_aift_dropped_no_export CHECK (secrecy_mode <> 'TEXT_DROPPED'

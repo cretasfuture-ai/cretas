@@ -76,6 +76,13 @@ public class FlywheelTextProtector {
 
     static final String CIPHER_PREFIX = "v1:";
 
+    /**
+     * 配方 / 工艺参数 (用量、比例、温度、时长、参数) 是否在<b>保密关的厂</b>也脱敏。⏳ 待 Steve 定 (10-24 TrainingConsentService
+     * 注释写「配方和工艺参数任何工厂都不存」, 11-14 口径是保密关的厂原文进); 现按 11-14 口径 false (保密关的厂原样)。
+     * 定了要更严就改成 true, 一处生效。
+     */
+    static final boolean RECIPE_IN_ALL_FACTORIES = false;
+
     enum Kind {
         CUSTOMER("客户"), SUPPLIER("供应商"), PRODUCT("产品"), PERSON("人员");
         final String label;
@@ -93,15 +100,6 @@ public class FlywheelTextProtector {
     static final int MIN_CORE = 3;
 
     static final String HAN = "\\u4e00-\\u9fa5";
-    static final String CN_DIGITS = "零〇一二三四五六七八九十百千万两";
-    static final Pattern NUMBER = Pattern.compile(
-            "(?<![A-Za-z0-9.．])[0-9０-９]+(?:[.．][0-9０-９]+)?|[" + CN_DIGITS + "]+(?:点[" + CN_DIGITS + "]+)?|半");
-    static final List<String> PRICE_UNITS_AFTER = List.of("元", "块钱", "块", "毛", "角", "RMB", "rmb");
-    static final List<String> QUANTITY_UNITS = List.of(
-            "公斤", "千克", "kg", "KG", "Kg", "斤", "两", "克", "g", "吨", "箱", "件", "袋", "包", "盒", "个", "只",
-            "桶", "瓶", "份", "托", "筐", "板", "条", "根", "罐", "车", "批", "L", "升", "毫升", "ml");
-    static final List<String> PARAM_UNITS_AFTER = List.of("℃", "°C", "°c", "度C");
-    static final int PARAM_WINDOW = 8;
     /** 像称呼 / 单位名但名单里没有: 不替换, 只计数。 */
     static final Pattern NAME_LIKE = Pattern.compile(
             "[老小阿][" + surnames() + "]家|(?<![" + HAN + "])[" + surnames() + "]记|(?<![" + HAN + "])["
@@ -205,7 +203,8 @@ public class FlywheelTextProtector {
             }
             String out = replaceNames(input, dictionary, sessionKey, stats);
             out = maskPrivacy(out, stats);
-            out = maskValues(out, options.redactQuantities(), stats);
+            out = FlywheelValueMasker.mask(out, new FlywheelValueMasker.Scope(true, true, options.redactQuantities()),
+                    ingredients(factoryId), stats);
             countUnmatched(out, stats);
             return new Protected(SecrecyMode.REDACTED, null, out, cipher, stats, notKept);
         } catch (RuntimeException e) {
@@ -223,6 +222,10 @@ public class FlywheelTextProtector {
             Map<String, Kind> dictionary = new LinkedHashMap<>();
             addPeople(dictionary, factoryId);
             export = maskPrivacy(replaceNames(input, dictionary, sessionKey, stats), stats);
+            if (RECIPE_IN_ALL_FACTORIES) {
+                export = FlywheelValueMasker.mask(export, new FlywheelValueMasker.Scope(false, true, false),
+                        ingredients(factoryId), stats);
+            }
         } catch (RuntimeException e) {
             log.warn("[flywheel] 人名名单查不出, 本条不出导出文本: factory={}, reason={}",
                     factoryId, e.getClass().getSimpleName());
@@ -247,6 +250,16 @@ public class FlywheelTextProtector {
                     factoryId, e.getClass().getSimpleName());
             return Options.FAIL_CLOSED;
         }
+    }
+
+    private List<String> ingredients(String factoryId) {
+        List<String> out = new ArrayList<>();
+        for (String n : masterData.findIngredientNames(factoryId)) {
+            if (n != null && !n.isBlank()) {
+                out.add(n.trim());
+            }
+        }
+        return out;
     }
 
     private static boolean truthy(Object v) {
@@ -381,72 +394,6 @@ public class FlywheelTextProtector {
         }
         m.appendTail(sb);
         return sb.toString();
-    }
-
-    /** 价格 → {@code <价格>}; 工艺参数 → {@code <参数>}; 数量 / 重量只在开关开时 → {@code <数量>}; 其余数值不动。 */
-    static String maskValues(String text, boolean quantities, Map<String, Integer> stats) {
-        Matcher m = NUMBER.matcher(text);
-        StringBuilder out = new StringBuilder();
-        int last = 0;
-        while (m.find()) {
-            int start = m.start();
-            int end = m.end();
-            String after = text.substring(end);
-            String before = text.substring(Math.max(0, start - PARAM_WINDOW), start);
-            String placeholder = null;
-            if (startsWithAny(after.stripLeading(), PRICE_UNITS_AFTER) || before.endsWith("¥") || before.endsWith("￥")
-                    || priceBefore(text, start)) {
-                placeholder = "<价格>";
-                bump(stats, "price");
-            } else if (startsWithAny(after.stripLeading(), PARAM_UNITS_AFTER) || paramBefore(before)) {
-                placeholder = "<参数>";
-                bump(stats, "param");
-            } else if (quantities && startsWithAny(after.stripLeading(), QUANTITY_UNITS)) {
-                placeholder = "<数量>";
-                bump(stats, "quantity");
-            }
-            if (placeholder != null) {
-                out.append(text, last, start).append(placeholder);
-                last = end;
-            }
-        }
-        out.append(text.substring(last));
-        return out.toString();
-    }
-
-    /** 「价」字在数值前 3 个字以内 (单价 12 / 价格是 12.5 / 特价 9 块), 中间没有断句。 */
-    private static boolean priceBefore(String text, int start) {
-        String w = text.substring(Math.max(0, start - 3), start);
-        int at = w.lastIndexOf('价');
-        return at >= 0 && noBreak(w.substring(at));
-    }
-
-    private static boolean paramBefore(String window) {
-        for (String marker : TrainingSampleRules.PARAMETER_MARKERS) {
-            int at = window.lastIndexOf(marker);
-            if (at >= 0 && noBreak(window.substring(at))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean noBreak(String s) {
-        for (int i = 0; i < s.length(); i++) {
-            if ("，,。；;！!？?、\n".indexOf(s.charAt(i)) >= 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static boolean startsWithAny(String s, Collection<String> words) {
-        for (String w : words) {
-            if (s.startsWith(w)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     static void countUnmatched(String exported, Map<String, Integer> stats) {

@@ -97,7 +97,7 @@ public class IntentFlywheelRecorder {
     public long droppedCount() { return dropped.get(); }
 
     /** 一轮在本线程上要记的东西 (入口线程上取快照, 后台线程上处理)。 */
-    record Draft(Entry entry, String factoryId, Long userId, String sessionId, String userInput,
+    record Draft(Entry entry, InputKind inputKind, String factoryId, Long userId, String sessionId, String userInput,
                  String requestedIntentCode, FlywheelDecisionAnalysis.Decision decision, String finalStatus,
                  String responseIntentCode, String confirmDigest, long latencyMs, LocalDateTime at) {
     }
@@ -113,20 +113,29 @@ public class IntentFlywheelRecorder {
             if (factoryId == null || factoryId.isBlank() || request == null) {
                 return;     // 没有工厂就没有可判的保密开关, 也不知道归谁: 不记 (不是失败)
             }
+            if (DEMO_FACTORIES.contains(factoryId.trim()) || userId == null) {
+                return;     // 公开演示 / 匿名对话不是真实使用, 不进飞轮
+            }
             String requested = blankToNull(request.getIntentCode());
+            InputKind kind = inputKind(request, requested);
             String sessionId = blankToNull(request.getSessionId());
             if (sessionId == null && response != null) sessionId = blankToNull(response.getSessionId());
             String digest = response == null || response.getConfirmableAction() == null ? null
                     : blankToNull(response.getConfirmableAction().getCommandDigest());
-            draft = new Draft(entry, factoryId, userId, sessionId, request.getUserInput(), requested,
-                    FlywheelDecisionAnalysis.analyse(turn, requested),
+            FlywheelDecisionAnalysis.Decision decision = FlywheelDecisionAnalysis.analyse(turn, requested);
+            if (kind == InputKind.FOLLOWUP) {
+                decision = new FlywheelDecisionAnalysis.Decision(FOLLOWUP_SOURCE, decision.path(), decision.action(),
+                        decision.intentCode(), decision.confidence(), decision.candidates(), decision.optionSetHash());
+            }
+            draft = new Draft(entry, kind, factoryId, userId, sessionId, request.getUserInput(), requested,
+                    decision,
                     response == null || response.getStatus() == null ? "UNKNOWN" : response.getStatus(),
                     response == null ? null : blankToNull(response.getIntentCode()),
                     digest, Math.max(0, latencyMs), LocalDateTime.now());
         } catch (RuntimeException e) {
             count("failed");
             failed.incrementAndGet();
-            log.warn("[flywheel] 准备记录失败 (不影响回答): factory={}, reason={}", factoryId, e.toString());
+            log.warn("[flywheel] 准备记录失败 (不影响回答): factory={}, reason={}", factoryId, errorKind(e));
             return;
         }
         submit(() -> persist(draft), factoryId);
@@ -155,7 +164,7 @@ public class IntentFlywheelRecorder {
             } catch (RuntimeException e) {
                 failed.incrementAndGet();
                 count("failed");
-                log.warn("[flywheel] 写记录失败 (不影响回答): factory={}, reason={}", factoryId, e.toString());
+                log.warn("[flywheel] 写记录失败 (不影响回答): factory={}, reason={}", factoryId, errorKind(e));
             }
         };
         if (synchronous) {
@@ -185,7 +194,7 @@ public class IntentFlywheelRecorder {
         t.setUserId(d.userId());
         t.setSessionId(d.sessionId());
         t.setEntry(d.entry());
-        t.setInputKind(d.requestedIntentCode() == null ? InputKind.TEXT : InputKind.BUTTON);
+        t.setInputKind(d.inputKind());
         t.setCatalogVersion(FlywheelDecisionAnalysis.CATALOG_VERSION);
         t.setOptionSetHash(clip(d.decision().optionSetHash(), 80));
         t.setSecrecyMode(p.mode());
@@ -196,7 +205,9 @@ public class IntentFlywheelRecorder {
             t.setContextSummary(contextSummary(recent, false));
         }
         if (p.mode() != SecrecyMode.TEXT_DROPPED) {
-            t.setContextExport(contextSummary(recent, true));
+            // 保密厂的上下文只能由已脱敏的前几轮拼: 前几轮写入时还是 PLAIN (中途开了保密) 的不抄它的导出列
+            t.setContextExport(contextSummary(p.mode() == SecrecyMode.PLAIN ? recent
+                    : recent.stream().filter(r -> r.getSecrecyMode() == SecrecyMode.REDACTED).toList(), true));
         }
         t.setRequestedIntentCode(clip(d.requestedIntentCode(), 100));
         t.setDecisionSource(d.decision().source());
@@ -299,6 +310,71 @@ public class IntentFlywheelRecorder {
                 meterRegistry.counter(METRIC_REACTIONS, "reaction", r.name()).increment();
             } catch (RuntimeException ignored) {
                 // 计数失败不影响记录
+            }
+        }
+    }
+
+    static final java.util.Set<String> DEMO_FACTORIES = java.util.Set.of("F_DEMO");
+    /** 确认入口这些状态才算「确认后办成了」。 */
+    public static final java.util.Set<String> CONFIRMED_STATUSES = java.util.Set.of("COMPLETED", "SUCCESS");
+    static final String FOLLOWUP_SOURCE = "FOLLOWUP";
+
+    /**
+     * BUTTON = 用户点了一个意图按钮; FOLLOWUP = 程序带着意图续上一步 (参数确认后执行 / 强制执行 / 跳过补槽 / 带了参数),
+     * 不是用户的选择, 不能当「点了哪个候选」训练。
+     */
+    static InputKind inputKind(IntentExecuteRequest request, String requested) {
+        if (requested == null) {
+            return InputKind.TEXT;
+        }
+        boolean programmatic = Boolean.TRUE.equals(request.getForceExecute())
+                || Boolean.TRUE.equals(request.getSkipSlotFilling())
+                || (request.getContext() != null && !request.getContext().isEmpty());
+        return programmatic ? InputKind.FOLLOWUP : InputKind.BUTTON;
+    }
+
+    /** 日志只带错误类型 / 约束名, 不带整行 (异常消息里可能有原文)。 */
+    static String errorKind(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String constraint = null;
+        if (root.getMessage() != null) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(ck_aift_[a-z_]+|uk_aift_[a-z_]+)").matcher(root.getMessage());
+            if (m.find()) {
+                constraint = m.group(1);
+            }
+        }
+        return e.getClass().getSimpleName() + (root != e ? "/" + root.getClass().getSimpleName() : "")
+                + (constraint == null ? "" : " constraint=" + constraint);
+    }
+
+    /** 进程退出: 最多等 5 秒写完队列; 没写完的计入 dropped。 */
+    @jakarta.annotation.PreDestroy
+    void shutdown() {
+        executor.shutdown();
+        try {
+            if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
+                int left = executor.shutdownNow().size();
+                dropped.addAndGet(left);
+                count("dropped", left);
+                log.warn("[flywheel] 退出时 {} 条记录没写完, 计入 dropped", left);
+            }
+        } catch (InterruptedException e) {
+            int left = executor.shutdownNow().size();
+            dropped.addAndGet(left);
+            count("dropped", left);
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private void count(String result, int n) {
+        if (meterRegistry != null && n > 0) {
+            try {
+                meterRegistry.counter(METRIC_TURNS, "result", result).increment(n);
+            } catch (RuntimeException ignored) {
+                // 计数失败不影响
             }
         }
     }

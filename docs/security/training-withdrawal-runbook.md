@@ -68,6 +68,8 @@ sudo -u postgres psql -d cretas_prod_db -tA -c \
 留给人工复核，也不会进训练。撤回标记设上以后，重判任务放行前会再查一次授权，撤回的不会再写进样本表；
 表里剩下的（PENDING 和 REJECTED 都算）仍要按本节删掉。
 `ai_intent_flywheel_turns`（Flyway V20261114_87，意图飞轮）每轮对话一条：保密关的厂存原文，保密厂只存脱敏导出与原文密文；撤回时整厂删。
+⚠️ 这张表**目前不受撤回止血控制**（Steve 2026-11-14 定暂缓）：撤回标记设上以后，飞轮记录器照样写、导出脚本 `intent_flywheel_export.py` 照样导出该厂。
+撤回工单里必须手工删这张表，并在交给训练前把撤回工厂从导出里剔掉，直到专门的修复上线。
 SmartBI 蒸馏样本里重判没过的行同理：带 `secrecy_rejected` 标记保留（只记原因、名单版本、时间，不带原文）、导出和训练都排除，撤回时随 `smart_bi_distillation_samples` 一起删；挂起行（`secrecy_recheck`，标记里带原文）过 7 天由采集路径顺手删掉。
 
 另外确认两件事并记入工单：

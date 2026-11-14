@@ -208,6 +208,59 @@ class IntentFlywheelEntryRepositoryQueryValidationTest {
     }
 
     @Test
+    void failedConfirmationDoesNotMarkTheTurnConfirmed() {
+        recognition.set(clarify());
+        answer.set(IntentExecuteResponse.builder().status("WRITE_CONFIRM_REQUIRED")
+                .confirmableAction(IntentExecuteResponse.ConfirmableAction.builder().commandDigest("dg-43").build()).build());
+        entry.execute(SECRET, request(SENTENCE, null, "sess-5"), 7L, "sales");
+        when(orchestrator.confirm(anyString(), any(ConfirmationProof.class), any(), any()))
+                .thenReturn(IntentExecuteResponse.builder().status("FAILED").build());
+
+        entry.confirm(SECRET, new ConfirmationProof("tok", "dg-43", Instant.now().plusSeconds(60)), 7L, "sales");
+
+        assertThat(only(SECRET).getReaction()).isNull();
+    }
+
+    @Test
+    void secretTurnContextIsBuiltOnlyFromRedactedTurnsEvenIfTheFactoryTurnedSecretMidSession() {
+        // 先是保密关 (PLAIN) 的一轮, 原话带客户名
+        recognition.set(clarify());
+        answer.set(IntentExecuteResponse.builder().status("NEED_CLARIFICATION").build());
+        entry.execute(PLAIN, request(SENTENCE, null, "sess-6"), 7L, "sales");
+        // 工厂中途开了保密
+        em.persist(FactorySecrecySetting.builder().factoryId(PLAIN).itemCode(SecrecyItem.EGRESS_REDACTION.name())
+                .enabled(true).updatedAt(LocalDateTime.now()).updatedBy(1L).build());
+        em.flush();
+        protector.setFactorySecrecyConfig(new FactorySecrecyConfig(secrecySettings, null));   // 新实例: 不吃 10 秒缓存
+
+        entry.execute(PLAIN, request("再加十斤", null, "sess-6"), 7L, "sales");
+
+        List<IntentFlywheelTurn> rows = turns.findAll().stream().filter(t -> PLAIN.equals(t.getFactoryId()))
+                .sorted((a, b) -> Long.compare(a.getId(), b.getId())).toList();
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(1).getSecrecyMode()).isEqualTo(IntentFlywheelTurn.SecrecyMode.REDACTED);
+        assertThat(rows.get(1).getContextExport()).isNull();     // 前一轮是 PLAIN: 不抄它的原文导出
+        assertThat(rows.get(1).getContextSummary()).isNull();
+    }
+
+    @Test
+    void programmaticFollowUpIsNotRecordedAsAButtonPickAndDemoFactoryIsNotRecorded() {
+        recognition.set(null);
+        answer.set(IntentExecuteResponse.builder().status("COMPLETED").intentCode("ORDER_CREATE").build());
+        IntentExecuteRequest followUp = request("确认", "ORDER_CREATE", "sess-7");
+        followUp.setForceExecute(true);
+
+        entry.execute(PLAIN, followUp, 7L, "sales");
+        entry.execute("F_DEMO", request("查库存", "MATERIAL_BATCH_QUERY", "demo"), 7L, "viewer");
+        entry.execute(PLAIN, request("匿名一句", null, "sess-8"), null, "sales");
+
+        IntentFlywheelTurn row = only(PLAIN);
+        assertThat(row.getInputKind()).isEqualTo(IntentFlywheelTurn.InputKind.FOLLOWUP);
+        assertThat(row.getDecisionSource()).isEqualTo("FOLLOWUP");
+        assertThat(turns.findAll().stream().filter(t -> "F_DEMO".equals(t.getFactoryId()))).isEmpty();
+    }
+
+    @Test
     void recorderFailureNeverChangesTheAnswerButIsCounted() {
         IntentFlywheelTurnRepository broken = mock(IntentFlywheelTurnRepository.class);
         when(broken.save(any())).thenThrow(new IllegalStateException("db down"));

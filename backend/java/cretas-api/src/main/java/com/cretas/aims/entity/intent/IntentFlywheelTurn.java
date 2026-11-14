@@ -37,8 +37,8 @@ public class IntentFlywheelTurn {
 
     public enum Entry { NORMAL, STREAM }
 
-    /** TEXT = 用户说 / 打的话; BUTTON = 点了一个意图按钮 (请求自带 intentCode)。 */
-    public enum InputKind { TEXT, BUTTON }
+    /** TEXT = 用户说 / 打的话; BUTTON = 点了一个意图按钮; FOLLOWUP = 程序带意图续上一步 (参数确认后执行等, 不是用户选择)。 */
+    public enum InputKind { TEXT, BUTTON, FOLLOWUP }
 
     public enum SecrecyMode { PLAIN, REDACTED, TEXT_DROPPED }
 

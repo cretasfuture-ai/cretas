@@ -158,7 +158,9 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
                                           Long userId, String userRole) {
         long startedNanos = System.nanoTime();
         IntentExecuteResponse response = orchestrator.confirm(factoryId, confirmationProof, userId, userRole);
-        if (flywheelRecorder != null && confirmationProof != null) {
+        // 只在确认后真的办成了才回填 CONFIRMED (失败 / 过期 / 被拦的不算)
+        if (flywheelRecorder != null && confirmationProof != null && response != null
+                && IntentFlywheelRecorder.CONFIRMED_STATUSES.contains(response.getStatus())) {
             flywheelRecorder.recordConfirm(factoryId, confirmationProof.commandDigest());
         }
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
@@ -174,6 +176,11 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Override
     public IntentExecuteResponse executeMultiIntent(String factoryId, IntentExecuteRequest request,
                                                      Long userId, String userRole) {
-        return multiIntentExecutionService.executeMultiIntent(factoryId, request, userId, userRole);
+        long startedNanos = System.nanoTime();
+        try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
+            IntentExecuteResponse response = multiIntentExecutionService.executeMultiIntent(factoryId, request, userId, userRole);
+            recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
+            return response;
+        }
     }
 }

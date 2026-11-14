@@ -11,6 +11,14 @@ phone numbers, which are privacy). ``RAW_COLUMNS`` lists them and the self-test 
 not mention them. ``TEXT_DROPPED`` rows (secret factory, name list unreadable at write time) come out
 with ``input: null`` and keep their decision metadata.
 
+Current secrecy: a row is judged by the factory's secrecy switches NOW (``factory_secrecy_settings``, same
+rule as Java: any of a / c / d / e on; factory unknown = on), not by its ``secrecy_mode`` at write time. A
+PLAIN row of a factory that has since turned secret comes out with ``input`` / ``context`` null and
+``textWithheld: secrecy_turned_on_since_write`` (the rules are not re-implemented here: one copy, in Java).
+
+Training withdrawal: NOT applied yet (Steve 2026-11-14: deferred). A withdrawn factory's rows are exported
+like any other; check the training-withdrawal runbook before handing an export to training.
+
 Reaction: the stored value when the next turn / the confirm entry judged it. Rows without one get a
 derived value, marked ``reactionDerived: true`` and never written back:
 
@@ -80,9 +88,49 @@ def derive_reaction(row: Dict[str, Any], now: datetime) -> Tuple[Optional[str], 
     return ("ABANDONED" if asked else "NO_FOLLOWUP"), True
 
 
+TEXT_SECRECY_ITEMS = ("PROCESS_SECRET", "EGRESS_REDACTION", "TRAINING_FILTER", "CUSTOMER_HELD")
+SECRECY_SQL = ("SELECT f.id, s.item_code, s.enabled FROM factories f"
+               " LEFT JOIN factory_secrecy_settings s ON s.factory_id = f.id WHERE f.id = ANY(%(ids)s)")
+
+
+def resolve_secrecy(ids: Sequence[str], rows: Iterable[Tuple[Any, Any, Any]]) -> Dict[str, bool]:
+    """Current secrecy per factory, same rule as Java FlywheelTextProtector.secretFactory: any of a/c/d/e on.
+    No row = default off; factory not in the factories table = on (fail closed, like FactorySecrecyConfig)."""
+    known = set()
+    out: Dict[str, bool] = {}
+    for fid, item, enabled in rows:
+        known.add(fid)
+        out.setdefault(fid, False)
+        if item in TEXT_SECRECY_ITEMS and enabled is True:
+            out[fid] = True
+    for fid in ids:
+        if fid not in known:
+            out[fid] = True
+    return out
+
+
+def current_secrecy(cur, ids: Sequence[str]) -> Dict[str, bool]:
+    if not ids:
+        return {}
+    cur.execute(SECRECY_SQL, {"ids": list(ids)})
+    return resolve_secrecy(ids, cur.fetchall())
+
+
 def to_line(row: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     reaction, derived = derive_reaction(row, now)
     confidence = row.get("confidence")
+    # 导出按「当前」保密开关判: 写入时保密关 (PLAIN)、现在开了保密的厂, 原文导出不能再给出去。
+    # 不在 Python 里另写一套脱敏 (会和 Java FlywheelTextProtector 漂, 形态 D): 文本扣下、标出原因, 决策元数据照出。
+    withheld = row.get("secrecy_mode") == "PLAIN" and row.get("_current_secret", False)
+    if withheld:
+        row = {**row, "user_input_export": None, "context_export": None}
+    line = _line(row, reaction, derived, confidence)
+    if withheld:
+        line["textWithheld"] = "secrecy_turned_on_since_write"
+    return line
+
+
+def _line(row: Dict[str, Any], reaction, derived, confidence) -> Dict[str, Any]:
     return {
         "turnId": row.get("turn_id"),
         "factoryId": row.get("factory_id"),
@@ -126,7 +174,11 @@ def read_rows(conn, since: str, until: Optional[str], factory: Optional[str]) ->
             cur.execute(select_sql(factory is not None, until is not None),
                         {"since": since, "until": until, "factory": factory})
             names = [d[0] for d in cur.description]
-            return [dict(zip(names, r)) for r in cur.fetchall()]
+            rows = [dict(zip(names, r)) for r in cur.fetchall()]
+            secret = current_secrecy(cur, sorted({r["factory_id"] for r in rows if r.get("factory_id")}))
+            for r in rows:
+                r["_current_secret"] = secret.get(r.get("factory_id"), True)
+            return rows
     finally:
         conn.rollback()
 
@@ -169,6 +221,13 @@ def self_test() -> List[str]:
                     "candidates_json": '[{"code":"A"}]', "confidence": 0.5}, now)
     if line["input"] != "给客户A下五十斤卤鸭腿" or line["decision"]["candidates"] != [{"code": "A"}]:
         failures.append(f"to_line mapping wrong: {line}")
+    if resolve_secrecy(["A", "B", "C"], [("A", None, None), ("B", "EGRESS_REDACTION", True)]) != {
+            "A": False, "B": True, "C": True}:
+        failures.append("resolve_secrecy wrong")
+    plain_now_secret = to_line({"turn_id": "t", "secrecy_mode": "PLAIN", "_current_secret": True,
+                                "user_input_export": "给老张家下五十斤", "context_export": "x", "created_at": old}, now)
+    if plain_now_secret["input"] is not None or plain_now_secret["context"] is not None             or plain_now_secret.get("textWithheld") != "secrecy_turned_on_since_write":
+        failures.append(f"PLAIN row of a now-secret factory leaked text: {plain_now_secret}")
     return failures
 
 
@@ -197,7 +256,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for row in rows:
         print(json.dumps(to_line(row, now), ensure_ascii=False))
     summary = {"rows": len(rows), "since": args.since, "until": args.until, "factory": args.factory,
-               "by_secrecy_mode": _count(r.get("secrecy_mode") for r in rows)}
+               "by_secrecy_mode": _count(r.get("secrecy_mode") for r in rows),
+               "text_withheld_secrecy_turned_on": sum(1 for r in rows
+                                                      if r.get("secrecy_mode") == "PLAIN" and r.get("_current_secret"))}
     print(json.dumps(summary, ensure_ascii=False), file=sys.stderr)
     if not rows:
         print(json.dumps({"note": "no row in the window: nothing exported"}), file=sys.stderr)
