@@ -93,7 +93,9 @@ class ProcessTimeLimitServiceContractTest {
         service = new ProcessTimeLimitService(portRepo, taskRepo, mock(WorkProcessRepository.class), batchRepo,
                 planRepo, instanceRepo, reportRepo, semiRepo, txnRepo, materialRepo,
                 mock(FinishedGoodsBatchRepository.class), edgeRepo, markRepo, eventRepo, writer, qcRelease,
-                mock(WarehouseResolver.class), revisionRepo, new com.fasterxml.jackson.databind.ObjectMapper()) {
+                mock(WarehouseResolver.class), revisionRepo, new com.fasterxml.jackson.databind.ObjectMapper(),
+                new com.cretas.aims.service.processentry.IntermediateOwnershipGuard(planRepo, batchRepo,
+                        mock(com.cretas.aims.repository.CustomerRepository.class))) {
             @Override
             protected LocalDateTime now() {
                 return now;
