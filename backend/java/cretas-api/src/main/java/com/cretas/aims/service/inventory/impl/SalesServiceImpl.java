@@ -423,6 +423,30 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.CustomerPriceMemoryService customerPriceMemoryService;
 
+    /**
+     * 编辑订单重建行时的价格来源: 价没变沿用原来源, 变了或原行没有来源/是新增行就记手填。
+     * (item 的 unitPrice 已设好; 报价单行沿用 QUOTE。)
+     */
+    /** 复制订单: 价是原样复制的, 来源也原样带上。 */
+    static void copyPriceSource(SalesOrderItem from, SalesOrderItem to) {
+        to.setPriceSource(from.getPriceSource());
+        to.setPriceRef(from.getPriceRef());
+    }
+
+    static void applyPriceSourceOnUpdate(SalesOrderItem item, SalesOrderItem previous) {
+        if (item.getQuotedGrossUnitPrice() != null) {
+            item.setPriceSource("QUOTE");
+            item.setPriceRef(null);
+        } else if (previous != null && previous.getPriceSource() != null
+                && priceMatches(item.getUnitPrice(), previous.getUnitPrice())) {
+            item.setPriceSource(previous.getPriceSource());
+            item.setPriceRef(previous.getPriceRef());
+        } else {
+            item.setPriceSource("MANUAL");
+            item.setPriceRef(null);
+        }
+    }
+
     /** 前端含税/未税来回折算有舍入, 差 ≤ 0.01 视为同一个价。 */
     private static boolean priceMatches(BigDecimal a, BigDecimal b) {
         return a != null && b != null && a.subtract(b).abs().compareTo(new BigDecimal("0.01")) <= 0;
@@ -774,8 +798,7 @@ public class SalesServiceImpl implements SalesService {
                     priceSource = "MANUAL";
                 }
             }
-            item.setPriceSource(priceSource);
-            item.setPriceRef(priceRef);
+            final BigDecimal priceBeforeStrategy = resolvedUnitPrice;
             // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
             // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
             // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).
@@ -874,6 +897,17 @@ public class SalesServiceImpl implements SalesService {
             item.setUnitPrice(quotedGrossUnitPrice == null ? resolvedUnitPrice
                     : resolvedUnitPrice.setScale(4, java.math.RoundingMode.HALF_UP));
             item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+            // 来源在最终价定下来之后才判: 报价单价 / 被价格策略(促销、阶梯)改过的价, 不能再挂「客户专属价」。
+            if (quotedGrossUnitPrice != null) {
+                priceSource = "QUOTE";
+                priceRef = null;
+            } else if (priceSource != null && !"MANUAL".equals(priceSource)
+                    && !priceMatches(item.getUnitPrice(), priceBeforeStrategy)) {
+                priceSource = "PRICING_STRATEGY";
+                priceRef = null;
+            }
+            item.setPriceSource(priceSource);
+            item.setPriceRef(priceRef);
 
             // ── E-5 毛利红线预警 (W1 追溯矩阵 E-5; 非阻断决策修正 2026-06-10) ──────────────
             // 决策 (SP3 spec §6.3 / SP5 spec §8): 低于红线只"预警"不"卡死"
@@ -2532,6 +2566,7 @@ public class SalesServiceImpl implements SalesService {
                 item.setUnitPrice(quotedGrossUnitPrice == null ? itemDTO.getUnitPrice()
                         : itemDTO.getUnitPrice().setScale(4, java.math.RoundingMode.HALF_UP));
                 item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+                applyPriceSourceOnUpdate(item, previous);
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
                 // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
                 BigDecimal effectiveTaxRateUpdate = itemDTO.getTaxRate();
@@ -2921,6 +2956,7 @@ public class SalesServiceImpl implements SalesService {
             newItem.setUnit(storageUnit(factoryId, srcItem.getUnit()));
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setQuotedGrossUnitPrice(srcItem.getQuotedGrossUnitPrice());
+            copyPriceSource(srcItem, newItem);
             newItem.setDiscountRate(srcItem.getDiscountRate() != null
                     ? srcItem.getDiscountRate() : BigDecimal.ZERO);
             newItem.setCostUnitPrice(srcItem.getCostUnitPrice());

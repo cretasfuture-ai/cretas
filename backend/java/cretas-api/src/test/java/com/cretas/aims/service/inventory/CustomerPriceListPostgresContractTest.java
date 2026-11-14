@@ -170,6 +170,19 @@ class CustomerPriceListPostgresContractTest {
             // 5) 产品不属于本工厂 → 拒绝
             assertThrows(RuntimeException.class,
                     () -> tx.execute(s -> service.upsert("F1", "C-A", 7L, "P-OTHER", BigDecimal.ONE)));
+
+            // 6) 审查中2: 客户只有一张【已过期】专属表时, 改价不能去改过期行 (开单取不到), 要落到新的生效表
+            jdbc.update("insert into price_lists(id,factory_id,name,customer_id,price_type,effective_from,effective_to)"
+                    + " values ('PL-OLD','F1','旧专属价','C-B','SELLING_PRICE',?,?)", today.minusDays(30), today.minusDays(1));
+            jdbc.update("insert into price_list_items(price_list_id,product_type_id,item_name,standard_price)"
+                    + " values ('PL-OLD','P1','牛肉丸',5.0000)");
+            tx.execute(s -> service.upsert("F1", "C-B", 7L, "P1", new BigDecimal("9.0000")));
+            assertEquals(0, new BigDecimal("5.0000").compareTo(jdbc.queryForObject(
+                    "select standard_price from price_list_items where price_list_id='PL-OLD'", BigDecimal.class)),
+                    "过期表里的行不得被改写");
+            var afterExpired = tx.execute(s -> resolver.resolveForOrder("F1", "C-B", "P1", today)).orElseThrow();
+            assertEquals("CUSTOMER", afterExpired.source(), "保存后开单必须真的带出这个价, 而不是落到统一价");
+            assertEquals(0, new BigDecimal("9.0000").compareTo(afterExpired.price()));
         } finally {
             if (sessionFactory != null) sessionFactory.close();
             if (registry != null) StandardServiceRegistryBuilder.destroy(registry);

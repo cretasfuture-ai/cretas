@@ -66,8 +66,11 @@ public class CustomerPriceListService {
 
         List<PriceList> lists = priceListRepository
                 .findByFactoryIdAndCustomerIdAndPriceTypeOrderByCreatedAtAsc(factoryId, customerId, SELLING_PRICE);
-        // 已有该产品的行 → 就地改价 (无论落在哪张价目表)
+        // 已有该产品的行 → 只改「当前生效」价目表里的 (过期/停用/未生效的表开单取不到, 改了也不会带出)
         for (PriceList pl : lists) {
+            if (!pl.isCurrentlyEffective()) {
+                continue;
+            }
             for (PriceListItem it : priceListItemRepository.findByPriceListIdAndProductTypeId(pl.getId(), productTypeId)) {
                 it.setStandardPrice(standardPrice);
                 priceListItemRepository.save(it);
@@ -75,7 +78,7 @@ public class CustomerPriceListService {
             }
         }
         PriceList target = lists.stream()
-                .filter(l -> DEDICATED_LIST_NAME.equals(l.getName()) && Boolean.TRUE.equals(l.getIsActive()))
+                .filter(l -> DEDICATED_LIST_NAME.equals(l.getName()) && l.isCurrentlyEffective())
                 .findFirst().orElse(null);
         if (target == null) {
             target = new PriceList();

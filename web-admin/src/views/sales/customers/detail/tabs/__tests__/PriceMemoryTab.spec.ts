@@ -89,6 +89,8 @@ describe('priceSourceLabel', () => {
     expect(priceSourceLabel('GLOBAL')).toBe('统一价');
     expect(priceSourceLabel('LAST_DEAL')).toBe('最近成交价');
     expect(priceSourceLabel('MANUAL')).toBe('手填');
+    expect(priceSourceLabel('QUOTE')).toBe('报价单价');
+    expect(priceSourceLabel('PRICING_STRATEGY')).toBe('价格策略调整');
     expect(priceSourceLabel(null)).toBe('未记录');
   });
 });

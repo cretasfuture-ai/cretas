@@ -17,13 +17,15 @@ export interface CustomerPriceItem {
 }
 
 /** 订单行价格来源 (后端 SalesOrderItem.priceSource), null/undefined = 历史单未记录 */
-export type PriceSource = 'CUSTOMER' | 'GLOBAL' | 'LAST_DEAL' | 'MANUAL';
+export type PriceSource = 'CUSTOMER' | 'GLOBAL' | 'LAST_DEAL' | 'MANUAL' | 'QUOTE' | 'PRICING_STRATEGY';
 
 const PRICE_SOURCE_LABELS: Record<string, string> = {
   CUSTOMER: '客户专属价',
   GLOBAL: '统一价',
   LAST_DEAL: '最近成交价',
   MANUAL: '手填',
+  QUOTE: '报价单价',
+  PRICING_STRATEGY: '价格策略调整',
 };
 
 export function priceSourceLabel(source?: string | null): string {
