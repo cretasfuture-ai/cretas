@@ -25,7 +25,8 @@ function qty(v: number | null) {
   return v == null ? '—' : String(v);
 }
 function money(v: number | null) {
-  return v == null ? '—' : `¥${v.toFixed(2)}`;
+  if (v == null) return '—';
+  return v < 0 ? `-¥${(-v).toFixed(2)}` : `¥${v.toFixed(2)}`;
 }
 
 async function load() {

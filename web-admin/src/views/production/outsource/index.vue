@@ -51,7 +51,8 @@ function num(v: number | null | undefined, unit?: string | null) {
   return unit ? `${v} ${unit}` : String(v);
 }
 function money(v: number | null | undefined) {
-  return v == null ? '—' : `¥${v.toFixed(2)}`;
+  if (v == null) return '—';
+  return v < 0 ? `-¥${(-v).toFixed(2)}` : `¥${v.toFixed(2)}`;
 }
 function time(v: string | null | undefined) {
   return v ? v.replace('T', ' ').slice(0, 16) : '—';
@@ -186,7 +187,7 @@ watch(() => route.query.orderId, (q) => {
       </div>
     </el-card>
 
-    <el-drawer v-model="detailVisible" size="860px" :title="detail ? `委外单 ${detail.orderNo} — ${detail.supplierName ?? detail.supplierId}` : '委外单'" @closed="onDrawerClosed">
+    <el-drawer v-model="detailVisible" size="min(1080px, 92vw)" :title="detail ? `委外单 ${detail.orderNo} — ${detail.supplierName ?? detail.supplierId}` : '委外单'" @closed="onDrawerClosed">
       <div v-if="detailError" class="state error" data-testid="outsource-detail-error">
         {{ detailError }} <el-button link type="primary" @click="detail ? openDetail(detail.id) : undefined">重试</el-button>
       </div>

@@ -883,6 +883,14 @@ const TOP_ENTRIES: MenuItem[] = [
  */
 const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报工', icon: '', module: 'production' };
 
+/**
+ * 委外（DECISIONS 第十九节，Steve 11-14）：委外并入生产主链，**不新增委外菜单组**，生产管理 → 生产过程
+ * 下放「委外单 /production/outsource」（排在交付风险之后）。只加在原型分组侧栏；原分组 menuConfig 不动。
+ * 后端 OutsourceOrderController 是 @RequireModule("production_plan") → 权限模块 production，与本项同一个判据，不加 roles。
+ * 闸里 EXPECTED_ADDITIONS 登记。
+ */
+const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外单', icon: '', module: 'production' };
+
 function insertAfter(group: MenuItem, afterPath: string, leaf: MenuItem): MenuItem {
   const children = [...(group.children ?? [])];
   const at = children.findIndex((c) => c.path === afterPath);
@@ -920,7 +928,10 @@ function buildGroupedMenu(): MenuItem[] {
     takeGroup('/workflow', MOVED_OUT),
     takeGroup('/procurement', MOVED_OUT),
     takeGroup('/sales', MOVED_OUT),
-    insertAfter(takeGroup('/production', MOVED_OUT), '/production/approval', P5_WEIGH_LEAF),
+    insertAfter(
+      insertAfter(takeGroup('/production', MOVED_OUT), '/production/approval', P5_WEIGH_LEAF),
+      '/production/delivery-risks', OUTSOURCE_LEAF,
+    ),
     warehouseGroupWithWip(),
     takeGroup('/quality', MOVED_OUT),
     analytics,

@@ -114,6 +114,8 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   // P6：「在制品」路由早已存在、原菜单无入口；原型分组侧栏挂在「仓储管理」下。
   // 链 = 「仓储管理」父组（取自改前快照，不手写）+ 叶子自身 module:'warehouse'（取自路由 meta，不加 roles）。
   '/warehouse/wip-batches': [snapshot.get('/warehouse/materials')![0], { path: '/warehouse/wip-batches', module: 'warehouse' }],
+  // 委外（DECISIONS 第十九节）：生产管理下「委外单」，与「交付风险」同判据（父组 生产管理 + module: 'production'），不加 roles
+  '/production/outsource': [{ path: '/production', module: 'production' }, { path: '/production/outsource', module: 'production' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

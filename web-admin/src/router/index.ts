@@ -376,6 +376,14 @@ const businessRoutes: RouteRecordRaw[] = [
             component: () => import('@/views/production/delivery-risks/index.vue'),
             meta: { requiresAuth: true, title: '交付风险', module: 'production' }
           },
+          {
+            // 委外单 (DECISIONS 第十九节): 按委外厂开单, 任务行挂工单工序或整单委外; 支持 ?orderId= 直接打开详情。
+            // 菜单只登记在原型分组侧栏 (menuConfig.ts 的 OUTSOURCE_LEAF), 不新增委外菜单组。
+            path: 'outsource',
+            name: 'ProductionOutsourceOrders',
+            component: () => import('@/views/production/outsource/index.vue'),
+            meta: { requiresAuth: true, title: '委外单', module: 'production' }
+          },
           // 2026-09-02 LIUSHANMEN 生产管理菜单收拢 (owner 拍板): 生产看板 hub ——
           // 合并未完成计划队列/备货看板/交货预警 3 个视角为一个入口 (el-tabs), 见
           // views/production/kanban/index.vue + views/production/productionKanbanTab.ts。
