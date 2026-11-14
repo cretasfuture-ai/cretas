@@ -61,6 +61,7 @@ import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, sa
 import { createAutoFullChildShipment } from './deliveryAutoChild';
 import { allocationNoticeLines, allocationNoticesOf, needsPackagingConfirmation, type ShipmentAllocationNotice } from './shipmentAllocationNotices';
 import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
+import { priceSourceLabel } from '@/api/customerPriceList';
 import { commerceAdapter, entityFromResponse } from '@/demo/nativeCommerceSteps';
 
 const route = useRoute();
@@ -2285,6 +2286,12 @@ async function handleQuickPayFull() {
               <el-table-column v-if="canViewPrice" label="含税单价" width="120" align="right">
                 <template #default="{ row }">
                   {{ formatTaxIncludedUnitPrice(row) }}
+                </template>
+              </el-table-column>
+              <el-table-column v-if="canViewPrice" label="价格来源" width="170" show-overflow-tooltip>
+                <template #default="{ row }">
+                  <span data-testid="price-source">{{ priceSourceLabel(row.priceSource) }}</span>
+                  <span v-if="row.priceRef" class="price-source-ref"> · {{ row.priceRef }}</span>
                 </template>
               </el-table-column>
               <el-table-column prop="taxRate" label="税率" width="80" align="center">
