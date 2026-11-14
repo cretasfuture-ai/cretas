@@ -629,7 +629,7 @@ const filteredData = computed(() => {
   .stat-value {
     font-size: 28px;
     font-weight: 600;
-    color: #409eff;
+    color: var(--cs-primary);
   }
 
   .stat-label {

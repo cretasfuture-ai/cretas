@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * What-If Pricing Simulator
  * Interactive tool for simulating revenue/profit impact of price, cost, and traffic changes.
@@ -245,7 +246,7 @@ function renderImpactChart() {
       },
     },
     series: [
-      { name: '收入', type: 'line', data: revenues, smooth: true, itemStyle: { color: '#409EFF' } },
+      { name: '收入', type: 'line', data: revenues, smooth: true, itemStyle: { color: CS_TOKENS.primary } },
       { name: '成本', type: 'line', data: costs, smooth: true, itemStyle: { color: '#E6A23C' } },
       { name: '毛利', type: 'line', data: profits, smooth: true, itemStyle: { color: '#67C23A' } },
     ],
@@ -310,7 +311,7 @@ function renderHeatmap() {
       right: 0,
       top: 'center',
       inRange: {
-        color: ['#F56C6C', '#E6A23C', '#f4e925', '#67C23A', '#409EFF'],
+        color: ['#F56C6C', '#E6A23C', '#f4e925', '#67C23A', CS_TOKENS.primary],
       },
     },
     series: [{
@@ -364,7 +365,7 @@ function renderComparisonChart() {
       axisLabel: { formatter: (v: number) => fmtMoney(v) },
     },
     series: [
-      { name: '收入', type: 'bar', data: cd.revenues, itemStyle: { color: '#409EFF' } },
+      { name: '收入', type: 'bar', data: cd.revenues, itemStyle: { color: CS_TOKENS.primary } },
       { name: '成本', type: 'bar', data: cd.costs, itemStyle: { color: '#E6A23C' } },
       { name: '毛利', type: 'bar', data: cd.profits, itemStyle: { color: '#67C23A' } },
     ],
