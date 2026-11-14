@@ -1932,6 +1932,11 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 不能删完旧组后才发现单位/端口错误。
         WorkflowClerkSheetConfigDTO workflowConfig =
                 validateMultiOutputAgainstWorkflow(factoryId, planId, req);
+        // 2a. 回料不得承载投入 (14c 2026-11-14): 首产出行承载全部投入并物化成 WIP material_batch;
+        //     回料要进 semi_finished_inventory(is_rework=true) 才能被下一道当回料选到。回料的 rework
+        //     角色此时已由 Workflow 快照裁定 (上一步), 按它重排。
+        outs = carrierFirstOutputs(outs);
+        req.setOutputs(outs);
 
         // 2b. 重存 (B2): base#* 组已存在 → 先删旧组 (级联反物化), 再建新组。整组无小结/无下游消耗才可删。
         deleteMultiOutputGroupIfPresent(factoryId, planId, req.getClientRowId(), userId);
@@ -1986,6 +1991,31 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 false, true, warnings);
         result.setOutputs(outputResults);
         return result;
+    }
+
+    /**
+     * 把非回料产出排到最前, 让它承载本组全部投入 (首产出行 = 投入承载行, 见 saveMultiOutputRow 第 3 步)。
+     *
+     * <p>回料若排在首位, 会带着投入走 WIP material_batch 物化, 不产生 is_rework 的半成品库存,
+     * 下一道的回料下拉永远看不到它 —— 报工却显示成功 (14c F006 PLAN-1794591097738-82F4762E)。
+     * 只有回料、没有主产出时没有合法的承载行, 明确拒绝而不是错记。非回料之间、回料之间保持原相对顺序。
+     */
+    static List<ProcessSheetRowRequest.OutputLine> carrierFirstOutputs(
+            List<ProcessSheetRowRequest.OutputLine> outs) {
+        List<ProcessSheetRowRequest.OutputLine> main = outs.stream()
+                .filter(o -> !Boolean.TRUE.equals(o.getRework()))
+                .toList();
+        if (main.isEmpty()) {
+            throw new BusinessException(400, "本次报工只填了回料产出，没有主产出，回料无法单独入账")
+                    .withCode("PROCESS_SHEET_REWORK_ONLY_OUTPUT")
+                    .withHint("请同时填写本工序的主产出数量，回料随主产出一起报工");
+        }
+        if (main.size() == outs.size()) {
+            return outs;
+        }
+        List<ProcessSheetRowRequest.OutputLine> ordered = new ArrayList<>(main);
+        outs.stream().filter(o -> Boolean.TRUE.equals(o.getRework())).forEach(ordered::add);
+        return List.copyOf(ordered);
     }
 
     /**
