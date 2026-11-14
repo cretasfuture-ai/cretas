@@ -29,6 +29,9 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Close, Refresh } from '@element-plus/icons-vue';
+import { useSelfApprovalSwitch } from '@/composables/useSelfApprovalSwitch';
+import { isSelfApproval, validateSelfApprovalReason } from '@/utils/selfApproval';
+import SelfApprovalReasonField from '@/components/approval/SelfApprovalReasonField.vue';
 
 interface AdjustmentRow {
   id: string;
@@ -59,6 +62,30 @@ const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const currentUserId = computed(() => authStore.user?.id);
+// 红线 4: 本厂开了「允许本人审批」时, 提交人可以审批自己的调整, 但必须写原因 (后端仍按开关把关)
+const { allowSelfApproval } = useSelfApprovalSwitch(factoryId);
+// 本人审批原因对话框 (防呆 Rule 3: 常见原因下拉, 选「其他」才必须补充)
+const selfReasonDialog = ref<{ open: boolean; row: AdjustmentRow | null; reason: string; error: string }>(
+  { open: false, row: null, reason: '', error: '' });
+let resolveSelfReason: ((reason: string | null) => void) | null = null;
+function askSelfApprovalReason(row: AdjustmentRow): Promise<string | null> {
+  selfReasonDialog.value = { open: true, row, reason: '', error: '' };
+  return new Promise(resolve => { resolveSelfReason = resolve; });
+}
+function closeSelfReasonDialog(reason: string | null) {
+  selfReasonDialog.value.open = false;
+  const resolve = resolveSelfReason;
+  resolveSelfReason = null;
+  resolve?.(reason);
+}
+function confirmSelfReason() {
+  const invalid = validateSelfApprovalReason(selfReasonDialog.value.reason);
+  if (invalid) {
+    selfReasonDialog.value.error = invalid;
+    return;
+  }
+  closeSelfReasonDialog(selfReasonDialog.value.reason.trim());
+}
 const canApprove = computed(() => permissionStore.canWrite('finance'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const route = useRoute();
@@ -223,7 +250,17 @@ async function handleApprove(row: AdjustmentRow) {
     );
     approvalConfirmationOpen = false;
     if (!isCurrentContext(context) || !canShowApproveBtn(row)) return;
-    const res = await post<Partial<AdjustmentRow>>(`/${context.factoryId}/finance/adjustment/${row.id}/approve`);
+    let body: { selfApprovalReason: string } | undefined;
+    if (isSelfApproval(row.operatedBy, currentUserId.value)) {
+      const selfReason = await askSelfApprovalReason(row);
+      if (selfReason === null || !isCurrentContext(context) || !canShowApproveBtn(row)) return;
+      body = { selfApprovalReason: selfReason };
+    }
+    const approveUrl = `/${context.factoryId}/finance/adjustment/${row.id}/approve`;
+    // 不是本人审批时请求与改动前完全一致 (不带 body)
+    const res = body
+      ? await post<Partial<AdjustmentRow>>(approveUrl, body)
+      : await post<Partial<AdjustmentRow>>(approveUrl);
     if (!isCurrentContext(context)) return;
     const result = res.data;
     if (res.success && result?.id === row.id && result.approvalStatus === 'APPROVED' &&
@@ -380,9 +417,10 @@ function isSelectable(row: AdjustmentRow): boolean {
   return !isRefundReversalRow(row);
 }
 
-// 4-eye gate: hide approve button if current user is the submitter.
+// 4-eye gate: hide approve button if current user is the submitter —— 除非本厂开了「允许本人审批」(须写原因)。
 function canShowApproveBtn(row: AdjustmentRow): boolean {
-  return canApprove.value && !isRefundReversalRow(row) && row.operatedBy !== currentUserId.value;
+  return canApprove.value && !isRefundReversalRow(row)
+    && (row.operatedBy !== currentUserId.value || allowSelfApproval.value);
 }
 
 function isKnownAmount(amount: unknown): amount is number {
@@ -587,6 +625,21 @@ onBeforeUnmount(() => {
         @current-change="handlePageChange"
       />
     </el-card>
+
+    <el-dialog
+      v-model="selfReasonDialog.open"
+      :title="`本人审批 — ${selfReasonDialog.row?.counterpartyName || selfReasonDialog.row?.counterpartyId || ''}`"
+      width="480px"
+      data-testid="adjustment-self-approval-dialog"
+      @closed="closeSelfReasonDialog(null)"
+    >
+      <SelfApprovalReasonField v-model="selfReasonDialog.reason" action-label="审批" />
+      <div v-if="selfReasonDialog.error" style="color:#F56C6C;margin-top:8px">{{ selfReasonDialog.error }}</div>
+      <template #footer>
+        <el-button @click="closeSelfReasonDialog(null)">取消</el-button>
+        <el-button type="primary" data-testid="adjustment-self-approval-confirm" @click="confirmSelfReason">确认本人审批</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

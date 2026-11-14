@@ -1067,7 +1067,33 @@ public class FactoryBuildInterviewService {
         optionalParam("inspectProducts", "哪些产品要先检验",
                 "哪些产品生产出来后，必须先检验放行才能发货或下道使用？用产品名字说，多个用顿号隔开。都不用就说没有。"),
         optionalParam("reworkLimits", "回料比例上限",
-                "哪些产品允许回料？回料最多占多少比例？像「卤牛肉 10%、卤鸭脖 5%」这样说。没有就说没有。"));
+                "哪些产品允许回料？回料最多占多少比例？像「卤牛肉 10%、卤鸭脖 5%」这样说。没有就说没有。"),
+        // 第二批厂规开关 (2026-11-13): 落到工厂阈值 (factory_thresholds), 与业务阈值页是同一份数据。
+        // ⛔ 每题都有「按系统默认」, 选它或没问到 = 不写; python 侧 generation.py#_factory_switch_thresholds
+        //    按这些题面的 label 和选项原文开头解析, 改 label / 选项要同步 (有契约测试钉住两边一致)。
+        choiceParam("packageUnitCheck", "按袋、盒下的计划能不能核对产线产能",
+                "计划里按袋、盒这类包装单位下单时，换线要怎么核对产线产能？",
+                List.of("按产品净含量折成公斤核对", "产线产能按我们自己的包装单位配置", "按系统默认")),
+        choiceParam("shortageClose", "缺料补齐后缺料处理怎么收尾",
+                "缺的料补齐以后，这条缺料处理要自动关闭，还是由生产主管手工关闭？",
+                List.of("补齐后系统自动关闭并留痕", "补齐后由生产主管手工关闭", "按系统默认")),
+        choiceParam("inspectionFailScope", "质检表里次要项不合格怎么判",
+                "动态质检表里只有次要项不合格时，整张表算不合格，还是交质量经理决定？",
+                List.of("任一项不合格整张都算不合格", "次要项不合格交质量经理决定", "只有关键项不合格整张才算不合格", "按系统默认")),
+        choiceParam("salesCancelAfterApproval", "财务批准后的销售订单还能不能取消",
+                "销售订单财务批准以后，没发货、没收款的情况下还能取消吗？",
+                List.of("能取消，要写原因", "不能取消，只能走驳回或退款", "按系统默认")),
+        choiceParam("overReceive", "成品入库实收比报工多怎么办",
+                "仓库收成品时，实收数量比车间报工数量多，怎么处理？",
+                List.of("不允许多收", "多收不超过一定比例可以收", "可以多收，但要写原因", "按系统默认")),
+        optionalParam("overReceiveRate", "允许多收的比例",
+                "上一题选了「多收不超过一定比例可以收」的话，最多允许多收百分之几？像「5%」这样说。没选那一项就说没有。"),
+        choiceParam("urgentInsertApproval", "插单要不要一律审批",
+                "车间插单时，是不是不管影响大小都要走审批？",
+                List.of("一律审批", "只有影响大的才审批", "按系统默认")),
+        choiceParam("customerSuppliedOverReceive", "客供料收货能不能多收",
+                "客户提供的原料到货数量比单据多，仓库能收吗？",
+                List.of("可以多收，按多收规则处理", "不能多收", "按系统默认")));
 
     private static final String STEP_TEMPLATE_KEY = "step";
 

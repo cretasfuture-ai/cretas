@@ -702,7 +702,7 @@ public class QualityDispositionInventoryService {
         if (decision == FlipDecision.FLIP && release) {
             // 纪律排查 A3: 质检处置放行同样写放行台账 (放行人 = 当前登录人, 拿不到用质检员)
             Long operator = com.cretas.aims.utils.SecurityUtils.currentUserId();
-            materialBatchReleaseGuard.recordIfRelease(inspection.getFactoryId(), mb, before, target,
+            materialBatchReleaseGuard.recordIfRelease(inspection.getFactoryId(), mb, before, mb.getStatus(),
                     com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_DISPOSITION,
                     "质检单处置放行", inspection.getId(),
                     operator != null ? operator : inspection.getInspectorId(), null);
@@ -730,7 +730,9 @@ public class QualityDispositionInventoryService {
         FlipDecision decision = evaluateMaterialFlip(mb, target);
         if (decision == FlipDecision.FLIP) {
             MaterialBatchStatus before = mb.getStatus();
-            mb.setStatus(target);
+            // #1590 遗留 M5: 放行一个被扣留 (冻结 / 偏离扣留) 的批次 ⇒ 还原扣留前状态, 不一律放成「可用」。
+            // 守卫按请求的目标判 (在制批次待检必须走质检放行那道闸看的是「放成可用」), 写入按还原后的状态。
+            mb.setStatus(com.cretas.aims.service.quality.release.MaterialBatchHoldService.releaseTarget(mb, target));
             repo.save(mb);
             publishMaterialStatusChange(publisher, source, mb, before);
         }

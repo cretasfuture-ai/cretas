@@ -9,6 +9,7 @@ import {
   endProcessTimeMark,
   getPlanTimeLimits,
   startProcessTimeMark,
+  timeLimitOwnershipNotice,
   type ProcessTimeLimitStatus,
 } from '@/api/processTimeLimit';
 import type { WorkflowPortDescriptor } from '@/api/processSheet';
@@ -34,6 +35,8 @@ const props = defineProps<{
 
 const rows = ref<ProcessTimeLimitStatus[]>([]);
 const loadFailed = ref(false);
+/** 缺口 16: 本计划归属判不出时后端给的原因 (在制品/半成品没列出来的原因)。 */
+const ownershipNotice = ref<string | null>(null);
 const nowMs = ref(Date.now());
 const busyKey = ref<string | null>(null);
 /** 已为哪些截止时间重新问过后端: 手机/电脑时钟不准时不至于每分钟都问一遍。 */
@@ -63,6 +66,7 @@ async function reload(): Promise<void> {
     if (seq !== loadSeq) return;
     if (res.success && Array.isArray(res.data)) {
       rows.value = res.data;
+      ownershipNotice.value = timeLimitOwnershipNotice(res);
       loadFailed.value = false;
       nowMs.value = Date.now();
     } else {
@@ -183,7 +187,7 @@ defineExpose({ reload });
 
 <template>
   <section
-    v-if="rows.length > 0 || loadFailed"
+    v-if="rows.length > 0 || loadFailed || ownershipNotice"
     class="time-limit-panel"
     data-testid="process-time-limit-panel"
     aria-label="工序时限"
@@ -195,6 +199,9 @@ defineExpose({ reload });
     <p v-if="loadFailed" class="time-limit-failed" data-testid="time-limit-load-failed">
       时限状态没读到，保存时系统仍会判定。
       <el-button link type="primary" size="small" @click="reload">重新读取</el-button>
+    </p>
+    <p v-if="ownershipNotice" class="time-limit-owner-notice" data-testid="time-limit-owner-notice">
+      {{ ownershipNotice }}
     </p>
     <table v-if="rows.length > 0" class="time-limit-table">
       <thead>
@@ -320,6 +327,7 @@ defineExpose({ reload });
 .time-limit-title { display: flex; gap: 8px; align-items: baseline; margin-bottom: 4px; }
 .time-limit-sub { color: var(--el-text-color-secondary, #909399); font-size: 12px; }
 .time-limit-failed { margin: 0; color: var(--el-color-danger, #f56c6c); }
+.time-limit-owner-notice { margin: 0; color: var(--el-color-warning, #e6a23c); }
 .time-limit-table { width: 100%; border-collapse: collapse; }
 .time-limit-table th, .time-limit-table td {
   padding: 3px 12px 3px 0; text-align: left; vertical-align: top; font-variant-numeric: tabular-nums;

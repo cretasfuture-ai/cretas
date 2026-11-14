@@ -12,6 +12,7 @@ import { approverHint, currentNodeText } from './nodeLabel';
 import { usePermissionStore } from '@/store/modules/permission';
 import OrderPeekDrawer from '@/views/finance/components/OrderPeekDrawer.vue';
 import { isRouteReachable, PEEKABLE_BY_MODULE } from './approvalDocReach';
+import { scheduleOutcomeHtml, toForceInsertScheduleView } from './forceInsertScheduleOutcome';
 
 /**
  * 业务类型中文名 —— 筛选下拉和表格列共用同一份。
@@ -248,6 +249,18 @@ async function act(row: PendingApproval, action: 'APPROVE' | 'REJECT') {
      */
     workspace.invalidateModules(oaInvalidatedModules(row.moduleCode));
     await loadPending();
+    // 强制插单批准走完画布 = 这一刻才排入并顺延: 把排进哪条线、哪天、挤了谁摆给审批人看 (dag-17)
+    if (action === 'APPROVE' && row.moduleCode === 'FORCE_INSERT') {
+      const resultData = (res as { data?: Record<string, unknown> }).data;
+      const view = toForceInsertScheduleView(resultData);
+      if (view) {
+        await ElMessageBox.alert(
+          scheduleOutcomeHtml(view, typeof resultData?.planNumber === 'string' ? resultData.planNumber : null),
+          '插单排程结果',
+          { confirmButtonText: '知道了', dangerouslyUseHTMLString: true },
+        ).catch((): undefined => undefined);
+      }
+    }
     // 客户 2026-07-30「审核后 库存没有过来」: 调拨审批通过 ≠ 库存过账, 还要回单据点一次
     // 「确认调拨入库」。批完人停在 OA 列表, 这里不导航就是 dead-end (防呆 Rule 5) ——
     // 实测客户 3 张单卡在 APPROVED, 最早一张卡了 6 周。

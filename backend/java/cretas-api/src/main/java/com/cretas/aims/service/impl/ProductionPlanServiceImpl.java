@@ -320,6 +320,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     /** S4-08 开工前的缺料闸 (工厂开关默认关). required=false 兼容单测. */
     @Autowired(required = false)
     private com.cretas.aims.service.shortage.ShortageStartGate shortageStartGate;
+    /** 1551-11 开工被拦时说清在等谁批 (只影响措辞). required=false 兼容单测. */
+    @Autowired(required = false)
+    private com.cretas.aims.service.production.ForceInsertApproverDescriber forceInsertApproverDescriber;
 
     /** 工序间 / 投料时限 (缺口 14)。 */
     @Autowired(required = false)
@@ -2052,6 +2055,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setOutputOwnership(InventoryOwnership.COMPANY_OWNED);
             return;
         }
+        // 主单和额外单合在一起按 id 排序先锁: 两个请求以不同主单合并同一批销售单 (A: SO1+SO2, B: SO2+SO1) 时,
+        // 若先锁主单再锁额外单会互相等死。必须在第一次加锁之前完成, 后面各处再锁同一行是重入。
+        lockAllSourceOrdersInIdOrder(factoryId, request);
         // 优先使用 sourceOrderItemId (新粒度); 兼容老 sourceOrderId 调用方
         String itemIdStr = request.getSourceOrderItemId();
         if (itemIdStr == null || itemIdStr.isBlank()) {
@@ -2065,8 +2071,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHint("销售订单不属于该工厂, 请选择本工厂的订单").withHintTarget("sourceOrderId");
                 }
                 BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-                // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
-                assertSalesOrderFinanceApproved(so, "sourceOrderId");
+                // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产 (状态在销售单行锁内复核)
+                assertSalesOrderFinanceApproved(so, "sourceOrderId", lockSalesOrderStatus(so));
                 snapshotSalesOwnershipContract(request, so,
                         so.getProcessingMode(), so.getMaterialSupplyMode(), "sourceOrderId");
                 if ((request.getSourceCustomerName() == null || request.getSourceCustomerName().isBlank())
@@ -2097,8 +2103,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新销售订单列表后重新选择").withHintTarget("sourceOrderItemId");
         }
         BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-        // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产
-        assertSalesOrderFinanceApproved(so, "sourceOrderItemId");
+        // 财审闸门: 客户订单必须先通过财务审核才能流转车间排产 (状态在销售单行锁内复核)
+        assertSalesOrderFinanceApproved(so, "sourceOrderItemId", lockSalesOrderStatus(so));
 
         // A line-level override is the finest-grained sales truth. Legacy lines
         // without a snapshot inherit the authoritative order-header contract.
@@ -2173,7 +2179,55 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * @param hintTarget 防呆提示定位字段 (sourceOrderId 或 sourceOrderItemId)
      */
     private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget) {
-        SalesOrderStatus status = so.getStatus();
+        assertSalesOrderFinanceApproved(so, hintTarget, so.getStatus());
+    }
+
+    /**
+     * 把本次请求涉及的全部销售单 (主单 sourceOrderId、行级 sourceOrderItemId 对应的订单、额外单 sourceOrderIds)
+     * 去重后按 id 排序逐个加行锁。只加锁, 不校验: 不存在 / 跨工厂的 id 读不到行, 照旧由后面的校验给出 404/403。
+     */
+    private void lockAllSourceOrdersInIdOrder(String factoryId, CreateProductionPlanRequest request) {
+        java.util.TreeSet<String> ids = new java.util.TreeSet<>();
+        if (!isBlank(request.getSourceOrderId())) {
+            ids.add(request.getSourceOrderId());
+        }
+        if (request.getSourceOrderIds() != null) {
+            request.getSourceOrderIds().stream().filter(id -> !isBlank(id)).forEach(ids::add);
+        }
+        if (!isBlank(request.getSourceOrderItemId())) {
+            try {
+                salesOrderItemRepository.findById(Long.parseLong(request.getSourceOrderItemId()))
+                        .map(SalesOrderItem::getSalesOrderId)
+                        .filter(id -> !isBlank(id))
+                        .ifPresent(ids::add);
+            } catch (NumberFormatException ignored) {
+                // 行 ID 格式错误: 后面的校验会给出 400
+            }
+        }
+        ids.forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
+    }
+
+    /**
+     * 锁住销售单行并返回已提交的最新状态 (手工建计划 / 合并计划读状态前必须先走这里)。
+     * 锁顺序: 销售单 → 生产计划 → 日调度计划, 与取消订单 (先锁销售单再取消计划) 和插单
+     * ({@link com.cretas.aims.service.scheduling.ProductionPlanScheduleLock}, 计划 → 日调度计划) 一致;
+     * 同一次请求里要锁多张销售单时按 id 排序 (见 {@link #normalizeAndValidateSourceOrderIds})。
+     * 取消先提交 → 这里读到 CANCELLED, 校验失败; 建计划先提交 → 取消随后看得见这张新计划并连带取消。
+     * 行不存在返回 null (调用方此前已按 id 读到过这张单, 视为状态未知而拦下)。
+     */
+    private SalesOrderStatus lockSalesOrderStatus(SalesOrder so) {
+        String locked = salesOrderRepository.lockStatusForUpdate(so.getId(), so.getFactoryId()).orElse(null);
+        if (locked == null) {
+            return null;
+        }
+        try {
+            return SalesOrderStatus.valueOf(locked);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget, SalesOrderStatus status) {
         boolean approved = status == SalesOrderStatus.FINANCE_APPROVED
                 || status == SalesOrderStatus.PROCESSING
                 || status == SalesOrderStatus.PARTIAL_DELIVERED
@@ -2229,6 +2283,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
 
         // 对超出主 SO 的额外 SO 做校验 (主 SO 在 validateAndEnrichSalesOrderSource 里已验过)
         if (deduped.size() > 1) {
+            // 两个请求以相反顺序合并同一批销售单时, 按列表顺序加锁会互相等死: 先按 id 排序把行锁全拿到。
+            deduped.subList(1, deduped.size()).stream()
+                    .filter(id -> id != null && !id.isBlank())
+                    .sorted()
+                    .forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
             for (int i = 1; i < deduped.size(); i++) {
                 String extraSoId = deduped.get(i);
                 if (extraSoId == null || extraSoId.isBlank()) continue;
@@ -2244,7 +2303,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                             .withHintTarget("sourceOrderIds");
                 }
                 BusinessRowScope.requireOwner(businessRowScope, factoryId, so.getCreatedBy());
-                assertSalesOrderFinanceApproved(so, "sourceOrderIds");
+                assertSalesOrderFinanceApproved(so, "sourceOrderIds", lockSalesOrderStatus(so));
                 assertCompatibleOwnershipContract(plan, so, extraSoId);
             }
         }
@@ -2483,6 +2542,16 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     public java.util.List<ProductionPlanDTO> createPlansFromSalesOrder(
             String factoryId, com.cretas.aims.dto.production.BatchPlanFromSalesOrderRequest req, Long userId) {
         // 跨租户校验: SO 须属当前工厂
+        // 主单和额外单合在一起按 id 排序先锁: A 以 SO1 为主合并 SO2、B 以 SO2 为主合并 SO1 时,
+        // 先锁主单再按请求顺序锁额外单会互相等死。后面的 findByIdAndFactoryIdForUpdate 是同事务重入。
+        java.util.TreeSet<String> batchLockIds = new java.util.TreeSet<>();
+        if (!isBlank(req.getSourceOrderId())) {
+            batchLockIds.add(req.getSourceOrderId());
+        }
+        if (req.getExtraSourceOrderIds() != null) {
+            req.getExtraSourceOrderIds().stream().filter(id -> !isBlank(id)).forEach(batchLockIds::add);
+        }
+        batchLockIds.forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
         // Lock the SO row so two tabs cannot both observe "no plan" and create
         // duplicate effective plans for the same order line.
         SalesOrder so = salesOrderRepository.findByIdAndFactoryIdForUpdate(req.getSourceOrderId(), factoryId)
@@ -3356,7 +3425,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                     .withHint("请刷新生产计划列表查看最新状态");
         }
         // 1551-11: 待审批的强制插单还没排进去 (批准那一刻才排入并顺延), 不能先开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
 
         // 2026-08-02: SSOP 阻产台账 —— 只记录, 【不阻断】开工。
         //    本类多处写着 "N1 开工无条件化"(原料不足只预警不阻塞), 那是明确的既有决定;
@@ -7846,6 +7915,8 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         // 质检放行 (缺口 11): 结单领用在制半成品批次 —— 待检 / 不合格不能领 (只作用于 PRODUCTION_BATCH 来源)。
         com.cretas.aims.service.quality.release.QcInspectionGuard.assertWipBatchDrawable(
                 batch, batch.getBatchNumber(), "实际领用");
+        // #1590 遗留: 原料批次同样按报工口径判状态 (拦质检中含冻结扣住 / 不良品 / 报废, 不拦过期 —— 过期由领料那一步把关)
+        com.cretas.aims.service.gate.MaterialBatchStateGate.assertPostable(batch);
         BigDecimal available = zeroIfNull(batch.getCurrentQuantity());
         ensureQuantityWithinAvailable("原料批次 " + batch.getBatchNumber(), line.getQuantity(), available, "实际领用");
 
@@ -9364,9 +9435,29 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional
     public void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId) {
+        cancelProductionPlan(factoryId, planId, reason, operatorId, null);
+    }
+
+    @Override
+    @Transactional
+    public void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId,
+                                     String viaSalesOrderId) {
         ProductionPlan plan = productionPlanRepository.findByIdForUpdate(planId)
             .orElseThrow(() -> new ResourceNotFoundException("生产计划", "id", planId));
-        requireVisiblePlan(factoryId, plan);
+        boolean belongsToCancelledOrder = viaSalesOrderId != null && factoryId.equals(plan.getFactoryId())
+                && viaSalesOrderId.equals(plan.getSourceOrderId());
+        if (belongsToCancelledOrder) {
+            // 方法是 public, 不信任调用方: 计划的行范围改由销售单的行范围承担, 这里复核取消人看得到这张销售单
+            SalesOrder via = salesOrderRepository.findById(viaSalesOrderId)
+                    .filter(o -> factoryId.equals(o.getFactoryId()))
+                    .orElseThrow(() -> new BusinessException(403, "无权操作该生产计划")
+                            .withHint("关联的销售订单不存在或不属于该工厂"));
+            BusinessRowScope.requireOwner(businessRowScope, factoryId, via.getCreatedBy());
+            log.info("随销售单取消计划, 行范围以销售单为准: factoryId={}, planId={}, SO={}, 操作人={}",
+                    factoryId, planId, viaSalesOrderId, operatorId);
+        } else {
+            requireVisiblePlan(factoryId, plan);
+        }
 
         // 验证工厂ID
         if (!plan.getFactoryId().equals(factoryId)) {
@@ -9460,12 +9551,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         plan.setCancelledAt(LocalDateTime.now());
         productionPlanRepository.save(plan);
 
+        // 取消一张还在待审批的强制插单: 它的画布审批实例也要结束, 不留悬空的待办 (审批人点开只会 409)
+        cancelPendingForceInsertWorkflow(factoryId, plan, cancellationReason, operatorId);
+
         // R1 (2026-06-14): 按批次定向级联关闭 WorkProcessTask (新表), 取代旧的"按产品类型全关 ProcessTask"。
         // 旧逻辑 findByFactoryIdAndProductTypeId 会把同产品另一并行活跃批次的任务一并 CLOSED (六扇门 6.1+6.2 场景误伤)。
         cancelPlanBatchesAndTasks(factoryId, planId, planBatches);
 
         log.info("取消生产计划: planId={}, operatorId={}, reason={}, batches={}",
                 planId, operatorId, cancellationReason, planBatches != null ? planBatches.size() : 0);
+    }
+
+    /** 强制插单画布的 module code (与 UrgentInsertServiceImpl.FORCE_INSERT_MODULE 一致) */
+    private static final String FORCE_INSERT_WORKFLOW_MODULE = "FORCE_INSERT";
+
+    /**
+     * 计划取消时一并结束它还在跑的强制插单审批实例 (CANCELLED + CANCEL history 记原因/操作人)。
+     * 没有实例 / 实例已结束 = 什么都不做; 引擎缺失 (单测环境) 同理。
+     */
+    private void cancelPendingForceInsertWorkflow(String factoryId, ProductionPlan plan, String reason, Long operatorId) {
+        if (workflowEngine == null || !Boolean.TRUE.equals(plan.getIsForceInserted())) {
+            return;
+        }
+        workflowEngine.getCurrentInstance(factoryId, FORCE_INSERT_WORKFLOW_MODULE, plan.getId())
+                .ifPresent(instance -> workflowEngine.cancel(instance.getId(), operatorId,
+                        "计划已取消，审批同步结束：" + reason));
     }
 
     /**
@@ -9554,36 +9664,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      * 不碰其它批次的任务 (即便同一 productTypeId)。终态任务 (COMPLETED/SKIPPED/CANCELLED) 不变。
      */
     private void cancelPlanBatchesAndTasks(String factoryId, String planId, List<ProductionBatch> planBatches) {
-        if (planBatches == null || planBatches.isEmpty()) {
-            return;
-        }
-        for (ProductionBatch batch : planBatches) {
-            if (batch.getId() == null) {
-                continue;
-            }
-            // 空批次 / 活跃批次 → CANCELLED (已 CANCELLED/COMPLETED 不动)
-            if (batch.getStatus() != ProductionBatchStatus.CANCELLED
-                    && batch.getStatus() != ProductionBatchStatus.COMPLETED) {
-                batch.setStatus(ProductionBatchStatus.CANCELLED);
-                productionBatchRepository.save(batch);
-            }
-            if (workProcessTaskRepository == null) {
-                continue; // 单测无注入 → 跳过 (有注入的测试覆盖级联)
-            }
-            List<com.cretas.aims.entity.workprocess.WorkProcessTask> tasks = workProcessTaskRepository
-                    .findByFactoryIdAndProductionBatchIdOrderByProcessOrderAsc(factoryId, batch.getId());
-            int closedCount = 0;
-            for (com.cretas.aims.entity.workprocess.WorkProcessTask task : tasks) {
-                if (!task.getStatus().isTerminal()) {
-                    task.setStatus(com.cretas.aims.entity.workprocess.WorkProcessTask.Status.CANCELLED);
-                    closedCount++;
-                }
-            }
-            if (closedCount > 0) {
-                workProcessTaskRepository.saveAll(tasks);
-                log.info("R1 级联取消 {} 个工序任务: planId={}, batchId={}", closedCount, planId, batch.getId());
-            }
-        }
+        // 唯一一份级联在 PlanBatchCascade (驳回强制插单也用它)
+        com.cretas.aims.service.production.PlanBatchCascade.cancelBatchesAndTasks(
+                factoryId, planId, planBatches, productionBatchRepository, workProcessTaskRepository);
     }
 
     /**
@@ -10464,7 +10547,7 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         //    (2026-11-03 验收 D-S410-01: 网页「逐道录入」「下发 APP 报工」都先调 create-batch, 曾绕过闸)。
         //    startProduction 不经过这里 (它直接调 materializeBatchForPlan), 所以同一次开工不会被记两次。
         // 1551-11: 同理, 待审批的强制插单不能经这里开工
-        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan);
+        com.cretas.aims.service.production.PendingApprovalStartGuard.check(plan, forceInsertApproverDescriber);
         if (shortageStartGate != null) {
             shortageStartGate.check(factoryId, plan, forceStartReason, operatorId);
         }

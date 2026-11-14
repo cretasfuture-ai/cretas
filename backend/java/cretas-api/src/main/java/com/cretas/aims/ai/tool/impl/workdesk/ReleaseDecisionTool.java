@@ -340,6 +340,8 @@ public class ReleaseDecisionTool extends AbstractBusinessTool {
         }
         // 走共用翻转 (改状态 + 保存 + 放行 / 离开质检中事件); 上面已排除非 FLIP 的情形 (D-S411-04 复审 R1)
         QualityDispositionInventoryService.applyMaterialFlip(materialBatchRepository, eventPublisher, this, batch, newStatus);
+        // #1590 遗留 M5: 放行被冻结的批次还原冻结前状态 (冻品回冻品等), 回执与台账按实际写入的状态
+        newStatus = batch.getStatus();
         if (release) {
             releaseGuard.recordIfRelease(factoryId, batch, prevStatus, newStatus,
                     com.cretas.aims.entity.material.MaterialBatchRelease.Channel.QC_RELEASE_DECISION,

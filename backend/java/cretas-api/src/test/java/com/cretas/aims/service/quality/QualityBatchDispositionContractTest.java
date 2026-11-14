@@ -1390,7 +1390,8 @@ class QualityBatchDispositionContractTest {
                 mock(com.cretas.aims.service.quality.release.QcReleaseService.class),
                 mock(com.cretas.aims.service.factory.WarehouseResolver.class),
                 mock(com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository.class),
-                new ObjectMapper());
+                new ObjectMapper(),
+                mock(com.cretas.aims.service.processentry.IntermediateOwnershipGuard.class));
     }
 
     @Test

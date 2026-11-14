@@ -75,7 +75,8 @@ final class WorkProcessTaskTransitionPreview {
 
     /** 完成工序: IN_PROGRESS → COMPLETED, 必填实际产量。 */
     static Map<String, Object> complete(WorkProcessTaskService service, String factoryId,
-                                        Long taskId, BigDecimal actualQuantity, String notes) {
+                                        Long taskId, BigDecimal actualQuantity, String notes,
+                                        Long operatorUserId) {
         // 写路径先查实际产量再读任务 (WorkProcessTaskServiceImpl#complete), 这里同序。
         // 能走到这里而为 null 的情形: 传了值但不是数字 (getBigDecimal 解析失败返回 null)。
         if (actualQuantity == null) {
@@ -97,6 +98,16 @@ final class WorkProcessTaskTransitionPreview {
         WorkProcessTaskDTO task = load(service, factoryId, taskId);
         if (task == null) {
             return notFound(ACTION_COMPLETE, taskId);
+        }
+        // 镜像写路径: 本人可报 (先于状态判断, 同 WorkProcessTaskServiceImpl#complete)。
+        // 预览带来的 taskId 来自客户端回传的 context, 可以被换成别人的 —— 在这里就拦, 不出确认卡。
+        try {
+            service.assertCanComplete(factoryId, task, operatorUserId);
+        } catch (com.cretas.aims.exception.BusinessException refused) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("action", ACTION_COMPLETE);
+            r.put("taskId", taskId);
+            return cannot(r, "NOT_PERMITTED", refused.getMessage());
         }
         Map<String, Object> result = base(ACTION_COMPLETE, task, Status.COMPLETED);
         result.put("actualQuantity", actualQuantity);

@@ -115,18 +115,11 @@ const businessRoutes: RouteRecordRaw[] = [
           hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
         },
       },
+      // P4：原「异常中心」改造成顶层「发现的问题 /issues」，旧地址跳过去（书签 / 外部链接不失效）。
       {
         path: 'workspaces/exceptions',
         name: 'FactoryWorkspaceExceptions',
-        component: () => import('@/views/workspaces/index.vue'),
-        meta: {
-          requiresAuth: true,
-          title: '异常中心',
-          icon: 'Warning',
-          module: 'dashboard',
-          roles: ['factory_super_admin', 'permission_admin'],
-          hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
-        },
+        redirect: '/issues',
       },
       {
         path: 'workspaces/plans-approvals',
@@ -205,6 +198,26 @@ const businessRoutes: RouteRecordRaw[] = [
         //   ⇒ equipment_admin / hr_admin / sales_manager / warehouse_worker 全都
         //     看得见这个看板、点进去必 403。与 /rd、/transfer 同形。
         meta: { requiresAuth: true, title: '生产进度看板', icon: 'Monitor', module: 'production' }
+      },
+      // P3：顶层「今天」「待办」。只读聚合，各来源按自己的模块权限读；入口与个人 OA 同判据 module: 'dashboard'
+      {
+        path: 'today',
+        name: 'TodayPage',
+        component: () => import('@/views/today/TodayPage.vue'),
+        meta: { requiresAuth: true, title: '今天', icon: 'Sunny', module: 'dashboard' }
+      },
+      {
+        path: 'todo',
+        name: 'TodoPage',
+        component: () => import('@/views/today/TodoPage.vue'),
+        meta: { requiresAuth: true, title: '待办', icon: 'Finished', module: 'dashboard' }
+      },
+      // P4：顶层「发现的问题」。只读聚合各来源（各按自己的模块权限读）+ 处置（关闭结论 / 转待办），入口同「今天」「待办」
+      {
+        path: 'issues',
+        name: 'IssuesPage',
+        component: () => import('@/views/issues/IssuesPage.vue'),
+        meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
       },
       {
         path: 'dashboard/widgets',

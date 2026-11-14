@@ -50,6 +50,7 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -226,7 +227,7 @@ class UrgentInsertForceInsertCanvasContractTest {
     }
 
     private void transitionEndsIn(String instanceId, String planId, InstanceStatus status) {
-        when(engine.transitionNode(eq(instanceId), any(), any(), any(), any()))
+        when(engine.transitionNode(eq(instanceId), any(), any(), any(), any(), any()))
                 .thenReturn(instance(instanceId, planId, status));
     }
 
@@ -420,7 +421,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         service.applyWorkflowAction(F, "P-1", "INST-1", APPROVER, "production_manager", null,
                 HistoryAction.APPROVE, "同意");
 
-        verify(engine).transitionNode("INST-1", APPROVER, "production_manager", HistoryAction.APPROVE, "同意");
+        verify(engine).transitionNode("INST-1", APPROVER, "production_manager", HistoryAction.APPROVE, "同意", null);
         verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(APPROVER));
         assertThat(plan.getApprovalStatus()).isEqualTo(ProductionPlan.ApprovalStatus.APPROVED);
         assertThat(plan.getApproverId()).isEqualTo(APPROVER);
@@ -434,7 +435,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         service.applyWorkflowAction(F, "P-2", "INST-2", APPROVER, "production_manager", null,
                 HistoryAction.APPROVE, "一级同意");
 
-        verify(engine).transitionNode(eq("INST-2"), any(), any(), eq(HistoryAction.APPROVE), any());
+        verify(engine).transitionNode(eq("INST-2"), any(), any(), eq(HistoryAction.APPROVE), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
         assertThat(plan.isPendingApproval()).isTrue();
     }
@@ -461,7 +462,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-4", "INST-4", APPROVER,
                 "production_manager", null, HistoryAction.REJECT, "  "))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_REJECT_REASON_REQUIRED"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
         assertThat(slot.getStatus()).isEqualTo("selected");
     }
 
@@ -475,7 +476,7 @@ class UrgentInsertForceInsertCanvasContractTest {
                 HistoryAction.REJECT, "不同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_ALREADY_DECIDED"));
 
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
     }
 
@@ -488,7 +489,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-6", "INST-6", APPROVER,
                 "production_manager", null, HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_WORKFLOW_MISMATCH"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
     }
 
     @Test
@@ -499,13 +500,13 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-7", "INST-7", APPROVER,
                 "production_manager", null, HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_NOT_PENDING"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
 
         // 驳回只结束审批: 时段早已随取消释放, 现在 selected 的可能是别的计划占着
         transitionEndsIn("INST-7", "P-7", InstanceStatus.REJECTED);
         service.applyWorkflowAction(F, "P-7", "INST-7", APPROVER, "production_manager", null,
                 HistoryAction.REJECT, "计划已取消");
-        verify(engine).transitionNode(eq("INST-7"), any(), any(), eq(HistoryAction.REJECT), any());
+        verify(engine).transitionNode(eq("INST-7"), any(), any(), eq(HistoryAction.REJECT), any(), any());
         assertThat(slot.getStatus()).isEqualTo("selected");
         verify(slots, never()).save(any());
     }
@@ -520,7 +521,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-14", "INST-14", APPROVER,
                 "production_manager", "level_1", HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("OA_TASK_NODE_CHANGED"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
     }
 
@@ -532,7 +533,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-15", "INST-15", APPROVER,
                 "production_manager", null, HistoryAction.APPROVE, "同意"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("OA_TASK_FORBIDDEN"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
     }
 
     // ------------------------------------------------------------------ 按当前审批流重新发起
@@ -582,7 +583,7 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-8", "INST-8", SUBMITTER,
                 "factory_super_admin", null, HistoryAction.APPROVE, "我自己批"))
                 .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN"));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
         verify(scheduler, never()).apply(any(), any(), any(), any(), any());
     }
 
@@ -594,21 +595,53 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThatThrownBy(() -> service.applyWorkflowAction(F, "P-9", "INST-9", SUBMITTER,
                 "factory_super_admin", null, HistoryAction.APPROVE, ""))
                 .satisfies(e -> assertThat(code(e)).isEqualTo(FactorySelfApprovalGate.REASON_REQUIRED));
-        verify(engine, never()).transitionNode(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
 
         transitionEndsIn("INST-9", "P-9", InstanceStatus.APPROVED);
         service.applyWorkflowAction(F, "P-9", "INST-9", SUBMITTER, "factory_super_admin", null,
                 HistoryAction.APPROVE, "本厂只有我一个人能审批");
 
         verify(engine).transitionNode("INST-9", SUBMITTER, "factory_super_admin", HistoryAction.APPROVE,
-                UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批");
+                UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批", null);
         assertThat(plan.getApprovalComment()).isEqualTo(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批");
         verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(SUBMITTER));
+        // 红线 4: 结构化留痕 —— 计划上和这一次的审批决策日志上都要有 self_approved + 原因 (不只是意见前缀)
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("本厂只有我一个人能审批");
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-9"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人能审批"), eq(SUBMITTER), any(),
+                eq(true), eq("本厂只有我一个人能审批"));
+    }
+
+    @Test
+    void aSelfApprovedIntermediateNodeIsRecordedStructurallyAndSurvivesTheNextApprover() {
+        ProductionPlan plan = pendingCanvasPlan("P-9B", "INST-9B");
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+        transitionEndsIn("INST-9B", "P-9B", InstanceStatus.RUNNING);
+
+        service.applyWorkflowAction(F, "P-9B", "INST-9B", SUBMITTER, "factory_super_admin", null,
+                HistoryAction.APPROVE, "  一级只有我  ");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("一级只有我");
+        verify(plans).save(plan);
+
+        // 二级由别人批走完: 计划上「审批链里有过本人审批」不被覆盖; 这一次的决策日志不是本人审批
+        transitionEndsIn("INST-9B", "P-9B", InstanceStatus.APPROVED);
+        service.applyWorkflowAction(F, "P-9B", "INST-9B", APPROVER, "production_manager", null,
+                HistoryAction.APPROVE, "二级同意");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("一级只有我");
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-9B"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("二级同意"), eq(APPROVER), any(), eq(false), isNull());
     }
 
     @Test
     void anotherApproverIsNotSelfApprovalEvenWithTheSwitchOff() {
-        pendingCanvasPlan("P-10", "INST-10");
+        ProductionPlan plan = pendingCanvasPlan("P-10", "INST-10");
         when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
         transitionEndsIn("INST-10", "P-10", InstanceStatus.APPROVED);
 
@@ -616,6 +649,12 @@ class UrgentInsertForceInsertCanvasContractTest {
                 HistoryAction.APPROVE, "同意");
 
         verify(scheduler).apply(any(), any(), any(), any(), eq(APPROVER));
+        // 别人批的: 不打本人审批标记 (阴性对照)
+        assertThat(plan.isSelfApproved()).isFalse();
+        assertThat(plan.getSelfApprovalReason()).isNull();
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-10"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("同意"), eq(APPROVER), any(), eq(false), isNull());
     }
 
     // ------------------------------------------------------------------ 直接审批入口
@@ -656,5 +695,162 @@ class UrgentInsertForceInsertCanvasContractTest {
         assertThat(otherLine.getStatus()).as("别的产线同一时刻的时段不动").isEqualTo("selected");
         assertThat(slot.getStatus()).isEqualTo("available");
         assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+    }
+
+    // ------------------------------------------------------------------ 收尾 (1551-11 遗留): 直接入口本人审批 / 并行节点 / 待审批列表
+
+    @Test
+    void directApprovalByTheSubmitterIsForbiddenWhileTheSwitchIsOff() {
+        pendingCanvasPlan("P-20", "INST-20");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-20")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.approveForceInsert(F, "P-20", SUBMITTER, true, "我自己批"))
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN"));
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+        assertThat(slot.getStatus()).as("没批成, 时段仍被占着").isEqualTo("selected");
+    }
+
+    @Test
+    void directApprovalBySubmitterWithTheSwitchOnNeedsAReasonAndIsMarkedInTheComment() {
+        ProductionPlan plan = pendingCanvasPlan("P-21", "INST-21");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-21")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+
+        assertThatThrownBy(() -> service.approveForceInsert(F, "P-21", SUBMITTER, true, " "))
+                .satisfies(e -> assertThat(code(e)).isEqualTo(FactorySelfApprovalGate.REASON_REQUIRED));
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+
+        service.approveForceInsert(F, "P-21", SUBMITTER, true, "本厂只有我一个人");
+
+        assertThat(plan.getApprovalComment()).isEqualTo(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "本厂只有我一个人");
+        verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(SUBMITTER));
+    }
+
+    @Test
+    void directApprovalByAnotherPersonIsNotSelfApprovalEvenWithTheSwitchOff() {
+        ProductionPlan plan = pendingCanvasPlan("P-22", "INST-22");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-22")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
+
+        service.approveForceInsert(F, "P-22", APPROVER, true, "同意");
+
+        assertThat(plan.getApprovalComment()).isEqualTo("同意");
+        verify(scheduler).apply(eq(F), eq(slot), eq(plan), isNull(), eq(APPROVER));
+    }
+
+    @Test
+    void directSelfApprovalIsRecordedStructurallyOnThePlanAndInTheDecisionAuditLog() {
+        // 红线 4 直接入口 (#1686): 判据是结构化字段, 不是意见前缀; 计划落库 + 决策日志都要 self_approved=true + 原因
+        ProductionPlan plan = pendingCanvasPlan("P-21S", "INST-21S");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-21S")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+
+        service.approveForceInsert(F, "P-21S", SUBMITTER, true, "  夜班只有我在  ");
+
+        assertThat(plan.isSelfApproved()).isTrue();
+        assertThat(plan.getSelfApprovalReason()).isEqualTo("夜班只有我在");
+        verify(plans, atLeastOnce()).save(plan);
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-21S"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq(UrgentInsertServiceImpl.SELF_APPROVAL_MARK + "夜班只有我在"), eq(SUBMITTER), any(),
+                eq(true), eq("夜班只有我在"));
+    }
+
+    @Test
+    void directApprovalByAnotherPersonIsNotStructurallySelfApprovedEvenWithTheSwitchOn() {
+        // 阴性对照: 开关开着, 但审批人不是提交人 ⇒ self_approved=false、原因为空
+        ProductionPlan plan = pendingCanvasPlan("P-22S", "INST-22S");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-22S")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(true);
+
+        service.approveForceInsert(F, "P-22S", APPROVER, true, "同意");
+
+        assertThat(plan.isSelfApproved()).isFalse();
+        assertThat(plan.getSelfApprovalReason()).isNull();
+        verify(audit).logApproval(eq(F), eq("ProductionPlan"), eq("P-22S"),
+                eq(com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.APPROVED),
+                eq("同意"), eq(APPROVER), any(), eq(false), isNull());
+    }
+
+    @Test
+    void directRejectionByTheSubmitterIsAWithdrawalAndIsNotBlocked() {
+        ProductionPlan plan = pendingCanvasPlan("P-23", "INST-23");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-23")).thenReturn(Optional.empty());
+        when(settings.findAllowSelfApprovalByFactoryId(F)).thenReturn(false);
+
+        service.approveForceInsert(F, "P-23", SUBMITTER, false, "不要了");
+
+        assertThat(plan.getStatus()).isEqualTo(ProductionPlanStatus.CANCELLED);
+        assertThat(slot.getStatus()).isEqualTo("available");
+    }
+
+    @Test
+    void theOaActionAdvancesTheNodeTheApproverWasShownNotTheFirstActiveNode() {
+        pendingCanvasPlan("P-24", "INST-24");
+        ApprovalWorkflowInstance parallel = instance("INST-24", "P-24", InstanceStatus.RUNNING);
+        parallel.setCurrentNodeIds(new java.util.ArrayList<>(List.of("branch_a", "branch_b")));
+        when(engine.getInstance(F, "INST-24")).thenReturn(Optional.of(parallel));
+        transitionEndsIn("INST-24", "P-24", InstanceStatus.RUNNING);
+
+        service.applyWorkflowAction(F, "P-24", "INST-24", APPROVER, "production_manager", "branch_b",
+                HistoryAction.APPROVE, "二号分支同意");
+
+        verify(engine).transitionNode("INST-24", APPROVER, "production_manager", HistoryAction.APPROVE,
+                "二号分支同意", "branch_b");
+    }
+
+    @Test
+    void pendingListMarksCanvasPlansWithTheirInstanceAndHidesCancelledOnes() {
+        ProductionPlan live = pendingCanvasPlan("P-25", "INST-25");
+        ProductionPlan cancelled = pendingCanvasPlan("P-26", "INST-26");
+        cancelled.setStatus(ProductionPlanStatus.CANCELLED);
+        ProductionPlan direct = pendingCanvasPlan("P-27", "INST-27");
+        when(plans.findByFactoryIdAndIsForceInsertedAndRequiresApprovalAndApprovalStatus(
+                F, true, true, ProductionPlan.ApprovalStatus.PENDING)).thenReturn(List.of(live, cancelled, direct));
+        when(engine.getCurrentInstance(F, "FORCE_INSERT", "P-25"))
+                .thenReturn(Optional.of(instance("INST-25", "P-25", InstanceStatus.RUNNING)));
+        when(engine.getCurrentInstance(F, "FORCE_INSERT", "P-27")).thenReturn(Optional.empty());
+
+        List<ProductionPlanDTO> pending = service.getPendingForceInsertApprovals(F);
+
+        assertThat(pending).as("已取消的不在待审批里 (只剩 2 张)").hasSize(2);
+        assertThat(pending.get(0).getApprovalWorkflowInstanceId()).isEqualTo("INST-25");
+        assertThat(pending.get(1).getApprovalWorkflowInstanceId()).as("没有画布的计划不带实例").isNull();
+    }
+
+    @Test
+    void whenTheSelfApprovalGateGivesNoVerdictBothEntrancesRefuseInsteadOfNpeOrPassing() {
+        FactorySelfApprovalGate silent = mock(FactorySelfApprovalGate.class); // decide(...) 未打桩 ⇒ null
+        UrgentInsertServiceImpl failClosed = UrgentInsertTestSupport.construct(UrgentInsertServiceImpl.class,
+                Map.ofEntries(
+                        Map.entry(UserRepository.class, userRepoWith(APPROVER)),
+                        Map.entry(InsertSlotRepository.class, slots),
+                        Map.entry(ProductionPlanRepository.class, plans),
+                        Map.entry(SchedulingResourceWriteLock.class, mock(SchedulingResourceWriteLock.class)),
+                        Map.entry(UrgentInsertScheduleService.class, scheduler),
+                        Map.entry(WorkflowEngineService.class, engine),
+                        Map.entry(FactorySelfApprovalGate.class, silent)));
+        ProductionPlan plan = pendingCanvasPlan("P-30", "INST-30");
+        when(engine.getLatestInstance(F, "FORCE_INSERT", "P-30")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> failClosed.approveForceInsert(F, "P-30", APPROVER, true, "同意"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE"));
+        assertThatThrownBy(() -> failClosed.applyWorkflowAction(F, "P-30", "INST-30", APPROVER,
+                "production_manager", null, HistoryAction.APPROVE, "同意"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(code(e)).isEqualTo("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE"));
+
+        assertThat(plan.isPendingApproval()).as("没批成, 计划仍待审批").isTrue();
+        verify(scheduler, never()).apply(any(), any(), any(), any(), any());
+        verify(engine, never()).transitionNode(any(), any(), any(), any(), any(), any());
+        assertThat(slot.getStatus()).isEqualTo("selected");
+    }
+
+    private UserRepository userRepoWith(long id) {
+        UserRepository repo = mock(UserRepository.class);
+        when(repo.findById(id)).thenReturn(Optional.of(user(id, "生产经理")));
+        return repo;
     }
 }

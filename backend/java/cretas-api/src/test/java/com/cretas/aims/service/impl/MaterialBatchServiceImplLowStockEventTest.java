@@ -100,6 +100,26 @@ class MaterialBatchServiceImplLowStockEventTest {
     }
 
     @Test
+    void useBatchQuantityRefusesHeldOrDefectiveBatchWithChineseReason() {
+        // #1590 遗留: 通用扣减原语也过状态闸 —— 冻结扣住 (质检中) / 判不合格的批次有余量也不能扣
+        for (MaterialBatchStatus st : new MaterialBatchStatus[]{MaterialBatchStatus.INSPECTING, MaterialBatchStatus.DEFECTIVE}) {
+            MaterialBatch batch = batch("MB-B", "RM-1", "100", "0", "0");
+            batch.setStatus(st);
+            when(materialBatchRepository.findById("MB-B")).thenReturn(Optional.of(batch));
+
+            org.assertj.core.api.Assertions.assertThatThrownBy(
+                            () -> service.useBatchQuantity("F006", "MB-B", new BigDecimal("10")))
+                    .as(st.name())
+                    .isInstanceOfSatisfying(com.cretas.aims.exception.BusinessException.class, e -> {
+                        assertThat(e.getCode()).isEqualTo(409);
+                        assertThat(e.getMessage()).contains(st.getDisplayName());
+                    });
+            assertThat(batch.getUsedQuantity()).as(st.name()).isEqualByComparingTo("0");
+        }
+        verify(materialBatchRepository, org.mockito.Mockito.never()).save(any(MaterialBatch.class));
+    }
+
+    @Test
     void consumeBatchMaterialPublishesLowStockEventWhenReservedConsumptionDropsBelowMinStock() {
         MaterialBatch batch = batch("MB-1", "RM-1", "100", "30", "50");
         when(materialBatchRepository.findById("MB-1")).thenReturn(Optional.of(batch));

@@ -106,11 +106,17 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     private final com.cretas.aims.service.discipline.FactoryDisciplinePolicy disciplinePolicy;
 
     /** 画布审批实例的 moduleCode, 与 DecisionTypeMetadataRegistry 里 FORCE_INSERT 的登记一致。 */
-    static final String FORCE_INSERT_MODULE = "FORCE_INSERT";
+    static final String FORCE_INSERT_MODULE = com.cretas.aims.service.production.ForceInsertApproverDescriber.MODULE;
 
     /** Sprint 3 Track-F (C-LINKARRAY-1): unified link service for urgent-insert path. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private LinkArrayService linkArrayService;
+
+    /** 1551-11 红线 1 B1: 驳回时级联作废挂在计划上的未开工批次。字段注入, 不打断按构造器装配的既有单测。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.workprocess.WorkProcessTaskRepository workProcessTaskRepository;
 
     @Override
     @Transactional
@@ -1331,8 +1337,25 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
 
         User approver = userRepository.findById(approverId)
                 .orElseThrow(() -> new EntityNotFoundException("User", approverId));
+        // 本人不能批自己提交的插单 (与画布路径同一个工厂开关): 开关关 ⇒ 拦; 开 ⇒ 必须写原因, 审批意见带留痕前缀。
+        // 只管批准; 驳回自己的插单 = 撤回, 不拦。
+        boolean actorIsMaker = approved
+                && (Objects.equals(plan.getCreatedBy(), approverId) || Objects.equals(plan.getForceInsertBy(), approverId));
+        String trimmedComment = comment == null ? null : comment.trim();
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision = decideSelfApproval(factoryId, actorIsMaker, trimmedComment);
+        if (selfDecision.forbidden()) {
+            throw new BusinessException(409, "提交强制插单的人不能审批自己的插单")
+                    .withCode("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN")
+                    .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
+        }
+        String auditComment = selfDecision.selfApproved() ? SELF_APPROVAL_MARK + selfDecision.reason() : comment;
         InsertSlot approvedSlot = approved ? findClaimedSlotOrThrow(factoryId, plan) : null;
-        return applyDecision(factoryId, plan, approverId, approver, approved, comment, approvedSlot);
+        if (selfDecision.selfApproved()) {
+            // 红线 4 结构化留痕: 直接入口与画布入口同口径 (判据是字段, 意见前缀只给人看)
+            markSelfApproved(plan, selfDecision.reason());
+        }
+        return applyDecision(factoryId, plan, approverId, approver, approved, auditComment, approvedSlot,
+                selfDecision);
     }
 
     /**
@@ -1405,14 +1428,14 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         // 纪律排查 B1–B3 / #1580: 提交人本人批准 —— 开关关 ⇒ 拦; 开 ⇒ 必须写原因并留痕。
         boolean actorIsMaker = action == ApprovalHistory.HistoryAction.APPROVE
                 && (Objects.equals(plan.getCreatedBy(), actorId) || Objects.equals(plan.getForceInsertBy(), actorId));
-        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision =
-                com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
-                        selfApprovalGate, factoryId, actorIsMaker, trimmedNotes);
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision = decideSelfApproval(factoryId, actorIsMaker, trimmedNotes);
         if (selfDecision.forbidden()) {
             throw new BusinessException(409, "提交强制插单的人不能审批自己的插单")
                     .withCode("FORCE_INSERT_SELF_APPROVAL_FORBIDDEN")
                     .withHint(com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT);
         }
+        // 红线 4: 结构化留痕 (self_approved + self_approval_reason) 才是判据; 意见前缀只给人看
+        // (OA 审批历史只有意见文本, 没有结构化列)。
         String auditNotes = selfDecision.selfApproved()
                 ? SELF_APPROVAL_MARK + selfDecision.reason()
                 : trimmedNotes;
@@ -1421,18 +1444,23 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         InsertSlot approvedSlot = action == ApprovalHistory.HistoryAction.APPROVE
                 ? findClaimedSlotOrThrow(factoryId, plan) : null;
 
+        // 并行网关: 推进入口校验过的那个节点 (expectedNodeId), 不是 currentNodeIds[0]
         ApprovalWorkflowInstance updated = workflowEngine.transitionNode(
-                workflowInstanceId, actorId, actorRole, action, auditNotes);
+                workflowInstanceId, actorId, actorRole, action, auditNotes, expectedNodeId);
 
+        if (selfDecision.selfApproved()) {
+            // 计划上的标记是「审批链里有过本人审批」: 多级画布里任何一级由提交人本人批, 都留在计划上不被后续节点覆盖
+            markSelfApproved(plan, selfDecision.reason());
+        }
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.APPROVED) {
-            return applyDecision(factoryId, plan, actorId, actor, true, auditNotes, approvedSlot);
+            return applyDecision(factoryId, plan, actorId, actor, true, auditNotes, approvedSlot, selfDecision);
         }
         if (updated.getStatus() == ApprovalWorkflowInstance.InstanceStatus.REJECTED) {
             if (!planStillPending) {
                 // 计划早已取消 (时段已经释放, 可能已被别的计划占用): 只结束审批, 不再动计划和时段
                 return productionPlanMapper.toDTO(plan);
             }
-            return applyDecision(factoryId, plan, actorId, actor, false, auditNotes, null);
+            return applyDecision(factoryId, plan, actorId, actor, false, auditNotes, null, selfDecision);
         }
         if (selfDecision.selfApproved()) {
             // 多级画布的中间节点由本人批: 也要留痕 (不只最后一个节点)
@@ -1503,8 +1531,34 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
         return switchOn && approvalWorkflowService.getActiveByDecisionType(factoryId, DecisionType.FORCE_INSERT).isPresent();
     }
 
-    /** 本人审批留痕: 写在计划审批意见与 OA 审批记录的前缀。 */
+    /**
+     * 本人审批判定。fail-closed: 判定组件没给出结论 (返回 null) 时抛 500 拒绝, 既不 NPE, 也绝不当成放行。
+     */
+    private com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decideSelfApproval(
+            String factoryId, boolean actorIsMaker, String reason) {
+        com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision decision = com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                selfApprovalGate, factoryId, actorIsMaker, reason);
+        if (decision == null) {
+            throw new BusinessException(500, "无法判定是否本人审批, 为安全起见已拒绝本次审批")
+                    .withCode("FORCE_INSERT_SELF_APPROVAL_UNDECIDABLE")
+                    .withHint("请稍后重试; 持续出现请联系技术支持");
+        }
+        return decision;
+    }
+
+    /**
+     * 本人审批的<b>给人看</b>的标记: 写在计划审批意见与 OA 审批记录的前缀。
+     * 判据是结构化字段 {@code production_plans.self_approved / self_approval_reason} 与
+     * {@code decision_audit_logs.self_approved / self_approval_reason} (红线 4, V20261114_01);
+     * 存量只有前缀的行用 scripts/migrations/2026-11-13-production-plan-self-approval-backfill.sql 回填。
+     */
     static final String SELF_APPROVAL_MARK = "【本人审批】";
+
+    /** 本人审批结构化留痕 (红线 4)。原因由 FactorySelfApprovalGate 校验过非空且已 trim。 */
+    private static void markSelfApproved(ProductionPlan plan, String reason) {
+        plan.setSelfApproved(true);
+        plan.setSelfApprovalReason(reason);
+    }
 
     private ProductionPlan loadPendingForceInsert(String factoryId, String planId) {
         ProductionPlan plan = productionPlanRepository.findById(planId)
@@ -1530,10 +1584,41 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
     }
 
     /**
+     * 1551-11 红线 1 独立审查 B1: 驳回 = 作废计划, 挂在它上面还没开工的手工 / AI 批次随之作废 (与取消计划同一个级联
+     * {@link com.cretas.aims.service.production.PlanBatchCascade}), 否则批次留在 PLANNED 还能开工。
+     * 已开工的批次 (修复前绕过审批开的存量) 不在这里动: 有报工 / 投料要走报工撤回, 只记 WARN 留给人处理。
+     */
+    private void cancelUnstartedBatchesOfRejectedPlan(String factoryId, ProductionPlan plan) {
+        if (productionBatchRepository == null) {
+            return; // 单测按构造器装配、没注入仓库
+        }
+        List<com.cretas.aims.entity.ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndProductionPlanId(factoryId, plan.getId());
+        List<com.cretas.aims.entity.ProductionBatch> unstarted = new ArrayList<>();
+        List<String> started = new ArrayList<>();
+        for (com.cretas.aims.entity.ProductionBatch b : batches) {
+            if (b.getStatus() == com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNED
+                    || b.getStatus() == com.cretas.aims.entity.enums.ProductionBatchStatus.PLANNING) {
+                unstarted.add(b);
+            } else if (b.getStatus() != com.cretas.aims.entity.enums.ProductionBatchStatus.CANCELLED
+                    && b.getStatus() != com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED) {
+                started.add(b.getBatchNumber());
+            }
+        }
+        com.cretas.aims.service.production.PlanBatchCascade.cancelBatchesAndTasks(
+                factoryId, plan.getId(), unstarted, productionBatchRepository, workProcessTaskRepository);
+        if (!started.isEmpty()) {
+            log.warn("驳回强制插单时发现已开工批次 (修复前绕过审批开工的存量), 未自动作废, 需走报工撤回: planId={}, batches={}",
+                    plan.getId(), started);
+        }
+    }
+
+    /**
      * 批准 = 按最新数据重算并排入 (顺延被挤计划); 驳回 = 作废计划并释放时段。直接审批与画布审批共用。
      */
     private ProductionPlanDTO applyDecision(String factoryId, ProductionPlan plan, Long approverId, User approver,
-                                            boolean approved, String comment, InsertSlot approvedSlot) {
+                                            boolean approved, String comment, InsertSlot approvedSlot,
+                                            com.cretas.aims.service.workflow.FactorySelfApprovalGate.Decision selfDecision) {
         String planId = plan.getId();
         UrgentInsertScheduleService.Proposal approvalSchedule = null;
         List<String> approvalWarnings = List.of();
@@ -1564,6 +1649,7 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         insertSlotRepository.save(slot);
                     });
 
+            cancelUnstartedBatchesOfRejectedPlan(factoryId, plan);
             log.info("强制插单已拒绝: planId={}", planId);
         }
 
@@ -1580,7 +1666,10 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         com.cretas.aims.entity.DecisionAuditLog.ApprovalStatus.REJECTED,
                 comment,
                 approverId,
-                approver.getFullName()
+                approver.getFullName(),
+                // 红线 4: 这一次决定是不是提交人本人做的 (与计划上「审批链里有过本人审批」的标记口径不同)
+                selfDecision.selfApproved(),
+                selfDecision.selfApproved() ? selfDecision.reason() : null
         );
 
         // 发送审批结果推送通知给申请人
@@ -1670,8 +1759,26 @@ public class UrgentInsertServiceImpl implements UrgentInsertService {
                         true,
                         ProductionPlan.ApprovalStatus.PENDING)
                 .stream()
-                .map(productionPlanMapper::toDTO)
+                // 已取消的计划审批状态仍是 PENDING, 但没有可批的东西了 —— 不进待审批列表
+                .filter(p -> p.getStatus() != ProductionPlanStatus.CANCELLED)
+                .map(plan -> {
+                    ProductionPlanDTO dto = productionPlanMapper.toDTO(plan);
+                    attachWorkflowRef(factoryId, plan, dto);
+                    return dto;
+                })
                 .collect(Collectors.toList());
+    }
+
+    /** 待审批列表: 走画布的计划带上运行中的实例 ID, 让手机端知道要走 OA 动作入口而不是直接审批 (直接入口对这类计划恒 409)。 */
+    private void attachWorkflowRef(String factoryId, ProductionPlan plan, ProductionPlanDTO dto) {
+        if (workflowEngine == null) {
+            return;
+        }
+        Optional<ApprovalWorkflowInstance> running = workflowEngine.getCurrentInstance(
+                factoryId, FORCE_INSERT_MODULE, plan.getId());
+        if (running != null && running.isPresent()) {
+            dto.setApprovalWorkflowInstanceId(running.get().getId());
+        }
     }
 
     @Override

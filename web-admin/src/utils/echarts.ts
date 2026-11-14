@@ -114,6 +114,8 @@ import { CanvasRenderer, SVGRenderer } from 'echarts/renderers'
 // 一起转译)。
 import 'echarts-wordcloud'
 
+import { cretasLightTheme } from './echarts-theme'
+
 echarts.use([
   // charts
   BarChart, LineChart, PieChart, ScatterChart, RadarChart,
@@ -131,35 +133,9 @@ echarts.use([
 ])
 
 // ---- Light theme ----
-echarts.registerTheme('cretas', {
-  color: ['#2D8B57', '#36B37E', '#FFAB00', '#FF5630', '#6B778C',
-          '#4C9AFF', '#57D9A3', '#FFC400', '#FF8B6A', '#A3A0FB'],
-  backgroundColor: 'transparent',
-  textStyle: { color: '#303133' },
-  title: { textStyle: { color: '#303133' }, subtextStyle: { color: '#909399' } },
-  legend: { textStyle: { color: '#606266' } },
-  tooltip: {
-    backgroundColor: 'rgba(255,255,255,0.96)',
-    borderColor: '#e4e7ed',
-    textStyle: { color: '#303133' },
-    extraCssText: 'box-shadow:0 4px 12px rgba(0,0,0,0.08);border-radius:8px;padding:12px 16px;',
-  },
-  categoryAxis: {
-    axisLine: { show: false },
-    axisTick: { show: false },
-    axisLabel: { color: '#909399', fontSize: 11 },
-    splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
-  },
-  valueAxis: {
-    axisLine: { show: false },
-    axisTick: { show: false },
-    axisLabel: { color: '#909399', fontSize: 11 },
-    splitLine: { lineStyle: { color: '#f0f2f5', type: 'dashed' } },
-  },
-  line: { symbol: 'circle', symbolSize: 6, lineStyle: { width: 3 }, smooth: true },
-  bar: { itemStyle: { borderRadius: [4, 4, 0, 0] } },
-  pie: { itemStyle: { borderColor: '#fff', borderWidth: 2 } },
-})
+// P1：浅色主题只有一份真值 = utils/echarts-theme.ts（映射到 --cs-*）。这里原来另写了一份
+// （首色 #2D8B57、文字 #303133），main.ts 的 registerEChartsTheme() 又注册一次，谁生效看加载先后。
+echarts.registerTheme('cretas', cretasLightTheme)
 
 // ---- B3: Dark mode theme ----
 echarts.registerTheme('cretas-dark', {

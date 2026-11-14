@@ -139,7 +139,7 @@ class IntentExecutionOrchestratorTaskStateContractTest {
         assertThat(resumed.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
         assertThat(resumed.getSessionId()).isEqualTo("s-report");
         assertThat(resumed.getMetadata()).containsEntry("sessionId", "s-report").containsEntry("taskResumed", true);
-        assertThat(resumed.getMessage()).contains("工序任务ID").contains("actualQuantity：0");
+        assertThat(resumed.getMessage()).contains("工序任务ID").contains("实际产量：0").doesNotContain("actualQuantity");
         assertThat(resumed.getConfirmableAction()).isNull();
         assertThat(report.getStatus()).isEqualTo(SessionStatus.ACTIVE);
     }
