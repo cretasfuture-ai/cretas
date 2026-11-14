@@ -270,6 +270,86 @@ public class ConversationServiceImpl implements ConversationService {
                 .build());
     }
 
+    private static final String CHOICE_PARAM_TYPE = ConversationSession.CHOICE_PARAM_TYPE;
+
+    @Override
+    @Transactional
+    public boolean attachParameterChoices(String factoryId, Long userId, String sessionId,
+                                          String paramName, String paramLabel, List<CandidateInfo> choices) {
+        if (sessionId == null || sessionId.isBlank() || paramName == null || paramName.isBlank()
+                || choices == null || choices.isEmpty()) {
+            return false;
+        }
+        try {
+            Optional<ConversationSession> found =
+                    sessionRepository.findBySessionIdAndFactoryIdAndUserId(sessionId, factoryId, userId);
+            if (found.isEmpty()) {
+                return false;
+            }
+            ConversationSession session = found.get();
+            if (!session.isParameterCollectionMode() || session.getStatus() != SessionStatus.ACTIVE) {
+                return false;
+            }
+            List<ConversationSession.RequiredParameter> required = session.getRequiredParameters();
+            boolean marked = false;
+            for (ConversationSession.RequiredParameter p : required) {
+                if (paramName.equals(p.getName()) && !p.isCollected()) {
+                    p.setType(CHOICE_PARAM_TYPE);
+                    if (paramLabel != null && !paramLabel.isBlank()) {
+                        p.setLabel(paramLabel);
+                    }
+                    marked = true;
+                }
+            }
+            if (!marked) {
+                return false;
+            }
+            List<CandidateIntent> candidates = choices.stream()
+                    .filter(c -> c != null && c.getIntentCode() != null && c.getIntentName() != null)
+                    .map(c -> CandidateIntent.builder().intentCode(c.getIntentCode())
+                            .intentName(c.getIntentName()).reasoning(c.getDescription()).build())
+                    .collect(Collectors.toList());
+            if (candidates.isEmpty()) {
+                return false;
+            }
+            session.setRequiredParameters(required);
+            session.setCandidates(candidates);
+            sessionRepository.save(session);
+            return true;
+        } catch (RuntimeException e) {
+            log.warn("给参数收集会话挂选项失败 (追问照常, 只是没有序号可选): session={}, error={}", sessionId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * 选择题这一问的回复: 对上选项 (序号 / 产品名 / 工序名) 就填值并返回 null (继续原流程);
+     * 没对上 = 不是在回答, 作废选项并返回 CANCELLED (调用方当新话重新识别)。
+     */
+    private ConversationResponse continueParameterChoice(ConversationSession session, String userReply) {
+        Optional<ConversationSession.RequiredParameter> pending = session.getNextPendingParameter()
+                .filter(p -> CHOICE_PARAM_TYPE.equals(p.getType()));
+        List<CandidateIntent> options = session.getCandidates();
+        if (pending.isEmpty() || options == null || options.isEmpty()) {
+            return null;
+        }
+        int index = ClarificationChoiceMatcher.matchParameterChoice(userReply, options);
+        if (index < 0) {
+            // 没选中 = 不是在回答这一问 (「不报了」「红烧肉还剩多少」): 旧选项作废, 交回识别当新话, 不消耗轮次、不回「没对上」
+            session.cancel();
+            sessionRepository.save(session);
+            return ConversationResponse.builder()
+                    .sessionId(session.getSessionId())
+                    .status(SessionStatus.CANCELLED)
+                    .completed(false)
+                    .message("选项已作废")
+                    .intentCode(session.getKnownIntentCode())
+                    .build();
+        }
+        session.addCollectedParameter(pending.get().getName(), options.get(index).getIntentCode());
+        return null;
+    }
+
     @Override
     @Transactional
     public ConversationResponse continueConversation(
@@ -356,8 +436,18 @@ public class ConversationServiceImpl implements ConversationService {
                     .build();
         }
 
-        // 使用 LLM 提取参数值
-        LlmParameterExtractionResult extractionResult = extractParametersWithLlm(session, userReply);
+        // 这一问是选择题 (选哪一道工序 …): 用选项匹配, 不让模型去「理解」一个序号
+        boolean choiceQuestion = session.isAwaitingChoice();
+        if (choiceQuestion) {
+            ConversationResponse notAnAnswer = continueParameterChoice(session, userReply);
+            if (notAnAnswer != null) {
+                return notAnAnswer;
+            }
+        }
+
+        // 使用 LLM 提取参数值 (选择题已经按选项填好了, 不再抽)
+        LlmParameterExtractionResult extractionResult = choiceQuestion
+                ? new LlmParameterExtractionResult() : extractParametersWithLlm(session, userReply);
 
         // 更新收集到的参数
         if (extractionResult.getExtractedParams() != null) {
