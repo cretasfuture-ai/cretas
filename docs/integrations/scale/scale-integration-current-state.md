@@ -72,7 +72,7 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 | G8 | 蓝牙 / 手机直连秤读数：App 端没有任何蓝牙读秤代码 | 无 | 如果现场秤只有蓝牙，需要新开发；先确认秤的接口 |
 | G9 | 真实 MQTT broker、真实数据库（`iot_device_data` 实表）、真实 `mqtt.enabled=true` 部署的整链未测 | 测试里用桩 | 在测试环境起 broker，用模拟器 + 真实网关发消息，看表里有记录、`lastWeightReading` 更新、工位计数拿到重量 |
 | G10 | App / web-admin 界面上的称重展示未验 | 无 UI 验收 | 工位计数界面的实时重量展示需真机 / 浏览器看 |
-| G11 | **柯力种子修正不会自动上线**：prod 的 `spring.flyway.locations` 只扫 `db/flyway`，两份历史种子 SQL（`db/migration`、`db/migration-pg-converted`）不会被执行；2026-11-14 只读核对 prod：`scale_protocol_configs` 柯力只有 1 行（`proto-keli-d2008-ascii`，全局内置，frame_format 是 jsonb，旧值 frameLength=12 / stable.start=10） | **迁移 V20261114_51 修正**（`db/flyway/V20261114_51__fix_keli_d2008_builtin_frame_format.sql`：按 id 精确定位、带旧值条件、幂等、人工改过不覆盖；真实 PG 测试 `KeliBuiltinFrameFormatMigrationPostgresContractTest`）。合并发布后待读回 prod 确认 14/11 | 发布后只读读回该行 frame_format 应为 frameLength=14、stable.start=11；用柯力样例帧 `2B303031323430206B6720530D0A` 协议测试应读出 124.0 kg 稳定 |
+| G11 | **柯力种子修正不会自动上线**：prod 的 `spring.flyway.locations` 只扫 `db/flyway`，两份历史种子 SQL（`db/migration`、`db/migration-pg-converted`）不会被执行；2026-11-14 只读核对 prod：`scale_protocol_configs` 柯力只有 1 行（`proto-keli-d2008-ascii`，全局内置，frame_format 是 jsonb，旧值 frameLength=12 / stable.start=10） | **迁移 V20261114_71 修正**（`db/flyway/V20261114_71__fix_keli_d2008_builtin_frame_format.sql`：按 id 精确定位、带旧值条件、幂等、人工改过不覆盖；真实 PG 测试 `KeliBuiltinFrameFormatMigrationPostgresContractTest`）。合并发布后待读回 prod 确认 14/11 | 发布后只读读回该行 frame_format 应为 frameLength=14、stable.start=11；用柯力样例帧 `2B303031323430206B6720530D0A` 协议测试应读出 124.0 kg 稳定 |
 
 ## 6. 本 PR 做了什么（行为变化，评审时请知悉）
 

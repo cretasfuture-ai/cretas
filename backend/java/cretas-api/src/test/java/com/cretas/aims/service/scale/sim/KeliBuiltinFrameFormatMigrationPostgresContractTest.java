@@ -27,7 +27,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 /**
- * 真实 PostgreSQL 上跑迁移 V20261114_51 (修正 prod 内置柯力协议 frame_format):
+ * 真实 PostgreSQL 上跑迁移 V20261114_71 (修正 prod 内置柯力协议 frame_format):
  * 旧行 -> 14/11 并能读样例帧; 再跑一次幂等; 人工改过的行不覆盖; 行不存在 / 表不存在不报错。
  * 旧行 JSON 取种子 SQL 里的新配置反向改回 (frameLength 14->12, stable.start 11->10), 即 prod 实际状态。
  * 解析走线上入口 ScaleProtocolAdapterServiceImpl, 读的是迁移后从库里读回的 frame_format。
@@ -43,7 +43,7 @@ import org.springframework.test.context.DynamicPropertySource;
 class KeliBuiltinFrameFormatMigrationPostgresContractTest {
 
     private static final Path MIGRATION = Path.of("src/main/resources/db/flyway",
-            "V20261114_51__fix_keli_d2008_builtin_frame_format.sql");
+            "V20261114_71__fix_keli_d2008_builtin_frame_format.sql");
     private static final String ID = "proto-keli-d2008-ascii";
     private static final String CODE = "KELI_D2008_ASCII";
     private static final String SAMPLE_HEX = "2B303031323430206B6720530D0A";
