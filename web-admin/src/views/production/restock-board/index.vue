@@ -442,7 +442,7 @@ onMounted(load)
 
 .label,
 .muted {
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 13px;
 }
 
@@ -457,16 +457,16 @@ onMounted(load)
 
 .shortfall,
 .warning-text {
-  color: #e6a23c;
+  color: var(--cs-warning);
 }
 
 .shortfall-strong {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-weight: 600;
 }
 
 .covered-dash {
-  color: #67c23a;
+  color: var(--cs-success);
 }
 
 .head-help {
@@ -486,8 +486,8 @@ onMounted(load)
 
 /* 日期矩阵第一列加左分隔, 与汇总列视觉区分 */
 .horizon-table :deep(.day-matrix-first) {
-  border-left: 2px solid #dcdfe6;
-  background-color: #fafafa;
+  border-left: 2px solid var(--cs-border);
+  background-color: var(--cs-surface-subtle);
 }
 
 .expand-grid {
@@ -516,7 +516,7 @@ onMounted(load)
 }
 
 .shippable-warning {
-  color: #e6a23c;
+  color: var(--cs-warning);
   font-weight: 600;
 }
 
