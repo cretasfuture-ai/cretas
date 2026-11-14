@@ -300,15 +300,15 @@ async function handleConfirm(): Promise<void> {
 
 <style scoped>
 .merge-form { margin-top: 12px; }
-.opt-meta { float: right; color: #909399; font-size: 12px; }
+.opt-meta { float: right; color: var(--cs-muted); font-size: 12px; }
 .merge-check { min-height: 8px; }
-.merge-block { margin: 8px 0; color: #606266; }
+.merge-block { margin: 8px 0; color: var(--cs-muted); }
 .merge-warning { margin: 6px 0; }
-.merge-blockers { margin: 8px 0; padding: 8px 12px; border: 1px solid #fbc4c4; background: #fef0f0; border-radius: 4px; }
-.blockers-title { color: #f56c6c; font-weight: 600; margin-bottom: 6px; }
+.merge-blockers { margin: 8px 0; padding: 8px 12px; border: 1px solid #fbc4c4; background: var(--cs-danger-soft); border-radius: 4px; }
+.blockers-title { color: var(--cs-danger); font-weight: 600; margin-bottom: 6px; }
 .blocker { padding: 6px 0; border-top: 1px dashed #fbc4c4; }
 .blocker:first-of-type { border-top: 0; }
 .blocker-message { color: #c45656; font-weight: 600; }
-.blocker-items { margin: 4px 0; padding-left: 20px; color: #606266; }
-.blocker-hint { color: #909399; font-size: 13px; }
+.blocker-items { margin: 4px 0; padding-left: 20px; color: var(--cs-muted); }
+.blocker-hint { color: var(--cs-muted); font-size: 13px; }
 </style>

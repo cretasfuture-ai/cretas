@@ -2050,7 +2050,7 @@ function goToReversalList() {
         style="margin-bottom:16px"
       >
         <template #default>
-          <div style="font-size:13px;color:#606266;line-height:1.6;margin-top:4px">
+          <div style="font-size:13px;color:var(--cs-muted);line-height:1.6;margin-top:4px">
             产品: <strong>{{ batch?.productName || batch?.productType || '—' }}</strong><br>
             计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + displayProcessUnit(batch.unit) : '—' }}</strong><br>
             当前状态: <strong>{{ batch ? getStatusText(batch.status) : '—' }}</strong>
@@ -2079,8 +2079,8 @@ function goToReversalList() {
 
       <!-- 撤回原因（fool-proof Rule 3: dropdown + 其他才显 textarea） -->
       <div style="margin-bottom:8px">
-        <span style="font-size:13px;font-weight:500;color:#303133">撤回原因</span>
-        <span style="color:#F56C6C;margin-left:2px">*</span>
+        <span style="font-size:13px;font-weight:500;color:var(--cs-text)">撤回原因</span>
+        <span style="color:var(--cs-danger);margin-left:2px">*</span>
       </div>
       <el-select
         v-model="reversalReasonSelected"
@@ -2159,7 +2159,7 @@ function goToReversalList() {
     font-size: 18px;
     font-weight: 600;
     margin: 0;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
   }
 }
 
@@ -2172,27 +2172,27 @@ function goToReversalList() {
 
 .kpi-card {
   background: #fff;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
   border-radius: 8px;
   padding: 16px 20px;
   text-align: center;
 
   .kpi-label {
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     margin-bottom: 8px;
   }
 
   .kpi-value {
     font-size: 24px;
     font-weight: 700;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     line-height: 1.2;
   }
 
   .kpi-unit {
     font-size: 12px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
     margin-top: 4px;
   }
 }
@@ -2206,14 +2206,14 @@ function goToReversalList() {
 .detail-card {
   :deep(.el-card__header) {
     padding: 12px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
   }
 }
 
 .section-title {
   font-size: 15px;
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .cost-card-header,
@@ -2229,7 +2229,7 @@ function goToReversalList() {
 
 .section-meta {
   font-size: 13px;
-  color: #909399;
+  color: var(--cs-muted);
   margin-left: 12px;
 }
 
@@ -2244,20 +2244,20 @@ function goToReversalList() {
   padding: 8px 10px;
   border-radius: 4px;
   color: var(--el-color-warning-dark-2, #a86200);
-  background: var(--el-color-warning-light-9, #fdf6ec);
+  background: var(--el-color-warning-light-9, var(--cs-warning-soft));
   font-size: 13px;
 }
 
-.text-success { color: #67C23A; }
-.text-warning { color: #E6A23C; }
-.text-danger { color: #F56C6C; }
+.text-success { color: var(--cs-success); }
+.text-warning { color: var(--cs-warning); }
+.text-danger { color: var(--cs-danger); }
 
 .yield-summary {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .yield-cost-summary {
@@ -2266,7 +2266,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 20px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .cost-item {
     font-weight: 500;
@@ -2285,7 +2285,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 24px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .trad-summary-item {
     font-weight: 500;
@@ -2327,7 +2327,7 @@ function goToReversalList() {
 /* 适配单元5: 展开行 — 证据照片/工时段/副产物/损耗/留样 细节 */
 .trad-detail {
   padding: 8px 16px 8px 48px;
-  background: var(--el-fill-color-lighter, #fafafa);
+  background: var(--el-fill-color-lighter, var(--cs-surface-subtle));
 }
 
 .trad-item {
@@ -2341,12 +2341,12 @@ function goToReversalList() {
 
 .trad-label {
   font-weight: 600;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   min-width: 56px;
 }
 
 .trad-value {
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 }
 
 .trad-empty {
@@ -2396,7 +2396,7 @@ function goToReversalList() {
 
 .annot-note-text {
   font-size: 10px;
-  color: #606266;
+  color: var(--cs-muted);
   word-break: break-all;
   line-height: 1.3;
 }
@@ -2406,31 +2406,31 @@ function goToReversalList() {
   padding: 2px 8px;
   border-radius: 4px;
   background: var(--el-color-info-light-9, #f4f4f5);
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   font-size: 12px;
 }
 
 .trad-chip-by {
-  background: var(--el-color-success-light-9, #f0f9eb);
+  background: var(--el-color-success-light-9, var(--cs-success-soft));
 }
 
 /* 单元 F: 订单出成率弹窗 */
 .order-yield-meta {
   margin-bottom: 12px;
   font-size: 13px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .order-yield-summary {
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
   gap: 8px 20px;
   font-weight: 600;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
 
   .order-yield-rate {
     color: var(--el-color-primary);
@@ -2440,7 +2440,7 @@ function goToReversalList() {
 .order-yield-note {
   margin-top: 6px;
   font-size: 13px;
-  color: var(--el-color-warning, #e6a23c);
+  color: var(--el-color-warning, var(--cs-warning));
 }
 
 .order-yield-cost {
@@ -2449,7 +2449,7 @@ function goToReversalList() {
   flex-wrap: wrap;
   gap: 8px 20px;
   font-size: 14px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 
   .cost-item {
     font-weight: 500;
@@ -2465,7 +2465,7 @@ function goToReversalList() {
   p {
     margin: 4px 0 0;
     font-size: 13px;
-    color: var(--text-color-secondary, #909399);
+    color: var(--text-color-secondary, var(--cs-muted));
   }
 
   .timeline-operator {
@@ -2484,7 +2484,7 @@ function goToReversalList() {
   // (与 isAssignmentDeepLinkHighlighted 的 setTimeout 时长一致)。
   &.is-deep-link-highlight {
     transition: box-shadow 0.3s ease;
-    box-shadow: 0 0 0 2px var(--el-color-primary, #409eff);
+    box-shadow: 0 0 0 2px var(--el-color-primary, var(--cs-primary));
   }
 }
 
@@ -2515,14 +2515,14 @@ function goToReversalList() {
   padding: 12px 16px;
   cursor: pointer;
   transition: background 0.15s;
-  border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
 
   &:last-child {
     border-bottom: none;
   }
 
   &:hover {
-    background: var(--el-fill-color-light, #f5f7fa);
+    background: var(--el-fill-color-light, var(--cs-surface-subtle));
   }
 }
 
@@ -2544,7 +2544,7 @@ function goToReversalList() {
   height: 28px;
   border-radius: 50%;
   background: var(--el-color-primary-light-9, #ecf5ff);
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   font-size: 13px;
   font-weight: 700;
 }
@@ -2560,7 +2560,7 @@ function goToReversalList() {
 .task-name {
   font-size: 14px;
   font-weight: 500;
-  color: var(--text-color-primary, #303133);
+  color: var(--text-color-primary, var(--cs-text));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2581,7 +2581,7 @@ function goToReversalList() {
 }
 
 .task-assignee-text {
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
 }
 
 .task-assignee-empty {
@@ -2599,14 +2599,14 @@ function goToReversalList() {
   label {
     display: block;
     margin-bottom: 8px;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
     font-weight: 600;
   }
 }
 
 .field-help {
   margin: 6px 0 0;
-  color: var(--text-color-secondary, #7a8599);
+  color: var(--text-color-secondary, var(--cs-muted));
   font-size: 12px;
   line-height: 1.5;
 }
@@ -2615,7 +2615,7 @@ function goToReversalList() {
   ul {
     margin: 10px 0 0;
     padding-left: 22px;
-    color: var(--text-color-primary, #303133);
+    color: var(--text-color-primary, var(--cs-text));
   }
 
   li + li {
@@ -2626,7 +2626,7 @@ function goToReversalList() {
 .task-output {
   flex-shrink: 0;
   font-size: 13px;
-  color: #67C23A;
+  color: var(--cs-success);
   font-weight: 500;
 }
 
@@ -2697,7 +2697,7 @@ function goToReversalList() {
   object-fit: cover;
   background: #111827;
   display: block;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
+  border: 1px solid var(--border-color-lighter, var(--cs-border));
 }
 
 .gallery-thumb-video {
@@ -2715,12 +2715,12 @@ function goToReversalList() {
 .gallery-order {
   font-size: 11px;
   font-weight: 700;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
 }
 
 .gallery-process-name {
   font-size: 11px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   text-align: center;
   max-width: 100%;
   overflow: hidden;
@@ -2735,7 +2735,7 @@ function goToReversalList() {
 /* SP1 T6 双产出: semiCode 副标题 (在半成品产出量下方小字) */
 .semi-code-text {
   font-size: 11px;
-  color: var(--text-color-secondary, #606266);
+  color: var(--text-color-secondary, var(--cs-muted));
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
