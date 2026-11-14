@@ -432,8 +432,8 @@ defineExpose({ setFocus, sendMessage, clearConversation });
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #409eff;
-  box-shadow: 0 0 6px #409eff;
+  background: var(--cs-primary);
+  box-shadow: 0 0 6px var(--cs-primary);
   flex-shrink: 0;
 }
 .acp-focus-row {

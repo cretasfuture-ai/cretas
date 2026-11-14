@@ -208,7 +208,7 @@ onMounted(load);
         font-size: 22px;
         font-weight: 600;
         margin-top: 8px;
-        &.primary { color: #409eff; }
+        &.primary { color: var(--cs-primary); }
         &.success { color: #67c23a; }
         &.warning { color: #e6a23c; }
       }

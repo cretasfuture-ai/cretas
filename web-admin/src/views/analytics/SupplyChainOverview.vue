@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import {
   enumLabel,
   MATERIAL_BATCH_STATUS_LABELS,
@@ -237,7 +238,7 @@ function renderSankeyChart() {
         focus: 'adjacency' as const,
       },
       data: [
-        { name: '采购', itemStyle: { color: '#409EFF' } },
+        { name: '采购', itemStyle: { color: CS_TOKENS.primary } },
         { name: '入库', itemStyle: { color: '#67C23A' } },
         { name: '领用', itemStyle: { color: '#E6A23C' } },
         { name: '生产', itemStyle: { color: '#F56C6C' } },
@@ -682,8 +683,8 @@ function salesStatusText(status: unknown): string {
   }
 
   &.purchase {
-    border-top: 3px solid #409EFF;
-    .stat-value { color: #409EFF; }
+    border-top: 3px solid var(--cs-primary);
+    .stat-value { color: var(--cs-primary); }
   }
 
   &.receive {

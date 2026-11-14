@@ -572,7 +572,7 @@ h2 { margin: 0; color: var(--el-text-color-primary, #1a2332); font-size: 20px; }
 .kpi-item small { font-size: 11px; font-weight: 400; }
 .finding-section { margin-top: 12px; }
 .finding-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; }
-.finding-title--success { color: #67c23a; }.finding-title--warning { color: #e6a23c; }.finding-title--info { color: #409eff; }
+.finding-title--success { color: #67c23a; }.finding-title--warning { color: #e6a23c; }.finding-title--info { color: var(--cs-primary); }
 .finding-section ul { margin: 0; padding-left: 18px; color: var(--el-text-color-regular, #606266); font-size: 12px; line-height: 1.6; }
 .unavailable-card { margin-top: 16px; }
 .unavailable-title { display: flex; align-items: center; gap: 6px; color: var(--el-text-color-primary, #303133); font-weight: 600; }

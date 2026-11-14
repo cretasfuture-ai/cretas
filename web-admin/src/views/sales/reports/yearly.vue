@@ -79,7 +79,7 @@ onMounted(load);
     margin-bottom: 24px;
     .label { color: #909399; font-size: 13px; margin-bottom: 6px; }
     .value { font-size: 20px; font-weight: 600; }
-    .primary { color: #409eff; }
+    .primary { color: var(--cs-primary); }
     .success { color: #67c23a; }
   }
   .monthly-table h4 { margin: 0 0 12px 0; }

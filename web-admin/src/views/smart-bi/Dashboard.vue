@@ -2663,7 +2663,7 @@ onUnmounted(() => {
     word-break: break-word;
 
     .cursor {
-      color: #409EFF;
+      color: var(--cs-primary);
       animation: blink 1s step-end infinite;
       margin-left: 1px;
     }

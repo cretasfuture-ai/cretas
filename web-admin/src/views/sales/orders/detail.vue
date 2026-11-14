@@ -3265,7 +3265,7 @@ async function handleQuickPayFull() {
   .tax-summary-label { font-size: 11px; color: #909399; margin-bottom: 2px; }
   .tax-summary-value { font-weight: 600; color: #303133; }
   .tax-value { color: #e6a23c; }
-  .tax-total { color: #409eff; font-size: 15px; }
+  .tax-total { color: var(--cs-primary); font-size: 15px; }
   .tax-summary-sep { color: #c0c4cc; font-size: 16px; font-weight: 300; align-self: center; }
 }
 
