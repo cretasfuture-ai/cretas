@@ -101,6 +101,13 @@ public class AIIntentServiceImpl implements AIIntentService {
     @Autowired(required = false)
     private com.cretas.aims.service.intent.RoleAwareIntentRepicker roleRepicker;
 
+    /**
+     * 本厂 AI 先问档位 (Steve 2026-11-14): 随 Python 识别请求下发。required=false 以免裸构造的单测被迫提供;
+     * 为 null 时不带档位, Python 按默认档并计数 (不静默)。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.IntentAskPolicyResolver askPolicyResolver;
+
 
     /**
      * Phase 2B-α (T20): feature flag controlling Python matcher dispatch.
@@ -506,6 +513,7 @@ public class AIIntentServiceImpl implements AIIntentService {
                         // 但在此之前全仓库没有任何一处给它们赋过值 —— Python 侧目录过滤一直是死的。
                         .mode(mode)
                         .userPermissions(userPermissions == null ? null : List.copyOf(userPermissions))
+                        .askPolicy(askPolicyResolver == null ? null : askPolicyResolver.resolve(factoryId))
                         .options(PythonIntentMatchRequest.Options.builder()
                                 .enableLlmFallback(Boolean.TRUE)
                                 .timeoutMs(30000)
