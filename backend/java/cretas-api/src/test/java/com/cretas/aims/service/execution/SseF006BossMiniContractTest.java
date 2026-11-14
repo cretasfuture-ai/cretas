@@ -183,6 +183,17 @@ class SseF006BossMiniContractTest {
     }
 
     @Test
+    void disconnectedWhileSendingProgressTakesTheDisconnectPathNotTheUpstreamFailurePath() throws Exception {
+        doThrow(new IOException("disconnected")).when(service).sendSseEvent(eq(emitter), eq("progress"), any());
+        execute("F006", 77L, "factory_super_admin", false);
+        verify(service).sendSseEvent(eq(emitter), eq("progress"), any()); // 必然发生的读数: 真走到了 progress
+        // 上游失败出口发的 error 带 status=FAILED; 断开走外层统一出口 (ProcessError), 与 token 断开一致
+        assertThat(sentPayloads("error")).noneMatch(p -> String.valueOf(p).contains("FAILED"));
+        verify(service, never()).sendSseEvent(eq(emitter), eq("result"), any());
+        verify(emitter).completeWithError(any(IOException.class));
+    }
+
+    @Test
     void otherFactoryStaysOnExistingChatProvider() throws Exception {
         execute("F007", 77L, "factory_super_admin", false);
         verify(mini, never()).stream(any(), any(), any(), any(), anyBoolean(), any(), any(), any());

@@ -34,7 +34,10 @@ class ChatBusinessFactGuardTest {
             "怎么降低成本？", "如何提高合格率呢", "怎么创建订单？", "冷库库存温度多少合适", "怎样提高产量吗",
             "质检要注意什么？", "有什么办法减少损耗？", "你建议怎么管库存？",
             // 低危: 「卖」只认业务用法
-            "你会卖萌吗"})
+            "你会卖萌吗",
+            // 第三轮项 2: 概念问法
+            "毛利和净利有什么区别？", "成本是什么意思？", "质检员的职责是什么？", "订单管理系统好用吗",
+            "生产日期在哪里看呢"})
     void chatAndAdviceStayChat(String input) {
         assertThat(ChatBusinessFactGuard.isBusinessQuestion(input)).isFalse();
     }
@@ -56,7 +59,8 @@ class ChatBusinessFactGuardTest {
             "销售额比去年明显增长。", "销量同比上升。", "出货量较上月下降。",
             // 第二轮修复项 2: 条件词在别的分句里不能放过趋势断言; 成本 / 合格率也是业务主语
             "本月销量同比增长明显，目标是继续保持。", "今年业绩稳定增长，这有助于扩大市场。",
-            "本月销量较上月有所下降，建议看看怎么调整。", "本月成本上升。", "本月合格率偏低。"})
+            "本月销量较上月有所下降，建议看看怎么调整。", "本月成本上升。", "本月合格率偏低。",
+            "订单35个。", "库存还有35个。", "目前订单有20个左右。"})   // 第三轮项 1: 阳性对照
     void fabricatedBusinessFactsAreBlockedAndCounted(String reply) {
         ChatBusinessFactGuard.Result r = guard.check("t", reply);
 
@@ -77,6 +81,10 @@ class ChatBusinessFactGuardTest {
             "想让销量同比增长，可以先做客户分层。",                 // 愿望句不是陈述事实
             "新员工培训一般需要3个月。",
             "早上好！今天给您3个小贴士。", "维护客户可以从3个维度入手。", "提升销量有3个关键点。",  // 第二轮修复项 3
+            // 第三轮项 1: 「个」白名单 —— 后面跟名词的是建议量词
+            "成本控制要抓住2个重点。", "合格率提升可以设置3个检查点。", "提高产量可以考虑2个班次。",
+            "销售团队可以分成2个小组。", "订单一般分3个等级。", "销量好的产品可以做2个套餐。",
+            "库存可以分成3个区域。", "成本核算建议设1个专人负责。",
             "如果本月销量同比增长，那么库存会增加。", "订单管理系统支持导出报表。", "产量统计请在生产报表里看。",
             "您好！有什么可以帮您的吗？"})
     void commonSenseRepliesPass(String reply) {
@@ -108,12 +116,12 @@ class ChatBusinessFactGuardTest {
     @Test
     @DisplayName("用户原话里写过的数字, 回复复述时放行; 没写过的照拦")
     void numbersTheUserTypedThemselvesAreNotFabrication() {
-        String reply = "订单量 35 个不算多，建议先按交期排产。";
+        String reply = "订单量有 35 个，建议先按交期排产。";
         assertThat(guard.check("t", null, reply, true).decision()).isEqualTo(ChatBusinessFactGuard.Decision.BLOCKED);
         ChatBusinessFactGuard.Result echoed = guard.check("t", "我们订单35个，怎么排产", reply, true);
         assertThat(echoed.decision()).isEqualTo(ChatBusinessFactGuard.Decision.PASS);
         assertThat(echoed.text()).isEqualTo(reply);
-        assertThat(guard.check("t", "我们订单35个，怎么排产", "订单量 36 个不算多，建议先按交期排产。", true).decision())
+        assertThat(guard.check("t", "我们订单35个，怎么排产", "订单量有 36 个，建议先按交期排产。", true).decision())
                 .as("阴性对照: 用户没写过 36").isEqualTo(ChatBusinessFactGuard.Decision.BLOCKED);
     }
 

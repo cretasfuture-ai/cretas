@@ -1825,7 +1825,11 @@ public class SseStreamingService {
         com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
                 redacted.streamRestorer(held::append);
         try {
-            sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
+            try {
+                sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e); // 客户端断开: 走下面的断开出口, 不当成上游失败
+            }
             var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
