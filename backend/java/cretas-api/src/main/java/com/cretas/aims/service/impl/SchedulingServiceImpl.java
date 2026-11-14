@@ -201,6 +201,11 @@ public class SchedulingServiceImpl implements SchedulingService {
     }
 
     @Override
+    public ProductionLineDTO updateProductionLineStaffing(String factoryId, String lineId, ProductionLineStaffingRequest request) {
+        return planCrudService.updateProductionLineStaffing(factoryId, lineId, request);
+    }
+
+    @Override
     public ProductionLineDTO updateProductionLineStatus(String factoryId, String lineId, String status) {
         return planCrudService.updateProductionLineStatus(factoryId, lineId, status);
     }
