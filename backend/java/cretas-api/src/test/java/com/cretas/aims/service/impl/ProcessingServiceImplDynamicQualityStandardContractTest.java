@@ -473,4 +473,43 @@ class ProcessingServiceImplDynamicQualityStandardContractTest {
         assertEquals("PASS", ((QualityInspection) result.get("inspection")).getResult());
         assertNull(result.get("reviewRequired"));
     }
+
+    // ---- 2026-11-14 逐项上下限判定边界: 等于上限/下限合格, 超出一点即不合格, 缺上限/缺下限只判有的那一侧 ----
+
+    private String verdictFor(BigDecimal min, BigDecimal max, String value) {
+        binding.getQualityCheckItem().setMinValue(min);
+        binding.getQualityCheckItem().setMaxValue(max);
+        String revision = (String) service.getDynamicQualityForm(FACTORY, BATCH).get("standardRevision");
+        DynamicQualityInspectionRequest request = request(revision, "binding-temp", "item-temp", 3, value);
+        request.setNotes("边界测试");
+        Map<String, Object> result = service.submitDynamicInspection(FACTORY, BATCH, request, 1557L);
+        return ((QualityInspection) result.get("inspection")).getResult();
+    }
+
+    @Test
+    void valueEqualToUpperOrLowerLimitPasses() {
+        assertEquals("PASS", verdictFor(BigDecimal.ZERO, BigDecimal.TEN, "10"));
+        assertEquals("PASS", verdictFor(BigDecimal.ZERO, BigDecimal.TEN, "0"));
+        assertEquals("PASS", verdictFor(BigDecimal.ZERO, BigDecimal.TEN, "10.0000"));
+    }
+
+    @Test
+    void valueJustOutsideEitherLimitFails() {
+        assertEquals("FAIL", verdictFor(BigDecimal.ZERO, BigDecimal.TEN, "10.01"));
+        assertEquals("FAIL", verdictFor(BigDecimal.ZERO, BigDecimal.TEN, "-0.01"));
+    }
+
+    @Test
+    void missingUpperLimitOnlyChecksLowerSide() {
+        assertEquals("PASS", verdictFor(new BigDecimal("5"), null, "9999"));
+        assertEquals("PASS", verdictFor(new BigDecimal("5"), null, "5"));
+        assertEquals("FAIL", verdictFor(new BigDecimal("5"), null, "4.99"));
+    }
+
+    @Test
+    void missingLowerLimitOnlyChecksUpperSide() {
+        assertEquals("PASS", verdictFor(null, new BigDecimal("5"), "-9999"));
+        assertEquals("PASS", verdictFor(null, new BigDecimal("5"), "5"));
+        assertEquals("FAIL", verdictFor(null, new BigDecimal("5"), "5.01"));
+    }
 }

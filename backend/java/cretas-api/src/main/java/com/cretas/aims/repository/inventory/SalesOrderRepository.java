@@ -141,6 +141,50 @@ public interface SalesOrderRepository extends JpaRepository<SalesOrder, String> 
                 pageable);
     }
 
+    /**
+     * 列表页「关键词 + 状态 + 订单日期 + DataScope」服务端搜索 (原型统一 DECISIONS 十九: 以前只在前端对当前页做 includes,
+     * 翻页后的数据搜不到)。关键词匹配 订单号 / 客户名 / 销售员 / 备注, 与 searchByFactoryAndKeyword 同口径;
+     * {@code keyword} 必须已转义 LIKE 通配符 (% _ \), 空串 = 不按关键词过滤。条件全部在分页之前由数据库过滤,
+     * 总数随过滤变化, 永远带 factory_id。
+     */
+    default Page<SalesOrder> searchListPage(String factoryId, Collection<Long> createdByList, SalesOrderStatus status,
+                                            String escapedKeyword, LocalDate orderDateFrom, LocalDate orderDateTo,
+                                            Pageable pageable) {
+        boolean byKeyword = escapedKeyword != null && !escapedKeyword.isBlank();
+        return searchListPageBound(factoryId,
+                createdByList != null, createdByList != null && !createdByList.isEmpty() ? createdByList : List.of(-1L),
+                status != null, status != null ? status : SalesOrderStatus.DRAFT,
+                byKeyword, byKeyword ? escapedKeyword : "",
+                orderDateFrom != null, orderDateFrom != null ? orderDateFrom : LocalDate.of(1970, 1, 1),
+                orderDateTo != null, orderDateTo != null ? orderDateTo : LocalDate.of(9999, 12, 31),
+                pageable);
+    }
+
+    @Query("SELECT so FROM SalesOrder so LEFT JOIN Customer c ON c.id = so.customerId " +
+            "WHERE so.factoryId = :factoryId " +
+            "AND (:scoped = false OR so.createdBy IN :createdByList) " +
+            "AND (:byStatus = false OR so.status = :status) " +
+            "AND (:byKeyword = false OR (" +
+            "LOWER(so.orderNumber) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.salesperson, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(c.name, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR " +
+            "LOWER(COALESCE(so.remark, '')) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')) " +
+            "AND (:byFrom = false OR so.orderDate >= :orderDateFrom) " +
+            "AND (:byTo = false OR so.orderDate <= :orderDateTo) " +
+            "ORDER BY so.createdAt DESC")
+    Page<SalesOrder> searchListPageBound(@Param("factoryId") String factoryId,
+                                         @Param("scoped") boolean scoped,
+                                         @Param("createdByList") Collection<Long> createdByList,
+                                         @Param("byStatus") boolean byStatus,
+                                         @Param("status") SalesOrderStatus status,
+                                         @Param("byKeyword") boolean byKeyword,
+                                         @Param("keyword") String keyword,
+                                         @Param("byFrom") boolean byFrom,
+                                         @Param("orderDateFrom") LocalDate orderDateFrom,
+                                         @Param("byTo") boolean byTo,
+                                         @Param("orderDateTo") LocalDate orderDateTo,
+                                         Pageable pageable);
+
     /** 只由 {@link #searchFiltered} 调用: 值参数都非空, 是否生效看布尔标志。 */
     @Query("SELECT so FROM SalesOrder so WHERE so.factoryId = :factoryId " +
             "AND (:scoped = false OR so.createdBy IN :createdByList) " +

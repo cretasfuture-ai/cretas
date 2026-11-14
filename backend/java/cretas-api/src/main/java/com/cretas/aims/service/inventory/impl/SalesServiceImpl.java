@@ -419,6 +419,39 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.PriceListService priceListService;
 
+    /** 最近成交价 (订单行价格来源回查用). Optional 注入, 同 priceListService。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.CustomerPriceMemoryService customerPriceMemoryService;
+
+    /**
+     * 编辑订单重建行时的价格来源: 价没变沿用原来源, 变了或原行没有来源/是新增行就记手填。
+     * (item 的 unitPrice 已设好; 报价单行沿用 QUOTE。)
+     */
+    /** 复制订单: 价是原样复制的, 来源也原样带上。 */
+    static void copyPriceSource(SalesOrderItem from, SalesOrderItem to) {
+        to.setPriceSource(from.getPriceSource());
+        to.setPriceRef(from.getPriceRef());
+    }
+
+    static void applyPriceSourceOnUpdate(SalesOrderItem item, SalesOrderItem previous) {
+        if (item.getQuotedGrossUnitPrice() != null) {
+            item.setPriceSource("QUOTE");
+            item.setPriceRef(null);
+        } else if (previous != null && previous.getPriceSource() != null
+                && priceMatches(item.getUnitPrice(), previous.getUnitPrice())) {
+            item.setPriceSource(previous.getPriceSource());
+            item.setPriceRef(previous.getPriceRef());
+        } else {
+            item.setPriceSource("MANUAL");
+            item.setPriceRef(null);
+        }
+    }
+
+    /** 前端含税/未税来回折算有舍入, 差 ≤ 0.01 视为同一个价。 */
+    private static boolean priceMatches(BigDecimal a, BigDecimal b) {
+        return a != null && b != null && a.subtract(b).abs().compareTo(new BigDecimal("0.01")) <= 0;
+    }
+
     /**
      * 单位落库归一 —— 「不许英文单位, 用户看到必须是中文」(Steve 2026-08-18).
      *
@@ -730,20 +763,42 @@ public class SalesServiceImpl implements SalesService {
             // Resolution: customer-specific selling price → global selling price → caller's value.
             // User-provided price always wins (per May 7 part2 L284-303 — manual override allowed).
             BigDecimal resolvedUnitPrice = itemDTO.getUnitPrice();
-            if (priceListService != null
-                    && (resolvedUnitPrice == null || resolvedUnitPrice.signum() == 0)) {
-                BigDecimal contractPrice = priceListService.findActivePriceForOrder(
+            boolean callerGavePrice = resolvedUnitPrice != null && resolvedUnitPrice.signum() != 0;
+            String priceSource = null;
+            String priceRef = null;
+            if (priceListService != null) {
+                var resolution = priceListService.resolveForOrder(
                         factoryId,
                         request.getCustomerId(),
                         itemDTO.getProductTypeId(),
                         order.getOrderDate()).orElse(null);
-                if (contractPrice != null) {
-                    resolvedUnitPrice = contractPrice;
-                    log.info("Issue #793: auto-applied 协议价 — SO={}, customerId={}, productId={}, "
-                            + "price={}", order.getOrderNumber(), request.getCustomerId(),
-                            itemDTO.getProductTypeId(), contractPrice);
+                if (!callerGavePrice && resolution != null) {
+                    resolvedUnitPrice = resolution.price();
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
+                    log.info("Issue #793: auto-applied {} price — SO={}, customerId={}, productId={}, "
+                            + "price={}", priceSource, order.getOrderNumber(), request.getCustomerId(),
+                            itemDTO.getProductTypeId(), resolution.price());
+                } else if (callerGavePrice && resolution != null
+                        && priceMatches(resolvedUnitPrice, resolution.price())) {
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
                 }
             }
+            if (priceSource == null && callerGavePrice) {
+                // 手填价若恰等于该客户该产品最近成交价, 记为 LAST_DEAL (前端「点击采用」走这条)。
+                var lastDeal = customerPriceMemoryService == null
+                        ? java.util.Optional.<com.cretas.aims.entity.CustomerPriceHistory>empty()
+                        : customerPriceMemoryService.getLatest(factoryId, request.getCustomerId(),
+                                itemDTO.getProductTypeId());
+                if (lastDeal.isPresent() && priceMatches(resolvedUnitPrice, lastDeal.get().getUnitPrice())) {
+                    priceSource = "LAST_DEAL";
+                    priceRef = lastDeal.get().getSourceOrderNumber();
+                } else {
+                    priceSource = "MANUAL";
+                }
+            }
+            final BigDecimal priceBeforeStrategy = resolvedUnitPrice;
             // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
             // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
             // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).
@@ -842,6 +897,17 @@ public class SalesServiceImpl implements SalesService {
             item.setUnitPrice(quotedGrossUnitPrice == null ? resolvedUnitPrice
                     : resolvedUnitPrice.setScale(4, java.math.RoundingMode.HALF_UP));
             item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+            // 来源在最终价定下来之后才判: 报价单价 / 被价格策略(促销、阶梯)改过的价, 不能再挂「客户专属价」。
+            if (quotedGrossUnitPrice != null) {
+                priceSource = "QUOTE";
+                priceRef = null;
+            } else if (priceSource != null
+                    && !priceMatches(item.getUnitPrice(), priceBeforeStrategy)) {
+                priceSource = "PRICING_STRATEGY";
+                priceRef = null;
+            }
+            item.setPriceSource(priceSource);
+            item.setPriceRef(priceRef);
 
             // ── E-5 毛利红线预警 (W1 追溯矩阵 E-5; 非阻断决策修正 2026-06-10) ──────────────
             // 决策 (SP3 spec §6.3 / SP5 spec §8): 低于红线只"预警"不"卡死"
@@ -1120,6 +1186,33 @@ public class SalesServiceImpl implements SalesService {
             if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
         }
         Page<SalesOrder> result = salesOrderRepository.searchFiltered(factoryId, createdBy, status,
+                orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
+        return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    @Override
+    @DataScope("created_by")
+    public PageResponse<SalesOrder> searchSalesOrders(String factoryId, SalesOrderStatus status, String keyword,
+                                                      LocalDate orderDateFrom, LocalDate orderDateTo,
+                                                      int page, int size) {
+        if (orderDateFrom != null && orderDateTo != null && orderDateFrom.isAfter(orderDateTo)) {
+            throw new BusinessException(400, "订单日期范围不成立: 开始 " + orderDateFrom + " 晚于结束 " + orderDateTo)
+                    .withHint("请把开始日期改成不晚于结束日期");
+        }
+        DataScopeContext dsCtx = DataScopeContext.current();
+        com.cretas.aims.entity.enums.DataScope scope = (dsCtx != null && dsCtx.getUserId() != null)
+                ? dsCtx.getScope() : null;
+        List<Long> createdBy = null;
+        if (scope == com.cretas.aims.entity.enums.DataScope.SELF) {
+            createdBy = List.of(dsCtx.getUserId());
+        } else if (scope == com.cretas.aims.entity.enums.DataScope.SELF_AND_BELOW
+                || scope == com.cretas.aims.entity.enums.DataScope.DEPT_AND_BELOW) {
+            createdBy = dataScopeResolver != null ? dataScopeResolver.resolveCreatedByChain(dsCtx) : null;
+            if (createdBy == null || createdBy.isEmpty()) createdBy = List.of(dsCtx.getUserId());
+        }
+        String escaped = keyword == null ? null : keyword.trim()
+                .replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
+        Page<SalesOrder> result = salesOrderRepository.searchListPage(factoryId, createdBy, status, escaped,
                 orderDateFrom, orderDateTo, PageRequest.of(page - 1, size));
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
     }
@@ -2500,6 +2593,7 @@ public class SalesServiceImpl implements SalesService {
                 item.setUnitPrice(quotedGrossUnitPrice == null ? itemDTO.getUnitPrice()
                         : itemDTO.getUnitPrice().setScale(4, java.math.RoundingMode.HALF_UP));
                 item.setQuotedGrossUnitPrice(quotedGrossUnitPrice);
+                applyPriceSourceOnUpdate(item, previous);
                 item.setDiscountRate(itemDTO.getDiscountRate() != null ? itemDTO.getDiscountRate() : BigDecimal.ZERO);
                 // SP4 updateSalesOrder: 同 createSalesOrder 三层 default 链 — item 显式 > SO.defaultTaxRate > 0
                 BigDecimal effectiveTaxRateUpdate = itemDTO.getTaxRate();
@@ -2889,6 +2983,7 @@ public class SalesServiceImpl implements SalesService {
             newItem.setUnit(storageUnit(factoryId, srcItem.getUnit()));
             newItem.setUnitPrice(srcItem.getUnitPrice());
             newItem.setQuotedGrossUnitPrice(srcItem.getQuotedGrossUnitPrice());
+            copyPriceSource(srcItem, newItem);
             newItem.setDiscountRate(srcItem.getDiscountRate() != null
                     ? srcItem.getDiscountRate() : BigDecimal.ZERO);
             newItem.setCostUnitPrice(srcItem.getCostUnitPrice());

@@ -42,4 +42,11 @@ public interface PriceListService {
                                                   String customerId,
                                                   String productId,
                                                   LocalDate asOf);
+
+    /** 解析结果: 价格 + 来源 (CUSTOMER / GLOBAL) + 命中的价目表名称。 */
+    record PriceResolution(BigDecimal price, String source, String priceListName) { }
+
+    /** 同 {@link #findActivePriceForOrder}, 但带上来源, 供订单行落价格来源。 */
+    Optional<PriceResolution> resolveForOrder(String factoryId, String customerId,
+                                              String productId, LocalDate asOf);
 }

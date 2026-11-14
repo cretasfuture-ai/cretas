@@ -24,7 +24,7 @@ class DataScopeServiceCoverageContractTest {
     private static final Map<String, String> EXPECTED_METHODS = expectedMethods();
 
     @Test
-    void exactlyEighteenReviewedServiceMethodsAreDataScoped() throws IOException {
+    void exactlyTwentyReviewedServiceMethodsAreDataScoped() throws IOException {
         Map<String, Integer> annotationCounts = new LinkedHashMap<>();
 
         try (var paths = Files.walk(SERVICES)) {
@@ -46,8 +46,8 @@ class DataScopeServiceCoverageContractTest {
         EXPECTED_METHODS.keySet().forEach(key ->
                 expectedCounts.merge(key.substring(0, key.indexOf('#')), 1, Integer::sum));
         assertThat(annotationCounts).isEqualTo(expectedCounts);
-        assertThat(annotationCounts.values()).containsOnly(1, 2, 9);
-        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(18);
+        assertThat(annotationCounts.values()).containsOnly(1, 3, 9);
+        assertThat(annotationCounts.values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(20);
 
         EXPECTED_METHODS.forEach((methodKey, ignored) -> {
             try {
@@ -104,6 +104,11 @@ class DataScopeServiceCoverageContractTest {
         // DEPT_AND_BELOW -> resolved chain (empty -> own), ALL / CUSTOM / no context -> unscoped. Before this, the
         // status path (getSalesOrdersByStatus) applied no DataScope at all.
         expected.put("inventory/impl/SalesServiceImpl.java#getSalesOrdersFiltered", "getSalesOrdersFiltered");
+        // Reviewed (原型统一 DECISIONS 十九): list-page server-side search (keyword + status + order date). Same created_by
+        // chain as getSalesOrdersFiltered / getPurchaseOrdersByStatus; for purchase, an explicit owners list (row scope)
+        // overrides the DataScope chain and an empty list returns an empty page.
+        expected.put("inventory/impl/SalesServiceImpl.java#searchSalesOrders", "searchSalesOrders");
+        expected.put("inventory/impl/PurchaseServiceImpl.java#searchPurchaseOrders", "searchPurchaseOrders");
         expected.put("listsummary/impl/ListSummaryServiceImpl.java#computeSummary", "computeSummary");
         // Reviewed (S6-09 task badge): the sales-order count mirrors SalesServiceImpl#getSalesOrders for
         // SELF / SELF_AND_BELOW / DEPT_AND_BELOW / ALL, and fails closed (UNKNOWN, never a factory-wide count)

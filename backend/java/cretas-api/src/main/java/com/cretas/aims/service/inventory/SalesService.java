@@ -42,6 +42,14 @@ public interface SalesService {
                                                     java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
                                                     int page, int size);
 
+    /**
+     * 列表页服务端搜索: 关键词(订单号/客户/销售员/备注) + 状态 + 订单日期, 每项可选, 在分页之前由数据库过滤,
+     * 总数随过滤变化, 按 DataScope 收窄。原型统一 DECISIONS 十九。
+     */
+    PageResponse<SalesOrder> searchSalesOrders(String factoryId, SalesOrderStatus status, String keyword,
+                                               java.time.LocalDate orderDateFrom, java.time.LocalDate orderDateTo,
+                                               int page, int size);
+
     SalesOrder confirmOrder(String factoryId, String orderId, Long initiatorUserId);
 
     /** 提交财务审核: CONFIRMED -> PENDING_FINANCE_REVIEW */

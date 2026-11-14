@@ -141,6 +141,21 @@ def test_real_deltas_terminal_usage_and_fixed_server_model(monkeypatch):
     assert audit.prompt_sha256 and not hasattr(audit, "prompt")
 
 
+def test_system_prompt_sent_to_model_is_factory_persona_without_business_numbers(monkeypatch):
+    # 2026-11-14: 识别不出时闲聊自称「专注古生物学与地球历史的白垩纪AI Agent」、并编出「同比增长 8%」。
+    # 读的是真正发给模型的那条 system 消息, 不是常量本身。
+    observed = install_model(monkeypatch, [frame("先检查温度。", done=True,
+                            prompt_eval_count=10, eval_count=4, done_reason="stop")])
+    collect()
+    messages = json.loads(observed["requests"][0].content)["messages"]
+    assert messages[0]["role"] == "system" and messages[1]["content"] == "如何检查冷链？"
+    system = messages[0]["content"]
+    assert "食品工厂" in system and "只是本系统的品牌名" in system
+    assert "与古生物学、恐龙、地质年代没有任何关系" in system
+    assert "不得给出任何业务数字或业务事实" in system and "同比" in system
+    assert "需要先查一下真实数据" in system
+
+
 def test_missing_usage_remains_unknown_not_zero(monkeypatch):
     observed = install_model(monkeypatch, [frame("检查温度。", done=True)])
     terminal = collect()[-1]

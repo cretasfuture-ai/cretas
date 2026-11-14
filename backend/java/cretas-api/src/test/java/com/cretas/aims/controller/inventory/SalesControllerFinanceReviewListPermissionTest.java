@@ -121,7 +121,7 @@ class SalesControllerFinanceReviewListPermissionTest {
 
         BusinessException error = assertThrows(BusinessException.class, () ->
                 buildController().listOrdersByStatus(
-                        "F006", SalesOrderStatus.PENDING_FINANCE_REVIEW, 1, 20,
+                        "F006", SalesOrderStatus.PENDING_FINANCE_REVIEW, null, null, null, 1, 20,
                         "Bearer test-token"));
         assertEquals(403, error.getCode());
     }

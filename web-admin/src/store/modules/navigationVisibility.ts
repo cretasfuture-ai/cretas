@@ -10,6 +10,7 @@ export type NavigationVisibilityIdentity = {
 
 export type NavigationVisibilitySnapshot = NavigationVisibilityIdentity & {
   paths: readonly string[];
+  menuProfile?: 'wholesale';
 };
 
 export type NavigationVisibilityStatus = 'unavailable' | 'loading' | 'ready' | 'error';

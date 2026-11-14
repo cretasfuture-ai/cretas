@@ -115,7 +115,8 @@ public class ECNServiceImpl implements ECNService {
         EngineeringChangeNotice saved = ecnRepo.save(ecn);
 
         // Cascade: any linked BomVersion in PENDING_APPROVAL flips to APPROVED.
-        List<BomVersion> linked = versionRepo.findByEcnId(ecnId);
+        // 红线 3 后续: 每个版本审批都会锁它的配方头 —— 按配方 id 升序逐个审批, 与族锁同向。
+        List<BomVersion> linked = versionRepo.findByEcnIdOrderByBomRecipeIdAscIdAsc(ecnId);
         for (BomVersion v : linked) {
             if (v.getStatus() == BomVersion.VersionStatus.PENDING_APPROVAL
                     || v.getStatus() == BomVersion.VersionStatus.DRAFT) {
