@@ -260,6 +260,55 @@ class IntentFlywheelEntryRepositoryQueryValidationTest {
         assertThat(turns.findAll().stream().filter(t -> "F_DEMO".equals(t.getFactoryId()))).isEmpty();
     }
 
+    /** 高1 (经真实入口落 H2): 保密关的厂, user_input 与 context_summary 都不存配方 / 工艺参数原值和手机号; 客户名、价格原样。 */
+    @Test
+    void plainFactoryRawColumnsNeverHoldRecipeValuesOrPhones() {
+        recognition.set(clarify());
+        answer.set(IntentExecuteResponse.builder().status("NEED_CLARIFICATION").build());
+        String said = "老张家那批卤水八角放5克，炸到180，电话13812345678，一斤12";
+
+        entry.execute(PLAIN, request(said, null, "sess-r1"), 7L, "sales");
+        entry.execute(PLAIN, request("再加十斤", null, "sess-r1"), 7L, "sales");
+
+        List<IntentFlywheelTurn> rows = turns.findAll().stream().filter(t -> PLAIN.equals(t.getFactoryId()))
+                .sorted((a, b) -> Long.compare(a.getId(), b.getId())).toList();
+        assertThat(rows).hasSize(2);
+        for (String column : new String[] {rows.get(0).getUserInput(), rows.get(0).getUserInputExport(),
+                rows.get(1).getContextSummary(), rows.get(1).getContextExport()}) {
+            assertThat(column).isNotNull().doesNotContain("5克").doesNotContain("180").doesNotContain("13812345678")
+                    .contains("<用量>").contains("<温度>")
+                    // 阴性对照: 保密关, 客户名与价格不脱
+                    .contains("老张家").contains("一斤12");
+        }
+    }
+
+    /** 低危 2: 演示租户全名单 (与 DemoReadOnlyInterceptor 同一份配置) 与合成身份 userId<0 不记; 正常一轮照记 (阳性)。 */
+    @Test
+    void allDemoFactoriesAndSyntheticUsersAreNotRecorded() {
+        recognition.set(null);
+        answer.set(IntentExecuteResponse.builder().status("COMPLETED").build());
+        recorder.setDemoFactoryIds("DEMO_REST,DEMO_FACTORY2,F_DEMO");
+
+        for (String demo : List.of("DEMO_REST", "DEMO_FACTORY2", "F_DEMO")) {
+            entry.execute(demo, request("查库存", null, "demo-" + demo), 7L, "viewer");
+        }
+        entry.execute(PLAIN, request("合成身份一句", null, "sess-neg"), -3L, "sales");
+        entry.execute(PLAIN, request("正常一句", null, "sess-pos"), 7L, "sales");
+
+        assertThat(turns.findAll()).extracting(IntentFlywheelTurn::getSessionId).containsExactly("sess-pos");
+    }
+
+    @Test
+    void demoFactoryListComesFromTheSharedPropertyWithTheSameFallback() throws Exception {
+        java.lang.reflect.Method setter = IntentFlywheelRecorder.class.getDeclaredMethod("setDemoFactoryIds", String.class);
+        org.springframework.beans.factory.annotation.Value v =
+                setter.getAnnotation(org.springframework.beans.factory.annotation.Value.class);
+        java.lang.reflect.Field field = com.cretas.aims.config.DemoReadOnlyInterceptor.class.getDeclaredField("demoFactoryIdsCsv");
+        org.springframework.beans.factory.annotation.Value interceptor =
+                field.getAnnotation(org.springframework.beans.factory.annotation.Value.class);
+        assertThat(v.value()).isEqualTo(interceptor.value());
+    }
+
     @Test
     void recorderFailureNeverChangesTheAnswerButIsCounted() {
         IntentFlywheelTurnRepository broken = mock(IntentFlywheelTurnRepository.class);

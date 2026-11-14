@@ -148,3 +148,26 @@ def test_attach_does_not_overwrite_and_survives_bad_results():
 def test_dto_carries_the_field(field):
     from ai.dto import IntentMatchResultDto
     assert field in IntentMatchResultDto.model_fields
+
+
+def test_fallback_failures_in_the_trace_keep_only_reason_codes():
+    """阳性: classify_exception 的代码原样; 阴性: 像异常原文 / 用户原话的值收成 other, 不进 decision_path。"""
+    async def run():
+        trace = legacy_exit_metrics.start_decision_trace()
+        legacy_exit_metrics.record_fallback('qwen_only', 'answered', {
+            'aliyun_intent': 'http_502',
+            'qwen_act': 'exception_ValueError',
+            'qwen_intent': 'HTTP 500: 老张家卤水八角放5克 phone 13812345678',
+        })
+        return trace
+    trace = asyncio.run(run())
+    failures = trace['fallback']['failures']
+    assert failures == {'aliyun_intent': 'http_502', 'qwen_act': 'exception_ValueError', 'qwen_intent': 'other'}
+    assert '老张家' not in str(trace) and '13812345678' not in str(trace)
+
+
+def test_real_classify_exception_output_passes_the_trace_filter():
+    import asyncio as _a
+    for ex in (_a.TimeoutError(), ValueError('原话 5克'), RuntimeError('x' * 300)):
+        code = legacy_exit_metrics.classify_exception(ex)
+        assert legacy_exit_metrics.trace_safe_failures({'s': code}) == {'s': code}

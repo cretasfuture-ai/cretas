@@ -2076,7 +2076,8 @@ public class SseStreamingService {
             flywheelRecorder.recordTurn(com.cretas.aims.entity.intent.IntentFlywheelTurn.Entry.STREAM, factoryId, userId,
                     request, recorded, turn, (System.nanoTime() - startedNanos) / 1_000_000L);
         } catch (RuntimeException e) {
-            log.warn("[flywheel] 流式入口记录失败 (不影响回答): factory={}, reason={}", factoryId, e.toString());
+            log.warn("[flywheel] 流式入口记录失败 (不影响回答): factory={}, reason={}", factoryId,
+                    com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder.errorKind(e));
         }
     }
 

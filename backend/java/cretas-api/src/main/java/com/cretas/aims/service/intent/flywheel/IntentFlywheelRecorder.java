@@ -113,8 +113,11 @@ public class IntentFlywheelRecorder {
             if (factoryId == null || factoryId.isBlank() || request == null) {
                 return;     // 没有工厂就没有可判的保密开关, 也不知道归谁: 不记 (不是失败)
             }
-            if (DEMO_FACTORIES.contains(factoryId.trim()) || userId == null) {
-                return;     // 公开演示 / 匿名对话不是真实使用, 不进飞轮
+            if (demoFactories.contains(factoryId.trim()) || userId == null || userId < 0) {
+                return;     // 公开演示 / 匿名 / 合成身份 (userId<0) 的对话不是真实使用, 不进飞轮
+            }
+            if (Boolean.TRUE.equals(request.getPreviewOnly())) {
+                return;     // 只预览不执行: 两入口都不记
             }
             String requested = blankToNull(request.getIntentCode());
             InputKind kind = inputKind(request, requested);
@@ -314,7 +317,24 @@ public class IntentFlywheelRecorder {
         }
     }
 
-    static final java.util.Set<String> DEMO_FACTORIES = java.util.Set.of("F_DEMO");
+    /** 与 {@code DemoReadOnlyInterceptor} 同一份配置 ({@code cretas.demo.factory-ids}, 同一 fallback)。 */
+    static final String DEMO_FACTORY_IDS_DEFAULT = "DEMO_REST,DEMO_FACTORY2,F_DEMO";
+    private java.util.Set<String> demoFactories = parseDemoFactories(DEMO_FACTORY_IDS_DEFAULT);
+
+    @Value("${cretas.demo.factory-ids:" + DEMO_FACTORY_IDS_DEFAULT + "}")
+    void setDemoFactoryIds(String csv) {
+        this.demoFactories = parseDemoFactories(csv);
+    }
+
+    static java.util.Set<String> parseDemoFactories(String csv) {
+        java.util.Set<String> out = new java.util.HashSet<>();
+        if (csv != null) {
+            for (String id : csv.split(",")) {
+                if (!id.isBlank()) out.add(id.trim());
+            }
+        }
+        return java.util.Set.copyOf(out);
+    }
     /** 确认入口这些状态才算「确认后办成了」。 */
     public static final java.util.Set<String> CONFIRMED_STATUSES = java.util.Set.of("COMPLETED", "SUCCESS");
     static final String FOLLOWUP_SOURCE = "FOLLOWUP";
@@ -334,7 +354,7 @@ public class IntentFlywheelRecorder {
     }
 
     /** 日志只带错误类型 / 约束名, 不带整行 (异常消息里可能有原文)。 */
-    static String errorKind(Throwable e) {
+    public static String errorKind(Throwable e) {
         Throwable root = e;
         while (root.getCause() != null && root.getCause() != root) {
             root = root.getCause();

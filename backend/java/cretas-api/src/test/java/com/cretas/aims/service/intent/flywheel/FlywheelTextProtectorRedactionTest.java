@@ -157,8 +157,75 @@ class FlywheelTextProtectorRedactionTest {
 
         FlywheelTextProtector.Protected p = protector.protect(PLAIN, "p1", said);
 
-        assertThat(p.rawInput()).isEqualTo(said);
+        assertThat(p.mode()).isEqualTo(SecrecyMode.PLAIN);
         assertThat(p.exportInput()).isEqualTo("老张家那批卤水<配料>放<用量>，炸到<温度>，按特价走，下五十斤卤鸭腿，一斤12");
+        // 高1: 原文列同样不存配方 / 工艺参数原值 (任何工厂、任何列), 只换值留说法
+        assertThat(p.rawInput()).isEqualTo("老张家那批卤水<配料>放<用量>，炸到<温度>，按特价走，下五十斤卤鸭腿，一斤12");
+        assertThat(p.rawInput()).doesNotContain("5克").doesNotContain("180");
+        // 阴性对照: 保密关的厂, 客户名与价格在原文列 / 导出列都原样
+        assertThat(p.rawInput()).contains("老张家").contains("一斤12");
+        assertThat(p.exportInput()).contains("老张家").contains("一斤12");
+    }
+
+    /** 高1: 保密关的厂原文列也抹手机 / 证件号 (隐私底线), 但人员姓名只在导出列换。 */
+    @Test
+    void plainFactoryRawColumnHasPrivacyMaskedButKeepsStaffNameForReview() {
+        String said = "让王小明找鲜禽供应站，电话13812345678，身份证110101199001011234";
+
+        FlywheelTextProtector.Protected p = protector.protect(PLAIN, "p2", said);
+
+        assertThat(p.rawInput()).isEqualTo("让王小明找鲜禽供应站，电话<电话>，身份证<证件号>");
+        assertThat(p.exportInput()).isEqualTo("让人员A找鲜禽供应站，电话<电话>，身份证<证件号>");
+    }
+
+    /** 高1: 保密厂的密文解开后同样没有配方 / 工艺参数原值与手机号; 客户名仍在密文里 (密文本来就是给人工复核看原话的)。 */
+    @Test
+    void secretFactoryCipherHoldsTheBaselineNotTheRecipeValues() {
+        String said = "老张家那批卤水八角放5克，炸到180，电话13812345678，一斤12";
+
+        FlywheelTextProtector.Protected p = protector.protect(SECRET, "c1", said);
+
+        assertThat(p.rawInput()).isNull();
+        String decrypted = protector.decrypt(p.inputCipher());
+        assertThat(decrypted).doesNotContain("5克").doesNotContain("180").doesNotContain("13812345678");
+        assertThat(decrypted).isEqualTo("老张家那批卤水<配料>放<用量>，炸到<温度>，电话<电话>，一斤12");
+        assertThat(p.exportInput()).isEqualTo("客户A那批卤水<配料>放<用量>，炸到<温度>，电话<电话>，一斤<价格>");
+    }
+
+    /** 高2: 原料名单查不出 → 保密关的厂原文与导出都不留 (不留没脱配方的文本)。 */
+    @Test
+    void plainFactoryIngredientLookupFailureKeepsNeitherRawNorExport() {
+        when(master.findIngredientNames(PLAIN)).thenThrow(new IllegalStateException("db down"));
+
+        FlywheelTextProtector.Protected p = protector.protect(PLAIN, "e1", "让王小明把卤水八角放5克，炸到180");
+
+        assertThat(p.exportInput()).isNull();
+        assertThat(p.rawInput()).isNull();
+        assertThat(p.inputCipher()).isNull();
+        assertThat(p.mode()).isEqualTo(SecrecyMode.TEXT_DROPPED);
+    }
+
+    /** 高2 阴性对照: 名单查得出时同一句照常留 (说明上面那条是出错路径收住, 不是一律不留)。 */
+    @Test
+    void plainFactoryWithIngredientsAvailableKeepsBothColumns() {
+        FlywheelTextProtector.Protected p = protector.protect(PLAIN, "e2", "让王小明把卤水八角放5克，炸到180");
+
+        assertThat(p.mode()).isEqualTo(SecrecyMode.PLAIN);
+        assertThat(p.exportInput()).isEqualTo("让人员A把卤水<配料>放<用量>，炸到<温度>");
+        assertThat(p.rawInput()).isEqualTo("让王小明把卤水<配料>放<用量>，炸到<温度>");
+    }
+
+    /** 高2: 保密厂原料名单查不出 → 密文也不留 (密文里不能是没脱配方的原话)。 */
+    @Test
+    void secretFactoryIngredientLookupFailureKeepsNoCipher() {
+        when(master.findIngredientNames(SECRET)).thenThrow(new IllegalStateException("db down"));
+
+        FlywheelTextProtector.Protected p = protector.protect(SECRET, "e3", "卤水八角放5克，炸到180");
+
+        assertThat(p.mode()).isEqualTo(SecrecyMode.TEXT_DROPPED);
+        assertThat(p.inputCipher()).isNull();
+        assertThat(p.exportInput()).isNull();
+        assertThat(p.rawInput()).isNull();
     }
 
     /** 阴性: 普通数量 / 产品名 / 业务说法在保密厂默认不动。 */

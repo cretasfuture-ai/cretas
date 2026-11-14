@@ -30,6 +30,7 @@ rw 用 Python 侧意图口径 (ai.db._is_write_row, 镜像 Java WriteGuardServic
 from __future__ import annotations
 
 import contextvars
+import re
 import json
 import logging
 import os
@@ -336,10 +337,23 @@ def record_luna_outcome(fallback_reason: Optional[str], qwen_outcome: Optional[s
         logger.debug("luna alarm failed", exc_info=True)
 
 
+_REASON_CODE = re.compile(r"^[A-Za-z0-9_]{1,64}$")
+
+
+def trace_safe_failures(failures: Dict[str, str]) -> Dict[str, str]:
+    """飞轮痕迹只收原因代码 (classify_exception 的输出: timeout / http_502 / exception_<类名> …)。
+    不像代码的值 (含空格、标点、中文 —— 可能是异常原文 / 用户原话) 一律记 "other", 不原样带回 Java 落库。"""
+    out: Dict[str, str] = {}
+    for side, reason in (failures or {}).items():
+        key = str(side) if _REASON_CODE.match(str(side)) else "other_side"
+        out[key] = str(reason) if reason is not None and _REASON_CODE.match(str(reason)) else "other"
+    return out
+
+
 def record_fallback(hop: str, outcome: str, failures: Optional[Dict[str, str]] = None) -> None:
     """退路一轮结束: 最终落在哪一跳 + 各边失败原因。阿里云 not_configured 的 qwen_only 不进告警分子。"""
     failures = failures or {}
-    note_trace("fallback", {"hop": hop, "outcome": outcome, "failures": dict(failures)})
+    note_trace("fallback", {"hop": hop, "outcome": outcome, "failures": trace_safe_failures(failures)})
     try:
         if FALLBACK_HOP is not None:
             FALLBACK_HOP.labels(hop=hop, outcome=outcome).inc()

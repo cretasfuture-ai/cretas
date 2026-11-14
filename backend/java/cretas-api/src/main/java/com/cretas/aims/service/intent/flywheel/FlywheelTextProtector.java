@@ -48,12 +48,17 @@ import java.util.regex.Pattern;
  * 「店 / 有限公司 …」后缀、至少 3 个字的称呼核心, 「老张家卤味店」→「老张家」), ⛔ 不用语义 / embedding 猜。
  * 像称呼但名单里没有的 (老X家 / X记 / X总 / …公司) <b>不替换, 但计数</b> ({@code unmatchedNameLike})。
  * 原文不落明文列; 配了密钥 ({@code CRETAS_FLYWHEEL_RAW_KEY}, base64 的 32 字节) 才以 AES-GCM 密文留一份, 没配就不留。
- * 名单查不出来 → {@link SecrecyMode#TEXT_DROPPED}: 原文与导出文本都不留 (不拿不全的名单去脱敏)。
+ * 密文里的「原文」也先过 {@link #rawBaseline} (配方 / 工艺参数值 + 个人隐私已抹)。
+ * 名单查不出来 → {@link SecrecyMode#TEXT_DROPPED}: 原文、密文与导出文本都不留 (不拿不全的名单去脱敏)。
+ *
+ * <h3>底线 (所有工厂、所有列)</h3>
+ * 配方 / 工艺参数原值 (配料用量、温度、时长、比例、参数) 与手机 / 证件 / 卡号 / 工资考勤数值在<b>任何工厂、任何列</b>
+ * (原文列、密文、context_summary、导出列) 都不落库 (Steve 2026-11-14 + organizer 最严口径), 见 {@link #rawBaseline}。
  *
  * <h3>保密全关的厂</h3>
- * 原文照存, 导出文本 = 原文 (客户名、产品、数量、价格都不动)。只有<b>个人隐私</b>照旧处理 (Steve 2026-11-04: 人名、
- * 号码、工资考勤数值在训练样本里一律剔除, 不归任何保密开关管): 本厂人员 / 联系人姓名 → 「人员A」, 手机 / 证件 / 卡号
- * → 占位符, 工资考勤词带数值时数值抹掉。这一条在保密厂同样生效。
+ * 原文列存「底线处理后的原文」; 导出文本 = 同一底线 + 本厂人员 / 联系人姓名 → 「人员A」 (Steve 2026-11-04: 人名、
+ * 号码、工资考勤数值在训练样本里一律剔除, 不归任何保密开关管)。客户名、产品、数量、价格都不动。
+ * 名单查不出 → {@link SecrecyMode#TEXT_DROPPED} (原文、导出都不留)。
  *
  * <h3>产品 / 数量开关放哪 (理由)</h3>
  * 放在现有按厂配置表 {@code factory_feature_config}, {@code module_id = AI_FLYWHEEL}, {@code config} 里
@@ -134,7 +139,7 @@ public class FlywheelTextProtector {
     }
 
     /**
-     * 处理结果。原文字段只在 {@link SecrecyMode#PLAIN} 时非空; {@code stats} 是各类替换 / 未匹配的次数
+     * 处理结果。原文字段只在 {@link SecrecyMode#PLAIN} 时非空, 且已过 {@link #rawBaseline}; {@code stats} 是各类替换 / 未匹配的次数
      * (customer / supplier / product / person / price / param / quantity / privacy / unmatchedNameLike)。
      */
     public record Protected(SecrecyMode mode, String rawInput, String exportInput, String inputCipher,
@@ -168,22 +173,30 @@ public class FlywheelTextProtector {
         if (!secretFactory(factoryId)) {
             return plain(factoryId, sessionKey, input, stats);
         }
+        if (input == null || input.isEmpty()) {
+            return new Protected(SecrecyMode.REDACTED, null, input, null, stats, null);
+        }
+        // 原料名单查不出 → 连「原文」都不知道该抹哪些配方值: 原文、密文、导出都不留 (fail-closed)
+        List<String> ingredientNames;
+        String rawBaseline;
+        try {
+            ingredientNames = ingredients(factoryId);
+            rawBaseline = rawBaseline(input, ingredientNames);
+        } catch (RuntimeException e) {
+            log.warn("[flywheel] 原料名单查不出, 不留文本: factory={}, reason={}", factoryId, e.getClass().getSimpleName());
+            return new Protected(SecrecyMode.TEXT_DROPPED, null, null, null, stats, "lookup_failed");
+        }
         String cipher = null;
         String notKept = null;
-        if (input != null && !input.isEmpty()) {
-            if (key == null) {
-                notKept = "no_key";
-            } else {
-                try {
-                    cipher = encrypt(input);
-                } catch (RuntimeException e) {
-                    notKept = "encrypt_failed";
-                    log.warn("[flywheel] 原话加密失败, 不留原文: factory={}, reason={}", factoryId, e.getClass().getSimpleName());
-                }
+        if (key == null) {
+            notKept = "no_key";
+        } else {
+            try {
+                cipher = encrypt(rawBaseline);
+            } catch (RuntimeException e) {
+                notKept = "encrypt_failed";
+                log.warn("[flywheel] 原话加密失败, 不留原文: factory={}, reason={}", factoryId, e.getClass().getSimpleName());
             }
-        }
-        if (input == null || input.isEmpty()) {
-            return new Protected(SecrecyMode.REDACTED, null, input, cipher, stats, notKept);
         }
         try {
             Options options = options(factoryId);
@@ -203,33 +216,50 @@ public class FlywheelTextProtector {
             String out = replaceNames(input, dictionary, sessionKey, stats);
             out = maskPrivacy(out, stats);
             out = FlywheelValueMasker.mask(out, new FlywheelValueMasker.Scope(true, true, options.redactQuantities()),
-                    ingredients(factoryId), stats);
+                    ingredientNames, stats);
             countUnmatched(out, stats);
             return new Protected(SecrecyMode.REDACTED, null, out, cipher, stats, notKept);
         } catch (RuntimeException e) {
             log.warn("[flywheel] 保密厂名单查不出, 不留文本: factory={}, reason={}", factoryId, e.getClass().getSimpleName());
-            return new Protected(SecrecyMode.TEXT_DROPPED, null, null, cipher, stats, notKept);
+            // 密文也不留: 这条行不进任何读者 (ck_aift_dropped_no_export), 留一份「名单不全时的原文」没有用处
+            return new Protected(SecrecyMode.TEXT_DROPPED, null, null, null, stats, "lookup_failed");
         }
+    }
+
+    /**
+     * 任何工厂、任何列 (明文原文列、密文原文、context_summary) 落库前的底线: 配方 / 工艺参数值换占位符 (只换值留说法)
+     * + 个人隐私抹除 (手机 / 证件 / 卡号 / 工资考勤数值)。保密开关只决定客户名、价格等其余项 (organizer 11-14 按最严口径裁定)。
+     * 不在这里换人员姓名: 原文列给人工复核看「谁说了什么」, 姓名只在导出列换。
+     */
+    static String rawBaseline(String input, Collection<String> ingredientNames) {
+        if (input == null || input.isEmpty()) {
+            return input;
+        }
+        Map<String, Integer> ignored = new LinkedHashMap<>();
+        String out = maskPrivacy(input, ignored);
+        return FlywheelValueMasker.mask(out, new FlywheelValueMasker.Scope(false, RECIPE_IN_ALL_FACTORIES, false),
+                ingredientNames, ignored);
     }
 
     private Protected plain(String factoryId, String sessionKey, String input, Map<String, Integer> stats) {
         if (input == null || input.isEmpty()) {
             return new Protected(SecrecyMode.PLAIN, input, input, null, stats, null);
         }
-        String export = null;
+        // 全部算完才落到返回值上: 中途任一名单查不出, 原文与导出都不留 (不留半脱敏 / 未脱配方的文本)
         try {
+            List<String> ingredientNames = ingredients(factoryId);
+            String raw = rawBaseline(input, ingredientNames);
             Map<String, Kind> dictionary = new LinkedHashMap<>();
             addPeople(dictionary, factoryId);
-            export = maskPrivacy(replaceNames(input, dictionary, sessionKey, stats), stats);
-            if (RECIPE_IN_ALL_FACTORIES) {
-                export = FlywheelValueMasker.mask(export, new FlywheelValueMasker.Scope(false, true, false),
-                        ingredients(factoryId), stats);
-            }
+            String export = maskPrivacy(replaceNames(input, dictionary, sessionKey, stats), stats);
+            export = FlywheelValueMasker.mask(export, new FlywheelValueMasker.Scope(false, RECIPE_IN_ALL_FACTORIES, false),
+                    ingredientNames, stats);
+            return new Protected(SecrecyMode.PLAIN, raw, export, null, stats, null);
         } catch (RuntimeException e) {
-            log.warn("[flywheel] 人名名单查不出, 本条不出导出文本: factory={}, reason={}",
+            log.warn("[flywheel] 名单查不出, 本条原文与导出文本都不留: factory={}, reason={}",
                     factoryId, e.getClass().getSimpleName());
+            return new Protected(SecrecyMode.TEXT_DROPPED, null, null, null, stats, "lookup_failed");
         }
-        return new Protected(SecrecyMode.PLAIN, input, export, null, stats, null);
     }
 
     Options options(String factoryId) {

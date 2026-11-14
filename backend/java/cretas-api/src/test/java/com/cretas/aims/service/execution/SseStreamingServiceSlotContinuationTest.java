@@ -219,6 +219,45 @@ class SseStreamingServiceSlotContinuationTest {
         assertThat(t.getUserInputExport()).isEqualTo("查询原材料库存");
     }
 
+    /** 流式入口同普通入口: previewOnly 不进飞轮 (阴性); 随后一轮正常的照记 (阳性, 证明记录器在跑)。 */
+    @Test
+    void streamedPreviewOnlyTurnIsNotRecordedButTheNextNormalTurnIs() throws Exception {
+        Harness h = new Harness();
+        com.cretas.aims.repository.intent.IntentFlywheelTurnRepository repo =
+                mock(com.cretas.aims.repository.intent.IntentFlywheelTurnRepository.class);
+        when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        com.cretas.aims.service.intent.flywheel.FlywheelTextProtector protector =
+                new com.cretas.aims.service.intent.flywheel.FlywheelTextProtector(
+                        mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class),
+                        mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class),
+                        mock(com.cretas.aims.repository.FactoryFeatureConfigRepository.class), "");
+        com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder recorder =
+                new com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder(repo, protector, new ObjectMapper());
+        ReflectionTestUtils.setField(h.service, "flywheelRecorder", recorder);
+        when(h.aiIntentService.recognizeIntentWithConfidence(
+                anyString(), eq(F), eq(3), any(), eq(ROLE), any(), any(), any(), any()))
+                .thenAnswer(inv -> IntentMatchResult.builder().userInput("查询原材料库存").confidence(0.0).build());
+
+        var previousRequest = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        var servletRequest = new org.springframework.mock.web.MockHttpServletRequest();
+        servletRequest.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE));
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(servletRequest));
+        try {
+            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").sessionId("s-preview")
+                    .previewOnly(true).build(), USER, ROLE);
+            h.service.executeStream(F, IntentExecuteRequest.builder().userInput("查询原材料库存").sessionId("s-real")
+                    .build(), USER, ROLE);
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(previousRequest);
+        }
+
+        verify(repo, org.mockito.Mockito.timeout(10_000)).save(org.mockito.ArgumentMatchers.argThat(
+                (com.cretas.aims.entity.intent.IntentFlywheelTurn t) -> t != null && "s-real".equals(t.getSessionId())));
+        verify(repo, org.mockito.Mockito.times(1)).save(any());
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"上班打卡", "查一下1830号任务"})
     void aNewSentenceWhileTheSessionIsOpenIsRecognisedNormallyAndClosesTheSession(String newSentence)
