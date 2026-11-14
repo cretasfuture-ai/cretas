@@ -377,6 +377,11 @@ class SseF006BossMiniContractTest {
         assertThat(((IntentExecuteResponse) sentPayloads("result").get(0)).getFormattedText())
                 .isEqualTo("冷库建议控制在 0-4℃，HACCP 有 7 个原则。");
         assertThat(sentPayloads("progress")).as("攒的期间发 progress").hasSize(1);
+        List<String> order = mockingDetails(service).getInvocations().stream()
+                .filter(i -> "sendSseEvent".equals(i.getMethod().getName()))
+                .map(i -> String.valueOf((Object) i.getArgument(1))).toList();
+        assertThat(order.indexOf("progress")).as("progress 在 token 之前")
+                .isGreaterThanOrEqualTo(0).isLessThan(order.indexOf("token"));
         assertThat(String.valueOf(sentPayloads("progress").get(0)))
                 .contains(SseStreamingService.GENERATING_PROGRESS_MESSAGE);
     }

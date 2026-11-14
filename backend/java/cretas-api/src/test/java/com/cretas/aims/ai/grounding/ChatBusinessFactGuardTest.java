@@ -19,7 +19,10 @@ class ChatBusinessFactGuardTest {
     @ParameterizedTest(name = "业务问法: 「{0}」")
     @ValueSource(strings = {"这个月卖得怎么样", "最近生意咋样", "今天出了多少货", "这个月利润咋样",
             "本月产量多少", "库存够不够", "质检合格率怎么样", "上个月销售额同比涨了吗", "这周发了几单货",
-            "本月销量如何", "库存如何？", "这个月卖了多少"})
+            "本月销量如何", "库存如何？", "这个月卖了多少",
+            // 第二轮修复项 1: 句末问号 / 吗 / 呢 的短问 + 问原因的「怎么」
+            "利润高吗", "成本高吗", "合格率达标吗", "库存够用吗", "本月销售额？", "订单呢？",
+            "销量怎么这么差", "销售怎么下降了", "今天产量怎么这么低？", "本月产量如何了", "销量怎样了"})
     void businessQuestionsAreNotChat(String input) {
         assertThat(ChatBusinessFactGuard.isBusinessQuestion(input)).isTrue();
     }
@@ -50,7 +53,10 @@ class ChatBusinessFactGuardTest {
             // 修复项 2: 业务主语句里不带单位 / 带「个」「多」的数字
             "订单35个。", "本月产量达到1200。", "库存还有200多。",
             // 修复项 3: 无数字的趋势断言, 同比 / 比去年算时间锚
-            "销售额比去年明显增长。", "销量同比上升。", "出货量较上月下降。"})
+            "销售额比去年明显增长。", "销量同比上升。", "出货量较上月下降。",
+            // 第二轮修复项 2: 条件词在别的分句里不能放过趋势断言; 成本 / 合格率也是业务主语
+            "本月销量同比增长明显，目标是继续保持。", "今年业绩稳定增长，这有助于扩大市场。",
+            "本月销量较上月有所下降，建议看看怎么调整。", "本月成本上升。", "本月合格率偏低。"})
     void fabricatedBusinessFactsAreBlockedAndCounted(String reply) {
         ChatBusinessFactGuard.Result r = guard.check("t", reply);
 
@@ -69,7 +75,9 @@ class ChatBusinessFactGuardTest {
             "如果本月销量下滑，建议先排查渠道。",
             "冷藏0-4℃。", "HACCP有7个原则。",                     // 修复项 2 的常识对照
             "想让销量同比增长，可以先做客户分层。",                 // 愿望句不是陈述事实
-            "新员工培训一般需要3个月。", "订单管理系统支持导出报表。", "产量统计请在生产报表里看。",
+            "新员工培训一般需要3个月。",
+            "早上好！今天给您3个小贴士。", "维护客户可以从3个维度入手。", "提升销量有3个关键点。",  // 第二轮修复项 3
+            "如果本月销量同比增长，那么库存会增加。", "订单管理系统支持导出报表。", "产量统计请在生产报表里看。",
             "您好！有什么可以帮您的吗？"})
     void commonSenseRepliesPass(String reply) {
         ChatBusinessFactGuard.Result r = guard.check("t", reply);
@@ -107,6 +115,15 @@ class ChatBusinessFactGuardTest {
         assertThat(echoed.text()).isEqualTo(reply);
         assertThat(guard.check("t", "我们订单35个，怎么排产", "订单量 36 个不算多，建议先按交期排产。", true).decision())
                 .as("阴性对照: 用户没写过 36").isEqualTo(ChatBusinessFactGuard.Decision.BLOCKED);
+    }
+
+    @Test
+    @DisplayName("用户说 35, 回复里的 35% 不算复述 (百分号不同)")
+    void userNumberDoesNotExcuseAPercent() {
+        assertThat(guard.check("t", "我们35个订单", "成本占比 35%。", true).decision())
+                .isEqualTo(ChatBusinessFactGuard.Decision.BLOCKED);
+        assertThat(guard.check("t", "成本占比35%怎么样", "成本占比 35%，要看同行水平。", true).decision())
+                .as("阴性对照: 用户自己写了 35%").isEqualTo(ChatBusinessFactGuard.Decision.PASS);
     }
 
     @Test

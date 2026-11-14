@@ -80,14 +80,16 @@ public class ChatBusinessFactGuard {
     /** 问情况 / 问数量 / 问变化 (「怎么提高」「如何做」这类咨询不在这里, 也不靠句末问号 / 吗 / 呢判业务)。 */
     private static final Pattern QUESTION_ASK = Pattern.compile(
             "怎么样|咋样|怎样|如何|情况|多少|几[个件吨单批箱台家笔斤]|好不好|行不行|好吗|多吗|够吗|够不够|多不多|高不高"
-                    + "|了吗|了没|有没有|有吗|还有|排名|排行|同比|环比|涨|跌|增长|下降|变化|趋势|表现");
+                    + "|了吗|了没|有没有|有吗|还有|排名|排行|同比|环比|涨|跌|增长|下降|变化|趋势|表现"
+                    + "|怎么(?:这么|那么|又|会|还|突然|回事|下降|少|多|了)|[?？]$|吗$|呢$");
 
     /**
      * 咨询 / 怎么做类问法: 先于业务问法判定。「怎么 / 怎样 / 如何」后面还跟着动作才是咨询
      * (「怎么样」「销量如何」「如何？」是在问情况, 不算); 「注意什么 / 建议 / 合适」同理。
      */
     private static final Pattern CONSULT = Pattern.compile(
-            "(?:怎么(?!样)|怎样|如何)(?![?？。!！吗呢啊呀，,]|$)|怎么办|注意|建议|办法|合适|适合|温度");
+            "(?:怎么(?!样|这么|那么|又|会|还|突然|回事|下降|少|多|了)|怎样|如何)(?![?？。!！吗呢啊呀了，,]|$)"
+                    + "|怎么办|注意|建议|办法|合适|适合|温度");
 
     /**
      * 这句话是不是在问业务情况 / 业务数字。是 ⇒ 调用方不许把它交给纯闲聊模型。
@@ -114,8 +116,11 @@ public class ChatBusinessFactGuard {
 
     /** 业务数量单位 (紧跟在数后面)。「个」只在不是「个月 / 个原则」这类量词时算。 */
     private static final Pattern QUANTITY_UNIT = Pattern.compile(
-            "^\\s*(件|箱|吨|公斤|千克|kg|斤|单|笔|批|袋|包|瓶|盒|头|只|台|个(?!月|小时|原则|步骤|方面|要点|环节|方法|阶段|条|点|人)"
-                    + "|家客户|位客户|万件|万箱)");
+            "^\\s*(件|箱|吨|公斤|千克|kg|斤|单|笔|批|袋|包|瓶|盒|头|只|台|个订单|个客户|家客户|位客户|万件|万箱)");
+
+    /** 「个」是泛量词: 只在和指标主语 (不含时间词 / 客户) 同句、且不是「3 个关键点」这类建议量词时才算业务数字。 */
+    private static final Pattern GE_UNIT = Pattern.compile(
+            "^\\s*个(?!月|小时|原则|步|方面|要点|关键|维度|贴士|技巧|建议|措施|环节|方法|办法|思路|角度|阶段|条|点|人|种|类|项)");
 
     /** 金额单位 (紧跟在数后面)。 */
     private static final Pattern MONEY_UNIT = Pattern.compile("^\\s*(元|块|美元|万元|亿元|万块)");
@@ -139,7 +144,7 @@ public class ChatBusinessFactGuard {
             "本月|这个月|这月|今天|今日|本周|这周|上周|上月|上个月|昨天|今年|本季度|最近|近期"
                     + "|同比|环比|比去年|比上年|比上月|比上个月|比上周|比昨天|比上季度|较去年|较上年|较上月|较上个月|较上周|较昨天");
     private static final Pattern FACT_SUBJECT = Pattern.compile(
-            "销售|销量|卖得|营收|营业额|收入|利润|毛利|产量|出货|发货|库存|订单|生意|业绩|回款");
+            "销售|销量|卖得|营收|营业额|收入|利润|毛利|成本|合格率|产量|出货|发货|库存|订单|生意|业绩|回款");
     private static final Pattern TREND_WORD = Pattern.compile(
             "增长|下降|上涨|下滑|上升|提升|持平|良好|不错|稳定|向好|偏低|偏高|较好|较差|增加|减少|火爆|低迷");
     /** 条件句 / 假设句 / 愿望句里的趋势词不是在陈述事实 (「如果本月销量下滑, 建议…」「想让销量同比增长, 可以…」)。 */
@@ -187,7 +192,7 @@ public class ChatBusinessFactGuard {
         if (hits.isEmpty()) {
             result = new Result(reply, Decision.PASS, null);
         } else {
-            result = new Result(advice ? adviceWithoutFacts(reply, hits) : NEED_QUERY_REPLY,
+            result = new Result(advice ? adviceWithoutFacts(reply, userInput, hits) : NEED_QUERY_REPLY,
                     Decision.BLOCKED, hits.get(0).rule());
         }
         return record(site, result, reply);
@@ -240,7 +245,8 @@ public class ChatBusinessFactGuard {
             } else if (t.multiplier().compareTo(BigDecimal.ONE) > 0 && !t.percent()
                     && (METRIC_WORD.matcher(sentence).find() || METRIC_SUBJECT.matcher(sentence).find())) {
                 rule = "big-number:" + t.raw(); // 「营收约 35 万」「销售额 120 万左右」: 不带「元」也是金额 / 量级
-            } else if (QUANTITY_UNIT.matcher(after).find() && BUSINESS_SUBJECT.matcher(sentence).find()) {
+            } else if ((QUANTITY_UNIT.matcher(after).find() && BUSINESS_SUBJECT.matcher(sentence).find())
+                    || (GE_UNIT.matcher(after).find() && METRIC_SUBJECT.matcher(sentence).find())) {
                 rule = "business-quantity:" + t.raw();
             } else if (!t.percent() && BARE_AFTER.matcher(after).find() && METRIC_SUBJECT.matcher(sentence).find()) {
                 rule = "business-bare-number:" + t.raw(); // 「产量达到 1200」「库存还有 200 多」
@@ -250,25 +256,38 @@ public class ChatBusinessFactGuard {
         Matcher m = SENTENCE.matcher(reply);
         while (m.find()) {
             String s = m.group();
-            if (TIME_ANCHOR.matcher(s).find() && FACT_SUBJECT.matcher(s).find()
-                    && TREND_WORD.matcher(s).find() && !CONDITIONAL.matcher(s).find()) {
+            if (TIME_ANCHOR.matcher(s).find() && FACT_SUBJECT.matcher(s).find() && assertsTrend(s)) {
                 hits.add(new Hit("business-claim:" + s.strip(), m.start()));
             }
         }
         return hits;
     }
 
+    /**
+     * 句子里有没有「在陈述事实」的趋势分句: 按逗号切分, 只在含趋势词的分句里找条件词;
+     * 条件词所在分句及其后的分句都算假设 (「如果销量同比增长, 那么库存会增加」不拦),
+     * 条件词在后面的分句不影响前面的断言 (「本月销量同比增长明显, 目标是继续保持」要拦)。
+     */
+    private static boolean assertsTrend(String sentence) {
+        boolean conditional = false;
+        for (String clause : sentence.split("[，,]")) {
+            if (CONDITIONAL.matcher(clause).find()) conditional = true;
+            if (!conditional && TREND_WORD.matcher(clause).find()) return true;
+        }
+        return false;
+    }
+
     /** 用户原话里写过同一个数 (含同样的百分号 / 万亿量级) ⇒ 是复述, 不是编造。 */
     private static boolean echoedByUser(FactoryNumberProvenance.NumberToken t,
                                         List<FactoryNumberProvenance.NumberToken> userNumbers) {
         for (FactoryNumberProvenance.NumberToken u : userNumbers) {
-            if (u.value().compareTo(t.value()) == 0) return true;
+            if (u.percent() == t.percent() && u.value().compareTo(t.value()) == 0) return true;
         }
         return false;
     }
 
     /** 去掉命中句子, 剩下的通用建议前面加说明; 一句都不剩时只给提示 (不带销售菜单)。 */
-    private String adviceWithoutFacts(String reply, List<Hit> hits) {
+    private String adviceWithoutFacts(String reply, String userInput, List<Hit> hits) {
         java.util.Set<Integer> dropped = new java.util.HashSet<>();
         for (Hit h : hits) dropped.add(h.sentenceStart());
         StringBuilder kept = new StringBuilder();
@@ -278,7 +297,7 @@ public class ChatBusinessFactGuard {
         }
         String remaining = kept.toString().strip();
         boolean usable = remaining.codePoints().filter(Character::isLetterOrDigit).count() >= 8
-                && hits(remaining, null).isEmpty();
+                && hits(remaining, userInput).isEmpty();
         return usable ? ADVICE_KEPT_PREFIX + remaining + "\n\n" + ADVICE_DATA_NOTICE : ADVICE_DATA_NOTICE;
     }
 

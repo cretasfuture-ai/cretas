@@ -1824,8 +1824,8 @@ public class SseStreamingService {
         StringBuilder held = new StringBuilder();
         com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
                 redacted.streamRestorer(held::append);
-        sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
         try {
+            sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
             var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
