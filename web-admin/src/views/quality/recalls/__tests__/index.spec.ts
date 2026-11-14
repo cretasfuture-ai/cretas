@@ -135,6 +135,15 @@ describe('quality recalls page', () => {
     expect(closeButton?.attributes()).toHaveProperty('disabled');
     wrapper.unmount();
   });
+  it('E-3: 批次扣留标签读召回事件的 eventCode，只认 FROZEN，不用检验单号字段', async () => {
+    const wrapper = await openPage();
+    const vm = wrapper.vm as unknown as { holdRecalls: (items: Array<Record<string, unknown>>) => Array<{ eventCode: string }> };
+    expect(vm.holdRecalls([{ ...detail, status: 'FROZEN' }]).map((h) => h.eventCode)).toEqual(['RC-001']);
+    expect(vm.holdRecalls([{ ...detail, status: 'OPEN' }, { ...detail, status: 'COMPLETED' }])).toEqual([]);
+    expect(vm.holdRecalls([{ ...detail, status: 'FROZEN', eventCode: '' }])).toEqual([]);
+    expect(JSON.stringify(vm.holdRecalls([{ ...detail, status: 'FROZEN' }]))).not.toContain('inspectionNo');
+    wrapper.unmount();
+  });
   it('loads the exact batch preview and recall list, then displays server batch context', async () => {
     const wrapper = await openPage();
     expect(previewFactoryRecall).toHaveBeenCalledWith('F006', 7);

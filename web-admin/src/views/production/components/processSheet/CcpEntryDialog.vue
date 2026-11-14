@@ -109,38 +109,38 @@ defineExpose({ collect });
 <style scoped>
 .lead {
   margin: 0 0 12px;
-  color: #606266;
+  color: var(--cs-muted);
   font-size: 13px;
 }
 .limit {
   font-size: 13px;
-  color: #303133;
+  color: var(--cs-text);
   width: 100%;
 }
 .procedure {
   font-size: 12px;
-  color: #909399;
+  color: var(--cs-muted);
   width: 100%;
   margin-bottom: 4px;
 }
 .unit {
   margin-left: 8px;
-  color: #606266;
+  color: var(--cs-muted);
 }
 .out-of-limit {
   width: 100%;
   margin-top: 4px;
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-size: 12px;
   line-height: 1.5;
 }
 .disabled-reason {
-  color: #f56c6c;
+  color: var(--cs-danger);
   font-size: 12px;
   margin-right: 12px;
 }
 .warn {
-  color: #e6a23c;
+  color: var(--cs-warning);
   font-size: 12px;
   margin-right: 12px;
 }

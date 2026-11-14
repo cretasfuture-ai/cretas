@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 // Sprint 7 wave 2 T5 — 销售排行榜.
 // HJ Round 13 §15 业绩 6 项: 销售排名 + 团队 quota + ECharts bar.
 // 防呆 R2 context: header 含 period + year/periodNum.
@@ -85,7 +86,7 @@ function renderChart(): void {
         name: '目标',
         type: 'bar',
         data: entries.map((e) => Number(e.target)),
-        itemStyle: { color: '#409eff' },
+        itemStyle: { color: CS_TOKENS.primary },
       },
     ],
   };
@@ -210,7 +211,7 @@ const { insight: leaderboardInsight, loading: leaderboardInsightLoading } = useC
     .kpi {
       .label { color: #909399; font-size: 13px; }
       .value { font-size: 22px; font-weight: 600; margin-top: 8px;
-        &.primary { color: #409eff; }
+        &.primary { color: var(--cs-primary); }
         &.success { color: #67c23a; }
         &.warning { color: #e6a23c; }
       }

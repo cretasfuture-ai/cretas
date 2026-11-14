@@ -111,6 +111,9 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/issues': [{ path: '/issues', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
   // P5：生产管理下「称重报工」，与「报工审批」同判据（父组 生产管理 + module: 'production'）
   '/production/weigh': [{ path: '/production', module: 'production' }, { path: '/production/weigh', module: 'production' }],
+  // P6：「在制品」路由早已存在、原菜单无入口；原型分组侧栏挂在「仓储管理」下。
+  // 链 = 「仓储管理」父组（取自改前快照，不手写）+ 叶子自身 module:'warehouse'（取自路由 meta，不加 roles）。
+  '/warehouse/wip-batches': [snapshot.get('/warehouse/materials')![0], { path: '/warehouse/wip-batches', module: 'warehouse' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 
