@@ -198,6 +198,9 @@ jobs:
           echo "READING: SHARD=${{ matrix.shard }}/4 CLASSES=$(echo "$TESTS" | tr ',' '\n' | wc -l)"
           # ExitOnOutOfMemoryError: 堆溢出时 fork 立即退出 (而不是半死不活挂着); MaxMetaspaceSize/MaxDirectMemorySize
           # 给非堆封顶, 让 fork 总占用有上界。
+          # 根因 (PR #1700 MEMGUARD 实测): Spring 测试上下文缓存默认留 32 个上下文 (每个带 H2 + 全部实体),
+          # 堆 245 秒涨到 7.2GB、337 秒顶满 8GB, 之后在同一个类上 GC 死循环直到 OOM; 12g 则吃光整机。
+          # 缓存上限压到 6: 被逐出的上下文会被关闭, 代价只是重复启动。
           rc=0
           "$MVN" -B test \
             -Dtest="$TESTS" \
