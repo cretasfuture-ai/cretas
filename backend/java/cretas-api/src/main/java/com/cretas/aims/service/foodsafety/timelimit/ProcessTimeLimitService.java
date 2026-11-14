@@ -154,7 +154,7 @@ public class ProcessTimeLimitService {
     private final WarehouseResolver warehouseResolver;
     private final ProductProcessWorkflowRevisionRepository revisionRepository;
     private final ObjectMapper objectMapper;
-    /** 缺口 16: 时限列表 = 这道可领来源清单, 别的客户的半成品 / 在制批不出现在这里 (领用闸同一口径)。 */
+    /** 缺口 16: 时限列表 = 这道可领来源清单, 归属与领用计划不同的半成品 / 在制批不出现在这里 (领用闸同一口径)。 */
     private final IntermediateOwnershipGuard ownershipGuard;
 
     /**
@@ -493,8 +493,9 @@ public class ProcessTimeLimitService {
     /**
      * 缺口 16 (2026-11-14 F006 验收): 这张列表在逐道录入里就是「这道能领哪些料」, 此前不看归属 ——
      * 客户 A 的在制批一放行就会出现在客户 B 计划的列表里 (保存时才被 {@link IntermediateOwnershipGuard} 409)。
-     * 现在: 客户所有的半成品 / 在制批只给同一客户的计划看; 公司自有的维持原样 (不在本修复范围,
-     * 领用闸对「公司自有 → 代工计划」同样 409, 列表是否也收掉由 organizer 定)。
+     * 现在与领用闸、半成品投料下拉同一口径 ({@code sameOwner}): 领用计划的归属 == 料的归属才列出 ——
+     * 客户所有的只给同一客户的计划, 公司自有的只给本厂自有计划 (列出注定 409 的批次只会让人选了再被拒,
+     * organizer 2026-11-14 定)。
      * 在制批归属从产出它的生产批次的计划现算 (与领用闸同口径); 算不出 (批次 / 计划已不存在) ⇒ 不列出 —— 领用闸同样会拒。
      */
     private boolean visibleTo(String factoryId, IntermediateOwnershipGuard.Owner listOwner, Source source,
@@ -511,7 +512,7 @@ public class ProcessTimeLimitService {
         } else {
             return true;   // 原料 / 成品: 归属另有闸, 本修复不动
         }
-        return !material.isCustomer() || IntermediateOwnershipGuard.sameOwner(listOwner, material);
+        return IntermediateOwnershipGuard.sameOwner(listOwner, material);
     }
 
     private Optional<IntermediateOwnershipGuard.Owner> wipOwner(

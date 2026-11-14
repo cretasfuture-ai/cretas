@@ -58,10 +58,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <ul>
  *   <li>阳性: 客户 A 的在制批 / 半成品行出现在 A 自己的计划和 A 的另一张计划里;</li>
  *   <li>阴性: 不出现在客户 B 的计划和本厂自有计划里; 服务端直接领 (领用闸) 同样 409;</li>
- *   <li>不变: 公司自有的在制批在所有计划里照旧列出 (是否收掉留给 organizer 定);</li>
+ *   <li>对齐领用闸: 客户计划不列公司自有的在制批 / 半成品; 公司自有计划照旧列出;</li>
  *   <li>根因读数: 待检 (INSPECTING) 的在制批本来就不进列表 —— F006 的 15549 就是这种。</li>
  * </ul>
- * 每条「不出现」都和同一张列表里「一定出现」的公司自有批同时断言 (列表确实跑出来了)。
+ * 每条「不出现」都和同一张列表里「一定出现」的批次同时断言 (列表确实跑出来了)。
  */
 @SpringBootTest(classes = TimeLimitCandidateOwnershipPostgresContractTest.Runtime.class,
         webEnvironment = SpringBootTest.WebEnvironment.NONE, properties = {
@@ -238,6 +238,7 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         String wipB = wip(FACTORY, b1.batch(), MaterialBatchStatus.AVAILABLE);
         String wipCompany = wip(FACTORY, company.batch(), MaterialBatchStatus.AVAILABLE);
         String semiA = semiRow(FACTORY, custA);
+        String semiB = semiRow(FACTORY, custB);
         String semiCompany = semiRow(FACTORY, null);
         // 别厂同 SKU 的公司自有在制批: 任何一张本厂计划都不该看到 (factory_id 隔离)
         PlanFixture foreign = plan(OTHER_FACTORY, null);
@@ -247,18 +248,51 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         for (PlanFixture own : List.of(a1, a2)) {
             assertThat(listed(FACTORY, own.planId()))
                     .as("客户 A 的计划 %s 能看到 A 的在制批 / 半成品", own.planId())
-                    .contains(wipA, semiA, wipCompany, semiCompany)
-                    .doesNotContain(wipB, wipAPending, wipForeign);
+                    .contains(wipA, semiA)
+                    .doesNotContain(wipB, semiB, wipAPending, wipForeign);
         }
         // 阴性: 客户 B
         assertThat(listed(FACTORY, b1.planId()))
-                .as("客户 B 的计划看不到 A 的料, 但看得到自己的 + 公司自有 (列表确实跑出来了)")
-                .contains(wipB, wipCompany, semiCompany)
+                .as("客户 B 的计划看不到 A 的料, 看得到自己的 (列表确实跑出来了)")
+                .contains(wipB, semiB)
                 .doesNotContain(wipA, semiA, wipAPending, wipForeign);
         // 阴性: 本厂自有计划也不列客户的料
         assertThat(listed(FACTORY, company.planId()))
                 .contains(wipCompany, semiCompany)
-                .doesNotContain(wipA, semiA, wipB, wipAPending, wipForeign);
+                .doesNotContain(wipA, semiA, wipB, semiB, wipAPending, wipForeign);
+    }
+
+    /**
+     * organizer 2026-11-14 定: 与领用闸 (sameOwner) 和半成品投料下拉对齐 ——
+     * 代工 (客户) 计划的列表不列公司自有的在制批 / 半成品 (领了也会 409); 公司自有计划的行为不变。
+     * 两边各配一条「一定出现」的读数 (客户计划看得到自己的料, 公司计划看得到公司的料)。
+     */
+    @Test
+    void customerPlansDoNotListCompanyOwnedIntermediates_companyPlansUnchanged() {
+        String custA = "CUST-A-" + UUID.randomUUID().toString().substring(0, 6);
+        PlanFixture a1 = plan(FACTORY, custA);
+        PlanFixture company = plan(FACTORY, null);
+        PlanFixture company2 = plan(FACTORY, null);
+
+        String wipA = wip(FACTORY, a1.batch(), MaterialBatchStatus.AVAILABLE);
+        String wipCompany = wip(FACTORY, company.batch(), MaterialBatchStatus.AVAILABLE);
+        String semiCompany = semiRow(FACTORY, null);
+
+        assertThat(listed(FACTORY, a1.planId()))
+                .as("客户计划: 看得到自己的在制批, 看不到公司自有的")
+                .contains(wipA)
+                .doesNotContain(wipCompany, semiCompany);
+        for (PlanFixture own : List.of(company, company2)) {
+            assertThat(listed(FACTORY, own.planId()))
+                    .as("公司自有计划 %s: 公司自有的在制批 / 半成品照常列出 (本计划和别的公司计划产出的)", own.planId())
+                    .contains(wipCompany, semiCompany)
+                    .doesNotContain(wipA);
+        }
+        // 服务端同口径: 客户计划直接领公司自有在制批 409
+        assertThatThrownBy(() -> ownershipGuard.assertWipBatchDrawable(FACTORY,
+                ownershipGuard.ofPlanId(FACTORY, a1.planId()), company.batch(), company.batch().getBatchNumber(), "P2"))
+                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode())
+                        .isEqualTo(IntermediateOwnershipGuard.CODE_CROSS_OWNER));
     }
 
     /** 服务端直接领 (不走列表): 领用闸用同一归属口径, B 领 A 的在制批 409, A 的另一张计划放行。 */
