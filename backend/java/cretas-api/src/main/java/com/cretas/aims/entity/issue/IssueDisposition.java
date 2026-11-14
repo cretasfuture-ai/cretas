@@ -89,6 +89,23 @@ public class IssueDisposition {
     @Column(name = "acted_at", nullable = false)
     private LocalDateTime actedAt;
 
+    /** 从「已关闭」恢复时留痕: 上一次的结论、说明、关闭人、关闭时间。 */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "previous_conclusion", length = 32)
+    private Conclusion previousConclusion;
+
+    @Column(name = "previous_reason", length = 200)
+    private String previousReason;
+
+    @Column(name = "previous_closed_by_type", length = 32)
+    private String previousClosedByType;
+
+    @Column(name = "previous_closed_by_id")
+    private Long previousClosedById;
+
+    @Column(name = "previous_closed_at")
+    private LocalDateTime previousClosedAt;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 

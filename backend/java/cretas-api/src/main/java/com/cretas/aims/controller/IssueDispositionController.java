@@ -57,10 +57,10 @@ public class IssueDispositionController {
             "procurement:read", "procurement:read_write", "warehouse:read", "warehouse:read_write",
             "quality:read", "quality:read_write", "finance:read", "finance:read_write"})
     @GetMapping
-    @Operation(summary = "本厂已关闭 / 已转待办的问题处置", description = "最近 500 条")
+    @Operation(summary = "本厂已关闭 / 已转待办的问题处置", description = "最近 500 条; 只返回操作人有读权限的来源类型")
     public ApiResponse<List<DispositionView>> list(@PathVariable String factoryId, HttpServletRequest http) {
-        ShortageCaseActionController.actor(http, factoryId);
-        return ApiResponse.success("获取成功", service.listActive(factoryId).stream().map(DispositionView::of).toList());
+        ActorRef actor = ShortageCaseActionController.actor(http, factoryId);
+        return ApiResponse.success("获取成功", service.listActive(factoryId, actor).stream().map(DispositionView::of).toList());
     }
 
     @GetMapping("/assigned-to-me")
@@ -71,7 +71,7 @@ public class IssueDispositionController {
             return ApiResponse.success("平台账号没有工厂待办", List.of());
         }
         return ApiResponse.success("获取成功",
-                service.assignedTo(factoryId, actor.id()).stream().map(DispositionView::of).toList());
+                service.assignedTo(factoryId, actor).stream().map(DispositionView::of).toList());
     }
 
     @RequirePermission({"production:read", "production:read_write", "sales:read", "sales:read_write",

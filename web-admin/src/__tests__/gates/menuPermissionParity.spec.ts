@@ -108,7 +108,7 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/today': [{ path: '/today', module: 'dashboard' }],
   '/todo': [{ path: '/todo', module: 'dashboard' }],
   // P4：顶层「发现的问题」，同判据
-  '/issues': [{ path: '/issues', module: 'dashboard' }],
+  '/issues': [{ path: '/issues', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

@@ -2,7 +2,8 @@
 --   一个来源对象 (缺料实例 / 交付风险 / 工艺参数偏离 / 成本损耗异常 / 冷链告警 / 每日核对运行) 在本页最多一行。
 --   ⛔ 只记在这里, 不改来源单据的阶段 (来源仍在各自页面按原流程处理), 与原型「关闭只记在记录里, 不改来源数据」一致。
 --   关闭必须选结论 (沿用原型清单: 已处理 / 误报 / 接受偏差) 并写一句说明 (去空白后 ≥ 2 字); 服务端校验, 这里再加 CHECK 兜底。
---   转待办 = 指派给操作人本人, 出现在「待办 › 指派给我」。恢复 = status 回 OPEN 并清空结论。
+--   转待办 = 指派给操作人本人, 出现在「待办 › 指派给我」。恢复 = status 回 OPEN 并清空结论;
+--   从「已关闭」恢复时, 上一次的结论 / 说明 / 关闭人 / 关闭时间留在 previous_* (已关闭的不能直接再关, 要改结论先恢复)。
 -- 新表, 不回填。IF NOT EXISTS: 可重复执行。
 
 CREATE TABLE IF NOT EXISTS factory_issue_dispositions (
@@ -21,6 +22,11 @@ CREATE TABLE IF NOT EXISTS factory_issue_dispositions (
     actor_type        VARCHAR(32)  NOT NULL,
     actor_id          BIGINT       NOT NULL,
     acted_at          TIMESTAMP    NOT NULL,
+    previous_conclusion      VARCHAR(32)  CHECK (previous_conclusion IN ('HANDLED', 'FALSE_ALARM', 'ACCEPTED_DEVIATION')),
+    previous_reason          VARCHAR(200),
+    previous_closed_by_type  VARCHAR(32),
+    previous_closed_by_id    BIGINT,
+    previous_closed_at       TIMESTAMP,
     created_at        TIMESTAMP    NOT NULL DEFAULT NOW(),
     updated_at        TIMESTAMP    NOT NULL DEFAULT NOW(),
     version           BIGINT       NOT NULL DEFAULT 0,

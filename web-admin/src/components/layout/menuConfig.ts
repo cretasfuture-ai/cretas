@@ -844,7 +844,7 @@ const MOVED_OUT = new Set<string>([...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS]
 const TOP_ENTRIES: MenuItem[] = [
   { path: '/today', title: '今天', icon: 'Sunny', module: 'dashboard', section: 'top' },
   { path: '/todo', title: '待办', icon: 'Finished', module: 'dashboard', section: 'top' },
-  { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', section: 'top' },
+  { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], section: 'top' },
 ];
 
 /** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */

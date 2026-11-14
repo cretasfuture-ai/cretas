@@ -217,7 +217,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'issues',
         name: 'IssuesPage',
         component: () => import('@/views/issues/IssuesPage.vue'),
-        meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard' }
+        meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
       },
       {
         path: 'dashboard/widgets',

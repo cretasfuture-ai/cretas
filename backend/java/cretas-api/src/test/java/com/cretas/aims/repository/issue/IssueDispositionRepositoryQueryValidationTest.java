@@ -76,6 +76,7 @@ class IssueDispositionRepositoryQueryValidationTest {
     private static final String F2 = "F-ISSUE-2";
     private static final ActorRef ME = new ActorRef(AuthenticatedActorType.FACTORY_USER, 71L);
     private static final ActorRef OTHER = new ActorRef(AuthenticatedActorType.FACTORY_USER, 72L);
+    private static final ActorRef ADMIN = new ActorRef(AuthenticatedActorType.FACTORY_USER, 73L);
 
     @Autowired TestEntityManager em;
     @Autowired IssueDispositionRepository repository;
@@ -88,7 +89,11 @@ class IssueDispositionRepositoryQueryValidationTest {
 
     @BeforeEach
     void seed() {
-        when(users.findById(any())).thenAnswer(i -> Optional.of(new User()));
+        when(users.findById(any())).thenAnswer(i -> {
+            User u = new User();
+            u.setRoleCode(Long.valueOf(73L).equals(i.getArgument(0)) ? "factory_super_admin" : "workshop_supervisor");
+            return Optional.of(u);
+        });
         when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenReturn(true);
         riskId = newCase(F1, ShortageCase.SourceType.DELIVERY_RISK, "SO-1").getId();
     }
@@ -127,8 +132,12 @@ class IssueDispositionRepositoryQueryValidationTest {
                 .isInstanceOf(BusinessException.class).hasMessageContaining("结论只能是");
         assertThatThrownBy(() -> service.close(F1, ME, risk(), "IGNORED", "已经和客户确认"))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("结论只能是");
-        // 选了结论但没写一句
+        // 选了结论但没写一句; 只填全角空格 / 不换行空格也算没写
         assertThatThrownBy(() -> service.close(F1, ME, risk(), "HANDLED", " 好 "))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("写一句说明");
+        assertThatThrownBy(() -> service.close(F1, ME, risk(), "HANDLED", "\u3000\u3000\u3000"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("写一句说明");
+        assertThatThrownBy(() -> service.close(F1, ME, risk(), "HANDLED", "\u3000好\u00A0"))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("写一句说明");
         em.flush();
         em.clear();
@@ -141,7 +150,7 @@ class IssueDispositionRepositoryQueryValidationTest {
         em.flush();
         em.clear();
 
-        List<IssueDisposition> rows = service.listActive(F1);
+        List<IssueDisposition> rows = service.listActive(F1, ME);
         assertThat(rows).hasSize(1);
         IssueDisposition d = rows.get(0);
         assertThat(d.getStatus()).isEqualTo(IssueDisposition.Status.CLOSED);
@@ -151,7 +160,75 @@ class IssueDispositionRepositoryQueryValidationTest {
         assertThat(d.getSourceId()).isEqualTo(riskId);
         assertThat(d.getActorId()).isEqualTo(71L);
         // 别厂看不到
-        assertThat(service.listActive(F2)).isEmpty();
+        assertThat(service.listActive(F2, ME)).isEmpty();
+    }
+
+    @Test
+    void closingAnAlreadyClosedIssueIsAConflictAndReopenKeepsTheLastConclusion() {
+        service.close(F1, ME, risk(), "FALSE_ALARM", "订单已经取消");
+        em.flush();
+        em.clear();
+        // 再关不覆盖原结论
+        assertThatThrownBy(() -> service.close(F1, OTHER, risk(), "HANDLED", "改成已处理"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("先恢复");
+        em.flush();
+        em.clear();
+        IssueDisposition kept = only();
+        assertThat(kept.getConclusion()).isEqualTo(IssueDisposition.Conclusion.FALSE_ALARM);
+        assertThat(kept.getReason()).isEqualTo("订单已经取消");
+
+        service.reopen(F1, OTHER, risk());
+        em.flush();
+        em.clear();
+        IssueDisposition reopened = only();
+        assertThat(reopened.getStatus()).isEqualTo(IssueDisposition.Status.OPEN);
+        assertThat(reopened.getConclusion()).isNull();
+        assertThat(reopened.getPreviousConclusion()).isEqualTo(IssueDisposition.Conclusion.FALSE_ALARM);
+        assertThat(reopened.getPreviousReason()).isEqualTo("订单已经取消");
+        assertThat(reopened.getPreviousClosedById()).isEqualTo(71L);
+        assertThat(reopened.getPreviousClosedByType()).isEqualTo("FACTORY_USER");
+        assertThat(reopened.getPreviousClosedAt()).isNotNull();
+        assertThat(reopened.getActorId()).isEqualTo(72L); // 恢复人
+
+        // 恢复后才能改结论
+        service.close(F1, OTHER, risk(), "HANDLED", "改成已处理");
+        em.flush();
+        em.clear();
+        assertThat(only().getConclusion()).isEqualTo(IssueDisposition.Conclusion.HANDLED);
+        assertThat(only().getPreviousConclusion()).isEqualTo(IssueDisposition.Conclusion.FALSE_ALARM);
+    }
+
+    @Test
+    void readingDispositionsIsFilteredBySourceReadPermission() {
+        String costId = newCase(F1, ShortageCase.SourceType.COST_VARIANCE, "PL-1").getId();
+        service.close(F1, ME, new SourceRef("COST_DEVIATION", costId, "成本差异 · PL-1", null), "ACCEPTED_DEVIATION", "原料涨价, 已知");
+        service.close(F1, ME, risk(), "HANDLED", "已经交货");
+        em.flush();
+        em.clear();
+        assertThat(service.listActive(F1, ME)).extracting(IssueDisposition::getSourceType)
+                .containsExactlyInAnyOrder(IssueDisposition.SourceType.COST_DEVIATION, IssueDisposition.SourceType.DELIVERY_RISK);
+
+        // 72 只有销售读权限 (没有财务 / 价格查看 / 生产) ⇒ 拿不到成本类处置 (标题和关闭说明都不能漏出去)
+        when(users.findById(72L)).thenAnswer(i -> {
+            User u = new User();
+            u.setRoleCode("sales_manager");
+            return Optional.of(u);
+        });
+        when(permissions.hasAnyPermission(any(User.class), any(String[].class))).thenAnswer(i -> {
+            User u = i.getArgument(0);
+            if (!"sales_manager".equals(u.getRoleCode())) return true;
+            for (int k = 1; k < i.getArguments().length; k++) {
+                if (String.valueOf(i.getArguments()[k]).startsWith("sales:read")) return true;
+            }
+            return false;
+        });
+        assertThat(service.listActive(F1, OTHER)).extracting(IssueDisposition::getSourceType)
+                .containsExactly(IssueDisposition.SourceType.DELIVERY_RISK);
+    }
+
+    private IssueDisposition only() {
+        return repository.findByFactoryIdAndSourceTypeAndSourceId(F1,
+                IssueDisposition.SourceType.DELIVERY_RISK, riskId).orElseThrow();
     }
 
     @Test
@@ -177,30 +254,50 @@ class IssueDispositionRepositoryQueryValidationTest {
     }
 
     @Test
-    void convertingLandsInTheActorsTodoAndReopenClearsIt() {
+    void convertingLandsInTheActorsTodoAndOnlyTheAssigneeOrAnAdminCanActOnIt() {
         service.convertToTodo(F1, ME, risk());
         em.flush();
         em.clear();
-        assertThat(service.assignedTo(F1, 71L)).extracting(IssueDisposition::getTitle).containsExactly("交付风险 · SO-1");
-        assertThat(service.assignedTo(F1, 72L)).isEmpty();
-        assertThat(service.assignedTo(F2, 71L)).isEmpty();
+        assertThat(service.assignedTo(F1, ME)).extracting(IssueDisposition::getTitle).containsExactly("交付风险 · SO-1");
+        assertThat(service.assignedTo(F1, OTHER)).isEmpty();
+        assertThat(service.assignedTo(F2, ME)).isEmpty();
 
-        // 已转待办的可以关闭 (结论照样必选), 关闭后不再是待办
-        service.close(F1, OTHER, risk(), "HANDLED", "已经排进明天");
+        // 阴性: 别人不能抢过来、不能关掉、不能恢复我名下的待办
+        assertThatThrownBy(() -> service.convertToTodo(F1, OTHER, risk()))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("转给别人");
+        assertThatThrownBy(() -> service.convertToTodo(F1, ME, risk()))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已经是你的待办");
+        assertThatThrownBy(() -> service.close(F1, OTHER, risk(), "HANDLED", "已经排进明天"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("只有被指派的人或管理员");
+        assertThatThrownBy(() -> service.reopen(F1, OTHER, risk()))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("只有被指派的人或管理员");
         em.flush();
         em.clear();
-        assertThat(service.assignedTo(F1, 71L)).isEmpty();
+        assertThat(only().getStatus()).isEqualTo(IssueDisposition.Status.CONVERTED);
+        assertThat(only().getAssigneeUserId()).isEqualTo(71L);
+
+        // 被指派人自己能关; 关闭后不再是待办
+        service.close(F1, ME, risk(), "HANDLED", "已经排进明天");
+        em.flush();
+        em.clear();
+        assertThat(service.assignedTo(F1, ME)).isEmpty();
         assertThatThrownBy(() -> service.convertToTodo(F1, ME, risk()))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("先恢复");
 
         service.reopen(F1, ME, risk());
         em.flush();
         em.clear();
-        IssueDisposition d = repository.findByFactoryIdAndSourceTypeAndSourceId(F1,
-                IssueDisposition.SourceType.DELIVERY_RISK, riskId).orElseThrow();
-        assertThat(d.getStatus()).isEqualTo(IssueDisposition.Status.OPEN);
-        assertThat(d.getConclusion()).isNull();
-        assertThat(d.getReason()).isNull();
-        assertThat(service.listActive(F1)).isEmpty();
+        assertThat(only().getStatus()).isEqualTo(IssueDisposition.Status.OPEN);
+        assertThat(service.listActive(F1, ME)).isEmpty();
+    }
+
+    @Test
+    void anAdminCanCloseSomeoneElsesTodo() {
+        service.convertToTodo(F1, ME, risk());
+        service.close(F1, ADMIN, risk(), "HANDLED", "管理员代为关闭");
+        em.flush();
+        em.clear();
+        assertThat(only().getStatus()).isEqualTo(IssueDisposition.Status.CLOSED);
+        assertThat(only().getActorId()).isEqualTo(73L);
     }
 }
