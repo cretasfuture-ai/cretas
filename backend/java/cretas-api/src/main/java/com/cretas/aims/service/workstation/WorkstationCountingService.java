@@ -595,6 +595,11 @@ public class WorkstationCountingService {
         return false;
     }
 
+    /** 有 stable 字段且不是明确的不稳定写法才算稳定 (MqttSubscriber 日志与 readScaleWeight 共用同一口径)。 */
+    public static boolean isStableFlag(JsonNode stable) {
+        return stable != null && !stable.isNull() && !stable.isMissingNode() && !isExplicitlyUnstable(stable);
+    }
+
     /** 秤读数 → kg。没写单位按 kg (秤默认); 写了但认不出/不是质量单位 → 没读到, 不猜。 */
     public static Optional<BigDecimal> scaleReadingToKg(double weight, String unit) {
         if (Double.isNaN(weight) || Double.isInfinite(weight)) {

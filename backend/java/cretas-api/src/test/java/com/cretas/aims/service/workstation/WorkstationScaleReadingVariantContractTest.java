@@ -78,6 +78,21 @@ class WorkstationScaleReadingVariantContractTest {
         }
     }
 
+    @Test
+    void mqttLogAndReadScaleWeightShareTheSameStableJudgement() throws Exception {
+        ObjectMapper m = new ObjectMapper();
+        for (String s : new String[]{"true", "1", "\"S\"", "\"1\"", "\"true\""}) {
+            assertThat(WorkstationCountingService.isStableFlag(m.readTree(s))).as("stable=%s", s).isTrue();
+        }
+        for (String s : new String[]{"false", "0", "\"U\"", "\"M\"", "\"false\"", "null"}) {
+            assertThat(WorkstationCountingService.isStableFlag(m.readTree(s))).as("stable=%s", s).isFalse();
+        }
+        assertThat(WorkstationCountingService.isStableFlag(null)).isFalse();
+        // 与 readScaleWeight 口径一致: 能被判为稳定的写法, 读数能进报工
+        assertThat(read("5", "\"S\"")).isEqualTo("5");
+        assertThat(read("5", "\"U\"")).isEqualTo("EMPTY");
+    }
+
     // ---------------------------------------------------------------- MqttSubscriber (入库路径)
 
     private MqttSubscriber mqtt() {

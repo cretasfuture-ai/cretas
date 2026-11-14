@@ -230,6 +230,9 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
             Boolean stable = null;
             char sign = '+';
             boolean weightNegative = false;
+            boolean signFieldSeen = false;
+            boolean weightCarriesSign = false;
+            int fieldsEnd = 0;
 
             for (JsonNode field : fields) {
                 String name = field.path("name").asText();
@@ -240,11 +243,13 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                     return ScaleDataParseResult.error("FRAME_TOO_SHORT",
                             "数据帧长度不足: 需要 " + (start + length) + ", 实际 " + ascii.length());
                 }
+                fieldsEnd = Math.max(fieldsEnd, start + length);
 
                 String value = ascii.substring(start, start + length);
 
                 switch (name) {
                     case "sign":
+                        signFieldSeen = true;
                         sign = value.charAt(0);
                         if (sign != '+' && sign != '-') {
                             return ScaleDataParseResult.error("INVALID_SIGN", "符号位不是 +/-: " + value);
@@ -258,6 +263,9 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                         // 允许重量域自带符号 ("-12.5") 和 "12." / ".5" 写法
                         if (!weightStr.matches("[+-]?(\\d+\\.?\\d*|\\.\\d+)")) {
                             return ScaleDataParseResult.error("INVALID_WEIGHT", "无法解析重量值: '" + weightStr + "'");
+                        }
+                        if (weightStr.startsWith("+") || weightStr.startsWith("-")) {
+                            weightCarriesSign = true;
                         }
                         if (weightStr.startsWith("-")) {
                             weightNegative = true;
@@ -283,6 +291,18 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                         break;
                     default:
                         break;
+                }
+            }
+
+            // 独立符号位和重量域各带一个符号 ("-" + "-00520"): 到底是不是负数说不清, 整帧拒绝, 不取反一次蒙一个
+            if (signFieldSeen && weightCarriesSign) {
+                return ScaleDataParseResult.error("DOUBLE_SIGN", "符号位和重量域各带一个符号, 无法判断正负");
+            }
+            // 字段之后只允许空白 / 换行 / 配置声明的结束标记; 其它多余字节说明帧格式对不上 (或两帧粘在一起)
+            String trailing = ascii.substring(fieldsEnd);
+            for (char c : trailing.toCharArray()) {
+                if (c != ' ' && c != '\r' && c != '\n' && endMarker.indexOf(c) < 0) {
+                    return ScaleDataParseResult.error("FRAME_TRAILING", "字段之后有多余内容: '" + trailing.trim() + "'");
                 }
             }
 

@@ -105,6 +105,39 @@ class ScaleParserVariantContractTest {
         assertThat(r.getWeight()).isEqualByComparingTo(new BigDecimal("-52.0"));
     }
 
+    // ---------------------------------------------------------------- 双重符号 / 帧尾多余内容 (复核 #1705 第二轮)
+
+    @Test
+    void signFieldPlusSignedWeightFieldIsRejectedNotNegatedOnce() {
+        String fmt = ScaleSimSupport.seedFrameFormat("proto-keli-d2008-ascii");
+        for (String frame : new String[]{"--00520 kg S\r\n", "+-00520 kg S\r\n", "-+00520 kg S\r\n", "++00520 kg S\r\n"}) {
+            ScaleDataParseResult r = parse(fmt, frame.getBytes(StandardCharsets.US_ASCII));
+            assertThat(r.getSuccess()).as("双重符号 %s 必须拒绝", frame.trim()).isFalse();
+            assertThat(r.getErrorCode()).isEqualTo("DOUBLE_SIGN");
+            assertThat(r.getWeight()).isNull();
+        }
+        // 对照: 只有一处符号的写法照常
+        assertThat(parse(fmt, "-000520 kg S\r\n".getBytes(StandardCharsets.US_ASCII)).getWeight())
+                .isEqualByComparingTo(new BigDecimal("-52.0"));
+        assertThat(parse(SIGN_IN_WEIGHT_FORMAT, "  -12.5 kg".getBytes(StandardCharsets.US_ASCII)).getWeight())
+                .isEqualByComparingTo(new BigDecimal("-12.5"));
+    }
+
+    @Test
+    void garbageAfterTheLastFieldIsRejected() {
+        String fmt = ScaleSimSupport.seedFrameFormat("proto-keli-d2008-ascii");
+        // 垃圾内容 / 两帧粘在一起 → 拒绝
+        for (String frame : new String[]{"+001240 kg SXYZ\r\n", "+001240 kg S\r\n+001240 kg S\r\n", "+001240 kg S 99\r\n"}) {
+            ScaleDataParseResult r = parse(fmt, frame.getBytes(StandardCharsets.US_ASCII));
+            assertThat(r.getSuccess()).as("帧尾多余内容必须拒绝: %s", frame.replace("\r\n", "\\r\\n")).isFalse();
+            assertThat(r.getErrorCode()).isEqualTo("FRAME_TRAILING");
+        }
+        // 对照: 尾部只有空白 / 换行 照常
+        for (String frame : new String[]{"+001240 kg S  \r\n", "+001240 kg S \n", "+001240 kg S"}) {
+            assertThat(parse(fmt, frame.getBytes(StandardCharsets.US_ASCII)).getSuccess()).as(frame).isTrue();
+        }
+    }
+
     @Test
     void malformedWeightsAreStillRejected() {
         for (String w : new String[]{"      -", "   --5.0", "  1.2.3", "    1e3", "   12-5"}) {

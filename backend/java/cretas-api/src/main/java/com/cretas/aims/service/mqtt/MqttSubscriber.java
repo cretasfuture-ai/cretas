@@ -147,7 +147,9 @@ public class MqttSubscriber {
         }
         double weight = weightValue.get();
         String unit = weightData.has("unit") ? weightData.get("unit").asText() : "kg";
-        boolean stable = weightData.has("stable") && weightData.get("stable").asBoolean();
+        // 与 readScaleWeight 同一个判定函数 (S / 1 / true 都是稳定, false / 0 / U / M 是不稳定)
+        boolean stable = com.cretas.aims.service.workstation.WorkstationCountingService
+                .isStableFlag(weightData.get("stable"));
 
         log.info("称重数据: device={}, weight={}{}, stable={}",
                 deviceId, weight, unit, stable);

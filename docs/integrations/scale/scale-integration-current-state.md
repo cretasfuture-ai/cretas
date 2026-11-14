@@ -72,6 +72,7 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 | G8 | 蓝牙 / 手机直连秤读数：App 端没有任何蓝牙读秤代码 | 无 | 如果现场秤只有蓝牙，需要新开发；先确认秤的接口 |
 | G9 | 真实 MQTT broker、真实数据库（`iot_device_data` 实表）、真实 `mqtt.enabled=true` 部署的整链未测 | 测试里用桩 | 在测试环境起 broker，用模拟器 + 真实网关发消息，看表里有记录、`lastWeightReading` 更新、工位计数拿到重量 |
 | G10 | App / web-admin 界面上的称重展示未验 | 无 UI 验收 | 工位计数界面的实时重量展示需真机 / 浏览器看 |
+| G11 | **柯力种子修正不会自动上线**：prod 的 `spring.flyway.locations` 只扫 `db/flyway`，那里没有 `proto-keli-d2008-ascii` 种子行；修的两份种子 SQL（`db/migration`、`db/migration-pg-converted`）是历史文件，不会被执行。线上库里若有旧的柯力行，`stable` 下标仍是 10 | **已知缺口，未处理**（本 PR 没加迁移：不知道线上有没有这行、`frame_format` 列是 json 还是 text，盲写 UPDATE 不稳妥） | 上线后由有库权限的人查 `scale_protocol_configs` 里 `protocol_code='KELI_D2008_ASCII'` 的行：没有就不用管；有就把 `frame_format` 里 stable 字段的 `start` 改 11、`frameLength` 改 14，改完用 `/api/.../scale` 的协议测试用柯力样例帧 `2B303031323430206B6720530D0A` 验证读出 124.0 kg 稳定 |
 
 ## 6. 本 PR 做了什么（行为变化，评审时请知悉）
 
@@ -81,11 +82,13 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
    - 配置里声明了 STX / ETX 起止标记的帧（控制字符只在声明的标记位置放行）；
    - 换行类结尾（CRLF / 只有 CR / 只有 LF / 没有结尾）都接受，真正的半帧靠字段不全拦住；ETX 这类非换行结束标记仍然必须有；
    - 重量域自带符号（`-12.5`、`+12.5`）以及 `12.`、`.5` 写法；单独的符号字段照旧取负。
+   - 但**独立符号位和重量域各带一个符号**（`-` + `-00520`）无法判断正负，整帧拒绝（`DOUBLE_SIGN`）。
+   - 最后一个字段之后只允许空白、换行和配置声明的结束标记，其它多余内容（垃圾字节、两帧粘在一起）拒绝（`FRAME_TRAILING`）。这是收紧：若真秤的帧在字段后还带校验字节或附加字段，现场要把它们补进协议配置的 `fields`，否则会被拒（联调清单 §2 抓帧时留意）。
 2. Modbus RTU：必须校验 CRC16、字节数与帧长一致；重量按**有符号**32 位读（此前去皮后的负重会读成 42949667.76）。
 3. 任何协议「解析成功但没有重量」→ 拒绝（`NO_WEIGHT`）。
 4. `MqttSubscriber` / `readScaleWeight`：重量是数字或数字字符串（`"12.50"`）都认；缺失、`"abc"`、`NaN`、`"1e3"` 一律「没读到」，不再当 0 kg。
 5. `readScaleWeight`：设备明确报不稳定的读数不进报工，写法认 `false` / `0` / `"false"` / `"0"` / `"U"` / `"M"` / `"unstable"`（不区分大小写）；没有 `stable` 字段、或写法认不出的设备行为不变。**这是产品行为变化**，如不要可单独回退这一条。
 
-测试（`*ContractTest`，PR 作业会选中）：`ScaleSimulatorFixtureParseContractTest`（33 个模拟器场景走线上解析入口，含 CR / LF / 无结尾变体）、`ScaleSimulatorEndToEndContractTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleParserVariantContractTest`（7 条：STX/ETX、结尾变体、重量域符号、`12.`）、`WorkstationScaleReadingVariantContractTest`（6 条：字符串重量、不稳定的多种写法、MQTT 订阅层）、`ScaleSeedConformanceContractTest`（3 条：柯力种子读自己的样例帧 + 耀华 / 托利多棘轮）。
+测试（`*ContractTest`，PR 作业会选中）：`ScaleSimulatorFixtureParseContractTest`（33 个模拟器场景走线上解析入口，含 CR / LF / 无结尾变体）、`ScaleSimulatorEndToEndContractTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleParserVariantContractTest`（9 条：STX/ETX、结尾变体、重量域符号、`12.`、双重符号拒绝、帧尾多余内容拒绝）、`WorkstationScaleReadingVariantContractTest`（7 条：字符串重量、不稳定的多种写法、MQTT 订阅层、稳定判定共用同一函数）、`ScaleSeedConformanceContractTest`（3 条：柯力种子读自己的样例帧 + 耀华 / 托利多棘轮）。
 
-变异验证：第一轮把三处生产代码回退后 14 条变红；独立终审后的 6 处修复各自单独破坏，对应阳性测试都变红（STX/ETX 1 条、结尾可选 4 条、重量写法 2 条、字符串重量 2 条、不稳定写法 1 条、柯力种子 20 条）。
+变异验证：第一轮把三处生产代码回退后 14 条变红；独立终审后的 6 处修复各自单独破坏，对应阳性测试都变红（STX/ETX 1 条、结尾可选 4 条、重量写法 2 条、字符串重量 2 条、不稳定写法 1 条、柯力种子 20 条）；第二轮复核后再补的三处（双重符号、帧尾多余内容、稳定判定共用函数）各单独破坏，各有 1 条测试变红。
