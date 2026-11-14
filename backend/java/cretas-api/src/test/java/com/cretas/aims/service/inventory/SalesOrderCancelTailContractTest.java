@@ -163,6 +163,16 @@ class SalesOrderCancelTailContractTest {
     }
 
     @Test
+    void aPlatformAdminLetInWithFactoryBypassIsNotInTheFactoryUserTableAndMustNotBeRefused() {
+        // 拦截器已按原口径放行带工厂放行的平台管理员; 他不在本厂用户表里, 查不到不等于「没有销售写权限」
+        when(users.findByIdAndFactoryId(500L, F)).thenReturn(Optional.empty());
+
+        service.requireSalesWriteForOrdinaryCancel(F, 500L);
+
+        verify(permissions, never()).hasPermission(any(User.class), eq("sales:read_write"));
+    }
+
+    @Test
     void thePlansOfTheCancelledOrderAreCancelledWithTheOrderIdSoTheCancellersRowScopeDoesNotBlockThem() {
         autoPlan("A");
 

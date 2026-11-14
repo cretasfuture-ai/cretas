@@ -2055,6 +2055,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
             request.setOutputOwnership(InventoryOwnership.COMPANY_OWNED);
             return;
         }
+        // 主单和额外单合在一起按 id 排序先锁: 两个请求以不同主单合并同一批销售单 (A: SO1+SO2, B: SO2+SO1) 时,
+        // 若先锁主单再锁额外单会互相等死。必须在第一次加锁之前完成, 后面各处再锁同一行是重入。
+        lockAllSourceOrdersInIdOrder(factoryId, request);
         // 优先使用 sourceOrderItemId (新粒度); 兼容老 sourceOrderId 调用方
         String itemIdStr = request.getSourceOrderItemId();
         if (itemIdStr == null || itemIdStr.isBlank()) {
@@ -2177,6 +2180,31 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
      */
     private void assertSalesOrderFinanceApproved(SalesOrder so, String hintTarget) {
         assertSalesOrderFinanceApproved(so, hintTarget, so.getStatus());
+    }
+
+    /**
+     * 把本次请求涉及的全部销售单 (主单 sourceOrderId、行级 sourceOrderItemId 对应的订单、额外单 sourceOrderIds)
+     * 去重后按 id 排序逐个加行锁。只加锁, 不校验: 不存在 / 跨工厂的 id 读不到行, 照旧由后面的校验给出 404/403。
+     */
+    private void lockAllSourceOrdersInIdOrder(String factoryId, CreateProductionPlanRequest request) {
+        java.util.TreeSet<String> ids = new java.util.TreeSet<>();
+        if (!isBlank(request.getSourceOrderId())) {
+            ids.add(request.getSourceOrderId());
+        }
+        if (request.getSourceOrderIds() != null) {
+            request.getSourceOrderIds().stream().filter(id -> !isBlank(id)).forEach(ids::add);
+        }
+        if (!isBlank(request.getSourceOrderItemId())) {
+            try {
+                salesOrderItemRepository.findById(Long.parseLong(request.getSourceOrderItemId()))
+                        .map(SalesOrderItem::getSalesOrderId)
+                        .filter(id -> !isBlank(id))
+                        .ifPresent(ids::add);
+            } catch (NumberFormatException ignored) {
+                // 行 ID 格式错误: 后面的校验会给出 400
+            }
+        }
+        ids.forEach(id -> salesOrderRepository.lockStatusForUpdate(id, factoryId));
     }
 
     /**

@@ -116,4 +116,30 @@ class PlanCreateLocksSalesOrderContractTest {
         assertThatThrownBy(() -> ReflectionTestUtils.invokeMethod(service, "validateAndEnrichSalesOrderSource", F, request()))
                 .isInstanceOf(BusinessException.class);
     }
+
+    @Test
+    void mergeLockOrderDoesNotDependOnWhichOrderIsThePrimary() {
+        // A: 主单 SO-B + 额外 SO-A;  B: 主单 SO-A + 额外 SO-B —— 两边第一次加锁都必须先 SO-A 后 SO-B, 否则 PG 死锁
+        for (String[] pair : new String[][]{{"SO-B", "SO-A"}, {"SO-A", "SO-B"}}) {
+            SalesOrderRepository repo = mock(SalesOrderRepository.class);
+            ProductionPlanServiceImpl svc = new ProductionPlanServiceImpl(mock(ProductionPlanRepository.class),
+                    mock(ProductionBatchRepository.class), mock(MaterialBatchRepository.class),
+                    mock(MaterialConsumptionRepository.class), mock(ProductionPlanBatchUsageRepository.class),
+                    mock(ProductTypeRepository.class), mock(ProductionPlanMapper.class), mock(ConversionRepository.class),
+                    mock(SchedulingService.class), mock(com.cretas.aims.repository.ProductionLineRepository.class),
+                    mock(UserRepository.class), mock(ExcelUtil.class), repo, items);
+            CreateProductionPlanRequest r = request();
+            r.setSourceOrderId(pair[0]);
+            r.setSourceOrderIds(new java.util.ArrayList<>(java.util.List.of(pair[0], pair[1])));
+
+            try {
+                ReflectionTestUtils.invokeMethod(svc, "validateAndEnrichSalesOrderSource", F, r);
+            } catch (BusinessException expected) {
+                // 订单没有桩出来, 后面的校验报 404 与本测试无关; 只看加锁顺序
+            }
+            InOrder o = inOrder(repo);
+            o.verify(repo).lockStatusForUpdate("SO-A", F);
+            o.verify(repo).lockStatusForUpdate("SO-B", F);
+        }
+    }
 }

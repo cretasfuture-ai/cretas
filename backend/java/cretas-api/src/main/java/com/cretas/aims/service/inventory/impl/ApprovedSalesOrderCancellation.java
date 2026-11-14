@@ -346,9 +346,14 @@ public class ApprovedSalesOrderCancellation {
         if (operatorUserId == null) {
             return;
         }
-        boolean allowed = userRepository.findByIdAndFactoryId(operatorUserId, factoryId)
-                .map(u -> permissionService.hasPermission(u, "sales:read_write"))
-                .orElse(false);
+        java.util.Optional<com.cretas.aims.entity.User> factoryUser =
+                userRepository.findByIdAndFactoryId(operatorUserId, factoryId);
+        if (factoryUser.isEmpty()) {
+            // 不在本厂用户表里的操作人 = 带工厂放行的平台管理员 (普通用户在拦截器里已按「本厂用户」校验过)。
+            // 拦截器已按原口径放行他们, 这里不能再把他们当成「没有销售写权限」。
+            return;
+        }
+        boolean allowed = permissionService.hasPermission(factoryUser.get(), "sales:read_write");
         if (!allowed) {
             throw new BusinessException(403, "没有取消销售订单的权限")
                     .withHint("你只有「取消已批准销售单」的权限, 只能取消财务已批准的订单");
