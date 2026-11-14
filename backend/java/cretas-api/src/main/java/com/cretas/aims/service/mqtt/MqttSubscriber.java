@@ -136,7 +136,14 @@ public class MqttSubscriber {
         JsonNode weightData = data.get("data");
         if (weightData == null) return;
 
-        double weight = weightData.has("weight") ? weightData.get("weight").asDouble() : 0;
+        JsonNode weightNode = weightData.get("weight");
+        if (weightNode == null || !weightNode.isNumber()) {
+            // 没有重量 / 不是数字 (坏帧、网关出错): 不是 0 公斤。原样留痕, 但不更新最近读数。
+            log.warn("称重消息没有有效重量字段, 不更新最近读数: device={}, weight={}", deviceId, weightNode);
+            iotDataService.saveDeviceData(factoryId, deviceId, "WEIGHT", data);
+            return;
+        }
+        double weight = weightNode.asDouble();
         String unit = weightData.has("unit") ? weightData.get("unit").asText() : "kg";
         boolean stable = weightData.has("stable") && weightData.get("stable").asBoolean();
 

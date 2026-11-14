@@ -1,0 +1,394 @@
+[
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "stable",
+    "hex": "2B303031323430206B6720530D0A",
+    "ascii": "+001240 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "124.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "unstable",
+    "hex": "2B303031323435206B6720550D0A",
+    "ascii": "+001245 kg U\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "124.5",
+      "unit": "kg",
+      "stable": false,
+      "reject": null
+    },
+    "note": "不稳定读数能解析, 但报工不得采用 (见 readScaleWeight)"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "zero",
+    "hex": "2B303030303030206B6720530D0A",
+    "ascii": "+000000 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "0.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "真实的 0 与「没读到」必须可区分"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "negative_after_tare",
+    "hex": "2D303030353230206B6720530D0A",
+    "ascii": "-000520 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "-52.0",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "去皮后放回少量 / 皮重大于毛重 → 负数"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "max_display",
+    "hex": "2B393939393939206B6720530D0A",
+    "ascii": "+999999 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "99999.9",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "grams_unit",
+    "hex": "2B30313530303020672020530D0A",
+    "ascii": "+015000 g  S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "1500.0",
+      "unit": "g",
+      "stable": true,
+      "reject": null
+    },
+    "note": "单位必须带到下游, 下游按 g→kg 换算 (缺口 21)"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "overrange",
+    "hex": "2B4F4F4F4F4F4F206B6720550D0A",
+    "ascii": "+OOOOOO kg U\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "OVERRANGE"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "truncated",
+    "hex": "2B3030313234",
+    "ascii": "+00124",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "no_terminator",
+    "hex": "2B303031323430206B672053",
+    "ascii": "+001240 kg S",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": "断流时只收到半帧 (含完整字段但没有 CRLF)"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "letter_in_digits",
+    "hex": "2B30306C323430206B6720530D0A",
+    "ascii": "+00l240 kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "WEIGHT"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "blank_weight",
+    "hex": "2B202020202020206B6720530D0A",
+    "ascii": "+       kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "WEIGHT"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "bad_sign",
+    "hex": "2A303031323430206B6720530D0A",
+    "ascii": "*001240 kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "SIGN"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "unknown_stable_flag",
+    "hex": "2B303031323430206B6720580D0A",
+    "ascii": "+001240 kg X\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "STABLE"
+    },
+    "note": "未知稳定标志不得当「不稳定」悄悄放行, 也不得当稳定"
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "binary_garbage",
+    "hex": "FFFE00801B5B41",
+    "ascii": "��\u0000�\u001b[A",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "KELI_D2008_ASCII",
+    "scenario": "exponent_notation",
+    "hex": "2B31452B303033206B6720530D0A",
+    "ascii": "+1E+003 kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "WEIGHT"
+    },
+    "note": "BigDecimal 会把 1E+003 当成数, 严格解析必须拒绝"
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "stable",
+    "hex": "3D2B30303132352E3430206B6720530D0A",
+    "ascii": "=+00125.40 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "125.40",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "motion",
+    "hex": "3D2B30303132352E3432206B67204D0D0A",
+    "ascii": "=+00125.42 kg M\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "125.42",
+      "unit": "kg",
+      "stable": false,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "negative",
+    "hex": "3D2D30303030332E3530206B6720530D0A",
+    "ascii": "=-00003.50 kg S\r\n",
+    "expect": {
+      "ok": true,
+      "weight": "-3.50",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "missing_start_marker",
+    "hex": "2B30303132352E3430206B6720530D0A",
+    "ascii": "+00125.40 kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "truncated",
+    "hex": "3D2B3030313235",
+    "ascii": "=+00125",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "YAOHUA_XK3190_ASCII",
+    "scenario": "letter_in_digits",
+    "hex": "3D2B30306C32352E3430206B6720530D0A",
+    "ascii": "=+00l25.40 kg S\r\n",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "WEIGHT"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "normal",
+    "hex": "010304000004D278AE",
+    "ascii": "",
+    "expect": {
+      "ok": true,
+      "weight": "12.34",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "zero",
+    "hex": "01030400000000FA33",
+    "ascii": "",
+    "expect": {
+      "ok": true,
+      "weight": "0.00",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": ""
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "negative",
+    "hex": "010304FFFFFDF8BB05",
+    "ascii": "",
+    "expect": {
+      "ok": true,
+      "weight": "-5.20",
+      "unit": "kg",
+      "stable": true,
+      "reject": null
+    },
+    "note": "int32 有符号: 不得读成 4294966776 / 100"
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "bad_crc",
+    "hex": "010304000004D27851",
+    "ascii": "",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "CRC"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "truncated",
+    "hex": "010304000004",
+    "ascii": "",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": ""
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "wrong_function",
+    "hex": "010404000004D278AE",
+    "ascii": "",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": "功能码被改但 CRC 不再匹配, 同样必须拒绝"
+  },
+  {
+    "protocol": "MODBUS_RTU_STANDARD",
+    "scenario": "exception_response",
+    "hex": "018302C0F1",
+    "ascii": "",
+    "expect": {
+      "ok": false,
+      "weight": null,
+      "unit": null,
+      "stable": null,
+      "reject": "FRAME"
+    },
+    "note": "从站异常应答 (非法数据地址)"
+  }
+]

@@ -172,6 +172,11 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                     return ScaleDataParseResult.error("UNSUPPORTED_FRAME_TYPE", "不支持的帧类型: " + frameType);
             }
 
+            if (result.isSuccess() && result.getWeight() == null) {
+                // 帧格式配置对不上 (没有 weight 字段 / 下标越界) 也算成功会让下游把「没读到」当成读数
+                return ScaleDataParseResult.error("NO_WEIGHT", "帧解析成功但没有取到重量 (检查协议字段配置)");
+            }
+
             if (result.isSuccess()) {
                 result.setProtocolId(config.getId());
                 result.setProtocolName(config.getProtocolName());
@@ -189,10 +194,30 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
     /**
      * 解析 ASCII 定长帧 (柯力/耀华等标准协议)
      * 格式示例: +001240 kg S\r\n
+     *
+     * <p>严格解析: 一帧里任何一处对不上就整帧拒绝, 绝不「尽量读」。拒绝的帧没有重量, 更不会是 0。
+     * 校验: 可打印字符 / 起止标记 / 字段越界 / 符号只能 +- / 重量只能是数字(超量程单独报 OVERRANGE) /
+     * 稳定标志必须在 mapping 里 / 必须读到重量。
      */
     private ScaleDataParseResult parseAsciiFixedFrame(JsonNode format, byte[] rawData) {
         try {
+            for (byte b : rawData) {
+                boolean ok = b == 0x0D || b == 0x0A || (b >= 0x20 && b <= 0x7E);
+                if (!ok) {
+                    return ScaleDataParseResult.error("FRAME_INVALID_CHARS", "数据帧含非 ASCII 可打印字符");
+                }
+            }
             String ascii = new String(rawData, StandardCharsets.US_ASCII);
+
+            String startMarker = frameMarker(format, "startMarker");
+            if (!startMarker.isEmpty() && !ascii.startsWith(startMarker)) {
+                return ScaleDataParseResult.error("FRAME_MARKER", "数据帧缺少起始标记");
+            }
+            String endMarker = frameMarker(format, "endMarker");
+            if (!endMarker.isEmpty() && !ascii.endsWith(endMarker)) {
+                return ScaleDataParseResult.error("FRAME_MARKER", "数据帧缺少结束标记 (可能只收到半帧)");
+            }
+
             JsonNode fields = format.path("fields");
 
             BigDecimal weight = null;
@@ -215,9 +240,18 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                 switch (name) {
                     case "sign":
                         sign = value.charAt(0);
+                        if (sign != '+' && sign != '-') {
+                            return ScaleDataParseResult.error("INVALID_SIGN", "符号位不是 +/-: " + value);
+                        }
                         break;
                     case "weight":
                         String weightStr = value.trim();
+                        if (weightStr.matches("[OoLl]+")) {
+                            return ScaleDataParseResult.error("OVERRANGE", "秤报超量程/溢出: " + weightStr);
+                        }
+                        if (!weightStr.matches("\\d+(\\.\\d+)?")) {
+                            return ScaleDataParseResult.error("INVALID_WEIGHT", "无法解析重量值: '" + weightStr + "'");
+                        }
                         int decimalPlaces = field.path("decimalPlaces").asInt(0);
                         weight = new BigDecimal(weightStr);
                         if (decimalPlaces > 0) {
@@ -230,7 +264,13 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                         break;
                     case "stable":
                         JsonNode mapping = field.path("mapping");
-                        stable = mapping.path(value.trim()).asBoolean(false);
+                        String flag = value.trim();
+                        if (!mapping.isObject() || !mapping.has(flag)) {
+                            return ScaleDataParseResult.error("INVALID_STABLE", "稳定标志不认识: '" + flag + "'");
+                        }
+                        stable = mapping.path(flag).asBoolean();
+                        break;
+                    default:
                         break;
                 }
             }
@@ -253,6 +293,17 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
         } catch (Exception e) {
             return ScaleDataParseResult.error("ASCII_PARSE_ERROR", e.getMessage());
         }
+    }
+
+    /** 帧起止标记: 种子里写成字面 \r\n 四个字符 (SQL 转义), 也可能是真的 CR LF; STX/ETX 用名字。 */
+    private static String frameMarker(JsonNode format, String key) {
+        JsonNode n = format.path(key);
+        if (!n.isTextual()) {
+            return "";
+        }
+        return n.asText()
+                .replace("\\r", "\r").replace("\\n", "\n")
+                .replace("STX", "\u0002").replace("ETX", "\u0003");
     }
 
     /**
@@ -278,6 +329,9 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
 
                     switch (name) {
                         case "weight":
+                            if (!value.matches("[+-]?\\d+(\\.\\d+)?")) {
+                                return ScaleDataParseResult.error("INVALID_WEIGHT", "无法解析重量值: '" + value + "'");
+                            }
                             weight = new BigDecimal(value);
                             break;
                         case "unit":
@@ -366,25 +420,34 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
                 return ScaleDataParseResult.error("MODBUS_FRAME_TOO_SHORT", "Modbus帧长度不足");
             }
 
-            int slaveId = rawData[0] & 0xFF;
             int functionCode = rawData[1] & 0xFF;
 
-            // 验证功能码 (通常是03读取保持寄存器)
+            // 验证功能码 (通常是03读取保持寄存器); 0x83 等异常应答也在这里被拒绝
             if (functionCode != 3) {
                 return ScaleDataParseResult.error("UNSUPPORTED_FUNCTION_CODE", "不支持的功能码: " + functionCode);
             }
 
             int byteCount = rawData[2] & 0xFF;
-            if (rawData.length < 3 + byteCount + 2) {
-                return ScaleDataParseResult.error("MODBUS_DATA_INCOMPLETE", "Modbus数据不完整");
+            if (rawData.length != 3 + byteCount + 2) {
+                return ScaleDataParseResult.error("MODBUS_DATA_INCOMPLETE", "Modbus帧长度与字节数不符");
             }
 
-            // 解析寄存器数据 (大端序)
+            // CRC16 (低字节在前), 不通过就是线上被干扰或半帧拼接, 整帧丢弃
+            int crcCalc = modbusCrc16(rawData, rawData.length - 2);
+            int crcFrame = (rawData[rawData.length - 2] & 0xFF) | ((rawData[rawData.length - 1] & 0xFF) << 8);
+            if (crcCalc != crcFrame) {
+                return ScaleDataParseResult.error("CRC_MISMATCH", "Modbus CRC 校验失败");
+            }
+
+            // 解析寄存器数据 (大端序, 有符号 32 位: 去皮后的负重不能读成 42949667.76)
             int weightOffset = format.path("weightRegisterOffset").asInt(0);
             int decimalPlaces = format.path("decimalPlaces").asInt(2);
+            if (byteCount < weightOffset + 4) {
+                return ScaleDataParseResult.error("MODBUS_DATA_INCOMPLETE", "Modbus数据不够 4 字节重量");
+            }
 
-            long rawValue = 0;
-            for (int i = 0; i < 4 && (3 + weightOffset + i) < rawData.length - 2; i++) {
+            int rawValue = 0;
+            for (int i = 0; i < 4; i++) {
                 rawValue = (rawValue << 8) | (rawData[3 + weightOffset + i] & 0xFF);
             }
 
@@ -401,6 +464,17 @@ public class ScaleProtocolAdapterServiceImpl implements ScaleProtocolAdapterServ
         } catch (Exception e) {
             return ScaleDataParseResult.error("MODBUS_PARSE_ERROR", e.getMessage());
         }
+    }
+
+    private static int modbusCrc16(byte[] data, int length) {
+        int crc = 0xFFFF;
+        for (int i = 0; i < length; i++) {
+            crc ^= (data[i] & 0xFF);
+            for (int k = 0; k < 8; k++) {
+                crc = (crc & 1) != 0 ? (crc >>> 1) ^ 0xA001 : crc >>> 1;
+            }
+        }
+        return crc;
     }
 
     // ==================== 协议自动识别 ====================

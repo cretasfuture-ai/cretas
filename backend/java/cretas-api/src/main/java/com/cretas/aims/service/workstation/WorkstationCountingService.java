@@ -536,7 +536,11 @@ public class WorkstationCountingService {
             // 读数可能在顶层, 也可能包在 data 里 (MqttSubscriber 存的是整条消息, 重量在 data 下)
             JsonNode reading = payload != null && payload.has("weight") ? payload
                     : (payload != null && payload.path("data").has("weight") ? payload.get("data") : null);
-            if (reading == null) {
+            if (reading == null || !reading.path("weight").isNumber()) {
+                return Optional.empty();
+            }
+            // 秤明确说「不稳定」(称盘还在晃): 这个数不能进报工; 没有 stable 字段的设备照旧按读数用
+            if (reading.has("stable") && reading.get("stable").isBoolean() && !reading.get("stable").asBoolean()) {
                 return Optional.empty();
             }
             return scaleReadingToKg(reading.get("weight").asDouble(),
