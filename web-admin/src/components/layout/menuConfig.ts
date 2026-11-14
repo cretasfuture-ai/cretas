@@ -743,7 +743,8 @@ export const platformWorkspacePaths: string[] = platformMenuConfig
 //     「自身 + 祖先链」权限字段，数量也要相等。
 //
 // 本批的取舍（P2 brief 要求写清）：
-//   · 顶层「今天 /today」「待办 /todo」P3 已加（TOP_ENTRIES）；「发现的问题 /issues」要到 P4 才有，**不显示**。
+//   · 顶层「今天 /today」「待办 /todo」P3 已加，「发现的问题 /issues」P4 已加（TOP_ENTRIES）；
+//     P4 同时把概览里的「异常中心 /workspaces/exceptions」拿掉（旧路由跳到 /issues），闸里 EXPECTED_REMOVALS 登记。
 //   · （P2 原文：三页要到 P3/P4 才有，当时不显示。）
 //     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
 //     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
@@ -838,18 +839,22 @@ const MOVED_OUT = new Set<string>([...MASTER_DATA_PATHS, ...SETTINGS_LEAF_PATHS]
  * P3：顶层独立入口「今天」「待办」。两页只读聚合各来源接口，自己没有数据权限；
  * 每个来源在页面里按各自模块权限决定读不读（权限不够的来源不发请求、写明原因），所以入口本身对所有工厂账号开放，
  * 与「个人 OA」同判据（module: 'dashboard'，人人都有）。新增项的权限字段在 menuPermissionParity 里列为预期新增。
- * 「发现的问题 /issues」要到 P4 才有，仍不显示。
+ * P4：「发现的问题 /issues」同判据——问题从各来源接口读（各按自己的模块权限），处置写入时后端再按来源查权限。
  */
 const TOP_ENTRIES: MenuItem[] = [
   { path: '/today', title: '今天', icon: 'Sunny', module: 'dashboard', section: 'top' },
   { path: '/todo', title: '待办', icon: 'Finished', module: 'dashboard', section: 'top' },
+  { path: '/issues', title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'], section: 'top' },
 ];
+
+/** P4：原「异常中心」由顶层「发现的问题」取代，概览里不再列（原分组 menuConfig 不动，餐饮 / 物流本来就看不到它）。 */
+const REPLACED_BY_ISSUES = new Set<string>(['/workspaces/exceptions']);
 
 function buildGroupedMenu(): MenuItem[] {
   const overview = container('#group/overview', '概览', 'House', [
     mustLocate('/dashboard').node,
     mustLocate('/workdesk').node,
-    mustLocate('/workspaces').node,
+    takeGroup('/workspaces', REPLACED_BY_ISSUES),
     mustLocate('/dashboard/ai-value').node,
   ]);
   const analytics = container('#group/analytics', '数据与分析', 'DataAnalysis', [
