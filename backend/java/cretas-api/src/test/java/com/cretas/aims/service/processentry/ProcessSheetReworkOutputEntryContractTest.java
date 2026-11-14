@@ -65,7 +65,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("ProcessSheet 多产出: 回料产出入账为 is_rework 半成品并计入物料平衡")
-class ProcessSheetReworkOutputEntryTest {
+class ProcessSheetReworkOutputEntryContractTest {
 
     private static final String FACTORY = "F006";
     private static final String PLAN_ID = "PLAN-REWORK-OUT-1";
