@@ -322,7 +322,7 @@ class FlywheelTextProtectorRedactionTest {
     /** 三审 中2 阴性: 业务话里的斤 / 公斤不当配方抹 (原料名、「加」都在也不算); 阳性对照见上「加盐5克」。 */
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {
-            "入库鸭腿200公斤", "领料鸭腿50斤", "订单再加20斤", "再加20斤", "八角到货100斤", "采购盐300公斤", "盐出库两斤", "配料入库200公斤", "领料八角5片"})
+            "入库鸭腿200公斤", "领料鸭腿50斤", "订单再加20斤", "八角到货100斤", "采购盐300公斤", "盐出库两斤", "配料入库200公斤", "领料八角5片"})
     void businessQuantitiesStayAsIsEvenWithIngredientNamesOrAdd(String said) {
         when(master.findIngredientNames(PLAIN)).thenReturn(List.of("鸭腿", "八角", "盐"));
 
@@ -340,6 +340,63 @@ class FlywheelTextProtectorRedactionTest {
     })
     void businessUnitsCountWithRecipeWordsAndAddWithinFourChars(String said, String expected) {
         assertThat(protector.protect(PLAIN, "r-" + said.hashCode(), said).rawInput()).isEqualTo(expected);
+    }
+
+    /**
+     * 终审 高1: 业务单位 (斤 / 升) 在原料名或「放 / 加」语境里仍是配方用量, 四列 (保密关的厂原文 / 导出, 保密厂导出 / 密文)
+     * 都不留原值; 终审 低5: 「一起」的「一」不是数。
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
+            "加白砂糖2斤|加<配料><用量>|2斤",
+            "白砂糖放2斤|<配料>放<用量>|2斤",
+            "每锅白砂糖2斤|每锅<配料><用量>|2斤",
+            "白砂糖2斤食盐1斤一起下锅|<配料1><用量1><配料2><用量2>一起下锅|2斤,1斤",
+            "这锅加水20升|这锅加<配料><用量>|20升",
+            "腌料比例3:1|腌料比例<比例>|3:1",
+            "配比3:1|配比<比例>|3:1",
+            "白砂糖和食盐3：1|<配料1>和<配料2><比例>|3：1"
+    })
+    void businessUnitsInRecipeContextAndColonRatiosAreMaskedInEveryColumn(String said, String expected, String gone) {
+        List<String> ingredients = List.of("白砂糖", "食盐", "水");
+        when(master.findIngredientNames(PLAIN)).thenReturn(ingredients);
+        when(master.findIngredientNames(SECRET)).thenReturn(ingredients);
+        String session = "f-" + said.hashCode();
+
+        FlywheelTextProtector.Protected plain = protector.protect(PLAIN, session, said);
+        FlywheelTextProtector.Protected secret = protector.protect(SECRET, session, said);
+        String[] columns = {plain.rawInput(), plain.exportInput(), secret.exportInput(), protector.decrypt(secret.inputCipher())};
+        for (String column : columns) {
+            assertThat(column).isEqualTo(expected);
+            for (String raw : gone.split(",")) {
+                assertThat(column).doesNotContain(raw);
+            }
+        }
+    }
+
+    /** 终审阴性对照: 业务话、非配方的冒号、g / 克不是单位的说法都原样。 */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "订单再加20斤", "入库鸭腿200公斤", "比分3:1", "时间10:30", "用2g网络", "手机是4g的", "3克拉", "这个和那个一样"})
+    void finalReviewNegativesStayAsIs(String said) {
+        List<String> ingredients = List.of("白砂糖", "食盐", "水", "鸭腿");
+        when(master.findIngredientNames(PLAIN)).thenReturn(ingredients);
+        when(master.findIngredientNames(SECRET)).thenReturn(ingredients);
+
+        FlywheelTextProtector.Protected plain = protector.protect(PLAIN, "fn-" + said.hashCode(), said);
+        assertThat(plain.rawInput()).isEqualTo(said);
+        assertThat(plain.exportInput()).isEqualTo(said);
+        assertThat(protector.protect(SECRET, "fn-" + said.hashCode(), said).exportInput()).isEqualTo(said);
+    }
+
+    /** 终审 低4: 15 位只在第 7-12 位是合法 YYMMDD 且不以 20 开头时算身份证。 */
+    @Test
+    void fifteenDigitNumbersAreIdCardsOnlyWithAValidBirthDate() {
+        assertThat(FlywheelTextProtector.looksLikeOldIdCard("110101900101123")).isTrue();
+        assertThat(FlywheelTextProtector.looksLikeOldIdCard("202611140012345")).isFalse();   // 日期型编号
+        assertThat(FlywheelTextProtector.looksLikeOldIdCard("110101901301123")).isFalse();   // 13 月
+        assertThat(FlywheelTextProtector.looksLikeOldIdCard("110101900132123")).isFalse();   // 32 日
+        assertThat(protector.protect(PLAIN, "id15", "批次202611140012345").rawInput()).isEqualTo("批次202611140012345");
     }
 
     /** 三审 低3: 号码各种写法 + 15 位旧身份证。 */

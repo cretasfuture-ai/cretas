@@ -408,7 +408,7 @@ public class FlywheelTextProtector {
         String out = replaceCounting(ID_CARD, text, "<证件号>", stats);
         out = replaceCounting(BANK_CARD, out, "<卡号>", stats);
         out = replaceCounting(PHONE, out, "<电话>", stats);
-        out = replaceCounting(ID_CARD_15, out, "<证件号>", stats);
+        out = replaceOldIdCards(out, stats);
         if (TrainingSampleRules.utteranceHasPayValue(out)) {
             String masked = TrainingSampleRules.maskNumbers(out);
             if (!masked.equals(out)) {
@@ -417,6 +417,34 @@ public class FlywheelTextProtector {
             out = masked;
         }
         return out;
+    }
+
+    /**
+     * 15 位旧身份证: 第 7-12 位必须是合法 YYMMDD (月 01-12、日 01-31), 且不以「20」开头
+     * (「批次202611140012345」这类日期型编号不算)。
+     */
+    static boolean looksLikeOldIdCard(String digits) {
+        if (digits.length() != 15 || digits.startsWith("20")) {
+            return false;
+        }
+        int month = Integer.parseInt(digits.substring(8, 10));
+        int day = Integer.parseInt(digits.substring(10, 12));
+        return month >= 1 && month <= 12 && day >= 1 && day <= 31;
+    }
+
+    private static String replaceOldIdCards(String text, Map<String, Integer> stats) {
+        Matcher m = ID_CARD_15.matcher(text);
+        StringBuilder sb = new StringBuilder();
+        while (m.find()) {
+            if (looksLikeOldIdCard(m.group())) {
+                m.appendReplacement(sb, Matcher.quoteReplacement("<证件号>"));
+                bump(stats, "privacy");
+            } else {
+                m.appendReplacement(sb, Matcher.quoteReplacement(m.group()));
+            }
+        }
+        m.appendTail(sb);
+        return sb.toString();
     }
 
     private static String replaceCounting(Pattern p, String text, String placeholder, Map<String, Integer> stats) {

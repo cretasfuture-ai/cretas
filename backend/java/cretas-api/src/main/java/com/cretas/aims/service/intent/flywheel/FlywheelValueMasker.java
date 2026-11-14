@@ -25,9 +25,11 @@ import java.util.regex.Pattern;
  *   <li>{@code <参数>}: 工艺参数词 ({@link TrainingSampleRules#PARAMETER_MARKERS}) 后面的其余数值;</li>
  *   <li>{@code <用量>}: 三档单位 (organizer 11-14 三审):
  *       配方专用单位 (克 / g / 毫升 / ml / 勺 / 茶匙 / 汤匙) 不看语境一律抹 (「加盐5克」「生抽一勺」);
- *       业务单位 (斤 / 公斤 / kg / 升) 只在小句里有配方类词时算 (「卤水配料放2斤」), 原料名、「放 / 加」不够 (「订单再加20斤」不动);
- *       其余 (两 / 片 / 粒) 看配方语境: 小句里有本厂原料名、配方类词, 或「放 / 加」在数值前 4 个字以内。
- *       小句里有入库 / 到货 / 采购 / 领料 / 订单 / 发货 … 业务词时后两档不按配方处理 (「入库鸭腿200公斤」原样);</li>
+ *       其余单位 (斤 / 公斤 / 升 / 两 / 片 / 粒 …) 看配方语境: 小句里有本厂原料名、配方类词, 或「放 / 加」在数值前 4 个字以内
+ *       (「加白砂糖2斤」「这锅加水20升」);
+ *       小句里有入库 / 到货 / 采购 / 领料 / 订单 / 发货 … 业务词时这一档不按配方处理 (「入库鸭腿200公斤」「订单再加20斤」原样);
+ *       g / 克后面紧跟 网 / 信号 / 卡 / 拉, 或小句里说手机 / 网络时的 g, 不是单位;</li>
+ *   <li>{@code <比例>} 另含冒号比例「3:1」(含配方类词 / 参数词 / 原料名的小句里; 「比分3:1」「时间10:30」不动);</li>
  *   <li>{@code <配料>}: 本厂原料名 (主数据确定性匹配), 只在含 {@code <用量>} / {@code <比例>} 的小句里换 (配方保密口径: 配料名 + 用量
  *       一起才是配方; 单说「八角到货了」是普通业务话, 不动);</li>
  *   <li>{@code <数量>}: 只在工厂开了「数量脱敏」时, 其余带数量单位的数 (单位保留: 「<数量>斤」)。</li>
@@ -54,8 +56,15 @@ final class FlywheelValueMasker {
             "公斤", "千克", "kg", "KG", "毫升", "ml", "mL", "汤匙", "茶匙", "克", "g", "两", "斤", "升", "L", "勺", "片", "粒");
     /** 配方专用单位: 不看语境, 一律 {@code <用量>} (organizer 11-14 三审: 原料表叫「食盐」时「加盐5克」也得抹)。 */
     static final List<String> RECIPE_ONLY_UNITS = List.of("毫升", "ml", "mL", "ML", "汤匙", "茶匙", "克", "g", "勺");
-    /** 业务单位: 只在小句里有配方类词 (或参数词, 走 {@code <参数>}) 时才算用量; 原料名 / 「放、加」不够。 */
-    static final List<String> BUSINESS_UNITS = List.of("公斤", "千克", "kg", "KG", "Kg", "斤", "升", "L");
+    /** 配方专用单位 g / 克 后面紧跟这些字时不是单位 (「2g网络」「4g信号」「3克拉」「g卡」)。 */
+    static final List<String> NOT_UNIT_AFTER_G = List.of("网", "信号", "卡", "拉");
+    /** 小句里有这些词时, 「数字 + g」是网络制式不是克 (「手机是4g的」)。 */
+    static final List<String> NETWORK_WORDS = List.of("手机", "网络", "信号", "流量", "基站", "路由");
+    /** 「一」后面跟这些字是虚词不是数 (「一起」「一样」「一下」…), 不当数值 (否则「1斤一起」被当成单价)。 */
+    static final String NOT_NUMBER_AFTER_YI = "起样般下些点直";
+    /** 冒号比例「3:1」「3：1」: 只在含配方类词 / 参数词 / 本厂原料名的小句里抹成 {@code <比例>}。 */
+    static final Pattern COLON_RATIO = Pattern.compile(
+            "(?<![0-9０-９.．])[0-9０-９]+(?:[.．][0-9０-９]+)?\\s*[:：]\\s*[0-9０-９]+(?:[.．][0-9０-９]+)?(?![0-9０-９])");
     /** 小句里有这些业务词 → 不按配方处理 (配方专用单位除外): 「入库鸭腿200公斤」「订单再加20斤」原样。 */
     static final List<String> BUSINESS_WORDS = List.of(
             "入库", "到货", "采购", "领料", "出库", "下单", "订单", "发货", "收货", "进货", "退货", "库存", "盘点", "送货", "调拨");
@@ -82,11 +91,26 @@ final class FlywheelValueMasker {
             return text;
         }
         List<Span> spans = new ArrayList<>();
-        Matcher m = NUMBER.matcher(text);
         List<int[]> names = occurrences(text, ingredients);
+        List<int[]> ratios = new ArrayList<>();
+        if (scope.recipe()) {
+            Matcher r = COLON_RATIO.matcher(text);
+            while (r.find()) {
+                if (recipeWordInClause(text, r.start()) || paramInClause(text, r.start())
+                        || ingredientInClause(text, r.start(), ingredients)) {
+                    spans.add(new Span(r.start(), r.end(), "比例"));
+                    ratios.add(new int[]{r.start(), r.end()});
+                }
+            }
+        }
+        Matcher m = NUMBER.matcher(text);
         while (m.find()) {
-            if (inside(names, m.start(), m.end())) {
-                continue;   // 「八角」「三七」这类原料名里的数字字不是数值
+            if (inside(names, m.start(), m.end()) || inside(ratios, m.start(), m.end())) {
+                continue;   // 「八角」「三七」这类原料名里的数字字不是数值; 冒号比例已整段算过
+            }
+            if (m.group().equals("一") && m.end() < text.length()
+                    && NOT_NUMBER_AFTER_YI.indexOf(text.charAt(m.end())) >= 0) {
+                continue;   // 「一起 / 一样 / 一下」是虚词
             }
             Span s = classify(text, m.start(), m.end(), scope, ingredients);
             if (s != null) {
@@ -179,15 +203,15 @@ final class FlywheelValueMasker {
             if (paramBefore(text, start)) {
                 return new Span(start, end, "参数");
             }
-            String unit = recipeOnlyUnit(afterTrim);
+            String unit = recipeOnlyUnit(text, start, afterTrim);
             if (unit != null) {
                 return new Span(start, end + afterGap + unit.length(), "用量");
             }
             unit = prefix(afterTrim, RECIPE_UNITS);
-            if (unit != null && !businessClause(text, start)) {
-                boolean recipe = BUSINESS_UNITS.contains(unit) ? recipeWordInClause(text, start)
-                        : recipeContext(text, start, before, ingredients);
-                if (recipe) {
+            if (unit != null && !RECIPE_ONLY_UNITS.contains(unit) && !businessClause(text, start)) {
+                // 业务单位 (斤 / 公斤 / 升) 同其余单位一样看配方语境 (原料名 / 放加窗口 / 配方词), 只靠业务词否决
+                // (organizer 11-15 终审: 只认配方词会漏「加白砂糖2斤」「这锅加水20升」)
+                if (recipeContext(text, start, before, ingredients)) {
                     return new Span(start, end + afterGap + unit.length(), "用量");
                 }
             }
@@ -262,7 +286,7 @@ final class FlywheelValueMasker {
     }
 
     /** 配方专用单位 (「g / ml」后面紧跟字母的不算: 「5gb」)。 */
-    private static String recipeOnlyUnit(String afterTrim) {
+    private static String recipeOnlyUnit(String text, int start, String afterTrim) {
         String unit = prefix(afterTrim, RECIPE_ONLY_UNITS);
         if (unit == null) {
             return null;
@@ -271,7 +295,47 @@ final class FlywheelValueMasker {
                 && isAsciiLetter(afterTrim.charAt(unit.length()))) {
             return null;
         }
+        if (unit.equals("g") || unit.equals("克")) {
+            String rest = afterTrim.substring(unit.length());
+            if (prefix(rest, NOT_UNIT_AFTER_G) != null) {
+                return null;    // 「2g网络」「3克拉」
+            }
+            if (unit.equals("g")) {
+                int[] c = clause(text, start);
+                String clause = text.substring(c[0], c[1]);
+                for (String w : NETWORK_WORDS) {
+                    if (clause.contains(w)) {
+                        return null;    // 「手机是4g的」
+                    }
+                }
+            }
+        }
         return unit;
+    }
+
+    private static boolean paramInClause(String text, int start) {
+        int[] c = clause(text, start);
+        String clause = text.substring(c[0], c[1]);
+        for (String marker : TrainingSampleRules.PARAMETER_MARKERS) {
+            if (clause.contains(marker)) {
+                return true;
+            }
+        }
+        return clause.contains("比例");
+    }
+
+    private static boolean ingredientInClause(String text, int start, Collection<String> ingredients) {
+        if (ingredients == null) {
+            return false;
+        }
+        int[] c = clause(text, start);
+        String clause = text.substring(c[0], c[1]);
+        for (String n : ingredients) {
+            if (n != null && !n.isEmpty() && clause.contains(n)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean isAsciiLetter(char c) {
