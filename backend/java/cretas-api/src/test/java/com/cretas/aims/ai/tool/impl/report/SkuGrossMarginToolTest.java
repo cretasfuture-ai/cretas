@@ -499,4 +499,28 @@ class SkuGrossMarginToolTest {
         for (int i = text.indexOf(needle); i >= 0; i = text.indexOf(needle, i + needle.length())) n++;
         return n;
     }
+
+    // ---- 出图 (六膳门演示: 毛利率排序要有图) ----
+
+    @Test
+    void rankingComesWithABarChartOfRealizedRates_noChartWhenNoRates() throws Exception {
+        type("A", "牛肉酱", "100");
+        type("B", "辣椒酱", "100");
+        sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");   // 36.84%
+        sales("B", "辣椒酱", 1, 1, 0, "100", "100", "50");    // 50.00%
+
+        JsonNode charts = run("{}").get("data").get("data").get("charts");
+        assertNotNull(charts, "有毛利率就要有图");
+        JsonNode option = charts.get(0).get("option");
+        assertEquals("bar", option.get("series").get(0).get("type").asText());
+        // 排序: 毛利率高的在前 -> 辣椒酱 50.00 先于 牛肉酱 36.84, 图里的数和答案里的数一致
+        assertEquals("辣椒酱", option.get("xAxis").get("data").get(0).asText());
+        assertEquals(0, new BigDecimal("50.00").compareTo(option.get("series").get(0).get("data").get(0).decimalValue()));
+        assertEquals(0, new BigDecimal("36.84").compareTo(option.get("series").get(0).get("data").get(1).decimalValue()));
+
+        // 阴性对照: 一个毛利率都算不出时不画空图
+        salesRows.clear();
+        JsonNode none = run("{}").get("data").get("data");
+        assertNull(none.get("charts"));
+    }
 }
