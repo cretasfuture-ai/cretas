@@ -34,4 +34,6 @@ public interface OutsourceOrderRepository extends JpaRepository<OutsourceOrder, 
                                 Pageable pageable);
 
     long countByFactoryIdAndOrderNoStartingWith(String factoryId, String prefix);
+
+    boolean existsByFactoryIdAndOrderNo(String factoryId, String orderNo);
 }

@@ -449,6 +449,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     @Transactional
     public WorkProcessTaskDTO start(String factoryId, Long id, Long operatorUserId) {
         WorkProcessTask task = loadOrThrow(factoryId, id);
+        assertNotOutsourced(task);
         assertTransition(task.getStatus(), Status.IN_PROGRESS);
         // 缺口 04: 上游产出的料还没到, 不许开工 (409 WORKFLOW_UPSTREAM_NOT_READY, 写明等哪一道)
         if (unlockGuard != null) {
@@ -488,6 +489,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         // 本人可报 (先于状态判断: 别人的工序连状态也不透出)。AI 预览 (WorkProcessTaskTransitionPreview#complete) 同序。
         checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
                 task.getProductWorkProcessId(), operatorUserId);
+        assertNotOutsourced(task);
         assertTransition(task.getStatus(), Status.COMPLETED);
 
         LocalDateTime now = LocalDateTime.now();
@@ -644,6 +646,19 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     }
 
     // ==================== Helpers ====================
+
+    /**
+     * 委外工序的状态只由委外单推进 (发料 → 进行中, 结单 → 完成; 产量 = 委外实收合格数)。
+     * 从报工入口开工 / 完工会让工序状态和委外厂的实际收发分叉。
+     */
+    static void assertNotOutsourced(WorkProcessTask task) {
+        if (Boolean.TRUE.equals(task.getIsOutsourced())) {
+            throw new BusinessException(409, "这道工序已委外, 由委外收货完成")
+                    .withCode("WORK_PROCESS_TASK_OUTSOURCED")
+                    .withHint("请到「生产管理 › 委外单」收货; 委外单结单后工序自动完成")
+                    .withSeverity("BLOCKING");
+        }
+    }
 
     private WorkProcessTask loadOrThrow(String factoryId, Long id) {
         return taskRepository.findByFactoryIdAndId(factoryId, id)
