@@ -10,6 +10,8 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.entity.enums.ProductionPlanStatus;
 import com.cretas.aims.entity.workflow.ProductionWorkflowInstance;
 import com.cretas.aims.entity.workflow.WorkflowTaskPort;
+import com.cretas.aims.entity.workprocess.WorkProcessTask;
+import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -50,6 +52,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 /**
  * 缺口 16 (2026-11-14 F006 验收): 逐道录入的「工序时限列表」就是这道可领来源的清单。
@@ -78,6 +82,8 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
     static final String FACTORY = "G16-TL-PG";
     static final String OTHER_FACTORY = "G16-TL-OTHER";
     static final String SEMI = "G16-SEMI";
+    static final String RAW = "G16-RAW";
+    static final String WORKSHOP = "G16-WKS";
     static final Long OPERATOR = 10016L;
 
     @Configuration(proxyBeanMethods = false)
@@ -98,7 +104,7 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         registry.add("spring.jpa.database-platform", () -> "org.hibernate.dialect.PostgreSQLDialect");
     }
 
-    /** 写事件 / 质检放行 / 车间仓解析 与「列出哪些来源」无关 (原料端口才用车间仓, 本测试只有半成品端口)。 */
+    /** 写事件 / 质检放行与「列出哪些来源」无关; 车间仓解析桩成固定仓 (原料端口按它找候选)。 */
     @MockBean ProcessTimeLimitEventWriter eventWriter;
     @MockBean QcReleaseService qcReleaseService;
     @MockBean WarehouseResolver warehouseResolver;
@@ -112,6 +118,7 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
     @Autowired WorkflowTaskPortRepository ports;
     @Autowired MaterialBatchRepository materialBatches;
     @Autowired SemiFinishedInventoryRepository semis;
+    @Autowired WorkProcessTaskRepository tasks;
 
     @BeforeEach
     void setUp() {
@@ -119,12 +126,22 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
                 + "FOR r IN SELECT conrelid::regclass AS t, conname FROM pg_constraint "
                 + "WHERE contype = 'f' AND connamespace = 'public'::regnamespace LOOP "
                 + "EXECUTE format('ALTER TABLE %s DROP CONSTRAINT %I', r.t, r.conname); END LOOP; END $$");
+        when(warehouseResolver.resolveWorkshopId(anyString())).thenReturn(WORKSHOP);
     }
 
-    private record PlanFixture(String planId, ProductionBatch batch) { }
+    private record PlanFixture(String planId, ProductionBatch batch, Long taskId) { }
 
-    /** 一张计划 + 它的生产批次 + 工艺实例 + 一个配了时限的半成品投入端口 (SKU = {@link #SEMI})。 */
     private PlanFixture plan(String factoryId, String customerId) {
+        return plan(factoryId, customerId,
+                customerId == null ? InventoryOwnership.COMPANY_OWNED : InventoryOwnership.CUSTOMER_OWNED, false);
+    }
+
+    /**
+     * 一张计划 + 它的生产批次 + 工艺实例 + 一道工序任务 (App 入口 statusForTask 用) +
+     * 这道任务上一个配了时限的半成品投入端口 (SKU = {@link #SEMI}); {@code withRawPort} 时再加一个原料端口 ({@link #RAW})。
+     */
+    private PlanFixture plan(String factoryId, String customerId, InventoryOwnership outputOwnership,
+                             boolean withRawPort) {
         String tag = UUID.randomUUID().toString().substring(0, 8);
         ProductionPlan plan = new ProductionPlan();
         plan.setId("PLAN-G16-" + tag);
@@ -140,7 +157,7 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         plan.setCreatedAt(LocalDateTime.now());
         plan.setUpdatedAt(LocalDateTime.now());
         plan.setCustomerId(customerId);
-        plan.setOutputOwnership(customerId == null ? InventoryOwnership.COMPANY_OWNED : InventoryOwnership.CUSTOMER_OWNED);
+        plan.setOutputOwnership(outputOwnership);
         plans.saveAndFlush(plan);
 
         ProductionBatch batch = ProductionBatch.builder()
@@ -157,24 +174,64 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         ProductionWorkflowInstance instance = instances.saveAndFlush(ProductionWorkflowInstance.create(
                 factoryId, batch.getId(), "G16-FIN", 1L, 1, "[]", "[]", LocalDateTime.now()));
 
+        WorkProcessTask task = new WorkProcessTask();
+        task.setFactoryId(factoryId);
+        task.setProductionBatchId(batch.getId());
+        task.setWorkflowInstanceId(instance.getId());
+        task.setWorkProcessId("WP-G16");
+        task.setProductTypeId("G16-FIN");
+        task.setProcessOrder(2);
+        task = tasks.saveAndFlush(task);
+
+        ports.saveAndFlush(port(factoryId, instance.getId(), task.getId(), "in-semi-" + tag, "SEMI_FINISHED", SEMI,
+                "OUTPUT_POSTED"));
+        if (withRawPort) {
+            ports.saveAndFlush(port(factoryId, instance.getId(), task.getId(), "in-raw-" + tag, "RAW_MATERIAL", RAW,
+                    "RAW_OUTBOUND"));
+        }
+        return new PlanFixture(plan.getId(), batch, task.getId());
+    }
+
+    private static WorkflowTaskPort port(String factoryId, Long instanceId, Long taskId, String portId, String kind,
+                                         String sku, String startEvent) {
         Map<String, Object> limit = new LinkedHashMap<>();
         limit.put("maxMinutes", 240);
-        limit.put("startEvent", "OUTPUT_POSTED");
+        limit.put("startEvent", startEvent);
         WorkflowTaskPort port = new WorkflowTaskPort();
         port.setFactoryId(factoryId);
-        port.setWorkflowInstanceId(instance.getId());
-        port.setTaskId(900L);
-        port.setWorkflowPortId("in-semi-" + tag);
+        port.setWorkflowInstanceId(instanceId);
+        port.setTaskId(taskId);
+        port.setWorkflowPortId(portId);
         port.setDirection(WorkflowTaskPort.Direction.INPUT);
         port.setOrdinal(0);
-        port.setMaterialNodeId("node-semi");
-        port.setMaterialKind("SEMI_FINISHED");
-        port.setSkuId(SEMI);
+        port.setMaterialNodeId("node-" + portId);
+        port.setMaterialKind(kind);
+        port.setSkuId(sku);
         port.setUnit("kg");
         port.setUnitCode("kg");
         port.setTimeLimitConfig(limit);
-        ports.saveAndFlush(port);
-        return new PlanFixture(plan.getId(), batch);
+        return port;
+    }
+
+    /** 车间仓里的原料批次 (原料端口的候选)。 */
+    private String rawBatch(String factoryId) {
+        MaterialBatch mb = new MaterialBatch();
+        mb.setId(UUID.randomUUID().toString());
+        mb.setFactoryId(factoryId);
+        mb.setBatchNumber("RM-G16-" + mb.getId().substring(0, 8));
+        mb.setMaterialTypeId(RAW);
+        mb.setWarehouseId(WORKSHOP);
+        mb.setReceiptQuantity(new BigDecimal("5"));
+        mb.setQuantityUnit("kg");
+        mb.setUsedQuantity(BigDecimal.ZERO);
+        mb.setReservedQuantity(BigDecimal.ZERO);
+        mb.setUnitPrice(BigDecimal.ONE);
+        mb.setStatus(MaterialBatchStatus.AVAILABLE);
+        mb.setOwnership(InventoryOwnership.COMPANY_OWNED);
+        mb.setReceiptDate(LocalDate.now());
+        mb.setCreatedBy(OPERATOR);
+        materialBatches.saveAndFlush(mb);
+        return mb.getBatchNumber();
     }
 
     /** 逐道录入产出的在制批 (归属不落在行上, 从产出它的生产批次的计划现算)。 */
@@ -311,5 +368,67 @@ class TimeLimitCandidateOwnershipPostgresContractTest {
         assertThatCode(() -> ownershipGuard.assertWipBatchDrawable(FACTORY,
                 ownershipGuard.ofPlanId(FACTORY, a2.planId()), a1.batch(), a1.batch().getBatchNumber(), "P2"))
                 .doesNotThrowAnyException();
+    }
+
+    private List<String> listedForTask(String factoryId, Long taskId) {
+        return timeLimits.statusForTask(factoryId, taskId).stream()
+                .map(ProcessTimeLimitService.SourceStatus::batchNumber).toList();
+    }
+
+    /** App 走 statusForTask (按工序任务): 同一归属口径, 归属从任务所在生产批次的计划算。 */
+    @Test
+    void appTaskEntryFiltersByTheTasksPlanOwner() {
+        String custA = "CUST-A-" + UUID.randomUUID().toString().substring(0, 6);
+        String custB = "CUST-B-" + UUID.randomUUID().toString().substring(0, 6);
+        PlanFixture a1 = plan(FACTORY, custA);
+        PlanFixture b1 = plan(FACTORY, custB);
+        PlanFixture company = plan(FACTORY, null);
+
+        String wipA = wip(FACTORY, a1.batch(), MaterialBatchStatus.AVAILABLE);
+        String wipB = wip(FACTORY, b1.batch(), MaterialBatchStatus.AVAILABLE);
+        String wipCompany = wip(FACTORY, company.batch(), MaterialBatchStatus.AVAILABLE);
+
+        assertThat(listedForTask(FACTORY, b1.taskId()))
+                .as("客户 B 的工序任务: 看得到 B 的在制批, 看不到 A 的和公司自有的")
+                .contains(wipB)
+                .doesNotContain(wipA, wipCompany);
+        assertThat(listedForTask(FACTORY, a1.taskId()))
+                .contains(wipA)
+                .doesNotContain(wipB, wipCompany);
+        assertThat(listedForTask(FACTORY, company.taskId()))
+                .contains(wipCompany)
+                .doesNotContain(wipA, wipB);
+    }
+
+    /**
+     * 旧数据: 代工计划缺客户 id ⇒ 归属判不出。以前整张列表 409 打不开; 现在原料照常列出,
+     * 在制批 / 半成品一律不列, 并带上原因 (web / App 两个入口都一样)。
+     */
+    @Test
+    void legacyCustomerPlanWithoutCustomerIdStillListsRawAndExplainsMissingIntermediates() {
+        PlanFixture legacy = plan(FACTORY, null, InventoryOwnership.CUSTOMER_OWNED, true);
+        PlanFixture company = plan(FACTORY, null);
+        String raw = rawBatch(FACTORY);
+        String wipOwn = wip(FACTORY, legacy.batch(), MaterialBatchStatus.AVAILABLE);
+        String wipCompany = wip(FACTORY, company.batch(), MaterialBatchStatus.AVAILABLE);
+        String semiCompany = semiRow(FACTORY, null);
+
+        for (ProcessTimeLimitService.SourceStatusView view : List.of(
+                timeLimits.statusViewForPlan(FACTORY, legacy.planId(), null),
+                timeLimits.statusViewForTask(FACTORY, legacy.taskId()))) {
+            assertThat(view.sources().stream().map(ProcessTimeLimitService.SourceStatus::batchNumber).toList())
+                    .as("原料照常列出, 在制批 / 半成品一律不列")
+                    .contains(raw)
+                    .doesNotContain(wipOwn, wipCompany, semiCompany);
+            assertThat(view.ownershipNotice())
+                    .startsWith("本计划缺客户信息，无法判定在制品归属")
+                    .contains(legacy.planId())
+                    .contains("原料照常显示");
+        }
+        // 对照: 归属判得出的公司计划没有提示, 且公司自有料照常列出
+        ProcessTimeLimitService.SourceStatusView companyView = timeLimits.statusViewForPlan(FACTORY, company.planId(), null);
+        assertThat(companyView.ownershipNotice()).isNull();
+        assertThat(companyView.sources().stream().map(ProcessTimeLimitService.SourceStatus::batchNumber).toList())
+                .contains(wipCompany, semiCompany);
     }
 }
