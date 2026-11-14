@@ -368,7 +368,7 @@ function formatPercent(num: Reading): string {
             <div class="card-header"><el-icon class="module-icon"><DataAnalysis /></el-icon><span>AI 深度分析</span></div>
  <div class="stat-value" style="font-size:18px;cursor:pointer"> 点击</div>
             <div class="stat-label">问 AI 领料/损耗/盘点</div>
-            <div class="stat-footer"><span style="color:#409eff">基于 Gold 数据秒回</span></div>
+            <div class="stat-footer"><span style="color:var(--cs-primary)">基于 Gold 数据秒回</span></div>
           </el-card>
         </el-col>
       </el-row>
@@ -405,7 +405,7 @@ function formatPercent(num: Reading): string {
           <el-card class="stat-card finance" shadow="hover" @click="$router.push('/smart-bi/analysis?tab=finance')">
             <div class="card-header" style="display:flex;align-items:center;gap:8px">
               <el-icon><DataAnalysis /></el-icon><span>毛利深度分析</span>
-              <span style="margin-left:auto;font-size:12px;color:#409eff;cursor:pointer">查看专属页面 →</span>
+              <span style="margin-left:auto;font-size:12px;color:var(--cs-primary);cursor:pointer">查看专属页面 →</span>
             </div>
             <div style="font-size:13px;color:#606266;line-height:1.8;padding:6px 0">
               跨模块分析: POS 销售 × 配方成本 = 每道菜毛利. 可按时段筛选, 按毛利率排序识别"赚钱菜" vs"负担菜".
@@ -689,8 +689,8 @@ function formatPercent(num: Reading): string {
   }
 
   &.production {
-    border-top: 3px solid #409EFF;
-    .stat-value { color: #409EFF; }
+    border-top: 3px solid var(--cs-primary);
+    .stat-value { color: var(--cs-primary); }
   }
 
   &.quality {
@@ -747,7 +747,7 @@ function formatPercent(num: Reading): string {
       }
 
       .el-icon {
-        color: #409EFF;
+        color: var(--cs-primary);
         margin-bottom: 12px;
       }
 

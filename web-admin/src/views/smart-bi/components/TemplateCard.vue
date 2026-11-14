@@ -641,7 +641,7 @@ watch(
   margin-top: 12px;
   padding: 10px;
   background: #f0f9ff;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--cs-primary);
   font-size: 13px;
 }
 .tpl-insight-text {
@@ -660,7 +660,7 @@ watch(
   padding: 0;
   background: none;
   border: 0;
-  color: #409eff;
+  color: var(--cs-primary);
   font-size: 12px;
   cursor: pointer;
 }

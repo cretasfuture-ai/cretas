@@ -132,11 +132,11 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
 // 开票待办在订单全部发货完成后自动生成；销售列表不再提供手工开票入口。
 const FINANCE_WRITE_ACTIONS = new Set(['quick-payment']);
+// W6（销售订单精简，DECISIONS 第十八节 / 迁移 P7）：默认 8–9 列。
+// 固定列 订单编号、客户、订单状态、出库状态、收款状态、下一步 = 6，再加默认 3 个可选列 = 9（无看价权限时 8）。
+// 其余列仍可在列选择器里加回，不删任何一列。
 const SALES_DEFAULT_COLUMNS = [
   'productSummary',
-  'processingMode',
-  'materialSupply',
-  'salesperson',
   'orderDate',
   'totalAmount',
 ];
@@ -146,7 +146,7 @@ const {
   isVisible: salesColumnVisible,
   reset: resetSalesColumns,
 } = useBusinessTableColumns({
-  storageKey: 'cretas:sales-orders:visible-columns:v1',
+  storageKey: 'cretas:sales-orders:visible-columns:v2',
   columns: () => [
     { key: 'processingMode', label: '加工方式' },
     { key: 'materialSupply', label: '物料供应' },
@@ -184,6 +184,8 @@ function goConfigureProduct(_productTypeId?: string) {
 
 // U-VIEW-1 (Sprint 4 Wave 2 Chat L) — view-mode switcher (5 modes).
 // Persistence handled by ViewModeSwitcher via route.name + localStorage.
+// W6：视图只留「表格｜看板」。
+const SALES_VIEW_MODES: ViewMode[] = ['table', 'kanban'];
 const viewMode = ref<ViewMode>('table');
 const kanbanColumns = computed(() =>
   Object.entries(statusMap).map(([status, v]: [string, { text: string }]) => ({ status, label: v.text }))
@@ -2426,14 +2428,16 @@ function handleMergePurchase() {
       </template>
 
       <div class="lifecycle-filter-header">
-        <el-tabs v-model="activeLifecycle" class="sales-lifecycle-tabs" @tab-change="handleLifecycleTabChange">
-          <el-tab-pane v-for="tab in lifecycleTabs" :key="tab.key" :name="tab.key">
-            <template #label>
-              <span>{{ tab.label }}</span>
-              <span class="tab-count">{{ lifecycleTabCount(tab.key) }}</span>
-            </template>
-          </el-tab-pane>
-        </el-tabs>
+        <!-- W6：原 7 个状态页签改成一个下拉，计数留在选项里 -->
+        <el-select
+          v-model="activeLifecycle"
+          class="sales-lifecycle-select"
+          aria-label="订单状态"
+          style="width: 200px"
+          @change="handleLifecycleTabChange"
+        >
+          <el-option v-for="tab in lifecycleTabs" :key="tab.key" :value="tab.key" :label="`${tab.label}（${lifecycleTabCount(tab.key)}）`" />
+        </el-select>
         <el-tooltip content="分页数字来自当前已加载的同一批订单，不会把出库和收款重复计入生命周期。" placement="top">
           <span class="count-scope-note"><el-icon><QuestionFilled /></el-icon> 计数口径</span>
         </el-tooltip>
@@ -2477,7 +2481,7 @@ function handleMergePurchase() {
         />
         <!-- U-VIEW-1 view-mode switcher (Sprint 4 Wave 2 Chat L) -->
         <div style="margin-left: auto">
-          <ViewModeSwitcher v-model="viewMode" />
+          <ViewModeSwitcher v-model="viewMode" :modes="SALES_VIEW_MODES" />
         </div>
       </div>
 
@@ -3411,25 +3415,10 @@ function handleMergePurchase() {
   display: flex;
   align-items: flex-start;
   gap: 16px;
-  border-bottom: 1px solid var(--el-border-color-lighter);
-  margin: -4px 0 12px;
+  margin: -4px 0 4px;
 }
-.sales-lifecycle-tabs {
-  flex: 1;
-  min-width: 0;
-  :deep(.el-tabs__header) { margin: 0; }
-  :deep(.el-tabs__nav-wrap::after) { display: none; }
-  :deep(.el-tabs__item) { min-height: 48px; padding: 0 18px; }
-}
-.tab-count {
-  display: inline-flex;
-  min-width: 18px;
-  justify-content: center;
-  margin-left: 5px;
-  color: var(--el-text-color-placeholder);
-  font-size: 12px;
-}
-:deep(.el-tabs__item.is-active) .tab-count { color: var(--el-color-primary); }
+.sales-lifecycle-select { flex-shrink: 0; margin-bottom: 8px; }
+.lifecycle-filter-header { align-items: center; }
 .count-scope-note {
   display: inline-flex;
   align-items: center;
@@ -3470,7 +3459,6 @@ function handleMergePurchase() {
 .trace-items :deep(.el-empty) { padding: 2px 0 0; }
 .business-action-row { justify-content: center; flex-wrap: nowrap; }
 @media (max-width: 1366px) {
-  .sales-lifecycle-tabs :deep(.el-tabs__item) { padding: 0 11px; }
   .order-trace-panel { grid-template-columns: 1fr 1fr; padding-left: 54px; }
   .trace-items { grid-column: 1 / -1; }
 }
@@ -3483,7 +3471,7 @@ function handleMergePurchase() {
 /* T131 Part 3 — 多选批量操作栏 */
 .bulk-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-bottom: 12px; padding: 8px 12px; background: #ecf5ff; border: 1px solid #d9ecff; border-radius: 4px;
-  .bulk-bar-count { font-size: 13px; color: #606266; margin-right: 4px; strong { color: #409eff; } }
+  .bulk-bar-count { font-size: 13px; color: #606266; margin-right: 4px; strong { color: var(--cs-primary); } }
 }
 .pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
 .order-items-scroll {
