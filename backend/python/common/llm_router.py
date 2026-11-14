@@ -2950,24 +2950,21 @@ def _choice_distribution(body: Dict[str, Any], name: str, values: List[str]) -> 
     return out if set(out) == set(values) else None
 
 
-async def call_decision_choice(
+async def _post_decisions(
     messages: List[Dict[str, Any]],
-    choices: List[Tuple[str, str]],
+    question: Dict[str, Any],
+    parse: Callable[[Dict[str, Any]], Any],
     *,
-    name: str = "intent",
-    timeout: float = 6.0,
-) -> Dict[str, float]:
-    """单选题交给 OpenAI Decisions API(gpt-6-luna), 返回每个选项的原生概率。
+    slot_label: str,
+    timeout: float,
+) -> Any:
+    """一道题交给 OpenAI Decisions API(gpt-6-luna); ``parse(响应)`` 返回 None = 形状不对。choice / predicate 共用。
 
-    ``messages`` 是 chat 形状(system 说明 + user 正文; DashScope 的 partial 前缀会被忽略), 先经共享客户端
+    ``messages`` 是 chat 形状(system = 这道题的说明, user = 正文; DashScope 的 partial 前缀会被忽略), 先经共享客户端
     **同一个脱敏出口**再拼成 Decisions 请求 —— 与 ``/chat/completions`` 外发同一套规则。
-    ``choices`` = [(选项值, 说明)]。
-
-    失败一律抛 :class:`LLMChainExhausted`(调用方回落读概率链), ⛔ 不编概率、不默认第一项。
-    计费护栏与 chat 链同一套: `_refuse_reason` / 熔断 / 额度跳过 / 空 key。
+    失败一律抛 :class:`LLMChainExhausted`, ⛔ 不编概率。计费护栏与 chat 链同一套: `_refuse_reason` / 熔断 / 额度跳过 / 空 key。
     """
     account, model = DECISION_CHOICE_PAIR
-    slot_label = "decision_choice"
     cb_key = f"{account}/{model}"
     if not decision_choice_enabled():
         # 没有出口(LLM_EGRESS_PROXY)或没有 key: 不发请求, 调用方直接走阿里云 qwen 读概率链
@@ -2984,9 +2981,6 @@ async def call_decision_choice(
         errors: List[str] = []
         _note_empty_key("llm_router_decision", account, errors)
         raise LLMChainExhausted(slot_label, errors)
-    values = [v for v, _d in choices]
-    if not values or len(set(values)) != len(values):
-        raise ValueError("decision choices must be non-empty and unique")
 
     names_token = await prefetch_names_for_request()
     try:
@@ -2995,9 +2989,7 @@ async def call_decision_choice(
         redacted, _tokens = await client.redact_chat_payload({"model": model, "messages": clean})
         system = "\n".join(str(m.get("content") or "") for m in redacted["messages"] if m.get("role") == "system")
         user = "\n".join(str(m.get("content") or "") for m in redacted["messages"] if m.get("role") == "user")
-        body = {"model": model, "input": user,
-                "questions": [{"type": "choice", "name": name, "instructions": system,
-                               "choices": [{"value": v, "description": d} for v, d in choices]}]}
+        body = {"model": model, "input": user, "questions": [dict(question, instructions=system)]}
         try:
             resp = await asyncio.wait_for(
                 client.post(f"{base_url}/decisions", headers=_auth_headers(account, api_key), json=body,
@@ -3022,10 +3014,11 @@ async def call_decision_choice(
             parsed = resp.json()
         except ValueError:
             parsed = {}
-        dist = _choice_distribution(parsed, name, values)
-        if dist is None:
+        value = parse(parsed)
+        if value is None:
             _cb_record_failure(cb_key)
-            raise LLMChainExhausted(slot_label, [f"{cb_key}: invalid_choice_distribution"])
+            kind = "choice_distribution" if question.get("type") == "choice" else "predicate_probability"
+            raise LLMChainExhausted(slot_label, [f"{cb_key}: invalid_{kind}"])
         _cb_record_success(cb_key)
         _quota_record_success(cb_key)
         usage = parsed.get("usage") or {}
@@ -3034,9 +3027,59 @@ async def call_decision_choice(
             "completion_tokens": usage.get("output_tokens") or 0,
             "prompt_tokens_details": usage.get("input_tokens_details") or {}}})
         logger.info(f"[llm_router] decision OK via {cb_key}")
-        return dist
+        return value
     finally:
         reset_prefetched_names(names_token)
+
+
+async def call_decision_choice(
+    messages: List[Dict[str, Any]],
+    choices: List[Tuple[str, str]],
+    *,
+    name: str = "intent",
+    timeout: float = 6.0,
+) -> Dict[str, float]:
+    """单选题交给 OpenAI Decisions API(gpt-6-luna), 返回每个选项的原生概率。
+
+    ``choices`` = [(选项值, 说明)]。失败一律抛 :class:`LLMChainExhausted`(调用方回落读概率链), ⛔ 不编概率、不默认第一项。
+    """
+    values = [v for v, _d in choices]
+    if not values or len(set(values)) != len(values):
+        raise ValueError("decision choices must be non-empty and unique")
+    question = {"type": "choice", "name": name,
+                "choices": [{"value": v, "description": d} for v, d in choices]}
+    return await _post_decisions(messages, question, lambda body: _choice_distribution(body, name, values),
+                                 slot_label="decision_choice", timeout=timeout)
+
+
+def _predicate_probability(body: Dict[str, Any], name: str) -> Optional[float]:
+    """Decisions 响应 -> 判断题为真的概率; 形状不对 / 概率非法 -> None (⛔ 不补)。"""
+    import math
+    answers = [a for a in (body or {}).get("answers") or []
+               if isinstance(a, dict) and a.get("name") == name and a.get("type") == "predicate"]
+    if len(answers) != 1:
+        return None
+    prob = answers[0].get("probability")
+    if isinstance(prob, bool) or not isinstance(prob, (int, float)) or not math.isfinite(prob) or not 0 <= prob <= 1:
+        return None
+    return float(prob)
+
+
+async def call_decision_predicate(
+    instructions: str,
+    text: str,
+    *,
+    name: str = "needs_clarification",
+    timeout: float = 6.0,
+) -> float:
+    """判断题交给 OpenAI Decisions API(gpt-6-luna), 返回「为真」的原生概率 (第三批: 这一轮是否必须先问)。
+
+    与 :func:`call_decision_choice` 同一个出口、同一套脱敏与计费护栏; 失败一律抛 :class:`LLMChainExhausted`。
+    """
+    messages = [{"role": "system", "content": instructions}, {"role": "user", "content": text}]
+    return await _post_decisions(messages, {"type": "predicate", "name": name},
+                                 lambda body: _predicate_probability(body, name),
+                                 slot_label="decision_predicate", timeout=timeout)
 
 
 # ---------------------------------------------------------------------------

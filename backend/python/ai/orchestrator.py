@@ -43,7 +43,8 @@ from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
 from ai.matcher.decision import with_task_state
 from ai.db import _is_write_row
-from ai.matcher.decision import CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, RequestPurpose, intent_text
+from ai.matcher.decision import (ASK_KEY, CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, NON_INTENT_KEYS, RequestPurpose,
+                                 intent_text)
 from ai.matcher.fallback_combo import HOPS, FallbackDecision, FallbackThresholds, run_fallback
 
 # 判「以上都不是」时给用户的话: 不执行, 并告诉他怎么继续 (说「帮助」走 SYSTEM_HELP)。
@@ -253,8 +254,9 @@ class Orchestrator:
             if len(options) == 1 and not special:
                 probs = {codes[0]: 1.0}
             else:
-                probs = await self.decision_matcher.choose_luna(query, role, options, history,
-                                                                special_options=special)
+                probs = await self.decision_matcher.choose_luna(
+                    query, role, options, history, special_options=special,
+                    ask=getattr(self.config, "decision_luna_policy", "v1") == "v3")
             if probs is None:
                 luna_reason = exit_metrics.get_luna_failure_reason()  # None = 没启用 Luna
                 modes = {c: ("WRITE" if _is_write_row(by_code[c]) else "READ") for c in codes}
@@ -338,10 +340,10 @@ class Orchestrator:
                 return None
             if clarify:
                 timing["mergedClarify"] = 1
-                probs = {k: v for k, v in probs.items() if k not in (NONE_KEY, CLARIFY_KEY)}
+                probs = {k: v for k, v in probs.items() if k not in NON_INTENT_KEYS}
                 probs[CLARIFY_KEY] = 1.0  # 先问的结论来自合并输出; Choice 只给按钮排序
                 return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
-            real = {k: v for k, v in probs.items() if k not in (NONE_KEY, CLARIFY_KEY)}
+            real = {k: v for k, v in probs.items() if k not in NON_INTENT_KEYS}
             if not (u.target and real and max(real, key=real.get) == u.target):
                 return self._result_from_probs(probs, True, query, by_code, visible_intents, timing, t0)
             timing["choiceAgrees"] = 1
@@ -401,6 +403,7 @@ class Orchestrator:
         probs = dict(probs)
         p_none = float(probs.pop(NONE_KEY, 0.0) or 0.0)
         p_clarify = float(probs.pop(CLARIFY_KEY, 0.0) or 0.0)
+        p_ask = probs.pop(ASK_KEY, None)
         ranked = sorted(probs.items(), key=lambda kv: -kv[1])
         top_real = ranked[0][1] if ranked else 0.0
         if special:
@@ -411,6 +414,27 @@ class Orchestrator:
             return self._none_result(query, timing, t0)
         # 「需要先问清楚」最大 → 一律出按钮 (不管真实第一名的概率是多少)
         force_clarify = special and p_clarify > top_real and p_clarify >= p_none
+        auto_threshold = self.config.decision_auto_threshold
+        if p_ask is not None and ranked:
+            # 第三批 v3 (Luna 判断题在手): 先问 / 按默认直接办 / 写确认卡, 见 AIConfig.decision_luna_policy
+            timing["lunaPolicyV3"] = 1
+            timing["lunaAskP"] = int(round(float(p_ask) * 1000))
+            top_code, p_top = ranked[0]
+            p_second = ranked[1][1] if len(ranked) > 1 else 0.0
+            if float(p_ask) >= self.config.luna_ask_threshold:
+                timing["lunaAsk"] = 1
+                force_clarify = True
+            elif not force_clarify:
+                if _is_write_row(by_code[top_code]):
+                    go = p_top >= self.config.luna_write_threshold and p_top >= p_clarify
+                    timing["lunaWriteToConfirm" if go else "lunaWriteWeak"] = 1
+                else:
+                    go = p_top >= self.config.luna_read_threshold or p_top - p_second >= self.config.luna_margin
+                    timing["lunaReadWithDefaults" if go else "lunaTwoWay"] = 1
+                if go:
+                    auto_threshold = 0.0  # 只把首选交给 Java: 读按默认执行并写明默认, 写一律走确认卡
+                else:
+                    force_clarify = True
         if force_clarify:
             timing["decisionClarify"] = 1
         candidates = []
@@ -427,7 +451,7 @@ class Orchestrator:
         # ③ 置信不够 → requiresConfirmation=true, Java 走 buildClarificationResponse 出候选按钮
         return self._build_result(query=query, top_candidates=candidates, method=MatchMethod.LLM,
                                   visible_intents=visible_intents,
-                                  min_confidence=1.01 if force_clarify else self.config.decision_auto_threshold,
+                                  min_confidence=1.01 if force_clarify else auto_threshold,
                                   timing=timing)
 
     def _result_from_fallback(self, fb: FallbackDecision, query: str, by_code: Dict[str, Any],
