@@ -419,6 +419,15 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.inventory.PriceListService priceListService;
 
+    /** 最近成交价 (订单行价格来源回查用). Optional 注入, 同 priceListService。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.CustomerPriceMemoryService customerPriceMemoryService;
+
+    /** 前端含税/未税来回折算有舍入, 差 ≤ 0.01 视为同一个价。 */
+    private static boolean priceMatches(BigDecimal a, BigDecimal b) {
+        return a != null && b != null && a.subtract(b).abs().compareTo(new BigDecimal("0.01")) <= 0;
+    }
+
     /**
      * 单位落库归一 —— 「不许英文单位, 用户看到必须是中文」(Steve 2026-08-18).
      *
@@ -730,20 +739,43 @@ public class SalesServiceImpl implements SalesService {
             // Resolution: customer-specific selling price → global selling price → caller's value.
             // User-provided price always wins (per May 7 part2 L284-303 — manual override allowed).
             BigDecimal resolvedUnitPrice = itemDTO.getUnitPrice();
-            if (priceListService != null
-                    && (resolvedUnitPrice == null || resolvedUnitPrice.signum() == 0)) {
-                BigDecimal contractPrice = priceListService.findActivePriceForOrder(
+            boolean callerGavePrice = resolvedUnitPrice != null && resolvedUnitPrice.signum() != 0;
+            String priceSource = null;
+            String priceRef = null;
+            if (priceListService != null) {
+                var resolution = priceListService.resolveForOrder(
                         factoryId,
                         request.getCustomerId(),
                         itemDTO.getProductTypeId(),
                         order.getOrderDate()).orElse(null);
-                if (contractPrice != null) {
-                    resolvedUnitPrice = contractPrice;
-                    log.info("Issue #793: auto-applied 协议价 — SO={}, customerId={}, productId={}, "
-                            + "price={}", order.getOrderNumber(), request.getCustomerId(),
-                            itemDTO.getProductTypeId(), contractPrice);
+                if (!callerGavePrice && resolution != null) {
+                    resolvedUnitPrice = resolution.price();
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
+                    log.info("Issue #793: auto-applied {} price — SO={}, customerId={}, productId={}, "
+                            + "price={}", priceSource, order.getOrderNumber(), request.getCustomerId(),
+                            itemDTO.getProductTypeId(), resolution.price());
+                } else if (callerGavePrice && resolution != null
+                        && priceMatches(resolvedUnitPrice, resolution.price())) {
+                    priceSource = resolution.source();
+                    priceRef = resolution.priceListName();
                 }
             }
+            if (priceSource == null && callerGavePrice) {
+                // 手填价若恰等于该客户该产品最近成交价, 记为 LAST_DEAL (前端「点击采用」走这条)。
+                var lastDeal = customerPriceMemoryService == null
+                        ? java.util.Optional.<com.cretas.aims.entity.CustomerPriceHistory>empty()
+                        : customerPriceMemoryService.getLatest(factoryId, request.getCustomerId(),
+                                itemDTO.getProductTypeId());
+                if (lastDeal.isPresent() && priceMatches(resolvedUnitPrice, lastDeal.get().getUnitPrice())) {
+                    priceSource = "LAST_DEAL";
+                    priceRef = lastDeal.get().getSourceOrderNumber();
+                } else {
+                    priceSource = "MANUAL";
+                }
+            }
+            item.setPriceSource(priceSource);
+            item.setPriceRef(priceRef);
             // Canvas-Pricing Phase 4b (2026-05-18): apply 价格策略 (TIERED / PROMOTION / MEMBER / BUNDLE).
             // 此处用 calculate() 写 PricingApplicationLog (审计 audit), CYCLE 策略由月底批处理路径处理.
             // pricingEngine 为 null 时 (老 jar 部署), 完全跳过 — 走原 resolvedUnitPrice (legacy fallback).

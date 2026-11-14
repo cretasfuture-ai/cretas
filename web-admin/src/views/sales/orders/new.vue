@@ -29,6 +29,7 @@ import {
   type SalesOrderPackagingSpec,
 } from './salesOrderNewLineContract';
 import { toDateString } from '@/utils/dateFormat';
+import { priceSourceLabel, type PriceSource } from '@/api/customerPriceList';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 import SalesPackagingSelect from './components/SalesPackagingSelect.vue';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
@@ -60,6 +61,8 @@ type SalesLine = {
   /** 随含税单价/税点实时反算，提交只发送当前快照。 */
   unitPrice: number;
   sourceWarehouseCode: string;
+  /** 带出的建议价 (未税)。CUSTOMER 会自动填入; GLOBAL / LAST_DEAL 仅提示, 点「采用」才填。 */
+  priceHint?: { source: PriceSource; price: number; ref: string; applied: boolean } | null;
 };
 type SuppliedMaterial = { materialTypeId: string; materialName: string; expectedQuantity: number; unit: string; expectedArrivalAt: string; targetWarehouseId: string };
 
@@ -189,6 +192,7 @@ async function onCustomerChange(): Promise<void> {
   const requestId = ++customerHistoryRequestId;
   const customerId = form.value.customerId;
   customerHistoryCounts.value = new Map();
+  for (const line of form.value.items) void applyCustomerPrice(line);
   if (!factoryId.value || !customerId) return;
   loadingCustomerHistory.value = true;
   try {
@@ -238,8 +242,73 @@ async function addProduct(product: Product): Promise<void> {
     taxRate,
     unitPrice: untaxedUnitPrice(taxIncludedPrice, taxRate),
     sourceWarehouseCode: '',
+    priceHint: null,
   });
   dirty.value = true;
+  const added = form.value.items[form.value.items.length - 1];
+  if (added) void applyCustomerPrice(added);
+}
+
+function setLineUntaxedPrice(line: SalesLine, untaxed: number): void {
+  line.taxIncludedUnitPrice = initialTaxIncludedUnitPrice({ unitPrice: untaxed, taxRate: line.taxRate });
+  recalculateSalesUnitPrice(line);
+}
+
+/**
+ * 选了客户+产品后带出价格并标来源 (客户价目表最小闭环):
+ * 客户专属价 → 自动填入; 统一价 / 最近成交价 → 只提示, 点「采用」才填 (专属价优先于它们)。
+ * 换客户时旧客户的价一律清掉, 不会串到别的客户身上。
+ */
+async function applyCustomerPrice(line: SalesLine): Promise<void> {
+  const customerId = form.value.customerId;
+  const productId = String(line.product.id);
+  // 上一个客户的专属价若还原样躺在价格框里, 换客户后要退回产品默认价, 不能带到别的客户身上。
+  const previous = line.priceHint;
+  if (previous?.applied && previous.source === 'CUSTOMER' && Math.abs(line.unitPrice - previous.price) <= 0.01) {
+    line.taxIncludedUnitPrice = initialTaxIncludedUnitPrice(line.product);
+    recalculateSalesUnitPrice(line);
+  }
+  line.priceHint = null;
+  if (!factoryId.value || !customerId || !productId) return;
+  const stale = () => customerId !== form.value.customerId || !form.value.items.includes(line);
+  try {
+    const lookup = await get<{ found: boolean; price: number | null; source: string | null; priceListName: string | null }>(
+      `/${factoryId.value}/price-lists/lookup`,
+      { params: { customerId, productTypeId: productId }, _silent: true } as never,
+    );
+    if (stale()) return;
+    if (lookup.success && lookup.data?.found && lookup.data.price != null) {
+      const source = lookup.data.source === 'CUSTOMER' ? 'CUSTOMER' : 'GLOBAL';
+      const price = Number(lookup.data.price);
+      line.priceHint = { source, price, ref: String(lookup.data.priceListName || ''), applied: source === 'CUSTOMER' };
+      if (source === 'CUSTOMER') setLineUntaxedPrice(line, price);
+      return;
+    }
+    const memory = await get<{ unitPrice: number; sourceOrderNumber: string } | null>(
+      `/${factoryId.value}/customers/${encodeURIComponent(customerId)}/price-memory`,
+      { params: { productTypeId: productId }, _silent: true } as never,
+    );
+    if (stale()) return;
+    if (memory.success && memory.data?.unitPrice != null) {
+      line.priceHint = { source: 'LAST_DEAL', price: Number(memory.data.unitPrice), ref: String(memory.data.sourceOrderNumber || ''), applied: false };
+    }
+  } catch {
+    if (!stale()) line.priceHint = null; // 提示是辅助信息, 失败不挡开单; 后端提交时仍会自动取价
+  }
+}
+
+function adoptPriceHint(line: SalesLine): void {
+  if (!line.priceHint) return;
+  setLineUntaxedPrice(line, line.priceHint.price);
+  line.priceHint.applied = true;
+}
+
+/** 行当前价与带出价一致才标来源, 手改过就标「手填」(与后端落库口径一致, 差 ≤ 0.01)。 */
+function priceSourceText(line: SalesLine): string {
+  const hint = line.priceHint;
+  if (!hint) return '';
+  if (Math.abs(line.unitPrice - hint.price) <= 0.01) return `${priceSourceLabel(hint.source)}${hint.ref ? ' · ' + hint.ref : ''}`;
+  return hint.applied ? '已改为手填' : '';
 }
 
 function recalculateSalesUnitPrice(line: SalesLine): void {
@@ -523,7 +592,11 @@ onMounted(async () => {
           <el-table-column label="数量" width="150"><template #default="{ row }"><el-input-number v-model="row.quantity" :min="0.001" :precision="3" @change="dirty = true" /></template></el-table-column>
           <el-table-column label="单位" width="150"><template #default="{ row }"><el-select v-model="row.unit" placeholder="选择规格单位" @change="row.packagingSpecId = undefined; dirty = true"><el-option v-for="unit in salesOrderUnitOptions(row.product)" :key="unit" :label="displayUnit(unit)" :value="unit" /></el-select></template></el-table-column>
           <el-table-column label="包装规格" min-width="240"><template #default="{ row }"><SalesPackagingSelect v-model="row.packagingSpecId" :options="salesPackagingOptions(row.product, row.unit)" @update:model-value="dirty = true" /></template></el-table-column>
-          <el-table-column label="含税单价" width="170"><template #default="{ row }"><el-input-number v-model="row.taxIncludedUnitPrice" :min="0.01" :precision="2" @update:model-value="recalculateSalesUnitPrice(row)" /></template></el-table-column>
+          <el-table-column label="含税单价" width="170"><template #default="{ row }"><el-input-number v-model="row.taxIncludedUnitPrice" :min="0.01" :precision="2" @update:model-value="recalculateSalesUnitPrice(row)" />
+            <div v-if="row.priceHint" class="price-source" data-testid="price-source">
+              <span v-if="priceSourceText(row)">{{ priceSourceText(row) }}</span>
+              <el-button v-if="!row.priceHint.applied && Math.abs(row.unitPrice - row.priceHint.price) > 0.01" link type="primary" @click="adoptPriceHint(row)">采用{{ priceSourceLabel(row.priceHint.source) }}（未税 ¥{{ row.priceHint.price }}）</el-button>
+            </div></template></el-table-column>
           <el-table-column label="税点(%)" width="150"><template #default="{ row }"><el-input-number v-model="row.taxRate" :min="0" :max="100" :precision="2" @update:model-value="recalculateSalesUnitPrice(row)" /></template></el-table-column>
           <el-table-column label="来源仓库" min-width="220"><template #default="{ row }"><el-select v-model="row.sourceWarehouseCode" filterable placeholder="请选择合法来源仓库" @change="dirty = true"><el-option-group v-for="group in warehouseGroups" :key="group.label" :label="group.label"><el-option v-for="warehouse in group.warehouses" :key="warehouse.code" :label="warehouseLabel(warehouse)" :value="warehouse.code" /></el-option-group></el-select></template></el-table-column>
           <el-table-column label="操作" width="80"><template #default="{ $index }"><el-button type="danger" link @click="removeProduct($index)">移除</el-button></template></el-table-column>
@@ -564,6 +637,7 @@ onMounted(async () => {
 .content-card { margin-bottom: 16px; border-radius: 10px; box-shadow: 0 2px 12px rgba(27,101,168,.06); }
 .section-title { font-weight: 600; color: #1a2332; }
 .muted, small { color: #7a8599; font-size: 12px; }
+.price-source { margin-top: 4px; font-size: 12px; color: var(--cs-primary); }
 .supplied-row { display: flex; align-items: flex-end; gap: 12px; margin: 12px 0; flex-wrap: wrap; }
 .supplied-row label { display: flex; flex-direction: column; gap: 5px; color: #606266; font-size: 13px; }
 .supplied-row label > span:first-child b { color: #f56c6c; }

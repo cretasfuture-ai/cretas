@@ -16,6 +16,10 @@ public interface PriceListRepository extends JpaRepository<PriceList, String> {
 
     Page<PriceList> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
+    /** 某客户在某类型下的全部价目表 (含已过期/停用, 供客户档案价格页维护用)。 */
+    List<PriceList> findByFactoryIdAndCustomerIdAndPriceTypeOrderByCreatedAtAsc(
+            String factoryId, String customerId, String priceType);
+
     /** 查询当前生效的价格表 */
     @Query("SELECT p FROM PriceList p WHERE p.factoryId = :factoryId " +
             "AND p.isActive = true AND p.effectiveFrom <= :date " +
