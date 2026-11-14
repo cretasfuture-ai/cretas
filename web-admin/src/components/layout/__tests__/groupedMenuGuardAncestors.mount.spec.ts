@@ -4,6 +4,8 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createRouter, createMemoryHistory } from 'vue-router';
 import ElementPlus from 'element-plus';
 import AppSidebar from '../AppSidebar.vue';
+import AppHeader from '../AppHeader.vue';
+import { useNavigationVisibilityStore } from '@/store/modules/navigationVisibility';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import type { User } from '@/types/auth';
@@ -28,14 +30,14 @@ let pinia: ReturnType<typeof createPinia>;
 let disabledMenuPaths: string[] = [];
 let extraFeatures: Record<string, unknown>[] = [];
 
-function identity(role: string, onlyModules?: string[], factoryType = 'FACTORY') {
+function identity(role: string, onlyModules?: string[], factoryType = 'FACTORY', factoryId = 'P2-UNIT') {
   const user: User = {
     id: 87, username: 'local-test', email: '', isActive: true, createdAt: '2026-11-13', updatedAt: '2026-11-13',
-    userType: 'factory', factoryUser: { role, factoryId: 'P2-UNIT', factoryType, permissions: [] },
+    userType: 'factory', factoryUser: { role, factoryId, factoryType, permissions: [] },
   } as User;
   useAuthStore().setUser(user);
   const p = usePermissionStore();
-  p.setRole(role, 'P2-UNIT', factoryType, 87, { skipDbLoad: true });
+  p.setRole(role, factoryId, factoryType, 87, { skipDbLoad: true });
   p.dbPermissions = onlyModules
     // 模拟库里只开了这几个模块的账号（与 prod 上 QA 销售主管实测一致：只看得到销售相关）
     ? Object.fromEntries(Object.keys(p.currentPermissions).map((m) => [m, onlyModules.includes(m) ? 'rw' : '-'])) as typeof p.currentPermissions
@@ -78,6 +80,65 @@ beforeEach(() => {
       return { success: true, message: '', data: [{ moduleId: 'p2_test', enabled: true, config: { disabledMenuPaths } }, ...extraFeatures] };
     }
     return { success: true, message: '', data: [] };
+  });
+});
+
+describe('批发侧栏与顶栏同源、换租户不串布局（真挂载）', () => {
+  async function chrome() {
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/:p(.*)*', meta: { title: '客户管理' }, component: { template: '<div />' } },
+    ] });
+    await router.push('/sales/customers');
+    const wrapper = mount({ components: { AppSidebar, AppHeader }, template: '<div><AppSidebar/><AppHeader/></div>' }, {
+      global: { plugins: [pinia, router, ElementPlus], stubs: { AlertNotificationBell: true, ReminderBell: true } },
+    });
+    await flushPromises();
+    return { wrapper, router };
+  }
+
+  it('批发面包屑跟随销售/采购归属，商品仍在基础资料，常用星标可用', async () => {
+    identity('factory_super_admin');
+    extraFeatures = [{ moduleId: 'dashboard', config: { businessNavigationProfile: 'wholesale' } }];
+    const { wrapper, router } = await chrome();
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('销售管理');
+    expect(wrapper.find('.el-breadcrumb').text()).not.toContain('主数据');
+    await wrapper.find('.pin-toggle').trigger('click');
+    expect(wrapper.find('.pin-toggle').attributes('aria-pressed')).toBe('true');
+    await router.push('/procurement/suppliers');
+    await flushPromises();
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('采购管理');
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('供应商管理');
+    await router.push('/system/products');
+    await flushPromises();
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('基础资料');
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('SKU 管理');
+    wrapper.unmount();
+  });
+
+  it('A的批发配置延迟返回时，已切换的B侧栏/快照/顶栏保持默认布局', async () => {
+    type FeatureResponse = { success: boolean; data: Record<string, unknown>[] };
+    let resolveA!: (response: FeatureResponse) => void;
+    const pendingA = new Promise<FeatureResponse>((resolve) => { resolveA = resolve; });
+    api.get.mockImplementation(async (url: string) => {
+      if (url === '/F-A/feature-config') return pendingA;
+      return { success: true, data: [] };
+    });
+    identity('factory_super_admin', undefined, 'FACTORY', 'F-A');
+    const { wrapper } = await chrome();
+    expect(useNavigationVisibilityStore().status).toBe('loading');
+    identity('factory_super_admin', undefined, 'FACTORY', 'F-B');
+    await flushPromises();
+    expect(useNavigationVisibilityStore().snapshot?.factoryId).toBe('F-B');
+    resolveA({ success: true, data: [{ moduleId: 'dashboard', config: { businessNavigationProfile: 'wholesale' } }] });
+    await flushPromises();
+    expect(useNavigationVisibilityStore().snapshot?.factoryId).toBe('F-B');
+    expect(useNavigationVisibilityStore().snapshot?.menuProfile).toBeUndefined();
+    expect(wrapper.find('.el-breadcrumb').text()).toContain('主数据');
+    expect(wrapper.find('.el-breadcrumb').text()).not.toContain('销售管理');
+    const titles = wrapper.findAll('.menu-title-copy').map((node) => node.text());
+    expect(titles).toContain('主数据');
+    expect(titles).not.toContain('基础资料');
+    wrapper.unmount();
   });
 });
 

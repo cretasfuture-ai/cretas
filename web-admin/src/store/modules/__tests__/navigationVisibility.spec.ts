@@ -22,6 +22,16 @@ describe('navigation visibility snapshot', () => {
     expect(store.isPathVisible('/workspaces/exceptions', identity)).toBe(false);
   });
 
+  it('drops the previous tenant layout profile on invalidation and default-tenant publication', () => {
+    const store = useNavigationVisibilityStore();
+    store.publish({ ...identity, paths: ['/sales/customers'], menuProfile: 'wholesale' });
+    expect(store.snapshot?.menuProfile).toBe('wholesale');
+    store.beginLoading();
+    expect(store.snapshot).toBeNull();
+    store.publish({ ...identity, factoryId: 'OTHER', paths: ['/sales/customers'] });
+    expect(store.snapshot?.menuProfile).toBeUndefined();
+  });
+
   it('keeps the snapshot empty while authoritative sidebar configuration is pending or invalid', () => {
     const store = useNavigationVisibilityStore();
     store.publish({ ...identity, paths: ['/workspaces/overview'] });
