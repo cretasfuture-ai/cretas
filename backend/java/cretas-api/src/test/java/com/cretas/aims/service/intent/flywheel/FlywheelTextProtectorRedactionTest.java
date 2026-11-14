@@ -123,28 +123,42 @@ class FlywheelTextProtectorRedactionTest {
     /** 阳性 (保密厂: 原值不在导出里, 说法骨架还在) + 阳性对照 (保密关的厂原样)。 */
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource(delimiter = '|', value = {
-            "卤水里八角放5克、桂皮3克|卤水里<配料1>放<用量1>、<配料2><用量2>|5克,3克,八角,桂皮",
-            "鸭腿炸到180就捞出来|鸭腿炸到<温度>就捞出来|180",
-            "先卤45分钟再焖两个小时|先卤<时长1>再焖<时长2>|45,两个小时",
-            "盐3%|<配料><比例>|3%,盐",
-            "盐放百分之三|<配料>放<比例>|百分之三",
-            "一斤12|一斤<价格>|12",
-            "12一斤|<价格>一斤|12",
-            "每斤12，明天开始|每斤<价格>，明天开始|12",
-            "价格调到12|价格调到<价格>|12",
-            "这批按15卖不行，卖16|这批按<价格1>卖不行，卖<价格2>|15,16",
-            "15/斤|<价格>/斤|15",
-            "¥ 12 一份|<价格> 一份|12",
-            "糖度12，中心温度75|糖度<参数>，中心温度<温度>|75"
+            "卤水里八角放5克、桂皮3克|卤水里<配料1>放<用量1>、<配料2><用量2>|5克,3克,八角,桂皮|recipe",
+            "鸭腿炸到180就捞出来|鸭腿炸到<温度>就捞出来|180|recipe",
+            "先卤45分钟再焖两个小时|先卤<时长1>再焖<时长2>|45,两个小时|recipe",
+            "盐3%|<配料><比例>|3%,盐|recipe",
+            "盐放百分之三|<配料>放<比例>|百分之三|recipe",
+            "一斤12|一斤<价格>|12|price",
+            "12一斤|<价格>一斤|12|price",
+            "每斤12，明天开始|每斤<价格>，明天开始|12|price",
+            "价格调到12|价格调到<价格>|12|price",
+            "这批按15卖不行，卖16|这批按<价格1>卖不行，卖<价格2>|15,16|price",
+            "15/斤|<价格>/斤|15|price",
+            "¥ 12 一份|<价格> 一份|12|price",
+            "糖度12，中心温度75|糖度<参数>，中心温度<温度>|75|recipe"
     })
-    void secretFactoryMasksRecipeProcessAndPriceValuesAndKeepsThePhrasing(String said, String expected, String gone) {
+    void secretFactoryMasksRecipeProcessAndPriceValuesAndKeepsThePhrasing(String said, String expected, String gone,
+                                                                          String kind) {
         String out = protector.protect(SECRET, "v-" + said.hashCode(), said).exportInput();
 
         assertThat(out).isEqualTo(expected);
         for (String raw : gone.split(",")) {
             assertThat(out).doesNotContain(raw);
         }
-        assertThat(protector.protect(PLAIN, "v-" + said.hashCode(), said).exportInput()).isEqualTo(said);
+        // 保密关的厂: 配方 / 工艺参数也脱 (Steve 11-14: 所有工厂), 价格按保密开关原样 (阳性对照)
+        assertThat(protector.protect(PLAIN, "v-" + said.hashCode(), said).exportInput())
+                .isEqualTo("recipe".equals(kind) ? expected : said);
+    }
+
+    /** 保密关的厂: 配方 / 工艺参数被脱掉, 客户名、价格、普通说法原样。 */
+    @Test
+    void plainFactoryStillMasksRecipeAndProcessValuesButKeepsCustomerAndOrdinaryWords() {
+        String said = "老张家那批卤水八角放5克，炸到180，按特价走，下五十斤卤鸭腿，一斤12";
+
+        FlywheelTextProtector.Protected p = protector.protect(PLAIN, "p1", said);
+
+        assertThat(p.rawInput()).isEqualTo(said);
+        assertThat(p.exportInput()).isEqualTo("老张家那批卤水<配料>放<用量>，炸到<温度>，按特价走，下五十斤卤鸭腿，一斤12");
     }
 
     /** 阴性: 普通数量 / 产品名 / 业务说法在保密厂默认不动。 */

@@ -77,11 +77,10 @@ public class FlywheelTextProtector {
     static final String CIPHER_PREFIX = "v1:";
 
     /**
-     * 配方 / 工艺参数 (用量、比例、温度、时长、参数) 是否在<b>保密关的厂</b>也脱敏。⏳ 待 Steve 定 (10-24 TrainingConsentService
-     * 注释写「配方和工艺参数任何工厂都不存」, 11-14 口径是保密关的厂原文进); 现按 11-14 口径 false (保密关的厂原样)。
-     * 定了要更严就改成 true, 一处生效。
+     * 配方 / 工艺参数 (配料、用量、比例、温度、时长、参数) 在<b>所有工厂</b>都脱敏, 不论保密开关 (Steve 2026-11-14 定);
+     * 客户名、价格等其余内容仍按保密开关。
      */
-    static final boolean RECIPE_IN_ALL_FACTORIES = false;
+    static final boolean RECIPE_IN_ALL_FACTORIES = true;
 
     enum Kind {
         CUSTOMER("客户"), SUPPLIER("供应商"), PRODUCT("产品"), PERSON("人员");
