@@ -3983,6 +3983,12 @@ public class IntentKnowledgeBase {
         // ---- 方言/口语表达 ----
         phraseToIntentMapping.put("销售咋整的", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("卖得咋样", "REPORT_DASHBOARD_OVERVIEW");
+        // 2026-11-14 F006 实测: 「这个月卖得怎么样」不在表里, 掉进闲聊被编了「同比增长 8%」
+        // (句首「这个月」由 stripLeadingTimePhrase 剥掉, 时间窗口仍按原话解析)
+        phraseToIntentMapping.put("卖得怎么样", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("卖得如何", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("生意咋样", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("生意如何", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("库存够不够使", "REPORT_INVENTORY");
         phraseToIntentMapping.put("活干完了没", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("人都来了吗", "ATTENDANCE_TODAY");

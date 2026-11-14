@@ -478,7 +478,7 @@ public class CustomerController {
     @GetMapping("/{customerId}/price-memory")
     @Operation(summary = "查询客户记忆价 (S-PRICE-1)",
             description = "客户 × 产品的最近成交单价 + 来源订单号 + 日期. 用于 SO Item 创建时 R1 hint.")
-    public ApiResponse<Map<String, Object>> getCustomerPriceMemory(
+    public ApiResponse<com.cretas.aims.dto.inventory.CustomerPriceMemoryView> getCustomerPriceMemory(
             @Parameter(description = "工厂ID", required = true)
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "客户ID", required = true)
@@ -486,12 +486,11 @@ public class CustomerController {
             @Parameter(description = "产品类型ID (NOT materialId)", required = true)
             @RequestParam @NotBlank String productTypeId) {
         return customerPriceMemoryService.getLatest(factoryId, customerId, productTypeId)
-                .map(row -> ApiResponse.success(Map.<String, Object>of(
-                        "unitPrice", row.getUnitPrice(),
-                        "sourceOrderNumber", row.getSourceOrderNumber() != null ? row.getSourceOrderNumber() : "",
-                        "sourceSalesOrderId", row.getSourceSalesOrderId(),
-                        "orderDate", row.getOrderDate().toString()
-                )))
+                .map(row -> ApiResponse.success(new com.cretas.aims.dto.inventory.CustomerPriceMemoryView(
+                        row.getUnitPrice(),
+                        row.getSourceOrderNumber() != null ? row.getSourceOrderNumber() : "",
+                        row.getSourceSalesOrderId(),
+                        row.getOrderDate().toString())))
                 .orElseGet(() -> ApiResponse.success(null));
     }
 

@@ -84,6 +84,18 @@ public class SseStreamingService {
     static final String CONVERSATIONAL_EGRESS_SITE = "conversational-reply-stream";
     static final String MINI_EGRESS_SITE = "f006-boss-question";
     static final String EGRESS_REFUSED_REPLY = "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
+
+    /**
+     * 闲聊 / 咨询 / F006 老板提问 (都没有工具查询结果) 的业务事实护栏, 与普通入口同一个类。
+     * 流式回复先攒齐、过闸后才下发, 被拦的回复一个 token 也不会到用户那里。默认实例保证裸构造的单测也走闸。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.ChatBusinessFactGuard chatBusinessFactGuard =
+            new com.cretas.aims.ai.grounding.ChatBusinessFactGuard();
+
+    static final String CHAT_FACT_GUARD_SITE = "conversational-no-data-stream";
+    static final String MINI_FACT_GUARD_SITE = "f006-boss-question";
+    static final String GENERATING_PROGRESS_MESSAGE = "正在生成回答...";
     private final DashScopeConfig dashScopeConfig;
 
     @Autowired(required = false)
@@ -492,7 +504,13 @@ public class SseStreamingService {
                             && aiIntentService.getIntentByCode(factoryId, "FOOD_KNOWLEDGE_QUERY")
                                     .filter(config -> Boolean.TRUE.equals(config.getIsActive())).isPresent();
 
-                    if (!isAnalysis && !isFood) {
+                    // 业务问法 (「这个月卖得怎么样」) 不进闲聊 / 老板提问模型: 交给下面的识别, 识别不出就是澄清候选
+                    boolean isBusiness = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(userInput);
+                    if (isBusiness) {
+                        log.info("[ChatBusinessFactGuard] Stream: 业务问法不进闲聊, 交给意图识别: questionType={}",
+                                earlyQuestionType);
+                    }
+                    if (!isAnalysis && !isFood && !isBusiness) {
                         log.info("Stream: 早期检测到{}，使用流式 LLM 回复", earlyQuestionType);
                         streamConversationalResponse(emitter, factoryId, userId, userRole,
                                 request.getSessionId(), userInput, earlyQuestionType,
@@ -1701,8 +1719,10 @@ public class SseStreamingService {
         }
         String systemPrompt;
         if (questionType == QuestionType.GENERAL_QUESTION) {
-            systemPrompt = """
-                你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或食品安全的通用咨询问题。
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES + """
+
+                用户正在询问一个关于生产管理、质量控制或食品安全的通用咨询问题。
 
                 请根据以下原则回答：
                 1. 提供专业、实用的建议
@@ -1714,8 +1734,10 @@ public class SseStreamingService {
                 注意：这不是一个具体的系统操作指令，而是通用知识咨询。
                 """;
         } else {
-            systemPrompt = """
-                你是白垩纪AI Agent的智能助手。用户发起了一个日常对话。
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES + """
+
+                用户发起了一个日常对话。
 
                 请根据以下原则回答：
                 1. 友好、亲切地回应
@@ -1758,21 +1780,25 @@ public class SseStreamingService {
                 "thinking", useThinking,
                 "questionType", questionType.name()));
 
-        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
-            try {
-                emitter.send(SseEmitter.event().name("token").data(token));
-            } catch (Exception e) {
-                log.debug("Client disconnected during stream token");
-            }
-        });
+        // 模型的 token 先攒在这里不下发: 整段过了业务事实护栏才发给用户 (被拦的回复一个字也不出去)
+        StringBuilder held = new StringBuilder();
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
+                redacted.streamRestorer(held::append);
+        // 攒的这段时间用户看不到 token: 先发 progress (沿用既有事件类型), 免得首字等待像卡住
+        sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
         try {
             dashScopeClient.chatCompletionStream(aiRequest,
                 restorer,
                 response -> {
                     try {
                         restorer.flush();
-                        String fullContent = response.getContent() != null
-                                ? redacted.restore(response.getContent()) : "";
+                        String modelContent = response.getContent() != null
+                                ? redacted.restore(response.getContent()) : held.toString();
+                        String fullContent = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput,
+                                modelContent, questionType == QuestionType.GENERAL_QUESTION);
+                        if (!fullContent.isEmpty()) {
+                            sendSseEvent(emitter, "token", fullContent);
+                        }
                         Integer tokensUsed = response.getUsage() != null
                                 ? response.getUsage().getTotalTokens() : null;
                         String finishReason = response.getChoices() != null && !response.getChoices().isEmpty()
@@ -1838,14 +1864,16 @@ public class SseStreamingService {
                     .executedAt(LocalDateTime.now()).build(), startTime);
             return;
         }
-        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer = redacted.streamRestorer(token -> {
-            try {
-                sendSseEvent(emitter, "token", token);
-            } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
-            }
-        });
+        // 老板提问同样没有工具查询结果: token 先攒着, 整段过了业务事实护栏才下发
+        StringBuilder held = new StringBuilder();
+        com.cretas.aims.service.consent.LlmEgressRedactor.StreamRestorer restorer =
+                redacted.streamRestorer(held::append);
         try {
+            try {
+                sendSseEvent(emitter, "progress", Map.of("stage", "generating", "message", GENERATING_PROGRESS_MESSAGE));
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e); // 客户端断开: 走下面的断开出口, 不当成上游失败
+            }
             var answer = f006BossQuestionClient.stream(factoryId, userId, userRole, redacted.text(0), thinking,
                     metadata -> {
                         try {
@@ -1858,7 +1886,15 @@ public class SseStreamingService {
                         }
                     }, restorer, cancellation);
             restorer.flush();
-            String content = redacted.restore(answer.content());
+            String content = chatBusinessFactGuard.enforce(MINI_FACT_GUARD_SITE, userInput,
+                    redacted.restore(answer.content()), true);
+            if (content != null && !content.isEmpty()) {
+                try {
+                    sendSseEvent(emitter, "token", content);
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e); // 客户端断开: 不发结果, 走下面的断开出口
+                }
+            }
             Map<String, Object> source = new LinkedHashMap<>();
             source.put("provider", answer.provider());
             source.put("model", answer.model());

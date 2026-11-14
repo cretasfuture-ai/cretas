@@ -1250,7 +1250,7 @@ async function fetchPriceMemory(item: TableRow, productTypeId: string) {
       `/${factoryId.value}/customers/${form.value.customerId}/price-memory`,
       { params: { productTypeId } },
     );
-    item.priceMemoryHint = (res.success && res.data) ? res.data : null;
+    item.priceMemoryHint = (res.success && res.data && res.data.unitPrice != null) ? res.data : null;
   } catch {
     // 静默失败 — hint 是 UX nice-to-have, 不阻塞下单
     item.priceMemoryHint = null;
