@@ -162,6 +162,10 @@ public class SseStreamingService {
     @Autowired(required = false)
     private AIIntentConfigRepository intentConfigRepository;
 
+    /** 短语快捷通道判否定说法用 (与 /execute 同一个服务)。裸构造的单测缺席时不做否定判断。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.QueryPreprocessorService queryPreprocessorService;
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -468,8 +472,15 @@ public class SseStreamingService {
                     && streamFollowUpConfirmation(emitter, factoryId, request, userId, userRole, startTime)) {
                 return;
             }
+            // 1.4. 短语快捷通道 —— 与 /execute (IntentExecutionOrchestrator 0.2) 同一张短语表、同一条优先级:
+            //      整句命中已知短语 (「先看下库存」→ REPORT_INVENTORY) 就定这个意图, 不再去问决策层。
+            //      2026-11-14 F006 实测: 流式缺这一步, 同一句话被决策层判成 MATERIAL_BATCH_QUERY, 与普通入口分叉。
+            //      命中后下面的缓存 / 早期问题类型 / 识别都跳过, 但意图权限、缺参追问、写确认照常在第 5-7 步。
+            IntentMatchResult phraseShortcut = factoryPackConstrained
+                    ? null : tryPhraseShortcut(factoryId, userInput);
+
             // 1.5. 早期问题类型检测
-            if (!factoryPackConstrained && userInput != null && !userInput.isEmpty()) {
+            if (!factoryPackConstrained && phraseShortcut == null && userInput != null && !userInput.isEmpty()) {
                 QuestionType earlyQuestionType = knowledgeBase.detectQuestionType(userInput);
                 if (earlyQuestionType == QuestionType.GENERAL_QUESTION ||
                     earlyQuestionType == QuestionType.CONVERSATIONAL) {
@@ -493,7 +504,7 @@ public class SseStreamingService {
 
             // 2. 查询语义缓存
             // 第 3b 步: 带最近对话的轮次也不读语义缓存 (缓存键只有工厂+原话, 不含上下文)。
-            boolean skipCacheForScopedRequest = factoryPackConstrained
+            boolean skipCacheForScopedRequest = factoryPackConstrained || phraseShortcut != null
                     || !recentTurns(request).isEmpty();
             SemanticCacheHit cacheHit = skipCacheForScopedRequest
                     ? SemanticCacheHit.miss(0L)
@@ -526,7 +537,9 @@ public class SseStreamingService {
             ));
 
             IntentMatchResult matchResult;
-            try {
+            if (phraseShortcut != null) {
+                matchResult = phraseShortcut;
+            } else try {
                 // spec §8.2 洞②: 流式路径同样把 tab 模式带进识别层, 否则咨询 tab 走 SSE 时
                 // 候选集里仍然留着写意图 (多意图执行/兜底重排会用到它们)。
                 Long recognizerUserId = trustedFactoryActor ? userId : null;
@@ -728,6 +741,52 @@ public class SseStreamingService {
             } catch (Exception ignored) {
             }
             emitter.completeWithError(e);
+        }
+    }
+
+    /**
+     * 短语快捷通道 (与 {@code IntentExecutionOrchestrator#tryOrchestratorPhraseShortcut} 同一张表、同一个置信度 0.96)。
+     * 否定说法 (别查库存了 / 不要报工) 一律不抢: 交给识别管线自己的否决闸。
+     * 短语指向的意图在本厂没有配置 / 已退役 / 需要特殊解析 (采购) 时返回 null, 照常识别。
+     */
+    private IntentMatchResult tryPhraseShortcut(String factoryId, String userInput) {
+        if (userInput == null || userInput.isBlank()) {
+            return null;
+        }
+        try {
+            if (queryPreprocessorService != null && queryPreprocessorService.detectNegationVeto(userInput, knowledgeBase)
+                    != com.cretas.aims.service.QueryPreprocessorService.NegationKind.NONE) {
+                return null;
+            }
+            Optional<String> phrase = knowledgeBase.matchPhrase(userInput.toLowerCase().trim(), "FACTORY");
+            if (phrase.isEmpty()) {
+                return null;
+            }
+            String code = phrase.get();
+            if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(code)) {
+                return null;
+            }
+            code = com.cretas.aims.ai.catalog.FactoryIntentCatalog.canonicalCode(code);
+            if ("PURCHASE_ORDER_CREATE".equals(code)) {
+                return null;
+            }
+            Optional<AIIntentConfig> configured = resolveStreamingIntentByCode(factoryId, code);
+            if (configured.isEmpty() && factoryId != null && !factoryId.isBlank()) {
+                configured = aiIntentService.getIntentByCode(code);
+            }
+            if (configured == null || configured.isEmpty()) {
+                return null;
+            }
+            log.info("[SSE-EarlyPhrase] phrase shortcut: input='{}', intentCode={}", userInput, code);
+            return IntentMatchResult.builder()
+                    .userInput(userInput)
+                    .bestMatch(configured.get())
+                    .confidence(0.96)
+                    .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
+                    .build();
+        } catch (Exception e) {
+            log.debug("[SSE-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
+            return null;
         }
     }
 
