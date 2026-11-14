@@ -324,6 +324,14 @@ public final class ThresholdKeys {
      */
     public static final String QUALITY_INSPECTION_FAIL_SCOPE = "quality.inspection.fail_scope";
 
+    /**
+     * 迁移 P5 数据疑点「单位明显不符」上限 (kg, 小数): 整合 / 称重报工的投入或良品换成 kg 后 ≥ 它 ⇒ 标「像是把克当成了千克」。
+     * 默认 5000; 大厂单笔真有 5 吨以上的按厂调大。只标疑点不挡动作 ⇒ 不是闸门类。
+     */
+    public static final String PRODUCTION_DATA_SUSPECT_MAX_WEIGHT_KG = "production.data_suspect.max_weight_kg";
+    /** 迁移 P5 数据疑点下限 (kg, 小数): 整合 / 称重报工投入 &lt; 它 ⇒ 标「像是把吨当成了千克」。默认 0.1。不是闸门类。 */
+    public static final String PRODUCTION_DATA_SUSPECT_MIN_INPUT_KG = "production.data_suspect.min_input_kg";
+
     // ==================== 闸门类阈值登记 (GATING) ====================
 
     /**
@@ -365,6 +373,8 @@ public final class ThresholdKeys {
      *       <b>全仓没有任何调用点</b>（2026-08-29 实测：除本文件外 0 处引用）。
      *       等它真被接上执行链的那天再登记；现在登记只会让人以为它生效了。</li>
      *   <li>所有 {@code *.red} / {@code *.yellow} —— 按定义就是染色，不挡动作</li>
+     *   <li>{@link #PRODUCTION_DATA_SUSPECT_MAX_WEIGHT_KG} / {@link #PRODUCTION_DATA_SUSPECT_MIN_INPUT_KG}
+     *       —— 只给报工标「数据疑点」, 不挡报工</li>
      * </ul>
      *
      * @since 2026-08-29

@@ -56,6 +56,9 @@ public class CustomerMaterialArrivalReceiptRequest {
     @Size(max = 500, message = "备注不能超过500个字符")
     private String notes;
 
+    /** 迁移 P5 R35: 到期日已早于今天仍要入库时必填的原因 (记入批次 expired_on_create_reason)。 */
+    private String expiredReason;
+
     /** True only when warehouse confirms no more truck loads are expected for this notice. */
     private Boolean completeNotice = false;
 }

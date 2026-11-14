@@ -194,6 +194,8 @@ export interface CreateCustomerSuppliedReceiptRequest {
   expireDate?: string;
   originPlace?: string;
   notes?: string;
+  /** 迁移 P5 R35：到期日已早于今天仍要入库时必填的原因（记入批次）。 */
+  expiredReason?: string;
   idempotencyKey: string;
 }
 
@@ -263,6 +265,8 @@ export interface CreateCustomerMaterialArrivalReceiptRequest {
   boxCount?: number;
   originPlace?: string;
   notes?: string;
+  /** 迁移 P5 R35：到期日已早于今天仍要入库时必填的原因（记入批次）。 */
+  expiredReason?: string;
   completeNotice: boolean;
 }
 

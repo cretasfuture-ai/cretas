@@ -68,6 +68,7 @@ public class MaterialBatchMapper {
                 .storageLocation(batch.getStorageLocation())
                 .qualityCertificate(batch.getQualityCertificate())
                 .notes(batch.getNotes())
+                .expiredOnCreateReason(batch.getExpiredOnCreateReason())
                 .factoryNumber(batch.getFactoryNumber())
                 .originPlace(batch.getOriginPlace())
                 // 来源个体 (V20261101_42) —— 上面那个 builder 是全仓**唯一**一处 DTO 构造点

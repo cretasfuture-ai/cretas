@@ -119,6 +119,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired
     private WorkflowTaskPortRepository workflowTaskPortRepository;
 
+    /** 工艺参数产品标准: 取本任务所属运行时实例(=计划锁定的工艺版本快照)里的画布参数; 未注入 = 旧行为。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.workflow.ProductionWorkflowInstanceRepository workflowInstanceRepo;
+
     @Autowired
     private com.cretas.aims.service.production.TaskMaterialBatchPickerService taskMaterialBatchPickerService;
 
@@ -136,6 +140,11 @@ public class YieldReportServiceImpl implements YieldReportService {
 
     @Autowired(required = false)
     private BackdateWindowValidator backdateWindowValidator;
+
+    /** 迁移 P5 R36 的「现在」; 测试可替换。 */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void setClock(java.time.Clock clock) { this.clock = clock; }
 
     /** Process-parameter deviation case hook; optional for old constructor-based unit fixtures. */
     @Autowired(required = false)
@@ -301,6 +310,14 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (backdateWindowValidator != null) {
             backdateWindowValidator.assertWithinWindow(factoryId, req.getBusinessDate(), "报工");
         }
+        // 迁移 P5: 皮重 ≥ 0 且净重不为负; R36 称重起止时间不晚于现在 5 分钟以上 (前端字段旁也提示, 这里兜底)
+        com.cretas.aims.service.yield.WeighingEntryRules.assertTare(req.getTareWeight(), req.getOutputQuantity(),
+                req.getTareWeight() == null || com.cretas.aims.service.unit.impl.UnitContractServiceImpl
+                        .describeBuiltIn(req.getOutputUnit())
+                        .map(u -> u.dimension() == com.cretas.aims.service.unit.UnitDimension.MASS)
+                        .orElse(false));
+        com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
+                req.getBusinessDate(), req.getLaborSegments(), clock);
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -461,7 +478,7 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 工艺参数 (App 产出报工录入): 与 web 工序表同口径 —— 未配置的键 400, 超标不拦, 服务端按当时标准留快照。
         Map<String, Object> processParams = processParamsForReport(req, reportKind, costWp);
         List<Map<String, Object>> paramChecks = processParams == null ? null
-                : ProcessParamCheck.evaluate(costWp.getCustomFieldSchema(), processParams);
+                : ProcessParamCheck.evaluate(standardsSchema(factoryId, costWp, t), processParams);
 
         ProductionReport r = ProductionReport.builder()
                 .factoryId(factoryId).batchId(batchId).reportType(YIELD)
@@ -477,6 +494,8 @@ public class YieldReportServiceImpl implements YieldReportService {
                 .outputQuantity(effOutput).outputUnit(effOutputUnit)
                 // 不良品数 (质量账)。null 原样传 null —— ⛔ 不兜底成 0。
                 .defectQuantity(req.getDefectQuantity())
+                // 迁移 P5: 皮重单独留痕; 产出阶段才有良品, INPUT/SEGMENT 不收
+                .tareWeight((isInput || isSegment) ? null : req.getTareWeight())
                 // 良品数只有在<b>有人清点过不良品</b>时才是真读数。没清点就是不知道 —— ⛔ 不许用产出量顶替。
                 //
                 // 见 V20260826_05/06 与 GoodQuantityIsNotFabricatedContractTest:
@@ -1313,6 +1332,25 @@ public class YieldReportServiceImpl implements YieldReportService {
             if (byproductMaps != null) m.put("byproducts", byproductMaps);
             return m;
         }).collect(Collectors.toList());
+    }
+
+    /**
+     * 判超标用的 schema: 工序 customFieldSchema + 本任务所属运行时实例(计划锁定的产品工艺版本)里该工序节点的
+     * 画布参数标准覆盖; 画布没配、找不到实例/节点 → 原 schema(旧行为)。
+     */
+    private List<Map<String, Object>> standardsSchema(String factoryId, WorkProcess wp, WorkProcessTask task) {
+        List<Map<String, Object>> schema = wp == null ? null : wp.getCustomFieldSchema();
+        if (schema == null || workflowInstanceRepo == null
+                || task == null || task.getWorkflowInstanceId() == null) {
+            return schema;
+        }
+        // 带 factory_id 且按本任务所属批次查, 再核对就是任务指向的那个实例: 不信一个裸 id
+        return workflowInstanceRepo.findByFactoryIdAndProductionBatchId(factoryId, task.getProductionBatchId())
+                .filter(inst -> task.getWorkflowInstanceId().equals(inst.getId()))
+                .map(inst -> com.cretas.aims.entity.workprocess.ProcessParamStandards.overlay(schema,
+                        com.cretas.aims.entity.workprocess.ProcessParamStandards.paramsOf(
+                                inst.getNodesJson(), task.getWorkflowNodeId(), task.getWorkProcessId())))
+                .orElse(schema);
     }
 
     /**

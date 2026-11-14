@@ -27,6 +27,7 @@ import AttachmentList from '@/components/attachment/AttachmentList.vue';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { displayUnit } from '@/utils/unitPricing';
 import { fmtQty } from '@/utils/tableFormatters';
+import { expiredDays, expiredHint, expiredReasonError } from './expiredBatch';
 import {
   defaultPurchaseReceiveWarehouseId,
   purchaseReceiveWarehouseOptions,
@@ -162,6 +163,8 @@ const arrivalForm = ref({
   boxCount: undefined as number | undefined,
   originPlace: '',
   notes: '',
+  // P5 R35：到期日已过仍要入库的原因（记在批次上）
+  expiredReason: '',
   completeNotice: true,
   idempotencyKey: '',
 });
@@ -225,6 +228,8 @@ const customerForm = ref({
   expireDate: '',
   originPlace: '',
   notes: '',
+  // P5 R35：到期日已过仍要入库的原因（记在批次上）
+  expiredReason: '',
 });
 const form = ref({
   purchaseOrderId: '',
@@ -812,6 +817,7 @@ async function openCustomerReceive(task: CustomerSuppliedReceivingTask) {
       expireDate: '',
       originPlace: '',
       notes: '',
+      expiredReason: '',
     };
     customerDialogVisible.value = true;
   } catch (error) {
@@ -839,15 +845,18 @@ async function confirmCustomerReceipt() {
     ElMessage.error('存在上传失败的附件，请重试或删除后再确认入库');
     return;
   }
+  customerExpiredTouched.value = true;
+  if (customerExpiredErr.value) return ElMessage.warning(customerExpiredErr.value);
   customerConfirming.value = true;
   try {
     await ElMessageBox.confirm(
-      `销售订单：${task.salesOrderNo}\n客户：${task.customerName}\n物料：${line.materialName}\n本次实收：${fmtQty(quantity)}${displayUnit(line.unit)}\n所有权：客户所有（仅限该客户/订单）\n\n确认后将直接生成客户所有库存批次；重复请求不会重复入库。`,
+      `销售订单：${task.salesOrderNo}\n客户：${task.customerName}\n物料：${line.materialName}\n本次实收：${fmtQty(quantity)}${displayUnit(line.unit)}\n所有权：客户所有（仅限该客户/订单）${expiredConfirmLine(customerForm.value)}\n\n确认后将直接生成客户所有库存批次；重复请求不会重复入库。`,
       '确认客户来料入库',
       { type: 'warning', confirmButtonText: '确认客户来料入库', cancelButtonText: '返回核对' },
     );
     const response = await createCustomerSuppliedReceipt(props.factoryId, task.taskId, {
       ...customerForm.value,
+      expiredReason: expiredReasonToSend(customerForm.value),
       unit: line.unit,
       idempotencyKey: customerIdempotencyKey.value,
     });
@@ -872,13 +881,32 @@ async function openArrivalReceive(task: CustomerMaterialArrivalTask) {
       warehouseId: defaultPurchaseReceiveWarehouseId(warehouseOptions.value, null),
       receivedQuantity: 0, unit: '', productionDate: '', expireDate: '',
       externalBatchNumber: '', contractNumber: '', factoryNumber: '',
-      boxCount: undefined, originPlace: '', notes: '', completeNotice: true,
+      boxCount: undefined, originPlace: '', notes: '', expiredReason: '', completeNotice: true,
       idempotencyKey: `arrival-${task.taskId}-${Date.now().toString(36)}`,
     };
     arrivalDialogVisible.value = true;
   } finally {
     openingTaskId.value = '';
   }
+}
+
+// ── P5 R35：到期日已过的批次允许入库，但要确认并写原因（服务端同口径兜底 409）──
+const EXPIRED_REASON_PRESETS = ['客户坚持送货，退回前暂存', '等质检判定是否可用', '已冷冻，保质期按冷冻品重新核定', '供应商补换货前暂存'];
+const arrivalExpiredTouched = ref(false);
+const customerExpiredTouched = ref(false);
+const arrivalExpiredErr = computed(() => (arrivalExpiredTouched.value
+  ? expiredReasonError(arrivalForm.value.expireDate, arrivalForm.value.expiredReason, new Date()) : ''));
+const customerExpiredErr = computed(() => (customerExpiredTouched.value
+  ? expiredReasonError(customerForm.value.expireDate, customerForm.value.expiredReason, new Date()) : ''));
+watch(arrivalDialogVisible, (v) => { if (v) arrivalExpiredTouched.value = false; });
+watch(customerDialogVisible, (v) => { if (v) customerExpiredTouched.value = false; });
+function expiredConfirmLine(f: { expireDate: string; expiredReason: string }): string {
+  const d = expiredDays(f.expireDate, new Date());
+  return d > 0 ? `\n⚠️ 该批次到期日 ${f.expireDate} 已过期 ${d} 天，仍要入库\n原因：${f.expiredReason.trim()}` : '';
+}
+/** 没过期不传原因（服务端也不存）。 */
+function expiredReasonToSend(f: { expireDate: string; expiredReason: string }): string | undefined {
+  return expiredDays(f.expireDate, new Date()) > 0 ? f.expiredReason.trim() : undefined;
 }
 
 function onArrivalMaterialChange() {
@@ -908,10 +936,12 @@ async function confirmArrivalReceipt() {
   if (!arrivalForm.value.materialTypeId) return ElMessage.warning('请选择现场实际收到的原料');
   if (!arrivalForm.value.warehouseId) return ElMessage.warning('请选择实际入库仓库');
   if (!(Number(arrivalForm.value.receivedQuantity) > 0)) return ElMessage.warning('本次实收必须大于 0');
+  arrivalExpiredTouched.value = true;
+  if (arrivalExpiredErr.value) return ElMessage.warning(arrivalExpiredErr.value);
   arrivalConfirming.value = true;
   try {
     await ElMessageBox.confirm(
-      `申请：${task.sourceNumber}\n原因：${arrivalReasonLabel(task)}\n关联客户：${task.customerName || '不关联客户'}\n物料：${arrivalForm.value.materialName}\n实收：${fmtQty(arrivalForm.value.receivedQuantity)}${displayUnit(arrivalForm.value.unit)}\n所有权：${arrivalOwnershipLabel(task)}\n\n确认后直接生成原料库存批次，不触发来料质检。`,
+      `申请：${task.sourceNumber}\n原因：${arrivalReasonLabel(task)}\n关联客户：${task.customerName || '不关联客户'}\n物料：${arrivalForm.value.materialName}\n实收：${fmtQty(arrivalForm.value.receivedQuantity)}${displayUnit(arrivalForm.value.unit)}\n所有权：${arrivalOwnershipLabel(task)}${expiredConfirmLine(arrivalForm.value)}\n\n确认后直接生成原料库存批次，不触发来料质检。`,
       '确认无订单入库',
       { type: 'warning', confirmButtonText: '确认入库', cancelButtonText: '返回核对' },
     );
@@ -922,6 +952,7 @@ async function confirmArrivalReceipt() {
       factoryNumber: blankToUndefined(arrivalForm.value.factoryNumber),
       originPlace: blankToUndefined(arrivalForm.value.originPlace),
       notes: blankToUndefined(arrivalForm.value.notes),
+      expiredReason: expiredReasonToSend(arrivalForm.value),
     });
     if (!response.success) return;
     ElMessage.success(arrivalForm.value.completeNotice
@@ -1297,6 +1328,14 @@ defineExpose({ loadTasks });
             <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="arrivalForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
             <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="arrivalForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
           </el-row>
+          <template v-if="expiredDays(arrivalForm.expireDate, new Date()) > 0">
+            <p class="expired-hint" data-testid="arrivalForm-expired-hint">{{ expiredHint(arrivalForm.expireDate, new Date()) }}</p>
+            <el-form-item label="已过期原因（必填）" :error="arrivalExpiredErr" required>
+              <el-select v-model="arrivalForm.expiredReason" filterable allow-create default-first-option placeholder="选一个，或直接写" style="width: 100%" data-testid="arrivalForm-expired-reason">
+                <el-option v-for="r in EXPIRED_REASON_PRESETS" :key="r" :label="r" :value="r" />
+              </el-select>
+            </el-form-item>
+          </template>
           <el-form-item label="外部批次号"><el-input v-model="arrivalForm.externalBatchNumber" maxlength="100" /></el-form-item>
           <el-form-item label="合同号"><el-input v-model="arrivalForm.contractNumber" maxlength="100" /></el-form-item>
           <el-row :gutter="12">
@@ -1464,6 +1503,14 @@ defineExpose({ loadTasks });
             <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="customerForm.productionDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>
             <el-col :span="12"><el-form-item label="到期日期"><el-date-picker v-model="customerForm.expireDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" /></el-form-item></el-col>
           </el-row>
+          <template v-if="expiredDays(customerForm.expireDate, new Date()) > 0">
+            <p class="expired-hint" data-testid="customerForm-expired-hint">{{ expiredHint(customerForm.expireDate, new Date()) }}</p>
+            <el-form-item label="已过期原因（必填）" :error="customerExpiredErr" required>
+              <el-select v-model="customerForm.expiredReason" filterable allow-create default-first-option placeholder="选一个，或直接写" style="width: 100%" data-testid="customerForm-expired-reason">
+                <el-option v-for="r in EXPIRED_REASON_PRESETS" :key="r" :label="r" :value="r" />
+              </el-select>
+            </el-form-item>
+          </template>
           <el-form-item label="产地"><el-input v-model="customerForm.originPlace" maxlength="200" /></el-form-item>
           <el-form-item label="备注"><el-input v-model="customerForm.notes" type="textarea" :rows="2" maxlength="500" /></el-form-item>
         </el-form>
@@ -1486,6 +1533,7 @@ defineExpose({ loadTasks });
 </template>
 
 <style scoped>
+.expired-hint { margin: 0 0 6px; color: var(--cs-warning); font-size: var(--cs-type-caption); }
 .receiving-task-panel { margin-bottom: 18px; }
 .task-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
 .task-heading h3 { margin: 0 0 4px; font-size: 17px; }
