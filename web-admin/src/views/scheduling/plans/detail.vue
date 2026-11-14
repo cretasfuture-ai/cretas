@@ -284,7 +284,7 @@ function updateGanttChart() {
     const endTime = new Date(s.plannedEndTime).getTime();
     const prob = s.predictedCompletionProb || 0;
 
-    let color = CS_TOKENS.primary; // 默认蓝色
+    let color: string = CS_TOKENS.primary; // 默认蓝色
     if (s.status === 'completed') {
       color = '#67C23A'; // 绿色
     } else if (s.status === 'in_progress') {
