@@ -223,5 +223,5 @@ function filterNode(node: { data?: SkuCascaderNode; text?: string }, keyword: st
 .submenu-search { width: 260px; padding: 2px 0; cursor: text; }
 :deep(.el-cascader-node:has(.submenu-search)) { padding: 4px 12px; }
 :deep(.el-cascader-menu__item.create-option),
-:deep(.el-cascader-node[aria-label*="现场创建"]) { color: #409eff; font-weight: 600; }
+:deep(.el-cascader-node[aria-label*="现场创建"]) { color: var(--el-color-primary); font-weight: 600; }
 </style>

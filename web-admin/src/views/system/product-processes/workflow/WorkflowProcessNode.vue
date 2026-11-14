@@ -598,7 +598,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   width: 58px; margin-left: 4px; padding: 2px 6px; font-size: 11px;
   border: 1px solid #dcdfe6; border-radius: 4px; text-align: right; background: #fff;
 }
-.share-input:focus { outline: none; border-color: #409eff; }
+.share-input:focus { outline: none; border-color: var(--el-color-primary); }
 .share-warning { margin: 2px 0 4px; color: #b7791f; font-size: 11px; }
 .time-limit-badge {
   grid-column: 1 / -1; justify-self: start; padding: 0 6px; border-radius: 4px;
@@ -609,7 +609,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   padding: 1px 8px; border: 1px solid #b9d8f4; border-radius: 4px;
   background: #fff; color: #1b65a8; font-size: 12px; cursor: pointer;
 }
-.time-limit-config:hover { border-color: #409eff; background: #eef6ff; }
+.time-limit-config:hover { border-color: var(--el-color-primary); background: #eef6ff; }
 .pending-section { margin: 6px 0; padding: 6px 8px; border: 1px solid #dfe6ee; border-radius: 6px; background: #fbfcfe; }
 .pending-section.has-pending { border-color: #e6a23c; background: #fffaf0; }
 .pending-badge { color: #b7791f; font-size: 12px; font-weight: 600; }
@@ -671,7 +671,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
 
 .process-node {
   position: relative;
-  width: 440px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid #409eff;
+  width: 440px; padding: 14px; border: 1px solid #b9d8f4; border-left: 4px solid var(--el-color-primary);
   border-radius: 10px; background: #fff; box-shadow: 0 2px 12px rgba(27, 101, 168, 0.09);
 }
 .process-node.selected { box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); }
@@ -682,7 +682,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   padding: 0 10px; border: 1px solid #b9d8f4; border-radius: 6px; background: #fff;
   color: #1b65a8; cursor: pointer; font-size: 12px; font-weight: 600;
 }
-.quick-edit-process:hover { border-color: #409eff; background: #eef6ff; }
+.quick-edit-process:hover { border-color: var(--el-color-primary); background: #eef6ff; }
 .step-mark { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 7px; color: #1b65a8; background: #eaf4ff; font-weight: 700; }
 .eyebrow { color: #7a8599; font-size: 11px; }
 .process-name { color: #1a2332; font-size: 15px; font-weight: 700; }
@@ -764,7 +764,7 @@ function handleStyle(index: number, count: number): Record<string, string> {
   cursor: pointer; transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
 }
 .port-remove:hover { color: #f56c6c; border-color: #f56c6c; background: #fef0f0; }
-.port-remove:focus-visible { outline: 2px solid #409eff; outline-offset: 1px; }
+.port-remove:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: 1px; }
 .unit-chip {
   display: flex;
   align-items: center;

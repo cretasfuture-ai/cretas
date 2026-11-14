@@ -402,7 +402,7 @@ function handleRefresh() {
           <div class="kpi-sub">{{ kpi.worstSku.name }}</div>
         </el-card>
         <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: #409EFF">
+          <div class="kpi-value" style="color: var(--el-color-primary)">
             {{ kpi.skuCount }}
           </div>
           <div class="kpi-label">SKU数量</div>
@@ -622,7 +622,7 @@ function handleRefresh() {
   color: #303133;
   margin-bottom: 16px;
   padding-left: 10px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--el-color-primary);
 }
 
 .chart-container {

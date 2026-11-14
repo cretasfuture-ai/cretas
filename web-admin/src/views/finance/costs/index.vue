@@ -316,7 +316,7 @@ function getTransactionTypeTag(type: string) {
   }
 
   &.net {
-    border-top: 3px solid #409EFF;
+    border-top: 3px solid var(--el-color-primary);
     .positive { color: #67C23A; }
     .negative { color: #F56C6C; }
   }

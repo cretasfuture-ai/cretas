@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * 调度计划详情页
  * 包含甘特图、排程列表、工人分配、概率监控
@@ -283,7 +284,7 @@ function updateGanttChart() {
     const endTime = new Date(s.plannedEndTime).getTime();
     const prob = s.predictedCompletionProb || 0;
 
-    let color = '#409EFF'; // 默认蓝色
+    let color = CS_TOKENS.primary; // 默认蓝色
     if (s.status === 'completed') {
       color = '#67C23A'; // 绿色
     } else if (s.status === 'in_progress') {
@@ -639,7 +640,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         <div class="card-header">
           <span>排程甘特图</span>
           <div class="legend">
-            <span class="legend-item"><span class="legend-color" style="background: #409EFF"></span>待开始</span>
+            <span class="legend-item"><span class="legend-color" style="background: var(--el-color-primary)"></span>待开始</span>
             <span class="legend-item"><span class="legend-color" style="background: #E6A23C"></span>进行中</span>
             <span class="legend-item"><span class="legend-color" style="background: #67C23A"></span>已完成</span>
             <span class="legend-item"><span class="legend-color" style="background: #F56C6C"></span>延期/风险</span>
@@ -893,7 +894,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
 
   .overview-icon {
     font-size: 32px;
-    color: #409EFF;
+    color: var(--el-color-primary);
   }
 
   .overview-content {

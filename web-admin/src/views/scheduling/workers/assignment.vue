@@ -499,7 +499,7 @@ function getStatusText(status: string) {
     width: 40px;
     height: 40px;
     border-radius: 50%;
-    background: #409EFF;
+    background: var(--el-color-primary);
     display: flex;
     align-items: center;
     justify-content: center;

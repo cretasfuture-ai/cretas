@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -243,7 +244,7 @@ async function saveConfig() {
 
 function getModuleColor(moduleId: string): string {
   const colors: Record<string, string> = {
-    production: '#409EFF',
+    production: CS_TOKENS.primary,
     warehouse: '#67C23A',
     quality: '#E6A23C',
     procurement: '#F56C6C',
@@ -254,7 +255,7 @@ function getModuleColor(moduleId: string): string {
     scheduling: '#ffc53d',
     smartbi: '#597ef7'
   };
-  return colors[moduleId] || '#409EFF';
+  return colors[moduleId] || CS_TOKENS.primary;
 }
 </script>
 

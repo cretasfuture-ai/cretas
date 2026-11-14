@@ -351,7 +351,7 @@ function getSeverityIcon(severity: string) {
   transition: all 0.2s;
 
   &.info {
-    border-left-color: #409EFF;
+    border-left-color: var(--el-color-primary);
   }
 
   &.warning {
@@ -378,7 +378,7 @@ function getSeverityIcon(severity: string) {
     .alert-icon {
       font-size: 24px;
 
-      &.info { color: #409EFF; }
+      &.info { color: var(--el-color-primary); }
       &.warning { color: #E6A23C; }
       &.critical { color: #F56C6C; }
     }
