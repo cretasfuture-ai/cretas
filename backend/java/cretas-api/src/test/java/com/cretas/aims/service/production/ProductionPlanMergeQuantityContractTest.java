@@ -109,6 +109,15 @@ class ProductionPlanMergeQuantityContractTest {
     /** 最后一次交给 createProductionPlan 的请求 —— 断言就看它。 */
     private final List<CreateProductionPlanRequest> capturedRequests = new ArrayList<>();
 
+    /** 建计划读销售单状态改为先锁行再读锁内状态 (lockStatusForUpdate); 桩按本用例用 findById 打好的销售单返回它的状态。 */
+    @BeforeEach
+    void stubSalesOrderStatusLock() {
+        lenient().when(salesOrderRepository.lockStatusForUpdate(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyString()))
+                .thenAnswer(inv -> salesOrderRepository.findById(inv.getArgument(0))
+                        .map(o -> o.getStatus() == null ? null : o.getStatus().name()));
+    }
+
     @BeforeEach
     void setUp() {
         service = new ProductionPlanServiceImpl(

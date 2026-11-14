@@ -267,6 +267,14 @@ public interface ProductionPlanService {
     void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId);
 
     /**
+     * 随销售单取消而取消它自动生成的计划: 计划的行范围 (创建人) 校验改为「这张计划确实属于该销售单」。
+     * 调用方必须已经按操作人的数据范围校验过销售单本身 —— 单子在范围内, 它名下系统生成的计划就不再按
+     * 「计划是谁创建的」二次拦 (否则数据范围为「本人」的取消人, 对别人创建 / 系统创建的计划永远 403, 整单回滚)。
+     * 计划不属于 {@code viaSalesOrderId} 时仍按普通取消校验行范围; 其余闸 (已开工 / 锁定 / 撤回审批中) 不变。
+     */
+    void cancelProductionPlan(String factoryId, String planId, String reason, Long operatorId, String viaSalesOrderId);
+
+    /**
      * @deprecated 计划级 PRODUCTION_REVERSAL 审批流已废弃（结构性死路：workflow 引擎从不回调
      * {@link #executeCancelApproved}，即使回调也只改状态、不恢复库存）。客户需求（六扇门 6.09
      * requirements-catalog §C「工单撤回」）是<b>整单撤回</b>（工单/批次级，非工序级），由

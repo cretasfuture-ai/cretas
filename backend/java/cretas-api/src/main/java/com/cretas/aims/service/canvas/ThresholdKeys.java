@@ -454,7 +454,8 @@ public final class ThresholdKeys {
     private static final java.util.Map<String, java.util.List<String>> ENUM_VALUES = java.util.Map.of(
             SHORTAGE_CASE_CLOSE_MODE, java.util.List.of("MANUAL", "AUTO"),
             PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE, java.util.List.of("NONE", "NET_CONTENT", "FACTORY_UNIT"),
-            QUALITY_INSPECTION_FAIL_SCOPE, java.util.List.of("ANY_ITEM", "MINOR_FOR_REVIEW", "CRITICAL_ONLY"));
+            QUALITY_INSPECTION_FAIL_SCOPE, java.util.List.of("ANY_ITEM", "MINOR_FOR_REVIEW", "CRITICAL_ONLY"),
+            PRODUCTION_RECEIPT_OVER_RECEIVE_MODE, java.util.List.of("BLOCK", "WITHIN_RATE", "ALWAYS_WITH_REASON"));
 
     private static String validateEnumValue(String thresholdKey, String value) {
         java.util.List<String> allowed = ENUM_VALUES.get(thresholdKey);
