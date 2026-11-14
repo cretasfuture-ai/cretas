@@ -284,12 +284,14 @@ async function applyCustomerPrice(line: SalesLine): Promise<void> {
       if (source === 'CUSTOMER') setLineUntaxedPrice(line, price);
       return;
     }
+    // 命中了价目但价格被后端按权限隐藏 (found=true, price=null): 不提示, 也不再去查最近成交价。
+    if (lookup.success && lookup.data?.found) return;
     const memory = await get<{ unitPrice: number; sourceOrderNumber: string } | null>(
       `/${factoryId.value}/customers/${encodeURIComponent(customerId)}/price-memory`,
       { params: { productTypeId: productId }, _silent: true } as never,
     );
     if (stale()) return;
-    if (memory.success && memory.data?.unitPrice != null) {
+    if (memory.success && memory.data && memory.data.unitPrice != null) {
       line.priceHint = { source: 'LAST_DEAL', price: Number(memory.data.unitPrice), ref: String(memory.data.sourceOrderNumber || ''), applied: false };
     }
   } catch {

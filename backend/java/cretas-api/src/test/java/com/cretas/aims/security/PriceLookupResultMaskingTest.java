@@ -87,4 +87,31 @@ class PriceLookupResultMaskingTest {
         Field f = PriceLookupResult.class.getDeclaredField("price");
         assertNotNull(f.getAnnotation(PriceSensitive.class));
     }
+
+    private com.cretas.aims.dto.inventory.CustomerPriceMemoryView runMemory() {
+        var dto = new com.cretas.aims.dto.inventory.CustomerPriceMemoryView(
+                new BigDecimal("12.5000"), "SO-1", "id-1", "2026-11-14");
+        advice.beforeBodyWrite(ApiResponse.success(dto), null, MediaType.APPLICATION_JSON, null, serverRequest, null);
+        return dto;
+    }
+
+    @Test
+    void priceMemoryUnitPriceIsNullForUserWithoutPriceView() {
+        asUser(false);
+        var dto = runMemory();
+        assertNull(dto.getUnitPrice(), "最近成交价同样要按价格权限脱敏 (原 Map.of 永远剥不掉)");
+        assertEquals("SO-1", dto.getSourceOrderNumber());
+    }
+
+    @Test
+    void priceMemoryUnitPriceKeptForUserWithPriceView() {
+        asUser(true);
+        assertEquals(0, new BigDecimal("12.5000").compareTo(runMemory().getUnitPrice()));
+    }
+
+    @Test
+    void priceMemoryFieldCarriesTheSensitiveAnnotation() throws Exception {
+        assertNotNull(com.cretas.aims.dto.inventory.CustomerPriceMemoryView.class
+                .getDeclaredField("unitPrice").getAnnotation(PriceSensitive.class));
+    }
 }

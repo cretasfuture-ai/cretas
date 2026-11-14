@@ -901,7 +901,7 @@ public class SalesServiceImpl implements SalesService {
             if (quotedGrossUnitPrice != null) {
                 priceSource = "QUOTE";
                 priceRef = null;
-            } else if (priceSource != null && !"MANUAL".equals(priceSource)
+            } else if (priceSource != null
                     && !priceMatches(item.getUnitPrice(), priceBeforeStrategy)) {
                 priceSource = "PRICING_STRATEGY";
                 priceRef = null;

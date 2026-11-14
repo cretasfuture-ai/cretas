@@ -32,7 +32,8 @@ public interface PriceListRepository extends JpaRepository<PriceList, String> {
     @Query("SELECT p FROM PriceList p WHERE p.factoryId = :factoryId " +
             "AND p.customerId = :customerId AND p.priceType = :priceType " +
             "AND p.isActive = true AND p.effectiveFrom <= :date " +
-            "AND (p.effectiveTo IS NULL OR p.effectiveTo >= :date)")
+            "AND (p.effectiveTo IS NULL OR p.effectiveTo >= :date) " +
+            "ORDER BY p.createdAt ASC, p.id ASC")
     List<PriceList> findEffectiveForCustomer(@Param("factoryId") String factoryId,
                                               @Param("customerId") String customerId,
                                               @Param("priceType") String priceType,
