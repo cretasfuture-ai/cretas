@@ -65,6 +65,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
   5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
   6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
+  - **执行线收尾归现任**（Steve 2026-11-14）：交班 detach 出去的执行线没有父会话，但仍归现任 organizer 收尾。PR 合并或关闭的会话由应用设置 `auto_archive_on_pr_close`（11-14 已开）自动归档；没有 PR 的线（设计、验收、原型、一次性检查）交付后由现任归档，归档前确认 worktree 干净且没有未推提交。依据：11-14 有 21 个已合并或已交班的会话空闲没人归档，每个占一个 claude 进程（约 100–400MB），这批会话 CLI 合计约 4GB 内存。
   - **会话命名**：organizer「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后的老 organizer「[已交班→第 N+1 任] <原名>」；执行会话「<批次>·<线名>：<做什么>」。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。
 - 换会话时顺带按任务换模型/effort（缓存本来就要重建）；不在长会话中途单独换模型。
