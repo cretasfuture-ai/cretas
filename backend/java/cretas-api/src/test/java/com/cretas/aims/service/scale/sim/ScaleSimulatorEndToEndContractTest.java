@@ -46,7 +46,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>固定样本来自 tools/scale-simulator/fixtures/frames.json (模拟器生成, 单一事实来源)。
  */
-class ScaleSimulatorEndToEndTest {
+class ScaleSimulatorEndToEndContractTest {
 
     private static final String FACTORY = "F006";
     private static final String DEVICE = "SCALE-SIM-1";

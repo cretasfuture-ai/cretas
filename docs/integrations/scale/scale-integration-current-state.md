@@ -44,7 +44,7 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 
 ## 4. 种子协议配置的真实状态（`V2026_01_04_11__scale_initial_data.sql`）
 
-用 `ScaleSeedConformanceTest` 钉住（它测的是「种子现在仍是坏的」，不是通过证明）：
+用 `ScaleSeedConformanceContractTest` 钉住（它测的是「种子现在仍是坏的」，不是通过证明）：
 
 | 协议 | 种子配置能否读出自己的样例帧 | 问题 |
 |---|---|---|
@@ -63,7 +63,7 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 | 编号 | 缺口 | 状态 | 怎么验 / 补 |
 |---|---|---|---|
 | G1 | 没有串口/TCP→MQTT 网关（读 RS232/RS485 帧、切帧、解析、发 MQTT 的进程） | **未实现**；测试里 `ScaleGatewayBridge` 只是按设计意图补的替身 | 需要 Steve/现场定：网关跑在哪（工位电脑 / 树莓派 / 串口服务器透传到后端），再实现。现场联调前必须先有它 |
-| G2 | 种子协议配置与样例帧不符（§4）；Modbus 数据类型与实现不符 | 未修，已钉住 | 真秤抓帧 → 迁移修种子 → 删 `ScaleSeedConformanceTest` 对应断言并把模拟器测试切回种子 |
+| G2 | 种子协议配置与样例帧不符（§4）；Modbus 数据类型与实现不符 | 未修，已钉住 | 真秤抓帧 → 迁移修种子 → 删 `ScaleSeedConformanceContractTest` 对应断言并把模拟器测试切回种子 |
 | G3 | 秤断线后最近一条旧读数仍被报工采用（读数不判新旧） | 未修；`knownGapStaleReadingAfterDisconnectIsStillUsed` 钉住 | 需业务定「多久算过期」：若秤只在重量变化时才发消息（`read_mode=ON_CHANGE`），一刀切的过期阈值会误伤正常称重。真秤上量清它的发送节奏后再定 |
 | G4 | Modbus 无稳定位，实现默认「稳定」 | 未修 | 真秤上确认是否有状态寄存器；没有的话稳定性要靠读数连续 N 次一致来判 |
 | G5 | 两套解析实现并存（内联 vs `FrameParserFactory`） | 未合并 | 合并前需逐协议对比行为（柯力 `frameLength` 之类种子值两边解释不同）；建议真秤联调后一并做 |
@@ -83,4 +83,4 @@ WorkstationCountingService.readScaleWeight   (读该设备最近一条 iot_devic
 4. `MqttSubscriber`：称重消息没有数字型 `weight` → 不再当 0 kg 更新最近读数（原样存档）。
 5. `readScaleWeight`：设备明确报 `stable:false` 的读数不进报工（没有 `stable` 字段的设备行为不变）。**这是产品行为变化**，如不要可单独回退这一条。
 
-测试：`ScaleSimulatorFixtureParseTest`（30 个模拟器场景走线上解析入口）、`ScaleSimulatorEndToEndTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleSeedConformanceTest`（3 条棘轮）。变异验证：把三处生产代码回退后 45 条里 14 条变红。
+测试：`ScaleSimulatorFixtureParseContractTest`（30 个模拟器场景走线上解析入口）、`ScaleSimulatorEndToEndContractTest`（12 条：TCP → 网关替身 → 解析 → `MqttSubscriber` → `WorkstationCountingService.manualCount` 的重量，含断线重连、坏帧不变 0、单位换算）、`ScaleSeedConformanceContractTest`（3 条棘轮）。变异验证：把三处生产代码回退后 45 条里 14 条变红。

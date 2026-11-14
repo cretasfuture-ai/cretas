@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 哪天有人用迁移修好了种子, 这里会红, 提醒他把模拟器测试切回种子配置并删掉本类对应断言。
  * 修种子必须等真秤抓到真实帧再改, 照样例帧猜着改没有意义。
  */
-class ScaleSeedConformanceTest {
+class ScaleSeedConformanceContractTest {
 
     private static final String KELI_SAMPLE_HEX = "2B303031323430206B6720530D0A";      // 种子 sample_data_hex
     private static final String YAOHUA_SAMPLE_HEX = "3D2B30303132352E3430206B6720530D0A";

@@ -103,7 +103,7 @@ public final class ScaleSimSupport {
                 mock(ScaleProtocolTestCaseRepository.class), MAPPER);
     }
 
-    /** 模拟器三条协议的配置: Modbus 取种子; 柯力/耀华用「按样例帧对齐」的拟议配置 (种子本身对不上, 见现状文档与 ScaleSeedConformanceTest)。 */
+    /** 模拟器三条协议的配置: Modbus 取种子; 柯力/耀华用「按样例帧对齐」的拟议配置 (种子本身对不上, 见现状文档与 ScaleSeedConformanceContractTest)。 */
     public static ScaleProtocolAdapterServiceImpl simAdapter() {
         return adapter(
                 config("KELI_D2008_ASCII", proposedKeliFrameFormat()),

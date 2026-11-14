@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * 秤模拟器每个场景走线上解析入口: 好帧读出对的值, 坏帧必须拒绝 (success=false 且没有重量), 绝不能读成 0。
  */
-class ScaleSimulatorFixtureParseTest {
+class ScaleSimulatorFixtureParseContractTest {
 
     private final ScaleProtocolAdapterServiceImpl adapter = ScaleSimSupport.simAdapter();
 
