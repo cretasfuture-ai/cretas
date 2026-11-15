@@ -51,7 +51,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * <p>质检员: 有 quality:read_write (过得了接口粗筛), 没有 production:read_write (这件事要的) ⇒ 服务端逐件判拒 403。
  * 阳性对照: 工厂超级管理员同一请求过两道闸, 确认链路被调用恰好 1 次 —— 证明 403 不是闸恒红。
  */
-class DigitalCrewConfirmPermissionMvcTest {
+class DigitalCrewConfirmPermissionMvcContractTest {
 
     private static final String F = "F1";
     private static final String DIGEST = "a".repeat(64);
