@@ -507,7 +507,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         BigDecimal curQty = cur.singleUnitQuantity();
         BigDecimal prevQty = prev.singleUnitQuantity();
         boolean perUnit = curQty != null && prevQty != null && curQty.signum() > 0 && prevQty.signum() > 0
-                && java.util.Objects.equals(cur.singleUnit(), prev.singleUnit());
+                && sameOutputUnit(cur.singleUnit(), prev.singleUnit());
         String[] names = {"原料", "人工", "设备", "其他"};
         BigDecimal[] now = {cur.material, cur.labor, cur.equipment, cur.other};
         BigDecimal[] before = {prev.material, prev.labor, prev.equipment, prev.other};
@@ -528,6 +528,16 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         String amount = topChange.setScale(perUnit ? 2 : 2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
         return "\n涨得最多的是" + names[top] + "：+" + amount + (perUnit ? " 元/" + (cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit()) : " 元")
                 + "（" + basis + "）。";
+    }
+
+    /**
+     * 两期的产出单位是不是同一个: 用运行时单位查找同一套归一 key (去空白/大小写), 不做「只/个/件」合并 (#1976 定案);
+     * 不同写法判不等的后果只是退回「按总额比」并明说, 不会误报单位成本涨幅。
+     */
+    private static boolean sameOutputUnit(String a, String b) {
+        String ka = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.normalizeLookupKey(a);
+        String kb = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.normalizeLookupKey(b);
+        return ka != null && ka.equals(kb);
     }
 
     private static String signed(BigDecimal v) {
