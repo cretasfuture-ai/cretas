@@ -90,6 +90,13 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        // 产品名本次请求解析一次; 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明, 不悄悄换产品
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.note());
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
         LocalDate today = today();
         LocalDate start;
         LocalDate end;
@@ -112,7 +119,6 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         }
         // 产品名按口径表 B 在本厂在用产品里解析 (ReportToolSchemas.resolveProduct): 只锁定名称完整出现在原话里的产品;
         // 没找到如实说, 名称里含该词的只列出来, 不把「卤牛肉片/五香卤牛肉片」合计成一个数; 同时问到几个产品时明确说
-        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
         String keyword = product.scope() == ReportToolSchemas.ProductScope.NAME_ONLY ? product.keyword() : null;
         String productLabel = product.label();   // 回复 / data 里写明是哪个产品
         boolean showAmounts = replyShowsAmounts(context, "cost", "unitCost", "totalCost");

@@ -19,7 +19,8 @@ import static org.mockito.Mockito.when;
  * #1767 第 3 轮口径表 B (1767-round3-spec.md): 产品名抽取。
  * 原则: 只在「目录里的某个产品名完整出现在问句里」时才锁定该产品; 绝不做「问句里的词被目录名包含」的反向包含匹配。
  * 目录 = {卤牛肉, 牛肉, 酱鸭, 低成本套餐, 外婆的红烧肉, 总汇三明治}。
- * 期望写法: 全厂 = 不限产品; 「A+B」= 锁定的产品 (多个按目录顺序); 「未找到:X」= 如实回「没有找到名称含「X」的产品」。
+ * 期望写法: 全厂 = 不限产品; 「A+B」= 锁定的产品 (多个按目录顺序); 「未找到:X」= 如实回「没有找到名称含「X」的产品」;
+ * 「 | 说明」= 回复开头必须写的说明 (问句里的名字比命中的目录名多了字)。
  */
 class ProductKeywordTableContractTest {
 
@@ -50,14 +51,17 @@ class ProductKeywordTableContractTest {
             "卤牛肉成本, 卤牛肉",
             "牛肉成本, 牛肉",
             "本周卤牛肉成本, 卤牛肉",
-            "卤牛肉片成本, 卤牛肉",
+            // organizer 裁定: 最长完整命中照用, 但问句里的名字多了字时回复要明说按哪个产品回答
+            "卤牛肉片成本, 卤牛肉 | 没有名为「卤牛肉片」的产品，下面按「卤牛肉」回答。",
             "卤牛肉和酱鸭成本, 卤牛肉+酱鸭",
             "外婆的红烧肉成本, 外婆的红烧肉",
             "低成本套餐毛利, 低成本套餐",
             "总汇三明治成本, 总汇三明治",
             "牛油果成本, 未找到:牛油果"})
     void table(String question, String expected) {
-        assertEquals(expected, ReportToolSchemas.resolveProduct(catalogRepo(), F, question).describe(), question);
+        ReportToolSchemas.ProductResolution r = ReportToolSchemas.resolveProduct(catalogRepo(), F, question);
+        // 期望 = 解析结果 [+ " | " + 回复开头必须写的说明]; 其它行没有说明 (note 为 null)
+        assertEquals(expected, r.describe() + (r.note() == null ? "" : " | " + r.note()), question);
     }
 
     /** 规则 3: 目录每次问答只查一次。 */

@@ -614,5 +614,12 @@ class SkuGrossMarginToolContractTest {
         assertEquals(Set.of("卤牛肉", "酱鸭"), names, two.toString());
         // 规则 3: 上面两次问答各只查一次本厂在用产品目录
         verify(productTypeRepository, org.mockito.Mockito.times(2)).findByFactoryIdAndIsActiveTrue("F1");
+        // organizer 裁定: 「卤牛肉片」按最长完整命中「卤牛肉」回答, 回复开头明说换了名字
+        JsonNode sliced = run("{\"productName\":\"卤牛肉片成本\"}");
+        assertEquals(1, sliced.get("data").get("data").get("items").size(), sliced.toString());
+        assertEquals("卤牛肉", sliced.get("data").get("data").get("items").get(0).get("productName").asText());
+        assertTrue(message(sliced).startsWith("没有名为「卤牛肉片」的产品，下面按「卤牛肉」回答。"), message(sliced));
+        // 阴性对照: 名字完整、后面只跟指标词时没有这句
+        assertFalse(message(run("{\"productName\":\"卤牛肉成本\"}")).contains("没有名为"));
     }
 }

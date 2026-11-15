@@ -93,8 +93,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        // 产品名本次请求解析一次; 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明, 不悄悄换产品
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.note());
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
         String raw = getString(params, "productName");
-        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, raw);
         String keyword = product.label();
         String startText = blankToNull(getString(params, "startDate"));
         String endText = blankToNull(getString(params, "endDate"));

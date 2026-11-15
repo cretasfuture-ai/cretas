@@ -128,6 +128,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 productTypeId = null;
             }
         }
+        String productNote = null;   // 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明
         if (productTypeId == null && catalog != null) {
             ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(catalog, rawProductName);
             String msg = product.refusalMessage("给出成本差异", true);
@@ -139,6 +140,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             }
             if (product.scope() == ReportToolSchemas.ProductScope.MATCHED) {
                 productTypeId = product.products().get(0).getId();
+                productNote = product.note();
             }
         }
         // 差异阈值: 只接受 (0, 1000] 的数值; 抽参给的其它值 (0、负数、文字) 忽略, 不悄悄过滤掉产品
@@ -263,7 +265,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
 
         log.info("成本差异报表查询完成 - 工厂ID: {}, 日期范围: {} ~ {}", factoryId, startDate, endDate);
 
-        return result;
+        return ReportToolSchemas.withNote(result, productNote);
     }
 
     /** 可比时给人看的话 (没有 message 键时通用格式化器会把字段打成 key: value 串, 2026-11-15 Q14)。 */

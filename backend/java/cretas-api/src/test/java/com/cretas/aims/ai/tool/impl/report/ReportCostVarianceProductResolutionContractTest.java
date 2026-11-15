@@ -173,6 +173,17 @@ class ReportCostVarianceProductResolutionContractTest {
         assertTrue(String.valueOf(run(Map.of()).get("summary")).contains("可比计划 4 个"));
     }
 
+    // organizer 裁定: 问句里的名字多了字 (「酱鸭腿」) 时按最长完整命中「酱鸭」查, 回复开头明说
+    @Test
+    void longerNameInQuestion_answersTheCatalogProduct_andSaysSo() throws Exception {
+        Map<String, Object> r = run(Map.of("productName", "酱鸭腿成本差异"));
+        verify(reportService).getCostVarianceReport(eq("F1"), any(), any(), eq("P-4"));
+        String msg = String.valueOf(r.get("message"));
+        assertTrue(msg.startsWith("没有名为「酱鸭腿」的产品，下面按「酱鸭」回答。"), msg);
+        // 阴性对照: 名字完整时没有这句
+        assertFalse(String.valueOf(run(Map.of("productName", "酱鸭成本差异")).get("message")).contains("没有名为"));
+    }
+
     // 第 3 轮表 B: 同时问到两个产品时明确说, 不悄悄只按其中一个查
     @Test
     void twoProductsInOneQuestion_areSaidPlainly_andNothingIsQueried() throws Exception {

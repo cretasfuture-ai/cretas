@@ -76,6 +76,13 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        // 产品名本次请求解析一次; 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明, 不悄悄换产品
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.note());
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
         LocalDate today = today();
         String startText = blank(getString(params, "startDate"));
         String endText = blank(getString(params, "endDate"));
@@ -96,7 +103,6 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
         String keyword = product.label();
         boolean showAmounts = replyShowsAmounts(context, "cost", "totalCost", "laborCost");
 
