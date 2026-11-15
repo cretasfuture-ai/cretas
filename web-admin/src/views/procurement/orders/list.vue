@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -1306,6 +1307,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
+useAiEntryLink(aiEntryVisible, canWrite);
 
 // ==================== Forward Share Dialog (PR #872) ====================
 // State for ForwardShareDialog — scoped to the row clicked via 转发 inline chip.

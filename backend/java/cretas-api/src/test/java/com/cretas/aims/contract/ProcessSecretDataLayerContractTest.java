@@ -257,6 +257,10 @@ class ProcessSecretDataLayerContractTest {
             "priceDecreaseApprovalPct", "priceIncreaseApprovalPct",
             // 成本构成占比 (金额口径, 价格另受价格权限), 不是用量配比
             "materialRatio", "otherCostRatio", "overheadRatio", "equipmentCostRatio", "rawMaterialPercentage",
+            // report_cost_query (只读成本查询): sharePct = 某成本分项(原料/人工/设备/其他)占期间总成本的金额占比,
+            // changePct = 与上一等长周期相比的成本涨跌百分比; 都是金额口径 (无成本查看权限时整份金额与图不出,
+            // 保密产品批次对无权调用者整批剔除), 不是用量配比。
+            "sharePct", "changePct",
             // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词
             "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里

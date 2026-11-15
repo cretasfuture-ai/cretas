@@ -1,0 +1,130 @@
+/*
+ * Cretas System v1 → Element Plus 反馈 / 浮层层：弹窗 / 抽屉 / 消息 / 通知 / 确认框 / 提示条 / tooltip / popover / loading。
+ * 来源：design-system.css 的 .cs-modal / .cs-drawer / .cs-toast / .cs-banner 与 .ydwm-modern .el-dialog。
+ * 只取 --cs-* token。选择器 html:root 起头，原因见 controls.css 文件头。
+ *
+ * 注意：不改 el-dialog / el-drawer 的 DOM 与定位逻辑（页面自己传的 width / size / append-to-body 不动），只换长相。
+ */
+
+/* ── 弹窗（.cs-modal）：12px 圆角 / 1px 边 / overlay 阴影；头 16/20 + 底线，体 20，脚 12/20 浅底 + 顶线 ── */
+html:root .el-overlay { background-color: rgb(15 28 45 / 32%); }
+html:root .el-dialog {
+  --el-dialog-border-radius: var(--cs-radius-lg);
+  --el-dialog-padding-primary: 20px;
+  --el-dialog-bg-color: var(--cs-surface);
+  padding: 0;
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-lg);
+  box-shadow: var(--cs-shadow-overlay);
+  max-width: calc(100vw - 32px);
+  color: var(--cs-text);
+  line-height: 1.6;
+  overflow: hidden;
+}
+html:root .el-dialog__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0; padding: 16px 20px; border-bottom: 1px solid var(--cs-border); }
+html:root .el-dialog__title, html:root .el-drawer__header .el-drawer__title, html:root .el-drawer__title { font-size: 18px; font-weight: 650; line-height: 1.5; color: var(--cs-text); }
+html:root .el-dialog__headerbtn { top: 0; right: 0; width: 56px; height: 56px; }
+html:root .el-dialog__headerbtn .el-dialog__close { color: var(--cs-muted); font-size: 18px; }
+html:root .el-dialog__headerbtn:hover .el-dialog__close { color: var(--cs-primary); }
+html:root .el-dialog__body { padding: 20px; color: var(--cs-text); font-size: var(--cs-font); line-height: 1.6; max-height: calc(100dvh - 240px); overflow: auto; overscroll-behavior: contain; }
+html:root .el-dialog__footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--cs-border); background: var(--cs-surface-subtle); }
+html:root .el-dialog__footer .el-button + .el-button { margin-left: 0; }
+html:root .el-dialog.is-fullscreen { border-radius: 0; max-width: none; }
+html:root .el-dialog.is-fullscreen .el-dialog__body { max-height: none; }
+
+/* ── 抽屉（.cs-drawer）：同弹窗的头 / 体 / 脚；侧边抽屉 12px 圆角 + 1px 边 ── */
+html:root .el-drawer {
+  --el-drawer-padding-primary: 20px;
+  --el-drawer-bg-color: var(--cs-surface);
+  background: var(--cs-surface);
+  color: var(--cs-text);
+  box-shadow: var(--cs-shadow-overlay);
+  line-height: 1.6;
+}
+html:root .el-drawer.rtl { border-left: 1px solid var(--cs-border); border-radius: var(--cs-radius-lg) 0 0 var(--cs-radius-lg); }
+html:root .el-drawer.ltr { border-right: 1px solid var(--cs-border); border-radius: 0 var(--cs-radius-lg) var(--cs-radius-lg) 0; }
+html:root .el-drawer.ttb { border-bottom: 1px solid var(--cs-border); border-radius: 0 0 var(--cs-radius-lg) var(--cs-radius-lg); }
+html:root .el-drawer.btt { border-top: 1px solid var(--cs-border); border-radius: var(--cs-radius-lg) var(--cs-radius-lg) 0 0; }
+html:root .el-drawer__header { align-items: center; margin-bottom: 0; padding: 16px 20px; border-bottom: 1px solid var(--cs-border); }
+html:root .el-drawer__header > :first-child { color: var(--cs-text); }
+html:root .el-drawer__close-btn { color: var(--cs-muted); font-size: 18px; }
+html:root .el-drawer__close-btn:hover { color: var(--cs-primary); }
+html:root .el-drawer__body { padding: 20px; font-size: var(--cs-font); line-height: 1.6; }
+html:root .el-drawer__footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--cs-border); background: var(--cs-surface-subtle); }
+
+/* ── 消息（.cs-toast）：白底 1px 边 / 8px 圆角 / 轻阴影；类型用图标色表达，不整条染色 ── */
+html:root .el-message {
+  --el-message-bg-color: var(--cs-surface);
+  --el-message-border-color: var(--cs-border);
+  --el-message-padding: 12px 14px;
+  min-width: 240px;
+  padding: 12px 14px;
+  border: 1px solid var(--cs-border);
+  border-radius: 8px;
+  background-color: var(--cs-surface);
+  box-shadow: var(--cs-shadow);
+  font-size: var(--cs-font);
+  line-height: 1.5;
+}
+html:root .el-message .el-message__content { color: var(--cs-text); font-size: var(--cs-font); }
+html:root .el-message--success { --el-message-text-color: var(--cs-text); background-color: var(--cs-surface); }
+html:root .el-message--warning { --el-message-text-color: var(--cs-text); background-color: var(--cs-surface); }
+html:root .el-message--info { --el-message-text-color: var(--cs-text); background-color: var(--cs-surface); }
+html:root .el-message--error { --el-message-text-color: var(--cs-text); background-color: var(--cs-surface); border-color: var(--cs-danger); }
+html:root .el-message--success .el-message__icon { color: var(--cs-success); }
+html:root .el-message--warning .el-message__icon { color: var(--cs-warning); }
+html:root .el-message--error .el-message__icon { color: var(--cs-danger); }
+html:root .el-message--info .el-message__icon { color: var(--cs-primary); }
+html:root .el-message .el-message__closeBtn { color: var(--cs-muted); }
+html:root .el-notification { border: 1px solid var(--cs-border); border-radius: var(--cs-radius); box-shadow: var(--cs-shadow-overlay); padding: 14px 16px; }
+html:root .el-notification__title { font-size: var(--cs-font); font-weight: 650; color: var(--cs-text); }
+html:root .el-notification__content { font-size: var(--cs-font); color: var(--cs-muted); line-height: 1.6; }
+html:root .el-notification .el-notification__icon.el-icon--success, html:root .el-notification--success .el-notification__icon { color: var(--cs-success); }
+html:root .el-notification--warning .el-notification__icon { color: var(--cs-warning); }
+html:root .el-notification--error .el-notification__icon { color: var(--cs-danger); }
+html:root .el-notification--info .el-notification__icon { color: var(--cs-primary); }
+
+/* ── 确认框（el-message-box）：同弹窗 ── */
+html:root .el-message-box { --el-messagebox-border-radius: var(--cs-radius-lg); padding: 0; border: 1px solid var(--cs-border); border-radius: var(--cs-radius-lg); box-shadow: var(--cs-shadow-overlay); background: var(--cs-surface); }
+html:root .el-message-box__header { padding: 16px 20px; border-bottom: 1px solid var(--cs-border); }
+html:root .el-message-box__title { font-size: 18px; font-weight: 650; color: var(--cs-text); }
+html:root .el-message-box__headerbtn { top: 0; right: 0; width: 56px; height: 56px; }
+html:root .el-message-box__content { padding: 20px; color: var(--cs-text); font-size: var(--cs-font); line-height: 1.6; }
+html:root .el-message-box__message p { line-height: 1.6; }
+html:root .el-message-box__btns { padding: 12px 20px; gap: 8px; display: flex; justify-content: flex-end; border-top: 1px solid var(--cs-border); background: var(--cs-surface-subtle); }
+html:root .el-message-box__btns .el-button + .el-button { margin-left: 0; }
+html:root .el-message-box__status.el-message-box-icon--warning { color: var(--cs-warning); }
+html:root .el-message-box__status.el-message-box-icon--error { color: var(--cs-danger); }
+html:root .el-message-box__status.el-message-box-icon--success { color: var(--cs-success); }
+html:root .el-message-box__status.el-message-box-icon--info { color: var(--cs-primary); }
+
+/* ── 提示条（.cs-banner）：12/16 内边距 / 6px 圆角 / 1px 边 / 语义色字 + 语义浅底 / 行高 1.65 ── */
+html:root .el-alert {
+  --el-alert-padding: 12px 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--cs-border);
+  border-radius: var(--cs-radius-sm);
+  line-height: 1.65;
+  align-items: flex-start;
+}
+html:root .el-alert__title { font-size: var(--cs-font); font-weight: 500; line-height: 1.65; }
+html:root .el-alert__description { font-size: var(--cs-font); line-height: 1.65; margin: 4px 0 0; }
+html:root .el-alert--info.is-light { color: var(--cs-info); background-color: var(--cs-info-soft); border-color: color-mix(in srgb, var(--cs-info) 22%, #fff); }
+html:root .el-alert--success.is-light { color: var(--cs-success); background-color: var(--cs-success-soft); border-color: color-mix(in srgb, var(--cs-success) 28%, #fff); }
+html:root .el-alert--warning.is-light { color: var(--cs-warning); background-color: var(--cs-warning-soft); border-color: color-mix(in srgb, var(--cs-warning) 28%, #fff); }
+html:root .el-alert--error.is-light { color: var(--cs-danger); background-color: var(--cs-danger-soft); border-color: color-mix(in srgb, var(--cs-danger) 28%, #fff); }
+html:root .el-alert--info.is-light .el-alert__description, html:root .el-alert--success.is-light .el-alert__description,
+html:root .el-alert--warning.is-light .el-alert__description, html:root .el-alert--error.is-light .el-alert__description { color: inherit; opacity: .9; }
+html:root .el-alert .el-alert__close-btn { color: inherit; }
+
+/* ── tooltip / popover / loading ── */
+html:root .el-popover.el-popper { padding: 12px 16px; font-size: var(--cs-font); color: var(--cs-text); border-radius: var(--cs-radius); }
+html:root .el-popper.is-dark { background: var(--cs-text); border-color: var(--cs-text); color: var(--cs-surface); font-size: var(--cs-font-small); line-height: 1.6; border-radius: var(--cs-radius-sm); }
+html:root .el-popper.is-dark .el-popper__arrow::before { background: var(--cs-text); border-color: var(--cs-text); }
+html:root .el-loading-mask { background-color: color-mix(in srgb, var(--cs-surface) 80%, transparent); }
+html:root .el-loading-spinner .path { stroke: var(--cs-primary); }
+html:root .el-loading-spinner .el-loading-text { color: var(--cs-primary); }
+html:root .el-popconfirm__main { font-size: var(--cs-font); color: var(--cs-text); }
+html:root .el-upload-dragger { border: 1px dashed var(--cs-border); border-radius: var(--cs-radius); background: var(--cs-surface-subtle); }
+html:root .el-upload-dragger:hover, html:root .el-upload-dragger.is-dragover { border-color: var(--cs-primary); background: var(--cs-primary-soft); }
+html:root .el-scrollbar__thumb { background-color: color-mix(in srgb, var(--cs-muted) 35%, transparent); }

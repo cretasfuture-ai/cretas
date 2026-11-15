@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { digitalWorkdeskTitle } from '@/router/digitalEmployeeProps';
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
@@ -83,12 +84,12 @@ watch(
  * 且它以 flush:'pre' 跑在渲染之前 —— 缓存键在同一帧内就是新的, 组件当场重新 mount。
  */
 watch(
-  () => [route.fullPath, authStore.factoryId, workspaceScope.value],
+  () => [route.fullPath, authStore.factoryId, workspaceScope.value, digitalWorkdeskTitle(route.path, String(route.meta.title || ''))],
   () => workspace.openRoute({
     fullPath: route.fullPath,
     path: route.path,
     name: route.name,
-    title: String(route.meta.title || ''),
+    title: digitalWorkdeskTitle(route.path, String(route.meta.title || '')),
     module: String(route.meta.module || ''),
     query: route.query,
   }),

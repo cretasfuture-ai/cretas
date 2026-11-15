@@ -28,6 +28,24 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     post.mockResolvedValue({ data: { status: 'SUCCESS', resultData: {} } });
   });
 
+  it('waits for tenant navigation before using the live wholesale low-stock query', async () => {
+    const wrapper = mount(PurchaserWorkdesk, {
+      props: { employeeNavigationPending: true }, global: { plugins: [ElementPlus] },
+    });
+    await flushPromises();
+    expect(post).not.toHaveBeenCalled();
+    await wrapper.setProps({ digitalEmployee: true, employeeNavigationPending: false });
+    await flushPromises();
+    expect(post.mock.calls).toEqual([[endpoint, { userInput: '查询低库存预警' }]]);
+    expect(wrapper.find('.employee-header img').exists()).toBe(true);
+    post.mockClear();
+    await wrapper.setProps({ employeeNavigationPending: true });
+    await wrapper.setProps({ employeeNavigationPending: false });
+    await flushPromises();
+    expect(post).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('keeps mount and explicit reload in automatic weekly-plan mode', async () => {
     const wrapper = await openWorkdesk();
     expect(post.mock.calls).toEqual([

@@ -225,10 +225,8 @@ async function handleLogout() {
 <style lang="scss" scoped>
 .app-header {
   height: 64px;
-  background-color: var(--color-bg-card, rgba(255, 255, 255, 0.85));
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid var(--border-color-light, #EDF2F7);
+  background-color: var(--cs-surface);
+  border-bottom: 1px solid var(--cs-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -262,7 +260,7 @@ async function handleLogout() {
   .collapse-btn {
     font-size: 20px;
     cursor: pointer;
-    color: var(--color-text-secondary, #7A8599);
+    color: var(--cs-muted);
     transition: color 0.2s;
     min-width: 44px;
     min-height: 44px;
@@ -271,7 +269,7 @@ async function handleLogout() {
     justify-content: center;
 
     &:hover {
-      color: var(--color-primary, #1B65A8);
+      color: var(--cs-primary);
     }
   }
 }
@@ -299,9 +297,9 @@ async function handleLogout() {
   .header-action {
     font-size: 18px;
     cursor: pointer;
-    color: var(--color-text-secondary, #7A8599);
+    color: var(--cs-muted);
     padding: 8px;
-    border-radius: var(--radius-sm, 6px);
+    border-radius: var(--cs-radius-sm);
     transition: all 0.2s;
 
     // 修复: flex 布局下 el-icon 的 svg 只继承到 height:1em, width 塌成 ~2px → 图标不可见 (但可点/hover)。
@@ -313,8 +311,8 @@ async function handleLogout() {
     }
 
     &:hover {
-      background-color: var(--color-bg-hover, #EDF2F7);
-      color: var(--color-primary, #1B65A8);
+      background-color: var(--cs-primary-soft);
+      color: var(--cs-primary);
     }
   }
 }
@@ -325,16 +323,16 @@ async function handleLogout() {
   gap: 8px;
   cursor: pointer;
   padding: 4px 8px;
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--cs-radius-sm);
   transition: background-color 0.2s;
 
   &:hover {
-    background-color: var(--color-bg-hover, #EDF2F7);
+    background-color: var(--cs-surface-subtle);
   }
 
   :deep(.el-avatar) {
-    background: linear-gradient(135deg, #1B65A8, #2B7EC1);
-    color: #fff;
+    background: var(--cs-primary-soft);
+    color: var(--cs-primary);
   }
 
   .user-detail {
@@ -344,12 +342,12 @@ async function handleLogout() {
 
     .user-name {
       font-size: 14px;
-      color: var(--color-text-primary, #1A2332);
+      color: var(--cs-text);
     }
 
     .user-role {
       font-size: 12px;
-      color: var(--color-text-secondary, #7A8599);
+      color: var(--cs-muted);
     }
   }
 }

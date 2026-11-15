@@ -403,6 +403,10 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
             + HIDDEN_FROM_PLATFORM_POLICY + ")")
     long countByStatusExcludingProcessSecretProducts(@Param("status") ProductionBatchStatus status);
 
+    /** 按批次结束时间半开区间 [from, to) 取批次 (AI 成本查询与成本分析页同口径: 按结束日落期)。 */
+    java.util.List<ProductionBatch> findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
+            String factoryId, LocalDateTime from, LocalDateTime to);
+
     /**
      * 获取时间范围内的批次（用于成本分析和绩效计算）
      */

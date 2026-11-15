@@ -959,13 +959,27 @@ export const configurableMenuConfig: MenuItem[] = [...menuConfig, ...groupedMenu
 
 export type FactoryMenuProfile = 'wholesale';
 
+export const wholesaleWorkdeskTitles: Record<string, string> = {
+  '/workdesk/sales-owner': '销售数字员工工作台',
+  '/workdesk/purchaser': '采购数字员工工作台',
+  '/workdesk/warehouse-keeper': '库存数字员工工作台',
+};
+const wholesaleDesk = (path: string): MenuItem => ({ ...moveLeaf(path), title: wholesaleWorkdeskTitles[path] });
+
 /** Layout only: keep the original paths, permissions and ancestor guards. */
 export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.map((item) => {
   if (item.path === '/procurement') {
-    return { ...item, children: [...(item.children ?? []), moveLeaf('/procurement/suppliers')] };
+    return { ...item, children: [wholesaleDesk('/workdesk/purchaser'), ...(item.children ?? []), moveLeaf('/procurement/suppliers')] };
   }
   if (item.path === '/sales') {
-    return { ...item, children: [...(item.children ?? []), moveLeaf('/sales/customers')] };
+    return { ...item, children: [wholesaleDesk('/workdesk/sales-owner'), ...(item.children ?? []), moveLeaf('/sales/customers')] };
+  }
+  if (item.path === '/warehouse') {
+    return { ...item, children: [wholesaleDesk('/workdesk/warehouse-keeper'), ...(item.children ?? [])] };
+  }
+  if (item.path === '#group/overview') {
+    return { ...item, children: item.children?.map((child) => child.path === '/workdesk'
+      ? { ...child, children: child.children?.filter((desk) => !wholesaleWorkdeskTitles[desk.path]) } : child) };
   }
   if (item.path === '#group/master-data') {
     return { ...item, title: '基础资料', children: item.children?.filter((child) =>
