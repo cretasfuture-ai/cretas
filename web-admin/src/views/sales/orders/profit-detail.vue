@@ -28,21 +28,21 @@
           <span>{{ row.productName || '—' }}</span>
           <div class="product-meta" v-if="row.unit">{{ displayUnit(row.unit) }}</div>
         </template>
-        <template #quantity-cell="{ row }"><span class="num">{{ fmtQty(row.original.quantity) }}</span></template>
-        <template #unitPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.unitPrice) }}</span></template>
-        <template #costUnitPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.costUnitPrice) }}</span></template>
+        <template #quantity-cell="{ row }"><span class="num">{{ fmtQ(row.original.quantity) }}</span></template>
+        <template #unitPrice-cell="{ row }"><span class="num">{{ fmtMoney(row.original.unitPrice) }}</span></template>
+        <template #costUnitPrice-cell="{ row }"><span class="num">{{ fmtMoney(row.original.costUnitPrice) }}</span></template>
         <template #grossProfit-cell="{ row }">
-          <span class="num" :class="profitClass(row.original.grossProfit)">{{ formatAmount(row.original.grossProfit) }}</span>
+          <span class="num" :class="profitClass(row.original.grossProfit)">{{ fmtMoney(row.original.grossProfit) }}</span>
         </template>
         <template #grossMarginPct-cell="{ row }">
           <span class="num" :class="marginClass(row.original.grossMarginPct)">{{ fmtPct(row.original.grossMarginPct) }}</span>
         </template>
-        <template #discountAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.discountAmount) }}</span></template>
-        <template #taxAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.taxAmount) }}</span></template>
+        <template #discountAmount-cell="{ row }"><span class="num">{{ fmtMoney(row.original.discountAmount) }}</span></template>
+        <template #taxAmount-cell="{ row }"><span class="num">{{ fmtMoney(row.original.taxAmount) }}</span></template>
         <template #netProfit-cell="{ row }">
-          <strong class="num" :class="profitClass(row.original.netProfit)">{{ formatAmount(row.original.netProfit) }}</strong>
+          <strong class="num" :class="profitClass(row.original.netProfit)">{{ fmtMoney(row.original.netProfit) }}</strong>
         </template>
-        <template #historicalAvgPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.historicalAvgPrice) }}</span></template>
+        <template #historicalAvgPrice-cell="{ row }"><span class="num">{{ fmtMoney(row.original.historicalAvgPrice) }}</span></template>
         <template #trend-cell="{ row }">
           <UBadge v-if="row.original.priceTrend === 'UP'" color="success" variant="soft">↑ 上涨</UBadge>
           <UBadge v-else-if="row.original.priceTrend === 'DOWN'" color="error" variant="soft">↓ 下跌</UBadge>
@@ -72,6 +72,10 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
+
+// 空值统一显示「—」(与毛利率 fmtPct 同一约定; 公共 formatAmount/fmtQty 空值是「-」)
+const fmtMoney = (v: number | null | undefined): string => (v == null ? '—' : formatAmount(v));
+const fmtQ = (v: number | null | undefined): string => (v == null ? '—' : fmtQty(v));
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
 

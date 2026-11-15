@@ -142,4 +142,19 @@ describe('OrdersTab', () => {
     expect(open.html()).toContain('12,345.67');
     expect(open.html()).toContain('888.01');
   });
+
+  it('状态列显示中文名(已知状态), 未知状态显示「未知状态」且不露英文原码', async () => {
+    const known: Record<string, string> = {
+      DRAFT: '草稿', CONFIRMED: '已确认', PENDING_FINANCE_REVIEW: '待 OA 审批', FINANCE_APPROVED: '审批已通过',
+      FINANCE_REJECTED: '审批已驳回', PROCESSING: '处理中', PARTIAL_DELIVERED: '部分发货', COMPLETED: '已完成',
+      CANCELLED: '已取消', SHORT_CLOSED: '短交结案',
+    };
+    const content = [...Object.keys(known), 'BRAND_NEW_STATUS'].map((status, i) => ({ id: String(i), orderNumber: `SO-${i}`, status }));
+    mockGet.mockResolvedValueOnce({ success: true, data: { content, totalElements: content.length } });
+    const w = mount(OrdersTab, { props: { customerId: 'cust-1' }, global: { stubs: globalStubs } });
+    await flushPromises();
+    const texts = w.findAll('.badge').map((b) => b.text());
+    expect(texts).toEqual([...Object.values(known), '未知状态']);
+    for (const code of [...Object.keys(known), 'BRAND_NEW_STATUS']) expect(w.html()).not.toContain(code);
+  });
 });

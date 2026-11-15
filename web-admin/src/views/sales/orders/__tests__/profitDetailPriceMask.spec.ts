@@ -76,4 +76,18 @@ describe('profit-detail 价格列权限', () => {
     expect(w.html()).toContain('77,777.77');
     expect(w.find('[data-testid="profit-price-hidden"]').exists()).toBe(false);
   });
+
+  it('空值统一显示「—」, 不出现单个「-」', async () => {
+    canViewPriceRef.value = true;
+    mockGet.mockImplementation((url: string) =>
+      url.includes('profit-detail')
+        ? Promise.resolve({ success: true, data: [{ productTypeId: 'P1', productName: '牛肉丸', unit: 'kg', quantity: null, unitPrice: 1, costUnitPrice: null, grossProfit: null, grossMarginPct: null, discountAmount: null, taxAmount: null, netProfit: null, historicalAvgPrice: null, priceTrend: null }] })
+        : Promise.resolve({ data: { orderNumber: 'SO-1' } }),
+    );
+    const w = mount(ProfitDetail, { global: { stubs } });
+    await flushPromises();
+    const cells = w.findAll('.row span, .row strong').map((e) => e.text());
+    expect(cells.filter((t) => t === '—').length).toBeGreaterThanOrEqual(7);
+    expect(cells.filter((t) => t === '-')).toEqual([]);
+  });
 });

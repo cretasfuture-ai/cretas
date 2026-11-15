@@ -29,7 +29,7 @@
     <template v-else>
       <UTable :data="orders" :columns="columns" class="cs-table" data-testid="customer-orders-table">
         <template #status-cell="{ row }">
-          <UBadge color="neutral" variant="soft">{{ row.original.status }}</UBadge>
+          <UBadge :color="badgeColor(salesOrderStatusTagType(row.original.status))" variant="soft" data-testid="order-status">{{ salesOrderStatusText(row.original.status) }}</UBadge>
         </template>
         <template #totalAmount-cell="{ row }">
           <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.totalAmount) }}</span>
@@ -61,6 +61,8 @@ import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
+import { badgeColor } from '@/utils/csBadge';
+import { salesOrderStatusText, salesOrderStatusTagType } from '@/views/sales/orders/salesOrderStatusDisplay';
 
 interface SalesOrderRow {
   id: string;
