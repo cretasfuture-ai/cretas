@@ -334,7 +334,7 @@ public class OutsourceService {
     public OrderDetail issue(String factoryId, String orderId, String lineId, IssueRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+        if (replayed(factoryId, orderId, lineId, req == null ? null : req.clientRequestId(),
                 OutsourceMovement.Type.ISSUE)) {
             return detail(factoryId, orderId);
         }
@@ -425,7 +425,7 @@ public class OutsourceService {
                                       MaterialReturnRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+        if (replayed(factoryId, orderId, lineId, req == null ? null : req.clientRequestId(),
                 OutsourceMovement.Type.MATERIAL_RETURN)) {
             return detail(factoryId, orderId);
         }
@@ -519,7 +519,7 @@ public class OutsourceService {
     public OrderDetail receive(String factoryId, String orderId, String lineId, ReceiveRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+        if (replayed(factoryId, orderId, lineId, req == null ? null : req.clientRequestId(),
                 OutsourceMovement.Type.RECEIVE)) {
             return detail(factoryId, orderId);
         }
@@ -995,7 +995,7 @@ public class OutsourceService {
                                    Long userId, String qualityReturnOrderId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+        if (replayed(factoryId, orderId, lineId, req == null ? null : req.clientRequestId(),
                 OutsourceMovement.Type.GOODS_RETURN)) {
             return detail(factoryId, orderId);
         }
@@ -1091,7 +1091,7 @@ public class OutsourceService {
     public OrderDetail registerLoss(String factoryId, String orderId, String lineId, LossRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+        if (replayed(factoryId, orderId, lineId, req == null ? null : req.clientRequestId(),
                 OutsourceMovement.Type.LOSS)) {
             return detail(factoryId, orderId);
         }
@@ -1225,16 +1225,17 @@ public class OutsourceService {
                         .collect(Collectors.groupingBy(OutsourceOrderLine::getOrderId));
         Map<String, String> supplierNames = supplierNames(factoryId,
                 p.getContent().stream().map(OutsourceOrder::getSupplierId).collect(Collectors.toSet()));
+        List<OutsourceOrderLine> allLines = linesByOrder.values().stream().flatMap(List::stream).toList();
+        // 一页只查一次委外仓批次 / 退货收发 / 冲减调整 (复审 低2: 原来每行各查一次)。
+        Map<String, BigDecimal> balances = outsourceBalances(factoryId, allLines);
+        Map<String, BigDecimal> fees = effectiveFees(factoryId, allLines, null);
         return p.map(o -> {
             List<OutsourceOrderLine> ls = linesByOrder.getOrDefault(o.getId(), List.of());
-            BigDecimal balance = ZERO;
-            for (OutsourceOrderLine l : ls) {
-                balance = balance.add(outsourceBalance(factoryId, l.getId()));
-            }
+            BigDecimal balance = sum(ls, l -> balances.getOrDefault(l.getId(), ZERO));
             return new OrderSummary(o.getId(), o.getOrderNo(), o.getSupplierId(), supplierNames.get(o.getSupplierId()),
                     o.getStatus().name(), o.getExpectedReturnDate(), ls.size(),
                     sum(ls, OutsourceOrderLine::getPlannedQuantity), sum(ls, OutsourceOrderLine::getReceivedGoodQuantity),
-                    balance, sum(ls, l -> effectiveFee(factoryId, l)), o.getCreatedAt());
+                    balance, sum(ls, l -> fees.get(l.getId())), o.getCreatedAt());
         });
     }
 
@@ -1260,6 +1261,7 @@ public class OutsourceService {
                 issuedByBatch.merge(m.getTargetBatchId(), m.getQuantity(), BigDecimal::add);
             }
         }
+        Map<String, BigDecimal> fees = effectiveFees(factoryId, lines, movements);
         Map<String, String> originByBatch = movements.stream()
                 .filter(m -> m.getMovementType() == OutsourceMovement.Type.ISSUE)
                 .collect(Collectors.toMap(OutsourceMovement::getTargetBatchId, OutsourceMovement::getSourceBatchId,
@@ -1277,7 +1279,7 @@ public class OutsourceService {
                     l.getOutputKind().name(), l.getProductTypeId(), l.getOutputName(), l.getUnit(),
                     l.getPlannedQuantity(), l.getUnitFee(), l.getTaxRate(), l.getReceivedGoodQuantity(),
                     l.getReceivedDefectQuantity(), l.getReturnedGoodsQuantity(), l.getReworkPendingQuantity(),
-                    l.remainingToReceive(), effectiveFee(factoryId, l, movements), bal, l.getStatus().name()));
+                    l.remainingToReceive(), fees.get(l.getId()), bal, l.getStatus().name()));
         }
         Map<String, String> batchNos = batchNumbers(factoryId, movements);
         List<MovementView> mvs = movements.stream().map(m -> new MovementView(m.getId(), m.getLineId(),
@@ -1289,7 +1291,7 @@ public class OutsourceService {
         return new OrderDetail(o.getId(), o.getOrderNo(), o.getSupplierId(),
                 supplierNames(factoryId, Set.of(o.getSupplierId())).get(o.getSupplierId()), o.getStatus().name(),
                 o.getOutsourceWarehouseId(), o.getExpectedReturnDate(), o.getRemark(), o.getReleasedAt(),
-                o.getClosedAt(), o.getCreatedAt(), sum(lines, l -> effectiveFee(factoryId, l, movements)), lineViews, balances, mvs);
+                o.getClosedAt(), o.getCreatedAt(), sum(lines, l -> fees.get(l.getId())), lineViews, balances, mvs);
     }
 
     /** 工单详情里的委外工序: 按工单列出挂在它下面的委外行。 */
@@ -1306,6 +1308,7 @@ public class OutsourceService {
         }
         Map<String, String> names = supplierNames(factoryId, orders.values().stream().filter(Objects::nonNull)
                 .map(OutsourceOrder::getSupplierId).collect(Collectors.toSet()));
+        Map<String, BigDecimal> fees = effectiveFees(factoryId, lines, null);
         List<ProcessLink> out = new ArrayList<>();
         for (OutsourceOrderLine l : lines) {
             OutsourceOrder o = orders.get(l.getOrderId());
@@ -1314,7 +1317,7 @@ public class OutsourceService {
             }
             out.add(new ProcessLink(l.getWorkProcessTaskId(), l.getProductionPlanId(), o.getId(), o.getOrderNo(),
                     o.getStatus().name(), o.getSupplierId(), names.get(o.getSupplierId()), l.getId(),
-                    l.getStatus().name(), l.getPlannedQuantity(), l.getReceivedGoodQuantity(), effectiveFee(factoryId, l)));
+                    l.getStatus().name(), l.getPlannedQuantity(), l.getReceivedGoodQuantity(), fees.get(l.getId())));
         }
         return out;
     }
@@ -1327,7 +1330,11 @@ public class OutsourceService {
         }
         List<OutsourceOrderLine> lines = lineRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds).stream()
                 .filter(l -> l.getStatus() != OutsourceOrderLine.Status.CANCELLED).toList();
-        return lines.isEmpty() ? null : sum(lines, l -> effectiveFee(factoryId, l));
+        if (lines.isEmpty()) {
+            return null;
+        }
+        Map<String, BigDecimal> fees = effectiveFees(factoryId, lines, null);
+        return sum(lines, l -> fees.get(l.getId()));
     }
 
     /** 把质检退回单 (SUBCONTRACT) 关联到委外任务行与被退的收货批次, 之后 ship 才会扣库存、冲加工费。 */
@@ -1354,24 +1361,47 @@ public class OutsourceService {
      * (复审 中2: 退货当时就扣行加工费, 财务驳回后行上、销售订单、工序上都少显示)。
      */
     private BigDecimal effectiveFee(String factoryId, OutsourceOrderLine line) {
-        return effectiveFee(factoryId, line, movementRepository.findByLineIdAndMovementTypeIn(line.getId(),
-                List.of(OutsourceMovement.Type.GOODS_RETURN)));
+        return effectiveFees(factoryId, List.of(line), null).get(line.getId());
     }
 
-    private BigDecimal effectiveFee(String factoryId, OutsourceOrderLine line, List<OutsourceMovement> movements) {
-        BigDecimal gross = nz(line.getFeeAmount());
-        List<String> adjIds = movements.stream()
-                .filter(m -> m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN
-                        && line.getId().equals(m.getLineId()) && m.getApTransactionId() != null)
-                .map(OutsourceMovement::getApTransactionId).toList();
-        if (adjIds.isEmpty()) {
-            return gross;
+    /**
+     * 多行一起算有效加工费: 退货收发一次查 (movements 传 null 时按行 id 批量查; detail 已有本单全部收发就直接用),
+     * 冲减调整一次 findAllById (复审 低2)。口径与单行相同: 毛额 + 本行退货上挂的、已批准且未删的调整。
+     */
+    private Map<String, BigDecimal> effectiveFees(String factoryId, Collection<OutsourceOrderLine> lines,
+                                                  List<OutsourceMovement> movements) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        if (lines == null || lines.isEmpty()) {
+            return out;
         }
-        BigDecimal approved = arApTransactionRepository.findAllById(adjIds).stream()
-                .filter(t -> factoryId.equals(t.getFactoryId()) && t.getDeletedAt() == null
-                        && t.getApprovalStatus() == ArApApprovalStatus.APPROVED && t.getAmount() != null)
-                .map(ArApTransaction::getAmount).reduce(ZERO, BigDecimal::add);
-        return gross.add(approved);
+        Set<String> lineIds = lines.stream().map(OutsourceOrderLine::getId).collect(Collectors.toSet());
+        List<OutsourceMovement> mvs = movements != null ? movements
+                : movementRepository.findByLineIdInAndMovementTypeIn(lineIds, List.of(OutsourceMovement.Type.GOODS_RETURN));
+        Map<String, List<String>> adjIdsByLine = new HashMap<>();
+        for (OutsourceMovement m : mvs) {
+            if (m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN && m.getApTransactionId() != null
+                    && lineIds.contains(m.getLineId())) {
+                adjIdsByLine.computeIfAbsent(m.getLineId(), k -> new ArrayList<>()).add(m.getApTransactionId());
+            }
+        }
+        Map<String, BigDecimal> approvedById = new HashMap<>();
+        List<String> allAdjIds = adjIdsByLine.values().stream().flatMap(List::stream).distinct().toList();
+        if (!allAdjIds.isEmpty()) {
+            for (ArApTransaction t : arApTransactionRepository.findAllById(allAdjIds)) {
+                if (factoryId.equals(t.getFactoryId()) && t.getDeletedAt() == null
+                        && t.getApprovalStatus() == ArApApprovalStatus.APPROVED && t.getAmount() != null) {
+                    approvedById.put(t.getId(), t.getAmount());
+                }
+            }
+        }
+        for (OutsourceOrderLine line : lines) {
+            BigDecimal fee = nz(line.getFeeAmount());
+            for (String adjId : adjIdsByLine.getOrDefault(line.getId(), List.of())) {
+                fee = fee.add(approvedById.getOrDefault(adjId, ZERO));
+            }
+            out.put(line.getId(), fee);
+        }
+        return out;
     }
 
     private OutsourceOrder lockOrder(String factoryId, String orderId) {
@@ -1400,7 +1430,8 @@ public class OutsourceService {
         }
     }
 
-    private boolean replayed(String factoryId, String orderId, String clientRequestId, OutsourceMovement.Type action) {
+    private boolean replayed(String factoryId, String orderId, String lineId, String clientRequestId,
+                             OutsourceMovement.Type action) {
         String key = trimToNull(clientRequestId);
         if (key == null) {
             // 收发写操作必须带提交编号: 不带就没有防重, 网络重试会重复耗料 / 重复挂应付 (终审 中6)。
@@ -1422,7 +1453,12 @@ public class OutsourceService {
             throw bad(409, "这个提交编号已用于另一种操作 (" + hit.get().getMovementType() + "), 请重新提交",
                     "OUTSOURCE_REQUEST_ID_CONFLICT", "clientRequestId");
         }
-        log.info("委外收发幂等命中: factory={} order={} requestId={}", factoryId, orderId, key);
+        if (!Objects.equals(lineId, hit.get().getLineId())) {
+            // 同一编号、同一单、同一动作用在另一行 (第 1 行收货后拿同号收第 2 行): 当成重放会静默吃掉第 2 行 (复审 低3)。
+            throw bad(409, "这个提交编号已用于本单的另一行任务, 请重新提交",
+                    "OUTSOURCE_REQUEST_ID_CONFLICT", "clientRequestId");
+        }
+        log.info("委外收发幂等命中: factory={} order={} line={} requestId={}", factoryId, orderId, lineId, key);
         return true;
     }
 
@@ -1512,6 +1548,20 @@ public class OutsourceService {
     List<MaterialBatch> outsourceBatches(String factoryId, String lineId) {
         return materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocIdOrderByBatchNumberAsc(
                 factoryId, DOC_ISSUE, lineId);
+    }
+
+    /** 多行委外结存一次查 (复审 低2)。 */
+    private Map<String, BigDecimal> outsourceBalances(String factoryId, Collection<OutsourceOrderLine> lines) {
+        Map<String, BigDecimal> out = new HashMap<>();
+        if (lines == null || lines.isEmpty()) {
+            return out;
+        }
+        Set<String> lineIds = lines.stream().map(OutsourceOrderLine::getId).collect(Collectors.toSet());
+        for (MaterialBatch b : materialBatchRepository.findByFactoryIdAndSourceDocTypeAndSourceDocIdIn(
+                factoryId, DOC_ISSUE, lineIds)) {
+            out.merge(b.getSourceDocId(), nz(b.getCurrentQuantity()), BigDecimal::add);
+        }
+        return out;
     }
 
     BigDecimal outsourceBalance(String factoryId, String lineId) {

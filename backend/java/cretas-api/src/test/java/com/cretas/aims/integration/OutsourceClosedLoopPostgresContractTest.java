@@ -54,6 +54,8 @@ import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
@@ -61,6 +63,11 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -145,6 +152,7 @@ class OutsourceClosedLoopPostgresContractTest {
     @Autowired WorkProcessTaskRepository tasks;
     @Autowired QualityReturnOrderRepository qros;
     @Autowired MaterialBatchHoldService holds;
+    @Autowired PlatformTransactionManager txManager;
 
     @BeforeAll
     void schema() throws Exception {
@@ -405,6 +413,9 @@ class OutsourceClosedLoopPostgresContractTest {
         WorkProcessTask done = tasks.findById(9001L).orElseThrow();
         assertThat(done.getStatus()).isEqualTo(WorkProcessTask.Status.COMPLETED);
         assertThat(done.getOutsourceFeeAmount()).isEqualByComparingTo("15.00");
+        // 复审 低2: 销售订单加工费 (processingFeeForPlans) 走批量查; 没有委外行的计划 ⇒ null 不伪造 0
+        assertThat(outsource.processingFeeForPlans(F, List.of("OS-PLAN", "NO-SUCH-PLAN"))).isEqualByComparingTo("15.00");
+        assertThat(outsource.processingFeeForPlans(F, List.of("NO-SUCH-PLAN"))).isNull();
     }
 
     // ==================== 3. 质检退回委外: 未关联任务行保持原行为 (高1: 关联入口未接上前不收紧) ====================
@@ -519,6 +530,10 @@ class OutsourceClosedLoopPostgresContractTest {
         assertThat(detailFee(orderId)).as("[待审不扣] 待审冲减不算").isEqualByComparingTo("10.00");
         arAp.approveAdjustment(F, adjId, APPROVER, null);
         assertThat(detailFee(orderId)).as("[批准] 有效加工费 = 10 - 4").isEqualByComparingTo("6.00");
+        // 复审 低2: 列表页走批量查, 口径与详情一致 (批准后 6.00, 委外结存 0)
+        OrderSummary row = summaryOf(orderId);
+        assertThat(row.feeAmount()).as("[列表批量] 有效加工费").isEqualByComparingTo("6.00");
+        assertThat(row.outsourceBalance()).isEqualByComparingTo("0");
 
         // 复审 低2: 只收返工却传了耗用 ⇒ 400
         assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-RW-BAD", null,
@@ -557,6 +572,118 @@ class OutsourceClosedLoopPostgresContractTest {
         assertThat(outsource.close(F, orderId, USER).status()).isEqualTo("CLOSED");
     }
 
+    // ==================== 6. 同一编号 + 同一单 + 同一动作用在另一行 ⇒ 409 (复审 低3) / 列表多行结存 (低2) ====================
+
+    @Test
+    @Order(6)
+    void sameRequestIdOnAnotherLineIsConflictNotReplay() {
+        OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null, List.of(
+                new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("5"), new BigDecimal("1.00"), null),
+                new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("5"), new BigDecimal("1.00"), null))), USER);
+        String orderId = d.id();
+        String line1 = d.lines().get(0).id();
+        String line2 = d.lines().get(1).id();
+        outsource.release(F, orderId, USER);
+        outsource.issue(F, orderId, line1, new IssueRequest("REQ-ML-ISSUE", null,
+                List.of(new BatchQuantity("OS-ML", new BigDecimal("3")))), USER);
+        assertThat(used("OS-ML")).isEqualByComparingTo("3");
+        int movesBefore = count("select count(*) from outsource_movements where factory_id = ?");
+
+        // 阳性对照: 同一行同号重放 ⇒ 静默返回, 不重复发料
+        outsource.issue(F, orderId, line1, new IssueRequest("REQ-ML-ISSUE", null,
+                List.of(new BatchQuantity("OS-ML", new BigDecimal("3")))), USER);
+        assertThat(used("OS-ML")).isEqualByComparingTo("3");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?")).isEqualTo(movesBefore);
+
+        // 低3: 同号拿去发第 2 行 ⇒ 409, 第 2 行没有任何委外仓批次 / 收发
+        assertThatThrownBy(() -> outsource.issue(F, orderId, line2, new IssueRequest("REQ-ML-ISSUE", null,
+                List.of(new BatchQuantity("OS-ML", new BigDecimal("2")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REQUEST_ID_CONFLICT")
+                .hasMessageContaining("另一行");
+        assertThat(used("OS-ML")).isEqualByComparingTo("3");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?")).isEqualTo(movesBefore);
+        assertThat(jdbc.queryForObject("select count(*) from material_batches where source_doc_type = 'OUTSOURCE_ISSUE' "
+                + "and source_doc_id = ?", Integer.class, line2)).isZero();
+
+        // 换新号发第 2 行照常; 列表页两行结存按行合计 (批量查, 复审 低2)
+        outsource.issue(F, orderId, line2, new IssueRequest("REQ-ML-ISSUE-2", null,
+                List.of(new BatchQuantity("OS-ML", new BigDecimal("2")))), USER);
+        assertThat(summaryOf(orderId).outsourceBalance()).as("[列表批量] 3 + 2").isEqualByComparingTo("5");
+    }
+
+    // ==================== 7. 并发同号撞唯一索引 ⇒ 409 而不是 500 (复审 低7) ====================
+
+    @Test
+    @Order(7)
+    void concurrentSameRequestIdOnTwoOrdersHitsUniqueIndexAs409() throws Exception {
+        String orderA = releasedSingleLineOrder();
+        String orderB = releasedSingleLineOrder();
+        String lineA = outsource.detail(F, orderA).lines().get(0).id();
+        String lineB = outsource.detail(F, orderB).lines().get(0).id();
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        CountDownLatch aWrote = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            // A: 发料落库但先不提交 (事务挂住)
+            Future<?> a = pool.submit(() -> tx.executeWithoutResult(st -> {
+                outsource.issue(F, orderA, lineA, new IssueRequest("REQ-RACE", null,
+                        List.of(new BatchQuantity("OS-RACE-A", new BigDecimal("1")))), USER);
+                aWrote.countDown();
+                try {
+                    releaseA.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(aWrote.await(30, TimeUnit.SECONDS)).isTrue();
+            // B: 别的单同号; A 未提交 ⇒ replayed 查不到, 只能靠部分唯一索引挡 (B 的 insert 等 A 提交)
+            Future<Throwable> b = pool.submit(() -> {
+                try {
+                    outsource.issue(F, orderB, lineB, new IssueRequest("REQ-RACE", null,
+                            List.of(new BatchQuantity("OS-RACE-B", new BigDecimal("1")))), USER);
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            });
+            Thread.sleep(1500);
+            assertThat(b.isDone()).as("前提: B 被唯一索引挂住, 等 A 提交").isFalse();
+            releaseA.countDown();
+            a.get(30, TimeUnit.SECONDS);
+            Throwable err = b.get(30, TimeUnit.SECONDS);
+            assertThat(err).isInstanceOf(BusinessException.class)
+                    .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REQUEST_ID_CONFLICT");
+            assertThat(((BusinessException) err).getCode()).isEqualTo(409);
+        } finally {
+            releaseA.countDown();
+            pool.shutdownNow();
+        }
+        // A 落库, B 整个回滚: B 的源批次没被扣, B 单没有收发
+        assertThat(used("OS-RACE-A")).isEqualByComparingTo("1");
+        assertThat(used("OS-RACE-B")).isEqualByComparingTo("0");
+        assertThat(jdbc.queryForObject("select count(*) from outsource_movements where order_id = ?",
+                Integer.class, orderB)).isZero();
+        assertThat(jdbc.queryForObject("select count(*) from outsource_movements where order_id = ? "
+                + "and client_request_id = 'REQ-RACE'", Integer.class, orderA)).isEqualTo(1);
+    }
+
+    private String releasedSingleLineOrder() {
+        OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null, List.of(
+                new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("5"), new BigDecimal("1.00"), null))), USER);
+        outsource.release(F, d.id(), USER);
+        return d.id();
+    }
+
+    private OrderSummary summaryOf(String orderId) {
+        return outsource.list(F, null, List.of("RELEASED", "CLOSED"), null, 1, 200).getContent().stream()
+                .filter(r -> r.id().equals(orderId)).findFirst().orElseThrow();
+    }
+
     // ==================== helpers ====================
 
     private void seed() {
@@ -582,6 +709,9 @@ class OutsourceClosedLoopPostgresContractTest {
         batch("OS-PACK", "MT-PACK", "50", "个", "0.10");
         batch("OS-RAW2", "MT-RAW", "20", "kg", "3.00");
         batch("OS-CRAW", "MT-RAW", "10", "kg", "1.00");
+        batch("OS-ML", "MT-RAW", "10", "kg", "1.00");
+        batch("OS-RACE-A", "MT-RAW", "5", "kg", "1.00");
+        batch("OS-RACE-B", "MT-RAW", "5", "kg", "1.00");
         jdbc.update("update material_batches set ownership = 'CUSTOMER_OWNED', owner_customer_id = 'CUST-OS-1' "
                 + "where id = 'OS-CRAW'");
 

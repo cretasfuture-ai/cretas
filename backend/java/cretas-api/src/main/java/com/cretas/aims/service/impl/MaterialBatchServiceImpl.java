@@ -1009,6 +1009,9 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("误录入批次请联系工厂管理员或仓储主管删除; 库存差异请走盘亏处理");
         }
 
+        // 委外厂手里的料: 刚发料的委外仓批次 current == receipt, 删掉会让委外结存凭空消失、没有损耗记录还能结单 (#1723 复审 低5)。
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
+
         // 只能删除未使用的批次
         if (!batch.getCurrentQuantity().equals(batch.getReceiptQuantity())) {
             throw new BusinessException(409, "已使用的批次不能删除")

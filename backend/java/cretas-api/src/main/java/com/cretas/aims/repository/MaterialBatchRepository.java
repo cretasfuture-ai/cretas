@@ -1037,6 +1037,10 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     java.util.List<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocIdOrderByBatchNumberAsc(
             String factoryId, String sourceDocType, String sourceDocId);
 
+    /** 委外列表页一次取多行的委外仓批次 (#1723 复审 低2, 免得每行查一次)。 */
+    java.util.List<MaterialBatch> findByFactoryIdAndSourceDocTypeAndSourceDocIdIn(
+            String factoryId, String sourceDocType, java.util.Collection<String> sourceDocIds);
+
     /** 期初建账幂等存在性检查 (是否已用该 batchKey 建过期初批次)。 */
     boolean existsByFactoryIdAndSourceDocTypeAndSourceDocId(
             String factoryId, String sourceDocType, String sourceDocId);

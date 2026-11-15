@@ -353,6 +353,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         if (opening) {
             batches = resolveOpeningBatchScope(factoryId, req.getWarehouseId(), scopedMaterialBatchIds, batches);
         }
+        rejectOutsourceBatches(batches);
         // 🔴 Fix (🔒🔒 生产仓延迟扣减盲区, 2026-07-04): 逐批预取未小结报工消耗量 (见 loadUnsettledByBatch)。
         Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
                 batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
@@ -898,6 +899,8 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                 log.warn("SP7 apply: 批次不存在，跳过 batchId={}", item.getMaterialBatchId());
                 continue;
             }
+            // 委外厂手里的料数量只走委外单 (#1723 复审 低5); 发起时已拦, 这里兜住发起闸之前建的盘点单。
+            com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
             // 差异是 delta (= 实盘 − 快照货架实物量), 把它加到 receiptQuantity 上即可让
             // getPhysicalQuantity() (= receipt − used) 精确落到实盘真值 —— used/reserved 不变,
@@ -1394,6 +1397,7 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
                     .toList();
             batches = resolveOpeningBatchScope(factoryId, source.getWarehouseId(), selectedBatchIds, batches);
         }
+        rejectOutsourceBatches(batches);
         Map<String, BigDecimal> unsettledByBatch = loadUnsettledByBatch(factoryId,
                 batches.stream().map(MaterialBatch::getId).collect(Collectors.toList()));
         List<FactoryStocktakeItem> items = new ArrayList<>();
@@ -2000,6 +2004,19 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     // -------------------------------------------------------
     // private helpers
     // -------------------------------------------------------
+
+    /**
+     * 委外仓 (委外厂手里的料) 不能盘点: 盘点生效直接平移 receiptQuantity, 会绕过委外单的发料 / 退料 / 损耗,
+     * 委外结存与委外单对不上 (#1723 复审 低5)。委外厂的料差异请在委外单上退料或登记损耗。
+     */
+    private static void rejectOutsourceBatches(List<MaterialBatch> batches) {
+        if (batches != null && batches.stream()
+                .anyMatch(com.cretas.aims.service.quality.release.MaterialBatchHoldService::isOutsourceBatch)) {
+            throw new BusinessException(409, "委外仓是委外厂手里的料, 不能盘点; 差异请到委外单上退料或登记损耗")
+                    .withCode("STOCKTAKE_OUTSOURCE_WAREHOUSE")
+                    .withHint("到委外单上操作退料 / 损耗");
+        }
+    }
 
     private List<MaterialBatch> resolveOpeningBatchScope(String factoryId, String warehouseId,
             List<String> requestedBatchIds, List<MaterialBatch> warehouseBatches) {

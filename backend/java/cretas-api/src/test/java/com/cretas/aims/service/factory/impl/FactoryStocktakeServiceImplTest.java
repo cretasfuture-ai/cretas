@@ -1695,6 +1695,79 @@ class FactoryStocktakeServiceImplTest {
         return batch;
     }
 
+    // -------------------------------------------------------
+    // #1723 复审 低5: 委外仓 (委外厂手里的料) 不能盘点 — 盘点生效直接平移 receiptQuantity, 绕过委外单收发
+    // -------------------------------------------------------
+    @Test
+    @DisplayName("#1723 低5: 仓里有委外仓批次 → 发起盘点 409 STOCKTAKE_OUTSOURCE_WAREHOUSE, 不建盘点单")
+    void initiate_rejectsOutsourceWarehouse() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        MaterialBatch os = materialBatch("OS-1", "10");
+        os.setSourceDocType("OUTSOURCE_ISSUE");
+        os.setStatus(MaterialBatchStatus.RESERVED);
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(materialBatch("MB-1", "5"), os));
+
+        assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> {
+                    assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
+                    assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("STOCKTAKE_OUTSOURCE_WAREHOUSE");
+                });
+        verify(stocktakeRepo, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("#1723 低5 阳性对照: 普通批次 (含其它 sourceDocType) 照常发起盘点")
+    void initiate_ordinaryWarehouseStillAllowed() {
+        ReflectionTestUtils.setField(service, "monthEndThreshold", 1);
+        CreateStocktakeRequest req = new CreateStocktakeRequest();
+        req.setWarehouseId(WAREHOUSE_ID);
+        MaterialBatch received = materialBatch("MB-2", "5");
+        received.setSourceDocType("OUTSOURCE_RECEIVE");
+        when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
+        when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
+                .thenReturn(List.of(materialBatch("MB-1", "5"), received));
+        when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        service.initiate(FACTORY_ID, req, USER_ID);
+        ArgumentCaptor<FactoryStocktake> captor = ArgumentCaptor.forClass(FactoryStocktake.class);
+        verify(stocktakeRepo).save(captor.capture());
+        assertThat(captor.getValue().getItems()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("#1723 低5: 闸之前建的盘点单里有委外仓批次差异 → 生效 409, 数量与凭证都不动")
+    void apply_rejectsOutsourceBatchDifference() {
+        FactoryStocktakeItem item = new FactoryStocktakeItem();
+        item.setId(UUID.randomUUID().toString());
+        item.setMaterialBatchId("OS-1");
+        item.setSystemQty(new BigDecimal("10.0000"));
+        item.setActualQty(new BigDecimal("7.0000"));
+        item.setDifferenceQty(new BigDecimal("-3.0000"));
+        item.setDifferenceType(FactoryStocktakeItem.DifferenceType.SHORTAGE);
+        FactoryStocktake stocktake = buildStocktake(FactoryStocktake.Status.APPROVED);
+        List<FactoryStocktakeItem> itemList = new ArrayList<>();
+        itemList.add(item);
+        stocktake.setItems(itemList);
+        item.setStocktake(stocktake);
+        when(stocktakeRepo.findById(stocktake.getId())).thenReturn(Optional.of(stocktake));
+        MaterialBatch os = materialBatch("OS-1", "10.00");
+        os.setSourceDocType("OUTSOURCE_ISSUE");
+        os.setStatus(MaterialBatchStatus.RESERVED);
+        when(materialBatchRepo.findById("OS-1")).thenReturn(Optional.of(os));
+
+        assertThatThrownBy(() -> service.apply(stocktake.getId(), FACTORY_ID, USER_ID))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
+        assertThat(os.getReceiptQuantity()).isEqualByComparingTo("10");
+        verify(adjustmentRepo, never()).save(any());
+        verify(materialBatchRepo, never()).save(any());
+    }
+
     private MaterialBatch materialBatch(String id, String receiptQuantity) {
         MaterialBatch batch = new MaterialBatch();
         batch.setId(id);

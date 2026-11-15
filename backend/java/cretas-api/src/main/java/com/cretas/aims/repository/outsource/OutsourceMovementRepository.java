@@ -15,5 +15,8 @@ public interface OutsourceMovementRepository extends JpaRepository<OutsourceMove
 
     List<OutsourceMovement> findByLineIdOrderByCreatedAtAsc(String lineId);
 
+    List<OutsourceMovement> findByLineIdInAndMovementTypeIn(Collection<String> lineIds,
+                                                            Collection<OutsourceMovement.Type> types);
+
     Optional<OutsourceMovement> findFirstByFactoryIdAndClientRequestId(String factoryId, String clientRequestId);
 }
