@@ -19,6 +19,7 @@ vi.mock('element-plus', async (orig) => {
   return { ...mod, ElMessageBox: { ...mod.ElMessageBox, confirm: (...a: unknown[]) => state.confirm(...a) } };
 });
 import Page from '../index.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const ok = (data: unknown) => ({ success: true, data });
 const alert = {
@@ -60,7 +61,7 @@ beforeEach(() => {
 });
 
 async function openDrawer() {
-  const wrapper = mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  const wrapper = mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
   await flushPromises();
   await wrapper.find('[data-testid="cc-open-7"]').trigger('click');
   await flushPromises();

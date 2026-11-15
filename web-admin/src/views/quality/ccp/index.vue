@@ -13,7 +13,9 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { Refresh, Download, Search } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
+import iconCcp from '@/assets/quality/icon-ccp.webp';
 import { useAuthStore } from '@/store/modules/auth';
 import { handleCatchError } from '@/utils/errorToast';
 import {
@@ -36,6 +38,32 @@ const batchNumber = ref('');
 const batchLoading = ref(false);
 const batchRows = ref<CcpRecordView[] | null>(null);
 const exporting = ref(false);
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const OPEN_COLUMNS: TableColumn<CcpRecordView>[] = [
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { id: 'checkpoint', header: '控制点' },
+  { id: 'measured', header: '实测值', meta: R },
+  { id: 'limit', header: '合格范围' },
+  { id: 'operator', header: '录入' },
+  { id: 'actions', header: '操作', meta: C },
+];
+const BATCH_COLUMNS: TableColumn<CcpRecordView>[] = [
+  { id: 'time', header: '时间' },
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { accessorKey: 'processOrder', header: '工序序' },
+  { id: 'checkpoint', header: '控制点' },
+  { id: 'measured', header: '实测值', meta: R },
+  { id: 'limit', header: '合格范围' },
+  { id: 'result', header: '结果' },
+  { accessorKey: 'deviationAction', header: '纠偏措施' },
+  { id: 'actions', header: '操作', meta: C },
+];
+const tabItems = computed<TabsItem[]>(() => [
+  { label: `未处理偏离 (${openRows.value.length})`, value: 'open', slot: 'open' },
+  { label: '按批次查看 / 导出', value: 'batch', slot: 'batch' },
+]);
 
 const handleVisible = ref(false);
 const handling = ref<CcpRecordView | null>(null);
@@ -152,178 +180,120 @@ onMounted(() => {
 
 <template>
   <div class="ccp-page">
-    <div class="page-header">
-      <div>
-        <h2 class="title">CCP 监控记录</h2>
-        <p class="subtitle">
-          关键控制点在报工时录入；超出临界限值会记偏离并让该批次待检。处理完偏离，才能在「质检放行」放行。
-          控制点与所属工序在「Canvas 配置编辑器 → 食品安全 → HACCP 关键控制点」维护。
-        </p>
+    <div class="cs-page-head">
+      <div class="head-main">
+        <img :src="iconCcp" alt="" class="head-icon" width="56" height="56">
+        <div>
+          <h2>CCP 监控记录</h2>
+          <p>
+            关键控制点在报工时录入；超出临界限值会记偏离并让该批次待检。处理完偏离，才能在「质检放行」放行。
+            控制点与所属工序在「Canvas 配置编辑器 → 食品安全 → HACCP 关键控制点」维护。
+          </p>
+        </div>
       </div>
-      <el-button @click="goRelease">去质检放行</el-button>
+      <UButton color="neutral" variant="outline" @click="goRelease">去质检放行</UButton>
     </div>
 
-    <el-tabs v-model="activeTab">
-      <el-tab-pane :label="`未处理偏离 (${openRows.length})`" name="open">
-        <div class="toolbar">
-          <el-button :icon="Refresh" :loading="openLoading" @click="loadOpen">刷新</el-button>
-        </div>
-        <el-table v-loading="openLoading" :data="openRows" stripe empty-text="没有未处理的偏离" data-testid="ccp-open-table">
-          <el-table-column prop="batchNumber" label="批次号" min-width="190" show-overflow-tooltip />
-          <el-table-column label="控制点" min-width="140">
-            <template #default="{ row }">{{ row.checkpointName || row.checkpointCode || row.checkpointId }}</template>
-          </el-table-column>
-          <el-table-column label="实测值" width="120" align="right">
-            <template #default="{ row }"><span class="bad">{{ row.measuredValue }} {{ row.unit }}</span></template>
-          </el-table-column>
-          <el-table-column label="合格范围" width="150">
-            <template #default="{ row }">{{ limitText(row) }}</template>
-          </el-table-column>
-          <el-table-column label="录入" min-width="170">
-            <template #default="{ row }">{{ row.operatorName || `用户 ${row.operatorUserId}` }} · {{ timeText(row.monitoringTime) }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="120" align="center" fixed="right">
-            <template #default="{ row }">
-              <el-button type="danger" size="small" :data-testid="`ccp-handle-${row.id}`" @click="openHandle(row)">处理偏离</el-button>
+    <section class="cs-card">
+      <UTabs v-model="activeTab" :items="tabItems" variant="link" :ui="{ content: 'pt-0' }">
+        <template #open>
+          <div class="toolbar">
+            <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="openLoading" @click="loadOpen">刷新</UButton>
+          </div>
+          <UTable :data="openRows" :columns="OPEN_COLUMNS" :loading="openLoading" class="cs-table" data-testid="ccp-open-table">
+            <template #empty><div class="cs-empty-art"><img :src="iconCcp" alt="" width="96"><span>没有未处理的偏离</span></div></template>
+            <template #checkpoint-cell="{ row }">{{ row.original.checkpointName || row.original.checkpointCode || row.original.checkpointId }}</template>
+            <template #measured-cell="{ row }"><span class="bad num">{{ row.original.measuredValue }} {{ row.original.unit }}</span></template>
+            <template #limit-cell="{ row }">{{ limitText(row.original) }}</template>
+            <template #operator-cell="{ row }">{{ row.original.operatorName || `用户 ${row.original.operatorUserId}` }} · {{ timeText(row.original.monitoringTime) }}</template>
+            <template #actions-cell="{ row }">
+              <UButton color="error" size="xs" :data-testid="`ccp-handle-${row.original.id}`" @click="openHandle(row.original)">处理偏离</UButton>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+          </UTable>
+        </template>
 
-      <el-tab-pane label="按批次查看 / 导出" name="batch">
-        <div class="toolbar">
-          <el-input
-            v-model="batchNumber"
-            placeholder="输入批次号（成品批号会带出同一生产计划全部工序的记录）"
-            clearable
-            style="width: 420px"
-            data-testid="ccp-batch-input"
-            @keyup.enter="searchBatch"
-          />
-          <el-button type="primary" :icon="Search" :loading="batchLoading" @click="searchBatch">查询</el-button>
-          <el-button :icon="Download" :loading="exporting" :disabled="!batchNumber.trim()" @click="doExport">导出 CSV</el-button>
-        </div>
-        <el-table v-if="batchRows" v-loading="batchLoading" :data="batchRows" stripe empty-text="这个批次没有 CCP 记录">
-          <el-table-column label="时间" min-width="160">
-            <template #default="{ row }">{{ timeText(row.monitoringTime) }}</template>
-          </el-table-column>
-          <el-table-column prop="batchNumber" label="批次号" min-width="170" show-overflow-tooltip />
-          <el-table-column prop="processOrder" label="工序序" width="80" align="center" />
-          <el-table-column label="控制点" min-width="130">
-            <template #default="{ row }">{{ row.checkpointName || row.checkpointCode }}</template>
-          </el-table-column>
-          <el-table-column label="实测值" width="110" align="right">
-            <template #default="{ row }">{{ row.measuredValue }} {{ row.unit }}</template>
-          </el-table-column>
-          <el-table-column label="合格范围" width="150">
-            <template #default="{ row }">{{ limitText(row) }}</template>
-          </el-table-column>
-          <el-table-column label="结果" width="120">
-            <template #default="{ row }">
-              <el-tag :type="RESULT_TAG[row.result]">{{ RESULT_LABELS[row.result] ?? row.result }}</el-tag>
+        <template #batch>
+          <div class="toolbar">
+            <UInput
+              v-model="batchNumber"
+              icon="i-lucide-search"
+              placeholder="输入批次号（成品批号会带出同一生产计划全部工序的记录）"
+              class="w-105"
+              data-testid="ccp-batch-input"
+              @keyup.enter="searchBatch"
+            />
+            <UButton :loading="batchLoading" icon="i-lucide-search" @click="searchBatch">查询</UButton>
+            <UButton color="neutral" variant="outline" icon="i-lucide-download" :loading="exporting" :disabled="!batchNumber.trim()" @click="doExport">导出 CSV</UButton>
+          </div>
+          <UTable v-if="batchRows" :data="batchRows" :columns="BATCH_COLUMNS" :loading="batchLoading" class="cs-table">
+            <template #empty>这个批次没有 CCP 记录</template>
+            <template #time-cell="{ row }">{{ timeText(row.original.monitoringTime) }}</template>
+            <template #checkpoint-cell="{ row }">{{ row.original.checkpointName || row.original.checkpointCode }}</template>
+            <template #measured-cell="{ row }"><span class="num">{{ row.original.measuredValue }} {{ row.original.unit }}</span></template>
+            <template #limit-cell="{ row }">{{ limitText(row.original) }}</template>
+            <template #result-cell="{ row }">
+              <UBadge :color="badgeColor(RESULT_TAG[row.original.result])" variant="soft">{{ RESULT_LABELS[row.original.result] ?? row.original.result }}</UBadge>
             </template>
-          </el-table-column>
-          <el-table-column prop="deviationAction" label="纠偏措施" min-width="180" show-overflow-tooltip />
-          <el-table-column label="操作" width="110" align="center">
-            <template #default="{ row }">
-              <el-button v-if="row.result === 'DEVIATION_OPEN'" link type="danger" @click="openHandle(row)">处理偏离</el-button>
+            <template #actions-cell="{ row }">
+              <UButton v-if="row.original.result === 'DEVIATION_OPEN'" color="error" variant="link" size="xs" @click="openHandle(row.original)">处理偏离</UButton>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
-    </el-tabs>
+          </UTable>
+        </template>
+      </UTabs>
+    </section>
 
-    <el-dialog v-model="handleVisible" title="处理 CCP 偏离" width="520px" :close-on-click-modal="false">
-      <template v-if="handling">
-        <el-descriptions :column="1" border size="small" class="mb">
-          <el-descriptions-item label="批次号">{{ handling.batchNumber }}</el-descriptions-item>
-          <el-descriptions-item label="控制点">{{ handling.checkpointName || handling.checkpointCode }}</el-descriptions-item>
-          <el-descriptions-item label="实测 / 合格范围">
-            <span class="bad">{{ handling.measuredValue }} {{ handling.unit }}</span> / {{ limitText(handling) }}
-          </el-descriptions-item>
-          <el-descriptions-item v-if="handling.correctiveActionGuide" label="规定纠偏措施">
-            {{ handling.correctiveActionGuide }}
-          </el-descriptions-item>
-        </el-descriptions>
-        <el-form label-position="top">
-          <el-form-item label="实际采取的纠偏措施" required>
+    <UModal
+      v-model:open="handleVisible"
+      title="处理 CCP 偏离"
+      description="填写实际采取的纠偏措施"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[520px]', description: 'sr-only' }"
+    >
+      <template #body>
+        <template v-if="handling">
+          <dl class="summary">
+            <div><dt>批次号</dt><dd>{{ handling.batchNumber }}</dd></div>
+            <div><dt>控制点</dt><dd>{{ handling.checkpointName || handling.checkpointCode }}</dd></div>
+            <div><dt>实测 / 合格范围</dt><dd><span class="bad">{{ handling.measuredValue }} {{ handling.unit }}</span> / {{ limitText(handling) }}</dd></div>
+            <div v-if="handling.correctiveActionGuide"><dt>规定纠偏措施</dt><dd>{{ handling.correctiveActionGuide }}</dd></div>
+          </dl>
+          <UFormField label="实际采取的纠偏措施" required class="mt-3">
             <div class="presets">
-              <el-button v-if="handling.correctiveActionGuide" class="preset" size="small" plain type="primary"
+              <UButton v-if="handling.correctiveActionGuide" class="preset" size="xs" color="primary" variant="soft"
                 @click="applyAction(handling.correctiveActionGuide || '')">
                 按规定：{{ handling.correctiveActionGuide }}
-              </el-button>
-              <el-button v-for="a in COMMON_ACTIONS" :key="a" class="preset" size="small" plain @click="applyAction(a)">{{ a }}</el-button>
+              </UButton>
+              <UButton v-for="a in COMMON_ACTIONS" :key="a" class="preset" size="xs" color="neutral" variant="soft" @click="applyAction(a)">{{ a }}</UButton>
             </div>
-            <el-input
+            <UTextarea
               v-model="action"
-              type="textarea"
               :rows="3"
-              maxlength="1000"
-              show-word-limit
+              :maxlength="1000"
               placeholder="例如：继续加热 5 分钟，复测中心温度 79℃ 合格"
+              class="w-full"
               data-testid="ccp-action"
             />
-          </el-form-item>
-        </el-form>
+          </UFormField>
+        </template>
       </template>
       <template #footer>
         <span v-if="!action.trim()" class="disabled-reason">请填写纠偏措施</span>
-        <el-button @click="handleVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" :disabled="!action.trim()" data-testid="ccp-handle-submit" @click="submitHandle">
-          确认已处理
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="handleVisible = false">取消</UButton>
+        <UButton :loading="submitting" :disabled="!action.trim()" data-testid="ccp-handle-submit" @click="submitHandle">确认已处理</UButton>
       </template>
-    </el-dialog>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.ccp-page {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 4px;
-  color: #303133;
-}
-.page-header .subtitle {
-  font-size: 13px;
-  color: #606266;
-  margin: 0;
-  line-height: 1.6;
-}
-.toolbar {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.bad {
-  color: #f56c6c;
-  font-weight: 600;
-}
-.mb {
-  margin-bottom: 12px;
-}
-.presets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.preset {
-  margin-left: 0;
-}
-.disabled-reason {
-  color: #f56c6c;
-  font-size: 12px;
-  margin-right: 12px;
-}
+.ccp-page { padding: var(--cs-space-4); }
+.head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
+.head-icon { flex: none; border-radius: var(--cs-radius); }
+.toolbar { display: flex; gap: var(--cs-space-2); align-items: center; padding: var(--cs-space-3) var(--cs-space-5); }
+.bad { color: var(--cs-danger); font-weight: 600; }
+.presets { display: flex; flex-wrap: wrap; gap: var(--cs-space-2); margin-bottom: var(--cs-space-2); }
+.disabled-reason { color: var(--cs-danger); font-size: var(--cs-font-small); margin-right: var(--cs-space-3); }
+.summary { display: grid; gap: var(--cs-space-2); margin: 0; padding: var(--cs-space-3) var(--cs-space-4); background: var(--cs-surface-subtle); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); }
+.summary dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.summary dd { margin: 2px 0 0; color: var(--cs-text); }
 </style>

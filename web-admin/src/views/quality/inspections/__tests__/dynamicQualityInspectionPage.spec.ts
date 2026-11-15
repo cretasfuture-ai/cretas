@@ -12,6 +12,7 @@ vi.mock('@/api/request', () => ({ get: (...args: unknown[]) => state.get(...args
 vi.mock('@/composables/useListSummary', () => ({ useListSummary: () => ({ summary: null, loading: false }) }));
 vi.mock('@/composables/useCreateAndReturn', () => ({ useCreateAndReturn: () => ({ goCreate: vi.fn() }) }));
 import Page from '../list.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const batch = { id: 11003, batchNumber: '11003', productName: 'QA原料成品', unit: '盒', quantity: 10 };
 const dynamicForm = {
@@ -22,7 +23,7 @@ const ok = (data: unknown) => ({ success: true, data });
 
 function mountPage() {
   return mount(Page, { global: { plugins: [ElementPlus], stubs: {
-    CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
+    ...nuxtUiStubs, CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
     TableFooter: true, UpstreamMissingHint: true,
   } } });
 }
