@@ -197,6 +197,9 @@ public class ToolDispatchService {
             });
             return null;
         }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refuses(tool.getToolName(), request.getUserInput())) {
+            return readTurnRefusal(intent, "EXTERNAL_DATA_REFUSED", com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE);
+        }
         if (request.getContext() != null) {
             request.getContext().keySet().forEach(key -> {
                 if (properties.containsKey(key) && params.get(key) != null) {
@@ -672,6 +675,10 @@ public class ToolDispatchService {
             }
             if (!boundConfirmation) {
                 params.put("userInput", userInputToUse);
+                // 预处理会把「上月」等换成日期区间; 工具要判「和上月比」这类说法时读原话
+                if (request.getUserInput() != null) {
+                    params.put("originalUserInput", request.getUserInput());
+                }
             }
             params.put("intentCode", intent.getIntentCode());
 

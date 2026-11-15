@@ -28,6 +28,9 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
     @Autowired
     private ReportService reportService;
 
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
     /** 工艺保密: 文案直接进模型上下文, 含保密产品的全厂总成本不写进文案 (Steve 10-28)。 */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
@@ -80,6 +83,12 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         productTypeId.put("description", "产品类型ID，筛选特定产品的成本差异数据");
         properties.put("productTypeId", productTypeId);
 
+        // productName: 产品名（可选）, 本厂在用产品里解析成 productTypeId
+        Map<String, Object> productName = new HashMap<>();
+        productName.put("type", "string");
+        productName.put("description", "产品名（可选）；完全同名优先，多个包含匹配时给候选不合计");
+        properties.put("productName", productName);
+
         // varianceThreshold: 差异阈值百分比（可选）
         Map<String, Object> varianceThreshold = new HashMap<>();
         varianceThreshold.put("type", "number");
@@ -89,7 +98,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
 
-        return schema;
+        return ReportToolSchemas.withOptionalExtraction(schema);
     }
 
     @Override
@@ -106,8 +115,33 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
-        Double varianceThreshold = params.get("varianceThreshold") != null
-                ? ((Number) params.get("varianceThreshold")).doubleValue()
+        String productName = getString(params, "productName");
+        // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
+        if (productTypeId != null && productTypeRepository != null) {
+            final String candidateId = productTypeId;
+            java.util.List<com.cretas.aims.entity.ProductType> catalog = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
+            boolean inCatalog = catalog != null && catalog.stream().anyMatch(t -> candidateId.equals(t.getId()));
+            if (!inCatalog) {
+                if (productName == null || productName.isBlank()) productName = productTypeId;
+                productTypeId = null;
+            }
+        }
+        if (productTypeId == null && productName != null && !productName.isBlank() && productTypeRepository != null) {
+            java.util.List<com.cretas.aims.entity.ProductType> candidates =
+                    ReportToolSchemas.matchProducts(productTypeRepository, factoryId, productName.trim());
+            String msg = ReportToolSchemas.productResolutionMessage(candidates, productName.trim(), "给出成本差异");
+            if (msg != null) {
+                Map<String, Object> none = new LinkedHashMap<>();
+                none.put("productFilter", productName);
+                none.put("candidates", candidates.stream().map(com.cretas.aims.entity.ProductType::getName).toList());
+                return buildSimpleResult(msg, none);
+            }
+            productTypeId = candidates.get(0).getId();
+        }
+        // 差异阈值: 只接受 (0, 1000] 的数值; 抽参给的其它值 (0、负数、文字) 忽略, 不悄悄过滤掉产品
+        Double varianceThreshold = params.get("varianceThreshold") instanceof Number n
+                && n.doubleValue() > 0 && n.doubleValue() <= 1000
+                ? Double.valueOf(n.doubleValue())
                 : null;
 
         // 计算日期范围

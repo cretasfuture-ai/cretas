@@ -3056,6 +3056,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出成率最低的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最低", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最高的批次", "REPORT_BATCH_YIELD_RANK");
+        // 财务复跑 (2026-11-15): 标准成本差异走成本差异; 「和上月比」走成本查询的环比上月
+        phraseToIntentMapping.put("实际成本和标准成本差多少", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本与标准成本差多少", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本和标准成本", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本与标准成本", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("标准成本差异", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("和上月比哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("和上月比成本", "COST_QUERY");
+        phraseToIntentMapping.put("跟上月比哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("比上月哪个成本涨了", "COST_QUERY");
+        // 不收太宽的「哪个成本涨了」: 「哪个原料成本涨了」可能是原料价格趋势; 短语走向量相似, 越宽越容易抢别的意图
+        phraseToIntentMapping.put("成本环比上月", "COST_QUERY");
         // AI 问答 BI 第 2 段 (只读, 2026-11-15 新增绑定; 不改既有意图): BOM 成本排行 / 本月销售额毛利 / 人工成本占比
         phraseToIntentMapping.put("BOM成本最高的产品", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("哪个产品BOM成本最高", "REPORT_BOM_COST_RANK");

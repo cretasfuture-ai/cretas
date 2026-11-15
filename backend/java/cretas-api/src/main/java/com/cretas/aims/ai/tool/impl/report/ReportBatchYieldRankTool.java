@@ -48,17 +48,17 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "startDate", Map.of("type", "string", "description", "开始日期 yyyy-MM-dd，默认最近 30 天"),
-                        "endDate", Map.of("type", "string", "description", "结束日期 yyyy-MM-dd，默认今天"),
+                        "startDate", Map.of("type", "string", "format", "date", "description", "开始日期 yyyy-MM-dd，默认最近 30 天"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "结束日期 yyyy-MM-dd，默认今天"),
                         "period", Map.of("type", "string", "description", "快捷周期: last_week / this_week / this_month / last_month；与日期同时给时以日期为准"),
                         "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配）"),
                         "order", Map.of("type", "string", "description", "lowest=出成率最低在前(默认) / highest=最高在前"),
                         "limit", Map.of("type", "integer", "description", "返回前几名，默认 10，最多 30")
                 ),
-                "required", List.of());
+                "required", List.of()));
     }
 
     @Override

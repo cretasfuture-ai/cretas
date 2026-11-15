@@ -69,15 +69,15 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
                         "productName", Map.of("type", "string", "description", "产品名称(可选，模糊匹配，不填则查全部有销售或有目录价的产品)"),
-                        "startDate", Map.of("type", "string", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
-                        "endDate", Map.of("type", "string", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
+                        "startDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
                 ),
                 "required", List.of()
-        );
+        ));
     }
 
     @Override
@@ -304,7 +304,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private Map<String, Object> buildCatalog(String factoryId, ProductType type) {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("definition", "目录价理论毛利: 产品目录价 vs 最近一条已算出单位成本的批次 (三价对比看板同一口径)");
+        m.put("definition", "目录价理论毛利: 产品目录价 vs 最近 " + ThreePriceComparisonService.CATALOG_COST_BATCHES + " 批已算出单位成本批次的加权单位成本 (按实际产量加权, 不取单批)");
         if (type == null) {
             m.put("status", "NOT_IN_CATALOG");
             m.put("reason", "该产品不在在用产品目录中，没有目录价");
@@ -337,6 +337,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         m.put("marginRate", status.equals("OK") ? cm.grossMarginPct() : null);   // 已是百分数
         m.put("costBatchNumber", cm.costBatchNumber());
         m.put("costAsOf", cm.costAsOf() != null ? cm.costAsOf().toString() : null);
+        m.put("costBatchCount", cm.costBatchCount());
+        m.put("latestBatchUnitCost", money(cm.latestBatchUnitCost()));
         return m;
     }
 
@@ -416,12 +418,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String catalogText(Map<String, Object> c) {
         if ("OK".equals(c.get("status"))) {
-            return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，最近批次 " + c.get("costBatchNumber")
-                    + " 单位成本 " + moneyText(c.get("unitCost")) + "）";
+            return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，近 " + c.get("costBatchCount")
+                    + " 批（最近 " + c.get("costBatchNumber") + "）加权单位成本（总成本 ÷ 实际产量）" + moneyText(c.get("unitCost")) + "）";
         }
         StringBuilder sb = new StringBuilder((String) c.get("reason"));
         if (c.get("price") != null) sb.append("（目录价 ").append(moneyText(c.get("price"))).append("）");
-        if (c.get("unitCost") != null) sb.append("（最近批次单位成本 ").append(moneyText(c.get("unitCost"))).append("）");
+        if (c.get("unitCost") != null) sb.append("（近批次加权单位成本 ").append(moneyText(c.get("unitCost"))).append("）");
         return sb.toString();
     }
 

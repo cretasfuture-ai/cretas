@@ -311,6 +311,43 @@ class ReadTurnParameterEntryContractTest {
         assertThat(sources(response)).containsEntry("size", "DEFAULT");
     }
 
+    // ------------------------------------------------------------------ 竞品拒答接线 (PR #1739 M1)
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("问竞争对手的成本: 走真实调度入口被拒 (EXTERNAL_DATA_REFUSED), 成本工具一次都没执行; 问本厂成本照常执行")
+    void competitorCostQuestionIsRefusedAtTheEntryAndTheToolNeverRuns(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("竞争对手的卤牛肉成本是多少", h.costQuery);
+        h.recognize("本月卤牛肉的总成本是多少", h.costQuery);
+        h.recognize("本月卤牛肉成本和上月比", h.costQuery);
+
+        IntentExecuteResponse refused = h.say("竞争对手的卤牛肉成本是多少");
+        assertThat(refused.getStatus()).as(refused.getMessage()).isEqualTo("EXTERNAL_DATA_REFUSED");
+        assertThat(refused.getMessage()).contains("未执行查询");
+        verify(h.costTool, never()).execute(any(), anyMap());
+
+        // 阴性对照: 同一个工具, 本厂问法 / 含「对比」「上月」字样都不拒, 工具真的被执行
+        assertThat(h.say("本月卤牛肉的总成本是多少").getStatus()).isNotEqualTo("EXTERNAL_DATA_REFUSED");
+        assertThat(h.say("本月卤牛肉成本和上月比").getStatus()).isNotEqualTo("EXTERNAL_DATA_REFUSED");
+        verify(h.costTool, times(2)).execute(any(), anyMap());
+    }
+
+    // PR #1739 N3: 识别入口把用户原话交给工具 (预处理后的 userInput 里「上月」已被换成日期区间, 工具判环比要读原话)
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("成本查询: 工具拿到的参数里带用户原话 originalUserInput (和预处理后的 userInput 并存)")
+    void costToolReceivesTheOriginalSentence(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("本月卤牛肉成本和上月比", h.costQuery);
+        h.say("本月卤牛肉成本和上月比");
+        ArgumentCaptor<com.cretas.aims.ai.dto.ToolCall> call = ArgumentCaptor.forClass(com.cretas.aims.ai.dto.ToolCall.class);
+        verify(h.costTool).execute(call.capture(), anyMap());
+        // 工具的参数 = ToolCall.arguments (JSON)
+        assertThat(call.getValue().getFunction().getArguments())
+                .contains("\"originalUserInput\":\"本月卤牛肉成本和上月比\"");
+    }
+
     // ------------------------------------------------------------------ helpers
 
     @SuppressWarnings("unchecked")
@@ -362,6 +399,9 @@ class ReadTurnParameterEntryContractTest {
         private final AIIntentConfig materialBatches;
         private final AIIntentConfig salesRanking;
         private final AIIntentConfig paginationNext;
+        private final AIIntentConfig costQuery;
+        private final com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool costTool =
+                org.mockito.Mockito.spy(new com.cretas.aims.ai.tool.impl.report.ReportCostQueryTool());
         private IntentExecutionOrchestrator orchestrator;
         private SseStreamingService sse;
         private final SseEmitter emitter = mock(SseEmitter.class);
@@ -390,7 +430,8 @@ class ReadTurnParameterEntryContractTest {
             ReflectionTestUtils.setField(materialTool, "materialBatchService", materials);
             ProductSalesRankingTool rankingTool = new ProductSalesRankingTool(ranking);
             ReflectionTestUtils.setField(rankingTool, "objectMapper", mapper);
-            for (ToolExecutor tool : List.<ToolExecutor>of(orderTool, materialTool, rankingTool)) {
+            org.mockito.Mockito.doReturn("{\"success\":true,\"message\":\"ok\"}").when(costTool).execute(any(), anyMap());
+            for (ToolExecutor tool : List.<ToolExecutor>of(orderTool, materialTool, rankingTool, costTool)) {
                 when(registry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
             }
             when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
@@ -410,7 +451,8 @@ class ReadTurnParameterEntryContractTest {
             materialBatches = intent("MATERIAL_BATCH_QUERY", "原料批次查询", "material_batch_query");
             salesRanking = intent("PRODUCT_SALES_RANKING", "产品销售排行", "product_sales_ranking");
             paginationNext = intent("PAGINATION_NEXT", "下一页", "pagination_next");
-            for (AIIntentConfig intent : List.of(orderList, materialBatches, salesRanking, paginationNext)) {
+            costQuery = intent("COST_QUERY", "成本查询", "report_cost_query");
+            for (AIIntentConfig intent : List.of(orderList, materialBatches, salesRanking, paginationNext, costQuery)) {
                 when(recognizer.getIntentByCode(FACTORY, intent.getIntentCode())).thenReturn(Optional.of(intent));
                 when(recognizer.getIntentByCode(intent.getIntentCode())).thenReturn(Optional.of(intent));
                 when(recognizer.hasPermission(intent.getIntentCode(), ROLE)).thenReturn(true);

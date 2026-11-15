@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.repository.ProductTypeRepository;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -28,6 +30,9 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
     static final int MAX_PRODUCTS = 8;
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
+    @Autowired(required = false)
+    private ProductTypeRepository productTypeRepository;
+
     @Autowired
     private ProductionBatchRepository batchRepository;
 
@@ -48,15 +53,15 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "startDate", Map.of("type", "string", "description", "开始日期 yyyy-MM-dd，默认本月 1 号"),
-                        "endDate", Map.of("type", "string", "description", "结束日期 yyyy-MM-dd，默认今天"),
+                        "startDate", Map.of("type", "string", "format", "date", "description", "开始日期 yyyy-MM-dd，默认本月 1 号"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "结束日期 yyyy-MM-dd，默认今天"),
                         "period", Map.of("type", "string", "description", "快捷周期: last_week / this_week / this_month / last_month；与日期同时给时以日期为准"),
-                        "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配）")
+                        "productName", Map.of("type", "string", "description", "产品名（可选）；同名优先，多个包含匹配时给候选不合计")
                 ),
-                "required", List.of());
+                "required", List.of()));
     }
 
     @Override
@@ -96,7 +101,20 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null
                 ? ProcessSecretLlmCostScope.Excluded.NONE : llmCostScope.forCurrentCaller(factoryId);
-        ReportCostQueryTool.Aggregate agg = ReportCostQueryTool.aggregate(batchRepository, factoryId, start, end, keyword, secret);
+        Set<String> productIds = null;
+        if (keyword != null && productTypeRepository != null) {
+            List<ProductType> candidates = ReportToolSchemas.matchProducts(productTypeRepository, factoryId, keyword);
+            String msg = ReportToolSchemas.productResolutionMessage(candidates, keyword, "统计人工成本占比");
+            if (msg != null) {
+                Map<String, Object> none = new LinkedHashMap<>();
+                none.put("productFilter", keyword);
+                none.put("candidates", candidates.stream().map(ProductType::getName).toList());
+                return buildSimpleResult(msg, none);
+            }
+            productIds = new HashSet<>();
+            productIds.add(candidates.get(0).getId());
+        }
+        ReportCostQueryTool.Aggregate agg = ReportCostQueryTool.aggregate(batchRepository, factoryId, start, end, productIds != null ? null : keyword, productIds, secret);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
