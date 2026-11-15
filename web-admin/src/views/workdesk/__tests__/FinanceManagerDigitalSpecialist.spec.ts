@@ -25,6 +25,21 @@ function open() {
 }
 
 describe('FinanceManager digital specialist', () => {
+  it('renders the pure income tool facts and warnings rather than a contradictory generated empty-data summary', async () => {
+    api.post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode: 'INCOME_STATEMENT_QUERY', formattedText: '本月暂无利润表数据，各指标均为空', resultData: {
+      message: '2026-11 利润表: 营业收入 ¥0.00 / 净利润 ¥-5.91',
+      data: { startYear: 2026, startMonth: 11, endYear: 2026, endMonth: 11, netProfit: -5.91, metricWarnings: ['期间营业收入为零或缺失，毛利率不可计算'] },
+    } } });
+    const wrapper = open(); await wrapper.setProps({ employeeNavigationPending: false }); await flushPromises();
+    const text = wrapper.findComponent(ConversationStub).text();
+    expect(text).toContain('实际期间：2026-11 至 2026-11');
+    expect(text).toContain('净利润 ¥-5.91');
+    expect(text).toContain('毛利率不可计算');
+    expect(text).not.toContain('各指标均为空');
+    expect(wrapper.find('.metrics-grid').exists()).toBe(false);
+    expect(api.post.mock.calls.every(([, body]) => body.intentCode !== 'MONTHLY_FINANCIAL_CLOSE')).toBe(true);
+    wrapper.unmount();
+  });
   beforeAll(async () => {
     FinanceManagerWorkdesk = (await import('../FinanceManagerWorkdesk.vue')).default;
   });
@@ -45,7 +60,7 @@ describe('FinanceManager digital specialist', () => {
     await wrapper.setProps({ employeeNavigationPending: false });
     await flushPromises();
     expect(api.post).toHaveBeenCalledWith('/F001/ai-intents/execute', expect.objectContaining({
-      userInput: '本月经营怎么样?', mode: 'READ', intentCode: 'MONTHLY_FINANCIAL_CLOSE',
+      userInput: '查询本月利润表', mode: 'READ', intentCode: 'INCOME_STATEMENT_QUERY',
     }));
     expect(wrapper.find('[data-conversation]').exists()).toBe(true);
   });

@@ -7,7 +7,7 @@
   vs HJ 模式: 财务报表菜单 → 选三表分别看 → 切到工资 → 切到 AR → 切到商机
   (5 屏 10 分钟). Cretas Workdesk: 1 屏 30 秒.
 
-  架构: 复用现有 /ai-intents/execute POST 端点, 触发 MONTHLY_FINANCIAL_CLOSE intent.
+  架构: 复用现有只读利润表查询；审批等办理操作沿用原有确认流程。
   Backend 路由到 monthly-financial-close Skill (串 8 Tool + LLM aggregate).
 
   防呆: 4 位一体. 三表链接跳 Sprint 7 T3 ship 的 /finance/three-statements.
@@ -607,7 +607,7 @@ async function callIntentExecute(input: string, intentCode?: string, mode?: 'REA
 }
 
 async function triggerMonthlyClose() {
-  userInput.value = '本月经营怎么样?';
+  userInput.value = props.digitalEmployee ? '查询本月利润表' : '本月经营怎么样?';
   await sendQuery(true);
 }
 
@@ -623,7 +623,7 @@ async function sendQuery(forceMonthlyClose = false) {
   resetMetrics();
 
   try {
-    const intentCode = forceMonthlyClose ? 'MONTHLY_FINANCIAL_CLOSE' : undefined;
+    const intentCode = forceMonthlyClose ? (props.digitalEmployee ? 'INCOME_STATEMENT_QUERY' : 'MONTHLY_FINANCIAL_CLOSE') : undefined;
     const response = await callIntentExecute(query, intentCode, forceMonthlyClose ? 'READ' : undefined, guard);
     if (!isCurrentRequest(guard)) return;
     responseStatus.value = response.status || '';
@@ -643,7 +643,20 @@ async function sendQuery(forceMonthlyClose = false) {
     //    让用户以为「本月营收 0」。
     if (!nonAnswerLabel) {
       const resultData = response.resultData || {};
-      extractKeyMetrics(resultData);
+      if (response.intentCode === 'INCOME_STATEMENT_QUERY') {
+        const nativeMessage = resultData.message;
+        const facts = resultData.data as Record<string, unknown> | undefined;
+        if (typeof nativeMessage === 'string' && nativeMessage.trim()) {
+          const period = facts && ['startYear', 'startMonth', 'endYear', 'endMonth'].every(key => Number.isInteger(facts[key]))
+            ? `实际期间：${facts.startYear}-${String(facts.startMonth).padStart(2, '0')} 至 ${facts.endYear}-${String(facts.endMonth).padStart(2, '0')}\n\n` : '';
+          const warningValues = facts?.metricWarnings;
+          const warnings = Array.isArray(warningValues) ? warningValues.filter((value): value is string => typeof value === 'string') : [];
+          formattedText.value = period + nativeMessage + (warnings.length ? `\n\n${warnings.join('\n')}` : '');
+          resultTitle.value = response.intentName || '利润表';
+        }
+      } else {
+        extractKeyMetrics(resultData);
+      }
     }
   } catch (err: unknown) {
     if (!isCurrentRequest(guard) || (err && typeof err === 'object' && 'stale' in err && (err as { stale?: boolean }).stale)) return;

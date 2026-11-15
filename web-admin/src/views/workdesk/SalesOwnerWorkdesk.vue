@@ -724,8 +724,8 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 }
 
 async function triggerFollowupQuery() {
-  userInput.value = props.wholesaleMode ? '查询当前销售订单' : '今天该跟谁?';
-  await sendQuery(!props.wholesaleMode);
+  userInput.value = props.digitalEmployee ? '查询当前销售订单' : '今天该跟谁?';
+  await sendQuery(!props.digitalEmployee);
 }
 
 async function sendQuery(forceFollowup = false) {

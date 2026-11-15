@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `9c67199366`（最初1e0e24f980）— Web数字专员发布窗口：9工作台/聊天气泡与闭会话修复；岗位/物流/共享导航scope。目标271+物流16+会话45+导航40测试及TSC已过，整合最新Nuxt迁移后重构建/CI/上线核对；窗口内不合无关PR，Web-only。
+- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `9c67199366` — Web发布窗口，锁9工作台/共享导航与测试。私有场景表 C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/unified-specialist-scenarios.md；真实8页/聊天已测，修正未配/混写开场查询并重验。CI全绿后Web-only发布及线上读回；窗口内不合无关PR。
 
 - `UNIFY-SPECIALIST-FOUR-20261115` — `review` — Owner /root/wholesale_components — Base `1e0e24f980` — 4个Workdesk页及4个DigitalSpecialist测试已完成，20测试通过；锁维持至父任务归档。
 

@@ -23,17 +23,18 @@ const mountPage = (component: typeof Sales, extra = {}) => shallowMount(componen
 
 describe('sales/purchase/inventory digital specialist identities', () => {
   it.each([
-    [Sales, ['DAILY_CUSTOMER_FOLLOWUP', 'SPRINT10_SHIPMENT_PENDING_TODAY']],
-    [Purchase, ['PURCHASER_WEEKLY_PLAN', 'SALES_FORECAST_7DAY']],
+    [Sales, ['SPRINT10_SHIPMENT_PENDING_TODAY']],
+    [Purchase, ['SALES_FORECAST_7DAY']],
     [Inventory, ['MATERIAL_TODAY_RECEIVING_QUERY', 'MATERIAL_DISPOSAL_RECOMMENDATION', 'RECEIVE_QUALITY_CHECK_TODAY']],
   ] as const)('retains the ordinary factory native daily queries in the digital presentation', async (component, intents) => {
     const wrapper = mountPage(component, { employeeNavigationPending: false, wholesaleMode: false }); await flushPromises();
     for (const intentCode of intents) expect(api.post.mock.calls.some(([, body]) => body.intentCode === intentCode && body.mode === 'READ')).toBe(true);
+    expect(api.post.mock.calls.some(([, body]) => ['DAILY_CUSTOMER_FOLLOWUP', 'PURCHASER_WEEKLY_PLAN'].includes(body.intentCode))).toBe(false);
     wrapper.unmount();
   });
   it('retains ordinary factory purchase forecasts and material price history values', async () => {
     api.post.mockImplementation((_path, body) => Promise.resolve({ data: { status: 'SUCCESS', resultData:
-      body.intentCode === 'PURCHASER_WEEKLY_PLAN' ? { warnings: [{ materialTypeId: 'MAT', materialName: '物料', currentStock: 2 }] }
+      body.userInput === '查询低库存预警' ? { warnings: [{ materialTypeId: 'MAT', materialName: '物料', currentStock: 2 }] }
         : body.intentCode === 'SALES_FORECAST_7DAY' ? { forecasts: [{ productTypeId: 'MAT', predicted7DayDemand: 5 }] }
           : body.intentCode === 'PRICE_HISTORY_QUERY' ? { monthlyPrices: [{ yearMonth: '2026-11', weightedAvgPrice: 8 }] } : {},
     } }));

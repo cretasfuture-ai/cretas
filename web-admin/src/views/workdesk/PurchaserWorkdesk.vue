@@ -618,9 +618,16 @@ async function callIntentExecute(input: string, intentCode?: string,
 }
 
 async function triggerWeeklyPlan() {
-  // Wholesale uses the live low-stock capability; the legacy weekly-plan Skill is not configured there.
-  userInput.value = props.wholesaleMode ? '查询低库存预警' : '下周采购什么?';
-  await sendQuery(!props.wholesaleMode);
+  const isCurrentOperation = scopedRequests.capture();
+  // Query available tools directly; the legacy weekly Skill may not be configured.
+  userInput.value = props.digitalEmployee ? '查询低库存预警' : '下周采购什么?';
+  await sendQuery(!props.digitalEmployee);
+  if (!isCurrentOperation() || props.employeeNavigationPending) return;
+  if (props.digitalEmployee && !props.wholesaleMode) {
+    await loadSalesForecast();
+    if (!isCurrentOperation() || props.employeeNavigationPending) return;
+    await loadPriceHistories();
+  }
 }
 
 async function verifyStockPrerequisites(): Promise<boolean> {
