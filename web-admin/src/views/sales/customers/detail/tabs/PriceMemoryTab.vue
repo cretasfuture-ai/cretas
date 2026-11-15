@@ -45,7 +45,7 @@
             />
           </UFormField>
           <UFormField label="未税单价">
-            <UInputNumber v-model="form.standardPrice" :min="0.0001" :format-options="{ minimumFractionDigits: 0, maximumFractionDigits: 4 }" :increment="false" :decrement="false" class="w-full" data-testid="price-input" />
+            <UInputNumber v-model="form.standardPrice" :min="0.0001" :step="0.0001" :format-options="{ minimumFractionDigits: 0, maximumFractionDigits: 4 }" :increment="false" :decrement="false" class="w-full" data-testid="price-input" />
           </UFormField>
         </div>
       </template>

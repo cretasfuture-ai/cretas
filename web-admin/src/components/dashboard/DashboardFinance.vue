@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 财务管理 Dashboard
  * 适用角色: finance_manager
@@ -34,7 +35,7 @@ const statCards = computed(() => [
     value: financeStats.value.totalRevenue,
     unit: '万元',
     icon: Money,
-    color: '#409eff',
+    color: CS_TOKENS.primary,
     route: '/smart-bi/finance'
   },
   {
@@ -65,7 +66,7 @@ const statCards = computed(() => [
 
 // 快捷操作
 const quickActions = [
-  { title: '成本分析', icon: TrendCharts, route: '/smart-bi/finance?tab=cost', color: '#409eff', badge: 'AI' },
+  { title: '成本分析', icon: TrendCharts, route: '/smart-bi/finance?tab=cost', color: CS_TOKENS.primary, badge: 'AI' },
   { title: '财务报表', icon: Document, route: '/smart-bi/finance', color: '#67c23a' }
 ];
 
@@ -232,7 +233,7 @@ function navigateTo(route: string) {
             </div>
           </template>
           <div class="ai-analysis-preview">
-            <el-icon :size="48" color="#409eff"><TrendCharts /></el-icon>
+            <el-icon :size="48" color="var(--cs-primary)"><TrendCharts /></el-icon>
             <p>使用 AI 智能分析成本结构，获取优化建议</p>
             <el-button type="primary" @click="navigateTo('/smart-bi/finance?tab=cost')">
               立即分析
@@ -275,7 +276,7 @@ function navigateTo(route: string) {
       .web-tag {
         background-color: #f0f9ff;
         border-color: #b3d8ff;
-        color: #409eff;
+        color: var(--cs-primary);
       }
     }
   }
@@ -408,7 +409,7 @@ function navigateTo(route: string) {
     }
 
     &.revenue {
-      background-color: #409eff;
+      background-color: var(--cs-primary);
     }
 
     &.cost {

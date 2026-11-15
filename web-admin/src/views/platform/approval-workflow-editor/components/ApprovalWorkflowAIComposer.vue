@@ -347,7 +347,7 @@ async function runQuickPrompt(prompt: string) {
 }
 
 .approval-ai-composer:focus-within {
-  border-color: #409eff;
+  border-color: var(--cs-primary);
 }
 
 .composer-footer,

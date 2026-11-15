@@ -42,7 +42,7 @@ function goHome() {
   .error-code {
     font-size: 120px;
     font-weight: 700;
-    color: #409eff;
+    color: var(--cs-primary);
     margin: 0;
     line-height: 1;
   }

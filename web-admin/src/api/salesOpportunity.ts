@@ -5,6 +5,7 @@
 // 防呆 R3 (stage dropdown): 8 个商机阶段 enum
 // 防呆 R5 (kanban dead-end): 空 kanban 跳"新增商机" dialog
 
+import { CS_TOKENS } from '@/styles/csTokens'
 import { get, post, put, del } from './request';
 
 /** 商机阶段 enum (mirrors backend OpportunityStage). */
@@ -36,7 +37,7 @@ export interface StageMeta {
 export const STAGE_META: StageMeta[] = [
   { value: 'LEAD',        label: '线索',     probability: 10,  tagType: 'info',    terminal: false, order: 0, color: '#909399' },
   { value: 'QUALIFIED',   label: '已资格化', probability: 30,  tagType: 'info',    terminal: false, order: 1, color: '#67C23A' },
-  { value: 'DEMO',        label: '产品演示', probability: 50,  tagType: 'primary', terminal: false, order: 2, color: '#409EFF' },
+  { value: 'DEMO',        label: '产品演示', probability: 50,  tagType: 'primary', terminal: false, order: 2, color: CS_TOKENS.primary },
   { value: 'PROPOSAL',    label: '方案报价', probability: 70,  tagType: 'primary', terminal: false, order: 3, color: '#5470C6' },
   { value: 'NEGOTIATE',   label: '商务谈判', probability: 85,  tagType: 'warning', terminal: false, order: 4, color: '#E6A23C' },
   { value: 'VERBAL',      label: '口头承诺', probability: 95,  tagType: 'warning', terminal: false, order: 5, color: '#F56C6C' },

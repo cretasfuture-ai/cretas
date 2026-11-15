@@ -1,0 +1,85 @@
+[
+  {
+    "name": "工单成本",
+    "evidenceId": "D-SYS-cost-permission-catalog",
+    "source": "权限目录",
+    "actualBusinessPageVisited": false,
+    "actions": [
+      "列表查看",
+      "打印",
+      "打印模板",
+      "导出",
+      "编辑",
+      "工单成本配置",
+      "录入其他成本"
+    ],
+    "routeVisited": false,
+    "businessContentViewed": false,
+    "latestReviewVersion": "V35",
+    "latestReviewDate": "2026-11-14",
+    "menuSearchObserved": "费用有入口；成本、利润均显示暂无该列表",
+    "feeItemsAreSeparate": true,
+    "currentDirectAccessRechecked": false,
+    "currentStatus": "NOT_VISITED_DO_NOT_INFER_PERMISSION"
+  },
+  {
+    "name": "成本调价助手",
+    "evidenceId": "D-SYS-cost-reprice-actions",
+    "source": "权限目录及实际入口访问",
+    "actualBusinessPageVisited": false,
+    "actions": [
+      "查看",
+      "创建"
+    ],
+    "routeVisited": true,
+    "businessContentViewed": false,
+    "accessEvidenceId": "D-COST-reprice-access",
+    "accessStatus": "CURRENT_ACCOUNT_NO_VIEW_PERMISSION",
+    "observedMessage": "暂无权限查看, 可联系管理员进行权限配置",
+    "latestReviewVersion": "V35",
+    "latestReviewDate": "2026-11-14",
+    "menuSearchObserved": "费用有入口；成本、利润均显示暂无该列表",
+    "feeItemsAreSeparate": true,
+    "currentDirectAccessRechecked": true,
+    "parentBreadcrumbObserved": "成本管理父级仍未提供业务内容",
+    "evidenceVersion": "V35"
+  },
+  {
+    "name": "其他成本",
+    "evidenceId": "D-SYS-othercost-actions",
+    "source": "权限目录",
+    "actualBusinessPageVisited": false,
+    "actions": [
+      "列表查看",
+      "创建",
+      "编辑",
+      "删除"
+    ],
+    "routeVisited": false,
+    "businessContentViewed": false,
+    "latestReviewVersion": "V35",
+    "latestReviewDate": "2026-11-14",
+    "menuSearchObserved": "费用有入口；成本、利润均显示暂无该列表",
+    "feeItemsAreSeparate": true,
+    "currentDirectAccessRechecked": false,
+    "currentStatus": "NOT_VISITED_DO_NOT_INFER_PERMISSION"
+  },
+  {
+    "name": "订单实时利润",
+    "evidenceId": "D-SYS-orderprofit-actions",
+    "source": "权限目录",
+    "actualBusinessPageVisited": false,
+    "actions": [
+      "列表查看",
+      "导出"
+    ],
+    "routeVisited": false,
+    "businessContentViewed": false,
+    "latestReviewVersion": "V35",
+    "latestReviewDate": "2026-11-14",
+    "menuSearchObserved": "费用有入口；成本、利润均显示暂无该列表",
+    "feeItemsAreSeparate": true,
+    "currentDirectAccessRechecked": false,
+    "currentStatus": "NOT_VISITED_DO_NOT_INFER_PERMISSION"
+  }
+]

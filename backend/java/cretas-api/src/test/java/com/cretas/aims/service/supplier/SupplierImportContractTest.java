@@ -51,7 +51,7 @@ class SupplierImportContractTest {
         Map<String, String> duplicate = row(headers, "甲供应商", "李四", "021-61234567", "上海市浦东新区2号", "TAX-2");
         Map<String, String> invalid = row(headers, "乙供应商", "王五", "123", "---", "TAX-3");
         Map<String, String> blank = row(headers, "", "", "", "", "");
-        when(excelUtil.readFirstSheetAsRows(any(InputStream.class), eq(1000)))
+        when(excelUtil.readFirstSheetAsRows(any(InputStream.class), eq(2000)))
                 .thenReturn(new ExcelUtil.RawSheet(headers, List.of(valid, duplicate, invalid, blank)));
 
         var preview = service.preview("F006", new byte[]{1, 2, 3}, "SMART", null);
@@ -69,7 +69,7 @@ class SupplierImportContractTest {
         existing.setName("甲供应商"); existing.setTaxNumber("TAX-1");
         when(supplierRepository.findByFactoryId("F006")).thenReturn(List.of(existing));
         List<String> headers = List.of("供应商名称", "联系人", "联系电话", "地址", "税号");
-        when(excelUtil.readFirstSheetAsRows(any(InputStream.class), eq(1000)))
+        when(excelUtil.readFirstSheetAsRows(any(InputStream.class), eq(2000)))
                 .thenReturn(new ExcelUtil.RawSheet(headers,
                         List.of(row(headers, "甲供应商", "张三", "13812345678", "上海市1号", "TAX-1"))));
 
@@ -212,6 +212,19 @@ class SupplierImportContractTest {
                 .hasMessageContaining("导入行校验失败");
 
         verifyNoInteractions(supplierService);
+    }
+
+    @Test
+    void previewAcceptsUpTo2000RowsAndRejectsEmptyOrOversizedFiles() {
+        List<String> headers = List.of("供应商名称", "联系人", "联系电话", "地址");
+        when(excelUtil.readFirstSheetAsRows(any(InputStream.class), eq(2000)))
+                .thenReturn(new ExcelUtil.RawSheet(headers, List.of()))
+                .thenThrow(new IllegalArgumentException("Excel 数据行不能超过 2000 行"));
+
+        assertThatThrownBy(() -> service.preview("F006", new byte[]{1}, "STANDARD", null))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("1 至 2000 行");
+        assertThatThrownBy(() -> service.preview("F006", new byte[]{1}, "STANDARD", null))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("2000");
     }
 
     private Map<String, String> row(List<String> headers, String... values) {

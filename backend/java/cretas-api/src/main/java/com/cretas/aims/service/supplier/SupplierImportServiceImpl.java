@@ -24,7 +24,7 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class SupplierImportServiceImpl implements SupplierImportService {
-    private static final int MAX_ROWS = 1000;
+    private static final int MAX_ROWS = 2000;
     private static final Pattern EMAIL = Pattern.compile("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$");
     private static final Set<String> TARGET_FIELDS = Set.of(
             "supplierCode", "name", "contactPerson", "phone", "email", "address",
@@ -52,8 +52,14 @@ public class SupplierImportServiceImpl implements SupplierImportService {
         if (!Set.of("STANDARD", "SMART").contains(normalizedMode)) {
             throw new BusinessException(400, "mode 仅支持 STANDARD 或 SMART").withHintTarget("mode");
         }
-        ExcelUtil.RawSheet sheet = excelUtil.readFirstSheetAsRows(new ByteArrayInputStream(fileBytes), MAX_ROWS);
+        ExcelUtil.RawSheet sheet;
+        try {
+            sheet = excelUtil.readFirstSheetAsRows(new ByteArrayInputStream(fileBytes), MAX_ROWS);
+        } catch (IllegalArgumentException tooMany) {
+            throw new BusinessException(400, "供应商导入需要 1 至 " + MAX_ROWS + " 行: " + tooMany.getMessage());
+        }
         if (sheet.headers().isEmpty()) throw new BusinessException(400, "Excel缺少表头");
+        if (sheet.rows().isEmpty()) throw new BusinessException(400, "供应商导入需要 1 至 " + MAX_ROWS + " 行，当前文件没有数据行");
 
         Map<String, String> sourceToTarget = resolveMappings(sheet.headers(), normalizedMode, columnMapping);
         List<SupplierImportPreviewDTO.ColumnMapping> mappings = sourceToTarget.entrySet().stream()

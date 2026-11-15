@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 行为校准管理 - 详情页
  * 展示校准会话详情、结果、历史记录等
@@ -319,11 +320,11 @@ function updateRadarChart() {
           color: 'rgba(64, 158, 255, 0.3)'
         },
         lineStyle: {
-          color: '#409EFF',
+          color: CS_TOKENS.primary,
           width: 2
         },
         itemStyle: {
-          color: '#409EFF'
+          color: CS_TOKENS.primary
         }
       }]
     }]
@@ -888,7 +889,7 @@ function getSeverityText(severity: string) {
   color: #303133;
 
   .el-icon {
-    color: #409EFF;
+    color: var(--cs-primary);
   }
 }
 
@@ -1001,7 +1002,7 @@ function getSeverityText(severity: string) {
     }
 
     .rec-icon {
-      color: #409EFF;
+      color: var(--cs-primary);
       font-size: 18px;
       flex-shrink: 0;
       margin-top: 2px;
