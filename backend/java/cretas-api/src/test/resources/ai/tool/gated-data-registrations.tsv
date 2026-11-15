@@ -3,6 +3,8 @@
 # RULED = the gate is set by an explicit ruling (reason starts with CODES:... / ROLES:...); it replaces the derived requirements and the tool is compared against it both ways. A tool missing here that the scan
 # cannot classify fails the test; a line whose tool no longer needs it fails too (stale).
 report_bom_cost	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本分析同口径
+report_bom_cost_rank	RULED	CODES:analytics:read_write 与 report_bom_cost / AIController#analyzeTimeRangeCost 成本分析同口径 (2026-11-15 AI 问答 BI 第 2 段)
+report_labor_cost_share	RULED	CODES:analytics:read_write 与 report_cost_query 同口径 (同一聚合, 2026-11-15)
 report_cost_query	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 同口径
 report_cost_trend_analysis	RULED	CODES:analytics:read_write 组织者裁定 2026-10-29: 与 AIController#analyzeTimeRangeCost 的成本趋势分析同口径 (那是 POST 分析端点, 扫描只看 GET)
 wage_policy_query	SURFACE	WagePolicyController#listPolicies — 组织者裁定 2026-10-29: 工资方案按 WagePolicyController 的 hr 读权限 (同一份数据另由仅限管理员角色的 canvas 端点提供, 不作口径)
@@ -22,6 +24,7 @@ additive_compliance_check_quality	RULED	CODES:quality:read,quality:read_write �
 additive_bom_compliance_check	RULED	CODES:quality:read,quality:read_write 组织者裁定 2026-11-03: 添加剂限量属质检工作, 质检读
 ssop_production_gate_check	RULED	CODES:quality:read,quality:read_write,production:read,production:read_write 组织者裁定 2026-11-03: SSOP 属质检, 开工前检查另让生产读 (车间主任、班组长) 看得到
 purchase_statistics	RULED	CODES:procurement:read #1305 (S5-12) 裁定: 采购统计含采购金额, 门 = 配置的采购读; 金额另按 canViewPurchasePrices 脱敏
+report_sales_margin_summary	RULED	CODES:finance:read,finance:read_write 与 report_sku_gross_margin 同口径 (同一条毛利 SQL, web 财务模块门, 2026-11-15)
 report_sku_gross_margin	RULED	CODES:finance:read,finance:read_write 组织者裁定 2026-11-03 (acc-s6 s610k): 与 web SKU 毛利视图 GET /finance/report/shipment-sku-margin (FinanceReportController 类门) 同口径, web 拒整份则对话拒整个工具
 online_staff_count	RULED	CODES:production:read,dashboard:read 组织者裁定 2026-11-03: 只是在岗人数, 按生产/看板读, 不按 hr
 canvas_product_work_process_draft_preview	RULED	ROLES:factory_super_admin,permission_admin 2026-11-06 CanvasAIController#chat 管理员产品工序配置草稿，与该配置页和工具双角色门一致；内部操作员匹配不将配置预览开放为HR名单查询。
