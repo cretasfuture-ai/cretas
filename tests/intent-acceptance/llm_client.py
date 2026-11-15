@@ -16,6 +16,7 @@ PRICE = {
     "qwen-plus": (0.11, 0.28),
     "gpt-5.4-mini": (0.25, 2.0),
     "gpt-5.4": (2.5, 15.0),
+    "qwen3.5-plus": (0.5, 3.0),  # 保守上限价 (实际约 0.11/0.67 USD)
 }
 
 
@@ -34,7 +35,7 @@ class LLM:
         else:
             raise ValueError(provider)
 
-    def chat(self, system, user, max_tokens=8000, temperature=0.8, json_mode=True):
+    def chat(self, system, user, max_tokens=8000, temperature=0.8, json_mode=True, extra=None):
         pin, pout = PRICE[self.model]
         bound = (len(system) + len(user)) / 1.5 * pin / 1e6 + max_tokens * pout / 1e6
         with self.lock:
@@ -47,6 +48,8 @@ class LLM:
         else:
             body["max_tokens"] = max_tokens
             body["temperature"] = temperature
+        if extra:
+            body.update(extra)  # 如千问 {"enable_thinking": False}
         if json_mode:
             body["response_format"] = {"type": "json_object"}
         h = {"Authorization": "Bearer " + self.key, "Content-Type": "application/json"}
