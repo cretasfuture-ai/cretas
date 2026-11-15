@@ -21,7 +21,11 @@
 <template>
   <div class="purchaser-workdesk">
     <DigitalEmployeeFrame :enabled="digitalEmployee" role="purchase" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
-    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerWeeklyPlan">重新核对</el-button>
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="采购数字文员" scope-label="供应商、采购与库存预警" :quick-questions="['查询低库存预警', '查询采购订单']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeeCanWrite && employeePaths.includes('/procurement/orders')" icon="i-lucide-file-plus" @click="openEmployeeOrder">交给采购单办理</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
     <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
@@ -37,7 +41,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -63,7 +67,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合 5 品类预警 (低库存 + 销售预测), 预计 3-5 秒..." }}</span>
@@ -72,7 +76,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -80,7 +84,7 @@
       class="error-alert" />
 
     <!-- AI 输出 -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -97,7 +101,7 @@
       <template #header>
         <div class="card-header">
  <span> 低库存清单 ({{ lowStockRows.length }})</span>
-          <span class="header-hint">已附推荐补货量, 一键创建请购单</span>
+          <span class="header-hint">{{ digitalEmployee ? '按安全库存核对，补货请到采购订单办理' : '已附推荐补货量, 一键创建请购单' }}</span>
         </div>
       </template>
       <el-table
@@ -132,11 +136,11 @@
         <el-table-column label="建议补货" width="120" align="right">
           <template #default="{ row }">
             <el-tag type="warning" effect="plain" size="small">
-              {{ formatQty(row.recommendedReplenishQty) }}{{ row.unit }}
+              {{ digitalEmployee && row.recommendedReplenishQty == null ? '未提供' : formatQty(row.recommendedReplenishQty) + (row.unit || '') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="预测下周用量" width="140" align="right">
+        <el-table-column v-if="!digitalEmployee" label="预测下周用量" width="140" align="right">
           <template #default="{ row }">
             <el-text v-if="forecastByMaterial[row.materialTypeId]" size="small" type="info">
               {{ formatQty(forecastByMaterial[row.materialTypeId]) }}{{ row.unit }}
@@ -144,20 +148,21 @@
             <el-text v-else size="small" type="info">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column label="价格趋势" width="140">
+        <el-table-column v-if="!digitalEmployee" label="价格趋势" width="140">
           <template #default="{ row }">
             <PriceMiniChart :data="priceTrendByMaterial[row.materialTypeId] || []" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column v-if="!digitalEmployee" label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="openRequisitionDialog(row)">
+            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openRequisitionDialog(row)">
               一键请购
             </el-button>
             <el-button
               size="small"
               type="warning"
               data-testid="loop3-procurement-create-btn"
+              v-if="!digitalEmployee"
               @click="openProcurementDialog(row)">
               一键采购下单
             </el-button>
@@ -430,6 +435,10 @@
 
 <script setup lang="ts">
 import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+import { queueAiEntry } from '@/composables/aiEntryHandoff';
+import { useRouter } from 'vue-router';
 const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
   digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
 });
@@ -516,7 +525,28 @@ const forecastRows = ref<ForecastRow[]>([]);
 const forecastByMaterial = ref<Record<string, number>>({});
 const priceTrendByMaterial = ref<Record<string, PricePoint[]>>({});
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const router = useRouter();
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+}
+function openEmployeeOrder() {
+  if (!props.employeeCanWrite || !props.employeePaths.includes('/procurement/orders')) return;
+  void router.push(queueAiEntry({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }, '/procurement/orders', userInput.value || lastEmployeeQuestion.value || '创建采购订单'));
+}
 
 // ===== Mini line chart (no chart lib dependency) =====
 
@@ -559,6 +589,8 @@ const PriceMiniChart = defineComponent({
 
 async function callIntentExecute(input: string, intentCode?: string,
     parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
+  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (props.digitalEmployee) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
@@ -574,8 +606,28 @@ async function triggerWeeklyPlan() {
   await sendQuery(!props.digitalEmployee);
 }
 
+async function verifyStockPrerequisites(): Promise<boolean> {
+  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
+  const catalog = await request.get(`/${factoryId.value}/raw-material-types/active`);
+  const materials: unknown = (catalog as { data?: unknown }).data;
+  if (!Array.isArray(materials)) throw new Error('未能读取原料资料，暂时无法判断库存');
+  if (!materials.length) {
+    formattedText.value = '当前还没有原料资料，暂时无法判断库存是否充足。请先在基础资料中维护原料，再重新查询。';
+    resultTitle.value = '需要维护原料资料';
+    responseStatus.value = 'NEED_MORE_INFO';
+    return false;
+  }
+  if (materials.some((row) => !row || typeof row !== 'object' || !('minStock' in row) || row.minStock == null)) {
+    formattedText.value = '有原料尚未设置安全库存，暂时无法完整判断是否需要补货。请先设置库存下限，再重新查询。';
+    resultTitle.value = '需要设置安全库存';
+    responseStatus.value = 'NEED_MORE_INFO';
+    return false;
+  }
+  return true;
+}
+
 async function sendQuery(autoTrigger = false) {
-  if (!userInput.value.trim()) return;
+  if (loading.value || !userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
   if (autoTrigger || props.digitalEmployee) {
@@ -588,8 +640,13 @@ async function sendQuery(autoTrigger = false) {
 
   try {
     // 1. 低库存预警 (主路径)
+    const stockPrechecked = props.digitalEmployee && /低库存|库存预警/.test(userInput.value);
+    if (stockPrechecked && !await verifyStockPrerequisites()) return;
     const intentCode = autoTrigger ? 'PURCHASER_WEEKLY_PLAN' : undefined;
     const response = await callIntentExecute(userInput.value, intentCode);
+    if (props.digitalEmployee && response.intentCode === 'MATERIAL_LOW_STOCK_ALERT' && !stockPrechecked
+      && !await verifyStockPrerequisites()) return;
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -604,6 +661,16 @@ async function sendQuery(autoTrigger = false) {
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     extractLowStockRows(resultData);
+    if (props.digitalEmployee && response.intentCode === 'MATERIAL_LOW_STOCK_ALERT') {
+      const stockData = (resultData.data as Record<string, unknown>) || resultData;
+      if (!Array.isArray(stockData.warnings)) {
+        formattedText.value = '';
+        throw new Error('未收到库存预警明细，请从库存查询入口核对');
+      }
+      formattedText.value = lowStockRows.value.length
+        ? `查询到 ${lowStockRows.value.length} 项原料库存低于安全库存。请核对下方缺口，并在采购订单中确认补货数量。`
+        : '已按当前安全库存设置核对，暂未发现低库存预警。';
+    }
 
     // 2. 自动 trigger 时, 并发拉销售预测
     if (autoTrigger) {
@@ -742,6 +809,7 @@ const canPreviewRequisition = computed(() => {
 });
 
 function openRequisitionDialog(row: LowStockRow) {
+  if (props.digitalEmployee) return;
   requisitionDialog.visible = true;
   requisitionDialog.row = row;
   // Default 数量 = recommendedReplenishQty (R1: 直接告诉采购员要采多少)
@@ -912,6 +980,7 @@ const canPreviewProcurement = computed(() => {
 });
 
 async function openProcurementDialog(row: LowStockRow) {
+  if (props.digitalEmployee) return;
   procurementDialog.visible = true;
   procurementDialog.row = row;
   procurementDialog.form.quantity = row.recommendedReplenishQty || row.gap || null;
@@ -1092,8 +1161,8 @@ async function executeProcurement() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
-watch(() => props.employeeNavigationPending, (pending) => {
-  if (pending || initialQueryStarted) return;
+watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
+  if (pending || !id || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerWeeklyPlan();
 }, { immediate: true });

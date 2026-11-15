@@ -261,6 +261,9 @@ class ProcessSecretDataLayerContractTest {
             // changePct = 与上一等长周期相比的成本涨跌百分比; 都是金额口径 (无成本查看权限时整份金额与图不出,
             // 保密产品批次对无权调用者整批剔除), 不是用量配比。
             "sharePct", "changePct",
+            // report_labor_cost_share (只读): laborSharePct = 人工成本金额占总成本金额的百分比 (金额口径, 不是用量配比);
+            // 无成本查看权限整份不出, 保密产品批次对无权调用者整批剔除 (见 ReportLaborCostShareToolContractTest)。
+            "laborSharePct",
             // 「yield」= 首检良品率 (质量), 不是出成; 其余是单位换算 / 排程 / 意图里的同名词
             "yield", "conversion", "conversionCandidates", "conversionDate", "conversionEvidence",
             // blendRatio 是整个配比核对快照对象, 里面的配方份额字段已在词表里

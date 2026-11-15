@@ -450,7 +450,7 @@ const hasBatchDeletable = computed(() =>
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('salesOrder', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, refresh: refreshFooter } = useListSummary('salesOrder', summaryRequest);
 
 // Apr 20 Bug BR-07 fix: 客户报告"未见检索功能", 补 keyword 搜索 (订单号/客户名)
 const searchKeyword = ref('');
@@ -978,6 +978,7 @@ onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeU
 
 async function loadData() {
   if (!factoryId.value) return;
+  void refreshFooter();
   loading.value = true;
   // T131 Part 3 — 每次刷新/翻页/筛选清空选择, 避免跨页 stale selection (mirror finance/adjustments).
   selectedRows.value = [];
@@ -2055,7 +2056,7 @@ async function handleSave() {
   }
 }
 
-async function openCreateDialog() {
+function resetNewOrderForm() {
   editingOrderId.value = null;
   // T130 Feature B — 新建时业务员未被用户碰过, 选客户后允许自动预填.
   salespersonTouched.value = false;
@@ -2077,6 +2078,10 @@ async function openCreateDialog() {
     contractFileName: null,
     version: null,
   };
+}
+
+async function openCreateDialog() {
+  resetNewOrderForm();
   // 张权 Apr 28 反馈: 新建对话框 dropdown 显示 onMounted 时的旧 cache.
   // 强制刷新让用户刚建的客户/产品立即可选.
   dialogVisible.value = true;
@@ -2121,7 +2126,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
-useAiEntryLink(aiEntryVisible, canWrite);
+const aiEntryInitialInput = useAiEntryLink(aiEntryVisible, canWrite, () => ({ factoryId: factoryId.value || '', actorId: String(authStore.user?.id || '') }));
 
 // ==================== Audit Log Drawer (PR #861) ====================
 // State for AuditLogDrawer — scoped to the row clicked via 审计 inline chip.
@@ -2136,6 +2141,7 @@ const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
 function handleAiFill(params: TableRow) {
+  resetNewOrderForm();
   // Match customerName to customerId
   const customerName = String(params.customerName || '');
   const customerResolution = resolveReferenceByName(customerName, customers.value);
@@ -3288,6 +3294,7 @@ function handleMergePurchase() {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="SALES_ORDER_CONFIG"
+      :initial-input="aiEntryInitialInput"
       @fill-form="handleAiFill"
     />
 

@@ -3,7 +3,7 @@
 任务 WHOLESALE-DESKS-20261115；Owner /root；Base 3c1ed4be3f313c7b3692c7652c8f21d83ba7590c。
 范围：Web 三岗位工作台、显式 wholesale 菜单、现有 AI 录入导航、对应组件与测试。无后端/库存算法/自动分单/直送改动。
 
-设计依据：本机 Documents/Cretas-组件库-NuxtUI-20261114/组件清单-NuxtUI映射.md（2026-11-14终版）。正式端未安装 Nuxt UI，本次在现有 Vue/Element Plus 上接入相同布局、状态、形象、--cs-* 变量，不进行全站组件迁移。销售和采购均为数字文员，库存为数字仓管；形象原文件复制自该组件库。
+设计依据：本机 Documents/Cretas-组件库-NuxtUI-20261114/组件清单-NuxtUI映射.md（2026-11-14终版）。开工时正式端尚未接入 Nuxt UI；合并前主线通过 #1733 接入 Nuxt UI 4 / Tailwind 4 与白色侧栏，本任务最终在整合主线 8016607c 上重建、回归并验证。工作台复用原领域能力、Element 过渡主题和相同 --cs-* 变量。销售和采购均为数字文员，库存为数字仓管；形象原文件复制自该组件库。
 
 ## UX Flow Analysis
 

@@ -69,8 +69,10 @@ interface FormItem {
   unit: string;
   unitPrice: number | null;
   priceSource?: string | null;
+  taxRate?: number | null;
 }
 interface Vm {
+  handleAiFill: (params: Record<string, unknown>) => Promise<void>;
   openEditDialog: (id: string) => Promise<void>;
   onSupplierChange: () => Promise<void>;
   dialogVisible: boolean;
@@ -130,6 +132,7 @@ function autoDraft(overrides: Record<string, unknown> = {}) {
 
 function routeGet(order: Record<string, unknown>) {
   harness.get.mockImplementation(async (url: string) => {
+    if (url.endsWith('/raw-material-types/active')) return { success: true, data: [{ id: 'mat-salt', name: 'QA-S4-1029-盐料', unit: 'kg', taxRate: 'TAX_13' }] };
     if (url === `/F006/purchase/orders/${order.id}`) return { success: true, data: order };
     if (/\/suppliers(\?|$)/.test(url) || url.endsWith('/suppliers/active')) {
       return { success: true, data: { content: [SUPPLIER], totalElements: 1 } };
@@ -164,6 +167,71 @@ describe('D-S411R-01 编辑采购草稿补录供应商 (挂载真实 list.vue)',
     route.query = {};
     harness.listSupplierMaterials.mockResolvedValue([SALT_RELATION]);
     harness.listSupplierPurchaseSpecs.mockResolvedValue([]);
+  });
+
+  it('AI fill binds the current supplier relation and material tax rate without saving', async () => {
+    routeGet(autoDraft());
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.handleAiFill({ supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 2, unit: 'kg', unitPrice: 5 }] });
+    expect(harness.listSupplierMaterials).toHaveBeenCalledWith('F006', SUPPLIER.id);
+    expect(vm.dialogVisible).toBe(true);
+    expect(vm.form.items[0]).toMatchObject({ supplierMaterialId: 'rel-salt', materialTypeId: 'mat-salt', quantity: 2, taxRate: 13 });
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('AI fill cannot bypass a missing supplier material relationship', async () => {
+    routeGet(autoDraft());
+    harness.listSupplierMaterials.mockResolvedValue([]);
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.handleAiFill({ supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 2, unit: 'kg', unitPrice: 5 }] });
+    expect(vm.dialogVisible).toBe(false);
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('keeps a one-cent quote discrepancy in AI preview without opening or saving an order', async () => {
+    routeGet(autoDraft());
+    const wrapper = mountList();
+    await flushPromises();
+    const params = { supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 1, unit: 'kg', unitPrice: 5 }] };
+    const guard = wrapper.findComponent({ name: 'AiEntryDrawer' }).props('confirmGuard') as (params: Record<string, unknown>) => string | null;
+    expect(guard(params)).toContain('报价合计 ¥5.00，当前计价规则保存后为 ¥4.99');
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.handleAiFill(params);
+    expect(vm.dialogVisible).toBe(false);
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    expect(guard({ ...params, items: [{ ...params.items[0], quantity: 2 }] })).toBeNull();
+    wrapper.unmount();
+  });
+
+  it.each([0, 9])('does not accept an AI tax rate %s that conflicts with the material default', async (taxRate) => {
+    routeGet(autoDraft());
+    const wrapper = mountList();
+    await flushPromises();
+    const params = { supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 1, unit: 'kg', unitPrice: 5, taxRate }] };
+    const guard = wrapper.findComponent({ name: 'AiEntryDrawer' }).props('confirmGuard') as (params: Record<string, unknown>) => string | null;
+    expect(guard(params)).toContain(`AI 识别税率 ${taxRate}% 与原料档案 13% 不同`);
+    await (wrapper.vm as unknown as Vm).handleAiFill(params);
+    expect((wrapper.vm as unknown as Vm).dialogVisible).toBe(false);
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('does not assume missing, unknown or different units are comparable quote quantities', async () => {
+    routeGet(autoDraft());
+    const wrapper = mountList();
+    await flushPromises();
+    const guard = wrapper.findComponent({ name: 'AiEntryDrawer' }).props('confirmGuard') as (params: Record<string, unknown>) => string | null;
+    const item = { materialName: 'QA-S4-1029-盐料', quantity: 1, unitPrice: 5 };
+    expect(guard({ items: [item] })).toBeNull();
+    expect(guard({ items: [{ ...item, unit: '未知单位' }] })).toBeNull();
+    expect(guard({ items: [{ ...item, unit: 'g', priceUnit: 'kg' }] })).toBeNull();
+    wrapper.unmount();
   });
 
   it('没有供应商的草稿: 编辑弹窗打开, 供应商下拉可用, 并提示可在此补录', async () => {

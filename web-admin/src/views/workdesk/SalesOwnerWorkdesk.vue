@@ -15,7 +15,11 @@
 <template>
   <div class="sales-owner-workdesk">
     <DigitalEmployeeFrame :enabled="digitalEmployee" role="sales" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
-    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerFollowupQuery">重新核对</el-button>
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="销售数字文员" scope-label="客户、订单与销售记录" :quick-questions="['查询当前销售订单', '今天哪些客户该跟进？']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeeCanWrite && employeePaths.includes('/sales/orders')" icon="i-lucide-file-plus" @click="openEmployeeOrder">交给销售单办理</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
     <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
@@ -31,7 +35,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -57,7 +61,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合 5 个数据源 (客户优先级 + 微信跟进 + 通话 + 商机 + 收入), 预计 5-10 秒..." }}</span>
@@ -66,7 +70,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -77,7 +81,7 @@
          Old: 4 mirror IndicatorCards (AVG_TICKET_PRICE 等 V_23_11 mirror) + 撒谎 header "F006 真数据"
          Fix: B2BRealDataSection 真接 sales_orders 算 ¥1.22M avg + 大字 banner "客户演示模式 · Sprint 12 接 backend"
          Sprint 12 backend rewrite 接 sister AI 工厂 chat, 见 docs/sprint-12-backlog/indicator-service-rewrite.md -->
-    <B2BRealDataSection :factory-id="factoryId" />
+    <B2BRealDataSection v-if="factoryId" :factory-id="factoryId" />
 
     <!-- Sprint 13 #304: Restaurant P&L card render when RESTAURANT_ECONOMICS_ANALYSIS
          intent returns dataAvailable=true. Mirrors WarehouseKeeperWorkdesk Q6 Option B.6
@@ -123,7 +127,7 @@
     </el-card>
 
     <!-- AI 输出 -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -174,13 +178,13 @@
             </div>
           </div>
           <div class="customer-actions">
-            <el-button size="small" type="primary" @click="openWechatDialog(c)">
+            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openWechatDialog(c)">
  补录微信
             </el-button>
             <el-button size="small" @click="gotoCustomerDetail(c)">
  查看详情
             </el-button>
-            <el-button size="small" type="warning" @click="openOpportunityDialog(c)">
+            <el-button v-if="!digitalEmployee" size="small" type="warning" @click="openOpportunityDialog(c)">
  更新商机
             </el-button>
           </div>
@@ -209,7 +213,7 @@
         </el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button size="small" type="primary" @click="openOpportunityTransitionById(row)">
+            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openOpportunityTransitionById(row)">
               推进阶段
             </el-button>
           </template>
@@ -270,6 +274,7 @@
               size="small"
               type="primary"
               data-testid="sprint10-confirm-shipment-btn"
+              v-if="!digitalEmployee"
               @click="openShipmentDialog(row)">
               一键确认发货
             </el-button>
@@ -512,6 +517,9 @@
 
 <script setup lang="ts">
 import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+import { queueAiEntry } from '@/composables/aiEntryHandoff';
 const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
   digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
 });
@@ -599,7 +607,27 @@ const DEFAULT_RESULT_TITLE = '今日跟进清单';
 const resultTitle = ref(DEFAULT_RESULT_TITLE);
 const restaurantPnl = ref<RestaurantPnl | null>(null);
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+}
+function openEmployeeOrder() {
+  if (!props.employeeCanWrite || !props.employeePaths.includes('/sales/orders')) return;
+  void router.push(queueAiEntry({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }, '/sales/orders', userInput.value || lastEmployeeQuestion.value || '创建销售订单'));
+}
 
 const renderedFormattedText = computed(() => {
   // Minimal markdown → HTML (line breaks + emoji preserve, escape angle brackets)
@@ -642,6 +670,8 @@ function previewAlertType(preview: { status?: string }): 'warning' | 'info' | 's
 
 async function callIntentExecute(input: string, intentCode?: string,
     context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (props.digitalEmployee) return employeeIntent.execute(input, context);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   // Sprint 11 Q6 Option B (2026-05-24): pass context so backend Tools can disambiguate
@@ -692,12 +722,12 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 }
 
 async function triggerFollowupQuery() {
-  userInput.value = '今天该跟谁?';
-  await sendQuery(true);
+  userInput.value = props.digitalEmployee ? '查询当前销售订单' : '今天该跟谁?';
+  await sendQuery(!props.digitalEmployee);
 }
 
 async function sendQuery(forceFollowup = false) {
-  if (!userInput.value.trim()) return;
+  if (loading.value || !userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
   formattedText.value = '';
@@ -719,6 +749,7 @@ async function sendQuery(forceFollowup = false) {
       context = { month };
     }
     const response = await callIntentExecute(userInput.value, intentCode, context);
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -847,6 +878,7 @@ const wechatDialog = reactive({
 });
 
 function openWechatDialog(c: CustomerItem) {
+  if (props.digitalEmployee) return;
   wechatDialog.visible = true;
   wechatDialog.customerId = c.customerId;
   wechatDialog.customerName = c.customerName || '';
@@ -962,6 +994,7 @@ const opportunityDialog = reactive({
 });
 
 async function openOpportunityDialog(c: CustomerItem) {
+  if (props.digitalEmployee) return;
   opportunityDialog.visible = true;
   opportunityDialog.customerId = c.customerId;
   opportunityDialog.customerName = c.customerName || '';
@@ -979,6 +1012,7 @@ async function openOpportunityDialog(c: CustomerItem) {
 }
 
 function openOpportunityTransitionById(opp: StaleOpportunity) {
+  if (props.digitalEmployee) return;
   opportunityDialog.visible = true;
   opportunityDialog.customerId = opp.customerId;
   opportunityDialog.customerName = opp.customerName || '';
@@ -1194,6 +1228,7 @@ async function loadTodayPendingShipments() {
 }
 
 function openShipmentDialog(order: PendingShipmentOrder) {
+  if (props.digitalEmployee) return;
   shipmentDialog.visible = true;
   shipmentDialog.salesOrderId = order.salesOrderId;
   shipmentDialog.orderNumber = order.orderNumber;
@@ -1300,8 +1335,8 @@ async function submitShipment() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
-watch(() => props.employeeNavigationPending, (pending) => {
-  if (pending || initialQueryStarted) return;
+watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
+  if (pending || !id || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerFollowupQuery();
   void loadTodayPendingShipments();

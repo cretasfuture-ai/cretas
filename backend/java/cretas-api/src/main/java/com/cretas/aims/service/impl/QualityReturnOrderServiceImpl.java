@@ -48,6 +48,11 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
     private final QualityReturnOrderRepository returnOrderRepository;
     private final QualityInspectionRepository inspectionRepository;
 
+    /** 退回委外 (SUBCONTRACT) 的 ship 走委外退货实现 (扣收货批次 + 冲加工费)。@Lazy 断开潜在循环依赖。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.outsource.OutsourceService outsourceService;
+
     /** Sprint 6 W2-B: 数据权限解析器 (optional). */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DataScopeResolver dataScopeResolver;
@@ -150,6 +155,16 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
         }
         if (shippingTrackingNo == null || shippingTrackingNo.trim().isEmpty()) {
             throw new BusinessException(400, "物流单号必填");
+        }
+        // 退回委外: 已关联委外任务行的走委外退货 (扣收货批次 + 进返工待收); 未关联的保持原行为 (只记单发出)。
+        // ⛔ 不在这里对未关联的单 409: 关联入口 (OutsourceService#linkQualityReturn) 还没有接口/界面,
+        //    收紧会让所有存量「退回委外」单发不出去 (#1723 终审 高1)。接上关联入口后再收紧。
+        if (order.getTargetType() == QualityReturnTargetType.SUBCONTRACT
+                && order.getOutsourceLineId() != null && !order.getOutsourceLineId().isBlank()) {
+            if (outsourceService == null) {
+                throw new BusinessException(500, "委外服务未就绪, 退回委外暂不能发出").withCode("OUTSOURCE_SERVICE_UNAVAILABLE");
+            }
+            outsourceService.returnGoodsForQualityReturn(factoryId, order, operatorId);
         }
         order.setStatus(QualityReturnStatus.SHIPPED);
         order.setShippedAt(LocalDateTime.now());

@@ -3068,6 +3068,36 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("比上月哪个成本涨了", "COST_QUERY");
         phraseToIntentMapping.put("哪个成本涨了", "COST_QUERY");
         phraseToIntentMapping.put("成本环比上月", "COST_QUERY");
+        // AI 问答 BI 第 2 段 (只读, 2026-11-15 新增绑定; 不改既有意图): BOM 成本排行 / 本月销售额毛利 / 人工成本占比
+        phraseToIntentMapping.put("BOM成本最高的产品", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("哪个产品BOM成本最高", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("哪个产品BOM成本高", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM成本排行", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM成本最高", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM成本最高的是哪个产品", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM成本排序", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("本月销售额和毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额与毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额和毛利是多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额及毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月卖了多少赚了多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("这个月销售额和毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("销售额和毛利", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("人工成本占比", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("人工成本占比多少", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("人工成本占总成本多少", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("人工占比", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("人工成本比例", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("本月人工成本占比", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("最近30天各批次的出成率排序", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各批次的出成率排序", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各批次出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("人工成本占总成本", "REPORT_LABOR_COST_SHARE");
+        phraseToIntentMapping.put("BOM配方成本最高的产品是哪个", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM配方成本最高的产品", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM 配方成本最高的产品是哪个", "REPORT_BOM_COST_RANK");
+        phraseToIntentMapping.put("BOM 成本最高的产品", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
@@ -4998,6 +5028,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("消除设备报警", "ALERT_RESOLVE");           // P2: full phrase, 6 chars
         phraseToIntentMapping.put("不够了", "MATERIAL_LOW_STOCK_ALERT");      // P3: "猪肉快不够了" (6 chars, isShortInput)
         phraseToIntentMapping.put("原料不够", "MATERIAL_LOW_STOCK_ALERT");    // v26-P3: 4-char for "原料不够了，需要采购" (10 chars)
+        phraseToIntentMapping.put("原料快不够用", "MATERIAL_LOW_STOCK_ALERT");
         phraseToIntentMapping.put("库存少于", "MATERIAL_LOW_STOCK_ALERT");    // v26-N1: "库存少于100公斤的原料"
         phraseToIntentMapping.put("到了没", "ORDER_LIST");                    // v26: fixed PROCUREMENT_LIST→ORDER_LIST (doesn't exist in DB)
         // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「采购了多少」

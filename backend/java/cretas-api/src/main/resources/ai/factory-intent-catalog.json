@@ -2261,6 +2261,42 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "REPORT_BOM_COST_RANK",
+      "intent_name": "BOM成本排行",
+      "intent_category": "REPORT",
+      "description": "只读查询BOM成本排行: 按产品现行BOM成本(每1个成品)排序并出柱图, 可按产品名筛选(自动解析产品ID); 当前BOM口径仅归集包材, 缺单价会标注。",
+      "tool_name": "report_bom_cost_rank",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "REPORT_SALES_MARGIN_SUMMARY",
+      "intent_name": "销售额与毛利汇总",
+      "intent_category": "REPORT",
+      "description": "只读查询销售额与毛利汇总(默认本月): 折后未税销售额、毛利、毛利率、成本覆盖率并出柱图; 毛利只算已回填成本的明细, 口径同SKU毛利率。",
+      "tool_name": "report_sales_margin_summary",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
+      "intent_code": "REPORT_LABOR_COST_SHARE",
+      "intent_name": "人工成本占比",
+      "intent_category": "REPORT",
+      "description": "只读查询人工成本占比: 期间内已完成批次人工成本占总成本的比例, 按产品拆分并出柱图; 与成本分析页同口径, 只给金额汇总不含人员。",
+      "tool_name": "report_labor_cost_share",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "REPORT_COST_VARIANCE",
       "intent_name": "成本差异分析",
       "intent_category": "REPORT",
