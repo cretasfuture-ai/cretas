@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { createApp, defineComponent, h, inject } from 'vue';
 import { describe, expect, it } from 'vitest';
-import { en, zh_cn } from '@nuxt/ui/locale';
+import { en, zh_cn } from '../nuxtUiLocaleSource.mjs';
 import nuxtUiLocale, { NUXT_UI_LOCALE_KEY } from '../nuxtUiLocale';
 
 /**

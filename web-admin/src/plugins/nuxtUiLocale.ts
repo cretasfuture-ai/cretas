@@ -16,7 +16,7 @@
  */
 import type { App } from 'vue';
 import { ref } from 'vue';
-import { zh_cn } from '@nuxt/ui/locale';
+import { zh_cn } from './nuxtUiLocaleSource.mjs';
 
 /** 与 @nuxt/ui 的 localeContextInjectionKey 同一个 Symbol.for 键 (runtime 内部导出, 不依赖深路径)。 */
 export const NUXT_UI_LOCALE_KEY = Symbol.for('nuxt-ui.locale-context');
