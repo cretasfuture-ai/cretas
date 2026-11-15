@@ -147,4 +147,19 @@ class ReportSalesMarginSummaryToolContractTest {
         assertFalse(all.contains("酱鸭") || all.contains("鸭脖"));
         assertTrue(r.get("data").get("message").asText().contains("不含 1 个保密产品"));
     }
+
+    @Test
+    void onlyAnchorRowRemovedWithNoProtectedProduct_saysNothingAboutSecrecy() throws Exception {
+        ProcessSecretLlmCostScope scope = mock(ProcessSecretLlmCostScope.class);
+        // C 只是计划锚点 / 联产普通产品: 被剔除, 但没有真正受保护的产品 (protected 为空)
+        when(scope.forCurrentCaller("F1")).thenReturn(new ProcessSecretLlmCostScope.Excluded(
+                Set.of(), Set.of(), Set.of(), Map.of(), Set.of("C")));
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        stub(List.of(row("A", "卤牛肉", "1000", "1000", "600"), row("C", "鸭脖", "200", "200", "100")));
+        JsonNode r = run();
+        String msg = r.get("data").get("message").asText();
+        assertFalse(msg.contains("保密"), msg);
+        assertEquals(0, r.get("data").get("data").get("excludedProductCount").asInt());
+        assertEquals(1000.0, r.get("data").get("data").get("revenue").asDouble(), 0.001);   // C 仍被剔除
+    }
 }

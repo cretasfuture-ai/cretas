@@ -112,7 +112,7 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
 
         if (rank.isEmpty()) {
             return buildSimpleResult(start + " 至 " + end + " 没有可统计的销售记录"
-                    + (excludedRows > 0 ? "（" + ProcessSecretLlmCostScope.note(excludedProtected) + "）" : "")
+                    + (excludedProtected > 0 ? "（" + ProcessSecretLlmCostScope.note(excludedProtected) + "）" : "")
                     + "，销售额和毛利无从计算。", data);
         }
 
@@ -162,7 +162,7 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
                 sb.append("未回填成本的明细没有计入毛利，实际毛利可能与此不同。");
             }
         }
-        if (excludedRows > 0) {
+        if (excludedProtected > 0) {
             sb.append("\n").append(ProcessSecretLlmCostScope.note(excludedProtected));
         }
         sb.append("\n口径：与 SKU 毛利率「实际销售毛利」一致（折后未税收入；毛利只算已回填成本的明细）。");
