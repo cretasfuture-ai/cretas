@@ -1,6 +1,4 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { computed, defineComponent, h, inject, provide } from 'vue';
-import type { ComputedRef } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -50,37 +48,9 @@ vi.mock('element-plus', () => ({
 }));
 
 import SupplierDetailDrawer from '../SupplierDetailDrawer.vue';
+import { nuxtUiStubs } from './nuxtUiStubs';
 
-const ROWS_KEY = 'stub-rows';
-
-/** ⚠️ 必须真的把行渲染出来 —— 否则「没看到 1.77」和「压根没渲染」是同一个读数。 */
-const ElTableStub = defineComponent({
-  name: 'ElTable',
-  props: { data: { type: Array, default: () => [] } },
-  setup(props, { slots }) {
-    provide(ROWS_KEY, computed(() => props.data));
-    return () => h('div', slots.default?.());
-  },
-});
-const ElTableColumnStub = defineComponent({
-  name: 'ElTableColumn',
-  props: { label: { type: String, default: '' } },
-  setup(props, { slots }) {
-    const rows = inject<ComputedRef<unknown[]>>(ROWS_KEY, computed(() => []));
-    return () => h('div', { 'data-col': props.label },
-      rows.value.map((row) => h('div', { class: 'cell' }, slots.default?.({ row }))));
-  },
-});
-const PassThrough = (name: string) => defineComponent({
-  name, setup: (_p, { slots }) => () => h('div', slots.default?.()),
-});
-/** el-tooltip 要把默认插槽渲染出来, 否则「基准未知」那段看不见。 */
-const ElTooltipStub = defineComponent({
-  name: 'ElTooltip',
-  props: { content: { type: String, default: '' } },
-  setup: (props, { slots }) => () => h('span', { 'data-tip': props.content }, slots.default?.()),
-});
-
+/** Nuxt UI 没装进 vitest: 用最小桩（见 ./nuxtUiStubs.ts），UTable 会把行真的渲染出来。 */
 function mountDrawer() {
   return mount(SupplierDetailDrawer, {
     props: {
@@ -90,21 +60,7 @@ function mountDrawer() {
     },
     global: {
       directives: { loading: {} },
-      stubs: {
-        ElDrawer: PassThrough('ElDrawer'), ElDialog: PassThrough('ElDialog'),
-        ElTabs: PassThrough('ElTabs'), ElTabPane: PassThrough('ElTabPane'),
-        ElForm: PassThrough('ElForm'), ElFormItem: PassThrough('ElFormItem'),
-        ElDescriptions: PassThrough('ElDescriptions'), ElDescriptionsItem: PassThrough('ElDescriptionsItem'),
-        ElTable: ElTableStub, ElTableColumn: ElTableColumnStub,
-        ElTooltip: ElTooltipStub,
-        ElCard: PassThrough('ElCard'), ElTag: PassThrough('ElTag'),
-        ElDivider: PassThrough('ElDivider'), ElAlert: PassThrough('ElAlert'), ElEmpty: PassThrough('ElEmpty'),
-        ElSkeleton: PassThrough('ElSkeleton'),
-        ElButton: defineComponent({ name: 'ElButton', setup: (_p, { slots }) => () => h('button', slots.default?.()) }),
-        ElInput: PassThrough('ElInput'), ElInputNumber: PassThrough('ElInputNumber'),
-        ElSwitch: PassThrough('ElSwitch'), ElSelect: PassThrough('ElSelect'), ElOption: PassThrough('ElOption'),
-        UnitSelect: PassThrough('UnitSelect'), SupplierProfileCollections: PassThrough('SupplierProfileCollections'),
-      },
+      stubs: { ...nuxtUiStubs },
     },
   });
 }

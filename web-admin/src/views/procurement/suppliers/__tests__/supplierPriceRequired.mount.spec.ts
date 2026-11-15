@@ -1,5 +1,4 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { defineComponent, h } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -69,6 +68,7 @@ vi.mock('element-plus', () => ({
 }));
 
 import SupplierDetailDrawer from '../SupplierDetailDrawer.vue';
+import { nuxtUiStubs } from './nuxtUiStubs';
 
 const RELATION = {
   id: 'rel-1',
@@ -87,35 +87,6 @@ const RELATION = {
   version: 3,
 };
 
-/** 只做一件事: 把 slot 渲染出来。⛔ 不模仿 Element Plus 的任何别的行为。 */
-const PassThrough = (name: string) => defineComponent({
-  name,
-  setup(_p, { slots }) {
-    return () => h('div', slots.default?.());
-  },
-});
-
-const ElButtonStub = defineComponent({
-  name: 'ElButton',
-  emits: ['click'],
-  setup(_p, { slots, emit }) {
-    return () => h('button', { onClick: () => emit('click') }, slots.default?.());
-  },
-});
-
-/** 受控输入桩 —— 必须真的 emit，否则"改了价格"这个动作根本没发生。 */
-const ModelStub = (name: string) => defineComponent({
-  name,
-  props: { modelValue: { type: null, default: null } },
-  emits: ['update:modelValue'],
-  setup(props, { emit }) {
-    return () => h('input', {
-      'data-model': String(props.modelValue),
-      onInput: (e: Event) => emit('update:modelValue', (e.target as HTMLInputElement).value),
-    });
-  },
-});
-
 /**
  * ⚠️ 必须"先关后开": 组件是靠 `watch(() => props.modelValue)` 去 loadDetail 的,
  * 而那个 watch **没有 immediate** —— 直接以 modelValue:true 挂载, 它一次都不会触发,
@@ -129,44 +100,17 @@ async function openDrawer() {
   return wrapper;
 }
 
+/** Nuxt UI 没装进 vitest: 用最小桩（见 ./nuxtUiStubs.ts），UTable 会把行真的渲染出来。 */
 function mountDrawer() {
   return mount(SupplierDetailDrawer, {
     props: {
-      modelValue: false,
-      factoryId: 'F006',
+      modelValue: false, factoryId: 'F006',
       supplier: { id: 'SUP-1', name: '上海鹃城', status: 'ACTIVE', active: true } as never,
       canWrite: true,
     },
     global: {
       directives: { loading: {} },
-      stubs: {
-        ElDrawer: PassThrough('ElDrawer'),
-        ElDialog: PassThrough('ElDialog'),
-        ElTabs: PassThrough('ElTabs'),
-        ElTabPane: PassThrough('ElTabPane'),
-        ElForm: PassThrough('ElForm'),
-        ElFormItem: PassThrough('ElFormItem'),
-        ElDescriptions: PassThrough('ElDescriptions'),
-        ElDescriptionsItem: PassThrough('ElDescriptionsItem'),
-        ElTable: PassThrough('ElTable'),
-        // ⛔ 不渲染列的 default slot: 那些 slot 都 destructure `{ row }`,
-        //    不喂行就会 TypeError。本组测试驱动的是保存函数, 不需要表格行。
-        ElTableColumn: defineComponent({ name: 'ElTableColumn', setup: () => () => h('div') }),
-        ElCard: PassThrough('ElCard'),
-        ElTag: PassThrough('ElTag'),
-        ElTooltip: PassThrough('ElTooltip'),
-        ElDivider: PassThrough('ElDivider'),
-        ElAlert: PassThrough('ElAlert'),
-        ElEmpty: PassThrough('ElEmpty'),
-        ElButton: ElButtonStub,
-        ElInput: ModelStub('ElInput'),
-        ElInputNumber: ModelStub('ElInputNumber'),
-        ElSwitch: ModelStub('ElSwitch'),
-        ElSelect: ModelStub('ElSelect'),
-        ElOption: PassThrough('ElOption'),
-        UnitSelect: ModelStub('UnitSelect'),
-        SupplierProfileCollections: PassThrough('SupplierProfileCollections'),
-      },
+      stubs: { ...nuxtUiStubs },
     },
   });
 }
