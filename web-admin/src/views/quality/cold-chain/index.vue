@@ -14,7 +14,8 @@
 import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
+import iconColdChain from '@/assets/quality/icon-cold-chain.webp';
 import { useAuthStore } from '@/store/modules/auth';
 import { handleCatchError } from '@/utils/errorToast';
 import { listWarehouses, type FactoryWarehouse } from '@/api/factoryWarehouse';
@@ -60,6 +61,33 @@ async function loadAlerts() {
   }
 }
 
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const ALERT_COLUMNS: TableColumn<ColdChainAlertView>[] = [
+  { accessorKey: 'alertTime', header: '告警时间' },
+  { id: 'equipment', header: '设备' },
+  { id: 'severity', header: '级别' },
+  { id: 'temp', header: '超温读数' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'heldBatchCount', header: '已转质检', meta: C },
+  { id: 'actions', header: '操作', meta: C },
+];
+const EQUIPMENT_COLUMNS: TableColumn<ColdChainEquipmentView>[] = [
+  { id: 'equipment', header: '设备' },
+  { id: 'target', header: '目标温度' },
+  { id: 'warehouse', header: '现在所在仓库' },
+  { accessorKey: 'currentSince', header: '从何时起' },
+  { id: 'actions', header: '操作', meta: C },
+];
+const HISTORY_COLUMNS: TableColumn<ColdChainLocationView>[] = [
+  { accessorKey: 'warehouseName', header: '仓库' },
+  { accessorKey: 'effectiveFrom', header: '开始' },
+  { id: 'end', header: '结束' },
+  { accessorKey: 'remark', header: '备注' },
+];
+const tabItems = computed<TabsItem[]>(() => [
+  { label: `超温告警 (${alerts.value.length})`, value: 'alerts', slot: 'alerts' },
+  { label: '设备库位', value: 'equipment', slot: 'equipment' },
+]);
 const STATUS_LABELS: Record<string, string> = { OPEN: '未处理', ACKNOWLEDGED: '已确认', RESOLVED: '已解决' };
 
 // ------------------------------------------------------------ 受影响批次
@@ -219,84 +247,62 @@ onMounted(async () => {
 
 <template>
   <div class="cold-chain">
-    <div class="page-header">
-      <div>
-        <h2 class="title">冷链超温批次</h2>
-        <p class="subtitle">
-          点一条超温告警，查看超温期间存放在这台设备所在仓库里的批次及各自暴露时长，勾选后一键转质检。
-        </p>
+    <div class="cs-page-head">
+      <div class="head-main">
+        <img :src="iconColdChain" alt="" class="head-icon" width="56" height="56">
+        <div>
+          <h2>冷链超温批次</h2>
+          <p>点一条超温告警，查看超温期间存放在这台设备所在仓库里的批次及各自暴露时长，勾选后一键转质检。</p>
+        </div>
       </div>
-      <el-button :icon="Refresh" :loading="alertsLoading || equipmentLoading" @click="loadAlerts(); loadEquipment()">刷新</el-button>
+      <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="alertsLoading || equipmentLoading" @click="loadAlerts(); loadEquipment()">刷新</UButton>
     </div>
 
-    <el-tabs v-model="activeTab">
-      <el-tab-pane :label="`超温告警 (${alerts.length})`" name="alerts">
-        <el-alert v-if="alertsError" :title="alertsError" type="error" :closable="false" show-icon class="mb" />
-        <el-table v-loading="alertsLoading" :data="alerts" stripe empty-text="最近 90 天没有冷链超温告警" data-testid="cc-alert-table">
-          <el-table-column prop="alertTime" label="告警时间" min-width="160" />
-          <el-table-column label="设备" min-width="180">
-            <template #default="{ row }">{{ row.equipmentName || '—' }}（{{ row.equipmentCode || row.equipmentId }}）</template>
-          </el-table-column>
-          <el-table-column label="级别" width="100">
-            <template #default="{ row }">
-              <el-tag :type="row.severity === 'CRITICAL' ? 'danger' : 'warning'">{{ row.severity === 'CRITICAL' ? '严重' : '警告' }}</el-tag>
+    <section class="cs-card">
+      <UTabs v-model="activeTab" :items="tabItems" variant="link" :ui="{ content: 'pt-0' }">
+        <template #alerts>
+          <UAlert v-if="alertsError" :title="alertsError" color="error" variant="subtle" icon="i-lucide-circle-alert" class="m-3" />
+          <UTable :data="alerts" :columns="ALERT_COLUMNS" :loading="alertsLoading" class="cs-table" data-testid="cc-alert-table">
+            <template #empty><div class="cs-empty-art"><img :src="iconColdChain" alt="" width="96"><span>最近 90 天没有冷链超温告警</span></div></template>
+            <template #equipment-cell="{ row }">{{ row.original.equipmentName || '—' }}（{{ row.original.equipmentCode || row.original.equipmentId }}）</template>
+            <template #severity-cell="{ row }">
+              <UBadge :color="row.original.severity === 'CRITICAL' ? 'error' : 'warning'" variant="soft">{{ row.original.severity === 'CRITICAL' ? '严重' : '警告' }}</UBadge>
             </template>
-          </el-table-column>
-          <el-table-column label="超温读数" width="140">
-            <template #default="{ row }">{{ row.minTemp }} ~ {{ row.maxTemp }} ℃</template>
-          </el-table-column>
-          <el-table-column label="状态" width="100">
-            <template #default="{ row }">{{ STATUS_LABELS[row.status] ?? row.status }}</template>
-          </el-table-column>
-          <el-table-column label="已转质检" width="100" align="center">
-            <template #default="{ row }">{{ row.heldBatchCount }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="140" align="center" fixed="right">
-            <template #default="{ row }">
-              <el-button type="primary" size="small" :data-testid="`cc-open-${row.id}`" @click="openAlert(row.id)">受影响批次</el-button>
+            <template #temp-cell="{ row }"><span class="num">{{ row.original.minTemp }} ~ {{ row.original.maxTemp }} ℃</span></template>
+            <template #status-cell="{ row }">{{ STATUS_LABELS[row.original.status] ?? row.original.status }}</template>
+            <template #actions-cell="{ row }">
+              <UButton size="xs" :data-testid="`cc-open-${row.original.id}`" @click="openAlert(row.original.id)">受影响批次</UButton>
             </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
+          </UTable>
+        </template>
 
-      <el-tab-pane label="设备库位" name="equipment">
-        <p class="muted mb">
-          登记每台冷链设备放在哪个仓库、从什么时候开始。设备换库时登记新仓库即可，旧记录保留，历史告警仍按当时的仓库计算。
-        </p>
-        <el-table v-loading="equipmentLoading" :data="equipment" stripe empty-text="本厂还没有冷链设备" data-testid="cc-equipment-table">
-          <el-table-column label="设备" min-width="180">
-            <template #default="{ row }">{{ row.equipmentName }}（{{ row.equipmentCode }}）</template>
-          </el-table-column>
-          <el-table-column label="目标温度" width="130">
-            <template #default="{ row }">{{ row.targetTempMin }} ~ {{ row.targetTempMax }} ℃</template>
-          </el-table-column>
-          <el-table-column label="现在所在仓库" min-width="160">
-            <template #default="{ row }">
-              <span v-if="row.currentWarehouseName">{{ row.currentWarehouseName }}</span>
-              <el-tag v-else type="danger">未登记</el-tag>
+        <template #equipment>
+          <p class="muted hint">
+            登记每台冷链设备放在哪个仓库、从什么时候开始。设备换库时登记新仓库即可，旧记录保留，历史告警仍按当时的仓库计算。
+          </p>
+          <UTable :data="equipment" :columns="EQUIPMENT_COLUMNS" :loading="equipmentLoading" class="cs-table" data-testid="cc-equipment-table">
+            <template #empty>本厂还没有冷链设备</template>
+            <template #equipment-cell="{ row }">{{ row.original.equipmentName }}（{{ row.original.equipmentCode }}）</template>
+            <template #target-cell="{ row }"><span class="num">{{ row.original.targetTempMin }} ~ {{ row.original.targetTempMax }} ℃</span></template>
+            <template #warehouse-cell="{ row }">
+              <span v-if="row.original.currentWarehouseName">{{ row.original.currentWarehouseName }}</span>
+              <UBadge v-else color="error" variant="soft">未登记</UBadge>
             </template>
-          </el-table-column>
-          <el-table-column prop="currentSince" label="从何时起" min-width="160" />
-          <el-table-column label="操作" width="200" align="center">
-            <template #default="{ row }">
-              <el-button size="small" type="primary" @click="openAssign(row)">登记库位</el-button>
-              <el-button size="small" @click="showHistory(row)">历史</el-button>
+            <template #actions-cell="{ row }">
+              <UButton size="xs" class="mr-2" @click="openAssign(row.original)">登记库位</UButton>
+              <UButton size="xs" color="neutral" variant="outline" @click="showHistory(row.original)">历史</UButton>
             </template>
-          </el-table-column>
-        </el-table>
-        <div v-if="historyFor" class="history">
-          <h4>{{ historyFor.equipmentName }} 的库位历史</h4>
-          <el-table :data="history" size="small" empty-text="还没有登记过">
-            <el-table-column prop="warehouseName" label="仓库" min-width="140" />
-            <el-table-column prop="effectiveFrom" label="开始" min-width="160" />
-            <el-table-column label="结束" min-width="160">
-              <template #default="{ row }">{{ row.effectiveTo ?? '至今' }}</template>
-            </el-table-column>
-            <el-table-column prop="remark" label="备注" min-width="160" />
-          </el-table>
-        </div>
-      </el-tab-pane>
-    </el-tabs>
+          </UTable>
+          <div v-if="historyFor" class="history">
+            <h4>{{ historyFor.equipmentName }} 的库位历史</h4>
+            <UTable :data="history" :columns="HISTORY_COLUMNS" class="cs-table">
+              <template #empty>还没有登记过</template>
+              <template #end-cell="{ row }">{{ row.original.effectiveTo ?? '至今' }}</template>
+            </UTable>
+          </div>
+        </template>
+      </UTabs>
+    </section>
 
     <el-drawer v-model="drawerVisible" size="80%" title="超温受影响批次" data-testid="cc-drawer">
       <div v-loading="reportLoading">
@@ -398,66 +404,19 @@ onMounted(async () => {
     </el-dialog>
   </div>
 </template>
-
 <style scoped>
-.cold-chain {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 12px;
-  gap: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 4px;
-  color: #303133;
-}
-.page-header .subtitle {
-  font-size: 13px;
-  color: #606266;
-  margin: 0;
-}
-.muted {
-  color: #909399;
-  font-size: 13px;
-}
-.danger {
-  color: #f56c6c;
-}
-.mb {
-  margin-bottom: 12px;
-}
-.seg {
-  margin-right: 16px;
-}
-.summary {
-  display: flex;
-  gap: 20px;
-  align-items: center;
-  font-size: 14px;
-}
-.history {
-  margin-top: 16px;
-}
-.history h4 {
-  margin: 0 0 8px;
-}
-.form-tip {
-  font-size: 12px;
-  color: #909399;
-  line-height: 1.5;
-  margin-top: 4px;
-}
-.footer-tip {
-  margin-right: 12px;
-}
-.disabled-reason {
-  color: #f56c6c;
-  font-size: 12px;
-  margin-right: 12px;
-}
+.cold-chain { padding: var(--cs-space-4); }
+.head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
+.head-icon { flex: none; object-fit: contain; }
+.muted { color: var(--cs-muted); font-size: 13px; }
+.hint { margin: 0; padding: var(--cs-space-3) var(--cs-space-5); }
+.danger { color: var(--cs-danger); }
+.mb { margin-bottom: var(--cs-space-3); }
+.seg { margin-right: var(--cs-space-4); }
+.summary { display: flex; gap: var(--cs-space-5); align-items: center; font-size: 14px; }
+.history { padding: var(--cs-space-4) var(--cs-space-5); }
+.history h4 { margin: 0 0 var(--cs-space-2); }
+.form-tip { font-size: 12px; color: var(--cs-muted); line-height: 1.5; margin-top: 4px; }
+.footer-tip { margin-right: var(--cs-space-3); }
+.disabled-reason { color: var(--cs-danger); font-size: var(--cs-font-small); margin-right: var(--cs-space-3); }
 </style>

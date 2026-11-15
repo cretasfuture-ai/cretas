@@ -16,6 +16,7 @@ vi.mock('@/api/request', () => ({
   get: (...args: unknown[]) => state.get(...args),
 }));
 import Page from '../index.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const ok = (data: unknown) => ({ success: true, data });
 const window30 = { startDate: '2026-10-06', endDate: '2026-11-04' };
@@ -51,7 +52,7 @@ function callsTo(suffix: string) {
   return state.get.mock.calls.filter((c) => String(c[0]).endsWith(suffix));
 }
 function mountPage() {
-  return mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  return mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
 }
 
 beforeEach(() => {

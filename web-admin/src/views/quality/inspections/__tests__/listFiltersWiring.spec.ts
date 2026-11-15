@@ -12,13 +12,14 @@ vi.mock('@/api/request', () => ({ get: (...a: unknown[]) => state.get(...a), pos
 vi.mock('@/composables/useListSummary', () => ({ useListSummary: () => ({ summary: null, loading: false }) }));
 vi.mock('@/composables/useCreateAndReturn', () => ({ useCreateAndReturn: () => ({ goCreate: vi.fn() }) }));
 import Page from '../list.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const ok = (data: unknown) => ({ success: true, data });
 function mountPage() {
   return mount(Page, {
     attachTo: document.body,
     global: { plugins: [ElementPlus], stubs: {
-      CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
+      ...nuxtUiStubs, CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
       TableFooter: true, UpstreamMissingHint: true,
       // Nuxt UI 在 vitest 里没有安装插件, 用最小桩保留 data-testid / 点击 / 输入契约
       UButton: { template: '<button type="button"><slot /></button>' },
