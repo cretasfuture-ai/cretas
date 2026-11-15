@@ -382,7 +382,7 @@ const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
   actorId: String(authStore.user?.id || ''),
   factoryId: effectiveFactoryId.value || '',
   role: roleCode.value,
-  factoryType: workspaceFactoryType.value,
+  factoryType: effectiveFactoryType.value,
   isPlatform: authStore.isPlatform,
 }));
 const navigationPermissionReady = computed(() => navigationPermissionsReady(

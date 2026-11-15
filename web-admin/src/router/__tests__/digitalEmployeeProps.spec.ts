@@ -50,6 +50,13 @@ describe('unified digital specialist route presentation with scoped capabilities
     nav.publish(snapshot());
     expect(digitalEmployeeProps({ path: '/workdesk/purchaser' }).employeeCanWrite).toBe(true);
   });
+  it('keeps a genuine LOGISTICS navigation identity ready without granting write access', () => {
+    auth.factoryId = 'LOGISTICS_TEST'; auth.factoryType = 'LOGISTICS';
+    useNavigationVisibilityStore().publish({ ...snapshot(), paths: ['/scheduling/logistics/workbench'] });
+    expect(digitalEmployeeProps({ path: '/scheduling/logistics/workbench' })).toEqual({ digitalEmployee: true, employeePaths: ['/scheduling/logistics/workbench'], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false });
+    auth.factoryType = 'RESTAURANT';
+    expect(digitalEmployeeProps({ path: '/scheduling/logistics/workbench' }).employeeNavigationPending).toBe(true);
+  });
   it.each([
     ['/workdesk/sales-owner', 'sales'], ['/workdesk/purchaser', 'procurement'],
     ['/workdesk/warehouse-keeper', 'warehouse'], ['/workdesk/finance-manager', 'finance'],
