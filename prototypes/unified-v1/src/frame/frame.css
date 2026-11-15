@@ -1,0 +1,115 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+@import "../cost/cost-scoped.css";
+@source "../**/*.{vue,ts}";
+/* 六膳门工作区样式：只用味美设计变量 --cs-*（由 /design-tokens.css 提供，即 ydwm-v1/public/design-system.css）。
+   版式与味美内容区一致：页标题 22px、分区 16px、正文 14px、说明 12px；列表行高 32-33px；控件圆角 6px、容器 10px、浮层 12px。 */
+:root{--ui-primary:var(--cs-primary,#1b65a8);--ui-bg:var(--cs-surface,#fff);--ui-text:var(--cs-text,#1a2332);--ui-text-muted:var(--cs-muted,#526278);--ui-border:var(--cs-border,#dce3ed);--ui-radius:6px}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--cs-bg,#f4f6f9)}
+body{font-family:var(--cs-font-family);font-size:var(--cs-type-body,.875rem);color:var(--cs-text);font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit}button{cursor:pointer}button:disabled{cursor:not-allowed}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--cs-primary);outline-offset:2px}
+select,input,textarea{border:1px solid var(--cs-border);background:var(--cs-surface);border-radius:var(--cs-radius-sm,6px);padding:5px 10px;color:inherit}
+select,input{height:32px}
+small{font-size:var(--cs-type-caption,.75rem);color:var(--cs-muted)}
+h1,h2,h3,h4,p{margin:0}
+h1{font-size:var(--cs-type-title,1.375rem);font-weight:600;color:var(--cs-text)}
+h2{font-size:var(--cs-type-section,1rem);font-weight:600}h3{font-size:14px;font-weight:600}h4{font-size:13px;font-weight:600}p{line-height:1.65}
+.lsm-main{padding:20px 24px 40px;max-width:1700px;margin:0 auto}
+.page-heading,.section-head{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.page-heading{margin-bottom:12px}.page-heading p{font-size:12px;color:var(--cs-muted);margin-bottom:4px}
+.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.help{display:inline-grid;place-items:center;width:16px;height:16px;font-size:11px;font-style:normal;border:1px solid #a9b8c7;border-radius:50%;color:var(--cs-muted);cursor:help;vertical-align:middle;margin-left:4px}
+.source-strip{display:flex;align-items:center;gap:16px;font-size:12px;color:var(--cs-muted);margin-bottom:16px;flex-wrap:wrap}
+.live-dot{width:6px;height:6px;background:var(--cs-success,#24724f);border-radius:50%;margin-right:-10px}
+.revision{margin-left:auto;color:#8fa0b2}
+.metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.metrics button{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);padding:12px 16px;text-align:left}
+.metrics button:hover{border-color:#90b7db}.metrics span{display:block;font-size:12px;color:var(--cs-muted)}.metrics strong{display:block;font-size:24px;font-weight:600;margin-top:2px}
+.card{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);margin-bottom:16px;overflow:hidden}
+.section-head{padding:12px 16px;border-bottom:1px solid var(--cs-border)}
+.section-head h2 small{font-weight:400;margin-left:6px}
+.section-head span,.section-head p,.section-head label{font-size:12px;color:var(--cs-muted)}
+.filters{display:flex;gap:8px;align-items:center;padding:12px 16px;flex-wrap:wrap}
+.filters input{min-width:200px;flex:1}.filters select{max-width:240px;font-size:13px}
+.table-scroll{overflow:auto}
+table{width:100%;border-collapse:collapse;text-align:left;font-size:13px}
+thead{background:var(--cs-surface-subtle);color:var(--cs-muted)}
+th{font-weight:500;white-space:nowrap}
+th,td{height:32px;padding:4px 12px;border-bottom:1px solid #edf0f4;line-height:1.4}
+td{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+tbody tr:hover{background:#f8fbfe}tbody tr.picked{background:var(--cs-primary-soft)}tbody tr.picked td:first-child{box-shadow:inset 3px 0 var(--cs-primary)}
+table small{display:block;font-size:11px}
+td .ui-button,td button{height:24px}
+.op{width:90px;white-space:nowrap}
+.state{display:inline-block;padding:1px 6px;border-radius:4px;font-size:12px;background:var(--cs-warning-soft);color:var(--cs-warning);white-space:nowrap}
+.state.success{background:var(--cs-success-soft);color:var(--cs-success)}.state.active{background:var(--cs-primary-soft);color:var(--cs-primary)}.state.muted{background:#f0f2f5;color:#6b7889}
+.pagination{display:flex;justify-content:flex-end;align-items:center;gap:12px;padding:10px 16px;font-size:12px;color:var(--cs-muted)}
+.pagination span{margin-right:auto}.pagination select{height:28px;padding:2px 6px}
+.footnote{font-size:12px;color:var(--cs-muted);margin-top:8px}
+.empty{padding:28px;text-align:center;color:var(--cs-muted)}
+.error,.notice{padding:10px 14px;margin-bottom:12px;border-radius:var(--cs-radius-sm);font-size:13px}
+.error{background:var(--cs-danger-soft);color:var(--cs-danger)}
+.notice{background:var(--cs-info-soft);color:var(--cs-info);display:flex;justify-content:space-between}.notice button{border:0;background:none}
+.muted{font-size:12px;color:var(--cs-muted)}
+.source-gap{border:1px solid #eee1bd;background:var(--cs-warning-soft);border-radius:var(--cs-radius-sm);padding:8px 14px;margin-bottom:12px;color:var(--cs-warning);font-size:12px}.source-gap p{margin-top:6px}.source-gap summary{cursor:pointer}
+.chain-context{padding:8px 10px;background:var(--cs-primary-soft);color:var(--cs-info);font-size:12px;border-radius:6px;margin:10px 0}
+.lsm-tabs{display:flex;align-items:center;gap:24px;margin:4px 0 12px;border-bottom:1px solid var(--cs-border)}
+.lc-ai-hint{font-size:12px;color:var(--cs-muted);border:1px dashed var(--cs-border);border-radius:6px;padding:4px 8px;white-space:nowrap}
+/* 记录详情（迁自六膳门） */
+.detail-modal{max-width:min(1060px,calc(100vw - 32px));width:100%}
+.detail-body{font-size:13px;line-height:1.65}.detail-body p{margin:8px 0}
+.detail-scope{font-size:12px;color:var(--cs-muted);margin-bottom:12px}
+.readonly{margin-left:12px;border:1px solid #d9e5ef;color:var(--cs-primary);border-radius:4px;padding:1px 6px}
+.detail-section,.detail-summary{padding:16px 0;border-bottom:1px solid var(--cs-border)}
+.detail-section h3{margin-bottom:8px}.detail-section table{margin-top:10px}.detail-section td{white-space:normal;overflow-wrap:anywhere;max-width:280px}
+.facts-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding:12px 0}.facts-grid span{display:block;font-size:12px;color:var(--cs-muted)}.facts-grid b{font-size:16px;font-weight:600}
+.issues{padding:8px 14px 8px 28px;color:var(--cs-warning);background:var(--cs-warning-soft);border-radius:6px;font-size:12px}
+.route-steps{display:flex;gap:8px;flex-wrap:wrap}.route-steps button{border:1px solid #d8e4ef;background:var(--cs-surface);border-radius:6px;padding:8px 10px;min-width:120px;text-align:left}.route-steps strong,.route-steps span{display:block}.route-steps span{font-size:11px;color:var(--cs-muted)}
+.raw-fields{font-size:12px;margin-top:16px;color:var(--cs-muted)}.raw-fields dl{display:grid;grid-template-columns:160px minmax(0,1fr);gap:6px}.raw-fields dd{overflow-wrap:anywhere;margin:0}
+.saved-note{padding:12px;background:var(--cs-primary-soft);border-radius:8px;margin:16px 0}
+.follow-modal{max-width:560px}.follow-form label{display:grid;gap:6px;margin:14px 0;font-size:13px}.follow-form p{font-size:12px;color:var(--cs-muted)}.follow-form .actions{justify-content:flex-end}
+.review-state{font-size:12px;color:var(--cs-warning);background:var(--cs-warning-soft);padding:4px 9px;border-radius:5px}
+.review-content{padding:20px;max-width:950px}.review-content p{font-size:13px;color:var(--cs-muted)}.review-content dl{display:grid;grid-template-columns:140px 1fr;gap:16px;margin:20px 0;font-size:13px}.review-content dt{color:var(--cs-muted)}.review-content dd{margin:0;line-height:1.8}
+/* 成本模块容器 */
+.unified-cost{margin-top:4px}
+/* AI 悬浮窗：与味美 nuxt-ai-panel 同规格（白底、12px 圆角、蓝色细边、浮层阴影、右下角）。 */
+.uni-ai-launcher{position:fixed;right:20px;bottom:18px;z-index:70;display:flex;align-items:center;gap:8px;max-width:360px;height:40px;padding:0 14px;border:1px solid rgba(27,101,168,.25);border-radius:20px;background:var(--cs-surface);color:var(--cs-primary);box-shadow:var(--cs-shadow-overlay);font-size:13px;font-weight:600}
+.uni-ai-launcher small{font-weight:400;color:var(--cs-muted);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.uni-ai-launcher:hover{background:var(--cs-primary-soft)}
+.uni-ai-panel{position:fixed;z-index:80;max-width:calc(100vw - 24px);height:min(680px,calc(100vh - 40px));min-width:340px;display:flex;flex-direction:column;background:var(--cs-surface);border:1px solid rgba(27,101,168,.2);border-radius:var(--cs-radius-lg,12px);box-shadow:0 16px 48px rgba(21,45,69,.22);overflow:hidden}
+.uni-ai-panel>header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid var(--cs-border);cursor:move;user-select:none;touch-action:none}
+.uni-ai-panel>header small{display:block;font-size:11px}
+.uni-ai-scroll{flex:1;overflow:auto;padding:12px 14px}
+.uni-ai-step{padding:8px 0;border-bottom:1px solid #eef2f6}.uni-ai-step:last-of-type{border-bottom:0}
+.uni-ai-step>b{display:block;font-size:12px;color:var(--cs-muted);font-weight:600;margin-bottom:4px}
+.uni-ai-step p{font-size:13px}
+.uni-ai-facts{display:grid;grid-template-columns:96px minmax(0,1fr);gap:3px 10px;font-size:12px;margin:0}.uni-ai-facts dt{color:var(--cs-muted)}.uni-ai-facts dd{margin:0;overflow-wrap:anywhere}
+.uni-ai-step .answer{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.75;margin:8px 0}
+.uni-ai-step h4{margin:8px 0 4px}
+.uni-ai-preview label{display:grid;gap:4px;margin:8px 0;font-size:12px}.uni-ai-preview textarea{width:100%;font-size:12px}
+.uni-ai-readback{background:var(--cs-success-soft);border-radius:8px;padding:10px 12px!important;margin-top:8px}
+.uni-ai-note{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:var(--cs-text)}
+.uni-ai-panel>form{border-top:1px solid var(--cs-border);padding:10px 12px}.uni-ai-panel textarea{width:100%;resize:vertical;font-size:13px}
+.uni-ai-panel form .actions{justify-content:flex-end;margin-top:6px}.uni-ai-panel form .actions small{margin-right:auto}
+@media(max-width:900px){.lsm-main{padding:14px}.metrics{gap:6px}.metrics strong{font-size:20px}.facts-grid{grid-template-columns:1fr 1fr}.filters select{max-width:170px}.section-head span{display:none}}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+.uni-ai-resize{position:absolute;left:0;top:0;bottom:0;width:6px;cursor:ew-resize;z-index:2;touch-action:none}
+.uni-ai-resize:hover{background:rgba(27,101,168,.15)}
+.uni-ai-panel>header:focus-visible{outline:2px solid var(--cs-primary);outline-offset:-2px}
+.uni-ai-step .cs-badge{margin:2px 0 6px}
+.uni-ai-sys{font-size:13px;margin:4px 0}.uni-ai-sys small,.uni-ai-items small{color:var(--cs-muted);font-size:11px;margin-right:4px}.uni-ai-items{margin:4px 0;padding-left:18px;font-size:13px}.uni-ai-items em{font-style:normal;color:var(--cs-muted)}
+
+/* 悬浮窗启动按钮不压住末行行内按钮：主内容底部留出按钮高度 */
+.lsm-main{padding-bottom:72px!important}
+
+/* 嵌入味美原生页面的悬浮窗 iframe：背景透明，组件贴 iframe 右下角，大小由外壳按上报的框设置 */
+html.uni-ai-embedded,html.uni-ai-embedded body{background:transparent!important;overflow:hidden}
+html.uni-ai-embedded .uni-ai-panel{right:0!important;bottom:0!important;width:100%!important;height:100%!important;max-width:none;box-shadow:none}
+html.uni-ai-embedded .uni-ai-launcher{right:auto!important;left:0;bottom:4px!important}
+
+/* 第七批（E 报：解读浮钮压住抽屉里的「提交结果 / 确认提交」）：原来靠脚本量抽屉宽度再左移，抽屉刚打开或量取时机不对时会短暂压住按钮。
+   再加一层纯样式兜底：页面里有 E 的右侧抽屉（.e-drawer）或带 data-ai-avoid 的侧栏时，浮钮固定让到抽屉左边；窄屏（抽屉占满宽）直接隐藏，不依赖脚本。 */
+body:has(.e-drawer) .uni-ai-launcher{right:calc(min(600px,100vw) + 20px)!important}
+@media (max-width:660px){body:has(.e-drawer, [data-ai-avoid]) .uni-ai-launcher{display:none!important}}
