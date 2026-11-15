@@ -11,7 +11,7 @@
 
 ## 已修复（本批 PR，带回归测试，红线域须独立审查）
 
-1. 库存汇总 totalValue：同一物料任一在库批次无单价，整组 totalValue 与 avgUnitPrice 为 null（原先 SUM 跳过空价，给出偏低的数）。`MaterialBatchRepository.findStockSummaryByFactory`；测试 `MaterialStockSummaryMissingPriceTest`（真实 JPA，旧查询下红、新查询下绿）。
+1. 库存汇总 totalValue：同一物料任一在库批次无单价，整组 totalValue 与 avgUnitPrice 为 null（原先 SUM 跳过空价，给出偏低的数）。`MaterialBatchRepository.findStockSummaryByFactory`；测试 `MaterialStockSummaryMissingPriceContractTest`（真实 JPA，旧查询下红、新查询下绿）。
 2. SKU 组装取客户未按工厂过滤（他厂客户名会写进本厂 SKU 名称与编码）。`SkuAssemblyService.assemblesku` 改 `findByIdAndFactoryId`；测试 `SkuAssemblyServiceTest.assembleskuRejectsCustomerOfAnotherFactory`。
 
 ## 未修、留给后续（按各节「疑似缺陷」列表，需先裁决或另派）

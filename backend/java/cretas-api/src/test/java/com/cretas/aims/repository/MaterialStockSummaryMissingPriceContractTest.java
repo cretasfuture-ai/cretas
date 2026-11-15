@@ -31,7 +31,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("库存汇总: 缺单价整组 totalValue=null")
-class MaterialStockSummaryMissingPriceTest {
+class MaterialStockSummaryMissingPriceContractTest {
 
     private static final String F = "F-SSMP-1";
 
