@@ -583,6 +583,12 @@ public class SmartBIUploadController {
         return body;
     }
 
+    /** 租户隔离：上传记录必须属于当前工厂；查不到（含仓库不可用）一律视为不属于。 */
+    boolean uploadBelongsToFactory(String factoryId, Long uploadId) {
+        return pgUploadRepository != null && uploadId != null && pgUploadRepository.findById(uploadId)
+                .map(u -> factoryId != null && factoryId.equals(u.getFactoryId())).orElse(false);
+    }
+
     @RequirePermission({"analytics:read"})
     @GetMapping("/uploads/{uploadId}/fields")
     @Operation(summary = "Get upload fields", description = "Get field definitions for uploaded data")
@@ -597,6 +603,9 @@ public class SmartBIUploadController {
         }
 
         try {
+            if (!uploadBelongsToFactory(factoryId, uploadId)) {
+                return ResponseEntity.status(404).body(ApiResponse.error(404, "上传记录不存在: " + uploadId));
+            }
             List<DynamicAnalysisService.FieldDefinitionDTO> fields =
                     dynamicAnalysisService.getFieldDefinitions(uploadId);
             return ResponseEntity.ok(ApiResponse.success(fields));
@@ -622,6 +631,9 @@ public class SmartBIUploadController {
         }
 
         try {
+            if (!uploadBelongsToFactory(factoryId, uploadId)) {
+                return ResponseEntity.status(404).body(ApiResponse.error(404, "上传记录不存在: " + uploadId));
+            }
             List<DynamicAnalysisService.FieldDefinitionDTO> fields =
                     dynamicAnalysisService.getFieldDefinitions(uploadId);
             List<String> headers = fields.stream()
