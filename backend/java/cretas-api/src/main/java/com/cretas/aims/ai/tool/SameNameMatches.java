@@ -20,6 +20,8 @@ import java.util.Map;
 public final class SameNameMatches {
 
     public static final String KEY = "_sameName";
+    /** 全名零命中时「你是不是要找」的候选 (在 {@link #KEY} 标记里): 只列出让人选, ⛔ 不自动选, 哪怕只有一个。 */
+    static final String SUGGESTED = "suggested";
     public static final int LIST_LIMIT = 5;
 
     private SameNameMatches() {
@@ -80,6 +82,29 @@ public final class SameNameMatches {
         return annotate(result, kind, resolution.query(), resolution.matches().size(), listed);
     }
 
+    /**
+     * 全名零命中、但有候选 (称呼核心 / 包含): 记 total=0 + 候选 (前 {@link #LIST_LIMIT} 个, 带区分字段)。
+     * 没有候选时返回 false, 结果不动 (工具走它原来的「没找到」)。
+     */
+    public static boolean annotateSuggestions(Map<String, Object> result, String kind,
+                                              FactoryEntityResolver.Resolution resolution) {
+        if (!resolution.matches().isEmpty() || resolution.suggestions().isEmpty()) {
+            return false;
+        }
+        annotate(result, kind, resolution.query(), 0, List.of());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> marker = (Map<String, Object>) result.get(KEY);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        List<FactoryEntityResolver.Candidate> all = resolution.suggestions();
+        for (FactoryEntityResolver.Candidate c : all.subList(0, Math.min(LIST_LIMIT, all.size()))) {
+            rows.add(matchOf(c, null).toMap());
+        }
+        marker.put(SUGGESTED, rows);
+        marker.put("suggestedTotal", all.size());
+        marker.put("suggestionBasis", resolution.basis().name());
+        return true;
+    }
+
     /** 回复文本: 0 个或 ≥2 个命中时给出; 恰好 1 个 (或没有标记) 时 null, 走原来的格式化。 */
     public static String reply(Object resultData) {
         resultData = TimeRangeFilter.toolResultOf(resultData);
@@ -89,6 +114,16 @@ public final class SameNameMatches {
         int total = marker.get("total") instanceof Number n ? n.intValue() : -1;
         String kind = String.valueOf(marker.get("kind"));
         String name = String.valueOf(marker.get("name"));
+        if (total == 0 && marker.get(SUGGESTED) instanceof List<?> suggested && !suggested.isEmpty()) {
+            int all = marker.get("suggestedTotal") instanceof Number n ? n.intValue() : suggested.size();
+            StringBuilder sb = new StringBuilder();
+            sb.append("本厂没有名称正好是「").append(name).append("」的").append(kind).append("。你是不是要找");
+            sb.append(all > suggested.size() ? "（共 " + all + " 个，列出前 " + suggested.size() + " 个）" : "");
+            sb.append("：");
+            appendRows(sb, suggested);
+            sb.append("\n没有替你选，请说完整名称或编码。");
+            return sb.toString();
+        }
         if (total == 0) {
             return "本厂没有找到叫「" + name + "」的" + kind + "，请核对名称，或改用编号/工号。";
         }
@@ -109,6 +144,11 @@ public final class SameNameMatches {
             sb.append("，都列出来了");
         }
         sb.append("：");
+        appendRows(sb, listed);
+        return sb.toString();
+    }
+
+    private static void appendRows(StringBuilder sb, List<?> listed) {
         int i = 1;
         for (Object o : listed) {
             Map<?, ?> row = (Map<?, ?>) o;
@@ -122,6 +162,5 @@ public final class SameNameMatches {
                 sb.append("：").append(summary);
             }
         }
-        return sb.toString();
     }
 }

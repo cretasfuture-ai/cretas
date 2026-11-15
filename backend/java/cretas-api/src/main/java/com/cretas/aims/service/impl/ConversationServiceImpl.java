@@ -58,6 +58,10 @@ public class ConversationServiceImpl implements ConversationService {
     static final String CONVERSATION_EGRESS_SITE = "intent-conversation";
     static final String PARAMETER_EGRESS_SITE = "intent-conversation-params";
 
+    /** 追问回答里抽出的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3); 没装配时不做这一条。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     @Value("${cretas.ai.conversation.max-rounds:5}")
     private int maxRounds;
 
@@ -1241,7 +1245,9 @@ public class ConversationServiceImpl implements ConversationService {
                 ? new HashMap<>(session.getCollectedParameters()) : new HashMap<>();
         com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
                 com.cretas.aims.service.execution.LlmParameterGrounding.groundSlots(
-                        raw.getExtractedParams(), existing, userReply, types);
+                        raw.getExtractedParams(), existing, userReply, types,
+                        com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                factoryEntityResolver, session.getFactoryId()));
         Map<String, String> kept = new HashMap<>();
         grounded.accepted().forEach((k, v) -> {
             if (v != null) kept.put(k, String.valueOf(v));

@@ -81,22 +81,55 @@ class SameNameReplyFormatterContractTest {
     }
 
     @Test
-    @DisplayName("CRM 客户状态: 「华联」只是名字的前缀 → 不按包含匹配列出三个, 说没找到")
+    @DisplayName("CRM 客户状态: 「华联」全名零命中 → 三个包含候选都列出让人选, 不自动选 (不查任何一家的 CRM)")
     void crmStatusDoesNotContainsMatch() {
         CustomerService customers = mock(CustomerService.class);
         Map<String, Object> result = run(crmTool(customers), "华联");
+        String text = format(result);
+        System.out.println("[same-name] 华联 -> " + text.replace("\n", " | "));
 
-        assertThat(String.valueOf(result.get("message"))).contains("未找到客户");
-        assertThat(result).doesNotContainKey(SameNameMatches.KEY);
+        // 性质: 没解析出任何一家 (matches 为 0), 候选全部列出带区分字段, 明说没替用户选
+        assertThat(result).containsKey(SameNameMatches.KEY);
+        assertThat(((Map<?, ?>) result.get(SameNameMatches.KEY)).get("total")).isEqualTo(0);
+        assertThat(text).contains("你是不是要找")
+                .contains("华联超市（客户编码 CU001，地址：中山路 8 号）")
+                .contains("华联超市（客户编码 CU002，地址：解放路 3 号）")
+                .contains("华联批发（客户编码 CU003）")
+                .contains("没有替你选");
         verify(customers, never()).getCustomerById(anyString(), anyString());
+        verify(customers, never()).searchCustomersByName(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("阴性对照: 毫不相干的名字 → 未找到 (不给候选); 只有一家的简称「老张家」→ 列这一家当候选, 照样不自动选")
+    void crmSuggestionNegativeControls() {
+        CustomerService customers = mock(CustomerService.class);
+        CustomerCrmStatusQueryTool tool = crmTool(customers);
+
+        Map<String, Object> unrelated = run(tool, "远方贸易");
+        assertThat(String.valueOf(unrelated.get("message"))).contains("未找到客户");
+        assertThat(unrelated).doesNotContainKey(SameNameMatches.KEY);
+
+        Map<String, Object> single = run(tool, "老张家");
+        String text = format(single);
+        assertThat(text).contains("你是不是要找").contains("1. 老张家卤味店（客户编码 CU004）")
+                .doesNotContain("2. ").doesNotContain("华联");
+        verify(customers, never()).getCustomerById(anyString(), anyString());
+    }
+
+    private String format(Map<String, Object> result) {
+        return formatter.format(IntentExecuteResponse.builder().intentCode("CUSTOMER_QUERY")
+                .intentCategory("CRM").status("SUCCESS").message(String.valueOf(result.get("message")))
+                .resultData(result).build());
     }
 
     private static CustomerCrmStatusQueryTool crmTool(CustomerService customers) {
         FactoryEntityDirectoryRepository directory = mock(FactoryEntityDirectoryRepository.class);
         when(directory.findCustomerRows("F1")).thenReturn(List.of(
-                new Object[]{"c1", "华联超市", "CU001", "中山路 8 号", null, null},
-                new Object[]{"c2", "华联超市", "CU002", "解放路 3 号", null, null},
-                new Object[]{"c3", "华联批发", "CU003", null, null, null}));
+                new Object[]{"c1", "华联超市", "CU001", "中山路 8 号", null, null, true},
+                new Object[]{"c2", "华联超市", "CU002", "解放路 3 号", null, null, true},
+                new Object[]{"c3", "华联批发", "CU003", null, null, null, true},
+                new Object[]{"c4", "老张家卤味店", "CU004", null, null, null, true}));
         CustomerCrmStatusQueryTool tool = new CustomerCrmStatusQueryTool();
         ReflectionTestUtils.setField(tool, "customerService", customers);
         ReflectionTestUtils.setField(tool, "entityResolver", new FactoryEntityResolver(directory, null));

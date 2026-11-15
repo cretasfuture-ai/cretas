@@ -17,27 +17,32 @@ import java.util.stream.Stream;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 实体解析只有一份实现 (INTENT-DISTILL-20261111 第③步 PR-5): 填参数、同名列出、飞轮脱敏三处都调
- * {@code FactoryEntityResolver}, 没有第二份「按名字找本厂对象」的匹配逻辑, 也没有第二份单位后缀表 (形态 D)。
+ * 实体解析只有一份实现 (INTENT-DISTILL-20261111 第③步 PR-5): 填参数 (ground / groundSlots 全部调用点)、同名列出
+ * (考勤 / CRM 状态 / 记忆价)、飞轮脱敏都调 {@code FactoryEntityResolver}, 没有第二份「按名字找本厂对象」的匹配逻辑,
+ * 也没有第二份单位后缀表 (形态 D)。
  *
  * <p>源码文本闸 (去掉注释再数, 否则闸会把说明文字数进去)。每条「不许有」都配一条「一定有」的读数 (硬约束 9):
- * 先断言被扫的文件真读到了、解析器调用真在, 再断言旧写法不在。</p>
+ * 先断言被扫的文件真读到了、调用点真在, 再断言旧写法不在。</p>
  */
-@DisplayName("实体解析: 三处接同一实现, 没有第二份匹配")
-class FactoryEntityResolverWiringSourceGateTest {
+@DisplayName("实体解析: 各使用方接同一实现, 没有第二份匹配")
+class FactoryEntityResolverWiringSourceContractTest {
 
     private static final Path MAIN = Paths.get("src/main/java/com/cretas/aims");
     private static final String RESOLVER = "service/entity/FactoryEntityResolver.java";
 
     /**
      * 注入 FactoryEntityResolver 的类 —— 登记表。它能按名字解析出本厂客户 / 员工, 新的使用方要在这里登记,
-     * 并自己答清「谁有权看解析出来的对象」(考勤按 hr:read, CRM 按 TOOL_PERMISSION_MAP 的客户四码)。
+     * 并自己答清「谁有权看解析出来的对象」(考勤按 hr:read, CRM / 记忆价按 TOOL_PERMISSION_MAP 的客户四码;
+     * 填参数只换名字不外露对象)。
      */
     private static final Set<String> REGISTERED_CONSUMERS = Set.of(
             "service/execution/ToolDispatchService.java",
             "service/skill/impl/SkillExecutorImpl.java",
+            "service/impl/SlotFillingServiceImpl.java",
+            "service/impl/ConversationServiceImpl.java",
             "service/intent/flywheel/FlywheelTextProtector.java",
             "ai/tool/impl/crm/CustomerCrmStatusQueryTool.java",
+            "ai/tool/impl/crm/CustomerPriceMemoryQueryTool.java",
             "ai/tool/impl/hr/AttendanceHistoryTool.java",
             "ai/tool/impl/hr/AttendanceStatusTool.java",
             "ai/tool/impl/hr/AttendanceTodayTool.java");
@@ -61,25 +66,44 @@ class FactoryEntityResolverWiringSourceGateTest {
         return n;
     }
 
-    @Test
-    @DisplayName("填参数: 规则 3 调解析器; ToolDispatchService / SkillExecutorImpl 每个 ground 调用点都带 EntityScope")
-    void parameterGroundingUsesTheResolver() throws IOException {
-        String grounding = code("service/execution/LlmParameterGrounding.java");
-        assertThat(grounding).contains("entities.resolver().resolve(").contains("EntityKind.forParameter(");
-
-        for (String caller : new String[]{"service/execution/ToolDispatchService.java",
-                "service/skill/impl/SkillExecutorImpl.java"}) {
-            String src = code(caller);
-            int grounds = count(src, "LlmParameterGrounding.ground(");
-            int scoped = count(src, "LlmParameterGrounding.EntityScope.of(");
-            System.out.println("[entity-gate] " + caller + ": ground 调用 " + grounds + ", 带 EntityScope " + scoped);
-            assertThat(grounds).as("%s 的 ground 调用点 (一定有)", caller).isEqualTo(2);
-            assertThat(scoped).as("%s 每个 ground 调用点都要带实体范围", caller).isEqualTo(grounds);
-        }
+    /** 调用点数 (一定有) 与带实体范围的个数必须相等。 */
+    private static void everyCallScoped(String caller, String call, String scope, int expectedCalls)
+            throws IOException {
+        String src = code(caller);
+        int calls = count(src, call);
+        int scoped = count(src, scope);
+        System.out.println("[entity-gate] " + caller + ": " + call + " " + calls + ", 带实体范围 " + scoped);
+        assertThat(calls).as("%s 的 %s 调用点 (一定有)", caller, call).isEqualTo(expectedCalls);
+        assertThat(scoped).as("%s 每个 %s 调用点都要带实体范围", caller, call).isEqualTo(calls);
     }
 
     @Test
-    @DisplayName("同名列出: 考勤 / CRM 只经解析器找人找客户, 不再按名字查库 (精确名查询 / 包含匹配搜索都不在)")
+    @DisplayName("填参数: 规则 3 调解析器 (按读写); ground 与 groundSlots 的每个产品调用点都带实体范围")
+    void parameterGroundingUsesTheResolver() throws IOException {
+        String grounding = code("service/execution/LlmParameterGrounding.java");
+        assertThat(grounding)
+                .contains("entities.resolver().resolve(entities.factoryId(), kind, name, entities.purpose())")
+                .contains("EntityKind.forParameter(")
+                .contains("FactoryEntityResolver.fullKey(name)")
+                .contains("return ground(values, existingParams, userInput, Map.of(\"properties\", properties), entities);");
+
+        everyCallScoped("service/execution/ToolDispatchService.java",
+                "LlmParameterGrounding.ground(", "entityScope(factoryId, tool))", 2);
+        assertThat(code("service/execution/ToolDispatchService.java"))
+                .contains("tool.getAccessMode() == ToolExecutor.AccessMode.READ");
+        everyCallScoped("service/skill/impl/SkillExecutorImpl.java",
+                "LlmParameterGrounding.ground(", "LlmParameterGrounding.EntityScope.of(", 2);
+        everyCallScoped("service/impl/SlotFillingServiceImpl.java",
+                "LlmParameterGrounding.groundSlots(", "LlmParameterGrounding.EntityScope.of(", 1);
+        everyCallScoped("service/impl/ConversationServiceImpl.java",
+                "LlmParameterGrounding.groundSlots(", "LlmParameterGrounding.EntityScope.of(", 1);
+        assertThat(code("service/impl/SlotFillingServiceImpl.java"))
+                .as("填槽的工厂取服务端认定的, 不取请求 context")
+                .contains("factoryEntityResolver, trustedFactoryId)");
+    }
+
+    @Test
+    @DisplayName("同名列出: 考勤 / CRM 状态 / 记忆价只经解析器找人找客户, 不再按名字查库 (精确名查询 / 包含匹配搜索都不在)")
     void sameNameListingUsesTheResolver() throws IOException {
         String attendance = code("ai/tool/impl/hr/AttendanceSubject.java");
         assertThat(attendance).contains("entities.resolve(factoryId, EntityKind.EMPLOYEE, name)")
@@ -94,6 +118,12 @@ class FactoryEntityResolverWiringSourceGateTest {
         String crm = code("ai/tool/impl/crm/CustomerCrmStatusQueryTool.java");
         assertThat(crm).contains("entityResolver.resolve(factoryId, EntityKind.CUSTOMER, customerName)")
                 .contains("SameNameMatches.listedCandidates(resolution)")
+                .contains("SameNameMatches.annotateSuggestions(result, \"客户\", resolution)")
+                .doesNotContain("searchCustomersByName");
+
+        String priceMemory = code("ai/tool/impl/crm/CustomerPriceMemoryQueryTool.java");
+        assertThat(priceMemory).contains("entityResolver.resolve(")
+                .contains("SameNameMatches.annotateSuggestions(result, \"客户\", resolution)")
                 .doesNotContain("searchCustomersByName");
 
         assertThat(code("repository/UserRepository.java"))
@@ -118,7 +148,8 @@ class FactoryEntityResolverWiringSourceGateTest {
     void oneSuffixListAndRegisteredConsumersOnly() throws IOException {
         Set<String> suffixLists = new TreeSet<>();
         Set<String> consumers = new TreeSet<>();
-        Pattern injection = Pattern.compile("(?:private|final)\\s+(?:final\\s+)?(?:[\\w.]+\\.)?FactoryEntityResolver\\s+\\w+\\s*;");
+        Pattern injection = Pattern.compile(
+                "(?:private|final)\\s+(?:final\\s+)?(?:[\\w.]+\\.)?FactoryEntityResolver\\s+\\w+\\s*;");
         int scanned = 0;
         try (Stream<Path> files = Files.walk(MAIN)) {
             for (Path p : files.filter(f -> f.toString().endsWith(".java")).toList()) {

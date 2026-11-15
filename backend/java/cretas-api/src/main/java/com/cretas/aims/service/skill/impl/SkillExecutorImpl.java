@@ -119,11 +119,11 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private com.cretas.aims.service.skill.contract.SkillRunStore runStore;
 
-    /** Steps of the run in progress, per context (parallel tools add from worker threads). */
     /** Skill 计划里 LLM 给的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3)。 */
     @Autowired(required = false)
     private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
 
+    /** Steps of the run in progress, per context (parallel tools add from worker threads). */
     private final Map<SkillContext, List<com.cretas.aims.service.skill.contract.SkillRunStore.Step>> runSteps =
             Collections.synchronizedMap(new IdentityHashMap<>());
 
@@ -553,7 +553,7 @@ public class SkillExecutorImpl implements SkillExecutor {
                             com.cretas.aims.service.execution.LlmParameterGrounding.ground(
                                     rawToolParams, planTrusted, context.getUserQuery(), planSchema,
                                     com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
-                                            factoryEntityResolver, context.getFactoryId()));
+                                            factoryEntityResolver, context.getFactoryId(), toolName, false));
                     Map<String, Object> cleanToolParams = filterCatalogParameters(planGrounded.accepted(), planSchema,
                             context.getUserQuery(), planTrusted);
                     cleanToolParams.putAll(planTrusted);

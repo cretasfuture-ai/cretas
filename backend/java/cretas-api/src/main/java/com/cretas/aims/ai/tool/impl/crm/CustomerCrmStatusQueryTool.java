@@ -106,6 +106,18 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
                 com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "客户", resolution, listed);
                 result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
                 return result;
+            } else {
+                // 全名零命中: 称呼核心 / 包含匹配出来的候选列出来让人选 (⛔ 不自动选, 哪怕只有一个)
+                Map<String, Object> result = new java.util.HashMap<>();
+                if (com.cretas.aims.ai.tool.SameNameMatches.annotateSuggestions(result, "客户", resolution)) {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("customerName", resolution.query());
+                    data.put("matchCount", 0);
+                    data.put("suggestionCount", resolution.suggestions().size());
+                    result.put("data", data);
+                    result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
+                    return result;
+                }
             }
         }
 

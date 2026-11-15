@@ -37,4 +37,22 @@ public enum EntityKind {
     public static Optional<EntityKind> forParameter(String parameterName) {
         return Optional.ofNullable(parameterName == null ? null : NAME_PARAMETERS.get(parameterName));
     }
+
+    /**
+     * 新建这一种实体的工具 (工具名 = 实体前缀 + {@code _create}, 如 product_create / customer_create)。
+     * 这类工具的名字参数就是一个本来不在主数据里的新名字: 填参数时 ⛔ 不因「主数据里没有」丢掉, 也不换成已有对象的名字。
+     * 只认「建实体本身」的工具 —— purchase_order_create 之类引用已有供应商 / 物料的工具不在此列。
+     */
+    static final Map<String, EntityKind> CREATING_TOOLS = Map.of(
+            "customer_create", CUSTOMER,
+            "supplier_create", SUPPLIER,
+            "product_create", PRODUCT,
+            "material_type_create", MATERIAL,
+            "raw_material_type_create", MATERIAL,
+            "user_create", EMPLOYEE,
+            "employee_create", EMPLOYEE);
+
+    public static Optional<EntityKind> createdBy(String toolName) {
+        return Optional.ofNullable(toolName == null ? null : CREATING_TOOLS.get(toolName));
+    }
 }

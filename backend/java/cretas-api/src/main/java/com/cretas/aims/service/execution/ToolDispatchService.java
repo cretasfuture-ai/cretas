@@ -90,6 +90,12 @@ public class ToolDispatchService {
     @Autowired(required = false)
     private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
 
+    /** 实体名落地范围: 工具的读写 (只读工具才可解析到停用对象) + 是否是新建该种实体的工具。 */
+    private LlmParameterGrounding.EntityScope entityScope(String factoryId, ToolExecutor tool) {
+        return LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId, tool.getToolName(),
+                tool.getAccessMode() == ToolExecutor.AccessMode.READ);
+    }
+
     /** 预览追问开参数收集会话用 (见 {@link #openPreviewQuestionSession}); 没有它时预览追问照旧、只是没人接答案。 */
     @Autowired(required = false)
     private ConversationService conversationService;
@@ -2445,7 +2451,7 @@ public class ToolDispatchService {
         Object userInput = previous.get("userInput");
         LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
                 changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema(),
-                LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId));
+                entityScope(factoryId, tool));
         params.clear();
         params.putAll(corrected);
         params.putAll(grounded.accepted());
@@ -2633,7 +2639,7 @@ public class ToolDispatchService {
                             // 必填的由工具走 NEED_MORE_INFO 追问)。规则只有一份, 见 LlmParameterGrounding。
                             LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
                                     raw, existingParams, userInput, parametersSchema,
-                                    LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId));
+                                    entityScope(factoryId, tool));
                             extractedParams.putAll(grounded.accepted());
                             if (!grounded.dropped().isEmpty()) {
                                 log.info("LLM 参数未落地, 已丢弃: tool={}, dropped={}",
