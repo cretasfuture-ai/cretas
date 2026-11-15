@@ -97,12 +97,35 @@ public final class SameNameMatches {
         List<Map<String, Object>> rows = new ArrayList<>();
         List<FactoryEntityResolver.Candidate> all = resolution.suggestions();
         for (FactoryEntityResolver.Candidate c : all.subList(0, Math.min(LIST_LIMIT, all.size()))) {
-            rows.add(matchOf(c, null).toMap());
+            rows.add(new Match(c.id(), c.name(), suggestionLabel(resolution.kind(), c), null).toMap());
         }
         marker.put(SUGGESTED, rows);
         marker.put("suggestedTotal", all.size());
         marker.put("suggestionBasis", resolution.basis().name());
         return true;
+    }
+
+    /**
+     * 「你是不是要找」候选只给名称 + 编码 (+ 停用标记), ⛔ 不带地址 / 电话尾号: 候选是用户没说准的名字猜出来的,
+     * 不该顺带把别家的联系信息报出来 (同名多个命中时的区分字段照旧, 不走这里)。
+     */
+    static String suggestionLabel(com.cretas.aims.service.entity.EntityKind kind,
+                                  FactoryEntityResolver.Candidate c) {
+        String[] labelAndKey = switch (kind) {
+            case CUSTOMER -> new String[]{"客户编码 ", "customerCode"};
+            case SUPPLIER -> new String[]{"供应商编码 ", "supplierCode"};
+            case PRODUCT, MATERIAL -> new String[]{"编码 ", "code"};
+            case EMPLOYEE -> new String[]{"工号 ", "employeeCode"};
+        };
+        String code = c.fields().get(labelAndKey[1]);
+        List<String> parts = new ArrayList<>();
+        if (code != null && !code.isBlank()) {
+            parts.add(labelAndKey[0] + code.trim());
+        }
+        if (!c.active()) {
+            parts.add("已停用");
+        }
+        return String.join("，", parts);
     }
 
     /** 回复文本: 0 个或 ≥2 个命中时给出; 恰好 1 个 (或没有标记) 时 null, 走原来的格式化。 */

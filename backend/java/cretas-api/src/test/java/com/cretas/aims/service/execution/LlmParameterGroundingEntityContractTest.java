@@ -26,6 +26,7 @@ class LlmParameterGroundingEntityContractTest {
     static final Map<String, Object> SCHEMA = Map.of("properties", Map.of(
             "customerName", Map.of("type", "string"),
             "productName", Map.of("type", "string"),
+            "fullName", Map.of("type", "string"),
             "employeeName", Map.of("type", "string")));
 
     private final FactoryEntityDirectoryRepository directory = mock(FactoryEntityDirectoryRepository.class);
@@ -127,6 +128,13 @@ class LlmParameterGroundingEntityContractTest {
         LlmParameterGrounding.Result update = ground("productName", "香辣鸭脖500g", said,
                 LlmParameterGrounding.EntityScope.of(resolver, F, "product_update", false));
         assertThat(update.dropped()).as("阴性对照: 非新建工具对本厂没有的产品名照常校验").containsKey("productName");
+
+        LlmParameterGrounding.Result user = ground("fullName", "王小明", "帮我给新来的小王开个账号",
+                LlmParameterGrounding.EntityScope.of(resolver, F, "user_create", false));
+        assertThat(user.accepted()).as("user_create 的姓名是新员工, 主数据里本来没有").containsEntry("fullName", "王小明");
+        assertThat(ground("fullName", "王小明", "帮我给新来的小王开个账号",
+                LlmParameterGrounding.EntityScope.of(resolver, F, "user_update", false)).dropped())
+                .as("阴性对照: 非新建工具的 fullName 按员工名校验").containsKey("fullName");
     }
 
     @Test

@@ -92,10 +92,12 @@ class SameNameReplyFormatterContractTest {
         assertThat(result).containsKey(SameNameMatches.KEY);
         assertThat(((Map<?, ?>) result.get(SameNameMatches.KEY)).get("total")).isEqualTo(0);
         assertThat(text).contains("你是不是要找")
-                .contains("华联超市（客户编码 CU001，地址：中山路 8 号）")
-                .contains("华联超市（客户编码 CU002，地址：解放路 3 号）")
-                .contains("华联批发（客户编码 CU003）")
-                .contains("没有替你选");
+                .contains("1. 华联超市（客户编码 CU001）")
+                .contains("2. 华联超市（客户编码 CU002）")
+                .contains("3. 华联批发（客户编码 CU003）")
+                .contains("没有替你选")
+                // 候选只给名称 + 编码, 不带地址 / 电话 (同名多个命中时才带, 见 crmStatusListsEveryMatchingCustomer)
+                .doesNotContain("中山路").doesNotContain("解放路").doesNotContain("地址");
         verify(customers, never()).getCustomerById(anyString(), anyString());
         verify(customers, never()).searchCustomersByName(anyString(), anyString());
     }
