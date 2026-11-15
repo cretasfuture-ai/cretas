@@ -58,7 +58,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 工序首检 —— 真 PostgreSQL + 真 Spring Data/Hibernate 上下文 (迁移 V20261115_51 原文建表, 含 CHECK 与部分唯一索引)。
+ * 工序首检 —— 真 PostgreSQL + 真 Spring Data/Hibernate 上下文 (迁移 V20261115_62 原文建表, 含 CHECK 与部分唯一索引)。
  *
  * <ol>
  *   <li>迁移可重复执行; 实体映射与迁移列一致 (Hibernate 读写全部列)。</li>
@@ -87,7 +87,7 @@ class FirstArticlePostgresContractTest {
     static final String F = "FA-PG";
     static final String OTHER = "FA-PG-OTHER";
     static final Long USER = 30001L;
-    static final String MIGRATION = "db/flyway/V20261115_51__process_first_article_inspection.sql";
+    static final String MIGRATION = "db/flyway/V20261115_62__process_first_article_inspection.sql";
 
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})

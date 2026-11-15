@@ -75,7 +75,7 @@ public class WorkProcessTaskDTO {
     private String blockedReason;
 
     /**
-     * 工序首检提示 (V20261115_51): 工厂首检开关为「提示 / 拦截」且这道工序要首检而还没首检合格时, 开工 / 完工返回里带一句话。
+     * 工序首检提示 (V20261115_62): 工厂首检开关为「提示 / 拦截」且这道工序要首检而还没首检合格时, 开工 / 完工返回里带一句话。
      * 开关关 (默认) 时恒为 null 且<b>不序列化</b> —— 现有工厂拿到的 JSON 与加这项功能前一字不差。
      */
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)

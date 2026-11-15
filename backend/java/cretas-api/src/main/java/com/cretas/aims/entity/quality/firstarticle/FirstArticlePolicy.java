@@ -14,7 +14,7 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDateTime;
 
 /**
- * 工序首检的工厂级开关 (V20261115_51)。<b>没有行 = {@link Mode#OFF}</b>: 现有工厂开工/完工完全照旧。
+ * 工序首检的工厂级开关 (V20261115_62)。<b>没有行 = {@link Mode#OFF}</b>: 现有工厂开工/完工完全照旧。
  *
  * <p>机制归系统、策略按厂配 (Steve 2026-11-10); 工厂纪律类场景默认只提示不硬拦, 所以「拦截」要工厂显式选。
  */

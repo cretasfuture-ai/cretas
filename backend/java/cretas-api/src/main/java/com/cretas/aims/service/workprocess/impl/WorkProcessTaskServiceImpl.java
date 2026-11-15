@@ -96,7 +96,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     private com.cretas.aims.repository.ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
 
     /**
-     * 工序首检闸 (V20261115_51)。工厂开关默认关: 关时只查一次开关就返回, 开工/完工与没有首检时一样。
+     * 工序首检闸 (V20261115_62)。工厂开关默认关: 关时只查一次开关就返回, 开工/完工与没有首检时一样。
      * required=false 同上 (不改构造器、不打断既有 @InjectMocks 单测); 没注入 = 不查首检。
      */
     @org.springframework.beans.factory.annotation.Autowired(required = false)

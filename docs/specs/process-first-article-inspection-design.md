@@ -1,6 +1,6 @@
 # 工序首检（E 线 BL17 承接）设计
 
-日期：2026-11-16　迁移：`V20261115_51__process_first_article_inspection.sql`　来源：`prototypes/unified-v1/spec/impl-E.md` ①、`BL-borrow.md` 第 17 条、`DECISIONS.md` 十九
+日期：2026-11-16　迁移：`V20261115_62__process_first_article_inspection.sql`　来源：`prototypes/unified-v1/spec/impl-E.md` ①、`BL-borrow.md` 第 17 条、`DECISIONS.md` 十九
 
 ## 目标
 
