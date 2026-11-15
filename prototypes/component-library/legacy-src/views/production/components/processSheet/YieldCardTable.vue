@@ -1,0 +1,534 @@
+<script setup lang="ts">
+/**
+ * F006 双出成率: 计划级半成品库存卡 (全工序汇总视图).
+ *
+ * 调用 getInventoryYieldCard() 获取该计划所有工序的 WIP 行, 展示:
+ *   - 工序序号 / 工序名 / 批次号 / 产出量 / 已用 / 剩余 / 单价
+ *   - stepYieldRate (对上工序出成率 %)
+ *   - cumulativeYieldRate (对原料累计出成率 %)
+ *
+ * null 值显示为 "—" (诚实, 不造假 — per .claude/rules/api-response-handling.md).
+ */
+import { computed, h, ref, watch, type VNode } from 'vue';
+import { ElIcon, ElTooltip } from 'element-plus';
+import { QuestionFilled } from '@element-plus/icons-vue';
+import { getInventoryYieldCard, type ProcessSheetInventoryItem } from '@/api/processSheet';
+import { normalizeMassQuantityForReporting } from '@/utils/processSheetUnits';
+import { useTableColumnWidth } from '@/composables/useTableColumnWidth';
+
+const props = defineProps<{
+  factoryId: string;
+  planId: string;
+}>();
+
+/**
+ * 列宽记忆 (客户 Sheet Row 13: 调好的列宽刷新就没了)。
+ * defaults 就是这张表原本写死的宽度 —— 用户没拖过时渲染结果与以前逐像素一致;
+ * min-width 那几列刻意不入 defaults, 让 `min-width` 继续管自适应。
+ */
+const YIELD_CARD_DEFAULT_COLUMN_WIDTHS = {
+  processOrder: 58,
+  processDate: 118,
+  feedQuantity: 110,
+  sourceConsumedRatio: 110,
+  inheritedRawEquivalentQuantity: 132,
+  produced: 100,
+  used: 100,
+  remaining: 100,
+  rowTotalCost: 116,
+  unitPrice: 105,
+  stepYieldRate: 132,
+  cumulativeYieldRate: 122,
+  status: 100,
+} as const;
+
+const { columnWidth, handleHeaderDragend, resetColumnWidths, hasStoredColumnWidths } = useTableColumnWidth({
+  pageKey: 'production.processSheet.yieldCard',
+  scope: () => props.factoryId,
+  defaults: YIELD_CARD_DEFAULT_COLUMN_WIDTHS,
+});
+
+const rows = ref<ProcessSheetInventoryItem[]>([]);
+const loading = ref(false);
+const errorMessage = ref('');
+let refreshSeq = 0;
+
+const missingYieldCount = computed(() =>
+  rows.value.filter((row) => row.cumulativeYieldRate == null).length,
+);
+
+const missingCostRows = computed(() =>
+  rows.value.filter((row) => row.rowTotalCost == null || row.unitPrice == null),
+);
+
+const missingCostCount = computed(() => missingCostRows.value.length);
+
+const LEGACY_COST_MISSING_HINT = '检查来源半成品单价、工序成本或成品成本结算数据。';
+
+/**
+ * 缺陷 A (2026-09-02, prod 实拍 plan PLAN-1788305552728-D94F7E22): 旧文案对「有 N 行成本未显示」
+ * 不分青红皂白固定列三个原因 (检查来源半成品单价/工序成本/成品成本结算数据), 而 prod 实测这批
+ * 10 道工序全都没录工时, 前 4 道因此成本未知 —— 三个原因一个都不对。
+ *
+ * 后端在能 100% 判定「本道没录工时」时会在 costMissingReasons 里标 "LABOR_NOT_LOGGED"；判不出
+ * 具体原因的行（costMissingReasons 为空/未标）沿用旧的通用排查文案。⛔ 只有多种原因同时存在时才
+ * 并列展示，不许只挑一个说。
+ */
+const missingCostHint = computed(() => {
+  const missing = missingCostRows.value;
+  const laborNotLogged = missing.filter((row) =>
+    (row.costMissingReasons || []).includes('LABOR_NOT_LOGGED'),
+  ).length;
+  const other = missing.length - laborNotLogged;
+  if (missing.length === 0) {
+    return LEGACY_COST_MISSING_HINT;
+  }
+  const parts: string[] = [];
+  if (laborNotLogged > 0) {
+    parts.push(`本道未录工时（${laborNotLogged} 道）`);
+  }
+  if (other > 0) {
+    parts.push(laborNotLogged > 0
+      ? `其余 ${other} 行请${LEGACY_COST_MISSING_HINT}`
+      : LEGACY_COST_MISSING_HINT);
+  }
+  return parts.join('；');
+});
+
+const processFilters = computed(() => Array.from(new Set(rows.value
+  .map((row) => row.processName || '未命名工序')))
+  .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+  .map((value) => ({ text: value, value })));
+
+const statusFilters = [
+  { text: '可用', value: 'ACTIVE' },
+  { text: '成品', value: 'COMPLETED' },
+  { text: '耗尽', value: 'DEPLETED' },
+];
+
+function filterProcess(value: string, row: ProcessSheetInventoryItem): boolean {
+  return (row.processName || '未命名工序') === value;
+}
+
+function filterStatus(value: string, row: ProcessSheetInventoryItem): boolean {
+  return row.status === value;
+}
+
+/**
+ * 缺陷 D (2026-09-02): 「分摊成本」「单价」两列此前没有任何口径说明 —— 客供料计划下
+ * material_consumptions.unit_price=0/total_cost=0 是**按设计**(工厂不承担客供原料成本),
+ * 但看到「¥52.00」的人分不清这是算出来的人工/损耗分摊, 还是漏了什么。连查库的人都要猜。
+ * ⛔ 不改数字本身, 只加口径说明。挂在 prop 上(而不是硬编码某一列的位置), 别的地方
+ * 复用这两个 prop 名(如卡片模式)时不用再抄一遍。
+ */
+const COLUMN_HELP: Record<string, string> = {
+  rowTotalCost: '本行归集到的实际成本 = 继承自上游批次的成本 + 本工序新增的人工、损耗等费用，'
+    + '按本行实际产出分摊得到。若本计划是客供料（工厂不承担原料成本），原料成本按口径算作 0 元 —— '
+    + '这是设计如此，不是数据缺失或系统故障。',
+  unitPrice: '单价 = 分摊成本 ÷ 本行产出数量，即每公斤（或对应单位）分摊到的成本，与「分摊成本」同一口径。'
+    + '客供料计划下原料成本按口径为 0，单价会相应偏低，同样是设计如此。',
+};
+
+/**
+ * 表头仍是一个真按钮 —— 触屏和键盘要有明确的可点区域与名字。
+ *
+ * 但它不再自带任何视觉外壳: 客户反馈「每个表头套了独立边框盒子」, 那个盒子感来自
+ * 加深的表头底色 + 逐格右边框 + 每格一个带 ↕ 的按钮三层叠加。现在按钮完全继承单元格
+ * 的字体与颜色, 排序方向交回 el-table 自己的箭头, 看上去就是生产计划列表那种通栏表头。
+ *
+ * 缺陷 F (2026-09-02): 这段文字之前**同时**是排序触发区 —— el-table 把 <th> 整格都
+ * 注册成点击排序区(见 table-header/event-helper.mjs 的 handleHeaderClick), 点文字和点
+ * 右侧真正的排序箭头(.caret-wrapper, el-table 在这段渲染结果**后面**自动追加)效果一样,
+ * 与同一格里的筛选漏斗(工序/状态两列)挤在一起, 容易误触。
+ * stopPropagation 后点击这段文字只是点文字, 不再冒泡到 <th> 触发排序 —— 排序只能从
+ * el-table 自带的箭头图标触发(箭头自己的 onClick 已经 event.stopPropagation() 过一次,
+ * 不受这里影响, 见 handleSortClick)。
+ */
+function sortableHeader({ column }: { column: { label?: string; property?: string } }) {
+  const label = column.label || '本列';
+  const help = column.property ? COLUMN_HELP[column.property] : undefined;
+  const children: (string | VNode)[] = [label];
+  if (help) {
+    children.push(
+      h(
+        ElTooltip,
+        { content: help, placement: 'top', effect: 'dark' },
+        {
+          default: () => h(
+            ElIcon,
+            {
+              class: 'yield-header-help',
+              'aria-label': `${label}口径说明`,
+              // 图标自己也在同一个 <button> 里, 不额外 stopPropagation 也没关系 ——
+              // 外层按钮本身已经挡住冒泡了, 这里显式写一次只是让「不会误触排序」不依赖外层实现细节。
+              onClick: (event: MouseEvent) => event.stopPropagation(),
+            },
+            { default: () => h(QuestionFilled) },
+          ),
+        },
+      ),
+    );
+  }
+  return h(
+    'button',
+    {
+      type: 'button',
+      class: 'yield-sort-trigger',
+      'aria-label': `${label}列标题，排序请点击右侧箭头图标`,
+      title: '排序请点击右侧箭头图标（点这段文字不会排序）',
+      onClick: (event: MouseEvent) => event.stopPropagation(),
+    },
+    children,
+  );
+}
+
+function fmtRate(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return v.toFixed(2) + '%';
+}
+
+function fmtQty(v: number | null | undefined, digits?: number): string {
+  if (v == null) return '—';
+  if (digits != null) return Number(v).toFixed(digits);
+  return String(v);
+}
+
+function fmtPrice(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return v.toFixed(2);
+}
+
+function reportingQuantity(row: ProcessSheetInventoryItem, field: 'produced' | 'used' | 'remaining'): string {
+  const normalized = normalizeMassQuantityForReporting(Number(row[field] ?? 0), row.unit);
+  return `${fmtQty(normalized.quantity)}${normalized.unit ? ` ${normalized.unit}` : ''}`;
+}
+
+function reportingUnitPrice(row: ProcessSheetInventoryItem): number | null | undefined {
+  if (row.unitPrice == null) return row.unitPrice;
+  const unit = row.unit?.trim().toLowerCase();
+  return unit === 'g' || unit === '克' ? row.unitPrice * 1000 : row.unitPrice;
+}
+
+function fmtDate(v: string | null | undefined): string {
+  if (!v) return '—';
+  // 保留 datetime 截断以兼容旧/异常响应；待接口契约测试及历史数据都保证 LocalDate 后删除。
+  return v.slice(0, 10);
+}
+
+function fmtMoney(v: number | null | undefined): string {
+  if (v == null) return '—';
+  return '¥' + Number(v).toFixed(2);
+}
+
+function rateColor(v: number | null | undefined): string {
+  if (v == null) return '';
+  if (v >= 90) return '#67c23a';
+  if (v >= 75) return '#e6a23c';
+  return '#f56c6c';
+}
+
+async function refresh() {
+  if (!props.factoryId || !props.planId) return;
+  const seq = ++refreshSeq;
+  loading.value = true;
+  errorMessage.value = '';
+  try {
+    const resp = await getInventoryYieldCard(props.factoryId, props.planId);
+    if (seq !== refreshSeq) return;
+    rows.value = resp.data || [];
+  } catch {
+    if (seq !== refreshSeq) return;
+    rows.value = [];
+    errorMessage.value = '出成率数据加载失败，请刷新重试。';
+  } finally {
+    if (seq === refreshSeq) loading.value = false;
+  }
+}
+
+watch(
+  () => [props.factoryId, props.planId],
+  () => { void refresh(); },
+  { immediate: true },
+);
+defineExpose({ refresh });
+</script>
+
+<template>
+  <el-alert
+    v-if="errorMessage"
+    type="error"
+    show-icon
+    :closable="false"
+    class="yield-card-error"
+  >
+    <template #title>
+      出成率数据加载失败
+    </template>
+    <template #default>
+      <span>{{ errorMessage }}</span>
+      <el-button link type="primary" size="small" @click="refresh">刷新重试</el-button>
+    </template>
+  </el-alert>
+  <div v-if="missingYieldCount > 0 || missingCostCount > 0" class="yield-card-warnings">
+    <el-alert
+      v-if="missingYieldCount > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="yield-card-warning"
+    >
+      <template #title>
+        有 {{ missingYieldCount }} 行累计出成率未显示
+      </template>
+      <template #default>
+        检查来源批次、原料投入或 SKU 标准克重配置；未确认来源时系统不会硬算百分比。
+      </template>
+    </el-alert>
+    <el-alert
+      v-if="missingCostCount > 0"
+      type="warning"
+      show-icon
+      :closable="false"
+      class="yield-card-warning"
+    >
+      <template #title>
+        有 {{ missingCostCount }} 行成本未显示
+      </template>
+      <template #default>
+        {{ missingCostHint }}
+      </template>
+    </el-alert>
+  </div>
+  <div v-if="rows.length > 0" class="yield-card-scroll-hint">
+    点击表头可升/降序，漏斗可筛选；拖动表头分隔线可调列宽（自动记住）；表格可左右滑动查看完整字段 →
+    <el-button
+      v-if="hasStoredColumnWidths"
+      link
+      type="primary"
+      size="small"
+      class="yield-card-reset-widths"
+      @click="resetColumnWidths"
+    >恢复默认列宽</el-button>
+  </div>
+  <el-table
+    :data="rows"
+    v-loading="loading"
+    size="small"
+    border
+    stripe
+    table-layout="fixed"
+    class="yield-card-table resizable-column-table"
+    empty-text="暂无半成品库存记录"
+    style="width: 100%"
+    :row-class-name="() => ''"
+    @header-dragend="handleHeaderDragend"
+  >
+    <el-table-column prop="processOrder" label="序" :width="columnWidth('processOrder')" align="center" sortable :render-header="sortableHeader" />
+    <el-table-column prop="processDate" label="流程日期" :width="columnWidth('processDate')" align="center" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtDate(row.processDate) }}
+      </template>
+    </el-table-column>
+    <el-table-column
+      prop="processName"
+      label="工序"
+      min-width="180"
+      :width="columnWidth('processName')"
+      show-overflow-tooltip
+      sortable
+      :render-header="sortableHeader"
+      :filters="processFilters"
+      :filter-method="filterProcess"
+    >
+      <template #default="{ row }">
+        {{ row.processName || '—' }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="batchNumber" label="批次号" min-width="230" :width="columnWidth('batchNumber')" show-overflow-tooltip sortable :render-header="sortableHeader" />
+    <el-table-column prop="sourceBatchNumber" label="来源批次" min-width="210" :width="columnWidth('sourceBatchNumber')" show-overflow-tooltip sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ row.sourceBatchNumber || '—' }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="feedQuantity" label="领用(kg)" :width="columnWidth('feedQuantity')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtQty(row.feedQuantity) }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="sourceConsumedRatio" label="领用占比" :width="columnWidth('sourceConsumedRatio')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtRate(row.sourceConsumedRatio) }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="inheritedRawEquivalentQuantity" label="继承原料(kg)" :width="columnWidth('inheritedRawEquivalentQuantity')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtQty(row.inheritedRawEquivalentQuantity, 2) }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="produced" label="产出" :width="columnWidth('produced')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ reportingQuantity(row, 'produced') }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="used" label="已用" :width="columnWidth('used')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ reportingQuantity(row, 'used') }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="remaining" label="剩余" :width="columnWidth('remaining')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        <span :style="{ color: (row.remaining ?? 0) <= 0 ? '#f56c6c' : '#67c23a' }">
+          {{ reportingQuantity(row, 'remaining') }}
+        </span>
+      </template>
+    </el-table-column>
+    <el-table-column prop="rowTotalCost" label="分摊成本" :width="columnWidth('rowTotalCost')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtMoney(row.rowTotalCost) }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="unitPrice" label="单价(¥)" :width="columnWidth('unitPrice')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        {{ fmtPrice(reportingUnitPrice(row)) }}
+      </template>
+    </el-table-column>
+    <el-table-column prop="stepYieldRate" label="对上工序出成" :width="columnWidth('stepYieldRate')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        <span :style="{ color: rateColor(row.stepYieldRate), fontWeight: 'bold' }">
+          {{ fmtRate(row.stepYieldRate) }}
+        </span>
+      </template>
+    </el-table-column>
+    <el-table-column prop="cumulativeYieldRate" label="对原料累计" :width="columnWidth('cumulativeYieldRate')" align="right" sortable :render-header="sortableHeader">
+      <template #default="{ row }">
+        <span :style="{ color: rateColor(row.cumulativeYieldRate) }">
+          {{ fmtRate(row.cumulativeYieldRate) }}
+        </span>
+      </template>
+    </el-table-column>
+    <el-table-column
+      prop="status"
+      label="状态"
+      :width="columnWidth('status')"
+      align="center"
+      :filters="statusFilters"
+      :filter-method="filterStatus"
+    >
+      <template #default="{ row }">
+        <el-tag :type="row.status === 'ACTIVE' ? 'success' : (row.status === 'COMPLETED' ? 'primary' : 'info')" size="small">
+          {{ row.status === 'ACTIVE' ? '可用' : (row.status === 'COMPLETED' ? '成品' : '耗尽') }}
+        </el-tag>
+      </template>
+    </el-table-column>
+  </el-table>
+  <div v-if="rows.length === 0 && !loading && !errorMessage" class="yield-card-empty-hint">
+    暂无半成品库存；保存任一工序有效产出后会生成全工序出成率汇总。
+  </div>
+</template>
+
+<style scoped>
+.yield-card-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.yield-card-scroll-hint {
+  margin: 0 0 6px;
+  color: var(--el-text-color-secondary, #909399);
+  font-size: 12px;
+  text-align: right;
+}
+
+.yield-card-reset-widths {
+  margin-left: 8px;
+  vertical-align: baseline;
+}
+
+/*
+  通栏表头 —— 与生产计划列表 (.business-list-table) 同一套观感。
+  不再覆盖表头底色/字重, 也不再逐格加深右边框: 那三层叠加正是客户说的「独立边框盒子」。
+*/
+.yield-card-table {
+  :deep(.el-table__header th.el-table__cell) {
+    height: 42px;
+    padding: 0;
+    border-right: 0;
+    background: transparent;
+  }
+
+  :deep(.el-table__body td.el-table__cell) {
+    height: 44px;
+    padding: 0;
+  }
+
+  :deep(.el-table__cell .cell) {
+    padding: 0 10px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :deep(.el-table__column-filter-trigger) {
+    margin-left: 5px;
+    color: #697586;
+  }
+
+  /* 按钮只提供点击热区与无障碍名字, 视觉上完全等同于普通表头文字 */
+  :deep(.yield-sort-trigger) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: inherit;
+    min-height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    appearance: none;
+    color: inherit;
+    font: inherit;
+    font-weight: inherit;
+    cursor: pointer;
+    touch-action: manipulation;
+  }
+
+  :deep(.yield-sort-trigger:hover) {
+    color: var(--el-color-primary, #409eff);
+  }
+
+  :deep(.yield-sort-trigger:focus-visible) {
+    outline: 2px solid var(--el-color-primary, #409eff);
+    outline-offset: 2px;
+  }
+
+  /* 缺陷 D: 「分摊成本」「单价」列头的口径说明图标 —— 与 ProcessDataTable.vue 里
+     .sp-th-custom-hint 同一套观感, 一个灰色小 ? , 不抢文字的视觉重量。 */
+  :deep(.yield-header-help) {
+    margin-left: 3px;
+    font-size: 13px;
+    color: #c0c4cc;
+    cursor: help;
+    vertical-align: -1px;
+  }
+
+  :deep(.yield-header-help:hover) {
+    color: var(--el-color-primary, #409eff);
+  }
+}
+
+.yield-card-error {
+  margin-bottom: 8px;
+}
+
+.yield-card-warning {
+  --el-alert-padding: 6px 10px;
+}
+
+.yield-card-empty-hint {
+  color: #909399;
+  font-size: 12px;
+  padding: 10px 0;
+  text-align: center;
+}
+</style>

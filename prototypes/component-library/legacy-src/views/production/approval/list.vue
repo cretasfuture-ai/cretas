@@ -1,0 +1,1043 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue';
+import { displayProcessUnit } from '@/utils/processSheetUnits';
+import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Check, Close, Refresh } from '@element-plus/icons-vue';
+import { handleCatchError, getErrorMessage } from '@/utils/errorToast';
+import {
+  getPendingApprovals, approveReport, rejectReport, batchApproveReports,
+  getCorrectableReports, submitReportCorrection,
+  type ApprovalItem, type CorrectableReportItem, type ProductionReportCorrectionPayload
+} from '@/api/processProduction';
+import OpinionInputDialog from '@/components/approval/OpinionInputDialog.vue';
+
+const authStore = useAuthStore();
+const permissionStore = usePermissionStore();
+const factoryId = computed(() => authStore.factoryId);
+const canApproveReports = computed(() => permissionStore.canWrite('production'));
+const canCorrectReports = computed(() => permissionStore.canWrite('production_report_correction'));
+
+const loading = ref(false);
+const allData = ref<ApprovalItem[]>([]);
+// 缺陷修复 (2026-09-01, LIUSHANMEN 生产事故): loadData() 403 时 allData 保持初始 []，
+// 页面渲染「待审批 0」+「暂无数据」—— 与"确实没有待审批"长得一模一样。
+// loadError 把"加载失败"和"真的是空"分开: 非空 = 加载失败, 数量位置渲染 "—" 不渲染 0。
+const loadError = ref('');
+const pagination = ref({ page: 1, size: 20 });
+const selectedIds = ref<number[]>([]);
+
+const correctionLoading = ref(false);
+const correctableReports = ref<CorrectableReportItem[]>([]);
+// 同一形状第二处 (硬约束 8): loadCorrectableReports() 也是「catch → 列表停在旧值/空 →
+// 渲染confident 的 empty-text」。独立于上面的 loadError，因为两个队列各自独立加载/失败。
+const correctionLoadError = ref('');
+const correctionDialogVisible = ref(false);
+const correctionTarget = ref<CorrectableReportItem | null>(null);
+const correctionSubmitting = ref(false);
+const correctionForm = ref<ProductionReportCorrectionPayload>({
+  outputQuantity: null,
+  goodQuantity: null,
+  defectQuantity: null,
+  totalWorkers: null,
+  totalWorkMinutes: null,
+  notes: '',
+  reason: '',
+});
+
+async function loadCorrectableReports() {
+  if (!factoryId.value || !canCorrectReports.value) {
+    correctableReports.value = [];
+    correctionLoadError.value = '';
+    return;
+  }
+  correctionLoading.value = true;
+  try {
+    const response = await getCorrectableReports(factoryId.value, { page: 1, size: 100 });
+    if (response.success) {
+      correctableReports.value = response.data?.content || [];
+      correctionLoadError.value = '';
+    } else {
+      correctionLoadError.value = response.message || '加载报工核对列表失败';
+    }
+  } catch (error) {
+    handleCatchError(error, '加载报工核对列表失败');
+    correctionLoadError.value = getErrorMessage(error, '加载报工核对列表失败');
+  } finally {
+    correctionLoading.value = false;
+  }
+}
+
+function openCorrection(row: CorrectableReportItem) {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return;
+  correctionTarget.value = row;
+  correctionForm.value = {
+    outputQuantity: row.outputQuantity ?? null,
+    goodQuantity: row.goodQuantity ?? null,
+    defectQuantity: row.defectQuantity ?? null,
+    totalWorkers: row.totalWorkers ?? null,
+    totalWorkMinutes: row.totalWorkMinutes ?? null,
+    notes: row.notes || '',
+    reason: '',
+  };
+  correctionDialogVisible.value = true;
+}
+
+async function submitCorrection() {
+  if (!factoryId.value || !correctionTarget.value || correctionSubmitting.value) return;
+  if (!correctionForm.value.reason.trim()) {
+    ElMessage.warning('请填写修正原因');
+    return;
+  }
+  correctionSubmitting.value = true;
+  try {
+    await submitReportCorrection(factoryId.value, correctionTarget.value.id, {
+      ...correctionForm.value,
+      reason: correctionForm.value.reason.trim(),
+      notes: correctionForm.value.notes.trim(),
+    });
+    ElMessage.success('修正草稿已提交 OA 审批；批准前原报工仍然有效');
+    correctionDialogVisible.value = false;
+    await Promise.all([loadCorrectableReports(), loadData()]);
+  } catch (error) {
+    handleCatchError(error, '提交报工修正失败');
+  } finally {
+    correctionSubmitting.value = false;
+  }
+}
+
+function correctionStatusText(row: CorrectableReportItem): string {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return '待审批';
+  if (row.dataCorrected) return '报工数据已修正';
+  if (row.lastCorrection?.status === 'REJECTED') return '上次修正已驳回';
+  return '未修正';
+}
+
+function correctionStatusType(row: CorrectableReportItem): 'warning' | 'success' | 'danger' | 'info' {
+  if (row.lastCorrection?.status === 'PENDING_APPROVAL') return 'warning';
+  if (row.dataCorrected) return 'success';
+  if (row.lastCorrection?.status === 'REJECTED') return 'danger';
+  return 'info';
+}
+
+function hasPendingCorrection(row: CorrectableReportItem): boolean {
+  return row.lastCorrection?.status === 'PENDING_APPROVAL';
+}
+
+// 筛选: 报工模式/报工阶段/工序 (实时按当前待审批队列里实际存在的值生成选项, 非固定枚举)
+const filterReportMode = ref('');
+const filterReportKind = ref('');
+const filterProcessCategory = ref('');
+
+const reportModeOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.reportMode).filter((v): v is string => !!v));
+  return Array.from(set).map(v => ({ value: v, label: reportModeLabel(v) }));
+});
+const reportKindOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.reportKind).filter((v): v is string => !!v));
+  return Array.from(set).map(v => ({ value: v, label: reportKindLabel(v) }));
+});
+const processCategoryOptions = computed(() => {
+  const set = new Set(allData.value.map(r => r.processCategory).filter((v): v is string => !!v));
+  return Array.from(set).sort();
+});
+
+const filteredData = computed(() => allData.value.filter(row => {
+  if (filterReportMode.value && row.reportMode !== filterReportMode.value) return false;
+  if (filterReportKind.value && row.reportKind !== filterReportKind.value) return false;
+  if (filterProcessCategory.value && row.processCategory !== filterProcessCategory.value) return false;
+  return true;
+}));
+
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return filteredData.value.slice(start, start + pagination.value.size);
+});
+
+function handleFilterChange() {
+  pagination.value.page = 1;
+}
+
+function handleFilterReset() {
+  filterReportMode.value = '';
+  filterReportKind.value = '';
+  filterProcessCategory.value = '';
+  pagination.value.page = 1;
+}
+
+// P2-6: Auto-refresh every 30 seconds
+//
+// ⚠️ 这一页在 <keep-alive :max="10"> 里 (AppLayout)。keep-alive 的语义是
+// 「离开时【不卸载】, 只 deactivate」—— 所以 onUnmounted 在离开本页时【不会触发】,
+// 它只在被挤出缓存(超过 10 个)或整个布局销毁时才跑。
+//
+// 后果: 只要访问过一次本页, 那个 30s 定时器就【一直在后台跑】, 用户早就切到
+// 别的页面了, 它还在每 30 秒打一次 pending-approval。在别的页面上待 2 分钟,
+// 就能看到 5 次本页的请求 —— 看起来像「一次加载重复请求五次」, 实际是
+// 「一个永远不停的后台轮询」。
+//
+// ⇒ 用 onActivated / onDeactivated 管定时器(keep-alive 场景的正确钩子),
+//   并且页面不可见时不轮询。onUnmounted 保留做兜底(被挤出缓存那条路径)。
+let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function startAutoRefresh() {
+  stopAutoRefresh(); // 幂等: 重复 activate 不叠加定时器
+  refreshTimer = setInterval(() => {
+    // 标签页在后台时不轮询 —— 没人在看, 打回来的数据没有用
+    if (document.visibilityState !== 'visible') return;
+    void loadData();
+  }, 30000);
+}
+
+onMounted(() => {
+  loadData();
+  loadCorrectableReports();
+  startAutoRefresh();
+});
+
+// keep-alive: 回到本页时重新拉一次并恢复轮询; 离开时立刻停掉
+onActivated(() => {
+  loadData();
+  loadCorrectableReports();
+  startAutoRefresh();
+});
+onDeactivated(stopAutoRefresh);
+onUnmounted(stopAutoRefresh);
+
+// 防重入: 上一次还没回来就不要再发一次(30s 轮询 + 手动刷新 + 审批后刷新会叠)
+let inFlight = false;
+
+async function loadData() {
+  if (!factoryId.value) return;
+  if (inFlight) return;
+  inFlight = true;
+  loading.value = true;
+  try {
+    // 全量拉取待审批队列 (审批后即离队, 队列体量天然有界) 供筛选下拉的"当前有的"选项 + 客户端筛选/分页用。
+    const response = await getPendingApprovals(factoryId.value, {
+      page: 1,
+      size: 500
+    });
+    if (response.success && response.data) {
+      allData.value = (response.data.content || []) as ApprovalItem[];
+      loadError.value = '';
+    } else {
+      // response.success === false: 原先这个分支静默不做事, allData 停在陈旧/空值上
+      // 且没有任何信号 —— 与"加载成功且真的没有待审批"无法区分.
+      loadError.value = response.message || '加载待审批列表失败';
+    }
+  } catch (e) {
+    // UX polish (2026-05-20): interceptor toast already covers 4xx/5xx.
+    handleCatchError(e, '加载待审批列表失败,请检查网络');
+    // LIUSHANMEN 生产事故 (2026-09-01): 403 走这条路, allData 保持 []，
+    // 页面此前渲染「待审批 0」+「暂无数据」—— 与"确实没有待审批"读数完全相同.
+    loadError.value = getErrorMessage(e, '加载待审批列表失败,请检查网络');
+  } finally {
+    loading.value = false;
+    inFlight = false;
+  }
+}
+
+// 报工审批"通过"防呆 (fool-proof-design.md Rule 1+2+4): 原先点击即提交, 零上下文零确认,
+// 且产品/工序列曾为空白 → 对批量盲审的误点零容错(审批结果影响成本/工资下游核算, 不可逆)。
+// 改为: 点击"通过"只打开确认弹框(展示完整上下文), 真正提交挪到 confirmApprove(), 并用
+// approveSubmitting 防重复点击(Rule 4 幂等 UX 层 — 弹框内确认按钮 disabled+loading)。
+const approveDialogVisible = ref(false);
+const approveTargetRow = ref<ApprovalItem | null>(null);
+const approveSubmitting = ref(false);
+
+function handleApprove(row: ApprovalItem) {
+  if (!factoryId.value) return;
+  approveTargetRow.value = row;
+  approveDialogVisible.value = true;
+}
+
+async function confirmApprove() {
+  const row = approveTargetRow.value;
+  // approveSubmitting 兜底: 弹框确认按钮已 :loading disabled, 但仍防御双击竞态.
+  if (!factoryId.value || !row || approveSubmitting.value) return;
+  approveSubmitting.value = true;
+  try {
+    await approveReport(factoryId.value, row.id);
+    ElMessage.success('已通过');
+    approveDialogVisible.value = false;
+    approveTargetRow.value = null;
+    loadData();
+  } catch (e) {
+    // R26 P1 (qa-prompt v2.4 Rule 7+8 real-window finding): pre-fix this catch
+    // unconditionally fired ElMessage.error('审批失败') on top of axios interceptor's
+    // rich actionHint toast → user saw BOTH "审批失败" + "请刷新报工列表查看最新审批状态".
+    // Per R24 follow-up pattern: skip fallback when interceptor handled (rich error
+    // identifiable by err.actionHint OR err.status === 409 — both routes axios already toasted).
+    const err = e as { status?: number; actionHint?: string | null } | undefined;
+    if (!err || (err.status !== 409 && !err.actionHint)) {
+      ElMessage.error('审批失败');
+    }
+    // R26 follow-up (reviewer #16 concern #4): only reload on 409 (already-processed
+    // race — backend state diverged from UI cache). On 502/network error, loadData()
+    // would just retry-and-fail too, doubling failed-request rate during outage.
+    if (err?.status === 409) {
+      approveDialogVisible.value = false;
+      approveTargetRow.value = null;
+      loadData();
+    }
+  } finally {
+    approveSubmitting.value = false;
+  }
+}
+
+function cancelApprove() {
+  if (approveSubmitting.value) return;
+  approveDialogVisible.value = false;
+  approveTargetRow.value = null;
+}
+
+// C-OPINION-1: 弹框 state + pending row reference (替代 ElMessageBox.prompt)
+const rejectDialogVisible = ref(false);
+const rejectTargetRow = ref<ApprovalItem | null>(null);
+
+function handleReject(row: ApprovalItem) {
+  if (!factoryId.value) return;
+  rejectTargetRow.value = row;
+  rejectDialogVisible.value = true;
+}
+
+async function handleRejectConfirm(reason: string) {
+  const row = rejectTargetRow.value;
+  if (!factoryId.value || !row) return;
+  try {
+    await rejectReport(factoryId.value, row.id, reason);
+    ElMessage.success('已驳回');
+    loadData();
+  } catch (e) {
+    // Interceptor shows specific toast; dedupe fallback
+    if (e !== 'cancel') console.error('[操作失败]', e);
+  } finally {
+    rejectTargetRow.value = null;
+  }
+}
+
+// Rule 4 幂等 UX 层: 批量确认本身已由 ElMessageBox.confirm 挡下误点; batchApproveSubmitting
+// 额外防"确认对话框关闭动画期间"的第二次点击(慢网络下 el-dialog 的关闭过渡可能让按钮短暂
+// 仍可点击)。
+const batchApproveSubmitting = ref(false);
+
+async function handleBatchApprove() {
+  if (!factoryId.value || selectedIds.value.length === 0 || batchApproveSubmitting.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确定批量通过 ${selectedIds.value.length} 条报工记录？`,
+      '批量审批',
+      { type: 'warning', confirmButtonText: '确认批量审批', cancelButtonText: '取消' }
+    );
+    batchApproveSubmitting.value = true;
+    await batchApproveReports(factoryId.value, selectedIds.value);
+    ElMessage.success(`已批量通过 ${selectedIds.value.length} 条`);
+    selectedIds.value = [];
+    loadData();
+  } catch (e) {
+    if (e === 'cancel') return;
+    // R26 P1: skip fallback when interceptor handled rich error (same gate as handleApprove).
+    const err = e as { status?: number; actionHint?: string | null } | undefined;
+    if (!err || (err.status !== 409 && !err.actionHint)) {
+      ElMessage.error('批量审批失败');
+    }
+    // R26 follow-up (reviewer #16 concern #4): only reload on 409 race.
+    if (err?.status === 409) loadData();
+  } finally {
+    batchApproveSubmitting.value = false;
+  }
+}
+
+function handleSelectionChange(rows: ApprovalItem[]) {
+  selectedIds.value = rows.map(r => r.id);
+}
+
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+}
+
+function formatDate(dateStr: string | null) {
+  if (!dateStr) return '-';
+  return dateStr.substring(0, 10);
+}
+
+/**
+ * Gap 2 补录时效防呆: 计算报工日期距今天数 (负数 = 过去).
+ * 后端 BackdateWindowValidator 默认 T-2 极限, T-3+ 锁死.
+ */
+function backdateDays(reportDate: string | null): number | null {
+  if (!reportDate) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(reportDate.substring(0, 10));
+  d.setHours(0, 0, 0, 0);
+  const diff = Math.round((d.getTime() - today.getTime()) / 86400000);
+  return diff;
+}
+
+/** T-2 极限: diff === -1 or -2 = 补录窗口内; diff <= -3 = 锁死; diff >= 0 = 当日/未来 */
+function backdateTagType(reportDate: string | null): 'warning' | 'danger' | '' {
+  const diff = backdateDays(reportDate);
+  if (diff === null || diff >= 0) return '';
+  if (diff >= -2) return 'warning'; // T-1 ~ T-2: 允许补录
+  return 'danger'; // T-3+: 后端会拒绝
+}
+
+function backdateTagText(reportDate: string | null): string {
+  const diff = backdateDays(reportDate);
+  if (diff === null || diff >= 0) return '';
+  if (diff === -1) return '补录 T-1';
+  if (diff === -2) return '补录 T-2 极限';
+  return `补录 T${diff} 已锁`;
+}
+
+function formatQty(value: number | null | undefined) {
+  if (value === null || value === undefined) return '-';
+  return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function formatTime(value: string | null | undefined) {
+  if (!value) return '-';
+  return String(value).substring(0, 5);
+}
+
+function formatTimeRange(row: ApprovalItem) {
+  const start = formatTime(row.productionStartTime);
+  const end = formatTime(row.productionEndTime);
+  if (start === '-' && end === '-') return '-';
+  return `${start} - ${end}`;
+}
+
+function reportModeLabel(mode: string | null | undefined) {
+  if (mode === 'MODE_1') return '按工序';
+  if (mode === 'MODE_2') return '按批次';
+  if (mode === 'MODE_3') return '按人头';
+  return mode || '-';
+}
+
+function reportKindLabel(kind: string | null | undefined) {
+  if (kind === 'INPUT') return '投入';
+  if (kind === 'SEGMENT') return '过程';
+  if (kind === 'OUTPUT') return '完工';
+  return kind || '整合报工';
+}
+
+function taskDisplayId(row: ApprovalItem) {
+  return row.processTaskId || row.workProcessTaskId || '-';
+}
+
+// 单位必须走展示映射: 库里存的是规范码, 原样插值会把 box / bag 摆给用户看。
+function textValue(value: unknown) {
+  if (value === null || value === undefined || String(value).trim() === '') return '-';
+  return String(value);
+}
+
+function segmentQty(seg: Record<string, unknown>, qtyKey: string, unitKey: string) {
+  const qty = seg[qtyKey];
+  if (qty === null || qty === undefined || String(qty).trim() === '') return '-';
+  const unit = textValue(seg[unitKey]);
+  return `${formatQty(Number(qty))} ${unit === '-' ? '' : displayProcessUnit(String(unit))}`.trim();
+}
+
+function hasProcessDetail(row: ApprovalItem) {
+  return (row.laborSegments?.length ?? 0) > 0
+    || (row.byproducts?.length ?? 0) > 0
+    || row.wasteQuantity !== null && row.wasteQuantity !== undefined
+    || row.sampleRetainQuantity !== null && row.sampleRetainQuantity !== undefined;
+}
+
+const customFieldLabels: Record<string, string> = {
+  evidenceWorkflow: '录入口径',
+  batchNumber: '生产批次',
+  sampleBoxes: '留样盒数',
+  remainingBoxes: '剩余盒数',
+  trimWeightKg: '料头/损耗kg',
+  byproductText: '副产物说明',
+  upstreamInputKg: '上游投入kg',
+  upstreamOutputKg: '上游产出kg',
+  grossWeightKg: '毛重kg',
+  tareWeightKg: '皮重kg',
+  netWeightKg: '净重kg',
+  laborSegmentsText: '多时段人工',
+  sourceExcel: '来源订单',
+  evidenceFiles: '原始证据文件',
+};
+
+function customFieldLabel(key: string) {
+  return customFieldLabels[key] || key;
+}
+
+function formatCustomFieldValue(value: unknown) {
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'number') {
+    return Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+  }
+  if (typeof value === 'string') {
+    return value === 'TEXT_INPUT_WITH_MEDIA_EVIDENCE' ? '文字录入 + 照片/视频证据' : value;
+  }
+  return JSON.stringify(value);
+}
+
+function customFieldEntries(row: ApprovalItem) {
+  if (!row.customFields || Object.keys(row.customFields).length === 0) {
+    return [] as Array<{ key: string; label: string; value: string }>;
+  }
+  return Object.entries(row.customFields)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    .map(([key, value]) => ({
+      key,
+      label: customFieldLabel(key),
+      value: formatCustomFieldValue(value),
+    }));
+}
+
+function isVideoEvidence(url: string): boolean {
+  return /\.(mp4|mov|webm)(\?|#|$)/i.test(url) || url.includes('/videos/');
+}
+
+function evidenceImages(urls: string[]): string[] {
+  return urls.filter((url) => !isVideoEvidence(url));
+}
+
+function evidenceImageIndex(urls: string[], url: string): number {
+  const idx = evidenceImages(urls).indexOf(url);
+  return idx < 0 ? 0 : idx;
+}
+</script>
+
+<template>
+  <div class="page-container">
+    <el-card>
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <h2 style="margin: 0">报工审批</h2>
+          <el-tag :type="loadError ? 'danger' : 'warning'">待审批 {{ loadError ? '—' : allData.length }}</el-tag>
+        </div>
+        <div class="toolbar-right">
+          <el-button :icon="Refresh" @click="loadData" />
+          <el-button
+            v-if="canApproveReports && selectedIds.length > 0"
+            type="success"
+            :icon="Check"
+            :loading="batchApproveSubmitting"
+            :disabled="batchApproveSubmitting"
+            @click="handleBatchApprove"
+          >
+            批量通过 ({{ selectedIds.length }})
+          </el-button>
+        </div>
+      </div>
+      <!-- LIUSHANMEN 生产事故 (2026-09-01): 加载失败(如 403)时不能只剩「待审批 0」+「暂无数据」，
+           那与「确实没有待审批」是同一个画面。这里显式喊出来，且不claim为空。 -->
+      <el-alert
+        v-if="loadError"
+        class="load-error"
+        type="error"
+        :closable="false"
+        title="待审批列表加载失败 —— 以下不代表「暂无待审批」"
+        style="margin-top: 12px"
+      >
+        <template #default>
+          <span>{{ loadError }}</span>
+          <el-button link type="primary" @click="loadData">重新加载</el-button>
+        </template>
+      </el-alert>
+    </el-card>
+
+    <el-card v-if="canCorrectReports" class="correction-card" style="margin-top: 16px">
+      <template #header>
+        <div class="correction-heading">
+          <div>
+            <h3>报工核对 / 修正</h3>
+            <p>只修正结果字段；投入与库存差异请走退补料或盘点。提交后先审批，批准前原值继续有效。</p>
+          </div>
+          <el-button :icon="Refresh" :loading="correctionLoading" @click="loadCorrectableReports">刷新核对列表</el-button>
+        </div>
+      </template>
+      <el-alert
+        v-if="correctionLoadError"
+        class="load-error"
+        type="error"
+        :closable="false"
+        title="报工核对列表加载失败 —— 以下不代表「无未结单报工」"
+        style="margin-bottom: 12px"
+      >
+        <template #default>
+          <span>{{ correctionLoadError }}</span>
+          <el-button link type="primary" @click="loadCorrectableReports">重新加载</el-button>
+        </template>
+      </el-alert>
+      <el-table
+        v-loading="correctionLoading"
+        :data="correctableReports"
+        row-key="id"
+        stripe
+        :empty-text="correctionLoadError ? '加载失败，数据未知' : '暂无未结单报工'"
+      >
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div v-if="row.lastCorrection" class="correction-audit">
+              <el-alert
+                :title="row.lastCorrection.status === 'PENDING_APPROVAL' ? '待审批：当前有效值仍为原报工' : correctionStatusText(row)"
+                :type="correctionStatusType(row)"
+                :closable="false"
+                show-icon
+              />
+              <div v-for="correction in row.corrections || [row.lastCorrection]" :key="correction.id" class="correction-history-item">
+                <el-descriptions :column="3" border size="small">
+                  <el-descriptions-item label="审批状态">{{ correction.status }}</el-descriptions-item>
+                  <el-descriptions-item label="修正原因" :span="2">{{ correction.reason }}</el-descriptions-item>
+                  <el-descriptions-item label="实际产出">{{ formatQty(correction.originalOutputQuantity) }} → {{ formatQty(correction.proposedOutputQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="良品">{{ formatQty(correction.originalGoodQuantity) }} → {{ formatQty(correction.proposedGoodQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="不良品">{{ formatQty(correction.originalDefectQuantity) }} → {{ formatQty(correction.proposedDefectQuantity) }}</el-descriptions-item>
+                  <el-descriptions-item label="人数">{{ correction.originalTotalWorkers ?? '-' }} → {{ correction.proposedTotalWorkers ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="工时(分钟)">{{ correction.originalTotalWorkMinutes ?? '-' }} → {{ correction.proposedTotalWorkMinutes ?? '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="审批实例">{{ correction.workflowInstanceId || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="修正人">{{ correction.submittedByName || `用户 ${correction.submittedBy}` }}</el-descriptions-item>
+                  <el-descriptions-item label="修正时间">{{ correction.submittedAt }}</el-descriptions-item>
+                  <el-descriptions-item label="审批意见">{{ correction.decisionNotes || '-' }}</el-descriptions-item>
+                  <el-descriptions-item label="备注" :span="3">{{ correction.originalNotes || '-' }} → {{ correction.proposedNotes || '-' }}</el-descriptions-item>
+                </el-descriptions>
+              </div>
+            </div>
+            <el-empty v-else description="该报工尚无修正记录" :image-size="48" />
+          </template>
+        </el-table-column>
+        <el-table-column prop="id" label="报工 ID" width="95" />
+        <el-table-column label="批次 / 任务" min-width="150">
+          <template #default="{ row }">
+            {{ row.batchId ?? '-' }} / {{ row.workProcessTaskId ?? '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="reporterName" label="报工人" width="100" />
+        <el-table-column prop="reportDate" label="报工日期" width="120" />
+        <el-table-column prop="productName" label="产品" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="processCategory" label="工序" min-width="110" />
+        <el-table-column label="当前有效结果" min-width="250">
+          <template #default="{ row }">
+            产出 {{ formatQty(row.outputQuantity) }} · 良品 {{ formatQty(row.goodQuantity) }} · 不良 {{ formatQty(row.defectQuantity) }}
+          </template>
+        </el-table-column>
+        <el-table-column label="修正状态" min-width="150">
+          <template #default="{ row }">
+            <el-tag :type="correctionStatusType(row)">{{ correctionStatusText(row) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="canCorrectReports" label="操作" width="130" fixed="right">
+          <template #default="{ row }">
+            <el-button
+              type="primary"
+              text
+              :disabled="hasPendingCorrection(row)"
+              @click="openCorrection(row)"
+            >核对修正</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
+    <el-card style="margin-top: 16px">
+      <!-- 筛选: 按当前待审批队列里实际存在的 报工模式/报工阶段/工序 生成选项, 非固定枚举 -->
+      <div class="filter-bar">
+        <el-select v-model="filterReportMode" placeholder="全部报工模式" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="opt in reportModeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-select v-model="filterReportKind" placeholder="全部报工阶段" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="opt in reportKindOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+        </el-select>
+        <el-select v-model="filterProcessCategory" placeholder="全部工序" clearable style="width: 140px" @change="handleFilterChange">
+          <el-option v-for="cat in processCategoryOptions" :key="cat" :label="cat" :value="cat" />
+        </el-select>
+        <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
+      </div>
+
+      <el-table
+        :data="tableData"
+        v-loading="loading"
+        row-key="id"
+        stripe
+        :empty-text="loadError ? '加载失败，数据未知，请点击右上角刷新重试' : '暂无待审批数据'"
+        @selection-change="handleSelectionChange"
+      >
+        <el-table-column type="selection" width="50" />
+        <el-table-column type="expand" width="44">
+          <template #default="{ row }">
+            <div class="report-detail">
+              <el-descriptions :column="3" border size="small">
+                <el-descriptions-item label="产品">{{ row.productName || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="投入量">{{ formatQty(row.inputQuantity) }}</el-descriptions-item>
+                <el-descriptions-item label="产出量">{{ formatQty(row.outputQuantity) }}</el-descriptions-item>
+                <el-descriptions-item label="人数">{{ row.totalWorkers ?? '-' }}</el-descriptions-item>
+                <el-descriptions-item label="工时分钟">{{ row.totalWorkMinutes ?? '-' }}</el-descriptions-item>
+                <el-descriptions-item label="工序时间">{{ formatTimeRange(row) }}</el-descriptions-item>
+                <el-descriptions-item label="报工模式">{{ reportModeLabel(row.reportMode) }}</el-descriptions-item>
+                <el-descriptions-item label="报工阶段">{{ reportKindLabel(row.reportKind) }}</el-descriptions-item>
+                <el-descriptions-item label="来源WIP">{{ row.sourceWipNo || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="任务ID">{{ taskDisplayId(row) }}</el-descriptions-item>
+                <el-descriptions-item label="证据数量">{{ row.photos?.length ?? 0 }}</el-descriptions-item>
+                <el-descriptions-item label="备注" :span="3">{{ row.notes || '-' }}</el-descriptions-item>
+                <el-descriptions-item v-if="hasProcessDetail(row)" label="过程报工明细" :span="3">
+                  <div class="process-detail-block">
+                    <div v-if="row.laborSegments?.length" class="process-segments">
+                      <div
+                        v-for="(seg, idx) in row.laborSegments"
+                        :key="idx"
+                        class="process-segment-line"
+                      >
+                        <el-tag size="small" effect="plain">第 {{ idx + 1 }} 段</el-tag>
+                        <span>{{ textValue(seg.startTime) }}~{{ textValue(seg.endTime) }}</span>
+                        <span>{{ textValue(seg.headcount) }} 人</span>
+                        <span>处理 {{ segmentQty(seg, 'processedQuantity', 'processedUnit') }}</span>
+                        <span>阶段产出 {{ segmentQty(seg, 'stageOutputQuantity', 'stageOutputUnit') }}</span>
+                        <span>过程损耗 {{ segmentQty(seg, 'segmentWasteQuantity', 'segmentWasteUnit') }}</span>
+                        <span v-if="seg.note">备注 {{ textValue(seg.note) }}</span>
+                      </div>
+                    </div>
+                    <div v-if="row.byproducts?.length" class="custom-field-tags">
+                      <el-tag
+                        v-for="(bp, idx) in row.byproducts"
+                        :key="idx"
+                        type="warning"
+                        effect="plain"
+                        class="custom-field-tag"
+                      >
+                        副产物 {{ textValue(bp.name) }}: {{ formatQty(Number(bp.quantity)) }} {{ displayProcessUnit(bp.unit) }}
+                      </el-tag>
+                    </div>
+                    <div class="custom-field-tags">
+                      <el-tag v-if="row.wasteQuantity !== null && row.wasteQuantity !== undefined" type="danger" effect="plain" class="custom-field-tag">
+                        完工损耗: {{ formatQty(row.wasteQuantity) }}
+                      </el-tag>
+                      <el-tag v-if="row.sampleRetainQuantity !== null && row.sampleRetainQuantity !== undefined" type="info" effect="plain" class="custom-field-tag">
+                        留样: {{ row.sampleRetainQuantity }}
+                      </el-tag>
+                    </div>
+                  </div>
+                </el-descriptions-item>
+                <el-descriptions-item label="文字录入明细" :span="3">
+                  <div v-if="customFieldEntries(row).length" class="custom-field-tags">
+                    <el-tag
+                      v-for="item in customFieldEntries(row)"
+                      :key="item.key"
+                      type="info"
+                      effect="plain"
+                      class="custom-field-tag"
+                    >
+                      {{ item.label }}: {{ item.value }}
+                    </el-tag>
+                  </div>
+                  <span v-else>-</span>
+                </el-descriptions-item>
+              </el-descriptions>
+              <div class="evidence-panel">
+                <div class="evidence-title">现场证据</div>
+                <div v-if="row.photos && row.photos.length" class="evidence-media">
+                  <template v-for="(url, i) in row.photos" :key="i">
+                    <video
+                      v-if="isVideoEvidence(url)"
+                      :src="url"
+                      class="evidence-item"
+                      controls
+                    />
+                    <el-image
+                      v-else
+                      :src="url"
+                      fit="cover"
+                      :preview-src-list="evidenceImages(row.photos)"
+                      :initial-index="evidenceImageIndex(row.photos, url)"
+                      class="evidence-item"
+                      preview-teleported
+                    />
+                  </template>
+                </div>
+                <div v-else class="evidence-empty">暂无现场证据</div>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="reporterName" label="报工人" width="100" />
+        <el-table-column prop="reportDate" label="报工日期" width="160">
+          <template #default="{ row }">
+            <div style="display:flex;flex-direction:column;gap:4px;align-items:flex-start">
+              <span>{{ formatDate(row.reportDate) }}</span>
+              <el-tooltip
+                v-if="backdateTagType(row.reportDate)"
+                :content="backdateTagType(row.reportDate) === 'danger'
+                  ? 'T-3 及更早已锁死，后端将拒绝此报工。请联系主管通过 ERP 后台处理。'
+                  : 'T-1 ~ T-2 补录窗口内，可正常审批。'"
+                placement="top"
+              >
+                <el-tag
+                  :type="backdateTagType(row.reportDate)"
+                  size="small"
+                  style="cursor:default"
+                >{{ backdateTagText(row.reportDate) }}</el-tag>
+              </el-tooltip>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="productName" label="产品" min-width="120" show-overflow-tooltip>
+          <template #default="{ row }">{{ row.productName || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="processCategory" label="工序" min-width="110" show-overflow-tooltip />
+        <el-table-column prop="inputQuantity" label="投入" width="90">
+          <template #default="{ row }">{{ formatQty(row.inputQuantity) }}</template>
+        </el-table-column>
+        <el-table-column prop="outputQuantity" label="产出" width="90">
+          <template #default="{ row }">
+            <span :class="{ 'text-warning': row.isSupplemental }">
+              {{ formatQty(row.outputQuantity) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="totalWorkers" label="人数" width="80">
+          <template #default="{ row }">{{ row.totalWorkers ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="totalWorkMinutes" label="工时" width="80">
+          <template #default="{ row }">{{ row.totalWorkMinutes ?? '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="isSupplemental" label="类型" width="80">
+          <template #default="{ row }">
+            <el-tag v-if="row.isSupplemental" type="warning" size="small">补报</el-tag>
+            <el-tag v-else type="info" size="small">正常</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="processTaskId" label="任务ID" width="120" show-overflow-tooltip />
+        <el-table-column label="操作" width="160" fixed="right" v-if="canApproveReports">
+          <template #default="{ row }">
+            <el-button
+              type="success"
+              text
+              size="small"
+              :icon="Check"
+              :disabled="approveSubmitting && approveTargetRow?.id === row.id"
+              @click="handleApprove(row)"
+            >
+              通过
+            </el-button>
+            <el-button type="danger" text size="small" :icon="Close" @click="handleReject(row)">
+              驳回
+            </el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <el-pagination
+        v-if="filteredData.length > 0"
+        style="margin-top: 16px; justify-content: flex-end"
+        :current-page="pagination.page"
+        :page-size="pagination.size"
+        :total="filteredData.length"
+        layout="total, prev, pager, next"
+        @current-change="handlePageChange"
+      />
+    </el-card>
+
+    <!-- C-OPINION-1: 驳回意见弹框 (R3 必选 dropdown + R2 context line) -->
+    <OpinionInputDialog
+      v-if="factoryId"
+      v-model:visible="rejectDialogVisible"
+      title="驳回报工"
+      :context-line="
+        rejectTargetRow
+          ? `${rejectTargetRow.reporterName ?? '?'} - ${rejectTargetRow.processCategory ?? '?'} (${formatDate(rejectTargetRow.reportDate)})`
+          : ''
+      "
+      :factory-id="factoryId"
+      decision-type="CUSTOM"
+      other-placeholder="请输入驳回原因"
+      confirm-text="驳回"
+      @confirm="handleRejectConfirm"
+    />
+
+    <!-- fool-proof-design.md Rule 1+2: 通过前必先展示完整上下文再确认, 不可一键秒批.
+         镜像 production/batches/detail.vue「申请撤回整单」弹框的 el-alert 上下文 pattern. -->
+    <el-dialog
+      v-model="approveDialogVisible"
+      title="确认审批通过"
+      width="480px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!approveSubmitting"
+      destroy-on-close
+      @close="cancelApprove"
+    >
+      <el-alert
+        v-if="approveTargetRow"
+        :title="`${approveTargetRow.productName || '产品未知'} - ${approveTargetRow.processCategory || '工序未知'}`"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #default>
+          <div class="approve-context">
+            <span>报工人: <strong>{{ approveTargetRow.reporterName || '-' }}</strong></span>
+            <span>报工日期: <strong>{{ formatDate(approveTargetRow.reportDate) }}</strong></span>
+            <span>投入量: <strong>{{ formatQty(approveTargetRow.inputQuantity) }}</strong></span>
+            <span>产出量: <strong>{{ formatQty(approveTargetRow.outputQuantity) }}</strong></span>
+            <span>人数: <strong>{{ approveTargetRow.totalWorkers ?? '-' }}</strong></span>
+            <span>工时(分钟): <strong>{{ approveTargetRow.totalWorkMinutes ?? '-' }}</strong></span>
+          </div>
+        </template>
+      </el-alert>
+      <el-alert
+        style="margin-top:12px"
+        title="审批通过后将计入下游成本/工资核算，不可撤销（如需撤销请到「报工撤回」流程重新审批）。"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+      <template #footer>
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <el-button :disabled="approveSubmitting" @click="cancelApprove">取消</el-button>
+          <el-button
+            type="success"
+            :loading="approveSubmitting"
+            :disabled="approveSubmitting"
+            @click="confirmApprove"
+          >确认审批通过</el-button>
+        </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog
+      v-model="correctionDialogVisible"
+      title="报工核对修正"
+      width="720px"
+      :close-on-click-modal="false"
+      :close-on-press-escape="!correctionSubmitting"
+      destroy-on-close
+    >
+      <template v-if="correctionTarget">
+        <el-alert
+          title="只修改报工结果。审批通过前，下方原始值仍是结单以外的当前有效事实；投入与库存不会在这里改变。"
+          type="warning"
+          :closable="false"
+          show-icon
+        />
+        <el-descriptions :column="3" border size="small" style="margin-top: 12px">
+          <el-descriptions-item label="报工人">{{ correctionTarget.reporterName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="产品">{{ correctionTarget.productName || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="工序">{{ correctionTarget.processCategory || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="报工 ID">{{ correctionTarget.id }}</el-descriptions-item>
+          <el-descriptions-item label="批次 ID">{{ correctionTarget.batchId ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="任务 ID">{{ correctionTarget.workProcessTaskId ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原实际产出">{{ formatQty(correctionTarget.outputQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原良品">{{ formatQty(correctionTarget.goodQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原不良品">{{ formatQty(correctionTarget.defectQuantity) }}</el-descriptions-item>
+          <el-descriptions-item label="原人数">{{ correctionTarget.totalWorkers ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原工时(分钟)">{{ correctionTarget.totalWorkMinutes ?? '-' }}</el-descriptions-item>
+          <el-descriptions-item label="原备注">{{ correctionTarget.notes || '-' }}</el-descriptions-item>
+        </el-descriptions>
+        <el-form label-width="120px" style="margin-top: 16px">
+          <div class="correction-form-grid">
+            <el-form-item label="修正实际产出"><el-input-number v-model="correctionForm.outputQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正良品"><el-input-number v-model="correctionForm.goodQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正不良品"><el-input-number v-model="correctionForm.defectQuantity" :min="0" :precision="2" /></el-form-item>
+            <el-form-item label="修正人数"><el-input-number v-model="correctionForm.totalWorkers" :min="0" :precision="0" /></el-form-item>
+            <el-form-item label="修正工时"><el-input-number v-model="correctionForm.totalWorkMinutes" :min="0" :precision="0" /></el-form-item>
+          </div>
+          <el-form-item label="报工备注"><el-input v-model="correctionForm.notes" maxlength="500" show-word-limit /></el-form-item>
+          <el-form-item label="修正原因" required>
+            <el-input v-model="correctionForm.reason" type="textarea" :rows="3" maxlength="500" show-word-limit placeholder="说明核对依据和为什么需要修正" />
+          </el-form-item>
+        </el-form>
+      </template>
+      <template #footer>
+        <el-button :disabled="correctionSubmitting" @click="correctionDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="correctionSubmitting" :disabled="correctionSubmitting" @click="submitCorrection">提交 OA 审批</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style scoped>
+.page-container { padding: 20px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; }
+.toolbar-left { display: flex; align-items: center; gap: 12px; }
+.correction-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.correction-heading h3 { margin: 0 0 4px; }
+.correction-heading p { margin: 0; color: var(--el-text-color-secondary); }
+.correction-audit { padding: 8px 24px 12px; }
+.correction-history-item { margin-top: 10px; }
+.correction-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+.toolbar-right { display: flex; gap: 8px; }
+.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+.text-warning { color: #e6a23c; font-weight: 600; }
+.report-detail {
+  padding: 12px 24px 18px 24px;
+  background: #fafcff;
+}
+.evidence-panel {
+  margin-top: 12px;
+}
+.evidence-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #303133;
+  margin-bottom: 8px;
+}
+.evidence-media {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.evidence-item {
+  width: 96px;
+  height: 96px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: #111827;
+}
+.evidence-empty {
+  color: #909399;
+  font-size: 13px;
+}
+.custom-field-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.process-detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.process-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.process-segment-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: #303133;
+  font-size: 13px;
+}
+.custom-field-tag {
+  max-width: 100%;
+  height: auto;
+  min-height: 24px;
+  white-space: normal;
+  line-height: 18px;
+  padding: 3px 8px;
+}
+.approve-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  font-size: 13px;
+  color: #606266;
+  margin-top: 4px;
+}
+</style>

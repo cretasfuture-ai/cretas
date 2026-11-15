@@ -1,0 +1,6 @@
+param([switch]$NoOpen)
+$ErrorActionPreference='Stop'
+$prototypeRoot=Split-Path -Parent $PSScriptRoot
+$listeners=@(Get-NetTCPConnection -LocalPort 19062 -State Listen -ErrorAction SilentlyContinue)
+if($listeners.Count){$state=Get-Content -LiteralPath (Join-Path $prototypeRoot 'private/server-state.json') -Raw|ConvertFrom-Json;$p=Get-CimInstance Win32_Process -Filter ('ProcessId='+$state.pid);if(($listeners.OwningProcess|Where-Object {$_ -ne $state.pid}) -or $p.CommandLine -notlike '*liushanmen-v1*server.cjs*'){throw 'Prototype port owned by another process'}}else{Start-Process -FilePath (Get-Command node.exe).Source -ArgumentList @('"'+(Join-Path $prototypeRoot 'server.cjs')+'"') -WorkingDirectory $prototypeRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $prototypeRoot 'private/server-out.log') -RedirectStandardError (Join-Path $prototypeRoot 'private/server-error.log')|Out-Null}
+for($i=0;$i -lt 35;$i++){try{$r=Invoke-RestMethod 'http://127.0.0.1:19062/api/health' -TimeoutSec 2;if($r.factoryId -eq 'LIUSHANMEN'){Write-Output 'LIUSHANMEN prototype ready: http://127.0.0.1:19062';if(-not $NoOpen){Start-Process 'http://127.0.0.1:19062'};exit 0}}catch{};Start-Sleep -Milliseconds 400};throw 'Prototype failed to start'
