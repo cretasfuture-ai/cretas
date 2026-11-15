@@ -334,6 +334,10 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ArApTransactionRepository arApTransactionRepository;
 
+    /** 发货后应收挂账失败 → 待补账记录 + 告警 (D-S3)。Optional for legacy unit tests。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.finance.ArPostingPendingService receivablePendingService;
+
     /**
      * 自动应收挂账的幂等来源类型 —— 与 DB 唯一键 {@code uk_aat_ar_invoice_per_shipment}
      * (V20261031_06) 的 {@code source_type} 取值一致。对应采购侧的 {@code "PURCHASE_RECEIVE"}。
@@ -3750,8 +3754,11 @@ public class SalesServiceImpl implements SalesService {
 
         // 自动创建应收账款（销售发货 → AR_INVOICE）
         if (record.getSalesOrderId() != null) {
+            BigDecimal postedShippedValue = null;
+            String receivableCustomerId = null;
             try {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
+                receivableCustomerId = order != null ? order.getCustomerId() : null;
                 if (order != null && order.getCustomerId() != null) {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
@@ -3814,6 +3821,7 @@ public class SalesServiceImpl implements SalesService {
                         //   sales_delivery_items.salesOrderItemId → sales_order_items.taxRate 借。
                         //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
                         BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
+                        postedShippedValue = shippedValue;
                         ArApTransaction ar = arApService.recordReceivableIfAbsent(
                                 factoryId, order.getCustomerId(), order.getId(),
                                 SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId(),
@@ -3826,10 +3834,19 @@ public class SalesServiceImpl implements SalesService {
                         }
                     }
                 }
-            } catch (BusinessException e) {
-                log.warn("应收自动挂账跳过(可能已存在): {}", e.getMessage());
-            } catch (Exception e) {
-                log.error("应收自动挂账失败: deliveryId={}", deliveryId, e);
+            } catch (RuntimeException e) {
+                // D-S3 (Steve 2026-11-15): 发货已成功, 挂账失败不回滚发货, 也不能静默。
+                // 先分清「已挂过(幂等/并发)」与「真正失败」: 前者不是失败, 不产生待补账。
+                if (receivablePendingService != null
+                        && receivablePendingService.receivableAlreadyPosted(
+                                factoryId, SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId())) {
+                    log.info("应收自动挂账幂等命中(异常后复查已存在, 不算失败): deliveryId={}", deliveryId);
+                } else if (receivablePendingService != null) {
+                    receivablePendingService.recordFailure(factoryId, record.getId(), record.getDeliveryNumber(),
+                            record.getSalesOrderId(), receivableCustomerId, postedShippedValue, userId, e);
+                } else {
+                    log.error("应收自动挂账失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, e);
+                }
             }
         }
 

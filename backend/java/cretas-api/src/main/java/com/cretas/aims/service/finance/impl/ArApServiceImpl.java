@@ -210,7 +210,7 @@ public class ArApServiceImpl implements ArApService {
      * （doomed-tx 会让<b>货发不出去</b>）。详见 {@link ArApService#recordReceivableIfAbsent} javadoc。
      */
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = BusinessException.class)
     public ArApTransaction recordReceivableIfAbsent(String factoryId, String customerId,
                                                     String salesOrderId, String sourceType, String sourceId,
                                                     BigDecimal amount,
