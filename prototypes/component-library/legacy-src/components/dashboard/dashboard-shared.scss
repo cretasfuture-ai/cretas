@@ -1,0 +1,248 @@
+/**
+ * Shared Dashboard CSS
+ * Common styles used across all Dashboard*.vue components.
+ * Extracted from DashboardAdmin, DashboardFinance, DashboardHR,
+ * DashboardProduction, DashboardWarehouse, DashboardDefault.
+ *
+ * AUDIT-069: Eliminates ~80 lines of duplicated CSS per file.
+ *
+ * Usage:
+ *   <style lang="scss" scoped>
+ *     @use './dashboard-shared.scss';
+ *     // ... unique styles for this dashboard
+ *   </style>
+ */
+
+// ==================== Welcome Section ====================
+.welcome-section {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding: 28px 32px;
+  background: linear-gradient(135deg, #0C1929 0%, #14507F 50%, #2D8B57 100%);
+  border-radius: var(--radius-lg, 14px);
+  position: relative;
+  overflow: hidden;
+  flex-wrap: wrap;
+  gap: 16px;
+
+  // Decorative light orbs
+  &::before {
+    content: '';
+    position: absolute;
+    top: -40px;
+    right: -20px;
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    background: rgba(43, 126, 193, 0.15);
+    pointer-events: none;
+  }
+
+  &::after {
+    content: '';
+    position: absolute;
+    bottom: -60px;
+    left: 30%;
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: rgba(43, 126, 193, 0.08);
+    pointer-events: none;
+  }
+
+  .welcome-info {
+    position: relative;
+    z-index: 1;
+
+    h1 {
+      font-size: 24px;
+      color: #fff;
+      margin: 0 0 8px;
+      font-weight: 600;
+    }
+
+    p {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin: 0;
+      color: rgba(255, 255, 255, 0.7);
+      font-size: 14px;
+    }
+  }
+
+  .ai-entry {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+// ==================== Stat Cards ====================
+.stat-cards {
+  margin-bottom: 24px;
+
+  .stat-card {
+    margin-bottom: 20px;
+    cursor: pointer;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+
+    &:hover {
+      transform: translateY(-4px);
+      box-shadow: var(--shadow-lg, 0 4px 16px rgba(45, 139, 87, 0.10));
+    }
+  }
+
+  .stat-content {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .stat-info {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .stat-title {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-size: var(--font-size-2xl);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+
+    small,
+    .stat-unit {
+      font-size: 14px;
+      font-weight: 400;
+      margin-left: 4px;
+    }
+  }
+
+  .stat-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+  }
+}
+
+// ==================== Quick Actions ====================
+.quick-actions-card {
+  margin-bottom: 24px;
+
+  .quick-actions {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+
+  .action-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 16px 24px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: all 0.25s ease;
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      bottom: 6px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0;
+      height: 2px;
+      background: var(--color-primary, #2D8B57);
+      border-radius: 1px;
+      transition: width 0.25s ease;
+    }
+
+    &:hover {
+      background-color: var(--color-bg-hover, #EDF2F7);
+      transform: translateY(-2px);
+
+      &::after {
+        width: 24px;
+      }
+    }
+
+    span {
+      font-size: 14px;
+      color: var(--color-text-regular, #4A5568);
+    }
+  }
+}
+
+// ==================== Card Header ====================
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+// ==================== Overview Content ====================
+.overview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+
+  .overview-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color-lighter, #F4F6F9);
+
+    &:last-child {
+      border-bottom: none;
+    }
+
+    .label {
+      color: var(--color-text-secondary);
+      font-size: 14px;
+    }
+
+    .value {
+      font-size: 16px;
+      font-variant-numeric: tabular-nums;
+      font-weight: 500;
+      color: var(--color-text-primary, #1A2332);
+
+      &.text-success {
+        color: var(--color-success, #36B37E);
+      }
+
+      &.text-danger {
+        color: var(--color-danger, #FF5630);
+      }
+    }
+  }
+}
+
+// ==================== Common Card Spacing ====================
+.el-card {
+  margin-bottom: 20px;
+}
+
+// ==================== Responsive ====================
+@media (max-width: 768px) {
+  .stat-cards .stat-value {
+    font-size: 22px;
+  }
+
+  .welcome-section {
+    padding: 20px 24px;
+  }
+}
