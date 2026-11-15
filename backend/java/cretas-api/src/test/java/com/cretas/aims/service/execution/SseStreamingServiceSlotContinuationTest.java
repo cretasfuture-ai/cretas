@@ -174,7 +174,8 @@ class SseStreamingServiceSlotContinuationTest {
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         com.cretas.aims.service.intent.flywheel.FlywheelTextProtector protector =
                 new com.cretas.aims.service.intent.flywheel.FlywheelTextProtector(
-                        mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class),
+                        new com.cretas.aims.service.entity.FactoryEntityResolver(null,
+                                mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class)),
                         mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class),
                         mock(com.cretas.aims.repository.FactoryFeatureConfigRepository.class), "");
         com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder recorder =
@@ -228,7 +229,8 @@ class SseStreamingServiceSlotContinuationTest {
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         com.cretas.aims.service.intent.flywheel.FlywheelTextProtector protector =
                 new com.cretas.aims.service.intent.flywheel.FlywheelTextProtector(
-                        mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class),
+                        new com.cretas.aims.service.entity.FactoryEntityResolver(null,
+                                mock(com.cretas.aims.repository.intent.FlywheelMasterDataRepository.class)),
                         mock(com.cretas.aims.repository.learning.FactoryNameDirectoryRepository.class),
                         mock(com.cretas.aims.repository.FactoryFeatureConfigRepository.class), "");
         com.cretas.aims.service.intent.flywheel.IntentFlywheelRecorder recorder =

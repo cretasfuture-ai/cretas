@@ -70,6 +70,7 @@ class IntentFlywheelEntryRepositoryQueryValidationTest {
     @Autowired TestEntityManager em;
     @Autowired IntentFlywheelTurnRepository turns;
     @Autowired FlywheelMasterDataRepository masterData;
+    @Autowired com.cretas.aims.repository.FactoryEntityDirectoryRepository entityDirectory;
     @Autowired FactoryNameDirectoryRepository people;
     @Autowired FactoryFeatureConfigRepository features;
     @Autowired FactorySecrecySettingRepository secrecySettings;
@@ -125,7 +126,7 @@ class IntentFlywheelEntryRepositoryQueryValidationTest {
                 .enabled(true).updatedAt(LocalDateTime.now()).updatedBy(1L).build());
         em.flush();
 
-        protector = new FlywheelTextProtector(masterData, people, features, FlywheelTextProtectorRedactionTest.key());
+        protector = new FlywheelTextProtector(new com.cretas.aims.service.entity.FactoryEntityResolver(entityDirectory, masterData), people, features, FlywheelTextProtectorRedactionTest.key());
         protector.setFactorySecrecyConfig(new FactorySecrecyConfig(secrecySettings, null));
         recorder = new IntentFlywheelRecorder(turns, protector, new ObjectMapper());
         recorder.setSynchronous(true);

@@ -31,6 +31,10 @@ public class CustomerPriceMemoryQueryTool extends AbstractBusinessTool {
     @Autowired
     private CustomerService customerService;
 
+    /** 按名称找客户只走实体解析公共能力 (本厂客户全名精确匹配), ⛔ 不用包含匹配的名称搜索自动选人。 */
+    @Autowired
+    private com.cretas.aims.service.entity.FactoryEntityResolver entityResolver;
+
     @Autowired
     private ProductTypeRepository productTypeRepository;
 
@@ -88,18 +92,36 @@ public class CustomerPriceMemoryQueryTool extends AbstractBusinessTool {
         log.info("S-PRICE-1 记忆价查询 - 工厂={}, customerId={}, customerName={}, productTypeId={}",
                 factoryId, customerId, customerName, productTypeId);
 
-        // 解析客户 (优先 ID, 否则按 name 精确匹配)
+        // 解析客户 (优先 ID, 否则走实体解析公共能力: 本厂客户全名精确匹配; 同名全部列出, 零命中给候选, 都不自动选)
         CustomerDTO customer = null;
         if (customerId != null && !customerId.isBlank()) {
             customer = customerService.getCustomerById(factoryId, customerId);
         } else if (customerName != null && !customerName.isBlank()) {
-            List<CustomerDTO> matches = customerService.searchCustomersByName(factoryId, customerName);
-            if (matches != null && matches.size() == 1) {
-                customer = matches.get(0);
-            } else if (matches != null && matches.size() > 1) {
-                return buildSimpleResult(
-                        String.format("找到 %d 个匹配 \"%s\" 的客户, 请提供 customerId 精确指定",
-                                matches.size(), customerName), null);
+            com.cretas.aims.service.entity.FactoryEntityResolver.Resolution resolution = entityResolver.resolve(
+                    factoryId, com.cretas.aims.service.entity.EntityKind.CUSTOMER, customerName);
+            if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.UNIQUE) {
+                customer = customerService.getCustomerById(factoryId, resolution.matches().get(0).id());
+            } else {
+                Map<String, Object> result = new java.util.HashMap<>();
+                boolean marked;
+                if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.MULTIPLE) {
+                    List<com.cretas.aims.ai.tool.SameNameMatches.Match> listed = new java.util.ArrayList<>();
+                    for (com.cretas.aims.service.entity.FactoryEntityResolver.Candidate c
+                            : com.cretas.aims.ai.tool.SameNameMatches.listedCandidates(resolution)) {
+                        listed.add(com.cretas.aims.ai.tool.SameNameMatches.matchOf(c, null));
+                    }
+                    com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "客户", resolution, listed);
+                    marked = true;
+                } else {
+                    marked = com.cretas.aims.ai.tool.SameNameMatches.annotateSuggestions(result, "客户", resolution);
+                }
+                if (marked) {
+                    result.put("data", Map.of("customerName", resolution.query(),
+                            "matchCount", resolution.matches().size()));
+                    result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result)
+                            + "\n（记忆价按客户查，请指明是哪一个客户。）");
+                    return result;
+                }
             }
         }
         if (customer == null) {
