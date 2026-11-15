@@ -107,7 +107,19 @@ class AiBiDemoRerunContractTest {
         kb.initDefaults();
         Map<String, String> p = kb.getPhraseToIntentMapping();
         assertEquals("QUALITY_STATS", p.get("本月生产了多少批次，合格率多少"));
-        assertEquals("SUPPLIER_PRICE_ALERT", p.get("原料采购价最近涨得最多的是哪个"));
+        // Q12: 不得用短语把采购涨价问句路由到无权限声明的 SUPPLIER_PRICE_ALERT 去绕过 price_history_query 的权限
+        for (String q : new String[]{"原料采购价最近涨得最多的是哪个", "采购价最近涨得最多的是哪个", "哪个原料涨价最多", "原料采购价涨得最多"}) {
+            assertNotEquals("SUPPLIER_PRICE_ALERT", p.get(q), q);
+        }
+    }
+
+    // Q12: 被拒时的文案要说清需要哪项权限、找谁开
+    @Test
+    void permissionDenialNamesTheRequiredPermissionAndWhoToAsk() {
+        ToolRbacGuard guard = new ToolRbacGuard();
+        String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "price_history_query", "procurement:read");
+        assertTrue(msg.contains("procurement:read") && msg.contains("工厂管理员"), msg);
+        assertFalse(guard.denyMessage(Map.of("userRole", "x"), "t").contains("需要的权限"));
     }
 
     // ---- Q19: 个人工资明细拒答, 汇总 / 规则问法不拒 ----
