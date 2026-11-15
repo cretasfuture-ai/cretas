@@ -173,3 +173,31 @@ export const MOVEMENT_LABEL: Record<OutsourceMovementType, string> = {
   ISSUE: '发料', MATERIAL_RETURN: '退料', RECEIVE: '收货', CONSUME: '耗用', GOODS_RETURN: '退货', LOSS: '损耗',
 };
 export const OUTSOURCE_TYPE_LABEL: Record<OutsourceType, string> = { PROCESS: '工序委外', WHOLE: '整单委外' };
+
+/**
+ * 补冲减: 返工件再退时上游退货冲减还在待审 (当时不冲), 之后上游被驳回, 后端在驳回那一刻补挂的等额冲减
+ * (#1723 低4 口径 B 规则 3)。它只挂加工费冲减, 没有实物退回, 不能显示成「退货 N 件」。
+ */
+export const FEE_COMP_REASON_PREFIX = 'UPSTREAM_REJECTED:';
+
+type MovementLike = Pick<OutsourceMovementView, 'movementType' | 'reason' | 'parentMovementId'>;
+
+export function isFeeCompensation(m: MovementLike): boolean {
+  return m.movementType === 'GOODS_RETURN' && m.parentMovementId != null
+    && (m.reason ?? '').startsWith(FEE_COMP_REASON_PREFIX);
+}
+
+/** 收发明细「类型」列。 */
+export function movementTypeText(m: MovementLike): string {
+  return isFeeCompensation(m) ? '补冲减（上游驳回）' : (MOVEMENT_LABEL[m.movementType] ?? m.movementType);
+}
+
+/** 收发明细「原因」列: 补冲减不露内部前缀与调整 id。 */
+export function movementReasonText(m: MovementLike): string {
+  return isFeeCompensation(m) ? '上游退货冲减被财务驳回，按件补挂加工费冲减（待审）' : (m.reason ?? '');
+}
+
+/** 收发明细是否显示件数: 补冲减没有实物退回, 不显示。 */
+export function movementShowsQuantity(m: MovementLike): boolean {
+  return !isFeeCompensation(m);
+}

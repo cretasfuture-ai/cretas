@@ -687,6 +687,18 @@ class OutsourceClosedLoopPostgresContractTest {
                 BigDecimal.ZERO, null), USER);
         String rework = reworkOf(lineId, fg);
 
+        // 复审 L4: 返工批次结存被手工加多 (4 → 7), 退 7 件 ⇒ 409 并说清只能追到 4 件、多出的走盘点/调整; 不动任何东西
+        jdbc.update("update finished_goods_batches set produced_quantity = produced_quantity + 3 where id = ?", rework);
+        int movesBefore = count("select count(*) from outsource_movements where factory_id = ?");
+        assertThatThrownBy(() -> outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4A-GR-BIG", null,
+                rework, new BigDecimal("7"), "超量"), USER, null))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REWORK_MISMATCH")
+                .hasMessageContaining("只能追到 4 件")
+                .hasMessageContaining("盘点或手工调整");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?")).isEqualTo(movesBefore);
+        jdbc.update("update finished_goods_batches set produced_quantity = produced_quantity - 3 where id = ?", rework);
+
         // 规则 2: 上游冲减已驳回 ⇒ 再退返工件按件数冲 4 × 1.00, 挂新的待审冲减
         outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4A-GR-2", null, rework,
                 new BigDecimal("4"), "返工仍不良"), USER, null);
@@ -717,8 +729,24 @@ class OutsourceClosedLoopPostgresContractTest {
         assertThat(goodsReturnAdjCount(lineId)).as("[规则1 待审] 不新挂冲减").isEqualTo(1);
         assertThat(detailFee(orderId)).isEqualByComparingTo("10.00");
 
+        // 复审 L2: 提交人自己驳回 ⇒ 预检报四眼 403 (真正原因), 不进委外侧、不补冲减, 上游仍待审
+        assertThatThrownBy(() -> arAp.rejectAdjustment(F, upstream, USER, "自己驳回"))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", ArApServiceImpl.ADJUSTMENT_FOUR_EYES);
+        assertThat(goodsReturnAdjCount(lineId)).isEqualTo(1);
+        assertThat(jdbc.queryForObject("select approval_status from ar_ap_transactions where id = ?", String.class,
+                upstream)).isEqualTo("PENDING");
+
         // 规则 3: 之后上游被驳回 ⇒ 驳回那一刻给这次再退补一笔等额待审冲减
         arAp.rejectAdjustment(F, upstream, APPROVER, "PG 驳回: 委外厂不认");
+        // 复审 L1: 详情收发里补冲减带 parent + UPSTREAM_REJECTED: 前缀 (前端据此显示「补冲减（上游驳回）」不显示件数)
+        assertThat(outsource.detail(F, orderId).movements()).filteredOn(mv -> mv.reason() != null
+                        && mv.reason().equals("UPSTREAM_REJECTED:" + upstream))
+                .singleElement()
+                .satisfies(mv -> {
+                    assertThat(mv.movementType()).isEqualTo("GOODS_RETURN");
+                    assertThat(mv.parentMovementId()).isNotNull();
+                });
         assertThat(goodsReturnAdjCount(lineId)).as("[规则3] 补一笔").isEqualTo(2);
         Map<String, Object> comp = jdbc.queryForMap("select m.quantity, m.amount, t.amount as adj_amount, "
                 + "t.approval_status from outsource_movements m join ar_ap_transactions t on t.id = m.ap_transaction_id "
@@ -747,6 +775,64 @@ class OutsourceClosedLoopPostgresContractTest {
         arAp.approveAdjustment(F, compAdj, USER, null);
         assertThat(detailFee(orderId)).as("[规则3] 最终 = 10 - 4, 与先驳回后再退一致").isEqualByComparingTo("6.00");
         assertThat(summaryOf(orderId).feeAmount()).isEqualByComparingTo("6.00");
+    }
+
+    // ==================== 10. 并发驳回同一笔上游冲减 ⇒ 补冲减只有 1 条 (#1755 复审附注) ====================
+
+    @Test
+    @Order(10)
+    void concurrentRejectOfSameUpstreamCompensatesOnce() throws Exception {
+        String[] ol = receivedTen("OS-L4C", "L4C");
+        String orderId = ol[0], lineId = ol[1], fg = ol[2];
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4C-GR-1", null, fg,
+                new BigDecimal("4"), "封口不良"), USER, null);
+        String upstream = adjOf(lineId, fg);
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-L4C-RW-1", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4C-GR-2", null, reworkOf(lineId, fg),
+                new BigDecimal("4"), "返工仍不良"), USER, null);
+        assertThat(goodsReturnAdjCount(lineId)).isEqualTo(1);
+
+        TransactionTemplate tx = new TransactionTemplate(txManager);
+        CountDownLatch aDone = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Throwable errB;
+        try {
+            // A: 驳回 (含补冲减) 做完但先不提交, 一直持有委外单锁
+            Future<?> a = pool.submit(() -> tx.executeWithoutResult(st -> {
+                arAp.rejectAdjustment(F, upstream, APPROVER, "PG 并发驳回 A");
+                aDone.countDown();
+                try {
+                    releaseA.await(30, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(aDone.await(30, TimeUnit.SECONDS)).isTrue();
+            // B: 同一笔再驳回; 预检时 A 未提交仍是待审 ⇒ 过预检进委外侧, 卡在委外单锁上
+            Future<Throwable> b = pool.submit(() -> {
+                try {
+                    arAp.rejectAdjustment(F, upstream, APPROVER, "PG 并发驳回 B");
+                    return null;
+                } catch (Throwable t) {
+                    return t;
+                }
+            });
+            Thread.sleep(1500);
+            assertThat(b.isDone()).as("前提: B 被委外单锁挂住, 等 A 提交").isFalse();
+            releaseA.countDown();
+            a.get(30, TimeUnit.SECONDS);
+            errB = b.get(30, TimeUnit.SECONDS);
+        } finally {
+            releaseA.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(errB).as("B 拿到锁后看到已驳回 ⇒ 409").isInstanceOf(BusinessException.class)
+                .hasMessageContaining("只能驳回 PENDING");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ? and line_id = '" + lineId
+                + "' and reason like 'UPSTREAM_REJECTED:%'")).as("补冲减只有 1 条").isEqualTo(1);
+        assertThat(goodsReturnAdjCount(lineId)).isEqualTo(2);
     }
 
     /** 新单 10 包 × 1.00, 发 10kg 原料并收合格 10 ⇒ [orderId, lineId, 合格成品批次]。 */
@@ -830,6 +916,7 @@ class OutsourceClosedLoopPostgresContractTest {
         batch("OS-RACE-B", "MT-RAW", "5", "kg", "1.00");
         batch("OS-L4A", "MT-RAW", "10", "kg", "1.00");
         batch("OS-L4B", "MT-RAW", "10", "kg", "1.00");
+        batch("OS-L4C", "MT-RAW", "10", "kg", "1.00");
         jdbc.update("update material_batches set ownership = 'CUSTOMER_OWNED', owner_customer_id = 'CUST-OS-1' "
                 + "where id = 'OS-CRAW'");
 

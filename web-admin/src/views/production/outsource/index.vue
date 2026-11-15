@@ -14,11 +14,12 @@ import {
   getOutsourceOrder,
   listOutsourceOrders,
   LINE_STATUS_LABEL,
-  MOVEMENT_LABEL,
+  movementReasonText,
+  movementShowsQuantity,
+  movementTypeText,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TAG,
   OUTSOURCE_TYPE_LABEL,
-  type OutsourceMovementType,
   type OutsourceOrderDetail,
   type OutsourceOrderStatus,
   type OutsourceOrderSummary,
@@ -116,10 +117,6 @@ const lineNoById = computed(() => {
   return m;
 });
 const balanceTotal = computed(() => (detail.value?.balances ?? []).filter((b) => (b.currentQuantity ?? 0) > 0).length);
-
-function movementLabel(t: string) {
-  return MOVEMENT_LABEL[t as OutsourceMovementType] ?? t;
-}
 
 onMounted(async () => {
   await load();
@@ -240,15 +237,15 @@ watch(() => route.query.orderId, (q) => {
           <el-tab-pane :label="`收发明细 (${detail.movements.length})`" name="movements">
             <el-table :data="detail.movements" size="small" border empty-text="还没有收发记录" data-testid="outsource-movements">
               <el-table-column label="日期" width="100"><template #default="{ row }">{{ row.bizDate ?? '—' }}</template></el-table-column>
-              <el-table-column label="类型" width="70"><template #default="{ row }">{{ movementLabel(row.movementType) }}</template></el-table-column>
+              <el-table-column label="类型" width="130"><template #default="{ row }">{{ movementTypeText(row) }}</template></el-table-column>
               <el-table-column label="行" width="50"><template #default="{ row }">{{ lineNoById[row.lineId] ?? '—' }}</template></el-table-column>
               <el-table-column label="来源批次" min-width="150"><template #default="{ row }">{{ row.sourceBatchNumber ?? '—' }}</template></el-table-column>
               <el-table-column label="去向批次" min-width="150"><template #default="{ row }">{{ row.targetBatchNumber ?? '—' }}</template></el-table-column>
               <el-table-column label="数量" width="100" align="right">
-                <template #default="{ row }">{{ num(row.quantity, row.unit) }}<span v-if="row.defectQuantity" class="muted"> (不良 {{ row.defectQuantity }})</span></template>
+                <template #default="{ row }"><template v-if="movementShowsQuantity(row)">{{ num(row.quantity, row.unit) }}</template><template v-else>—</template><span v-if="row.defectQuantity" class="muted"> (不良 {{ row.defectQuantity }})</span></template>
               </el-table-column>
               <el-table-column label="金额" width="90" align="right"><template #default="{ row }">{{ money(row.amount) }}</template></el-table-column>
-              <el-table-column label="原因" min-width="110"><template #default="{ row }">{{ row.reason ?? '' }}</template></el-table-column>
+              <el-table-column label="原因" min-width="110"><template #default="{ row }">{{ movementReasonText(row) }}</template></el-table-column>
               <el-table-column label="录入时间" width="130"><template #default="{ row }">{{ time(row.createdAt) }}</template></el-table-column>
             </el-table>
           </el-tab-pane>

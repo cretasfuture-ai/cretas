@@ -445,7 +445,7 @@ public class OutsourceService {
             MaterialBatch os = lockOutsourceBatch(factoryId, line, it.batchId());
             BigDecimal q = it.quantity();
             assertWithinBalance(os, q, "退料");
-            OutsourceMovement issue = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId()).stream()
+            OutsourceMovement issue = movementRepository.findByFactoryIdAndLineIdOrderByCreatedAtAsc(line.getFactoryId(), line.getId()).stream()
                     .filter(m -> m.getMovementType() == OutsourceMovement.Type.ISSUE && os.getId().equals(m.getTargetBatchId()))
                     .findFirst()
                     .orElseThrow(() -> bad(409, "找不到这个委外仓批次的发料记录", "OUTSOURCE_ISSUE_RECORD_MISSING", os.getId()));
@@ -709,7 +709,7 @@ public class OutsourceService {
     private void receiveRework(String factoryId, OutsourceOrder order, OutsourceOrderLine line, OutsourceMovement header,
                                BigDecimal rework, InventoryOwnership ownership, String ownerCustomer,
                                LocalDate bizDate, Long userId, boolean headerTarget) {
-        List<OutsourceMovement> lineMovements = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
+        List<OutsourceMovement> lineMovements = movementRepository.findByFactoryIdAndLineIdOrderByCreatedAtAsc(line.getFactoryId(), line.getId());
         Map<String, BigDecimal> plan = planRework(lineMovements, line, rework);
         BigDecimal cost = ZERO;
         boolean known = true;
@@ -773,7 +773,7 @@ public class OutsourceService {
     }
 
     private Map<String, BigDecimal> planRework(OutsourceOrderLine line, BigDecimal rework) {
-        return planRework(movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId()), line, rework);
+        return planRework(movementRepository.findByFactoryIdAndLineIdOrderByCreatedAtAsc(line.getFactoryId(), line.getId()), line, rework);
     }
 
     /** 返工待收按被退回的收货批次先进先出抵扣: 被退批次 id → 本次抵扣量。对不上 ⇒ 409。 */
@@ -936,6 +936,14 @@ public class OutsourceService {
                                                 String reworkBatchId, BigDecimal q, String lineId) {
         FeeLedger ledger = feeLedger(factoryId, lineMovements, null);
         Deque<FeeSeg> origin = ledger.origins().getOrDefault(reworkBatchId, new ArrayDeque<>());
+        BigDecimal traced = origin.stream().map(FeeSeg::qty).reduce(ZERO, BigDecimal::add);
+        if (traced.compareTo(q) < 0) {
+            // 批次结存比委外收发能追到的返工件多 (例如盘盈 / 手工加过数): 多出来的件查不到上游冲减, 算不出该不该冲 (#1755 复审 L4)
+            throw bad(409, String.format("这个返工批次按委外收发只能追到 %s 件还没退过的返工件, 这次要退 %s 件; "
+                            + "多出来的数量不是委外返工收回来的 (可能是盘点或手工调整加的), 算不出该不该冲加工费",
+                            plain(traced), plain(q)), "OUTSOURCE_REWORK_MISMATCH", reworkBatchId)
+                    .withHint("先按 " + plain(traced) + " 件以内退货; 多出的数量请仓库核对后走盘点或库存调整, 有疑问联系管理员");
+        }
         BigDecimal chargeable = ZERO;
         for (FeeSeg u : takeFifo(origin, q, lineId)) {
             if (u.cover() != null && !ledger.settled(u.cover())) {
@@ -965,7 +973,7 @@ public class OutsourceService {
         OutsourceOrder order = lockOrder(e.factoryId(), src.getOrderId());
         OutsourceOrderLine line = lineRepository.findByIdAndFactoryId(src.getLineId(), e.factoryId())
                 .orElseThrow(() -> new ResourceNotFoundException("委外任务行不存在"));
-        List<OutsourceMovement> mvs = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
+        List<OutsourceMovement> mvs = movementRepository.findByFactoryIdAndLineIdOrderByCreatedAtAsc(line.getFactoryId(), line.getId());
         FeeLedger ledger = feeLedger(e.factoryId(), mvs, e.transactionId());
         for (OutsourceMovement m : mvs) {
             List<FeeSeg> ups = ledger.upstreamByReturn().get(m.getId());
@@ -1208,7 +1216,7 @@ public class OutsourceService {
             throw bad(400, "退货数量必须大于 0", "OUTSOURCE_GOODS_RETURN_QTY_INVALID", "quantity");
         }
         String batchId = req.sourceBatchId();
-        List<OutsourceMovement> lineMovements = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
+        List<OutsourceMovement> lineMovements = movementRepository.findByFactoryIdAndLineIdOrderByCreatedAtAsc(line.getFactoryId(), line.getId());
         // 返工回货建的批次本来就没计加工费 (receive 只按新收合格计费) ⇒ 再退它不按件直接冲 (复审 中1),
         // 而是看上游那笔冲减: 批准 / 待审不冲, 驳回才冲 (低4 口径 B, 见 feeLedger)。
         boolean isReworkBatch = batchId != null && lineMovements.stream()
@@ -1582,7 +1590,8 @@ public class OutsourceService {
         }
         Set<String> lineIds = lines.stream().map(OutsourceOrderLine::getId).collect(Collectors.toSet());
         List<OutsourceMovement> mvs = movements != null ? movements
-                : movementRepository.findByLineIdInAndMovementTypeIn(lineIds, List.of(OutsourceMovement.Type.GOODS_RETURN));
+                : movementRepository.findByFactoryIdAndLineIdInAndMovementTypeIn(factoryId, lineIds,
+                        List.of(OutsourceMovement.Type.GOODS_RETURN));
         Map<String, List<String>> adjIdsByLine = new HashMap<>();
         for (OutsourceMovement m : mvs) {
             if (m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN && m.getApTransactionId() != null

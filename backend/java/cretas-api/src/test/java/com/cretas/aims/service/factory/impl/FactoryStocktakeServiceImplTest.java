@@ -1710,14 +1710,17 @@ class FactoryStocktakeServiceImplTest {
         when(stocktakeRepo.findActiveStocktakesForWarehouseAndMonth(any(), any(), any())).thenReturn(List.of());
         when(materialBatchRepo.findByFactoryIdAndWarehouseId(FACTORY_ID, WAREHOUSE_ID))
                 .thenReturn(List.of(materialBatch("MB-1", "5"), os));
+        // 闸若失效, 发起会照常保存 ⇒ 让保存走得通, 失效时红在「不该保存」上, 而不是桩返回 null 的 NPE
+        lenient().when(stocktakeRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        assertThatThrownBy(() -> service.initiate(FACTORY_ID, req, USER_ID))
-                .isInstanceOf(BusinessException.class)
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.initiate(FACTORY_ID, req, USER_ID));
+        verify(stocktakeRepo, never()).save(any());   // 守的行为: 委外仓不建盘点单
+        assertThat(thrown).isInstanceOf(BusinessException.class)
                 .satisfies(ex -> {
                     assertThat(((BusinessException) ex).getCode()).isEqualTo(409);
                     assertThat(((BusinessException) ex).getErrorCode()).isEqualTo("STOCKTAKE_OUTSOURCE_WAREHOUSE");
                 });
-        verify(stocktakeRepo, never()).save(any());
     }
 
     @Test
