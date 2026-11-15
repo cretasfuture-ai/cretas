@@ -60,6 +60,18 @@ public class ClarificationCandidateService {
      * 为空只发生在裸构造的单测里 —— 那时绑定了已注册工具的意图一律不出按钮 (fail-closed)。
      */
     private final ToolPermissionChain toolPermissionChain;
+    /**
+     * 没绑工具的意图在执行期走显式 Skill 路由 (intent_code → skill_name, 见
+     * {@link DynamicToolSelectionService#tryExplicitSkillRouteForIntent}), Skill 执行前对它能跑到的每个工具做
+     * 权限预检 ({@link com.cretas.aims.service.skill.SkillExecutor#permissionRefusal})。候选按同一个预检过滤。
+     * 生产上由 Spring 注入; 裸构造的单测里为空 = 不按 Skill 过滤 (那些测试的意图都不对应 Skill)。
+     */
+    @Autowired(required = false)
+    @Lazy
+    private com.cretas.aims.service.skill.SkillRegistry skillRegistry;
+    @Autowired(required = false)
+    @Lazy
+    private com.cretas.aims.service.skill.SkillExecutor skillExecutor;
 
     public ClarificationCandidateService(
             IntentConfigManagementService configService,
@@ -379,7 +391,8 @@ public class ClarificationCandidateService {
      * {@link ToolDispatchService#executeWithTool} 拒绝的是同一批人。身份按服务端主体绑定
      * ({@link TrustedExecutionContext#enforcePrincipal}), RBAC 按 userId 从库里取角色, 不信请求自带的角色。
      *
-     * <p>没绑定工具 (或工具未注册) 时执行期没有工具级门, 只剩一线写门: 一线角色 + 写意图 + 本厂没开放
+     * <p>没绑定工具时执行期走显式 Skill 路由, 按 Skill 的权限预检判 ({@link #skillGateAllowed});
+     * 此外一线写门照旧: 一线角色 + 写意图 + 本厂没开放
      * ⇒ 不出这个选项 (2026-10-06: 此前按钮照出, 点了才被 #939 的门拒绝)。
      */
     private boolean toolGateAllowed(AIIntentConfig config, String factoryId, Long userId, String userRole) {
@@ -397,6 +410,10 @@ public class ClarificationCandidateService {
                 TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
                 return toolPermissionChain.denyReason(tool, factoryId, userRole, config, trusted).isEmpty();
             }
+            // 只有 tool_name 为空才走显式 Skill (IntentExecutionOrchestrator 3.5); 配了但没注册的工具不在此列
+            if ((toolName == null || toolName.isBlank()) && !skillGateAllowed(config, factoryId, userId, userRole)) {
+                return false;
+            }
             if (!FrontlineAiWriteGrantService.isFrontline(userRole)) {
                 return true;
             }
@@ -405,6 +422,34 @@ public class ClarificationCandidateService {
         } catch (Exception ignored) {
             return false;
         }
+    }
+
+    /**
+     * 没绑工具的意图: 若本厂有它对应的 Skill (与执行期显式 Skill 路由同一个名字映射), 按 Skill 执行前的
+     * 权限预检判 —— 预检会拒 ⇒ 不出按钮 (#1747 终审 M2: viewer 的候选里出现「今日客户跟进」, 点了 Skill 整个被拒)。
+     * 没有对应 Skill ⇒ 执行期不会跑任何工具, 不按此过滤。Skill 存在但预检器缺失 ⇒ fail-closed。
+     */
+    private boolean skillGateAllowed(AIIntentConfig config, String factoryId, Long userId, String userRole) {
+        if (skillRegistry == null) {
+            return true;
+        }
+        String skillName = DynamicToolSelectionService.intentCodeToSkillName(config.getIntentCode());
+        if (skillName == null || skillName.isBlank()) {
+            return true;
+        }
+        com.cretas.aims.dto.skill.SkillDefinition skill = skillRegistry.getSkillForFactory(factoryId, skillName);
+        if (skill == null || !skill.isEnabled()) {
+            return true;
+        }
+        if (skillExecutor == null) {
+            return false;
+        }
+        com.cretas.aims.dto.skill.SkillContext context = com.cretas.aims.dto.skill.SkillContext.builder()
+                .factoryId(factoryId)
+                .userId(String.valueOf(userId))
+                .userRole(userRole)
+                .build();
+        return skillExecutor.permissionRefusal(skill, context).isEmpty();
     }
 
     private boolean permissionAllowed(AIIntentConfig config, String factoryId,

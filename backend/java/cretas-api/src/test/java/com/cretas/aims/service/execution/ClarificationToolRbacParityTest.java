@@ -20,6 +20,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.cretas.aims.repository.smartbi.SmartBiSkillRepository;
+import com.cretas.aims.service.skill.impl.SkillExecutorImpl;
+import com.cretas.aims.service.skill.impl.SkillRegistryImpl;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -57,6 +61,8 @@ class ClarificationToolRbacParityTest {
     private static final String NO_TOOL = "FAQ_NO_TOOL";
     private static final String LEGACY = "LEGACY_ROLE_STRING";
     private static final String ALSO = "ALSO_MODULE_GATED";
+    /** tool_name=NULL, 执行期走显式 Skill daily-customer-followup (含商机预警 / 客户优先级两个销售管理类工具)。 */
+    private static final String FOLLOWUP = "DAILY_CUSTOMER_FOLLOWUP";
 
     /** 角色 → (userId, 该角色在矩阵里拥有的权限码)。viewer 与 prod 读数一致: 客户列表能跑 (有 sales:read)。 */
     private static final Map<String, Long> USER_OF = new LinkedHashMap<>();
@@ -126,10 +132,27 @@ class ClarificationToolRbacParityTest {
         bind(LEGACY, "旧角色串工具", legacyRoleTool());
         bind(ALSO, "且模块码工具", alsoGatedTool());
         bind(NO_TOOL, "常见问题", null);
+        bind(FOLLOWUP, "今日客户跟进", null);
 
         service = new ClarificationCandidateService(configService, mock(IntentPermissionGate.class),
                 accessModeFilter, new WriteGuardService(), grants, toolRegistry, chain);
+
+        // 真 Skill 栈: 内置 Skill 全量 (含 daily-customer-followup) + 真执行器的权限预检, 同一条 chain
+        SkillRegistryImpl skills = new SkillRegistryImpl(mock(SmartBiSkillRepository.class), new ObjectMapper());
+        ReflectionTestUtils.setField(skills, "loadDefaults", true);
+        ReflectionTestUtils.setField(skills, "skillsDirectory", "classpath:skills/");
+        ReflectionTestUtils.setField(skills, "defaultMinMatchScore", 0.1);
+        skills.loadSkills();
+        skillExecutor = new SkillExecutorImpl(toolRegistry, mock(com.cretas.aims.ai.client.DashScopeClient.class),
+                new ObjectMapper());
+        ReflectionTestUtils.setField(skillExecutor, "toolPermissionChain", chain);
+        ReflectionTestUtils.setField(service, "skillRegistry", skills);
+        ReflectionTestUtils.setField(service, "skillExecutor", skillExecutor);
+        followupSkill = skills.getSkillForFactory(FACTORY, "daily-customer-followup");
     }
+
+    private SkillExecutorImpl skillExecutor;
+    private com.cretas.aims.dto.skill.SkillDefinition followupSkill;
 
     private void bind(String code, String name, ToolExecutor tool) {
         String toolName = tool == null ? null : tool.getToolName();
@@ -240,5 +263,65 @@ class ClarificationToolRbacParityTest {
                 .stream().filter(a -> "SELECT_INTENT".equals(a.getActionCode()))
                 .map(a -> String.valueOf(a.getParameters().get("intentCode"))).toList();
         assertThat(shown).containsExactly(NO_TOOL);
+    }
+
+    @Test
+    @DisplayName("M2 回归: 没绑工具、靠 Skill 执行的「今日客户跟进」—— 执行期 Skill 预检会拒的 viewer 不出, sales_manager 照出")
+    void skillBackedIntentFollowsSkillPermissionPreflight() {
+        assertThat(followupSkill).as("内置 Skill daily-customer-followup 必须存在, 否则本条没有量到东西").isNotNull();
+        assertThat(followupSkill.getTools()).contains("opportunity_stage_alert", "customer_priority_query");
+        // 前提: 执行期 (SkillExecutorImpl 第 2a 步) 对 viewer 会整个拒, 对 sales_manager 放行
+        assertThat(skillExecutor.permissionRefusal(followupSkill, skillCtx("viewer"))).isPresent();
+        assertThat(skillExecutor.permissionRefusal(followupSkill, skillCtx("sales_manager"))).isEmpty();
+
+        assertThat(offered("viewer", FOLLOWUP, CUSTOMERS)).containsExactly(CUSTOMERS);
+        assertThat(offered("sales_manager", FOLLOWUP, CUSTOMERS)).containsExactly(FOLLOWUP, CUSTOMERS);
+    }
+
+    @Test
+    @DisplayName("Skill 存在但预检器缺失 ⇒ fail-closed 不出; 没有对应 Skill 的无工具意图不受影响")
+    void skillBackedIntentFailsClosedWithoutExecutor() {
+        ReflectionTestUtils.setField(service, "skillExecutor", null);
+        assertThat(offered("sales_manager", FOLLOWUP, NO_TOOL)).containsExactly(NO_TOOL);
+    }
+
+    private com.cretas.aims.dto.skill.SkillContext skillCtx(String role) {
+        return com.cretas.aims.dto.skill.SkillContext.builder().factoryId(FACTORY)
+                .userId(String.valueOf(USER_OF.get(role))).userRole(role).build();
+    }
+
+    /**
+     * 钉住执行期 {@code ToolDispatchService#executeWithToolInScope} 里「按调用者拒绝」的门清单。
+     * 候选侧覆盖: 一线写门 / 旧角色串 / 中央 RBAC (同一个 ToolPermissionChain) + READ 模式写拦截 (modeAllowed)。
+     * 已知未覆盖 (登记, #1747 后续单): 工厂关掉的工具 isToolEnabledForFactory (M1)、供应商比价身份门 (L1)。
+     * 治理不可用 (DENIED) / 写确认 / 预览不支持 / FAILED 不是「这个人能不能用」。
+     * 执行期新增一道拒绝门 ⇒ 这里的计数变 ⇒ 红: 先决定候选侧要不要跟, 再改这张表。
+     */
+    @Test
+    @DisplayName("执行期拒绝门清单钉住: 新增门必须先决定候选是否跟进")
+    void executionSideGateInventoryIsPinned() throws Exception {
+        String src = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/execution/ToolDispatchService.java"));
+        int start = src.indexOf("    private IntentExecuteResponse executeWithToolInScope(");
+        assertThat(start).as("executeWithToolInScope 必须存在").isGreaterThan(0);
+        java.util.regex.Matcher next = java.util.regex.Pattern
+                .compile("\\n    (private|public|protected|static)[^\\n]*\\(").matcher(src);
+        assertThat(next.find(start + 10)).isTrue();
+        String body = src.substring(start, next.start());
+
+        Map<String, Integer> statuses = new java.util.TreeMap<>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\.status\\(\"([A-Z_]+)\"\\)").matcher(body);
+        while (m.find()) statuses.merge(m.group(1), 1, Integer::sum);
+        assertThat(statuses).as("执行期拒绝/返回状态清单变了 —— 新门要同步到 ClarificationCandidateService 或登记为已知未做")
+                .isEqualTo(new java.util.TreeMap<>(Map.of(
+                        "PERMISSION_DENIED", 2, "FORBIDDEN", 1, "TOOL_DISABLED", 1, "READ_MODE_WRITE_BLOCKED", 1,
+                        "DENIED", 1, "WRITE_CONFIRM_REQUIRED", 2, "PREVIEW_UNSUPPORTED", 1, "FAILED", 3)));
+        Map<String, Integer> gates = new LinkedHashMap<>();
+        for (String g : List.of("frontlineWriteDenied(", "legacyRoleDenied(", "toolRbacEnforcer.check(",
+                "isToolEnabledForFactory(", "SupplierComparisonReadIntent.")) {
+            gates.put(g, body.split(java.util.regex.Pattern.quote(g), -1).length - 1);
+        }
+        assertThat(gates).isEqualTo(Map.of("frontlineWriteDenied(", 1, "legacyRoleDenied(", 1,
+                "toolRbacEnforcer.check(", 1, "isToolEnabledForFactory(", 2, "SupplierComparisonReadIntent.", 6));
     }
 }
