@@ -293,8 +293,10 @@ export function createTodayLoader(deps: TodayDeps) {
       const d = (res.data ?? {}) as Row;
       const mine = asRows(d.mine);
       const hidden = Number(d.hiddenCount);
+      // 服务端分页：件数取库里的总数 (totalMine)，不是这一页的长度
+      const total = Number(d.totalMine);
       set('crewConfirm', {
-        state: 'ok', count: mine.length,
+        state: 'ok', count: Number.isFinite(total) ? total : mine.length,
         note: Number.isFinite(hidden) && hidden > 0 ? `另有 ${hidden} 件要别的岗位确认，按我的权限不显示` : '确认前会按我的权限重新预览改前 / 改后',
         items: mine.slice(0, 10).map((r): TItem => ({
           label: String(r.title ?? '待确认'),

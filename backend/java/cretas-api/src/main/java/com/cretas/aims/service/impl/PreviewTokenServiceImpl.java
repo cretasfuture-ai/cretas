@@ -218,6 +218,22 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
                 .map(IntentPreviewToken::getStatus);
     }
 
+    @Override
+    @Transactional
+    public boolean cancelPendingById(Long tokenId, String factoryId, Long ownerUserId, String reason) {
+        if (tokenId == null || factoryId == null || factoryId.isBlank() || ownerUserId == null) {
+            return false;
+        }
+        String msg = reason == null ? "被新的预览操作替代" : reason;
+        if (msg.length() > MAX_RESOLUTION_MESSAGE_LENGTH) msg = msg.substring(0, MAX_RESOLUTION_MESSAGE_LENGTH);
+        return tokenRepository.cancelPendingById(tokenId, factoryId, ownerUserId, msg, LocalDateTime.now()) == 1;
+    }
+
+    @Override
+    public long executingStaleMinutes() {
+        return executingStaleMinutes;
+    }
+
     private static boolean ownedBy(IntentPreviewToken row, String factoryId, Long userId) {
         return factoryId.equals(row.getFactoryId()) && factoryId.equals(row.getTenantId())
                 && userId.equals(row.getUserId()) && row.isBoundForExecution();

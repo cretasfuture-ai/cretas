@@ -105,6 +105,36 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
                 TokenStatus.OUTCOME_UNKNOWN, TokenStatus.CONFIRMED, now, "late owner")).isEqualTo(1);
     }
 
+    /**
+     * #1771 复审 中-A: 数字班组事项被别人重新预览时, 按行 id 作废上一个预览人的凭据。
+     * 只作废属主 + 工厂对得上、还是 PENDING 的; 作废后这张凭据在任何入口都认领不到; 已被认领的作废不了。
+     */
+    @Test
+    void cancelPendingByIdIsOwnerBoundAtomicAndMakesTheTokenUnclaimable() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        IntentPreviewToken first = persistBound("token-first-previewer", now.plusMinutes(5));
+        IntentPreviewToken claimed = persistBound("token-already-claimed", now.plusMinutes(5));
+        claim(claimed, "claim-elsewhere", now);
+
+        assertThat(repository.cancelPendingById(first.getId(), "OTHER", first.getUserId(), "x", now)).isZero();
+        assertThat(repository.cancelPendingById(first.getId(), first.getFactoryId(), first.getUserId() + 1, "x", now)).isZero();
+        assertThat(repository.cancelPendingById(first.getId(), first.getFactoryId(), first.getUserId(), "重新预览", now))
+                .isEqualTo(1);
+        assertThat(repository.cancelPendingById(first.getId(), first.getFactoryId(), first.getUserId(), "again", now)).isZero();
+        assertThat(repository.findByToken(first.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus).isEqualTo(TokenStatus.CANCELLED);
+        assertThat(repository.claimForExecution(
+                first.getToken(), first.getFactoryId(), first.getTenantId(), first.getUserId(),
+                first.getCommandDigest(), first.getParametersHash(), first.getToolName(),
+                first.getDescriptorVersion(), first.getExecutionMode(), "claim-after-cancel", now, now,
+                TokenStatus.PENDING, TokenStatus.EXECUTING)).as("作废后的凭据认领不到").isZero();
+
+        assertThat(repository.cancelPendingById(claimed.getId(), claimed.getFactoryId(), claimed.getUserId(), "x", now))
+                .as("已被认领的作废不了, 不会被改回已取消").isZero();
+        assertThat(repository.findByToken(claimed.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus).isEqualTo(TokenStatus.EXECUTING);
+    }
+
     private void claim(IntentPreviewToken token, String claimId, LocalDateTime claimedAt) {
         assertThat(repository.claimForExecution(
                 token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),

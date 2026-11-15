@@ -50,7 +50,7 @@ class DigitalCrewControllerContractTest {
         assertForbidden(() -> controller.updateMembers("F1", new DigitalCrewController.MembersRequest(Map.of("planner", false), "不用了"), other));
         assertForbidden(() -> controller.updateRoleMapping("F1", new DigitalCrewController.RoleMappingRequest(Map.of("operator", "keeper"), "换人"), other));
         assertForbidden(() -> controller.ask("F1", "planner", new DigitalCrewController.AskRequest("查计划", null), other));
-        assertForbidden(() -> controller.inbox("F1", other));
+        assertForbidden(() -> controller.inbox("F1", 0, 50, other));
         assertForbidden(() -> controller.preview("F1", 1L, other));
         assertForbidden(() -> controller.confirm("F1", 1L, "proof", body(), other));
         assertForbidden(() -> controller.reject("F1", 1L, new DigitalCrewController.RejectRequest("不办"), other));

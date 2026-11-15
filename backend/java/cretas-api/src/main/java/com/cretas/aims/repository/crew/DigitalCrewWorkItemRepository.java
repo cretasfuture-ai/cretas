@@ -17,13 +17,27 @@ public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrew
 
     Optional<DigitalCrewWorkItem> findByIdAndFactoryId(Long id, String factoryId);
 
-    List<DigitalCrewWorkItem> findByFactoryIdAndStatusInOrderByCreatedAtDesc(
-            String factoryId, Collection<Status> statuses, Pageable pageable);
-
     List<DigitalCrewWorkItem> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
     List<DigitalCrewWorkItem> findByFactoryIdAndMemberKeyOrderByCreatedAtDesc(String factoryId, String memberKey,
                                                                               Pageable pageable);
+
+    /** 某人挂着的某状态件数 (每人「已交办」上限用)。 */
+    long countByFactoryIdAndCreatedByUserIdAndStatus(String factoryId, Long createdByUserId, Status status);
+
+    /** 本厂某状态的事项里出现过的权限码 (等我确认: 先逐个判登录人能不能确认, 再按码在库里分页)。 */
+    @Query("SELECT DISTINCT w.requiredPermission FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status")
+    List<String> findDistinctRequiredPermissions(@Param("factoryId") String factoryId, @Param("status") Status status);
+
+    org.springframework.data.domain.Page<DigitalCrewWorkItem> findByFactoryIdAndStatusAndRequiredPermissionInOrderByCreatedAtDescIdDesc(
+            String factoryId, Status status, Collection<String> requiredPermissions, Pageable pageable);
+
+    long countByFactoryIdAndStatusAndRequiredPermissionIn(String factoryId, Status status, Collection<String> requiredPermissions);
+
+    @Query("SELECT DISTINCT w.module FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
+            + " AND w.requiredPermission IN :codes")
+    List<String> findDistinctModules(@Param("factoryId") String factoryId, @Param("status") Status status,
+                                     @Param("codes") Collection<String> codes);
 
     /** 确认在途 (CONFIRMING) 超过时限的事项: 对账回收用。 */
     List<DigitalCrewWorkItem> findByFactoryIdAndStatusAndConfirmedAtBefore(

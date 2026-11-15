@@ -93,9 +93,12 @@ public class DigitalCrewController {
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
             "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @GetMapping("/inbox")
-    @Operation(summary = "等我确认", description = "已交办、我有权确认的事; 另报按权限不显示的件数")
-    public ApiResponse<DigitalCrewService.InboxView> inbox(@PathVariable String factoryId, HttpServletRequest http) {
-        return ApiResponse.success(service.inbox(factoryId, actor(http, factoryId)));
+    @Operation(summary = "等我确认", description = "已交办、我有权确认的事 (分页, page 从 0 起, size ≤ 100); 另报按权限不显示的件数")
+    public ApiResponse<DigitalCrewService.InboxView> inbox(@PathVariable String factoryId,
+                                                           @RequestParam(defaultValue = "0") int page,
+                                                           @RequestParam(defaultValue = "" + DigitalCrewService.INBOX_PAGE_SIZE_DEFAULT) int size,
+                                                           HttpServletRequest http) {
+        return ApiResponse.success(service.inbox(factoryId, actor(http, factoryId), page, size));
     }
 
     @RequirePermission({"sales:read_write", "procurement:read_write", "warehouse:read_write", "inventory:read_write",

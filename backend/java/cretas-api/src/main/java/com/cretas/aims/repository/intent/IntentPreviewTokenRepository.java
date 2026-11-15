@@ -157,6 +157,21 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
                              @Param("now") LocalDateTime now);
 
     /**
+     * 按行 id 作废一张还没被认领的凭据 (属主 + 工厂 + 租户都要对上)。原子: 与 {@link #claimForExecution}
+     * 并发时只有一方生效 —— 已被认领 (EXECUTING / 终态) 的返回 0, 不会被改回已取消。
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("UPDATE IntentPreviewToken t SET t.status = 'CANCELLED', t.resolvedAt = :now, " +
+           "t.resolutionMessage = :reason " +
+           "WHERE t.id = :id AND t.factoryId = :factoryId AND t.tenantId = :factoryId AND t.userId = :userId " +
+           "AND t.status = 'PENDING'")
+    int cancelPendingById(@Param("id") Long id,
+                          @Param("factoryId") String factoryId,
+                          @Param("userId") Long userId,
+                          @Param("reason") String reason,
+                          @Param("now") LocalDateTime now);
+
+    /**
      * 删除指定天数之前的已处理令牌 (清理历史数据)
      */
     @Modifying

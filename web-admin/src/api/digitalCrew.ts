@@ -25,7 +25,8 @@ export interface CrewItem {
   resolvedAt: string | null; resolvedDate: string | null; resultStatus: string | null; resultNote: string | null;
   evidence: string | null; previewedByMe: boolean; canConfirm: boolean;
 }
-export interface CrewInbox { mine: CrewItem[]; hiddenCount: number; hiddenModules: string[] }
+/** 等我确认（服务端分页）：mine = 这一页；totalMine = 我能确认的总件数；hiddenCount = 按权限不显示的总件数。 */
+export interface CrewInbox { mine: CrewItem[]; hiddenCount: number; hiddenModules: string[]; totalMine: number; page: number; size: number }
 export interface CrewSettingLog { at: string; by: string; kind: 'MEMBERS' | 'ROLE_MAPPING'; reason: string; before: string; after: string }
 export interface CrewSettings {
   members: CrewMember[]; roleMapping: Record<string, string | null>; roleLabels: Record<string, string>;
@@ -73,7 +74,8 @@ export const crewApi = {
     unwrap<CrewSettings>(await request.put(`${base(f)}/settings/role-mapping`, { mapping, reason })),
   ask: async (f: string, member: string, text: string, sessionId?: string | null) =>
     unwrap<CrewAsk>(await request.post(`${base(f)}/members/${encodeURIComponent(member)}/ask`, { text, sessionId: sessionId || null }, { timeout: 90_000 })),
-  inbox: async (f: string, config?: RequestConfig) => unwrap<CrewInbox>(await request.get(`${base(f)}/inbox`, config)),
+  inbox: async (f: string, page = 0, config?: RequestConfig) =>
+    unwrap<CrewInbox>(await request.get(`${base(f)}/inbox`, { ...config, params: { ...(config?.params as object | undefined), page, size: 50 } })),
   preview: async (f: string, id: number) =>
     unwrap<CrewPreview>(await request.post(`${base(f)}/items/${id}/preview`, {}, { timeout: 90_000 })),
   reject: async (f: string, id: number, reason: string) =>

@@ -15,6 +15,7 @@ const auth = useAuthStore();
 const inbox = ref<CrewInbox | null>(null);
 const loading = ref(false);
 const error = ref('');
+const page = ref(0);
 interface Row { preview?: CrewPreviewResponse; busy: boolean; error: string; rejecting: boolean; reason: string; other: string; done?: CrewItem }
 const rows = reactive<Record<number, Row>>({});
 const REASONS = ['不需要了', '内容不对，要重新说', '这周排不开', '已经在别处办了', '其他'];
@@ -25,12 +26,14 @@ const errText = (e: unknown) => (e instanceof Error && e.message ? e.message : '
 async function load() {
   if (!auth.factoryId) return;
   loading.value = true; error.value = '';
-  try { inbox.value = await crewApi.inbox(auth.factoryId); }
+  try { inbox.value = await crewApi.inbox(auth.factoryId, page.value); }
   catch (e) { inbox.value = null; error.value = `读取失败：${errText(e)}。没有执行任何写操作。`; }
   finally { loading.value = false; }
 }
 onMounted(load);
-watch(() => auth.factoryId, load);
+watch(() => auth.factoryId, () => { page.value = 0; load(); });
+const pages = computed(() => (inbox.value && inbox.value.size > 0 ? Math.ceil(inbox.value.totalMine / inbox.value.size) : 0));
+function go(p: number) { page.value = p; load(); }
 
 async function preview(item: CrewItem) {
   const r = row(item.id); r.busy = true; r.error = ''; r.preview = undefined;
@@ -70,6 +73,11 @@ defineExpose({ load });
     </UAlert>
     <template v-else-if="inbox">
       <p v-if="hiddenText" class="muted" data-testid="crew-inbox-hidden">{{ hiddenText }}</p>
+      <div v-if="pages > 1" class="pager" data-testid="crew-inbox-pager">
+        <span class="muted">共 {{ inbox.totalMine }} 件等你确认，第 {{ inbox.page + 1 }} / {{ pages }} 页</span>
+        <UButton size="sm" variant="outline" color="neutral" :disabled="inbox.page <= 0 || loading" @click="go(inbox.page - 1)">上一页</UButton>
+        <UButton size="sm" variant="outline" color="neutral" :disabled="inbox.page + 1 >= pages || loading" data-testid="crew-inbox-next" @click="go(inbox.page + 1)">下一页</UButton>
+      </div>
       <p v-if="!inbox.mine.length" class="muted" data-testid="crew-inbox-empty">
         没有等你确认的事。在「数字班组」里对数字员工说要办的事，它整理好的预览会进这里。
         <RouterLink to="/crew">去数字班组</RouterLink>
@@ -139,5 +147,5 @@ table { border-collapse: collapse; width: 100%; font-size: var(--cs-type-body); 
 th { text-align: left; color: var(--cs-muted); font-weight: 400; padding: 2px 12px 2px 0; width: 30%; vertical-align: top; }
 td { padding: 2px 0; }
 s { color: var(--cs-muted); }
-.actions, .reject { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.actions, .reject, .pager { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 </style>

@@ -126,7 +126,9 @@ class DigitalCrewConfirmPermissionMvcContractTest {
     void inspectorWithoutTheItemsWritePermissionGets403AndTheConfirmChainIsNeverCalled() throws Exception {
         confirmAs(31L, "quality_inspector")
                 .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.success").value(false));
+                .andExpect(jsonPath("$.success").value(false))
+                // 钉死是服务层逐件判拒 (消息带事项的权限码), 不是拦截器粗筛拒的
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("production:read_write")));
         verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
         verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any());
     }

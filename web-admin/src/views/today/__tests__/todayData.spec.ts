@@ -35,7 +35,7 @@ function makeGet(overrides: Record<string, Handler> = {}) {
     ]) as never;
     if (url.includes('/digital-crew/inbox')) return ok({
       mine: [{ id: 1, title: '新建生产计划 · 明天加 500kg', memberName: '数字计划员', createdByName: '张三' }],
-      hiddenCount: 2, hiddenModules: ['quality'],
+      hiddenCount: 2, hiddenModules: ['quality'], totalMine: 57, page: 0, size: 50,
     }) as never;
     return Promise.reject(new Error(`unexpected ${url}`));
   };
@@ -159,9 +159,12 @@ describe('G-2：页签角标只在读到数时画', () => {
     expect(tabBadge('approve', L.T.s)).toBe(7);
     expect(tabBadge('mine', L.T.s), '读取失败').toBeNull();
     expect(L.T.s.mine.note).toContain('读取失败：boom');
-    // P8：等我确认读数字班组 inbox，角标 = 我有权确认的件数（别的岗位的只在 note 里报件数，不计入）
-    expect(tabBadge('confirm', L.T.s)).toBe(1);
+    // P8：等我确认读数字班组 inbox，角标 = 我有权确认的件数（服务端库里的总数 totalMine，不是这一页 mine 的长度 1；
+    // 别的岗位的只在 note 里报件数，不计入）
+    expect(tabBadge('confirm', L.T.s)).toBe(57);
     expect(L.T.s.crewConfirm.note).toContain('另有 2 件');
+    // 服务端分页：件数是库里的总数，不是这一页的长度
+    expect(L.T.s.crewConfirm.count).toBe(57);
     expect(TODO_TABS.find((t) => t.id === 'confirm')?.reason).toBeUndefined();
     // 业务待办：销售订单角标不适用不参与；其余 ok ⇒ 2 + 2 + 2 + 4
     expect(L.T.s.salesOrders.state).toBe('na');

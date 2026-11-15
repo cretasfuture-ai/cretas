@@ -76,10 +76,19 @@ public class DigitalCrewService {
             TokenStatus.FAILED, TokenStatus.CANCELLED, TokenStatus.EXPIRED);
     /**
      * 「办理中」超过这个时长还没有结果 = 确认请求已经断了 (进程重启 / 超时 / 结算事务失败), 对账回收。
-     * 比预览凭据的在途对账窗口 (10 分钟, PreviewTokenServiceImpl.executingStaleMinutes) 长, 先让凭据自己定态。
+     * 必须比预览凭据的在途对账窗口 ({@link PreviewTokenService#executingStaleMinutes()}, 可配置) 长, 先让凭据自己定态:
+     * 取「凭据窗口 + 5 分钟」, 且不少于 15 分钟 ({@link #confirmingStale()})。
      */
-    public static final java.time.Duration CONFIRMING_STALE = java.time.Duration.ofMinutes(15);
+    public static final long CONFIRMING_STALE_MARGIN_MINUTES = 5;
+    public static final long CONFIRMING_STALE_FLOOR_MINUTES = 15;
     static final int RECORDS_LIMIT = 300;
+    /**
+     * 每人同时挂着的「已交办」上限: 交办门槛是任一读权限 (#1771 复审 中-B), 不设上限时一个人就能把真正的待确认挤出去。
+     * 超了先处理 (确认 / 不办) 再交办新的。
+     */
+    public static final int OPEN_DELEGATIONS_PER_USER = 20;
+    public static final int INBOX_PAGE_SIZE_DEFAULT = 50;
+    public static final int INBOX_PAGE_SIZE_MAX = 100;
 
     /** 会话里取出的操作人: 类型 / id / 角色都来自 JWT, ⛔ 不来自请求体。 */
     public record Actor(AuthenticatedActorType type, Long id, String role) {
@@ -146,7 +155,9 @@ public class DigitalCrewService {
                            boolean previewedByMe, boolean canConfirm) {
     }
 
-    public record InboxView(List<ItemView> mine, int hiddenCount, List<String> hiddenModules) {
+    /** 等我确认: mine 是这一页; totalMine = 我能确认的总件数; hiddenCount = 按权限不显示的总件数 (都在库里计数, 不截断)。 */
+    public record InboxView(List<ItemView> mine, int hiddenCount, List<String> hiddenModules, long totalMine,
+                            int page, int size) {
     }
 
     public record SettingLogView(LocalDateTime at, String by, String kind, String reason, String before, String after) {
@@ -354,6 +365,12 @@ public class DigitalCrewService {
             Optional<DigitalCrewWorkItem> dup = items.findFirstByFactoryIdAndMemberKeyAndCreatedByUserIdAndUserInputAndStatus(
                     factoryId, member.key(), actor.id(), input, Status.DELEGATED);
             if (dup.isPresent()) return dup.get();
+            long open = items.countByFactoryIdAndCreatedByUserIdAndStatus(factoryId, actor.id(), Status.DELEGATED);
+            if (open >= OPEN_DELEGATIONS_PER_USER) {
+                throw new BusinessException(409, "你已经有 " + open + " 件交办还在等确认（每人最多 " + OPEN_DELEGATIONS_PER_USER
+                        + " 件），这件没有交办，也没有执行任何写操作")
+                        .withHint("到「数字班组 › 工作记录」看还在等确认的事，请有权限的人确认，或把不需要的点「不办」，再交办新的");
+            }
             DigitalCrewWorkItem w = new DigitalCrewWorkItem();
             w.setFactoryId(factoryId);
             w.setMemberKey(member.key());
@@ -376,22 +393,31 @@ public class DigitalCrewService {
     // ==================== 等我确认 ====================
 
     public InboxView inbox(String factoryId, Actor actor) {
+        return inbox(factoryId, actor, 0, INBOX_PAGE_SIZE_DEFAULT);
+    }
+
+    /**
+     * 等我确认 (分页)。先列出本厂已交办事项里出现过的权限码, 逐个按登录人判能不能确认, 再在库里按「我能确认的码」
+     * 分页取、计数 —— 件数再多也不会把我的待办挤出去 (#1771 复审 中-B), 隐藏件数也是库里的总数。
+     */
+    public InboxView inbox(String factoryId, Actor actor, int page, int size) {
         User user = requireUser(actor);
-        reconcile(factoryId);
-        List<DigitalCrewWorkItem> open = items.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
-                factoryId, List.of(Status.DELEGATED), PageRequest.of(0, 200));
-        List<ItemView> mine = new ArrayList<>();
-        Set<String> hiddenModules = new TreeSet<>();
-        int hidden = 0;
-        for (DigitalCrewWorkItem w : open) {
-            if (permissions.hasPermission(user, w.getRequiredPermission())) {
-                mine.add(view(w, user));
-            } else {
-                hidden++;
-                hiddenModules.add(w.getModule());
-            }
-        }
-        return new InboxView(mine, hidden, List.copyOf(hiddenModules));
+        reconcile(factoryId, actor);
+        int p = Math.max(0, page);
+        int sz = size <= 0 ? INBOX_PAGE_SIZE_DEFAULT : Math.min(size, INBOX_PAGE_SIZE_MAX);
+        List<String> codes = items.findDistinctRequiredPermissions(factoryId, Status.DELEGATED);
+        List<String> allowed = codes.stream().filter(c -> permissions.hasPermission(user, c)).toList();
+        List<String> denied = codes.stream().filter(c -> !allowed.contains(c)).toList();
+        org.springframework.data.domain.Page<DigitalCrewWorkItem> mine = allowed.isEmpty()
+                ? org.springframework.data.domain.Page.empty(PageRequest.of(p, sz))
+                : items.findByFactoryIdAndStatusAndRequiredPermissionInOrderByCreatedAtDescIdDesc(
+                        factoryId, Status.DELEGATED, allowed, PageRequest.of(p, sz));
+        long hidden = denied.isEmpty() ? 0
+                : items.countByFactoryIdAndStatusAndRequiredPermissionIn(factoryId, Status.DELEGATED, denied);
+        List<String> hiddenModules = denied.isEmpty() ? List.of()
+                : items.findDistinctModules(factoryId, Status.DELEGATED, denied).stream().sorted().toList();
+        return new InboxView(mine.getContent().stream().map(w -> view(w, user)).toList(),
+                (int) Math.min(Integer.MAX_VALUE, hidden), hiddenModules, mine.getTotalElements(), p, sz);
     }
 
     /** 确认人按自己身份预览 (#1632 路径)。凭据只回给确认人, 本表只记摘要和凭据行 id (不是凭据本身)。 */
@@ -405,6 +431,7 @@ public class DigitalCrewService {
             throw new BusinessException(409, "这件事已经" + w.getStatus().label() + "，不能再预览")
                     .withHint("到「数字班组 › 工作记录」看这件事的结果，不用再预览");
         }
+        retirePreviousToken(factoryId, w);
         IntentExecuteRequest req = IntentExecuteRequest.builder()
                 .userInput(w.getUserInput()).intentCode(w.getIntentCode()).build();
         IntentExecuteResponse resp = intents.preview(factoryId, req, actor.id(), actor.role());
@@ -412,6 +439,11 @@ public class DigitalCrewService {
         IntentExecuteResponse.ConfirmableAction action = resp.getConfirmableAction();
         if (action != null && action.getCommandDigest() != null && action.getConfirmToken() != null) {
             Long tokenId = previewTokens.readBoundTokenId(action.getConfirmToken(), factoryId, actor.id()).orElse(null);
+            if (tokenId == null) {
+                // 刚铸的凭据读不回来 = 没法把它绑到这件事上, 后面的绑定校验和对账都会落空: 不放行 (fail closed)
+                previewTokens.cancelToken(action.getConfirmToken(), factoryId, actor.id(), "数字班组没登记上这张凭据");
+                throw new BusinessException(502, "预览没有登记上，没有执行任何写操作，请重新预览");
+            }
             DigitalCrewWorkItem stamped = tx.execute(s -> {
                 DigitalCrewWorkItem cur = requireItem(factoryId, id);
                 if (cur.getStatus() != Status.DELEGATED) {
@@ -547,7 +579,7 @@ public class DigitalCrewService {
      */
     public LedgerView ledger(String factoryId, Actor actor, String memberKey) {
         User user = actor.factoryUser() ? requireUser(actor) : null;
-        reconcile(factoryId);
+        reconcile(factoryId, actor);
         Map<String, String> levels = levels(actor);
         LocalDate today = clock.get().toLocalDate();
         String scope = memberKey == null || memberKey.isBlank() ? null : memberKey;
@@ -597,14 +629,22 @@ public class DigitalCrewService {
      * </ol>
      * 单件失败 (并发被别人改了 / 回读异常) 跳过, 下次读再对, 不挡读。
      */
-    void reconcile(String factoryId) {
-        LocalDateTime cutoff = clock.get().minus(CONFIRMING_STALE);
+    void reconcile(String factoryId, Actor trigger) {
+        LocalDateTime cutoff = clock.get().minus(confirmingStale());
         for (DigitalCrewWorkItem w : items.findByFactoryIdAndStatusAndConfirmedAtBefore(factoryId, Status.CONFIRMING, cutoff)) {
+            log.info("[DigitalCrew] reconcile stale confirming: item={}, triggeredBy={}:{}", w.getId(),
+                    trigger == null ? null : trigger.type(), trigger == null ? null : trigger.id());
             safely(w.getId(), () -> reconcileStaleConfirming(factoryId, w.getId(), cutoff));
         }
         for (DigitalCrewWorkItem w : items.findByFactoryIdAndStatusAndPreviewTokenIdIsNotNull(factoryId, Status.DELEGATED)) {
             safely(w.getId(), () -> reconcileDelegated(factoryId, w.getId()));
         }
+    }
+
+    /** 「办理中」超时窗口: 凭据在途窗口 + 5 分钟, 不少于 15 分钟。 */
+    java.time.Duration confirmingStale() {
+        long tokenWindow = previewTokens.executingStaleMinutes();
+        return java.time.Duration.ofMinutes(Math.max(CONFIRMING_STALE_FLOOR_MINUTES, tokenWindow + CONFIRMING_STALE_MARGIN_MINUTES));
     }
 
     private void safely(Long id, Runnable r) {
@@ -615,9 +655,30 @@ public class DigitalCrewService {
         }
     }
 
+    /**
+     * 再次预览前: 作废这件事上一次登记的凭据 (不论是谁预览的)。凭据只作废同一个人的旧凭据
+     * (PreviewTokenServiceImpl.createBoundToken), A 预览后 B 再预览, A 那张还能拿去通用确认入口写入 (#1771 复审 中-A)。
+     * 作废是原子的: 已被认领 / 已终态的作废不了, 这时回读并按结果回写, 拒绝这次预览。
+     */
+    private void retirePreviousToken(String factoryId, DigitalCrewWorkItem w) {
+        if (w.getPreviewTokenId() == null || w.getPreviewedByUserId() == null) return;
+        boolean cancelled = previewTokens.cancelPendingById(w.getPreviewTokenId(), factoryId, w.getPreviewedByUserId(),
+                "数字班组事项 " + w.getId() + " 已重新预览，旧凭据作废");
+        if (!cancelled) {
+            // 没作废掉: 要么早已终态没写入 (下面对账清掉), 要么刚被拿去用了 (对账回写 + 409)
+            requireNotUsedElsewhere(factoryId, w.getId());
+        }
+    }
+
     /** 预览 / 确认 / 不办之前: 这件事的凭据要是已经在别处用掉了, 先回写结果, 再拒绝这次操作。 */
     private void requireNotUsedElsewhere(String factoryId, Long id) {
-        Status after = reconcileDelegated(factoryId, id);
+        Status after;
+        try {
+            after = reconcileDelegated(factoryId, id);
+        } catch (OptimisticLockingFailureException raced) {
+            throw new BusinessException(409, "这件事刚被别人处理了，这次没有执行任何操作")
+                    .withHint("刷新「待办 › 等我确认」，到工作记录里看是谁处理的");
+        }
         if (after != null) {
             throw new BusinessException(409, "这件事的确认凭据已经在数字班组之外用掉了，已按回读结果记为「" + after.label()
                     + "」，这次没有执行任何操作")
@@ -679,7 +740,7 @@ public class DigitalCrewService {
                         "确认请求在途中断，对账回读凭据「" + ts.name() + "」，确定没有写入，回到已交办，可以重新预览后再确认。", null);
             } else {
                 resolve(w, Status.OUTCOME_UNKNOWN, "RECONCILED_" + (ts == null ? "UNREADABLE" : ts.name()),
-                        "确认请求超过 " + CONFIRMING_STALE.toMinutes() + " 分钟没有结果，对账回读凭据「"
+                        "确认请求超过 " + confirmingStale().toMinutes() + " 分钟没有结果，对账回读凭据「"
                                 + (ts == null ? "读不到" : ts.name()) + "」，写入可能已经提交，按结果不明记录、不扣额度。"
                                 + "请到业务页面核对，勿重复办理。", null);
             }
@@ -693,6 +754,12 @@ public class DigitalCrewService {
                             String evidence) {
         DigitalCrewWorkItem saved = tx.execute(s -> {
             DigitalCrewWorkItem w = requireItem(factoryId, id);
+            if (w.getStatus() != Status.CONFIRMING || !Objects.equals(w.getConfirmedByUserId(), user.getId())) {
+                // 这次确认回来晚了: 对账已经定了结果 (或已回到已交办、被别人重新认领), 不覆盖
+                log.warn("[DigitalCrew] late confirm result ignored: item={}, now={}, wanted={}, resultStatus={}",
+                        id, w.getStatus(), to, resultStatus);
+                return w;
+            }
             resolve(w, to, resultStatus, note, evidence);
             return items.save(w);
         });

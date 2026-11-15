@@ -156,6 +156,9 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         sales.setIntentName("查销售订单");
         sales.setRequiredPermission("sales:read");
         when(intentConfigs.getIntentByCode(F, "ORDER_LIST")).thenReturn(Optional.of(sales));
+        // 铸出来的凭据都能读回行 id (读不回来的情形单独测: fail closed)
+        when(previewTokens.readBoundTokenId(anyString(), eq(F), anyLong())).thenReturn(Optional.of(501L));
+        when(previewTokens.executingStaleMinutes()).thenReturn(10L);
     }
 
     private void writeIntentRecognized() {
@@ -537,6 +540,184 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         assertThat(service.ledger(F, BOSS, "clerk").quotaToday()).isEqualTo(2);
         // 明细仍按查看人的读权限过滤 (原话里可能有别的模块的业务内容)
         assertThat(service.ledger(F, OPERATOR, "clerk").records()).isEmpty();
+    }
+
+    // ==================== #1771 复审修复 ====================
+
+    /** 每个人预览拿到自己的凭据: tok-<userId>, 行 id = 500 + (userId - 80)。 */
+    private void previewMintsPerUser() {
+        when(intents.preview(eq(F), any(), anyLong(), anyString())).thenAnswer(inv -> {
+            Long uid = inv.getArgument(2);
+            IntentExecuteResponse.ConfirmableAction action = new IntentExecuteResponse.ConfirmableAction();
+            action.setConfirmToken("tok-" + uid);
+            action.setCommandDigest(DIGEST);
+            action.setExpiresAt(Instant.now().plusSeconds(300));
+            return IntentExecuteResponse.builder().status("PREVIEW").confirmableAction(action).build();
+        });
+        for (Actor a : List.of(PLANNER, BOSS)) {
+            when(previewTokens.readBoundTokenId("tok-" + a.id(), F, a.id())).thenReturn(Optional.of(500L + (a.id() - 80)));
+        }
+    }
+
+    /**
+     * 中-A: A (计划员) 预览后 B (厂长) 再预览 ⇒ 先按行 id 作废 A 那张凭据 (属主 = A), 再给 B 铸新的;
+     * 事项改记 B 的凭据。A 那张被作废后在任何入口都认领不到 (真查询见 IntentPreviewTokenCancelByIdRepositoryQueryValidationTest)。
+     */
+    @Test
+    void secondPreviewerRetiresTheFirstPreviewersTokenBeforeMintingANewOne() {
+        Long id = delegateOne();
+        previewMintsPerUser();
+        service.preview(F, PLANNER, id);
+        assertThat(reread(id).getPreviewTokenId()).isEqualTo(501L);
+        when(previewTokens.cancelPendingById(eq(501L), eq(F), eq(PLANNER.id()), anyString())).thenReturn(true);
+
+        service.preview(F, BOSS, id);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(previewTokens, intents);
+        order.verify(intents).preview(eq(F), any(), eq(PLANNER.id()), anyString());
+        order.verify(previewTokens).cancelPendingById(eq(501L), eq(F), eq(PLANNER.id()), anyString());
+        order.verify(intents).preview(eq(F), any(), eq(BOSS.id()), anyString());
+        DigitalCrewWorkItem w = reread(id);
+        assertThat(w.getPreviewTokenId()).isEqualTo(502L);
+        assertThat(w.getPreviewedByUserId()).isEqualTo(BOSS.id());
+        assertThat(w.getStatus()).isEqualTo(Status.DELEGATED);
+    }
+
+    /**
+     * 中-A: A 预览后, 抢在 B 之前拿自己的凭据去通用确认入口执行了 (作废不掉, 回读已确认) ⇒ B 的预览被拒 409,
+     * 事项回写已办成扣 1, 不给 B 铸新凭据 —— 不会出现第二次写入。
+     */
+    @Test
+    void firstPreviewersTokenUsedElsewhereBlocksTheSecondPreviewAndIsWrittenBack() {
+        Long id = delegateOne();
+        previewMintsPerUser();
+        service.preview(F, PLANNER, id);
+        when(previewTokens.cancelPendingById(eq(501L), eq(F), eq(PLANNER.id()), anyString())).thenReturn(false);
+        when(previewTokens.readBoundStatusById(501L, F, PLANNER.id())).thenReturn(Optional.of(TokenStatus.CONFIRMED));
+
+        assertThatThrownBy(() -> service.preview(F, BOSS, id)).isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+
+        verify(intents, never()).preview(eq(F), any(), eq(BOSS.id()), anyString());
+        DigitalCrewWorkItem w = reread(id);
+        assertThat(w.getStatus()).isEqualTo(Status.DONE);
+        assertThat(w.getQuotaCost()).isEqualTo(1);
+        assertThat(w.getConfirmedByUserId()).isEqualTo(PLANNER.id());
+        assertThatThrownBy(() -> service.confirm(F, BOSS, id, proof())).isInstanceOf(BusinessException.class);
+        verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
+    }
+
+    /** 低-C: 刚铸的凭据读不回行 id ⇒ 作废它、502, 事项不记这次预览 (不 fail-open)。 */
+    @Test
+    void previewWhoseTokenCannotBeRegisteredFailsClosed() {
+        Long id = delegateOne();
+        previewMints(DIGEST);
+        when(previewTokens.readBoundTokenId("proof-token-1", F, BOSS.id())).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.preview(F, BOSS, id)).isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(502));
+        verify(previewTokens).cancelToken(eq("proof-token-1"), eq(F), eq(BOSS.id()), anyString());
+        assertThat(reread(id).getCommandDigest()).isNull();
+        assertThat(reread(id).getPreviewTokenId()).isNull();
+    }
+
+    private DigitalCrewWorkItem openItem(Actor creator, String input, String permission, String module) {
+        DigitalCrewWorkItem w = new DigitalCrewWorkItem();
+        w.setFactoryId(F);
+        w.setMemberKey("production".equals(module) ? "planner" : "clerk");
+        w.setIntentCode("X_CREATE");
+        w.setTitle("t · " + input);
+        w.setUserInput(input);
+        w.setRequiredPermission(permission);
+        w.setModule(module);
+        w.setStatus(Status.DELEGATED);
+        w.setCreatedByUserId(creator.id());
+        w.setCreatedByName("用户" + creator.id());
+        return w;
+    }
+
+    /** 中-B: 每人挂着的「已交办」到上限 ⇒ 不再交办 (409 + 提示); 同一句话的重复交办仍返回先建的那件。 */
+    @Test
+    void openDelegationsArePerUserCapped() {
+        List<DigitalCrewWorkItem> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < DigitalCrewService.OPEN_DELEGATIONS_PER_USER; i++) {
+            rows.add(openItem(PLANNER, "第 " + i + " 件", "production:read_write", "production"));
+        }
+        rows.get(0).setUserInput("明天加一个 500kg 的卤牛肉计划");
+        items.saveAll(rows);
+        writeIntentRecognized();
+
+        DigitalCrewService.AskView again = service.ask(F, PLANNER, "planner", "明天加一个 500kg 的卤牛肉计划", null);
+        assertThat(again.kind()).isEqualTo("DELEGATED");
+        assertThat(again.item().id()).isEqualTo(rows.get(0).getId());
+
+        assertThatThrownBy(() -> service.ask(F, PLANNER, "planner", "后天再加一个 800kg", null))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    BusinessException be = (BusinessException) e;
+                    assertThat(be.getCode()).isEqualTo(409);
+                    assertThat(be.getActionHint()).contains("不办");
+                });
+        assertThat(items.count()).isEqualTo(DigitalCrewService.OPEN_DELEGATIONS_PER_USER);
+        // 别人不受我的上限影响
+        assertThat(service.ask(F, BOSS, "planner", "后天再加一个 800kg", null).kind()).isEqualTo("DELEGATED");
+    }
+
+    /** 中-B: 等我确认在库里按「我能确认的码」分页和计数 —— 超过 200 件也不丢, 隐藏件数是总数。 */
+    @Test
+    void inboxIsPagedInTheDatabaseAndCountsEverything() {
+        List<DigitalCrewWorkItem> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < 230; i++) {
+            rows.add(openItem(i % 2 == 0 ? OPERATOR : BOSS, "生产 " + i, "production:read_write", "production"));
+        }
+        for (int i = 0; i < 3; i++) {
+            rows.add(openItem(OPERATOR, "销售 " + i, "sales:read_write", "sales"));
+        }
+        items.saveAll(rows);
+
+        DigitalCrewService.InboxView first = service.inbox(F, PLANNER, 0, 100);
+        assertThat(first.mine()).hasSize(100);
+        assertThat(first.totalMine()).isEqualTo(230);
+        assertThat(first.hiddenCount()).isEqualTo(3);
+        assertThat(first.hiddenModules()).containsExactly("sales");
+        DigitalCrewService.InboxView last = service.inbox(F, PLANNER, 2, 100);
+        assertThat(last.mine()).hasSize(30);
+        assertThat(last.mine()).allSatisfy(v -> assertThat(v.requiredPermission()).isEqualTo("production:read_write"));
+        java.util.Set<Long> seen = new java.util.HashSet<>();
+        for (int p = 0; p < 3; p++) {
+            service.inbox(F, PLANNER, p, 100).mine().forEach(v -> seen.add(v.id()));
+        }
+        assertThat(seen).as("三页拼起来恰好是全部 230 件, 不重不漏").hasSize(230);
+        assertThat(service.inbox(F, PLANNER, 0, 1000).size()).as("页大小有上限").isEqualTo(DigitalCrewService.INBOX_PAGE_SIZE_MAX);
+        // 厂长什么都能确认: 没有隐藏
+        assertThat(service.inbox(F, BOSS).hiddenCount()).isZero();
+        assertThat(service.inbox(F, BOSS).totalMine()).isEqualTo(233);
+    }
+
+    /**
+     * 低-A: 确认请求在途时, 对账已经把这件事定了结果 (这里模拟: 确认接口还没返回, 事项已被改成结果不明);
+     * 迟到的确认结果不覆盖对账结论。
+     */
+    @Test
+    void lateConfirmResultDoesNotOverwriteAReconciledOutcome() {
+        Long id = delegateOne();
+        previewMints(DIGEST);
+        service.preview(F, BOSS, id);
+        when(intents.confirm(eq(F), any(), eq(BOSS.id()), anyString())).thenAnswer(inv -> {
+            DigitalCrewWorkItem w = reread(id);
+            w.setStatus(Status.OUTCOME_UNKNOWN);
+            w.setResultStatus("RECONCILED_UNREADABLE");
+            w.setResolvedAt(LocalDateTime.now());
+            w.setResolvedDate(LocalDate.now(ZoneId.of("Asia/Shanghai")));
+            items.saveAndFlush(w);
+            return IntentExecuteResponse.builder().status("SUCCESS").message("已创建").build();
+        });
+        tokenReadsBack(BOSS, TokenStatus.CONFIRMED);
+        DigitalCrewService.ItemView v = service.confirm(F, BOSS, id, proof());
+        assertThat(v.status()).isEqualTo("OUTCOME_UNKNOWN");
+        DigitalCrewWorkItem w = reread(id);
+        assertThat(w.getStatus()).isEqualTo(Status.OUTCOME_UNKNOWN);
+        assertThat(w.getResultStatus()).isEqualTo("RECONCILED_UNREADABLE");
+        assertThat(w.getQuotaCost()).isZero();
     }
 
     @Test

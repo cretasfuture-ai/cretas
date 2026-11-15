@@ -49,10 +49,28 @@ function open() {
 beforeEach(() => {
   setActivePinia(createPinia());
   Object.values(api).forEach((f) => f.mockReset());
-  api.inbox.mockResolvedValue({ mine: [item], hiddenCount: 1, hiddenModules: ['quality'] });
+  api.inbox.mockResolvedValue({ mine: [item], hiddenCount: 1, hiddenModules: ['quality'], totalMine: 1, page: 0, size: 50 });
 });
 
 describe('等我确认（P8）', () => {
+  it('服务端分页：总数超过一页才出翻页；点下一页按页码重新读取', async () => {
+    api.inbox.mockResolvedValue({ mine: [item], hiddenCount: 0, hiddenModules: [], totalMine: 120, page: 0, size: 50 });
+    const w = open();
+    await flushPromises();
+    expect(api.inbox).toHaveBeenLastCalledWith('F1', 0);
+    expect(w.find('[data-testid="crew-inbox-pager"]').text()).toContain('共 120 件');
+    expect(w.find('[data-testid="crew-inbox-pager"]').text()).toContain('第 1 / 3 页');
+    await w.find('[data-testid="crew-inbox-next"]').trigger('click');
+    await flushPromises();
+    expect(api.inbox).toHaveBeenLastCalledWith('F1', 1);
+  });
+
+  it('只有一页就不出翻页', async () => {
+    const w = open();
+    await flushPromises();
+    expect(w.find('[data-testid="crew-inbox-pager"]').exists()).toBe(false);
+  });
+
   it('预览之后不点确认，就不发确认请求；点一次恰好一次；改前改后每一行都显示（新英文键也不藏）', async () => {
     api.preview.mockResolvedValue({ item, preview: { status: 'PREVIEW', confirmableAction: action } });
     api.confirm.mockResolvedValue({ ...item, status: 'DONE', statusLabel: '已办成', quotaCost: 1, evidence: '回读预览凭据：已确认执行' });
