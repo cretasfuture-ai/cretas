@@ -331,6 +331,26 @@ class ReportCostQueryToolContractTest {
         assertTrue(ReportCostQueryTool.hasOwnTimeWord("本周成本和上月比"));
         assertFalse(ReportCostQueryTool.hasOwnTimeWord("卤牛肉成本和上月比"));
         assertTrue(ReportCostQueryTool.hasOwnTimeWord("10月卤牛肉成本比上月"));
+        // R3 New-3: 产品名里的月/年/季/日/数字不是时间词
+        for (String p : new String[]{"月饼", "年糕", "四季豆", "日式咖喱", "500g卤牛肉"}) {
+            assertFalse(ReportCostQueryTool.hasOwnTimeWord(p + "成本和上月比"), p);
+        }
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("近7天成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("第3季度成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("今年成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("3月份成本和上月比"));
+    }
+
+    @Test
+    void monthOverMonth_productNamesWithTimeLikeChars_keepThisMonthAsThePeriod_andFallBackToUserInput() throws Exception {
+        for (String p : new String[]{"月饼", "年糕", "四季豆", "日式咖喱", "500g卤牛肉"}) {
+            productCatalog(p);
+            // 无 originalUserInput: 回退读 userInput (R3 New-3)
+            JsonNode r = run("{\"startDate\":\"2026-10-01\",\"endDate\":\"2026-10-31\",\"timeRangeFromSentence\":\"2026-10-01~2026-10-31\","
+                    + "\"userInput\":\"" + p + "成本和上月比\"}").get("data");
+            assertEquals("2026-11-01", r.get("data").get("period").get("startDate").asText(), p);
+            assertEquals("2026-11-14", r.get("data").get("period").get("endDate").asText(), p);
+        }
     }
 
     // N4: 有一批缺产量时, 分项金额含它、产量不含它 -> 不能按单位成本比, 退回总额口径并明说

@@ -150,7 +150,9 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             if (q != null && MONTH_OVER_MONTH.matcher(q).find()) compareTo = "last_month";
         }
         boolean monthOverMonth = "last_month".equalsIgnoreCase(compareTo);
-        if (monthOverMonth && !hasOwnTimeWord(blankToNull(getString(params, "originalUserInput")))
+        String sentence = blankToNull(getString(params, "originalUserInput"));
+        if (sentence == null) sentence = blankToNull(getString(params, "userInput"));
+        if (monthOverMonth && !hasOwnTimeWord(sentence)
                 && params.get(com.cretas.aims.ai.tool.TimeRangeFilter.SAID) != null) {
             // 「X成本和上月比」: 句子里唯一的时间词是「上月」, 它是对比基准, 不是本期; 预处理却把它当成了本期区间 -> 本期回到默认(本月)
             start = today.withDayOfMonth(1);
@@ -207,7 +209,9 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     // ==================== 聚合 ====================
 
     private static final java.util.regex.Pattern OWN_TIME_WORD = java.util.regex.Pattern.compile(
-            "[月周天年季日]|今|最近|[0-9]");
+            "(?:本|这个?|上个?|下个?|当)(?:月|周|星期|礼拜|季度?|年)|(?:今|去|前|明)年|今天|昨天|前天|今日|昨日|最近|近期"
+                    + "|近\\d+(?:天|周|个月|月)|(?:\\d{1,2}|[一二三四五六七八九十]{1,3})月(?:份)?|第(?:[一二三四]|[1-4])季度"
+                    + "|\\d{4}[-/年.]\\d{1,2}|\\d{1,2}[日号]");
 
     /** 原话里除了「和上月比」本身, 还有没有别的时间词 (有 → 本期以句子里的时间为准)。 */
     static boolean hasOwnTimeWord(String original) {

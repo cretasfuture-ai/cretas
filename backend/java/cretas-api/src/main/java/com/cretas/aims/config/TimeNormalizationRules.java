@@ -146,8 +146,9 @@ public class TimeNormalizationRules {
                 (now, m) -> {
                     int y1 = now.getYear() + yearOffsetOf(m.group(1));
                     int m1 = parseMonthNumber(m.group(2));
-                    int y2 = m.group(3) != null ? now.getYear() + yearOffsetOf(m.group(3)) : y1;
                     int m2 = parseMonthNumber(m.group(4));
+                    // 第二个月没写年份: 月份比起始月小就是跨年 (「去年12月到2月」= 去年12月~今年2月)
+                    int y2 = m.group(3) != null ? now.getYear() + yearOffsetOf(m.group(3)) : (m2 < m1 ? y1 + 1 : y1);
                     if (m1 < 1 || m1 > 12 || m2 < 1 || m2 > 12) {
                         throw new IllegalArgumentException("月份超出范围: " + m.group(2) + "/" + m.group(4));
                     }
@@ -160,7 +161,7 @@ public class TimeNormalizationRules {
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile(YEAR_PREFIX + MONTH_TEXT + "月(?:份)?\\s*(?:以来|起|开始|至今)"),
+                Pattern.compile(YEAR_PREFIX + MONTH_TEXT + "月(?:份)?\\s*(?:以来|以后|之后|起|开始|至今)"),
                 (now, m) -> {
                     int month = parseMonthNumber(m.group(2));
                     if (month < 1 || month > 12) {
@@ -173,7 +174,7 @@ public class TimeNormalizationRules {
         // 单月: 「今年10月1日」这种具体日期不是单月, 照旧落到整年规则 (偏宽但不丢数据)。
         // 「份」用占有量词, 否则回溯成空后前瞻看到「份」就放行。上一个词是「到/至」的年月已被上面的区间规则吃掉。
         TIME_PATTERNS.put(
-                Pattern.compile("(?<![到至\\-~—])" + YEAR_PREFIX + MONTH_TEXT + "月(?:份)?+(?!\\s*(?:到|至|-|~|—|以来|起|开始|\\d{1,2}[日号]|[一二三四五六七八九十]{1,3}[日号]))"),
+                Pattern.compile("(?<![到至\\-~—])" + YEAR_PREFIX + MONTH_TEXT + "月(?:份)?+(?!\\s*(?:到|至|-|~|—|以来|以后|之后|后|以前|之前|前|和|、|起|开始|\\d{1,2}[日号]|[一二三四五六七八九十]{1,3}[日号]))"),
                 (now, m) -> {
                     int yearOffset = yearOffsetOf(m.group(1));
                     int month = parseMonthNumber(m.group(2));
@@ -388,8 +389,6 @@ public class TimeNormalizationRules {
         return TimeRange.of(startOfMonth, endOfMonth);
     }
 
-    /** 「3」「十二」「一」→ 月份数字; 认不出返回 -1。 */
-
     /** 年份前缀 → 相对今年的偏移; null (没写年份) 视为今年。 */
     static int yearOffsetOf(String prefix) {
         if (prefix == null) return 0;
@@ -401,6 +400,7 @@ public class TimeNormalizationRules {
         };
     }
 
+    /** 「3」「十二」「一」→ 月份数字; 认不出返回 -1。 */
     static int parseMonthNumber(String text) {
         if (text.chars().allMatch(Character::isDigit)) {
             return Integer.parseInt(text);

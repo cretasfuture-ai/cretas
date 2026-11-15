@@ -61,6 +61,28 @@ class AiBiFinanceFollowupContractTest {
         assertRange("今年3月开始的成本", marStart, NOW.toLocalDate());
     }
 
+    // R3 New-1: 以后/之后 = 「以来」(起点=该月1日, 止=今天); 以前/之前/前/和/、 不是单月, 回落整年 (偏宽不丢数据)
+    @Test
+    void afterBeforeAndConjunctionAfterAMonth_areNotCollapsedToThatSingleMonth() {
+        LocalDate marStart = LocalDate.of(2026, 3, 1);
+        LocalDate yearEnd = LocalDate.of(2026, 12, 31);
+        LocalDate yearStart = LocalDate.of(2026, 1, 1);
+        assertRange("今年3月以后的成本", marStart, NOW.toLocalDate());
+        assertRange("今年3月之后的成本", marStart, NOW.toLocalDate());
+        assertRange("今年3月之前的成本", yearStart, yearEnd);
+        assertRange("今年3月以前的成本", yearStart, yearEnd);
+        assertRange("今年3月前的成本", yearStart, yearEnd);
+        assertRange("今年3月和4月的成本", yearStart, yearEnd);
+        assertRange("今年3月、4月的成本", yearStart, yearEnd);
+    }
+
+    // R3 New-2: 第二个月没写年份且比起始月小 = 跨年
+    @Test
+    void rangeWhoseSecondMonthHasNoYear_crossesTheYearWhenItIsEarlierThanTheFirst() {
+        assertRange("去年12月到2月的成本", LocalDate.of(2025, 12, 1), LocalDate.of(2026, 2, 28));
+        assertRange("今年3月到5月的成本", LocalDate.of(2026, 3, 1), LocalDate.of(2026, 5, 31));
+    }
+
     @Test
     void yearPrefixedMonthWithADayIsNotASingleMonth_andPlainSingleMonthsStillWork() {
         // 「今年10月1日」: 不是单月, 落整年 (偏宽但不丢数据)
