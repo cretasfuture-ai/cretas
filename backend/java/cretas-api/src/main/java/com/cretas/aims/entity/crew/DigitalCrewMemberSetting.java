@@ -7,7 +7,7 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/** 本厂是否启用某位数字员工 (V20261115_21)。没有行 = 启用。 */
+/** 本厂是否启用某位数字员工 (V20261115_61)。没有行 = 启用。 */
 @Getter
 @Setter
 @NoArgsConstructor

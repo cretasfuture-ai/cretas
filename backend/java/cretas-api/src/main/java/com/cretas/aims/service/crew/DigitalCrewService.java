@@ -29,6 +29,8 @@ import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.crew.DigitalCrewCatalog.Member;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -69,6 +71,15 @@ public class DigitalCrewService {
     /** 凭据处于这些状态 = 确定没写入, 事项回到已交办可重新预览。 */
     static final Set<TokenStatus> DEFINITELY_NOT_WRITTEN = EnumSet.of(
             TokenStatus.PENDING, TokenStatus.FAILED, TokenStatus.CANCELLED, TokenStatus.EXPIRED);
+    /** 凭据处于这些状态 = 再也不会被认领执行 (终态且没写入)。 */
+    static final Set<TokenStatus> TERMINAL_NOT_WRITTEN = EnumSet.of(
+            TokenStatus.FAILED, TokenStatus.CANCELLED, TokenStatus.EXPIRED);
+    /**
+     * 「办理中」超过这个时长还没有结果 = 确认请求已经断了 (进程重启 / 超时 / 结算事务失败), 对账回收。
+     * 比预览凭据的在途对账窗口 (10 分钟, PreviewTokenServiceImpl.executingStaleMinutes) 长, 先让凭据自己定态。
+     */
+    public static final java.time.Duration CONFIRMING_STALE = java.time.Duration.ofMinutes(15);
+    static final int RECORDS_LIMIT = 300;
 
     /** 会话里取出的操作人: 类型 / id / 角色都来自 JWT, ⛔ 不来自请求体。 */
     public record Actor(AuthenticatedActorType type, Long id, String role) {
@@ -287,15 +298,28 @@ public class DigitalCrewService {
                     resp.getIntentCode(), resp.getIntentName(), pack, owner, null, List.of(), resp.getSessionId());
         }
 
-        if ("READ_MODE_WRITE_BLOCKED".equals(resp.getStatus())) {
+        // 两种形状都是「写操作、这次不执行」, 都交办:
+        //  · READ_MODE_WRITE_BLOCKED: 说话人自己有写权限, 编排器在 READ 模式下拦了写;
+        //  · NO_PERMISSION + 写级权限码: 编排器先查权限、后做 READ 写拦截, 没写权限的人 (如操作员) 拿到的是这个。
+        //    交给有权限的人确认正是数字班组要做的事 (DECISIONS 第二十一节 2/3); 确认仍只限有权限的人。
+        boolean writeBlocked = "READ_MODE_WRITE_BLOCKED".equals(resp.getStatus());
+        boolean deniedWrite = "NO_PERMISSION".equals(resp.getStatus()) && intent != null && isWriteLevel(requiredPermission);
+        if (writeBlocked || deniedWrite) {
             if (requiredPermission == null || requiredPermission.isBlank()) {
                 return new AskView("REFUSED", memberKey, resp.getStatus(),
                         "这件事是写操作，但系统里没有登记谁有权确认，所以不交办。没有执行任何写操作。",
                         resp.getIntentCode(), resp.getIntentName(), pack, null, null, List.of(), resp.getSessionId());
             }
+            if (!isWriteLevel(requiredPermission) || module == null) {
+                return new AskView("REFUSED", memberKey, resp.getStatus(),
+                        "这件事是写操作，但登记的权限「" + requiredPermission + "」不是写权限，没法判断谁有权确认，所以不交办。"
+                                + "没有执行任何写操作。请管理员在意图配置里登记写权限。",
+                        resp.getIntentCode(), resp.getIntentName(), pack, null, null, List.of(), resp.getSessionId());
+            }
             ItemView item = delegate(factoryId, actor, member, input, intent, requiredPermission, module);
+            String who = deniedWrite ? "你没有这项写权限，" : "";
             return new AskView("DELEGATED", memberKey, resp.getStatus(),
-                    member.name() + "把这件事整理好了，记为「已交办」，放进「待办 › 等我确认」。"
+                    who + member.name() + "把这件事整理好了，记为「已交办」，放进「待办 › 等我确认」。"
                             + "有权限的人先看改前改后的预览、再确认才会执行。现在没有执行任何写操作，也不扣额度。",
                     resp.getIntentCode(), resp.getIntentName(), pack, null, item, List.of(), resp.getSessionId());
         }
@@ -313,7 +337,20 @@ public class DigitalCrewService {
     private ItemView delegate(String factoryId, Actor actor, Member member, String input, AIIntentConfig intent,
                               String requiredPermission, String module) {
         User user = requireUser(actor);
-        DigitalCrewWorkItem saved = tx.execute(s -> {
+        DigitalCrewWorkItem saved;
+        try {
+            saved = insertDelegated(factoryId, actor, member, input, intent, requiredPermission, module, user);
+        } catch (DataIntegrityViolationException raced) {
+            // 双击 / 重放: 库里的部分唯一索引 (同一人同一句话只能有一件已交办) 挡住了第二件, 返回先建的那件
+            saved = tx.execute(s -> items.findFirstByFactoryIdAndMemberKeyAndCreatedByUserIdAndUserInputAndStatus(
+                    factoryId, member.key(), actor.id(), input, Status.DELEGATED).orElseThrow(() -> raced));
+        }
+        return view(saved, user);
+    }
+
+    private DigitalCrewWorkItem insertDelegated(String factoryId, Actor actor, Member member, String input,
+                                                AIIntentConfig intent, String requiredPermission, String module, User user) {
+        return tx.execute(s -> {
             Optional<DigitalCrewWorkItem> dup = items.findFirstByFactoryIdAndMemberKeyAndCreatedByUserIdAndUserInputAndStatus(
                     factoryId, member.key(), actor.id(), input, Status.DELEGATED);
             if (dup.isPresent()) return dup.get();
@@ -332,15 +369,15 @@ public class DigitalCrewService {
                     + "。原话：「" + input + "」。确认前会按确认人的权限重新预览改前 / 改后，看过再确认。");
             w.setCreatedByUserId(actor.id());
             w.setCreatedByName(displayName(user));
-            return items.save(w);
+            return items.saveAndFlush(w);
         });
-        return view(saved, user);
     }
 
     // ==================== 等我确认 ====================
 
     public InboxView inbox(String factoryId, Actor actor) {
         User user = requireUser(actor);
+        reconcile(factoryId);
         List<DigitalCrewWorkItem> open = items.findByFactoryIdAndStatusInOrderByCreatedAtDesc(
                 factoryId, List.of(Status.DELEGATED), PageRequest.of(0, 200));
         List<ItemView> mine = new ArrayList<>();
@@ -357,13 +394,16 @@ public class DigitalCrewService {
         return new InboxView(mine, hidden, List.copyOf(hiddenModules));
     }
 
-    /** 确认人按自己身份预览 (#1632 路径)。凭据只回给确认人, 本表只记摘要。 */
+    /** 确认人按自己身份预览 (#1632 路径)。凭据只回给确认人, 本表只记摘要和凭据行 id (不是凭据本身)。 */
     public PreviewView preview(String factoryId, Actor actor, Long id) {
         User user = requireUser(actor);
         DigitalCrewWorkItem w = requireItem(factoryId, id);
         requireConfirmPermission(user, w);
+        requireNotUsedElsewhere(factoryId, id);
+        w = requireItem(factoryId, id);
         if (w.getStatus() != Status.DELEGATED) {
-            throw new BusinessException(409, "这件事已经" + w.getStatus().label() + "，不能再预览");
+            throw new BusinessException(409, "这件事已经" + w.getStatus().label() + "，不能再预览")
+                    .withHint("到「数字班组 › 工作记录」看这件事的结果，不用再预览");
         }
         IntentExecuteRequest req = IntentExecuteRequest.builder()
                 .userInput(w.getUserInput()).intentCode(w.getIntentCode()).build();
@@ -371,14 +411,17 @@ public class DigitalCrewService {
         if (resp == null) throw new BusinessException(502, "没有收到预览，没有执行任何写操作，请重试");
         IntentExecuteResponse.ConfirmableAction action = resp.getConfirmableAction();
         if (action != null && action.getCommandDigest() != null && action.getConfirmToken() != null) {
+            Long tokenId = previewTokens.readBoundTokenId(action.getConfirmToken(), factoryId, actor.id()).orElse(null);
             DigitalCrewWorkItem stamped = tx.execute(s -> {
                 DigitalCrewWorkItem cur = requireItem(factoryId, id);
                 if (cur.getStatus() != Status.DELEGATED) {
-                    throw new BusinessException(409, "这件事刚被别人处理了（" + cur.getStatus().label() + "）");
+                    throw new BusinessException(409, "这件事刚被别人处理了（" + cur.getStatus().label() + "）")
+                            .withHint("刷新「待办 › 等我确认」，到工作记录里看是谁处理的");
                 }
                 cur.setPreviewedByUserId(actor.id());
                 cur.setPreviewedAt(clock.get());
                 cur.setCommandDigest(action.getCommandDigest());
+                cur.setPreviewTokenId(tokenId);
                 return items.save(cur);
             });
             return new PreviewView(view(stamped, user), resp);
@@ -387,23 +430,34 @@ public class DigitalCrewService {
     }
 
     /**
-     * 确认执行。服务端: 会话里的人有写权限 → 事项仍已交办、预览人是本人、摘要一致 → 原子认领 →
-     * 走 #1632 确认 → 回读凭据定四态。
+     * 确认执行。服务端: 会话里的人有写权限 → 事项仍已交办、凭据没在别处用掉、预览人是本人、凭据是这件事的、
+     * 摘要一致 → 原子认领 → 走 #1632 确认 → 回读凭据定四态。
      */
     public ItemView confirm(String factoryId, Actor actor, Long id, ConfirmationProof proof) {
         User user = requireUser(actor);
         DigitalCrewWorkItem w = requireItem(factoryId, id);
         requireConfirmPermission(user, w);
         if (proof == null) throw new BusinessException(400, "缺少确认凭据，请先预览");
+        requireNotUsedElsewhere(factoryId, id);
+        w = requireItem(factoryId, id);
+        if (w.getPreviewTokenId() != null) {
+            Long presented = previewTokens.readBoundTokenId(proof.proofToken(), factoryId, actor.id()).orElse(null);
+            if (!w.getPreviewTokenId().equals(presented)) {
+                throw new BusinessException(409, "这张确认凭据不是这件事的预览凭据，没有执行任何写操作")
+                        .withHint("在这件事上点「预览」重新生成凭据，再点确认");
+            }
+        }
         String name = displayName(user);
         Integer claimed = tx.execute(s -> items.claimForConfirm(id, factoryId, actor.id(), name,
                 proof.commandDigest(), clock.get(), Status.DELEGATED, Status.CONFIRMING));
         if (claimed == null || claimed != 1) {
             DigitalCrewWorkItem cur = requireItem(factoryId, id);
             if (cur.getStatus() != Status.DELEGATED) {
-                throw new BusinessException(409, "这件事已经" + cur.getStatus().label() + "，没有再执行");
+                throw new BusinessException(409, "这件事已经" + cur.getStatus().label() + "，没有再执行")
+                        .withHint("到「数字班组 › 工作记录」看这件事的结果，勿重复办理");
             }
-            throw new BusinessException(409, "确认凭据与你的预览对不上（预览不是你做的，或已重新预览），请重新预览后再确认。没有执行任何写操作");
+            throw new BusinessException(409, "确认凭据与你的预览对不上（预览不是你做的，或已重新预览），请重新预览后再确认。没有执行任何写操作")
+                    .withHint("在这件事上点「预览」，看过改前改后再确认");
         }
 
         IntentExecuteResponse resp;
@@ -443,59 +497,194 @@ public class DigitalCrewService {
                 "结果不明：" + message + "。写入可能已经提交，请先到业务页面核对，勿重复办理。", null);
     }
 
-    /** 不办 (记没办成)。只有有权确认的人, 或交办人自己, 能不办。 */
+    /** 不办 (记没办成)。只有有权确认的人, 或交办人自己, 能不办。凭据已在别处用掉的不能再记成没办成。 */
     public ItemView reject(String factoryId, Actor actor, Long id, String reason) {
         User user = requireUser(actor);
         String why = requireReason(reason);
-        DigitalCrewWorkItem saved = tx.execute(s -> {
-            DigitalCrewWorkItem w = requireItem(factoryId, id);
-            boolean creator = Objects.equals(w.getCreatedByUserId(), actor.id());
-            if (!creator && !permissions.hasPermission(user, w.getRequiredPermission())) {
-                throw new BusinessException(403, "你没有处理这件事的权限（需要 " + w.getRequiredPermission() + "）");
-            }
-            if (w.getStatus() != Status.DELEGATED) {
-                throw new BusinessException(409, "这件事已经" + w.getStatus().label() + "，不能再改成不办");
-            }
-            LocalDateTime now = clock.get();
-            w.setStatus(Status.NOT_DONE);
-            w.setQuotaCost(0);
-            w.setConfirmedByUserId(actor.id());
-            w.setConfirmedByName(displayName(user));
-            w.setConfirmedAt(now);
-            w.setResolvedAt(now);
-            w.setResolvedDate(now.toLocalDate());
-            w.setResultStatus("REJECTED");
-            w.setResultNote(clip("不办：" + why, 500));
-            return items.save(w);
-        });
+        DigitalCrewWorkItem first = requireItem(factoryId, id);
+        requireRejecter(user, actor, first);
+        requireNotUsedElsewhere(factoryId, id);
+        DigitalCrewWorkItem saved;
+        try {
+            saved = tx.execute(s -> {
+                DigitalCrewWorkItem w = requireItem(factoryId, id);
+                requireRejecter(user, actor, w);
+                if (w.getStatus() != Status.DELEGATED) {
+                    throw new BusinessException(409, "这件事已经" + w.getStatus().label() + "，不能再改成不办")
+                            .withHint("到「数字班组 › 工作记录」看这件事的结果");
+                }
+                LocalDateTime now = clock.get();
+                w.setStatus(Status.NOT_DONE);
+                w.setQuotaCost(0);
+                w.setConfirmedByUserId(actor.id());
+                w.setConfirmedByName(displayName(user));
+                w.setConfirmedAt(now);
+                w.setResolvedAt(now);
+                w.setResolvedDate(now.toLocalDate());
+                w.setResultStatus("REJECTED");
+                w.setResultNote(clip("不办：" + why, 500));
+                return items.saveAndFlush(w);
+            });
+        } catch (OptimisticLockingFailureException raced) {
+            throw new BusinessException(409, "这件事刚被别人处理了，没有改成不办")
+                    .withHint("刷新「待办 › 等我确认」，到工作记录里看是谁处理的");
+        }
         return view(saved, user);
+    }
+
+    private void requireRejecter(User user, Actor actor, DigitalCrewWorkItem w) {
+        boolean creator = Objects.equals(w.getCreatedByUserId(), actor.id());
+        if (!creator && !permissions.hasPermission(user, w.getRequiredPermission())) {
+            throw new BusinessException(403, "你没有处理这件事的权限（需要 " + w.getRequiredPermission() + "）");
+        }
     }
 
     // ==================== 工作记录与额度 ====================
 
+    /**
+     * 工作记录与额度。件数与额度在库里按 factory_id 聚合 (不截断、不按查看人过滤: 所有查看人看到同一个数);
+     * 明细列表 (最近 {@value #RECORDS_LIMIT} 件) 按查看人的模块读权限过滤 —— 原话里可能有别的模块的业务内容。
+     */
     public LedgerView ledger(String factoryId, Actor actor, String memberKey) {
         User user = actor.factoryUser() ? requireUser(actor) : null;
+        reconcile(factoryId);
         Map<String, String> levels = levels(actor);
         LocalDate today = clock.get().toLocalDate();
-        List<DigitalCrewWorkItem> all = items.findByFactoryIdOrderByCreatedAtDesc(factoryId, PageRequest.of(0, 2000))
-                .stream().filter(w -> readable(levels, w.getModule())).toList();
-        List<MemberCount> per = new ArrayList<>();
-        for (Member m : DigitalCrewCatalog.MEMBERS) {
-            List<DigitalCrewWorkItem> mine = all.stream().filter(w -> w.getMemberKey().equals(m.key())).toList();
-            per.add(new MemberCount(m.key(), m.name(), count(mine, Status.DELEGATED), count(mine, Status.CONFIRMING),
-                    count(mine, Status.DONE), count(mine, Status.NOT_DONE), count(mine, Status.OUTCOME_UNKNOWN),
-                    mine.stream().mapToLong(DigitalCrewWorkItem::getQuotaCost).sum()));
+        String scope = memberKey == null || memberKey.isBlank() ? null : memberKey;
+
+        Map<String, Map<Status, long[]>> agg = new HashMap<>();
+        for (Object[] r : items.countByMemberAndStatus(factoryId)) {
+            agg.computeIfAbsent((String) r[0], k -> new EnumMap<>(Status.class))
+                    .put((Status) r[1], new long[]{((Number) r[2]).longValue(), ((Number) r[3]).longValue()});
         }
-        List<DigitalCrewWorkItem> scoped = memberKey == null || memberKey.isBlank() ? all
-                : all.stream().filter(w -> w.getMemberKey().equals(memberKey)).toList();
-        long quotaToday = scoped.stream().filter(w -> today.equals(w.getResolvedDate()))
-                .mapToLong(DigitalCrewWorkItem::getQuotaCost).sum();
-        long quotaMonth = scoped.stream().filter(w -> w.getResolvedDate() != null
-                        && w.getResolvedDate().getYear() == today.getYear() && w.getResolvedDate().getMonth() == today.getMonth())
-                .mapToLong(DigitalCrewWorkItem::getQuotaCost).sum();
-        long quotaTotal = scoped.stream().mapToLong(DigitalCrewWorkItem::getQuotaCost).sum();
-        return new LedgerView(today, quotaToday, quotaMonth, quotaTotal, count(scoped, Status.DELEGATED),
-                count(scoped, Status.DONE), per, scoped.stream().limit(300).map(w -> view(w, user)).toList());
+        List<MemberCount> per = new ArrayList<>();
+        long scopedDelegated = 0, scopedDone = 0, scopedQuota = 0;
+        for (Member m : DigitalCrewCatalog.MEMBERS) {
+            Map<Status, long[]> c = agg.getOrDefault(m.key(), Map.of());
+            long quota = c.values().stream().mapToLong(v -> v[1]).sum();
+            per.add(new MemberCount(m.key(), m.name(), n(c, Status.DELEGATED), n(c, Status.CONFIRMING),
+                    n(c, Status.DONE), n(c, Status.NOT_DONE), n(c, Status.OUTCOME_UNKNOWN), quota));
+            if (scope == null || scope.equals(m.key())) {
+                scopedDelegated += n(c, Status.DELEGATED);
+                scopedDone += n(c, Status.DONE);
+                scopedQuota += quota;
+            }
+        }
+        long quotaToday = items.sumQuota(factoryId, today, today, scope);
+        long quotaMonth = items.sumQuota(factoryId, today.withDayOfMonth(1), today.withDayOfMonth(today.lengthOfMonth()), scope);
+
+        PageRequest page = PageRequest.of(0, RECORDS_LIMIT);
+        List<DigitalCrewWorkItem> recent = scope == null
+                ? items.findByFactoryIdOrderByCreatedAtDesc(factoryId, page)
+                : items.findByFactoryIdAndMemberKeyOrderByCreatedAtDesc(factoryId, scope, page);
+        List<ItemView> records = recent.stream().filter(w -> readable(levels, w.getModule())).map(w -> view(w, user)).toList();
+        return new LedgerView(today, quotaToday, quotaMonth, scopedQuota, scopedDelegated, scopedDone, per, records);
+    }
+
+    private static long n(Map<Status, long[]> c, Status s) {
+        long[] v = c.get(s);
+        return v == null ? 0 : v[0];
+    }
+
+    // ==================== 对账 ====================
+
+    /**
+     * 读的时候顺手对账 (等我确认 / 工作记录都会调):
+     * <ol>
+     *   <li>「办理中」超过 {@link #CONFIRMING_STALE} 的 (确认请求断了: 进程重启 / 超时 / 结算事务失败),
+     *       按凭据行 id + 预览人回读凭据定四态 ({@link #reconcileStaleConfirming});</li>
+     *   <li>「已交办」但预览过的, 凭据可能被别的入口 (通用 AI 写入确认) 用掉了, 回读后回写 ({@link #reconcileDelegated})。</li>
+     * </ol>
+     * 单件失败 (并发被别人改了 / 回读异常) 跳过, 下次读再对, 不挡读。
+     */
+    void reconcile(String factoryId) {
+        LocalDateTime cutoff = clock.get().minus(CONFIRMING_STALE);
+        for (DigitalCrewWorkItem w : items.findByFactoryIdAndStatusAndConfirmedAtBefore(factoryId, Status.CONFIRMING, cutoff)) {
+            safely(w.getId(), () -> reconcileStaleConfirming(factoryId, w.getId(), cutoff));
+        }
+        for (DigitalCrewWorkItem w : items.findByFactoryIdAndStatusAndPreviewTokenIdIsNotNull(factoryId, Status.DELEGATED)) {
+            safely(w.getId(), () -> reconcileDelegated(factoryId, w.getId()));
+        }
+    }
+
+    private void safely(Long id, Runnable r) {
+        try {
+            r.run();
+        } catch (RuntimeException e) {
+            log.warn("[DigitalCrew] reconcile skipped: item={}, error={}", id, e.toString());
+        }
+    }
+
+    /** 预览 / 确认 / 不办之前: 这件事的凭据要是已经在别处用掉了, 先回写结果, 再拒绝这次操作。 */
+    private void requireNotUsedElsewhere(String factoryId, Long id) {
+        Status after = reconcileDelegated(factoryId, id);
+        if (after != null) {
+            throw new BusinessException(409, "这件事的确认凭据已经在数字班组之外用掉了，已按回读结果记为「" + after.label()
+                    + "」，这次没有执行任何操作")
+                    .withHint("到「数字班组 › 工作记录」核对这件事；结果不明的请先到业务页面核对，勿重复办理");
+        }
+    }
+
+    /**
+     * 已交办的事项, 凭据回读为已确认 ⇒ 已办成 (扣 1, 确认人 = 预览人); 在途 / 结果不明 ⇒ 结果不明;
+     * 终态且没写入 ⇒ 清掉凭据行 id (再也不会被执行, 不用再对)。返回改成的状态, 没改返回 null。
+     */
+    Status reconcileDelegated(String factoryId, Long id) {
+        return tx.execute(s -> {
+            DigitalCrewWorkItem w = requireItem(factoryId, id);
+            if (w.getStatus() != Status.DELEGATED || w.getPreviewTokenId() == null || w.getPreviewedByUserId() == null) {
+                return null;
+            }
+            TokenStatus ts = previewTokens.readBoundStatusById(w.getPreviewTokenId(), factoryId, w.getPreviewedByUserId())
+                    .orElse(null);
+            if (ts == null || ts == TokenStatus.PENDING) return null;
+            if (TERMINAL_NOT_WRITTEN.contains(ts)) {
+                w.setPreviewTokenId(null);
+                items.saveAndFlush(w);
+                return null;
+            }
+            Long previewer = w.getPreviewedByUserId();
+            String previewerName = users.findById(previewer).map(DigitalCrewService::displayName).orElse("用户 " + previewer);
+            w.setConfirmedByUserId(previewer);
+            w.setConfirmedByName(previewerName);
+            w.setConfirmedAt(clock.get());
+            if (ts == TokenStatus.CONFIRMED) {
+                resolve(w, Status.DONE, "CONFIRMED_ELSEWHERE",
+                        "这件事的预览凭据在数字班组之外（如通用 AI 写入确认）被确认执行了，按回读结果记已办成。",
+                        "回读预览凭据：已确认执行（凭据行 " + w.getPreviewTokenId() + "，预览人 " + previewerName + "）");
+            } else {
+                resolve(w, Status.OUTCOME_UNKNOWN, "TOKEN_" + ts.name(),
+                        "这件事的预览凭据在数字班组之外被拿去确认了，回读凭据状态是「" + ts.name()
+                                + "」，写入可能已经提交，按结果不明记录、不扣额度。请到业务页面核对，勿重复办理。", null);
+            }
+            items.saveAndFlush(w);
+            return w.getStatus();
+        });
+    }
+
+    /** 「办理中」超时: 回读凭据 —— 已确认 ⇒ 已办成; 终态没写入 ⇒ 回到已交办; 其余 (在途 / 结果不明 / 读不到) ⇒ 结果不明。 */
+    void reconcileStaleConfirming(String factoryId, Long id, LocalDateTime cutoff) {
+        tx.executeWithoutResult(s -> {
+            DigitalCrewWorkItem w = requireItem(factoryId, id);
+            if (w.getStatus() != Status.CONFIRMING || w.getConfirmedAt() == null || w.getConfirmedAt().isAfter(cutoff)) {
+                return;
+            }
+            TokenStatus ts = w.getPreviewTokenId() == null || w.getPreviewedByUserId() == null ? null
+                    : previewTokens.readBoundStatusById(w.getPreviewTokenId(), factoryId, w.getPreviewedByUserId()).orElse(null);
+            if (ts == TokenStatus.CONFIRMED) {
+                resolve(w, Status.DONE, "RECONCILED_CONFIRMED", "确认请求在途中断，对账回读凭据为已确认执行，记已办成。",
+                        "对账回读预览凭据：已确认执行（凭据行 " + w.getPreviewTokenId() + "）");
+            } else if (ts != null && DEFINITELY_NOT_WRITTEN.contains(ts)) {
+                resolve(w, Status.DELEGATED, "RECONCILED_" + ts.name(),
+                        "确认请求在途中断，对账回读凭据「" + ts.name() + "」，确定没有写入，回到已交办，可以重新预览后再确认。", null);
+            } else {
+                resolve(w, Status.OUTCOME_UNKNOWN, "RECONCILED_" + (ts == null ? "UNREADABLE" : ts.name()),
+                        "确认请求超过 " + CONFIRMING_STALE.toMinutes() + " 分钟没有结果，对账回读凭据「"
+                                + (ts == null ? "读不到" : ts.name()) + "」，写入可能已经提交，按结果不明记录、不扣额度。"
+                                + "请到业务页面核对，勿重复办理。", null);
+            }
+            items.saveAndFlush(w);
+        });
     }
 
     // ==================== 内部 ====================
@@ -504,28 +693,34 @@ public class DigitalCrewService {
                             String evidence) {
         DigitalCrewWorkItem saved = tx.execute(s -> {
             DigitalCrewWorkItem w = requireItem(factoryId, id);
-            LocalDateTime now = clock.get();
-            w.setStatus(to);
-            w.setResultStatus(clip(resultStatus, 40));
-            w.setResultNote(clip(note, 500));
-            if (to == Status.DELEGATED) {
-                // 确定没写入: 清掉这次预览, 回到等确认
-                w.setQuotaCost(0);
-                w.setCommandDigest(null);
-                w.setPreviewedByUserId(null);
-                w.setPreviewedAt(null);
-                w.setConfirmedByUserId(null);
-                w.setConfirmedByName(null);
-                w.setConfirmedAt(null);
-            } else {
-                w.setQuotaCost(to == Status.DONE ? 1 : 0);
-                w.setResolvedAt(now);
-                w.setResolvedDate(now.toLocalDate());
-                w.setEvidence(clip(evidence, 500));
-            }
+            resolve(w, to, resultStatus, note, evidence);
             return items.save(w);
         });
         return view(saved, user);
+    }
+
+    /** 定一件事的状态 (四态 + 回到已交办), 额度只有已办成扣 1; 日期是北京时间真实日期。 */
+    private void resolve(DigitalCrewWorkItem w, Status to, String resultStatus, String note, String evidence) {
+        LocalDateTime now = clock.get();
+        w.setStatus(to);
+        w.setResultStatus(clip(resultStatus, 40));
+        w.setResultNote(clip(note, 500));
+        if (to == Status.DELEGATED) {
+            // 确定没写入: 清掉这次预览, 回到等确认
+            w.setQuotaCost(0);
+            w.setCommandDigest(null);
+            w.setPreviewTokenId(null);
+            w.setPreviewedByUserId(null);
+            w.setPreviewedAt(null);
+            w.setConfirmedByUserId(null);
+            w.setConfirmedByName(null);
+            w.setConfirmedAt(null);
+        } else {
+            w.setQuotaCost(to == Status.DONE ? 1 : 0);
+            w.setResolvedAt(now);
+            w.setResolvedDate(now.toLocalDate());
+            w.setEvidence(clip(evidence, 500));
+        }
     }
 
     private static String affected(IntentExecuteResponse resp) {
@@ -557,7 +752,8 @@ public class DigitalCrewService {
     private Member requireEnabledMember(String factoryId, String key) {
         Member m = DigitalCrewCatalog.member(key).orElseThrow(() -> new BusinessException(404, "不认识的数字员工"));
         if (!enabledMap(factoryId).getOrDefault(key, true)) {
-            throw new BusinessException(409, "本厂没有启用" + m.name() + "，请到「设置 › 数字班组配置」启用");
+            throw new BusinessException(409, "本厂没有启用" + m.name() + "，请到「设置 › 数字班组配置」启用")
+                    .withHint("到「设置 › 数字班组配置」启用" + m.name() + "，或换一位数字员工");
         }
         return m;
     }
@@ -651,8 +847,11 @@ public class DigitalCrewService {
         return r;
     }
 
-    private static long count(List<DigitalCrewWorkItem> list, Status s) {
-        return list.stream().filter(w -> w.getStatus() == s).count();
+    /** 写级别权限码: 只有这种码才交办 (确认人必须持有它)。 */
+    static boolean isWriteLevel(String permission) {
+        if (permission == null) return false;
+        String p = permission.strip();
+        return p.endsWith(":read_write") || p.endsWith(":write");
     }
 
     private static String nz(String a, String b) {

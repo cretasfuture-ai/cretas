@@ -100,6 +100,15 @@ public interface PreviewTokenService {
     Optional<BoundTokenExecution> readBoundExecution(String token, String factoryId, Long userId);
 
     /**
+     * Owner-scoped, non-secret row id of a bound token. Callers that must later re-check the
+     * token's state (e.g. digital-crew work items) store this id instead of the bearer token.
+     */
+    Optional<Long> readBoundTokenId(String token, String factoryId, Long userId);
+
+    /** Owner-scoped status read by row id (see {@link #readBoundTokenId}); includes terminal states. */
+    Optional<IntentPreviewToken.TokenStatus> readBoundStatusById(Long tokenId, String factoryId, Long userId);
+
+    /**
      * 确认令牌并执行操作 (Confirm 阶段)
      *
      * @param token 令牌值

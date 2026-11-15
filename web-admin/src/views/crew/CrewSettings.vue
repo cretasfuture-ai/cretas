@@ -64,7 +64,7 @@ const nameOf = (k?: string | null) => s.value?.members.find((m) => m.key === k)?
 <template>
   <div class="crew-settings" data-testid="crew-settings">
     <header><h1>数字班组配置</h1>
-      <p class="why">各厂按需启用；能办什么另由登录人的权限决定。停用的员工不出现在对话入口和手机端，已有记录保留。</p></header>
+      <p class="why">各厂按需启用；能办什么另由登录人的权限决定。停用的员工不出现在对话入口，已有记录保留。</p></header>
     <UAlert v-if="error" data-testid="crew-settings-error" color="error" variant="soft" title="没有完成" :description="error" />
     <UAlert v-if="notice" color="success" variant="soft" :title="notice" />
     <template v-if="s">
@@ -88,7 +88,7 @@ const nameOf = (k?: string | null) => s.value?.members.find((m) => m.key === k)?
             <td>{{ m.capabilities.map((c) => c.label).join('；') }}</td></tr></tbody></table>
       </section>
       <section class="panel">
-        <h2>一线岗位 → 数字员工 <small>手机端按岗位只给一个入口</small></h2>
+        <h2>一线岗位 → 数字员工 <small>先存配置：手机端按岗位给入口本期还没接上，现在保存不影响手机端</small></h2>
         <table class="list"><thead><tr><th>一线岗位</th><th>对应的数字员工</th></tr></thead>
           <tbody><tr v-for="(label, role) in s.roleLabels" :key="role"><td>{{ label }}</td>
             <td><USelect v-if="s.canEdit" v-model="mapDraft[role]" :items="memberItems" :aria-label="`${label}对应的数字员工`" class="sel" />

@@ -9,7 +9,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 /**
- * 数字员工办的一件事 (V20261115_21): 等我确认 + 额度四态 (R29)。
+ * 数字员工办的一件事 (V20261115_61): 等我确认 + 额度四态 (R29)。
  *
  * <p>DELEGATED 已交办 (等有权限的人确认, 不扣) → 确认人按自己身份预览 → 确认 → CONFIRMING (在途) →
  * DONE 已办成 (回读预览凭据为 CONFIRMED, 扣 1) / OUTCOME_UNKNOWN 结果不明 (不扣);
@@ -94,6 +94,13 @@ public class DigitalCrewWorkItem {
 
     @Column(name = "command_digest", length = 64)
     private String commandDigest;
+
+    /**
+     * 预览凭据那一行的 id (不是凭据本身, 不能拿来确认)。对账用: 凭据被别的入口用掉、或确认在途卡住时,
+     * 按 (id, 工厂, 预览人) 回读凭据状态定四态。
+     */
+    @Column(name = "preview_token_id")
+    private Long previewTokenId;
 
     @Column(name = "confirmed_by_user_id")
     private Long confirmedByUserId;

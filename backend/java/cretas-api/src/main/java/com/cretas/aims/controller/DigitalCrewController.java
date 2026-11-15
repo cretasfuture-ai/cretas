@@ -45,7 +45,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @GetMapping("/members")
     @Operation(summary = "五位数字员工", description = "本厂启用与否 + 当前登录人在各模块的权限级别")
     public ApiResponse<List<DigitalCrewService.MemberView>> members(@PathVariable String factoryId, HttpServletRequest http) {
@@ -53,7 +53,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @GetMapping("/settings")
     @Operation(summary = "数字班组配置", description = "启用哪几位、一线岗位对应、调整记录")
     public ApiResponse<DigitalCrewService.SettingsView> settings(@PathVariable String factoryId, HttpServletRequest http) {
@@ -81,7 +81,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @PostMapping("/members/{memberKey}/ask")
     @Operation(summary = "对一位数字员工说一句话", description = "查询直接返回; 写操作只记「已交办」进等我确认, 不执行")
     public ApiResponse<DigitalCrewService.AskView> ask(@PathVariable String factoryId, @PathVariable String memberKey,
@@ -91,7 +91,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @GetMapping("/inbox")
     @Operation(summary = "等我确认", description = "已交办、我有权确认的事; 另报按权限不显示的件数")
     public ApiResponse<DigitalCrewService.InboxView> inbox(@PathVariable String factoryId, HttpServletRequest http) {
@@ -126,7 +126,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @PostMapping("/items/{id}/reject")
     @Operation(summary = "不办", description = "记没办成, 不扣额度; 有权确认的人或交办人本人可操作; 必须写原因")
     public ApiResponse<DigitalCrewService.ItemView> reject(@PathVariable String factoryId, @PathVariable Long id,
@@ -136,7 +136,7 @@ public class DigitalCrewController {
     }
 
     @RequirePermission({"dashboard:read", "sales:read", "procurement:read", "warehouse:read", "inventory:read",
-            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read"})
+            "production:read", "scheduling:read", "quality:read", "finance:read", "analytics:read", "work_report:read"})
     @GetMapping("/ledger")
     @Operation(summary = "工作记录与额度", description = "四态分开计数; 只有已办成扣额度; 按真实日期")
     public ApiResponse<DigitalCrewService.LedgerView> ledger(@PathVariable String factoryId,

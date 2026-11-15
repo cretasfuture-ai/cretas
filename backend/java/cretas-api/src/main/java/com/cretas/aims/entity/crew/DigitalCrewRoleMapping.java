@@ -8,7 +8,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 一线岗位 → 数字员工 (F-crew-gaps D4, 原型是代码常量, 正式端按厂配置; V20261115_21)。
+ * 一线岗位 → 数字员工 (F-crew-gaps D4, 原型是代码常量, 正式端按厂配置; V20261115_61)。
  * 没有行 = 用默认对应 ({@code DigitalCrewCatalog#DEFAULT_ROLE_MAPPING}); member_key 为空 = 该岗位不给入口。
  */
 @Getter

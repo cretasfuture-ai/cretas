@@ -7,7 +7,7 @@ import lombok.Setter;
 
 import java.time.LocalDateTime;
 
-/** 数字班组配置的调整记录: 谁、什么时候、改了什么、为什么 (V20261115_21)。只追加。 */
+/** 数字班组配置的调整记录: 谁、什么时候、改了什么、为什么 (V20261115_61)。只追加。 */
 @Getter
 @Setter
 @NoArgsConstructor

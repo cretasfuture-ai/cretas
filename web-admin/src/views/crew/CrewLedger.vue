@@ -2,7 +2,7 @@
 /**
  * 工作记录与额度（P8，原型 /crew/ledger，R26/R29）。四种结果分开显示：
  * 已交办（等人确认，不扣）/ 已办成（确认执行且回读核实，扣 1）/ 没办成（不办，不扣）/ 结果不明（不扣，要人去核对）。
- * 额度按北京时间真实日期计数（服务端 resolvedDate），⛔ 不按快照日。只显示我有读权限的模块的事。
+ * 额度按北京时间真实日期计数（服务端 resolvedDate），⛔ 不按快照日。额度与件数是全厂合计（服务端库内聚合）；明细只显示我有读权限的模块的事。
  */
 import { computed, onMounted, ref, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
@@ -29,7 +29,7 @@ const t = (s?: string | null) => (s ? s.replace('T', ' ').slice(0, 16) : '');
   <div class="crew-ledger" data-testid="crew-ledger">
     <header class="head">
       <div><h1>工作记录与额度</h1>
-        <p class="why">额度口径：每件「已办成」的事 1 个额度（确认执行后回读核实才算）；已交办、没办成、结果不明都不扣。按真实日期计数。</p></div>
+        <p class="why">额度口径：每件「已办成」的事 1 个额度（确认执行后回读核实才算）；已交办、没办成、结果不明都不扣。按真实日期计数。额度和件数是全厂合计，所有人看到同一个数；下面的明细只列你有读权限的模块的事，最多最近 300 条。「办理中」超过 15 分钟没结果的，打开本页时会按回读凭据自动定为已办成 / 已交办 / 结果不明。</p></div>
       <UButton to="/crew" variant="ghost" color="neutral">回数字班组</UButton>
     </header>
     <UAlert v-if="error" color="error" variant="soft" title="工作记录没读到" :description="`${error}。不显示数量，也不推算。`">

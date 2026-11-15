@@ -14,13 +14,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261115_21 (数字班组) 在真实 PostgreSQL 上: 脚本可重复执行; 额度四态的 CHECK 兜底 ——
+ * V20261115_61 (数字班组) 在真实 PostgreSQL 上: 脚本可重复执行; 额度四态的 CHECK 兜底 ——
  * 只有已办成能扣额度且必须扣 1、有确认人和真实日期; 没办成 / 结果不明必须有日期; 员工 key 与原因受约束。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class DigitalCrewMigrationPostgresContractTest {
 
-    private static final String MIGRATION = "db/flyway/V20261115_21__digital_crew.sql";
+    private static final String MIGRATION = "db/flyway/V20261115_61__digital_crew.sql";
 
     private static final String INSERT = "INSERT INTO digital_crew_work_items (factory_id, member_key, intent_code, title,"
             + " user_input, required_permission, module, status, quota_cost, created_by_user_id, created_by_name,"
@@ -57,6 +57,10 @@ class DigitalCrewMigrationPostgresContractTest {
             assertThrows(SQLException.class, () -> st.execute(row("planner", "NOT_DONE", 0, "8", "NULL")), "not done needs date");
             assertThrows(SQLException.class, () -> st.execute(row("planner", "MAYBE", 0, "NULL", "NULL")), "unknown status");
             assertThrows(SQLException.class, () -> st.execute(row("robot", "DELEGATED", 0, "NULL", "NULL")), "unknown member");
+            // 同一人同一句话只能有一件在等确认 (已办成 / 没办成 / 结果不明 的同一句不受限, 上面已插过)
+            assertThrows(SQLException.class, () -> st.execute(row("planner", "DELEGATED", 0, "NULL", "NULL")), "one open duplicate");
+            assertDoesNotThrow(() -> st.execute(row("keeper", "DELEGATED", 0, "NULL", "NULL")));
+            assertDoesNotThrow(() -> st.execute("UPDATE digital_crew_work_items SET preview_token_id = 42 WHERE member_key = 'keeper'"));
             assertThrows(SQLException.class, () -> st.execute("INSERT INTO digital_crew_setting_logs (factory_id, change_kind,"
                     + " actor_name, reason, before_json, after_json) VALUES ('F1', 'MEMBERS', 'n', ' 好 ', '{}', '{}')"), "reason >= 2");
             assertThrows(SQLException.class, () -> st.execute("INSERT INTO digital_crew_member_settings (factory_id, member_key,"

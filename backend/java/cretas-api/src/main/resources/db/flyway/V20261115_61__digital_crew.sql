@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS digital_crew_work_items (
     previewed_by_user_id  BIGINT,
     previewed_at          TIMESTAMP,
     command_digest        VARCHAR(64),
+    preview_token_id      BIGINT,
     confirmed_by_user_id  BIGINT,
     confirmed_by_name     VARCHAR(100),
     confirmed_at          TIMESTAMP,
@@ -89,8 +90,14 @@ CREATE INDEX IF NOT EXISTS idx_digital_crew_work_items_status
     ON digital_crew_work_items (factory_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_digital_crew_work_items_resolved
     ON digital_crew_work_items (factory_id, resolved_date);
+-- 同一人对同一员工的同一句话, 只能有一件还在等确认 (双击 / 重放不会建出两件)
+CREATE UNIQUE INDEX IF NOT EXISTS uk_digital_crew_work_items_open_dup
+    ON digital_crew_work_items (factory_id, member_key, created_by_user_id, user_input)
+    WHERE status = 'DELEGATED';
 
 COMMENT ON TABLE digital_crew_work_items IS
     '数字员工办的事: 等我确认 + 额度四态 (已交办/已办成/没办成/结果不明); 只有回读核实的已办成扣 1。';
 COMMENT ON COLUMN digital_crew_work_items.command_digest IS
     '确认人预览时铸的凭据摘要 (不存凭据本身); 确认请求的摘要必须与此相等, 且确认人 = previewed_by_user_id。';
+COMMENT ON COLUMN digital_crew_work_items.preview_token_id IS
+    '预览凭据行 id (不是凭据本身); 对账时按 id + 工厂 + 预览人回读凭据状态 (被通用确认入口用掉 / 确认在途卡住)。';

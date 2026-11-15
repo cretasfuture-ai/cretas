@@ -197,6 +197,33 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Optional<Long> readBoundTokenId(String token, String factoryId, Long userId) {
+        if (token == null || token.isBlank() || factoryId == null || factoryId.isBlank() || userId == null) {
+            return Optional.empty();
+        }
+        return tokenRepository.findByToken(token)
+                .filter(row -> ownedBy(row, factoryId, userId))
+                .map(IntentPreviewToken::getId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<TokenStatus> readBoundStatusById(Long tokenId, String factoryId, Long userId) {
+        if (tokenId == null || factoryId == null || factoryId.isBlank() || userId == null) {
+            return Optional.empty();
+        }
+        return tokenRepository.findById(tokenId)
+                .filter(row -> ownedBy(row, factoryId, userId))
+                .map(IntentPreviewToken::getStatus);
+    }
+
+    private static boolean ownedBy(IntentPreviewToken row, String factoryId, Long userId) {
+        return factoryId.equals(row.getFactoryId()) && factoryId.equals(row.getTenantId())
+                && userId.equals(row.getUserId()) && row.isBoundForExecution();
+    }
+
+    @Override
     @Deprecated(forRemoval = false)
     public ConfirmResult confirmToken(String token, Long userId) {
         log.warn("拒绝旧版非原子确认入口: tokenFingerprint={}, user={}", fingerprint(token), userId);
