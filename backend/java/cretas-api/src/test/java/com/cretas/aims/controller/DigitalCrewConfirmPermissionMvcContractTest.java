@@ -70,7 +70,8 @@ class DigitalCrewConfirmPermissionMvcContractTest {
         ReflectionTestUtils.setField(permissions, "factoryConfigRepo", mock(FactoryModuleConfigRepository.class));
         ReflectionTestUtils.setField(permissions, "platformRepo", mock(PlatformRolePermissionRepository.class));
         DigitalCrewService service = new DigitalCrewService(items, mock(DigitalCrewMemberSettingRepository.class),
-                mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class), users,
+                mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
+                mock(com.cretas.aims.repository.crew.DigitalCrewDelegationLockRepository.class), users,
                 permissions, intents, mock(AIIntentService.class), previewTokens,
                 mock(FactoryCapabilityPackSelector.class), mock(FactoryBusinessTypeResolver.class),
                 mock(PlatformTransactionManager.class));

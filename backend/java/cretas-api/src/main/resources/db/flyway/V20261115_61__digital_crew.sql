@@ -95,6 +95,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_digital_crew_work_items_open_dup
     ON digital_crew_work_items (factory_id, member_key, created_by_user_id, user_input)
     WHERE status = 'DELEGATED';
 
+-- 每人每厂一行的交办锁: 交办前 SELECT ... FOR UPDATE 锁住, 再数件数、再插入 => 每人「已交办」上限不会被并发冲破
+CREATE TABLE IF NOT EXISTS digital_crew_delegation_locks (
+    lock_key    VARCHAR(80)  PRIMARY KEY,
+    factory_id  VARCHAR(50)  NOT NULL,
+    user_id     BIGINT       NOT NULL,
+    created_at  TIMESTAMP    NOT NULL DEFAULT NOW(),
+    CONSTRAINT uk_digital_crew_delegation_locks UNIQUE (factory_id, user_id)
+);
+
 COMMENT ON TABLE digital_crew_work_items IS
     '数字员工办的事: 等我确认 + 额度四态 (已交办/已办成/没办成/结果不明); 只有回读核实的已办成扣 1。';
 COMMENT ON COLUMN digital_crew_work_items.command_digest IS

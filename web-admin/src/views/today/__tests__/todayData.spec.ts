@@ -214,4 +214,13 @@ describe('P8 等我确认', () => {
     expect(tabBadge('confirm', L.T.s)).toBeNull();
     expect(L.T.s.crewConfirm.note).toContain('读取失败');
   });
+
+  it('inbox 没返回总件数 totalMine ⇒ 当读不到处理（不画角标），⛔ 不退回本页件数', async () => {
+    const a = makeGet({ '/digital-crew/inbox': () => ok({ mine: [{ id: 1, title: '新建生产计划' }], hiddenCount: 0, hiddenModules: [] }) });
+    const L = createTodayLoader({ get: a.get as never });
+    await L.load(ctxOf());
+    expect(L.T.s.crewConfirm.state).toBe('error');
+    expect(tabBadge('confirm', L.T.s)).toBeNull();
+    expect(L.T.s.crewConfirm.note).toContain('总件数');
+  });
 });

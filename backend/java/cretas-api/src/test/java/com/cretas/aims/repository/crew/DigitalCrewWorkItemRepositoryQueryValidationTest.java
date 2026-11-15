@@ -76,7 +76,8 @@ import static org.mockito.Mockito.when;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository", includeFilters = @ComponentScan.Filter(
         type = FilterType.ASSIGNABLE_TYPE,
         classes = {DigitalCrewWorkItemRepository.class, DigitalCrewMemberSettingRepository.class,
-                DigitalCrewRoleMappingRepository.class, DigitalCrewSettingLogRepository.class}))
+                DigitalCrewRoleMappingRepository.class, DigitalCrewSettingLogRepository.class,
+                DigitalCrewDelegationLockRepository.class}))
 @Import(DigitalCrewService.class)
 class DigitalCrewWorkItemRepositoryQueryValidationTest {
 
@@ -561,7 +562,7 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
 
     /**
      * 中-A: A (计划员) 预览后 B (厂长) 再预览 ⇒ 先按行 id 作废 A 那张凭据 (属主 = A), 再给 B 铸新的;
-     * 事项改记 B 的凭据。A 那张被作废后在任何入口都认领不到 (真查询见 IntentPreviewTokenCancelByIdRepositoryQueryValidationTest)。
+     * 事项改记 B 的凭据。A 那张被作废后在任何入口都认领不到 (真查询见 IntentPreviewTokenCancelByIdRepositoryQueryValidationTest (H2 + PG))。
      */
     @Test
     void secondPreviewerRetiresTheFirstPreviewersTokenBeforeMintingANewOne() {
@@ -620,9 +621,15 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         assertThat(reread(id).getPreviewTokenId()).isNull();
     }
 
+    private static final String OTHER_FACTORY = "F-CREW-OTHER";
+
     private DigitalCrewWorkItem openItem(Actor creator, String input, String permission, String module) {
+        return openItem(F, creator, input, permission, module);
+    }
+
+    private DigitalCrewWorkItem openItem(String factoryId, Actor creator, String input, String permission, String module) {
         DigitalCrewWorkItem w = new DigitalCrewWorkItem();
-        w.setFactoryId(F);
+        w.setFactoryId(factoryId);
         w.setMemberKey("production".equals(module) ? "planner" : "clerk");
         w.setIntentCode("X_CREATE");
         w.setTitle("t · " + input);
@@ -644,6 +651,12 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         }
         rows.get(0).setUserInput("明天加一个 500kg 的卤牛肉计划");
         items.saveAll(rows);
+        // 跨厂对照: 同一个人在别的厂也挂满了 —— 那边的件数不能算进本厂, 本厂的也不能算进那边
+        List<DigitalCrewWorkItem> elsewhere = new java.util.ArrayList<>();
+        for (int i = 0; i < DigitalCrewService.OPEN_DELEGATIONS_PER_USER; i++) {
+            elsewhere.add(openItem(OTHER_FACTORY, BOSS, "别厂 " + i, "production:read_write", "production"));
+        }
+        items.saveAll(elsewhere);
         writeIntentRecognized();
 
         DigitalCrewService.AskView again = service.ask(F, PLANNER, "planner", "明天加一个 500kg 的卤牛肉计划", null);
@@ -657,8 +670,8 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
                     assertThat(be.getCode()).isEqualTo(409);
                     assertThat(be.getActionHint()).contains("不办");
                 });
-        assertThat(items.count()).isEqualTo(DigitalCrewService.OPEN_DELEGATIONS_PER_USER);
-        // 别人不受我的上限影响
+        assertThat(items.count()).isEqualTo(2L * DigitalCrewService.OPEN_DELEGATIONS_PER_USER);
+        // 别人不受我的上限影响; 厂长在别的厂挂满了 20 件, 本厂照样能交办 (上限按厂按人)
         assertThat(service.ask(F, BOSS, "planner", "后天再加一个 800kg", null).kind()).isEqualTo("DELEGATED");
     }
 
@@ -671,6 +684,13 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         }
         for (int i = 0; i < 3; i++) {
             rows.add(openItem(OPERATOR, "销售 " + i, "sales:read_write", "sales"));
+        }
+        // 跨厂对照: 别的厂的已交办 (我能确认的码 + 我不能确认的码各一批) 不能出现在本厂的列表、总数或隐藏件数里
+        for (int i = 0; i < 40; i++) {
+            rows.add(openItem(OTHER_FACTORY, OPERATOR, "别厂生产 " + i, "production:read_write", "production"));
+        }
+        for (int i = 0; i < 7; i++) {
+            rows.add(openItem(OTHER_FACTORY, OPERATOR, "别厂质检 " + i, "quality:read_write", "quality"));
         }
         items.saveAll(rows);
 
@@ -718,6 +738,111 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         assertThat(w.getStatus()).isEqualTo(Status.OUTCOME_UNKNOWN);
         assertThat(w.getResultStatus()).isEqualTo("RECONCILED_UNREADABLE");
         assertThat(w.getQuotaCost()).isZero();
+    }
+
+    /**
+     * 中-C: 两个人几乎同时预览 (两边都还在等 LLM 预览时, 事项上都还没有凭据) ⇒ 先落库的登记上, 后落库的影响 0 行:
+     * 当场作废自己刚铸的凭据、返回 409 —— 最终只有一张凭据是有效的, 不会有一张脱离追踪的 PENDING 凭据。
+     */
+    @Test
+    void concurrentPreviewsLeaveExactlyOneLiveToken() throws Exception {
+        Long id = delegateOne();
+        previewMintsPerUser();
+        java.util.concurrent.CyclicBarrier bothInPreview = new java.util.concurrent.CyclicBarrier(2);
+        IntentExecuteResponse.ConfirmableAction[] minted = new IntentExecuteResponse.ConfirmableAction[2];
+        when(intents.preview(eq(F), any(), anyLong(), anyString())).thenAnswer(inv -> {
+            Long uid = inv.getArgument(2);
+            bothInPreview.await(10, java.util.concurrent.TimeUnit.SECONDS); // 两边都已经过了「作废旧凭据」, 都在等预览
+            IntentExecuteResponse.ConfirmableAction action = new IntentExecuteResponse.ConfirmableAction();
+            action.setConfirmToken("tok-" + uid);
+            action.setCommandDigest(DIGEST);
+            action.setExpiresAt(Instant.now().plusSeconds(300));
+            return IntentExecuteResponse.builder().status("PREVIEW").confirmableAction(action).build();
+        });
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            List<java.util.concurrent.Future<Object>> results = new java.util.ArrayList<>();
+            for (Actor a : List.of(PLANNER, BOSS)) {
+                results.add(pool.submit(() -> {
+                    try {
+                        return service.preview(F, a, id);
+                    } catch (BusinessException e) {
+                        return e;
+                    }
+                }));
+            }
+            int ok = 0;
+            int conflicts = 0;
+            for (java.util.concurrent.Future<Object> f : results) {
+                Object r = f.get(30, java.util.concurrent.TimeUnit.SECONDS);
+                if (r instanceof BusinessException be) {
+                    assertThat(be.getCode()).isEqualTo(409);
+                    conflicts++;
+                } else {
+                    ok++;
+                }
+            }
+            assertThat(ok).as("恰好一个人的预览登记上").isEqualTo(1);
+            assertThat(conflicts).as("另一个人 409").isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+        DigitalCrewWorkItem w = reread(id);
+        Long winner = w.getPreviewedByUserId();
+        Long loser = winner.equals(PLANNER.id()) ? BOSS.id() : PLANNER.id();
+        assertThat(w.getPreviewTokenId()).isEqualTo(500L + (winner - 80));
+        // 输的那一方: 自己刚铸的凭据被当场作废 (属主 = 自己), 不留一张没人追踪的 PENDING
+        verify(previewTokens).cancelPendingById(eq(500L + (loser - 80)), eq(F), eq(loser), anyString());
+        verify(previewTokens, never()).cancelPendingById(eq(500L + (winner - 80)), anyString(), anyLong(), anyString());
+    }
+
+    /** 低-1: 同一个人并发交办 (都已过识别、同时插入) ⇒ 交办锁让「数件数 → 插入」串行, 上限不会被冲破。 */
+    @Test
+    void concurrentAsksCannotBreakThePerUserCap() throws Exception {
+        int cap = DigitalCrewService.OPEN_DELEGATIONS_PER_USER;
+        List<DigitalCrewWorkItem> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < cap - 1; i++) {
+            rows.add(openItem(PLANNER, "已有 " + i, "production:read_write", "production"));
+        }
+        items.saveAll(rows);
+        int threads = 6;
+        java.util.concurrent.CyclicBarrier allRecognized = new java.util.concurrent.CyclicBarrier(threads);
+        when(intents.execute(eq(F), any(), anyLong(), anyString())).thenAnswer(inv -> {
+            allRecognized.await(10, java.util.concurrent.TimeUnit.SECONDS); // 都过了识别, 一起去插入
+            return IntentExecuteResponse.builder().intentRecognized(true).intentCode("PRODUCTION_PLAN_CREATE")
+                    .intentName("新建生产计划").status("READ_MODE_WRITE_BLOCKED").build();
+        });
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
+        int delegated = 0;
+        int refused = 0;
+        try {
+            List<java.util.concurrent.Future<Object>> results = new java.util.ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                String text = "并发第 " + i + " 件";
+                results.add(pool.submit(() -> {
+                    try {
+                        return service.ask(F, PLANNER, "planner", text, null);
+                    } catch (BusinessException e) {
+                        return e;
+                    }
+                }));
+            }
+            for (java.util.concurrent.Future<Object> f : results) {
+                Object r = f.get(60, java.util.concurrent.TimeUnit.SECONDS);
+                if (r instanceof BusinessException be) {
+                    assertThat(be.getCode()).isEqualTo(409);
+                    refused++;
+                } else {
+                    assertThat(((DigitalCrewService.AskView) r).kind()).isEqualTo("DELEGATED");
+                    delegated++;
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(delegated).as("只剩 1 个名额, 只有 1 件交办成功").isEqualTo(1);
+        assertThat(refused).isEqualTo(threads - 1);
+        assertThat(items.countOpenByUser(F, PLANNER.id(), Status.DELEGATED)).isEqualTo(cap);
     }
 
     @Test
