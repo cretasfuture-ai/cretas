@@ -51,6 +51,10 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     private final ProductionPlanRepository productionPlanRepository;
     private final MaterialBatchRepository materialBatchRepository;
@@ -674,7 +678,7 @@ public class ImpactAnalysisServiceImpl implements ImpactAnalysisService {
                 .planId(plan.getId())
                 .planNumber(plan.getPlanNumber())
                 .productName(plan.getProductType() != null
-                        ? plan.getProductType().getName()
+                        ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType())
                         : null)
                 .productTypeId(plan.getProductTypeId())
                 .plannedQuantity(plan.getPlannedQuantity())

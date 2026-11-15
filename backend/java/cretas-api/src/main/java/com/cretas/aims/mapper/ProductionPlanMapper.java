@@ -25,6 +25,10 @@ import java.util.UUID;
 @Slf4j
 @Component
 public class ProductionPlanMapper {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -116,7 +120,7 @@ public class ProductionPlanMapper {
                 .build();
         // 设置产品信息
         if (plan.getProductType() != null) {
-            String ptName = plan.getProductType().getName();
+            String ptName = com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType());
             dto.setProductName(ptName);
             dto.setProductTypeName(ptName);  // Bug #1b (R2): alias field, previously orphan, frontend may bind to either
             dto.setProductUnit(UnitDisplayNames.display(plan.getProductType().getUnit()));
