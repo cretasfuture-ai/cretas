@@ -33,6 +33,10 @@ import java.util.stream.Collectors;
 @Tag(name = "生产分析与人效分析")
 @RequireModule("production_plan")
 public class ProductionAnalyticsController {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     private final ProductionAnalyticsServiceImpl analyticsService;
     private final ProductionPlanRepository planRepository;
@@ -181,7 +185,7 @@ public class ProductionAnalyticsController {
                     Map<String, Object> item = new HashMap<>();
                     item.put("planId", p.getId());
                     item.put("planNumber", p.getPlanNumber());
-                    item.put("productName", p.getProductType() != null ? p.getProductType().getName() : "");
+                    item.put("productName", p.getProductType() != null ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, p.getFactoryId(), p.getProductType()) : "");
                     if (canViewCosts) {
                         item.put("estimatedMaterialCost", p.getEstimatedMaterialCost());
                         item.put("actualMaterialCost", p.getActualMaterialCost());

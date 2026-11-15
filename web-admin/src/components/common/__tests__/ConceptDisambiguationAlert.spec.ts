@@ -24,8 +24,8 @@ const props = {
 
 const global = {
   stubs: {
-    'el-alert': { template: '<div class="alert"><slot name="title"/><slot/></div>' },
-    'el-link': { template: '<a><slot/></a>' },
+    UAlert: { template: '<div class="alert"><slot name="title"/><slot name="description"/></div>' },
+    UButton: { template: '<a><slot/></a>' },
   },
 };
 
