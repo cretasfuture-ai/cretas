@@ -11,7 +11,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import type { TableColumn, TabsItem } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
 import { useAuthStore } from '@/store/modules/auth';
 import {
   getOutsourceOrder,
