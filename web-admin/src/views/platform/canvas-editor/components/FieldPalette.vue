@@ -57,5 +57,5 @@ function cloneItem(item: PaletteItem): Partial<DynamicField> {
   font-size: 13px; cursor: grab; background: #fff;
   transition: border-color 0.2s;
 }
-.palette-item:hover { border-color: #409eff; color: #409eff; }
+.palette-item:hover { border-color: var(--cs-primary); color: var(--cs-primary); }
 </style>

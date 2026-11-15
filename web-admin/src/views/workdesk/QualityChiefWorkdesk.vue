@@ -672,7 +672,7 @@ onMounted(() => {
   background: linear-gradient(135deg, #ecf5ff, #f4f8ff);
   padding: 12px 20px;
   border-radius: 8px;
-  border-left: 4px solid #409eff;
+  border-left: 4px solid var(--cs-primary);
 }
 
 .header-title {
