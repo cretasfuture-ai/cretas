@@ -377,7 +377,7 @@ onMounted(() => {
   font-size: 20px;
 }
 .back-btn {
-  color: #409eff;
+  color: var(--cs-primary);
   cursor: pointer;
   font-size: 14px;
 }

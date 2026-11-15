@@ -1352,7 +1352,7 @@ watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
   background: #f0f9ff;
   padding: 8px 12px;
   border-radius: 4px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--cs-primary);
 }
 
 .form-hint {

@@ -76,9 +76,9 @@
             <div
               class="workflow-node"
               :class="[`node-cat-${data.nodeCategory || 'default'}`, { 'node-initial': data.stateType === 'initial', 'node-final': data.stateType === 'final' }]"
-              :style="{ borderColor: data.color || '#409EFF', borderLeftColor: data.color || '#409EFF' }"
+              :style="{ borderColor: data.color || 'var(--cs-primary)', borderLeftColor: data.color || 'var(--cs-primary)' }"
             >
-              <div class="node-header" :style="{ backgroundColor: data.color || '#409EFF' }">
+              <div class="node-header" :style="{ backgroundColor: data.color || 'var(--cs-primary)' }">
                 <span class="node-header-icon">{{ nodeIcon(data.nodeCategory) }}</span>
                 {{ data.label }}
               </div>
@@ -360,6 +360,7 @@
 </template>
 
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 import { ref, computed, onMounted, reactive, watch } from 'vue'
 import { VueFlow, type Node, type Edge, type Connection } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -526,7 +527,7 @@ function buildFlowFromSM(states: SMState[], transitions: SMTransition[]) {
       label: s.name,
       stateCode: s.code,
       stateType: s.type || 'normal',
-      color: s.color || '#409EFF',
+      color: s.color || CS_TOKENS.primary,
       description: s.description || '',
       nodeSchemaType: s.nodeSchemaType || '',
       nodeCategory: s.nodeCategory || '',
@@ -705,7 +706,7 @@ function buildSMJson() {
     name: n.data.label as string,
     type: (n.data.stateType as 'initial' | 'normal' | 'final') || 'normal',
     description: (n.data.description as string) || '',
-    color: (n.data.color as string) || '#409EFF',
+    color: (n.data.color as string) || CS_TOKENS.primary,
     nodeSchemaType: (n.data.nodeSchemaType as string) || '',
     nodeCategory: (n.data.nodeCategory as string) || '',
     nodeConfig: n.data.nodeConfig || {},

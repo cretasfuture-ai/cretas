@@ -826,7 +826,7 @@ defineExpose({
     color: #303133;
 
     .el-icon {
-      color: #409eff;
+      color: var(--cs-primary);
     }
   }
 

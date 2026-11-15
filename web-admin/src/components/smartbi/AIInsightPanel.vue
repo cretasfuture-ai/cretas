@@ -212,7 +212,7 @@ function handleRefresh() {
         <!-- Suggestions Section -->
         <div v-if="insight?.suggestions?.items?.length" class="insight-section suggestions">
           <div class="section-header">
-            <el-icon :size="16" color="#409eff"><InfoFilled /></el-icon>
+            <el-icon :size="16" color="var(--cs-primary)"><InfoFilled /></el-icon>
             <span class="section-title">{{ insight!.suggestions.title || '建议' }}</span>
             <span class="item-count">{{ insight!.suggestions.items.length }}</span>
           </div>
@@ -375,16 +375,16 @@ function handleRefresh() {
 
   .retry-button {
     padding: 8px 20px;
-    border: 1px solid #409eff;
+    border: 1px solid var(--cs-primary);
     border-radius: 4px;
     background: transparent;
-    color: #409eff;
+    color: var(--cs-primary);
     font-size: 13px;
     cursor: pointer;
     transition: all 0.2s;
 
     &:hover {
-      background: #409eff;
+      background: var(--cs-primary);
       color: #fff;
     }
   }
@@ -431,7 +431,7 @@ function handleRefresh() {
 
   &.suggestions {
     .section-header {
-      color: #409eff;
+      color: var(--cs-primary);
     }
   }
 }
@@ -495,7 +495,7 @@ function handleRefresh() {
     }
 
     &.suggestion-bullet {
-      background: #409eff;
+      background: var(--cs-primary);
     }
   }
 

@@ -7778,7 +7778,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   z-index: 10;
   border-radius: 10px;
   box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 32%, transparent),
     0 12px 30px rgba(27, 101, 168, 0.2);
   transition: box-shadow 140ms ease;
 }
@@ -7796,7 +7796,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   z-index: 11;
   border-radius: 10px;
   box-shadow:
-    0 0 0 5px color-mix(in srgb, var(--pair-color, #409eff) 32%, transparent),
+    0 0 0 5px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 32%, transparent),
     0 14px 34px rgba(27, 101, 168, 0.22);
 }
 .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::before {
@@ -7804,14 +7804,14 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   position: absolute; left: 8px; top: -25px; height: 20px;
   display: flex; align-items: center; padding: 0 8px;
   border-radius: 10px; color: #fff;
-  background: var(--pair-color, #409eff);
-  box-shadow: 0 3px 10px color-mix(in srgb, var(--pair-color, #409eff) 28%, transparent);
+  background: var(--pair-color, var(--cs-primary));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--pair-color, var(--cs-primary)) 28%, transparent);
   font-size: 12px; font-weight: 700; white-space: nowrap; pointer-events: none;
 }
 .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
   content: ''; position: absolute; right: -8px; top: -8px;
   width: 14px; height: 14px; border-radius: 50%;
-  border: 3px solid var(--pair-color, #409eff); background: #fff; pointer-events: none;
+  border: 3px solid var(--pair-color, var(--cs-primary)); background: #fff; pointer-events: none;
 }
 @media (prefers-reduced-motion: no-preference) {
   .workflow-canvas :deep(.vue-flow__node.wf-pair-remote)::after {
@@ -7819,7 +7819,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   }
 }
 @keyframes wf-pair-beacon {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pair-color, #409eff) 44%, transparent); }
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--pair-color, var(--cs-primary)) 44%, transparent); }
   70% { box-shadow: 0 0 0 13px transparent; }
   100% { box-shadow: 0 0 0 13px transparent; }
 }
@@ -8204,8 +8204,8 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   font-size: 13px;
 }
 .raw-input-mode.is-active {
-  border-color: var(--el-color-primary, #409eff);
-  color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
+  color: var(--el-color-primary, var(--cs-primary));
   background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relations { display: grid; gap: 8px; }
@@ -8220,7 +8220,7 @@ function identitiesMatch(left: WorkflowIdentity, right: WorkflowIdentity): boole
   cursor: pointer;
 }
 .raw-input-relation.is-active {
-  border-color: var(--el-color-primary, #409eff);
+  border-color: var(--el-color-primary, var(--cs-primary));
   background: var(--el-color-primary-light-9, #ecf5ff);
 }
 .raw-input-relation input { grid-area: radio; margin-top: 3px; }

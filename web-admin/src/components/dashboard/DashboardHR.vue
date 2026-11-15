@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 人事管理 Dashboard
  * 适用角色: hr_admin
@@ -53,7 +54,7 @@ const statCards = computed<Array<{
     value: hrStats.value.activeEmployees,
     unit: '人',
     icon: User,
-    color: '#409eff',
+    color: CS_TOKENS.primary,
     route: '/hr/employees'
   },
   {
@@ -86,7 +87,7 @@ const statCards = computed<Array<{
 
 // 快捷操作
 const quickActions = [
-  { title: '员工档案', icon: User, route: '/hr/employees', color: '#409eff' },
+  { title: '员工档案', icon: User, route: '/hr/employees', color: CS_TOKENS.primary },
   { title: '考勤统计', icon: Clock, route: '/hr/attendance', color: '#67c23a' },
   { title: '账号邀请', icon: Files, route: '/hr/whitelist', color: '#e6a23c' },
   { title: '部门管理', icon: UserFilled, route: '/hr/departments', color: '#909399' }
@@ -243,7 +244,7 @@ function navigateTo(route: string) {
                 </div>
               </div>
               <div class="attendance-stat">
-                <el-icon :size="40" color="#409eff"><Clock /></el-icon>
+                <el-icon :size="40" color="var(--cs-primary)"><Clock /></el-icon>
                 <div class="stat-detail">
                   <span class="label">出勤率</span>
                   <span class="value">{{ hrStats.attendanceRate }}%</span>
@@ -435,7 +436,7 @@ function navigateTo(route: string) {
 
       strong {
         font-size: 18px;
-        color: #409eff;
+        color: var(--cs-primary);
       }
     }
   }
