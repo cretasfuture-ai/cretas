@@ -78,6 +78,7 @@ public class ProcessingController {
             @PathVariable @Parameter(description = "工厂ID", example = "F001") String factoryId,
             @Valid @RequestBody CreateProductionBatchRequest request) {
         log.info("创建生产批次: factoryId={}, batchNumber={}", factoryId, request.getBatchNumber());
+        assertPositiveBatchQuantity(request);
         ProductionBatch batch = toProductionBatch(request);
         ProductionBatch result = processingService.createBatch(factoryId, batch);
         return ApiResponse.success(result);
@@ -1071,6 +1072,24 @@ public class ProcessingController {
      * {@code totalCost}, {@code unitCost}, {@code yieldRate},
      * {@code efficiency}, {@code workDurationMinutes}.
      */
+    /**
+     * 建批次的数量必须大于 0 (Steve 2026-11-15 裁决: 后端也拒绝 0, 不再静默记 0)。
+     *
+     * <p>实际数量取 quantity, 缺省回退 plannedQuantity; 两者都没填也算 0。填了 plannedQuantity 就必须大于 0。
+     * 没有计划量、按实际报工的持续生产, 走存货生产类型的生产计划, 不走手工建批次。
+     * 只管 HTTP 入口; AI 建批工具走 service, 不受此限 (本次裁决范围外)。
+     */
+    static void assertPositiveBatchQuantity(CreateProductionBatchRequest r) {
+        java.math.BigDecimal planned = r.getPlannedQuantity();
+        java.math.BigDecimal effective = r.getQuantity() != null ? r.getQuantity() : planned;
+        if ((planned != null && planned.signum() <= 0) || effective == null || effective.signum() <= 0) {
+            throw new com.cretas.aims.exception.BusinessException(400, "批次数量必须大于 0")
+                    .withCode("BATCH_QUANTITY_MUST_BE_POSITIVE")
+                    .withHint("请填写大于 0 的计划数量; 没有固定产量的持续生产, 请改建「存货生产」类型的生产计划")
+                    .withHintTarget("plannedQuantity");
+        }
+    }
+
     private static ProductionBatch toProductionBatch(CreateProductionBatchRequest r) {
         ProductionBatch b = new ProductionBatch();
         b.setBatchNumber(r.getBatchNumber());

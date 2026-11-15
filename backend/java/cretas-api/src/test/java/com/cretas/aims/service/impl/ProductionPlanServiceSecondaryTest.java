@@ -236,6 +236,67 @@ class ProductionPlanServiceSecondaryTest {
                     .isInstanceOf(ResourceNotFoundException.class);
         }
 
+        private ProductionPlanServiceImpl serviceWithWorkflowVerdict(Optional<Boolean> verdict) throws Exception {
+            ProductionPlanServiceImpl svc = buildService(wipInventoryService);
+            SemiFinishedInventory wip = buildWip(new BigDecimal("50"));
+            wip.setProductTypeId("SEMI-1");
+            wip.setIntermediateBatchNo("CLK-SEMI-1");
+            when(wipInventoryService.listAvailableWip(FACTORY_ID)).thenReturn(List.of(wip));
+            when(productTypeRepo.findByIdAndFactoryId(PRODUCT_TYPE_ID, FACTORY_ID))
+                    .thenReturn(Optional.of(buildProductType()));
+            when(productionPlanRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            when(productionPlanMapper.toDTO(any())).thenReturn(new ProductionPlanDTO());
+            var workflows = mock(com.cretas.aims.service.workflow.ProductWorkflowResolutionService.class);
+            when(workflows.activeWorkflowAcceptsInput(FACTORY_ID, PRODUCT_TYPE_ID, "SEMI-1")).thenReturn(verdict);
+            injectField(svc, "workflowResolutionService", workflows);
+            return svc;
+        }
+
+        @Test
+        @DisplayName("目标工艺没有工序接这份半成品 → 建计划时就 409, 不落库 (Steve 2026-11-15)")
+        void targetWorkflowDoesNotAcceptSource_throws409AtCreate_andSavesNothing() throws Exception {
+            ProductionPlanServiceImpl svc = serviceWithWorkflowVerdict(Optional.of(false));
+
+            assertThatThrownBy(() -> svc.createSecondaryPlan(FACTORY_ID, WIP_ID,
+                    new BigDecimal("10"), PRODUCT_TYPE_ID, LocalDate.now(), 1L))
+                    .isInstanceOfSatisfying(BusinessException.class, ex -> {
+                        assertThat(ex.getCode()).isEqualTo(409);
+                        assertThat(ex.getErrorCode()).isEqualTo("SECONDARY_SOURCE_NOT_ACCEPTED");
+                    });
+            verify(productionPlanRepo, never()).save(any());
+        }
+
+        /** 预检放行 = 不抛 SECONDARY_SOURCE_NOT_ACCEPTED; 后面的单位/BOM 权威链不在本测试范围, 其报错与预检无关。 */
+        private void assertPrecheckDoesNotBlock(ProductionPlanServiceImpl svc) {
+            try {
+                svc.createSecondaryPlan(FACTORY_ID, WIP_ID,
+                        new BigDecimal("10"), PRODUCT_TYPE_ID, LocalDate.now(), 1L);
+            } catch (BusinessException ex) {
+                assertThat(ex.getErrorCode()).isNotEqualTo("SECONDARY_SOURCE_NOT_ACCEPTED");
+            }
+        }
+
+        @Test
+        @DisplayName("目标工艺有工序接这份半成品 → 预检放行")
+        void targetWorkflowAcceptsSource_precheckPasses() throws Exception {
+            ProductionPlanServiceImpl svc = serviceWithWorkflowVerdict(Optional.of(true));
+
+            assertPrecheckDoesNotBlock(svc);
+
+            // 阴性对照的对面: 预检确实被问过 (不是因为没接线才放行)
+            verify((com.cretas.aims.service.workflow.ProductWorkflowResolutionService)
+                    org.springframework.test.util.ReflectionTestUtils.getField(svc, "workflowResolutionService"))
+                    .activeWorkflowAcceptsInput(FACTORY_ID, PRODUCT_TYPE_ID, "SEMI-1");
+        }
+
+        @Test
+        @DisplayName("目标成品没有可解析的已启用工艺 (无端口可比) → 预检不能判断, 放行, 开工闸仍在")
+        void noResolvableWorkflow_precheckUndecidable_doesNotBlock() throws Exception {
+            ProductionPlanServiceImpl svc = serviceWithWorkflowVerdict(Optional.empty());
+
+            assertPrecheckDoesNotBlock(svc);
+        }
+
         @Test
         @DisplayName("wipInventoryService 为 null (未注入) → 500")
         void wipServiceNull_throws500() throws Exception {
