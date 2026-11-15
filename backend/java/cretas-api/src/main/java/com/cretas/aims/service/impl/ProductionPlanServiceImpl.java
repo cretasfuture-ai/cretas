@@ -2963,7 +2963,10 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         String productTypeName = null;
         try {
             if (plan.getProductType() != null) {
-                productTypeName = plan.getProductType().getName();
+                // 联产计划的 productType 是内部原料锚点 (名字 __RAW_WORKFLOW_OWNER__<原料id>), 不能原样给人看:
+                // 与排程页/成本差异页同一份规则 —— 显示原料名, 查不到就去掉前缀。⛔ 只改输出, 锚点存储与匹配不动。
+                productTypeName = com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(
+                        rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType());
             }
         } catch (Exception ignored) {
             // 容忍 lazy-load 失败 — productTypeName 为 null 由前端兜底
