@@ -15,7 +15,7 @@ vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => auth }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }), useRoute: () => ({ query: {} }) }));
 
 const FrameStub = defineComponent({ template: '<div data-frame><slot /></div>' });
-const ConversationStub = defineComponent({ props: { response: String }, template: '<div data-conversation>{{ response }}<slot name="action" /></div>' });
+const ConversationStub = defineComponent({ props: { response: String, error: String }, template: '<div data-conversation>{{ response }}{{ error }}<slot name="action" /></div>' });
 
 function open() {
   return mount(FinanceManagerWorkdesk, {
@@ -25,6 +25,13 @@ function open() {
 }
 
 describe('FinanceManager digital specialist', () => {
+  it.each([undefined, 'INCOME_STATEMENT_QUERY'])('rejects generated financial prose without native facts (echo=%s)', async (intentCode) => {
+    api.post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode, formattedText: '不可信的全部为零', resultData: {} } });
+    const wrapper = open(); await wrapper.setProps({ employeeNavigationPending: false }); await flushPromises();
+    expect(wrapper.findComponent(ConversationStub).text()).not.toContain('不可信');
+    expect(wrapper.text()).toContain('未收到可核验的利润表原始结果');
+    wrapper.unmount();
+  });
   it('renders the pure income tool facts and warnings rather than a contradictory generated empty-data summary', async () => {
     api.post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode: 'INCOME_STATEMENT_QUERY', formattedText: '本月暂无利润表数据，各指标均为空', resultData: {
       message: '2026-11 利润表: 营业收入 ¥0.00 / 净利润 ¥-5.91',
@@ -46,7 +53,7 @@ describe('FinanceManager digital specialist', () => {
   beforeEach(() => {
     api.post.mockReset();
     api.get.mockReset();
-    api.post.mockResolvedValue({ data: { status: 'SUCCESS', formattedText: '本月经营摘要', resultData: {} } });
+    api.post.mockResolvedValue({ data: { status: 'SUCCESS', formattedText: '本月经营摘要', resultData: { message: '本月经营摘要' } } });
     api.get.mockResolvedValue({ data: { items: [], count: 0 } });
     auth.factoryId = 'F001';
     auth.user = { id: 41 };
@@ -85,7 +92,7 @@ describe('FinanceManager digital specialist', () => {
     });
     await flushPromises();
     auth.factoryId = 'F009';
-    api.post.mockResolvedValueOnce({ data: { status: 'SUCCESS', formattedText: '新企业结果', resultData: {} } });
+    api.post.mockResolvedValueOnce({ data: { status: 'SUCCESS', formattedText: '新企业结果', resultData: { message: '新企业结果' } } });
     await flushPromises();
     resolveOld({ data: { status: 'SUCCESS', formattedText: '旧企业结果', resultData: {} } });
     await flushPromises();

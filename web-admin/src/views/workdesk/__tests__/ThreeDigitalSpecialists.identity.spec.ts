@@ -22,6 +22,24 @@ const mountPage = (component: typeof Sales, extra = {}) => shallowMount(componen
 });
 
 describe('sales/purchase/inventory digital specialist identities', () => {
+  it('keeps procurement busy until the supplementary forecast finishes, preventing mixed query rounds', async () => {
+    let finishForecast!: (value: unknown) => void;
+    api.post.mockImplementation((_path, body) => body.intentCode === 'SALES_FORECAST_7DAY'
+      ? new Promise(resolve => { finishForecast = resolve; })
+      : Promise.resolve({ data: { status: 'SUCCESS', resultData: { warnings: [] } } }));
+    const wrapper = mountPage(Purchase, { employeeNavigationPending: false, wholesaleMode: false });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { loading: boolean; forecastRows: unknown[] };
+    expect(vm.loading).toBe(true);
+    const count = api.post.mock.calls.length;
+    wrapper.findComponent(Conversation).vm.$emit('send', '第二轮采购问题'); await flushPromises();
+    expect(api.post.mock.calls).toHaveLength(count);
+    finishForecast({ data: { status: 'SUCCESS', resultData: { forecasts: [{ productTypeId: 'MAT', predicted7DayDemand: 5 }] } } });
+    await flushPromises();
+    expect(vm.loading).toBe(false);
+    expect(vm.forecastRows).toHaveLength(1);
+    wrapper.unmount();
+  });
   it.each([
     [Sales, ['SPRINT10_SHIPMENT_PENDING_TODAY']],
     [Purchase, ['SALES_FORECAST_7DAY']],

@@ -8,7 +8,7 @@
   (5 屏 10 分钟). Cretas Workdesk: 1 屏 30 秒.
 
   架构: 复用现有只读利润表查询；审批等办理操作沿用原有确认流程。
-  Backend 路由到 monthly-financial-close Skill (串 8 Tool + LLM aggregate).
+  数字专员默认查询使用 INCOME_STATEMENT_QUERY 原生报表事实。
 
   防呆: 4 位一体. 三表链接跳 Sprint 7 T3 ship 的 /finance/three-statements.
 -->
@@ -643,10 +643,13 @@ async function sendQuery(forceMonthlyClose = false) {
     //    让用户以为「本月营收 0」。
     if (!nonAnswerLabel) {
       const resultData = response.resultData || {};
-      if (response.intentCode === 'INCOME_STATEMENT_QUERY') {
+      if (intentCode === 'INCOME_STATEMENT_QUERY' || response.intentCode === 'INCOME_STATEMENT_QUERY') {
         const nativeMessage = resultData.message;
         const facts = resultData.data as Record<string, unknown> | undefined;
-        if (typeof nativeMessage === 'string' && nativeMessage.trim()) {
+        if (typeof nativeMessage !== 'string' || !nativeMessage.trim()) {
+          formattedText.value = '';
+          throw new Error('未收到可核验的利润表原始结果，请从财务报表入口核对');
+        } else {
           const period = facts && ['startYear', 'startMonth', 'endYear', 'endMonth'].every(key => Number.isInteger(facts[key]))
             ? `实际期间：${facts.startYear}-${String(facts.startMonth).padStart(2, '0')} 至 ${facts.endYear}-${String(facts.endMonth).padStart(2, '0')}\n\n` : '';
           const warningValues = facts?.metricWarnings;

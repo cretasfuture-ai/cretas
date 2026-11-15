@@ -618,16 +618,9 @@ async function callIntentExecute(input: string, intentCode?: string,
 }
 
 async function triggerWeeklyPlan() {
-  const isCurrentOperation = scopedRequests.capture();
   // Query available tools directly; the legacy weekly Skill may not be configured.
   userInput.value = props.digitalEmployee ? '查询低库存预警' : '下周采购什么?';
-  await sendQuery(!props.digitalEmployee);
-  if (!isCurrentOperation() || props.employeeNavigationPending) return;
-  if (props.digitalEmployee && !props.wholesaleMode) {
-    await loadSalesForecast();
-    if (!isCurrentOperation() || props.employeeNavigationPending) return;
-    await loadPriceHistories();
-  }
+  await sendQuery(!props.digitalEmployee, props.digitalEmployee && !props.wholesaleMode);
 }
 
 async function verifyStockPrerequisites(): Promise<boolean> {
@@ -650,7 +643,7 @@ async function verifyStockPrerequisites(): Promise<boolean> {
   return true;
 }
 
-async function sendQuery(autoTrigger = false) {
+async function sendQuery(autoTrigger = false, includeSupplemental = false) {
   if (props.employeeNavigationPending) return;
   const isCurrentOperation = scopedRequests.capture();
   const query = userInput.value.trim();
@@ -668,7 +661,10 @@ async function sendQuery(autoTrigger = false) {
   try {
     // 1. 低库存预警 (主路径)
     const stockPrechecked = props.digitalEmployee && /低库存|库存预警/.test(query);
-    if (stockPrechecked && !await verifyStockPrerequisites()) return;
+    if (stockPrechecked && !await verifyStockPrerequisites()) {
+      if (includeSupplemental && isCurrentOperation()) await loadSalesForecast();
+      return;
+    }
     const intentCode = autoTrigger ? 'PURCHASER_WEEKLY_PLAN' : undefined;
     const response = await callReadIntent(query, intentCode);
     if (props.digitalEmployee && response.intentCode === 'MATERIAL_LOW_STOCK_ALERT' && !stockPrechecked
@@ -700,10 +696,11 @@ async function sendQuery(autoTrigger = false) {
     }
 
     // 2. 自动 trigger 时, 并发拉销售预测
-    if (autoTrigger) {
+    if (autoTrigger || includeSupplemental) {
       await Promise.allSettled([
         loadSalesForecast(),
       ]);
+      if (!isCurrentOperation() || props.employeeNavigationPending) return;
       // 3. 顺次拉每个低库存物料的价格历史 (limit 6 避免太多调用)
       await loadPriceHistories();
     }
