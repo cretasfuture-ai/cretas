@@ -105,4 +105,22 @@ class ReportCostVarianceProductResolutionContractTest {
         Map<String, Object> kept = run(Map.of("varianceThreshold", 5));
         assertEquals(5.0, ((Number) ((Map<?, ?>) kept.get("queryConditions")).get("varianceThreshold")).doubleValue());
     }
+
+    // 2026-11-15 复跑 Q14: 可比时没有 message, 通用格式化器把 DTO 字段打成 `comparedPlanCount: 13 | ...`; 且 totalBomCost(只含可比计划)
+    // 和 totalActualCost(期间全部批次) 口径不同, 不能相减。必须给人话, 差额用「可比计划的实际成本」算
+    @Test
+    void comparableResult_hasHumanMessage_andDoesNotSubtractIncomparableActual() throws Exception {
+        CostVarianceReportDTO d = CostVarianceReportDTO.builder()
+                .comparable(true).comparedPlanCount(13).incomparablePlanCount(61)
+                .totalBomCost(new BigDecimal("16.52")).comparedActualCost(new BigDecimal("18.00"))
+                .totalVariance(new BigDecimal("1.48")).totalVarianceRate(new BigDecimal("8.96"))
+                .totalActualCost(new BigDecimal("200426.82")).batchCount(74).build();
+        when(reportService.getCostVarianceReport(eq("F1"), any(), any())).thenReturn(d);
+        Map<String, Object> r = run(Map.of());
+        String msg = String.valueOf(r.get("message"));
+        assertFalse(msg.contains("comparedPlanCount") || msg.contains("totalBomCost"), msg);
+        assertTrue(msg.contains("13 个能和标准成本比较") && msg.contains("61 个无法比较"), msg);
+        assertTrue(msg.contains("标准成本 ¥16.52") && msg.contains("实际成本 ¥18.00") && msg.contains("差额 ¥1.48"), msg);
+        assertTrue(msg.contains("不能拿它和可比部分的标准成本相减"), msg);
+    }
 }

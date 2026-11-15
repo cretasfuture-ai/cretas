@@ -64,6 +64,7 @@ class ReportCostVarianceToolNotComparableTest {
         Map<String, Object> result = run(dto);
 
         assertThat(result.get("comparable")).isEqualTo(true);
-        assertThat(result.get("message")).isNull();
+        // 可比时现在会给人话 message (Q14); 性质不变: 不得宣称整体「成本差异无法比较」
+        assertThat(String.valueOf(result.get("message"))).doesNotContain("成本差异无法比较");
     }
 }

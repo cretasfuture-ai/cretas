@@ -115,7 +115,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
-        String productName = getString(params, "productName");
+        String productName = ReportToolSchemas.productKeyword(getString(params, "productName"));
         // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
         if (productTypeId != null && productTypeRepository != null) {
             final String candidateId = productTypeId;
@@ -237,6 +237,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             sum.append("回料差 = 从别的计划回投的回料按回料池单位成本加、本计划产出转给别人的回料按同一单价减 (配方不含回料时标准为 0); 本计划自产自用是内部转移不另计; 主料用量差算不出时回料差无法比较。");
             if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
             result.put("summary", sum.toString());
+            result.put("message", humanMessage(costVarianceData, startDate, endDate));
         }
 
         // 添加查询条件摘要
@@ -251,6 +252,45 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         log.info("成本差异报表查询完成 - 工厂ID: {}, 日期范围: {} ~ {}", factoryId, startDate, endDate);
 
         return result;
+    }
+
+    /** 可比时给人看的话 (没有 message 键时通用格式化器会把字段打成 key: value 串, 2026-11-15 Q14)。 */
+    static String humanMessage(CostVarianceReportDTO d, LocalDate start, LocalDate end) {
+        int compared = d.getComparedPlanCount() == null ? 0 : d.getComparedPlanCount();
+        int incomparable = d.getIncomparablePlanCount() == null ? 0 : d.getIncomparablePlanCount();
+        StringBuilder sb = new StringBuilder();
+        sb.append(start).append(" 至 ").append(end).append("：共 ").append(compared + incomparable)
+                .append(" 个生产计划，").append(compared).append(" 个能和标准成本比较");
+        if (incomparable > 0) {
+            sb.append("，").append(incomparable).append(" 个无法比较（常见原因：开计划时没有标准成本快照、快照缺物料单价、还没产出）");
+        }
+        sb.append("。\n");
+        sb.append("可比部分：标准成本 ¥").append(plain(d.getTotalBomCost()))
+                .append("，实际成本 ¥").append(plain(d.getComparedActualCost()))
+                .append("，差额 ¥").append(plain(d.getTotalVariance()))
+                .append("（").append(plain(d.getTotalVarianceRate())).append("%）。");
+        if (d.getPriceVariance() != null) {
+            sb.append("其中价格差 ¥").append(plain(d.getPriceVariance()))
+                    .append("、用量差 ¥").append(plain(d.getUsageVariance()))
+                    .append("、替代料差 ¥").append(plain(d.getSubstituteVariance()));
+            if (d.getLaborVariance() != null) sb.append("、人工差 ¥").append(plain(d.getLaborVariance()));
+            sb.append("。");
+        }
+        if (d.getTotalActualCost() != null && incomparable > 0) {
+            sb.append("\n注意：期间全部批次的实际总成本是 ¥").append(plain(d.getTotalActualCost()))
+                    .append("，包含上面无法比较的计划，不能拿它和可比部分的标准成本相减。");
+        }
+        if (d.getAnomalyProducts() != null && !d.getAnomalyProducts().isEmpty()) {
+            List<String> names = new ArrayList<>();
+            d.getAnomalyProducts().stream()
+                    .sorted(Comparator.comparing((CostVarianceReportDTO.ProductCostVariance p) -> p.getVarianceRate().abs()).reversed())
+                    .limit(3)
+                    .forEach(p -> names.add(p.getProductName() + "（" + plain(p.getVarianceRate()) + "%）"));
+            sb.append("\n差异率超过 5% 的产品共 ").append(d.getAnomalyProducts().size()).append(" 个，最大的：")
+                    .append(String.join("、", names)).append("。");
+        }
+        if (d.getProcessSecretNote() != null) sb.append(d.getProcessSecretNote());
+        return sb.toString();
     }
 
     private static String plain(java.math.BigDecimal value) {

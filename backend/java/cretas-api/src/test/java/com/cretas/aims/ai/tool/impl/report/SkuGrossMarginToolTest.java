@@ -523,4 +523,25 @@ class SkuGrossMarginToolTest {
         JsonNode none = run("{}").get("data").get("data");
         assertNull(none.get("charts"));
     }
+
+    // 2026-11-15 复跑 Q05/Q06: 大模型把「全部」「哪个产品毛利率最高」当产品名 → 「没有找到名称含…」。范围词 / 整句问法 = 不限产品, 出全量排序
+    @Test
+    void scopeWordOrWholeQuestionAsProductName_isNotAProductFilter_andRanksAll() throws Exception {
+        type("A", "牛肉酱", "100");
+        type("B", "酱鸭", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "90");
+        sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
+        sales("B", "酱鸭", 1, 1, 0, "100", "100", "90");
+        for (String bad : new String[]{"全部", "哪个产品毛利率最高", "各 SKU", "所有产品"}) {
+            JsonNode result = run("{\"productName\":\"" + bad + "\"}");
+            assertFalse(message(result).contains("没有找到名称含"), bad + " -> " + message(result));
+            JsonNode items = result.get("data").get("data").get("items");
+            assertEquals(2, items.size(), bad);
+            assertEquals("牛肉酱", items.get(0).get("productName").asText(), bad + " 应按毛利率从高到低");
+        }
+        // 阴性对照: 真产品名照常只筛该产品
+        JsonNode one = run("{\"productName\":\"酱鸭\"}");
+        assertEquals(1, one.get("data").get("data").get("items").size());
+    }
 }

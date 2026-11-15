@@ -339,10 +339,26 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    /** 个人工资明细: 整轮拒答 (识别之前), 见 PersonalPayRefusalGuard。 */
+    public static IntentExecuteResponse personalPayRefusalResponse() {
+        String message = com.cretas.aims.ai.tool.PersonalPayRefusalGuard.MESSAGE;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status(com.cretas.aims.ai.tool.PersonalPayRefusalGuard.STATUS)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return personalPayRefusalResponse();
+        }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }

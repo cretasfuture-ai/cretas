@@ -93,7 +93,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        String keyword = blankToNull(getString(params, "productName"));
+        String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
         String startText = blankToNull(getString(params, "startDate"));
         String endText = blankToNull(getString(params, "endDate"));
 

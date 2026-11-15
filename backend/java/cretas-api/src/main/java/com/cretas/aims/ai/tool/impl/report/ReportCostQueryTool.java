@@ -111,7 +111,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        String keyword = blankToNull(getString(params, "productName"));
+        String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
         String productLabel = keyword;   // 回复 / data 里写明是哪个产品; keyword 解析后会清空 (改按 productTypeId 过滤)
         boolean showAmounts = replyShowsAmounts(context, "cost", "unitCost", "totalCost");
         // 产品名先在本厂在用产品里解析: 完全同名优先; 包含匹配多个时给候选, 不把「卤牛肉/卤牛肉片/五香卤牛肉」合计成一个数

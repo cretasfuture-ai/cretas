@@ -96,7 +96,7 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        String keyword = blank(getString(params, "productName"));
+        String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
         boolean showAmounts = replyShowsAmounts(context, "cost", "totalCost", "laborCost");
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null

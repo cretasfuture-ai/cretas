@@ -3061,6 +3061,16 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("实际成本与标准成本差多少", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("实际成本和标准成本", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("实际成本与标准成本", "REPORT_COST_VARIANCE");
+        // 演示题单第二轮复跑 (2026-11-15): 「本月生产了多少批次，合格率多少」财务号落 QUALITY_STATS、管理员号落 SMART_INDICATOR_QUERY(要 indicator_code);
+        // 「原料采购价涨得最多」财务号落 PRICE_HISTORY_QUERY(要 materialTypeId + 采购权限)、管理员号落 SUPPLIER_PRICE_ALERT。同一句话两个角色必须同一意图。
+        phraseToIntentMapping.put("本月生产了多少批次，合格率多少", "QUALITY_STATS");
+        phraseToIntentMapping.put("本月生产了多少批次合格率多少", "QUALITY_STATS");
+        phraseToIntentMapping.put("生产了多少批次，合格率多少", "QUALITY_STATS");
+        phraseToIntentMapping.put("本月批次数和合格率", "QUALITY_STATS");
+        phraseToIntentMapping.put("原料采购价最近涨得最多的是哪个", "SUPPLIER_PRICE_ALERT");
+        phraseToIntentMapping.put("采购价最近涨得最多的是哪个", "SUPPLIER_PRICE_ALERT");
+        phraseToIntentMapping.put("哪个原料涨价最多", "SUPPLIER_PRICE_ALERT");
+        phraseToIntentMapping.put("原料采购价涨得最多", "SUPPLIER_PRICE_ALERT");
         phraseToIntentMapping.put("标准成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("和上月比哪个成本涨了", "COST_QUERY");
         phraseToIntentMapping.put("和上月比成本", "COST_QUERY");
