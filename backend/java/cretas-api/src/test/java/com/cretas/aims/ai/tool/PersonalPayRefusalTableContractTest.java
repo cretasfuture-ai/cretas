@@ -44,8 +44,18 @@ class PersonalPayRefusalTableContractTest {
             "本月发了多少工资（总额）",
             "工资策略",
             "每个产品的毛利",
-            "计件工资多少钱一件"})
+            "计件工资多少钱一件",
+            // organizer 终审低危: 问在哪操作 / 谁经手, 不是要数额
+            "工资明细表在哪导出",
+            "谁负责发工资"})
     void mustPass(String text) {
         assertFalse(PersonalPayRefusalGuard.refuses(text), "应放行: " + text);
+    }
+
+    /** 上面两条放行的阴性对照: 操作类问法带上逐人 / 点名仍拒, 「谁的工资最高」仍拒。 */
+    @ParameterizedTest(name = "拒(对照): {0}")
+    @ValueSource(strings = {"导出每个员工的工资明细", "张三的工资明细在哪导出", "谁的工资最高"})
+    void operationalQuestionsStillRefuseWhenTheyPointAtPeople(String text) {
+        assertTrue(PersonalPayRefusalGuard.refuses(text), "应拒答: " + text);
     }
 }

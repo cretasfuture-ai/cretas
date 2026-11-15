@@ -31,12 +31,24 @@ final class ReportToolSchemas {
      * @param keyword     NOT_FOUND 时是剥词后剩下的词; NAME_ONLY 时是按名称筛的关键词
      * @param suggestions NOT_FOUND 时名称里含 keyword 的在用产品名, 只做提示, ⛔ 不当答案
      * @param catalog     本次请求已加载的本厂在用产品 (null = 没有目录); 工具复用它, 不再查第二次
-     * @param note        MATCHED 时问句里的产品名比命中的目录名多了字 (「卤牛肉片」命中「卤牛肉」): 回复开头必须写的说明, 否则 null
      */
     record ProductResolution(ProductScope scope, List<ProductType> products, String keyword,
-                             List<String> suggestions, List<ProductType> catalog, String note) {
+                             List<String> suggestions, List<ProductType> catalog) {
 
         boolean isAll() { return scope == ProductScope.ALL; }
+
+        /**
+         * 回复开头写明统计口径 (organizer 终审口径, #1767 第 3 轮): 锁定单个产品「按产品「卤牛肉」统计：」, 多个「按产品「卤牛肉」「酱鸭」统计：」,
+         * 不限产品「按全厂统计：」。这样「卤牛肉片成本」按卤牛肉回答时回复里也写清楚统计的是谁, 不用猜问句里多出来的字是什么。
+         * 没找到 / 无目录按名称筛 / 单产品口径的工具碰到多个产品 (这几种回复本身就是说明) 返回 null。
+         */
+        String leadIn(boolean singleProductOnly) {
+            if (scope == ProductScope.ALL) return "按全厂统计：";
+            if (scope != ProductScope.MATCHED || (singleProductOnly && products.size() > 1)) return null;
+            StringBuilder sb = new StringBuilder("按产品");
+            for (String n : productNames()) sb.append("「").append(n).append("」");
+            return sb.append("统计：").toString();
+        }
 
         List<String> productNames() {
             List<String> names = new ArrayList<>();
@@ -148,7 +160,7 @@ final class ReportToolSchemas {
         if (catalog == null) {
             String keyword = productKeyword(k);
             return keyword == null ? all(null)
-                    : new ProductResolution(ProductScope.NAME_ONLY, List.of(), keyword, List.of(), null, null);
+                    : new ProductResolution(ProductScope.NAME_ONLY, List.of(), keyword, List.of(), null);
         }
 
         String text = k.toLowerCase(Locale.ROOT);
@@ -170,8 +182,7 @@ final class ReportToolSchemas {
             if (!covered) maximal.add(t);
         }
         if (!maximal.isEmpty()) {
-            return new ProductResolution(ProductScope.MATCHED, List.copyOf(maximal), null, List.of(), catalog,
-                    substitutionNote(k, maximal));
+            return new ProductResolution(ProductScope.MATCHED, List.copyOf(maximal), null, List.of(), catalog);
         }
 
         String rest = stripQuestionWords(k);
@@ -182,41 +193,10 @@ final class ReportToolSchemas {
             String n = normalizedName(t);
             if (n != null && n.contains(restKey) && !suggestions.contains(t.getName().trim())) suggestions.add(t.getName().trim());
         }
-        return new ProductResolution(ProductScope.NOT_FOUND, List.of(), rest, List.copyOf(suggestions), catalog, null);
+        return new ProductResolution(ProductScope.NOT_FOUND, List.of(), rest, List.copyOf(suggestions), catalog);
     }
 
-    /** 命中名后面紧跟的字到这里为止: 指标 / 时间 / 范围词, 或虚词、连接字、标点。 */
-    private static final java.util.regex.Pattern AFTER_NAME_BOUNDARY = java.util.regex.Pattern.compile(
-            METRIC_WORDS.pattern() + "|[的和与及跟了吗是，,。、；;？?！!\\s]");
-
-    /**
-     * organizer 裁定 (#1767 第 3 轮): 最长完整命中照用, 但问句里命中名后面还跟着别的字 (「卤牛肉片」命中「卤牛肉」, 剩下的「片」
-     * 不是指标 / 范围 / 虚词) 时不能悄悄换产品, 回复开头明说「没有名为「卤牛肉片」的产品，下面按「卤牛肉」回答」。
-     */
-    private static String substitutionNote(String question, List<ProductType> matched) {
-        String text = question.toLowerCase(Locale.ROOT);
-        List<String> notes = new ArrayList<>();
-        for (ProductType t : matched) {
-            String name = t.getName().trim();
-            int at = text.indexOf(name.toLowerCase(Locale.ROOT));
-            if (at < 0) continue;   // 单字名整句相等的情况
-            String tail = question.substring(at + name.length());
-            int end = tail.length();
-            java.util.regex.Matcher m = AFTER_NAME_BOUNDARY.matcher(tail);
-            if (m.find()) end = m.start();
-            for (ProductType other : matched) {   // 「卤牛肉酱鸭」: 紧跟的是另一个命中名, 不算多出来的字
-                int o = tail.toLowerCase(Locale.ROOT).indexOf(other.getName().trim().toLowerCase(Locale.ROOT));
-                if (other != t && o >= 0 && o < end) end = o;
-            }
-            String extra = tail.substring(0, end).trim();
-            if (!extra.isEmpty()) {
-                notes.add("没有名为「" + name + extra + "」的产品，下面按「" + name + "」回答。");
-            }
-        }
-        return notes.isEmpty() ? null : String.join("", notes);
-    }
-
-    /** 解析带了说明 (按更短的目录名回答) 时, 把说明加在工具回复开头; 没有说明原样返回。 */
+    /** 把统计口径说明 ({@link ProductResolution#leadIn}) 加在工具回复开头; 说明为 null 原样返回。 */
     static Map<String, Object> withNote(Map<String, Object> result, String note) {
         if (note == null || result == null) return result;
         Map<String, Object> copy = new java.util.HashMap<>(result);
@@ -226,7 +206,7 @@ final class ReportToolSchemas {
     }
 
     private static ProductResolution all(List<ProductType> catalog) {
-        return new ProductResolution(ProductScope.ALL, List.of(), null, List.of(), catalog, null);
+        return new ProductResolution(ProductScope.ALL, List.of(), null, List.of(), catalog);
     }
 
     private static String normalizedName(ProductType t) {

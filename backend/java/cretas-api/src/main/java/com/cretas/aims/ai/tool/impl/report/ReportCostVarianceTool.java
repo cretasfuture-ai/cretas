@@ -119,19 +119,24 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         // 本厂在用产品目录本次请求只查一次 (口径表 B 规则 3): ID 校验和产品名解析共用
         java.util.List<com.cretas.aims.entity.ProductType> catalog = productTypeRepository == null ? null
                 : java.util.Objects.requireNonNullElse(productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId), java.util.List.of());
+        String productNote = null;   // 回复开头写明按哪个产品 / 全厂统计
         // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
         if (productTypeId != null && catalog != null) {
             final String candidateId = productTypeId;
             boolean inCatalog = catalog.stream().anyMatch(t -> candidateId.equals(t.getId()));
+            if (inCatalog) {
+                productNote = catalog.stream().filter(pt -> candidateId.equals(pt.getId())).findFirst()
+                        .map(pt -> "按产品「" + pt.getName() + "」统计：").orElse(null);
+            }
             if (!inCatalog) {
                 if (rawProductName == null || rawProductName.isBlank()) rawProductName = productTypeId;
                 productTypeId = null;
             }
         }
-        String productNote = null;   // 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明
         if (productTypeId == null && catalog != null) {
             ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(catalog, rawProductName);
             String msg = product.refusalMessage("给出成本差异", true);
+            productNote = product.leadIn(true);
             if (msg != null) {
                 Map<String, Object> none = new LinkedHashMap<>();
                 none.put("productFilter", product.label());
@@ -140,7 +145,6 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             }
             if (product.scope() == ReportToolSchemas.ProductScope.MATCHED) {
                 productTypeId = product.products().get(0).getId();
-                productNote = product.note();
             }
         }
         // 差异阈值: 只接受 (0, 1000] 的数值; 抽参给的其它值 (0、负数、文字) 忽略, 不悄悄过滤掉产品

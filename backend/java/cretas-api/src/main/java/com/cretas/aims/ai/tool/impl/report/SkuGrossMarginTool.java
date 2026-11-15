@@ -93,9 +93,9 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        // 产品名本次请求解析一次; 按更短的目录名回答时 (「卤牛肉片」→「卤牛肉」) 回复开头写明, 不悄悄换产品
+        // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
         ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
-        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.note());
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(false));
     }
 
     private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,

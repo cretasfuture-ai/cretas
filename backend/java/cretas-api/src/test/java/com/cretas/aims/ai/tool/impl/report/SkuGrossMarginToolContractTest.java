@@ -614,12 +614,16 @@ class SkuGrossMarginToolContractTest {
         assertEquals(Set.of("卤牛肉", "酱鸭"), names, two.toString());
         // 规则 3: 上面两次问答各只查一次本厂在用产品目录
         verify(productTypeRepository, org.mockito.Mockito.times(2)).findByFactoryIdAndIsActiveTrue("F1");
-        // organizer 裁定: 「卤牛肉片」按最长完整命中「卤牛肉」回答, 回复开头明说换了名字
-        JsonNode sliced = run("{\"productName\":\"卤牛肉片成本\"}");
-        assertEquals(1, sliced.get("data").get("data").get("items").size(), sliced.toString());
-        assertEquals("卤牛肉", sliced.get("data").get("data").get("items").get(0).get("productName").asText());
-        assertTrue(message(sliced).startsWith("没有名为「卤牛肉片」的产品，下面按「卤牛肉」回答。"), message(sliced));
-        // 阴性对照: 名字完整、后面只跟指标词时没有这句
-        assertFalse(message(run("{\"productName\":\"卤牛肉成本\"}")).contains("没有名为"));
+        // organizer 终审口径: 锁定产品时回复开头写「按产品「卤牛肉」统计：」(「卤牛肉片」按卤牛肉回答也看得出来), 全厂写「按全厂统计：」
+        for (String raw : new String[]{"卤牛肉片成本", "卤牛肉总成本", "卤牛肉平均成本", "卤牛肉3月成本", "卤牛肉第三季度成本",
+                "卤牛肉近半年成本", "卤牛肉每吨成本", "卤牛肉为什么成本高"}) {
+            JsonNode r = run("{\"productName\":\"" + raw + "\"}");
+            assertEquals(1, r.get("data").get("data").get("items").size(), raw + " " + r);
+            assertEquals("卤牛肉", r.get("data").get("data").get("items").get(0).get("productName").asText(), raw);
+            assertTrue(message(r).startsWith("按产品「卤牛肉」统计："), raw + " -> " + message(r));
+            assertFalse(message(r).contains("没有名为"), raw + " -> " + message(r));
+        }
+        assertTrue(message(run("{\"productName\":\"卤牛肉和酱鸭成本\"}")).startsWith("按产品「卤牛肉」「酱鸭」统计："));
+        assertTrue(message(run("{\"productName\":\"成本\"}")).startsWith("按全厂统计："));
     }
 }

@@ -39,6 +39,10 @@ public final class PersonalPayRefusalGuard {
     /** 要清单 / 排名到人。 */
     private static final Pattern LIST_REQUEST = Pattern.compile("列出|列一下|列个|明细|清单|名单|一览|排行|排名|谁");
 
+    /** 问在哪操作 / 谁经手, 不是问数额。 */
+    private static final Pattern OPERATIONAL = Pattern.compile(
+            "在哪|哪里|哪儿|怎么导出|导出|下载|打印|入口|谁负责|谁来|谁管|谁发|谁算|找谁");
+
     /** 人员名词 + 工资词 (中间只允许「们 / 的 / 每月」): 「工人工资是多少」。 */
     private static final Pattern STAFF_PAY = Pattern.compile(
             "(工人|员工|职工|工友|师傅|操作员|操作工|人员|班组长|组长|班长|大家|所有人)(们)?(的|每月|每个月|月)?(" + PAY + ")");
@@ -80,7 +84,10 @@ public final class PersonalPayRefusalGuard {
             boolean pay = PAY_WORD.matcher(clause).find();
             boolean perPerson = PER_PERSON.matcher(clause).find();
             if (pay) {
-                if (perPerson || namesAPerson(clause) || LIST_REQUEST.matcher(clause).find()) return true;
+                if (perPerson || namesAPerson(clause)) return true;
+                // 问操作 / 流程 (工资明细表在哪导出、谁负责发工资) 不是在要数额: 没有逐人 / 点名时放行
+                if (OPERATIONAL.matcher(clause).find()) continue;
+                if (LIST_REQUEST.matcher(clause).find()) return true;
                 if (STAFF_PAY.matcher(clause).find()
                         && !RULE_WORDS.matcher(clause).find() && !AGGREGATE_WORDS.matcher(clause).find()) return true;
             } else if (perPerson && RECEIVE_OR_AMOUNT.matcher(clause).find() && !OTHER_METRIC.matcher(clause).find()) {
