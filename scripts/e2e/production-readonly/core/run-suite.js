@@ -75,6 +75,7 @@ const SCENARIOS = [
   require('../scenarios/material-requisition-closed-readonly'),
   require('../scenarios/ui-stability'),
   require('../scenarios/visual-page-census-readonly'),
+  require('../scenarios/digital-specialists-readonly'),
 ];
 
 function describeHarness() {

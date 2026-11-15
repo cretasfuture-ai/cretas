@@ -3,7 +3,7 @@
  */
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { setupRouterGuards } from './guards';
-import { digitalEmployeeProps } from './digitalEmployeeProps';
+import { digitalEmployeeProps, digitalWorkdeskTitle } from './digitalEmployeeProps';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
@@ -176,7 +176,8 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'dashboard/ai-value',
         name: 'AiValueSummary',
         component: () => import('@/views/dashboard/AiValueSummary.vue'),
-        meta: { requiresAuth: true, title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard' }
+          props: digitalEmployeeProps,
+          meta: { requiresAuth: true, title: 'AI价值数字专员工作台', icon: 'MagicStick', module: 'dashboard' }
       },
       {
         path: 'operations/customer-material-arrivals',
@@ -235,7 +236,7 @@ const businessRoutes: RouteRecordRaw[] = [
         props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '销售老板工作台',
+          title: digitalWorkdeskTitle('/workdesk/sales-owner', '销售老板工作台'),
           icon: 'Sell',
           module: 'sales'
         }
@@ -246,9 +247,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/finance-manager',
         name: 'FinanceManagerWorkdesk',
         component: () => import('@/views/workdesk/FinanceManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '财务主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/finance-manager', '财务主管工作台'),
           icon: 'Money',
           module: 'finance'
         }
@@ -260,9 +262,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/quality-manager',
         name: 'QualityManagerWorkdesk',
         component: () => import('@/views/workdesk/QualityManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '质量主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/quality-manager', '质量主管工作台'),
           icon: 'Warning',
           module: 'quality'
         }
@@ -277,7 +280,7 @@ const businessRoutes: RouteRecordRaw[] = [
         props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '仓管员工作台',
+          title: digitalWorkdeskTitle('/workdesk/warehouse-keeper', '仓管员工作台'),
           icon: 'Box',
           module: 'warehouse'
         }
@@ -293,7 +296,7 @@ const businessRoutes: RouteRecordRaw[] = [
         props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '采购员工作台',
+          title: digitalWorkdeskTitle('/workdesk/purchaser', '采购员工作台'),
           icon: 'ShoppingCart',
           module: 'procurement'
         }
@@ -306,9 +309,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/quality-chief',
         name: 'QualityChiefWorkdesk',
         component: () => import('@/views/workdesk/QualityChiefWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '质检主管工作台',
+          title: digitalWorkdeskTitle('/workdesk/quality-chief', '质检主管工作台'),
           icon: 'Aim',
           module: 'quality'
         }
@@ -322,9 +326,10 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/production-manager',
         name: 'ProductionManagerWorkdesk',
         component: () => import('@/views/workdesk/ProductionManagerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
-          title: '生产经理工作台',
+          title: digitalWorkdeskTitle('/workdesk/production-manager', '生产经理工作台'),
           icon: 'Operation',
           module: 'production'
         }
@@ -2336,7 +2341,8 @@ meta: { requiresAuth: true, title: '校准列表', module: 'system', roles: plat
             path: 'logistics/workbench',
             name: 'LogisticsSchedulingWorkbench',
             component: () => import('@/views/scheduling/logistics/workbench/index.vue'),
-            meta: { requiresAuth: true, title: '排线工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
+              props: digitalEmployeeProps,
+              meta: { requiresAuth: true, title: '排线数字专员工作台', module: 'scheduling', mockDemo: true, hideForFactoryTypes: ['FACTORY', 'RESTAURANT'] },
           },
           {
             path: 'logistics/records',

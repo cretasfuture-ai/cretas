@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { LogisticsPlan, PlanStatus, ExceptionReason, ExceptionDisposition } from '@/api/logistics';
+import { useAuthStore } from '@/store/modules/auth';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 import LogisticsMap from '../components/LogisticsMap.vue';
 import RouteCards from '../components/RouteCards.vue';
@@ -8,8 +9,26 @@ import ScheduleTimetable from '../components/ScheduleTimetable.vue';
 import ExecutionTracker from '../components/ExecutionTracker.vue';
 
 const state = useLogisticsScheduling();
+const authStore = useAuthStore();
 const currentPage = ref(1);
 const pageSize = ref(20);
+
+interface IdentitySnapshot { key: string; factoryId: string; actorId: string; role: string }
+const identityKey = computed(() => {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  return factoryId && actorId && role ? `${factoryId}:${actorId}:${role}` : '';
+});
+function captureIdentity(): IdentitySnapshot | null {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  return factoryId && actorId && role
+    ? { key: `${factoryId}:${actorId}:${role}`, factoryId, actorId, role }
+    : null;
+}
+function identityStillCurrent(identity: IdentitySnapshot): boolean { return identityKey.value === identity.key; }
 
 // 调度记录「查看排线」= 在本模块内打开只读详情抽屉(自己的地图 + 路线 + 状态), 不跳排线工作台
 // (避免复用工作台导致一会 2 步一会 3 步来回撞)。
@@ -60,14 +79,13 @@ function dateParams(): { startDate?: string; endDate?: string } | undefined {
   return dateRange.value ? { startDate: dateRange.value[0], endDate: dateRange.value[1] } : undefined;
 }
 
-async function reload(page = 0): Promise<void> {
+async function reload(page = 0, expectedIdentity: IdentitySnapshot | null = captureIdentity()): Promise<void> {
+  if (!expectedIdentity || !identityStillCurrent(expectedIdentity)) return;
   currentPage.value = page + 1;
-  await state.loadPlanHistory(page, pageSize.value, dateParams());
+  const loadPlanHistory = state.loadPlanHistory;
+  await loadPlanHistory(page, pageSize.value, dateParams());
+  if (!identityStillCurrent(expectedIdentity)) return;
 }
-
-onMounted(() => {
-  void reload(0);
-});
 
 async function handlePageChange(nextPage: number): Promise<void> {
   await reload(nextPage - 1);
@@ -79,36 +97,56 @@ async function onDateChange(): Promise<void> {
 }
 
 async function showDetails(plan: LogisticsPlan, view: 'route' | 'execution' = 'route'): Promise<void> {
+  const identity = captureIdentity();
+  if (!identity || !records.value.some((row) => row.id === plan.id)) return;
   // 在调度记录模块内打开只读详情抽屉(自己的地图 + 路线 + 状态 + 执行跟踪), 不跳排线工作台。
   detailPlan.value = plan;
   // 执行视图仅对已确认/已导出计划有意义, 否则回落路线视图
   detailView.value = (view === 'execution' && (plan.status === 'CONFIRMED' || plan.status === 'EXPORTED')) ? 'execution' : 'route';
   detailOpen.value = true;
   detailLoading.value = true;
-  await state.openPlan(plan.id); // 载入 stores + trips + orders 到共享 state, 供抽屉里的地图/路线/执行只读展示
+  const openPlan = state.openPlan;
+  await openPlan(plan.id); // 载入 stores + trips + orders 到共享 state, 供抽屉里的地图/路线/执行只读展示
+  if (!identityStillCurrent(identity)) return;
   detailLoading.value = false;
 }
 
 // 执行跟踪: 逐门店标送达/异常/撤销(改后刷新 detailPlan 的进度)。
 async function onDeliver(orderId: string): Promise<void> {
-  if (await state.markStoreDelivered(orderId)) syncDetailProgress();
+  const identity = captureIdentity();
+  if (!identity || !detailPlan.value || !state.orders.value.some((order) => order.id === orderId)) return;
+  const markStoreDelivered = state.markStoreDelivered;
+  const ok = await markStoreDelivered(orderId);
+  if (identityStillCurrent(identity) && ok) syncDetailProgress();
 }
 async function onException(p: { orderId: string; reason: ExceptionReason; disposition: ExceptionDisposition; note: string | null }): Promise<void> {
-  if (await state.markStoreException(p.orderId, p.reason, p.disposition, p.note)) syncDetailProgress();
+  const identity = captureIdentity();
+  if (!identity || !detailPlan.value || !state.orders.value.some((order) => order.id === p.orderId)) return;
+  const markStoreException = state.markStoreException;
+  const ok = await markStoreException(p.orderId, p.reason, p.disposition, p.note);
+  if (identityStillCurrent(identity) && ok) syncDetailProgress();
 }
 async function onResetDelivery(orderId: string): Promise<void> {
-  if (await state.resetStoreDelivery(orderId)) syncDetailProgress();
+  const identity = captureIdentity();
+  if (!identity || !detailPlan.value || !state.orders.value.some((order) => order.id === orderId)) return;
+  const resetStoreDelivery = state.resetStoreDelivery;
+  const ok = await resetStoreDelivery(orderId);
+  if (identityStillCurrent(identity) && ok) syncDetailProgress();
 }
 // 一键全部送达: 逐单串行标记(每单独立, 后端无 trip 级乐观锁), 完成后刷新进度。
 async function onDeliverAll(orderIds: string[]): Promise<void> {
+  const identity = captureIdentity();
+  if (!identity || !detailPlan.value || orderIds.some((id) => !state.orders.value.some((order) => order.id === id))) return;
+  const markStoreDelivered = state.markStoreDelivered;
   for (const id of orderIds) {
-    const ok = await state.markStoreDelivered(id);
-    if (!ok) break; // 出错停止(错误已由 planError 展示), 已标的保留
+    const ok = await markStoreDelivered(id);
+    if (!identityStillCurrent(identity) || !ok) return;
   }
   syncDetailProgress();
 }
 // 完成本次调度: 全部门店已处理后的收口(执行态已逐单持久化, 此处仅提示 + 收起抽屉)。
 async function onComplete(): Promise<void> {
+  if (!captureIdentity() || !detailPlan.value) return;
   const { ElMessage } = await import('element-plus');
   ElMessage({ message: '本次调度已完成，全部门店处理完毕', type: 'success' });
   detailOpen.value = false;
@@ -128,18 +166,54 @@ function syncDetailProgress(): void {
   detailPlan.value.executionStatus = done === 0 ? 'NOT_STARTED' : (done < total ? 'IN_PROGRESS' : 'COMPLETED');
 }
 
-async function ensurePlanLoaded(plan: LogisticsPlan): Promise<boolean> {
+async function ensurePlanLoaded(plan: LogisticsPlan, identity: IdentitySnapshot): Promise<boolean> {
+  if (!identityStillCurrent(identity) || !records.value.some((row) => row.id === plan.id)) return false;
   if (state.plan.value?.id === plan.id) return true;
-  return state.openPlan(plan.id);
+  const openPlan = state.openPlan;
+  const opened = await openPlan(plan.id);
+  return identityStillCurrent(identity) && opened;
 }
 
 async function reExportCsv(plan: LogisticsPlan): Promise<void> {
-  if (await ensurePlanLoaded(plan)) await state.exportCsv();
+  const identity = captureIdentity();
+  if (!identity) return;
+  const exportCsv = state.exportCsv;
+  if (await ensurePlanLoaded(plan, identity) && identityStillCurrent(identity)) await exportCsv();
+  if (!identityStillCurrent(identity)) return;
 }
 
 async function reExportXlsx(plan: LogisticsPlan): Promise<void> {
-  if (await ensurePlanLoaded(plan)) await state.exportXlsx();
+  const identity = captureIdentity();
+  if (!identity) return;
+  const exportXlsx = state.exportXlsx;
+  if (await ensurePlanLoaded(plan, identity) && identityStillCurrent(identity)) await exportXlsx();
+  if (!identityStillCurrent(identity)) return;
 }
+
+function clearLocalScopeState(): void {
+  currentPage.value = 1;
+  dateRange.value = null;
+  detailOpen.value = false;
+  detailLoading.value = false;
+  detailPlan.value = null;
+  detailView.value = 'route';
+  ganttHidden.value = false;
+  routesHidden.value = false;
+}
+
+let scopeLoadVersion = 0;
+watch(identityKey, () => {
+  scopeLoadVersion += 1;
+  clearLocalScopeState();
+}, { flush: 'sync' });
+watch(identityKey, async () => {
+  const version = scopeLoadVersion;
+  if (version === 0) clearLocalScopeState();
+  const identity = captureIdentity();
+  if (!identity) return;
+  await reload(0, identity);
+  if (version !== scopeLoadVersion || !identityStillCurrent(identity)) return;
+}, { immediate: true });
 </script>
 
 <template>

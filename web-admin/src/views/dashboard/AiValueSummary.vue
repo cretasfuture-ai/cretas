@@ -15,10 +15,15 @@
  *    并给出下一步，而不是画一堆空图表假装热闹。把零渲染成「运行正常」就是把
  *    「没发生」说成「一切良好」。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { fetchAiValueSummary, type AiValueSummary } from '@/api/aiValueSummary';
 import { useAuthStore } from '@/store/modules/auth';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeCanWrite?: boolean; employeeNavigationPending?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: true, employeePaths: () => [], employeeCanWrite: false, employeeNavigationPending: false, wholesaleMode: false,
+});
 
 const authStore = useAuthStore();
 
@@ -26,6 +31,7 @@ const loading = ref(false);
 const loadError = ref<string | null>(null);
 const summary = ref<AiValueSummary | null>(null);
 const days = ref(30);
+let generation = 0;
 
 const dayOptions = [
   { label: '最近 7 天', value: 7 },
@@ -42,32 +48,42 @@ const statusCount = (key: string) => summary.value?.alertsByStatus?.[key] ?? 0;
 
 async function load() {
   const factoryId = authStore.factoryId;
-  if (!factoryId) {
-    loadError.value = '当前账号没有工厂上下文，无法查询';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole;
+  const requestGeneration = ++generation;
+  const isCurrent = () => !props.employeeNavigationPending && requestGeneration === generation && factoryId === authStore.factoryId
+    && actorId === String(authStore.user?.id || '') && role === authStore.currentRole;
+  summary.value = null;
+  loading.value = false;
+  if (!factoryId || !actorId || props.employeeNavigationPending) {
+    loadError.value = !factoryId ? '当前账号没有工厂上下文，无法查询' : '正在核对企业与操作人身份，请稍后重试';
     return;
   }
   loading.value = true;
   loadError.value = null;
   try {
     const res = await fetchAiValueSummary(factoryId, days.value);
+    if (!isCurrent()) return;
     summary.value = res.data;
   } catch (error: unknown) {
+    if (!isCurrent()) return;
     // 加载失败不得渲染成 0 —— 那等于把「查不到」说成「什么都没发生」。
     summary.value = null;
     loadError.value = error instanceof Error ? error.message : '加载失败';
     ElMessage.error(loadError.value);
   } finally {
-    loading.value = false;
+    if (isCurrent()) loading.value = false;
   }
 }
 
-onMounted(load);
+watch([() => `${authStore.factoryId || ''}:${authStore.user?.id || ''}:${authStore.currentRole || ''}`, () => props.employeeNavigationPending], () => { void load(); }, { immediate: true, flush: 'sync' });
 </script>
 
 <template>
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="ai-value" :busy="loading" :error="loadError || ''" :factory-id="authStore.factoryId || ''" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="false">
   <div class="ai-value-summary" v-loading="loading">
     <div class="header">
-      <h2>AI 工作台</h2>
+      <h2>使用情况与预警处理</h2>
       <el-select v-model="days" style="width: 140px" @change="load">
         <el-option
           v-for="opt in dayOptions"
@@ -138,6 +154,7 @@ onMounted(load);
       </el-card>
     </template>
   </div>
+  </DigitalEmployeeFrame>
 </template>
 
 <style scoped>

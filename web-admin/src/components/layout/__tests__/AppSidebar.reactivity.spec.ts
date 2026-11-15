@@ -201,6 +201,9 @@ describe('AppSidebar.vue source — keeps WS6 reactive shape', () => {
     expect(src).toContain('useNavigationVisibilityStore');
     expect(src).toContain('navigationVisibility.publish');
     expect(src).toContain('navigationIdentity');
+    const navigationIdentitySource = src.slice(src.indexOf('const navigationIdentity ='), src.indexOf('const navigationPermissionReady ='));
+    expect(navigationIdentitySource).toContain('factoryType: effectiveFactoryType.value');
+    expect(navigationIdentitySource).not.toContain('factoryType: workspaceFactoryType.value');
     expect(src).toContain('navigationVisibility.beginLoading');
     expect(src).toContain('navigationVisibility.isCurrentLoad');
     expect(src).toContain("status !== 'ready'");

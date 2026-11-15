@@ -78,7 +78,7 @@ const EXPECTED_CHANGES: ReadonlyArray<{ leaf: string; ancestor: string; field: k
   '/smart-bi/food-kb-feedback',
   '/smart-bi/fallback-log',
   '/smart-bi/calibration',
-].map((leaf) => ({ leaf, ancestor: '/smart-bi', field: 'hideForFactoryTypes' as const, from: ['FACTORY'], to: undefined }));
+].map((leaf) => ({ leaf, ancestor: '/smart-bi', field: 'hideForFactoryTypes' as const, from: ['FACTORY'], to: undefined as undefined }));
 
 /** 快照 + 白名单 = 这次之后应有的链。白名单里写的「改前」值必须与快照一致，否则白名单本身写错了。 */
 function applyExpectedChanges(base: Map<string, Guard[]>): Map<string, Guard[]> {
@@ -229,7 +229,7 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
   it('面包屑按菜单树取「组 › 项」，最长匹配', () => {
     expect(menuTrail(groupedMenuConfig, '/system/products')?.map((n) => n.title)).toEqual(['主数据', 'SKU 管理']);
     expect(menuTrail(groupedMenuConfig, '/production/plans?x=1')?.map((n) => n.title)).toEqual(['生产管理', '生产计划']);
-    expect(menuTrail(groupedMenuConfig, '/workdesk/purchaser')?.map((n) => n.title)).toEqual(['概览', '工作台', '采购员工作台']);
+    expect(menuTrail(groupedMenuConfig, '/workdesk/purchaser')?.map((n) => n.title)).toEqual(['概览', '工作台', '采购数字专员工作台']);
     expect(menuTrail(groupedMenuConfig, '/no/such/page')).toBeNull();
   });
 });

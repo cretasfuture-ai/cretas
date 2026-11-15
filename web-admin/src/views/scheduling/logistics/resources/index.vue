@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import type {
   AvailabilityResourceType,
@@ -24,18 +24,40 @@ import { useLogisticsScheduling } from '../useLogisticsScheduling';
 type ResourceFilter = 'all' | 'owned' | 'outsourced';
 
 const state = useLogisticsScheduling();
+const authStore = useAuthStore();
 const filter = ref<ResourceFilter>('all');
+
+interface IdentitySnapshot {
+  key: string;
+  factoryId: string;
+  actorId: string;
+  role: string;
+}
+
+const identityKey = computed(() => {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  return factoryId && actorId && role ? `${factoryId}:${actorId}:${role}` : '';
+});
+
+function captureIdentity(): IdentitySnapshot | null {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  if (!factoryId || !actorId || !role) return null;
+  return { key: `${factoryId}:${actorId}:${role}`, factoryId, actorId, role };
+}
+
+function identityStillCurrent(identity: IdentitySnapshot): boolean {
+  return identityKey.value === identity.key;
+}
 
 const filteredVehicles = computed(() => state.vehicles.value.filter((vehicle) => (
   filter.value === 'all'
   || (filter.value === 'owned' && vehicle.source === 'OWNED')
   || (filter.value === 'outsourced' && vehicle.source === 'OUTSOURCED')
 )));
-
-onMounted(async () => {
-  await state.loadResources();
-  await loadAvailability(); // 依赖 vehicles/drivers 已加载 → 合并覆盖生成可编辑行
-});
 
 function sourceLabel(source: VehicleSourceCode): string {
   return source === 'OWNED' ? '自有' : '外协';
@@ -72,6 +94,7 @@ const profileForm = ref<{
 });
 
 function openProfileDialog(vehicle: LogisticsVehicle): void {
+  if (!captureIdentity() || !state.vehicles.value.some((item) => item.id === vehicle.id)) return;
   profileForm.value = {
     vehicleId: vehicle.id,
     capacityCbm: vehicle.capacityCbm,
@@ -88,12 +111,16 @@ function openProfileDialog(vehicle: LogisticsVehicle): void {
 }
 
 async function saveProfile(): Promise<void> {
+  const identity = captureIdentity();
+  if (!identity || !state.vehicles.value.some((vehicle) => vehicle.id === profileForm.value.vehicleId)) return;
   const { vehicleId, serviceAreasText, ...rest } = profileForm.value;
   const payload: VehicleProfileUpdate = {
     ...rest,
     serviceAreas: serviceAreasText.split(/[、,，]/).map((area) => area.trim()).filter(Boolean),
   };
-  const ok = await state.saveVehicleProfile(vehicleId, payload);
+  const saveVehicleProfile = state.saveVehicleProfile;
+  const ok = await saveVehicleProfile(vehicleId, payload);
+  if (!identityStillCurrent(identity)) return;
   if (ok) {
     ElMessage.success('车辆信息已更新');
     profileDialogVisible.value = false;
@@ -108,6 +135,7 @@ const bindingsVehiclePlate = ref('');
 const bindingsForm = ref<LogisticsVehicleDriverBinding[]>([]);
 
 function openBindingsDialog(vehicle: LogisticsVehicle): void {
+  if (!captureIdentity() || !state.vehicles.value.some((item) => item.id === vehicle.id)) return;
   bindingsVehicleId.value = vehicle.id;
   bindingsVehiclePlate.value = vehicle.plateNumber;
   bindingsForm.value = vehicle.drivers.map((binding) => ({ ...binding }));
@@ -126,8 +154,12 @@ function removeBindingRow(index: number): void {
 }
 
 async function saveBindings(): Promise<void> {
+  const identity = captureIdentity();
+  if (!identity || !state.vehicles.value.some((vehicle) => vehicle.id === bindingsVehicleId.value)) return;
   const validBindings = bindingsForm.value.filter((binding) => binding.driverId);
-  const ok = await state.saveVehicleDrivers(bindingsVehicleId.value, validBindings);
+  const saveVehicleDrivers = state.saveVehicleDrivers;
+  const ok = await saveVehicleDrivers(bindingsVehicleId.value, validBindings);
+  if (!identityStillCurrent(identity)) return;
   if (ok) {
     ElMessage.success('司机绑定已更新');
     bindingsDialogVisible.value = false;
@@ -142,6 +174,7 @@ const driverForm = ref<DriverInput>({ name: '', phone: '', employmentType: 'OWNE
 const driverServiceAreasText = ref('');
 
 function openAddDriver(): void {
+  if (!captureIdentity()) return;
   editingDriverId.value = null;
   driverForm.value = { name: '', phone: '', employmentType: 'OWNED', serviceAreas: [], availableFrom: '', availableTo: '', active: true };
   driverServiceAreasText.value = '';
@@ -149,6 +182,7 @@ function openAddDriver(): void {
 }
 
 function openEditDriver(driver: LogisticsDriver): void {
+  if (!captureIdentity() || !state.drivers.value.some((item) => item.id === driver.id)) return;
   editingDriverId.value = driver.id;
   driverForm.value = {
     name: driver.name,
@@ -164,6 +198,9 @@ function openEditDriver(driver: LogisticsDriver): void {
 }
 
 async function saveDriverForm(): Promise<void> {
+  const identity = captureIdentity();
+  if (!identity) return;
+  if (editingDriverId.value && !state.drivers.value.some((driver) => driver.id === editingDriverId.value)) return;
   if (!driverForm.value.name.trim()) {
     ElMessage.warning('请填写司机姓名');
     return;
@@ -172,11 +209,18 @@ async function saveDriverForm(): Promise<void> {
     ...driverForm.value,
     serviceAreas: driverServiceAreasText.value.split(/[、,，]/).map((area) => area.trim()).filter(Boolean),
   };
-  const ok = editingDriverId.value
-    ? await state.saveDriver(editingDriverId.value, payload)
-    : await state.addDriver(payload);
+  const editingId = editingDriverId.value;
+  let ok: boolean;
+  if (editingId) {
+    const saveDriver = state.saveDriver;
+    ok = await saveDriver(editingId, payload);
+  } else {
+    const addDriver = state.addDriver;
+    ok = await addDriver(payload);
+  }
+  if (!identityStillCurrent(identity)) return;
   if (ok) {
-    ElMessage.success(editingDriverId.value ? '司机信息已更新' : '司机已新增');
+    ElMessage.success(editingId ? '司机信息已更新' : '司机已新增');
     driverDialogVisible.value = false;
   }
 }
@@ -185,8 +229,6 @@ async function saveDriverForm(): Promise<void> {
 // 排班前，调度员在此标记「今天谁请假 / 哪辆车维修 / 谁临时换班次」。
 // 排线算法会读取当天覆盖：不可用的司机/车辆不进算法，班次覆盖替换固定时段。
 // 无记录 = 按固定资料默认可用（引入本功能前行为完全不变）。
-
-const authStore = useAuthStore();
 
 /** YYYY-MM-DD（本地时区），默认今天。 */
 function todayStr(): string {
@@ -260,12 +302,19 @@ function rebuildAvailRows(): void {
   availRows.value = rows;
 }
 
-async function loadAvailability(): Promise<void> {
-  const factoryId = authStore.factoryId;
-  if (!factoryId) return;
+let availabilityRequestVersion = 0;
+async function loadAvailability(expectedIdentity: IdentitySnapshot | null = captureIdentity()): Promise<void> {
+  const requestVersion = ++availabilityRequestVersion;
+  if (!expectedIdentity || !identityStillCurrent(expectedIdentity)) return;
+  const requestedDate = availDate.value;
   availLoading.value = true;
   try {
-    const res = await listDailyAvailability(factoryId, availDate.value);
+    const res = await listDailyAvailability(expectedIdentity.factoryId, requestedDate);
+    if (
+      requestVersion !== availabilityRequestVersion
+      || !identityStillCurrent(expectedIdentity)
+      || availDate.value !== requestedDate
+    ) return;
     const map: Record<string, DailyAvailability> = {};
     for (const r of res.data ?? []) {
       map[`${r.resourceType}:${r.resourceId}`] = r;
@@ -273,61 +322,110 @@ async function loadAvailability(): Promise<void> {
     overrideMap.value = map;
     rebuildAvailRows();
   } catch {
-    ElMessage.error('加载当天可用性失败');
+    if (identityStillCurrent(expectedIdentity) && requestVersion === availabilityRequestVersion) {
+      ElMessage.error('加载当天可用性失败');
+    }
   } finally {
-    availLoading.value = false;
+    if (identityStillCurrent(expectedIdentity) && requestVersion === availabilityRequestVersion) {
+      availLoading.value = false;
+    }
   }
 }
 
 /** 标记「请假/维修」或恢复可用 —— 立即写后端，让排班读到最新状态。 */
 async function toggleAvailable(row: AvailRow, available: boolean): Promise<void> {
-  const factoryId = authStore.factoryId;
-  if (!factoryId) return;
+  const identity = captureIdentity();
+  if (!identity || !availRows.value.some((item) => item.key === row.key)) return;
+  const requestedDate = availDate.value;
   try {
     // 恢复可用 且 无班次覆盖 → 删除覆盖记录，回归默认（保持表干净）。
     if (available && !row.shiftStart && !row.shiftEnd && row.overrideId) {
-      await deleteDailyAvailability(factoryId, row.overrideId);
+      await deleteDailyAvailability(identity.factoryId, row.overrideId);
+      if (!identityStillCurrent(identity)) return;
       ElMessage.success(`${row.name} 已恢复默认可用`);
     } else {
-      await upsertDailyAvailability(factoryId, {
+      await upsertDailyAvailability(identity.factoryId, {
         resourceType: row.resourceType,
         resourceId: row.resourceId,
-        availDate: availDate.value,
+        availDate: requestedDate,
         available,
         shiftStart: row.shiftStart || null,
         shiftEnd: row.shiftEnd || null,
       });
+      if (!identityStillCurrent(identity)) return;
       ElMessage.success(available ? `${row.name} 已标记可用` : `${row.name} 当天已标记不可用`);
     }
-    await loadAvailability();
+    await loadAvailability(identity);
   } catch {
+    if (!identityStillCurrent(identity)) return;
     ElMessage.error('保存失败，请重试');
-    await loadAvailability(); // 回滚 UI 到后端真实状态
+    await loadAvailability(identity); // 回滚 UI 到后端真实状态
   }
 }
 
 /** 保存临时班次覆盖（起止时段任意一个填了即写覆盖）。 */
 async function saveShiftOverride(row: AvailRow): Promise<void> {
-  const factoryId = authStore.factoryId;
-  if (!factoryId) return;
+  const identity = captureIdentity();
+  if (!identity || !availRows.value.some((item) => item.key === row.key)) return;
+  const requestedDate = availDate.value;
   try {
-    await upsertDailyAvailability(factoryId, {
+    await upsertDailyAvailability(identity.factoryId, {
       resourceType: row.resourceType,
       resourceId: row.resourceId,
-      availDate: availDate.value,
+      availDate: requestedDate,
       available: row.available,
       shiftStart: row.shiftStart || null,
       shiftEnd: row.shiftEnd || null,
     });
+    if (!identityStillCurrent(identity)) return;
     ElMessage.success(`${row.name} 班次已更新`);
-    await loadAvailability();
+    await loadAvailability(identity);
   } catch {
+    if (!identityStillCurrent(identity)) return;
     ElMessage.error('保存失败，请重试');
-    await loadAvailability();
+    await loadAvailability(identity);
   }
 }
 
 const unavailableCount = computed(() => availRows.value.filter((r) => !r.available).length);
+
+function clearLocalScopeState(): void {
+  filter.value = 'all';
+  profileDialogVisible.value = false;
+  profileForm.value = {
+    vehicleId: '', capacityCbm: 0, maxWeightKg: 0, source: 'OWNED', bodyType: '',
+    serviceAreasText: '', availableFrom: '', availableTo: '', active: true,
+  };
+  bindingsDialogVisible.value = false;
+  bindingsVehicleId.value = '';
+  bindingsVehiclePlate.value = '';
+  bindingsForm.value = [];
+  driverDialogVisible.value = false;
+  editingDriverId.value = null;
+  driverForm.value = { name: '', phone: '', employmentType: 'OWNED', serviceAreas: [], availableFrom: '', availableTo: '', active: true };
+  driverServiceAreasText.value = '';
+  availDate.value = todayStr();
+  overrideMap.value = {};
+  availRows.value = [];
+  availLoading.value = false;
+  availabilityRequestVersion += 1;
+}
+
+let scopeLoadVersion = 0;
+watch(identityKey, () => {
+  scopeLoadVersion += 1;
+  clearLocalScopeState();
+}, { flush: 'sync' });
+watch(identityKey, async () => {
+  const version = scopeLoadVersion;
+  if (version === 0) clearLocalScopeState();
+  const identity = captureIdentity();
+  if (!identity) return;
+  const loadResources = state.loadResources;
+  await loadResources();
+  if (version !== scopeLoadVersion || !identityStillCurrent(identity)) return;
+  await loadAvailability(identity);
+}, { immediate: true });
 </script>
 
 <template>

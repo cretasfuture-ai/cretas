@@ -265,13 +265,13 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
   it('groups workdesks by management and execution roles without duplicate quality titles', () => {
     expect(childGroupLabels('/workdesk')).toEqual(['经营管理', '一线执行']);
     expect(childTitles('/workdesk')).toEqual([
-      '销售老板工作台',
-      '财务主管工作台',
-      '质量主管工作台',
-      '生产经理工作台',
-      '仓管员工作台',
-      '采购员工作台',
-      '质检主管工作台',
+      '销售数字专员工作台',
+      '财务数字专员工作台',
+      '质量追溯数字专员工作台',
+      '生产数字专员工作台',
+      '库存数字专员工作台',
+      '采购数字专员工作台',
+      '质检数字专员工作台',
     ]);
   });
 
@@ -512,7 +512,7 @@ describe('menuConfig - Liushanmen department workflow entries', () => {
       '/scheduling/logistics/resources',
     ];
     expect(paths.map((path) => findDescendant('/scheduling', path)?.title)).toEqual([
-      '排线工作台', '调度记录', '门店与订单', '车辆与司机',
+      '排线数字专员工作台', '调度记录', '门店与订单', '车辆与司机',
     ]);
     for (const path of paths) {
       expect(findDescendant('/scheduling', path)?.hideForFactoryTypes).toEqual(['FACTORY']);
