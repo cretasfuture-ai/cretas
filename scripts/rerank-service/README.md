@@ -57,7 +57,9 @@ Steve 拍板「慢一点无所谓」。
 | 窗口 | 成功（重排服务侧） | 回退（47 `python-prod.log` 的 `rerank failed` / `rerank: HTTP` / `rerank: bad`） |
 |---|---|---|
 | 切换前 19:50–20:50（Windows） | ≈1（Windows `service.log` 200 行数 19:43=9926 → 20:50=9927；该日志无时间戳，只能按差值） | 0 |
-| 切换后 20:50–20:51（mini） | 1（n=50） | 0 |
+| 切换后 20:50:44–21:50:44（mini） | 23（全部 n=50；服务侧耗时 p50 460ms、最大 681ms；mini `service.log` 的 `rerank ok` 行） | 2（21:42:32、21:42:48，隧道断线期间，见下） |
+
+Windows 侧切换后 `service.log` 200 行数停在 9927（不再有线上流量），证明 47 已不打 18190。
 
 切换后跑 `ai_live_probe.py --no-write`：两入口 12/12 PASS，rc=0（20 次调用里只有 1 次走重排，其余带历史或精确命中，符合设计）。
 线上这个时段流量很低（每小时个位数），计数只能证明「接上了、没回退」，不能说明高峰表现。
@@ -66,6 +68,9 @@ Steve 拍板「慢一点无所谓」。
 
 - **3 个请求同时到时 p95 ≈ 1.53s，略超 `AI_RERANK_TIMEOUT_MS=1500`**：MLX 推理串行，第 3 个排队约 1.5s，那一次退回 LLM 粗选（识别不中断，只是贵一点）。Steve 2026-11-15 接受（「慢一点无所谓」）。若回退计数变多：调大超时到 2000、`AI_RERANK_POOL_K=30`（要先重测召回），或切回 Windows。
 - 单次（不并发）比 Windows 慢约 0.3s（从 47 测 p50 526 vs 219ms）。
+- **mini 到 47 的网络会抖**。2026-11-15 约 21:25–21:44 mini 出网断过一次（本地模型隧道 11437 同时在重连）。mini 端 ssh 靠 `ServerAliveInterval` 退出重连，但 47 的 sshd 当时 `ClientAliveInterval 0`，半死的旧会话一直占着 18191，新连接全报 `bind [127.0.0.1]:18191: Address already in use`（launchd 重连 40 多次），期间 2 次请求退回粗选。
+  已修：47 `sshd_config` 的 `Match User cretas-llm-canada` 块加 `ClientAliveInterval 15` / `ClientAliveCountMax 3`（备份 `sshd_config.bak.20261115-215408-clientalive`），死会话约 45s 内被 47 踢掉、端口释放。只对修改后新建的连接生效：rerank 隧道已重连；11437/11438 下次重连时生效。
+  排查：47 上 `journalctl _COMM=sshd --since -1h | grep 18191`；mini 上 `~/rerank-service/tunnel.err`。
 
 ## 文件
 
