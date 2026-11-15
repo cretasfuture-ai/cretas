@@ -16,3 +16,14 @@
 ## 补收（2026-11-15）
 - `component-library/legacy-src`：旧版 web-admin 快照（1164 个文件），组件库 `App.vue`、`main.ts` 引入其整个路由，`fusion/identity.ts` 与 `FusionAnalytics.vue` 引入其 store/类型/Dashboard。它与当前 `web-admin/src` 不同（旧版），迁移时以 `web-admin` 为准，此处只为让组件库保持可读、可构建。
 - `ydwm-v1/public/design-system.{css,js,d.ts}`：`--cs-*` 变量与 `CretasSystem` 类型，`unified-v1/src/frame/ai-protocol.ts` 按相对路径引用，目录层级与原型一致。
+
+## 原型后端（补收，2026-11-15）
+原型是「页面 + 本机假后端」。假后端里是业务规则的原型实现，**后续要对照着融进现有 Java 与 Python 后端**（Steve 11-15），迁移时以这些文件为规则依据，不是直接部署。
+
+| 目录 | 内容 |
+|---|---|
+| `ydwm-v1/*.mjs` `*.cjs` | 味美后端处理 48 个文件：BOM、成本、称重、生产、库存、采购销售、退货冲销、报表、工作流、盘点、调拨、仓位等（`fusion-*.mjs`），及 `server.cjs` |
+| `component-library/server/*.mjs` | 组件库侧的同类处理文件 15 个与 `server.mjs` |
+| `liushanmen-v1/server.cjs`、`tools/` | 六膳门服务与黑湖只读数据读取脚本（`read_source.py` 等） |
+
+仍不收：各目录 `data/`、`private/`（客户数据与测试状态）。`fusion-controlled-purchase.mjs` 里的 `token` 是本地演示用的一次性随机凭证，不是密钥。
