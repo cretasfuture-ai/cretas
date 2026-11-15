@@ -10741,11 +10741,11 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         ProductionPlanImportDTO dto = new ProductionPlanImportDTO();
         // Resolve product name
         if (plan.getProductType() != null) {
-            dto.setProductName(plan.getProductType().getName());
+            dto.setProductName(com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, plan.getFactoryId(), plan.getProductType()));
         } else {
             productTypeRepository.findByIdAndFactoryId(
                             plan.getProductTypeId(), plan.getFactoryId())
-                    .ifPresent(pt -> dto.setProductName(pt.getName()));
+                    .ifPresent(pt -> dto.setProductName(com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, plan.getFactoryId(), pt)));
         }
         dto.setPlannedQuantity(plan.getPlannedQuantity());
         dto.setExpectedCompletionDate(plan.getExpectedCompletionDate());
