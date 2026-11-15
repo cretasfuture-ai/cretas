@@ -74,4 +74,18 @@ describe('workdesk unified recognition boundary', () => {
     expect(post.mock.calls[1][1].sessionId).toBe('clarify-session');
     scope.stop();
   });
+
+  it('describes the receiving tool actual window instead of claiming an unsupported date filter is all-time', async () => {
+    post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode: 'MATERIAL_TODAY_RECEIVING_QUERY',
+      formattedText: '注意：这个查询不能按时间筛选（你说的是 2026-11-15 至 2026-11-15），下面是不限时间的结果。\n暂无待收货',
+      resultData: { data: { today: '2026-11-15', rangeEnd: '2026-11-16', includeOverdue: true } },
+    } });
+    const { client, scope } = create();
+    const result = await client.execute('今天要收什么货');
+    expect(result.formattedText).toContain('未按你指定的日期筛选');
+    expect(result.formattedText).toContain('截至 2026-11-16，包含逾期待收');
+    expect(result.formattedText).toContain('暂无待收货');
+    expect(result.formattedText).not.toContain('不限时间');
+    scope.stop();
+  });
 });

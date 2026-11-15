@@ -63,6 +63,20 @@ export function useWorkdeskIntent(identity: () => WorkdeskIdentity) {
     if (result.status === 'READ_MODE_WRITE_BLOCKED') {
       return { ...result, formattedText: '这是办理单据的请求。请从下方业务入口继续，核对表单后再保存。' };
     }
+    // This tool reports its actual bounded window; the shared unsupported-date notice says
+    // "all time" even though this result still uses that window. Preserve the warning accurately.
+    if (result.intentCode === 'MATERIAL_TODAY_RECEIVING_QUERY') {
+      const data = result.resultData?.data || result.resultData;
+      if (data && typeof data === 'object' && 'today' in data && 'rangeEnd' in data && 'includeOverdue' in data
+        && typeof data.today === 'string' && typeof data.rangeEnd === 'string' && typeof data.includeOverdue === 'boolean') {
+        const text = result.formattedText || result.message || '';
+        const notice = /^注意：这个查询不能按时间筛选（[^）]*），下面是不限时间的结果。\s*/;
+        if (notice.test(text)) {
+          const range = data.includeOverdue ? `截至 ${data.rangeEnd}，包含逾期待收` : `${data.today} 至 ${data.rangeEnd}`;
+          return { ...result, formattedText: `本次未按你指定的日期筛选。实际查询范围：${range}；仅统计已维护预计到货日期的订单。\n\n${text.replace(notice, '')}` };
+        }
+      }
+    }
     return result;
   }
   return { execute, reset, sessionId, clarificationQuestions };
