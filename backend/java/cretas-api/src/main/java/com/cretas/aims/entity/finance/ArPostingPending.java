@@ -19,7 +19,7 @@ import java.util.UUID;
  *
  * <p>2026-11-15 Steve 裁决: 发货不回滚, 失败写本表并发告警, 由人补账。
  * 「幂等命中(该发运单已挂账)」不是失败, 不产生本表记录。
- * 表: {@code ar_posting_pending} (V20261115_41)。补账动作与 RESOLVED 置位本期未做。
+ * 表: {@code ar_posting_pending} (V20261115_71)。补账动作与 RESOLVED 置位本期未做。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
