@@ -40,17 +40,24 @@ class MaterialStockSummaryMissingPriceContractTest {
     @Autowired private JdbcTemplate jdbc;
 
     @Test
-    @DisplayName("全有价求和; 任一批次无价则 totalValue 为 null; 别的厂不串")
+    @DisplayName("全有价求和; 单价 0 算有价; 任一批次无价则 totalValue 为 null; 别的厂批次不串入")
     void partialPriceGivesNullValue() {
         jdbc.execute("SET REFERENTIAL_INTEGRITY FALSE");
+        try {
         material("MT-SSMP-ALL", "A");
         material("MT-SSMP-PART", "B");
         material("MT-SSMP-NONE", "C");
+        material("MT-SSMP-ZERO", "D");
         batches.saveAndFlush(batch("b1", "MT-SSMP-ALL", "10", "2.5"));
         batches.saveAndFlush(batch("b2", "MT-SSMP-ALL", "4", "5"));
         batches.saveAndFlush(batch("b3", "MT-SSMP-PART", "10", "2"));
         batches.saveAndFlush(batch("b4", "MT-SSMP-PART", "10", null));
         batches.saveAndFlush(batch("b5", "MT-SSMP-NONE", "3", null));
+        batches.saveAndFlush(batch("b6", "MT-SSMP-ZERO", "7", "0"));
+        // 阴性对照: 他厂同物料的无价批次不得拖成本厂 null, 也不得把数量加进来
+        MaterialBatch foreign = batch("b7", "MT-SSMP-ALL", "100", null);
+        foreign.setFactoryId("F-SSMP-OTHER");
+        batches.saveAndFlush(foreign);
 
         List<MaterialStockSummaryDTO> rows = batches.findStockSummaryByFactory(F);
 
@@ -61,6 +68,12 @@ class MaterialStockSummaryMissingPriceContractTest {
         assertThat(part.getTotalQuantity()).isEqualByComparingTo("20");
         assertThat(part.getTotalValue()).as("部分批次无价, 不得给出偏低的 20").isNull();
         assertThat(row(rows, "MT-SSMP-NONE").getTotalValue()).isNull();
+        MaterialStockSummaryDTO zero = row(rows, "MT-SSMP-ZERO");
+        assertThat(zero.getTotalValue()).as("单价 0 算有价").isEqualByComparingTo("0");
+        assertThat(all.getBatchCount()).as("他厂批次不串入").isEqualTo(2L);
+        } finally {
+            jdbc.execute("SET REFERENTIAL_INTEGRITY TRUE");
+        }
     }
 
     private static MaterialStockSummaryDTO row(List<MaterialStockSummaryDTO> rows, String id) {

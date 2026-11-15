@@ -678,6 +678,10 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
      * <p>JOIN m.materialType mt 取 name/code/category。PG 严格 GROUP BY: 所有非聚合
      * SELECT 列 (m.materialTypeId / m.quantityUnit 及 mt.name/code/category) 均列入 GROUP BY。
      * avgUnitPrice 不在 SQL 聚合, 由 Service 层 totalValue/totalQuantity 计算回填。</p>
+     *
+     * <p><b>缺单价</b>: 同一 (物料, 单位) 组内只要有一个在库批次 unitPrice 为 NULL, 该组 totalValue
+     * 整体返回 NULL (而不是跳过空价批次只加有价的, 那会得到偏低的数); avgUnitPrice 随之为 NULL。
+     * 单价为 0 视为有价。</p>
      */
     @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
            "m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit, " +
