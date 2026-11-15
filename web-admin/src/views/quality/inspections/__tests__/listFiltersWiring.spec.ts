@@ -20,6 +20,17 @@ function mountPage() {
     global: { plugins: [ElementPlus], stubs: {
       CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
       TableFooter: true, UpstreamMissingHint: true,
+      // Nuxt UI 在 vitest 里没有安装插件, 用最小桩保留 data-testid / 点击 / 输入契约
+      UButton: { template: '<button type="button"><slot /></button>' },
+      UPopover: {
+        props: ['open'], emits: ['update:open'],
+        template: `<div><span @click="$emit('update:open', !open)"><slot /></span><div v-if="open"><slot name="content" /></div></div>`,
+      },
+      UFormField: { template: '<label><slot /></label>' },
+      UTextarea: {
+        props: ['modelValue'], emits: ['update:modelValue'],
+        template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />`,
+      },
     } },
   });
 }
