@@ -682,7 +682,8 @@ public interface MaterialBatchRepository extends JpaRepository<MaterialBatch, St
     @Query("SELECT new com.cretas.aims.dto.material.MaterialStockSummaryDTO(" +
            "m.materialTypeId, mt.name, mt.code, mt.category, m.quantityUnit, " +
            "SUM(m.receiptQuantity - m.usedQuantity - m.reservedQuantity), " +
-           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice), " +
+           "CASE WHEN COUNT(m.unitPrice) = COUNT(m) THEN " +
+           "SUM((m.receiptQuantity - m.usedQuantity - m.reservedQuantity) * m.unitPrice) ELSE NULL END, " +
            "COUNT(m), COUNT(DISTINCT m.warehouseId)) " +
            "FROM MaterialBatch m JOIN m.materialType mt " +
            "WHERE m.factoryId = :factoryId " +
