@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -35,10 +36,16 @@ import java.util.*;
 public class ReportCostQueryTool extends AbstractBusinessTool {
 
     static final int MAX_PRODUCTS = 15;
+    static final java.util.regex.Pattern MONTH_OVER_MONTH =
+            java.util.regex.Pattern.compile("(和|与|跟|同|比)(上个月|上月)(比|相比|对比)?|比(上个月|上月)|环比(上个月|上月)");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
 
     @Autowired
     private ProductionBatchRepository batchRepository;
+
+    /** 解析产品名用 (本厂在用产品目录); 取不到时退回按批次名子串筛 (旧行为)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
 
     @Autowired(required = false)
     private ProcessSecretLlmCostScope llmCostScope = ProcessSecretLlmCostScope.standalone();
@@ -61,8 +68,8 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "startDate", Map.of("type", "string", "description", "开始日期 yyyy-MM-dd，默认本月 1 号；「上周」填上周一，「本月」填 1 号"),
-                        "endDate", Map.of("type", "string", "description", "结束日期 yyyy-MM-dd，默认今天；「上周」填上周日"),
+                        "startDate", Map.of("type", "string", "format", "date", "description", "开始日期 yyyy-MM-dd，默认本月 1 号；「上周」填上周一，「本月」填 1 号"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "结束日期 yyyy-MM-dd，默认今天；「上周」填上周日"),
                         "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配），不填则全部产品"),
                         "period", Map.of("type", "string", "description", "快捷周期: last_week(上周) / this_week(本周) / this_month(本月) / last_month(上月)；与 startDate/endDate 同时给时以日期为准"),
                         "compareTo", Map.of("type", "string", "description", "对比基准: last_month=环比上月（用户说「和上月比」「比上个月」时填，上一期整体往前推一个月）；不填=上一个等长周期"),
@@ -106,18 +113,42 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         }
         String keyword = blankToNull(getString(params, "productName"));
         boolean showAmounts = replyShowsAmounts(context, "cost", "unitCost", "totalCost");
+        // 产品名先在本厂在用产品里解析: 完全同名优先; 包含匹配多个时给候选, 不把「卤牛肉/卤牛肉片/五香卤牛肉」合计成一个数
+        Set<String> productIds = null;
+        if (keyword != null && productTypeRepository != null) {
+            List<ProductType> candidates = matchProducts(factoryId, keyword);
+            if (candidates.isEmpty()) {
+                Map<String, Object> none = new LinkedHashMap<>();
+                none.put("productFilter", keyword);
+                none.put("candidates", List.of());
+                return buildSimpleResult("没有找到名称含「" + keyword + "」的在用产品，无法统计成本。请确认产品名。", none);
+            }
+            if (candidates.size() > 1) {
+                List<String> names = new ArrayList<>();
+                for (ProductType t : candidates) names.add(t.getName());
+                Map<String, Object> amb = new LinkedHashMap<>();
+                amb.put("productFilter", keyword);
+                amb.put("candidates", names);
+                return buildSimpleResult("「" + keyword + "」匹配到 " + names.size() + " 个产品：" + String.join("、", names)
+                        + "。请说清楚要看哪一个（说完整产品名），我不把它们合计成一个数。", amb);
+            }
+            productIds = new HashSet<>();
+            productIds.add(candidates.get(0).getId());
+            keyword = null;
+        }
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null
                 ? ProcessSecretLlmCostScope.Excluded.NONE : llmCostScope.forCurrentCaller(factoryId);
 
-        Aggregate current = aggregate(factoryId, start, end, keyword, secret);
+        Aggregate current = aggregate(factoryId, start, end, keyword, productIds, secret);
         long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
         // 「和上月比」= 环比上月: 上一期是整体往前推一个月 (本月 1~今天 对上月 1~同一天), 不是上一个等长周期
         String compareTo = blankToNull(getString(params, "compareTo"));
         if (compareTo == null) {
-            // 抽参没填时的兜底: 原问题里明说了「和上月比 / 比上月 / 环比」
-            String q = blankToNull(getString(params, "question"));
-            if (q != null && q.matches("(?s).*(和上月比|与上月比|跟上月比|比上月|比上个月|和上个月比|环比).*")) compareTo = "last_month";
+            // 抽参没填时的兜底: 原话里明说了「和上月比 / 比上月 / 环比上月」(「环比」单独出现不当成上月: 「本周环比」是和上一周比)
+            String q = blankToNull(getString(params, "userInput"));
+            if (q == null) q = blankToNull(getString(params, "question"));
+            if (q != null && MONTH_OVER_MONTH.matcher(q).find()) compareTo = "last_month";
         }
         boolean monthOverMonth = "last_month".equalsIgnoreCase(compareTo);
         LocalDate prevStart;
@@ -131,7 +162,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             prevEnd = start.minusDays(1);
             prevStart = prevEnd.minusDays(days - 1);
         }
-        Aggregate previous = aggregate(factoryId, prevStart, prevEnd, keyword, secret);
+        Aggregate previous = aggregate(factoryId, prevStart, prevEnd, keyword, productIds, secret);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
@@ -165,7 +196,22 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     // ==================== 聚合 ====================
 
-    private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword,
+    /** 本厂在用产品里名称匹配 keyword 的: 有完全同名 (忽略大小写) 只返回它, 否则返回所有包含匹配。 */
+    List<ProductType> matchProducts(String factoryId, String keyword) {
+        List<ProductType> types = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
+        List<ProductType> exact = new ArrayList<>();
+        List<ProductType> contains = new ArrayList<>();
+        if (types != null) {
+            for (ProductType t : types) {
+                if (t.getId() == null || t.getName() == null) continue;
+                if (t.getName().trim().equalsIgnoreCase(keyword)) exact.add(t);
+                else if (containsIgnoreCase(t.getName(), keyword)) contains.add(t);
+            }
+        }
+        return exact.isEmpty() ? contains : exact;
+    }
+
+    private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword, Set<String> productIds,
                                 ProcessSecretLlmCostScope.Excluded secret) {
         // 与成本分析页同口径: 按批次结束日 (DATE(end_time)) 落期, 半开区间 [start 00:00, end+1 00:00)
         List<ProductionBatch> batches = batchRepository.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
@@ -178,6 +224,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             if (b.getStatus() != ProductionBatchStatus.COMPLETED) continue;
             if ("CLERK_WIP".equals(b.getBatchType())) continue;
             if (keyword != null && !containsIgnoreCase(b.getProductName(), keyword)) continue;
+            if (productIds != null && (b.getProductTypeId() == null || !productIds.contains(b.getProductTypeId()))) continue;
             if (secret.coversBatch(b.getProductTypeId(), b.getProductionPlanId())) {
                 agg.withheldBatches++;
                 continue;
@@ -221,6 +268,22 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             if (b.getActualQuantity() != null) {
                 p.qtyByUnit.merge(unit, b.getActualQuantity(), BigDecimal::add);
             }
+        }
+
+        /** 所有成本已算全批次都只有一个产出单位时返回该单位 (没有批次或多个单位返回 null)。 */
+        String singleUnit() {
+            java.util.Set<String> units = new java.util.LinkedHashSet<>();
+            for (ProductAgg p : byProduct.values()) units.addAll(p.qtyByUnit.keySet());
+            return units.size() == 1 ? units.iterator().next() : null;
+        }
+
+        /** 单一单位时的总产量, 否则 null。 */
+        BigDecimal singleUnitQuantity() {
+            String unit = singleUnit();
+            if (unit == null) return null;
+            BigDecimal sum = BigDecimal.ZERO;
+            for (ProductAgg p : byProduct.values()) sum = sum.add(p.qtyByUnit.getOrDefault(unit, BigDecimal.ZERO));
+            return sum;
         }
 
         String withheldNote() {
@@ -424,7 +487,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                 if (c.get("changePct") != null) sb.append("（").append(signed((BigDecimal) c.get("changePct"))).append("%）");
             }
             sb.append("。");
-            sb.append(riserText(cmp));
+            sb.append(riserText(cur, prev));
         }
         sb.append("\n口径：只统计已完成批次（按结束日落期）；单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量，按单位分开算，与成本分析页一致。");
         return sb.toString();
@@ -432,19 +495,35 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     // ==================== 小工具 ====================
 
-    /** 涨得最多的分项 (只在原料/人工/设备/其他里比, 不含总成本); 都没涨就明说。 */
-    static String riserText(List<Map<String, Object>> cmp) {
-        Map<String, Object> top = null;
-        for (Map<String, Object> c : cmp) {
-            if ("总成本".equals(c.get("name"))) continue;
-            BigDecimal change = (BigDecimal) c.get("change");
-            if (change.signum() > 0 && (top == null || change.compareTo((BigDecimal) top.get("change")) > 0)) {
-                top = c;
+    /**
+     * 涨得最多的分项。两期都只有同一个产出单位且有产量时, 按「每单位产量的分项成本」比 (产量翻倍、单位成本不变不算涨);
+     * 否则按总额比并明说是总额、没有按产量折算。只在 原料/人工/设备/其他 里比, 不含总成本。
+     */
+    static String riserText(Aggregate cur, Aggregate prev) {
+        BigDecimal curQty = cur.singleUnitQuantity();
+        BigDecimal prevQty = prev.singleUnitQuantity();
+        boolean perUnit = curQty != null && prevQty != null && curQty.signum() > 0 && prevQty.signum() > 0
+                && java.util.Objects.equals(cur.singleUnit(), prev.singleUnit());
+        String[] names = {"原料", "人工", "设备", "其他"};
+        BigDecimal[] now = {cur.material, cur.labor, cur.equipment, cur.other};
+        BigDecimal[] before = {prev.material, prev.labor, prev.equipment, prev.other};
+        int top = -1;
+        BigDecimal topChange = BigDecimal.ZERO;
+        for (int i = 0; i < names.length; i++) {
+            BigDecimal a = perUnit ? now[i].divide(curQty, 4, RoundingMode.HALF_UP) : now[i];
+            BigDecimal b = perUnit ? before[i].divide(prevQty, 4, RoundingMode.HALF_UP) : before[i];
+            BigDecimal change = a.subtract(b);
+            if (change.signum() > 0 && change.compareTo(topChange) > 0) {
+                top = i;
+                topChange = change;
             }
         }
-        if (top == null) return "\n各分项都没有上涨。";
-        return "\n涨得最多的是" + top.get("name") + "：+" + ((BigDecimal) top.get("change")).stripTrailingZeros().toPlainString()
-                + (top.get("changePct") != null ? "（+" + ((BigDecimal) top.get("changePct")).stripTrailingZeros().toPlainString() + "%）" : "") + "。";
+        String basis = perUnit ? "按每" + (cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit()) + "产量的单位成本比"
+                : "按总额比，没有按产量折算（产量或单位不同，产量变化会影响总额）";
+        if (top < 0) return "\n各分项都没有上涨（" + basis + "）。";
+        String amount = topChange.setScale(perUnit ? 2 : 2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+        return "\n涨得最多的是" + names[top] + "：+" + amount + (perUnit ? " 元/" + (cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit()) : " 元")
+                + "（" + basis + "）。";
     }
 
     private static String signed(BigDecimal v) {

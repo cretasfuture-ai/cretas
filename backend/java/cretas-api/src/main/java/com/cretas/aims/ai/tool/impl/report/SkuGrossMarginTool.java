@@ -73,8 +73,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
                 "type", "object",
                 "properties", Map.of(
                         "productName", Map.of("type", "string", "description", "产品名称(可选，模糊匹配，不填则查全部有销售或有目录价的产品)"),
-                        "startDate", Map.of("type", "string", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
-                        "endDate", Map.of("type", "string", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
+                        "startDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
+                        "endDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
                 ),
                 "required", List.of()
         ));
