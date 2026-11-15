@@ -149,6 +149,12 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword,
                                 ProcessSecretLlmCostScope.Excluded secret) {
+        return aggregate(batchRepository, factoryId, start, end, keyword, secret);
+    }
+
+    /** 同口径聚合入口 (人工成本占比等同包工具复用, 不另写一份口径)。 */
+    static Aggregate aggregate(ProductionBatchRepository batchRepository, String factoryId, LocalDate start,
+                               LocalDate end, String keyword, ProcessSecretLlmCostScope.Excluded secret) {
         // 与成本分析页同口径: 按批次结束日 (DATE(end_time)) 落期, 半开区间 [start 00:00, end+1 00:00)
         List<ProductionBatch> batches = batchRepository.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
                 factoryId, start.atStartOfDay(), end.plusDays(1).atStartOfDay());
@@ -196,6 +202,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             if (p.name == null) p.name = name;
             p.batches++;
             p.total = p.total.add(b.getTotalCost());
+            p.labor = p.labor.add(nz(b.getLaborCost()));
             // 单位成本口径 = 成本分析页 (factory_production_gold.py product-cost-compare):
             // 有成本批次的总成本 ÷ 这些批次的「实际产量」, 按 (产品, 单位) 分开。不用良品数 (页面不用)。
             String unit = b.getUnit() != null ? b.getUnit() : "";
@@ -260,6 +267,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         String name;
         int batches;
         BigDecimal total = BigDecimal.ZERO;
+        BigDecimal labor = BigDecimal.ZERO;
         final Map<String, BigDecimal> qtyByUnit = new LinkedHashMap<>();
         final Map<String, BigDecimal> costByUnit = new LinkedHashMap<>();
 
