@@ -493,46 +493,45 @@ public class ToolDispatchService {
         try {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
-            if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())))
-                    && (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
-                    || com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
-                    .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
-                    .filter(actor -> Objects.equals(actor.id(), userId))
-                    .filter(actor -> Objects.equals(actor.factoryId(), factoryId)).isEmpty())) {
-                return IntentExecuteResponse.builder()
+            // 身份门 + 功能开关与澄清候选共用一份判定 (ToolExecutionAdmission), 候选不许比这里放得宽。
+            ToolExecutionAdmission.Refusal admission =
+                    ToolExecutionAdmission.refusal(toolRegistry, tool, intent, factoryId, userId).orElse(null);
+            // 任何拒绝都不往下执行: switch 表达式对枚举必须穷举 —— 以后新增一种 Refusal 而这里没写,
+            // 编译就过不去 (不会落空放行; 候选侧按 isPresent 一律不出) (#1769 终审第 2 条)。
+            if (admission != null) {
+                return switch (admission) {
+                    case SUPPLIER_IDENTITY -> IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent == null ? null : intent.getIntentCode())
                         .status("FORBIDDEN").aiMode("READ")
                         .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
                         .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
                         .executedAt(LocalDateTime.now()).build();
-            }
-            // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
-            // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
-            // ToolRegistry.isToolEnabledForFactory() was never called on the execution
-            // path — the switch was decorative. Now we check it here so a disabled tool
-            // returns a clear error instead of silently running.
-            if (toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, tool.getToolName())) {
-                log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
-                // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
-                // and cross-factory cases (e.g. F999 not configured → tool not enabled).
-                String disabledMsg = String.format(
-                        "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
-                        + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
-                        + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
-                        intent.getIntentName(), factoryId, factoryId);
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent.getIntentCode())
-                        .intentName(intent.getIntentName())
-                        .intentCategory(intent.getIntentCategory())
-                        .status("TOOL_DISABLED")
-                        .message(disabledMsg)
-                        .formattedText(disabledMsg)
-                        .executedAt(LocalDateTime.now())
-                        .build();
+                    // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
+                    // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
+                    // the switch was never read on the execution path. Now a disabled tool
+                    // returns a clear error instead of silently running.
+                    case TOOL_DISABLED -> {
+                        log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
+                        // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
+                        // and cross-factory cases (e.g. F999 not configured → tool not enabled).
+                        String disabledMsg = String.format(
+                                "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
+                                + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
+                                + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
+                                intent.getIntentName(), factoryId, factoryId);
+                        yield IntentExecuteResponse.builder()
+                                .intentRecognized(true)
+                                .intentCode(intent.getIntentCode())
+                                .intentName(intent.getIntentName())
+                                .intentCategory(intent.getIntentCategory())
+                                .status("TOOL_DISABLED")
+                                .message(disabledMsg)
+                                .formattedText(disabledMsg)
+                                .executedAt(LocalDateTime.now())
+                                .build();
+                    }
+                };
             }
 
             IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
