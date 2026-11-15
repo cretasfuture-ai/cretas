@@ -26,11 +26,11 @@
     </section>
 
     <!-- 新建 -->
-    <UModal v-model:open="createVisible" title="新建周转耗材" description="登记新的周转耗材" :ui="{ content: 'max-w-[520px]', description: 'sr-only' }">
+    <UModal v-model:open="createVisible" title="新建周转耗材" description="登记新的周转耗材" :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
-          <UFormField label="编号"><UInput v-model="createForm.containerCode" class="w-full" /></UFormField>
-          <UFormField label="名称"><UInput v-model="createForm.containerName" class="w-full" /></UFormField>
+          <UFormField label="编号" required><UInput v-model="createForm.containerCode" class="w-full" /></UFormField>
+          <UFormField label="名称" required><UInput v-model="createForm.containerName" class="w-full" /></UFormField>
           <UFormField label="规格"><UInput v-model="createForm.specification" placeholder="60*40*30 cm / 25kg" class="w-full" /></UFormField>
           <UFormField v-if="canViewPrice" label="单价/赔偿价">
             <UInputNumber :step-snapping="false" v-model="createForm.unitPrice" :min="0" :format-options="MONEY_FORMAT" :increment="false" :decrement="false" class="w-full" />
@@ -48,10 +48,10 @@
     </UModal>
 
     <!-- 发出 / 归还 / 报损 通用 -->
-    <UModal v-model:open="actionVisible" :title="actionTitle" description="周转耗材发出、归还或报损登记" :ui="{ content: 'max-w-[500px]', description: 'sr-only' }">
+    <UModal v-model:open="actionVisible" :title="actionTitle" description="周转耗材发出、归还或报损登记" :ui="{ content: 'max-w-[500px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
-          <UFormField label="数量">
+          <UFormField label="数量" required>
             <UInputNumber :step-snapping="false" v-model="actionForm.quantity" :min="1" :increment="false" :decrement="false" class="w-full" />
           </UFormField>
           <UFormField label="客户ID"><UInput v-model="actionForm.customerId" class="w-full" /></UFormField>
@@ -70,7 +70,7 @@
     </UModal>
 
     <!-- 流水 -->
-    <UModal v-model:open="txVisible" title="流水记录" description="周转耗材收发流水" :ui="{ content: 'max-w-[780px]', description: 'sr-only' }">
+    <UModal v-model:open="txVisible" title="流水记录" description="周转耗材收发流水" :ui="{ content: 'max-w-[780px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <UTable :data="txRows" :columns="txColumns" :loading="txLoading" class="cs-table" data-testid="container-tx-table">
           <template #empty>暂无流水</template>

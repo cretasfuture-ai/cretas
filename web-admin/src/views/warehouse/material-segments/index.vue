@@ -390,7 +390,7 @@ onMounted(loadTree);
       </UTable>
     </section>
 
-    <UModal v-model:open="dialogVisible" :title="form.id ? '编辑分类' : '新增分类'" description="维护分类名称、层级和上级分类" :ui="{ content: 'max-w-[520px]', description: 'sr-only' }">
+    <UModal v-model:open="dialogVisible" :title="form.id ? '编辑分类' : '新增分类'" description="维护分类名称、层级和上级分类" :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
           <UFormField label="层级" required>
@@ -417,7 +417,7 @@ onMounted(loadTree);
       </template>
     </UModal>
 
-    <UModal :open="confirmOpen" :title="confirmState.title" description="请确认" :ui="{ content: 'max-w-[440px]', description: 'sr-only' }" @update:open="onConfirmOpenChange">
+    <UModal :open="confirmOpen" :title="confirmState.title" description="请确认" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }" @update:open="onConfirmOpenChange">
       <template #body>
         <p class="confirm">{{ confirmState.message }}</p>
       </template>

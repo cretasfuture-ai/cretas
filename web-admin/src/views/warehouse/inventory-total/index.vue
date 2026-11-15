@@ -57,7 +57,7 @@ const R = { class: { th: 'text-right', td: 'text-right' } };
 const C = { class: { th: 'text-center', td: 'text-center' } };
 const columns = computed<TableColumn<MaterialStockSummaryRow>[]>(() => [
   { accessorKey: 'materialCode', header: '原料编码' },
-  { accessorKey: 'materialName', header: '原料名称' },
+  { id: 'materialName', header: '原料名称', meta: { class: { th: 'w-[260px] max-w-[260px]', td: 'w-[260px] max-w-[260px]' } } },
   { id: 'materialCategory', header: '类别' },
   { id: 'totalQuantity', header: '当前总库存', meta: R },
   { id: 'unit', header: '单位', meta: C },
@@ -204,6 +204,7 @@ onMounted(() => {
       <section class="cs-card">
         <UTable :data="filteredData" :columns="columns" :loading="loading" class="cs-table" data-testid="inventory-total-table">
           <template #empty>暂无库存数据</template>
+          <template #materialName-cell="{ row }"><span class="cell-ellipsis" :title="row.original.materialName">{{ row.original.materialName }}</span></template>
           <template #materialCategory-cell="{ row }">{{ row.original.materialCategory || '-' }}</template>
           <template #totalQuantity-cell="{ row }"><strong class="num">{{ fmtQty(row.original.totalQuantity) }}</strong></template>
           <template #unit-cell="{ row }">{{ row.original.unit || '-' }}</template>
@@ -220,6 +221,7 @@ onMounted(() => {
 <style scoped>
 .page-wrapper { display: flex; flex-direction: column; gap: var(--cs-space-3); padding: var(--cs-space-4); }
 .page-wrapper > .cs-card + .cs-card { margin-top: 0; }
+.cell-ellipsis { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kind-switch { display: flex; gap: var(--cs-space-2); }
 .cs-card-head { align-items: baseline; }
 .page-title { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }

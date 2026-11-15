@@ -200,7 +200,7 @@ async function confirmDelete() {
       </UTable>
     </section>
 
-    <UModal v-model:open="dialogVisible" :title="dialogTitle" description="维护厂号编码、厂商名称与默认产地" :ui="{ content: 'max-w-[520px]', description: 'sr-only' }">
+    <UModal v-model:open="dialogVisible" :title="dialogTitle" description="维护厂号编码、厂商名称与默认产地" :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
           <UFormField label="厂号" required :error="codeError">
@@ -226,7 +226,7 @@ async function confirmDelete() {
       </template>
     </UModal>
 
-    <UModal v-model:open="deleteVisible" title="停用厂商登记" description="确认停用厂号" :ui="{ content: 'max-w-[440px]', description: 'sr-only' }">
+    <UModal v-model:open="deleteVisible" title="停用厂商登记" description="确认停用厂号" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <p class="confirm">确认停用厂号 {{ deleteTarget?.code }}？</p>
       </template>
