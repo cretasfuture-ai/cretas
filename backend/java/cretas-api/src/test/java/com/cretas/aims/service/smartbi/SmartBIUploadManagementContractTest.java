@@ -21,7 +21,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
-class SmartBIUploadManagementServiceTest {
+class SmartBIUploadManagementContractTest {
     @Mock SmartBiPgExcelUploadRepository uploads;
     @Mock SmartBiDynamicDataRepository data;
     @Mock SmartBiPgFieldDefinitionRepository fields;

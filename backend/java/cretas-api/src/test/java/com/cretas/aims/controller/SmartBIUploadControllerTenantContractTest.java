@@ -20,7 +20,7 @@ import static org.mockito.Mockito.*;
 
 /** 上传记录的 fields/data 读取必须校验归属工厂（此前只按 uploadId 读，跨厂可读到字段定义）。 */
 @ExtendWith(MockitoExtension.class)
-class SmartBIUploadControllerTenantTest {
+class SmartBIUploadControllerTenantContractTest {
     @Mock ExcelDynamicParserService parser;
     @Mock SmartBIUploadFlowService flow;
     @Mock PythonSmartBIClient client;
