@@ -69,8 +69,10 @@ interface FormItem {
   unit: string;
   unitPrice: number | null;
   priceSource?: string | null;
+  taxRate?: number | null;
 }
 interface Vm {
+  handleAiFill: (params: Record<string, unknown>) => Promise<void>;
   openEditDialog: (id: string) => Promise<void>;
   onSupplierChange: () => Promise<void>;
   dialogVisible: boolean;
@@ -130,6 +132,7 @@ function autoDraft(overrides: Record<string, unknown> = {}) {
 
 function routeGet(order: Record<string, unknown>) {
   harness.get.mockImplementation(async (url: string) => {
+    if (url.endsWith('/raw-material-types/active')) return { success: true, data: [{ id: 'mat-salt', name: 'QA-S4-1029-盐料', taxRate: 'TAX_13' }] };
     if (url === `/F006/purchase/orders/${order.id}`) return { success: true, data: order };
     if (/\/suppliers(\?|$)/.test(url) || url.endsWith('/suppliers/active')) {
       return { success: true, data: { content: [SUPPLIER], totalElements: 1 } };
@@ -164,6 +167,31 @@ describe('D-S411R-01 编辑采购草稿补录供应商 (挂载真实 list.vue)',
     route.query = {};
     harness.listSupplierMaterials.mockResolvedValue([SALT_RELATION]);
     harness.listSupplierPurchaseSpecs.mockResolvedValue([]);
+  });
+
+  it('AI fill binds the current supplier relation and material tax rate without saving', async () => {
+    routeGet(autoDraft());
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.handleAiFill({ supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 2, unit: 'kg', unitPrice: 5 }] });
+    expect(harness.listSupplierMaterials).toHaveBeenCalledWith('F006', SUPPLIER.id);
+    expect(vm.dialogVisible).toBe(true);
+    expect(vm.form.items[0]).toMatchObject({ supplierMaterialId: 'rel-salt', materialTypeId: 'mat-salt', quantity: 2, taxRate: 13 });
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('AI fill cannot bypass a missing supplier material relationship', async () => {
+    routeGet(autoDraft());
+    harness.listSupplierMaterials.mockResolvedValue([]);
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as Vm;
+    await vm.handleAiFill({ supplierName: SUPPLIER.name, items: [{ materialName: 'QA-S4-1029-盐料', quantity: 2, unit: 'kg', unitPrice: 5 }] });
+    expect(vm.dialogVisible).toBe(false);
+    expect(harness.post.mock.calls.filter(([path]) => String(path).endsWith('/purchase/orders'))).toHaveLength(0);
+    wrapper.unmount();
   });
 
   it('没有供应商的草稿: 编辑弹窗打开, 供应商下拉可用, 并提示可在此补录', async () => {

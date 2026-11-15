@@ -7,6 +7,12 @@
 
 ## 在飞任务
 
+- `WH-UI-COMP-20261115` — `in-progress` — Owner /root — Base `7f2556c6f949` — 已暂停组件子代理并接回 web-admin/src/components/workdesk/**；修真实发送/原话交接/状态；目标Vitest与三岗接线、tsc/build统一验证。
+
+- `WHOLESALE-ACCEPT-20261115` — `in-progress` — Owner /root — Base `7f2556c6f949` — 批发商试用三岗真实验收及修复；scope Web workdesk/AI录入与对应测试，后端按缺陷另锁。场景表：C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/scenarios.md；验收真实UI+独立回读、Vitest/tsc/build。
+
+- `WH-INTENT-FIX-20261115` — `in-progress` — Owner /root — Base `7f2556c6f949` — 锁 IntentKnowledgeBase.java、runtime-tool-policies.yaml、InventoryWorkdeskRecognitionContractTest.java；修补货短语误判与批次只读入口策略；保留角色/权限/企业闸，验收真实请求+对应Maven契约测试与独立审查。
+
 
 - `INTENT-DISTILL-20261111` — `in-progress` — Owner organizer — Base `a89e8c70f997` — 意图提速+本地决策蒸馏。A=`service/execution`+`backend/python/ai`，B=`tests/semantic-read`，C=`scripts/finetune`，G=`tests/semantic-read/HOLDOUT.md`；A/D/E/H 串行。见 archive/2026-11-11-intent-distill-plan.md 与 -pr1476-split-map.md。
 

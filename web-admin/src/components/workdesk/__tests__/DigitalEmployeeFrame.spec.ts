@@ -8,12 +8,13 @@ describe('embedded role workdesks', () => {
     ['sales', '销售数字员工工作台', 'clerk', '/sales/orders'],
     ['purchase', '采购数字员工工作台', 'clerk', '/procurement/orders'],
     ['inventory', '库存数字员工工作台', 'keeper', '/warehouse/materials'],
-  ] as const)('renders %s using the updated library image and a real business route', async (role, title, avatar, path) => {
+  ] as const)('renders %s using the updated Nuxt UI employee frame and a real business route', async (role, title, avatar, path) => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }] });
     await router.push('/');
     const wrapper = mount(DigitalEmployeeFrame, { props: { enabled: true, role, busy: false, error: '', factoryId: 'WHOLESALE_TEST', paths: [path], canWrite: true }, global: { plugins: [router] }, slots: { default: '<p>原工作台的真实查询结果</p>' } });
     expect(wrapper.get('h1').text()).toBe(title);
-    expect(wrapper.get('img').attributes('src')).toBe(`/digital-employees/${avatar}.png`);
+    expect(wrapper.get('uavatar').attributes('src')).toBe(`/digital-employees/${avatar}.png`);
+    expect(wrapper.get('uchip').attributes('color')).toBe('neutral');
     expect(wrapper.text()).toContain('原工作台的真实查询结果');
     expect(wrapper.text()).toContain('WHOLESALE_TEST');
     await wrapper.get('nav a').trigger('click');
@@ -21,9 +22,10 @@ describe('embedded role workdesks', () => {
     expect(router.resolve(wrapper.get('nav a').attributes('href')).path).toBe(path);
     expect(wrapper.findAll('nav a').every((link) => link.attributes('href').startsWith(path))).toBe(true);
     await wrapper.setProps({ busy: true });
-    expect(wrapper.get('[role="status"]').text()).toBe('正在核对');
+    expect(wrapper.get('[role="status"]').text()).toContain('正在核对');
     await wrapper.setProps({ busy: false, error: '接口未响应' });
     expect(wrapper.get('.crew-avatar').attributes('data-state')).toBe('alert');
+    expect(wrapper.get('uchip').attributes('color')).toBe('error');
     expect(wrapper.text()).not.toContain('已办成');
     wrapper.unmount();
   });

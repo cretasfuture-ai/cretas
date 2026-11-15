@@ -26,8 +26,12 @@
 -->
 <template>
   <div class="warehouse-keeper-workdesk">
-    <DigitalEmployeeFrame :enabled="digitalEmployee" role="inventory" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths">
-    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerTodayQuery">重新核对</el-button>
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="inventory" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="库存数字仓管" scope-label="待收货、入库与库存记录" :quick-questions="['有哪些采购到货还等着接收？', '查询库存情况']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/warehouse/materials')" to="/warehouse/materials" icon="i-lucide-package-check">{{ employeeCanWrite ? '到入库任务办理' : '查看入库任务' }}</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
     <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
@@ -43,7 +47,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -69,7 +73,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合今日待收清单 + 临期建议, 预计 3-5 秒..." }}</span>
@@ -78,7 +82,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -126,7 +130,7 @@
     </el-card>
 
     <!-- AI 输出 -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -150,6 +154,7 @@
             size="small"
             type="primary"
             :disabled="selectedRows.length === 0"
+            v-if="!digitalEmployee"
             @click="generateScanTask">
  一键扫码 ({{ selectedRows.length }})
           </el-button>
@@ -205,13 +210,14 @@
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
-            <el-button size="small" @click="openReceiveDialog(row)">
+            <el-button v-if="!digitalEmployee" size="small" @click="openReceiveDialog(row)">
               快速收货
             </el-button>
             <el-button
               size="small"
               type="primary"
               data-testid="confirm-receive-btn"
+              v-if="!digitalEmployee"
               @click="openConfirmReceiveDialog(row)">
               确认收货
             </el-button>
@@ -509,8 +515,10 @@
 
 <script setup lang="ts">
 import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
-const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean }>(), {
-  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false,
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
 });
 import { ref, computed, watch, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -629,11 +637,26 @@ interface RestaurantPnl {
 }
 const restaurantPnl = ref<RestaurantPnl | null>(null);
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const responseStatus = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+}
 
 async function callIntentExecute(input: string, intentCode?: string,
     parameters?: Record<string, unknown>, preview = false,
     context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (props.digitalEmployee) return employeeIntent.execute(input, context);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
@@ -717,14 +740,14 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 
 async function triggerTodayQuery() {
   userInput.value = '今天要收什么货?';
-  await sendQuery(true);
+  await sendQuery(!props.digitalEmployee);
 }
 
 async function sendQuery(autoTrigger = false) {
-  if (!userInput.value.trim()) return;
+  if (loading.value || !userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
-  if (autoTrigger) {
+  if (autoTrigger || props.digitalEmployee) {
     formattedText.value = '';
     receivingRows.value = [];
     disposalRecommendations.value = [];
@@ -751,6 +774,7 @@ async function sendQuery(autoTrigger = false) {
     }
     const response = await callIntentExecute(userInput.value, intentCode,
         undefined, false, context);
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -935,6 +959,7 @@ const canPreviewReceive = computed(() => {
 });
 
 function openReceiveDialog(row: ReceivingRow) {
+  if (props.digitalEmployee) return;
   receiveDialog.visible = true;
   receiveDialog.row = row;
   // 默认填 pendingQuantity (仓管员最常见场景: 全收)
@@ -1019,6 +1044,7 @@ const scanTaskDialog = reactive<{ visible: boolean; task: ScanTask | null }>({
 });
 
 async function generateScanTask() {
+  if (props.digitalEmployee) return;
   if (selectedRows.value.length === 0) {
     ElMessage.warning('请先选中要扫码的 PO 行');
     return;
@@ -1105,6 +1131,7 @@ const canPreviewConfirm = computed(() => {
 });
 
 function openConfirmReceiveDialog(row: ReceivingRow) {
+  if (props.digitalEmployee) return;
   confirmReceiveDialog.visible = true;
   confirmReceiveDialog.row = row;
   confirmReceiveDialog.form.receivedQty = row.pendingQuantity;  // default 全收
@@ -1195,8 +1222,8 @@ async function executeConfirmReceive() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
-watch(() => props.employeeNavigationPending, (pending) => {
-  if (pending || initialQueryStarted) return;
+watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
+  if (pending || !id || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerTodayQuery();
 }, { immediate: true });

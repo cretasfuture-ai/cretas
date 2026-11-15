@@ -1,0 +1,77 @@
+import { effectScope, reactive } from 'vue';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useWorkdeskIntent } from '../useWorkdeskIntent';
+
+const { post } = vi.hoisted(() => ({ post: vi.fn() }));
+vi.mock('@/api/request', () => ({ default: { post } }));
+
+describe('workdesk unified recognition boundary', () => {
+  beforeEach(() => { post.mockReset(); });
+  function create() {
+    const identity = reactive({ factoryId: 'WHOLESALE_TEST', actorId: '1709' });
+    const scope = effectScope();
+    const client = scope.run(() => useWorkdeskIntent(() => identity))!;
+    return { identity, scope, client };
+  }
+
+  it('sends natural language and keeps one session across followups without forcing an intent', async () => {
+    post.mockResolvedValue({ data: { status: 'SUCCESS' } });
+    const { client, scope } = create();
+    await client.execute('查询采购订单');
+    await client.execute('其中还没收到的呢？');
+    const first = post.mock.calls[0];
+    expect(first[0]).toBe('/WHOLESALE_TEST/ai-intents/execute');
+    expect(first[1]).toEqual({ userInput: '查询采购订单', sessionId: expect.any(String), mode: 'READ' });
+    expect(post.mock.calls[1][1]).toEqual({ userInput: '其中还没收到的呢？', sessionId: first[1].sessionId, mode: 'READ' });
+    scope.stop();
+  });
+
+  it('resets conversations and never sends missing tenant or actor requests', async () => {
+    post.mockResolvedValue({ data: { status: 'SUCCESS', sessionId: 'server-session' } });
+    const { client, identity, scope } = create();
+    await client.execute('查询订单');
+    expect(client.sessionId.value).toBe('server-session');
+    client.reset();
+    expect(client.sessionId.value).toBe('');
+    identity.factoryId = '';
+    await expect(client.execute('查询订单')).rejects.toThrow('账号未绑定企业');
+    identity.factoryId = 'OTHER';
+    identity.actorId = '';
+    await expect(client.execute('查询订单')).rejects.toThrow('账号未绑定企业');
+    expect(post).toHaveBeenCalledTimes(1);
+    scope.stop();
+  });
+
+  it('rejects an old response after identity or conversation changes', async () => {
+    let resolve!: (value: unknown) => void;
+    post.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    const { client, identity, scope } = create();
+    const pending = client.execute('查询订单');
+    identity.factoryId = 'OTHER';
+    resolve({ data: { status: 'SUCCESS', sessionId: 'old' } });
+    await expect(pending).rejects.toThrow('企业或对话已切换');
+    expect(client.sessionId.value).toBe('');
+    scope.stop();
+  });
+
+  it('does not treat HTTP 200 gateway denial as a completed answer', async () => {
+    post.mockResolvedValue({ data: { status: 'DENIED', message: 'Tool policy rejected' } });
+    const { client, scope } = create();
+    await expect(client.execute('查询原料')).rejects.toThrow('当前查询未获准执行');
+    scope.stop();
+  });
+
+  it('carries server clarification session and only exposes the supplied query choices', async () => {
+    post.mockResolvedValue({ data: { status: 'NEED_CLARIFICATION', metadata: { sessionId: 'clarify-session' }, suggestedActions: [
+      { actionCode: 'SELECT_INTENT', actionName: '今日待收货清单' },
+      { actionCode: 'DELETE', actionName: '删除记录' },
+    ] } });
+    const { client, scope } = create();
+    await client.execute('其中还没收到的呢？');
+    expect(client.sessionId.value).toBe('clarify-session');
+    expect(client.clarificationQuestions.value).toEqual(['今日待收货清单']);
+    await client.execute('今日待收货清单');
+    expect(post.mock.calls[1][1].sessionId).toBe('clarify-session');
+    scope.stop();
+  });
+});
