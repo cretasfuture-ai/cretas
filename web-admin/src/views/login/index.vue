@@ -3,6 +3,13 @@ import { ref, reactive } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
+import heroImage from '@/assets/login/login-hero.webp';
+import iconWeighing from '@/assets/login/feature-weighing.webp';
+import iconTrace from '@/assets/login/feature-trace.webp';
+import iconCost from '@/assets/login/feature-cost.webp';
+import iconAiBi from '@/assets/login/feature-ai-bi.webp';
+import iconOutsource from '@/assets/login/feature-outsource.webp';
+import iconAiVision from '@/assets/login/feature-ai-vision.webp';
 
 const router = useRouter();
 const route = useRoute();
@@ -13,11 +20,12 @@ const showPassword = ref(false);
 const forgotOpen = ref(false);
 
 const highlights = [
-  { icon: 'i-lucide-scale', title: '报工称重', desc: '现场称重直接入账，批次数据实时可查' },
-  { icon: 'i-lucide-git-branch', title: '全链溯源', desc: '从原料到成品，一键追到每个批次' },
-  { icon: 'i-lucide-calculator', title: '成本分析', desc: '物料、人工、损耗逐项归集，毛利一目了然' },
-  { icon: 'i-lucide-sparkles', title: 'AI 问答 BI', desc: '用一句话问经营数据，直接得到图表和结论' },
-  { icon: 'i-lucide-handshake', title: '委外协同', desc: '发料、回收、费用对账全程在线' }
+  { icon: iconWeighing, title: '报工称重', desc: '现场称重直接入账，批次数据实时可查' },
+  { icon: iconTrace, title: '全链溯源', desc: '从原料到成品，一键追到每个批次' },
+  { icon: iconCost, title: '成本分析', desc: '物料、人工、损耗逐项归集，毛利一目了然' },
+  { icon: iconAiBi, title: 'AI 问答 BI', desc: '用一句话问经营数据，直接得到图表和结论' },
+  { icon: iconOutsource, title: '委外协同', desc: '发料、回收、费用对账全程在线' },
+  { icon: iconAiVision, title: 'AI 视觉质检', desc: '拍照即检，异常自动留痕、自动预警' }
 ];
 const loading = ref(false);
 
@@ -83,23 +91,14 @@ async function handleLogin() {
         <p class="brand-sub">面向食品加工企业的一体化经营管理平台</p>
         <ul class="highlight-grid">
           <li v-for="h in highlights" :key="h.title" class="highlight">
-            <span class="highlight-icon"><UIcon :name="h.icon" class="size-5" /></span>
+            <span class="highlight-icon"><img :src="h.icon" alt="" class="highlight-img" /></span>
             <span class="highlight-copy">
               <span class="highlight-title">{{ h.title }}</span>
               <span class="highlight-desc">{{ h.desc }}</span>
             </span>
           </li>
         </ul>
-        <svg class="brand-art" viewBox="0 0 520 120" fill="none" aria-hidden="true">
-          <path d="M0 96 C80 96 80 40 160 40 S240 88 320 64 S440 16 520 24" stroke="var(--cs-primary)" stroke-opacity=".35" stroke-width="2" />
-          <path d="M0 108 C90 108 100 64 180 64 S270 100 350 84 S450 44 520 52" stroke="var(--cs-success)" stroke-opacity=".35" stroke-width="2" />
-          <g fill="var(--cs-primary)" fill-opacity=".5">
-            <circle cx="160" cy="40" r="5" /><circle cx="320" cy="64" r="5" /><circle cx="520" cy="24" r="5" />
-          </g>
-          <g fill="var(--cs-success)" fill-opacity=".5">
-            <circle cx="180" cy="64" r="4" /><circle cx="350" cy="84" r="4" />
-          </g>
-        </svg>
+        <div class="brand-art-slot"><img :src="heroImage" alt="" class="brand-art" /></div>
       </div>
     </section>
 
@@ -251,15 +250,21 @@ async function handleLogin() {
 
 .highlight-icon {
   flex: none;
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: var(--cs-radius-sm);
   background: var(--cs-surface);
-  color: var(--cs-primary);
   border: 1px solid var(--cs-border);
+  overflow: hidden;
+}
+
+.highlight-img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .highlight-copy {
@@ -280,11 +285,23 @@ async function handleLogin() {
   line-height: 1.5;
 }
 
+/* 主插图位：固定 4:3；换图时把里面的 svg 换成 <img src> 即可 */
+.brand-art-slot {
+  width: 100%;
+  max-width: 440px;
+  aspect-ratio: 4 / 3;
+  margin-top: 32px;
+  display: flex;
+  align-items: center;
+  border-radius: var(--cs-radius-lg);
+  overflow: hidden;
+}
+
 .brand-art {
   display: block;
   width: 100%;
-  height: auto;
-  margin-top: 40px;
+  height: 100%;
+  object-fit: contain;
 }
 
 /* ---- 右侧登录面板 ---- */
@@ -412,6 +429,12 @@ async function handleLogin() {
   .brand-headline {
     font-size: 26px;
   }
+  .highlight-grid {
+    gap: 20px 20px;
+  }
+}
+
+@media (max-width: 900px) {
   .highlight-grid {
     grid-template-columns: 1fr;
   }
