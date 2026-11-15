@@ -68,6 +68,10 @@ public class SlotFillingServiceImpl implements SlotFillingService {
 
     static final String EGRESS_SITE = "slot-filling";
 
+    /** 填槽兜底抽出的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3); 没装配时不做这一条。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     @Autowired(required = false)
     public void setPythonLLMClient(PythonLLMClient pythonLLMClient) {
         this.pythonLLMClient = pythonLLMClient;
@@ -128,7 +132,8 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                     request.getUserInput(),
                     requiredSlots,
                     request.getContext(),
-                    matchResult);
+                    matchResult,
+                    factoryId);
 
             log.debug("从用户输入提取参数: intentCode={}, extracted={}",
                     intent.getIntentCode(), extractedParams.keySet());
@@ -239,6 +244,19 @@ public class SlotFillingServiceImpl implements SlotFillingService {
             List<RequiredSlot> slots,
             Map<String, Object> context,
             IntentMatchResult matchResult) {
+        // 接口入口不知道可信工厂 (context 里的 factoryId 是客户端给的) —— 不做实体名落地
+        return extractParameters(userInput, slots, context, matchResult, null);
+    }
+
+    /**
+     * @param trustedFactoryId 服务端认定的工厂 (⛔ 不取请求 context 里的值); 为 null 时不做实体名落地
+     */
+    Map<String, Object> extractParameters(
+            String userInput,
+            List<RequiredSlot> slots,
+            Map<String, Object> context,
+            IntentMatchResult matchResult,
+            String trustedFactoryId) {
 
         Map<String, Object> extracted = new HashMap<>();
 
@@ -283,7 +301,9 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                 // 与 ToolDispatchService 同一条出处校验: 原话里没有的数 / 不是原话的备注不收
                 com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
                         com.cretas.aims.service.execution.LlmParameterGrounding.groundSlots(
-                                llmExtractMissingSlots(userInput, stillMissing), extracted, userInput, types);
+                                llmExtractMissingSlots(userInput, stillMissing), extracted, userInput, types,
+                                com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                        factoryEntityResolver, trustedFactoryId));
                 if (!grounded.dropped().isEmpty()) {
                     log.info("填槽 LLM 抽参未落地, 已丢弃: {}", grounded.dropped());
                 }

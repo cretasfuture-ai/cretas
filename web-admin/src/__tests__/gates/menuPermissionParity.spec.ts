@@ -118,6 +118,9 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/production/outsource': [{ path: '/production', module: 'production' }, { path: '/production/outsource', module: 'production' }],
   // 工序首检（E 线 BL17）：质量管理下「工序首检」，与「质检记录」同判据（父组 质量管理 取自改前快照 + module: 'quality'），不加 roles
   '/quality/first-article': [snapshot.get('/quality/inspections')![0], { path: '/quality/first-article', module: 'quality' }],
+  // P10：「数据与分析」末尾「外部软件对照」（容器纯展示不带判据），与后端 production:read 同判据，不加 roles；
+  // 没有外部授权的工厂由 AppSidebar 按 feature-config integrations 行隐藏（不在本闸）。
+  '/external-software': [{ path: '/external-software', module: 'production' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

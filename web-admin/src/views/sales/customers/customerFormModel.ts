@@ -12,7 +12,8 @@ export const CUSTOMER_ADVANCED_FIELDS = [
 ] as const;
 
 export function customerTypeLabel(value: unknown): string {
-  return CUSTOMER_TYPE_OPTIONS.find((option) => option.value === value)?.label || '未设置';
+  if (value == null || String(value).trim() === '') return '未设置';
+  return CUSTOMER_TYPE_OPTIONS.find((option) => option.value === value)?.label || '未知类型';
 }
 
 export function isSupportedCustomerPhone(value: unknown): boolean {

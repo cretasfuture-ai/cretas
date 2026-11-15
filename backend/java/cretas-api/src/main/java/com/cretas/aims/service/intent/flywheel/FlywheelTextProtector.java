@@ -3,9 +3,10 @@ package com.cretas.aims.service.intent.flywheel;
 import com.cretas.aims.entity.FactoryFeatureConfig;
 import com.cretas.aims.entity.intent.IntentFlywheelTurn.SecrecyMode;
 import com.cretas.aims.repository.FactoryFeatureConfigRepository;
-import com.cretas.aims.repository.intent.FlywheelMasterDataRepository;
 import com.cretas.aims.repository.learning.FactoryNameDirectoryRepository;
 import com.cretas.aims.service.consent.TrainingSampleRules;
+import com.cretas.aims.service.entity.EntityKind;
+import com.cretas.aims.service.entity.FactoryEntityResolver;
 import com.cretas.aims.service.secrecy.FactorySecrecyConfig;
 import com.cretas.aims.service.secrecy.SecrecyItem;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,8 @@ import java.util.regex.Pattern;
  * </ul>
  * 名字识别只靠<b>本厂主数据确定性匹配</b> (客户 / 供应商 / 产品表的名字, 含已停用的; 客户名另取去掉
  * 「店 / 有限公司 …」后缀、至少 3 个字的称呼核心, 「老张家卤味店」→「老张家」), ⛔ 不用语义 / embedding 猜。
+ * 名单与称呼核心都来自实体解析公共能力 {@link FactoryEntityResolver} ({@code redactionNames} / {@code surfaceForms}),
+ * 与填参数、同名列出同一份规范化规则 —— 这里 ⛔ 不另维护一份后缀表。
  * 像称呼但名单里没有的 (老X家 / X记 / X总 / …公司) <b>不替换, 但计数</b> ({@code unmatchedNameLike})。
  * 原文不落明文列; 配了密钥 ({@code CRETAS_FLYWHEEL_RAW_KEY}, base64 的 32 字节) 才以 AES-GCM 密文留一份, 没配就不留。
  * 密文里的「原文」也先过 {@link #rawBaseline} (配方 / 工艺参数值 + 个人隐私已抹)。
@@ -96,13 +99,6 @@ public class FlywheelTextProtector {
         }
     }
 
-    /** 客户名去掉这些后缀后的「称呼核心」也算本厂客户名 (从长到短, 最多去两层)。 */
-    static final List<String> CUSTOMER_SUFFIXES = List.of(
-            "股份有限公司", "有限责任公司", "有限公司", "公司", "集团", "卤味店", "熟食店", "餐饮店", "批发部", "门市部",
-            "食品厂", "饭店", "酒楼", "酒店", "餐厅", "餐馆", "食堂", "超市", "商行", "商贸", "连锁", "卤味", "熟食",
-            "餐饮", "店", "铺");
-    static final int MIN_CORE = 3;
-
     static final String HAN = "\\u4e00-\\u9fa5";
     /** 像称呼 / 单位名但名单里没有: 不替换, 只计数。 */
     static final Pattern NAME_LIKE = Pattern.compile(
@@ -116,7 +112,7 @@ public class FlywheelTextProtector {
     static final Pattern ID_CARD_15 = Pattern.compile("(?<![0-9A-Za-z])[0-9]{15}(?![0-9A-Za-z])");
     static final Pattern BANK_CARD = Pattern.compile("(?<![0-9A-Za-z])[0-9]{16,19}(?![0-9A-Za-z])");
 
-    private final FlywheelMasterDataRepository masterData;
+    private final FactoryEntityResolver entities;
     private final FactoryNameDirectoryRepository people;
     private final FactoryFeatureConfigRepository featureConfigs;
     private final SecretKeySpec key;
@@ -125,11 +121,11 @@ public class FlywheelTextProtector {
     private FactorySecrecyConfig secrecy = FactorySecrecyConfig.allOn();
 
     @Autowired
-    public FlywheelTextProtector(FlywheelMasterDataRepository masterData,
+    public FlywheelTextProtector(FactoryEntityResolver entities,
                                  FactoryNameDirectoryRepository people,
                                  FactoryFeatureConfigRepository featureConfigs,
                                  @Value("${cretas.ai.flywheel.raw-key:${CRETAS_FLYWHEEL_RAW_KEY:}}") String base64Key) {
-        this.masterData = masterData;
+        this.entities = entities;
         this.people = people;
         this.featureConfigs = featureConfigs;
         this.key = parseKey(base64Key);
@@ -205,15 +201,15 @@ public class FlywheelTextProtector {
         try {
             Options options = options(factoryId);
             Map<String, Kind> dictionary = new LinkedHashMap<>();
-            for (String n : masterData.findCustomerNames(factoryId)) {
+            for (String n : entities.redactionNames(factoryId, EntityKind.CUSTOMER)) {
                 addCustomer(dictionary, n, Kind.CUSTOMER);
             }
-            for (String n : masterData.findSupplierNames(factoryId)) {
+            for (String n : entities.redactionNames(factoryId, EntityKind.SUPPLIER)) {
                 addCustomer(dictionary, n, Kind.SUPPLIER);
             }
             addPeople(dictionary, factoryId);
             if (options.redactProductNames()) {
-                for (String n : masterData.findProductNames(factoryId)) {
+                for (String n : entities.redactionNames(factoryId, EntityKind.PRODUCT)) {
                     add(dictionary, n, Kind.PRODUCT, 2);
                 }
             }
@@ -287,7 +283,7 @@ public class FlywheelTextProtector {
 
     private List<String> ingredients(String factoryId) {
         List<String> out = new ArrayList<>();
-        for (String n : masterData.findIngredientNames(factoryId)) {
+        for (String n : entities.redactionNames(factoryId, EntityKind.MATERIAL)) {
             if (n != null && !n.isBlank()) {
                 out.add(n.trim());
             }
@@ -308,32 +304,13 @@ public class FlywheelTextProtector {
         }
     }
 
+    /** 全名 + 称呼核心 (由实体解析给出, 与解析同一份后缀规则)。 */
     private static void addCustomer(Map<String, Kind> dictionary, String name, Kind kind) {
-        if (name == null) {
-            return;
+        List<String> forms = FactoryEntityResolver.surfaceForms(
+                kind == Kind.SUPPLIER ? EntityKind.SUPPLIER : EntityKind.CUSTOMER, name);
+        for (int i = 0; i < forms.size(); i++) {
+            add(dictionary, forms.get(i), kind, i == 0 ? 2 : FactoryEntityResolver.MIN_CORE);
         }
-        String full = name.trim();
-        add(dictionary, full, kind, 2);
-        String core = full;
-        for (int round = 0; round < 2; round++) {
-            String stripped = stripSuffix(core);
-            if (stripped.equals(core)) {
-                break;
-            }
-            core = stripped;
-            if (core.length() >= MIN_CORE) {
-                add(dictionary, core, kind, MIN_CORE);
-            }
-        }
-    }
-
-    static String stripSuffix(String s) {
-        for (String suffix : CUSTOMER_SUFFIXES) {
-            if (s.endsWith(suffix) && s.length() > suffix.length()) {
-                return s.substring(0, s.length() - suffix.length());
-            }
-        }
-        return s;
     }
 
     /** 先登记的类优先 (客户 > 供应商 > 人员 > 产品): 同一个串只归一类。 */
@@ -391,7 +368,7 @@ public class FlywheelTextProtector {
             if (e.getValue() == kind && other.length() > name.length() && other.startsWith(name)) {
                 String core = other;
                 for (int round = 0; round < 2 && !core.equals(name); round++) {
-                    core = stripSuffix(core);
+                    core = FactoryEntityResolver.stripSuffix(core);
                 }
                 if (core.equals(name) && (best.equals(name) || other.length() < best.length())) {
                     best = other;

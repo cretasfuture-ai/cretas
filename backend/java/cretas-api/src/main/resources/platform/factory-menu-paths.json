@@ -84,6 +84,7 @@
   ],
   "production": [
     "/dashboard/production-progress",
+    "/external-software",
     "/production/analysis-query",
     "/production/approval",
     "/production/batches",

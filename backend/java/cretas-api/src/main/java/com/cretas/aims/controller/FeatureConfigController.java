@@ -8,6 +8,7 @@ import com.cretas.aims.exception.BusinessException;
 import lombok.RequiredArgsConstructor;
 import com.cretas.aims.service.platform.FactoryFeatureMenuWriteLock;
 import com.cretas.aims.service.secrecy.FactorySecrecyConfig;
+import com.cretas.aims.service.integration.ExternalIntegrationService;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,6 +27,10 @@ import java.util.Set;
  * 带 {@code secrecy: {CODE: bool}} (生效值, 读不到按开启)。真值在平台专属表 factory_secrecy_settings,
  * 工厂端写不了: PUT {@code /secrecy} 一律 403, 任何模块的配置里带 {@code secrecy} 键也 403;
  * 库里即使有人写了 moduleId = "secrecy" 的行也不下发 (GET 只认平台表)。前端读取一律判断 {@code === true}。</p>
+ *
+ * <p>外部软件接口授权 (统一原型迁移 P10): 同样的只读伪模块 {@code moduleId = "integrations"},
+ * 带 {@code integrations: {blacklake: {authorized: true, lastCollectedAt, stale}}} (只列 ACTIVE 的系统, 读不到 = 空)。
+ * 真值在平台专属表 factory_external_integrations; 工厂端 PUT {@code /integrations} 或配置里带 {@code integrations} 键一律 403。</p>
  */
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/feature-config")
@@ -37,18 +42,24 @@ public class FeatureConfigController {
     /** 只读的保密配置伪模块 (平台专属表, 工厂端写不了)。 */
     public static final String SECRECY_MODULE_ID = "secrecy";
     public static final String SECRECY_KEY = "secrecy";
+    /** 只读的外部软件授权伪模块 (平台专属表, 工厂端写不了)。 */
+    public static final String INTEGRATIONS_MODULE_ID = "integrations";
+    public static final String INTEGRATIONS_KEY = "integrations";
+    private static final java.util.Set<String> READ_ONLY_MODULES = java.util.Set.of(SECRECY_MODULE_ID, INTEGRATIONS_MODULE_ID);
 
     private final FactoryFeatureConfigRepository featureConfigRepository;
     private final FactoryFeatureMenuWriteLock writeLock;
     private final FactorySecrecyConfig secrecyConfig;
+    private final ExternalIntegrationService externalIntegrations;
 
     @GetMapping
     public ApiResponse<List<Object>> getAll(@PathVariable String factoryId) {
         List<Object> out = new ArrayList<>();
         for (FactoryFeatureConfig config : featureConfigRepository.findByFactoryIdAndDeletedAtIsNull(factoryId)) {
-            if (!SECRECY_MODULE_ID.equals(config.getModuleId())) out.add(config);
+            if (!READ_ONLY_MODULES.contains(config.getModuleId())) out.add(config);
         }
         out.add(secrecyRow(factoryId));
+        out.add(integrationsRow(factoryId));
         return ApiResponse.success(out);
     }
 
@@ -66,12 +77,29 @@ public class FeatureConfigController {
         return row;
     }
 
+    /** 只读外部软件授权行: 与保密行同一形状 ({@code integrations} 在顶层和 {@code config} 里各一份)。 */
+    Map<String, Object> integrationsRow(String factoryId) {
+        Map<String, Object> integrations = externalIntegrations.featureConfigView(factoryId);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("factoryId", factoryId);
+        row.put("moduleId", INTEGRATIONS_MODULE_ID);
+        row.put("moduleName", "外部软件接口授权（平台设置，只读）");
+        row.put("enabled", true);
+        row.put("readOnly", true);
+        row.put("config", Map.of(INTEGRATIONS_KEY, integrations));
+        row.put(INTEGRATIONS_KEY, integrations);
+        return row;
+    }
+
     @GetMapping("/{moduleId}")
     public ApiResponse<Object> getOne(
             @PathVariable String factoryId,
             @PathVariable String moduleId) {
         if (SECRECY_MODULE_ID.equals(moduleId)) {
             return ApiResponse.success(secrecyRow(factoryId));
+        }
+        if (INTEGRATIONS_MODULE_ID.equals(moduleId)) {
+            return ApiResponse.success(integrationsRow(factoryId));
         }
         return featureConfigRepository
                 .findByFactoryIdAndModuleIdAndDeletedAtIsNull(factoryId, moduleId)
@@ -89,6 +117,9 @@ public class FeatureConfigController {
             @RequestBody Map<String, Object> config) {
         if (SECRECY_MODULE_ID.equals(moduleId) || (config != null && config.containsKey(SECRECY_KEY))) {
             throw new BusinessException(403, "保密配置只能由平台在「工厂管理」里修改");
+        }
+        if (INTEGRATIONS_MODULE_ID.equals(moduleId) || (config != null && config.containsKey(INTEGRATIONS_KEY))) {
+            throw new BusinessException(403, "外部软件接口授权只能由平台在「工厂管理」里修改");
         }
         writeLock.lock(factoryId);
         var existing = featureConfigRepository

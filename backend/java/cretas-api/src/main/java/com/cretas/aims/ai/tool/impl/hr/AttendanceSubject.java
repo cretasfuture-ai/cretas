@@ -5,6 +5,8 @@ import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.UserRepository;
+import com.cretas.aims.service.entity.EntityKind;
+import com.cretas.aims.service.entity.FactoryEntityResolver;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -104,15 +106,16 @@ final class AttendanceSubject {
      * <ul>
      *   <li><b>权限</b>: 有 hr:read 才按姓名在本厂找人; 没有时只认「名字就是调用者本人」, 否则拒绝 ——
      *       拒绝前<b>不查同名</b>, 所以回复里不会泄露「有几个同名的人」。</li>
-     *   <li><b>工厂范围</b>: {@code factoryId} 是工具基类从可信上下文取的, 仓储查询带 {@code factory_id} 条件;
-     *       每位员工的考勤查询也仍按 {@code factoryId} 过滤。</li>
+     *   <li><b>工厂范围</b>: {@code factoryId} 是工具基类从可信上下文取的, 找人走 {@link FactoryEntityResolver}
+     *       (本厂在职员工, 姓名规范化后精确匹配, 仓储查询带 {@code factory_id} 条件); 每位员工的考勤查询也仍按
+     *       {@code factoryId} 过滤。</li>
      * </ul>
      *
      * @return 完整工具结果 (message / data / {@link SameNameMatches#KEY}); 没给姓名时 null (走原来的 userId 路径)
      */
     static Map<String, Object> runByName(String requestedName, String factoryId, Map<String, Object> context,
-                                         ToolRbacGuard rbacGuard, UserRepository users,
-                                         PerUser query, Summary summary) throws Exception {
+                                         ToolRbacGuard rbacGuard, FactoryEntityResolver entities,
+                                         UserRepository users, PerUser query, Summary summary) throws Exception {
         if (requestedName == null || requestedName.isBlank()) {
             return null;
         }
@@ -127,9 +130,12 @@ final class AttendanceSubject {
         if (!boundFactoryUser(factoryId, caller)) {
             throw new BusinessException(403, "按姓名查员工考勤需要本厂员工账号登录。");
         }
-        List<User> matches;
+        FactoryEntityResolver.Resolution resolution;
         if (rbacGuard != null && rbacGuard.hasAnyPermission(context, "hr:read")) {
-            matches = users.findActiveByFactoryIdAndExactFullName(factoryId, name);
+            if (entities == null) {
+                throw new IllegalStateException("FactoryEntityResolver 未装配, 不能按姓名找人");
+            }
+            resolution = entities.resolve(factoryId, EntityKind.EMPLOYEE, name);
         } else {
             User self = users.findByIdAndFactoryId(caller, factoryId).orElse(null);
             if (self != null && isOwnName(self, name)) {
@@ -139,6 +145,7 @@ final class AttendanceSubject {
             throw new BusinessException(403, DENIED);
         }
 
+        List<FactoryEntityResolver.Candidate> matches = resolution.matches();
         Map<String, Object> result = new LinkedHashMap<>();
         if (matches.isEmpty()) {
             Map<String, Object> data = new LinkedHashMap<>();
@@ -146,31 +153,31 @@ final class AttendanceSubject {
             data.put("matchCount", 0);
             data.put("employees", List.of());
             result.put("data", data);
-            SameNameMatches.annotate(result, "在职员工", name, 0, List.of());
+            SameNameMatches.annotate(result, "在职员工", resolution, List.of());
             result.put("message", SameNameMatches.reply(result));
             return result;
         }
         if (matches.size() == 1) {
-            User u = matches.get(0);
-            Object data = query.query(u.getId());
-            result.put("message", "查询成功（" + displayName(u) + "，" + distinguishing(u) + "）");
+            FactoryEntityResolver.Candidate u = matches.get(0);
+            Object data = query.query(Long.valueOf(u.id()));
+            result.put("message", "查询成功（" + u.name() + "，" + u.distinguishing() + "）");
             result.put("data", data);
-            SameNameMatches.annotate(result, "员工", name, 1,
-                    List.of(new SameNameMatches.Match(u.getId(), displayName(u), distinguishing(u), null)));
+            SameNameMatches.annotate(result, "员工", resolution, List.of(SameNameMatches.matchOf(u, null)));
             return result;
         }
 
         List<SameNameMatches.Match> listed = new ArrayList<>();
         List<Map<String, Object>> employees = new ArrayList<>();
-        for (User u : matches.subList(0, Math.min(SameNameMatches.LIST_LIMIT, matches.size()))) {
-            Object data = query.query(u.getId());
-            listed.add(new SameNameMatches.Match(u.getId(), displayName(u), distinguishing(u), summary.of(data)));
+        for (FactoryEntityResolver.Candidate u : SameNameMatches.listedCandidates(resolution)) {
+            Long userId = Long.valueOf(u.id());
+            Object data = query.query(userId);
+            listed.add(SameNameMatches.matchOf(u, summary.of(data)));
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("userId", u.getId());
-            row.put("name", displayName(u));
-            row.put("department", u.getDepartment());
-            row.put("position", u.getPosition());
-            row.put("employeeCode", u.getEmployeeCode());
+            row.put("userId", userId);
+            row.put("name", u.name());
+            row.put("department", u.fields().get("department"));
+            row.put("position", u.fields().get("position"));
+            row.put("employeeCode", u.fields().get("employeeCode"));
             row.put("result", data);
             employees.add(row);
         }
@@ -179,7 +186,7 @@ final class AttendanceSubject {
         data.put("matchCount", matches.size());
         data.put("employees", employees);
         result.put("data", data);
-        SameNameMatches.annotate(result, "员工", name, matches.size(), listed);
+        SameNameMatches.annotate(result, "员工", resolution, listed);
         result.put("message", SameNameMatches.reply(result));
         return result;
     }
@@ -212,20 +219,6 @@ final class AttendanceSubject {
             return name.equals(full);
         }
         return name.equals(self.getUsername());
-    }
-
-    private static String displayName(User u) {
-        return u.getFullName() == null || u.getFullName().isBlank() ? u.getUsername() : u.getFullName();
-    }
-
-    /** 区分字段: 部门/车间、岗位、工号; 都没有时给用户 ID, 保证同名的两行一定能分开。 */
-    static String distinguishing(User u) {
-        List<String> parts = new ArrayList<>();
-        if (u.getDepartment() != null && !u.getDepartment().isBlank()) parts.add("车间/部门：" + u.getDepartment());
-        if (u.getPosition() != null && !u.getPosition().isBlank()) parts.add("岗位：" + u.getPosition());
-        if (u.getEmployeeCode() != null && !u.getEmployeeCode().isBlank()) parts.add("工号 " + u.getEmployeeCode());
-        if (parts.isEmpty()) parts.add("用户ID " + u.getId());
-        return String.join("，", parts);
     }
 
     private static Long callerId(Map<String, Object> context) {

@@ -238,5 +238,87 @@ regen
 [ "$RC" = 0 ] || fail "改回 id 之后仍然 rc=$RC —— [4] 的红不是主键那条判据造成的"
 ok "改回 id ⇒ rc=0, [4] 的红确实来自主键断言"
 
+# ═════════ 5. 目录遍历顺序不影响生成物 (#1777) ═══════════════════════════
+# 一个实体有多个 *Repository 接口时 repo= 取「先见者」。os.walk 的顺序跟文件系统走
+# (NTFS 按字母, ext4 按哈希) ⇒ 不排序时 Windows 上 --write 的仓库份和 CI 重放对不上。
+# 故障注入: PYTHONPATH 上放一个 sitecustomize, 把 os.walk 的子目录与文件顺序都倒过来;
+# 生成物必须与正常顺序逐字节相同, 且 repo= 取字母序第一个。
+echo "[5] 打乱 os.walk 顺序 ⇒ 生成物不变"
+mk_child SynTwoDirs syn_two_dirs SynParent 0 parent_id
+cat > "$REP/ZSynWithRepoAltRepository.java" <<'JAVA'
+package com.cretas.aims.repository;
+public interface ZSynWithRepoAltRepository extends org.springframework.data.repository.Repository<SynWithRepo, String> {
+}
+JAVA
+mkdir -p "$REP/a" "$REP/b"
+for pair in "a Alpha" "b Beta"; do
+    set -- $pair
+    cat > "$REP/$1/${2}SynTwoDirsRepository.java" <<JAVA
+package com.cretas.aims.repository.$1;
+public interface ${2}SynTwoDirsRepository extends org.springframework.data.jpa.repository.JpaRepository<SynTwoDirs, String> {
+}
+JAVA
+done
+echo "syn_two_dirs" >> "$SYN/scripts/cron/soft-delete-orphans.hasdel.txt"
+SHUF="$TMP/shuffle-walk"
+mkdir -p "$SHUF"
+cat > "$SHUF/sitecustomize.py" <<'PY'
+import os, sys
+_real_walk = os.walk
+def _reversed_walk(top, *args, **kwargs):
+    for dp, dns, fs in _real_walk(top, *args, **kwargs):
+        dns.reverse()  # 原地倒序: 递归顺序跟着变 (调用方 dns.sort() 能再纠正回来)
+        yield dp, dns, list(reversed(fs))
+os.walk = _reversed_walk
+sys.stderr.write("WALK_REVERSED\n")
+PY
+
+run_gen() {  # $1 = 生成器, $2 = 输出前缀, $3 = 1 时打乱遍历顺序
+    if [ "$3" = 1 ]; then
+        PYTHONPATH="$SHUF" SDO_REPO_ROOT="$SYN" bash "$1" --regen-offline > "$2.sql" 2> "$2.err"
+    else
+        SDO_REPO_ROOT="$SYN" bash "$1" --regen-offline > "$2.sql" 2> "$2.err"
+    fi
+    GRC=$?
+    # 出处戳带生成时刻 (秒), 两次运行必然不同 —— 比较前去掉这一行, 其余逐字节比
+    grep -v '^-- generated-from ' "$2.sql" > "$2.body"
+    echo "    $(basename "$2"): rc=$GRC, 打乱标记 $(grep -c WALK_REVERSED "$2.err") 次"
+    grep -E '^-- class syn_(with_repo|two_dirs)' "$2.sql" | sed 's/^/      /' || true
+}
+run_gen "$GEN" "$TMP/ord" 0
+[ "$GRC" = 0 ] || fail "[5] 正常顺序生成失败 rc=$GRC: $(cat "$TMP/ord.err")"
+run_gen "$GEN" "$TMP/rev" 1
+[ "$GRC" = 0 ] || fail "[5] 打乱顺序生成失败 rc=$GRC: $(cat "$TMP/rev.err")"
+grep -q WALK_REVERSED "$TMP/rev.err" || fail "[5] sitecustomize 没被加载 —— 故障注入没生效, 本次读数作废"
+grep -q WALK_REVERSED "$TMP/ord.err" && fail "[5] 正常顺序那次也被打乱了 —— 对照组不成立"
+grep -Fq -- "-- class syn_with_repo.parent_id -> syn_parents escalate=1 repo=SynWithRepoRepository " "$TMP/ord.sql" \
+    || fail "[5] 同目录两个候选时 repo= 不是字母序第一个"
+grep -Fq -- "-- class syn_two_dirs.parent_id -> syn_parents escalate=1 repo=AlphaSynTwoDirsRepository " "$TMP/ord.sql" \
+    || fail "[5] 两个子目录各一个候选时 repo= 不是字母序第一个子目录里的"
+cmp -s "$TMP/ord.body" "$TMP/rev.body" \
+    || fail "[5] 打乱遍历顺序后生成物变了: $(diff "$TMP/ord.body" "$TMP/rev.body" | head -6 | tr '\n' ' ')"
+ok "打乱 os.walk 顺序 ⇒ 生成物逐字节相同, repo= 取字母序第一个"
+
+# 变异: 去掉仓库接口扫描那处的排序 ⇒ 打乱后必须变 (证明 [5] 守的是排序, 不是恒真)
+echo "[5b] 变异: 仓库接口扫描去掉排序 ⇒ 打乱顺序后生成物必须不同"
+MUT5="$TMP/gen-mutant-walk.sh"
+python - "$GEN" "$MUT5" <<'PY'
+import io, sys
+src, dst = sys.argv[1], sys.argv[2]
+s = io.open(src, "r", encoding="utf-8", newline="").read()
+old = "for dp, dns, fs in os.walk(repository_root):\n    dns.sort()\n    for fn in sorted(fs):\n"
+new = "for dp, dns, fs in os.walk(repository_root):  # MUTANT_WALK_UNSORTED\n    for fn in fs:\n"
+n = s.count(old)
+if n != 1:
+    raise SystemExit("REFUSE: anchor occurs %d times, expected 1" % n)
+io.open(dst, "w", encoding="utf-8", newline="").write(s.replace(old, new))
+PY
+[ -s "$MUT5" ] || fail "[5b] 变异体没写出来"
+echo "    变异确已进代码: $(grep -c MUTANT_WALK_UNSORTED "$MUT5") 处命中"
+run_gen "$MUT5" "$TMP/mut5" 1
+[ "$GRC" = 0 ] || fail "[5b] 变异体自己跑挂了 rc=$GRC"
+cmp -s "$TMP/ord.body" "$TMP/mut5.body" && fail "[5b] 去掉排序后打乱顺序仍然相同 —— [5] 守的不是排序"
+ok "变异 ⇒ 打乱顺序后生成物不同, [5] 的断言会红"
+
 echo
 echo "PASS: test-soft-delete-orphans-escalation-classify.sh ($PASSED 项)"

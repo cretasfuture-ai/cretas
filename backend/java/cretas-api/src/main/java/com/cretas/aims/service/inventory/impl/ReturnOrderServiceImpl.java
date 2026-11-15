@@ -162,6 +162,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     private com.cretas.aims.repository.inventory.SalesOrderRepository salesOrderRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.inventory.PurchaseOrderRepository purchaseOrderRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.UserRepository userRepository;
 
     public ReturnOrderServiceImpl(ReturnOrderRepository returnOrderRepository,
@@ -681,9 +684,17 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             log.warn("退货单详情 enrich 对方名称失败 (不阻断详情加载): returnOrderId={}", returnOrderId, e);
         }
         try {
-            if (order.getSourceOrderId() != null && salesOrderRepository != null) {
-                salesOrderRepository.findById(order.getSourceOrderId())
-                        .ifPresent(so -> order.setSourceOrderNumber(so.getOrderNumber()));
+            if (order.getSourceOrderId() != null) {
+                if (order.getReturnType() == ReturnType.PURCHASE_RETURN) {
+                    // 采购退货的源单是采购订单; 必须带 factory_id, 别的厂的单号不能被解析出来
+                    if (purchaseOrderRepository != null) {
+                        purchaseOrderRepository.findByIdAndFactoryId(order.getSourceOrderId(), order.getFactoryId())
+                                .ifPresent(po -> order.setSourceOrderNumber(po.getOrderNumber()));
+                    }
+                } else if (salesOrderRepository != null) {
+                    salesOrderRepository.findById(order.getSourceOrderId())
+                            .ifPresent(so -> order.setSourceOrderNumber(so.getOrderNumber()));
+                }
             }
         } catch (Exception e) {
             log.warn("退货单详情 enrich 源订单号失败 (不阻断详情加载): returnOrderId={}", returnOrderId, e);
@@ -815,20 +826,42 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         try {
             java.util.Set<String> sourceOrderIds = new java.util.HashSet<>();
             for (ReturnOrder o : orders) {
-                if (o.getSourceOrderId() != null) sourceOrderIds.add(o.getSourceOrderId());
+                if (o.getSourceOrderId() != null && o.getReturnType() != ReturnType.PURCHASE_RETURN) {
+                    sourceOrderIds.add(o.getSourceOrderId());
+                }
             }
             if (!sourceOrderIds.isEmpty() && salesOrderRepository != null) {
                 java.util.Map<String, String> numberById = new java.util.HashMap<>();
                 salesOrderRepository.findAllById(sourceOrderIds)
                         .forEach(so -> numberById.put(so.getId(), so.getOrderNumber()));
                 for (ReturnOrder o : orders) {
-                    if (o.getSourceOrderId() != null) {
+                    if (o.getSourceOrderId() != null && o.getReturnType() != ReturnType.PURCHASE_RETURN) {
                         o.setSourceOrderNumber(numberById.get(o.getSourceOrderId()));
                     }
                 }
             }
         } catch (Exception e) {
             log.warn("退货单列表 enrich 源订单号失败 (不阻断列表加载): count={}", orders.size(), e);
+        }
+
+        // 采购退货: 源单是采购订单。复用已有 findByIdAndFactoryId (带 factory_id, 跨厂 id 解析为空),
+        // 按 (factoryId, sourceOrderId) 去重, 每个不同源单最多查一次。
+        try {
+            if (purchaseOrderRepository != null) {
+                java.util.Map<String, String> numberByKey = new java.util.HashMap<>();
+                for (ReturnOrder o : orders) {
+                    if (o.getReturnType() != ReturnType.PURCHASE_RETURN || o.getSourceOrderId() == null) continue;
+                    String key = o.getFactoryId() + "|" + o.getSourceOrderId();
+                    if (!numberByKey.containsKey(key)) {
+                        numberByKey.put(key, purchaseOrderRepository
+                                .findByIdAndFactoryId(o.getSourceOrderId(), o.getFactoryId())
+                                .map(po -> po.getOrderNumber()).orElse(null));
+                    }
+                    o.setSourceOrderNumber(numberByKey.get(key));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("退货单列表 enrich 采购源单号失败 (不阻断列表加载): count={}", orders.size(), e);
         }
 
         try {
