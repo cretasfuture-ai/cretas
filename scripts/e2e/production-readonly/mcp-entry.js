@@ -2774,19 +2774,20 @@ async function inspectDigitalSpecialistPage(page, item, ctx, shouldNavigate) {
   const linkRecords = [];
   const links = [];
   for (let index = 0; index < await linkNodes.count(); index += 1) {
-    const href = (await linkNodes.nth(index).getAttribute('href') || '').split('?')[0];
+    const rawHref = await linkNodes.nth(index).getAttribute('href') || '';
+    const href = rawHref.split('?')[0];
     if (href) {
       links.push(href);
-      linkRecords.push({ index, href });
+      linkRecords.push({ index, href, rawHref });
     }
   }
   const errorMarkers = ERROR_MARKERS.filter((marker) => body.includes(marker));
   const loadingVisible = await page.locator('[data-testid="ai-chat-loading-skeleton"]').count() > 0;
   const assistantBodies = await page.locator('[data-testid="ai-chat-assistant-body"]').allInnerTexts().catch(() => []);
   const nativeFactVisible = !item.nativeFact || assistantBodies.some((text) => item.nativeFact.test(text));
-  const linkRecord = linkRecords.find(({ href }) => item.links.includes(href));
+  const linkRecord = linkRecords.find(({ href, rawHref }) => !rawHref.includes('?') && item.links.includes(href));
   const linkIndex = linkRecord?.index ?? -1;
-  let businessLinkNavigation = { attempted: false, passed: true, path: '' };
+  let businessLinkNavigation = { attempted: false, passed: !item.clickVerify, path: '' };
   if (item.clickVerify && linkIndex >= 0) {
     const expectedPath = item.links.find((path) => links.includes(path)) || item.links[0];
     businessLinkNavigation = { attempted: true, passed: false, path: expectedPath };
@@ -2899,16 +2900,22 @@ const scenario = {
         await inspectDigitalSpecialistPage(page, sales, scenarioContext, true);
         salesQuestion = await sendSalesQuestion(page);
       }
-      const pass = pages.length === cases.length
-        && pages.every((item) => item.titleVisible && item.avatar.decoded && item.hasBusinessLink
+      const failedPages = pages.filter((item) => !(item.titleVisible && item.avatar.decoded && item.hasBusinessLink
           && !item.loadingVisible && item.errorMarkers.length === 0 && item.nativeFactVisible
-          && item.businessLinkNavigation.passed)
+          && item.businessLinkNavigation.passed));
+      const pass = pages.length === cases.length && failedPages.length === 0
         && salesQuestionPasses(salesQuestion);
       return {
         factoryId: scenarioContext.expectedFactoryId,
         routeCount: pages.length,
         expectedRouteCount: cases.length,
         pages,
+        failedPageIds: failedPages.map((item) => item.id),
+        // Keep scalar evidence readable through the shared bounded-depth sanitizer.
+        pageChecks: pages.map((item) => JSON.stringify({ id: item.id, title: item.titleVisible,
+          avatar: item.avatar.decoded, links: item.businessLinks, loading: item.loadingVisible,
+          errors: item.errorMarkers, nativeFact: item.nativeFactVisible,
+          navigation: item.businessLinkNavigation })),
         salesQuestion,
         logisticsClaimed: false,
         assessment: { result: pass ? 'PASS' : 'UNVERIFIED', rootCauseClass: pass ? 'none' : 'frontend' },

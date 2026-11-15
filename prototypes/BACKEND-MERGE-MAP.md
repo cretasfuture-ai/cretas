@@ -85,12 +85,14 @@
 - 会话与租户：`x-prototype-test-session`、`x-v5-business-session` 头；租户硬编码 `FOOD_0000_001`。
 - 原型标记与降级：`prototypeLocalOnly`、`LOCAL_PRACTICE` 审批链、`/__local/` `/__account/` `/__prototype/` `/__v5/` 路由、快照 404、「未收录接口回快照数据」、`hiddenIds` 假删除。这些违反「禁止降级、不返回假数据」。
 
-## 七、已知缺口（确认缺，需要写代码）
+## 七、已知缺口（2026-11-15 按三条融合线回执订正）
 
-1. 生产：`semi-finished/inventory`、`POST processing/batches`、批次级 `wip`、`work-process-tasks`；`yield` 路径对齐。
-2. 报表：`chart/build`、`chart/batch`、`chart/recommend`；工艺与配方 Excel 导出；模板下载。
-3. 导入：SKU 导入；供应商导入的批量校验。
-4. Java 统一单位换算入口。
+本节原先把按路由「未找到」的项都写成「确认缺」，逐条 grep 与读码后多数其实已存在。订正如下。
+
+1. 生产：原列的 `semi-finished/inventory`、`POST processing/batches`、批次级 `wip`、`work-process-tasks`、`yield` **全部已存在**。批次级三个接口的路径前缀是 `production/batches/{id}/`，RN 与 web-admin 已在用，原型侧适配路径即可。真正的差异是两处口径，Steve 已裁决并由 PR #1752 落地：建二次加工计划时就拦截目标工艺接不住半成品（409 `SECONDARY_SOURCE_NOT_ACCEPTED`，开工闸保留）；`POST processing/batches` 数量缺失或 ≤0 返回 400 `BATCH_QUANTITY_MUST_BE_POSITIVE`。
+2. 报表与导入（PR #1749）：`chart/build`、`chart/batch`、`chart/recommend` 已在 Python `/api/chart/*`；工艺与配方 Excel 导出已有 `GET /bom/workflow-export`；SKU 导入已有 preview/confirm。真缺并已补的是：图表混单位闸、`GET /smart-bi/upload-template` 模板下载、上传改名与真删（物理删除，不带 `hiddenIds` 假删除）、`fields`/`data` 的工厂归属校验、供应商导入上限 1000 改 2000 与空文件、超限的明确 400。
+3. 库存、采购、销售（PR #1756）：逐条核对表见 `docs/qa/prototype-rules-inventory-purchase-sales-audit-20261115.md`。已修两处：库存汇总任一在库批次缺单价时总价值与均价为空，不再给偏低的数；`SkuAssemblyService` 取客户按本厂过滤。核对表其余疑似缺陷为读码结论，未逐条复核，其中需 Steve 裁决的口径项仍未改。
+4. Java 统一单位换算入口：只出了设计，未实现，见 `docs/qa/unit-conversion-gateway-design-20261115.md`，等 Steve 确认。
 
 ## 八、没覆盖到的
 
