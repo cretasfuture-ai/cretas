@@ -22,6 +22,8 @@
     "/smart-bi/upload"
   ],
   "dashboard": [
+    "/crew",
+    "/crew/ledger",
     "/dashboard",
     "/dashboard/ai-value",
     "/issues",
@@ -155,6 +157,7 @@
   "system": [
     "/calibration/list",
     "/canvas-editor",
+    "/crew/settings",
     "/factory-onboarding",
     "/factory-readiness",
     "/factory-review",
