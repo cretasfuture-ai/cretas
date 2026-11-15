@@ -103,6 +103,8 @@ class OutsourceClosedLoopPostgresContractTest {
     static final String F = "OS-PG";
     static final String OTHER = "OS-PG-OTHER";
     static final Long USER = 20001L;
+    /** 财务审批人 (四眼: 与提交人不同)。 */
+    static final Long APPROVER = 20002L;
 
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
@@ -290,13 +292,21 @@ class OutsourceClosedLoopPostgresContractTest {
         BigDecimal beforeReturn = supplierBalance();
         outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-GR-1", null, goodId,
                 new BigDecimal("5"), "封口不良"), USER, null);
-        Map<String, Object> adj = jdbc.queryForMap("select amount, approval_status, transaction_type from ar_ap_transactions "
+        Map<String, Object> adj = jdbc.queryForMap("select id, amount, approval_status, transaction_type from ar_ap_transactions "
                 + "where factory_id = ? and source_type = 'OUTSOURCE_GOODS_RETURN'", F);
         assertThat((BigDecimal) adj.get("amount")).isEqualByComparingTo("-3.00");
         assertThat(adj.get("approval_status")).isEqualTo("PENDING");
         assertThat(adj.get("transaction_type")).isEqualTo("AP_ADJUSTMENT");
         assertThat(supplierBalance()).isEqualByComparingTo(beforeReturn);
-        assertThat(lineFee(lineId)).isEqualByComparingTo("19.80");
+        // 复审 中2: 冲减还待审 ⇒ 行上 (毛额) 与展示的有效加工费都还是 22.80, 不在退货当时就扣
+        assertThat(lineFee(lineId)).isEqualByComparingTo("22.80");
+        assertThat(detailFee(orderId)).as("[待审不扣] 退货当时有效加工费不变").isEqualByComparingTo("22.80");
+        // 财务驳回: 实际照原额付 ⇒ 有效加工费仍 22.80, 供应商余额不动
+        arAp.rejectAdjustment(F, (String) adj.get("id"), APPROVER, "PG 驳回: 委外厂不认");
+        assertThat(jdbc.queryForObject("select approval_status from ar_ap_transactions where id = ?", String.class,
+                adj.get("id"))).isEqualTo("REJECTED");
+        assertThat(detailFee(orderId)).as("[驳回] 有效加工费 = 毛额").isEqualByComparingTo("22.80");
+        assertThat(supplierBalance()).isEqualByComparingTo(beforeReturn);
 
         // 超发对平 (阴性对照): 委外厂还剩 原料 10 + 包材 10, 另有返工待收 5 → 结单 409 并逐批列出
         assertThatThrownBy(() -> outsource.close(F, orderId, USER))
@@ -310,7 +320,8 @@ class OutsourceClosedLoopPostgresContractTest {
         outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-RW", null, new BigDecimal("5"),
                 BigDecimal.ZERO, null), USER);
         assertThat(current(osRaw)).isEqualByComparingTo(rawBalanceBefore);
-        assertThat(lineFee(lineId)).isEqualByComparingTo("19.80");
+        assertThat(lineFee(lineId)).isEqualByComparingTo("22.80");
+        assertThat(detailFee(orderId)).isEqualByComparingTo("22.80");
         assertThat(jdbc.queryForObject("select coalesce(sum(amount), 0) from ar_ap_transactions "
                 + "where factory_id = ? and source_type = 'OUTSOURCE_RECEIVE'", BigDecimal.class, F))
                 .as("返工回货不新挂应付").isEqualByComparingTo("22.80");
@@ -462,6 +473,90 @@ class OutsourceClosedLoopPostgresContractTest {
                 BigDecimal.class, fg)).isEqualByComparingTo("8");
     }
 
+    // ==================== 5. 代加工 (客户料): 只收返工不改物权 / 返工批次再退不二次冲费 / 批准后才扣有效加工费 ====================
+
+    @Test
+    @Order(5)
+    void customerOwnedReworkKeepsOwnershipAndFeeIsChargedOnce() {
+        OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null,
+                List.of(new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("10"), new BigDecimal("1.00"), null))), USER);
+        String orderId = d.id();
+        String lineId = d.lines().get(0).id();
+        outsource.release(F, orderId, USER);
+        outsource.issue(F, orderId, lineId, new IssueRequest("REQ-C-ISSUE", null,
+                List.of(new BatchQuantity("OS-CRAW", new BigDecimal("10")))), USER);
+        String os = jdbc.queryForObject("select id from material_batches where source_doc_type = 'OUTSOURCE_ISSUE' "
+                + "and source_doc_id = ?", String.class, lineId);
+        assertThat(jdbc.queryForObject("select ownership from material_batches where id = ?", String.class, os))
+                .as("前提: 委外仓批次继承客户料物权").isEqualTo("CUSTOMER_OWNED");
+
+        // 复审 低4: 同一编号先用于发料, 再拿来收货 ⇒ 409, 不当成重放静默返回
+        int movesBefore = count("select count(*) from outsource_movements where factory_id = ?");
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-ISSUE", null,
+                new BigDecimal("10"), BigDecimal.ZERO, List.of(new BatchQuantity(os, new BigDecimal("10")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REQUEST_ID_CONFLICT");
+        // 复审 低2: 耗用明细缺批次 ⇒ 400 (不是 500)
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-NOBATCH", null,
+                new BigDecimal("10"), BigDecimal.ZERO, List.of(new BatchQuantity(null, new BigDecimal("10")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_CONSUMPTION_INVALID");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?")).isEqualTo(movesBefore);
+
+        OrderDetail rc = outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-RC", null, new BigDecimal("10"),
+                BigDecimal.ZERO, List.of(new BatchQuantity(os, new BigDecimal("10")))), USER);
+        String fg = rc.movements().stream().filter(m -> "RECEIVE".equals(m.movementType()) && m.parentMovementId() == null)
+                .map(MovementView::targetBatchId).findFirst().orElseThrow();
+        assertThat(ownerOf(fg)).as("前提: 首次收货的成品批次是客户的").containsExactly("CUSTOMER_OWNED", "CUST-OS-1");
+        assertThat(detailFee(orderId)).isEqualByComparingTo("10.00");
+
+        // 退 4 ⇒ 冲减 -4.00 待审; 财务批准后有效加工费才变 6.00 (复审 中2)
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-C-GR-1", null, fg,
+                new BigDecimal("4"), "封口不良"), USER, null);
+        String adjId = jdbc.queryForObject("select ap_transaction_id from outsource_movements where line_id = ? "
+                + "and movement_type = 'GOODS_RETURN'", String.class, lineId);
+        assertThat(detailFee(orderId)).as("[待审不扣] 待审冲减不算").isEqualByComparingTo("10.00");
+        arAp.approveAdjustment(F, adjId, APPROVER, null);
+        assertThat(detailFee(orderId)).as("[批准] 有效加工费 = 10 - 4").isEqualByComparingTo("6.00");
+
+        // 复审 低2: 只收返工却传了耗用 ⇒ 400
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-RW-BAD", null,
+                new BigDecimal("4"), BigDecimal.ZERO, List.of(new BatchQuantity(os, new BigDecimal("1")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REWORK_CONSUMPTION_NOT_ALLOWED");
+
+        // 复审 高1: 只收返工 (不耗料) ⇒ 返工成品批次的物权 / 客户编号与被退批次相同, 不能变成我方库存
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-RW-1", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        String rework1 = jdbc.queryForObject("select target_batch_id from outsource_movements where line_id = ? "
+                + "and movement_type = 'CONSUME' and reason = 'REWORK' and source_batch_id = ?", String.class, lineId, fg);
+        assertThat(ownerOf(rework1)).as("[返工物权] 返工批次 = 被退批次的物权与客户")
+                .containsExactly("CUSTOMER_OWNED", "CUST-OS-1");
+
+        // 复审 中1: 再退返工回来的批次 ⇒ 返工本来没计费, 不再挂负数调整, 有效加工费不变
+        int adjBefore = count("select count(*) from ar_ap_transactions where factory_id = ? "
+                + "and source_type = 'OUTSOURCE_GOODS_RETURN'");
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-C-GR-2", null, rework1,
+                new BigDecimal("4"), "返工仍不良"), USER, null);
+        assertThat(count("select count(*) from ar_ap_transactions where factory_id = ? "
+                + "and source_type = 'OUTSOURCE_GOODS_RETURN'"))
+                .as("[二次冲减] 退返工批次不新挂加工费冲减").isEqualTo(adjBefore);
+        assertThat(jdbc.queryForObject("select amount from outsource_movements where line_id = ? "
+                + "and movement_type = 'GOODS_RETURN' and source_batch_id = ?", BigDecimal.class, lineId, rework1))
+                .isEqualByComparingTo("0");
+        assertThat(detailFee(orderId)).as("[二次冲减] 有效加工费仍 = 10 - 4").isEqualByComparingTo("6.00");
+        assertThat(lineFee(lineId)).as("行上存毛额").isEqualByComparingTo("10.00");
+
+        // 再收返工 4: 源是返工批次, 物权仍是客户的; 之后能结单
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-C-RW-2", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        String rework2 = jdbc.queryForObject("select target_batch_id from outsource_movements where line_id = ? "
+                + "and movement_type = 'CONSUME' and reason = 'REWORK' and source_batch_id = ?", String.class, lineId, rework1);
+        assertThat(ownerOf(rework2)).containsExactly("CUSTOMER_OWNED", "CUST-OS-1");
+        assertThat(outsource.close(F, orderId, USER).status()).isEqualTo("CLOSED");
+    }
+
     // ==================== helpers ====================
 
     private void seed() {
@@ -486,6 +581,9 @@ class OutsourceClosedLoopPostgresContractTest {
         batch("OS-RAW", "MT-RAW", "100", "kg", "2.00");
         batch("OS-PACK", "MT-PACK", "50", "个", "0.10");
         batch("OS-RAW2", "MT-RAW", "20", "kg", "3.00");
+        batch("OS-CRAW", "MT-RAW", "10", "kg", "1.00");
+        jdbc.update("update material_batches set ownership = 'CUSTOMER_OWNED', owner_customer_id = 'CUST-OS-1' "
+                + "where id = 'OS-CRAW'");
 
         ProductionPlan plan = new ProductionPlan();
         plan.setId("OS-PLAN");
@@ -576,6 +674,16 @@ class OutsourceClosedLoopPostgresContractTest {
 
     private BigDecimal lineFee(String lineId) {
         return jdbc.queryForObject("select fee_amount from outsource_order_lines where id = ?", BigDecimal.class, lineId);
+    }
+
+    private List<Object> ownerOf(String finishedBatchId) {
+        Map<String, Object> r = jdbc.queryForMap("select ownership, owner_customer_id from finished_goods_batches "
+                + "where id = ?", finishedBatchId);
+        return java.util.Arrays.asList(r.get("ownership"), r.get("owner_customer_id"));
+    }
+
+    private BigDecimal detailFee(String orderId) {
+        return outsource.detail(F, orderId).lines().get(0).feeAmount();
     }
 
     private BigDecimal supplierBalance() {

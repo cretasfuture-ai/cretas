@@ -8,7 +8,9 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionPlan;
 import com.cretas.aims.entity.QualityReturnOrder;
 import com.cretas.aims.entity.Supplier;
+import com.cretas.aims.entity.enums.ArApApprovalStatus;
 import com.cretas.aims.entity.enums.CounterpartyType;
+import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.entity.enums.QualityReturnTargetType;
@@ -27,6 +29,7 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionPlanRepository;
 import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
+import com.cretas.aims.repository.finance.ArApTransactionRepository;
 import com.cretas.aims.repository.foodsafety.ProcessTimeLimitEventRepository;
 import com.cretas.aims.repository.inventory.FinishedGoodsBatchRepository;
 import com.cretas.aims.repository.outsource.OutsourceMovementRepository;
@@ -42,6 +45,8 @@ import com.cretas.aims.service.quality.release.QcInspectionPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.NestedExceptionUtils;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
@@ -103,6 +108,7 @@ public class OutsourceService {
     private final WarehouseResolver warehouseResolver;
     private final QcInspectionPolicy qcInspectionPolicy;
     private final ArApService arApService;
+    private final ArApTransactionRepository arApTransactionRepository;
     private final LineageEdgeRecorder lineageEdgeRecorder;
 
     @Autowired(required = false)
@@ -253,7 +259,7 @@ public class OutsourceService {
             task.setOutsourceLineId(line.getId());
             task.setOutsourcerSupplierId(order.getSupplierId());
             task.setOutsourceUnitFee(line.getUnitFee());
-            task.setOutsourceFeeAmount(line.getFeeAmount());
+            task.setOutsourceFeeAmount(effectiveFee(factoryId, line));
             taskRepository.save(task);
         }
         order.setStatus(OutsourceOrder.Status.RELEASED);
@@ -328,7 +334,8 @@ public class OutsourceService {
     public OrderDetail issue(String factoryId, String orderId, String lineId, IssueRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId())) {
+        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+                OutsourceMovement.Type.ISSUE)) {
             return detail(factoryId, orderId);
         }
         requireReleased(order);
@@ -390,7 +397,7 @@ public class OutsourceService {
             mv.setAmount(src.getUnitPrice() == null ? null : money(src.getUnitPrice().multiply(q)));
             mv.setClientRequestId(requestId);
             requestId = null;   // 一次提交多批次: 防重复键只落在第一条上
-            movementRepository.save(mv);
+            saveRequestMovement(mv);
             lineageEdgeRecorder.recordMaterialTransfer(factoryId, src.getId(), os.getId(), q, src.getQuantityUnit(),
                     userId, "outsource-issue:" + mv.getId(), Map.of("origin", "OUTSOURCE_ISSUE",
                             "outsourceOrderNo", order.getOrderNo()));
@@ -418,7 +425,8 @@ public class OutsourceService {
                                       MaterialReturnRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId())) {
+        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+                OutsourceMovement.Type.MATERIAL_RETURN)) {
             return detail(factoryId, orderId);
         }
         requireReleased(order);
@@ -465,7 +473,7 @@ public class OutsourceService {
             mv.setParentMovementId(issue.getId());
             mv.setClientRequestId(requestId);
             requestId = null;
-            movementRepository.save(mv);
+            saveRequestMovement(mv);
         }
         return detail(factoryId, orderId);
     }
@@ -511,7 +519,8 @@ public class OutsourceService {
     public OrderDetail receive(String factoryId, String orderId, String lineId, ReceiveRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId())) {
+        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+                OutsourceMovement.Type.RECEIVE)) {
             return detail(factoryId, orderId);
         }
         requireReleased(order);
@@ -539,6 +548,12 @@ public class OutsourceService {
             consumptions = suggestReceive(factoryId, orderId, lineId, g, d).consumptions().stream()
                     .map(s -> new BatchQuantity(s.batchId(), s.suggestedQuantity())).toList();
         }
+        if (newTotal.signum() == 0 && consumptions != null && consumptions.stream()
+                .anyMatch(c -> c != null && c.quantity() != null && c.quantity().signum() != 0)) {
+            // 只收返工不耗料: 客户端传的耗用会被静默忽略, 明确拒绝 (复审 低2)。
+            throw bad(400, "本次全部是返工回货, 不耗料; 请去掉耗用明细, 或把新收数量填进合格 / 不良",
+                    "OUTSOURCE_REWORK_CONSUMPTION_NOT_ALLOWED", "consumptions");
+        }
         List<MaterialBatch> consumedBatches = new ArrayList<>();
         List<BigDecimal> consumedQty = new ArrayList<>();
         BigDecimal consumedCost = ZERO;
@@ -553,6 +568,9 @@ public class OutsourceService {
             for (BatchQuantity c : consumptions) {
                 if (c == null || c.quantity() == null || c.quantity().signum() == 0) {
                     continue;
+                }
+                if (isBlank(c.batchId())) {
+                    throw bad(400, "耗用明细缺少委外仓批次", "OUTSOURCE_CONSUMPTION_INVALID", "consumptions");
                 }
                 if (c.quantity().signum() < 0) {
                     throw bad(400, "耗用量不能为负", "OUTSOURCE_CONSUMPTION_INVALID", c.batchId());
@@ -588,11 +606,25 @@ public class OutsourceService {
         header.setUnit(line.getUnit());
         header.setAmount(fee);
         header.setClientRequestId(trimToNull(req.clientRequestId()));
-        movementRepository.save(header);
+        saveRequestMovement(header);
 
         InventoryOwnership ownership = commonOwnership(consumedBatches);
         String ownerCustomer = ownership == InventoryOwnership.CUSTOMER_OWNED && !consumedBatches.isEmpty()
                 ? consumedBatches.get(0).getOwnerCustomerId() : null;
+        if (rework.signum() > 0) {
+            // 返工回货的物权跟被退批次走, 不跟本次新收的耗用走: 只收返工时耗用为空, commonOwnership 会给出「我方」,
+            // 客户料 (代加工) 退去返工回来就变成我方库存 (复审 高1)。被退批次之间、与本次新收耗用之间物权不一致 ⇒ 409。
+            OwnerRef reworkOwner = reworkOwnership(factoryId, line, planRework(line, rework));
+            if (!consumedBatches.isEmpty()
+                    && (reworkOwner.ownership() != ownership || !Objects.equals(reworkOwner.customerId(), ownerCustomer))) {
+                throw bad(409, "本次新收的料与返工回货的物权不一致 (我方 / 客户), 请把返工回货和新收分开登记",
+                        "OUTSOURCE_RECEIVE_MIXED_OWNERSHIP", "goodQuantity");
+            }
+            if (consumedBatches.isEmpty()) {
+                ownership = reworkOwner.ownership();
+                ownerCustomer = reworkOwner.customerId();
+            }
+        }
 
         // ---- 2. 产出批次 ----
         String goodBatchId = null;
@@ -670,40 +702,19 @@ public class OutsourceService {
     private void receiveRework(String factoryId, OutsourceOrder order, OutsourceOrderLine line, OutsourceMovement header,
                                BigDecimal rework, InventoryOwnership ownership, String ownerCustomer,
                                LocalDate bizDate, Long userId, boolean headerTarget) {
-        Map<String, BigDecimal> pending = new LinkedHashMap<>();
         List<OutsourceMovement> lineMovements = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
-        for (OutsourceMovement m : lineMovements) {
-            if (m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN) {
-                pending.merge(m.getSourceBatchId(), m.getQuantity(), BigDecimal::add);
-            } else if (m.getMovementType() == OutsourceMovement.Type.CONSUME && REWORK_MARK.equals(m.getReason())) {
-                pending.merge(m.getSourceBatchId(), m.getQuantity().negate(), BigDecimal::add);
-            }
-        }
-        BigDecimal left = rework;
+        Map<String, BigDecimal> plan = planRework(lineMovements, line, rework);
         BigDecimal cost = ZERO;
         boolean known = true;
-        List<String> srcIds = new ArrayList<>();
-        List<BigDecimal> srcQty = new ArrayList<>();
-        for (Map.Entry<String, BigDecimal> e : pending.entrySet()) {
-            if (left.signum() <= 0) {
-                break;
-            }
-            BigDecimal take = e.getValue().min(left);
-            if (take.signum() <= 0) {
-                continue;
-            }
-            BigDecimal srcCost = outputUnitCost(factoryId, line, e.getKey());
+        List<String> srcIds = new ArrayList<>(plan.keySet());
+        List<BigDecimal> srcQty = new ArrayList<>(plan.values());
+        for (int i = 0; i < srcIds.size(); i++) {
+            BigDecimal srcCost = outputUnitCost(factoryId, line, srcIds.get(i));
             if (srcCost == null) {
                 known = false;
             } else {
-                cost = cost.add(srcCost.multiply(take));
+                cost = cost.add(srcCost.multiply(srcQty.get(i)));
             }
-            srcIds.add(e.getKey());
-            srcQty.add(take);
-            left = left.subtract(take);
-        }
-        if (left.signum() > 0) {
-            throw bad(409, "返工待收与退货记录对不上, 请联系管理员核对", "OUTSOURCE_REWORK_MISMATCH", line.getId());
         }
         BigDecimal unitCost = known ? cost.divide(rework, 4, RoundingMode.HALF_UP) : null;
         String batchId = createOutput(order, line, rework, unitCost, false, ownership, ownerCustomer, bizDate, userId);
@@ -748,6 +759,74 @@ public class OutsourceService {
             header.setTargetBatchKind(kindOf(line));
             header.setUnitCost(unitCost);
         }
+    }
+
+    /** 物权 + 客户编号 (CUSTOMER_OWNED 时非空)。 */
+    private record OwnerRef(InventoryOwnership ownership, String customerId) {
+    }
+
+    private Map<String, BigDecimal> planRework(OutsourceOrderLine line, BigDecimal rework) {
+        return planRework(movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId()), line, rework);
+    }
+
+    /** 返工待收按被退回的收货批次先进先出抵扣: 被退批次 id → 本次抵扣量。对不上 ⇒ 409。 */
+    private static Map<String, BigDecimal> planRework(List<OutsourceMovement> lineMovements, OutsourceOrderLine line,
+                                                      BigDecimal rework) {
+        Map<String, BigDecimal> pending = new LinkedHashMap<>();
+        for (OutsourceMovement m : lineMovements) {
+            if (m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN) {
+                pending.merge(m.getSourceBatchId(), m.getQuantity(), BigDecimal::add);
+            } else if (m.getMovementType() == OutsourceMovement.Type.CONSUME && REWORK_MARK.equals(m.getReason())) {
+                pending.merge(m.getSourceBatchId(), m.getQuantity().negate(), BigDecimal::add);
+            }
+        }
+        BigDecimal left = rework;
+        Map<String, BigDecimal> plan = new LinkedHashMap<>();
+        for (Map.Entry<String, BigDecimal> e : pending.entrySet()) {
+            if (left.signum() <= 0) {
+                break;
+            }
+            BigDecimal take = e.getValue().min(left);
+            if (take.signum() <= 0) {
+                continue;
+            }
+            plan.put(e.getKey(), take);
+            left = left.subtract(take);
+        }
+        if (left.signum() > 0) {
+            throw bad(409, "返工待收与退货记录对不上, 请联系管理员核对", "OUTSOURCE_REWORK_MISMATCH", line.getId());
+        }
+        return plan;
+    }
+
+    /** 返工回货的物权 = 被退批次的物权; 多个被退批次物权 (或客户) 不一致 ⇒ 409, 不替用户猜。 */
+    private OwnerRef reworkOwnership(String factoryId, OutsourceOrderLine line, Map<String, BigDecimal> plan) {
+        OwnerRef first = null;
+        for (String srcId : plan.keySet()) {
+            OwnerRef cur;
+            if (line.getOutputKind() == OutsourceOrderLine.OutputKind.FINISHED) {
+                FinishedGoodsBatch fg = finishedGoodsBatchRepository.findById(srcId)
+                        .filter(b -> factoryId.equals(b.getFactoryId()))
+                        .orElseThrow(() -> new ResourceNotFoundException("被退批次不存在: " + srcId));
+                cur = ownerRef(fg.getOwnership(), fg.getOwnerCustomerId());
+            } else {
+                MaterialBatch mb = materialBatchRepository.findByIdAndFactoryId(srcId, factoryId)
+                        .orElseThrow(() -> new ResourceNotFoundException("被退批次不存在: " + srcId));
+                cur = ownerRef(mb.getOwnership(), mb.getOwnerCustomerId());
+            }
+            if (first == null) {
+                first = cur;
+            } else if (!first.equals(cur)) {
+                throw bad(409, "本次返工回货抵扣的被退批次物权不一致 (我方 / 客户), 请按物权分开收返工",
+                        "OUTSOURCE_REWORK_MIXED_OWNERSHIP", srcId);
+            }
+        }
+        return first != null ? first : new OwnerRef(InventoryOwnership.COMPANY_OWNED, null);
+    }
+
+    private static OwnerRef ownerRef(InventoryOwnership ownership, String customerId) {
+        InventoryOwnership o = ownership != null ? ownership : InventoryOwnership.COMPANY_OWNED;
+        return new OwnerRef(o, o == InventoryOwnership.CUSTOMER_OWNED ? customerId : null);
     }
 
     /**
@@ -916,7 +995,8 @@ public class OutsourceService {
                                    Long userId, String qualityReturnOrderId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId())) {
+        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+                OutsourceMovement.Type.GOODS_RETURN)) {
             return detail(factoryId, orderId);
         }
         requireReleased(order);
@@ -926,7 +1006,12 @@ public class OutsourceService {
             throw bad(400, "退货数量必须大于 0", "OUTSOURCE_GOODS_RETURN_QTY_INVALID", "quantity");
         }
         String batchId = req.sourceBatchId();
-        boolean isReceiptGood = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId()).stream()
+        List<OutsourceMovement> lineMovements = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
+        // 返工回货建的批次本来就没计加工费 (receive 只按新收合格计费) ⇒ 再退它不能再冲一次加工费 (复审 中1)。
+        boolean isReworkBatch = batchId != null && lineMovements.stream()
+                .anyMatch(m -> m.getMovementType() == OutsourceMovement.Type.CONSUME
+                        && REWORK_MARK.equals(m.getReason()) && batchId.equals(m.getTargetBatchId()));
+        boolean isReceiptGood = lineMovements.stream()
                 .anyMatch(m -> batchId != null && batchId.equals(m.getTargetBatchId())
                         && (m.getMovementType() == OutsourceMovement.Type.RECEIVE
                             || (m.getMovementType() == OutsourceMovement.Type.CONSUME && REWORK_MARK.equals(m.getReason())))
@@ -970,7 +1055,7 @@ public class OutsourceService {
             unitCost = mb.getUnitPrice();
             unit = mb.getQuantityUnit();
         }
-        BigDecimal feeBack = money(q.multiply(line.getUnitFee()));
+        BigDecimal feeBack = isReworkBatch ? money(ZERO) : money(q.multiply(line.getUnitFee()));
         OutsourceMovement mv = movement(order, line, OutsourceMovement.Type.GOODS_RETURN, bizDate, userId);
         mv.setProductTypeId(line.getProductTypeId());
         mv.setSourceBatchId(batchId);
@@ -981,7 +1066,7 @@ public class OutsourceService {
         mv.setReason(trimToNull(req.reason()));
         mv.setQualityReturnOrderId(qualityReturnOrderId);
         mv.setClientRequestId(trimToNull(req.clientRequestId()));
-        movementRepository.save(mv);
+        saveRequestMovement(mv);
         if (feeBack.signum() > 0) {
             var adj = arApService.recordAdjustment(factoryId, CounterpartyType.SUPPLIER, order.getSupplierId(),
                     feeBack.negate(), userId,
@@ -993,7 +1078,8 @@ public class OutsourceService {
         line.setReceivedGoodQuantity(nz(line.getReceivedGoodQuantity()).subtract(q));
         line.setReturnedGoodsQuantity(nz(line.getReturnedGoodsQuantity()).add(q));
         line.setReworkPendingQuantity(nz(line.getReworkPendingQuantity()).add(q));
-        line.setFeeAmount(nz(line.getFeeAmount()).subtract(feeBack));
+        // ⛔ 不在这里扣 fee_amount: 冲减还是待审调整, 财务驳回就照原额付 (复审 中2)。
+        // fee_amount = 已挂的收货加工费毛额; 对外展示用 effectiveFee (毛额 + 已批准的退货冲减)。
         line.setStatus(OutsourceOrderLine.Status.OPEN);
         lineRepository.save(line);
         syncTask(factoryId, line, q.negate());
@@ -1005,7 +1091,8 @@ public class OutsourceService {
     public OrderDetail registerLoss(String factoryId, String orderId, String lineId, LossRequest req, Long userId) {
         requireActor(userId);
         OutsourceOrder order = lockOrder(factoryId, orderId);
-        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId())) {
+        if (replayed(factoryId, orderId, req == null ? null : req.clientRequestId(),
+                OutsourceMovement.Type.LOSS)) {
             return detail(factoryId, orderId);
         }
         requireReleased(order);
@@ -1033,7 +1120,7 @@ public class OutsourceService {
             mv.setReason(reason);
             mv.setClientRequestId(requestId);
             requestId = null;
-            movementRepository.save(mv);
+            saveRequestMovement(mv);
         }
         return detail(factoryId, orderId);
     }
@@ -1084,7 +1171,7 @@ public class OutsourceService {
                         t.setCompletedAt(now);
                         t.setCompletedBy(userId);
                         t.setActualQuantity(nz(line.getReceivedGoodQuantity()));
-                        t.setOutsourceFeeAmount(line.getFeeAmount());
+                        t.setOutsourceFeeAmount(effectiveFee(factoryId, line));
                         taskRepository.save(t);
                     }
                 });
@@ -1147,7 +1234,7 @@ public class OutsourceService {
             return new OrderSummary(o.getId(), o.getOrderNo(), o.getSupplierId(), supplierNames.get(o.getSupplierId()),
                     o.getStatus().name(), o.getExpectedReturnDate(), ls.size(),
                     sum(ls, OutsourceOrderLine::getPlannedQuantity), sum(ls, OutsourceOrderLine::getReceivedGoodQuantity),
-                    balance, sum(ls, OutsourceOrderLine::getFeeAmount), o.getCreatedAt());
+                    balance, sum(ls, l -> effectiveFee(factoryId, l)), o.getCreatedAt());
         });
     }
 
@@ -1190,7 +1277,7 @@ public class OutsourceService {
                     l.getOutputKind().name(), l.getProductTypeId(), l.getOutputName(), l.getUnit(),
                     l.getPlannedQuantity(), l.getUnitFee(), l.getTaxRate(), l.getReceivedGoodQuantity(),
                     l.getReceivedDefectQuantity(), l.getReturnedGoodsQuantity(), l.getReworkPendingQuantity(),
-                    l.remainingToReceive(), l.getFeeAmount(), bal, l.getStatus().name()));
+                    l.remainingToReceive(), effectiveFee(factoryId, l, movements), bal, l.getStatus().name()));
         }
         Map<String, String> batchNos = batchNumbers(factoryId, movements);
         List<MovementView> mvs = movements.stream().map(m -> new MovementView(m.getId(), m.getLineId(),
@@ -1202,7 +1289,7 @@ public class OutsourceService {
         return new OrderDetail(o.getId(), o.getOrderNo(), o.getSupplierId(),
                 supplierNames(factoryId, Set.of(o.getSupplierId())).get(o.getSupplierId()), o.getStatus().name(),
                 o.getOutsourceWarehouseId(), o.getExpectedReturnDate(), o.getRemark(), o.getReleasedAt(),
-                o.getClosedAt(), o.getCreatedAt(), sum(lines, OutsourceOrderLine::getFeeAmount), lineViews, balances, mvs);
+                o.getClosedAt(), o.getCreatedAt(), sum(lines, l -> effectiveFee(factoryId, l, movements)), lineViews, balances, mvs);
     }
 
     /** 工单详情里的委外工序: 按工单列出挂在它下面的委外行。 */
@@ -1227,7 +1314,7 @@ public class OutsourceService {
             }
             out.add(new ProcessLink(l.getWorkProcessTaskId(), l.getProductionPlanId(), o.getId(), o.getOrderNo(),
                     o.getStatus().name(), o.getSupplierId(), names.get(o.getSupplierId()), l.getId(),
-                    l.getStatus().name(), l.getPlannedQuantity(), l.getReceivedGoodQuantity(), l.getFeeAmount()));
+                    l.getStatus().name(), l.getPlannedQuantity(), l.getReceivedGoodQuantity(), effectiveFee(factoryId, l)));
         }
         return out;
     }
@@ -1240,7 +1327,7 @@ public class OutsourceService {
         }
         List<OutsourceOrderLine> lines = lineRepository.findByFactoryIdAndProductionPlanIdIn(factoryId, planIds).stream()
                 .filter(l -> l.getStatus() != OutsourceOrderLine.Status.CANCELLED).toList();
-        return lines.isEmpty() ? null : sum(lines, OutsourceOrderLine::getFeeAmount);
+        return lines.isEmpty() ? null : sum(lines, l -> effectiveFee(factoryId, l));
     }
 
     /** 把质检退回单 (SUBCONTRACT) 关联到委外任务行与被退的收货批次, 之后 ship 才会扣库存、冲加工费。 */
@@ -1262,12 +1349,58 @@ public class OutsourceService {
 
     // ==================== 内部 ====================
 
+    /**
+     * 有效加工费 = 已挂的收货加工费毛额 (fee_amount) + <b>已批准</b>的退货冲减调整; 待审 / 驳回的冲减不算
+     * (复审 中2: 退货当时就扣行加工费, 财务驳回后行上、销售订单、工序上都少显示)。
+     */
+    private BigDecimal effectiveFee(String factoryId, OutsourceOrderLine line) {
+        return effectiveFee(factoryId, line, movementRepository.findByLineIdAndMovementTypeIn(line.getId(),
+                List.of(OutsourceMovement.Type.GOODS_RETURN)));
+    }
+
+    private BigDecimal effectiveFee(String factoryId, OutsourceOrderLine line, List<OutsourceMovement> movements) {
+        BigDecimal gross = nz(line.getFeeAmount());
+        List<String> adjIds = movements.stream()
+                .filter(m -> m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN
+                        && line.getId().equals(m.getLineId()) && m.getApTransactionId() != null)
+                .map(OutsourceMovement::getApTransactionId).toList();
+        if (adjIds.isEmpty()) {
+            return gross;
+        }
+        BigDecimal approved = arApTransactionRepository.findAllById(adjIds).stream()
+                .filter(t -> factoryId.equals(t.getFactoryId()) && t.getDeletedAt() == null
+                        && t.getApprovalStatus() == ArApApprovalStatus.APPROVED && t.getAmount() != null)
+                .map(ArApTransaction::getAmount).reduce(ZERO, BigDecimal::add);
+        return gross.add(approved);
+    }
+
     private OutsourceOrder lockOrder(String factoryId, String orderId) {
         return orderRepository.findByIdAndFactoryIdForUpdate(orderId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("委外单不存在或不属于当前工厂"));
     }
 
-    private boolean replayed(String factoryId, String orderId, String clientRequestId) {
+    /**
+     * 带提交编号的那条收发: 立即 flush, 撞部分唯一索引 uk_outsource_movements_request (别的单 / 并发同号已落库)
+     * 转 409, 不让 500 冒出去 (复审 低5)。其余约束错误原样抛出。
+     */
+    private void saveRequestMovement(OutsourceMovement mv) {
+        if (mv.getClientRequestId() == null) {
+            movementRepository.save(mv);
+            return;
+        }
+        try {
+            movementRepository.saveAndFlush(mv);
+        } catch (DataIntegrityViolationException e) {
+            String msg = String.valueOf(NestedExceptionUtils.getMostSpecificCause(e).getMessage());
+            if (msg.contains("uk_outsource_movements_request")) {
+                throw bad(409, "这个提交编号已被另一次提交使用 (可能是并发重复提交), 请刷新后重试",
+                        "OUTSOURCE_REQUEST_ID_CONFLICT", "clientRequestId");
+            }
+            throw e;
+        }
+    }
+
+    private boolean replayed(String factoryId, String orderId, String clientRequestId, OutsourceMovement.Type action) {
         String key = trimToNull(clientRequestId);
         if (key == null) {
             // 收发写操作必须带提交编号: 不带就没有防重, 网络重试会重复耗料 / 重复挂应付 (终审 中6)。
@@ -1283,6 +1416,11 @@ public class OutsourceService {
         }
         if (!orderId.equals(hit.get().getOrderId())) {
             throw bad(409, "这个提交编号已用于另一张委外单", "OUTSOURCE_REQUEST_ID_CONFLICT", "clientRequestId");
+        }
+        if (hit.get().getMovementType() != action) {
+            // 同一编号先用于发料、再用于收货: 当成重放会静默返回、什么都不做 (复审 低4)。
+            throw bad(409, "这个提交编号已用于另一种操作 (" + hit.get().getMovementType() + "), 请重新提交",
+                    "OUTSOURCE_REQUEST_ID_CONFLICT", "clientRequestId");
         }
         log.info("委外收发幂等命中: factory={} order={} requestId={}", factoryId, orderId, key);
         return true;
@@ -1411,7 +1549,7 @@ public class OutsourceService {
             }
             BigDecimal actual = nz(t.getActualQuantity()).add(goodDelta);
             t.setActualQuantity(actual.signum() < 0 ? ZERO : actual);
-            t.setOutsourceFeeAmount(line.getFeeAmount());
+            t.setOutsourceFeeAmount(effectiveFee(factoryId, line));
             taskRepository.save(t);
         });
     }

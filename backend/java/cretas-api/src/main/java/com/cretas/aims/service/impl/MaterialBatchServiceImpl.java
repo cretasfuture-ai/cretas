@@ -1305,6 +1305,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
         // 计算新数量
         BigDecimal newQuantity = batch.getCurrentQuantity().add(adjustmentQuantity);
@@ -2088,6 +2089,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertNotOutsourceQuantityEdit(batch);
 
         // W-03 defense (Round 7): reject negative newQuantity before it reaches the
         // receipt_quantity arithmetic — otherwise it propagated to a DB constraint
@@ -2297,6 +2299,7 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请联系管理员确认批次归属或切换工厂账号");
         }
         DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+        com.cretas.aims.service.quality.release.MaterialBatchHoldService.assertOutsourceManualStatus(batch, status);
 
         // D-S411-04 M2: 质检放行判了不合格的原料, 仓库页不能改回可用 (与处置放行 / 放行决策工具同一判定)
         com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.assertMayBecome(
