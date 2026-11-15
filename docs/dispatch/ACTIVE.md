@@ -7,7 +7,6 @@
 
 ## 在飞任务
 
-- `WHOLESALE-DESKS-20261115` — `in-progress` — Owner /root — Base `3c1ed4be3f31` — scope: Web岗位工作台/组件/wholesale菜单/AI录入导航/对应测试；复用真实能力与新库形象，仅试用profile。验收Vitest/build/浏览器，说明见docs/design/wholesale-workdesks-20261115.md。
 
 - `INTENT-DISTILL-20261111` — `in-progress` — Owner organizer — Base `a89e8c70f997` — 意图提速+本地决策蒸馏。A=`service/execution`+`backend/python/ai`，B=`tests/semantic-read`，C=`scripts/finetune`，G=`tests/semantic-read/HOLDOUT.md`；A/D/E/H 串行。见 archive/2026-11-11-intent-distill-plan.md 与 -pr1476-split-map.md。
 
