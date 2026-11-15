@@ -101,6 +101,16 @@ class AiBiFinanceFollowupContractTest {
     }
 
     // R4 M4: 环比对比基准「上月」不是本期
+    // R4 M4 收窄: 「上月」是句子里唯一的时间词时保持改前行为 (primary=上月), 不隐藏 -> 没有环比模式的工具不会回落到默认期间放宽数据
+    @Test
+    void monthOverMonthBase_staysPrimaryWhenItIsTheOnlyTimeWord() {
+        for (String text : new String[]{"销量和上月比", "卤牛肉成本比上月", "卤牛肉成本和上月比"}) {
+            var r = rules.extractAndReplace(text, NOW).getFirstRange().orElseThrow(() -> new AssertionError(text + " 没有 primary"));
+            assertEquals(LocalDate.of(2026, 10, 1), r.getStart().toLocalDate(), text + " 起");
+            assertEquals(LocalDate.of(2026, 10, 31), r.getEnd().toLocalDate(), text + " 止");
+        }
+    }
+
     @Test
     void monthOverMonthBase_isSkippedWhenPickingThePrimaryRange() {
         var mar = rules.extractAndReplace("今年3月的成本和上月比", NOW).getFirstRange().orElseThrow();
@@ -111,9 +121,6 @@ class AiBiFinanceFollowupContractTest {
         assertEquals(LocalDate.of(2026, 10, 31), oct.getEnd().toLocalDate());
         var threeDays = rules.extractAndReplace("3天前成本和上月比", NOW).getFirstRange().orElseThrow();
         assertEquals(LocalDate.of(2026, 11, 12), threeDays.getStart().toLocalDate());
-        // 句子里只有对比基准: 没有本期时间; 「上月」作为本期时间照旧可用 (阴性对照)
-        assertTrue(rules.extractAndReplace("卤牛肉成本和上月比", NOW).getExtractedRanges().isEmpty());
-        assertTrue(rules.extractAndReplace("卤牛肉成本和上月比", NOW).getProcessedText().contains("和上月比"));
         var lastMonth = rules.extractAndReplace("上月的成本", NOW).getFirstRange().orElseThrow();
         assertEquals(LocalDate.of(2026, 10, 1), lastMonth.getStart().toLocalDate());
     }

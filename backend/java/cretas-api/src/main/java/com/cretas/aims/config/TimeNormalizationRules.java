@@ -335,10 +335,24 @@ public class TimeNormalizationRules {
             return new NormalizationResult(text, java.util.Collections.emptyList());
         }
 
-        // 环比对比基准「和上月比」的「上月」不是本期: 先换成占位符, 提取完再还原 (否则「今年3月的成本和上月比」本期被取成上月)
+        // 环比对比基准「和上月比」的「上月」: 句子里除它之外还有别的时间表达时, 它不是本期 (先换成占位符, 提取完再还原,
+        // 否则「今年3月的成本和上月比」本期被取成上月)。它是句子里唯一的时间词时保持原行为 (primary=上月), 不隐藏:
+        // 没有环比模式的工具拿不到本期会回落到各自默认期间, 静默放宽数据。
         java.util.List<String> protectedBases = new java.util.ArrayList<>();
-        String result = protectMonthOverMonthBase(text, protectedBases);
+        String protectedText = protectMonthOverMonthBase(text, protectedBases);
+        if (!protectedBases.isEmpty()) {
+            java.util.List<TimeRange> others = new java.util.ArrayList<>();
+            String protectedResult = extractAll(protectedText, now, others);
+            if (!others.isEmpty()) {
+                return new NormalizationResult(restoreMonthOverMonthBase(protectedResult, protectedBases), others);
+            }
+        }
         java.util.List<TimeRange> extractedRanges = new java.util.ArrayList<>();
+        return new NormalizationResult(extractAll(text, now, extractedRanges), extractedRanges);
+    }
+
+    private String extractAll(String text, LocalDateTime now, java.util.List<TimeRange> extractedRanges) {
+        String result = text;
 
         for (Map.Entry<Pattern, BiFunction<LocalDateTime, Matcher, TimeRange>> entry : TIME_PATTERNS.entrySet()) {
             Matcher matcher = entry.getKey().matcher(result);
@@ -357,7 +371,7 @@ public class TimeNormalizationRules {
             }
         }
 
-        return new NormalizationResult(restoreMonthOverMonthBase(result, protectedBases), extractedRanges);
+        return result;
     }
 
     private static String protectMonthOverMonthBase(String text, java.util.List<String> bases) {
