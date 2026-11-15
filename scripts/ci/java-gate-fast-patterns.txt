@@ -45,5 +45,3 @@ ProductionPlanSettlementTest
 MaterialBatchServiceImplLowStockEventTest
 # 强制插单收尾 (并行网关按岗位推进节点): 并行分支用例写在引擎测试类里, 原先不在 PR 选择范围
 WorkflowEngineServiceImplTest
-# INTENT-DISTILL-20261111 红线: 澄清候选 = 执行期工具判定 (ToolPermissionChain) 的一致性与回归 (#1747)
-ClarificationToolRbacParityTest

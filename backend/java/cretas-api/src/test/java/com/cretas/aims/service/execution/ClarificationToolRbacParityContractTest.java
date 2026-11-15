@@ -52,7 +52,7 @@ import static org.mockito.Mockito.when;
  * + 真 {@link ToolPermissionChain}; 只桩用户表与权限矩阵 (PermissionService)。
  */
 @DisplayName("澄清候选 = 执行期工具判定: 执行期会拒的工具不出按钮, 会放行的照出")
-class ClarificationToolRbacParityTest {
+class ClarificationToolRbacParityContractTest {
 
     private static final String FACTORY = "F006";
     private static final String OPP = "OPPORTUNITY_STAGE_ALERT";
