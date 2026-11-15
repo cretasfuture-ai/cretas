@@ -152,7 +152,7 @@ class OutsourceClosedLoopPostgresContractTest {
         }
         jdbc.execute(migration("db/flyway/V20260821_02__batch_lineage_schema.sql"));
         jdbc.execute(migration("db/flyway/V20261101_43__batch_lineage_edges_refkey_unique.sql"));
-        jdbc.execute(migration("db/flyway/V20261114_91__outsource_orders.sql"));
+        jdbc.execute(migration("db/flyway/V20261115_31__outsource_orders.sql"));
         jdbc.execute("DO $$ DECLARE r record; BEGIN "
                 + "FOR r IN SELECT conrelid::regclass AS t, conname FROM pg_constraint "
                 + "WHERE contype = 'f' AND connamespace = 'public'::regnamespace LOOP "
