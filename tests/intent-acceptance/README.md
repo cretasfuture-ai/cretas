@@ -138,5 +138,22 @@ python -X utf8 adjudicate_v3.py calibrate --work <dir>   # 阳性对照：抽确
 python -X utf8 adjudicate_v3.py apply --work <dir> --csv <待复核.csv> --summary-out <stats.json>
 ```
 
-局限：第三票也是模型，不是人；第三票对已确认题的姿态一致率约 81%（抽样 167 条，WRITE 题有三分之一被它判成先问，说明它比标注更爱问，所以 ASK 多数必须带三类真歧义理由，否则按默认执行）。裁定后的 ASK 和 REFUSE 仍是多数票结果，读数要标注口径，不要和只有确认题的旧读数混着比。确认题里另有 43 行 `intent_alternates` 是字符串（assemble 的既有问题，`score_recognize` 会按字符展开），封存半边大概率同样，未在本次处理。
+局限：第三票也是模型，不是人；第三票对已确认题的姿态一致率约 81%（抽样 167 条，WRITE 题有三分之一被它判成先问，说明它比标注更爱问，所以 ASK 多数必须带三类真歧义理由，否则按默认执行）。裁定后的 ASK 和 REFUSE 仍是多数票结果，读数要标注口径，不要和只有确认题的旧读数混着比。确认题里另有 43 行 `intent_alternates`（47 行含 `ask_options`）是字符串（assemble 的既有问题，`score_recognize` 会按字符展开），第二轮已改成列表（见 8.1）；封存半边大概率同样，**未动**。
+
+### 8.1 第二轮（对第一轮仍待复核的 251 题，`adjudicate_v3_r2.py`）
+
+口径同上，再深一层，详细规则编号见脚本头注释（`adjudication.rule_id` = 第一轮规则 + `R2` + 第二轮规则；第一轮结果整份留在 `adjudication.round1`，`orig_*` 仍是最初标注，`base_row()` 仍能整行回滚）：
+
+1. 意图无多数：给强模型候选意图的完整定义（代码 + 中文名 + 类别 + 说明全文 + 读写属性 + 必填实体，取自 Python 侧 `backend/python/ai/data/factory-intent-catalog.json`），`qwen-max` 与 `qwen3.5-plus`（关思考）各自独立选或判「都不对」并写理由；两次一致才定（J1）；不一致时再让两个模型各自独立判上下位，两个都认定同一个是「更具体者」且读写相同才取它、另一个进 `intent_alternates`（J2）；其余保持待复核（J0）。
+2. 姿态三方各异：先套规则（S4：去掉无三类真歧义理由的 ASK 票和意图是真意图时的 OOD 票，剩下的票里有与意图读写属性一致的就取它），规则判不了再一次强模型复核（S6；ASK 仍须带理由，只读意图的同名 / 缺必填仍按默认执行；REFUSE 须另有一票支持）。OOD 一律过复核，且话里点名工厂实体（人 / 物料 / 产品 / 客户 / 设备 / 单子 / 货……）的不判 OOD（S7）。
+3. 读写冲突：以意图目录里该意图的读写属性为准修姿态（R3）。
+4. 第二轮票（判官意图、理由、上下位、复核）写在 `adjudication.round2.j`，`apply2` 没有缓存也能复跑，结果字节相同。
+
+```bash
+cd tests/intent-acceptance
+python -X utf8 adjudicate_v3_r2.py deepen --work <dir>                              # 判官 A/B -> 上下位 -> 姿态复核，断点续跑
+python -X utf8 adjudicate_v3_r2.py apply2 --work <dir> --csv <剩余待复核.csv> --summary-out <stats.json>
+```
+
+仍定不下的题 `ambiguous=true`、`adjudication.status=pending_review`，原因在 `pending_cause`，清单在本机不进仓库。
 
