@@ -22,7 +22,7 @@ public final class OwnFactoryDataOnlyGuard {
             "report_bom_cost", "report_bom_cost_rank", "report_labor_cost_share", "report_sales_margin_summary",
             "report_cost_trend_analysis", "report_finance", "report_finance_ratio", "report_sales", "efficiency_comparison");
 
-    /** 清单是否都是已注册工具由 OwnFactoryDataOnlyGuardWiringContractTest 钉住 (工具改名时清单不会悄悄失效)。 */
+    /** 清单是否都是已注册工具由 AiBiFinanceFollowupContractTest.everyGuardedToolNameIsARealRegisteredTool 钉住 (扫工具源码里的 getToolName 返回值, 工具改名时清单不会悄悄失效)。 */
     public static Set<String> ownDataToolNames() {
         return OWN_DATA_TOOLS;
     }

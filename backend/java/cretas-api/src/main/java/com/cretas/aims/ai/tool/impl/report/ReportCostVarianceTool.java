@@ -116,6 +116,16 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
         String productName = getString(params, "productName");
+        // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
+        if (productTypeId != null && productTypeRepository != null) {
+            final String candidateId = productTypeId;
+            java.util.List<com.cretas.aims.entity.ProductType> catalog = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
+            boolean inCatalog = catalog != null && catalog.stream().anyMatch(t -> candidateId.equals(t.getId()));
+            if (!inCatalog) {
+                if (productName == null || productName.isBlank()) productName = productTypeId;
+                productTypeId = null;
+            }
+        }
         if (productTypeId == null && productName != null && !productName.isBlank() && productTypeRepository != null) {
             java.util.List<com.cretas.aims.entity.ProductType> candidates =
                     ReportToolSchemas.matchProducts(productTypeRepository, factoryId, productName.trim());
@@ -128,8 +138,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             }
             productTypeId = candidates.get(0).getId();
         }
-        Double varianceThreshold = params.get("varianceThreshold") != null
-                ? ((Number) params.get("varianceThreshold")).doubleValue()
+        // 差异阈值: 只接受 (0, 1000] 的数值; 抽参给的其它值 (0、负数、文字) 忽略, 不悄悄过滤掉产品
+        Double varianceThreshold = params.get("varianceThreshold") instanceof Number n
+                && n.doubleValue() > 0 && n.doubleValue() <= 1000
+                ? Double.valueOf(n.doubleValue())
                 : null;
 
         // 计算日期范围

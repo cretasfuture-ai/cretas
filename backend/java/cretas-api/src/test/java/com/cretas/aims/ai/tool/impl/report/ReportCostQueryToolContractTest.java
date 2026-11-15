@@ -294,8 +294,67 @@ class ReportCostQueryToolContractTest {
         productCatalog("卤牛肉", "卤牛肉片");
         thisMonth.add(batch("卤牛肉", "100", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
         thisMonth.add(batch("卤牛肉片", "900", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
-        JsonNode data = run("{\"productName\":\"卤牛肉\"}").get("data").get("data");
+        JsonNode r = run("{\"productName\":\"卤牛肉\"}").get("data");
+        JsonNode data = r.get("data");
         assertEquals(100.00, data.get("totals").get("totalCost").asDouble(), 0.001);   // 只答「卤牛肉」, 不含「卤牛肉片」
+        // N2: 回复和 data 里写明是哪个产品, 不能读起来像全厂数
+        assertEquals("卤牛肉", data.get("productFilter").asText());
+        assertTrue(r.get("message").asText().contains("卤牛肉"), r.get("message").asText());
+    }
+
+    @Test
+    void resolvedProductWithNoBatches_saysThatProductHasNone_notTheWholeFactory() throws Exception {
+        productCatalog("卤牛肉", "酱鸭");
+        thisMonth.add(batch("酱鸭", "900", "0", "0", "0", "10", "盒", ProductionBatchStatus.COMPLETED, false));
+        JsonNode r = run("{\"productName\":\"卤牛肉\"}").get("data");
+        assertTrue(r.get("message").asText().contains("「卤牛肉」这个产品没有"), r.get("message").asText());
+        assertEquals("卤牛肉", r.get("data").get("productFilter").asText());
+    }
+
+    // N3: 识别路径上 userInput 是预处理后的文本; 工具读调度层带来的原话 originalUserInput, 且「上月」是对比基准不是本期
+    @Test
+    void monthOverMonthFromOriginalSentence_whenPreprocessingTurnedLastMonthIntoThePeriod() throws Exception {
+        lastMonthSameDaysStub().add(batch("卤牛肉", "450", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("卤牛肉", "600", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        JsonNode r = run("{\"startDate\":\"2026-10-01\",\"endDate\":\"2026-10-31\",\"timeRangeFromSentence\":\"2026-10-01~2026-10-31\","
+                + "\"userInput\":\"卤牛肉成本和[2026-10-01 00:00 至 2026-10-31 23:59]比\",\"originalUserInput\":\"卤牛肉成本和上月比\"}").get("data");
+        assertEquals("2026-11-01", r.get("data").get("period").get("startDate").asText());
+        assertEquals("2026-11-14", r.get("data").get("period").get("endDate").asText());
+        assertEquals("2026-10-01", r.get("data").get("previousPeriod").get("startDate").asText());
+        assertEquals("2026-10-14", r.get("data").get("previousPeriod").get("endDate").asText());
+        assertTrue(r.get("message").asText().contains("对比上月同期"), r.get("message").asText());
+    }
+
+    @Test
+    void ownTimeWordInTheSentenceKeepsThePeriod_negativeControl() throws Exception {
+        // 「本周成本和上月比」: 句子里有自己的时间词 (本周), 本期不被改回本月
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("本周成本和上月比"));
+        assertFalse(ReportCostQueryTool.hasOwnTimeWord("卤牛肉成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("10月卤牛肉成本比上月"));
+    }
+
+    // N4: 有一批缺产量时, 分项金额含它、产量不含它 -> 不能按单位成本比, 退回总额口径并明说
+    @Test
+    void riserFallsBackToTotals_whenABatchHasNoQuantity() throws Exception {
+        List<ProductionBatch> lastMonthSameDays = lastMonthSameDaysStub();
+        ProductionBatch noQty = batch("卤牛肉", "300", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false);
+        noQty.setActualQuantity(null);
+        thisMonth.add(batch("卤牛肉", "300", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(noQty);
+        lastMonthSameDays.add(batch("卤牛肉", "300", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
+        String msg = run("{\"compareTo\":\"last_month\"}").get("data").get("message").asText();
+        assertTrue(msg.contains("按总额比"), msg);
+        assertFalse(msg.contains("元/kg"), msg);
+    }
+
+    @Test
+    void riserSaysWhenTheProductMixDiffers() throws Exception {
+        List<ProductionBatch> lastMonthSameDays = lastMonthSameDaysStub();
+        thisMonth.add(batch("卤牛肉", "600", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("酱鸭", "100", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastMonthSameDays.add(batch("卤牛肉", "300", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
+        String msg = run("{\"compareTo\":\"last_month\"}").get("data").get("message").asText();
+        assertTrue(msg.contains("产品构成不同"), msg);
     }
 
     @Test

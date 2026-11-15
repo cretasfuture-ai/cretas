@@ -419,7 +419,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     private String catalogText(Map<String, Object> c) {
         if ("OK".equals(c.get("status"))) {
             return c.get("marginRate") + "%（目录价 " + moneyText(c.get("price")) + "，近 " + c.get("costBatchCount")
-                    + " 批（最近 " + c.get("costBatchNumber") + "）加权单位成本 " + moneyText(c.get("unitCost")) + "）";
+                    + " 批（最近 " + c.get("costBatchNumber") + "）加权单位成本（总成本 ÷ 实际产量）" + moneyText(c.get("unitCost")) + "）";
         }
         StringBuilder sb = new StringBuilder((String) c.get("reason"));
         if (c.get("price") != null) sb.append("（目录价 ").append(moneyText(c.get("price"))).append("）");

@@ -333,6 +333,21 @@ class ReadTurnParameterEntryContractTest {
         verify(h.costTool, times(2)).execute(any(), anyMap());
     }
 
+    // PR #1739 N3: 识别入口把用户原话交给工具 (预处理后的 userInput 里「上月」已被换成日期区间, 工具判环比要读原话)
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("成本查询: 工具拿到的参数里带用户原话 originalUserInput (和预处理后的 userInput 并存)")
+    void costToolReceivesTheOriginalSentence(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("本月卤牛肉成本和上月比", h.costQuery);
+        h.say("本月卤牛肉成本和上月比");
+        ArgumentCaptor<com.cretas.aims.ai.dto.ToolCall> call = ArgumentCaptor.forClass(com.cretas.aims.ai.dto.ToolCall.class);
+        verify(h.costTool).execute(call.capture(), anyMap());
+        // 工具的参数 = ToolCall.arguments (JSON)
+        assertThat(call.getValue().getFunction().getArguments())
+                .contains("\"originalUserInput\":\"本月卤牛肉成本和上月比\"");
+    }
+
     // ------------------------------------------------------------------ helpers
 
     @SuppressWarnings("unchecked")

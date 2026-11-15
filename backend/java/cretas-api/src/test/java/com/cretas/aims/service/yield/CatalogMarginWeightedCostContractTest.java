@@ -28,12 +28,17 @@ class CatalogMarginWeightedCostContractTest {
     }
 
     @Test
-    void goodQuantityBelowActual_weightedEqualsSumTotalOverSumGood() {
+    void goodQuantityBelowActual_weightedEqualsSumTotalOverSumActual_likeTheCostQueryTool() {
         // 批1: 总成本 100, 实际 100, 良品 50 (unitCost=2); 批2: 总成本 100, 实际 100, 无良品数 (unitCost=1)
-        // 正确口径 Σtotal/Σ分母 = 200/(50+100) = 1.3333; 旧口径 Σ(unitCost×actual)/Σactual = (200+100)/200 = 1.5
+        // 与成本查询工具同口径 Σtotal/Σ实际产量 = 200/200 = 1.0; 良品数口径 1.3333 和旧「单位成本×产量」口径 1.5 都不是
         BigDecimal w = ThreePriceComparisonService.weightedUnitCost(List.of(full("100", "100", "50"), full("100", "100", null)));
-        assertEquals(1.3333, w.doubleValue(), 0.0001);
+        assertEquals(1.0, w.doubleValue(), 0.0001);
         assertEquals(2, ThreePriceComparisonService.weightedCostBatchCount(List.of(full("100", "100", "50"), full("100", "100", null))));
+        // 近 5 批里 4 批没有产量: 只有 1 批参与加权, 「近 N 批」如实报 1, 不报 5
+        ProductionBatch noQty = new ProductionBatch();
+        noQty.setUnitCost(new BigDecimal("9"));
+        assertEquals(1, ThreePriceComparisonService.weightedCostBatchCount(
+                List.of(full("100", "100", null), noQty, noQty, noQty, noQty)));
     }
 
     @Test

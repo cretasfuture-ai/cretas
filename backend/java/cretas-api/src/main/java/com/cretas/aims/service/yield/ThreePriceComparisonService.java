@@ -129,7 +129,7 @@ public class ThreePriceComparisonService {
     public CatalogMargin catalogMarginFor(String factoryId, ProductType pt) {
         BigDecimal salesPrice = pt.getUnitPrice();
         // 理论毛利的成本不取「最近一批」(单批产量异常会把毛利带到 -101%, 2026-11-15 财务复跑 Q16),
-        // 取最近 CATALOG_COST_BATCHES 批已算单位成本的批次, 加权口径 Σ总成本 ÷ Σ(良品数, 缺则实际产量), 与单批 unitCost 同分母。
+        // 取最近 CATALOG_COST_BATCHES 批已算单位成本的批次, 加权口径 Σ总成本 ÷ Σ实际产量, 与成本查询工具同分母。
         List<ProductionBatch> recent = productionBatchRepository
                 .findRecentPricedBatches(factoryId, pt.getId(), PageRequest.of(0, CATALOG_COST_BATCHES));
         ProductionBatch latestPriced = recent == null || recent.isEmpty() ? null : recent.get(0);
@@ -150,12 +150,17 @@ public class ThreePriceComparisonService {
      */
     public static final int CATALOG_COST_BATCHES = 5;
 
-    /** 单批的单位成本分母: 与 ProductionBatch.calculateMetrics 同口径 — 良品数 > 0 取良品数, 否则取实际产量; 都没有 → null。 */
+    /**
+     * 单批的单位成本分母: 实际产量 (> 0); 没有实际产量才退到良品数; 都没有 → null。
+     * 与 ReportCostQueryTool 的单位成本同口径 (成本分析页: 总成本 ÷ 实际产量, 不用良品数), 让同一个产品在
+     * 「卤牛肉单位成本」和「卤牛肉理论毛利」两个问法里得到同一个单位成本。注意: 这和 ProductionBatch.unitCost
+     * (良品数优先) 不是同一个分母, 所以这里用 总成本 ÷ 分母 重算, 不用 unitCost × 产量。
+     */
     private static BigDecimal costDenominator(ProductionBatch b) {
-        BigDecimal good = b.getGoodQuantity();
-        if (good != null && good.signum() > 0) return good;
         BigDecimal actual = b.getActualQuantity();
-        return actual != null && actual.signum() > 0 ? actual : null;
+        if (actual != null && actual.signum() > 0) return actual;
+        BigDecimal good = b.getGoodQuantity();
+        return good != null && good.signum() > 0 ? good : null;
     }
 
     /** 单批的总成本: 优先用批次总成本; 缺则用 单位成本 × 分母 还原; 都没有 → null。 */
@@ -166,8 +171,8 @@ public class ThreePriceComparisonService {
     }
 
     /**
-     * 近 N 批单位成本 = Σ总成本 ÷ Σ分母 (分母同 ProductionBatch.unitCost: 良品数 > 0 取良品数, 否则取实际产量),
-     * 与单批 unitCost 的口径一致, 不再用 单位成本×产量 绕一圈。没有任何批次带产量时退回有单位成本批次的简单平均; 没有批次 → null。
+     * 近 N 批单位成本 = Σ总成本 ÷ Σ实际产量 (见 {@link #costDenominator}), 与成本查询工具同口径。
+     * 没有任何批次带产量时退回有单位成本批次的简单平均; 没有批次 → null。
      */
     static BigDecimal weightedUnitCost(List<ProductionBatch> batches) {
         if (batches == null || batches.isEmpty()) return null;
@@ -192,12 +197,18 @@ public class ThreePriceComparisonService {
                 : simpleSum.divide(BigDecimal.valueOf(simpleN), 4, RoundingMode.HALF_UP);
     }
 
-    /** 实际参与 {@link #weightedUnitCost} 的批次数 (有单位成本的批次; 全无产量时即简单平均的批数)。 */
+    /** 实际参与 {@link #weightedUnitCost} 的批次数: 有分母和总成本的批次; 一批都没有时才数简单平均用到的批次 (有单位成本的)。 */
     static int weightedCostBatchCount(List<ProductionBatch> batches) {
         if (batches == null) return 0;
-        int n = 0;
-        for (ProductionBatch b : batches) if (b.getUnitCost() != null) n++;
-        return n;
+        int weighted = 0;
+        int simple = 0;
+        for (ProductionBatch b : batches) {
+            if (b.getUnitCost() == null) continue;
+            simple++;
+            BigDecimal d = costDenominator(b);
+            if (d != null && batchTotalCost(b, d) != null) weighted++;
+        }
+        return weighted > 0 ? weighted : simple;
     }
 
     /** {@link #catalogMarginFor} 的结果; 毛利率为百分数 (42.5 = 42.5%), 任一价缺失 → null。actualCost = 近 costBatchCount 批的加权单位成本。 */

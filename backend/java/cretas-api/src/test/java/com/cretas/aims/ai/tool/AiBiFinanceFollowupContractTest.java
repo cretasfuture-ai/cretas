@@ -40,20 +40,34 @@ class AiBiFinanceFollowupContractTest {
         assertEquals(LocalDate.of(2027, 12, 31), year.getEnd().toLocalDate());
     }
 
-    // PR #1739 M6: 「年 + 月」规则不得把区间 / 以来 / 具体日期吞成单月
+    // PR #1739 M6/N1: 「年 + 月」规则不得把区间 / 以来 / 起 / 具体日期吞成单月 —— 精确区间断言 (assertEquals), 不是「不等于某值」
+    private void assertRange(String text, LocalDate start, LocalDate end) {
+        var res = rules.extractAndReplace(text, NOW);
+        assertEquals(1, res.getExtractedRanges().size(), text + " -> " + res.getExtractedRanges());
+        var r = res.getFirstRange().orElseThrow();
+        assertEquals(start, r.getStart().toLocalDate(), text + " 起");
+        assertEquals(end, r.getEnd().toLocalDate(), text + " 止");
+    }
+
     @Test
-    void yearPrefixedMonthRule_doesNotSwallowRangesSinceOrSpecificDays() {
-        var r1 = rules.extractAndReplace("今年3月到5月的成本", NOW).getFirstRange().orElseThrow();
-        assertEquals(LocalDate.of(2026, 12, 31), r1.getEnd().toLocalDate());   // 不再只剩 3 月 (落整年, 偏宽但不丢数据)
-        var r2 = rules.extractAndReplace("今年3月以来的成本", NOW).getFirstRange().orElseThrow();
-        assertEquals(LocalDate.of(2026, 12, 31), r2.getEnd().toLocalDate());
-        var r3 = rules.extractAndReplace("今年10月1日的成本", NOW).getFirstRange().orElseThrow();
-        assertNotEquals(LocalDate.of(2026, 10, 31), r3.getEnd().toLocalDate());
-        var r4 = rules.extractAndReplace("去年12月到今年2月的成本", NOW).getFirstRange().orElseThrow();
-        assertNotEquals(LocalDate.of(2025, 12, 31), r4.getEnd().toLocalDate());
+    void yearPrefixedMonthRanges_areRecognisedAsAWholeRange() {
+        LocalDate marStart = LocalDate.of(2026, 3, 1);
+        assertRange("今年3月到5月的成本", marStart, LocalDate.of(2026, 5, 31));
+        assertRange("今年3月份到5月份的成本", marStart, LocalDate.of(2026, 5, 31));
+        assertRange("今年三月份到五月份的成本", marStart, LocalDate.of(2026, 5, 31));
+        assertRange("去年12月到今年2月的成本", LocalDate.of(2025, 12, 1), LocalDate.of(2026, 2, 28));
+        assertRange("今年3月份以来的成本", marStart, NOW.toLocalDate());
+        assertRange("今年3月起的成本", marStart, NOW.toLocalDate());
+        assertRange("今年3月开始的成本", marStart, NOW.toLocalDate());
+    }
+
+    @Test
+    void yearPrefixedMonthWithADayIsNotASingleMonth_andPlainSingleMonthsStillWork() {
+        // 「今年10月1日」: 不是单月, 落整年 (偏宽但不丢数据)
+        assertRange("今年10月1日的成本", LocalDate.of(2026, 1, 1), LocalDate.of(2026, 12, 31));
         // 阴性对照: 单月照常
-        var ok = rules.extractAndReplace("今年3月份的成本", NOW).getFirstRange().orElseThrow();
-        assertEquals(LocalDate.of(2026, 3, 31), ok.getEnd().toLocalDate());
+        assertRange("今年3月份的成本", LocalDate.of(2026, 3, 1), LocalDate.of(2026, 3, 31));
+        assertRange("去年2月成本", LocalDate.of(2025, 2, 1), LocalDate.of(2025, 2, 28));
     }
 
     // ---- 3. 竞品拒答 ----
@@ -126,5 +140,7 @@ class AiBiFinanceFollowupContractTest {
         Map<String, String> phrases = kb.getPhraseToIntentMapping();
         assertEquals("REPORT_COST_VARIANCE", phrases.get("实际成本和标准成本差多少"));
         assertEquals("COST_QUERY", phrases.get("和上月比哪个成本涨了"));
+        // 短语是向量相似匹配, 优先级无法静态断言; 能守的是「不收太宽的短语」: 没有「上月」限定的「哪个成本涨了」不进 COST_QUERY
+        assertNull(phrases.get("哪个成本涨了"));
     }
 }
