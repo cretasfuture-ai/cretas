@@ -26,7 +26,11 @@ import {
   rejectRequisition,
   convertToPO,
   deleteRequisition,
+  reopenRequisition,
+  updateRequisition,
+  getApprovalHistory,
   REQUISITION_STATUS_MAP,
+  type RequisitionApprovalRecord,
   type PurchaseRequisition,
   type PurchaseRequisitionStatus,
 } from '@/api/purchaseRequisition';
@@ -70,6 +74,27 @@ const canDelete = computed(
     currentUserId.value !== null &&
     requisition.value?.requesterId === currentUserId.value,
 );
+
+// 2026-11-15: 驳回后请购人可重开回草稿、改数量再提交; 每轮审批历史保留。
+const isMine = computed(
+  () =>
+    currentUserId.value !== null &&
+    requisition.value?.requesterId === currentUserId.value,
+);
+const canReopen = computed(
+  () => canManageOwnDraft.value && isMine.value && requisition.value?.status === 'REJECTED',
+);
+const canEditDraft = computed(
+  () => canManageOwnDraft.value && isMine.value && requisition.value?.status === 'DRAFT',
+);
+const approvalHistory = ref<RequisitionApprovalRecord[]>([]);
+const editQuantities = ref<Record<number, number>>({});
+const ACTION_TEXT: Record<RequisitionApprovalRecord['action'], string> = {
+  SUBMITTED: '提交审批',
+  APPROVED: '审批通过',
+  REJECTED: '驳回',
+  REOPENED: '驳回后重开',
+};
 
 interface Supplier {
   id: string;
@@ -146,6 +171,7 @@ async function loadRequisition() {
     const res = await getRequisition(factoryId.value, requisitionId.value);
     if (res?.success && res.data) {
       requisition.value = res.data;
+      void loadApprovalHistory(); // 提交/审批/驳回/重开后每次重载都刷新审批历史
       // Pre-fill convert dialog supplier from first item's suggestedSupplierId
       const firstItem = res.data.requestedItems?.[0];
       const suggested =
@@ -176,6 +202,74 @@ async function loadRequisition() {
   }
 }
 
+async function loadApprovalHistory() {
+  if (!factoryId.value || !requisitionId.value) return;
+  try {
+    const res = await getApprovalHistory(factoryId.value, requisitionId.value);
+    approvalHistory.value = res?.success && Array.isArray(res.data) ? res.data : [];
+  } catch {
+    // interceptor handles; 历史拉不到不遮盖主单
+    approvalHistory.value = [];
+  }
+}
+
+async function handleReopen() {
+  if (!requisition.value || submitting.value) return;
+  const r = requisition.value;
+  try {
+    await ElMessageBox.confirm(
+      `重开被驳回的 ${r.requisitionNumber}?\n\n重开后变为草稿, 可修改数量后再次提交; 之前每一轮的提交和驳回记录都会保留。`,
+      '驳回后重开',
+      { type: 'warning', confirmButtonText: '重开', cancelButtonText: '取消' },
+    );
+  } catch {
+    return;
+  }
+  submitting.value = true;
+  try {
+    const res = await reopenRequisition(factoryId.value, r.id);
+    if (res?.success) {
+      ElMessage.success('已重开为草稿, 可修改后重新提交');
+      await loadRequisition();
+    }
+  } catch (e) {
+    if (e !== 'cancel') console.error('[重开失败]', e);
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function handleSaveEdits() {
+  if (!requisition.value || submitting.value) return;
+  const r = requisition.value;
+  const items = (r.requestedItems || []).map((it, idx) => ({
+    ...it,
+    quantity: editQuantities.value[idx] ?? it.quantity,
+  }));
+  if (items.some((it) => !(Number(it.quantity) > 0))) {
+    ElMessage.warning('数量必须大于 0');
+    return;
+  }
+  submitting.value = true;
+  try {
+    const res = await updateRequisition(factoryId.value, r.id, {
+      requestedItems: items,
+      expectedDate: r.expectedDate ?? null,
+      reason: r.reason ?? null,
+      remark: r.remark ?? null,
+    });
+    if (res?.success) {
+      ElMessage.success('已保存修改');
+      editQuantities.value = {};
+      await loadRequisition();
+    }
+  } catch (e) {
+    if (e !== 'cancel') console.error('[保存失败]', e);
+  } finally {
+    submitting.value = false;
+  }
+}
+
 async function loadSuppliers() {
   if (!factoryId.value) return;
   try {
@@ -190,7 +284,11 @@ async function loadSuppliers() {
 }
 
 onMounted(async () => {
-  await Promise.all([loadRequisition(), loadSuppliers(), loadUserDirectory(factoryId.value)]);
+  await Promise.all([
+    loadRequisition(),
+    loadSuppliers(),
+    loadUserDirectory(factoryId.value),
+  ]);
 });
 
 const lineCount = computed(() =>
@@ -405,6 +503,24 @@ function goBack() {
               {{ submitButtonText }}
             </el-button>
             <el-button
+              v-if="canReopen"
+              type="warning"
+              :loading="submitting"
+              @click="handleReopen"
+            >
+              重开并修改
+            </el-button>
+            <el-button
+              v-if="canEditDraft"
+              type="primary"
+              plain
+              :loading="submitting"
+              :disabled="Object.keys(editQuantities).length === 0"
+              @click="handleSaveEdits"
+            >
+              保存数量修改
+            </el-button>
+            <el-button
               v-if="canDelete"
               type="danger"
               :loading="submitting"
@@ -513,7 +629,19 @@ function goBack() {
             </template>
           </el-table-column>
           <el-table-column label="数量" width="120" align="right">
-            <template #default="{ row }">{{ row.quantity ?? '-' }}</template>
+            <template #default="{ row, $index }">
+              <el-input-number
+                v-if="canEditDraft"
+                v-model="editQuantities[$index]"
+                :min="0.001"
+                :precision="3"
+                size="small"
+                controls-position="right"
+                :placeholder="String(row.quantity ?? '')"
+                style="width: 110px"
+              />
+              <template v-else>{{ row.quantity ?? '-' }}</template>
+            </template>
           </el-table-column>
           <el-table-column label="单位" width="80" align="center">
             <template #default="{ row }">{{ row.unit || '-' }}</template>
@@ -529,6 +657,31 @@ function goBack() {
             <template #default="{ row }">{{ row.remark || '-' }}</template>
           </el-table-column>
         </el-table>
+
+        <template v-if="approvalHistory.length">
+          <el-divider>审批历史 (共 {{ Math.max(...approvalHistory.map((h) => h.round)) }} 轮)</el-divider>
+          <el-table :data="approvalHistory" stripe border style="width: 100%">
+            <el-table-column prop="round" label="第几轮" width="80" align="center" />
+            <el-table-column label="动作" width="120">
+              <template #default="{ row }">{{ ACTION_TEXT[row.action as RequisitionApprovalRecord['action']] || row.action }}</template>
+            </el-table-column>
+            <el-table-column label="操作人" width="140">
+              <template #default="{ row }">{{ personLabel(row.actorId) }}</template>
+            </el-table-column>
+            <el-table-column label="时间" width="170">
+              <template #default="{ row }">{{ String(row.actedAt).replace('T', ' ').slice(0, 19) }}</template>
+            </el-table-column>
+            <el-table-column label="驳回原因 / 当轮提交内容" min-width="260">
+              <template #default="{ row }">
+                <span v-if="row.reason" style="color: #f56c6c">{{ row.reason }}</span>
+                <span v-else-if="row.itemsSnapshot">
+                  {{ row.itemsSnapshot.map((it: { materialName?: string; materialTypeId?: string; quantity?: number; unit?: string }) => `${it.materialName || it.materialTypeId} ${it.quantity}${it.unit || ''}`).join('；') }}
+                </span>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
       </template>
     </el-card>
 

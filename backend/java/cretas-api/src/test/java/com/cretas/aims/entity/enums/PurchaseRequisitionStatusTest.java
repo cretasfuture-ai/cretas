@@ -44,13 +44,21 @@ class PurchaseRequisitionStatusTest {
     }
 
     @Test
-    @DisplayName("CONVERTED_TO_PO / REJECTED 是终态")
+    @DisplayName("CONVERTED_TO_PO 是终态")
     void terminalStates() {
         for (PurchaseRequisitionStatus target : PurchaseRequisitionStatus.values()) {
             assertFalse(PurchaseRequisitionStatus.CONVERTED_TO_PO.canTransitionTo(target),
                     "CONVERTED_TO_PO 应是终态, 不可 → " + target);
-            assertFalse(PurchaseRequisitionStatus.REJECTED.canTransitionTo(target),
-                    "REJECTED 应是终态, 不可 → " + target);
+        }
+    }
+
+    @Test
+    @DisplayName("REJECTED 不再是终态 (2026-11-15 Steve 裁决): 只能重开回 DRAFT, 不能直达其它状态")
+    void rejectedCanOnlyReopenToDraft() {
+        for (PurchaseRequisitionStatus target : PurchaseRequisitionStatus.values()) {
+            assertEquals(target == PurchaseRequisitionStatus.DRAFT,
+                    PurchaseRequisitionStatus.REJECTED.canTransitionTo(target),
+                    "REJECTED → " + target);
         }
     }
 }

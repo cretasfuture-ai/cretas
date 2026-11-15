@@ -123,6 +123,41 @@ public class PurchaseRequisitionController {
                 requisitionService.rejectRequisition(factoryId, id, approverId, reason));
     }
 
+    @PostMapping("/{id}/reopen")
+    @Operation(summary = "驳回后重开 (REJECTED → DRAFT, 仅请购人)",
+            description = "重开后可 PUT 修改行项目再 submit; 每轮审批留痕见 approval-history")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<PurchaseRequisition> reopen(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id,
+            @RequestHeader("Authorization") String authorization) {
+        Long userId = extractUserId(authorization);
+        return ApiResponse.success("已重开为草稿",
+                requisitionService.reopenRequisition(factoryId, id, userId));
+    }
+
+    @PutMapping("/{id}")
+    @Operation(summary = "修改请购单草稿 (仅 DRAFT, 仅请购人)")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<PurchaseRequisition> updateDraft(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id,
+            @RequestHeader("Authorization") String authorization,
+            @Valid @RequestBody CreatePurchaseRequisitionRequest request) {
+        Long userId = extractUserId(authorization);
+        return ApiResponse.success("请购单已修改",
+                requisitionService.updateDraft(factoryId, id, userId, request));
+    }
+
+    @GetMapping("/{id}/approval-history")
+    @Operation(summary = "审批历史 (每轮提交/通过/驳回/重开, 按发生顺序)")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<java.util.List<com.cretas.aims.entity.inventory.PurchaseRequisitionApprovalRecord>> approvalHistory(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id) {
+        return ApiResponse.success("查询成功", requisitionService.getApprovalHistory(factoryId, id));
+    }
+
     @PostMapping("/{id}/convert-to-po")
     @Operation(summary = "转 PO (APPROVED → CONVERTED_TO_PO)",
             description = "幂等: 重复 invoke 返回已转的 PO 不再创建")
