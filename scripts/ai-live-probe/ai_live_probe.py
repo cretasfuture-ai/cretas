@@ -383,7 +383,8 @@ def run_case(http: Http, token: str, case: Dict[str, Any], entry: str) -> Dict[s
         status = LIFTED if pending else PASS
     return {"type": "case", "case": case["id"], "title": case.get("title"), "entry": entry,
             "result": status, "pending_reason": pending, "problems": problems or None,
-            "final_intent": turns[-1]["intent"] if turns else None, "turns": turns}
+            "final_intent": turns[-1]["intent"] if turns else None,
+            "final_status": turns[-1]["status"] if turns else None, "turns": turns}
 
 
 # ───────────────────────────── 写入真跑 ─────────────────────────────
@@ -691,6 +692,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 emit({"type": "case", "case": case["id"] + "#same_intent", "entry": "execute=stream",
                       "result": PASS if ok else FAIL, "intents": intents,
                       "problems": None if ok else [f"两个入口意图不一致: {intents}"]})
+            if case.get("same_status_across_entries") and len(per_entry) == 2:
+                # PR-2b: /execute 改走流式管线后, 同一句话两个入口的最终状态必须相同 (「怎么降低成本？」曾 COMPLETED ≠ NEED_CLARIFICATION)
+                statuses = {e: r["final_status"] for e, r in per_entry.items()}
+                ok = len(set(statuses.values())) == 1 and None not in statuses.values()
+                emit({"type": "case", "case": case["id"] + "#same_status", "entry": "execute=stream",
+                      "result": PASS if ok else FAIL, "statuses": statuses,
+                      "problems": None if ok else [f"两个入口状态不一致: {statuses}"]})
 
         if not args.no_write:
             wuser, wpwd, wsrc = resolve_write_creds(args.env_file)
