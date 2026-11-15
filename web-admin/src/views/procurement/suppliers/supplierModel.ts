@@ -121,3 +121,20 @@ export function supplierStatus(record: Pick<SupplierRecord, 'status' | 'isActive
 export function supplierStatusLabel(record: Pick<SupplierRecord, 'status' | 'isActive'>): string {
   return supplierStatus(record) === 'ACTIVE' ? '合作中' : '暂停合作';
 }
+
+/** Nuxt UI `UForm :validate` 用：与 supplierFormRules 同一组判据与文案（新建弹窗不再经过 Element 表单）。 */
+export function validateSupplierForm(state: Partial<SupplierSavePayload>): Array<{ name: string; message: string }> {
+  const errors: Array<{ name: string; message: string }> = [];
+  if (!normalizeText(state.name)) errors.push({ name: 'name', message: '请输入供应商名称' });
+  if (normalizeText(state.shortName).length > SUPPLIER_SHORT_NAME_MAX_LENGTH) {
+    errors.push({ name: 'shortName', message: `简称不超过 ${SUPPLIER_SHORT_NAME_MAX_LENGTH} 字` });
+  }
+  if (!normalizeText(state.contactPerson)) errors.push({ name: 'contactPerson', message: '请输入联系人' });
+  if (!normalizeText(state.phone)) errors.push({ name: 'phone', message: '请输入联系电话' });
+  else if (!isValidSupplierPhone(state.phone)) errors.push({ name: 'phone', message: '请输入大陆手机号或带区号座机，可带分机' });
+  if (!normalizeText(state.address)) errors.push({ name: 'address', message: '请输入地址' });
+  else if (!isReadableSupplierAddress(state.address)) {
+    errors.push({ name: 'address', message: `请输入可识别的地址（不超过 ${SUPPLIER_ADDRESS_MAX_LENGTH} 字）` });
+  }
+  return errors;
+}
