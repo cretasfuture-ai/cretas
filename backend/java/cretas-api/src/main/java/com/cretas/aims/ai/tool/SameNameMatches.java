@@ -1,5 +1,6 @@
 package com.cretas.aims.ai.tool;
 
+import com.cretas.aims.service.entity.FactoryEntityResolver;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -57,6 +58,26 @@ public final class SameNameMatches {
         marker.put("listed", rows);
         result.put(KEY, marker);
         return result;
+    }
+
+    /**
+     * 同名列表里要列的那几个 (前 {@link #LIST_LIMIT} 个)。命中本身只来自 {@link FactoryEntityResolver}
+     * (本厂主数据规范化后精确匹配) —— 工具 ⛔ 不自己按名字搜。
+     */
+    public static List<FactoryEntityResolver.Candidate> listedCandidates(FactoryEntityResolver.Resolution resolution) {
+        List<FactoryEntityResolver.Candidate> all = resolution.matches();
+        return all.subList(0, Math.min(LIST_LIMIT, all.size()));
+    }
+
+    /** 解析出的一个对象 -> 同名列表的一行 (区分字段用解析器拼好的那份)。 */
+    public static Match matchOf(FactoryEntityResolver.Candidate candidate, String summary) {
+        return new Match(candidate.id(), candidate.name(), candidate.distinguishing(), summary);
+    }
+
+    /** 按解析结果记标记: 总数 = 本厂全部命中数, 名字 = 用户说的。 */
+    public static Map<String, Object> annotate(Map<String, Object> result, String kind,
+                                               FactoryEntityResolver.Resolution resolution, List<Match> listed) {
+        return annotate(result, kind, resolution.query(), resolution.matches().size(), listed);
     }
 
     /** 回复文本: 0 个或 ≥2 个命中时给出; 恰好 1 个 (或没有标记) 时 null, 走原来的格式化。 */
