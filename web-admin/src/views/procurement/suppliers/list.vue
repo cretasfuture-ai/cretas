@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage, ElMessageBox, type FormInstance } from 'element-plus';
-import { Download, MoreFilled, Plus, Refresh, Search, Upload } from '@element-plus/icons-vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
@@ -18,7 +18,7 @@ import SupplierDetailDrawer from './SupplierDetailDrawer.vue';
 import SupplierImportDialog from './SupplierImportDialog.vue';
 import {
   normalizeSupplierPayload,
-  supplierFormRules,
+  validateSupplierForm,
   supplierProfileComplete,
   supplierStatus,
   supplierStatusLabel,
@@ -41,10 +41,37 @@ const detailInitialTab = ref('profile');
 const importVisible = ref(false);
 const createVisible = ref(false);
 const creating = ref(false);
-const createFormRef = ref<FormInstance>();
+const createFormRef = ref<{ submit: () => Promise<void> } | null>(null);
 const createForm = reactive<SupplierSavePayload>({
   name: '', shortName: '', contactPerson: '', phone: '', address: '', email: '', bankAccount: '', taxNumber: '', notes: '',
 });
+
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const statusItems = [
+  { label: '全部状态', value: 'ALL' },
+  { label: '合作中', value: 'ACTIVE' },
+  { label: '暂停合作', value: 'INACTIVE' },
+];
+const statusSelect = computed({
+  get: () => filterStatus.value || 'ALL',
+  set: (v: string) => { filterStatus.value = v === 'ALL' ? '' : (v as 'ACTIVE' | 'INACTIVE'); },
+});
+const sizeItems = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, value: n }));
+const columns: TableColumn<SupplierRecord>[] = [
+  { id: 'code', header: '供应商编号' },
+  { id: 'name', header: '供应商名称' },
+  { id: 'contact', header: '联系人' },
+  { id: 'phone', header: '联系电话' },
+  { id: 'address', header: '地址' },
+  { id: 'status', header: '状态' },
+  { id: 'actions', header: '操作' },
+];
+function rowMenu(supplier: SupplierRecord) {
+  return [[
+    { label: '供应原料', onSelect: () => handleRowCommand('materials', supplier) },
+    { label: supplierStatus(supplier) === 'ACTIVE' ? '暂停合作' : '恢复合作', onSelect: () => handleRowCommand('status', supplier) },
+  ]];
+}
 
 const filteredData = computed(() => allData.value.filter((supplier) => {
   if (filterStatus.value && supplierStatus(supplier) !== filterStatus.value) return false;
@@ -105,8 +132,7 @@ function openCreate(): void {
 }
 
 async function submitCreate(): Promise<void> {
-  if (!createFormRef.value) return;
-  await createFormRef.value.validate();
+  // 校验由 UForm 的 validate（validateSupplierForm）在 @submit 之前完成
   creating.value = true;
   try {
     const created = await createSupplier(factoryId.value, normalizeSupplierPayload(createForm));
@@ -161,118 +187,88 @@ async function handleDownloadTemplate(): Promise<void> {
       other="向我们采购的下游买家，用于销售订单 / 应收账款"
       other-path="/sales/customers"
     />
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">供应商管理</span>
-            <span class="data-count">共 {{ filteredData.length }} 条记录</span>
-          </div>
-          <div v-if="canWrite" class="header-right">
-            <el-button :icon="Download" @click="handleDownloadTemplate">下载标准模板</el-button>
-            <el-button :icon="Upload" @click="importVisible = true">导入供应商</el-button>
-            <el-button type="primary" :icon="Plus" @click="openCreate">新增供应商</el-button>
-          </div>
-        </div>
-      </template>
 
-      <div class="search-bar">
-        <el-input
+    <div class="cs-page-head">
+      <div>
+        <h2>供应商管理</h2>
+        <p>共 {{ filteredData.length }} 条记录</p>
+      </div>
+      <div v-if="canWrite" class="head-actions">
+        <UButton icon="i-lucide-download" color="neutral" variant="outline" @click="handleDownloadTemplate">下载标准模板</UButton>
+        <UButton icon="i-lucide-upload" color="neutral" variant="outline" @click="importVisible = true">导入供应商</UButton>
+        <UButton icon="i-lucide-plus" @click="openCreate">新增供应商</UButton>
+      </div>
+    </div>
+
+    <section class="cs-card">
+      <div class="cs-card-head">
+        <UInput
           v-model="searchKeyword"
+          icon="i-lucide-search"
           placeholder="搜索供应商名称/简称/编号/联系人"
-          :prefix-icon="Search"
-          clearable
+          class="w-80"
           @keyup.enter="pagination.page = 1"
         />
-        <el-select v-model="filterStatus" placeholder="全部状态" clearable @change="pagination.page = 1">
-          <el-option label="合作中" value="ACTIVE" />
-          <el-option label="暂停合作" value="INACTIVE" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="pagination.page = 1">搜索</el-button>
-        <el-button :icon="Refresh" @click="resetFilters">重置</el-button>
+        <USelect v-model="statusSelect" :items="statusItems" class="w-40" @update:model-value="pagination.page = 1" />
+        <UButton icon="i-lucide-search" @click="pagination.page = 1">搜索</UButton>
+        <UButton icon="i-lucide-rotate-ccw" color="neutral" variant="outline" @click="resetFilters">重置</UButton>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" stripe border class="supplier-table">
-        <el-table-column prop="supplierCode" label="供应商编号" width="150">
-          <template #default="{ row }">{{ row.supplierCode || row.code || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="供应商名称" min-width="220" show-overflow-tooltip>
-          <template #default="{ row }">
-            <el-tag v-if="row.shortName" type="primary" size="small" effect="plain" class="short-name-tag">
-              {{ row.shortName }}
-            </el-tag>
-            <span>{{ row.name }}</span>
-            <el-tag v-if="!supplierProfileComplete(row)" type="warning" size="small" effect="plain" class="incomplete-tag">
-              资料不完整
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="联系人" width="130">
-          <template #default="{ row }">{{ row.contactPerson || '资料不完整' }}</template>
-        </el-table-column>
-        <el-table-column label="联系电话" width="160">
-          <template #default="{ row }">{{ row.phone || row.contactPhone || '资料不完整' }}</template>
-        </el-table-column>
-        <el-table-column label="地址" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.address || '资料不完整' }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="110" align="center">
-          <template #default="{ row }">
-            <el-tag :type="supplierStatus(row) === 'ACTIVE' ? 'success' : 'info'" size="small">
-              {{ supplierStatusLabel(row) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link @click="openDetail(row)">详情</el-button>
-            <el-dropdown v-if="canWrite" trigger="click" @command="handleRowCommand($event, row)">
-              <el-button link :icon="MoreFilled">更多</el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item command="materials">供应原料</el-dropdown-item>
-                  <el-dropdown-item command="status" :divided="true">
-                    {{ supplierStatus(row) === 'ACTIVE' ? '暂停合作' : '恢复合作' }}
-                  </el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
-        </el-table-column>
-      </el-table>
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty>暂无供应商</template>
+        <template #code-cell="{ row }">{{ row.original.supplierCode || row.original.code || '-' }}</template>
+        <template #name-cell="{ row }">
+          <div class="name-cell">
+            <UBadge v-if="row.original.shortName" color="primary" variant="outline">{{ row.original.shortName }}</UBadge>
+            <span :title="row.original.name">{{ row.original.name }}</span>
+            <UBadge v-if="!supplierProfileComplete(row.original)" color="warning" variant="outline">资料不完整</UBadge>
+          </div>
+        </template>
+        <template #contact-cell="{ row }">{{ row.original.contactPerson || '资料不完整' }}</template>
+        <template #phone-cell="{ row }">{{ row.original.phone || row.original.contactPhone || '资料不完整' }}</template>
+        <template #address-cell="{ row }"><span :title="row.original.address || ''">{{ row.original.address || '资料不完整' }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="supplierStatus(row.original) === 'ACTIVE' ? 'success' : 'neutral'" variant="soft">{{ supplierStatusLabel(row.original) }}</UBadge>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="openDetail(row.original)">详情</UButton>
+            <UDropdownMenu v-if="canWrite" :items="rowMenu(row.original)">
+              <UButton size="xs" variant="link" color="neutral" icon="i-lucide-ellipsis">更多</UButton>
+            </UDropdownMenu>
+          </div>
+        </template>
+      </UTable>
 
       <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="filteredData.length"
-          layout="total, sizes, prev, pager, next, jumper"
-        />
+        <span class="total">共 {{ filteredData.length }} 条</span>
+        <USelect v-model="pagination.size" :items="sizeItems" class="w-28" @update:model-value="pagination.page = 1" />
+        <UPagination v-model:page="pagination.page" :items-per-page="pagination.size" :total="filteredData.length" show-edges :sibling-count="1" />
       </div>
-    </el-card>
+    </section>
 
-    <el-dialog v-model="createVisible" title="新增供应商" width="620px" destroy-on-close :close-on-click-modal="false">
-      <el-alert title="供应商名称、联系人、联系电话和地址为必填项" type="info" :closable="false" show-icon />
-      <el-form ref="createFormRef" :model="createForm" :rules="supplierFormRules" label-width="110px" class="create-form">
-        <el-form-item label="供应商名称" prop="name"><el-input v-model="createForm.name" maxlength="200" /></el-form-item>
-        <el-form-item label="简称" prop="shortName">
-          <el-input v-model="createForm.shortName" maxlength="50" show-word-limit placeholder="选填，下拉里优先显示，例如「飞熊」" />
-          <div class="field-hint">留空时下拉显示全称。同一工厂内简称不能重复。</div>
-        </el-form-item>
-        <el-form-item label="联系人" prop="contactPerson"><el-input v-model="createForm.contactPerson" maxlength="100" /></el-form-item>
-        <el-form-item label="联系电话" prop="phone"><el-input v-model="createForm.phone" placeholder="大陆手机号或带区号座机，可含分机" maxlength="40" /></el-form-item>
-        <el-form-item label="地址" prop="address"><el-input v-model="createForm.address" type="textarea" maxlength="500" show-word-limit /></el-form-item>
-        <el-form-item label="邮箱"><el-input v-model="createForm.email" maxlength="100" /></el-form-item>
-        <el-form-item label="银行账户"><el-input v-model="createForm.bankAccount" maxlength="100" /></el-form-item>
-        <el-form-item label="税号"><el-input v-model="createForm.taxNumber" maxlength="50" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="createForm.notes" type="textarea" maxlength="5000" /></el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="submitCreate">创建</el-button>
+    <UModal v-model:open="createVisible" title="新增供应商" description="新增供应商资料" :dismissible="false" :ui="{ content: 'max-w-[620px]', description: 'sr-only' }">
+      <template #body>
+        <UAlert color="info" variant="subtle" icon="i-lucide-info" class="mb-4" title="供应商名称、联系人、联系电话和地址为必填项" />
+        <UForm ref="createFormRef" :state="createForm" :validate="validateSupplierForm" class="create-form" @submit="submitCreate">
+          <UFormField label="供应商名称" name="name" required><UInput v-model="createForm.name" :maxlength="200" class="w-full" /></UFormField>
+          <UFormField label="简称" name="shortName" help="留空时下拉显示全称。同一工厂内简称不能重复。">
+            <UInput v-model="createForm.shortName" :maxlength="50" placeholder="选填，下拉里优先显示，例如「飞熊」" class="w-full" />
+          </UFormField>
+          <UFormField label="联系人" name="contactPerson" required><UInput v-model="createForm.contactPerson" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField label="联系电话" name="phone" required><UInput v-model="createForm.phone" placeholder="大陆手机号或带区号座机，可含分机" :maxlength="40" class="w-full" /></UFormField>
+          <UFormField label="地址" name="address" required><UTextarea v-model="createForm.address" :maxlength="500" :rows="2" class="w-full" /></UFormField>
+          <UFormField label="邮箱" name="email"><UInput v-model="createForm.email" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField label="银行账户" name="bankAccount"><UInput v-model="createForm.bankAccount" :maxlength="100" class="w-full" /></UFormField>
+          <UFormField label="税号" name="taxNumber"><UInput v-model="createForm.taxNumber" :maxlength="50" class="w-full" /></UFormField>
+          <UFormField label="备注" name="notes"><UTextarea v-model="createForm.notes" :maxlength="5000" :rows="2" class="w-full" /></UFormField>
+        </UForm>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="createVisible = false">取消</UButton>
+        <UButton :loading="creating" @click="createFormRef?.submit()">创建</UButton>
+      </template>
+    </UModal>
 
     <SupplierImportDialog v-model="importVisible" :factory-id="factoryId" @imported="loadData" />
     <SupplierDetailDrawer
@@ -286,24 +282,12 @@ async function handleDownloadTemplate(): Promise<void> {
   </div>
 </template>
 
-<style scoped lang="scss">
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; border-radius: 10px; }
-.card-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.header-left, .header-right, .search-bar { display: flex; align-items: center; gap: 8px; }
-.page-title { font-size: 16px; font-weight: 600; color: var(--el-text-color-primary); }
-.data-count { color: var(--el-text-color-secondary); font-size: 13px; }
-.search-bar { margin-bottom: 16px; flex-wrap: wrap; }
-.search-bar .el-input { width: 300px; }
-.search-bar .el-select { width: 150px; }
-.supplier-table { width: 100%; }
-.incomplete-tag { margin-left: 8px; }
-.short-name-tag { margin-right: 8px; }
-.field-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; }
-.create-form { margin-top: 16px; }
-@media (max-width: 1100px) {
-  .card-header { align-items: flex-start; flex-direction: column; }
-  .header-right { width: 100%; flex-wrap: wrap; }
-}
+<style scoped>
+.page-wrapper { padding: var(--cs-space-4); }
+.head-actions { display: flex; gap: var(--cs-space-2); align-items: center; flex-wrap: wrap; }
+.row-actions { display: flex; gap: var(--cs-space-1); align-items: center; }
+.name-cell { display: flex; align-items: center; gap: var(--cs-space-2); min-width: 0; }
+.create-form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>

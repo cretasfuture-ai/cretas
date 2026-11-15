@@ -12,7 +12,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { parseDraftInquiryPrefill } from './draftInquiryPrefill';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
-import { Refresh, Plus } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import {
   listInquiries,
   createInquiry,
@@ -57,6 +58,19 @@ const STATUS_TAG: Record<InquiryQuoteStatus, { type: 'info' | 'warning' | 'prima
   CONVERTED: { type: 'success', label: '已转采购' },
   CANCELLED: { type: 'info', label: '已取消' },
 };
+
+const columns: TableColumn<InquiryQuote>[] = [
+  { id: 'inquiryNumber', header: '核价单号' },
+  { id: 'material', header: '物料' },
+  { id: 'quantity', header: '数量', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'inquiryDate', header: '询价日期' },
+  { id: 'requiredDate', header: '期望到货' },
+  { id: 'supplier', header: '中标供应商' },
+  { id: 'price', header: '中标价', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'status', header: '状态' },
+  { id: 'po', header: '采购单' },
+  { id: 'actions', header: '操作' },
+];
 
 async function load() {
   if (!factoryId.value) {
@@ -184,163 +198,102 @@ onMounted(() => {
 
 <template>
   <div class="inquiry-quote-list">
-    <div class="page-header">
+    <div class="cs-page-head">
       <div>
-        <h2 class="title">核价单</h2>
-        <p class="subtitle">询价 → 核价 → 采购 三阶段 pipeline (P-NUCLEAR-1)</p>
+        <h2>核价单</h2>
+        <p>询价 → 核价 → 采购 三阶段 pipeline (P-NUCLEAR-1)</p>
       </div>
-      <div class="actions">
-        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openCreate">新建核价单</el-button>
+      <div class="head-actions">
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="load">刷新</UButton>
+        <UButton icon="i-lucide-plus" @click="openCreate">新建核价单</UButton>
       </div>
     </div>
 
-    <el-table
-      v-loading="loading"
-      :data="rows"
-      stripe
-      style="width: 100%"
-      empty-text="暂无核价单"
-      @row-click="goDetail"
-    >
-      <el-table-column prop="inquiryNumber" label="核价单号" min-width="180" />
-      <el-table-column prop="materialName" label="物料" min-width="160">
-        <template #default="{ row }">
-          {{ row.materialName || row.materialTypeId }}
-          <span v-if="row.specification" class="spec">({{ row.specification }})</span>
+    <section class="cs-card">
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table cs-clickable" @select="(_e: unknown, row: { original: InquiryQuote }) => goDetail(row.original)">
+        <template #empty>暂无核价单</template>
+        <template #inquiryNumber-cell="{ row }">{{ row.original.inquiryNumber }}</template>
+        <template #material-cell="{ row }">
+          {{ row.original.materialName || row.original.materialTypeId }}
+          <span v-if="row.original.specification" class="spec">({{ row.original.specification }})</span>
         </template>
-      </el-table-column>
-      <el-table-column prop="quantity" label="数量" min-width="100" align="right">
-        <template #default="{ row }">{{ row.quantity }} {{ row.unit }}</template>
-      </el-table-column>
-      <el-table-column prop="inquiryDate" label="询价日期" min-width="120" />
-      <el-table-column prop="requiredDate" label="期望到货" min-width="120">
-        <template #default="{ row }">{{ row.requiredDate || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="中标供应商" min-width="160">
-        <template #default="{ row }">
-          {{ row.selectedSupplierName || row.selectedSupplierId || '-' }}
+        <template #quantity-cell="{ row }"><span class="num">{{ row.original.quantity }} {{ row.original.unit }}</span></template>
+        <template #inquiryDate-cell="{ row }"><span class="num">{{ row.original.inquiryDate }}</span></template>
+        <template #requiredDate-cell="{ row }"><span class="num">{{ row.original.requiredDate || '-' }}</span></template>
+        <template #supplier-cell="{ row }">{{ row.original.selectedSupplierName || row.original.selectedSupplierId || '-' }}</template>
+        <template #price-cell="{ row }"><span class="num">{{ formatPrice(row.original.selectedUnitPrice) }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(STATUS_TAG[row.original.status as InquiryQuoteStatus]?.type || 'info')" variant="soft">
+            {{ STATUS_TAG[row.original.status as InquiryQuoteStatus]?.label || row.original.status }}
+          </UBadge>
         </template>
-      </el-table-column>
-      <el-table-column label="中标价" min-width="120" align="right">
-        <template #default="{ row }">{{ formatPrice(row.selectedUnitPrice) }}</template>
-      </el-table-column>
-      <el-table-column label="状态" min-width="100">
-        <template #default="{ row }">
-          <el-tag :type="STATUS_TAG[row.status as InquiryQuoteStatus]?.type || 'info'" effect="light">
-            {{ STATUS_TAG[row.status as InquiryQuoteStatus]?.label || row.status }}
-          </el-tag>
+        <template #po-cell="{ row }">{{ row.original.purchaseOrderNumber || '-' }}</template>
+        <template #actions-cell="{ row }">
+          <UButton size="xs" variant="link" @click.stop="goDetail(row.original)">详情</UButton>
         </template>
-      </el-table-column>
-      <el-table-column label="采购单" min-width="160">
-        <template #default="{ row }">
-          {{ row.purchaseOrderNumber || '-' }}
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="100" align="center" fixed="right">
-        <template #default="{ row }">
-          <el-button link type="primary" @click.stop="goDetail(row)">详情</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
+      </UTable>
 
-    <el-pagination
-      v-if="pagination.total > 0"
-      class="pagination"
-      :current-page="pagination.page"
-      :page-size="pagination.size"
-      :total="pagination.total"
-      layout="total, prev, pager, next, jumper"
-      background
-      @current-change="handlePageChange"
-    />
+      <div v-if="pagination.total > 0" class="pagination-wrapper">
+        <span class="total">共 {{ pagination.total }} 条</span>
+        <UPagination v-model:page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
+      </div>
+    </section>
 
-    <!-- 新建核价单 dialog -->
-    <el-dialog v-model="createDialogVisible" title="新建核价单" width="560px" :close-on-click-modal="false">
-      <el-alert
-        v-if="linkedToDraft"
-        type="info"
-        :closable="false"
-        show-icon
-        style="margin-bottom: 12px"
-        :title="`来自采购草稿 ${createForm.sourceOrderNumber || ''}：选定报价会回填这张草稿的本物料行，不另建采购单`"
-      />
-      <el-form :model="createForm" label-width="100px">
-        <el-form-item label="标题">
-          <el-input v-model="createForm.title" placeholder="选填, 如 Q2 辣椒采购询价" maxlength="200" />
-        </el-form-item>
-        <el-form-item label="物料类型 ID" required>
-          <el-input
-            v-model="createForm.materialTypeId"
-            placeholder="raw_material_types.id"
-            maxlength="191"
-            :disabled="linkedToDraft"
-          />
-        </el-form-item>
-        <el-form-item label="物料名称">
-          <el-input v-model="createForm.materialName" placeholder="如 辣椒" maxlength="200" />
-        </el-form-item>
-        <el-form-item label="规格">
-          <el-input v-model="createForm.specification" placeholder="选填" maxlength="200" />
-        </el-form-item>
-        <el-form-item label="数量 / 单位" required>
-          <el-input-number v-model="createForm.quantity" :min="0" :precision="4" />
-          <el-input
-            v-model="createForm.unit"
-            placeholder="单位(必填)"
-            style="width: 100px; margin-left: 8px"
-            :disabled="linkedToDraft"
-          />
-        </el-form-item>
-        <el-form-item label="询价日期" required>
-          <el-date-picker v-model="createForm.inquiryDate" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="期望到货">
-          <el-date-picker v-model="createForm.requiredDate" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="createForm.remark" type="textarea" :rows="2" maxlength="5000" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createSubmitting" @click="submitCreate">创建</el-button>
+    <!-- 新建核价单 -->
+    <UModal v-model:open="createDialogVisible" title="新建核价单" description="创建询价核价单" :dismissible="false" :ui="{ content: 'max-w-[560px]', description: 'sr-only' }">
+      <template #body>
+        <UAlert
+          v-if="linkedToDraft"
+          color="info"
+          variant="subtle"
+          icon="i-lucide-info"
+          class="mb-3"
+          :title="`来自采购草稿 ${createForm.sourceOrderNumber || ''}：选定报价会回填这张草稿的本物料行，不另建采购单`"
+        />
+        <div class="form">
+          <UFormField label="标题">
+            <UInput v-model="createForm.title" placeholder="选填, 如 Q2 辣椒采购询价" :maxlength="200" class="w-full" />
+          </UFormField>
+          <UFormField label="物料类型 ID" required>
+            <UInput v-model="createForm.materialTypeId" placeholder="raw_material_types.id" :maxlength="191" :disabled="linkedToDraft" class="w-full" />
+          </UFormField>
+          <UFormField label="物料名称">
+            <UInput v-model="createForm.materialName" placeholder="如 辣椒" :maxlength="200" class="w-full" />
+          </UFormField>
+          <UFormField label="规格">
+            <UInput v-model="createForm.specification" placeholder="选填" :maxlength="200" class="w-full" />
+          </UFormField>
+          <UFormField label="数量 / 单位" required>
+            <div class="qty-row">
+              <UInputNumber v-model="createForm.quantity" :min="0" :step-snapping="false" :format-options="{ maximumFractionDigits: 4 }" :increment="false" :decrement="false" class="w-full" />
+              <UInput v-model="createForm.unit" placeholder="单位(必填)" :disabled="linkedToDraft" class="w-28" />
+            </div>
+          </UFormField>
+          <UFormField label="询价日期" required>
+            <UInput v-model="createForm.inquiryDate" type="date" class="w-full" />
+          </UFormField>
+          <UFormField label="期望到货">
+            <UInput v-model="createForm.requiredDate" type="date" class="w-full" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="createForm.remark" :rows="2" :maxlength="5000" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="createDialogVisible = false">取消</UButton>
+        <UButton :loading="createSubmitting" @click="submitCreate">创建</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.inquiry-quote-list {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 4px;
-  color: #303133;
-}
-.page-header .subtitle {
-  font-size: 13px;
-  color: #909399;
-  margin: 0;
-}
-.pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-}
-.spec {
-  color: #909399;
-  font-size: 12px;
-  margin-left: 4px;
-}
-:deep(.el-table__row) {
-  cursor: pointer;
-}
+.inquiry-quote-list { padding: var(--cs-space-4); }
+.head-actions { display: flex; gap: var(--cs-space-2); align-items: center; }
+.spec { color: var(--cs-muted); font-size: var(--cs-font-small); margin-left: var(--cs-space-1); }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.qty-row { display: flex; gap: var(--cs-space-2); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>
