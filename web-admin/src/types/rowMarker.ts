@@ -1,3 +1,4 @@
+import { CS_TOKENS } from '@/styles/csTokens'
 // U-MARKER-1 (Sprint 4 Wave 2 Chat L) — 5-color row marker types.
 
 export type RowMarkerColor = 'red' | 'orange' | 'yellow' | 'green' | 'blue';
@@ -15,7 +16,7 @@ export const MARKER_COLOR_HEX: Record<RowMarkerColor, string> = {
   orange: '#e6a23c',
   yellow: '#dcb83a',
   green: '#67c23a',
-  blue: '#409eff',
+  blue: CS_TOKENS.primary,
 };
 
 export const MARKER_COLOR_LABELS: Record<RowMarkerColor, string> = {

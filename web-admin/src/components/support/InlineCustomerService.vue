@@ -133,7 +133,7 @@ async function goConfigure() {
   height: 48px;
   border-radius: 50%;
   border: none;
-  background-color: var(--el-color-primary, #409eff);
+  background-color: var(--el-color-primary, var(--cs-primary));
   color: #fff;
   display: flex;
   align-items: center;
@@ -164,7 +164,7 @@ async function goConfigure() {
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
-  background-color: var(--el-color-primary, #409eff);
+  background-color: var(--el-color-primary, var(--cs-primary));
   color: #fff;
   font-weight: 600;
 }
@@ -229,15 +229,15 @@ async function goConfigure() {
   margin-top: 4px;
   padding: 8px 18px;
   border-radius: 16px;
-  border: 1px solid var(--el-color-primary, #409eff);
+  border: 1px solid var(--el-color-primary, var(--cs-primary));
   background-color: transparent;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   font-size: 13px;
   cursor: pointer;
   transition: all 0.15s ease;
 
   &:hover {
-    background-color: var(--el-color-primary, #409eff);
+    background-color: var(--el-color-primary, var(--cs-primary));
     color: #fff;
   }
 }

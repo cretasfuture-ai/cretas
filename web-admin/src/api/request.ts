@@ -134,7 +134,7 @@ const showGateDiagnosisCard = async (message: string, diagnoses: GateDiagnosis[]
       h('div', { style: 'font-weight:600' }, `${d.gateLabel}${d.subjectRef ? ' · ' + d.subjectRef : ''}`),
       d.cause ? h('div', { style: 'color:#909399' }, `原因：${d.cause}`) : null,
       qty(d) ? h('div', null, qty(d)) : null,
-      h('div', { style: 'color:#409eff' }, `怎么解开：${d.howToResolve}`),
+      h('div', { style: 'color:var(--cs-primary)' }, `怎么解开：${d.howToResolve}`),
     ]);
   const route = diagnoses.find(d => d.resolveRoute)?.resolveRoute ?? null;
   try {

@@ -383,6 +383,7 @@
 </template>
 
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 import { markRaw, ref, computed, nextTick, onMounted, watch } from 'vue'
 import {
   VueFlow,
@@ -672,7 +673,7 @@ interface PaletteSchema {
 
 const nodeSchemas: PaletteSchema[] = [
   { type: 'start', displayName: '开始', description: '流程入口', shortLabel: '始', color: '#2FA66A' },
-  { type: 'approval', displayName: '审批', description: '角色或指定人员', shortLabel: '审', color: '#409EFF' },
+  { type: 'approval', displayName: '审批', description: '角色或指定人员', shortLabel: '审', color: CS_TOKENS.primary },
   { type: 'condition', displayName: '条件', description: '金额、部门等分流', shortLabel: '判', color: '#D88900' },
   { type: 'parallel', displayName: '并行审批', description: '多部门同时处理', shortLabel: '并', color: '#7657C8' },
   { type: 'join', displayName: '汇聚', description: '等待分支完成', shortLabel: '汇', color: '#6B7788' },
@@ -2118,9 +2119,9 @@ onMounted(async () => {
   border: 1px solid #e4e7ed; border-radius: 6px;
   cursor: grab; transition: border-color 0.2s, background-color 0.2s;
 }
-.palette-node:hover { border-color: #409EFF; background: #f0f7ff; }
+.palette-node:hover { border-color: var(--cs-primary); background: #f0f7ff; }
 .palette-node:focus-visible {
-  outline: 2px solid #409eff;
+  outline: 2px solid var(--cs-primary);
   outline-offset: 2px;
 }
 .palette-node:disabled { cursor: not-allowed; opacity: 0.55; }
@@ -2440,11 +2441,11 @@ onMounted(async () => {
 }
 
 :deep(.vue-flow__node.selected) {
-  box-shadow: 0 0 0 2px #409eff, 0 4px 12px rgb(31 62 92 / 16%) !important;
+  box-shadow: 0 0 0 2px var(--cs-primary), 0 4px 12px rgb(31 62 92 / 16%) !important;
 }
 
 :deep(.vue-flow__edge.selected .vue-flow__edge-path) {
-  stroke: #409eff !important;
+  stroke: var(--cs-primary) !important;
   stroke-width: 3px !important;
 }
 

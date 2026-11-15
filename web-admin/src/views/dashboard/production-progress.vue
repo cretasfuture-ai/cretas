@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * B8 生产进度数字打屏看板
  * 客户原话 4802-4811s: "做一个数字打屏,看到当天所有商品工序生产的一个进度"
@@ -45,7 +46,7 @@ async function toggleFullscreen() {
 
 function statusColor(status: string): string {
   if (status === 'DONE') return '#67c23a'
-  if (status === 'IN_PROGRESS') return '#409eff'
+  if (status === 'IN_PROGRESS') return CS_TOKENS.primary
   return '#909399'
 }
 function statusText(status: string): string {
@@ -123,7 +124,7 @@ onBeforeUnmount(() => {
           :percentage="data.summary.overallProgressPct"
           :stroke-width="12"
           :show-text="false"
-          color="#409eff"
+          :color="CS_TOKENS.primary"
         />
       </div>
     </div>
@@ -236,7 +237,7 @@ onBeforeUnmount(() => {
 .date-big {
   font-size: 32px;
   font-weight: 600;
-  color: #409eff;
+  color: var(--cs-primary);
   letter-spacing: 2px;
 }
 .clock {
@@ -280,7 +281,7 @@ onBeforeUnmount(() => {
 }
 .summary-card.overall {
   grid-column: span 1;
-  border-color: #409eff;
+  border-color: var(--cs-primary);
   background: rgba(64, 158, 255, 0.1);
 }
 .summary-label {
@@ -295,9 +296,9 @@ onBeforeUnmount(() => {
   color: #ffffff;
   line-height: 1;
 }
-.summary-value.big-pct { color: #409eff; }
+.summary-value.big-pct { color: var(--cs-primary); }
 .summary-card.done .summary-value { color: #67c23a; }
-.summary-card.progress .summary-value { color: #409eff; }
+.summary-card.progress .summary-value { color: var(--cs-primary); }
 .summary-card.overall :deep(.el-progress-bar__outer) {
   background-color: rgba(255,255,255,0.1);
   margin-top: 10px;
@@ -316,7 +317,7 @@ onBeforeUnmount(() => {
   transition: all 0.3s;
 }
 .plan-card:hover {
-  border-color: #409eff;
+  border-color: var(--cs-primary);
   transform: translateY(-2px);
 }
 .plan-header {
@@ -356,14 +357,14 @@ onBeforeUnmount(() => {
 .plan-qty .reported {
   font-size: 32px;
   font-weight: 700;
-  color: #409eff;
+  color: var(--cs-primary);
 }
 .plan-qty .divider { color: #475569; }
 .plan-qty .planned { color: #94a3b8; }
 .plan-pct {
   font-size: 42px;
   font-weight: 800;
-  color: #409eff;
+  color: var(--cs-primary);
   line-height: 1;
 }
 .plan-card :deep(.el-progress-bar__outer) {
