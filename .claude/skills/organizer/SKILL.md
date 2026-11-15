@@ -31,6 +31,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - **organizer ⇒ Opus**，靠短会话控成本。
   - effort 一律 medium 起步（只读可 low），卡住、被纠正或需要更深推理时有证据再升 high。质量靠红线的独立终审和验证，不靠全线用强模型。
   - 改档后盯一两周：Sonnet 线的 CI 红、返工、被终审打回次数明显高于 Opus 线，就把那类任务挪回 Opus 并在这里写明。
+  - **Fable 5.2 只在卡住时用**（Steve 2026-11-15）：Opus 线升到 `high` 后仍卡住（同一问题再修两轮 CI 仍红，或再被独立审查打回），才开 Fable 5.2 新会话重做，`effort` 显式传 `medium`（Fable 默认 `high`，不传会多花一档）；⛔ 不把任何线默认设成 Fable。每次升级（升 `high` 和换 Fable 都算）在 `~/.claude/context-handoff/check-findings.jsonl` 记一行，id 以 `escalation-` 开头，写任务、升到哪档、做成没有、花费、轮数；攒到约 10 条再评估难题线是否固定用 Fable。依据：官方迁移指南把 Opus 5.5 定为大多数工作的默认，Opus 调高 effort 仍不达标才换；Fable 读缓存与 Opus 同价、其余约两倍，按本周花费结构同样步数约 1.5 倍，要少用约 1/3 步才不亏；卡住类会话最多占主会话花费 24%，专门跑同题对照（约 $250–350）不划算。
 - 每个切片只维护一份任务说明、一条在飞记录和一份证据索引。ACTIVE 的 ID/状态/Owner/Base/scope 与阻塞摘要 ≤ 300 字，详情进 `docs/dispatch/archive/`；不要求模型、effort、编排方式等固定列。
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
 - 🔴 **CI 由 organizer 统一盯**（Steve 2026-11-10）：开了 PR 的执行会话按应用规定不能自己轮询 CI，Auto-fix 只在变红时叫醒它，**CI 全绿没有任何通知** ⇒ 不叫它就一直干等（2026-11-10 #1556/#1557/#1560 各空等十几到几十分钟）。所以：
