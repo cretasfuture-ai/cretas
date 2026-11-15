@@ -194,6 +194,41 @@ class PurchaseRequisitionResubmitContractTest {
     }
 
     @Test
+    @DisplayName("改草稿数量必须 > 0: 0 / 负数 / 非数字 / 缺失都 400, 原行项目不变")
+    void updateRejectsNonPositiveQuantity() {
+        PurchaseRequisition pr = newDraft("10");
+        for (String bad : new String[]{"0", "-3", "abc"}) {
+            assertThatThrownBy(() -> service.updateDraft(F, pr.getId(), REQUESTER, req(bad)))
+                    .as("数量 " + bad)
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(400);
+        }
+        Map<String, Object> noQty = line("1");
+        noQty.remove("quantity");
+        List<Map<String, Object>> items = new ArrayList<>();
+        items.add(noQty);
+        assertThatThrownBy(() -> service.updateDraft(F, pr.getId(), REQUESTER,
+                new CreatePurchaseRequisitionRequest(null, items, null, null, null)))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(400);
+        assertThat(repo.findById(pr.getId()).orElseThrow().getRequestedItems().get(0).get("quantity"))
+                .isEqualTo("10");
+    }
+
+    @Test
+    @DisplayName("提交/驳回/重开过的单据(有审批历史)不能删, 历史接口仍可读; 没提交过的草稿照常可删")
+    void documentsWithHistoryCannotBeDeleted() {
+        PurchaseRequisition pr = newPending();
+        service.rejectRequisition(F, pr.getId(), APPROVER, "改");
+        service.reopenRequisition(F, pr.getId(), REQUESTER); // 回到 DRAFT, 但已有历史
+        assertThatThrownBy(() -> service.deleteDraft(F, pr.getId(), REQUESTER))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(400);
+        assertThat(service.getApprovalHistory(F, pr.getId())).hasSize(3);
+
+        PurchaseRequisition fresh = newDraft("2");
+        service.deleteDraft(F, fresh.getId(), REQUESTER);
+        assertThat(repo.findById(fresh.getId())).isEmpty();
+    }
+
+    @Test
     @DisplayName("租户: 他厂不能重开/改/查本厂请购单的审批历史")
     void tenantIsolation() {
         PurchaseRequisition pr = newPending();

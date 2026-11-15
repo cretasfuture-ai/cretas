@@ -88,7 +88,11 @@ const canEditDraft = computed(
   () => canManageOwnDraft.value && isMine.value && requisition.value?.status === 'DRAFT',
 );
 const approvalHistory = ref<RequisitionApprovalRecord[]>([]);
-const editQuantities = ref<Record<number, number>>({});
+const editQuantities = ref<Record<number, number | undefined>>({});
+// 有改了数量但还没保存的草稿: 提交前必须先保存, 否则后端提交的是旧数量, 当轮快照也记旧值
+const hasUnsavedEdits = computed(() =>
+  Object.values(editQuantities.value).some((v) => v !== undefined && v !== null),
+);
 const ACTION_TEXT: Record<RequisitionApprovalRecord['action'], string> = {
   SUBMITTED: '提交审批',
   APPROVED: '审批通过',
@@ -240,7 +244,13 @@ async function handleReopen() {
 }
 
 async function handleSaveEdits() {
-  if (!requisition.value || submitting.value) return;
+  if (submitting.value) return;
+  await saveEdits();
+}
+
+/** 保存数量修改; 成功(或无修改)返回 true, 失败返回 false —— 提交流程据此决定是否继续。 */
+async function saveEdits(): Promise<boolean> {
+  if (!requisition.value) return false;
   const r = requisition.value;
   const items = (r.requestedItems || []).map((it, idx) => ({
     ...it,
@@ -248,7 +258,7 @@ async function handleSaveEdits() {
   }));
   if (items.some((it) => !(Number(it.quantity) > 0))) {
     ElMessage.warning('数量必须大于 0');
-    return;
+    return false;
   }
   submitting.value = true;
   try {
@@ -262,9 +272,12 @@ async function handleSaveEdits() {
       ElMessage.success('已保存修改');
       editQuantities.value = {};
       await loadRequisition();
+      return true;
     }
+    return false;
   } catch (e) {
     if (e !== 'cancel') console.error('[保存失败]', e);
+    return false;
   } finally {
     submitting.value = false;
   }
@@ -311,6 +324,8 @@ async function handleSubmit() {
   } catch {
     return;
   }
+  // 改了数量没点「保存数量修改」就提交: 先自动保存, 保存失败则不提交
+  if (hasUnsavedEdits.value && !(await saveEdits())) return;
   submitting.value = true;
   try {
     const res = await submitRequisition(factoryId.value, r.id);

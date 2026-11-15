@@ -153,6 +153,14 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
             throw new BusinessException(400, "请购行项目不能为空")
                     .withHint("请添加至少 1 行请购物料");
         }
+        // 数量必须 > 0: 转 PO 时数量 <=0 的行会被静默跳过(见 mapItemsToPoItems), 改量入口不能放它们进来
+        for (Map<String, Object> item : request.getRequestedItems()) {
+            BigDecimal q = item == null ? null : toBigDecimal(item.get("quantity"));
+            if (q == null || q.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new BusinessException(400, "请购行数量必须大于 0")
+                        .withHint("请检查每一行的数量, 0 或负数不能保存");
+            }
+        }
         pr.setRequestedItems(new ArrayList<>(request.getRequestedItems()));
         pr.setExpectedDate(request.getExpectedDate());
         pr.setReason(request.getReason());
@@ -245,6 +253,11 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
             throw new BusinessException(400,
                     "仅 DRAFT 状态可删除 (当前状态: " + pr.getStatus().getDisplayName() + ")")
                     .withHint("如需取消已提交的请购单, 请使用 reject (驳回) 操作");
+        }
+        // 提交/驳回过的单据(submit_round>0)带审批历史, 软删后历史接口会找不到单据 ⇒ 不许删
+        if (pr.getSubmitRound() != null && pr.getSubmitRound() > 0) {
+            throw new BusinessException(400, "该请购单已有审批历史, 不能删除")
+                    .withHint("驳回后重开的单据请修改后重新提交");
         }
         // 仅 requester 本人可删 (MVP — 一致于 submitRequisition)
         if (!pr.getRequesterId().equals(currentUserId)) {
