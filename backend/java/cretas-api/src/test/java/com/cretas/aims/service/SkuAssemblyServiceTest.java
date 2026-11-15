@@ -137,6 +137,33 @@ class SkuAssemblyServiceTest {
                 .count() == 1);
     }
 
+    @Test
+    @DisplayName("assemblesku rejects a customer that belongs to another factory (no cross-tenant name leak)")
+    void assembleskuRejectsCustomerOfAnotherFactory() {
+        seedTemplateWithProcessChainAndBom();
+        Factory otherFactory = new Factory();
+        otherFactory.setId("F-SKU-OTHER");
+        otherFactory.setName("SKU Other Factory");
+        entityManager.persist(otherFactory);
+        Customer foreign = new Customer();
+        foreign.setId("CUS-SKU-FOREIGN");
+        foreign.setFactoryId("F-SKU-OTHER");
+        foreign.setCode("CUS-FOREIGN");
+        foreign.setCustomerCode("CUS-FOREIGN");
+        foreign.setName("Foreign Secret Customer");
+        foreign.setIsActive(true);
+        foreign.setCreatedBy(seededUserId);
+        foreign.setVersion(0L);
+        entityManager.persist(foreign);
+        entityManager.flush();
+        long before = productTypeRepository.count();
+
+        assertThrows(com.cretas.aims.exception.ResourceNotFoundException.class,
+                () -> skuAssemblyService.assemblesku(
+                        FACTORY_ID, TEMPLATE_ID, "CUS-SKU-FOREIGN", "v1", null, seededUserId));
+        assertEquals(before, productTypeRepository.count());
+    }
+
     private List<Long> templateProcessIds() {
         return productWorkProcessRepository
                 .findByFactoryIdAndProductTypeIdOrderByProcessOrderAsc(FACTORY_ID, TEMPLATE_ID)

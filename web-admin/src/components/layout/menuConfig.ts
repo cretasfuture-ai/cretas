@@ -1,4 +1,5 @@
 import type { ModuleName } from '@/store/modules/permission';
+import { digitalSpecialistTitles } from '@/components/workdesk/digitalSpecialistRoles';
 // 菜单配置
 export interface MenuItem {
   path: string;
@@ -116,7 +117,7 @@ const rawMenuConfig: MenuItem[] = [
   //   两个判据不是同一个, 中间的差就是「看得见点不开」。
   // ⛔ 不是给销售加 AI 权限: owner 明确「数据分析应该是管理员或者老板这样子阶级的」。
   {
-    path: '/dashboard/ai-value', title: 'AI 工作台', icon: 'MagicStick', module: 'dashboard',
+    path: '/dashboard/ai-value', title: digitalSpecialistTitles['/dashboard/ai-value'], icon: 'MagicStick', module: 'dashboard',
     roles: ['factory_super_admin', 'platform_admin', 'permission_admin'],
   },
   {
@@ -125,13 +126,13 @@ const rawMenuConfig: MenuItem[] = [
     icon: 'Odometer',
     module: 'dashboard',
     children: [
-      { path: '/workdesk/sales-owner', title: '销售老板工作台', icon: '', module: 'sales', groupLabel: '经营管理' },
-      { path: '/workdesk/finance-manager', title: '财务主管工作台', icon: '', module: 'finance' },
-      { path: '/workdesk/quality-manager', title: '质量主管工作台', icon: '', module: 'quality' },
-      { path: '/workdesk/production-manager', title: '生产经理工作台', icon: '', module: 'production' },
-      { path: '/workdesk/warehouse-keeper', title: '仓管员工作台', icon: '', module: 'warehouse', groupLabel: '一线执行' },
-      { path: '/workdesk/purchaser', title: '采购员工作台', icon: '', module: 'procurement' },
-      { path: '/workdesk/quality-chief', title: '质检主管工作台', icon: '', module: 'quality' },
+      { path: '/workdesk/sales-owner', title: digitalSpecialistTitles['/workdesk/sales-owner'], icon: '', module: 'sales', groupLabel: '经营管理' },
+      { path: '/workdesk/finance-manager', title: digitalSpecialistTitles['/workdesk/finance-manager'], icon: '', module: 'finance' },
+      { path: '/workdesk/quality-manager', title: digitalSpecialistTitles['/workdesk/quality-manager'], icon: '', module: 'quality' },
+      { path: '/workdesk/production-manager', title: digitalSpecialistTitles['/workdesk/production-manager'], icon: '', module: 'production' },
+      { path: '/workdesk/warehouse-keeper', title: digitalSpecialistTitles['/workdesk/warehouse-keeper'], icon: '', module: 'warehouse', groupLabel: '一线执行' },
+      { path: '/workdesk/purchaser', title: digitalSpecialistTitles['/workdesk/purchaser'], icon: '', module: 'procurement' },
+      { path: '/workdesk/quality-chief', title: digitalSpecialistTitles['/workdesk/quality-chief'], icon: '', module: 'quality' },
     ],
   },
   {
@@ -574,7 +575,7 @@ const rawMenuConfig: MenuItem[] = [
   {
     path: '/scheduling', title: '智能调度', icon: 'Calendar', module: 'scheduling',
     children: [
-      { path: '/scheduling/logistics/workbench', title: '排线工作台', icon: '', module: 'scheduling', groupLabel: '日常调度',
+      { path: '/scheduling/logistics/workbench', title: digitalSpecialistTitles['/scheduling/logistics/workbench'], icon: '', module: 'scheduling', groupLabel: '日常调度',
         hideForFactoryTypes: ['FACTORY'] },
       { path: '/scheduling/logistics/records', title: '调度记录', icon: '', module: 'scheduling',
         hideForFactoryTypes: ['FACTORY'] },
@@ -960,9 +961,9 @@ export const configurableMenuConfig: MenuItem[] = [...menuConfig, ...groupedMenu
 export type FactoryMenuProfile = 'wholesale';
 
 export const wholesaleWorkdeskTitles: Record<string, string> = {
-  '/workdesk/sales-owner': '销售数字员工工作台',
-  '/workdesk/purchaser': '采购数字员工工作台',
-  '/workdesk/warehouse-keeper': '库存数字员工工作台',
+  '/workdesk/sales-owner': digitalSpecialistTitles['/workdesk/sales-owner'],
+  '/workdesk/purchaser': digitalSpecialistTitles['/workdesk/purchaser'],
+  '/workdesk/warehouse-keeper': digitalSpecialistTitles['/workdesk/warehouse-keeper'],
 };
 const wholesaleDesk = (path: string): MenuItem => ({ ...moveLeaf(path), title: wholesaleWorkdeskTitles[path] });
 

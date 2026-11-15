@@ -42,6 +42,20 @@ function open(props: Partial<InstanceType<typeof DigitalEmployeeConversation>['$
 }
 
 describe('DigitalEmployeeConversation', () => {
+  it('clears real user and assistant history, pending retry and draft on identity change', async () => {
+    const wrapper = open({ scopeKey: 'A:43', modelValue: 'A企业的订单' });
+    await wrapper.get('form').trigger('submit');
+    await wrapper.setProps({ response: 'A企业的敏感结果', modelValue: '未发送草稿' });
+    expect(wrapper.text()).toContain('A企业的敏感结果');
+    await wrapper.setProps({ scopeKey: 'B:44', response: '', error: '', busy: false });
+    expect(wrapper.find('[data-role="user"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="ai-chat-assistant-body"]').exists()).toBe(false);
+    expect(wrapper.emitted('update:modelValue')?.at(-1)).toEqual(['']);
+    await wrapper.setProps({ modelValue: '' });
+    await wrapper.get('form').trigger('submit');
+    expect(wrapper.emitted('send')).toHaveLength(1);
+    wrapper.unmount();
+  });
   it('sends the real question and keeps the user turn in the conversation', async () => {
     const wrapper = open({ modelValue: '查今天的待收数量' });
 

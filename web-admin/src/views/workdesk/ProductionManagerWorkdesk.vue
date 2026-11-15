@@ -24,9 +24,14 @@
               请求体含 testRun (从 query string 或 button 控制, 默认 false)
 -->
 <template>
-  <div class="production-manager-workdesk">
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="production" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="生产数字专员" scope-label="需求分析、生产计划与批次上下文" :quick-questions="['今天要起产什么？', '查看当前生产需求']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/production/batches')" to="/production/batches" icon="i-lucide-factory">进入生产批次办理</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">生产经理工作台</span>
@@ -40,7 +45,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -66,7 +71,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>AI 正在聚合销售订单 + 在产批次, 计算净缺量 + 推荐起产量, 预计 3-8 秒...</span>
@@ -75,7 +80,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -83,7 +88,7 @@
       class="error-alert" />
 
     <!-- AI 输出 (formattedText / message) -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -139,7 +144,7 @@
             </div>
           </div>
           <div class="demand-actions">
-            <el-button size="small" type="primary" @click="openCreateBatchDialog(d)">
+            <el-button size="small" type="primary" :disabled="!canAct" @click="openCreateBatchDialog(d)">
  一键起产
             </el-button>
             <el-button size="small" @click="gotoOrderList(d)">
@@ -228,23 +233,24 @@
         <el-button @click="batchDialog.visible = false">取消</el-button>
         <el-button
           :loading="batchDialog.previewing"
+          :disabled="!canAct"
           @click="previewBatchCreate">
           预览
         </el-button>
         <el-button
           type="primary"
           :loading="batchDialog.submitting"
-          :disabled="!batchDialog.canSubmit"
+          :disabled="!batchDialog.canSubmit || !canAct"
           @click="executeBatchCreate">
           确认创建
         </el-button>
       </template>
     </el-dialog>
-  </div>
+  </DigitalEmployeeFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import { ref, computed, watch, reactive } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
@@ -252,6 +258,9 @@ import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { toDateString } from '@/utils/dateFormat';
 import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
 
 interface ProductDemand {
   productTypeId: string;
@@ -295,6 +304,10 @@ interface PreviewResult {
 const router = useRouter();
 const route = useRoute();
 const authStore = useAuthStore();
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
 
 // testRun: ?testRun=1 in URL → playwright will set this true to tag created data
 const testRun = computed(() => {
@@ -313,7 +326,57 @@ const lastQueryTime = ref('');
 const DEFAULT_RESULT_TITLE = '排产建议清单';
 const resultTitle = ref(DEFAULT_RESULT_TITLE);
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const actorId = computed(() => String(authStore.user?.id || ''));
+const actorRole = computed(() => String((authStore as { currentRole?: string }).currentRole || ''));
+interface RequestGuard {
+  factoryId: string;
+  actorId: string;
+  role: string;
+  requestGeneration: number;
+  requireAction?: boolean;
+}
+let requestGeneration = 0;
+function captureRequestGuard(requireAction = false): RequestGuard {
+  if (!factoryId.value || !actorId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (requireAction && !canAct.value) throw new Error('当前导航或岗位不可办理写操作');
+  return { factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value, requestGeneration, requireAction };
+}
+function isCurrentRequest(guard: RequestGuard): boolean {
+  return guard.requestGeneration === requestGeneration
+    && guard.factoryId === factoryId.value
+    && guard.actorId === actorId.value
+    && guard.role === actorRole.value
+    && !props.employeeNavigationPending
+    && (!guard.requireAction || canAct.value);
+}
+function staleRequestError(): Error & { stale?: boolean } {
+  const error = new Error('企业或账号已切换，请重新查询') as Error & { stale?: boolean };
+  error.stale = true;
+  return error;
+}
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  loading.value = false;
+  batchDialog.previewing = false;
+  batchDialog.submitting = false;
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+  demands.value = [];
+  batchDialog.visible = false;
+  resetBatchDialog();
+}
 
 const renderedFormattedText = computed(() => {
   if (!formattedText.value) return '';
@@ -360,14 +423,18 @@ function previewAlertType(preview: PreviewResult): 'warning' | 'success' | 'info
 }
 
 async function callIntentExecute(input: string, intentCode?: string,
-    parameters?: Record<string, unknown>, preview = false)
+    parameters?: Record<string, unknown>, preview = false, mode?: 'READ' | 'WRITE', guard = captureRequestGuard())
     : Promise<ExecuteResponse> {
+  if (!isCurrentRequest(guard)) throw staleRequestError();
+  if (props.digitalEmployee && !intentCode) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
+  if (mode) body.mode = mode;
   const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
+    `/${guard.factoryId}/ai-intents/execute`, body);
+  if (!isCurrentRequest(guard)) throw staleRequestError();
   return (res as { data: ExecuteResponse }).data;
 }
 
@@ -377,15 +444,21 @@ async function triggerDemandQuery() {
 }
 
 async function sendQuery(forceDemand = false) {
+  if (props.employeeNavigationPending || !factoryId.value || !actorId.value) return;
   if (!userInput.value.trim()) return;
+  const guard = captureRequestGuard();
+  const query = userInput.value.trim();
   loading.value = true;
   errorMessage.value = '';
   formattedText.value = '';
+  responseStatus.value = '';
   demands.value = [];
 
   try {
     const intentCode = forceDemand ? 'PRODUCTION_DEMAND_QUERY' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    const response = await callIntentExecute(query, intentCode, undefined, false, forceDemand ? 'READ' : undefined, guard);
+    if (!isCurrentRequest(guard)) return;
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -400,8 +473,9 @@ async function sendQuery(forceDemand = false) {
     if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
 
     // 解析 resultData
-    extractDemandsFromResult(response.resultData || {});
+    if (!nonAnswerLabel) extractDemandsFromResult(response.resultData || {});
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard) || (err && typeof err === 'object' && 'stale' in err && (err as { stale?: boolean }).stale)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -411,7 +485,7 @@ async function sendQuery(forceDemand = false) {
       showClose: true,
     });
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(guard)) loading.value = false;
   }
 }
 
@@ -483,6 +557,7 @@ function tomorrow(): string {
 }
 
 function openCreateBatchDialog(d: ProductDemand) {
+  if (!canAct.value) return;
   batchDialog.visible = true;
   batchDialog.productTypeId = d.productTypeId;
   batchDialog.productName = d.productName || '';
@@ -515,6 +590,7 @@ function resetBatchDialog() {
 }
 
 async function previewBatchCreate() {
+  if (!canAct.value) return;
   if (!batchDialog.form.quantity || batchDialog.form.quantity <= 0) {
     ElMessage.warning('请输入正整数起产量');
     return;
@@ -527,6 +603,7 @@ async function previewBatchCreate() {
     ElMessage.warning('请选择排程开工日');
     return;
   }
+  const guard = captureRequestGuard(true);
   batchDialog.previewing = true;
   try {
     const params: Record<string, unknown> = {
@@ -540,12 +617,14 @@ async function previewBatchCreate() {
       testRun: testRun.value,
     };
     if (batchDialog.salesOrderId) params.salesOrderId = batchDialog.salesOrderId;
-    const data = await callIntentExecute('预览创建生产批次', 'PRODUCTION_BATCH_CREATE', params, true);
+    const data = await callIntentExecute('预览创建生产批次', 'PRODUCTION_BATCH_CREATE', params, true, undefined, guard);
+    if (!isCurrentRequest(guard)) return;
     const previewData = (data.resultData || {}) as PreviewResult;
     batchDialog.preview = previewData;
     batchDialog.canSubmit = previewData.canDo !== false
         && previewData.status === 'PREVIEW';
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -553,15 +632,17 @@ async function previewBatchCreate() {
       showClose: true,
     });
   } finally {
-    batchDialog.previewing = false;
+    if (isCurrentRequest(guard)) batchDialog.previewing = false;
   }
 }
 
 async function executeBatchCreate() {
+  if (!canAct.value) return;
   if (!batchDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
+  const guard = captureRequestGuard(true);
   batchDialog.submitting = true;
   try {
     const params: Record<string, unknown> = {
@@ -575,7 +656,8 @@ async function executeBatchCreate() {
       testRun: testRun.value,
     };
     if (batchDialog.salesOrderId) params.salesOrderId = batchDialog.salesOrderId;
-    const data = await callIntentExecute('创建生产批次', 'PRODUCTION_BATCH_CREATE', params, false);
+    const data = await callIntentExecute('创建生产批次', 'PRODUCTION_BATCH_CREATE', params, false, undefined, guard);
+    if (!isCurrentRequest(guard)) return;
     const result = (data.resultData || {}) as {
       status?: string; message?: string; batchId?: number; batchNumber?: string;
     };
@@ -601,6 +683,7 @@ async function executeBatchCreate() {
       });
     }
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `创建失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -608,7 +691,7 @@ async function executeBatchCreate() {
       showClose: true,
     });
   } finally {
-    batchDialog.submitting = false;
+    if (isCurrentRequest(guard)) batchDialog.submitting = false;
   }
 }
 
@@ -619,10 +702,22 @@ function gotoExistingBatch() {
   }
 }
 
-// Auto-trigger on mount
-onMounted(() => {
+// Auto-trigger only after tenant/user navigation is ready; identity changes clear stale plans/dialogs.
+let initialQueryStarted = false;
+let previousScopeKey = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, actorRole, () => props.employeeCanWrite, () => props.wholesaleMode], ([pending, id, actor]) => {
+  const scopeKey = `${id}:${actor}:${actorRole.value}:${pending}:${props.employeeCanWrite}:${props.wholesaleMode ?? ''}`;
+  if (scopeKey !== previousScopeKey) {
+    requestGeneration += 1;
+    if (previousScopeKey) resetDigitalConversation();
+    previousScopeKey = scopeKey;
+    initialQueryStarted = false;
+  }
+  if (pending) return;
+  if (!id || !actor || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerDemandQuery();
-});
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <style scoped>

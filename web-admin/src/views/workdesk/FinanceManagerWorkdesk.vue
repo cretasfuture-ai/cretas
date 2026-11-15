@@ -7,15 +7,20 @@
   vs HJ 模式: 财务报表菜单 → 选三表分别看 → 切到工资 → 切到 AR → 切到商机
   (5 屏 10 分钟). Cretas Workdesk: 1 屏 30 秒.
 
-  架构: 复用现有 /ai-intents/execute POST 端点, 触发 MONTHLY_FINANCIAL_CLOSE intent.
-  Backend 路由到 monthly-financial-close Skill (串 8 Tool + LLM aggregate).
+  架构: 复用现有只读利润表查询；审批等办理操作沿用原有确认流程。
+  数字专员默认查询使用 INCOME_STATEMENT_QUERY 原生报表事实。
 
   防呆: 4 位一体. 三表链接跳 Sprint 7 T3 ship 的 /finance/three-statements.
 -->
 <template>
-  <div class="finance-manager-workdesk">
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="finance" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="财务数字专员" scope-label="财务报表、期间与审批查询" :quick-questions="['查询本月利润表', '查询应收账龄']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/finance/accounting-period')" to="/finance/accounting-period" icon="i-lucide-file-check">进入财务业务入口</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">财务主管工作台</span>
@@ -29,7 +34,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -55,7 +60,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>AI 正在聚合 8 个数据源 (期间状态 + 三表 + 工资 + 漏斗 + 应付提成 + 应收账龄), 预计 5-15 秒...</span>
@@ -64,7 +69,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -72,7 +77,7 @@
       class="error-alert" />
 
     <!-- AI 输出 -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -274,6 +279,7 @@
             <el-button
               size="small"
               type="success"
+              :disabled="!canAct"
               @click="openApprovalDialog(scope.row, 'APPROVE')"
               data-testid="approval-approve-btn">
               批准
@@ -281,6 +287,7 @@
             <el-button
               size="small"
               type="danger"
+              :disabled="!canAct"
               @click="openApprovalDialog(scope.row, 'REJECT')"
               data-testid="approval-reject-btn">
               拒绝
@@ -370,24 +377,27 @@
         <el-button
           :type="approvalForm.action === 'APPROVE' ? 'success' : 'danger'"
           :loading="approvalSubmitting"
-          :disabled="!isApprovalFormValid"
+          :disabled="!isApprovalFormValid || !canAct"
           @click="submitApproval"
           data-testid="approval-submit-btn">
           {{ approvalForm.action === 'APPROVE' ? '确认批准' : '确认拒绝' }}
         </el-button>
       </template>
     </el-dialog>
-  </div>
+  </DigitalEmployeeFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -401,6 +411,10 @@ interface ExecuteResponse {
 
 const router = useRouter();
 const authStore = useAuthStore();
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
 
 const now = new Date();
 const currentYear = ref(now.getFullYear());
@@ -486,7 +500,60 @@ const isApprovalFormValid = computed(() => {
   return true;
 });
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const actorId = computed(() => String(authStore.user?.id || ''));
+const actorRole = computed(() => String((authStore as { currentRole?: string }).currentRole || ''));
+interface RequestGuard {
+  factoryId: string;
+  actorId: string;
+  role: string;
+  requestGeneration: number;
+  requireAction?: boolean;
+}
+let requestGeneration = 0;
+function captureRequestGuard(requireAction = false): RequestGuard {
+  if (!factoryId.value || !actorId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (requireAction && !canAct.value) throw new Error('当前导航或岗位不可办理写操作');
+  return { factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value, requestGeneration, requireAction };
+}
+function isCurrentRequest(guard: RequestGuard): boolean {
+  return guard.requestGeneration === requestGeneration
+    && guard.factoryId === factoryId.value
+    && guard.actorId === actorId.value
+    && guard.role === actorRole.value
+    && !props.employeeNavigationPending
+    && (!guard.requireAction || canAct.value);
+}
+function staleRequestError(): Error & { stale?: boolean } {
+  const error = new Error('企业或账号已切换，请重新查询') as Error & { stale?: boolean };
+  error.stale = true;
+  return error;
+}
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  loading.value = false;
+  approvalLoading.value = false;
+  approvalSubmitting.value = false;
+  approvalPendingCount.value = 0;
+  approvalPendingItems.value = [];
+  approvalError.value = '';
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+  resetMetrics();
+  approvalDialogVisible.value = false;
+  approvalDialogTarget.value = null;
+}
 
 const periodLabel = computed(() => `${currentYear.value}-${String(currentMonth.value).padStart(2, '0')}`);
 
@@ -527,29 +594,39 @@ function formatAmount(v: number | string | null | undefined): string {
   return num.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-async function callIntentExecute(input: string, intentCode?: string): Promise<ExecuteResponse> {
+async function callIntentExecute(input: string, intentCode?: string, mode?: 'READ' | 'WRITE', guard = captureRequestGuard()): Promise<ExecuteResponse> {
+  if (!isCurrentRequest(guard)) throw staleRequestError();
+  if (props.digitalEmployee && !intentCode) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
+  if (mode) body.mode = mode;
   const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
+    `/${guard.factoryId}/ai-intents/execute`, body);
+  if (!isCurrentRequest(guard)) throw staleRequestError();
   return (res as { data: ExecuteResponse }).data;
 }
 
 async function triggerMonthlyClose() {
-  userInput.value = '本月经营怎么样?';
+  userInput.value = props.digitalEmployee ? '查询本月利润表' : '本月经营怎么样?';
   await sendQuery(true);
 }
 
 async function sendQuery(forceMonthlyClose = false) {
+  if (props.employeeNavigationPending || !factoryId.value || !actorId.value) return;
   if (!userInput.value.trim()) return;
+  const guard = captureRequestGuard();
+  const query = userInput.value.trim();
   loading.value = true;
   errorMessage.value = '';
   formattedText.value = '';
+  responseStatus.value = '';
   resetMetrics();
 
   try {
-    const intentCode = forceMonthlyClose ? 'MONTHLY_FINANCIAL_CLOSE' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    const intentCode = forceMonthlyClose ? (props.digitalEmployee ? 'INCOME_STATEMENT_QUERY' : 'MONTHLY_FINANCIAL_CLOSE') : undefined;
+    const response = await callIntentExecute(query, intentCode, forceMonthlyClose ? 'READ' : undefined, guard);
+    if (!isCurrentRequest(guard)) return;
+    responseStatus.value = response.status || '';
     formattedText.value = response.formattedText || response.message || '(无输出)';
     lastQueryTime.value = new Date().toLocaleTimeString('zh-CN');
     // 🔴 2026-08-28 生产实测: 这里原本不看 status, 于是后端的
@@ -566,9 +643,26 @@ async function sendQuery(forceMonthlyClose = false) {
     //    让用户以为「本月营收 0」。
     if (!nonAnswerLabel) {
       const resultData = response.resultData || {};
-      extractKeyMetrics(resultData);
+      if (intentCode === 'INCOME_STATEMENT_QUERY' || response.intentCode === 'INCOME_STATEMENT_QUERY') {
+        const nativeMessage = resultData.message;
+        const facts = resultData.data as Record<string, unknown> | undefined;
+        if (typeof nativeMessage !== 'string' || !nativeMessage.trim()) {
+          formattedText.value = '';
+          throw new Error('未收到可核验的利润表原始结果，请从财务报表入口核对');
+        } else {
+          const period = facts && ['startYear', 'startMonth', 'endYear', 'endMonth'].every(key => Number.isInteger(facts[key]))
+            ? `实际期间：${facts.startYear}-${String(facts.startMonth).padStart(2, '0')} 至 ${facts.endYear}-${String(facts.endMonth).padStart(2, '0')}\n\n` : '';
+          const warningValues = facts?.metricWarnings;
+          const warnings = Array.isArray(warningValues) ? warningValues.filter((value): value is string => typeof value === 'string') : [];
+          formattedText.value = period + nativeMessage + (warnings.length ? `\n\n${warnings.join('\n')}` : '');
+          resultTitle.value = response.intentName || '利润表';
+        }
+      } else {
+        extractKeyMetrics(resultData);
+      }
     }
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard) || (err && typeof err === 'object' && 'stale' in err && (err as { stale?: boolean }).stale)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -578,7 +672,7 @@ async function sendQuery(forceMonthlyClose = false) {
       showClose: true,
     });
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(guard)) loading.value = false;
   }
 }
 
@@ -710,15 +804,18 @@ function gotoFunnel() {
 // ==================== Sprint 10 Loop 4 — 审批闭环 ====================
 
 async function loadPendingApprovals() {
+  const guard = captureRequestGuard();
   approvalLoading.value = true;
   approvalError.value = '';
   try {
-    const response = await callIntentExecute('我该批什么', 'APPROVAL_PENDING_QUERY');
+    const response = await callIntentExecute('我该批什么', 'APPROVAL_PENDING_QUERY', undefined, guard);
+    if (!isCurrentRequest(guard)) return;
     const data = (response.resultData as Record<string, unknown> | undefined) || {};
     const inner = (data['data'] as PendingQueryResultData) || (data as PendingQueryResultData);
     approvalPendingCount.value = typeof inner.count === 'number' ? inner.count : 0;
     approvalPendingItems.value = Array.isArray(inner.items) ? inner.items : [];
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard)) return;
     const msg = extractErrorMessage(err);
     approvalError.value = `查询待审清单失败: ${msg}`;
     ElMessage({
@@ -728,11 +825,12 @@ async function loadPendingApprovals() {
       showClose: true,
     });
   } finally {
-    approvalLoading.value = false;
+    if (isCurrentRequest(guard)) approvalLoading.value = false;
   }
 }
 
 function openApprovalDialog(target: ApprovalPendingItem, action: 'APPROVE' | 'REJECT') {
+  if (!canAct.value) return;
   approvalDialogTarget.value = target;
   approvalForm.value = {
     action,
@@ -744,6 +842,8 @@ function openApprovalDialog(target: ApprovalPendingItem, action: 'APPROVE' | 'RE
 
 async function submitApproval() {
   if (!approvalDialogTarget.value) return;
+  if (!canAct.value) return;
+  const guard = captureRequestGuard(true);
   if (!isApprovalFormValid.value) {
     ElMessage({
       message: '请选择审批意见 (若选 "其他" 需填写备注)',
@@ -771,7 +871,9 @@ async function submitApproval() {
         action: approvalForm.value.action,
         notes: notesText,
       },
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
 
     // 成功: 用 sticky info toast 显示后端 message (4 位一体)
     const replyMsg = response.message
@@ -788,6 +890,7 @@ async function submitApproval() {
     // 重新加载列表
     await loadPendingApprovals();
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard)) return;
     const msg = extractErrorMessage(err);
     ElMessage({
       message: `审批失败: ${msg}`,
@@ -796,7 +899,7 @@ async function submitApproval() {
       showClose: true,
     });
   } finally {
-    approvalSubmitting.value = false;
+    if (isCurrentRequest(guard)) approvalSubmitting.value = false;
   }
 }
 
@@ -808,6 +911,7 @@ async function callIntentExecuteWithParams(
   input: string,
   intentCode: string,
   toolParams: Record<string, unknown>,
+  guard = captureRequestGuard(true),
 ): Promise<ExecuteResponse> {
   const body: Record<string, unknown> = {
     userInput: input,
@@ -816,15 +920,28 @@ async function callIntentExecuteWithParams(
     skipSlotFilling: true,
   };
   const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
+    `/${guard.factoryId}/ai-intents/execute`, body);
+  if (!isCurrentRequest(guard)) throw staleRequestError();
   return (res as { data: ExecuteResponse }).data;
 }
 
-// Auto-trigger on mount
-onMounted(() => {
+// Auto-trigger only after route identity and tenant navigation are ready.
+let initialQueryStarted = false;
+let previousScopeKey = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, actorRole, () => props.employeeCanWrite, () => props.wholesaleMode], ([pending, id, actor]) => {
+  const scopeKey = `${id}:${actor}:${actorRole.value}:${pending}:${props.employeeCanWrite}:${props.wholesaleMode ?? ''}`;
+  if (scopeKey !== previousScopeKey) {
+    requestGeneration += 1;
+    if (previousScopeKey) resetDigitalConversation();
+    previousScopeKey = scopeKey;
+    initialQueryStarted = false;
+  }
+  if (pending) return;
+  if (!id || !actor || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerMonthlyClose();
-  void loadPendingApprovals();
-});
+  if (!props.digitalEmployee) void loadPendingApprovals();
+}, { immediate: true });
 </script>
 
 <style scoped>

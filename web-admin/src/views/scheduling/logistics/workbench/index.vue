@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRoute, useRouter } from 'vue-router';
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useAuthStore } from '@/store/modules/auth';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import { useWorkdeskRequest } from '@/composables/useWorkdeskRequest';
 import { vReveal } from '@/composables/useReveal';
 import type { ManualOrderRow } from '@/api/logistics';
 import type { LogisticsDeliveryOrder } from '@/api/logistics';
@@ -17,6 +20,13 @@ import StoreDetailDrawer from '../components/StoreDetailDrawer.vue';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 const state = useLogisticsScheduling();
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeCanWrite?: boolean; employeeNavigationPending?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: true, employeePaths: () => [], employeeCanWrite: false, employeeNavigationPending: false, wholesaleMode: false,
+});
+const authStore = useAuthStore();
+const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
+const canReadReady = computed(() => !props.employeeNavigationPending && !!authStore.factoryId && !!authStore.user?.id);
+const workdeskRequests = useWorkdeskRequest(() => ({ factoryId: authStore.factoryId || '', actorId: String(authStore.user?.id || ''), contextKey: `${authStore.currentRole}:${props.employeeNavigationPending}:${props.employeeCanWrite}` }));
 // 配送线路(右列)可隐藏 —— 用地图/线路之间的竖向 knob 手柄折叠, 隐藏后左侧地图区响应式撑满整行。
 const routesHidden = ref(false);
 // 调度时间表(甘特, 左列下方)可隐藏 —— 用地图/甘特之间的横向 knob 手柄折叠, 隐藏后地图向下变高。
@@ -86,13 +96,31 @@ const exceptionDescription = computed(() => {
 const WORKBENCH_STEPS = ['import', 'map', 'export'] as const;
 type WorkbenchStep = (typeof WORKBENCH_STEPS)[number];
 
-onMounted(async () => {
+let initializationGeneration = 0;
+let previousIdentity = '';
+const initializingIdentity = ref(false);
+watch([() => `${authStore.factoryId || ''}:${authStore.user?.id || ''}:${authStore.currentRole || ''}`, () => props.employeeNavigationPending], async ([identity, pending]) => {
+  const generation = ++initializationGeneration;
+  const isCurrent = () => generation === initializationGeneration;
+  initializingIdentity.value = true;
+  try {
+  if (previousIdentity && identity !== previousIdentity) {
+    routesEditing.value = false; routeDirty.value = false; exportPreviewConfirmed.value = false;
+    locationPickerOpen.value = false; locationPickerOrder.value = null;
+    const query = { ...route.query }; delete query.planId; delete query.step;
+    await router.replace({ query });
+    if (!isCurrent()) return;
+  }
+  previousIdentity = identity;
+  if (pending || !authStore.factoryId || !authStore.user?.id) return;
   // 先抓 URL 里的步骤 —— restore 里 openPlan 会把 activeStep 置成 map 并经 watch 覆盖掉 URL 的 step，
   // 必须在 restore 之前捕获，之后再应用，否则刷新前所在步骤会被冲掉、总是跳「查看路线」。
   const stepFromQuery = typeof route.query.step === 'string' ? route.query.step : null;
   await Promise.all([state.loadVehicles(), state.loadDrivers()]);
+  if (!isCurrent()) return;
   const planIdFromQuery = typeof route.query.planId === 'string' ? route.query.planId : null;
   await state.restore(planIdFromQuery);
+  if (!isCurrent()) return;
   if (stepFromQuery && (WORKBENCH_STEPS as readonly string[]).includes(stepFromQuery)) {
     state.activeStep.value = stepFromQuery as WorkbenchStep;
   } else if (!planIdFromQuery) {
@@ -101,9 +129,17 @@ onMounted(async () => {
     state.activeStep.value = 'import';
   }
   await nextTick();
+  if (!isCurrent()) return;
   recomputeMapRowHeight();
-  window.addEventListener('resize', recomputeMapRowHeight);
-});
+  const query: LocationQueryRaw = { ...route.query, step: state.activeStep.value };
+  if (state.plan.value?.id) query.planId = state.plan.value.id;
+  else delete query.planId;
+  await router.replace({ query });
+  } finally {
+    if (isCurrent()) initializingIdentity.value = false;
+  }
+}, { immediate: true, flush: 'sync' });
+onMounted(() => { window.addEventListener('resize', recomputeMapRowHeight); });
 
 onUnmounted(() => {
   window.removeEventListener('resize', recomputeMapRowHeight);
@@ -117,11 +153,13 @@ watch(
 
 // 步骤切换写回 URL，刷新后停在同一步（不再强制跳到「查看路线」）。
 watch(() => state.activeStep.value, (step) => {
+  if (initializingIdentity.value) return;
   if (route.query.step !== step) router.replace({ query: { ...route.query, step } });
 });
 
 // 生成/恢复计划后把 planId 写回 URL，刷新页面时可据此恢复（handoff §12.3）。
 watch(() => state.plan.value?.id, (planId) => {
+  if (initializingIdentity.value) return;
   if (planId && route.query.planId !== planId) {
     router.replace({ query: { ...route.query, planId } });
   }
@@ -142,23 +180,30 @@ async function downloadTemplate(): Promise<void> {
 }
 
 async function uploadFile(file: File, columnMapping?: Record<number, string>): Promise<void> {
+  if (!canAct.value) return;
   await state.uploadPreview(file, columnMapping);
 }
 
 async function pasteImport(payload: { rawText: string; businessDate: string | null; columnMapping?: Record<number, string> }): Promise<void> {
+  if (!canAct.value) return;
   await state.pastePreview(payload);
 }
 
 async function commitImport(): Promise<void> {
+  if (!canAct.value) return;
   await state.commitImport();
 }
 
 async function submitManual(payload: { businessDate: string | null; rows: ManualOrderRow[] }): Promise<void> {
-  await state.submitManualOrders(payload.businessDate, payload.rows);
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
+  await state.submitManualOrders(payload.businessDate, payload.rows, () => canAct.value && isCurrent());
 }
 
 /** 开始新一天排线：清空当前视图回到第一步录入。当前计划已存库，可随时从计划列表恢复（防呆确认）。 */
 async function startNewSchedule(): Promise<void> {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
   try {
     await ElMessageBox.confirm(
       '将清空当前排线视图，回到第一步录入新一天的订单。当前计划已保存到系统，可随时恢复。',
@@ -168,8 +213,10 @@ async function startNewSchedule(): Promise<void> {
   } catch {
     return; // 用户取消
   }
+  if (!isCurrent() || !canAct.value) return;
   state.reset();
   await router.replace({ query: {} }); // 清掉 URL 里的 planId，避免刷新又恢复旧计划
+  if (!isCurrent()) return;
   await Promise.all([state.loadVehicles(), state.loadDrivers()]);
 }
 
@@ -179,17 +226,20 @@ function goManageVehicles(): void {
 }
 
 function handleOptimizeMode(mode: 'TIME' | 'DISTANCE'): void {
+  if (!canAct.value) return;
   void state.setOptimizeMode(mode);
 }
 
 // 人工确认页现在一次展示全部车次, 每个操作都带 tripId —— 先把该车次设为当前, 再走原子写回。
 // (state 里的写操作按 activeTrip 定位; selectTrip 同步设置 selectedTripId, activeTrip 是 computed, 立即生效。)
 async function assignVehicle(tripId: string, vehicleId: string | null): Promise<void> {
+  if (!canAct.value) return;
   state.selectTrip(tripId);
   await state.assignVehicle(vehicleId);
 }
 
 async function assignDriver(tripId: string, driverId: string | null): Promise<void> {
+  if (!canAct.value) return;
   state.selectTrip(tripId);
   await state.assignDriver(driverId);
 }
@@ -200,12 +250,16 @@ const locationPickerOpen = ref(false);
 const locationPickerOrder = ref<LogisticsDeliveryOrder | null>(null);
 
 function openLocationPicker(order: LogisticsDeliveryOrder): void {
+  if (!canAct.value) return;
   locationPickerOrder.value = order;
   locationPickerOpen.value = true;
 }
 
 async function confirmLocation(payload: { orderId: string; longitude: number; latitude: number }): Promise<void> {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
   const ok = await state.updateLocation(payload.orderId, payload.longitude, payload.latitude);
+  if (!isCurrent()) return;
   locationPickerOpen.value = false;
   if (!ok) return;
   if (totalTripCount.value > 0) {
@@ -217,35 +271,48 @@ async function confirmLocation(payload: { orderId: string; longitude: number; la
 }
 
 async function handleMoveStore(tripId: string, storeId: string, direction: -1 | 1): Promise<void> {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
   state.selectTrip(tripId);
   await state.moveStore(storeId, direction);
+  if (!isCurrent()) return;
   routeDirty.value = true; // 改了门店顺序 → 路线/距离/ETA 失效, 进下一步前须重算
 }
 
 async function handleMoveToTrip(tripId: string, storeId: string, targetTripId: string | null): Promise<void> {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
   state.selectTrip(tripId);
   await state.moveStoreToTrip(storeId, targetTripId);
+  if (!isCurrent()) return;
   routeDirty.value = true; // 移了车次 → 两条线路都变, 进下一步前须重算
 }
 
 /** 重新生成路线 —— 重算后清除脏标记(路线/距离/ETA 已刷新)。 */
 async function regenerateRoutes(): Promise<void> {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
   await state.regeneratePlanAction();
+  if (!isCurrent()) return;
   routeDirty.value = false;
 }
 
 async function confirmTrip(tripId: string): Promise<void> {
+  if (!canAct.value) return;
   state.selectTrip(tripId);
   await state.confirmTrip();
 }
 
 /** 一键确认全部车次 —— 后端一次性确认(实时, 乐观更新立即全标已确认), 不再逐个串行请求。 */
 async function confirmAllTrips(): Promise<void> {
+  if (!canAct.value) return;
   await state.confirmAllTrips();
 }
 
 async function confirmSchedule(): Promise<void> {
-  if (await state.confirmSchedule()) {
+  if (!canAct.value) return;
+  const isCurrent = workdeskRequests.capture();
+  if (await state.confirmSchedule() && isCurrent()) {
     exportPreviewConfirmed.value = false;
     ElMessage.success('当天排班已确认，可下载 CSV / Excel 发给司机');
   }
@@ -257,11 +324,15 @@ function confirmExportPreview(): void {
 }
 
 async function exportCsv(): Promise<void> {
-  await state.exportCsv();
+  if (!canReadReady.value) return;
+  const isCurrent = workdeskRequests.capture();
+  await state.exportCsv(() => canReadReady.value && isCurrent());
 }
 
 async function exportXlsx(): Promise<void> {
-  await state.exportXlsx();
+  if (!canReadReady.value) return;
+  const isCurrent = workdeskRequests.capture();
+  await state.exportXlsx(() => canReadReady.value && isCurrent());
 }
 
 function back(): void {
@@ -273,8 +344,11 @@ function back(): void {
 }
 
 async function next(): Promise<void> {
+  const isCurrent = workdeskRequests.capture();
   if (state.activeStep.value === 'import') {
+    if (!canAct.value) return;
     await state.generateRoutes();
+    if (!isCurrent()) return;
     routeDirty.value = false; // 新生成的计划路线是最新的
   } else if (state.activeStep.value === 'map') {
     // 脏闸: 改过门店/车次但没重算 → 阻止进下一步(路线/距离/ETA 会不准)
@@ -289,6 +363,7 @@ async function next(): Promise<void> {
 </script>
 
 <template>
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="logistics" :busy="state.analyzing.value || state.uploading.value || state.committing.value || state.planLoading.value" :error="state.planError.value || state.importError.value || state.resourcesError.value || (!authStore.factoryId ? '请先选择企业或重新登录' : '')" :factory-id="authStore.factoryId || ''" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite" :show-aside="false">
   <main class="workbench-page">
     <div v-if="state.analyzing.value" data-testid="ai-analyzing" class="ai-analyzing-overlay">
       <div class="ai-analyzing-card">
@@ -299,11 +374,11 @@ async function next(): Promise<void> {
       </div>
     </div>
     <header class="page-header">
-      <div><h1>配送排程</h1><p>按订单、路线、确认和导出完成当天排程。</p></div>
+      <div><h2>配送排程</h2><p>按订单、路线、确认和导出完成当天排程。</p></div>
       <div class="header-actions">
         <el-tag v-if="state.batch.value" effect="plain" type="success">批次 {{ state.batch.value.batchNumber }}</el-tag>
         <el-button
-          v-if="state.batch.value || state.plan.value"
+          v-if="canAct && (state.batch.value || state.plan.value)"
           type="primary"
           plain
           @click="startNewSchedule"
@@ -315,6 +390,7 @@ async function next(): Promise<void> {
     <CapacityDiagnosisBanner v-if="!capacityOk" :diagnosis="state.capacityDiagnosis.value" @manage-vehicles="goManageVehicles" />
     <el-alert v-if="hasExceptions" data-testid="assignment-issue" title="需要处理" :description="exceptionDescription" type="warning" :closable="false" show-icon />
 
+    <fieldset v-if="state.activeStep.value === 'import'" :disabled="!canAct" class="import-controls">
     <OrderImportStep
       v-if="state.activeStep.value === 'import'"
       :preview="state.preview.value"
@@ -330,6 +406,7 @@ async function next(): Promise<void> {
       @submit-manual="submitManual"
       @clear-batch="startNewSchedule"
     />
+    </fieldset>
 
     <section v-else-if="state.activeStep.value === 'map'" data-testid="map-step" class="map-step">
       <!-- 控制条: 统计 + 运力充足 pill(左) | 优化目标 + 重新生成路线(右)。「查看路线」标题不再重复(步骤条已标)。 -->
@@ -346,9 +423,9 @@ async function next(): Promise<void> {
           <span v-if="totalTripCount > 0" class="cfm-pill" data-testid="confirm-progress">已确认 {{ confirmedTripCount }}/{{ totalTripCount }}<template v-if="unmatchedTripCount > 0"> · 待匹配 {{ unmatchedTripCount }}</template></span>
         </div>
         <div class="rc-right route-settings" data-testid="route-settings">
-          <button v-if="confirmableTripCount > 0 && unmatchedTripCount === 0" type="button" class="confirm-all-btn" data-testid="confirm-all-trips" @click="confirmAllTrips">✓ 一键确认全部（{{ confirmableTripCount }}）</button>
-          <label class="opt-mode">优化目标 <el-radio-group :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
-          <button data-testid="generate-routes" class="generate-button" :class="{ 'dirty-pulse': routeDirty }" type="button" @click="regenerateRoutes">{{ routeDirty ? '⚠ 重新生成路线' : '重新生成路线' }}</button>
+          <button v-if="canAct && confirmableTripCount > 0 && unmatchedTripCount === 0" type="button" class="confirm-all-btn" data-testid="confirm-all-trips" @click="confirmAllTrips">✓ 一键确认全部（{{ confirmableTripCount }}）</button>
+          <label class="opt-mode">优化目标 <el-radio-group :disabled="!canAct" :model-value="state.optimizeMode.value" size="small" @update:model-value="handleOptimizeMode"><el-radio-button label="DISTANCE">路程最短</el-radio-button><el-radio-button label="TIME">时间最快</el-radio-button></el-radio-group></label>
+          <button :disabled="!canAct" data-testid="generate-routes" class="generate-button" :class="{ 'dirty-pulse': routeDirty }" type="button" @click="regenerateRoutes">{{ routeDirty ? '⚠ 重新生成路线' : '重新生成路线' }}</button>
         </div>
       </div>
 
@@ -375,6 +452,7 @@ async function next(): Promise<void> {
         <div v-show="!routesHidden" class="rv-right" data-testid="routes-pane">
           <div class="mr-routes-title">配送线路 · 派车与确认 <span class="mrt-sub">{{ totalTripCount }} 车次 · 逐条或一键确认</span></div>
           <RouteCards
+            :readonly="!canAct"
             :stores="state.stores.value"
             :trips="state.scheduleResult.value.trips"
             :vehicles="state.vehiclesView.value"
@@ -397,7 +475,7 @@ async function next(): Promise<void> {
         <ul>
           <li v-for="order in state.unresolvedOrders.value" :key="order.id">
             <span class="up-store">{{ order.storeName }} · {{ order.address }}</span>
-            <button type="button" class="up-locate-btn" data-testid="locate-store" @click="openLocationPicker(order)">📍 定位</button>
+            <button v-if="canAct" type="button" class="up-locate-btn" data-testid="locate-store" @click="openLocationPicker(order)">📍 定位</button>
           </li>
         </ul>
       </section>
@@ -409,7 +487,7 @@ async function next(): Promise<void> {
       :rows="state.exportRows.value"
       :confirmed="exportConfirmed"
       :preview-confirmed="exportPreviewConfirmed"
-      :can-confirm-schedule="canConfirmSchedule"
+      :can-confirm-schedule="canAct && canConfirmSchedule"
       :plan-id="state.plan.value?.id ?? null"
       @confirm-schedule="confirmSchedule"
       @confirm-preview="confirmExportPreview"
@@ -421,13 +499,15 @@ async function next(): Promise<void> {
       <el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button>
       <div class="ab-right">
         <span v-if="state.activeStep.value === 'map' && routeDirty" class="dirty-hint" data-testid="route-dirty-hint">已调整门店 / 车次，请先「重新生成路线」重算</span>
-        <button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" :disabled="state.activeStep.value === 'map' && routeDirty" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button>
+        <button v-if="state.activeStep.value !== 'export'" data-testid="finish-schedule" class="next-button" type="button" :disabled="(state.activeStep.value === 'import' && !canAct) || (state.activeStep.value === 'map' && routeDirty)" @click="next">{{ state.activeStep.value === 'map' ? '查看排班预览' : '下一步' }}</button>
       </div>
     </footer>
   </main>
+  </DigitalEmployeeFrame>
 </template>
 
 <style scoped lang="scss">
+.import-controls { border: 0; padding: 0; margin: 0; min-width: 0; }
 .workbench-page { display: grid; gap: 12px; max-width: 2560px; min-height: 100%; padding: 12px 24px 14px; margin: 0 auto; background: #f8fafc; } .ai-analyzing-overlay { position: fixed; inset: 0; z-index: 3000; display: grid; place-items: center; background: rgba(16, 24, 40, 0.55); backdrop-filter: blur(2px); } .ai-analyzing-card { width: min(460px, 90vw); padding: 32px 28px; text-align: center; background: #fff; border-radius: 16px; box-shadow: 0 12px 40px rgba(0,0,0,0.25); } .ai-spark { font-size: 40px; animation: ai-pulse 1.1s ease-in-out infinite; } @keyframes ai-pulse { 0%,100% { transform: scale(1); opacity: 0.85; } 50% { transform: scale(1.18); opacity: 1; } } .ai-title { margin: 12px 0 6px; color: #101828; font-size: 18px; font-weight: 750; } .ai-sub { margin: 0 0 18px; color: #667085; font-size: 13px; line-height: 1.5; }
 .page-header, .map-heading, .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 16px; } .header-actions { display: flex; align-items: center; gap: 12px; }
 /* 控制条: 统计 + 运力 pill(左) | 优化目标 + 重新生成路线(右) */

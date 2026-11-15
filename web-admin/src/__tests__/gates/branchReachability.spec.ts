@@ -410,6 +410,19 @@ describe('分支可达性（棘轮：空转的权限分支只许变少）', () =
     expect(f?.verdict).not.toBe('VACUOUS');
   });
 
+  it('阴性对照 ⑦：角色身份/存在性检查不冒充权限决策', () => {
+    const out = judgeSource(
+      H,
+      SFC(
+        "const identity = computed(() => authStore.currentRole === authStore.currentRole);" +
+          "const present = computed(() => authStore.currentRole || '');",
+        '<div v-if="identity && present">x</div>',
+      ),
+      ['hr_admin@FACTORY', 'viewer@FACTORY'],
+    );
+    expect(out).toEqual([]);
+  });
+
   // ==================== 真实用例 ====================
 
   it('真实用例：AlertDashboard 不再暴露餐饮体检分支', () => {
@@ -430,6 +443,14 @@ describe('分支可达性（棘轮：空转的权限分支只许变少）', () =
     expect(f).toBeDefined();
     expect(f?.verdict).toBe('VACUOUS');
     expect(f?.detail).toContain('恒为真');
+  });
+
+  it('真实用例：Sales 数字专员的 employeeCanWrite 绑定到 sales 权限', () => {
+    const f = RESULT.findings.find(
+      (x) => x.relFile.endsWith('workdesk/SalesOwnerWorkdesk.vue') && x.key === "perm.canWrite('sales')",
+    );
+    expect(f?.verdict).toBe('EFFECTIVE');
+    expect(RESULT.undecided.some((x) => /useWorkdesk(?:Intent|Request)/.test(x.key))).toBe(false);
   });
 
   // ==================== 棘轮 ====================

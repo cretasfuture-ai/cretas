@@ -43,6 +43,7 @@ function canVisitRoute(
 function isPathVisible(path: string, context: WorkspaceVisibilityContext): boolean {
   if (!context.factoryId) return false;
   return navigationVisibility.isPathVisible(path.split('?')[0], {
+    actorId: String(authStore.user?.id || ''),
     factoryId: context.factoryId,
     role: context.role,
     factoryType: context.factoryType,

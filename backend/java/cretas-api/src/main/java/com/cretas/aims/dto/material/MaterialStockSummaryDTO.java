@@ -26,7 +26,8 @@ import java.math.BigDecimal;
  *   <li><b>仅在库批次</b>: status NOT IN (DEPLETED, USED_UP, EXPIRED, SCRAPPED, DEFECTIVE)
  *       且 当前剩余 (receiptQuantity - usedQuantity - reservedQuantity) &gt; 0</li>
  *   <li><b>totalQuantity</b>: SUM(receiptQuantity - usedQuantity - reservedQuantity)</li>
- *   <li><b>totalValue</b>: SUM((receiptQuantity - usedQuantity - reservedQuantity) * unitPrice)</li>
+ *   <li><b>totalValue</b>: SUM((receiptQuantity - usedQuantity - reservedQuantity) * unitPrice);
+ *       该组内任一批次缺单价 (unitPrice 为 NULL) 时整体为 null, 不给偏低的数; 单价 0 算有价</li>
  *   <li><b>batchCount</b>: COUNT(批次)</li>
  *   <li><b>warehouseCount</b>: COUNT(DISTINCT warehouseId)</li>
  *   <li><b>avgUnitPrice</b>: totalValue / totalQuantity (移动均价, 除零保护 → null)</li>
@@ -59,7 +60,7 @@ public class MaterialStockSummaryDTO {
     /** 当前总库存 = SUM(receiptQuantity - usedQuantity - reservedQuantity) 跨所有在库批次 */
     private BigDecimal totalQuantity;
 
-    /** 库存总价值 = SUM(剩余数量 * 单价). 价格脱敏: 无 procurement:price:view 权限置 null。 */
+    /** 库存总价值 = SUM(剩余数量 * 单价). 为 null 的原因: 该组有批次缺单价, 或无 procurement:price:view 权限被脱敏。 */
     @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     private BigDecimal totalValue;
 
@@ -69,7 +70,7 @@ public class MaterialStockSummaryDTO {
     /** 涉及仓库数 (DISTINCT warehouseId) */
     private Long warehouseCount;
 
-    /** 移动均价 = totalValue / totalQuantity (除零保护 → null). 价格脱敏: 无 procurement:price:view 权限置 null。 */
+    /** 移动均价 = totalValue / totalQuantity (除零保护 → null; totalValue 为 null 即缺单价时也为 null). 价格脱敏: 无 procurement:price:view 权限置 null。 */
     @PriceSensitive(permission = PriceSensitive.PURCHASE_OR_FINANCE)
     private BigDecimal avgUnitPrice;
 

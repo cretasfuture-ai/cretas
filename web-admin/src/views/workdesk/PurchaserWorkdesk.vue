@@ -20,8 +20,8 @@
 -->
 <template>
   <div class="purchaser-workdesk">
-    <DigitalEmployeeFrame :enabled="digitalEmployee" role="purchase" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
-    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="采购数字文员" scope-label="供应商、采购与库存预警" :quick-questions="['查询低库存预警', '查询采购订单']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="purchase" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite" :wholesale-mode="wholesaleMode">
+    <DigitalEmployeeConversation :scope-key="`${factoryId}:${actorId}:${authStore.currentRole || ''}:${employeeNavigationPending}`" v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="采购数字专员" scope-label="供应商、采购与库存预警" :quick-questions="['查询低库存预警', '查询采购订单']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
       <template #action>
         <UButton v-if="employeeCanWrite && employeePaths.includes('/procurement/orders')" icon="i-lucide-file-plus" @click="openEmployeeOrder">交给采购单办理</UButton>
       </template>
@@ -140,7 +140,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column v-if="!digitalEmployee" label="预测下周用量" width="140" align="right">
+        <el-table-column v-if="!wholesaleMode" label="预测下周用量" width="140" align="right">
           <template #default="{ row }">
             <el-text v-if="forecastByMaterial[row.materialTypeId]" size="small" type="info">
               {{ formatQty(forecastByMaterial[row.materialTypeId]) }}{{ row.unit }}
@@ -148,21 +148,21 @@
             <el-text v-else size="small" type="info">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column v-if="!digitalEmployee" label="价格趋势" width="140">
+        <el-table-column v-if="!wholesaleMode" label="价格趋势" width="140">
           <template #default="{ row }">
             <PriceMiniChart :data="priceTrendByMaterial[row.materialTypeId] || []" />
           </template>
         </el-table-column>
-        <el-table-column v-if="!digitalEmployee" label="操作" width="240" fixed="right">
+        <el-table-column v-if="showNativeActions" label="操作" width="240" fixed="right">
           <template #default="{ row }">
-            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openRequisitionDialog(row)">
+            <el-button v-if="showNativeActions" size="small" type="primary" @click="openRequisitionDialog(row)">
               一键请购
             </el-button>
             <el-button
               size="small"
               type="warning"
               data-testid="loop3-procurement-create-btn"
-              v-if="!digitalEmployee"
+              v-if="showNativeActions"
               @click="openProcurementDialog(row)">
               一键采购下单
             </el-button>
@@ -437,12 +437,14 @@
 import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
 import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
 import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+import { useWorkdeskRequest, isWorkdeskScopeChanged, WorkdeskScopeChangedError } from '@/composables/useWorkdeskRequest';
 import { queueAiEntry } from '@/composables/aiEntryHandoff';
 import { useRouter } from 'vue-router';
-const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
-  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
 });
-import { ref, computed, watch, reactive, h, defineComponent } from 'vue';
+const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
+import { nextTick, ref, computed, watch, reactive, h, defineComponent } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -534,7 +536,18 @@ function handleEmployeeQuestion(question: string) {
   lastEmployeeQuestion.value = question;
   void sendQuery(false);
 }
-const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }));
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || ''), role: authStore.currentRole || '' }));
+const actorId = computed(() => String(authStore.user?.id || ''));
+const scopedRequests = useWorkdeskRequest(() => ({ factoryId: factoryId.value, actorId: actorId.value, contextKey: `${authStore.currentRole || ''}:${props.employeeNavigationPending}:${props.employeeCanWrite}:${props.wholesaleMode}` }));
+function scopedPost<T>(url: string, body?: unknown) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.post<T>(url, body));
+}
+function scopedGet<T>(url: string, config?: Parameters<typeof request.get>[1]) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.get<T>(url, config));
+}
+
 function resetDigitalConversation() {
   employeeIntent.reset();
   formattedText.value = '';
@@ -544,7 +557,7 @@ function resetDigitalConversation() {
   lastEmployeeQuestion.value = '';
 }
 function openEmployeeOrder() {
-  if (!props.employeeCanWrite || !props.employeePaths.includes('/procurement/orders')) return;
+  if (props.employeeNavigationPending || !props.employeeCanWrite || !props.employeePaths.includes('/procurement/orders')) return;
   void router.push(queueAiEntry({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }, '/procurement/orders', userInput.value || lastEmployeeQuestion.value || '创建采购订单'));
 }
 
@@ -587,28 +600,32 @@ const PriceMiniChart = defineComponent({
   },
 });
 
+async function callReadIntent(input: string, intentCode?: string, parameters?: Record<string, unknown>, _preview = false, context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (props.employeeNavigationPending) throw new WorkdeskScopeChangedError();
+  return scopedRequests.run(() => employeeIntent.execute(input, context, { intentCode, parameters }));
+}
+
 async function callIntentExecute(input: string, intentCode?: string,
     parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
   if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
-  if (props.digitalEmployee) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
-  const res = await request.post<ExecuteResponse>(
+  const res = await scopedPost<ExecuteResponse>(
     `/${factoryId.value}/ai-intents/execute`, body);
   return (res as { data: ExecuteResponse }).data;
 }
 
 async function triggerWeeklyPlan() {
-  // Wholesale uses the live low-stock capability; the legacy weekly-plan Skill is not configured there.
+  // Query available tools directly; the legacy weekly Skill may not be configured.
   userInput.value = props.digitalEmployee ? '查询低库存预警' : '下周采购什么?';
-  await sendQuery(!props.digitalEmployee);
+  await sendQuery(!props.digitalEmployee, props.digitalEmployee && !props.wholesaleMode);
 }
 
 async function verifyStockPrerequisites(): Promise<boolean> {
   if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
-  const catalog = await request.get(`/${factoryId.value}/raw-material-types/active`);
+  const catalog = await scopedGet(`/${factoryId.value}/raw-material-types/active`);
   const materials: unknown = (catalog as { data?: unknown }).data;
   if (!Array.isArray(materials)) throw new Error('未能读取原料资料，暂时无法判断库存');
   if (!materials.length) {
@@ -626,8 +643,11 @@ async function verifyStockPrerequisites(): Promise<boolean> {
   return true;
 }
 
-async function sendQuery(autoTrigger = false) {
-  if (loading.value || !userInput.value.trim()) return;
+async function sendQuery(autoTrigger = false, includeSupplemental = false) {
+  if (props.employeeNavigationPending) return;
+  const isCurrentOperation = scopedRequests.capture();
+  const query = userInput.value.trim();
+  if (loading.value || !query) return;
   loading.value = true;
   errorMessage.value = '';
   if (autoTrigger || props.digitalEmployee) {
@@ -640,10 +660,13 @@ async function sendQuery(autoTrigger = false) {
 
   try {
     // 1. 低库存预警 (主路径)
-    const stockPrechecked = props.digitalEmployee && /低库存|库存预警/.test(userInput.value);
-    if (stockPrechecked && !await verifyStockPrerequisites()) return;
+    const stockPrechecked = props.digitalEmployee && /低库存|库存预警/.test(query);
+    if (stockPrechecked && !await verifyStockPrerequisites()) {
+      if (includeSupplemental && isCurrentOperation()) await loadSalesForecast();
+      return;
+    }
     const intentCode = autoTrigger ? 'PURCHASER_WEEKLY_PLAN' : undefined;
-    const response = await callIntentExecute(userInput.value, intentCode);
+    const response = await callReadIntent(query, intentCode);
     if (props.digitalEmployee && response.intentCode === 'MATERIAL_LOW_STOCK_ALERT' && !stockPrechecked
       && !await verifyStockPrerequisites()) return;
     responseStatus.value = response.status || '';
@@ -673,14 +696,16 @@ async function sendQuery(autoTrigger = false) {
     }
 
     // 2. 自动 trigger 时, 并发拉销售预测
-    if (autoTrigger) {
+    if (autoTrigger || includeSupplemental) {
       await Promise.allSettled([
         loadSalesForecast(),
       ]);
+      if (!isCurrentOperation() || props.employeeNavigationPending) return;
       // 3. 顺次拉每个低库存物料的价格历史 (limit 6 避免太多调用)
       await loadPriceHistories();
     }
   } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -690,6 +715,7 @@ async function sendQuery(autoTrigger = false) {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     loading.value = false;
   }
 }
@@ -704,7 +730,7 @@ function extractLowStockRows(resultData: Record<string, unknown>) {
 
 async function loadSalesForecast() {
   try {
-    const response = await callIntentExecute('7 天销售预测', 'SALES_FORECAST_7DAY');
+    const response = await callReadIntent('7 天销售预测', 'SALES_FORECAST_7DAY');
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     const dataLayer = (resultData['data'] as Record<string, unknown>) || resultData;
     const rows = dataLayer['forecasts'] as ForecastRow[] | undefined;
@@ -719,7 +745,8 @@ async function loadSalesForecast() {
       });
       forecastByMaterial.value = idx;
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     console.warn('Sales forecast failed:', err);
   }
 }
@@ -729,7 +756,7 @@ async function loadPriceHistories() {
   await Promise.allSettled(top.map(async row => {
     if (!row.materialTypeId) return;
     try {
-      const response = await callIntentExecute(
+      const response = await callReadIntent(
         `${row.materialName} 价格历史`,
         'PRICE_HISTORY_QUERY',
         { materialTypeId: row.materialTypeId, monthsBack: 6 });
@@ -739,7 +766,8 @@ async function loadPriceHistories() {
       if (Array.isArray(monthly)) {
         priceTrendByMaterial.value[row.materialTypeId] = monthly;
       }
-    } catch (err) {
+    } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
       console.warn(`Price history failed for ${row.materialTypeId}:`, err);
     }
   }));
@@ -809,7 +837,7 @@ const canPreviewRequisition = computed(() => {
 });
 
 function openRequisitionDialog(row: LowStockRow) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   requisitionDialog.visible = true;
   requisitionDialog.row = row;
   // Default 数量 = recommendedReplenishQty (R1: 直接告诉采购员要采多少)
@@ -835,6 +863,8 @@ function resetRequisitionDialog() {
 }
 
 async function previewRequisition() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!requisitionDialog.row || !canPreviewRequisition.value) {
     ElMessage.warning('请填写数量 + 期望到货日');
     return;
@@ -852,7 +882,8 @@ async function previewRequisition() {
     requisitionDialog.preview = previewData;
     requisitionDialog.canSubmit = previewData.canDo === true
         && previewData.status === 'PREVIEW';
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -860,11 +891,14 @@ async function previewRequisition() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     requisitionDialog.previewing = false;
   }
 }
 
 async function executeRequisition() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!requisitionDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
@@ -883,7 +917,8 @@ async function executeRequisition() {
     requisitionDialog.visible = false;
     // 刷新主表
     await triggerWeeklyPlan();
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `提交失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -891,6 +926,7 @@ async function executeRequisition() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     requisitionDialog.submitting = false;
   }
 }
@@ -980,7 +1016,7 @@ const canPreviewProcurement = computed(() => {
 });
 
 async function openProcurementDialog(row: LowStockRow) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   procurementDialog.visible = true;
   procurementDialog.row = row;
   procurementDialog.form.quantity = row.recommendedReplenishQty || row.gap || null;
@@ -1025,7 +1061,8 @@ async function loadProcurementContext(row: LowStockRow) {
     if (previewData.maxQuantity != null) {
       procurementDialog.maxQuantity = Number(previewData.maxQuantity);
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     // Defensive: dialog still usable even if context load fails
     console.warn('Procurement context preload failed:', err);
   }
@@ -1063,6 +1100,8 @@ function gotoPreviewNextAction(url: string) {
 }
 
 async function previewProcurement() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!procurementDialog.row || !canPreviewProcurement.value) {
     ElMessage.warning('请选供应商 + 填数量');
     return;
@@ -1091,7 +1130,8 @@ async function previewProcurement() {
     if (previewData.maxQuantity != null) {
       procurementDialog.maxQuantity = Number(previewData.maxQuantity);
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1099,11 +1139,14 @@ async function previewProcurement() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     procurementDialog.previewing = false;
   }
 }
 
 async function executeProcurement() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!procurementDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
@@ -1138,7 +1181,7 @@ async function executeProcurement() {
       });
       // Soft navigate hint
       setTimeout(() => {
-        if (url) window.location.href = url;
+        if (url && isCurrentOperation() && showNativeActions.value) window.location.href = url;
       }, 1500);
       procurementDialog.visible = false;
       return;
@@ -1147,7 +1190,8 @@ async function executeProcurement() {
     procurementDialog.visible = false;
     // 刷新主表
     await triggerWeeklyPlan();
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `提交失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1155,17 +1199,39 @@ async function executeProcurement() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     procurementDialog.submitting = false;
   }
 }
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
-watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
-  if (pending || !id || initialQueryStarted) return;
+let initializationGeneration = 0;
+let previousIdentity = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole, () => props.wholesaleMode, () => props.employeeCanWrite], ([pending, id, actor, role]) => {
+  const generation = ++initializationGeneration;
+  const identity = `${id}:${actor}:${role || ''}:${pending}:${props.wholesaleMode}:${props.employeeCanWrite}`;
+  if (identity !== previousIdentity) {
+    previousIdentity = identity;
+    initialQueryStarted = false;
+    resetDigitalConversation(); loading.value = false; lastQueryTime.value = ''; resultTitle.value = DEFAULT_RESULT_TITLE;
+    lowStockRows.value = []; forecastRows.value = []; forecastByMaterial.value = {}; priceTrendByMaterial.value = {};
+    requisitionDialog.visible = false; resetRequisitionDialog();
+    procurementDialog.visible = false; resetProcurementDialog();
+  }
+  if (pending || !id || !actor || initialQueryStarted) return;
+  void nextTick(() => {
+    if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerWeeklyPlan();
-}, { immediate: true });
+  });
+}, { immediate: true, flush: 'sync' });
+watch(showNativeActions, (allowed) => {
+  if (allowed) return;
+  requisitionDialog.previewing = false; requisitionDialog.submitting = false; procurementDialog.previewing = false; procurementDialog.submitting = false;
+  requisitionDialog.visible = false; requisitionDialog.preview = null; requisitionDialog.canSubmit = false; requisitionDialog.row = null; procurementDialog.visible = false; procurementDialog.preview = null; procurementDialog.canSubmit = false; procurementDialog.row = null;
+}, { flush: 'sync' });
+
 </script>
 
 <style scoped>

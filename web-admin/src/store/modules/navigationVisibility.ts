@@ -2,6 +2,7 @@ import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 
 export type NavigationVisibilityIdentity = {
+  actorId: string;
   factoryId: string;
   role: string;
   factoryType: string;
@@ -15,8 +16,17 @@ export type NavigationVisibilitySnapshot = NavigationVisibilityIdentity & {
 
 export type NavigationVisibilityStatus = 'unavailable' | 'loading' | 'ready' | 'error';
 
+export function navigationPermissionsReady(identity: NavigationVisibilityIdentity, permission: {
+  currentUserId: string; currentFactoryId: string; currentRole: string; isDbLoaded: boolean; isUserModuleAccessLoaded: boolean;
+}, demoModuleExempt = false): boolean {
+  return !!identity.actorId && permission.currentUserId === identity.actorId
+    && permission.currentFactoryId === identity.factoryId && permission.currentRole === identity.role
+    && (identity.isPlatform || demoModuleExempt || (permission.isDbLoaded && permission.isUserModuleAccessLoaded));
+}
+
 function sameIdentity(a: NavigationVisibilityIdentity, b: NavigationVisibilityIdentity): boolean {
   return a.factoryId === b.factoryId
+    && a.actorId === b.actorId
     && a.role === b.role
     && a.factoryType === b.factoryType
     && a.isPlatform === b.isPlatform;

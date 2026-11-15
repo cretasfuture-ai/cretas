@@ -19,9 +19,14 @@
   - R5 dead-end: 失败 toast duration:0 + showClose + actionHint
 -->
 <template>
-  <div class="quality-chief-workdesk">
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="quality-chief" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="质检数字专员" scope-label="待检批次、综合核对与放行预览" :quick-questions="['查询待放行批次', '这批次能放行吗？']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/quality/release')" to="/quality/release" icon="i-lucide-badge-check">进入质检放行入口</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">质检主管工作台</span>
@@ -35,7 +40,7 @@
     </div>
 
     <!-- AI 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话 — 批次放行综合决策</span>
@@ -61,7 +66,7 @@
     </el-card>
 
     <!-- Loading -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>AI 正在综合 4 项 audit (质检 + HACCP + 添加剂 + 客户标准), 预计 3-5 秒...</span>
@@ -70,7 +75,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -78,7 +83,7 @@
       class="error-alert" />
 
     <!-- AI 输出 (LLM 综合建议) -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -127,7 +132,7 @@
               type="success"
               size="default"
               :icon="CircleCheck"
-              :disabled="!batch.canRelease"
+              :disabled="!batch.canRelease || !canAct"
               @click="openReleaseDialog(batch, 'RELEASED')">
  一键放行
             </el-button>
@@ -135,6 +140,7 @@
               type="danger"
               size="default"
               :icon="CircleClose"
+              :disabled="!canAct"
               @click="openReleaseDialog(batch, 'REJECTED')">
  退货
             </el-button>
@@ -243,23 +249,24 @@
         <el-button @click="releaseDialog.visible = false">取消</el-button>
         <el-button
           :loading="releaseDialog.previewing"
+          :disabled="!canAct"
           @click="previewRelease">
           预览
         </el-button>
         <el-button
           :type="releaseDialog.decision === 'RELEASED' ? 'success' : 'danger'"
           :loading="releaseDialog.submitting"
-          :disabled="!releaseDialog.canSubmit"
+          :disabled="!releaseDialog.canSubmit || !canAct"
           @click="executeRelease">
           {{ releaseDialog.decision === 'RELEASED' ? '确认放行' : '确认退货' }}
         </el-button>
       </template>
     </el-dialog>
-  </div>
+  </DigitalEmployeeFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive, onMounted } from 'vue';
+import { ref, computed, reactive, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Refresh, Loading, CircleCheck, CircleClose, View,
@@ -267,6 +274,9 @@ import {
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -312,6 +322,10 @@ interface BatchDetail {
 }
 
 const authStore = useAuthStore();
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
 
 const userInput = ref('今天哪些批次待放行?');
 const loading = ref(false);
@@ -335,7 +349,64 @@ const currentBatchDetail = reactive<BatchDetail>({
   customerStatus: '-',
 });
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const actorId = computed(() => String(authStore.user?.id || ''));
+const actorRole = computed(() => String((authStore as { currentRole?: string }).currentRole || ''));
+interface RequestGuard {
+  factoryId: string;
+  actorId: string;
+  role: string;
+  requestGeneration: number;
+  requireAction?: boolean;
+}
+let requestGeneration = 0;
+function captureRequestGuard(requireAction = false): RequestGuard {
+  if (!factoryId.value || !actorId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (requireAction && !canAct.value) throw new Error('当前导航或岗位不可办理写操作');
+  return { factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value, requestGeneration, requireAction };
+}
+function isCurrentRequest(guard: RequestGuard): boolean {
+  return guard.requestGeneration === requestGeneration
+    && guard.factoryId === factoryId.value
+    && guard.actorId === actorId.value
+    && guard.role === actorRole.value
+    && !props.employeeNavigationPending
+    && (!guard.requireAction || canAct.value);
+}
+function staleRequestError(): Error & { stale?: boolean } {
+  const error = new Error('企业或账号已切换，请重新查询') as Error & { stale?: boolean };
+  error.stale = true;
+  return error;
+}
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery(false);
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  loading.value = false;
+  releaseDialog.previewing = false;
+  releaseDialog.submitting = false;
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+  pendingBatches.value = [];
+  currentBatchDetail.show = false;
+  currentBatchDetail.batchNumber = '';
+  currentBatchDetail.materialName = '';
+  currentBatchDetail.qualityScore = '';
+  currentBatchDetail.haccpStatus = '';
+  currentBatchDetail.additiveStatus = '';
+  currentBatchDetail.customerStatus = '';
+  releaseDialog.visible = false;
+  resetReleaseDialog();
+}
 
 const renderedFormattedText = computed(() => {
   if (!formattedText.value) return '';
@@ -375,13 +446,17 @@ function previewAlertType(preview: PreviewData): 'warning' | 'info' | 'success' 
 }
 
 async function callIntentExecute(input: string, intentCode?: string,
-    parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
+    parameters?: Record<string, unknown>, preview = false, mode?: 'READ' | 'WRITE', guard = captureRequestGuard()): Promise<ExecuteResponse> {
+  if (!isCurrentRequest(guard)) throw staleRequestError();
+  if (props.digitalEmployee && !intentCode) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
+  if (mode) body.mode = mode;
   const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
+    `/${guard.factoryId}/ai-intents/execute`, body);
+  if (!isCurrentRequest(guard)) throw staleRequestError();
   return (res as { data: ExecuteResponse }).data;
 }
 
@@ -391,16 +466,26 @@ async function triggerPendingQuery() {
 }
 
 async function sendQuery(forcePending = false) {
+  if (props.employeeNavigationPending || !factoryId.value || !actorId.value) return;
   if (!userInput.value.trim()) return;
+  const guard = captureRequestGuard();
+  const query = userInput.value.trim();
   loading.value = true;
   errorMessage.value = '';
   formattedText.value = '';
+  responseStatus.value = '';
 
   try {
     const response = await callIntentExecute(
-      userInput.value,
+      query,
       forcePending ? 'QUALITY_CHIEF_WORKDESK' : undefined,
+      undefined,
+      false,
+      forcePending ? 'READ' : undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -414,8 +499,9 @@ async function sendQuery(forcePending = false) {
         : (response.intentName || DEFAULT_RESULT_TITLE);
     // ⚠️ 正文照旧显示(用户需要知道发生了什么), 变的是【标题不再谎称这是结果】。
     if (nonAnswerLabel) resultTitle.value = nonAnswerLabel;
-    extractBatchesFromResult(response.resultData || {});
+    if (!nonAnswerLabel) extractBatchesFromResult(response.resultData || {});
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard) || (err && typeof err === 'object' && 'stale' in err && (err as { stale?: boolean }).stale)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -425,7 +511,7 @@ async function sendQuery(forcePending = false) {
       showClose: true,
     });
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(guard)) loading.value = false;
   }
 }
 
@@ -471,6 +557,7 @@ function mapToBatch(item: Record<string, unknown>): PendingBatch {
 }
 
 async function queryBatchDetail(batchNumber: string) {
+  const guard = captureRequestGuard();
   loading.value = true;
   try {
     // 调 quality_check_summary Tool
@@ -478,7 +565,11 @@ async function queryBatchDetail(batchNumber: string) {
       `批次 ${batchNumber} 的质检`,
       'QUALITY_CHECK_SUMMARY',
       { batchNumber },
+      false,
+      'READ',
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     const data = (response.resultData?.['data'] as Record<string, unknown>)
       || response.resultData || {};
 
@@ -495,10 +586,11 @@ async function queryBatchDetail(batchNumber: string) {
     // 并行调其他 3 Tool 凑齐 4 维度
     try {
       const [haccpRes, additiveRes, custRes] = await Promise.allSettled([
-        callIntentExecute(`HACCP ${batchNumber}`, 'HACCP_STATUS_QUERY', { batchNumber }),
-        callIntentExecute(`添加剂 ${batchNumber}`, 'ADDITIVE_COMPLIANCE_QUALITY', { batchNumber }),
-        callIntentExecute('客户标准', 'CUSTOMER_QUALITY_STANDARD', { customerId: 'placeholder' }),
+        callIntentExecute(`HACCP ${batchNumber}`, 'HACCP_STATUS_QUERY', { batchNumber }, false, 'READ', guard),
+        callIntentExecute(`添加剂 ${batchNumber}`, 'ADDITIVE_COMPLIANCE_QUALITY', { batchNumber }, false, 'READ', guard),
+        callIntentExecute('客户标准', 'CUSTOMER_QUALITY_STANDARD', { customerId: 'placeholder' }, false, 'READ', guard),
       ]);
+      if (!isCurrentRequest(guard)) return;
       if (haccpRes.status === 'fulfilled') {
         const hd = (haccpRes.value.resultData?.['data'] as Record<string, unknown>) || {};
         const passed = hd['passed'] as boolean;
@@ -525,6 +617,7 @@ async function queryBatchDetail(batchNumber: string) {
 
     ElMessage.success('详细 audit 已加载');
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `查询失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -532,7 +625,7 @@ async function queryBatchDetail(batchNumber: string) {
       showClose: true,
     });
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(guard)) loading.value = false;
   }
 }
 
@@ -559,6 +652,7 @@ const releaseDialogTitle = computed(() => {
 });
 
 function openReleaseDialog(batch: PendingBatch, decision: 'RELEASED' | 'REJECTED') {
+  if (!canAct.value) return;
   releaseDialog.batchNumber = batch.batchNumber;
   releaseDialog.materialName = batch.materialName || '';
   releaseDialog.decision = decision;
@@ -573,12 +667,18 @@ function openReleaseDialog(batch: PendingBatch, decision: 'RELEASED' | 'REJECTED
 }
 
 function resetReleaseDialog() {
+  releaseDialog.previewing = false;
+  releaseDialog.submitting = false;
+  releaseDialog.batchNumber = '';
+  releaseDialog.materialName = '';
+  releaseDialog.decisionLabel = '';
   releaseDialog.form.notes = '';
   releaseDialog.preview = null;
   releaseDialog.canSubmit = false;
 }
 
 async function previewRelease() {
+  if (!canAct.value) return;
   if (!releaseDialog.batchNumber) {
     ElMessage.warning('批次号必填');
     return;
@@ -587,6 +687,7 @@ async function previewRelease() {
     ElMessage.warning('退货必填理由');
     return;
   }
+  const guard = captureRequestGuard(true);
   releaseDialog.previewing = true;
   try {
     const response = await callIntentExecute(
@@ -598,7 +699,10 @@ async function previewRelease() {
         notes: releaseDialog.form.notes,
       },
       true,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     const previewData = (response.resultData || {}) as PreviewData;
     releaseDialog.preview = previewData;
     releaseDialog.canSubmit = previewData.canDo !== false
@@ -607,6 +711,7 @@ async function previewRelease() {
       && previewData.status !== 'INVALID_DECISION'
       && previewData.status !== 'MISSING_REJECT_REASON';
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -614,15 +719,17 @@ async function previewRelease() {
       showClose: true,
     });
   } finally {
-    releaseDialog.previewing = false;
+    if (isCurrentRequest(guard)) releaseDialog.previewing = false;
   }
 }
 
 async function executeRelease() {
+  if (!canAct.value) return;
   if (!releaseDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
+  const guard = captureRequestGuard(true);
   releaseDialog.submitting = true;
   try {
     const response = await callIntentExecute(
@@ -633,13 +740,18 @@ async function executeRelease() {
         decision: releaseDialog.decision,
         notes: releaseDialog.form.notes,
       },
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     ElMessage.success(response.message
       || `批次 ${releaseDialog.batchNumber} ${releaseDialog.decisionLabel} 完成`);
     releaseDialog.visible = false;
     // 重新查询
     await triggerPendingQuery();
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `决策失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -647,14 +759,26 @@ async function executeRelease() {
       showClose: true,
     });
   } finally {
-    releaseDialog.submitting = false;
+    if (isCurrentRequest(guard)) releaseDialog.submitting = false;
   }
 }
 
-// auto-trigger on mount
-onMounted(() => {
-  triggerPendingQuery();
-});
+// Auto-trigger only after tenant/user navigation is ready; identity changes clear stale batches/dialogs.
+let initialQueryStarted = false;
+let previousScopeKey = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, actorRole, () => props.employeeCanWrite, () => props.wholesaleMode], ([pending, id, actor]) => {
+  const scopeKey = `${id}:${actor}:${actorRole.value}:${pending}:${props.employeeCanWrite}:${props.wholesaleMode ?? ''}`;
+  if (scopeKey !== previousScopeKey) {
+    requestGeneration += 1;
+    if (previousScopeKey) resetDigitalConversation();
+    previousScopeKey = scopeKey;
+    initialQueryStarted = false;
+  }
+  if (pending) return;
+  if (!id || !actor || initialQueryStarted) return;
+  initialQueryStarted = true;
+  void triggerPendingQuery();
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <style scoped>
