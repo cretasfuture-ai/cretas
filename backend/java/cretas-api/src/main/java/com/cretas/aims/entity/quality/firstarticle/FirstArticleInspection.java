@@ -12,6 +12,7 @@ import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -34,6 +35,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @Entity
 @Table(name = "first_article_inspections")
+@SQLDelete(sql = "UPDATE first_article_inspections SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class FirstArticleInspection extends BaseEntity {
 
@@ -116,6 +118,13 @@ public class FirstArticleInspection extends BaseEntity {
 
     @Column(name = "judge_notes", length = 500)
     private String judgeNotes;
+
+    /** 送检人本人判定 (工厂开了「允许本人审批」才可能为 true, 必带原因)。 */
+    @Column(name = "self_judged", nullable = false)
+    private Boolean selfJudged = Boolean.FALSE;
+
+    @Column(name = "self_judge_reason", length = 500)
+    private String selfJudgeReason;
 
     @Column(name = "void_reason", length = 500)
     private String voidReason;

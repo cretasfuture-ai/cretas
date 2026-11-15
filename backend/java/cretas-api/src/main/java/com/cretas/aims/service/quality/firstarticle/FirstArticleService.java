@@ -26,6 +26,7 @@ import com.cretas.aims.repository.quality.firstarticle.FirstArticleInspectionRep
 import com.cretas.aims.repository.quality.firstarticle.FirstArticlePolicyRepository;
 import com.cretas.aims.repository.quality.firstarticle.FirstArticleStandardRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
+import com.cretas.aims.service.workflow.FactorySelfApprovalGate;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -65,6 +66,11 @@ public class FirstArticleService {
     private final WorkProcessRepository workProcessRepository;
     private final ProductionBatchRepository batchRepository;
     private final ObjectMapper objectMapper;
+    /** 工厂「允许本人审批」开关 (四眼) 的唯一判定处; 读不到 = 关 = 送检人不能判自己的样。 */
+    private final FactorySelfApprovalGate selfApprovalGate;
+
+    /** 送检人判自己送的样, 而本厂没开「允许本人审批」。 */
+    public static final String SELF_JUDGE_FORBIDDEN = "FIRST_ARTICLE_SELF_JUDGE_FORBIDDEN";
 
     // ==================== 开关 ====================
 
@@ -150,7 +156,8 @@ public class FirstArticleService {
         FirstArticleStandard s = standardRepository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("首检标准不存在"));
         if (!Boolean.TRUE.equals(s.getActive())) {
-            throw new BusinessException(409, "这条首检标准已经停用").withCode("FIRST_ARTICLE_STATE");
+            throw new BusinessException(409, "这条首检标准已经停用").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("刷新首检标准列表; 这道工序还要首检的话, 新建一条标准");
         }
         s.setActive(Boolean.FALSE);
         s.setDeactivatedReason(why);
@@ -173,7 +180,8 @@ public class FirstArticleService {
             existing = standardRepository.findByFactoryIdAndId(factoryId, req.id())
                     .orElseThrow(() -> new ResourceNotFoundException("首检标准不存在"));
             if (!Boolean.TRUE.equals(existing.getActive())) {
-                throw new BusinessException(409, "停用的标准不能再改, 请新建一条").withCode("FIRST_ARTICLE_STATE");
+                throw new BusinessException(409, "停用的标准不能再改, 请新建一条").withCode("FIRST_ARTICLE_STATE")
+                        .withHint("在「首检标准」页点「新建首检标准」, 选同一道工序重新配置检验项");
             }
             if (req.workProcessId() != null && !req.workProcessId().equals(existing.getWorkProcessId())) {
                 throw new BusinessException(400, "标准的工序不能改; 换工序请停用后新建").withCode("FIRST_ARTICLE_INVALID");
@@ -199,7 +207,8 @@ public class FirstArticleService {
 
     private static BusinessException activeExists(String processName) {
         return new BusinessException(409, "工序「" + processName + "」已经有一条启用的首检标准, 请直接修改它")
-                .withCode("FIRST_ARTICLE_STATE");
+                .withCode("FIRST_ARTICLE_STATE")
+                .withHint("在「首检标准」列表找到这道工序的标准点「修改」; 要换成全新标准, 先停用旧的再新建");
     }
 
     // ==================== 工序首检表 ====================
@@ -283,18 +292,22 @@ public class FirstArticleService {
                 .orElseThrow(() -> new ResourceNotFoundException("工序任务不存在"));
         if (task.getStatus() != WorkProcessTask.Status.IN_PROGRESS) {
             throw new BusinessException(409, "工序任务现在是「" + task.getStatus().getDisplayName()
-                    + "」, 只有进行中的工序才能送首检").withCode("FIRST_ARTICLE_STATE");
+                    + "」, 只有进行中的工序才能送首检").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("先开工这道工序, 做出首件后再送检; 已完成的工序不再需要首检");
         }
         FirstArticleStandard std = standardRepository.findActive(factoryId, task.getWorkProcessId())
                 .orElseThrow(() -> new BusinessException(409, "这道工序没有启用的首检标准, 不需要首检")
-                        .withCode("FIRST_ARTICLE_STATE"));
+                        .withCode("FIRST_ARTICLE_STATE")
+                        .withHint("这道工序要首检的话, 请质量负责人先在「首检标准」里给它配一条标准"));
         FirstArticleInspection latest = latestByTask(factoryId, List.of(task.getId())).get(task.getId());
         if (latest != null && latest.getStatus() == Status.PENDING) {
-            throw new BusinessException(409, "这道工序已经送检, 等质检判定").withCode("FIRST_ARTICLE_STATE");
+            throw new BusinessException(409, "这道工序已经送检, 等质检判定").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("不用重复送检; 请质检在「工序首检」表里点「判定」, 送错了可以作废后重送");
         }
         if (latest != null && latest.getStatus() == Status.PASSED) {
             throw new BusinessException(409, "这道工序首检已经合格; 要重新首检请先作废那张单")
-                    .withCode("FIRST_ARTICLE_STATE");
+                    .withCode("FIRST_ARTICLE_STATE")
+                    .withHint("在「首检单」里找到那张合格单点「作废」并写明原因, 再重新送检");
         }
         FirstArticleInspection i = new FirstArticleInspection();
         i.setFactoryId(factoryId);
@@ -314,26 +327,59 @@ public class FirstArticleService {
         try {
             i = inspectionRepository.saveAndFlush(i);
         } catch (DataIntegrityViolationException dup) {
-            throw new BusinessException(409, "这道工序已经送检, 等质检判定").withCode("FIRST_ARTICLE_STATE");
+            throw new BusinessException(409, "这道工序已经送检, 等质检判定").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("刚有人同时送检了这道工序; 刷新「工序首检」表, 等质检判定那一张");
         }
         return inspectionView(i, processNames(factoryId, Set.of(i.getWorkProcessId())).get(i.getWorkProcessId()));
     }
 
     /** 判定预览: 按送检时的标准快照逐项算, 不写库。 */
     @Transactional(readOnly = true)
-    public JudgePreview previewJudge(String factoryId, Long id, JudgeRequest req) {
+    public JudgePreview previewJudge(String factoryId, Long id, JudgeRequest req, Long operatorId) {
         FirstArticleInspection i = inspectionRepository.findByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("首检单不存在"));
-        return judgePreview(i, req);
+        JudgePreview p = judgePreview(i, req);
+        if (!isMaker(i, operatorId) || !p.canSubmit()) {
+            return isMaker(i, operatorId) ? withSelf(p, p.canSubmit(), p.message()) : p;
+        }
+        // 预览与写路径同一判据 (FactorySelfApprovalGate), 只是不抛, 改成 canSubmit=false + 原因
+        if (selfApprovalGate == null || !selfApprovalGate.isEnabled(factoryId)) {
+            return withSelf(p, false, SELF_JUDGE_MESSAGE);
+        }
+        if (req.selfJudgeReason() == null || req.selfJudgeReason().isBlank()) {
+            return withSelf(p, false, "本厂允许本人判定, 但要写明为什么由送检人本人判定");
+        }
+        return withSelf(p, true, p.message() + " (本人判定, 原因会留痕)");
+    }
+
+    private static final String SELF_JUDGE_MESSAGE =
+            "这张首检单是你送检的, 本厂没有允许本人判定, 请由另一位有质量权限的人判定";
+
+    private static boolean isMaker(FirstArticleInspection i, Long operatorId) {
+        return operatorId != null && operatorId.equals(i.getRequestedBy());
+    }
+
+    private static JudgePreview withSelf(JudgePreview p, boolean canSubmit, String message) {
+        return new JudgePreview(p.inspectionId(), p.results(), p.autoVerdict(), p.failedItems(), p.verdict(),
+                canSubmit, message, true);
     }
 
     @Transactional
     public InspectionView judge(String factoryId, Long id, JudgeRequest req, Long operatorId) {
         FirstArticleInspection i = inspectionRepository.lockByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("首检单不存在"));
+        // 四眼: 送检人判自己送的样 → 看工厂「允许本人审批」开关; 关 (默认 / 读不到) → 403, 开 → 必须写原因 (422) 并留痕
+        FactorySelfApprovalGate.Decision self = FactorySelfApprovalGate.decide(selfApprovalGate, factoryId,
+                isMaker(i, operatorId), req == null ? null : req.selfJudgeReason());
+        if (self.forbidden()) {
+            throw new BusinessException(403, SELF_JUDGE_MESSAGE)
+                    .withCode(SELF_JUDGE_FORBIDDEN)
+                    .withHint(FactorySelfApprovalGate.SWITCH_HINT);
+        }
         JudgePreview preview = judgePreview(i, req);
         if (!preview.canSubmit()) {
-            throw new BusinessException(409, preview.message()).withCode("FIRST_ARTICLE_STATE");
+            throw new BusinessException(409, preview.message()).withCode("FIRST_ARTICLE_STATE")
+                    .withHint("按提示调整判定结果或补写原因, 先点「预览判定」确认能提交后再确认");
         }
         FirstArticleItemRules.Evaluation ev = new FirstArticleItemRules.Evaluation(
                 preview.results(), preview.autoVerdict(), preview.failedItems());
@@ -343,6 +389,8 @@ public class FirstArticleService {
         i.setJudgedBy(operatorId);
         i.setJudgedAt(LocalDateTime.now());
         i.setJudgeNotes(clip(req.notes()));
+        i.setSelfJudged(self.selfApproved());
+        i.setSelfJudgeReason(self.selfApproved() ? self.reason() : null);
         i = inspectionRepository.save(i);
         return inspectionView(i, processNames(factoryId, Set.of(i.getWorkProcessId())).get(i.getWorkProcessId()));
     }
@@ -351,7 +399,7 @@ public class FirstArticleService {
         if (req == null) throw new BusinessException(400, "请求体不能为空").withCode("FIRST_ARTICLE_INVALID");
         if (i.getStatus() != Status.PENDING) {
             return new JudgePreview(i.getId(), List.of(), null, List.of(), req.verdict(), false,
-                    "这张首检单现在是「" + i.getStatus().getDisplayName() + "」, 不能再判定");
+                    "这张首检单现在是「" + i.getStatus().getDisplayName() + "」, 不能再判定", false);
         }
         List<FirstArticleItemRules.Item> items = FirstArticleItemRules.readItems(objectMapper, i.getStandardItemsJson());
         FirstArticleItemRules.Evaluation ev = FirstArticleItemRules.evaluate(items, req.results());
@@ -373,7 +421,7 @@ public class FirstArticleService {
             message = "确认判定为「" + label(verdict) + "」"
                     + (ev.failedItemNames().isEmpty() ? "" : " (不合格项: " + String.join("、", ev.failedItemNames()) + ")");
         }
-        return new JudgePreview(i.getId(), ev.items(), ev.autoVerdict(), ev.failedItemNames(), verdict, canSubmit, message);
+        return new JudgePreview(i.getId(), ev.items(), ev.autoVerdict(), ev.failedItemNames(), verdict, canSubmit, message, false);
     }
 
     @Transactional
@@ -382,7 +430,8 @@ public class FirstArticleService {
         FirstArticleInspection i = inspectionRepository.lockByFactoryIdAndId(factoryId, id)
                 .orElseThrow(() -> new ResourceNotFoundException("首检单不存在"));
         if (i.getStatus() == Status.VOID) {
-            throw new BusinessException(409, "这张首检单已经作废").withCode("FIRST_ARTICLE_STATE");
+            throw new BusinessException(409, "这张首检单已经作废").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("刷新首检单列表; 这道工序还要首检的话, 重新送检开一张新单");
         }
         i.setStatus(Status.VOID);
         i.setVoidReason(why);
@@ -434,7 +483,8 @@ public class FirstArticleService {
                 i.getStatus(), i.getStatus().getDisplayName(), i.getSampleQuantity(), i.getSampleUnit(),
                 i.getRequestNotes(), i.getRequestedBy(), i.getRequestedAt(),
                 FirstArticleItemRules.readResults(objectMapper, i.getResultsJson()), i.getAutoVerdict(),
-                i.getJudgedBy(), i.getJudgedAt(), i.getJudgeNotes(), i.getVoidReason(), i.getVoidedAt());
+                i.getJudgedBy(), i.getJudgedAt(), i.getJudgeNotes(), Boolean.TRUE.equals(i.getSelfJudged()),
+                i.getSelfJudgeReason(), i.getVoidReason(), i.getVoidedAt());
     }
 
     private static String label(Verdict v) {

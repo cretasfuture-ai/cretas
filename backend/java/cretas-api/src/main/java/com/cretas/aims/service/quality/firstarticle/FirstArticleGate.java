@@ -24,8 +24,9 @@ import java.util.Optional;
  * 调用方: {@code WorkProcessTaskServiceImpl#start / #complete} (HTTP + AI 完工工具都走它),
  * AI 完工预览经 {@code WorkProcessTaskService#assertFirstArticleAllowsComplete} 镜像同一判据。
  *
- * <p>⚠️ 本切片未接: Web 逐道录入 ({@code ProcessSheetServiceImpl} → {@code WorkflowTaskProgressWriter}) 与 App 产量报工
- * 把任务记成完成的路径, BLOCK 不拦这两条 (见设计文档「未做」)。
+ * <p>另外两个能把任务记成完成的入口也接了同一判据 (BLOCK 才查, 关 / 提示时只问一次开关):
+ * Web 逐道录入 {@code ProcessSheetServiceImpl} (正式行前置 + 进度回写前兜底) 与 App 产量报工
+ * {@code YieldReportServiceImpl#submitReport} (产出报工且要完工时, 落库前)。
  */
 @Component
 @RequiredArgsConstructor
@@ -71,9 +72,17 @@ public class FirstArticleGate {
                 .orElse(null);
     }
 
-    /** BLOCK 下首检没合格 → 409; OFF / WARN / 不要求 / 已合格 → 放行。 */
+    /** 本厂开关是不是「拦截」。调用方在读任务之前先问它: 关 / 提示时连任务都不用找。 */
+    public boolean isBlocking(String factoryId) {
+        return modeOf(factoryId) == Mode.BLOCK;
+    }
+
+    /** BLOCK 下首检没合格 → 409; OFF / WARN / 不要求 / 已合格 / 任务早已完成 (重存已完成工序不新拦) → 放行。 */
     public void assertCanComplete(String factoryId, WorkProcessTask task) {
         if (modeOf(factoryId) != Mode.BLOCK) {
+            return;
+        }
+        if (task != null && task.getStatus() == WorkProcessTask.Status.COMPLETED) {
             return;
         }
         Optional<Requirement> req = requirementOf(factoryId, task);

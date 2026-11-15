@@ -141,7 +141,7 @@ public class FirstArticleController {
     @RequirePermission({"quality:read_write"})
     public ApiResponse<JudgePreview> previewJudge(@PathVariable String factoryId, @PathVariable Long id,
                                                   @RequestBody JudgeRequest body) {
-        return ApiResponse.success(service.previewJudge(factoryId, id, body));
+        return ApiResponse.success(service.previewJudge(factoryId, id, body, SecurityUtils.currentUserId()));
     }
 
     @PostMapping("/inspections/{id}/judge")

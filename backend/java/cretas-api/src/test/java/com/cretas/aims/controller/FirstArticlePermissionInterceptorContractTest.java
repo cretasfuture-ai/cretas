@@ -115,7 +115,7 @@ class FirstArticlePermissionInterceptorContractTest {
         postAs(operator, "/standards/5/deactivate", "{\"reason\":\"x\"}").andExpect(status().isForbidden());
 
         verify(service, never()).judge(anyString(), anyLong(), any(), any());
-        verify(service, never()).previewJudge(anyString(), anyLong(), any());
+        verify(service, never()).previewJudge(anyString(), anyLong(), any(), any());
         verify(service, never()).voidInspection(anyString(), anyLong(), any(), any());
         verify(service, never()).saveStandard(anyString(), any(), any());
         verify(service, never()).deactivateStandard(anyString(), anyLong(), any(), any());

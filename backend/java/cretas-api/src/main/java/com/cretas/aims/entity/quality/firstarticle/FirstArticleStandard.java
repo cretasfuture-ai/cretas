@@ -10,6 +10,7 @@ import jakarta.persistence.Table;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 /**
@@ -17,7 +18,7 @@ import org.hibernate.annotations.Where;
  *
  * <p>每道工序同时最多一条启用标准 (部分唯一索引 {@code uk_fa_standards_active_process})。
  * 改标准 = 同一行 {@code revision + 1}; 已送检的首检单存当时的标准快照, 不受后改影响。
- * 停用写原因; 不物理删除, 也不走软删 (没有删除入口)。
+ * 停用写原因; 业务上没有删除入口 (停用代替删除), 万一有人调 delete 也只软删 ({@code @SQLDelete})。
  *
  * <p>{@code itemsJson} 的形状与校验只在 {@code FirstArticleItemRules} 一处 (⛔ 别处不要再解析一份)。
  */
@@ -26,6 +27,7 @@ import org.hibernate.annotations.Where;
 @NoArgsConstructor
 @Entity
 @Table(name = "first_article_standards")
+@SQLDelete(sql = "UPDATE first_article_standards SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class FirstArticleStandard extends BaseEntity {
 

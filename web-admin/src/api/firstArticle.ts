@@ -111,12 +111,15 @@ export interface InspectionView {
   judgedBy: number | null;
   judgedAt: string | null;
   judgeNotes: string | null;
+  selfJudged: boolean;
+  selfJudgeReason: string | null;
   voidReason: string | null;
   voidedAt: string | null;
 }
 
 export interface ResultInput { key: string; numericValue: number | null; optionValue: string | null }
-export interface JudgeRequest { results: ResultInput[]; verdict: Verdict | null; notes: string | null }
+/** selfJudgeReason: 判定人就是送检人、且本厂开了「允许本人审批」时必填; 开关关时本人一律不能判 (服务端 403) */
+export interface JudgeRequest { results: ResultInput[]; verdict: Verdict | null; notes: string | null; selfJudgeReason: string | null }
 export interface JudgePreview {
   inspectionId: number;
   results: FirstArticleItemResult[];
@@ -125,6 +128,8 @@ export interface JudgePreview {
   verdict: Verdict | null;
   canSubmit: boolean;
   message: string;
+  /** 当前判定人就是送检人 */
+  selfJudge: boolean;
 }
 
 export interface Page<T> { content: T[]; totalElements: number; page: number; size: number }

@@ -31,8 +31,9 @@ public final class FirstArticleDtos {
     public record InspectionRequest(Long taskId, BigDecimal sampleQuantity, String sampleUnit, String notes) {
     }
 
+    /** {@code selfJudgeReason}: 判定人就是送检人、且本厂开了「允许本人审批」时必填 (开关关时本人一律不能判)。 */
     public record JudgeRequest(List<FirstArticleItemRules.ResultInput> results,
-                               FirstArticleInspection.Verdict verdict, String notes) {
+                               FirstArticleInspection.Verdict verdict, String notes, String selfJudgeReason) {
     }
 
     // ==================== 返回 ====================
@@ -63,14 +64,15 @@ public final class FirstArticleDtos {
                                  FirstArticleInspection.Verdict autoVerdict,
                                  Long judgedBy,
                                  @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime judgedAt,
-                                 String judgeNotes, String voidReason,
+                                 String judgeNotes, boolean selfJudged, String selfJudgeReason, String voidReason,
                                  @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime voidedAt) {
     }
 
     /** 判定预览: 服务端逐项算出的结论, 不写库。 */
     public record JudgePreview(Long inspectionId, List<FirstArticleItemRules.ItemResult> results,
                                FirstArticleInspection.Verdict autoVerdict, List<String> failedItems,
-                               FirstArticleInspection.Verdict verdict, boolean canSubmit, String message) {
+                               FirstArticleInspection.Verdict verdict, boolean canSubmit, String message,
+                               boolean selfJudge) {
     }
 
     /**

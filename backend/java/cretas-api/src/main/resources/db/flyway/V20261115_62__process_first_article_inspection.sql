@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS first_article_inspections (
     judged_by             BIGINT,
     judged_at             TIMESTAMP,
     judge_notes           VARCHAR(500),
+    -- 送检人本人判定 (工厂「允许本人审批」开关开时才可能为 TRUE, 必须带原因; 开关关时服务端 403)
+    self_judged           BOOLEAN       NOT NULL DEFAULT FALSE,
+    self_judge_reason     VARCHAR(500),
     void_reason           VARCHAR(500),
     voided_by             BIGINT,
     voided_at             TIMESTAMP,
@@ -63,6 +66,7 @@ CREATE TABLE IF NOT EXISTS first_article_inspections (
     -- 判定过的记录必须有判定人/时间; 作废必须有原因。
     CONSTRAINT ck_fa_inspections_judged CHECK (
         status NOT IN ('PASSED', 'FAILED') OR (judged_at IS NOT NULL AND auto_verdict IS NOT NULL)),
+    CONSTRAINT ck_fa_inspections_self_judge CHECK (NOT self_judged OR self_judge_reason IS NOT NULL),
     CONSTRAINT ck_fa_inspections_void CHECK (
         status <> 'VOID' OR (void_reason IS NOT NULL AND voided_at IS NOT NULL))
 );

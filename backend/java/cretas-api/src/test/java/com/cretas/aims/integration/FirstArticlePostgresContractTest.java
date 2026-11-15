@@ -87,13 +87,16 @@ class FirstArticlePostgresContractTest {
     static final String F = "FA-PG";
     static final String OTHER = "FA-PG-OTHER";
     static final Long USER = 30001L;
+    /** 判定人 (四眼: 与送检人 USER 不同)。 */
+    static final Long INSPECTOR = 30002L;
     static final String MIGRATION = "db/flyway/V20261115_62__process_first_article_inspection.sql";
 
     @Configuration(proxyBeanMethods = false)
     @EnableAutoConfiguration(exclude = {SecurityAutoConfiguration.class, UserDetailsServiceAutoConfiguration.class})
     @EntityScan("com.cretas.aims.entity")
     @EnableJpaRepositories("com.cretas.aims.repository")
-    @Import({FirstArticleService.class, FirstArticleGate.class})
+    @Import({FirstArticleService.class, FirstArticleGate.class,
+            com.cretas.aims.service.workflow.FactorySelfApprovalGate.class})
     static class Runtime {
     }
 
@@ -164,7 +167,7 @@ class FirstArticlePostgresContractTest {
 
     static JudgeRequest judge(String weight, String seal, Verdict verdict, String notes) {
         return new JudgeRequest(List.of(new ResultInput("weight", new BigDecimal(weight), null),
-                new ResultInput("seal", null, seal)), verdict, notes);
+                new ResultInput("seal", null, seal)), verdict, notes, null);
     }
 
     WorkProcessTask taskEntity(String factory, long id) {
@@ -271,32 +274,43 @@ class FirstArticlePostgresContractTest {
         assertThat(tx(() -> service.listTasks(F, true, 1, 20)).getContent().get(0).firstArticleStatus()).isEqualTo("PENDING");
 
         // 判定预览: 块重 230 超上限 → 系统判不合格, 不能判合格, 不写库
-        JudgePreview bad = tx(() -> service.previewJudge(F, first.id(), judge("230", "平整", Verdict.PASSED, null)));
+        JudgePreview bad = tx(() -> service.previewJudge(F, first.id(), judge("230", "平整", Verdict.PASSED, null), INSPECTOR));
         assertThat(bad.autoVerdict()).isEqualTo(Verdict.FAILED);
         assertThat(bad.failedItems()).containsExactly("块重");
         assertThat(bad.canSubmit()).isFalse();
-        assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(), judge("230", "平整", Verdict.PASSED, null), USER)))
+        assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(), judge("230", "平整", Verdict.PASSED, null), INSPECTOR)))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("不能判首检合格");
         assertThat(jdbc.queryForObject("select status from first_article_inspections where id = ?", String.class, first.id()))
                 .isEqualTo("PENDING");
         // 必检项缺值 → 400
         assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(),
-                new JudgeRequest(List.of(new ResultInput("weight", new BigDecimal("200"), null)), Verdict.PASSED, null), USER)))
+                new JudgeRequest(List.of(new ResultInput("weight", new BigDecimal("200"), null)), Verdict.PASSED, null, null), INSPECTOR)))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("封口");
 
-        InspectionView failed = tx(() -> service.judge(F, first.id(), judge("230", "平整", Verdict.FAILED, null), USER));
+        // 四眼 (本厂没有 factory_settings 行 = 「允许本人审批」关): 送检人 USER 判自己送的样 → 403, 单仍是 PENDING
+        assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(), judge("200", "平整", Verdict.PASSED, null), USER)))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> {
+                    assertThat(((BusinessException) e).getCode()).isEqualTo(403);
+                    assertThat(((BusinessException) e).getErrorCode()).isEqualTo(FirstArticleService.SELF_JUDGE_FORBIDDEN);
+                });
+        assertThat(tx(() -> service.previewJudge(F, first.id(), judge("200", "平整", Verdict.PASSED, null), USER)).canSubmit())
+                .isFalse();
+        assertThat(jdbc.queryForObject("select status from first_article_inspections where id = ?", String.class, first.id()))
+                .isEqualTo("PENDING");
+        InspectionView failed = tx(() -> service.judge(F, first.id(), judge("230", "平整", Verdict.FAILED, null), INSPECTOR));
         assertThat(failed.status()).isEqualTo(FirstArticleInspection.Status.FAILED);
         assertThat(failed.results()).hasSize(2);
         assertThat(failed.results().get(0).pass()).isFalse();
         assertThat(failed.results().get(1).pass()).isTrue();
-        assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(), judge("200", "平整", Verdict.PASSED, null), USER)))
+        assertThatThrownBy(() -> tx(() -> service.judge(F, first.id(), judge("200", "平整", Verdict.PASSED, null), INSPECTOR)))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("不能再判定");
         assertThatThrownBy(() -> tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9101)); return null; }))
                 .hasMessageContaining("首检不合格");
 
         // 返工后再送检 → 合格 → 闸放行
         InspectionView second = tx(() -> service.requestInspection(F, new InspectionRequest(9101L, null, null, null), USER));
-        InspectionView passed = tx(() -> service.judge(F, second.id(), judge("205", "轻微褶皱", Verdict.PASSED, null), USER));
+        InspectionView passed = tx(() -> service.judge(F, second.id(), judge("205", "轻微褶皱", Verdict.PASSED, null), INSPECTOR));
         assertThat(passed.status()).isEqualTo(FirstArticleInspection.Status.PASSED);
         assertThat(passed.autoVerdict()).isEqualTo(Verdict.PASSED);
         tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9101)); return null; });
@@ -330,13 +344,13 @@ class FirstArticlePostgresContractTest {
                 new InspectionRequest(9201L, null, null, null), USER));
 
         assertThatThrownBy(() -> tx(() -> service.getInspection(OTHER, aId))).isInstanceOf(ResourceNotFoundException.class);
-        assertThatThrownBy(() -> tx(() -> service.judge(OTHER, aId, judge("200", "平整", Verdict.PASSED, null), USER)))
+        assertThatThrownBy(() -> tx(() -> service.judge(OTHER, aId, judge("200", "平整", Verdict.PASSED, null), INSPECTOR)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> tx(() -> service.voidInspection(OTHER, aId, "x", USER)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThatThrownBy(() -> tx(() -> service.requestInspection(OTHER, new InspectionRequest(9101L, null, null, null), USER)))
                 .isInstanceOf(ResourceNotFoundException.class);
-        assertThatThrownBy(() -> tx(() -> service.previewJudge(F, bInspection.id(), judge("200", "平整", Verdict.PASSED, null))))
+        assertThatThrownBy(() -> tx(() -> service.previewJudge(F, bInspection.id(), judge("200", "平整", Verdict.PASSED, null), INSPECTOR)))
                 .isInstanceOf(ResourceNotFoundException.class);
         assertThat(inspections.findByFactoryIdAndId(OTHER, aId)).isEmpty();
         assertThat(inspections.findEffectiveForTasks(OTHER, List.of(9101L))).isEmpty();

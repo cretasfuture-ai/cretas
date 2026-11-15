@@ -140,6 +140,7 @@ const judgeTarget = ref<InspectionView | null>(null);
 const judgeValues = ref<Record<string, string>>({});
 const judgeVerdict = ref<Verdict | null>(null);
 const judgeNotes = ref('');
+const judgeSelfReason = ref('');
 const judgePreviewData = ref<JudgePreview | null>(null);
 const judgeBusy = ref(false);
 const VERDICT_ITEMS = [{ label: '首检合格', value: 'PASSED' }, { label: '首检不合格', value: 'FAILED' }];
@@ -151,13 +152,17 @@ async function openJudge(inspectionId: number) {
     judgeValues.value = {};
     judgeVerdict.value = null;
     judgeNotes.value = '';
+    judgeSelfReason.value = '';
     judgePreviewData.value = null;
   } catch (e) { ElMessage.error(errorText(e, '首检单读取失败')); }
 }
 function judgeBody() {
   const built = buildResults(judgeTarget.value?.standardItems ?? [], judgeValues.value);
   if (built.error) { ElMessage.error(built.error); return null; }
-  return { results: built.results, verdict: judgeVerdict.value, notes: judgeNotes.value.trim() || null };
+  return {
+    results: built.results, verdict: judgeVerdict.value, notes: judgeNotes.value.trim() || null,
+    selfJudgeReason: judgeSelfReason.value.trim() || null,
+  };
 }
 async function runJudgePreview() {
   if (!judgeTarget.value) return;
@@ -515,6 +520,9 @@ onMounted(async () => {
             </div>
             <UFormField label="判定结果"><URadioGroup v-model="judgeVerdict" orientation="horizontal" :items="VERDICT_ITEMS" @update:model-value="onJudgeInputChanged" /></UFormField>
             <UFormField label="说明"><UTextarea v-model="judgeNotes" :rows="2" :maxlength="500" placeholder="各项合格却判不合格时必填" class="w-full" @update:model-value="onJudgeInputChanged" /></UFormField>
+            <UFormField v-if="judgePreviewData?.selfJudge" label="本人判定原因" help="这张单是你送检的；本厂允许本人判定时必须写明原因，会留痕">
+              <UTextarea v-model="judgeSelfReason" :rows="2" :maxlength="500" placeholder="如 本厂只有我一个质检" class="w-full" data-testid="fa-self-reason" @update:model-value="onJudgeInputChanged" />
+            </UFormField>
             <UAlert v-if="judgePreviewData" :color="judgePreviewData.canSubmit ? 'info' : 'warning'" variant="subtle" :title="`系统按标准算出：${judgePreviewData.autoVerdict === 'PASSED' ? '首检合格' : '首检不合格'}`" :description="judgePreviewData.message" data-testid="fa-judge-preview" />
           </template>
           <template v-else>
@@ -526,6 +534,7 @@ onMounted(async () => {
             </div>
             <p v-if="!judgeTarget.results" class="muted">{{ judgeTarget.status === 'PENDING' ? '等质检判定（你没有质量写权限，只能查看）' : '没有逐项结果' }}</p>
             <p v-if="judgeTarget.judgeNotes">判定说明：{{ judgeTarget.judgeNotes }}</p>
+            <p v-if="judgeTarget.selfJudged">送检人本人判定，原因：{{ judgeTarget.selfJudgeReason }}</p>
             <p v-if="judgeTarget.voidReason">作废原因：{{ judgeTarget.voidReason }}</p>
           </template>
         </div>

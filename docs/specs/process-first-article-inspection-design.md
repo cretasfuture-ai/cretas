@@ -46,23 +46,32 @@ FAILED 之后返工再送检，开一张新单（旧单保留）。
 
 ## 开关打开后的效果（`FirstArticleGate`）
 
-| 开关 | 开工 | 报完工（`PUT /work-process-tasks/{id}/complete`、AI 完工工具） |
+| 开关 | 开工 | 报完工（工序任务完工 + AI 完工工具、Web 逐道录入正数产出的正式行、App 产出报工且完工） |
 |---|---|---|
 | OFF（默认） | 照旧；只查一次开关 | 照旧；返回 JSON 与之前一样（`firstArticleNotice` 为 null，不序列化） |
 | WARN | 照旧，返回里带 `firstArticleNotice` | 照旧，返回里带 `firstArticleNotice` |
 | BLOCK | 照旧（首件要开工后才做得出来）+ 提示 | 首检没合格 → 409 `FIRST_ARTICLE_NOT_PASSED`；AI 完工预览同一判据，不出确认卡 |
+
+## 三个完工入口都接了同一判据
+
+| 入口 | 接在哪 | 拦什么 | 不拦 |
+|---|---|---|---|
+| 工序任务完工（HTTP、AI 工具） | `WorkProcessTaskServiceImpl#complete`，AI 预览经 `assertFirstArticleAllowsComplete` | 完工 | 开工 |
+| Web 逐道录入 | `ProcessSheetServiceImpl#saveRow / #submitRow` 的前置校验（与上游解冻闸同位置，写入前）；改行、多产出、重新物化等路径在回写「记成完成」前再判一次（同一事务，抛出即整次保存回滚） | 有正数产出的正式行 | 产出为 0 的行、草稿、早已完成的任务 |
+| App 产量报工 | `YieldReportServiceImpl#submitReport`，落库前 | 产出 / 旧式整合报工且会把任务记成完成 | 部分产出续报（`markComplete=false`）、领料、工时段 |
+
+开关关或提示时，每个入口只多查一次开关，不读 Workflow 快照，也不查标准和首检单。
 
 ## 口径选择（二选一时选了保守的一边）
 
 1. 默认关，没有开关行的工厂一律按关处理，不回填。
 2. 开关三档，「提示」与「拦截」由工厂选；拦截只拦报完工，不拦开工。
 3. 标准挂在工序定义上，不按产品分别配置。
-4. 判定不设四眼：送检人和判定人可以是同一人，只要有质量写权限（小厂一人质检的常见情况）。要不要接工厂的「允许本人审批」开关，需要 Steve 拍板。
+4. 判定遵守工厂「允许本人审批」开关（organizer 按保守口径定，走唯一判定处 `FactorySelfApprovalGate`）：开关关（默认，或读不到）时，送检人不能判定自己送的样，服务端返回 403 `FIRST_ARTICLE_SELF_JUDGE_FORBIDDEN` 并写明原因；开关开时允许，但必须写本人判定原因（没写返回 422），记录上留痕 `self_judged` + `self_judge_reason`。
 5. 系统判出不合格项时不允许人工改判合格（不设让步放行）。
 
 ## 未做（本切片范围外）
 
-- BLOCK 只接了工序任务「报完工」入口（HTTP + AI 工具）。Web 逐道录入（`ProcessSheetServiceImpl` → `WorkflowTaskProgressWriter`）和 App 产量报工也会把任务记成完成，这两条路**不拦**。接上前，开「拦截」的工厂只在工序任务完工入口生效。
 - 对话建厂（FactoryBuildInterview）里还没有首检开关这一题；目前只能在 web-admin「工序首检」页改。
 - 规则提醒（首检未做提醒）是 E 线另一项，不在本切片。
 - RN App 没有改界面；`firstArticleNotice` 字段已在开工和完工的返回里，App 还没有显示它。
