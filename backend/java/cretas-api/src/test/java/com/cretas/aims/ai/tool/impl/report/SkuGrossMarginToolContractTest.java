@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
  * 口径 2 由真实的 {@link ThreePriceComparisonService#catalogMarginFor} 算出 (只桩掉仓库)。
  * 折扣用例则用 H2 真的跑那条 SQL。
  */
-class SkuGrossMarginToolTest {
+class SkuGrossMarginToolContractTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 10, 6);
 
@@ -157,7 +157,7 @@ class SkuGrossMarginToolTest {
         pricedBatch("A", "60");
         sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
 
-        JsonNode result = run("{\"productName\":\"牛肉\"}");
+        JsonNode result = run("{\"productName\":\"牛肉酱\"}");
         assertTrue(result.get("success").asBoolean(), result.toString());
         JsonNode a = item(result, "牛肉酱");
 
@@ -188,7 +188,7 @@ class SkuGrossMarginToolTest {
     void partialCostCoverageIsReportedNotHidden() throws Exception {
         type("P", "火锅底料", "50");
         sales("P", "火锅底料", 4, 2, 0, "2000", "1000", "900");
-        JsonNode r = item(run("{\"productName\":\"火锅\"}"), "火锅底料").get("realized");
+        JsonNode r = item(run("{\"productName\":\"火锅底料\"}"), "火锅底料").get("realized");
         assertDecimal("10.00", r.get("marginRate"), "marginRate on costed lines only");      // (1000-900)/1000
         assertDecimal("50.00", r.get("costCoverage"), "costCoverage");                       // 1000/2000
         assertDecimal("1000.00", r.get("revenue"), "revenue = costed-line revenue");
@@ -256,7 +256,7 @@ class SkuGrossMarginToolTest {
         type("F", "没回填成本", "100");
         sales("F", "没回填成本", 3, 0, 0, "600", null, null);
 
-        JsonNode r = item(run("{\"productName\":\"没回填\"}"), "没回填成本").get("realized");
+        JsonNode r = item(run("{\"productName\":\"没回填成本\"}"), "没回填成本").get("realized");
         assertEquals("NO_COST", r.get("status").asText());
         assertTrue(r.get("marginRate").isNull());
         assertTrue(r.get("cost").isNull());
@@ -465,7 +465,7 @@ class SkuGrossMarginToolTest {
     void explicitPeriodIsPassedToTheQueryAndEchoedInTheAnswer() throws Exception {
         type("A", "牛肉酱", "100");
         sales("A", "牛肉酱", 1, 1, 0, "100", "100", "50");
-        JsonNode result = run("{\"productName\":\"牛肉\",\"startDate\":\"2026-08-01\",\"endDate\":\"2026-08-31\"}");
+        JsonNode result = run("{\"productName\":\"牛肉酱\",\"startDate\":\"2026-08-01\",\"endDate\":\"2026-08-31\"}");
         verify(realizedQuery).fetch("F1", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
         assertTrue(message(result).contains("2026-08-01 至 2026-08-31"), message(result));
         assertFalse(message(result).contains("默认最近"), message(result));
@@ -479,8 +479,14 @@ class SkuGrossMarginToolTest {
         type("Q", "其他产品", "10");
         sales("Q", "其他产品", 1, 1, 0, "100", "100", "50");
 
-        JsonNode only = run("{\"productName\":\"牛肉\"}");
+        JsonNode only = run("{\"productName\":\"牛肉酱\"}");
         assertEquals(1, only.get("data").get("data").get("items").size());
+
+        // 第 3 轮口径表 B: 只说了产品名的一部分 (「牛肉」⊂「牛肉酱」) 不锁定那个产品 (⛔ 反向包含), 只列出来请用户说完整名
+        JsonNode partial = run("{\"productName\":\"牛肉\"}");
+        assertEquals(0, partial.get("data").get("data").get("items").size(), partial.toString());
+        assertTrue(message(partial).contains("没有名为「牛肉」") && message(partial).contains("牛肉酱"), message(partial));
+        assertEquals("牛肉酱", partial.get("data").get("data").get("candidates").get(0).asText(), partial.toString());
 
         JsonNode none = run("{\"productName\":\"不存在的东西\"}");
         assertTrue(none.get("success").asBoolean());
@@ -522,5 +528,102 @@ class SkuGrossMarginToolTest {
         salesRows.clear();
         JsonNode none = run("{}").get("data").get("data");
         assertNull(none.get("charts"));
+    }
+
+    // 2026-11-15 复跑 Q05/Q06: 大模型把「全部」「哪个产品毛利率最高」当产品名 → 「没有找到名称含…」。范围词 / 整句问法 = 不限产品, 出全量排序
+    @Test
+    void scopeWordOrWholeQuestionAsProductName_isNotAProductFilter_andRanksAll() throws Exception {
+        type("A", "牛肉酱", "100");
+        type("B", "酱鸭", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "90");
+        sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
+        sales("B", "酱鸭", 1, 1, 0, "100", "100", "90");
+        for (String bad : new String[]{"全部", "哪个产品毛利率最高", "各 SKU", "所有产品"}) {
+            JsonNode result = run("{\"productName\":\"" + bad + "\"}");
+            assertFalse(message(result).contains("没有找到名称含"), bad + " -> " + message(result));
+            JsonNode items = result.get("data").get("data").get("items");
+            assertEquals(2, items.size(), bad);
+            assertEquals("牛肉酱", items.get(0).get("productName").asText(), bad + " 应按毛利率从高到低");
+        }
+        // 阴性对照: 真产品名照常只筛该产品
+        JsonNode one = run("{\"productName\":\"酱鸭\"}");
+        assertEquals(1, one.get("data").get("data").get("items").size());
+    }
+
+    // R-M2: 「真产品名 + 指标词」不能被当成「不限产品」悄悄答成全厂数
+    @Test
+    void productNameWithMetricWords_stillFiltersToThatProduct_notTheWholeFactory() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "酱鸭", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "90");
+        sales("A", "卤牛肉", 2, 2, 0, "190", "190", "120");
+        sales("B", "酱鸭", 1, 1, 0, "100", "100", "90");
+        for (String raw : new String[]{"卤牛肉成本", "卤牛肉的毛利率", "卤牛肉本月成本多少"}) {
+            JsonNode items = run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items");
+            assertEquals(1, items.size(), raw);
+            assertEquals("卤牛肉", items.get(0).get("productName").asText(), raw);
+        }
+        // 剥完剩下的不是目录里的产品: 如实说没找到, 不扩成全厂
+        assertTrue(message(run("{\"productName\":\"牛油果成本多少\"}")).contains("没有找到名称含「牛油果」"));
+    }
+
+    // 复审 R-M2: 只整词剥; 范围 / 时间词 = 不限产品; 产品名里的字不被剥坏; 目录里有就原样用
+    @Test
+    void stripOnlyWholeWords_scopeAndTimeWordsMeanWholeFactory_andRealNamesSurvive() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "总汇三明治", "100");
+        type("C", "外婆的红烧肉", "100");
+        type("D", "低成本套餐", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "60");
+        pricedBatch("C", "60");
+        pricedBatch("D", "60");
+        // 范围 / 汇总 / 时间词: 不限产品, 4 个产品全出 (⛔ 「汇总成本」不能剥成「汇」去命中「总汇三明治」)
+        for (String raw : new String[]{"汇总成本", "全年成本", "本周成本", "近三个月毛利", "合计成本"}) {
+            assertEquals(4, run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items").size(), raw);
+        }
+        // 名字整个出现在原文里 → 该产品 (时间词被带进产品名也不影响)
+        for (String raw : new String[]{"本周卤牛肉成本", "外婆的红烧肉成本", "低成本套餐"}) {
+            JsonNode items = run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items");
+            assertEquals(1, items.size(), raw);
+        }
+        assertEquals("外婆的红烧肉", run("{\"productName\":\"外婆的红烧肉成本\"}").get("data").get("data").get("items").get(0).get("productName").asText());
+        assertEquals("低成本套餐", run("{\"productName\":\"低成本套餐\"}").get("data").get("data").get("items").get(0).get("productName").asText());
+        // 纯函数: 无目录时只整词剥
+        assertNull(ReportToolSchemas.productKeyword("汇总成本"));
+        assertNull(ReportToolSchemas.productKeyword("全年成本"));
+        assertEquals("卤牛肉", ReportToolSchemas.productKeyword("卤牛肉的毛利率"));
+    }
+
+    // 第 3 轮口径表 B 在真实工具入口上: 「成本」不是「低成本套餐」; 两个产品都出现就两个都答; 目录本次只查一次
+    @Test
+    void tableB_onTheRealToolEntry_noReverseContainment_bothProductsKept_catalogLoadedOnce() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "牛肉", "100");
+        type("C", "酱鸭", "100");
+        type("D", "低成本套餐", "100");
+        for (String id : new String[]{"A", "B", "C", "D"}) pricedBatch(id, "60");
+        // 「成本」⊂「低成本套餐」: 不锁定低成本套餐, 不限产品 → 4 个都出
+        assertEquals(4, run("{\"productName\":\"成本\"}").get("data").get("data").get("items").size());
+        // 两个互不包含的产品都出现: 两个都答, 不丢酱鸭
+        JsonNode two = run("{\"productName\":\"卤牛肉和酱鸭成本\"}").get("data").get("data").get("items");
+        Set<String> names = new HashSet<>();
+        for (JsonNode i : two) names.add(i.get("productName").asText());
+        assertEquals(Set.of("卤牛肉", "酱鸭"), names, two.toString());
+        // 规则 3: 上面两次问答各只查一次本厂在用产品目录
+        verify(productTypeRepository, org.mockito.Mockito.times(2)).findByFactoryIdAndIsActiveTrue("F1");
+        // organizer 终审口径: 锁定产品时回复开头写「按产品「卤牛肉」统计：」(「卤牛肉片」按卤牛肉回答也看得出来), 全厂写「按全厂统计：」
+        for (String raw : new String[]{"卤牛肉片成本", "卤牛肉总成本", "卤牛肉平均成本", "卤牛肉3月成本", "卤牛肉第三季度成本",
+                "卤牛肉近半年成本", "卤牛肉每吨成本", "卤牛肉为什么成本高"}) {
+            JsonNode r = run("{\"productName\":\"" + raw + "\"}");
+            assertEquals(1, r.get("data").get("data").get("items").size(), raw + " " + r);
+            assertEquals("卤牛肉", r.get("data").get("data").get("items").get(0).get("productName").asText(), raw);
+            assertTrue(message(r).startsWith("按产品「卤牛肉」统计："), raw + " -> " + message(r));
+            assertFalse(message(r).contains("没有名为"), raw + " -> " + message(r));
+        }
+        assertTrue(message(run("{\"productName\":\"卤牛肉和酱鸭成本\"}")).startsWith("按产品「卤牛肉」「酱鸭」统计："));
+        assertTrue(message(run("{\"productName\":\"成本\"}")).startsWith("按全厂统计："));
     }
 }

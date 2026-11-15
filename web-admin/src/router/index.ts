@@ -222,6 +222,14 @@ const businessRoutes: RouteRecordRaw[] = [
         meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
       },
       {
+        // P10 外部软件（MIGRATION-PLAN 第四块）：只在平台授权了黑湖接口的工厂可进（守卫见 guards.ts externalIntegration;
+        // 后端没授权同样 404）。只读：外部数据时点 + 报工对照列，不改任何一边、不回写外部系统。
+        path: 'external-software',
+        name: 'ExternalSoftwarePage',
+        component: () => import('@/views/external-software/ExternalSoftwarePage.vue'),
+        meta: { requiresAuth: true, title: '外部软件对照', module: 'production', externalIntegration: 'blacklake' }
+      },
+      {
         path: 'dashboard/widgets',
         name: 'WidgetDemoDashboard',
         component: () => import('@/views/dashboard/widget-demo.vue'),

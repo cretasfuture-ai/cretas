@@ -323,6 +323,11 @@ public class SseStreamingService {
                         ? retiredTenantResponse() : tenantTypeUnavailableResponse(), startTime);
                 return;
             }
+            // 个人工资明细: 识别之前整轮拒答 (与非流式入口 IntentExecutionOrchestrator.executeInScope 同一守卫)
+            if (request != null && com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+                streamTerminalResponse(emitter, IntentExecutionOrchestrator.personalPayRefusalResponse(), startTime);
+                return;
+            }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
             boolean requestNamesSession = request != null && request.getSessionId() != null
                     && !request.getSessionId().isBlank();
@@ -1192,7 +1197,7 @@ public class SseStreamingService {
         } else if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
                 ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
                 : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
-            return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+            return "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         }
         return null;
     }

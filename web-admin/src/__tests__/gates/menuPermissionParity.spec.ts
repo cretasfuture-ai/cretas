@@ -116,6 +116,9 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/warehouse/wip-batches': [snapshot.get('/warehouse/materials')![0], { path: '/warehouse/wip-batches', module: 'warehouse' }],
   // 委外（DECISIONS 第十九节）：生产管理下「委外单」，与「交付风险」同判据（父组 生产管理 + module: 'production'），不加 roles
   '/production/outsource': [{ path: '/production', module: 'production' }, { path: '/production/outsource', module: 'production' }],
+  // P10：「数据与分析」末尾「外部软件对照」（容器纯展示不带判据），与后端 production:read 同判据，不加 roles；
+  // 没有外部授权的工厂由 AppSidebar 按 feature-config integrations 行隐藏（不在本闸）。
+  '/external-software': [{ path: '/external-software', module: 'production' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

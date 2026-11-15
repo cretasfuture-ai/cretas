@@ -1,7 +1,6 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -91,6 +90,13 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(true));
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
         LocalDate today = today();
         LocalDate start;
         LocalDate end;
@@ -111,32 +117,21 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        String keyword = blankToNull(getString(params, "productName"));
-        String productLabel = keyword;   // 回复 / data 里写明是哪个产品; keyword 解析后会清空 (改按 productTypeId 过滤)
+        // 产品名按口径表 B 在本厂在用产品里解析 (ReportToolSchemas.resolveProduct): 只锁定名称完整出现在原话里的产品;
+        // 没找到如实说, 名称里含该词的只列出来, 不把「卤牛肉片/五香卤牛肉片」合计成一个数; 同时问到几个产品时明确说
+        String keyword = product.scope() == ReportToolSchemas.ProductScope.NAME_ONLY ? product.keyword() : null;
+        String productLabel = product.label();   // 回复 / data 里写明是哪个产品
         boolean showAmounts = replyShowsAmounts(context, "cost", "unitCost", "totalCost");
-        // 产品名先在本厂在用产品里解析: 完全同名优先; 包含匹配多个时给候选, 不把「卤牛肉/卤牛肉片/五香卤牛肉」合计成一个数
         Set<String> productIds = null;
-        if (keyword != null && productTypeRepository != null) {
-            List<ProductType> candidates = matchProducts(factoryId, keyword);
-            if (candidates.isEmpty()) {
-                Map<String, Object> none = new LinkedHashMap<>();
-                none.put("productFilter", keyword);
-                none.put("candidates", List.of());
-                return buildSimpleResult("没有找到名称含「" + keyword + "」的在用产品（已停用的产品不在查询范围），无法统计成本。请确认产品名。", none);
-            }
-            if (candidates.size() > 1) {
-                List<String> names = new ArrayList<>();
-                for (ProductType t : candidates) names.add(t.getName());
-                Map<String, Object> amb = new LinkedHashMap<>();
-                amb.put("productFilter", keyword);
-                amb.put("candidates", names);
-                return buildSimpleResult("「" + keyword + "」匹配到 " + names.size() + " 个产品：" + String.join("、", names)
-                        + "。请说清楚要看哪一个（说完整产品名），我不把它们合计成一个数。", amb);
-            }
-            productIds = new HashSet<>();
-            productIds.add(candidates.get(0).getId());
-            productLabel = candidates.get(0).getName();
-            keyword = null;
+        String resolution = product.refusalMessage("统计成本", true);
+        if (resolution != null) {
+            Map<String, Object> none = new LinkedHashMap<>();
+            none.put("productFilter", productLabel);
+            none.put("candidates", product.candidateNames());
+            return buildSimpleResult(resolution, none);
+        }
+        if (product.scope() == ReportToolSchemas.ProductScope.MATCHED) {
+            productIds = new HashSet<>(product.productIds());
         }
 
         // 「和上月比」= 环比上月: 上一期是整体往前推一个月 (本月 1~今天 对上月 1~同一天), 不是上一个等长周期
@@ -218,11 +213,6 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         if (original == null) return true;   // 没有原话: 不改本期
         String rest = MONTH_OVER_MONTH.matcher(original).replaceAll("");
         return OWN_TIME_WORD.matcher(rest).find();
-    }
-
-    /** 本厂在用产品里名称匹配 keyword 的: 有完全同名 (忽略大小写) 只返回它, 否则返回所有包含匹配。 */
-    List<ProductType> matchProducts(String factoryId, String keyword) {
-        return ReportToolSchemas.matchProducts(productTypeRepository, factoryId, keyword);
     }
 
     private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword, Set<String> productIds,

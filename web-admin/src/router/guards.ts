@@ -9,6 +9,7 @@ import { isDemoFactoryId, resolveLogisticsDemoRoute } from '@/views/demo/demoRou
 import { getFactoryAssemblyEnabled, isFactoryAssemblyPlatformUser } from '@/api/factoryAssemblyCapabilities';
 import { platformWorkspacePaths } from '@/components/layout/menuConfig';
 import { getFactorySecrecyFlags, isAnySecrecyOn, type SecrecyCode } from '@/api/factorySecrecy';
+import { getFactoryExternalAuthorizations, isExternalAuthorized, type ExternalSystemCode } from '@/api/externalIntegrations';
 
 export function isPlatformWorkspaceRoute(path: string): boolean {
   return platformWorkspacePaths.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
@@ -246,6 +247,18 @@ export function setupRouterGuards(router: Router) {
       const { usePlatformFactoryContextStore } = await import('@/store/modules/platformFactoryContext');
       const factoryId = usePlatformFactoryContextStore().factoryId || authStore.factoryId;
       if (!isAnySecrecyOn(await getFactorySecrecyFlags(factoryId), secrecyFeature)) {
+        next('/404');
+        return;
+      }
+    }
+
+    // P10 外部软件接口授权 (平台设置, 只读): 外部数据页只在 feature-config integrations 行里该系统明确
+    // authorized === true 时可进; 读不到 / 没有这一行一律当没授权 (阴性: 没授权的工厂直接访问也是 404)。
+    const externalIntegration = to.meta.externalIntegration as ExternalSystemCode | undefined;
+    if (externalIntegration) {
+      const { usePlatformFactoryContextStore } = await import('@/store/modules/platformFactoryContext');
+      const factoryId = usePlatformFactoryContextStore().factoryId || authStore.factoryId;
+      if (!isExternalAuthorized(await getFactoryExternalAuthorizations(factoryId), externalIntegration)) {
         next('/404');
         return;
       }

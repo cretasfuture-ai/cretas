@@ -93,7 +93,15 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        String keyword = blankToNull(getString(params, "productName"));
+        // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(false));
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
+        String raw = getString(params, "productName");
+        String keyword = product.label();
         String startText = blankToNull(getString(params, "startDate"));
         String endText = blankToNull(getString(params, "endDate"));
 
@@ -110,17 +118,26 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> realizedRows = (List<Map<String, Object>>) payload.get("rank");
 
-        List<ProductType> types = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
+        List<ProductType> types = product.catalog() != null ? product.catalog() : List.of();   // 本次请求已加载, 不再查第二次
         Map<String, ProductType> typeById = new HashMap<>();
         for (ProductType t : types) {
             if (t.getId() != null) typeById.put(t.getId(), t);
         }
 
-        // ---- 选出要回答的 SKU ----
+        // ---- 选出要回答的 SKU (口径表 B: 只锁定名称完整出现在原话里的产品, ⛔ 不按「名称含这个词」反向包含挑) ----
+        ReportToolSchemas.ProductScope scope = product.scope();
+        Set<String> pickedIds = scope == ReportToolSchemas.ProductScope.MATCHED ? product.productIds() : Set.of();
+        Set<String> pickedNames = new HashSet<>();
+        for (String n : product.productNames()) pickedNames.add(n.trim().toLowerCase(Locale.ROOT));
+        String asked = raw == null ? "" : raw.trim().toLowerCase(Locale.ROOT);
         Map<String, Candidate> candidates = new LinkedHashMap<>();
         for (ProductType t : types) {
-            boolean pick = keyword != null ? containsIgnoreCase(t.getName(), keyword)
-                    : t.getUnitPrice() != null && t.getUnitPrice().signum() > 0;
+            boolean pick = switch (scope) {
+                case ALL -> t.getUnitPrice() != null && t.getUnitPrice().signum() > 0;
+                case MATCHED -> pickedIds.contains(t.getId());
+                case NAME_ONLY -> containsIgnoreCase(t.getName(), product.keyword());
+                case NOT_FOUND -> false;
+            };
             if (pick && t.getId() != null) {
                 candidates.computeIfAbsent(t.getId(), k -> new Candidate()).type = t;
             }
@@ -128,8 +145,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         for (Map<String, Object> row : realizedRows) {
             String id = (String) row.get("productTypeId");
             String name = (String) row.get("productName");
-            boolean pick = keyword == null || containsIgnoreCase(name, keyword)
-                    || (id != null && candidates.containsKey(id));
+            String n = name == null ? "" : name.trim().toLowerCase(Locale.ROOT);
+            boolean pick = switch (scope) {
+                case ALL -> true;
+                case MATCHED -> (id != null && candidates.containsKey(id)) || (id == null && pickedNames.contains(n));
+                case NAME_ONLY -> containsIgnoreCase(name, product.keyword());
+                // 目录里没有 (例如已停用) 但期间有销售: 销售记录上的名称完整出现在原话里才算问到了它
+                case NOT_FOUND -> n.length() >= 2 && asked.contains(n);
+            };
             if (!pick) continue;
             String key = id != null ? id : "name:" + name;
             Candidate c = candidates.computeIfAbsent(key, k -> new Candidate());
@@ -138,10 +161,17 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         }
 
         if (candidates.isEmpty()) {
-            String msg = keyword != null
-                    ? "没有找到名称含「" + keyword + "」的在用产品，所选期间(" + start + " 至 " + end + ")也没有该名称的销售记录，毛利率无从计算。"
-                    : "所选期间(" + start + " 至 " + end + ")没有销售记录，也没有设置目录价的在用产品，没有可计算毛利率的产品。";
-            return buildSimpleResult(msg, resultData(List.of(), 0, start, end, defaultPeriod));
+            String msg;
+            if (scope == ReportToolSchemas.ProductScope.NOT_FOUND && !product.suggestions().isEmpty()) {
+                msg = product.refusalMessage("计算毛利率", false);
+            } else if (keyword != null) {
+                msg = "没有找到名称含「" + keyword + "」的在用产品，所选期间(" + start + " 至 " + end + ")也没有该名称的销售记录，毛利率无从计算。";
+            } else {
+                msg = "所选期间(" + start + " 至 " + end + ")没有销售记录，也没有设置目录价的在用产品，没有可计算毛利率的产品。";
+            }
+            Map<String, Object> empty = resultData(List.of(), 0, start, end, defaultPeriod);
+            if (!product.suggestions().isEmpty()) empty.put("candidates", product.suggestions());
+            return buildSimpleResult(msg, empty);
         }
 
         // ---- 逐 SKU 组装两种口径 ----

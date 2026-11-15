@@ -35,7 +35,8 @@ class FeatureConfigSecrecyContractTest {
     final FactorySecrecyConfig secrecy = new FactorySecrecyConfig(settings,
             (org.springframework.transaction.PlatformTransactionManager) null);
     final FeatureConfigController controller = new FeatureConfigController(repository,
-            mock(FactoryFeatureMenuWriteLock.class), secrecy);
+            mock(FactoryFeatureMenuWriteLock.class), secrecy,
+            mock(com.cretas.aims.service.integration.ExternalIntegrationService.class));
 
     @Test
     @SuppressWarnings("unchecked")
@@ -48,7 +49,7 @@ class FeatureConfigSecrecyContractTest {
 
         List<Object> data = controller.getAll(F).getData();
         assertThat(data).contains(module).doesNotContain(forged);
-        Map<String, Object> row = (Map<String, Object>) data.get(data.size() - 1);
+        Map<String, Object> row = (Map<String, Object>) data.get(data.size() - 2);   // 末两行: secrecy, integrations
         assertThat(row).containsEntry("moduleId", "secrecy").containsEntry("readOnly", true);
         Map<String, Boolean> secrecyMap = (Map<String, Boolean>) row.get("secrecy");
         assertThat(secrecyMap).hasSize(SecrecyItem.values().length)
@@ -64,7 +65,7 @@ class FeatureConfigSecrecyContractTest {
     void aFailedReadShowsEveryItemAsOn() {
         when(repository.findByFactoryIdAndDeletedAtIsNull(F)).thenReturn(List.of());
         when(settings.findByFactoryId(F)).thenThrow(new org.springframework.dao.QueryTimeoutException("slow"));
-        Map<String, Object> row = (Map<String, Object>) controller.getAll(F).getData().get(0);
+        Map<String, Object> row = (Map<String, Object>) controller.getAll(F).getData().get(0);   // secrecy 行在 integrations 行之前
         assertThat(((Map<String, Boolean>) row.get("secrecy")).values()).containsOnly(true);
     }
 

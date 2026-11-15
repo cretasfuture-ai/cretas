@@ -261,8 +261,12 @@ hasdel = set(l.strip() for l in io.open(hasdel_path, encoding="utf-8")
               if l.strip() and not l.startswith("--"))
 
 soft, ents = set(), {}
-for dp, _, fs in os.walk(entity_root):
-    for fn in fs:
+# ⚠️ 遍历顺序必须固定 (dns.sort() + sorted(fs)): 下面的 setdefault 是「先见者胜」, os.walk 的顺序
+# 跟文件系统走 (NTFS 按字母, ext4 按哈希), 不排序时同一棵树在 Windows 和 CI 上生成的 SQL 不一样
+# (#1777: customers 有 CustomerRepository / FactoryEntityDirectoryRepository 两个候选, CI drift 红)。
+for dp, dns, fs in os.walk(entity_root):
+    dns.sort()
+    for fn in sorted(fs):
         if not fn.endswith(".java"):
             continue
         s = io.open(os.path.join(dp, fn), encoding="utf-8", errors="replace").read()
@@ -284,8 +288,10 @@ for cls, s in ents.items():
 # `extends JpaRepository<X, …>`(实测), 这里放宽到任意 *Repository 基接口, 因为
 # 「换个基接口」不该让分类静默变松(那正是形态 D: 判据和现实各走各的)。
 repo_iface_of_entity = {}
-for dp, _, fs in os.walk(repository_root):
-    for fn in fs:
+# 排序原因同上 (实体扫描): 一个实体有多个 *Repository 接口时 setdefault 取哪个不能随文件系统变。
+for dp, dns, fs in os.walk(repository_root):
+    dns.sort()
+    for fn in sorted(fs):
         if not fn.endswith(".java"):
             continue
         s = io.open(os.path.join(dp, fn), encoding="utf-8", errors="replace").read()

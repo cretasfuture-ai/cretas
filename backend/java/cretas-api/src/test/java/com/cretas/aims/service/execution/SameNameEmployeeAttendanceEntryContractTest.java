@@ -88,7 +88,7 @@ import static org.mockito.Mockito.when;
  * 不先问, 两个都查出来列给他, 每条标明车间/部门。
  *
  * <p>跑在两个产品真实入口上 (普通 {@link IntentExecutionOrchestrator#execute} 与 SSE {@code executeStreamAsync});
- * 按姓名找人走<b>真实 JPA</b> ({@link UserRepository} + H2, {@code @Where} 软删过滤生效), 结果格式化是真的
+ * 按姓名找人走<b>真实 JPA</b> (实体解析公共能力 {@code FactoryEntityResolver} + H2, {@code @Where} 软删过滤生效), 结果格式化是真的
  * {@code ResultFormatterServiceImpl}。只有识别 (模型)、考勤记录服务、权限判定是桩 —— 权限判定的桩
  * 就是「这个调用者有没有 hr:read」这一个问题。
  *
@@ -110,6 +110,8 @@ class SameNameEmployeeAttendanceEntryContractTest {
 
     @Autowired TestEntityManager em;
     @Autowired UserRepository users;
+    @Autowired com.cretas.aims.repository.FactoryEntityDirectoryRepository entityDirectory;
+    @Autowired com.cretas.aims.repository.intent.FlywheelMasterDataRepository masterNames;
     @Autowired com.cretas.aims.repository.permission.PlatformRolePermissionRepository platformRolePermissions;
     @Autowired com.cretas.aims.repository.config.FactoryModuleConfigRepository factoryModuleConfigs;
 
@@ -463,6 +465,9 @@ class SameNameEmployeeAttendanceEntryContractTest {
             ReflectionTestUtils.setField(tool, "timeClockService", clock);
             ReflectionTestUtils.setField(tool, "rbacGuard", guard);
             ReflectionTestUtils.setField(tool, "userRepository", users);
+            // 按姓名找人走真实的实体解析公共能力 (真实 JPA 仓储, factory_id 范围)
+            ReflectionTestUtils.setField(tool, "entityResolver",
+                    new com.cretas.aims.service.entity.FactoryEntityResolver(entityDirectory, masterNames));
             when(registry.getExecutor(tool.getToolName())).thenReturn(Optional.<ToolExecutor>of(tool));
             when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
             when(clock.getClockHistory(anyString(), anyLong(), any(), any(), any(PageRequest.class)))
