@@ -137,6 +137,8 @@ report_ai_quality	CODES	dashboard:read,dashboard:read_write,finance:read,finance
 report_anomaly	CODES	finance:read,finance:read_write,procurement:price:view
 report_benefit_overview	CODES	finance:read,finance:read_write,procurement:price:view
 report_bom_cost	CODES	analytics:read_write
+report_bom_cost_rank	CODES	analytics:read_write
+report_labor_cost_share	CODES	analytics:read_write
 report_cost_query	CODES	analytics:read_write
 report_cost_trend_analysis	CODES	analytics:read_write
 report_cost_variance	CODES	finance:read,finance:read_write,procurement:price:view
@@ -153,6 +155,7 @@ report_production	CODES	dashboard:read,dashboard:read_write,finance:read,finance
 report_production_weekly_comparison	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_quality	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
 report_sales	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write
+report_sales_margin_summary	CODES	finance:read,finance:read_write
 report_sku_gross_margin	CODES	finance:read,finance:read_write
 report_trends	CODES	finance:read,finance:read_write,procurement:price:view
 report_workshop_daily	CODES	dashboard:read,dashboard:read_write,finance:read,finance:read_write,inventory:read,inventory:read_write,procurement:price:view,production:read,production:read_write,quality:read,quality:read_write,warehouse:read,warehouse:read_write

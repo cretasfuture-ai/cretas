@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 494
+expectedToolCount: 497
 expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
@@ -145,6 +145,69 @@ descriptors:
       requiresPermission: false
       hasPermission: false
       requiredPermissions: false
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_bom_cost_rank"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportBomCostRankTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["analytics:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "cost"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_labor_cost_share"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportLaborCostShareTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: ["analytics:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "cost"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: true
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "report_sales_margin_summary"
+    implementationClass: "com.cretas.aims.ai.tool.impl.report.ReportSalesMarginSummaryTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: true
+    requiredPermissions: ["finance:read", "finance:read_write"]
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["report", "sales"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: true
+      hasPermission: false
+      requiredPermissions: true
       version: true
       domainTags: true
     governanceStatus: REVIEW_REQUIRED

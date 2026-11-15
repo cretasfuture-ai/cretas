@@ -101,6 +101,12 @@ class SoftDeleteEntityDeclaredUniqueContractTest {
                             + "UNIQUE(request_key,transfer_item_id) 全量、无部分谓词；"
                             + "请求身份永久保留，软删后重用同键仍为23505，新键可写且原历史保留"),
 
+            Map.entry("OutsourceOrder#uk_outsource_orders_no",
+                    "#1723 新表尚未发布 (prod 无 outsource_orders)；V20261115_31 原文 "
+                            + "CONSTRAINT uk_outsource_orders_no UNIQUE (factory_id, order_no) 全量、无 deleted_at 谓词，"
+                            + "与实体逐列一致；类别 A：委外单号是单据身份不回收 (作废走 CANCELLED 状态, "
+                            + "主代码无删除委外单的路径)；OutsourceClosedLoopPostgresContractTest 用迁移原文建表"),
+
             // ── 类别 A′：prod 也是全量键、逐列一致，但那个键把 deleted_at 写进了键列 ────────────────
             // 🔴 2026-09-07 实测：PG 里 NULL 互不相等，(device_id, channel_id, deleted_at) 这种键
             // 对**活行零约束**——同一个 (DEV-1, 1) 连插两条活行，两条都成功。

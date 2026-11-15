@@ -45,6 +45,8 @@ describe('tenant scoped digital employee route props', () => {
     canWrite.mockReturnValue(true);
     expect(digitalEmployeeProps({ path: '/workdesk/purchaser' }).employeeCanWrite).toBe(true);
     expect(canWrite).toHaveBeenLastCalledWith('procurement');
+    expect(digitalEmployeeProps({ path: '/workdesk/warehouse-keeper' }).employeeCanWrite).toBe(true);
+    expect(canWrite).toHaveBeenLastCalledWith('warehouse');
     auth.factoryId = 'F006';
     expect(digitalEmployeeProps({ path: '/workdesk/purchaser' }).employeeCanWrite).toBe(false);
   });

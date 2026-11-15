@@ -12,6 +12,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
+import { purchaseAiQuoteDifference } from './purchaseAiQuoteGuard';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { PURCHASE_ORDER_CONFIG } from '@/components/ai-entry/types';
 import { WorkflowBar } from '@/components/workflow';
@@ -249,7 +250,7 @@ const attachmentQueue = ref({ total: 0, pending: 0, failed: 0 });
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('purchaseOrder', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, refresh: refreshFooter } = useListSummary('purchaseOrder', summaryRequest);
 
 interface ProcurementOrderItem {
   materialName?: string;
@@ -816,6 +817,7 @@ onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeU
 
 async function loadData() {
   if (!factoryId.value) return;
+  void refreshFooter();
   loading.value = true;
   try {
     const url = statusFilter.value
@@ -1307,7 +1309,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
-useAiEntryLink(aiEntryVisible, canWrite);
+const aiEntryInitialInput = useAiEntryLink(aiEntryVisible, canWrite, () => ({ factoryId: factoryId.value || '', actorId: String(authStore.user?.id || '') }));
 
 // ==================== Forward Share Dialog (PR #872) ====================
 // State for ForwardShareDialog — scoped to the row clicked via 转发 inline chip.
@@ -1315,7 +1317,40 @@ const forwardDialogVisible = ref(false);
 const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
-function handleAiFill(params: TableRow) {
+function guardPurchaseAiQuote(params: TableRow): string | null {
+  if (!Array.isArray(params.items)) return null;
+  for (const [index, item] of (params.items as TableRow[]).entries()) {
+    const price = item.taxIncludedUnitPrice ?? item.unitPrice;
+    if (price == null || price === '') continue;
+    const match = resolveReferenceByName(String(item.materialName || ''), materials.value);
+    if (match.status !== 'MATCHED') continue; // Existing reference checks handle this.
+    const material = materials.value.find((row) => String(row.id) === match.id);
+    const configuredRate = materialTaxRate(material?.taxRate);
+    const suppliedRate = materialTaxRate(item.taxRate);
+    if (configuredRate !== null && suppliedRate !== null && suppliedRate !== configuredRate) {
+      return `第 ${index + 1} 行 AI 识别税率 ${suppliedRate}% 与原料档案 ${configuredRate}% 不同，请继续修改；如需使用其他税率，请到普通采购表单核对办理。系统未创建采购单。`;
+    }
+    const rate = configuredRate ?? suppliedRate;
+    if (rate === null) continue;
+    const rawQuantityUnit = item.quantityUnit || item.unit;
+    const rawPriceUnit = item.priceUnit || item.unit;
+    if (!rawQuantityUnit || !rawPriceUnit) continue;
+    const quantityUnit = canonicalUnitCodeKeepingCount(rawQuantityUnit);
+    const priceUnit = canonicalUnitCodeKeepingCount(rawPriceUnit);
+    const materialUnit = canonicalUnitCodeKeepingCount(material?.unit);
+    // Only compare an explicitly supplied quote in this material's maintained base unit.
+    // Other units/conversions remain governed by the existing native form/server checks.
+    if (!materialUnit || quantityUnit !== materialUnit || priceUnit !== materialUnit) continue;
+    const difference = purchaseAiQuoteDifference(Number(item.quantity), Number(price), rate);
+    if (difference) return `第 ${index + 1} 行含税报价合计 ¥${difference.quoted}，当前计价规则保存后为 ¥${difference.stored}。含税报价保真尚待完善，本次不能填入表单；请继续修改并核对报价，系统未创建采购单。`;
+  }
+  return null;
+}
+
+async function handleAiFill(params: TableRow) {
+  const quoteWarning = guardPurchaseAiQuote(params);
+  if (quoteWarning) { ElMessage.warning(quoteWarning); return; }
+  resetForm();
   // Match supplierName to supplierId
   const supplierName = String(params.supplierName || '');
   const supplierResolution = resolveReferenceByName(supplierName, suppliers.value);
@@ -1332,6 +1367,7 @@ function handleAiFill(params: TableRow) {
 
   if (Array.isArray(params.items) && params.items.length > 0) {
     try {
+      await refreshSupplierMaterialRelations();
       form.value.items = (params.items as TableRow[]).map((item) => {
       // Try to match materialName to materialTypeId
       const matName = String(item.materialName || '');
@@ -1339,17 +1375,24 @@ function handleAiFill(params: TableRow) {
       if (materialResolution.status !== 'MATCHED') {
         throw new Error(`原料“${matName}”${materialResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
       }
+      const relation = supplierMaterialRelations.value.find((row) => String(row.materialTypeId) === materialResolution.id && row.active !== false);
+      if (!relation) throw new Error(`供应商“${supplierName}”尚未维护原料“${matName}”的供应关系，请先维护供应原料`);
+      const material = materials.value.find((row) => String(row.id) === materialResolution.id);
+      const taxRate = materialTaxRate(material?.taxRate) ?? materialTaxRate(item.taxRate);
       return {
+        ...newPurchaseItem(),
+        supplierMaterialId: relation.id,
         materialTypeId: materialResolution.id,
+        materialName: matName,
         quantity: Number(item.quantity || 0),
         unit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
         quantityUnit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
-        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, item.taxRate),
+        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, taxRate),
         taxIncludedUnitPrice: item.taxIncludedUnitPrice == null && item.unitPrice == null
           ? null : Number(item.taxIncludedUnitPrice ?? item.unitPrice),
         priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit || 'kg'),
         priceSource: item.taxIncludedUnitPrice == null && item.unitPrice == null ? 'MISSING' : 'MANUAL',
-        taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
+        taxRate,
       };
       });
     } catch (error) {
@@ -1920,6 +1963,8 @@ function handleAiFill(params: TableRow) {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="PURCHASE_ORDER_CONFIG"
+      :initial-input="aiEntryInitialInput"
+      :confirm-guard="guardPurchaseAiQuote"
       @fill-form="handleAiFill"
     />
 

@@ -3,8 +3,27 @@ import { defineComponent, ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { useAiEntryLink } from '../useAiEntryLink';
+import { queueAiEntry } from '../aiEntryHandoff';
 
 describe('business AI entry links', () => {
+  it('clears consumed handoff text when the editor closes and does not replay it on ordinary reopen', async () => {
+    const identity = { factoryId: 'WHOLESALE_TEST', actorId: '1709' };
+    const target = queueAiEntry(identity, '/sales/orders', '为验收客户创建新订单');
+    const visible = ref(false);
+    let initialInput = ref('');
+    const page = defineComponent({ setup() { initialInput = useAiEntryLink(visible, ref(true), () => identity); return () => null; } });
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/sales/orders', component: page }] });
+    await router.push(target);
+    const wrapper = mount(page, { global: { plugins: [router] } });
+    await flushPromises();
+    expect(initialInput.value).toBe('为验收客户创建新订单');
+    visible.value = false;
+    await flushPromises();
+    visible.value = true;
+    await flushPromises();
+    expect(initialInput.value).toBe('');
+    wrapper.unmount();
+  });
   it.each([true, false])('opens only for writable users (%s), consumes only its own query parameter', async (writable) => {
     const visible = ref(false);
     const canWrite = ref(writable);

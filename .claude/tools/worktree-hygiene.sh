@@ -20,7 +20,15 @@
 #   当前目录时改名会失败 ⇒ 判为「占用中」, 一个文件都不删。原因: git worktree remove 是先删文件、最后删目录;
 #   会话正在用的目录会被删光内容、只剩一个删不掉的空壳 (2026-11-11 organizer 会话与推送排查会话都是这样丢了工作目录)。
 #   活动标记与时间窗口只是推断, 这一步问的是操作系统。Linux/macOS 上改名不受当前目录限制, 探测恒为「未占用」, 只靠前面的判据。
+#
+# 会话工作目录保护 (2026-11-15): 没归档的 Claude 桌面会话的 cwd / worktreePath (含其子目录) 一律保留, --apply 与 --auto 都管。
+#   活动标记只看 6 小时窗口, 置顶但几天没说话的会话会被判成「不在用」: 11-15 11:18 --auto 删掉了置顶会话「产品亮点与BP叙事」的 worktree。
+#   会话清单读自 Claude 应用的 claude-code-sessions 目录 (WH_SESSIONS_DIR 可覆盖)。目录不存在 = 本机没有桌面应用, 不按会话保护;
+#   目录在但一个会话文件都读不到 = 没量到, --auto 本次不回收。
+# 归属检查放行 (2026-11-15): 部分 worktree 的 .git 归属是 Administrators, git 报 dubious ownership 拒绝读, 本脚本拿不到分支和提交
+#   (日志里 branch=DETACHED ahead=?), 已完成的也一直判成「未完成」。下面只对本脚本里的 git 放行。
 set -u
+_n=${GIT_CONFIG_COUNT:-0}; export "GIT_CONFIG_KEY_$_n=safe.directory" "GIT_CONFIG_VALUE_$_n=*" "GIT_CONFIG_COUNT=$((_n+1))"; unset _n
 MAX=30
 mode="${1:-}"; shift || true
 keeps=()
@@ -108,11 +116,39 @@ is_keep() {
 }
 locked_set=$(git -C "$main_wt" worktree list --porcelain | awk '/^worktree /{p=$2} /^locked/{print p}')
 
+# 会话工作目录保护 (见文件头)。
+sess_dir="${WH_SESSIONS_DIR:-}"
+if [ -z "$sess_dir" ]; then
+  if [ -n "${APPDATA:-}" ]; then sess_dir="$APPDATA/Claude/claude-code-sessions"; else sess_dir="$HOME/Library/Application Support/Claude/claude-code-sessions"; fi
+fi
+sess_paths=""
+if [ -d "$sess_dir" ]; then
+  sess_files=0
+  sess_paths=$(while IFS= read -r -d '' f; do
+      grep -q '"isArchived":true' "$f" 2>/dev/null && continue
+      grep -o '"\(cwd\|worktreePath\)":"[^"]*"' "$f" 2>/dev/null
+    done < <(find "$sess_dir" -name 'local_*.json' -print0 2>/dev/null) \
+    | sed 's/^"[A-Za-z]*":"//; s/"$//' | while IFS= read -r x; do norm "$x" | tr -s '/' | sed 's#/$##'; done | sort -u)
+  sess_files=$(find "$sess_dir" -name 'local_*.json' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$sess_files" = 0 ]; then
+    echo "会话清单没量到 ($sess_dir 下没有会话文件)"
+    [ "$mode" = "--auto" ] && { echo "--auto: 会话清单没量到, 本次不回收"; exit 0; }
+  fi
+else
+  echo "会话清单不存在, 不按会话保护: $sess_dir"
+fi
+sess_in_use() { # 0 = 是某个没归档会话的工作目录 (或其上级)
+  [ -n "$sess_paths" ] || return 1
+  local p; p=$(norm "$1" | tr -s '/'); p="${p%/}"
+  printf '%s\n' "$sess_paths" | awk -v p="$p" '$0==p || index($0, p"/")==1 {f=1} END{exit !f}'
+}
+
 removable=()
 shell_candidates=(${shell_candidates[@]:-})
 for p in "${paths[@]}"; do
   if is_keep "$p"; then echo "KEEP(保护)   $p"; continue; fi
   if echo "$locked_set" | grep -Fxq "$p"; then echo "KEEP(locked) $p"; continue; fi
+  if sess_in_use "$p"; then echo "KEEP(会话在用) $p"; continue; fi
   if recent "$p"; then echo "KEEP(近期活动) $p"; continue; fi
   dirty=0; [ "$mode" = "--auto" ] || dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')   # --auto 先判完成再查脏(git status 在大树上要几秒)
   br=$(git -C "$p" branch --show-current 2>/dev/null)
@@ -121,7 +157,8 @@ for p in "${paths[@]}"; do
     head_sha=$(git -C "$p" rev-parse HEAD 2>/dev/null)
     done_=0
     [ "$ahead" = 0 ] && done_=1
-    [ -n "$br" ] && echo "$merged_map" | grep -Fxq "$br $head_sha" && done_=1
+    # 按 HEAD 提交号匹配已合并 PR 的头, 不要求分支名一致: 合并后 worktree 常被切成 detached (2026-11-15 infallible-matsumoto 因此一直判未完成)
+    [ -n "$head_sha" ] && echo "$merged_map" | awk -v s="$head_sha" '$2==s{f=1} END{exit !f}' && done_=1
     [ "$done_" = 1 ] || { echo "KEEP(未完成) $p branch=${br:-DETACHED} ahead=$ahead"; continue; }
     dirty=$(git -C "$p" status --porcelain 2>/dev/null | wc -l | tr -d ' ')
     [ "$dirty" = 0 ] || { echo "KEEP(有改动) $p"; continue; }

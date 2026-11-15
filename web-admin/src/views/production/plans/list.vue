@@ -96,6 +96,7 @@ import WorkflowRoutePreview from './components/WorkflowRoutePreview.vue';
 import ProcessSheet from '../components/processSheet/ProcessSheet.vue';
 import ProductionSummaryDialog from '../components/ProductionSummaryDialog.vue';
 import PlanConcurrentReadiness from './components/PlanConcurrentReadiness.vue';
+import PlanOutsourceProcesses from './components/PlanOutsourceProcesses.vue';
 import {
   documentTraceTarget,
   traceDocumentLabel,
@@ -5295,6 +5296,13 @@ function guardProductionPlanAi(params: Record<string, unknown>) {
             {{ viewPlan.processName || '暂无工序配置' }}
           </div>
         </div>
+
+        <PlanOutsourceProcesses
+          v-if="factoryId && viewPlan.id"
+          :key="`outsource:${factoryId}:${viewPlan.id}`"
+          :factory-id="factoryId"
+          :plan-id="String(viewPlan.id)"
+        />
 
         <PlanConcurrentReadiness
           v-if="factoryId && viewPlan.id"
