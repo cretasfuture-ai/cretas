@@ -567,13 +567,16 @@ public class SseStreamingService {
                 // 任务状态摘要 (白名单, 见 TaskStateSummary): 开关关 / 没有任务时为空, 调用形状与改动前相同
                 Map<String, Object> taskState = taskStateService != null && trustedFactoryActor
                         ? taskStateService.summary(factoryId, userId, request.getSessionId()) : Map.of();
+                // 识别候选按权限收窄 (操作 tab): 与普通入口同一个方法 (IntentTurnSharedSteps)
+                java.util.Set<String> filterPermissions = IntentTurnSharedSteps.recognitionPermissionFilter(
+                        request.getMode(), userId, factoryId, intentPermissionGate);
                 matchResult = taskState.isEmpty()
                         ? aiIntentService.recognizeIntentWithConfidence(
                                 userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                                request.getMode(), null, recentTurns(request))
+                                request.getMode(), filterPermissions, recentTurns(request))
                         : aiIntentService.recognizeIntentWithConfidence(
                                 userInput, factoryId, 3, recognizerUserId, userRole, recognizerSessionId,
-                                request.getMode(), null, recentTurns(request), taskState);
+                                request.getMode(), filterPermissions, recentTurns(request), taskState);
             } catch (LlmSchemaValidationException e) {
                 IntentExecuteResponse validationFailureResponse = buildValidationFailureResponse(e);
                 sendSseEvent(emitter, "result", validationFailureResponse);
@@ -595,6 +598,12 @@ public class SseStreamingService {
                             : "intent-not-allowed";
                     streamTerminalResponse(
                             emitter, buildFactoryPackNoMatch(factoryPackRoute, reason), startTime);
+                } else if (IntentTurnSharedSteps.answersGeneralQuestionDirectly(matchResult, userInput)) {
+                    // 识别不出 + 通用咨询/闲聊 + 非业务问法 → 直答, 与普通入口 2b 同一个判定 (「怎么降低成本？」)
+                    log.info("Stream: 识别后判为{}且无匹配，使用流式 LLM 回复", matchResult.getQuestionType());
+                    streamConversationalResponse(emitter, factoryId, userId, userRole,
+                            request.getSessionId(), userInput, matchResult.getQuestionType(),
+                            request.getEnableThinking(), request.getThinkingBudget(), startTime, miniCancellation);
                 } else {
                     IntentExecuteResponse noMatchResponse = buildNoMatchResponseForStream(matchResult, factoryId);
                     sendSseEvent(emitter, "result", noMatchResponse);
@@ -664,18 +673,37 @@ public class SseStreamingService {
                 return;
             }
 
+            // 6.5 意图权限 → 咨询 tab 拦写 → 审批, 与普通入口同序同判定 (IntentTurnSharedSteps):
+            //     先于 Skill / 抽参 / 缺参追问 —— 咨询 tab 的写意图不追问参数, 需审批的不进执行层。
+            String intentDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
+            if (intentDenied != null) {
+                streamNoPermission(emitter, intent, intentDenied, startTime);
+                return;
+            }
+            IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                    request, intent, intentAccessModeFilter, writeGuardService);
+            if (readModeBlocked != null) {
+                streamTerminalResponse(emitter, readModeBlocked, startTime);
+                return;
+            }
+            if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+                streamTerminalResponse(emitter,
+                        IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
+                return;
+            }
+
             // 7a. Skill 路由 —— 与 /execute (IntentExecutionOrchestrator 3.5) 同一前提:
             // 只给「没绑工具」的意图 (WORKDESK 类, Skill 就是它的执行器), 且意图权限先过。
             // 2026-10-06 生产: 这里曾对所有意图都先跑关键词 Skill, 操作员说「上班打卡」(已识别为
             // CLOCK_IN) 被 0.30 分的人员排班 Skill 抢走, 跑了管理员级考勤统计, 卡没打上。
             String streamBoundToolName = intent.getToolName();
             boolean intentHasNoTool = streamBoundToolName == null || streamBoundToolName.isBlank();
-            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool
-                    && permissionDeniedMessage(factoryId, intent, userId, userRole) == null) {
+            if (dynamicToolSelectionService.isSkillsEnabled() && intentHasNoTool) {
                 try {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
                             request.getUserInput(), factoryId, userId, userRole);
                     if (skillResponse != null) {
+                        applySharedResultSteps(skillResponse, intent, streamBoundToolName, userId);
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", skillResponse.getStatus(),
@@ -691,6 +719,7 @@ public class SseStreamingService {
                     IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
                             .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
                     if (explicitSkillResp != null) {
+                        applySharedResultSteps(explicitSkillResp, intent, streamBoundToolName, userId);
                         sendSseEvent(emitter, "result", explicitSkillResp);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", explicitSkillResp.getStatus(),
@@ -709,10 +738,8 @@ public class SseStreamingService {
             //      Slot Filling 只追问真正没抽到的; 被 W0 拦下时随确认卡带去预览 (见 attachPreviewParams)。
             //      ⛔ 先过意图权限再抽: 没权限的请求不许碰执行层 (SseSemanticCacheAdmissionContractTest 守的就是这条),
             //      也不该为一个注定被拒的请求花一次 LLM 抽参、再追问参数。权限只算这一次, 结果带进 7c (不重算)。
-            String admissionDenied = permissionDeniedMessage(factoryId, intent, userId, userRole);
-            if (admissionDenied == null) {
-                admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
-            }
+            // 意图权限已在 6.5 判过 (每个请求只算一次), 这里只剩一线写开放
+            String admissionDenied = frontlineWriteDenied(factoryId, userRole, intent);
             if (admissionDenied != null) {
                 streamNoPermission(emitter, intent, admissionDenied, startTime);
                 return;
@@ -740,6 +767,8 @@ public class SseStreamingService {
                                 && slotFillingResponse.getMessage().length() >= 5) {
                             slotFillingResponse.setFormattedText(slotFillingResponse.getMessage());
                         }
+                        IntentTurnSharedSteps.applyAiModeStamp(slotFillingResponse, intent, intent.getToolName(),
+                                writeGuardService, toolRegistry);
                         sendSseEvent(emitter, "result", slotFillingResponse);
                         sendSseEvent(emitter, "complete", Map.of(
                                 "status", "NEED_MORE_INFO",
@@ -989,23 +1018,17 @@ public class SseStreamingService {
             return;
         }
 
-        // 审批检查
-        if (intent.needsApproval() && !Boolean.TRUE.equals(request.getForceExecute())) {
-            IntentExecuteResponse approvalResponse = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("PENDING_APPROVAL")
-                    .message("此操作需要审批，已提交审批请求")
-                    .requiresApproval(true)
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            sendSseEvent(emitter, "result", approvalResponse);
-            sendSseEvent(emitter, "complete", Map.of(
-                    "status", "PENDING_APPROVAL",
-                    "totalLatencyMs", System.currentTimeMillis() - startTime
-            ));
-            emitter.complete();
+        // 咨询 tab 拦写 + 审批: 与普通入口同一个方法、同一个谓词 (IntentTurnSharedSteps)。
+        // 显式意图码 / 能力包路径不经过识别分支的 6.5, 在这里过; 识别分支到这里已判过, 再判结果相同。
+        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                request, intent, intentAccessModeFilter, writeGuardService);
+        if (readModeBlocked != null) {
+            streamTerminalResponse(emitter, readModeBlocked, startTime);
+            return;
+        }
+        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+            streamTerminalResponse(emitter,
+                    IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
             return;
         }
 
@@ -1060,19 +1083,8 @@ public class SseStreamingService {
             }
         }
 
-        // 格式化结果
-        boolean isSuccessStatus = "SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus());
-        if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
-            try {
-                resultFormatterService.formatAndSet(response, userId);
-            } catch (Exception e) {
-                log.warn("[SSE] 结果格式化异常: {}", e.getMessage());
-            }
-        }
-        if (response.getFormattedText() == null && response.getMessage() != null
-                && response.getMessage().length() >= 5) {
-            response.setFormattedText(response.getMessage());
-        }
+        // 遮价 → 格式化 → 文字兜底 → 内部推理消毒 → aiMode (与普通入口同序)
+        applySharedResultSteps(response, intent, toolName, userId);
 
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
             response.setSessionId(request.getSessionId());
@@ -1114,6 +1126,33 @@ public class SseStreamingService {
         }
         sendSseEvent(emitter, "complete", complete);
         emitter.complete();
+    }
+
+    /**
+     * 执行结果下发前的共用收尾 (与普通入口 applyCallerPriceView → applyResultFormatting → 兜底 → aiMode 同序):
+     * 先把 resultData 换成这个人看得到的那一份, 再格式化 —— 格式化按 resultData 写文字, 先格式化再在线上遮
+     * resultData, 文字里的价格已经出去了。
+     */
+    private void applySharedResultSteps(IntentExecuteResponse response, AIIntentConfig intent, String toolName,
+                                        Long userId) {
+        if (response == null) {
+            return;
+        }
+        IntentTurnSharedSteps.applyCallerPriceView(priceView, response, userId);
+        boolean isSuccessStatus = "SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus());
+        if (resultFormatterService != null && isSuccessStatus && response.getResultData() != null) {
+            try {
+                resultFormatterService.formatAndSet(response, userId);
+            } catch (Exception e) {
+                log.warn("[SSE] 结果格式化异常: {}", e.getMessage());
+            }
+        }
+        if (response.getFormattedText() == null && response.getMessage() != null
+                && response.getMessage().length() >= 5) {
+            response.setFormattedText(response.getMessage());
+        }
+        IntentTurnSharedSteps.sanitizeInternalReasoningLeak(response);
+        IntentTurnSharedSteps.applyAiModeStamp(response, intent, toolName, writeGuardService, toolRegistry);
     }
 
     /**
