@@ -3,6 +3,8 @@ package com.cretas.aims.ai.tool.impl.crm;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.customer.CustomerDTO;
 import com.cretas.aims.service.CustomerService;
+import com.cretas.aims.service.entity.EntityKind;
+import com.cretas.aims.service.entity.FactoryEntityResolver;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -22,6 +24,10 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
 
     @Autowired
     private CustomerService customerService;
+
+    /** 按名称找客户只走实体解析公共能力 (本厂主数据规范化后精确匹配), ⛔ 不用包含匹配的名称搜索。 */
+    @Autowired
+    private FactoryEntityResolver entityResolver;
 
     @Override
     public String getToolName() {
@@ -75,30 +81,43 @@ public class CustomerCrmStatusQueryTool extends AbstractBusinessTool {
         if (customerId != null && !customerId.isBlank()) {
             customer = customerService.getCustomerById(factoryId, customerId);
         } else if (customerName != null && !customerName.isBlank()) {
-            List<CustomerDTO> matches = customerService.searchCustomersByName(factoryId, customerName);
-            if (matches != null && matches.size() == 1) {
-                customer = matches.get(0);
-            } else if (matches != null && matches.size() > 1) {
+            FactoryEntityResolver.Resolution resolution =
+                    entityResolver.resolve(factoryId, EntityKind.CUSTOMER, customerName);
+            if (resolution.status() == FactoryEntityResolver.Status.UNIQUE) {
+                customer = customerService.getCustomerById(factoryId, resolution.matches().get(0).id());
+            } else if (resolution.status() == FactoryEntityResolver.Status.MULTIPLE) {
                 // 口径规则 8 (INTENT-DISTILL-20261111): 只读查询名字命中多个时不先问、不只取第一个 ——
-                // 全部列出 (前 5 个), 每个标出客户编码与 CRM 状态。
+                // 全部列出 (前 5 个), 每个标出解析器给的区分字段 (客户编码 / 地址 / 电话尾号) 与 CRM 状态。
                 List<Map<String, Object>> rows = new java.util.ArrayList<>();
                 List<com.cretas.aims.ai.tool.SameNameMatches.Match> listed = new java.util.ArrayList<>();
-                for (CustomerDTO c : matches.subList(0,
-                        Math.min(com.cretas.aims.ai.tool.SameNameMatches.LIST_LIMIT, matches.size()))) {
-                    Map<String, Object> row = statusData(c);
+                for (FactoryEntityResolver.Candidate c
+                        : com.cretas.aims.ai.tool.SameNameMatches.listedCandidates(resolution)) {
+                    Map<String, Object> row = statusData(customerService.getCustomerById(factoryId, c.id()));
                     rows.add(row);
-                    listed.add(new com.cretas.aims.ai.tool.SameNameMatches.Match(c.getId(), c.getName(),
-                            c.getCustomerCode() != null ? "客户编码 " + c.getCustomerCode() : "客户ID " + c.getId(), row.get("customerStatus") + "，" + row.get("importance")));
+                    listed.add(com.cretas.aims.ai.tool.SameNameMatches.matchOf(c,
+                            row.get("customerStatus") + "，" + row.get("importance")));
                 }
                 Map<String, Object> data = new LinkedHashMap<>();
-                data.put("customerName", customerName);
-                data.put("matchCount", matches.size());
+                data.put("customerName", resolution.query());
+                data.put("matchCount", resolution.matches().size());
                 data.put("customers", rows);
                 Map<String, Object> result = new java.util.HashMap<>();
                 result.put("data", data);
-                com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "客户", customerName, matches.size(), listed);
+                com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "客户", resolution, listed);
                 result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
                 return result;
+            } else {
+                // 全名零命中: 称呼核心 / 包含匹配出来的候选列出来让人选 (⛔ 不自动选, 哪怕只有一个)
+                Map<String, Object> result = new java.util.HashMap<>();
+                if (com.cretas.aims.ai.tool.SameNameMatches.annotateSuggestions(result, "客户", resolution)) {
+                    Map<String, Object> data = new LinkedHashMap<>();
+                    data.put("customerName", resolution.query());
+                    data.put("matchCount", 0);
+                    data.put("suggestionCount", resolution.suggestions().size());
+                    result.put("data", data);
+                    result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
+                    return result;
+                }
             }
         }
 

@@ -1,5 +1,4 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { defineComponent, h } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -46,30 +45,9 @@ vi.mock('element-plus', () => ({
 }));
 
 import SupplierDetailDrawer from '../SupplierDetailDrawer.vue';
+import { nuxtUiStubs } from './nuxtUiStubs';
 
-const PassThrough = (name: string) => defineComponent({
-  name, setup: (_p, { slots }) => () => h('div', slots.default?.()),
-});
-
-/** el-form-item 必须把 label 渲染出来 —— 本组测试就是在看标题说的是含税还是未税。 */
-const ElFormItemStub = defineComponent({
-  name: 'ElFormItem',
-  props: { label: { type: String, default: '' } },
-  setup: (props, { slots }) => () => h('div', { class: 'form-item' }, [
-    h('label', props.label), slots.default?.(),
-  ]),
-});
-
-const ModelStub = (name: string) => defineComponent({
-  name,
-  props: { modelValue: { type: null, default: null }, disabled: { type: Boolean, default: false } },
-  emits: ['update:modelValue'],
-  setup: (props) => () => h('input', {
-    'data-value': String(props.modelValue ?? ''),
-    disabled: props.disabled,
-  }),
-});
-
+/** Nuxt UI 没装进 vitest: 用最小桩（见 ./nuxtUiStubs.ts），UTable 会把行真的渲染出来。 */
 function mountDrawer() {
   return mount(SupplierDetailDrawer, {
     props: {
@@ -79,24 +57,7 @@ function mountDrawer() {
     },
     global: {
       directives: { loading: {} },
-      stubs: {
-        ElDrawer: PassThrough('ElDrawer'), ElDialog: PassThrough('ElDialog'),
-        ElTabs: PassThrough('ElTabs'), ElTabPane: PassThrough('ElTabPane'),
-        ElForm: PassThrough('ElForm'), ElFormItem: ElFormItemStub,
-        ElDescriptions: PassThrough('ElDescriptions'), ElDescriptionsItem: PassThrough('ElDescriptionsItem'),
-        ElTable: PassThrough('ElTable'),
-        ElTableColumn: defineComponent({ name: 'ElTableColumn', setup: () => () => h('div') }),
-        ElCard: PassThrough('ElCard'), ElTag: PassThrough('ElTag'), ElTooltip: PassThrough('ElTooltip'),
-        ElDivider: PassThrough('ElDivider'), ElAlert: PassThrough('ElAlert'), ElEmpty: PassThrough('ElEmpty'),
-        ElButton: defineComponent({
-          name: 'ElButton', emits: ['click'],
-          setup: (_p, { slots, emit }) => () => h('button', { onClick: () => emit('click') }, slots.default?.()),
-        }),
-        ElInput: ModelStub('ElInput'), ElInputNumber: ModelStub('ElInputNumber'),
-        ElSwitch: ModelStub('ElSwitch'), ElSelect: ModelStub('ElSelect'),
-        ElOption: PassThrough('ElOption'), UnitSelect: ModelStub('UnitSelect'),
-        SupplierProfileCollections: PassThrough('SupplierProfileCollections'),
-      },
+      stubs: { ...nuxtUiStubs },
     },
   });
 }

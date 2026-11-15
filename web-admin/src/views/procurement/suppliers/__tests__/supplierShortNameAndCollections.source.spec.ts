@@ -74,7 +74,7 @@ describe('supplier contacts / addresses / bank accounts wiring', () => {
   it('renders the collections tab inside the supplier drawer', () => {
     expect(drawerSource).toContain('import SupplierProfileCollections from \'./SupplierProfileCollections.vue\'');
     expect(drawerSource).toContain('<SupplierProfileCollections');
-    expect(drawerSource).toContain('name="collections"');
+    expect(drawerSource).toContain("value: 'collections'");
   });
 
   it('reloads the master record after a child record changes', () => {
@@ -124,6 +124,6 @@ describe('supplier contacts / addresses / bank accounts wiring', () => {
     expect(collectionsSource).toContain('还没有联系人');
     expect(collectionsSource).toContain('还没有地址');
     expect(collectionsSource).toContain('还没有银行账户');
-    expect(collectionsSource.match(/<el-empty/g) ?? []).toHaveLength(3);
+    expect(collectionsSource.match(/<UEmpty/g) ?? []).toHaveLength(3);
   });
 });
