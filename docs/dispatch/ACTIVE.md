@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `bb3b333e17` — Web发布窗口，锁9工作台/共享导航、sales/orders/list.vue餐饮POS请求门禁及测试。私有场景表 C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/unified-specialist-scenarios.md；本地真实只读闭环PASS/写0。收齐CI后Web-only发布及线上读回；窗口内不合无关PR。
+- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `4cbad881af` — Web发布窗口，锁9工作台/共享导航、sales/orders/list.vue餐饮POS请求门禁及测试。私有场景表 C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/unified-specialist-scenarios.md；本地真实只读闭环PASS/写0。收齐CI后Web-only发布及线上读回；窗口内不合无关PR。
 - `UNIFY-BRANCH-MODEL-20261115` — `in-progress` — Owner /root/branch_model — Base `9c67199366` — 独占 web-admin/src/__tests__/gates/lib/branchReachability.ts 与 branchReachability.spec.ts；建模数字专员真实写权限，区分身份完整性与权限决策，不抬预算。验收 npx vitest run src/__tests__/gates/branchReachability.spec.ts。
 - `UNIFY-READONLY-ACCEPTANCE-20261115` — `in-progress` — Owner /root — Base `9c67199366` — 独占 scripts/e2e/production-readonly 的白名单、run-suite、mcp-entry及新增数字专员scenario/test；复用唯一生产入口，严格READ体及原mutation guard，不放行业务写。验收 node --test 对应目标及真实UI；生成bundle。
 
