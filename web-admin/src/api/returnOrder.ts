@@ -59,6 +59,10 @@ export interface ReturnOrder {
   status: ReturnOrderStatus;
   counterpartyId: string;
   sourceOrderId?: string | null;
+  /** 对方名称 (后端按 returnType 解析; null = 未取到) */
+  counterpartyName?: string | null;
+  /** 源单号 (后端解析; null = 未取到) */
+  sourceOrderNumber?: string | null;
   returnDate: string;
   totalAmount?: number | null;
   /** 销项税额 (销售退货); 应收冲减 = totalAmount + taxAmount */

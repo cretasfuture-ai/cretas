@@ -3,9 +3,11 @@ package com.cretas.aims.service.inventory.impl;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.Customer;
 import com.cretas.aims.entity.enums.ReturnType;
+import com.cretas.aims.entity.inventory.PurchaseOrder;
 import com.cretas.aims.entity.inventory.ReturnOrder;
 import com.cretas.aims.entity.inventory.SalesOrder;
 import com.cretas.aims.repository.CustomerRepository;
+import com.cretas.aims.repository.inventory.PurchaseOrderRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderItemRepository;
 import com.cretas.aims.repository.inventory.ReturnOrderRepository;
 import com.cretas.aims.repository.inventory.SalesOrderRepository;
@@ -22,10 +24,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -66,6 +70,7 @@ class ReturnOrderListEnrichmentContractTest {
     @Mock ApplicationEventPublisher applicationEventPublisher;
     @Mock CustomerRepository customerRepository;
     @Mock SalesOrderRepository salesOrderRepository;
+    @Mock PurchaseOrderRepository purchaseOrderRepository;
 
     private ReturnOrderServiceImpl service;
 
@@ -80,6 +85,7 @@ class ReturnOrderListEnrichmentContractTest {
                 returnOrderRepository, returnOrderItemRepository, arApService, applicationEventPublisher);
         ReflectionTestUtils.setField(service, "customerRepository", customerRepository);
         ReflectionTestUtils.setField(service, "salesOrderRepository", salesOrderRepository);
+        ReflectionTestUtils.setField(service, "purchaseOrderRepository", purchaseOrderRepository);
     }
 
     private static ReturnOrder salesReturn(String id, String counterpartyId, String sourceOrderId) {
@@ -170,5 +176,64 @@ class ReturnOrderListEnrichmentContractTest {
         assertThat(page.getContent().get(0).getCounterpartyName()).isNull();
         // 一类失败不该拖垮另一类。
         assertThat(page.getContent().get(0).getSourceOrderNumber()).isEqualTo("SO-20260820-0007");
+    }
+
+    private static ReturnOrder purchaseReturn(String id, String sourceOrderId) {
+        ReturnOrder o = salesReturn(id, "sup-1", sourceOrderId);
+        o.setReturnType(ReturnType.PURCHASE_RETURN);
+        return o;
+    }
+
+    private static PurchaseOrder purchaseOrder(String id, String number) {
+        PurchaseOrder po = new PurchaseOrder();
+        po.setId(id);
+        po.setOrderNumber(number);
+        return po;
+    }
+
+    @Test
+    @DisplayName("采购退货列表: 源单号来自采购订单 (带 factory_id 查询), 销售单仓库不参与")
+    void purchaseReturnResolvesPurchaseOrderNumber() {
+        when(returnOrderRepository.findByFactoryIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(purchaseReturn("r1", "po-1"))));
+        when(purchaseOrderRepository.findByIdAndFactoryId("po-1", FACTORY))
+                .thenReturn(Optional.of(purchaseOrder("po-1", "PO-20261029-0003")));
+
+        PageResponse<ReturnOrder> page = service.getReturnOrders(FACTORY, null, null, 1, 20);
+
+        assertThat(page.getContent().get(0).getSourceOrderNumber()).isEqualTo("PO-20261029-0003");
+        verify(salesOrderRepository, never()).findAllById(any());
+    }
+
+    @Test
+    @DisplayName("销售退货仍返回销售单号, 且不碰采购订单仓库")
+    void salesReturnStillResolvesSalesOrderNumber() {
+        when(returnOrderRepository.findByFactoryIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(salesReturn("r1", CUSTOMER_A, ORDER_A))));
+        when(salesOrderRepository.findAllById(any()))
+                .thenReturn(List.of(salesOrder(ORDER_A, "SO-20260820-0007")));
+
+        PageResponse<ReturnOrder> page = service.getReturnOrders(FACTORY, null, null, 1, 20);
+
+        assertThat(page.getContent().get(0).getSourceOrderNumber()).isEqualTo("SO-20260820-0007");
+        verify(purchaseOrderRepository, never()).findByIdAndFactoryId(any(), any());
+    }
+
+    @Test
+    @DisplayName("跨厂的采购单 id 解析为空 (查询按退货单自己的 factoryId, 别厂单号出不来)")
+    void crossFactoryPurchaseOrderIdResolvesToNull() {
+        when(returnOrderRepository.findByFactoryIdOrderByCreatedAtDesc(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(purchaseReturn("r1", "po-other-factory"))));
+        // 仓库语义: 仅当 (id, factoryId) 同时匹配才返回; 该单属于别的厂。
+        when(purchaseOrderRepository.findByIdAndFactoryId("po-other-factory", "F006"))
+                .thenReturn(Optional.empty());
+        // 阳性对照: 若实现漏掉 factory_id (如 findById), 别厂单号会被填上。
+        lenient().when(purchaseOrderRepository.findById("po-other-factory"))
+                .thenReturn(Optional.of(purchaseOrder("po-other-factory", "PO-OTHER-FACTORY")));
+
+        PageResponse<ReturnOrder> page = service.getReturnOrders(FACTORY, null, null, 1, 20);
+
+        assertThat(page.getContent().get(0).getSourceOrderNumber()).isNull();
+        verify(purchaseOrderRepository, never()).findById(any());
     }
 }

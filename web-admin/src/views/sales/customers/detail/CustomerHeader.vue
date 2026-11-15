@@ -11,7 +11,7 @@
         <div class="meta">
           <el-tag size="small">{{ customer.customerCode }}</el-tag>
           <el-tag v-if="customer.customerType || customer.type" size="small" type="info">
-            {{ customer.customerType || customer.type }}
+            {{ customerTypeLabel(customer.customerType || customer.type) }}
           </el-tag>
           <el-tag v-if="customer.industry" size="small" effect="plain">
             {{ customer.industry }}
@@ -67,6 +67,7 @@ import { User, Phone, Message } from '@element-plus/icons-vue';
 import { usePermissionStore } from '@/store/modules/permission';
 import { storeToRefs } from 'pinia';
 import type { Customer } from '@/api/customer';
+import { customerTypeLabel } from '../customerFormModel';
 
 const props = defineProps<{
   customer: Customer | null;
