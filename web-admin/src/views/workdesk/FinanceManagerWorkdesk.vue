@@ -14,7 +14,7 @@
 -->
 <template>
   <DigitalEmployeeFrame :enabled="digitalEmployee" role="finance" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
-    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="财务数字专员" scope-label="财务报表、期间与审批查询" :quick-questions="['本月经营怎么样？', '查询应收账龄']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="财务数字专员" scope-label="财务报表、期间与审批查询" :quick-questions="['查询本月利润表', '查询应收账龄']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
       <template #action>
         <UButton v-if="employeePaths.includes('/finance/accounting-period')" to="/finance/accounting-period" icon="i-lucide-file-check">进入财务业务入口</UButton>
       </template>

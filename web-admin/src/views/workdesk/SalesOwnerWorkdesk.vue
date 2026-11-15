@@ -15,7 +15,7 @@
 <template>
   <div class="sales-owner-workdesk">
     <DigitalEmployeeFrame :enabled="digitalEmployee" role="sales" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite" :wholesale-mode="wholesaleMode">
-    <DigitalEmployeeConversation :scope-key="`${factoryId}:${actorId}:${authStore.currentRole || ''}:${employeeNavigationPending}`" v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="销售数字专员" scope-label="客户、订单与销售记录" :quick-questions="['查询当前销售订单', '今天哪些客户该跟进？']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+    <DigitalEmployeeConversation :scope-key="`${factoryId}:${actorId}:${authStore.currentRole || ''}:${employeeNavigationPending}`" v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="销售数字专员" scope-label="客户、订单与销售记录" :quick-questions="['查询当前销售订单']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
       <template #action>
         <UButton v-if="employeeCanWrite && employeePaths.includes('/sales/orders')" icon="i-lucide-file-plus" @click="openEmployeeOrder">交给销售单办理</UButton>
       </template>
