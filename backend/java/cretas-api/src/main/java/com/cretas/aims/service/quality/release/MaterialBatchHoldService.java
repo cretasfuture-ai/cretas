@@ -34,6 +34,9 @@ public class MaterialBatchHoldService {
     /** 扣留写入的状态。 */
     public static final MaterialBatchStatus HOLD_STATUS = MaterialBatchStatus.INSPECTING;
 
+    /** 委外发料建的委外仓批次的 source_doc_type (= {@code OutsourceService.DOC_ISSUE}; 这里不反向依赖 OutsourceService)。 */
+    static final String OUTSOURCE_ISSUE_DOC = "OUTSOURCE_ISSUE";
+
     /** 冻结时写进 notes 的审计标记 (召回损失估算据此认出「被冻结工具扣住」的批次; 老数据缺扣留前状态时也靠它认)。 */
     public static final String FREEZE_AUDIT_MARK = "[FREEZE by user=";
 
@@ -122,6 +125,13 @@ public class MaterialBatchHoldService {
      * 其余回扣留前状态 (生产预留由 {@link #followWip} 在在制结束时改写, 见下)。
      */
     public static MaterialBatchStatus releaseTarget(MaterialBatch batch, MaterialBatchStatus requested) {
+        // 委外厂手里的料 (委外发料建的委外仓批次) 靠 RESERVED (预留量 0) 挡住领料 / FEFO / 调拨 (委外设计 D13)。
+        // 扣留后放行、或仓库页 / AI 工具直接改成「可用」, 都 ⛔ 不能变成 AVAILABLE (#1723 终审 中7):
+        // 还有结存回 RESERVED, 没结存回已耗尽。料回我方只走委外退料。
+        if (batch != null && requested == MaterialBatchStatus.AVAILABLE
+                && OUTSOURCE_ISSUE_DOC.equals(batch.getSourceDocType())) {
+            return positive(batch.getCurrentQuantity()) ? MaterialBatchStatus.RESERVED : MaterialBatchStatus.DEPLETED;
+        }
         if (batch == null || requested != MaterialBatchStatus.AVAILABLE
                 || batch.getStatus() != HOLD_STATUS || batch.getHoldPriorStatus() == null) {
             return requested;

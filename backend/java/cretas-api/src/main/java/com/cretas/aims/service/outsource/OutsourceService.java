@@ -505,7 +505,7 @@ public class OutsourceService {
 
     /**
      * 收货 (D4/D5/D7): 合格 g + 不良 d。返工待收先抵扣 (不耗料, 血缘从被退回的收货批次连过来);
-     * 新收部分必须有耗用。加工费 = g × 单价, 同一事务里挂应付 (按收货明细 id 幂等)。
+     * 新收部分必须有耗用。加工费 = 新收合格数 × 单价 (返工回货不计), 同一事务里挂应付 (按收货明细 id 幂等)。
      */
     @Transactional
     public OrderDetail receive(String factoryId, String orderId, String lineId, ReceiveRequest req, Long userId) {
@@ -525,6 +525,13 @@ public class OutsourceService {
         BigDecimal rework = g.min(nz(line.getReworkPendingQuantity()));
         BigDecimal newGood = g.subtract(rework);
         BigDecimal newTotal = newGood.add(d);
+        // 新收 (合格减返工抵扣 + 不良) 不能超过剩余应收: 否则少量耗用就能建出任意大的产出批次并挂对应应付 (终审 中3)。
+        BigDecimal remaining = line.remainingToReceive();
+        if (newTotal.compareTo(remaining) > 0) {
+            throw bad(409, String.format("本次新收 %s (合格 %s + 不良 %s, 已扣返工抵扣 %s) 超过剩余应收 %s %s",
+                    plain(newTotal), plain(newGood), plain(d), plain(rework), plain(remaining), line.getUnit()),
+                    "OUTSOURCE_RECEIVE_EXCEEDS_REMAINING", "goodQuantity");
+        }
 
         // ---- 1. 新收部分的耗用 ----
         List<BatchQuantity> consumptions = req.consumptions();
@@ -542,12 +549,18 @@ public class OutsourceService {
                         "OUTSOURCE_BALANCE_EMPTY", lineId);
             }
             BigDecimal total = ZERO;
+            Set<String> seenBatches = new HashSet<>();
             for (BatchQuantity c : consumptions) {
                 if (c == null || c.quantity() == null || c.quantity().signum() == 0) {
                     continue;
                 }
                 if (c.quantity().signum() < 0) {
                     throw bad(400, "耗用量不能为负", "OUTSOURCE_CONSUMPTION_INVALID", c.batchId());
+                }
+                // 同批两条: 每条单独对结存校验都过, 合计却超结存 → 撞 DB 约束变 500 (终审 中4)。
+                if (!seenBatches.add(c.batchId())) {
+                    throw bad(409, "同一委外仓批次在耗用明细里出现了两次, 请合并数量",
+                            "OUTSOURCE_CONSUMPTION_DUPLICATED", c.batchId());
                 }
                 MaterialBatch os = lockOutsourceBatch(factoryId, line, c.batchId());
                 assertWithinBalance(os, c.quantity(), "耗用");
@@ -565,7 +578,9 @@ public class OutsourceService {
             }
         }
 
-        BigDecimal fee = money(g.multiply(line.getUnitFee()));
+        // 加工费只按新收合格数计, 返工回货不再计费 (终审 中5)。退货时那 q × 单价已挂成待审负数调整:
+        // 财务批准 = 返工那部分不付费; 驳回 = 照原收货付费。两条路都只付一次, 不会因为驳回多挂一笔。
+        BigDecimal fee = money(newGood.multiply(line.getUnitFee()));
         OutsourceMovement header = movement(order, line, OutsourceMovement.Type.RECEIVE, bizDate, userId);
         header.setProductTypeId(line.getProductTypeId());
         header.setQuantity(g);
@@ -637,7 +652,7 @@ public class OutsourceService {
         if (fee.signum() > 0) {
             var ap = arApService.recordPayableFromSource(factoryId, order.getSupplierId(), AP_SOURCE_RECEIVE,
                     header.getId(), fee, bizDate.plusDays(PAYABLE_DUE_DAYS), userId,
-                    "委外加工费 " + order.getOrderNo() + " 第" + line.getLineNo() + "行 合格 " + plain(g));
+                    "委外加工费 " + order.getOrderNo() + " 第" + line.getLineNo() + "行 合格 " + plain(newGood));
             header.setApTransactionId(ap.getId());
         }
         movementRepository.save(header);
@@ -656,7 +671,8 @@ public class OutsourceService {
                                BigDecimal rework, InventoryOwnership ownership, String ownerCustomer,
                                LocalDate bizDate, Long userId, boolean headerTarget) {
         Map<String, BigDecimal> pending = new LinkedHashMap<>();
-        for (OutsourceMovement m : movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId())) {
+        List<OutsourceMovement> lineMovements = movementRepository.findByLineIdOrderByCreatedAtAsc(line.getId());
+        for (OutsourceMovement m : lineMovements) {
             if (m.getMovementType() == OutsourceMovement.Type.GOODS_RETURN) {
                 pending.merge(m.getSourceBatchId(), m.getQuantity(), BigDecimal::add);
             } else if (m.getMovementType() == OutsourceMovement.Type.CONSUME && REWORK_MARK.equals(m.getReason())) {
@@ -704,16 +720,87 @@ public class OutsourceService {
             cm.setUnit(line.getUnit());
             cm.setReason(REWORK_MARK);
             movementRepository.save(cm);
-            // 成品被退回时源是成品批次: 血缘节点只认物料批次 → 成品的返工边不写 (闭包里由首次收货边覆盖)。
             if (line.getOutputKind() == OutsourceOrderLine.OutputKind.SEMI) {
                 lineageEdgeRecorder.recordOutsourceProcess(factoryId, srcIds.get(i), targetType, batchId, srcQty.get(i),
                         line.getUnit(), userId, "outsource-rework:" + cm.getId(), Map.of("origin", "OUTSOURCE_REWORK"));
+            } else {
+                // 成品被退回时源是成品批次, 而 OUTSOURCE_PROCESS 边的源只能是物料批次 ⇒ 返工成品批次的上游
+                // 改为「被退批次当初耗用的委外仓批次」(按收发明细追, 返工再返工也追到首次收货), 否则新成品批次
+                // 没有上游边, 正向召回 / 反查断链 (终审 高2)。
+                Map<String, BigDecimal> upstream = new LinkedHashMap<>();
+                collectOutsourceUpstream(lineMovements, srcIds.get(i), srcQty.get(i), upstream, 0);
+                if (upstream.isEmpty()) {
+                    throw bad(409, "返工回货追不到被退批次耗用的委外仓料, 血缘会断, 请联系管理员核对",
+                            "OUTSOURCE_REWORK_LINEAGE_MISSING", srcIds.get(i));
+                }
+                for (Map.Entry<String, BigDecimal> u : upstream.entrySet()) {
+                    String unitOfOs = materialBatchRepository.findByIdAndFactoryId(u.getKey(), factoryId)
+                            .map(MaterialBatch::getQuantityUnit).orElse(null);
+                    lineageEdgeRecorder.recordOutsourceProcess(factoryId, u.getKey(), targetType, batchId,
+                            u.getValue().setScale(6, RoundingMode.HALF_UP), unitOfOs, userId,
+                            "outsource-rework:" + cm.getId() + ":" + u.getKey(),
+                            Map.of("origin", "OUTSOURCE_REWORK", "reworkOf", srcIds.get(i)));
+                }
             }
         }
         if (headerTarget) {
             header.setTargetBatchId(batchId);
             header.setTargetBatchKind(kindOf(line));
             header.setUnitCost(unitCost);
+        }
+    }
+
+    /**
+     * 产出批次 {@code batchId} 的 {@code take} 个单位, 按收发明细追到它耗用的委外仓批次 (委外仓批次 id → 耗用量份额)。
+     * <ul>
+     *   <li>返工回货建的批次: 返工 CONSUME 行 targetBatchId = 它, 源是更早被退回的批次 ⇒ 按各行数量分摊后递归。</li>
+     *   <li>首次收货建的批次: 收货主记录 targetBatchId = 它; 其下非返工的 CONSUME 行就是耗用的委外仓批次,
+     *       按 take / 本次新收总数 (合格新收 + 不良) 分摊。</li>
+     * </ul>
+     */
+    private static void collectOutsourceUpstream(List<OutsourceMovement> lineMovements, String batchId, BigDecimal take,
+                                                 Map<String, BigDecimal> out, int depth) {
+        if (depth > 32 || take.signum() <= 0) {
+            return;
+        }
+        // 先看是不是返工回货建的批次 (只返工、无新收合格时收货主记录也指向它, 不能按主记录的耗用分摊)
+        List<OutsourceMovement> reworkRows = lineMovements.stream()
+                .filter(m -> m.getMovementType() == OutsourceMovement.Type.CONSUME && REWORK_MARK.equals(m.getReason())
+                        && batchId.equals(m.getTargetBatchId()))
+                .toList();
+        BigDecimal reworkTotal = sum(reworkRows, OutsourceMovement::getQuantity);
+        if (reworkTotal.signum() > 0) {
+            for (OutsourceMovement r : reworkRows) {
+                collectOutsourceUpstream(lineMovements, r.getSourceBatchId(),
+                        take.multiply(nz(r.getQuantity())).divide(reworkTotal, 8, RoundingMode.HALF_UP), out, depth + 1);
+            }
+            return;
+        }
+        for (OutsourceMovement h : lineMovements) {
+            if (h.getMovementType() != OutsourceMovement.Type.RECEIVE || h.getParentMovementId() != null
+                    || !batchId.equals(h.getTargetBatchId())) {
+                continue;
+            }
+            BigDecimal reworkUnder = ZERO;
+            List<OutsourceMovement> consumed = new ArrayList<>();
+            for (OutsourceMovement c : lineMovements) {
+                if (c.getMovementType() != OutsourceMovement.Type.CONSUME || !h.getId().equals(c.getParentMovementId())) {
+                    continue;
+                }
+                if (REWORK_MARK.equals(c.getReason())) {
+                    reworkUnder = reworkUnder.add(nz(c.getQuantity()));
+                } else {
+                    consumed.add(c);
+                }
+            }
+            BigDecimal newTotal = nz(h.getQuantity()).add(nz(h.getDefectQuantity())).subtract(reworkUnder);
+            if (newTotal.signum() > 0) {
+                for (OutsourceMovement c : consumed) {
+                    out.merge(c.getSourceBatchId(),
+                            nz(c.getQuantity()).multiply(take).divide(newTotal, 8, RoundingMode.HALF_UP), BigDecimal::add);
+                }
+                return;
+            }
         }
     }
 
@@ -1012,15 +1099,19 @@ public class OutsourceService {
 
     /**
      * 质检退回单 (SUBCONTRACT) 发出时调用: 走同一个退货实现, 回填 movement。
-     * 未关联任务行的 SUBCONTRACT 单 ⇒ 409 (fail-closed, 不再允许只记单不动库存)。
+     * 只处理<b>已关联</b>任务行的 SUBCONTRACT 单; 未关联的由调用方按原行为发出 (关联入口未接上前不收紧)。
+     * 关联了任务行却没填被退批次 ⇒ 409 (半关联说不清扣哪批)。
      */
     @Transactional
     public void returnGoodsForQualityReturn(String factoryId, QualityReturnOrder qro, Long userId) {
         if (qro.getTargetType() != QualityReturnTargetType.SUBCONTRACT) {
             return;
         }
-        if (isBlank(qro.getOutsourceLineId()) || isBlank(qro.getSourceBatchId())) {
-            throw bad(409, "退回委外的退回单必须先关联委外任务行和被退的收货批次", "OUTSOURCE_LINE_REQUIRED", "outsourceLineId");
+        if (isBlank(qro.getOutsourceLineId())) {
+            return;
+        }
+        if (isBlank(qro.getSourceBatchId())) {
+            throw bad(409, "退回委外的退回单关联了委外任务行, 但没有选被退的收货批次", "OUTSOURCE_LINE_REQUIRED", "sourceBatchId");
         }
         OutsourceOrderLine line = lineRepository.findByIdAndFactoryId(qro.getOutsourceLineId(), factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("委外任务行不存在: " + qro.getOutsourceLineId()));
@@ -1179,7 +1270,9 @@ public class OutsourceService {
     private boolean replayed(String factoryId, String orderId, String clientRequestId) {
         String key = trimToNull(clientRequestId);
         if (key == null) {
-            return false;
+            // 收发写操作必须带提交编号: 不带就没有防重, 网络重试会重复耗料 / 重复挂应付 (终审 中6)。
+            throw bad(400, "缺少提交编号 clientRequestId (每次提交生成一个, 重试时沿用)",
+                    "OUTSOURCE_REQUEST_ID_REQUIRED", "clientRequestId");
         }
         if (key.length() > 64) {
             throw bad(400, "clientRequestId 太长 (最多 64)", "OUTSOURCE_REQUEST_ID_INVALID", "clientRequestId");

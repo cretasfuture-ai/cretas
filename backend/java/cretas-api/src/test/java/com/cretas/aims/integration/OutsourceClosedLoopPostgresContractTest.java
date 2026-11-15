@@ -30,6 +30,7 @@ import com.cretas.aims.service.lineage.LineageEdgeOutbox;
 import com.cretas.aims.service.lineage.LineageEdgeRecorder;
 import com.cretas.aims.service.lineage.LineageEdgeWriter;
 import com.cretas.aims.service.outsource.OutsourceService;
+import com.cretas.aims.service.quality.release.MaterialBatchHoldService;
 import com.cretas.aims.service.quality.release.QcInspectionPolicy;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.MethodOrderer;
@@ -73,7 +74,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>超发对平: 超发后直接结单 409 并列出剩余批次; 退料 + 损耗之后才能结单。</li>
  *   <li>加工费: 合格数 × 单价 = AP_INVOICE = 行累计; 不良不计费; 同一 clientRequestId 不重复挂账;
  *       退货产生待审负数 AP_ADJUSTMENT, 审批前供应商余额不变。</li>
- *   <li>阴性对照: 发料超结存 409 且源批次不动 / 耗用超结存 409 / SUBCONTRACT 未关联任务行 ship 409 / 跨厂 404。</li>
+ *   <li>阴性对照: 发料超结存 409 且源批次不动 / 耗用超结存 409 / 新收超剩余应收 409 / 同批重复耗用 409 /
+ *       缺 clientRequestId 400 / 跨厂 404。</li>
+ *   <li>返工: 返工回货不计加工费; 返工成品批次的血缘追到原始源批次; 委外仓批次扣留→放行仍是 RESERVED。</li>
+ *   <li>质检退回委外: 未关联任务行照原行为发出; 已关联的发出即走委外退货。</li>
  *   <li>工序委外: 下达后工序 is_outsourced; 收货累加实际产量; 结单后工序 COMPLETED。</li>
  * </ol>
  *
@@ -106,7 +110,7 @@ class OutsourceClosedLoopPostgresContractTest {
     @EnableJpaRepositories("com.cretas.aims.repository")
     @Import({OutsourceService.class, LineageEdgeRecorder.class, LineageEdgeWriter.class, LineageEdgeOutbox.class,
             FinishedBatchProductionAligner.class, WarehouseResolver.class, QcInspectionPolicy.class,
-            ArApServiceImpl.class, QualityReturnOrderServiceImpl.class,
+            ArApServiceImpl.class, QualityReturnOrderServiceImpl.class, MaterialBatchHoldService.class,
             com.cretas.aims.service.finance.FinancePaymentReferenceLock.class})
     static class Runtime {
         /** 会计期间闸不在本测试范围: 一律开放。 */
@@ -138,6 +142,7 @@ class OutsourceClosedLoopPostgresContractTest {
     @Autowired FactoryWarehouseRepository warehouses;
     @Autowired WorkProcessTaskRepository tasks;
     @Autowired QualityReturnOrderRepository qros;
+    @Autowired MaterialBatchHoldService holds;
 
     @BeforeAll
     void schema() throws Exception {
@@ -195,6 +200,45 @@ class OutsourceClosedLoopPostgresContractTest {
         // 「一定会发生」: 发料的 MATERIAL_TRANSFER 边真的落库 (afterCommit 真跑了)
         assertThat(count("select count(*) from batch_lineage_edges where factory_id = ? and edge_type = 'MATERIAL_TRANSFER'"))
                 .isEqualTo(2);
+
+        // 中7: 委外仓批次被扣留 (AI 冻结入口) 再放行, 必须回 RESERVED, 不能变 AVAILABLE 被领料 / FEFO 选中
+        String osRawNo = batches.findById(osRaw).orElseThrow().getBatchNumber();
+        assertThat(holds.freeze(F, osRawNo, "PG 扣留", USER).held()).isTrue();
+        assertThat(status(osRaw)).isEqualTo(MaterialBatchStatus.INSPECTING.name());
+        MaterialBatch held = batches.findById(osRaw).orElseThrow();
+        held.setStatus(MaterialBatchHoldService.releaseTarget(held, MaterialBatchStatus.AVAILABLE));
+        batches.saveAndFlush(held);
+        assertThat(status(osRaw)).isEqualTo(MaterialBatchStatus.RESERVED.name());
+        List<String> fefo = batches.findAvailableBatchesFEFO(F, "MT-RAW").stream().map(MaterialBatch::getId).toList();
+        assertThat(fefo).as("阳性对照: 我方仓原料批次照常可选").contains("OS-RAW").doesNotContain(osRaw);
+
+        // 中6: 写接口不带 clientRequestId → 400, 不落任何收发
+        int movesBefore = count("select count(*) from outsource_movements where factory_id = ?");
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest(null, null,
+                new BigDecimal("1"), BigDecimal.ZERO, List.of(new BatchQuantity(osRaw, new BigDecimal("1")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_REQUEST_ID_REQUIRED");
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?")).isEqualTo(movesBefore);
+
+        // 中3: 新收超过剩余应收 (计划 40, 收合格 10000) → 409, 不建产出批次、不挂应付
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-OVER", null,
+                new BigDecimal("10000"), BigDecimal.ZERO, List.of(new BatchQuantity(osRaw, new BigDecimal("0.001")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_RECEIVE_EXCEEDS_REMAINING");
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-OVER2", null,
+                new BigDecimal("39"), new BigDecimal("2"), List.of(new BatchQuantity(osRaw, new BigDecimal("1")))), USER))
+                .as("边界: 合格 39 + 不良 2 = 41 > 40")
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_RECEIVE_EXCEEDS_REMAINING");
+        assertThat(count("select count(*) from finished_goods_batches where factory_id = ?")).isZero();
+        assertThat(count("select count(*) from ar_ap_transactions where factory_id = ?")).isZero();
+
+        // 中4: 同一委外仓批次两条耗用 (40 + 40 > 结存 60, 每条单看都没超) → 409 而不是撞库约束 500
+        assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-DUP", null,
+                new BigDecimal("38"), new BigDecimal("2"), List.of(new BatchQuantity(osRaw, new BigDecimal("40")),
+                        new BatchQuantity(osRaw, new BigDecimal("40")))), USER))
+                .isInstanceOf(BusinessException.class)
+                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_CONSUMPTION_DUPLICATED");
+        assertThat(current(osRaw)).isEqualByComparingTo("60");
 
         // 阴性对照: 耗用超过委外仓结存 → 409
         assertThatThrownBy(() -> outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-BAD", null,
@@ -261,12 +305,29 @@ class OutsourceClosedLoopPostgresContractTest {
                 .hasMessageContaining("还剩 10")
                 .hasMessageContaining("返工待收 5");
 
-        // 返工回货 5: 不耗料
+        // 返工回货 5: 不耗料, 不再计加工费 (中5: 退货冲减已挂待审调整, 返工再计费 = 驳回时多付一笔)
         BigDecimal rawBalanceBefore = current(osRaw);
         outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-RC-RW", null, new BigDecimal("5"),
                 BigDecimal.ZERO, null), USER);
         assertThat(current(osRaw)).isEqualByComparingTo(rawBalanceBefore);
-        assertThat(lineFee(lineId)).isEqualByComparingTo("22.80");
+        assertThat(lineFee(lineId)).isEqualByComparingTo("19.80");
+        assertThat(jdbc.queryForObject("select coalesce(sum(amount), 0) from ar_ap_transactions "
+                + "where factory_id = ? and source_type = 'OUTSOURCE_RECEIVE'", BigDecimal.class, F))
+                .as("返工回货不新挂应付").isEqualByComparingTo("22.80");
+
+        // 高2: 返工回来的新成品批次能追到原始源批次 (OS-RAW / OS-PACK → 委外仓批次 → 返工成品, depth 2)
+        String reworkId = jdbc.queryForObject("select id from finished_goods_batches where factory_id = ? "
+                + "and status <> 'DEFECTIVE' and remark like '委外收货%' and id <> ?", String.class, F, goodId);
+        assertThat(count("select count(*) from batch_lineage_edges where factory_id = ? and edge_type = 'OUTSOURCE_PROCESS' "
+                + "and target_type = 'FINISHED_BATCH' and target_id = '" + reworkId + "'"))
+                .as("返工成品批次的上游边 = 被退批次耗用的 2 个委外仓批次").isEqualTo(2);
+        List<Map<String, Object>> reworkAnc = jdbc.queryForList("select ancestor_id, depth from batch_lineage_closure "
+                + "where factory_id = ? and descendant_type = 'FINISHED_BATCH' and descendant_id = ? and depth > 0",
+                F, reworkId);
+        assertThat(reworkAnc).anySatisfy(r -> {
+            assertThat(r.get("ancestor_id")).isEqualTo("OS-RAW");
+            assertThat(((Number) r.get("depth")).intValue()).isEqualTo(2);
+        }).anySatisfy(r -> assertThat(r.get("ancestor_id")).isEqualTo("OS-PACK"));
 
         // 退料 6 原料 (回到原批次) + 损耗 原料 4 / 包材 10 (原因必填)
         outsource.returnMaterial(F, orderId, lineId, new MaterialReturnRequest("REQ-MR-1", null,
@@ -335,11 +396,11 @@ class OutsourceClosedLoopPostgresContractTest {
         assertThat(done.getOutsourceFeeAmount()).isEqualByComparingTo("15.00");
     }
 
-    // ==================== 3. 质检退回委外: 未关联任务行 fail-closed ====================
+    // ==================== 3. 质检退回委外: 未关联任务行保持原行为 (高1: 关联入口未接上前不收紧) ====================
 
     @Test
     @Order(3)
-    void subcontractQualityReturnWithoutLineCannotShip() {
+    void subcontractQualityReturnWithoutLineStillShipsAsBefore() {
         QualityReturnOrder q = new QualityReturnOrder();
         q.setId("OS-QRO-1");
         q.setFactoryId(F);
@@ -351,10 +412,54 @@ class OutsourceClosedLoopPostgresContractTest {
         q.setStatus(QualityReturnStatus.CONFIRMED);
         q.setCreatedBy(USER);
         qros.saveAndFlush(q);
-        assertThatThrownBy(() -> qualityReturns.ship(F, "OS-QRO-1", "SF123", USER))
-                .isInstanceOf(BusinessException.class)
-                .hasFieldOrPropertyWithValue("errorCode", "OUTSOURCE_LINE_REQUIRED");
-        assertThat(qros.findById("OS-QRO-1").orElseThrow().getStatus()).isEqualTo(QualityReturnStatus.CONFIRMED);
+        int movesBefore = count("select count(*) from outsource_movements where factory_id = ?");
+        qualityReturns.ship(F, "OS-QRO-1", "SF123", USER);
+        assertThat(qros.findById("OS-QRO-1").orElseThrow().getStatus()).isEqualTo(QualityReturnStatus.SHIPPED);
+        assertThat(count("select count(*) from outsource_movements where factory_id = ?"))
+                .as("未关联: 只记单发出, 不动委外库存").isEqualTo(movesBefore);
+    }
+
+    // ==================== 4. 质检退回委外: 已关联任务行 → 发出即退货返工 ====================
+
+    @Test
+    @Order(4)
+    void linkedSubcontractQualityReturnShipsThroughOutsourceReturn() {
+        OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null,
+                List.of(new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("10"), new BigDecimal("1.00"), null))), USER);
+        String orderId = d.id();
+        String lineId = d.lines().get(0).id();
+        outsource.release(F, orderId, USER);
+        outsource.issue(F, orderId, lineId, new IssueRequest("REQ-Q-ISSUE", null,
+                List.of(new BatchQuantity("OS-RAW2", new BigDecimal("5")))), USER);
+        String os = jdbc.queryForObject("select id from material_batches where source_doc_type = 'OUTSOURCE_ISSUE' "
+                + "and source_doc_id = ?", String.class, lineId);
+        OrderDetail rc = outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-Q-RC", null, new BigDecimal("10"),
+                BigDecimal.ZERO, List.of(new BatchQuantity(os, new BigDecimal("5")))), USER);
+        String fg = rc.movements().stream().filter(m -> "RECEIVE".equals(m.movementType()) && m.parentMovementId() == null)
+                .map(MovementView::targetBatchId).findFirst().orElseThrow();
+
+        QualityReturnOrder q = new QualityReturnOrder();
+        q.setId("OS-QRO-2");
+        q.setFactoryId(F);
+        q.setReturnNumber("QR-OS-2");
+        q.setQualityInspectionId("QI-Y");
+        q.setTargetType(QualityReturnTargetType.SUBCONTRACT);
+        q.setTargetId("OS-SUP");
+        q.setQuantity(new BigDecimal("2"));
+        q.setStatus(QualityReturnStatus.CONFIRMED);
+        q.setCreatedBy(USER);
+        outsource.linkQualityReturn(F, q, lineId, fg);
+        qros.saveAndFlush(q);
+
+        qualityReturns.ship(F, "OS-QRO-2", "SF456", USER);
+        assertThat(qros.findById("OS-QRO-2").orElseThrow().getStatus()).isEqualTo(QualityReturnStatus.SHIPPED);
+        assertThat(jdbc.queryForObject("select quantity from outsource_movements where movement_type = 'GOODS_RETURN' "
+                + "and quality_return_order_id = 'OS-QRO-2'", BigDecimal.class)).isEqualByComparingTo("2");
+        assertThat(jdbc.queryForObject("select rework_pending_quantity from outsource_order_lines where id = ?",
+                BigDecimal.class, lineId)).isEqualByComparingTo("2");
+        assertThat(jdbc.queryForObject("select produced_quantity from finished_goods_batches where id = ?",
+                BigDecimal.class, fg)).isEqualByComparingTo("8");
     }
 
     // ==================== helpers ====================
@@ -453,6 +558,10 @@ class OutsourceClosedLoopPostgresContractTest {
 
     private BigDecimal used(String batchId) {
         return jdbc.queryForObject("select used_quantity from material_batches where id = ?", BigDecimal.class, batchId);
+    }
+
+    private String status(String batchId) {
+        return jdbc.queryForObject("select status from material_batches where id = ?", String.class, batchId);
     }
 
     private BigDecimal current(String batchId) {

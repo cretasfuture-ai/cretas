@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 委外闭环的几条钉子 (设计 docs/specs/outsource-closed-loop-design.md D13 / 第 3 节)。 */
-class OutsourceInvariantsTest {
+class OutsourceInvariantsContractTest {
 
     @Test
     void outsourceWarehouseIsNotSettlementEligible() {

@@ -51,7 +51,7 @@
 
 **物权不变**：委外仓的批次仍是我方或原客户的库存，所以照常计入库存余额和估值。但它不能被领料、FEFO、销售可用量或投产分配选中。
 
-做法是委外仓批次的状态写成 `RESERVED`（已预留）。实际核对过：`MaterialBatchRepository` 里所有可用量和 FEFO 查询都只取 `status='AVAILABLE'`，其中有 8 处不带仓库过滤，比如 `findAvailableBatchesFEFO`、销售可用量、投产分配。如果状态写成 AVAILABLE，委外厂手里的料就会被这些查询算成可用。
+做法是委外仓批次的状态写成 `RESERVED`（已预留）。实际核对过：`MaterialBatchRepository` 里所有可用量和 FEFO 查询都只取 `status='AVAILABLE'`，其中有 8 处不带仓库过滤，比如 `findAvailableBatchesFEFO`、销售可用量、投产分配。如果状态写成 AVAILABLE，委外厂手里的料就会被这些查询算成可用。质检扣留后放行、仓库页或 AI 工具把它改成「可用」时，`MaterialBatchHoldService.releaseTarget` 一律改回 RESERVED（无结存则已耗尽），料回我方只走委外退料。
 
 委外仓批次的数量只由本模块改动。
 
@@ -72,7 +72,7 @@
    - SEMI 行：新建半成品物料批次（`product_type_id` 为行上的产品），入车间仓，供下一道工序领料或投料。
    - 不良数 d 另建一个批次，状态为不良（DEFECTIVE），不计加工费。
 3. 血缘：每个被耗用的委外仓批次写一条 OUTSOURCE_PROCESS 边，指向产出批次。目标类型是 MATERIAL_BATCH 或 FINISHED_BATCH。
-4. 返工回货：如果之前有退货，行上的 `rework_pending_quantity` 会大于 0。这部分重新收货时**不再耗料**，因为料已经在第一次收货时耗过。只建产出批次，血缘指向那次退货的源批次。
+4. 返工回货：如果之前有退货，行上的 `rework_pending_quantity` 会大于 0。这部分重新收货时**不再耗料**，因为料已经在第一次收货时耗过。只建产出批次，**不再计加工费**（#1723 第 4 段）。血缘：SEMI 行指向那次退货的源批次；FINISHED 行（成品批次不能做 OUTSOURCE_PROCESS 边的源）改为按收发明细追到被退批次当初耗用的委外仓批次，逐个写 OUTSOURCE_PROCESS 边到返工批次，返工再返工也追到首次收货。
 
 **损耗（LOSS）**：结单时委外厂手里还有剩余，可以登记为损耗，原因必填。委外仓批次 `used += q`，写一条 MaterialConsumption（sourceType `OUTSOURCE_LOSS`）。
 
@@ -92,15 +92,15 @@
 
 ## 5. 加工费与账
 
-- **金额**：本次合格数 × 行单价。单价按含税价，行上的税率只作展示。不良不计费。行上的 `fee_amount` 是累计净额。
-- **应付**：收货确认的同一事务内调用 `ArApService.recordPayableFromSource`，参数为 sourceType `OUTSOURCE_RECEIVE`、sourceId（收货明细的 id），挂 AP_INVOICE，到期日 30 天（同送货单口径）。按 sourceType+sourceId 幂等。
+- **金额**：本次**新收**合格数 × 行单价（返工回货抵扣的部分不计）。本次新收（合格新收 + 不良）不能超过剩余应收，超了 409 OUTSOURCE_RECEIVE_EXCEEDS_REMAINING。单价按含税价，行上的税率只作展示。不良不计费。行上的 `fee_amount` 是累计净额。
+- **应付**：收货确认的同一事务内调用 `ArApService.recordPayableFromSource`，参数为 sourceType `OUTSOURCE_RECEIVE`、sourceId（收货明细的 id），挂 AP_INVOICE，到期日 30 天（同送货单口径）。按 sourceType+sourceId 幂等。收发写接口（发料、退料、收货、退货、损耗）的 `clientRequestId` 必填，缺了 400 OUTSOURCE_REQUEST_ID_REQUIRED；重试沿用同一个编号即命中幂等。
 - **退货（GOODS_RETURN）**：合格品退回委外厂返工，流程如下：
   1. 扣减收货批次；
   2. 行上合格数减 q，`rework_pending_quantity` 加 q；
-  3. 用 `ArApService.recordAdjustment` 挂一条负数的 AP_ADJUSTMENT，sourceType 为 `OUTSOURCE_GOODS_RETURN`。它是待审批状态（四眼），审批前不改余额。
+  3. 用 `ArApService.recordAdjustment` 挂一条负数的 AP_ADJUSTMENT，sourceType 为 `OUTSOURCE_GOODS_RETURN`。它是待审批状态（四眼），审批前不改余额。返工回货不再计费，所以：财务批准 = 返工那部分不付费；驳回 = 照原收货付费，都只付一次。
 - **QualityReturnOrder SUBCONTRACT**：
   - 关联了任务行的 SUBCONTRACT 单，在 `ship` 时调用同一个退货实现，并回填 movement。
-  - 没有关联任务行的 SUBCONTRACT 单，`ship` 返回 409（OUTSOURCE_LINE_REQUIRED），fail-closed。原来那种只记单、不动库存的状态不再允许。
+  - 没有关联任务行的 SUBCONTRACT 单，`ship` **保持原行为**（只记单发出，不动委外库存）。关联入口（接口/界面）接上之前不收紧，否则存量「退回委外」单全部发不出（#1723 终审 高1）。
 - **成本**：
   - 产出批次单价 =（本次耗用物料成本 + 本次加工费）/ 合格数。
   - 半成品被下道工序投料后，加工费已经随批次单价进了 `OrderCostBreakdown` 的投料成本，所以不在计划合计里再加一次（防重复计算）。

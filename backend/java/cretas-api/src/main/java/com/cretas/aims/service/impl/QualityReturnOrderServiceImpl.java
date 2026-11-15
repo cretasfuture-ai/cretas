@@ -156,13 +156,11 @@ public class QualityReturnOrderServiceImpl implements QualityReturnOrderService 
         if (shippingTrackingNo == null || shippingTrackingNo.trim().isEmpty()) {
             throw new BusinessException(400, "物流单号必填");
         }
-        if (order.getTargetType() == QualityReturnTargetType.SUBCONTRACT) {
-            if (order.getOutsourceLineId() == null || order.getOutsourceLineId().isBlank()) {
-                throw new BusinessException(409, "退回委外的退回单必须先关联委外任务行, 才能发出")
-                        .withCode("OUTSOURCE_LINE_REQUIRED")
-                        .withHint("请在委外单详情里选择被退的收货批次后再发出; 只记单不动库存的发出已停用")
-                        .withSeverity("BLOCKING");
-            }
+        // 退回委外: 已关联委外任务行的走委外退货 (扣收货批次 + 进返工待收); 未关联的保持原行为 (只记单发出)。
+        // ⛔ 不在这里对未关联的单 409: 关联入口 (OutsourceService#linkQualityReturn) 还没有接口/界面,
+        //    收紧会让所有存量「退回委外」单发不出去 (#1723 终审 高1)。接上关联入口后再收紧。
+        if (order.getTargetType() == QualityReturnTargetType.SUBCONTRACT
+                && order.getOutsourceLineId() != null && !order.getOutsourceLineId().isBlank()) {
             if (outsourceService == null) {
                 throw new BusinessException(500, "委外服务未就绪, 退回委外暂不能发出").withCode("OUTSOURCE_SERVICE_UNAVAILABLE");
             }

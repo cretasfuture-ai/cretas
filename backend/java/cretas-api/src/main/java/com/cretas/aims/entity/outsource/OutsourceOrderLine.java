@@ -4,6 +4,7 @@ import com.cretas.aims.entity.BaseEntity;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import jakarta.persistence.*;
@@ -21,6 +22,7 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @Entity
 @Table(name = "outsource_order_lines")
+@SQLDelete(sql = "UPDATE outsource_order_lines SET deleted_at = NOW() WHERE id = ? AND version = ?")
 @Where(clause = "deleted_at IS NULL")
 public class OutsourceOrderLine extends BaseEntity {
 
