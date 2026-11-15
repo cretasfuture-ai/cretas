@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=tests/intent-acceptance/leak_gate.py,tests/intent-acceptance/gate.py,tests/intent-acceptance/score_recognize.py,tests/intent-acceptance/corpus_guard.py,tests/intent-acceptance/sealed_v3_fingerprints.jsonl
+# GUARDS=tests/intent-acceptance/run_tests.py,tests/intent-acceptance/leak_gate.py,tests/intent-acceptance/gate.py,tests/intent-acceptance/score_recognize.py,tests/intent-acceptance/corpus_guard.py,tests/intent-acceptance/sealed_v3_fingerprints.jsonl
 # 意图验收集 v3 的隔离闸与多指标门槛 (tests/intent-acceptance) —— ⛔ 不连生产、不读封存原文 (仓库里只有指纹)。守三件事:
 #   A. 隔离闸自检: 干净语料 rc=0 / 注入了封存题 (换全角、空格、标点写法) rc=1 / 空目录与缺指纹 rc=2。
 #   B. 仓库当前状态: 真实封存指纹 vs 默认训练/开发语料根, 必须 rc=0 (有人把封存题抄进训练线, 这里变红)。
@@ -33,9 +33,9 @@ grep -q '"files_scanned": [1-9]' "$LOG" || fail "B 隔离闸没扫到任何文�
 ok "B 仓库当前状态无泄漏 (扫到语料, 指纹非空)"
 
 # C 单测
-"$PY" -m pytest "$DIR" -q -p no:cacheprovider > "$LOG" 2>&1; rc=$?
-[ "$rc" -eq 0 ] || { tail -30 "$LOG" >&2; fail "C pytest rc=$rc"; }
-grep -Eq '[1-9][0-9]* passed' "$LOG" || fail "C 没有任何用例通过 (0 执行不算通过)"
+"$PY" -I -X utf8 "$DIR/run_tests.py" > "$LOG" 2>&1; rc=$?   # CI 的 Python 没有 pytest, 用同目录最小跑器
+[ "$rc" -eq 0 ] || { tail -30 "$LOG" >&2; fail "C 单测 rc=$rc"; }
+grep -Eq '[1-9][0-9]* passed, 0 failed' "$LOG" || fail "C 没有任何用例通过 (0 执行不算通过)"
 ok "C 计分 / 门槛单测: $(grep -E 'passed' "$LOG" | tail -1)"
 
 echo "PASS: test-intent-acceptance-leak-gate"
