@@ -21,7 +21,7 @@ import static org.mockito.Mockito.when;
  * ⛔ 不让模型从 null 字段里自己补一个差异率。
  */
 @DisplayName("AI 成本差异工具: 不可比较时回答「无法比较」")
-class ReportCostVarianceToolNotComparableTest {
+class ReportCostVarianceToolNotComparableContractTest {
 
     private Map<String, Object> run(CostVarianceReportDTO dto) throws Exception {
         ReportService reportService = mock(ReportService.class);

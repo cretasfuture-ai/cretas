@@ -68,9 +68,20 @@ final class ReportToolSchemas {
         if (k.isEmpty()) return null;
         String core = k.replaceAll("[的\\s]", "").toLowerCase(java.util.Locale.ROOT);
         if (core.isEmpty() || SCOPE_WORDS.contains(core)) return null;
-        if (QUESTION_FRAGMENT.matcher(k).find() || k.length() > 40) return null;
-        return k;
+        if (!QUESTION_FRAGMENT.matcher(k).find() && k.length() <= 40) return k;
+        // 带了问句 / 指标词: 先剥掉这些词, 剩下的是产品名就按产品查 (「卤牛肉成本」→「卤牛肉」, ⛔ 不扩成全厂);
+        // 剥完什么都不剩 / 只剩范围词才是「不限产品」; 剩下不认识的词原样当产品名, 由工具如实回「没有找到」
+        String rest = METRIC_WORDS.matcher(k).replaceAll("").replaceAll("[\\s，,。？?！!]", "");
+        String restCore = rest.toLowerCase(java.util.Locale.ROOT);
+        if (restCore.isEmpty() || SCOPE_WORDS.contains(restCore)) return null;
+        return rest.length() > 40 ? null : rest;
     }
+
+    /** 指标 / 问句 / 时间 / 范围用语: 从「卤牛肉成本多少」这类被抽成产品名的话里剥掉, 剩下的才可能是产品名。 */
+    private static final java.util.regex.Pattern METRIC_WORDS = java.util.regex.Pattern.compile(
+            "毛利率|毛利|成本|占比|占总|哪个产品|哪个|哪些|哪款|哪种|多少|排序|排名|最高|最低|最多|最少|怎么样|怎么|是什么|"
+                    + "人工|原料|设备|单位|本月|这个月|上个月|上月|今年|去年|全部|所有|每个|各个|各|总|占|率|吗|了|是|的|和|与|"
+                    + "(?i:sku)|产品");
 
     static Map<String, Object> withOptionalExtraction(Map<String, Object> schema) {
         Map<String, Object> copy = new LinkedHashMap<>(schema);

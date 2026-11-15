@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
+import java.util.Set;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -122,5 +123,27 @@ class ReportCostVarianceProductResolutionContractTest {
         assertTrue(msg.contains("13 个能和标准成本比较") && msg.contains("61 个无法比较"), msg);
         assertTrue(msg.contains("标准成本 ¥16.52") && msg.contains("实际成本 ¥18.00") && msg.contains("差额 ¥1.48"), msg);
         assertTrue(msg.contains("不能拿它和可比部分的标准成本相减"), msg);
+    }
+
+    // R-M3: 可比分支的新文案也要走保密 fail-closed: 调用者对保密产品无权而数据没带说明时, 金额不写进文案
+    @Test
+    void comparableMessageWithholdsAmountsWhenCallerLacksSecretProductAccessAndNoteMissing() throws Exception {
+        CostVarianceReportDTO d = CostVarianceReportDTO.builder()
+                .comparable(true).comparedPlanCount(1).incomparablePlanCount(2)
+                .totalBomCost(new BigDecimal("16.52")).comparedActualCost(new BigDecimal("18.00"))
+                .totalVariance(new BigDecimal("1.48")).totalVarianceRate(new BigDecimal("8.96"))
+                .totalActualCost(new BigDecimal("200426.82")).batchCount(3).build();
+        when(reportService.getCostVarianceReport(eq("F1"), any(), any())).thenReturn(d);
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope scope =
+                mock(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.class);
+        when(scope.forCurrentCaller("F1")).thenReturn(new com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded(
+                Set.of("P-9"), Set.of(), Set.of("P-9"), Map.of(), Set.of()));
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        String msg = String.valueOf(run(Map.of()).get("message"));
+        assertFalse(msg.contains("200426.82") || msg.contains("18.00") || msg.contains("16.52"), msg);
+        assertTrue(msg.contains("不提供给 AI"), msg);
+        // 阴性对照: 数据带了保密说明 (已按调用者裁剪) 时照写
+        d.setProcessSecretNote("（不含 1 个保密产品）");
+        assertTrue(String.valueOf(run(Map.of()).get("message")).contains("¥200426.82"));
     }
 }

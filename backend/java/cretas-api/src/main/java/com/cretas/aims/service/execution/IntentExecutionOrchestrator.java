@@ -949,6 +949,9 @@ public class IntentExecutionOrchestrator {
                                                              Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return personalPayRefusalResponse();
+        }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }

@@ -118,7 +118,10 @@ class AiBiDemoRerunContractTest {
     void permissionDenialNamesTheRequiredPermissionAndWhoToAsk() {
         ToolRbacGuard guard = new ToolRbacGuard();
         String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "price_history_query", "procurement:read");
-        assertTrue(msg.contains("procurement:read") && msg.contains("工厂管理员"), msg);
+        assertTrue(msg.contains("采购查看") && msg.contains("工厂管理员"), msg);
+        // 一线用户看不懂内部标识: 不显示工具名 / 权限码
+        assertFalse(msg.contains("price_history_query") || msg.contains("procurement:read"), msg);
+        assertFalse(guard.denyMessage(Map.of("userRole", "x"), "some_unmapped_tool", "x:y").contains("some_unmapped_tool"));
         assertFalse(guard.denyMessage(Map.of("userRole", "x"), "t").contains("需要的权限"));
     }
 
@@ -152,5 +155,18 @@ class AiBiDemoRerunContractTest {
         int guard = src.indexOf("PersonalPayRefusalGuard.refuses(request.getUserInput())", body);
         int recognise = src.indexOf("FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute", body);
         assertTrue(body > 0 && guard > body && guard < recognise, "guard=" + guard + " recognise=" + recognise);
+    }
+
+    // R-M1: 组合句里前半是个人工资, 后半有汇总词 —— 整句有汇总词不能放行整句 (子句级判断)
+    @ParameterizedTest
+    @ValueSource(strings = {"每个工人的工资多少，本月人工成本多少", "本月人工成本多少，另外每位员工的工资是多少", "工资策略是什么以及每个员工的薪资"})
+    void compositeQuestionWithAPersonalPayClauseIsRefused(String text) {
+        assertTrue(PersonalPayRefusalGuard.refuses(text), text);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"工人工资怎么算", "员工奖金怎么算", "本月人工成本多少，工资策略是什么", "员工工资计算规则"})
+    void rulesAndAggregatesAreStillNotRefused(String text) {
+        assertFalse(PersonalPayRefusalGuard.refuses(text), text);
     }
 }

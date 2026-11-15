@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
  * 口径 2 由真实的 {@link ThreePriceComparisonService#catalogMarginFor} 算出 (只桩掉仓库)。
  * 折扣用例则用 H2 真的跑那条 SQL。
  */
-class SkuGrossMarginToolTest {
+class SkuGrossMarginToolContractTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 10, 6);
 
@@ -543,5 +543,23 @@ class SkuGrossMarginToolTest {
         // 阴性对照: 真产品名照常只筛该产品
         JsonNode one = run("{\"productName\":\"酱鸭\"}");
         assertEquals(1, one.get("data").get("data").get("items").size());
+    }
+
+    // R-M2: 「真产品名 + 指标词」不能被当成「不限产品」悄悄答成全厂数
+    @Test
+    void productNameWithMetricWords_stillFiltersToThatProduct_notTheWholeFactory() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "酱鸭", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "90");
+        sales("A", "卤牛肉", 2, 2, 0, "190", "190", "120");
+        sales("B", "酱鸭", 1, 1, 0, "100", "100", "90");
+        for (String raw : new String[]{"卤牛肉成本", "卤牛肉的毛利率", "卤牛肉本月成本多少"}) {
+            JsonNode items = run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items");
+            assertEquals(1, items.size(), raw);
+            assertEquals("卤牛肉", items.get(0).get("productName").asText(), raw);
+        }
+        // 剥完剩下的不是目录里的产品: 如实说没找到, 不扩成全厂
+        assertTrue(message(run("{\"productName\":\"牛油果成本多少\"}")).contains("没有找到名称含「牛油果」"));
     }
 }

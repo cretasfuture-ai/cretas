@@ -613,4 +613,20 @@ class ReadTurnParameterEntryContractTest {
             return (IntentExecuteResponse) result;
         }
     }
+
+    // 显式意图入口 (executeWithExplicitIntent, /execute/multi 的子意图也走它): 同一守卫
+    @org.junit.jupiter.api.Test
+    @DisplayName("显式意图入口: 个人工资问法同样被拒, 不执行任何工具")
+    void personalPayQuestionIsRefusedAtTheExplicitIntentEntry() throws Exception {
+        Harness h = new Harness(Entry.ORDINARY);
+        IntentExecuteRequest request = IntentExecuteRequest.builder().userInput("每个工人的工资多少，本月人工成本多少")
+                .intentCode("COST_QUERY").sessionId(SESSION).build();
+        IntentExecuteResponse r;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
+            r = h.orchestrator.executeWithExplicitIntent(FACTORY, request, USER, ROLE);
+        }
+        assertThat(r.getStatus()).as(r.getMessage()).isEqualTo("PERSONAL_PAY_REFUSED");
+        verify(h.costTool, never()).execute(any(), anyMap());
+    }
 }

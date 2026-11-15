@@ -116,11 +116,33 @@ public class ToolRbacGuard {
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {
         String role = context != null ? String.valueOf(context.getOrDefault("userRole", "未知")) : "未知";
         String need = permissionCodes == null || permissionCodes.length == 0 ? ""
-                : "需要的权限: " + String.join("、", permissionCodes) + "（拥有其中任一项的角色可以查看）。";
+                : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
+                        .distinct().collect(java.util.stream.Collectors.joining("、")) + "（拥有其中任一项的角色可以查看）。";
         return String.format(
-                "您当前的角色 (%s) 没有权限执行「%s」操作。此操作涉及敏感数据/库存/资金, 需要授权角色。%s"
+                "您当前的角色 (%s) 没有权限使用「%s」。此操作涉及敏感数据/库存/资金, 需要授权角色。%s"
                         + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。",
-                role, action, need);
+                role, actionLabel(action), need);
+    }
+
+    private static final Map<String, String> ACTION_LABELS = Map.of(
+            "price_history_query", "采购价格历史");
+
+    private static final Map<String, String> PERMISSION_LABELS = Map.of(
+            "procurement:read", "采购查看", "procurement:read_write", "采购管理",
+            "finance:read", "财务查看", "finance:read_write", "财务管理",
+            "procurement:price:view", "采购价格查看");
+
+    /** 工具名 → 功能名; 不认识的 ASCII 标识 (snake_case 工具名) 不原样显示。 */
+    static String actionLabel(String action) {
+        if (action == null) return "该功能";
+        String mapped = ACTION_LABELS.get(action);
+        if (mapped != null) return mapped;
+        return action.matches("[A-Za-z0-9_:.\\-]+") ? "该功能" : action;
+    }
+
+    static String permissionLabel(String code) {
+        String mapped = PERMISSION_LABELS.get(code);
+        return mapped != null ? mapped : "对应模块的查看权限";
     }
 
     private User loadUser(Map<String, Object> context) {

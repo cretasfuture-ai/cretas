@@ -201,8 +201,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 // 工艺保密: 报表服务已按调用者只算他能看的批次并给出说明 (processSecretNote) —— 照写合计并带上说明;
                 // 调用者对本厂某个保密产品无权、而数据没带说明 (未按调用者裁剪过, 例如旧缓存) 时不写这个总数 (fail-closed)。
                 // 按产品查的报表不走缓存、每次按调用者现算, 没带说明就是这个产品的批次一个都没被隐藏 —— 照写它自己的合计
-                if (productTypeId == null && !llmCostScope.forCurrentCaller(factoryId).isEmpty()
-                        && costVarianceData.getProcessSecretNote() == null) {
+                if (totalWithheld(factoryId, productTypeId, costVarianceData)) {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 批次数 ").append(costVarianceData.getBatchCount())
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");
@@ -237,7 +236,8 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             sum.append("回料差 = 从别的计划回投的回料按回料池单位成本加、本计划产出转给别人的回料按同一单价减 (配方不含回料时标准为 0); 本计划自产自用是内部转移不另计; 主料用量差算不出时回料差无法比较。");
             if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
             result.put("summary", sum.toString());
-            result.put("message", humanMessage(costVarianceData, startDate, endDate));
+            result.put("message", humanMessage(costVarianceData, startDate, endDate,
+                    totalWithheld(factoryId, productTypeId, costVarianceData)));
         }
 
         // 添加查询条件摘要
@@ -255,7 +255,17 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
     }
 
     /** 可比时给人看的话 (没有 message 键时通用格式化器会把字段打成 key: value 串, 2026-11-15 Q14)。 */
-    static String humanMessage(CostVarianceReportDTO d, LocalDate start, LocalDate end) {
+    /**
+     * 工艺保密 fail-closed (不可比 / 可比两个分支共用): 调用者对本厂某个保密产品无权、而数据没带说明
+     * (未按调用者裁剪过, 例如旧缓存) 时, 全厂实际总成本不写进文案。按产品查的报表不走缓存、每次按调用者现算,
+     * 没带说明就是这个产品的批次一个都没被隐藏 —— 照写它自己的合计。
+     */
+    private boolean totalWithheld(String factoryId, String productTypeId, CostVarianceReportDTO d) {
+        return productTypeId == null && !llmCostScope.forCurrentCaller(factoryId).isEmpty()
+                && d.getProcessSecretNote() == null;
+    }
+
+    static String humanMessage(CostVarianceReportDTO d, LocalDate start, LocalDate end, boolean totalWithheld) {
         int compared = d.getComparedPlanCount() == null ? 0 : d.getComparedPlanCount();
         int incomparable = d.getIncomparablePlanCount() == null ? 0 : d.getIncomparablePlanCount();
         StringBuilder sb = new StringBuilder();
@@ -265,6 +275,10 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             sb.append("，").append(incomparable).append(" 个无法比较（常见原因：开计划时没有标准成本快照、快照缺物料单价、还没产出）");
         }
         sb.append("。\n");
+        if (totalWithheld) {
+            // 同「不可比」分支: 数据没带保密说明而调用者对保密产品无权 → 金额不写进文案 (fail-closed)
+            return sb.append("成本金额含工艺保密产品，不提供给 AI。").toString();
+        }
         sb.append("可比部分：标准成本 ¥").append(plain(d.getTotalBomCost()))
                 .append("，实际成本 ¥").append(plain(d.getComparedActualCost()))
                 .append("，差额 ¥").append(plain(d.getTotalVariance()))
@@ -276,7 +290,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             if (d.getLaborVariance() != null) sb.append("、人工差 ¥").append(plain(d.getLaborVariance()));
             sb.append("。");
         }
-        if (d.getTotalActualCost() != null && incomparable > 0) {
+        if (d.getTotalActualCost() != null && incomparable > 0 && !totalWithheld) {
             sb.append("\n注意：期间全部批次的实际总成本是 ¥").append(plain(d.getTotalActualCost()))
                     .append("，包含上面无法比较的计划，不能拿它和可比部分的标准成本相减。");
         }
