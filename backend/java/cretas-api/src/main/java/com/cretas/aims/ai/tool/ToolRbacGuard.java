@@ -118,7 +118,9 @@ public class ToolRbacGuard {
                 context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "");
         String need = permissionCodes == null || permissionCodes.length == 0 ? ""
                 : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
-                        .distinct().collect(java.util.stream.Collectors.joining("、")) + "（拥有其中任一项的角色可以查看）。";
+                        .distinct().collect(java.util.stream.Collectors.joining("、"))
+                        // 写权限也走这里: 不说「可以查看」(复审 R2-M5)
+                        + "（拥有其中任一项权限的角色可以使用）。";
         return String.format(
                 "您当前的角色 (%s) 没有权限使用「%s」。此操作涉及敏感数据/库存/资金, 需要授权角色。%s"
                         + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。",

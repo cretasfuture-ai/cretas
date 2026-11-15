@@ -150,4 +150,36 @@ class ReportCostVarianceProductResolutionContractTest {
         assertTrue(String.valueOf(run(Map.of()).get("message")).contains("¥200426.82"));
         assertTrue(String.valueOf(run(Map.of()).get("summary")).contains("16.52"));
     }
+
+    // 第 3 轮表 C: 保密兜底命中且可比计划数为 null 时, summary 不写「可比计划 null 个」
+    @Test
+    void withheldSummary_doesNotPrintNullPlanCount() throws Exception {
+        CostVarianceReportDTO d = CostVarianceReportDTO.builder()
+                .comparable(true).comparedPlanCount(null).incomparablePlanCount(2)
+                .totalBomCost(new BigDecimal("16.52")).comparedActualCost(new BigDecimal("18.00"))
+                .totalVariance(new BigDecimal("1.48")).totalVarianceRate(new BigDecimal("8.96"))
+                .totalActualCost(new BigDecimal("200426.82")).batchCount(3).build();
+        when(reportService.getCostVarianceReport(eq("F1"), any(), any())).thenReturn(d);
+        com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope scope =
+                mock(com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.class);
+        when(scope.forCurrentCaller("F1")).thenReturn(new com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded(
+                Set.of("P-9"), Set.of(), Set.of("P-9"), Map.of(), Set.of()));
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        String summary = String.valueOf(run(Map.of()).get("summary"));
+        assertTrue(summary.contains("不提供给 AI"), summary);   // 确认走的是兜底分支
+        assertFalse(summary.contains("null"), summary);
+        // 阳性对照: 计划数有值时照写
+        d.setComparedPlanCount(4);
+        assertTrue(String.valueOf(run(Map.of()).get("summary")).contains("可比计划 4 个"));
+    }
+
+    // 第 3 轮表 B: 同时问到两个产品时明确说, 不悄悄只按其中一个查
+    @Test
+    void twoProductsInOneQuestion_areSaidPlainly_andNothingIsQueried() throws Exception {
+        Map<String, Object> r = run(Map.of("productName", "卤牛肉和酱鸭成本差异"));
+        String msg = String.valueOf(r.get("message"));
+        assertTrue(msg.contains("问到了 2 个产品") && msg.contains("卤牛肉") && msg.contains("酱鸭"), msg);
+        verify(reportService, never()).getCostVarianceReport(any(), any(), any());
+        verify(reportService, never()).getCostVarianceReport(any(), any(), any(), any());
+    }
 }

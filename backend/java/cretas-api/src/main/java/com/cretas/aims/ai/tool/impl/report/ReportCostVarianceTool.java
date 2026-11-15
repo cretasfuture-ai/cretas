@@ -86,7 +86,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         // productName: 产品名（可选）, 本厂在用产品里解析成 productTypeId
         Map<String, Object> productName = new HashMap<>();
         productName.put("type", "string");
-        productName.put("description", "产品名（可选）；完全同名优先，多个包含匹配时给候选不合计");
+        productName.put("description", "产品名（可选）；按本厂在用产品名完整匹配，没找到如实说明，不合计多个产品");
         properties.put("productName", productName);
 
         // varianceThreshold: 差异阈值百分比（可选）
@@ -115,28 +115,31 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
-        String productName = ReportToolSchemas.productKeyword(productTypeRepository, factoryId, getString(params, "productName"));
+        String rawProductName = getString(params, "productName");
+        // 本厂在用产品目录本次请求只查一次 (口径表 B 规则 3): ID 校验和产品名解析共用
+        java.util.List<com.cretas.aims.entity.ProductType> catalog = productTypeRepository == null ? null
+                : java.util.Objects.requireNonNullElse(productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId), java.util.List.of());
         // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
-        if (productTypeId != null && productTypeRepository != null) {
+        if (productTypeId != null && catalog != null) {
             final String candidateId = productTypeId;
-            java.util.List<com.cretas.aims.entity.ProductType> catalog = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
-            boolean inCatalog = catalog != null && catalog.stream().anyMatch(t -> candidateId.equals(t.getId()));
+            boolean inCatalog = catalog.stream().anyMatch(t -> candidateId.equals(t.getId()));
             if (!inCatalog) {
-                if (productName == null || productName.isBlank()) productName = productTypeId;
+                if (rawProductName == null || rawProductName.isBlank()) rawProductName = productTypeId;
                 productTypeId = null;
             }
         }
-        if (productTypeId == null && productName != null && !productName.isBlank() && productTypeRepository != null) {
-            java.util.List<com.cretas.aims.entity.ProductType> candidates =
-                    ReportToolSchemas.matchProducts(productTypeRepository, factoryId, productName.trim());
-            String msg = ReportToolSchemas.productResolutionMessage(candidates, productName.trim(), "给出成本差异");
+        if (productTypeId == null && catalog != null) {
+            ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(catalog, rawProductName);
+            String msg = product.refusalMessage("给出成本差异", true);
             if (msg != null) {
                 Map<String, Object> none = new LinkedHashMap<>();
-                none.put("productFilter", productName);
-                none.put("candidates", candidates.stream().map(com.cretas.aims.entity.ProductType::getName).toList());
+                none.put("productFilter", product.label());
+                none.put("candidates", product.candidateNames());
                 return buildSimpleResult(msg, none);
             }
-            productTypeId = candidates.get(0).getId();
+            if (product.scope() == ReportToolSchemas.ProductScope.MATCHED) {
+                productTypeId = product.products().get(0).getId();
+            }
         }
         // 差异阈值: 只接受 (0, 1000] 的数值; 抽参给的其它值 (0、负数、文字) 忽略, 不悄悄过滤掉产品
         Double varianceThreshold = params.get("varianceThreshold") instanceof Number n
@@ -238,8 +241,11 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             // 保密兜底命中 (调用者对保密产品无权、数据没带说明): summary 也只给口径和计划数, 不写任何金额 (与 message 一致)
             if (totalWithheld(factoryId, productTypeId, costVarianceData)) {
                 sum = new StringBuilder(CostVarianceReportDTO.STANDARD_COST_BASIS).append("。")
-                        .append(startDate).append(" ~ ").append(endDate).append(" 可比计划 ")
-                        .append(costVarianceData.getComparedPlanCount()).append(" 个；成本金额含工艺保密产品，不提供给 AI。");
+                        .append(startDate).append(" ~ ").append(endDate)
+                        // 计划数为 null 时不写「可比计划 null 个」(与 humanMessage 同口径)
+                        .append(costVarianceData.getComparedPlanCount() == null ? ""
+                                : " 可比计划 " + costVarianceData.getComparedPlanCount() + " 个")
+                        .append("；成本金额含工艺保密产品，不提供给 AI。");
             }
             result.put("summary", sum.toString());
             result.put("message", humanMessage(costVarianceData, startDate, endDate,

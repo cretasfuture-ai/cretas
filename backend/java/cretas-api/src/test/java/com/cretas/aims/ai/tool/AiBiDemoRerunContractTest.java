@@ -185,5 +185,10 @@ class AiBiDemoRerunContractTest {
         String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "x_tool", "quality:read_write");
         assertFalse(msg.contains("finance_manager") || msg.contains("quality:read_write") || msg.contains("x_tool"), msg);
         assertTrue(msg.contains("对应模块的操作权限") && !msg.contains("查看权限"), msg);
+        // 第 3 轮表 C: 断言整句, 写权限后面不能再跟「可以查看」
+        assertEquals("您当前的角色 (财务主管) 没有权限使用「该功能」。此操作涉及敏感数据/库存/资金, 需要授权角色。"
+                + "需要的权限: 对应模块的操作权限（拥有其中任一项权限的角色可以使用）。"
+                + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。", msg);
+        assertFalse(msg.contains("查看"), msg);
     }
 }

@@ -157,7 +157,7 @@ class SkuGrossMarginToolContractTest {
         pricedBatch("A", "60");
         sales("A", "牛肉酱", 2, 2, 0, "190", "190", "120");
 
-        JsonNode result = run("{\"productName\":\"牛肉\"}");
+        JsonNode result = run("{\"productName\":\"牛肉酱\"}");
         assertTrue(result.get("success").asBoolean(), result.toString());
         JsonNode a = item(result, "牛肉酱");
 
@@ -188,7 +188,7 @@ class SkuGrossMarginToolContractTest {
     void partialCostCoverageIsReportedNotHidden() throws Exception {
         type("P", "火锅底料", "50");
         sales("P", "火锅底料", 4, 2, 0, "2000", "1000", "900");
-        JsonNode r = item(run("{\"productName\":\"火锅\"}"), "火锅底料").get("realized");
+        JsonNode r = item(run("{\"productName\":\"火锅底料\"}"), "火锅底料").get("realized");
         assertDecimal("10.00", r.get("marginRate"), "marginRate on costed lines only");      // (1000-900)/1000
         assertDecimal("50.00", r.get("costCoverage"), "costCoverage");                       // 1000/2000
         assertDecimal("1000.00", r.get("revenue"), "revenue = costed-line revenue");
@@ -256,7 +256,7 @@ class SkuGrossMarginToolContractTest {
         type("F", "没回填成本", "100");
         sales("F", "没回填成本", 3, 0, 0, "600", null, null);
 
-        JsonNode r = item(run("{\"productName\":\"没回填\"}"), "没回填成本").get("realized");
+        JsonNode r = item(run("{\"productName\":\"没回填成本\"}"), "没回填成本").get("realized");
         assertEquals("NO_COST", r.get("status").asText());
         assertTrue(r.get("marginRate").isNull());
         assertTrue(r.get("cost").isNull());
@@ -465,7 +465,7 @@ class SkuGrossMarginToolContractTest {
     void explicitPeriodIsPassedToTheQueryAndEchoedInTheAnswer() throws Exception {
         type("A", "牛肉酱", "100");
         sales("A", "牛肉酱", 1, 1, 0, "100", "100", "50");
-        JsonNode result = run("{\"productName\":\"牛肉\",\"startDate\":\"2026-08-01\",\"endDate\":\"2026-08-31\"}");
+        JsonNode result = run("{\"productName\":\"牛肉酱\",\"startDate\":\"2026-08-01\",\"endDate\":\"2026-08-31\"}");
         verify(realizedQuery).fetch("F1", LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
         assertTrue(message(result).contains("2026-08-01 至 2026-08-31"), message(result));
         assertFalse(message(result).contains("默认最近"), message(result));
@@ -479,8 +479,14 @@ class SkuGrossMarginToolContractTest {
         type("Q", "其他产品", "10");
         sales("Q", "其他产品", 1, 1, 0, "100", "100", "50");
 
-        JsonNode only = run("{\"productName\":\"牛肉\"}");
+        JsonNode only = run("{\"productName\":\"牛肉酱\"}");
         assertEquals(1, only.get("data").get("data").get("items").size());
+
+        // 第 3 轮口径表 B: 只说了产品名的一部分 (「牛肉」⊂「牛肉酱」) 不锁定那个产品 (⛔ 反向包含), 只列出来请用户说完整名
+        JsonNode partial = run("{\"productName\":\"牛肉\"}");
+        assertEquals(0, partial.get("data").get("data").get("items").size(), partial.toString());
+        assertTrue(message(partial).contains("没有名为「牛肉」") && message(partial).contains("牛肉酱"), message(partial));
+        assertEquals("牛肉酱", partial.get("data").get("data").get("candidates").get(0).asText(), partial.toString());
 
         JsonNode none = run("{\"productName\":\"不存在的东西\"}");
         assertTrue(none.get("success").asBoolean());
@@ -589,5 +595,24 @@ class SkuGrossMarginToolContractTest {
         assertNull(ReportToolSchemas.productKeyword("汇总成本"));
         assertNull(ReportToolSchemas.productKeyword("全年成本"));
         assertEquals("卤牛肉", ReportToolSchemas.productKeyword("卤牛肉的毛利率"));
+    }
+
+    // 第 3 轮口径表 B 在真实工具入口上: 「成本」不是「低成本套餐」; 两个产品都出现就两个都答; 目录本次只查一次
+    @Test
+    void tableB_onTheRealToolEntry_noReverseContainment_bothProductsKept_catalogLoadedOnce() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "牛肉", "100");
+        type("C", "酱鸭", "100");
+        type("D", "低成本套餐", "100");
+        for (String id : new String[]{"A", "B", "C", "D"}) pricedBatch(id, "60");
+        // 「成本」⊂「低成本套餐」: 不锁定低成本套餐, 不限产品 → 4 个都出
+        assertEquals(4, run("{\"productName\":\"成本\"}").get("data").get("data").get("items").size());
+        // 两个互不包含的产品都出现: 两个都答, 不丢酱鸭
+        JsonNode two = run("{\"productName\":\"卤牛肉和酱鸭成本\"}").get("data").get("data").get("items");
+        Set<String> names = new HashSet<>();
+        for (JsonNode i : two) names.add(i.get("productName").asText());
+        assertEquals(Set.of("卤牛肉", "酱鸭"), names, two.toString());
+        // 规则 3: 上面两次问答各只查一次本厂在用产品目录
+        verify(productTypeRepository, org.mockito.Mockito.times(2)).findByFactoryIdAndIsActiveTrue("F1");
     }
 }

@@ -69,7 +69,8 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        String keyword = ReportToolSchemas.productKeyword(productTypeRepository, factoryId, getString(params, "productName"));
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        String keyword = product.label();
         boolean highestFirst = !"lowest".equalsIgnoreCase(getString(params, "order", "highest"));
         int limit = DEFAULT_LIMIT;
         Object limitRaw = params.get("limit");
@@ -85,21 +86,21 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
             return buildSimpleResult("BOM 成本金额按当前账号权限不显示；需要请用有成本查看权限的账号。", data);
         }
 
+        // 产品名按口径表 B 解析 (只锁定名称完整出现在原话里的产品, 可多个; 没找到如实说, 名称含该词的只列名不排行)
+        String resolution = product.refusalMessage("给出 BOM 成本", false);
+        if (resolution != null) {
+            data.put("candidates", product.candidateNames());
+            return buildSimpleResult(resolution, data);
+        }
         Set<String> withBom = new LinkedHashSet<>(orEmpty(bomService.getProductTypesWithBom(factoryId)));
-        List<ProductType> types = orEmpty(productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId));
+        List<ProductType> types = orEmpty(product.catalog());
+        Set<String> pickedIds = product.scope() == ReportToolSchemas.ProductScope.MATCHED ? product.productIds() : null;
         List<ProductType> matched = new ArrayList<>();
-        List<ProductType> exactNamed = new ArrayList<>();
         for (ProductType t : types) {
             if (t.getId() == null || !withBom.contains(t.getId())) continue;
-            if (keyword != null) {
-                if (t.getName() == null) continue;
-                if (t.getName().trim().equalsIgnoreCase(keyword)) exactNamed.add(t);
-                else if (!t.getName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) continue;
-            }
+            if (pickedIds != null && !pickedIds.contains(t.getId())) continue;
             matched.add(t);
         }
-        // 完全同名优先: 只看这一个; 否则排行里列出所有包含匹配的 (排行本身就是逐产品列出, 不合计)
-        if (!exactNamed.isEmpty()) matched = exactNamed;
         if (matched.isEmpty()) {
             return buildSimpleResult(keyword != null
                     ? "没有找到名称含「" + keyword + "」且配置了 BOM 的在用产品，无法给出 BOM 成本。"
