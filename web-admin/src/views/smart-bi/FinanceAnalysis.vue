@@ -2964,7 +2964,7 @@ onUnmounted(() => {
 
     .citation-ref {
       cursor: pointer;
-      color: var(--el-color-primary, #409EFF);
+      color: var(--el-color-primary, var(--cs-primary));
       transition: opacity 0.2s;
 
       &:hover {
@@ -2977,7 +2977,7 @@ onUnmounted(() => {
 
 .insight-citation {
   cursor: pointer;
-  color: var(--el-color-primary, #409EFF);
+  color: var(--el-color-primary, var(--cs-primary));
   transition: color 0.2s;
 
   &:hover {

@@ -766,7 +766,7 @@ onUnmounted(() => {
 .batch-info {
   font-size: 13px;
   font-weight: 600;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   margin-right: 4px;
 }
 
@@ -804,7 +804,7 @@ onUnmounted(() => {
   padding: 10px 14px;
   background: var(--el-fill-color-lighter, #fafafa);
   border-radius: 6px;
-  border-left: 3px solid var(--el-color-primary, #409eff);
+  border-left: 3px solid var(--el-color-primary, var(--cs-primary));
 }
 .answer-text {
   padding: 10px 14px;

@@ -900,6 +900,6 @@ body[style*="col-resize"],
 }
 
 .el-table__column-resize-proxy {
-  border-left: 2px solid var(--el-color-primary, #409eff);
+  border-left: 2px solid var(--el-color-primary, var(--cs-primary));
   box-shadow: 0 0 0 1px rgb(255 255 255 / 90%);
 }

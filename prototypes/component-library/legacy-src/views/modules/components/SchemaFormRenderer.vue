@@ -1,0 +1,464 @@
+<script setup lang="ts">
+/**
+ * SchemaFormRenderer — Schema 驱动动态表单
+ * 根据 EffectiveModuleConfig 自动渲染表单字段
+ */
+import { ref, computed, watch, onMounted } from 'vue'
+import { ElMessage } from 'element-plus'
+import { useAuthStore } from '@/store/modules/auth'
+import { useConfigStore } from '@/store/modules/config'
+import type { EffectiveModuleConfig, EffectiveField, FieldGroup } from '@/types/config'
+import { evaluateSpelBoolean, evaluateSpelValue } from '@/utils/spelEvaluator'
+import ReferenceSelector from './ReferenceSelector.vue'
+import DynamicArrayEditor from './DynamicArrayEditor.vue'
+import LineItemsEditor from './LineItemsEditor.vue'
+import SubTableEditor from './SubTableEditor.vue'
+import AttachmentUploader from './AttachmentUploader.vue'
+import type { TableRow } from '@/types/api';
+
+const props = defineProps<{
+  moduleCode: string
+  mode: 'create' | 'edit' | 'view'
+  initialData?: TableRow
+  factoryId?: string
+  recordId?: string
+}>()
+
+const emit = defineEmits<{
+  submit: [data: TableRow]
+  cancel: []
+}>()
+
+const authStore = useAuthStore()
+const configStore = useConfigStore()
+const config = ref<EffectiveModuleConfig | null>(null)
+const formData = ref<TableRow>({})
+const loading = ref(false)
+
+// 加载配置
+onMounted(async () => {
+  const factoryId = authStore.factoryId
+  if (!factoryId) return
+  config.value = await configStore.loadEffectiveConfig(factoryId, props.moduleCode)
+  if (config.value) {
+    initFormData()
+  }
+})
+
+/**
+ * PR1.5 Bug A: resolve schema sentinel default values to actual runtime values.
+ * Backend stores defaults like "TODAY" / "NOW" as schema sentinels — frontend
+ * must resolve them so submit payload contains parseable date/datetime strings.
+ */
+function resolveDefault(field: EffectiveField): unknown {
+  const dv = field.defaultValue
+  if (typeof dv !== 'string') return dv ?? null
+  const today = new Date()
+  // Build YYYY-MM-DD using LOCAL date (not UTC) — avoids 8h shift bug for CST users
+  // when local is one day ahead/behind UTC midnight.
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const localDate = `${today.getFullYear()}-${pad(today.getMonth() + 1)}-${pad(today.getDate())}`
+  switch (dv) {
+    case 'TODAY':
+      return localDate
+    case 'NOW':
+      // LOCAL ISO datetime — backend LenientLocalDateDeserializer also accepts the literal
+      // "NOW" sentinel as backup, so frontend resolution is "best effort visual" only.
+      return `${localDate}T${pad(today.getHours())}:${pad(today.getMinutes())}:${pad(today.getSeconds())}`
+    case 'YESTERDAY': {
+      const d = new Date(today.getTime() - 86400000)
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+    }
+    default:
+      return dv
+  }
+}
+
+function initFormData() {
+  if (!config.value) return
+  const data: TableRow = {}
+
+  config.value.fields.forEach((field) => {
+    const resolvedDefault = resolveDefault(field)
+    if (props.mode === 'edit' && props.initialData) {
+      data[field.code] = readInitialForField(field, props.initialData) ?? resolvedDefault ?? null
+    } else if (props.mode === 'create') {
+      data[field.code] = resolvedDefault ?? null
+    } else {
+      data[field.code] = props.initialData ? readInitialForField(field, props.initialData) : null
+    }
+  })
+
+  formData.value = data
+}
+
+/**
+ * Apr 25 2026 (Round 4 Critical #4): for reference fields with valueField='id',
+ * prefer initialData[`${code}Id`] when present (backend dual-field convention:
+ * the snapshot string lives in `salesperson` and the FK Long lives in `salespersonId`).
+ * Falls back to initialData[code] for legacy/non-reference cases.
+ *
+ * Why: SO entity returns both `salesperson` (snapshot fullName) and `salespersonId` (FK).
+ * Without this lookup, edit-mode form gets the snapshot string, which (a) doesn't survive
+ * fetchById (looksLikeId rejects non-ASCII names), (b) saves back as legacy path on submit,
+ * dropping the FK link and re-introducing the collision the dual-field migration was meant
+ * to solve.
+ */
+function readInitialForField(field: { code: string; type?: string; extra?: { referenceConfig?: { valueField?: string } } }, initial: TableRow): unknown {
+  if (field.type === 'reference' && field.extra?.referenceConfig?.valueField === 'id') {
+    const idKey = `${field.code}Id`
+    if (initial[idKey] !== undefined && initial[idKey] !== null) {
+      // R6 (Apr 25 2026): coerce to String. After V20260425_09, salespersonId is BIGINT
+      // so JSON returns number 146. ReferenceSelector's fetchById coerces options.value
+      // to String, so el-select needs String modelValue too for strict-eq match.
+      return String(initial[idKey])
+    }
+  }
+  return initial[field.code]
+}
+
+// 按 group 分组的可见字段
+const groupedFields = computed(() => {
+  if (!config.value) return []
+  const groups = config.value.groups
+    .filter((g) => g.visible)
+    .sort((a, b) => a.order - b.order)
+
+  return groups.map((group) => ({
+    ...group,
+    fields: config.value!.fields
+      .filter((f) => f.group === group.code && f.visible && isFieldShown(f))
+      .sort((a, b) => a.order - b.order),
+  }))
+})
+
+// dependsOn 条件显示 + visibleWhen SpEL
+function isFieldShown(field: EffectiveField): boolean {
+  const dep = field.extra?.dependsOn as { field: string; value: unknown } | undefined
+  if (dep) {
+    if (formData.value[dep.field] !== dep.value) return false
+  }
+  if (field.visibleWhen) {
+    return evaluateSpelBoolean(field.visibleWhen, formData.value)
+  }
+  return true
+}
+
+// 是否只读
+function isReadonly(field: EffectiveField): boolean {
+  if (props.mode === 'view') return true
+  if (field.readonly || field.extra?.computed) return true
+  // Spec §4.A.2 + M3: autoGenerate fields disabled in both create + edit (snapshot semantics)
+  if (field.extra?.autoGenerate) return true
+  return false
+}
+
+// computedWhen 动态计算值
+const computedValues = computed(() => {
+  const result: TableRow = {}
+  if (!config.value) return result
+  for (const field of config.value.fields) {
+    if (field.computedWhen) {
+      result[field.code] = evaluateSpelValue(field.computedWhen, formData.value)
+    }
+  }
+  return result
+})
+
+// 自定义标签
+function getLabel(field: EffectiveField): string {
+  return config.value?.customLabels?.[field.code] || field.label
+}
+
+/**
+ * C-6 Task 4: 接收顶层 ReferenceSelector @project event, 写 formData shadow 字段.
+ * computedWhen 是 Vue computed property (line 156-165), 自动 react formData 变化
+ * 重算, 不需要手动 trigger.
+ *
+ * shadowKey 已在 ReferenceSelector.emitProjectFields (SHADOW_KEY_RE) 校验,
+ * 单一 emit 来源, 此处直接 spread 不重复 validate.
+ */
+function onTopLevelProject(projected: TableRow) {
+  for (const [k, v] of Object.entries(projected)) {
+    formData.value[k] = v
+  }
+}
+
+// 提交
+function handleSubmit() {
+  if (!config.value) return
+
+  // 校验必填
+  for (const field of config.value.fields) {
+    if (!field.visible || !isFieldShown(field)) continue
+    if (field.required && !isReadonly(field)) {
+      const val = formData.value[field.code]
+      if (val === null || val === undefined || val === '') {
+        ElMessage.warning(`${getLabel(field)} 不能为空`)
+        return
+      }
+    }
+  }
+
+  // Canvas V3: Apply computedWhen values into payload (write-back)
+  // computedValues are calculated by SpEL at render time; persist them on submit.
+  const payload: TableRow = { ...formData.value }
+  for (const field of config.value.fields) {
+    if (field.computedWhen && computedValues.value[field.code] != null) {
+      payload[field.code] = computedValues.value[field.code]
+    }
+  }
+
+  // Canvas V3: Split JPA vs dynamic fields so backend can route them
+  // Dynamic fields go into customFields Map (dual-track architecture)
+  //
+  // C-6 Task 6 注: 顶层 shadow 字段 (`_` 前缀) 自然被此循环过滤 — 因为我们仅迭代
+  // config.value.fields 中声明的字段, shadow 字段不在 schema 中. line_items 字段
+  // 内部 row 的 shadow 字段需在下方显式过滤 (单独 helper).
+  const customFields: TableRow = {}
+  const jpaPayload: TableRow = {}
+  for (const field of config.value.fields) {
+    let val = payload[field.code]
+    if (val === undefined) continue
+
+    // C-6 Task 6: line_items 行里的 shadow 字段 (_ 前缀) 在 submit 前过滤,
+    // 避免发到后端 (后端不识别这些虚拟字段, 可能 400 reject 或忽略).
+    if (field.type === 'line_items' && Array.isArray(val)) {
+      val = (val as TableRow[]).map((row) =>
+        Object.fromEntries(Object.entries(row).filter(([k]) => !k.startsWith('_')))
+      )
+    }
+
+    if (field.source === 'dynamic') {
+      customFields[field.code] = val
+    } else {
+      jpaPayload[field.code] = val
+    }
+  }
+  if (Object.keys(customFields).length > 0) {
+    jpaPayload.customFields = customFields
+  }
+
+  emit('submit', jpaPayload)
+}
+
+// 活动的 collapse 面板
+const activeGroups = ref<string[]>([])
+watch(
+  () => config.value,
+  (c) => {
+    if (c) activeGroups.value = c.groups.filter((g) => g.visible).map((g) => g.code)
+  },
+  { immediate: true },
+)
+</script>
+
+<template>
+  <div class="schema-form-renderer" v-if="config">
+    <el-form label-width="130px" label-position="right">
+      <el-collapse v-model="activeGroups">
+        <el-collapse-item
+          v-for="group in groupedFields"
+          :key="group.code"
+          :title="group.label"
+          :name="group.code"
+        >
+          <template v-for="field in group.fields" :key="field.code">
+            <el-form-item
+              :label="getLabel(field)"
+              :required="field.required && !isReadonly(field)"
+            >
+              <!-- string -->
+              <el-input
+                v-if="field.type === 'string' || field.type === 'text'"
+                v-model="formData[field.code]"
+                :disabled="isReadonly(field)"
+                :placeholder="field.extra?.autoGenerate && mode === 'create' ? '保存后自动生成' : `请输入${getLabel(field)}`"
+              />
+
+              <!-- textarea -->
+              <el-input
+                v-else-if="field.type === 'textarea'"
+                v-model="formData[field.code]"
+                type="textarea"
+                :rows="3"
+                :disabled="isReadonly(field)"
+                :placeholder="`请输入${getLabel(field)}`"
+              />
+
+              <!-- decimal -->
+              <el-input-number
+                v-else-if="field.type === 'decimal'"
+                v-model="formData[field.code]"
+                :precision="(field.extra?.precision as number) ?? 2"
+                :min="(field.extra?.min as number) ?? undefined"
+                :max="(field.extra?.max as number) ?? undefined"
+                :disabled="isReadonly(field)"
+                controls-position="right"
+                style="width: 220px"
+              />
+
+              <!-- integer -->
+              <el-input-number
+                v-else-if="field.type === 'integer'"
+                v-model="formData[field.code]"
+                :precision="0"
+                :min="(field.extra?.min as number) ?? undefined"
+                :max="(field.extra?.max as number) ?? undefined"
+                :disabled="isReadonly(field)"
+                controls-position="right"
+                style="width: 220px"
+              />
+
+              <!-- boolean -->
+              <el-switch
+                v-else-if="field.type === 'boolean'"
+                v-model="formData[field.code]"
+                :disabled="isReadonly(field)"
+              />
+
+              <!-- date -->
+              <el-date-picker
+                v-else-if="field.type === 'date'"
+                v-model="formData[field.code]"
+                type="date"
+                value-format="YYYY-MM-DD"
+                :disabled="isReadonly(field)"
+                :placeholder="`请选择${getLabel(field)}`"
+                style="width: 220px"
+              />
+
+              <!-- Round 4 Fix P1-11: datetime with minute precision -->
+              <el-date-picker
+                v-else-if="field.type === 'datetime'"
+                v-model="formData[field.code]"
+                type="datetime"
+                value-format="YYYY-MM-DD HH:mm:ss"
+                :disabled="isReadonly(field)"
+                :placeholder="`请选择${getLabel(field)}`"
+                style="width: 240px"
+              />
+
+              <!-- Round 4 Fix P1-11: textarea for long-form notes (longtext alias for textarea) -->
+              <el-input
+                v-else-if="field.type === 'longtext'"
+                v-model="formData[field.code]"
+                type="textarea"
+                :rows="3"
+                :disabled="isReadonly(field)"
+                :placeholder="`请输入${getLabel(field)}`"
+                style="width: 100%"
+              />
+
+              <!-- select -->
+              <el-select
+                v-else-if="field.type === 'select'"
+                v-model="formData[field.code]"
+                :disabled="isReadonly(field)"
+                :placeholder="`请选择${getLabel(field)}`"
+                clearable
+                style="width: 220px"
+              >
+                <el-option
+                  v-for="opt in field.options"
+                  :key="opt.value"
+                  :label="opt.label"
+                  :value="opt.value"
+                />
+              </el-select>
+
+              <!-- reference -->
+              <ReferenceSelector
+                v-else-if="field.type === 'reference'"
+                v-model="formData[field.code]"
+                :config="(field.extra?.referenceConfig as any)"
+                :disabled="isReadonly(field)"
+                :placeholder="`请选择${getLabel(field)}`"
+                @project="onTopLevelProject"
+              />
+
+              <!-- json_array -->
+              <DynamicArrayEditor
+                v-else-if="field.type === 'json_array'"
+                v-model="(formData[field.code] as TableRow[])"
+                :item-schema="(field.extra?.itemSchema as any)"
+                :disabled="isReadonly(field)"
+              />
+
+              <!-- line_items -->
+              <LineItemsEditor
+                v-else-if="field.type === 'line_items'"
+                v-model="(formData[field.code] as TableRow[])"
+                :item-schema="(field.extra?.itemSchema as any)"
+                :disabled="isReadonly(field)"
+              />
+
+              <!-- attachment -->
+              <AttachmentUploader
+                v-else-if="field.type === 'attachment'"
+                v-model="formData[field.code]"
+                :factory-id="factoryId || ''"
+                :accept="(field.extra?.accept as string)"
+                :max-size="(field.extra?.maxSize as number)"
+                :max-count="(field.extra?.maxCount as number)"
+                :readonly="isReadonly(field)"
+              />
+
+              <!-- sub_table -->
+              <SubTableEditor
+                v-else-if="field.type === 'sub_table'"
+                :factory-id="factoryId || ''"
+                :module-code="moduleCode"
+                :record-id="recordId || ''"
+                :field-code="field.code"
+                :label="field.label"
+                :columns="(field.extra?.columns as any[]) || []"
+                :readonly="mode === 'view'"
+              />
+
+              <!-- fallback -->
+              <el-input v-else v-model="formData[field.code]" :disabled="isReadonly(field)" />
+
+              <!-- computedWhen 动态计算显示 -->
+              <span
+                v-if="field.computedWhen && computedValues[field.code] != null"
+                class="computed-display"
+              >
+                {{ computedValues[field.code] }}
+              </span>
+            </el-form-item>
+          </template>
+        </el-collapse-item>
+      </el-collapse>
+
+      <!-- 底部按钮 -->
+      <el-form-item v-if="mode !== 'view'" style="margin-top: 24px">
+        <el-button type="primary" @click="handleSubmit">
+          {{ mode === 'create' ? '创建' : '保存' }}
+        </el-button>
+        <el-button @click="emit('cancel')">取消</el-button>
+      </el-form-item>
+    </el-form>
+  </div>
+
+  <div v-else style="text-align: center; padding: 60px 0; color: #909399">
+    <el-icon :size="32" style="margin-bottom: 12px"><Loading /></el-icon>
+    <div>加载配置中...</div>
+  </div>
+</template>
+
+<style scoped>
+.schema-form-renderer {
+  max-width: 900px;
+}
+.schema-form-renderer :deep(.el-collapse-item__header) {
+  font-size: 15px;
+  font-weight: 600;
+  color: #303133;
+}
+.computed-display {
+  margin-left: 8px;
+  color: #909399;
+  font-size: 13px;
+}
+</style>

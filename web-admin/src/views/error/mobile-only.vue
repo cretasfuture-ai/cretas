@@ -134,7 +134,7 @@ function goToLogin() {
   margin-bottom: 24px;
 
   .mobile-icon {
-    color: #409eff;
+    color: var(--cs-primary);
   }
 
   .warning-badge {

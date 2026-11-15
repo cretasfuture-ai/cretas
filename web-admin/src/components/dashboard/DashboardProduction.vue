@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 生产管理 Dashboard
  * 适用角色: production_manager, workshop_supervisor
@@ -74,7 +75,7 @@ const statCards = computed(() => [
     unavailable: dashboardLoaded.value && sourceFailed.value.overview,
     unit: 'kg',
     icon: TrendCharts,
-    color: '#409eff',
+    color: CS_TOKENS.primary,
     route: '/production/batches'
   },
   {
@@ -132,7 +133,7 @@ const batchStatusItems = computed(() => [
 // 快捷操作
 // T125: 转换率配置入口已移除 (后端 API/fallback 仍保留, 维护路径: BOM成本管理 → 转换率 tab)
 const quickActions = [
-  { title: '生产批次', icon: DataLine, route: '/production/batches', color: '#409eff' },
+  { title: '生产批次', icon: DataLine, route: '/production/batches', color: CS_TOKENS.primary },
   { title: '生产计划', icon: Calendar, route: '/production/plans', color: '#67c23a' }
 ];
 
@@ -283,7 +284,7 @@ function navigateTo(route: string) {
             </div>
             <el-progress
               :percentage="overview?.completionRate ?? 0"
-              :color="(overview?.completionRate ?? 0) >= 100 ? '#67c23a' : '#409eff'"
+              :color="(overview?.completionRate ?? 0) >= 100 ? '#67c23a' : CS_TOKENS.primary"
               :stroke-width="20"
             />
           </div>

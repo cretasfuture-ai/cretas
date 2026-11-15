@@ -1,0 +1,1010 @@
+<script setup lang="ts">
+/**
+ * SmartBI YoYMoMComparisonChart - Year-over-Year & Month-over-Month Comparison Chart
+ * Features:
+ * - Top KPI cards row (last year cumulative, current year cumulative, YoY growth amount, YoY growth rate)
+ * - Monthly bar chart (current period vs same period last year)
+ * - MoM growth rate line chart
+ * - Quarter YoY data annotations
+ * - Toggle between YoY and MoM views
+ */
+import { ref, watch, onMounted, onUnmounted, computed } from 'vue';
+import echarts from '@/utils/echarts';
+import type { EChartsOption, ECharts } from 'echarts';
+import { defaultTooltip } from './chart-helpers';
+
+// Types
+export interface ComparisonData {
+  /** Period (month) - e.g., '1月', '2月', 'Jan', 'Feb' */
+  period: string;
+  /** Current period value */
+  current: number;
+  /** Same period last year */
+  lastYearSame: number;
+  /** Last period value (for MoM calculation) */
+  lastPeriod?: number;
+  /** Year-over-Year growth rate (%) */
+  yoyGrowth: number;
+  /** Month-over-Month growth rate (%) */
+  momGrowth?: number;
+  /** Optional: Quarter identifier for grouping */
+  quarter?: 'Q1' | 'Q2' | 'Q3' | 'Q4';
+}
+
+export type ViewMode = 'yoy' | 'mom' | 'both';
+
+interface Props {
+  title?: string;
+  data: ComparisonData[];
+  /** Metric name (e.g., "Sales", "Revenue") */
+  metric?: string;
+  /** Unit (e.g., "万元", "件") */
+  unit?: string;
+  height?: number;
+  /** Show data zoom slider */
+  showDataZoom?: boolean;
+  /** Initial view mode */
+  defaultViewMode?: ViewMode;
+  /** Show view mode toggle */
+  showViewToggle?: boolean;
+  /** Positive growth is good (green) or bad (red) */
+  positiveIsGood?: boolean;
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  title: '',
+  metric: '数值',
+  unit: '',
+  height: 400,
+  showDataZoom: false,
+  defaultViewMode: 'yoy',
+  showViewToggle: true,
+  positiveIsGood: true
+});
+
+const emit = defineEmits<{
+  (e: 'viewModeChange', mode: ViewMode): void;
+  (e: 'dataClick', data: { period: string; dataPoint: ComparisonData }): void;
+}>();
+
+const chartRef = ref<HTMLDivElement | null>(null);
+const chartInstance = ref<ECharts | null>(null);
+let resizeObserver: ResizeObserver | null = null;
+let rafId = 0;
+const viewMode = ref<ViewMode>(props.defaultViewMode);
+
+// Color palette
+const colors = {
+  currentPeriod: '#2D8B57',      // Blue - current period
+  lastYearSame: '#A9D18E',       // Light green - last year same period
+  yoyGrowthLine: '#ee6666',      // Red - YoY growth line
+  momGrowthLine: '#fac858',      // Yellow - MoM growth line
+  positiveGrowth: '#67c23a',     // Green - positive
+  negativeGrowth: '#f56c6c',     // Red - negative
+  quarterBg: 'rgba(64, 158, 255, 0.05)'
+};
+
+// KPI calculations
+const kpiData = computed(() => {
+  if (!props.data || props.data.length === 0) {
+    return {
+      lastYearCumulative: 0,
+      currentYearCumulative: 0,
+      yoyGrowthAmount: 0,
+      yoyGrowthRate: 0
+    };
+  }
+
+  const lastYearCumulative = props.data.reduce((sum, d) => sum + (d.lastYearSame || 0), 0);
+  const currentYearCumulative = props.data.reduce((sum, d) => sum + (d.current || 0), 0);
+  const yoyGrowthAmount = currentYearCumulative - lastYearCumulative;
+  const yoyGrowthRate = lastYearCumulative !== 0
+    ? ((currentYearCumulative - lastYearCumulative) / lastYearCumulative) * 100
+    : 0;
+
+  return {
+    lastYearCumulative,
+    currentYearCumulative,
+    yoyGrowthAmount,
+    yoyGrowthRate
+  };
+});
+
+// Format number with K/M suffix
+const formatNumber = (value: number, precision = 1): string => {
+  if (Math.abs(value) >= 1000000) {
+    return (value / 1000000).toFixed(precision) + 'M';
+  } else if (Math.abs(value) >= 1000) {
+    return (value / 1000).toFixed(precision) + 'K';
+  }
+  return value.toFixed(precision);
+};
+
+// Determine trend direction based on value and positiveIsGood setting
+const getTrendDirection = (value: number): 'up' | 'down' | 'flat' => {
+  if (value > 0.5) return 'up';
+  if (value < -0.5) return 'down';
+  return 'flat';
+};
+
+// Get trend color (considering positiveIsGood setting)
+const getTrendColor = (value: number): string => {
+  const isPositive = value > 0;
+  if (props.positiveIsGood) {
+    return isPositive ? colors.positiveGrowth : colors.negativeGrowth;
+  } else {
+    return isPositive ? colors.negativeGrowth : colors.positiveGrowth;
+  }
+};
+
+// Computed: quarterly summary for star markPoints
+const quarterSummaries = computed(() => {
+  const result: { period: string; current: number; lastYear: number; yoyGrowth: number }[] = [];
+  const quarters: Record<string, { current: number; lastYear: number; count: number; lastPeriod: string }> = {};
+
+  props.data.forEach(item => {
+    if (!item.quarter) return;
+    if (!quarters[item.quarter]) {
+      quarters[item.quarter] = { current: 0, lastYear: 0, count: 0, lastPeriod: item.period };
+    }
+    quarters[item.quarter].current += item.current;
+    quarters[item.quarter].lastYear += item.lastYearSame;
+    quarters[item.quarter].count++;
+    quarters[item.quarter].lastPeriod = item.period;
+  });
+
+  Object.entries(quarters).forEach(([, data]) => {
+    const yoy = data.lastYear !== 0
+      ? ((data.current - data.lastYear) / data.lastYear) * 100
+      : 0;
+    result.push({ period: data.lastPeriod, current: data.current, lastYear: data.lastYear, yoyGrowth: yoy });
+  });
+
+  return result;
+});
+
+// Build quarter mark areas
+const buildQuarterMarkAreas = () => {
+  const quarters: { start: number; end: number; label: string }[] = [];
+  let currentQuarter: string | null = null;
+  let startIdx = 0;
+
+  props.data.forEach((item, idx) => {
+    if (item.quarter && item.quarter !== currentQuarter) {
+      if (currentQuarter !== null) {
+        quarters.push({
+          start: startIdx,
+          end: idx - 1,
+          label: currentQuarter
+        });
+      }
+      currentQuarter = item.quarter;
+      startIdx = idx;
+    }
+  });
+
+  // Push last quarter
+  if (currentQuarter !== null) {
+    quarters.push({
+      start: startIdx,
+      end: props.data.length - 1,
+      label: currentQuarter
+    });
+  }
+
+  if (quarters.length === 0) return undefined;
+
+  return {
+    silent: true,
+    data: quarters.map((q, idx) => [
+      {
+        xAxis: props.data[q.start].period,
+        itemStyle: {
+          color: idx % 2 === 0 ? 'rgba(64, 158, 255, 0.03)' : 'rgba(103, 194, 58, 0.03)'
+        }
+      },
+      { xAxis: props.data[q.end].period }
+    ])
+  };
+};
+
+// Build YoY mark points for significant changes
+const buildYoYMarkPoints = () => {
+  const significantChanges = props.data.filter(d => Math.abs(d.yoyGrowth) >= 20);
+
+  if (significantChanges.length === 0) return undefined;
+
+  return {
+    symbol: 'pin',
+    symbolSize: 40,
+    label: {
+      show: true,
+      position: 'top',
+      formatter: (params: { data: { value: string } }) => params.data.value,
+      fontSize: 10,
+      fontWeight: 'bold',
+      color: '#fff'
+    },
+    data: significantChanges.map(d => ({
+      value: (d.yoyGrowth > 0 ? '+' : '') + d.yoyGrowth.toFixed(1) + '%',
+      coord: [d.period, d.current],
+      itemStyle: {
+        color: getTrendColor(d.yoyGrowth)
+      }
+    }))
+  };
+};
+
+// Chart options
+const chartOptions = computed<EChartsOption>(() => {
+  const periods = props.data.map(d => d.period);
+  const currentValues = props.data.map(d => d.current);
+  const lastYearValues = props.data.map(d => d.lastYearSame);
+  const yoyGrowthValues = props.data.map(d => d.yoyGrowth);
+  const momGrowthValues = props.data.map(d => d.momGrowth ?? null);
+
+  const markAreaConfig = buildQuarterMarkAreas();
+  const markPointConfig = buildYoYMarkPoints();
+
+  // Build series based on view mode
+  const series: echarts.SeriesOption[] = [];
+
+  // Build quarter red-border markArea config
+  const quarterRedMarkAreas = props.data.some(d => d.quarter) ? (() => {
+    const groups: { start: string; end: string; label: string }[] = [];
+    let curQ: string | null = null;
+    let startPeriod = '';
+
+    props.data.forEach((item, idx) => {
+      if (item.quarter && item.quarter !== curQ) {
+        if (curQ !== null) {
+          groups.push({ start: startPeriod, end: props.data[idx - 1].period, label: curQ });
+        }
+        curQ = item.quarter;
+        startPeriod = item.period;
+      }
+    });
+    if (curQ !== null) {
+      groups.push({ start: startPeriod, end: props.data[props.data.length - 1].period, label: curQ });
+    }
+
+    return {
+      silent: true,
+      data: groups.map((g, idx) => [
+        {
+          xAxis: g.start,
+          itemStyle: {
+            color: idx % 2 === 0 ? 'rgba(255,86,48,0.04)' : 'rgba(45,139,87,0.04)',
+            borderColor: '#FF5630',
+            borderWidth: 1,
+            borderType: 'solid'
+          },
+          label: {
+            show: true,
+            position: 'insideTopRight',
+            formatter: g.label,
+            color: '#FF5630',
+            fontSize: 10,
+            fontWeight: 'bold'
+          }
+        },
+        { xAxis: g.end }
+      ])
+    };
+  })() : undefined;
+
+  // Always show bar chart for current vs last year
+  series.push({
+    name: `本期${props.metric}`,
+    type: 'bar',
+    barWidth: '35%',
+    barGap: '10%',
+    data: currentValues,
+    itemStyle: {
+      color: colors.currentPeriod,
+      borderRadius: [4, 4, 0, 0]
+    },
+    emphasis: {
+      itemStyle: {
+        shadowBlur: 10,
+        shadowColor: 'rgba(0, 0, 0, 0.2)'
+      }
+    },
+    ...(quarterRedMarkAreas ? { markArea: quarterRedMarkAreas } : markAreaConfig ? { markArea: markAreaConfig } : {}),
+    ...(viewMode.value === 'yoy' && markPointConfig ? { markPoint: markPointConfig } : {})
+  } as unknown as echarts.BarSeriesOption);
+
+  series.push({
+    name: `去年同期${props.metric}`,
+    type: 'bar',
+    barWidth: '35%',
+    data: lastYearValues,
+    itemStyle: {
+      color: colors.lastYearSame,
+      borderRadius: [4, 4, 0, 0]
+    },
+    emphasis: {
+      itemStyle: {
+        shadowBlur: 10,
+        shadowColor: 'rgba(0, 0, 0, 0.2)'
+      }
+    }
+  } as unknown as echarts.BarSeriesOption);
+
+  // Add growth rate lines based on view mode
+  if (viewMode.value === 'yoy' || viewMode.value === 'both') {
+    // Build quarter star markPoints
+    const quarterStarMarkPoints = quarterSummaries.value.length > 0 ? {
+      symbol: 'star',
+      symbolSize: 18,
+      label: {
+        show: true,
+        position: 'top',
+        formatter: (p: { data: { value: string } }) => p.data.value,
+        fontSize: 9,
+        fontWeight: 'bold',
+        color: '#fff'
+      },
+      data: quarterSummaries.value.map(q => ({
+        value: (q.yoyGrowth > 0 ? '+' : '') + q.yoyGrowth.toFixed(0) + '%',
+        coord: [q.period, q.yoyGrowth],
+        itemStyle: { color: getTrendColor(q.yoyGrowth) }
+      }))
+    } : undefined;
+
+    series.push({
+      name: '同比增长率',
+      type: 'line',
+      yAxisIndex: 1,
+      data: yoyGrowthValues,
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 6,
+      itemStyle: {
+        color: colors.yoyGrowthLine
+      },
+      lineStyle: {
+        width: 2
+      },
+      label: {
+        show: true,
+        position: 'top',
+        formatter: (params: { value: number | null | undefined }) => {
+          const val = params.value as number;
+          if (val === null || val === undefined) return '';
+          const sign = val >= 0 ? '+' : '';
+          // Use pos/neg rich keys for different background colors
+          const key = val >= 0 ? 'bubblePos' : 'bubbleNeg';
+          return `{${key}|${sign}${val.toFixed(1)}%}`;
+        },
+        rich: {
+          bubblePos: {
+            backgroundColor: 'rgba(103,194,58,0.85)',
+            borderRadius: 8,
+            padding: [2, 5],
+            color: '#fff',
+            fontSize: 9,
+            fontWeight: 'bold'
+          },
+          bubbleNeg: {
+            backgroundColor: 'rgba(245,108,108,0.85)',
+            borderRadius: 8,
+            padding: [2, 5],
+            color: '#fff',
+            fontSize: 9,
+            fontWeight: 'bold'
+          }
+        }
+      },
+      emphasis: {
+        focus: 'series'
+      },
+      ...(quarterStarMarkPoints ? { markPoint: quarterStarMarkPoints } : {})
+    } as unknown as echarts.LineSeriesOption);
+  }
+
+  if (viewMode.value === 'mom' || viewMode.value === 'both') {
+    series.push({
+      name: '环比增长率',
+      type: 'line',
+      yAxisIndex: 1,
+      data: momGrowthValues,
+      smooth: true,
+      symbol: 'diamond',
+      symbolSize: 6,
+      itemStyle: {
+        color: colors.momGrowthLine
+      },
+      lineStyle: {
+        width: 2,
+        type: 'dashed'
+      },
+      emphasis: {
+        focus: 'series'
+      }
+    } as unknown as echarts.LineSeriesOption);
+  }
+
+  // Build quarter graphic red-border rect annotations
+  const quarterRects: echarts.GraphicComponentOption[] = [];
+  if (props.data.some(d => d.quarter)) {
+    const quarterGroups: Record<string, { startIdx: number; endIdx: number }> = {};
+    props.data.forEach((item, idx) => {
+      if (!item.quarter) return;
+      if (!quarterGroups[item.quarter]) {
+        quarterGroups[item.quarter] = { startIdx: idx, endIdx: idx };
+      }
+      quarterGroups[item.quarter].endIdx = idx;
+    });
+
+    Object.entries(quarterGroups).forEach(([qName, { startIdx, endIdx }]) => {
+      const centerIdx = Math.floor((startIdx + endIdx) / 2);
+      quarterRects.push({
+        type: 'group',
+        children: [
+          {
+            type: 'text',
+            z: 10,
+            style: {
+              text: qName,
+              fill: '#FF5630',
+              font: 'bold 11px sans-serif',
+              textAlign: 'center'
+            },
+            // position set dynamically in rendered chart via markArea label instead
+            left: `${((centerIdx + 0.5) / props.data.length) * 100}%`,
+            top: 2
+          }
+        ]
+      } as echarts.GraphicComponentOption);
+    });
+  }
+
+  const options: EChartsOption = {
+    tooltip: {
+      ...defaultTooltip('axis'),
+      axisPointer: {
+        type: 'cross',
+        crossStyle: {
+          color: '#999'
+        }
+      },
+      formatter: (params) => {
+        if (!Array.isArray(params)) return '';
+        const period = (params[0] as { axisValue?: string })?.axisValue || '';
+        const dataPoint = props.data.find(d => d.period === period);
+
+        let html = `<div style="font-weight: 600; margin-bottom: 8px;">${period}</div>`;
+
+        params.forEach((param) => {
+          const isGrowthRate = param.seriesName?.includes('增长率');
+          const unit = isGrowthRate ? '%' : props.unit;
+          const value = param.value !== null && param.value !== undefined
+            ? (isGrowthRate ? (param.value as number).toFixed(1) : formatNumber(param.value as number))
+            : '-';
+
+          // Determine shape based on series type
+          const isLine = param.seriesName?.includes('增长率');
+          const shape = isLine ? '50%' : '2px';
+
+          html += `
+            <div style="display: flex; align-items: center; gap: 8px; margin: 4px 0;">
+              <span style="display: inline-block; width: 10px; height: 10px; border-radius: ${shape}; background: ${param.color};"></span>
+              <span>${param.seriesName}: </span>
+              <span style="font-weight: 600;">${value}${unit}</span>
+            </div>
+          `;
+        });
+
+        // Add YoY/MoM analysis
+        if (dataPoint) {
+          html += '<div style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed #ebeef5; font-size: 12px;">';
+
+          const yoyDiff = dataPoint.current - dataPoint.lastYearSame;
+          const yoyColor = getTrendColor(yoyDiff);
+          const yoyArrow = yoyDiff > 0 ? '&#8593;' : (yoyDiff < 0 ? '&#8595;' : '&#8594;');
+
+          html += `<div style="color: ${yoyColor};">同比: ${yoyArrow} ${yoyDiff > 0 ? '+' : ''}${formatNumber(yoyDiff)}${props.unit} (${dataPoint.yoyGrowth > 0 ? '+' : ''}${dataPoint.yoyGrowth.toFixed(1)}%)</div>`;
+
+          if (dataPoint.momGrowth !== undefined && dataPoint.lastPeriod !== undefined) {
+            const momDiff = dataPoint.current - dataPoint.lastPeriod;
+            const momColor = getTrendColor(momDiff);
+            const momArrow = momDiff > 0 ? '&#8593;' : (momDiff < 0 ? '&#8595;' : '&#8594;');
+            html += `<div style="color: ${momColor};">环比: ${momArrow} ${momDiff > 0 ? '+' : ''}${formatNumber(momDiff)}${props.unit} (${dataPoint.momGrowth > 0 ? '+' : ''}${dataPoint.momGrowth.toFixed(1)}%)</div>`;
+          }
+
+          html += '</div>';
+        }
+
+        return html;
+      }
+    },
+    legend: {
+      bottom: 0,
+      icon: 'rect',
+      itemWidth: 14,
+      itemHeight: 8,
+      textStyle: {
+        color: '#606266',
+        fontSize: 12
+      }
+    },
+    grid: {
+      top: 30,
+      right: 60,
+      bottom: props.showDataZoom ? 80 : 50,
+      left: 60,
+      containLabel: true
+    },
+    xAxis: {
+      type: 'category',
+      data: periods,
+      axisPointer: {
+        type: 'shadow'
+      },
+      axisLine: {
+        lineStyle: {
+          color: '#dcdfe6'
+        }
+      },
+      axisTick: {
+        show: false
+      },
+      axisLabel: {
+        color: '#909399',
+        fontSize: 11
+      }
+    },
+    yAxis: [
+      {
+        type: 'value',
+        name: props.metric + (props.unit ? ` (${props.unit})` : ''),
+        nameLocation: 'middle',
+        nameGap: 50,
+        nameTextStyle: {
+          color: '#909399'
+        },
+        splitLine: {
+          lineStyle: {
+            color: '#ebeef5',
+            type: 'dashed'
+          }
+        },
+        axisLine: {
+          show: false
+        },
+        axisTick: {
+          show: false
+        },
+        axisLabel: {
+          color: '#909399',
+          fontSize: 11,
+          formatter: (value: number) => formatNumber(value, 0)
+        }
+      },
+      {
+        type: 'value',
+        name: '增长率 (%)',
+        nameLocation: 'middle',
+        nameGap: 40,
+        nameTextStyle: {
+          color: '#909399'
+        },
+        splitLine: {
+          show: false
+        },
+        axisLine: {
+          show: false
+        },
+        axisTick: {
+          show: false
+        },
+        axisLabel: {
+          color: '#909399',
+          fontSize: 11,
+          formatter: '{value}%'
+        }
+      }
+    ],
+    series
+  };
+
+  // Add data zoom if enabled
+  if (props.showDataZoom) {
+    options.dataZoom = [
+      {
+        type: 'slider',
+        show: true,
+        xAxisIndex: 0,
+        start: 0,
+        end: 100,
+        bottom: 30,
+        height: 20,
+        borderColor: '#dcdfe6',
+        fillerColor: 'rgba(64, 158, 255, 0.2)',
+        handleStyle: {
+          color: '#2D8B57'
+        }
+      },
+      {
+        type: 'inside',
+        xAxisIndex: 0
+      }
+    ];
+  }
+
+  return options;
+});
+
+function initChart() {
+  if (!chartRef.value) return;
+
+  chartInstance.value = echarts.init(chartRef.value, 'cretas') as unknown as ECharts;
+  chartInstance.value.setOption(chartOptions.value);
+
+  // Click event
+  chartInstance.value.on('click', (params) => {
+    if (params.componentType === 'series' && params.dataIndex !== undefined) {
+      const dataPoint = props.data[params.dataIndex as number];
+      if (dataPoint) {
+        emit('dataClick', {
+          period: params.name as string,
+          dataPoint
+        });
+      }
+    }
+  });
+}
+
+function updateChart() {
+  if (chartInstance.value) {
+    chartInstance.value.setOption(chartOptions.value, true);
+  }
+}
+
+function handleResize() {
+  if (rafId) return;
+  rafId = requestAnimationFrame(() => {
+    rafId = 0;
+    chartInstance.value?.resize();
+  });
+}
+
+function onViewModeChange(mode: ViewMode) {
+  viewMode.value = mode;
+  emit('viewModeChange', mode);
+}
+
+// Lifecycle
+onMounted(() => {
+  initChart();
+  if (chartRef.value && typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(chartRef.value);
+  }
+  window.addEventListener('resize', handleResize);
+});
+
+onUnmounted(() => {
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  if (rafId) cancelAnimationFrame(rafId);
+  window.removeEventListener('resize', handleResize);
+  chartInstance.value?.dispose();
+});
+
+// Watch for data changes
+watch(() => props.data, updateChart, { deep: true });
+watch(viewMode, updateChart);
+watch(chartOptions, updateChart, { deep: true });
+
+// Expose methods
+defineExpose({
+  resize: handleResize,
+  getInstance: () => chartInstance.value,
+  setViewMode: onViewModeChange
+});
+</script>
+
+<template>
+  <div class="yoy-mom-chart">
+    <!-- Header with title and view mode toggle -->
+    <div v-if="title || showViewToggle" class="chart-header">
+      <h3 v-if="title">{{ title }}</h3>
+      <el-radio-group
+        v-if="showViewToggle"
+        v-model="viewMode"
+        size="small"
+        @change="onViewModeChange"
+      >
+        <el-radio-button value="yoy">同比</el-radio-button>
+        <el-radio-button value="mom">环比</el-radio-button>
+        <el-radio-button value="both">综合</el-radio-button>
+      </el-radio-group>
+    </div>
+
+    <!-- KPI Cards Row -->
+    <div class="kpi-cards-row">
+      <!-- Last Year Cumulative -->
+      <div class="kpi-card">
+        <div class="kpi-title">上年累计</div>
+        <div class="kpi-value">
+          {{ formatNumber(kpiData.lastYearCumulative) }}
+          <span class="kpi-unit">{{ unit }}</span>
+        </div>
+      </div>
+
+      <!-- Current Year Cumulative -->
+      <div class="kpi-card highlight">
+        <div class="kpi-title">本年累计</div>
+        <div class="kpi-value primary">
+          {{ formatNumber(kpiData.currentYearCumulative) }}
+          <span class="kpi-unit">{{ unit }}</span>
+        </div>
+      </div>
+
+      <!-- YoY Growth Amount -->
+      <div class="kpi-card">
+        <div class="kpi-title">同比增长额</div>
+        <div
+          class="kpi-value"
+          :class="{
+            positive: kpiData.yoyGrowthAmount > 0,
+            negative: kpiData.yoyGrowthAmount < 0
+          }"
+        >
+          <span class="trend-arrow">
+            <template v-if="kpiData.yoyGrowthAmount > 0">&#8593;</template>
+            <template v-else-if="kpiData.yoyGrowthAmount < 0">&#8595;</template>
+            <template v-else>&#8594;</template>
+          </span>
+          {{ kpiData.yoyGrowthAmount > 0 ? '+' : '' }}{{ formatNumber(kpiData.yoyGrowthAmount) }}
+          <span class="kpi-unit">{{ unit }}</span>
+        </div>
+      </div>
+
+      <!-- YoY Growth Rate -->
+      <div class="kpi-card">
+        <div class="kpi-title">同比增长率</div>
+        <div
+          class="kpi-value"
+          :class="{
+            positive: kpiData.yoyGrowthRate > 0,
+            negative: kpiData.yoyGrowthRate < 0
+          }"
+        >
+          <span class="trend-arrow">
+            <template v-if="kpiData.yoyGrowthRate > 0">&#8593;</template>
+            <template v-else-if="kpiData.yoyGrowthRate < 0">&#8595;</template>
+            <template v-else>&#8594;</template>
+          </span>
+          {{ kpiData.yoyGrowthRate > 0 ? '+' : '' }}{{ kpiData.yoyGrowthRate.toFixed(1) }}
+          <span class="kpi-unit">%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div ref="chartRef" role="img" :aria-label="title || '同比环比对比图'" :style="{ width: '100%', height: height + 'px' }"></div>
+
+    <!-- Monthly Data Compact Table -->
+    <div v-if="data && data.length > 0" class="monthly-data-table">
+      <div class="mdt-scroll">
+        <table class="mdt-table">
+          <thead>
+            <tr>
+              <td class="mdt-row-label"></td>
+              <th v-for="item in data" :key="item.period" class="mdt-col-header">{{ item.period }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="mdt-row-lastyear">
+              <td class="mdt-row-label">上年值</td>
+              <td v-for="item in data" :key="item.period" class="mdt-cell">
+                {{ formatNumber(item.lastYearSame, 0) }}
+              </td>
+            </tr>
+            <tr class="mdt-row-current">
+              <td class="mdt-row-label">本年值</td>
+              <td v-for="item in data" :key="item.period" class="mdt-cell">
+                <span style="font-weight: 600; color: #2D8B57;">{{ formatNumber(item.current, 0) }}</span>
+              </td>
+            </tr>
+            <tr class="mdt-row-yoy">
+              <td class="mdt-row-label">同比率</td>
+              <td v-for="item in data" :key="item.period" class="mdt-cell">
+                <span
+                  :style="{
+                    color: item.yoyGrowth > 0 ? '#67c23a' : item.yoyGrowth < 0 ? '#f56c6c' : '#909399',
+                    fontWeight: '600'
+                  }"
+                >
+                  {{ item.yoyGrowth > 0 ? '+' : '' }}{{ item.yoyGrowth.toFixed(1) }}%
+                </span>
+              </td>
+            </tr>
+            <tr v-if="data.some(d => d.momGrowth !== undefined)" class="mdt-row-mom">
+              <td class="mdt-row-label">环比率</td>
+              <td v-for="item in data" :key="item.period" class="mdt-cell">
+                <span
+                  v-if="item.momGrowth !== undefined"
+                  :style="{
+                    color: item.momGrowth > 0 ? '#67c23a' : item.momGrowth < 0 ? '#f56c6c' : '#909399'
+                  }"
+                >
+                  {{ item.momGrowth > 0 ? '+' : '' }}{{ item.momGrowth.toFixed(1) }}%
+                </span>
+                <span v-else style="color: #c0c4cc;">-</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.yoy-mom-chart {
+  width: 100%;
+
+  .chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+    padding: 0 4px;
+
+    h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 600;
+      color: #303133;
+    }
+  }
+
+  .kpi-cards-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 20px;
+
+    .kpi-card {
+      padding: 16px;
+      background: #f8f9fa;
+      border-radius: 8px;
+      border: 1px solid #ebeef5;
+      transition: all 0.2s ease;
+
+      &.highlight {
+        background: linear-gradient(135deg, #e8f5e9 0%, #f0f9eb 100%);
+        border-color: #A9D18E;
+      }
+
+      &:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      }
+
+      .kpi-title {
+        font-size: 12px;
+        color: #909399;
+        margin-bottom: 8px;
+        font-weight: 500;
+      }
+
+      .kpi-value {
+        font-size: 24px;
+        font-weight: 700;
+        color: #303133;
+        display: flex;
+        align-items: baseline;
+        gap: 4px;
+
+        &.primary {
+          color: #2D8B57;
+        }
+
+        &.positive {
+          color: #67c23a;
+        }
+
+        &.negative {
+          color: #f56c6c;
+        }
+
+        .trend-arrow {
+          font-size: 18px;
+          font-weight: bold;
+          margin-right: 2px;
+        }
+
+        .kpi-unit {
+          font-size: 12px;
+          font-weight: 400;
+          color: #909399;
+          margin-left: 2px;
+        }
+      }
+    }
+  }
+}
+
+.yoy-mom-chart {
+  .monthly-data-table {
+    margin-top: 16px;
+    padding: 12px 0;
+    border-top: 1px solid #ebeef5;
+
+    .mdt-scroll {
+      overflow-x: auto;
+    }
+
+    .mdt-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 11px;
+      min-width: 480px;
+
+      th, td {
+        padding: 5px 8px;
+        text-align: center;
+        white-space: nowrap;
+      }
+
+      .mdt-col-header {
+        color: #606266;
+        font-weight: 600;
+        background: #f8f9fa;
+        border-bottom: 1px solid #ebeef5;
+      }
+
+      .mdt-row-label {
+        color: #909399;
+        font-weight: 500;
+        text-align: left;
+        white-space: nowrap;
+        padding-left: 0;
+        min-width: 52px;
+      }
+
+      .mdt-cell {
+        color: #303133;
+        border-bottom: 1px solid #f2f3f5;
+      }
+
+      .mdt-row-current .mdt-cell {
+        background: rgba(45, 139, 87, 0.03);
+      }
+
+      .mdt-row-yoy .mdt-cell,
+      .mdt-row-mom .mdt-cell {
+        background: rgba(230, 162, 60, 0.03);
+      }
+    }
+  }
+}
+
+// Responsive adjustments
+@media (max-width: 1200px) {
+  .yoy-mom-chart {
+    .kpi-cards-row {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+}
+
+@media (max-width: 768px) {
+  .yoy-mom-chart {
+    .kpi-cards-row {
+      grid-template-columns: 1fr;
+    }
+
+    .chart-header {
+      flex-direction: column;
+      gap: 12px;
+      align-items: flex-start;
+    }
+  }
+}
+</style>

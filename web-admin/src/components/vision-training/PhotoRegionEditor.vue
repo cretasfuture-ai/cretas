@@ -185,7 +185,7 @@ watch(() => props.boxes.length, length => { if (selectedIndex.value >= length) s
 .region-stage svg:focus-visible { outline: 2px solid #1b65a8; outline-offset: -2px; }.region-stage.disabled svg { cursor: default; }
 .region-box { fill: rgba(0, 167, 196, .20); stroke: #008a9f; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .region-box.selected { fill: rgba(255, 210, 63, .22); stroke: #a36a00; stroke-dasharray: 7 4; }
-.region-box.drawing { fill: rgba(64, 158, 255, .18); stroke: #409eff; }
+.region-box.drawing { fill: rgba(64, 158, 255, .18); stroke: var(--cs-primary); }
 .region-empty { min-height: 260px; display: grid; place-items: center; color: #7a8599; }
 .region-help { margin: 0; color: #7a8599; font-size: 13px; line-height: 1.6; }
 .region-list { display: flex; gap: 8px; flex-wrap: wrap; max-height: 160px; overflow: auto; }
