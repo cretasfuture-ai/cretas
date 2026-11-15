@@ -20,5 +20,11 @@ public interface ArPostingPendingRepository extends JpaRepository<ArPostingPendi
     Page<ArPostingPending> findByFactoryIdAndStatusOrderByCreatedAtDesc(
             String factoryId, ArPostingPendingStatus status, Pageable pageable);
 
+    Page<ArPostingPending> findByFactoryIdAndOwnerIdInOrderByCreatedAtDesc(
+            String factoryId, java.util.Collection<Long> ownerIds, Pageable pageable);
+
+    Page<ArPostingPending> findByFactoryIdAndStatusAndOwnerIdInOrderByCreatedAtDesc(
+            String factoryId, ArPostingPendingStatus status, java.util.Collection<Long> ownerIds, Pageable pageable);
+
     long countByFactoryIdAndStatus(String factoryId, ArPostingPendingStatus status);
 }

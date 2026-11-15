@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS ar_posting_pending (
     failure_reason   VARCHAR(1000) NOT NULL,
     status           VARCHAR(16)   NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'RESOLVED')),
     operated_by      BIGINT,
+    owner_id         BIGINT,
     resolved_at      TIMESTAMP,
     resolved_by      BIGINT,
     created_at       TIMESTAMP     NOT NULL DEFAULT NOW(),

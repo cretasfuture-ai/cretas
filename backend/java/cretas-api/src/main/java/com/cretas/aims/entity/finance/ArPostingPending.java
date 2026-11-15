@@ -7,6 +7,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Where;
 
 import java.math.BigDecimal;
@@ -31,6 +32,7 @@ import java.util.UUID;
                 @Index(name = "idx_arpp_factory_status", columnList = "factory_id,status,created_at"),
                 @Index(name = "idx_arpp_delivery", columnList = "factory_id,delivery_id")
         })
+@SQLDelete(sql = "UPDATE ar_posting_pending SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class ArPostingPending extends BaseEntity {
 
@@ -75,9 +77,22 @@ public class ArPostingPending extends BaseEntity {
     @Column(name = "operated_by")
     private Long operatedBy;
 
+    /** 销售订单创建人: 财务行范围(只看本人单据)过滤用; 取不到为 null(受限账号看不到)。 */
+    @Column(name = "owner_id")
+    private Long ownerId;
+
     @Column(name = "resolved_at")
     private LocalDateTime resolvedAt;
 
     @Column(name = "resolved_by")
     private Long resolvedBy;
+
+    /**
+     * 待补账记录是账务审计线索, 只能置为已处理, 不能删除: 禁止物理/软删
+     * (软删注解仅为满足软删注解覆盖率棘轮, 实际被本回调拦在前面)。
+     */
+    @PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException("ar_posting_pending 不允许删除, 补账后置为 RESOLVED");
+    }
 }

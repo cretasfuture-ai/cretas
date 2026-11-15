@@ -6,6 +6,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.entity.finance.ArPostingPending;
 import com.cretas.aims.entity.finance.ArPostingPendingStatus;
+import com.cretas.aims.security.RowScopeSupported;
 import com.cretas.aims.service.finance.ArPostingPendingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -20,6 +21,7 @@ import org.springframework.web.bind.annotation.*;
 @RequiredArgsConstructor
 @Tag(name = "待补账记录", description = "发货成功但应收自动挂账失败的记录(只读)")
 @RequirePermission({"finance:read_write", "finance:read"})
+@RowScopeSupported
 public class ArPostingPendingController {
 
     private final ArPostingPendingService service;

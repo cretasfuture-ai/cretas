@@ -3754,11 +3754,16 @@ public class SalesServiceImpl implements SalesService {
 
         // 自动创建应收账款（销售发货 → AR_INVOICE）
         if (record.getSalesOrderId() != null) {
+            final SalesDeliveryRecord shipped = record;
             BigDecimal postedShippedValue = null;
             String receivableCustomerId = null;
+            Long receivableOwnerId = null;
+            RuntimeException prepFailure = null;
+            java.util.function.Supplier<ArApTransaction> poster = null;
             try {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
                 receivableCustomerId = order != null ? order.getCustomerId() : null;
+                receivableOwnerId = order != null ? order.getCreatedBy() : null;
                 if (order != null && order.getCustomerId() != null) {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
@@ -3822,30 +3827,42 @@ public class SalesServiceImpl implements SalesService {
                         //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
                         BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
                         postedShippedValue = shippedValue;
-                        ArApTransaction ar = arApService.recordReceivableIfAbsent(
-                                factoryId, order.getCustomerId(), order.getId(),
-                                SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId(),
-                                shippedValue, LocalDate.now().plusDays(30), userId,
-                                "销售发货自动挂账-" + record.getDeliveryNumber());
-                        if (ar != null) {
-                            log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
-                                    order.getId(), record.getId(), shippedValue,
-                                    record.getTotalAmount(), order.getPayableAmount(), ar.getId());
-                        }
+                        final SalesOrder postOrder = order;
+                        final BigDecimal postValue = shippedValue;
+                        poster = () -> {
+                            ArApTransaction ar = arApService.recordReceivableIfAbsent(
+                                    factoryId, postOrder.getCustomerId(), postOrder.getId(),
+                                    SOURCE_DOC_TYPE_SALES_DELIVERY, shipped.getId(),
+                                    postValue, LocalDate.now().plusDays(30), userId,
+                                    "销售发货自动挂账-" + shipped.getDeliveryNumber());
+                            if (ar != null) {
+                                log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
+                                        postOrder.getId(), shipped.getId(), postValue,
+                                        shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
+                            }
+                            return ar;
+                        };
                     }
                 }
             } catch (RuntimeException e) {
-                // D-S3 (Steve 2026-11-15): 发货已成功, 挂账失败不回滚发货, 也不能静默。
-                // 先分清「已挂过(幂等/并发)」与「真正失败」: 前者不是失败, 不产生待补账。
-                if (receivablePendingService != null
-                        && receivablePendingService.receivableAlreadyPosted(
-                                factoryId, SOURCE_DOC_TYPE_SALES_DELIVERY, record.getId())) {
-                    log.info("应收自动挂账幂等命中(异常后复查已存在, 不算失败): deliveryId={}", deliveryId);
-                } else if (receivablePendingService != null) {
-                    receivablePendingService.recordFailure(factoryId, record.getId(), record.getDeliveryNumber(),
-                            record.getSalesOrderId(), receivableCustomerId, postedShippedValue, userId, e);
+                prepFailure = e; // 算金额/查订单阶段的失败也要落待补账, 不能静默
+            }
+            // D-S3 (Steve 2026-11-15): 发货已成功, 挂账失败不回滚发货, 也不能静默。
+            // 挂账放到发货事务【提交之后】的独立事务里做: 挂账的任何失败(含 DB 异常/PG 事务 aborted)
+            // 都碰不到发货事务, 挂账里 lockFactory 也不会与发货事务自锁; 失败写待补账并告警。
+            if (poster != null || prepFailure != null) {
+                if (receivablePendingService != null) {
+                    receivablePendingService.postAfterShipCommit(factoryId, shipped.getId(),
+                            shipped.getDeliveryNumber(), shipped.getSalesOrderId(), receivableCustomerId,
+                            receivableOwnerId, postedShippedValue, userId, prepFailure, poster);
+                } else if (prepFailure != null) {
+                    log.error("应收自动挂账准备阶段失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, prepFailure);
                 } else {
-                    log.error("应收自动挂账失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, e);
+                    try {
+                        poster.get();
+                    } catch (RuntimeException e) {
+                        log.error("应收自动挂账失败且无待补账服务(仅 legacy 单测上下文): deliveryId={}", deliveryId, e);
+                    }
                 }
             }
         }

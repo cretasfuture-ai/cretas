@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
@@ -64,12 +65,13 @@ import static org.mockito.Mockito.when;
  *
  * <p>三层断言:
  * <ol>
- *   <li>事务层: 挂账抛异常<b>穿过 {@code @Transactional} 代理</b>后, 外层(发货)事务仍能提交, 待补账行落库;
- *       recordReceivableIfAbsent 去掉 noRollbackFor 时这里提交即 UnexpectedRollbackException;</li>
- *   <li>shipDelivery 层: 挂账抛 BusinessException → 发货仍成功 + 待补账落库 + 告警触发;
- *       幂等命中(返回既有 / 异常后复查已存在)不产生待补账;</li>
- *   <li>租户: 列表只见本厂。</li>
+ *   <li>事务层(真事务管理器 + 真实 {@code ArApServiceImpl} 代理): 挂账抛 BusinessException / 非 Business 的
+ *       运行时异常(ArithmeticException)后, 发货事务照常提交, 发货侧写入保留, 待补账行落库, 挂账晚于发货提交;</li>
+ *   <li>shipDelivery 层(发货放在真事务里调用, 挂账走 afterCommit): 挂账失败 → 发货 SHIPPED + 待补账 + 告警;
+ *       挂账返回既有记录(幂等)→ 无待补账; 异常后复查已存在(并发已挂)→ 无待补账;</li>
+ *   <li>租户 / 行范围: 列表只见本厂, 行范围受限账号只见本人订单的待补账; 待补账记录不可删除。</li>
  * </ol>
+ * 说明: H2 无法复现 PG「语句失败后事务 aborted」, 该场景由「挂账在独立事务」的结构保证, 未在真 PG 上验证。
  */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -88,6 +90,7 @@ class ArPostingPendingContractTest {
 
     @Autowired ArPostingPendingService service;
     @Autowired ArPostingPendingRepository pendingRepo;
+    @Autowired org.springframework.jdbc.core.JdbcTemplate jdbc;
     @Autowired ArApTransactionRepository arRepo;
     @Autowired ArApService realArApService;
     @MockBean FinanceRowScopeQuery rowScope;
@@ -100,46 +103,117 @@ class ArPostingPendingContractTest {
     @BeforeEach
     @AfterEach
     void clean() {
-        pendingRepo.deleteAll();
+        jdbc.execute("DELETE FROM ar_posting_pending"); // 实体禁止删除, 测试清理走 SQL
         arRepo.deleteAll();
+        // Mockito 对 List 返回值默认给空表 = 「无可见行」; 默认应为不受限(null)
+        org.mockito.Mockito.reset(rowScope);
+        when(rowScope.creators(any())).thenReturn(null);
     }
 
     @Test
-    @DisplayName("事务层: 真实 ArApServiceImpl 的 BusinessException 穿过 @Transactional 代理后, 发货事务仍可提交, 发货侧写入保留, 待补账落库")
-    void failureThroughTransactionalProxyDoesNotDoomShipTransaction() {
-        TransactionTemplate ship = new TransactionTemplate(tm);
-        ship.executeWithoutResult(s -> {
-            // 代表「发货已完成的写入」
-            ArPostingPending shipped = new ArPostingPending();
-            shipped.setFactoryId(F);
-            shipped.setDeliveryId("SHIP-MARKER");
-            shipped.setFailureReason("marker");
-            shipped.setStatus(ArPostingPendingStatus.RESOLVED);
-            pendingRepo.save(shipped);
+    @DisplayName("事务层: 真实 ArApServiceImpl 抛 BusinessException 或 ArithmeticException 后, 发货事务仍可提交, 待补账落库, 挂账晚于发货提交")
+    void anyPostingFailureLeavesShipTransactionAlone() {
+        RuntimeException[] failures = {
+                new BusinessException(403, "无权访问该销售订单的应收"),
+                new ArithmeticException("Rounding necessary")   // 审查点名的: 非 BusinessException 的运行时异常
+        };
+        for (RuntimeException failure : failures) {
+            clean();
+            List<String> order = new ArrayList<>();
+            org.mockito.Mockito.doThrow(failure).when(rowScope).requireSalesOrderOwner(F, ORDER_ID);
 
-            // 真实 ArApServiceImpl(真 @Transactional 代理): requireSalesOrderOwner 抛 BusinessException 穿过代理
-            org.mockito.Mockito.doThrow(new BusinessException(403, "无权访问该销售订单的应收"))
-                    .when(rowScope).requireSalesOrderOwner(F, ORDER_ID);
-            try {
-                realArApService.recordReceivableIfAbsent(F, "CUST-1", ORDER_ID, "SALES_DELIVERY", DELIVERY_ID,
-                        new BigDecimal("113.00"), LocalDate.now(), 7L, "t");
-                throw new AssertionError("应抛 BusinessException");
-            } catch (BusinessException e) {
-                service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1",
-                        new BigDecimal("113.00"), 7L, e);
-            }
-        }); // 提交; 被 doom 则此处抛 UnexpectedRollbackException
+            new TransactionTemplate(tm).executeWithoutResult(s -> {
+                ArPostingPending marker = new ArPostingPending();   // 代表「发货已完成的写入」
+                marker.setFactoryId(F);
+                marker.setDeliveryId("SHIP-MARKER");
+                marker.setFailureReason("marker");
+                marker.setStatus(ArPostingPendingStatus.RESOLVED);
+                pendingRepo.save(marker);
 
-        assertThat(pendingRepo.findAll().stream().map(ArPostingPending::getDeliveryId))
-                .contains("SHIP-MARKER", DELIVERY_ID);
-        ArPostingPending row = pendingRepo
-                .findFirstByFactoryIdAndDeliveryIdAndStatus(F, DELIVERY_ID, ArPostingPendingStatus.PENDING)
-                .orElseThrow();
-        assertThat(row.getFactoryId()).isEqualTo(F);
-        assertThat(row.getSalesOrderId()).isEqualTo(ORDER_ID);
-        assertThat(row.getAmount()).isEqualByComparingTo("113.00");
-        assertThat(row.getFailureReason()).contains("无权访问该销售订单的应收");
-        assertThat(row.getCreatedAt()).isNotNull();
+                service.postAfterShipCommit(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                        new BigDecimal("113.00"), 7L, null,
+                        () -> {
+                            order.add("posted");
+                            return realArApService.recordReceivableIfAbsent(F, "CUST-1", ORDER_ID,
+                                    "SALES_DELIVERY", DELIVERY_ID, new BigDecimal("113.00"),
+                                    LocalDate.now(), 7L, "t");
+                        });
+                order.add("ship-body-done");
+            }); // 发货事务提交; 若挂账在发货事务内抛异常穿过代理, 这里会是 UnexpectedRollbackException
+
+            assertThat(order).as(failure.getClass().getSimpleName() + ": 挂账必须晚于发货事务体").containsExactly("ship-body-done", "posted");
+            assertThat(pendingRepo.findAll().stream().map(ArPostingPending::getDeliveryId))
+                    .as("发货侧写入保留 + 待补账落库").contains("SHIP-MARKER", DELIVERY_ID);
+            ArPostingPending row = pendingRepo
+                    .findFirstByFactoryIdAndDeliveryIdAndStatus(F, DELIVERY_ID, ArPostingPendingStatus.PENDING)
+                    .orElseThrow();
+            assertThat(row.getFailureReason()).contains(failure.getClass().getSimpleName());
+            assertThat(row.getOwnerId()).isEqualTo(5L);
+            assertThat(row.getAmount()).isEqualByComparingTo("113.00");
+            assertThat(row.getCreatedAt()).isNotNull();
+            verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
+            org.mockito.Mockito.reset(notificationService);
+        }
+    }
+
+    @Test
+    @DisplayName("成功路径: 发货提交后挂账的写入必须真正落库(挂账不在独立事务里就会写进已完成的发货事务而丢失), 且不产生待补账")
+    void postingAfterShipCommitIsActuallyCommitted() {
+        new TransactionTemplate(tm).executeWithoutResult(s ->
+                service.postAfterShipCommit(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                        new BigDecimal("113.00"), 7L, null, () -> {
+                            ArApTransaction ar = new ArApTransaction();
+                            ar.setFactoryId(F);
+                            ar.setTransactionNumber("AR-OK-1");
+                            ar.setTransactionType(ArApTransactionType.AR_INVOICE);
+                            ar.setCounterpartyType(CounterpartyType.CUSTOMER);
+                            ar.setCounterpartyId("CUST-1");
+                            ar.setSourceType("SALES_DELIVERY");
+                            ar.setSourceId(DELIVERY_ID);
+                            ar.setAmount(new BigDecimal("113.00"));
+                            ar.setBalanceAfter(new BigDecimal("113.00"));
+                            ar.setTransactionDate(LocalDate.now());
+                            return arRepo.save(ar);
+                        }));
+
+        assertThat(service.receivableAlreadyPosted(F, "SALES_DELIVERY", DELIVERY_ID))
+                .as("发货事务提交后, 挂账行必须已提交可见").isTrue();
+        assertThat(pendingRepo.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("告警自己抛异常不影响待补账记录; 待补账记录不可删除")
+    void alertFailureDoesNotLoseRecordAndRecordCannotBeDeleted() {
+        org.mockito.Mockito.doThrow(new RuntimeException("通知通道挂了"))
+                .when(notificationService).notifyRole(anyString(), anyString(), anyString(), anyString());
+        ArPostingPending row = service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "C", 5L,
+                new BigDecimal("1.00"), 1L, new RuntimeException("x"));
+        assertThat(pendingRepo.findById(row.getId())).isPresent();
+
+        assertThatThrownBy(() -> {
+            pendingRepo.delete(pendingRepo.findById(row.getId()).orElseThrow());
+            pendingRepo.flush();
+        }).isInstanceOf(UnsupportedOperationException.class);
+        assertThat(pendingRepo.findById(row.getId())).isPresent();
+    }
+
+    @Test
+    @DisplayName("行范围: 受限账号只看本人订单的待补账; 范围为空什么都看不到; 不受限看全厂(仍按工厂隔离)")
+    void listHonorsFinanceRowScope() {
+        service.recordFailure(F, "D-1", "DN-1", "SO-1", "C", 5L, new BigDecimal("1.00"), 1L, new RuntimeException("a"));
+        service.recordFailure(F, "D-2", "DN-2", "SO-2", "C", 6L, new BigDecimal("2.00"), 1L, new RuntimeException("b"));
+        service.recordFailure(F, "D-3", "DN-3", "SO-3", "C", null, new BigDecimal("3.00"), 1L, new RuntimeException("c"));
+        service.recordFailure(F_OTHER, "D-9", "DN-9", "SO-9", "C", 5L, new BigDecimal("9.00"), 1L, new RuntimeException("z"));
+
+        assertThat(service.list(F, null, 1, 20).getTotalElements()).isEqualTo(3);
+
+        when(rowScope.creators(F)).thenReturn(List.of(5L));
+        var scoped = service.list(F, null, 1, 20);
+        assertThat(scoped.getContent()).extracting(ArPostingPending::getDeliveryId).containsExactly("D-1");
+        assertThat(service.list(F, ArPostingPendingStatus.PENDING, 1, 20).getTotalElements()).isEqualTo(1);
+
+        when(rowScope.creators(F)).thenReturn(List.of());
+        assertThat(service.list(F, null, 1, 20).getTotalElements()).isZero();
     }
 
     @Test
@@ -150,7 +224,7 @@ class ArPostingPendingContractTest {
                 .thenThrow(new BusinessException(403, "无权访问该销售订单的应收"));
         SalesServiceImpl sales = salesService(arApService);
 
-        SalesDeliveryRecord shipped = sales.shipDelivery(F, DELIVERY_ID, 7L);
+        SalesDeliveryRecord shipped = shipInTx(sales);
 
         assertThat(shipped.getStatus()).as("发货必须成功, 不回滚").isEqualTo(SalesDeliveryStatus.SHIPPED);
         List<ArPostingPending> rows = pendingRepo.findAll();
@@ -164,14 +238,14 @@ class ArPostingPendingContractTest {
     }
 
     @Test
-    @DisplayName("shipDelivery: 幂等命中(挂账返回既有记录)不产生待补账、不告警")
+    @DisplayName("阴性对照: 挂账返回既有记录(幂等命中, 不抛)不产生待补账、不告警 —— 不经过失败分支, 失败分支里的幂等复查由「并发已挂」用例守")
     void idempotentHitCreatesNoPending() {
         com.cretas.aims.service.finance.ArApService arApService = mock(com.cretas.aims.service.finance.ArApService.class);
         when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(new ArApTransaction());
         SalesServiceImpl sales = salesService(arApService);
 
-        sales.shipDelivery(F, DELIVERY_ID, 7L);
+        shipInTx(sales);
 
         assertThat(pendingRepo.findAll()).isEmpty();
         verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
@@ -198,7 +272,7 @@ class ArPostingPendingContractTest {
                 .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uk_aat_ar_invoice_per_shipment"));
         SalesServiceImpl sales = salesService(arApService);
 
-        SalesDeliveryRecord shipped = sales.shipDelivery(F, DELIVERY_ID, 7L);
+        SalesDeliveryRecord shipped = shipInTx(sales);
 
         assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
         assertThat(pendingRepo.findAll()).isEmpty();
@@ -208,9 +282,9 @@ class ArPostingPendingContractTest {
     @Test
     @DisplayName("同一发运单重复失败不堆叠; 列表按工厂隔离并可按状态筛选")
     void dedupeAndTenantScopedListing() {
-        service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "C", new BigDecimal("1.00"), 1L, new RuntimeException("a"));
-        service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "C", new BigDecimal("2.00"), 1L, new RuntimeException("b"));
-        service.recordFailure(F_OTHER, DELIVERY_ID, "DN-X", "SO-X", "C", new BigDecimal("3.00"), 1L, new RuntimeException("c"));
+        service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "C", 5L, new BigDecimal("1.00"), 1L, new RuntimeException("a"));
+        service.recordFailure(F, DELIVERY_ID, "DN-1", ORDER_ID, "C", 5L, new BigDecimal("2.00"), 1L, new RuntimeException("b"));
+        service.recordFailure(F_OTHER, DELIVERY_ID, "DN-X", "SO-X", "C", 5L, new BigDecimal("3.00"), 1L, new RuntimeException("c"));
 
         assertThat(pendingRepo.count()).isEqualTo(2);
         var mine = service.list(F, null, 1, 20);
@@ -222,6 +296,11 @@ class ArPostingPendingContractTest {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    /** 发货放进真事务调用: 挂账走 afterCommit(与生产一致), 而不是单测里的直调分支。 */
+    private SalesDeliveryRecord shipInTx(SalesServiceImpl sales) {
+        return new TransactionTemplate(tm).execute(st -> sales.shipDelivery(F, DELIVERY_ID, 7L));
+    }
 
     private SalesServiceImpl salesService(com.cretas.aims.service.finance.ArApService arApService) {
         SalesOrderRepository orderRepo = Mockito.mock(SalesOrderRepository.class);
