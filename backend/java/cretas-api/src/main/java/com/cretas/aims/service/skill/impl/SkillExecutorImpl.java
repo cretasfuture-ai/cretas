@@ -1770,6 +1770,24 @@ public class SkillExecutorImpl implements SkillExecutor {
                 .build();
     }
 
+    /** Same preflight as step 2a of {@link #execute}; exposed so clarification choices never offer a Skill it would refuse. */
+    @Override
+    public Optional<String> permissionRefusal(SkillDefinition skill, SkillContext context) {
+        if (skill == null || context == null) {
+            return Optional.of("权限预检不可用");
+        }
+        try {
+            Preflight preflight = permissionPreflight(skill, context);
+            if (preflight.unavailable()) {
+                return Optional.of("权限预检不可用");
+            }
+            return preflight.denied().isEmpty() ? Optional.empty()
+                    : Optional.of("denied tools: " + preflight.denied());
+        } catch (RuntimeException e) {
+            return Optional.of("权限预检失败");
+        }
+    }
+
     /** Result of the permission preflight: tools checked, tools denied, or the check unavailable. */
     private record Preflight(int checked, List<String> denied, boolean unavailable) {
     }

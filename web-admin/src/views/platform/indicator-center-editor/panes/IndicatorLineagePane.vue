@@ -63,6 +63,7 @@
 </template>
 
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 import { computed, onMounted, ref, watch } from 'vue'
 import { VueFlow, type Node, type Edge } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -91,7 +92,7 @@ const currentLineage = ref<IndicatorLineage | null>(null)
 const tree = ref<IndicatorTreeFlow | null>(null)
 
 const categoryColor: Record<string, string> = {
-  FACTORY: '#409EFF',
+  FACTORY: CS_TOKENS.primary,
   RESTAURANT: '#E6A23C',
   QUALITY: '#67C23A',
   FINANCE: '#909399',

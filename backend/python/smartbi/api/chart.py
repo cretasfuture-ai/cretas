@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from common.responses import ApiException, ErrorCode
 
 from services.chart_builder import ChartBuilder, _sanitize_for_json
+from services.chart_unit_guard import mixed_unit_error
 from services.shared_pool import shared_executor
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,10 @@ async def build_chart(request: ChartBuildRequest):
     try:
         if not request.data:
             raise ApiException("Data is required", ErrorCode.VALIDATION_ERROR, 400)
+
+        unit_error = mixed_unit_error(request.data, request.yFields)
+        if unit_error:
+            return ChartBuildResponse(success=False, error=unit_error)
 
         result = chart_builder.build(
             chart_type=request.chartType,
@@ -167,8 +172,12 @@ async def batch_build(requests: List[ChartBuildRequest]):
     """
     try:
         loop = asyncio.get_event_loop()
-        tasks = [
-            loop.run_in_executor(_chart_executor, lambda req=req: chart_builder.build(
+
+        def _build_one(req: ChartBuildRequest):
+            unit_error = mixed_unit_error(req.data, req.yFields)
+            if unit_error:
+                return {"success": False, "error": unit_error}
+            return chart_builder.build(
                 chart_type=req.chartType,
                 data=req.data,
                 x_field=req.xField,
@@ -178,7 +187,10 @@ async def batch_build(requests: List[ChartBuildRequest]):
                 subtitle=req.subtitle,
                 theme=req.theme,
                 options=req.options
-            ))
+            )
+
+        tasks = [
+            loop.run_in_executor(_chart_executor, lambda req=req: _build_one(req))
             for req in requests
         ]
         results = await asyncio.gather(*tasks)

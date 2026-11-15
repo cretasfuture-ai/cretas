@@ -1,0 +1,46 @@
+{
+  "name": "cretas-five-page-interactive-samples",
+  "version": "5.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vue-tsc --noEmit && vite build",
+    "dev": "node server.mjs --dev",
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "^1.2.0",
+    "@nuxt/ui": "4.12.0",
+    "@vue-flow/background": "1.3.2",
+    "@vue-flow/controls": "1.1.3",
+    "@vue-flow/core": "1.48.2",
+    "echarts": "6.1.0",
+    "element-plus": "2.13.0",
+    "vue": "3.5.26",
+    "vue-router": "4.6.4",
+    "@element-plus/icons-vue": "^2.3.2",
+    "axios": "^1.13.2",
+    "dompurify": "^3.3.1",
+    "echarts-wordcloud": "^2.1.0",
+    "fflate": "^0.8.2",
+    "gsap": "^3.15.0",
+    "jspdf": "^4.1.0",
+    "marked": "^17.0.2",
+    "pinia": "^3.0.4",
+    "pinyin-pro": "^3.29.3",
+    "qrcode": "^1.5.4",
+    "sass": "^1.97.1",
+    "vue-echarts": "^8.0.1",
+    "vuedraggable": "^4.1.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "html2canvas": "^1.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.4",
+    "@vitejs/plugin-vue": "6.0.1",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vue-tsc": "3.1.4",
+    "@types/qrcode": "^1.5.6"
+  }
+}

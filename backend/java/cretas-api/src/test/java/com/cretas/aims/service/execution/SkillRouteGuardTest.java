@@ -391,7 +391,7 @@ class SkillRouteGuardTest {
             IntentPermissionGate permissionGate = mock(IntentPermissionGate.class);
             IntentAccessModeFilter accessModeFilter = mock(IntentAccessModeFilter.class);
             candidates = new ClarificationCandidateService(configService, permissionGate, accessModeFilter,
-                    writeGuard, frontline, toolRegistry);
+                    writeGuard, frontline, toolRegistry, chain);
 
             // 真 Skill 栈: 默认 Skill + classpath SKILL.md 全量 + 两个测试用无工具意图的 Skill
             registry = new SkillRegistryImpl(mock(SmartBiSkillRepository.class), new ObjectMapper());

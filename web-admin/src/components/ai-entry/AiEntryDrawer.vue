@@ -706,7 +706,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #2D8B57, #409EFF);
+  background: linear-gradient(90deg, #2D8B57, var(--cs-primary));
   border-radius: 2px;
   transition: width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
@@ -746,7 +746,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   width: 56px;
   height: 56px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   font-size: 24px;
   font-weight: 700;
@@ -808,7 +808,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   animation: fadeSlideIn 0.3s ease-out both;
 
   &.demo-user {
-    background: linear-gradient(135deg, #2D8B57, #409EFF);
+    background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
     color: #fff;
     align-self: flex-end;
     border-radius: 10px 10px 4px 10px;
@@ -857,7 +857,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
 .demo-form-btn {
   margin-top: 4px;
   padding: 6px 0;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   text-align: center;
   border-radius: 6px;
@@ -899,7 +899,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2D8B57, #409EFF);
+  background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
   color: #fff;
   font-size: 14px;
   font-weight: 700;
@@ -1275,7 +1275,7 @@ $ai-font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang
   transition: all 0.25s ease;
 
   &.active {
-    background: linear-gradient(135deg, #2D8B57, #409EFF);
+    background: linear-gradient(135deg, #2D8B57, var(--cs-primary));
     color: #fff;
     cursor: pointer;
     box-shadow: 0 2px 8px rgba(45, 139, 87, 0.25);

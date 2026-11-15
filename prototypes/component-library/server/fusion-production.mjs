@@ -1,0 +1,92 @@
+import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fusionWorkspace } from './fusion-data.mjs'
+import { getFusionSettlementPrefill } from './fusion-process-sheet.mjs'
+import { getFusionActiveWorkflow } from './fusion-workflow.mjs'
+const BASE='/api/mobile/F006/production-plans',clone=v=>structuredClone(v),finite=v=>v!==null&&v!==''&&Number.isFinite(Number(v)),closed=p=>['COMPLETED','CANCELLED','CLOSED'].includes(p.status)
+function value(w,p){return w.state.configs[p]??w.read('GET',p)?.body?.data}
+function product(w,id){const model=w.models.get('/api/mobile/F006/product-types');return model&&w.row(model,id)}
+function create(w,input,at){
+  input={...input,plannedQuantity:input.plannedQuantity??(input.sourceType==='SAFETY_STOCK'?0:null)}
+  const ids=input.targetFinishedGoodIds?.length?input.targetFinishedGoodIds:[input.productTypeId],products=ids.map(id=>product(w,id));if(!input.productTypeId||products.some(p=>!p))throw Error('请选择当前工厂存在的生产成品')
+  if(!input.plannedDate||!/^\d{4}-\d{2}-\d{2}$/.test(input.plannedDate))throw Error('请选择有效的计划生产日期')
+  if(!finite(input.plannedQuantity)||Number(input.plannedQuantity)<0||input.sourceType!=='SAFETY_STOCK'&&Number(input.plannedQuantity)<=0)throw Error('计划数量无效')
+  const owner=product(w,input.productTypeId),id=crypto.randomUUID(),name=products.map(p=>p.name||p.productName).join('、'),unit=input.plannedUnit||input.unit||owner?.unit||products[0]?.unit
+  const active=input.selectedWorkflowId?getFusionActiveWorkflow(path.join(w.root,'samples-v5'),w.session,ids[0],input.selectedWorkflowId):null;if(active)input={...input,selectedWorkflowRevisionId:active.definition.revisionId,selectedWorkflowRevisionHash:active.definition.revisionHash,selectedWorkflowVersion:active.definition.version,workflowOutputUnitsByProduct:Object.fromEntries(active.candidate.terminalOutputs.map(o=>[o.productTypeId,o.unit]))}
+  return {...clone(input),id,factoryId:'F006',planNumber:'PLAN-LOCAL-'+Date.now()+'-'+id.slice(0,8).toUpperCase(),productName:name,productTypeName:name,plannedUnit:unit,unit,quantityUnit:unit,targetFinishedGoodIds:ids,plannedQuantity:Number(input.plannedQuantity),actualQuantity:null,status:input.status==='DRAFT'?'DRAFT':'PENDING',statusDisplayName:input.status==='DRAFT'?'草稿':'待执行',createdAt:at,updatedAt:at,createdBy:1309,createdByName:'张六膳',isLocked:false,isUrgent:!!input.isUrgent,requiresApproval:false,prototypeLocalOnly:true}
+}
+function materializeBatch(w,plan,at){
+  const model=w.ensureModel('/api/mobile/F006/processing/batches'),old=w.rows(model).find(b=>b.productionPlanId===plan.id&&!['CANCELLED','COMPLETED'].includes(b.status));if(old)return old
+  const id=Date.now(),batch={id,factoryId:'F006',batchNumber:'PB-LOCAL-'+id,productionPlanId:plan.id,productTypeId:plan.productTypeId,productName:plan.productName,targetFinishedGoodIds:clone(plan.targetFinishedGoodIds||[]),selectedWorkflowId:plan.selectedWorkflowId,selectedWorkflowVersion:plan.selectedWorkflowVersion,plannedQuantity:plan.plannedQuantity,quantity:0,unit:plan.plannedUnit,actualQuantity:null,status:'IN_PROGRESS',startTime:at,createdAt:at,updatedAt:at,materialCost:null,laborCost:null,totalCost:null,costIncomplete:true,prototypeLocalOnly:true};w.set(model,id,batch);return batch
+}
+function postSettlement(w,plan,input,at,interim){
+  const original=getFusionSettlementPrefill(w,plan.id),prefill=original?.prefill;if(input.confirm&&(!prefill||!original.audit?.clean))throw Error('结单核对仍有未解决项，请补全实际报工与用料')
+  const facts=input.confirm?prefill:input,quantity=facts.actualFinishedQuantity,semi=Number(facts.actualSemiFinishedQuantity||0);if((!finite(quantity)||Number(quantity)<0)&&!facts.terminalOutputs?.length)throw Error('请填写真实成品产量');if(Number(quantity||0)===0&&semi===0&&!facts.terminalOutputs?.some(o=>Number(o.quantity)>0))throw Error('没有可入库的实际产出，不能结单')
+  const fingerprint=crypto.createHash('sha256').update(JSON.stringify(facts)).digest('hex'),fingerprintKey=BASE+'/'+plan.id+'/last-settlement-hash';if(interim&&w.state.configs[fingerprintKey]===fingerprint)return value(w,BASE+'/'+plan.id+'/settlement')
+  const materialModel=w.models.get('/api/mobile/F006/material-batches'),consumptions=facts.rawMaterialConsumptions||[],changes=[],contributions=[],totals=new Map();let materialCost=0,completeCost=true
+  for(const line of consumptions){if(!finite(line.quantity)||Number(line.quantity)<=0)throw Error('实际耗料必须为正数');const raw=materialModel&&w.row(materialModel,line.materialBatchId);if(!raw)throw Error('找不到本工厂的实际领料批次');if(line.unit&&raw.unit&&line.unit!==raw.unit)throw Error('领料单位与批次单位不一致，请核对换算');if(line.consumed!==true)totals.set(String(raw.id),(totals.get(String(raw.id))||0)+Number(line.quantity));const price=raw.unitPrice??raw.pricePerUnit??raw.purchasePrice,amount=finite(price)?Number(price)*Number(line.quantity):null;if(amount===null)completeCost=false;else materialCost+=amount;contributions.push({batchId:raw.id,batchName:raw.batchNumber,quantity:Number(line.quantity),unit:line.unit||raw.unit,unitPrice:price??null,cost:amount})}
+  for(const[id,total]of totals){const raw=w.row(materialModel,id),available=raw.remainingQuantity??raw.availableQuantity??raw.quantity;if(!finite(available)||Number(available)<total)throw Error((raw.batchNumber||raw.id)+' 库存不足，未扣料');changes.push([raw,{...raw,remainingQuantity:Number(available)-total,availableQuantity:Number(available)-total,updatedAt:at,prototypeLocalOnly:true}])}
+  // Validate every stock line before committing any state.
+  const outputs=facts.terminalOutputs?.length?facts.terminalOutputs.map(o=>({productTypeId:o.productTypeId,reportedBatchNumber:o.batchNumber||'FG-LOCAL-'+Date.now(),reportedQuantity:Number(o.quantity),quantityUnit:o.unit})):facts.outputLines?.length?facts.outputLines:[{productTypeId:plan.targetFinishedGoodIds?.[0]||plan.productTypeId,reportedBatchNumber:'FG-LOCAL-'+Date.now(),reportedQuantity:Number(quantity||0),quantityUnit:facts.quantityUnit||plan.plannedUnit}]
+  if(outputs.some(o=>!product(w,o.productTypeId)||!finite(o.reportedQuantity)||Number(o.reportedQuantity)<0||!o.quantityUnit))throw Error('请核对各产出的产品、实际数量与固定单位')
+  for(const [before,after]of changes)w.set(materialModel,before.id,after)
+  const settlementId=crypto.randomUUID(),settlement={settlementId,productionPlanId:plan.id,planNumber:plan.planNumber,status:interim?'INTERIM_POSTED':'PENDING_WAREHOUSE',postingStatus:'PENDING_WAREHOUSE',postingMessage:'本机生产核对已保存，等待仓库确认；未执行生产环境操作',plannedQuantity:plan.plannedQuantity,actualFinishedQuantity:finite(quantity)?Number(quantity):null,actualSemiFinishedQuantity:semi,quantityUnit:facts.quantityUnit||plan.plannedUnit,warehouseReceivedQuantity:0,outputLines:outputs.map(o=>({...o,status:'PENDING_WAREHOUSE',receivedQuantity:0})),rawMaterialConsumptions:clone(consumptions),laborSegments:clone(facts.laborSegments||[]),costContributions:contributions,materialCost:completeCost?materialCost:null,laborCost:null,totalCost:null,costIncomplete:true,createdAt:at,prototypeLocalOnly:true}
+  const rowPath=BASE+'/'+plan.id+'/process-sheet/rows',stored=w.state.configs[rowPath];if(Array.isArray(stored))w.state.configs[rowPath]=stored.map(row=>row.submissionStatus==='SUBMITTED'&&!row.interimSettledAt?{...row,inventoryConsumed:true,interimSettledAt:at,settlementId}:row)
+  const settlements=clone(value(w,BASE+'/'+plan.id+'/local-settlements')||[]);settlements.push(settlement);w.state.configs[BASE+'/'+plan.id+'/local-settlements']=settlements;w.state.configs[BASE+'/'+plan.id+'/settlement']=settlement;w.state.configs[fingerprintKey]=fingerprint;return settlement
+}
+function generateTransfer(w,plan,at){
+  const model=w.ensureModel('/api/mobile/F006/transfers');if(plan.preparationTransferId){const previous=w.row(model,plan.preparationTransferId);if(previous)return previous}
+  if(!(Number(plan.plannedQuantity)>0))throw Error('本计划未设置参考产量，请先填写计划数量，再按配方生成备料草稿。')
+  const targets=plan.targetFinishedGoodIds?.length?plan.targetFinishedGoodIds:[plan.productTypeId];if(targets.length!==1)throw Error('多产出计划需先确认每种成品的目标数量，请在配方与调拨明细中分别核对。')
+  const recipe=w.rows(w.models.get('/api/mobile/F006/bom/recipes')).find(r=>r.productTypeId===targets[0]&&r.status==='ACTIVE'&&r.isCurrent);if(!recipe)throw Error('未找到该成品的生效 BOM 配方，请先在工艺画布配置。')
+  if(recipe.outputUnit!==plan.plannedUnit||!(Number(recipe.outputQuantityPerUnit)>0))throw Error('BOM 配方单位与计划单位没有可用的换算依据，请先核对配方基准。')
+  const items=(recipe.items||[]).filter(item=>!item.deleted&&!item.deletedAt).map(item=>{const perUnit=item.actualQuantity??item.standardQuantity;if(!finite(perUnit)||Number(perUnit)<0||!item.materialTypeId||!item.unit)throw Error('BOM 存在缺少数量或单位的用料行，请先补齐配方。');const quantity=Number(perUnit)*Number(plan.plannedQuantity)/Number(recipe.outputQuantityPerUnit);return {...clone(item),id:crypto.randomUUID(),quantity,requestedQuantity:quantity,unit:item.unit,materialName:item.materialName,materialTypeId:item.materialTypeId,sourceRecipeId:recipe.id,sourceRecipeVersion:recipe.version,prototypeLocalOnly:true}})
+  if(!items.length)throw Error('BOM 未配置可计算的备料行，请先完善配方。')
+  const id=crypto.randomUUID(),transfer={id,factoryId:'F006',transferNumber:'TR-LOCAL-'+Date.now(),productionPlanId:plan.id,status:'DRAFT',notes:'按 '+plan.planNumber+' 的已配置配方建立；提交前请核对仓库和数量。',items,createdAt:at,updatedAt:at,prototypeLocalOnly:true};w.set(model,id,transfer);return transfer
+}
+export function handleFusionProduction({parent,role,session,method,target,body,headers,send,res}){
+  if(role!=='factory'||!target.startsWith(BASE))return false
+  if(method==='GET'){const p=new URL(target,'http://local').pathname,file=path.join(parent,'data/v3/test-state','factory-'+session+'.json');if(!fs.existsSync(file))return false;const stored=JSON.parse(fs.readFileSync(file));if(!Object.hasOwn(stored.configs||{},p))return false;send(res,200,{success:true,data:stored.configs[p],prototypeLocalOnly:true});return true}
+  const u=new URL(target,'http://local'),parts=u.pathname.slice(BASE.length).split('/').filter(Boolean),w=fusionWorkspace(parent,role,session),model=w.models.get(BASE),at=new Date().toISOString(),ok=(data,message='已保存到本机工作区')=>{send(res,200,{success:true,data,message,prototypeLocalOnly:true});return true},fail=(message,status=422,code='LOCAL_BUSINESS_VALIDATION')=>{send(res,status,{success:false,message,code,prototypeLocalOnly:true});return true}
+  if(!model)return false
+  if(method==='GET'){const p=u.pathname;if(Object.hasOwn(w.state.configs,p))return ok(w.state.configs[p]);return false}
+  let input;try{input=JSON.parse(body?.toString()||'{}')}catch{return false}
+  if(input.factoryId&&input.factoryId!=='F006')return fail('工厂范围不一致',403)
+  const key=headers?.['idempotency-key']||input.clientRequestId||input.idempotencyKey,idem=key?'__fusion-production/'+method+u.pathname+'/'+key:null
+  if(idem&&Object.hasOwn(w.state.configs,idem))return ok(w.state.configs[idem],'已回读相同操作的本机结果')
+  const save=(id,before,after,type='update',result=after)=>{w.set(model,id,after);if(idem)w.state.configs[idem]=clone(result);w.log({method,path:u.pathname,type,base:BASE,id,before,after,at});return ok(result)}
+  try{
+    if(method==='POST'&&(!parts.length||parts[0]==='draft')){const next=create(w,{...input,...(parts[0]==='draft'?{status:'DRAFT'}:{})},at);return save(next.id,null,next,'create')}
+    if(method==='POST'&&parts[0]==='batch-from-so'){
+      const orders=w.models.get('/api/mobile/F006/sales/orders'),ids=[input.sourceOrderId,...input.extraSourceOrderIds||[]],selected=[]
+      for(const id of ids){const order=orders&&w.row(orders,id);if(!order)throw Error('销售订单不存在');for(const item of order.items||[])if(id!==input.sourceOrderId||!input.itemIds?.length||input.itemIds.map(String).includes(String(item.id)))selected.push({order,item})}
+      if(!selected.length)throw Error('请选择销售订单产品行');const rows=selected.map(({order,item})=>create(w,{...input,productTypeId:item.productTypeId,targetFinishedGoodIds:[item.productTypeId],sourceType:'CUSTOMER_ORDER',sourceOrderId:order.id,sourceOrderItemId:item.id,sourceOrderIds:ids,plannedQuantity:item.remainingQuantity??item.quantity,plannedUnit:item.unit||item.quantityUnit,customerId:order.customerId},at));for(const row of rows)w.set(model,row.id,row);if(idem)w.state.configs[idem]=rows;w.log({method,path:u.pathname,type:'create',after:rows,at});return ok(rows)
+    }
+    const id=parts[0],action=parts.slice(1).join('/'),old=w.row(model,id);if(!old)return false
+    if(action==='schedule-meta'||action==='copy')return false
+    let next={...old,updatedAt:at,prototypeLocalOnly:true},result
+    if(method==='PUT'&&!action){if(!['DRAFT','PENDING','PLANNED','APPROVED'].includes(old.status))return fail('已经开工的计划请使用排产信息编辑',409);next={...next,...input,id:old.id,factoryId:'F006'};if(!finite(next.plannedQuantity)||Number(next.plannedQuantity)<0)throw Error('计划数量无效');return save(id,old,next)}
+    if(method==='DELETE'&&!action){if(!['DRAFT','PENDING','PLANNED'].includes(old.status))return fail('仅未开工计划可删除',409);w.set(model,id,old,true);w.log({method,path:u.pathname,type:'delete',id,before:old,after:null,at});return ok(null)}
+    if(method!=='POST'&&!(method==='PUT'&&action==='costs'))return false
+    if(action==='create-batch'||action==='batches'){if(closed(old))throw Error('已结束计划不能创建生产批次');const batch=materializeBatch(w,old,at);next.status='IN_PROGRESS';next.statusDisplayName='进行中';next.batchId=batch.id;next.batchNumber=batch.batchNumber;result=batch}
+    else if(action==='start'){if(!['PENDING','PLANNED','APPROVED'].includes(old.status))throw Error('当前计划不能开始生产');next.status='IN_PROGRESS';next.statusDisplayName='进行中';next.startTime=at}
+    else if(action==='pause'){if(old.status!=='IN_PROGRESS')throw Error('仅进行中计划可暂停');next.status='PAUSED';next.statusDisplayName='暂停'}
+    else if(action==='resume'){if(old.status!=='PAUSED')throw Error('仅暂停计划可恢复');next.status='IN_PROGRESS';next.statusDisplayName='进行中'}
+    else if(action==='lock'||action==='unlock'){next.isLocked=action==='lock';next.lockedAt=action==='lock'?at:null}
+    else if(action==='commit'){if(old.status!=='DRAFT')throw Error('仅草稿可提交');next.status='PENDING';next.statusDisplayName='待执行'}
+    else if(action==='cancel'){if(closed(old)||Number(old.actualQuantity)>0)throw Error('已结束或有实际产出的计划不能直接取消');next.status='CANCELLED';next.statusDisplayName='已取消';next.cancelReason=input.reason||u.searchParams.get('reason');if(!next.cancelReason)throw Error('请填写取消原因')}
+    else if(action==='settle'||action==='interim-settle'){if(!['IN_PROGRESS','PAUSED'].includes(old.status))throw Error('仅已开工计划可进行生产核对');const isInterim=action==='interim-settle';if(isInterim&&old.sourceType!=='SAFETY_STOCK')throw Error('生产小结仅适用于存货生产');result=postSettlement(w,old,isInterim?{confirm:true,...input}:input,at,isInterim);if(!isInterim){next.status='COMPLETED';next.statusDisplayName='已结单';next.endTime=at}next.actualQuantity=result.actualFinishedQuantity;next.settlementId=result.settlementId;next.prototypeSettlement=true}
+    else if(action==='stop-production'){if(old.sourceType!=='SAFETY_STOCK'||!['IN_PROGRESS','PAUSED'].includes(old.status))throw Error('仅进行中的存货生产计划可以停产关闭');const pre=value(w,BASE+'/'+id+'/settlement-prefill');if(pre?.audit?.issues?.some(i=>i.severity==='BLOCKER'))throw Error('存在未核对的生产记录，请先完成生产小结');next.status='COMPLETED';next.statusDisplayName='已结单';next.endTime=at}
+    else if(action==='repair-batch-date'){if(!/^\d{4}-\d{2}-\d{2}$/.test(input.batchDate||''))throw Error('批次日期无效');next.batchDate=input.batchDate}
+    else if(action==='costs'){for(const[k,v]of Object.entries(input)){if(v!=null&&(!finite(v)||Number(v)<0))throw Error('成本应为非负数');next[k]=v}}
+    else if(action==='warehouse-receipt'){
+      const settlement=clone(value(w,BASE+'/'+id+'/settlement'));if(!settlement?.settlementId)throw Error('请先进行生产核对');if(settlement.status==='WAREHOUSE_RECEIVED')return ok(settlement,'已回读入库结果');const lines=input.outputLines?.length?input.outputLines:settlement.outputLines.map(o=>({...o,receivedQuantity:input.receivedQuantity??o.reportedQuantity})),goods=w.ensureModel('/api/mobile/F006/sales/finished-goods');for(const line of lines){const expected=settlement.outputLines.find(o=>o.productTypeId===line.productTypeId);if(!expected||!finite(line.receivedQuantity)||Number(line.receivedQuantity)<0)throw Error('入库明细无效');if(Number(line.receivedQuantity)!==Number(expected.reportedQuantity)&&!input.varianceReason)throw Error('实际收货与报工数量不同，请填写差异原因')}
+      for(const line of lines){const itemId=crypto.randomUUID(),row={id:itemId,factoryId:'F006',productTypeId:line.productTypeId,batchNumber:line.batchNumber||line.reportedBatchNumber,producedQuantity:Number(line.receivedQuantity),availableQuantity:Number(line.receivedQuantity),shippedQuantity:0,unit:line.quantityUnit||settlement.quantityUnit,unitCost:null,totalCost:null,costIncomplete:true,createdAt:at,prototypeLocalOnly:true};w.set(goods,itemId,row)}settlement.status='WAREHOUSE_RECEIVED';settlement.postingStatus='POSTED';settlement.warehouseReceivedQuantity=lines.reduce((n,l)=>n+Number(l.receivedQuantity),0);settlement.outputLines=settlement.outputLines.map(o=>({...o,receivedQuantity:Number(lines.find(l=>l.productTypeId===o.productTypeId)?.receivedQuantity||0),status:'WAREHOUSE_RECEIVED'}));w.state.configs[BASE+'/'+id+'/settlement']=settlement;result=settlement
+    }
+    else if(action==='recalculate-settled-costs'){const s=value(w,BASE+'/'+id+'/settlement');if(!s)throw Error('未找到生产核对单');return ok({productionPlanId:id,settlementId:s.settlementId,authoritativeTotalCost:s.totalCost??null,sharedUnitCost:null,outputLineCount:s.outputLines?.length||0,costContributions:s.costContributions||[],productionBatchCount:w.rows(w.models.get('/api/mobile/F006/processing/batches')).filter(b=>b.productionPlanId===id).length,costIncomplete:s.costIncomplete},s.costIncomplete?'缺少价格或工时成本依据，请在源记录补齐后重算':'已按当前本机依据重算')}
+    else if(action==='generate-transfer'){result=generateTransfer(w,old,at);next.preparationTransferId=result.id}
+    else return false
+    return save(id,old,next,action,result||next)
+  }catch(error){return fail(error.message)}
+}
