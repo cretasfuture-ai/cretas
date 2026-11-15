@@ -12,3 +12,7 @@
 | `ydwm-nuxt-system` | 味美 Nuxt UI 构建源码；与 `unified-v1/src/cost` 逐字节相同的 3 个成本页只保留在后者 |
 
 原型目录没有 `package.json` 的部分依赖 `component-library/package.json`；本目录未验证可独立构建。
+
+## 补收（2026-11-15）
+- `component-library/legacy-src`：旧版 web-admin 快照（1164 个文件），组件库 `App.vue`、`main.ts` 引入其整个路由，`fusion/identity.ts` 与 `FusionAnalytics.vue` 引入其 store/类型/Dashboard。它与当前 `web-admin/src` 不同（旧版），迁移时以 `web-admin` 为准，此处只为让组件库保持可读、可构建。
+- `ydwm-v1/public/design-system.{css,js,d.ts}`：`--cs-*` 变量与 `CretasSystem` 类型，`unified-v1/src/frame/ai-protocol.ts` 按相对路径引用，目录层级与原型一致。

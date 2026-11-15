@@ -1,0 +1,578 @@
+<script setup lang="ts">
+import { ref, computed, onMounted, watch } from 'vue';
+import { useAuthStore } from '@/store/modules/auth';
+import { get } from '@/api/request';
+import { ElMessage } from 'element-plus';
+import { Search, Refresh } from '@element-plus/icons-vue';
+import { formatDateTimeCell } from '@/utils/tableFormatters';
+
+// ---------- auth ----------
+const authStore = useAuthStore();
+const factoryId = computed(() => authStore.factoryId);
+
+// ---------- state ----------
+const loading = ref(false);
+const tableData = ref<BatchRow[]>([]);
+const pagination = ref({ page: 1, size: 10, total: 0 });
+const dateRange = ref<[string, string] | null>(null);
+
+// Per-batch expanded detail (materialConsumptions)
+const expandedDetails = ref<Record<number, MaterialDetail[]>>({});
+const expandLoading = ref<Record<number, boolean>>({});
+
+// ---------- types ----------
+interface BatchRow {
+  id: number;
+  batchNumber: string;
+  productTypeName?: string;
+  productName?: string;
+  plannedQuantity: number;
+  actualQuantity: number | null;
+  status: string;
+  createdAt: string;
+  // computed from consumption summary
+  plannedTotal?: number;
+  actualTotal?: number;
+  achievementRate?: number;
+}
+
+interface MaterialDetail {
+  materialName: string;
+  planned: number;
+  actual: number;
+  variance: number;
+  unit?: string;
+}
+
+interface ConsumptionSummary {
+  materialName?: string;
+  materialTypeName?: string;
+  plannedQuantity?: number;
+  actualQuantity?: number;
+  unit?: string;
+}
+
+// ---------- KPI ----------
+const kpi = computed(() => {
+  const rows = tableData.value;
+  const total = rows.length;
+  if (total === 0) return { total: 0, avgRate: null as number | null, overConsumptionCount: 0, minRate: null as number | null };
+
+  // Only include rows that have a real achievementRate (not null/undefined)
+  const rowsWithRate = rows.filter(r => r.achievementRate != null);
+  const rates = rowsWithRate.map(r => r.achievementRate as number);
+
+  const avg = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+  // ⚠️ 2026-08-28 订正: 这个计数原来写的是 `< 95`, 而卡片标签是「超耗批次数」。
+  //   `< 95` 在**成本偏差得分**口径下(后端那个 `1 - |dev|`)确实等于「偏离 >5%」,
+  //   两个方向都算 —— 标签和阈值是照那个口径设计的。
+  //   但这一列渲染的是**数量比** `actual / planned`, 在这个口径下
+  //   `< 95%` 是**用得比计划少**(欠耗), 超耗是 `> 105%` ⇒ **标签的方向是反的**。
+  //
+  // ⇒ 把设计意图(「偏离计划超过 5% 的批次」)如实译到数量比口径: 两个方向都数,
+  //   卡片标签同步改成「用量偏差批次数 (偏离计划 >5%)」——**说清数的是什么**。
+  const overCount = rows.filter(
+    r => r.achievementRate != null && (r.achievementRate < 95 || r.achievementRate > 105),
+  ).length;
+  const minRate = rates.length > 0 ? Math.min(...rates) : null;
+
+  return {
+    total,
+    // 🔴 2026-08-28 部署后**逐屏视觉验收**抓到的: 上一轮只修了「不再编 100%」,
+    //   而卡片上「总批次数 8」紧挨着「平均达成率 100%」——那个 100% **只来自 1 个批次**
+    //   (另外 7 个没有计划数据, 达成率是「—」)。用户读到的是「8 个批次平均 100%」。
+    //
+    // ▎不编数字只是第一步; **不说分母仍然会误导**。
+    // ⇒ 把「这几个数是基于几个批次算的」一起报出来(本仓「报数时同时报口径」)。
+    ratedCount: rowsWithRate.length,
+    avgRate: avg != null ? Math.round(avg * 10) / 10 : null,
+    overConsumptionCount: overCount,
+    minRate: minRate != null ? Math.round(minRate * 10) / 10 : null,
+  };
+});
+
+// ---------- load ----------
+onMounted(() => {
+  loadData();
+});
+
+async function loadData() {
+  if (!factoryId.value) return;
+
+  loading.value = true;
+  try {
+    const params: Record<string, unknown> = {
+      page: pagination.value.page,
+      size: pagination.value.size,
+      status: 'COMPLETED',
+    };
+    if (dateRange.value && dateRange.value[0]) {
+      params.startDate = dateRange.value[0];
+      params.endDate = dateRange.value[1];
+    }
+
+    const response = await get<{
+      content: BatchRow[];
+      totalElements: number;
+    }>(`/${factoryId.value}/processing/batches`, { params });
+
+    if (response.success && response.data) {
+      const batches = response.data.content || [];
+      // Fetch consumption summaries in parallel
+      const enriched = await Promise.all(batches.map(enrichBatch));
+      tableData.value = enriched;
+      pagination.value.total = response.data.totalElements || 0;
+    }
+  } catch (error: any) {
+    console.error('Failed to load batches:', error);
+    if (!error?.actionHint) ElMessage.error('加载批次数据失败');
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
+  try {
+    const res = await get<Record<string, unknown>>(
+      `/${factoryId.value}/processing/material-consumptions/batch/${batch.id}/summary`
+    );
+    if (res.success && res.data) {
+      // 后端返回 { items: [...], overallAchievementRate, totalPlannedCost, totalActualCost }
+      const items = (res.data.items as Record<string, unknown>[] | undefined) || (Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []);
+      const planned = items.reduce((s: number, r) => s + (Number(r.plannedQty ?? r.plannedQuantity ?? 0)), 0);
+      const actual = items.reduce((s: number, r) => s + (Number(r.actualQty ?? r.actualQuantity ?? 0)), 0);
+      if (items.length > 0) {
+        // 🔴 2026-08-28: 上面这句「Never fall back to 100 — null means no data」原本就写在
+        //   把 100 放进去的那两行**正上方**:
+        //
+        //     const computedRate = planned > 0 ? … : null;      ← 守卫算出 null
+        //     achievementRate: computedRate ?? backendRate …    ← 下一行把守卫扔了
+        //
+        //   `planned === 0` 时 computedRate 是 null, `?? backendRate` 立刻用后端那个数,
+        //   而后端在 totalPlannedCost == 0 时**固定返回 100**。
+        //   实拍(f006): 8 个批次里 7 个「计划总量 0」显示成「达成率 100%」。
+        //
+        // ⚠️ 而且两侧是**两个口径**: 这里是数量比 `actual/planned`, 后端是成本偏差
+        //   `1 - |actualCost - plannedCost| / plannedCost`。`??` 把两个语义不同的数
+        //   混进同一列, 列名都叫「达成率」—— 一行是比值(超耗 >100%), 另一行是
+        //   偏差得分(超耗和欠耗都往下掉)。
+        //
+        // ⇒ 后端已改为在没有计划成本时下发 null; 这里只留**一个口径**(数量比),
+        //   算不出来就是 undefined → 表格与 KPI 都渲染「—」。
+        const computedRate = planned > 0 ? Math.round((actual / planned) * 1000) / 10 : null;
+        return {
+          ...batch,
+          plannedTotal: Math.round(planned * 100) / 100,
+          actualTotal: Math.round(actual * 100) / 100,
+          achievementRate: computedRate ?? undefined,
+        };
+      }
+    }
+  } catch {
+    // Silently fall back — API may not exist yet for some batches
+  }
+  return {
+    ...batch,
+    plannedTotal: batch.plannedQuantity ?? 0,
+    actualTotal: batch.actualQuantity ?? 0,
+    // Never use 100 as a fake default — null means no consumption data available
+    achievementRate: batch.plannedQuantity && batch.actualQuantity != null
+      ? Math.round((batch.actualQuantity / batch.plannedQuantity) * 1000) / 10
+      : undefined,
+  };
+}
+
+/**
+ * 三张派生 KPI 的口径说明 —— 「这几个数是基于几个批次算的」。
+ *
+ * 🔴 2026-08-28 部署后逐屏验收抓到: 只把「没有计划 ⇒ 达成率 —」修掉还不够。
+ * 屏上「总批次数 8」和「平均达成率 100%」并排, 而那个 100% 只来自 **1** 个批次
+ * (另外 7 个没有计划数据)。⇒ 报数时同时报口径。
+ */
+const kpiCaliber = computed(() => {
+  const k = kpi.value;
+  if (k.total === 0) return '';
+  if (k.ratedCount === 0) return '无批次有计划数据, 算不出达成率';
+  if (k.ratedCount === k.total) return `基于全部 ${k.total} 个批次`;
+  return `仅基于 ${k.ratedCount}/${k.total} 个有计划数据的批次`;
+});
+
+// ---------- expand row ----------
+async function handleExpandChange(row: BatchRow, expandedRows: BatchRow[]) {
+  const isExpanded = expandedRows.some(r => r.id === row.id);
+  if (!isExpanded || expandedDetails.value[row.id]) return;
+
+  expandLoading.value[row.id] = true;
+  try {
+    const res = await get<Record<string, unknown>>(
+      `/${factoryId.value}/processing/material-consumptions/batch/${row.id}/summary`
+    );
+    if (res.success && res.data) {
+      // 后端返回 { items: [...] } 或直接数组
+      const items = (res.data.items as Record<string, unknown>[] | undefined) || (Array.isArray(res.data) ? res.data as Record<string, unknown>[] : []);
+      expandedDetails.value[row.id] = items.map((item) => ({
+        materialName: (item.materialName as string) || (item.materialTypeName as string) || '-',
+        planned: Number(item.plannedQty ?? item.plannedQuantity ?? 0),
+        actual: Number(item.actualQty ?? item.actualQuantity ?? 0),
+        variance: Math.round((Number(item.actualQty ?? item.actualQuantity ?? 0) - Number(item.plannedQty ?? item.plannedQuantity ?? 0)) * 100) / 100,
+        unit: item.unit as string,
+      }));
+    } else {
+      expandedDetails.value[row.id] = [];
+    }
+  } catch {
+    expandedDetails.value[row.id] = [];
+  } finally {
+    expandLoading.value[row.id] = false;
+  }
+}
+
+// ---------- helpers ----------
+function getRateTagType(rate: number | undefined): string {
+  if (rate == null) return 'info';
+  if (rate >= 95) return 'success';
+  if (rate >= 85) return 'warning';
+  return 'danger';
+}
+
+function getRateColor(rate: number | undefined): string {
+  if (rate == null) return '#909399';
+  if (rate >= 95) return '#67C23A';
+  if (rate >= 85) return '#E6A23C';
+  return '#F56C6C';
+}
+
+function getStatusType(status: string): string {
+  const map: Record<string, string> = {
+    PLANNED: 'info', PENDING: 'info',
+    IN_PROGRESS: 'warning',
+    COMPLETED: 'success',
+    CANCELLED: 'danger',
+  };
+  return map[status?.toUpperCase()] || 'info';
+}
+
+function getStatusText(status: string): string {
+  const map: Record<string, string> = {
+    PLANNED: '待生产', PENDING: '待生产',
+    IN_PROGRESS: '生产中',
+    COMPLETED: '已完成',
+    CANCELLED: '已取消',
+  };
+  return map[status?.toUpperCase()] || status;
+}
+
+function getVarianceClass(variance: number): string {
+  if (variance > 0) return 'variance-over';
+  if (variance < 0) return 'variance-under';
+  return '';
+}
+
+// ---------- pagination ----------
+function handleSearch() {
+  pagination.value.page = 1;
+  loadData();
+}
+
+function handleReset() {
+  dateRange.value = null;
+  handleSearch();
+}
+
+function handlePageChange(page: number) {
+  pagination.value.page = page;
+  loadData();
+}
+
+function handleSizeChange(size: number) {
+  pagination.value.size = size;
+  pagination.value.page = 1;
+  loadData();
+}
+</script>
+
+<template>
+  <div class="page-wrapper">
+    <el-card class="page-card" shadow="never">
+      <template #header>
+        <div class="card-header">
+          <div class="header-left">
+            <span class="page-title">BOM达成率分析</span>
+            <span class="data-count">共 {{ pagination.total }} 条记录</span>
+          </div>
+          <div class="header-right">
+            <el-date-picker
+              v-model="dateRange"
+              type="daterange"
+              range-separator="至"
+              start-placeholder="开始日期"
+              end-placeholder="结束日期"
+              value-format="YYYY-MM-DD"
+              style="width: 280px"
+              @change="handleSearch"
+            />
+          </div>
+        </div>
+      </template>
+
+      <!-- KPI Row -->
+      <div class="kpi-row">
+        <el-card shadow="hover" class="kpi-card">
+          <div class="kpi-value">{{ kpi.total }}</div>
+          <div class="kpi-label">总批次数</div>
+        </el-card>
+        <el-card shadow="hover" class="kpi-card">
+          <div class="kpi-value" :style="{ color: kpi.avgRate != null ? getRateColor(kpi.avgRate) : '#909399' }">
+            {{ kpi.avgRate != null ? kpi.avgRate + '%' : '—' }}
+          </div>
+          <div class="kpi-label">平均达成率</div>
+          <!-- ⚠️ 分母必须写出来: 上一轮修完「不再编 100%」之后, 卡片上仍然是
+               「总批次数 8」紧挨着「平均达成率 100%」, 而那个 100% 只来自 1 个批次。
+               不编数字只是第一步, **不说分母仍然会误导**。 -->
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
+        </el-card>
+        <el-card shadow="hover" class="kpi-card">
+          <div class="kpi-value" style="color: #F56C6C">{{ kpi.overConsumptionCount }}</div>
+          <div class="kpi-label">用量偏差批次数 (偏离计划 &gt;5%)</div>
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
+        </el-card>
+        <el-card shadow="hover" class="kpi-card">
+          <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : '#909399' }">
+            {{ kpi.minRate != null ? kpi.minRate + '%' : '—' }}
+          </div>
+          <div class="kpi-label">最低达成率</div>
+          <div class="kpi-caliber">{{ kpiCaliber }}</div>
+        </el-card>
+      </div>
+
+      <!-- Search bar -->
+      <div class="search-bar">
+        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
+        <el-button :icon="Refresh" @click="handleReset">重置</el-button>
+      </div>
+
+      <!-- Main Table -->
+      <el-table
+        :data="tableData"
+        v-loading="loading"
+        empty-text="暂无已完成的生产批次"
+        stripe
+        border
+        style="width: 100%"
+        row-key="id"
+        @expand-change="handleExpandChange"
+      >
+        <el-table-column type="expand">
+          <template #default="{ row }">
+            <div class="expand-content" v-loading="expandLoading[row.id]">
+              <el-table
+                v-if="expandedDetails[row.id] && expandedDetails[row.id].length > 0"
+                :data="expandedDetails[row.id]"
+                border
+                size="small"
+                style="margin: 12px 48px"
+              >
+                <el-table-column prop="materialName" label="原材料" min-width="150" />
+                <el-table-column prop="planned" label="计划用量" width="120" align="right">
+                  <template #default="{ row: r }">
+                    {{ r.planned }} {{ r.unit || '' }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="actual" label="实际用量" width="120" align="right">
+                  <template #default="{ row: r }">
+                    {{ r.actual }} {{ r.unit || '' }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="偏差" width="120" align="right">
+                  <template #default="{ row: r }">
+                    <span :class="getVarianceClass(r.variance)">
+                      {{ r.variance > 0 ? '+' : '' }}{{ r.variance }} {{ r.unit || '' }}
+                    </span>
+                  </template>
+                </el-table-column>
+              </el-table>
+              <el-empty v-else-if="!expandLoading[row.id]" description="暂无物料消耗数据" :image-size="60" />
+            </div>
+          </template>
+        </el-table-column>
+
+        <el-table-column prop="batchNumber" label="批次号" width="160" />
+        <el-table-column label="产品名称" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ row.productTypeName || row.productName || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="plannedTotal" label="计划总量" width="110" align="right">
+          <template #default="{ row }">
+            {{ row.plannedTotal != null ? row.plannedTotal : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column prop="actualTotal" label="实际总量" width="110" align="right">
+          <template #default="{ row }">
+            {{ row.actualTotal != null ? row.actualTotal : '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="达成率" width="120" align="center">
+          <template #default="{ row }">
+            <el-tag
+              :type="getRateTagType(row.achievementRate)"
+              size="small"
+              effect="light"
+            >
+              {{ row.achievementRate != null ? row.achievementRate + '%' : '-' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="100" align="center">
+          <template #default="{ row }">
+            <el-tag :type="getStatusType(row.status)" size="small">
+              {{ getStatusText(row.status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column prop="createdAt" label="创建时间" width="180" :formatter="formatDateTimeCell" />
+      </el-table>
+
+      <!-- Pagination -->
+      <div class="pagination-wrapper">
+        <el-pagination
+          v-model:current-page="pagination.page"
+          v-model:page-size="pagination.size"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="pagination.total"
+          layout="total, sizes, prev, pager, next, jumper"
+          @current-change="handlePageChange"
+          @size-change="handleSizeChange"
+        />
+      </div>
+    </el-card>
+  </div>
+</template>
+
+<style lang="scss" scoped>
+.page-wrapper {
+  height: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.page-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+
+  :deep(.el-card__header) {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
+  }
+
+  :deep(.el-card__body) {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+  }
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+
+  .header-left {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+
+    .page-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-color-primary, #303133);
+    }
+
+    .data-count {
+      font-size: 13px;
+      color: var(--text-color-secondary, #909399);
+    }
+  }
+}
+
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.kpi-card {
+  text-align: center;
+
+  :deep(.el-card__body) {
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .kpi-value {
+    font-size: 28px;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-bottom: 4px;
+  }
+
+  .kpi-label {
+    font-size: 13px;
+    color: var(--text-color-secondary, #909399);
+  }
+}
+
+.search-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.el-table {
+  flex: 1;
+}
+
+.pagination-wrapper {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color-lighter, #ebeef5);
+  margin-top: 16px;
+}
+
+.expand-content {
+  min-height: 40px;
+}
+
+.variance-over {
+  color: #F56C6C;
+  font-weight: 600;
+}
+
+.variance-under {
+  color: #67C23A;
+  font-weight: 600;
+}
+
+@media (max-width: 768px) {
+  .kpi-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.kpi-caliber {
+  margin-top: 2px;
+  font-size: 11px;
+  color: #909399;
+  line-height: 1.3;
+}
+</style>
