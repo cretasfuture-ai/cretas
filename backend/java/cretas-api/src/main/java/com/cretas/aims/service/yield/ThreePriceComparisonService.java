@@ -127,19 +127,52 @@ public class ThreePriceComparisonService {
     @Transactional(readOnly = true)
     public CatalogMargin catalogMarginFor(String factoryId, ProductType pt) {
         BigDecimal salesPrice = pt.getUnitPrice();
-        ProductionBatch latestPriced = resolveLatestPricedBatch(factoryId, pt.getId());
-        BigDecimal actualCost = latestPriced != null ? latestPriced.getUnitCost() : null;
+        // 理论毛利的成本不取「最近一批」(单批产量异常会把毛利带到 -101%, 2026-11-15 财务复跑 Q16),
+        // 取最近 CATALOG_COST_BATCHES 批已算单位成本的批次, 按实际产量加权; 没有产量的批次权重按等权处理。
+        List<ProductionBatch> recent = productionBatchRepository
+                .findRecentPricedBatches(factoryId, pt.getId(), PageRequest.of(0, CATALOG_COST_BATCHES));
+        ProductionBatch latestPriced = recent == null || recent.isEmpty() ? null : recent.get(0);
+        BigDecimal actualCost = weightedUnitCost(recent);
         return new CatalogMargin(
                 salesPrice,
                 actualCost,
                 computeGrossMarginPct(salesPrice, actualCost),
                 latestPriced != null ? latestPriced.getBatchNumber() : null,
-                latestPriced != null ? latestPriced.getCreatedAt() : null);
+                latestPriced != null ? latestPriced.getCreatedAt() : null,
+                recent == null ? 0 : recent.size(),
+                latestPriced != null ? latestPriced.getUnitCost() : null);
     }
 
-    /** {@link #catalogMarginFor} 的结果; 毛利率为百分数 (42.5 = 42.5%), 任一价缺失 → null。 */
+    /** 理论毛利取最近几批的加权单位成本。 */
+    public static final int CATALOG_COST_BATCHES = 5;
+
+    /** 近 N 批单位成本: 有实际产量的按产量加权 (Σ单位成本×产量 ÷ Σ产量); 全都没有产量时取简单平均; 没有批次 → null。 */
+    static BigDecimal weightedUnitCost(List<ProductionBatch> batches) {
+        if (batches == null || batches.isEmpty()) return null;
+        BigDecimal weighted = BigDecimal.ZERO;
+        BigDecimal qty = BigDecimal.ZERO;
+        BigDecimal sum = BigDecimal.ZERO;
+        int n = 0;
+        for (ProductionBatch b : batches) {
+            if (b.getUnitCost() == null) continue;
+            n++;
+            sum = sum.add(b.getUnitCost());
+            BigDecimal q = b.getActualQuantity();
+            if (q != null && q.signum() > 0) {
+                weighted = weighted.add(b.getUnitCost().multiply(q));
+                qty = qty.add(q);
+            }
+        }
+        if (n == 0) return null;
+        return qty.signum() > 0
+                ? weighted.divide(qty, 4, RoundingMode.HALF_UP)
+                : sum.divide(BigDecimal.valueOf(n), 4, RoundingMode.HALF_UP);
+    }
+
+    /** {@link #catalogMarginFor} 的结果; 毛利率为百分数 (42.5 = 42.5%), 任一价缺失 → null。actualCost = 近 costBatchCount 批的加权单位成本。 */
     public record CatalogMargin(BigDecimal salesPrice, BigDecimal actualCost, BigDecimal grossMarginPct,
-                                String costBatchNumber, java.time.LocalDateTime costAsOf) {
+                                String costBatchNumber, java.time.LocalDateTime costAsOf,
+                                int costBatchCount, BigDecimal latestBatchUnitCost) {
     }
 
     private ProductionBatch resolveLatestPricedBatch(String factoryId, String productTypeId) {

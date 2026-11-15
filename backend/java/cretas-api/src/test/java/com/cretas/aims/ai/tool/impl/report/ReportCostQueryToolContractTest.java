@@ -219,4 +219,30 @@ class ReportCostQueryToolContractTest {
         assertEquals(1, r.get("data").get("data").get("previousCostIncompleteBatchCount").asInt());
         assertTrue(r.get("data").get("message").asText().contains("另有 1 个成本未算全未计入"));
     }
+
+    @Test
+    void compareToLastMonth_comparesAgainstLastMonthSameDays_andNamesTheBiggestRiser() throws Exception {
+        List<ProductionBatch> lastMonthSameDays = new ArrayList<>();
+        when(repo.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(eq("F1"),
+                eq(LocalDate.of(2026, 10, 1).atStartOfDay()), eq(LocalDate.of(2026, 10, 15).atStartOfDay()))).thenReturn(lastMonthSameDays);
+        // 本月 1~14: 原料600 人工100 设备50 其他50; 上月 1~14: 原料500 人工80 设备50 其他50
+        thisMonth.add(batch("卤牛肉", "600", "100", "50", "50", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastMonthSameDays.add(batch("卤牛肉", "500", "80", "50", "50", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        JsonNode r = run("{\"compareTo\":\"last_month\"}");
+        assertEquals("2026-10-01", r.get("data").get("data").get("previousPeriod").get("startDate").asText());
+        assertEquals("2026-10-14", r.get("data").get("data").get("previousPeriod").get("endDate").asText());
+        String msg = r.get("data").get("message").asText();
+        assertTrue(msg.contains("对比上月同期"), msg);
+        assertTrue(msg.contains("涨得最多的是原料：+100"), msg);   // 原料 +100 > 人工 +20
+    }
+
+    @Test
+    void defaultComparisonStillPreviousEqualLengthPeriod_andSaysNothingRoseWhenNothingRose() throws Exception {
+        thisMonth.add(batch("卤牛肉", "100", "10", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch("卤牛肉", "500", "80", "50", "50", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        JsonNode r = run("{}");
+        String msg = r.get("data").get("message").asText();
+        assertTrue(msg.contains("对比上一个等长周期"), msg);
+        assertTrue(msg.contains("各分项都没有上涨"), msg);
+    }
 }

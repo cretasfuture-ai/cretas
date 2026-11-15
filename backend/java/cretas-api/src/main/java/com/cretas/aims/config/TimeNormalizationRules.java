@@ -135,6 +135,26 @@ public class TimeNormalizationRules {
         );
 
         // === 年 ===
+        // 「明年一月」「去年3月」「今年十二月」: 带年份前缀的具体月份。必须排在下面整年规则之前,
+        // 否则「明年」先被吃成整年 (2027-01-01~2027-12-31), 「一月」被丢掉 (2026-11-15 财务复跑 Q17)。
+        TIME_PATTERNS.put(
+                Pattern.compile("(今年|本年|明年|下一年|去年|上一年|前年)(\\d{1,2}|[一二三四五六七八九十]{1,3})月(?:份)?"),
+                (now, m) -> {
+                    int yearOffset = switch (m.group(1)) {
+                        case "明年", "下一年" -> 1;
+                        case "去年", "上一年" -> -1;
+                        case "前年" -> -2;
+                        default -> 0;
+                    };
+                    int month = parseMonthNumber(m.group(2));
+                    if (month < 1 || month > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(2));
+                    }
+                    LocalDateTime first = now.plusYears(yearOffset).withMonth(month).with(TemporalAdjusters.firstDayOfMonth())
+                            .with(LocalTime.MIN);
+                    return TimeRange.of(first, first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX));
+                }
+        );
         TIME_PATTERNS.put(
                 Pattern.compile("今年|本年"),
                 (now, m) -> yearRange(now, 0)
@@ -336,6 +356,21 @@ public class TimeNormalizationRules {
         LocalDateTime endOfMonth = targetMonth.with(TemporalAdjusters.lastDayOfMonth())
                 .with(LocalTime.MAX);
         return TimeRange.of(startOfMonth, endOfMonth);
+    }
+
+    /** 「3」「十二」「一」→ 月份数字; 认不出返回 -1。 */
+    static int parseMonthNumber(String text) {
+        if (text.chars().allMatch(Character::isDigit)) {
+            return Integer.parseInt(text);
+        }
+        String digits = "一二三四五六七八九";
+        if (text.equals("十")) return 10;
+        if (text.length() == 1) return digits.indexOf(text) + 1 > 0 ? digits.indexOf(text) + 1 : -1;
+        if (text.length() == 2 && text.charAt(0) == '十') {
+            int u = digits.indexOf(text.charAt(1)) + 1;
+            return u > 0 ? 10 + u : -1;
+        }
+        return -1;
     }
 
     /**

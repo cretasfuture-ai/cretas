@@ -58,16 +58,17 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
                         "startDate", Map.of("type", "string", "description", "开始日期 yyyy-MM-dd，默认本月 1 号；「上周」填上周一，「本月」填 1 号"),
                         "endDate", Map.of("type", "string", "description", "结束日期 yyyy-MM-dd，默认今天；「上周」填上周日"),
                         "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配），不填则全部产品"),
                         "period", Map.of("type", "string", "description", "快捷周期: last_week(上周) / this_week(本周) / this_month(本月) / last_month(上月)；与 startDate/endDate 同时给时以日期为准"),
+                        "compareTo", Map.of("type", "string", "description", "对比基准: last_month=环比上月（用户说「和上月比」「比上个月」时填，上一期整体往前推一个月）；不填=上一个等长周期"),
                         "question", Map.of("type", "string", "description", "用户的原问题（仅记录）")
                 ),
-                "required", List.of());
+                "required", List.of()));
     }
 
     @Override
@@ -111,8 +112,25 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
         Aggregate current = aggregate(factoryId, start, end, keyword, secret);
         long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
-        LocalDate prevEnd = start.minusDays(1);
-        LocalDate prevStart = prevEnd.minusDays(days - 1);
+        // 「和上月比」= 环比上月: 上一期是整体往前推一个月 (本月 1~今天 对上月 1~同一天), 不是上一个等长周期
+        String compareTo = blankToNull(getString(params, "compareTo"));
+        if (compareTo == null) {
+            // 抽参没填时的兜底: 原问题里明说了「和上月比 / 比上月 / 环比」
+            String q = blankToNull(getString(params, "question"));
+            if (q != null && q.matches("(?s).*(和上月比|与上月比|跟上月比|比上月|比上个月|和上个月比|环比).*")) compareTo = "last_month";
+        }
+        boolean monthOverMonth = "last_month".equalsIgnoreCase(compareTo);
+        LocalDate prevStart;
+        LocalDate prevEnd;
+        if (monthOverMonth) {
+            prevStart = start.minusMonths(1);
+            prevEnd = end.getDayOfMonth() == end.lengthOfMonth()
+                    ? end.minusMonths(1).withDayOfMonth(end.minusMonths(1).lengthOfMonth())
+                    : end.minusMonths(1);
+        } else {
+            prevEnd = start.minusDays(1);
+            prevStart = prevEnd.minusDays(days - 1);
+        }
         Aggregate previous = aggregate(factoryId, prevStart, prevEnd, keyword, secret);
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -142,7 +160,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             data.put("comparison", comparison(current, previous));
             data.put("charts", charts(current));
         }
-        return buildSimpleResult(buildMessage(current, previous, start, end, prevStart, prevEnd, keyword, showAmounts), data);
+        return buildSimpleResult(buildMessage(current, previous, start, end, prevStart, prevEnd, keyword, showAmounts, monthOverMonth), data);
     }
 
     // ==================== 聚合 ====================
@@ -353,7 +371,8 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
     }
 
     private String buildMessage(Aggregate cur, Aggregate prev, LocalDate start, LocalDate end, LocalDate prevStart,
-                                LocalDate prevEnd, String keyword, boolean showAmounts) {
+                                LocalDate prevEnd, String keyword, boolean showAmounts, boolean monthOverMonth) {
+        String prevLabel = monthOverMonth ? "上月同期" : "上一个等长周期";
         StringBuilder sb = new StringBuilder();
         sb.append(start).append(" 至 ").append(end).append(keyword != null ? "「" + keyword + "」" : "")
                 .append(" 已完成批次 ").append(cur.batchCount).append(" 个");
@@ -392,9 +411,9 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                     .append("，").append(p.batches).append(" 批，单位成本 ").append(p.unitCostText());
         }
         if (prev.costedBatches == 0) {
-            sb.append("\n对比：上一个等长周期（").append(prevStart).append(" 至 ").append(prevEnd).append("）没有成本已算全的批次，无法给涨跌。");
+            sb.append("\n对比：" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("）没有成本已算全的批次，无法给涨跌。");
         } else {
-            sb.append("\n对比上一个等长周期（").append(prevStart).append(" 至 ").append(prevEnd).append("，成本已算全 ")
+            sb.append("\n对比" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("，成本已算全 ")
                     .append(prev.costedBatches).append(" 个批次").append(prev.incompleteBatches > 0
                             ? "，另有 " + prev.incompleteBatches + " 个成本未算全未计入" : "").append("）：");
             List<Map<String, Object>> cmp = comparison(cur, prev);
@@ -405,12 +424,28 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                 if (c.get("changePct") != null) sb.append("（").append(signed((BigDecimal) c.get("changePct"))).append("%）");
             }
             sb.append("。");
+            sb.append(riserText(cmp));
         }
         sb.append("\n口径：只统计已完成批次（按结束日落期）；单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量，按单位分开算，与成本分析页一致。");
         return sb.toString();
     }
 
     // ==================== 小工具 ====================
+
+    /** 涨得最多的分项 (只在原料/人工/设备/其他里比, 不含总成本); 都没涨就明说。 */
+    static String riserText(List<Map<String, Object>> cmp) {
+        Map<String, Object> top = null;
+        for (Map<String, Object> c : cmp) {
+            if ("总成本".equals(c.get("name"))) continue;
+            BigDecimal change = (BigDecimal) c.get("change");
+            if (change.signum() > 0 && (top == null || change.compareTo((BigDecimal) top.get("change")) > 0)) {
+                top = c;
+            }
+        }
+        if (top == null) return "\n各分项都没有上涨。";
+        return "\n涨得最多的是" + top.get("name") + "：+" + ((BigDecimal) top.get("change")).stripTrailingZeros().toPlainString()
+                + (top.get("changePct") != null ? "（+" + ((BigDecimal) top.get("changePct")).stripTrailingZeros().toPlainString() + "%）" : "") + "。";
+    }
 
     private static String signed(BigDecimal v) {
         return (v.signum() > 0 ? "+" : "") + v.stripTrailingZeros().toPlainString();

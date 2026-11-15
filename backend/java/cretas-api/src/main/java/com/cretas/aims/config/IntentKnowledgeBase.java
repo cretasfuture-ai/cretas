@@ -3056,6 +3056,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出成率最低的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最低", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最高的批次", "REPORT_BATCH_YIELD_RANK");
+        // 财务复跑 (2026-11-15): 标准成本差异走成本差异; 「和上月比」走成本查询的环比上月
+        phraseToIntentMapping.put("实际成本和标准成本差多少", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本与标准成本差多少", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本和标准成本", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("实际成本与标准成本", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("标准成本差异", "REPORT_COST_VARIANCE");
+        phraseToIntentMapping.put("和上月比哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("和上月比成本", "COST_QUERY");
+        phraseToIntentMapping.put("跟上月比哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("比上月哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("哪个成本涨了", "COST_QUERY");
+        phraseToIntentMapping.put("成本环比上月", "COST_QUERY");
         phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
