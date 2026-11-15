@@ -1,9 +1,9 @@
 package com.cretas.aims.controller;
 
-import com.cretas.aims.annotation.RateLimit;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.service.integration.ExternalIntegrationService;
+import com.cretas.aims.service.integration.ExternalSnapshotPushLimiter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
@@ -25,8 +25,9 @@ import java.io.InputStream;
  * 路径放在 {@code /api/public/} 下只是为了网关两个域名都转得到 Java、且不被 JWT 拦截器要求登录 ——
  * 鉴权在 {@link ExternalIntegrationService#push} 里, 没有令牌 = 401。</p>
  *
- * <p>审查低1: 按 IP 限流; 先看令牌格式、再按 {@link ExternalIntegrationService#MAX_PUSH_BODY_BYTES} 有界读取请求体,
- * 之后才反序列化 —— 匿名请求不能让服务端先解析一整份大 JSON。
+ * <p>顺序 (审查低1 + 复审中-新1): 先验凭证 ({@link ExternalIntegrationService#authenticatePush}, 无效 = 401, 不读请求体、
+ * 不占限流桶) → 按授权行限流 ({@link ExternalSnapshotPushLimiter}, ⛔ 不按 IP: X-Forwarded-For 可伪造、网关不设 X-Real-IP)
+ * → 按 {@link ExternalIntegrationService#MAX_PUSH_BODY_BYTES} 有界读取请求体 → 反序列化 → 写入。
  * 审查低5: 同一时点并发推送撞唯一约束时, 在事务外重试一次, 第二次按已存在的行判幂等 (duplicate) 或 409。</p>
  */
 @Slf4j
@@ -38,20 +39,20 @@ public class ExternalSnapshotPushController {
 
     private final ExternalIntegrationService service;
     private final ObjectMapper objectMapper;
+    private final ExternalSnapshotPushLimiter limiter;
 
-    public ExternalSnapshotPushController(ExternalIntegrationService service, ObjectMapper objectMapper) {
+    public ExternalSnapshotPushController(ExternalIntegrationService service, ObjectMapper objectMapper,
+                                          ExternalSnapshotPushLimiter limiter) {
         this.service = service;
         this.objectMapper = objectMapper;
+        this.limiter = limiter;
     }
 
     @PostMapping("/push")
-    @RateLimit(count = 30, period = 60, limitType = RateLimit.LimitType.IP, message = "推送过于频繁，请稍后再试")
     public ApiResponse<ExternalIntegrationService.PushResult> push(
             @RequestHeader(value = TOKEN_HEADER, required = false) String token,
             HttpServletRequest request) throws IOException {
-        if (token == null || token.isBlank() || !token.trim().startsWith("cxs_")) {
-            throw new BusinessException(401, "推送凭证缺失或无效");
-        }
+        limiter.acquire(service.authenticatePush(token));
         ExternalIntegrationService.PushRequest body = readBody(request);
         try {
             return ApiResponse.success(service.push(token, body));

@@ -250,6 +250,10 @@ public class ExternalIntegrationService {
                     .add(r.getOutputQuantity(), text(r.getOutputUnit()), 1);
         }
 
+        // 单位口径走单位契约 storageUnit (与调拨 sameTransferUnit 同一口径): kg / 公斤 归一, 只 / 个 / 件 各算各的,
+        // 未登记的自由文本按字面; 每个不同的原始写法只问一次契约 (审查低-新2: 不逐行查库)
+        Map<String, String> canonical = new java.util.HashMap<>();
+        Function<String, String> canon = raw -> canonical.computeIfAbsent(raw, r -> units.storageUnit(factoryId, r));
         List<ComparisonRow> rows = new ArrayList<>();
         Set<String> keys = new java.util.TreeSet<>(Comparator.reverseOrder());
         keys.addAll(ext.keySet());
@@ -261,8 +265,8 @@ public class ExternalIntegrationService {
             rows.add(new ComparisonRow(any.date, any.product, any.process,
                     e == null ? null : e.qty, e == null ? null : e.unit(), e == null ? null : e.count,
                     c == null ? null : c.qty, c == null ? null : c.unit(), c == null ? null : c.count,
-                    e != null && c != null && sameUnit(factoryId, e, c) ? c.qty.subtract(e.qty) : null,
-                    state(factoryId, e, c)));
+                    e != null && c != null && sameUnit(canon, e, c) ? c.qty.subtract(e.qty) : null,
+                    state(canon, e, c)));
         }
         return new Comparison(row.getSystem(), system.label(), true, null, beijingMinute(s.getCollectedAt()),
                 isStale(s.getCollectedAt()), from, to, page.getTotalElements() > MAX_CRETAS_SCAN, rows);
@@ -312,16 +316,18 @@ public class ExternalIntegrationService {
         }
     }
 
-    /** 两侧各只有一个单位, 且单位契约判为同一单位 (KG / kg / 公斤 按契约归一, 不比字符串)。 */
-    private boolean sameUnit(String factoryId, Side e, Side c) {
-        return e.units.size() == 1 && c.units.size() == 1
-                && units.areEquivalent(factoryId, e.units.iterator().next(), c.units.iterator().next());
+    /** 两侧各只有一个单位, 且按单位契约的落库口径 (storageUnit) 是同一个单位。 */
+    private static boolean sameUnit(Function<String, String> canon, Side e, Side c) {
+        if (e.units.size() != 1 || c.units.size() != 1) return false;
+        String l = canon.apply(e.units.iterator().next());
+        String r = canon.apply(c.units.iterator().next());
+        return l != null && !l.isBlank() && l.equals(r);
     }
 
-    private MatchState state(String factoryId, Side e, Side c) {
+    private static MatchState state(Function<String, String> canon, Side e, Side c) {
         if (e == null) return MatchState.CRETAS_ONLY;
         if (c == null) return MatchState.EXTERNAL_ONLY;
-        if (!sameUnit(factoryId, e, c)) return MatchState.UNIT_MISMATCH;
+        if (!sameUnit(canon, e, c)) return MatchState.UNIT_MISMATCH;
         BigDecimal tolerance = e.qty.abs().multiply(new BigDecimal("0.005")).max(new BigDecimal("0.01"));
         return c.qty.subtract(e.qty).abs().compareTo(tolerance) <= 0 ? MatchState.MATCH : MatchState.DIFF;
     }
@@ -463,12 +469,7 @@ public class ExternalIntegrationService {
      */
     @Transactional
     public PushResult push(String token, PushRequest body) {
-        if (token == null || token.isBlank() || !token.startsWith(TOKEN_PREFIX)) {
-            throw new BusinessException(401, "推送凭证缺失或无效");
-        }
-        FactoryExternalIntegration row = integrations.findByPushTokenSha256(sha256(token.trim()))
-                .orElseThrow(() -> new BusinessException(401, "推送凭证缺失或无效"));
-        if (!row.isActive()) throw new BusinessException(403, "该工厂的外部软件授权已暂停，拒收快照");
+        FactoryExternalIntegration row = requirePushAuthorization(token);
         if (body == null) throw new BusinessException(400, "请求体为空");
         if (!row.getSystem().equals(body.system())) throw new BusinessException(403, "推送凭证与外部软件不匹配");
         if (row.getSourceOrgId() == null || !row.getSourceOrgId().equals(body.sourceOrgId())) {
@@ -508,6 +509,34 @@ public class ExternalIntegrationService {
         log.info("外部快照已收: factoryId={}, system={}, collectedAt={}Z, datasets={}", row.getFactoryId(),
                 row.getSystem(), collectedAt, out);
         return new PushResult(row.getFactoryId(), row.getSystem(), beijingMinute(collectedAt), out);
+    }
+
+    /** 推送凭证确认到的授权行 (限流按它分桶, 见 ExternalSnapshotPushController)。 */
+    public record PushPrincipal(String factoryId, String system) {
+        public String bucketKey() {
+            return factoryId + "|" + system;
+        }
+    }
+
+    /**
+     * 只认凭证, 不读请求体: 缺失 / 不认识 = 401, 授权行不是 ACTIVE = 403。
+     * 控制器在读请求体、计限流之前调它 —— 无效凭证不占任何限流桶。
+     */
+    @Transactional(readOnly = true)
+    public PushPrincipal authenticatePush(String token) {
+        FactoryExternalIntegration row = requirePushAuthorization(token);
+        return new PushPrincipal(row.getFactoryId(), row.getSystem());
+    }
+
+    private FactoryExternalIntegration requirePushAuthorization(String token) {
+        String trimmed = token == null ? "" : token.trim();
+        if (!trimmed.startsWith(TOKEN_PREFIX)) {
+            throw new BusinessException(401, "推送凭证缺失或无效");
+        }
+        FactoryExternalIntegration row = integrations.findByPushTokenSha256(sha256(trimmed))
+                .orElseThrow(() -> new BusinessException(401, "推送凭证缺失或无效"));
+        if (!row.isActive()) throw new BusinessException(403, "该工厂的外部软件授权已暂停，拒收快照");
+        return row;
     }
 
     private void validateRows(ExternalDataset dataset, List<Map<String, Object>> rows) {

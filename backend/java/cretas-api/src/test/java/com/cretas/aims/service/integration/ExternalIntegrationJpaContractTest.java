@@ -75,6 +75,7 @@ class ExternalIntegrationJpaContractTest {
     @Autowired WorkProcessTaskRepository tasks;
     @Autowired WorkProcessRepository processes;
     @Autowired EntityManager em;
+    @org.springframework.boot.test.mock.mockito.SpyBean com.cretas.aims.service.unit.UnitContractService unitContract;
 
     @BeforeEach
     void fixedClock() {
@@ -231,6 +232,24 @@ class ExternalIntegrationJpaContractTest {
         assertThat(service.push(fresh, request("2026-11-15T08:01:00+08:00", rows)).factoryId()).isEqualTo(LSM);
     }
 
+    /** 控制器限流前的凭证确认: 认出授权行才给分桶键; 无效 401, 暂停 403 (都不会占限流桶)。 */
+    @Test
+    void authenticatePushResolvesTheAuthorizationOrRefuses() {
+        String token = authorize(LSM);
+        assertThat(service.authenticatePush(token)).isEqualTo(new ExternalIntegrationService.PushPrincipal(LSM, "blacklake"));
+        assertThat(service.authenticatePush("  " + token + " ").factoryId()).isEqualTo(LSM);
+        for (String bad : new String[]{null, "", "Bearer x", "cxs_not-a-real-token"}) {
+            assertThatThrownBy(() -> service.authenticatePush(bad))
+                    .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(401);
+        }
+        String issuedWhileSuspended;
+        service.upsert(LSM, "blacklake", new ExternalIntegrationService.Update("SUSPENDED", ORG, null), PLATFORM);
+        issuedWhileSuspended = service.issuePushToken(LSM, "blacklake", PLATFORM).token();
+        em.flush();
+        assertThatThrownBy(() -> service.authenticatePush(issuedWhileSuspended))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(403);
+    }
+
     @Test
     void rotatingTheTokenRevokesTheOldOne() {
         String old = authorize(LSM);
@@ -277,7 +296,9 @@ class ExternalIntegrationJpaContractTest {
                 report("2026-11-14", "烟熏牛肉", "烟熏", "80.000"),
                 report("2026-11-13", "羊排", "腌制", "50"),
                 withUnit(report("2026-11-11", "鸡翅", "腌制", "30"), "公斤"),
-                withUnit(report("2026-11-10", "鸡翅", "腌制", "30"), "箱"))));
+                withUnit(report("2026-11-10", "鸡翅", "腌制", "30"), "箱"),
+                withUnit(report("2026-11-09", "鸡翅", "腌制", "4"), "托"),
+                withUnit(report("2026-11-08", "鸡翅", "腌制", "6"), "只"))));
 
         WorkProcess pickle = processes.save(WorkProcess.builder().id("WP-EXT-1").factoryId(LSM).processName("腌制")
                 .defaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED).build());
@@ -295,6 +316,8 @@ class ExternalIntegrationJpaContractTest {
         yieldReport(F6, t3, "2026-11-13", "羊排", "50", "kg");            // 别厂: 不算
         yieldReport(LSM, t1, "2026-11-11", "鸡翅", "30", "kg");           // 公斤 ≡ kg (单位契约) → 一致
         yieldReport(LSM, t1, "2026-11-10", "鸡翅", "30", "kg");           // 箱 ≠ kg → 单位不同, 不算差
+        yieldReport(LSM, t1, "2026-11-09", "鸡翅", "4", "托");            // 两边同一个未登记单位 → 照常比
+        yieldReport(LSM, t1, "2026-11-08", "鸡翅", "6", "件");            // 只 ≠ 件 (Steve 08-03: 只/个/件 三个单位)
         em.flush();
         em.clear();
 
@@ -304,7 +327,15 @@ class ExternalIntegrationJpaContractTest {
         assertThat(c.from()).isEqualTo(LocalDate.parse("2026-11-01"));
         Map<String, ExternalIntegrationService.ComparisonRow> byKey = new HashMap<>();
         c.rows().forEach(r -> byKey.put(r.reportDate() + "/" + r.productName() + "/" + r.processName(), r));
-        assertThat(byKey).hasSize(6);
+        assertThat(byKey).hasSize(8);
+        assertThat(byKey.get("2026-11-09/鸡翅/腌制").state()).isEqualTo(ExternalIntegrationService.MatchState.MATCH);
+        assertThat(byKey.get("2026-11-08/鸡翅/腌制")).satisfies(r -> {
+            assertThat(r.state()).isEqualTo(ExternalIntegrationService.MatchState.UNIT_MISMATCH);
+            assertThat(r.difference()).isNull();
+        });
+        // 每个不同的原始写法只问一次单位契约 (kg 公斤 箱 托 只 件), 不是每行每次都查
+        org.mockito.Mockito.verify(unitContract, org.mockito.Mockito.atMost(6))
+                .storageUnit(org.mockito.ArgumentMatchers.eq(LSM), org.mockito.ArgumentMatchers.anyString());
         assertThat(byKey.get("2026-11-11/鸡翅/腌制")).satisfies(r -> {
             assertThat(r.state()).isEqualTo(ExternalIntegrationService.MatchState.MATCH);
             assertThat(r.difference()).isEqualByComparingTo("0");
