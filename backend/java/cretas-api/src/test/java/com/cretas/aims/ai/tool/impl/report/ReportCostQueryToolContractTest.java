@@ -325,6 +325,15 @@ class ReportCostQueryToolContractTest {
         assertTrue(r.get("message").asText().contains("对比上月同期"), r.get("message").asText());
     }
 
+    // R4 M2: 「上一周成本和上月比」本期保持上一周 (预处理 primary), 不被改回本月
+    @Test
+    void lastWeekSentenceWithMonthOverMonth_keepsLastWeekAsThePeriod() throws Exception {
+        JsonNode r = run("{\"startDate\":\"2026-11-02\",\"endDate\":\"2026-11-08\",\"timeRangeFromSentence\":\"2026-11-02~2026-11-08\","
+                + "\"userInput\":\"[2026-11-02 00:00 至 2026-11-08 23:59]成本和上月比\",\"originalUserInput\":\"上一周成本和上月比\"}").get("data");
+        assertEquals("2026-11-02", r.get("data").get("period").get("startDate").asText());
+        assertEquals("2026-11-08", r.get("data").get("period").get("endDate").asText());
+    }
+
     @Test
     void ownTimeWordInTheSentenceKeepsThePeriod_negativeControl() throws Exception {
         // 「本周成本和上月比」: 句子里有自己的时间词 (本周), 本期不被改回本月
@@ -339,6 +348,10 @@ class ReportCostQueryToolContractTest {
         assertTrue(ReportCostQueryTool.hasOwnTimeWord("第3季度成本和上月比"));
         assertTrue(ReportCostQueryTool.hasOwnTimeWord("今年成本和上月比"));
         assertTrue(ReportCostQueryTool.hasOwnTimeWord("3月份成本和上月比"));
+        // R4 M2: 上一周/上一年/下一周也是时间词
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("上一周成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("上一年成本和上月比"));
+        assertTrue(ReportCostQueryTool.hasOwnTimeWord("下一周成本和上月比"));
     }
 
     @Test

@@ -7,6 +7,8 @@ import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.service.execution.ToolDispatchService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -61,26 +63,59 @@ class AiBiFinanceFollowupContractTest {
         assertRange("今年3月开始的成本", marStart, NOW.toLocalDate());
     }
 
-    // R3 New-1: 以后/之后 = 「以来」(起点=该月1日, 止=今天); 以前/之前/前/和/、 不是单月, 回落整年 (偏宽不丢数据)
-    @Test
-    void afterBeforeAndConjunctionAfterAMonth_areNotCollapsedToThatSingleMonth() {
-        LocalDate marStart = LocalDate.of(2026, 3, 1);
-        LocalDate yearEnd = LocalDate.of(2026, 12, 31);
-        LocalDate yearStart = LocalDate.of(2026, 1, 1);
-        assertRange("今年3月以后的成本", marStart, NOW.toLocalDate());
-        assertRange("今年3月之后的成本", marStart, NOW.toLocalDate());
-        assertRange("今年3月之前的成本", yearStart, yearEnd);
-        assertRange("今年3月以前的成本", yearStart, yearEnd);
-        assertRange("今年3月前的成本", yearStart, yearEnd);
-        assertRange("今年3月和4月的成本", yearStart, yearEnd);
-        assertRange("今年3月、4月的成本", yearStart, yearEnd);
+    // R3/R4: 「N月 + 以后/之后/后/之前/以前/前/和/、/到(无年份的第二个月)」每句独立报告 (精确起止日期; today=2026-11-15)
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+            "今年3月以后的成本, 2026-03-01, 2026-11-15",
+            "今年3月之后的成本, 2026-03-01, 2026-11-15",
+            "今年3月后的成本, 2026-03-01, 2026-11-15",
+            "今年3月之前的成本, 2026-01-01, 2026-02-28",
+            "今年3月以前的成本, 2026-01-01, 2026-02-28",
+            "今年3月前的成本, 2026-01-01, 2026-02-28",
+            "今年3月份前的成本, 2026-01-01, 2026-02-28",
+            "今年3月和4月的成本, 2026-01-01, 2026-12-31",
+            "今年3月、4月的成本, 2026-01-01, 2026-12-31",
+            "去年12月到2月的成本, 2025-12-01, 2026-02-28",
+            "今年3月到5月的成本, 2026-03-01, 2026-05-31",
+    })
+    void monthWithTrailingWord_exactRange(String text, LocalDate start, LocalDate end) {
+        assertRange(text, start, end);
     }
 
-    // R3 New-2: 第二个月没写年份且比起始月小 = 跨年
+    // R4 M3: 「今年1月之前」前面没有可统计的月份: 如实认不出, 不猜成整年 / 单月
     @Test
-    void rangeWhoseSecondMonthHasNoYear_crossesTheYearWhenItIsEarlierThanTheFirst() {
-        assertRange("去年12月到2月的成本", LocalDate.of(2025, 12, 1), LocalDate.of(2026, 2, 28));
-        assertRange("今年3月到5月的成本", LocalDate.of(2026, 3, 1), LocalDate.of(2026, 5, 31));
+    void monthBeforeJanuary_isNotRecognised_notGuessed() {
+        for (String text : new String[]{"今年1月之前的成本", "今年1月以前的成本", "今年1月前的成本"}) {
+            assertTrue(rules.extractAndReplace(text, NOW).getExtractedRanges().isEmpty(), text);
+        }
+    }
+
+    // R4 M1: 「和」后面跟的是带年份的月 (对比) 不是并列月份: 本期仍是第一个月; 「和上月比」不再把3月变整年
+    @Test
+    void conjunctionFollowedByAYearedMonthOrComparison_keepsTheFirstMonthAsPrimary() {
+        for (String text : new String[]{"今年3月和去年3月对比", "今年3月和去年3月的成本对比", "今年3月和上月比成本"}) {
+            var r = rules.extractAndReplace(text, NOW).getFirstRange().orElseThrow();
+            assertEquals(LocalDate.of(2026, 3, 1), r.getStart().toLocalDate(), text + " 起");
+            assertEquals(LocalDate.of(2026, 3, 31), r.getEnd().toLocalDate(), text + " 止");
+        }
+    }
+
+    // R4 M4: 环比对比基准「上月」不是本期
+    @Test
+    void monthOverMonthBase_isSkippedWhenPickingThePrimaryRange() {
+        var mar = rules.extractAndReplace("今年3月的成本和上月比", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 3, 1), mar.getStart().toLocalDate());
+        assertEquals(LocalDate.of(2026, 3, 31), mar.getEnd().toLocalDate());
+        var oct = rules.extractAndReplace("今年10月卤牛肉成本比上月", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 10, 1), oct.getStart().toLocalDate());
+        assertEquals(LocalDate.of(2026, 10, 31), oct.getEnd().toLocalDate());
+        var threeDays = rules.extractAndReplace("3天前成本和上月比", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 11, 12), threeDays.getStart().toLocalDate());
+        // 句子里只有对比基准: 没有本期时间; 「上月」作为本期时间照旧可用 (阴性对照)
+        assertTrue(rules.extractAndReplace("卤牛肉成本和上月比", NOW).getExtractedRanges().isEmpty());
+        assertTrue(rules.extractAndReplace("卤牛肉成本和上月比", NOW).getProcessedText().contains("和上月比"));
+        var lastMonth = rules.extractAndReplace("上月的成本", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 10, 1), lastMonth.getStart().toLocalDate());
     }
 
     @Test
