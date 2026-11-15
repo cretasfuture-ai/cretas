@@ -2,71 +2,75 @@
   客户档案「价格」页 (客户价目表最小闭环, 2026-11-14 DECISIONS 十九):
   列出并维护该客户的专属售价。这里维护的价, 就是销售开单选客户+产品时自动带出的价
   (来源标「客户专属价」, 订单行可回查)。采购价目不在此页。价格列无权限时后端置 null, 显示「—」。
+  组件: Nuxt UI (UTable / UBadge / UButton / UModal / UFormField / UInputNumber / USelectMenu / UEmpty / UAlert) + --cs-*。
+  新增/改价弹窗与删除确认整体都是 UModal, 里面没有 Element 控件。
 -->
 <template>
   <div class="price-tab">
     <div class="toolbar">
       <span class="title">客户专属价目</span>
       <span class="hint">开单选这个客户和对应产品时，会自动带出下面的价，并标注来源「客户专属价」。</span>
-      <el-button v-if="canEdit" type="primary" @click="openAdd">新增专属价</el-button>
+      <UButton v-if="canEdit" icon="i-lucide-plus" @click="openAdd">新增专属价</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="4" animated />
-    <div v-else-if="state === 'error'">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra><el-button type="primary" @click="fetchList">重试</el-button></template>
-      </el-result>
+    <div v-if="state === 'loading'" class="skeleton" data-testid="customer-price-loading">
+      <USkeleton v-for="i in 4" :key="i" class="h-9 w-full" />
     </div>
-    <el-empty v-else-if="rows.length === 0" description="该客户还没有专属价，开单时按统一价或最近成交价" :image-size="80" />
-    <el-table v-else :data="rows" border stripe size="small" data-testid="customer-price-table">
-      <el-table-column label="产品" prop="itemName" min-width="200" show-overflow-tooltip />
-      <el-table-column label="单位" prop="unit" width="80" />
-      <el-table-column label="未税单价" width="130" align="right">
-        <template #default="{ row }">{{ row.standardPrice == null ? '—' : Number(row.standardPrice).toFixed(2) }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="90">
-        <template #default="{ row }">
-          <el-tag :type="row.effective ? 'success' : 'info'" size="small">{{ row.effective ? '生效中' : '未生效' }}</el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="生效日期" prop="effectiveFrom" width="120" />
-      <el-table-column v-if="canEdit" label="操作" width="140">
-        <template #default="{ row }">
-          <el-button link type="primary" @click="openEdit(row)">改价</el-button>
-          <el-button link type="danger" @click="remove(row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-
-    <el-dialog v-model="dialogVisible" :title="editing ? '修改专属价' : '新增专属价'" width="440px" append-to-body>
-      <el-form label-width="90px" @submit.prevent>
-        <el-form-item label="产品">
-          <el-select
-            v-model="form.productTypeId"
-            filterable
-            :disabled="editing"
-            placeholder="选择成品"
-            style="width: 100%"
-            data-testid="price-product-select"
-          >
-            <el-option v-for="p in productOptions" :key="p.id" :label="p.label" :value="p.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="未税单价">
-          <el-input-number v-model="form.standardPrice" :min="0.0001" :precision="4" :controls="false" style="width: 100%" data-testid="price-input" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" :disabled="!form.productTypeId || !(Number(form.standardPrice) > 0)" @click="save">保存</el-button>
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
+    <UEmpty v-else-if="rows.length === 0" icon="i-lucide-tag" description="该客户还没有专属价，开单时按统一价或最近成交价" class="empty" />
+    <UTable v-else :data="rows" :columns="columns" class="cs-table" data-testid="customer-price-table">
+      <template #price-cell="{ row }"><span class="num">{{ row.original.standardPrice == null ? '—' : Number(row.original.standardPrice).toFixed(2) }}</span></template>
+      <template #state-cell="{ row }">
+        <UBadge :color="row.original.effective ? 'success' : 'neutral'" variant="soft">{{ row.original.effective ? '生效中' : '未生效' }}</UBadge>
       </template>
-    </el-dialog>
+      <template #actions-cell="{ row }">
+        <UButton variant="link" size="xs" @click="openEdit(row.original)">改价</UButton>
+        <UButton variant="link" color="error" size="xs" @click="askRemove(row.original)">删除</UButton>
+      </template>
+    </UTable>
+
+    <UModal v-model:open="dialogVisible" :title="editing ? '修改专属价' : '新增专属价'" description="维护该客户的专属未税单价" :ui="{ content: 'max-w-[440px]', description: 'sr-only' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="产品">
+            <USelectMenu
+              v-model="form.productTypeId"
+              :items="productOptions"
+              value-key="id"
+              label-key="label"
+              :disabled="editing"
+              placeholder="选择成品"
+              class="w-full"
+              data-testid="price-product-select"
+            />
+          </UFormField>
+          <UFormField label="未税单价">
+            <UInputNumber v-model="form.standardPrice" :min="0.0001" :format-options="{ minimumFractionDigits: 0, maximumFractionDigits: 4 }" :increment="false" :decrement="false" class="w-full" data-testid="price-input" />
+          </UFormField>
+        </div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="saving" :disabled="!form.productTypeId || !(Number(form.standardPrice) > 0)" @click="save">保存</UButton>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="confirmVisible" title="删除专属价" description="删除后开单按统一价或最近成交价" :ui="{ content: 'max-w-[440px]', description: 'sr-only' }">
+      <template #body>
+        <p class="confirm">删除「{{ pending?.itemName || pending?.productTypeId }}」的专属价？删除后开单按统一价或最近成交价。</p>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="confirmVisible = false">取消</UButton>
+        <UButton color="error" :loading="removing" @click="doRemove">删除</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import type { TableColumn } from '@nuxt/ui';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -89,6 +93,18 @@ const errorMsg = ref('');
 const rows = ref<CustomerPriceItem[]>([]);
 const productOptions = ref<{ id: string; label: string }[]>([]);
 const dialogVisible = ref(false);
+const confirmVisible = ref(false);
+const removing = ref(false);
+const pending = ref<CustomerPriceItem | null>(null);
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns = computed<TableColumn<CustomerPriceItem>[]>(() => [
+  { accessorKey: 'itemName', header: '产品' },
+  { accessorKey: 'unit', header: '单位' },
+  { id: 'price', header: '未税单价', meta: R },
+  { id: 'state', header: '状态' },
+  { accessorKey: 'effectiveFrom', header: '生效日期' },
+  ...(canEdit.value ? [{ id: 'actions', header: '操作' }] : []),
+]);
 const editing = ref(false);
 const saving = ref(false);
 const form = ref<{ productTypeId: string; standardPrice: number | null }>({ productTypeId: '', standardPrice: null });
@@ -148,22 +164,24 @@ async function save() {
   }
 }
 
-async function remove(row: CustomerPriceItem) {
+function askRemove(row: CustomerPriceItem) {
+  pending.value = row;
+  confirmVisible.value = true;
+}
+
+async function doRemove() {
+  const row = pending.value;
+  if (!row || !factoryId.value) return;
+  removing.value = true;
   try {
-    await ElMessageBox.confirm(`删除「${row.itemName || row.productTypeId}」的专属价？删除后开单按统一价或最近成交价。`, '删除专属价', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    });
-  } catch {
-    return;
-  }
-  try {
-    await deleteCustomerPrice(factoryId.value as string, props.customerId, row.itemId);
+    await deleteCustomerPrice(factoryId.value, props.customerId, row.itemId);
     ElMessage.success('已删除');
+    confirmVisible.value = false;
     await fetchList();
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '删除失败');
+  } finally {
+    removing.value = false;
   }
 }
 
@@ -173,6 +191,12 @@ onMounted(fetchList);
 <style scoped>
 .price-tab { padding: 12px 0; }
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.title { font-size: 15px; font-weight: 600; }
-.hint { flex: 1; color: var(--cs-muted); font-size: 12px; }
+.title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.hint { flex: 1; color: var(--cs-muted); font-size: var(--cs-font-small); }
+.skeleton { display: grid; gap: 8px; }
+.form { display: grid; gap: var(--cs-space-4); }
+.confirm { margin: 0; color: var(--cs-text); }
+.num { font-variant-numeric: tabular-nums; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 600; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: var(--cs-font); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

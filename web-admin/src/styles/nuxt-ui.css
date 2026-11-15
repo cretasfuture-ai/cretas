@@ -41,6 +41,10 @@
 /* 未分层 + html:root：压过 Nuxt UI 在 base 层里的 :root 取值 */
 html:root {
   --ui-primary: var(--cs-primary);
+  --ui-success: var(--cs-success);
+  --ui-warning: var(--cs-warning);
+  --ui-error: var(--cs-danger);
+  --ui-info: var(--cs-info);
   --ui-color-primary-500: var(--cs-primary);
   --ui-color-primary-600: var(--cs-primary-hover);
   --ui-bg: var(--cs-surface);
