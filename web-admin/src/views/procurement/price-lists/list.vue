@@ -1,10 +1,11 @@
 <script setup lang="ts">
+import CsDateField from '@/components/cs/CsDateField.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Search } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
 
@@ -64,6 +65,41 @@ function handleFilterReset() {
   filterActive.value = '';
   pagination.value.page = 1;
 }
+
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const typeItems = computed(() => [
+  { label: '全部类型', value: 'ALL' },
+  ...priceTypeOptions.value.map((pt) => ({ label: priceTypeMap[pt] || pt, value: pt })),
+]);
+const activeItems = computed(() => [{ label: '全部状态', value: 'ALL' }, ...activeOptions.value]);
+const typeSelect = computed({
+  get: () => filterPriceType.value || 'ALL',
+  set: (v: string) => { filterPriceType.value = v === 'ALL' ? '' : v; },
+});
+const activeSelect = computed({
+  get: () => filterActive.value || 'ALL',
+  set: (v: string) => { filterActive.value = v === 'ALL' ? '' : (v as 'ACTIVE' | 'INACTIVE'); },
+});
+const sizeItems = [10, 20, 50].map((n) => ({ label: `${n} 条/页`, value: n }));
+const priceTypeItems = Object.entries(priceTypeMap).map(([value, label]) => ({ value, label }));
+const priceFormat = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+const expanded = ref<Record<string, boolean>>({});
+const columns: TableColumn<TableRow>[] = [
+  { id: 'expand', header: '', meta: { class: { th: 'w-12', td: 'w-12' } } },
+  { id: 'name', header: '价格表名称' },
+  { id: 'priceType', header: '类型' },
+  { id: 'effectiveFrom', header: '生效日期' },
+  { id: 'effectiveTo', header: '失效日期' },
+  { id: 'isActive', header: '状态' },
+  { id: 'actions', header: '操作' },
+];
+const itemColumns: TableColumn<TableRow>[] = [
+  { id: 'itemName', accessorKey: 'itemName', header: '项目名称' },
+  { id: 'unit', accessorKey: 'unit', header: '单位' },
+  { id: 'standardPrice', header: '标准价', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'minPrice', header: '最低价', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'maxPrice', header: '最高价', meta: { class: { th: 'text-right', td: 'text-right' } } },
+];
 
 const form = ref({
   name: '',
@@ -138,157 +174,132 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
 
 <template>
   <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">价格表管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条</span>
-          </div>
-          <div class="header-right">
-            <el-input
-              v-model="searchKeyword"
-              placeholder="搜索价格表名称"
-              clearable
-              :prefix-icon="Search"
-              style="width: 240px; margin-right: 12px;"
-              @keyup.enter="handleSearch"
-              @clear="handleSearchClear"
-            />
-            <el-button type="primary" @click="handleSearch">搜索</el-button>
-            <el-button v-if="canWrite && canViewPrice" type="primary" :icon="Plus" @click="dialogVisible = true">新建价格表</el-button>
-          </div>
-        </div>
-      </template>
+    <div class="cs-page-head">
+      <div>
+        <h2>价格表管理</h2>
+        <p>共 {{ pagination.total }} 条</p>
+      </div>
+      <div class="head-actions">
+        <UButton v-if="canWrite && canViewPrice" icon="i-lucide-plus" @click="dialogVisible = true">新建价格表</UButton>
+      </div>
+    </div>
 
-      <template v-if="canViewPrice">
+    <section v-if="canViewPrice" class="cs-card">
+      <div class="cs-card-head">
+        <UInput
+          v-model="searchKeyword"
+          icon="i-lucide-search"
+          placeholder="搜索价格表名称"
+          class="w-60"
+          @keyup.enter="handleSearch"
+        />
+        <UButton icon="i-lucide-search" @click="handleSearch">搜索</UButton>
         <!-- 筛选: 按当前数据里实际存在的 类型/状态 生成选项, 非固定枚举 -->
-        <div class="filter-bar">
-          <el-select
-            v-model="filterPriceType"
-            placeholder="全部类型"
-            clearable
-            style="width: 140px"
-            @change="handleFilterChange"
-          >
-            <el-option v-for="pt in priceTypeOptions" :key="pt" :label="priceTypeMap[pt] || pt" :value="pt" />
-          </el-select>
-          <el-select
-            v-model="filterActive"
-            placeholder="全部状态"
-            clearable
-            style="width: 140px"
-            @change="handleFilterChange"
-          >
-            <el-option v-for="opt in activeOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-          <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
-        </div>
+        <USelect v-model="typeSelect" :items="typeItems" class="w-36" @update:model-value="handleFilterChange" />
+        <USelect v-model="activeSelect" :items="activeItems" class="w-36" @update:model-value="handleFilterChange" />
+        <UButton icon="i-lucide-rotate-ccw" color="neutral" variant="outline" @click="handleFilterReset">重置</UButton>
+      </div>
 
-        <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border row-key="id" style="width: 100%">
-          <el-table-column type="expand">
-            <template #default="{ row }">
-              <div style="padding: 12px 48px">
-                <el-table :data="row.items || []" border size="small">
-                  <el-table-column prop="itemName" label="项目名称" min-width="150" />
-                  <el-table-column prop="unit" label="单位" width="80" align="center" />
-                  <el-table-column prop="standardPrice" label="标准价" width="120" align="right">
-                    <template #default="{ row: item }">{{ formatAmount(item.standardPrice) }}</template>
-                  </el-table-column>
-                  <el-table-column prop="minPrice" label="最低价" width="120" align="right">
-                    <template #default="{ row: item }">{{ formatAmount(item.minPrice) }}</template>
-                  </el-table-column>
-                  <el-table-column prop="maxPrice" label="最高价" width="120" align="right">
-                    <template #default="{ row: item }">{{ formatAmount(item.maxPrice) }}</template>
-                  </el-table-column>
-                </el-table>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="name" label="价格表名称" min-width="200" show-overflow-tooltip />
-          <el-table-column prop="priceType" label="类型" width="100" align="center">
-            <template #default="{ row }">
-              <el-tag size="small">{{ priceTypeMap[row.priceType] || row.priceType }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="effectiveFrom" label="生效日期" width="120" />
-          <el-table-column prop="effectiveTo" label="失效日期" width="120" />
-          <el-table-column prop="isActive" label="状态" width="90" align="center">
-            <template #default="{ row }">
-              <el-tag :type="row.isActive ? 'success' : 'info'" size="small">{{ row.isActive ? '生效中' : '未生效' }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="100" fixed="right" align="center">
-            <template #default="{ row }">
-              <el-button v-if="canWrite" type="danger" link size="small" @click="handleDelete(row.id)">删除</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+      <UTable v-model:expanded="expanded" :data="tableData" :columns="columns" :loading="loading" class="cs-table" :get-row-id="(r: TableRow) => String(r.id)">
+        <template #empty>暂无数据</template>
+        <template #expand-cell="{ row }">
+          <UButton
+            size="xs"
+            variant="ghost"
+            color="neutral"
+            :icon="row.getIsExpanded() ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+            :aria-label="row.getIsExpanded() ? '收起明细' : '展开明细'"
+            @click="row.toggleExpanded()"
+          />
+        </template>
+        <template #name-cell="{ row }"><span :title="row.original.name">{{ row.original.name }}</span></template>
+        <template #priceType-cell="{ row }">
+          <UBadge color="primary" variant="soft">{{ priceTypeMap[row.original.priceType] || row.original.priceType }}</UBadge>
+        </template>
+        <template #effectiveFrom-cell="{ row }"><span class="num">{{ row.original.effectiveFrom }}</span></template>
+        <template #effectiveTo-cell="{ row }"><span class="num">{{ row.original.effectiveTo }}</span></template>
+        <template #isActive-cell="{ row }">
+          <UBadge :color="row.original.isActive ? 'success' : 'neutral'" variant="soft">{{ row.original.isActive ? '生效中' : '未生效' }}</UBadge>
+        </template>
+        <template #actions-cell="{ row }">
+          <UButton v-if="canWrite" size="xs" variant="link" color="error" @click="handleDelete(row.original.id)">删除</UButton>
+        </template>
+        <template #expanded="{ row }">
+          <div class="expanded">
+            <UTable :data="row.original.items || []" :columns="itemColumns" class="cs-table">
+              <template #empty>暂无明细</template>
+              <template #standardPrice-cell="{ row: item }"><span class="num">{{ formatAmount(item.original.standardPrice) }}</span></template>
+              <template #minPrice-cell="{ row: item }"><span class="num">{{ formatAmount(item.original.minPrice) }}</span></template>
+              <template #maxPrice-cell="{ row: item }"><span class="num">{{ formatAmount(item.original.maxPrice) }}</span></template>
+            </UTable>
+          </div>
+        </template>
+      </UTable>
 
-        <div class="pagination-wrapper">
-          <el-pagination v-model:current-page="pagination.page" v-model:page-size="pagination.size"
-            :page-sizes="[10, 20, 50]" :total="filteredData.length"
-            layout="total, sizes, prev, pager, next, jumper"
-            @current-change="handlePageChange" @size-change="handleSizeChange" />
+      <div class="pagination-wrapper">
+        <span class="total">共 {{ filteredData.length }} 条</span>
+        <USelect v-model="pagination.size" :items="sizeItems" class="w-28" @update:model-value="handleSizeChange" />
+        <UPagination v-model:page="pagination.page" :items-per-page="pagination.size" :total="filteredData.length" show-edges :sibling-count="1" @update:page="handlePageChange" />
+      </div>
+    </section>
+    <section v-else class="cs-card">
+      <div class="no-perm">您没有查看价格数据的权限</div>
+    </section>
+
+    <UModal v-if="canViewPrice" v-model:open="dialogVisible" title="新建价格表" description="新建采购/销售/调拨价格表" :dismissible="false" :ui="{ footer: 'justify-end', content: 'max-w-[760px]', description: 'sr-only' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="名称" required><UInput v-model="form.name" placeholder="例如:2025 Q2 采购标准价" class="w-full" /></UFormField>
+          <UFormField label="类型" required>
+            <URadioGroup v-model="form.priceType" orientation="horizontal" :items="priceTypeItems" />
+          </UFormField>
+          <div class="date-row">
+            <UFormField label="生效日期" required class="flex-1"><CsDateField v-model="form.effectiveFrom" class="w-full" /></UFormField>
+            <UFormField label="失效日期" class="flex-1"><CsDateField v-model="form.effectiveTo" clearable class="w-full" /></UFormField>
+          </div>
+          <USeparator label="价格明细" />
+          <div class="item-row item-header">
+            <span class="c-name">名称</span>
+            <span class="c-unit">单位</span>
+            <span class="c-price"><span class="req-star">*</span>标准价</span>
+            <span class="c-price">最低</span>
+            <span class="c-price">最高</span>
+            <span class="c-act"></span>
+          </div>
+          <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
+            <UInput v-model="item.itemName" placeholder="名称" class="c-name" />
+            <UInput v-model="item.unit" placeholder="单位" class="c-unit" />
+            <UInputNumber v-model="item.standardPrice" :min="0" :step-snapping="false" placeholder="标准价" :format-options="priceFormat" :increment="false" :decrement="false" class="c-price" />
+            <UInputNumber v-model="item.minPrice" :min="0" :step-snapping="false" placeholder="最低" :format-options="priceFormat" :increment="false" :decrement="false" class="c-price" />
+            <UInputNumber v-model="item.maxPrice" :min="0" :step-snapping="false" placeholder="最高" :format-options="priceFormat" :increment="false" :decrement="false" class="c-price" />
+            <UButton variant="link" color="error" class="c-act" :disabled="form.items.length <= 1" @click="removeItem(idx)">删除</UButton>
+          </div>
+          <UButton color="neutral" variant="outline" block icon="i-lucide-plus" @click="addItem">添加行</UButton>
         </div>
       </template>
-      <el-empty v-else description="您没有查看价格数据的权限" />
-    </el-card>
-
-    <el-dialog v-if="canViewPrice" v-model="dialogVisible" title="新建价格表" width="720px" destroy-on-close>
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="名称" required><el-input v-model="form.name" placeholder="例如:2025 Q2 采购标准价" /></el-form-item>
-        <el-form-item label="类型" required>
-          <el-radio-group v-model="form.priceType">
-            <el-radio value="PURCHASE_PRICE">采购价</el-radio>
-            <el-radio value="SELLING_PRICE">销售价</el-radio>
-            <el-radio value="TRANSFER_PRICE">调拨价</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item label="生效日期" required><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="失效日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-divider>价格明细</el-divider>
-        <div class="item-row item-header">
-          <span style="width: 150px">名称</span>
-          <span style="width: 80px">单位</span>
-          <span style="width: 120px"><span class="req-star">*</span>标准价</span>
-          <span style="width: 110px">最低</span>
-          <span style="width: 110px">最高</span>
-          <span style="width: 50px"></span>
-        </div>
-        <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
-          <el-input v-model="item.itemName" placeholder="名称" style="width: 150px" />
-          <el-input v-model="item.unit" placeholder="单位" style="width: 80px" />
-          <el-input-number v-model="item.standardPrice" :min="0" :precision="2" placeholder="标准价" style="width: 120px" />
-          <el-input-number v-model="item.minPrice" :min="0" :precision="2" placeholder="最低" style="width: 110px" />
-          <el-input-number v-model="item.maxPrice" :min="0" :precision="2" placeholder="最高" style="width: 110px" />
-          <el-button type="danger" link @click="removeItem(idx)" :disabled="form.items.length <= 1">删除</el-button>
-        </div>
-        <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
-      </el-form>
       <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="handleCreate">创建</el-button>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton @click="handleCreate">创建</UButton>
       </template>
-    </el-dialog>
+    </UModal>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-}
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: baseline; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-    .data-count { font-size: 13px; color: #909399; }
-  }
-}
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
-.filter-bar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.item-row { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
-.item-header { font-size: 13px; color: #606266; font-weight: 500; margin-bottom: 4px; }
-.req-star { color: #f56c6c; margin-right: 2px; }
+<style scoped>
+.page-wrapper { padding: var(--cs-space-4); }
+.head-actions { display: flex; gap: var(--cs-space-2); align-items: center; }
+.expanded { padding: var(--cs-space-3) var(--cs-space-6); background: var(--cs-surface-subtle); }
+.no-perm { padding: var(--cs-space-6); text-align: center; color: var(--cs-muted); }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.date-row { display: flex; gap: var(--cs-space-3); }
+.flex-1 { flex: 1; min-width: 0; }
+.item-row { display: flex; gap: var(--cs-space-2); align-items: center; }
+.item-header { font-size: var(--cs-font-small); color: var(--cs-muted); font-weight: 500; }
+.c-name { width: 170px; flex: none; }
+.c-unit { width: 80px; flex: none; }
+.c-price { width: 120px; flex: none; }
+.c-act { width: 56px; flex: none; }
+.req-star { color: var(--cs-danger); margin-right: 2px; }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>
