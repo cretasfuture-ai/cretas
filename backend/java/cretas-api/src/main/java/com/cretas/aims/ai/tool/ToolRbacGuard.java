@@ -114,11 +114,41 @@ public class ToolRbacGuard {
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {
-        String role = context != null ? String.valueOf(context.getOrDefault("userRole", "未知")) : "未知";
+        String role = com.cretas.aims.ai.tool.RoleDisplay.of(
+                context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "");
+        String need = permissionCodes == null || permissionCodes.length == 0 ? ""
+                : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
+                        .distinct().collect(java.util.stream.Collectors.joining("、"))
+                        // 写权限也走这里: 不说「可以查看」(复审 R2-M5)
+                        + "（拥有其中任一项权限的角色可以使用）。";
         return String.format(
-                "您当前的角色 (%s) 没有权限执行「%s」操作。此操作涉及敏感数据/库存/资金, 需要授权角色。"
-                        + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员申请权限。",
-                role, action);
+                "您当前的角色 (%s) 没有权限使用「%s」。此操作涉及敏感数据/库存/资金, 需要授权角色。%s"
+                        + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。",
+                role, actionLabel(action), need);
+    }
+
+    private static final Map<String, String> ACTION_LABELS = Map.of(
+            "price_history_query", "采购价格历史");
+
+    private static final Map<String, String> PERMISSION_LABELS = Map.of(
+            "procurement:read", "采购查看", "procurement:read_write", "采购管理",
+            "finance:read", "财务查看", "finance:read_write", "财务管理",
+            "procurement:price:view", "采购价格查看");
+
+    /** 工具名 → 功能名; 不认识的 ASCII 标识 (snake_case 工具名) 不原样显示。 */
+    static String actionLabel(String action) {
+        if (action == null) return "该功能";
+        String mapped = ACTION_LABELS.get(action);
+        if (mapped != null) return mapped;
+        return action.matches("[A-Za-z0-9_:.\\-]+") ? "该功能" : action;
+    }
+
+    static String permissionLabel(String code) {
+        String mapped = PERMISSION_LABELS.get(code);
+        if (mapped != null) return mapped;
+        // 未登记的码: 写权限不能说成「查看权限」
+        return code != null && (code.endsWith(":read_write") || code.endsWith(":write") || code.contains("write"))
+                ? "对应模块的操作权限" : "对应模块的查看权限";
     }
 
     private User loadUser(Map<String, Object> context) {

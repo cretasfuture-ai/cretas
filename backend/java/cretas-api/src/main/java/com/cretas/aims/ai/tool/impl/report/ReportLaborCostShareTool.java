@@ -59,7 +59,7 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
                         "startDate", Map.of("type", "string", "format", "date", "description", "开始日期 yyyy-MM-dd，默认本月 1 号"),
                         "endDate", Map.of("type", "string", "format", "date", "description", "结束日期 yyyy-MM-dd，默认今天"),
                         "period", Map.of("type", "string", "description", "快捷周期: last_week / this_week / this_month / last_month；与日期同时给时以日期为准"),
-                        "productName", Map.of("type", "string", "description", "产品名（可选）；同名优先，多个包含匹配时给候选不合计")
+                        "productName", Map.of("type", "string", "description", "产品名（可选）；按本厂在用产品名完整匹配，没找到如实说明，不合计多个产品")
                 ),
                 "required", List.of()));
     }
@@ -76,6 +76,13 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
+        // 产品名本次请求解析一次; 回复开头写明按哪个产品 / 全厂统计 (「卤牛肉片」按卤牛肉回答时也看得出来)
+        ReportToolSchemas.ProductResolution product = ReportToolSchemas.resolveProduct(productTypeRepository, factoryId, getString(params, "productName"));
+        return ReportToolSchemas.withNote(answer(factoryId, params, context, product), product.leadIn(true));
+    }
+
+    private Map<String, Object> answer(String factoryId, Map<String, Object> params, Map<String, Object> context,
+                                       ReportToolSchemas.ProductResolution product) throws Exception {
         LocalDate today = today();
         String startText = blank(getString(params, "startDate"));
         String endText = blank(getString(params, "endDate"));
@@ -96,23 +103,21 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        String keyword = blank(getString(params, "productName"));
+        String keyword = product.label();
         boolean showAmounts = replyShowsAmounts(context, "cost", "totalCost", "laborCost");
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null
                 ? ProcessSecretLlmCostScope.Excluded.NONE : llmCostScope.forCurrentCaller(factoryId);
         Set<String> productIds = null;
-        if (keyword != null && productTypeRepository != null) {
-            List<ProductType> candidates = ReportToolSchemas.matchProducts(productTypeRepository, factoryId, keyword);
-            String msg = ReportToolSchemas.productResolutionMessage(candidates, keyword, "统计人工成本占比");
-            if (msg != null) {
-                Map<String, Object> none = new LinkedHashMap<>();
-                none.put("productFilter", keyword);
-                none.put("candidates", candidates.stream().map(ProductType::getName).toList());
-                return buildSimpleResult(msg, none);
-            }
-            productIds = new HashSet<>();
-            productIds.add(candidates.get(0).getId());
+        String resolution = product.refusalMessage("统计人工成本占比", true);
+        if (resolution != null) {
+            Map<String, Object> none = new LinkedHashMap<>();
+            none.put("productFilter", keyword);
+            none.put("candidates", product.candidateNames());
+            return buildSimpleResult(resolution, none);
+        }
+        if (product.scope() == ReportToolSchemas.ProductScope.MATCHED) {
+            productIds = new HashSet<>(product.productIds());
         }
         ReportCostQueryTool.Aggregate agg = ReportCostQueryTool.aggregate(batchRepository, factoryId, start, end, productIds != null ? null : keyword, productIds, secret);
 

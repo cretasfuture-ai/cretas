@@ -28,6 +28,14 @@ public class QualityStatsQueryTool extends AbstractBusinessTool {
     @Autowired
     private QualityInspectionRepository qualityInspectionRepository;
 
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductionBatchRepository productionBatchRepository;
+
+    /** 测试可覆盖; 生产用服务器本地日期。 */
+    protected LocalDate today() {
+        return LocalDate.now();
+    }
+
     @Override
     public String getToolName() {
         return "quality_stats_query";
@@ -60,6 +68,18 @@ public class QualityStatsQueryTool extends AbstractBusinessTool {
         dateFrom.put("format", "date");
         dateFrom.put("description", "自定义查询开始日期，格式：yyyy-MM-dd（period=custom时使用）");
         properties.put("dateFrom", dateFrom);
+
+        // startDate / endDate: 对话预处理把原话里的时间 (本月 / 上周 ...) 放进这两个参数; 声明了就必须真的按它过滤
+        Map<String, Object> startDate = new HashMap<>();
+        startDate.put("type", "string");
+        startDate.put("format", "date");
+        startDate.put("description", "起始日期（用户说了时间范围时使用，优先于统计周期）");
+        properties.put("startDate", startDate);
+        Map<String, Object> endDate = new HashMap<>();
+        endDate.put("type", "string");
+        endDate.put("format", "date");
+        endDate.put("description", "结束日期");
+        properties.put("endDate", endDate);
 
         // dateTo: 自定义结束日期（可选）
         Map<String, Object> dateTo = new HashMap<>();
@@ -104,6 +124,13 @@ public class QualityStatsQueryTool extends AbstractBusinessTool {
         String period = getString(params, "period", "today");
         String dateFromStr = getString(params, "dateFrom");
         String dateToStr = getString(params, "dateTo");
+        String saidStart = getString(params, "startDate");
+        String saidEnd = getString(params, "endDate");
+        if (saidStart != null && !saidStart.isBlank()) {
+            period = "custom";
+            dateFromStr = saidStart;
+            if (saidEnd != null && !saidEnd.isBlank()) dateToStr = saidEnd;
+        }
         String productTypeId = getString(params, "productTypeId");
         Boolean includeDetails = getBoolean(params, "includeDetails", false);
 
@@ -118,7 +145,7 @@ public class QualityStatsQueryTool extends AbstractBusinessTool {
         Map<String, Object> stats = new HashMap<>();
 
         // 基础统计
-        long totalCount = qualityInspectionRepository.countByFactoryIdAndInspectionDateAfter(factoryId, startDate);
+        long totalCount = qualityInspectionRepository.findByFactoryIdAndDateRange(factoryId, startDate, endDate).size();
         long passCountNum = qualityInspectionRepository.countByFactoryIdAndResult(factoryId, "PASS");
         long failCountNum = qualityInspectionRepository.countByFactoryIdAndResult(factoryId, "FAIL");
 
@@ -207,17 +234,58 @@ public class QualityStatsQueryTool extends AbstractBusinessTool {
         String summary = generateSummary(period, totalCount, avgPassRate, qualityIssues);
         stats.put("summary", summary);
 
+        // 「本月生产了多少批次，合格率多少」: 批次数 (已完成, 按结束日落期) + 合格率 (检验结果合格次数 ÷ 检验次数); 没数据如实说缺什么
+        Integer completedBatches = countCompletedBatches(factoryId, startDate, endDate);
+        stats.put("completedBatchCount", completedBatches);
+        stats.put("inspectionPassRatePct", totalCount > 0 && firstPassRate != null
+                ? BigDecimal.valueOf(firstPassRate).setScale(1, RoundingMode.HALF_UP) : null);
+        stats.put("message", humanMessage(startDate, endDate, completedBatches, totalCount, firstPassRate));
+
         log.info("质检统计查询完成 - 周期: {}, 总检验数: {}, 平均合格率: {}",
                 period, totalCount, avgPassRate);
 
         return stats;
     }
 
+    /** 已完成生产批次数 (按结束日落期, 与成本分析页同口径; 排除文员在制批)。仓库不可用时 null = 没量到, ⛔ 不写 0。 */
+    private Integer countCompletedBatches(String factoryId, LocalDate start, LocalDate end) {
+        if (productionBatchRepository == null) return null;
+        List<com.cretas.aims.entity.ProductionBatch> batches =
+                productionBatchRepository.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
+                        factoryId, start.atStartOfDay(), end.plusDays(1).atStartOfDay());
+        int n = 0;
+        if (batches != null) {
+            for (com.cretas.aims.entity.ProductionBatch b : batches) {
+                if (b.getStatus() != com.cretas.aims.entity.enums.ProductionBatchStatus.COMPLETED) continue;
+                if ("CLERK_WIP".equals(b.getBatchType())) continue;
+                n++;
+            }
+        }
+        return n;
+    }
+
+    static String humanMessage(LocalDate start, LocalDate end, Integer completedBatches, long inspections, Double passRatePct) {
+        StringBuilder sb = new StringBuilder().append(start).append(" 至 ").append(end).append("：");
+        if (completedBatches == null) {
+            sb.append("生产批次数暂时查不到；");
+        } else {
+            sb.append("已完成生产批次 ").append(completedBatches).append(" 个；");
+        }
+        if (inspections <= 0 || passRatePct == null) {
+            sb.append("这段时间没有质检记录，合格率算不出（需要先在质检环节录入检验结果），不估算。");
+        } else {
+            sb.append("质检 ").append(inspections).append(" 次，合格率 ")
+                    .append(BigDecimal.valueOf(passRatePct).setScale(1, RoundingMode.HALF_UP))
+                    .append("%（合格次数 ÷ 检验次数）。");
+        }
+        return sb.toString();
+    }
+
     /**
      * 根据周期计算日期范围
      */
     private LocalDate[] calculateDateRange(String period, String dateFromStr, String dateToStr) {
-        LocalDate today = LocalDate.now();
+        LocalDate today = today();
         LocalDate startDate;
         LocalDate endDate = today;
 
