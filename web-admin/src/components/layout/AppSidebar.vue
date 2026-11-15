@@ -19,7 +19,7 @@ import {
   TrendCharts, Sell, Upload, ChatDotRound, Aim, Odometer, Tickets,
   Histogram, StarFilled
 } from '@element-plus/icons-vue';
-import { factoryMenuForType, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
+import { factoryMenuForType, wholesaleWorkdeskTitles, platformMenuConfig, financeManagerMenu, MENU_SECTION_TITLES, type MenuItem, type MenuSection } from './menuConfig';
 import { resolveWorkspaceFactoryType, resolveWorkspaceFactoryTypeFromUser } from '@/config/workspaces';
 import SidebarMenuNode from './SidebarMenuNode.vue';
 import MenuSearch from './MenuSearch.vue';
@@ -538,7 +538,8 @@ function handleSelect(index: string) {
     path: target.path,
     fullPath: target.fullPath,
     query: target.query,
-    title: typeof target.meta.title === 'string' ? target.meta.title : undefined,
+    title: (menuProfile.value === 'wholesale' ? wholesaleWorkdeskTitles[target.path] : undefined)
+      || (typeof target.meta.title === 'string' ? target.meta.title : undefined),
   }));
   if (appStore.isMobile) {
     appStore.closeMobileMenu();

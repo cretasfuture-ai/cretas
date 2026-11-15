@@ -3,6 +3,7 @@
  */
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
 import { setupRouterGuards } from './guards';
+import { digitalEmployeeProps } from './digitalEmployeeProps';
 import smartBIRoutes, { smartBIRedirects } from './modules/smartbi';
 import productionAnalyticsRoutes from './modules/production-analytics';
 import crmRoutes from './modules/crm';
@@ -231,6 +232,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/sales-owner',
         name: 'SalesOwnerWorkdesk',
         component: () => import('@/views/workdesk/SalesOwnerWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
           title: '销售老板工作台',
@@ -272,6 +274,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/warehouse-keeper',
         name: 'WarehouseKeeperWorkdesk',
         component: () => import('@/views/workdesk/WarehouseKeeperWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
           title: '仓管员工作台',
@@ -287,6 +290,7 @@ const businessRoutes: RouteRecordRaw[] = [
         path: 'workdesk/purchaser',
         name: 'PurchaserWorkdesk',
         component: () => import('@/views/workdesk/PurchaserWorkdesk.vue'),
+        props: digitalEmployeeProps,
         meta: {
           requiresAuth: true,
           title: '采购员工作台',
