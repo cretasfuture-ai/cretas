@@ -49,16 +49,16 @@ class FactoryCatalogRuntimeBindingContractTest {
         CatalogSnapshot catalog = readCatalog();
         Map<String, ToolExecutor> metadata = scanToolMetadata();
 
-        assertThat(catalog.canonicalCodes).hasSize(266);
+        assertThat(catalog.canonicalCodes).hasSize(267);
         assertThat(catalog.reclassifiedCodes).hasSize(29);
         Set<String> canonicalReclassifiedCodes = catalog.reclassifiedCodes.stream()
                 .map(FactoryIntentCatalog::canonicalCode)
                 .collect(java.util.stream.Collectors.toCollection(LinkedHashSet::new));
         assertThat(canonicalReclassifiedCodes).hasSize(29);
         assertThat(FactoryIntentCatalog.canonicalCodes())
-                .hasSize(266)
+                .hasSize(267)
                 .containsAll(canonicalReclassifiedCodes);
-        assertThat(catalog.toolNames).hasSize(252);
+        assertThat(catalog.toolNames).hasSize(253);
         assertThat(metadata.keySet()).containsAll(catalog.toolNames);
 
         ToolRegistry toolRegistry = register(metadata.values());

@@ -102,7 +102,10 @@ class FactorySecrecyGatesContractTest {
             // (process_secret_names 经它取, 不再直接写 SQL); 别名解析; 离线重放工具的 --live-lists
             Map.entry("common/process_secret_sql.py", Set.of("TRAINING_FILTER", "EGRESS_REDACTION")),
             Map.entry("common/process_secret_terms.py", Set.of("TRAINING_FILTER")),
-            Map.entry("scripts/training_filter_replay.py", Set.of("TRAINING_FILTER"))));
+            Map.entry("scripts/training_filter_replay.py", Set.of("TRAINING_FILTER")),
+            // 意图飞轮导出 (只读): 按「当前」a/c/d/e 判, 写入时保密关、现在保密的行扣下文本 (逐项判定用 common.factory_secrecy.resolve)
+            Map.entry("scripts/intent_flywheel_export.py",
+                    Set.of("PROCESS_SECRET", "EGRESS_REDACTION", "TRAINING_FILTER", "CUSTOMER_HELD"))));
 
     /** 跨厂隔离闸: 一律不读任何一项。 */
     static final List<String> JAVA_ISOLATION_GATES = List.of(

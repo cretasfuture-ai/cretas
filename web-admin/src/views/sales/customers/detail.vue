@@ -162,7 +162,7 @@ const TAB_DEFS: TabDef[] = [
     status: '尚未开放', workaround: '当前请用「退货」tab 处理售后退货',
     actionText: '去退货', actionTabKey: 'returns' },
   // 19 — integration fallback (Chat B S-PRICE-1 pending; internal placeholder)
-  { key: 'priceMemory', label: '价格记忆',
+  { key: 'priceMemory', label: '价格',
     component: defineAsyncComponent(() => import('./detail/tabs/PriceMemoryTab.vue')) },
   // 20-21 — real (Phase D7, D5)
   { key: 'salesUserHist', label: '业务员变更',

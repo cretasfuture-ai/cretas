@@ -4,6 +4,7 @@ import { useRouter, useRoute } from 'vue-router';
 import { useAppStore } from '@/store/modules/app';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
+import { useNavigationVisibilityStore } from '@/store/modules/navigationVisibility';
 import { factoryMenuForType, groupedMenuConfig, menuTrail } from './menuConfig';
 import { usePinnedMenu } from './pinnedMenu';
 import { Star, StarFilled } from '@element-plus/icons-vue';
@@ -17,6 +18,16 @@ const route = useRoute();
 const appStore = useAppStore();
 const authStore = useAuthStore();
 const factoryView = usePlatformFactoryContextStore();
+const navigationVisibility = useNavigationVisibilityStore();
+const currentFactoryMenu = computed(() => {
+  const snapshot = navigationVisibility.snapshot;
+  const identityMatches = navigationVisibility.status === 'ready'
+    && snapshot?.factoryId === (factoryView.factoryId || authStore.factoryId)
+    && snapshot?.role === authStore.currentRole
+    && snapshot?.isPlatform === authStore.isPlatform;
+  return factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType,
+    identityMatches ? snapshot?.menuProfile : undefined);
+});
 
 // 面包屑
 //
@@ -34,7 +45,7 @@ const pinnedMenu = usePinnedMenu();
 const pinnablePath = computed<string | null>(() => {
   if (authStore.isPlatform || authStore.currentRole === 'finance_manager' || !pinnedMenu.currentKey.value) return null;
   if (factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) !== groupedMenuConfig) return null;
-  const trail = menuTrail(groupedMenuConfig, route.fullPath);
+  const trail = menuTrail(currentFactoryMenu.value, route.fullPath);
   const leaf = trail?.[trail.length - 1];
   if (!leaf || leaf.path.split(/[?#]/)[0] !== route.path) return null;
   return pinnedMenu.canPin(leaf.path) ? leaf.path : null;
@@ -47,7 +58,7 @@ const breadcrumbs = computed(() => {
   const useGroupedLayout = !authStore.isPlatform
     && authStore.currentRole !== 'finance_manager'
     && factoryMenuForType(factoryView.context?.factoryType || authStore.factoryType) === groupedMenuConfig;
-  const trail = useGroupedLayout ? menuTrail(groupedMenuConfig, route.fullPath) : null;
+  const trail = useGroupedLayout ? menuTrail(currentFactoryMenu.value, route.fullPath) : null;
   if (trail && trail.length > 1) {
     const leaf = trail[trail.length - 1];
     const isLeafItself = leaf.path.split(/[?#]/)[0] === route.path;

@@ -101,6 +101,7 @@ public class LegacyIntentExitMetrics {
 
     /** 旧出口定了意图 (或旧出口也没答出来, exit 以 NONE 结尾)。 */
     public void recordExit(String site, String exit, String factoryId, String rw, String reason) {
+        com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteExit(exit);   // 意图飞轮痕迹 (只记)
         try {
             incrementSite(site);
             if (registry != null) {

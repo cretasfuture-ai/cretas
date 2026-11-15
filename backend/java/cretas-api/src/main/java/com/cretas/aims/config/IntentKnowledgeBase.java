@@ -3046,6 +3046,16 @@ public class IntentKnowledgeBase {
 
         // 成本差异 (BOM 理论成本 vs 实际成本) 走只读的成本差异意图。COST_QUERY 会生成并保存 AI 成本分析报告 (写),
         // 咨询页里被写闸拦下, 成本差异的问题以前全落到它上面走不通 (S6 复测 #1394)。
+        // 批次出成率排行 (只读, 2026-11-15 新增绑定; 不改既有意图): 这些说法以前落到指标查询/仪表盘总览。
+        phraseToIntentMapping.put("哪个批次出成率最低", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪个批次出成率最高", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("批次出成率排序", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各批次出成率排序", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("批次出成率排行", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("批次出成率最低", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率最低的批次", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率最低", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率最高的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
@@ -3973,6 +3983,12 @@ public class IntentKnowledgeBase {
         // ---- 方言/口语表达 ----
         phraseToIntentMapping.put("销售咋整的", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("卖得咋样", "REPORT_DASHBOARD_OVERVIEW");
+        // 2026-11-14 F006 实测: 「这个月卖得怎么样」不在表里, 掉进闲聊被编了「同比增长 8%」
+        // (句首「这个月」由 stripLeadingTimePhrase 剥掉, 时间窗口仍按原话解析)
+        phraseToIntentMapping.put("卖得怎么样", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("卖得如何", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("生意咋样", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("生意如何", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("库存够不够使", "REPORT_INVENTORY");
         phraseToIntentMapping.put("活干完了没", "PROCESSING_BATCH_LIST");
         phraseToIntentMapping.put("人都来了吗", "ATTENDANCE_TODAY");

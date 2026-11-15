@@ -58,6 +58,10 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.processsecret.ProcessSecretRecipeGuard processSecretGuard;
 
+    /** 红线 3 后续: 应用前锁住并刷新要改的配方头 (见 recalculateApply); 纯单测为 null。 */
+    @jakarta.persistence.PersistenceContext
+    private jakarta.persistence.EntityManager entityManager;
+
     @Override
     public BomYieldEstimateDTO estimateForProduct(
             String factoryId, String productTypeId, String materialCategory) {
@@ -150,6 +154,12 @@ public class BomYieldEstimateServiceImpl implements BomYieldEstimateService {
         for (BomYieldApplyRequest request : requests) {
             assertYieldRateInRange(request);
         }
+        // 红线 3 后续: 在保密检查 / 过期校验读配方之前, 按配方 id 升序锁住要改的配方头 (只锁这些行)。
+        // 配方头没有乐观锁、Hibernate 整行 UPDATE: 不锁的话, 读到之后并发调价重算提交的 total_cost
+        // 会在本事务提交时被旧值写回; 过期校验也会基于锁外的旧值。
+        com.cretas.aims.service.bom.BomRecipeHeadLocks.lockHeadsInIdOrder(
+                entityManager, bomRecipeRepository, factoryId,
+                requests.stream().map(BomYieldApplyRequest::getRecipeId).toList());
         // 工艺保密 (写入侧): 点名的配方里任一属于调用者无编辑权的保密产品, 整批 403、一条都不写。
         // ⛔ 必须在下面的「过期校验」之前: 过期 409 会把库里的标准出成率 (dbCurrent) 原样带回去 (独立审查 V2.1 H1)
         if (processSecretGuard != null) {

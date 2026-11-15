@@ -33,7 +33,9 @@ FACTORY = "F_LUNA_ASK"
 
 
 def _cfg(**kw):
-    base = dict(decision_business_types="FACTORY", decision_special_options=True, decision_fallback="combo")
+    # 本文件守保守档 (v3, 史浩禾口径) 的门槛语义: 全局开关 v3 = 全部工厂按保守档 (分档另见 test_ai_decision_ask_policy_tiers)
+    base = dict(decision_business_types="FACTORY", decision_special_options=True, decision_fallback="combo",
+                decision_luna_policy="v3")
     base.update(kw)
     return AIConfig(**base)
 
@@ -191,4 +193,4 @@ def test_env_selects_policy_and_thresholds(monkeypatch):
     monkeypatch.delenv("AI_DECISION_LUNA_ASK_THRESHOLD")
     cfg = AIConfig.from_env()
     assert (cfg.decision_luna_policy, cfg.luna_ask_threshold, cfg.luna_read_threshold, cfg.luna_margin,
-            cfg.luna_write_threshold) == ("v3", 0.6, 0.15, 0.3, 0.4)
+            cfg.luna_write_threshold) == ("factory", 0.6, 0.15, 0.3, 0.4)

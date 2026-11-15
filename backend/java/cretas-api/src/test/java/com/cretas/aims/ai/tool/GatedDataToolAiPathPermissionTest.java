@@ -205,7 +205,7 @@ public class GatedDataToolAiPathPermissionTest {
     void everyToolIsClassified() {
         // Readings that must happen, or this gate guards nothing.
         assertThat(scan.uninstantiable).as("tools the scan cannot name are invisible to it").isEmpty();
-        assertThat(scan.toolCalls).hasSize(493);
+        assertThat(scan.toolCalls).hasSize(494);
         assertThat(scan.handlers).isGreaterThan(1000);
         for (String known : List.of("balance_sheet_query", "attendance_stats", "purchase_statistics", "order_list")) {
             assertThat(scan.gatedCalls(known)).as("%s must read gated data per the scan", known).isNotEmpty();

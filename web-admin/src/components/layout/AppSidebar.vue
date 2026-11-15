@@ -27,7 +27,7 @@ import { PINNED_MENU_LIMIT, pinnedMenuStorageKey, usePinnedMenu } from './pinned
 import { getF006DemoMenu } from './f006DemoMenu';
 import {
   isFactoryAnalyticsSidebarTurnedOff, isFactoryAnalyticsGroupHidden,
-  getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden,
+  getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden, getFactoryMenuProfile,
 } from './factoryMenuVisibility';
 import { secrecyFromFeatureConfig, secrecyHiddenMenuPaths } from '@/api/factorySecrecy';
 
@@ -41,6 +41,7 @@ const disposalApproval = useDisposalApprovalStore();
 const workspace = useWorkspaceStore();
 const navigationVisibility = useNavigationVisibilityStore();
 const factoryView = usePlatformFactoryContextStore();
+const menuProfile = ref<'wholesale' | undefined>();
 
 // 当前用户角色
 const roleCode = computed(() => authStore.currentRole);
@@ -126,6 +127,7 @@ function isDemoTenant(factoryId: string | undefined): boolean {
 // `filteredMenu`) recompute automatically.
 async function fetchDisabledModules(factoryId: string) {
   const token = navigationVisibility.beginLoading();
+  menuProfile.value = undefined;
   factoryAnalyticsTurnedOff.value = false;
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
@@ -157,6 +159,7 @@ async function fetchDisabledModules(factoryId: string) {
       return;
     }
     factoryAnalyticsTurnedOff.value = isFactoryAnalyticsSidebarTurnedOff(featuresPayload.data);
+    menuProfile.value = getFactoryMenuProfile(featuresPayload.data);
     // 工厂级保密配置 (平台设置, 只读): 「工艺保密」不是明确开启 (=== true) 时隐藏工艺保密菜单
     const secrecyFlags = secrecyFromFeatureConfig(featuresPayload.data);
     hiddenFactoryMenuPaths.value = [
@@ -319,7 +322,7 @@ function filterMenuItem(item: MenuItem): MenuItem | null {
 const filteredMenu = computed(() => {
   const sourceMenu = authStore.isPlatform && !factoryView.isViewingFactory
     ? platformMenuConfig
-    : roleCode.value === 'finance_manager' ? financeManagerMenu : factoryMenuForType(effectiveFactoryType.value);
+    : roleCode.value === 'finance_manager' ? financeManagerMenu : factoryMenuForType(effectiveFactoryType.value, menuProfile.value);
   const demoMenu = factoryView.isViewingFactory ? [] : getF006DemoMenu(effectiveFactoryId.value, roleCode.value);
   return [...demoMenu, ...sourceMenu]
     .map(item => filterMenuItem(item))
@@ -386,6 +389,7 @@ watch(
     navigationVisibility.publish({
       ...identity,
       paths: collectVisiblePaths(visibleMenu),
+      menuProfile: menuProfile.value,
     });
   },
   { immediate: true, deep: true },

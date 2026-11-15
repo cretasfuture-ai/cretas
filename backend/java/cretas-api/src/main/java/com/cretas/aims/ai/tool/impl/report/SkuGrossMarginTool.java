@@ -169,9 +169,45 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         int total = items.size();
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
+        Map<String, Object> data = resultData(shown, total, start, end, defaultPeriod);
+        Map<String, Object> chart = marginChart(shown, secret);
+        if (chart != null) {
+            data.put("charts", List.of(chart));
+        }
         return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
                         replyShowsAmounts(context, "revenue", "cost", "price", "unitCost")),
-                resultData(shown, total, start, end, defaultPeriod));
+                data);
+    }
+
+    /**
+     * 实际销售毛利率排行柱图 (六膳门演示: 问答要出图)。只画有毛利率的、当前调用者看得到的 SKU, 前 10;
+     * 工艺保密而无权看的产品不进图 (排名和高度本身会泄露毛利)。没有可画的数据就不出图, 不画空图。
+     */
+    static Map<String, Object> marginChart(List<Map<String, Object>> items,
+                                           com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
+        List<String> names = new ArrayList<>();
+        List<BigDecimal> rates = new ArrayList<>();
+        for (Map<String, Object> item : items) {
+            Object id = item.get("productTypeId");
+            if (id == null || secret.coversProduct(id.toString())) continue;
+            BigDecimal rate = rateOf(item, "realized");
+            if (rate == null) continue;
+            names.add(String.valueOf(item.get("productName")));
+            rates.add(rate);
+            if (names.size() >= 10) break;
+        }
+        if (names.isEmpty()) return null;
+        Map<String, Object> option = new LinkedHashMap<>();
+        option.put("tooltip", Map.of("trigger", "axis"));
+        option.put("grid", Map.of("left", 50, "right", 20, "bottom", 70, "containLabel", true));
+        option.put("xAxis", Map.of("type", "category", "data", names, "axisLabel", Map.of("interval", 0, "rotate", 25)));
+        option.put("yAxis", Map.of("type", "value", "name", "%"));
+        option.put("series", List.of(Map.of("type", "bar", "name", "实际销售毛利率(%)", "data", rates)));
+        Map<String, Object> chart = new LinkedHashMap<>();
+        chart.put("type", "bar");
+        chart.put("title", "SKU 实际销售毛利率排行（%，前 10）");
+        chart.put("option", option);
+        return chart;
     }
 
     // ==================== 组装 ====================

@@ -141,6 +141,12 @@ public class IntentMatchResult {
      */
     private Map<String, Long> timingMs;
 
+    /**
+     * Python 决策层的决策痕迹 (意图飞轮, INTENT-DISTILL-20261111): 问没问 Luna、Luna 成没成、退路落在哪一跳、
+     * 是否旧四级出口、候选集合摘要 (optionSetHash)。只用于记录, 不参与任何判断; 旧版 Python 不带 = null。
+     */
+    private Map<String, Object> decisionTrace;
+
     // ==================== 查询预处理结果 (模块B) ====================
 
     /**

@@ -943,11 +943,32 @@ function buildGroupedMenu(): MenuItem[] {
 /** FACTORY / CENTRAL_KITCHEN（及未带工厂类型的工厂账号）用的原型分组侧栏。 */
 export const groupedMenuConfig: MenuItem[] = buildGroupedMenu();
 
+/** Catalog both layouts: factory-only leaves must also be configurable by platform admins. */
+export const configurableMenuConfig: MenuItem[] = [...menuConfig, ...groupedMenuConfig];
+
+export type FactoryMenuProfile = 'wholesale';
+
+/** Layout only: keep the original paths, permissions and ancestor guards. */
+export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.map((item) => {
+  if (item.path === '/procurement') {
+    return { ...item, children: [...(item.children ?? []), moveLeaf('/procurement/suppliers')] };
+  }
+  if (item.path === '/sales') {
+    return { ...item, children: [...(item.children ?? []), moveLeaf('/sales/customers')] };
+  }
+  if (item.path === '#group/master-data') {
+    return { ...item, title: '基础资料', children: item.children?.filter((child) =>
+      !['/procurement/suppliers', '/sales/customers'].includes(child.path)) };
+  }
+  return item;
+});
+
 /** 餐饮 / 物流不在原型范围，继续用原分组。 */
 const LEGACY_LAYOUT_FACTORY_TYPES = new Set(['RESTAURANT', 'LOGISTICS']);
 
-export function factoryMenuForType(factoryType: string | null | undefined): MenuItem[] {
-  return factoryType && LEGACY_LAYOUT_FACTORY_TYPES.has(factoryType) ? menuConfig : groupedMenuConfig;
+export function factoryMenuForType(factoryType: string | null | undefined, profile?: FactoryMenuProfile): MenuItem[] {
+  if (factoryType && LEGACY_LAYOUT_FACTORY_TYPES.has(factoryType)) return menuConfig;
+  return profile === 'wholesale' ? wholesalerMenuConfig : groupedMenuConfig;
 }
 
 /** 面包屑「组 › 项 › 子项」：按菜单树找当前路径的祖先标题；section 不进面包屑。找不到返回 null。 */

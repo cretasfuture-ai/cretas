@@ -51,7 +51,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * 咨询页 (mode=READ) 里的成本差异问题: 走 REPORT_COST_VARIANCE → report_cost_variance (READ), 不被写闸拦;
- * 真写工具 (report_cost_query 会生成并保存 AI 成本分析报告) 照旧拦; 门槛与 GET /reports/cost-variance 同一组,
+ * 声明 WRITE 的工具照旧拦 (report_cost_query 已改只读, 见 costQueryIsNotBlockedInReadMode); 门槛与 GET /reports/cost-variance 同一组,
  * 门槛外的角色被拒 (= REST 403)。真实 {@link ToolDispatchService} 直调分支 + 真实 {@link WriteGuardService}
  * + 真实 {@link ToolRbacEnforcer} / {@link PermissionServiceImpl} (prod L1)。
  */
@@ -60,17 +60,25 @@ class ReportCostVarianceReadModeContractTest {
     private static final String F = "F006";
     /** prod platform_role_permissions 的 finance / procurement 级别 (F006 没有这些角色的 L2 覆盖)。 */
     private static final Map<String, Map<String, String>> L1 = Map.of(
-            "factory_super_admin", Map.of("finance", "rw", "procurement", "rw"),
-            "finance_manager", Map.of("finance", "rw", "procurement", "-"),
-            "department_admin", Map.of("finance", "r", "procurement", "r"),
-            "warehouse_manager", Map.of("finance", "-", "procurement", "r"),
-            "viewer", Map.of("finance", "-", "procurement", "r"));
+            "factory_super_admin", Map.of("finance", "rw", "procurement", "rw", "analytics", "rw"),
+            "finance_manager", Map.of("finance", "rw", "procurement", "-", "analytics", "rw"),
+            "department_admin", Map.of("finance", "r", "procurement", "r", "analytics", "r"),
+            "warehouse_manager", Map.of("finance", "-", "procurement", "r", "analytics", "-"),
+            "viewer", Map.of("finance", "-", "procurement", "r", "analytics", "-"));
 
     private final UserRepository users = mock(UserRepository.class);
     private final Map<String, Long> idOf = new HashMap<>();
     private PermissionServiceImpl permissions;
     private ToolDispatchService dispatch;
     private ReportCostVarianceTool varianceTool;
+
+    /** 价格可见性 ThreadLocal 不得被本测试留在线程上 (污染同一 fork 里后续测试, 如 PriceSensitiveContextScopeContractTest)。 */
+    @org.junit.jupiter.api.AfterEach
+    void priceContextMustNotLeak() {
+        boolean leaked = com.cretas.aims.security.PriceSensitiveContext.shouldHide("procurement:price:view");
+        com.cretas.aims.security.PriceSensitiveContext.clear();
+        org.junit.jupiter.api.Assertions.assertFalse(leaked, "测试后价格可见性上下文仍是隐藏态 = 泄漏");
+    }
 
     @BeforeEach
     void setUp() {
@@ -138,12 +146,47 @@ class ReportCostVarianceReadModeContractTest {
         assertThat(response.getStatus()).isNotEqualTo("READ_MODE_WRITE_BLOCKED");
     }
 
-    /** 阴性对照: 真写工具 (生成并保存 AI 成本分析报告) 在咨询页照旧被写闸拦下。 */
+    /**
+     * 阴性对照: 声明为 WRITE 的工具在咨询页照旧被写闸拦下 (原先拿 report_cost_query 当真写工具, 它 2026-11-15 改成只读后,
+     * 换成「同一个工具声明 WRITE」证明闸本身没松)。
+     */
     @Test
     void aRealWriteIntentIsStillBlockedInReadMode() {
-        IntentExecuteResponse response = run(new ReportCostQueryTool(), intent("COST_QUERY", "report_cost_query"),
-                "factory_super_admin");
+        ReportCostQueryTool writeTool = new ReportCostQueryTool() {
+            @Override
+            public AccessMode getAccessMode() {
+                return AccessMode.WRITE;
+            }
+        };
+        IntentExecuteResponse response = run(writeTool, intent("COST_QUERY", "report_cost_query"), "factory_super_admin");
         assertThat(response.getStatus()).isEqualTo("READ_MODE_WRITE_BLOCKED");
+    }
+
+    /**
+     * 缺陷原样: 咨询页里「单位成本/成本构成」问 COST_QUERY 被拦成「请切换到操作页」。现在 report_cost_query 只读, 不被写闸拦;
+     * 门槛 analytics:read_write (与 AIController#analyzeTimeRangeCost 同口径, 组织者裁定 2026-10-29) 内的角色能执行,
+     * 门槛外 (viewer / warehouse_manager / 只有 analytics 只读的 department_admin) 被拒 PERMISSION_DENIED。
+     */
+    @ParameterizedTest(name = "{0}: 咨询页里成本查询可执行")
+    @ValueSource(strings = {"factory_super_admin", "finance_manager"})
+    void costQueryRunsForConfiguredRolesInReadMode(String role) {
+        IntentExecuteResponse response = run(costTool(), intent("COST_QUERY", "report_cost_query"), role);
+        assertThat(response.getStatus()).as(response.getMessage()).isNotIn("READ_MODE_WRITE_BLOCKED", "PERMISSION_DENIED");
+    }
+
+    @ParameterizedTest(name = "{0}: 成本查询门槛外被拒")
+    @ValueSource(strings = {"viewer", "warehouse_manager", "department_admin"})
+    void costQueryIsRefusedForUnconfiguredRoles(String role) {
+        IntentExecuteResponse response = run(costTool(), intent("COST_QUERY", "report_cost_query"), role);
+        assertThat(response.getStatus()).isEqualTo("PERMISSION_DENIED");
+    }
+
+    private ReportCostQueryTool costTool() {
+        ReportCostQueryTool costTool = new ReportCostQueryTool();
+        ReflectionTestUtils.setField(costTool, "batchRepository",
+                mock(com.cretas.aims.repository.ProductionBatchRepository.class));
+        ReflectionTestUtils.setField(costTool, "objectMapper", new ObjectMapper().registerModule(new JavaTimeModule()));
+        return costTool;
     }
 
     /** 门槛外的角色: 对话被拒 (PERMISSION_DENIED), 与 REST GET /reports/cost-variance 的 403 同一组权限。 */
