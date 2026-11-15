@@ -8,11 +8,13 @@
 </template>
 
 <style>
-/* 全局样式重置 */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* 全局样式重置（legacy-reset 层，见 style.css） */
+@layer legacy-reset {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html, body, #app {

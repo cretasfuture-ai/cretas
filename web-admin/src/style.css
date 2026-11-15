@@ -169,12 +169,15 @@
 /* ============================================================
  * Global Reset
  * ============================================================ */
-*,
-*::before,
-*::after {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+/* 旧全局重置放进 legacy-reset 层（层序在 nuxt-ui.css 里声明，低于 Tailwind utilities），否则 Nuxt UI 的内边距被它清零 */
+@layer legacy-reset {
+  *,
+  *::before,
+  *::after {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
 }
 
 html {
