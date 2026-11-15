@@ -16,7 +16,7 @@ import java.io.Serializable;
 import java.time.LocalDateTime;
 
 /**
- * 一家工厂对一个外部软件的接口授权 (V20261115_41, 统一原型迁移 P10)。
+ * 一家工厂对一个外部软件的接口授权 (V20261115_51, 统一原型迁移 P10)。
  * 平台专属: 只有 {@code ExternalIntegrationService} 的平台方法写; 工厂端只读。
  * 没有行或 {@code status != ACTIVE} = 没授权, 外部对照列 / 外部数据页一律不出现。
  * 时间列是服务器本地时间 (与其它配置表一致); 推送令牌只存 SHA-256。

@@ -29,14 +29,14 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * V20261115_41 在真实 PostgreSQL 上: 两张表与实体逐列一致 (列名 + 可空), system / dataset 的 CHECK 与枚举逐项一致,
+ * V20261115_51 在真实 PostgreSQL 上: 两张表与实体逐列一致 (列名 + 可空), system / dataset 的 CHECK 与枚举逐项一致,
  * 授权状态只有 ACTIVE / SUSPENDED, 推送令牌只能是 64 位小写十六进制且全表唯一, 快照同一采集时点只一行、只追加
  * (UPDATE 被触发器拒绝, DELETE 允许 —— 平台删除工厂数据要能删掉)。
  */
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class ExternalIntegrationMigrationPostgresContractTest {
 
-    private static final String MIGRATION = "db/flyway/V20261115_41__factory_external_integrations.sql";
+    private static final String MIGRATION = "db/flyway/V20261115_51__factory_external_integrations.sql";
     private static final String HASH_A = "a".repeat(64);
 
     @Test

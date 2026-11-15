@@ -15,7 +15,7 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 
 /**
- * 外部系统只读快照 (V20261115_41)。一行 = 工厂 × 系统 × 数据集 × 一次采集时点; 只追加。
+ * 外部系统只读快照 (V20261115_51)。一行 = 工厂 × 系统 × 数据集 × 一次采集时点; 只追加。
  * {@code collectedAt} / {@code receivedAt} 存 UTC (推送端给的是带时区的时刻, 服务端统一换成 UTC 落库),
  * 页面展示一律换成北京时间。
  */

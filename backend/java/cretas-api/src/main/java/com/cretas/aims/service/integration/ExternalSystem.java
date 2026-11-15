@@ -4,7 +4,7 @@ import java.util.Arrays;
 import java.util.Optional;
 
 /**
- * 能授权的外部软件。取值与迁移 V20261115_41 的 CHECK 一致 (ExternalIntegrationMigrationPostgresContractTest 核对)。
+ * 能授权的外部软件。取值与迁移 V20261115_51 的 CHECK 一致 (ExternalIntegrationMigrationPostgresContractTest 核对)。
  */
 public enum ExternalSystem {
     BLACKLAKE("blacklake", "黑湖");
