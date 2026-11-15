@@ -33,6 +33,10 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 @RequireModule("production_report")
 public class ProcessCheckinController {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     private final ProcessCheckinRecordRepository checkinRepository;
     private final ProductionPlanRepository planRepository;
@@ -219,7 +223,7 @@ public class ProcessCheckinController {
                 .map(p -> {
                     Map<String, Object> m = new HashMap<>();
                     m.put("processName", p.getProcessName());
-                    m.put("productName", p.getProductType() != null ? p.getProductType().getName() : "");
+                    m.put("productName", p.getProductType() != null ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, p.getFactoryId(), p.getProductType()) : "");
                     m.put("planId", p.getId());
                     m.put("customerName", p.getSourceCustomerName());
                     return m;
