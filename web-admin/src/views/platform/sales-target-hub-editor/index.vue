@@ -29,7 +29,7 @@
         <el-statistic
           :value="overview.tieredRules"
           title="阶梯规则"
-          :value-style="overview.tieredRules > 0 ? { color: '#409eff' } : {}"
+          :value-style="overview.tieredRules > 0 ? { color: 'var(--cs-primary)' } : {}"
         />
         <el-statistic :value="overview.monthlyRules" title="按月规则" />
         <el-statistic :value="overview.quarterlyRules" title="按季度规则" />

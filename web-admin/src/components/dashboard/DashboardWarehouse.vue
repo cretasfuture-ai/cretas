@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 仓储管理 Dashboard
  * 适用角色: warehouse_manager
@@ -47,7 +48,7 @@ const statCards = computed<Array<{
     value: warehouseStats.value.totalMaterials,
     unit: '批',
     icon: Box,
-    color: '#409eff',
+    color: CS_TOKENS.primary,
     route: '/warehouse/materials'
   },
   {
@@ -80,7 +81,7 @@ const statCards = computed<Array<{
 
 // 快捷操作
 const quickActions = [
-  { title: '原材料批次', icon: Box, route: '/warehouse/materials', color: '#409eff' },
+  { title: '原材料批次', icon: Box, route: '/warehouse/materials', color: CS_TOKENS.primary },
   { title: '出货管理', icon: Van, route: '/warehouse/shipments', color: '#67c23a' },
   { title: '盘点管理', icon: Document, route: '/warehouse/inventory', color: '#e6a23c' }
 ];

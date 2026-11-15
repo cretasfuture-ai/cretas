@@ -12,7 +12,7 @@
       <Background />
       <Controls />
       <template #node-state="{ data }">
-        <div class="state-node" :style="{ borderColor: data.color || '#409eff' }">
+        <div class="state-node" :style="{ borderColor: data.color || 'var(--cs-primary)' }">
           <div class="state-label">{{ data.label }}</div>
           <div class="state-code">{{ data.code }}</div>
         </div>
@@ -41,6 +41,7 @@
 </template>
 
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 import { ref, onMounted, watch } from 'vue'
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -60,8 +61,8 @@ const selectedEdge = ref<any>(null)
 
 // Color mapping for workflow states
 const stateColors: Record<string, string> = {
-  DRAFT: '#909399', CONFIRMED: '#409eff', PENDING_FINANCE_REVIEW: '#e6a23c',
-  FINANCE_APPROVED: '#67c23a', DELIVERING: '#409eff', DELIVERED: '#67c23a',
+  DRAFT: '#909399', CONFIRMED: CS_TOKENS.primary, PENDING_FINANCE_REVIEW: '#e6a23c',
+  FINANCE_APPROVED: '#67c23a', DELIVERING: CS_TOKENS.primary, DELIVERED: '#67c23a',
   COMPLETED: '#67c23a', CANCELLED: '#f56c6c', FINANCE_REJECTED: '#f56c6c',
 }
 
@@ -80,7 +81,7 @@ async function loadWorkflow() {
     id: s.code,
     type: 'state',
     position: { x: (i % 4) * 200, y: Math.floor(i / 4) * 120 },
-    data: { label: s.label, code: s.code, color: stateColors[s.code] || '#409eff' },
+    data: { label: s.label, code: s.code, color: stateColors[s.code] || CS_TOKENS.primary },
   }))
 
   edges.value = transitions.map((t: any, i: number) => ({

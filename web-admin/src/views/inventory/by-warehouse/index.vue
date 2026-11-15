@@ -746,7 +746,7 @@ onMounted(async () => {
   .badge {
     font-size: 12px;
     background: #ecf5ff;
-    color: #409eff;
+    color: var(--cs-primary);
     padding: 2px 8px;
     border-radius: 3px;
     font-weight: normal;
@@ -754,7 +754,7 @@ onMounted(async () => {
 }
 
 .strong-blue {
-  color: #409eff;
+  color: var(--cs-primary);
 }
 
 .strong-green {

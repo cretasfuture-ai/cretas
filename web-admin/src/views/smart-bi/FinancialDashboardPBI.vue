@@ -3338,13 +3338,13 @@ onBeforeUnmount(() => {
 }
 
 .chart-switcher__item:focus-visible {
-  outline: 2px solid var(--el-color-primary, #409eff);
+  outline: 2px solid var(--el-color-primary, var(--cs-primary));
   outline-offset: 1px;
 }
 
 .chart-switcher__item.is-active {
   background: var(--el-color-primary-light-9, #ecf5ff);
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   font-weight: 600;
 }
 
@@ -3355,7 +3355,7 @@ onBeforeUnmount(() => {
 
 .chart-switcher__item--primary {
   border-color: var(--el-color-primary-light-5, #a0cfff);
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
 }
 
 .chart-switcher--loading {
@@ -3395,7 +3395,7 @@ onBeforeUnmount(() => {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--el-color-primary, #409eff);
+  color: var(--el-color-primary, var(--cs-primary));
   font: inherit;
   font-size: 13px;
   font-weight: 600;
