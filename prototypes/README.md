@@ -27,3 +27,7 @@
 | `liushanmen-v1/server.cjs`、`tools/` | 六膳门服务与黑湖只读数据读取脚本（`read_source.py` 等） |
 
 仍不收：各目录 `data/`、`private/`（客户数据与测试状态）。`fusion-controlled-purchase.mjs` 里的 `token` 是本地演示用的一次性随机凭证，不是密钥。
+
+## 后端依赖与融合对照（补收，2026-11-15）
+- `ydwm-v1/tools/`（57 个，其中 `engine/` 22 个，含 `material-demand.mjs`）与 `component-library/tools/v3/`（17 个）：服务文件的本地依赖闭包，用脚本按相对 `require/import` 求出，不含 `tools/vendor`（第三方 xlsx）和 `capture-*` 抓取脚本。
+- 融合对照表见 `BACKEND-MERGE-MAP.md`：各模块在 Java/Python 里的对应、状态、易错规则、不能带进正式后端的东西、已知缺口。
