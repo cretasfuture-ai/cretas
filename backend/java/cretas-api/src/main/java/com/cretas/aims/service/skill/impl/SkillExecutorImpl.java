@@ -119,6 +119,10 @@ public class SkillExecutorImpl implements SkillExecutor {
     @Autowired(required = false)
     private com.cretas.aims.service.skill.contract.SkillRunStore runStore;
 
+    /** Skill 计划里 LLM 给的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     /** Steps of the run in progress, per context (parallel tools add from worker threads). */
     private final Map<SkillContext, List<com.cretas.aims.service.skill.contract.SkillRunStore.Step>> runSteps =
             Collections.synchronizedMap(new IdentityHashMap<>());
@@ -522,7 +526,9 @@ public class SkillExecutorImpl implements SkillExecutor {
             globalValues.remove("_reasoning");
             com.cretas.aims.service.execution.LlmParameterGrounding.Result grounded =
                     com.cretas.aims.service.execution.LlmParameterGrounding.ground(
-                            globalValues, trustedParams, context.getUserQuery(), schema);
+                            globalValues, trustedParams, context.getUserQuery(), schema,
+                            com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                    factoryEntityResolver, context.getFactoryId()));
             safe.putAll(filterCatalogParameters(grounded.accepted(), schema,
                     context.getUserQuery(), trustedParams));
 
@@ -545,7 +551,9 @@ public class SkillExecutorImpl implements SkillExecutor {
                     planTrusted.putAll(safe);
                     com.cretas.aims.service.execution.LlmParameterGrounding.Result planGrounded =
                             com.cretas.aims.service.execution.LlmParameterGrounding.ground(
-                                    rawToolParams, planTrusted, context.getUserQuery(), planSchema);
+                                    rawToolParams, planTrusted, context.getUserQuery(), planSchema,
+                                    com.cretas.aims.service.execution.LlmParameterGrounding.EntityScope.of(
+                                            factoryEntityResolver, context.getFactoryId(), toolName, false));
                     Map<String, Object> cleanToolParams = filterCatalogParameters(planGrounded.accepted(), planSchema,
                             context.getUserQuery(), planTrusted);
                     cleanToolParams.putAll(planTrusted);

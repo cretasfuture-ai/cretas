@@ -37,6 +37,10 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
     @Autowired
     private com.cretas.aims.repository.UserRepository userRepository;
 
+    /** 按姓名找人 (口径规则 8) 只走实体解析公共能力, 不自己按名字查库。 */
+    @Autowired
+    private com.cretas.aims.service.entity.FactoryEntityResolver entityResolver;
+
     @Override
     public String getToolName() {
         return "attendance_history";
@@ -121,7 +125,7 @@ public class AttendanceHistoryTool extends AbstractBusinessTool {
         String requestedId = getString(params, "userId");
         if (AttendanceSubject.nameMayDecide(requestedId, context)) {
             Map<String, Object> byName = AttendanceSubject.runByName(getString(params, AttendanceSubject.NAME_PARAM),
-                    factoryId, context, rbacGuard, userRepository,
+                    factoryId, context, rbacGuard, entityResolver, userRepository,
                     id -> timeClockService.getClockHistory(factoryId, id, startDate, endDate, pageRequest),
                     data -> "这段时间共 " + (data instanceof PageResponse<?> r ? r.getTotalElements() : 0) + " 条打卡记录");
             if (byName != null) {

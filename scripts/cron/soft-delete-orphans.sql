@@ -1,4 +1,4 @@
--- generated-from b696ab088ea6 2026-11-15 15:45:49Z
+-- generated-from 723628a78d13 2026-11-15 18:13:29Z
 -- 关联 62 对 = 注解扫描 60 + 手工登记新增 2
 -- ⛔ 这个文件是生成物。改它请改 scripts/check-soft-delete-orphans.sh 后跑 --write。
 --
