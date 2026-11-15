@@ -1200,7 +1200,7 @@ function formatDate(dateStr?: string): string {
   transition: color 0.2s;
 
   &:hover {
-    color: var(--el-color-primary-light-3, #409eff);
+    color: var(--el-color-primary-light-3, var(--cs-primary));
   }
 }
 

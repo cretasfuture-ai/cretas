@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * MetricCard - AI 行为校准指标卡片组件
  * 显示单个指标的值、趋势和状态
@@ -44,7 +45,7 @@ const statusConfig: Record<StatusType, { bg: string; text: string; border: strin
   success: { bg: '#f0f9eb', text: '#67c23a', border: '#e1f3d8', icon: '#67c23a' },
   warning: { bg: '#fdf6ec', text: '#e6a23c', border: '#faecd8', icon: '#e6a23c' },
   danger: { bg: '#fef0f0', text: '#f56c6c', border: '#fde2e2', icon: '#f56c6c' },
-  info: { bg: '#f4f4f5', text: '#409eff', border: '#e9e9eb', icon: '#409eff' }
+  info: { bg: '#f4f4f5', text: CS_TOKENS.primary, border: '#e9e9eb', icon: CS_TOKENS.primary }
 };
 
 // 趋势颜色
@@ -181,7 +182,7 @@ export default {
     width: 24px;
     height: 24px;
     border: 2px solid #dcdfe6;
-    border-top-color: #409eff;
+    border-top-color: var(--cs-primary);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
   }

@@ -1,0 +1,400 @@
+/* Production plan control-room shell.  The existing Vue/Element Plus controls
+ * remain the source of truth; this file only supplies the visual layer. */
+.fusion-plan-page {
+  --fusion-bg: #f2f4f7;
+  --fusion-card: #ffffff;
+  --fusion-ink: #17283c;
+  --fusion-muted: #6f8094;
+  --fusion-border: #dce3eb;
+  --fusion-brand: #1b65a8;
+  --fusion-brand-soft: #eaf3fb;
+  --fusion-success: #2d8a60;
+  --fusion-warning: #c98924;
+  min-height: 100%;
+  padding: 20px 24px 28px;
+  background: var(--fusion-bg);
+  color: var(--fusion-ink);
+  font-size: 14px;
+}
+
+.fusion-plan-page .workflow-bar,
+.fusion-plan-page .workflow-bar-wrapper {
+  margin-bottom: 16px;
+}
+
+.fusion-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  margin: 2px 0 18px;
+}
+
+.fusion-eyebrow {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--fusion-brand);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+
+.fusion-page-heading h1 {
+  margin: 0;
+  color: var(--fusion-ink);
+  font-size: 26px;
+  font-weight: 750;
+  letter-spacing: -.02em;
+  line-height: 1.2;
+}
+
+.fusion-page-heading p {
+  margin: 7px 0 0;
+  color: var(--fusion-muted);
+  font-size: 13px;
+}
+
+.fusion-heading-count {
+  display: inline-flex;
+  align-items: center;
+  min-width: 32px;
+  height: 24px;
+  margin-left: 6px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: var(--fusion-brand-soft);
+  color: var(--fusion-brand);
+  font-size: 14px;
+  vertical-align: 3px;
+}
+
+.fusion-head-note {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 204px;
+  padding: 10px 14px;
+  border: 1px solid var(--fusion-border);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .74);
+}
+
+.fusion-head-note strong,
+.fusion-head-note small {
+  display: block;
+}
+
+.fusion-head-note strong {
+  color: var(--fusion-ink);
+  font-size: 13px;
+}
+
+.fusion-head-note small {
+  margin-top: 3px;
+  color: var(--fusion-muted);
+  font-size: 11px;
+}
+
+.fusion-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fusion-success);
+  box-shadow: 0 0 0 4px rgba(45, 138, 96, .13);
+}
+
+.fusion-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(220px, 1.35fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.fusion-metric {
+  min-height: 92px;
+  padding: 15px 16px 13px;
+  border: 1px solid var(--fusion-border);
+  border-radius: 9px;
+  background: var(--fusion-card);
+}
+
+.fusion-metric > span,
+.fusion-metric > em {
+  display: block;
+}
+
+.fusion-metric > span {
+  color: var(--fusion-muted);
+  font-size: 12px;
+}
+
+.fusion-metric > strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--fusion-ink);
+  font-size: 23px;
+  line-height: 1;
+}
+
+.fusion-metric > strong small {
+  margin-left: 3px;
+  color: var(--fusion-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.fusion-metric > em {
+  margin-top: 6px;
+  color: #8796a7;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.fusion-metric--primary {
+  border-color: #b9d3e9;
+  background: linear-gradient(135deg, #f4f9fd 0%, #fff 78%);
+}
+
+.fusion-metric--primary > strong {
+  color: var(--fusion-brand);
+}
+
+.fusion-metric--hint {
+  background: #1a3048;
+  border-color: #1a3048;
+}
+
+.fusion-metric--hint > span,
+.fusion-metric--hint > em {
+  color: #b4c7da;
+}
+
+.fusion-metric--hint > strong {
+  color: #fff;
+  font-size: 17px;
+  letter-spacing: .02em;
+}
+
+.fusion-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+}
+
+.fusion-dot--blue { background: #418cca; }
+.fusion-dot--amber { background: #d2952c; }
+.fusion-dot--green { background: #42a773; }
+
+.fusion-card {
+  overflow: hidden;
+  border: 1px solid var(--fusion-border) !important;
+  border-radius: 10px !important;
+  background: var(--fusion-card);
+  box-shadow: 0 3px 14px rgba(23, 40, 60, .045);
+}
+
+.fusion-card .el-card__header {
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--fusion-border);
+}
+
+.fusion-card .el-card__body {
+  padding: 0 18px 18px;
+}
+
+.fusion-card-header .page-title {
+  color: var(--fusion-ink);
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.fusion-card-header .data-count {
+  color: var(--fusion-muted);
+  font-size: 12px;
+}
+
+.fusion-card-header .header-right {
+  gap: 6px;
+}
+
+.fusion-card-header .header-right .el-button {
+  margin-left: 0 !important;
+  border-radius: 7px;
+}
+
+.fusion-status-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 54px;
+  border-bottom: 1px solid var(--fusion-border);
+  overflow-x: auto;
+}
+
+.fusion-status-tabs button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 54px;
+  padding: 0 14px;
+  border: 0;
+  background: transparent;
+  color: #687a8e;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.fusion-status-tabs button::after {
+  position: absolute;
+  right: 12px;
+  bottom: -1px;
+  left: 12px;
+  height: 2px;
+  background: transparent;
+  content: '';
+}
+
+.fusion-status-tabs button span {
+  min-width: 19px;
+  padding: 2px 5px;
+  border-radius: 10px;
+  background: #eef2f6;
+  color: #728398;
+  font-size: 11px;
+  text-align: center;
+}
+
+.fusion-status-tabs button:hover,
+.fusion-status-tabs button.is-active {
+  color: var(--fusion-brand);
+}
+
+.fusion-status-tabs button.is-active {
+  font-weight: 700;
+}
+
+.fusion-status-tabs button.is-active::after {
+  background: var(--fusion-brand);
+}
+
+.fusion-status-tabs button.is-active span {
+  background: var(--fusion-brand-soft);
+  color: var(--fusion-brand);
+}
+
+.fusion-status-tabs__hint {
+  margin-left: auto;
+  padding: 0 5px 0 14px;
+  color: #9aa8b6;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.fusion-search-bar {
+  align-items: center;
+  margin: 16px 0 14px;
+  padding: 11px;
+  border: 1px solid #e4eaf0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.fusion-search-bar .el-input__wrapper,
+.fusion-search-bar .el-select__wrapper {
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px #d6e0e9 inset;
+}
+
+.fusion-search-bar .el-button {
+  border-radius: 6px;
+}
+
+.fusion-clear-filter {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--fusion-brand);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.fusion-clear-filter:hover {
+  color: #124c80;
+  text-decoration: underline;
+}
+
+.fusion-data-table {
+  border: 1px solid var(--fusion-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.fusion-data-table .el-table__header th.el-table__cell {
+  height: 42px;
+  background: #f7f9fb;
+  color: #556a80;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.fusion-data-table .el-table__body td.el-table__cell {
+  height: 56px;
+  border-bottom-color: #e7edf2;
+  color: var(--fusion-ink);
+  font-size: 13px;
+}
+
+.fusion-data-table .el-table__body tr:hover > td.el-table__cell {
+  background: #f3f8fc !important;
+}
+
+.fusion-data-table .el-table__fixed-right::before,
+.fusion-data-table .el-table__fixed::before {
+  background: var(--fusion-border);
+}
+
+.fusion-data-table .el-button.is-link {
+  font-weight: 600;
+}
+
+.fusion-pagination {
+  padding-top: 14px;
+  border-top: 0;
+}
+
+.fusion-pagination .el-pagination {
+  color: var(--fusion-muted);
+}
+
+@media (max-width: 1280px) {
+  .fusion-plan-page { padding: 18px; }
+  .fusion-metrics { grid-template-columns: repeat(4, minmax(120px, 1fr)); }
+  .fusion-metric--hint { grid-column: 1 / -1; min-height: auto; }
+}
+
+@media (max-width: 860px) {
+  .fusion-page-head { align-items: flex-start; flex-direction: column; }
+  .fusion-head-note { width: 100%; }
+  .fusion-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fusion-metric--hint { grid-column: auto; }
+  .fusion-card-header { align-items: flex-start; flex-direction: column; }
+  .fusion-card-header .header-right { width: 100%; }
+  .fusion-status-tabs__hint { display: none; }
+}
+
+@media (max-width: 560px) {
+  .fusion-plan-page { padding: 14px 10px 20px; }
+  .fusion-metrics { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .fusion-metric { padding: 12px; }
+  .fusion-metric--hint { grid-column: 1 / -1; }
+  .fusion-card .el-card__body { padding: 0 10px 12px; }
+  .fusion-search-bar { align-items: stretch; flex-direction: column; }
+  .fusion-search-bar .el-input,
+  .fusion-search-bar .el-select { width: 100% !important; }
+}

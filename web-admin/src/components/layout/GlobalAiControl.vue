@@ -126,7 +126,7 @@ onBeforeUnmount(() => { resize?.disconnect(); dispose?.(); document.body.classLi
 <style scoped>
 .global-ai-control { display:flex; align-items:center; flex-wrap:wrap; gap:8px 16px; padding:10px 20px; background:var(--el-fill-color-light,#f5f7fa); border-bottom:1px solid var(--el-border-color-light,#e4e7ed); font-size:13px; }
 .global-ai-control.is-active { position:fixed; top:0; left:0; right:0; z-index:10000; box-sizing:border-box; }
-.global-ai-control>strong { color:var(--el-color-primary,#409eff); white-space:nowrap; }
+.global-ai-control>strong { color:var(--el-color-primary,var(--cs-primary)); white-space:nowrap; }
 .idle-hint { color:var(--el-text-color-secondary,#909399); flex:1; }
 .agent-status { display:flex; flex:1; align-items:center; flex-wrap:wrap; gap:6px 12px; min-width:220px; }
 .agent-scope { color:var(--el-text-color-secondary,#909399); font-size:12px; }
@@ -151,7 +151,7 @@ body.global-page-agent-active .app-sidebar { top:var(--page-agent-height,80px); 
 body.global-page-agent-active .app-header { top:var(--page-agent-height,80px); }
 body.global-page-agent-active .el-dialog.is-fullscreen { margin-top:var(--page-agent-height,80px); height:calc(100vh - var(--page-agent-height,80px)); }
 body.global-page-agent-active .el-drawer { top:var(--page-agent-height,80px); height:calc(100vh - var(--page-agent-height,80px)); }
-.page-agent-current-control { outline:3px solid var(--el-color-primary,#409eff)!important; outline-offset:4px; }
+.page-agent-current-control { outline:3px solid var(--el-color-primary,var(--cs-primary))!important; outline-offset:4px; }
 .global-ai-event-popover { max-width:calc(100vw - 32px); }
 @media(prefers-reduced-motion:reduce) { .page-agent-current-control { scroll-behavior:auto; } }
 </style>

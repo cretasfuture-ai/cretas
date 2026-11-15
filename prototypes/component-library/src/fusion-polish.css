@@ -1,0 +1,11 @@
+html:root {--el-color-primary:#1b65a8;--el-color-primary-light-9:#edf4fb;--el-border-radius-base:7px;--el-text-color-primary:#21374e;--el-font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif}
+.fusion-business .el-button--primary.is-plain {--el-button-bg-color:#edf4fb;--el-button-border-color:#bed6e9;--el-button-text-color:#1b65a8}
+.app-shell .fusion-business .fusion-plan-page .el-table .el-table__body tr>td.el-table__cell {background:#fff!important}
+.app-shell .fusion-business .fusion-plan-page .el-table .el-table__body tr:hover>td.el-table__cell {background:#edf4fb!important}
+.el-dialog,.el-drawer {font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;color:#263d55}
+.el-dialog {border:1px solid #d8e2ec;border-radius:12px!important;box-shadow:0 24px 70px #172c4b26!important;max-width:calc(100vw - 32px)}
+.el-dialog__header {padding:6px 30px 20px 4px;border-bottom:1px solid #e4eaf1;margin-bottom:18px}.el-dialog__title{font-size:17px!important;font-weight:600;line-height:1.5}.el-dialog__footer{border-top:1px solid #e4eaf1;padding-top:18px;margin-top:16px}
+.el-overlay .el-form-item__label {font-size:13px;color:#536d86}.el-overlay .el-input__wrapper,.el-overlay .el-select__wrapper{border-radius:7px}.el-overlay .el-button{border-radius:7px}
+html[data-motion='off'] .fusion-business *,html[data-motion='off'] .el-overlay * {animation-duration:0ms!important;transition-duration:0ms!important;scroll-behavior:auto!important}
+html[data-motion='light'] .fusion-business *,html[data-motion='light'] .el-overlay * {animation-duration:100ms!important;transition-duration:100ms!important}
+@media(max-width:760px){.el-dialog{margin-top:6vh!important}.fusion-business .el-table{max-width:100%}.fusion-business .workflow-editor{min-width:0}.fusion-business .workflow-toolbar{padding:12px}.fusion-business .el-descriptions__table{table-layout:fixed}.el-overlay .el-form-item__label{white-space:normal}}

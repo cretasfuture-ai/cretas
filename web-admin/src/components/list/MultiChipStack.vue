@@ -118,7 +118,7 @@ function chipClass(c: ChipDef) {
   }
   &.chip--primary {
     background-color: var(--el-color-primary-light-9, #ecf5ff);
-    color: var(--el-color-primary, #409eff);
+    color: var(--el-color-primary, var(--cs-primary));
     border: 1px solid var(--el-color-primary-light-7, #c6e2ff);
   }
   &.chip--default {

@@ -975,7 +975,7 @@ defineExpose({
     color: #303133;
 
     .el-icon {
-      color: #409eff;
+      color: var(--cs-primary);
     }
   }
 }
@@ -1000,7 +1000,7 @@ defineExpose({
 
   &:hover {
     background: #ecf5ff;
-    border-color: #409eff;
+    border-color: var(--cs-primary);
 
     .drag-handle {
       opacity: 1;
@@ -1024,7 +1024,7 @@ defineExpose({
 
   .el-icon {
     font-size: 18px;
-    color: #409eff;
+    color: var(--cs-primary);
   }
 }
 
@@ -1055,7 +1055,7 @@ defineExpose({
 
 .drag-handle {
   opacity: 0;
-  color: #409eff;
+  color: var(--cs-primary);
   transition: opacity 0.2s ease;
 }
 
@@ -1187,7 +1187,7 @@ defineExpose({
 
 .alignment-guide {
   position: absolute;
-  background: #409eff;
+  background: var(--cs-primary);
   pointer-events: none;
   z-index: 10;
 
@@ -1206,7 +1206,7 @@ defineExpose({
 
 .drop-indicator {
   background: rgba(64, 158, 255, 0.15);
-  border: 2px dashed #409eff;
+  border: 2px dashed var(--cs-primary);
   border-radius: 8px;
   pointer-events: none;
   z-index: 5;
@@ -1241,7 +1241,7 @@ defineExpose({
 
   &.is-resizing {
     box-shadow: 0 4px 16px rgba(64, 158, 255, 0.3);
-    border: 2px solid #409eff;
+    border: 2px solid var(--cs-primary);
   }
 }
 
@@ -1357,7 +1357,7 @@ defineExpose({
 
   &:hover {
     &::before {
-      border-color: #409eff;
+      border-color: var(--cs-primary);
     }
 
     &::after {
@@ -1369,7 +1369,7 @@ defineExpose({
     opacity: 1 !important;
 
     &::before {
-      border-color: #409eff;
+      border-color: var(--cs-primary);
     }
 
     &::after {

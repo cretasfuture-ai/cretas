@@ -175,7 +175,7 @@ onUnmounted(() => {
   transition: all 0.2s;
 }
 .canvas-field-item:hover { border-color: #c0c4cc; }
-.canvas-field-item.selected { border-color: #409eff; background: #ecf5ff; }
+.canvas-field-item.selected { border-color: var(--cs-primary); background: #ecf5ff; }
 .canvas-field-item.dynamic { border-left: 3px solid #e6a23c; }
 .drag-handle { cursor: grab; color: #c0c4cc; }
 .field-info { flex: 1; display: flex; align-items: center; gap: 6px; }

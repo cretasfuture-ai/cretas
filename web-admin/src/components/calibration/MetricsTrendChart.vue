@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * MetricsTrendChart - AI 行为校准指标趋势图组件
  * 使用 ECharts 绘制多指标折线图
@@ -43,7 +44,7 @@ const granularity = ref<TimeGranularity>(props.defaultGranularity);
 
 // 指标配置
 const metricsConfig = [
-  { key: 'conciseness', name: '简洁性', color: '#409eff', unit: '%' },
+  { key: 'conciseness', name: '简洁性', color: CS_TOKENS.primary, unit: '%' },
   { key: 'successRate', name: '成功率', color: '#67c23a', unit: '%' },
   { key: 'efficiency', name: '推理效率', color: '#e6a23c', unit: '' },
   { key: 'compositeScore', name: '综合得分', color: '#f56c6c', unit: '' }

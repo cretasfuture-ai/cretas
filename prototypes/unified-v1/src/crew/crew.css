@@ -1,0 +1,143 @@
+/* F 线 · 数字班组。只用设计系统变量 --cs-*；对话区遵守 docs/ux/ai-chat-standard.md（助手全宽无气泡、用户浅色气泡圆角 12、正文 16px、T1 字体栈）。 */
+.crew{--crew-chat-font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif}
+.crew .crew-tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--cs-border);margin:0 0 16px}
+.crew .crew-tabs button{border:0;background:none;padding:8px 12px;color:var(--cs-muted);border-bottom:2px solid transparent;margin-bottom:-1px;font-size:13px}
+.crew .crew-tabs button[aria-current=page]{color:var(--cs-primary);border-bottom-color:var(--cs-primary);font-weight:600}
+.crew .crew-tabs .count{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:9px;background:var(--cs-warning-soft);color:var(--cs-warning-text,var(--cs-warning));font-size:11px;text-align:center}
+.crew .crew-strip{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--cs-muted);margin-bottom:12px}
+.crew .crew-strip .warn{color:var(--cs-warning)}
+.crew .crew-role{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--cs-muted)}
+.crew .grid5{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-bottom:16px}
+.crew .crew-card{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);padding:14px 16px;display:flex;flex-direction:column;gap:10px;text-align:left}
+.crew .crew-card.off{opacity:.6;background:var(--cs-surface-subtle)}
+.crew .crew-card header{display:flex;gap:10px;align-items:center}
+.crew .crew-card header h2{font-size:15px}
+.crew .crew-card header p{font-size:12px;color:var(--cs-muted);line-height:1.4}
+.crew .nums{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.crew .nums button{border:1px solid var(--cs-border);background:var(--cs-surface);border-radius:var(--cs-radius-sm);padding:6px 8px;text-align:left}
+.crew .nums button:hover{border-color:var(--cs-primary)}
+.crew .nums span{display:block;font-size:11px;color:var(--cs-muted)}.crew .nums strong{font-size:20px;font-weight:600}
+.crew .nums .warn strong{color:var(--cs-warning)}.crew .nums .bad strong{color:var(--cs-danger)}
+.crew .finding{font-size:12px;color:var(--cs-text);line-height:1.5;border-left:3px solid var(--cs-warning);padding-left:8px}
+.crew .finding.none{border-left-color:var(--cs-border);color:var(--cs-muted)}
+.crew .perm{font-size:11px;padding:1px 6px;border-radius:4px;background:var(--cs-surface-subtle);color:var(--cs-muted)}
+.crew .perm.rw{background:var(--cs-success-soft);color:var(--cs-success)}.crew .perm.r{background:var(--cs-info-soft);color:var(--cs-info)}
+.crew .chip{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;white-space:nowrap;background:var(--cs-surface-subtle);color:var(--cs-muted)}
+.crew .chip.success{background:var(--cs-success-soft);color:var(--cs-success)}.crew .chip.warning{background:var(--cs-warning-soft);color:var(--cs-warning-text,var(--cs-warning))}
+.crew .chip.danger{background:var(--cs-danger-soft);color:var(--cs-danger)}.crew .chip.info{background:var(--cs-info-soft);color:var(--cs-info)}
+.crew .btn{height:32px;padding:0 14px;border-radius:var(--cs-radius-sm);border:1px solid var(--cs-border);background:var(--cs-surface);color:var(--cs-text);font-size:13px;white-space:nowrap}
+.crew .btn.primary{background:var(--cs-primary);border-color:var(--cs-primary);color:#fff}.crew .btn.primary:hover{background:var(--cs-primary-hover,var(--cs-primary))}
+.crew .btn.link{border:0;background:none;color:var(--cs-primary);padding:0 4px;height:auto}
+.crew .btn:disabled{opacity:.55}
+.crew .panel{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);margin-bottom:16px}
+.crew .panel>header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--cs-border)}
+.crew .panel>header small{font-weight:400}
+.crew .panel .body{padding:12px 16px}
+/* 形象：Codex 正式形象的胸像（avatars/*.png），状态点不变；找不到图时退回首字占位 */
+.crew-avatar{position:relative;display:inline-grid;place-items:center;flex:none;border-radius:50%;background:var(--cs-primary-soft);color:var(--cs-primary);font-weight:600;border:1px dashed #9db8d4}
+.crew-avatar .st{position:absolute;right:-2px;bottom:-2px;width:30%;height:30%;min-width:8px;min-height:8px;border-radius:50%;border:2px solid var(--cs-surface,#fff)}
+.crew-avatar[data-state=idle] .st{background:#a9b8c7}.crew-avatar[data-state=working] .st{background:var(--cs-info);animation:crew-pulse 1.5s ease-in-out infinite}
+.crew-avatar[data-state=waiting] .st{background:var(--cs-warning)}.crew-avatar[data-state=alert] .st{background:var(--cs-danger)}
+.crew-avatar.has-img{border:1px solid var(--cs-border);background:#eaf1f7}.crew-avatar img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+@keyframes crew-pulse{50%{opacity:.35}}@media (prefers-reduced-motion:reduce){.crew-avatar .st{animation:none!important}}
+/* 预览卡（写确认卡）：每一行都显示，不藏 */
+.crew .preview{border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-surface)}
+.crew .preview>h3{padding:10px 14px;border-bottom:1px solid var(--cs-border);display:flex;justify-content:space-between;gap:8px;align-items:center}
+.crew .preview dl{display:grid;grid-template-columns:110px 1fr;margin:0;font-size:13px}
+.crew .preview dt,.crew .preview dd{margin:0;padding:6px 14px;border-bottom:1px solid #edf0f4;line-height:1.5}
+.crew .preview dt{color:var(--cs-muted)}
+.crew .preview .notes{padding:8px 14px;font-size:12px;color:var(--cs-muted);display:grid;gap:4px}
+.crew .preview .notes b{color:var(--cs-text);font-weight:600}
+.crew .preview footer{display:flex;gap:8px;justify-content:flex-end;padding:10px 14px;align-items:center;flex-wrap:wrap}
+.crew .preview footer .why{margin-right:auto;font-size:12px;color:var(--cs-muted)}
+/* 工作台：左对话、右任务 */
+.crew .bench{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;align-items:start}
+.crew .chat{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);display:flex;flex-direction:column;height:calc(100vh - 220px);min-height:520px}
+.crew .chat-head{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--cs-border)}
+.crew .chat-head .grow{flex:1}
+.crew .thread{flex:1;overflow:auto;padding:16px;font-family:var(--crew-chat-font)}
+.crew .thread-col{max-width:768px;margin:0 auto;display:flex;flex-direction:column;gap:8px}
+.crew .msg-user{align-self:flex-end;max-width:min(70%,560px);background:var(--cs-primary-soft);border-radius:12px;padding:8px 12px;font-size:16px;line-height:1.5;white-space:pre-wrap}
+.crew .msg-ai{font-size:16px;line-height:1.55;white-space:pre-wrap;color:var(--cs-text);background:transparent;margin-bottom:8px}
+.crew .msg-ai.error{color:var(--cs-danger)}
+.crew .opts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.crew .opts button{min-height:40px;text-align:left;border:1px solid var(--cs-border);background:var(--cs-surface);border-radius:8px;padding:8px 12px;font-size:16px;font-family:var(--crew-chat-font)}
+.crew .opts button small{display:block;font-size:12px}
+.crew .follow{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.crew .follow button{min-height:32px;max-width:220px;border:1px solid var(--cs-primary);color:var(--cs-primary);background:var(--cs-surface);border-radius:16px;padding:4px 12px;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crew .loading{display:grid;gap:6px;max-width:420px}.crew .loading i{height:10px;border-radius:5px;background:linear-gradient(90deg,#edf1f5,#dfe6ee,#edf1f5);background-size:200% 100%;animation:crew-sk 1.5s linear infinite}
+.crew .loading span{font-size:13px;color:var(--cs-muted)}
+@keyframes crew-sk{to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.crew .loading i{animation:none}}
+.crew .composer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--cs-border);align-items:flex-end}
+.crew .composer textarea{flex:1;min-height:40px;max-height:200px;border-radius:8px;padding:9px 12px;font-family:var(--crew-chat-font);font-size:16px;line-height:1.4;resize:none}
+.crew .ctx{margin:0 16px;margin-top:10px;padding:8px 12px;border-radius:8px;background:var(--cs-info-soft);color:var(--cs-info);font-size:13px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.crew .mini{width:100%;font-size:12px;border-collapse:collapse;margin-top:8px;font-family:var(--cs-font-family)}
+.crew .mini th,.crew .mini td{height:28px;padding:3px 8px;border-bottom:1px solid #edf0f4;text-align:left;white-space:nowrap}
+.crew .mini td.num,.crew .mini th.num{text-align:right}
+.crew .mini tr.hl td{background:var(--cs-warning-soft)}
+.crew .tasks{display:flex;flex-direction:column;gap:8px}
+.crew .task{border:1px solid var(--cs-border);border-radius:var(--cs-radius-sm);padding:8px 10px;background:var(--cs-surface);display:grid;gap:4px;font-size:13px}
+.crew .task .t{display:flex;justify-content:space-between;gap:6px;align-items:flex-start}
+.crew .task small{font-size:12px}
+.crew .ladder{display:flex;flex-wrap:wrap;gap:4px;margin:6px 0}
+.crew .steps{display:grid;gap:8px}
+.crew .step{border:1px solid var(--cs-border);border-radius:var(--cs-radius-sm);padding:8px 12px;display:grid;grid-template-columns:28px 120px 1fr;gap:8px;align-items:start;font-size:13px}
+.crew .step .n{width:24px;height:24px;border-radius:50%;background:var(--cs-primary-soft);color:var(--cs-primary);display:grid;place-items:center;font-size:12px}
+.crew .ok{color:var(--cs-success)}.crew .no{color:var(--cs-danger)}
+.crew .twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.crew .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
+.crew table.list{width:100%;border-collapse:collapse;font-size:13px}
+.crew table.list th,.crew table.list td{height:32px;padding:4px 10px;border-bottom:1px solid #edf0f4;text-align:left;vertical-align:top;white-space:normal;max-width:none}
+.crew table.list th{background:var(--cs-surface-subtle);color:var(--cs-muted);font-weight:500;white-space:nowrap}
+.crew table.list td.num{text-align:right;white-space:nowrap}
+.crew .summary-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.crew .summary-row div{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:var(--cs-radius);padding:10px 14px}
+.crew .summary-row span{display:block;font-size:12px;color:var(--cs-muted)}.crew .summary-row strong{font-size:22px;font-weight:600}
+@media (max-width:1100px){.crew .bench,.crew .twocol{grid-template-columns:1fr}.crew .chat{height:auto;min-height:480px}}
+/* 一线手机端：375 宽外壳（ai-chat-standard 手机规则：正文 16px、按钮 ≥44px、芯片 ≥40px、左右 16px） */
+.crew .phone-wrap{display:flex;gap:24px;align-items:flex-start;flex-wrap:wrap}
+.crew .phone{width:395px;height:832px;box-sizing:border-box;border:10px solid #1d2733;border-radius:36px;background:var(--cs-bg,#f4f6f9);overflow:hidden;display:flex;flex-direction:column;font-family:var(--crew-chat-font);flex:none}
+.crew .phone .bar{height:52px;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--cs-surface);border-bottom:1px solid var(--cs-border)}
+.crew .phone .bar b{font-size:18px}
+.crew .phone .scroll{flex:1;overflow:auto;padding:12px 16px}
+.crew .phone .msg-ai,.crew .phone .msg-user{font-size:16px}
+.crew .phone .msg-user{max-width:min(78%,320px)}
+.crew .phone .todo{background:var(--cs-surface);border:1px solid var(--cs-border);border-radius:10px;padding:12px;margin-bottom:8px;display:grid;gap:4px}
+.crew .phone .todo b{font-size:16px}.crew .phone .todo span{font-size:13px;color:var(--cs-muted)}
+.crew .phone .big{min-height:48px;font-size:16px;border-radius:10px;width:100%}
+.crew .phone .mic{width:72px;height:72px;border-radius:50%;border:0;background:var(--cs-primary);color:#fff;font-size:14px;display:block;margin:8px auto}
+.crew .phone .dock{padding:10px 16px 18px;background:var(--cs-surface);border-top:1px solid var(--cs-border)}
+.crew .phone .dock .row{display:flex;gap:8px;align-items:center}
+.crew .phone .dock input{flex:1;height:44px;border-radius:8px;padding:0 12px;font-size:16px}
+.crew .phone .dock .btn{height:44px;min-width:44px}
+.crew .phone .preview dl{grid-template-columns:88px 1fr;font-size:14px}
+.crew .phone .preview footer .btn{height:48px;flex:1;font-size:16px}
+.crew .phone .num-big{font-size:28px;font-weight:600}
+.crew .ux-notes{flex:1;min-width:320px;font-size:13px;line-height:1.6}
+/* 信息架构图 */
+.crew .ia svg{width:100%;height:auto;display:block}
+.crew .ia text{font-family:var(--cs-font-family);fill:var(--cs-text)}
+/* F-7：真实窄屏（≤ 600px）打开一线手机端时只显示手机屏本身，不要管理端抬头、页签、外框和设计说明 */
+@media (max-width:600px){
+  .crew[data-view=mobile]>.page-heading,.crew[data-view=mobile]>.crew-strip,.crew[data-view=mobile]>.crew-tabs{display:none}
+  .crew[data-view=mobile] .phone-wrap{display:block}
+  .crew[data-view=mobile] .phone{width:100%;height:100vh;height:100dvh;border:0;border-radius:0}
+  .crew[data-view=mobile] .ux-notes{display:none}
+}
+.lsm-main:has(.crew[data-view=mobile]){padding-left:0;padding-right:0}
+@media (min-width:601px){.lsm-main:has(.crew[data-view=mobile]){padding-left:24px;padding-right:24px}}
+.crew [data-testid=ai-chat-feedback] button{border-color:var(--cs-border);color:var(--cs-muted);min-width:44px}
+.crew [data-testid=ai-chat-feedback] button.on,.crew [data-testid=ai-chat-feedback] button[aria-pressed=true]{border-color:var(--cs-primary);background:var(--cs-primary-soft)}
+.crew .phone input,.crew .phone select{box-sizing:border-box;max-width:100%}
+.crew .phone label input,.crew .phone label select{width:100%}
+/* 班组首页卡片：64px 形象下，权限标签不折行，「进入工作台」贴底对齐 */
+.crew .perm{white-space:nowrap;display:inline-block}
+.crew .crew-card header{align-items:flex-start}
+.crew .crew-card>.btn.primary{margin-top:auto}
+/* 回答：第一行结论，依据默认折叠 */
+.crew .msg-ai.head{font-weight:600}
+.crew details.basis{margin-top:8px;border:1px solid var(--cs-border);border-radius:var(--cs-radius);background:var(--cs-surface)}
+.crew details.basis>summary{cursor:pointer;padding:8px 12px;font-size:13px;color:var(--cs-primary);user-select:none}
+.crew details.basis[open]>summary{border-bottom:1px solid var(--cs-border)}
+.crew details.basis>.msg-ai,.crew details.basis>table,.crew details.basis>p{margin:10px 12px}
+.crew details.basis>table{width:calc(100% - 24px)}
