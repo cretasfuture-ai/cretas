@@ -31,7 +31,7 @@ import static org.mockito.Mockito.when;
  * 目标成品的已启用 Workflow 里, 有没有工序的 INPUT 端口接这种半成品 (按 SKU 对)。
  * 走真实 ProductWorkflowResolutionServiceImpl + 真实节点 JSON, 只桩仓库。
  */
-class ProductWorkflowAcceptsInputTest {
+class ProductWorkflowAcceptsInputContractTest {
 
     private ProductProcessWorkflowActivationRepository activations;
     private ProductProcessWorkflowRepository workflows;
