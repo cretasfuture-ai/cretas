@@ -93,12 +93,14 @@ public class ToolRbacEnforcer {
             //    | customer_by_type             | getCustomersByType            | /by-type              |
             //    | customer_purchase_history    | getCustomerPurchaseHistory    | /{id}/purchase-history|
             //    | customer_price_memory_query  | CustomerPriceMemoryService    | /{id}/price-memory    |
-            //    | customer_crm_status_query    | searchCustomersByName         | /{id} + /search       |
+            //    | customer_crm_status_query    | getCustomerById (+实体解析)   | /{id} + /search       |
             //
             // 🔴 最后那条不在派活的清单里 —— 是按硬约束 8 grep「谁调 CustomerService 的名单方法」
             //    才捞出来的 (⛔ 数调用点, 不是数别人给的工具名)。它看着像「查单个客户的 CRM 状态」,
-            //    但传 customerName 走的是 searchCustomersByName, 且**多条命中时把整份
+            //    当时传 customerName 走的是 searchCustomersByName, 且**多条命中时把整份
             //    candidates(完整 CustomerDTO 列表) 原样返回** ⇒ customerName="a" 就是一次名单导出。
+            //    (PR-5 #1777 起按名称改走 FactoryEntityResolver: 全名精确命中才取详情, 零命中只列至多
+            //    5 个候选的名称 + 区分字段; 名单出口变窄, 但仍按 /search 的码挂门, 不放宽。)
             //
             // ⛔ 故意**没有**映射 customer_stats: 它的默认分支 (不传 customerId) 走的是
             //    getOverallCustomerStatistics + 两张分布表 —— 那三个 HTTP 端点按档 C
