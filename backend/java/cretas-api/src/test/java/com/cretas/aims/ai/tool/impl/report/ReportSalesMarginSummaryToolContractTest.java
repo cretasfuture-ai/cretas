@@ -129,4 +129,22 @@ class ReportSalesMarginSummaryToolContractTest {
         assertFalse(AiBiToolTestSupport.enforcerAllows(tool, Set.of("production:read", "analytics:read_write")));
         assertTrue(AiBiToolTestSupport.enforcerAllows(tool, Set.of("finance:read")));
     }
+
+    @Test
+    void protectedProductIsRemovedAndTotalsRecomputedOnRemainingRows_countIsRealProtectedOnly() throws Exception {
+        ProcessSecretLlmCostScope scope = mock(ProcessSecretLlmCostScope.class);
+        // B 是受保护产品; C 是与它同计划联产的普通产品 (withheld 但不是 protected, 不能计入保密产品个数)
+        when(scope.forCurrentCaller("F1")).thenReturn(new ProcessSecretLlmCostScope.Excluded(
+                Set.of("B"), Set.of(), Set.of("B"), Map.of(), Set.of("C")));
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        stub(List.of(row("A", "卤牛肉", "1000", "1000", "600"), row("B", "酱鸭", "500", "500", "300"), row("C", "鸭脖", "200", "200", "100")));
+        JsonNode r = run();
+        JsonNode d = r.get("data").get("data");
+        assertEquals(1000.0, d.get("revenue").asDouble(), 0.001);       // 只剩 A
+        assertEquals(400.0, d.get("grossProfit").asDouble(), 0.001);
+        assertEquals(1, d.get("excludedProductCount").asInt());          // 只数 B, 不数联产的 C
+        String all = r.toString();
+        assertFalse(all.contains("酱鸭") || all.contains("鸭脖"));
+        assertTrue(r.get("data").get("message").asText().contains("不含 1 个保密产品"));
+    }
 }

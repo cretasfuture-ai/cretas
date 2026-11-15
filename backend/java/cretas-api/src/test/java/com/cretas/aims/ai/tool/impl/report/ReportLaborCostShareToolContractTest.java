@@ -79,7 +79,10 @@ class ReportLaborCostShareToolContractTest {
 
     @Test
     void sharesMatchHandComputed_andIncompleteAndUnfinishedAreExcluded() throws Exception {
-        batches.add(batch("卤牛肉", "100", "800", false, ProductionBatchStatus.COMPLETED));
+        ProductionBatch withPeople = batch("卤牛肉", "100", "800", false, ProductionBatchStatus.COMPLETED);
+        withPeople.setSupervisorName("张三");
+        withPeople.setSupervisorId(7L);
+        batches.add(withPeople);
         batches.add(batch("卤牛肉", "50", "200", false, ProductionBatchStatus.COMPLETED));
         batches.add(batch("酱鸭", "20", "100", false, ProductionBatchStatus.COMPLETED));
         batches.add(batch("酱鸭", "999", "999", true, ProductionBatchStatus.COMPLETED));      // 未算全
@@ -91,11 +94,12 @@ class ReportLaborCostShareToolContractTest {
         assertEquals(1100.0, d.get("totalCost").asDouble(), 0.001);
         assertEquals(15.5, d.get("laborSharePct").asDouble(), 0.001);
         assertEquals(1, d.get("costIncompleteBatchCount").asInt());
-        assertEquals(15.0, d.get("products").get(0).get("laborSharePct").asDouble(), 0.001); // 牛肉 150/1000
+        assertEquals(20.0, d.get("products").get(0).get("laborSharePct").asDouble(), 0.001); // 酱鸭 20/100 占比最高排第一
+        assertEquals(15.0, d.get("products").get(1).get("laborSharePct").asDouble(), 0.001); // 牛肉 150/1000
         assertEquals(1, d.get("charts").size());
         assertTrue(r.get("data").get("message").asText().contains("15.5%"));
         // 只出金额汇总: 不含人员字段
-        assertFalse(d.toString().contains("operator") || d.toString().contains("employee") || d.toString().contains("worker"));
+        assertFalse(r.toString().contains("张三") || r.toString().contains("supervisor"), "人员字段不得出现在结果里");
     }
 
     @Test
@@ -126,5 +130,32 @@ class ReportLaborCostShareToolContractTest {
         assertEquals(Set.of("analytics:read_write"), tool.getRequiredPermissions());
         assertFalse(AiBiToolTestSupport.enforcerAllows(tool, Set.of("production:read", "production:read_write")));
         assertTrue(AiBiToolTestSupport.enforcerAllows(tool, Set.of("analytics:read_write")));
+    }
+
+    @Test
+    void rowsAreOrderedByLaborShare_soASmallHighShareProductIsNotCutOff() throws Exception {
+        // 10 个大产品占比 5%, 1 个小产品占比 80%: 取前 8 个若按总成本排会漏掉它
+        for (int i = 0; i < 10; i++) {
+            batches.add(batch("大产品" + i, "50", "1000", false, ProductionBatchStatus.COMPLETED));
+        }
+        batches.add(batch("小产品", "80", "100", false, ProductionBatchStatus.COMPLETED));
+        JsonNode products = run("{}").get("data").get("data").get("products");
+        assertEquals("小产品", products.get(0).get("productName").asText());
+        assertEquals(80.0, products.get(0).get("laborSharePct").asDouble(), 0.001);
+    }
+
+    @Test
+    void protectedProductBatchesAreDroppedFromTotalsRowsAndText() throws Exception {
+        ProcessSecretLlmCostScope scope = mock(ProcessSecretLlmCostScope.class);
+        when(scope.forCurrentCaller("F1")).thenReturn(new ProcessSecretLlmCostScope.Excluded(
+                Set.of("PT-酱鸭"), Set.of(), Set.of("PT-酱鸭"), Map.of(), Set.of()));
+        ReflectionTestUtils.setField(tool, "llmCostScope", scope);
+        batches.add(batch("卤牛肉", "100", "800", false, ProductionBatchStatus.COMPLETED));
+        batches.add(batch("酱鸭", "900", "1000", false, ProductionBatchStatus.COMPLETED));
+        JsonNode r = run("{}");
+        JsonNode d = r.get("data").get("data");
+        assertEquals(12.5, d.get("laborSharePct").asDouble(), 0.001);   // 只剩卤牛肉 100/800
+        assertEquals(1, d.get("withheldBatchCount").asInt());
+        assertFalse(r.toString().contains("酱鸭"));
     }
 }

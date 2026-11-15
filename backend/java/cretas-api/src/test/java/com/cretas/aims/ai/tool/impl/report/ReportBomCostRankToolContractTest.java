@@ -43,8 +43,22 @@ class ReportBomCostRankToolContractTest {
     }
 
     private static BomCostSummaryDTO cost(String id, String total, boolean missing) {
-        return BomCostSummaryDTO.builder().productTypeId(id).totalCost(new BigDecimal(total)).costUnit("元/盒")
-                .hasMissingPrice(missing).missingPriceCount(missing ? 2 : 0).build();
+        return cost(id, total, missing, "元/盒", true);
+    }
+
+    private static BomCostSummaryDTO cost(String id, String total, boolean missing, String unit, boolean packagingRow) {
+        List<BomCostSummaryDTO.MaterialCostItem> items = packagingRow
+                ? List.of(BomCostSummaryDTO.MaterialCostItem.builder().materialName("包材").subtotal(new BigDecimal(total)).build())
+                : List.of(BomCostSummaryDTO.MaterialCostItem.builder().materialName("原料").build());   // 非归集行 subtotal=null
+        return BomCostSummaryDTO.builder().productTypeId(id).totalCost(new BigDecimal(total)).costUnit(unit)
+                .materialCosts(items).hasMissingPrice(missing).missingPriceCount(missing ? 2 : 0).build();
+    }
+
+    private static ProcessSecretLlmCostScope scopeProtecting(String... ids) {
+        ProcessSecretLlmCostScope scope = mock(ProcessSecretLlmCostScope.class);
+        java.util.Set<String> set = java.util.Set.of(ids);
+        when(scope.forCurrentCaller("F1")).thenReturn(new ProcessSecretLlmCostScope.Excluded(set, java.util.Set.of(), set, Map.of(), java.util.Set.of()));
+        return scope;
     }
 
     @BeforeEach
@@ -115,5 +129,53 @@ class ReportBomCostRankToolContractTest {
         assertEquals(Set.of("analytics:read_write"), tool.getRequiredPermissions());
         assertFalse(AiBiToolTestSupport.enforcerAllows(tool, Set.of("production:read")));
         assertTrue(AiBiToolTestSupport.enforcerAllows(tool, Set.of("analytics:read_write")));
+    }
+
+    @Test
+    void productWithNoAggregatableRowIsNotRankedAsZero_andIsCounted() throws Exception {
+        // P2 的 BOM 没有包材行: calculateProductCost 给 0 不是 null, 以前会以 0.00 排第一 (升序) 并进图
+        when(bom.calculateProductCost("F1", "P2")).thenReturn(cost("P2", "0.00", false, "元/盒", false));
+        JsonNode r = run("{\"order\":\"lowest\"}");
+        JsonNode rows = r.get("data").get("data").get("rows");
+        assertEquals(2, rows.size());
+        assertEquals("P3", rows.get(0).get("productTypeId").asText());   // 7.00 最低, 不是 0.00 的酱鸭
+        assertEquals(1, r.get("data").get("data").get("noPackagingRowProductCount").asInt());
+        assertTrue(r.get("data").get("message").asText().contains("没有可归集成本的行"));
+        assertFalse(r.get("data").get("data").get("charts").toString().contains("酱鸭"));
+    }
+
+    @Test
+    void differentUnitsAreNotMixed_mainUnitRanked_othersSaid_axisNamedAfterUnit() throws Exception {
+        when(bom.calculateProductCost("F1", "P2")).thenReturn(cost("P2", "99.00", false, "元/kg", true));
+        JsonNode r = run("{}");
+        JsonNode d = r.get("data").get("data");
+        assertEquals(2, d.get("rows").size());                           // 两个 元/盒 产品
+        assertEquals("元/盒", d.get("costUnit").asText());
+        assertEquals(1, d.get("otherUnitProductCounts").get("元/kg").asInt());
+        assertEquals("元/盒", d.get("charts").get(0).get("option").get("yAxis").get("name").asText());
+        String msg = r.get("data").get("message").asText();
+        assertTrue(msg.contains("元/kg") && msg.contains("不能一起排"));
+        assertFalse(msg.contains("99.00"));
+    }
+
+    @Test
+    void protectedProductIsNotInRowsChartOrText_andOnlyRealProtectedCountIsReported() throws Exception {
+        ReflectionTestUtils.setField(tool, "llmCostScope", scopeProtecting("P1"));
+        JsonNode r = run("{}");
+        JsonNode d = r.get("data").get("data");
+        assertEquals(2, d.get("rows").size());
+        assertFalse(d.toString().contains("卤牛肉礼盒") || d.toString().contains("12.5"));
+        String msg = r.get("data").get("message").asText();
+        assertFalse(msg.contains("卤牛肉礼盒") || msg.contains("12.5"));
+        assertTrue(msg.contains("不含 1 个保密产品"), msg);
+        assertEquals(1, d.get("withheldProductCount").asInt());
+        org.mockito.Mockito.verify(bom, org.mockito.Mockito.never()).calculateProductCost("F1", "P1");
+    }
+
+    @Test
+    void callerWithoutCostView_neverQueriesBomAtAll() throws Exception {
+        ReflectionTestUtils.setField(tool, "priceView", AiBiToolTestSupport.priceView(false));
+        run("{}");
+        org.mockito.Mockito.verify(bom, org.mockito.Mockito.never()).calculateProductCost(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
     }
 }

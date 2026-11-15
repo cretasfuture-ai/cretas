@@ -102,15 +102,25 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null
                 ? ProcessSecretLlmCostScope.Excluded.NONE : llmCostScope.forCurrentCaller(factoryId);
-        int withheld = 0;
-        List<Map<String, Object>> ranked = new ArrayList<>();
+        Set<String> withheldIds = secret.withheldProducts();
+        Set<String> withheldProtected = new LinkedHashSet<>();
+        int noPackagingRows = 0;
+        List<Map<String, Object>> all = new ArrayList<>();
         for (ProductType t : matched) {
-            if (secret.coversProduct(t.getId())) {
-                withheld++;
+            if (withheldIds.contains(t.getId())) {
+                // 计数只数真正受保护的产品 (计划锚点 / 同计划联产的普通产品不算, 不暴露联产结构)
+                if (secret.protectedProductTypeIds().contains(t.getId())) withheldProtected.add(t.getId());
                 continue;
             }
             BomCostSummaryDTO s = bomService.calculateProductCost(factoryId, t.getId());
             if (s == null || s.getTotalCost() == null) continue;
+            // calculateProductCost 无可归集 (包材) 行时给 0 不是 null: 0 不是「不要钱」是「此处没有可归集的行」, 不进榜
+            boolean hasAggregatableRow = s.getMaterialCosts() != null
+                    && s.getMaterialCosts().stream().anyMatch(i -> i.getSubtotal() != null);
+            if (!hasAggregatableRow) {
+                noPackagingRows++;
+                continue;
+            }
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("productTypeId", t.getId());
             row.put("productName", t.getName());
@@ -118,15 +128,32 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
             row.put("costUnit", s.getCostUnit());
             row.put("hasMissingPrice", s.isHasMissingPrice());
             row.put("missingPriceCount", s.getMissingPriceCount());
-            ranked.add(row);
+            all.add(row);
         }
+        // 不同单位 (元/kg、元/盒) 不混排: 只排人数最多的主单位组, 其余单位的产品个数单独说明 (同 #1732 单位不相比)
+        Map<String, List<Map<String, Object>>> byUnit = new LinkedHashMap<>();
+        for (Map<String, Object> r : all) {
+            byUnit.computeIfAbsent(String.valueOf(r.get("costUnit")), k -> new ArrayList<>()).add(r);
+        }
+        String mainUnit = null;
+        for (Map.Entry<String, List<Map<String, Object>>> e : byUnit.entrySet()) {
+            if (mainUnit == null || e.getValue().size() > byUnit.get(mainUnit).size()) mainUnit = e.getKey();
+        }
+        List<Map<String, Object>> ranked = mainUnit == null ? new ArrayList<>() : new ArrayList<>(byUnit.get(mainUnit));
+        Map<String, Integer> otherUnits = new LinkedHashMap<>();
+        final String main = mainUnit;
+        byUnit.forEach((u, rows) -> { if (!u.equals(main)) otherUnits.put(u, rows.size()); });
         Comparator<Map<String, Object>> byCost = Comparator.comparing(r -> (BigDecimal) r.get("totalCost"));
         ranked.sort(highestFirst ? byCost.reversed() : byCost);
         List<Map<String, Object>> shown = ranked.size() > limit ? new ArrayList<>(ranked.subList(0, limit)) : ranked;
 
+        String unitLabel = mainUnit == null || "null".equals(mainUnit) ? "元/成品" : mainUnit;
         data.put("order", highestFirst ? "highest" : "lowest");
         data.put("productCount", ranked.size());
-        data.put("withheldProductCount", withheld);
+        data.put("withheldProductCount", withheldProtected.size());
+        data.put("noPackagingRowProductCount", noPackagingRows);
+        data.put("costUnit", unitLabel);
+        data.put("otherUnitProductCounts", otherUnits);
         data.put("rows", shown);
         if (!shown.isEmpty()) {
             List<String> names = new ArrayList<>();
@@ -139,29 +166,35 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
             option.put("tooltip", Map.of("trigger", "axis"));
             option.put("grid", Map.of("left", 60, "right", 20, "bottom", 70, "containLabel", true));
             option.put("xAxis", Map.of("type", "category", "data", names, "axisLabel", Map.of("interval", 0, "rotate", 25)));
-            option.put("yAxis", Map.of("type", "value", "name", "元/个"));
+            option.put("yAxis", Map.of("type", "value", "name", unitLabel));
             option.put("series", List.of(Map.of("type", "bar", "name", "BOM成本", "data", values)));
             data.put("charts", List.of(Map.of("type", "bar",
-                    "title", "BOM 成本（元/成品，" + (highestFirst ? "最高" : "最低") + "前 " + shown.size() + "）", "option", option)));
+                    "title", "BOM 成本（" + unitLabel + "，" + (highestFirst ? "最高" : "最低") + "前 " + shown.size() + "）", "option", option)));
         }
 
         StringBuilder sb = new StringBuilder();
         if (shown.isEmpty()) {
-            sb.append("没有能算出 BOM 成本的产品。");
+            sb.append("没有能算出 BOM 成本的产品（没有可归集成本行的产品不进排行）。");
         } else {
-            sb.append("BOM 成本").append(highestFirst ? "最高" : "最低").append("的 ").append(shown.size()).append(" 个产品（共 ")
-                    .append(ranked.size()).append(" 个有 BOM 成本）：");
+            sb.append("BOM 成本").append(highestFirst ? "最高" : "最低").append("的 ").append(shown.size()).append(" 个产品（").append(unitLabel)
+                    .append("，共 ").append(ranked.size()).append(" 个有 BOM 成本）：");
             int i = 0;
             for (Map<String, Object> r : shown) {
-                sb.append("\n").append(++i).append(". ").append(r.get("productName")).append("：¥").append(r.get("totalCost"))
-                        .append(r.get("costUnit") == null ? "" : "（" + r.get("costUnit") + "）");
+                sb.append("\n").append(++i).append(". ").append(r.get("productName")).append("：¥").append(r.get("totalCost"));
                 if (Boolean.TRUE.equals(r.get("hasMissingPrice"))) {
                     sb.append("，有 ").append(r.get("missingPriceCount")).append(" 行缺单价，成本被低估");
                 }
             }
         }
-        if (withheld > 0) {
-            sb.append("\n另有 ").append(withheld).append(" 个产品涉及工艺保密，当前账号无权查看，未计入。");
+        if (!otherUnits.isEmpty()) {
+            sb.append("\n另有产品按其他单位计成本（").append(String.join("、", otherUnits.keySet()))
+                    .append("），单位不同不能一起排，未计入排行，需要请指定产品名。");
+        }
+        if (noPackagingRows > 0) {
+            sb.append("\n另有 ").append(noPackagingRows).append(" 个产品的 BOM 里没有可归集成本的行（当前口径只归集包材），未进排行。");
+        }
+        if (!withheldIds.isEmpty() && matched.stream().anyMatch(t -> withheldIds.contains(t.getId()))) {
+            sb.append("\n").append(ProcessSecretLlmCostScope.note(withheldProtected.size()));
         }
         sb.append("\n口径：现行 BOM 估算，每 1 个成品；该口径当前只归集包材成本，原辅料、人工、均摊不在 BOM 归集，不是完整生产成本。");
         return buildSimpleResult(sb.toString(), data);

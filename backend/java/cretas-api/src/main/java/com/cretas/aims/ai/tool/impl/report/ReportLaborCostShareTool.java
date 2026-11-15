@@ -130,7 +130,13 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         data.put("laborSharePct", sharePct);
 
         List<ReportCostQueryTool.ProductAgg> products = new ArrayList<>(agg.byProduct.values());
-        products.sort((a, b) -> b.total.compareTo(a.total));
+        // 按人工占比从高到低取前 N (按总成本取前 N 会漏掉占比最高的小产品)
+        products.sort((a, b) -> {
+            BigDecimal sa = pct(a.labor, a.total);
+            BigDecimal sb2 = pct(b.labor, b.total);
+            if (sa == null || sb2 == null) return sa == null ? (sb2 == null ? 0 : 1) : -1;
+            return sb2.compareTo(sa);
+        });
         List<Map<String, Object>> rows = new ArrayList<>();
         for (ReportCostQueryTool.ProductAgg p : products) {
             if (rows.size() >= MAX_PRODUCTS) break;
@@ -163,7 +169,7 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         option.put("xAxis", Map.of("type", "category", "data", names, "axisLabel", Map.of("interval", 0, "rotate", 25)));
         option.put("yAxis", Map.of("type", "value", "name", "%"));
         option.put("series", List.of(Map.of("type", "bar", "name", "人工成本占比(%)", "data", values)));
-        charts.add(Map.of("type", "bar", "title", "各产品人工成本占比（%，按总成本从高到低前 " + rows.size() + "）", "option", option));
+        charts.add(Map.of("type", "bar", "title", "各产品人工成本占比（%，按占比从高到低前 " + rows.size() + "）", "option", option));
         return charts;
     }
 
@@ -180,7 +186,7 @@ public class ReportLaborCostShareTool extends AbstractBusinessTool {
         }
         sb.append("\n人工成本 ¥").append(ReportCostQueryTool.money(agg.labor)).append("，占总成本 ¥")
                 .append(ReportCostQueryTool.money(agg.total)).append(" 的 ").append(sharePct).append("%。");
-        sb.append("\n各产品人工占比：");
+        sb.append("\n各产品人工占比（从高到低）：");
         int i = 0;
         for (Map<String, Object> r : rows) {
             sb.append("\n").append(++i).append(". ").append(r.get("productName")).append("：人工 ¥").append(r.get("laborCost"))

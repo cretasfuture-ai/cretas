@@ -107,10 +107,12 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
         Map<String, Object> summary = (Map<String, Object>) view.get("summary");
         List<Map<String, Object>> rank = (List<Map<String, Object>>) view.get("rank");
         int excludedRows = ((Number) view.get("excludedRowCount")).intValue();
+        // 对外只报真正受保护的产品个数 (行数含计划锚点 / 同计划联产的普通产品, 会暴露联产结构)
+        int excludedProtected = ((Number) view.get("excludedProtectedProductCount")).intValue();
 
         if (rank.isEmpty()) {
             return buildSimpleResult(start + " 至 " + end + " 没有可统计的销售记录"
-                    + (excludedRows > 0 ? "（另有 " + excludedRows + " 个产品涉及工艺保密，当前账号无权查看，未计入）" : "")
+                    + (excludedRows > 0 ? "（" + ProcessSecretLlmCostScope.note(excludedProtected) + "）" : "")
                     + "，销售额和毛利无从计算。", data);
         }
 
@@ -122,7 +124,7 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
         BigDecimal coverage = pct(OperatingReportAssembler.number(summary.get("costCoverage")));
 
         data.put("productCount", summary.get("productCount"));
-        data.put("excludedProductCount", excludedRows);
+        data.put("excludedProductCount", excludedProtected);
         data.put("revenue", money(revenue));
         data.put("costedRevenue", money(costedRevenue));
         data.put("cost", money(cost));
@@ -161,7 +163,7 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
             }
         }
         if (excludedRows > 0) {
-            sb.append("\n另有 ").append(excludedRows).append(" 个产品涉及工艺保密，当前账号无权查看，未计入。");
+            sb.append("\n").append(ProcessSecretLlmCostScope.note(excludedProtected));
         }
         sb.append("\n口径：与 SKU 毛利率「实际销售毛利」一致（折后未税收入；毛利只算已回填成本的明细）。");
         return buildSimpleResult(sb.toString(), data);
