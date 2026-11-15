@@ -9,7 +9,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 
 /** 目录价理论毛利的成本 = 近 N 批按产量加权, 单批异常 (如 ¥54 的小批量) 不再把毛利拉到 -101%。 */
-class CatalogMarginWeightedCostTest {
+class CatalogMarginWeightedCostContractTest {
 
     private static ProductionBatch b(String unitCost, String qty) {
         ProductionBatch p = new ProductionBatch();
