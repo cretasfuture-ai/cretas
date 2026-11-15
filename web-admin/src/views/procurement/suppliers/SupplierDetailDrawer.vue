@@ -945,19 +945,19 @@ function formatMoney(value: number | null | undefined): string {
 
 <style scoped lang="scss">
 .drawer-header { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.drawer-title { color: var(--el-text-color-primary); font-size: 18px; font-weight: 600; }
-.drawer-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--el-text-color-secondary); font-size: 13px; }
+.drawer-title { color: var(--cs-text); font-size: 18px; font-weight: 600; }
+.drawer-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--cs-muted); font-size: 13px; }
 .header-actions, .edit-actions, .tab-toolbar { display: flex; align-items: center; gap: 8px; }
 .profile-form { margin-top: 16px; }
 .profile-descriptions { margin-top: 16px; }
 .edit-actions { justify-content: flex-end; }
-.tab-toolbar { justify-content: space-between; margin-bottom: 12px; color: var(--el-text-color-secondary); font-size: 13px; }
+.tab-toolbar { justify-content: space-between; margin-bottom: 12px; color: var(--cs-muted); font-size: 13px; }
 .contract-alert { margin-top: 12px; }
-.field-hint { margin-left: 10px; color: var(--el-text-color-secondary); font-size: 12px; }
+.field-hint { margin-left: 10px; color: var(--cs-muted); font-size: 12px; }
 /* 缺陷 35: 基准未知的存量价格 —— 视觉上要与「已确认含税」区分开,
    ⛔ 但不能弱到看不见: 它是一个需要人去确认的状态, 不是次要信息。 */
-.price-basis-unknown { color: var(--el-color-warning); }
-.inline-spec-divider { color: var(--el-text-color-secondary); font-size: 13px; font-weight: 400; }
+.price-basis-unknown { color: var(--cs-warning); }
+.inline-spec-divider { color: var(--cs-muted); font-size: 13px; font-weight: 400; }
 .inline-spec-toggle, .spec-add-toggle { display: flex; justify-content: center; margin: 4px 0 12px; }
 .inline-spec-form { margin-top: 4px; }
 </style>
