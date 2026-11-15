@@ -64,6 +64,8 @@ public class LineageEdgeRecorder {
     public static final String EDGE_PRODUCTION_TO_FINISHED = "PRODUCTION_TO_FINISHED";
     public static final String EDGE_FINISHED_TO_SHIPMENT = "FINISHED_TO_SHIPMENT";
     public static final String EDGE_MATERIAL_TRANSFER = "MATERIAL_TRANSFER";
+    /** 委外加工: 委外仓里被耗用的批次 (或退货返工的源批次) → 委外收货产出批次。 */
+    public static final String EDGE_OUTSOURCE_PROCESS = "OUTSOURCE_PROCESS";
 
     /**
      * 生产批次 → 它产出的在制库存批（{@code material_batches}，{@code source_doc_type='PRODUCTION_BATCH'}）。
@@ -311,6 +313,28 @@ public class LineageEdgeRecorder {
         return record(factoryId, EDGE_MATERIAL_TRANSFER,
                 NODE_MATERIAL_BATCH, sourceMaterialBatchId,
                 NODE_MATERIAL_BATCH, targetMaterialBatchId,
+                quantity, unit, operatorId, refKey, extraMeta);
+    }
+
+    /**
+     * 委外加工: 委外仓物料批次 → 收货产出批次 (半成品为 MATERIAL_BATCH, 成品为 FINISHED_BATCH)。
+     * 返工回货时源是被退回的收货批次。闭包由触发器维护, 不区分边类型。
+     */
+    public LineageRecordOutcome recordOutsourceProcess(String factoryId,
+                                                       String sourceMaterialBatchId,
+                                                       String targetType,
+                                                       String targetBatchId,
+                                                       BigDecimal quantity,
+                                                       String unit,
+                                                       Long operatorId,
+                                                       String refKey,
+                                                       Map<String, Object> extraMeta) {
+        if (!NODE_MATERIAL_BATCH.equals(targetType) && !NODE_FINISHED_BATCH.equals(targetType)) {
+            throw new IllegalArgumentException("委外产出节点类型只能是 MATERIAL_BATCH / FINISHED_BATCH: " + targetType);
+        }
+        return record(factoryId, EDGE_OUTSOURCE_PROCESS,
+                NODE_MATERIAL_BATCH, sourceMaterialBatchId,
+                targetType, targetBatchId,
                 quantity, unit, operatorId, refKey, extraMeta);
     }
 

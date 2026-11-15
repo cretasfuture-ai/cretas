@@ -382,6 +382,20 @@ public class SalesServiceImpl implements SalesService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.bom.StandardCostService standardCostService;
 
+    /** 委外加工费 (D10): 订单 → 计划 → 委外行。Optional — 未注册时 processingFee 返 null。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.outsource.OutsourceService outsourceService;
+
+    private java.math.BigDecimal outsourceProcessingFee(String factoryId, String orderId) {
+        if (outsourceService == null || productionPlanRepository == null) {
+            return null;
+        }
+        java.util.List<String> planIds = productionPlanRepository.findByFactoryIdAndSourceOrderId(factoryId, orderId)
+                .stream().map(com.cretas.aims.entity.ProductionPlan::getId).toList();
+        return outsourceService.processingFeeForPlans(factoryId, planIds);
+    }
+
     /** SP12 实际成本拆分: 订单 → 生产计划. Optional — 未注册时 actualCostSplit 返 null. */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductionPlanRepository productionPlanRepository;
@@ -1933,11 +1947,9 @@ public class SalesServiceImpl implements SalesService {
                 .variancePct(orderVariancePct)
                 .belowThreshold(orderBelowThreshold)
                 .alarmMessage(orderAlarmMessage)
-                // P1 #32: 委外加工费独立科目 — 诚实 null.
-                // WorkProcess/WorkProcessTask 当前无 isOutsourced + outsourcedFee 列,
-                // 委外加工费无生产记录来源 → 不伪造数字, 返 null.
-                // 待 WorkProcess 加 is_outsourced 列后接入真实数据.
-                .processingFee(null)
+                // P1 #32: 委外加工费独立科目 — 订单名下计划所挂委外行的累计净加工费 (D10: 只展示,
+                // 半成品单价里已含加工费, 不再并入 actualCost)。没有委外行 ⇒ null (不伪造 0)。
+                .processingFee(outsourceProcessingFee(factoryId, orderId))
                 // SP12: 实际成本拆分 (材料逐料 + 人工 + 制费), 来自生产真实领料/报工.
                 // 诚实 null: 订单未投产 / 未领料 / 未报工时返 null. 不破坏上面聚合字段.
                 .actualCostSplit(buildActualCostSplit(factoryId, orderId))

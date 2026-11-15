@@ -70,6 +70,10 @@ public class FactoryWarehouse extends BaseEntity {
     @Column(name = "remarks", columnDefinition = "TEXT")
     private String remarks;
 
+    /** 仅 OUTSOURCE 仓: 这个委外仓属于哪个委外厂 (suppliers.id)。一个委外厂一个委外仓 (部分唯一索引)。 */
+    @Column(name = "outsourcer_supplier_id", length = 191)
+    private String outsourcerSupplierId;
+
     /**
      * 仓库类型枚举.
      *
