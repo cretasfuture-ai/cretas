@@ -7,13 +7,9 @@
 
 ## 在飞任务
 
-- `WH-AI-QUOTE-GUARD-20261115` — `in-progress` — Owner /root — Base `914c9444b6` — 锁 Web采购list.vue、purchaseAiQuoteGuard.ts与对应测试；复用AI预览confirmGuard拦截含税报价分差，保留原话。禁止改财务算法/DTO/Entity/历史金额。验收：采购guard与Drawer目标Vitest、tsc、构建及试用账号UI。
 
-- `WH-UI-COMP-20261115` — `review` — Owner /root — Base `fa35dd8a86` — 协调者接回 web-admin/src/components/workdesk/**；Nuxt组件及三岗接线已冻结，37files/329tests通过；整合最新main，Web tree未变。
 
-- `WHOLESALE-ACCEPT-20261115` — `in-progress` — Owner /root — Base `fa35dd8a86` — 批发商试用三岗验收修复；原Base7f2556已整合最新main。锁Web workdesk/AI录入与测试；场景表：C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/scenarios.md；采购2kg确认入库并回读，待发布后复测。
 
-- `WH-INTENT-FIX-20261115` — `review` — Owner /root — Base `fa35dd8a86` — 锁 IntentKnowledgeBase.java、runtime-tool-policies.yaml、InventoryWorkdeskRecognitionContractTest.java；修补货短语和只读入口来源；28个Maven测试通过、独立审查通过；最新main整合构建再验。
 
 
 - `INTENT-DISTILL-20261111` — `in-progress` — Owner organizer — Base `a89e8c70f997` — 意图提速+本地决策蒸馏。A=`service/execution`+`backend/python/ai`，B=`tests/semantic-read`，C=`scripts/finetune`，G=`tests/semantic-read/HOLDOUT.md`；A/D/E/H 串行。见 archive/2026-11-11-intent-distill-plan.md 与 -pr1476-split-map.md。
