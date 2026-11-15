@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh, Search } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
@@ -12,8 +13,9 @@ import {
   type ManufacturerPayload,
   type ManufacturerRegistry,
 } from '@/api/manufacturer';
-import type { FormInstance } from 'element-plus';
 
+// 组件全部是 Nuxt UI (UTable / UModal / UFormField / UInput / UTextarea / USwitch / UBadge) + --cs-*；
+// 弹窗整体 UModal (含停用确认)，里面不放 Element 控件。提示仍用 ElMessage（命令式服务）。
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -26,7 +28,6 @@ const activeOnly = ref(false);
 
 const dialogVisible = ref(false);
 const dialogTitle = ref('新增厂商登记');
-const formRef = ref<FormInstance>();
 const saving = ref(false);
 const editingId = ref<string | null>(null);
 const form = reactive<ManufacturerPayload>({
@@ -36,11 +37,23 @@ const form = reactive<ManufacturerPayload>({
   isActive: true,
   remark: '',
 });
+// 必填校验（原 el-form rules）：提交时检查，错误显示在字段下方
+const submitted = ref(false);
+const codeError = computed(() => (submitted.value && !String(form.code || '').trim() ? '请输入厂号编码' : undefined));
+const nameError = computed(() => (submitted.value && !String(form.name || '').trim() ? '请输入厂商名称' : undefined));
 
-const rules = {
-  code: [{ required: true, message: '请输入厂号编码', trigger: 'blur' }],
-  name: [{ required: true, message: '请输入厂商名称', trigger: 'blur' }],
-};
+const deleteTarget = ref<ManufacturerRegistry | null>(null);
+const deleteVisible = ref(false);
+const deleting = ref(false);
+
+const columns = computed<TableColumn<ManufacturerRegistry>[]>(() => [
+  { accessorKey: 'code', header: '厂号' },
+  { accessorKey: 'name', header: '厂商名称' },
+  { id: 'originPlace', header: '默认产地' },
+  { id: 'status', header: '状态' },
+  { id: 'remark', header: '备注' },
+  ...(canWrite.value ? [{ id: 'actions', header: '操作' } as TableColumn<ManufacturerRegistry>] : []),
+]);
 
 const filteredRows = computed(() => {
   const q = keyword.value.trim().toLowerCase();
@@ -73,6 +86,7 @@ function resetForm() {
     isActive: true,
     remark: '',
   });
+  submitted.value = false;
 }
 
 function handleCreate() {
@@ -85,6 +99,7 @@ function handleCreate() {
 function handleEdit(row: ManufacturerRegistry) {
   editingId.value = row.id;
   dialogTitle.value = '编辑厂商登记';
+  resetForm();
   Object.assign(form, {
     code: row.code,
     name: row.name,
@@ -96,9 +111,9 @@ function handleEdit(row: ManufacturerRegistry) {
 }
 
 async function handleSubmit() {
-  if (!factoryId.value || !formRef.value) return;
-  const valid = await formRef.value.validate().catch(() => false);
-  if (!valid) return;
+  if (!factoryId.value) return;
+  submitted.value = true;
+  if (codeError.value || nameError.value) return;
   saving.value = true;
   try {
     const payload = {
@@ -124,126 +139,109 @@ async function handleSubmit() {
   }
 }
 
-async function handleDelete(row: ManufacturerRegistry) {
-  if (!factoryId.value) return;
+function handleDelete(row: ManufacturerRegistry) {
+  deleteTarget.value = row;
+  deleteVisible.value = true;
+}
+
+async function confirmDelete() {
+  if (!factoryId.value || !deleteTarget.value) return;
+  deleting.value = true;
   try {
-    await ElMessageBox.confirm(`确认停用厂号 ${row.code}？`, '停用厂商登记', {
-      type: 'warning',
-      confirmButtonText: '停用',
-      cancelButtonText: '取消',
-    });
-    const res = await deleteManufacturer(factoryId.value, row.id);
+    const res = await deleteManufacturer(factoryId.value, deleteTarget.value.id);
     if (res.success) {
       ElMessage.success('厂商登记已停用');
+      deleteVisible.value = false;
       await loadData();
     }
   } catch (error) {
-    if (error === 'cancel' || error === 'close') return;
     const message = String((error as Error)?.message || '停用失败');
     ElMessage({ message, type: 'error', duration: 0, showClose: true });
+  } finally {
+    deleting.value = false;
   }
 }
 </script>
 
 <template>
   <div class="page-container">
-    <div class="page-header">
+    <div class="cs-page-head">
       <div>
         <h2>厂商登记表</h2>
         <p>维护工厂级厂号编码、厂商名称和默认产地</p>
       </div>
-      <el-button v-if="canWrite" type="primary" :icon="Plus" @click="handleCreate">新增厂商</el-button>
+      <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="manufacturer-create" @click="handleCreate">新增厂商</UButton>
     </div>
 
-    <el-card shadow="never" class="content-card">
+    <section class="cs-card">
       <div class="toolbar">
-        <el-input v-model="keyword" :prefix-icon="Search" clearable placeholder="搜索厂号、厂商、产地" />
-        <el-checkbox v-model="activeOnly" @change="loadData">仅显示启用</el-checkbox>
-        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <UInput v-model="keyword" icon="i-lucide-search" placeholder="搜索厂号、厂商、产地" class="w-80" data-testid="manufacturer-keyword">
+          <template v-if="keyword" #trailing>
+            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="keyword = ''" />
+          </template>
+        </UInput>
+        <UCheckbox v-model="activeOnly" label="仅显示启用" @update:model-value="loadData" />
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
       </div>
 
-      <el-table v-loading="loading" :data="filteredRows" border stripe>
-        <el-table-column prop="code" label="厂号" width="130" show-overflow-tooltip />
-        <el-table-column prop="name" label="厂商名称" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="originPlace" label="默认产地" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.originPlace || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
-              {{ row.isActive ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
-        <el-table-column v-if="canWrite" label="操作" width="150" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button link type="danger" @click="handleDelete(row)">停用</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      <UTable :data="filteredRows" :columns="columns" :loading="loading" class="cs-table" data-testid="manufacturer-table">
+        <template #empty>暂无厂商登记</template>
+        <template #originPlace-cell="{ row }">{{ row.original.originPlace || '-' }}</template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(row.original.isActive ? 'success' : 'info')" variant="soft">{{ row.original.isActive ? '启用' : '停用' }}</UBadge>
+        </template>
+        <template #remark-cell="{ row }">{{ row.original.remark || '' }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" @click="handleEdit(row.original)">编辑</UButton>
+            <UButton size="xs" variant="link" color="error" @click="handleDelete(row.original)">停用</UButton>
+          </div>
+        </template>
+      </UTable>
+    </section>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px" destroy-on-close>
-      <el-form ref="formRef" :model="form" :rules="rules" label-width="92px">
-        <el-form-item label="厂号" prop="code">
-          <el-input v-model="form.code" maxlength="64" show-word-limit />
-        </el-form-item>
-        <el-form-item label="厂商名称" prop="name">
-          <el-input v-model="form.name" maxlength="200" show-word-limit />
-        </el-form-item>
-        <el-form-item label="默认产地">
-          <el-input v-model="form.originPlace" maxlength="200" show-word-limit />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch v-model="form.isActive" active-text="启用" inactive-text="停用" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="form.remark" type="textarea" :rows="3" maxlength="500" show-word-limit />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="handleSubmit">保存</el-button>
+    <UModal v-model:open="dialogVisible" :title="dialogTitle" description="维护厂号编码、厂商名称与默认产地" :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="厂号" required :error="codeError">
+            <UInput v-model="form.code" :maxlength="64" class="w-full" data-testid="manufacturer-code" />
+          </UFormField>
+          <UFormField label="厂商名称" required :error="nameError">
+            <UInput v-model="form.name" :maxlength="200" class="w-full" data-testid="manufacturer-name" />
+          </UFormField>
+          <UFormField label="默认产地">
+            <UInput v-model="form.originPlace" :maxlength="200" class="w-full" />
+          </UFormField>
+          <UFormField label="状态">
+            <USwitch v-model="form.isActive" :label="form.isActive ? '启用' : '停用'" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="form.remark" :rows="3" :maxlength="500" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="saving" @click="handleSubmit">保存</UButton>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="deleteVisible" title="停用厂商登记" description="确认停用厂号" :ui="{ content: 'max-w-[440px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <p class="confirm">确认停用厂号 {{ deleteTarget?.code }}？</p>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="deleteVisible = false">取消</UButton>
+        <UButton color="warning" :loading="deleting" data-testid="manufacturer-delete-confirm" @click="confirmDelete">停用</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
-<style scoped lang="scss">
-.page-container {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-
-  h2 {
-    margin: 0;
-    font-size: 20px;
-    color: #1a2332;
-  }
-
-  p {
-    margin: 4px 0 0;
-    color: var(--cs-muted);
-    font-size: 13px;
-  }
-}
-
-.content-card {
-  border-radius: 10px;
-}
-
-.toolbar {
-  display: grid;
-  grid-template-columns: minmax(220px, 320px) auto auto;
-  gap: 12px;
-  align-items: center;
-  margin-bottom: 12px;
-}
+<style scoped>
+.page-container { padding: var(--cs-space-4); }
+.toolbar { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.row-actions { display: flex; gap: var(--cs-space-1); }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.confirm { margin: 0; color: var(--cs-text); }
 </style>
