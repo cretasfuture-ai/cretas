@@ -221,6 +221,31 @@ const businessRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/issues/IssuesPage.vue'),
         meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
       },
+      // P8：数字班组（MIGRATION-PLAN 2.7）。数据接口按登录人权限逐件判（DigitalCrewController），入口同「待办」判据
+      {
+        path: 'crew',
+        name: 'CrewHome',
+        component: () => import('@/views/crew/CrewHome.vue'),
+        meta: { requiresAuth: true, title: '班组首页', icon: 'UserFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/ledger',
+        name: 'CrewLedger',
+        component: () => import('@/views/crew/CrewLedger.vue'),
+        meta: { requiresAuth: true, title: '工作记录与额度', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/settings',
+        name: 'CrewSettings',
+        component: () => import('@/views/crew/CrewSettings.vue'),
+        meta: { requiresAuth: true, title: '数字班组配置', icon: 'Setting', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/member/:member(clerk|keeper|planner|inspector|accountant)',
+        name: 'CrewMember',
+        component: () => import('@/views/crew/CrewMemberPage.vue'),
+        meta: { requiresAuth: true, title: '数字员工', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
       {
         path: 'dashboard/widgets',
         name: 'WidgetDemoDashboard',

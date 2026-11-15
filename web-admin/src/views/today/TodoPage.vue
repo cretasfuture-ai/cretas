@@ -3,6 +3,7 @@ import { computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import SourceBlock from './SourceBlock.vue';
+import CrewInboxList from '@/views/crew/CrewInboxList.vue';
 import { useToday } from './useToday';
 import { tabBadge, TODO_TABS, type TodoTabId } from './todoTabs';
 
@@ -28,7 +29,7 @@ const blocks = computed(() => tab.value.sources.map((id) => T.s[id]));
     <header class="head">
       <div>
         <h1>待办</h1>
-        <p class="why">要我动手的事只在这一处。审批动作仍在各单据详情里发生，这里只汇总、只读。</p>
+        <p class="why">要我动手的事只在这一处。审批动作仍在各单据详情里发生；「等我确认」里数字员工交办的事，预览后可在这里确认。</p>
       </div>
       <el-button :loading="T.busy" @click="reload">刷新</el-button>
     </header>
@@ -40,7 +41,8 @@ const blocks = computed(() => tab.value.sources.map((id) => T.s[id]));
     </div>
     <el-card class="card" shadow="never">
       <p v-if="tab.reason" class="reason" :data-testid="`tab-${tab.id}-reason`">{{ tab.reason }}</p>
-      <SourceBlock v-for="b in blocks" :key="b.id" :s="b" :max="10" />
+      <CrewInboxList v-if="tab.id === 'confirm'" @changed="reload" />
+      <SourceBlock v-for="b in blocks" v-else :key="b.id" :s="b" :max="10" />
     </el-card>
   </div>
 </template>

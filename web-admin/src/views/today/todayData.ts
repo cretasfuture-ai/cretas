@@ -40,7 +40,7 @@ export interface TSrc {
 
 export type SrcId =
   | 'approve' | 'mine' | 'acted' | 'copied'
-  | 'expiry' | 'risk' | 'receiving' | 'unordered' | 'salesOrders' | 'assigned' | 'issueTodo';
+  | 'expiry' | 'risk' | 'receiving' | 'unordered' | 'salesOrders' | 'assigned' | 'issueTodo' | 'crewConfirm';
 
 interface ApiRes { success?: boolean; message?: string; data?: unknown; totalElements?: number; total?: number }
 type Row = Record<string, unknown>;
@@ -71,6 +71,7 @@ const DEF: Record<SrcId, Pick<TSrc, 'title' | 'hint' | 'link' | 'linkLabel'>> = 
   salesOrders: { title: '待处理销售订单', hint: '按我的数据范围，需要有人动手的销售订单', link: '/sales/orders', linkLabel: '去销售订单' },
   assigned: { title: '指派给我', hint: '交付风险处理实例里负责人是我的', link: '/production/delivery-risks', linkLabel: '去交付风险' },
   issueTodo: { title: '从「发现的问题」转来的', hint: '我在「发现的问题」里转成自己待办、还没关闭的问题', link: '/issues', linkLabel: '去发现的问题' },
+  crewConfirm: { title: '数字员工交办、等我确认的事', hint: '数字员工整理好的写操作，我有权确认的（服务端按我的权限筛）', link: '/crew', linkLabel: '去数字班组' },
 };
 export const SRC_IDS = Object.keys(DEF) as SrcId[];
 
@@ -284,6 +285,26 @@ export function createTodayLoader(deps: TodayDeps) {
     } catch (e) { fail('issueTodo', e); }
   }
 
+  /** P8 等我确认：服务端只返回我有权确认的（按登录人权限逐件判）；别的岗位的只报件数。 */
+  async function loadCrewConfirm(ctx: TodayContext) {
+    set('crewConfirm', { state: 'loading' });
+    try {
+      const res = await read(`/${ctx.factoryId}/digital-crew/inbox`);
+      const d = (res.data ?? {}) as Row;
+      const mine = asRows(d.mine);
+      const hidden = Number(d.hiddenCount);
+      set('crewConfirm', {
+        state: 'ok', count: mine.length,
+        note: Number.isFinite(hidden) && hidden > 0 ? `另有 ${hidden} 件要别的岗位确认，按我的权限不显示` : '确认前会按我的权限重新预览改前 / 改后',
+        items: mine.slice(0, 10).map((r): TItem => ({
+          label: String(r.title ?? '待确认'),
+          sub: [r.memberName, r.createdByName ? `${String(r.createdByName)} 交办` : ''].filter(Boolean).map(String).join(' · '),
+          to: '/todo?tab=confirm',
+        })),
+      });
+    } catch (e) { fail('crewConfirm', e); }
+  }
+
   /** 读取全部来源。同一 (工厂, 用户) 并发调用复用同一次读取；任何情况下 finally 都释放 inflight。 */
   function load(ctx: TodayContext): Promise<void> {
     const key = `${ctx.factoryId}:${ctx.userId}`;
@@ -308,6 +329,7 @@ export function createTodayLoader(deps: TodayDeps) {
           loadBadge(ctx, 'unordered', 'unordered-inbound', ['warehouse'], '无订单入库'),
           loadBadge(ctx, 'salesOrders', 'sales-orders', ['sales'], '销售订单'),
           loadIssueTodo(ctx),
+          loadCrewConfirm(ctx),
         ]);
         T.loadedAt = Date.now();
       } finally {

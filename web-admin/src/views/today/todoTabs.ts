@@ -4,10 +4,8 @@ export type TodoTabId = 'confirm' | 'work' | 'assigned' | 'approve' | 'mine' | '
 export interface TodoTab { id: TodoTabId; label: string; sources: SrcId[]; reason?: string }
 
 export const TODO_TABS: TodoTab[] = [
-  {
-    id: 'confirm', label: '等我确认', sources: [],
-    reason: '本页签依赖数字班组（数字员工出预览、等有权限的人确认），数字班组在 P8 才上线，所以现在没有数据来源，不显示数量。',
-  },
+  // P8：数字员工交办的写操作，我有权确认的（服务端按登录人权限筛）。页签内容是可操作的确认列表（CrewInboxList）
+  { id: 'confirm', label: '等我确认', sources: ['crewConfirm'] },
   { id: 'work', label: '业务待办', sources: ['risk', 'expiry', 'receiving', 'unordered', 'salesOrders'] },
   { id: 'assigned', label: '指派给我', sources: ['issueTodo', 'assigned'] },
   { id: 'approve', label: '待我审批', sources: ['approve'] },
