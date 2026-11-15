@@ -1,12 +1,11 @@
 /**
  * Sprint 4 W1 S-CUSTOMER-TAB-1 (Phase F) — OrdersTab spec.
  * 重点: fetch on mount with correct params + state machine transitions.
- * Mask DOM rendering tested in Phase G E2E (el-table-column scoped slot
- * doesn't render cleanly with vitest stubs).
+ * 金额脱敏: UTable 桩会真实调用 `<id>-cell` 插槽, 末尾用例直接断言无 canViewPrice 时金额不进 DOM。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { ref } from 'vue';
+import { ref, defineComponent, h } from 'vue';
 import OrdersTab from '../OrdersTab.vue';
 
 const mockGet = vi.fn();
@@ -29,18 +28,31 @@ vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-const globalStubs = {
-  'el-skeleton': { props: ['rows', 'animated'], template: '<div class="el-skeleton" />' },
-  'el-empty': { props: ['description', 'imageSize'], template: '<div class="el-empty">{{ description }}<slot /></div>' },
-  'el-table': {
-    props: ['data', 'border', 'stripe', 'size'],
-    template: '<div class="el-table-stub" :data-count="data?.length || 0"><slot /></div>',
+// UTable 桩: 记下行数, 并真的调用每列的 `<id>-cell` 插槽渲染每行 (金额脱敏断言走真实插槽)
+const UTableStub = defineComponent({
+  props: ['data', 'columns'],
+  setup(props, { slots }) {
+    return () =>
+      h('div', { class: 'el-table-stub', 'data-count': props.data?.length || 0 }, [
+        ...(props.data || []).map((row: any, i: number) =>
+          h(
+            'div',
+            { class: 'row', key: i },
+            (props.columns || []).map((c: any) => slots[`${c.id}-cell`]?.({ row: { original: row } })),
+          ),
+        ),
+      ]);
   },
-  'el-table-column': { props: ['label', 'prop'], template: '<div class="col" />' },
-  'el-pagination': { template: '<div class="el-pagination" />' },
-  'el-button': { props: ['type', 'loading'], template: '<button class="el-button"><slot /></button>' },
-  'el-icon': { template: '<i />' },
-  'el-result': { props: ['icon', 'title'], template: '<div class="el-result">{{ title }}<slot name="extra" /></div>' },
+});
+
+const globalStubs = {
+  USkeleton: { template: '<div class="el-skeleton" />' },
+  UEmpty: { props: ['description'], template: '<div class="el-empty">{{ description }}<slot name="actions" /></div>' },
+  UTable: UTableStub,
+  UBadge: { template: '<span class="badge"><slot /></span>' },
+  UPagination: { template: '<div class="el-pagination" />' },
+  UButton: { template: '<button class="el-button"><slot /></button>' },
+  UAlert: { props: ['title'], template: '<div class="el-result">{{ title }}</div>' },
 };
 
 describe('OrdersTab', () => {
@@ -107,5 +119,27 @@ describe('OrdersTab', () => {
     await flushPromises();
     expect(w.find('.el-result').exists()).toBe(true);
     expect(w.html()).toContain('无权');
+  });
+
+  it('canViewPrice=false 时总额/已收款显示 **** 且金额不进 DOM; true 时显示金额', async () => {
+    const payload = {
+      success: true,
+      data: { content: [{ id: '1', orderNumber: 'SO-001', status: 'NEW', totalAmount: 12345.67, paidAmount: 888.01 }], totalElements: 1 },
+    };
+    canViewPriceRef.value = false;
+    mockGet.mockResolvedValueOnce(payload);
+    const masked = mount(OrdersTab, { props: { customerId: 'cust-1' }, global: { stubs: globalStubs } });
+    await flushPromises();
+    expect(masked.findAll('.masked')).toHaveLength(2);
+    expect(masked.html()).not.toContain('12,345.67');
+    expect(masked.html()).not.toContain('888.01');
+
+    canViewPriceRef.value = true;
+    mockGet.mockResolvedValueOnce(payload);
+    const open = mount(OrdersTab, { props: { customerId: 'cust-1' }, global: { stubs: globalStubs } });
+    await flushPromises();
+    expect(open.findAll('.masked')).toHaveLength(0);
+    expect(open.html()).toContain('12,345.67');
+    expect(open.html()).toContain('888.01');
   });
 });

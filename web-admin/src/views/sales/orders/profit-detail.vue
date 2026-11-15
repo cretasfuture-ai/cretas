@@ -1,107 +1,66 @@
+<!--
+  产品级利润详情: Nuxt UI 迁移第5批 (UTable / UBadge / USelect / UButton / UAlert) + --cs-*。
+  价格敏感列(单价/成本/毛利/毛利率/折让/税额/净利润/历史均价/趋势)整体受 permissionStore.canViewPrice 控制, 无权限时列不渲染并显示提示。
+-->
 <template>
   <div class="profit-detail-page">
-    <div class="page-header">
-      <el-button :icon="ArrowLeft" link @click="goBack">返回订单详情</el-button>
-      <h2>产品级利润详情</h2>
+    <div class="cs-page-head">
+      <div class="head-left">
+        <UButton icon="i-lucide-arrow-left" variant="link" color="neutral" @click="goBack">返回订单详情</UButton>
+        <h2>产品级利润详情</h2>
+      </div>
       <div class="header-meta" v-if="orderNumber">
         <span class="meta-label">订单号：</span>
         <span class="meta-value">{{ orderNumber }}</span>
       </div>
     </div>
 
-    <el-card class="filter-card" shadow="never">
-      <el-form inline>
-        <el-form-item label="历史均价回溯">
-          <el-select v-model="lookbackDays" style="width: 160px" @change="loadProfitDetail">
-            <el-option label="近 30 天" :value="30" />
-            <el-option label="近 60 天" :value="60" />
-            <el-option label="近 90 天" :value="90" />
-            <el-option label="近 180 天" :value="180" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :loading="loading" @click="loadProfitDetail">刷新</el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+    <section class="cs-card">
+      <div class="cs-card-head">
+        <span class="filter-label">历史均价回溯</span>
+        <USelect v-model="lookbackDays" :items="lookbackItems" class="w-40" data-testid="profit-lookback" @update:model-value="loadProfitDetail" />
+        <UButton icon="i-lucide-refresh-cw" :loading="loading" @click="loadProfitDetail">刷新</UButton>
+      </div>
 
-    <el-card class="table-card" shadow="never" v-loading="loading">
-      <el-table
-        :data="rows"
-        border
-        stripe
-        empty-text="无数据"
-        :header-cell-style="{ background: '#f5f7fa', fontWeight: 600 }"
-      >
-        <el-table-column prop="productName" label="产品" min-width="160" fixed="left">
-          <template #default="{ row }">
-            <span>{{ row.productName || '—' }}</span>
-            <div class="product-meta" v-if="row.unit">{{ displayUnit(row.unit) }}</div>
-          </template>
-        </el-table-column>
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table" data-testid="profit-detail-table">
+        <template #empty>无数据</template>
+        <template #productName-cell="{ row: { original: row } }">
+          <span>{{ row.productName || '—' }}</span>
+          <div class="product-meta" v-if="row.unit">{{ displayUnit(row.unit) }}</div>
+        </template>
+        <template #quantity-cell="{ row }"><span class="num">{{ fmtQty(row.original.quantity) }}</span></template>
+        <template #unitPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.unitPrice) }}</span></template>
+        <template #costUnitPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.costUnitPrice) }}</span></template>
+        <template #grossProfit-cell="{ row }">
+          <span class="num" :class="profitClass(row.original.grossProfit)">{{ formatAmount(row.original.grossProfit) }}</span>
+        </template>
+        <template #grossMarginPct-cell="{ row }">
+          <span class="num" :class="marginClass(row.original.grossMarginPct)">{{ fmtPct(row.original.grossMarginPct) }}</span>
+        </template>
+        <template #discountAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.discountAmount) }}</span></template>
+        <template #taxAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.taxAmount) }}</span></template>
+        <template #netProfit-cell="{ row }">
+          <strong class="num" :class="profitClass(row.original.netProfit)">{{ formatAmount(row.original.netProfit) }}</strong>
+        </template>
+        <template #historicalAvgPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.historicalAvgPrice) }}</span></template>
+        <template #trend-cell="{ row }">
+          <UBadge v-if="row.original.priceTrend === 'UP'" color="success" variant="soft">↑ 上涨</UBadge>
+          <UBadge v-else-if="row.original.priceTrend === 'DOWN'" color="error" variant="soft">↓ 下跌</UBadge>
+          <UBadge v-else-if="row.original.priceTrend === 'FLAT'" color="neutral" variant="soft">— 持平</UBadge>
+          <span v-else>—</span>
+        </template>
+      </UTable>
 
-        <el-table-column prop="quantity" label="数量" width="100" align="right">
-          <template #default="{ row }">{{ fmtQty(row.quantity) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="costUnitPrice" label="成本" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(row.costUnitPrice) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="grossProfit" label="毛利" width="110" align="right">
-          <template #default="{ row }">
-            <span :class="profitClass(row.grossProfit)">{{ formatAmount(row.grossProfit) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="grossMarginPct" label="毛利率" width="100" align="right">
-          <template #default="{ row }">
-            <span :class="marginClass(row.grossMarginPct)">{{ fmtPct(row.grossMarginPct) }}</span>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="discountAmount" label="折让" width="100" align="right">
-          <template #default="{ row }">{{ formatAmount(row.discountAmount) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="taxAmount" label="税额" width="100" align="right">
-          <template #default="{ row }">{{ formatAmount(row.taxAmount) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="netProfit" label="净利润" width="120" align="right">
-          <template #default="{ row }">
-            <strong :class="profitClass(row.netProfit)">{{ formatAmount(row.netProfit) }}</strong>
-          </template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" prop="historicalAvgPrice" label="历史均价" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(row.historicalAvgPrice) }}</template>
-        </el-table-column>
-
-        <el-table-column v-if="canViewPrice" label="趋势" width="80" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.priceTrend === 'UP'" type="success" size="small">↑ 上涨</el-tag>
-            <el-tag v-else-if="row.priceTrend === 'DOWN'" type="danger" size="small">↓ 下跌</el-tag>
-            <el-tag v-else-if="row.priceTrend === 'FLAT'" type="info" size="small">— 持平</el-tag>
-            <span v-else>—</span>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <el-alert
-        v-if="!canViewPrice"
-        type="info"
-        :closable="false"
-        show-icon
-        title="价格敏感信息已隐藏"
-        description="当前角色无权查看单价、成本、利润等敏感字段。如需查看请联系管理员调整权限。"
-        style="margin-top: 16px"
-      />
-    </el-card>
+      <div v-if="!canViewPrice" class="cs-card-body" data-testid="profit-price-hidden">
+        <UAlert
+          color="info"
+          variant="subtle"
+          icon="i-lucide-info"
+          title="价格敏感信息已隐藏"
+          description="当前角色无权查看单价、成本、利润等敏感字段。如需查看请联系管理员调整权限。"
+        />
+      </div>
+    </section>
   </div>
 </template>
 
@@ -111,8 +70,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
-import { ArrowLeft } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
@@ -142,8 +100,30 @@ const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const orderId = computed(() => route.params.id as string);
 
+const R = { class: { th: 'text-right', td: 'text-right' } };
+// 价格敏感列与原 el-table-column v-if="canViewPrice" 同一判断: 无权限账号 DOM 里没有这些列
+const columns = computed<TableColumn<SalesProductProfitRow>[]>(() => [
+  { accessorKey: 'productName', header: '产品' },
+  { accessorKey: 'quantity', header: '数量', meta: R },
+  ...(canViewPrice.value
+    ? [
+        { accessorKey: 'unitPrice', header: '单价', meta: R },
+        { accessorKey: 'costUnitPrice', header: '成本', meta: R },
+        { accessorKey: 'grossProfit', header: '毛利', meta: R },
+        { accessorKey: 'grossMarginPct', header: '毛利率', meta: R },
+        { accessorKey: 'discountAmount', header: '折让', meta: R },
+        { accessorKey: 'taxAmount', header: '税额', meta: R },
+        { accessorKey: 'netProfit', header: '净利润', meta: R },
+        { accessorKey: 'historicalAvgPrice', header: '历史均价', meta: R },
+        { id: 'trend', header: '趋势' },
+      ] as TableColumn<SalesProductProfitRow>[]
+    : []),
+]);
+
+
 const loading = ref(false);
 const lookbackDays = ref(90);
+const lookbackItems = [30, 60, 90, 180].map((d) => ({ label: `近 ${d} 天`, value: d }));
 const rows = ref<SalesProductProfitRow[]>([]);
 const orderNumber = ref<string | null>(null);
 
@@ -151,10 +131,11 @@ async function loadProfitDetail() {
   if (!factoryId.value || !orderId.value) return;
   loading.value = true;
   try {
-    const data = await get<SalesProductProfitRow[]>(
+    // get() 返回 ApiResponse 信封 { success, data }; 迁移前这里把信封当数组判断, 表格永远是「无数据」
+    const resp = await get<SalesProductProfitRow[]>(
       `/${factoryId.value}/reports/sales/profit-detail/${orderId.value}?lookbackDays=${lookbackDays.value}`
     );
-    rows.value = Array.isArray(data) ? data : [];
+    rows.value = Array.isArray(resp?.data) ? resp.data : [];
   } catch (err) {
     handleCatchError(err, '加载利润详情失败');
   } finally {
@@ -202,47 +183,15 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.profit-detail-page {
-  padding: 16px;
-}
-.page-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.page-header h2 {
-  margin: 0;
-  font-size: 18px;
-}
-.header-meta {
-  margin-left: auto;
-  color: #606266;
-  font-size: 14px;
-}
-.meta-label {
-  color: #909399;
-}
-.meta-value {
-  font-weight: 600;
-}
-.filter-card {
-  margin-bottom: 12px;
-}
-.product-meta {
-  color: #909399;
-  font-size: 12px;
-  margin-top: 2px;
-}
-.text-positive {
-  color: #67c23a;
-  font-weight: 600;
-}
-.text-negative {
-  color: #f56c6c;
-  font-weight: 600;
-}
-.text-neutral {
-  color: #e6a23c;
-}
+.profit-detail-page { padding: var(--cs-space-4); }
+.head-left { display: flex; align-items: center; gap: var(--cs-space-4); }
+.head-left h2 { margin: 0; font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.header-meta { color: var(--cs-muted); font-size: var(--cs-font); }
+.meta-label { color: var(--cs-muted); }
+.meta-value { font-weight: 600; color: var(--cs-text); }
+.filter-label { font-weight: 500; color: var(--cs-muted); }
+.product-meta { color: var(--cs-muted); font-size: var(--cs-font-small); margin-top: 2px; }
+.text-positive { color: var(--cs-success); font-weight: 600; }
+.text-negative { color: var(--cs-danger); font-weight: 600; }
+.text-neutral { color: var(--cs-warning); }
 </style>

@@ -2,74 +2,60 @@
   Sprint 4 W1 S-CUSTOMER-TAB-1: tab 7 销售单 by customer.
   Backend: GET /api/mobile/{factoryId}/sales/orders/by-customer?customerId= (Phase C C1).
   RBAC: canViewPrice mask on totalAmount / paidAmount columns per spec §7.2.
+  组件: Nuxt UI 迁移第5批 (UTable / UBadge / UButton / UEmpty / UAlert / USkeleton / UPagination) + --cs-*。
+  金额列无 canViewPrice 时显示 **** (与迁移前同一判断)。
 -->
 <template>
   <div class="orders-tab">
     <div class="toolbar">
       <span class="title">销售单</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
+    <div v-if="state === 'loading'" class="skeleton" data-testid="customer-orders-loading">
+      <USkeleton v-for="i in 5" :key="i" class="h-9 w-full" />
+    </div>
 
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无销售单" :image-size="80">
-      <el-button type="primary" @click="goCreate">创建销售单</el-button>
-    </el-empty>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-file-text" description="该客户暂无销售单" class="empty">
+      <template #actions>
+        <UButton @click="goCreate">创建销售单</UButton>
+      </template>
+    </UEmpty>
 
     <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
+      <UAlert color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
     </div>
 
     <template v-else>
-      <el-table :data="orders" border stripe size="small">
-        <el-table-column label="订单号" prop="orderNumber" width="170" />
-        <el-table-column label="下单日期" prop="orderDate" width="120" />
-        <el-table-column label="状态" prop="status" width="120">
-          <template #default="{ row }">
-            <el-tag size="small">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="业务员" prop="salesperson" width="100" />
-        <el-table-column label="总额" align="right" width="140">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.totalAmount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="已收款" align="right" width="140">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.paidAmount) }}</span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="goDetail(row.id)">查看</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <UTable :data="orders" :columns="columns" class="cs-table" data-testid="customer-orders-table">
+        <template #status-cell="{ row }">
+          <UBadge color="neutral" variant="soft">{{ row.original.status }}</UBadge>
+        </template>
+        <template #totalAmount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.totalAmount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+        <template #paidAmount-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.paidAmount) }}</span>
+          <span v-else class="masked">****</span>
+        </template>
+        <template #actions-cell="{ row }">
+          <UButton variant="link" size="xs" @click="goDetail(row.original.id)">查看</UButton>
+        </template>
+      </UTable>
 
-      <el-pagination
-        class="pagination"
-        background
-        layout="prev, pager, next, total"
-        :total="totalElements"
-        :page-size="pageSize"
-        :current-page="currentPage"
-        @current-change="onPageChange"
-      />
+      <div class="pagination">
+        <span class="total">共 {{ totalElements }} 条</span>
+        <UPagination :page="currentPage" :items-per-page="pageSize" :total="totalElements" show-edges :sibling-count="1" @update:page="onPageChange" />
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -109,6 +95,16 @@ const orders = ref<SalesOrderRow[]>([]);
 const totalElements = ref(0);
 const currentPage = ref(1);
 const pageSize = 20;
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns = computed<TableColumn<SalesOrderRow>[]>(() => [
+  { accessorKey: 'orderNumber', header: '订单号' },
+  { accessorKey: 'orderDate', header: '下单日期' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'salesperson', header: '业务员' },
+  { id: 'totalAmount', header: '总额', meta: R },
+  { id: 'paidAmount', header: '已收款', meta: R },
+  { id: 'actions', header: '操作' },
+]);
 
 function formatMoney(v: number | null | undefined): string {
   if (v == null) return '—';
@@ -168,31 +164,14 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.orders-tab {
-  padding: 8px 0;
-}
-.toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
-.toolbar .title {
-  font-size: 14px;
-  color: var(--el-text-color-secondary);
-}
-.pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-  display: flex;
-}
-.masked {
-  color: var(--el-text-color-secondary);
-  font-family: monospace;
-  letter-spacing: 2px;
-  user-select: none;
-}
-.error-panel {
-  padding: 24px 0;
-}
+.orders-tab { padding: 8px 0; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.skeleton { display: grid; gap: 8px; }
+.pagination { margin-top: 16px; display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.error-panel { padding: 24px 0; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
