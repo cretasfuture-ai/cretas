@@ -93,7 +93,7 @@ const SUMMARY_COLUMNS: TableColumn<ParamDeviationSummaryRow>[] = [
 const DETAIL_COLUMNS: TableColumn<ParamDeviationDetail>[] = [
   { id: 'reportDate', header: '报工日期' },
   { id: 'reportedAt', header: '录入时间' },
-  { id: 'batch', header: '批次号', meta: { class: { td: 'max-w-56 truncate' } } },
+  { id: 'batch', header: '批次号', meta: { class: { td: 'max-w-56' } } },
   { id: 'product', header: '产品', meta: { class: { td: 'max-w-36 truncate' } } },
   { id: 'process', header: '工序', meta: { class: { td: 'max-w-40 truncate' } } },
   { id: 'param', header: '参数' },
@@ -332,9 +332,9 @@ onMounted(() => {
         <template #reportDate-cell="{ row }">{{ row.original.reportDate || '—' }}</template>
         <template #reportedAt-cell="{ row }">{{ timeText(row.original.reportedAt) }}</template>
         <template #batch-cell="{ row }">
-          <UButton v-if="row.original.batchId != null" color="primary" variant="link" size="xs" :data-testid="`pd-batch-${row.original.reportId}`" @click="openBatch(row.original)">
+          <button v-if="row.original.batchId != null" type="button" class="batch-link" :title="row.original.batchNumber || `批次 ${row.original.batchId}`" :data-testid="`pd-batch-${row.original.reportId}`" @click="openBatch(row.original)">
             {{ row.original.batchNumber || `批次 ${row.original.batchId}` }}
-          </UButton>
+          </button>
           <span v-else>{{ row.original.batchNumber || '—' }}</span>
         </template>
         <template #product-cell="{ row }">{{ row.original.productName || '—' }}</template>
@@ -360,7 +360,7 @@ onMounted(() => {
 <style scoped>
 .pd-page { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
-.head-icon { flex: none; border-radius: var(--cs-radius); }
+.head-icon { flex: none; object-fit: contain; }
 .filters { display: flex; flex-wrap: wrap; gap: var(--cs-space-3); align-items: flex-end; padding: var(--cs-space-4) var(--cs-space-5) var(--cs-space-2); }
 .field { display: flex; flex-direction: column; gap: 4px; font-size: var(--cs-font-small); color: var(--cs-muted); }
 .field.actions { flex-direction: row; gap: var(--cs-space-2); }
@@ -368,6 +368,8 @@ onMounted(() => {
 .range-error { font-size: var(--cs-font-small); color: var(--cs-danger); margin: 0; padding: 0 var(--cs-space-5) var(--cs-space-3); }
 .cs-card-head h3 { margin: 0; font-size: var(--cs-font); font-weight: 600; color: var(--cs-text); }
 .unit { color: var(--cs-muted); }
+.batch-link { display: block; max-width: 14rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; color: var(--cs-primary); background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+.batch-link:hover { text-decoration: underline; }
 .bad { color: var(--cs-danger); font-weight: 600; }
 .pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }
 </style>

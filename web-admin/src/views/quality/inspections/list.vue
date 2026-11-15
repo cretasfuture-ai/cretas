@@ -54,18 +54,16 @@ const PAGE_SIZE_ITEMS = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, v
 const C = { class: { th: 'text-center', td: 'text-center' } };
 const columns: TableColumn<TableRow>[] = [
   { id: 'id', header: '质检编号' },
-  { accessorKey: 'batchNumber', header: '生产批次号', meta: { class: { td: 'max-w-52 truncate' } } },
-  { accessorKey: 'productName', header: '品名', meta: { class: { td: 'max-w-36 truncate' } } },
-  { id: 'process', header: '工序' },
-  { accessorKey: 'notes', header: '备注', meta: { class: { td: 'max-w-48 truncate' } } },
+  { accessorKey: 'batchNumber', header: '生产批次号', meta: { class: { td: 'max-w-44 truncate' } } },
+  { accessorKey: 'productName', header: '品名', meta: { class: { td: 'max-w-32 truncate' } } },
+  { accessorKey: 'notes', header: '备注', meta: { class: { td: 'max-w-36 truncate' } } },
   { accessorKey: 'sampleSize', header: '抽样数', meta: C },
   { id: 'inspector', header: '质检员', meta: C },
   { id: 'result', header: '检测结果', meta: C },
   { accessorKey: 'qualityGrade', header: '等级', meta: C },
   { id: 'passRate', header: '抽检合格率', meta: C },
   { accessorKey: 'inspectionDate', header: '检测日期' },
-  // 操作列贴右侧，表格横向滚动时不会被推出可视区
-  { id: 'actions', header: '操作', meta: { class: { th: 'sticky right-0 bg-(--cs-surface-subtle)', td: 'sticky right-0 bg-(--cs-surface) whitespace-nowrap' } } },
+  { id: 'actions', header: '操作', meta: { class: { td: 'whitespace-nowrap' } } },
 ];
 
 const loading = ref(false);
@@ -517,9 +515,8 @@ function registerDefect(row: TableRow) {
       </div>
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
-        <template #empty><div class="cs-empty-art"><img :src="imgVision" alt="" width="240"><span>暂无数据</span></div></template>
+        <template #empty><div class="cs-empty-art"><img :src="imgVision" alt="" width="280" class="art-main"><span>暂无数据</span></div></template>
         <template #id-cell="{ row }">{{ row.original.id ? String(row.original.id).substring(0, 8).toUpperCase() : '-' }}</template>
-        <template #process-cell>未提供工序关联</template>
         <!--
           原来这一列叫「质检员ID」且直接显示数字主键 —— 给用户看数据库标识。
           后端已补 inspectorName(解析不出时为 null, 不编造假名字), 这里优先显示姓名,
@@ -680,7 +677,7 @@ function registerDefect(row: TableRow) {
 
 <style scoped>
 .page-wrapper { padding: var(--cs-space-4); width: 100%; }
-.head-icon { flex: none; border-radius: var(--cs-radius-sm); }
+.head-icon { flex: none; object-fit: contain; }
 .cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
 .count { color: var(--cs-muted); font-size: var(--cs-font-small); font-weight: 400; }
 .spacer { flex: 1; }

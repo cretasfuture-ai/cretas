@@ -523,7 +523,7 @@ onMounted(load);
 <style scoped>
 .defect-list { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
-.head-icon { flex: none; border-radius: var(--cs-radius); }
+.head-icon { flex: none; object-fit: contain; }
 .head-actions { display: flex; gap: var(--cs-space-2); }
 .filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
 .pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }

@@ -407,7 +407,7 @@ onMounted(async () => {
 <style scoped>
 .cold-chain { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
-.head-icon { flex: none; border-radius: var(--cs-radius); }
+.head-icon { flex: none; object-fit: contain; }
 .muted { color: var(--cs-muted); font-size: 13px; }
 .hint { margin: 0; padding: var(--cs-space-3) var(--cs-space-5); }
 .danger { color: var(--cs-danger); }

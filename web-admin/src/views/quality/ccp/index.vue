@@ -288,7 +288,7 @@ onMounted(() => {
 <style scoped>
 .ccp-page { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
-.head-icon { flex: none; border-radius: var(--cs-radius); }
+.head-icon { flex: none; object-fit: contain; }
 .toolbar { display: flex; gap: var(--cs-space-2); align-items: center; padding: var(--cs-space-3) var(--cs-space-5); }
 .bad { color: var(--cs-danger); font-weight: 600; }
 .presets { display: flex; flex-wrap: wrap; gap: var(--cs-space-2); margin-bottom: var(--cs-space-2); }
