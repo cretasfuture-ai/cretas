@@ -53,7 +53,7 @@ class FlywheelTextProtectorRedactionTest {
         }
         when(features.findByFactoryIdAndModuleIdAndDeletedAtIsNull(anyString(), eq(FlywheelTextProtector.OPTIONS_MODULE)))
                 .thenReturn(Optional.empty());
-        protector = new FlywheelTextProtector(master, people, features, key());
+        protector = new FlywheelTextProtector(new com.cretas.aims.service.entity.FactoryEntityResolver(null, master), people, features, key());
         FactorySecrecyConfig secrecy = mock(FactorySecrecyConfig.class);
         when(secrecy.isOn(eq(SECRET), any(SecrecyItem.class))).thenAnswer(inv -> inv.getArgument(1) == SecrecyItem.EGRESS_REDACTION);
         when(secrecy.isOn(eq(PLAIN), any(SecrecyItem.class))).thenReturn(false);
@@ -272,7 +272,7 @@ class FlywheelTextProtectorRedactionTest {
 
     @Test
     void withoutAKeyTheRawTextIsNotKeptAnywhere() {
-        FlywheelTextProtector noKey = new FlywheelTextProtector(master, people, features, "");
+        FlywheelTextProtector noKey = new FlywheelTextProtector(new com.cretas.aims.service.entity.FactoryEntityResolver(null, master), people, features, "");
         FactorySecrecyConfig secrecy = mock(FactorySecrecyConfig.class);
         when(secrecy.isOn(eq(SECRET), any(SecrecyItem.class))).thenReturn(true);
         noKey.setFactorySecrecyConfig(secrecy);
