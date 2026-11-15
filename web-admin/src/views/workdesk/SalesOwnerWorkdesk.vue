@@ -14,8 +14,8 @@
 -->
 <template>
   <div class="sales-owner-workdesk">
-    <DigitalEmployeeFrame :enabled="digitalEmployee" role="sales" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
-    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="销售数字文员" scope-label="客户、订单与销售记录" :quick-questions="['查询当前销售订单', '今天哪些客户该跟进？']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="sales" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite" :wholesale-mode="wholesaleMode">
+    <DigitalEmployeeConversation :scope-key="`${factoryId}:${actorId}:${authStore.currentRole || ''}:${employeeNavigationPending}`" v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="销售数字专员" scope-label="客户、订单与销售记录" :quick-questions="['查询当前销售订单', '今天哪些客户该跟进？']" @send="handleEmployeeQuestion" @retry="sendQuery(false)" @reset="resetDigitalConversation">
       <template #action>
         <UButton v-if="employeeCanWrite && employeePaths.includes('/sales/orders')" icon="i-lucide-file-plus" @click="openEmployeeOrder">交给销售单办理</UButton>
       </template>
@@ -178,13 +178,13 @@
             </div>
           </div>
           <div class="customer-actions">
-            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openWechatDialog(c)">
+            <el-button v-if="showNativeActions" size="small" type="primary" @click="openWechatDialog(c)">
  补录微信
             </el-button>
             <el-button size="small" @click="gotoCustomerDetail(c)">
  查看详情
             </el-button>
-            <el-button v-if="!digitalEmployee" size="small" type="warning" @click="openOpportunityDialog(c)">
+            <el-button v-if="showNativeActions" size="small" type="warning" @click="openOpportunityDialog(c)">
  更新商机
             </el-button>
           </div>
@@ -213,7 +213,7 @@
         </el-table-column>
         <el-table-column label="操作" width="180">
           <template #default="{ row }">
-            <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openOpportunityTransitionById(row)">
+            <el-button v-if="showNativeActions" size="small" type="primary" @click="openOpportunityTransitionById(row)">
               推进阶段
             </el-button>
           </template>
@@ -274,7 +274,7 @@
               size="small"
               type="primary"
               data-testid="sprint10-confirm-shipment-btn"
-              v-if="!digitalEmployee"
+              v-if="showNativeActions"
               @click="openShipmentDialog(row)">
               一键确认发货
             </el-button>
@@ -519,10 +519,12 @@
 import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
 import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
 import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
+import { useWorkdeskRequest, isWorkdeskScopeChanged, WorkdeskScopeChangedError } from '@/composables/useWorkdeskRequest';
 import { queueAiEntry } from '@/composables/aiEntryHandoff';
-const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
-  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
 });
+const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
 import { ref, computed, watch, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -615,7 +617,18 @@ function handleEmployeeQuestion(question: string) {
   lastEmployeeQuestion.value = question;
   void sendQuery(false);
 }
-const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }));
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: String(authStore.user?.id || ''), role: authStore.currentRole || '' }));
+const actorId = computed(() => String(authStore.user?.id || ''));
+const scopedRequests = useWorkdeskRequest(() => ({ factoryId: factoryId.value, actorId: actorId.value, contextKey: `${authStore.currentRole || ''}:${props.employeeNavigationPending}:${props.employeeCanWrite}:${props.wholesaleMode}` }));
+function scopedPost<T>(url: string, body?: unknown) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.post<T>(url, body));
+}
+function scopedGet<T>(url: string, config?: Parameters<typeof request.get>[1]) {
+  if (props.employeeNavigationPending) return Promise.reject(new WorkdeskScopeChangedError());
+  return scopedRequests.run(() => request.get<T>(url, config));
+}
+
 function resetDigitalConversation() {
   employeeIntent.reset();
   formattedText.value = '';
@@ -625,7 +638,7 @@ function resetDigitalConversation() {
   lastEmployeeQuestion.value = '';
 }
 function openEmployeeOrder() {
-  if (!props.employeeCanWrite || !props.employeePaths.includes('/sales/orders')) return;
+  if (props.employeeNavigationPending || !props.employeeCanWrite || !props.employeePaths.includes('/sales/orders')) return;
   void router.push(queueAiEntry({ factoryId: factoryId.value, actorId: String(authStore.user?.id || '') }, '/sales/orders', userInput.value || lastEmployeeQuestion.value || '创建销售订单'));
 }
 
@@ -668,20 +681,9 @@ function previewAlertType(preview: { status?: string }): 'warning' | 'info' | 's
   return 'info';
 }
 
-async function callIntentExecute(input: string, intentCode?: string,
-    context?: Record<string, unknown>): Promise<ExecuteResponse> {
-  if (!factoryId.value) throw new Error('账号未绑定企业，请重新登录');
-  if (props.digitalEmployee) return employeeIntent.execute(input, context);
-  const body: Record<string, unknown> = { userInput: input };
-  if (intentCode) body.intentCode = intentCode;
-  // Sprint 11 Q6 Option B (2026-05-24): pass context so backend Tools can disambiguate
-  // period-bounded P&L / loss / cost queries. SalesOwnerWorkdesk is the canonical
-  // entry point for the 12-cell customer-journey audit (PR #235) — without context
-  // backend BERT classifier misroutes ambiguous restaurant-economics phrases.
-  if (context) body.context = context;
-  const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
-  return (res as { data: ExecuteResponse }).data;
+async function callReadIntent(input: string, intentCode?: string, context?: Record<string, unknown>): Promise<ExecuteResponse> {
+  if (props.employeeNavigationPending) throw new WorkdeskScopeChangedError();
+  return scopedRequests.run(() => employeeIntent.execute(input, context, { intentCode }));
 }
 
 /**
@@ -727,6 +729,8 @@ async function triggerFollowupQuery() {
 }
 
 async function sendQuery(forceFollowup = false) {
+  if (props.employeeNavigationPending) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (loading.value || !userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
@@ -748,7 +752,7 @@ async function sendQuery(forceFollowup = false) {
       })();
       context = { month };
     }
-    const response = await callIntentExecute(userInput.value, intentCode, context);
+    const response = await callReadIntent(userInput.value, intentCode, context);
     responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
@@ -770,6 +774,7 @@ async function sendQuery(forceFollowup = false) {
     extractStaleOpportunitiesFromResult(resultData);
     extractRestaurantPnl(response.intentCode, resultData);
   } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -779,6 +784,7 @@ async function sendQuery(forceFollowup = false) {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     loading.value = false;
   }
 }
@@ -878,7 +884,7 @@ const wechatDialog = reactive({
 });
 
 function openWechatDialog(c: CustomerItem) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   wechatDialog.visible = true;
   wechatDialog.customerId = c.customerId;
   wechatDialog.customerName = c.customerName || '';
@@ -901,13 +907,15 @@ function resetWechatDialogForm() {
 }
 
 async function previewWechatCreate() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!wechatDialog.form.messageContent.trim()) {
     ElMessage.warning('消息内容必填');
     return;
   }
   wechatDialog.previewing = true;
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '预览补录微信',
@@ -927,7 +935,8 @@ async function previewWechatCreate() {
     wechatDialog.preview = previewData;
     wechatDialog.canSubmit = previewData.canDo !== false
         && previewData.status !== 'DUPLICATE';
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -935,18 +944,21 @@ async function previewWechatCreate() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     wechatDialog.previewing = false;
   }
 }
 
 async function executeWechatCreate() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!wechatDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
   wechatDialog.submitting = true;
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '补录微信',
@@ -962,7 +974,8 @@ async function executeWechatCreate() {
     const data = (res as { data: ExecuteResponse }).data;
     ElMessage.success(data.message || '微信记录已补录');
     wechatDialog.visible = false;
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `提交失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -970,6 +983,7 @@ async function executeWechatCreate() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     wechatDialog.submitting = false;
   }
 }
@@ -994,25 +1008,26 @@ const opportunityDialog = reactive({
 });
 
 async function openOpportunityDialog(c: CustomerItem) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   opportunityDialog.visible = true;
   opportunityDialog.customerId = c.customerId;
   opportunityDialog.customerName = c.customerName || '';
   resetOpportunityDialogForm();
   // 加载该客户的所有商机
   try {
-    const res = await request.get(
+    const res = await scopedGet(
       `/${factoryId.value}/sales/opportunities`,
       { params: { customerId: c.customerId, page: 0, size: 50 } });
     const data = (res as { data?: { content?: OpportunityListItem[] } }).data;
     opportunityDialog.opportunityList = data?.content || [];
-  } catch {
+  } catch (err) {
+    if (isWorkdeskScopeChanged(err)) return;
     opportunityDialog.opportunityList = [];
   }
 }
 
 function openOpportunityTransitionById(opp: StaleOpportunity) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   opportunityDialog.visible = true;
   opportunityDialog.customerId = opp.customerId;
   opportunityDialog.customerName = opp.customerName || '';
@@ -1047,13 +1062,15 @@ function onOpportunitySelect() {
 }
 
 async function previewOpportunityTransition() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!opportunityDialog.form.id || !opportunityDialog.form.newStage) {
     ElMessage.warning('请选择商机 + 目标阶段');
     return;
   }
   opportunityDialog.previewing = true;
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '预览推进商机',
@@ -1072,7 +1089,8 @@ async function previewOpportunityTransition() {
     opportunityDialog.preview = previewData;
     opportunityDialog.canSubmit = previewData.canDo !== false
         && previewData.status === 'PREVIEW';
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1080,18 +1098,21 @@ async function previewOpportunityTransition() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     opportunityDialog.previewing = false;
   }
 }
 
 async function executeOpportunityTransition() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!opportunityDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
   opportunityDialog.submitting = true;
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '推进商机',
@@ -1108,7 +1129,8 @@ async function executeOpportunityTransition() {
     opportunityDialog.visible = false;
     // Refresh
     await triggerFollowupQuery();
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     ElMessage({
       message: `推进失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1116,6 +1138,7 @@ async function executeOpportunityTransition() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     opportunityDialog.submitting = false;
   }
 }
@@ -1201,20 +1224,23 @@ function shipmentFeedbackType(f: ShipmentFeedback): 'success' | 'warning' | 'err
 }
 
 async function loadTodayPendingShipments() {
+  const isCurrentOperation = scopedRequests.capture();
   shipmentLoading.value = true;
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '今日 SO 待发',
         intentCode: 'SPRINT10_SHIPMENT_PENDING_TODAY',
+        mode: 'READ',
         parameters: {},
       });
     const data = (res as { data: ExecuteResponse }).data;
     const resultData = (data.resultData || {}) as Record<string, unknown>;
     const orders = (resultData['orders'] as PendingShipmentOrder[] | undefined) || [];
     pendingShipments.value = Array.isArray(orders) ? orders : [];
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     pendingShipments.value = [];
     ElMessage({
       message: `今日待发查询失败: ${extractErrorMessage(err)}`,
@@ -1223,12 +1249,13 @@ async function loadTodayPendingShipments() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     shipmentLoading.value = false;
   }
 }
 
 function openShipmentDialog(order: PendingShipmentOrder) {
-  if (props.digitalEmployee) return;
+  if (!showNativeActions.value) return;
   shipmentDialog.visible = true;
   shipmentDialog.salesOrderId = order.salesOrderId;
   shipmentDialog.orderNumber = order.orderNumber;
@@ -1256,6 +1283,8 @@ function resetShipmentDialog() {
 }
 
 async function submitShipment() {
+  if (!showNativeActions.value) return;
+  const isCurrentOperation = scopedRequests.capture();
   if (!shipmentCanSubmit.value) {
     ElMessage.warning('请检查发货数量 (≥1 行 > 0 且不超过剩余可发)');
     return;
@@ -1272,7 +1301,7 @@ async function submitShipment() {
       }));
 
   try {
-    const res = await request.post<ExecuteResponse>(
+    const res = await scopedPost<ExecuteResponse>(
       `/${factoryId.value}/ai-intents/execute`,
       {
         userInput: '确认发货',
@@ -1319,7 +1348,8 @@ async function submitShipment() {
         showClose: true,
       });
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (isWorkdeskScopeChanged(err)) return;
     const msg = extractErrorMessage(err);
     shipmentDialog.feedback = { status: 'ERROR', message: msg };
     ElMessage({
@@ -1329,18 +1359,38 @@ async function submitShipment() {
       showClose: true,
     });
   } finally {
+    if (!isCurrentOperation()) return;
     shipmentDialog.submitting = false;
   }
 }
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
-watch([() => props.employeeNavigationPending, factoryId], ([pending, id]) => {
-  if (pending || !id || initialQueryStarted) return;
+let previousIdentity = '';
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole], ([pending, id, actor, role]) => {
+  const identity = `${id}:${actor}:${role || ''}:${pending}`;
+  if (identity !== previousIdentity) {
+    previousIdentity = identity;
+    initialQueryStarted = false;
+    resetDigitalConversation(); loading.value = false; lastQueryTime.value = ''; resultTitle.value = DEFAULT_RESULT_TITLE;
+    customers.value = []; staleOpportunities.value = []; restaurantPnl.value = null;
+    pendingShipments.value = []; shipmentLoading.value = false;
+    wechatDialog.visible = false; wechatDialog.customerId = ''; wechatDialog.customerName = ''; resetWechatDialog();
+    opportunityDialog.visible = false; opportunityDialog.customerId = ''; opportunityDialog.customerName = ''; opportunityDialog.opportunityList = []; resetOpportunityDialog();
+    shipmentDialog.visible = false; shipmentDialog.salesOrderId = ''; shipmentDialog.orderNumber = ''; shipmentDialog.customerName = ''; shipmentDialog.itemForms = []; shipmentDialog.feedback = null;
+  }
+  if (pending || !id || !actor || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerFollowupQuery();
   void loadTodayPendingShipments();
-}, { immediate: true });
+}, { immediate: true, flush: 'sync' });
+watch(showNativeActions, (allowed) => {
+  if (allowed) return;
+  wechatDialog.visible = false; wechatDialog.customerId = ''; wechatDialog.customerName = ''; resetWechatDialog(); wechatDialog.previewing = false; wechatDialog.submitting = false;
+  opportunityDialog.visible = false; resetOpportunityDialog(); opportunityDialog.previewing = false; opportunityDialog.submitting = false;
+  shipmentDialog.visible = false; resetShipmentDialog(); shipmentDialog.submitting = false;
+}, { flush: 'sync' });
+
 </script>
 
 <style scoped>

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { useNavigationVisibilityStore } from '../navigationVisibility';
+import { useNavigationVisibilityStore, navigationPermissionsReady } from '../navigationVisibility';
 
 const identity = {
+  actorId: '43',
   factoryId: 'F006',
   role: 'factory_super_admin',
   factoryType: 'FACTORY',
@@ -10,6 +11,25 @@ const identity = {
 };
 
 describe('navigation visibility snapshot', () => {
+  it('does not publish the previous actor permissions as the new same-factory actor while authoritative loading is delayed', () => {
+    const permission = { currentUserId: '43', currentFactoryId: identity.factoryId, currentRole: identity.role, isDbLoaded: true, isUserModuleAccessLoaded: true };
+    const next = { ...identity, actorId: '44' };
+    expect(navigationPermissionsReady(identity, permission)).toBe(true);
+    expect(navigationPermissionsReady(next, permission)).toBe(false);
+    permission.currentUserId = '44'; permission.isDbLoaded = false; permission.isUserModuleAccessLoaded = false;
+    expect(navigationPermissionsReady(next, permission)).toBe(false);
+    permission.isDbLoaded = true;
+    expect(navigationPermissionsReady(next, permission)).toBe(false);
+    permission.isUserModuleAccessLoaded = true;
+    expect(navigationPermissionsReady(next, permission)).toBe(true);
+  });
+  it('preserves the existing DEMO mockDemo permission lane without exempting ordinary tenant readiness', () => {
+    const permission = { currentUserId: '43', currentFactoryId: 'DEMO_LOGISTICS', currentRole: identity.role, isDbLoaded: false, isUserModuleAccessLoaded: false };
+    const demo = { ...identity, factoryId: permission.currentFactoryId };
+    expect(navigationPermissionsReady(demo, permission, true)).toBe(true);
+    expect(navigationPermissionsReady(demo, permission, false)).toBe(false);
+    expect(navigationPermissionsReady({ ...demo, actorId: '44' }, permission, true)).toBe(false);
+  });
   beforeEach(() => setActivePinia(createPinia()));
 
   it('publishes only deduplicated paths from the fully filtered sidebar', () => {

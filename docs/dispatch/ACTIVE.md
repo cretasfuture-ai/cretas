@@ -7,6 +7,16 @@
 
 ## 在飞任务
 
+- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `1e0e24f980` — 统一9工作台为数字专员；锁Web workdesk/dashboard/物流页及共享组件/router/menu/导航snapshot与permission身份只读导出、Sidebar/Header/workspaces消费者和目标测试。补actor/角色/pending隔离，保留原权限业务。验收Vitest/tsc/标准发布/真实UI。
+
+- `UNIFY-SPECIALIST-FOUR-20261115` — `review` — Owner /root/wholesale_components — Base `1e0e24f980` — 4个Workdesk页及4个DigitalSpecialist测试已完成，20测试通过；锁维持至父任务归档。
+
+- `UNIFY-LOGISTICS-ISOLATION-20261115` — `claimed` — Owner /root/wholesale_components — Base `1e0e24f980` — 仅新增物流__tests__/useLogisticsScheduling.identity.spec.ts；验证切factory/actor清空plan/orders、延迟结果隔离、无身份零API、旧方法不可写新租户。禁止改composable/页面/其他测试；验收该Vitest。
+
+- `UNIFY-LOGISTICS-CONSUMERS-20261115` — `claimed` — Owner /root/wholesale_ui_audit — Base `1e0e24f980` — 仅物流orders/resources/records三个index.vue及各新增identity测试；按factory/actor/role清本地dialog/IDs/data并重载，异步写前/后fence，保留原权限流程。禁改共享composable/workbench/ACTIVE；目标Vitest/回执。
+
+- `WH-QA-CLEANUP-20261115` — `in-progress` — Owner /root — 仅清理WHOLESALE_0000_001本次QA-WH-1115样例，固定ID核对关联、备份与计数后处理并读回；保留账号/菜单/工作台/配置，其他租户零写入。只读图谱与安全复查先行，禁止清空租户或盲目级联。
+
 
 
 

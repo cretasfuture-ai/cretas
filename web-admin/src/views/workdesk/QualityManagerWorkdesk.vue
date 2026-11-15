@@ -15,16 +15,21 @@
   - R5 dead-end: 失败 toast duration:0 + showClose, 含 actionHint
 -->
 <template>
-  <div class="quality-manager-workdesk">
+  <DigitalEmployeeFrame :enabled="digitalEmployee" role="quality-manager" :busy="loading || employeeNavigationPending" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <DigitalEmployeeConversation v-if="digitalEmployee" v-model="userInput" :busy="loading || employeeNavigationPending" :error="errorMessage" :response="formattedText" :result-title="resultTitle" :response-status="responseStatus" :scope-key="`${factoryId}:${actorId}:${actorRole}:${props.employeeNavigationPending}`" :clarification-choices="employeeIntent.clarificationQuestions.value" employee-name="质量追溯数字专员" scope-label="批次追溯、HACCP 与召回记录" :quick-questions="['查询 HACCP 监控', '追溯这个批次的影响范围']" @send="handleEmployeeQuestion" @retry="sendQuery" @reset="resetDigitalConversation">
+      <template #action>
+        <UButton v-if="employeePaths.includes('/quality/recalls')" to="/quality/recalls" icon="i-lucide-shield-alert">进入召回业务入口</UButton>
+      </template>
+    </DigitalEmployeeConversation>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">质量主管工作台</span>
         
       </div>
       <div class="header-actions">
-        <el-button type="danger" :icon="Warning" @click="openRecallStartDialog">
+        <el-button type="danger" :icon="Warning" :disabled="!canAct" @click="openRecallStartDialog">
  启动召回
         </el-button>
         <el-button :loading="loading" :icon="Refresh" @click="triggerHaccpQuery">
@@ -34,7 +39,7 @@
     </div>
 
     <!-- AI Chat 输入区 -->
-    <el-card class="chat-card" shadow="never">
+    <el-card v-if="!digitalEmployee" class="chat-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
@@ -60,7 +65,7 @@
     </el-card>
 
     <!-- 加载中提示 -->
-    <el-card v-if="loading" class="loading-card" shadow="never">
+    <el-card v-if="loading && !digitalEmployee" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
         <span>AI 正在运行 food-safety-recall Skill (串 8 Tool: batch 追溯 + HACCP audit + GB 2760 + 影响客户 + 损失预估), 预计 5-15 秒...</span>
@@ -69,7 +74,7 @@
 
     <!-- 错误显示 -->
     <el-alert
-      v-if="errorMessage"
+      v-if="errorMessage && !digitalEmployee"
       :title="errorMessage"
       type="error"
       show-icon
@@ -77,7 +82,7 @@
       class="error-alert" />
 
     <!-- AI 输出 (LLM aggregate 召回行动方案) -->
-    <el-card v-if="formattedText" class="result-card" shadow="never">
+    <el-card v-if="formattedText && !digitalEmployee" class="result-card" shadow="never">
       <template #header>
         <div class="card-header">
  <span> {{ resultTitle }}</span>
@@ -253,6 +258,7 @@
           type="primary"
           size="large"
           :icon="Box"
+          :disabled="!canAct"
           @click="openInventoryFreezeDialog">
  冻结库存
         </el-button>
@@ -260,6 +266,7 @@
           type="warning"
           size="large"
           :icon="Bell"
+          :disabled="!canAct"
           @click="openCustomerNotifyDialog">
  通知客户
         </el-button>
@@ -267,6 +274,7 @@
           type="info"
           size="large"
           :icon="Document"
+          :disabled="!canAct"
           @click="openRegulatoryReportDialog">
  生成监管文件
         </el-button>
@@ -274,6 +282,7 @@
           type="success"
           size="large"
           :icon="CircleCheck"
+          :disabled="!canAct"
           @click="openCloseEventDialog">
  关闭事件
         </el-button>
@@ -316,7 +325,7 @@
         <el-button
           type="danger"
           :loading="recallStartDialog.analyzing"
-          :disabled="!canStartRecall"
+          :disabled="!canStartRecall || !canAct"
           @click="startRecallAnalysis">
           开始召回分析
         </el-button>
@@ -357,13 +366,14 @@
         <el-button @click="freezeDialog.visible = false">取消</el-button>
         <el-button
           :loading="freezeDialog.previewing"
+          :disabled="!canAct"
           @click="previewFreeze">
           预览
         </el-button>
         <el-button
           type="primary"
           :loading="freezeDialog.submitting"
-          :disabled="!freezeDialog.canSubmit"
+          :disabled="!freezeDialog.canSubmit || !canAct"
           @click="executeFreeze">
           确认冻结
         </el-button>
@@ -413,13 +423,14 @@
         <el-button @click="notifyDialog.visible = false">取消</el-button>
         <el-button
           :loading="notifyDialog.previewing"
+          :disabled="!canAct"
           @click="previewNotify">
           预览
         </el-button>
         <el-button
           type="warning"
           :loading="notifyDialog.submitting"
-          :disabled="!notifyDialog.canSubmit"
+          :disabled="!notifyDialog.canSubmit || !canAct"
           @click="executeNotify">
           确认发送
         </el-button>
@@ -455,7 +466,7 @@
         <el-button
           type="info"
           :loading="reportDialog.submitting"
-          :disabled="!recallContext.recallEventId"
+          :disabled="!recallContext.recallEventId || !canAct"
           @click="executeGenerateReport">
           生成报告
         </el-button>
@@ -498,17 +509,17 @@
         <el-button
           type="success"
           :loading="closeDialog.submitting"
-          :disabled="!recallContext.recallEventId || !closeDialog.form.summary.trim()"
+          :disabled="!recallContext.recallEventId || !closeDialog.form.summary.trim() || !canAct"
           @click="executeCloseEvent">
           确认关闭
         </el-button>
       </template>
     </el-dialog>
-  </div>
+  </DigitalEmployeeFrame>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, reactive } from 'vue';
+import { ref, computed, reactive, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import {
   Refresh, Loading, Warning, Box, Bell, Document, CircleCheck,
@@ -516,6 +527,9 @@ import {
 import request from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { intentNonAnswerLabel } from '@/utils/intentResponseStatus';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+import DigitalEmployeeConversation from '@/components/workdesk/DigitalEmployeeConversation.vue';
+import { useWorkdeskIntent } from '@/composables/useWorkdeskIntent';
 
 interface ExecuteResponse {
   intentRecognized?: boolean;
@@ -581,6 +595,10 @@ interface PreviewData {
 }
 
 const authStore = useAuthStore();
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean; wholesaleMode?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
 
 const userInput = ref('今天 HACCP 监控全通过吗?');
 const loading = ref(false);
@@ -611,7 +629,70 @@ const lossEstimate = reactive<LossEstimate>({
   totalLoss: 0,
 });
 
-const factoryId = computed(() => authStore.factoryId || 'F006');
+const factoryId = computed(() => authStore.factoryId || '');
+const actorId = computed(() => String(authStore.user?.id || ''));
+const actorRole = computed(() => String((authStore as { currentRole?: string }).currentRole || ''));
+interface RequestGuard {
+  factoryId: string;
+  actorId: string;
+  role: string;
+  requestGeneration: number;
+  requireAction?: boolean;
+}
+let requestGeneration = 0;
+function captureRequestGuard(requireAction = false): RequestGuard {
+  if (!factoryId.value || !actorId.value) throw new Error('账号未绑定企业，请重新登录');
+  if (requireAction && !canAct.value) throw new Error('当前导航或岗位不可办理写操作');
+  return { factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value, requestGeneration, requireAction };
+}
+function isCurrentRequest(guard: RequestGuard): boolean {
+  return guard.requestGeneration === requestGeneration
+    && guard.factoryId === factoryId.value
+    && guard.actorId === actorId.value
+    && guard.role === actorRole.value
+    && !props.employeeNavigationPending
+    && (!guard.requireAction || canAct.value);
+}
+function staleRequestError(): Error & { stale?: boolean } {
+  const error = new Error('企业或账号已切换，请重新查询') as Error & { stale?: boolean };
+  error.stale = true;
+  return error;
+}
+const responseStatus = ref('');
+const lastEmployeeQuestion = ref('');
+function handleEmployeeQuestion(question: string) {
+  userInput.value = question;
+  lastEmployeeQuestion.value = question;
+  void sendQuery();
+}
+const employeeIntent = useWorkdeskIntent(() => ({ factoryId: factoryId.value, actorId: actorId.value, role: actorRole.value }));
+function resetDigitalConversation() {
+  employeeIntent.reset();
+  loading.value = false;
+  recallStartDialog.analyzing = false;
+  freezeDialog.previewing = false;
+  freezeDialog.submitting = false;
+  notifyDialog.previewing = false;
+  notifyDialog.submitting = false;
+  reportDialog.submitting = false;
+  closeDialog.submitting = false;
+  formattedText.value = '';
+  errorMessage.value = '';
+  responseStatus.value = '';
+  userInput.value = '';
+  lastEmployeeQuestion.value = '';
+  resetRecallData();
+  recallStartDialog.visible = false;
+  freezeDialog.visible = false;
+  notifyDialog.visible = false;
+  reportDialog.visible = false;
+  closeDialog.visible = false;
+  resetRecallStartDialog();
+  resetFreezeDialog();
+  resetNotifyDialog();
+  resetReportDialog();
+  resetCloseDialog();
+}
 
 const renderedFormattedText = computed(() => {
   if (!formattedText.value) return '';
@@ -680,13 +761,17 @@ function extractErrorMessage(err: unknown): string {
 }
 
 async function callIntentExecute(input: string, intentCode?: string,
-    parameters?: Record<string, unknown>, preview = false): Promise<ExecuteResponse> {
+    parameters?: Record<string, unknown>, preview = false, mode?: 'READ' | 'WRITE', guard = captureRequestGuard()): Promise<ExecuteResponse> {
+  if (!isCurrentRequest(guard)) throw staleRequestError();
+  if (props.digitalEmployee && !intentCode) return employeeIntent.execute(input);
   const body: Record<string, unknown> = { userInput: input };
   if (intentCode) body.intentCode = intentCode;
   if (parameters) body.parameters = parameters;
   if (preview) body.preview = true;
+  if (mode) body.mode = mode;
   const res = await request.post<ExecuteResponse>(
-    `/${factoryId.value}/ai-intents/execute`, body);
+    `/${guard.factoryId}/ai-intents/execute`, body);
+  if (!isCurrentRequest(guard)) throw staleRequestError();
   return (res as { data: ExecuteResponse }).data;
 }
 
@@ -696,13 +781,19 @@ async function triggerHaccpQuery() {
 }
 
 async function sendQuery() {
+  if (props.employeeNavigationPending || !factoryId.value || !actorId.value) return;
   if (!userInput.value.trim()) return;
+  const guard = captureRequestGuard();
+  const query = userInput.value.trim();
   loading.value = true;
   errorMessage.value = '';
   formattedText.value = '';
+  responseStatus.value = '';
 
   try {
-    const response = await callIntentExecute(userInput.value);
+    const response = await callIntentExecute(query, undefined, undefined, false, 'READ', guard);
+    if (!isCurrentRequest(guard)) return;
+    responseStatus.value = response.status || '';
     // 🔴 后端的 WRITE_CONFIRM_REQUIRED / NEED_MORE_INFO / PERMISSION_DENIED 等回执
     //    不是答案。判据见 utils/intentResponseStatus.ts。
     const nonAnswerLabel = intentNonAnswerLabel(response.status);
@@ -720,6 +811,7 @@ async function sendQuery() {
     //    让用户以为「本次召回涉及 0 个批次」。
     extractRecallDataFromResult(nonAnswerLabel ? {} : (response.resultData || {}));
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard) || (err && typeof err === 'object' && 'stale' in err && (err as { stale?: boolean }).stale)) return;
     const msg = extractErrorMessage(err);
     errorMessage.value = `查询失败: ${msg}`;
     ElMessage({
@@ -729,7 +821,7 @@ async function sendQuery() {
       showClose: true,
     });
   } finally {
-    loading.value = false;
+    if (isCurrentRequest(guard)) loading.value = false;
   }
 }
 
@@ -841,6 +933,7 @@ const canStartRecall = computed(() =>
   && recallStartDialog.form.complaintDescription.trim() !== '');
 
 function openRecallStartDialog() {
+  if (!canAct.value) return;
   recallStartDialog.visible = true;
 }
 
@@ -851,7 +944,9 @@ function resetRecallStartDialog() {
 }
 
 async function startRecallAnalysis() {
+  if (!canAct.value) return;
   if (!canStartRecall.value) return;
+  const guard = captureRequestGuard(true);
   recallStartDialog.analyzing = true;
   resetRecallData();
 
@@ -868,7 +963,11 @@ async function startRecallAnalysis() {
         complaintDate: recallStartDialog.form.complaintDate,
         complaintDescription: recallStartDialog.form.complaintDescription,
       },
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     // 🔴 这一处此前【无条件】宣布「召回分析完成」——
     //    后端返回 WRITE_CONFIRM_REQUIRED / PERMISSION_DENIED 这类非答案时,
     //    用户被告知分析完成了, 而下面显示的是一句拒答。
@@ -886,6 +985,7 @@ async function startRecallAnalysis() {
       ElMessage.success('召回分析完成, 请查看下方结果并执行后续行动');
     }
   } catch (err: unknown) {
+    if (!isCurrentRequest(guard)) return;
     const msg = extractErrorMessage(err);
     ElMessage({
       message: `召回分析失败: ${msg}`,
@@ -894,7 +994,7 @@ async function startRecallAnalysis() {
       showClose: true,
     });
   } finally {
-    recallStartDialog.analyzing = false;
+    if (isCurrentRequest(guard)) recallStartDialog.analyzing = false;
   }
 }
 
@@ -911,6 +1011,7 @@ const freezeDialog = reactive({
 });
 
 function openInventoryFreezeDialog() {
+  if (!canAct.value) return;
   if (!recallContext.batchNumber) {
     ElMessage.warning('请先启动召回分析获取批次号');
     return;
@@ -926,10 +1027,12 @@ function resetFreezeDialog() {
 }
 
 async function previewFreeze() {
+  if (!canAct.value) return;
   if (!recallContext.batchNumber || !freezeDialog.form.reason.trim()) {
     ElMessage.warning('批次号 + 冻结原因必填');
     return;
   }
+  const guard = captureRequestGuard(true);
   freezeDialog.previewing = true;
   try {
     const response = await callIntentExecute(
@@ -940,12 +1043,16 @@ async function previewFreeze() {
         reason: freezeDialog.form.reason,
       },
       true,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     const previewData = (response.resultData || {}) as PreviewData;
     freezeDialog.preview = previewData;
     freezeDialog.canSubmit = previewData.canDo !== false
         && previewData.status !== 'ALREADY_FROZEN';
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -953,15 +1060,17 @@ async function previewFreeze() {
       showClose: true,
     });
   } finally {
-    freezeDialog.previewing = false;
+    if (isCurrentRequest(guard)) freezeDialog.previewing = false;
   }
 }
 
 async function executeFreeze() {
+  if (!canAct.value) return;
   if (!freezeDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
+  const guard = captureRequestGuard(true);
   freezeDialog.submitting = true;
   try {
     const response = await callIntentExecute(
@@ -971,10 +1080,15 @@ async function executeFreeze() {
         batchNumber: recallContext.batchNumber,
         reason: freezeDialog.form.reason,
       },
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     ElMessage.success(response.message || '已冻结批次, 此批次无法再用于生产/出货');
     freezeDialog.visible = false;
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `冻结失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -982,7 +1096,7 @@ async function executeFreeze() {
       showClose: true,
     });
   } finally {
-    freezeDialog.submitting = false;
+    if (isCurrentRequest(guard)) freezeDialog.submitting = false;
   }
 }
 
@@ -999,6 +1113,7 @@ const notifyDialog = reactive({
 });
 
 function openCustomerNotifyDialog() {
+  if (!canAct.value) return;
   if (!recallContext.batchNumber) {
     ElMessage.warning('请先启动召回分析获取批次号');
     return;
@@ -1013,10 +1128,12 @@ function resetNotifyDialog() {
 }
 
 async function previewNotify() {
+  if (!canAct.value) return;
   if (!recallContext.batchNumber) {
     ElMessage.warning('批次号必填');
     return;
   }
+  const guard = captureRequestGuard(true);
   notifyDialog.previewing = true;
   try {
     const params: Record<string, unknown> = {
@@ -1033,12 +1150,16 @@ async function previewNotify() {
       'CUSTOMER_NOTIFY_BATCH',
       params,
       true,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     const previewData = (response.resultData || {}) as PreviewData;
     notifyDialog.preview = previewData;
     notifyDialog.canSubmit = previewData.canDo !== false
         && previewData.status !== 'ALREADY_NOTIFIED';
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `预览失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1046,15 +1167,17 @@ async function previewNotify() {
       showClose: true,
     });
   } finally {
-    notifyDialog.previewing = false;
+    if (isCurrentRequest(guard)) notifyDialog.previewing = false;
   }
 }
 
 async function executeNotify() {
+  if (!canAct.value) return;
   if (!notifyDialog.canSubmit) {
     ElMessage.warning('请先点击 [预览] 验证可提交');
     return;
   }
+  const guard = captureRequestGuard(true);
   notifyDialog.submitting = true;
   try {
     const params: Record<string, unknown> = {
@@ -1070,10 +1193,15 @@ async function executeNotify() {
       '通知客户',
       'CUSTOMER_NOTIFY_BATCH',
       params,
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     ElMessage.success(response.message || '已群发召回通知');
     notifyDialog.visible = false;
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `通知失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1081,7 +1209,7 @@ async function executeNotify() {
       showClose: true,
     });
   } finally {
-    notifyDialog.submitting = false;
+    if (isCurrentRequest(guard)) notifyDialog.submitting = false;
   }
 }
 
@@ -1094,6 +1222,7 @@ const reportDialog = reactive({
 });
 
 function openRegulatoryReportDialog() {
+  if (!canAct.value) return;
   if (!recallContext.recallEventId) {
     ElMessage.warning('请先启动召回分析创建召回事件');
     return;
@@ -1107,14 +1236,20 @@ function resetReportDialog() {
 }
 
 async function executeGenerateReport() {
+  if (!canAct.value) return;
   if (!recallContext.recallEventId) return;
+  const guard = captureRequestGuard(true);
   reportDialog.submitting = true;
   try {
     const response = await callIntentExecute(
       '生成监管上报文件',
       'REGULATORY_REPORT',
       { recallEventId: recallContext.recallEventId },
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     const data = (response.resultData || {}) as Record<string, unknown>;
     reportDialog.markdownContent = (data['markdown'] as string)
         || (data['content'] as string)
@@ -1122,6 +1257,7 @@ async function executeGenerateReport() {
         || '(无 markdown 内容)';
     ElMessage.success(response.message || '监管文件已生成');
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     ElMessage({
       message: `生成失败: ${extractErrorMessage(err)}`,
       type: 'error',
@@ -1129,7 +1265,7 @@ async function executeGenerateReport() {
       showClose: true,
     });
   } finally {
-    reportDialog.submitting = false;
+    if (isCurrentRequest(guard)) reportDialog.submitting = false;
   }
 }
 
@@ -1156,6 +1292,7 @@ const closeDialog = reactive({
 });
 
 function openCloseEventDialog() {
+  if (!canAct.value) return;
   if (!recallContext.recallEventId) {
     ElMessage.warning('请先启动召回分析创建召回事件');
     return;
@@ -1168,7 +1305,9 @@ function resetCloseDialog() {
 }
 
 async function executeCloseEvent() {
+  if (!canAct.value) return;
   if (!recallContext.recallEventId || !closeDialog.form.summary.trim()) return;
+  const guard = captureRequestGuard(true);
   closeDialog.submitting = true;
   try {
     // Phase 1 stub: RecallEventService 控制器尚未 ship.
@@ -1182,11 +1321,16 @@ async function executeCloseEvent() {
         summary: closeDialog.form.summary,
         status: 'COMPLETED',
       },
+      false,
+      undefined,
+      guard,
     );
+    if (!isCurrentRequest(guard)) return;
     ElMessage.success(response.message
         || `召回事件 #${recallContext.recallEventId} 已关闭`);
     closeDialog.visible = false;
   } catch (err) {
+    if (!isCurrentRequest(guard)) return;
     // R5 dead-end: stub 失败提示前往详情页手动关闭
     const msg = extractErrorMessage(err);
     ElMessage({
@@ -1196,12 +1340,20 @@ async function executeCloseEvent() {
       showClose: true,
     });
   } finally {
-    closeDialog.submitting = false;
+    if (isCurrentRequest(guard)) closeDialog.submitting = false;
   }
 }
 
-// 注意: 不 auto-trigger on mount, 召回是 reactive 场景 (客户投诉触发) 不是 daily query.
-// 用户手动点 "启动召回" 或输入对话框触发.
+// 召回是 reactive 场景 (客户投诉触发) 不是 daily query；仍需在身份变更时清理旧结果。
+let previousScopeKey = '';
+watch([factoryId, actorId, actorRole, () => props.employeeNavigationPending, () => props.employeeCanWrite, () => props.wholesaleMode], ([id, actor]) => {
+  const identity = `${id}:${actor}`;
+  const scopeKey = `${identity}:${actorRole.value}:${props.employeeNavigationPending}:${props.employeeCanWrite}:${props.wholesaleMode ?? ''}`;
+  if (scopeKey === previousScopeKey) return;
+  requestGeneration += 1;
+  if (previousScopeKey) resetDigitalConversation();
+  previousScopeKey = scopeKey;
+}, { immediate: true, flush: 'sync' });
 </script>
 
 <style scoped>

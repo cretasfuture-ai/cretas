@@ -11,11 +11,13 @@ const props = withDefaults(defineProps<{
   resultTitle: string;
   employeeName: string;
   scopeLabel?: string;
+  scopeKey?: string;
   quickQuestions?: readonly string[];
   responseStatus?: string;
   clarificationChoices?: readonly string[];
 }>(), {
   scopeLabel: '',
+  scopeKey: '',
   quickQuestions: () => [],
   responseStatus: '',
   clarificationChoices: () => [],
@@ -40,6 +42,15 @@ const pendingQuestion = ref<string | null>(null);
 const sending = ref(false);
 const lastResponse = ref('');
 let messageSequence = 0;
+
+watch(() => props.scopeKey, () => {
+  messages.value = [];
+  pendingQuestion.value = null;
+  sending.value = false;
+  lastResponse.value = '';
+  messageSequence = 0;
+  emit('update:modelValue', '');
+}, { flush: 'sync' });
 
 const draft = computed({
   get: () => props.modelValue,
@@ -146,7 +157,7 @@ watch(() => props.busy, (busy) => {
 </script>
 
 <template>
-  <section class="employee-conversation" aria-label="数字员工对话">
+  <section class="employee-conversation" aria-label="数字专员对话">
     <header class="conversation-header">
       <div>
         <p class="conversation-kicker">{{ employeeName }}<span v-if="scopeLabel"> · {{ scopeLabel }}</span></p>

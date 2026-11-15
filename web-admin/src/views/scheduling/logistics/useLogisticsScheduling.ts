@@ -78,14 +78,18 @@ import type { ExportRow, RouteTrip, ScheduleResult, StoreOrder, Vehicle } from '
 
 export type LogisticsStep = 'import' | 'map' | 'confirm' | 'export';
 
+function createLogisticsState(scope: { factoryId: string; actorId: string; role: string }) {
 // ==================== 内部工具 ====================
 
 function requireFactoryId(): string {
-  const factoryId = useAuthStore().factoryId;
-  if (!factoryId) {
-    throw new ApiError('未获取到工厂身份，请重新登录', 'NO_FACTORY_ID');
+  const auth = useAuthStore();
+  if (!scope.factoryId || !scope.actorId) {
+    throw new ApiError('未获取到企业或操作人身份，请重新登录', 'NO_FACTORY_ID');
   }
-  return factoryId;
+  if (auth.factoryId !== scope.factoryId || String(auth.user?.id || '') !== scope.actorId || (auth.currentRole || '') !== scope.role) {
+    throw new ApiError('账号或企业已切换，请重新打开排线工作台', 'LOGISTICS_SCOPE_CHANGED');
+  }
+  return scope.factoryId;
 }
 
 function errorMessage(err: unknown): string {
@@ -342,6 +346,7 @@ async function submitManualOrders(businessDate: string | null, rows: ManualOrder
     preview.value = res.data;
     // 有有效行才落库（与文件导入一致：无有效行只回报错误，不建空批次上下文）。
     if (res.data.validRows > 0) {
+      requireFactoryId(); // Identity may change while the preview is in flight.
       const committed = await commitOrderImport(factoryId, res.data.jobId);
       batch.value = committed.data;
       preview.value = null;
@@ -809,6 +814,7 @@ async function exportCsv(): Promise<void> {
   try {
     const factoryId = requireFactoryId();
     const res = await apiExportPlanCsv(factoryId, plan.value.id);
+    requireFactoryId(); // A late response must not download the previous identity's file.
     triggerDownload(new Blob([res.data], { type: 'text/csv;charset=utf-8' }), `${plan.value.planNumber || plan.value.id}.csv`);
   } catch (err) {
     planError.value = errorMessage(err);
@@ -820,6 +826,7 @@ async function exportXlsx(): Promise<void> {
   try {
     const factoryId = requireFactoryId();
     const res = await apiExportPlanXlsx(factoryId, plan.value.id);
+    requireFactoryId();
     triggerDownload(
       new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
       `${plan.value.planNumber || plan.value.id}.xlsx`,
@@ -961,7 +968,7 @@ async function restore(planIdFromQuery?: string | null): Promise<void> {
   // 用户显式点过「清除，重新导入 / 新建排线」→ 停在第一步录入, 不自动捞最近计划(否则切走再回来又把旧批次
   // 捞回来 + 跳到第二步, 严重影响录入新订单体验)。首次进入(未清除)才自动带出最近计划。
   let suppressed = false;
-  try { suppressed = sessionStorage.getItem('logi_suppress_auto_restore') === '1'; } catch { /* sessionStorage 不可用忽略 */ }
+  try { suppressed = sessionStorage.getItem(`logi_suppress_auto_restore:${scope.factoryId}:${scope.actorId}`) === '1'; } catch { /* sessionStorage 不可用忽略 */ }
   if (suppressed) return;
   try {
     const factoryId = requireFactoryId();
@@ -982,7 +989,7 @@ async function restore(planIdFromQuery?: string | null): Promise<void> {
 
 function reset(): void {
   // 显式清除/新建 → 抑制下次「无 planId 时自动捞最近计划」, 让录入新订单从空白第一步开始且切走回来不复原。
-  try { sessionStorage.setItem('logi_suppress_auto_restore', '1'); } catch { /* sessionStorage 不可用忽略 */ }
+  try { sessionStorage.setItem(`logi_suppress_auto_restore:${scope.factoryId}:${scope.actorId}`, '1'); } catch { /* sessionStorage 不可用忽略 */ }
   batch.value = null;
   batches.value = [];
   preview.value = null;
@@ -1105,10 +1112,34 @@ const state = {
   reset,
 };
 
+// Each identity owns its own closures and refs. A late response can only update
+// its abandoned state, never the new tenant's orders/plan. No API call runs here.
+return state;
+}
+
+type LogisticsState = ReturnType<typeof createLogisticsState>;
+let currentIdentity = '';
+let currentState: LogisticsState | undefined;
+function scopedState(): LogisticsState {
+  const auth = useAuthStore();
+  const factoryId = auth.factoryId || '';
+  const actorId = String(auth.user?.id || '');
+  const role = auth.currentRole || '';
+  const identity = `${factoryId}:${actorId}:${role}`;
+  if (!currentState || identity !== currentIdentity) {
+    currentIdentity = identity;
+    currentState = createLogisticsState({ factoryId, actorId, role });
+  }
+  return currentState;
+}
+const currentScopeState = new Proxy({} as LogisticsState, {
+  get(_target, property) { return Reflect.get(scopedState(), property); },
+});
+
 export function useLogisticsScheduling() {
-  return state;
+  return currentScopeState;
 }
 
 export function resetLogisticsScheduling(): void {
-  reset();
+  scopedState().reset();
 }

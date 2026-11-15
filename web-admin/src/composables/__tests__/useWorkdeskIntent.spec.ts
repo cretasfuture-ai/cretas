@@ -8,7 +8,7 @@ vi.mock('@/api/request', () => ({ default: { post } }));
 describe('workdesk unified recognition boundary', () => {
   beforeEach(() => { post.mockReset(); });
   function create() {
-    const identity = reactive({ factoryId: 'WHOLESALE_TEST', actorId: '1709' });
+    const identity = reactive({ factoryId: 'WHOLESALE_TEST', actorId: '1709', role: 'sales' });
     const scope = effectScope();
     const client = scope.run(() => useWorkdeskIntent(() => identity))!;
     return { identity, scope, client };
@@ -39,6 +39,22 @@ describe('workdesk unified recognition boundary', () => {
     identity.actorId = '';
     await expect(client.execute('查询订单')).rejects.toThrow('账号未绑定企业');
     expect(post).toHaveBeenCalledTimes(1);
+    scope.stop();
+  });
+  it('starts a new session and drops a delayed result after role changes on the same actor', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'SUCCESS', sessionId: 'old-session' } });
+    const { client, identity, scope } = create();
+    await client.execute('查询订单');
+    let finish!: (value: unknown) => void;
+    post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const pending = client.execute('查询旧岗位数据');
+    identity.role = 'warehouse';
+    expect(client.sessionId.value).toBe('');
+    finish({ data: { status: 'SUCCESS', sessionId: 'old-session' } });
+    await expect(pending).rejects.toThrow('企业或对话已切换');
+    post.mockResolvedValueOnce({ data: { status: 'SUCCESS' } });
+    await client.execute('查询库存');
+    expect(post.mock.calls.at(-1)?.[1].sessionId).not.toBe('old-session');
     scope.stop();
   });
 

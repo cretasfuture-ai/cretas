@@ -44,23 +44,23 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     await wrapper.setProps({ employeeNavigationPending: true });
     await wrapper.setProps({ employeeNavigationPending: false });
     await flushPromises();
-    expect(post).not.toHaveBeenCalled();
+    expect(post.mock.calls).toEqual([[endpoint, { userInput: '查询低库存预警', mode: 'READ', sessionId: expect.any(String) }]]);
     wrapper.unmount();
   });
 
   it('keeps mount and explicit reload in automatic weekly-plan mode', async () => {
     const wrapper = await openWorkdesk();
     expect(post.mock.calls).toEqual([
-      [endpoint, { userInput: '下周采购什么?', intentCode: 'PURCHASER_WEEKLY_PLAN' }],
-      [endpoint, { userInput: '7 天销售预测', intentCode: 'SALES_FORECAST_7DAY' }],
+      [endpoint, { userInput: '下周采购什么?', intentCode: 'PURCHASER_WEEKLY_PLAN', mode: 'READ', sessionId: expect.any(String) }],
+      [endpoint, { userInput: '7 天销售预测', intentCode: 'SALES_FORECAST_7DAY', mode: 'READ', sessionId: expect.any(String) }],
     ]);
     await wrapper.get('.chat-input textarea').setValue(query);
     post.mockClear();
     await wrapper.get('.header-actions button').trigger('click');
     await flushPromises();
     expect(post.mock.calls).toEqual([
-      [endpoint, { userInput: '下周采购什么?', intentCode: 'PURCHASER_WEEKLY_PLAN' }],
-      [endpoint, { userInput: '7 天销售预测', intentCode: 'SALES_FORECAST_7DAY' }],
+      [endpoint, { userInput: '下周采购什么?', intentCode: 'PURCHASER_WEEKLY_PLAN', mode: 'READ', sessionId: expect.any(String) }],
+      [endpoint, { userInput: '7 天销售预测', intentCode: 'SALES_FORECAST_7DAY', mode: 'READ', sessionId: expect.any(String) }],
     ]);
   });
 
@@ -107,7 +107,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     post.mockClear();
     await wrapper.get('.chat-input button').trigger('click');
     await flushPromises();
-    expect(post.mock.calls).toEqual([[endpoint, { userInput: query }]]);
+    expect(post.mock.calls).toEqual([[endpoint, { userInput: query, mode: 'READ', sessionId: expect.any(String) }]]);
   });
 
   it('sends the exact manual query without a forced intent on Ctrl+Enter', async () => {
@@ -117,7 +117,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     post.mockClear();
     await input.trigger('keydown', { key: 'Enter', code: 'Enter', ctrlKey: true });
     await flushPromises();
-    expect(post.mock.calls).toEqual([[endpoint, { userInput: query }]]);
+    expect(post.mock.calls).toEqual([[endpoint, { userInput: query, mode: 'READ', sessionId: expect.any(String) }]]);
   });
 
   it('does not submit the query on Enter without Ctrl', async () => {

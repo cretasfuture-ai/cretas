@@ -4,6 +4,7 @@ import request from '@/api/request';
 export interface WorkdeskIdentity {
   factoryId: string;
   actorId: string;
+  role?: string;
 }
 
 export interface WorkdeskIntentResponse {
@@ -29,10 +30,10 @@ export function useWorkdeskIntent(identity: () => WorkdeskIdentity) {
     sessionId.value = '';
     clarificationQuestions.value = [];
   }
-  const scope = () => `${identity().factoryId}:${identity().actorId}`;
+  const scope = () => `${identity().factoryId}:${identity().actorId}:${identity().role || ''}`;
   watch(scope, reset, { flush: 'sync' });
 
-  async function execute(userInput: string, context?: Record<string, unknown>): Promise<WorkdeskIntentResponse> {
+  async function execute(userInput: string, context?: Record<string, unknown>, options?: { intentCode?: string; parameters?: Record<string, unknown> }): Promise<WorkdeskIntentResponse> {
     const current = identity();
     if (!current.factoryId || !current.actorId) throw new Error('账号未绑定企业，请重新登录');
     if (!userInput.trim()) throw new Error('请先填写要查询的问题');
@@ -41,7 +42,9 @@ export function useWorkdeskIntent(identity: () => WorkdeskIdentity) {
     sessionId.value ||= crypto.randomUUID();
     const response = await request.post<WorkdeskIntentResponse>(
       `/${current.factoryId}/ai-intents/execute`,
-      { userInput, sessionId: sessionId.value, mode: 'READ', ...(context ? { context } : {}) },
+      { userInput, sessionId: sessionId.value, mode: 'READ', ...(context ? { context } : {}),
+        ...(options?.intentCode ? { intentCode: options.intentCode } : {}),
+        ...(options?.parameters ? { parameters: options.parameters } : {}) },
     );
     if (requestedScope !== scope() || requestedGeneration !== generation) {
       throw new Error('企业或对话已切换，请重新查询');
