@@ -17,11 +17,12 @@ import {
   getOutsourceOrder,
   listOutsourceOrders,
   LINE_STATUS_LABEL,
-  MOVEMENT_LABEL,
+  movementReasonText,
+  movementShowsQuantity,
+  movementTypeText,
   ORDER_STATUS_LABEL,
   ORDER_STATUS_TAG,
   OUTSOURCE_TYPE_LABEL,
-  type OutsourceMovementType,
   type OutsourceOrderDetail,
   type OutsourceOrderStatus,
   type OutsourceOrderSummary,
@@ -180,10 +181,6 @@ const lineNoById = computed(() => {
 });
 const balanceTotal = computed(() => (detail.value?.balances ?? []).filter((b) => (b.currentQuantity ?? 0) > 0).length);
 
-function movementLabel(t: string) {
-  return MOVEMENT_LABEL[t as OutsourceMovementType] ?? t;
-}
-
 onMounted(async () => {
   await load();
   const q = route.query.orderId;
@@ -296,13 +293,13 @@ watch(() => route.query.orderId, (q) => {
               <UTable :data="detail.movements" :columns="movementColumns" class="cs-table" data-testid="outsource-movements">
                 <template #empty>还没有收发记录</template>
                 <template #date-cell="{ row }">{{ row.original.bizDate ?? '—' }}</template>
-                <template #mtype-cell="{ row }">{{ movementLabel(row.original.movementType) }}</template>
+                <template #mtype-cell="{ row }">{{ movementTypeText(row.original) }}</template>
                 <template #mline-cell="{ row }">{{ lineNoById[row.original.lineId] ?? '—' }}</template>
                 <template #source-cell="{ row }">{{ row.original.sourceBatchNumber ?? '—' }}</template>
                 <template #target-cell="{ row }">{{ row.original.targetBatchNumber ?? '—' }}</template>
-                <template #qty-cell="{ row }"><span class="num">{{ num(row.original.quantity, row.original.unit) }}</span><span v-if="row.original.defectQuantity" class="muted"> (不良 {{ row.original.defectQuantity }})</span></template>
+                <template #qty-cell="{ row }"><span class="num">{{ movementShowsQuantity(row.original) ? num(row.original.quantity, row.original.unit) : '—' }}</span><span v-if="row.original.defectQuantity" class="muted"> (不良 {{ row.original.defectQuantity }})</span></template>
                 <template #amount-cell="{ row }"><span class="num">{{ money(row.original.amount) }}</span></template>
-                <template #reason-cell="{ row }">{{ row.original.reason ?? '' }}</template>
+                <template #reason-cell="{ row }">{{ movementReasonText(row.original) }}</template>
                 <template #created-cell="{ row }">{{ time(row.original.createdAt) }}</template>
               </UTable>
             </template>

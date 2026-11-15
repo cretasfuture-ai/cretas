@@ -139,6 +139,26 @@ class MaterialBatchServiceImplOutsourceBatchGuardTest {
         verify(materialBatchRepository, atLeastOnce()).save(any());
     }
 
+    @Test
+    @DisplayName("#1723 低5: 管理员删除未动过的委外仓批次 → 409, 不删")
+    void outsourceBatchCannotBeDeleted() {
+        MaterialBatch os = batch("OS-4", "OUTSOURCE_ISSUE");
+        assertThat(os.getCurrentQuantity()).as("前提: 刚发料的委外仓批次正好满足「未使用」").isEqualByComparingTo(os.getReceiptQuantity());
+        assertThatThrownBy(() -> service.deleteMaterialBatch(FACTORY, "OS-4", "factory_super_admin"))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409))
+                .hasMessageContaining("委外厂手里的料");
+        verify(materialBatchRepository, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("#1723 低5 阳性对照: 管理员删除未动过的普通批次照常删")
+    void ordinaryBatchStillDeletable() {
+        MaterialBatch b = batch("MB-3", null);
+        service.deleteMaterialBatch(FACTORY, "MB-3", "factory_super_admin");
+        verify(materialBatchRepository).delete(b);
+    }
+
     private MaterialBatch batch(String id, String sourceDocType) {
         MaterialBatch b = new MaterialBatch();
         b.setId(id);
