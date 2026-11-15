@@ -11,6 +11,14 @@ const authStore = useAuthStore();
 const formRef = ref();
 const showPassword = ref(false);
 const forgotOpen = ref(false);
+
+const highlights = [
+  { icon: 'i-lucide-scale', title: '报工称重', desc: '现场称重直接入账，批次数据实时可查' },
+  { icon: 'i-lucide-git-branch', title: '全链溯源', desc: '从原料到成品，一键追到每个批次' },
+  { icon: 'i-lucide-calculator', title: '成本分析', desc: '物料、人工、损耗逐项归集，毛利一目了然' },
+  { icon: 'i-lucide-sparkles', title: 'AI 问答 BI', desc: '用一句话问经营数据，直接得到图表和结论' },
+  { icon: 'i-lucide-handshake', title: '委外协同', desc: '发料、回收、费用对账全程在线' }
+];
 const loading = ref(false);
 
 const loginForm = reactive({
@@ -68,93 +76,124 @@ async function handleLogin() {
 
 <template>
   <div class="login-page">
-    <div class="login-container">
-      <!-- Logo 区域：与外壳侧栏同一份品牌资源 -->
-      <div class="login-header">
+    <!-- 左侧品牌展示区（窄屏隐藏） -->
+    <section class="brand-pane">
+      <div class="brand-inner">
+        <h2 class="brand-headline">让每一批货都可追溯，<br />每一分成本都算得清</h2>
+        <p class="brand-sub">面向食品加工企业的一体化经营管理平台</p>
+        <ul class="highlight-grid">
+          <li v-for="h in highlights" :key="h.title" class="highlight">
+            <span class="highlight-icon"><UIcon :name="h.icon" class="size-5" /></span>
+            <span class="highlight-copy">
+              <span class="highlight-title">{{ h.title }}</span>
+              <span class="highlight-desc">{{ h.desc }}</span>
+            </span>
+          </li>
+        </ul>
+        <svg class="brand-art" viewBox="0 0 520 120" fill="none" aria-hidden="true">
+          <path d="M0 96 C80 96 80 40 160 40 S240 88 320 64 S440 16 520 24" stroke="var(--cs-primary)" stroke-opacity=".35" stroke-width="2" />
+          <path d="M0 108 C90 108 100 64 180 64 S270 100 350 84 S450 44 520 52" stroke="var(--cs-success)" stroke-opacity=".35" stroke-width="2" />
+          <g fill="var(--cs-primary)" fill-opacity=".5">
+            <circle cx="160" cy="40" r="5" /><circle cx="320" cy="64" r="5" /><circle cx="520" cy="24" r="5" />
+          </g>
+          <g fill="var(--cs-success)" fill-opacity=".5">
+            <circle cx="180" cy="64" r="4" /><circle cx="350" cy="84" r="4" />
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <!-- 右侧登录面板 -->
+    <section class="form-pane">
+      <div class="form-top">
         <img :src="authStore.factoryLogoUrl" :alt="authStore.brandTitle" class="login-logo" />
-        <h1 class="login-title">白垩纪AI Agent</h1>
-        <p class="login-subtitle">企业级智能管理平台</p>
+        <span class="form-brand">{{ authStore.brandTitle }}</span>
       </div>
 
-      <!-- 登录表单 -->
-      <UForm
-        ref="formRef"
-        :state="loginForm"
-        :validate="validate"
-        :validate-on="['blur']"
-        class="login-form"
-        @keyup.enter="handleLogin"
-        @submit.prevent
-      >
-        <UFormField name="username">
-          <UInput
-            v-model="loginForm.username"
-            placeholder="请输入手机号或用户名"
-            size="xl"
-            icon="i-lucide-user"
-            class="w-full"
-            autocomplete="username"
-          />
-        </UFormField>
+      <div class="form-main">
+        <div class="form-box">
+          <p class="login-subtitle">白垩纪AI Agent · 企业级智能管理平台</p>
+          <h1 class="login-title">欢迎登录</h1>
 
-        <UFormField name="password">
-          <UInput
-            v-model="loginForm.password"
-            :type="showPassword ? 'text' : 'password'"
-            placeholder="请输入密码"
-            size="xl"
-            icon="i-lucide-lock"
-            class="w-full"
-            autocomplete="current-password"
-            :ui="{ trailing: 'pe-1' }"
+          <UForm
+            ref="formRef"
+            :state="loginForm"
+            :validate="validate"
+            :validate-on="['blur']"
+            class="login-form"
+            @keyup.enter="handleLogin"
+            @submit.prevent
           >
-            <template #trailing>
-              <UButton
-                color="neutral"
-                variant="link"
-                size="sm"
-                :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
-                :aria-label="showPassword ? '隐藏密码' : '显示密码'"
-                @click="showPassword = !showPassword"
+            <UFormField label="账号" name="username">
+              <UInput
+                v-model="loginForm.username"
+                placeholder="请输入手机号或用户名"
+                size="xl"
+                icon="i-lucide-user"
+                class="w-full"
+                autocomplete="username"
               />
-            </template>
-          </UInput>
-        </UFormField>
+            </UFormField>
 
-        <p class="login-hint">登录状态将保留，可随时退出登录</p>
+            <UFormField label="密码" name="password">
+              <UInput
+                v-model="loginForm.password"
+                :type="showPassword ? 'text' : 'password'"
+                placeholder="请输入密码"
+                size="xl"
+                icon="i-lucide-lock"
+                class="w-full"
+                autocomplete="current-password"
+                :ui="{ trailing: 'pe-1' }"
+              >
+                <template #trailing>
+                  <UButton
+                    color="neutral"
+                    variant="link"
+                    size="sm"
+                    :icon="showPassword ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+                    :aria-label="showPassword ? '隐藏密码' : '显示密码'"
+                    @click="showPassword = !showPassword"
+                  />
+                </template>
+              </UInput>
+            </UFormField>
 
-        <UButton
-          block
-          size="xl"
-          :loading="loading"
-          class="login-button"
-          @click="handleLogin"
-        >
-          {{ loading ? '登录中...' : '登 录' }}
-        </UButton>
+            <!-- 登录状态始终保留（语义不变），与忘记密码同一行分居两端 -->
+            <div class="login-row">
+              <span class="login-hint">登录状态将保留，可随时退出登录</span>
+              <!-- UX P2-4: 忘记密码提示 — prod 无自助 reset, 引导联系管理员 -->
+              <UPopover v-model:open="forgotOpen">
+                <a class="forgot-link" role="button" tabindex="0" @keyup.enter.stop="forgotOpen = !forgotOpen">忘记密码?</a>
+                <template #content>
+                  <div class="forgot-pop">
+                    <p class="forgot-pop-title">请联系您的工厂管理员</p>
+                    <p class="forgot-pop-text">
+                      由于账号权限与工厂绑定, 密码重置需通过管理员在"人事管理 → 账号管理"中操作.
+                      如您就是管理员, 请联系平台 superadmin.
+                    </p>
+                  </div>
+                </template>
+              </UPopover>
+            </div>
 
-        <!-- UX P2-4: 忘记密码提示 — prod 无自助 reset, 引导联系管理员 -->
-        <div class="forgot-tip">
-          <UPopover v-model:open="forgotOpen">
-            <a class="forgot-link" role="button" tabindex="0" @keyup.enter.stop="forgotOpen = !forgotOpen">忘记密码?</a>
-            <template #content>
-              <div class="forgot-pop">
-                <p class="forgot-pop-title">请联系您的工厂管理员</p>
-                <p class="forgot-pop-text">
-                  由于账号权限与工厂绑定, 密码重置需通过管理员在"人事管理 → 账号管理"中操作.
-                  如您就是管理员, 请联系平台 superadmin.
-                </p>
-              </div>
-            </template>
-          </UPopover>
+            <UButton
+              block
+              size="xl"
+              :loading="loading"
+              class="login-button"
+              @click="handleLogin"
+            >
+              {{ loading ? '登录中...' : '登 录' }}
+            </UButton>
+          </UForm>
         </div>
-      </UForm>
+      </div>
 
-      <!-- 底部信息 -->
       <div class="login-footer">
         <p>© 2026 白垩纪科技. All rights reserved.</p>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
@@ -162,48 +201,144 @@ async function handleLogin() {
 .login-page {
   min-height: 100vh;
   display: flex;
+  background: var(--cs-bg);
+}
+
+/* ---- 左侧品牌区 ---- */
+.brand-pane {
+  flex: 0 0 58%;
+  display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--cs-bg);
-  padding: var(--cs-space-5);
+  padding: 48px;
   box-sizing: border-box;
+  background: linear-gradient(160deg, var(--cs-primary-soft) 0%, var(--cs-bg) 70%);
 }
 
-.login-container {
+.brand-inner {
   width: 100%;
-  max-width: 400px;
+  max-width: 620px;
+}
+
+.brand-headline {
+  margin: 0 0 var(--cs-space-3);
+  font-size: 32px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: var(--cs-text);
+}
+
+.brand-sub {
+  margin: 0 0 36px;
+  color: var(--cs-muted);
+  font-size: var(--cs-font);
+}
+
+.highlight-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 24px 32px;
+}
+
+.highlight {
+  display: flex;
+  gap: var(--cs-space-3);
+  align-items: flex-start;
+}
+
+.highlight-icon {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--cs-radius-sm);
   background: var(--cs-surface);
+  color: var(--cs-primary);
   border: 1px solid var(--cs-border);
-  border-radius: var(--cs-radius-lg);
-  padding: 40px 36px 28px;
-  box-shadow: var(--cs-shadow);
+}
+
+.highlight-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.highlight-title {
+  font-weight: 600;
+  color: var(--cs-text);
+}
+
+.highlight-desc {
+  font-size: var(--cs-font-small);
+  color: var(--cs-muted);
+  line-height: 1.5;
+}
+
+.brand-art {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: 40px;
+}
+
+/* ---- 右侧登录面板 ---- */
+.form-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--cs-surface);
+  padding: 24px 40px 20px;
   box-sizing: border-box;
 }
 
-.login-header {
-  text-align: center;
-  margin-bottom: 28px;
+.form-top {
+  display: flex;
+  align-items: center;
+  gap: var(--cs-space-2);
+}
 
-  .login-logo {
-    width: 48px;
-    height: 48px;
-    object-fit: contain;
-    border-radius: 12px;
-    margin-bottom: var(--cs-space-4);
-  }
+.login-logo {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: 8px;
+}
 
-  .login-title {
-    font-size: var(--cs-type-title);
-    font-weight: 700;
-    color: var(--cs-text);
-    margin: 0 0 var(--cs-space-1);
-  }
+.form-brand {
+  font-weight: 600;
+  color: var(--cs-text);
+}
 
-  .login-subtitle {
-    font-size: var(--cs-font);
-    color: var(--cs-muted);
-    margin: 0;
-  }
+.form-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.form-box {
+  width: 100%;
+  max-width: 360px;
+}
+
+.login-subtitle {
+  margin: 0 0 var(--cs-space-2);
+  font-size: var(--cs-font);
+  color: var(--cs-primary);
+}
+
+.login-title {
+  margin: 0 0 28px;
+  font-size: var(--cs-type-title);
+  font-weight: 700;
+  color: var(--cs-text);
 }
 
 .login-form {
@@ -212,11 +347,16 @@ async function handleLogin() {
   gap: var(--cs-space-4);
 }
 
+.login-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cs-space-2);
+}
+
 .login-hint {
-  margin: 0;
   font-size: var(--cs-font-small);
   color: var(--cs-muted);
-  text-align: center;
 }
 
 .login-button {
@@ -224,17 +364,13 @@ async function handleLogin() {
   letter-spacing: 2px;
 }
 
-.forgot-tip {
-  text-align: center;
-}
-
 .forgot-link {
-  color: var(--cs-muted);
+  flex: none;
+  color: var(--cs-primary);
   font-size: var(--cs-font-small);
   cursor: pointer;
 
   &:hover {
-    color: var(--cs-primary);
     text-decoration: underline;
   }
 }
@@ -259,7 +395,6 @@ async function handleLogin() {
 }
 
 .login-footer {
-  margin-top: var(--cs-space-6);
   text-align: center;
 
   p {
@@ -269,12 +404,25 @@ async function handleLogin() {
   }
 }
 
-@media (max-width: 480px) {
-  .login-page {
-    padding: var(--cs-space-4);
+@media (max-width: 1100px) {
+  .brand-pane {
+    flex-basis: 50%;
+    padding: 32px;
   }
-  .login-container {
-    padding: 28px 20px 20px;
+  .brand-headline {
+    font-size: 26px;
+  }
+  .highlight-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .brand-pane {
+    display: none;
+  }
+  .form-pane {
+    padding: 20px 20px 16px;
   }
 }
 </style>
