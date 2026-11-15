@@ -3,7 +3,7 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import type { TableColumn } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
 import type { TableRow } from '@/types/api';
 

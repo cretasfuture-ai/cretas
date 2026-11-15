@@ -25,7 +25,7 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { TableColumn } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { useAuthStore } from '@/store/modules/auth';
 import { PROCESS_SECRET_LABEL, isProcessSecretRow, processSecretMessage } from '@/utils/processSecretField';
 import {

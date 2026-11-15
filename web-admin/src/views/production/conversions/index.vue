@@ -4,7 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import type { TableColumn } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import ConceptDisambiguationAlert from '@/components/common/ConceptDisambiguationAlert.vue';
 import type { TableRow } from '@/types/api';
 import {

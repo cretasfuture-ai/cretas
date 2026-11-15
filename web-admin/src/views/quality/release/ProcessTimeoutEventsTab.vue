@@ -7,7 +7,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { TableColumn } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import {
   PROCESS_TIME_START_LABELS,
   decideProcessTimeEvent,

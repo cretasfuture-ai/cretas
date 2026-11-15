@@ -6,7 +6,7 @@
  */
 import { ref, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import type { TableColumn } from '@nuxt/ui';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
