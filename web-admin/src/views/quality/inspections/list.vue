@@ -5,7 +5,10 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Plus, Search, Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
+import iconVision from '@/assets/quality/icon-vision.webp';
+import imgVision from '@/assets/quality/ai-visual-inspection.webp';
 import CanvasDynamicFields from '@/components/canvas/CanvasDynamicFields.vue';
 import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import type { TableRow } from '@/types/api';
@@ -41,6 +44,27 @@ function returnToTrace() {
     void router.push({ path: '/production/traceability', query: { batchNumber } });
   }
 }
+
+const RESULT_ITEMS = [
+  { label: '合格', value: 'PASS' },
+  { label: '不合格', value: 'FAIL' },
+  { label: '有条件放行', value: 'CONDITIONAL' },
+];
+const PAGE_SIZE_ITEMS = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, value: n }));
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const columns: TableColumn<TableRow>[] = [
+  { id: 'id', header: '质检编号' },
+  { accessorKey: 'batchNumber', header: '生产批次号', meta: { class: { td: 'max-w-44 truncate' } } },
+  { accessorKey: 'productName', header: '品名', meta: { class: { td: 'max-w-32 truncate' } } },
+  { accessorKey: 'notes', header: '备注', meta: { class: { td: 'max-w-36 truncate' } } },
+  { accessorKey: 'sampleSize', header: '抽样数', meta: C },
+  { id: 'inspector', header: '质检员', meta: C },
+  { id: 'result', header: '检测结果', meta: C },
+  { accessorKey: 'qualityGrade', header: '等级', meta: C },
+  { id: 'passRate', header: '抽检合格率', meta: C },
+  { accessorKey: 'inspectionDate', header: '检测日期' },
+  { id: 'actions', header: '操作', meta: { class: { td: 'whitespace-nowrap' } } },
+];
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -209,6 +233,10 @@ const detailData = ref<TableRow | null>(null);
 
 function isPassResult(result: unknown): boolean {
   return result === 'PASS' || result === 'PASSED';
+}
+
+function resultColor(result: unknown) {
+  return badgeColor(isPassResult(result) ? 'success' : (result === 'CONDITIONAL' ? 'warning' : 'danger'));
 }
 
 function getResultLabel(result: unknown): string {
@@ -455,87 +483,58 @@ function registerDefect(row: TableRow) {
 <template>
   <CanvasAwareWrapper module-code="quality_inspection">
   <div class="page-wrapper">
-    <el-alert v-if="contextError" :title="contextError" type="error" :closable="false" show-icon />
-    <el-alert v-else-if="scopedBatch" :title="`当前批次：${scopedBatch.batchNumber} · ${scopedBatch.productName || ''}`" type="info" :closable="false">
-      这里只显示本批次的质检记录。抽检结果不等同于生产良品率；出货后补录不能作为出货前放行证明。
-      <el-button link type="primary" @click="returnToTrace">返回批次追溯</el-button>
-    </el-alert>
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">质检记录管理</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
-          </div>
-          <div class="header-right">
-            <el-button v-if="canWrite" type="primary" :icon="Plus" :disabled="contextLoading || !!contextError" @click="handleCreate">新建质检</el-button>
-          </div>
-        </div>
+    <UAlert v-if="contextError" :title="contextError" color="error" variant="subtle" icon="i-lucide-circle-alert" class="mb-3" />
+    <UAlert v-else-if="scopedBatch" :title="`当前批次：${scopedBatch.batchNumber} · ${scopedBatch.productName || ''}`" color="info" variant="subtle" class="mb-3">
+      <template #description>
+        这里只显示本批次的质检记录。抽检结果不等同于生产良品率；出货后补录不能作为出货前放行证明。
+        <UButton color="primary" variant="link" size="xs" @click="returnToTrace">返回批次追溯</UButton>
       </template>
+    </UAlert>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <img :src="iconVision" alt="" class="head-icon" width="40" height="40">
+        <h2>质检记录管理</h2>
+        <span class="count">共 {{ pagination.total }} 条记录</span>
+        <span class="spacer" />
+        <UButton v-if="canWrite" icon="i-lucide-plus" :disabled="contextLoading || !!contextError" @click="handleCreate">新建质检</UButton>
+      </header>
 
-      <div class="search-bar">
-        <el-input
+      <div class="filters">
+        <UInput
           v-model="searchKeyword"
+          icon="i-lucide-search"
           placeholder="搜索质检编号/批次号"
-          :prefix-icon="Search"
-          clearable
-          style="width: 280px"
+          class="w-70"
           @keyup.enter="handleSearch"
         />
         <CsBatchNoSearch ref="batchNoSearchRef" label="批次号" :on-search="searchBatchNos" @clear="clearBatchNos" />
         <CsRelativeDate v-model="dateKey" @change="onDateChange" />
-        <el-select v-model="filterResult" placeholder="检测结果" clearable style="width: 150px">
-          <el-option label="合格" value="PASS" />
-          <el-option label="不合格" value="FAIL" />
-          <el-option label="有条件放行" value="CONDITIONAL" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <USelect v-model="filterResult" :items="RESULT_ITEMS" placeholder="检测结果" class="w-40" />
+        <UButton icon="i-lucide-search" @click="handleSearch">搜索</UButton>
+        <UButton color="neutral" variant="outline" icon="i-lucide-rotate-ccw" @click="handleRefresh">重置</UButton>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column label="质检编号" width="160">
-          <template #default="{ row }">
-            {{ row.id ? row.id.substring(0, 8).toUpperCase() : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="batchNumber" label="生产批次号" min-width="170" show-overflow-tooltip />
-        <el-table-column prop="productName" label="品名" min-width="150" show-overflow-tooltip />
-        <el-table-column label="工序" width="140"><template #default>未提供工序关联</template></el-table-column>
-        <el-table-column prop="notes" label="备注" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="sampleSize" label="抽样数" width="90" align="center" />
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty><div class="cs-empty-art"><img :src="imgVision" alt="" width="280" class="art-main"><span>暂无数据</span></div></template>
+        <template #id-cell="{ row }">{{ row.original.id ? String(row.original.id).substring(0, 8).toUpperCase() : '-' }}</template>
         <!--
           原来这一列叫「质检员ID」且直接显示数字主键 —— 给用户看数据库标识。
           后端已补 inspectorName(解析不出时为 null, 不编造假名字), 这里优先显示姓名,
           回落到 ID 时带上「#」前缀, 让人一眼看出这是编号不是名字。
         -->
-        <el-table-column label="质检员" width="120" align="center">
-          <template #default="{ row }">
-            {{ row.inspectorName || (row.inspectorId != null ? `#${row.inspectorId}` : '-') }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="result" label="检测结果" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="isPassResult(row.result) ? 'success' : (row.result === 'CONDITIONAL' ? 'warning' : 'danger')" size="small">
-              {{ getResultLabel(row.result) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="qualityGrade" label="等级" width="70" align="center" />
-        <el-table-column label="抽检合格率" width="110" align="center">
-          <template #default="{ row }">
-            {{ row.passRate != null ? row.passRate.toFixed(1) + '%' : '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="inspectionDate" label="检测日期" width="130" />
-        <el-table-column label="操作" width="200" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" @click="showDetail(row)">查看详情</el-button>
-            <el-button v-if="canWrite && (['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.result)) || canReviewPassingReinspection(scopedBatch, row))" type="primary" link @click="reviewException(row)">{{ row.result === 'PASS' ? '复检放行复核' : '异常复核' }}</el-button>
-            <el-button v-if="canWrite && row.id" type="warning" link @click="registerDefect(row)">登记不良</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <template #inspector-cell="{ row: { original: row } }">
+          {{ row.inspectorName || (row.inspectorId != null ? `#${row.inspectorId}` : '-') }}
+        </template>
+        <template #result-cell="{ row }">
+          <UBadge :color="resultColor(row.original.result)" variant="soft">{{ getResultLabel(row.original.result) }}</UBadge>
+        </template>
+        <template #passRate-cell="{ row }">{{ row.original.passRate != null ? Number(row.original.passRate).toFixed(1) + '%' : '-' }}</template>
+        <template #actions-cell="{ row }">
+          <UButton color="primary" variant="link" size="xs" @click="showDetail(row.original)">查看详情</UButton>
+          <UButton v-if="canWrite && (['FAIL', 'FAILED', 'CONDITIONAL'].includes(String(row.original.result)) || canReviewPassingReinspection(scopedBatch, row.original))" color="primary" variant="link" size="xs" @click="reviewException(row.original)">{{ row.original.result === 'PASS' ? '复检放行复核' : '异常复核' }}</UButton>
+          <UButton v-if="canWrite && row.original.id" color="warning" variant="link" size="xs" @click="registerDefect(row.original)">登记不良</UButton>
+        </template>
+      </UTable>
 
       <TableFooter v-if="!hasBatchContext"
         :stats="footerSummary?.stats ?? []"
@@ -544,18 +543,11 @@ function registerDefect(row: TableRow) {
         @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前质检${formatSummaryForAI(footerSummary)}`, duration: 8000, showClose: true })"
       />
 
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
+      <div class="pager">
+        <USelect :model-value="pagination.size" :items="PAGE_SIZE_ITEMS" class="w-32" @update:model-value="(v: number) => handleSizeChange(Number(v))" />
+        <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
       </div>
-    </el-card>
+    </section>
 
     <!-- 新建质检对话框 -->
     <el-dialog v-model="dialogVisible" title="新建质检记录" width="560px" :close-on-click-modal="false">
@@ -650,96 +642,52 @@ function registerDefect(row: TableRow) {
     </el-dialog>
 
     <!-- 详情抽屉 -->
-    <el-drawer v-model="detailVisible" title="质检记录详情" size="420px">
-      <el-descriptions :column="1" border v-if="detailData">
-        <el-descriptions-item label="质检编号">{{ detailData.id ? detailData.id.substring(0, 8).toUpperCase() : '-' }}</el-descriptions-item>
-        <el-descriptions-item label="生产批次号">{{ detailData.batchNumber || '未提供' }}</el-descriptions-item>
-        <el-descriptions-item label="品名">{{ detailData.productName || '未提供' }}</el-descriptions-item>
-        <el-descriptions-item label="工序">未提供工序关联</el-descriptions-item>
-        <el-descriptions-item label="备注">{{ detailData.notes || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="抽样数">{{ detailData.sampleSize ?? '-' }}</el-descriptions-item>
-        <el-descriptions-item label="质检员">
-          {{ detailData.inspectorName || (detailData.inspectorId != null ? `#${detailData.inspectorId}` : '-') }}
-        </el-descriptions-item>
-        <el-descriptions-item label="检测结果">
-          <el-tag :type="isPassResult(detailData.result) ? 'success' : (detailData.result === 'CONDITIONAL' ? 'warning' : 'danger')" size="small">
-            {{ getResultLabel(detailData.result) }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="等级">{{ detailData.qualityGrade || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="抽检合格率">{{ detailData.passRate != null ? detailData.passRate.toFixed(1) + '%' : '-' }}</el-descriptions-item>
-        <el-descriptions-item label="检测日期">{{ detailData.inspectionDate || '-' }}</el-descriptions-item>
-      </el-descriptions>
-    </el-drawer>
+    <USlideover
+      v-model:open="detailVisible"
+      side="right"
+      title="质检记录详情"
+      description="质检记录详情（只读）"
+      :ui="{ content: 'cs-insp-slide', description: 'sr-only' }"
+    >
+      <template #body>
+        <dl v-if="detailData" class="detail">
+          <div><dt>质检编号</dt><dd>{{ detailData.id ? String(detailData.id).substring(0, 8).toUpperCase() : '-' }}</dd></div>
+          <div><dt>生产批次号</dt><dd>{{ detailData.batchNumber || '未提供' }}</dd></div>
+          <div><dt>品名</dt><dd>{{ detailData.productName || '未提供' }}</dd></div>
+          <div><dt>工序</dt><dd>未提供工序关联</dd></div>
+          <div><dt>备注</dt><dd>{{ detailData.notes || '-' }}</dd></div>
+          <div><dt>抽样数</dt><dd>{{ detailData.sampleSize ?? '-' }}</dd></div>
+          <div>
+            <dt>质检员</dt>
+            <dd>{{ detailData.inspectorName || (detailData.inspectorId != null ? `#${detailData.inspectorId}` : '-') }}</dd>
+          </div>
+          <div>
+            <dt>检测结果</dt>
+            <dd><UBadge :color="resultColor(detailData.result)" variant="soft">{{ getResultLabel(detailData.result) }}</UBadge></dd>
+          </div>
+          <div><dt>等级</dt><dd>{{ detailData.qualityGrade || '-' }}</dd></div>
+          <div><dt>抽检合格率</dt><dd>{{ detailData.passRate != null ? Number(detailData.passRate).toFixed(1) + '%' : '-' }}</dd></div>
+          <div><dt>检测日期</dt><dd>{{ detailData.inspectionDate || '-' }}</dd></div>
+        </dl>
+      </template>
+    </USlideover>
   </div>
   </CanvasAwareWrapper>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-color-primary, #303133);
-    }
-
-    .data-count {
-      font-size: 13px;
-      color: var(--text-color-secondary, #909399);
-    }
-  }
-}
-
-.search-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.el-table {
-  flex: 1;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
-  margin-top: 16px;
-}
+<style scoped>
+.page-wrapper { padding: var(--cs-space-4); width: 100%; }
+.head-icon { flex: none; object-fit: contain; }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); font-weight: 400; }
+.spacer { flex: 1; }
+.filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
+.detail { display: grid; gap: var(--cs-space-3); margin: 0; }
+.detail > div { display: grid; grid-template-columns: 96px 1fr; gap: var(--cs-space-3); padding-bottom: var(--cs-space-2); border-bottom: 1px solid var(--cs-border); }
+.detail dt { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.detail dd { margin: 0; color: var(--cs-text); }
+</style>
+<style>
+.cs-insp-slide { width: 100%; max-width: min(460px, 92vw) !important; }
 </style>

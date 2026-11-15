@@ -15,7 +15,9 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, Plus } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
+import iconDefects from '@/assets/quality/icon-defects.webp';
 import {
   listDefects,
   recordDefect,
@@ -40,8 +42,8 @@ const route = useRoute();
 const loading = ref(false);
 const rows = ref<QualityDefect[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
-const filterStatus = ref<DefectStatus | ''>('');
-const filterType = ref<DefectType | ''>('');
+const filterStatus = ref<DefectStatus | undefined>(undefined);
+const filterType = ref<DefectType | undefined>(undefined);
 
 const showRecordDialog = ref(false);
 const showActionDialog = ref(false);
@@ -84,6 +86,26 @@ const TYPE_OPTIONS: DefectType[] = [
   'PACKAGING', 'FOREIGN_OBJECT', 'SENSORY', 'SHELF_LIFE', 'OTHER',
 ];
 
+const STATUS_ITEMS = STATUS_OPTIONS.map((s) => ({ label: DEFECT_STATUS_LABELS[s], value: s }));
+const TYPE_ITEMS = TYPE_OPTIONS.map((t) => ({ label: DEFECT_TYPE_LABELS[t], value: t }));
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<QualityDefect>[] = [
+  { id: 'defectType', header: '缺陷类型' },
+  { accessorKey: 'quantity', header: '数量', meta: R },
+  { accessorKey: 'qualityInspectionId', header: '关联质检 ID' },
+  { accessorKey: 'cause', header: '原因' },
+  { id: 'handlingAction', header: '处置动作' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'createdAt', header: '登记时间' },
+  { id: 'actions', header: '操作' },
+];
+
+function clearFilters() {
+  filterStatus.value = undefined;
+  filterType.value = undefined;
+  handleFilterChange();
+}
+
 async function load() {
   if (!factoryId.value) {
     ElMessage.warning('未登录或缺少工厂上下文');
@@ -106,7 +128,7 @@ async function load() {
   }
 }
 
-function statusTagType(status: DefectStatus): string {
+function statusTagType(status: DefectStatus): 'success' | 'warning' | 'danger' {
   if (status === 'CLOSED') return 'success';
   if (status === 'IN_PROGRESS') return 'warning';
   return 'danger';
@@ -335,98 +357,44 @@ onMounted(load);
 
 <template>
   <div class="defect-list">
-    <div class="page-header">
-      <div>
-        <h2 class="title">工序质检不良</h2>
-        <p class="subtitle">登记 → 分派 → 闭环 完整流程</p>
+    <div class="cs-page-head">
+      <div class="head-main">
+        <img :src="iconDefects" alt="" class="head-icon" width="56" height="56">
+        <div>
+          <h2>工序质检不良</h2>
+          <p>登记 → 分派 → 闭环 完整流程</p>
+        </div>
       </div>
-      <div class="actions">
-        <el-button :icon="Refresh" :loading="loading" @click="load">刷新</el-button>
-        <el-button type="primary" :icon="Plus" @click="openRecordDialog()">登记不良</el-button>
+      <div class="head-actions">
+        <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" @click="load">刷新</UButton>
+        <UButton icon="i-lucide-plus" @click="openRecordDialog()">登记不良</UButton>
       </div>
     </div>
 
-    <div class="filter-row">
-      <el-select
-        v-model="filterStatus"
-        placeholder="状态"
-        clearable
-        style="width: 160px"
-        @change="handleFilterChange"
-      >
-        <el-option
-          v-for="s in STATUS_OPTIONS"
-          :key="s"
-          :label="DEFECT_STATUS_LABELS[s]"
-          :value="s"
-        />
-      </el-select>
-      <el-select
-        v-model="filterType"
-        placeholder="缺陷类型"
-        clearable
-        style="width: 200px"
-        @change="handleFilterChange"
-      >
-        <el-option
-          v-for="t in TYPE_OPTIONS"
-          :key="t"
-          :label="DEFECT_TYPE_LABELS[t]"
-          :value="t"
-        />
-      </el-select>
-    </div>
-
-    <el-table v-loading="loading" :data="rows" stripe empty-text="暂无不良记录" style="width: 100%">
-      <el-table-column label="缺陷类型" min-width="120">
-        <template #default="{ row }">
-          <el-tag>{{ DEFECT_TYPE_LABELS[String(row.defectType) as DefectType] || row.defectType }}</el-tag>
+    <section class="cs-card">
+      <div class="filters">
+        <USelect v-model="filterStatus" :items="STATUS_ITEMS" placeholder="状态" class="w-40" @update:model-value="handleFilterChange" />
+        <USelect v-model="filterType" :items="TYPE_ITEMS" placeholder="缺陷类型" class="w-48" @update:model-value="handleFilterChange" />
+        <UButton v-if="filterStatus || filterType" color="neutral" variant="link" size="xs" @click="clearFilters">清除筛选</UButton>
+      </div>
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty><div class="cs-empty-art"><img :src="iconDefects" alt="" width="96"><span>暂无不良记录</span></div></template>
+        <template #defectType-cell="{ row }">
+          <UBadge color="primary" variant="soft">{{ DEFECT_TYPE_LABELS[String(row.original.defectType) as DefectType] || row.original.defectType }}</UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="quantity" label="数量" min-width="100" align="right" />
-      <el-table-column prop="qualityInspectionId" label="关联质检 ID" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="cause" label="原因" min-width="180" show-overflow-tooltip />
-      <el-table-column prop="handlingAction" label="处置动作" min-width="160" show-overflow-tooltip>
-        <template #default="{ row }">{{ row.handlingAction || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="状态" width="110" align="center">
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row.status)">{{ DEFECT_STATUS_LABELS[String(row.status) as DefectStatus] || row.status }}</el-tag>
+        <template #handlingAction-cell="{ row }">{{ row.original.handlingAction || '-' }}</template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusTagType(row.original.status))" variant="soft">{{ DEFECT_STATUS_LABELS[String(row.original.status) as DefectStatus] || row.original.status }}</UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="createdAt" label="登记时间" min-width="160" />
-      <el-table-column label="操作" width="180" align="center" fixed="right">
-        <template #default="{ row }">
-          <el-button
-            v-if="row.status === 'OPEN'"
-            link
-            type="primary"
-            @click="openAssignDialog(row)"
-          >
-            分派
-          </el-button>
-          <el-button
-            v-if="row.status !== 'CLOSED'"
-            link
-            type="success"
-            @click="openCloseDialog(row)"
-          >
-            闭环
-          </el-button>
+        <template #actions-cell="{ row }">
+          <UButton v-if="row.original.status === 'OPEN'" color="primary" variant="link" size="xs" @click="openAssignDialog(row.original)">分派</UButton>
+          <UButton v-if="row.original.status !== 'CLOSED'" color="success" variant="link" size="xs" @click="openCloseDialog(row.original)">闭环</UButton>
         </template>
-      </el-table-column>
-    </el-table>
-
-    <el-pagination
-      v-if="pagination.total > 0"
-      class="pagination"
-      :current-page="pagination.page"
-      :page-size="pagination.size"
-      :total="pagination.total"
-      layout="total, prev, pager, next, jumper"
-      background
-      @current-change="handlePageChange"
-    />
+      </UTable>
+      <div v-if="pagination.total > 0" class="pager">
+        <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
+      </div>
+    </section>
 
     <!-- 登记不良 dialog -->
     <el-dialog v-model="showRecordDialog" title="登记质检不良" width="500px">
@@ -553,33 +521,10 @@ onMounted(load);
 </template>
 
 <style scoped>
-.defect-list {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  margin-bottom: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0 0 4px;
-  color: #303133;
-}
-.page-header .subtitle {
-  font-size: 13px;
-  color: #909399;
-  margin: 0;
-}
-.filter-row {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.pagination {
-  margin-top: 16px;
-  justify-content: flex-end;
-}
+.defect-list { padding: var(--cs-space-4); }
+.head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
+.head-icon { flex: none; object-fit: contain; }
+.head-actions { display: flex; gap: var(--cs-space-2); }
+.filters { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }
 </style>
