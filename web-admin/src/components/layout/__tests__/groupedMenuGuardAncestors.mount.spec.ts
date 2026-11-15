@@ -43,6 +43,7 @@ function identity(role: string, onlyModules?: string[], factoryType = 'FACTORY',
     ? Object.fromEntries(Object.keys(p.currentPermissions).map((m) => [m, onlyModules.includes(m) ? 'rw' : '-'])) as typeof p.currentPermissions
     : { ...p.currentPermissions };
   p.isDbLoaded = true;
+  p.applyUserModuleAccess([]);
   permissionApi.getCurrentModulePermissions.mockResolvedValue({ ...p.currentPermissions });
 }
 
@@ -95,6 +96,17 @@ describe('批发侧栏与顶栏同源、换租户不串布局（真挂载）', (
     await flushPromises();
     return { wrapper, router };
   }
+
+  it('在当前操作人的L4权限未就绪前不发布旧菜单，加载后再发布', async () => {
+    identity('factory_super_admin');
+    usePermissionStore().isUserModuleAccessLoaded = false;
+    const { wrapper } = await chrome();
+    expect(useNavigationVisibilityStore().snapshot).toBeNull();
+    usePermissionStore().applyUserModuleAccess([]);
+    await flushPromises();
+    expect(useNavigationVisibilityStore().snapshot).toMatchObject({ factoryId: 'P2-UNIT', actorId: '87' });
+    wrapper.unmount();
+  });
 
   it('批发面包屑跟随销售/采购归属，商品仍在基础资料，常用星标可用', async () => {
     identity('factory_super_admin');

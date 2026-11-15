@@ -20,6 +20,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
+import { sumStockValue } from './stockValueSum';
 import FinishedGoodsSummary from './FinishedGoodsSummary.vue';
 const inventoryKind = ref('materials');
 
@@ -106,8 +107,9 @@ const filteredData = computed<MaterialStockSummaryRow[]>(() => {
 const totalMaterialKinds = computed(() => filteredData.value.length);
 const totalValueSum = computed(() => {
   if (!canViewPrice.value) return null;
-  return filteredData.value.reduce((acc, r) => acc + (Number(r.totalValue) || 0), 0);
+  return sumStockValue(filteredData.value);
 });
+const totalValueIncomplete = computed(() => canViewPrice.value && totalValueSum.value == null && filteredData.value.length > 0);
 
 function handleRefresh() {
   searchKeyword.value = '';
@@ -175,7 +177,8 @@ onMounted(() => {
         </div>
         <div class="summary-item" v-if="canViewPrice">
           <div class="summary-label">库存总价值</div>
-          <div class="summary-value strong-green">{{ formatAmount(totalValueSum) }}</div>
+          <div class="summary-value strong-green">{{ totalValueSum == null ? '-' : formatAmount(totalValueSum) }}</div>
+          <div v-if="totalValueIncomplete" class="summary-label">含缺单价物料，无法合计</div>
         </div>
       </div>
     </el-card>

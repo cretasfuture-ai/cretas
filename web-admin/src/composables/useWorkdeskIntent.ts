@@ -4,6 +4,7 @@ import request from '@/api/request';
 export interface WorkdeskIdentity {
   factoryId: string;
   actorId: string;
+  role?: string;
 }
 
 export interface WorkdeskIntentResponse {
@@ -29,24 +30,39 @@ export function useWorkdeskIntent(identity: () => WorkdeskIdentity) {
     sessionId.value = '';
     clarificationQuestions.value = [];
   }
-  const scope = () => `${identity().factoryId}:${identity().actorId}`;
+  const scope = () => `${identity().factoryId}:${identity().actorId}:${identity().role || ''}`;
   watch(scope, reset, { flush: 'sync' });
 
-  async function execute(userInput: string, context?: Record<string, unknown>): Promise<WorkdeskIntentResponse> {
+  async function execute(userInput: string, context?: Record<string, unknown>, options?: { intentCode?: string; parameters?: Record<string, unknown> }): Promise<WorkdeskIntentResponse> {
     const current = identity();
     if (!current.factoryId || !current.actorId) throw new Error('账号未绑定企业，请重新登录');
     if (!userInput.trim()) throw new Error('请先填写要查询的问题');
     const requestedScope = scope();
     const requestedGeneration = generation;
-    sessionId.value ||= crypto.randomUUID();
-    const response = await request.post<WorkdeskIntentResponse>(
-      `/${current.factoryId}/ai-intents/execute`,
-      { userInput, sessionId: sessionId.value, mode: 'READ', ...(context ? { context } : {}) },
-    );
-    if (requestedScope !== scope() || requestedGeneration !== generation) {
-      throw new Error('企业或对话已切换，请重新查询');
+    let result: WorkdeskIntentResponse | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      sessionId.value ||= crypto.randomUUID();
+      const response = await request.post<WorkdeskIntentResponse>(
+        `/${current.factoryId}/ai-intents/execute`,
+        { userInput, sessionId: sessionId.value, mode: 'READ', ...(context ? { context } : {}),
+          ...(options?.intentCode ? { intentCode: options.intentCode } : {}),
+          ...(options?.parameters ? { parameters: options.parameters } : {}) },
+      );
+      if (requestedScope !== scope() || requestedGeneration !== generation) {
+        throw new Error('企业或对话已切换，请重新查询');
+      }
+      result = (response as { data: WorkdeskIntentResponse }).data;
+      if (!result) throw new Error('没有收到查询结果，请重试');
+      const closedSessionNotice = result.status === 'CONVERSATION_CONTINUE'
+        && result.metadata?.status === 'COMPLETED'
+        && (result.formattedText || result.message) === '对话已完成';
+      if (!closedSessionNotice) break;
+      // This is the previous clarification session's terminal notice, not an
+      // answer to this question. Re-recognize the unchanged question once in READ.
+      sessionId.value = '';
+      clarificationQuestions.value = [];
+      if (attempt === 1) throw new Error('会话已结束，未返回本次问题的回答，请重新发起对话');
     }
-    const result = (response as { data: WorkdeskIntentResponse }).data;
     if (!result) throw new Error('没有收到查询结果，请重试');
     const returnedSession = result.sessionId || result.metadata?.sessionId;
     if (typeof returnedSession === 'string' && returnedSession) sessionId.value = returnedSession;

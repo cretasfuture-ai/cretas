@@ -22,6 +22,7 @@ const navigationVisibility = useNavigationVisibilityStore();
 const currentFactoryMenu = computed(() => {
   const snapshot = navigationVisibility.snapshot;
   const identityMatches = navigationVisibility.status === 'ready'
+    && snapshot?.actorId === String(authStore.user?.id || '')
     && snapshot?.factoryId === (factoryView.factoryId || authStore.factoryId)
     && snapshot?.role === authStore.currentRole
     && snapshot?.isPlatform === authStore.isPlatform;

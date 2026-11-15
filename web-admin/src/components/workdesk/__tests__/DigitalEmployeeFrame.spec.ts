@@ -5,9 +5,15 @@ import DigitalEmployeeFrame from '../DigitalEmployeeFrame.vue';
 
 describe('embedded role workdesks', () => {
   it.each([
-    ['sales', '销售数字员工工作台', 'clerk', '/sales/orders'],
-    ['purchase', '采购数字员工工作台', 'clerk', '/procurement/orders'],
-    ['inventory', '库存数字员工工作台', 'keeper', '/warehouse/materials'],
+    ['sales', '销售数字专员工作台', 'clerk', '/sales/orders'],
+    ['purchase', '采购数字专员工作台', 'clerk', '/procurement/orders'],
+    ['inventory', '库存数字专员工作台', 'keeper', '/warehouse/materials'],
+    ['finance', '财务数字专员工作台', 'accountant', '/finance/ar-ap'],
+    ['quality-manager', '质量追溯数字专员工作台', 'inspector', '/quality/recalls'],
+    ['production', '生产数字专员工作台', 'planner', '/production/batches'],
+    ['quality-chief', '质检数字专员工作台', 'inspector', '/quality/inspections'],
+    ['ai-value', 'AI价值数字专员工作台', 'clerk', '/dashboard'],
+    ['logistics', '排线数字专员工作台', 'planner', '/scheduling/logistics/records'],
   ] as const)('renders %s using the updated Nuxt UI employee frame and a real business route', async (role, title, avatar, path) => {
     const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/:pathMatch(.*)*', component: { template: '<div />' } }] });
     await router.push('/');
@@ -29,7 +35,7 @@ describe('embedded role workdesks', () => {
     expect(wrapper.text()).not.toContain('已办成');
     wrapper.unmount();
   });
-  it('leaves default tenants on the original UI', () => {
+  it('honors an explicitly disabled frame for embedded legacy consumers', () => {
     const wrapper = mount(DigitalEmployeeFrame, { props: { role: 'sales', busy: false, error: '', factoryId: 'F006' }, slots: { default: '原工作台' } });
     expect(wrapper.text()).toBe('原工作台');
     expect(wrapper.find('img').exists()).toBe(false);
