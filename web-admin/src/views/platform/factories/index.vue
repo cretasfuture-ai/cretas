@@ -15,6 +15,7 @@ import {
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import FactoryAccessPanel from '@/components/FactoryAccessPanel.vue';
 import FactorySecrecyPanel from '@/components/FactorySecrecyPanel.vue';
+import FactoryIntegrationsPanel from '@/components/FactoryIntegrationsPanel.vue';
 
 const router = useRouter();
 const factoryView = usePlatformFactoryContextStore();
@@ -27,7 +28,7 @@ const savingModule = ref<string | null>(null);
 let menuLoadSequence = 0;
 const search = ref('');
 const errorMessage = ref('');
-const activeTab = ref<'activation' | 'roles' | 'employees' | 'secrecy' | 'menu'>('menu');
+const activeTab = ref<'activation' | 'roles' | 'employees' | 'secrecy' | 'integrations' | 'menu'>('menu');
 const accessSaving = ref(false);
 
 const filteredFactories = computed(() => {
@@ -184,6 +185,9 @@ onMounted(() => { void loadFactories(); });
           </el-tab-pane>
           <el-tab-pane label="保密设置" name="secrecy" :disabled="accessSaving">
             <FactorySecrecyPanel v-if="activeTab === 'secrecy'" :factory-id="selectedFactoryId" @writing-change="accessSaving = $event" />
+          </el-tab-pane>
+          <el-tab-pane label="外部软件" name="integrations" :disabled="accessSaving">
+            <FactoryIntegrationsPanel v-if="activeTab === 'integrations'" :factory-id="selectedFactoryId" @writing-change="accessSaving = $event" />
           </el-tab-pane>
           <el-tab-pane label="菜单显示" name="menu" :disabled="accessSaving">
             <el-skeleton v-if="loadingConfig" :rows="8" animated />

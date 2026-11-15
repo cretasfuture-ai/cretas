@@ -120,6 +120,9 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/crew': [{ path: '/crew', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
   '/crew/ledger': [{ path: '/crew/ledger', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
   '/crew/settings': [{ path: '/crew/settings', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
+  // P10：「数据与分析」末尾「外部软件对照」（容器纯展示不带判据），与后端 production:read 同判据，不加 roles；
+  // 没有外部授权的工厂由 AppSidebar 按 feature-config integrations 行隐藏（不在本闸）。
+  '/external-software': [{ path: '/external-software', module: 'production' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 
