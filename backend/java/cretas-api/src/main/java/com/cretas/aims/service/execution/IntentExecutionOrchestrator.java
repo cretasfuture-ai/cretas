@@ -2705,7 +2705,7 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
-        String msg = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+        String msg = "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())

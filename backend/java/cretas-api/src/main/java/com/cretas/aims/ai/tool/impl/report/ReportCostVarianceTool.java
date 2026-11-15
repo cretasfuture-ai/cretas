@@ -115,7 +115,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
-        String productName = ReportToolSchemas.productKeyword(getString(params, "productName"));
+        String productName = ReportToolSchemas.productKeyword(productTypeRepository, factoryId, getString(params, "productName"));
         // 产品 ID 可能是大模型从原话里抽出来的 (可选参数抽取): 必须是本厂目录里真实存在的 ID; 不是 (比如把产品名填进了 ID) 就当产品名再解析
         if (productTypeId != null && productTypeRepository != null) {
             final String candidateId = productTypeId;
@@ -235,6 +235,12 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
             }
             sum.append("回料差 = 从别的计划回投的回料按回料池单位成本加、本计划产出转给别人的回料按同一单价减 (配方不含回料时标准为 0); 本计划自产自用是内部转移不另计; 主料用量差算不出时回料差无法比较。");
             if (costVarianceData.getProcessSecretNote() != null) sum.append(costVarianceData.getProcessSecretNote());
+            // 保密兜底命中 (调用者对保密产品无权、数据没带说明): summary 也只给口径和计划数, 不写任何金额 (与 message 一致)
+            if (totalWithheld(factoryId, productTypeId, costVarianceData)) {
+                sum = new StringBuilder(CostVarianceReportDTO.STANDARD_COST_BASIS).append("。")
+                        .append(startDate).append(" ~ ").append(endDate).append(" 可比计划 ")
+                        .append(costVarianceData.getComparedPlanCount()).append(" 个；成本金额含工艺保密产品，不提供给 AI。");
+            }
             result.put("summary", sum.toString());
             result.put("message", humanMessage(costVarianceData, startDate, endDate,
                     totalWithheld(factoryId, productTypeId, costVarianceData)));

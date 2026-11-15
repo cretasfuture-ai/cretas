@@ -114,7 +114,8 @@ public class ToolRbacGuard {
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {
-        String role = context != null ? String.valueOf(context.getOrDefault("userRole", "未知")) : "未知";
+        String role = com.cretas.aims.ai.tool.RoleDisplay.of(
+                context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "");
         String need = permissionCodes == null || permissionCodes.length == 0 ? ""
                 : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
                         .distinct().collect(java.util.stream.Collectors.joining("、")) + "（拥有其中任一项的角色可以查看）。";
@@ -142,7 +143,10 @@ public class ToolRbacGuard {
 
     static String permissionLabel(String code) {
         String mapped = PERMISSION_LABELS.get(code);
-        return mapped != null ? mapped : "对应模块的查看权限";
+        if (mapped != null) return mapped;
+        // 未登记的码: 写权限不能说成「查看权限」
+        return code != null && (code.endsWith(":read_write") || code.endsWith(":write") || code.contains("write"))
+                ? "对应模块的操作权限" : "对应模块的查看权限";
     }
 
     private User loadUser(Map<String, Object> context) {

@@ -93,7 +93,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
+        String keyword = ReportToolSchemas.productKeyword(null, factoryId, getString(params, "productName"));
         boolean lowestFirst = !"highest".equalsIgnoreCase(getString(params, "order", "lowest"));
         int limit = DEFAULT_LIMIT;
         Object limitRaw = params.get("limit");

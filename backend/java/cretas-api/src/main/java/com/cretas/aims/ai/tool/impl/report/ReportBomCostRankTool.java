@@ -69,7 +69,7 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
-        String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
+        String keyword = ReportToolSchemas.productKeyword(productTypeRepository, factoryId, getString(params, "productName"));
         boolean highestFirst = !"lowest".equalsIgnoreCase(getString(params, "order", "highest"));
         int limit = DEFAULT_LIMIT;
         Object limitRaw = params.get("limit");

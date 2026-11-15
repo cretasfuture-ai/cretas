@@ -159,14 +159,31 @@ class AiBiDemoRerunContractTest {
 
     // R-M1: 组合句里前半是个人工资, 后半有汇总词 —— 整句有汇总词不能放行整句 (子句级判断)
     @ParameterizedTest
-    @ValueSource(strings = {"每个工人的工资多少，本月人工成本多少", "本月人工成本多少，另外每位员工的工资是多少", "工资策略是什么以及每个员工的薪资"})
+    @ValueSource(strings = {"每个工人的工资多少，本月人工成本多少", "本月人工成本多少，另外每位员工的工资是多少", "工资策略是什么以及每个员工的薪资",
+            // 复审 R-M1: 「怎么算」不能豁免逐人 / 问数额的句子; 子句要能按空格 / 和 / 及 / 冒号 / 斜杠 / 然后切开
+            "每个工人的工资怎么算出来是多少", "每个员工的提成怎么算的，各拿了多少", "每个工人的工资多少 本月人工成本多少",
+            "每个工人的工资和本月人工成本", "每个工人的工资及人工成本", "每个工人的工资/本月人工成本", "每个工人的工资：多少 然后本月人工成本",
+            "每位员工的工资汇总", "每个员工的工资总额是多少"})
     void compositeQuestionWithAPersonalPayClauseIsRefused(String text) {
         assertTrue(PersonalPayRefusalGuard.refuses(text), text);
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"工人工资怎么算", "员工奖金怎么算", "本月人工成本多少，工资策略是什么", "员工工资计算规则"})
+    @ValueSource(strings = {"工人工资怎么算", "员工奖金怎么算", "本月人工成本多少，工资策略是什么", "员工工资计算规则", "员工工资总额是多少"})
     void rulesAndAggregatesAreStillNotRefused(String text) {
         assertFalse(PersonalPayRefusalGuard.refuses(text), text);
+    }
+
+    // 复审 R-M5: 拒答文案不露角色码 / 工具名 / 权限码; 写权限不说成「查看权限」
+    @Test
+    void denialShowsChineseRoleNames_andWritePermissionIsNotCalledViewing() {
+        assertFalse(RoleDisplay.of("finance_manager").contains("finance_manager"));
+        assertEquals("相应角色", RoleDisplay.of("no_such_role"));
+        String list = RoleDisplay.listOf("[factory_super_admin, no_such_role]");
+        assertFalse(list.contains("factory_super_admin") || list.contains("["), list);
+        ToolRbacGuard guard = new ToolRbacGuard();
+        String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "x_tool", "quality:read_write");
+        assertFalse(msg.contains("finance_manager") || msg.contains("quality:read_write") || msg.contains("x_tool"), msg);
+        assertTrue(msg.contains("对应模块的操作权限") && !msg.contains("查看权限"), msg);
     }
 }

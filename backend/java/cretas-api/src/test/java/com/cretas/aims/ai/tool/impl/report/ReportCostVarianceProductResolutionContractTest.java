@@ -142,8 +142,12 @@ class ReportCostVarianceProductResolutionContractTest {
         String msg = String.valueOf(run(Map.of()).get("message"));
         assertFalse(msg.contains("200426.82") || msg.contains("18.00") || msg.contains("16.52"), msg);
         assertTrue(msg.contains("不提供给 AI"), msg);
+        // 复审 R-M3: 同一响应的 summary 也不写金额
+        String summary = String.valueOf(run(Map.of()).get("summary"));
+        assertFalse(summary.contains("16.52") || summary.contains("1.48") || summary.contains("8.96"), summary);
         // 阴性对照: 数据带了保密说明 (已按调用者裁剪) 时照写
         d.setProcessSecretNote("（不含 1 个保密产品）");
         assertTrue(String.valueOf(run(Map.of()).get("message")).contains("¥200426.82"));
+        assertTrue(String.valueOf(run(Map.of()).get("summary")).contains("16.52"));
     }
 }

@@ -1158,7 +1158,7 @@ public class SseStreamingService {
         } else if (!(SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
                 ? aiIntentService.hasPermission(factoryId, intent.getIntentCode(), userRole)
                 : aiIntentService.hasPermission(intent.getIntentCode(), userRole))) {
-            return "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+            return "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         }
         return null;
     }

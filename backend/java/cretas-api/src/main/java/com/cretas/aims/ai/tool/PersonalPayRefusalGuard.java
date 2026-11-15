@@ -19,19 +19,28 @@ public final class PersonalPayRefusalGuard {
     private static final Pattern STAFF_PAY = Pattern.compile(
             "(工人|员工|职工|工友|师傅|操作员|操作工|人员|大家|每个人|每人|每位|每名|各人|所有人)(们)?(的|每月|每个月|月)?"
                     + "(工资|薪资|薪水|薪酬|月薪|底薪|奖金|提成|计件收入|收入)");
-    private static final Pattern POLICY_OR_AGGREGATE = Pattern.compile(
-            "(工资|薪资|薪酬|奖金|提成)(策略|规则|模式|政策|方案|制度|结构|计算|怎么算|如何算|怎么计算|成本|总额|合计|汇总|占比)"
-                    + "|人工成本|工资总额|总工资");
-    private static final Pattern CLAUSE_SPLIT = Pattern.compile("[，,。；;？?！!、" + "\n" + "]|以及|并且|还有|另外");
+    /** 只问规则 / 方式的词 (工资怎么算): 句子里没有「每个 / 各 / 多少 / 拿了」这类问具体数额的词时才豁免。 */
+    private static final Pattern RULE_WORDS = Pattern.compile(
+            "(工资|薪资|薪酬|奖金|提成)(策略|规则|模式|政策|方案|制度|结构|计算|怎么算|如何算|怎么计算)");
+    /** 汇总口径 (总人工成本等): 句子没有逐人 / 分别的词时豁免。 */
+    private static final Pattern AGGREGATE_WORDS = Pattern.compile(
+            "(工资|薪资|薪酬|奖金|提成)(成本|总额|合计|汇总|占比)|人工成本|工资总额|总工资");
+    private static final Pattern PER_PERSON_MARKERS = Pattern.compile("每个|每位|每名|每人|各|分别|逐个|挨个|拿了|发了|各自");
+    private static final Pattern AMOUNT_ASKED = Pattern.compile("多少|几何|是几");
+    private static final Pattern CLAUSE_SPLIT = Pattern.compile(
+            "[，,。；;：:？?！!、/／\\s]+|以及|并且|还有|另外|然后|和|及");
 
     private PersonalPayRefusalGuard() {}
 
     public static boolean refuses(String userInput) {
         if (userInput == null) return false;
         for (String clause : CLAUSE_SPLIT.split(userInput)) {
-            if (STAFF_PAY.matcher(clause).find() && !POLICY_OR_AGGREGATE.matcher(clause).find()) {
-                return true;
-            }
+            if (!STAFF_PAY.matcher(clause).find()) continue;
+            boolean perPerson = PER_PERSON_MARKERS.matcher(clause).find();
+            // 规则问法只在「不问逐人 / 具体数额」时豁免: 「工资怎么算出来是多少」「提成怎么算的，各拿了多少」仍是在要个人数额
+            boolean ruleOnly = RULE_WORDS.matcher(clause).find() && !perPerson && !AMOUNT_ASKED.matcher(clause).find();
+            boolean aggregateOnly = AGGREGATE_WORDS.matcher(clause).find() && !perPerson;
+            if (!ruleOnly && !aggregateOnly) return true;
         }
         return false;
     }

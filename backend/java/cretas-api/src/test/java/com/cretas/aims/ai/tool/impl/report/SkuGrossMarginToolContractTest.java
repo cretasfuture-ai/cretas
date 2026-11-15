@@ -562,4 +562,32 @@ class SkuGrossMarginToolContractTest {
         // 剥完剩下的不是目录里的产品: 如实说没找到, 不扩成全厂
         assertTrue(message(run("{\"productName\":\"牛油果成本多少\"}")).contains("没有找到名称含「牛油果」"));
     }
+
+    // 复审 R-M2: 只整词剥; 范围 / 时间词 = 不限产品; 产品名里的字不被剥坏; 目录里有就原样用
+    @Test
+    void stripOnlyWholeWords_scopeAndTimeWordsMeanWholeFactory_andRealNamesSurvive() throws Exception {
+        type("A", "卤牛肉", "100");
+        type("B", "总汇三明治", "100");
+        type("C", "外婆的红烧肉", "100");
+        type("D", "低成本套餐", "100");
+        pricedBatch("A", "60");
+        pricedBatch("B", "60");
+        pricedBatch("C", "60");
+        pricedBatch("D", "60");
+        // 范围 / 汇总 / 时间词: 不限产品, 4 个产品全出 (⛔ 「汇总成本」不能剥成「汇」去命中「总汇三明治」)
+        for (String raw : new String[]{"汇总成本", "全年成本", "本周成本", "近三个月毛利", "合计成本"}) {
+            assertEquals(4, run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items").size(), raw);
+        }
+        // 名字整个出现在原文里 → 该产品 (时间词被带进产品名也不影响)
+        for (String raw : new String[]{"本周卤牛肉成本", "外婆的红烧肉成本", "低成本套餐"}) {
+            JsonNode items = run("{\"productName\":\"" + raw + "\"}").get("data").get("data").get("items");
+            assertEquals(1, items.size(), raw);
+        }
+        assertEquals("外婆的红烧肉", run("{\"productName\":\"外婆的红烧肉成本\"}").get("data").get("data").get("items").get(0).get("productName").asText());
+        assertEquals("低成本套餐", run("{\"productName\":\"低成本套餐\"}").get("data").get("data").get("items").get(0).get("productName").asText());
+        // 纯函数: 无目录时只整词剥
+        assertNull(ReportToolSchemas.productKeyword("汇总成本"));
+        assertNull(ReportToolSchemas.productKeyword("全年成本"));
+        assertEquals("卤牛肉", ReportToolSchemas.productKeyword("卤牛肉的毛利率"));
+    }
 }
