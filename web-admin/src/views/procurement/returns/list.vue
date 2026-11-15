@@ -21,6 +21,7 @@ import { ref, computed, onMounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
+import { displayName } from './returnDisplay';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
@@ -222,8 +223,12 @@ function doComplete(row: ReturnOrder) {
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
         <template #empty>暂无采购退货单</template>
         <template #returnNumber-cell="{ row }">{{ row.original.returnNumber }}</template>
-        <template #supplier-cell="{ row }">{{ row.original.counterpartyId || '-' }}</template>
-        <template #source-cell="{ row }">{{ row.original.sourceOrderId || '-' }}</template>
+        <template #supplier-cell="{ row }">
+          <span :title="displayName(row.original.counterpartyName) ? undefined : '名称未取到'">{{ displayName(row.original.counterpartyName) || '—' }}</span>
+        </template>
+        <template #source-cell="{ row }">
+          <span :title="displayName(row.original.sourceOrderNumber) ? undefined : '名称未取到'">{{ displayName(row.original.sourceOrderNumber) || '—' }}</span>
+        </template>
         <template #returnDate-cell="{ row }"><span class="num">{{ row.original.returnDate }}</span></template>
         <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalAmount) }}</span></template>
         <template #status-cell="{ row }">

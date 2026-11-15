@@ -1564,6 +1564,7 @@ public class ProductionReportServiceImpl implements ProductionReportService {
                 .comparabilityReason(reportReason)
                 .standardCostBasis(CostVarianceReportDTO.STANDARD_COST_BASIS)
                 .totalBomCost(scaleOrNull(totalBomCost))
+                .comparedActualCost(scaleOrNull(comparedActual))
                 .totalActualCost(totalActualCost.setScale(2, RoundingMode.HALF_UP))
                 .totalVariance(scaleOrNull(totalVariance))
                 .totalVarianceRate(scaleOrNull(varianceRate))

@@ -1,6 +1,4 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { computed, defineComponent, h, inject, provide } from 'vue';
-import type { ComputedRef } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -9,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  *
  * <h3>判据（硬约束 9：每条"两个按钮消失了"都要配一条"合并后的动作确实渲染并打开了统一弹窗"）</h3>
  * ① 操作列只剩一个按钮（不再是「采购规格」+「编辑」两个）；
- * ② 点它之后，同一个 `<el-dialog>` 里既有关系表单又有规格管理区（一个弹窗，不是两个）；
+ * ② 点它之后，同一个弹窗（UModal）里既有关系表单又有规格管理区（一个弹窗，不是两个）；
  * ③ 点击那一刻就把该关系的采购规格加载出来（旧「采购规格」按钮的能力，合并后不能丢）；
  * ④ 供应商暂停/无写权限时，按钮变成「查看」但仍然可点、仍然能看到规格（旧行为：
  *    「采购规格」按钮从不受 canWrite/isActive 限制）——只挡「能不能保存」，不挡「能不能看」；
@@ -47,78 +45,19 @@ vi.mock('element-plus', () => ({
 }));
 
 import SupplierDetailDrawer from '../SupplierDetailDrawer.vue';
+import { nuxtUiStubs } from './nuxtUiStubs';
 
-const ROWS_KEY = 'stub-rows';
-
-/** 与缺陷 35 测试同一套手法: 真的把行渲染出来, 否则「没看到按钮」和「压根没渲染」是同一读数。 */
-const ElTableStub = defineComponent({
-  name: 'ElTable',
-  props: { data: { type: Array, default: () => [] } },
-  setup(props, { slots }) {
-    provide(ROWS_KEY, computed(() => props.data));
-    return () => h('div', { class: 'stub-table' }, slots.default?.());
-  },
-});
-const ElTableColumnStub = defineComponent({
-  name: 'ElTableColumn',
-  props: { label: { type: String, default: '' } },
-  setup(props, { slots }) {
-    const rows = inject<ComputedRef<unknown[]>>(ROWS_KEY, computed(() => []));
-    return () => h('div', { 'data-col': props.label },
-      rows.value.map((row) => h('div', { class: 'cell' }, slots.default?.({ row }))));
-  },
-});
-/** ⚠️ 只渲染 default 插槽的 PassThrough 会把 `<template #footer>` 吃掉 —— 本组要看 footer, 必须单独渲染。 */
-const ElDialogStub = defineComponent({
-  name: 'ElDialog',
-  props: { title: { type: String, default: '' } },
-  setup(props, { slots }) {
-    return () => h('div', { class: 'stub-dialog', 'data-title': props.title },
-      [slots.default?.(), slots.footer?.()]);
-  },
-});
-const ElButtonStub = defineComponent({
-  name: 'ElButton',
-  emits: ['click'],
-  setup(_p, { slots, emit }) {
-    return () => h('button', { onClick: () => emit('click') }, slots.default?.());
-  },
-});
-const ModelStub = (name: string) => defineComponent({
-  name,
-  props: { modelValue: { type: null, default: null }, disabled: { type: Boolean, default: false } },
-  emits: ['update:modelValue'],
-  setup(props) {
-    return () => h('input', { 'data-value': String(props.modelValue ?? ''), disabled: props.disabled });
-  },
-});
-const PassThrough = (name: string) => defineComponent({
-  name, setup: (_p, { slots }) => () => h('div', slots.default?.()),
-});
-
+/** Nuxt UI 没装进 vitest: 用最小桩（见 ./nuxtUiStubs.ts），UTable 会把行真的渲染出来。 */
 function mountDrawer(canWrite: boolean) {
   return mount(SupplierDetailDrawer, {
     props: {
       modelValue: false, factoryId: 'F006',
       supplier: { id: 'SUP-1', name: '六膳门', status: 'ACTIVE', active: true } as never,
-      canWrite,
+      canWrite: canWrite,
     },
     global: {
       directives: { loading: {} },
-      stubs: {
-        ElDrawer: PassThrough('ElDrawer'), ElDialog: ElDialogStub,
-        ElTabs: PassThrough('ElTabs'), ElTabPane: PassThrough('ElTabPane'),
-        ElForm: PassThrough('ElForm'), ElFormItem: PassThrough('ElFormItem'),
-        ElDescriptions: PassThrough('ElDescriptions'), ElDescriptionsItem: PassThrough('ElDescriptionsItem'),
-        ElTable: ElTableStub, ElTableColumn: ElTableColumnStub,
-        ElCard: PassThrough('ElCard'), ElTag: PassThrough('ElTag'), ElTooltip: PassThrough('ElTooltip'),
-        ElDivider: PassThrough('ElDivider'), ElAlert: PassThrough('ElAlert'), ElEmpty: PassThrough('ElEmpty'),
-        ElSkeleton: PassThrough('ElSkeleton'),
-        ElButton: ElButtonStub,
-        ElInput: ModelStub('ElInput'), ElInputNumber: ModelStub('ElInputNumber'),
-        ElSwitch: ModelStub('ElSwitch'), ElSelect: ModelStub('ElSelect'), ElOption: PassThrough('ElOption'),
-        UnitSelect: ModelStub('UnitSelect'), SupplierProfileCollections: PassThrough('SupplierProfileCollections'),
-      },
+      stubs: { ...nuxtUiStubs },
     },
   });
 }
@@ -177,8 +116,8 @@ describe('缺陷 16: 供应原料关系「新增」「编辑」合并成同一�
   it('② 阳性对照: 点"编辑"打开的是【同一个】弹窗, 而且它同时加载了这条关系的采购规格', async () => {
     const wrapper = await openWith(true);
 
-    // 合并之前是 2 个 <el-dialog>(关系 + 采购规格); 合并之后必须只剩 1 个。
-    expect(wrapper.findAllComponents({ name: 'ElDialog' }).length,
+    // 合并之前是 2 个弹窗(关系 + 采购规格); 合并之后必须只剩 1 个。
+    expect(wrapper.findAllComponents({ name: 'UModal' }).length,
       '弹窗数量不是 1 —— 说明两个弹窗没有真的合并成一个').toBe(1);
 
     const editButton = wrapper.findAll('[data-col="操作"] button')
@@ -236,18 +175,24 @@ describe('缺陷 16: 供应原料关系「新增」「编辑」合并成同一�
     const wrapper = await openWith(true);
     const vm = wrapper.vm as unknown as {
       openRelationEdit: (row: unknown) => Promise<void>;
-      removePurchaseSpec: (row: unknown) => Promise<void>;
+      removePurchaseSpec: (row: unknown) => void;
     };
 
     await vm.openRelationEdit(RELATION);
     await flushPromises();
-    await vm.removePurchaseSpec(SPEC_ROW);
+    vm.removePurchaseSpec(SPEC_ROW);
     await flushPromises();
 
-    expect(api.confirm).toHaveBeenCalled();
+    // 确认在 UModal 里（模态 UModal 里 Element 的 ElMessageBox 点不了）: 点「停用」只打开确认, 此时还没停用。
+    expect(wrapper.find('[data-testid="spec-stop-confirm"]').exists(), '点停用后应出现确认弹窗').toBe(true);
+    expect(api.deleteSupplierPurchaseSpec, '确认之前就停用了').not.toHaveBeenCalled();
+
+    await wrapper.find('[data-testid="spec-stop-confirm"]').trigger('click');
+    await flushPromises();
     expect(api.deleteSupplierPurchaseSpec).toHaveBeenCalledWith(
       'F006', 'SUP-1', 'rel-1', 'spec-1', 2,
     );
+    expect(wrapper.find('[data-testid="spec-stop-confirm"]').exists(), '停用后确认弹窗应关闭').toBe(false);
     wrapper.unmount();
   });
 
@@ -279,7 +224,7 @@ describe('缺陷 16: 供应原料关系「新增」「编辑」合并成同一�
     await vm.openRelationCreate();
     await flushPromises();
 
-    expect(wrapper.findAllComponents({ name: 'ElDialog' }).length).toBe(1);
+    expect(wrapper.findAllComponents({ name: 'UModal' }).length).toBe(1);
     expect(wrapper.find('.stub-dialog').text()).toContain('采购规格');
     wrapper.unmount();
   });

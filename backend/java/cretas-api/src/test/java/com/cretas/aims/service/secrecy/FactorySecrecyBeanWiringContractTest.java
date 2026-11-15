@@ -69,11 +69,23 @@ class FactorySecrecyBeanWiringContractTest {
             .withBean(jakarta.persistence.EntityManagerFactory.class, () -> mock(jakarta.persistence.EntityManagerFactory.class))
             .withBean(FactoryFeatureConfigRepository.class, () -> mock(FactoryFeatureConfigRepository.class))
             .withBean(DashScopeClient.class, () -> mock(DashScopeClient.class))
+            // P10: FeatureConfigController 读外部软件授权 (只读伪模块), 用真实服务 + mock 仓库证明它在容器里接得上
+            .withBean(com.cretas.aims.repository.integration.FactoryExternalIntegrationRepository.class,
+                    () -> mock(com.cretas.aims.repository.integration.FactoryExternalIntegrationRepository.class))
+            .withBean(com.cretas.aims.repository.integration.ExternalSourceSnapshotRepository.class,
+                    () -> mock(com.cretas.aims.repository.integration.ExternalSourceSnapshotRepository.class))
+            .withBean(com.cretas.aims.repository.ProductionReportRepository.class,
+                    () -> mock(com.cretas.aims.repository.ProductionReportRepository.class))
+            .withBean(com.cretas.aims.repository.workprocess.WorkProcessTaskRepository.class,
+                    () -> mock(com.cretas.aims.repository.workprocess.WorkProcessTaskRepository.class))
+            .withBean(com.cretas.aims.repository.WorkProcessRepository.class,
+                    () -> mock(com.cretas.aims.repository.WorkProcessRepository.class))
             .withUserConfiguration(FactorySecrecyConfig.class, ProcessSecretAccessService.class,
                     ProcessSecretSampleFilter.class, LlmEgressGuard.class, ProcessSecretAiAccessAudit.class,
                     ProcessSecretExternalService.class, PlatformFactoryControlAuthority.class,
                     FactorySecrecySettingsService.class, PlatformFactorySecrecyController.class,
-                    FeatureConfigController.class, ProcessSecretController.class, WorkdeskOutputSummarizer.class);
+                    FeatureConfigController.class, ProcessSecretController.class, WorkdeskOutputSummarizer.class,
+                    com.cretas.aims.service.integration.ExternalIntegrationService.class);
 
     @Test
     void everyWiringPointGetsTheContainersConfig() {
@@ -94,6 +106,8 @@ class FactorySecrecyBeanWiringContractTest {
                     .isSameAs(config);
             assertThat(ReflectionTestUtils.getField(context.getBean(FeatureConfigController.class), "secrecyConfig"))
                     .isSameAs(config);
+            assertThat(ReflectionTestUtils.getField(context.getBean(FeatureConfigController.class), "externalIntegrations"))
+                    .isSameAs(context.getBean(com.cretas.aims.service.integration.ExternalIntegrationService.class));
             assertThat(ReflectionTestUtils.getField(context.getBean(WorkdeskOutputSummarizer.class), "egressGuard"))
                     .isSameAs(context.getBean(LlmEgressGuard.class));
             assertThat(context).hasSingleBean(PlatformFactorySecrecyController.class);

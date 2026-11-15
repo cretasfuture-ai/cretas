@@ -339,10 +339,26 @@ public class IntentExecutionOrchestrator {
         }
     }
 
+    /** 个人工资明细: 整轮拒答 (识别之前), 见 PersonalPayRefusalGuard。 */
+    public static IntentExecuteResponse personalPayRefusalResponse() {
+        String message = com.cretas.aims.ai.tool.PersonalPayRefusalGuard.MESSAGE;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status(com.cretas.aims.ai.tool.PersonalPayRefusalGuard.STATUS)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return personalPayRefusalResponse();
+        }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
@@ -673,10 +689,9 @@ public class IntentExecutionOrchestrator {
                     factoryId, userId, choiceSourceInput(matchResult, request));
         }
 
-        // 2b. 通用咨询/闲聊 —— 业务问法 (「这个月卖得怎么样」) 不进闲聊: 有匹配就执行, 没有就走下面的澄清候选
-        if ((matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
-            matchResult.getQuestionType() == QuestionType.CONVERSATIONAL)
-                && !com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(request.getUserInput())) {
+        // 2b. 通用咨询/闲聊直答 —— 与流式入口同一个判定 (IntentTurnSharedSteps): 识别不出 + 非业务问法才直答;
+        //     识别到了就照常执行, 业务问法 (「这个月卖得怎么样」) 走下面的澄清候选
+        if (IntentTurnSharedSteps.answersGeneralQuestionDirectly(matchResult, request.getUserInput())) {
             String llmResponse = generateConversationalResponse(factoryId, request.getUserInput(),
                     matchResult.getQuestionType(), request.getEnableThinking(), request.getThinkingBudget());
             return IntentExecuteResponse.builder()
@@ -739,14 +754,15 @@ public class IntentExecutionOrchestrator {
         }
 
         // P1 读写分块 §4.4: 咨询 tab (mode=READ) 强制只读 — 写意图不进审批/slot-filling/执行,
-        // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
-            return buildReadModeWriteBlockedResponse(intent);
+        // 返回跳转提示卡 (防呆 Rule 5: dead-end 改导航)。与流式入口同一个方法。
+        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                request, intent, intentAccessModeFilter, writeGuardService);
+        if (readModeBlocked != null) {
+            return readModeBlocked;
         }
 
-        // 审批检查
-        if (Boolean.TRUE.equals(intent.getRequiresApproval())
-                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
+        // 审批检查 (与流式入口同一个谓词)
+        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
             return buildApprovalResponse(intent);
         }
 
@@ -933,6 +949,9 @@ public class IntentExecutionOrchestrator {
                                                              Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
+        if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
+            return personalPayRefusalResponse();
+        }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
         }
@@ -996,8 +1015,10 @@ public class IntentExecutionOrchestrator {
 
         // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
         // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
-        if ("READ".equalsIgnoreCase(request.getMode()) && isWriteIntentDeclarationAware(intent)) {
-            return buildReadModeWriteBlockedResponse(intent);
+        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                request, intent, intentAccessModeFilter, writeGuardService);
+        if (readModeBlocked != null) {
+            return readModeBlocked;
         }
 
         // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
@@ -1040,8 +1061,7 @@ public class IntentExecutionOrchestrator {
         // Approval governs the mutation, not its read-only TCC preview. Keeping
         // previewOnly outside this gate lets the user inspect before/after and
         // impact details before deciding whether to request approval/confirm.
-        if (Boolean.TRUE.equals(intent.getRequiresApproval())
-                && !Boolean.TRUE.equals(request.getPreviewOnly())) {
+        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
             return buildApprovalResponse(intent);
         }
 
@@ -1249,7 +1269,7 @@ public class IntentExecutionOrchestrator {
                     previewTokenService.resolveClaim(confirmToken, claimId, false, denied.getMessage());
                     return denied;
                 }
-                if (Boolean.TRUE.equals(intentConfig.getRequiresApproval())) {
+                if (IntentTurnSharedSteps.stopsForApproval(intentConfig, null)) {
                     IntentExecuteResponse approval = buildApprovalResponse(intentConfig);
                     previewTokenService.resolveClaim(confirmToken, claimId, false, approval.getMessage());
                     return approval;
@@ -2602,20 +2622,7 @@ public class IntentExecutionOrchestrator {
      * 保持不变; 其余按 WriteGuardService 意图判定, 意图未判写时以已匹配工具兜底。
      */
     private void applyAiModeStamp(IntentExecuteResponse response, AIIntentConfig intent, String matchedToolName) {
-        if (response == null || response.getAiMode() != null) {
-            return;
-        }
-        boolean write = intent != null && writeGuardService != null && writeGuardService.isWriteIntent(intent);
-        if (!write && matchedToolName != null && !matchedToolName.isEmpty()) {
-            try {
-                write = toolRegistry.getExecutor(matchedToolName)
-                        .map(writeGuardService::isWriteTool)
-                        .orElse(false);
-            } catch (Exception e) {
-                // aiMode 是展示元数据, 判定失败不阻断响应
-            }
-        }
-        response.setAiMode(write ? "WRITE" : "READ");
+        IntentTurnSharedSteps.applyAiModeStamp(response, intent, matchedToolName, writeGuardService, toolRegistry);
     }
 
     /**
@@ -2658,35 +2665,11 @@ public class IntentExecutionOrchestrator {
      * @return 权限码集合; null = 不按权限过滤 (真正的鉴权在 checkIntentPermission / ToolRbacEnforcer)
      */
     private java.util.Set<String> resolveUserPermissionsForFiltering(String mode, Long userId, String factoryId) {
-        if (userId == null || intentPermissionGate == null
-                || !IntentAccessModeFilter.MODE_OPERATE.equalsIgnoreCase(mode)) {
-            return null;
-        }
-        try {
-            return intentPermissionGate.resolveUserPermissions(userId, factoryId);
-        } catch (Exception e) {
-            log.warn("候选过滤权限集解析失败, 跳过权限过滤: userId={}, err={}", userId, e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * P1 读写分块 §4.4: 咨询 tab (mode=READ) 命中写意图/写工具时的拦截响应。
-     * aiMode=WRITE 供前端渲染「前往操作页」跳转卡。
-     */
-    private IntentExecuteResponse buildReadModeWriteBlockedResponse(AIIntentConfig intent) {
-        String msg = "这是操作类请求，请切换到【操作】页处理。";
-        return IntentExecuteResponse.builder()
-                .intentRecognized(true).intentCode(intent.getIntentCode())
-                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
-                .sensitivityLevel(intent.getSensitivityLevel())
-                .status("READ_MODE_WRITE_BLOCKED").message(msg).formattedText(msg)
-                .aiMode("WRITE")
-                .executedAt(LocalDateTime.now()).build();
+        return IntentTurnSharedSteps.recognitionPermissionFilter(mode, userId, factoryId, intentPermissionGate);
     }
 
     private IntentExecuteResponse buildNoPermissionResponse(AIIntentConfig intent) {
-        String msg = "您没有权限执行此操作。需要角色: " + intent.getRequiredRoles();
+        String msg = "您没有权限执行此操作。需要角色: " + com.cretas.aims.ai.tool.RoleDisplay.listOf(intent.getRequiredRoles());
         IntentExecuteResponse response = IntentExecuteResponse.builder()
                 .intentRecognized(true).intentCode(intent.getIntentCode())
                 .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
@@ -2698,16 +2681,7 @@ public class IntentExecutionOrchestrator {
     }
 
     private IntentExecuteResponse buildApprovalResponse(AIIntentConfig intent) {
-        String msg = "此操作需要审批，当前 AI 入口尚不支持提交和核验审批。未提交审批、未执行操作，请通过业务页面完成审批。";
-        IntentExecuteResponse response = IntentExecuteResponse.builder()
-                .intentRecognized(true).intentCode(intent.getIntentCode())
-                .intentName(intent.getIntentName()).intentCategory(intent.getIntentCategory())
-                .sensitivityLevel(intent.getSensitivityLevel())
-                .status("PENDING_APPROVAL").message(msg).formattedText(msg)
-                .requiresApproval(true).approvalChainId(intent.getApprovalChainId())
-                .executedAt(LocalDateTime.now()).build();
-        applyAiModeStamp(response, intent, intent.getToolName());
-        return response;
+        return IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry);
     }
 
     private IntentExecuteResponse buildDroolsFailureResponse(AIIntentConfig intent, ValidationResult validationResult) {
@@ -3175,28 +3149,9 @@ public class IntentExecutionOrchestrator {
         }
     }
 
-    /** 客户可见文本内部泄漏消毒 (Sheet 7/22 V7): LLM 意图分类/rerank 的推理
-     * 文本 ("在提供的可用意图列表中, 只有 PRODUCT_XXX…") 偶发被当回答返回。
-     * 同时含意图元讨论词与 CODE 形状 token 的消息不可能是合法业务答案。 */
-    private static final java.util.regex.Pattern INTERNAL_CODE_TOKEN =
-            java.util.regex.Pattern.compile("[A-Z]{2,}_[A-Z0-9_]{2,}");
-
+    /** 客户可见文本内部泄漏消毒: 与流式入口同一个实现 ({@link IntentTurnSharedSteps#sanitizeInternalReasoningLeak})。 */
     private void sanitizeInternalReasoningLeak(IntentExecuteResponse response) {
-        String msg = response.getMessage();
-        if (msg == null) {
-            return;
-        }
-        boolean metaTalk = msg.contains("意图列表") || msg.contains("可用意图")
-                || msg.contains("候选意图") || msg.contains("intent_code")
-                || msg.contains("该意图覆盖");
-        if (metaTalk && INTERNAL_CODE_TOKEN.matcher(msg).find()) {
-            log.warn("[sanitize] internal intent reasoning leaked to customer text, replaced. head={}",
-                    msg.substring(0, Math.min(80, msg.length())));
-            String safe = "这个问题我还没有把握直接回答。请换一种问法，"
-                    + "或说明想看的指标（如营收/销量/毛利）和时间范围，我再帮您查。";
-            response.setMessage(safe);
-            response.setFormattedText(safe);
-        }
+        IntentTurnSharedSteps.sanitizeInternalReasoningLeak(response);
     }
 
     /** 价格 / 财务可见性的唯一判定 (与 HTTP 响应层同一个); 没装配时不让模型看结果数据。 */
@@ -3212,15 +3167,7 @@ public class IntentExecutionOrchestrator {
      * @return true = 数据已按这个人遮过 (或本来就没有数据); false = 判定组件没装配, 后面不许把数据交给模型
      */
     private boolean applyCallerPriceView(IntentExecuteResponse response, Long userId) {
-        if (response == null || response.getResultData() == null) {
-            return true;
-        }
-        if (priceView == null) {
-            log.warn("价格可见性组件未装配: 结果数据不交给摘要模型 (fail closed)");
-            return false;
-        }
-        response.setResultData(priceView.maskedViewFor(response.getResultData(), userId));
-        return true;
+        return IntentTurnSharedSteps.applyCallerPriceView(priceView, response, userId);
     }
 
     private void applyFormattedTextFallback(String factoryId, IntentExecuteResponse response, boolean priceMasked) {
