@@ -3,7 +3,8 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import type { TableRow } from '@/types/api';
 
 /**
@@ -93,7 +94,7 @@ async function loadData() {
   }
 }
 
-function getWarnTagType(level: string): string {
+function getWarnTagType(level: string): 'danger' | 'warning' | 'success' | 'info' {
   switch (level) {
     case 'OVERDUE': return 'danger';
     case 'URGENT': return 'danger';
@@ -102,6 +103,32 @@ function getWarnTagType(level: string): string {
     default: return 'info';
   }
 }
+
+const warnColumns: TableColumn<TableRow>[] = [
+  { id: 'level', header: '预警等级' },
+  { accessorKey: 'planNumber', header: '计划编号' },
+  { id: 'product', header: '产品类型' },
+  { id: 'customer', header: '客户' },
+  { accessorKey: 'plannedQuantity', header: '计划数量' },
+  { accessorKey: 'actualQuantity', header: '实际数量' },
+  { accessorKey: 'expectedCompletionDate', header: '预期完工' },
+  { id: 'days', header: '距交期' },
+  { id: 'status', header: '状态' },
+];
+const windowOptions = [
+  { value: 3, label: '未来 3 天' },
+  { value: 7, label: '未来 7 天' },
+  { value: 14, label: '未来 14 天' },
+  { value: 30, label: '未来 30 天' },
+];
+const emptyText = computed(() => (loaded.value ? '窗口内无交货预警' : '数据未加载 — 请点刷新重试'));
+const CARDS: { key: WarnFilterKey; label: string; cls: string }[] = [
+  { key: 'ALL', label: '全部', cls: 'card-all' },
+  { key: 'OVERDUE', label: '已超期', cls: 'card-danger' },
+  { key: 'URGENT', label: '紧急 (<3d)', cls: 'card-urgent' },
+  { key: 'WARN', label: '预警 (3-7d)', cls: 'card-warn' },
+  { key: 'NORMAL', label: '正常 (≥7d)', cls: 'card-normal' },
+];
 
 function getWarnLabel(level: string): string {
   const map: Record<string, string> = {
@@ -136,212 +163,71 @@ function formatDaysCell(days: number | null | undefined): string {
 
 <template>
   <div class="delivery-warnings-page">
-    <div class="page-header">
+    <div class="cs-page-head">
       <h2>交货预警</h2>
       <div class="page-actions">
-        <el-select v-model="windowDays" style="width: 160px" @change="loadData">
-          <el-option :value="3" label="未来 3 天" />
-          <el-option :value="7" label="未来 7 天" />
-          <el-option :value="14" label="未来 14 天" />
-          <el-option :value="30" label="未来 30 天" />
-        </el-select>
-        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+        <USelect v-model="windowDays" :items="windowOptions" class="w-40" @update:model-value="loadData" />
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
       </div>
     </div>
 
     <!--
-      四张卡同时是筛选入口: 卡上的数 == 点下去之后表格里的行数。
+      五张卡同时是筛选入口: 卡上的数 == 点下去之后表格里的行数。
       用 <button> 而不是纯 div —— 键盘可达, aria-pressed 表达选中态。
     -->
-    <el-row :gutter="16" class="summary-cards">
-      <el-col :span="4">
-        <button
-          type="button"
-          class="summary-card card-all"
-          :class="{ 'card-active': activeLevel === 'ALL' }"
-          data-warn-card="ALL"
-          :aria-pressed="activeLevel === 'ALL'"
-          @click="selectLevel('ALL')"
-        >
-          <span class="card-label">全部</span>
-          <span class="card-value">{{ formatCount(allCount) }}</span>
-        </button>
-      </el-col>
-      <el-col :span="5">
-        <button
-          type="button"
-          class="summary-card card-danger"
-          :class="{ 'card-active': activeLevel === 'OVERDUE' }"
-          data-warn-card="OVERDUE"
-          :aria-pressed="activeLevel === 'OVERDUE'"
-          @click="selectLevel('OVERDUE')"
-        >
-          <span class="card-label">已超期</span>
-          <span class="card-value">{{ formatCount(overdueCount) }}</span>
-        </button>
-      </el-col>
-      <el-col :span="5">
-        <button
-          type="button"
-          class="summary-card card-urgent"
-          :class="{ 'card-active': activeLevel === 'URGENT' }"
-          data-warn-card="URGENT"
-          :aria-pressed="activeLevel === 'URGENT'"
-          @click="selectLevel('URGENT')"
-        >
-          <span class="card-label">紧急 (&lt;3d)</span>
-          <span class="card-value">{{ formatCount(urgentCount) }}</span>
-        </button>
-      </el-col>
-      <el-col :span="5">
-        <button
-          type="button"
-          class="summary-card card-warn"
-          :class="{ 'card-active': activeLevel === 'WARN' }"
-          data-warn-card="WARN"
-          :aria-pressed="activeLevel === 'WARN'"
-          @click="selectLevel('WARN')"
-        >
-          <span class="card-label">预警 (3-7d)</span>
-          <span class="card-value">{{ formatCount(warnCount) }}</span>
-        </button>
-      </el-col>
-      <el-col :span="5">
-        <button
-          type="button"
-          class="summary-card card-normal"
-          :class="{ 'card-active': activeLevel === 'NORMAL' }"
-          data-warn-card="NORMAL"
-          :aria-pressed="activeLevel === 'NORMAL'"
-          @click="selectLevel('NORMAL')"
-        >
-          <span class="card-label">正常 (≥7d)</span>
-          <span class="card-value">{{ formatCount(normalCount) }}</span>
-        </button>
-      </el-col>
-    </el-row>
+    <div class="summary-cards">
+      <button
+        v-for="c in CARDS"
+        :key="c.key"
+        type="button"
+        class="summary-card"
+        :class="[c.cls, { 'card-active': activeLevel === c.key }]"
+        :data-warn-card="c.key"
+        :aria-pressed="activeLevel === c.key"
+        @click="selectLevel(c.key)"
+      >
+        <span class="card-label">{{ c.label }}</span>
+        <span class="card-value">{{ formatCount(countOf(c.key)) }}</span>
+      </button>
+    </div>
 
-    <el-table
-      v-loading="loading"
-      :data="displayRows"
-      stripe
-      border
-      :empty-text="loaded ? '窗口内无交货预警' : '数据未加载 — 请点刷新重试'"
-      class="warn-table"
-    >
-      <el-table-column label="预警等级" width="120">
-        <template #default="{ row }">
-          <el-tag :type="getWarnTagType(row.warnLevel)" effect="dark">
-            {{ getWarnLabel(row.warnLevel) }}
-          </el-tag>
+    <section class="cs-card">
+      <UTable :data="displayRows" :columns="warnColumns" :loading="loading" :data-empty-text="emptyText" class="cs-table">
+        <template #empty>{{ emptyText }}</template>
+        <template #level-cell="{ row }">
+          <UBadge :color="badgeColor(getWarnTagType(row.original.warnLevel))" variant="solid">{{ getWarnLabel(row.original.warnLevel) }}</UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="planNumber" label="计划编号" min-width="160" />
-      <el-table-column label="产品类型" min-width="160">
-        <template #default="{ row }">
-          {{ row.productTypeName || row.productTypeId || '-' }}
+        <template #product-cell="{ row }">{{ row.original.productTypeName || row.original.productTypeId || '-' }}</template>
+        <template #customer-cell="{ row }">{{ row.original.sourceCustomerName || '' }}</template>
+        <template #days-cell="{ row }">
+          <span :class="row.original.warnLevel === 'OVERDUE' ? 'days-overdue' : ''">{{ formatDaysCell(row.original.daysUntilDeadline) }}</span>
         </template>
-      </el-table-column>
-      <el-table-column prop="sourceCustomerName" label="客户" min-width="140" show-overflow-tooltip />
-      <el-table-column prop="plannedQuantity" label="计划数量" width="100" align="right" />
-      <el-table-column prop="actualQuantity" label="实际数量" width="100" align="right" />
-      <el-table-column prop="expectedCompletionDate" label="预期完工" width="120" />
-      <el-table-column label="距交期" width="140" align="center">
-        <template #default="{ row }">
-          <span :class="row.warnLevel === 'OVERDUE' ? 'days-overdue' : ''">
-            {{ formatDaysCell(row.daysUntilDeadline) }}
-          </span>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="100" align="center">
-        <template #default="{ row }">
-          {{ getStatusLabel(row.status) }}
-        </template>
-      </el-table-column>
-    </el-table>
+        <template #status-cell="{ row }">{{ getStatusLabel(row.original.status) }}</template>
+      </UTable>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.delivery-warnings-page {
-  padding: 20px;
-}
-
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.page-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
-.page-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.summary-cards {
-  margin-bottom: 16px;
-}
+.delivery-warnings-page { padding: var(--cs-space-4); }
+.page-actions { display: flex; gap: var(--cs-space-2); }
+.summary-cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--cs-space-3); margin-bottom: var(--cs-space-3); }
 
 /* 卡片即筛选入口 —— <button> 自带键盘可达与按下语义 */
 .summary-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: 100%;
-  padding: 16px;
-  text-align: left;
-  border: 1px solid var(--el-border-color-light, var(--cs-border));
-  border-radius: 4px;
-  background: var(--el-fill-color-blank, #fff);
-  cursor: pointer;
-  transition: box-shadow 0.2s, border-color 0.2s;
+  display: flex; flex-direction: column; align-items: flex-start; width: 100%;
+  padding: var(--cs-space-4); text-align: left; cursor: pointer;
+  border: 1px solid var(--cs-border); border-radius: var(--cs-radius); background: var(--cs-surface);
+  transition: border-color 0.15s, background 0.15s;
 }
-
-.summary-card:hover {
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
-}
-
-.summary-card:focus-visible {
-  outline: 2px solid var(--el-color-primary, var(--cs-primary));
-  outline-offset: 2px;
-}
-
-.summary-card.card-active {
-  border-color: var(--el-color-primary, var(--cs-primary));
-  box-shadow: 0 0 0 1px var(--el-color-primary, var(--cs-primary)) inset;
-}
-
-.summary-cards .card-label {
-  font-size: 14px;
-  color: var(--cs-muted);
-  margin-bottom: 8px;
-}
-
-.summary-cards .card-value {
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1.2;
-}
-
-.summary-cards .card-all .card-value { color: var(--cs-text); }
-.summary-cards .card-danger .card-value { color: var(--cs-danger); }
-.summary-cards .card-urgent .card-value { color: var(--cs-warning); }
-.summary-cards .card-warn .card-value { color: var(--cs-warning); }
-.summary-cards .card-normal .card-value { color: var(--cs-success); }
-
-.days-overdue {
-  color: var(--cs-danger);
-  font-weight: 600;
-}
-
-.warn-table {
-  margin-top: 8px;
-}
+.summary-card:hover { background: var(--cs-primary-soft); }
+.summary-card:focus-visible { outline: 2px solid var(--cs-primary); outline-offset: 2px; }
+.summary-card.card-active { border-color: var(--cs-primary); box-shadow: 0 0 0 1px var(--cs-primary) inset; }
+.card-label { font-size: var(--cs-font); color: var(--cs-muted); margin-bottom: var(--cs-space-2); }
+.card-value { font-size: 28px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.card-all .card-value { color: var(--cs-text); }
+.card-danger .card-value { color: var(--cs-danger); }
+.card-urgent .card-value, .card-warn .card-value { color: var(--cs-warning); }
+.card-normal .card-value { color: var(--cs-success); }
+.days-overdue { color: var(--cs-danger); font-weight: 600; }
 </style>
