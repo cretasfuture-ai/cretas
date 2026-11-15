@@ -238,9 +238,9 @@ onMounted(async () => {
         <template #actualBox-cell="{ row }"><span class="num">{{ fmt(row.original.actualLaborCostPerBox) }}</span></template>
         <template #variance-header>
           <span>偏差率</span>
-          <UTooltip text="偏差率需先在「研发样品管理」为该批次配置预估人工成本">
+          <span title="偏差率需先在「研发样品管理」为该批次配置预估人工成本">
             <UButton size="xs" variant="link" @click="router.push('/rd/samples')">去配置</UButton>
-          </UTooltip>
+          </span>
         </template>
         <template #variance-cell="{ row }">
           <span v-if="row.original.varianceRate != null" class="num" :class="varianceRateClass(row.original.varianceRate, row.original.varianceStatus)">

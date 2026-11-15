@@ -253,22 +253,22 @@ async function doDelete() {
         <template #empty>暂无数据</template>
         <template #product-cell="{ row }">{{ row.original.productTypeName || row.original.productName || row.original.productTypeId || '-' }}</template>
         <template #rate-cell="{ row }">
-          <UTooltip v-if="isProcessSecretHidden(row.original, 'conversionRate')" :text="processSecretMessage(row.original)">
+          <span v-if="isProcessSecretHidden(row.original, 'conversionRate')" :title="processSecretMessage(row.original)">
             <UBadge color="neutral" variant="outline">{{ PROCESS_SECRET_LABEL }}</UBadge>
-          </UTooltip>
+          </span>
           <span v-else class="num">{{ (row.original.conversionRate * 100).toFixed(1) }}%</span>
         </template>
         <template #wastage-cell="{ row }">
-          <UTooltip v-if="isProcessSecretHidden(row.original, 'wastageRate')" :text="processSecretMessage(row.original)">
+          <span v-if="isProcessSecretHidden(row.original, 'wastageRate')" :title="processSecretMessage(row.original)">
             <UBadge color="neutral" variant="outline">{{ PROCESS_SECRET_LABEL }}</UBadge>
-          </UTooltip>
+          </span>
           <span v-else class="num">{{ ((row.original.wastageRate || 0) * 100).toFixed(1) }}%</span>
         </template>
         <template #actions-cell="{ row }">
           <!-- 工艺保密: 转换率已隐藏的行不能在这里改 (否则会把空值 / 0 存回去), 需保密负责人授权 -->
-          <UTooltip v-if="canWrite && isProcessSecretRow(row.original)" :text="processSecretMessage(row.original)">
+          <span v-if="canWrite && isProcessSecretRow(row.original)" :title="processSecretMessage(row.original)">
             <UBadge color="neutral" variant="outline">需授权才能修改</UBadge>
-          </UTooltip>
+          </span>
           <div v-else-if="canWrite" class="row-actions">
             <UButton size="xs" variant="link" icon="i-lucide-pencil" @click="handleEdit(row.original)">编辑</UButton>
             <UButton size="xs" variant="link" color="error" icon="i-lucide-trash-2" @click="handleDelete(row.original)">删除</UButton>

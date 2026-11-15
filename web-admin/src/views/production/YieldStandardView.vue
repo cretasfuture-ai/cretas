@@ -237,9 +237,9 @@ onMounted(loadData);
     <section class="cs-card">
       <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table">
         <template #current-cell="{ row }">
-          <UTooltip v-if="isProcessSecretRow(row.original)" :text="processSecretMessage(row.original)">
+          <span v-if="isProcessSecretRow(row.original)" :title="processSecretMessage(row.original)">
             <UBadge color="neutral" variant="outline">{{ PROCESS_SECRET_LABEL }}</UBadge>
-          </UTooltip>
+          </span>
           <UBadge v-else-if="row.original.currentYieldRate == null" color="error" variant="outline">未填</UBadge>
           <span v-else class="current-value">{{ currentText(row.original) }}</span>
         </template>
@@ -249,9 +249,9 @@ onMounted(loadData);
         </template>
         <template #actions-cell="{ row }">
           <!-- 工艺保密: 标准出成率对当前账号隐藏的行不给修改入口 (会把「已保密」当成「未填」去填) -->
-          <UTooltip v-if="isProcessSecretRow(row.original)" :text="processSecretMessage(row.original)">
+          <span v-if="isProcessSecretRow(row.original)" :title="processSecretMessage(row.original)">
             <UBadge color="neutral" variant="outline">需授权才能修改</UBadge>
-          </UTooltip>
+          </span>
           <UButton
             v-else
             variant="link"
