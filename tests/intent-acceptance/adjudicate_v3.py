@@ -26,6 +26,9 @@
   I3   意图多数: 第三票与第二票意图相同, 出题方为异议 (出题方原意图保留为替代意图)
   I0   意图无多数: 保持 ambiguous
   V0   重装配校验 (assemble_v3.validate) 不过: 保持 ambiguous
+  N0c  确认题里 intent_alternates / ask_options 是字符串的改成列表 (只改类型, 见 normalize_lists; 由 apply_row 和第二轮共用)
+
+第二轮 (对第一轮仍待复核的 251 题再深一层: 两个强模型独立判意图 + 上下位判断 + 姿态规则 + 一次复核) 在 adjudicate_v3_r2.py。
 """
 import argparse
 import collections
@@ -60,6 +63,15 @@ def as_list(v):
     if isinstance(v, str):
         return [s.strip() for s in re.split(r"[,，、]\s*", v) if s.strip()]
     return []
+
+
+def normalize_lists(row):
+    """N0c: intent_alternates / ask_options 是字符串的改成列表 (只改类型; 已是列表的原样)。返回新 dict。"""
+    r = dict(row)
+    for k in ("intent_alternates", "ask_options"):
+        if not isinstance(r.get(k), list):
+            r[k] = as_list(r.get(k))
+    return r
 
 
 def base_row(row):
@@ -183,7 +195,7 @@ def apply_row(row, v1, v2, by_code):
     """返回裁定后的行 (确认题原样)。"""
     row = base_row(row)
     if not row.get("ambiguous"):
-        return row
+        return normalize_lists(row)  # N0c: 确认题只修字符串字段的类型
     norm = dict(row)
     norm["intent_alternates"], norm["ask_options"] = as_list(row["intent_alternates"]), as_list(row["ask_options"])
     d = decide(norm, v1, v2, by_code)
