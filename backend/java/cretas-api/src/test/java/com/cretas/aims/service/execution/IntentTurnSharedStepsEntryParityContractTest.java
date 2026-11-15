@@ -76,7 +76,7 @@ import static org.mockito.Mockito.when;
  * 真实闲聊护栏。桩: 识别层结果、权限、工具分发、闲聊模型、价格可见性判定、格式化器。
  */
 @DisplayName("PR-2a 两入口共用步骤: 同一句话同一判定")
-class IntentTurnSharedStepsEntryParityTest {
+class IntentTurnSharedStepsEntryParityContractTest {
 
     enum Entry { ORDINARY, SSE }
 
@@ -89,6 +89,7 @@ class IntentTurnSharedStepsEntryParityTest {
     private static final String WRITE_TOOL = "material_batch_create";
     private static final String APPROVAL_INTENT = "COST_VARIANCE_REVIEW";
     private static final String APPROVAL_TOOL = "cost_variance_review";
+    private static final String SKILL_WRITE_INTENT = "GOODS_ARRIVAL_CREATE";
     private static final String CHAT_REPLY = "降低成本可以从优化采购批量、减少损耗、提高设备稼动率入手。";
 
     // ------------------------------------------------------------------ 2b 通用问法直答
@@ -272,6 +273,75 @@ class IntentTurnSharedStepsEntryParityTest {
         assertThat(shown.getMessage()).doesNotContain("PRODUCT_SALES_QUERY");
     }
 
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("显式意图码 (按钮点选) + forceExecute, 声明了需要审批 (非 CRITICAL) → 两入口都停在 PENDING_APPROVAL")
+    void explicitIntentCodeWithForceExecuteStillStopsForApproval(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+
+        IntentExecuteResponse shown = h.send(IntentExecuteRequest.builder().userInput("看下成本差异复核")
+                .intentCode(APPROVAL_INTENT).forceExecute(true).build());
+
+        assertThat(h.recognitionCalls()).as("走的是显式意图路径, 不经过识别").isZero();
+        assertThat(shown.getStatus()).isEqualTo("PENDING_APPROVAL");
+        assertThat(shown.getMessage()).contains("未提交审批、未执行操作").doesNotContain("已提交审批请求");
+        assertThat(h.executedIntents).as("执行层一次都没碰").isEmpty();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("阴性对照: 显式意图码, 没声明审批 → 照常执行")
+    void explicitIntentCodeWithoutApprovalExecutes(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.approvalIntent.setRequiresApproval(false);
+
+        IntentExecuteResponse shown = h.send(IntentExecuteRequest.builder().userInput("看下成本差异复核")
+                .intentCode(APPROVAL_INTENT).forceExecute(true).build());
+
+        assertThat(shown.getStatus()).isEqualTo("SUCCESS");
+        assertThat(h.executedIntents).containsExactly(APPROVAL_INTENT);
+    }
+
+    // ------------------------------------------------------------------ Skill 分支 (没绑工具的意图)
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("Skill 开启 + 咨询 tab + 没绑工具的写意图 → 两入口都拦写, Skill 一次都不跑")
+    void readModeBlocksSkillRoutedWriteIntentOnBothEntries(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.enableSkills();
+        String input = "那批到货的鸡腿帮我登记进系统";
+        assertThat(h.knowledgeBase.matchPhrase(input, "FACTORY")).as("前提: 短语表没有 (走识别分支)").isEmpty();
+        h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.skillWriteIntent)
+                .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+
+        IntentExecuteResponse shown = h.send(IntentExecuteRequest.builder().userInput(input).mode("READ").build());
+
+        assertThat(h.recognitionCalls()).as("阳性对照: 识别被调用").isEqualTo(1);
+        assertThat(shown.getStatus()).isEqualTo("READ_MODE_WRITE_BLOCKED");
+        assertThat(h.skillCalls()).as("Skill 一次都没跑").isZero();
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("阴性对照: 操作 tab 同一句走 Skill, 结果经过共用收尾 (遮价 + aiMode)")
+    void operateModeSkillResultGoesThroughSharedResultSteps(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.enableSkills();
+        String input = "那批到货的鸡腿帮我登记进系统";
+        h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.skillWriteIntent)
+                .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+
+        IntentExecuteResponse shown = h.send(IntentExecuteRequest.builder().userInput(input).mode("OPERATE").build());
+
+        assertThat(h.skillCalls()).as("阳性对照: Skill 真的跑了").isEqualTo(1);
+        assertThat(shown.getStatus()).isEqualTo("SUCCESS");
+        assertThat(shown.getResultData()).as("Skill 结果也换成调用者视图").isEqualTo(Harness.MASKED);
+        assertThat(shown.getAiMode()).isEqualTo("WRITE");
+    }
+
     // ------------------------------------------------------------------ 识别候选按权限收窄
 
     @ParameterizedTest(name = "{0}")
@@ -318,6 +388,7 @@ class IntentTurnSharedStepsEntryParityTest {
         final DashScopeConfig llmConfig = mock(DashScopeConfig.class);
         final AgenticRAGRouterService rag = mock(AgenticRAGRouterService.class);
         final ResultFormatterService formatter = mock(ResultFormatterService.class);
+        final DynamicToolSelectionService dynamicTools = mock(DynamicToolSelectionService.class);
         final PriceFieldResponseAdvice priceView = mock(PriceFieldResponseAdvice.class);
         /** 写意图一律「还缺参数」: 咨询 tab 的拦写必须在它之前, 否则用户先被追问一个根本不该办的写操作。 */
         final com.cretas.aims.service.SlotFillingService slotFilling = mock(com.cretas.aims.service.SlotFillingService.class);
@@ -328,6 +399,8 @@ class IntentTurnSharedStepsEntryParityTest {
         final AIIntentConfig readIntent;
         final AIIntentConfig writeIntent;
         final AIIntentConfig approvalIntent;
+        /** 没绑工具的写意图 (WORKDESK 类, 由 Skill 执行)。 */
+        final AIIntentConfig skillWriteIntent;
         IntentExecuteResponse toolResult;
         SseStreamingService sse;
 
@@ -353,6 +426,7 @@ class IntentTurnSharedStepsEntryParityTest {
             approvalIntent = intent(APPROVAL_INTENT, "成本差异复核", APPROVAL_TOOL, "MEDIUM",
                     ToolExecutor.AccessMode.READ);
             approvalIntent.setRequiresApproval(true);
+            skillWriteIntent = intent(SKILL_WRITE_INTENT, "到货登记", null, "MEDIUM", ToolExecutor.AccessMode.WRITE);
 
             when(toolDispatch.executeWithTool(any(), anyString(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
                 AIIntentConfig seen = inv.getArgument(3);
@@ -394,11 +468,29 @@ class IntentTurnSharedStepsEntryParityTest {
             when(recognizer.getIntentByCode(FACTORY, code)).thenReturn(Optional.of(config));
             when(recognizer.getIntentByCode(code)).thenReturn(Optional.of(config));
             when(recognizer.hasPermission(code, ROLE)).thenReturn(true);
+            if (toolName == null) {
+                return config;
+            }
             ToolExecutor tool = mock(ToolExecutor.class);
             when(tool.getToolName()).thenReturn(toolName);
             when(tool.getAccessMode()).thenReturn(accessMode);
             when(toolRegistry.getExecutor(toolName)).thenReturn(Optional.of(tool));
             return config;
+        }
+
+        /** Skill 开启: 关键词 Skill 对任何话都命中, 回一份带价格字段的结果。 */
+        void enableSkills() {
+            when(dynamicTools.isSkillsEnabled()).thenReturn(true);
+            when(dynamicTools.trySkillRoute(anyString(), anyString(), any(), any())).thenAnswer(inv ->
+                    IntentExecuteResponse.builder().intentRecognized(true).intentCode(SKILL_WRITE_INTENT)
+                            .status("SUCCESS").message("已按 Skill 完成到货登记")
+                            .resultData(Map.of("unitPrice", 12.5)).build());
+        }
+
+        long skillCalls() {
+            return org.mockito.Mockito.mockingDetails(dynamicTools).getInvocations().stream()
+                    .filter(i -> i.getMethod().getName().startsWith("try"))
+                    .count();
         }
 
         void toolReturns(IntentExecuteResponse response) {
@@ -480,7 +572,7 @@ class IntentTurnSharedStepsEntryParityTest {
                     knowledgeBase, mock(AIAnalysisResultRepository.class), toolRegistry,
                     mock(AnalysisRouterService.class), mock(ComplexityRouter.class), mock(AgentOrchestrator.class),
                     rag, mock(ResultValidatorService.class), toolDispatch,
-                    mock(DynamicToolSelectionService.class), preprocessor);
+                    dynamicTools, preprocessor);
             ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", permissionGate);
             ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
             ReflectionTestUtils.setField(orchestrator, "configService", configService);
@@ -504,7 +596,7 @@ class IntentTurnSharedStepsEntryParityTest {
             when(factories.findById(anyString())).thenReturn(Optional.of(factory));
             SseStreamingService s = spy(new SseStreamingService(
                     recognizer, semanticCache, knowledgeBase, mock(AnalysisRouterService.class), new ObjectMapper(),
-                    toolRegistry, toolDispatch, mock(DynamicToolSelectionService.class), llm, llmConfig));
+                    toolRegistry, toolDispatch, dynamicTools, llm, llmConfig));
             ReflectionTestUtils.setField(s, "factoryCapabilityPackRoutingPolicy", new FactoryCapabilityPackRoutingPolicy(
                     factories, new FactoryCapabilityPackSelector(new FactoryCapabilityPackRegistry()), false));
             FactoryAnalysisTestMetadata.bindNamedFactories(s);
