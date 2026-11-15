@@ -42,7 +42,7 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("#1755 L2: 驳回调整先预检再发委外事件")
-class ArApServiceImplRejectPrecheckTest {
+class ArApServiceImplRejectPrecheckContractTest {
 
     @Mock private ArApTransactionRepository transactionRepository;
     @Mock private CustomerRepository customerRepository;
