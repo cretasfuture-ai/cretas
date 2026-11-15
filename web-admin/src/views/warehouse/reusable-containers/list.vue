@@ -1,116 +1,127 @@
 <template>
   <div class="reusable-containers-page">
-    <el-card>
-      <template #header>
-        <div class="header">
-          <span>周转耗材管理 (周转框)</span>
-          <el-button type="primary" @click="openCreate">新建周转耗材</el-button>
-        </div>
-      </template>
+    <section class="cs-card">
+      <header class="cs-card-head header">
+        <h2>周转耗材管理 (周转框)</h2>
+        <UButton data-testid="container-create" @click="openCreate">新建周转耗材</UButton>
+      </header>
 
-      <el-table :data="rows" v-loading="loading" border stripe>
-        <el-table-column prop="containerCode" label="编号" width="120" />
-        <el-table-column prop="containerName" label="名称" min-width="160" />
-        <el-table-column prop="specification" label="规格" min-width="180" />
-        <el-table-column v-if="canViewPrice" prop="unitPrice" label="单价/赔偿价" width="120" />
-        <el-table-column prop="totalQuantity" label="总持有" width="100" />
-        <el-table-column prop="inWarehouseQuantity" label="在库" width="100" />
-        <el-table-column prop="inTransitQuantity" label="在客户处" width="110" />
-        <el-table-column label="操作" width="280" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" @click="openShipOut(row)">发出</el-button>
-            <el-button size="small" type="success" @click="openReturnIn(row)">归还</el-button>
-            <el-button size="small" type="warning" @click="openLoss(row)">报损</el-button>
-            <el-button size="small" link @click="viewTx(row)">流水</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table" data-testid="container-table">
+        <template #empty>暂无周转耗材</template>
+        <template #unitPrice-cell="{ row }"><span class="num">{{ row.original.unitPrice }}</span></template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" color="neutral" variant="outline" @click="openShipOut(row.original)">发出</UButton>
+            <UButton size="xs" color="success" variant="outline" @click="openReturnIn(row.original)">归还</UButton>
+            <UButton size="xs" color="warning" variant="outline" @click="openLoss(row.original)">报损</UButton>
+            <UButton size="xs" variant="link" @click="viewTx(row.original)">流水</UButton>
+          </div>
+        </template>
+      </UTable>
 
-      <el-pagination
-        v-model:current-page="page"
-        v-model:page-size="size"
-        :total="total"
-        layout="prev, pager, next, total"
-        @current-change="loadList"
-        style="margin-top: 12px; justify-content: flex-end"
-      />
-    </el-card>
+      <div class="pager">
+        <span class="total">共 {{ total }} 条</span>
+        <UPagination v-model:page="page" :items-per-page="size" :total="total" show-edges :sibling-count="1" @update:page="loadList" />
+      </div>
+    </section>
 
     <!-- 新建 -->
-    <el-dialog v-model="createVisible" title="新建周转耗材" width="520px">
-      <el-form :model="createForm" label-width="110px">
-        <el-form-item label="编号"><el-input v-model="createForm.containerCode" /></el-form-item>
-        <el-form-item label="名称"><el-input v-model="createForm.containerName" /></el-form-item>
-        <el-form-item label="规格"><el-input v-model="createForm.specification" placeholder="60*40*30 cm / 25kg" /></el-form-item>
-        <el-form-item v-if="canViewPrice" label="单价/赔偿价"><el-input-number v-model="createForm.unitPrice" :min="0" :precision="2" /></el-form-item>
-        <el-form-item label="初始数量"><el-input-number v-model="createForm.totalQuantity" :min="0" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="createForm.remark" type="textarea" /></el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitCreate">确认创建</el-button>
+    <UModal v-model:open="createVisible" title="新建周转耗材" description="登记新的周转耗材" :ui="{ content: 'max-w-[520px]', description: 'sr-only' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="编号"><UInput v-model="createForm.containerCode" class="w-full" /></UFormField>
+          <UFormField label="名称"><UInput v-model="createForm.containerName" class="w-full" /></UFormField>
+          <UFormField label="规格"><UInput v-model="createForm.specification" placeholder="60*40*30 cm / 25kg" class="w-full" /></UFormField>
+          <UFormField v-if="canViewPrice" label="单价/赔偿价">
+            <UInputNumber :step-snapping="false" v-model="createForm.unitPrice" :min="0" :format-options="MONEY_FORMAT" :increment="false" :decrement="false" class="w-full" />
+          </UFormField>
+          <UFormField label="初始数量">
+            <UInputNumber :step-snapping="false" v-model="createForm.totalQuantity" :min="0" :increment="false" :decrement="false" class="w-full" />
+          </UFormField>
+          <UFormField label="备注"><UTextarea v-model="createForm.remark" :rows="3" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="createVisible = false">取消</UButton>
+        <UButton @click="submitCreate">确认创建</UButton>
+      </template>
+    </UModal>
 
     <!-- 发出 / 归还 / 报损 通用 -->
-    <el-dialog v-model="actionVisible" :title="actionTitle" width="500px">
-      <el-form :model="actionForm" label-width="110px">
-        <el-form-item label="数量">
-          <el-input-number v-model="actionForm.quantity" :min="1" />
-        </el-form-item>
-        <el-form-item label="客户ID">
-          <el-input v-model="actionForm.customerId" />
-        </el-form-item>
-        <el-form-item label="客户名称">
-          <el-input v-model="actionForm.customerName" />
-        </el-form-item>
-        <el-form-item v-if="actionType === 'shipOut'" label="发货单ID">
-          <el-input v-model="actionForm.salesDeliveryId" />
-        </el-form-item>
-        <el-form-item v-if="actionType === 'loss' && canViewPrice" label="赔偿金额">
-          <el-input-number v-model="actionForm.compensationAmount" :min="0" :precision="2" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="actionForm.remark" type="textarea" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="actionVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitAction">确认</el-button>
+    <UModal v-model:open="actionVisible" :title="actionTitle" description="周转耗材发出、归还或报损登记" :ui="{ content: 'max-w-[500px]', description: 'sr-only' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="数量">
+            <UInputNumber :step-snapping="false" v-model="actionForm.quantity" :min="1" :increment="false" :decrement="false" class="w-full" />
+          </UFormField>
+          <UFormField label="客户ID"><UInput v-model="actionForm.customerId" class="w-full" /></UFormField>
+          <UFormField label="客户名称"><UInput v-model="actionForm.customerName" class="w-full" /></UFormField>
+          <UFormField v-if="actionType === 'shipOut'" label="发货单ID"><UInput v-model="actionForm.salesDeliveryId" class="w-full" /></UFormField>
+          <UFormField v-if="actionType === 'loss' && canViewPrice" label="赔偿金额">
+            <UInputNumber :step-snapping="false" v-model="actionForm.compensationAmount" :min="0" :format-options="MONEY_FORMAT" :increment="false" :decrement="false" class="w-full" />
+          </UFormField>
+          <UFormField label="备注"><UTextarea v-model="actionForm.remark" :rows="3" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="actionVisible = false">取消</UButton>
+        <UButton @click="submitAction">确认</UButton>
+      </template>
+    </UModal>
 
     <!-- 流水 -->
-    <el-dialog v-model="txVisible" title="流水记录" width="780px">
-      <el-table :data="txRows" v-loading="txLoading" border>
-        <el-table-column prop="createdAt" label="时间" width="170" />
-        <el-table-column prop="transactionType" label="类型" width="100" />
-        <el-table-column prop="quantity" label="数量" width="80" />
-        <el-table-column prop="customerName" label="客户" min-width="140" />
-        <el-table-column v-if="canViewPrice" prop="compensationAmount" label="赔偿金额" width="110" />
-        <el-table-column prop="remark" label="备注" min-width="160" />
-      </el-table>
-    </el-dialog>
+    <UModal v-model:open="txVisible" title="流水记录" description="周转耗材收发流水" :ui="{ content: 'max-w-[780px]', description: 'sr-only' }">
+      <template #body>
+        <UTable :data="txRows" :columns="txColumns" :loading="txLoading" class="cs-table" data-testid="container-tx-table">
+          <template #empty>暂无流水</template>
+        </UTable>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue';
 import { ElMessage } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { get, post } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 
+// 组件全部是 Nuxt UI (UTable / UModal / UFormField / UInput / UInputNumber / UPagination) + --cs-*；
+// 三个弹窗整体 UModal，不混用 Element 控件。提示仍用 ElMessage（命令式服务）。
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
+
+const MONEY_FORMAT = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
 
 const loading = ref(false);
 const rows = ref<any[]>([]);
 const page = ref(1);
 const size = ref(20);
 const total = ref(0);
+
+type Row = Record<string, any>;
+const columns = computed<TableColumn<Row>[]>(() => [
+  { accessorKey: 'containerCode', header: '编号' },
+  { accessorKey: 'containerName', header: '名称' },
+  { accessorKey: 'specification', header: '规格' },
+  ...(canViewPrice.value ? [{ id: 'unitPrice', header: '单价/赔偿价' } as TableColumn<Row>] : []),
+  { accessorKey: 'totalQuantity', header: '总持有' },
+  { accessorKey: 'inWarehouseQuantity', header: '在库' },
+  { accessorKey: 'inTransitQuantity', header: '在客户处' },
+  { id: 'actions', header: '操作' },
+]);
+const txColumns = computed<TableColumn<Row>[]>(() => [
+  { accessorKey: 'createdAt', header: '时间' },
+  { accessorKey: 'transactionType', header: '类型' },
+  { accessorKey: 'quantity', header: '数量' },
+  { accessorKey: 'customerName', header: '客户' },
+  ...(canViewPrice.value ? [{ accessorKey: 'compensationAmount', header: '赔偿金额' } as TableColumn<Row>] : []),
+  { accessorKey: 'remark', header: '备注' },
+]);
 
 const baseUrl = computed(() => `/${factoryId.value}/reusable-containers`);
 
@@ -215,6 +226,11 @@ onMounted(loadList);
 </script>
 
 <style scoped>
-.reusable-containers-page { padding: 16px; }
-.header { display: flex; justify-content: space-between; align-items: center; }
+.reusable-containers-page { padding: var(--cs-space-4); }
+.header { justify-content: space-between; }
+.header h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.row-actions { display: flex; gap: var(--cs-space-1); align-items: center; }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); }
+.total { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
 </style>

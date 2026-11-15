@@ -11,18 +11,22 @@
  *   - totalQuantity = SUM(receiptQuantity - usedQuantity - reservedQuantity)
  *   - totalValue / avgUnitPrice 受 RBAC 价格可见性约束 (canViewPrice)
  *
- * 只读页面 (无新建/编辑/删除)。
+ * 只读页面 (无新建/编辑/删除)。组件全部是 Nuxt UI (UTable / USelect / UInput / UButton) + --cs-*。
  */
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatAmount, fmtQty } from '@/utils/tableFormatters';
 import { sumStockValue } from './stockValueSum';
 import FinishedGoodsSummary from './FinishedGoodsSummary.vue';
 const inventoryKind = ref('materials');
+const KIND_ITEMS = [
+  { label: '原料库存', value: 'materials' },
+  { label: '成品库存', value: 'products' },
+];
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -48,6 +52,22 @@ const loadError = ref('');
 const tableData = ref<MaterialStockSummaryRow[]>([]);
 const searchKeyword = ref('');
 const filterCategory = ref('');
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const columns = computed<TableColumn<MaterialStockSummaryRow>[]>(() => [
+  { accessorKey: 'materialCode', header: '原料编码' },
+  { accessorKey: 'materialName', header: '原料名称' },
+  { id: 'materialCategory', header: '类别' },
+  { id: 'totalQuantity', header: '当前总库存', meta: R },
+  { id: 'unit', header: '单位', meta: C },
+  ...(canViewPrice.value ? [
+    { id: 'avgUnitPrice', header: '移动均价', meta: R },
+    { id: 'totalValue', header: '库存总价值', meta: R },
+  ] : []),
+  { id: 'batchCount', header: '批次数', meta: R },
+  { id: 'warehouseCount', header: '仓库数', meta: R },
+]);
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -90,10 +110,24 @@ const categoryOptions = computed<string[]>(() => {
   return Array.from(set).sort();
 });
 
+// USelect 的选项值不能是空串: 页面内用 ALL 表示全部类别
+const ALL = 'ALL';
+const categoryItems = computed(() => [
+  { label: '全部类别', value: ALL },
+  ...categoryOptions.value.map((c) => ({ label: c, value: c })),
+]);
+const categorySelect = computed({
+  get: () => filterCategory.value || ALL,
+  set: (v: string) => { filterCategory.value = v === ALL ? '' : v; },
+});
+
 const filteredData = computed<MaterialStockSummaryRow[]>(() => {
   const kw = searchKeyword.value.trim().toLowerCase();
   const cat = filterCategory.value;
-  return tableData.value.filter((r) => {
+  // 原 el-table 的 default-sort: 原料名称升序
+  const sorted = [...tableData.value].sort((a, b) =>
+    (a.materialName || '').localeCompare(b.materialName || '', 'zh-CN'));
+  return sorted.filter((r) => {
     if (cat && r.materialCategory !== cat) return false;
     if (!kw) return true;
     const name = (r.materialName || '').toLowerCase();
@@ -124,207 +158,77 @@ onMounted(() => {
 
 <template>
   <div class="page-wrapper">
-    <el-radio-group v-model="inventoryKind" aria-label="库存类型">
-      <el-radio-button value="materials">原料库存</el-radio-button>
-      <el-radio-button value="products">成品库存</el-radio-button>
-    </el-radio-group>
+    <div class="kind-switch" role="group" aria-label="库存类型">
+      <UButton
+        v-for="k in KIND_ITEMS"
+        :key="k.value"
+        size="sm"
+        :color="inventoryKind === k.value ? 'primary' : 'neutral'"
+        :variant="inventoryKind === k.value ? 'solid' : 'outline'"
+        :data-testid="`inventory-kind-${k.value}`"
+        @click="inventoryKind = k.value"
+      >{{ k.label }}</UButton>
+    </div>
     <FinishedGoodsSummary v-if="inventoryKind === 'products'" />
-    <el-card v-if="inventoryKind === 'materials'" class="filter-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span class="page-title">总库存查询</span>
+    <template v-if="inventoryKind === 'materials'">
+      <section class="cs-card">
+        <header class="cs-card-head">
+          <h2 class="page-title">总库存查询</h2>
           <span class="hint">工厂级原料总库存 — 按物料聚合, 跨所有仓库 (仅在库批次)</span>
+        </header>
+        <div class="filter-row">
+          <UInput v-model="searchKeyword" icon="i-lucide-search" placeholder="原料名称 / 编码" class="w-60" data-testid="inventory-total-keyword">
+            <template v-if="searchKeyword" #trailing>
+              <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="searchKeyword = ''" />
+            </template>
+          </UInput>
+          <USelect v-model="categorySelect" :items="categoryItems" class="w-44" data-testid="inventory-total-category" />
+          <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" @click="handleRefresh">刷新</UButton>
         </div>
-      </template>
-      <div class="filter-row">
-        <div class="filter-item">
-          <label>搜索:</label>
-          <el-input
-            v-model="searchKeyword"
-            placeholder="原料名称 / 编码"
-            :prefix-icon="Search"
-            clearable
-            style="width: 240px"
-          />
-        </div>
+      </section>
 
-        <div class="filter-item">
-          <label>类别:</label>
-          <el-select
-            v-model="filterCategory"
-            placeholder="全部类别"
-            clearable
-            style="width: 180px"
-          >
-            <el-option
-              v-for="cat in categoryOptions"
-              :key="cat"
-              :label="cat"
-              :value="cat"
-            />
-          </el-select>
+      <section class="cs-card">
+        <div class="summary-row">
+          <div class="summary-item">
+            <div class="summary-label">原料种类</div>
+            <div class="summary-value strong-blue">{{ totalMaterialKinds }}</div>
+          </div>
+          <div v-if="canViewPrice" class="summary-item">
+            <div class="summary-label">库存总价值</div>
+            <div class="summary-value strong-green">{{ totalValueSum == null ? '-' : formatAmount(totalValueSum) }}</div>
+            <div v-if="totalValueIncomplete" class="summary-label">含缺单价物料，无法合计</div>
+          </div>
         </div>
+      </section>
 
-        <el-button :icon="Refresh" @click="handleRefresh">刷新</el-button>
-      </div>
-    </el-card>
-
-    <el-card v-if="inventoryKind === 'materials'" class="summary-card" shadow="never">
-      <div class="summary-row">
-        <div class="summary-item">
-          <div class="summary-label">原料种类</div>
-          <div class="summary-value strong-blue">{{ totalMaterialKinds }}</div>
-        </div>
-        <div class="summary-item" v-if="canViewPrice">
-          <div class="summary-label">库存总价值</div>
-          <div class="summary-value strong-green">{{ totalValueSum == null ? '-' : formatAmount(totalValueSum) }}</div>
-          <div v-if="totalValueIncomplete" class="summary-label">含缺单价物料，无法合计</div>
-        </div>
-      </div>
-    </el-card>
-
-    <el-card v-if="inventoryKind === 'materials'" class="result-card" shadow="never">
-      <el-table
-        :data="filteredData"
-        v-loading="loading"
-        empty-text="暂无库存数据"
-        stripe
-        border
-        style="width: 100%"
-        :default-sort="{ prop: 'materialName', order: 'ascending' }"
-      >
-        <el-table-column prop="materialCode" label="原料编码" width="130" show-overflow-tooltip />
-        <el-table-column prop="materialName" label="原料名称" min-width="160" show-overflow-tooltip sortable />
-        <el-table-column prop="materialCategory" label="类别" width="120" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.materialCategory || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          prop="totalQuantity"
-          label="当前总库存"
-          width="140"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            <strong>{{ fmtQty(row.totalQuantity) }}</strong>
-          </template>
-        </el-table-column>
-        <el-table-column label="单位" width="90" align="center">
-          <template #default="{ row }">
-            {{ row.unit || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="canViewPrice"
-          label="移动均价"
-          width="130"
-          align="right"
-        >
-          <template #default="{ row }">
-            {{ row.avgUnitPrice == null ? '-' : formatAmount(row.avgUnitPrice) }}
-          </template>
-        </el-table-column>
-        <el-table-column
-          v-if="canViewPrice"
-          prop="totalValue"
-          label="库存总价值"
-          width="150"
-          align="right"
-          sortable
-        >
-          <template #default="{ row }">
-            {{ formatAmount(row.totalValue) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="批次数" width="100" align="right">
-          <template #default="{ row }">
-            {{ row.batchCount ?? 0 }}
-          </template>
-        </el-table-column>
-        <el-table-column label="仓库数" width="100" align="right">
-          <template #default="{ row }">
-            {{ row.warehouseCount ?? 0 }}
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      <section class="cs-card">
+        <UTable :data="filteredData" :columns="columns" :loading="loading" class="cs-table" data-testid="inventory-total-table">
+          <template #empty>暂无库存数据</template>
+          <template #materialCategory-cell="{ row }">{{ row.original.materialCategory || '-' }}</template>
+          <template #totalQuantity-cell="{ row }"><strong class="num">{{ fmtQty(row.original.totalQuantity) }}</strong></template>
+          <template #unit-cell="{ row }">{{ row.original.unit || '-' }}</template>
+          <template #avgUnitPrice-cell="{ row }"><span class="num">{{ row.original.avgUnitPrice == null ? '-' : formatAmount(row.original.avgUnitPrice) }}</span></template>
+          <template #totalValue-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalValue) }}</span></template>
+          <template #batchCount-cell="{ row }"><span class="num">{{ row.original.batchCount ?? 0 }}</span></template>
+          <template #warehouseCount-cell="{ row }"><span class="num">{{ row.original.warehouseCount ?? 0 }}</span></template>
+        </UTable>
+      </section>
+    </template>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.card-header {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-
-  .page-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--cs-text);
-  }
-
-  .hint {
-    font-size: 13px;
-    color: var(--cs-muted);
-  }
-}
-
-.filter-row {
-  display: flex;
-  gap: 16px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.filter-item {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-
-  label {
-    font-size: 13px;
-    color: var(--cs-muted);
-    white-space: nowrap;
-  }
-}
-
-.summary-row {
-  display: flex;
-  gap: 48px;
-  flex-wrap: wrap;
-}
-
-.summary-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.summary-label {
-  font-size: 13px;
-  color: var(--cs-muted);
-}
-
-.summary-value {
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--cs-text);
-
-  &.strong-blue {
-    color: var(--cs-primary);
-  }
-
-  &.strong-green {
-    color: var(--cs-success);
-  }
-}
+<style scoped>
+.page-wrapper { display: flex; flex-direction: column; gap: var(--cs-space-3); padding: var(--cs-space-4); }
+.page-wrapper > .cs-card + .cs-card { margin-top: 0; }
+.kind-switch { display: flex; gap: var(--cs-space-2); }
+.cs-card-head { align-items: baseline; }
+.page-title { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.hint { font-size: 13px; color: var(--cs-muted); font-weight: 400; }
+.filter-row { display: flex; gap: var(--cs-space-3); flex-wrap: wrap; align-items: center; padding: var(--cs-space-4) var(--cs-space-5); }
+.summary-row { display: flex; gap: 48px; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.summary-item { display: flex; flex-direction: column; gap: 4px; }
+.summary-label { font-size: 13px; color: var(--cs-muted); }
+.summary-value { font-size: 22px; font-weight: 600; color: var(--cs-text); }
+.summary-value.strong-blue { color: var(--cs-primary); }
+.summary-value.strong-green { color: var(--cs-success); }
 </style>
