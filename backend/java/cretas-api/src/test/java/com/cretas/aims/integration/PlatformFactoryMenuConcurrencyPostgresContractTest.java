@@ -63,6 +63,8 @@ class PlatformFactoryMenuConcurrencyPostgresContractTest {
     @MockBean FactoryService factoryService;
     @MockBean JwtUtil jwtUtil;
     @MockBean FactoryConfigService factoryConfigService;
+    /** P10: FeatureConfigController 的只读外部软件授权行; 本测试只走 update(), 不读它。 */
+    @MockBean com.cretas.aims.service.integration.ExternalIntegrationService externalIntegrations;
 
     @DynamicPropertySource
     static void postgres(DynamicPropertyRegistry registry) {
