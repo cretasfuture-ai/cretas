@@ -41,6 +41,10 @@
 /* 未分层 + html:root：压过 Nuxt UI 在 base 层里的 :root 取值 */
 html:root {
   --ui-primary: var(--cs-primary);
+  --ui-success: var(--cs-success);
+  --ui-warning: var(--cs-warning);
+  --ui-error: var(--cs-danger);
+  --ui-info: var(--cs-info);
   --ui-color-primary-500: var(--cs-primary);
   --ui-color-primary-600: var(--cs-primary-hover);
   --ui-bg: var(--cs-surface);
@@ -57,3 +61,45 @@ html:root {
   --ui-border-accented: var(--cs-border);
   --ui-radius: var(--cs-radius-sm);
 }
+
+/*
+ * 缺 preflight 的补丁（只作用于 Nuxt UI 组件）。
+ * 我们不引 Tailwind preflight（会重置 583 个 Element 业务页的 h1/button/img），
+ * 但 Nuxt UI 的 `border` / `border-b` 工具类只设宽度、靠 preflight 提供 border-style: solid，
+ * 按钮/输入框也靠它去掉浏览器默认边框与灰底。没有这段：表格行分隔线不显示、UTabs 触发器是浏览器灰色立体按钮。
+ * 选择器限定 [data-slot]（Nuxt UI 4 每个组件元素都带），放 base 层，工具类照常覆盖。
+ */
+@layer base {
+  [data-slot], [data-slot]::before, [data-slot]::after { box-sizing: border-box; border: 0 solid; }
+  button[data-slot], input[data-slot], textarea[data-slot], select[data-slot] { font: inherit; color: inherit; letter-spacing: inherit; margin: 0; background-color: transparent; }
+  button[data-slot] { padding: 0; cursor: pointer; }
+  table[data-slot] { border-collapse: collapse; text-indent: 0; }
+}
+
+/*
+ * 层级：外壳（侧栏/顶栏/页签）与 Element 浮层的 z-index 都高于 Nuxt UI 默认的 z-50，
+ * 实测 UModal/USlideover 的遮罩盖不住侧栏、标题被顶栏遮住。统一把 Nuxt UI 的遮罩、弹层内容、
+ * 下拉/气泡浮层（reka popper wrapper 会照抄内容层 z-index）抬到 1100–1200：高于外壳（侧栏最高 1001，顶栏 99），低于 Element 的 message/notification（从 2000 起），所以弹窗里保存失败的 ElMessage 仍在最上层。
+ * 不分层，直接压过 utilities 层的 z-50。
+ */
+[data-slot='overlay'] { z-index: 1100 !important; }
+[role='dialog'][data-slot='content'] { z-index: 1101 !important; }
+[data-reka-popper-content-wrapper] { z-index: 1200 !important; }
+
+/*
+ * 业务页共用（迁到 Nuxt UI 的页面）：卡片 / 表格 / 标题。不要在每个页面里再抄一份 scoped 版本。
+ * 表头 32px/12px/500，行 44px/13px（组件库「计划列表」实测值）。
+ */
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card + .cs-card { margin-top: var(--cs-space-3); }
+.cs-card-head { display: flex; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); font-weight: 600; color: var(--cs-text); flex-wrap: wrap; }
+.cs-card-body { padding: var(--cs-space-4) var(--cs-space-5); }
+.cs-table th { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+.cs-table td { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+.cs-table .num, .num { font-variant-numeric: tabular-nums; }
+.cs-clickable tbody tr { cursor: pointer; }
+.cs-clickable tbody tr:hover td { background: var(--cs-primary-soft); }
+.cs-page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--cs-space-4); margin-bottom: var(--cs-space-3); flex-wrap: wrap; }
+.cs-page-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.cs-page-head p { margin: 4px 0 0; color: var(--cs-muted); font-size: var(--cs-font); }
+.cs-slide { width: 100%; max-width: min(var(--cs-slide-width, 600px), 92vw) !important; }

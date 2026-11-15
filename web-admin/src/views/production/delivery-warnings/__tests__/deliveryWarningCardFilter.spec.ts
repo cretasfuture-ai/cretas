@@ -41,20 +41,12 @@ const ROWS = [
 ];
 
 const stubs = {
-  'el-button': { template: '<button><slot /></button>' },
-  'el-select': { template: '<div><slot /></div>' },
-  'el-option': { template: '<div />' },
-  'el-row': { template: '<div><slot /></div>' },
-  'el-col': { template: '<div><slot /></div>' },
-  'el-tag': { template: '<span><slot /></span>' },
-  // 表格 stub 把 :data 的长度暴露出来 —— 断言「点下去看到几条」全靠它。
-  'el-table': {
-    props: ['data', 'emptyText'],
+  // Nuxt UI 没装进 vitest: 只桩表格, 把 :data 的长度和空表文案暴露出来 —— 断言「点下去看到几条」全靠它。
+  UTable: {
+    props: ['data', 'dataEmptyText'],
     template:
-      '<div class="tbl" :data-row-count="(data || []).length" :data-empty-text="emptyText"><slot /></div>',
+      '<div class="tbl" :data-row-count="(data || []).length" :data-empty-text="dataEmptyText"><slot /></div>',
   },
-  // ⛔ 列 stub 不渲染默认插槽: 那是需要 `row` 作用域的 scoped slot。
-  'el-table-column': { template: '<div />' },
 };
 
 async function mountPage(response: unknown) {

@@ -59,4 +59,15 @@ public interface SkillExecutor {
      * @return 是否支持
      */
     boolean supports(SkillDefinition skillDefinition);
+
+    /**
+     * 执行前的权限预检 —— 与 {@link #execute} 第 2a 步是<b>同一个</b>判定 (Skill 能跑到的每个工具都过
+     * 执行期工具判定链; 任一被拒 / 预检不可用 ⇒ 整个 Skill 被拒、什么都不跑)。
+     * 澄清候选用它判断「这个没绑工具、靠 Skill 执行的意图, 当前调用者点了会不会被拒」。
+     *
+     * @return 空 = 预检通过; 非空 = 会被拒, 值是拒绝原因。默认实现 fail-closed。
+     */
+    default java.util.Optional<String> permissionRefusal(SkillDefinition skillDefinition, SkillContext context) {
+        return java.util.Optional.of("权限预检不可用");
+    }
 }

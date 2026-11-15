@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
+import { h } from 'vue';
 
 /**
  * 质检放行页 (缺口 11): 待检清单 → 放行 / 不合格, 结论必填; 有未处理 CCP 偏离的批次不能放行。
@@ -29,8 +30,37 @@ const pendingRows = [
   },
 ];
 
+// vitest 没装 Nuxt UI 插件: 只给「超时处置」Tab 用到的 Nuxt UI 组件最小桩 (表格按列渲染 cell 插槽, 弹窗按 open 内联渲染)。
+type Col = { id?: string; accessorKey?: string };
+const nuxtUiStubs = {
+  UTable: {
+    props: ['data', 'columns'],
+    setup(props: { data: Record<string, unknown>[]; columns: Col[] }, { slots }: { slots: Record<string, (a?: unknown) => unknown> }) {
+      return () => h('div', [
+        h('table', [h('tbody', (props.data ?? []).map(original => h('tr', props.columns.map((c) => {
+          const key = c.id ?? c.accessorKey ?? '';
+          const cell = slots[`${key}-cell`];
+          return h('td', cell ? cell({ row: { original } }) as never : String(original[c.accessorKey ?? ''] ?? ''));
+        }))))]),
+        !(props.data ?? []).length && slots.empty ? h('div', slots.empty() as never) : null,
+      ]);
+    },
+  },
+  UModal: {
+    props: ['open', 'title'],
+    setup(props: { open: boolean; title: string }, { slots }: { slots: Record<string, () => unknown> }) {
+      return () => (props.open ? h('div', [h('h3', props.title), slots.body?.() as never, slots.footer?.() as never]) : null);
+    },
+  },
+  UButton: { props: ['disabled'], template: '<button :disabled="disabled"><slot /></button>' },
+  UBadge: { template: '<span><slot /></span>' },
+  UAlert: { props: ['title'], template: '<div>{{ title }}</div>' },
+  UFormField: { template: '<div><slot /></div>' },
+  UTextarea: { props: ['modelValue'], emits: ['update:modelValue'], template: `<textarea :value="modelValue" @input="$emit('update:modelValue', $event.target.value)" />` },
+};
+
 function mountPage() {
-  return mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  return mount(Page, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs }, attachTo: document.body });
 }
 
 function submitButton(): HTMLButtonElement {
