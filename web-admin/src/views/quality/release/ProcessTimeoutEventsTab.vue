@@ -7,6 +7,7 @@
  */
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import {
   PROCESS_TIME_START_LABELS,
   decideProcessTimeEvent,
@@ -21,6 +22,27 @@ import { formatBackendTime, formatDuration, parseBackendTime } from '@/utils/pro
 
 const props = defineProps<{ factoryId: string }>();
 const emit = defineEmits<{ count: [value: number] }>();
+
+const eventColumns: TableColumn<ProcessTimeLimitEvent>[] = [
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { accessorKey: 'processName', header: '工序' },
+  { id: 'limit', header: '时限' },
+  { id: 'start', header: '起算' },
+  { id: 'deadline', header: '截止' },
+  { id: 'overdue', header: '已超时' },
+  { id: 'qty', header: '超时数量' },
+  { id: 'actions', header: '操作' },
+];
+const recordColumns: TableColumn<ProcessTimeLimitEvent>[] = [
+  { id: 'result', header: '结果' },
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { accessorKey: 'processName', header: '工序' },
+  { id: 'qty', header: '超时数量' },
+  { accessorKey: 'conclusion', header: '复检结论' },
+  { id: 'decidedBy', header: '处置人' },
+  { id: 'decidedAt', header: '处置时间' },
+  { id: 'validUntil', header: '放行有效到' },
+];
 
 const loading = ref(false);
 const loadError = ref<string | null>(null);
@@ -148,119 +170,94 @@ defineExpose({ reload });
 
 <template>
   <div data-testid="timeout-events-tab">
-    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon class="mb" />
-    <el-table v-loading="loading" :data="events" stripe empty-text="暂无待处置的超时批次" data-testid="timeout-events-table" class="mb">
-      <el-table-column prop="batchNumber" label="批次号" min-width="190" show-overflow-tooltip />
-      <el-table-column prop="processName" label="工序" min-width="110" show-overflow-tooltip />
-      <el-table-column label="时限" width="110">
-        <template #default="{ row }">{{ formatDuration(row.limitMinutes) }}</template>
-      </el-table-column>
-      <el-table-column label="起算" min-width="210">
-        <template #default="{ row }">{{ startText(row) }}</template>
-      </el-table-column>
-      <el-table-column label="截止" width="150">
-        <template #default="{ row }">{{ formatBackendTime(row.deadlineAt) }}</template>
-      </el-table-column>
-      <el-table-column label="已超时" width="120">
-        <template #default="{ row }">{{ overdueText(row) }}</template>
-      </el-table-column>
-      <el-table-column label="超时数量" width="120" align="right">
-        <template #default="{ row }">{{ qty(row) }}</template>
-      </el-table-column>
-      <el-table-column label="操作" width="120" align="center" fixed="right">
-        <template #default="{ row }">
-          <el-button type="primary" size="small" :data-testid="`timeout-decide-${row.id}`" @click="openDecision(row)">
-            处置
-          </el-button>
+    <UAlert v-if="loadError" :title="loadError" color="error" variant="subtle" icon="i-lucide-circle-alert" class="mb" />
+    <section class="cs-card mb">
+      <UTable :data="events" :columns="eventColumns" :loading="loading" data-testid="timeout-events-table" class="cs-table">
+        <template #empty>暂无待处置的超时批次</template>
+        <template #limit-cell="{ row }">{{ formatDuration(row.original.limitMinutes) }}</template>
+        <template #start-cell="{ row }">{{ startText(row.original) }}</template>
+        <template #deadline-cell="{ row }">{{ formatBackendTime(row.original.deadlineAt) }}</template>
+        <template #overdue-cell="{ row }">{{ overdueText(row.original) }}</template>
+        <template #qty-cell="{ row }"><span class="num">{{ qty(row.original) }}</span></template>
+        <template #actions-cell="{ row }">
+          <UButton size="xs" :data-testid="`timeout-decide-${row.original.id}`" @click="openDecision(row.original)">处置</UButton>
         </template>
-      </el-table-column>
-    </el-table>
+      </UTable>
+    </section>
 
     <h4 class="section-title">处置记录</h4>
-    <el-table :data="decidedRecords" stripe empty-text="暂无处置记录" data-testid="timeout-records-table">
-      <el-table-column label="结果" width="110">
-        <template #default="{ row }">
-          <el-tag :type="row.status === 'RELEASED' ? 'success' : 'danger'">
-            {{ row.status === 'RELEASED' ? '复检放行' : '判不合格' }}
-          </el-tag>
+    <section class="cs-card">
+      <UTable :data="decidedRecords" :columns="recordColumns" data-testid="timeout-records-table" class="cs-table">
+        <template #empty>暂无处置记录</template>
+        <template #result-cell="{ row }">
+          <UBadge :color="row.original.status === 'RELEASED' ? 'success' : 'error'" variant="soft">
+            {{ row.original.status === 'RELEASED' ? '复检放行' : '判不合格' }}
+          </UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="batchNumber" label="批次号" min-width="190" show-overflow-tooltip />
-      <el-table-column prop="processName" label="工序" min-width="110" show-overflow-tooltip />
-      <el-table-column label="超时数量" width="120" align="right">
-        <template #default="{ row }">{{ qty(row) }}</template>
-      </el-table-column>
-      <el-table-column prop="conclusion" label="复检结论" min-width="220" show-overflow-tooltip />
-      <el-table-column label="处置人" width="110">
-        <template #default="{ row }">{{ row.decidedByName || '—' }}</template>
-      </el-table-column>
-      <el-table-column label="处置时间" width="150">
-        <template #default="{ row }">{{ formatBackendTime(row.decidedAt) }}</template>
-      </el-table-column>
-      <el-table-column label="放行有效到" width="150">
-        <template #default="{ row }">{{ row.status === 'RELEASED' ? formatBackendTime(row.validUntil) : '—' }}</template>
-      </el-table-column>
-    </el-table>
+        <template #qty-cell="{ row }"><span class="num">{{ qty(row.original) }}</span></template>
+        <template #decidedBy-cell="{ row }">{{ row.original.decidedByName || '—' }}</template>
+        <template #decidedAt-cell="{ row }">{{ formatBackendTime(row.original.decidedAt) }}</template>
+        <template #validUntil-cell="{ row }">{{ row.original.status === 'RELEASED' ? formatBackendTime(row.original.validUntil) : '—' }}</template>
+      </UTable>
+    </section>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px" :close-on-click-modal="false">
-      <template v-if="current">
-        <el-descriptions :column="1" border size="small" class="mb">
-          <el-descriptions-item label="批次号">{{ current.batchNumber || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="工序 / 时限">{{ current.processName || '—' }} · {{ formatDuration(current.limitMinutes) }}</el-descriptions-item>
-          <el-descriptions-item label="超时">{{ overdueText(current) }} · 数量 {{ qty(current) }}</el-descriptions-item>
-        </el-descriptions>
-        <el-form label-position="top">
-          <el-form-item label="处置结果" required>
-            <el-radio-group v-model="decision">
-              <el-radio value="RELEASED" data-testid="timeout-decision-released">复检放行</el-radio>
-              <el-radio value="REJECTED" data-testid="timeout-decision-rejected">判不合格</el-radio>
-            </el-radio-group>
+    <UModal v-model:open="dialogVisible" :title="dialogTitle" description="超时批次复检处置" :dismissible="false" :ui="{ content: 'max-w-[520px]', description: 'sr-only' }">
+      <template #body>
+        <template v-if="current">
+          <dl class="desc mb">
+            <dt>批次号</dt><dd>{{ current.batchNumber || '—' }}</dd>
+            <dt>工序 / 时限</dt><dd>{{ current.processName || '—' }} · {{ formatDuration(current.limitMinutes) }}</dd>
+            <dt>超时</dt><dd>{{ overdueText(current) }} · 数量 {{ qty(current) }}</dd>
+          </dl>
+          <UFormField label="处置结果" required>
+            <div class="radios">
+              <label class="radio" data-testid="timeout-decision-released"><input v-model="decision" type="radio" value="RELEASED"> 复检放行</label>
+              <label class="radio" data-testid="timeout-decision-rejected"><input v-model="decision" type="radio" value="REJECTED"> 判不合格</label>
+            </div>
             <div v-if="decisionTip" class="form-tip">{{ decisionTip }}</div>
-          </el-form-item>
-          <el-form-item label="复检结论" required>
+          </UFormField>
+          <UFormField label="复检结论" required class="mt-3">
             <div class="presets">
-              <el-button
+              <UButton
                 v-for="p in conclusionPresets"
                 :key="p"
-                class="preset"
-                size="small"
-                plain
-                :type="decision === 'REJECTED' ? 'danger' : 'success'"
+                size="xs"
+                variant="outline"
+                :color="decision === 'REJECTED' ? 'error' : 'success'"
                 @click="applyPreset(p)"
-              >{{ p }}</el-button>
+              >{{ p }}</UButton>
             </div>
-            <el-input
+            <UTextarea
               v-model="conclusion"
-              type="textarea"
               :rows="3"
-              maxlength="2000"
-              show-word-limit
+              :maxlength="2000"
               placeholder="例如：感官正常，中心温度复测 4℃ 合格"
+              class="w-full"
               data-testid="timeout-conclusion"
             />
-          </el-form-item>
-        </el-form>
+          </UFormField>
+        </template>
       </template>
       <template #footer>
         <span v-if="submitDisabledReason" class="disabled-reason">{{ submitDisabledReason }}</span>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="submitting"
-          :disabled="!!submitDisabledReason"
-          data-testid="timeout-decision-submit"
-          @click="submitDecision"
-        >确认处置</el-button>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" :disabled="!!submitDisabledReason" data-testid="timeout-decision-submit" @click="submitDecision">确认处置</UButton>
       </template>
-    </el-dialog>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.mb { margin-bottom: 12px; }
-.section-title { margin: 16px 0 8px; color: #303133; font-size: 14px; font-weight: 600; }
-.form-tip { width: 100%; margin-top: 4px; color: #909399; font-size: 12px; line-height: 1.5; }
-.presets { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-.preset { margin-left: 0; }
-.disabled-reason { margin-right: 12px; color: #f56c6c; font-size: 12px; }
+.mb { margin-bottom: var(--cs-space-3); }
+.section-title { margin: var(--cs-space-4) 0 var(--cs-space-2); color: var(--cs-text); font-size: var(--cs-type-section); font-weight: 600; }
+.desc { display: grid; grid-template-columns: 96px 1fr; margin: 0; border: 1px solid var(--cs-border); border-radius: var(--cs-radius); font-size: var(--cs-font); }
+.desc dt, .desc dd { margin: 0; padding: 6px 10px; border-bottom: 1px solid var(--cs-border); }
+.desc dt { background: var(--cs-surface-subtle); color: var(--cs-muted); }
+.desc dt:nth-last-of-type(1), .desc dd:last-of-type { border-bottom: 0; }
+.radios { display: flex; gap: var(--cs-space-5); }
+.radio { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--cs-text); }
+.radio input { accent-color: var(--cs-primary); }
+.form-tip { margin-top: 4px; color: var(--cs-muted); font-size: var(--cs-font-small); line-height: 1.5; }
+.presets { display: flex; flex-wrap: wrap; gap: var(--cs-space-2); margin-bottom: var(--cs-space-2); }
+.disabled-reason { margin-right: auto; color: var(--cs-danger); font-size: var(--cs-font-small); }
 </style>
