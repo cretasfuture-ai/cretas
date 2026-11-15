@@ -7,6 +7,8 @@
 
 ## 在飞任务
 
+- `WH-AI-QUOTE-GUARD-20261115` — `in-progress` — Owner /root — Base `914c9444b6` — 锁 Web采购list.vue、purchaseAiQuoteGuard.ts与对应测试；复用AI预览confirmGuard拦截含税报价分差，保留原话。禁止改财务算法/DTO/Entity/历史金额。验收：采购guard与Drawer目标Vitest、tsc、构建及试用账号UI。
+
 - `WH-UI-COMP-20261115` — `review` — Owner /root — Base `fa35dd8a86` — 协调者接回 web-admin/src/components/workdesk/**；Nuxt组件及三岗接线已冻结，37files/329tests通过；整合最新main，Web tree未变。
 
 - `WHOLESALE-ACCEPT-20261115` — `in-progress` — Owner /root — Base `fa35dd8a86` — 批发商试用三岗验收修复；原Base7f2556已整合最新main。锁Web workdesk/AI录入与测试；场景表：C:/Users/Steve/.codex/tmp/wholesale-acceptance-20261115/scenarios.md；采购2kg确认入库并回读，待发布后复测。

@@ -12,6 +12,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { pickPrefilled, readReadinessPrefill } from '@/views/factory-readiness/readinessPrefill';
 import { Plus, Search, Refresh, ChatDotRound, Download, QuestionFilled } from '@element-plus/icons-vue';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
+import { purchaseAiQuoteDifference } from './purchaseAiQuoteGuard';
 import AttachmentDropZone from '@/components/attachment/AttachmentDropZone.vue';
 import { PURCHASE_ORDER_CONFIG } from '@/components/ai-entry/types';
 import { WorkflowBar } from '@/components/workflow';
@@ -1316,7 +1317,39 @@ const forwardDialogVisible = ref(false);
 const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
+function guardPurchaseAiQuote(params: TableRow): string | null {
+  if (!Array.isArray(params.items)) return null;
+  for (const [index, item] of (params.items as TableRow[]).entries()) {
+    const price = item.taxIncludedUnitPrice ?? item.unitPrice;
+    if (price == null || price === '') continue;
+    const match = resolveReferenceByName(String(item.materialName || ''), materials.value);
+    if (match.status !== 'MATCHED') continue; // Existing reference checks handle this.
+    const material = materials.value.find((row) => String(row.id) === match.id);
+    const configuredRate = materialTaxRate(material?.taxRate);
+    const suppliedRate = materialTaxRate(item.taxRate);
+    if (configuredRate !== null && suppliedRate !== null && suppliedRate !== configuredRate) {
+      return `第 ${index + 1} 行 AI 识别税率 ${suppliedRate}% 与原料档案 ${configuredRate}% 不同，请继续修改；如需使用其他税率，请到普通采购表单核对办理。系统未创建采购单。`;
+    }
+    const rate = configuredRate ?? suppliedRate;
+    if (rate === null) continue;
+    const rawQuantityUnit = item.quantityUnit || item.unit;
+    const rawPriceUnit = item.priceUnit || item.unit;
+    if (!rawQuantityUnit || !rawPriceUnit) continue;
+    const quantityUnit = canonicalUnitCodeKeepingCount(rawQuantityUnit);
+    const priceUnit = canonicalUnitCodeKeepingCount(rawPriceUnit);
+    const materialUnit = canonicalUnitCodeKeepingCount(material?.unit);
+    // Only compare an explicitly supplied quote in this material's maintained base unit.
+    // Other units/conversions remain governed by the existing native form/server checks.
+    if (!materialUnit || quantityUnit !== materialUnit || priceUnit !== materialUnit) continue;
+    const difference = purchaseAiQuoteDifference(Number(item.quantity), Number(price), rate);
+    if (difference) return `第 ${index + 1} 行含税报价合计 ¥${difference.quoted}，当前计价规则保存后为 ¥${difference.stored}。含税报价保真尚待完善，本次不能填入表单；请继续修改并核对报价，系统未创建采购单。`;
+  }
+  return null;
+}
+
 async function handleAiFill(params: TableRow) {
+  const quoteWarning = guardPurchaseAiQuote(params);
+  if (quoteWarning) { ElMessage.warning(quoteWarning); return; }
   resetForm();
   // Match supplierName to supplierId
   const supplierName = String(params.supplierName || '');
@@ -1345,7 +1378,7 @@ async function handleAiFill(params: TableRow) {
       const relation = supplierMaterialRelations.value.find((row) => String(row.materialTypeId) === materialResolution.id && row.active !== false);
       if (!relation) throw new Error(`供应商“${supplierName}”尚未维护原料“${matName}”的供应关系，请先维护供应原料`);
       const material = materials.value.find((row) => String(row.id) === materialResolution.id);
-      const taxRate = item.taxRate == null ? materialTaxRate(material?.taxRate) : materialTaxRate(item.taxRate);
+      const taxRate = materialTaxRate(material?.taxRate) ?? materialTaxRate(item.taxRate);
       return {
         ...newPurchaseItem(),
         supplierMaterialId: relation.id,
@@ -1931,6 +1964,7 @@ async function handleAiFill(params: TableRow) {
       v-model="aiEntryVisible"
       :config="PURCHASE_ORDER_CONFIG"
       :initial-input="aiEntryInitialInput"
+      :confirm-guard="guardPurchaseAiQuote"
       @fill-form="handleAiFill"
     />
 
