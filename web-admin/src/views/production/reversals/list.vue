@@ -3,8 +3,9 @@ import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { TableColumn } from '@nuxt/ui';
+import { badgeColor } from '@/utils/csBadge';
 import { get, put } from '@/api/request';
 import { handleCatchError } from '@/utils/errorToast';
 import { formatDateTime } from '@/utils/dateFormat';
@@ -44,6 +45,32 @@ const REJECT_REASONS = [
   '其他',
 ] as const;
 const rejectReasonSelected = ref('数据仍需保留');
+const rejectReasonItems = REJECT_REASONS.map(r => ({ label: r, value: r }));
+const statusItems = [
+  { label: '全部', value: 'ALL' },
+  { label: '待审批', value: 'PENDING' },
+  { label: '已批准', value: 'APPROVED' },
+  { label: '已撤回', value: 'DONE' },
+  { label: '已驳回', value: 'REJECTED' },
+];
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛, 请求时还原成空串
+const statusSelect = computed({
+  get: () => statusFilter.value || 'ALL',
+  set: (v: string) => { statusFilter.value = v === 'ALL' ? '' : v; },
+});
+const columns: TableColumn<TableRow>[] = [
+  { id: 'batch', header: '批次 ID' },
+  { id: 'scope', header: '撤回范围' },
+  { id: 'status', header: '状态' },
+  { id: 'reason', header: '申请原因' },
+  { id: 'reverted', header: '已回退流水' },
+  { id: 'submittedBy', header: '提交人 ID' },
+  { id: 'approvedBy', header: '审批人 ID' },
+  { id: 'approvedAt', header: '审批时间' },
+  { id: 'createdAt', header: '申请时间' },
+  { id: 'actions', header: '操作' },
+];
+const txnCount = (r: TableRow) => (Array.isArray(r.revertedTxnIds) ? r.revertedTxnIds.length : 0);
 const rejectReasonOther = ref('');
 
 onMounted(() => {
@@ -148,256 +175,126 @@ function goToBatch(batchId: number) {
 
 <template>
   <div class="page-container">
-    <!-- 页头 -->
-    <div class="page-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+    <div class="cs-page-head">
       <div>
-        <h2 style="margin:0;font-size:18px;font-weight:600;color:var(--cs-text)">报工撤回申请</h2>
-        <p style="margin:4px 0 0;font-size:13px;color:var(--cs-muted)">管理生产批次的整单撤回申请与审批</p>
+        <h2>报工撤回申请</h2>
+        <p>管理生产批次的整单撤回申请与审批</p>
       </div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <el-select
-          v-model="statusFilter"
-          placeholder="状态筛选"
-          clearable
-          style="width:140px"
-          @change="loadData"
-        >
-          <el-option label="全部" value="" />
-          <el-option label="待审批" value="PENDING" />
-          <el-option label="已批准" value="APPROVED" />
-          <el-option label="已撤回" value="DONE" />
-          <el-option label="已驳回" value="REJECTED" />
-        </el-select>
-        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
+      <div class="head-actions">
+        <USelect v-model="statusSelect" :items="statusItems" class="w-36" @update:model-value="loadData" />
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
       </div>
     </div>
 
-    <!-- 主列表 -->
-    <el-card shadow="never" style="border-radius:10px">
-      <el-table
-        v-loading="loading"
-        :data="tableData"
-        stripe
-        style="width:100%"
-        empty-text="暂无撤回申请"
-      >
-        <!-- 批次号 -->
-        <el-table-column label="批次 ID" width="100">
-          <template #default="{ row }">
-            <el-button
-              type="primary"
-              link
-              @click="goToBatch(row.batchId)"
-              style="font-weight:600"
-            >
-              #{{ row.batchId }}
-            </el-button>
-          </template>
-        </el-table-column>
+    <section class="cs-card">
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty>暂无撤回申请</template>
+        <template #batch-cell="{ row }">
+          <UButton variant="link" class="font-semibold" @click="goToBatch(row.original.batchId as number)">#{{ row.original.batchId }}</UButton>
+        </template>
+        <template #scope-cell="{ row }">
+          <UBadge color="neutral" variant="soft">{{ getReversalScopeText(row.original.reversalScope as string) }}</UBadge>
+        </template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(getStatusType(row.original.status as string))" variant="soft">{{ getStatusText(row.original.status as string) }}</UBadge>
+        </template>
+        <template #reason-cell="{ row }"><span class="muted">{{ row.original.reason || '—' }}</span></template>
+        <template #reverted-cell="{ row }">
+          <span v-if="txnCount(row.original) > 0" class="ok">{{ txnCount(row.original) }} 笔</span>
+          <span v-else class="muted">—</span>
+        </template>
+        <template #submittedBy-cell="{ row }"><span class="muted">{{ row.original.submittedBy || '—' }}</span></template>
+        <template #approvedBy-cell="{ row }"><span class="muted">{{ row.original.approvedBy || '—' }}</span></template>
+        <template #approvedAt-cell="{ row }"><span class="muted">{{ row.original.approvedAt ? formatDateTime(row.original.approvedAt as string) : '—' }}</span></template>
+        <template #createdAt-cell="{ row }"><span class="muted">{{ formatDateTime(row.original.createdAt as string) }}</span></template>
+        <template #actions-cell="{ row }">
+          <div v-if="row.original.status === 'PENDING' && canWrite" class="row-actions">
+            <UButton size="xs" color="success" @click="openApprovalDialog(row.original, 'approve')">批准</UButton>
+            <UButton size="xs" color="error" variant="outline" @click="openApprovalDialog(row.original, 'reject')">驳回</UButton>
+          </div>
+          <UButton v-else size="xs" variant="link" @click="goToBatch(row.original.batchId as number)">查看批次</UButton>
+        </template>
+      </UTable>
+    </section>
 
-        <!-- 撤回范围 -->
-        <el-table-column label="撤回范围" width="110">
-          <template #default="{ row }">
-            <el-tag type="info" size="small">{{ getReversalScopeText(row.reversalScope) }}</el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 状态徽章 -->
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small" effect="dark">
-              {{ getStatusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-
-        <!-- 申请原因 -->
-        <el-table-column label="申请原因" min-width="180" show-overflow-tooltip>
-          <template #default="{ row }">
-            <span style="color:var(--cs-muted)">{{ row.reason || '—' }}</span>
-          </template>
-        </el-table-column>
-
-        <!-- 已回退流水数 -->
-        <el-table-column label="已回退流水" width="110">
-          <template #default="{ row }">
-            <span v-if="row.revertedTxnIds && row.revertedTxnIds.length > 0" style="color:var(--cs-success);font-weight:500">
-              {{ row.revertedTxnIds.length }} 笔
-            </span>
-            <span v-else style="color:#C0C4CC">—</span>
-          </template>
-        </el-table-column>
-
-        <!-- 提交人 -->
-        <el-table-column label="提交人 ID" width="100">
-          <template #default="{ row }">
-            <span style="color:var(--cs-muted)">{{ row.submittedBy || '—' }}</span>
-          </template>
-        </el-table-column>
-
-        <!-- 审批人 -->
-        <el-table-column label="审批人 ID" width="100">
-          <template #default="{ row }">
-            <span style="color:var(--cs-muted)">{{ row.approvedBy || '—' }}</span>
-          </template>
-        </el-table-column>
-
-        <!-- 审批时间 -->
-        <el-table-column label="审批时间" width="160">
-          <template #default="{ row }">
-            <span style="color:var(--cs-muted);font-size:12px">
-              {{ row.approvedAt ? formatDateTime(row.approvedAt) : '—' }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <!-- 申请时间 -->
-        <el-table-column label="申请时间" width="160">
-          <template #default="{ row }">
-            <span style="color:var(--cs-muted);font-size:12px">
-              {{ formatDateTime(row.createdAt) }}
-            </span>
-          </template>
-        </el-table-column>
-
-        <!-- 操作 -->
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <template v-if="row.status === 'PENDING' && canWrite">
-              <el-button
-                type="success"
-                size="small"
-                @click="openApprovalDialog(row, 'approve')"
-              >批准</el-button>
-              <el-button
-                type="danger"
-                size="small"
-                plain
-                @click="openApprovalDialog(row, 'reject')"
-              >驳回</el-button>
-            </template>
-            <el-button
-              v-else
-              type="primary"
-              link
-              size="small"
-              @click="goToBatch(row.batchId)"
-            >查看批次</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- ===== 审批 Dialog ===== -->
-    <el-dialog
-      v-model="approvalDialogVisible"
+    <!-- ===== 审批弹窗 ===== -->
+    <UModal
+      v-model:open="approvalDialogVisible"
       :title="approvalAction === 'approve' ? '批准撤回申请' : '驳回撤回申请'"
-      width="520px"
-      :close-on-click-modal="false"
-      destroy-on-close
+      description="审批整单撤回申请"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[520px]', description: 'sr-only' }"
     >
-      <template v-if="approvalTarget">
-        <!-- 批次上下文（fool-proof Rule 2: context 必带） -->
-        <el-alert
-          :title="`撤回对象: 批次 #${approvalTarget.batchId}`"
-          type="info"
-          :closable="false"
-          show-icon
-          style="margin-bottom:16px"
-        >
-          <template #default>
-            <div style="font-size:13px;color:var(--cs-muted);line-height:1.6;margin-top:4px">
-              <span v-if="approvalTarget.planId">
-                关联计划: <strong>{{ approvalTarget.planId }}</strong><br>
-              </span>
-              撤回范围: <strong>{{ getReversalScopeText(approvalTarget.reversalScope) }}</strong><br>
-              <template v-if="approvalTarget.revertedTxnIds && approvalTarget.revertedTxnIds.length > 0">
-                将回退流水: <strong>{{ approvalTarget.revertedTxnIds.length }} 笔</strong>（含原料回补 / WIP 作废 / 成品软删）<br>
-              </template>
-              申请原因: <strong>{{ approvalTarget.reason || '（未填写）' }}</strong>
-            </div>
+      <template #body>
+        <template v-if="approvalTarget">
+          <!-- 批次上下文（fool-proof Rule 2: context 必带） -->
+          <UAlert color="info" variant="subtle" icon="i-lucide-info" class="mb-4" :title="`撤回对象: 批次 #${approvalTarget.batchId}`">
+            <template #description>
+              <div class="ctx">
+                <span v-if="approvalTarget.planId">关联计划: <strong>{{ approvalTarget.planId }}</strong><br></span>
+                撤回范围: <strong>{{ getReversalScopeText(approvalTarget.reversalScope as string) }}</strong><br>
+                <template v-if="txnCount(approvalTarget) > 0">
+                  将回退流水: <strong>{{ txnCount(approvalTarget) }} 笔</strong>（含原料回补 / WIP 作废 / 成品软删）<br>
+                </template>
+                申请原因: <strong>{{ approvalTarget.reason || '（未填写）' }}</strong>
+              </div>
+            </template>
+          </UAlert>
+
+          <!-- 拒绝时: 原因 dropdown（fool-proof Rule 3） -->
+          <template v-if="approvalAction === 'reject'">
+            <UFormField label="驳回原因" required>
+              <USelect v-model="rejectReasonSelected" :items="rejectReasonItems" placeholder="选择驳回原因" class="w-full" data-testid="reject-reason" />
+            </UFormField>
+            <UTextarea
+              v-if="rejectReasonSelected === '其他'"
+              v-model="rejectReasonOther"
+              :rows="3"
+              placeholder="请补充说明驳回原因"
+              :maxlength="300"
+              class="w-full mt-2"
+            />
+            <UTextarea
+              v-else
+              v-model="rejectReasonOther"
+              :rows="2"
+              :placeholder="`可选: 补充说明（已选: ${rejectReasonSelected}）`"
+              :maxlength="200"
+              class="w-full mt-2"
+            />
           </template>
-        </el-alert>
 
-        <!-- 拒绝时: 原因 dropdown（fool-proof Rule 3） -->
-        <template v-if="approvalAction === 'reject'">
-          <div style="margin-bottom:8px">
-            <span style="font-size:13px;font-weight:500;color:var(--cs-text)">驳回原因</span>
-            <span style="color:var(--cs-danger);margin-left:2px">*</span>
-          </div>
-          <el-select
-            v-model="rejectReasonSelected"
-            placeholder="选择驳回原因"
-            style="width:100%;margin-bottom:10px"
-          >
-            <el-option v-for="r in REJECT_REASONS" :key="r" :label="r" :value="r" />
-          </el-select>
-          <el-input
-            v-if="rejectReasonSelected === '其他'"
-            v-model="rejectReasonOther"
-            type="textarea"
-            :rows="3"
-            placeholder="请补充说明驳回原因"
-            maxlength="300"
-            show-word-limit
-            style="margin-bottom:10px"
-          />
-          <el-input
-            v-else
-            v-model="rejectReasonOther"
-            type="textarea"
-            :rows="2"
-            :placeholder="`可选: 补充说明（已选: ${rejectReasonSelected}）`"
-            maxlength="200"
-            show-word-limit
-          />
-        </template>
-
-        <!-- 批准时: 可选意见 -->
-        <template v-else>
-          <div style="margin-bottom:8px">
-            <span style="font-size:13px;font-weight:500;color:var(--cs-text)">审批意见（可选）</span>
-          </div>
-          <el-input
-            v-model="approvalOpinion"
-            type="textarea"
-            :rows="3"
-            placeholder="可填写审批意见，不填写则默认通过"
-            maxlength="200"
-            show-word-limit
-          />
-          <el-alert
-            v-if="approvalAction === 'approve'"
-            title="批准后将自动执行整单撤回: 原料回补、WIP 作废、成品软删、移动均价重算。此操作不可逆。"
-            type="warning"
-            :closable="false"
-            show-icon
-            style="margin-top:12px"
-          />
-          <SelfApprovalReasonField v-if="isSelfApprove" v-model="selfApprovalReason" action-label="审批" />
+          <!-- 批准时: 可选意见 -->
+          <template v-else>
+            <UFormField label="审批意见（可选）">
+              <UTextarea v-model="approvalOpinion" :rows="3" placeholder="可填写审批意见，不填写则默认通过" :maxlength="200" class="w-full" />
+            </UFormField>
+            <UAlert
+              color="warning"
+              variant="subtle"
+              icon="i-lucide-triangle-alert"
+              class="mt-3"
+              title="批准后将自动执行整单撤回: 原料回补、WIP 作废、成品软删、移动均价重算。此操作不可逆。"
+            />
+            <SelfApprovalReasonField v-if="isSelfApprove" v-model="selfApprovalReason" action-label="审批" />
+          </template>
         </template>
       </template>
-
       <template #footer>
-        <div style="display:flex;justify-content:flex-end;gap:8px">
-          <el-button @click="approvalDialogVisible = false">取消</el-button>
-          <el-button
-            :type="approvalAction === 'approve' ? 'success' : 'danger'"
-            :loading="approvalLoading"
-            @click="confirmApproval"
-          >
-            {{ approvalAction === 'approve' ? '确认批准' : '确认驳回' }}
-          </el-button>
-        </div>
+        <UButton color="neutral" variant="outline" @click="approvalDialogVisible = false">取消</UButton>
+        <UButton :color="approvalAction === 'approve' ? 'success' : 'error'" :loading="approvalLoading" @click="confirmApproval">
+          {{ approvalAction === 'approve' ? '确认批准' : '确认驳回' }}
+        </UButton>
       </template>
-    </el-dialog>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-  background: var(--cs-bg);
-  min-height: 100%;
-}
+.page-container { padding: var(--cs-space-4); }
+.head-actions { display: flex; gap: var(--cs-space-2); align-items: center; }
+.row-actions { display: flex; gap: var(--cs-space-2); }
+.muted { color: var(--cs-muted); }
+.ok { color: var(--cs-success); font-weight: 500; }
+.ctx { line-height: 1.6; color: var(--cs-muted); }
 </style>
