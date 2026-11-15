@@ -2056,7 +2056,7 @@ async function handleSave() {
   }
 }
 
-async function openCreateDialog() {
+function resetNewOrderForm() {
   editingOrderId.value = null;
   // T130 Feature B — 新建时业务员未被用户碰过, 选客户后允许自动预填.
   salespersonTouched.value = false;
@@ -2078,6 +2078,10 @@ async function openCreateDialog() {
     contractFileName: null,
     version: null,
   };
+}
+
+async function openCreateDialog() {
+  resetNewOrderForm();
   // 张权 Apr 28 反馈: 新建对话框 dropdown 显示 onMounted 时的旧 cache.
   // 强制刷新让用户刚建的客户/产品立即可选.
   dialogVisible.value = true;
@@ -2137,6 +2141,7 @@ const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
 function handleAiFill(params: TableRow) {
+  resetNewOrderForm();
   // Match customerName to customerId
   const customerName = String(params.customerName || '');
   const customerResolution = resolveReferenceByName(customerName, customers.value);

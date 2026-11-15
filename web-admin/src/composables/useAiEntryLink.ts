@@ -7,6 +7,7 @@ export function useAiEntryLink(visible: Ref<boolean>, canWrite: Readonly<Ref<boo
   const route = useRoute();
   const router = useRouter();
   const initialInput = ref('');
+  watch(visible, (open) => { if (!open) initialInput.value = ''; });
   const scope = computed(() => identity?.() || null);
   watch(() => [route.query.assistant, canWrite.value, scope.value?.factoryId, scope.value?.actorId] as const, ([intent, writable]) => {
     if (intent !== 'order-entry' || !writable) return;
