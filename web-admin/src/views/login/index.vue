@@ -207,16 +207,20 @@ async function handleLogin() {
 .brand-pane {
   flex: 0 0 58%;
   display: flex;
-  align-items: center;
   justify-content: center;
-  padding: 48px;
+  height: 100vh;
+  padding: 40px 48px 0;
   box-sizing: border-box;
-  background: linear-gradient(160deg, var(--cs-primary-soft) 0%, var(--cs-bg) 70%);
+  overflow: hidden;
+  background: var(--cs-bg);
 }
 
 .brand-inner {
   width: 100%;
-  max-width: 620px;
+  max-width: 720px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .brand-headline {
@@ -228,7 +232,7 @@ async function handleLogin() {
 }
 
 .brand-sub {
-  margin: 0 0 36px;
+  margin: 0 0 28px;
   color: var(--cs-muted);
   font-size: var(--cs-font);
 }
@@ -285,16 +289,12 @@ async function handleLogin() {
   line-height: 1.5;
 }
 
-/* 主插图位：固定 4:3；换图时把里面的 svg 换成 <img src> 即可 */
+/* 主插图：无底色/圆角/边框，直接融进左侧背景；占满剩余高度，不够就按比例缩小，底部出血到视口底边。
+   换图只改 heroImage 的 import。边缘用 mask 羽化，和背景色无缝衔接。 */
 .brand-art-slot {
-  width: 100%;
-  max-width: 440px;
-  aspect-ratio: 4 / 3;
-  margin-top: 32px;
-  display: flex;
-  align-items: center;
-  border-radius: var(--cs-radius-lg);
-  overflow: hidden;
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 24px;
 }
 
 .brand-art {
@@ -302,6 +302,13 @@ async function handleLogin() {
   width: 100%;
   height: 100%;
   object-fit: contain;
+  object-position: center bottom;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 10%);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent 0, #000 8%, #000 92%, transparent 100%),
+    linear-gradient(to bottom, transparent 0, #000 10%);
+  mask-composite: intersect;
 }
 
 /* ---- 右侧登录面板 ---- */
@@ -424,7 +431,7 @@ async function handleLogin() {
 @media (max-width: 1100px) {
   .brand-pane {
     flex-basis: 50%;
-    padding: 32px;
+    padding: 32px 32px 0;
   }
   .brand-headline {
     font-size: 26px;
