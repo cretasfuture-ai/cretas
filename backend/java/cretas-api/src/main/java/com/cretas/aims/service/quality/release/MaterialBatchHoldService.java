@@ -119,12 +119,6 @@ public class MaterialBatchHoldService {
     }
 
     /**
-     * 放行时真正该写的状态。请求不是「可用」(判不合格 / 报废 / 指定状态) 或批次没有扣留记录 ⇒ 原样返回请求。
-     * 有扣留记录 ⇒ 按扣留前状态还原, 数量状态按<b>当前</b>数量重算 (扣留期间数量可能变了):
-     * 实物为 0 → 已用完; 可用为 0 → 已耗尽; 否则扣留前是已耗尽 → 可用; 扣留前已预留但预留量已为 0 → 可用;
-     * 其余回扣留前状态 (生产预留由 {@link #followWip} 在在制结束时改写, 见下)。
-     */
-    /**
      * 委外厂手里的料 (委外仓批次) 在仓库页 / AI 批次工具上只能扣留 (质检中)、放行 (可用 → 回 RESERVED) 或保持预留;
      * 改成鲜品 / 冻品等其它状态会绕过 RESERVED 让按批次 id 领料扣到委外厂的料 (复审 低1)。数量只走委外收发。
      */
@@ -141,14 +135,25 @@ public class MaterialBatchHoldService {
                 .withHint("到委外单上操作退料 / 损耗");
     }
 
+    /** 委外发料建的委外仓批次 (委外厂手里的料)。数量只由委外单改, 删除 / 盘点 / 改数量都要走这个判断。 */
+    public static boolean isOutsourceBatch(MaterialBatch batch) {
+        return batch != null && OUTSOURCE_ISSUE_DOC.equals(batch.getSourceDocType());
+    }
+
     /** 委外仓批次的数量只由委外单的发料 / 退料 / 收货耗用 / 损耗改, 仓库页与 AI 工具改数量一律 409 (复审 低1)。 */
     public static void assertNotOutsourceQuantityEdit(MaterialBatch batch) {
-        if (batch != null && OUTSOURCE_ISSUE_DOC.equals(batch.getSourceDocType())) {
+        if (isOutsourceBatch(batch)) {
             throw new BusinessException(409, "委外厂手里的料不能直接改数量; 请到委外单上退料或登记损耗")
                     .withHint("到委外单上操作退料 / 损耗");
         }
     }
 
+    /**
+     * 放行时真正该写的状态。请求不是「可用」(判不合格 / 报废 / 指定状态) 或批次没有扣留记录 ⇒ 原样返回请求。
+     * 有扣留记录 ⇒ 按扣留前状态还原, 数量状态按<b>当前</b>数量重算 (扣留期间数量可能变了):
+     * 实物为 0 → 已用完; 可用为 0 → 已耗尽; 否则扣留前是已耗尽 → 可用; 扣留前已预留但预留量已为 0 → 可用;
+     * 其余回扣留前状态 (生产预留由 {@link #followWip} 在在制结束时改写, 见下)。
+     */
     public static MaterialBatchStatus releaseTarget(MaterialBatch batch, MaterialBatchStatus requested) {
         // 委外厂手里的料 (委外发料建的委外仓批次) 靠 RESERVED (预留量 0) 挡住领料 / FEFO / 调拨 (委外设计 D13)。
         // 扣留后放行、或仓库页 / AI 工具直接改成「可用」, 都 ⛔ 不能变成 AVAILABLE (#1723 终审 中7):

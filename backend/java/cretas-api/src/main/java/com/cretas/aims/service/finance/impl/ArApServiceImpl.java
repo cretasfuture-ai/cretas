@@ -1041,6 +1041,20 @@ public class ArApServiceImpl implements ArApService {
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
 
         rejectRefundReversalSource(txn.getSourceType());
+        // 委外退货冲减被驳回 ⇒ 委外侧给「当时靠这笔待审冲减没冲」的返工件再退补冲减 (#1723 低4 口径 B 规则 3)。
+        // 在加锁之前发: 订阅方先锁委外单再锁工厂, 与委外退货同序, 不死锁; 后面驳回失败则整事务回滚。
+        // 发之前先做不加锁的预检 (只能驳回待审 / 四眼), 拒绝原因归到真正的原因上, 不被委外侧的错盖掉,
+        // 也不白拿委外单锁 (#1755 复审 L2)。加锁后下面照旧再检一遍 (宁挡不漏: 预检与加锁之间状态可能变)。
+        if (txn.getApprovalStatus() != com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING) {
+            throw new BusinessException(409, "只能驳回 PENDING 状态的调整, 当前: " + txn.getApprovalStatus())
+                    .withHint("请刷新调整列表查看最新状态")
+                    .withHintTarget("调整记录");
+        }
+        precheckAdjustmentFourEyes(factoryId, txn, approvedBy, reason, "请使用其他账号驳回");
+        if (applicationEventPublisher != null) {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.ArApAdjustmentRejectingEvent(
+                    factoryId, txn.getId(), txn.getSourceType(), txn.getSourceId(), approvedBy));
+        }
         lockFactoryThenTransaction(factoryId, txn);
 
         rejectRefundReversalSource(txn.getSourceType());
@@ -1094,6 +1108,20 @@ public class ArApServiceImpl implements ArApService {
         }
         txn.setSelfApproved(decision.selfApproved());
         txn.setSelfApprovalReason(decision.selfApproved() ? decision.reason() : null);
+    }
+
+    /** 四眼预检: 与 {@link #ensureAdjustmentFourEyes} 同一判定, 只抛错、不改调整记录 (加锁前用)。 */
+    private void precheckAdjustmentFourEyes(String factoryId, ArApTransaction txn, Long actorId,
+                                            String selfApprovalReason, String otherAccountHint) {
+        boolean actorIsMaker = txn.getOperatedBy() != null && txn.getOperatedBy().equals(actorId);
+        if (com.cretas.aims.service.workflow.FactorySelfApprovalGate.decide(
+                selfApprovalGate, factoryId, actorIsMaker, selfApprovalReason).forbidden()) {
+            throw new BusinessException(403, "审批人不能与提交人相同 (4 眼原则)")
+                    .withCode(ADJUSTMENT_FOUR_EYES)
+                    .withHint(otherAccountHint + "; "
+                            + com.cretas.aims.service.workflow.FactorySelfApprovalGate.SWITCH_HINT)
+                    .withHintTarget("审批人");
+        }
     }
 
     /** 应收/应付调整: 提交人审批/驳回自己的调整 (开关关时)。 */
