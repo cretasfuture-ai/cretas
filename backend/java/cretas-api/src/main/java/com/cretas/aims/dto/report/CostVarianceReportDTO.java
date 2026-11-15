@@ -65,6 +65,8 @@ public class CostVarianceReportDTO {
     private BigDecimal usageVariance;
     /** 替代料差: 用替代料顶主料, 按开计划时两者的价差计。 */
     private BigDecimal substituteVariance;
+    /** 可比计划的实际成本合计 (与 totalBomCost 同一批计划, 两者才能相减); totalActualCost 是期间全部批次, 口径不同。 */
+    private BigDecimal comparedActualCost;
     /** 有可比部分的计划数。 */
     private Integer comparedPlanCount;
     /** 完全无法比较的计划数 (无快照 / 缺单价 / 未产出等, 原因见 planVariances)。 */

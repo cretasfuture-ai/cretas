@@ -237,7 +237,8 @@ class ProcessSecretDataLayerContractTest {
             "scrapDefectRateMin", "nullPassRateAction",
             // 质量 / 运营 / 系统监控 / 意图识别 / 人事薪资 / 财务指标 / 设备 / 计划进度
             "percent", // 影响分析 Tool 参数: 涨价假设百分比, 不是配方份额
-            "availabilityRate", "averagePassRate", "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
+            "availabilityRate", "averagePassRate", "inspectionPassRatePct", // 质检合格率 (检验结果合格次数÷检验次数), 与配方无关
+             "averageUsageHours", "avgMatchRate", "avgStrongSignalRate",
             "baudRate", "bracketRate", "brandLossRate", "budgetVarianceRate", "completionPct", "complianceRate",
             "complianceRatePct", "configuredMaxRatio", "constantBitRate", "costChangeRate", "coverageRate",
             "currentRatio", "debtRatio", "decisionPassRate", "directExecuteRate", "epsilonPct", "equipmentRatio",

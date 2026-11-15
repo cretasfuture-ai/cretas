@@ -118,6 +118,10 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/production/outsource': [{ path: '/production', module: 'production' }, { path: '/production/outsource', module: 'production' }],
   // 工序首检（E 线 BL17）：质量管理下「工序首检」，与「质检记录」同判据（父组 质量管理 取自改前快照 + module: 'quality'），不加 roles
   '/quality/first-article': [snapshot.get('/quality/inspections')![0], { path: '/quality/first-article', module: 'quality' }],
+  // P8 数字班组（M4）：组是 container 不带判据；两个叶子同「发现的问题」判据，配置页同系统管理模块。数据接口按登录人逐件判
+  '/crew': [{ path: '/crew', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
+  '/crew/ledger': [{ path: '/crew/ledger', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
+  '/crew/settings': [{ path: '/crew/settings', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }],
   // P10：「数据与分析」末尾「外部软件对照」（容器纯展示不带判据），与后端 production:read 同判据，不加 roles；
   // 没有外部授权的工厂由 AppSidebar 按 feature-config integrations 行隐藏（不在本闸）。
   '/external-software': [{ path: '/external-software', module: 'production' }],
@@ -194,7 +198,7 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
     const containers: MenuItem[] = [];
     const walk = (nodes: readonly MenuItem[]) => nodes.forEach((n) => { if (n.container) containers.push(n); if (n.children) walk(n.children); });
     walk(groupedMenuConfig);
-    expect(containers.map((c) => c.title)).toEqual(['概览', '数据与分析', '主数据']);
+    expect(containers.map((c) => c.title)).toEqual(['概览', '数据与分析', '数字班组', '主数据']);
     for (const c of containers) {
       expect(c.roles, c.title).toBeUndefined();
       expect(c.hideForFactoryTypes, c.title).toBeUndefined();
@@ -208,16 +212,17 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
   it('分区与组顺序按原型：今天/待办/发现的问题 → 全部功能（概览→个人 OA→采购→销售→生产→仓储→质量→数据与分析→保留模块）→ 设置', () => {
     expect(groupedMenuConfig.map((m) => `${m.section}:${m.title}`)).toEqual([
       'top:今天', 'top:待办', 'top:发现的问题',
-      'all:概览', 'all:个人 OA', 'all:采购管理', 'all:销售管理', 'all:生产管理', 'all:仓储管理', 'all:质量管理', 'all:数据与分析',
+      'all:概览', 'all:个人 OA', 'all:采购管理', 'all:销售管理', 'all:生产管理', 'all:仓储管理', 'all:质量管理', 'all:数据与分析', 'all:数字班组',
       'all:研发管理', 'all:人事管理', 'all:设备管理', 'all:财务管理', 'all:智能调度',
-      'settings:主数据', 'settings:视觉质检训练', 'settings:系统管理',
+      'settings:主数据', 'settings:视觉质检训练', 'settings:数字班组配置', 'settings:系统管理',
     ]);
   });
 
-  it('本批不出现的入口：数字班组（M4）、M7 四页；概览里不再有异常中心（P4 由发现的问题取代）', () => {
+  it('不出现的入口：M7 四页、数字班组入职（未做）；概览里不再有异常中心（P4 由发现的问题取代）；P8 起数字班组三项出现', () => {
     const paths = leafChains(groupedMenuConfig).map((c) => c.path);
     expect(paths).toContain('/issues');
-    for (const p of ['/workspaces/exceptions', '/crew', '/crew/ledger', '/crew/onboard',
+    for (const p of ['/crew', '/crew/ledger', '/crew/settings']) expect(paths, p).toContain(p);
+    for (const p of ['/workspaces/exceptions', '/crew/onboard', '/crew/inbox',
       '/lsm/outsource', '/lsm/customer-prices', '/warehouse/inventory-adjustments', '/collab/tasks']) {
       expect(paths, p).not.toContain(p);
     }

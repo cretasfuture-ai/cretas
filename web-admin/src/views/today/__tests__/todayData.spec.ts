@@ -33,6 +33,10 @@ function makeGet(overrides: Record<string, Handler> = {}) {
     if (url.includes('/issues/dispositions/assigned-to-me')) return ok([
       { title: '缺料 · 订单 SO-1', linkPath: '/production/shortage-cases', actedAt: '2026-11-14T09:00:00' },
     ]) as never;
+    if (url.includes('/digital-crew/inbox')) return ok({
+      mine: [{ id: 1, title: '新建生产计划 · 明天加 500kg', memberName: '数字计划员', createdByName: '张三' }],
+      hiddenCount: 2, hiddenModules: ['quality'], totalMine: 57, page: 0, size: 50,
+    }) as never;
     return Promise.reject(new Error(`unexpected ${url}`));
   };
   return { get, calls };
@@ -148,15 +152,20 @@ describe('G-1：读取超时 + 释放 inflight（阳性对照）', () => {
 });
 
 describe('G-2：页签角标只在读到数时画', () => {
-  it('读到数画；失败 / 不适用 / 没有来源（等我确认）都是 null，而不是「—」或 0', async () => {
+  it('读到数画；失败 / 不适用都是 null，而不是「—」或 0', async () => {
     const a = makeGet({ '/workflow/instances/my-created': () => Promise.reject(new Error('boom')) });
     const L = createTodayLoader({ get: a.get as never });
     await L.load(ctxOf({ canRead: (m) => !(m.length === 1 && m[0] === 'sales') }));
     expect(tabBadge('approve', L.T.s)).toBe(7);
     expect(tabBadge('mine', L.T.s), '读取失败').toBeNull();
     expect(L.T.s.mine.note).toContain('读取失败：boom');
-    expect(tabBadge('confirm', L.T.s), '没有来源').toBeNull();
-    expect(TODO_TABS.find((t) => t.id === 'confirm')?.reason).toContain('P8');
+    // P8：等我确认读数字班组 inbox，角标 = 我有权确认的件数（服务端库里的总数 totalMine，不是这一页 mine 的长度 1；
+    // 别的岗位的只在 note 里报件数，不计入）
+    expect(tabBadge('confirm', L.T.s)).toBe(57);
+    expect(L.T.s.crewConfirm.note).toContain('另有 2 件');
+    // 服务端分页：件数是库里的总数，不是这一页的长度
+    expect(L.T.s.crewConfirm.count).toBe(57);
+    expect(TODO_TABS.find((t) => t.id === 'confirm')?.reason).toBeUndefined();
     // 业务待办：销售订单角标不适用不参与；其余 ok ⇒ 2 + 2 + 2 + 4
     expect(L.T.s.salesOrders.state).toBe('na');
     expect(tabBadge('work', L.T.s)).toBe(2 + 2 + 2 + 4);
@@ -193,5 +202,25 @@ describe('G-2：页签角标只在读到数时画', () => {
   it('SRC_IDS 与页签来源互相覆盖（没有来源游离在页签之外）', () => {
     const inTabs = new Set(TODO_TABS.flatMap((t) => t.sources));
     for (const id of SRC_IDS) expect(inTabs.has(id), id).toBe(true);
+  });
+});
+
+describe('P8 等我确认', () => {
+  it('数字班组 inbox 读取失败 ⇒ 页签不画角标、写明读取失败（不写 0）', async () => {
+    const a = makeGet({ '/digital-crew/inbox': () => Promise.reject(new Error('403 没有权限')) });
+    const L = createTodayLoader({ get: a.get as never });
+    await L.load(ctxOf());
+    expect(L.T.s.crewConfirm.state).toBe('error');
+    expect(tabBadge('confirm', L.T.s)).toBeNull();
+    expect(L.T.s.crewConfirm.note).toContain('读取失败');
+  });
+
+  it('inbox 没返回总件数 totalMine ⇒ 当读不到处理（不画角标），⛔ 不退回本页件数', async () => {
+    const a = makeGet({ '/digital-crew/inbox': () => ok({ mine: [{ id: 1, title: '新建生产计划' }], hiddenCount: 0, hiddenModules: [] }) });
+    const L = createTodayLoader({ get: a.get as never });
+    await L.load(ctxOf());
+    expect(L.T.s.crewConfirm.state).toBe('error');
+    expect(tabBadge('confirm', L.T.s)).toBeNull();
+    expect(L.T.s.crewConfirm.note).toContain('总件数');
   });
 });

@@ -100,10 +100,19 @@ class ReportBomCostRankToolContractTest {
 
     @Test
     void productNameResolvesToTypeIds_onlyMatchingRanked() throws Exception {
-        JsonNode rows = run("{\"productName\":\"牛肉\"}").get("data").get("data").get("rows");
+        // 第 3 轮口径表 B: 名称完整出现在原话里才锁定; 两个都出现就两个都排
+        JsonNode rows = run("{\"productName\":\"卤牛肉礼盒和卤牛肉散装\"}").get("data").get("data").get("rows");
         assertEquals(2, rows.size());
         assertEquals("P1", rows.get(0).get("productTypeId").asText());
         assertEquals("P3", rows.get(1).get("productTypeId").asText());
+        JsonNode one = run("{\"productName\":\"卤牛肉礼盒成本\"}").get("data").get("data").get("rows");
+        assertEquals(1, one.size());
+        assertEquals("P1", one.get(0).get("productTypeId").asText());
+        // 只说了一部分 (「牛肉」⊂「卤牛肉礼盒」): ⛔ 不反向包含去排它们, 只列候选请用户说完整名
+        JsonNode partial = run("{\"productName\":\"牛肉\"}").get("data");
+        assertFalse(partial.get("data").has("rows"), partial.toString());
+        String msg = partial.get("message").asText();
+        assertTrue(msg.contains("没有名为「牛肉」") && msg.contains("卤牛肉礼盒") && msg.contains("卤牛肉散装"), msg);
     }
 
     @Test

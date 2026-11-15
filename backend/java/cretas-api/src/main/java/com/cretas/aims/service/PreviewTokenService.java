@@ -100,6 +100,27 @@ public interface PreviewTokenService {
     Optional<BoundTokenExecution> readBoundExecution(String token, String factoryId, Long userId);
 
     /**
+     * Owner-scoped, non-secret row id of a bound token. Callers that must later re-check the
+     * token's state (e.g. digital-crew work items) store this id instead of the bearer token.
+     */
+    Optional<Long> readBoundTokenId(String token, String factoryId, Long userId);
+
+    /** Owner-scoped status read by row id (see {@link #readBoundTokenId}); includes terminal states. */
+    Optional<IntentPreviewToken.TokenStatus> readBoundStatusById(Long tokenId, String factoryId, Long userId);
+
+    /**
+     * Atomically cancels one still-PENDING token by row id, scoped to its owner and factory. Used when a
+     * shared work item is re-previewed by someone else: the previous previewer's token must stop being
+     * confirmable anywhere. Returns false when the token was already claimed / resolved / not owned.
+     */
+    boolean cancelPendingById(Long tokenId, String factoryId, Long ownerUserId, String reason);
+
+    /** Configured EXECUTING-lease reconciliation window (minutes); callers that wait on it derive from this. */
+    default long executingStaleMinutes() {
+        return 10;
+    }
+
+    /**
      * 确认令牌并执行操作 (Confirm 阶段)
      *
      * @param token 令牌值

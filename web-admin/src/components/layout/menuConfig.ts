@@ -749,7 +749,7 @@ export const platformWorkspacePaths: string[] = platformMenuConfig
 //   · （P2 原文：三页要到 P3/P4 才有，当时不显示。）
 //     不指向现有近似页的理由：那样会让同一 path 在菜单里出现两次（选中高亮/面包屑二义），
 //     而新 path 又还没有路由。section 'top' 的位置已留好，P3/P4 只加条目。
-//   · 「数字班组」组本批不出现（M4）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
+//   · 「数字班组」组 P8 已加（M4，见 CREW_LEAVES）。委外收发/客户价目表/库存调整单/协同任务 4 页不做（M7）。
 //   · 「数据与分析」对工厂默认显示（M3）在 P2b 落地：/smart-bi 去掉 hideForFactoryTypes FACTORY，
 //     按厂关闭改为 feature-config showInSidebar === false；闸里 EXPECTED_CHANGES 白名单逐条列出。
 //   · 餐饮 / 物流工厂与平台侧栏不在原型范围（MIGRATION-PLAN 1.4）：继续用原分组，只换 token 与外壳。
@@ -900,6 +900,21 @@ const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外
 const FIRST_ARTICLE_LEAF: MenuItem = { path: '/quality/first-article', title: '工序首检', icon: '', module: 'quality' };
 
 /**
+ * P8「数字班组」（MIGRATION-PLAN 2.7，DECISIONS 第十八节 M4：P8 上菜单）。只加在原型分组侧栏；原分组 menuConfig 不动。
+ * 组是 container（纯展示）；两个叶子与「待办」同判据（module: 'dashboard'，餐饮 / 物流不显示），
+ * 页面数据由 DigitalCrewController 按登录人权限逐件判。「等我确认」不另开页，并入「待办 › 等我确认」。
+ * 设置 › 数字班组配置：module: 'system'（与「系统管理」同模块）；改配置后端再要 system:read_write。
+ * 闸里 EXPECTED_ADDITIONS 登记。
+ */
+const CREW_LEAVES: MenuItem[] = [
+  { path: '/crew', title: '班组首页', icon: '', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
+  { path: '/crew/ledger', title: '工作记录与额度', icon: '', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] },
+];
+const CREW_SETTINGS_LEAF: MenuItem = {
+  path: '/crew/settings', title: '数字班组配置', icon: 'UserFilled', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'],
+};
+
+/**
  * P10 外部软件（MIGRATION-PLAN 第四块）：「数据与分析」末尾放「外部软件对照 /external-software」。
  * 只在平台授权了外部软件接口的工厂显示：AppSidebar 用 feature-config integrations 行（externalHiddenMenuPaths）隐藏，
  * 路由守卫与后端同样按授权拦。后端接口 @RequirePermission production:read → module: 'production'，不加 roles。
@@ -952,6 +967,7 @@ function buildGroupedMenu(): MenuItem[] {
     warehouseGroupWithWip(),
     insertAfter(takeGroup('/quality', MOVED_OUT), '/quality/inspections', FIRST_ARTICLE_LEAF),
     analytics,
+    container('#group/crew', '数字班组', 'UserFilled', CREW_LEAVES),
     // 原型关掉、正式端保留的模块（第三块）：只换外观与位置
     takeGroup('/rd', MOVED_OUT),
     takeGroup('/hr', MOVED_OUT),
@@ -963,6 +979,7 @@ function buildGroupedMenu(): MenuItem[] {
   const settings: MenuItem[] = [
     container('#group/master-data', '主数据', 'Tickets', MASTER_DATA_PATHS.map(moveLeaf), 'settings'),
     ...SETTINGS_LEAF_PATHS.map((p) => ({ ...moveLeaf(p), icon: 'Aim', section: 'settings' as const })),
+    { ...CREW_SETTINGS_LEAF, section: 'settings' as const },
     { ...takeGroup('/system', MOVED_OUT), section: 'settings' as const },
   ];
   return [...TOP_ENTRIES, ...all, ...settings];
@@ -983,8 +1000,11 @@ export const wholesaleWorkdeskTitles: Record<string, string> = {
 };
 const wholesaleDesk = (path: string): MenuItem => ({ ...moveLeaf(path), title: wholesaleWorkdeskTitles[path] });
 
-/** Layout only: keep the original paths, permissions and ancestor guards. */
-export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.map((item) => {
+/**
+ * Layout only: keep the original paths, permissions and ancestor guards.
+ * 批发商的数字员工已嵌在各自模块里（#1734/#1753），不另出顶层「数字班组」组：P8 的两个叶子（判据不变）并进「概览」。
+ */
+export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.filter((item) => item.path !== '#group/crew').map((item) => {
   if (item.path === '/procurement') {
     return { ...item, children: [wholesaleDesk('/workdesk/purchaser'), ...(item.children ?? []), moveLeaf('/procurement/suppliers')] };
   }
@@ -995,8 +1015,9 @@ export const wholesalerMenuConfig: MenuItem[] = groupedMenuConfig.map((item) => 
     return { ...item, children: [wholesaleDesk('/workdesk/warehouse-keeper'), ...(item.children ?? [])] };
   }
   if (item.path === '#group/overview') {
-    return { ...item, children: item.children?.map((child) => child.path === '/workdesk'
-      ? { ...child, children: child.children?.filter((desk) => !wholesaleWorkdeskTitles[desk.path]) } : child) };
+    return { ...item, children: [...(item.children?.map((child) => child.path === '/workdesk'
+      ? { ...child, children: child.children?.filter((desk) => !wholesaleWorkdeskTitles[desk.path]) } : child) ?? []),
+    ...CREW_LEAVES.map((leaf) => (leaf.path === '/crew' ? { ...leaf, title: '数字班组' } : leaf))] };
   }
   if (item.path === '#group/master-data') {
     return { ...item, title: '基础资料', children: item.children?.filter((child) =>
