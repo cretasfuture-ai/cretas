@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { CS_TOKENS } from '@/styles/csTokens'
 /**
  * 默认 Dashboard
  * 适用角色: viewer, quality_manager, procurement_manager, sales_manager, equipment_admin 等
@@ -25,7 +26,7 @@ const factoryId = computed(() => authStore.factoryId);
 
 // 模块配置
 const moduleConfig = [
-  { key: 'dashboard', title: '首页', icon: House, route: '/dashboard', color: '#409eff' },
+  { key: 'dashboard', title: '首页', icon: House, route: '/dashboard', color: CS_TOKENS.primary },
   { key: 'production', title: '生产管理', icon: TrendCharts, route: '/production/batches', color: '#67c23a' },
   { key: 'warehouse', title: '仓储管理', icon: Box, route: '/warehouse/materials', color: '#e6a23c' },
   { key: 'quality', title: '质量管理', icon: Checked, route: '/quality/inspections', color: '#f56c6c' },
@@ -202,7 +203,7 @@ function getPermissionLabel(module: string): string {
     transition: all 0.2s;
 
     &:hover {
-      border-color: #409eff;
+      border-color: var(--cs-primary);
       box-shadow: 0 2px 12px rgba(64, 158, 255, 0.1);
       transform: translateY(-2px);
     }
@@ -255,7 +256,7 @@ function getPermissionLabel(module: string): string {
     }
 
     strong {
-      color: #409eff;
+      color: var(--cs-primary);
     }
   }
 }

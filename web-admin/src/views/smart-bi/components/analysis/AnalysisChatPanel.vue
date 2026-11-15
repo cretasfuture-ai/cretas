@@ -605,13 +605,13 @@ defineExpose({ setFocus, sendMessage, clearConversation });
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button__original-radio:checked + .el-radio-button__inner) {
   color: #fff;
-  background: var(--el-color-primary, #409eff);
-  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary, var(--cs-primary));
+  border-color: var(--el-color-primary, var(--cs-primary));
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-radio-button.is-active .el-radio-button__inner) {
   color: #fff;
-  background: var(--el-color-primary, #409eff);
-  border-color: var(--el-color-primary, #409eff);
+  background: var(--el-color-primary, var(--cs-primary));
+  border-color: var(--el-color-primary, var(--cs-primary));
 }
 :global(:root[data-theme='dark']) .acp-panel :deep(.el-input__wrapper) {
   background: #262727;

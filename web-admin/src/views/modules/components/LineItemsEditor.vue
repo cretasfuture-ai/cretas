@@ -244,7 +244,7 @@ defineExpose({ recomputeRow, onReferenceProject, updateField })
     </el-table>
     <div style="display: flex; justify-content: space-between; margin-top: 8px; align-items: center">
       <el-button v-if="!disabled" type="primary" link size="small" @click="addRow">+ 添加行</el-button>
-      <span v-if="showTotalAmount" style="font-weight: 600; color: #409eff">合计: ¥{{ totalAmount.toFixed(2) }}</span>
+      <span v-if="showTotalAmount" style="font-weight: 600; color: var(--cs-primary)">合计: ¥{{ totalAmount.toFixed(2) }}</span>
     </div>
   </div>
 </template>

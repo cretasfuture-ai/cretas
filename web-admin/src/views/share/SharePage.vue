@@ -358,7 +358,7 @@ onMounted(load);
   color: #303133;
   margin: 20px 0 12px;
   padding-left: 8px;
-  border-left: 3px solid #409eff;
+  border-left: 3px solid var(--cs-primary);
 }
 
 .error-hint {
