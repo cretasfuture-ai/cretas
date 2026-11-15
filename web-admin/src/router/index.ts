@@ -854,6 +854,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             component: () => import('@/views/quality/inspections/list.vue'),
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
           },
+          // 工序首检 (E 线 BL17): 送检 / 判定 / 首检标准 / 本厂开关; 菜单只登记在原型分组侧栏 (menuConfig.ts 的 FIRST_ARTICLE_LEAF)
+          {
+            path: 'first-article',
+            name: 'QualityFirstArticle',
+            component: () => import('@/views/quality/first-article/index.vue'),
+            meta: { requiresAuth: true, title: '工序首检', module: 'quality' }
+          },
           // 缺口 11: 质检放行 (需检产品产出待检 → 放行 / 不合格)
           {
             path: 'release',

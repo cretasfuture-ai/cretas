@@ -24,6 +24,8 @@ import java.util.Map;
  *   <li>完成必填实际产量, 且不能为负 (0 允许) —— 同 {@code WorkProcessTaskServiceImpl#complete} 前两条校验</li>
  *   <li>开始前上游产出的料要到 —— 读 {@code getById} 带回的 {@code unlocked} (与写路径同一个
  *       {@code WorkflowStepUnlockGuard})</li>
+ *   <li>完成前工序首检 (工厂开关 = 拦截时) —— {@link WorkProcessTaskService#assertFirstArticleAllowsComplete},
+ *       写路径 {@code complete} 调的是同一个 {@code FirstArticleGate}</li>
  * </ul>
  *
  * <p>返回形状与其它写工具预览一致 ({@code ReceiveWithLimitTool}):
@@ -117,6 +119,12 @@ final class WorkProcessTaskTransitionPreview {
         Status from = task.getStatus();
         if (!WorkProcessTaskService.isTransitionAllowed(from, Status.COMPLETED)) {
             return cannot(result, "INVALID_STATUS", completeRefusal(task));
+        }
+        // 镜像写路径: 工厂首检开关 = 拦截且首检没合格 → 写路径 409, 这里不出确认卡 (开关关 / 提示时什么都不做)。
+        try {
+            service.assertFirstArticleAllowsComplete(factoryId, task.getId());
+        } catch (com.cretas.aims.exception.BusinessException refused) {
+            return cannot(result, "FIRST_ARTICLE_NOT_PASSED", refused.getMessage());
         }
 
         Map<String, Object> current = identityRows(task);

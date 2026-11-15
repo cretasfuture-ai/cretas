@@ -116,6 +116,8 @@ const EXPECTED_ADDITIONS: Record<string, Guard[]> = {
   '/warehouse/wip-batches': [snapshot.get('/warehouse/materials')![0], { path: '/warehouse/wip-batches', module: 'warehouse' }],
   // 委外（DECISIONS 第十九节）：生产管理下「委外单」，与「交付风险」同判据（父组 生产管理 + module: 'production'），不加 roles
   '/production/outsource': [{ path: '/production', module: 'production' }, { path: '/production/outsource', module: 'production' }],
+  // 工序首检（E 线 BL17）：质量管理下「工序首检」，与「质检记录」同判据（父组 质量管理 取自改前快照 + module: 'quality'），不加 roles
+  '/quality/first-article': [snapshot.get('/quality/inspections')![0], { path: '/quality/first-article', module: 'quality' }],
 };
 const ADDED = new Set(Object.keys(EXPECTED_ADDITIONS));
 

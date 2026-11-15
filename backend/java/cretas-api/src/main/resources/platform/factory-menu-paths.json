@@ -110,6 +110,7 @@
     "/quality/defects",
     "/quality/disposals",
     "/quality/disposition",
+    "/quality/first-article",
     "/quality/inspections",
     "/quality/label-qc",
     "/quality/param-deviation",

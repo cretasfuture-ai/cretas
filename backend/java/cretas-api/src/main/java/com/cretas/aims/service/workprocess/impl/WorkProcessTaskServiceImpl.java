@@ -95,6 +95,13 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.ProductWorkProcessAssigneeRepository pwpAssigneeRepository;
 
+    /**
+     * 工序首检闸 (V20261115_51)。工厂开关默认关: 关时只查一次开关就返回, 开工/完工与没有首检时一样。
+     * required=false 同上 (不改构造器、不打断既有 @InjectMocks 单测); 没注入 = 不查首检。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
+
     // ==================== T142: batch assignedToName helper ====================
 
     /**
@@ -463,7 +470,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         }
         WorkProcessTask saved = taskRepository.save(task);
         log.info("工序任务 {} 开始 (operator={})", id, operatorUserId);
-        return toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId()));
+        return withFirstArticleNotice(factoryId, saved, toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId())));
     }
 
     @Override
@@ -491,6 +498,10 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
                 task.getProductWorkProcessId(), operatorUserId);
         assertNotOutsourced(task);
         assertTransition(task.getStatus(), Status.COMPLETED);
+        // 工序首检: 工厂开关 = 拦截且首检没合格 → 409; 关 / 提示 → 放行 (AI 预览经 assertFirstArticleAllowsComplete 同判据)
+        if (firstArticleGate != null) {
+            firstArticleGate.assertCanComplete(factoryId, task);
+        }
 
         LocalDateTime now = LocalDateTime.now();
         task.setStatus(Status.COMPLETED);
@@ -509,7 +520,7 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         WorkProcessTask saved = taskRepository.save(task);
         log.info("工序任务 {} 完成 actualQuantity={} actualMinutes={}",
                 id, request.getActualQuantity(), saved.getActualMinutes());
-        return toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId()));
+        return withFirstArticleNotice(factoryId, saved, toDTO(saved, lookupDefinition(factoryId, saved.getWorkProcessId())));
     }
 
     @Override
@@ -588,6 +599,23 @@ public class WorkProcessTaskServiceImpl implements WorkProcessTaskService {
         }
         checkCanComplete(factoryId, task.getFactoryId(), task.getAssignedTo(),
                 task.getProductWorkProcessId(), operatorUserId);
+    }
+
+    @Override
+    public void assertFirstArticleAllowsComplete(String factoryId, Long taskId) {
+        if (firstArticleGate == null || taskId == null) {
+            return;
+        }
+        taskRepository.findByFactoryIdAndId(factoryId, taskId)
+                .ifPresent(task -> firstArticleGate.assertCanComplete(factoryId, task));
+    }
+
+    /** 工厂开关 = 提示 / 拦截且这道工序首检没合格时, 返回里带一句提示; 开关关 → DTO 原样 (字段为 null 不序列化)。 */
+    private WorkProcessTaskDTO withFirstArticleNotice(String factoryId, WorkProcessTask task, WorkProcessTaskDTO dto) {
+        if (firstArticleGate != null && dto != null) {
+            dto.setFirstArticleNotice(firstArticleGate.noticeFor(factoryId, task));
+        }
+        return dto;
     }
 
     @Override

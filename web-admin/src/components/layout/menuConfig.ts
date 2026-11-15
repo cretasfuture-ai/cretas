@@ -892,6 +892,13 @@ const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报�
  */
 const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外单', icon: '', module: 'production' };
 
+/**
+ * 工序首检（原型统一 E 线 BL17）：质量管理 → 质量检验下放「工序首检 /quality/first-article」（排在质检记录之后）。
+ * 只加在原型分组侧栏；原分组 menuConfig 不动。后端 FirstArticleController 是 @RequireModule("quality_inspection")，
+ * 读接口认 quality / production 读权限，菜单与质检记录同判据 module: 'quality'，不加 roles。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const FIRST_ARTICLE_LEAF: MenuItem = { path: '/quality/first-article', title: '工序首检', icon: '', module: 'quality' };
+
 function insertAfter(group: MenuItem, afterPath: string, leaf: MenuItem): MenuItem {
   const children = [...(group.children ?? [])];
   const at = children.findIndex((c) => c.path === afterPath);
@@ -934,7 +941,7 @@ function buildGroupedMenu(): MenuItem[] {
       '/production/delivery-risks', OUTSOURCE_LEAF,
     ),
     warehouseGroupWithWip(),
-    takeGroup('/quality', MOVED_OUT),
+    insertAfter(takeGroup('/quality', MOVED_OUT), '/quality/inspections', FIRST_ARTICLE_LEAF),
     analytics,
     // 原型关掉、正式端保留的模块（第三块）：只换外观与位置
     takeGroup('/rd', MOVED_OUT),
