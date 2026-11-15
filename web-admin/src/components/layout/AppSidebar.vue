@@ -30,6 +30,7 @@ import {
   getDisabledFactoryMenuPaths, getHiddenFactoryMenuModules, isFactoryMenuHidden, getFactoryMenuProfile,
 } from './factoryMenuVisibility';
 import { secrecyFromFeatureConfig, secrecyHiddenMenuPaths } from '@/api/factorySecrecy';
+import { externalHiddenMenuPaths, integrationsFromFeatureConfig } from '@/api/externalIntegrations';
 
 const router = useRouter();
 const route = useRoute();
@@ -131,6 +132,8 @@ async function fetchDisabledModules(factoryId: string) {
   factoryAnalyticsTurnedOff.value = false;
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
+  // P10：外部授权读到 authorized === true 之前，外部软件对照菜单同样不显示
+  hiddenFactoryMenuPaths.value.push(...externalHiddenMenuPaths({}));
   hiddenFactoryMenuModules.value = [];
   if (!factoryId) {
     disabledModuleCodes.value = [];
@@ -170,6 +173,8 @@ async function fetchDisabledModules(factoryId: string) {
     hiddenFactoryMenuPaths.value = [
       ...getDisabledFactoryMenuPaths(featuresPayload.data),
       ...secrecyHiddenMenuPaths(secrecyFlags),
+      // P10：外部软件对照只在平台授权（authorized === true）的工厂显示，读不到按没授权
+      ...externalHiddenMenuPaths(integrationsFromFeatureConfig(featuresPayload.data)),
     ];
     hiddenFactoryMenuModules.value = getHiddenFactoryMenuModules(featuresPayload.data);
     navigationVisibility.markReadyIfCurrent(token);

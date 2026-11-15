@@ -892,6 +892,14 @@ const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报�
  */
 const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外单', icon: '', module: 'production' };
 
+/**
+ * P10 外部软件（MIGRATION-PLAN 第四块）：「数据与分析」末尾放「外部软件对照 /external-software」。
+ * 只在平台授权了外部软件接口的工厂显示：AppSidebar 用 feature-config integrations 行（externalHiddenMenuPaths）隐藏，
+ * 路由守卫与后端同样按授权拦。后端接口 @RequirePermission production:read → module: 'production'，不加 roles。
+ * 只加在原型分组侧栏；原分组 menuConfig 不动。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const EXTERNAL_SOFTWARE_LEAF: MenuItem = { path: '/external-software', title: '外部软件对照', icon: '', module: 'production', groupLabel: '外部数据' };
+
 function insertAfter(group: MenuItem, afterPath: string, leaf: MenuItem): MenuItem {
   const children = [...(group.children ?? [])];
   const at = children.findIndex((c) => c.path === afterPath);
@@ -923,6 +931,7 @@ function buildGroupedMenu(): MenuItem[] {
     mustLocate('/analytics/ai-reports').node,
     mustLocate('/analytics/indicators').node,
     ...analyticsChildren(),
+    EXTERNAL_SOFTWARE_LEAF,
   ]);
   const all: MenuItem[] = [
     overview,
