@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
@@ -2120,6 +2121,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
+useAiEntryLink(aiEntryVisible, canWrite);
 
 // ==================== Audit Log Drawer (PR #861) ====================
 // State for AuditLogDrawer — scoped to the row clicked via 审计 inline chip.
