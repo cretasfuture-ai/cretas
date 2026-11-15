@@ -305,7 +305,7 @@ function errorText(errors?: Record<string, string>): string {
 <style scoped lang="scss">
 .zero-write-alert { margin: 16px 0; }
 .mode-row { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.mode-help, .local-check { color: var(--el-text-color-secondary); font-size: 13px; }
+.mode-help, .local-check { color: var(--cs-muted); font-size: 13px; }
 .mapping-title, .preview-counts { display: flex; align-items: center; gap: 8px; margin: 18px 0 10px; }
 .local-check { margin-top: 10px; }
 .dialog-footer { display: flex; justify-content: flex-end; gap: 8px; }

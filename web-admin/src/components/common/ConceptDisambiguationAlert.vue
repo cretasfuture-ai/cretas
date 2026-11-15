@@ -50,27 +50,29 @@ const hidden = computed(() => HINT_OPTED_OUT_FACTORY_IDS.has(authStore.factoryId
 </script>
 
 <template>
-  <el-alert
+  <!-- 与 Nuxt UI 迁移页的提示条同一种样式：UAlert info subtle + 线框 lucide 图标 -->
+  <UAlert
     v-if="!hidden"
-    type="info"
-    :closable="false"
-    show-icon
-    style="margin-bottom: 12px"
+    color="info"
+    variant="subtle"
+    icon="i-lucide-info"
+    class="concept-alert"
   >
     <template #title>
       <strong>这里是「{{ hereName }}」管理</strong> — {{ here }}
     </template>
-    <template #default>
-      <span style="font-size: 13px">
- ️ 如果你想录入的是<strong>{{ other }}</strong>，请到
-        <el-link
-          type="primary"
-          underline="never"
-          style="font-weight: 600"
-          @click="router.push(otherPath)"
-        >{{ otherName }}</el-link>
+    <template #description>
+      <span class="concept-hint">
+        如果你想录入的是<strong>{{ other }}</strong>，请到
+        <UButton variant="link" size="xs" class="concept-link" @click="router.push(otherPath)">{{ otherName }}</UButton>
         创建。<template v-if="consequence">{{ consequence }}。</template>
       </span>
     </template>
-  </el-alert>
+  </UAlert>
 </template>
+
+<style scoped>
+.concept-alert { margin-bottom: var(--cs-space-3); }
+.concept-hint { font-size: 13px; }
+.concept-link { padding: 0; font-weight: 600; vertical-align: baseline; }
+</style>

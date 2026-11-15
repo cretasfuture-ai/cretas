@@ -37,8 +37,8 @@
   5. `production/conversions/index.vue`
   6. `production/labor-efficiency/index.vue`
   7. `quality/release/ProcessTimeoutEventsTab.vue`
-- 第 2 批：采购单据列表（`procurement/payment-requests|returns|requisitions|suppliers|price-lists|inquiry-quotes` 等 8 页）
-- 第 3 批：仓库台账（`warehouse/inventory-total|semi-finished|transit-ledger|manufacturers|reusable-containers` 等 8 页）
+- **第 2 批：采购单据列表（已完成 2026-11-15，8 页）**：`procurement/payment-requests/list`、`returns/list`、`requisitions/list`、`requisitions/my-list`、`suppliers/list`（新增弹窗已迁 UModal；详情抽屉 / 导入弹窗为子组件，留下一轮）、`price-lists/list`、`inquiry-quotes/list`、`approval-rules/list`。未动：`orders/list`（2086 行高密度）、`invoices/list`、`exceptions/list`、各 detail 页与 `CreateRequisitionDialog`（Element 子弹窗）。
+- **第 3 批：仓库台账（已完成，8 个文件）**：`warehouse/inventory-total/index.vue`（含子组件 `FinishedGoodsSummary.vue`）、`semi-finished/list.vue`、`transit-ledger/list.vue`、`manufacturers/index.vue`、`reusable-containers/list.vue`、`materials/wip-list.vue`、`material-segments/index.vue`。弹窗全部 `UModal`（含停用/删除确认，取代 `ElMessageBox`）；其余较重的仓库页（inventory、stocktakes、materials/list、shipments、wastage-reports 等）留到后续批。
 - 第 4 批：质量（`quality/ccp|cold-chain|returns|defects|param-deviation`，含质检记录列表本体）
 - 第 5 批：销售订单/客户（销售 45 页，按 订单 / 客户 / 报价 / 发运 分 3 小批）
 - 之后：财务、人事、系统、smart-bi、平台编辑器（编辑器类整页多为画布，最后评估是否迁）。
