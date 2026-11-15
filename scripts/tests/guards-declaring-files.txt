@@ -35,3 +35,4 @@ test-java-gate-shards-cover-selector.sh
 test-tool-access-mode-scanner.sh
 test-merge-queue-ready.sh
 test-ai-live-probe.sh
+test-intent-acceptance-leak-gate.sh
