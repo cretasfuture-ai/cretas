@@ -233,7 +233,7 @@ class ReportCostQueryToolContractTest {
         assertEquals("2026-10-14", r.get("data").get("data").get("previousPeriod").get("endDate").asText());
         String msg = r.get("data").get("message").asText();
         assertTrue(msg.contains("对比上月同期"), msg);
-        assertTrue(msg.contains("涨得最多的是原料：+100"), msg);   // 原料 +100 > 人工 +20
+        assertTrue(msg.contains("涨得最多的是原料：+1.25 元/kg"), msg);   // 单位成本: 7.5 - 6.25 (产量同为 80kg)
     }
 
     @Test
@@ -244,5 +244,79 @@ class ReportCostQueryToolContractTest {
         String msg = r.get("data").get("message").asText();
         assertTrue(msg.contains("对比上一个等长周期"), msg);
         assertTrue(msg.contains("各分项都没有上涨"), msg);
+    }
+
+    private void productCatalog(String... names) {
+        com.cretas.aims.repository.ProductTypeRepository types = mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        List<com.cretas.aims.entity.ProductType> list = new ArrayList<>();
+        for (String n : names) {
+            com.cretas.aims.entity.ProductType t = new com.cretas.aims.entity.ProductType();
+            t.setId("PT-" + n);
+            t.setName(n);
+            list.add(t);
+        }
+        when(types.findByFactoryIdAndIsActiveTrue("F1")).thenReturn(list);
+        ReflectionTestUtils.setField(tool, "productTypeRepository", types);
+    }
+
+    private List<ProductionBatch> lastMonthSameDaysStub() {
+        List<ProductionBatch> lastMonthSameDays = new ArrayList<>();
+        when(repo.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(eq("F1"),
+                eq(LocalDate.of(2026, 10, 1).atStartOfDay()), eq(LocalDate.of(2026, 10, 15).atStartOfDay()))).thenReturn(lastMonthSameDays);
+        return lastMonthSameDays;
+    }
+
+    @Test
+    void doubledOutputWithSameUnitCost_isNotReportedAsARise() throws Exception {
+        List<ProductionBatch> lastMonthSameDays = lastMonthSameDaysStub();
+        thisMonth.add(batch("卤牛肉", "1200", "0", "0", "0", "160", "kg", ProductionBatchStatus.COMPLETED, false)); // 7.5/kg
+        lastMonthSameDays.add(batch("卤牛肉", "600", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false)); // 7.5/kg
+        String msg = run("{\"compareTo\":\"last_month\"}").get("data").get("message").asText();
+        assertTrue(msg.contains("各分项都没有上涨"), msg);
+        assertFalse(msg.contains("涨得最多的是原料"), msg);
+    }
+
+    @Test
+    void ambiguousProductName_listsCandidatesAndDoesNotSumThem() throws Exception {
+        productCatalog("卤牛肉", "卤牛肉片", "五香卤牛肉片", "酱鸭");
+        thisMonth.add(batch("卤牛肉片", "100", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("五香卤牛肉片", "900", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        // 「牛肉片」没有完全同名: 匹配到 2 个 -> 候选, 没有合计的 1000
+        JsonNode r = run("{\"productName\":\"牛肉片\"}").get("data");
+        assertTrue(r.get("message").asText().contains("卤牛肉片") && r.get("message").asText().contains("五香卤牛肉片"), r.toString());
+        assertEquals(2, r.get("data").get("candidates").size());
+        assertNull(r.get("data").get("totals"));
+        assertFalse(r.toString().contains("1000"), r.toString());
+    }
+
+    @Test
+    void exactProductName_winsOverContainsMatches_andNarrowsTheTotals() throws Exception {
+        productCatalog("卤牛肉", "卤牛肉片");
+        thisMonth.add(batch("卤牛肉", "100", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("卤牛肉片", "900", "0", "0", "0", "10", "kg", ProductionBatchStatus.COMPLETED, false));
+        JsonNode data = run("{\"productName\":\"卤牛肉\"}").get("data").get("data");
+        assertEquals(100.00, data.get("totals").get("totalCost").asDouble(), 0.001);   // 只答「卤牛肉」, 不含「卤牛肉片」
+    }
+
+    @Test
+    void unknownProductName_saysNoSuchProduct_notFactoryWideNumbers() throws Exception {
+        productCatalog("酱鸭");
+        thisMonth.add(batch("酱鸭", "900", "0", "0", "0", "10", "盒", ProductionBatchStatus.COMPLETED, false));
+        JsonNode r = run("{\"productName\":\"卤牛肉\"}").get("data");
+        assertTrue(r.get("message").asText().contains("没有找到"), r.toString());
+        assertNull(r.get("data").get("totals"));
+    }
+
+    @Test
+    void monthOverMonthFallback_readsUserInput_andPlainHuanbiIsNotLastMonth() throws Exception {
+        lastMonthSameDaysStub().add(batch("卤牛肉", "450", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("卤牛肉", "600", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch("卤牛肉", "500", "0", "0", "0", "80", "kg", ProductionBatchStatus.COMPLETED, false));
+        // 抽参没填 compareTo, 但原话 userInput 里有「和上月比」
+        String msg = run("{\"userInput\":\"卤牛肉成本和上月比\"}").get("data").get("message").asText();
+        assertTrue(msg.contains("对比上月同期"), msg);
+        // 「环比」单独出现不是上月: 仍然是上一个等长周期
+        String msg2 = run("{\"userInput\":\"成本环比\"}").get("data").get("message").asText();
+        assertTrue(msg2.contains("对比上一个等长周期"), msg2);
     }
 }

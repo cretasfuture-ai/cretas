@@ -2,7 +2,12 @@ package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.service.execution.ToolDispatchService;
 
+import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.repository.ProductTypeRepository;
+
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,6 +18,35 @@ import java.util.Map;
  */
 final class ReportToolSchemas {
     private ReportToolSchemas() {}
+
+    /** 本厂在用产品里名称匹配 keyword 的: 有完全同名 (忽略大小写) 只返回它, 否则返回所有包含匹配。 */
+    static List<ProductType> matchProducts(ProductTypeRepository repo, String factoryId, String keyword) {
+        List<ProductType> types = repo.findByFactoryIdAndIsActiveTrue(factoryId);
+        List<ProductType> exact = new ArrayList<>();
+        List<ProductType> contains = new ArrayList<>();
+        if (types != null) {
+            String k = keyword.toLowerCase(java.util.Locale.ROOT);
+            for (ProductType t : types) {
+                if (t.getId() == null || t.getName() == null) continue;
+                String name = t.getName().trim().toLowerCase(java.util.Locale.ROOT);
+                if (name.equals(k)) exact.add(t);
+                else if (name.contains(k)) contains.add(t);
+            }
+        }
+        return exact.isEmpty() ? contains : exact;
+    }
+
+    /** 候选不是唯一一个时的说明文案 (0 个 = 没找到; 多个 = 列候选, 不合计); 唯一时返回 null。 */
+    static String productResolutionMessage(List<ProductType> candidates, String keyword, String what) {
+        if (candidates.size() == 1) return null;
+        if (candidates.isEmpty()) {
+            return "没有找到名称含「" + keyword + "」的在用产品，无法" + what + "。请确认产品名。";
+        }
+        List<String> names = new ArrayList<>();
+        for (ProductType t : candidates) names.add(t.getName());
+        return "「" + keyword + "」匹配到 " + names.size() + " 个产品：" + String.join("、", names)
+                + "。请说清楚要看哪一个（说完整产品名），我不把它们合计成一个数。";
+    }
 
     static Map<String, Object> withOptionalExtraction(Map<String, Object> schema) {
         Map<String, Object> copy = new LinkedHashMap<>(schema);

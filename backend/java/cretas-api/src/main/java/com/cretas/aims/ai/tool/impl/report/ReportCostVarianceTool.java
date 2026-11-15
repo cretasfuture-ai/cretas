@@ -28,6 +28,9 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
     @Autowired
     private ReportService reportService;
 
+    @Autowired(required = false)
+    private com.cretas.aims.repository.ProductTypeRepository productTypeRepository;
+
     /** 工艺保密: 文案直接进模型上下文, 含保密产品的全厂总成本不写进文案 (Steve 10-28)。 */
     @Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope =
@@ -80,6 +83,12 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         productTypeId.put("description", "产品类型ID，筛选特定产品的成本差异数据");
         properties.put("productTypeId", productTypeId);
 
+        // productName: 产品名（可选）, 本厂在用产品里解析成 productTypeId
+        Map<String, Object> productName = new HashMap<>();
+        productName.put("type", "string");
+        productName.put("description", "产品名（可选）；完全同名优先，多个包含匹配时给候选不合计");
+        properties.put("productName", productName);
+
         // varianceThreshold: 差异阈值百分比（可选）
         Map<String, Object> varianceThreshold = new HashMap<>();
         varianceThreshold.put("type", "number");
@@ -89,7 +98,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         schema.put("properties", properties);
         schema.put("required", Collections.emptyList());
 
-        return schema;
+        return ReportToolSchemas.withOptionalExtraction(schema);
     }
 
     @Override
@@ -106,6 +115,19 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
         String startDateStr = getString(params, "startDate");
         String endDateStr = getString(params, "endDate");
         String productTypeId = getString(params, "productTypeId");
+        String productName = getString(params, "productName");
+        if (productTypeId == null && productName != null && !productName.isBlank() && productTypeRepository != null) {
+            java.util.List<com.cretas.aims.entity.ProductType> candidates =
+                    ReportToolSchemas.matchProducts(productTypeRepository, factoryId, productName.trim());
+            String msg = ReportToolSchemas.productResolutionMessage(candidates, productName.trim(), "给出成本差异");
+            if (msg != null) {
+                Map<String, Object> none = new LinkedHashMap<>();
+                none.put("productFilter", productName);
+                none.put("candidates", candidates.stream().map(com.cretas.aims.entity.ProductType::getName).toList());
+                return buildSimpleResult(msg, none);
+            }
+            productTypeId = candidates.get(0).getId();
+        }
         Double varianceThreshold = params.get("varianceThreshold") != null
                 ? ((Number) params.get("varianceThreshold")).doubleValue()
                 : null;

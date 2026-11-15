@@ -40,6 +40,22 @@ class AiBiFinanceFollowupContractTest {
         assertEquals(LocalDate.of(2027, 12, 31), year.getEnd().toLocalDate());
     }
 
+    // PR #1739 M6: 「年 + 月」规则不得把区间 / 以来 / 具体日期吞成单月
+    @Test
+    void yearPrefixedMonthRule_doesNotSwallowRangesSinceOrSpecificDays() {
+        var r1 = rules.extractAndReplace("今年3月到5月的成本", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 12, 31), r1.getEnd().toLocalDate());   // 不再只剩 3 月 (落整年, 偏宽但不丢数据)
+        var r2 = rules.extractAndReplace("今年3月以来的成本", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 12, 31), r2.getEnd().toLocalDate());
+        var r3 = rules.extractAndReplace("今年10月1日的成本", NOW).getFirstRange().orElseThrow();
+        assertNotEquals(LocalDate.of(2026, 10, 31), r3.getEnd().toLocalDate());
+        var r4 = rules.extractAndReplace("去年12月到今年2月的成本", NOW).getFirstRange().orElseThrow();
+        assertNotEquals(LocalDate.of(2025, 12, 31), r4.getEnd().toLocalDate());
+        // 阴性对照: 单月照常
+        var ok = rules.extractAndReplace("今年3月份的成本", NOW).getFirstRange().orElseThrow();
+        assertEquals(LocalDate.of(2026, 3, 31), ok.getEnd().toLocalDate());
+    }
+
     // ---- 3. 竞品拒答 ----
     @Test
     void competitorQuestionIsRefusedForOwnDataToolsOnly() {
@@ -48,6 +64,12 @@ class AiBiFinanceFollowupContractTest {
         assertFalse(OwnFactoryDataOnlyGuard.refuses("report_cost_query", "本月卤牛肉的总成本是多少"));
         assertFalse(OwnFactoryDataOnlyGuard.refuses("some_other_tool", "竞争对手的卤牛肉成本是多少"));
         assertTrue(OwnFactoryDataOnlyGuard.MESSAGE.contains("本厂"));
+        // 阴性对照 (L1): 这些都是本厂问法, 不拒
+        for (String ok : new String[]{"对比上月的卤牛肉成本", "供应商报价和卤牛肉成本", "客户A的毛利率", "目录价和成本对比", "手机端对手机型号成本"}) {
+            assertFalse(OwnFactoryDataOnlyGuard.refuses("report_cost_query", ok), ok);
+        }
+        assertTrue(OwnFactoryDataOnlyGuard.refuses("report_cost_query", "对手的毛利率多少"));
+        assertTrue(OwnFactoryDataOnlyGuard.refuses("report_cost_trend_analysis", "竞品的成本趋势"));
     }
 
     // ---- 1. 产品名要被抽出来: 只有可选参数的工具必须声明 EXTRACT_OPTIONAL_FLAG ----
@@ -57,6 +79,42 @@ class AiBiFinanceFollowupContractTest {
             Map<String, Object> schema = t.getParametersSchema();
             assertEquals(Boolean.TRUE, schema.get(ToolDispatchService.EXTRACT_OPTIONAL_FLAG), t.getToolName());
             assertTrue(((Map<?, ?>) schema.get("properties")).containsKey("productName"), t.getToolName());
+            // 日期键带 format:date, 让 LlmParameterGrounding 丢掉原话里没说过的日期 (H2)
+            Map<?, ?> props = (Map<?, ?>) schema.get("properties");
+            for (String k : new String[]{"startDate", "endDate"}) {
+                if (props.containsKey(k)) assertEquals("date", ((Map<?, ?>) props.get(k)).get("format"), t.getToolName() + "." + k);
+            }
+        }
+    }
+
+    // #1735 的两个带产品名工具 + 成本差异: 同样声明抽取, 日期带 format:date (M7 成本差异可按产品名)
+    @Test
+    void newBiToolsAndCostVarianceOptInAndGroundDates() {
+        for (ToolExecutor t : new ToolExecutor[]{new com.cretas.aims.ai.tool.impl.report.ReportBomCostRankTool(),
+                new com.cretas.aims.ai.tool.impl.report.ReportLaborCostShareTool(),
+                new com.cretas.aims.ai.tool.impl.report.ReportCostVarianceTool()}) {
+            Map<String, Object> schema = t.getParametersSchema();
+            assertEquals(Boolean.TRUE, schema.get(ToolDispatchService.EXTRACT_OPTIONAL_FLAG), t.getToolName());
+            Map<?, ?> props = (Map<?, ?>) schema.get("properties");
+            assertTrue(props.containsKey("productName"), t.getToolName());
+            for (String k : new String[]{"startDate", "endDate"}) {
+                if (props.containsKey(k)) assertEquals("date", ((Map<?, ?>) props.get(k)).get("format"), t.getToolName() + "." + k);
+            }
+        }
+    }
+
+    // M2: 拒答清单里的每个名字都必须是真实存在的工具 (改名后清单不会悄悄失效)
+    @Test
+    void everyGuardedToolNameIsARealRegisteredTool() throws Exception {
+        java.nio.file.Path root = java.nio.file.Path.of("src/main/java/com/cretas/aims/ai/tool/impl");
+        StringBuilder all = new StringBuilder();
+        try (var files = java.nio.file.Files.walk(root)) {
+            for (java.nio.file.Path f : (Iterable<java.nio.file.Path>) files.filter(x -> x.toString().endsWith(".java"))::iterator) {
+                all.append(java.nio.file.Files.readString(f));
+            }
+        }
+        for (String name : OwnFactoryDataOnlyGuard.ownDataToolNames()) {
+            assertTrue(all.toString().contains("return \"" + name + "\";"), "拒答清单里的工具不存在: " + name);
         }
     }
 

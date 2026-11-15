@@ -18,6 +18,24 @@ class CatalogMarginWeightedCostContractTest {
         return p;
     }
 
+    private static ProductionBatch full(String total, String actual, String good) {
+        ProductionBatch p = new ProductionBatch();
+        p.setTotalCost(new BigDecimal(total));
+        p.setActualQuantity(new BigDecimal(actual));
+        p.setGoodQuantity(good == null ? null : new BigDecimal(good));
+        p.setUnitCost(new BigDecimal(total).divide(new BigDecimal(good != null ? good : actual), 4, java.math.RoundingMode.HALF_UP));
+        return p;
+    }
+
+    @Test
+    void goodQuantityBelowActual_weightedEqualsSumTotalOverSumGood() {
+        // 批1: 总成本 100, 实际 100, 良品 50 (unitCost=2); 批2: 总成本 100, 实际 100, 无良品数 (unitCost=1)
+        // 正确口径 Σtotal/Σ分母 = 200/(50+100) = 1.3333; 旧口径 Σ(unitCost×actual)/Σactual = (200+100)/200 = 1.5
+        BigDecimal w = ThreePriceComparisonService.weightedUnitCost(List.of(full("100", "100", "50"), full("100", "100", null)));
+        assertEquals(1.3333, w.doubleValue(), 0.0001);
+        assertEquals(2, ThreePriceComparisonService.weightedCostBatchCount(List.of(full("100", "100", "50"), full("100", "100", null))));
+    }
+
     @Test
     void oneAbnormalSmallBatchBarelyMovesTheWeightedCost() {
         // 最近一批 ¥54.28 但只产 2 盒; 其余 4 批 ¥16 共 400 盒 → 加权 ≈ 16.19, 而不是 54.28

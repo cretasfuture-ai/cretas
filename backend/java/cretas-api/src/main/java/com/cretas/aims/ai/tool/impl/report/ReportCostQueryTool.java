@@ -198,27 +198,23 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     /** 本厂在用产品里名称匹配 keyword 的: 有完全同名 (忽略大小写) 只返回它, 否则返回所有包含匹配。 */
     List<ProductType> matchProducts(String factoryId, String keyword) {
-        List<ProductType> types = productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId);
-        List<ProductType> exact = new ArrayList<>();
-        List<ProductType> contains = new ArrayList<>();
-        if (types != null) {
-            for (ProductType t : types) {
-                if (t.getId() == null || t.getName() == null) continue;
-                if (t.getName().trim().equalsIgnoreCase(keyword)) exact.add(t);
-                else if (containsIgnoreCase(t.getName(), keyword)) contains.add(t);
-            }
-        }
-        return exact.isEmpty() ? contains : exact;
+        return ReportToolSchemas.matchProducts(productTypeRepository, factoryId, keyword);
     }
 
     private Aggregate aggregate(String factoryId, LocalDate start, LocalDate end, String keyword, Set<String> productIds,
                                 ProcessSecretLlmCostScope.Excluded secret) {
-        return aggregate(batchRepository, factoryId, start, end, keyword, secret);
+        return aggregate(batchRepository, factoryId, start, end, keyword, productIds, secret);
     }
 
     /** 同口径聚合入口 (人工成本占比等同包工具复用, 不另写一份口径)。 */
     static Aggregate aggregate(ProductionBatchRepository batchRepository, String factoryId, LocalDate start,
                                LocalDate end, String keyword, ProcessSecretLlmCostScope.Excluded secret) {
+        return aggregate(batchRepository, factoryId, start, end, keyword, null, secret);
+    }
+
+    static Aggregate aggregate(ProductionBatchRepository batchRepository, String factoryId, LocalDate start,
+                               LocalDate end, String keyword, Set<String> productIds,
+                               ProcessSecretLlmCostScope.Excluded secret) {
         // 与成本分析页同口径: 按批次结束日 (DATE(end_time)) 落期, 半开区间 [start 00:00, end+1 00:00)
         List<ProductionBatch> batches = batchRepository.findByFactoryIdAndEndTimeGreaterThanEqualAndEndTimeLessThan(
                 factoryId, start.atStartOfDay(), end.plusDays(1).atStartOfDay());

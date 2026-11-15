@@ -51,14 +51,14 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
 
     @Override
     public Map<String, Object> getParametersSchema() {
-        return Map.of(
+        return ReportToolSchemas.withOptionalExtraction(Map.of(
                 "type", "object",
                 "properties", Map.of(
-                        "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配），不填则排所有有 BOM 的产品"),
+                        "productName", Map.of("type", "string", "description", "产品名（可选）；有完全同名只看它，否则列出所有包含该名的产品；不填则排所有有 BOM 的产品"),
                         "order", Map.of("type", "string", "description", "highest=成本最高在前(默认) / lowest=最低在前"),
                         "limit", Map.of("type", "integer", "description", "返回前几名，默认 10，最多 30")
                 ),
-                "required", List.of());
+                "required", List.of()));
     }
 
     @Override
@@ -88,12 +88,18 @@ public class ReportBomCostRankTool extends AbstractBusinessTool {
         Set<String> withBom = new LinkedHashSet<>(orEmpty(bomService.getProductTypesWithBom(factoryId)));
         List<ProductType> types = orEmpty(productTypeRepository.findByFactoryIdAndIsActiveTrue(factoryId));
         List<ProductType> matched = new ArrayList<>();
+        List<ProductType> exactNamed = new ArrayList<>();
         for (ProductType t : types) {
             if (t.getId() == null || !withBom.contains(t.getId())) continue;
-            if (keyword != null && (t.getName() == null
-                    || !t.getName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT)))) continue;
+            if (keyword != null) {
+                if (t.getName() == null) continue;
+                if (t.getName().trim().equalsIgnoreCase(keyword)) exactNamed.add(t);
+                else if (!t.getName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) continue;
+            }
             matched.add(t);
         }
+        // 完全同名优先: 只看这一个; 否则排行里列出所有包含匹配的 (排行本身就是逐产品列出, 不合计)
+        if (!exactNamed.isEmpty()) matched = exactNamed;
         if (matched.isEmpty()) {
             return buildSimpleResult(keyword != null
                     ? "没有找到名称含「" + keyword + "」且配置了 BOM 的在用产品，无法给出 BOM 成本。"
