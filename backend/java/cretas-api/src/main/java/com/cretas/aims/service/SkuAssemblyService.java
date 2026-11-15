@@ -88,7 +88,7 @@ public class SkuAssemblyService {
         // 2. 加载客户 (可选)
         Customer customer = null;
         if (customerId != null && !customerId.isBlank()) {
-            customer = customerRepository.findById(customerId)
+            customer = customerRepository.findByIdAndFactoryId(customerId, factoryId)
                     .orElseThrow(() -> new ResourceNotFoundException("客户不存在: " + customerId));
         }
 
