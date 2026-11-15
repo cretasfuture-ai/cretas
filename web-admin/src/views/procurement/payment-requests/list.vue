@@ -1,83 +1,61 @@
 <template>
   <div class="page-container">
-    <div class="page-header">
-      <h2 class="page-title">历史付款申请</h2>
-      <p class="page-subtitle">仅用于查询迁移前的付款申请记录</p>
+    <div class="cs-page-head">
+      <div>
+        <h2>历史付款申请</h2>
+        <p>仅用于查询迁移前的付款申请记录</p>
+      </div>
     </div>
 
-    <el-alert
-      type="info"
-      :closable="false"
-      show-icon
+    <UAlert
+      color="info"
+      variant="subtle"
+      icon="i-lucide-info"
+      class="mb-4"
       title="采购付款申请旧入口已停用"
       description="现行流程为：仓库确认收货生成未清应付，财务在“应收应付”页面选择该未清项并执行付款核销。这里不会再创建、提交、审批或确认付款。"
-      style="margin-bottom: 16px"
     />
 
-    <el-card class="filter-card" shadow="never">
-      <el-row :gutter="16" align="middle">
-        <el-col :span="6">
-          <el-select v-model="filterStatus" placeholder="状态" clearable style="width: 100%" @change="handleFilterChange">
-            <el-option label="全部" value="" />
-            <el-option label="待提交" value="PENDING" />
-            <el-option label="财务审核中" value="FINANCE_REVIEW" />
-            <el-option label="已批准" value="APPROVED" />
-            <el-option label="已付款" value="PAID" />
-            <el-option label="已拒绝" value="REJECTED" />
-          </el-select>
-        </el-col>
-        <el-col :span="8">
-          <el-input
-            v-model="filterKeyword"
-            placeholder="搜索供应商或申请单号"
-            clearable
-            @clear="handleFilterChange"
-            @keyup.enter="handleFilterChange"
-          />
-        </el-col>
-        <el-col :span="10">
-          <el-button type="primary" @click="handleFilterChange">查询</el-button>
-          <el-button @click="resetFilter">重置</el-button>
-        </el-col>
-      </el-row>
-    </el-card>
+    <section class="cs-card">
+      <div class="cs-card-head">
+        <USelect v-model="statusSelect" :items="statusItems" placeholder="状态" class="w-40" @update:model-value="handleFilterChange" />
+        <UInput
+          v-model="filterKeyword"
+          icon="i-lucide-search"
+          placeholder="搜索供应商或申请单号"
+          class="w-72"
+          @keyup.enter="handleFilterChange"
+        />
+        <UButton icon="i-lucide-search" @click="handleFilterChange">查询</UButton>
+        <UButton icon="i-lucide-rotate-ccw" color="neutral" variant="outline" @click="resetFilter">重置</UButton>
+      </div>
 
-    <el-card class="data-card" shadow="never">
-      <el-table v-loading="loading" :data="tableData" stripe row-key="id" empty-text="暂无历史付款申请">
-        <el-table-column label="申请单号" prop="requestNumber" width="170" />
-        <el-table-column label="采购单号" prop="purchaseOrderNumber" width="170" />
-        <el-table-column label="供应商" prop="supplierName" min-width="140" />
-        <el-table-column label="申请金额" prop="amount" width="130" align="right">
-          <template #default="{ row }">{{ row.amount == null ? '—' : formatAmount(row.amount) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" prop="status" width="120">
-          <template #default="{ row }">
-            <el-tag :type="statusTag(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" prop="createdAt" width="180">
-          <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="备注" prop="remark" min-width="160" show-overflow-tooltip />
-      </el-table>
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
+        <template #empty>暂无历史付款申请</template>
+        <template #requestNumber-cell="{ row }">{{ row.original.requestNumber ?? '' }}</template>
+        <template #purchaseOrderNumber-cell="{ row }">{{ row.original.purchaseOrderNumber ?? '' }}</template>
+        <template #supplierName-cell="{ row }">{{ row.original.supplierName ?? '' }}</template>
+        <template #amount-cell="{ row }"><span class="num">{{ row.original.amount == null ? '—' : formatAmount(row.original.amount) }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusTag(row.original.status))" variant="soft">{{ statusLabel(row.original.status) }}</UBadge>
+        </template>
+        <template #createdAt-cell="{ row }"><span class="muted">{{ formatDate(row.original.createdAt) }}</span></template>
+        <template #remark-cell="{ row }"><span class="muted" :title="row.original.remark ?? ''">{{ row.original.remark ?? '' }}</span></template>
+      </UTable>
 
       <div class="pagination-wrap">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :total="total"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next"
-          @current-change="fetchData"
-          @size-change="fetchData"
-        />
+        <span class="total">共 {{ total }} 条</span>
+        <USelect v-model="pageSize" :items="sizeItems" class="w-28" @update:model-value="handleSizeChange" />
+        <UPagination v-model:page="page" :items-per-page="pageSize" :total="total" show-edges :sibling-count="1" @update:page="fetchData" />
       </div>
-    </el-card>
+    </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor } from '@/utils/csBadge';
 import { ElMessage } from 'element-plus';
 import { get } from '@/api/request';
 import { useAuthStore } from '@/store/modules/auth';
@@ -100,6 +78,30 @@ const total = ref(0);
 const page = ref(1);
 const pageSize = ref(20);
 const filterStatus = ref('');
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛
+const statusItems = [
+  { label: '全部', value: 'ALL' },
+  { label: '待提交', value: 'PENDING' },
+  { label: '财务审核中', value: 'FINANCE_REVIEW' },
+  { label: '已批准', value: 'APPROVED' },
+  { label: '已付款', value: 'PAID' },
+  { label: '已拒绝', value: 'REJECTED' },
+];
+const statusSelect = computed({
+  get: () => filterStatus.value || 'ALL',
+  set: (v: string) => { filterStatus.value = v === 'ALL' ? '' : v; },
+});
+const sizeItems = [10, 20, 50].map((n) => ({ label: `${n} 条/页`, value: n }));
+const columns: TableColumn<HistoricalPaymentRequest>[] = [
+  { id: 'requestNumber', header: '申请单号' },
+  { id: 'purchaseOrderNumber', header: '采购单号' },
+  { id: 'supplierName', header: '供应商' },
+  { id: 'amount', header: '申请金额', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'status', header: '状态' },
+  { id: 'createdAt', header: '创建时间' },
+  { id: 'remark', header: '备注' },
+];
+function handleSizeChange() { page.value = 1; void fetchData(); }
 const filterKeyword = ref('');
 
 function statusLabel(status?: string): string {
@@ -162,11 +164,8 @@ onMounted(fetchData);
 </script>
 
 <style scoped>
-.page-container { padding: 20px; background: #f4f6f9; min-height: 100%; }
-.page-header { margin-bottom: 16px; }
-.page-title { margin: 0 0 6px; font-size: 20px; color: #303133; }
-.page-subtitle { margin: 0; color: #909399; font-size: 14px; }
-.filter-card { margin-bottom: 16px; }
-.data-card { min-height: 360px; }
-.pagination-wrap { display: flex; justify-content: flex-end; margin-top: 16px; }
+.page-container { padding: var(--cs-space-4); }
+.muted { color: var(--cs-muted); }
+.total { color: var(--cs-muted); font-size: var(--cs-font); }
+.pagination-wrap { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
 </style>
