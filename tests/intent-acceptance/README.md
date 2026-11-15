@@ -25,7 +25,7 @@
 | | 题数 | 其中确定题（计分） | 歧义（单列） |
 |---|---|---|---|
 | 封存半边 | 2256 | 1232 | 1024 |
-| 开发半边 | 2208 | 1228 | 980 |
+| 开发半边（2026-11-15 裁定后，见第 8 节；裁定前 1228 / 980） | 2208 | 1957 | 251 |
 
 封存半边按姿态：DIRECT 860、ASK 671、WRITE 495、OOD 139、REFUSE 91（其中确定题：DIRECT 596、ASK 155、WRITE 370、OOD 101、REFUSE 10）。覆盖 200 个意图，确定题覆盖 168 个意图。完整覆盖表见 [COVERAGE.md](COVERAGE.md)（由 `coverage_report.py` 生成，只有统计）。
 
@@ -120,3 +120,23 @@ python -m pytest tests/intent-acceptance -q
 - 门槛还没接进「自动上线」流程（需要自动优化器那条线调用 `run_recognize → score → gate`）；现在是手跑 + 离线单测 + 隔离闸进 CI。
 - 题量里 ASK / REFUSE 的确定题偏少，等真人说法或人工复核后补。
 - 多轮（任务状态、挂起恢复、翻页）仍用 v2。
+
+## 8. 开发半边歧义题裁定（2026-11-15，`adjudicate_v3.py`）
+
+只动 `dev/items.jsonl` 里原来 `ambiguous=true` 的 980 题；确认题（1228 条）一行不改，封存半边和 `sealed_v3_fingerprints.jsonl` 不读不改（封存半边仍是 1232 确定 / 1024 歧义，**没有裁定**；基线 `baseline/*.score.json` 仍对应封存半边，与本次裁定无关、不可与开发半边比）。
+
+口径（Steve 偏执行）：能按合理默认执行就判 DIRECT（读）或 WRITE（写，先展示再确认）；只有真歧义才判 ASK：写操作同名对象有多个、写操作缺必填参数且无合理默认、两个意图结果差别大且都说得通；只读题的同名不先问（两个都列出来，沿用第 2 节口径）。REFUSE 只用于超出权限或不该做的事，OOD 只用于与工厂业务无关的闲聊。
+
+做法：出题方、盲标方的意见保留，加第三票 `qwen3.5-plus`（关思考，千问通道，盲判，看不到前两方答案，目录取自 `scan_catalog.py` 当前扫出的 270 个意图含说明）；姿态按三票多数；意图不在出题方候选里的再加第二票 `qwen-plus`。判定逻辑在 `decide()`，规则编号见脚本头注释，写进每题的 `adjudication.rule_id` 和 `adjudication.votes`。仍无多数的保持 `ambiguous=true`、`adjudication.status=pending_review`，原因写在 `pending_cause`，清单 CSV 在本机不进仓库。
+
+回滚：原姿态 / 意图 / 替代意图 / 询问选项 / 读写属性 / 歧义标记改名为 `orig_*`，`adjudicate_v3.base_row()` 可把整行还原（实测 2208 行全部与 `main` 上原文件逐字段相同）。脚本幂等，重跑结果字节相同。
+
+```bash
+cd tests/intent-acceptance
+python -X utf8 adjudicate_v3.py vote --work <dir>        # 第三票 + 第二票，断点续跑
+python -X utf8 adjudicate_v3.py calibrate --work <dir>   # 阳性对照：抽确认题让第三票盲判，看一致率
+python -X utf8 adjudicate_v3.py apply --work <dir> --csv <待复核.csv> --summary-out <stats.json>
+```
+
+局限：第三票也是模型，不是人；第三票对已确认题的姿态一致率约 81%（抽样 167 条，WRITE 题有三分之一被它判成先问，说明它比标注更爱问，所以 ASK 多数必须带三类真歧义理由，否则按默认执行）。裁定后的 ASK 和 REFUSE 仍是多数票结果，读数要标注口径，不要和只有确认题的旧读数混着比。确认题里另有 43 行 `intent_alternates` 是字符串（assemble 的既有问题，`score_recognize` 会按字符展开），封存半边大概率同样，未在本次处理。
+

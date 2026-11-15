@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CsDateField from '@/components/cs/CsDateField.vue';
 /**
  * 新建请购单 dialog — Sprint 6 W2-A.
  *
@@ -14,7 +15,6 @@
  */
 import { ref, reactive, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Plus, Delete } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import { usePinyinFilter } from '@/utils/pinyinSearch';
@@ -128,6 +128,8 @@ const materialFilter = usePinyinFilter(
 );
 const handleMaterialFilter = materialFilter.handleFilter;
 const handleMaterialVisibleChange = materialFilter.handleVisibleChange;
+// USelectMenu: 搜索词双向绑定到同一个 query，过滤仍走 usePinyinFilter（拼音/首字母），ignore-filter 关掉组件自带的字面过滤
+const materialSearch = materialFilter.query;
 const filteredMaterials = materialFilter.filtered;
 
 // 🔴 空态文案要挂 `no-data-text`, ⛔ 不能只挂 `no-match-text`。
@@ -190,6 +192,11 @@ function onMaterialChange(row: FormItemRow) {
     row.materialName = String(mat.name || '');
     if (!row.unit && mat.unit) row.unit = String(mat.unit);
   }
+}
+
+// 单位允许手输新值（原 el-select allow-create）：USelectMenu create-item 触发后直接写回该行
+function onUnitCreate(row: FormItemRow, name: string) {
+  row.unit = name;
 }
 
 function addItem() {
@@ -268,177 +275,115 @@ void _avoidUnusedWarning;
 </script>
 
 <template>
-  <el-dialog
-    v-model="visible"
+  <UModal
+    v-model:open="visible"
     :title="dialogTitle"
-    width="900px"
-    destroy-on-close
-    :close-on-click-modal="false"
+    description="创建请购单草稿"
+    :dismissible="false"
+    :ui="{ footer: 'justify-end', content: 'max-w-[900px]', description: 'sr-only' }"
   >
-    <el-form :model="form" label-width="110px">
-      <el-form-item :label="supplierLabelText" :required="!isRestaurant">
-        <el-select
-          v-model="form.suggestedSupplierId"
-          :placeholder="supplierPlaceholder"
-          filterable
-          clearable
-          style="width: 100%"
-        >
-          <el-option
-            v-for="s in suppliers"
-            :key="s.id"
-            :label="s.name"
-            :value="s.id"
+    <template #body>
+      <div class="form">
+        <UFormField :label="supplierLabelText" :required="!isRestaurant">
+          <USelectMenu
+            v-model="form.suggestedSupplierId"
+            :items="suppliers"
+            value-key="id"
+            label-key="name"
+            :placeholder="supplierPlaceholder"
+            clear
+            class="w-full"
           />
-        </el-select>
-        <div v-if="supplierLabel" class="hint">
-          已选: <strong>{{ supplierLabel }}</strong>
+          <div v-if="supplierLabel" class="hint">
+            已选: <strong>{{ supplierLabel }}</strong>
+          </div>
+        </UFormField>
+        <UFormField :label="expectedDateLabel">
+          <CsDateField v-model="form.expectedDate" clearable class="w-56" />
+        </UFormField>
+        <UFormField :label="reasonLabel">
+          <UTextarea v-model="form.reason" :rows="2" :maxlength="5000" :placeholder="reasonPlaceholder" class="w-full" />
+        </UFormField>
+        <UFormField label="备注">
+          <UTextarea v-model="form.remark" :rows="2" :maxlength="5000" :placeholder="remarkPlaceholder" class="w-full" />
+        </UFormField>
+
+        <USeparator :label="itemDividerText" />
+
+        <div class="item-row item-header">
+          <span class="c-material"><span class="req-star">*</span>物料</span>
+          <span class="c-qty"><span class="req-star">*</span>数量</span>
+          <span class="c-unit"><span class="req-star">*</span>单位</span>
+          <span class="c-remark">行备注</span>
+          <span class="c-act">操作</span>
         </div>
-      </el-form-item>
-      <el-form-item :label="expectedDateLabel">
-        <el-date-picker
-          v-model="form.expectedDate"
-          type="date"
-          value-format="YYYY-MM-DD"
-          style="width: 220px"
-        />
-      </el-form-item>
-      <el-form-item :label="reasonLabel">
-        <el-input
-          v-model="form.reason"
-          type="textarea"
-          :rows="2"
-          maxlength="5000"
-          show-word-limit
-          :placeholder="reasonPlaceholder"
-        />
-      </el-form-item>
-      <el-form-item label="备注">
-        <el-input
-          v-model="form.remark"
-          type="textarea"
-          :rows="2"
-          maxlength="5000"
-          show-word-limit
-          :placeholder="remarkPlaceholder"
-        />
-      </el-form-item>
-
-      <el-divider>{{ itemDividerText }}</el-divider>
-
-      <div class="item-row item-header">
-        <span style="width: 240px"><span class="req-star">*</span>物料</span>
-        <span style="width: 130px"><span class="req-star">*</span>数量</span>
-        <span style="width: 110px"><span class="req-star">*</span>单位</span>
-        <span style="flex: 1; min-width: 160px">行备注</span>
-        <span style="width: 60px">操作</span>
-      </div>
-      <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
-        <!-- 缺陷 13: 拼音/首字母搜索 + 能指路的空态 (默认的「无匹配数据」不告诉
-             用户该换什么词输)。filter-method 关掉内建过滤 ⇒ v-for 走 filteredMaterials。 -->
-        <el-select
-          v-model="item.materialTypeId"
-          placeholder="选择物料 (支持拼音, 如 ht)"
-          filterable
-          :filter-method="handleMaterialFilter"
-          :no-data-text="materialEmptyText"
-          :no-match-text="materialEmptyText"
-          style="width: 240px"
-          @change="onMaterialChange(item)"
-          @visible-change="handleMaterialVisibleChange"
-        >
-          <el-option
-            v-for="m in filteredMaterials"
-            :key="m.id"
-            :label="m.name"
-            :value="m.id"
+        <div v-for="(item, idx) in form.items" :key="idx" class="item-row">
+          <!-- 缺陷 13: 拼音/首字母搜索 + 能指路的空态。ignore-filter 关掉组件自带过滤 ⇒ items 走 filteredMaterials。 -->
+          <USelectMenu
+            v-model="item.materialTypeId"
+            v-model:search-term="materialSearch"
+            :items="filteredMaterials"
+            value-key="id"
+            label-key="name"
+            ignore-filter
+            placeholder="选择物料 (支持拼音, 如 ht)"
+            class="c-material"
+            @update:model-value="onMaterialChange(item)"
+            @update:open="(o: boolean) => handleMaterialVisibleChange(o)"
+          >
+            <template #empty>{{ materialEmptyText }}</template>
+          </USelectMenu>
+          <UInputNumber
+            v-model="item.quantity"
+            :min="0.01"
+            :step-snapping="false"
+            :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }"
+            :increment="false"
+            :decrement="false"
+            placeholder="数量"
+            class="c-qty"
           />
-        </el-select>
-        <el-input-number
-          v-model="item.quantity"
-          :min="0.01"
-          :precision="2"
-          placeholder="数量"
-          style="width: 130px"
-          controls-position="right"
-        />
-        <el-select
-          v-model="item.unit"
-          placeholder="单位"
-          :disabled="!item.materialTypeId"
-          filterable
-          allow-create
-          default-first-option
-          style="width: 110px"
-        >
-          <el-option
-            v-for="u in getMaterialUnits(item)"
-            :key="u"
-            :label="u"
-            :value="u"
+          <USelectMenu
+            v-model="item.unit"
+            :items="getMaterialUnits(item)"
+            :disabled="!item.materialTypeId"
+            create-item
+            placeholder="单位"
+            class="c-unit"
+            @create="(name: string) => onUnitCreate(item, name)"
           />
-        </el-select>
-        <el-input
-          v-model="item.remark"
-          placeholder="可选 — 备注"
-          style="flex: 1; min-width: 160px"
-          maxlength="200"
-        />
-        <el-button
-          type="danger"
-          link
-          :icon="Delete"
-          :disabled="form.items.length <= 1"
-          @click="removeItem(idx)"
-        />
+          <UInput v-model="item.remark" placeholder="可选 — 备注" :maxlength="200" class="c-remark" />
+          <UButton
+            variant="link"
+            color="error"
+            icon="i-lucide-trash-2"
+            class="c-act"
+            aria-label="删除明细行"
+            :disabled="form.items.length <= 1"
+            @click="removeItem(idx)"
+          />
+        </div>
+        <UButton color="primary" variant="outline" block icon="i-lucide-plus" @click="addItem">{{ addLineText }}</UButton>
       </div>
-      <el-button
-        type="primary"
-        plain
-        :icon="Plus"
-        style="width: 100%; margin-top: 8px"
-        @click="addItem"
-      >
-        {{ addLineText }}
-      </el-button>
-    </el-form>
-    <template #footer>
-      <el-button @click="visible = false">取消</el-button>
-      <el-button
-        type="primary"
-        :loading="submitting"
-        :disabled="!canSubmit"
-        @click="handleCreate"
-      >
-        {{ canSubmit ? createReadyText : '请填写必填项' }}
-      </el-button>
     </template>
-  </el-dialog>
+    <template #footer>
+      <UButton color="neutral" variant="outline" @click="visible = false">取消</UButton>
+      <UButton :loading="submitting" :disabled="!canSubmit" @click="handleCreate">
+        {{ canSubmit ? createReadyText : '请填写必填项' }}
+      </UButton>
+    </template>
+  </UModal>
 </template>
 
-<style lang="scss" scoped>
-.item-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  margin-bottom: 8px;
-}
-.item-header {
-  font-size: 13px;
-  font-weight: 600;
-  color: #606266;
-  margin-bottom: 4px;
-  span {
-    display: inline-block;
-  }
-}
-.hint {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
-.req-star {
-  color: var(--el-color-danger);
-  margin-right: 4px;
-}
+<style scoped>
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.item-row { display: flex; gap: var(--cs-space-2); align-items: center; }
+.item-header { font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); }
+.c-material { width: 240px; flex: none; }
+.c-qty { width: 130px; flex: none; }
+.c-unit { width: 120px; flex: none; }
+.c-remark { flex: 1; min-width: 160px; }
+.c-act { width: 60px; flex: none; }
+.hint { font-size: var(--cs-font-small); color: var(--cs-muted); margin-top: var(--cs-space-1); }
+.req-star { color: var(--cs-danger); margin-right: var(--cs-space-1); }
 </style>

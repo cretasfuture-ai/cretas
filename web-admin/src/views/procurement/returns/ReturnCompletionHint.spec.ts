@@ -19,6 +19,15 @@ vi.mock('@/api/returnOrder', () => ({
   completeReturnOrder: vi.fn(),
 }));
 
+// Nuxt UI 没装进 vitest: 最小桩 —— 表格把每行的 status / actions 槽渲出来, 按钮只留文字和点击。
+const stubs = {
+  UTable: {
+    props: ['data'],
+    template: '<div><div v-for="r in data" :key="r.id" class="r"><slot name="status-cell" :row="{ original: r }" /><slot name="actions-cell" :row="{ original: r }" /></div></div>',
+  },
+  UButton: { template: '<button type="button"><slot /></button>' },
+};
+
 const row = {
   id: 'R1', factoryId: 'F-RETURN', returnNumber: 'RT-PUR-TEST', returnType: 'PURCHASE_RETURN' as const,
   status: 'FINANCE_APPROVED' as const, counterpartyId: 'S1', returnDate: '2026-10-16',
@@ -34,7 +43,7 @@ describe('purchase return completion notice', () => {
   it('keeps the pending payable adjustment notice visible after actual completion action', async () => {
     const hint = '退货已完成。100元余额冲减待财务审批，供应商应付余额尚未变动。';
     vi.mocked(completeReturnOrder).mockResolvedValue({ ...row, status: 'COMPLETED', completionHint: hint });
-    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus], stubs } });
     await flushPromises();
     const button = wrapper.findAll('button').find(button => button.text() === '完成出货');
     expect(button).toBeDefined(); await button!.trigger('click'); await flushPromises();
@@ -45,7 +54,7 @@ describe('purchase return completion notice', () => {
 
   it('retains ordinary success feedback when the response has no completion hint', async () => {
     vi.mocked(completeReturnOrder).mockResolvedValue({ ...row, status: 'COMPLETED' });
-    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus], stubs } });
     await flushPromises();
     await wrapper.findAll('button').find(button => button.text() === '完成出货')!.trigger('click');
     await flushPromises();
@@ -56,7 +65,7 @@ describe('purchase return completion notice', () => {
   it('keeps completion unavailable before finance approval', async () => {
     access.finance = false;
     vi.mocked(listReturnOrders).mockResolvedValue({ content: [{ ...row, status: 'APPROVED' }], totalElements: 1, totalPages: 1 });
-    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(ReturnList, { global: { plugins: [ElementPlus], stubs } });
     await flushPromises();
     expect(wrapper.text()).toContain('待财务审批');
     expect(wrapper.findAll('button').some(button => button.text() === '完成出货')).toBe(false);
