@@ -23,7 +23,7 @@ import java.util.UUID;
  * <p>2026-11-15 Steve 裁决: 请购被驳回后允许请购人改后重提, 并保留多轮审批历史。
  * {@code round} 从 1 起, 每次提交 +1; {@code seq} 是该请购单内的全局顺序号(同一轮里依次是
  * SUBMITTED → REJECTED/APPROVED → REOPENED)。SUBMITTED 行带当时的行项目快照, 所以改量重提后
- * 每一轮到底提交了什么都查得到。表: {@code purchase_requisition_approval_records} (V20261115_42)。
+ * 每一轮到底提交了什么都查得到。表: {@code purchase_requisition_approval_records} (V20261115_72)。
  */
 @Data
 @EqualsAndHashCode(callSuper = true)
