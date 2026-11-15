@@ -24,12 +24,13 @@ describe('质检记录的质检员显示', () => {
     );
 
     it('阳性对照: 源码读得到', () => {
-        expect(source).toContain('el-table-column');
+        // 表格已迁 Nuxt UI (UTable 列定义)，阳性对照改为读到列定义
+        expect(source).toContain('TableColumn<TableRow>[]');
     });
 
     it('列名不许再叫「质检员ID」', () => {
-        expect(source, '列名把数据库标识摆到台面上').not.toContain('label="质检员ID"');
-        expect(source).toContain('label="质检员"');
+        expect(source, '列名把数据库标识摆到台面上').not.toContain("header: '质检员ID'");
+        expect(source).toContain("header: '质检员'");
     });
 
     it('优先显示姓名, 解析不出才回落 ID', () => {

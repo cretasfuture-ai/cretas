@@ -12,12 +12,13 @@ vi.mock('@/api/request', () => ({ get: (...args: unknown[]) => state.get(...args
 vi.mock('@/composables/useListSummary', () => ({ useListSummary: () => ({ summary: null, loading: false }) }));
 vi.mock('@/composables/useCreateAndReturn', () => ({ useCreateAndReturn: () => ({ goCreate: vi.fn() }) }));
 import Page from '../list.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const batch = { id: 8, batchNumber: 'BOX-8', productName: '盒装产品' };
 const ok = (data: unknown) => ({ success: true, data });
 function mountPage() {
   return mount(Page, { global: { plugins: [ElementPlus], stubs: {
-    CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
+    ...nuxtUiStubs, CanvasAwareWrapper: { template: '<div><slot /></div>' }, CanvasDynamicFields: true,
     TableFooter: true, UpstreamMissingHint: true,
   } } });
 }
@@ -91,7 +92,8 @@ describe('追溯进入既有质检页面', () => {
     state.get.mockImplementation((url: string) => Promise.resolve(ok(url.endsWith('/batches/8') ? batch : url.endsWith('/batches/9') ? { ...batch, id: 9, batchNumber: 'BOX-9' } : url.endsWith('/quality-form') ? { batchId: String(route.query.batchId), standardRevision: 'legacy-empty', items: [] } : { content: [], totalElements: 0 })));
     const wrapper = mountPage();
     await flushPromises();
-    wrapper.findAllComponents(ElSelect)[0].vm.$emit('update:modelValue', 'FAIL');
+    // 结果筛选已是 Nuxt UI USelect (最小桩带 name), 弹窗关着时页面上唯一的 USelect 之一; 取第一个 = 结果筛选
+    wrapper.findAllComponents({ name: 'USelect' })[0].vm.$emit('update:modelValue', 'FAIL');
     await clickText(wrapper, '搜索');
     expect(state.get.mock.calls.at(-1)![1].params.result).toBe('FAIL');
     route.query = { batchId: '9' };

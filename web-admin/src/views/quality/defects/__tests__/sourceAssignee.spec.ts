@@ -27,6 +27,7 @@ vi.mock('@/api/request', () => ({
 }));
 
 import DefectsPage from '../list.vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 import InspectionsPage from '../../inspections/list.vue';
 
 const ok = (data: unknown) => ({ success: true, data });
@@ -39,12 +40,12 @@ const source = {
 };
 
 function mountPage() {
-  return mount(DefectsPage, { global: { plugins: [ElementPlus] } });
+  return mount(DefectsPage, { global: { plugins: [ElementPlus], stubs: nuxtUiStubs } });
 }
 
 function mountInspectionsPage() {
   return mount(InspectionsPage, { global: { plugins: [ElementPlus], stubs: {
-    CanvasAwareWrapper: { template: '<div><slot /></div>' },
+    ...nuxtUiStubs, CanvasAwareWrapper: { template: '<div><slot /></div>' },
     CanvasDynamicFields: true,
     TableFooter: true,
     UpstreamMissingHint: true,
