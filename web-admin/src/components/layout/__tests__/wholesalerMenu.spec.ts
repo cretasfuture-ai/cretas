@@ -39,4 +39,20 @@ describe('explicit wholesale navigation profile', () => {
     expect(isFactoryMenuHidden('/system/products', hidden)).toBe(false);
     expect(isFactoryMenuHidden('/production', hidden)).toBe(false);
   });
+
+  it('embeds each digital workdesk in its own module without a separate crew menu or lost guards', () => {
+    for (const [path, parent] of [['/workdesk/sales-owner', '/sales'], ['/workdesk/purchaser', '/procurement'], ['/workdesk/warehouse-keeper', '/warehouse']]) {
+      const trail = menuTrail(wholesalerMenuConfig, path)!;
+      expect(trail[0].path).toBe(parent);
+      expect(leaves(wholesalerMenuConfig).filter((item) => item.path === path)).toHaveLength(1);
+      const original = leaves(groupedMenuConfig).find((item) => item.path === path)!;
+      const moved = trail.at(-1)!;
+      expect(moved.module).toBe(original.module);
+      expect(moved.roles).toEqual(original.roles);
+      // Moving a leaf keeps the old /workdesk parent permission as an ancestor guard.
+      expect(moved.guardAncestors?.length).toBeGreaterThan(0);
+      expect(menuTrail(groupedMenuConfig, path)?.[0].path).toBe('#group/overview');
+    }
+    expect(wholesalerMenuConfig.some((item) => item.title === '数字班组')).toBe(false);
+  });
 });

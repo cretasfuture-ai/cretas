@@ -20,8 +20,10 @@
 -->
 <template>
   <div class="purchaser-workdesk">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="purchase" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerWeeklyPlan">重新核对</el-button>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">采购员工作台</span>
@@ -39,7 +41,7 @@
       <template #header>
         <div class="card-header">
  <span> 与 AI 对话</span>
-          <span class="header-hint">默认查询: "下周采购什么?" — 也可问其他</span>
+          <span class="header-hint">{{ digitalEmployee ? '先核对低库存，再到采购订单办理' : '默认查询: "下周采购什么?" — 也可问其他' }}</span>
         </div>
       </template>
       <div class="chat-input">
@@ -64,7 +66,7 @@
     <el-card v-if="loading" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
-        <span>AI 正在聚合 5 品类预警 (低库存 + 销售预测), 预计 3-5 秒...</span>
+        <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合 5 品类预警 (低库存 + 销售预测), 预计 3-5 秒..." }}</span>
       </div>
     </el-card>
 
@@ -422,11 +424,16 @@
         </el-button>
       </template>
     </el-dialog>
+    </DigitalEmployeeFrame>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive, h, defineComponent } from 'vue';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+import { ref, computed, watch, reactive, h, defineComponent } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -562,15 +569,16 @@ async function callIntentExecute(input: string, intentCode?: string,
 }
 
 async function triggerWeeklyPlan() {
-  userInput.value = '下周采购什么?';
-  await sendQuery(true);
+  // Wholesale uses the live low-stock capability; the legacy weekly-plan Skill is not configured there.
+  userInput.value = props.digitalEmployee ? '查询低库存预警' : '下周采购什么?';
+  await sendQuery(!props.digitalEmployee);
 }
 
 async function sendQuery(autoTrigger = false) {
   if (!userInput.value.trim()) return;
   loading.value = true;
   errorMessage.value = '';
-  if (autoTrigger) {
+  if (autoTrigger || props.digitalEmployee) {
     formattedText.value = '';
     lowStockRows.value = [];
     forecastRows.value = [];
@@ -1083,9 +1091,12 @@ async function executeProcurement() {
 }
 
 // Auto-trigger on mount
-onMounted(() => {
+let initialQueryStarted = false;
+watch(() => props.employeeNavigationPending, (pending) => {
+  if (pending || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerWeeklyPlan();
-});
+}, { immediate: true });
 </script>
 
 <style scoped>

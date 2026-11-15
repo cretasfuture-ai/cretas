@@ -14,8 +14,10 @@
 -->
 <template>
   <div class="sales-owner-workdesk">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="sales" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths" :can-write="employeeCanWrite">
+    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerFollowupQuery">重新核对</el-button>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">销售老板工作台</span>
@@ -58,7 +60,7 @@
     <el-card v-if="loading" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
-        <span>AI 正在聚合 5 个数据源 (客户优先级 + 微信跟进 + 通话 + 商机 + 收入), 预计 5-10 秒...</span>
+        <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合 5 个数据源 (客户优先级 + 微信跟进 + 通话 + 商机 + 收入), 预计 5-10 秒..." }}</span>
       </div>
     </el-card>
 
@@ -504,11 +506,16 @@
         </el-button>
       </template>
     </el-dialog>
+    </DigitalEmployeeFrame>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean; employeeCanWrite?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false,
+});
+import { ref, computed, watch, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
@@ -1292,10 +1299,13 @@ async function submitShipment() {
 }
 
 // Auto-trigger on mount
-onMounted(() => {
+let initialQueryStarted = false;
+watch(() => props.employeeNavigationPending, (pending) => {
+  if (pending || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerFollowupQuery();
   void loadTodayPendingShipments();
-});
+}, { immediate: true });
 </script>
 
 <style scoped>

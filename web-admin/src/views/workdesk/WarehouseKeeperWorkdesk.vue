@@ -26,8 +26,10 @@
 -->
 <template>
   <div class="warehouse-keeper-workdesk">
+    <DigitalEmployeeFrame :enabled="digitalEmployee" role="inventory" :busy="loading" :error="errorMessage" :factory-id="factoryId" :factory-name="authStore.factoryName" :paths="employeePaths">
+    <el-button v-if="digitalEmployee" :loading="loading" :icon="Refresh" @click="triggerTodayQuery">重新核对</el-button>
     <!-- Header -->
-    <div class="workdesk-header">
+    <div v-if="!digitalEmployee" class="workdesk-header">
       <div class="header-title">
  <span class="emoji"></span>
         <span class="title-text">仓管员工作台</span>
@@ -70,7 +72,7 @@
     <el-card v-if="loading" class="loading-card" shadow="never">
       <div class="loading-content">
         <el-icon class="is-loading"><Loading /></el-icon>
-        <span>AI 正在聚合今日待收清单 + 临期建议, 预计 3-5 秒...</span>
+        <span>{{ digitalEmployee ? "正在核对当前企业的业务记录，请稍候…" : "AI 正在聚合今日待收清单 + 临期建议, 预计 3-5 秒..." }}</span>
       </div>
     </el-card>
 
@@ -501,11 +503,16 @@
         </template>
       </el-result>
     </el-dialog>
+    </DigitalEmployeeFrame>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, reactive } from 'vue';
+import DigitalEmployeeFrame from '@/components/workdesk/DigitalEmployeeFrame.vue';
+const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePaths?: readonly string[]; employeeNavigationPending?: boolean }>(), {
+  digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false,
+});
+import { ref, computed, watch, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -1187,9 +1194,12 @@ async function executeConfirmReceive() {
 }
 
 // Auto-trigger on mount
-onMounted(() => {
+let initialQueryStarted = false;
+watch(() => props.employeeNavigationPending, (pending) => {
+  if (pending || initialQueryStarted) return;
+  initialQueryStarted = true;
   void triggerTodayQuery();
-});
+}, { immediate: true });
 </script>
 
 <style scoped>
