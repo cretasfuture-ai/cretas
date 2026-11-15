@@ -82,6 +82,10 @@ import com.cretas.aims.exception.BusinessException;
 @RequireModule("production_plan")
 @RowScopeSupported
 public class ProductionPlanController {
+    /** 联产计划的产品是内部原料锚点, 对外名字走 ScheduleProductNames (显示原料名)。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.RawMaterialTypeRepository rawMaterialTypeRepository;
+
 
     /** 开工请求体 (可省略): 工厂开了「缺料时拦开工」(S4-08) 时, 用它带强制开工原因。 */
     public static class StartProductionRequest {
@@ -1326,7 +1330,7 @@ public class ProductionPlanController {
             card.put("planId", p.getId());
             card.put("planNumber", p.getPlanNumber());
             card.put("customerName", p.getSourceCustomerName());
-            card.put("productName", p.getProductType() != null ? p.getProductType().getName() : "");
+            card.put("productName", p.getProductType() != null ? com.cretas.aims.service.scheduling.daily.ScheduleProductNames.displayName(rawMaterialTypeRepository, p.getFactoryId(), p.getProductType()) : "");
             card.put("processName", p.getProcessName());
             card.put("plannedQty", p.getPlannedQuantity());
             card.put("reportedQty", p.getActualQuantity() != null ? p.getActualQuantity() : BigDecimal.ZERO);

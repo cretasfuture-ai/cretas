@@ -40,6 +40,9 @@ async function bootstrap() {
   // Nuxt UI 4（外壳与新页面用；Element 继续负责高密度业务表格/表单）
   const nuxtUi = await import('@nuxt/ui/vue-plugin');
   app.use(nuxtUi.default);
+  // Nuxt UI 内置文案(搜索框占位、分页、空状态、关闭按钮 aria 等)统一中文; 详见 plugins/nuxtUiLocale.ts
+  const nuxtUiLocale = await import('./plugins/nuxtUiLocale');
+  app.use(nuxtUiLocale.default);
 
   // Bug #312 fix (2026-04-18): monkey-patch ElMessage.error / ElMessage({type:'error'})
   // so all 608 call-sites across 114 files get sticky (duration:0 + showClose:true)
