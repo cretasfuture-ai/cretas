@@ -101,7 +101,6 @@ class BomVersionServiceImplApproveTest {
         when(versionRepo.findCurrentInStatus(FACTORY, RECIPE_ID, VersionStatus.APPROVED))
                 .thenReturn(Optional.of(priorApprovedVersion));
         when(versionRepo.save(any(BomVersion.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
 
         // act
         BomVersion approved = service.approve(FACTORY, NEW_ID, APPROVER);
@@ -129,9 +128,10 @@ class BomVersionServiceImplApproveTest {
         // to the partial unique index before the new APPROVED row is written)
         verify(versionRepo, times(1)).flush();
 
-        // assert — BomRecipe.isCurrent sync still runs
-        assertTrue(recipe.getIsCurrent(), "BomRecipe.isCurrent should be true after approve");
-        assertEquals(2, recipe.getVersion(), "BomRecipe.version should match approved.versionNumber");
+        // assert — BomRecipe.isCurrent / version sync still runs, as a targeted 2-column UPDATE
+        // (红线 3 后续: 不再读实体整行 save —— 那会把并发重算刚提交的成本列用旧值写回)
+        verify(recipeRepo).markCurrentVersion(RECIPE_ID, FACTORY, 2);
+        verify(recipeRepo, never()).save(any());
     }
 
     @Test
@@ -142,7 +142,6 @@ class BomVersionServiceImplApproveTest {
         when(versionRepo.findCurrentInStatus(FACTORY, RECIPE_ID, VersionStatus.APPROVED))
                 .thenReturn(Optional.empty());
         when(versionRepo.save(any(BomVersion.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
 
         // act
         BomVersion approved = service.approve(FACTORY, NEW_ID, APPROVER);
@@ -169,7 +168,6 @@ class BomVersionServiceImplApproveTest {
         when(versionRepo.findCurrentInStatus(FACTORY, RECIPE_ID, VersionStatus.APPROVED))
                 .thenReturn(Optional.of(alreadyApproved));   // same id
         when(versionRepo.save(any(BomVersion.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(recipeRepo.findById(RECIPE_ID)).thenReturn(Optional.of(recipe));
 
         // act
         BomVersion approved = service.approve(FACTORY, NEW_ID, APPROVER);

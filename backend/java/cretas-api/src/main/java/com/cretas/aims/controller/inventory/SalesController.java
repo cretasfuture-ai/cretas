@@ -152,9 +152,14 @@ public class SalesController {
     public ApiResponse<PageResponse<SalesOrder>> listOrders(
             @PathVariable @NotBlank String factoryId,
             @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        PageResponse<SalesOrder> result = salesService.getSalesOrders(factoryId, keyword, page, size);
+        // 带订单日期范围时走统一服务端搜索 (关键词 + 日期 + DataScope, 分页前由数据库过滤); 否则保持原路径
+        PageResponse<SalesOrder> result = (startDate != null || endDate != null)
+                ? salesService.searchSalesOrders(factoryId, null, keyword, startDate, endDate, page, size)
+                : salesService.getSalesOrders(factoryId, keyword, page, size);
         return ApiResponse.success("查询成功", result);
     }
 
@@ -468,6 +473,9 @@ public class SalesController {
     public ApiResponse<PageResponse<SalesOrder>> listOrdersByStatus(
             @PathVariable @NotBlank String factoryId,
             @RequestParam SalesOrderStatus status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) LocalDate endDate,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size,
             @RequestHeader("Authorization") String authorization) {
@@ -487,7 +495,7 @@ public class SalesController {
             }
         }
         // 与 AI 工具同一个方法: 状态在数据库里过滤并按 DataScope 收窄 (以前这个接口不收窄, SELF 角色看到全厂该状态的单)
-        PageResponse<SalesOrder> result = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
+        PageResponse<SalesOrder> result = salesService.searchSalesOrders(factoryId, status, keyword, startDate, endDate, page, size);
         return ApiResponse.success("查询成功", result);
     }
 

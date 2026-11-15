@@ -55,6 +55,12 @@ public class PythonIntentMatchRequest {
      */
     private Map<String, Object> taskState;
 
+    /**
+     * 本厂先问档位 (CONSERVATIVE / AGGRESSIVE), 来自 factory_thresholds {@code ai.intent.ask_policy}
+     * (IntentAskPolicyResolver)。null = 老调用方 / 没装配解析器: Python 按默认档并计数。
+     */
+    private String askPolicy;
+
     @Data
     @Builder
     @NoArgsConstructor

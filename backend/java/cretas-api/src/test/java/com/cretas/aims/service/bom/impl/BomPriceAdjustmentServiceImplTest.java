@@ -78,6 +78,8 @@ class BomPriceAdjustmentServiceImplTest {
                 .thenAnswer(inv -> inv.getArgument(0));
         when(recipeRepository.lockByIdAndFactoryId("R-1", "F006"))
                 .thenReturn(java.util.Optional.of(recipe("R-1", "PT-A", "Meal A")));
+        // 红线 3 锁序「整族配方头 → 行」: 批准先只取行所属配方 id 定位要锁的族
+        when(itemRepository.findRecipeIdById("F006", 101L)).thenReturn(java.util.Optional.of("R-1"));
     }
 
     @Test
@@ -210,7 +212,7 @@ class BomPriceAdjustmentServiceImplTest {
         proposal.setStatus(Status.PENDING);
 
         when(proposalRepository.findByIdAndFactoryId(77L, "F006")).thenReturn(java.util.Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(101L))).thenReturn(java.util.Optional.of(bomItem));
         when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("15.0000")));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -234,7 +236,7 @@ class BomPriceAdjustmentServiceImplTest {
             assertThat(audit.getAfterUnitPrice()).isEqualByComparingTo("15.0000");
             assertThat(audit.getApprovedBy()).isEqualTo(9L);
         });
-        verify(itemRepository).findByIdForUpdate(101L);
+        verify(itemRepository).findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(101L));
         verify(itemRepository, never()).findById(101L);
     }
 
@@ -247,7 +249,7 @@ class BomPriceAdjustmentServiceImplTest {
 
         when(proposalRepository.findByIdAndFactoryId(88L, "F006")).thenReturn(java.util.Optional.of(first));
         when(proposalRepository.findByIdAndFactoryId(89L, "F006")).thenReturn(java.util.Optional.of(second));
-        when(itemRepository.findByIdForUpdate(101L)).thenReturn(java.util.Optional.of(bomItem));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(101L))).thenReturn(java.util.Optional.of(bomItem));
         when(materialRepository.findById("RM-BEEF")).thenReturn(java.util.Optional.of(material("14.0000")));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -255,7 +257,7 @@ class BomPriceAdjustmentServiceImplTest {
         service.approve("F006", 89L, 10L, "second");
 
         assertThat(bomItem.getUnitPrice()).isEqualByComparingTo("14.0000");
-        verify(itemRepository, times(2)).findByIdForUpdate(101L);
+        verify(itemRepository, times(2)).findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(101L));
         verify(itemRepository, never()).findById(101L);
     }
 

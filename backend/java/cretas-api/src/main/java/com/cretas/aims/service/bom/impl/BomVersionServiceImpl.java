@@ -306,13 +306,12 @@ public class BomVersionServiceImpl implements BomVersionService {
      * Used during the 6-month transition where consumer code may still read BomRecipe.isCurrent.
      */
     private void syncBomRecipeIsCurrent(BomVersion approvedVersion) {
-        recipeRepo.findById(approvedVersion.getBomRecipeId()).ifPresent(recipe -> {
-            // approve() has already superseded any prior APPROVED bomVersion (via explicit
-            // OBSOLETE write). The new approved version IS the current. Mark
-            // BomRecipe.isCurrent=true and version=approvedVersion.versionNumber.
-            recipe.setIsCurrent(true);
-            recipe.setVersion(approvedVersion.getVersionNumber());
-            recipeRepo.save(recipe);
-        });
+        // approve() has already superseded any prior APPROVED bomVersion (via explicit
+        // OBSOLETE write). The new approved version IS the current. Mark
+        // BomRecipe.isCurrent=true and version=approvedVersion.versionNumber.
+        // 红线 3 后续: 定向 UPDATE 只写这两列 —— 原来 findById + save 是整行 UPDATE, 会把审批期间
+        // 并发重算刚提交的 total_cost 等成本列用审批开头读到的旧值静默写回。
+        recipeRepo.markCurrentVersion(approvedVersion.getBomRecipeId(), approvedVersion.getFactoryId(),
+                approvedVersion.getVersionNumber());
     }
 }

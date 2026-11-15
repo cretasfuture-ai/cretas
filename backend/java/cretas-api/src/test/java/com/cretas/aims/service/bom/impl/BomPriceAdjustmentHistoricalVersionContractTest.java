@@ -63,6 +63,8 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
     @Mock private com.cretas.aims.service.bom.BomRecipeService bomRecipeService;
 
     private BomPriceAdjustmentServiceImpl service;
+    /** item() 造出的行 → 所属配方 id; 供 findRecipeIdById 桥接 (不能在 item() 里打桩: 它常在别的 when(...) 里被调用)。 */
+    private final java.util.Map<Long, String> recipeIdByItem = new java.util.HashMap<>();
 
     @BeforeEach
     void setUp() {
@@ -84,6 +86,9 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         when(proposalRepository.save(any(BomPriceAdjustmentProposal.class))).thenAnswer(inv -> inv.getArgument(0));
         when(auditRepository.save(any(BomPriceAdjustmentAudit.class))).thenAnswer(inv -> inv.getArgument(0));
         when(itemRepository.save(any(BomRecipeItem.class))).thenAnswer(inv -> inv.getArgument(0));
+        // 红线 3 锁序「整族配方头 → 行」: 批准先只取行所属配方 id (标量) 定位要锁的族
+        when(itemRepository.findRecipeIdById(any(), any())).thenAnswer(inv ->
+                Optional.ofNullable(recipeIdByItem.get(inv.<Long>getArgument(1))));
     }
 
     // ---------------------------------------------------------------- a) 生成端
@@ -129,7 +134,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BigDecimal costBefore = archivedLine.getItemCost();
         BomPriceAdjustmentProposal proposal = pending(280L, archivedLine, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(280L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1575L)).thenReturn(Optional.of(archivedLine));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1575L))).thenReturn(Optional.of(archivedLine));
         when(recipeRepository.lockByIdAndFactoryId("R-RW-V1", F))
                 .thenReturn(Optional.of(recipe("R-RW-V1", "PT-RW", 1, BomRecipe.Status.ARCHIVED)));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -157,7 +162,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BomRecipeItem line = item(1576L, "R-GONE", "0.5");
         BomPriceAdjustmentProposal proposal = pending(290L, line, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(290L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1576L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1576L))).thenReturn(Optional.of(line));
         when(recipeRepository.lockByIdAndFactoryId("R-GONE", F)).thenReturn(Optional.empty());
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
 
@@ -180,7 +185,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         line.setStandardQuantity(new BigDecimal("3"));
         BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1604L))).thenReturn(Optional.of(line));
         BomRecipe activeV4 = recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE);
         when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F)).thenReturn(Optional.of(activeV4));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -205,7 +210,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BomRecipeItem line = item(1604L, "R-RW-V4", "0.5");
         BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1604L))).thenReturn(Optional.of(line));
         when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
                 .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -219,8 +224,9 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
                 itemRepository, recipeRepository, guard);
         order.verify(materialRepository).lockByFactoryIdAndIdIn(F, List.of(MAT));
         order.verify(proposalRepository).lockByIdAndFactoryId(287L, F);
-        order.verify(itemRepository).findByIdForUpdate(1604L);
+        // 红线 3: 先头后行 (与激活 / 整表更新 / 草稿明细编辑同一方向), 两者都在保密检查之前
         order.verify(recipeRepository).lockByIdAndFactoryId("R-RW-V4", F);
+        order.verify(itemRepository).findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1604L));
         order.verify(guard).requireRecipe(org.mockito.ArgumentMatchers.eq(F), org.mockito.ArgumentMatchers.eq("R-RW-V4"),
                 any(), any());
     }
@@ -231,7 +237,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BomRecipeItem line = item(1604L, "R-RW-V4", "0.5");
         BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
         when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1604L))).thenReturn(Optional.of(line));
         when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
                 .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -255,7 +261,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         BomPriceAdjustmentProposal proposal = pending(287L, line, "0.7501");
         line.setMaterialTypeId("RMT-OTHER");
         when(proposalRepository.findByIdAndFactoryId(287L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1604L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1604L))).thenReturn(Optional.of(line));
         when(recipeRepository.lockByIdAndFactoryId("R-RW-V4", F))
                 .thenReturn(Optional.of(recipe("R-RW-V4", "PT-RW", 4, BomRecipe.Status.ACTIVE)));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -275,7 +281,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         line.setItemCost(line.computeItemCost());
         BomPriceAdjustmentProposal proposal = pending(286L, line, "0.8");
         when(proposalRepository.findByIdAndFactoryId(286L, F)).thenReturn(Optional.of(proposal));
-        when(itemRepository.findByIdForUpdate(1609L)).thenReturn(Optional.of(line));
+        when(itemRepository.findByIdForUpdate(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq(1609L))).thenReturn(Optional.of(line));
         when(recipeRepository.lockByIdAndFactoryId("R-SRC-V3", F))
                 .thenReturn(Optional.of(recipe("R-SRC-V3", "PT-SRC", 3, BomRecipe.Status.ACTIVE)));
         when(materialRepository.findById(MAT)).thenReturn(Optional.of(material("0.7501")));
@@ -337,6 +343,7 @@ class BomPriceAdjustmentHistoricalVersionContractTest {
         item.setStandardQuantity(BigDecimal.ONE);
         item.setYieldRate(new BigDecimal("100.00"));
         item.setUnitPrice(new BigDecimal(unitPrice));
+        recipeIdByItem.put(id, recipeId);
         return item;
     }
 

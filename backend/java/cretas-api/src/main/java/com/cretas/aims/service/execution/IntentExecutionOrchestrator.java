@@ -154,6 +154,21 @@ public class IntentExecutionOrchestrator {
 
     static final String CONVERSATIONAL_PROVENANCE_SITE = "conversational-with-report";
 
+    /**
+     * 没有数据支撑的闲聊 / 兜底回复的业务事实护栏 (与 SSE 入口同一个类)。
+     * 默认实例保证裸构造的单测和生产一样走闸: 字段不会是 null, 不存在「没注入就不拦」。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.ai.grounding.ChatBusinessFactGuard chatBusinessFactGuard =
+            new com.cretas.aims.ai.grounding.ChatBusinessFactGuard();
+
+    static final String CHAT_FACT_GUARD_SITE = "conversational-no-data";
+
+    /** 没有经营报告时的咨询提示词 (报告脱敏失败退回的也是它)。 */
+    static final String NO_DATA_ADVICE_PROMPT = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+            + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES
+            + "请提供专业、实用的生产管理建议，不超过300字，使用中文。";
+
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
@@ -658,9 +673,10 @@ public class IntentExecutionOrchestrator {
                     factoryId, userId, choiceSourceInput(matchResult, request));
         }
 
-        // 2b. 通用咨询/闲聊
-        if (matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
-            matchResult.getQuestionType() == QuestionType.CONVERSATIONAL) {
+        // 2b. 通用咨询/闲聊 —— 业务问法 (「这个月卖得怎么样」) 不进闲聊: 有匹配就执行, 没有就走下面的澄清候选
+        if ((matchResult.getQuestionType() == QuestionType.GENERAL_QUESTION ||
+            matchResult.getQuestionType() == QuestionType.CONVERSATIONAL)
+                && !com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(request.getUserInput())) {
             String llmResponse = generateConversationalResponse(factoryId, request.getUserInput(),
                     matchResult.getQuestionType(), request.getEnableThinking(), request.getThinkingBudget());
             return IntentExecuteResponse.builder()
@@ -1876,6 +1892,13 @@ public class IntentExecutionOrchestrator {
             }
         }
 
+        // 业务问法不交给闲聊模型 (2026-11-14 F006: 「这个月卖得怎么样」在这里被编了「同比增长 8%」):
+        // 交回识别管线 —— 识别出来就查真数, 识别不出就是澄清候选, 两个入口同一条判定
+        if (com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(userInput)) {
+            log.info("[ChatBusinessFactGuard] 业务问法不进闲聊, 交给意图识别: questionType={}", earlyQuestionType);
+            return null;
+        }
+
         // Default: LLM conversational response
         String llmResponse = generateConversationalResponse(factoryId, userInput, earlyQuestionType,
                 request.getEnableThinking(), request.getThinkingBudget());
@@ -2286,19 +2309,22 @@ public class IntentExecutionOrchestrator {
         if (questionType == QuestionType.GENERAL_QUESTION) {
             factoryAnalysisContext = getPrecomputedAnalysisContext(factoryId);
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
-                systemPrompt = """
-                    你是白垩纪AI Agent的智能助手。用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
-                    **重要**: 下面是该工厂的最新运营分析报告：
+                systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA + """
+
+                    用户正在询问一个关于生产管理、质量控制或成本优化的咨询问题。
+                    **重要**: 下面是该工厂的最新运营分析报告（报告之外的业务数字一律不得给出）：
                     ---
                     %s
                     ---
                     请基于数据提供针对性建议，不超过500字，使用中文。
                     """.formatted(factoryAnalysisContext) + llmCostScope.harnessFor(factoryId);
             } else {
-                systemPrompt = "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。";
+                systemPrompt = NO_DATA_ADVICE_PROMPT;
             }
         } else {
-            systemPrompt = "你是白垩纪AI Agent的智能助手。友好回应，不超过100字，使用中文。";
+            systemPrompt = com.cretas.aims.ai.grounding.ChatBusinessFactGuard.PERSONA
+                    + com.cretas.aims.ai.grounding.ChatBusinessFactGuard.NO_DATA_RULES
+                    + "友好回应，不超过100字，使用中文。";
         }
 
         // 经营报告 + 原话发给模型前脱敏 (报告里有客户 / 供应商 / 人名); 报告脱敏不了就不带报告, 原话也脱敏不了就不发
@@ -2308,7 +2334,7 @@ public class IntentExecutionOrchestrator {
         if (redacted.refused() && factoryAnalysisContext != null) {
             factoryAnalysisContext = null;
             redacted = llmEgressGuard.texts(CONVERSATIONAL_EGRESS_SITE, factoryId,
-                    "你是白垩纪AI Agent的智能助手。请提供专业、实用的生产管理建议，不超过300字，使用中文。", userInput);
+                    NO_DATA_ADVICE_PROMPT, userInput);
         }
         if (redacted.refused()) {
             return "抱歉，这句话里有无法脱敏的内容，没有发给 AI。您可以换个说法，或直接使用系统的查询功能。";
@@ -2337,6 +2363,10 @@ public class IntentExecutionOrchestrator {
             if (factoryAnalysisContext != null && !factoryAnalysisContext.isEmpty()) {
                 response = numberProvenance.enforceText(
                         CONVERSATIONAL_PROVENANCE_SITE, response, factoryAnalysisContext, userInput);
+            } else {
+                // 没有任何数据进模型: 回复里的业务数字 / 业务事实都没有出处, 不下发 (常识数字照常放行)
+                response = chatBusinessFactGuard.enforce(CHAT_FACT_GUARD_SITE, userInput, response,
+                        questionType == QuestionType.GENERAL_QUESTION);
             }
             return response;
         } catch (Exception e) {

@@ -65,6 +65,16 @@ public class SalesOrderItem extends BaseEntity {
     @Column(name = "unit_price", precision = 15, scale = 4)
     private BigDecimal unitPrice;
 
+    /** 价格来源: CUSTOMER 客户专属价 / GLOBAL 统一价 / LAST_DEAL 最近成交 / MANUAL 手填; 历史行 null=未记录。 */
+    @PriceSensitive
+    @Column(name = "price_source", length = 16)
+    private String priceSource;
+
+    /** 价格来源说明快照 (价目表名称或来源订单号)。 */
+    @PriceSensitive
+    @Column(name = "price_ref", length = 200)
+    private String priceRef;
+
     /** Approved gross unit price, captured only for newly validated quote orders. */
     @PriceSensitive
     @Column(name = "quoted_gross_unit_price", precision = 15, scale = 2)
