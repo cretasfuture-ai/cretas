@@ -812,6 +812,15 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
             return IntentExecuteResponse.builder().intentRecognized(true).intentCode("PRODUCTION_PLAN_CREATE")
                     .intentName("新建生产计划").status("READ_MODE_WRITE_BLOCKED").build();
         });
+        // 把「数件数 → 插入」之间的窗口放宽到 300ms: 有交办锁时这段等待在锁里, 各线程依次通过;
+        // 没有锁时 6 个线程都会数到 19、都去插入 —— 变异 (去掉锁) 因此一定看得见 (第一版没有这段, 去掉锁也是绿的)。
+        service.afterOpenCountHook = () -> {
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        };
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
         int delegated = 0;
         int refused = 0;
@@ -839,6 +848,7 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
             }
         } finally {
             pool.shutdownNow();
+            service.afterOpenCountHook = () -> { };
         }
         assertThat(delegated).as("只剩 1 个名额, 只有 1 件交办成功").isEqualTo(1);
         assertThat(refused).isEqualTo(threads - 1);

@@ -90,6 +90,11 @@ public class DigitalCrewService {
      */
     public static final int OPEN_DELEGATIONS_PER_USER = 20;
     public static final int INBOX_PAGE_SIZE_DEFAULT = 50;
+    /**
+     * 测试接缝 (默认什么都不做): 并发上限测试在「数完件数」之后插一段等待, 把竞态窗口放宽到看得见,
+     * 证明交办锁真的在起作用 (#1771 复审 低-1)。⛔ 生产代码不设置它。
+     */
+    public volatile Runnable afterOpenCountHook = () -> { };
     public static final int INBOX_PAGE_SIZE_MAX = 100;
 
     /** 会话里取出的操作人: 类型 / id / 角色都来自 JWT, ⛔ 不来自请求体。 */
@@ -376,6 +381,7 @@ public class DigitalCrewService {
                     factoryId, member.key(), actor.id(), input, Status.DELEGATED);
             if (dup.isPresent()) return dup.get();
             long open = items.countOpenByUser(factoryId, actor.id(), Status.DELEGATED);
+            afterOpenCountHook.run();
             if (open >= OPEN_DELEGATIONS_PER_USER) {
                 throw new BusinessException(409, "你已经有 " + open + " 件交办还在等确认（每人最多 " + OPEN_DELEGATIONS_PER_USER
                         + " 件），这件没有交办，也没有执行任何写操作")
