@@ -242,7 +242,7 @@ watch(() => route.query.orderId, (q) => {
       side="right"
       :title="detail ? `委外单 ${detail.orderNo} — ${detail.supplierName ?? detail.supplierId}` : '委外单'"
       description="委外单详情（只读）"
-      :ui="{ content: 'max-w-[min(1080px,92vw)] w-full', description: 'sr-only' }"
+      :ui="{ content: 'cs-outsource-slide', description: 'sr-only' }"
       @update:open="onDrawerChange"
     >
       <template #body>
@@ -331,8 +331,12 @@ watch(() => route.query.orderId, (q) => {
 .summary dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
 .summary dd { margin: 2px 0 0; color: var(--cs-text); }
 .summary .wide { grid-column: 1 / -1; }
-:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 600; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
-:deep(.cs-table td) { font-size: var(--cs-font); color: var(--cs-text); border-color: var(--cs-border); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 :deep(.clickable tbody tr) { cursor: pointer; }
 :deep(.clickable tbody tr:hover td) { background: var(--cs-primary-soft); }
+</style>
+<style>
+/* USlideover 自带 sm:max-w-md，同名工具类合并不掉；宽度直接用一条全局规则 */
+.cs-outsource-slide { width: 100%; max-width: min(1080px, 92vw) !important; }
 </style>

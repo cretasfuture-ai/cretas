@@ -197,6 +197,6 @@ onMounted(fetchList);
 .form { display: grid; gap: var(--cs-space-4); }
 .confirm { margin: 0; color: var(--cs-text); }
 .num { font-variant-numeric: tabular-nums; }
-:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 600; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
-:deep(.cs-table td) { font-size: var(--cs-font); color: var(--cs-text); border-color: var(--cs-border); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
