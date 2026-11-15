@@ -1,0 +1,109 @@
+/* 统一外壳：沿用味美 --cs-* 变量，六膳门工作区侧栏/顶栏与原生一致 */
+#uni-ws{display:inline-flex;align-items:center;gap:2px;margin:0 12px;padding:3px;border:1px solid var(--cs-border,#dce3ed);border-radius:8px;background:var(--cs-bg,#f4f6f9);flex-shrink:0}
+#uni-ws .uni-ws-label{font-size:12px;color:#64748b;padding:0 8px 0 6px}
+#uni-ws button{height:28px;padding:0 12px;border:0;border-radius:6px;background:transparent;color:#41536a;font-size:13px;cursor:pointer;white-space:nowrap}
+#uni-ws button:hover{background:#e6edf5}
+#uni-ws button.active{background:var(--cs-primary,#1b65a8);color:#fff;font-weight:600}
+#uni-ws button:focus-visible,.uni-ws-help:focus-visible{outline:2px solid var(--cs-primary,#1b65a8);outline-offset:2px}
+.uni-ws-help{display:inline-grid;place-items:center;width:17px;height:17px;margin:0 4px;font-size:11px;border:1px solid #a9b8c7;border-radius:50%;color:#64748b;cursor:help}
+/* 六膳门模式：隐藏味美专属外壳，保留结构 */
+html.uni-lsm .app-sidebar .sidebar-logo,html.uni-lsm .app-sidebar .sidebar-menu-wrap,html.uni-lsm .app-header .header-left,html.uni-lsm .app-header .header-right,html.uni-lsm .workspace-tabs,html.uni-lsm .workspace-content-shell,html.uni-lsm .inline-cs,html.uni-lsm #cretas-nuxt-root,html.uni-lsm .cretas-nuxt-surface{display:none!important}
+html:not(.uni-lsm) #uni-logo,html:not(.uni-lsm) #uni-nav,html:not(.uni-lsm) #uni-tools,html:not(.uni-lsm) #uni-frame-host{display:none!important}
+html.uni-lsm .app-main{display:flex;flex-direction:column;min-height:0}
+#uni-logo{display:flex;align-items:center;gap:12px;height:76px;padding:16px 20px;border-bottom:1px solid rgba(255,255,255,.07);color:#fff;white-space:nowrap;overflow:hidden}
+.uni-logo-mark{width:36px;height:36px;border-radius:8px;display:grid;place-items:center;background:#1b65a8;font-weight:700;flex-shrink:0}
+.uni-logo-copy{display:flex;flex-direction:column;min-width:0}.uni-logo-title{font-size:17px;font-weight:600;color:#fff}.uni-logo-sub{font-size:11px;color:#9cb2c8}
+#uni-logo.uni-collapsed .uni-logo-copy{display:none}
+#uni-nav{padding:8px 10px 24px;overflow-y:auto;height:calc(100% - 76px);scrollbar-width:thin}
+#uni-nav button{display:flex;align-items:center;gap:12px;width:100%;border:0;background:transparent;color:#d8e3ef;text-align:left;cursor:pointer;font-size:14px}
+.uni-group{height:43px;padding:0 14px 0 18px;border-radius:8px;margin:2px 0}.uni-group:hover,.uni-item:hover,.uni-sub:hover{background:rgba(255,255,255,.07)}
+.uni-group .uni-label{flex:1}.uni-group .uni-chev{flex:0 0 7px;height:7px;margin-right:4px}.uni-chev{width:7px;height:7px;border-right:1.6px solid #9cb2c8;border-bottom:1.6px solid #9cb2c8;transform:rotate(45deg);transition:transform .2s}.uni-group.open .uni-chev{transform:rotate(-135deg)}
+.uni-item{height:38px;padding:0 14px 0 49px;border-radius:8px;margin:1px 0;font-size:13.5px}.uni-section{padding:14px 18px 4px;font-size:11.5px;letter-spacing:.08em;color:#7f94aa}.uni-collapsed .uni-section,.uni-section.uni-label{white-space:nowrap}.uni-item.solo{height:43px;padding:0 18px;font-size:14px;margin:2px 0}
+.uni-item.active{background:rgba(27,101,168,.25);color:#fff;font-weight:600}.uni-item.solo.active{background:rgba(27,101,168,.25)}
+.uni-sub{height:32px;padding:0 14px 0 66px;border-radius:8px;font-size:12.5px;color:#a9bdd1!important}.uni-sub.active{color:#fff!important;font-weight:600;background:rgba(255,255,255,.08)}
+.uni-tag{font-style:normal;font-size:10px;color:#9cb2c8;border:1px solid rgba(255,255,255,.18);border-radius:10px;padding:0 6px;margin-left:auto;white-space:nowrap}
+#uni-nav.uni-collapsed .uni-label,#uni-nav.uni-collapsed .uni-sub{display:none}#uni-nav.uni-collapsed .uni-item:not(.solo){display:none}#uni-nav.uni-collapsed button{justify-content:center;padding:0}
+#uni-nav button:focus-visible{outline:2px solid #5ba7e0;outline-offset:-2px}
+#uni-tools{flex:1;display:flex;align-items:center;gap:14px;min-width:0}
+.uni-crumb{font-size:13px;color:#41536a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.uni-crumb i{margin:0 8px;color:#a6b3c1;font-style:normal}.uni-crumb b{color:#1a2332;font-weight:600}
+.uni-search{position:relative;margin-left:auto}
+#uni-search-open{display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 10px;border:1px solid var(--cs-border,#dce3ed);border-radius:8px;background:#fff;color:#41536a;font-size:13px;cursor:pointer}
+#uni-search-open kbd{font-size:10px;border:1px solid #d6dee7;border-radius:4px;padding:0 4px;color:#758296}
+.uni-search-pop{position:absolute;right:0;top:40px;width:420px;max-width:80vw;background:#fff;border:1px solid var(--cs-border,#dce3ed);border-radius:12px;box-shadow:0 12px 32px rgba(23,43,64,.18);padding:10px;z-index:3000}
+.uni-search-pop input{width:100%;height:34px;border:1px solid var(--cs-border,#dce3ed);border-radius:6px;padding:0 10px;font-size:13px}
+.uni-search-pop ul{list-style:none;margin:8px 0 0;padding:0;max-height:340px;overflow:auto}
+.uni-search-pop li{display:grid;grid-template-columns:1fr auto;gap:2px 10px;padding:7px 10px;border-radius:6px;cursor:pointer;font-size:13px}.uni-search-pop li.on,.uni-search-pop li:hover{background:#eaf2fa}
+.uni-search-pop li small{grid-column:1;color:#758296;font-size:11px}.uni-search-pop li em{grid-row:1;grid-column:2;font-style:normal;font-size:11px;color:#1b65a8}.uni-search-pop li.none{display:block;color:#758296}
+.uni-scope{font-size:12px;color:#1b65a8;background:#eaf2fa;padding:5px 10px;border-radius:6px;white-space:nowrap}
+#uni-frame-host{flex:1;min-height:0;display:flex}#uni-frame{flex:1;width:100%;border:0;background:var(--cs-bg,#f4f6f9);min-height:calc(100vh - 64px)}
+@media(max-width:1100px){.uni-scope{display:none}#uni-ws .uni-ws-label{display:none}}
+/* D10 六膳门侧栏常用；D9 原型工具收纳 */
+html.uni-lsm .cs-pins{display:none!important}
+.uni-pins{padding:2px 0 8px;margin-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08)}
+.uni-pins-head{display:flex;align-items:center;justify-content:space-between;padding:4px 8px;font-size:12px;color:#9cb2c8}
+#uni-nav .uni-pin-toggle{width:auto;height:22px;padding:0 6px;border-radius:4px;font-size:12px;color:#c6d4e2}
+.uni-pin{display:flex;align-items:center;border-radius:8px}.uni-pin.active{background:rgba(27,101,168,.25)}
+#uni-nav .uni-pin-link{flex:1;min-width:0;height:32px;padding:0 10px;font-size:13px;overflow:hidden}
+#uni-nav .uni-pin-link .uni-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#uni-nav .uni-pin-remove{width:24px;height:24px;justify-content:center;padding:0;opacity:0;color:#9cb2c8}
+.uni-pin:hover .uni-pin-remove,#uni-nav .uni-pin-remove:focus-visible{opacity:1}
+#uni-nav.uni-collapsed .uni-pins{display:none}
+.uni-proto-hidden{display:none!important}
+#uni-proto{height:30px;font-size:13px;margin-right:6px}
+.uni-usage{display:grid;grid-template-columns:150px 1fr;gap:4px 12px;font-size:13px;margin:8px 0 12px}.uni-usage dt{color:#64748b}.uni-usage dd{margin:0;font-variant-numeric:tabular-nums}
+/* N9 味美工作区的自定义报表：覆盖查询模板路由的内容区 */
+html.uni-ydwm-reports .app-main .workspace-content-shell,html.uni-ydwm-reports .app-main .workspace-tabs{display:none!important}
+#uni-ydwm-reports{flex:1;display:flex;min-height:calc(100vh - 64px)}#uni-ydwm-reports iframe{flex:1;border:0;background:var(--cs-bg,#f4f6f9)}
+html.uni-lsm #uni-ydwm-reports{display:none!important}
+/* 窄屏（≤640px）：顶栏按钮不换行，搜索只留图标，工作区只留两个按钮 */
+@media(max-width:640px){
+  .app-header button,.app-header a,#uni-ws button{white-space:nowrap}
+  #uni-ws{margin:0 6px;padding:2px}#uni-ws button{padding:0 8px}#uni-ws .uni-ws-label,#uni-ws .uni-ws-help{display:none}
+  .app-header [aria-label="搜索已开放菜单"] span,.app-header [aria-label="搜索已开放菜单"] kbd,#uni-search-open span,#uni-search-open kbd{display:none}
+  #uni-proto{display:none}
+  .uni-search-pop{position:fixed;left:8px;right:8px;width:auto;top:60px}
+}
+/* D3–D13 页面适配层 */
+.d-hidden{display:none!important}
+.d-note{margin:0 0 10px;padding:6px 10px;border-radius:8px;background:var(--cs-surface-subtle,#f4f6f9);color:var(--cs-muted,#5b6475);font-size:12px;line-height:20px}
+.d-note a{color:var(--cs-primary,#1b65a8);margin-left:6px}
+.d-seg{display:flex;align-items:center;gap:4px;margin:0 0 8px;padding:3px;border:1px solid var(--cs-border,#dce3ed);border-radius:8px;background:var(--cs-surface,#fff);width:max-content;max-width:100%;flex-wrap:wrap}
+.d-seg button{height:28px;padding:0 14px;border:0;border-radius:6px;background:transparent;color:var(--cs-muted,#5b6475);font-size:13px;cursor:pointer}
+.d-seg button[aria-current=page]{background:var(--cs-primary,#1b65a8);color:#fff;font-weight:600}
+.d-seg .d-seg-gap{width:12px}.d-seg .d-seg-link{color:var(--cs-primary,#1b65a8)}
+.d-missing{color:var(--cs-muted,#5b6475)!important;font-size:.875em}
+.d-no-records{opacity:.75}
+body[data-d-oa] .el-table__empty-block~.el-scrollbar__bar.is-horizontal,body[data-d-oa] .el-table--empty .el-scrollbar__bar.is-horizontal{display:none!important}
+/* 精简视图默认时的「打开原页面办理」条（W6 销售订单） */
+#uni-ydwm-reports{flex-direction:column}
+.uni-native-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 16px;background:var(--cs-surface,#fff);border-bottom:1px solid var(--cs-border,#dce3ed);font-size:13px;color:var(--cs-muted,#5b6475)}
+.uni-native-bar a{color:var(--cs-primary,#1b65a8);font-weight:600;text-decoration:none}
+/* 审计第二轮必修 3：味美把内容区直接子元素撑成整屏高，注入的分段条与说明按内容高度显示 */
+.app-content>.d-seg,.app-content>.d-note,.app-content>#d-oa-nav,.app-content>#d-oa-tip,.app-content>.cs-cost-jump,.app-content>[data-d-for]{height:auto!important;min-height:0!important;max-height:none!important;flex:0 0 auto!important}
+/* BL 24 规则提醒（异常预警页，数据来自 E 的规则接口） */
+.d-rules{margin:0 0 12px;padding:10px 14px;border:1px solid var(--cs-border,#dce3ed);border-radius:10px;background:var(--cs-surface,#fff);font-size:13px}
+.d-rules header{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.d-rules header span{color:var(--cs-muted,#5b6475);font-size:12px;flex:1}.d-rules header a{color:var(--cs-primary,#1b65a8)}
+.d-rules ol{margin:6px 0 0;padding-left:18px}.d-rules li{padding:3px 0}.d-rules li span{margin-left:8px;color:var(--cs-muted,#5b6475);font-size:12px}
+.app-content>.d-rules{height:auto!important;min-height:0!important}
+/* 味美原生页面的统一悬浮窗宿主（透明 iframe，承载 AiFloat） */
+#uni-ai-host{position:fixed;right:20px;bottom:18px;width:380px;height:48px;border:0;background:transparent;z-index:2400;color-scheme:normal}
+html.uni-lsm #uni-ai-host{display:none!important}
+
+/* 快速查找（BL 21 批量单号 + BL 23 相对日期，生产计划 / 采购订单原页面） */
+.d-quick-find{margin:0 0 8px;padding:6px 10px;border:1px solid var(--cs-border,#dce3ed);border-radius:8px;background:var(--cs-surface,#fff);font-size:13px}
+.d-qf-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.d-qf-hint{color:var(--cs-muted,#5b6475);font-size:12px;margin-left:auto}
+.d-qf-out p{margin:6px 0 0}.d-qf-out ol{margin:4px 0 0;padding-left:18px;max-height:220px;overflow:auto}.d-qf-out li span{margin-left:8px;color:var(--cs-muted,#5b6475);font-size:12px}
+.d-qf-out [data-no]{border:0;background:none;color:var(--cs-primary,#1b65a8);cursor:pointer;padding:0;font:inherit;font-variant-numeric:tabular-nums}.d-qf-clear{margin-left:8px;border:0;background:none;color:var(--cs-primary,#1b65a8);cursor:pointer}
+.app-content>.d-quick-find{height:auto!important;min-height:0!important}
+/* 第四批②：预警归因按钮与抽屉 */
+.d-rules li .d-ex-btn{margin-left:8px;padding:2px 8px;font-size:12px}
+.d-explain .d-ex-state{margin:6px 0 10px;font-size:13px}.d-explain .d-ex-table{width:100%;border-collapse:collapse;font-size:12px}.d-explain .d-ex-table th{text-align:left;font-weight:500;color:var(--cs-muted,#5b6475);padding:4px 8px 4px 0;white-space:nowrap;vertical-align:top}.d-explain .d-ex-table td{padding:4px 0;font-variant-numeric:tabular-nums}.d-explain .d-ex-facts{margin-top:12px}
+/* 第四批：子菜单带「待整理」标签时标题被挤成一字一行；标题单行省略，左缩进减小 */
+.uni-sub{padding-left:52px}.uni-sub .uni-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1 1 auto;text-align:left}.uni-sub .uni-tag{flex:0 0 auto}
+/* 第五批：动作权限对照、适配自检（只读工具） */
+.d-perm-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:8px 0}.d-perm-bar input[type=search]{flex:1 1 220px;padding:6px 10px;border:1px solid var(--cs-border,#dce3ed);border-radius:6px}.d-perm-count{color:var(--cs-muted,#5b6475);font-size:12px}
+.d-perm-scroll{max-height:60vh;overflow:auto;border:1px solid var(--cs-border,#dce3ed);border-radius:6px}.d-perm-table{width:100%;border-collapse:collapse;font-size:12px}.d-perm-table th{position:sticky;top:0;background:var(--cs-surface-muted,#f5f7fa);text-align:left;padding:6px 8px;white-space:nowrap}.d-perm-table td{padding:6px 8px;border-top:1px solid var(--cs-border,#edf1f5);vertical-align:top}.d-perm-table td small{display:block;color:var(--cs-muted,#5b6475)}
+.d-perm-table td.ok{color:#2f7a5b}.d-perm-table td.no{color:#b3261e}.d-perm-table td.unk{color:var(--cs-muted,#8a94a6)}
+.d-sc-table tr.sc-miss td{background:#fdecea;color:#b3261e}.d-sc-table tr.sc-na td{color:var(--cs-muted,#8a94a6)}.d-selfcheck .miss{color:#b3261e}.d-sc-state{margin:6px 0 10px;font-size:13px}
+/* F 线「数字班组」在味美侧栏的静态分组（常开；侧栏收起时只隐藏标题文字） */
+.app-sidebar .cs-extra-group > .cs-extra-group-title{cursor:default}.app-sidebar .cs-extra-group > .el-menu{display:block!important}

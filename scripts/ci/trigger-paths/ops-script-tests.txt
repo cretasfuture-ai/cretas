@@ -89,3 +89,6 @@ backend/java/cretas-api/pom.xml
 # 判定仪器自身: 改了它们就该触发本闸 (否则清单/判定改坏了这道闸无从发现)。
 scripts/ci/changed-paths.py
 scripts/ci/trigger-paths/ops-script-tests.txt
+
+# 2026-11-15 新增: 意图验收集 v3 隔离闸 / 门槛 (test-intent-acceptance-leak-gate.sh, GUARDS=tests/intent-acceptance/*)。
+tests/intent-acceptance/**

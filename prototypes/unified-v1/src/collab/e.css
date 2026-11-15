@@ -1,0 +1,80 @@
+/* E 线补充样式：只用 --cs-* 变量与 frame.css 共享类（card / table / state / uni-ai-*），不另起体系。 */
+.e-module{padding:20px 24px 40px;max-width:1700px;margin:0 auto}
+.e-actor{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--cs-muted)}
+.e-actor select{height:28px;padding:2px 6px;font-size:12px}
+.e-strip{margin-bottom:12px}
+.e-src,.e-tag{display:inline-block;padding:0 6px;border-radius:4px;font-size:11px;line-height:18px;background:var(--cs-info-soft);color:var(--cs-info);white-space:nowrap}
+.e-tag.lake{background:var(--cs-success-soft);color:var(--cs-success)}.e-tag.unv{background:var(--cs-warning-soft);color:var(--cs-warning)}
+.e-session{color:var(--cs-warning)}
+.e-tabs{display:flex;gap:4px;padding:0 16px;border-bottom:1px solid var(--cs-border);overflow-x:auto}
+.e-tabs button{border:0;background:none;padding:10px 12px;font-size:13px;color:var(--cs-muted);border-bottom:2px solid transparent;white-space:nowrap}
+.e-tabs button[aria-selected="true"]{color:var(--cs-primary);border-bottom-color:var(--cs-primary);font-weight:600}
+.e-tabs b{font-weight:600;margin-left:4px;font-variant-numeric:tabular-nums}
+.e-tabs .bad{color:var(--cs-danger)}
+.e-stage-hint{padding:8px 16px 0;font-size:12px;color:var(--cs-muted)}
+.state.danger{background:var(--cs-danger-soft);color:var(--cs-danger)}
+.e-over{color:var(--cs-danger);font-size:12px}
+.e-empty{padding:36px 16px;text-align:center;color:var(--cs-muted)}
+.e-empty p{margin-bottom:10px}
+.e-link{border:0;background:none;color:var(--cs-primary);padding:0;font-size:inherit;text-decoration:underline;text-underline-offset:2px}
+td .e-link{height:auto}
+/* 详情侧栏：非模态，宽度受控，悬浮窗在其左侧 */
+.e-drawer{position:fixed;top:0;right:0;bottom:0;width:min(600px,100vw);z-index:60;background:var(--cs-surface);border-left:1px solid var(--cs-border);box-shadow:-12px 0 32px rgba(21,45,69,.12);display:flex;flex-direction:column;animation:e-in .22s ease-out}
+@keyframes e-in{from{transform:translateX(24px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){.e-drawer{animation:none}}
+.e-drawer>header{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:14px 18px;border-bottom:1px solid var(--cs-border)}
+.e-drawer>header h2{font-size:16px}.e-drawer>header p{font-size:12px;color:var(--cs-muted);margin-top:2px}
+.e-drawer .e-body{flex:1;overflow:auto;padding:12px 18px 18px}
+.e-drawer>footer{display:flex;justify-content:flex-end;gap:8px;align-items:center;padding:10px 18px;border-top:1px solid var(--cs-border);flex-wrap:wrap}
+.e-drawer>footer .muted{margin-right:auto}
+.e-sec{padding:10px 0;border-bottom:1px solid #eef2f6}.e-sec:last-child{border-bottom:0}
+.e-sec>h3{font-size:13px;margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.e-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px}
+.e-grid label,.e-field{display:grid;gap:4px;font-size:12px;color:var(--cs-muted)}
+.e-grid label.wide,.e-field.wide{grid-column:1/-1}
+.e-grid input,.e-grid select,.e-grid textarea,.e-field input,.e-field select,.e-field textarea{width:100%;color:var(--cs-text);font-size:13px}
+.e-grid textarea,.e-field textarea{min-height:60px;resize:vertical}
+.e-req::after{content:" *";color:var(--cs-danger)}
+.e-items td input,.e-items td select{height:26px;padding:2px 6px;font-size:12px;width:100%}
+.e-items td{max-width:none;white-space:normal}
+.e-items tr.fail{background:var(--cs-danger-soft)}
+.e-items tr.hl{box-shadow:inset 3px 0 var(--cs-primary)}
+.e-kv{display:grid;grid-template-columns:96px minmax(0,1fr);gap:4px 12px;font-size:13px;margin:0}.e-kv dt{color:var(--cs-muted)}.e-kv dd{margin:0;overflow-wrap:anywhere}
+.e-verdict{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;background:var(--cs-surface-subtle);font-size:13px}
+.e-verdict.FAIL{background:var(--cs-danger-soft);color:var(--cs-danger)}.e-verdict.PASS{background:var(--cs-success-soft);color:var(--cs-success)}.e-verdict.INCOMPLETE{background:var(--cs-warning-soft);color:var(--cs-warning)}
+.e-log{font-size:12px;color:var(--cs-muted)}.e-log summary{cursor:pointer}.e-log li{margin:4px 0}
+.e-log ul{padding-left:16px;margin:6px 0}
+.e-preview{border:1px solid var(--cs-border);border-radius:8px;padding:10px 12px;background:var(--cs-surface-subtle);margin-top:8px;font-size:12px}
+.e-preview h4{margin-bottom:6px}
+.e-preview .diff{display:grid;grid-template-columns:72px 1fr 1fr;gap:4px 8px}.e-preview .diff .h{color:var(--cs-muted)}
+.e-preview del{color:var(--cs-danger)}.e-preview ins{color:var(--cs-success);text-decoration:none}
+.e-ok{padding:8px 10px;border-radius:8px;background:var(--cs-success-soft);color:var(--cs-success);font-size:12px;margin-top:8px}
+.e-err{padding:8px 10px;border-radius:8px;background:var(--cs-danger-soft);color:var(--cs-danger);font-size:12px;margin-top:8px}
+.e-timeline{list-style:none;padding:0;margin:0}.e-timeline li{padding:6px 0;border-bottom:1px dashed #eef2f6;font-size:13px}.e-timeline small{display:block}
+.e-comment-box textarea{width:100%;min-height:56px}.e-comment-box .actions{justify-content:flex-end;margin-top:6px}
+.e-rel{display:flex;flex-wrap:wrap;gap:6px}.e-rel span{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--cs-border);border-radius:6px;padding:2px 6px;font-size:12px}
+.e-rel button.x{border:0;background:none;color:var(--cs-muted);padding:0 2px}
+.e-agent{opacity:.6}
+.e-module .filters .e-switch{display:flex;align-items:center;gap:4px;font-size:12px;color:var(--cs-muted)}
+.e-module .filters .e-switch input{height:auto;min-width:0;flex:none}
+.e-ai-src{font-size:11px;color:var(--cs-muted);border:1px solid var(--cs-border);border-radius:4px;padding:0 4px;margin-left:6px}
+.e-ai-src.sys{color:var(--cs-info);border-color:#bcd3ea}
+.e-ai-rejected{color:var(--cs-muted);font-size:12px}.e-ai-rejected s{color:#8fa0b2}
+.e-ai-modes{display:flex;gap:6px;margin-top:6px}
+.e-procs{display:flex;flex-wrap:wrap;gap:4px 14px;max-height:180px;overflow:auto;padding:6px 8px;border:1px solid var(--cs-border);border-radius:6px}
+.e-procs label{white-space:nowrap}
+.e-drawer input:disabled,.e-drawer select:disabled,.e-drawer textarea:disabled{background:var(--cs-surface-subtle,#f5f7fa);color:var(--cs-muted);cursor:not-allowed}
+.e-item-card{border:1px solid var(--cs-border);border-radius:8px;padding:8px 10px;margin-bottom:8px;display:grid;gap:6px}
+.e-grid3{grid-template-columns:2fr 2fr 1fr}.e-grid4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.e-inline{display:flex!important;align-items:center;gap:6px;font-size:12px;color:var(--cs-text)}.e-inline input[type=checkbox]{height:auto;width:auto}
+.state.info{background:var(--cs-info-soft);color:var(--cs-info)}.state.warning{background:var(--cs-warning-soft);color:var(--cs-warning)}.state.primary{background:var(--cs-primary-soft);color:var(--cs-primary)}.state.neutral{background:#f0f2f5;color:#526278}
+.e-fc{border-top:1px solid var(--cs-border);border-bottom:1px solid var(--cs-border);background:var(--cs-surface-subtle,#f8fafc);margin-top:8px}
+.e-rem .e-rem-group{padding:4px 16px 8px}.e-rem-group h3{font-size:13px;margin:6px 0}.e-rem-group ul{list-style:none;padding:0;margin:0}.e-rem-group li{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:5px 0;border-bottom:1px dashed #eef2f6;font-size:13px}.e-rem-group li>small{color:var(--cs-muted)}.e-rem-group li>.actions{margin-left:auto}
+.e-procs input[type=checkbox]{height:auto;width:auto;margin:0 2px 0 0}
+.e-verdict.INVALID{background:var(--cs-warning-soft);color:var(--cs-warning)}
+.e-lake-row{background:#fbfcfe}
+.e-shared{display:inline-flex;align-items:center;gap:4px}.e-date small{white-space:nowrap}
+.e-views{padding:8px 16px 0}
+.e-stage-counts span{white-space:nowrap}
+/* 第六批自查：工序首检表加了「首笔称重」列后，约 1000px 宽时「操作」列被挤出可视区。首检、首笔称重两列允许换行，说明文字单独一行 */
+.e-fc td:nth-child(6),.e-fc td:nth-child(7){white-space:normal;min-width:120px;max-width:190px}.e-fc td:nth-child(6) small,.e-fc td:nth-child(7) small{display:block;white-space:normal}
