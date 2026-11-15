@@ -247,7 +247,7 @@ async function handleDownloadTemplate(): Promise<void> {
       </div>
     </section>
 
-    <UModal v-model:open="createVisible" title="新增供应商" description="新增供应商资料" :dismissible="false" :ui="{ content: 'max-w-[620px]', description: 'sr-only' }">
+    <UModal v-model:open="createVisible" title="新增供应商" description="新增供应商资料" :dismissible="false" :ui="{ footer: 'justify-end', content: 'max-w-[620px]', description: 'sr-only' }">
       <template #body>
         <UAlert color="info" variant="subtle" icon="i-lucide-info" class="mb-4" title="供应商名称、联系人、联系电话和地址为必填项" />
         <UForm ref="createFormRef" :state="createForm" :validate="validateSupplierForm" class="create-form" @submit="submitCreate">

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CsDateField from '@/components/cs/CsDateField.vue';
 /**
  * P-NUCLEAR-1 (28-Backlog #30) — 核价单列表 (PC).
  *
@@ -240,7 +241,7 @@ onMounted(() => {
     </section>
 
     <!-- 新建核价单 -->
-    <UModal v-model:open="createDialogVisible" title="新建核价单" description="创建询价核价单" :dismissible="false" :ui="{ content: 'max-w-[560px]', description: 'sr-only' }">
+    <UModal v-model:open="createDialogVisible" title="新建核价单" description="创建询价核价单" :dismissible="false" :ui="{ footer: 'justify-end', content: 'max-w-[560px]', description: 'sr-only' }">
       <template #body>
         <UAlert
           v-if="linkedToDraft"
@@ -270,10 +271,10 @@ onMounted(() => {
             </div>
           </UFormField>
           <UFormField label="询价日期" required>
-            <UInput v-model="createForm.inquiryDate" type="date" class="w-full" />
+            <CsDateField v-model="createForm.inquiryDate" class="w-full" />
           </UFormField>
           <UFormField label="期望到货">
-            <UInput v-model="createForm.requiredDate" type="date" class="w-full" />
+            <CsDateField v-model="createForm.requiredDate" clearable class="w-full" />
           </UFormField>
           <UFormField label="备注">
             <UTextarea v-model="createForm.remark" :rows="2" :maxlength="5000" class="w-full" />

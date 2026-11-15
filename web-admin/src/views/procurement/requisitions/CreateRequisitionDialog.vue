@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CsDateField from '@/components/cs/CsDateField.vue';
 /**
  * 新建请购单 dialog — Sprint 6 W2-A.
  *
@@ -279,7 +280,7 @@ void _avoidUnusedWarning;
     :title="dialogTitle"
     description="创建请购单草稿"
     :dismissible="false"
-    :ui="{ content: 'max-w-[900px]', description: 'sr-only' }"
+    :ui="{ footer: 'justify-end', content: 'max-w-[900px]', description: 'sr-only' }"
   >
     <template #body>
       <div class="form">
@@ -298,7 +299,7 @@ void _avoidUnusedWarning;
           </div>
         </UFormField>
         <UFormField :label="expectedDateLabel">
-          <UInput v-model="form.expectedDate" type="date" class="w-56" />
+          <CsDateField v-model="form.expectedDate" clearable class="w-56" />
         </UFormField>
         <UFormField :label="reasonLabel">
           <UTextarea v-model="form.reason" :rows="2" :maxlength="5000" :placeholder="reasonPlaceholder" class="w-full" />

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import CsDateField from '@/components/cs/CsDateField.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -245,7 +246,7 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
       <div class="no-perm">您没有查看价格数据的权限</div>
     </section>
 
-    <UModal v-if="canViewPrice" v-model:open="dialogVisible" title="新建价格表" description="新建采购/销售/调拨价格表" :dismissible="false" :ui="{ content: 'max-w-[760px]', description: 'sr-only' }">
+    <UModal v-if="canViewPrice" v-model:open="dialogVisible" title="新建价格表" description="新建采购/销售/调拨价格表" :dismissible="false" :ui="{ footer: 'justify-end', content: 'max-w-[760px]', description: 'sr-only' }">
       <template #body>
         <div class="form">
           <UFormField label="名称" required><UInput v-model="form.name" placeholder="例如:2025 Q2 采购标准价" class="w-full" /></UFormField>
@@ -253,8 +254,8 @@ function handleSearchClear() { searchKeyword.value = ''; handleSearch(); }
             <URadioGroup v-model="form.priceType" orientation="horizontal" :items="priceTypeItems" />
           </UFormField>
           <div class="date-row">
-            <UFormField label="生效日期" required class="flex-1"><UInput v-model="form.effectiveFrom" type="date" class="w-full" /></UFormField>
-            <UFormField label="失效日期" class="flex-1"><UInput v-model="form.effectiveTo" type="date" class="w-full" /></UFormField>
+            <UFormField label="生效日期" required class="flex-1"><CsDateField v-model="form.effectiveFrom" class="w-full" /></UFormField>
+            <UFormField label="失效日期" class="flex-1"><CsDateField v-model="form.effectiveTo" clearable class="w-full" /></UFormField>
           </div>
           <USeparator label="价格明细" />
           <div class="item-row item-header">

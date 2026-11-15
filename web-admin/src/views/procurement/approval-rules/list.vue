@@ -206,7 +206,7 @@ onMounted(loadRules);
       </UTable>
     </section>
 
-    <UModal v-model:open="dialogVisible" :title="editingId ? '编辑规则' : '新增规则'" description="配置采购审批规则" :dismissible="false" :ui="{ content: 'max-w-[500px]', description: 'sr-only' }">
+    <UModal v-model:open="dialogVisible" :title="editingId ? '编辑规则' : '新增规则'" description="配置采购审批规则" :dismissible="false" :ui="{ footer: 'justify-end', content: 'max-w-[500px]', description: 'sr-only' }">
       <template #body>
         <UForm ref="formRef" :state="form" :validate="validateForm" class="form" @submit="handleSave">
           <UFormField label="规则名称" name="ruleName" required>
