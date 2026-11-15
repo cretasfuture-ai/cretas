@@ -10813,6 +10813,21 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 productTypeRepository.findByIdAndFactoryId(productTypeId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("产品类型", "id", productTypeId));
 
+        // 2b. 目标工艺须有工序接收这份半成品 (Steve 2026-11-15: 提前到建计划这一步拦, 改掉 11-04 只在开工时拦的口径)。
+        //     三态: 目标成品没有可解析的已启用 Workflow (旧式线性链) ⇒ 无端口可比, 放行, 开工闸 assertAcceptedBy 仍生效;
+        //     有 Workflow 但没有工序接 ⇒ 409, 不建计划。开工时的闸保留 (建计划后工艺可能被重新启用成别的版本)。
+        if (workflowResolutionService != null) {
+            Optional<Boolean> accepted = workflowResolutionService.activeWorkflowAcceptsInput(
+                    factoryId, productTypeId, wip.getProductTypeId());
+            if (accepted.isPresent() && !accepted.get()) {
+                throw new BusinessException(409, "目标工艺图没有工序接这份半成品 ("
+                        + wip.getIntermediateBatchNo() + "), 不能建二次加工计划")
+                        .withCode("SECONDARY_SOURCE_NOT_ACCEPTED")
+                        .withHint("请换一个工艺图里有这种半成品投入的目标产品, 或在工艺图上给接料工序加这种半成品的投入后重新发布")
+                        .withHintTarget("productTypeId");
+            }
+        }
+
         // 3. 生成计划编号
         String planNumber = "SEC-" + factoryId + "-"
                 + java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd").format(

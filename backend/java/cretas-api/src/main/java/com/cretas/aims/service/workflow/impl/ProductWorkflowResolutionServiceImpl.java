@@ -139,6 +139,63 @@ public class ProductWorkflowResolutionServiceImpl implements ProductWorkflowReso
 
     @Override
     @Transactional(readOnly = true)
+    public Optional<Boolean> activeWorkflowAcceptsInput(
+            String factoryId, String targetProductTypeId, String inputSkuId) {
+        if (targetProductTypeId == null || targetProductTypeId.isBlank()
+                || inputSkuId == null || inputSkuId.isBlank()) {
+            return Optional.empty();
+        }
+        WorkflowOutputResolutionDTO resolution = resolveForOutputs(factoryId, List.of(targetProductTypeId));
+        List<WorkflowOutputResolutionDTO.Candidate> candidates = resolution.getCandidates() == null
+                ? List.of() : resolution.getCandidates();
+        if (candidates.isEmpty()) {
+            return Optional.empty();
+        }
+        boolean checkedAny = false;
+        for (WorkflowOutputResolutionDTO.Candidate candidate : candidates) {
+            ProductProcessWorkflow workflow = workflowRepository
+                    .findByIdAndFactoryId(candidate.getWorkflowId(), factoryId).orElse(null);
+            if (workflow == null) {
+                continue;
+            }
+            checkedAny = true;
+            if (hasInputPortForSku(workflow, inputSkuId)) {
+                return Optional.of(true);
+            }
+        }
+        return checkedAny ? Optional.of(false) : Optional.empty();
+    }
+
+    private boolean hasInputPortForSku(ProductProcessWorkflow workflow, String inputSkuId) {
+        try {
+            List<ProductProcessWorkflowDTO.Node> nodes = objectMapper.readValue(
+                    workflow.getNodesJson(), new TypeReference<List<ProductProcessWorkflowDTO.Node>>() { });
+            Map<String, ProductProcessWorkflowDTO.Node> byId = new HashMap<>();
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node != null && node.getId() != null) {
+                    byId.put(node.getId(), node);
+                }
+            }
+            for (ProductProcessWorkflowDTO.Node node : nodes) {
+                if (node == null || !"PROCESS".equals(node.getKind()) || node.getData() == null) continue;
+                if (!(node.getData().get("ports") instanceof List<?> ports)) continue;
+                for (Object raw : ports) {
+                    if (!(raw instanceof Map<?, ?> port) || !"INPUT".equals(port.get("direction"))) continue;
+                    ProductProcessWorkflowDTO.Node material = byId.get(stringValue(port.get("materialNodeId")));
+                    if (material != null && material.getData() != null
+                            && inputSkuId.equals(stringValue(material.getData().get("skuId")))) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            throw invalidPath("Workflow 图无法解析");
+        }
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public void assertActiveWorkflowCoversOutputs(
             String factoryId, String ownerProductTypeId, List<String> targetFinishedGoodIds) {
         List<String> targets = selectedOutputs(ownerProductTypeId, targetFinishedGoodIds);
