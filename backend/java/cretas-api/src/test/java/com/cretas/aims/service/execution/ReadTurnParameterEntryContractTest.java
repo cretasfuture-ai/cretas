@@ -333,6 +333,24 @@ class ReadTurnParameterEntryContractTest {
         verify(h.costTool, times(2)).execute(any(), anyMap());
     }
 
+    // 个人工资明细拒答: 两个真实入口 (普通 + 流式) 都要在识别之前拒, 不落到任何意图 / 工具
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("问「每个工人的工资是多少」: 两个入口都被拒 (PERSONAL_PAY_REFUSED), 工具一次都没执行; 问总人工成本不拒")
+    void personalPayQuestionIsRefusedAtBothEntries(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        h.recognize("本月卤牛肉的总成本是多少", h.costQuery);
+
+        IntentExecuteResponse refused = h.say("每个工人的工资是多少");
+        assertThat(refused.getStatus()).as(refused.getMessage()).isEqualTo("PERSONAL_PAY_REFUSED");
+        assertThat(refused.getMessage()).contains("不提供").contains("总人工成本");
+        verify(h.costTool, never()).execute(any(), anyMap());
+
+        // 阴性对照: 不含个人工资的问法照常执行
+        assertThat(h.say("本月卤牛肉的总成本是多少").getStatus()).isNotEqualTo("PERSONAL_PAY_REFUSED");
+        verify(h.costTool, times(1)).execute(any(), anyMap());
+    }
+
     // PR #1739 N3: 识别入口把用户原话交给工具 (预处理后的 userInput 里「上月」已被换成日期区间, 工具判环比要读原话)
     @ParameterizedTest(name = "{0}")
     @EnumSource(Entry.class)
@@ -594,5 +612,21 @@ class ReadTurnParameterEntryContractTest {
                     .isInstanceOf(IntentExecuteResponse.class);
             return (IntentExecuteResponse) result;
         }
+    }
+
+    // 显式意图入口 (executeWithExplicitIntent, /execute/multi 的子意图也走它): 同一守卫
+    @org.junit.jupiter.api.Test
+    @DisplayName("显式意图入口: 个人工资问法同样被拒, 不执行任何工具")
+    void personalPayQuestionIsRefusedAtTheExplicitIntentEntry() throws Exception {
+        Harness h = new Harness(Entry.ORDINARY);
+        IntentExecuteRequest request = IntentExecuteRequest.builder().userInput("每个工人的工资多少，本月人工成本多少")
+                .intentCode("COST_QUERY").sessionId(SESSION).build();
+        IntentExecuteResponse r;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
+            r = h.orchestrator.executeWithExplicitIntent(FACTORY, request, USER, ROLE);
+        }
+        assertThat(r.getStatus()).as(r.getMessage()).isEqualTo("PERSONAL_PAY_REFUSED");
+        verify(h.costTool, never()).execute(any(), anyMap());
     }
 }

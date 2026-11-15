@@ -158,4 +158,16 @@ class ReportLaborCostShareToolContractTest {
         assertEquals(1, d.get("withheldBatchCount").asInt());
         assertFalse(r.toString().contains("酱鸭"));
     }
+
+    // 2026-11-15 复跑 Q08 (管理员号): 整句「人工成本占总成本多少」被当产品名 → 候选/没找到。必须当「不限产品」
+    @Test
+    void wholeQuestionOrScopeWordAsProductName_isIgnored_notTreatedAsAProduct() throws Exception {
+        batches.add(batch("卤牛肉", "100", "800", false, ProductionBatchStatus.COMPLETED));
+        for (String bad : new String[]{"人工成本占总成本多少", "全部", "所有产品"}) {
+            JsonNode r = run("{\"productName\":\"" + bad + "\"}");
+            JsonNode d = r.get("data").get("data");
+            assertTrue(d.has("laborSharePct"), bad + " -> " + r);
+            assertEquals(12.5, d.get("laborSharePct").asDouble(), 0.001, bad);
+        }
+    }
 }
