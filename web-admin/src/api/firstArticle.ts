@@ -149,7 +149,7 @@ export const saveStandard = (f: string, body: StandardRequest): Promise<ApiRespo
 export const deactivateStandard = (f: string, id: number, reason: string): Promise<ApiResponse<StandardView>> =>
   post(`${base(f)}/standards/${id}/deactivate`, { reason });
 
-export const listTasks = (f: string, q: { onlyInProgress: boolean; page: number; size: number }):
+export const listTasks = (f: string, q: { openOnly: boolean; page: number; size: number }):
   Promise<ApiResponse<Page<TaskRow>>> => get(`${base(f)}/tasks`, { params: q });
 
 export const listInspections = (f: string, q: { status?: FirstArticleStatus | null; taskId?: number | null; page: number; size: number }):

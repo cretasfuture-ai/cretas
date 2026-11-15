@@ -83,6 +83,13 @@ class FirstArticleEntryWiringGateTest {
             return r;
         }
 
+        /** 开关读取抛错 (连接抖动 / 锁超时 / 表权限): 闸必须按关处理。 */
+        static GateRepos failingRead() {
+            GateRepos r = of(Mode.BLOCK);
+            when(r.policies.findModeByFactoryId(F)).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("connection reset"));
+            return r;
+        }
+
         FirstArticleGate gate() {
             return new FirstArticleGate(policies, standards, inspections);
         }
@@ -162,6 +169,19 @@ class FirstArticleEntryWiringGateTest {
         verifyNoInteractions(repos.standards(), repos.inspections());
     }
 
+    @Test
+    @DisplayName("App 报工 开关读取抛错: 按关处理, 结果与没装闸逐字相同, 不查标准 / 首检单")
+    void appSwitchReadFailureBehavesAsOff() {
+        AppFixture without = app(null);
+        String baseline = outcome(() -> without.svc().submitReport(F, 500L, 7L, output(null)));
+        GateRepos repos = GateRepos.failingRead();
+        AppFixture with = app(repos.gate());
+        String gated = outcome(() -> with.svc().submitReport(F, 500L, 7L, output(null)));
+        assertThat(gated).isEqualTo(baseline).doesNotContain(FirstArticleGate.CODE).doesNotContain("connection reset");
+        verify(repos.policies()).findModeByFactoryId(F);
+        verifyNoInteractions(repos.standards(), repos.inspections());
+    }
+
     // ==================== Web 逐道录入 ====================
 
     private record WebFixture(ProcessSheetServiceImpl svc, ProcessSheetRowRepository rows, WorkflowClerkSheetService sheet) {
@@ -225,6 +245,19 @@ class FirstArticleEntryWiringGateTest {
         WebFixture z = web(zeroRepos.gate());
         assertThat(outcome(() -> z.svc().saveRow(F, "P1", row("0"), 7L))).doesNotContain(FirstArticleGate.CODE);
         verifyNoInteractions(zeroRepos.standards(), zeroRepos.inspections());
+    }
+
+    @Test
+    @DisplayName("Web 正式录入 开关读取抛错: 按关处理, 结果与没装闸逐字相同, 不查标准 / 首检单")
+    void webSwitchReadFailureBehavesAsOff() {
+        WebFixture without = web(null);
+        String baseline = outcome(() -> without.svc().saveRow(F, "P1", row("40"), 7L));
+        GateRepos repos = GateRepos.failingRead();
+        WebFixture with = web(repos.gate());
+        String gated = outcome(() -> with.svc().saveRow(F, "P1", row("40"), 7L));
+        assertThat(gated).isEqualTo(baseline).doesNotContain(FirstArticleGate.CODE).doesNotContain("connection reset");
+        verify(repos.policies(), Mockito.atLeastOnce()).findModeByFactoryId(F);
+        verifyNoInteractions(repos.standards(), repos.inspections());
     }
 
     @Test

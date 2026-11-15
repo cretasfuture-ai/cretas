@@ -8,7 +8,11 @@ import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.quality.firstarticle.FirstArticleInspectionRepository;
 import com.cretas.aims.repository.quality.firstarticle.FirstArticlePolicyRepository;
 import com.cretas.aims.repository.quality.firstarticle.FirstArticleStandardRepository;
-import lombok.RequiredArgsConstructor;
+import com.cretas.aims.service.workflow.IsolatedSettingsRead;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.lang.Nullable;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -28,8 +32,8 @@ import java.util.Optional;
  * Web 逐道录入 {@code ProcessSheetServiceImpl} (正式行前置 + 进度回写前兜底) 与 App 产量报工
  * {@code YieldReportServiceImpl#submitReport} (产出报工且要完工时, 落库前)。
  */
+@Slf4j
 @Component
-@RequiredArgsConstructor
 public class FirstArticleGate {
 
     public static final String CODE = "FIRST_ARTICLE_NOT_PASSED";
@@ -37,16 +41,47 @@ public class FirstArticleGate {
     private final FirstArticlePolicyRepository policyRepository;
     private final FirstArticleStandardRepository standardRepository;
     private final FirstArticleInspectionRepository inspectionRepository;
+    /** 读开关用独立只读事务 (同 {@code FactorySelfApprovalGate}); 为空 (手工构造的单测) 时直接读。 */
+    @Nullable
+    private final PlatformTransactionManager transactionManager;
+
+    public FirstArticleGate(FirstArticlePolicyRepository policyRepository,
+                            FirstArticleStandardRepository standardRepository,
+                            FirstArticleInspectionRepository inspectionRepository) {
+        this(policyRepository, standardRepository, inspectionRepository, null);
+    }
+
+    @Autowired
+    public FirstArticleGate(FirstArticlePolicyRepository policyRepository,
+                            FirstArticleStandardRepository standardRepository,
+                            FirstArticleInspectionRepository inspectionRepository,
+                            @Nullable PlatformTransactionManager transactionManager) {
+        this.policyRepository = policyRepository;
+        this.standardRepository = standardRepository;
+        this.inspectionRepository = inspectionRepository;
+        this.transactionManager = transactionManager;
+    }
 
     /** 本厂开关; 没有行 = OFF。 */
     public Mode modeOf(String factoryId) {
-        Mode m = policyRepository.findModeByFactoryId(factoryId);
-        return m == null ? Mode.OFF : m;
+        // 读开关失败一律按关 (fail closed = 不拦, 与没有这项功能时一样), 并且在独立只读事务里读:
+        // 只 try/catch 不够 —— 在调用方事务里查询报错, PG 会把整个外层事务标成 aborted, 后面的开工/报工照样失败。
+        try {
+            Mode m = IsolatedSettingsRead.read(transactionManager, () -> policyRepository.findModeByFactoryId(factoryId));
+            return m == null ? Mode.OFF : m;
+        } catch (RuntimeException e) {
+            log.warn("first_article_policies 读取失败, 按关闭处理 (不查首检): factoryId={}, err={}", factoryId, e.getMessage());
+            return Mode.OFF;
+        }
     }
 
-    /** 该任务当前的首检要求与状态; 工序没有启用标准 → empty (不要求首检)。不看开关。 */
+    /**
+     * 该任务当前的首检要求与状态; 工序没有启用标准 → empty (不要求首检)。不看开关。
+     * 委外工序不要求我方首检 (首件在委外厂做, 回厂走委外收货 / 质检), 所以委外结单
+     * ({@code OutsourceService#close}) 不过本闸, 工序首检表也不列委外任务。
+     */
     public Optional<Requirement> requirementOf(String factoryId, WorkProcessTask task) {
-        if (task == null || task.getWorkProcessId() == null) {
+        if (task == null || task.getWorkProcessId() == null || Boolean.TRUE.equals(task.getIsOutsourced())) {
             return Optional.empty();
         }
         Optional<FirstArticleStandard> std = standardRepository.findActive(factoryId, task.getWorkProcessId());
@@ -93,7 +128,7 @@ public class FirstArticleGate {
         throw new BusinessException(409, "这道工序首检还没合格 (标准「" + r.standard().getName() + "」, 现在"
                 + r.stateText() + "), 本厂设置为首检合格前不能报完工")
                 .withCode(CODE)
-                .withHint("请先送检, 由质检判定首检合格后再报完工")
+                .withHint("到「质量管理 › 工序首检」给这道工序点「送检」(待开始的工序也能送), 质检判定合格后再报完工")
                 .withSeverity("BLOCKING");
     }
 

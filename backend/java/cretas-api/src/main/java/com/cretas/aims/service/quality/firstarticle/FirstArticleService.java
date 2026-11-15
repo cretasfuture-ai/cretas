@@ -214,11 +214,12 @@ public class FirstArticleService {
     // ==================== 工序首检表 ====================
 
     /**
-     * 要首检的工序任务及其首检状态。{@code onlyInProgress=true} 只看进行中 (默认), 否则含待开始 / 已完成。
+     * 要首检的工序任务及其首检状态。{@code openOnly=true} 只看没结束的 (待开始 + 进行中, 默认), 否则再加已完成。
+     * 待开始也列: web 逐道录入的任务在录入前一直是待开始。委外任务不列 (不要求我方首检)。
      * 本厂没有启用标准 → 空表 (如实为空, 不是没查)。
      */
     @Transactional(readOnly = true)
-    public PageResponse<TaskRow> listTasks(String factoryId, boolean onlyInProgress, int page, int size) {
+    public PageResponse<TaskRow> listTasks(String factoryId, boolean openOnly, int page, int size) {
         int p = Math.max(1, page);
         int sz = Math.min(MAX_PAGE_SIZE, Math.max(1, size));
         Map<String, FirstArticleStandard> stdByProcess = new HashMap<>();
@@ -228,8 +229,8 @@ public class FirstArticleService {
         if (stdByProcess.isEmpty()) {
             return PageResponse.of(List.of(), p, sz, 0L);
         }
-        List<WorkProcessTask.Status> statuses = onlyInProgress
-                ? List.of(WorkProcessTask.Status.IN_PROGRESS)
+        List<WorkProcessTask.Status> statuses = openOnly
+                ? List.of(WorkProcessTask.Status.PENDING, WorkProcessTask.Status.IN_PROGRESS)
                 : List.of(WorkProcessTask.Status.PENDING, WorkProcessTask.Status.IN_PROGRESS,
                 WorkProcessTask.Status.COMPLETED);
         Page<WorkProcessTask> tasks = inspectionRepository.findTasksRequiringFirstArticle(factoryId,
@@ -290,10 +291,16 @@ public class FirstArticleService {
         }
         WorkProcessTask task = taskRepository.findByFactoryIdAndId(factoryId, req.taskId())
                 .orElseThrow(() -> new ResourceNotFoundException("工序任务不存在"));
-        if (task.getStatus() != WorkProcessTask.Status.IN_PROGRESS) {
+        // 待开始 / 进行中都能送检: web 逐道录入 (Workflow 线) 的任务一直停在「待开始」, 直到第一行正式产出把它
+        // 记成完成 —— 那里没有开工按钮。送检只关联任务, 不改任务状态 (状态机归工序任务服务)。
+        if (task.getStatus() != WorkProcessTask.Status.IN_PROGRESS && task.getStatus() != WorkProcessTask.Status.PENDING) {
             throw new BusinessException(409, "工序任务现在是「" + task.getStatus().getDisplayName()
-                    + "」, 只有进行中的工序才能送首检").withCode("FIRST_ARTICLE_STATE")
-                    .withHint("先开工这道工序, 做出首件后再送检; 已完成的工序不再需要首检");
+                    + "」, 已结束的工序不能再送首检").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("已完成 / 跳过 / 取消的工序不再需要首检; 请在还没完成的工序上送检");
+        }
+        if (Boolean.TRUE.equals(task.getIsOutsourced())) {
+            throw new BusinessException(409, "这道工序已委外, 不要求我方首检").withCode("FIRST_ARTICLE_STATE")
+                    .withHint("委外工序的首件在委外厂做, 回厂时在「委外单」收货并按来料质检处理");
         }
         FirstArticleStandard std = standardRepository.findActive(factoryId, task.getWorkProcessId())
                 .orElseThrow(() -> new BusinessException(409, "这道工序没有启用的首检标准, 不需要首检")

@@ -104,10 +104,10 @@ public class FirstArticleController {
     @Operation(summary = "工序首检表: 要首检的工序任务及首检状态")
     @RequirePermission({"quality:read", "quality:read_write", "production:read", "production:read_write"})
     public ApiResponse<PageResponse<TaskRow>> tasks(@PathVariable String factoryId,
-                                                   @RequestParam(defaultValue = "true") boolean onlyInProgress,
+                                                   @RequestParam(defaultValue = "true") boolean openOnly,
                                                    @RequestParam(defaultValue = "1") int page,
                                                    @RequestParam(defaultValue = "20") int size) {
-        return ApiResponse.success(service.listTasks(factoryId, onlyInProgress, page, size));
+        return ApiResponse.success(service.listTasks(factoryId, openOnly, page, size));
     }
 
     @GetMapping("/inspections")

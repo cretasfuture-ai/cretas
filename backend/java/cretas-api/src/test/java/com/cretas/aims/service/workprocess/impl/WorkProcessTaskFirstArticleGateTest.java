@@ -129,6 +129,35 @@ class WorkProcessTaskFirstArticleGateTest {
     }
 
     @Test
+    @DisplayName("开关读取抛错: 按关处理 —— 完工 / 开工与没装闸逐字节相同, 不查标准与首检单")
+    void switchReadFailureBehavesAsOff() throws Exception {
+        when(policies.findModeByFactoryId(FACTORY))
+                .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("connection reset"));
+        stubTask(WorkProcessTask.Status.IN_PROGRESS);
+        String baselineComplete = stable(service(false).complete(FACTORY, TASK_ID, 42L, qty("10")));
+        stubTask(WorkProcessTask.Status.IN_PROGRESS);
+        String gatedComplete = stable(service(true).complete(FACTORY, TASK_ID, 42L, qty("10")));
+        assertThat(gatedComplete).isEqualTo(baselineComplete).doesNotContain("firstArticleNotice");
+        stubTask(WorkProcessTask.Status.PENDING);
+        String baselineStart = stable(service(false).start(FACTORY, TASK_ID, 42L));
+        stubTask(WorkProcessTask.Status.PENDING);
+        assertThat(stable(service(true).start(FACTORY, TASK_ID, 42L))).isEqualTo(baselineStart);
+        verify(policies, org.mockito.Mockito.atLeast(2)).findModeByFactoryId(FACTORY);
+        verifyNoInteractions(standards, inspections);
+    }
+
+    @Test
+    @DisplayName("委外工序不要求我方首检: 拦截档下也不拦, 不查标准")
+    void outsourcedTaskNotRequired() {
+        when(policies.findModeByFactoryId(FACTORY)).thenReturn(Mode.BLOCK);
+        WorkProcessTask t = WorkProcessTask.builder().id(TASK_ID).factoryId(FACTORY).productionBatchId(9L)
+                .workProcessId("wp-1").productTypeId("p-1").processOrder(1).status(WorkProcessTask.Status.IN_PROGRESS)
+                .isOutsourced(true).build();
+        new FirstArticleGate(policies, standards, inspections).assertCanComplete(FACTORY, t);
+        verifyNoInteractions(standards, inspections);
+    }
+
+    @Test
     @DisplayName("开关 = OFF 行与没有行同一结论")
     void explicitOffRowSameAsNoRow() {
         when(policies.findModeByFactoryId(FACTORY)).thenReturn(Mode.OFF);

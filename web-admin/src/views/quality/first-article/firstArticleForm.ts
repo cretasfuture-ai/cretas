@@ -92,12 +92,16 @@ export function buildResults(items: FirstArticleItem[], values: Record<string, s
 
 export interface RowActions { request: boolean; judge: boolean }
 
-/** 工序首检表一行能做什么: 送检 = 进行中且 (没送检 / 不合格待复检); 判定 = 有待判定的单且有质量写权限。 */
+/**
+ * 工序首检表一行能做什么: 送检 = 没结束 (待开始 / 进行中) 且 (没送检 / 不合格待复检); 判定 = 有待判定的单且有质量写权限。
+ * 待开始也能送检: web 逐道录入的任务在录入前一直是待开始, 那里没有开工按钮。
+ */
 export function rowActions(row: Pick<TaskRow, 'taskStatus' | 'firstArticleStatus' | 'latestInspectionId'>,
   perms: { canRequest: boolean; canJudge: boolean }): RowActions {
   const requestable: FirstArticleTaskStatus[] = ['NOT_REQUESTED', 'FAILED'];
   return {
-    request: perms.canRequest && row.taskStatus === 'IN_PROGRESS' && requestable.includes(row.firstArticleStatus),
+    request: perms.canRequest && (row.taskStatus === 'IN_PROGRESS' || row.taskStatus === 'PENDING')
+      && requestable.includes(row.firstArticleStatus),
     judge: perms.canJudge && row.firstArticleStatus === 'PENDING' && row.latestInspectionId != null,
   };
 }

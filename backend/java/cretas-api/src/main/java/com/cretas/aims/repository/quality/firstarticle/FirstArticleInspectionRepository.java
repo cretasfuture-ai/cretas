@@ -46,11 +46,11 @@ public interface FirstArticleInspectionRepository extends JpaRepository<FirstArt
                                         Pageable pageable);
 
     /**
-     * 本厂指定状态下、工序属于给定集合的工序任务 (「工序首检」表用)。
+     * 本厂指定状态下、工序属于给定集合、不是委外的工序任务 (「工序首检」表用; 委外工序不要求我方首检)。
      * 放在这里而不是 {@code WorkProcessTaskRepository}: 只有首检用, 不动共享仓库。
      */
     @Query("SELECT t FROM WorkProcessTask t WHERE t.factoryId = :factoryId"
-            + " AND t.workProcessId IN :workProcessIds AND t.status IN :statuses")
+            + " AND t.workProcessId IN :workProcessIds AND t.status IN :statuses AND t.isOutsourced = false")
     Page<WorkProcessTask> findTasksRequiringFirstArticle(@Param("factoryId") String factoryId,
                                                          @Param("workProcessIds") Collection<String> workProcessIds,
                                                          @Param("statuses") Collection<WorkProcessTask.Status> statuses,

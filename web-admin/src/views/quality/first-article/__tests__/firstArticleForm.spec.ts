@@ -33,12 +33,14 @@ describe('首检表单换算', () => {
     expect(buildResults(items, { i1: '200', i2: '漏气' }).results[1]).toEqual({ key: 'i2', numericValue: null, optionValue: '漏气' });
   });
 
-  it('行操作: 送检只在进行中且没送检/不合格; 判定要质量写权限且有待判定单', () => {
+  it('行操作: 送检只在没结束且没送检/不合格; 判定要质量写权限且有待判定单', () => {
     const perms = { canRequest: true, canJudge: false };
     expect(rowActions({ taskStatus: 'IN_PROGRESS', firstArticleStatus: 'NOT_REQUESTED', latestInspectionId: null }, perms).request).toBe(true);
     expect(rowActions({ taskStatus: 'IN_PROGRESS', firstArticleStatus: 'FAILED', latestInspectionId: 3 }, perms).request).toBe(true);
     expect(rowActions({ taskStatus: 'IN_PROGRESS', firstArticleStatus: 'PASSED', latestInspectionId: 3 }, perms).request).toBe(false);
-    expect(rowActions({ taskStatus: 'PENDING', firstArticleStatus: 'NOT_REQUESTED', latestInspectionId: null }, perms).request).toBe(false);
+    // 待开始也能送检 (web 逐道录入的任务录入前一直是待开始); 已完成不能
+    expect(rowActions({ taskStatus: 'PENDING', firstArticleStatus: 'NOT_REQUESTED', latestInspectionId: null }, perms).request).toBe(true);
+    expect(rowActions({ taskStatus: 'COMPLETED', firstArticleStatus: 'NOT_REQUESTED', latestInspectionId: null }, perms).request).toBe(false);
     // 没有质量写权限 → 不给判定按钮 (服务端同样会 403)
     expect(rowActions({ taskStatus: 'IN_PROGRESS', firstArticleStatus: 'PENDING', latestInspectionId: 3 }, perms).judge).toBe(false);
     expect(rowActions({ taskStatus: 'IN_PROGRESS', firstArticleStatus: 'PENDING', latestInspectionId: 3 }, { canRequest: false, canJudge: true }).judge).toBe(true);

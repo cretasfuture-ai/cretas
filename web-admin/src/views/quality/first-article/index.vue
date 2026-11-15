@@ -69,7 +69,7 @@ const TABS: TabsItem[] = [
 ];
 
 // ==================== 工序首检表 ====================
-const onlyInProgress = ref(true);
+const openOnly = ref(true);
 const taskRows = ref<TaskRow[]>([]);
 const taskTotal = ref(0);
 const taskPage = ref(1);
@@ -89,7 +89,7 @@ async function loadTasks() {
   taskLoading.value = true;
   taskFailed.value = false;
   try {
-    const res = await listTasks(factoryId.value, { onlyInProgress: onlyInProgress.value, page: taskPage.value, size: 20 });
+    const res = await listTasks(factoryId.value, { openOnly: openOnly.value, page: taskPage.value, size: 20 });
     if (res.success && res.data) { taskRows.value = res.data.content ?? []; taskTotal.value = res.data.totalElements ?? 0; }
     else { taskFailed.value = true; ElMessage.error(res.message || '工序首检表加载失败'); }
   } catch (e) { taskFailed.value = true; ElMessage.error(errorText(e, '工序首检表加载失败')); }
@@ -390,7 +390,7 @@ onMounted(async () => {
       <template #tasks>
         <section class="cs-card">
           <div class="filters">
-            <UCheckbox v-model="onlyInProgress" label="只看进行中" @update:model-value="() => { taskPage = 1; loadTasks(); }" />
+            <UCheckbox v-model="openOnly" label="只看未完成（待开始 + 进行中）" @update:model-value="() => { taskPage = 1; loadTasks(); }" />
             <span class="muted">共 {{ taskTotal }} 个要首检的工序任务</span>
           </div>
           <UAlert v-if="taskFailed" color="error" variant="subtle" title="加载失败，下面的列表不代表没有要首检的工序" class="mx-5 mb-3" />

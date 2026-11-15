@@ -32,7 +32,7 @@ import static org.mockito.Mockito.when;
  * JSON 出口), 只桩掉 {@link WorkProcessTaskService}。每条「能做」都配一条「不能做」的对照,
  * 每条都断言 {@code start / complete} 一次都没被调 —— 预览不许改状态。
  */
-class WorkProcessTaskTransitionPreviewToolTest {
+class WorkProcessTaskTransitionPreviewToolContractTest {
 
     private static final String FACTORY = "F006";
     private static final String OTHER_FACTORY = "F999";

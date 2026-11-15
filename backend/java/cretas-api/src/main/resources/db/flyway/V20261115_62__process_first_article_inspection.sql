@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS first_article_inspections (
     -- 判定过的记录必须有判定人/时间; 作废必须有原因。
     CONSTRAINT ck_fa_inspections_judged CHECK (
         status NOT IN ('PASSED', 'FAILED') OR (judged_at IS NOT NULL AND auto_verdict IS NOT NULL)),
-    CONSTRAINT ck_fa_inspections_self_judge CHECK (NOT self_judged OR self_judge_reason IS NOT NULL),
+    CONSTRAINT ck_fa_inspections_self_judge CHECK (NOT self_judged OR btrim(coalesce(self_judge_reason, '')) <> ''),
     CONSTRAINT ck_fa_inspections_void CHECK (
         status <> 'VOID' OR (void_reason IS NOT NULL AND voided_at IS NOT NULL))
 );

@@ -1,6 +1,15 @@
 package com.cretas.aims.integration;
 
 import com.cretas.aims.dto.common.PageResponse;
+import com.cretas.aims.dto.processentry.ProcessSheetRowRequest;
+import com.cretas.aims.dto.workflow.WorkflowClerkSheetConfigDTO;
+import com.cretas.aims.entity.ProductionPlan;
+import com.cretas.aims.repository.ProcessSheetRowRepository;
+import com.cretas.aims.repository.ProductionPlanRepository;
+import com.cretas.aims.service.processentry.impl.ProcessSheetServiceImpl;
+import com.cretas.aims.service.workflow.WorkflowClerkSheetService;
+import org.mockito.Mockito;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.cretas.aims.dto.quality.FirstArticleDtos.InspectionRequest;
 import com.cretas.aims.dto.quality.FirstArticleDtos.InspectionView;
 import com.cretas.aims.dto.quality.FirstArticleDtos.JudgePreview;
@@ -141,6 +150,13 @@ class FirstArticlePostgresContractTest {
         workProcess("FA-WP-SEAL-O", OTHER, "封口");
         task(9101, F, "FA-WP-SEAL", "IN_PROGRESS");   // 要首检, 进行中
         task(9102, F, "FA-WP-SEAL", "PENDING");       // 要首检, 还没开工
+        task(9105, F, "FA-WP-SEAL", "COMPLETED");     // 已完成: 不再送检
+        task(9106, F, "FA-WP-SEAL", "IN_PROGRESS");   // 委外: 不要求我方首检
+        jdbc.update("update work_process_tasks set is_outsourced = true where id = 9106");
+        // web 逐道录入 (Workflow 线) 的任务: 一直停在待开始, 直到第一行正式产出把它记成完成
+        task(9104, F, "FA-WP-SEAL", "PENDING");
+        jdbc.update("update work_process_tasks set workflow_instance_id = 900, workflow_node_id = 'node-seal',"
+                + " process_order = 3 where id = 9104");
         task(9103, F, "FA-WP-CUT", "IN_PROGRESS");    // 工序没标准
         task(9201, OTHER, "FA-WP-SEAL-O", "IN_PROGRESS");
     }
@@ -168,6 +184,11 @@ class FirstArticlePostgresContractTest {
     static JudgeRequest judge(String weight, String seal, Verdict verdict, String notes) {
         return new JudgeRequest(List.of(new ResultInput("weight", new BigDecimal(weight), null),
                 new ResultInput("seal", null, seal)), verdict, notes, null);
+    }
+
+    TaskRow row(String factory, long taskId) {
+        return tx(() -> service.listTasks(factory, false, 1, 50)).getContent().stream()
+                .filter(r -> r.taskId() == taskId).findFirst().orElseThrow();
     }
 
     WorkProcessTask taskEntity(String factory, long id) {
@@ -235,12 +256,13 @@ class FirstArticlePostgresContractTest {
     @Test
     @Order(3)
     void taskListRequestJudgeAndGate() {
+        // 默认只看没结束的: 待开始也列 (web 逐道录入的任务一直是待开始); 委外 9106 不列; 已完成 9105 只在全部里
         PageResponse<TaskRow> rows = tx(() -> service.listTasks(F, true, 1, 20));
-        assertThat(rows.getContent()).extracting(TaskRow::taskId).containsExactly(9101L);
-        assertThat(rows.getContent().get(0).firstArticleStatus()).isEqualTo("NOT_REQUESTED");
-        assertThat(rows.getContent().get(0).processName()).isEqualTo("封口");
+        assertThat(rows.getContent()).extracting(TaskRow::taskId).containsExactly(9104L, 9102L, 9101L);
+        assertThat(row(F, 9101).firstArticleStatus()).isEqualTo("NOT_REQUESTED");
+        assertThat(row(F, 9101).processName()).isEqualTo("封口");
         assertThat(tx(() -> service.listTasks(F, false, 1, 20)).getContent()).extracting(TaskRow::taskId)
-                .containsExactlyInAnyOrder(9101L, 9102L);
+                .containsExactlyInAnyOrder(9101L, 9102L, 9104L, 9105L);
 
         // 闸: OFF → 放行; BLOCK 且没送检 → 409
         tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9101)); return null; });
@@ -254,9 +276,13 @@ class FirstArticlePostgresContractTest {
         // 没标准的工序不受影响
         tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9103)); return null; });
 
-        // 送检: 还没开工 / 没标准 → 409
-        assertThatThrownBy(() -> tx(() -> service.requestInspection(F, new InspectionRequest(9102L, null, null, null), USER)))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("只有进行中的工序");
+        // 送检: 已结束 / 委外 / 没标准 → 409
+        assertThatThrownBy(() -> tx(() -> service.requestInspection(F, new InspectionRequest(9105L, null, null, null), USER)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已结束的工序");
+        assertThatThrownBy(() -> tx(() -> service.requestInspection(F, new InspectionRequest(9106L, null, null, null), USER)))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已委外");
+        // 委外任务在拦截档下也不要求首检 (委外结单不过本闸)
+        tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9106)); return null; });
         assertThatThrownBy(() -> tx(() -> service.requestInspection(F, new InspectionRequest(9103L, null, null, null), USER)))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("没有启用的首检标准");
         InspectionView first = tx(() -> service.requestInspection(F,
@@ -271,7 +297,7 @@ class FirstArticlePostgresContractTest {
                 + " standard_items_json, status, requested_at) values (?, 9101, 88001, 'FA-WP-SEAL', 1, 1, 'x', '[]',"
                 + " 'PENDING', now())", F))
                 .isInstanceOf(DataIntegrityViolationException.class);
-        assertThat(tx(() -> service.listTasks(F, true, 1, 20)).getContent().get(0).firstArticleStatus()).isEqualTo("PENDING");
+        assertThat(row(F, 9101).firstArticleStatus()).isEqualTo("PENDING");
 
         // 判定预览: 块重 230 超上限 → 系统判不合格, 不能判合格, 不写库
         JudgePreview bad = tx(() -> service.previewJudge(F, first.id(), judge("230", "平整", Verdict.PASSED, null), INSPECTOR));
@@ -319,7 +345,7 @@ class FirstArticlePostgresContractTest {
 
         // 作废合格单 → 首检状态回到上一张 (不合格) → BLOCK 又拦; WARN 只提示
         tx(() -> service.voidInspection(F, passed.id(), "录错块重", USER));
-        assertThat(tx(() -> service.listTasks(F, true, 1, 20)).getContent().get(0).firstArticleStatus()).isEqualTo("FAILED");
+        assertThat(row(F, 9101).firstArticleStatus()).isEqualTo("FAILED");
         assertThatThrownBy(() -> tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9101)); return null; }))
                 .isInstanceOf(BusinessException.class);
         tx(() -> service.updatePolicy(F, Mode.WARN, USER));
@@ -364,6 +390,120 @@ class FirstArticlePostgresContractTest {
         // A 厂原单没被 B 厂的尝试改动
         assertThat(jdbc.queryForObject("select status from first_article_inspections where id = ?", String.class, aId))
                 .isEqualTo("FAILED");
+    }
+
+    // ==================== 5. 开关读取失败: 独立事务读, 按关处理 (审查 M1) ====================
+
+    @Test
+    @Order(5)
+    void switchReadFailureIsIsolatedAndTreatedAsOff() {
+        // 让开关查询真的在 PG 上报错 (表不在了), 不是 mock 出来的异常
+        jdbc.execute("ALTER TABLE first_article_policies RENAME TO first_article_policies_hidden");
+        try {
+            // 阳性对照 (仪器能红): 不隔离的读 (没有事务管理器) 在外层事务里报错 → 外层事务废掉, 后面的查询 / 提交失败。
+            // 这正是「只加 try/catch 不够」的那种失败。
+            FirstArticleGate naive = new FirstArticleGate(policies, standards, inspections);
+            assertThatThrownBy(() -> tx(() -> {
+                assertThat(naive.modeOf(F)).isEqualTo(Mode.OFF);
+                return taskEntity(F, 9101);
+            })).isInstanceOf(RuntimeException.class);
+
+            // 修复后 (Spring 注入的闸, 独立只读事务): 按关处理, 外层事务照常继续并提交
+            WorkProcessTask t = tx(() -> {
+                assertThat(gate.modeOf(F)).isEqualTo(Mode.OFF);
+                assertThat(gate.isBlocking(F)).isFalse();
+                gate.assertCanComplete(F, taskEntity(F, 9101));
+                assertThat(gate.noticeFor(F, taskEntity(F, 9101))).isNull();
+                return taskEntity(F, 9101);
+            });
+            assertThat(t.getId()).isEqualTo(9101L);
+        } finally {
+            jdbc.execute("ALTER TABLE first_article_policies_hidden RENAME TO first_article_policies");
+        }
+        assertThat(gate.modeOf(F)).as("表恢复后读回原来的开关").isEqualTo(Mode.WARN);
+    }
+
+    // ==================== 6. 拦截档下 web 逐道录入走得通 (审查 M2) ====================
+
+    @Test
+    @Order(6)
+    void blockModeWebEntryPendingTaskRequestJudgeThenPasses() {
+        tx(() -> service.updatePolicy(F, Mode.BLOCK, USER));
+        ProcessSheetServiceImpl web = webEntry();
+        // 1) 待开始的 Workflow 任务, 文员录正数产出 → 被首检拦, hint 指到工序首检页
+        String blocked = outcome(() -> web.saveRow(F, "P-FA", sealRow(), 7L));
+        assertThat(blocked).contains("|409|" + FirstArticleGate.CODE + "|").contains("工序首检").contains("待开始");
+        // 2) 工序首检表里看得到它, 待开始也能送检; 送检不改任务状态
+        assertThat(row(F, 9104).taskStatus()).isEqualTo("PENDING");
+        InspectionView sent = tx(() -> service.requestInspection(F, new InspectionRequest(9104L, null, null, "首件"), USER));
+        assertThat(jdbc.queryForObject("select status from work_process_tasks where id = 9104", String.class))
+                .isEqualTo("PENDING");
+        // 3) 质检 (不是送检人) 判合格
+        tx(() -> service.judge(F, sent.id(), judge("200", "平整", Verdict.PASSED, null), INSPECTOR));
+        // 4) 同一行再录: 首检闸放行 (后面没装配的依赖由别的测试管, 这里只看不再被首检拦)
+        String after = outcome(() -> web.saveRow(F, "P-FA", sealRow(), 7L));
+        assertThat(after).doesNotContain(FirstArticleGate.CODE);
+        // 进度回写「记成完成」前的兜底判据也放行
+        tx(() -> { gate.assertCanComplete(F, taskEntity(F, 9104)); return null; });
+    }
+
+    private ProcessSheetServiceImpl webEntry() {
+        ProductionPlanRepository planRepo = Mockito.mock(ProductionPlanRepository.class);
+        Mockito.when(planRepo.findByIdAndFactoryId("P-FA", F)).thenReturn(java.util.Optional.of(new ProductionPlan()));
+        WorkflowClerkSheetService sheet = Mockito.mock(WorkflowClerkSheetService.class);
+        WorkflowClerkSheetConfigDTO cfg = new WorkflowClerkSheetConfigDTO();
+        cfg.setWorkflowInstanceId(900L);
+        WorkflowClerkSheetConfigDTO.ProcessDescriptor d = new WorkflowClerkSheetConfigDTO.ProcessDescriptor();
+        d.setProcessOrder(3);
+        d.setWorkflowNodeId("node-seal");
+        cfg.setProcesses(List.of(d));
+        Mockito.when(sheet.getWorkflowSheetConfig(F, "P-FA")).thenReturn(cfg);
+        ProcessSheetServiceImpl svc = construct(ProcessSheetServiceImpl.class, java.util.Map.of(
+                ProductionPlanRepository.class, planRepo,
+                WorkProcessTaskRepository.class, tasks,
+                ProcessSheetRowRepository.class, Mockito.mock(ProcessSheetRowRepository.class)));
+        ReflectionTestUtils.setField(svc, "workflowClerkSheetService", sheet);
+        ReflectionTestUtils.setField(svc, "firstArticleGate", gate);
+        return svc;
+    }
+
+    private static ProcessSheetRowRequest sealRow() {
+        ProcessSheetRowRequest req = new ProcessSheetRowRequest();
+        req.setProcessOrder(3);
+        req.setProcessCode("SEAL");
+        req.setClientRowId("fa-r1");
+        req.setOutputQuantity(new BigDecimal("40"));
+        return req;
+    }
+
+    private static String outcome(Runnable call) {
+        try {
+            call.run();
+            return "OK";
+        } catch (BusinessException e) {
+            return e.getClass().getSimpleName() + "|" + e.getCode() + "|" + e.getErrorCode() + "|" + e.getMessage()
+                    + "|" + e.getActionHint();
+        } catch (RuntimeException e) {
+            return e.getClass().getName() + "|" + e.getMessage();
+        }
+    }
+
+    /** 用最多参数的构造器建服务, 没给的依赖一律 mock (同 WorkflowStepUnlockWiringContractTest#construct)。 */
+    private static <T> T construct(Class<T> type, java.util.Map<Class<?>, Object> provided) {
+        try {
+            java.lang.reflect.Constructor<?> ctor = java.util.Arrays.stream(type.getDeclaredConstructors())
+                    .max(java.util.Comparator.comparingInt(java.lang.reflect.Constructor::getParameterCount))
+                    .orElseThrow();
+            Class<?>[] params = ctor.getParameterTypes();
+            Object[] args = new Object[params.length];
+            for (int i = 0; i < params.length; i++) {
+                args[i] = provided.containsKey(params[i]) ? provided.get(params[i]) : Mockito.mock(params[i]);
+            }
+            ctor.setAccessible(true);
+            return type.cast(ctor.newInstance(args));
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("cannot construct " + type.getSimpleName(), e);
+        }
     }
 
     private static String migration(String path) throws Exception {

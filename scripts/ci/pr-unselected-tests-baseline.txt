@@ -151,7 +151,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/P
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/ProductWorkProcessConfigToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/ProductWorkProcessRecommendToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/WorkProcessCatalogToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/workprocess/WorkProcessTaskTransitionPreviewToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/usage/LlmUsageScopeTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/workflow/inventory/InventoryAnalysisWorkflowTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/aspect/RateLimitAspectTest.java
