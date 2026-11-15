@@ -25,6 +25,7 @@ const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePath
 });
 const authStore = useAuthStore();
 const canAct = computed(() => !props.employeeNavigationPending && (!props.digitalEmployee || props.employeeCanWrite));
+const canReadReady = computed(() => !props.employeeNavigationPending && !!authStore.factoryId && !!authStore.user?.id);
 const workdeskRequests = useWorkdeskRequest(() => ({ factoryId: authStore.factoryId || '', actorId: String(authStore.user?.id || ''), contextKey: `${authStore.currentRole}:${props.employeeNavigationPending}:${props.employeeCanWrite}` }));
 // 配送线路(右列)可隐藏 —— 用地图/线路之间的竖向 knob 手柄折叠, 隐藏后左侧地图区响应式撑满整行。
 const routesHidden = ref(false);
@@ -195,7 +196,8 @@ async function commitImport(): Promise<void> {
 
 async function submitManual(payload: { businessDate: string | null; rows: ManualOrderRow[] }): Promise<void> {
   if (!canAct.value) return;
-  await state.submitManualOrders(payload.businessDate, payload.rows);
+  const isCurrent = workdeskRequests.capture();
+  await state.submitManualOrders(payload.businessDate, payload.rows, () => canAct.value && isCurrent());
 }
 
 /** 开始新一天排线：清空当前视图回到第一步录入。当前计划已存库，可随时从计划列表恢复（防呆确认）。 */
@@ -322,13 +324,15 @@ function confirmExportPreview(): void {
 }
 
 async function exportCsv(): Promise<void> {
-  if (!canAct.value) return;
-  await state.exportCsv();
+  if (!canReadReady.value) return;
+  const isCurrent = workdeskRequests.capture();
+  await state.exportCsv(() => canReadReady.value && isCurrent());
 }
 
 async function exportXlsx(): Promise<void> {
-  if (!canAct.value) return;
-  await state.exportXlsx();
+  if (!canReadReady.value) return;
+  const isCurrent = workdeskRequests.capture();
+  await state.exportXlsx(() => canReadReady.value && isCurrent());
 }
 
 function back(): void {
@@ -478,19 +482,18 @@ async function next(): Promise<void> {
       <LocationPicker v-model="locationPickerOpen" :order="locationPickerOrder" @confirm="confirmLocation" />
     </section>
 
-    <fieldset v-else :disabled="!canAct" class="import-controls">
     <ExportConfirmStep
+      v-else
       :rows="state.exportRows.value"
       :confirmed="exportConfirmed"
       :preview-confirmed="exportPreviewConfirmed"
-      :can-confirm-schedule="canConfirmSchedule"
+      :can-confirm-schedule="canAct && canConfirmSchedule"
       :plan-id="state.plan.value?.id ?? null"
       @confirm-schedule="confirmSchedule"
       @confirm-preview="confirmExportPreview"
       @export-csv="exportCsv"
       @export-xlsx="exportXlsx"
     />
-    </fieldset>
 
     <footer ref="actionBarRef" class="action-bar">
       <el-button :disabled="state.activeStep.value === 'import'" @click="back">上一步</el-button>

@@ -337,7 +337,7 @@ async function commitImport(): Promise<boolean> {
  * 手动录入订单（非文件）：结构化行 → 后端复用文件导入校验（返回 preview + jobId）→ 直接 commit 写库。
  * 返回 preview（含逐行错误）供 UI 展示；若有有效行则 batch 已创建。
  */
-async function submitManualOrders(businessDate: string | null, rows: ManualOrderRow[]): Promise<PreviewResult | null> {
+async function submitManualOrders(businessDate: string | null, rows: ManualOrderRow[], canCommit: () => boolean = () => true): Promise<PreviewResult | null> {
   importError.value = null;
   committing.value = true;
   try {
@@ -347,6 +347,7 @@ async function submitManualOrders(businessDate: string | null, rows: ManualOrder
     // 有有效行才落库（与文件导入一致：无有效行只回报错误，不建空批次上下文）。
     if (res.data.validRows > 0) {
       requireFactoryId(); // Identity may change while the preview is in flight.
+      if (!canCommit()) return null; // Recheck live UI capability before the second request writes.
       const committed = await commitOrderImport(factoryId, res.data.jobId);
       batch.value = committed.data;
       preview.value = null;
@@ -809,24 +810,28 @@ function previewExport(): boolean {
   return true;
 }
 
-async function exportCsv(): Promise<void> {
+async function exportCsv(canDownload: () => boolean = () => true): Promise<void> {
+  if (!canDownload()) return;
   if (!plan.value) return;
   try {
     const factoryId = requireFactoryId();
     const res = await apiExportPlanCsv(factoryId, plan.value.id);
     requireFactoryId(); // A late response must not download the previous identity's file.
+    if (!canDownload()) return;
     triggerDownload(new Blob([res.data], { type: 'text/csv;charset=utf-8' }), `${plan.value.planNumber || plan.value.id}.csv`);
   } catch (err) {
     planError.value = errorMessage(err);
   }
 }
 
-async function exportXlsx(): Promise<void> {
+async function exportXlsx(canDownload: () => boolean = () => true): Promise<void> {
+  if (!canDownload()) return;
   if (!plan.value) return;
   try {
     const factoryId = requireFactoryId();
     const res = await apiExportPlanXlsx(factoryId, plan.value.id);
     requireFactoryId();
+    if (!canDownload()) return;
     triggerDownload(
       new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
       `${plan.value.planNumber || plan.value.id}.xlsx`,

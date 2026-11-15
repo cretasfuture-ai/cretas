@@ -97,6 +97,52 @@ const batchA = {
 };
 
 describe('useLogisticsScheduling identity isolation', () => {
+  it.each(['employeeCanWrite', 'employeeNavigationPending'] as const)('does not commit an in-flight manual preview after %s revokes readiness', async (capability) => {
+    api.listVehicles.mockResolvedValue({ data: [] }); api.listDrivers.mockResolvedValue({ data: [] }); api.listPlans.mockResolvedValue(page([]));
+    const wrapper = shallowMount(Workbench, { props: { employeeCanWrite: true, employeeNavigationPending: false } }); await flushPromises();
+    let finish!: (value: unknown) => void;
+    api.createOrdersManual.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const vm = wrapper.vm as unknown as { submitManual(payload: { businessDate: null; rows: [] }): Promise<void> };
+    const pending = vm.submitManual({ businessDate: null, rows: [] });
+    await wrapper.setProps({ [capability]: capability !== 'employeeCanWrite' });
+    finish({ data: { validRows: 1, jobId: 'REVOKED-PREVIEW' } });
+    await pending;
+    expect(api.createOrdersManual).toHaveBeenCalledTimes(1);
+    expect(api.commitOrderImport).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it.each(['exportCsv', 'exportXlsx'] as const)('retains readonly %s downloads but refuses pending exports', async (method) => {
+    api.listVehicles.mockResolvedValue({ data: [] }); api.listDrivers.mockResolvedValue({ data: [] }); api.listPlans.mockResolvedValue(page([]));
+    const wrapper = shallowMount(Workbench, { props: { employeeCanWrite: false, employeeNavigationPending: false } }); await flushPromises();
+    const state = useLogisticsScheduling(); state.plan.value = { ...planA, status: 'CONFIRMED' } as unknown as NonNullable<typeof state.plan.value>;
+    const mock = method === 'exportCsv' ? api.exportPlanCsv : api.exportPlanXlsx;
+    mock.mockResolvedValue({ data: new Blob(['confirmed plan']) });
+    const nativeURL = URL;
+    vi.stubGlobal('URL', class extends nativeURL { static createObjectURL = vi.fn(() => 'blob:confirmed-plan'); static revokeObjectURL = vi.fn(); });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      const vm = wrapper.vm as unknown as Record<typeof method, () => Promise<void>>;
+      await vm[method]();
+      expect(mock).toHaveBeenCalledWith('F-A', 'PLAN-A'); expect(click).toHaveBeenCalledTimes(1);
+      await wrapper.setProps({ employeeNavigationPending: true });
+      await vm[method]();
+      expect(mock).toHaveBeenCalledTimes(1); expect(click).toHaveBeenCalledTimes(1);
+    } finally { wrapper.unmount(); click.mockRestore(); vi.stubGlobal('URL', nativeURL); }
+  });
+  it.each(['exportCsv', 'exportXlsx'] as const)('discards an in-flight %s download when navigation becomes pending', async (method) => {
+    api.listVehicles.mockResolvedValue({ data: [] }); api.listDrivers.mockResolvedValue({ data: [] }); api.listPlans.mockResolvedValue(page([]));
+    const wrapper = shallowMount(Workbench, { props: { employeeCanWrite: false, employeeNavigationPending: false } }); await flushPromises();
+    const state = useLogisticsScheduling(); state.plan.value = planA as unknown as NonNullable<typeof state.plan.value>;
+    const mock = method === 'exportCsv' ? api.exportPlanCsv : api.exportPlanXlsx;
+    let finish!: (value: unknown) => void; mock.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      const pending = (wrapper.vm as unknown as Record<typeof method, () => Promise<void>>)[method]();
+      await wrapper.setProps({ employeeNavigationPending: true });
+      finish({ data: new Blob(['old plan']) }); await pending;
+      expect(mock).toHaveBeenCalledTimes(1); expect(click).not.toHaveBeenCalled();
+    } finally { wrapper.unmount(); click.mockRestore(); }
+  });
   it('uses the actual workbench handlers to deny readonly/pending writes and retain an authorized manual preview', async () => {
     api.listVehicles.mockResolvedValue({ data: [] }); api.listDrivers.mockResolvedValue({ data: [] }); api.listPlans.mockResolvedValue(page([]));
     const wrapper = shallowMount(Workbench, { props: { employeeCanWrite: false, employeeNavigationPending: true } }); await flushPromises();
