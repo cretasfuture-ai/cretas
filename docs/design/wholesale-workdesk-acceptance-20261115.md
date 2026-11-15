@@ -1,6 +1,7 @@
 # 批发商数字员工实测修正
 
 Task WHOLESALE-ACCEPT-20261115；Base 7f2556c6f949e193888ce8d1a24798bd2583cae8。
+整合基线：fa35dd8a86（最新主线含已合并的三项只读 BI 工具）；本次 Web 补丁与整合前一致。
 
 ## UX Flow Analysis
 
