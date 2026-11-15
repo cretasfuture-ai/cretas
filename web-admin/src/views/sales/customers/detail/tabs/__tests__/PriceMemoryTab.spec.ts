@@ -27,19 +27,16 @@ vi.mock('@/store/modules/permission', () => ({
 }));
 
 const stubs = {
-  'el-skeleton': { template: '<div />' },
-  'el-empty': { props: ['description'], template: '<div class="empty">{{ description }}</div>' },
-  'el-result': { props: ['title'], template: '<div>{{ title }}</div>' },
-  'el-table': { props: ['data'], template: '<div class="tbl" :data-rows="JSON.stringify(data)"><slot /></div>' },
-  'el-table-column': { template: '<div />' },
-  'el-tag': { template: '<span><slot /></span>' },
-  'el-button': { template: '<button class="btn"><slot /></button>' },
-  'el-dialog': { template: '<div />' },
-  'el-form': { template: '<div />' },
-  'el-form-item': { template: '<div />' },
-  'el-select': { template: '<div />' },
-  'el-option': { template: '<div />' },
-  'el-input-number': { template: '<div />' },
+  USkeleton: { template: '<div />' },
+  UEmpty: { props: ['description'], template: '<div class="empty">{{ description }}</div>' },
+  UAlert: { props: ['title'], template: '<div>{{ title }}</div>' },
+  UTable: { props: ['data'], template: '<div class="tbl" :data-rows="JSON.stringify(data)" />' },
+  UBadge: { template: '<span><slot /></span>' },
+  UButton: { template: '<button class="btn"><slot /></button>' },
+  UModal: { template: '<div />' },
+  UFormField: { template: '<div />' },
+  USelectMenu: { template: '<div />' },
+  UInputNumber: { template: '<div />' },
 };
 
 const row = {
