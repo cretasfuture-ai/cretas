@@ -522,7 +522,7 @@ const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePath
   digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
 });
 const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
-import { ref, computed, watch, reactive } from 'vue';
+import { nextTick, ref, computed, watch, reactive } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -757,7 +757,7 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 
 async function triggerTodayQuery() {
   userInput.value = '今天要收什么货?';
-  await sendQuery(!props.digitalEmployee);
+  await sendQuery(!props.wholesaleMode);
 }
 
 async function sendQuery(autoTrigger = false) {
@@ -1262,9 +1262,11 @@ async function executeConfirmReceive() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
+let initializationGeneration = 0;
 let previousIdentity = '';
-watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole], ([pending, id, actor, role]) => {
-  const identity = `${id}:${actor}:${role || ''}:${pending}`;
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole, () => props.wholesaleMode, () => props.employeeCanWrite], ([pending, id, actor, role]) => {
+  const generation = ++initializationGeneration;
+  const identity = `${id}:${actor}:${role || ''}:${pending}:${props.wholesaleMode}:${props.employeeCanWrite}`;
   if (identity !== previousIdentity) {
     previousIdentity = identity;
     initialQueryStarted = false;
@@ -1275,8 +1277,11 @@ watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStor
     confirmReceiveDialog.visible = false; resetConfirmReceiveDialog();
   }
   if (pending || !id || !actor || initialQueryStarted) return;
+  void nextTick(() => {
+    if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerTodayQuery();
+  });
 }, { immediate: true, flush: 'sync' });
 watch(showNativeActions, (allowed) => {
   if (allowed) return;

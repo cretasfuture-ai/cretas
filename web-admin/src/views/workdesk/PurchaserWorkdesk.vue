@@ -444,7 +444,7 @@ const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePath
   digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
 });
 const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
-import { ref, computed, watch, reactive, h, defineComponent } from 'vue';
+import { nextTick, ref, computed, watch, reactive, h, defineComponent } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
 import request from '@/api/request';
@@ -619,8 +619,8 @@ async function callIntentExecute(input: string, intentCode?: string,
 
 async function triggerWeeklyPlan() {
   // Wholesale uses the live low-stock capability; the legacy weekly-plan Skill is not configured there.
-  userInput.value = props.digitalEmployee ? '查询低库存预警' : '下周采购什么?';
-  await sendQuery(!props.digitalEmployee);
+  userInput.value = props.wholesaleMode ? '查询低库存预警' : '下周采购什么?';
+  await sendQuery(!props.wholesaleMode);
 }
 
 async function verifyStockPrerequisites(): Promise<boolean> {
@@ -1202,9 +1202,11 @@ async function executeProcurement() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
+let initializationGeneration = 0;
 let previousIdentity = '';
-watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole], ([pending, id, actor, role]) => {
-  const identity = `${id}:${actor}:${role || ''}:${pending}`;
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole, () => props.wholesaleMode, () => props.employeeCanWrite], ([pending, id, actor, role]) => {
+  const generation = ++initializationGeneration;
+  const identity = `${id}:${actor}:${role || ''}:${pending}:${props.wholesaleMode}:${props.employeeCanWrite}`;
   if (identity !== previousIdentity) {
     previousIdentity = identity;
     initialQueryStarted = false;
@@ -1214,8 +1216,11 @@ watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStor
     procurementDialog.visible = false; resetProcurementDialog();
   }
   if (pending || !id || !actor || initialQueryStarted) return;
+  void nextTick(() => {
+    if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerWeeklyPlan();
+  });
 }, { immediate: true, flush: 'sync' });
 watch(showNativeActions, (allowed) => {
   if (allowed) return;

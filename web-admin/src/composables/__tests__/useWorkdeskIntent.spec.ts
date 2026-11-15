@@ -6,6 +6,26 @@ const { post } = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('@/api/request', () => ({ default: { post } }));
 
 describe('workdesk unified recognition boundary', () => {
+  it('re-recognizes the original question once when a previous clarification session is already completed', async () => {
+    post.mockResolvedValueOnce({ data: { status: 'CONVERSATION_CONTINUE', formattedText: '对话已完成', metadata: { status: 'COMPLETED', sessionId: 'closed-session' } } })
+      .mockResolvedValueOnce({ data: { status: 'SUCCESS', formattedText: '这是本次问题的实际回答' } });
+    const { client, scope } = create();
+    const result = await client.execute('我是谁');
+    expect(result.formattedText).toBe('这是本次问题的实际回答');
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(post.mock.calls.map(([, body]) => body.userInput)).toEqual(['我是谁', '我是谁']);
+    expect(post.mock.calls.every(([, body]) => body.mode === 'READ')).toBe(true);
+    expect(post.mock.calls[1][1].sessionId).not.toBe(post.mock.calls[0][1].sessionId);
+    scope.stop();
+  });
+  it('does not loop or present a repeated terminal notice as a successful answer', async () => {
+    post.mockResolvedValue({ data: { status: 'CONVERSATION_CONTINUE', message: '对话已完成', metadata: { status: 'COMPLETED' } } });
+    const { client, scope } = create();
+    await expect(client.execute('我是谁')).rejects.toThrow('未返回本次问题的回答');
+    expect(post).toHaveBeenCalledTimes(2);
+    expect(client.sessionId.value).toBe('');
+    scope.stop();
+  });
   beforeEach(() => { post.mockReset(); });
   function create() {
     const identity = reactive({ factoryId: 'WHOLESALE_TEST', actorId: '1709', role: 'sales' });

@@ -36,7 +36,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     });
     await flushPromises();
     expect(post).not.toHaveBeenCalled();
-    await wrapper.setProps({ digitalEmployee: true, employeeNavigationPending: false });
+    await wrapper.setProps({ digitalEmployee: true, wholesaleMode: true, employeeNavigationPending: false });
     await flushPromises();
     expect(post.mock.calls).toEqual([[endpoint, { userInput: '查询低库存预警', mode: 'READ', sessionId: expect.any(String) }]]);
     expect(wrapper.findComponent({ name: 'DigitalEmployeeFrame' }).props('enabled')).toBe(true);
@@ -65,7 +65,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
   });
 
   it('uses the emitted original question after the new conversation clears its input', async () => {
-    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true }, global: { plugins: [ElementPlus] } });
+    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true, wholesaleMode: true }, global: { plugins: [ElementPlus] } });
     await flushPromises();
     post.mockClear();
     const conversation = wrapper.findComponent({ name: 'DigitalEmployeeConversation' });
@@ -80,7 +80,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode: 'MATERIAL_LOW_STOCK_ALERT', formattedText: '库存充足', resultData: { warnings: [
       { materialTypeId: 'RAW_TEST', materialName: '验收原料', currentStock: 2, safetyStock: 10, gap: 8, unit: 'kg' },
     ] } } });
-    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true }, global: { plugins: [ElementPlus] } });
+    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true, wholesaleMode: true }, global: { plugins: [ElementPlus] } });
     await flushPromises();
     const text = wrapper.findComponent({ name: 'DigitalEmployeeConversation' }).props('response');
     expect(text).toContain('1 项原料库存低于安全库存');
@@ -93,7 +93,7 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
 
   it.each([{ materials: [] }, { materials: [{ id: 'RAW_TEST', minStock: null }] }])('does not claim sufficient stock without catalog or thresholds', async ({ materials }) => {
     get.mockResolvedValue({ data: materials });
-    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true }, global: { plugins: [ElementPlus] } });
+    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true, wholesaleMode: true }, global: { plugins: [ElementPlus] } });
     await flushPromises();
     expect(post).not.toHaveBeenCalled();
     expect(wrapper.findComponent({ name: 'DigitalEmployeeConversation' }).props('responseStatus')).toBe('NEED_MORE_INFO');

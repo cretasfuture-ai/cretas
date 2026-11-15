@@ -525,7 +525,7 @@ const props = withDefaults(defineProps<{ digitalEmployee?: boolean; employeePath
   digitalEmployee: false, employeePaths: () => [], employeeNavigationPending: false, employeeCanWrite: false, wholesaleMode: false,
 });
 const showNativeActions = computed(() => !props.employeeNavigationPending && !props.wholesaleMode && (!props.digitalEmployee || props.employeeCanWrite));
-import { ref, computed, watch, reactive } from 'vue';
+import { nextTick, ref, computed, watch, reactive } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Loading } from '@element-plus/icons-vue';
@@ -724,8 +724,8 @@ function looksLikeRestaurantEconomicsQuery(input: string): boolean {
 }
 
 async function triggerFollowupQuery() {
-  userInput.value = props.digitalEmployee ? '查询当前销售订单' : '今天该跟谁?';
-  await sendQuery(!props.digitalEmployee);
+  userInput.value = props.wholesaleMode ? '查询当前销售订单' : '今天该跟谁?';
+  await sendQuery(!props.wholesaleMode);
 }
 
 async function sendQuery(forceFollowup = false) {
@@ -1366,9 +1366,11 @@ async function submitShipment() {
 
 // Auto-trigger on mount
 let initialQueryStarted = false;
+let initializationGeneration = 0;
 let previousIdentity = '';
-watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole], ([pending, id, actor, role]) => {
-  const identity = `${id}:${actor}:${role || ''}:${pending}`;
+watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStore.currentRole, () => props.wholesaleMode, () => props.employeeCanWrite], ([pending, id, actor, role]) => {
+  const generation = ++initializationGeneration;
+  const identity = `${id}:${actor}:${role || ''}:${pending}:${props.wholesaleMode}:${props.employeeCanWrite}`;
   if (identity !== previousIdentity) {
     previousIdentity = identity;
     initialQueryStarted = false;
@@ -1380,9 +1382,12 @@ watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStor
     shipmentDialog.visible = false; shipmentDialog.salesOrderId = ''; shipmentDialog.orderNumber = ''; shipmentDialog.customerName = ''; shipmentDialog.itemForms = []; shipmentDialog.feedback = null;
   }
   if (pending || !id || !actor || initialQueryStarted) return;
+  void nextTick(() => {
+    if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
   initialQueryStarted = true;
   void triggerFollowupQuery();
   void loadTodayPendingShipments();
+  });
 }, { immediate: true, flush: 'sync' });
 watch(showNativeActions, (allowed) => {
   if (allowed) return;
