@@ -749,6 +749,7 @@ export const usePermissionStore = defineStore('permission', () => {
     currentRole,
     currentPermissions,
     currentUserId,
+    currentFactoryId: computed(() => currentFactoryId.value),
     // DB-driven state (Phase 3)
     dbPermissions,
     isDbLoaded,

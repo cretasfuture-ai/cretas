@@ -1,12 +1,40 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { LocationStatus, LogisticsDeliveryOrder } from '@/api/logistics';
+import { useAuthStore } from '@/store/modules/auth';
 import { useLogisticsScheduling } from '../useLogisticsScheduling';
 
 const state = useLogisticsScheduling();
+const authStore = useAuthStore();
 const router = useRouter();
+
+interface IdentitySnapshot {
+  key: string;
+  factoryId: string;
+  actorId: string;
+  role: string;
+}
+
+const identityKey = computed(() => {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  return factoryId && actorId && role ? `${factoryId}:${actorId}:${role}` : '';
+});
+
+function captureIdentity(): IdentitySnapshot | null {
+  const factoryId = authStore.factoryId || '';
+  const actorId = String(authStore.user?.id || '');
+  const role = authStore.currentRole || '';
+  if (!factoryId || !actorId || !role) return null;
+  return { key: `${factoryId}:${actorId}:${role}`, factoryId, actorId, role };
+}
+
+function identityStillCurrent(identity: IdentitySnapshot): boolean {
+  return identityKey.value === identity.key;
+}
 
 const selectedBatchId = ref<string | null>(null);
 const currentPage = ref(1); // UI 侧 1-based，调用后端时转 0-based
@@ -21,27 +49,34 @@ const locationStatusMeta: Record<LocationStatus, { label: string; type: 'success
 const rows = computed(() => state.ordersPage.value?.content ?? []);
 const total = computed(() => state.ordersPage.value?.totalElements ?? 0);
 
-onMounted(async () => {
-  await state.loadBatches();
-  selectedBatchId.value = state.batches.value[0]?.id ?? null;
-});
-
 watch(selectedBatchId, async (batchId) => {
   currentPage.value = 1;
-  if (batchId) await state.loadOrdersPage(batchId, 0, pageSize.value);
+  const identity = captureIdentity();
+  if (!identity || !batchId) return;
+  const loadOrdersPage = state.loadOrdersPage;
+  await loadOrdersPage(batchId, 0, pageSize.value);
+  if (!identityStillCurrent(identity) || selectedBatchId.value !== batchId) return;
 });
 
 async function handlePageChange(nextPage: number): Promise<void> {
-  if (!selectedBatchId.value) return;
+  const identity = captureIdentity();
+  if (!identity || !selectedBatchId.value) return;
+  const batchId = selectedBatchId.value;
   currentPage.value = nextPage;
-  await state.loadOrdersPage(selectedBatchId.value, nextPage - 1, pageSize.value);
+  const loadOrdersPage = state.loadOrdersPage;
+  await loadOrdersPage(batchId, nextPage - 1, pageSize.value);
+  if (!identityStillCurrent(identity)) return;
 }
 
 async function handleSizeChange(nextSize: number): Promise<void> {
-  if (!selectedBatchId.value) return;
+  const identity = captureIdentity();
+  if (!identity || !selectedBatchId.value) return;
+  const batchId = selectedBatchId.value;
   pageSize.value = nextSize;
   currentPage.value = 1;
-  await state.loadOrdersPage(selectedBatchId.value, 0, nextSize);
+  const loadOrdersPage = state.loadOrdersPage;
+  await loadOrdersPage(batchId, 0, nextSize);
+  if (!identityStillCurrent(identity)) return;
 }
 
 function goToWorkbench(): void {
@@ -49,7 +84,11 @@ function goToWorkbench(): void {
 }
 
 async function downloadTemplate(): Promise<void> {
-  await state.downloadTemplate();
+  const identity = captureIdentity();
+  if (!identity) return;
+  const download = state.downloadTemplate;
+  await download();
+  if (!identityStillCurrent(identity)) return;
 }
 
 // ==================== 门店详情 / 补录定位 ====================
@@ -59,24 +98,54 @@ const activeOrder = ref<LogisticsDeliveryOrder | null>(null);
 const locationForm = ref<{ longitude: number | null; latitude: number | null }>({ longitude: null, latitude: null });
 
 function openDetail(order: LogisticsDeliveryOrder): void {
+  if (!captureIdentity() || !rows.value.some((row) => row.id === order.id)) return;
   activeOrder.value = order;
   locationForm.value = { longitude: order.longitude ?? null, latitude: order.latitude ?? null };
   detailVisible.value = true;
 }
 
 async function saveLocation(): Promise<void> {
-  if (!activeOrder.value) return;
+  const identity = captureIdentity();
+  if (!identity || !activeOrder.value || !rows.value.some((row) => row.id === activeOrder.value?.id)) return;
+  const orderId = activeOrder.value.id;
+  const storeName = activeOrder.value.storeName;
   const { longitude, latitude } = locationForm.value;
   if (longitude === null || latitude === null || Number.isNaN(longitude) || Number.isNaN(latitude)) {
     ElMessage.warning('请输入经度和纬度');
     return;
   }
-  const ok = await state.updateLocation(activeOrder.value.id, longitude, latitude);
+  const updateLocation = state.updateLocation;
+  const ok = await updateLocation(orderId, longitude, latitude);
+  if (!identityStillCurrent(identity)) return;
   if (ok) {
-    ElMessage.success(`已更新 ${activeOrder.value.storeName} 的定位`);
-    activeOrder.value = rows.value.find((row) => row.id === activeOrder.value?.id) ?? activeOrder.value;
+    ElMessage.success(`已更新 ${storeName} 的定位`);
+    activeOrder.value = rows.value.find((row) => row.id === orderId) ?? activeOrder.value;
   }
 }
+
+function clearLocalScopeState(): void {
+  selectedBatchId.value = null;
+  currentPage.value = 1;
+  detailVisible.value = false;
+  activeOrder.value = null;
+  locationForm.value = { longitude: null, latitude: null };
+}
+
+let scopeLoadVersion = 0;
+watch(identityKey, () => {
+  scopeLoadVersion += 1;
+  clearLocalScopeState();
+}, { flush: 'sync' });
+watch(identityKey, async () => {
+  const version = scopeLoadVersion;
+  if (version === 0) clearLocalScopeState();
+  const identity = captureIdentity();
+  if (!identity) return;
+  const loadBatches = state.loadBatches;
+  await loadBatches();
+  if (version !== scopeLoadVersion || !identityStillCurrent(identity)) return;
+  selectedBatchId.value = state.batches.value[0]?.id ?? null;
+}, { immediate: true });
 </script>
 
 <template>

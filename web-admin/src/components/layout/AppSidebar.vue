@@ -7,7 +7,7 @@ import { usePermissionStore, ModuleName } from '@/store/modules/permission';
 import { useTaskBadgeStore } from '@/store/modules/taskBadges';
 import { useDisposalApprovalStore } from '@/store/modules/disposalApproval';
 import { useWorkspaceStore } from '@/store/modules/workspace';
-import { useNavigationVisibilityStore, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
+import { useNavigationVisibilityStore, navigationPermissionsReady, type NavigationVisibilityIdentity } from '@/store/modules/navigationVisibility';
 import { usePlatformFactoryContextStore, isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
 import type { User as AuthUser } from '@/types/auth';
 import { get } from '@/api/request';
@@ -132,9 +132,14 @@ async function fetchDisabledModules(factoryId: string) {
   // 保密配置读到 `=== true` 之前, 依赖它的菜单 (工艺保密) 一律不显示
   hiddenFactoryMenuPaths.value = secrecyHiddenMenuPaths({});
   hiddenFactoryMenuModules.value = [];
-  if (!factoryId || isDemoTenant(factoryId)) {
+  if (!factoryId) {
     disabledModuleCodes.value = [];
     navigationVisibility.markUnavailableIfCurrent(token);
+    return;
+  }
+  if (isDemoTenant(factoryId)) {
+    disabledModuleCodes.value = [];
+    navigationVisibility.markReadyIfCurrent(token);
     return;
   }
   try {
@@ -178,8 +183,8 @@ async function fetchDisabledModules(factoryId: string) {
   }
 }
 watch(
-  () => effectiveFactoryId.value,
-  (factoryId) => { void fetchDisabledModules(factoryId); },
+  () => [effectiveFactoryId.value, authStore.user?.id] as const,
+  ([factoryId]) => { void fetchDisabledModules(factoryId); },
   { immediate: true },
 );
 watch(
@@ -374,18 +379,23 @@ function sectionTitleBefore(index: number): string {
 }
 
 const navigationIdentity = computed<NavigationVisibilityIdentity>(() => ({
+  actorId: String(authStore.user?.id || ''),
   factoryId: effectiveFactoryId.value || '',
   role: roleCode.value,
-  factoryType: workspaceFactoryType.value,
+  factoryType: effectiveFactoryType.value,
   isPlatform: authStore.isPlatform,
 }));
+const navigationPermissionReady = computed(() => navigationPermissionsReady(
+  { ...navigationIdentity.value, factoryId: authStore.factoryId || '' }, permissionStore,
+  !!route.meta.mockDemo && isDemoTenant(authStore.factoryId),
+));
 
 // Publish only the already fully filtered sidebar paths. Consumers must match
 // this identity exactly; a missing or stale snapshot fails closed.
 watch(
-  [filteredMenu, navigationIdentity, () => navigationVisibility.status],
-  ([visibleMenu, identity, status]) => {
-    if (status !== 'ready') return;
+  [filteredMenu, navigationIdentity, () => navigationVisibility.status, navigationPermissionReady],
+  ([visibleMenu, identity, status, permissionsReady]) => {
+    if (status !== 'ready' || !permissionsReady) return;
     navigationVisibility.publish({
       ...identity,
       paths: collectVisiblePaths(visibleMenu),
@@ -397,7 +407,7 @@ watch(
 
 const LOGISTICS_TITLE_OVERRIDES: Record<string, string> = {
   '/scheduling': '物流调度',
-  '/scheduling/logistics/workbench': '排线工作台',
+  '/scheduling/logistics/workbench': '排线数字专员工作台',
   '/scheduling/logistics/records': '调度记录',
   '/scheduling/logistics/orders': '门店与订单',
   '/scheduling/logistics/resources': '车辆与司机',

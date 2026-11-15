@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { classifyMutation } = require('../core/mutation-guard');
+const { workdeskIntentReadBodyMatches } = require('../config/readonly-post-whitelist');
 
 test('allows only exact authentication and documented query POST contracts', () => {
   assert.equal(classifyMutation('GET', 'https://admin.example/api/mobile/F006/skus').kind, 'safe-method');
@@ -182,6 +183,42 @@ test('allows only the exact factory analysis contract while generic chat remains
     question: '分析', contextId: 'clarification-context', analysisSubject: 'P1', actorId: 'unknown-actor',
   }).kind, 'business-mutation');
   assert.equal(classifyMutation('POST', 'https://admin.example/api/mobile/F006/smart-bi/factory-analysis/extra').kind, 'business-mutation');
+});
+
+test('allows only the bounded useWorkdeskIntent READ session envelope', () => {
+  const url = 'https://admin.example/api/mobile/F006/ai-intents/execute';
+  const valid = {
+    mode: 'READ',
+    userInput: '我是谁',
+    sessionId: '7d6d3a9b-8bd6-4f3f-9f28-8f76a5c8d45c',
+    context: { month: '2026-11' },
+    parameters: {},
+    intentCode: 'WHO_AM_I',
+  };
+  assert.equal(workdeskIntentReadBodyMatches(valid), true);
+  assert.equal(classifyMutation('POST', url, undefined, valid).kind, 'readonly-post');
+  const financeNativeRead = {
+    userInput: '查询本月利润表',
+    intentCode: 'INCOME_STATEMENT_QUERY',
+    mode: 'READ',
+  };
+  assert.equal(workdeskIntentReadBodyMatches(financeNativeRead), true);
+  assert.equal(classifyMutation('POST', url, undefined, financeNativeRead).kind, 'readonly-post');
+  for (const altered of [
+    { ...valid, mode: 'WRITE' },
+    { ...valid, preview: true },
+    { ...valid, previewOnly: true },
+    { ...valid, execute: true },
+    { ...valid, userInput: ' '.repeat(1001) },
+    { ...valid, sessionId: '' },
+    { ...valid, parameters: [] },
+    { ...valid, context: { ...valid.context, ...Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`k${index}`, index])) } },
+    { ...valid, context: { oversized: '中'.repeat(3000) } },
+    { ...valid, parameters: { oversized: '中'.repeat(3000) } },
+  ]) {
+    assert.equal(workdeskIntentReadBodyMatches(altered), false);
+    assert.equal(classifyMutation('POST', url, undefined, altered).kind, 'business-mutation');
+  }
 });
 
 test('uploaded three-table analysis allows only distinct explicit read-only source IDs', () => {
