@@ -101,7 +101,7 @@
       <template #header>
         <div class="card-header">
  <span> 低库存清单 ({{ lowStockRows.length }})</span>
-          <span class="header-hint">已附推荐补货量, 一键创建请购单</span>
+          <span class="header-hint">{{ digitalEmployee ? '按安全库存核对，补货请到采购订单办理' : '已附推荐补货量, 一键创建请购单' }}</span>
         </div>
       </template>
       <el-table
@@ -136,11 +136,11 @@
         <el-table-column label="建议补货" width="120" align="right">
           <template #default="{ row }">
             <el-tag type="warning" effect="plain" size="small">
-              {{ formatQty(row.recommendedReplenishQty) }}{{ row.unit }}
+              {{ digitalEmployee && row.recommendedReplenishQty == null ? '未提供' : formatQty(row.recommendedReplenishQty) + (row.unit || '') }}
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="预测下周用量" width="140" align="right">
+        <el-table-column v-if="!digitalEmployee" label="预测下周用量" width="140" align="right">
           <template #default="{ row }">
             <el-text v-if="forecastByMaterial[row.materialTypeId]" size="small" type="info">
               {{ formatQty(forecastByMaterial[row.materialTypeId]) }}{{ row.unit }}
@@ -148,12 +148,12 @@
             <el-text v-else size="small" type="info">—</el-text>
           </template>
         </el-table-column>
-        <el-table-column label="价格趋势" width="140">
+        <el-table-column v-if="!digitalEmployee" label="价格趋势" width="140">
           <template #default="{ row }">
             <PriceMiniChart :data="priceTrendByMaterial[row.materialTypeId] || []" />
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="240" fixed="right">
+        <el-table-column v-if="!digitalEmployee" label="操作" width="240" fixed="right">
           <template #default="{ row }">
             <el-button v-if="!digitalEmployee" size="small" type="primary" @click="openRequisitionDialog(row)">
               一键请购
@@ -661,6 +661,16 @@ async function sendQuery(autoTrigger = false) {
 
     const resultData = (response.resultData || {}) as Record<string, unknown>;
     extractLowStockRows(resultData);
+    if (props.digitalEmployee && response.intentCode === 'MATERIAL_LOW_STOCK_ALERT') {
+      const stockData = (resultData.data as Record<string, unknown>) || resultData;
+      if (!Array.isArray(stockData.warnings)) {
+        formattedText.value = '';
+        throw new Error('未收到库存预警明细，请从库存查询入口核对');
+      }
+      formattedText.value = lowStockRows.value.length
+        ? `查询到 ${lowStockRows.value.length} 项原料库存低于安全库存。请核对下方缺口，并在采购订单中确认补货数量。`
+        : '已按当前安全库存设置核对，暂未发现低库存预警。';
+    }
 
     // 2. 自动 trigger 时, 并发拉销售预测
     if (autoTrigger) {

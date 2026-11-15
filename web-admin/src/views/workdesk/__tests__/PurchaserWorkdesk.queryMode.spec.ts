@@ -76,6 +76,21 @@ describe('PurchaserWorkdesk query mode through mounted user events', () => {
     wrapper.unmount();
   });
 
+  it('uses actual warning rows when generated prose incorrectly claims stock is sufficient', async () => {
+    post.mockResolvedValue({ data: { status: 'SUCCESS', intentCode: 'MATERIAL_LOW_STOCK_ALERT', formattedText: '库存充足', resultData: { warnings: [
+      { materialTypeId: 'RAW_TEST', materialName: '验收原料', currentStock: 2, safetyStock: 10, gap: 8, unit: 'kg' },
+    ] } } });
+    const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true }, global: { plugins: [ElementPlus] } });
+    await flushPromises();
+    const text = wrapper.findComponent({ name: 'DigitalEmployeeConversation' }).props('response');
+    expect(text).toContain('1 项原料库存低于安全库存');
+    expect(text).not.toContain('库存充足');
+    expect(wrapper.get('.low-stock-card').text()).toContain('2kg');
+    expect(wrapper.get('.low-stock-card').text()).toContain('10kg');
+    expect(wrapper.get('.low-stock-card').text()).toContain('未提供');
+    wrapper.unmount();
+  });
+
   it.each([{ materials: [] }, { materials: [{ id: 'RAW_TEST', minStock: null }] }])('does not claim sufficient stock without catalog or thresholds', async ({ materials }) => {
     get.mockResolvedValue({ data: materials });
     const wrapper = mount(PurchaserWorkdesk, { props: { digitalEmployee: true }, global: { plugins: [ElementPlus] } });
