@@ -449,6 +449,31 @@ class ClarificationToolRbacParityContractTest {
                 "src/main/java/com/cretas/aims/service/execution/ToolExecutionAdmission.java"));
         assertThat(count(admission, "isToolEnabledForFactory(")).isEqualTo(1);
         assertThat(count(admission, "AuthenticatedActor.fromCurrentExecution()")).isEqualTo(1);
+
+        // 每一种拒绝在执行期都有自己的分支, 不靠 == 逐个比 (新增一种而没处理 = 落空放行) —— 按枚举穷举
+        assertThat(body).contains("return switch (admission) {").doesNotContain("admission == ");
+        for (ToolExecutionAdmission.Refusal r : ToolExecutionAdmission.Refusal.values()) {
+            assertThat(count(body, "case " + r.name() + " ->")).as("执行期缺 %s 分支", r).isEqualTo(1);
+        }
+
+        // Skill 路径 (#1769 终审第 1 条): 执行 (executeSingleTool) 与预检 (preflightTools) 读同一个开关
+        String skillExec = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/skill/impl/SkillExecutorImpl.java"));
+        assertThat(count(skillExec, "ToolExecutionAdmission.toolDisabled(")).isEqualTo(2);
+        assertThat(count(skillExec, "isToolEnabledForFactory(")).as("Skill 路径不许自抄开关判定").isZero();
+    }
+
+    @Test
+    @DisplayName("M1 (Skill 路径) 回归: 工厂关掉「今日客户跟进」里的一个工具 ⇒ 执行期会失败 ⇒ 候选不出; 开着时照出")
+    void skillWithFactoryDisabledToolIsNotOffered() {
+        assertThat(offered("sales_manager", FOLLOWUP, CUSTOMERS)).as("对照: 开关全开时照出")
+                .containsExactly(FOLLOWUP, CUSTOMERS);
+        when(toolRegistry.isToolEnabledForFactory(FACTORY, "opportunity_stage_alert")).thenReturn(false);
+        // 前提: 执行期 executeSingleTool 用的就是这个判定 (见 executionSideGateInventoryIsPinned 的源码钉)
+        assertThat(ToolExecutionAdmission.toolDisabled(toolRegistry, FACTORY, "opportunity_stage_alert")).isTrue();
+        assertThat(skillExecutor.permissionRefusal(followupSkill, skillCtx("sales_manager"))).isPresent();
+
+        assertThat(offered("sales_manager", FOLLOWUP, CUSTOMERS)).containsExactly(CUSTOMERS);
     }
 
     private static int count(String text, String needle) {

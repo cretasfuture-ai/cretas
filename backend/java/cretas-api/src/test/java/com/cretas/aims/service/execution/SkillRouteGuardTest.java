@@ -190,6 +190,21 @@ class SkillRouteGuardTest {
     }
 
     @Test
+    void keywordPreemptionDoesNotRunASkillWhoseToolTheFactoryTurnedOff() {
+        // #1769 终审第 1 条: 工厂关掉 Skill 里的工具, 执行期 executeSingleTool 抛 "Tool disabled for factory";
+        // 抢先不能先把这个 Skill 抢下来 (抢先第二层对无意图工具直接放过, 只能靠共用预检拦)。
+        // 用没有意图绑定的工具 (query_online_staff_count): 第二层对它直接 continue, 只有共用预检能拦 —— 正是终审说的漏口
+        Fixture f = new Fixture();
+        SkillDefinition orphan = SkillDefinition.builder().name("orphan-only").tools(List.of("query_online_staff_count"))
+                .triggers(List.of("x")).build();
+        assertThat(f.dynamic.skillPreemptionBlocker(orphan, FACTORY, ADMIN_ID, ADMIN)).as("对照: 开着时可抢先").isEmpty();
+
+        when(f.toolRegistry.isToolEnabledForFactory(FACTORY, "query_online_staff_count")).thenReturn(false);
+        assertThat(f.dynamic.skillPreemptionBlocker(orphan, FACTORY, ADMIN_ID, ADMIN))
+                .hasValueSatisfying(reason -> assertThat(reason).contains("query_online_staff_count"));
+    }
+
+    @Test
     void toolLessIntentTheUserMayNotUseDoesNotReachItsSkill() {
         // SSE 7a 的显式 Skill 路由此前在意图权限检查之前 —— 没权限的意图也能先把 Skill 跑掉。
         Fixture f = new Fixture();

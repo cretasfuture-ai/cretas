@@ -38,11 +38,21 @@ public final class ToolExecutionAdmission {
         if (supplierIdentityRefused(tool, intent, factoryId, userId)) {
             return Optional.of(Refusal.SUPPLIER_IDENTITY);
         }
-        // Round 8-β Fix: Canvas factory_tool_configs 的开关原来只写不读, 执行期在这里读。
-        if (toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, tool.getToolName())) {
+        if (toolDisabled(toolRegistry, factoryId, tool.getToolName())) {
             return Optional.of(Refusal.TOOL_DISABLED);
         }
         return Optional.empty();
+    }
+
+    /**
+     * 工厂功能开关 (Canvas factory_tool_configs) 的唯一读法。直接执行 ({@link #refusal})、Skill 执行
+     * ({@code SkillExecutorImpl#executeSingleTool}) 与 Skill 权限预检 ({@code SkillExecutorImpl#preflightTools})
+     * 都调这里 —— 预检放行的 Skill, 执行期不许因为工具被关而失败 (#1769 终审第 1 条)。
+     * 注册表缺失 (只在裸构造单测里) ⇒ 不按开关拒, 与改前一致。
+     */
+    public static boolean toolDisabled(ToolRegistry toolRegistry, String factoryId, String toolName) {
+        // Round 8-β Fix: Canvas factory_tool_configs 的开关原来只写不读, 执行期在这里读。
+        return toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, toolName);
     }
 
     /**

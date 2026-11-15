@@ -1318,7 +1318,8 @@ public class SkillExecutorImpl implements SkillExecutor {
         // Round 9 Fix (R8-β tail): respect factory_tool_configs disable flag.
         // R7b fixed this at ToolDispatchService but Skill orchestration was a 2nd path
         // that still ran disabled tools. Now skills also honor the Canvas switch.
-        if (!toolRegistry.isToolEnabledForFactory(context.getFactoryId(), toolName)) {
+        if (com.cretas.aims.service.execution.ToolExecutionAdmission.toolDisabled(
+                toolRegistry, context.getFactoryId(), toolName)) {
             log.warn("Tool disabled for factory via Canvas: tool={}, factoryId={}, skill path",
                     toolName, context.getFactoryId());
             throw new IllegalStateException("Tool disabled for factory: " + toolName);
@@ -1880,6 +1881,13 @@ public class SkillExecutorImpl implements SkillExecutor {
             Optional<ToolExecutor> tool = toolRegistry.getExecutor(toolName);
             if (tool.isEmpty()) {
                 continue;  // missing tools fail at context validation
+            }
+            // #1769 终审第 1 条: 执行期 executeSingleTool 遇工厂关掉的工具抛 "Tool disabled for factory"
+            // (DAG / 契约 / 多工具三路都经过它); 预检按同一个开关判, 候选与关键词抢先才不会放出点了就失败的 Skill。
+            if (com.cretas.aims.service.execution.ToolExecutionAdmission.toolDisabled(toolRegistry, factoryId, toolName)) {
+                checked++;
+                denied.add(toolName);
+                continue;
             }
             if (toolRuntimeRegistry != null && toolRuntimeRegistry.isGoverned(toolName)) {
                 checked++;
