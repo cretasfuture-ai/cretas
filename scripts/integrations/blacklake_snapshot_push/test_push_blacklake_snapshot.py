@@ -65,6 +65,46 @@ class ProjectionTest(unittest.TestCase):
             self.assertEqual(body["system"], "blacklake")
             self.assertEqual(list(body["datasets"]), ["report_output"])
 
+    def test_unreadable_quantity_is_not_counted_as_zero(self):
+        for bad in ("12kg", "", None, "NaN", True):
+            payload = json.loads(json.dumps(PAYLOAD))
+            payload["data"]["output"][1]["numberofgoodProducts"] = bad
+            with self.assertRaises(p.UnreadableQuantity) as ctx:
+                p.project_report_output(payload)
+            self.assertIn("numberofgoodProducts 1 行", str(ctx.exception), repr(bad))
+        payload = json.loads(json.dumps(PAYLOAD))
+        del payload["data"]["output"][0]["numberofDefectives"]
+        with self.assertRaises(p.UnreadableQuantity) as ctx:
+            p.project_report_output(payload)
+        self.assertIn("numberofDefectives 1 行", str(ctx.exception))
+
+    def test_unreadable_quantity_exits_unmeasured_rc2(self):
+        with tempfile.TemporaryDirectory() as d:
+            payload = json.loads(json.dumps(PAYLOAD))
+            payload["data"]["output"][0]["numberofgoodProducts"] = "坏数"
+            db = Path(d) / "monitor.sqlite3"
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE content (hash TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("CREATE TABLE cycle (id TEXT PRIMARY KEY, started TEXT, finished TEXT, status TEXT, hash TEXT)")
+            conn.execute("INSERT INTO content VALUES ('h1', ?)", (json.dumps(payload),))
+            conn.execute("INSERT INTO cycle VALUES ('c1', 'x', '2026-11-15T00:01:11+00:00', 'success', 'h1')")
+            conn.commit()
+            conn.close()
+            cfg = Path(d) / "config.json"
+            cfg.write_text(json.dumps({"db": str(db), "source_factory_id": 1}), encoding="utf-8")
+            self.assertEqual(p.main(["push", "--config", str(cfg), "--dry-run"]), 2)
+
+    def test_body_over_the_server_byte_limit_is_refused_locally(self):
+        output = [{"endtimeofReport": f"2026-11-14 10:00:{i % 60:02d}", "productCode": f"CP{i}",
+                   "productName": "很长的产品名" * 8, "processId": 1, "stockUnit": "KG",
+                   "numberofgoodProducts": "1", "numberofDefectives": "0"} for i in range(4000)]
+        payload = {"data": {"process": [{"id": 1, "name": "腌制"}], "output": output}}
+        rows = p.project_report_output(payload)
+        self.assertLessEqual(len(rows), p.MAX_ROWS)
+        with self.assertRaises(SystemExit) as ctx:
+            p.build_request({"source_factory_id": 1}, {"id": "c", "finished": "2026-11-15T00:01:11+00:00"}, payload)
+        self.assertIn("字节", str(ctx.exception.code))
+
     def test_refuses_plain_http_to_remote_hosts(self):
         with self.assertRaises(SystemExit):
             p.post("http://example.invalid", "cxs_x", {})

@@ -10,6 +10,7 @@ import { computed, onMounted, ref } from 'vue';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor, type ElementTagType } from '@/utils/csBadge';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import {
   getReportComparison,
   listFactoryIntegrations,
@@ -20,7 +21,9 @@ import {
 } from '@/api/externalIntegrations';
 
 const authStore = useAuthStore();
-const factoryId = computed(() => authStore.factoryId || '');
+// 与路由守卫同一取法 (审查低3): 平台查看某工厂时用查看上下文里的工厂, 否则用登录工厂
+const platformFactoryContext = usePlatformFactoryContextStore();
+const factoryId = computed(() => platformFactoryContext.factoryId || authStore.factoryId || '');
 
 const STATE_LABEL: Record<MatchState, string> = {
   MATCH: '一致',

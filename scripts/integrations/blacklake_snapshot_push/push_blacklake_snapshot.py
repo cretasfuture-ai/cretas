@@ -13,7 +13,9 @@
   python -I push_blacklake_snapshot.py push --config D:\\...\\config.json --endpoint https://admin.cretaceousfuture.com
   python -I push_blacklake_snapshot.py push --config ... --dry-run --out preview.json   # 只生成，不发
 
-退出码三态（measurement-and-wiring 硬约束 4）：0 已推送 / 重复推送已确认；1 服务端拒收或网络失败；2 没量到（库不存在、没有成功采集轮、凭证缺失）。
+退出码三态（measurement-and-wiring 硬约束 4）：0 已推送 / 重复推送已确认；1 服务端拒收或网络失败；
+2 没量到（库不存在、没有成功采集轮、凭证缺失、有报工的良品 / 不良数读不出来）。
+⛔ 读不出来的数量不当 0：整批不推（rc=2），输出里报出几行、哪个字段。
 """
 from __future__ import annotations
 
@@ -38,6 +40,8 @@ PUSH_PATH = "/api/public/external-snapshots/push"
 # 与 Java ExternalDataset.REPORT_OUTPUT.allowedFields 一致（服务端多一个键就整批拒收）
 ALLOWED_FIELDS = ("reportDate", "productCode", "productName", "processName", "unit", "goodQty", "defectQty", "reportCount")
 MAX_ROWS = 5000
+# 与 Java ExternalIntegrationService.MAX_PUSH_BODY_BYTES 一致（低于 nginx 默认 1m），先在本机自查
+MAX_BODY_BYTES = 1_000_000
 
 
 # ------------------------------------------------------------------ DPAPI（当前用户范围）
@@ -105,11 +109,22 @@ def latest_success_cycle(db: Path) -> tuple[dict, dict]:
         conn.close()
 
 
-def _dec(value) -> Decimal:
+class UnreadableQuantity(ValueError):
+    """报工里有数量读不出来：不能当 0 推上去（会把「不知道」变成「有差异」）。"""
+
+
+def _dec(value) -> Decimal | None:
+    """读不出来返回 None（由调用方计数并拒推），⛔ 不当 0。空值 / 缺字段也算读不出来。"""
+    if value is None or isinstance(value, bool):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
     try:
-        return Decimal(str(value).strip())
-    except (InvalidOperation, AttributeError):
-        return Decimal(0)
+        d = Decimal(text)
+    except InvalidOperation:
+        return None
+    return d if d.is_finite() else None
 
 
 def _fmt(d: Decimal) -> str:
@@ -125,6 +140,7 @@ def project_report_output(payload: dict) -> list[dict]:
         if isinstance(p, dict) and p.get("id") is not None:
             process_names[p["id"]] = str(p.get("name") or "").strip()
     groups: "OrderedDict[tuple, dict]" = OrderedDict()
+    unreadable: dict[str, int] = {}
     for r in data.get("output") or []:
         if not isinstance(r, dict):
             continue
@@ -134,10 +150,21 @@ def project_report_output(payload: dict) -> list[dict]:
             continue
         key = (date, str(r.get("productCode") or "").strip(), str(r.get("productName") or "").strip(),
                process_names.get(r.get("processId"), ""), str(r.get("stockUnit") or "").strip())
+        good = _dec(r.get("numberofgoodProducts"))
+        defect = _dec(r.get("numberofDefectives"))
+        if good is None:
+            unreadable["numberofgoodProducts"] = unreadable.get("numberofgoodProducts", 0) + 1
+        if defect is None:
+            unreadable["numberofDefectives"] = unreadable.get("numberofDefectives", 0) + 1
+        if good is None or defect is None:
+            continue
         g = groups.setdefault(key, {"good": Decimal(0), "defect": Decimal(0), "count": 0})
-        g["good"] += _dec(r.get("numberofgoodProducts"))
-        g["defect"] += _dec(r.get("numberofDefectives"))
+        g["good"] += good
+        g["defect"] += defect
         g["count"] += 1
+    if unreadable:
+        detail = "，".join(f"{k} {v} 行" for k, v in sorted(unreadable.items()))
+        raise UnreadableQuantity("报工数量读不出来（不当 0，整批不推）：" + detail)
     rows = []
     for (date, code, name, process, unit), g in sorted(groups.items()):
         rows.append({"reportDate": date, "productCode": code, "productName": name, "processName": process,
@@ -157,20 +184,28 @@ def build_request(config: dict, cycle: dict, payload: dict) -> dict:
     rows = project_report_output(payload)
     if len(rows) > MAX_ROWS:
         raise SystemExit(f"汇总后 {len(rows)} 行，超过服务端上限 {MAX_ROWS}")
-    return {
+    body = {
         "system": SYSTEM,
         "sourceOrgId": str(config["source_factory_id"]),
         "collectedAt": finished.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "collectorRunId": str(cycle["id"])[:80],
         "datasets": {DATASET: rows},
     }
+    size = len(encode_body(body))
+    if size > MAX_BODY_BYTES:
+        raise SystemExit(f"请求体 {size} 字节，超过服务端上限 {MAX_BODY_BYTES}（{len(rows)} 行）")
+    return body
+
+
+def encode_body(body: dict) -> bytes:
+    return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
 
 def post(endpoint: str, token: str, body: dict, timeout: float = 60) -> tuple[int, dict]:
     url = endpoint.rstrip("/") + PUSH_PATH
     if not url.startswith("https://") and not url.startswith("http://localhost") and not url.startswith("http://127.0.0.1"):
         raise SystemExit("只允许推到 https，或本机 http://localhost / 127.0.0.1（本地测试）")
-    req = urllib.request.Request(url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), method="POST",
+    req = urllib.request.Request(url, data=encode_body(body), method="POST",
                                  headers={"Content-Type": "application/json; charset=utf-8", TOKEN_HEADER: token})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:

@@ -168,6 +168,14 @@ function base(factoryId: string): string {
   return `/api/platform/factories/${encodeURIComponent(factoryId)}/integrations`;
 }
 
+/**
+ * 暂停授权的确认文案。暂停 = 作废推送凭证（后端清空令牌哈希，审查中1）：
+ * 重新授权后旧凭证不会复活，必须重新签发并在本机重新 set-token。
+ */
+export function suspendConfirmMessage(factoryId: string, label: string): string {
+  return `暂停后，${factoryId} 的「${label}」对照列与外部软件页立即不再显示，推送会被拒收，当前推送凭证同时作废。重新授权需重新签发凭证，并在本机重新保存（set-token）。`;
+}
+
 export function getPlatformIntegrations(factoryId: string): Promise<ApiResponse<PlatformIntegrationRow[]>> {
   return adminGet<PlatformIntegrationRow[]>(base(factoryId), ABS);
 }

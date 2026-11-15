@@ -50,7 +50,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-@Import({ExternalIntegrationService.class, ExternalIntegrationJpaContractTest.Config.class})
+@Import({ExternalIntegrationService.class, com.cretas.aims.service.unit.impl.UnitContractServiceImpl.class,
+        ExternalIntegrationJpaContractTest.Config.class})
 class ExternalIntegrationJpaContractTest {
 
     static final String LSM = "F-EXT-LSM";
@@ -187,13 +188,47 @@ class ExternalIntegrationJpaContractTest {
 
         service.upsert(LSM, "blacklake", new ExternalIntegrationService.Update("SUSPENDED", ORG, null), PLATFORM);
         em.flush();
+        // 暂停同时作废凭证 (审查中1): 旧凭证 = 不认识 = 401
         assertThatThrownBy(() -> service.push(token, request("2026-11-15T08:01:00+08:00", rows)))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(401);
+        // 暂停期间签发的凭证: 认识, 但授权行不是 ACTIVE → 403
+        String issuedWhileSuspended = service.issuePushToken(LSM, "blacklake", PLATFORM).token();
+        em.flush();
+        assertThatThrownBy(() -> service.push(issuedWhileSuspended, request("2026-11-15T08:01:00+08:00", rows)))
                 .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(403);
         // 暂停后工厂端不再出现
         assertThat(service.factoryView(LSM)).isEmpty();
         assertThat(service.featureConfigView(LSM)).isEmpty();
         assertThatThrownBy(() -> service.reportComparison(LSM, "blacklake")).isInstanceOf(BusinessException.class);
         assertThat(snapshots.findAll()).isEmpty();
+    }
+
+    /**
+     * 审查中1: 暂停 = 撤销凭证。暂停后再授权, 旧凭证必须是 401 (不认识), 不是复活;
+     * 平台视图显示「没有凭证」, 重新签发的新凭证才能推。
+     */
+    @Test
+    void suspendingRevokesTheTokenSoReauthorizingDoesNotReviveIt() {
+        String old = authorize(LSM);
+        service.upsert(LSM, "blacklake", new ExternalIntegrationService.Update("SUSPENDED", ORG, null), PLATFORM);
+        em.flush();
+        em.clear();
+        FactoryExternalIntegration suspended = integrations.findByFactoryIdAndSystem(LSM, "blacklake").orElseThrow();
+        assertThat(suspended.getPushTokenSha256()).isNull();
+        assertThat(suspended.getPushTokenIssuedAt()).isNull();
+
+        service.upsert(LSM, "blacklake", new ExternalIntegrationService.Update("ACTIVE", ORG, "恢复"), PLATFORM);
+        em.flush();
+        em.clear();
+        var rows = List.of(report("2026-11-14", "牛肉", "腌制", "1"));
+        assertThatThrownBy(() -> service.push(old, request("2026-11-15T08:01:00+08:00", rows)))
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(401);
+        assertThat(service.platformView(LSM)).singleElement()
+                .satisfies(r -> assertThat(r.hasPushToken()).isFalse());
+        assertThat(snapshots.findAll()).isEmpty();
+
+        String fresh = service.issuePushToken(LSM, "blacklake", PLATFORM).token();
+        assertThat(service.push(fresh, request("2026-11-15T08:01:00+08:00", rows)).factoryId()).isEqualTo(LSM);
     }
 
     @Test
@@ -240,7 +275,9 @@ class ExternalIntegrationJpaContractTest {
         service.push(token, request("2026-11-15T08:01:00+08:00", List.of(
                 report("2026-11-14", "烟熏牛肉", "腌制", "100.000"),
                 report("2026-11-14", "烟熏牛肉", "烟熏", "80.000"),
-                report("2026-11-13", "羊排", "腌制", "50"))));
+                report("2026-11-13", "羊排", "腌制", "50"),
+                withUnit(report("2026-11-11", "鸡翅", "腌制", "30"), "公斤"),
+                withUnit(report("2026-11-10", "鸡翅", "腌制", "30"), "箱"))));
 
         WorkProcess pickle = processes.save(WorkProcess.builder().id("WP-EXT-1").factoryId(LSM).processName("腌制")
                 .defaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED).build());
@@ -256,6 +293,8 @@ class ExternalIntegrationJpaContractTest {
         yieldReport(LSM, t2, "2026-11-14", "烟熏牛肉", "70", "kg");       // 差 -10 → 有差异
         yieldReport(LSM, t1, "2026-11-12", "鸡腿", "5", "kg");            // 只有 Cretas
         yieldReport(F6, t3, "2026-11-13", "羊排", "50", "kg");            // 别厂: 不算
+        yieldReport(LSM, t1, "2026-11-11", "鸡翅", "30", "kg");           // 公斤 ≡ kg (单位契约) → 一致
+        yieldReport(LSM, t1, "2026-11-10", "鸡翅", "30", "kg");           // 箱 ≠ kg → 单位不同, 不算差
         em.flush();
         em.clear();
 
@@ -265,7 +304,15 @@ class ExternalIntegrationJpaContractTest {
         assertThat(c.from()).isEqualTo(LocalDate.parse("2026-11-01"));
         Map<String, ExternalIntegrationService.ComparisonRow> byKey = new HashMap<>();
         c.rows().forEach(r -> byKey.put(r.reportDate() + "/" + r.productName() + "/" + r.processName(), r));
-        assertThat(byKey).hasSize(4);
+        assertThat(byKey).hasSize(6);
+        assertThat(byKey.get("2026-11-11/鸡翅/腌制")).satisfies(r -> {
+            assertThat(r.state()).isEqualTo(ExternalIntegrationService.MatchState.MATCH);
+            assertThat(r.difference()).isEqualByComparingTo("0");
+        });
+        assertThat(byKey.get("2026-11-10/鸡翅/腌制")).satisfies(r -> {
+            assertThat(r.state()).isEqualTo(ExternalIntegrationService.MatchState.UNIT_MISMATCH);
+            assertThat(r.difference()).isNull();
+        });
         assertThat(byKey.get("2026-11-14/烟熏牛肉/腌制").state()).isEqualTo(ExternalIntegrationService.MatchState.MATCH);
         assertThat(byKey.get("2026-11-14/烟熏牛肉/烟熏")).satisfies(r -> {
             assertThat(r.state()).isEqualTo(ExternalIntegrationService.MatchState.DIFF);
@@ -274,6 +321,11 @@ class ExternalIntegrationJpaContractTest {
         assertThat(byKey.get("2026-11-13/羊排/腌制").state()).isEqualTo(ExternalIntegrationService.MatchState.EXTERNAL_ONLY);
         assertThat(byKey.get("2026-11-13/羊排/腌制").cretasGoodQty()).isNull();
         assertThat(byKey.get("2026-11-12/鸡腿/腌制").state()).isEqualTo(ExternalIntegrationService.MatchState.CRETAS_ONLY);
+    }
+
+    private static Map<String, Object> withUnit(Map<String, Object> row, String unit) {
+        row.put("unit", unit);
+        return row;
     }
 
     private Long task(String factoryId, String processId) {

@@ -8,6 +8,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   getPlatformIntegrations,
   issuePlatformPushToken,
+  suspendConfirmMessage,
   updatePlatformIntegration,
   type PlatformIntegrationRow,
 } from '@/api/externalIntegrations';
@@ -48,7 +49,7 @@ async function save(row: PlatformIntegrationRow, status: 'ACTIVE' | 'SUSPENDED')
   }
   if (status === 'SUSPENDED') {
     try {
-      await ElMessageBox.confirm(`暂停后，${props.factoryId} 的「${row.label}」对照列与外部软件页立即不再显示，推送也会被拒收。`, `暂停 ${row.label} 授权`, { type: 'warning' });
+      await ElMessageBox.confirm(suspendConfirmMessage(props.factoryId, row.label), `暂停 ${row.label} 授权`, { type: 'warning' });
     } catch { return; }
   }
   saving.value = true;
@@ -59,7 +60,10 @@ async function save(row: PlatformIntegrationRow, status: 'ACTIVE' | 'SUSPENDED')
     });
     if (!res.success) throw new Error(res.message || '保存失败');
     rows.value = res.data ?? rows.value;
-    ElMessage.success(status === 'ACTIVE' ? '已授权' : '已暂停');
+    if (status === 'SUSPENDED' && issued.value?.system === row.system) issued.value = null;
+    const after = rows.value.find((r) => r.system === row.system);
+    ElMessage.success(status === 'SUSPENDED' ? '已暂停，推送凭证已作废'
+      : after && !after.hasPushToken ? '已授权；还没有推送凭证，请签发后在本机保存' : '已授权');
   } catch (e) {
     ElMessage({ type: 'error', message: e instanceof Error ? e.message : '保存失败', duration: 0, showClose: true });
   } finally {

@@ -3,6 +3,7 @@ import {
   externalHiddenMenuPaths,
   integrationsFromFeatureConfig,
   isExternalAuthorized,
+  suspendConfirmMessage,
 } from '../externalIntegrations';
 
 const row = (integrations: unknown) => ({ moduleId: 'integrations', readOnly: true, integrations, config: { integrations } });
@@ -38,5 +39,12 @@ describe('外部软件接口授权（P10，feature-config 只读行）', () => {
   it('RN 只保留 config 时也读得到', () => {
     const auth = integrationsFromFeatureConfig([{ moduleId: 'integrations', config: { integrations: { blacklake: { authorized: true } } } }]);
     expect(isExternalAuthorized(auth, 'blacklake')).toBe(true);
+  });
+
+  it('暂停确认文案写明凭证同时作废、重新授权需重新签发', () => {
+    const text = suspendConfirmMessage('F-LSM', '黑湖');
+    expect(text).toContain('F-LSM');
+    expect(text).toContain('当前推送凭证同时作废');
+    expect(text).toContain('重新授权需重新签发凭证');
   });
 });

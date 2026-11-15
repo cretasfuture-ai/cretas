@@ -12,6 +12,7 @@ import com.cretas.aims.repository.integration.ExternalSourceSnapshotRepository;
 import com.cretas.aims.repository.integration.FactoryExternalIntegrationRepository;
 import com.cretas.aims.repository.workprocess.WorkProcessTaskRepository;
 import com.cretas.aims.security.ActorRef;
+import com.cretas.aims.service.unit.UnitContractService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -75,6 +76,12 @@ public class ExternalIntegrationService {
     public static final String NOT_CONNECTED = "外部数据未接入（找平台）";
     public static final String NOT_AUTHORIZED = "本厂没有开通这个外部软件的接口授权";
     static final int MAX_ROWS_PER_DATASET = 5000;
+    /**
+     * 推送请求体上限 (字节)。低于 nginx 默认 client_max_body_size 1m, 保证超限时由 Java 给出明确的 413,
+     * 而不是在网关被截; 推送脚本用同一个数先自查 (push_blacklake_snapshot.MAX_BODY_BYTES)。
+     * 行数上限与它取先到者: 按每行约 200-250 字节估, 4000-5000 行之间会先碰到字节上限 (现网约 700 行 / 160KB)。
+     */
+    public static final int MAX_PUSH_BODY_BYTES = 1_000_000;
     static final int COMPARISON_DAYS = 14;
     static final int MAX_CRETAS_SCAN = 5000;
     static final Duration MAX_FUTURE_SKEW = Duration.ofMinutes(10);
@@ -90,6 +97,7 @@ public class ExternalIntegrationService {
     private final WorkProcessTaskRepository tasks;
     private final WorkProcessRepository processes;
     private final ObjectMapper objectMapper;
+    private final UnitContractService units;
     Clock clock = Clock.systemUTC();
 
     public ExternalIntegrationService(FactoryExternalIntegrationRepository integrations,
@@ -97,13 +105,15 @@ public class ExternalIntegrationService {
                                       ProductionReportRepository reports,
                                       WorkProcessTaskRepository tasks,
                                       WorkProcessRepository processes,
-                                      ObjectMapper objectMapper) {
+                                      ObjectMapper objectMapper,
+                                      UnitContractService units) {
         this.integrations = integrations;
         this.snapshots = snapshots;
         this.reports = reports;
         this.tasks = tasks;
         this.processes = processes;
         this.objectMapper = objectMapper;
+        this.units = units;
     }
 
     // ------------------------------------------------------------------ 工厂端只读
@@ -251,7 +261,8 @@ public class ExternalIntegrationService {
             rows.add(new ComparisonRow(any.date, any.product, any.process,
                     e == null ? null : e.qty, e == null ? null : e.unit(), e == null ? null : e.count,
                     c == null ? null : c.qty, c == null ? null : c.unit(), c == null ? null : c.count,
-                    e != null && c != null && sameUnit(e, c) ? c.qty.subtract(e.qty) : null, state(e, c)));
+                    e != null && c != null && sameUnit(factoryId, e, c) ? c.qty.subtract(e.qty) : null,
+                    state(factoryId, e, c)));
         }
         return new Comparison(row.getSystem(), system.label(), true, null, beijingMinute(s.getCollectedAt()),
                 isStale(s.getCollectedAt()), from, to, page.getTotalElements() > MAX_CRETAS_SCAN, rows);
@@ -301,14 +312,16 @@ public class ExternalIntegrationService {
         }
     }
 
-    private static boolean sameUnit(Side e, Side c) {
-        return e.units.size() == 1 && e.units.equals(c.units);
+    /** 两侧各只有一个单位, 且单位契约判为同一单位 (KG / kg / 公斤 按契约归一, 不比字符串)。 */
+    private boolean sameUnit(String factoryId, Side e, Side c) {
+        return e.units.size() == 1 && c.units.size() == 1
+                && units.areEquivalent(factoryId, e.units.iterator().next(), c.units.iterator().next());
     }
 
-    private static MatchState state(Side e, Side c) {
+    private MatchState state(String factoryId, Side e, Side c) {
         if (e == null) return MatchState.CRETAS_ONLY;
         if (c == null) return MatchState.EXTERNAL_ONLY;
-        if (!sameUnit(e, c)) return MatchState.UNIT_MISMATCH;
+        if (!sameUnit(factoryId, e, c)) return MatchState.UNIT_MISMATCH;
         BigDecimal tolerance = e.qty.abs().multiply(new BigDecimal("0.005")).max(new BigDecimal("0.01"));
         return c.qty.subtract(e.qty).abs().compareTo(tolerance) <= 0 ? MatchState.MATCH : MatchState.DIFF;
     }
@@ -397,6 +410,12 @@ public class ExternalIntegrationService {
             row.setAuthorizedAt(now);
             row.setAuthorizedBy(actor.id());
         }
+        if (FactoryExternalIntegration.SUSPENDED.equals(body.status())) {
+            // 暂停 = 撤销推送凭证 (审查中1): 只改状态的话, 重新授权会让泄露的旧凭证复活。
+            // 重新授权后必须重新签发凭证。
+            row.setPushTokenSha256(null);
+            row.setPushTokenIssuedAt(null);
+        }
         row.setStatus(body.status());
         row.setSourceOrgId(sourceOrgId);
         row.setNote(note);
@@ -473,12 +492,15 @@ public class ExternalIntegrationService {
                     row.getFactoryId(), row.getSystem(), dataset.code(), collectedAt);
             if (existing.isPresent()) {
                 if (!existing.get().getPayloadSha256().equals(sha)) {
-                    throw new BusinessException(409, "同一采集时点已收过内容不同的快照（" + dataset.code() + "），拒收");
+                    throw new BusinessException(409, "同一采集时点已收过内容不同的快照（" + dataset.code() + "），拒收")
+                            .withHint("同一采集时点的内容只收一次；请用新的采集轮重新推送");
                 }
                 out.add(new PushedDataset(dataset.code(), rows.size(), true));
                 continue;
             }
-            snapshots.save(ExternalSourceSnapshot.builder().factoryId(row.getFactoryId()).system(row.getSystem())
+            // saveAndFlush: 并发推送同一时点时唯一约束在这里就触发 (DataIntegrityViolationException),
+            // 由 ExternalSnapshotPushController 在事务外重试一次, 第二次按已存在的行判幂等 / 409。
+            snapshots.saveAndFlush(ExternalSourceSnapshot.builder().factoryId(row.getFactoryId()).system(row.getSystem())
                     .dataset(dataset.code()).collectedAt(collectedAt).receivedAt(receivedAt).rowCount(rows.size())
                     .payload(payload).payloadSha256(sha).collectorRunId(runId).build());
             out.add(new PushedDataset(dataset.code(), rows.size(), false));
