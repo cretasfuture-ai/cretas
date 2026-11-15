@@ -7,7 +7,7 @@
 
 ## 在飞任务
 
-- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `review` — Owner /root — Base `5cd15a0810`（最初1e0e24f980）— 统一9工作台为数字专员；锁Web岗位/物流页、共享组件/router/menu/导航snapshot/permission身份导出及测试。271项目标+物流追加16项通过；候选Web-only，补最终tsc/build/终审/CI及线上UI。
+- `UNIFY-DIGITAL-SPECIALISTS-20261115` — `in-progress` — Owner /root — Base `9c67199366`（最初1e0e24f980）— Web数字专员发布窗口：9工作台/聊天气泡与闭会话修复；岗位/物流/共享导航scope。目标271+物流16+会话45+导航40测试及TSC已过，整合最新Nuxt迁移后重构建/CI/上线核对；窗口内不合无关PR，Web-only。
 
 - `UNIFY-SPECIALIST-FOUR-20261115` — `review` — Owner /root/wholesale_components — Base `1e0e24f980` — 4个Workdesk页及4个DigitalSpecialist测试已完成，20测试通过；锁维持至父任务归档。
 
