@@ -86,6 +86,10 @@ public class ToolDispatchService {
     @Autowired(required = false)
     private PreviewTokenService previewTokenService;
 
+    /** LLM 抽出的客户 / 产品 / 员工等名字到本厂主数据落地 (LlmParameterGrounding 规则 3); 没装配时不做这一条。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver factoryEntityResolver;
+
     /** 预览追问开参数收集会话用 (见 {@link #openPreviewQuestionSession}); 没有它时预览追问照旧、只是没人接答案。 */
     @Autowired(required = false)
     private ConversationService conversationService;
@@ -2440,7 +2444,8 @@ public class ToolDispatchService {
         }
         Object userInput = previous.get("userInput");
         LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
-                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema());
+                changed, previous, userInput instanceof String s ? s : null, tool.getParametersSchema(),
+                LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId));
         params.clear();
         params.putAll(corrected);
         params.putAll(grounded.accepted());
@@ -2627,7 +2632,8 @@ public class ToolDispatchService {
                             // LLM 给的数字 / 备注必须在用户原话或上下文里落得了地, 否则丢掉 (参数保持缺失,
                             // 必填的由工具走 NEED_MORE_INFO 追问)。规则只有一份, 见 LlmParameterGrounding。
                             LlmParameterGrounding.Result grounded = LlmParameterGrounding.ground(
-                                    raw, existingParams, userInput, parametersSchema);
+                                    raw, existingParams, userInput, parametersSchema,
+                                    LlmParameterGrounding.EntityScope.of(factoryEntityResolver, factoryId));
                             extractedParams.putAll(grounded.accepted());
                             if (!grounded.dropped().isEmpty()) {
                                 log.info("LLM 参数未落地, 已丢弃: tool={}, dropped={}",

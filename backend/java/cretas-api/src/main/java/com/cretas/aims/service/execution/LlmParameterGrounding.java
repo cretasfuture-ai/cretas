@@ -1,5 +1,8 @@
 package com.cretas.aims.service.execution;
 
+import com.cretas.aims.service.entity.EntityKind;
+import com.cretas.aims.service.entity.FactoryEntityResolver;
+
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -31,6 +34,10 @@ import java.util.regex.Pattern;
  *   <li><b>自由文本</b> (备注 / 原因 / 说明 / 描述 …, 按参数名判定, 见 {@link #isFreeTextParam};
  *       带 enum 的不算): 只收用户原话 (或上下文里的字符串) 的子串 —— 忽略空白与标点;
  *       纯数字不算备注。</li>
+ *   <li><b>实体名</b> (客户 / 供应商 / 产品 / 物料 / 员工的名字参数, 参数名表见 {@link EntityKind#forParameter};
+ *       只在调用方给了 {@link EntityScope} 时): 交给 {@link FactoryEntityResolver} 到本厂主数据规范化后精确匹配 ——
+ *       唯一 → 收下并换成主数据里的名字; 多个 → 原样收 (工具按口径规则 8 全部列出); 没有 → 只有用户原话 / 上下文里
+ *       出现过才收 (工具会说「没找到」), 否则是 LLM 编出来的名字, 丢掉。⛔ 不做包含匹配、不按语义猜。</li>
  * </ol>
  * 没落地的参数被丢掉 (不是改成别的值), 于是它保持「缺」—— 必填的会由工具走正常的
  * NEED_MORE_INFO 追问。
@@ -48,6 +55,17 @@ public final class LlmParameterGrounding {
 
     /** accepted: 收下的参数 (数字已规整成 Number); dropped: 丢掉的参数名 → 原因 (不含值, 可直接进日志)。 */
     public record Result(Map<String, Object> accepted, Map<String, String> dropped) { }
+
+    /**
+     * 实体名落地的范围: 哪个解析器、哪个工厂 (可信上下文里的 factoryId)。任一为空 = 不做实体名这一条
+     * (切片测试 / 没装配解析器时与以前一样)。
+     */
+    public record EntityScope(FactoryEntityResolver resolver, String factoryId) {
+        public static EntityScope of(FactoryEntityResolver resolver, String factoryId) {
+            return resolver == null || factoryId == null || factoryId.isBlank()
+                    ? null : new EntityScope(resolver, factoryId);
+        }
+    }
 
     /** 参数名 (小写) 以这些结尾就算自由文本: notes / rejectionReason / ackRemark / description …… */
     public static final List<String> FREE_TEXT_NAME_SUFFIXES = List.of(
@@ -84,9 +102,15 @@ public final class LlmParameterGrounding {
      * @param userInput      用户这一轮说的话 (LLM 看到的那句)
      * @param parametersSchema 工具的 JSON schema (取 properties 的 type / enum 与 required 顺序)
      */
-    @SuppressWarnings("unchecked")
     public static Result ground(Map<String, Object> llmValues, Map<String, Object> existingParams,
                          String userInput, Map<String, Object> parametersSchema) {
+        return ground(llmValues, existingParams, userInput, parametersSchema, null);
+    }
+
+    /** 同 {@link #ground(Map, Map, String, Map)}, 另按 {@code entities} 做实体名落地 (规则 3)。 */
+    @SuppressWarnings("unchecked")
+    public static Result ground(Map<String, Object> llmValues, Map<String, Object> existingParams,
+                         String userInput, Map<String, Object> parametersSchema, EntityScope entities) {
         Map<String, Object> accepted = new LinkedHashMap<>();
         Map<String, String> dropped = new LinkedHashMap<>();
         if (llmValues == null || llmValues.isEmpty()) {
@@ -122,6 +146,11 @@ public final class LlmParameterGrounding {
 
             if (value == null || value instanceof Boolean || value instanceof Map || value instanceof Collection) {
                 accepted.put(key, value);
+                continue;
+            }
+            if (entities != null && !hasEnum && value instanceof String name && !name.isBlank()
+                    && !value.equals(existing.get(key)) && EntityKind.forParameter(key).isPresent()) {
+                groundEntity(key, name, EntityKind.forParameter(key).get(), entities, textCorpus, accepted, dropped);
                 continue;
             }
             if (!numericType && !hasEnum && isFreeTextParam(key)
@@ -178,6 +207,30 @@ public final class LlmParameterGrounding {
         }
         Map<String, Object> values = llmValues == null ? Map.of() : new LinkedHashMap<>(llmValues);
         return ground(values, existingParams, userInput, Map.of("properties", properties));
+    }
+
+    /** 规则 3: 实体名到本厂主数据精确匹配 (见类注释)。解析器出错时原样收 (与没有这条规则时一样), 不因查库失败丢参数。 */
+    private static void groundEntity(String key, String name, EntityKind kind, EntityScope entities,
+                                     String textCorpus, Map<String, Object> accepted, Map<String, String> dropped) {
+        FactoryEntityResolver.Resolution resolution;
+        try {
+            resolution = entities.resolver().resolve(entities.factoryId(), kind, name);
+        } catch (RuntimeException e) {
+            accepted.put(key, name);
+            return;
+        }
+        switch (resolution.status()) {
+            case UNIQUE -> accepted.put(key, resolution.matches().get(0).name());
+            case MULTIPLE -> accepted.put(key, name);
+            case NONE -> {
+                String norm = normalizeText(name);
+                if (!norm.isEmpty() && textCorpus.contains(norm)) {
+                    accepted.put(key, name);
+                } else {
+                    dropped.put(key, "本厂没有这个" + kind.label + ", 用户原话里也没有");
+                }
+            }
+        }
     }
 
     /** 参数名是否算自由文本业务字段 (备注 / 原因 / 说明 / 描述 …)。 */

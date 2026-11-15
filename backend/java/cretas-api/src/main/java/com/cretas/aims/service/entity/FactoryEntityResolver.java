@@ -36,6 +36,10 @@ import java.util.regex.Pattern;
  * ({@code FlywheelTextProtector} 用 {@link #redactionNames} + {@link #surfaceForms})。</p>
  *
  * <p>🔴 每次解析都必须带 factoryId; 仓储查询按 factory_id 取候选, 别的工厂的同名对象不会出现。</p>
+ *
+ * <p>🔴 解析本身不判权限: 把解析出的对象 (尤其员工的部门 / 工号、客户的地址) 给到用户之前, 调用方自己判
+ * (考勤按 hr:read, 见 AttendanceSubject; CRM 按 ToolRbacEnforcer 的客户四码)。新的注入方须在
+ * {@code FactoryEntityResolverWiringSourceGateTest#REGISTERED_CONSUMERS} 登记。</p>
  */
 @Component
 public class FactoryEntityResolver {
