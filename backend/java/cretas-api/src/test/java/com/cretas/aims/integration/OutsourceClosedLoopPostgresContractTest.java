@@ -671,6 +671,122 @@ class OutsourceClosedLoopPostgresContractTest {
                 + "and client_request_id = 'REQ-RACE'", Integer.class, orderA)).isEqualTo(1);
     }
 
+    // ==================== 8/9. 返工件再退的加工费 (#1723 低4, Steve 定口径 B) ====================
+
+    @Test
+    @Order(8)
+    void reworkReturnAfterUpstreamRejectedIsCharged() {
+        String[] ol = receivedTen("OS-L4A", "L4A");
+        String orderId = ol[0], lineId = ol[1], fg = ol[2];
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4A-GR-1", null, fg,
+                new BigDecimal("4"), "封口不良"), USER, null);
+        String upstream = adjOf(lineId, fg);
+        arAp.rejectAdjustment(F, upstream, APPROVER, "PG 驳回: 委外厂不认");
+        assertThat(goodsReturnAdjCount(lineId)).as("前提: 只有上游那一笔 (已驳回), 首次退货之后没有补冲减").isEqualTo(1);
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-L4A-RW", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        String rework = reworkOf(lineId, fg);
+
+        // 规则 2: 上游冲减已驳回 ⇒ 再退返工件按件数冲 4 × 1.00, 挂新的待审冲减
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4A-GR-2", null, rework,
+                new BigDecimal("4"), "返工仍不良"), USER, null);
+        assertThat(goodsReturnAdjCount(lineId)).as("[规则2] 新挂一笔冲减").isEqualTo(2);
+        String second = adjOf(lineId, rework);
+        assertThat(jdbc.queryForObject("select amount from ar_ap_transactions where id = ?", BigDecimal.class, second))
+                .isEqualByComparingTo("-4.00");
+        assertThat(detailFee(orderId)).as("[规则2] 待审不扣").isEqualByComparingTo("10.00");
+        arAp.approveAdjustment(F, second, APPROVER, null);
+        assertThat(detailFee(orderId)).as("[规则2] 批准后 = 10 - 4 (只冲一次)").isEqualByComparingTo("6.00");
+    }
+
+    @Test
+    @Order(9)
+    void upstreamRejectedAfterReworkReturnGetsCompensatedOnce() {
+        String[] ol = receivedTen("OS-L4B", "L4B");
+        String orderId = ol[0], lineId = ol[1], fg = ol[2];
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4B-GR-1", null, fg,
+                new BigDecimal("4"), "封口不良"), USER, null);
+        String upstream = adjOf(lineId, fg);
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-L4B-RW-1", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        String rework1 = reworkOf(lineId, fg);
+
+        // 规则 1 (待审): 上游还在待审 ⇒ 再退返工件不冲
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4B-GR-2", null, rework1,
+                new BigDecimal("4"), "返工仍不良"), USER, null);
+        assertThat(goodsReturnAdjCount(lineId)).as("[规则1 待审] 不新挂冲减").isEqualTo(1);
+        assertThat(detailFee(orderId)).isEqualByComparingTo("10.00");
+
+        // 规则 3: 之后上游被驳回 ⇒ 驳回那一刻给这次再退补一笔等额待审冲减
+        arAp.rejectAdjustment(F, upstream, APPROVER, "PG 驳回: 委外厂不认");
+        assertThat(goodsReturnAdjCount(lineId)).as("[规则3] 补一笔").isEqualTo(2);
+        Map<String, Object> comp = jdbc.queryForMap("select m.quantity, m.amount, t.amount as adj_amount, "
+                + "t.approval_status from outsource_movements m join ar_ap_transactions t on t.id = m.ap_transaction_id "
+                + "where m.line_id = ? and m.parent_movement_id is not null and m.reason like 'UPSTREAM_REJECTED:%'", lineId);
+        assertThat((BigDecimal) comp.get("quantity")).isEqualByComparingTo("4");
+        assertThat((BigDecimal) comp.get("adj_amount")).isEqualByComparingTo("-4.00");
+        assertThat(comp.get("approval_status")).isEqualTo("PENDING");
+        assertThat(jdbc.queryForObject("select rework_pending_quantity from outsource_order_lines where id = ?",
+                BigDecimal.class, lineId)).as("补冲减不计入返工待收").isEqualByComparingTo("4");
+
+        // 再下游: 返工再收、再退 ⇒ 靠的是这笔补冲减 (待审), 不重复补也不重复冲
+        outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-L4B-RW-2", null, new BigDecimal("4"),
+                BigDecimal.ZERO, null), USER);
+        String rework2 = reworkOf(lineId, rework1);
+        outsource.returnGoods(F, orderId, lineId, new GoodsReturnRequest("REQ-L4B-GR-3", null, rework2,
+                new BigDecimal("4"), "还是不良"), USER, null);
+        assertThat(goodsReturnAdjCount(lineId)).as("[规则1 靠补冲减] 不新挂").isEqualTo(2);
+
+        String compAdj = jdbc.queryForObject("select ap_transaction_id from outsource_movements where line_id = ? "
+                + "and reason like 'UPSTREAM_REJECTED:%'", String.class, lineId);
+        // 补冲减的提交人 = 驳回上游的人 (真实操作者), 四眼: 只能由另一个人批准
+        assertThat(jdbc.queryForObject("select operated_by from ar_ap_transactions where id = ?", Long.class, compAdj))
+                .isEqualTo(APPROVER);
+        assertThatThrownBy(() -> arAp.approveAdjustment(F, compAdj, APPROVER, null))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("4 眼");
+        arAp.approveAdjustment(F, compAdj, USER, null);
+        assertThat(detailFee(orderId)).as("[规则3] 最终 = 10 - 4, 与先驳回后再退一致").isEqualByComparingTo("6.00");
+        assertThat(summaryOf(orderId).feeAmount()).isEqualByComparingTo("6.00");
+    }
+
+    /** 新单 10 包 × 1.00, 发 10kg 原料并收合格 10 ⇒ [orderId, lineId, 合格成品批次]。 */
+    private String[] receivedTen(String rawBatch, String tag) {
+        OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null, List.of(
+                new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
+                        new BigDecimal("10"), new BigDecimal("1.00"), null))), USER);
+        String orderId = d.id();
+        String lineId = d.lines().get(0).id();
+        outsource.release(F, orderId, USER);
+        outsource.issue(F, orderId, lineId, new IssueRequest("REQ-" + tag + "-ISSUE", null,
+                List.of(new BatchQuantity(rawBatch, new BigDecimal("10")))), USER);
+        String os = jdbc.queryForObject("select id from material_batches where source_doc_type = 'OUTSOURCE_ISSUE' "
+                + "and source_doc_id = ?", String.class, lineId);
+        OrderDetail rc = outsource.receive(F, orderId, lineId, new ReceiveRequest("REQ-" + tag + "-RC", null,
+                new BigDecimal("10"), BigDecimal.ZERO, List.of(new BatchQuantity(os, new BigDecimal("10")))), USER);
+        String fg = rc.movements().stream().filter(m -> "RECEIVE".equals(m.movementType()) && m.parentMovementId() == null)
+                .map(MovementView::targetBatchId).findFirst().orElseThrow();
+        assertThat(detailFee(orderId)).isEqualByComparingTo("10.00");
+        return new String[]{orderId, lineId, fg};
+    }
+
+    private String adjOf(String lineId, String returnedBatchId) {
+        return jdbc.queryForObject("select ap_transaction_id from outsource_movements where line_id = ? "
+                + "and movement_type = 'GOODS_RETURN' and parent_movement_id is null and source_batch_id = ?",
+                String.class, lineId, returnedBatchId);
+    }
+
+    private String reworkOf(String lineId, String returnedBatchId) {
+        return jdbc.queryForObject("select target_batch_id from outsource_movements where line_id = ? "
+                + "and movement_type = 'CONSUME' and reason = 'REWORK' and source_batch_id = ?",
+                String.class, lineId, returnedBatchId);
+    }
+
+    private int goodsReturnAdjCount(String lineId) {
+        return jdbc.queryForObject("select count(*) from ar_ap_transactions t join outsource_movements m "
+                + "on m.ap_transaction_id = t.id where m.line_id = ? and t.source_type = 'OUTSOURCE_GOODS_RETURN'",
+                Integer.class, lineId);
+    }
+
     private String releasedSingleLineOrder() {
         OrderDetail d = outsource.create(F, new CreateOrderRequest("OS-SUP", null, null, List.of(
                 new CreateLineRequest("WHOLE", null, null, "FINISHED", "OS-FIN", "包",
@@ -712,6 +828,8 @@ class OutsourceClosedLoopPostgresContractTest {
         batch("OS-ML", "MT-RAW", "10", "kg", "1.00");
         batch("OS-RACE-A", "MT-RAW", "5", "kg", "1.00");
         batch("OS-RACE-B", "MT-RAW", "5", "kg", "1.00");
+        batch("OS-L4A", "MT-RAW", "10", "kg", "1.00");
+        batch("OS-L4B", "MT-RAW", "10", "kg", "1.00");
         jdbc.update("update material_batches set ownership = 'CUSTOMER_OWNED', owner_customer_id = 'CUST-OS-1' "
                 + "where id = 'OS-CRAW'");
 

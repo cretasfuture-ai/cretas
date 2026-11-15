@@ -1745,6 +1745,8 @@ class FactoryStocktakeServiceImplTest {
         FactoryStocktakeItem item = new FactoryStocktakeItem();
         item.setId(UUID.randomUUID().toString());
         item.setMaterialBatchId("OS-1");
+        item.setRawMaterialTypeId("TYPE-OS-1");
+        item.setQuantityUnit("kg");
         item.setSystemQty(new BigDecimal("10.0000"));
         item.setActualQty(new BigDecimal("7.0000"));
         item.setDifferenceQty(new BigDecimal("-3.0000"));
@@ -1762,6 +1764,7 @@ class FactoryStocktakeServiceImplTest {
 
         assertThatThrownBy(() -> service.apply(stocktake.getId(), FACTORY_ID, USER_ID))
                 .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("委外厂手里的料")
                 .satisfies(ex -> assertThat(((BusinessException) ex).getCode()).isEqualTo(409));
         assertThat(os.getReceiptQuantity()).isEqualByComparingTo("10");
         verify(adjustmentRepo, never()).save(any());

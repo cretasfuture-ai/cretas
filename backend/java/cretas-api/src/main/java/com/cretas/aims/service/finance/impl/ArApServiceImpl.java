@@ -1041,6 +1041,13 @@ public class ArApServiceImpl implements ArApService {
                 .orElseThrow(() -> new ResourceNotFoundException("调整记录不存在: " + transactionId));
 
         rejectRefundReversalSource(txn.getSourceType());
+        // 委外退货冲减被驳回 ⇒ 委外侧给「当时靠这笔待审冲减没冲」的返工件再退补冲减 (#1723 低4 口径 B 规则 3)。
+        // 在加锁之前发: 订阅方先锁委外单再锁工厂, 与委外退货同序, 不死锁; 后面驳回失败则整事务回滚。
+        if (applicationEventPublisher != null
+                && txn.getApprovalStatus() == com.cretas.aims.entity.enums.ArApApprovalStatus.PENDING) {
+            applicationEventPublisher.publishEvent(new com.cretas.aims.event.ArApAdjustmentRejectingEvent(
+                    factoryId, txn.getId(), txn.getSourceType(), txn.getSourceId(), approvedBy));
+        }
         lockFactoryThenTransaction(factoryId, txn);
 
         rejectRefundReversalSource(txn.getSourceType());
