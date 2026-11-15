@@ -186,8 +186,13 @@ class ClarificationChoiceReplyEntryContractTest {
             when(accessModeFilter.isWriteIntent(any(AIIntentConfig.class))).thenReturn(false);
             FrontlineAiWriteGrantService grants = mock(FrontlineAiWriteGrantService.class);
             when(grants.denyReason(any(), any(), any(), any())).thenReturn(Optional.empty());
+            // 候选与执行用同一个工具注册表 (原来给候选的是一个空注册表: 写意图的工具「没注册」,
+            // #1747 L2 之后这种按钮不再出)。本测试不测权限: 工具判定链一律放行, 工具开关开着。
+            ToolPermissionChain allowAll = mock(ToolPermissionChain.class);
+            when(allowAll.denyReason(any(), any(), any(), any(), any())).thenReturn(Optional.empty());
+            when(toolRegistry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
             candidates = new ClarificationCandidateService(configService, permissionGate, accessModeFilter,
-                    new WriteGuardService(), grants, mock(ToolRegistry.class));
+                    new WriteGuardService(), grants, toolRegistry, allowAll);
             when(configService.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
             for (String[] c : new String[][]{{WRITE, "完成工序", "PRODUCTION"}, {READ, "库存报表", "QUERY"}}) {
                 AIIntentConfig config = AIIntentConfig.builder().intentCode(c[0]).intentName(c[1]).intentCategory(c[2])

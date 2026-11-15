@@ -401,16 +401,24 @@ public class ClarificationCandidateService {
             String toolName = config.getToolName();
             if (toolRegistry != null && toolName != null && !toolName.isBlank()) {
                 tool = toolRegistry.getExecutor(toolName).orElse(null);
+                if (tool == null) {
+                    // #1747 遗留 L2: 配了工具名但没注册 ⇒ 执行期只会回「Tool 未注册」(buildNoToolResponse), 不出按钮
+                    return false;
+                }
             }
             if (tool != null) {
                 if (toolPermissionChain == null) {
+                    return false;
+                }
+                // #1747 遗留 M1 / L1: 工厂关掉的工具、供应商比价的身份门 —— 与执行期同一个判定
+                if (ToolExecutionAdmission.refusal(toolRegistry, tool, config, factoryId, userId).isPresent()) {
                     return false;
                 }
                 java.util.Map<String, Object> trusted = new HashMap<>();
                 TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
                 return toolPermissionChain.denyReason(tool, factoryId, userRole, config, trusted).isEmpty();
             }
-            // 只有 tool_name 为空才走显式 Skill (IntentExecutionOrchestrator 3.5); 配了但没注册的工具不在此列
+            // 只有 tool_name 为空才走显式 Skill (IntentExecutionOrchestrator 3.5); 配了但没注册的工具上面已不出
             if ((toolName == null || toolName.isBlank()) && !skillGateAllowed(config, factoryId, userId, userRole)) {
                 return false;
             }
@@ -441,15 +449,27 @@ public class ClarificationCandidateService {
         if (skill == null || !skill.isEnabled()) {
             return true;
         }
+        return skillPermissionRefusal(skill, factoryId, userId, userRole).isEmpty();
+    }
+
+    /**
+     * Skill 的权限判定只有这一份: 执行期 {@link com.cretas.aims.service.skill.SkillExecutor} 第 2a 步的预检
+     * (声明的工具 / DAG / 步骤; 受治理工具按网关准入; 库存分析按固定工作流真正会跑的工具)。
+     * 澄清候选 (无工具意图 → 显式 Skill) 与关键词 Skill 抢先 ({@link DynamicToolSelectionService#trySkillRoute})
+     * 都调这里 (#1747 遗留 L-b: 原来抢先自己按工具链判一遍, 与显式 Skill 的预检不是同一套)。
+     * 预检器缺失 ⇒ fail-closed。
+     */
+    public java.util.Optional<String> skillPermissionRefusal(com.cretas.aims.dto.skill.SkillDefinition skill,
+                                                             String factoryId, Long userId, String userRole) {
         if (skillExecutor == null) {
-            return false;
+            return java.util.Optional.of("Skill 权限预检不可用");
         }
         com.cretas.aims.dto.skill.SkillContext context = com.cretas.aims.dto.skill.SkillContext.builder()
                 .factoryId(factoryId)
-                .userId(String.valueOf(userId))
+                .userId(userId == null ? null : String.valueOf(userId))
                 .userRole(userRole)
                 .build();
-        return skillExecutor.permissionRefusal(skill, context).isEmpty();
+        return skillExecutor.permissionRefusal(skill, context);
     }
 
     private boolean permissionAllowed(AIIntentConfig config, String factoryId,

@@ -75,7 +75,8 @@ class ClarificationToolRbacParityContractTest {
 
     static {
         long id = 100;
-        for (String role : List.of("viewer", "sales_manager", "quality_manager", "factory_super_admin", "super_admin")) {
+        for (String role : List.of("viewer", "sales_manager", "quality_manager", "factory_super_admin", "super_admin",
+                "warehouse_manager")) {
             USER_OF.put(role, id++);
         }
     }
@@ -120,6 +121,8 @@ class ClarificationToolRbacParityContractTest {
 
         configService = mock(IntentConfigManagementService.class);
         toolRegistry = mock(ToolRegistry.class);
+        // 默认本厂工具都开着; M1 用例单独关一个
+        when(toolRegistry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
         IntentAccessModeFilter accessModeFilter = mock(IntentAccessModeFilter.class);
         when(accessModeFilter.isWriteIntent(any(AIIntentConfig.class))).thenReturn(false);
         when(configService.resolveBusinessDomain(FACTORY)).thenReturn("FACTORY");
@@ -285,6 +288,116 @@ class ClarificationToolRbacParityContractTest {
         assertThat(offered("sales_manager", FOLLOWUP, NO_TOOL)).containsExactly(NO_TOOL);
     }
 
+    // ───────────── #1747 遗留 (INTENT-DISTILL-20261111 第③步 PR-1) ─────────────
+
+    @Test
+    @DisplayName("M1 回归: 工厂在功能配置里关掉的工具, 执行期回 TOOL_DISABLED ⇒ 候选不出; 开着时照出")
+    void factoryDisabledToolIsNotOffered() {
+        ToolExecutor customers = toolByIntent.get(CUSTOMERS);
+        when(toolRegistry.isToolEnabledForFactory(FACTORY, customers.getToolName())).thenReturn(false);
+        // 前提: 执行期同一个判定确实拒 (ToolDispatchService#executeWithToolInScope 调的就是它)
+        assertThat(ToolExecutionAdmission.refusal(toolRegistry, customers, intentConfig(CUSTOMERS), FACTORY,
+                USER_OF.get("sales_manager"))).contains(ToolExecutionAdmission.Refusal.TOOL_DISABLED);
+        assertThat(offered("sales_manager", OPP, CUSTOMERS)).containsExactly(OPP);
+
+        when(toolRegistry.isToolEnabledForFactory(FACTORY, customers.getToolName())).thenReturn(true);
+        assertThat(offered("sales_manager", OPP, CUSTOMERS)).containsExactly(OPP, CUSTOMERS);
+    }
+
+    @Test
+    @DisplayName("L1 回归: 供应商比价只给绑定本厂的工厂用户 —— 平台管理员 / 别厂用户 / 无身份都不出, 本厂用户照出")
+    void supplierComparisonFollowsExecutionIdentityGate() {
+        ToolExecutor supplier = mock(ToolExecutor.class);
+        when(supplier.getToolName()).thenReturn(SupplierComparisonReadIntent.TOOL);
+        when(supplier.getRequiredPermissions()).thenReturn(Set.of());
+        when(supplier.getRequiredRoles()).thenReturn(Set.of());
+        when(supplier.getAlsoRequiredPermissions()).thenReturn(Set.of());
+        bind(SupplierComparisonReadIntent.CODE, "供应商比价", supplier);
+        String role = "factory_super_admin";
+        Long uid = USER_OF.get(role);
+        // 前提: 角色侧放行, 差异只可能来自身份门
+        assertThat(executionAllows(role, supplier)).isTrue();
+
+        assertThat(offered(role, SupplierComparisonReadIntent.CODE, CUSTOMERS))
+                .as("没有可信身份").containsExactly(CUSTOMERS);
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.PLATFORM_ADMIN, uid, null, "super_admin"))) {
+            assertThat(offered(role, SupplierComparisonReadIntent.CODE, CUSTOMERS))
+                    .as("平台管理员替本厂对话").containsExactly(CUSTOMERS);
+        }
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, uid, "F999", role))) {
+            assertThat(offered(role, SupplierComparisonReadIntent.CODE, CUSTOMERS))
+                    .as("别厂的工厂用户").containsExactly(CUSTOMERS);
+        }
+        try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
+                new com.cretas.aims.security.AuthenticatedActor(
+                        com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, uid, FACTORY, role))) {
+            assertThat(ToolExecutionAdmission.refusal(toolRegistry, supplier,
+                    intentConfig(SupplierComparisonReadIntent.CODE), FACTORY, uid)).isEmpty();
+            assertThat(offered(role, SupplierComparisonReadIntent.CODE, CUSTOMERS))
+                    .as("阴性对照: 绑定本厂的工厂用户").containsExactly(SupplierComparisonReadIntent.CODE, CUSTOMERS);
+        }
+    }
+
+    @Test
+    @DisplayName("L2 回归: 意图配了工具名但工具没注册 (执行期只会回「Tool 未注册」) ⇒ 不出按钮")
+    void configuredButUnregisteredToolIsNotOffered() {
+        AIIntentConfig ghost = AIIntentConfig.builder().intentCode("GHOST_TOOL_INTENT").intentName("幽灵工具")
+                .businessType("COMMON").intentCategory("QUERY").sensitivityLevel("LOW").toolName("ghost_tool").build();
+        ghost.setIsActive(true);
+        when(configService.getIntentByCode(FACTORY, "GHOST_TOOL_INTENT")).thenReturn(Optional.of(ghost));
+        assertThat(toolRegistry.getExecutor("ghost_tool")).isEmpty();
+        assertThat(offered("super_admin", "GHOST_TOOL_INTENT", CUSTOMERS)).containsExactly(CUSTOMERS);
+    }
+
+    @Test
+    @DisplayName("L-a 回归: 库存分析执行期是固定工作流经网关跑 APPROVED_TOOLS; 预检按网关准入判, 库里改过的定义不算数")
+    void inventoryAnalysisPreflightFollowsWorkflowGatewayAdmission() {
+        List<String> approved = com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow.APPROVED_TOOLS;
+        for (String name : approved) {
+            ToolExecutor t = mock(ToolExecutor.class);
+            when(t.getToolName()).thenReturn(name);
+            when(t.getVersion()).thenReturn("1.0.0");
+            when(toolRegistry.getExecutor(name)).thenReturn(Optional.of(t));
+        }
+        // 网关: 仓管能跑这三个工具, viewer 不能 (工作流执行期正是按网关准入一个个跑, 第一个被拒就停)
+        var principals = mock(com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory.class);
+        var policy = mock(com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.class);
+        var runtime = mock(com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry.class);
+        var viewerPrincipal = mock(com.cretas.aims.ai.tool.gateway.ExecutionPrincipal.class);
+        var keeperPrincipal = mock(com.cretas.aims.ai.tool.gateway.ExecutionPrincipal.class);
+        when(principals.create(eq(FACTORY), any(), eq("viewer"))).thenReturn(viewerPrincipal);
+        when(principals.create(eq(FACTORY), any(), eq("warehouse_manager"))).thenReturn(keeperPrincipal);
+        when(policy.rehydrate(any())).thenAnswer(inv -> Optional.of(
+                new com.cretas.aims.ai.tool.gateway.ToolPrincipalPolicy.RehydratedPrincipal(inv.getArgument(0), Map.of())));
+        when(runtime.resolve(any(), any())).thenAnswer(inv ->
+                inv.getArgument(1) == keeperPrincipal
+                        && approved.contains(inv.<com.cretas.aims.ai.tool.gateway.ToolExecutionCommand>getArgument(0).toolName())
+                        ? Optional.of(mock(com.cretas.aims.ai.tool.gateway.ToolRuntimeRegistry.ResolvedTool.class))
+                        : Optional.empty());
+        ReflectionTestUtils.setField(skillExecutor, "toolPrincipalFactory", principals);
+        ReflectionTestUtils.setField(skillExecutor, "toolPrincipalPolicy", policy);
+        ReflectionTestUtils.setField(skillExecutor, "toolRuntimeRegistry", runtime);
+
+        // 库里改过的定义只列一个 viewer 能用的工具; 改前预检按它判 ⇒ viewer 放行, 而执行期工作流会在网关被拒
+        com.cretas.aims.dto.skill.SkillDefinition overridden = com.cretas.aims.dto.skill.SkillDefinition.builder()
+                .name(com.cretas.aims.ai.workflow.inventory.InventoryAnalysisWorkflow.CANONICAL_SKILL_NAME)
+                .displayName("库存分析").tools(List.of(new CustomerListTool().getToolName())).enabled(true).build();
+        assertThat(executionAllows("viewer", toolByIntent.get(CUSTOMERS)))
+                .as("前提: 只看定义里的工具 viewer 是放行的").isTrue();
+
+        assertThat(skillExecutor.permissionRefusal(overridden, skillCtx("viewer"))).isPresent();
+        assertThat(skillExecutor.permissionRefusal(overridden, skillCtx("warehouse_manager")))
+                .as("阴性对照: 网关放行的角色预检也放行").isEmpty();
+    }
+
+    private AIIntentConfig intentConfig(String code) {
+        return configService.getIntentByCode(FACTORY, code).orElseThrow();
+    }
+
     private com.cretas.aims.dto.skill.SkillContext skillCtx(String role) {
         return com.cretas.aims.dto.skill.SkillContext.builder().factoryId(FACTORY)
                 .userId(String.valueOf(USER_OF.get(role))).userRole(role).build();
@@ -293,7 +406,7 @@ class ClarificationToolRbacParityContractTest {
     /**
      * 钉住执行期 {@code ToolDispatchService#executeWithToolInScope} 里「按调用者拒绝」的门清单。
      * 候选侧覆盖: 一线写门 / 旧角色串 / 中央 RBAC (同一个 ToolPermissionChain) + READ 模式写拦截 (modeAllowed)。
-     * 已知未覆盖 (登记, #1747 后续单): 工厂关掉的工具 isToolEnabledForFactory (M1)、供应商比价身份门 (L1)。
+     * 工厂关掉的工具 (M1)、供应商比价身份门 (L1): 两边共用 {@link ToolExecutionAdmission#refusal}。
      * 治理不可用 (DENIED) / 写确认 / 预览不支持 / FAILED 不是「这个人能不能用」。
      * 执行期新增一道拒绝门 ⇒ 这里的计数变 ⇒ 红: 先决定候选侧要不要跟, 再改这张表。
      */
@@ -318,10 +431,27 @@ class ClarificationToolRbacParityContractTest {
                         "DENIED", 1, "WRITE_CONFIRM_REQUIRED", 2, "PREVIEW_UNSUPPORTED", 1, "FAILED", 3)));
         Map<String, Integer> gates = new LinkedHashMap<>();
         for (String g : List.of("frontlineWriteDenied(", "legacyRoleDenied(", "toolRbacEnforcer.check(",
-                "isToolEnabledForFactory(", "SupplierComparisonReadIntent.")) {
-            gates.put(g, body.split(java.util.regex.Pattern.quote(g), -1).length - 1);
+                "isToolEnabledForFactory(", "SupplierComparisonReadIntent.", "ToolExecutionAdmission.refusal(")) {
+            gates.put(g, count(body, g));
         }
+        // 身份门 + 功能开关 (M1/L1) 已收进 ToolExecutionAdmission: 执行期只调它一次, 不再自己判
+        // (剩下 2 处 SupplierComparisonReadIntent. 是「执行后」的结果处理, 不是准入门)
         assertThat(gates).isEqualTo(Map.of("frontlineWriteDenied(", 1, "legacyRoleDenied(", 1,
-                "toolRbacEnforcer.check(", 1, "isToolEnabledForFactory(", 2, "SupplierComparisonReadIntent.", 6));
+                "toolRbacEnforcer.check(", 1, "isToolEnabledForFactory(", 0, "SupplierComparisonReadIntent.", 2,
+                "ToolExecutionAdmission.refusal(", 1));
+
+        // 候选侧调的是同一个方法 (接上没有: 不是各写一份)
+        String candidates = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/execution/ClarificationCandidateService.java"));
+        assertThat(count(candidates, "ToolExecutionAdmission.refusal(")).isEqualTo(1);
+        assertThat(count(candidates, "isToolEnabledForFactory(")).as("候选不许自抄一份开关判定").isZero();
+        String admission = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "src/main/java/com/cretas/aims/service/execution/ToolExecutionAdmission.java"));
+        assertThat(count(admission, "isToolEnabledForFactory(")).isEqualTo(1);
+        assertThat(count(admission, "AuthenticatedActor.fromCurrentExecution()")).isEqualTo(1);
+    }
+
+    private static int count(String text, String needle) {
+        return text.split(java.util.regex.Pattern.quote(needle), -1).length - 1;
     }
 }

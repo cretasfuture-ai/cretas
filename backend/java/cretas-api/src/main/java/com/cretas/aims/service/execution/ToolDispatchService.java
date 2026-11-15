@@ -483,14 +483,10 @@ public class ToolDispatchService {
         try {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
-            if ((SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || (intent != null && SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())))
-                    && (!SupplierComparisonReadIntent.TOOL.equals(tool.getToolName())
-                    || intent == null || !SupplierComparisonReadIntent.CODE.equals(intent.getIntentCode())
-                    || com.cretas.aims.security.AuthenticatedActor.fromCurrentExecution()
-                    .filter(actor -> actor.type() == com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER)
-                    .filter(actor -> Objects.equals(actor.id(), userId))
-                    .filter(actor -> Objects.equals(actor.factoryId(), factoryId)).isEmpty())) {
+            // 身份门 + 功能开关与澄清候选共用一份判定 (ToolExecutionAdmission), 候选不许比这里放得宽。
+            ToolExecutionAdmission.Refusal admission =
+                    ToolExecutionAdmission.refusal(toolRegistry, tool, intent, factoryId, userId).orElse(null);
+            if (admission == ToolExecutionAdmission.Refusal.SUPPLIER_IDENTITY) {
                 return IntentExecuteResponse.builder()
                         .intentRecognized(true)
                         .intentCode(intent == null ? null : intent.getIntentCode())
@@ -501,10 +497,9 @@ public class ToolDispatchService {
             }
             // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
             // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
-            // ToolRegistry.isToolEnabledForFactory() was never called on the execution
-            // path — the switch was decorative. Now we check it here so a disabled tool
+            // the switch was never read on the execution path. Now a disabled tool
             // returns a clear error instead of silently running.
-            if (toolRegistry != null && !toolRegistry.isToolEnabledForFactory(factoryId, tool.getToolName())) {
+            if (admission == ToolExecutionAdmission.Refusal.TOOL_DISABLED) {
                 log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
                 // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
                 // and cross-factory cases (e.g. F999 not configured → tool not enabled).
