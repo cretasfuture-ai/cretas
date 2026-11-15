@@ -58,6 +58,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @DisplayName("Sales finished-goods price isolation")
 class SalesFinishedGoodsPriceContractTest {
 
+    /** 直接调 controller 绕过了 PriceSensitiveContextFilter 的 finally 清理: 不清会把「隐藏价格」留在 surefire 共用线程上,
+     *  污染同一 fork 里后续的 PriceSensitiveContextScopeContractTest (CI 分片 3/4 实测, 泄漏探针定位)。 */
+    @org.junit.jupiter.api.AfterEach
+    void clearPriceContext() {
+        com.cretas.aims.security.PriceSensitiveContext.clear();
+    }
+
     @Mock private SalesService salesService;
     @Mock private MobileService mobileService;
     @Mock private PermissionService permissionService;

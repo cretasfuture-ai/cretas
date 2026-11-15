@@ -1,0 +1,24 @@
+{
+  "_comment": "六膳门 AI 问答 BI 演示题单 (只读, 咨询口径 mode=READ)。kind=answer 期望给出数字; kind=refuse 期望诚实说查不到/口径不支持, 不许编数。",
+  "questions": [
+    {"id": "Q01", "kind": "answer", "say": "上周卤牛肉单位成本是多少"},
+    {"id": "Q02", "kind": "answer", "say": "本月卤牛肉的总成本是多少"},
+    {"id": "Q03", "kind": "answer", "say": "哪个批次出成率最低"},
+    {"id": "Q04", "kind": "answer", "say": "最近 30 天各批次的出成率排序"},
+    {"id": "Q05", "kind": "answer", "say": "这个月各 SKU 毛利率排序"},
+    {"id": "Q06", "kind": "answer", "say": "哪个产品毛利率最高"},
+    {"id": "Q07", "kind": "answer", "say": "成本里原料占比多少"},
+    {"id": "Q08", "kind": "answer", "say": "人工成本占总成本多少"},
+    {"id": "Q09", "kind": "answer", "say": "和上月比哪个成本涨了"},
+    {"id": "Q10", "kind": "answer", "say": "近 3 个月成本趋势怎么样"},
+    {"id": "Q11", "kind": "answer", "say": "本月销售额和毛利是多少"},
+    {"id": "Q12", "kind": "answer", "say": "原料采购价最近涨得最多的是哪个"},
+    {"id": "Q13", "kind": "answer", "say": "BOM 配方成本最高的产品是哪个"},
+    {"id": "Q14", "kind": "answer", "say": "实际成本和标准成本差多少"},
+    {"id": "Q15", "kind": "answer", "say": "本月生产了多少批次，合格率多少"},
+    {"id": "Q16", "kind": "answer", "say": "卤牛肉毛利率是多少"},
+    {"id": "Q17", "kind": "refuse", "say": "明年一月卤牛肉的单位成本是多少"},
+    {"id": "Q18", "kind": "refuse", "say": "竞争对手的卤牛肉成本是多少"},
+    {"id": "Q19", "kind": "refuse", "say": "每个工人的工资是多少"}
+  ]
+}

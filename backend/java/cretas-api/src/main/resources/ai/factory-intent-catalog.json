@@ -2249,6 +2249,18 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "REPORT_BATCH_YIELD_RANK",
+      "intent_name": "批次出成率排行",
+      "intent_category": "REPORT",
+      "description": "只读查询批次出成率排行: 期间内已完成批次按出成率(良品数量÷实际产出数量)从低到高或从高到低排序并出柱图; 缺良品或实际数量的批次不进排行并说明个数。",
+      "tool_name": "report_batch_yield_rank",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "REPORT_COST_VARIANCE",
       "intent_name": "成本差异分析",
       "intent_category": "REPORT",
