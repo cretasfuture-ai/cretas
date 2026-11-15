@@ -52,13 +52,31 @@ public class ClarificationCandidateService {
     private final FrontlineAiWriteGrantService frontlineWriteGrants;
     /** 判「写」要看意图绑定的工具 (与执行期 W0 同一判据)。 */
     private final ToolRegistry toolRegistry;
+    /**
+     * 执行期「这个人能不能用这个工具」的判定链 (一线门 → 旧角色串 → 中央 RBAC: 工具角色 / 权限码 /
+     * 内置映射 / 「且」模块码)。候选按钮直接问它, ⛔ 不在本类再抄一份 (INTENT-DISTILL 红线:
+     * 此前本类只查意图级权限 + 一线门, 漏了工具级 {@code getRequiredRoles()} 与 TOOL_PERMISSION_MAP,
+     * viewer 的澄清里出现「商机超 SLA 警告」, 点了才 PERMISSION_DENIED)。
+     * 为空只发生在裸构造的单测里 —— 那时绑定了已注册工具的意图一律不出按钮 (fail-closed)。
+     */
+    private final ToolPermissionChain toolPermissionChain;
 
     public ClarificationCandidateService(
             IntentConfigManagementService configService,
             IntentPermissionGate permissionGate,
             IntentAccessModeFilter accessModeFilter,
             WriteGuardService writeGuardService) {
-        this(configService, permissionGate, accessModeFilter, writeGuardService, null, null);
+        this(configService, permissionGate, accessModeFilter, writeGuardService, null, null, null);
+    }
+
+    public ClarificationCandidateService(
+            IntentConfigManagementService configService,
+            IntentPermissionGate permissionGate,
+            IntentAccessModeFilter accessModeFilter,
+            WriteGuardService writeGuardService,
+            FrontlineAiWriteGrantService frontlineWriteGrants,
+            ToolRegistry toolRegistry) {
+        this(configService, permissionGate, accessModeFilter, writeGuardService, frontlineWriteGrants, toolRegistry, null);
     }
 
     @Autowired
@@ -68,7 +86,9 @@ public class ClarificationCandidateService {
             IntentAccessModeFilter accessModeFilter,
             WriteGuardService writeGuardService,
             @Lazy FrontlineAiWriteGrantService frontlineWriteGrants,
-            @Lazy ToolRegistry toolRegistry) {
+            @Lazy ToolRegistry toolRegistry,
+            @Lazy ToolPermissionChain toolPermissionChain) {
+        this.toolPermissionChain = toolPermissionChain;
         this.configService = configService;
         this.permissionGate = permissionGate;
         this.accessModeFilter = accessModeFilter;
@@ -343,34 +363,45 @@ public class ClarificationCandidateService {
     }
 
     /**
-     * 当前调用者能不能用这个意图: 意图权限 (权限码 / 旧 requiredRoles) 且没被一线写操作门挡住。
+     * 当前调用者能不能用这个意图: 意图权限 (权限码 / 旧 requiredRoles) 且意图绑定的工具过得了
+     * 执行期同一条工具判定链 ({@link ToolPermissionChain#denyReason})。
      *
      * <p>澄清按钮 (本类) 与 Skill 抢先路由的预检 ({@link DynamicToolSelectionService#trySkillRoute})
      * 共用这一份 —— 「按钮里出现的」与「Skill 能替你跑的」不许比执行期放得更宽。
      */
     boolean callerMayUse(AIIntentConfig config, String factoryId, Long userId, String userRole) {
         return permissionAllowed(config, factoryId, userId, userRole)
-                && frontlineAllowed(config, factoryId, userRole);
+                && toolGateAllowed(config, factoryId, userId, userRole);
     }
 
     /**
-     * 一线角色 + 写意图 + 本厂没开放 ⇒ 不出这个选项 (2026-10-06: 此前按钮照出, 点了才被 #939 的门拒绝)。
-     * 与执行期同一个判定 ({@link FrontlineAiWriteGrantService#denyReason}: 默认清单 + 本厂开放记录)。
+     * 意图绑定了已注册工具 ⇒ 直接问执行期那条链 (一线门 + 旧角色串 + 中央 RBAC), 与
+     * {@link ToolDispatchService#executeWithTool} 拒绝的是同一批人。身份按服务端主体绑定
+     * ({@link TrustedExecutionContext#enforcePrincipal}), RBAC 按 userId 从库里取角色, 不信请求自带的角色。
+     *
+     * <p>没绑定工具 (或工具未注册) 时执行期没有工具级门, 只剩一线写门: 一线角色 + 写意图 + 本厂没开放
+     * ⇒ 不出这个选项 (2026-10-06: 此前按钮照出, 点了才被 #939 的门拒绝)。
      */
-    private boolean frontlineAllowed(AIIntentConfig config, String factoryId, String userRole) {
-        if (!FrontlineAiWriteGrantService.isFrontline(userRole)) {
-            return true;
-        }
-        if (frontlineWriteGrants == null) {
-            return false;
-        }
+    private boolean toolGateAllowed(AIIntentConfig config, String factoryId, Long userId, String userRole) {
         try {
             ToolExecutor tool = null;
             String toolName = config.getToolName();
             if (toolRegistry != null && toolName != null && !toolName.isBlank()) {
                 tool = toolRegistry.getExecutor(toolName).orElse(null);
             }
-            return frontlineWriteGrants.denyReason(factoryId, userRole, tool, config).isEmpty();
+            if (tool != null) {
+                if (toolPermissionChain == null) {
+                    return false;
+                }
+                java.util.Map<String, Object> trusted = new HashMap<>();
+                TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
+                return toolPermissionChain.denyReason(tool, factoryId, userRole, config, trusted).isEmpty();
+            }
+            if (!FrontlineAiWriteGrantService.isFrontline(userRole)) {
+                return true;
+            }
+            return frontlineWriteGrants != null
+                    && frontlineWriteGrants.denyReason(factoryId, userRole, null, config).isEmpty();
         } catch (Exception ignored) {
             return false;
         }
