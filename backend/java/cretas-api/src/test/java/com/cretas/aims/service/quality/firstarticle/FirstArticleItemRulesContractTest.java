@@ -15,7 +15,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** 检验项校验与逐项判定: 每条拒绝配一条放行; 上下限端点算合格。 */
-class FirstArticleItemRulesTest {
+class FirstArticleItemRulesContractTest {
 
     static Item num(String name, String lo, String hi, String target) {
         return new Item(null, name, ItemType.NUMERIC, null, "g", lo == null ? null : new BigDecimal(lo),
