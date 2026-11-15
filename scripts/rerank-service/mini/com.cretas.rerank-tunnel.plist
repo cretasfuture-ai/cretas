@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 装到 ~/Library/LaunchAgents/; 与 com.cretas.llm-tunnel 同形 (断了 30s 后重连)。 -->
+<plist version="1.0"><dict>
+<key>Label</key><string>com.cretas.rerank-tunnel</string>
+<key>ProgramArguments</key><array><string>/bin/bash</string><string>/Users/rex/rerank-service/rerank-tunnel.sh</string></array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>
+<key>StandardErrorPath</key><string>/Users/rex/rerank-service/tunnel.err</string>
+</dict></plist>

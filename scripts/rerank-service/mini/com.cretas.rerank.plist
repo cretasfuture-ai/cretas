@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 装到 ~/Library/LaunchAgents/ (用户 rex, 开机自动登录后起; 与 com.cretas.llm-* 同一套做法)。KeepAlive = 崩溃重启。 -->
+<plist version="1.0"><dict>
+<key>Label</key><string>com.cretas.rerank</string>
+<key>WorkingDirectory</key><string>/Users/rex/rerank-service</string>
+<key>ProgramArguments</key><array>
+  <string>/Users/rex/rerank-service/venv/bin/python</string><string>-m</string><string>uvicorn</string>
+  <string>app_mlx:app</string><string>--host</string><string>127.0.0.1</string><string>--port</string><string>18190</string>
+  <string>--workers</string><string>1</string><string>--no-access-log</string>
+</array>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>30</integer>
+<key>StandardOutPath</key><string>/Users/rex/rerank-service/service.log</string>
+<key>StandardErrorPath</key><string>/Users/rex/rerank-service/service.err.log</string>
+</dict></plist>
