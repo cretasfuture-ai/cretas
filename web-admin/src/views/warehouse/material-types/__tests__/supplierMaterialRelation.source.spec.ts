@@ -36,8 +36,14 @@ describe('supplier material bidirectional relation contract', () => {
 
   it('uses the shared purchase quantity unit catalog and makes price units explicit', () => {
     // ⚠️ usage-scope / displayUnit 两条保持原样 —— 它们没过期, 仍然在守「价格字段的计量单位必须明示」。
+    expect(materialSource).toContain('usage-scope="PURCHASE_QUANTITY"');
+    // 供应商抽屉 2026-11-15 迁 Nuxt UI: 弹层里不能放 Element 的 UnitSelect, 改用 SupplierUnitSelect;
+    // 「绑定采购数量单位目录」的性质由「选项只来自 PURCHASE_QUANTITY 目录」承担, 不再靠 usage-scope 字面。
+    expect(supplierSource).toContain('<SupplierUnitSelect');
+    expect(supplierSource).toContain(':options="relationPurchaseUnitOptions"');
+    expect(supplierSource).toContain("listSystemUnits(props.factoryId, 'PURCHASE_QUANTITY')");
+    expect(supplierSource).not.toContain('<UnitSelect');
     for (const source of [materialSource, supplierSource]) {
-      expect(source).toContain('usage-scope="PURCHASE_QUANTITY"');
       expect(source).toContain('displayUnit(relationForm.purchaseUnit)');
     }
 
@@ -80,8 +86,11 @@ describe('supplier material bidirectional relation contract', () => {
       expect(source).toContain('resolvePurchaseUnits(');
       expect(source).toContain('purchaseUnitSelectionReason(');
       expect(source).toContain(':options=');
-      expect(source).toContain('<el-alert');
     }
+    expect(materialSource).toContain('<el-alert');
+    // 抽屉侧: 单位不兼容的提示仍然渲染（Nuxt UI 的 UAlert，绑 relationUnitReason）
+    expect(supplierSource).toContain('<UAlert');
+    expect(supplierSource).toContain('v-if="relationUnitReason"');
     expect(supplierSource).not.toContain("relationForm.purchaseUnit = material?.unit || ''");
     expect(materialSource).not.toContain("purchaseUnit: suppliersDialogMaterial.value?.unit || ''");
   });
