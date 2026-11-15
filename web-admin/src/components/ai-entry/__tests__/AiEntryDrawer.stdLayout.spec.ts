@@ -72,11 +72,11 @@ let wrappers: VueWrapper[] = [];
 
 function mountDrawer(
   config: AiEntryConfig,
-  opts: { query?: Record<string, string>; confirmGuard?: (p: Record<string, unknown>) => string | null } = {},
+  opts: { query?: Record<string, string>; confirmGuard?: (p: Record<string, unknown>) => string | null; initialInput?: string } = {},
 ) {
   h.routeMock.query = opts.query ?? {};
   const w = mount(AiEntryDrawer, {
-    props: { modelValue: true, config, confirmGuard: opts.confirmGuard, guardActionLabel: opts.confirmGuard ? '去补客户' : undefined },
+    props: { modelValue: true, config, confirmGuard: opts.confirmGuard, guardActionLabel: opts.confirmGuard ? '去补客户' : undefined, initialInput: opts.initialInput },
     global: { stubs: globalStubs },
     attachTo: document.body,
   });
@@ -163,6 +163,28 @@ async function previewFor(config: AiEntryConfig, values: Record<string, unknown>
 }
 
 // ===================== 1. 无头像、无时间 (L1 / L3 / L4) =====================
+
+it('prefills handoff text when the editor is already open on initial mount without parsing or saving', () => {
+  const w = mountDrawer(PURCHASE_ORDER_CONFIG, { initialInput: '从验收供应商采购两公斤原料' });
+  expect((w.get('textarea.chat-textarea').element as HTMLTextAreaElement).value).toBe('从验收供应商采购两公斤原料');
+  expect(h.parse).not.toHaveBeenCalled();
+  expect(w.emitted('fill-form')).toBeUndefined();
+});
+
+it('shows unknown business fields, zero and false while excluding explicit system fields', async () => {
+  const w = await previewFor(PURCHASE_ORDER_CONFIG, {
+    supplierName: '验收供应商',
+    items: [{ materialName: '原料', quantity: 1, unitPrice: 0, taxIncluded: false }],
+    customDeliveryRule: '直送前确认',
+    factoryId: 'PRIVATE_FACTORY',
+  });
+  const rows = w.get('[data-testid="ai-confirm-rows"]').text();
+  expect(rows).toContain('单价：0');
+  expect(rows).toContain('taxIncluded：false');
+  expect(rows).toContain('customDeliveryRule');
+  expect(rows).toContain('直送前确认');
+  expect(rows).not.toContain('PRIVATE_FACTORY');
+});
 
 describe('L1 / L3 / L4 · 助手全宽无头像无气泡, 不显示每条消息时间', () => {
   it('欢迎态: 没有头像节点; 有欢迎语和示例芯片 (对照)', () => {
@@ -439,8 +461,8 @@ describe('🔴 写入一步 · 预览一行不少、不点不写、点了恰好 
     expect(text).toContain('单位：kg');
     expect(text).toContain('customCode：X1');          // 未知英文键: 原样, 不藏
     expect(text).not.toMatch(/materialName|quantity|unitPrice/); // 已知键不再露英文
-    // 改前行为原样保留: 单价 0 不进文本 (旧过滤 v !== 0)
-    expect(text).not.toContain('单价');
+    // H3: zero is a business value and must remain visible before confirmation.
+    expect(text).toContain('单价：0');
   });
 
   it('入库明细: receivedQuantity 有中文名', async () => {

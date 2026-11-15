@@ -12,7 +12,8 @@ export function digitalEmployeeProps(route?: { path: string }) {
     && snapshot?.factoryType === auth.factoryType && snapshot?.isPlatform === auth.isPlatform;
   const enabled = navigation.status === 'ready' && identityMatches && snapshot?.menuProfile === 'wholesale' && !auth.isPlatform;
   const module: ModuleName | undefined = route?.path === '/workdesk/sales-owner' ? 'sales'
-    : route?.path === '/workdesk/purchaser' ? 'procurement' : undefined;
+    : route?.path === '/workdesk/purchaser' ? 'procurement'
+      : route?.path === '/workdesk/warehouse-keeper' ? 'warehouse' : undefined;
   return {
     digitalEmployee: !!enabled, employeePaths: enabled ? snapshot.paths : [],
     employeeNavigationPending: navigation.status === 'loading' || (navigation.status === 'ready' && !identityMatches),

@@ -249,7 +249,7 @@ const attachmentQueue = ref({ total: 0, pending: 0, failed: 0 });
 const summaryRequest = computed<ListSummaryRequest>(() => ({
   filterConditions: statusFilter.value ? { status: statusFilter.value } : {},
 }));
-const { summary: footerSummary, loading: footerLoading } = useListSummary('purchaseOrder', summaryRequest);
+const { summary: footerSummary, loading: footerLoading, refresh: refreshFooter } = useListSummary('purchaseOrder', summaryRequest);
 
 interface ProcurementOrderItem {
   materialName?: string;
@@ -816,6 +816,7 @@ onBeforeUnmount(() => { window.removeEventListener('beforeunload', handleBeforeU
 
 async function loadData() {
   if (!factoryId.value) return;
+  void refreshFooter();
   loading.value = true;
   try {
     const url = statusFilter.value
@@ -1307,7 +1308,7 @@ function handleRefresh() {
 
 // ==================== AI Entry ====================
 const aiEntryVisible = ref(false);
-useAiEntryLink(aiEntryVisible, canWrite);
+const aiEntryInitialInput = useAiEntryLink(aiEntryVisible, canWrite, () => ({ factoryId: factoryId.value || '', actorId: String(authStore.user?.id || '') }));
 
 // ==================== Forward Share Dialog (PR #872) ====================
 // State for ForwardShareDialog — scoped to the row clicked via 转发 inline chip.
@@ -1315,7 +1316,8 @@ const forwardDialogVisible = ref(false);
 const forwardEntityId = ref('');
 const forwardEntityLabel = ref('');
 
-function handleAiFill(params: TableRow) {
+async function handleAiFill(params: TableRow) {
+  resetForm();
   // Match supplierName to supplierId
   const supplierName = String(params.supplierName || '');
   const supplierResolution = resolveReferenceByName(supplierName, suppliers.value);
@@ -1332,6 +1334,7 @@ function handleAiFill(params: TableRow) {
 
   if (Array.isArray(params.items) && params.items.length > 0) {
     try {
+      await refreshSupplierMaterialRelations();
       form.value.items = (params.items as TableRow[]).map((item) => {
       // Try to match materialName to materialTypeId
       const matName = String(item.materialName || '');
@@ -1339,17 +1342,24 @@ function handleAiFill(params: TableRow) {
       if (materialResolution.status !== 'MATCHED') {
         throw new Error(`原料“${matName}”${materialResolution.status === 'AMBIGUOUS' ? '匹配到多个候选' : '未找到'}`);
       }
+      const relation = supplierMaterialRelations.value.find((row) => String(row.materialTypeId) === materialResolution.id && row.active !== false);
+      if (!relation) throw new Error(`供应商“${supplierName}”尚未维护原料“${matName}”的供应关系，请先维护供应原料`);
+      const material = materials.value.find((row) => String(row.id) === materialResolution.id);
+      const taxRate = item.taxRate == null ? materialTaxRate(material?.taxRate) : materialTaxRate(item.taxRate);
       return {
+        ...newPurchaseItem(),
+        supplierMaterialId: relation.id,
         materialTypeId: materialResolution.id,
+        materialName: matName,
         quantity: Number(item.quantity || 0),
         unit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
         quantityUnit: canonicalUnitCodeKeepingCount(item.quantityUnit || item.unit || 'kg'),
-        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, item.taxRate),
+        unitPrice: purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice ?? item.unitPrice, taxRate),
         taxIncludedUnitPrice: item.taxIncludedUnitPrice == null && item.unitPrice == null
           ? null : Number(item.taxIncludedUnitPrice ?? item.unitPrice),
         priceUnit: canonicalUnitCodeKeepingCount(item.priceUnit || item.unit || 'kg'),
         priceSource: item.taxIncludedUnitPrice == null && item.unitPrice == null ? 'MISSING' : 'MANUAL',
-        taxRate: validateTaxRate(item.taxRate) ? null : normalizeTaxRateForPayload(item.taxRate),
+        taxRate,
       };
       });
     } catch (error) {
@@ -1920,6 +1930,7 @@ function handleAiFill(params: TableRow) {
     <AiEntryDrawer
       v-model="aiEntryVisible"
       :config="PURCHASE_ORDER_CONFIG"
+      :initial-input="aiEntryInitialInput"
       @fill-form="handleAiFill"
     />
 

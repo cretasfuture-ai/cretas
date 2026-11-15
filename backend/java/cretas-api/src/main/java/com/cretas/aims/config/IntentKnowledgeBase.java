@@ -5016,6 +5016,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("消除设备报警", "ALERT_RESOLVE");           // P2: full phrase, 6 chars
         phraseToIntentMapping.put("不够了", "MATERIAL_LOW_STOCK_ALERT");      // P3: "猪肉快不够了" (6 chars, isShortInput)
         phraseToIntentMapping.put("原料不够", "MATERIAL_LOW_STOCK_ALERT");    // v26-P3: 4-char for "原料不够了，需要采购" (10 chars)
+        phraseToIntentMapping.put("原料快不够用", "MATERIAL_LOW_STOCK_ALERT");
         phraseToIntentMapping.put("库存少于", "MATERIAL_LOW_STOCK_ALERT");    // v26-N1: "库存少于100公斤的原料"
         phraseToIntentMapping.put("到了没", "ORDER_LIST");                    // v26: fixed PROCUREMENT_LIST→ORDER_LIST (doesn't exist in DB)
         // 采购问题不再短路到 ORDER_LIST (只查销售订单): 用销售数据回答采购问题是错数据, 交给决策层 / 澄清出口 (organizer 裁定 2026-11-03) 「采购了多少」

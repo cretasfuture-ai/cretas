@@ -10,6 +10,7 @@ const props = defineProps<{
   config: AiEntryConfig;
   confirmGuard?: (params: Record<string, unknown>) => string | null;
   guardActionLabel?: string;
+  initialInput?: string;
 }>();
 
 const emit = defineEmits<{
@@ -19,6 +20,16 @@ const emit = defineEmits<{
 }>();
 
 const { messages, loading, previewParams, sendMessage, retry, continueEditing, confirmParams, reset } = useAiChat(props.config);
+const HIDDEN_PREVIEW_KEYS = new Set(['factoryId', 'userId', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt', 'token', 'accessToken', 'refreshToken', 'password']);
+const previewFields = computed(() => {
+  const fields = props.config.fields.filter((field) => !HIDDEN_PREVIEW_KEYS.has(field.key));
+  const known = new Set(fields.map((field) => field.key));
+  const extra = Object.keys(previewParams.value || {})
+    .filter((key) => !known.has(key) && !HIDDEN_PREVIEW_KEYS.has(key)
+      && previewParams.value?.[key] !== undefined && previewParams.value?.[key] !== null && previewParams.value?.[key] !== '')
+    .map((key) => ({ key, label: itemKeyLabel(key), required: false }));
+  return [...fields, ...extra];
+});
 
 /** W1: 骨架屏 3 条, 宽度 92% / 78% / 62%; 超过 3 秒没回就把文字从「正在理解」换成「正在处理」 */
 const SKELETON_BAR_WIDTHS = [92, 78, 62] as const;
@@ -194,9 +205,8 @@ function formatPreviewValue(key: string, value: unknown): string {
     if (value.length === 0) return EMPTY_VALUE_TEXT;
     return value.map((item, i) => {
       if (typeof item === 'object' && item !== null) {
-        // 过滤规则与改前一致 (空串 / 0 / null 不进文本); 只改键名的写法, 不改哪些值显示
         const parts = Object.entries(item)
-          .filter(([, v]) => v !== '' && v !== 0 && v !== null)
+          .filter(([k, v]) => !HIDDEN_PREVIEW_KEYS.has(k) && v !== undefined && v !== '' && v !== null)
           .map(([k, v]) => `${itemKeyLabel(k)}：${v}`);
         return `(${i + 1}) ${parts.join('，')}`;
       }
@@ -222,12 +232,12 @@ function formatPreviewValue(key: string, value: unknown): string {
 watch(() => props.modelValue, (visible) => {
   if (visible) {
     reset();
-    chatInput.value = '';
+    chatInput.value = props.initialInput || '';
     showTutorial.value = false;
     tutorialActive.value = false;
     tutorialStep.value = 0;
   }
-});
+}, { immediate: true });
 </script>
 
 <template>
@@ -496,9 +506,9 @@ watch(() => props.modelValue, (visible) => {
                     </span>
                     <span class="preview-count">{{ filledFieldCount }}/{{ config.fields.length }} 已填</span>
                   </div>
-                  <div class="preview-body">
+                  <div class="preview-body" data-testid="ai-confirm-rows">
                     <div
-                      v-for="field in config.fields"
+                      v-for="field in previewFields"
                       :key="field.key"
                       class="preview-row"
                       data-testid="aie-preview-row"
