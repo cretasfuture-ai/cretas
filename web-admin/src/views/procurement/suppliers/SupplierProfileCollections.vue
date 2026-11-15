@@ -599,9 +599,9 @@ defineExpose({ reload });
   margin-bottom: 10px;
 }
 .collection-head h4 { margin: 0; font-size: 15px; }
-.collection-head .count { font-weight: 400; color: var(--el-text-color-secondary); }
+.collection-head .count { font-weight: 400; color: var(--cs-muted); }
 .primary-tag { margin-right: 6px; }
-.field-hint { font-size: 12px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.field-hint { font-size: 12px; color: var(--cs-muted); line-height: 1.6; }
 .bank-warning { margin-bottom: 14px; }
 .full-width { width: 100%; }
 </style>
