@@ -28,8 +28,9 @@ for w in wt-live wt-arch wt-free; do git -C "$repo" worktree add -q --detach "$t
 mkdir -p "$tmp/wt-live/sub"
 
 sess="$tmp/sessions/acct/ws"; mkdir -p "$sess"
-live_cwd=$(win "$tmp/wt-live/sub" | sed 's#/#\\\\#g')   # JSON 里是转义的反斜杠, 与真实会话文件同形
-arch_cwd=$(win "$tmp/wt-arch" | sed 's#/#\\\\#g')
+bs='\\'   # JSON 里路径分隔符是转义的反斜杠 (两个字符), 与真实会话文件同形; 不走管道, 免得吞掉退出码
+live_cwd=$(win "$tmp/wt-live/sub") || exit 2; live_cwd=${live_cwd//\//$bs}
+arch_cwd=$(win "$tmp/wt-arch") || exit 2; arch_cwd=${arch_cwd//\//$bs}
 printf '{"sessionId":"local_live","cwd":"%s","isArchived":false}\n' "$live_cwd" > "$sess/local_live.json"
 printf '{"sessionId":"local_arch","cwd":"%s","isArchived":true}\n' "$arch_cwd" > "$sess/local_arch.json"
 
