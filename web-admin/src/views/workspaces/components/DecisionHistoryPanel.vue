@@ -236,7 +236,7 @@ h3 { font-size: 17px; }
 .state-panel p, .warning-copy, .reason-copy { margin-top: 8px; line-height: 1.6; }
 .error-state { border-color: rgb(245 108 108 / 35%); color: var(--el-color-danger, #f56c6c); }
 .primary-button, .secondary-button { min-height: 36px; padding: 0 14px; border-radius: 6px; font: inherit; cursor: pointer; }
-.primary-button { border: 1px solid var(--el-color-primary, #409eff); background: var(--el-color-primary, #409eff); color: white; }
+.primary-button { border: 1px solid var(--el-color-primary, var(--cs-primary)); background: var(--el-color-primary, var(--cs-primary)); color: white; }
 .secondary-button { border: 1px solid var(--el-color-primary, #1b65a8); background: white; color: var(--el-color-primary, #1b65a8); }
 button:disabled { cursor: not-allowed; opacity: .55; }
 .table-wrap { overflow-x: auto; border: 1px solid var(--el-border-color-lighter, #edf2f7); border-radius: 8px; }
@@ -245,7 +245,7 @@ th, td { padding: 11px 12px; border-bottom: 1px solid var(--el-border-color-ligh
 th { background: var(--el-fill-color-light, #f5f7fa); font-size: 13px; }
 td strong, td code { display: block; }
 td code, .hash-grid code, .provenance-grid code { margin-top: 4px; color: var(--el-text-color-secondary, #7a8599); font-size: 12px; overflow-wrap: anywhere; }
-input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-primary, #409eff); }
+input[type='radio'] { width: 16px; height: 16px; accent-color: var(--el-color-primary, var(--cs-primary)); }
 .pagination { justify-content: center; margin-top: 14px; }
 .compare-controls { flex-wrap: wrap; padding: 14px 0 0; }
 .comparison-card { margin-top: 16px; }

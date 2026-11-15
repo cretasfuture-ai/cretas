@@ -426,11 +426,11 @@ h2 { font-size: 17px; line-height: 1.4; }
 .form-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px 16px; }
 label { display: flex; flex-direction: column; gap: 6px; color: var(--el-text-color-regular, #303133); font-size: 13px; }
 input, select { width: 100%; min-height: 36px; border: 1px solid var(--el-border-color, #dcdfe6); border-radius: 6px; padding: 7px 10px; background: #fff; color: inherit; font: inherit; box-sizing: border-box; }
-input:focus, select:focus { outline: 2px solid rgba(64,158,255,.28); border-color: var(--el-color-primary, #409EFF); }
+input:focus, select:focus { outline: 2px solid rgba(64,158,255,.28); border-color: var(--el-color-primary, var(--cs-primary)); }
 .candidate-card { border: 1px solid var(--el-border-color-lighter, #EDF2F7); border-radius: 8px; padding: 14px; margin-bottom: 12px; }
 .candidate-title { display: flex; justify-content: space-between; margin-bottom: 12px; }
 .primary-button, .secondary-button { border-radius: 6px; min-height: 36px; padding: 0 16px; cursor: pointer; font: inherit; }
-.primary-button { background: var(--el-color-primary, #409EFF); color: #fff; border: 1px solid var(--el-color-primary, #409EFF); margin-top: 8px; }
+.primary-button { background: var(--el-color-primary, var(--cs-primary)); color: #fff; border: 1px solid var(--el-color-primary, var(--cs-primary)); margin-top: 8px; }
 .secondary-button { background: #fff; color: var(--el-color-primary, #1B65A8); border: 1px solid var(--el-color-primary, #1B65A8); }
 .primary-button:disabled, .secondary-button:disabled { opacity: .55; cursor: not-allowed; }
 .text-button { border: 0; background: transparent; color: var(--el-color-danger, #F56C6C); cursor: pointer; }
