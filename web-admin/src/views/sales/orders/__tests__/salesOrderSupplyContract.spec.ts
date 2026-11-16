@@ -115,7 +115,7 @@ describe('sales order supply contract', () => {
     expect(customerMaterialCategoryLabel('unclassified')).toBe('未知分类');
     expect(newSource).toContain('suppliedMaterialCategory(material)');
     expect(listSource).toContain('suppliedMaterialCategory(material)');
-    expect(detailSource).toContain('customerMaterialCategory(row)');
+    expect(detailSource).toContain('customerMaterialCategory(row.original)');
     expect(listSource).toContain('category: _category, mainCategory: _mainCategory');
     expect(newSource).toContain('customerMaterialCategoryLabel(material.mainCategory, material.category)');
     expect(listSource).toContain('mainCategory || option?.mainCategory,');

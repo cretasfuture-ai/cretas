@@ -42,6 +42,7 @@ class PurchaseRequisitionServiceImplTest {
     @Mock private PurchaseRequisitionRepository repo;
     @Mock private PurchaseService purchaseService;
     @Mock private com.cretas.aims.repository.UserRepository userRepository;
+    @Mock private com.cretas.aims.repository.inventory.PurchaseRequisitionApprovalRecordRepository approvalRepo;
 
     private PurchaseRequisitionServiceImpl service;
 
@@ -54,7 +55,7 @@ class PurchaseRequisitionServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        service = new PurchaseRequisitionServiceImpl(repo, purchaseService, userRepository);
+        service = new PurchaseRequisitionServiceImpl(repo, purchaseService, userRepository, approvalRepo);
     }
 
     private PurchaseRequisition buildPr(PurchaseRequisitionStatus status, String factoryId) {
@@ -239,7 +240,7 @@ class PurchaseRequisitionServiceImplTest {
         }
 
         @Test
-        @DisplayName("REJECTED → 400 (终态)")
+        @DisplayName("REJECTED → 400 (只有 DRAFT 可删; 驳回单应重开改后重提)")
         void deleteRejectedTerminalRejected() {
             PurchaseRequisition pr = buildPr(PurchaseRequisitionStatus.REJECTED, FACTORY);
             when(repo.findById(PR_ID)).thenReturn(Optional.of(pr));

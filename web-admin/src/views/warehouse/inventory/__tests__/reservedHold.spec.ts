@@ -87,8 +87,8 @@ describe('接线: 库存列表那一列真的用上了 helper', () => {
     expect(source).toMatch(/reservedHoldLabel/);
   });
 
-  it('「当前数量」那一列的 v-if 绑的是 shouldShowReservedHold(row), ⛔ 不是写死的 false', () => {
-    const binding = source.match(/v-if="shouldShowReservedHold\(row\)"/);
+  it('「当前数量」那一列的 v-if 绑的是 shouldShowReservedHold(row / UTable 的 row.original), ⛔ 不是写死的 false', () => {
+    const binding = source.match(/v-if="shouldShowReservedHold\(row(\.original)?\)"/);
     expect(binding, '占用说明没有绑到 helper 上 —— helper 写好了但没人调').not.toBeNull();
     expect(source).not.toMatch(/v-if="false"/);
   });

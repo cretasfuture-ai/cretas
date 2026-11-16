@@ -45,8 +45,13 @@ describe('sales, procurement and production list integration', () => {
   const procurementSource = readSource('../../../views/procurement/orders/list.vue');
   const productionSource = readSource('../../../views/production/plans/list.vue');
 
+  it('sales list (Nuxt UI UTable) keeps the shared grid class and limited column selector', () => {
+    expect(salesSource).toContain('business-list-table');
+    expect(salesSource).toContain('<ListColumnSelector');
+    expect(salesSource).toContain('<UTable');
+  });
+
   it.each([
-    ['sales', salesSource],
     ['procurement', procurementSource],
     ['production', productionSource],
   ])('%s list uses the shared fixed-grid and limited column selector', (_name, source) => {
@@ -59,7 +64,8 @@ describe('sales, procurement and production list integration', () => {
     expect(salesSource).not.toContain('<RowMarkerCell');
     expect(procurementSource).not.toContain('<RowMarkerCell');
     expect(procurementSource).not.toContain('type="selection"');
-    expect(salesSource).toContain('v-if="salesBatchMode" type="selection"');
+    // Nuxt UI 版: 勾选列只在 salesBatchMode 下进列定义
+    expect(salesSource).toContain("salesBatchMode.value && { id: 'select' }");
     expect(productionSource).toContain('v-if="productionBatchMode" type="selection"');
   });
 

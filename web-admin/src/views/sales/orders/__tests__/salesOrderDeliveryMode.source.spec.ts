@@ -10,8 +10,10 @@ const autoChildHelper = readFileSync(resolve(import.meta.dirname, '../deliveryAu
 describe('sales delivery mode contract', () => {
   it('offers explicit one-time full and partial modes', () => {
     expect(detail).toContain('deliveryMode: \'FULL\'');
-    expect(detail).toContain('value="FULL"');
-    expect(detail).toContain('value="PARTIAL"');
+    // Nuxt UI 版: 单选项在 DELIVERY_MODE_ITEMS 里, 模板用 URadioGroup 绑 deliveryForm.deliveryMode
+    expect(detail).toContain("value: 'FULL'");
+    expect(detail).toContain("value: 'PARTIAL'");
+    expect(detail).toContain('v-model="deliveryForm.deliveryMode" :items="DELIVERY_MODE_ITEMS"');
     expect(createPage).not.toContain('deliveryMode');
   });
 

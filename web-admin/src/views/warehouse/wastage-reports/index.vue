@@ -4,9 +4,9 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Plus, Search, Refresh, View, Check, Close, Picture, Paperclip, CircleCloseFilled } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
+import { badgeColor, type ElementTagType } from '@/utils/csBadge';
 import type { TableRow } from '@/types/api';
-import { warehouseTypeBadge } from '@/utils/warehouse';
 // Rule 5 (fool-proof-design): 报损照片证据改真实拍照/文件上传, 不再要求仓管员手打 URL 粘贴到文本框
 // (低技术素养用户根本无法生成一个图片 URL). WastageReport 在后端要求创建时 photoUrls 已非空
 // (WastageReportServiceImpl#validatePhotos), 此时报损单实体还不存在, 无法用需要 entityId 的
@@ -15,17 +15,7 @@ import { warehouseTypeBadge } from '@/utils/warehouse';
 // fileUrl 后推入 createForm.photoUrls — 提交时序不变 (仍是 photoUrls: string[] JSON.stringify)。
 import { getUploadUrl } from '@/api/attachment';
 
-// Safe helpers — Vue template compiler does not support optional chaining (?.)
-// in attribute bindings; delegate to these plain functions instead.
-function wBadgeColor(type: unknown): string | undefined {
-  return warehouseTypeBadge(String(type || ''))?.color;
-}
-function wBadgeLabel(type: unknown): string | undefined {
-  return warehouseTypeBadge(String(type || ''))?.label;
-}
-function wBadgeTextColor(type: unknown): string | undefined {
-  return warehouseTypeBadge(String(type || ''))?.textColor;
-}
+/* 组件全部是 Nuxt UI (UTable / UTabs / UModal / UFormField / USelectMenu / UInput / UTextarea / UBadge / UPagination) + --cs-*；弹窗里不放 Element 控件，照片缩略图用原生 img + 链接（取代 el-image 预览）。提示仍用 ElMessage。 */
 
 // ────────────────────────────────────────────────────────────────────────────
 // Auth / permissions
@@ -39,6 +29,16 @@ const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 // Tab: WAREHOUSE / FACTORY
 // ────────────────────────────────────────────────────────────────────────────
 const activeTab = ref<'WAREHOUSE' | 'FACTORY'>('WAREHOUSE');
+const tabItems: TabsItem[] = [
+  { label: '仓库报损 → 财务审批', value: 'WAREHOUSE' },
+  { label: '生产报损 → 厂长审批', value: 'FACTORY' },
+];
+const tabModel = computed({
+  get: () => activeTab.value,
+  set: (v: string) => { activeTab.value = v as 'WAREHOUSE' | 'FACTORY'; handleTabChange(); },
+});
+// 新建弹窗里的「报损类型」只切类型，不重新加载列表（与原 el-radio-group 绑 activeTab 行为一致）
+function setTrack(v: 'WAREHOUSE' | 'FACTORY') { activeTab.value = v; }
 
 // ────────────────────────────────────────────────────────────────────────────
 // Status / reason maps
@@ -72,6 +72,30 @@ const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const statusFilter = ref('');
 const UNSETTLED_BATCH_QUERY_SIZE = 50;
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<TableRow>[] = [
+  { accessorKey: 'reportNo', header: '报损单号' },
+  { id: 'warehouse', header: '仓库' },
+  { id: 'batch', header: '批次' },
+  { id: 'wastageQty', header: '报损数量', meta: R },
+  { id: 'reason', header: '报损原因' },
+  { id: 'status', header: '状态' },
+  { id: 'submitter', header: '提交人' },
+  { id: 'createdAt', header: '创建时间' },
+  { id: 'actions', header: '操作', meta: R },
+];
+// 状态筛选：Nuxt UI 选项值不能是空串，用 ALL 表示「全部状态」，回写 statusFilter 仍是 ''
+const statusItems = [{ label: '全部状态', value: 'ALL' }, ...Object.entries(statusMap).map(([k, v]) => ({ label: v.label, value: k }))];
+const statusModel = computed({
+  get: () => statusFilter.value || 'ALL',
+  set: (v: string) => { statusFilter.value = v === 'ALL' ? '' : v; handleFilterChange(); },
+});
+const pageModel = computed({
+  get: () => pagination.value.page,
+  set: (v: number) => handlePageChange(v),
+});
+const photoInput = ref<HTMLInputElement | null>(null);
 
 async function loadData() {
   if (!factoryId.value) return;
@@ -116,6 +140,7 @@ function handleFilterChange() {
 // Warehouses dropdown
 // ────────────────────────────────────────────────────────────────────────────
 const warehouses = ref<TableRow[]>([]);
+const warehouseItems = computed(() => warehouses.value.map((w) => ({ label: String(w.name), value: String(w.id) })));
 
 async function loadWarehouses() {
   if (!factoryId.value) return;
@@ -192,6 +217,10 @@ async function loadUnsettledConsumption() {
 }
 
 // 按所选仓库过滤批次 (仓库未选则显全部)
+const batchItems = computed(() => warehouseBatches.value.map((b) => ({
+  label: `${b.batchNumber} - ${b.materialName || b.materialTypeName || '物料'} (可用 ${b.currentQuantity ?? b.remainingQuantity ?? 0})`,
+  value: String(b.id),
+})));
 const warehouseBatches = computed<TableRow[]>(() => {
   const wid = createForm.value.warehouseId;
   if (!wid) return batches.value;
@@ -280,6 +309,14 @@ async function handlePhotoUpload(opts: { file: File }): Promise<void> {
   } finally {
     photoUploading.value = false;
   }
+}
+
+async function onPhotoChosen(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file || !beforePhotoUpload(file)) return;
+  await handlePhotoUpload({ file });
 }
 
 function removePhoto(idx: number) {
@@ -508,352 +545,249 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="page-header">
+  <div class="page-container" data-testid="wastage-reports">
+    <div class="cs-page-head">
       <h2>报损管理</h2>
       <div class="header-actions">
-        <el-select
-          v-model="statusFilter"
-          placeholder="全部状态"
-          clearable
-          style="width: 140px; margin-right: 12px"
-          @change="handleFilterChange"
-        >
-          <el-option v-for="(v, k) in statusMap" :key="k" :label="v.label" :value="k" />
-        </el-select>
-        <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-        <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
-          新建报损
-        </el-button>
+        <USelectMenu
+          v-model="statusModel"
+          value-key="value"
+          :items="statusItems"
+          :search-input="false"
+          class="w-36"
+          data-testid="wastage-status-filter"
+        />
+        <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="loading" @click="loadData">刷新</UButton>
+        <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="wastage-create" @click="openCreateDialog">新建报损</UButton>
       </div>
     </div>
 
-    <!-- Cost note banner -->
-    <el-alert
-      type="info"
-      show-icon
-      :closable="false"
-      title="报损出库将计入损耗成本，审批通过并应用后自动扣减库存。"
-      style="margin-bottom: 16px"
-    />
+    <UAlert class="mb-3" color="info" variant="subtle" icon="i-lucide-info" title="报损出库将计入损耗成本，审批通过并应用后自动扣减库存。" />
 
     <!-- Dual-track tabs -->
-    <el-tabs v-model="activeTab" type="border-card" style="margin-bottom: 16px" @tab-change="handleTabChange">
-      <el-tab-pane label="仓库报损 → 财务审批" name="WAREHOUSE" />
-      <el-tab-pane label="生产报损 → 厂长审批" name="FACTORY" />
-    </el-tabs>
+    <section class="cs-card">
+      <UTabs v-model="tabModel" :items="tabItems" :content="false" variant="link" class="px-4" data-testid="wastage-tabs" />
 
-    <el-card>
-      <el-table v-loading="loading" :data="tableData" row-key="id" stripe>
-        <el-table-column label="报损单号" prop="reportNo" min-width="150" />
-        <el-table-column label="仓库" min-width="110">
-          <template #default="{ row }">{{ warehouseName(row.warehouseId) }}</template>
-        </el-table-column>
-        <el-table-column label="批次" prop="materialBatchId" min-width="180">
-          <template #default="{ row }">{{ batchLabel(row.materialBatchId) }}</template>
-        </el-table-column>
-        <el-table-column label="报损数量" prop="wastageQty" width="100" align="right" />
-        <el-table-column label="报损原因" width="120">
-          <template #default="{ row }">{{ reasonLabel(String(row.wastageReason)) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="(statusMap[String(row.status)]?.type as 'info' | 'warning' | 'success' | 'danger') || 'info'" size="small">
-              {{ statusMap[String(row.status)]?.label || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="wastage-table">
+        <template #empty>暂无报损记录</template>
+        <template #warehouse-cell="{ row }">{{ warehouseName(row.original.warehouseId) }}</template>
+        <template #batch-cell="{ row }">{{ batchLabel(row.original.materialBatchId) }}</template>
+        <template #wastageQty-cell="{ row }"><span class="num">{{ row.original.wastageQty }}</span></template>
+        <template #reason-cell="{ row }">{{ reasonLabel(String(row.original.wastageReason)) }}</template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(statusMap[String(row.original.status)]?.type as ElementTagType)" variant="soft">
+            {{ statusMap[String(row.original.status)]?.label || row.original.status }}
+          </UBadge>
+        </template>
         <!-- fool-proof-design Rule 2: 后端已批量解析 submittedByName (userId→姓名), 不再显裸 userId. -->
-        <el-table-column label="提交人" width="100">
-          <template #default="{ row }">{{ row.submittedByName || row.submittedBy || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="创建时间" prop="createdAt" min-width="150">
-          <template #default="{ row }">
-            {{ row.createdAt ? String(row.createdAt).replace('T', ' ').slice(0, 16) : '—' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="280" fixed="right">
-          <template #default="{ row }">
-            <!-- 查看照片 -->
-            <el-button size="small" :icon="Picture" @click="openPhotoViewer(row)">照片</el-button>
-            <!-- 提交审批: DRAFT -->
-            <el-button
-              v-if="canWrite && row.status === 'DRAFT'"
-              size="small"
-              type="warning"
+        <template #submitter-cell="{ row }">{{ row.original.submittedByName || row.original.submittedBy || '—' }}</template>
+        <template #createdAt-cell="{ row }">
+          {{ row.original.createdAt ? String(row.original.createdAt).replace('T', ' ').slice(0, 16) : '—' }}
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" color="neutral" icon="i-lucide-image" @click="openPhotoViewer(row.original)">照片</UButton>
+            <UButton
+              v-if="canWrite && row.original.status === 'DRAFT'"
+              size="xs"
+              variant="link"
+              color="warning"
               :loading="submitLoading"
-              @click="submitForApproval(row)"
-            >提交审批</el-button>
-            <!-- 审批: PENDING_APPROVAL -->
-            <el-button
-              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
-              size="small"
-              type="success"
-              :icon="Check"
-              @click="openApproveDialog(row)"
-            >审批</el-button>
-            <el-button
-              v-if="canWrite && row.status === 'PENDING_APPROVAL'"
-              size="small"
-              type="danger"
-              :icon="Close"
-              @click="openRejectDialog(row)"
-            >驳回</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+              @click="submitForApproval(row.original)"
+            >提交审批</UButton>
+            <UButton
+              v-if="canWrite && row.original.status === 'PENDING_APPROVAL'"
+              size="xs"
+              variant="link"
+              color="success"
+              icon="i-lucide-check"
+              @click="openApproveDialog(row.original)"
+            >审批</UButton>
+            <UButton
+              v-if="canWrite && row.original.status === 'PENDING_APPROVAL'"
+              size="xs"
+              variant="link"
+              color="error"
+              icon="i-lucide-x"
+              @click="openRejectDialog(row.original)"
+            >驳回</UButton>
+          </div>
+        </template>
+      </UTable>
 
-      <div style="display: flex; justify-content: flex-end; margin-top: 16px">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          :page-size="pagination.size"
-          :total="pagination.total"
-          layout="total, prev, pager, next"
-          @current-change="handlePageChange"
-        />
+      <div class="pager">
+        <span class="count">共 {{ pagination.total }} 条</span>
+        <UPagination v-model:page="pageModel" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" />
       </div>
-    </el-card>
+    </section>
 
     <!-- ──────────────── Create Dialog ──────────────── -->
-    <el-dialog v-model="createDialogVisible" title="新建报损记录" width="560px">
-      <el-alert
-        type="warning"
-        show-icon
-        :closable="false"
-        title="报损出库计入损耗成本。至少上传1张照片证据。"
-        style="margin-bottom: 16px"
-      />
-      <el-form label-width="110px">
-        <el-form-item label="报损类型">
-          <el-radio-group v-model="activeTab">
-            <el-radio-button value="WAREHOUSE">仓库报损</el-radio-button>
-            <el-radio-button value="FACTORY">生产报损</el-radio-button>
-          </el-radio-group>
-          <el-text type="info" style="font-size: 12px; margin-left: 8px">
-            {{ activeTab === 'WAREHOUSE' ? '财务审批' : '厂长审批' }}
-          </el-text>
-        </el-form-item>
-        <el-form-item label="仓库" required>
-          <el-select v-model="createForm.warehouseId" placeholder="选择仓库" style="width: 100%" @change="createForm.materialBatchId = ''">
-            <el-option v-for="w in warehouses" :key="String(w.id)" :label="String(w.name)" :value="String(w.id)">
-              <span>{{ w.name }}</span>
-              <el-tag
-                v-if="wBadgeLabel(w.type)"
-                size="small"
-                :style="{ marginLeft: '8px', fontSize: '11px', color: wBadgeTextColor(w.type) }"
-                :color="wBadgeColor(w.type)"
-                effect="dark"
-              >{{ wBadgeLabel(w.type) }}</el-tag>
-            </el-option>
-          </el-select>
-        </el-form-item>
-        <el-form-item label="批次" required>
-          <el-select
-            v-model="createForm.materialBatchId"
-            placeholder="请选择批次（报损须精确到批次）"
-            filterable
-            style="width: 100%"
-          >
-            <el-option
-              v-for="b in warehouseBatches"
-              :key="String(b.id)"
-              :label="`${b.batchNumber} - ${b.materialName || b.materialTypeName || '物料'} (可用 ${b.currentQuantity ?? b.remainingQuantity ?? 0})`"
-              :value="String(b.id)"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="报损数量" required>
-          <el-input-number
-            v-model="createForm.wastageQty"
-            :min="0.001"
-            :max="selectedWastageMax ?? undefined"
-            :precision="3"
-            style="width: 200px"
-            placeholder="数量"
-          />
-          <div v-if="selectedWastageMax != null" style="font-size:12px;color:var(--cs-muted);margin-top:4px">
-            该批次可用量 {{ selectedWastageMax }}，报损数量不可超过此值
-          </div>
-          <!-- fool-proof-design Rule 1 (预先显示边界, 2026-07-05): 纯提示, 不改上面的 :max gate。
-               只在有未小结生产占用 (货架实物 < 可用量) 时才显示, 避免无意义噪音。 -->
-          <div
-            v-if="selectedPhysicalAvailable != null && selectedUnsettled > 0"
-            style="font-size:12px;color:var(--cs-warning);margin-top:4px"
-          >
-            可用(货架实物) {{ selectedPhysicalAvailable }}：可用库存 {{ selectedWastageMax }} − 生产已占用（未小结）{{ selectedUnsettled }}
-          </div>
-        </el-form-item>
-        <el-form-item label="报损原因" required>
-          <el-select v-model="createForm.wastageReason" placeholder="选择原因" style="width: 100%">
-            <el-option v-for="opt in reasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="createForm.wastageReason === 'OTHER'" label="补充说明" required>
-          <el-input v-model="createForm.reasonDetail" type="textarea" :rows="2" placeholder="请填写具体原因" />
-        </el-form-item>
-        <el-form-item label="照片证据" required>
-          <div style="width: 100%">
-            <el-upload
-              :show-file-list="false"
-              :auto-upload="true"
-              :before-upload="beforePhotoUpload"
-              :http-request="handlePhotoUpload"
-              :disabled="photoUploading"
-              accept="image/*"
-            >
-              <el-button type="primary" :icon="Paperclip" :loading="photoUploading" :disabled="photoUploading">
-                拍照 / 上传照片
-              </el-button>
-            </el-upload>
-            <div v-if="createForm.photoUrls.length" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px">
-              <div v-for="(url, i) in createForm.photoUrls" :key="url + i" style="position:relative">
-                <el-image
-                  :src="url"
-                  fit="cover"
-                  style="width:72px;height:72px;border-radius:4px;border:1px solid var(--cs-border)"
-                  :preview-src-list="createForm.photoUrls"
-                  :initial-index="i"
-                />
-                <el-icon
-                  style="position:absolute;top:-6px;right:-6px;background:#fff;border-radius:50%;cursor:pointer;color:var(--cs-danger)"
-                  :size="18"
-                  @click="removePhoto(i)"
-                ><CircleCloseFilled /></el-icon>
-              </div>
+    <UModal v-model:open="createDialogVisible" title="新建报损记录" description="报损出库计入损耗成本" :ui="{ content: 'max-w-[560px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <UAlert color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="报损出库计入损耗成本。至少上传1张照片证据。" class="mb-3" />
+        <div class="form">
+          <UFormField label="报损类型">
+            <div class="seg">
+              <UButton value="WAREHOUSE" size="sm" :color="activeTab === 'WAREHOUSE' ? 'primary' : 'neutral'" :variant="activeTab === 'WAREHOUSE' ? 'solid' : 'outline'" @click="setTrack('WAREHOUSE')">仓库报损</UButton>
+              <UButton value="FACTORY" size="sm" :color="activeTab === 'FACTORY' ? 'primary' : 'neutral'" :variant="activeTab === 'FACTORY' ? 'solid' : 'outline'" @click="setTrack('FACTORY')">生产报损</UButton>
+              <span class="hint">{{ activeTab === 'WAREHOUSE' ? '财务审批' : '厂长审批' }}</span>
             </div>
-            <el-text type="info" style="font-size: 12px;display:block;margin-top:4px">已上传 {{ createForm.photoUrls.length }} 张（至少1张）</el-text>
-          </div>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="createForm.notes" type="textarea" :rows="2" placeholder="可选" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createLoading" @click="submitCreate">保存草稿</el-button>
+          </UFormField>
+          <UFormField label="仓库" required>
+            <USelectMenu v-model="createForm.warehouseId" value-key="value" :items="warehouseItems" placeholder="选择仓库" class="w-full" data-testid="wastage-warehouse" @update:model-value="createForm.materialBatchId = ''" />
+          </UFormField>
+          <UFormField label="批次" required>
+            <USelectMenu v-model="createForm.materialBatchId" value-key="value" :items="batchItems" placeholder="请选择批次（报损须精确到批次）" class="w-full" data-testid="wastage-batch" />
+          </UFormField>
+          <UFormField label="报损数量" required>
+            <UInput
+              v-model.number="createForm.wastageQty"
+              type="number"
+              :min="0.001"
+              :max="selectedWastageMax ?? undefined"
+              step="0.001"
+              placeholder="数量"
+              class="w-48"
+              data-testid="wastage-qty"
+            />
+            <div v-if="selectedWastageMax != null" class="hint-line">
+              该批次可用量 {{ selectedWastageMax }}，报损数量不可超过此值
+            </div>
+            <!-- fool-proof-design Rule 1 (预先显示边界, 2026-07-05): 纯提示, 不改上面的 :max gate。
+                 只在有未小结生产占用 (货架实物 < 可用量) 时才显示, 避免无意义噪音。 -->
+            <div v-if="selectedPhysicalAvailable != null && selectedUnsettled > 0" class="hint-line warn">
+              可用(货架实物) {{ selectedPhysicalAvailable }}：可用库存 {{ selectedWastageMax }} − 生产已占用（未小结）{{ selectedUnsettled }}
+            </div>
+          </UFormField>
+          <UFormField label="报损原因" required>
+            <USelectMenu v-model="createForm.wastageReason" value-key="value" :items="reasonOptions" :search-input="false" placeholder="选择原因" class="w-full" data-testid="wastage-reason" />
+          </UFormField>
+          <UFormField v-if="createForm.wastageReason === 'OTHER'" label="补充说明" required>
+            <UTextarea v-model="createForm.reasonDetail" :rows="2" placeholder="请填写具体原因" class="w-full" />
+          </UFormField>
+          <UFormField label="照片证据" required>
+            <div class="w-full">
+              <input ref="photoInput" type="file" accept="image/*" hidden data-testid="wastage-photo-input" @change="onPhotoChosen">
+              <UButton icon="i-lucide-paperclip" :loading="photoUploading" :disabled="photoUploading" @click="photoInput?.click()">拍照 / 上传照片</UButton>
+              <div v-if="createForm.photoUrls.length" class="thumbs">
+                <div v-for="(url, i) in createForm.photoUrls" :key="url + i" class="thumb">
+                  <a :href="url" target="_blank" rel="noopener"><img :src="url" alt="报损照片"></a>
+                  <button type="button" class="thumb-x" aria-label="删除照片" @click="removePhoto(i)">
+                    <UIcon name="i-lucide-circle-x" />
+                  </button>
+                </div>
+              </div>
+              <div class="hint-line">已上传 {{ createForm.photoUrls.length }} 张（至少1张）</div>
+            </div>
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="createForm.notes" :rows="2" placeholder="可选" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="createDialogVisible = false">取消</UButton>
+        <UButton :loading="createLoading" data-testid="wastage-create-submit" @click="submitCreate">保存草稿</UButton>
+      </template>
+    </UModal>
 
     <!-- ──────────────── Approve Dialog ──────────────── -->
-    <el-dialog v-model="approveDialogVisible" title="审批报损申请" width="520px">
-      <template v-if="approveRow">
-        <el-descriptions :column="2" border style="margin-bottom: 16px">
-          <el-descriptions-item label="报损单号">{{ approveRow.reportNo }}</el-descriptions-item>
-          <el-descriptions-item label="审批路径">
-            <el-tag type="info" size="small">
-              {{ activeTab === 'WAREHOUSE' ? '仓库报损 → 财务审批' : '生产报损 → 厂长审批' }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="仓库">{{ warehouseName(approveRow?.warehouseId) }}</el-descriptions-item>
-          <el-descriptions-item label="报损数量">{{ approveRow.wastageQty }}</el-descriptions-item>
-          <el-descriptions-item label="报损原因">{{ reasonLabel(String(approveRow.wastageReason)) }}</el-descriptions-item>
-          <el-descriptions-item label="提交人">{{ approveRow.submittedByName || approveRow.submittedBy || '—' }}</el-descriptions-item>
-        </el-descriptions>
+    <UModal v-model:open="approveDialogVisible" title="审批报损申请" description="核对报损信息后审批" :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <template v-if="approveRow">
+          <dl class="summary">
+            <div><dt>报损单号</dt><dd>{{ approveRow.reportNo }}</dd></div>
+            <div><dt>审批路径</dt><dd><UBadge color="neutral" variant="soft">{{ activeTab === 'WAREHOUSE' ? '仓库报损 → 财务审批' : '生产报损 → 厂长审批' }}</UBadge></dd></div>
+            <div><dt>仓库</dt><dd>{{ warehouseName(approveRow?.warehouseId) }}</dd></div>
+            <div><dt>报损数量</dt><dd class="num">{{ approveRow.wastageQty }}</dd></div>
+            <div><dt>报损原因</dt><dd>{{ reasonLabel(String(approveRow.wastageReason)) }}</dd></div>
+            <div><dt>提交人</dt><dd>{{ approveRow.submittedByName || approveRow.submittedBy || '—' }}</dd></div>
+          </dl>
 
-        <!-- Photo thumbnails: photoUrls is a JSON string from the backend DTO -->
-        <div v-if="parsePhotoUrlsFromRow(approveRow.photoUrls).length > 0" style="margin-bottom: 16px">
-          <div style="font-size: 13px; color: var(--cs-muted); margin-bottom: 6px">照片证据：</div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap">
-            <el-image
-              v-for="(url, i) in parsePhotoUrlsFromRow(approveRow.photoUrls)"
-              :key="i"
-              :src="url"
-              :preview-src-list="parsePhotoUrlsFromRow(approveRow.photoUrls)"
-              fit="cover"
-              style="width: 80px; height: 80px; border-radius: 4px; object-fit: cover"
-            />
+          <!-- Photo thumbnails: photoUrls is a JSON string from the backend DTO -->
+          <div v-if="parsePhotoUrlsFromRow(approveRow.photoUrls).length > 0" class="mt-3">
+            <div class="hint-line">照片证据：</div>
+            <div class="thumbs">
+              <a v-for="(url, i) in parsePhotoUrlsFromRow(approveRow.photoUrls)" :key="i" :href="url" target="_blank" rel="noopener" class="thumb big">
+                <img :src="url" alt="报损照片">
+              </a>
+            </div>
           </div>
-        </div>
 
-        <el-alert type="warning" show-icon :closable="false" title="审批通过后，报损数量将计入损耗成本并扣减对应库存。" style="margin-bottom: 12px" />
+          <UAlert color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="审批通过后，报损数量将计入损耗成本并扣减对应库存。" class="my-3" />
 
-        <el-form label-width="80px">
-          <el-form-item label="审批备注">
-            <el-input v-model="approveNote" type="textarea" :rows="2" placeholder="可选" />
-          </el-form-item>
-        </el-form>
+          <UFormField label="审批备注">
+            <UTextarea v-model="approveNote" :rows="2" placeholder="可选" class="w-full" />
+          </UFormField>
+        </template>
       </template>
       <template #footer>
-        <el-button @click="approveDialogVisible = false">取消</el-button>
-        <el-button type="success" :loading="approveLoading" @click="submitApprove">确认审批通过</el-button>
+        <UButton color="neutral" variant="outline" @click="approveDialogVisible = false">取消</UButton>
+        <UButton color="success" :loading="approveLoading" @click="submitApprove">确认审批通过</UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
     <!-- ──────────────── Reject Dialog ──────────────── -->
-    <el-dialog v-model="rejectDialogVisible" title="驳回报损申请" width="480px">
-      <template v-if="rejectRow">
-        <el-descriptions :column="2" border style="margin-bottom: 16px">
-          <el-descriptions-item label="报损单号">{{ rejectRow.reportNo }}</el-descriptions-item>
-          <el-descriptions-item label="仓库">{{ warehouseName(rejectRow?.warehouseId) }}</el-descriptions-item>
-          <el-descriptions-item label="报损数量">{{ rejectRow.wastageQty }}</el-descriptions-item>
-          <el-descriptions-item label="原因">{{ reasonLabel(String(rejectRow.wastageReason)) }}</el-descriptions-item>
-        </el-descriptions>
-        <el-form label-width="100px">
-          <el-form-item label="驳回原因" required>
-            <el-select v-model="rejectReasonSelect" placeholder="选择驳回原因" style="width: 100%">
-              <el-option v-for="opt in rejectReasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-          </el-form-item>
-          <el-form-item v-if="rejectReasonSelect === 'OTHER'" label="补充说明" required>
-            <el-input v-model="rejectReasonOther" type="textarea" :rows="2" placeholder="请填写具体原因" />
-          </el-form-item>
-        </el-form>
+    <UModal v-model:open="rejectDialogVisible" title="驳回报损申请" description="选择驳回原因" :ui="{ content: 'max-w-[480px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <template v-if="rejectRow">
+          <dl class="summary">
+            <div><dt>报损单号</dt><dd>{{ rejectRow.reportNo }}</dd></div>
+            <div><dt>仓库</dt><dd>{{ warehouseName(rejectRow?.warehouseId) }}</dd></div>
+            <div><dt>报损数量</dt><dd class="num">{{ rejectRow.wastageQty }}</dd></div>
+            <div><dt>原因</dt><dd>{{ reasonLabel(String(rejectRow.wastageReason)) }}</dd></div>
+          </dl>
+          <div class="form mt-3">
+            <UFormField label="驳回原因" required>
+              <USelectMenu v-model="rejectReasonSelect" value-key="value" :items="rejectReasonOptions" :search-input="false" placeholder="选择驳回原因" class="w-full" data-testid="wastage-reject-reason" />
+            </UFormField>
+            <UFormField v-if="rejectReasonSelect === 'OTHER'" label="补充说明" required>
+              <UTextarea v-model="rejectReasonOther" :rows="2" placeholder="请填写具体原因" class="w-full" />
+            </UFormField>
+          </div>
+        </template>
       </template>
       <template #footer>
-        <el-button @click="rejectDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="rejectLoading" @click="submitReject">确认驳回</el-button>
+        <UButton color="neutral" variant="outline" @click="rejectDialogVisible = false">取消</UButton>
+        <UButton color="error" :loading="rejectLoading" @click="submitReject">确认驳回</UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
     <!-- ──────────────── Photo Viewer Dialog ──────────────── -->
-    <el-dialog v-model="photoViewerVisible" title="照片证据查看" width="640px">
-      <div style="display: flex; flex-wrap: wrap; gap: 12px; justify-content: center">
-        <el-image
-          v-for="(url, i) in viewingPhotos"
-          :key="i"
-          :src="url"
-          :preview-src-list="viewingPhotos"
-          fit="contain"
-          style="width: 180px; height: 180px; border: 1px solid var(--cs-border); border-radius: 6px"
-        >
-          <template #error>
-            <div style="display: flex; align-items: center; justify-content: center; height: 100%; color: #c0c4cc; font-size: 12px">
-              图片加载失败
-            </div>
-          </template>
-        </el-image>
-      </div>
-      <template #footer>
-        <el-button @click="photoViewerVisible = false">关闭</el-button>
+    <UModal v-model:open="photoViewerVisible" title="照片证据查看" description="点击图片在新窗口查看原图" :ui="{ content: 'max-w-[640px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="thumbs center">
+          <a v-for="(url, i) in viewingPhotos" :key="i" :href="url" target="_blank" rel="noopener" class="thumb viewer">
+            <img :src="url" alt="报损照片">
+          </a>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="photoViewerVisible = false">关闭</UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-  background: var(--cs-bg);
-  min-height: 100%;
-}
-.page-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.page-header h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--cs-primary);
-}
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.el-card {
-  border-radius: 10px;
-}
+.page-container { padding: var(--cs-space-4); min-height: 100%; }
+.header-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.row-actions { display: flex; justify-content: flex-end; gap: var(--cs-space-1); }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.seg { display: flex; gap: var(--cs-space-2); align-items: center; }
+.hint { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.hint-line { font-size: var(--cs-font-small); color: var(--cs-muted); margin-top: 4px; }
+.hint-line.warn { color: var(--cs-warning); }
+.thumbs { display: flex; flex-wrap: wrap; gap: var(--cs-space-2); margin-top: var(--cs-space-2); }
+.thumbs.center { justify-content: center; gap: var(--cs-space-3); }
+.thumb { position: relative; display: block; width: 72px; height: 72px; }
+.thumb.big { width: 80px; height: 80px; }
+.thumb.viewer { width: 180px; height: 180px; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; border-radius: var(--cs-radius-sm); border: 1px solid var(--cs-border); }
+.thumb-x { position: absolute; top: -6px; right: -6px; display: flex; background: var(--cs-surface); border-radius: 50%; color: var(--cs-danger); font-size: 18px; }
+.summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cs-space-3); margin: 0; padding: var(--cs-space-3) var(--cs-space-4); background: var(--cs-surface-subtle); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); }
+.summary dt { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.summary dd { margin: 2px 0 0; color: var(--cs-text); }
 </style>

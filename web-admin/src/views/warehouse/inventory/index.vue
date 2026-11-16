@@ -6,7 +6,9 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Search, Refresh, DataAnalysis, Edit, View, Download, Warning, ChatDotRound, QuestionFilled } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { badgeColor, type ElementTagType } from '@/utils/csBadge';
+/* 组件全部是 Nuxt UI (UTable / UModal / UFormField / UInput / USelectMenu / UTextarea / UBadge / UPagination) + --cs-*；弹窗里不放 Element 控件。提示仍用 ElMessage；附件列头提示用原生 title（UTooltip 需 UApp）。 */
 // Sprint 6 W3-A — inline 3-chip link counter (文件 / 图片 / 合同).
 import LinkChipCell from '@/components/list/LinkChipCell.vue';
 import { useLinkChipCounts } from '@/composables/useLinkChipCounts';
@@ -144,11 +146,35 @@ const adjustReasonOptions = [
 const detailDialogVisible = ref(false);
 const detailData = ref<TableRow | null>(null);
 const detailLoading = ref(false);
+
+const adjustedQuantity = computed(() => (Number(adjustForm.value.currentQuantity) || 0) + (Number(adjustForm.value.adjustQuantity) || 0));
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const columns: TableColumn<TableRow>[] = [
+  { accessorKey: 'batchNumber', header: '批次号' },
+  { id: 'material', header: '材料类型' },
+  { id: 'quantity', header: '当前数量', meta: R },
+  { id: 'unit', header: '单位', meta: C },
+  { id: 'storageLocation', header: '存储位置' },
+  { id: 'status', header: '状态', meta: C },
+  { id: 'expire', header: '过期日期' },
+  { id: 'updatedAt', header: '更新时间' },
+  { id: 'attachments', header: '附件', meta: C },
+  { id: 'actions', header: '操作', meta: C },
+];
+const historyColumns: TableColumn<TableRow>[] = [
+  { accessorKey: 'adjustmentType', header: '类型' },
+  { id: 'adjustmentQuantity', header: '数量', meta: R },
+  { id: 'quantityBefore', header: '调前', meta: R },
+  { id: 'quantityAfter', header: '调后', meta: R },
+  { accessorKey: 'reason', header: '原因' },
+  { accessorKey: 'adjustmentTime', header: '时间' },
+];
+const sizeItems = [10, 20, 50, 100].map((v) => ({ label: `${v} 条/页`, value: v }));
 const adjustHistory = ref<TableRow[]>([]);
 
 // 状态选项
 const statusOptions = [
-  { value: '', label: '全部状态' },
   { value: 'AVAILABLE', label: '可用' },
   { value: 'FRESH', label: '鲜品' },
   { value: 'FROZEN', label: '冻品' },
@@ -158,6 +184,20 @@ const statusOptions = [
   { value: 'EXPIRED', label: '已过期' },
   { value: 'SCRAPPED', label: '已报废' },
 ];
+// Nuxt UI 选项值不能是空串：ALL 表示「全部状态」，回写 statusFilter 仍是 ''
+const statusItems = [{ value: 'ALL', label: '全部状态' }, ...statusOptions];
+const statusModel = computed({
+  get: () => statusFilter.value || 'ALL',
+  set: (v: string) => { statusFilter.value = v === 'ALL' ? '' : v; handleSearch(); },
+});
+const pageModel = computed({
+  get: () => pagination.value.page,
+  set: (v: number) => handlePageChange(v),
+});
+const sizeModel = computed({
+  get: () => pagination.value.size,
+  set: (v: number) => handleSizeChange(v),
+});
 
 onMounted(() => {
   loadData();
@@ -389,7 +429,7 @@ function getStatusText(status: string) {
 </script>
 
 <template>
-  <div class="page-wrapper">
+  <div class="page-wrapper" data-testid="inventory-page">
     <!-- U-NAV-1 业务流程图导航 (Sprint 2 Track G) -->
     <WorkflowBar
       :nodes="workflowStats?.nodes ?? []"
@@ -401,150 +441,105 @@ function getStatusText(status: string) {
     />
     <!-- 统计卡片 -->
     <div class="statistics-row">
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-content">
-          <div class="stat-value">{{ statistics.totalBatches }}</div>
-          <div class="stat-label">批次总数</div>
-        </div>
-      </el-card>
-      <el-card class="stat-card" shadow="hover">
-        <div class="stat-content">
-          <div class="stat-value">{{ statistics.totalQuantity }}</div>
-          <div class="stat-label">库存总量</div>
-        </div>
-      </el-card>
-      <el-card class="stat-card warning" shadow="hover">
-        <div class="stat-content">
-          <div class="stat-value">{{ statistics.lowStockCount }}</div>
-          <div class="stat-label">低库存预警</div>
-        </div>
-      </el-card>
-      <el-card class="stat-card danger" shadow="hover">
-        <div class="stat-content">
-          <div class="stat-value">{{ statistics.expiringCount }}</div>
-          <div class="stat-label">即将过期</div>
-        </div>
-      </el-card>
+      <div class="cs-card stat-card">
+        <div class="stat-value">{{ statistics.totalBatches }}</div>
+        <div class="stat-label">批次总数</div>
+      </div>
+      <div class="cs-card stat-card">
+        <div class="stat-value">{{ statistics.totalQuantity }}</div>
+        <div class="stat-label">库存总量</div>
+      </div>
+      <div class="cs-card stat-card warning">
+        <div class="stat-value">{{ statistics.lowStockCount }}</div>
+        <div class="stat-label">低库存预警</div>
+      </div>
+      <div class="cs-card stat-card danger">
+        <div class="stat-value">{{ statistics.expiringCount }}</div>
+        <div class="stat-label">即将过期</div>
+      </div>
     </div>
 
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">库存批次查询</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
-          </div>
-          <div class="header-right">
-            <el-button v-if="canWrite" type="success" :icon="ChatDotRound" @click="aiEntryVisible = true">
-              AI 盘点
-            </el-button>
-            <el-button :icon="Download" @click="handleExport">导出报告</el-button>
-            <el-button :icon="DataAnalysis" @click="loadStatistics">刷新统计</el-button>
-          </div>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <span class="page-title">库存批次查询</span>
+        <span class="data-count">共 {{ pagination.total }} 条记录</span>
+        <div class="header-right">
+          <UButton v-if="canWrite" color="success" icon="i-lucide-message-circle" @click="aiEntryVisible = true">AI 盘点</UButton>
+          <UButton color="neutral" variant="outline" icon="i-lucide-download" @click="handleExport">导出报告</UButton>
+          <UButton color="neutral" variant="outline" icon="i-lucide-chart-column" @click="loadStatistics">刷新统计</UButton>
         </div>
-      </template>
+      </header>
 
       <div class="search-bar">
-        <el-input
-          v-model="searchKeyword"
-          placeholder="搜索批次号/材料名称"
-          :prefix-icon="Search"
-          clearable
-          style="width: 280px"
-          @keyup.enter="handleSearch"
-        />
-        <el-select v-model="statusFilter" placeholder="状态筛选" clearable style="width: 150px" @change="handleSearch">
-          <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-        <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
+        <UInput v-model="searchKeyword" icon="i-lucide-search" placeholder="搜索批次号/材料名称" class="w-70" data-testid="inventory-keyword" @keyup.enter="handleSearch">
+          <template v-if="searchKeyword" #trailing>
+            <UButton color="neutral" variant="link" size="xs" icon="i-lucide-x" aria-label="清空" @click="searchKeyword = ''" />
+          </template>
+        </UInput>
+        <USelectMenu v-model="statusModel" value-key="value" :items="statusItems" :search-input="false" class="w-40" data-testid="inventory-status" />
+        <UButton icon="i-lucide-search" @click="handleSearch">搜索</UButton>
+        <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" @click="handleRefresh">重置</UButton>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
-        <el-table-column prop="batchNumber" label="批次号" width="160" />
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="inventory-table">
+        <template #empty>暂无数据</template>
+        <template #batchNumber-cell="{ row }">{{ row.original.batchNumber }}</template>
         <!-- Bug 2 fix: MaterialBatchDTO 返回字段是 materialName, 不是 materialTypeName (后者在
              该 DTO 上不存在, 恒 undefined → 之前列永远显 "-", 仓管员看不到具体物料) -->
-        <el-table-column label="材料类型" min-width="150" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.materialName || row.materialTypeName || '-' }}</template>
-        </el-table-column>
+        <template #material-cell="{ row }">{{ row.original.materialName || row.original.materialTypeName || '-' }}</template>
         <!-- 🔴 2026-08-19: 「当前数量」的后端口径是 收货量 − 已用 − 已占用。
              在此之前 reserved_quantity 全库恒 0(prod 实测 65 个在用批次 0 个有值),
              这一列等价于 收货量 − 已用。「报工即占用」上线后, 已提交未结单的报工会给
              车间批次写上占用量 ⇒ 同一列会**变小**, 而界面上没有任何东西解释它为什么变小。
              ▎仓管看到的就是「库存凭空少了」。所以把被扣掉的那部分显式说出来。 -->
-        <el-table-column label="当前数量" width="150" align="right">
-          <template #default="{ row }">
-            <div>{{ row.currentQuantity ?? row.quantity ?? '-' }}</div>
-            <div v-if="shouldShowReservedHold(row)" class="reserved-hold-hint">
-              {{ reservedHoldLabel(row) }}
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="单位" width="80" align="center">
-          <template #default="{ row }">
-            {{ displayUnit(row.quantityUnit || row.unit) || '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="storageLocation" label="存储位置" width="130" show-overflow-tooltip />
-        <el-table-column prop="status" label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="过期日期" width="120">
-          <template #default="{ row }">
-            <span :class="getExpireDateClass(row)">
-              {{ row.expirationDate || row.expireDate || '-' }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column label="更新时间" width="170" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.updatedAt ? row.updatedAt.replace('T', ' ').substring(0, 19) : '-' }}
-          </template>
-        </el-table-column>
+        <template #quantity-cell="{ row }">
+          <div class="num">{{ row.original.currentQuantity ?? row.original.quantity ?? '-' }}</div>
+          <div v-if="shouldShowReservedHold(row.original)" class="reserved-hold-hint">
+            {{ reservedHoldLabel(row.original) }}
+          </div>
+        </template>
+        <template #unit-cell="{ row }">{{ displayUnit(row.original.quantityUnit || row.original.unit) || '-' }}</template>
+        <template #storageLocation-cell="{ row }"><span class="clip" :title="row.original.storageLocation || ''">{{ row.original.storageLocation || '' }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="badgeColor(getStatusType(row.original.status) as ElementTagType)" variant="soft">
+            {{ getStatusText(row.original.status) }}
+          </UBadge>
+        </template>
+        <template #expire-cell="{ row }">
+          <span :class="getExpireDateClass(row.original)">
+            {{ row.original.expirationDate || row.original.expireDate || '-' }}
+          </span>
+        </template>
+        <template #updatedAt-cell="{ row }">
+          {{ row.original.updatedAt ? row.original.updatedAt.replace('T', ' ').substring(0, 19) : '-' }}
+        </template>
         <!--
           Sprint 6 W3-A — 行内 3-chip 链接计数 (文件 / 图片 / 合同).
           库存批次附件: 入库单据 / 抄码单 (DOCUMENT) + 现场照片 (PHOTO) + 质检报告 (CONTRACT).
           数据源: POST /attachments/batch-3chip-counts (batch, 避免 N+1).
         -->
-        <el-table-column label="附件" width="200" align="center">
-          <template #header>
-            <span style="display: inline-flex; align-items: center; gap: 4px;">
-              附件
-              <el-tooltip placement="top">
-                <template #content>
-                  <div style="line-height: 1.6;">
-                    <div><b>文件</b>: 入库单据 / 抄码单 (DOCUMENT / OTHER)</div>
-                    <div><b>图片</b>: 现场照片 / 视频 (PHOTO / VIDEO)</div>
-                    <div><b>合同</b>: 质检报告 / 证明 (CONTRACT)</div>
-                    <div style="margin-top: 4px; color: var(--text-color-secondary);">点查看可看附件清单</div>
-                  </div>
-                </template>
-                <el-icon style="cursor: help; color: var(--text-color-secondary, var(--cs-muted)); font-size: 12px;"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-          </template>
-          <template #default="{ row }">
-            <LinkChipCell :counts="linkCountsFor(row.id)" />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="150" fixed="right" align="center">
-          <template #default="{ row }">
-            <el-button type="primary" link size="small" :icon="View" @click="handleViewDetail(row)">查看</el-button>
-            <el-button
-              v-if="canWrite && (row.status === 'AVAILABLE' || row.status === 'IN_STOCK' || row.status === 'FRESH' || row.status === 'FROZEN')"
-              type="warning"
-              link
-              size="small"
-              :icon="Edit"
-              @click="handleAdjust(row)"
-            >调整</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <template #attachments-header>
+          <span class="attach-head" title="文件: 入库单据 / 抄码单；图片: 现场照片 / 视频；合同: 质检报告 / 证明。点查看可看附件清单">
+            附件 <UIcon name="i-lucide-circle-help" class="attach-help" />
+          </span>
+        </template>
+        <template #attachments-cell="{ row }">
+          <LinkChipCell :counts="linkCountsFor(row.original.id)" />
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton size="xs" variant="link" icon="i-lucide-eye" @click="handleViewDetail(row.original)">查看</UButton>
+            <UButton
+              v-if="canWrite && (row.original.status === 'AVAILABLE' || row.original.status === 'IN_STOCK' || row.original.status === 'FRESH' || row.original.status === 'FROZEN')"
+              size="xs"
+              variant="link"
+              color="warning"
+              icon="i-lucide-pencil"
+              @click="handleAdjust(row.original)"
+            >调整</UButton>
+          </div>
+        </template>
+      </UTable>
 
       <TableFooter
         :stats="footerSummary?.stats ?? []"
@@ -554,149 +549,139 @@ function getStatusText(status: string) {
       />
 
       <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
+        <span class="data-count">共 {{ pagination.total }} 条</span>
+        <USelectMenu v-model="sizeModel" value-key="value" :items="sizeItems" :search-input="false" class="w-28" />
+        <UPagination v-model:page="pageModel" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" />
       </div>
-    </el-card>
+    </section>
 
     <!-- 调整库存对话框 -->
     <!-- Bug 2 (fool-proof Rule 2 上下文): 标题带物料名, 用户一眼看清在调整哪个物料的库存,
          而不是只看到一串批次号数字。 -->
-    <el-dialog
-      v-model="adjustDialogVisible"
+    <UModal
+      v-model:open="adjustDialogVisible"
       :title="adjustForm.materialName ? `调整库存 — ${adjustForm.materialName} (${adjustForm.batchNumber})` : '调整库存'"
-      width="450px"
-      :close-on-click-modal="false"
+      description="调整批次库存数量"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[460px]', description: 'sr-only', footer: 'justify-end' }"
     >
-      <el-form :model="adjustForm" label-width="100px">
-        <el-form-item label="物料名称">
-          <el-input :model-value="adjustForm.materialName || '-'" disabled />
-        </el-form-item>
-        <el-form-item label="批次号">
-          <el-input v-model="adjustForm.batchNumber" disabled />
-        </el-form-item>
-        <el-form-item label="当前数量">
-          <el-input-number v-model="adjustForm.currentQuantity" disabled style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="调整数量" required>
-          <el-input-number v-model="adjustForm.adjustQuantity" :step="1" style="width: 100%" />
-          <div class="form-tip">
-            正数增加，负数减少 ·
-            调整后数量:
-            <strong :style="{ color: ((Number(adjustForm.currentQuantity) || 0) + (Number(adjustForm.adjustQuantity) || 0)) < 0 ? 'var(--el-color-danger)' : 'inherit' }">
-              {{ (Number(adjustForm.currentQuantity) || 0) + (Number(adjustForm.adjustQuantity) || 0) }}
-            </strong>
-          </div>
-          <div class="form-tip" style="color: var(--cs-muted); font-size: 12px; margin-top: 4px;">
- "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
-          </div>
-        </el-form-item>
-        <!-- Bug 5 (fool-proof Rule 3): 调整原因改标准下拉, 与报损原因一致的约束选择,
-             不是自由 textarea (之前用户可瞎写无统计价值)。 -->
-        <el-form-item label="调整原因" required>
-          <el-select v-model="adjustForm.reason" placeholder="选择调整原因" style="width: 100%">
-            <el-option v-for="opt in adjustReasonOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-        </el-form-item>
-        <el-form-item v-if="adjustForm.reason === 'OTHER'" label="补充说明" required>
-          <el-input v-model="adjustForm.reasonOther" type="textarea" :rows="2" placeholder="请填写具体调整原因" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="adjustDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
-          :loading="adjustLoading"
-          :disabled="((Number(adjustForm.currentQuantity) || 0) + (Number(adjustForm.adjustQuantity) || 0)) < 0"
-          @click="submitAdjust"
-        >确定</el-button>
+      <template #body>
+        <div class="form">
+          <UFormField label="物料名称">
+            <UInput :model-value="adjustForm.materialName || '-'" disabled class="w-full" />
+          </UFormField>
+          <UFormField label="批次号">
+            <UInput v-model="adjustForm.batchNumber" disabled class="w-full" />
+          </UFormField>
+          <UFormField label="当前数量">
+            <UInput v-model.number="adjustForm.currentQuantity" type="number" disabled class="w-full" />
+          </UFormField>
+          <UFormField label="调整数量" required>
+            <UInput v-model.number="adjustForm.adjustQuantity" type="number" step="1" class="w-full" data-testid="inventory-adjust-qty" />
+            <div class="form-tip">
+              正数增加，负数减少 ·
+              调整后数量:
+              <strong :style="{ color: adjustedQuantity < 0 ? 'var(--cs-danger)' : 'inherit' }">
+                {{ adjustedQuantity }}
+              </strong>
+            </div>
+            <div class="form-tip">
+              "当前数量"在对话框打开时读取，若有其他用户同时调整，实际结果可能偏差。如需保证一致性请先刷新列表。
+            </div>
+          </UFormField>
+          <!-- Bug 5 (fool-proof Rule 3): 调整原因改标准下拉, 与报损原因一致的约束选择,
+               不是自由 textarea (之前用户可瞎写无统计价值)。 -->
+          <UFormField label="调整原因" required>
+            <USelectMenu v-model="adjustForm.reason" value-key="value" :items="adjustReasonOptions" :search-input="false" placeholder="选择调整原因" class="w-full" data-testid="inventory-adjust-reason" />
+          </UFormField>
+          <UFormField v-if="adjustForm.reason === 'OTHER'" label="补充说明" required>
+            <UTextarea v-model="adjustForm.reasonOther" :rows="2" placeholder="请填写具体调整原因" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="adjustDialogVisible = false">取消</UButton>
+        <UButton :loading="adjustLoading" :disabled="adjustedQuantity < 0" data-testid="inventory-adjust-submit" @click="submitAdjust">确定</UButton>
+      </template>
+    </UModal>
 
     <!-- 批次详情对话框 -->
-    <el-dialog v-model="detailDialogVisible" title="批次详情" width="650px">
-      <div v-if="detailData" class="detail-grid">
-        <div class="detail-item">
-          <span class="detail-label">批次号</span>
-          <span class="detail-value">{{ detailData.batchNumber }}</span>
+    <UModal v-model:open="detailDialogVisible" title="批次详情" description="批次基础信息与调整/使用记录" :ui="{ content: 'max-w-[680px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div v-if="detailData" class="detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">批次号</span>
+            <span class="detail-value">{{ detailData.batchNumber }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">材料类型</span>
+            <span class="detail-value">{{ detailData.materialName || detailData.materialTypeName || '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">供应商</span>
+            <span class="detail-value">{{ detailData.supplierName || '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">状态</span>
+            <span><UBadge :color="badgeColor(getStatusType(detailData.status) as ElementTagType)" variant="soft">{{ getStatusText(detailData.status) }}</UBadge></span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">入库数量</span>
+            <span class="detail-value">{{ detailData.receiptQuantity ?? detailData.inboundQuantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">当前数量</span>
+            <span class="detail-value">{{ detailData.currentQuantity ?? detailData.quantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">已用数量</span>
+            <span class="detail-value">{{ detailData.usedQuantity ?? '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">预留数量</span>
+            <span class="detail-value">{{ detailData.reservedQuantity ?? '-' }}</span>
+          </div>
+          <div v-if="canViewPrice" class="detail-item">
+            <span class="detail-label">单价</span>
+            <span class="detail-value">{{ detailData.unitPrice != null ? `¥${detailData.unitPrice}` : '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">存储位置</span>
+            <span class="detail-value">{{ detailData.storageLocation || '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">入库日期</span>
+            <span class="detail-value">{{ detailData.receiptDate || detailData.inboundDate || '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">生产日期</span>
+            <span class="detail-value">{{ detailData.productionDate || '-' }}</span>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">过期日期</span>
+            <span class="detail-value" :class="getExpireDateClass(detailData)">{{ detailData.expirationDate || detailData.expireDate || '-' }}</span>
+          </div>
+          <div class="detail-item wide">
+            <span class="detail-label">备注</span>
+            <span class="detail-value">{{ detailData.notes || '-' }}</span>
+          </div>
         </div>
-        <div class="detail-item">
-          <span class="detail-label">材料类型</span>
-          <span class="detail-value">{{ detailData.materialName || detailData.materialTypeName || '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">供应商</span>
-          <span class="detail-value">{{ detailData.supplierName || '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">状态</span>
-          <el-tag :type="getStatusType(detailData.status)" size="small">{{ getStatusText(detailData.status) }}</el-tag>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">入库数量</span>
-          <span class="detail-value">{{ detailData.receiptQuantity ?? detailData.inboundQuantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">当前数量</span>
-          <span class="detail-value">{{ detailData.currentQuantity ?? detailData.quantity ?? '-' }} {{ displayUnit(detailData.quantityUnit || detailData.unit) }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">已用数量</span>
-          <span class="detail-value">{{ detailData.usedQuantity ?? '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">预留数量</span>
-          <span class="detail-value">{{ detailData.reservedQuantity ?? '-' }}</span>
-        </div>
-        <div v-if="canViewPrice" class="detail-item">
-          <span class="detail-label">单价</span>
-          <span class="detail-value">{{ detailData.unitPrice != null ? `¥${detailData.unitPrice}` : '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">存储位置</span>
-          <span class="detail-value">{{ detailData.storageLocation || '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">入库日期</span>
-          <span class="detail-value">{{ detailData.receiptDate || detailData.inboundDate || '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">生产日期</span>
-          <span class="detail-value">{{ detailData.productionDate || '-' }}</span>
-        </div>
-        <div class="detail-item">
-          <span class="detail-label">过期日期</span>
-          <span class="detail-value" :class="getExpireDateClass(detailData)">{{ detailData.expirationDate || detailData.expireDate || '-' }}</span>
-        </div>
-        <div class="detail-item" style="grid-column: span 2">
-          <span class="detail-label">备注</span>
-          <span class="detail-value">{{ detailData.notes || '-' }}</span>
-        </div>
-      </div>
 
-      <!-- 调整历史 -->
-      <div v-if="adjustHistory.length > 0" style="margin-top: 20px">
-        <div style="font-weight: 600; margin-bottom: 8px; font-size: 14px">调整/使用记录</div>
-        <el-table :data="adjustHistory" size="small" border stripe max-height="250">
-          <el-table-column prop="adjustmentType" label="类型" width="80" />
-          <el-table-column prop="adjustmentQuantity" label="数量" width="90" align="right" />
-          <el-table-column prop="quantityBefore" label="调前" width="90" align="right" />
-          <el-table-column prop="quantityAfter" label="调后" width="90" align="right" />
-          <el-table-column prop="reason" label="原因" min-width="120" show-overflow-tooltip />
-          <el-table-column prop="adjustmentTime" label="时间" width="160" show-overflow-tooltip />
-        </el-table>
-      </div>
-      <div v-else-if="detailLoading" style="text-align: center; padding: 20px">
-        <el-icon class="is-loading"><DataAnalysis /></el-icon> 加载中...
-      </div>
-    </el-dialog>
+        <!-- 调整历史 -->
+        <div v-if="adjustHistory.length > 0" class="history">
+          <div class="history-title">调整/使用记录</div>
+          <UTable :data="adjustHistory" :columns="historyColumns" class="cs-table history-table" data-testid="inventory-history">
+            <template #adjustmentQuantity-cell="{ row }"><span class="num">{{ row.original.adjustmentQuantity }}</span></template>
+            <template #quantityBefore-cell="{ row }"><span class="num">{{ row.original.quantityBefore }}</span></template>
+            <template #quantityAfter-cell="{ row }"><span class="num">{{ row.original.quantityAfter }}</span></template>
+          </UTable>
+        </div>
+        <div v-else-if="detailLoading" class="history-loading">加载中...</div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="detailDialogVisible = false">关闭</UButton>
+      </template>
+    </UModal>
 
     <!-- AI 盘点调整对话框 (Day 7, Issue #780.1) -->
     <AiEntryDrawer
@@ -707,165 +692,41 @@ function getStatusText(status: string) {
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.statistics-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-
-.stat-card {
-  .stat-content {
-    text-align: center;
-    padding: 8px 0;
-  }
-
-  .stat-value {
-    font-size: 28px;
-    font-weight: 600;
-    color: var(--cs-primary);
-  }
-
-  .stat-label {
-    font-size: 14px;
-    color: var(--cs-muted);
-    margin-top: 8px;
-  }
-
-  &.warning .stat-value {
-    color: var(--cs-warning);
-  }
-
-  &.danger .stat-value {
-    color: var(--cs-danger);
-  }
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, var(--cs-border));
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-color-primary, var(--cs-text));
-    }
-
-    .data-count {
-      font-size: 13px;
-      color: var(--text-color-secondary, var(--cs-muted));
-    }
-  }
-
-  .header-right {
-    display: flex;
-    gap: 8px;
-  }
-}
-
-.search-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.el-table {
-  flex: 1;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, var(--cs-border));
-  margin-top: 16px;
-}
-
-.form-tip {
-  font-size: 12px;
-  color: var(--cs-muted);
-  margin-top: 4px;
-}
-
-// 过期日期高亮
-.expire-expired {
-  color: var(--cs-danger);
-  font-weight: 600;
-}
-
-.expire-danger {
-  color: var(--cs-warning);
-  font-weight: 500;
-}
-
-.expire-warning {
-  color: var(--cs-muted);
-}
-
-// 详情网格
-.detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px 24px;
-}
-
-.detail-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.detail-label {
-  font-size: 12px;
-  color: var(--cs-muted);
-}
-
-.detail-value {
-  font-size: 14px;
-  color: var(--cs-text);
-}
-
+<style scoped>
+.page-wrapper { display: flex; flex-direction: column; gap: var(--cs-space-3); padding: var(--cs-space-4); width: 100%; }
+.statistics-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--cs-space-3); }
+.stat-card { text-align: center; padding: var(--cs-space-3) 0; }
+.cs-card + .cs-card { margin-top: 0; }
+.stat-value { font-size: 28px; font-weight: 600; color: var(--cs-primary); }
+.stat-label { font-size: var(--cs-font); color: var(--cs-muted); margin-top: 8px; }
+.stat-card.warning .stat-value { color: var(--cs-warning); }
+.stat-card.danger .stat-value { color: var(--cs-danger); }
+.cs-card-head { padding-block: var(--cs-space-4); }
+.page-title { font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.data-count { font-size: var(--cs-font-small); color: var(--cs-muted); font-weight: 400; }
+.header-right { display: flex; gap: var(--cs-space-2); margin-left: auto; }
+.search-bar { display: flex; gap: var(--cs-space-3); align-items: center; flex-wrap: wrap; padding: var(--cs-space-4) var(--cs-space-5); }
+.row-actions { display: flex; justify-content: center; gap: var(--cs-space-1); }
+.pagination-wrapper { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
+.clip { display: inline-block; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+.attach-head { display: inline-flex; align-items: center; gap: 4px; }
+.attach-help { cursor: help; color: var(--cs-muted); font-size: 12px; }
+.form { display: flex; flex-direction: column; gap: var(--cs-space-3); }
+.form-tip { font-size: var(--cs-font-small); color: var(--cs-muted); margin-top: 4px; }
+.expire-expired { color: var(--cs-danger); font-weight: 600; }
+.expire-danger { color: var(--cs-warning); font-weight: 500; }
+.expire-warning { color: var(--cs-muted); }
+.detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--cs-space-4) var(--cs-space-6, 24px); }
+.detail-item { display: flex; flex-direction: column; gap: 4px; }
+.detail-item.wide { grid-column: span 2; }
+.detail-label { font-size: var(--cs-font-small); color: var(--cs-muted); }
+.detail-value { font-size: var(--cs-font); color: var(--cs-text); }
+.history { margin-top: var(--cs-space-5); }
+.history-title { font-weight: 600; margin-bottom: var(--cs-space-2); }
+.history-table { max-height: 250px; overflow: auto; }
+.history-loading { text-align: center; padding: var(--cs-space-5); color: var(--cs-muted); }
 /* 占用说明: 比主数字弱一档, 但 ⛔ 不许弱到看不见 —— 它解释的正是主数字为什么变小。
    本仓栽过「把元素裁成 0 宽 → IntersectionObserver 恒不相交 → 9 个眉题从来没显形」,
    所以这里不用 height/opacity 做隐藏, 只降字号与灰度。 */
-.reserved-hold-hint {
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.3;
-  color: var(--el-color-warning, var(--cs-warning));
-  white-space: normal;
-}
+.reserved-hold-hint { margin-top: 2px; font-size: 12px; line-height: 1.3; color: var(--cs-warning); white-space: normal; }
 </style>

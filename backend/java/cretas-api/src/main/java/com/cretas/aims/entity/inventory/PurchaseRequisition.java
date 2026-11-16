@@ -126,6 +126,10 @@ public class PurchaseRequisition extends BaseEntity {
     @Column(name = "remark", columnDefinition = "TEXT")
     private String remark;
 
+    /** 当前提交轮次: 每次提交 +1; 0 = 从未经审批流水机制提交过(含存量单据)。 */
+    @Column(name = "submit_round", nullable = false)
+    private Integer submitRound = 0;
+
     /** Optimistic lock version */
     @Version
     @Column(name = "version", nullable = false)

@@ -27,9 +27,9 @@ describe('短交结案 — 两个按钮都是显式点击, 没有默认/自动�
     const closeVIf = detail.lastIndexOf('v-if="showShortShipmentActions"', closeButton);
     expect(reshipVIf).toBeGreaterThan(-1);
     expect(closeVIf).toBeGreaterThan(-1);
-    // 两个按钮各自最近的 v-if 之间不能隔着别的 el-button (否则门禁挂到了别的元素上)。
-    expect(detail.slice(reshipVIf, reshipButton)).not.toContain('</el-button>');
-    expect(detail.slice(closeVIf, closeButton)).not.toContain('</el-button>');
+    // 两个按钮各自最近的 v-if 之间不能隔着别的 UButton (否则门禁挂到了别的元素上)。
+    expect(detail.slice(reshipVIf, reshipButton)).not.toContain('</UButton>');
+    expect(detail.slice(closeVIf, closeButton)).not.toContain('</UButton>');
   });
 
   it('门禁本身要求 PARTIAL_DELIVERED 且实发缺口 > 0 —— 两个条件都不能少', () => {
@@ -61,9 +61,9 @@ describe('短交结案 — 两个按钮都是显式点击, 没有默认/自动�
   });
 
   it('「短交结案」提交按钮在勾选确认前必须 disabled —— 不许仅靠 warning 消息拦', () => {
-    const dialogIndex = detail.indexOf('v-model="shortCloseDialogVisible"');
+    const dialogIndex = detail.indexOf('v-model:open="shortCloseDialogVisible"');
     expect(dialogIndex).toBeGreaterThan(-1);
-    const dialogEnd = detail.indexOf('</el-dialog>', dialogIndex);
+    const dialogEnd = detail.indexOf('</UModal>', dialogIndex);
     const dialogBody = detail.slice(dialogIndex, dialogEnd);
     expect(dialogBody).toContain('v-model="shortCloseAcknowledged"');
     expect(dialogBody).toContain(':disabled="!shortCloseAcknowledged"');
