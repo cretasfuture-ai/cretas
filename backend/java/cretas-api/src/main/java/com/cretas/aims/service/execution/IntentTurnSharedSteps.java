@@ -30,6 +30,7 @@ import java.util.regex.Pattern;
  *   <li>{@link #sanitizeInternalReasoningLeak}: 模型内部推理 (意图列表 + 意图码) 不当回答下发</li>
  *   <li>{@link #applyAiModeStamp}: 响应补 aiMode (READ|WRITE)</li>
  *   <li>{@link #recognitionPermissionFilter}: 识别时按权限收窄候选 (仅操作 tab)</li>
+ *   <li>{@link #applyTextFallback}: 文字兜底 (两个方向 + workdesk 摘要) —— PR-3 起两入口一份</li>
  * </ul>
  */
 @Slf4j
@@ -60,6 +61,20 @@ public final class IntentTurnSharedSteps {
         }
         return userInput != null && !userInput.isBlank()
                 && !com.cretas.aims.ai.grounding.ChatBusinessFactGuard.isBusinessQuestion(userInput);
+    }
+
+    // ==================== 否定说法 ====================
+
+    /** 否定说法 (VETO_READ, 「别给我看订单」) 的澄清回复: 不执行、不追问参数 (两入口一份)。 */
+    public static IntentExecuteResponse negationVetoClarification() {
+        final String msg = "您是要取消这次操作吗?需要我帮您查询或处理什么?";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NEED_CLARIFICATION")
+                .message(msg)
+                .formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
     }
 
     // ==================== 咨询 tab 拦写 ====================
@@ -181,6 +196,64 @@ public final class IntentTurnSharedSteps {
                 || text.contains("候选意图") || text.contains("intent_code")
                 || text.contains("该意图覆盖");
         return metaTalk && INTERNAL_CODE_TOKEN.matcher(text).find();
+    }
+
+    // ==================== 文字兜底 (PR-3: 两入口一份) ====================
+
+    /** 工具 / Skill 给的「占位」回复: 盖住 formattedText 里真答案的那几句。 */
+    static final Set<String> GENERIC_SHORT_REPLIES = Set.of(
+            "查询完成，暂无数据", "操作完成", "查询完成", "查询成功", "执行成功",
+            "查询完成,暂无数据", "处理完成", "请求成功",
+            // 2026-07-23 工厂 AI 复盘: ToolDispatchService 对无 message 的工具
+            // 结果默认填 "操作已完成。" — 该占位符掩盖 formattedText 里的真答案
+            // (前端显示 message || formattedText, 占位符非空则真答案永不露出)。
+            "操作已完成", "操作已完成。"
+    );
+
+    /**
+     * 执行结果下发前的文字兜底 (两入口同一份, 意图蒸馏③ PR-3; 此前流式只有 formattedText ← message 一个方向):
+     * 内部推理消毒 → formattedText ← message → 反向兜底 message ← formattedText (占位符盖住真答案时) →
+     * workdesk / Skill 编排输出的摘要 ({@link WorkdeskOutputSummarizer}, 只在数据已按查看人遮过时交给模型)。
+     *
+     * @param priceMasked {@link #applyCallerPriceView} 的返回值: false 时不把结果交给摘要模型
+     */
+    public static void applyTextFallback(IntentExecuteResponse response, WorkdeskOutputSummarizer summarizer,
+                                         String factoryId, boolean priceMasked) {
+        if (response == null) {
+            return;
+        }
+        sanitizeInternalReasoningLeak(response);
+        String currentFT = response.getFormattedText();
+        String msg = response.getMessage();
+        boolean ftMissing = currentFT == null;
+        boolean ftGeneric = currentFT != null && GENERIC_SHORT_REPLIES.contains(currentFT.trim());
+        boolean ftShort = currentFT != null && currentFT.length() < 15;
+        if ((ftMissing || ftGeneric || ftShort) && msg != null && msg.length() >= 20
+                && msg.length() > (currentFT != null ? currentFT.length() : 0)) {
+            response.setFormattedText(msg);
+        } else if (ftMissing && msg != null && msg.length() >= 5) {
+            response.setFormattedText(msg);
+        }
+        if (response.getFormattedText() == null && response.getMessage() != null && !response.getMessage().isEmpty()) {
+            response.setFormattedText(response.getMessage());
+        }
+        // 反向兜底 (2026-07-23 工厂 AI 复盘): message 是占位符/空 而 formattedText 有实质答案时, 用 formattedText 覆盖
+        String finalMsg = response.getMessage();
+        String finalFT = response.getFormattedText();
+        boolean msgMissing = finalMsg == null || finalMsg.isBlank();
+        boolean msgGeneric = finalMsg != null && GENERIC_SHORT_REPLIES.contains(finalMsg.trim());
+        if ((msgMissing || msgGeneric) && finalFT != null && finalFT.length() >= 20
+                && !GENERIC_SHORT_REPLIES.contains(finalFT.trim())) {
+            response.setMessage(finalFT);
+        }
+        // Sprint 9 P0.2: Workdesk / Skill 编排输出 (下划线元数据、原始 JSON、裸模板) 交模型写成中文摘要
+        if (summarizer != null && priceMasked) {
+            try {
+                summarizer.apply(response, factoryId);
+            } catch (Exception e) {
+                log.warn("WorkdeskOutputSummarizer 应用失败 (non-blocking): {}", e.getMessage());
+            }
+        }
     }
 
     // ==================== aiMode ====================
