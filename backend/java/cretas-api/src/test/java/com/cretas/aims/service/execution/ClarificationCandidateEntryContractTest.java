@@ -121,17 +121,38 @@ class ClarificationCandidateEntryContractTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Entry.class)
-    @DisplayName("业务候选为 0: 明确说没有可安全提供的业务选项, 只给「重新描述」, 不回退默认业务按钮")
-    void zeroBusinessCandidatesFailExplicitlyWithoutLegacyDefaults(Entry entry) throws Exception {
+    @DisplayName("业务候选全被权限滤掉: 按标准拒答说明缺什么权限 (PERMISSION_DENIED), 只给「重新描述」, 不回退默认业务按钮")
+    void zeroBusinessCandidatesBecauseOfPermission_saysWhichPermissionWithoutLegacyDefaults(Entry entry) throws Exception {
         Harness h = new Harness(entry);
         h.deny("ORDER_LIST");
         h.deny("FINANCE_REPORT");
         IntentExecuteResponse response = h.clarify("ORDER_LIST", "FINANCE_REPORT", "PAGINATION_NEXT", "OUT_OF_DOMAIN");
 
-        assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        // 2026-11-16 复跑: 原来这里只说「当前没有可安全提供的业务选项」, 不说是权限原因
+        assertThat(response.getStatus()).isEqualTo("PERMISSION_DENIED");
         assertThat(codes(response)).containsExactly("REPHRASE");
-        assertThat(response.getMessage()).isEqualTo("当前没有可安全提供的业务选项，请重新描述您的需求。");
+        assertThat(response.getMessage())
+                .isEqualTo(com.cretas.aims.ai.tool.ToolRbacGuard.standardDenyMessage(ROLE, "销售订单查询", "any:read"))
+                .contains("没有权限使用「销售订单查询」").contains("需要的权限")
+                .doesNotContain("当前没有可安全提供的业务选项");
         assertThat(String.valueOf(response.getFormattedText())).doesNotContain("原料库存", "生产批次", "下一页");
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Entry.class)
+    @DisplayName("业务候选为 0 且不是权限原因 (本厂没配): 照旧澄清, 话术给可问的示例, 不报权限")
+    void zeroBusinessCandidatesNotBecauseOfPermission_givesExamples(Entry entry) throws Exception {
+        Harness h = new Harness(entry);
+        IntentExecuteResponse response = h.clarify("ORDER_LIST", "NOT_CONFIGURED_HERE", "OUT_OF_DOMAIN", "ALSO_NOT_CONFIGURED");
+        // 阳性对照: ORDER_LIST 有权限 ⇒ 正常一个选项
+        assertThat(selectable(response)).containsExactly("ORDER_LIST", "OUT_OF_DOMAIN");
+
+        Harness none = new Harness(entry);
+        IntentExecuteResponse empty = none.clarifyWithBest("ORDER_LIST", "NOT_CONFIGURED_HERE", "ALSO_NOT_CONFIGURED");
+        assertThat(empty.getStatus()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(codes(empty)).containsExactly("REPHRASE");
+        assertThat(empty.getMessage()).isEqualTo(ClarificationCandidateService.NO_CANDIDATE_MESSAGE)
+                .contains("例如").doesNotContain("需要的权限");
     }
 
     // ------------------------------------------------------------------ helpers
@@ -189,7 +210,12 @@ class ClarificationCandidateEntryContractTest {
         }
 
         IntentExecuteResponse clarify(String... candidateCodes) throws Exception {
-            AIIntentConfig best = configService.getIntentByCode(FACTORY, candidateCodes[0]).orElseThrow();
+            return clarifyWithBest(candidateCodes[0], candidateCodes);
+        }
+
+        /** 识别的最佳意图 = bestCode, 候选 = 后面那些 (可以不含 bestCode)。 */
+        IntentExecuteResponse clarifyWithBest(String bestCode, String... candidateCodes) throws Exception {
+            AIIntentConfig best = configService.getIntentByCode(FACTORY, bestCode).orElseThrow();
             IntentMatchResult match = IntentMatchResult.builder()
                     .bestMatch(best)
                     // 识别给的名字不可信: 按钮名只能来自当前工厂配置

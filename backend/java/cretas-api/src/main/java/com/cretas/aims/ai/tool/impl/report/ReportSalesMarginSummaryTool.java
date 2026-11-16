@@ -19,7 +19,8 @@ import java.util.*;
  * <p>口径 = {@link SkuGrossMarginTool} 的「实际销售毛利」(同一条 {@link OperatingReportGrossMarginQuery} SQL):
  * 销售额 = 折后未税收入 (有售价的明细); 毛利 = 已回填成本明细的收入 − 成本, 并给成本覆盖率;
  * 缺成本的明细不当 0 成本进毛利。工艺保密产品对无权调用者整行剔除后汇总在剩余行上重算, 并说明。
- * 无金额查看权限的调用者: 金额、毛利、毛利率、图一律不出。
+ * 可见性与 SKU 毛利率同一个判据 ({@link SkuGrossMarginTool#MARGIN_AMOUNT_KEYS}): 过了财务读的工具门就给毛利率 /
+ * 成本覆盖率; 金额 (销售额 / 成本 / 毛利) 看不到的调用者金额字段与金额图不出, 文字里也不写金额。
  */
 @Component
 public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
@@ -90,14 +91,11 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        boolean showAmounts = replyShowsAmounts(context, "revenue", "cost", "grossProfit");
+        boolean showAmounts = replyShowsAmounts(context, SkuGrossMarginTool.MARGIN_AMOUNT_KEYS);
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
         data.put("basis", "销售额 = 销售订单明细折后未税收入（有售价的明细）；毛利 = 已回填成本明细的收入 − 成本；与 SKU 毛利率「实际销售毛利」同口径");
-        if (!showAmounts) {
-            return buildSimpleResult(start + " 至 " + end + " 的销售额、毛利按当前账号权限不显示；需要请用有财务查看权限的账号。", data);
-        }
 
         ProcessSecretLlmCostScope.Excluded secret = llmCostScope == null
                 ? ProcessSecretLlmCostScope.Excluded.NONE : llmCostScope.forCurrentCaller(factoryId);
@@ -125,6 +123,9 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
 
         data.put("productCount", summary.get("productCount"));
         data.put("excludedProductCount", excludedProtected);
+        if (!showAmounts) {
+            return amountsHiddenResult(start, end, summary, margin, coverage, excludedProtected, rank, data);
+        }
         data.put("revenue", money(revenue));
         data.put("costedRevenue", money(costedRevenue));
         data.put("cost", money(cost));
@@ -162,6 +163,45 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
                 sb.append("未回填成本的明细没有计入毛利，实际毛利可能与此不同。");
             }
         }
+        if (excludedProtected > 0) {
+            sb.append("\n").append(ProcessSecretLlmCostScope.note(excludedProtected));
+        }
+        sb.append("\n口径：与 SKU 毛利率「实际销售毛利」一致（折后未税收入；毛利只算已回填成本的明细）。");
+        return buildSimpleResult(sb.toString(), data);
+    }
+
+    /**
+     * 过了工具门、但金额按权限配置看不到: 与 SKU 毛利率给同样多 —— 毛利率、成本覆盖率、各产品毛利率照给,
+     * 销售额 / 成本 / 毛利金额字段不放、文字里不写、金额图不出。
+     */
+    private Map<String, Object> amountsHiddenResult(LocalDate start, LocalDate end, Map<String, Object> summary,
+                                                    BigDecimal margin, BigDecimal coverage, int excludedProtected,
+                                                    List<Map<String, Object>> rank, Map<String, Object> data) {
+        data.put("marginRate", margin);
+        data.put("costCoverage", coverage);
+        data.put("amountsHidden", true);
+        List<Map<String, Object>> products = new ArrayList<>();
+        for (Map<String, Object> r : rank) {
+            if (products.size() >= CHART_PRODUCTS) break;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("productTypeId", r.get("productTypeId"));
+            row.put("productName", r.get("productName"));
+            row.put("marginRate", pct(OperatingReportAssembler.number(r.get("marginRate"))));
+            products.add(row);
+        }
+        data.put("products", products);
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(start).append(" 至 ").append(end).append(" 共 ").append(summary.get("productCount")).append(" 个产品有销售。");
+        if (margin == null) {
+            sb.append("\n没有已回填成本的销售明细，毛利率算不出，不估算。");
+        } else {
+            sb.append("\n毛利率 ").append(margin).append("%（只算已回填成本的明细，成本覆盖 ").append(coverage).append("% 的销售额）。");
+            if (coverage != null && coverage.compareTo(HUNDRED) < 0) {
+                sb.append("未回填成本的明细没有计入毛利，实际毛利率可能与此不同。");
+            }
+        }
+        sb.append("\n销售额、成本、毛利金额按当前账号的权限配置不显示（毛利率与 SKU 毛利率同一判据照给）。");
         if (excludedProtected > 0) {
             sb.append("\n").append(ProcessSecretLlmCostScope.note(excludedProtected));
         }

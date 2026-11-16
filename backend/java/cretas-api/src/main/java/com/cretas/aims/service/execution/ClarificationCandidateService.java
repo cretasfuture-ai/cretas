@@ -120,6 +120,46 @@ public class ClarificationCandidateService {
             Long userId,
             String userRole,
             String mode) {
+        return collectCandidateActions(matchResult, factoryId, userId, userRole, mode, new String[1]);
+    }
+
+    static final String STATUS_NEED_CLARIFICATION = "NEED_CLARIFICATION";
+    static final String STATUS_PERMISSION_DENIED = "PERMISSION_DENIED";
+
+    /** 一次澄清的结果: 选项 + 话术 + 状态。普通入口与 SSE 用同一份。 */
+    public record Clarification(List<IntentExecuteResponse.SuggestedAction> actions, String message, String status) { }
+
+    /**
+     * 候选 + 话术 + 状态。业务候选一个都没剩、且至少有一个是<b>因为当前账号没有权限</b>被滤掉时, 不再说
+     * 「没有可安全提供的业务选项」, 而是按执行期同一份拒答说明缺什么权限 (状态 PERMISSION_DENIED, 文案就是
+     * 被滤掉的第一个候选在执行期会得到的那句: 工具 RBAC / 意图权限码 / 旧角色串 / 一线写门 / Skill 预检)。
+     * 不是权限原因 (没有候选 / 本厂没配 / 业态不符 / 只读模式) ⇒ 照旧澄清, 话术给可问的示例。
+     * 2026-11-16 复跑: sales_manager 问「哪个产品毛利率最高」候选全被财务权限滤掉, 只得到「重新描述」。
+     */
+    Clarification clarify(IntentMatchResult matchResult, String factoryId, Long userId, String userRole, String mode) {
+        String[] firstPermissionDenial = new String[1];
+        List<IntentExecuteResponse.SuggestedAction> actions =
+                collectCandidateActions(matchResult, factoryId, userId, userRole, mode, firstPermissionDenial);
+        boolean noBusinessChoice = actions.stream().noneMatch(a -> a != null && "SELECT_INTENT".equals(a.getActionCode()));
+        if (noBusinessChoice && firstPermissionDenial[0] != null) {
+            return new Clarification(actions, firstPermissionDenial[0], STATUS_PERMISSION_DENIED);
+        }
+        return new Clarification(actions, clarificationMessage(actions), STATUS_NEED_CLARIFICATION);
+    }
+
+    /** 服务缺失 (裸构造的单测) 时两个入口用的退路: 只给「重新描述」。 */
+    static Clarification rephraseOnlyClarification() {
+        List<IntentExecuteResponse.SuggestedAction> actions = rephraseOnly();
+        return new Clarification(actions, clarificationMessage(actions), STATUS_NEED_CLARIFICATION);
+    }
+
+    private List<IntentExecuteResponse.SuggestedAction> collectCandidateActions(
+            IntentMatchResult matchResult,
+            String factoryId,
+            Long userId,
+            String userRole,
+            String mode,
+            String[] firstPermissionDenial) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
         List<IntentExecuteResponse.SuggestedAction> conversationOptions = new ArrayList<>();
         Set<String> seenCodes = new HashSet<>();
@@ -147,10 +187,17 @@ public class ClarificationCandidateService {
                     AIIntentConfig config = currentActiveConfig(factoryId, code);
                     if (config == null
                             || !domainAllowed(config, factoryDomain)
-                            || !modeAllowed(config, factoryId, mode)
-                            || !callerMayUse(config, factoryId, userId, userRole)
+                            || !modeAllowed(config, factoryId, mode)) {
+                        continue;
+                    }
+                    java.util.Optional<Denial> denial = callerDenial(config, factoryId, userId, userRole);
+                    if (denial.isPresent()
                             // 读意图没配 required_roles 时上面全放行; 仓库工作台那几个对一线角色按受众名单再收一次
                             || !FrontlineReadAudience.offeredTo(code, userRole)) {
+                        if (denial.isPresent() && denial.get().permission() && firstPermissionDenial[0] == null
+                                && !NON_BUSINESS_OPTIONS.contains(code)) {
+                            firstPermissionDenial[0] = denial.get().message();
+                        }
                         continue;
                     }
                     if (NON_BUSINESS_OPTIONS.contains(code)) {
@@ -282,7 +329,7 @@ public class ClarificationCandidateService {
     static String clarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
         String choices = choicesLine(actions);
         if (choices.isBlank()) {
-            return "当前没有可安全提供的业务选项，请重新描述您的需求。";
+            return NO_CANDIDATE_MESSAGE;
         }
         // 只剩一个选项时不说「可能匹配多个操作」—— 2026-10-06 真机: 一个按钮配「请选择」读起来像坏了。
         List<IntentExecuteResponse.SuggestedAction> intentChoices = actions.stream()
@@ -294,6 +341,10 @@ public class ClarificationCandidateService {
         }
         return "您的请求可能匹配多个操作, 请选择您实际想做的:" + choices;
     }
+
+    /** 确实没有可选的业务候选 (不是权限原因): 说清楚, 并给几个可以直接问的说法。只是问法示例, 不含任何数据。 */
+    static final String NO_CANDIDATE_MESSAGE = "没有找到与您的描述对得上的业务操作。请说清要查的对象和时间再问，例如："
+            + "「本月生产了多少批次」「最近 30 天各批次的出成率」「现在库存里有哪些原料」。";
 
     private static String choicesLine(List<IntentExecuteResponse.SuggestedAction> actions) {
         if (actions == null || actions.isEmpty()) {
@@ -382,8 +433,24 @@ public class ClarificationCandidateService {
      * 共用这一份 —— 「按钮里出现的」与「Skill 能替你跑的」不许比执行期放得更宽。
      */
     boolean callerMayUse(AIIntentConfig config, String factoryId, Long userId, String userRole) {
-        return permissionAllowed(config, factoryId, userId, userRole)
-                && toolGateAllowed(config, factoryId, userId, userRole);
+        return callerDenial(config, factoryId, userId, userRole).isEmpty();
+    }
+
+    /** 不出这个选项的原因。{@code permission}=true: 当前账号没有权限 (消息即执行期那句拒答); false: 其它原因。 */
+    record Denial(boolean permission, String message) {
+        static java.util.Optional<Denial> permission(String message) {
+            return java.util.Optional.of(new Denial(message != null && !message.isBlank(), message));
+        }
+
+        static java.util.Optional<Denial> other() {
+            return java.util.Optional.of(new Denial(false, null));
+        }
+    }
+
+    /** {@link #callerMayUse} 的判定本体: 意图权限在前, 工具 / Skill / 一线门在后 (与原短路顺序相同)。 */
+    java.util.Optional<Denial> callerDenial(AIIntentConfig config, String factoryId, Long userId, String userRole) {
+        java.util.Optional<Denial> permission = permissionDenial(config, factoryId, userId, userRole);
+        return permission.isPresent() ? permission : toolGateDenial(config, factoryId, userId, userRole);
     }
 
     /**
@@ -395,7 +462,7 @@ public class ClarificationCandidateService {
      * 此外一线写门照旧: 一线角色 + 写意图 + 本厂没开放
      * ⇒ 不出这个选项 (2026-10-06: 此前按钮照出, 点了才被 #939 的门拒绝)。
      */
-    private boolean toolGateAllowed(AIIntentConfig config, String factoryId, Long userId, String userRole) {
+    private java.util.Optional<Denial> toolGateDenial(AIIntentConfig config, String factoryId, Long userId, String userRole) {
         try {
             ToolExecutor tool = null;
             String toolName = config.getToolName();
@@ -403,32 +470,39 @@ public class ClarificationCandidateService {
                 tool = toolRegistry.getExecutor(toolName).orElse(null);
                 if (tool == null) {
                     // #1747 遗留 L2: 配了工具名但没注册 ⇒ 执行期只会回「Tool 未注册」(buildNoToolResponse), 不出按钮
-                    return false;
+                    return Denial.other();
                 }
             }
             if (tool != null) {
                 if (toolPermissionChain == null) {
-                    return false;
+                    return Denial.other();
                 }
                 // #1747 遗留 M1 / L1: 工厂关掉的工具、供应商比价的身份门 —— 与执行期同一个判定
                 if (ToolExecutionAdmission.refusal(toolRegistry, tool, config, factoryId, userId).isPresent()) {
-                    return false;
+                    return Denial.other();
                 }
                 java.util.Map<String, Object> trusted = new HashMap<>();
                 TrustedExecutionContext.enforcePrincipal(trusted, factoryId, userId, userRole);
-                return toolPermissionChain.denyReason(tool, factoryId, userRole, config, trusted).isEmpty();
+                java.util.Optional<String> reason = toolPermissionChain.denyReason(tool, factoryId, userRole, config, trusted);
+                return reason.isPresent() ? Denial.permission(reason.get()) : java.util.Optional.empty();
             }
             // 只有 tool_name 为空才走显式 Skill (IntentExecutionOrchestrator 3.5); 配了但没注册的工具上面已不出
-            if ((toolName == null || toolName.isBlank()) && !skillGateAllowed(config, factoryId, userId, userRole)) {
-                return false;
+            if (toolName == null || toolName.isBlank()) {
+                java.util.Optional<String> skillRefusal = skillGateRefusal(config, factoryId, userId, userRole);
+                if (skillRefusal.isPresent()) {
+                    return Denial.permission(skillRefusal.get());
+                }
             }
             if (!FrontlineAiWriteGrantService.isFrontline(userRole)) {
-                return true;
+                return java.util.Optional.empty();
             }
-            return frontlineWriteGrants != null
-                    && frontlineWriteGrants.denyReason(factoryId, userRole, null, config).isEmpty();
+            if (frontlineWriteGrants == null) {
+                return Denial.other();
+            }
+            java.util.Optional<String> frontline = frontlineWriteGrants.denyReason(factoryId, userRole, null, config);
+            return frontline.isPresent() ? Denial.permission(frontline.get()) : java.util.Optional.empty();
         } catch (Exception ignored) {
-            return false;
+            return Denial.other();
         }
     }
 
@@ -437,19 +511,19 @@ public class ClarificationCandidateService {
      * 权限预检判 —— 预检会拒 ⇒ 不出按钮 (#1747 终审 M2: viewer 的候选里出现「今日客户跟进」, 点了 Skill 整个被拒)。
      * 没有对应 Skill ⇒ 执行期不会跑任何工具, 不按此过滤。Skill 存在但预检器缺失 ⇒ fail-closed。
      */
-    private boolean skillGateAllowed(AIIntentConfig config, String factoryId, Long userId, String userRole) {
+    private java.util.Optional<String> skillGateRefusal(AIIntentConfig config, String factoryId, Long userId, String userRole) {
         if (skillRegistry == null) {
-            return true;
+            return java.util.Optional.empty();
         }
         String skillName = DynamicToolSelectionService.intentCodeToSkillName(config.getIntentCode());
         if (skillName == null || skillName.isBlank()) {
-            return true;
+            return java.util.Optional.empty();
         }
         com.cretas.aims.dto.skill.SkillDefinition skill = skillRegistry.getSkillForFactory(factoryId, skillName);
         if (skill == null || !skill.isEnabled()) {
-            return true;
+            return java.util.Optional.empty();
         }
-        return skillPermissionRefusal(skill, factoryId, userId, userRole).isEmpty();
+        return skillPermissionRefusal(skill, factoryId, userId, userRole);
     }
 
     /**
@@ -472,18 +546,25 @@ public class ClarificationCandidateService {
         return skillExecutor.permissionRefusal(skill, context);
     }
 
-    private boolean permissionAllowed(AIIntentConfig config, String factoryId,
-                                      Long userId, String userRole) {
+    private java.util.Optional<Denial> permissionDenial(AIIntentConfig config, String factoryId,
+                                                        Long userId, String userRole) {
         try {
             String requiredPermission = config.getRequiredPermission();
             if (requiredPermission != null && !requiredPermission.isBlank()) {
-                return permissionGate != null
-                        && permissionGate.check(config, userId, userRole).isAllowed();
+                if (permissionGate != null && permissionGate.check(config, userId, userRole).isAllowed()) {
+                    return java.util.Optional.empty();
+                }
+                // 与执行期工具拒答同一格式 (ToolRbacGuard: 角色中文名 / 缺哪些权限的中文名 / 怎么办), 不露权限码
+                return Denial.permission(com.cretas.aims.ai.tool.ToolRbacGuard.standardDenyMessage(
+                        userRole, config.getIntentName(),
+                        IntentPermissionGate.splitCodes(requiredPermission).toArray(String[]::new)));
             }
             // Empty required_permission retains the existing requiredRoles gate.
-            return configService.hasPermission(factoryId, config.getIntentCode(), userRole);
+            return configService.hasPermission(factoryId, config.getIntentCode(), userRole)
+                    ? java.util.Optional.empty()
+                    : Denial.permission(ToolPermissionChain.legacyRoleDeniedMessage(userRole, config.getIntentName()));
         } catch (Exception ignored) {
-            return false;
+            return Denial.other();
         }
     }
 

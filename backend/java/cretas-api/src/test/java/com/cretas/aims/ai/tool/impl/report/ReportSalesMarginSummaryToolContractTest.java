@@ -111,14 +111,19 @@ class ReportSalesMarginSummaryToolContractTest {
     }
 
     @Test
-    void callerWithoutAmountView_getsNothingMonetary() throws Exception {
+    void callerWithoutAmountView_getsNothingMonetary_butTheSameMarginRateAsSkuGrossMargin() throws Exception {
         ReflectionTestUtils.setField(tool, "priceView", AiBiToolTestSupport.priceView(false));
         stub(List.of(row("A", "卤牛肉", "1000", "1000", "600")));
         JsonNode r = run();
         JsonNode d = r.get("data").get("data");
-        assertFalse(d.has("revenue") || d.has("grossProfit") || d.has("marginRate") || d.has("charts"));
-        assertFalse(r.get("data").get("message").asText().contains("1000"));
-        assertTrue(r.get("data").get("message").asText().contains("按当前账号权限不显示"));
+        // 金额 (销售额 / 成本 / 毛利) 与金额图不出 —— 字段、文字都没有
+        assertFalse(d.has("revenue") || d.has("cost") || d.has("costedRevenue") || d.has("grossProfit") || d.has("charts"), d.toString());
+        String msg = r.get("data").get("message").asText();
+        assertFalse(msg.contains("1000") || msg.contains("600") || msg.contains("400") || msg.contains("¥"), msg);
+        assertTrue(msg.contains("金额按当前账号的权限配置不显示"), msg);
+        // 毛利率是比例不是金额: 与 SKU 毛利率同一判据 (过了财务读的工具门就给), 2026-11-16 复跑 Q11 口径统一
+        assertEquals(40.0, d.get("marginRate").asDouble(), 0.001);
+        assertTrue(msg.contains("毛利率 40.00%"), msg);
     }
 
     @Test

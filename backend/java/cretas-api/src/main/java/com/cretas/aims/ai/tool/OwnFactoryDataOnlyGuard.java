@@ -44,4 +44,21 @@ public final class OwnFactoryDataOnlyGuard {
     public static boolean refuses(String toolName, String userInput) {
         return appliesTo(toolName) && asksForExternalData(userInput);
     }
+
+    public static final String STATUS = "EXTERNAL_DATA_REFUSED";
+
+    /** 上面那些工具答的指标 (成本 / 价格 / 毛利 / 出成率 / 销售 / 财务 / 效率 / 工资)。 */
+    private static final Pattern OWN_DATA_METRIC = Pattern.compile(
+            "成本|价格|价钱|单价|售价|进价|报价|定价|多少钱|毛利|利润|盈利|赚|出成率|得率|良率|合格率|损耗|产量|产能|销量|销售|营收|收入|"
+                    + "费用|财务|效率|人效|工资|薪资|薪酬|配方|BOM|bom");
+
+    /**
+     * 识别之前 (普通 / 流式 / 多意图 / 显式意图入口) 用: 这句话问的是别家的本厂类指标 ⇒ 整轮拒答, 不看落到哪个意图、
+     * 也不看调用者有没有权限 (2026-11-16 复跑 Q18: viewer 先被成本权限拒, sales_manager 落到「我没有理解您的意图」)。
+     * 只拒答、不执行任何查询, 不扩大可见数据。比 {@link #refuses} 多要求句子里有上面这类指标词, 免得「同行」之类的
+     * 字眼在与经营数据无关的问话里也被拒。
+     */
+    public static boolean refusesBeforeRouting(String userInput) {
+        return asksForExternalData(userInput) && OWN_DATA_METRIC.matcher(userInput).find();
+    }
 }

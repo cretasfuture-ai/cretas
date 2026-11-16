@@ -205,7 +205,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
             data.put("charts", List.of(chart));
         }
         return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
-                        replyShowsAmounts(context, "revenue", "cost", "price", "unitCost")),
+                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS)),
                 data);
     }
 
@@ -239,6 +239,18 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         chart.put("option", option);
         return chart;
     }
+
+    /**
+     * 毛利两处 (本工具 / {@link ReportSalesMarginSummaryTool}) 同一个可见性判据 (2026-11-16 复跑 Q05/Q06 vs Q11):
+     * <ul>
+     *   <li>能不能用 = 工具门 {@code finance:read | finance:read_write} (中央 ToolRbacEnforcer, 与 web 财务模块门同源);</li>
+     *   <li>过了门: 毛利率 / 成本覆盖率 (百分数) 照给;</li>
+     *   <li>金额 (收入 / 成本 / 毛利 / 目录价 / 单位成本) 是否写进回复 = {@code replyShowsAmounts(这组键)},
+     *       与字段遮挡同一套规则 (PriceFieldResponseAdvice, 按权限配置判)。</li>
+     * </ul>
+     * 两个工具都只用这一组键问, ⛔ 不各写一份。
+     */
+    static final String[] MARGIN_AMOUNT_KEYS = {"revenue", "cost", "grossProfit", "price", "unitCost"};
 
     // ==================== 组装 ====================
 

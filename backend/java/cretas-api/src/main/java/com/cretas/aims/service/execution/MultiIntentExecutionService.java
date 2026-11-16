@@ -76,6 +76,9 @@ public class MultiIntentExecutionService {
         if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
             return IntentExecutionOrchestrator.personalPayRefusalResponse();
         }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return IntentExecutionOrchestrator.externalDataRefusalResponse();
+        }
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
         log.info("执行多意图识别: factoryId={}, userInput='{}'",
                 factoryId,
@@ -161,6 +164,9 @@ public class MultiIntentExecutionService {
         requireFactoryIntentAccess(factoryId, userRole);
         if (request != null && com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
             return IntentExecutionOrchestrator.personalPayRefusalResponse();
+        }
+        if (request != null && com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return IntentExecutionOrchestrator.externalDataRefusalResponse();
         }
         List<IntentMatchResult.IntentMatch> intents = intentResult.getAdditionalIntents();
         AuthenticatedActor trustedActor = AuthenticatedActor.fromCurrentExecution().orElse(null);
