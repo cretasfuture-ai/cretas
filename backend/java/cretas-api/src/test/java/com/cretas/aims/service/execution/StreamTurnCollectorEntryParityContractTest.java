@@ -515,10 +515,10 @@ class StreamTurnCollectorEntryParityContractTest {
         org.springframework.beans.factory.ObjectProvider<IntentExecutionOrchestrator> absent =
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         ReflectionTestUtils.setField(h.sse, "turnStepsBean", absent);
-        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::afterSingletonsInstantiated)
+        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::verifyTurnStepsWired)
                 .isInstanceOf(IllegalStateException.class);
         ReflectionTestUtils.setField(h.sse, "turnStepsBean", null);
-        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::afterSingletonsInstantiated)
+        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::verifyTurnStepsWired)
                 .as("ObjectProvider 本身没注入也按缺席").isInstanceOf(IllegalStateException.class);
 
         @SuppressWarnings("unchecked")
@@ -526,7 +526,7 @@ class StreamTurnCollectorEntryParityContractTest {
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         when(present.getIfAvailable()).thenReturn(h.orchestrator);
         ReflectionTestUtils.setField(h.sse, "turnStepsBean", present);
-        h.sse.afterSingletonsInstantiated();   // 阳性对照: 不抛
+        h.sse.verifyTurnStepsWired();   // 阳性对照: 不抛
     }
 
     @SuppressWarnings("unchecked")

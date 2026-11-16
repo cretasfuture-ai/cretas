@@ -60,7 +60,7 @@ import java.util.concurrent.ExecutorService;
  */
 @Slf4j
 @Service
-public class SseStreamingService implements org.springframework.beans.factory.SmartInitializingSingleton {
+public class SseStreamingService {
 
     private static final long SSE_TIMEOUT_MS = 120_000L;
 
@@ -184,7 +184,7 @@ public class SseStreamingService implements org.springframework.beans.factory.Sm
      * 单一实现在编排器里, 本管线 (App 流式与 /execute 同一条) 每一轮都调。
      * {@code @Lazy}: 编排器不依赖本类, 不成环; 只有裸构造的单测缺席 (这些步骤不跑)。
      * 生产上必须在 (PR-3 复审 L2): 缺了 Drools / 补问 / 对话记忆 / 早期路由 (含分析流准入) 会被悄悄跳过,
-     * 所以是必需依赖, 且启动时由 {@link #afterSingletonsInstantiated} 实际解析一次 —— 解析不到应用就起不来 (fail closed)。
+     * 所以是必需依赖, 且本 bean 建好时由 {@link #verifyTurnStepsWired} 实际解析一次 —— 解析不到应用就起不来 (fail closed)。
      */
     @Autowired
     @Lazy
@@ -195,11 +195,14 @@ public class SseStreamingService implements org.springframework.beans.factory.Sm
     private org.springframework.beans.factory.ObjectProvider<IntentExecutionOrchestrator> turnStepsBean;
 
     /**
-     * 启动校验 (所有单例建完之后, 不会引出装配环): 每轮共用步骤的编排器必须真的在。
-     * 缺了就让启动失败 —— ⛔ 不带着「Drools / 记忆 / 分析流准入都不跑」的管线对外服务。
+     * 启动校验: 每轮共用步骤的编排器必须真的在。缺了就让本 bean 创建失败 (普通 profile 下即启动失败) ——
+     * ⛔ 不带着「Drools / 记忆 / 分析流准入都不跑」的管线对外服务。
+     * ⛔ 不要改回 SmartInitializingSingleton: Spring Boot 的懒加载后处理器对该接口的 bean 一律不懒,
+     * lineage-backfill (全局懒加载) 进程会因此在启动时建出本类并带出调度器 / 工具路由等副作用组件
+     * (LineageBackfillProcessIsolationTest 在 #1790 上就是这样红的)。{@code @PostConstruct} 只在本 bean 真被建出时跑。
      */
-    @Override
-    public void afterSingletonsInstantiated() {
+    @jakarta.annotation.PostConstruct
+    public void verifyTurnStepsWired() {
         IntentExecutionOrchestrator resolved = turnStepsBean == null ? null : turnStepsBean.getIfAvailable();
         if (resolved == null) {
             throw new IllegalStateException(
