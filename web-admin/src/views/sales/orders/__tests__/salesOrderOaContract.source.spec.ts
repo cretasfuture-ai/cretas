@@ -42,7 +42,8 @@ describe('sales order OA web contract', () => {
   it('does not query or render linked purchase orders without procurement read access', () => {
     expect(detail).toContain("const canViewLinkedPurchases = computed(() => permissionStore.canAccess('procurement'))");
     expect(detail).toContain('if (!canViewLinkedPurchases.value || !factoryId.value || !orderId.value) return;');
-    expect(detail).toContain('<el-tab-pane v-if="canViewLinkedPurchases" name="purchase">');
+    // Nuxt UI 版: 页签项只在有采购读权限时进 tabItems (无权限时页签不渲染)
+    expect(detail).toContain("...(canViewLinkedPurchases.value\n      ? [{ label: '关联采购', value: 'purchase'");
   });
 
   it('keeps batch submission truthful instead of aggregating guessed outcomes', () => {

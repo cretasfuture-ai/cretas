@@ -33,7 +33,7 @@ const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
 function planQuantityBlock(): string {
   const start = source.indexOf('label="计划发货数量"');
   expect(start, '找不到「计划发货数量」表单项 —— 结构变了, 这条闸需要重写').toBeGreaterThan(-1);
-  const end = source.indexOf('</el-form-item>', start);
+  const end = source.indexOf('</UFormField>', start);
   expect(end).toBeGreaterThan(start);
   return source.slice(start, end).replace(/<!--[\s\S]*?-->/g, '');
 }
@@ -49,9 +49,10 @@ describe('创建发货单 · 计划发货数量', () => {
 
   it('② 允许小数 —— precision 必须显式给, 且不能是 0', () => {
     const block = planQuantityBlock();
-    const precision = block.match(/:precision="(\d+)"/);
-    expect(precision, '没有 :precision 时, 步进/失焦的取整行为随版本变, 必须显式声明').not.toBeNull();
-    expect(Number(precision![1]), 'precision=0 等于禁止小数, 与缺陷同效').toBeGreaterThan(0);
+    // Nuxt UI UInputNumber 用 format-options 的小数位声明精度 (原 el-input-number 的 :precision)
+    const precision = block.match(/maximumFractionDigits:\s*(\d+)/);
+    expect(precision, '没有显式小数位时, 失焦的取整行为随版本变, 必须显式声明').not.toBeNull();
+    expect(Number(precision![1]), '小数位=0 等于禁止小数, 与缺陷同效').toBeGreaterThan(0);
   });
 
   it('③ 有上限, 且上限来自订单行下单量 (否则能随手填出必然 409 的数)', () => {
