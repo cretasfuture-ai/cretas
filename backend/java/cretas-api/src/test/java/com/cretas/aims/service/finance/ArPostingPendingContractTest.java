@@ -326,6 +326,8 @@ class ArPostingPendingContractTest {
         shipInTx(sales);
 
         assertThat(openPending()).isEmpty();
+        assertThat(pendingRepo.findAll()).hasSize(1);
+        assertThat(pendingRepo.findAll().get(0).getStatus()).isEqualTo(ArPostingPendingStatus.RESOLVED);
         verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -354,6 +356,9 @@ class ArPostingPendingContractTest {
 
         assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
         assertThat(openPending()).isEmpty();
+        assertThat(pendingRepo.findAll()).hasSize(1);
+        assertThat(pendingRepo.findAll().get(0).getStatus()).isEqualTo(ArPostingPendingStatus.RESOLVED);
+        assertThat(pendingRepo.findAll().get(0).getFailureReason()).contains("幂等命中");
         verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
     }
 

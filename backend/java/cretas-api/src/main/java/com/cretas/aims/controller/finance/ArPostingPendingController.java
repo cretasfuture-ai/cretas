@@ -27,11 +27,11 @@ public class ArPostingPendingController {
     private final ArPostingPendingService service;
 
     @GetMapping
-    @Operation(summary = "待补账记录列表(可按状态筛选)")
+    @Operation(summary = "待补账记录列表(默认只看未处理 PENDING; 看已自动关闭/已处理的传 status=RESOLVED)")
     @RequireModule("finance_ar")
     public ApiResponse<PageResponse<ArPostingPending>> list(
             @PathVariable @NotBlank String factoryId,
-            @RequestParam(required = false) ArPostingPendingStatus status,
+            @RequestParam(defaultValue = "PENDING") ArPostingPendingStatus status,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
         Page<ArPostingPending> result = service.list(factoryId, status, page, size);
