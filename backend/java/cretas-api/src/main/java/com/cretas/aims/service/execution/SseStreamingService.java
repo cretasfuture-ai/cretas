@@ -1276,11 +1276,6 @@ public class SseStreamingService {
         return event;
     }
 
-    /** 短语快捷通道会不会接这句 (只读判定, 与管线 1.4 同一个方法)。 */
-    boolean phraseShortcutWouldTake(String factoryId, String userInput) {
-        return tryPhraseShortcut(factoryId, userInput) != null;
-    }
-
     /**
      * 执行结果下发前的共用收尾 (与普通入口 applyCallerPriceView → applyResultFormatting → 兜底 → aiMode 同序):
      * 先把 resultData 换成这个人看得到的那一份, 再格式化 —— 格式化按 resultData 写文字, 先格式化再在线上遮
