@@ -7,6 +7,7 @@
 
   pass               全部按预期
   stream_drift       流式入口把「查库存」识别成别的意图 (两入口漂移) ⇒ rc=1
+  status_drift       「怎么降低成本？」普通入口直答 COMPLETED、流式回 NEED_CLARIFICATION (PR-2b 前的线上分叉) ⇒ rc=1
   wrong_tenant       登录回的是 LIUSHANMEN ⇒ rc=2, 且之后一次 AI 调用都不许发生
   bad_login          登录 401 ⇒ rc=2
   write_no_persist   /confirm 说成功但没落库 ⇒ rc=1 (回查计数不 +1)
@@ -46,6 +47,10 @@ def recognize(text, entry):
         if entry == "stream" and MODE == "stream_drift":
             return respond_result("REPORT_DASHBOARD_OVERVIEW", message="仪表盘")
         return respond_result("REPORT_INVENTORY", message="库存报告 (今日)")
+    if text == "怎么降低成本？":
+        if entry == "stream" and MODE == "status_drift":
+            return respond_result(None, status="NEED_CLARIFICATION", message="请问您想查哪方面的成本?")
+        return respond_result(None, status="COMPLETED", message="降低成本可以从采购批量和损耗入手。")
     match = re.search(r"客户编号(\S+?)，消息内容：(QA-PROBE-\w+)", text)
     if match:
         params = {"customerId": match.group(1), "direction": "INTERNAL",

@@ -3,7 +3,7 @@
     "上线后自动实测关的固定话术 (INTENT-DISTILL-20261111, 方案第 7 节一级第 3 条)。",
     "每条 case 在 entries 列出的入口各跑一遍 (execute = 普通 POST /ai-intents/execute, stream = /execute/stream)。",
     "turns 依次在同一会话里说; sessionId 一律取服务端回的那个 (澄清会话的 id 由服务端生成)。",
-    "expect 字段: status_in / intent / ai_mode / message_contains (全部要有) / message_not_contains (一个都不许有) / min_choices (SELECT_INTENT 候选数下限) / same_intent_across_entries (两个入口最终意图必须相同)。",
+    "expect 字段: status_in / intent / ai_mode / message_contains (全部要有) / message_not_contains (一个都不许有) / min_choices (SELECT_INTENT 候选数下限) / same_intent_across_entries (两个入口最终意图必须相同) / same_status_across_entries (两个入口最终状态必须相同, PR-2b /execute 走流式管线后)。",
     "pending: {entry 或 '*': 原因}。这一入口没过记 EXPECTED_PENDING 不算失败; 过了记 PENDING_LIFTED (提示去掉标记), 也不算失败。",
     "⚠️ 走 Luna 的话术 (匹配不上短语表的) 每次上线都会真调一次线上决策模型, 只留必要的那几条。"
   ],
@@ -13,6 +13,7 @@
       "title": "查库存: 两个入口同意图 REPORT_INVENTORY",
       "entries": ["execute", "stream"],
       "same_intent_across_entries": true,
+      "same_status_across_entries": true,
       "turns": [
         {"say": "查库存",
          "expect": {"status_in": ["SUCCESS", "COMPLETED"], "intent": "REPORT_INVENTORY", "ai_mode": "READ",
@@ -70,6 +71,17 @@
         {"say": "报工产量统计",
          "expect": {"status_in": ["SUCCESS", "COMPLETED"], "ai_mode": "READ", "intent_not": ["WORK_PROCESS_TASK_COMPLETE"],
                     "intent_in": ["REPORT_PRODUCTION", "REPORT_WORK_STATS", "WORK_REPORT_QUERY", "PROCESSING_WORK_REPORT_QUERY"]}}
+      ]
+    },
+    {
+      "id": "general_cost_question_same_status",
+      "title": "「怎么降低成本？」两个入口同状态 (都直答, 不追问)",
+      "entries": ["execute", "stream"],
+      "same_status_across_entries": true,
+      "_note": "PR-2b 前线上 /execute=COMPLETED、流式=NEED_CLARIFICATION; 识别不出 + 通用咨询 → 两入口都直答。会真调一次线上决策模型。",
+      "turns": [
+        {"say": "怎么降低成本？",
+         "expect": {"status_in": ["COMPLETED"], "message_not_contains": ["我没有理解您的意图"]}}
       ]
     }
   ]

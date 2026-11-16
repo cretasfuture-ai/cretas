@@ -9,6 +9,7 @@ import com.cretas.aims.service.IntentExecutorService;
 import com.cretas.aims.service.execution.IntentExecutionOrchestrator;
 import com.cretas.aims.service.execution.MultiIntentExecutionService;
 import com.cretas.aims.service.execution.SseStreamingService;
+import com.cretas.aims.service.execution.StreamTurnCollector;
 import com.cretas.aims.service.execution.DemoConversationScope;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.security.AuthenticatedActorType;
@@ -52,6 +53,13 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     @Autowired(required = false)
     private FactoryAgentTraceRecorder factoryTraceRecorder;
 
+    /**
+     * /execute 改走流式管线的适配层 (PR-2b)。null = 部分上下文 / 单测直接构造 ⇒ 一律原分支。
+     * 回退杆: cretas.ai.execute.via-stream=false (PR-3 删)。
+     */
+    @Autowired(required = false)
+    private StreamTurnCollector streamTurnCollector;
+
     /** 意图飞轮 (INTENT-DISTILL-20261111): 每轮一条记录; null = 不记 (部分上下文 / 单测直接构造)。 */
     @Autowired(required = false)
     private IntentFlywheelRecorder flywheelRecorder;
@@ -62,7 +70,15 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
         long startedNanos = System.nanoTime();
         IntentExecuteResponse response;
         try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
-            response = orchestrator.execute(factoryId, request, userId, userRole);
+            // PR-2b: 已对齐的那一类请求走流式管线 (同线程收集最后一个 result), 其余留原分支 —— 见 StreamTurnCollector
+            StreamTurnCollector.Route route = streamTurnCollector == null
+                    ? StreamTurnCollector.Route.LEGACY_SWITCH_OFF
+                    : streamTurnCollector.route(factoryId, request, userId);
+            log.debug("[execute] route={} factoryId={}", route, factoryId);
+            response = route.viaStream()
+                    ? streamTurnCollector.collect(factoryId, request, userId, userRole)
+                    : orchestrator.execute(factoryId, request, userId, userRole);
+            // 飞轮 entry 仍记 NORMAL (两条路都是普通入口)
             recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
         }
         populateConversationRound(factoryId, userId, request, response);

@@ -178,6 +178,20 @@ public class SseStreamingService {
     @Autowired(required = false)
     private com.cretas.aims.service.QueryPreprocessorService queryPreprocessorService;
 
+    /**
+     * 普通入口 (/execute) 经本管线跑时 ({@link StreamTurnCollector}) 保留的、只在普通入口有的步骤 (Drools 校验、
+     * 动态选工具、NEED_MORE_INFO 补问、对话记忆): 单一实现在编排器里, 这里只在普通入口那一轮调用 —— App 流式不变。
+     * {@code @Lazy}: 编排器不依赖本类, 不成环; 裸构造的单测缺席时这些步骤不跑 (普通入口那一轮也不会走到这里)。
+     */
+    @Autowired(required = false)
+    @Lazy
+    private IntentExecutionOrchestrator ordinaryEntrySteps;
+
+    /** 本线程这一轮是不是普通入口 (/execute) 经流式管线; 是 ⇒ 返回保留步骤的实现, 否则 null。 */
+    private IntentExecutionOrchestrator ordinaryEntryStepsForThisTurn() {
+        return StreamTurnCollector.collectingOnCurrentThread() ? ordinaryEntrySteps : null;
+    }
+
     @Autowired
     public SseStreamingService(@Lazy AIIntentService aiIntentService,
                                SemanticCacheService semanticCacheService,
@@ -696,6 +710,16 @@ public class SseStreamingService {
                         IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
                 return;
             }
+            // 6.6 普通入口那一轮保留 Drools 校验 (原普通入口识别分支有, 短语快捷不跑; App 流式不跑) —— PR-2b C 类 #10
+            IntentExecutionOrchestrator ordinarySteps = ordinaryEntryStepsForThisTurn();
+            if (ordinarySteps != null && phraseShortcut == null) {
+                IntentExecuteResponse droolsBlocked = ordinarySteps.droolsValidationBlock(
+                        factoryId, intent, request, userId, userRole);
+                if (droolsBlocked != null) {
+                    streamTerminalResponse(emitter, droolsBlocked, startTime);
+                    return;
+                }
+            }
 
             // 7a. Skill 路由 —— 与 /execute (IntentExecutionOrchestrator 3.5) 同一前提:
             // 只给「没绑工具」的意图 (WORKDESK 类, Skill 就是它的执行器), 且意图权限先过。
@@ -708,6 +732,7 @@ public class SseStreamingService {
                     IntentExecuteResponse skillResponse = dynamicToolSelectionService.trySkillRoute(
                             request.getUserInput(), factoryId, userId, userRole);
                     if (skillResponse != null) {
+                        skillResponse = enrichNeedMoreInfoForOrdinaryEntry(skillResponse, request, intent, factoryId, userId);
                         applySharedResultSteps(skillResponse, intent, streamBoundToolName, userId);
                         sendSseEvent(emitter, "result", skillResponse);
                         sendSseEvent(emitter, "complete", Map.of(
@@ -724,6 +749,8 @@ public class SseStreamingService {
                     IntentExecuteResponse explicitSkillResp = dynamicToolSelectionService
                             .tryExplicitSkillRouteForIntent(intent, request.getUserInput(), factoryId, userId, userRole);
                     if (explicitSkillResp != null) {
+                        explicitSkillResp = enrichNeedMoreInfoForOrdinaryEntry(
+                                explicitSkillResp, request, intent, factoryId, userId);
                         applySharedResultSteps(explicitSkillResp, intent, streamBoundToolName, userId);
                         sendSseEvent(emitter, "result", explicitSkillResp);
                         sendSseEvent(emitter, "complete", Map.of(
@@ -1073,6 +1100,13 @@ public class SseStreamingService {
                 log.warn("[SSE] Tool 未找到: toolName={}", toolName);
                 response = toolDispatchService.buildNoToolResponse(intent);
             }
+        } else if (permissionAlreadyChecked && ordinaryEntryStepsForThisTurn() != null
+                && dynamicToolSelectionService.requiresDynamicSelection(matchResult)) {
+            // 普通入口那一轮保留动态选工具 (原普通入口识别分支有、显式意图码路径没有; App 流式不跑) —— PR-2b C 类 #11。
+            // permissionAlreadyChecked 只有识别分支 (7c) 传 true。
+            log.info("[SSE/ordinary] 动态工具选择: intentCode={}", intent.getIntentCode());
+            response = dynamicToolSelectionService.executeWithDynamicToolSelection(
+                    factoryId, request, intent, matchResult, userId, userRole);
         } else {
             // Sprint 9 P0.1 fix (2026-05-21): tool_name=NULL — 走 explicit Skill fallback (cover
             // 7a Skill route 已尝试但仍 fall through 到 executeAndStreamResult 的 corner case).
@@ -1088,13 +1122,27 @@ public class SseStreamingService {
             }
         }
 
+        // 普通入口那一轮保留 NEED_MORE_INFO 补问 (原普通入口两条路径都有; App 流式不跑) —— PR-2b C 类 #11
+        response = enrichNeedMoreInfoForOrdinaryEntry(response, request, intent, factoryId, userId);
+
         // 遮价 → 格式化 → 文字兜底 → 内部推理消毒 → aiMode (与普通入口同序)
         applySharedResultSteps(response, intent, toolName, userId);
 
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
             response.setSessionId(request.getSessionId());
         }
-        persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
+        IntentExecutionOrchestrator ordinarySteps = ordinaryEntryStepsForThisTurn();
+        if (ordinarySteps != null) {
+            // 普通入口那一轮: 先做原普通入口的文字兜底 (反向兜底 / workdesk 摘要), 记忆里记的才是用户看到的那句
+            // (#1782 终审 低-2); 取回后不再做第二遍
+            ordinarySteps.applyOrdinaryEntryTextFallback(factoryId, response, userId);
+            StreamTurnCollector.markTextFallbackApplied();
+            // 执行过的一轮照原普通入口写对话记忆 (任何状态 + 实体槽, 含同一份 readQuery/翻页元数据),
+            // 不再另写流式的「只记成功的只读翻页」, 免得同一轮记两遍 —— PR-2b C 类 #12
+            ordinarySteps.recordExecutedTurnMemory(factoryId, request, response, matchResult, userId);
+        } else {
+            persistSuccessfulReadPagination(factoryId, userId, request, intent, toolName, response);
+        }
 
         if (factoryFollowUpService != null
                 && com.cretas.aims.util.RetiredAnalysisContext.isKnownFactoryDomain(resolveFactoryDomainForTenantCheck(factoryId))) {
@@ -1131,6 +1179,46 @@ public class SseStreamingService {
         }
         sendSseEvent(emitter, "complete", complete);
         emitter.complete();
+    }
+
+    private IntentExecuteResponse enrichNeedMoreInfoForOrdinaryEntry(IntentExecuteResponse response,
+                                                                     IntentExecuteRequest request, AIIntentConfig intent,
+                                                                     String factoryId, Long userId) {
+        IntentExecutionOrchestrator ordinarySteps = ordinaryEntryStepsForThisTurn();
+        return ordinarySteps == null ? response
+                : ordinarySteps.enrichNeedMoreInfo(response, request, intent, factoryId, userId);
+    }
+
+    // ==================== 普通入口 (/execute) 同线程跑本管线 (PR-2b) ====================
+
+    /** 一轮跑完后取回的东西: 最后一个 result、complete 状态、路由定下的意图码、是否走了 error 出口。 */
+    record CollectedTurn(IntentExecuteResponse result, String completeStatus, String resolvedIntentCode,
+                         boolean errorExit, String errorMessage) {
+    }
+
+    /**
+     * 在当前线程上跑一整轮流式管线 (不另开工作线程, 不记 STREAM 飞轮 / trace —— 由普通入口门面按 NORMAL 记),
+     * 跑完取回并清掉这个 emitter 的读数。只给 {@link StreamTurnCollector} 用。
+     */
+    CollectedTurn runOnCurrentThread(SseEmitter emitter, String factoryId, IntentExecuteRequest request,
+                                     Long userId, String userRole) {
+        executeStreamAsync(emitter, factoryId, request, userId, userRole,
+                new com.cretas.aims.ai.client.F006BossQuestionClient.Cancellation());
+        IntentExecuteResponse result = lastStreamedResult.remove(emitter);
+        String completeStatus = streamedCompleteStatus.remove(emitter);
+        String resolvedIntent = streamedIntentCode.remove(emitter);
+        String errorMessage = erroredEmitters.remove(emitter);
+        return new CollectedTurn(result, completeStatus, resolvedIntent, errorMessage != null,
+                errorMessage == null || errorMessage.isEmpty() ? null : errorMessage);
+    }
+
+    /** 走了 error 出口的 emitter → error 事件里的 message (没有则空串; sendSseEvent 记)。 */
+    private final Map<SseEmitter, String> erroredEmitters =
+            java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /** 短语快捷通道会不会接这句 (只读判定, 与管线 1.4 同一个方法)。 */
+    boolean phraseShortcutWouldTake(String factoryId, String userInput) {
+        return tryPhraseShortcut(factoryId, userInput) != null;
     }
 
     /**
@@ -2097,6 +2185,11 @@ public class SseStreamingService {
         } else if ("error".equals(eventName)) {
             // The run ended in the error exit without ever sending a result: still a (failed) run.
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
+            if (emitter instanceof StreamTurnCollector.CollectingEmitter) {
+                // 普通入口要知道这一轮走的是 error 出口, 以及要给用户看的那句说明
+                Object message = data instanceof Map<?, ?> error ? error.get("message") : null;
+                erroredEmitters.put(emitter, message instanceof String text ? text : "");
+            }
         }
         try {
             String json = objectMapper.writeValueAsString(priceMaskedWire(eventName, data));
