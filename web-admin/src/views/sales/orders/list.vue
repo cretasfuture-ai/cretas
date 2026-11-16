@@ -102,6 +102,7 @@ import {
 } from './salesOrderListUx';
 import { toDateString } from '@/utils/dateFormat';
 import { createAutoFullChildShipment, isFullQuickDeliveryPlan } from './deliveryAutoChild';
+import { buildQuickDeliveryItems, withKnownUnitPrice } from './deliveryPricePayload';
 import { allocationNoticeLines } from './shipmentAllocationNotices';
 
 // Quick action dialogs
@@ -2324,25 +2325,8 @@ function handleAiFill(params: TableRow) {
 async function handleQuickDelivery(row: TableRow) {
   const today = toDateString(new Date());
   // Build items from order items (each with productTypeId, deliveredQuantity, unit)
-  let items: TableRow[] = [];
-  if (row.items && row.items.length > 0) {
-    items = row.items
-      .filter((item: TableRow) => item.productTypeId || item.productType?.id)
-      .map((item: TableRow) => ({
-        salesOrderItemId: item.id,
-        productTypeId: item.productTypeId || item.productType?.id,
-        productName: item.productName || item.productType?.name,
-        deliveredQuantity: item.quantity || 0,
-        // 🔴 2026-08-13 真机 E2E: 计划数量输入框需要一个上限, 否则可以随手填出
-        // 后端必然 409 的数。后端真正的闸是 `下单量 - 已安排`, 前端拿不到「已安排」,
-        // 所以这里只兜「不超过下单量」这一层, 精确判定仍由后端
-        // DELIVERY_QUANTITY_EXCEEDS_REMAINING 负责。
-        maxQuantity: Number(item.quantity) > 0 ? Number(item.quantity) : undefined,
-        unit: item.unit || 'kg',
-        packagingSpecId: item.packagingSpecId,
-        unitPrice: Number(item.unitPrice || 0),
-      }));
-  }
+  // 单价被遮/缺失时不带 unitPrice (见 deliveryPricePayload.ts), ⛔ 不发假 0。
+  const items: TableRow[] = buildQuickDeliveryItems(row.items as TableRow[] | undefined);
   if (items.length === 0) {
     return ElMessage.warning('订单缺少产品信息，无法快速出库');
   }
@@ -2373,7 +2357,8 @@ async function submitQuickDelivery() {
       salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
     } = deliveryForm.value;
     const res = await post(`/${factoryId.value}/sales/deliveries`, {
-      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany, items, remark,
+      salesOrderId, customerId, deliveryDate, deliveryAddress, logisticsCompany,
+      items: (items as TableRow[]).map((it) => withKnownUnitPrice(it)), remark,
     });
     if (res.success) {
       // Issue #740: 文案改为"发货单已创建"明示后续等仓库 confirm
