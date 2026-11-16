@@ -578,7 +578,7 @@ const itemColumns = computed<TableColumn<TableRow>[]>(() => {
 });
 const taxGroupColumns: TableColumn<{ taxRate: number; amount: number }>[] = [
   { id: 'rate', header: '税率', meta: C },
-  { id: 'amount', header: '金额小计', meta: R },
+  { id: 'groupSum', header: '金额小计', meta: R },
 ];
 const invoiceColumns = computed<TableColumn<TableRow>[]>(() => {
   const price = canViewPrice.value;
@@ -2507,14 +2507,14 @@ async function handleQuickPayFull() {
             <!-- ─── R14: 税率分组汇总 (Canvas FormulaEngine 驱动) ─── -->
             <div v-if="canViewPrice && taxGroupData" class="tax-group-section">
               <h3 class="sub-title">税率分组汇总</h3>
-              <UTable :data="taxGroupData" :columns="taxGroupColumns" class="cs-table tax-group-table">
+              <div class="tax-group-wrap"><UTable :data="taxGroupData" :columns="taxGroupColumns" class="cs-table">
                 <template #rate-cell="{ row }">
                   <UBadge variant="soft" :color="row.original.taxRate === 9 ? 'success' : (row.original.taxRate === 13 ? 'warning' : 'neutral')">
                     {{ row.original.taxRate }}%
                   </UBadge>
                 </template>
-                <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount) }}</span></template>
-              </UTable>
+                <template #groupSum-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount) }}</span></template>
+              </UTable></div>
             </div>
 
             <!-- ─── 审批进度时间线 (V3 P0-11 补强 — 客户金矿截图 49m17s 底部 timeline) ─── -->
@@ -2750,7 +2750,7 @@ async function handleQuickPayFull() {
           </UFormField>
           <UTable :data="deliveryForm.items" :columns="deliveryItemColumns" class="cs-table">
             <template #qty-cell="{ row }">
-              <UInputNumber v-model="row.original.deliveredQuantity" :min="0" :max="row.original.maxDeliverableQuantity" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" />
+              <UInputNumber v-model="row.original.deliveredQuantity" :min="0" :max="row.original.maxDeliverableQuantity" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" :step-snapping="false" />
               <div class="delivery-capacity-hint">剩余可安排 {{ row.original.maxDeliverableQuantity }}{{ displayUnit(row.original.unit) }}</div>
             </template>
             <template #unit-cell="{ row }">{{ displayUnit(row.original.unit) }}</template>
@@ -2789,7 +2789,7 @@ async function handleQuickPayFull() {
           <UFormField label="备注"><UTextarea v-model="shipmentForm.remark" :rows="2" class="w-full" /></UFormField>
           <UTable :data="shipmentForm.items" :columns="shipmentItemColumns" class="cs-table">
             <template #qty-cell="{ row }">
-              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.remaining" :format-options="QTY3" :increment="false" :decrement="false" class="w-32" />
+              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.remaining" :format-options="QTY3" :increment="false" :decrement="false" class="w-32" :step-snapping="false" />
             </template>
             <template #unit-cell="{ row }">{{ displayUnit(row.original.unit) }}</template>
             <template #remaining-cell="{ row }">{{ row.original.remaining }}{{ displayUnit(row.original.unit) }}</template>
@@ -2898,7 +2898,7 @@ async function handleQuickPayFull() {
           <UTable :data="returnForm.items" :columns="returnItemColumns" class="cs-table">
             <template #selected-cell="{ row }"><UCheckbox v-model="row.original.selected" aria-label="选择该行退货" /></template>
             <template #qty-cell="{ row }">
-              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.maxQuantity || undefined" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" :disabled="!row.original.selected" />
+              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.maxQuantity || undefined" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" :disabled="!row.original.selected" :step-snapping="false" />
             </template>
             <template #reason-cell="{ row }">
               <UInput v-model="row.original.reason" size="sm" placeholder="(可选)" :maxlength="500" class="w-full" :disabled="!row.original.selected" />
@@ -3119,8 +3119,7 @@ async function handleQuickPayFull() {
                 :decrement="false"
                 :color="paymentOverLimit ? 'error' : 'primary'"
                 :highlight="paymentOverLimit"
-                class="w-52"
-              />
+                class="w-52" :step-snapping="false" />
               <span class="form-hint">待收 {{ formatAmount(computedRemainingAmount()) }}</span>
             </div>
             <div v-if="paymentOverLimit" class="over-limit-hint over-limit-hint--danger">
@@ -3202,8 +3201,8 @@ async function handleQuickPayFull() {
   .header-right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 }
 .loading-state { padding: var(--cs-space-4); color: var(--cs-muted); }
-.desc-grid { display: grid; gap: 1px; margin: 0; background: var(--cs-border); border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); overflow: hidden;
-  > div { display: flex; gap: var(--cs-space-3); padding: 10px 14px; background: var(--cs-surface); min-width: 0; }
+.desc-grid { display: grid; margin: 0; background: var(--cs-surface); border-top: 1px solid var(--cs-border); border-left: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); overflow: hidden;
+  > div { display: flex; gap: var(--cs-space-3); padding: 10px 14px; background: var(--cs-surface); min-width: 0; box-shadow: inset -1px -1px 0 0 var(--cs-border); }
   dt { flex: 0 0 auto; min-width: 76px; color: var(--cs-muted); font-size: var(--cs-font-small); line-height: 22px; }
   dd { margin: 0; color: var(--cs-text); font-size: 13px; line-height: 22px; min-width: 0; overflow-wrap: anywhere; }
   .wide { grid-column: 1 / -1; }
@@ -3237,7 +3236,7 @@ async function handleQuickPayFull() {
 .strong { font-weight: 600; color: var(--cs-text); }
 .danger-text { color: var(--cs-danger); }
 .ok-text { font-size: 12px; color: var(--cs-success); }
-.tax-group-table { max-width: 400px; }
+.tax-group-wrap { max-width: 400px; }
 // E-4 含税/未税汇总条
 .tax-summary-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;

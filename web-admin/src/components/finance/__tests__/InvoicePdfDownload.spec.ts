@@ -43,10 +43,12 @@ describe('private issued invoice PDF download', () => {
     expect(target.close).toHaveBeenCalledOnce(); expect(target.location.href).toBe(''); w.unmount();
   });
   it('mounts the protected downloader in both real invoice entry points', () => {
-    for (const path of ['../../../views/sales/orders/detail.vue', '../../../views/finance/invoices/list.vue']) {
+    // 销售订单详情迁到 UTable 后行变量是 row.original (Nuxt UI 的行对象); 财务发票列表仍是 el-table 的 row
+    for (const [path, row] of [['../../../views/sales/orders/detail.vue', 'row.original'], ['../../../views/finance/invoices/list.vue', 'row']]) {
       const source = readFileSync(new URL(path, import.meta.url), 'utf8');
-      expect(source).toContain('<InvoicePdfDownload v-if="row.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.id" :file-name="row.invoiceFileName" />');
+      expect(source).toContain(`<InvoicePdfDownload v-if="${row}.invoicePdfUrl" :factory-id="factoryId" :invoice-id="${row}.id" :file-name="${row}.invoiceFileName" />`);
       expect(source).not.toContain(':href="row.invoicePdfUrl"');
+      expect(source).not.toContain(':href="row.original.invoicePdfUrl"');
     }
   });
 });

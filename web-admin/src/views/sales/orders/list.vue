@@ -2862,8 +2862,7 @@ function handleMergePurchase() {
                 :increment="false"
                 :decrement="false"
                 size="sm"
-                class="w-36"
-              /> {{ displayUnit(item.unit) }}
+                class="w-36" :step-snapping="false" /> {{ displayUnit(item.unit) }}
             </div>
           </UFormField>
           <UFormField label="备注">
@@ -2882,7 +2881,7 @@ function handleMergePurchase() {
       <template #body>
         <div class="form-stack">
           <UFormField label="收款金额">
-            <UInputNumber v-model="paymentForm.amount" :min="0" :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }" :increment="false" :decrement="false" class="w-full" />
+            <UInputNumber v-model="paymentForm.amount" :min="0" :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }" :increment="false" :decrement="false" class="w-full" :step-snapping="false" />
           </UFormField>
           <UFormField label="收款方式">
             <USelectMenu v-model="paymentForm.paymentMethod" :items="PAYMENT_METHOD_ITEMS" value-key="value" :search-input="false" class="w-full" />
@@ -3396,7 +3395,7 @@ function handleMergePurchase() {
 .status-filter-badge { gap: 4px; }
 .form-stack { display: flex; flex-direction: column; gap: var(--cs-space-4); }
 .delivery-qty-row { margin-bottom: 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sort-th { display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
+.sort-th { border: 0; background: transparent; padding: 0; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
 .sort-icon { width: 12px; height: 12px; color: var(--cs-muted); opacity: 0.6; }
 .sort-icon.active { color: var(--cs-primary); opacity: 1; }
 .attach-th { display: inline-flex; align-items: center; gap: 4px; cursor: help; }
