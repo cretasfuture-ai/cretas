@@ -32,10 +32,9 @@ import java.util.UUID;
 @AllArgsConstructor
 @NoArgsConstructor
 @Entity
+// 唯一约束 uk_prar_requisition_seq(requisition_id, seq) 只在迁移里声明, 不在这里重复声明:
+// 软删唯一约束清单闸要求「软删实体声明的唯一约束必须登记」, 而本表禁止删除, 登记无意义。
 @Table(name = "purchase_requisition_approval_records",
-        uniqueConstraints = {
-                @UniqueConstraint(name = "uk_prar_requisition_seq", columnNames = {"requisition_id", "seq"})
-        },
         indexes = {
                 @Index(name = "idx_prar_requisition", columnList = "factory_id, requisition_id, seq")
         })
