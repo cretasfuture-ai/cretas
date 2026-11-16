@@ -2362,9 +2362,9 @@ async function handleQuickPayFull() {
             </dd>
           </div>
           <div v-if="canViewPrice"><dt>未税总额</dt><dd class="num">{{ formatAmount(order.totalAmount) }}</dd></div>
-          <div v-if="canViewPrice"><dt>已发货金额</dt><dd class="num">{{ order.actualShippedAmount ? formatAmount(order.actualShippedAmount) : '0.00' }}</dd></div>
-          <div v-if="canViewPrice"><dt>已开票</dt><dd class="num">{{ order.invoicedAmount ? formatAmount(order.invoicedAmount) : '0.00' }}</dd></div>
-          <div v-if="canViewPrice"><dt>已收款</dt><dd class="num">{{ order.paidAmount ? formatAmount(order.paidAmount) : '0.00' }}</dd></div>
+          <div v-if="canViewPrice"><dt>已发货金额</dt><dd class="num">{{ formatAmount(order.actualShippedAmount || 0) }}</dd></div>
+          <div v-if="canViewPrice"><dt>已开票</dt><dd class="num">{{ formatAmount(order.invoicedAmount || 0) }}</dd></div>
+          <div v-if="canViewPrice"><dt>已收款</dt><dd class="num">{{ formatAmount(order.paidAmount || 0) }}</dd></div>
         </dl>
 
         <!-- 4 tab 业务中心 (V3 P0-11 — 金矿截图 49m17s) -->

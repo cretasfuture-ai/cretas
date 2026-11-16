@@ -46,3 +46,16 @@ describe('销售订单详情: 价格/金额列受 canViewPrice 控制', () => {
     expect(columnLine(detail, 'quantity')).not.toMatch(/price && /);
   });
 });
+
+describe('销售订单详情头部: 已发货/已开票/已收款统一走 formatAmount (零值也带 ¥)', () => {
+  it.each(['actualShippedAmount', 'invoicedAmount', 'paidAmount'])('%s 用 formatAmount(order.x || 0), 不写 0.00 字面量', (f) => {
+    expect(detail).toContain(`<dd class="num">{{ formatAmount(order.${f} || 0) }}</dd>`);
+  });
+  it('阴性对照: 不再有裸 0.00 字面量', () => {
+    expect(detail).not.toContain(": '0.00'");
+  });
+  it('formatAmount(0) 带 ¥', async () => {
+    const { formatAmount } = await import('@/utils/tableFormatters');
+    expect(formatAmount(0)).toBe('¥0.00');
+  });
+});
