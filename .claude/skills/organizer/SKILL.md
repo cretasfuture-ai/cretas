@@ -54,13 +54,14 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 
   **老 organizer（交出方）**
   1. 写交接到 `~/.claude/context-handoff/handoff/`（仓库外，≤ 15 行）：在飞执行线（会话 id + 在做什么 + PR 号）、仍在挂的 PR 监视、合并排队、待 Steve 裁决、Base SHA、试过但放弃的路、下一步第一个动作。
-  2. `start_session` 开新 organizer（Opus、medium，用 `title` 起名「Organizer｜<批次>｜第 N+1 任｜<MM-DD>」），开完 `get_session` 核对模型。
-     - 如果只开出卡片（被别的会话消息叫醒的回合里会这样）：立刻告诉 Steve「新 organizer 是卡片 <task_id>，请点开；点开前本会话继续守着 <在飞 PR>」。能选时机就在 Steve 自己发消息的那一轮收口，那一轮能直接开。
+  2. `start_session` 开新 organizer（Opus、medium，用 `title` 起名「Organizer｜<批次>｜第 N+1 任｜<MM-DD>」，**`initiation: "user_asked"`**——Steve 2026-11-16 在对话里明确要求「organizer 自动开，不用我点卡片确认」，这是他本人的指示，⛔ 不传 `offer` / `own_initiative`，那两种必出卡片），开完 `get_session` 核对模型。
+     - 🔴 **不出卡片的唯一办法是挑对回合**：应用在「被别的会话消息 / 定时 / 后台通知叫醒的回合」里一律拒绝直接开会话，只能出卡片，这是应用限制，⛔ 不要绕。所以到收口点时先看本回合是谁叫醒的：是 Steve 自己发的消息 → 当场开；是别的会话 / 通知叫醒的 → **不开、不出卡片**，继续守着在飞 PR，记一行「待交班」，等 Steve 下一条消息那一轮再开（300K 软线本来就允许拖到下个边界）。只有过了 400K 硬线且 Steve 长时间没发消息，才退回出卡片并说一行「新 organizer 是卡片 <task_id>，请点开」。
   3. 在新 organizer 发来「已接手」之前：**不 detach、不停 CI 监视、不停手**。不要替新 organizer 给执行线转述它的 id。
   4. 收到新 organizer 的接手回执后，**用自己的完整上下文逐项核对**（不只是对照交接文件——漏写进文件的事只有你记得），回复它：「完整」，或列出漏掉的项。然后对自己名下在飞执行线逐个 `detach_session`（被拒的写明原因），**连新 organizer 本身也 detach**（用 `start_session` 直接开出的新 organizer 挂在你名下，你被归档时空闲的它会被连带归档；卡片开出的不挂靠，不受影响），停掉自己的监视，改名「[已交班→第 N+1 任] <原名>」，最后发一句「已 detach、已停手」给新 organizer，停手。
 
   **新 organizer（接手方）**
-  1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）。
+  1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）；**`set_pinned self true` 把自己置顶**（置顶的会话不受「PR 合并自动归档」影响）。
+     - 🔴 依据（2026-11-16）：意图第 8 任、原型第 15 任都被自己合并的 PR（#1782/#1780）触发 `auto_archive_on_pr_close` 归档，两个批次一度无人管；同期置顶的降本第 5 任 PR 合并后没被归档。⛔ 不要关这个应用设置（执行会话靠它回收）。另外 organizer 自己开/合的 PR（台账 fastlane 等）合并前先 `unbind_pr`，别让 PR 绑在 organizer 会话上。
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
   3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，之后完成/阻塞/PR 号直接回复这条消息的发件人」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
