@@ -82,7 +82,7 @@ describe('对照: 仓库确认发货的实际数量输入', () => {
 
   it('实际数量允许小数且有上限 (销售端向它看齐)', () => {
     expect(warehouseSource).toMatch(/:min="0"/);
-    expect(warehouseSource).toMatch(/:max="row\.plannedQty"/);
-    expect(warehouseSource).toMatch(/:precision="2"/);
+    expect(warehouseSource).toMatch(/:max="row(\.original)?\.plannedQty"/);
+    expect(warehouseSource).toMatch(/:precision="2"|step="0\.01"/); // el-input-number 2 位小数 / UInput 原生 number 步长 0.01
   });
 });
