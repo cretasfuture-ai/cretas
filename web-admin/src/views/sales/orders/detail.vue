@@ -61,6 +61,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, salesOrderRemainingAmount, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 import { createAutoFullChildShipment } from './deliveryAutoChild';
+import { withKnownUnitPrice } from './deliveryPricePayload';
 import { allocationNoticeLines, allocationNoticesOf, needsPackagingConfirmation, type ShipmentAllocationNotice } from './shipmentAllocationNotices';
 import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
 import { priceSourceLabel } from '@/api/customerPriceList';
@@ -1333,7 +1334,7 @@ async function handleCreateDelivery() {
       deliveryDate: toDateString(new Date()),
       deliveryAddress: deliveryForm.value.deliveryAddress,
       logisticsCompany: deliveryForm.value.logisticsCompany,
-      items: filteredItems,
+      items: filteredItems.map((it) => withKnownUnitPrice(it)),
     });
     if (res.success) {
       // 客户 2026-07-31:「点击生成发货单以后……但是发货单在哪里看」——
