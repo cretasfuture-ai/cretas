@@ -67,6 +67,25 @@ public final class FactoryIntentCatalog {
         return Set.copyOf(result);
     }
 
+    /**
+     * 拒答文案用的功能名: 按工具名或意图码取目录里的中文意图名。一个工具对应多个不同意图名时
+     * 不猜 (返回空), 由调用方兜底。
+     */
+    public static java.util.Optional<String> displayNameForAction(String key) {
+        if (key == null || key.isBlank()) return java.util.Optional.empty();
+        JsonNode byCode = INTENTS.get(key);
+        if (byCode != null && !byCode.path("intent_name").asText("").isBlank()) {
+            return java.util.Optional.of(byCode.path("intent_name").asText());
+        }
+        Set<String> names = new LinkedHashSet<>();
+        for (JsonNode row : INTENTS.values()) {
+            if (key.equals(row.path("tool_name").asText(null)) && !row.path("intent_name").asText("").isBlank()) {
+                names.add(row.path("intent_name").asText());
+            }
+        }
+        return names.size() == 1 ? java.util.Optional.of(names.iterator().next()) : java.util.Optional.empty();
+    }
+
     public static String canonicalCode(String code) {
         return code == null ? null : ALIASES.getOrDefault(code, code);
     }
