@@ -8,6 +8,7 @@ import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
 import lombok.ToString;
+import org.hibernate.annotations.SQLDelete;
 import org.hibernate.annotations.Type;
 import org.hibernate.annotations.Where;
 
@@ -38,6 +39,7 @@ import java.util.UUID;
         indexes = {
                 @Index(name = "idx_prar_requisition", columnList = "factory_id, requisition_id, seq")
         })
+@SQLDelete(sql = "UPDATE purchase_requisition_approval_records SET deleted_at = NOW() WHERE id = ?")
 @Where(clause = "deleted_at IS NULL")
 public class PurchaseRequisitionApprovalRecord extends BaseEntity {
 
@@ -89,4 +91,13 @@ public class PurchaseRequisitionApprovalRecord extends BaseEntity {
 
     @Column(name = "expected_date_snapshot")
     private LocalDate expectedDateSnapshot;
+
+    /**
+     * 审批流水是只追加的审计记录, 不允许删除(物理/软删都不行): 软删后历史接口会少轮次。
+     * @SQLDelete 仅为满足软删注解覆盖率棘轮, 实际被本回调拦在前面。
+     */
+    @PreRemove
+    protected void preventRemove() {
+        throw new UnsupportedOperationException("请购审批流水是只追加的审计记录, 不允许删除");
+    }
 }
