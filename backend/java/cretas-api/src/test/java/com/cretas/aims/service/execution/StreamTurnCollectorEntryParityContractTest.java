@@ -9,6 +9,7 @@ import com.cretas.aims.ai.client.F006BossQuestionClient;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.grounding.ChatBusinessFactGuard;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolRbacGuard;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.config.DashScopeConfig;
@@ -60,6 +61,7 @@ import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.crew.DigitalCrewService;
 import com.cretas.aims.service.impl.ConversationServiceImpl;
 import com.cretas.aims.service.impl.IntentExecutorServiceImpl;
+import com.cretas.aims.service.impl.PermissionServiceImpl;
 import com.cretas.aims.service.intent.IntentConfigManagementService;
 import com.cretas.aims.service.processsecret.ProcessSecretAccessService;
 import com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit;
@@ -306,6 +308,205 @@ class StreamTurnCollectorEntryParityContractTest {
             assertThat(invocationsOf(h.agents, "executeCollaborativeAnalysis")).as(entry + ": 多代理跑了一次").isEqualTo(1);
             assertThat(h.recognitionCalls()).as(entry + ": 早期就接住, 不识别").isZero();
         }
+    }
+
+    // ------------------------------------------------------------------ PR-3 复审 M2: 分析流准入 (两入口共用一处)
+
+    private static final String ANALYSIS_INPUT = "分析一下最近的成本走势";
+    private static final String ANALYSIS_TEXT = "分析结论：成本上升主要来自包材与能耗。";
+    /** 存档经营报告里的一句 (兜底时会被拼进模型提示词); 模型桩把系统提示词原样回出来, 报告进没进回复一看便知。 */
+    private static final String REPORT_MARKER = "日报存档采购单价九九八八元每公斤";
+
+    /**
+     * 早期判为分析问法 → 分析流。权限按真实角色矩阵判 ({@link PermissionServiceImpl} + {@link ToolRbacGuard} +
+     * {@link IntentPermissionGate}, 只桩用户仓库): 分析流准入那一次检查交给真实的门, 其它意图检查照旧放行。
+     */
+    private static void analysisTurn(Harness h, String role, boolean analysisSucceeds, boolean seesFinanceFigures) {
+        org.mockito.Mockito.doReturn(QuestionType.GENERAL_QUESTION).when(h.knowledgeBase).detectQuestionType(ANALYSIS_INPUT);
+        when(h.analysisRouter.isAnalysisRequest(ANALYSIS_INPUT, QuestionType.GENERAL_QUESTION)).thenReturn(true);
+        when(h.analysisRouter.detectAnalysisTopic(ANALYSIS_INPUT)).thenReturn(AnalysisTopic.values()[0]);
+        when(h.complexityRouter.route(eq(ANALYSIS_INPUT), any())).thenReturn(ProcessingMode.MULTI_AGENT);
+        when(h.agents.executeCollaborativeAnalysis(any())).thenReturn(analysisSucceeds
+                ? AnalysisResult.builder().success(true).formattedAnalysis(ANALYSIS_TEXT).build()
+                : AnalysisResult.builder().success(false).build());
+        IntentPermissionGate realGate = realPermissionGate(role);
+        when(h.permissionGate.check(org.mockito.ArgumentMatchers.argThat(i -> i != null
+                        && IntentExecutionOrchestrator.ANALYSIS_FLOW_PERMISSION.equals(i.getRequiredPermission())),
+                any(), any()))
+                .thenAnswer(inv -> realGate.check(inv.getArgument(0), inv.getArgument(1), inv.getArgument(2)));
+        com.cretas.aims.entity.AIAnalysisResult report = new com.cretas.aims.entity.AIAnalysisResult();
+        report.setAnalysisText(REPORT_MARKER);
+        when(h.reports.findFirstByFactoryIdAndReportTypeAndExpiresAtAfterOrderByCreatedAtDesc(
+                eq(FACTORY), anyString(), any())).thenReturn(Optional.of(report));
+        when(h.priceView.seesFinanceFigures(USER)).thenReturn(seesFinanceFigures);
+        when(h.llm.chat(anyString(), anyString())).thenAnswer(inv -> "建议：" + inv.getArgument(0));
+    }
+
+    private static IntentPermissionGate realPermissionGate(String role) {
+        PermissionServiceImpl matrix = new PermissionServiceImpl();
+        com.cretas.aims.testutil.PermissionRepositoryFixtures.installSuccessfulEmpty(matrix);
+        UserRepository users = mock(UserRepository.class);
+        User caller = new User();
+        caller.setId(USER);
+        caller.setFactoryId(FACTORY);
+        caller.setRoleCode(role);
+        caller.setIsActive(true);
+        when(users.findById(USER)).thenReturn(Optional.of(caller));
+        ToolRbacGuard rbac = new ToolRbacGuard();
+        ReflectionTestUtils.setField(rbac, "userRepository", users);
+        ReflectionTestUtils.setField(rbac, "permissionService", matrix);
+        IntentPermissionGate gate = new IntentPermissionGate();
+        ReflectionTestUtils.setField(gate, "rbacGuard", rbac);
+        return gate;
+    }
+
+    /** 两入口都跑在「本人」的可信用户作用域里 (生产: /execute 有 servlet 请求的 userId, App 流在工作线程上绑同一个)。 */
+    private static Map<Entry, Harness> runAnalysis(Consumer<Harness> setup) throws Exception {
+        try (com.cretas.aims.utils.SecurityUtils.Scope ignored =
+                     com.cretas.aims.utils.SecurityUtils.trustedUserIdScope(USER)) {
+            return runAll(setup, IntentExecuteRequest.builder().userInput(ANALYSIS_INPUT).build());
+        }
+    }
+
+    private static String shownText(IntentExecuteResponse r) {
+        return String.valueOf(r.getMessage()) + "\n" + r.getFormattedText();
+    }
+
+    private static long analysisGateChecks(Harness h) {
+        return org.mockito.Mockito.mockingDetails(h.permissionGate).getInvocations().stream()
+                .filter(i -> "check".equals(i.getMethod().getName()))
+                .filter(i -> i.getArgument(0) instanceof AIIntentConfig c
+                        && IntentExecutionOrchestrator.ANALYSIS_FLOW_PERMISSION.equals(c.getRequiredPermission()))
+                .count();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"operator", "warehouse_worker"})
+    @DisplayName("M2 没有 analytics 的操作员 / 仓管问分析问法: 两入口都 NO_PERMISSION, 不进分析、不读存档报告、不调模型; /execute envelope success=false")
+    void analysisFlowWithoutAnalyticsIsRefusedOnBothEntries(String role) throws Exception {
+        // 分析本身失败 + 看得到财务数字: 去掉准入时会走「存档报告兜底」并把报告回给用户 (变异会红在这里)
+        Map<Entry, Harness> runs = runAnalysis(h -> analysisTurn(h, role, false, true));
+
+        assertSameStatusAndIntent(runs, "NO_PERMISSION");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(analysisGateChecks(h)).as(entry + ": 分析流准入真的问了权限门 (仪器是活的)").isEqualTo(1);
+            assertThat(h.shown.getRequiredPermission()).as(entry.name())
+                    .isEqualTo(IntentExecutionOrchestrator.ANALYSIS_FLOW_PERMISSION);
+            assertThat(shownText(h.shown)).as(entry + ": 回复里没有存档报告")
+                    .doesNotContain(REPORT_MARKER).contains("需要权限");
+            assertThat(invocationsOf(h.complexityRouter, "route")).as(entry + ": 没进复杂度路由").isZero();
+            assertThat(invocationsOf(h.agents, "executeCollaborativeAnalysis")).as(entry + ": 没跑分析").isZero();
+            assertThat(invocationsOf(h.reports, "findFirstByFactoryIdAndReportTypeAndExpiresAtAfterOrderByCreatedAtDesc"))
+                    .as(entry + ": 没读存档经营报告").isZero();
+            assertThat(h.llmChatCalls()).as(entry + ": 没调模型").isZero();
+            assertThat(h.recognitionCalls()).as(entry + ": 也没转去识别").isZero();
+        }
+        assertThat(envelope(runs.get(Entry.EXECUTE).shown).getSuccess()).as("/execute envelope 不报成功").isFalse();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"dispatcher", "finance_manager"})
+    @DisplayName("M2 阳性对照: 有 analytics 的角色问同一句, 两入口都进分析流拿到回答 (同一个真实权限门)")
+    void analysisFlowWithAnalyticsAnswersOnBothEntries(String role) throws Exception {
+        Map<Entry, Harness> runs = runAnalysis(h -> analysisTurn(h, role, true, true));
+
+        assertSameStatusAndIntent(runs, "ANALYSIS_COMPLETED");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(analysisGateChecks(h)).as(entry + ": 问了权限门").isEqualTo(1);
+            assertThat(h.shown.getMessage()).as(entry.name()).isEqualTo(ANALYSIS_TEXT);
+            assertThat(invocationsOf(h.agents, "executeCollaborativeAnalysis")).as(entry + ": 分析跑了一次").isEqualTo(1);
+        }
+        assertThat(envelope(runs.get(Entry.EXECUTE).shown).getSuccess()).isTrue();
+    }
+
+    @Test
+    @DisplayName("M2 有 analytics、分析失败走存档报告兜底: 看不到财务数字的人拿不到报告 (遮价), 看得到的人拿得到 (阳性对照)")
+    void analysisFallbackShowsTheStoredReportOnlyToCallersWhoSeeFinanceFigures() throws Exception {
+        Map<Entry, Harness> hidden = runAnalysis(h -> analysisTurn(h, "dispatcher", false, false));
+        Map<Entry, Harness> shown = runAnalysis(h -> analysisTurn(h, "dispatcher", false, true));
+
+        assertSameStatusAndIntent(hidden, "COMPLETED");
+        assertSameStatusAndIntent(shown, "COMPLETED");
+        for (Entry entry : Entry.values()) {
+            Harness h = hidden.get(entry);
+            assertThat(h.llmChatCalls()).as(entry + ": 兜底真的调了模型 (一定会发生)").isEqualTo(1);
+            assertThat(shownText(h.shown)).as(entry + ": 看不到财务数字 → 报告没进模型、也没进回复")
+                    .doesNotContain(REPORT_MARKER);
+            assertThat(invocationsOf(h.reports, "findFirstByFactoryIdAndReportTypeAndExpiresAtAfterOrderByCreatedAtDesc"))
+                    .as(entry + ": 没读存档报告").isZero();
+            assertThat(shownText(shown.get(entry).shown)).as(entry + ": 阳性对照 —— 看得到财务数字的人, 报告进了模型")
+                    .contains(REPORT_MARKER);
+        }
+    }
+
+    // ------------------------------------------------------------------ PR-3 复审 M1: 拒绝不许报成功
+
+    @Test
+    @DisplayName("M1 平台账号点名会话: /execute 回 SESSION_OWNERSHIP_DENIED, envelope success=false (不执行)")
+    void platformNamedSessionIsNotEnvelopedAsSuccess() throws Exception {
+        String input = "看下经营概况";
+        AuthenticatedActor platform = new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, USER, null, ROLE);
+        Map<Entry, Harness> named = runAll(h -> {
+            h.actorOverride = platform;
+            h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.readIntent)
+                    .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                    .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+        }, IntentExecuteRequest.builder().userInput(input).build());
+        assertSameStatusAndIntent(named, "SESSION_OWNERSHIP_DENIED");
+        assertThat(named.get(Entry.EXECUTE).executedIntents).isEmpty();
+        com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> body = envelope(named.get(Entry.EXECUTE).shown);
+        assertThat(body.getSuccess()).as("会话归属被拒, envelope 不许报成功").isFalse();
+        assertThat(body.getMessage()).isNotBlank().isNotEqualTo("操作成功");
+        assertThat(body.getData()).as("data 仍带上").isSameAs(named.get(Entry.EXECUTE).shown);
+
+        // 阳性对照: 同一个平台账号不点名会话 (无状态识别) 照常成功, envelope success=true
+        Map<Entry, Harness> stateless = runAllExact(h -> {
+            h.actorOverride = platform;
+            h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.readIntent)
+                    .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                    .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+        }, IntentExecuteRequest.builder().userInput(input).build());
+        assertSameStatusAndIntent(stateless, "SUCCESS");
+        assertThat(envelope(stateless.get(Entry.EXECUTE).shown).getSuccess()).isTrue();
+    }
+
+    // ------------------------------------------------------------------ PR-3 复审 L2: 共用步骤缺席 → 启动失败
+
+    @Test
+    @DisplayName("L2 每轮共用步骤 (编排器) 没装配: 启动校验抛错 (fail closed); 装配了就通过")
+    void missingTurnStepsFailsStartup() throws Exception {
+        Harness h = new Harness(Entry.STREAM);
+        h.build();
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<IntentExecutionOrchestrator> absent =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        ReflectionTestUtils.setField(h.sse, "turnStepsBean", absent);
+        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::afterSingletonsInstantiated)
+                .isInstanceOf(IllegalStateException.class);
+        ReflectionTestUtils.setField(h.sse, "turnStepsBean", null);
+        org.assertj.core.api.Assertions.assertThatThrownBy(h.sse::afterSingletonsInstantiated)
+                .as("ObjectProvider 本身没注入也按缺席").isInstanceOf(IllegalStateException.class);
+
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<IntentExecutionOrchestrator> present =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(present.getIfAvailable()).thenReturn(h.orchestrator);
+        ReflectionTestUtils.setField(h.sse, "turnStepsBean", present);
+        h.sse.afterSingletonsInstantiated();   // 阳性对照: 不抛
+    }
+
+    @SuppressWarnings("unchecked")
+    private static com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> envelope(IntentExecuteResponse r) {
+        com.cretas.aims.controller.AIIntentConfigController controller = mock(
+                com.cretas.aims.controller.AIIntentConfigController.class,
+                org.mockito.Mockito.withSettings().defaultAnswer(org.mockito.Mockito.CALLS_REAL_METHODS));
+        org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>> entity =
+                (org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>>)
+                        ReflectionTestUtils.invokeMethod(controller, "envelopeByInnerStatus", r);
+        assertThat(entity).isNotNull();
+        return entity.getBody();
     }
 
     @Test
@@ -766,6 +967,7 @@ class StreamTurnCollectorEntryParityContractTest {
         final AnalysisRouterService analysisRouter = mock(AnalysisRouterService.class);
         final ComplexityRouter complexityRouter = mock(ComplexityRouter.class);
         final AgentOrchestrator agents = mock(AgentOrchestrator.class);
+        final AIAnalysisResultRepository reports = mock(AIAnalysisResultRepository.class);
         final ResultFormatterService formatter = mock(ResultFormatterService.class);
         final DynamicToolSelectionService dynamicTools = mock(DynamicToolSelectionService.class);
         final PriceFieldResponseAdvice priceView = mock(PriceFieldResponseAdvice.class);
@@ -1035,7 +1237,7 @@ class StreamTurnCollectorEntryParityContractTest {
                     recognizer, mock(IntentSemanticsParser.class), semanticCache,
                     ruleEngine, conversations, memory,
                     new ObjectMapper(), llm, llmConfig,
-                    knowledgeBase, mock(AIAnalysisResultRepository.class), toolRegistry,
+                    knowledgeBase, reports, toolRegistry,
                     analysisRouter, complexityRouter, agents,
                     rag, mock(ResultValidatorService.class), toolDispatch,
                     dynamicTools, preprocessor);

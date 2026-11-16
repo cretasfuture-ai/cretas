@@ -975,8 +975,25 @@ class SupplierComparisonDispatchContractTest {
             assertThat(response.getStatus()).isEqualTo(
                     List.of("inactive", "foreign").contains(state) ? "NO_MATCH" : "NO_PERMISSION");
             verify(tool, never()).execute(any(), anyMap());
+            // PR-3 复审 M1: 本厂停用 / 非本厂的比价意图 (NO_MATCH) 与无权限一样, /execute envelope 不许报成功
+            com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> body = executeEnvelope(response);
+            assertThat(body.getSuccess()).as("%s: 没执行, envelope 不报成功", state).isFalse();
+            assertThat(body.getMessage()).isNotBlank().isNotEqualTo("操作成功");
         }
         verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
+    }
+
+    /** /execute 的 envelope (AIIntentConfigController#envelopeByInnerStatus, 真实方法)。 */
+    @SuppressWarnings("unchecked")
+    private static com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> executeEnvelope(IntentExecuteResponse r) {
+        com.cretas.aims.controller.AIIntentConfigController controller = org.mockito.Mockito.mock(
+                com.cretas.aims.controller.AIIntentConfigController.class,
+                org.mockito.Mockito.withSettings().defaultAnswer(org.mockito.Mockito.CALLS_REAL_METHODS));
+        org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>> entity =
+                (org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>>)
+                        ReflectionTestUtils.invokeMethod(controller, "envelopeByInnerStatus", r);
+        assertThat(entity).isNotNull();
+        return entity.getBody();
     }
 
     @ParameterizedTest

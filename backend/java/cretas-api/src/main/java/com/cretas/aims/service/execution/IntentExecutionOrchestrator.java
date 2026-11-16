@@ -1379,9 +1379,48 @@ public class IntentExecutionOrchestrator {
     // 匹配会把内嵌的预设短语抢走, 只答一半; 复合句放行到 tiered 反转由
     // python agent 拆解回答。与 python restaurant_agent._COMPOUND_HINT_RE 同款。
 
+    /**
+     * 分析流 (早期分析问法: 复杂度路由 / 多代理, 失败时以本厂存档经营报告为上下文兜底) 的准入权限:
+     * 与 App 经营分析 / 财务报表数据同一组码 ({@code ReportFinanceTool.FINANCE_REPORT_SURFACE}), 逗号 = 任一即可。
+     * 2026-11-04 Steve 裁定「手机分析入口开放给有 analytics 的工厂角色」—— 没有 analytics 的操作员 / 仓管不进分析流。
+     */
+    static final String ANALYSIS_FLOW_PERMISSION = "analytics:read,analytics:read_write";
+
+    /**
+     * 分析流准入 (PR-3 复审 M2): App 与 /execute 共用这一处 (两入口的早期分析问法都从 {@link #routeEarlyGeneralQuestion} 进来)。
+     * 走与意图权限同一个门 ({@link IntentPermissionGate}, fail-closed); 门没装配也按拒绝。
+     *
+     * @return null = 放行; 否则是标准的无权限回复 (不进分析、不碰存档报告、不调模型)
+     */
+    private IntentExecuteResponse analysisFlowPermissionDenied(Long userId, String userRole) {
+        AIIntentConfig analysis = AIIntentConfig.builder()
+                .intentCode("ANALYSIS_FLOW").intentName("经营分析")
+                .requiredPermission(ANALYSIS_FLOW_PERMISSION).build();
+        IntentPermissionGate.PermissionCheck check = intentPermissionGate == null
+                ? IntentPermissionGate.PermissionCheck.denied(ANALYSIS_FLOW_PERMISSION)
+                : intentPermissionGate.check(analysis, userId, userRole);
+        if (check.isAllowed()) {
+            return null;
+        }
+        String required = check.requiredPermission() != null ? check.requiredPermission() : ANALYSIS_FLOW_PERMISSION;
+        log.info("分析流准入拒绝: userId={}, role={}, requiredPermission={}", userId, userRole, required);
+        String msg = "您没有权限执行此操作。需要权限: " + required + "，请联系工厂管理员开通。";
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status("NO_PERMISSION")
+                .requiredPermission(required)
+                .message(msg).formattedText(msg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
     private IntentExecuteResponse executeAnalysisFlow(String factoryId, String userInput,
                                                        IntentExecuteRequest request,
                                                        Long userId, String userRole) {
+        IntentExecuteResponse analysisDenied = analysisFlowPermissionDenied(userId, userRole);
+        if (analysisDenied != null) {
+            return analysisDenied;
+        }
         try {
             AnalysisTopic topic = analysisRouterService.detectAnalysisTopic(userInput);
             AnalysisContext analysisContext = AnalysisContext.builder()
