@@ -39,6 +39,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
@@ -178,7 +180,83 @@ class ArPostingPendingContractTest {
 
         assertThat(service.receivableAlreadyPosted(F, "SALES_DELIVERY", DELIVERY_ID))
                 .as("发货事务提交后, 挂账行必须已提交可见").isTrue();
+        assertThat(openPending()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("崩溃保护: 发货已提交但 afterCommit 回调没跑(进程被杀的模拟), 发货事务内写下的 PENDING 意图行仍在, 且无告警")
+    void intentRowSurvivesWhenAfterCommitCallbackNeverRuns() {
+        boolean[] posted = {false};
+        try {
+            new TransactionTemplate(tm).executeWithoutResult(s -> {
+                // 先注册一个 afterCommit 就抛的同步: 后面注册的挂账回调因此不会执行(模拟 commit 之后进程消失)
+                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        throw new IllegalStateException("simulated crash after commit");
+                    }
+                });
+                service.postAfterShipCommit(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                        new BigDecimal("113.00"), 7L, null, () -> {
+                            posted[0] = true;
+                            return null;
+                        });
+            });
+        } catch (IllegalStateException expected) {
+            // 模拟崩溃的异常冲出提交点, 预期内
+        }
+        assertThat(posted[0]).as("挂账回调确实没有执行").isFalse();
+        List<ArPostingPending> open = openPending();
+        assertThat(open).hasSize(1);
+        assertThat(open.get(0).getDeliveryId()).isEqualTo(DELIVERY_ID);
+        assertThat(open.get(0).getFailureReason()).contains("挂账进行中");
+        assertThat(open.get(0).getOwnerId()).isEqualTo(5L);
+        verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("发货事务回滚时意图行一起回滚, 不留幽灵待补账")
+    void intentRowRollsBackWithShipTransaction() {
+        try {
+            new TransactionTemplate(tm).executeWithoutResult(s -> {
+                service.postAfterShipCommit(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                        new BigDecimal("113.00"), 7L, null, () -> null);
+                throw new IllegalStateException("发货后续失败, 事务回滚");
+            });
+        } catch (IllegalStateException expected) {
+            // 预期内
+        }
         assertThat(pendingRepo.findAll()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("挂账成功后意图行自动关闭为 RESOLVED(不是 PENDING, 也不留旧原因)")
+    void successClosesTheIntentRow() {
+        new TransactionTemplate(tm).executeWithoutResult(s ->
+                service.postAfterShipCommit(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                        new BigDecimal("113.00"), 7L, null, () -> "ok"));
+        List<ArPostingPending> all = pendingRepo.findAll();
+        assertThat(all).hasSize(1);
+        assertThat(all.get(0).getStatus()).isEqualTo(ArPostingPendingStatus.RESOLVED);
+        assertThat(all.get(0).getResolvedAt()).isNotNull();
+        assertThat(all.get(0).getFailureReason()).doesNotContain("挂账进行中");
+    }
+
+    @Test
+    @DisplayName("挂账被「诚实跳过」(返回 null: 金额缺失/客户不存在/订单状态不可开票)也当失败落待补账并告警")
+    void skippedPostingReturningNullIsRecordedAsFailure() {
+        com.cretas.aims.service.finance.ArApService arApService = mock(com.cretas.aims.service.finance.ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(null);
+        SalesServiceImpl sales = salesService(arApService);
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        List<ArPostingPending> open = openPending();
+        assertThat(open).hasSize(1);
+        assertThat(open.get(0).getFailureReason()).contains("自动挂账被跳过");
+        verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
     }
 
     @Test
@@ -247,7 +325,7 @@ class ArPostingPendingContractTest {
 
         shipInTx(sales);
 
-        assertThat(pendingRepo.findAll()).isEmpty();
+        assertThat(openPending()).isEmpty();
         verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -275,7 +353,7 @@ class ArPostingPendingContractTest {
         SalesDeliveryRecord shipped = shipInTx(sales);
 
         assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
-        assertThat(pendingRepo.findAll()).isEmpty();
+        assertThat(openPending()).isEmpty();
         verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
     }
 
@@ -296,6 +374,11 @@ class ArPostingPendingContractTest {
     }
 
     // ---------------------------------------------------------------- helpers
+
+    private List<ArPostingPending> openPending() {
+        return pendingRepo.findAll().stream()
+                .filter(r -> r.getStatus() == ArPostingPendingStatus.PENDING).toList();
+    }
 
     /** 发货放进真事务调用: 挂账走 afterCommit(与生产一致), 而不是单测里的直调分支。 */
     private SalesDeliveryRecord shipInTx(SalesServiceImpl sales) {

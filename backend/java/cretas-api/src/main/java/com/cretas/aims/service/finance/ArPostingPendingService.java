@@ -33,13 +33,20 @@ import java.util.function.Supplier;
  * 现在: 发货事务提交 → afterCommit 里用 REQUIRES_NEW 跑挂账; 失败再开新事务写待补账, 再开新事务发告警。
  * 发货事务从头到尾碰不到挂账的任何异常。没有事务同步(单测直调)时立即执行。
  *
- * <p>补账动作与 RESOLVED 置位本期不做。
+ * <h2>崩溃保护: 发货事务内同步写「意图行」</h2>
+ * afterCommit 回调在内存里, 进程在「发货已提交、回调未执行」之间被杀(蓝绿切换/OOM)就会无痕丢失。
+ * 所以 {@link #postAfterShipCommit} 先在<b>调用方(发货)事务内</b>写一行 PENDING(原因「挂账进行中」),
+ * 与发货同提交/同回滚; 挂账成功后独立事务把它置 RESOLVED(自动关闭), 失败则更新原因并告警, 崩溃则保留可见。
+ * 仍可能无痕的只剩「记录失败本身又失败」(DB 持续不可用), 此时仅有 log.error。
+ *
+ * <p>人工补账动作本期不做。
  */
 @Slf4j
 @Service
 public class ArPostingPendingService {
 
     static final String ALERT_ROLE = "finance_manager";
+    static final String IN_FLIGHT_REASON = "挂账进行中(尚未确认结果; 若长时间停留在此说明进程中断, 需人工核查)";
 
     private final ArPostingPendingRepository repository;
     private final PlatformTransactionManager transactionManager;
@@ -72,6 +79,8 @@ public class ArPostingPendingService {
                                     String salesOrderId, String customerId, Long ownerId, BigDecimal amount,
                                     Long operatedBy, RuntimeException prepFailure,
                                     Supplier<?> poster) {
+        // 发货事务内同步写意图行(与发货同事务): 崩溃/回调丢失时仍留有 PENDING 线索
+        openIntent(factoryId, deliveryId, deliveryNumber, salesOrderId, customerId, ownerId, amount, operatedBy);
         Runnable task = () -> {
             try {
                 runPosting(factoryId, deliveryId, deliveryNumber, salesOrderId, customerId, ownerId, amount,
@@ -105,6 +114,7 @@ public class ArPostingPendingService {
             }
         }
         if (failure == null) {
+            closeIntent(factoryId, deliveryId, "自动挂账成功, 意图行自动关闭");
             return;
         }
         // 区分「已挂过(幂等/并发)」与「真正失败」。复查本身失败则按真正失败处理: 宁可多一条待补账。
@@ -117,10 +127,46 @@ public class ArPostingPendingService {
         }
         if (posted) {
             log.info("应收自动挂账幂等命中(异常后复查已存在, 不算失败): deliveryId={}", deliveryId);
+            closeIntent(factoryId, deliveryId, "应收已存在(幂等命中), 意图行自动关闭");
             return;
         }
         recordFailure(factoryId, deliveryId, deliveryNumber, salesOrderId, customerId, ownerId, amount,
                 operatedBy, failure);
+    }
+
+    /** 在当前(发货)事务内写/复用该发运单的 PENDING 意图行; 本方法的异常会随发货事务一起失败(同库同事务, 概率极低)。 */
+    private void openIntent(String factoryId, String deliveryId, String deliveryNumber, String salesOrderId,
+                            String customerId, Long ownerId, BigDecimal amount, Long operatedBy) {
+        ArPostingPending r = repository
+                .findFirstByFactoryIdAndDeliveryIdAndStatus(factoryId, deliveryId, ArPostingPendingStatus.PENDING)
+                .orElseGet(ArPostingPending::new);
+        r.setFactoryId(factoryId);
+        r.setDeliveryId(deliveryId);
+        r.setDeliveryNumber(deliveryNumber);
+        r.setSalesOrderId(salesOrderId);
+        r.setCustomerId(customerId);
+        r.setOwnerId(ownerId);
+        r.setAmount(amount);
+        r.setFailureReason(IN_FLIGHT_REASON);
+        r.setStatus(ArPostingPendingStatus.PENDING);
+        r.setOperatedBy(operatedBy);
+        repository.save(r);
+    }
+
+    /** 挂账成功(或幂等命中)后把意图行置 RESOLVED; 关闭失败只记日志(行保持 PENDING, 可见可查)。 */
+    private void closeIntent(String factoryId, String deliveryId, String note) {
+        try {
+            newTx().executeWithoutResult(s ->
+                    repository.findFirstByFactoryIdAndDeliveryIdAndStatus(
+                            factoryId, deliveryId, ArPostingPendingStatus.PENDING).ifPresent(r -> {
+                        r.setStatus(ArPostingPendingStatus.RESOLVED);
+                        r.setFailureReason(note);
+                        r.setResolvedAt(java.time.LocalDateTime.now());
+                        repository.save(r);
+                    }));
+        } catch (RuntimeException e) {
+            log.error("待补账意图行关闭失败(保持 PENDING): deliveryId={}", deliveryId, e);
+        }
     }
 
     /**

@@ -3764,6 +3764,11 @@ public class SalesServiceImpl implements SalesService {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
                 receivableCustomerId = order != null ? order.getCustomerId() : null;
                 receivableOwnerId = order != null ? order.getCreatedBy() : null;
+                if (order == null || order.getCustomerId() == null) {
+                    // 发货了却没有可挂账的订单/客户: 不是「无事发生」, 必须留待补账线索
+                    throw new IllegalStateException("无法自动挂账: "
+                            + (order == null ? "销售订单不存在 " + record.getSalesOrderId() : "销售订单没有客户"));
+                }
                 if (order != null && order.getCustomerId() != null) {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
@@ -3835,11 +3840,16 @@ public class SalesServiceImpl implements SalesService {
                                     SOURCE_DOC_TYPE_SALES_DELIVERY, shipped.getId(),
                                     postValue, LocalDate.now().plusDays(30), userId,
                                     "销售发货自动挂账-" + shipped.getDeliveryNumber());
-                            if (ar != null) {
-                                log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
-                                        postOrder.getId(), shipped.getId(), postValue,
-                                        shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
+                            if (ar == null) {
+                                // recordReceivableIfAbsent 的「诚实跳过」(金额缺失或非正 / 客户不存在 / 订单状态不可开票)
+                                // 返回 null 而不抛。货已发而应收没挂, 属于「真正没挂上」⇒ 当失败落待补账并告警,
+                                // 由人补单价/补客户后补账; 不能只打一行 warn。
+                                throw new IllegalStateException("自动挂账被跳过(未生成应收): 实发含税金额="
+                                        + postValue + ", 请检查发货单单价/客户/订单状态");
                             }
+                            log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
+                                    postOrder.getId(), shipped.getId(), postValue,
+                                    shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
                             return ar;
                         };
                     }
