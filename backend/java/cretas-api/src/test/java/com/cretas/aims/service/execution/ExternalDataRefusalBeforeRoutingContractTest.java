@@ -216,6 +216,8 @@ class ExternalDataRefusalBeforeRoutingContractTest {
             // #1788 审查 M1: 本厂与客户 / 供应商往来、集团内其他工厂 —— 都是本厂数据, 不在识别前拒
             "卖给其他公司的卤牛肉价格是多少|false", "别家供应商的报价比现在便宜吗|false", "其他工厂的产量|false",
             "比较一下各供应商的报价|false", "别家的进价是多少|false",
+            // 有外部主语 + 价格词, 但语境是本厂往来 —— 只有往来语境排除能放行它们 (变异 R2a 第一轮存活后补)
+            "别家供应商的价格是多少|false", "卖给别家的卤牛肉价格是多少|false", "同行客户的采购价格|false",
             // 不是成本 / 价格 / 毛利的指标不在识别前拒 (落到本厂数据工具时由工具级 refuses 兜)
             "行业平均出成率是多少|false"})
     void beforeRoutingPredicateOnlyRefusesCompetitorCostPriceMargin(String text, boolean refused) {
