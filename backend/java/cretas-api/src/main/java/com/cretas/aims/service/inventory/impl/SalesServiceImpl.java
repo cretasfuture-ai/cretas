@@ -3764,12 +3764,15 @@ public class SalesServiceImpl implements SalesService {
                 SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
                 receivableCustomerId = order != null ? order.getCustomerId() : null;
                 receivableOwnerId = order != null ? order.getCreatedBy() : null;
-                if (order == null || order.getCustomerId() == null) {
-                    // 发货了却没有可挂账的订单/客户: 不是「无事发生」, 必须留待补账线索
-                    throw new IllegalStateException("无法自动挂账: "
-                            + (order == null ? "销售订单不存在 " + record.getSalesOrderId() : "销售订单没有客户"));
+                if (order == null) {
+                    // 发货了却查不到销售订单: 不是「无事发生」, 必须留待补账线索
+                    throw new IllegalStateException("无法自动挂账: 销售订单不存在 " + record.getSalesOrderId());
                 }
-                if (order != null && order.getCustomerId() != null) {
+                if (!hasText(order.getCustomerId())) {
+                    // Steve 2026-11-16 口径: 没有客户的订单按正常跳过 —— 不写待补账、不告警, 只留 INFO。
+                    log.info("应收自动挂账跳过(订单无客户, 按正常跳过不写待补账): factoryId={}, salesOrderId={}, deliveryId={}",
+                            factoryId, order.getId(), record.getId());
+                } else {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
                     // 仓管在「确认发货」时可以覆盖实际发货数量 (warehouseConfirmDelivery,
@@ -3831,27 +3834,34 @@ public class SalesServiceImpl implements SalesService {
                         //   sales_delivery_items.salesOrderItemId → sales_order_items.taxRate 借。
                         //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
                         BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
-                        postedShippedValue = shippedValue;
-                        final SalesOrder postOrder = order;
-                        final BigDecimal postValue = shippedValue;
-                        poster = () -> {
-                            ArApTransaction ar = arApService.recordReceivableIfAbsent(
-                                    factoryId, postOrder.getCustomerId(), postOrder.getId(),
-                                    SOURCE_DOC_TYPE_SALES_DELIVERY, shipped.getId(),
-                                    postValue, LocalDate.now().plusDays(30), userId,
-                                    "销售发货自动挂账-" + shipped.getDeliveryNumber());
-                            if (ar == null) {
-                                // recordReceivableIfAbsent 的「诚实跳过」(金额缺失或非正 / 客户不存在 / 订单状态不可开票)
-                                // 返回 null 而不抛。货已发而应收没挂, 属于「真正没挂上」⇒ 当失败落待补账并告警,
-                                // 由人补单价/补客户后补账; 不能只打一行 warn。
-                                throw new IllegalStateException("自动挂账被跳过(未生成应收): 实发含税金额="
-                                        + postValue + ", 请检查发货单单价/客户/订单状态");
-                            }
-                            log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
-                                    postOrder.getId(), shipped.getId(), postValue,
-                                    shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
-                            return ar;
-                        };
+                        if (isKnownZeroShipmentValue(order, record, shippedValue)) {
+                            // Steve 2026-11-16 口径: 零金额发货(赠品/样品)按正常跳过 —— 不写待补账、不告警。
+                            // 只放开真赠品/样品: 发货行与订单行单价都确定为 0; 缺价/误录/空明细算出的 0 仍按失败处理。
+                            log.info("应收自动挂账跳过(零金额发货, 按正常跳过不写待补账): factoryId={}, salesOrderId={}, deliveryId={}, 实发含税={}",
+                                    factoryId, order.getId(), record.getId(), shippedValue);
+                        } else {
+                            postedShippedValue = shippedValue;
+                            final SalesOrder postOrder = order;
+                            final BigDecimal postValue = shippedValue;
+                            poster = () -> {
+                                ArApTransaction ar = arApService.recordReceivableIfAbsent(
+                                        factoryId, postOrder.getCustomerId(), postOrder.getId(),
+                                        SOURCE_DOC_TYPE_SALES_DELIVERY, shipped.getId(),
+                                        postValue, LocalDate.now().plusDays(30), userId,
+                                        "销售发货自动挂账-" + shipped.getDeliveryNumber());
+                                if (ar == null) {
+                                    // recordReceivableIfAbsent 的「诚实跳过」(金额缺失或非正 / 客户不存在 / 订单状态不可开票)
+                                    // 返回 null 而不抛。货已发而应收没挂, 属于「真正没挂上」⇒ 当失败落待补账并告警,
+                                    // 由人补单价/补客户后补账; 不能只打一行 warn。
+                                    throw new IllegalStateException("自动挂账被跳过(未生成应收): 实发含税金额="
+                                            + postValue + ", 请检查发货单单价/客户/订单状态");
+                                }
+                                log.info("自动创建应收(实发价税合计): orderId={}, deliveryId={}, 实发含税={}, 发货单未税={}, 订单含税={}, transactionId={}",
+                                        postOrder.getId(), shipped.getId(), postValue,
+                                        shipped.getTotalAmount(), postOrder.getPayableAmount(), ar.getId());
+                                return ar;
+                            };
+                        }
                     }
                 }
             } catch (RuntimeException e) {
@@ -6133,6 +6143,52 @@ public class SalesServiceImpl implements SalesService {
                 "业务员账号 " + user.getId() + " 既没有姓名也没有登录名, 无法记录业务员")
                 .withHint("请先在用户管理里补全该账号的姓名")
                 .withHintTarget("salesperson");
+    }
+
+    /**
+     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 口径: 按正常跳过, 不写待补账、不告警。
+     *
+     * <p>四条同时成立才放行, 否则按失败(待补账 + 告警), 由人补价/核对:
+     * <ol>
+     *   <li>本次应收含税合计 {@code compareTo(0) == 0} (0 与 0.00 都算零, 0.01 不算);</li>
+     *   <li>有发货明细 —— 空明细时头额默认 0, 那个 0 不是「确定为 0」;</li>
+     *   <li>每一行: 实发数量非空, 发货行单价非空且为 0;</li>
+     *   <li>每一行挂得上订单行, 且订单行单价非空且为 0、报价含税单价为空或为 0。
+     *       与提审校验 {@code validatePriceBeforeFinanceReview} 同一缺价口径: 订单行单价为空 = 价格没维护, 不是赠品;
+     *       订单行有价而发货行录成 0 = 误录, 不是赠品。</li>
+     * </ol>
+     * 由此「全额折扣算出 0」「极小单价舍入成 0」都不放行(订单行/发货行单价不为 0)。
+     */
+    static boolean isKnownZeroShipmentValue(SalesOrder order, SalesDeliveryRecord record, BigDecimal shippedValue) {
+        if (order == null || record == null || shippedValue == null
+                || shippedValue.compareTo(BigDecimal.ZERO) != 0) {
+            return false;
+        }
+        if (record.getItems() == null || record.getItems().isEmpty()) {
+            return false;
+        }
+        java.util.Map<Long, SalesOrderItem> orderItemById = new java.util.HashMap<>();
+        if (order.getItems() != null) {
+            for (SalesOrderItem oi : order.getItems()) {
+                if (oi.getId() != null) {
+                    orderItemById.put(oi.getId(), oi);
+                }
+            }
+        }
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getDeliveredQuantity() == null
+                    || item.getUnitPrice() == null || item.getUnitPrice().signum() != 0) {
+                return false;
+            }
+            SalesOrderItem oi = item.getSalesOrderItemId() == null ? null : orderItemById.get(item.getSalesOrderItemId());
+            if (oi == null || oi.getUnitPrice() == null || oi.getUnitPrice().signum() != 0) {
+                return false;
+            }
+            if (oi.getQuotedGrossUnitPrice() != null && oi.getQuotedGrossUnitPrice().signum() != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
