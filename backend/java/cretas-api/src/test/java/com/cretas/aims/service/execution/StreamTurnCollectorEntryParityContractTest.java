@@ -472,6 +472,38 @@ class StreamTurnCollectorEntryParityContractTest {
         assertThat(envelope(stateless.get(Entry.EXECUTE).shown).getSuccess()).isTrue();
     }
 
+    // ------------------------------------------------------------------ #1788 合入: 问别家成本/价格/毛利, 识别之前拒
+
+    @Test
+    @DisplayName("#1788 竞品毛利问法: /execute 普通入口 (门面 → 流式管线) 与 App 流式都在识别之前回 EXTERNAL_DATA_REFUSED, 不识别不执行")
+    void competitorMarginQuestionIsRefusedBeforeRecognitionOnBothEntries() throws Exception {
+        String input = "同行的毛利率一般多少";
+        assertThat(com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(input)).as("前提: 守卫认这句").isTrue();
+        Map<Entry, Harness> runs = runAll(h -> h.recognizerAnswers(IntentMatchResult.builder().userInput(input)
+                .bestMatch(h.readIntent).matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build()),
+                IntentExecuteRequest.builder().userInput(input).build());
+
+        assertSameStatusAndIntent(runs, com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS);
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getMessage()).as(entry.name()).isEqualTo(com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE);
+            assertThat(h.recognitionCalls()).as(entry + ": 识别之前就拒").isZero();
+            assertThat(h.executedIntents).as(entry + ": 不执行").isEmpty();
+            assertThat(invocationsOf(h.permissionGate, "check")).as(entry + ": 也没轮到权限门").isZero();
+        }
+        // 阳性对照: 本厂的同一指标照常进识别 (仪器是活的)
+        String own = "哪个产品毛利率最高";
+        assertThat(com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(own)).isFalse();
+        Map<Entry, Harness> control = runAll(h -> h.recognizerAnswers(IntentMatchResult.builder().userInput(own)
+                .bestMatch(h.readIntent).matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build()),
+                IntentExecuteRequest.builder().userInput(own).build());
+        for (Entry entry : Entry.values()) {
+            assertThat(control.get(entry).recognitionCalls()).as(entry + ": 本厂问题进了识别").isEqualTo(1);
+        }
+    }
+
     // ------------------------------------------------------------------ PR-3 复审 L2: 共用步骤缺席 → 启动失败
 
     @Test
