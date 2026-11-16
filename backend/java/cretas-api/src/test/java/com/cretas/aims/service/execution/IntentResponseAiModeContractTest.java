@@ -81,7 +81,7 @@ class IntentResponseAiModeContractTest {
         var response = clarify(intent);
         assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
         // INTENT-DISTILL D2: 没有可选的业务候选时明确说没有; 识别给的自由文本 (可能点名调用者用不了的功能) 不再照抄
-        assertThat(response.getMessage()).isEqualTo("当前没有可安全提供的业务选项，请重新描述您的需求。")
+        assertThat(response.getMessage()).isEqualTo(ClarificationCandidateService.NO_CANDIDATE_MESSAGE)
                 .doesNotContain("生产报表");
         assertThat(response.getAiMode()).isEqualTo("READ");
         assertThat(response.getConfirmableAction()).isNull();

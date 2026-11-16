@@ -342,6 +342,11 @@ public class SseStreamingService {
                 streamTerminalResponse(emitter, IntentExecutionOrchestrator.personalPayRefusalResponse(), startTime);
                 return;
             }
+            // 问别家的成本 / 价格 / 毛利: 识别和权限判定之前整轮拒答 (与非流式入口同一守卫)
+            if (request != null && com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+                streamTerminalResponse(emitter, IntentExecutionOrchestrator.externalDataRefusalResponse("stream", factoryId), startTime);
+                return;
+            }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);
             boolean requestNamesSession = request != null && request.getSessionId() != null
                     && !request.getSessionId().isBlank();
@@ -684,7 +689,7 @@ public class SseStreamingService {
                 }
                 sendSseEvent(emitter, "result", clarificationResponse);
                 sendSseEvent(emitter, "complete", Map.of(
-                        "status", "NEED_CLARIFICATION",
+                        "status", clarificationResponse.getStatus(),
                         "cacheHit", false,
                         "totalLatencyMs", System.currentTimeMillis() - startTime
                 ));
@@ -2322,29 +2327,26 @@ public class SseStreamingService {
     private IntentExecuteResponse buildClarificationResponseForStream(
             IntentMatchResult matchResult, String factoryId, Long userId, String userRole, String mode) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions =
+        // 与普通入口同一份: 全被权限滤掉 ⇒ PERMISSION_DENIED + 标准拒答; 确实没有 ⇒ 澄清 + 可问的示例
+        ClarificationCandidateService.Clarification clarification =
                 clarificationCandidateService == null
-                        ? List.of(IntentExecuteResponse.SuggestedAction.builder()
-                                .actionCode("REPHRASE").actionName("重新描述").build())
-                        : clarificationCandidateService.buildCandidateActions(
+                        ? ClarificationCandidateService.rephraseOnlyClarification()
+                        : clarificationCandidateService.clarify(
                                 matchResult, factoryId, userId, userRole, mode);
-        String clarificationMessage = buildSafeClarificationMessage(candidateActions);
+        List<IntentExecuteResponse.SuggestedAction> candidateActions = clarification.actions();
+        String clarificationMessage = clarification.message();
         return IntentExecuteResponse.builder()
                 .intentRecognized(true)
                 .intentCode(matchedIntent.getIntentCode())
                 .intentName(matchedIntent.getIntentName())
                 .intentCategory(matchedIntent.getIntentCategory())
-                .status("NEED_CLARIFICATION")
+                .status(clarification.status())
                 .message(clarificationMessage)
                 .formattedText(clarificationMessage)
                 .confidence(matchResult.getConfidence())
                 .suggestedActions(candidateActions)
                 .executedAt(LocalDateTime.now())
                 .build();
-    }
-
-    private String buildSafeClarificationMessage(List<IntentExecuteResponse.SuggestedAction> actions) {
-        return ClarificationCandidateService.clarificationMessage(actions);
     }
 
     /** 一线角色 + 写操作 + 本厂未开放 ⇒ 拒绝说明; 否则 null。与执行入口 (ToolDispatchService) 同一判定。 */

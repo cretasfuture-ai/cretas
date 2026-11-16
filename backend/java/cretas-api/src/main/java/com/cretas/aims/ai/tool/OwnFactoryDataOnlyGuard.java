@@ -44,4 +44,40 @@ public final class OwnFactoryDataOnlyGuard {
     public static boolean refuses(String toolName, String userInput) {
         return appliesTo(toolName) && asksForExternalData(userInput);
     }
+
+    public static final String STATUS = "EXTERNAL_DATA_REFUSED";
+
+    /**
+     * 强主语: 明确的他厂 —— 竞争对手 / 竞品 / 同行 / 友商 / 其他厂家 / 隔壁厂 / 行业或市场均值。出现时<b>不受</b>本厂往来豁免:
+     * 「竞争对手的进价」「同行的采购成本」「竞品的报价」仍拒 (#1788 增量复审: 豁免曾让它们落到采购价类工具, 拿本厂数答竞品)。
+     * ⛔ 不含「其他工厂 / 其他公司 / 别的厂」: 集团账号问的其他工厂、本厂卖给的其他公司都是本厂往来 (#1788 审查 M1)。
+     * 「市场价」不在这里: 可能是本厂采购口径 (市场价采购), 不处理。
+     */
+    private static final Pattern STRONG_EXTERNAL_SUBJECT = Pattern.compile(
+            "竞争对手|竞争者|竞品|竞对|同行|友商|(?<!竞争)对手(?!机)|其他厂家|别的厂家|同类厂家|隔壁厂|隔壁工厂|行业平均|行业均值|市场均价|市场平均");
+
+    /** 弱主语: 「别家 / 别人家」—— 可能是别家供应商 / 卖给别家的客户, 只在没有本厂往来语境时才算他厂。 */
+    private static final Pattern WEAK_EXTERNAL_SUBJECT = Pattern.compile("别家|别人家");
+
+    /** Q18 那类要的指标: 成本 / 价格 / 毛利 / 进价 / 报价 (不含产量、合格率等 —— 那些若落到本厂数据工具, 由 {@link #refuses} 兜)。 */
+    private static final Pattern COST_PRICE_MARGIN = Pattern.compile("成本|价格|价钱|单价|售价|定价|进价|报价|多少钱|毛利|利润|盈利|赚多少");
+
+    /** 本厂与客户 / 供应商往来的语境: 别家供应商的报价、卖给别家的价格、供应商比价 —— 都是本厂数据, 照常放行 (只对弱主语生效)。 */
+    private static final Pattern OWN_TRADE_CONTEXT = Pattern.compile("供应商|供货|客户|卖给|卖到|买家|采购|进货|进价|报价|比价|询价");
+
+    /**
+     * 识别之前 (普通 / 流式 / 多意图 / 显式意图入口) 用: 问他厂的成本、价格、毛利 ⇒ 整轮拒答, 不看落到哪个意图、
+     * 也不看调用者有没有权限 (2026-11-16 复跑 Q18: viewer 先被成本权限拒, sales_manager 落到「我没有理解您的意图」)。
+     * 只拒答、不执行任何查询, 不扩大可见数据。强主语优先: 有强主语就拒, 不看本厂往来语境; 只有弱主语 (别家) 时,
+     * 句子里有本厂往来语境才放行。更宽的问法仍由工具级 {@link #refuses} 在本厂数据工具上兜。
+     */
+    public static boolean refusesBeforeRouting(String userInput) {
+        if (userInput == null || !COST_PRICE_MARGIN.matcher(userInput).find()) {
+            return false;
+        }
+        if (STRONG_EXTERNAL_SUBJECT.matcher(userInput).find()) {
+            return true;
+        }
+        return WEAK_EXTERNAL_SUBJECT.matcher(userInput).find() && !OWN_TRADE_CONTEXT.matcher(userInput).find();
+    }
 }

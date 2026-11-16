@@ -10,7 +10,17 @@ sys.path.insert(0, os.path.join(HERE, "..", "ai-live-probe"))
 import ai_live_probe as P  # noqa: E402
 
 
+def _utf8_console():
+    """Windows GBK 控制台 print「¥」会 UnicodeEncodeError 中断整轮; 输出改 utf-8, 仍编不了的字符替换, 不崩。"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main():
+    _utf8_console()
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--only", default="")

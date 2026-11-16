@@ -414,12 +414,34 @@ public class IntentExecutionOrchestrator {
                 .build();
     }
 
+    /**
+     * 问别家 (竞争对手 / 同行 / 行业平均) 的成本、价格、毛利: 整轮拒答 (识别和权限判定之前), 见
+     * OwnFactoryDataOnlyGuard#refusesBeforeRouting。不执行任何查询, 也不拿本厂数代替。
+     */
+    public static IntentExecuteResponse externalDataRefusalResponse(String entry, String factoryId) {
+        // 被拒的轮次留一条带标记的日志 (飞轮 / 评测能数到这类问题); ⛔ 不记原话等数据内容
+        log.info("[PreRoutingRefusal] guard=externalData status={} entry={} factoryId={}",
+                com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS, entry, factoryId);
+        String message = com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE;
+        return IntentExecuteResponse.builder()
+                .intentRecognized(false)
+                .status(com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS)
+                .aiMode("READ")
+                .message(message)
+                .formattedText(message)
+                .executedAt(java.time.LocalDateTime.now())
+                .build();
+    }
+
     private IntentExecuteResponse executeInScope(String factoryId, IntentExecuteRequest request,
                                           Long userId, String userRole) {
         IntentExecuteResponse tenantGate = analysisAdmissionResponse(factoryId, userRole);
         if (tenantGate != null) return tenantGate;
         if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
             return personalPayRefusalResponse();
+        }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return externalDataRefusalResponse("ordinary", factoryId);
         }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
@@ -994,6 +1016,9 @@ public class IntentExecutionOrchestrator {
         if (tenantGate != null) return tenantGate;
         if (com.cretas.aims.ai.tool.PersonalPayRefusalGuard.refuses(request.getUserInput())) {
             return personalPayRefusalResponse();
+        }
+        if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
+            return externalDataRefusalResponse("explicit", factoryId);
         }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
@@ -2798,10 +2823,11 @@ public class IntentExecutionOrchestrator {
     IntentExecuteResponse buildClarificationResponse(IntentMatchResult matchResult, String factoryId,
                                                      Long userId, String userRole, String mode) {
         AIIntentConfig matchedIntent = matchResult.getBestMatch();
-        List<IntentExecuteResponse.SuggestedAction> candidateActions =
-                buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
-        // 与 SSE 同一份话术: 有业务候选就列出来; 一个都没有就明确说没有, 不用默认业务按钮凑数。
-        String clarificationMessage = ClarificationCandidateService.clarificationMessage(candidateActions);
+        ClarificationCandidateService.Clarification clarification =
+                clarify(matchResult, factoryId, userId, userRole, mode);
+        List<IntentExecuteResponse.SuggestedAction> candidateActions = clarification.actions();
+        // 与 SSE 同一份话术: 有业务候选就列出来; 全被权限滤掉就按标准拒答说明缺什么权限; 确实没有就给可问的示例。
+        String clarificationMessage = clarification.message();
 
         Map<String, Object> metadata = new HashMap<>();
         if (matchResult.getSessionId() != null && !matchResult.getSessionId().isEmpty()) {
@@ -2817,7 +2843,7 @@ public class IntentExecutionOrchestrator {
                 .intentCode(matchedIntent.getIntentCode())
                 .intentName(matchedIntent.getIntentName())
                 .intentCategory(matchedIntent.getIntentCategory())
-                .status("NEED_CLARIFICATION")
+                .status(clarification.status())
                 .message(clarificationMessage)
                 .formattedText(clarificationMessage)
                 .confidence(matchResult.getConfidence())
@@ -2848,11 +2874,12 @@ public class IntentExecutionOrchestrator {
         }
 
         if (matchResult.getTopCandidates() != null && !matchResult.getTopCandidates().isEmpty()) {
-            List<IntentExecuteResponse.SuggestedAction> candidateActions = buildCandidateActions(
+            ClarificationCandidateService.Clarification clarification = clarify(
                     matchResult, factoryId, userId, userRole, request == null ? null : request.getMode());
-            String weakSignalMsg = ClarificationCandidateService.clarificationMessage(candidateActions);
+            List<IntentExecuteResponse.SuggestedAction> candidateActions = clarification.actions();
+            String weakSignalMsg = clarification.message();
             IntentExecuteResponse.IntentExecuteResponseBuilder builder = IntentExecuteResponse.builder()
-                    .intentRecognized(false).status("NEED_CLARIFICATION")
+                    .intentRecognized(false).status(clarification.status())
                     .message(weakSignalMsg).formattedText(weakSignalMsg)
                     .suggestedActions(candidateActions).executedAt(LocalDateTime.now());
             if (!metadata.isEmpty()) builder.metadata(metadata);
@@ -3132,10 +3159,16 @@ public class IntentExecutionOrchestrator {
     private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult,
                                                                           String factoryId, Long userId,
                                                                           String userRole, String mode) {
+        return clarify(matchResult, factoryId, userId, userRole, mode).actions();
+    }
+
+    private ClarificationCandidateService.Clarification clarify(IntentMatchResult matchResult,
+                                                                String factoryId, Long userId,
+                                                                String userRole, String mode) {
         if (clarificationCandidateService == null) {
-            return ClarificationCandidateService.rephraseOnly();
+            return ClarificationCandidateService.rephraseOnlyClarification();
         }
-        return clarificationCandidateService.buildCandidateActions(matchResult, factoryId, userId, userRole, mode);
+        return clarificationCandidateService.clarify(matchResult, factoryId, userId, userRole, mode);
     }
 
     /**

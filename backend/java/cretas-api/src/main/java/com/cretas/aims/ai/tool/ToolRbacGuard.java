@@ -114,8 +114,13 @@ public class ToolRbacGuard {
      * 拒绝时构造一致的提示文案 (4 位一体: 谁的角色 / 缺什么权限 / 怎么办)。
      */
     public String denyMessage(Map<String, Object> context, String action, String... permissionCodes) {
-        String role = com.cretas.aims.ai.tool.RoleDisplay.of(
-                context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "");
+        return standardDenyMessage(context != null ? String.valueOf(context.getOrDefault("userRole", "")) : "",
+                action, permissionCodes);
+    }
+
+    /** 同上, 不需要实例 (澄清候选全被权限滤掉时按同一格式说明, 见 ClarificationCandidateService)。 */
+    public static String standardDenyMessage(String userRole, String action, String... permissionCodes) {
+        String role = com.cretas.aims.ai.tool.RoleDisplay.of(userRole == null ? "" : userRole);
         String need = permissionCodes == null || permissionCodes.length == 0 ? ""
                 : "需要的权限: " + java.util.Arrays.stream(permissionCodes).map(ToolRbacGuard::permissionLabel)
                         .distinct().collect(java.util.stream.Collectors.joining("、"))

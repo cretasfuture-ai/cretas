@@ -208,7 +208,7 @@ public class ToolDispatchService {
             return null;
         }
         if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refuses(tool.getToolName(), request.getUserInput())) {
-            return readTurnRefusal(intent, "EXTERNAL_DATA_REFUSED", com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE);
+            return readTurnRefusal(intent, com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS, com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE);
         }
         if (request.getContext() != null) {
             request.getContext().keySet().forEach(key -> {

@@ -31,8 +31,14 @@ final class AiBiToolTestSupport {
     }
 
     static PriceFieldResponseAdvice priceView(boolean shows) {
+        return priceView(shows, shows);
+    }
+
+    /** amounts = 金额 / 成本覆盖率这类键看不看得到; marginRate = 毛利率 (价格查看口径 + marginRate 键) 看不看得到。 */
+    static PriceFieldResponseAdvice priceView(boolean amounts, boolean marginRate) {
         PriceFieldResponseAdvice v = mock(PriceFieldResponseAdvice.class);
-        when(v.showsKey(any(), any())).thenReturn(shows);
+        when(v.showsKey(any(), any())).thenAnswer(call -> "marginRate".equals(call.getArgument(1)) ? marginRate : amounts);
+        when(v.showsSpec(any(), any())).thenReturn(marginRate);
         return v;
     }
 
