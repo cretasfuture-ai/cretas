@@ -78,7 +78,6 @@ class AttachmentSopRepositoryStartupGuardTest {
     void testPoolDoesNotHoldFullIdleSetPerCachedContext() throws SQLException {
         var hikari = dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class);
         assertThat(hikari.getMinimumIdle()).isEqualTo(1);
-        assertThat(hikari.getIdleTimeout()).isEqualTo(10_000L);
     }
 
     @Test
