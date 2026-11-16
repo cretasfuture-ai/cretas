@@ -16,6 +16,19 @@ vi.mock('@/store/modules/permission', () => ({
   usePermissionStore: () => ({ canWrite: () => true, canViewPrice: true }),
 }));
 
+// Nuxt UI 没装进 vitest：只桩表格（把整行数据印成文字，断言行内客户名）和页签（role=tab 按钮，点击发 update:modelValue）
+const stubs = {
+  UTable: {
+    props: ['data'],
+    template: '<div class="tbl"><div v-for="(r, i) in data" :key="i" class="tbl-row">{{ JSON.stringify(r) }}</div></div>',
+  },
+  UTabs: {
+    props: ['modelValue', 'items'],
+    emits: ['update:modelValue'],
+    template: `<div><button v-for="t in items" :key="t.value" role="tab" @click="$emit('update:modelValue', t.value)">{{ t.label }}</button></div>`,
+  },
+};
+
 describe('warehouse shipment customer labels', () => {
   beforeEach(() => {
     api.get.mockReset();
@@ -55,7 +68,7 @@ describe('warehouse shipment customer labels', () => {
   });
 
   it('mounts without the unrestricted customer roster and keeps row-scoped names', async () => {
-    const wrapper = mount(ShipmentList, { global: { plugins: [ElementPlus] } });
+    const wrapper = mount(ShipmentList, { global: { plugins: [ElementPlus], stubs } });
     await flushPromises();
 
     expect(wrapper.text()).toContain('待确认客户');
