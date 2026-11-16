@@ -167,19 +167,41 @@ class ExternalDataRefusalBeforeRoutingContractTest {
         }
     }
 
-    // 阴性对照: 问本厂的同一个指标不拒 (识别器被调用 = 正常往下走了)
     @Test
-    void ownFactoryQuestionIsNotRefused_control() {
+    void refusedTurnLeavesOneTaggedLogLineWithoutTheQuestionText() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger)
+                org.slf4j.LoggerFactory.getLogger(IntentExecutionOrchestrator.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try (AuthenticatedActor.ActorScope ignored = as("viewer")) {
+            ordinary().execute(FACTORY, IntentExecuteRequest.builder().userInput(Q18).mode("READ").build(), USER, "viewer");
+        } finally {
+            logger.detachAppender(appender);
+        }
+        List<String> tagged = appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                .filter(m -> m.contains("[PreRoutingRefusal]")).toList();
+        assertThat(tagged).hasSize(1);
+        assertThat(tagged.get(0)).contains("EXTERNAL_DATA_REFUSED").contains("entry=ordinary").contains(FACTORY)
+                .doesNotContain("卤牛肉").doesNotContain("竞争对手");
+    }
+
+    // 阴性对照: 问本厂的同一个指标、本厂与客户 / 供应商的往来、供应商比价 都不拒 (识别器被调用 = 正常往下走了)
+    @ParameterizedTest
+    @ValueSource(strings = {"本月卤牛肉的单位成本是多少", "卖给其他公司的卤牛肉价格是多少", "别家供应商的报价比现在便宜吗",
+            "其他工厂的产量", "比较一下各供应商的卤牛肉报价"})
+    void ownFactoryQuestionIsNotRefused_control(String text) {
         com.cretas.aims.dto.intent.IntentMatchResult noMatch = com.cretas.aims.dto.intent.IntentMatchResult.builder()
-                .userInput("本月卤牛肉的单位成本是多少").confidence(0.0).build();
+                .userInput(text).confidence(0.0).build();
         when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(),
                 any(), any(), any(), any(), any())).thenReturn(noMatch);
         when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(),
                 any(), any(), any(), any(), any(), any())).thenReturn(noMatch);
         try (AuthenticatedActor.ActorScope ignored = as("viewer")) {
             IntentExecuteResponse r = ordinary().execute(FACTORY,
-                    IntentExecuteRequest.builder().userInput("本月卤牛肉的单位成本是多少").mode("READ").build(), USER, "viewer");
-            assertThat(r == null ? null : r.getStatus()).isNotEqualTo("EXTERNAL_DATA_REFUSED");
+                    IntentExecuteRequest.builder().userInput(text).mode("READ").build(), USER, "viewer");
+            assertThat(r == null ? null : r.getStatus()).as(text).isNotEqualTo("EXTERNAL_DATA_REFUSED");
         }
         assertThat(org.mockito.Mockito.mockingDetails(recognizer).getInvocations())
                 .as("本厂问题必须照常进识别").isNotEmpty();
@@ -187,11 +209,16 @@ class ExternalDataRefusalBeforeRoutingContractTest {
 
     @ParameterizedTest
     @CsvSource(delimiter = '|', value = {
-            "竞争对手的卤牛肉成本是多少|true", "同行的毛利率一般多少|true", "行业平均出成率是多少|true",
-            "别家的卤牛肉卖多少钱|true", "竞品的销售额|true",
+            "竞争对手的卤牛肉成本是多少|true", "同行的毛利率一般多少|true", "行业平均售价是多少|true",
+            "别家的卤牛肉卖多少钱|true", "竞品的价格是多少|true", "市场上其他厂家的卤牛肉成本|true",
             "本月卤牛肉的总成本是多少|false", "哪个产品毛利率最高|false",
-            "明天和同行一起去展会|false", "竞争对手是谁|false"})
-    void beforeRoutingPredicateNeedsBothExternalWordAndAnOwnDataMetric(String text, boolean refused) {
+            "明天和同行一起去展会|false", "竞争对手是谁|false",
+            // #1788 审查 M1: 本厂与客户 / 供应商往来、集团内其他工厂 —— 都是本厂数据, 不在识别前拒
+            "卖给其他公司的卤牛肉价格是多少|false", "别家供应商的报价比现在便宜吗|false", "其他工厂的产量|false",
+            "比较一下各供应商的报价|false", "别家的进价是多少|false",
+            // 不是成本 / 价格 / 毛利的指标不在识别前拒 (落到本厂数据工具时由工具级 refuses 兜)
+            "行业平均出成率是多少|false"})
+    void beforeRoutingPredicateOnlyRefusesCompetitorCostPriceMargin(String text, boolean refused) {
         assertThat(OwnFactoryDataOnlyGuard.refusesBeforeRouting(text)).as(text).isEqualTo(refused);
     }
 

@@ -155,6 +155,27 @@ class ClarificationPermissionReasonContractTest {
     }
 
     @Test
+    @DisplayName("只看排名最高的候选 (#1788 审查 L1): 排第一的因非权限原因不出、后面的因权限不出 ⇒ 不报权限, 给示例; 反过来才报")
+    void onlyTheTopRankedCandidatesPermissionDenialIsReported() {
+        ClarificationCandidateService s = service(Set.of("sales:read"));
+        AIIntentConfig unregistered = AIIntentConfig.builder().intentCode("TOOL_NOT_REGISTERED").intentName("未注册工具的意图")
+                .intentCategory("QUERY").businessType("COMMON").sensitivityLevel("LOW").toolName("no_such_tool").build();
+        unregistered.setIsActive(true);
+        when(configService.getIntentByCode(FACTORY, "TOOL_NOT_REGISTERED")).thenReturn(Optional.of(unregistered));
+
+        ClarificationCandidateService.Clarification noiseFirst =
+                s.clarify(match("TOOL_NOT_REGISTERED", "SKU_GROSS_MARGIN"), FACTORY, USER, ROLE, "READ");
+        assertThat(noiseFirst.status()).isEqualTo("NEED_CLARIFICATION");
+        assertThat(noiseFirst.message()).isEqualTo(ClarificationCandidateService.NO_CANDIDATE_MESSAGE);
+
+        // 阳性对照: 同两个候选, 权限被拒的那个排第一 ⇒ 报它的权限
+        ClarificationCandidateService.Clarification deniedFirst =
+                s.clarify(match("SKU_GROSS_MARGIN", "TOOL_NOT_REGISTERED"), FACTORY, USER, ROLE, "READ");
+        assertThat(deniedFirst.status()).isEqualTo("PERMISSION_DENIED");
+        assertThat(deniedFirst.message()).contains("财务查看");
+    }
+
+    @Test
     @DisplayName("确实没有候选 (本厂没配这些意图): 不报权限, 说清楚并给可问的示例")
     void noCandidateAtAll_isNotAPermissionDenial_andGivesExamples() {
         ClarificationCandidateService.Clarification c = service(Set.of("sales:read"))

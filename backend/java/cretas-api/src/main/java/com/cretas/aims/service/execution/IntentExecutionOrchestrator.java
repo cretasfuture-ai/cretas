@@ -418,7 +418,10 @@ public class IntentExecutionOrchestrator {
      * 问别家 (竞争对手 / 同行 / 行业平均) 的成本、价格、毛利: 整轮拒答 (识别和权限判定之前), 见
      * OwnFactoryDataOnlyGuard#refusesBeforeRouting。不执行任何查询, 也不拿本厂数代替。
      */
-    public static IntentExecuteResponse externalDataRefusalResponse() {
+    public static IntentExecuteResponse externalDataRefusalResponse(String entry, String factoryId) {
+        // 被拒的轮次留一条带标记的日志 (飞轮 / 评测能数到这类问题); ⛔ 不记原话等数据内容
+        log.info("[PreRoutingRefusal] guard=externalData status={} entry={} factoryId={}",
+                com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.STATUS, entry, factoryId);
         String message = com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.MESSAGE;
         return IntentExecuteResponse.builder()
                 .intentRecognized(false)
@@ -438,7 +441,7 @@ public class IntentExecutionOrchestrator {
             return personalPayRefusalResponse();
         }
         if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
-            return externalDataRefusalResponse();
+            return externalDataRefusalResponse("ordinary", factoryId);
         }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();
@@ -1015,7 +1018,7 @@ public class IntentExecutionOrchestrator {
             return personalPayRefusalResponse();
         }
         if (com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
-            return externalDataRefusalResponse();
+            return externalDataRefusalResponse("explicit", factoryId);
         }
         if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(request.getIntentCode())) {
             return retiredCapabilityResponse();

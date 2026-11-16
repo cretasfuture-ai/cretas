@@ -81,6 +81,8 @@ class SkuGrossMarginToolContractTest {
         ReflectionTestUtils.setField(t, "catalogService", catalog);
         ReflectionTestUtils.setField(t, "productTypeRepository", productTypeRepository);
         ReflectionTestUtils.setField(t, "objectMapper", mapper);
+        // 本类的数字用例: 毛利率看得到 (价格查看), 金额看不到 —— 与 #1788 前这些用例的口径一致
+        ReflectionTestUtils.setField(t, "priceView", AiBiToolTestSupport.priceView(false, true));
         return t;
     }
 

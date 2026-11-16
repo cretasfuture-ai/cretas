@@ -130,19 +130,20 @@ public class ClarificationCandidateService {
     public record Clarification(List<IntentExecuteResponse.SuggestedAction> actions, String message, String status) { }
 
     /**
-     * 候选 + 话术 + 状态。业务候选一个都没剩、且至少有一个是<b>因为当前账号没有权限</b>被滤掉时, 不再说
-     * 「没有可安全提供的业务选项」, 而是按执行期同一份拒答说明缺什么权限 (状态 PERMISSION_DENIED, 文案就是
-     * 被滤掉的第一个候选在执行期会得到的那句: 工具 RBAC / 意图权限码 / 旧角色串 / 一线写门 / Skill 预检)。
+     * 候选 + 话术 + 状态。业务候选一个都没剩、且<b>排名最高的那个</b> (识别给的顺序里第一个在本厂配置里存在的业务候选)
+     * 是因为当前账号没有权限被滤掉时, 不再说「没有可安全提供的业务选项」, 而是按执行期同一份拒答说明缺什么权限
+     * (状态 PERMISSION_DENIED, 文案就是它在执行期会得到的那句: 工具 RBAC / 意图权限码 / 旧角色串 / 一线写门 / Skill 预检)。
+     * 只看排名最高的那个 (#1788 审查 L1): 排在后面的低置信候选因权限被滤掉时不报权限, 免得点名一个与问题无关的功能。
      * 不是权限原因 (没有候选 / 本厂没配 / 业态不符 / 只读模式) ⇒ 照旧澄清, 话术给可问的示例。
      * 2026-11-16 复跑: sales_manager 问「哪个产品毛利率最高」候选全被财务权限滤掉, 只得到「重新描述」。
      */
     Clarification clarify(IntentMatchResult matchResult, String factoryId, Long userId, String userRole, String mode) {
-        String[] firstPermissionDenial = new String[1];
+        String[] topPermissionDenial = new String[1];
         List<IntentExecuteResponse.SuggestedAction> actions =
-                collectCandidateActions(matchResult, factoryId, userId, userRole, mode, firstPermissionDenial);
+                collectCandidateActions(matchResult, factoryId, userId, userRole, mode, topPermissionDenial);
         boolean noBusinessChoice = actions.stream().noneMatch(a -> a != null && "SELECT_INTENT".equals(a.getActionCode()));
-        if (noBusinessChoice && firstPermissionDenial[0] != null) {
-            return new Clarification(actions, firstPermissionDenial[0], STATUS_PERMISSION_DENIED);
+        if (noBusinessChoice && topPermissionDenial[0] != null) {
+            return new Clarification(actions, topPermissionDenial[0], STATUS_PERMISSION_DENIED);
         }
         return new Clarification(actions, clarificationMessage(actions), STATUS_NEED_CLARIFICATION);
     }
@@ -159,10 +160,11 @@ public class ClarificationCandidateService {
             Long userId,
             String userRole,
             String mode,
-            String[] firstPermissionDenial) {
+            String[] topPermissionDenial) {
         List<IntentExecuteResponse.SuggestedAction> actions = new ArrayList<>();
         List<IntentExecuteResponse.SuggestedAction> conversationOptions = new ArrayList<>();
         Set<String> seenCodes = new HashSet<>();
+        boolean topRankedSeen = false;
 
         if (matchResult != null && hasIdentity(factoryId, userId, userRole)) {
             DomainResolution domainResolution = resolveFactoryDomain(factoryId);
@@ -185,6 +187,11 @@ public class ClarificationCandidateService {
                         continue;
                     }
                     AIIntentConfig config = currentActiveConfig(factoryId, code);
+                    // 排名最高的业务候选 = 识别顺序里第一个在本厂配置里存在的业务候选; 只有它的权限拒绝会被说出来
+                    boolean topRanked = config != null && !topRankedSeen && !NON_BUSINESS_OPTIONS.contains(code);
+                    if (topRanked) {
+                        topRankedSeen = true;
+                    }
                     if (config == null
                             || !domainAllowed(config, factoryDomain)
                             || !modeAllowed(config, factoryId, mode)) {
@@ -194,9 +201,8 @@ public class ClarificationCandidateService {
                     if (denial.isPresent()
                             // 读意图没配 required_roles 时上面全放行; 仓库工作台那几个对一线角色按受众名单再收一次
                             || !FrontlineReadAudience.offeredTo(code, userRole)) {
-                        if (denial.isPresent() && denial.get().permission() && firstPermissionDenial[0] == null
-                                && !NON_BUSINESS_OPTIONS.contains(code)) {
-                            firstPermissionDenial[0] = denial.get().message();
+                        if (topRanked && denial.isPresent() && denial.get().permission()) {
+                            topPermissionDenial[0] = denial.get().message();
                         }
                         continue;
                     }

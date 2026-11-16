@@ -344,7 +344,7 @@ public class SseStreamingService {
             }
             // 问别家的成本 / 价格 / 毛利: 识别和权限判定之前整轮拒答 (与非流式入口同一守卫)
             if (request != null && com.cretas.aims.ai.tool.OwnFactoryDataOnlyGuard.refusesBeforeRouting(request.getUserInput())) {
-                streamTerminalResponse(emitter, IntentExecutionOrchestrator.externalDataRefusalResponse(), startTime);
+                streamTerminalResponse(emitter, IntentExecutionOrchestrator.externalDataRefusalResponse("stream", factoryId), startTime);
                 return;
             }
             boolean trustedFactoryActor = hasBoundFactoryActor(factoryId, userId);

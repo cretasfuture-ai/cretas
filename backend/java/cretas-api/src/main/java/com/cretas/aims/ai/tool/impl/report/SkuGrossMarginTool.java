@@ -113,6 +113,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         }
         boolean defaultPeriod = startText == null && endText == null;
 
+        // 毛利率与 web SKU 毛利同一判定 (ShipmentSkuMarginDTO.marginRate 的 @PriceSensitive 口径): 看不到就整份不给,
+        // 不给「金额已遮、毛利率仍在」的部分答案 (2026-11-16 #1788 独立审查 H1)。不查库。
+        if (!replyShowsPriceSpec(context, MARGIN_RATE_SPEC) || !replyShowsAmount(context, "marginRate")) {
+            Map<String, Object> hidden = resultData(List.of(), 0, start, end, defaultPeriod);
+            hidden.put("marginHidden", true);
+            return buildSimpleResult(MARGIN_RATE_HIDDEN_MESSAGE, hidden);
+        }
+
         // ---- 口径 1 的数据: 复用销售毛利报表的查询 (不另写 SQL) ----
         Map<String, Object> payload = realizedQuery.fetch(factoryId, start, end);
         @SuppressWarnings("unchecked")
@@ -205,7 +213,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
             data.put("charts", List.of(chart));
         }
         return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
-                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS)),
+                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS), replyShowsAmount(context, "costCoverage")),
                 data);
     }
 
@@ -241,16 +249,37 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     }
 
     /**
-     * 毛利两处 (本工具 / {@link ReportSalesMarginSummaryTool}) 同一个可见性判据 (2026-11-16 复跑 Q05/Q06 vs Q11):
+     * 毛利两处 (本工具 / {@link ReportSalesMarginSummaryTool}) 与 web 同一个可见性判据 (2026-11-16 复跑 Q05/Q06 vs Q11,
+     * #1788 独立审查 H1: 与 web 的 shipment-sku-margin / 经营报告毛利段对齐, 只收紧不放开):
      * <ul>
      *   <li>能不能用 = 工具门 {@code finance:read | finance:read_write} (中央 ToolRbacEnforcer, 与 web 财务模块门同源);</li>
-     *   <li>过了门: 毛利率 / 成本覆盖率 (百分数) 照给;</li>
-     *   <li>金额 (收入 / 成本 / 毛利 / 目录价 / 单位成本) 是否写进回复 = {@code replyShowsAmounts(这组键)},
-     *       与字段遮挡同一套规则 (PriceFieldResponseAdvice, 按权限配置判)。</li>
+     *   <li>毛利率 = {@link #MARGIN_RATE_SPEC}: web {@code ShipmentSkuMarginDTO.marginRate} 上 {@code @PriceSensitive} 的口径,
+     *       经同一个判定点 (PriceFieldResponseAdvice#showsSpec → PriceVisibility) 按权限配置判; 看不到 ⇒ 整份不给;</li>
+     *   <li>金额 (收入 / 成本 / 毛利 / 目录价 / 单位成本) 是否写进回复 = {@code replyShowsAmounts(这组键)};
+     *       成本覆盖率问 {@code costCoverage} 这个键 —— 文字与遮挡后的字段同进同出。</li>
      * </ul>
-     * 两个工具都只用这一组键问, ⛔ 不各写一份。
+     * 两个工具都只用这几个常量问, ⛔ 不各写一份、不写死角色。
      */
     static final String[] MARGIN_AMOUNT_KEYS = {"revenue", "cost", "grossProfit", "price", "unitCost"};
+
+    /** web SKU 毛利视图里毛利率字段的口径, 直接读注解 (web 改口径, 这里跟着变)。 */
+    static final String MARGIN_RATE_SPEC = webMarginRateSpec();
+
+    static final String MARGIN_RATE_HIDDEN_MESSAGE = "毛利率按当前账号的权限配置不显示（与 web「SKU 毛利」页同一判定，需要价格查看权限），"
+            + "销售额、成本、毛利金额也不显示；需要请联系工厂管理员开通。";
+
+    private static String webMarginRateSpec() {
+        try {
+            com.cretas.aims.security.PriceSensitive annotation = com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO.class
+                    .getDeclaredField("marginRate").getAnnotation(com.cretas.aims.security.PriceSensitive.class);
+            if (annotation == null) {
+                throw new IllegalStateException("ShipmentSkuMarginDTO.marginRate 没有 @PriceSensitive");
+            }
+            return annotation.permission();
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException("ShipmentSkuMarginDTO.marginRate 不存在", e);
+        }
+    }
 
     // ==================== 组装 ====================
 
@@ -403,14 +432,19 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String buildMessage(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
-                                boolean showAmounts) {
+                                boolean showAmounts, boolean showCoverage) {
         this.showAmounts.set(showAmounts);
+        this.showCoverage.set(showCoverage);
         try {
             return buildMessageText(shown, total, start, end, defaultPeriod, secret);
         } finally {
             this.showAmounts.remove();
+            this.showCoverage.remove();
         }
     }
+
+    /** 成本覆盖率进不进文字: 与字段 realized.costCoverage 经遮挡层后同进同出 (#1788 审查 M2)。 */
+    private final ThreadLocal<Boolean> showCoverage = new ThreadLocal<>();
 
     /** 文字里的收入 / 成本 / 目录价 / 单位成本与 revenue / cost / price / unitCost 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001) */
     private final ThreadLocal<Boolean> showAmounts = new ThreadLocal<>();
@@ -449,7 +483,11 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         if ("OK".equals(status)) {
             StringBuilder sb = new StringBuilder();
             sb.append(r.get("marginRate")).append("%（已回填成本明细的收入 ").append(moneyText(r.get("revenue")))
-              .append("，成本 ").append(moneyText(r.get("cost"))).append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入）");
+              .append("，成本 ").append(moneyText(r.get("cost")));
+            if (Boolean.TRUE.equals(showCoverage.get())) {
+                sb.append("，成本覆盖 ").append(r.get("costCoverage")).append("% 的收入");
+            }
+            sb.append("）");
             if (r.get("note") != null) sb.append("。").append(r.get("note"));
             return sb.toString();
         }
