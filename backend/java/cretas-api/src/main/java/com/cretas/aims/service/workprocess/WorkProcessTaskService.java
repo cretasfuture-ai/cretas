@@ -169,6 +169,13 @@ public interface WorkProcessTaskService {
     boolean isCompletionSupervisor(String factoryId, Long operatorUserId);
 
     /**
+     * 工序首检闸 (工厂开关 = 拦截时): 这道工序要首检而没首检合格 → 409 {@code FIRST_ARTICLE_NOT_PASSED}。
+     * {@link #complete} 自己会调同一条判据; AI 完工预览调它, 预览与写路径一个结论。开关关 / 提示时什么都不做。
+     */
+    default void assertFirstArticleAllowsComplete(String factoryId, Long taskId) {
+    }
+
+    /**
      * 跳过工序: 任意非终态 → SKIPPED, 必填 notes, 限主管.
      */
     WorkProcessTaskDTO skip(
