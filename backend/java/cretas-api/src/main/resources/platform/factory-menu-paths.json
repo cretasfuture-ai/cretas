@@ -22,6 +22,8 @@
     "/smart-bi/upload"
   ],
   "dashboard": [
+    "/crew",
+    "/crew/ledger",
     "/dashboard",
     "/dashboard/ai-value",
     "/issues",
@@ -111,6 +113,7 @@
     "/quality/defects",
     "/quality/disposals",
     "/quality/disposition",
+    "/quality/first-article",
     "/quality/inspections",
     "/quality/label-qc",
     "/quality/param-deviation",
@@ -155,6 +158,7 @@
   "system": [
     "/calibration/list",
     "/canvas-editor",
+    "/crew/settings",
     "/factory-onboarding",
     "/factory-readiness",
     "/factory-review",
