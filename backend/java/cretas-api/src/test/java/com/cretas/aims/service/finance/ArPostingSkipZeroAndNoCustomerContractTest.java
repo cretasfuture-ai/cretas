@@ -5,9 +5,11 @@ import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.finance.ArApTransaction;
 import com.cretas.aims.entity.finance.ArPostingPending;
 import com.cretas.aims.entity.finance.ArPostingPendingStatus;
+import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.entity.inventory.SalesOrderItem;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
@@ -94,19 +96,66 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     @Test
-    @DisplayName("零金额发货: 应收含税合计 0 与 0.00 都按正常跳过 —— 无待补账行、无告警、不调挂账")
-    void zeroValueShipmentIsSkippedWithoutPendingOrAlert() {
+    @DisplayName("赠品/样品(有明细, 发货行与订单行单价都为 0; 0 与 0.00 都算零): 按正常跳过 —— 无待补账行、无告警、不调挂账")
+    void giftShipmentIsSkippedWithoutPendingOrAlert() {
         for (String zero : new String[]{"0", "0.00"}) {
             clean();
             ArApService arApService = mock(ArApService.class);
-            SalesServiceImpl sales = salesService(arApService, "CUST-1", new BigDecimal(zero));
+            SalesServiceImpl sales = salesServiceWithLine(arApService, zero, zero);
 
             SalesDeliveryRecord shipped = shipInTx(sales);
 
             assertThat(shipped.getStatus()).as(zero + ": 发货成功").isEqualTo(SalesDeliveryStatus.SHIPPED);
+            assertThat(shipped.getItems()).as("确实是有明细的发货").hasSize(1);
             assertThat(pendingRepo.findAll()).as(zero + ": 不写待补账(连意图行也没有)").isEmpty();
             verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
             verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        }
+    }
+
+    @Test
+    @DisplayName("不放开: 订单行有价(100)而发货行录成 0 → 误录不是赠品, 仍待补账 + 告警")
+    void orderLinePricedButShipLineZeroIsStillFailure() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(null);
+        SalesServiceImpl sales = salesServiceWithLine(arApService, "0", "100.00");
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        assertThat(openPending()).hasSize(1);
+        verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
+    }
+
+    @Test
+    @DisplayName("不放开: 订单行单价没维护(null)、发货行 0 → 缺价不是赠品, 仍待补账 + 告警")
+    void orderLinePriceMissingIsStillFailure() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(null);
+        SalesServiceImpl sales = salesServiceWithLine(arApService, "0", null);
+
+        shipInTx(sales);
+
+        assertThat(openPending()).hasSize(1);
+        verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
+    }
+
+    @Test
+    @DisplayName("不放开: 空明细(头额默认 0 / 0.00) 不算零金额, 仍待补账 + 告警")
+    void emptyItemsWithZeroHeaderIsStillFailure() {
+        for (String zero : new String[]{"0", "0.00"}) {
+            clean();
+            ArApService arApService = mock(ArApService.class);
+            when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                    .thenReturn(null);
+            SalesServiceImpl sales = salesService(arApService, "CUST-1", new BigDecimal(zero));
+
+            shipInTx(sales);
+
+            assertThat(openPending()).as(zero).hasSize(1);
+            verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
         }
     }
 
@@ -208,24 +257,50 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     @Test
-    @DisplayName("明细级判零: 单价 0 的赠品行算零; 任一行缺单价/缺数量算「不知道」不算零; 0.01 不算零")
+    @DisplayName("判零细则(补充, 真实入口见上): 缺单价/缺数量/部分行缺价、极小单价舍入成 0、订单行有价或报价含税单价非 0、挂不上订单行、空明细、0.01、负数 都不算零")
     void itemLevelZeroJudgement() {
-        assertThat(knownZero(items(line("0", "5")), "0.00")).isTrue();
-        assertThat(knownZero(items(line("0.00", "1"), line("0", "2")), "0")).isTrue();
-        assertThat(knownZero(items(line(null, "5")), "0.00")).as("缺单价").isFalse();
-        assertThat(knownZero(items(line("0", null)), "0.00")).as("缺数量").isFalse();
-        assertThat(knownZero(items(line("0", "5"), line(null, "1")), "0.00")).as("部分行缺单价").isFalse();
-        assertThat(knownZero(items(line("0.01", "1")), "0.01")).as("0.01").isFalse();
-        assertThat(knownZero(items(line("1", "1")), "-1.00")).as("负数(折扣超额)").isFalse();
+        SalesOrder giftOrder = orderWith(orderLine(1L, "0", null), orderLine(2L, "0.00", "0"));
+        assertThat(knownZero(giftOrder, items(line(1L, "0", "5")), "0.00")).isTrue();
+        assertThat(knownZero(giftOrder, items(line(1L, "0.00", "1"), line(2L, "0", "2")), "0")).isTrue();
+        assertThat(knownZero(giftOrder, items(line(1L, null, "5")), "0.00")).as("发货行缺单价").isFalse();
+        assertThat(knownZero(giftOrder, items(line(1L, "0", null)), "0.00")).as("缺数量").isFalse();
+        assertThat(knownZero(giftOrder, items(line(1L, "0", "5"), line(2L, null, "1")), "0.00")).as("部分行缺单价").isFalse();
+        assertThat(knownZero(giftOrder, items(line(1L, "0.0040", "1")), "0.00")).as("极小单价舍入成 0").isFalse();
+        assertThat(knownZero(giftOrder, items(line(99L, "0", "1")), "0.00")).as("挂不上订单行").isFalse();
+        assertThat(knownZero(giftOrder, items(line(null, "0", "1")), "0.00")).as("没有订单行 ID").isFalse();
+        assertThat(knownZero(orderWith(orderLine(1L, "100", null)), items(line(1L, "0", "1")), "0.00"))
+                .as("订单行有价, 发货行 0(含全额折扣算出 0 的情形)").isFalse();
+        assertThat(knownZero(orderWith(orderLine(1L, null, null)), items(line(1L, "0", "1")), "0.00"))
+                .as("订单行缺价").isFalse();
+        assertThat(knownZero(orderWith(orderLine(1L, "0", "1.00")), items(line(1L, "0", "1")), "0.00"))
+                .as("订单行报价含税单价非 0").isFalse();
+        assertThat(knownZero(giftOrder, items(), "0.00")).as("空明细").isFalse();
+        assertThat(knownZero(giftOrder, items(line(1L, "0", "1")), "0.01")).as("0.01").isFalse();
+        assertThat(knownZero(giftOrder, items(line(1L, "0", "1")), "-1.00")).as("负数").isFalse();
     }
 
     // ---------------------------------------------------------------- helpers
 
-    private static SalesDeliveryItem line(String unitPrice, String qty) {
+    private static SalesDeliveryItem line(Long orderItemId, String unitPrice, String qty) {
         SalesDeliveryItem i = new SalesDeliveryItem();
+        i.setSalesOrderItemId(orderItemId);
         i.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
         i.setDeliveredQuantity(qty == null ? null : new BigDecimal(qty));
         return i;
+    }
+
+    private static SalesOrderItem orderLine(Long id, String unitPrice, String quotedGross) {
+        SalesOrderItem oi = new SalesOrderItem();
+        ReflectionTestUtils.setField(oi, "id", id);
+        oi.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
+        oi.setQuotedGrossUnitPrice(quotedGross == null ? null : new BigDecimal(quotedGross));
+        return oi;
+    }
+
+    private static SalesOrder orderWith(SalesOrderItem... lines) {
+        SalesOrder o = new SalesOrder();
+        o.setItems(new ArrayList<>(List.of(lines)));
+        return o;
     }
 
     private static SalesDeliveryRecord items(SalesDeliveryItem... lines) {
@@ -234,9 +309,9 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         return r;
     }
 
-    private static boolean knownZero(SalesDeliveryRecord r, String value) {
+    private static boolean knownZero(SalesOrder o, SalesDeliveryRecord r, String value) {
         Boolean b = ReflectionTestUtils.invokeMethod(SalesServiceImpl.class, "isKnownZeroShipmentValue",
-                r, new BigDecimal(value));
+                o, r, new BigDecimal(value));
         return Boolean.TRUE.equals(b);
     }
 
@@ -250,6 +325,47 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     private SalesServiceImpl salesService(ArApService arApService, String customerId, BigDecimal deliveryTotal) {
+        return build(arApService, customerId, deliveryTotal, new ArrayList<>(), new ArrayList<>(), mock(FinishedGoodsBatchRepository.class));
+    }
+
+    /**
+     * 有一条明细的发货: 发货行单价 {@code shipLinePrice}、订单行单价 {@code orderLinePrice}(null = 没维护), 数量 5 盒;
+     * 成品库存给一个足量批次, 让 shipDelivery 真走完扣库存再到挂账段。
+     */
+    private SalesServiceImpl salesServiceWithLine(ArApService arApService, String shipLinePrice, String orderLinePrice) {
+        SalesOrderItem oi = new SalesOrderItem();
+        ReflectionTestUtils.setField(oi, "id", 501L);
+        oi.setProductTypeId("PT-ARSKIP");
+        oi.setQuantity(new BigDecimal("5"));
+        oi.setUnit("盒");
+        oi.setUnitPrice(orderLinePrice == null ? null : new BigDecimal(orderLinePrice));
+
+        SalesDeliveryItem di = new SalesDeliveryItem();
+        di.setSalesOrderItemId(501L);
+        di.setProductTypeId("PT-ARSKIP");
+        di.setProductName("样品");
+        di.setUnit("盒");
+        di.setDeliveredQuantity(new BigDecimal("5"));
+        di.setUnitPrice(new BigDecimal(shipLinePrice));
+
+        FinishedGoodsBatch batch = new FinishedGoodsBatch();
+        ReflectionTestUtils.setField(batch, "id", "FGB-ARSKIP-1");
+        batch.setFactoryId(F);
+        batch.setProductTypeId("PT-ARSKIP");
+        batch.setBatchNumber("FGB-ARSKIP-1");
+        batch.setUnit("盒");
+        batch.setProducedQuantity(new BigDecimal("100"));
+        FinishedGoodsBatchRepository fgRepo = mock(FinishedGoodsBatchRepository.class);
+        when(fgRepo.findShippableBatchesAllWarehousesExcluding(any(), any(), any())).thenReturn(new ArrayList<>(List.of(batch)));
+        when(fgRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        return build(arApService, "CUST-1", BigDecimal.ZERO,
+                new ArrayList<>(List.of(di)), new ArrayList<>(List.of(oi)), fgRepo);
+    }
+
+    private SalesServiceImpl build(ArApService arApService, String customerId, BigDecimal deliveryTotal,
+                                   List<SalesDeliveryItem> deliveryItems, List<SalesOrderItem> orderItems,
+                                   FinishedGoodsBatchRepository fgRepo) {
         SalesOrderRepository orderRepo = Mockito.mock(SalesOrderRepository.class);
         SalesDeliveryRecordRepository deliveryRepo = Mockito.mock(SalesDeliveryRecordRepository.class);
         SalesOrderItemRepository itemRepo = Mockito.mock(SalesOrderItemRepository.class);
@@ -264,7 +380,7 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         d.setDeliveryMethod("SELF_PICKUP");
         d.setDeliveryDate(java.time.LocalDate.now());
         d.setTotalAmount(deliveryTotal);
-        d.setItems(new ArrayList<>());
+        d.setItems(deliveryItems);
 
         SalesOrder o = new SalesOrder();
         ReflectionTestUtils.setField(o, "id", ORDER_ID);
@@ -272,18 +388,18 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         o.setCustomerId(customerId);
         o.setTotalAmount(new BigDecimal("900.00"));
         o.setStatus(SalesOrderStatus.CONFIRMED);
-        o.setItems(new ArrayList<>());
+        o.setItems(orderItems);
 
         when(deliveryRepo.findById(DELIVERY_ID)).thenReturn(Optional.of(d));
         when(deliveryRepo.findByIdAndFactoryIdForUpdate(DELIVERY_ID, F)).thenReturn(Optional.of(d));
         when(orderRepo.findById(ORDER_ID)).thenReturn(Optional.of(o));
         when(orderRepo.findByIdAndFactoryIdForUpdate(ORDER_ID, F)).thenReturn(Optional.of(o));
-        when(itemRepo.findBySalesOrderId(ORDER_ID)).thenReturn(Collections.emptyList());
+        when(itemRepo.findBySalesOrderId(ORDER_ID)).thenReturn(orderItems.isEmpty() ? Collections.emptyList() : orderItems);
         when(deliveryRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(orderRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         SalesServiceImpl sales = new SalesServiceImpl(orderRepo, itemRepo, deliveryRepo,
-                mock(FinishedGoodsBatchRepository.class), mock(CustomerRepository.class),
+                fgRepo, mock(CustomerRepository.class),
                 mock(ProductTypeRepository.class), arApService, mock(ApplicationEventPublisher.class));
         ReflectionTestUtils.setField(sales, "receivablePendingService", service);
         ReflectionTestUtils.setField(sales, "arApTransactionRepository", arRepo);
