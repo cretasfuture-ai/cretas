@@ -32,7 +32,7 @@ import static org.mockito.Mockito.when;
  * JSON 出口), 只桩掉 {@link WorkProcessTaskService}。每条「能做」都配一条「不能做」的对照,
  * 每条都断言 {@code start / complete} 一次都没被调 —— 预览不许改状态。
  */
-class WorkProcessTaskTransitionPreviewToolTest {
+class WorkProcessTaskTransitionPreviewToolContractTest {
 
     private static final String FACTORY = "F006";
     private static final String OTHER_FACTORY = "F999";
@@ -199,6 +199,26 @@ class WorkProcessTaskTransitionPreviewToolTest {
             assertThat(String.valueOf(data.get("message"))).as(from.name())
                     .contains(WorkProcessTaskTransitionPreview.label(from));
         }
+        assertNoMutation();
+    }
+
+    @Test
+    @DisplayName("COMPLETE 对照: 工厂首检开关 = 拦截且首检没合格 → canDo=false FIRST_ARTICLE_NOT_PASSED, 不出确认卡 (与写路径同判据)")
+    void completeRefusedWhenFirstArticleGateBlocks() throws Exception {
+        stubTask(FACTORY, task(Status.IN_PROGRESS));
+        org.mockito.Mockito.doThrow(new com.cretas.aims.exception.BusinessException(409,
+                        "这道工序首检还没合格 (标准「修油首检」, 现在还没送检), 本厂设置为首检合格前不能报完工")
+                        .withCode("FIRST_ARTICLE_NOT_PASSED"))
+                .when(service).assertFirstArticleAllowsComplete(FACTORY, TASK_ID);
+
+        Map<String, Object> data = data(completeTool.preview(call("work_process_task_complete",
+                Map.of("taskId", TASK_ID, "actualQuantity", 10)), ctx(FACTORY)));
+
+        assertThat(data.get("canDo")).isEqualTo(false);
+        assertThat(data.get("status")).isEqualTo("FIRST_ARTICLE_NOT_PASSED");
+        assertThat(String.valueOf(data.get("message"))).contains("首检还没合格").contains("修油首检");
+        assertThat(data).doesNotContainKey("newValues");
+        verify(service).assertFirstArticleAllowsComplete(FACTORY, TASK_ID);
         assertNoMutation();
     }
 

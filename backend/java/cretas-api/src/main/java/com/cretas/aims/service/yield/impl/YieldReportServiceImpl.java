@@ -173,6 +173,10 @@ public class YieldReportServiceImpl implements YieldReportService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 工序首检闸 (V20261115_62), 与工序任务完工同一判据。required=false 不改构造器; 没注入 = 不查首检。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
+
     /** 返工计划的来源半成品: 报工时算占用、超量, 投料下拉里给出来 (D-S315-01)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
@@ -346,6 +350,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 写在任何落库之前; 幂等重放已在上面提前返回, 不受影响。
         if (unlockGuard != null) {
             unlockGuard.assertUnlocked(factoryId, t);
+        }
+        // 工序首检 (工厂开关 = 拦截): 这次报工会把任务记成完成 (产出 / 旧式整合报工 且没选「续报」) 而首检没合格 → 409。
+        // 写在任何落库之前; 部分产出续报 (markComplete=false)、领料、工时段不拦。开关关 / 提示时只问一次开关。
+        if (firstArticleGate != null && (isOutput || isLegacy) && !Boolean.FALSE.equals(req.getMarkComplete())) {
+            firstArticleGate.assertCanComplete(factoryId, t);
         }
 
         // 工序成本配置继承: 报工未传成本字段时, 从工序定义(ProductWorkProcess)继承默认值

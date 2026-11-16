@@ -185,6 +185,10 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
     @Autowired(required = false)
     private com.cretas.aims.service.workprocess.WorkflowStepUnlockGuard unlockGuard;
 
+    /** 工序首检闸 (V20261115_62), 与工序任务完工同一判据。字段注入 (required=false) 不改构造器; 没注入 = 不查首检。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.quality.firstarticle.FirstArticleGate firstArticleGate;
+
     /** 返工计划的来源半成品: 超量闸与「被自己占用的来源不算领空」(D-S315-01)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.SecondaryPlanFeedService secondaryPlanFeedService;
@@ -276,6 +280,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         assertColumnLimits(req);
         // 缺口 04: 同理放在最前面 —— 下面的端口校验 / 领料分配都不该在上游没料时先跑。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertFirstArticleAllowsWorkflowRow(factoryId, planId, req);
         assertSecondaryFeedWithinPlan(factoryId, planId, req);
         if (req.getProcessDate() == null) {
             throw new BusinessException(400, "正式报工必须填写生产日期")
@@ -1221,6 +1226,7 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
         // 1b. 缺口 04: 按工艺图解锁。有正数产出的行会把这道工序记成已报 (WorkflowTaskProgressWriter),
         //     所以上游产出的料还没到时在这里拒绝; 草稿 (saveDraft) 不走本方法, 照常可存。
         assertWorkflowUpstreamReady(factoryId, planId, req);
+        assertFirstArticleAllowsWorkflowRow(factoryId, planId, req);
         assertSecondaryFeedWithinPlan(factoryId, planId, req);
 
         // 1c. 缺口 14: 工序间 / 投料时限。放在多产出分支之前。正式提交已在扣回料之前判过 (见 submitRow)。
@@ -1736,11 +1742,57 @@ public class ProcessSheetServiceImpl implements ProcessSheetService {
                 .isPresent();
     }
 
+    /**
+     * 工序首检 (工厂开关 = 拦截): 有正数产出的正式行会把这道工序记成完成, 首检没合格 → 409。
+     * 放在写入前 (与上面的上游解冻闸同位置)。开关关 / 提示时只问一次开关, 不读 Workflow 快照、不找任务。
+     */
+    private void assertFirstArticleAllowsWorkflowRow(String factoryId, String planId, ProcessSheetRowRequest req) {
+        if (firstArticleGate == null || workflowClerkSheetService == null || req.getProcessOrder() == null) {
+            return;
+        }
+        boolean positiveOutput = req.getOutputs() != null && !req.getOutputs().isEmpty()
+                ? req.getOutputs().stream().anyMatch(o -> o.getQuantity() != null && o.getQuantity().signum() > 0)
+                : req.getOutputQuantity() != null && req.getOutputQuantity().signum() > 0;
+        if (!positiveOutput || !firstArticleGate.isBlocking(factoryId)) {
+            return;
+        }
+        assertFirstArticleForWorkflowTask(factoryId, req.getProcessOrder(),
+                workflowClerkSheetService.getWorkflowSheetConfig(factoryId, planId));
+    }
+
+    /** 按 Workflow 快照找到这道工序的任务并过首检闸 (调用方已确认开关是拦截)。 */
+    private void assertFirstArticleForWorkflowTask(String factoryId, Integer processOrder,
+                                                   WorkflowClerkSheetConfigDTO config) {
+        if (config == null || config.getWorkflowInstanceId() == null || config.getProcesses() == null
+                || processOrder == null) {
+            return;
+        }
+        String nodeId = config.getProcesses().stream()
+                .filter(p -> processOrder.equals(p.getProcessOrder()))
+                .map(WorkflowClerkSheetConfigDTO.ProcessDescriptor::getWorkflowNodeId)
+                .filter(Objects::nonNull)
+                .findFirst()
+                .orElse(null);
+        if (nodeId == null) {
+            return;
+        }
+        taskRepo.findByFactoryIdAndWorkflowInstanceIdOrderByProcessOrderAsc(factoryId, config.getWorkflowInstanceId())
+                .stream()
+                .filter(t -> nodeId.equals(t.getWorkflowNodeId()))
+                .findFirst()
+                .ifPresent(task -> firstArticleGate.assertCanComplete(factoryId, task));
+    }
+
     private void stampWorkflowTaskIfApplicable(
             String factoryId,
             String planId,
             ProcessSheetRowRequest req,
             WorkflowClerkSheetConfigDTO config) {
+        // 工序首检兜底: 改行 / 多产出 / 重新物化等不经过上面前置闸的路径, 在发「记成完成」之前再判一次;
+        // 抛出时整次保存在同一事务里回滚。开关关 / 提示时只问一次开关。
+        if (firstArticleGate != null && config != null && firstArticleGate.isBlocking(factoryId)) {
+            assertFirstArticleForWorkflowTask(factoryId, req.getProcessOrder(), config);
+        }
         publishWorkflowTaskProgress(factoryId, planId, req.getProcessOrder(), req.getOutputQuantity(),
                 config, true);
     }

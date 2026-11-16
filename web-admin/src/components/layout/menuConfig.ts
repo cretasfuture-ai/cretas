@@ -893,6 +893,13 @@ const P5_WEIGH_LEAF: MenuItem = { path: '/production/weigh', title: '称重报�
 const OUTSOURCE_LEAF: MenuItem = { path: '/production/outsource', title: '委外单', icon: '', module: 'production' };
 
 /**
+ * 工序首检（原型统一 E 线 BL17）：质量管理 → 质量检验下放「工序首检 /quality/first-article」（排在质检记录之后）。
+ * 只加在原型分组侧栏；原分组 menuConfig 不动。后端 FirstArticleController 是 @RequireModule("quality_inspection")，
+ * 读接口认 quality / production 读权限，菜单与质检记录同判据 module: 'quality'，不加 roles。闸里 EXPECTED_ADDITIONS 登记。
+ */
+const FIRST_ARTICLE_LEAF: MenuItem = { path: '/quality/first-article', title: '工序首检', icon: '', module: 'quality' };
+
+/**
  * P8「数字班组」（MIGRATION-PLAN 2.7，DECISIONS 第十八节 M4：P8 上菜单）。只加在原型分组侧栏；原分组 menuConfig 不动。
  * 组是 container（纯展示）；两个叶子与「待办」同判据（module: 'dashboard'，餐饮 / 物流不显示），
  * 页面数据由 DigitalCrewController 按登录人权限逐件判。「等我确认」不另开页，并入「待办 › 等我确认」。
@@ -958,7 +965,7 @@ function buildGroupedMenu(): MenuItem[] {
       '/production/delivery-risks', OUTSOURCE_LEAF,
     ),
     warehouseGroupWithWip(),
-    takeGroup('/quality', MOVED_OUT),
+    insertAfter(takeGroup('/quality', MOVED_OUT), '/quality/inspections', FIRST_ARTICLE_LEAF),
     analytics,
     container('#group/crew', '数字班组', 'UserFilled', CREW_LEAVES),
     // 原型关掉、正式端保留的模块（第三块）：只换外观与位置
