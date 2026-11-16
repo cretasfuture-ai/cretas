@@ -34,14 +34,13 @@ describe('sales order ordinary create entry', () => {
   });
 
   it('adds data-type appropriate sorting and categorical header filters to the order table', () => {
-    expect(source).toContain('prop="orderNumber" label="订单编号" width="170" sortable');
-    expect(source).toContain(':filters="processingModeFilters"');
-    expect(source).toContain(':filters="materialSupplyModeFilters"');
-    expect(source).toContain(':filters="invoiceStatusFilters"');
-    expect(source).toContain(':filters="salesStatusFilters"');
-    expect(source).toContain('prop="totalAmount"');
-    expect(source).toContain('label="总金额"');
-    expect(source).toContain('sortable');
+    // Nuxt UI 版: 排序走 UTable 列定义 (文本列带中文 sortingFn, 金额列 accessorFn 出数字), 表头筛选搬到工具栏下拉
+    expect(source).toContain("id: 'orderNumber', accessorKey: 'orderNumber', header: '订单编号', sortingFn: sortText");
+    expect(source).toContain('v-model="columnFilters.processingMode" :items="processingModeFilterItems"');
+    expect(source).toContain('v-model="columnFilters.materialSupplyMode" :items="materialSupplyFilterItems"');
+    expect(source).toContain('v-model="columnFilters.invoiceStatus" :items="invoiceStatusFilterItems"');
+    expect(source).toContain('v-model="columnFilters.status" :items="orderStatusFilterItems"');
+    expect(source).toContain("id: 'totalAmount', accessorFn: (r) => (r.totalAmount == null ? null : Number(r.totalAmount)), header: '总金额'");
   });
 
   it('preserves source warehouse through create, edit and payload submission', () => {

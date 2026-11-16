@@ -6,8 +6,8 @@
  *
  * State machine:
  *   DRAFT ──submit──> PENDING_APPROVAL ──approve──> APPROVED ──convertToPO──> CONVERTED_TO_PO
- *                          │                            │
- *                          └──reject─────────> REJECTED ┘
+ *     ^                      │
+ *     └──reopen(仅请购人)── REJECTED <──reject──┘
  *
  * RBAC: 列表/详情/创建/提交 → procurement:read 或 procurement:read_write
  *       审批/驳回/转 PO → procurement:read_write
@@ -17,7 +17,7 @@
  *   - AI Tool wrapping (PurchaseRequisitionTool)
  *   - Canvas-Workflow ApprovalChainConfig integration
  */
-import { get, post, del } from './request';
+import { get, post, put, del } from './request';
 import type { ApiResponse } from '@/types/api';
 
 // ============================================================================
@@ -81,6 +81,20 @@ export interface CreatePurchaseRequisitionRequest {
   expectedDate?: string | null;
   reason?: string | null;
   remark?: string | null;
+}
+
+/** 审批流水 — 每轮提交/通过/驳回/重开各一行 (2026-11-15 驳回后可改后重提, 多轮历史保留). */
+export interface RequisitionApprovalRecord {
+  id: string;
+  requisitionId: string;
+  round: number;
+  seq: number;
+  action: 'SUBMITTED' | 'APPROVED' | 'REJECTED' | 'REOPENED';
+  actorId?: number | null;
+  actedAt: string;
+  reason?: string | null;
+  itemsSnapshot?: RequisitionItem[] | null;
+  expectedDateSnapshot?: string | null;
 }
 
 export interface PurchaseOrderSummary {
@@ -150,6 +164,38 @@ export function submitRequisition(
 ): Promise<ApiResponse<PurchaseRequisition>> {
   return post<PurchaseRequisition>(
     `/${factoryId}/purchase-requisitions/${requisitionId}/submit`,
+  );
+}
+
+/** 驳回后重开 (REJECTED → DRAFT, 仅请购人本人). */
+export function reopenRequisition(
+  factoryId: string,
+  requisitionId: string,
+): Promise<ApiResponse<PurchaseRequisition>> {
+  return post<PurchaseRequisition>(
+    `/${factoryId}/purchase-requisitions/${requisitionId}/reopen`,
+  );
+}
+
+/** 修改草稿内容 (仅 DRAFT + 请购人本人). */
+export function updateRequisition(
+  factoryId: string,
+  requisitionId: string,
+  request: CreatePurchaseRequisitionRequest,
+): Promise<ApiResponse<PurchaseRequisition>> {
+  return put<PurchaseRequisition>(
+    `/${factoryId}/purchase-requisitions/${requisitionId}`,
+    request,
+  );
+}
+
+/** 审批历史 (按发生顺序). */
+export function getApprovalHistory(
+  factoryId: string,
+  requisitionId: string,
+): Promise<ApiResponse<RequisitionApprovalRecord[]>> {
+  return get<RequisitionApprovalRecord[]>(
+    `/${factoryId}/purchase-requisitions/${requisitionId}/approval-history`,
   );
 }
 
