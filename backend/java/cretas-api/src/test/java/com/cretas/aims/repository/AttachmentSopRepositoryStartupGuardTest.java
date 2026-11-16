@@ -73,13 +73,6 @@ class AttachmentSopRepositoryStartupGuardTest {
         });
     }
 
-    /** 守的是: 缓存的测试上下文不常驻整池空闲连接(否则 shard 内累积的池会撑满 PG max_connections)。 */
-    @Test
-    void testPoolDoesNotHoldFullIdleSetPerCachedContext() throws SQLException {
-        var hikari = dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class);
-        assertThat(hikari.getMinimumIdle()).isEqualTo(1);
-    }
-
     @Test
     void optInPostgresTargetIsReallyPostgres() throws SQLException {
         assumeTrue(System.getenv("CRETAS_WORKFLOW_PG_URL") != null
@@ -88,6 +81,10 @@ class AttachmentSopRepositoryStartupGuardTest {
             assertThat(connection.getMetaData().getDatabaseProductName())
                     .containsIgnoringCase("PostgreSQL");
         }
+        // CI 的临时 PG 要容得下 shard 内累积的全部缓存上下文连接池 (见 scripts/ci/run-with-test-postgres.sh 的注释)
+        Integer maxConnections = new org.springframework.jdbc.core.JdbcTemplate(dataSource)
+                .queryForObject("select current_setting('max_connections')::int", Integer.class);
+        assertThat(maxConnections).as("max_connections of the CI test PG (run-with-test-postgres.sh)").isGreaterThanOrEqualTo(500);
     }
 
     private static Attachment attachment(String id, AuthenticatedActorType actorType, long actorId, Long uploadedBy) {
