@@ -2032,7 +2032,9 @@ public class SseStreamingService {
         } catch (IOException unavailable) {
             log.warn("F006 Mini question failed: userId={}, elapsedMs={}",
                     userId, System.currentTimeMillis() - startTime);
-            sendSseEvent(emitter, "error", Map.of("status", "FAILED", "message", unavailable.getMessage()));
+            // 说明先脱敏再下发 (两入口同一句; 本地通道地址 / 内部类名不出门)
+            sendSseEvent(emitter, "error", Map.of("status", "FAILED",
+                    "message", ErrorSanitizer.sanitize(unavailable.getMessage())));
             emitter.complete();
         }
     }
