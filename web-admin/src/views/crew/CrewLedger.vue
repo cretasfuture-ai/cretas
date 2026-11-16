@@ -10,17 +10,19 @@ import { crewApi, STATUS_TONE, type CrewLedger } from '@/api/digitalCrew';
 
 const auth = useAuthStore();
 const data = ref<CrewLedger | null>(null);
-const member = ref('');
+// reka-ui 不允许空字符串作选项值，「全部」用哨兵值，发请求时再映射回「不传参数」
+const ALL_MEMBERS = '__all__';
+const member = ref(ALL_MEMBERS);
 const error = ref('');
 async function load() {
   if (!auth.factoryId) return;
   error.value = '';
-  try { data.value = await crewApi.ledger(auth.factoryId, member.value || undefined); }
+  try { data.value = await crewApi.ledger(auth.factoryId, member.value === ALL_MEMBERS ? undefined : member.value); }
   catch (e) { data.value = null; error.value = e instanceof Error ? e.message : '读取失败'; }
 }
 onMounted(load);
 watch([() => auth.factoryId, member], load);
-const memberItems = computed(() => [{ label: '全部数字员工', value: '' },
+const memberItems = computed(() => [{ label: '全部数字员工', value: ALL_MEMBERS },
   ...(data.value?.perMember || []).map((m) => ({ label: m.memberName, value: m.memberKey }))]);
 const t = (s?: string | null) => (s ? s.replace('T', ' ').slice(0, 16) : '');
 </script>

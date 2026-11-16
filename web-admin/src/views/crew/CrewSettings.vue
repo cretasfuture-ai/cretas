@@ -9,6 +9,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { crewApi, CREW_AVATARS, LEVEL_CN, MODULE_CN, type CrewSettings } from '@/api/digitalCrew';
 
+// reka-ui 不允许空字符串作选项值，「不给入口」在下拉里用哨兵值，读写后端时映射回 ''/null
+const NO_ENTRY = '__none__';
 const auth = useAuthStore();
 const s = ref<CrewSettings | null>(null);
 const error = ref('');
@@ -22,7 +24,7 @@ const saving = ref(false);
 function fill(v: CrewSettings) {
   s.value = v;
   for (const m of v.members) draft[m.key] = m.enabled;
-  for (const [r, k] of Object.entries(v.roleMapping)) mapDraft[r] = k || '';
+  for (const [r, k] of Object.entries(v.roleMapping)) mapDraft[r] = k || NO_ENTRY;
 }
 async function load() {
   if (!auth.factoryId) return;
@@ -33,9 +35,10 @@ async function load() {
 onMounted(load);
 watch(() => auth.factoryId, load);
 
+const draftKey = (r: string) => (mapDraft[r] === NO_ENTRY ? '' : mapDraft[r] || '');
 const dirty = computed(() => !!s.value && s.value.members.some((m) => draft[m.key] !== m.enabled));
-const mapDirty = computed(() => !!s.value && Object.entries(s.value.roleMapping).some(([r, k]) => (mapDraft[r] || '') !== (k || '')));
-const memberItems = computed(() => [{ label: '不给入口', value: '' }, ...(s.value?.members || []).map((m) => ({ label: m.name, value: m.key }))]);
+const mapDirty = computed(() => !!s.value && Object.entries(s.value.roleMapping).some(([r, k]) => draftKey(r) !== (k || '')));
+const memberItems = computed(() => [{ label: '不给入口', value: NO_ENTRY }, ...(s.value?.members || []).map((m) => ({ label: m.name, value: m.key }))]);
 
 async function saveMembers() {
   saving.value = true; error.value = ''; notice.value = '';
@@ -51,7 +54,7 @@ async function saveMapping() {
   saving.value = true; error.value = ''; notice.value = '';
   try {
     const changed = Object.fromEntries(Object.entries(s.value!.roleMapping)
-      .filter(([r, k]) => (mapDraft[r] || '') !== (k || '')).map(([r]) => [r, mapDraft[r] || null]));
+      .filter(([r, k]) => draftKey(r) !== (k || '')).map(([r]) => [r, draftKey(r) || null]));
     fill(await crewApi.updateRoleMapping(auth.factoryId!, changed, mapReason.value.trim()));
     mapReason.value = '';
     notice.value = '已保存并回读岗位对应';
