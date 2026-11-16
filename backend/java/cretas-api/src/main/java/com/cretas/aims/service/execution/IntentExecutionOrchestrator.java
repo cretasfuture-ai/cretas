@@ -3153,6 +3153,12 @@ public class IntentExecutionOrchestrator {
      * 意图权限与一线受众逐个核过才出; 业务候选为 0 时只有「重新描述」(明确失败), 不再回落未过滤的
      * 识别候选或默认业务按钮 (INTENT-DISTILL D2)。
      */
+    private List<IntentExecuteResponse.SuggestedAction> buildCandidateActions(IntentMatchResult matchResult,
+                                                                          String factoryId, Long userId,
+                                                                          String userRole, String mode) {
+        return clarify(matchResult, factoryId, userId, userRole, mode).actions();
+    }
+
     private ClarificationCandidateService.Clarification clarify(IntentMatchResult matchResult,
                                                                 String factoryId, Long userId,
                                                                 String userRole, String mode) {
