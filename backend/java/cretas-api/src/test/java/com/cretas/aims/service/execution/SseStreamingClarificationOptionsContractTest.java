@@ -259,7 +259,7 @@ class SseStreamingClarificationOptionsContractTest {
                 .filter(event -> "complete".equals(event.name()))
                 .map(event -> (Map<String, Object>) event.data())
                 .findFirst().orElseThrow();
-        assertThat(result.getMessage()).isEqualTo("当前没有可安全提供的业务选项，请重新描述您的需求。");
+        assertThat(result.getMessage()).isEqualTo(ClarificationCandidateService.NO_CANDIDATE_MESSAGE);
         assertThat(result.getSuggestedActions()).extracting(IntentExecuteResponse.SuggestedAction::getActionCode)
                 .containsExactly("REPHRASE");
         assertThat(result.getMessage()).doesNotContain("OLD_FORGED_NAME");
