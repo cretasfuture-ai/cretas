@@ -103,6 +103,9 @@ class StreamTurnCollectorEntryParityContractTest {
     private static final String REPORT_WORK_INTENT = "WORK_PROCESS_TASK_COMPLETE";
     private static final String REPORT_WORK_TOOL = "work_process_task_complete";
     private static final String NO_TOOL_INTENT = "DAILY_CUSTOMER_FOLLOWUP";
+    /** 本人这一页的会话 (Web / App 都带); 不带 sessionId 的 /execute 留原分支, 见 sessionlessExecuteDoesNotJoinTheAppSession。 */
+    private static final String SESSION = "web-session-1";
+    private static final String APP_SESSION = "app-session-1";
     private static final String CHAT_REPLY = "降低成本可以从优化采购批量、减少损耗、提高设备稼动率入手。";
 
     // ------------------------------------------------------------------ 对齐: 同句两入口同状态
@@ -246,6 +249,8 @@ class StreamTurnCollectorEntryParityContractTest {
                     .as("账号绑定的不是这家工厂").isEqualTo(StreamTurnCollector.Route.LEGACY_NOT_FACTORY_ACTOR);
             assertThat(collector.route(FACTORY, req("怎么降低成本？"), USER))
                     .as("阳性对照: 对齐类走流式").isEqualTo(StreamTurnCollector.Route.STREAM);
+            assertThat(collector.route(FACTORY, IntentExecuteRequest.builder().userInput("怎么降低成本？").build(), USER))
+                    .as("没带 sessionId").isEqualTo(StreamTurnCollector.Route.LEGACY_SESSIONLESS);
             assertThat(collector.route(FACTORY, req("库存查询"), USER))
                     .as("短语快捷会接的句子不看早期问题类型").isEqualTo(StreamTurnCollector.Route.STREAM);
         }
@@ -333,12 +338,140 @@ class StreamTurnCollectorEntryParityContractTest {
         IntentExecuteResponse shown = h.sendThroughFacade(req(input));
         assertThat(h.streamRuns()).isEqualTo(1);
         assertThat(shown.getStatus()).isEqualTo("FAILED");
+        assertThat(shown.getMessage()).as("带上 error 事件里的说明 (#1782 低-3)").isNotBlank()
+                .doesNotContain("boom").doesNotContain("IllegalStateException");
+        assertThat(h.auditRefs()).as("error 出口审计恰好一条 (#1782 低-5)").containsExactly("ai:intent-execution");
+    }
+
+    @Test
+    @DisplayName("中-1: 不带 sessionId 的 /execute 不接上 App 正在问参数的那一轮 (「100」不被当成报工那一问的回答)")
+    void sessionlessExecuteDoesNotJoinTheAppSession() throws Exception {
+        Harness h = new Harness(Entry.EXECUTE);
+        h.useRealSessionServices();
+        // App 那边: 本人最近一次活跃会话 = app-session-1, 且正停在报工的缺参追问上
+        com.cretas.aims.entity.conversation.ConversationMemory appMemory =
+                com.cretas.aims.entity.conversation.ConversationMemory.builder()
+                        .factoryId(FACTORY).userId(USER).sessionId(APP_SESSION).build();
+        appMemory.setLastActiveAt(java.time.LocalDateTime.now());
+        when(h.memoryRepository.findLatestActiveByFactoryIdAndUserId(FACTORY, USER)).thenReturn(Optional.of(appMemory));
+        when(h.memoryRepository.findBySessionId(APP_SESSION)).thenReturn(Optional.of(appMemory));
+        com.cretas.aims.entity.conversation.ConversationSession pending =
+                mock(com.cretas.aims.entity.conversation.ConversationSession.class);
+        when(pending.getSessionId()).thenReturn(APP_SESSION);
+        when(pending.isParameterCollectionMode()).thenReturn(true);
+        when(pending.getStatus()).thenReturn(com.cretas.aims.entity.conversation.ConversationSession.SessionStatus.ACTIVE);
+        when(h.sessionRepository.findBySessionIdAndFactoryIdAndUserId(APP_SESSION, FACTORY, USER))
+                .thenReturn(Optional.of(pending));
+        org.mockito.Mockito.doReturn(QuestionType.OPERATIONAL_COMMAND).when(h.knowledgeBase).detectQuestionType("100");
+
+        IntentExecuteResponse shown = h.sendThroughFacade(IntentExecuteRequest.builder().userInput("100").build());
+
+        assertThat(h.streamRuns()).as("没带 sessionId 留原分支").isZero();
+        assertThat(h.orchestratorExecuteCalls()).isEqualTo(1);
+        assertThat(invocationsOf(h.memoryRepository, "findLatestActiveByFactoryIdAndUserId"))
+                .as("没去找本人最近一次会话").isZero();
+        assertThat(invocationsOf(h.sessionRepository, "findBySessionIdAndFactoryIdAndUserId"))
+                .as("App 那一轮的缺参会话一次都没被读").isZero();
+        assertThat(org.mockito.Mockito.mockingDetails(pending).getInvocations().stream()
+                .filter(i -> i.getMethod().getName().startsWith("set") || i.getMethod().getName().startsWith("add"))
+                .count()).as("也没被改").isZero();
+        assertThat(shown.getSessionId()).isNotEqualTo(APP_SESSION);
+
+        // 阳性对照: 同样的会话服务, 带着本页 sessionId 的 /execute 走流式, 会去读这一页的缺参会话 (仪器是活的)
+        Harness sessionful = new Harness(Entry.EXECUTE);
+        sessionful.useRealSessionServices();
+        org.mockito.Mockito.doReturn(QuestionType.OPERATIONAL_COMMAND).when(sessionful.knowledgeBase).detectQuestionType("100");
+        sessionful.sendThroughFacade(req("100"));
+        assertThat(sessionful.streamRuns()).isEqualTo(1);
+        assertThat(invocationsOf(sessionful.sessionRepository, "findBySessionIdAndFactoryIdAndUserId"))
+                .as("带 sessionId 时确实会读会话").isPositive();
+    }
+
+    @Test
+    @DisplayName("低-2: /execute 走流式时对话记忆记的是用户看到的那句 (文字兜底之后), 同原分支")
+    void conversationMemoryRecordsTheShownAnswer() throws Exception {
+        String input = "看下经营概况";
+        String answer = "本月销售额 ¥35,000，出货 1200 箱，环比增长 3 个百分点。";
+        Map<Entry, Harness> runs = runAll(h -> {
+            h.recordMemory();
+            h.toolReturns(IntentExecuteResponse.builder().intentRecognized(true).intentCode(READ_INTENT)
+                    .status("SUCCESS").message("操作已完成。").formattedText(answer).build());
+            h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.readIntent)
+                    .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                    .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+        }, IntentExecuteRequest.builder().userInput(input).build());
+
+        for (Entry entry : new Entry[] {Entry.EXECUTE, Entry.LEGACY}) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getMessage()).as(entry + " 返回").isEqualTo(answer);
+            assertThat(h.assistantMemory()).as(entry + " 记忆里的助手那句 == 返回 message").containsExactly(answer);
+        }
+    }
+
+    @Test
+    @DisplayName("低-5: 在 HTTP 请求线程上 (审计挂在请求上, 请求结束时写): /execute 走流式仍恰好一条 INTENT_EXECUTION")
+    void auditAttachedToTheRequestIsWrittenOnceWhenTheRequestEnds() throws Exception {
+        Harness h = new Harness(Entry.EXECUTE);
+        String input = "看下经营概况";
+        h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.readIntent)
+                .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+        org.springframework.mock.web.MockHttpServletRequest http = new org.springframework.mock.web.MockHttpServletRequest();
+        http.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE, h.actor());
+        org.springframework.web.context.request.ServletRequestAttributes attributes =
+                new org.springframework.web.context.request.ServletRequestAttributes(http);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(attributes);
+        IntentExecuteResponse shown;
+        try {
+            shown = h.sendThroughFacade(req(input));
+            assertThat(h.streamRuns()).as("请求线程上同样走流式").isEqualTo(1);
+            assertThat(h.auditRefs()).as("请求还没结束: 挂着, 没写").isEmpty();
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            attributes.requestCompleted();
+        }
+        assertThat(shown.getStatus()).isEqualTo("SUCCESS");
+        assertThat(h.auditRefs()).as("请求结束写恰好一条").containsExactly("ai:intent-execution");
+    }
+
+    @Test
+    @DisplayName("低-1: 取回后的文字兜底 (workdesk 摘要会调模型) 在按本厂脱敏的外发作用域内")
+    void ordinaryTextFallbackRunsInsideTheEgressScope() throws Exception {
+        Harness h = new Harness(Entry.EXECUTE);
+        String input = "怎么降低成本？";
+        org.mockito.Mockito.doReturn(QuestionType.OPERATIONAL_COMMAND).when(h.knowledgeBase).detectQuestionType(input);
+        h.chatReplies(CHAT_REPLY);
+        h.recognizerAnswers(IntentMatchResult.builder().userInput(input)
+                .matchMethod(IntentMatchResult.MatchMethod.NONE).confidence(0.0)
+                .questionType(QuestionType.GENERAL_QUESTION).build());
+        List<Object> egressFactoryAtSummary = new ArrayList<>();
+        WorkdeskOutputSummarizer summarizer = mock(WorkdeskOutputSummarizer.class);
+        @SuppressWarnings("unchecked")
+        ThreadLocal<String> analysed = (ThreadLocal<String>) ReflectionTestUtils.getField(
+                com.cretas.aims.service.consent.LlmEgressGuard.class, "ANALYSED_FACTORY");
+        doAnswer(inv -> {
+            egressFactoryAtSummary.add(String.valueOf(analysed.get()));
+            return null;
+        }).when(summarizer).apply(any(), anyString());
+        h.workdeskSummarizer = summarizer;
+
+        IntentExecuteResponse shown = h.sendThroughFacade(req(input));
+
+        assertThat(shown.getStatus()).isEqualTo("COMPLETED");
+        assertThat(h.streamRuns()).isEqualTo(1);
+        assertThat(egressFactoryAtSummary).as("摘要被调用, 且当时外发按本厂脱敏").containsExactly(FACTORY);
+        assertThat(analysed.get()).as("作用域结束后还原").isNull();
+    }
+
+    private static long invocationsOf(Object mock, String method) {
+        return org.mockito.Mockito.mockingDetails(mock).getInvocations().stream()
+                .filter(i -> method.equals(i.getMethod().getName())).count();
     }
 
     // ------------------------------------------------------------------ helpers
 
     private static IntentExecuteRequest req(String input) {
-        return IntentExecuteRequest.builder().userInput(input).build();
+        return IntentExecuteRequest.builder().userInput(input).sessionId(SESSION).build();
     }
 
     private static Map<Entry, Harness> runAll(Consumer<Harness> setup, IntentExecuteRequest request) throws Exception {
@@ -355,7 +488,7 @@ class StreamTurnCollectorEntryParityContractTest {
     private static IntentExecuteRequest copy(IntentExecuteRequest r) {
         return IntentExecuteRequest.builder().userInput(r.getUserInput()).intentCode(r.getIntentCode())
                 .mode(r.getMode()).forceExecute(r.getForceExecute()).previewOnly(r.getPreviewOnly())
-                .sessionId(r.getSessionId()).build();
+                .sessionId(r.getSessionId() != null ? r.getSessionId() : SESSION).build();
     }
 
     private static void assertSameStatusAndIntent(Map<Entry, Harness> runs, String expectedStatus) {
@@ -394,12 +527,21 @@ class StreamTurnCollectorEntryParityContractTest {
         final com.cretas.aims.service.SlotFillingService slotFilling = mock(com.cretas.aims.service.SlotFillingService.class);
         final ChatBusinessFactGuard guard = new ChatBusinessFactGuard();
         final ConversationServiceImpl conversations;
+        final ConversationSessionRepository sessionRepository = mock(ConversationSessionRepository.class);
+        final com.cretas.aims.repository.conversation.ConversationMemoryRepository memoryRepository =
+                mock(com.cretas.aims.repository.conversation.ConversationMemoryRepository.class);
+        /** 编排器用的对话记忆 (默认桩, 什么也不记); useRealSessionServices 换成真实实现。 */
+        ConversationMemoryService memory = mock(ConversationMemoryService.class);
+        /** 流式用的对话记忆; null = 与改动前的裸构造一致。 */
+        ConversationMemoryService streamMemory;
+        final List<String> memoryWrites = new ArrayList<>();
         final List<String> executedIntents = new ArrayList<>();
         final AIIntentConfig readIntent;
         final AIIntentConfig writeIntent;
         final AIIntentConfig approvalIntent;
         final AIIntentConfig noToolIntent;
         IntentExecuteResponse toolResult;
+        WorkdeskOutputSummarizer workdeskSummarizer;
         IntentExecuteResponse shown;
         IntentExecutionOrchestrator orchestrator;
         SseStreamingService sse;
@@ -407,7 +549,7 @@ class StreamTurnCollectorEntryParityContractTest {
         Harness(Entry entry) {
             this.entry = entry;
             knowledgeBase.initDefaults();
-            conversations = new ConversationServiceImpl(mock(ConversationSessionRepository.class),
+            conversations = new ConversationServiceImpl(sessionRepository,
                     mock(AIIntentConfigRepository.class), null, mock(DashScopeClient.class));
             ReflectionTestUtils.setField(conversations, "maxRounds", 5);
             ReflectionTestUtils.setField(conversations, "timeoutMinutes", 10);
@@ -506,6 +648,33 @@ class StreamTurnCollectorEntryParityContractTest {
             }).when(llm).chatCompletionStream(any(), any(), any());
         }
 
+        /** 真实的会话记忆 / 会话服务 (只桩仓库那一层), 编排器与流式共用。 */
+        void useRealSessionServices() {
+            ConversationMemoryService real = new com.cretas.aims.service.impl.ConversationMemoryServiceImpl(
+                    memoryRepository, mock(DashScopeClient.class));
+            when(memoryRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+            memory = real;
+            streamMemory = real;
+        }
+
+        /** 编排器的会话记忆: 本人本页会话存在, 助手那句记进 memoryWrites。 */
+        void recordMemory() {
+            when(memory.getOrCreateContext(FACTORY, USER, SESSION)).thenReturn(
+                    com.cretas.aims.dto.conversation.ConversationContext.builder()
+                            .sessionId(SESSION).factoryId(FACTORY).userId(USER).build());
+            doAnswer(inv -> {
+                com.cretas.aims.dto.conversation.ConversationMessage m = inv.getArgument(1);
+                if (m.getRole() == com.cretas.aims.dto.conversation.ConversationMessage.Role.ASSISTANT) {
+                    memoryWrites.add(m.getContent());
+                }
+                return null;
+            }).when(memory).addMessage(eq(SESSION), any());
+        }
+
+        List<String> assistantMemory() {
+            return memoryWrites;
+        }
+
         AuthenticatedActor actor() {
             return new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE);
         }
@@ -602,7 +771,7 @@ class StreamTurnCollectorEntryParityContractTest {
         private IntentExecutionOrchestrator ordinary() {
             IntentExecutionOrchestrator o = new IntentExecutionOrchestrator(
                     recognizer, mock(IntentSemanticsParser.class), semanticCache,
-                    ruleEngine, conversations, mock(ConversationMemoryService.class),
+                    ruleEngine, conversations, memory,
                     new ObjectMapper(), llm, llmConfig,
                     knowledgeBase, mock(AIAnalysisResultRepository.class), toolRegistry,
                     mock(AnalysisRouterService.class), mock(ComplexityRouter.class), mock(AgentOrchestrator.class),
@@ -617,6 +786,9 @@ class StreamTurnCollectorEntryParityContractTest {
             ReflectionTestUtils.setField(o, "slotFillingService", slotFilling);
             ReflectionTestUtils.setField(o, "validationEnabled", true);
             ReflectionTestUtils.setField(o, "aiAccessAudit", audit);
+            if (workdeskSummarizer != null) {
+                ReflectionTestUtils.setField(o, "workdeskOutputSummarizer", workdeskSummarizer);
+            }
             BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
             when(businessTypeGate.check(anyString(), any())).thenReturn(Optional.empty());
             ReflectionTestUtils.setField(o, "businessTypeGate", businessTypeGate);
@@ -646,6 +818,9 @@ class StreamTurnCollectorEntryParityContractTest {
             ReflectionTestUtils.setField(s, "resultFormatterService", formatter);
             ReflectionTestUtils.setField(s, "priceView", priceView);
             ReflectionTestUtils.setField(s, "slotFillingService", slotFilling);
+            if (streamMemory != null) {
+                ReflectionTestUtils.setField(s, "conversationMemoryService", streamMemory);
+            }
             return spy(s);
         }
     }

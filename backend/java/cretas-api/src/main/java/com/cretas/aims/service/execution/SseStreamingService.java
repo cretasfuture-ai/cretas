@@ -1133,7 +1133,11 @@ public class SseStreamingService {
         }
         IntentExecutionOrchestrator ordinarySteps = ordinaryEntryStepsForThisTurn();
         if (ordinarySteps != null) {
-            // 普通入口那一轮: 执行过的一轮照原普通入口写对话记忆 (任何状态 + 实体槽, 含同一份 readQuery/翻页元数据),
+            // 普通入口那一轮: 先做原普通入口的文字兜底 (反向兜底 / workdesk 摘要), 记忆里记的才是用户看到的那句
+            // (#1782 终审 低-2); 取回后不再做第二遍
+            ordinarySteps.applyOrdinaryEntryTextFallback(factoryId, response, userId);
+            StreamTurnCollector.markTextFallbackApplied();
+            // 执行过的一轮照原普通入口写对话记忆 (任何状态 + 实体槽, 含同一份 readQuery/翻页元数据),
             // 不再另写流式的「只记成功的只读翻页」, 免得同一轮记两遍 —— PR-2b C 类 #12
             ordinarySteps.recordExecutedTurnMemory(factoryId, request, response, matchResult, userId);
         } else {
@@ -1189,7 +1193,7 @@ public class SseStreamingService {
 
     /** 一轮跑完后取回的东西: 最后一个 result、complete 状态、路由定下的意图码、是否走了 error 出口。 */
     record CollectedTurn(IntentExecuteResponse result, String completeStatus, String resolvedIntentCode,
-                         boolean errorExit) {
+                         boolean errorExit, String errorMessage) {
     }
 
     /**
@@ -1203,12 +1207,13 @@ public class SseStreamingService {
         IntentExecuteResponse result = lastStreamedResult.remove(emitter);
         String completeStatus = streamedCompleteStatus.remove(emitter);
         String resolvedIntent = streamedIntentCode.remove(emitter);
-        boolean errorExit = Boolean.TRUE.equals(erroredEmitters.remove(emitter));
-        return new CollectedTurn(result, completeStatus, resolvedIntent, errorExit);
+        String errorMessage = erroredEmitters.remove(emitter);
+        return new CollectedTurn(result, completeStatus, resolvedIntent, errorMessage != null,
+                errorMessage == null || errorMessage.isEmpty() ? null : errorMessage);
     }
 
-    /** 走了 error 出口的 emitter (sendSseEvent 记)。 */
-    private final Map<SseEmitter, Boolean> erroredEmitters =
+    /** 走了 error 出口的 emitter → error 事件里的 message (没有则空串; sendSseEvent 记)。 */
+    private final Map<SseEmitter, String> erroredEmitters =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
 
     /** 短语快捷通道会不会接这句 (只读判定, 与管线 1.4 同一个方法)。 */
@@ -2181,7 +2186,9 @@ public class SseStreamingService {
             // The run ended in the error exit without ever sending a result: still a (failed) run.
             lastStreamedResult.putIfAbsent(emitter, IntentExecuteResponse.builder().status("FAILED").build());
             if (emitter instanceof StreamTurnCollector.CollectingEmitter) {
-                erroredEmitters.put(emitter, Boolean.TRUE); // 普通入口要知道这一轮走的是 error 出口
+                // 普通入口要知道这一轮走的是 error 出口, 以及要给用户看的那句说明
+                Object message = data instanceof Map<?, ?> error ? error.get("message") : null;
+                erroredEmitters.put(emitter, message instanceof String text ? text : "");
             }
         }
         try {

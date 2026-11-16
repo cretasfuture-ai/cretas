@@ -32,6 +32,7 @@ import java.util.Objects;
  *   <li>预览 → 原分支 (预览不走本类, 这里再兜一次);</li>
  *   <li>显式意图码 (按钮点选 / 参数确认后执行) → 原分支: 原普通入口显式路径先出写确认卡再判审批 (#17);</li>
  *   <li>调用者不是绑定本厂本人的工厂账号 (演示会话、平台账号、公开演示) → 原分支: 流式只认工厂账号 (#15/#18);</li>
+ *   <li>没带 sessionId → 原分支: 流式会接上本人最近一次 (App) 会话, 把独立一问当成那一轮的续句 (#1782 终审 中-1);</li>
  *   <li>否定说法 (「别查库存了」「不要报工」) → 原分支: 原普通入口在续轮 / 恢复之前就拦 (#9);</li>
  *   <li>短语快捷不接、早期问题类型是通用咨询 / 闲聊 → 原分支: 分析流、复杂度路由、多代理、食品知识、
  *       RAG 路由只在原普通入口有 (#16)。</li>
@@ -52,6 +53,7 @@ public class StreamTurnCollector {
         LEGACY_PREVIEW,
         LEGACY_EXPLICIT_INTENT,
         LEGACY_NOT_FACTORY_ACTOR,
+        LEGACY_SESSIONLESS,
         LEGACY_NEGATION,
         LEGACY_EARLY_GENERAL;
 
@@ -60,11 +62,25 @@ public class StreamTurnCollector {
         }
     }
 
-    private static final ThreadLocal<Boolean> COLLECTING = new ThreadLocal<>();
+    /** 普通入口经流式管线的这一轮的线程内状态。 */
+    private static final class TurnState {
+        boolean textFallbackApplied;
+    }
+
+    private static final ThreadLocal<TurnState> COLLECTING = new ThreadLocal<>();
 
     /** 本线程上正在跑的这一轮是普通入口 (/execute) 经流式管线。 */
     public static boolean collectingOnCurrentThread() {
-        return Boolean.TRUE.equals(COLLECTING.get());
+        return COLLECTING.get() != null;
+    }
+
+    /**
+     * 流式管线在执行分支里已对这一轮做过原普通入口的文字兜底 (要在写对话记忆之前做, 记忆里记的才是用户看到的那句);
+     * 取回后不再做第二遍 (workdesk 摘要会再调一次模型)。
+     */
+    static void markTextFallbackApplied() {
+        TurnState state = COLLECTING.get();
+        if (state != null) state.textFallbackApplied = true;
     }
 
     private final SseStreamingService sseStreamingService;
@@ -110,6 +126,12 @@ public class StreamTurnCollector {
         if (userId == null || !factoryActor) {
             return Route.LEGACY_NOT_FACTORY_ACTOR;
         }
+        // 没带 sessionId: 流式会经 establishOwnedSession → getOrCreateContext(sessionId=null) 接上本人最近一次会话
+        // (App 的那一个), 识别历史 / 缺参续轮 / 任务恢复 / 对话记忆都会落到那一轮上 —— 「100」会被当成 App 里报工那一问的回答。
+        // 原普通入口无 sessionId 就是独立一问, 留原分支 (#1782 终审 中-1)。
+        if (request.getSessionId() == null || request.getSessionId().isBlank()) {
+            return Route.LEGACY_SESSIONLESS;
+        }
         String input = request.getUserInput();
         if (input == null || input.isBlank()) {
             return Route.STREAM;
@@ -146,33 +168,41 @@ public class StreamTurnCollector {
      */
     public IntentExecuteResponse collect(String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
         CollectingEmitter emitter = new CollectingEmitter();
-        SseStreamingService.CollectedTurn turn;
-        Boolean previous = COLLECTING.get();
+        TurnState previous = COLLECTING.get();
+        TurnState state = new TurnState();
+        // 收尾 (文字兜底里的 workdesk 摘要会调模型) 也在脱敏外发 + 审计作用域内 (#1782 终审 低-1)
         try (var egressFactory = LlmEgressGuard.analysing(factoryId);
              var aiAccess = ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
-            COLLECTING.set(Boolean.TRUE);
-            turn = sseStreamingService.runOnCurrentThread(emitter, factoryId, request, userId, userRole);
+            COLLECTING.set(state);
+            SseStreamingService.CollectedTurn turn =
+                    sseStreamingService.runOnCurrentThread(emitter, factoryId, request, userId, userRole);
+            IntentExecuteResponse response = turn.result();
+            if (response == null || (turn.errorExit() && "FAILED".equals(response.getStatus())
+                    && response.getMessage() == null)) {
+                // 没发出 result 就结束 (error 出口 / 中途断): 如实失败, ⛔ 不兜成成功; 带上 error 事件里的说明 (已消毒)
+                log.warn("[execute-via-stream] 流式管线未给出回答: factoryId={}, completeStatus={}, errorExit={}",
+                        factoryId, turn.completeStatus(), turn.errorExit());
+                String message = turn.errorMessage() == null || turn.errorMessage().isBlank()
+                        ? null : com.cretas.aims.util.ErrorSanitizer.sanitize(turn.errorMessage());
+                return IntentExecuteResponse.builder()
+                        .intentRecognized(false)
+                        .intentCode(turn.resolvedIntentCode())
+                        .status("FAILED")
+                        .message(message)
+                        .formattedText(message)
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+            if (!state.textFallbackApplied) {
+                orchestrator.applyOrdinaryEntryTextFallback(factoryId, response, userId);
+            }
+            orchestrator.applyUnselectedAnswerReadStamp(response);
+            return response;
         } finally {
             if (previous == null) COLLECTING.remove();
             else COLLECTING.set(previous);
         }
-        IntentExecuteResponse response = turn.result();
-        if (response == null || (turn.errorExit() && "FAILED".equals(response.getStatus())
-                && response.getMessage() == null)) {
-            // 没发出 result 就结束 (error 出口 / 中途断): 如实失败, ⛔ 不兜成成功
-            log.warn("[execute-via-stream] 流式管线未给出回答: factoryId={}, completeStatus={}, errorExit={}",
-                    factoryId, turn.completeStatus(), turn.errorExit());
-            return IntentExecuteResponse.builder()
-                    .intentRecognized(false)
-                    .intentCode(turn.resolvedIntentCode())
-                    .status("FAILED")
-                    .executedAt(LocalDateTime.now())
-                    .build();
-        }
-        orchestrator.applyOrdinaryEntryTextFallback(factoryId, response, userId);
-        orchestrator.applyUnselectedAnswerReadStamp(response);
-        return response;
     }
 
     /** 只收不发的 emitter: 流式管线照常 send / complete, 内容由 {@link SseStreamingService} 记下的读数取回。 */
