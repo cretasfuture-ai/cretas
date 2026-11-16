@@ -23,6 +23,8 @@ import { describe, expect, it } from 'vitest';
  * 而现场表现只是「数量怎么自己变成 1 了」, 没人会怀疑到一个输入框属性上。
  */
 const source = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
+// 快速发货的发货行构造已抽到 deliveryPricePayload.ts (单价缺失不发 0), 数量口径断言读它。
+const builderSource = readFileSync(resolve(__dirname, '..', 'deliveryPricePayload.ts'), 'utf8');
 
 /**
  * 「计划发货数量」表单项到下一个 form-item 之间的片段, <b>已剥掉 HTML 注释</b>。
@@ -57,7 +59,7 @@ describe('创建发货单 · 计划发货数量', () => {
 
   it('③ 有上限, 且上限来自订单行下单量 (否则能随手填出必然 409 的数)', () => {
     expect(planQuantityBlock()).toMatch(/:max="item\.maxQuantity"/);
-    expect(source, 'maxQuantity 必须在构造 items 时按下单量填好')
+    expect(builderSource, 'maxQuantity 必须在构造 items 时按下单量填好')
       .toContain('maxQuantity: Number(item.quantity) > 0 ? Number(item.quantity) : undefined');
   });
 
@@ -66,7 +68,7 @@ describe('创建发货单 · 计划发货数量', () => {
    * 断言它没被改成「取整」之类的「顺手修复」。
    */
   it('④ 预填仍然是订单行原值, 不做任何取整', () => {
-    expect(source).toContain('deliveredQuantity: item.quantity || 0,');
+    expect(builderSource).toContain('deliveredQuantity: item.quantity || 0,');
   });
 });
 

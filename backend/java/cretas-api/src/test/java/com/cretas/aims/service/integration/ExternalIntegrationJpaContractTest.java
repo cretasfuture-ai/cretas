@@ -79,7 +79,12 @@ class ExternalIntegrationJpaContractTest {
 
     @BeforeEach
     void fixedClock() {
-        service.clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        // service 是 @Transactional 的 CGLIB 代理: 往代理上写字段, 真正干活的目标对象仍用系统时钟,
+        // 夹具时点一过 STALE_HOURS (36h) 断言就会翻红 (2026-11-16 20:01 北京时间起)。必须写到目标对象上。
+        ExternalIntegrationService target = org.springframework.test.util.AopTestUtils.getTargetObject(service);
+        target.clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        // 证明固定时钟真的生效: 用系统时钟时, NOW 这个时点在 36h 后会被算成过期
+        assertThat(target.isStale(java.time.LocalDateTime.ofInstant(NOW, ZoneOffset.UTC))).isFalse();
     }
 
     private String authorize(String factoryId) {
