@@ -8,7 +8,8 @@ const profitSource = readFileSync(resolve(import.meta.dirname, '../profit-detail
 
 describe('sales order detail display-unit contract', () => {
   it('renders canonical order and delivery units through displayUnit', () => {
-    expect(detailSource).toContain('{{ displayUnit(row.unit) }}');
+    expect(detailSource).toContain('{{ displayUnit(row.original.unit) }}');
+    expect(detailSource).toContain("accessorFn: (r) => displayUnit(r.unit) || '—'");
     expect(detailSource).toContain('{{ item.deliveredQuantity }}{{ displayUnit(item.unit) }}');
     expect(detailSource).toContain('{{ row.availableQuantity }}{{ displayUnit(row.unit || item.unit) }}');
     expect(detailSource).not.toContain('<el-table-column prop="unit" label="单位"');
@@ -16,7 +17,7 @@ describe('sales order detail display-unit contract', () => {
 
   it('keeps source-warehouse payload canonical while rendering the configured warehouse name', () => {
     expect(detailSource).toContain('sourceWarehouseCode: it.sourceWarehouseCode ||');
-    expect(detailSource).toContain('sourceWarehouseLabel(row.sourceWarehouseCode)');
+    expect(detailSource).toContain('sourceWarehouseLabel(r.sourceWarehouseCode)');
   });
 
   it('covers subsequent quick-delivery and profit displays without changing payload values', () => {
@@ -37,8 +38,9 @@ describe('sales order detail display-unit contract', () => {
 
   it('shows actionable shipment badge, localized audit time and explicit historical tracking gaps', () => {
     expect(detailSource).toContain('actionableDeliveries');
-    expect(detailSource).toContain('neutral-record-count');
-    expect(detailSource).toContain(':timestamp="formatBusinessDateTime(node.time)"');
+    // 无待处理时只在页签名后挂中性计数「（n）」, 有待处理才挂徽标
+    expect(detailSource).toContain("!actionableDeliveries.value && deliveries.value.length ? `（${deliveries.value.length}）` : ''");
+    expect(detailSource).toContain('{{ formatBusinessDateTime(node.time) }}');
     expect(detailSource).toContain("'系统自动审批'");
     expect(detailSource).toContain('未填写（历史数据）');
     expect(detailSource).toContain('shipmentForm.deliveryMethod');

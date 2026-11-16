@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, nextTick } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -18,7 +18,9 @@ import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import { useCreateAndReturn } from '@/composables/useCreateAndReturn';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { confirmPackagingConversion, mismatchConfirmLines } from '@/views/sales/packagingConversion';
-import { ArrowLeft } from '@element-plus/icons-vue';
+import CsDateField from '@/components/cs/CsDateField.vue';
+import { badgeColor, type CsBadgeColor, type ElementTagType } from '@/utils/csBadge';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { formatAmount } from '@/utils/tableFormatters';
 import { displayUnit } from '@/utils/unitPricing';
 import { handleCatchError } from '@/utils/errorToast';
@@ -482,6 +484,212 @@ const orderTransportStatusMap: Record<string, { text: string; type: string }> = 
   PARTIALLY_RECEIVED: { text: '部分签收', type: 'warning' },
   RECEIVED: { text: '已签收', type: 'success' },
 };
+
+// ── Nuxt UI 版: 徽标映射 / 表格列 / 页签 / 选项 ──────────────────────────────────
+type StatusMapEntry = { text: string; type: string };
+/** 状态码 → 徽标色; type 为 '' 的是默认蓝 (primary), 查不到的走 fallback。 */
+function mapColor(map: Record<string, StatusMapEntry>, key: unknown, fallback: CsBadgeColor = 'neutral'): CsBadgeColor {
+  const hit = map[String(key ?? '')];
+  return hit ? badgeColor((hit.type || 'primary') as ElementTagType) : fallback;
+}
+/** 状态码 → 中文; 查不到只显示「未知状态」, 不把后端枚举原文露给用户。 */
+function mapText(map: Record<string, StatusMapEntry>, key: unknown): string {
+  return map[String(key ?? '')]?.text ?? '未知状态';
+}
+
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const C = { class: { th: 'text-center', td: 'text-center' } };
+const QTY3 = { minimumFractionDigits: 0, maximumFractionDigits: 3 };
+const DELIVERY_METHOD_ITEMS = [
+  { label: '物流配送', value: 'LOGISTICS' },
+  { label: '自送', value: 'SELF_DELIVERY' },
+  { label: '客户自提', value: 'SELF_PICKUP' },
+];
+const DELIVERY_MODE_ITEMS = [
+  { label: '一次性全量发货（自动建一张全量子单）', value: 'FULL' },
+  { label: '分批发货（后续逐批建子单）', value: 'PARTIAL' },
+];
+const PAYMENT_METHOD_ITEMS = [
+  { label: '银行转账', value: 'BANK_TRANSFER' },
+  { label: '现金', value: 'CASH' },
+  { label: '支票', value: 'CHECK' },
+  { label: '微信', value: 'WECHAT' },
+  { label: '支付宝', value: 'ALIPAY' },
+  { label: '其他', value: 'OTHER' },
+];
+const RETURN_TYPE_ITEMS = [
+  { label: '有货退回 (入成品仓不良品区 → 完成时 AR 冲减)', value: 'goods' },
+  { label: '无食物退款 (审批立即 AR 冲减, 无库存动作)', value: 'refund' },
+];
+const RETURN_REASON_ITEMS = [...RETURN_REASON_OPTIONS];
+// URadioGroup 不收布尔值: 用字符串选项桥接 returnForm.withGoods
+const returnWithGoodsChoice = computed({
+  get: () => (returnForm.value.withGoods ? 'goods' : 'refund'),
+  set: (v: string) => { returnForm.value.withGoods = v === 'goods'; },
+});
+
+const tabItems = computed(() => {
+  const badge = (n: number) => (n > 0 ? { label: n > 99 ? '99+' : String(n), size: 'sm' as const, variant: 'soft' as const } : undefined);
+  return [
+    { label: '订单详情', value: 'detail', slot: 'detail' },
+    { label: '开票记录', value: 'invoice', slot: 'invoice', badge: badge(invoices.value.length) },
+    {
+      label: `${label('delivery')}记录${!actionableDeliveries.value && deliveries.value.length ? `（${deliveries.value.length}）` : ''}`,
+      value: 'delivery', slot: 'delivery', badge: badge(actionableDeliveries.value),
+    },
+    { label: '收款记录', value: 'payment', slot: 'payment', badge: badge(payments.value.length) },
+    ...(canViewLinkedPurchases.value
+      ? [{ label: '关联采购', value: 'purchase', slot: 'purchase', badge: badge(purchaseOrders.value.length) }]
+      : []),
+  ];
+});
+
+const reservationColumns: TableColumn<SalesOrderReservation>[] = [
+  { id: 'product', accessorFn: (r) => r.productName || r.productTypeId, header: '成品' },
+  { accessorKey: 'batchNumber', header: '精确批次' },
+  { id: 'reserved', header: '已预留数量', meta: R },
+  { id: 'state', header: '状态', meta: C },
+];
+const suppliedColumns: TableColumn<CustomerSuppliedMaterialRequirement>[] = [
+  { id: 'material', header: '物料分类 / 名称' },
+  { id: 'arrival', header: '预计到货' },
+  { id: 'warehouse', header: '目标仓库' },
+  { id: 'progress', header: '收货进度' },
+  { id: 'state', header: '状态' },
+];
+const itemColumns = computed<TableColumn<TableRow>[]>(() => {
+  const price = canViewPrice.value;
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { id: 'productName', accessorFn: (r) => r.productName || '—', header: label('product') },
+    { id: 'specification', accessorFn: (r) => r.specification || '—', header: '规格' },
+    { id: 'quantity', accessorFn: (r) => r.quantity ?? '—', header: '订单数量', meta: R },
+    { id: 'unit', accessorFn: (r) => displayUnit(r.unit) || '—', header: '单位', meta: C },
+    { id: 'boxQuantity', accessorFn: (r) => r.boxQuantity || '—', header: '箱数', meta: R },
+    price && { id: 'unitPrice', accessorFn: (r) => formatUnitPrice(r.unitPrice), header: '未税单价', meta: R },
+    price && { id: 'taxIncludedPrice', accessorFn: (r) => formatTaxIncludedUnitPrice(r), header: '含税单价', meta: R },
+    price && { id: 'priceSource', header: '价格来源' },
+    { id: 'taxRate', header: '税率', meta: C },
+    { id: 'delivered', accessorFn: (r) => r.deliveredQuantity || 0, header: '已发货', meta: R },
+    { id: 'sourceWarehouse', accessorFn: (r) => sourceWarehouseLabel(r.sourceWarehouseCode) || '—', header: '来源仓库' },
+    price && { id: 'lineAmount', header: '未税小计', meta: R },
+    price && { id: 'lineTaxIncluded', header: '含税小计', meta: R },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+const taxGroupColumns: TableColumn<{ taxRate: number; amount: number }>[] = [
+  { id: 'rate', header: '税率', meta: C },
+  { id: 'groupSum', header: '金额小计', meta: R },
+];
+const invoiceColumns = computed<TableColumn<TableRow>[]>(() => {
+  const price = canViewPrice.value;
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { accessorKey: 'invoiceNumber', header: '发票编号' },
+    { id: 'status', header: '状态', meta: C },
+    price && { id: 'amount', header: '不含税', meta: R },
+    price && { id: 'taxAmount', header: '税额', meta: R },
+    price && { id: 'totalAmount', header: '价税合计', meta: R },
+    price && { id: 'taxBreakdown', header: '税率分组' },
+    { id: 'requestedAt', accessorFn: (r) => r.requestedAt || '—', header: '申请时间' },
+    { id: 'actions', header: '操作', meta: C },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+const deliveryColumns = computed<TableColumn<TableRow>[]>(() => {
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { id: 'role', header: '层级' },
+    { accessorKey: 'deliveryNumber', header: '发货/发运单号' },
+    { id: 'deliveryDate', accessorFn: (r) => r.deliveryDate || '—', header: '发货日期' },
+    {
+      id: 'method', header: '配送方式',
+      accessorFn: (r) => ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '自提' } as Record<string, string>)[r.deliveryMethod] || (r.deliveryMethod ? '其他' : '未记录（历史数据）'),
+    },
+    { id: 'logistics', accessorFn: (r) => r.logisticsCompany || '未填写（历史数据）', header: '物流公司' },
+    { id: 'tracking', accessorFn: (r) => r.trackingNumber || '未填写（历史数据）', header: '运单号' },
+    { id: 'status', header: '状态', meta: C },
+    canViewPrice.value && { id: 'amount', header: '金额', meta: R },
+    { id: 'allocation', header: '批次分配', meta: C },
+    { id: 'audit', header: '数量与操作审计' },
+    { id: 'actions', header: '操作', meta: C },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+/** 刚创建的发货单行高亮 (原 el-table :row-class-name)。 */
+const deliveryTableMeta = { class: { tr: (row: { original: TableRow }) => deliveryRowClass({ row: row.original }) } };
+const paymentColumns = computed<TableColumn<TableRow>[]>(() => {
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { accessorKey: 'paymentNumber', header: '收款单号' },
+    { id: 'paymentDate', accessorFn: (r) => r.paymentDate || '—', header: '收款日期' },
+    canViewPrice.value && { id: 'amount', header: '收款金额', meta: R },
+    { id: 'method', header: '收款方式', meta: C },
+    { id: 'paymentReference', accessorFn: (r) => r.paymentReference || '—', header: '参考号/凭证' },
+    { id: 'status', header: '状态', meta: C },
+    { id: 'remark', accessorFn: (r) => r.remark || '—', header: '备注' },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+const purchaseColumns = computed<TableColumn<TableRow>[]>(() => {
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { accessorKey: 'orderNumber', header: '采购单号' },
+    { id: 'supplierName', accessorFn: (r) => r.supplierName || '—', header: '供应商' },
+    { id: 'orderDate', accessorFn: (r) => r.orderDate || '—', header: '下单日期' },
+    { id: 'status', header: '状态', meta: C },
+    canViewPrice.value && { id: 'amount', header: '金额', meta: R },
+    { id: 'actions', header: '操作', meta: C },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+const deliveryItemColumns = computed<TableColumn<TableRow>[]>(() => {
+  const price = canViewPrice.value;
+  const cols: (TableColumn<TableRow> | false)[] = [
+    { id: 'productName', accessorFn: (r) => r.productName || '—', header: label('product') },
+    { id: 'qty', header: '本次发货数量' },
+    { id: 'unit', header: '单位', meta: C },
+    price && { id: 'unitPrice', header: '未税单价', meta: R },
+    price && { id: 'subtotal', header: '本次发货小计（未税）', meta: R },
+    price && { id: 'tax', header: '税额', meta: R },
+  ];
+  return cols.filter((c): c is TableColumn<TableRow> => c !== false);
+});
+const shipmentItemColumns: TableColumn<TableRow>[] = [
+  { id: 'productName', accessorFn: (r) => r.productName || '—', header: '成品' },
+  { id: 'qty', header: '本次发运数量' },
+  { id: 'unit', header: '单位' },
+  { id: 'remaining', header: '母单剩余' },
+];
+const returnItemColumns: TableColumn<ReturnDialogItem>[] = [
+  { id: 'selected', header: '' },
+  { id: 'itemName', accessorFn: (r) => r.itemName || '—', header: '品名' },
+  { id: 'maxQuantity', accessorFn: (r) => r.maxQuantity, header: '已发货', meta: R },
+  { id: 'qty', header: '退货数量' },
+  { id: 'reason', header: '行原因' },
+];
+
+// 回款凭证 / 发票 PDF: 原 el-upload 换成原生文件选择 (弹层整体是 UModal, 里面不放 Element 控件)
+function onReceiptPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (file) void handleReceiptChange({ raw: file });
+  else { receiptFile.value = null; paymentForm.value.receiptUrl = ''; }
+}
+function onIssuePdfPicked(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0];
+  if (file) handleFileChange({ raw: file });
+  else issuePdfFile.value = null;
+}
+function onIssuePdfDropped(e: DragEvent) {
+  const file = e.dataTransfer?.files?.[0];
+  if (file) handleFileChange({ raw: file });
+}
+/**
+ * Nuxt UI 的模态层关闭动画结束前, body 带 pointer-events:none, 此时弹 ElMessageBox 点不了。
+ * 在关弹层后立刻要弹 ElMessageBox 的地方先等它解除 (最多 1.2 秒)。
+ */
+async function waitOverlayReleased(): Promise<void> {
+  await nextTick();
+  for (let i = 0; i < 24 && document.body.style.pointerEvents === 'none'; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 const orderFormulas = ref<TableRow>({});
 
@@ -1354,6 +1562,7 @@ async function promptAllocationNotices(
     });
     return;
   }
+  await waitOverlayReleased();
   try {
     await ElMessageBox.confirm(text, '批次没有自动分配', {
       type: 'warning',
@@ -2037,150 +2246,142 @@ async function handleQuickPayFull() {
 </script>
 
 <template>
-  <div class="page-wrapper" v-loading="loading">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <el-button :icon="ArrowLeft" @click="router.push('/sales/orders')">返回</el-button>
-            <span class="page-title">{{ label('salesOrder') }}详情</span>
-            <el-button v-if="order" plain @click="documentTraceVisible = true">单据追溯</el-button>
-            <el-tag v-if="order" :type="(statusMap[order.status]?.type) || 'info'" size="large">
-              {{ statusMap[order.status]?.text || order.status }}
-            </el-tag>
-            <el-tag v-if="order" :type="orderPaymentStatusMap[order.paymentStatus]?.type || 'info'" size="small" style="margin-left: 8px">
-              收款: {{ orderPaymentStatusMap[order.paymentStatus]?.text || '待收款' }}
-            </el-tag>
-            <el-tag v-if="order" :type="orderInvoiceStatusMap[order.invoiceStatus]?.type || 'info'" size="small" style="margin-left: 4px">
-              开票: {{ orderInvoiceStatusMap[order.invoiceStatus]?.text || '待开票' }}
-            </el-tag>
-            <el-tag v-if="order" :type="orderTransportStatusMap[order.transportPlanStatus]?.type || 'info'" size="small" style="margin-left: 4px">
-              运输: {{ orderTransportStatusMap[transportDisplayStatus]?.text || '待出厂' }}
-            </el-tag>
-          </div>
-          <div class="header-right" v-if="order && canWrite">
-            <el-button data-testid="sales-order-submit" v-if="order.status === 'DRAFT'" type="success" :loading="submitting" @click="handleAction('confirm')">确认并提交 OA 审批</el-button>
-            <el-button data-testid="sales-order-resubmit" v-if="order.status === 'CONFIRMED'" type="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交 OA 审批</el-button>
-            <el-button v-if="order.status === 'PENDING_FINANCE_REVIEW'" type="primary" plain @click="goToApprovalProgress">前往 OA 审批中心</el-button>
-            <el-tooltip
-              v-if="order.status === 'FINANCE_APPROVED'"
-              :content="productionAction.tooltip"
-              :disabled="!productionAction.tooltip"
-              placement="top"
-            >
-              <span>
-                <el-button
-                  type="primary"
-                  :loading="productionPlansLoading"
-                  :disabled="productionAction.disabled"
-                  @click="handleStartProduction"
-                >{{ productionAction.label }}</el-button>
-              </span>
-            </el-tooltip>
-            <el-button
-              v-if="productionAction.relatedId"
-              link
-              type="primary"
-              @click="router.push(`/production/plans?salesOrderId=${orderId}`)"
-            >查看生产计划</el-button>
-            <!-- 销售只创建发货任务；库存扣减固定由仓库出货管理确认。 -->
-            <el-tooltip
-              v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)"
-              :content="deliveryAction.tooltip"
-              :disabled="!deliveryAction.tooltip"
-              placement="top"
-            >
-              <span>
-                <el-button
-                  type="primary"
-                  :loading="deliveriesLoading"
-                  :disabled="deliveryAction.disabled"
-                  @click="openDeliveryDialog"
-                >{{ deliveryAction.label }}</el-button>
-              </span>
-            </el-tooltip>
-            <el-button v-if="isOrderDrivenCustomerSuppliedOrder" type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
-            <!-- T-SHORT-SHIP (owner 2026-09-04 拍板): 短交必须同时支持「补发」和「关单/短交
-                 结案」两条路, 且都是显式确认点击。两个按钮只在部分发货且实发有缺口时并排出现,
-                 不做任何默认/自动的那一条。 -->
-            <el-button
-              v-if="showShortShipmentActions"
-              type="primary"
-              plain
-              @click="handleReshipOutstanding"
-            >补发剩余 {{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</el-button>
-            <el-button
-              v-if="showShortShipmentActions"
-              type="danger"
-              plain
-              @click="openShortCloseDialog"
-            >短交结案</el-button>
-            <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
-                 Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
-            <el-button v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
-                       type="warning" :loading="submitting" @click="openReturnDialog">申请退货</el-button>
-            <el-button v-if="['DRAFT','CONFIRMED'].includes(order.status)" type="danger" :disabled="submitting" @click="handleAction('cancel')">取消</el-button>
-            <!-- Sprint 4 Wave 2 S-PROFIT-DETAIL-1: per-product profit drill-down.
-                 Only meaningful for non-DRAFT orders with line items + visible to price-cleared roles. -->
-            <!-- 🔴 2026-08-22: 加 canViewProfitReport。这一页调 /reports/sales/profit-detail/,
-                 后端要 finance|procurement ⇒ 只看 canViewPrice 会让 sales_manager 点出 403。
-                 ▎「看得到金额」不等于「进得去利润报表」—— 两个判据不是一回事。 -->
-            <el-button
-              v-if="canViewPrice && canViewProfitReport && order.status !== 'DRAFT'"
-              type="info"
-              plain
-              @click="router.push(`/sales/orders/${orderId}/profit`)"
-            >产品级利润分析</el-button>
-          </div>
-          <div class="header-right" v-else-if="order && isOrderDrivenCustomerSuppliedOrder">
-            <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
-          </div>
+  <div class="page-wrapper">
+    <section class="cs-card page-card">
+      <header class="cs-card-head card-header">
+        <div class="header-left">
+          <UButton color="neutral" variant="outline" icon="i-lucide-arrow-left" @click="router.push('/sales/orders')">返回</UButton>
+          <h2 class="page-title">{{ label('salesOrder') }}详情</h2>
+          <UButton v-if="order" color="neutral" variant="outline" @click="documentTraceVisible = true">单据追溯</UButton>
+          <UBadge v-if="order" :color="mapColor(statusMap, order.status)" variant="soft" size="lg">
+            {{ mapText(statusMap, order.status) }}
+          </UBadge>
+          <UBadge v-if="order" :color="mapColor(orderPaymentStatusMap, order.paymentStatus, 'neutral')" variant="soft">
+            收款: {{ orderPaymentStatusMap[order.paymentStatus]?.text || '待收款' }}
+          </UBadge>
+          <UBadge v-if="order" :color="mapColor(orderInvoiceStatusMap, order.invoiceStatus, 'neutral')" variant="soft">
+            开票: {{ orderInvoiceStatusMap[order.invoiceStatus]?.text || '待开票' }}
+          </UBadge>
+          <UBadge v-if="order" :color="mapColor(orderTransportStatusMap, order.transportPlanStatus, 'neutral')" variant="soft">
+            运输: {{ orderTransportStatusMap[transportDisplayStatus]?.text || '待出厂' }}
+          </UBadge>
         </div>
-      </template>
+        <div v-if="order && canWrite" class="header-right">
+          <UButton data-testid="sales-order-submit" v-if="order.status === 'DRAFT'" color="success" :loading="submitting" @click="handleAction('confirm')">确认并提交 OA 审批</UButton>
+          <UButton data-testid="sales-order-resubmit" v-if="order.status === 'CONFIRMED'" color="warning" :loading="submitting" @click="handleAction('submit-for-review')">提交 OA 审批</UButton>
+          <UButton v-if="order.status === 'PENDING_FINANCE_REVIEW'" variant="outline" @click="goToApprovalProgress">前往 OA 审批中心</UButton>
+          <!-- 提示放 title (原生), 不用 UTooltip: 它未包 UApp 会整页渲染失败 -->
+          <span
+            v-if="order.status === 'FINANCE_APPROVED'"
+            :title="productionAction.tooltip"
+          >
+            <UButton
+              :loading="productionPlansLoading"
+              :disabled="productionAction.disabled"
+              @click="handleStartProduction"
+            >{{ productionAction.label }}</UButton>
+          </span>
+          <UButton
+            v-if="productionAction.relatedId"
+            variant="link"
+            @click="router.push(`/production/plans?salesOrderId=${orderId}`)"
+          >查看生产计划</UButton>
+          <!-- 销售只创建发货任务；库存扣减固定由仓库出货管理确认。 -->
+          <span
+            v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status)"
+            :title="deliveryAction.tooltip"
+          >
+            <UButton
+              :loading="deliveriesLoading"
+              :disabled="deliveryAction.disabled"
+              @click="openDeliveryDialog"
+            >{{ deliveryAction.label }}</UButton>
+          </span>
+          <UButton v-if="isOrderDrivenCustomerSuppliedOrder" color="warning" variant="outline" @click="goWarehouseReceiving">前往仓储收货任务</UButton>
+          <!-- T-SHORT-SHIP (owner 2026-09-04 拍板): 短交必须同时支持「补发」和「关单/短交
+               结案」两条路, 且都是显式确认点击。两个按钮只在部分发货且实发有缺口时并排出现,
+               不做任何默认/自动的那一条。 -->
+          <UButton
+            v-if="showShortShipmentActions"
+            variant="outline"
+            @click="handleReshipOutstanding"
+          >补发剩余 {{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</UButton>
+          <UButton
+            v-if="showShortShipmentActions"
+            color="error"
+            variant="outline"
+            @click="openShortCloseDialog"
+          >短交结案</UButton>
+          <!-- T-RTA (issue #531): F006 客户反馈 第四次会议 956-1037 — 申请退货 入口.
+               Opens dialog that builds CreateReturnOrderRequest with returnType=SALES_RETURN. -->
+          <UButton v-if="['PARTIAL_DELIVERED','DELIVERED','COMPLETED'].includes(order.status)"
+                   color="warning" :loading="submitting" @click="openReturnDialog">申请退货</UButton>
+          <UButton v-if="['DRAFT','CONFIRMED'].includes(order.status)" color="error" variant="outline" :disabled="submitting" @click="handleAction('cancel')">取消</UButton>
+          <!-- Sprint 4 Wave 2 S-PROFIT-DETAIL-1: per-product profit drill-down.
+               Only meaningful for non-DRAFT orders with line items + visible to price-cleared roles. -->
+          <!-- 🔴 2026-08-22: 加 canViewProfitReport。这一页调 /reports/sales/profit-detail/,
+               后端要 finance|procurement ⇒ 只看 canViewPrice 会让 sales_manager 点出 403。
+               ▎「看得到金额」不等于「进得去利润报表」—— 两个判据不是一回事。 -->
+          <UButton
+            v-if="canViewPrice && canViewProfitReport && order.status !== 'DRAFT'"
+            color="neutral"
+            variant="outline"
+            @click="router.push(`/sales/orders/${orderId}/profit`)"
+          >产品级利润分析</UButton>
+        </div>
+        <div v-else-if="order && isOrderDrivenCustomerSuppliedOrder" class="header-right">
+          <UButton color="warning" variant="outline" @click="goWarehouseReceiving">前往仓储收货任务</UButton>
+        </div>
+      </header>
+
+      <div class="cs-card-body page-body">
+      <div v-if="loading && !order" class="loading-state" data-testid="sales-order-loading">正在读取订单…</div>
 
       <!-- R18-ext #283: explicit empty state for 404 / not-found -->
-      <el-empty
+      <UEmpty
         v-if="notFound"
+        icon="i-lucide-file-x"
         :description="`订单 ${orderId} 不存在或已被删除`"
-      >
-        <el-button type="primary" @click="router.push('/sales/orders')">返回订单列表</el-button>
-        <el-button @click="router.back()">返回上页</el-button>
-      </el-empty>
+        :actions="[{ label: '返回订单列表', onClick: () => router.push('/sales/orders') }, { label: '返回上页', color: 'neutral', variant: 'outline', onClick: () => router.back() }]"
+      />
 
       <template v-if="order && !notFound">
         <!-- 订单头部摘要 (4 状态联动) -->
-        <el-descriptions :column="4" border>
-          <el-descriptions-item label="订单编号">{{ order.orderNumber }}</el-descriptions-item>
-          <el-descriptions-item :label="label('customer')">{{ order.customerName || order.customer?.name || order.customerId }}</el-descriptions-item>
-          <el-descriptions-item label="下单日期">{{ order.orderDate }}</el-descriptions-item>
-          <el-descriptions-item label="业务员">{{ order.salesperson || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="加工方式">{{ processingModeLabel(order.processingMode) }}</el-descriptions-item>
-          <el-descriptions-item label="物料供应方式">
-            <el-tag size="small" :type="order.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'info'">
-              {{ materialSupplyModeLabel(order.materialSupplyMode) }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="未税总额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="已发货金额">{{ order.actualShippedAmount ? formatAmount(order.actualShippedAmount) : '0.00' }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="已开票">{{ order.invoicedAmount ? formatAmount(order.invoicedAmount) : '0.00' }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="已收款">{{ order.paidAmount ? formatAmount(order.paidAmount) : '0.00' }}</el-descriptions-item>
-        </el-descriptions>
+        <dl class="desc-grid cols-4">
+          <div><dt>订单编号</dt><dd>{{ order.orderNumber }}</dd></div>
+          <div><dt>{{ label('customer') }}</dt><dd>{{ order.customerName || order.customer?.name || order.customerId }}</dd></div>
+          <div><dt>下单日期</dt><dd>{{ order.orderDate || '—' }}</dd></div>
+          <div><dt>业务员</dt><dd>{{ order.salesperson || '—' }}</dd></div>
+          <div><dt>加工方式</dt><dd>{{ processingModeLabel(order.processingMode) }}</dd></div>
+          <div>
+            <dt>物料供应方式</dt>
+            <dd>
+              <UBadge :color="order.materialSupplyMode === 'CUSTOMER_SUPPLIED' ? 'warning' : 'neutral'" variant="soft">
+                {{ materialSupplyModeLabel(order.materialSupplyMode) }}
+              </UBadge>
+            </dd>
+          </div>
+          <div v-if="canViewPrice"><dt>未税总额</dt><dd class="num">{{ formatAmount(order.totalAmount) }}</dd></div>
+          <div v-if="canViewPrice"><dt>已发货金额</dt><dd class="num">{{ formatAmount(order.actualShippedAmount || 0) }}</dd></div>
+          <div v-if="canViewPrice"><dt>已开票</dt><dd class="num">{{ formatAmount(order.invoicedAmount || 0) }}</dd></div>
+          <div v-if="canViewPrice"><dt>已收款</dt><dd class="num">{{ formatAmount(order.paidAmount || 0) }}</dd></div>
+        </dl>
 
         <!-- 4 tab 业务中心 (V3 P0-11 — 金矿截图 49m17s) -->
-        <el-tabs v-model="activeTab" class="business-tabs">
+        <UTabs v-model="activeTab" :items="tabItems" variant="link" class="business-tabs" :ui="{ content: 'pt-3' }" data-testid="sales-order-tabs">
 
           <!-- ─── Tab 1: 订单详情 ─── -->
-          <el-tab-pane label="订单详情" name="detail">
-            <el-descriptions :column="3" border style="margin-top: 8px">
-              <el-descriptions-item label="交货日期">{{ order.requiredDeliveryDate || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="下单箱数">{{ order.boxQuantity || '-' }}</el-descriptions-item>
-              <el-descriptions-item v-if="canViewPrice" label="折扣">{{ order.discountAmount ? formatAmount(order.discountAmount) : '-' }}</el-descriptions-item>
-              <el-descriptions-item label="含运费">{{ order.shippingIncluded ? '是' : '否' }}</el-descriptions-item>
-              <el-descriptions-item v-if="canViewPrice" label="运费">{{ order.shippingFee ? formatAmount(order.shippingFee) : '-' }}</el-descriptions-item>
-              <el-descriptions-item v-if="canViewPrice" label="预估利润">{{ order.estimatedProfit ? formatAmount(order.estimatedProfit) : '-' }}</el-descriptions-item>
-              <el-descriptions-item label="交货地址" :span="3">{{ order.deliveryAddress || '-' }}</el-descriptions-item>
-              <el-descriptions-item label="备注" :span="3">{{ order.remark || '-' }}</el-descriptions-item>
-            </el-descriptions>
+          <template #detail>
+            <dl class="desc-grid cols-3">
+              <div><dt>交货日期</dt><dd>{{ order.requiredDeliveryDate || '—' }}</dd></div>
+              <div><dt>下单箱数</dt><dd>{{ order.boxQuantity || '—' }}</dd></div>
+              <div v-if="canViewPrice"><dt>折扣</dt><dd class="num">{{ order.discountAmount ? formatAmount(order.discountAmount) : '—' }}</dd></div>
+              <div><dt>含运费</dt><dd>{{ order.shippingIncluded ? '是' : '否' }}</dd></div>
+              <div v-if="canViewPrice"><dt>运费</dt><dd class="num">{{ order.shippingFee ? formatAmount(order.shippingFee) : '—' }}</dd></div>
+              <div v-if="canViewPrice"><dt>预估利润</dt><dd class="num">{{ order.estimatedProfit ? formatAmount(order.estimatedProfit) : '—' }}</dd></div>
+              <div class="wide"><dt>交货地址</dt><dd>{{ order.deliveryAddress || '—' }}</dd></div>
+              <div class="wide"><dt>备注</dt><dd>{{ order.remark || '—' }}</dd></div>
+            </dl>
 
             <section v-if="isPrestockedCustomerStock" class="customer-supplied-progress" aria-label="客户已有成品库存预留">
               <div class="section-heading">
@@ -2188,38 +2389,25 @@ async function handleQuickPayFull() {
                   <h3>客户已有成品库存</h3>
                   <p>以下批次已精确预留给本销售订单；销售创建发货单后，由仓管核对实发数量并确认出库。</p>
                 </div>
-                <el-button
+                <UButton
                   v-if="canAccessWarehouse"
-                  type="warning"
-                  plain
+                  color="warning"
+                  variant="outline"
                   @click="router.push('/warehouse/shipments')"
-                >前往仓库确认出库</el-button>
+                >前往仓库确认出库</UButton>
               </div>
-              <el-alert
+              <UAlert
                 v-if="reservationsFailed"
-                type="error"
-                :closable="false"
-                show-icon
+                color="error"
+                variant="subtle"
+                icon="i-lucide-circle-x"
                 title="预留批次加载失败，请刷新后再创建发货单。"
               />
-              <el-table
-                v-else
-                v-loading="reservationsLoading"
-                :data="activeReservations"
-                border
-                empty-text="当前没有生效中的客户成品预留"
-              >
-                <el-table-column prop="productName" label="成品" min-width="220" show-overflow-tooltip>
-                  <template #default="{ row }">{{ row.productName || row.productTypeId }}</template>
-                </el-table-column>
-                <el-table-column prop="batchNumber" label="精确批次" min-width="220" show-overflow-tooltip />
-                <el-table-column label="已预留数量" width="170" align="right">
-                  <template #default="{ row }">{{ row.reservedQuantity }} {{ displayUnit(row.unit) }}</template>
-                </el-table-column>
-                <el-table-column label="状态" width="100" align="center">
-                  <template #default><el-tag type="success">已预留</el-tag></template>
-                </el-table-column>
-              </el-table>
+              <UTable v-else :data="activeReservations" :columns="reservationColumns" :loading="reservationsLoading" class="cs-table">
+                <template #empty>当前没有生效中的客户成品预留</template>
+                <template #reserved-cell="{ row }"><span class="num">{{ row.original.reservedQuantity }} {{ displayUnit(row.original.unit) }}</span></template>
+                <template #state-cell><UBadge color="success" variant="soft">已预留</UBadge></template>
+              </UTable>
             </section>
 
             <section v-if="isOrderDrivenCustomerSuppliedOrder" class="customer-supplied-progress" aria-label="客户自带物料收货进度">
@@ -2228,115 +2416,67 @@ async function handleQuickPayFull() {
                   <h3>客户自带物料需求</h3>
                   <p>销售侧仅查看预计来料和收货进度；实收、批次及库存只能由仓储任务处理。</p>
                 </div>
-                <el-button type="warning" plain @click="goWarehouseReceiving">前往仓储收货任务</el-button>
+                <UButton color="warning" variant="outline" @click="goWarehouseReceiving">前往仓储收货任务</UButton>
               </div>
-              <el-alert
+              <UAlert
                 v-if="customerSuppliedRequirements.length === 0"
-                type="warning"
-                :closable="false"
-                show-icon
+                color="warning"
+                variant="subtle"
+                icon="i-lucide-triangle-alert"
                 title="该代加工订单尚未返回结构化客供料需求，请在订单草稿中补齐后再提交。"
               />
-              <el-table v-else :data="customerSuppliedRequirements" border>
-                <el-table-column label="物料分类 / 名称" min-width="250" show-overflow-tooltip>
-                  <template #default="{ row }"><el-tag size="small" effect="plain">{{ customerMaterialCategory(row) }}</el-tag> {{ row.materialName || row.materialTypeId }}</template>
-                </el-table-column>
-                <el-table-column label="预计到货" width="125">
-                  <template #default="{ row }">{{ formatBusinessDateTime(row.expectedArrivalAt) }}</template>
-                </el-table-column>
-                <el-table-column label="目标仓库" min-width="160" show-overflow-tooltip>
-                  <template #default="{ row }">{{ targetWarehouseLabel(row) }}</template>
-                </el-table-column>
-                <el-table-column label="收货进度" min-width="260">
-                  <template #default="{ row }">{{ customerMaterialProgress(row) }}</template>
-                </el-table-column>
-                <el-table-column label="状态" width="110">
-                  <template #default="{ row }"><el-tag type="warning">{{ customerMaterialReceivingStatusLabel(row.status) }}</el-tag></template>
-                </el-table-column>
-              </el-table>
+              <UTable v-else :data="customerSuppliedRequirements" :columns="suppliedColumns" class="cs-table">
+                <template #material-cell="{ row }"><UBadge color="neutral" variant="outline" class="mr-1">{{ customerMaterialCategory(row.original) }}</UBadge>{{ row.original.materialName || row.original.materialTypeId }}</template>
+                <template #arrival-cell="{ row }">{{ formatBusinessDateTime(row.original.expectedArrivalAt) }}</template>
+                <template #warehouse-cell="{ row }">{{ targetWarehouseLabel(row.original) }}</template>
+                <template #progress-cell="{ row }">{{ customerMaterialProgress(row.original) }}</template>
+                <template #state-cell="{ row }"><UBadge color="warning" variant="soft">{{ customerMaterialReceivingStatusLabel(row.original.status) }}</UBadge></template>
+              </UTable>
             </section>
 
-            <h3 style="margin: 20px 0 12px">{{ label('product') }}明细</h3>
+            <h3 class="sub-title">{{ label('product') }}明细</h3>
             <!-- Task 4: DRAFT 草稿可编辑产品行 -->
-            <div v-if="isDraft && canWrite" style="margin-bottom: 8px;">
-              <el-button type="primary" size="small" @click="openEditItems">编辑产品行</el-button>
+            <div v-if="isDraft && canWrite" class="mb-2">
+              <UButton size="sm" @click="openEditItems">编辑产品行</UButton>
             </div>
-            <el-alert
+            <UAlert
               v-else-if="!isDraft && !(order.items && order.items.length)"
-              type="info"
-              :closable="false"
+              color="info"
+              variant="subtle"
               title="该订单非草稿状态且无产品行，请联系销售在草稿阶段补充。"
             />
             <!-- T3-13 fix (issue #524): widen 规格 + 产品 columns + scroll-x fallback to prevent 成品详情规格列盖住. -->
-            <el-table :data="order.items || []" border stripe style="width: 100%" :scrollbar-always-on="true">
-              <el-table-column prop="productName" :label="label('product')" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="specification" label="规格" min-width="180" show-overflow-tooltip>
-                <template #default="{ row }">{{ row.specification || '-' }}</template>
-              </el-table-column>
-              <el-table-column prop="quantity" label="订单数量" width="110" align="right" />
-              <el-table-column label="单位" width="80" align="center">
-                <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
-              </el-table-column>
-              <el-table-column prop="boxQuantity" label="箱数" width="80" align="right">
-                <template #default="{ row }">{{ row.boxQuantity || '-' }}</template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
-                <template #default="{ row }">{{ formatUnitPrice(row.unitPrice) }}</template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" label="含税单价" width="120" align="right">
-                <template #default="{ row }">
-                  {{ formatTaxIncludedUnitPrice(row) }}
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" label="价格来源" width="170" show-overflow-tooltip>
-                <template #default="{ row }">
-                  <span data-testid="price-source">{{ priceSourceLabel(row.priceSource) }}</span>
-                  <span v-if="row.priceRef" class="price-source-ref"> · {{ row.priceRef }}</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="taxRate" label="税率" width="80" align="center">
-                <template #default="{ row }">
-                  <el-tag v-if="row.taxRate != null" size="small"
-                          :type="Number(row.taxRate) === 9 ? 'success' : (Number(row.taxRate) === 13 ? 'warning' : 'info')">
-                    {{ row.taxRate }}%
-                  </el-tag>
-                  <span v-else>-</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="已发货" width="100" align="right">
-                <template #default="{ row }">{{ row.deliveredQuantity || 0 }}</template>
-              </el-table-column>
-              <!-- T4-D1 (issue #525): 来源仓库 per line item.
-                   Backend: sales_order_items.source_warehouse_code (V20260514_01 migration).
-                   2026-07-02 fix: shows the warehouse's real DB name (resolved from
-                   the loaded warehouse list), not a hardcoded WH-LOG→总仓 label —
-                   see utils/warehouse.ts for the LIUSHANMEN "同仓库多名字" incident. -->
-              <el-table-column label="来源仓库" width="120">
-                <template #default="{ row }">{{ sourceWarehouseLabel(row.sourceWarehouseCode) }}</template>
-              </el-table-column>
+            <UTable :data="order.items || []" :columns="itemColumns" class="cs-table" data-testid="sales-order-items">
+              <template #empty>暂无产品明细</template>
+              <template #priceSource-cell="{ row }">
+                <span data-testid="price-source">{{ priceSourceLabel(row.original.priceSource) }}</span>
+                <span v-if="row.original.priceRef" class="price-source-ref"> · {{ row.original.priceRef }}</span>
+              </template>
+              <template #taxRate-cell="{ row }">
+                <UBadge v-if="row.original.taxRate != null" variant="soft" :color="Number(row.original.taxRate) === 9 ? 'success' : (Number(row.original.taxRate) === 13 ? 'warning' : 'neutral')">
+                  {{ row.original.taxRate }}%
+                </UBadge>
+                <span v-else>—</span>
+              </template>
               <!-- E-4 (六扇门需求矩阵 / PR #737/#749): 同时显示未税净价 + 含税价双值.
                    后端 SalesOrderItem.getLineAmount()       = 未税小计 (折后未税)
                    后端 SalesOrderItem.getLineAmountWithTax() = 含税小计 = 未税 × (1 + taxRate/100)
                    两者均为 @PriceSensitive — 无价格权限时后端返回 null → 显示 "—". -->
-              <el-table-column v-if="canViewPrice" label="未税小计" width="130" align="right">
-                <template #default="{ row }">
-                  <span :title="'未含税金额 (折后)'">
-                    {{ row.lineAmount != null ? formatAmount(row.lineAmount) : (row.unitPrice != null ? formatAmount(row.quantity * row.unitPrice) : '—') }}
-                  </span>
+              <template #lineAmount-cell="{ row }">
+                <span class="num" :title="'未含税金额 (折后)'">
+                  {{ row.original.lineAmount != null ? formatAmount(row.original.lineAmount) : (row.original.unitPrice != null ? formatAmount(row.original.quantity * row.original.unitPrice) : '—') }}
+                </span>
+              </template>
+              <template #lineTaxIncluded-cell="{ row }">
+                <template v-if="row.original.unitPrice != null">
+                  <span class="num strong">{{ formatAmount(displayLineMoney(row.original).taxIncluded) }}</span>
+                  <div v-if="row.original.taxRate && Number(row.original.taxRate) > 0" class="sub-note">
+                    税额 {{ formatAmount(displayLineMoney(row.original).tax) }}
+                  </div>
                 </template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" label="含税小计" width="140" align="right">
-                <template #default="{ row }">
-                  <template v-if="row.unitPrice != null">
-                    <span style="font-weight: 600; color: #303133">{{ formatAmount(displayLineMoney(row).taxIncluded) }}</span>
-                    <div v-if="row.taxRate && Number(row.taxRate) > 0" style="font-size: 11px; color: #909399; margin-top: 2px">
-                      税额 {{ formatAmount(displayLineMoney(row).tax) }}
-                    </div>
-                  </template>
-                  <span v-else>—</span>
-                </template>
-              </el-table-column>
-            </el-table>
+                <span v-else>—</span>
+              </template>
+            </UTable>
 
             <!-- E-4 含税/未税汇总条 (仅在有税率数据时展示) -->
             <div v-if="canViewPrice && order.items && order.items.length > 0" class="tax-summary-bar">
@@ -2366,583 +2506,413 @@ async function handleQuickPayFull() {
 
             <!-- ─── R14: 税率分组汇总 (Canvas FormulaEngine 驱动) ─── -->
             <div v-if="canViewPrice && taxGroupData" class="tax-group-section">
-              <h3 style="margin: 20px 0 12px">税率分组汇总</h3>
-              <el-table :data="taxGroupData" border stripe size="small" style="max-width: 400px">
-                <el-table-column label="税率" width="120" align="center">
-                  <template #default="{ row }">
-                    <el-tag :type="row.taxRate === 9 ? 'success' : (row.taxRate === 13 ? 'warning' : 'info')" size="small">
-                      {{ row.taxRate }}%
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="金额小计" width="160" align="right">
-                  <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
-                </el-table-column>
-              </el-table>
+              <h3 class="sub-title">税率分组汇总</h3>
+              <div class="tax-group-wrap"><UTable :data="taxGroupData" :columns="taxGroupColumns" class="cs-table">
+                <template #rate-cell="{ row }">
+                  <UBadge variant="soft" :color="row.original.taxRate === 9 ? 'success' : (row.original.taxRate === 13 ? 'warning' : 'neutral')">
+                    {{ row.original.taxRate }}%
+                  </UBadge>
+                </template>
+                <template #groupSum-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount) }}</span></template>
+              </UTable></div>
             </div>
 
             <!-- ─── 审批进度时间线 (V3 P0-11 补强 — 客户金矿截图 49m17s 底部 timeline) ─── -->
             <div class="approval-timeline-section">
               <h3>审批进度</h3>
-              <el-descriptions
-                v-if="approvalProgress?.hasInstance"
-                :column="2"
-                border
-                class="oa-progress-summary"
-              >
-                <el-descriptions-item label="OA 状态">
-                  {{ approvalProgressStatusLabel(approvalProgress.status) }}
-                </el-descriptions-item>
-                <el-descriptions-item label="当前节点">
-                  {{ approvalProgress.currentNodeNames.join('、') || '流程已结束' }}
-                </el-descriptions-item>
-                <el-descriptions-item label="待处理角色">
-                  {{ approvalProgress.approverRoles.map(role => enumLabel(role)).join('、') || '-' }}
-                </el-descriptions-item>
-                <el-descriptions-item label="待处理人员">
-                  {{ approvalProgress.assignees.join('、') || '-' }}
-                </el-descriptions-item>
-                <el-descriptions-item label="提交时间">
-                  {{ formatBusinessDateTime(approvalProgress.initiatedAt) }}
-                </el-descriptions-item>
-                <el-descriptions-item label="停留时长">
-                  {{ approvalProgress.stayMinutes == null ? '-' : `${approvalProgress.stayMinutes} 分钟` }}
-                </el-descriptions-item>
-                <el-descriptions-item :span="2" label="操作">
-                  <el-button link type="primary" @click="goToApprovalProgress">前往个人 OA 查看</el-button>
-                </el-descriptions-item>
-              </el-descriptions>
-              <el-alert
+              <dl v-if="approvalProgress?.hasInstance" class="desc-grid cols-2 oa-progress-summary">
+                <div><dt>OA 状态</dt><dd>{{ approvalProgressStatusLabel(approvalProgress.status) }}</dd></div>
+                <div><dt>当前节点</dt><dd>{{ approvalProgress.currentNodeNames.join('、') || '流程已结束' }}</dd></div>
+                <div><dt>待处理角色</dt><dd>{{ approvalProgress.approverRoles.map(role => enumLabel(role)).join('、') || '—' }}</dd></div>
+                <div><dt>待处理人员</dt><dd>{{ approvalProgress.assignees.join('、') || '—' }}</dd></div>
+                <div><dt>提交时间</dt><dd>{{ formatBusinessDateTime(approvalProgress.initiatedAt) }}</dd></div>
+                <div><dt>停留时长</dt><dd>{{ approvalProgress.stayMinutes == null ? '—' : `${approvalProgress.stayMinutes} 分钟` }}</dd></div>
+                <div class="wide"><dt>操作</dt><dd><UButton variant="link" size="xs" @click="goToApprovalProgress">前往个人 OA 查看</UButton></dd></div>
+              </dl>
+              <UAlert
                 v-else
-                type="info"
-                :closable="false"
-                show-icon
+                color="info"
+                variant="subtle"
+                icon="i-lucide-info"
                 :title="approvalProgress?.message || '该订单尚未发起 OA 审批'"
                 class="oa-progress-summary"
               />
-              <el-empty v-if="approvalTimeline.length === 0" description="暂无审批记录" :image-size="60" />
-              <el-timeline v-else>
-                <el-timeline-item
-                  v-for="(node, idx) in approvalTimeline"
-                  :key="idx"
-                  :type="node.type"
-                  :timestamp="formatBusinessDateTime(node.time)"
-                  placement="top"
-                  size="large"
-                >
-                  <el-card shadow="hover" class="timeline-card">
+              <UEmpty v-if="approvalTimeline.length === 0" icon="i-lucide-history" description="暂无审批记录" />
+              <ol v-else class="cs-timeline">
+                <li v-for="(node, idx) in approvalTimeline" :key="idx" class="cs-timeline-item">
+                  <span class="cs-timeline-dot" :class="`is-${node.type}`" />
+                  <div class="timeline-time">{{ formatBusinessDateTime(node.time) }}</div>
+                  <div class="timeline-card">
                     <div class="timeline-title">{{ node.title }}</div>
                     <div class="timeline-meta">
-                      <el-icon><i class="el-icon-user" /></el-icon>
+                      <UIcon name="i-lucide-user" />
                       <span>{{ node.user }}</span>
                     </div>
                     <div v-if="node.notes" class="timeline-notes">
                       <div v-for="line in approvalReasonLines(node.notes)" :key="line">{{ line }}</div>
                     </div>
-                  </el-card>
-                </el-timeline-item>
-              </el-timeline>
+                  </div>
+                </li>
+              </ol>
             </div>
-          </el-tab-pane>
+          </template>
 
           <!-- ─── Tab 2: 自动生成的开票记录 ─── -->
-          <el-tab-pane name="invoice">
-            <template #label>
-              开票记录
-              <el-badge v-if="invoices.length" :value="invoices.length" :max="99" class="tab-badge" />
-            </template>
-
+          <template #invoice>
             <div class="tab-toolbar">
               <span v-if="canViewPrice" class="tab-hint">订单未税总额 {{ formatAmount(order.totalAmount) }} / 已开票（含税）{{ formatAmount(order.invoicedAmount || 0) }}</span>
               <span class="tab-hint">全部发货完成后，系统自动按税率分组生成待审核开票记录</span>
             </div>
 
-            <el-table :data="invoices" border stripe style="margin-top: 12px">
-              <el-table-column prop="invoiceNumber" label="发票编号" width="180" />
-              <el-table-column label="状态" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag :type="invoiceStatusMap[row.status]?.type || 'info'" size="small">
-                    {{ invoiceStatusMap[row.status]?.text || row.status }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="amount" label="不含税" width="120" align="right">
-                <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="taxAmount" label="税额" width="120" align="right">
-                <template #default="{ row }">{{ formatAmount(row.taxAmount) }}</template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="totalAmount" label="价税合计" width="130" align="right">
-                <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" label="税率分组" min-width="240">
-                <template #default="{ row }">
-                  <div v-if="row.taxBreakdown && row.taxBreakdown.length" class="tax-breakdown">
-                    <el-tag
-                      v-for="(group, idx) in row.taxBreakdown"
-                      :key="idx"
-                      size="small"
-                      :type="Number(group.taxRate) === 9 ? 'success' : (Number(group.taxRate) === 13 ? 'warning' : 'info')"
-                      style="margin-right: 6px"
-                    >
-                      {{ group.taxRate }}% × {{ group.lineCount }} 行 = {{ formatAmount(group.taxableAmount) }} (税 {{ formatAmount(group.taxAmount) }})
-                    </el-tag>
-                  </div>
-                  <span v-else>-</span>
-                </template>
-              </el-table-column>
-              <el-table-column prop="requestedAt" label="申请时间" width="160" />
-              <el-table-column label="操作" width="200" align="center" fixed="right">
-                <template #default="{ row }">
-                  <el-button v-if="row.status === 'REQUESTED' && canWrite" type="success" link size="small" @click="handleApproveInvoice(row.id)">通过</el-button>
-                  <el-button v-if="row.status === 'REQUESTED' && canWrite" type="danger" link size="small" @click="handleRejectInvoice(row.id)">驳回</el-button>
-                  <el-button v-if="row.status === 'APPROVED' && canWrite" type="primary" link size="small" @click="openIssueDialog(row.id)">上传发票</el-button>
-                  <InvoicePdfDownload v-if="row.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.id" :file-name="row.invoiceFileName" />
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
+            <UTable :data="invoices" :columns="invoiceColumns" class="cs-table">
+              <template #empty>暂无开票记录</template>
+              <template #status-cell="{ row }">
+                <UBadge :color="mapColor(invoiceStatusMap, row.original.status, 'neutral')" variant="soft">{{ mapText(invoiceStatusMap, row.original.status) }}</UBadge>
+              </template>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount) }}</span></template>
+              <template #taxAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.taxAmount) }}</span></template>
+              <template #totalAmount-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalAmount) }}</span></template>
+              <template #taxBreakdown-cell="{ row }">
+                <div v-if="row.original.taxBreakdown && row.original.taxBreakdown.length" class="tax-breakdown">
+                  <UBadge
+                    v-for="(group, idx) in row.original.taxBreakdown"
+                    :key="idx"
+                    variant="soft"
+                    :color="Number(group.taxRate) === 9 ? 'success' : (Number(group.taxRate) === 13 ? 'warning' : 'neutral')"
+                  >
+                    {{ group.taxRate }}% × {{ group.lineCount }} 行 = {{ formatAmount(group.taxableAmount) }} (税 {{ formatAmount(group.taxAmount) }})
+                  </UBadge>
+                </div>
+                <span v-else>—</span>
+              </template>
+              <template #actions-cell="{ row }">
+                <div class="row-actions">
+                  <UButton v-if="row.original.status === 'REQUESTED' && canWrite" color="success" variant="link" size="xs" @click="handleApproveInvoice(row.original.id)">通过</UButton>
+                  <UButton v-if="row.original.status === 'REQUESTED' && canWrite" color="error" variant="link" size="xs" @click="handleRejectInvoice(row.original.id)">驳回</UButton>
+                  <UButton v-if="row.original.status === 'APPROVED' && canWrite" variant="link" size="xs" @click="openIssueDialog(row.original.id)">上传发票</UButton>
+                  <InvoicePdfDownload v-if="row.original.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.original.id" :file-name="row.original.invoiceFileName" />
+                </div>
+              </template>
+            </UTable>
+          </template>
 
           <!-- ─── Tab 3: 销售出库 ─── -->
-          <el-tab-pane name="delivery">
-            <template #label>
-              {{ label('delivery') }}记录
-              <el-badge v-if="actionableDeliveries" :value="actionableDeliveries" :max="99" class="tab-badge" />
-              <span v-else-if="deliveries.length" class="neutral-record-count">（{{ deliveries.length }}）</span>
-            </template>
-
+          <template #delivery>
             <div class="tab-toolbar">
-              <el-tooltip :content="deliveryAction.tooltip" :disabled="!deliveryAction.tooltip">
-                <span><el-button
+              <span :title="deliveryAction.tooltip">
+                <UButton
                   v-if="['CONFIRMED','FINANCE_APPROVED','PROCESSING','PARTIAL_DELIVERED'].includes(order.status) && canWrite"
-                  type="primary" :disabled="deliveryAction.disabled" @click="openDeliveryDialog"
-                >+ {{ deliveryAction.label }}</el-button></span>
-              </el-tooltip>
+                  icon="i-lucide-plus" :disabled="deliveryAction.disabled" @click="openDeliveryDialog"
+                >{{ deliveryAction.label }}</UButton>
+              </span>
             </div>
 
-            <el-table
-              :data="deliveries"
-              border
-              stripe
-              style="margin-top: 12px"
-              :row-class-name="deliveryRowClass"
-            >
-              <el-table-column label="层级" width="90">
-                <template #default="{ row }">
-                  <el-tag :type="row.recordRole === 'MASTER' ? 'primary' : 'info'" size="small">
-                    {{ row.recordRole === 'MASTER' ? '母发货单' : (row.recordRole === 'SHIPMENT' ? '子发运' : '历史单') }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="deliveryNumber" label="发货/发运单号" min-width="190" class-name="semantic-text-column" />
-              <el-table-column prop="deliveryDate" label="发货日期" width="120" />
-              <el-table-column label="配送方式" width="110"><template #default="{ row }">{{ ({ LOGISTICS: '物流配送', SELF_DELIVERY: '自送', SELF_PICKUP: '自提' } as Record<string, string>)[row.deliveryMethod] || (row.deliveryMethod ? row.deliveryMethod : '未记录（历史数据）') }}</template></el-table-column>
-              <el-table-column label="物流公司" width="140"><template #default="{ row }">{{ row.logisticsCompany || '未填写（历史数据）' }}</template></el-table-column>
-              <el-table-column label="运单号" width="170"><template #default="{ row }">{{ row.trackingNumber || '未填写（历史数据）' }}</template></el-table-column>
-              <el-table-column prop="status" label="状态" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag :type="(delStatusMap[row.status]?.type) || 'info'" size="small">
-                    {{ delStatusMap[row.status]?.text || row.status }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="130" align="right">
-                <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
-              </el-table-column>
-              <el-table-column label="批次分配" width="160" align="center">
-                <template #default="{ row }">
-                  <span v-if="row.recordRole === 'MASTER'">由子发运单分配</span>
-                  <!--
-                    整单物料: 后端在「确认发货」时按 FIFO 自动扣减, 没有批次可分。
-                    原来这里显示「已分配 0/0.7 kg」, 仓管会以为还欠一步。
-                  -->
-                  <el-tag v-else-if="allocationSummary[String(row.id)]?.materialOnly" type="success" size="small" effect="plain">
-                    物料 · 自动扣减
-                  </el-tag>
-                  <span v-else-if="allocationSummary[String(row.id)]">
-                    已分配 {{ allocationSummary[String(row.id)].allocated }}/{{ allocationSummary[String(row.id)].planned }}
-                    {{ allocationSummary[String(row.id)].unit }}
-                    <div v-for="batch in allocationSummary[String(row.id)].batches" :key="batch" class="muted-audit">{{ batch }}</div>
-                    <span v-if="allocationSummary[String(row.id)].materialLines" style="color: var(--el-text-color-secondary)">
-                      (另 {{ allocationSummary[String(row.id)].materialLines }} 行物料自动扣减)
-                    </span>
+            <UTable :data="deliveries" :columns="deliveryColumns" :meta="deliveryTableMeta" class="cs-table">
+              <template #empty>暂无发货记录</template>
+              <template #role-cell="{ row }">
+                <UBadge :color="row.original.recordRole === 'MASTER' ? 'primary' : 'neutral'" variant="soft">
+                  {{ row.original.recordRole === 'MASTER' ? '母发货单' : (row.original.recordRole === 'SHIPMENT' ? '子发运' : '历史单') }}
+                </UBadge>
+              </template>
+              <template #status-cell="{ row }">
+                <UBadge :color="mapColor(delStatusMap, row.original.status, 'neutral')" variant="soft">{{ mapText(delStatusMap, row.original.status) }}</UBadge>
+              </template>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalAmount) }}</span></template>
+              <template #allocation-cell="{ row }">
+                <span v-if="row.original.recordRole === 'MASTER'">由子发运单分配</span>
+                <!--
+                  整单物料: 后端在「确认发货」时按 FIFO 自动扣减, 没有批次可分。
+                  原来这里显示「已分配 0/0.7 kg」, 仓管会以为还欠一步。
+                -->
+                <UBadge v-else-if="allocationSummary[String(row.original.id)]?.materialOnly" color="success" variant="outline">
+                  物料 · 自动扣减
+                </UBadge>
+                <span v-else-if="allocationSummary[String(row.original.id)]">
+                  已分配 {{ allocationSummary[String(row.original.id)].allocated }}/{{ allocationSummary[String(row.original.id)].planned }}
+                  {{ allocationSummary[String(row.original.id)].unit }}
+                  <div v-for="batch in allocationSummary[String(row.original.id)].batches" :key="batch" class="muted-audit">{{ batch }}</div>
+                  <span v-if="allocationSummary[String(row.original.id)].materialLines" class="muted-audit">
+                    (另 {{ allocationSummary[String(row.original.id)].materialLines }} 行物料自动扣减)
                   </span>
-                  <span v-else>0/0</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="数量与操作审计" min-width="250">
-                <template #default="{ row }">
-                  <div>{{ deliveryQuantitySummary(row) }}</div>
-                  <div class="muted-audit">{{ deliveryAuditSummary(row) }}</div>
-                </template>
-              </el-table-column>
-              <el-table-column label="操作" width="330" align="center">
-                <template #default="{ row }">
-                  <el-button
-                    v-if="row.recordRole === 'MASTER' && !['SHIPPED','DELIVERED','CANCELLED'].includes(row.status) && canWrite"
-                    type="primary" link size="small" @click="openShipmentDialog(row)"
-                  >新建分批发运</el-button>
+                </span>
+                <span v-else>0/0</span>
+              </template>
+              <template #audit-cell="{ row }">
+                <div>{{ deliveryQuantitySummary(row.original) }}</div>
+                <div class="muted-audit">{{ deliveryAuditSummary(row.original) }}</div>
+              </template>
+              <template #actions-cell="{ row }">
+                <div class="row-actions">
+                  <UButton
+                    v-if="row.original.recordRole === 'MASTER' && !['SHIPPED','DELIVERED','CANCELLED'].includes(row.original.status) && canWrite"
+                    variant="link" size="xs" @click="openShipmentDialog(row.original)"
+                  >新建分批发运</UButton>
                   <!-- 普通订单可由销售预先分配批次；PRESTOCKED 在仓库确认时按订单预留自动匹配。 -->
-                  <el-button v-if="!isPrestockedCustomerStock && row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status) && canWrite" type="primary" link size="small" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.id, row.deliveryNumber)">
-                    {{ allocationSummary[String(row.id)]?.complete ? '查看/修改批次' : (allocationSummary[String(row.id)]?.allocated ? '继续分配/修改批次' : '分配批次') }}
-                  </el-button>
-                  <el-tooltip
-                    v-if="row.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.status)"
-                    content="库存扣减只能由仓管在 仓储管理 → 出货管理 核对后执行"
-                    placement="top"
+                  <UButton v-if="!isPrestockedCustomerStock && row.original.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.original.status) && canWrite" variant="link" size="xs" :disabled="submitting || batchAllocLoading" :loading="batchAllocLoading" @click="openBatchAllocDialog(row.original.id, row.original.deliveryNumber)">
+                    {{ allocationSummary[String(row.original.id)]?.complete ? '查看/修改批次' : (allocationSummary[String(row.original.id)]?.allocated ? '继续分配/修改批次' : '分配批次') }}
+                  </UButton>
+                  <span
+                    v-if="row.original.recordRole !== 'MASTER' && ['DRAFT','PENDING_WAREHOUSE_CONFIRM','PICKED'].includes(row.original.status)"
+                    title="库存扣减只能由仓管在 仓储管理 → 出货管理 核对后执行"
                   >
-                    <el-button
-                      type="warning"
-                      link
-                      size="small"
+                    <UButton
+                      color="warning"
+                      variant="link"
+                      size="xs"
                       :disabled="!canAccessWarehouse"
                       @click="router.push('/warehouse/shipments')"
-                    >等待仓库确认</el-button>
-                  </el-tooltip>
-                  <el-button v-if="row.status === 'SHIPPED' && canWrite" type="success" link size="small" :disabled="submitting" @click="openSignatureDialog(row)">填写凭证并签收</el-button>
-                  <el-button v-if="['DELIVERED', 'SIGNED'].includes(String(row.status)) && row.recordRole !== 'MASTER'"
-                    type="primary" link size="small" @click="signatureReceiptTarget = row">查看签收凭证</el-button>
-                </template>
-              </el-table-column>
-            </el-table>
-          </el-tab-pane>
+                    >等待仓库确认</UButton>
+                  </span>
+                  <UButton v-if="row.original.status === 'SHIPPED' && canWrite" color="success" variant="link" size="xs" :disabled="submitting" @click="openSignatureDialog(row.original)">填写凭证并签收</UButton>
+                  <UButton v-if="['DELIVERED', 'SIGNED'].includes(String(row.original.status)) && row.original.recordRole !== 'MASTER'"
+                    variant="link" size="xs" @click="signatureReceiptTarget = row.original">查看签收凭证</UButton>
+                </div>
+              </template>
+            </UTable>
+          </template>
 
           <!-- ─── Tab 4: 收款记录 ─── -->
-          <el-tab-pane name="payment">
-            <template #label>
-              收款记录
-              <el-badge v-if="payments.length" :value="payments.length" :max="99" class="tab-badge" />
-            </template>
-
+          <template #payment>
             <div class="tab-toolbar">
-              <el-button v-if="canWrite && canWriteFinance" type="primary" @click="openPaymentDialog">
-                + 登记收款
-              </el-button>
+              <UButton v-if="canWrite && canWriteFinance" icon="i-lucide-plus" @click="openPaymentDialog">
+                登记收款
+              </UButton>
               <!-- T-INV (F006 客户反馈): 一键收款 shortcut — only shown when remaining > 0.
                    Auto-fills remaining amount + BANK_TRANSFER + today; bypasses dialog form. -->
-              <el-button v-if="canWrite && canWriteFinance && computedRemainingAmount() > 0" type="success"
-                         :loading="submitting" @click="handleQuickPayFull">一键收款 (全额)</el-button>
+              <UButton v-if="canWrite && canWriteFinance && computedRemainingAmount() > 0" color="success"
+                       :loading="submitting" @click="handleQuickPayFull">一键收款 (全额)</UButton>
               <span v-if="canViewPrice" class="tab-hint">应收总额（含税）{{ formatAmount(salesOrderReceivableAmount(order)) }} / 已收 {{ formatAmount(order.paidAmount || 0) }} / 待收 {{ formatAmount(computedRemainingAmount()) }}</span>
             </div>
 
             <!-- 🔴「查不到」不能长成「没有」: 加载失败时明确说出来 + 给下一步动作, 不再静默空表。 -->
-            <el-alert
+            <UAlert
               v-if="paymentsLoadError"
-              type="error"
-              :closable="false"
-              show-icon
-              style="margin-top: 12px"
+              color="error"
+              variant="subtle"
+              icon="i-lucide-circle-x"
+              class="mb-3"
               title="收款记录未能加载 —— 下方为空不代表这单没有收款"
               :description="`${paymentsLoadError}（若本账号只有只读权限，请联系管理员开通财务收款查看权限后重试）`"
             />
-            <el-table
-              :data="payments"
-              border
-              stripe
-              style="margin-top: 12px"
-              :empty-text="paymentsLoadError ? '未能加载收款记录（见上方提示）' : '暂无收款记录'"
-            >
-              <el-table-column prop="paymentNumber" label="收款单号" width="180" />
-              <el-table-column prop="paymentDate" label="收款日期" width="120" />
-              <el-table-column v-if="canViewPrice" prop="amount" label="收款金额" width="130" align="right">
-                <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
-              </el-table-column>
-              <el-table-column prop="paymentMethod" label="收款方式" width="120" align="center">
-                <template #default="{ row }">
-                  {{ ({ BANK_TRANSFER: '银行转账', CASH: '现金', CHECK: '支票', WECHAT: '微信', ALIPAY: '支付宝', OTHER: '其他' } as Record<string, string>)[row.paymentMethod] || row.paymentMethod }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="paymentReference" label="参考号/凭证" width="180" />
-              <el-table-column label="状态" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag :type="paymentStatusMap[row.status]?.type || 'info'" size="small">
-                    {{ paymentStatusMap[row.status]?.text || row.status }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-            </el-table>
-          </el-tab-pane>
+            <UTable :data="payments" :columns="paymentColumns" class="cs-table">
+              <template #empty>{{ paymentsLoadError ? '未能加载收款记录（见上方提示）' : '暂无收款记录' }}</template>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount) }}</span></template>
+              <template #method-cell="{ row }">
+                {{ ({ BANK_TRANSFER: '银行转账', CASH: '现金', CHECK: '支票', WECHAT: '微信', ALIPAY: '支付宝', OTHER: '其他' } as Record<string, string>)[row.original.paymentMethod] || '其他' }}
+              </template>
+              <template #status-cell="{ row }">
+                <UBadge :color="mapColor(paymentStatusMap, row.original.status, 'neutral')" variant="soft">{{ mapText(paymentStatusMap, row.original.status) }}</UBadge>
+              </template>
+            </UTable>
+          </template>
 
           <!-- ─── Tab 5: 关联采购订单 ─── -->
-          <el-tab-pane v-if="canViewLinkedPurchases" name="purchase">
-            <template #label>
-              关联采购
-              <el-badge v-if="purchaseOrders.length" :value="purchaseOrders.length" :max="99" class="tab-badge" />
-            </template>
-
-            <div class="tab-hint" style="padding: 12px 0">
+          <template #purchase>
+            <div class="tab-hint pad-y">
               客户原话: 主原料 (贵重料) 必须按销售订单做定点追踪, 防止多采浪费
             </div>
 
-            <el-table :data="purchaseOrders" border stripe>
-              <el-table-column prop="orderNumber" label="采购单号" width="180" />
-              <el-table-column prop="supplierName" label="供应商" min-width="150" />
-              <el-table-column prop="orderDate" label="下单日期" width="120" />
-              <el-table-column prop="status" label="状态" width="100" align="center">
-                <template #default="{ row }">
-                  <el-tag size="small">{{ row.status }}</el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column v-if="canViewPrice" prop="totalAmount" label="金额" width="130" align="right">
-                <template #default="{ row }">{{ formatAmount(row.totalAmount) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="100" align="center">
-                <template #default="{ row }">
-                  <el-button link type="primary" size="small" @click="router.push(`/procurement/orders/${row.id}`)">查看</el-button>
-                </template>
-              </el-table-column>
-              <template #empty>
-                <el-empty description="暂无关联采购订单" :image-size="80" />
+            <UTable :data="purchaseOrders" :columns="purchaseColumns" class="cs-table">
+              <template #empty>暂无关联采购订单</template>
+              <template #status-cell="{ row }"><UBadge color="neutral" variant="soft">{{ enumLabel(row.original.status) }}</UBadge></template>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.totalAmount) }}</span></template>
+              <template #actions-cell="{ row }">
+                <UButton variant="link" size="xs" @click="router.push(`/procurement/orders/${row.original.id}`)">查看</UButton>
               </template>
-            </el-table>
-          </el-tab-pane>
-        </el-tabs>
-      </template>
-    </el-card>
-
-    <el-dialog v-model="deliveryDialogVisible" :title="`创建${label('delivery')}单`" width="980px" destroy-on-close>
-      <el-alert
-        v-if="deliveryAddressMissing"
-        type="warning"
-        show-icon
-        :closable="false"
-        title="客户/订单未维护收货地址"
-        description="请为本次发货单手工补充发货地址，空地址禁止创建。"
-        style="margin-bottom: 12px"
-      />
-      <el-form label-width="90px">
-        <el-form-item label="发货地址" required>
-          <el-input v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" />
-        </el-form-item>
-        <el-form-item label="配送方式" required>
-          <el-radio-group v-model="deliveryForm.deliveryMethod">
-            <el-radio value="LOGISTICS">物流配送</el-radio>
-            <el-radio value="SELF_DELIVERY">自送</el-radio>
-            <el-radio value="SELF_PICKUP">客户自提</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司" required><el-input v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" /></el-form-item>
-        <el-form-item v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号" required><el-input v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号" /></el-form-item>
-        <el-form-item label="发货模式" required>
-          <el-radio-group v-model="deliveryForm.deliveryMode">
-            <el-radio value="FULL">一次性全量发货（自动建一张全量子单）</el-radio>
-            <el-radio value="PARTIAL">分批发货（后续逐批建子单）</el-radio>
-          </el-radio-group>
-        </el-form-item>
-      </el-form>
-      <el-table :data="deliveryForm.items" border style="margin-top: 12px">
-        <el-table-column prop="productName" :label="label('product')" min-width="190" class-name="semantic-text-column" />
-        <el-table-column label="本次发货数量" width="170">
-          <template #default="{ row }">
-            <el-input-number v-model="row.deliveredQuantity" :min="0" :max="row.maxDeliverableQuantity" :precision="3" size="small" style="width: 130px" />
-            <div class="delivery-capacity-hint">剩余可安排 {{ row.maxDeliverableQuantity }}{{ displayUnit(row.unit) }}</div>
+            </UTable>
           </template>
-        </el-table-column>
-        <el-table-column label="单位" width="80" align="center">
-          <template #default="{ row }">{{ displayUnit(row.unit) }}</template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
-          <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" label="本次发货小计（未税）" width="165" align="right">
-          <template #default="{ row }">{{ formatAmount(Number(row.deliveredQuantity || 0) * Number(row.unitPrice || 0)) }}</template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" label="税额" width="110" align="right">
-          <template #default="{ row }">{{ formatAmount(deliveryMoney([row]).tax) }}</template>
-        </el-table-column>
-      </el-table>
-      <div v-if="canViewPrice" class="delivery-amount-summary">
-        <span>本次未税合计 <strong>{{ formatAmount(deliveryTotals.untaxed) }}</strong></span>
-        <span>税额 <strong>{{ formatAmount(deliveryTotals.tax) }}</strong></span>
-        <span>本次含税合计 <strong>{{ formatAmount(deliveryTotals.taxIncluded) }}</strong></span>
+        </UTabs>
+      </template>
       </div>
-      <template #footer>
-        <el-button @click="deliveryDialogVisible = false">取消</el-button>
-        <el-button data-testid="sales-delivery-create" type="primary" :loading="submitting" :disabled="deliveryAddressMissing" @click="handleCreateDelivery">创建发货单</el-button>
-      </template>
-    </el-dialog>
+    </section>
 
-    <el-dialog v-model="shipmentDialogVisible" title="新建分批发运" width="760px" destroy-on-close>
-      <el-alert type="info" :closable="false" show-icon title="本步骤只创建子发运安排，不扣库存；子单分配批次并由仓库确认后才实际发货。" style="margin-bottom: 12px" />
-      <el-form label-width="110px">
-        <el-form-item label="计划发运日期" required>
-          <el-date-picker v-model="shipmentForm.plannedShipmentDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="配送方式" required>
-          <el-radio-group v-model="shipmentForm.deliveryMethod">
-            <el-radio value="LOGISTICS">物流配送</el-radio>
-            <el-radio value="SELF_DELIVERY">自送</el-radio>
-            <el-radio value="SELF_PICKUP">客户自提</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-row :gutter="12">
-          <el-col :span="12"><el-form-item label="物流公司" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><el-input v-model="shipmentForm.logisticsCompany" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" /></el-form-item></el-col>
-          <el-col :span="12"><el-form-item label="物流/运单号" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><el-input v-model="shipmentForm.trackingNumber" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" /></el-form-item></el-col>
-        </el-row>
-        <el-form-item label="发货地址" required><el-input v-model="shipmentForm.deliveryAddress" /></el-form-item>
-        <el-form-item label="备注"><el-input v-model="shipmentForm.remark" type="textarea" :rows="2" /></el-form-item>
-      </el-form>
-      <el-table :data="shipmentForm.items" border>
-        <el-table-column prop="productName" label="成品" min-width="220" class-name="semantic-text-column" />
-        <el-table-column label="本次发运数量" width="180">
-          <template #default="{ row }">
-            <el-input-number v-model="row.quantity" :min="0" :max="row.remaining" :precision="3" style="width: 130px" />
-          </template>
-        </el-table-column>
-        <el-table-column label="单位" width="80"><template #default="{ row }">{{ displayUnit(row.unit) }}</template></el-table-column>
-        <el-table-column label="母单剩余" width="120"><template #default="{ row }">{{ row.remaining }}{{ displayUnit(row.unit) }}</template></el-table-column>
-      </el-table>
-      <template #footer>
-        <el-button @click="shipmentDialogVisible = false">取消</el-button>
-        <el-button data-testid="sales-shipment-create" type="primary" :loading="submitting" @click="handleCreateShipment">创建子发运单</el-button>
+    <UModal v-model:open="deliveryDialogVisible" :title="`创建${label('delivery')}单`" description="销售创建发货任务单，库存由仓库确认后扣减" :ui="{ content: 'max-w-[1000px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UAlert
+            v-if="deliveryAddressMissing"
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="客户/订单未维护收货地址"
+            description="请为本次发货单手工补充发货地址，空地址禁止创建。"
+          />
+          <UFormField label="发货地址" required>
+            <UInput v-model="deliveryForm.deliveryAddress" placeholder="优先使用订单交货地址；订单为空时回退客户主档收货地址" class="w-full" />
+          </UFormField>
+          <UFormField label="配送方式" required>
+            <URadioGroup v-model="deliveryForm.deliveryMethod" orientation="horizontal" :items="DELIVERY_METHOD_ITEMS" />
+          </UFormField>
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="物流公司" required><UInput v-model="deliveryForm.logisticsCompany" placeholder="如：顺丰冷链" class="w-full" /></UFormField>
+          <UFormField v-if="deliveryForm.deliveryMethod === 'LOGISTICS'" label="运单号" required><UInput v-model="deliveryForm.trackingNumber" placeholder="填写物流运单号" class="w-full" /></UFormField>
+          <UFormField label="发货模式" required>
+            <URadioGroup v-model="deliveryForm.deliveryMode" :items="DELIVERY_MODE_ITEMS" />
+          </UFormField>
+          <UTable :data="deliveryForm.items" :columns="deliveryItemColumns" class="cs-table">
+            <template #qty-cell="{ row }">
+              <UInputNumber v-model="row.original.deliveredQuantity" :min="0" :max="row.original.maxDeliverableQuantity" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" :step-snapping="false" />
+              <div class="delivery-capacity-hint">剩余可安排 {{ row.original.maxDeliverableQuantity }}{{ displayUnit(row.original.unit) }}</div>
+            </template>
+            <template #unit-cell="{ row }">{{ displayUnit(row.original.unit) }}</template>
+            <template #unitPrice-cell="{ row }"><span class="num">{{ formatAmount(row.original.unitPrice) }}</span></template>
+            <template #subtotal-cell="{ row }"><span class="num">{{ formatAmount(Number(row.original.deliveredQuantity || 0) * Number(row.original.unitPrice || 0)) }}</span></template>
+            <template #tax-cell="{ row }"><span class="num">{{ formatAmount(deliveryMoney([row.original]).tax) }}</span></template>
+          </UTable>
+          <div v-if="canViewPrice" class="delivery-amount-summary">
+            <span>本次未税合计 <strong>{{ formatAmount(deliveryTotals.untaxed) }}</strong></span>
+            <span>税额 <strong>{{ formatAmount(deliveryTotals.tax) }}</strong></span>
+            <span>本次含税合计 <strong>{{ formatAmount(deliveryTotals.taxIncluded) }}</strong></span>
+          </div>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="deliveryDialogVisible = false">取消</UButton>
+        <UButton data-testid="sales-delivery-create" :loading="submitting" :disabled="deliveryAddressMissing" @click="handleCreateDelivery">创建发货单</UButton>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="shipmentDialogVisible" title="新建分批发运" description="只创建子发运安排，不扣库存" :ui="{ content: 'max-w-[780px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UAlert color="info" variant="subtle" icon="i-lucide-info" title="本步骤只创建子发运安排，不扣库存；子单分配批次并由仓库确认后才实际发货。" />
+          <UFormField label="计划发运日期" required>
+            <CsDateField v-model="shipmentForm.plannedShipmentDate" />
+          </UFormField>
+          <UFormField label="配送方式" required>
+            <URadioGroup v-model="shipmentForm.deliveryMethod" orientation="horizontal" :items="DELIVERY_METHOD_ITEMS" />
+          </UFormField>
+          <div class="form-row">
+            <UFormField label="物流公司" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><UInput v-model="shipmentForm.logisticsCompany" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" class="w-full" /></UFormField>
+            <UFormField label="物流/运单号" :required="shipmentForm.deliveryMethod === 'LOGISTICS'"><UInput v-model="shipmentForm.trackingNumber" :disabled="shipmentForm.deliveryMethod !== 'LOGISTICS'" class="w-full" /></UFormField>
+          </div>
+          <UFormField label="发货地址" required><UInput v-model="shipmentForm.deliveryAddress" class="w-full" /></UFormField>
+          <UFormField label="备注"><UTextarea v-model="shipmentForm.remark" :rows="2" class="w-full" /></UFormField>
+          <UTable :data="shipmentForm.items" :columns="shipmentItemColumns" class="cs-table">
+            <template #qty-cell="{ row }">
+              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.remaining" :format-options="QTY3" :increment="false" :decrement="false" class="w-32" :step-snapping="false" />
+            </template>
+            <template #unit-cell="{ row }">{{ displayUnit(row.original.unit) }}</template>
+            <template #remaining-cell="{ row }">{{ row.original.remaining }}{{ displayUnit(row.original.unit) }}</template>
+          </UTable>
+        </div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="shipmentDialogVisible = false">取消</UButton>
+        <UButton data-testid="sales-shipment-create" :loading="submitting" @click="handleCreateShipment">创建子发运单</UButton>
+      </template>
+    </UModal>
 
     <!-- ─── T-SHORT-SHIP (owner 2026-09-04 拍板): 短交结案对话框 —— 镜像采购侧
          PendingPurchaseReceivingPanel.vue 的「少收关闭」, 多一道勾选确认。 ─── -->
-    <el-dialog
-      v-model="shortCloseDialogVisible"
+    <UModal
+      v-model:open="shortCloseDialogVisible"
       :title="`短交结案 — ${order?.orderNumber || ''}`"
-      width="min(680px, calc(100vw - 32px))"
-      :close-on-click-modal="false"
+      description="结案后剩余数量不再生成发货安排"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[700px]', description: 'sr-only', footer: 'justify-end' }"
     >
-      <template v-if="order">
-        <el-alert
-          type="warning"
-          :closable="false"
-          show-icon
-          title="结案后，剩余数量不再生成发货安排；已发货部分的库存/开票不受影响。"
-          description="本操作用于客户确认接受少发、或原料确实无法补齐的短交场景。若仍会补发，请取消并使用「补发剩余」。"
-          style="margin-bottom: 12px"
-        />
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="订单编号">{{ order.orderNumber }}</el-descriptions-item>
-          <el-descriptions-item label="下单数量">{{ shortShipment.ordered }}{{ displayUnit(shortShipment.unit) }}</el-descriptions-item>
-          <el-descriptions-item label="已实发数量">{{ shortShipment.shipped }}{{ displayUnit(shortShipment.unit) }}</el-descriptions-item>
-          <el-descriptions-item label="结案后不再发货的数量">
-            <strong style="color: var(--el-color-danger)">{{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</strong>
-          </el-descriptions-item>
-        </el-descriptions>
-        <el-form label-width="110px" style="margin-top: 12px">
-          <el-form-item label="结案原因" required>
-            <el-select v-model="shortCloseForm.reasonCode" placeholder="请选择标准原因" style="width: 100%">
-              <el-option
-                v-for="option in SHORT_CLOSE_REASON_OPTIONS"
-                :key="option.value"
-                :label="option.label"
-                :value="option.value"
-              />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="补充说明" :required="shortCloseForm.reasonCode === 'OTHER'">
-            <el-input
+      <template #body>
+        <div v-if="order" class="form-stack">
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="结案后，剩余数量不再生成发货安排；已发货部分的库存/开票不受影响。"
+            description="本操作用于客户确认接受少发、或原料确实无法补齐的短交场景。若仍会补发，请取消并使用「补发剩余」。"
+          />
+          <dl class="desc-grid cols-2">
+            <div><dt>订单编号</dt><dd>{{ order.orderNumber }}</dd></div>
+            <div><dt>下单数量</dt><dd>{{ shortShipment.ordered }}{{ displayUnit(shortShipment.unit) }}</dd></div>
+            <div><dt>已实发数量</dt><dd>{{ shortShipment.shipped }}{{ displayUnit(shortShipment.unit) }}</dd></div>
+            <div><dt>结案后不再发货的数量</dt><dd><strong class="danger-text">{{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }}</strong></dd></div>
+          </dl>
+          <UFormField label="结案原因" required>
+            <USelectMenu v-model="shortCloseForm.reasonCode" :items="SHORT_CLOSE_REASON_OPTIONS" value-key="value" :search-input="false" placeholder="请选择标准原因" class="w-full" />
+          </UFormField>
+          <UFormField label="补充说明" :required="shortCloseForm.reasonCode === 'OTHER'">
+            <UTextarea
               v-model="shortCloseForm.notes"
-              type="textarea"
               :rows="3"
-              maxlength="500"
-              show-word-limit
+              :maxlength="500"
               placeholder="可填写客户确认记录、原料短缺依据等"
+              class="w-full"
             />
-          </el-form-item>
-        </el-form>
-        <el-checkbox v-model="shortCloseAcknowledged">
-          我确认剩余 {{ shortShipment.outstanding }}{{ displayUnit(shortShipment.unit) }} 不再发货，结案后需重新下单才能补发
-        </el-checkbox>
+          </UFormField>
+          <UCheckbox
+            v-model="shortCloseAcknowledged"
+            :label="`我确认剩余 ${shortShipment.outstanding}${displayUnit(shortShipment.unit)} 不再发货，结案后需重新下单才能补发`"
+          />
+        </div>
       </template>
       <template #footer>
-        <el-button :disabled="shortCloseSubmitting" @click="shortCloseDialogVisible = false">取消</el-button>
-        <el-button
-          type="danger"
+        <UButton color="neutral" variant="outline" :disabled="shortCloseSubmitting" @click="shortCloseDialogVisible = false">取消</UButton>
+        <UButton
+          color="error"
           :loading="shortCloseSubmitting"
           :disabled="!shortCloseAcknowledged"
           @click="submitShortClose"
-        >确认短交结案</el-button>
+        >确认短交结案</UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
     <!-- ─── T-RTA (issues #531 + #571 business logic): 申请退货 对话框 ─── -->
-    <el-dialog v-model="returnDialogVisible" title="申请退货" width="780px" destroy-on-close>
-      <el-alert type="info" show-icon :closable="false" style="margin-bottom: 12px"
-                title="退货流程说明"
-                description="提交后退货单为 DRAFT 草稿. 客户服务 → 销售退货 菜单里点 提交审批, 财务/管理员审批后才会触发库存或退款动作. 退货数量不能超过已发货数量." />
-      <el-form label-width="100px">
-        <!-- T-RTA business logic (#571): 有食物 / 无食物 分支决定后端 AR冲减 + 库存 时机. -->
-        <el-form-item label="退货类型" required>
-          <el-radio-group v-model="returnForm.withGoods">
-            <el-radio :value="true">有货退回 (入成品仓不良品区 → 完成时 AR 冲减)</el-radio>
-            <el-radio :value="false">无食物退款 (审批立即 AR 冲减, 无库存动作)</el-radio>
-          </el-radio-group>
-          <div style="color: #909399; font-size: 12px; margin-top: 4px;">
-            <!-- 🔴 2026-08-19: 原文案「总仓入库」与实际不符 (落的是成品仓的 DEFECTIVE 批次),
-                 且没讲「不计入可售库存」——用户因此报「说会退回成品仓但是没有」。 -->
-            <span v-if="returnForm.withGoods">实物退货: 仓库收到货 → 入成品仓【不良品区】→ 标记完成时触发 AR 冲减. ⚠️ 不良品不计入可售库存, 需质检合格后方可再次销售.</span>
-            <span v-else>无实物: 审批通过即触发 AR/AP 冲减, 不产生库存动作.</span>
-          </div>
-        </el-form-item>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="退货日期" required>
-              <el-date-picker v-model="returnForm.returnDate" type="date" value-format="YYYY-MM-DD" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="退货原因" required>
-              <el-select
+    <UModal v-model:open="returnDialogVisible" title="申请退货" description="提交退货申请，生成草稿退货单" :ui="{ content: 'max-w-[800px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UAlert color="info" variant="subtle" icon="i-lucide-info"
+                  title="退货流程说明"
+                  description="提交后退货单为 DRAFT 草稿. 客户服务 → 销售退货 菜单里点 提交审批, 财务/管理员审批后才会触发库存或退款动作. 退货数量不能超过已发货数量." />
+          <!-- T-RTA business logic (#571): 有食物 / 无食物 分支决定后端 AR冲减 + 库存 时机. -->
+          <UFormField label="退货类型" required>
+            <URadioGroup v-model="returnWithGoodsChoice" :items="RETURN_TYPE_ITEMS" />
+            <div class="form-hint">
+              <!-- 🔴 2026-08-19: 原文案「总仓入库」与实际不符 (落的是成品仓的 DEFECTIVE 批次),
+                   且没讲「不计入可售库存」——用户因此报「说会退回成品仓但是没有」。 -->
+              <span v-if="returnForm.withGoods">实物退货: 仓库收到货 → 入成品仓【不良品区】→ 标记完成时触发 AR 冲减. ⚠️ 不良品不计入可售库存, 需质检合格后方可再次销售.</span>
+              <span v-else>无实物: 审批通过即触发 AR/AP 冲减, 不产生库存动作.</span>
+            </div>
+          </UFormField>
+          <div class="form-row">
+            <UFormField label="退货日期" required>
+              <CsDateField v-model="returnForm.returnDate" />
+            </UFormField>
+            <UFormField label="退货原因" required>
+              <USelectMenu
                 v-model="returnForm.reasonCategory"
+                :items="RETURN_REASON_ITEMS"
+                :search-input="false"
                 placeholder="请选择退货原因"
-                style="width: 100%"
-                @change="onReturnReasonCategoryChange"
-              >
-                <el-option v-for="opt in RETURN_REASON_OPTIONS" :key="opt" :label="opt" :value="opt" />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <!-- fool-proof-design Rule 3: 选"其他"才展开自由文本 -->
-        <el-form-item v-if="returnForm.reasonCategory === '其他'" label="其他原因说明" required>
-          <el-input
-            v-model="returnForm.reason"
-            type="textarea"
-            :rows="2"
-            placeholder="请具体说明退货原因"
-            maxlength="500"
-            show-word-limit
-          />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="returnForm.remark" type="textarea" :rows="2" maxlength="1000" show-word-limit />
-        </el-form-item>
-        <el-divider content-position="left">退货明细</el-divider>
-        <el-table :data="returnForm.items" border size="small">
-          <el-table-column width="50" align="center">
-            <template #default="{ row }"><el-checkbox v-model="row.selected" /></template>
-          </el-table-column>
-          <el-table-column label="品名" min-width="160" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.itemName }}</template>
-          </el-table-column>
-          <el-table-column label="已发货" width="100" align="right">
-            <template #default="{ row }">{{ row.maxQuantity }}</template>
-          </el-table-column>
-          <el-table-column label="退货数量" width="140">
-            <template #default="{ row }">
-              <el-input-number v-model="row.quantity" :min="0" :max="row.maxQuantity || undefined" :precision="3"
-                               :controls="false" size="small" style="width: 100%" :disabled="!row.selected" />
+                class="w-full"
+                @update:model-value="onReturnReasonCategoryChange"
+              />
+            </UFormField>
+          </div>
+          <!-- fool-proof-design Rule 3: 选"其他"才展开自由文本 -->
+          <UFormField v-if="returnForm.reasonCategory === '其他'" label="其他原因说明" required>
+            <UTextarea v-model="returnForm.reason" :rows="2" placeholder="请具体说明退货原因" :maxlength="500" class="w-full" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="returnForm.remark" :rows="2" :maxlength="1000" class="w-full" />
+          </UFormField>
+          <h4 class="sub-title">退货明细</h4>
+          <UTable :data="returnForm.items" :columns="returnItemColumns" class="cs-table">
+            <template #selected-cell="{ row }"><UCheckbox v-model="row.original.selected" aria-label="选择该行退货" /></template>
+            <template #qty-cell="{ row }">
+              <UInputNumber v-model="row.original.quantity" :min="0" :max="row.original.maxQuantity || undefined" :format-options="QTY3" :increment="false" :decrement="false" size="sm" class="w-32" :disabled="!row.original.selected" :step-snapping="false" />
             </template>
-          </el-table-column>
-          <el-table-column label="行原因" min-width="180">
-            <template #default="{ row }">
-              <el-input v-model="row.reason" size="small" placeholder="(可选)" maxlength="500" :disabled="!row.selected" />
+            <template #reason-cell="{ row }">
+              <UInput v-model="row.original.reason" size="sm" placeholder="(可选)" :maxlength="500" class="w-full" :disabled="!row.original.selected" />
             </template>
-          </el-table-column>
-        </el-table>
-      </el-form>
-      <template #footer>
-        <el-button @click="returnDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="returnSubmitting" @click="handleCreateReturn">提交退货申请</el-button>
+          </UTable>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="returnDialogVisible = false">取消</UButton>
+        <UButton :loading="returnSubmitting" @click="handleCreateReturn">提交退货申请</UButton>
+      </template>
+    </UModal>
 
+    <!-- ─── 客户签收对话框: 内含 AttachmentDropZone (Element 专有上传组件), 整弹层保留 Element ─── -->
     <el-dialog
       v-model="signatureDialogVisible"
       :title="`客户签收 — ${signatureTarget?.deliveryNumber || ''}`"
@@ -3021,6 +2991,7 @@ async function handleQuickPayFull() {
       </template>
     </el-dialog>
 
+    <!-- ─── 签收凭证查看: DeliverySignatureReceipt 是 Element 组件, 整弹层保留 Element ─── -->
     <el-dialog :model-value="Boolean(signatureReceiptTarget)" title="查看签收凭证" width="620px"
       destroy-on-close @update:model-value="(value: boolean) => { if (!value) signatureReceiptTarget = null; }">
       <DeliverySignatureReceipt v-if="signatureReceiptTarget" :key="String(signatureReceiptTarget.id)"
@@ -3032,7 +3003,7 @@ async function handleQuickPayFull() {
       <template #footer><el-button @click="signatureReceiptTarget = null">关闭</el-button></template>
     </el-dialog>
 
-    <!-- ─── 批次分配对话框 (P0-13 强制批次追溯) ─── -->
+    <!-- ─── 批次分配对话框 (P0-13 强制批次追溯): 提交时会调 ElMessageBox 确认规格换算, Nuxt UI 模态层下点不了, 整弹层保留 Element ─── -->
     <el-dialog v-model="batchAllocDialogVisible" title="成品批次分配" width="880px" destroy-on-close>
       <el-alert
         type="info"
@@ -3105,101 +3076,88 @@ async function handleQuickPayFull() {
     </el-dialog>
 
     <!-- ─── 上传发票 PDF 对话框 (V3 P0-3c — 4 步开票闭环最后一环) ─── -->
-    <el-dialog v-model="issueDialogVisible" title="开具发票 — 上传 PDF 附件" width="520px" destroy-on-close>
-      <el-alert
-        type="warning"
-        :closable="false"
-        title="客户原话: 销售从订单页直接下载发票"
-        description="财务开具的发票 PDF 必须以附件形式上传到本申请, 否则无法完成开票闭环。"
-        style="margin-bottom: 16px"
-      />
-      <el-upload
-        :auto-upload="false"
-        :limit="1"
-        accept=".pdf,application/pdf"
-        :on-change="handleFileChange"
-        :on-remove="() => { issuePdfFile = null; }"
-        drag
-      >
-        <el-icon class="el-icon--upload"><i class="el-icon-upload" /></el-icon>
-        <div class="el-upload__text">将 PDF 文件拖到此处, 或<em>点击选择</em></div>
-        <template #tip>
-          <div class="el-upload__tip">仅支持 .pdf 格式, 单文件 ≤ 10MB</div>
+    <UModal v-model:open="issueDialogVisible" title="开具发票 — 上传 PDF 附件" description="上传财务开具的发票 PDF" :ui="{ content: 'max-w-[540px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            title="客户原话: 销售从订单页直接下载发票"
+            description="财务开具的发票 PDF 必须以附件形式上传到本申请, 否则无法完成开票闭环。"
+          />
+          <label class="drop-zone" @dragover.prevent @drop.prevent="onIssuePdfDropped">
+            <UIcon name="i-lucide-upload" class="drop-icon" />
+            <span v-if="issuePdfFile" class="drop-file" data-testid="issue-pdf-name">{{ issuePdfFile.name }}</span>
+            <span v-else>将 PDF 文件拖到此处, 或<em>点击选择</em></span>
+            <input type="file" accept=".pdf,application/pdf" class="sr-only" data-testid="issue-pdf-input" @change="onIssuePdfPicked">
+          </label>
+          <div class="form-hint">仅支持 .pdf 格式, 单文件 ≤ 10MB</div>
           <AiUploadHint kind="pdf" />
-        </template>
-      </el-upload>
-      <template #footer>
-        <el-button @click="issueDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" :disabled="!issuePdfFile" @click="handleIssueInvoice">确认开具</el-button>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="issueDialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" :disabled="!issuePdfFile" @click="handleIssueInvoice">确认开具</UButton>
+      </template>
+    </UModal>
 
     <!-- ─── 登记收款对话框 ─── -->
-    <el-dialog v-model="paymentDialogVisible" title="登记收款" width="520px" destroy-on-close>
-      <el-form label-width="90px">
-        <el-form-item v-if="canViewPrice" label="收款金额" required>
-          <!-- fool-proof-design Rule 1 (block-not-clamp fix): 不绑定 :max — ElementPlus
-               InputNumber 会在按键时静默 clamp modelValue 到 max (见 procurement/receives/list.vue
-               同款修复注释), 这里改用 paymentOverLimit computed 驱动红框 + 红字 + 禁用提交. -->
-          <el-input-number
-            v-model="paymentForm.amount"
-            :min="0"
-            :precision="2"
-            style="width: 200px"
-            :class="{ 'over-limit-input': paymentOverLimit }"
-          />
-          <span style="margin-left: 12px; color: #909399">待收 {{ formatAmount(computedRemainingAmount()) }}</span>
-          <div v-if="paymentOverLimit" class="over-limit-hint over-limit-hint--danger">
-            超出待收余额 {{ formatAmount(computedRemainingAmount()) }}, 请调低
-          </div>
-        </el-form-item>
-        <el-form-item label="收款方式">
-          <el-select v-model="paymentForm.paymentMethod" style="width: 200px">
-            <el-option label="银行转账" value="BANK_TRANSFER" />
-            <el-option label="现金" value="CASH" />
-            <el-option label="支票" value="CHECK" />
-            <el-option label="微信" value="WECHAT" />
-            <el-option label="支付宝" value="ALIPAY" />
-            <el-option label="其他" value="OTHER" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="收款日期">
-          <el-date-picker v-model="paymentForm.paymentDate" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="参考号/凭证">
-          <el-input v-model="paymentForm.paymentReference" placeholder="银行流水号 / 凭证号" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="paymentForm.remark" type="textarea" :rows="2" placeholder="如: 定金 / 尾款" />
-        </el-form-item>
-        <el-form-item label="回款凭证">
-          <el-upload
-            :auto-upload="false"
-            :limit="1"
-            accept=".pdf,image/jpeg,image/png,.jpg,.png"
-            :on-change="handleReceiptChange"
-            :on-remove="() => { receiptFile = null; paymentForm.receiptUrl = ''; }"
-          >
-            <el-button size="small" :loading="receiptUploading">选择凭证</el-button>
-            <template #tip>
-              <div class="el-upload__tip">PDF/JPG/PNG, ≤10MB (可选)</div>
-            </template>
-          </el-upload>
-          <span v-if="paymentForm.receiptUrl" style="font-size:12px;color:#67c23a;margin-left:8px">已上传</span>
-        </el-form-item>
-      </el-form>
+    <UModal v-model:open="paymentDialogVisible" title="登记收款" description="登记一笔回款" :ui="{ content: 'max-w-[540px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form-stack">
+          <UFormField v-if="canViewPrice" label="收款金额" required>
+            <!-- fool-proof-design Rule 1 (block-not-clamp fix): 不绑定 :max — 数字输入框
+                 会在按键时静默 clamp modelValue 到 max (见 procurement/receives/list.vue
+                 同款修复注释), 这里改用 paymentOverLimit computed 驱动红框 + 红字 + 禁用提交. -->
+            <div class="amount-line">
+              <UInputNumber
+                v-model="paymentForm.amount"
+                :min="0"
+                :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }"
+                :increment="false"
+                :decrement="false"
+                :color="paymentOverLimit ? 'error' : 'primary'"
+                :highlight="paymentOverLimit"
+                class="w-52" :step-snapping="false" />
+              <span class="form-hint">待收 {{ formatAmount(computedRemainingAmount()) }}</span>
+            </div>
+            <div v-if="paymentOverLimit" class="over-limit-hint over-limit-hint--danger">
+              超出待收余额 {{ formatAmount(computedRemainingAmount()) }}, 请调低
+            </div>
+          </UFormField>
+          <UFormField label="收款方式">
+            <USelectMenu v-model="paymentForm.paymentMethod" :items="PAYMENT_METHOD_ITEMS" value-key="value" :search-input="false" class="w-52" />
+          </UFormField>
+          <UFormField label="收款日期">
+            <CsDateField v-model="paymentForm.paymentDate" />
+          </UFormField>
+          <UFormField label="参考号/凭证">
+            <UInput v-model="paymentForm.paymentReference" placeholder="银行流水号 / 凭证号" class="w-full" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="paymentForm.remark" :rows="2" placeholder="如: 定金 / 尾款" class="w-full" />
+          </UFormField>
+          <UFormField label="回款凭证" hint="PDF/JPG/PNG, ≤10MB (可选)">
+            <div class="amount-line">
+              <input type="file" accept=".pdf,image/jpeg,image/png,.jpg,.png" class="file-input" data-testid="receipt-input" :disabled="receiptUploading" @change="onReceiptPicked">
+              <span v-if="receiptUploading" class="form-hint">上传中…</span>
+              <span v-else-if="paymentForm.receiptUrl" class="ok-text">已上传</span>
+            </div>
+          </UFormField>
+        </div>
+      </template>
       <template #footer>
-        <el-button @click="paymentDialogVisible = false">取消</el-button>
-        <el-button
-          type="primary"
+        <UButton color="neutral" variant="outline" @click="paymentDialogVisible = false">取消</UButton>
+        <UButton
           :loading="submitting"
           :disabled="!paymentForm.amount || paymentForm.amount <= 0 || paymentOverLimit"
           @click="handleCreatePayment"
-        >登记收款</el-button>
+        >登记收款</UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
-    <!-- ─── Task 4: 编辑产品行对话框 ─── -->
+    <!-- ─── Task 4: 编辑产品行对话框: OrderItemsEditor 是 Element 行内编辑组件 (其它页也在用), 整弹层保留 Element ─── -->
     <el-dialog
       v-model="editItemsVisible"
       :title="`编辑产品行 — ${order?.orderNumber || ''}`"
@@ -3235,17 +3193,25 @@ async function handleQuickPayFull() {
 
 <style lang="scss" scoped>
 .page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; padding: 20px; overflow-y: auto; }
+.page-card { flex: 1; display: flex; flex-direction: column; }
+.page-body { flex: 1; overflow-y: auto; }
+.card-header { justify-content: space-between;
+  .header-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .page-title { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+  .header-right { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 }
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: center; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-  }
-  .header-right { display: flex; gap: 8px; }
+.loading-state { padding: var(--cs-space-4); color: var(--cs-muted); }
+.desc-grid { display: grid; margin: 0; background: var(--cs-surface); border-top: 1px solid var(--cs-border); border-left: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); overflow: hidden;
+  > div { display: flex; gap: var(--cs-space-3); padding: 10px 14px; background: var(--cs-surface); min-width: 0; box-shadow: inset -1px -1px 0 0 var(--cs-border); }
+  dt { flex: 0 0 auto; min-width: 76px; color: var(--cs-muted); font-size: var(--cs-font-small); line-height: 22px; }
+  dd { margin: 0; color: var(--cs-text); font-size: 13px; line-height: 22px; min-width: 0; overflow-wrap: anywhere; }
+  .wide { grid-column: 1 / -1; }
 }
+.desc-grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.desc-grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.desc-grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .business-tabs { margin-top: 20px; }
+.sub-title { margin: 20px 0 12px; font-size: 15px; font-weight: 600; color: var(--cs-text); }
 .customer-supplied-progress { margin-top: 18px; }
 .section-heading {
   display: flex;
@@ -3254,58 +3220,86 @@ async function handleQuickPayFull() {
   gap: 16px;
   margin-bottom: 10px;
   h3 { margin: 0 0 4px; font-size: 15px; }
-  p { margin: 0; color: #606266; font-size: 13px; }
+  p { margin: 0; color: var(--cs-muted); font-size: 13px; }
 }
 .tab-toolbar {
-  display: flex; align-items: center; gap: 16px; padding: 4px 0 12px;
-  .tab-hint { color: #909399; font-size: 12px; }
+  display: flex; align-items: center; gap: 16px; padding: 4px 0 12px; flex-wrap: wrap;
 }
-.tab-badge { :deep(.el-badge__content) { transform: translateY(-2px) translateX(8px); } }
+.tab-hint { color: var(--cs-muted); font-size: 12px; }
+.pad-y { padding: 12px 0; }
+.mb-2 { margin-bottom: 8px; }
+.mb-3 { margin-bottom: 12px; }
+.mr-1 { margin-right: 4px; }
 .tax-breakdown { display: flex; flex-wrap: wrap; gap: 4px; }
+.row-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.sub-note { font-size: 11px; color: var(--cs-muted); margin-top: 2px; }
+.strong { font-weight: 600; color: var(--cs-text); }
+.danger-text { color: var(--cs-danger); }
+.ok-text { font-size: 12px; color: var(--cs-success); }
+.tax-group-wrap { max-width: 400px; }
 // E-4 含税/未税汇总条
 .tax-summary-bar {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
   margin-top: 8px; padding: 10px 16px;
-  background: #f5f7fa; border-radius: 6px;
+  background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm);
   font-size: 13px;
   .tax-summary-item { display: flex; flex-direction: column; align-items: flex-end; }
-  .tax-summary-label { font-size: 11px; color: #909399; margin-bottom: 2px; }
-  .tax-summary-value { font-weight: 600; color: #303133; }
-  .tax-value { color: #e6a23c; }
+  .tax-summary-label { font-size: 11px; color: var(--cs-muted); margin-bottom: 2px; }
+  .tax-summary-value { font-weight: 600; color: var(--cs-text); }
+  .tax-value { color: var(--cs-warning); }
   .tax-total { color: var(--cs-primary); font-size: 15px; }
-  .tax-summary-sep { color: #c0c4cc; font-size: 16px; font-weight: 300; align-self: center; }
+  .tax-summary-sep { color: var(--cs-muted); font-size: 16px; font-weight: 300; align-self: center; }
 }
 
 // V3 P0-11 补强 — 审批 timeline
 .approval-timeline-section {
   margin-top: 28px;
   padding-top: 16px;
-  border-top: 1px dashed #ebeef5;
+  border-top: 1px dashed var(--cs-border);
 
-  h3 { margin: 0 0 16px; font-size: 15px; color: #303133; }
-
-  .timeline-card { padding: 8px 12px;
-    .timeline-title { font-weight: 600; color: #303133; font-size: 14px; margin-bottom: 4px; }
-    .timeline-meta { color: #606266; font-size: 12px; display: flex; align-items: center; gap: 4px; }
-    .timeline-notes { margin-top: 6px; padding: 6px 8px; background: #fafafa; border-radius: 4px;
-      color: #909399; font-size: 12px; }
-  }
+  h3 { margin: 0 0 16px; font-size: 15px; color: var(--cs-text); }
+  .oa-progress-summary { margin-bottom: 16px; }
+}
+.cs-timeline { list-style: none; margin: 0; padding: 0 0 0 8px; border-left: 2px solid var(--cs-border); }
+.cs-timeline-item { position: relative; padding: 0 0 16px 20px; }
+.cs-timeline-dot { position: absolute; left: -14px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--cs-muted); box-shadow: 0 0 0 3px var(--cs-surface);
+  &.is-success { background: var(--cs-success); }
+  &.is-warning { background: var(--cs-warning); }
+  &.is-danger { background: var(--cs-danger); }
+  &.is-primary { background: var(--cs-primary); }
+}
+.timeline-time { color: var(--cs-muted); font-size: 12px; margin-bottom: 6px; }
+.timeline-card { padding: 8px 12px; border: 1px solid var(--cs-border); border-radius: var(--cs-radius-sm); background: var(--cs-surface);
+  .timeline-title { font-weight: 600; color: var(--cs-text); font-size: 14px; margin-bottom: 4px; }
+  .timeline-meta { color: var(--cs-muted); font-size: 12px; display: flex; align-items: center; gap: 4px; }
+  .timeline-notes { margin-top: 6px; padding: 6px 8px; background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm); color: var(--cs-muted); font-size: 12px; }
 }
 
-// fool-proof-design Rule 1: 收款/超限灰字提示 (正常) / 超限变红 (与 :class 前置拦截 +
-// 提交禁用二重防御, 不用 el-input-number :max 静默 clamp)
+.form-stack { display: flex; flex-direction: column; gap: var(--cs-space-4); }
+.form-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cs-space-4); }
+.form-hint { margin-top: 4px; color: var(--cs-muted); font-size: 12px; }
+.amount-line { display: flex; align-items: center; gap: 12px; }
+.file-input { font-size: 13px; color: var(--cs-text); }
+.drop-zone { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 28px 16px; border: 1px dashed var(--cs-border); border-radius: var(--cs-radius-sm); background: var(--cs-surface-subtle); color: var(--cs-muted); font-size: 13px; cursor: pointer;
+  &:hover { border-color: var(--cs-primary); }
+  em { color: var(--cs-primary); font-style: normal; }
+  .drop-icon { width: 24px; height: 24px; }
+  .drop-file { color: var(--cs-text); font-weight: 500; }
+}
+// fool-proof-design Rule 1: 收款/超限灰字提示 (正常) / 超限变红 (与 :color 前置拦截 +
+// 提交禁用二重防御, 不用 :max 静默 clamp)
 .over-limit-hint {
   font-size: 11px;
-  color: #909399;
+  color: var(--cs-muted);
   line-height: 1.4;
   margin-top: 2px;
 }
 .over-limit-hint--danger {
-  color: #f56c6c;
+  color: var(--cs-danger);
 }
 .delivery-capacity-hint {
   margin-top: 4px;
-  color: #909399;
+  color: var(--cs-muted);
   font-size: 11px;
   white-space: nowrap;
 }
@@ -3313,20 +3307,16 @@ async function handleQuickPayFull() {
   display: flex;
   justify-content: flex-end;
   gap: 24px;
-  margin-top: 12px;
   padding: 10px 12px;
-  background: #f5f7fa;
-  border-radius: 4px;
-  color: #606266;
-}
-:deep(.over-limit-input .el-input__wrapper) {
-  box-shadow: 0 0 0 1px #f56c6c inset;
+  background: var(--cs-surface-subtle);
+  border-radius: var(--cs-radius-sm);
+  color: var(--cs-text);
 }
 /* 刚创建的发货单行 —— 建完自动切到本 tab 后, 让人一眼找到是哪一条 (客户 2026-07-31) */
 :deep(.just-created-row > td) {
-  background: var(--el-color-primary-light-9) !important;
+  background: var(--cs-primary-soft) !important;
 }
-.muted-audit { margin-top: 4px; color: var(--el-text-color-secondary); font-size: 12px; }
+.muted-audit { margin-top: 4px; color: var(--cs-muted); font-size: 12px; }
 .signature-context { margin-bottom: 16px; }
 .signature-form { margin-top: 16px; }
 .signature-upload-field { width: 100%; }

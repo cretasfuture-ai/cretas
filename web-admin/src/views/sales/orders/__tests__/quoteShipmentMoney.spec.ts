@@ -20,6 +20,6 @@ describe('报价订单发货含税金额', () => {
   it('真实发货窗口带入订单快照并使用同一行税额计算', () => {
     const source = readFileSync(resolve(import.meta.dirname, '../detail.vue'), 'utf8');
     expect(source.includes('quotedGrossUnitPrice: it.quotedGrossUnitPrice')).toBe(true);
-    expect(source.includes('deliveryMoney([row]).tax')).toBe(true);
+    expect(source.includes('deliveryMoney([row.original]).tax')).toBe(true);
   });
 });

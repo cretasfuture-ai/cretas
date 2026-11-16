@@ -18,16 +18,17 @@ describe('sales order list lifecycle UX source contract', () => {
   });
 
   it('keeps one order row and expands its item, shipment and payment trace', () => {
-    expect(source).toContain('<el-table-column type="expand"');
+    expect(source).toContain("{ id: 'expand' }");
+    expect(source).toContain('<template #expanded="{ row }">');
     expect(source).toContain('订单明细');
     expect(source).toContain('出库履约');
     expect(source).toContain('收款进度');
   });
 
   it('exposes exactly one emphasized next action and moves secondary actions into the menu', () => {
-    expect(source).toContain('label="下一步"');
-    expect(source).toContain('@click="handlePrimaryAction(row)"');
-    expect(source).toContain(':actions="rowActionsFor(row)"');
+    expect(source).toContain("header: '下一步'");
+    expect(source).toContain('@click="handlePrimaryAction(row.original)"');
+    expect(source).toContain(':actions="rowActionsFor(row.original)"');
   });
 
   it('W6: default list is 8-9 columns and views are only table|kanban', () => {
