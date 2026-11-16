@@ -221,6 +221,31 @@ const businessRoutes: RouteRecordRaw[] = [
         component: () => import('@/views/issues/IssuesPage.vue'),
         meta: { requiresAuth: true, title: '发现的问题', icon: 'WarningFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
       },
+      // P8：数字班组（MIGRATION-PLAN 2.7）。数据接口按登录人权限逐件判（DigitalCrewController），入口同「待办」判据
+      {
+        path: 'crew',
+        name: 'CrewHome',
+        component: () => import('@/views/crew/CrewHome.vue'),
+        meta: { requiresAuth: true, title: '班组首页', icon: 'UserFilled', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/ledger',
+        name: 'CrewLedger',
+        component: () => import('@/views/crew/CrewLedger.vue'),
+        meta: { requiresAuth: true, title: '工作记录与额度', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/settings',
+        name: 'CrewSettings',
+        component: () => import('@/views/crew/CrewSettings.vue'),
+        meta: { requiresAuth: true, title: '数字班组配置', icon: 'Setting', module: 'system', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
+      {
+        path: 'crew/member/:member(clerk|keeper|planner|inspector|accountant)',
+        name: 'CrewMember',
+        component: () => import('@/views/crew/CrewMemberPage.vue'),
+        meta: { requiresAuth: true, title: '数字员工', module: 'dashboard', hideForFactoryTypes: ['RESTAURANT', 'LOGISTICS'] }
+      },
       {
         // P10 外部软件（MIGRATION-PLAN 第四块）：只在平台授权了黑湖接口的工厂可进（守卫见 guards.ts externalIntegration;
         // 后端没授权同样 404）。只读：外部数据时点 + 报工对照列，不改任何一边、不回写外部系统。
@@ -861,6 +886,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
             name: 'QualityInspections',
             component: () => import('@/views/quality/inspections/list.vue'),
             meta: { requiresAuth: true, title: '质检记录', module: 'quality' }
+          },
+          // 工序首检 (E 线 BL17): 送检 / 判定 / 首检标准 / 本厂开关; 菜单只登记在原型分组侧栏 (menuConfig.ts 的 FIRST_ARTICLE_LEAF)
+          {
+            path: 'first-article',
+            name: 'QualityFirstArticle',
+            component: () => import('@/views/quality/first-article/index.vue'),
+            meta: { requiresAuth: true, title: '工序首检', module: 'quality' }
           },
           // 缺口 11: 质检放行 (需检产品产出待检 → 放行 / 不合格)
           {

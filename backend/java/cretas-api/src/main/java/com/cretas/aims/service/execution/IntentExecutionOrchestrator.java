@@ -324,18 +324,80 @@ public class IntentExecutionOrchestrator {
              var aiAccess = com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.beginOrNoop(aiAccessAudit, factoryId,
                      com.cretas.aims.service.processsecret.ProcessSecretAiAccessAudit.Entry.INTENT_EXECUTION)) {
             IntentExecuteResponse response = executeInScope(factoryId, request, userId, userRole);
-            // Only an unselected, non-executing answer can default to READ. Known
-            // intents must be stamped where their declaration is available; neither
-            // a missing stamp nor caller-supplied text/code proves a read operation.
-            if (response != null && response.getAiMode() == null
-                    && !Boolean.TRUE.equals(response.getIntentRecognized())
-                    && (response.getIntentCode() == null || response.getIntentCode().isBlank())
-                    && response.getConfirmableAction() == null && response.getResultData() == null
-                    && (response.getAffectedEntities() == null || response.getAffectedEntities().isEmpty())
-                    && !Boolean.TRUE.equals(response.getRequiresApproval())) {
-                applyAiModeStamp(response, null, null);
-            }
+            applyUnselectedAnswerReadStamp(response);
             return response;
+        }
+    }
+
+    /**
+     * Only an unselected, non-executing answer can default to READ. Known intents must be stamped where
+     * their declaration is available; neither a missing stamp nor caller-supplied text/code proves a read
+     * operation. 普通入口经流式管线时 ({@link StreamTurnCollector}) 也调这一份。
+     */
+    public void applyUnselectedAnswerReadStamp(IntentExecuteResponse response) {
+        if (response != null && response.getAiMode() == null
+                && !Boolean.TRUE.equals(response.getIntentRecognized())
+                && (response.getIntentCode() == null || response.getIntentCode().isBlank())
+                && response.getConfirmableAction() == null && response.getResultData() == null
+                && (response.getAffectedEntities() == null || response.getAffectedEntities().isEmpty())
+                && !Boolean.TRUE.equals(response.getRequiresApproval())) {
+            applyAiModeStamp(response, null, null);
+        }
+    }
+
+    // ==================== 普通入口经流式管线时保留的步骤 (PR-2b, 单一实现) ====================
+    // 下面几个方法是普通入口原有、流式入口 (App) 没有的步骤。/execute 改走流式管线后, 流式在同一位置
+    // 只对普通入口调用它们 ({@link StreamTurnCollector#collectingOnCurrentThread()}), 两个入口的行为都不变;
+    // 要不要也给 App 流式开、还是删掉, 留 PR-3 决定。
+
+    /** Drools 校验 (只读查询不进): 不通过返回校验失败卡, 通过返回 null。 */
+    public IntentExecuteResponse droolsValidationBlock(String factoryId, AIIntentConfig intent,
+                                                       IntentExecuteRequest request, Long userId, String userRole) {
+        if (!shouldRunDroolsValidation(intent)) {
+            return null;
+        }
+        ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
+        return validationResult.isValid() ? null : buildDroolsFailureResponse(intent, validationResult);
+    }
+
+    /** NEED_MORE_INFO 补问 (追问问题 + 参数收集会话); 其它状态原样返回。 */
+    public IntentExecuteResponse enrichNeedMoreInfo(IntentExecuteResponse response, IntentExecuteRequest request,
+                                                    AIIntentConfig intent, String factoryId, Long userId) {
+        if (response == null || !"NEED_MORE_INFO".equals(response.getStatus())) {
+            return response;
+        }
+        return enrichWithClarificationQuestions(response, request, intent, factoryId, userId);
+    }
+
+    /** 文字兜底 (含 message ← formattedText 反向兜底、workdesk 摘要); 先按查看人遮价, 遮不了就不交给摘要模型。 */
+    public void applyOrdinaryEntryTextFallback(String factoryId, IntentExecuteResponse response, Long userId) {
+        if (response == null) {
+            return;
+        }
+        boolean priceMasked = applyCallerPriceView(response, userId);
+        applyFormattedTextFallback(factoryId, response, priceMasked);
+    }
+
+    /** 8. 对话记忆: 执行过的一轮 (任何状态) 写进本人会话记忆 + 实体槽; 只给绑定的工厂账号。 */
+    public void recordExecutedTurnMemory(String factoryId, IntentExecuteRequest request,
+                                         IntentExecuteResponse response, IntentMatchResult matchResult, Long userId) {
+        // D1-fix: Ensure ConversationMemory row exists before writing slots/messages.
+        // ConversationMemoryServiceImpl.updateEntitySlot / addMessage silently bail out
+        // when the session row does not yet exist (no auto-create). The explicit-intent
+        // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
+        // already calls getOrCreateContext first; mirror that guarantee here so DISH /
+        // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
+        if (request != null && hasBoundSupplierFactoryActor(factoryId, userId)
+                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
+            try {
+                ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
+                if (ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) {
+                    updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
+                }
+            } catch (Exception e) {
+                log.warn("对话记忆 getOrCreateContext 失败 (非阻断): sessionId={}, error={}",
+                        request.getSessionId(), e.getMessage());
+            }
         }
     }
 
@@ -780,11 +842,9 @@ public class IntentExecutionOrchestrator {
         // Read-only query intents should not enter the Drools validation engine:
         // the engine is meant to guard writes/critical actions, and repeated
         // compilation on high-volume chat queries can exhaust JVM Metaspace.
-        if (shouldRunDroolsValidation(intent)) {
-            ValidationResult validationResult = validateWithDrools(factoryId, intent, request, userId, userRole);
-            if (!validationResult.isValid()) {
-                return buildDroolsFailureResponse(intent, validationResult);
-            }
+        IntentExecuteResponse droolsBlocked = droolsValidationBlock(factoryId, intent, request, userId, userRole);
+        if (droolsBlocked != null) {
+            return droolsBlocked;
         }
 
         // 3.5. Skill 优先检查
@@ -908,25 +968,8 @@ public class IntentExecutionOrchestrator {
         // 7. 缓存
         processResponseCaching(factoryId, request, matchResult, response);
 
-        // 8. 对话记忆
-        // D1-fix: Ensure ConversationMemory row exists before writing slots/messages.
-        // ConversationMemoryServiceImpl.updateEntitySlot / addMessage silently bail out
-        // when the session row does not yet exist (no auto-create). The explicit-intent
-        // path (executeWithExplicitIntent → persistConversationMemoryForExplicitIntent)
-        // already calls getOrCreateContext first; mirror that guarantee here so DISH /
-        // STORE slots written by extractAndUpdateEntitySlots are actually persisted.
-        if (hasBoundSupplierFactoryActor(factoryId, userId)
-                && request.getSessionId() != null && !request.getSessionId().isEmpty()) {
-            try {
-                ConversationContext owner = conversationMemoryService.getOrCreateContext(factoryId, userId, request.getSessionId());
-                if (ownsConversationMemory(owner, factoryId, userId, request.getSessionId())) {
-                    updateConversationMemory(request.getSessionId(), request, response, matchResult, factoryId, userId);
-                }
-            } catch (Exception e) {
-                log.warn("对话记忆 getOrCreateContext 失败 (非阻断): sessionId={}, error={}",
-                        request.getSessionId(), e.getMessage());
-            }
-        }
+        // 8. 对话记忆 (与普通入口经流式管线时同一个方法)
+        recordExecutedTurnMemory(factoryId, request, response, matchResult, userId);
 
         return response;
     }

@@ -32,7 +32,9 @@ done
 # 只用一条只读 case, 让桩保持小; 真套件的 cases.json 另做结构校验 (见 D)。
 cat >"$TMP/cases.json" <<'EOF'
 {"cases": [{"id": "inventory_both_entries", "entries": ["execute", "stream"], "same_intent_across_entries": true,
-  "turns": [{"say": "查库存", "expect": {"status_in": ["SUCCESS"], "intent": "REPORT_INVENTORY", "message_contains": ["库存"]}}]}]}
+  "turns": [{"say": "查库存", "expect": {"status_in": ["SUCCESS"], "intent": "REPORT_INVENTORY", "message_contains": ["库存"]}}]},
+ {"id": "general_cost_question_same_status", "entries": ["execute", "stream"], "same_status_across_entries": true,
+  "turns": [{"say": "怎么降低成本？", "expect": {}}]}]}
 EOF
 
 start_stub() {  # $1 = STUB_MODE
@@ -79,6 +81,16 @@ run_probe --no-write
 expect_rc 1 "流式入口意图漂移"
 grep -q 'FAIL.*inventory_both_entries (stream)' "$OUT" || fail "漂移应记在 stream 那条上"
 grep -q 'FAIL.*#same_intent' "$OUT" || fail "两入口意图不一致应单独记一条 FAIL"
+
+grep -q 'PASS.*general_cost_question_same_status#same_status' "$OUT" || { cat "$OUT"; fail "全过时两入口同状态那条要真的判过 (PASS)"; }
+ok "same_status_across_entries 真的被判了 (全过时 PASS)"
+
+start_stub status_drift
+run_probe --no-write
+expect_rc 1 "「怎么降低成本？」两入口状态分叉"
+grep -q 'FAIL.*general_cost_question_same_status#same_status' "$OUT" || { cat "$OUT"; fail "两入口状态不一致应单独记一条 FAIL"; }
+grep -q 'PASS.*general_cost_question_same_status (stream)' "$OUT" || fail "每个入口单看都过 (expect 为空), 只能靠同状态判红"
+ok "状态分叉只由 #same_status 打红"
 
 start_stub bad_login
 run_probe
@@ -223,7 +235,7 @@ cases = json.load(open(sys.argv[1], encoding="utf-8"))["cases"]
 ids = [c["id"] for c in cases]
 assert len(ids) == len(set(ids)), "case id 重复"
 need = {"inventory_both_entries", "clarify_then_pick_1", "report_work_suspend_resume",
-        "report_work_lists_processes_first", "report_work_stats_is_query"}
+        "report_work_lists_processes_first", "report_work_stats_is_query", "general_cost_question_same_status"}
 assert need <= set(ids), "缺必备话术: %s" % (need - set(ids))
 for c in cases:
     assert set(c["entries"]) <= {"execute", "stream"} and c["entries"], c["id"]
@@ -232,8 +244,11 @@ for c in cases:
         assert key in c["entries"] or key == "*", (c["id"], key)
 inv = next(c for c in cases if c["id"] == "inventory_both_entries")
 assert inv["entries"] == ["execute", "stream"] and inv["same_intent_across_entries"], "查库存必须两入口同意图"
+cost = next(c for c in cases if c["id"] == "general_cost_question_same_status")
+assert cost["entries"] == ["execute", "stream"] and cost.get("same_status_across_entries") is True, "「怎么降低成本？」必须两入口同状态"
+assert cost["turns"][0]["say"] == "怎么降低成本？", cost["turns"][0]["say"]
 print("cases=%d ok" % len(cases))
 EOF
-ok "cases.json 含 5 条必备话术, pending 只挂在存在的入口上"
+ok "cases.json 含 6 条必备话术, pending 只挂在存在的入口上"
 
 echo "PASS: test-ai-live-probe"
