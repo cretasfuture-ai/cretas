@@ -244,6 +244,8 @@ class StreamTurnCollectorEntryParityContractTest {
     void writeVetoSkipsShortcutsAndGoesToRecognitionOnBothEntries() throws Exception {
         String input = "不要报工";
         Map<Entry, Harness> runs = runAll(h -> {
+            // 前提: 不看否定的话短语表会接这句 (守的是「含短语的否定句不被短语快捷抢走」)
+            org.mockito.Mockito.doReturn(Optional.of(REPORT_WORK_INTENT)).when(h.knowledgeBase).matchPhrase(input, "FACTORY");
             when(h.preprocessor.detectNegationVeto(eq(input), any()))
                     .thenReturn(QueryPreprocessorService.NegationKind.VETO_WRITE);
             h.recognizerAnswers(IntentMatchResult.builder().userInput(input)

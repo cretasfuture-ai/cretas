@@ -844,8 +844,8 @@ public class SseStreamingService {
     }
 
     /**
-     * 短语快捷通道 (与 {@code IntentExecutionOrchestrator#tryOrchestratorPhraseShortcut} 同一张表、同一个置信度 0.96)。
-     * 否定说法 (别查库存了 / 不要报工) 一律不抢: 交给识别管线自己的否决闸。
+     * 短语快捷通道 (两入口唯一一份; 编排器那一份随识别分支删了, PR-3)。置信度 0.96。
+     * 否定说法 (别查库存了 / 不要报工) 一律不抢: 调用方 (管线 1.4) 按本轮否定判定不调这里, 交给识别层否决闸。
      * 短语指向的意图在本厂没有配置 / 已退役 / 需要特殊解析 (采购) 时返回 null, 照常识别。
      */
     private IntentMatchResult tryPhraseShortcut(String factoryId, String userInput) {
@@ -853,9 +853,7 @@ public class SseStreamingService {
             return null;
         }
         try {
-            if (detectNegation(userInput) != QueryPreprocessorService.NegationKind.NONE) {
-                return null;
-            }
+            // 否定说法 (别查库存了 / 不要报工) 由调用方 (管线 1.4) 按本轮唯一一次判定挡掉, 这里不再判第二遍
             Optional<String> phrase = knowledgeBase.matchPhrase(userInput.toLowerCase().trim(), "FACTORY");
             if (phrase.isEmpty()) {
                 return null;
