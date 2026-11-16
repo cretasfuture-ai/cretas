@@ -73,6 +73,14 @@ class AttachmentSopRepositoryStartupGuardTest {
         });
     }
 
+    /** 守的是: 缓存的测试上下文不常驻整池空闲连接(否则 shard 内累积的池会撑满 PG max_connections)。 */
+    @Test
+    void testPoolDoesNotHoldFullIdleSetPerCachedContext() throws SQLException {
+        var hikari = dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class);
+        assertThat(hikari.getMinimumIdle()).isEqualTo(1);
+        assertThat(hikari.getIdleTimeout()).isEqualTo(10_000L);
+    }
+
     @Test
     void optInPostgresTargetIsReallyPostgres() throws SQLException {
         assumeTrue(System.getenv("CRETAS_WORKFLOW_PG_URL") != null
