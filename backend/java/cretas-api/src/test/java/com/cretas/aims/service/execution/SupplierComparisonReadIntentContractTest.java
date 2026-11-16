@@ -104,15 +104,16 @@ class SupplierComparisonReadIntentContractTest {
     }
 
     @Test
-    void actualOrchestratorPhraseShortcutUsesTheRegisteredReadMetadata() {
+    void actualPipelinePhraseShortcutUsesTheRegisteredReadMetadata() {
+        // PR-3: 短语快捷只剩流式管线这一份 (两个入口共用; 编排器那一份随识别分支删了)
         IntentKnowledgeBase knowledge = new IntentKnowledgeBase();
         knowledge.initDefaults();
-        IntentExecutionOrchestrator orchestrator = mock(IntentExecutionOrchestrator.class, CALLS_REAL_METHODS);
-        ReflectionTestUtils.setField(orchestrator, "knowledgeBase", knowledge);
-        ReflectionTestUtils.setField(orchestrator, "toolRegistry", tools);
-        ReflectionTestUtils.setField(orchestrator, "intentConfigRepository", configs);
-        IntentMatchResult result = ReflectionTestUtils.invokeMethod(orchestrator,
-                "tryOrchestratorPhraseShortcut", "供应商价格比较：没有真实报价请明确不可比价", "F006", "FACTORY");
+        SseStreamingService pipeline = mock(SseStreamingService.class, CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(pipeline, "knowledgeBase", knowledge);
+        ReflectionTestUtils.setField(pipeline, "toolRegistry", tools);
+        ReflectionTestUtils.setField(pipeline, "intentConfigRepository", configs);
+        IntentMatchResult result = ReflectionTestUtils.invokeMethod(pipeline,
+                "tryPhraseShortcut", "F006", "供应商价格比较：没有真实报价请明确不可比价");
         assertThat(result).isNotNull();
         assertThat(result.getBestMatch().getIntentCode()).isEqualTo(SupplierComparisonReadIntent.CODE);
         assertThat(result.getBestMatch().getToolName()).isEqualTo(SupplierComparisonReadIntent.TOOL);

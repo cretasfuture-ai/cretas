@@ -528,13 +528,9 @@ class SameNameEmployeeAttendanceEntryContractTest {
                 ReflectionTestUtils.setField(orchestrator, "configService", config);
                 ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
                 ReflectionTestUtils.setField(orchestrator, "resultFormatterService", formatter);
-                ReflectionTestUtils.setField(orchestrator, "recognitionHistoryResolver",
-                        new RecognitionHistoryResolver(memory));
                 OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
+                OrdinaryEntryPipeline.bind(orchestrator, new RecognitionHistoryResolver(memory));
                 FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
-                for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
-                    ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
-                }
             } else {
                 FactoryRepository factories = mock(FactoryRepository.class);
                 Factory factory = new Factory();
@@ -575,7 +571,7 @@ class SameNameEmployeeAttendanceEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(actorType, callerId, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    return orchestrator.execute(FACTORY, request, callerId, ROLE);
+                    return OrdinaryEntryPipeline.execute(orchestrator, FACTORY, request, callerId, ROLE);
                 }
                 ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", mock(SseEmitter.class), FACTORY, request,
                         callerId, ROLE);

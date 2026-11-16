@@ -93,8 +93,8 @@ class PhraseShortcutEntryParityContractTest {
     }
 
     @ParameterizedTest(name = "{0}: 否定说法「{1}」不被短语抢走")
-    @CsvSource({"SSE,别查库存了", "SSE,不要看库存了"})
-    @DisplayName("阴性对照: 否定说法不走短语快捷通道, 交给识别管线 (流式)")
+    @CsvSource({"SSE,别查库存了", "SSE,不要看库存了", "ORDINARY,别查库存了"})
+    @DisplayName("阴性对照: 只读否定 (VETO_READ) 不走短语快捷通道, 先澄清 —— PR-3 起两入口同一时机 (原普通入口 W1b)")
     void negatedPhraseIsLeftToRecognition(Entry entry, String input) throws Exception {
         Harness h = new Harness(entry);
         when(h.preprocessor.detectNegationVeto(anyString(), any()))
@@ -102,8 +102,14 @@ class PhraseShortcutEntryParityContractTest {
 
         h.send(input);
 
-        assertThat(h.recognitionCalls()).as("没被短语抢 → 识别被调用 (阳性对照)").containsExactly(input);
-        assertThat(h.executedIntents).doesNotContain(PHRASE_INTENT);
+        assertThat(h.executedIntents).as("没被短语抢成执行").doesNotContain(PHRASE_INTENT);
+        assertThat(h.recognitionCalls()).as("先澄清, 不再识别").isEmpty();
+        assertThat(invocationsOf(h.preprocessor, "detectNegationVeto")).as("阳性对照: 否定判定确实跑了").isPositive();
+    }
+
+    private static long invocationsOf(Object mock, String method) {
+        return org.mockito.Mockito.mockingDetails(mock).getInvocations().stream()
+                .filter(i -> method.equals(i.getMethod().getName())).count();
     }
 
     // ------------------------------------------------------------------ harness
@@ -185,7 +191,7 @@ class PhraseShortcutEntryParityContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    ordinary().execute(FACTORY, request, USER, ROLE);
+                    OrdinaryEntryPipeline.execute(ordinary(), FACTORY, request, USER, ROLE);
                     return;
                 }
                 ReflectionTestUtils.invokeMethod(sse(), "executeStreamAsync", mock(SseEmitter.class), FACTORY,

@@ -91,17 +91,9 @@ class ReportWorkPhraseShortcutEntryContractTest {
 
         h.send(input);
 
-        if (entry == Entry.ORDINARY) {
-            // 报工是写操作: 普通入口先过写确认闸 (WRITE_CONFIRM_REQUIRED, App 再调预览出确认卡), 不会直接执行;
-            // 这里要证明的是「落到了完成工序」, 阳性对照 = 确认闸确实拦了、没有任何工具被直接执行
-            assertThat(h.ordinaryResponse).as("普通入口有回执").isNotNull();
-            assertThat(h.ordinaryResponse.getIntentCode()).isEqualTo(PHRASE_INTENT);
-            assertThat(h.ordinaryResponse.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
-            assertThat(h.executedIntents).as("写操作没被直接执行").isEmpty();
-        } else {
-            assertThat(h.executedIntents).as("阳性对照: 工具分发真的被调用了").hasSize(1);
-            assertThat(h.executedIntents).containsExactly(PHRASE_INTENT);
-        }
+        // PR-3: 两个入口是同一条流式管线 —— 都落到完成工序的工具分发 (写确认由工具层 W0 SITE B 出, 这里分发是桩)
+        assertThat(h.executedIntents).as("阳性对照: 工具分发真的被调用了").hasSize(1);
+        assertThat(h.executedIntents).containsExactly(PHRASE_INTENT);
         assertThat(h.recognitionCalls()).as("短语命中不再去识别").isEmpty();
     }
 
@@ -228,7 +220,7 @@ class ReportWorkPhraseShortcutEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    ordinaryResponse = ordinary().execute(FACTORY, request, USER, ROLE);
+                    ordinaryResponse = OrdinaryEntryPipeline.execute(ordinary(), FACTORY, request, USER, ROLE);
                     return;
                 }
                 ReflectionTestUtils.invokeMethod(sse(), "executeStreamAsync", mock(SseEmitter.class), FACTORY,

@@ -65,7 +65,7 @@ class IntentResponseAiModeContractTest {
 
     @Test
     void realExecuteEarlyRetirementResponseHasReadModeWithoutRevivingCapability() {
-        var response = orchestrator.execute("F006", IntentExecuteRequest.builder()
+        var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder()
                 .intentCode(FactoryIntentCatalog.retiredCodes().iterator().next())
                 .userInput("已退役能力").mode("READ").build(), 1707L, "viewer");
         assertThat(response.getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
@@ -145,7 +145,7 @@ class IntentResponseAiModeContractTest {
         when(recognizer.hasPermission(intent.getIntentCode(), "viewer")).thenReturn(true);
         ReflectionTestUtils.setField(orchestrator, "aiIntentService", recognizer);
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", mock(BusinessTypeGate.class));
-        var response = orchestrator.execute("F006", IntentExecuteRequest.builder().intentCode(intent.getIntentCode())
+        var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder().intentCode(intent.getIntentCode())
                 .userInput("预览产品").previewOnly(true).build(), 1707L, "viewer");
         assertThat(response.getStatus()).isEqualTo("FAILED");
         assertThat(response.getMessage()).contains("预览模式暂不支持");
@@ -163,7 +163,7 @@ class IntentResponseAiModeContractTest {
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry
                     ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_WORKFLOW_GUIDANCE");
             assertThat(response.getAiMode()).isEqualTo("WRITE");
             assertThat(response.getMetadata()).containsEntry("mutation", true);
@@ -215,7 +215,7 @@ class IntentResponseAiModeContractTest {
         ReflectionTestUtils.setField(orchestrator, "slotFillingService", slots);
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "viewer"))) {
-            var response = orchestrator.execute("F006", IntentExecuteRequest.builder().userInput("缺槽测试").build(),
+            var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder().userInput("缺槽测试").build(),
                     1707L, "viewer");
             assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
             assertThat(response.getAiMode()).isEqualTo(write ? "WRITE" : "READ");
@@ -242,7 +242,7 @@ class IntentResponseAiModeContractTest {
         var request = IntentExecuteRequest.builder().intentCode(selected.getIntentCode()).userInput("配置预览")
                 .previewOnly(true).build();
         var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "viewer")
-                : orchestrator.execute("F006", request, 1707L, "viewer");
+                : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "viewer");
         assertThat(response.getStatus()).isEqualTo("BUSINESS_TYPE_MISMATCH");
         assertThat(response.getAiMode()).isEqualTo("WRITE");
         assertThat(response.getConfirmableAction()).isNull();
@@ -263,7 +263,7 @@ class IntentResponseAiModeContractTest {
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
             assertThat(response.getAiMode()).isEqualTo("WRITE");
             assertThat(response.getConfirmableAction()).isNull();
@@ -284,7 +284,7 @@ class IntentResponseAiModeContractTest {
         try (var ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 1707L, "F006", "operator"))) {
             var response = explicitEntry ? orchestrator.executeWithExplicitIntent("F006", request, 1707L, "operator")
-                    : orchestrator.execute("F006", request, 1707L, "operator");
+                    : OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 1707L, "operator");
             assertThat(response.getStatus()).isEqualTo("FACTORY_PACK_NO_MATCH");
             assertThat(response.getMetadata()).containsEntry("reason", "read-tool-outside-allowlist");
             assertThat(response.getAiMode()).isEqualTo("READ");

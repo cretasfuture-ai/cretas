@@ -114,7 +114,7 @@ class OrdinaryEntryPhraseShortcutTaskStateContractTest {
         taskState = new ConversationTaskStateService(repo);
         taskState.setEnabled(false);
         taskState.setFactories("F006");
-        ReflectionTestUtils.setField(orchestrator, "taskStateService", taskState);
+        OrdinaryEntryPipeline.bind(orchestrator, taskState);
 
         // 报工工具: 参数说明与 WorkProcessTaskCompleteTool 的 schema 相同 (给人看的名字从这里来)
         ToolExecutor tool = mock(ToolExecutor.class);
@@ -171,13 +171,13 @@ class OrdinaryEntryPhraseShortcutTaskStateContractTest {
         // 第 2 轮: 正在问任务号, 插一句查询 → 报工挂起 (改动前: 短语表直接执行 REPORT_INVENTORY, 会话一直 ACTIVE)
         IntentExecuteResponse inventory = execute("先看下库存");
         assertThat(sessions.get(sessionId).getStatus()).as("报工被挂起").isEqualTo(SessionStatus.SUSPENDED);
-        assertThat(inventory.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(inventory.getMetadata() == null || !Boolean.TRUE.equals(inventory.getMetadata().get("taskResumed"))).as("没有恢复任务").isTrue();
         assertThat(inventory.getIntentCode()).as("挂起之后这句照常走短语快捷通道, 查库存照查")
                 .isEqualTo(phraseCode("先看下库存"));
 
         // 第 3 轮: 「继续报工」→ 回到报工 (改动前: 短语表执行成 CONTEXT_CONTINUE「正在为您恢复上次操作」)
         IntentExecuteResponse resumed = execute("继续报工");
-        assertThat(resumed.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(resumed.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(resumed.getIntentCode()).isEqualTo(INTENT);
         assertThat(resumed.getSessionId()).isEqualTo(sessionId);
         assertThat(resumed.getMetadata()).containsEntry("taskResumed", true);
@@ -201,7 +201,7 @@ class OrdinaryEntryPhraseShortcutTaskStateContractTest {
     @DisplayName("正在问时说「继续完成工序」(它自己) → 重问, 重问那句同样不外露字段名")
     void repeatingTheOpenTaskUsesDisplayNames() {
         IntentExecuteResponse response = execute("继续完成工序");
-        assertThat(response.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(response.getSessionId()).isEqualTo(sessionId);
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
         assertThat(response.getMessage()).contains("实际产量：100").contains("工序任务编号");
@@ -210,15 +210,15 @@ class OrdinaryEntryPhraseShortcutTaskStateContractTest {
     }
 
     @Test
-    @DisplayName("阴性对照: 开关对本厂关 → 短语表照旧先执行, 不查任务、不挂起、不恢复 (与改动前相同)")
+    @DisplayName("阴性对照: 开关对本厂关 → 不挂起、不恢复; 打断即取消缺参追问, 这句照常按短语表执行 (PR-3 起 /execute 与 App 同一条管线)")
     void switchOffKeepsThePhraseShortcutFirst() {
         taskState.setFactories("");
         clearInvocations(repo);
 
         IntentExecuteResponse inventory = execute("先看下库存");
-        assertThat(inventory.getIntentCode()).as("必然读数: 短语快捷通道照旧先执行").isEqualTo(phraseCode("先看下库存"));
-        assertThat(sessions.get(sessionId).getStatus()).as("开关关: 不挂起").isEqualTo(SessionStatus.ACTIVE);
-        verify(repo, never()).findBySessionIdAndFactoryIdAndUserId(anyString(), anyString(), anyLong());
+        assertThat(inventory.getIntentCode()).as("必然读数: 短语快捷通道执行了这句").isEqualTo(phraseCode("先看下库存"));
+        assertThat(sessions.get(sessionId).getStatus()).as("开关关: 不挂起 (打断 = 取消, 与 App 流式一致)")
+                .isEqualTo(SessionStatus.CANCELLED);
         verify(repo, never()).findSuspendedByFactoryAndUser(anyString(), anyLong());
 
         IntentExecuteResponse cont = execute("继续报工");
@@ -243,7 +243,7 @@ class OrdinaryEntryPhraseShortcutTaskStateContractTest {
     private IntentExecuteResponse execute(String input) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
-            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+            return OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
                     .build(), USER, ROLE);
         }
     }

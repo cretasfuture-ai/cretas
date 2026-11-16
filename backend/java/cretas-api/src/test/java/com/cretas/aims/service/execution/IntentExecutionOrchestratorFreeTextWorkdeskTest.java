@@ -143,7 +143,7 @@ class IntentExecutionOrchestratorFreeTextWorkdeskTest {
         when(llm.chatFast(anyString(), sent.capture()))
                 .thenReturn("今日共 7 个客户需要跟进, 优先: [客户A] (联系人 [人员A], 评分 40)。");
 
-        IntentExecuteResponse response = orchestrator.execute(FACTORY,
+        IntentExecuteResponse response = OrdinaryEntryPipeline.execute(orchestrator, FACTORY,
                 IntentExecuteRequest.builder().userInput(QUESTION).build(), USER, ROLE);
 
         verify(dynamic).tryExplicitSkillRouteForIntent(eq(intent), eq(QUESTION), eq(FACTORY), eq(USER), eq(ROLE));
@@ -185,7 +185,7 @@ class IntentExecutionOrchestratorFreeTextWorkdeskTest {
         // 「6 个」在数据里找不到出处 → 闸拒绝 (「前 6 位」这种窗口说法闸会放过, 不能拿来测)
         when(llm.chatFast(anyString(), anyString())).thenReturn("其中 6 个是 VIP 客户, 优先跟进 [客户A]。");
 
-        IntentExecuteResponse response = orchestrator.execute(FACTORY,
+        IntentExecuteResponse response = OrdinaryEntryPipeline.execute(orchestrator, FACTORY,
                 IntentExecuteRequest.builder().userInput(QUESTION).build(), USER, ROLE);
 
         assertThat(response.getFormattedText())
@@ -208,7 +208,7 @@ class IntentExecutionOrchestratorFreeTextWorkdeskTest {
                 .thenReturn(skillResponseAsInProduction());
         when(llm.chatFast(anyString(), anyString())).thenReturn("今日共 7 个客户需要跟进, 优先: [客户A]。");
 
-        IntentExecuteResponse response = orchestrator.execute(FACTORY,
+        IntentExecuteResponse response = OrdinaryEntryPipeline.execute(orchestrator, FACTORY,
                 IntentExecuteRequest.builder().userInput(QUESTION).build(), USER, ROLE);
 
         assertThat(response.getFormattedText()).contains("叮咚-上海松江冷藏仓");

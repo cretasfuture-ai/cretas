@@ -208,7 +208,7 @@ class ClarificationCandidateEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    return ordinary().execute(FACTORY, request, USER, ROLE);
+                    return OrdinaryEntryPipeline.execute(ordinary(), FACTORY, request, USER, ROLE);
                 }
                 SseStreamingService sse = sse();
                 ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", mock(SseEmitter.class), FACTORY,

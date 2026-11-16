@@ -42,6 +42,8 @@ class SseStreamingFoodFallbackContractTest {
 
     private void execute(Optional<AIIntentConfig> food, boolean isAnalysis) throws Exception {
         FactoryAnalysisTestMetadata.bindNamedFactories(service);
+        // 生产接线: 早期通用问法的路由 (分析流 / 食品知识 / RAG) 只有编排器那一份, 管线每轮都调 (PR-3)
+        OrdinaryEntryPipeline.attachTurnSteps(service);
         when(knowledge.detectQuestionType(QUESTION)).thenReturn(IntentKnowledgeBase.QuestionType.GENERAL_QUESTION);
         when(knowledge.matchPhrase(QUESTION)).thenReturn(Optional.of("FOOD_KNOWLEDGE_QUERY"));
         when(intents.getIntentByCode("F006", "FOOD_KNOWLEDGE_QUERY")).thenReturn(food);
@@ -86,19 +88,22 @@ class SseStreamingFoodFallbackContractTest {
     }
 
     @Test
-    void activeFoodConfigKeepsTheExistingKnowledgeRecognitionPath() throws Exception {
+    void activeFoodConfigRoutesToTheFoodKnowledgeIntentNotChat() throws Exception {
+        // PR-3: 两入口同一条早期路由 —— 本厂配了且在用的 FOOD_KNOWLEDGE_QUERY 直接按显式意图走 (原普通入口口径),
+        // 不进闲聊, 也不再绕一圈识别
         execute(Optional.of(AIIntentConfig.builder().intentCode("FOOD_KNOWLEDGE_QUERY").isActive(true).build()), false);
         verify(llm, never()).chatCompletionStream(any(), any(), any());
-        verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
+        verify(intents, never()).recognizeIntentWithConfidence(any(), any(), anyInt(), any(), any(), any(), any(), any(), anyList());
+        verify(intents, org.mockito.Mockito.atLeastOnce()).getIntentByCode("F006", "FOOD_KNOWLEDGE_QUERY");
+        verify(service).sendSseEvent(eq(emitter), eq("result"), any());
     }
 
     @Test
     void analysisDetectionStillTakesPriorityOverGeneralChat() throws Exception {
+        // PR-3: 分析请求进分析流 (复杂度路由), 不进闲聊流式回复, 不识别 —— 两入口同一条
         execute(Optional.of(AIIntentConfig.builder().intentCode("FOOD_KNOWLEDGE_QUERY").isActive(true).build()), true);
         verify(llm, never()).chatCompletionStream(any(), any(), any());
-        verify(cache).queryCache("F006", QUESTION);
-        verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
-                eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
+        verify(analysis).detectAnalysisTopic(QUESTION);
+        verify(intents, never()).recognizeIntentWithConfidence(any(), any(), anyInt(), any(), any(), any(), any(), any(), anyList());
     }
 }

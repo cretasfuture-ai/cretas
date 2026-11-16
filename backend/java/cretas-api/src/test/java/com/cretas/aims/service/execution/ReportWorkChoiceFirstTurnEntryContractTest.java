@@ -317,12 +317,16 @@ class ReportWorkChoiceFirstTurnEntryContractTest {
             ConversationTaskStateService taskState = new ConversationTaskStateService(repo);
             taskState.setEnabled(false);
             taskState.setFactories("F006");
-            ReflectionTestUtils.setField(orchestrator, "taskStateService", taskState);
+            OrdinaryEntryPipeline.bind(orchestrator, taskState);
 
             when(aiIntentService.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), any(),
                     any(), any(), any())).thenAnswer(inv -> recognized(inv.getArgument(0)));
             when(aiIntentService.recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), any(),
                     any(), any(), any(), anyList(), anyMap())).thenAnswer(inv -> recognized(inv.getArgument(0)));
+            // PR-3: /execute 与 App 同一条管线 —— 选中之后到工具层, 写操作停在 W0 写确认 (SITE B, 与流式用例同一个桩)
+            doAnswer(inv -> IntentExecuteResponse.builder().intentRecognized(true).intentCode(INTENT)
+                    .status("WRITE_CONFIRM_REQUIRED").message("该操作会写入/修改数据，执行前需要确认。").build())
+                    .when(dispatch).executeWithTool(eq(completeTool), eq(F), any(), eq(complete), eq(USER), eq(ROLE), any());
         }
 
         @Test
@@ -349,7 +353,8 @@ class ReportWorkChoiceFirstTurnEntryContractTest {
             Map<String, Object> previewParams = (Map<String, Object>) second.getMetadata().get("previewParams");
             assertThat(previewParams).containsEntry("taskId", "101").containsEntry("actualQuantity", "100");
             assertThat(sessions.get(first.getSessionId()).getCollectedParameters()).containsEntry("taskId", "101");
-            verify(dispatch, never()).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
+            // PR-3: 同一条流式管线 —— 到工具层一次, 停在 W0 写确认 (SITE B 桩); 真正的写 (complete) 一次都没发生
+            verify(dispatch).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
             verify(taskService, never()).complete(anyString(), anyLong(), anyLong(), any());
         }
 
@@ -364,7 +369,8 @@ class ReportWorkChoiceFirstTurnEntryContractTest {
             assertThat(first.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
             Map<String, Object> previewParams = (Map<String, Object>) first.getMetadata().get("previewParams");
             assertThat(previewParams).containsEntry("taskId", "101").containsEntry("actualQuantity", "100");
-            verify(dispatch, never()).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
+            // PR-3: 同一条流式管线 —— 到工具层一次, 停在 W0 写确认 (SITE B 桩); 真正的写 (complete) 一次都没发生
+            verify(dispatch).executeWithTool(any(), anyString(), any(), any(), any(), any(), any());
             verify(taskService, never()).complete(anyString(), anyLong(), anyLong(), any());
         }
 
@@ -398,7 +404,7 @@ class ReportWorkChoiceFirstTurnEntryContractTest {
 
         private IntentExecuteResponse execute(String input, String sessionId) {
             try (AuthenticatedActor.ActorScope ignored = actor()) {
-                return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+                return OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
                         .build(), USER, ROLE);
             }
         }

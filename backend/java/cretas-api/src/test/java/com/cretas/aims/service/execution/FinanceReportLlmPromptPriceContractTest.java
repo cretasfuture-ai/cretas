@@ -188,7 +188,7 @@ class FinanceReportLlmPromptPriceContractTest {
     @ParameterizedTest(name = "{0}: 发给模型的提示词里没有被遮的数")
     @ValueSource(strings = {"production_manager", "sales_manager", "procurement_manager", "department_admin"})
     void nonFinanceCaller_theLlmNeverSeesTheMaskedValues(String role) {
-        IntentExecuteResponse response = orchestrator.execute(F,
+        IntentExecuteResponse response = OrdinaryEntryPipeline.execute(orchestrator, F,
                 IntentExecuteRequest.builder().userInput(QUESTION).build(), idOf.get(role), role);
 
         ArgumentCaptor<String> system = ArgumentCaptor.forClass(String.class);
@@ -227,7 +227,7 @@ class FinanceReportLlmPromptPriceContractTest {
             r.setResultData(composite);
             return r;
         });
-        orchestrator.execute(F, IntentExecuteRequest.builder().userInput(QUESTION).build(),
+        OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(QUESTION).build(),
                 idOf.get("production_manager"), "production_manager");
 
         ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
@@ -241,7 +241,7 @@ class FinanceReportLlmPromptPriceContractTest {
     @ParameterizedTest(name = "{0}: 照常看得到 (对照)")
     @ValueSource(strings = {"finance_manager", "factory_super_admin"})
     void financeOrAdmin_stillGetsTheValues(String role) {
-        IntentExecuteResponse response = orchestrator.execute(F,
+        IntentExecuteResponse response = OrdinaryEntryPipeline.execute(orchestrator, F,
                 IntentExecuteRequest.builder().userInput(QUESTION).build(), idOf.get(role), role);
 
         assertThat(response.getFormattedText())
@@ -254,7 +254,7 @@ class FinanceReportLlmPromptPriceContractTest {
     @Test
     void withoutThePriceComponent_theSummarizerIsNotCalled() {
         ReflectionTestUtils.setField(orchestrator, "priceView", null);
-        orchestrator.execute(F, IntentExecuteRequest.builder().userInput(QUESTION).build(),
+        OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(QUESTION).build(),
                 idOf.get("production_manager"), "production_manager");
         verify(llm, org.mockito.Mockito.never()).chatFast(anyString(), anyString());
     }

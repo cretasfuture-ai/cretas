@@ -447,12 +447,8 @@ public class SseStreamingService {
             }
             if (!factoryPackConstrained && explicitIntent.isPresent()) {
                 AIIntentConfig intent = explicitIntent.get();
-                sendSseEvent(emitter, "intent_recognized", Map.of(
-                        "intentCode", intent.getIntentCode(),
-                        "intentName", intent.getIntentName(),
-                        "intentCategory", intent.getIntentCategory(),
-                        "confidence", 1.0d,
-                        "matchMethod", "EXPLICIT"));
+                sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, 1.0d,
+                        "EXPLICIT"));
                 recordClarificationSelection(factoryId, userId, userRole, request, intent);
                 // 点了按钮 = 用户自己选了要做什么; 之前没答完的缺参追问作废, 免得下一个数字被它截走
                 closeOpenSlotSession(factoryId, userId, request, "explicit-intent");
@@ -486,12 +482,8 @@ public class SseStreamingService {
                         .requiresConfirmation(false)
                         .questionType(QuestionType.OPERATIONAL_COMMAND)
                         .build();
-                sendSseEvent(emitter, "intent_recognized", Map.of(
-                        "intentCode", intent.getIntentCode(),
-                        "intentName", intent.getIntentName(),
-                        "intentCategory", intent.getIntentCategory(),
-                        "confidence", 1.0d,
-                        "matchMethod", "EXPLICIT"));
+                sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, 1.0d,
+                        "EXPLICIT"));
                 executeAndStreamResult(
                         emitter, factoryId, request, intent, userId, userRole, startTime,
                         explicitMatch, factoryPackRoute);
@@ -529,6 +521,10 @@ public class SseStreamingService {
             //      命中后下面的缓存 / 早期问题类型 / 识别都跳过, 但意图权限、缺参追问、写确认照常在第 5-7 步。
             IntentMatchResult phraseShortcut = factoryPackConstrained || negation != QueryPreprocessorService.NegationKind.NONE
                     ? null : tryPhraseShortcut(factoryId, userInput);
+            if (!factoryPackConstrained && negation == QueryPreprocessorService.NegationKind.NONE
+                    && userInput != null && !userInput.isEmpty()) {
+                recordPhraseShortcutExit(factoryId, phraseShortcut);
+            }
 
             // 1.5. 早期问题类型检测 (两入口一份, PR-3; PR-2b C 类 #16): 早期即判通用咨询 / 闲聊的句子 ——
             //      分析流 (复杂度路由 / 多代理)、食品知识、RAG 路由、短语表意图由编排器的唯一实现接;
@@ -674,13 +670,8 @@ public class SseStreamingService {
                     return;
                 }
             }
-            sendSseEvent(emitter, "intent_recognized", Map.of(
-                    "intentCode", intent.getIntentCode(),
-                    "intentName", intent.getIntentName(),
-                    "intentCategory", intent.getIntentCategory(),
-                    "confidence", matchResult.getConfidence(),
-                    "matchMethod", matchResult.getMatchMethod() != null ? matchResult.getMatchMethod().name() : "UNKNOWN"
-            ));
+            sendSseEvent(emitter, "intent_recognized", intentRecognizedEvent(intent, matchResult.getConfidence(),
+                    matchResult.getMatchMethod() != null ? matchResult.getMatchMethod().name() : "UNKNOWN"));
 
             // Pack-constrained intents authorize and terminate here. This deliberately precedes
             // generic confirmation, legacy Skill and slot-filling branches so none can bypass the
@@ -894,6 +885,34 @@ public class SseStreamingService {
         } catch (Exception e) {
             log.debug("[SSE-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * 旧出口计数 (INTENT-DISTILL-20261111): 短语直达不经决策模型定意图, 只计数不改行为。PR-3 起两个入口都经这里
+     * (原先计在已删的编排器短语快捷上, App 流式这一处没计 —— 只计一处的读数会偏低)。缺席 (裸构造的单测) 不计。
+     */
+    @Autowired(required = false)
+    private com.cretas.aims.service.intent.LegacyIntentExitMetrics legacyExitMetrics;
+
+    private void recordPhraseShortcutExit(String factoryId, IntentMatchResult phraseShortcut) {
+        if (legacyExitMetrics == null) {
+            return;
+        }
+        try {
+            if (phraseShortcut != null && phraseShortcut.hasMatch()) {
+                AIIntentConfig hit = phraseShortcut.getBestMatch();
+                legacyExitMetrics.recordExit(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE,
+                        "java_phrase_shortcut", factoryId,
+                        com.cretas.aims.service.intent.LegacyIntentExitMetrics.rw(hit,
+                                () -> IntentExecutionOrchestrator.isWriteIntentDeclarationAware(
+                                        hit, intentAccessModeFilter, writeGuardService)),
+                        "precedes_decision");
+            } else {
+                legacyExitMetrics.recordPass(com.cretas.aims.service.intent.LegacyIntentExitMetrics.SITE_EXECUTE_PHRASE);
+            }
+        } catch (RuntimeException e) {
+            log.debug("[SSE] 旧出口计数失败 (不影响回答): {}", e.getClass().getSimpleName());
         }
     }
 
@@ -1116,10 +1135,10 @@ public class SseStreamingService {
         }
 
         // 发送执行中事件
-        sendSseEvent(emitter, "executing", Map.of(
-                "intentCode", intent.getIntentCode(),
-                "intentName", intent.getIntentName()
-        ));
+        Map<String, Object> executingEvent = new LinkedHashMap<>();
+        executingEvent.put("intentCode", intent.getIntentCode());
+        if (intent.getIntentName() != null) executingEvent.put("intentName", intent.getIntentName());
+        sendSseEvent(emitter, "executing", executingEvent);
 
         // 路由到 Tool
         String toolName = intent.getToolName();
@@ -1242,6 +1261,20 @@ public class SseStreamingService {
     /** 走了 error 出口的 emitter → error 事件里的 message (没有则空串; sendSseEvent 记)。 */
     private final Map<SseEmitter, String> erroredEmitters =
             java.util.Collections.synchronizedMap(new java.util.WeakHashMap<>());
+
+    /**
+     * intent_recognized 事件: 意图配置里名称 / 分类允许为空 (Map.of 遇 null 会让整轮走 error 出口 —— PR-3 起 /execute
+     * 也经这里, 编排器原路径不发这个事件、不会因此失败)。空的字段不放进事件。
+     */
+    private static Map<String, Object> intentRecognizedEvent(AIIntentConfig intent, Object confidence, Object matchMethod) {
+        Map<String, Object> event = new LinkedHashMap<>();
+        event.put("intentCode", intent.getIntentCode());
+        if (intent.getIntentName() != null) event.put("intentName", intent.getIntentName());
+        if (intent.getIntentCategory() != null) event.put("intentCategory", intent.getIntentCategory());
+        if (confidence != null) event.put("confidence", confidence);
+        if (matchMethod != null) event.put("matchMethod", matchMethod);
+        return event;
+    }
 
     /** 短语快捷通道会不会接这句 (只读判定, 与管线 1.4 同一个方法)。 */
     boolean phraseShortcutWouldTake(String factoryId, String userInput) {

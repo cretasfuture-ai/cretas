@@ -1109,9 +1109,9 @@ public class IntentExecutionOrchestrator {
         }
 
         // Agentic RAG routing
-        if (earlyQuestionType == QuestionType.GENERAL_QUESTION) {
-            RAGRouteResult ragRouteResult = agenticRAGRouterService.route(userInput);
-
+        RAGRouteResult ragRouteResult = earlyQuestionType == QuestionType.GENERAL_QUESTION
+                ? agenticRAGRouterService.route(userInput) : null;
+        if (ragRouteResult != null && ragRouteResult.getConsultationType() != null) {
             switch (ragRouteResult.getConsultationType()) {
                 case KNOWLEDGE_SEARCH:
                     String knowledgeResponse = agenticRAGRouterService.executeKnowledgeSearch(userInput, ragRouteResult);
@@ -2117,8 +2117,10 @@ public class IntentExecutionOrchestrator {
             String userInput = request.getUserInput();
             String assistantMessage = response.getMessage() != null ? response.getMessage() : "执行完成";
             conversationMemoryService.addMessage(sessionId, ConversationMessage.user(userInput));
-            ConversationMessage assistant = ConversationMessage.assistant(assistantMessage);
-            Map<String, Object> readMetadata = readTurnMemoryMetadata(request, response);
+            ConversationMessage assistant = intentResult != null && intentResult.getBestMatch() != null
+                    ? ConversationMessage.assistant(assistantMessage, intentResult.getBestMatch().getIntentCode())
+                    : ConversationMessage.assistant(assistantMessage);
+            Map<String, Object> readMetadata = readTurnMemoryMetadata(request, response, intentResult);
             if (!readMetadata.isEmpty()) assistant.setMetadata(readMetadata);
             conversationMemoryService.addMessage(sessionId, assistant);
             // Extract entities from response data
@@ -2135,22 +2137,35 @@ public class IntentExecutionOrchestrator {
      * INTENT-DISTILL D1: 成功的只读查询把「本次实际执行的参数与来源」(readQuery) 和服务端分页元数据挂在助手消息上,
      * 与 SSE 入口写进同一份会话记忆 —— 下一轮续句沿用、「下一页」翻页都只从这里取。
      */
-    private Map<String, Object> readTurnMemoryMetadata(IntentExecuteRequest request, IntentExecuteResponse response) {
-        if (response == null || response.getMetadata() == null
-                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))
-                || !(response.getMetadata().get(ReadTurnParameters.METADATA_KEY) instanceof Map<?, ?> readQuery)
-                || !(readQuery.get("intentCode") instanceof String intentCode)
-                || !(readQuery.get("toolName") instanceof String toolName)) {
+    private Map<String, Object> readTurnMemoryMetadata(IntentExecuteRequest request, IntentExecuteResponse response,
+                                                       IntentMatchResult intentResult) {
+        if (response == null
+                || !("SUCCESS".equals(response.getStatus()) || "COMPLETED".equals(response.getStatus()))) {
+            return Map.of();
+        }
+        Map<String, Object> readQuery = response.getMetadata() != null
+                && response.getMetadata().get(ReadTurnParameters.METADATA_KEY) instanceof Map<?, ?> rq ? new LinkedHashMap<>() : null;
+        if (readQuery != null) {
+            ((Map<?, ?>) response.getMetadata().get(ReadTurnParameters.METADATA_KEY))
+                    .forEach((k, v) -> { if (k != null) readQuery.put(String.valueOf(k), v); });
+        }
+        AIIntentConfig intent = intentResult != null ? intentResult.getBestMatch() : null;
+        // readQuery 优先; 工具没给 readQuery 时按这一轮的意图与绑定工具 (两入口一份, PR-3: 原流式那一份就这样记翻页)
+        String intentCode = readQuery != null && readQuery.get("intentCode") instanceof String code ? code
+                : intent != null ? intent.getIntentCode() : null;
+        String toolName = readQuery != null && readQuery.get("toolName") instanceof String tool ? tool
+                : intent != null ? intent.getToolName() : null;
+        if (intentCode == null || toolName == null || toolName.isBlank()) {
             return Map.of();
         }
         Map<String, Object> metadata = new LinkedHashMap<>();
-        Map<String, Object> copy = new LinkedHashMap<>();
-        readQuery.forEach((k, v) -> { if (k != null) copy.put(String.valueOf(k), v); });
-        metadata.put(ReadTurnParameters.METADATA_KEY, copy);
+        if (readQuery != null) metadata.put(ReadTurnParameters.METADATA_KEY, readQuery);
         Optional<ToolExecutor> executor = toolRegistry.getExecutor(toolName);
-        if (executor.isPresent() && executor.get().getAccessMode() == ToolExecutor.AccessMode.READ) {
+        if (executor.isPresent() && executor.get().getAccessMode() == ToolExecutor.AccessMode.READ
+                && !(writeGuardService != null && writeGuardService.isWriteTool(executor.get()))
+                && !(intent != null && writeGuardService != null && writeGuardService.isWriteIntent(intent))) {
             Map<String, Object> pagination = ReadPaginationSupport.buildMetadata(request, intentCode, toolName,
-                    executor.get(), response.getResultData(), copy);
+                    executor.get(), response.getResultData(), readQuery);
             if (pagination != null) metadata.put(ReadPaginationSupport.METADATA_KEY, pagination);
         }
         return metadata;

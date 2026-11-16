@@ -72,14 +72,13 @@ class PhraseShortcutExitMetricsContractTest {
         OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
         FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
         registry = new SimpleMeterRegistry();
-        ReflectionTestUtils.setField(orchestrator, "legacyExitMetrics",
-                new LegacyIntentExitMetrics(registry, 900, 20, 0.05, 0.20));
+        OrdinaryEntryPipeline.bind(orchestrator, new LegacyIntentExitMetrics(registry, 900, 20, 0.05, 0.20));
     }
 
     private void execute(String input) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
-            orchestrator.execute(FACTORY, IntentExecuteRequest.builder().userInput(input).build(), USER, ROLE);
+            OrdinaryEntryPipeline.execute(orchestrator, FACTORY, IntentExecuteRequest.builder().userInput(input).build(), USER, ROLE);
         }
     }
 
