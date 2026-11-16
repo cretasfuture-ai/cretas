@@ -50,6 +50,7 @@ class PurchaseRequisitionResubmitContractTest {
     @Autowired PurchaseRequisitionServiceImpl service;
     @Autowired PurchaseRequisitionRepository repo;
     @MockBean PurchaseService purchaseService;
+    @Autowired jakarta.persistence.EntityManager em;
 
     private static Map<String, Object> line(String qty) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -109,6 +110,7 @@ class PurchaseRequisitionResubmitContractTest {
         assertThat(approved.getRejectionReason()).as("重提后上一轮的驳回结论不再挂在单据上").isNull();
         assertThat(approved.getRequestedItems().get(0).get("quantity")).isEqualTo("5");
 
+        em.flush(); // 只 flush 不 clear: H2 读回 jsonb 列会失败(hypersistence 在 H2 上的限制), JSONB 往返只能在真 PG 验证
         List<PurchaseRequisitionApprovalRecord> h = service.getApprovalHistory(F, id);
         assertThat(h).extracting(PurchaseRequisitionApprovalRecord::getAction).containsExactly(
                 Action.SUBMITTED, Action.REJECTED, Action.REOPENED,
@@ -226,6 +228,39 @@ class PurchaseRequisitionResubmitContractTest {
         PurchaseRequisition fresh = newDraft("2");
         service.deleteDraft(F, fresh.getId(), REQUESTER);
         assertThat(repo.findById(fresh.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("存量已驳回单(submit_round=0 无流水)重开: 补写第 1 轮驳回流水并保留原驳回原因, 轮次 1,1,2, 重开后不能删")
+    void legacyRejectedRowKeepsReasonAndRoundsWhenReopened() {
+        PurchaseRequisition pr = newDraft("10");
+        pr.setStatus(PurchaseRequisitionStatus.REJECTED); // 机制上线前就被驳回的终态单据
+        pr.setSubmitRound(0);
+        pr.setApproverId(APPROVER);
+        pr.setRejectionReason("老驳回原因");
+        pr.setApprovedAt(java.time.LocalDateTime.of(2026, 10, 1, 9, 0));
+        repo.saveAndFlush(pr);
+
+        service.reopenRequisition(F, pr.getId(), REQUESTER);
+        service.submitRequisition(F, pr.getId(), REQUESTER);
+        em.flush();
+
+        List<PurchaseRequisitionApprovalRecord> h = service.getApprovalHistory(F, pr.getId());
+        assertThat(h).extracting(PurchaseRequisitionApprovalRecord::getAction)
+                .containsExactly(Action.REJECTED, Action.REOPENED, Action.SUBMITTED);
+        assertThat(h).extracting(PurchaseRequisitionApprovalRecord::getRound).containsExactly(1, 1, 2);
+        assertThat(h.get(0).getReason()).isEqualTo("老驳回原因");
+        assertThat(h.get(0).getActorId()).isEqualTo(APPROVER);
+        assertThat(h.get(0).getActedAt()).isEqualTo(java.time.LocalDateTime.of(2026, 10, 1, 9, 0));
+
+        PurchaseRequisition other = newDraft("4");
+        other.setStatus(PurchaseRequisitionStatus.REJECTED);
+        other.setSubmitRound(0);
+        repo.saveAndFlush(other);
+        service.reopenRequisition(F, other.getId(), REQUESTER); // 重开后(未再提交)
+        assertThatThrownBy(() -> service.deleteDraft(F, other.getId(), REQUESTER))
+                .as("重开后 submit_round 已 > 0, 有历史不可删")
+                .isInstanceOf(BusinessException.class).extracting("code").isEqualTo(400);
     }
 
     @Test

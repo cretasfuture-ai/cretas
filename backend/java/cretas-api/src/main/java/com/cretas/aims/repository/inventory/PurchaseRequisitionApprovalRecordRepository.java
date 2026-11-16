@@ -14,4 +14,7 @@ public interface PurchaseRequisitionApprovalRecordRepository
             String factoryId, String requisitionId);
 
     long countByFactoryIdAndRequisitionId(String factoryId, String requisitionId);
+
+    java.util.Optional<PurchaseRequisitionApprovalRecord> findTopByFactoryIdAndRequisitionIdOrderBySeqDesc(
+            String factoryId, String requisitionId);
 }

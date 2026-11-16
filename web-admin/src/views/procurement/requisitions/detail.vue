@@ -72,7 +72,9 @@ const canDelete = computed(
     canManageOwnDraft.value &&
     requisition.value?.status === 'DRAFT' &&
     currentUserId.value !== null &&
-    requisition.value?.requesterId === currentUserId.value,
+    requisition.value?.requesterId === currentUserId.value &&
+    // 有审批历史(含驳回后重开)的单据后端不许删, 不显示删除按钮免得点了必 400
+    approvalHistory.value.length === 0,
 );
 
 // 2026-11-15: 驳回后请购人可重开回草稿、改数量再提交; 每轮审批历史保留。
@@ -175,7 +177,7 @@ async function loadRequisition() {
     const res = await getRequisition(factoryId.value, requisitionId.value);
     if (res?.success && res.data) {
       requisition.value = res.data;
-      void loadApprovalHistory(); // 提交/审批/驳回/重开后每次重载都刷新审批历史
+      await loadApprovalHistory(); // 提交/审批/驳回/重开后每次重载都刷新审批历史(等它回来, 不乱序覆盖)
       // Pre-fill convert dialog supplier from first item's suggestedSupplierId
       const firstItem = res.data.requestedItems?.[0];
       const suggested =
@@ -530,7 +532,7 @@ function goBack() {
               type="primary"
               plain
               :loading="submitting"
-              :disabled="Object.keys(editQuantities).length === 0"
+              :disabled="!hasUnsavedEdits"
               @click="handleSaveEdits"
             >
               保存数量修改

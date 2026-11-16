@@ -121,6 +121,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         pr.setApprovedAt(null);
         pr.setRejectionReason(null);
         PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
         appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.SUBMITTED, currentUserId, null,
                 snapshotItems(pr.getRequestedItems()), pr.getExpectedDate());
         return saved;
@@ -131,8 +132,17 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
     public PurchaseRequisition reopenRequisition(String factoryId, String requisitionId, Long currentUserId) {
         PurchaseRequisition pr = loadAndCheckFactory(factoryId, requisitionId);
         requireRequester(pr, currentUserId, "重开");
+        if (pr.getStatus() == PurchaseRequisitionStatus.REJECTED
+                && (pr.getSubmitRound() == null || pr.getSubmitRound() == 0)
+                && approvalRecordRepository.countByFactoryIdAndRequisitionId(factoryId, requisitionId) == 0) {
+            // 存量驳回单(机制上线前就被驳回, 终态): 驳回信息只在单据上, 提交时会被清掉 ⇒ 先补写第 1 轮的驳回流水
+            ensureRoundForLegacy(pr);
+            appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REJECTED, pr.getApproverId(),
+                    pr.getRejectionReason(), null, null, pr.getApprovedAt());
+        }
         transitionStatus(pr, PurchaseRequisitionStatus.DRAFT);
         PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush(); // 先吃 @Version, 并发败者在这里失败, 不留下流水
         appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REOPENED, currentUserId, null, null, null);
         log.info("请购单驳回后重开: id={}, round={}, requesterId={}", requisitionId, pr.getSubmitRound(), currentUserId);
         return saved;
@@ -185,6 +195,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         ensureRoundForLegacy(pr);
         log.info("审批通过请购单: id={}, approverId={}", requisitionId, approverId);
         PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
         appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.APPROVED, approverId, null, null, null);
         return saved;
     }
@@ -205,6 +216,7 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
         ensureRoundForLegacy(pr);
         log.info("驳回请购单: id={}, approverId={}, reason={}", requisitionId, approverId, rejectionReason);
         PurchaseRequisition saved = requisitionRepository.save(pr);
+        requisitionRepository.flush();
         appendRecord(pr, PurchaseRequisitionApprovalRecord.Action.REJECTED, approverId, rejectionReason, null, null);
         return saved;
     }
@@ -321,14 +333,22 @@ public class PurchaseRequisitionServiceImpl implements PurchaseRequisitionServic
     private void appendRecord(PurchaseRequisition pr, PurchaseRequisitionApprovalRecord.Action action,
                               Long actorId, String reason, List<Map<String, Object>> itemsSnapshot,
                               LocalDate expectedDate) {
+        appendRecord(pr, action, actorId, reason, itemsSnapshot, expectedDate, null);
+    }
+
+    private void appendRecord(PurchaseRequisition pr, PurchaseRequisitionApprovalRecord.Action action,
+                              Long actorId, String reason, List<Map<String, Object>> itemsSnapshot,
+                              LocalDate expectedDate, LocalDateTime actedAt) {
         PurchaseRequisitionApprovalRecord r = new PurchaseRequisitionApprovalRecord();
         r.setFactoryId(pr.getFactoryId());
         r.setRequisitionId(pr.getId());
         r.setRound(pr.getSubmitRound() == null || pr.getSubmitRound() == 0 ? 1 : pr.getSubmitRound());
-        r.setSeq((int) approvalRecordRepository.countByFactoryIdAndRequisitionId(pr.getFactoryId(), pr.getId()) + 1);
+        r.setSeq(approvalRecordRepository
+                .findTopByFactoryIdAndRequisitionIdOrderBySeqDesc(pr.getFactoryId(), pr.getId())
+                .map(last -> last.getSeq() + 1).orElse(1));
         r.setAction(action);
         r.setActorId(actorId);
-        r.setActedAt(LocalDateTime.now());
+        r.setActedAt(actedAt != null ? actedAt : LocalDateTime.now());
         r.setReason(reason);
         r.setItemsSnapshot(itemsSnapshot);
         r.setExpectedDateSnapshot(expectedDate);
