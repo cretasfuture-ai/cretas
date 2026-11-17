@@ -114,7 +114,7 @@ class UserDisableConfirmationContractTest {
     void toolDispatchPreviewRebindsMaliciousRequestUserIdToTrustedActorWithoutWriting() throws Exception {
         stubValidActor();
         ToolDispatchService dispatch = new ToolDispatchService(
-                mock(ToolRegistry.class), new ObjectMapper(), mock(DashScopeClient.class),
+                com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled(), new ObjectMapper(), mock(DashScopeClient.class),
                 mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
                 mock(CorrectionAgentService.class), mock(ExternalVerifierService.class),
                 mock(ToolResultValidatorService.class), mock(ParameterExtractionLearningService.class));

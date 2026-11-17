@@ -723,23 +723,102 @@ class StreamTurnCollectorEntryParityContractTest {
     }
 
     @Test
-    @DisplayName("PR-3b 预览 (带意图码 previewOnly): 两入口都走预览出口; 要审批的写也只预览 (审批管写入不管预览), 都不执行")
+    @DisplayName("PR-3b 预览 (带意图码 previewOnly, 真实调度): 免审批的写两入口都走预览出口并各铸一张令牌 (阳性对照)")
     void explicitPreviewRunsThePreviewBranchOnBothEntries() throws Exception {
-        for (String code : List.of(WRITE_INTENT, APPROVAL_WRITE_INTENT)) {
-            String tool = WRITE_INTENT.equals(code) ? WRITE_TOOL : APPROVAL_WRITE_TOOL;
-            Map<Entry, Harness> runs = runAll(h -> {
-                h.choiceListingAsks();
-                h.previewSupported(tool);
-            }, IntentExecuteRequest.builder().userInput("先看下会改什么").intentCode(code).previewOnly(true).build());
+        Map<Entry, Harness> runs = runAll(h -> {
+            h.useRealDispatch();
+            uncheck(() -> h.toolPreviewsSuccessfully(WRITE_TOOL));
+        }, IntentExecuteRequest.builder().userInput("先看下会改什么").intentCode(WRITE_INTENT).previewOnly(true).build());
 
-            assertExplicitParity(runs, "PREVIEW");
-            for (Entry entry : Entry.values()) {
-                Harness h = runs.get(entry);
-                assertThat(h.toolPreviewCalls()).as(code + " " + entry + ": 预览一次").isEqualTo(1);
-                assertThat(h.choiceListingCalls()).as(code + " " + entry + ": 预览不列选项").isZero();
-                assertThat(h.toolLayerCalls()).as(code + " " + entry + ": 不进执行出口").isZero();
-                assertThat(h.toolBodyCalls()).isZero();
-            }
+        assertExplicitParity(runs, "PREVIEW");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.toolPreviewCalls()).as(entry + ": 预览一次").isEqualTo(1);
+            assertThat(h.toolPreviewBodyCalls()).as(entry + ": 工具预览真的跑了").isEqualTo(1);
+            assertThat(h.tokensMinted()).as(entry + ": 阳性对照: 铸令牌的仪器是活的").isEqualTo(1);
+            assertThat(h.shown.getConfirmableAction()).as(entry.name()).isNotNull();
+            assertThat(h.toolLayerCalls()).as(entry + ": 不进执行出口").isZero();
+            assertThat(h.toolBodyCalls()).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 终审 M2: 要审批的写带 previewOnly → 两入口都 PENDING_APPROVAL, 不调预览、不铸令牌")
+    void explicitApprovalWritePreviewStopsAtApprovalOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(h -> {
+            h.useRealDispatch();
+            h.choiceListingAsks();
+            uncheck(() -> h.toolPreviewsSuccessfully(APPROVAL_WRITE_TOOL));
+        }, IntentExecuteRequest.builder().userInput("先看下会删什么").intentCode(APPROVAL_WRITE_INTENT)
+                .previewOnly(true).build());
+
+        assertExplicitParity(runs, "PENDING_APPROVAL");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getConfirmableAction()).as(entry + ": 没有确认按钮").isNull();
+            assertThat(h.toolPreviewCalls()).as(entry + ": 预览出口 0 次").isZero();
+            assertThat(h.toolPreviewBodyCalls()).as(entry + ": 工具预览 0 次").isZero();
+            assertThat(h.tokensMinted()).as(entry + ": 令牌 0 张").isZero();
+            assertThat(h.choiceListingCalls()).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 终审 M1: 本厂关了这个工具 → 带意图码的预览两入口都 TOOL_DISABLED, 不跑预览、不铸令牌")
+    void explicitPreviewOfADisabledToolIsRefusedOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(h -> {
+            h.useRealDispatch();
+            uncheck(() -> h.toolPreviewsSuccessfully(WRITE_TOOL));
+            when(h.toolRegistry.isToolEnabledForFactory(FACTORY, WRITE_TOOL)).thenReturn(false);
+        }, IntentExecuteRequest.builder().userInput("先看下会改什么").intentCode(WRITE_INTENT).previewOnly(true).build());
+
+        assertExplicitParity(runs, "TOOL_DISABLED");
+        assertPreviewRefusedWithoutToken(runs);
+    }
+
+    @Test
+    @DisplayName("PR-3b 终审 M1: 旧逐工具角色检查过不了 → 带意图码的预览两入口都 PERMISSION_DENIED, 不跑预览、不铸令牌")
+    void explicitPreviewDeniedByTheLegacyRoleCheckIsRefusedOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(h -> {
+            h.useRealDispatch();
+            uncheck(() -> h.toolPreviewsSuccessfully(WRITE_TOOL));
+            ToolExecutor tool = h.tools.get(WRITE_TOOL);
+            when(tool.requiresPermission()).thenReturn(true);
+            when(tool.getRequiredPermissions()).thenReturn(java.util.Set.of());
+            when(tool.hasPermission(ROLE)).thenReturn(false);
+        }, IntentExecuteRequest.builder().userInput("先看下会改什么").intentCode(WRITE_INTENT).previewOnly(true).build());
+
+        assertExplicitParity(runs, "PERMISSION_DENIED");
+        assertPreviewRefusedWithoutToken(runs);
+    }
+
+    @Test
+    @DisplayName("PR-3b 终审 L1: 不能安全预览的工具 → 带意图码的预览两入口都 PREVIEW_UNSUPPORTED, 不执行")
+    void explicitPreviewOfAToolWithoutSafePreviewIsUnsupportedOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(Harness::useRealDispatch, IntentExecuteRequest.builder()
+                .userInput("先看下会改什么").intentCode(WRITE_INTENT).previewOnly(true).build());
+
+        assertExplicitParity(runs, "PREVIEW_UNSUPPORTED");
+        assertPreviewRefusedWithoutToken(runs);
+    }
+
+    private static void assertPreviewRefusedWithoutToken(Map<Entry, Harness> runs) {
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getConfirmableAction()).as(entry + ": 没有确认按钮").isNull();
+            assertThat(h.toolPreviewBodyCalls()).as(entry + ": 工具预览 0 次").isZero();
+            assertThat(h.tokensMinted()).as(entry + ": 令牌 0 张").isZero();
+            assertThat(h.toolBodyCalls()).as(entry + ": 没写").isZero();
+        }
+    }
+
+    private interface ThrowingRunnable { void run() throws Exception; }
+
+    private static void uncheck(ThrowingRunnable r) {
+        try {
+            r.run();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
         }
     }
 
@@ -1108,7 +1187,9 @@ class StreamTurnCollectorEntryParityContractTest {
         final SemanticCacheService semanticCache = mock(SemanticCacheService.class);
         final IntentKnowledgeBase knowledgeBase = spy(new IntentKnowledgeBase());
         final QueryPreprocessorService preprocessor = mock(QueryPreprocessorService.class);
-        final ToolDispatchService toolDispatch = mock(ToolDispatchService.class);
+        ToolDispatchService toolDispatch = mock(ToolDispatchService.class);
+        /** useRealDispatch 时的确认令牌服务 (数铸了几张)。 */
+        PreviewTokenService previewTokens;
         final ToolRegistry toolRegistry = mock(ToolRegistry.class);
         final DashScopeClient llm = mock(DashScopeClient.class);
         final DashScopeConfig llmConfig = mock(DashScopeConfig.class);
@@ -1356,6 +1437,46 @@ class StreamTurnCollectorEntryParityContractTest {
                 return IntentExecuteResponse.builder().intentRecognized(true).intentCode(seen.getIntentCode())
                         .status("PREVIEW").message("将删除 1 个批次（预览，未执行）").build();
             });
+        }
+
+        /**
+         * 真实工具调度 (预览出口的工具开关 / 身份 / 一线 / 旧角色门与铸令牌都是真的), 只桩它的外部依赖;
+         * 令牌服务是桩, 数 createBoundToken。工具默认在本厂开着。build() 之前调。
+         */
+        void useRealDispatch() {
+            ToolDispatchService real = new ToolDispatchService(toolRegistry, new ObjectMapper(),
+                    mock(DashScopeClient.class),
+                    mock(com.cretas.aims.service.calibration.ToolCallRedundancyService.class),
+                    mock(com.cretas.aims.service.calibration.SelfCorrectionService.class),
+                    mock(com.cretas.aims.service.calibration.CorrectionAgentService.class),
+                    mock(com.cretas.aims.service.calibration.ExternalVerifierService.class),
+                    mock(com.cretas.aims.service.calibration.ToolResultValidatorService.class),
+                    mock(com.cretas.aims.service.ParameterExtractionLearningService.class));
+            previewTokens = mock(PreviewTokenService.class);
+            when(previewTokens.createBoundToken(any())).thenReturn(com.cretas.aims.entity.intent.IntentPreviewToken
+                    .builder().token("tok-1").commandDigest("digest-1")
+                    .expiresAt(java.time.LocalDateTime.now().plusMinutes(5)).build());
+            ReflectionTestUtils.setField(real, "previewTokenService", previewTokens);
+            ReflectionTestUtils.setField(real, "writeGuardService", new WriteGuardService());
+            when(toolRegistry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
+            toolDispatch = spy(real);
+        }
+
+        /** 写工具支持预览且预览成功 (能确认), 真实调度会为它铸一张令牌。 */
+        void toolPreviewsSuccessfully(String toolName) throws Exception {
+            ToolExecutor tool = tools.get(toolName);
+            when(tool.supportsPreview()).thenReturn(true);
+            when(tool.getVersion()).thenReturn("1");
+            when(tool.preview(any(), any())).thenReturn("{\"success\":true,\"data\":{\"status\":\"PREVIEW\","
+                    + "\"canDo\":true,\"currentValues\":{\"状态\":\"在库\"},\"newValues\":{\"状态\":\"已删除\"}}}");
+        }
+
+        long tokensMinted() {
+            return previewTokens == null ? 0 : invocations(previewTokens, "createBoundToken");
+        }
+
+        long toolPreviewBodyCalls() {
+            return tools.values().stream().mapToLong(t -> invocations(t, "preview")).sum();
         }
 
         long orchestratorExecuteCalls() {

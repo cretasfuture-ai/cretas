@@ -973,11 +973,12 @@ public class IntentExecutionOrchestrator {
      * <p>顺序 (⛔ 不要调换, {@code StreamTurnCollectorEntryParityContractTest} 的显式意图用例守着):
      * <ol>
      *   <li>咨询页 (mode=READ) 拦写 —— READ 模式下不该出现确认卡;</li>
-     *   <li>审批 —— 声明需要审批的非预览请求在这里就停, 返回 PENDING_APPROVAL, 不列可选对象、不出确认卡、不执行
-     *       (PR-3b 前编排器是先出确认卡、确认时才判审批);</li>
+     *   <li>审批 —— 声明需要审批的请求 (含 previewOnly) 在这里就停, 返回 PENDING_APPROVAL, 不列可选对象、
+     *       不出确认卡、不预览 (不铸令牌)、不执行 (PR-3b 前编排器是先出确认卡、确认时才判审批; 预览放行);</li>
      *   <li>业态门 (能力包受限路由不判);</li>
      *   <li>写操作 (非预览、未确认): 先列可选对象 → 一线未开放的写如实拒 (不出确认卡) → W0 写确认卡;</li>
-     *   <li>预览 (previewOnly): 支持安全预览的工具只预览; 否则如实失败, 不执行。审批管的是写入本身, 不管只读预览。</li>
+     *   <li>预览 (previewOnly): 支持安全预览的工具只预览 (预览出口自己再判工具开关 / 身份 / 一线 / 旧角色检查);
+     *       不支持 → PREVIEW_UNSUPPORTED, 不执行 (与工具层执行出口同一状态)。</li>
      * </ol>
      *
      * <p>W0 写确认 (intent-w0) SITE A: 不看 forceExecute (多意图子请求把它恒设 true, 那正是不能跳过的);
@@ -1061,8 +1062,10 @@ public class IntentExecutionOrchestrator {
                     .intentRecognized(true)
                     .intentCode(intent.getIntentCode())
                     .intentName(intent.getIntentName())
-                    .status("FAILED")
-                    .message("预览模式暂不支持此意图类型")
+                    // 与工具层执行出口 (ToolDispatchService) 同一状态与文案; 前端 aiWriteConfirm 按 PREVIEW_UNSUPPORTED 映射
+                    .status("PREVIEW_UNSUPPORTED")
+                    .message("该工具不支持安全预览，未执行任何操作。")
+                    .formattedText("该工具不支持安全预览，未执行任何操作。")
                     .executedAt(LocalDateTime.now())
                     .build();
             applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());

@@ -494,44 +494,9 @@ public class ToolDispatchService {
             // Request identity must be checked before parameter extraction or cache lookup.
             // A cached supplier result is subject to the same boundary as a fresh Tool call.
             // 身份门 + 功能开关与澄清候选共用一份判定 (ToolExecutionAdmission), 候选不许比这里放得宽。
-            ToolExecutionAdmission.Refusal admission =
-                    ToolExecutionAdmission.refusal(toolRegistry, tool, intent, factoryId, userId).orElse(null);
-            // 任何拒绝都不往下执行: switch 表达式对枚举必须穷举 —— 以后新增一种 Refusal 而这里没写,
-            // 编译就过不去 (不会落空放行; 候选侧按 isPresent 一律不出) (#1769 终审第 2 条)。
-            if (admission != null) {
-                return switch (admission) {
-                    case SUPPLIER_IDENTITY -> IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent == null ? null : intent.getIntentCode())
-                        .status("FORBIDDEN").aiMode("READ")
-                        .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
-                        .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
-                        .executedAt(LocalDateTime.now()).build();
-                    // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
-                    // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
-                    // the switch was never read on the execution path. Now a disabled tool
-                    // returns a clear error instead of silently running.
-                    case TOOL_DISABLED -> {
-                        log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
-                        // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
-                        // and cross-factory cases (e.g. F999 not configured → tool not enabled).
-                        String disabledMsg = String.format(
-                                "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
-                                + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
-                                + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
-                                intent.getIntentName(), factoryId, factoryId);
-                        yield IntentExecuteResponse.builder()
-                                .intentRecognized(true)
-                                .intentCode(intent.getIntentCode())
-                                .intentName(intent.getIntentName())
-                                .intentCategory(intent.getIntentCategory())
-                                .status("TOOL_DISABLED")
-                                .message(disabledMsg)
-                                .formattedText(disabledMsg)
-                                .executedAt(LocalDateTime.now())
-                                .build();
-                    }
-                };
+            IntentExecuteResponse admissionRefused = admissionRefusalResponse(tool, intent, factoryId, userId);
+            if (admissionRefused != null) {
+                return admissionRefused;
             }
 
             IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
@@ -609,20 +574,9 @@ public class ToolDispatchService {
             // 导致 3 个原料只读查询对所有角色全拒 (超管也拒), 4 个写工具的
             // confirm 终点被拦死。仅保留给只有 legacy 角色逻辑的旧工具。
             // 规则只有一份, 在 ToolPermissionChain —— Skill 路径也问它 (2026-10-06)。
-            if (ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
-                log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
-                // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
-                String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole, intent.getIntentName());
-                return IntentExecuteResponse.builder()
-                        .intentRecognized(true)
-                        .intentCode(intent.getIntentCode())
-                        .intentName(intent.getIntentName())
-                        .intentCategory(intent.getIntentCategory())
-                        .status("PERMISSION_DENIED")
-                        .message(permDeniedMsg)
-                        .formattedText(permDeniedMsg)
-                        .executedAt(LocalDateTime.now())
-                        .build();
+            IntentExecuteResponse legacyRoleRefused = legacyRoleDeniedResponse(tool, intent, userRole);
+            if (legacyRoleRefused != null) {
+                return legacyRoleRefused;
             }
 
             // 1.4. W9 红线 (AI-RBAC) — SITE B: central enforce. Covers sensitive write tools that do NOT
@@ -657,7 +611,8 @@ public class ToolDispatchService {
             // 1.5. 预览模式（不支持预览的请求已在上方 fail closed）
             if (Boolean.TRUE.equals(request.getPreviewOnly())) {
                 log.info("Tool preview 模式: tool={}, intentCode={}", tool.getToolName(), intent.getIntentCode());
-                return executeToolPreview(tool, factoryId, request, intent, userId, userRole);
+                // 工具开关 / 供应商身份 / 一线 / 旧逐工具角色检查上面都已判过, 直接进预览本体
+                return executeToolPreviewBody(tool, factoryId, request, intent, userId, userRole);
             }
 
             // A claimed preview is already the approved command. Do not resolve references or
@@ -1249,6 +1204,76 @@ public class ToolDispatchService {
     }
 
     /**
+     * 身份门 + 功能开关 (与澄清候选共用一份判定 {@link ToolExecutionAdmission}) 的回复; null = 放行。
+     * 执行出口与预览出口都用这一份。
+     */
+    private IntentExecuteResponse admissionRefusalResponse(ToolExecutor tool, AIIntentConfig intent,
+                                                           String factoryId, Long userId) {
+        java.util.Optional<ToolExecutionAdmission.Refusal> refused =
+                ToolExecutionAdmission.refusal(toolRegistry, tool, intent, factoryId, userId);
+        if (refused.isEmpty()) {
+            return null;
+        }
+        // 任何拒绝都不往下执行: switch 表达式对枚举必须穷举 —— 以后新增一种 Refusal 而这里没写,
+        // 编译就过不去 (不会落空放行; 候选侧按 isPresent 一律不出) (#1769 终审第 2 条)。
+        ToolExecutionAdmission.Refusal admission = refused.get();
+        return switch (admission) {
+            case SUPPLIER_IDENTITY -> IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent == null ? null : intent.getIntentCode())
+                .status("FORBIDDEN").aiMode("READ")
+                .message("供应商价格比较需要绑定的工厂用户身份及正式只读工具")
+                .resultData(Map.of("code", "FORBIDDEN", "toolName", tool.getToolName()))
+                .executedAt(LocalDateTime.now()).build();
+            // Round 8-β Fix: Canvas factory_tool_configs was a "write-only" table.
+            // Factory admins toggled tools on/off in Canvas UI (ToolSkillMatrix.vue) but
+            // the switch was never read on the execution path. Now a disabled tool
+            // returns a clear error instead of silently running.
+            case TOOL_DISABLED -> {
+                log.warn("Tool disabled for factory: tool={}, factoryId={}", tool.getToolName(), factoryId);
+                // Sprint 12: 4-element error UX (≥80-char). Covers both genuine admin-disable
+                // and cross-factory cases (e.g. F999 not configured → tool not enabled).
+                String disabledMsg = String.format(
+                        "「%s」功能当前在工厂 %s 不可用。可能原因: 1. 该功能已被工厂管理员在功能配置中关闭;"
+                        + " 2. 当前工厂 (%s) 未开通此模块或工厂编号不存在; 3. 您的角色暂无此功能权限。"
+                        + "建议: 联系工厂管理员在「功能配置」中开启, 或确认已切换到正确的工厂。",
+                        intent.getIntentName(), factoryId, factoryId);
+                yield IntentExecuteResponse.builder()
+                        .intentRecognized(true)
+                        .intentCode(intent.getIntentCode())
+                        .intentName(intent.getIntentName())
+                        .intentCategory(intent.getIntentCategory())
+                        .status("TOOL_DISABLED")
+                        .message(disabledMsg)
+                        .formattedText(disabledMsg)
+                        .executedAt(LocalDateTime.now())
+                        .build();
+            }
+        };
+    }
+
+    /** 旧逐工具角色串检查 ({@link ToolPermissionChain#legacyRoleDenied}) 的回复; null = 放行。执行与预览共用。 */
+    private IntentExecuteResponse legacyRoleDeniedResponse(ToolExecutor tool, AIIntentConfig intent, String userRole) {
+        if (!ToolPermissionChain.legacyRoleDenied(tool, userRole)) {
+            return null;
+        }
+        log.warn("Tool 权限不足: tool={}, userRole={}", tool.getToolName(), userRole);
+        // Sprint 12: 4-element error UX (≥80-char) for permission-denied case.
+        String permDeniedMsg = ToolPermissionChain.legacyRoleDeniedMessage(userRole,
+                intent == null ? null : intent.getIntentName());
+        return IntentExecuteResponse.builder()
+                .intentRecognized(true)
+                .intentCode(intent == null ? null : intent.getIntentCode())
+                .intentName(intent == null ? null : intent.getIntentName())
+                .intentCategory(intent == null ? null : intent.getIntentCategory())
+                .status("PERMISSION_DENIED")
+                .message(permDeniedMsg)
+                .formattedText(permDeniedMsg)
+                .executedAt(LocalDateTime.now())
+                .build();
+    }
+
+    /**
      * 一线角色 + 写操作 + 未开放 ⇒ 拒绝 (不出确认卡、不执行)。其它情况返回 null, 继续原有流程。
      */
     public IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
@@ -1286,14 +1311,35 @@ public class ToolDispatchService {
         }
     }
 
+    /**
+     * 直接调预览 (显式意图码的预览分支, 两入口一份) 与执行出口里的预览同一套门: 工具开关 TOOL_DISABLED、
+     * 供应商身份 (ToolExecutionAdmission)、一线未开放、旧逐工具角色检查 (ToolPermissionChain)。
+     * 过不了的不跑预览、不铸确认令牌 (PR-3b 终审 M1)。W9 权限矩阵按原口径不管只读预览。
+     */
     private IntentExecuteResponse executeToolPreviewInScope(ToolExecutor tool, String factoryId,
                                                      IntentExecuteRequest request,
                                                      AIIntentConfig intent,
                                                      Long userId, String userRole) {
+        IntentExecuteResponse admissionRefused = admissionRefusalResponse(tool, intent, factoryId, userId);
+        if (admissionRefused != null) {
+            return admissionRefused;
+        }
         IntentExecuteResponse frontlineDenied = frontlineWriteDenied(tool, factoryId, intent, userRole);
         if (frontlineDenied != null) {
             return frontlineDenied;
         }
+        IntentExecuteResponse legacyRoleRefused = legacyRoleDeniedResponse(tool, intent, userRole);
+        if (legacyRoleRefused != null) {
+            return legacyRoleRefused;
+        }
+        return executeToolPreviewBody(tool, factoryId, request, intent, userId, userRole);
+    }
+
+    /** 预览本体 (门已在调用方判过)。 */
+    private IntentExecuteResponse executeToolPreviewBody(ToolExecutor tool, String factoryId,
+                                                     IntentExecuteRequest request,
+                                                     AIIntentConfig intent,
+                                                     Long userId, String userRole) {
         try {
             Map<String, Object> params = TrustedExecutionContext.merge(
                     request.getContext(), factoryId, userId, userRole);
