@@ -44,6 +44,11 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
   - 停了马上通知对应会话：绿了让它合并发布，红了让它定位修复。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
+- 🔴 **全机资源预算**（Steve 2026-11-18）：几个批次的 organizer 共用这一台 Windows，各派各的线时彼此看不见，所以每任 organizer 派线、开构建前都按全机算，不只算自己这批：
+  - **本机 Java 构建（mvn）同时最多 2 个**，所有批次合计。开构建前先数：`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | ? CommandLine -match 'plexus-classworlds').Count"`；已有 2 个就排队，先做别的步骤或等它结束。执行线和子代理的任务包里写上这条。Mac mini 构建车道（`canada-mini`，国内、M4 Pro 64GB）配好后，构建优先放到 mini 上。
+  - **派新线前先体检**：`bash .claude/tools/worktree-hygiene.sh --check` 超过 30，或可用内存低于约 8GB，先回收或排队，不开新线、新子代理。
+  - **每任交班时归档自己名下已交付、空闲的会话**（规则同「执行线收尾归现任」）；子代理的 worktree 用完由派它的 organizer 收。
+  - 依据：2026-11-18 00:09 桌面应用卡死重启。应用主进程反复阻塞在拉起 git 上，单次 1–5 秒，累计约 78 分钟。当时同时跑着 6 个 Maven（每个约 2GB）和 44–46 个 worktree，应用要给每个未归档会话的目录轮询 git 状态和 PR 检查，子进程约 170 个，内存约 12GB。
 - 已有验证按共享规则复用。合并后归档本批并释放 scope，并跑一次 `bash .claude/tools/worktree-hygiene.sh --auto` 回收本批已完成的 worktree（只回收干净且 PR 已合并的，分支保留）；完整发布回执已覆盖的服务检查不重复做，业务验收缺口单列。
 
 ## 会话收口与接手（Steve 2026-11-10）
