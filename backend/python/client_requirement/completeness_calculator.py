@@ -32,7 +32,7 @@ class CompletenessResult(BaseModel):
     entity_type: str
     total_records: int
     field_completeness: Dict[str, float]  # field_name -> completion %
-    overall_completeness: float
+    overall_completeness: Optional[float] = None
     # Optional per-entity metadata (e.g. date range, unique counts) — kept
     # optional so manufacturing entities don't have to populate it.
     metadata: Optional[Dict[str, Any]] = None
@@ -43,6 +43,14 @@ class CompletenessRequest(BaseModel):
     factory_id: Optional[str] = None
     entity_types: Optional[List[str]] = None  # if None, compute all (manufacturing only)
 
+
+# 联系人/电话: 写入口径不一 (供应商表单与客户 Excel 导入只写 contact_person/phone,
+# 客户表单双写 contact_name/contact_phone), 任一列有非空白值就算「有」。
+# 值是 SQL 表达式, 有值时非 NULL、缺失时 NULL; 只在本文件里写死, 不拼用户输入。
+_CONTACT_EXPRS = {
+    "contact": "COALESCE(NULLIF(BTRIM(contact_person), ''), NULLIF(BTRIM(contact_name), ''))",
+    "phone": "COALESCE(NULLIF(BTRIM(phone), ''), NULLIF(BTRIM(contact_phone), ''))",
+}
 
 # Entity type to table/field mapping
 ENTITY_FIELD_MAP = {
@@ -95,35 +103,49 @@ ENTITY_FIELD_MAP = {
         "factory_filter": "factory_id",
         "label_field": "name",
         "fields": ["code", "name", "category", "unit", "unit_price", "storage_type", "shelf_life_days", "tax_rate"],
-        "text_fields": ["code", "name", "category", "unit", "storage_type"],
+        "text_fields": ["code", "name", "category", "unit", "storage_type", "tax_rate"],
     },
     "CUSTOMER": {
         "table": "customers",
         "factory_filter": "factory_id",
         "label_field": "name",
-        "fields": ["code", "name", "type", "contact_name", "contact_phone", "shipping_address",
+        "fields": ["code", "name", "type", "contact", "phone", "shipping_address",
                    "tax_number", "payment_terms", "credit_limit", "assigned_sales_user_id"],
-        "text_fields": ["code", "name", "type", "contact_name", "contact_phone", "shipping_address",
-                        "tax_number", "payment_terms"],
+        "text_fields": ["code", "name", "type", "shipping_address", "tax_number", "payment_terms"],
+        "exprs": dict(_CONTACT_EXPRS),
     },
     "SUPPLIER": {
         "table": "suppliers",
         "factory_filter": "factory_id",
         "label_field": "name",
-        "fields": ["code", "name", "contact_name", "contact_phone", "address",
+        "fields": ["code", "name", "contact", "phone", "address",
                    "tax_number", "payment_terms", "bank_name", "bank_account"],
-        "text_fields": ["code", "name", "contact_name", "contact_phone", "address",
-                        "tax_number", "payment_terms", "bank_name", "bank_account"],
+        "text_fields": ["code", "name", "address", "tax_number", "payment_terms", "bank_name", "bank_account"],
+        "exprs": dict(_CONTACT_EXPRS),
     },
 }
 
 MASTER_DATA_ENTITY_TYPES = ["MATERIAL_TYPE", "CUSTOMER", "SUPPLIER"]
+
+# 主数据明细下钻 (id + 名称) 等同于吐名单, 必须和 Java 对应名册同口径 (Python 侧只有 JWT 角色, 没有权限码, 所以镜像角色集):
+#  * 客户: CustomerController 名单 owner 裁定 (2026-09-06) 只给 销售/财务/工厂管理员/运营 (L1 sales|finance r/rw);
+#  * 供应商/物料: 名单导出要求 procurement|finance r/rw, 即 采购/财务/仓管/工厂管理员。
+# 角色集改动要和 Java 一起改; 其余角色 403。平台管理员与工厂管理员始终放行。
+_ADMIN = {"factory_super_admin", "platform_admin", "platform_super_admin"}
+MASTER_DATA_DRILLDOWN_ROLES = {
+    "CUSTOMER": _ADMIN | {"sales_manager", "finance_manager", "cashier", "operations_coordinator"},
+    "SUPPLIER": _ADMIN | {"procurement_manager", "finance_manager", "cashier", "warehouse_manager"},
+    "MATERIAL_TYPE": _ADMIN | {"procurement_manager", "finance_manager", "warehouse_manager"},
+}
 # 默认只算原来的 5 个生产实体, 主数据由调用方显式要 (设置页), 不改变既有页面的返回行数。
 DEFAULT_ENTITY_TYPES = [t for t in ENTITY_FIELD_MAP if t not in MASTER_DATA_ENTITY_TYPES]
 
 
 def _count_expr(config: Dict[str, Any], field: str) -> str:
     """COUNT 表达式: 文本列把空白当缺失。field 只来自 ENTITY_FIELD_MAP 白名单, 不拼用户输入。"""
+    expr = config.get("exprs", {}).get(field)
+    if expr:
+        return f"COUNT({expr}) as cnt_{field}"
     if field in config.get("text_fields", []):
         return f"COUNT(NULLIF(BTRIM({field}), '')) as cnt_{field}"
     return f"COUNT({field}) as cnt_{field}"
@@ -148,8 +170,13 @@ def build_missing_query(entity_type: str, field: str, count: bool = False) -> st
         raise ValueError(f"unknown field for {entity_type}: {field}")
     label = config.get("label_field")
     label_expr = f"{label}::text AS label" if label else "NULL::text AS label"
-    missing = (f"({field} IS NULL OR BTRIM({field}) = '')" if field in config.get("text_fields", [])
-               else f"{field} IS NULL")
+    expr = config.get("exprs", {}).get(field)
+    if expr:
+        missing = f"({expr}) IS NULL"
+    elif field in config.get("text_fields", []):
+        missing = f"({field} IS NULL OR BTRIM({field}) = '')"
+    else:
+        missing = f"{field} IS NULL"
     if count:
         return (f"SELECT COUNT(*) FROM {config['table']} "
                 f"WHERE {config['factory_filter']} = $1 AND deleted_at IS NULL AND {missing}")
@@ -389,7 +416,11 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
                             cnt = row[f"cnt_{f}"]
                             field_completeness[f] = round(cnt / total * 100, 1)
 
-                    overall = round(sum(field_completeness.values()) / len(field_completeness), 1) if field_completeness else 0  # noqa: E501
+                    # 没有记录 (total=0) 时没有可算的完整度: 主数据返回 None 以区别于「全部缺失」的 0%;
+                    # 既有生产实体保持旧行为 (0)。
+                    overall = (round(sum(field_completeness.values()) / len(field_completeness), 1)
+                               if field_completeness
+                               else (None if entity_type in MASTER_DATA_ENTITY_TYPES else 0))  # noqa: E501
 
                     results.append(CompletenessResult(
                         entity_type=entity_type,
@@ -452,6 +483,11 @@ async def api_missing_records(req: MissingRecordsRequest, request: Request):
         query = build_missing_query(req.entity_type, req.field)
     except ValueError:
         raise HTTPException(status_code=400, detail="不支持的实体类型或字段")
+    allowed = MASTER_DATA_DRILLDOWN_ROLES.get(req.entity_type)
+    if allowed is not None:
+        role = str(getattr(request.state, "role", "") or "").lower()
+        if role not in allowed:
+            raise HTTPException(status_code=403, detail="当前角色无权查看该名单的缺失明细")
     count_query = build_missing_query(req.entity_type, req.field, count=True)
     pool = await _get_db_pool()
     try:

@@ -18,7 +18,7 @@ def test_master_entities_registered_but_not_in_default_set():
 
 def test_text_fields_treat_blank_as_missing_numeric_do_not():
     q = cc.build_completeness_query("CUSTOMER")
-    assert "COUNT(NULLIF(BTRIM(contact_phone), '')) as cnt_contact_phone" in q
+    assert "COUNT(NULLIF(BTRIM(shipping_address), '')) as cnt_shipping_address" in q
     assert "COUNT(credit_limit) as cnt_credit_limit" in q  # 数值列不能 BTRIM
     assert "deleted_at IS NULL" in q and "factory_id = $1" in q
 
@@ -35,11 +35,11 @@ def test_every_text_field_is_a_declared_field():
 
 
 def test_missing_query_text_field_checks_null_or_blank_and_is_tenant_scoped():
-    q = cc.build_missing_query("SUPPLIER", "contact_phone")
-    assert "(contact_phone IS NULL OR BTRIM(contact_phone) = '')" in q
+    q = cc.build_missing_query("SUPPLIER", "address")
+    assert "(address IS NULL OR BTRIM(address) = '')" in q
     assert "factory_id = $1" in q and "deleted_at IS NULL" in q and "LIMIT $2" in q
-    n = cc.build_missing_query("SUPPLIER", "contact_phone", count=True)
-    assert n.startswith("SELECT COUNT(*)") and "LIMIT" not in n and "(contact_phone IS NULL OR" in n
+    n = cc.build_missing_query("SUPPLIER", "address", count=True)
+    assert n.startswith("SELECT COUNT(*)") and "LIMIT" not in n and "(address IS NULL OR" in n
 
 
 def test_missing_query_numeric_field_is_plain_is_null():
