@@ -227,3 +227,66 @@ def test_no_data_at_all_keeps_java_golden_zero_metrics():
     assert m["GROSS_PROFIT"]["value"] == 0
     assert m["GROSS_MARGIN"]["value"] == 0
     assert m["ROI"]["value"] == 0
+
+
+# ---------------------------------------------------------------- 复审 M1: 按上传批次判断「没录成本」
+
+def test_complete_costs_plus_one_gift_row_still_gives_gross_profit():
+    """阴性对照: 成本齐全的批次里有一行赠品 (金额 > 0, 成本 0) = 真 0, 毛利照常给出。"""
+    rows = [
+        {"amount": Decimal("10000"), "cost": Decimal("6000"), "order_date": date(2026, 10, 5), "upload_id": 7},
+        {"amount": Decimal("200"), "cost": Decimal("0"), "order_date": date(2026, 10, 6), "upload_id": 7},
+    ]
+    m = _metrics(rows)
+    assert m["GROSS_PROFIT"]["value"] == 4200
+    assert m["GROSS_MARGIN"]["value"] == pytest.approx(41.18, abs=0.01)
+    assert m["ROI"]["value"] is not None
+    point, = mod._aggregate_profit_by_period_sales(rows, "MONTH")
+    assert (point["revenue"], point["cost"], point["grossProfit"]) == (10200, 6000, 4200)
+
+
+def test_batch_with_all_zero_cost_is_missing_even_if_other_batch_has_cost():
+    """整批成本全是 0 = 那次上传没录成本列 → 缺数, 即使另一批成本齐全。"""
+    rows = [
+        {"amount": Decimal("10000"), "cost": Decimal("6000"), "order_date": date(2026, 10, 5), "upload_id": 7},
+        {"amount": Decimal("3000"), "cost": Decimal("0"), "order_date": date(2026, 11, 2), "upload_id": 8},
+        {"amount": Decimal("1000"), "cost": Decimal("0"), "order_date": date(2026, 11, 9), "upload_id": 8},
+    ]
+    oct_, nov = mod._aggregate_profit_by_period_sales(rows, "MONTH")
+    assert (oct_["cost"], oct_["grossProfit"]) == (6000, 4000)
+    assert (nov["revenue"], nov["cost"], nov["grossProfit"]) == (4000, None, None)
+    m = _metrics(rows)
+    assert m["GROSS_PROFIT"]["value"] is None and m["GROSS_MARGIN"]["value"] is None
+
+
+# ---------------------------------------------------------------- 复审 M2: finance_data 按月判断
+
+def _rev(month, amount):
+    return {"actual_amount": Decimal(amount), "category": "营业收入",
+            "record_date": date(2026, month, 15), "upload_id": 1}
+
+
+def _cost(month, amount):
+    return {"total_cost": Decimal(amount), "actual_amount": None,
+            "record_date": date(2026, month, 15), "upload_id": 1}
+
+
+def test_finance_month_with_revenue_but_no_cost_nulls_metrics():
+    """10 月有收入有成本, 11 月只有收入 → 不能用「两个月收入 − 10 月成本」算毛利率。"""
+    m = _metrics([], {"REVENUE": [_rev(10, "10000"), _rev(11, "8000")], "COST": [_cost(10, "6000")]})
+    assert m["GROSS_PROFIT"]["value"] is None
+    assert m["GROSS_MARGIN"]["value"] is None
+    assert m["GROSS_MARGIN"]["alertLevel"] != "RED"
+    assert m["ROI"]["value"] is None
+
+
+def test_finance_month_with_cost_but_no_revenue_is_left_out_of_gross():
+    """10 月收入、成本都有, 11 月只有成本 → 毛利只用 10 月算, 与趋势点、页面合计同一口径。"""
+    finance = {"REVENUE": [_rev(10, "10000")], "COST": [_cost(10, "6000"), _cost(11, "500")]}
+    m = _metrics([], finance)
+    assert m["GROSS_PROFIT"]["value"] == 4000
+    assert m["GROSS_MARGIN"]["value"] == 40
+    assert m["ROI"]["value"] == pytest.approx(66.67, abs=0.01)
+    oct_, nov = mod._build_profit_chart_from_finance_data(finance["REVENUE"], finance["COST"], "MONTH")
+    assert (oct_["revenue"], oct_["cost"], oct_["grossProfit"]) == (10000, 6000, 4000)
+    assert (nov["revenue"], nov["cost"], nov["grossProfit"]) == (None, 500, None)
