@@ -238,6 +238,6 @@ class DigitalCrewWriteDelegationMvcContractTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.message", containsString("没有")));
         verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
-        verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 }
