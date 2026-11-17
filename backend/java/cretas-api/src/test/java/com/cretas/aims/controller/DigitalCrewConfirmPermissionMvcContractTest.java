@@ -96,8 +96,10 @@ class DigitalCrewConfirmPermissionMvcContractTest {
         w.setCreatedByName("操作员");
         w.setPreviewedByUserId(32L);
         w.setCommandDigest(DIGEST);
+        w.setPreviewTokenId(77L);
         when(items.findByIdAndFactoryId(5L, F)).thenReturn(Optional.of(w));
-        when(items.claimForConfirm(eq(5L), eq(F), anyLong(), anyString(), eq(DIGEST), any(), any(), any())).thenReturn(1);
+        when(previewTokens.readBoundTokenId("proof-token-1", F, 32L)).thenReturn(Optional.of(77L));
+        when(items.claimForConfirm(eq(5L), eq(F), anyLong(), anyString(), eq(DIGEST), eq(77L), any(), any(), any())).thenReturn(1);
         when(items.save(any(DigitalCrewWorkItem.class))).thenAnswer(inv -> inv.getArgument(0));
         when(intents.confirm(eq(F), any(), anyLong(), anyString()))
                 .thenReturn(IntentExecuteResponse.builder().status("SUCCESS").message("已创建").build());
@@ -131,7 +133,7 @@ class DigitalCrewConfirmPermissionMvcContractTest {
                 // 钉死是服务层逐件判拒 (消息带事项的权限码), 不是拦截器粗筛拒的
                 .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("production:read_write")));
         verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
-        verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any());
+        verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     @Test

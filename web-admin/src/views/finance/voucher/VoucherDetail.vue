@@ -15,8 +15,11 @@ import { ref, computed, watch, onActivated, onDeactivated, onBeforeUnmount } fro
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { ArrowLeft, Check, Close } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import { badgeColor, type ElementTagType } from '@/utils/csBadge';
+import type { CsTableColumn } from '@/types/csTable';
+// 通用确认弹窗 (UModal, 取代 ElMessageBox)。
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import { getReturnRefundByRequest } from '@/api/inventory';
 import {
   getVoucherDetail,
@@ -44,6 +47,7 @@ const voucherId = computed(() => String(route.params.id ?? ''));
 const isVoucherPage = computed(() => route.name === 'FinanceVoucherDetail');
 const pageActive = ref(true);
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const loading = ref(false);
 const voucher = ref<Voucher | null>(null);
 const errorMessage = ref('');
@@ -312,15 +316,12 @@ async function onPost() {
   const context = captureContext();
   const currentVoucher = voucher.value;
   // Rule 2 context: 二次确认携带凭证号 + 金额
-  try {
-    await ElMessageBox.confirm(
-      `凭证 ${voucher.value.voucherNumber} (¥${fmtAmount(totalDebit.value)}) 即将过账, 之后将不可编辑. 确认?`,
-      '过账确认',
-      { confirmButtonText: '确认过账', cancelButtonText: '取消', type: 'warning' },
-    );
-  } catch {
-    return;  // user cancelled
-  }
+  const confirmed = await confirmRef.value!.ask({
+    title: '过账确认',
+    message: `凭证 ${voucher.value.voucherNumber} (¥${fmtAmount(totalDebit.value)}) 即将过账, 之后将不可编辑. 确认?`,
+    confirmText: '确认过账',
+  });
+  if (confirmed === null) return;  // user cancelled
   if (!isCurrentContext(context) || !voucher.value || voucher.value.id !== currentVoucher.id) return;
   loading.value = true;
   errorMessage.value = '';
@@ -397,6 +398,19 @@ async function onVoidSubmit() {
   }
 }
 
+const VOID_REASON_ITEMS = STANDARD_VOID_REASONS.map(o => ({ label: o.label, value: o.value }));
+function onVoidOpenChange(next: boolean) { voidDialogVisible.value = next; }
+
+const entryColumns = computed<CsTableColumn<Voucher['entries'][number]>[]>(() => [
+  { id: 'lineNo', header: '行号', meta: { class: { th: 'text-center', td: 'text-center' } } },
+  { id: 'subjectCode', header: '科目编码' },
+  { id: 'subjectName', header: '科目名称' },
+  { id: 'auxiliary', header: '辅助核算' },
+  { id: 'description', header: '摘要' },
+  { id: 'debit', header: '借方金额', meta: { class: { th: 'text-right', td: 'text-right vd-col-debit' } } },
+  { id: 'credit', header: '贷方金额', meta: { class: { th: 'text-right', td: 'text-right vd-col-credit' } } },
+]);
+
 function onBack() {
   router.back();
 }
@@ -425,25 +439,24 @@ onBeforeUnmount(() => { pageActive.value = false; ++requestSequence; });
 </script>
 
 <template>
-  <div class="voucher-detail" v-loading="loading">
-    <el-alert
+  <div class="voucher-detail" data-testid="voucher-detail">
+    <p v-if="loading" class="vd-loading">加载中…</p>
+    <UAlert
       v-if="errorMessage"
       class="vd-error"
-      type="error"
+      color="error" variant="soft" icon="i-lucide-circle-alert"
       :title="errorMessage"
-      show-icon
-      :closable="false"
     />
     <!-- Header: 上下文 (Rule 2) + 平衡 status (Rule 1) -->
     <div class="vd-header">
-      <el-button :icon="ArrowLeft" plain @click="onBack">返回</el-button>
+      <div><UButton color="neutral" variant="outline" icon="i-lucide-arrow-left" @click="onBack">返回</UButton></div>
 
       <template v-if="voucher">
         <h2 class="vd-title">
           凭证 {{ voucher.voucherNumber }}
-          <el-tag v-if="statusBadge" :type="statusBadge.type as any" effect="dark" class="vd-status-tag">
+          <UBadge v-if="statusBadge" :color="badgeColor(statusBadge.type as ElementTagType)" class="vd-status-tag">
             {{ statusBadge.text }}
-          </el-tag>
+          </UBadge>
         </h2>
         <div class="vd-meta">
           <span class="vd-meta-item">
@@ -459,46 +472,44 @@ onBeforeUnmount(() => { pageActive.value = false; ++requestSequence; });
             <strong>来源:</strong> {{ sourceBusinessTypeLabel(voucher.sourceBusinessType) }} / {{ voucher.sourceBusinessId }}
           </span>
           <span v-if="isReturnRefund" class="vd-meta-item vd-refund-source">
-            <el-button
-              type="primary"
-              link
+            <UButton
+              variant="link"
               :loading="refundLookupLoading"
               :disabled="refundLookupLoading"
               @click="openRefundContext"
-            >查看退款与资金流水</el-button>
+            >查看退款与资金流水</UButton>
           </span>
           <span v-if="linkedVoucherId" class="vd-meta-item vd-refund-source">
-            <el-button type="primary" link @click="openLinkedVoucher">
+            <UButton variant="link" @click="openLinkedVoucher">
               {{ isVoucherReversal ? '查看原始凭证' : '查看红冲凭证' }}
-            </el-button>
+            </UButton>
           </span>
           <span v-if="disposalOrigin" class="vd-meta-item">
-            <el-button type="primary" link @click="openDisposalLink('original')">原凭证 {{ disposalOrigin.voucherNumber }}（已冲销）</el-button>
+            <UButton variant="link" @click="openDisposalLink('original')">原凭证 {{ disposalOrigin.voucherNumber }}（已冲销）</UButton>
           </span>
           <span v-if="disposalRed" class="vd-meta-item">
-            <el-button type="primary" link @click="openDisposalLink('red')">红字凭证 {{ disposalRed.voucherNumber }}</el-button>
+            <UButton variant="link" @click="openDisposalLink('red')">红字凭证 {{ disposalRed.voucherNumber }}</UButton>
           </span>
           <span v-if="disposalRecordId" class="vd-meta-item">
-            <el-button type="primary" link @click="openDisposalLink('record')">查看报废审批</el-button>
+            <UButton variant="link" @click="openDisposalLink('record')">查看报废审批</UButton>
           </span>
         </div>
         <p v-if="isDisposalRevision" class="vd-meta-item">原凭证与红字凭证相抵，本次修订分录重新按核定成本记账。</p>
-        <el-alert v-if="disposalLookupError" type="error" :title="disposalLookupError" :closable="false" show-icon>
-          <el-button link type="primary" @click="loadVoucher">重新读取关联凭证</el-button>
-        </el-alert>
-        <el-alert
+        <div v-if="disposalLookupError" class="vd-lookup-error">
+          <UAlert color="error" variant="soft" icon="i-lucide-circle-alert" :title="disposalLookupError" />
+          <UButton variant="link" @click="loadVoucher">重新读取关联凭证</UButton>
+        </div>
+        <UAlert
           v-if="refundLookupError"
           class="vd-refund-error"
-          type="error"
+          color="error" variant="soft" icon="i-lucide-circle-alert"
           :title="refundLookupError"
-          :closable="false"
-          show-icon
         />
       </template>
     </div>
 
     <!-- Balance summary card (Rule 1: 预先边界 — 用户写新分录前已看到平衡是否 OK) -->
-    <el-card v-if="voucher" class="vd-balance-card" shadow="hover">
+    <section v-if="voucher" class="vd-card vd-balance-card">
       <div class="vd-balance-grid">
         <div class="vd-balance-cell">
           <div class="vd-balance-label">借方合计</div>
@@ -518,358 +529,164 @@ onBeforeUnmount(() => { pageActive.value = false; ++requestSequence; });
           </div>
         </div>
         <div class="vd-balance-cell vd-balance-status">
-          <el-tag
-            v-if="balanced"
-            type="success"
-            effect="dark"
-            size="large"
-            :icon="Check"
-          >
- 借贷平衡
-          </el-tag>
-          <el-tag
-            v-else
-            type="danger"
-            effect="dark"
-            size="large"
-            :icon="Close"
-          >
- 借贷不平衡
-          </el-tag>
+          <UBadge v-if="balanced" color="success" size="lg" icon="i-lucide-check">借贷平衡</UBadge>
+          <UBadge v-else color="error" size="lg" icon="i-lucide-x">借贷不平衡</UBadge>
         </div>
       </div>
-    </el-card>
+    </section>
 
     <!-- 借/贷 双栏 table -->
-    <el-card v-if="voucher" class="vd-entries-card" shadow="hover">
-      <template #header>
-        <div class="vd-entries-header">
-          <span>凭证分录 ({{ voucher.entries.length }} 条)</span>
-        </div>
-      </template>
+    <section v-if="voucher" class="vd-card vd-entries-card">
+      <header class="vd-entries-header">
+        <span>凭证分录 ({{ voucher.entries.length }} 条)</span>
+      </header>
 
-      <el-table
-        :data="voucher.entries"
-        border
-        stripe
-        size="default"
-        :empty-text="'暂无分录'"
-      >
-        <el-table-column prop="lineNo" label="行号" width="64" align="center" />
-        <el-table-column prop="subjectCode" label="科目编码" width="110" />
-        <el-table-column prop="subjectName" label="科目名称" min-width="140" />
-        <el-table-column label="辅助核算" min-width="160">
-          <template #default="{ row }">
-            <span v-if="row.auxiliaryType && row.auxiliaryEntityId" class="vd-aux">
-              <el-tooltip :content="row.auxiliaryEntityId" placement="top">
-                <span>{{ auxiliaryDisplay(row) }}</span>
-              </el-tooltip>
-            </span>
-            <span v-else class="vd-muted">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="摘要" min-width="180" show-overflow-tooltip />
+      <UTable :data="voucher.entries" :columns="entryColumns" class="cs-table" data-testid="voucher-entries-table">
+        <template #empty>暂无分录</template>
+        <template #lineNo-cell="{ row }">{{ row.original.lineNo }}</template>
+        <template #subjectCode-cell="{ row }">{{ row.original.subjectCode }}</template>
+        <template #subjectName-cell="{ row }">{{ row.original.subjectName }}</template>
+        <template #auxiliary-cell="{ row }">
+          <!-- 完整 ID 放原生 title (不用 UTooltip) -->
+          <span v-if="row.original.auxiliaryType && row.original.auxiliaryEntityId" class="vd-aux" :title="row.original.auxiliaryEntityId">{{ auxiliaryDisplay(row.original) }}</span>
+          <span v-else class="vd-muted">—</span>
+        </template>
+        <template #description-cell="{ row }"><span :title="row.original.description || ''">{{ row.original.description || '' }}</span></template>
         <!-- 借方栏 (left, 蓝色) -->
-        <el-table-column label="借方金额" width="140" align="right" class-name="vd-col-debit">
-          <template #default="{ row }">
-            <span v-if="row.debit && row.debit > 0" class="vd-amount-debit">
-              ¥{{ fmtAmount(row.debit) }}
-            </span>
-            <span v-else class="vd-muted">—</span>
-          </template>
-        </el-table-column>
+        <template #debit-cell="{ row }">
+          <span v-if="row.original.debit && row.original.debit > 0" class="vd-amount-debit">¥{{ fmtAmount(row.original.debit) }}</span>
+          <span v-else class="vd-muted">—</span>
+        </template>
         <!-- 贷方栏 (right, 橙色) -->
-        <el-table-column label="贷方金额" width="140" align="right" class-name="vd-col-credit">
-          <template #default="{ row }">
-            <span v-if="row.credit && row.credit > 0" class="vd-amount-credit">
-              ¥{{ fmtAmount(row.credit) }}
-            </span>
-            <span v-else class="vd-muted">—</span>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+        <template #credit-cell="{ row }">
+          <span v-if="row.original.credit && row.original.credit > 0" class="vd-amount-credit">¥{{ fmtAmount(row.original.credit) }}</span>
+          <span v-else class="vd-muted">—</span>
+        </template>
+      </UTable>
+    </section>
 
     <!-- Actions: 过账 / 作废 (Rule 1 precondition + Rule 5 dead-end nav) -->
     <div class="vd-actions" v-if="voucher">
       <div class="vd-actions-hint">
-        <template v-if="isReturnRefund">
-          <el-text type="warning">
-            客户退款凭证需由退货退款流程核对；不能在此作废或重复过账，请先核对资金流水。
-          </el-text>
-        </template>
-        <template v-else-if="isVoucherReversal">
-          <el-text type="warning">
-            红字冲销凭证由原业务凭证流程维护；不能在此作废或重复过账，请先核对原始凭证。
-          </el-text>
-        </template>
-        <template v-else-if="isDisposalVoucher">
-          <el-text type="warning">报废凭证不能单独作废或冲销；请通过成本更正流程同步处理报废损失和账务。</el-text>
-        </template>
-        <template v-else-if="isReversed">
-          <el-text type="warning">凭证已冲销，不可再次过账或作废。</el-text>
-        </template>
-        <template v-else-if="isPosted">
-          <el-text type="info">
-            凭证已过账, 不可编辑. 如需修改请联系财务管理员先反结账.
-          </el-text>
-        </template>
-        <template v-else-if="isVoid">
-          <el-text type="danger">凭证已作废, 不可恢复.</el-text>
-        </template>
-        <template v-else-if="!balanced">
-          <el-text type="warning">
-            凭证借贷不平衡, 差额 ¥{{ fmtAmount(Math.abs(difference)) }}, 不可过账.
-          </el-text>
-        </template>
-        <template v-else-if="!canWrite">
-          <el-text type="warning">您没有财务写入权限, 无法操作.</el-text>
-        </template>
-        <template v-else>
-          <el-text type="success">凭证已平衡, 可过账.</el-text>
-        </template>
+        <span v-if="isReturnRefund" class="vd-hint-warning">
+          客户退款凭证需由退货退款流程核对；不能在此作废或重复过账，请先核对资金流水。
+        </span>
+        <span v-else-if="isVoucherReversal" class="vd-hint-warning">
+          红字冲销凭证由原业务凭证流程维护；不能在此作废或重复过账，请先核对原始凭证。
+        </span>
+        <span v-else-if="isDisposalVoucher" class="vd-hint-warning">报废凭证不能单独作废或冲销；请通过成本更正流程同步处理报废损失和账务。</span>
+        <span v-else-if="isReversed" class="vd-hint-warning">凭证已冲销，不可再次过账或作废。</span>
+        <span v-else-if="isPosted" class="vd-hint-info">
+          凭证已过账, 不可编辑. 如需修改请联系财务管理员先反结账.
+        </span>
+        <span v-else-if="isVoid" class="vd-hint-danger">凭证已作废, 不可恢复.</span>
+        <span v-else-if="!balanced" class="vd-hint-warning">
+          凭证借贷不平衡, 差额 ¥{{ fmtAmount(Math.abs(difference)) }}, 不可过账.
+        </span>
+        <span v-else-if="!canWrite" class="vd-hint-warning">您没有财务写入权限, 无法操作.</span>
+        <span v-else class="vd-hint-success">凭证已平衡, 可过账.</span>
       </div>
       <div class="vd-actions-buttons">
-        <el-button
-          type="primary"
-          :disabled="!canPost"
-          @click="onPost"
-        >
-          过账
-        </el-button>
-        <el-button
+        <UButton v-if="isDraft" :disabled="!canPost" data-testid="voucher-post" @click="onPost">过账</UButton>
+        <UButton
           v-if="!isProtectedRefundVoucher"
-          type="danger"
-          plain
+          color="error"
+          variant="outline"
           :disabled="!canVoid"
+          data-testid="voucher-void"
           @click="openVoidDialog"
-        >
-          作废
-        </el-button>
+        >作废</UButton>
       </div>
     </div>
 
     <!-- 作废 dialog (Rule 3 标准原因 dropdown + 自由 textarea fallback) -->
-    <el-dialog
-      v-model="voidDialogVisible"
+    <UModal
+      :open="voidDialogVisible"
       title="作废凭证 — 选择原因"
-      width="500"
-      :close-on-click-modal="false"
+      description="选择作废原因后确认作废"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[500px]', description: 'sr-only', footer: 'justify-end' }"
+      @update:open="onVoidOpenChange"
     >
-      <div class="vd-void-context" v-if="voucher">
-        <p>
-          <strong>凭证号:</strong> {{ voucher.voucherNumber }} ({{ voucherTypeLabel }})
-        </p>
-        <p>
-          <strong>金额:</strong> ¥{{ fmtAmount(totalDebit) }}
-        </p>
-        <p>
-          <strong>状态:</strong>
-          <el-tag v-if="statusBadge" :type="statusBadge.type as any" effect="dark" size="small">
-            {{ statusBadge.text }}
-          </el-tag>
-        </p>
-      </div>
-      <el-form label-position="top">
-        <el-form-item label="作废原因" required>
-          <el-select v-model="voidReasonSelected" placeholder="请选择标准原因" style="width: 100%">
-            <el-option
-              v-for="opt in STANDARD_VOID_REASONS"
-              :key="opt.value"
-              :value="opt.value"
-              :label="opt.label"
+      <template #body>
+        <div class="vd-void-context" v-if="voucher">
+          <p>
+            <strong>凭证号:</strong> {{ voucher.voucherNumber }} ({{ voucherTypeLabel }})
+          </p>
+          <p>
+            <strong>金额:</strong> ¥{{ fmtAmount(totalDebit) }}
+          </p>
+          <p>
+            <strong>状态:</strong>
+            <UBadge v-if="statusBadge" :color="badgeColor(statusBadge.type as ElementTagType)" size="sm">
+              {{ statusBadge.text }}
+            </UBadge>
+          </p>
+        </div>
+        <div class="vd-void-form">
+          <UFormField label="作废原因" required>
+            <USelect v-model="voidReasonSelected" :items="VOID_REASON_ITEMS" placeholder="请选择标准原因" class="w-full" data-testid="voucher-void-reason" />
+          </UFormField>
+          <UFormField v-if="voidReasonSelected === '其他'" label="详细原因 (必填)" required>
+            <UTextarea
+              v-model="voidReasonOther"
+              :rows="3"
+              placeholder="请说明作废原因 (供审计追溯)"
+              :maxlength="500"
+              class="w-full"
+              data-testid="voucher-void-other"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item
-          v-if="voidReasonSelected === '其他'"
-          label="详细原因 (必填)"
-          required
-        >
-          <el-input
-            v-model="voidReasonOther"
-            type="textarea"
-            :rows="3"
-            placeholder="请说明作废原因 (供审计追溯)"
-            maxlength="500"
-            show-word-limit
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="voidDialogVisible = false">取消</el-button>
-        <el-button
-          type="danger"
-          :disabled="voidSubmitDisabled"
-          @click="onVoidSubmit"
-        >
-          确认作废
-        </el-button>
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="voidDialogVisible = false">取消</UButton>
+        <UButton color="error" :disabled="voidSubmitDisabled" data-testid="voucher-void-confirm" @click="onVoidSubmit">确认作废</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
 <style scoped>
-.voucher-detail {
-  padding: 20px;
-}
-
-.vd-error {
-  margin-bottom: 16px;
-}
-
-.vd-header {
-  margin-bottom: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.vd-title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 8px 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.vd-status-tag {
-  font-size: 13px;
-}
-
-.vd-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
-
-.vd-meta-item strong {
-  color: var(--el-text-color-primary);
-  margin-right: 4px;
-}
-
-.vd-balance-card {
-  margin-bottom: 16px;
-}
-
-.vd-balance-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1.4fr;
-  gap: 24px;
-  align-items: center;
-}
-
-.vd-balance-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.vd-balance-label {
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
-}
-
-.vd-balance-value {
-  font-size: 20px;
-  font-weight: 600;
-  font-family: 'Courier New', monospace;
-}
-
-.vd-debit {
-  color: #1d8cf8;
-}
-
-.vd-credit {
-  color: #fd7e14;
-}
-
-.vd-balanced {
-  color: var(--el-color-success);
-}
-
-.vd-unbalanced {
-  color: var(--el-color-danger);
-}
-
-.vd-balance-status {
-  justify-content: center;
-  align-items: center;
-}
-
-.vd-entries-card {
-  margin-bottom: 16px;
-}
-
-.vd-entries-header {
-  font-weight: 600;
-  font-size: 15px;
-}
-
-:deep(.vd-col-debit) {
-  background-color: rgba(29, 140, 248, 0.05);
-}
-
-:deep(.vd-col-credit) {
-  background-color: rgba(253, 126, 20, 0.05);
-}
-
-.vd-amount-debit {
-  font-family: 'Courier New', monospace;
-  color: #1d8cf8;
-  font-weight: 600;
-}
-
-.vd-amount-credit {
-  font-family: 'Courier New', monospace;
-  color: #fd7e14;
-  font-weight: 600;
-}
-
-.vd-muted {
-  color: var(--el-text-color-placeholder);
-}
-
-.vd-aux {
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  padding: 2px 6px;
-  background: var(--el-fill-color-light);
-  border-radius: 3px;
-}
-
-.vd-actions {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  background: var(--el-fill-color-blank);
-  border: 1px solid var(--el-border-color-light);
-  border-radius: 6px;
-}
-
-.vd-actions-hint {
-  flex: 1;
-}
-
-.vd-actions-buttons {
-  display: flex;
-  gap: 12px;
-}
-
-.vd-void-context {
-  background: var(--el-fill-color-light);
-  padding: 12px 16px;
-  border-radius: 4px;
-  margin-bottom: 16px;
-}
-
-.vd-void-context p {
-  margin: 4px 0;
-  font-size: 13px;
-}
+.voucher-detail { padding: var(--cs-space-4); }
+.vd-loading { color: var(--cs-muted); font-size: var(--cs-font-small); margin: 0 0 8px; }
+.vd-error { margin-bottom: 16px; }
+.vd-lookup-error { display: flex; align-items: center; gap: var(--cs-space-2); }
+.vd-header { margin-bottom: 16px; display: flex; flex-direction: column; gap: 12px; }
+.vd-title { font-size: 20px; font-weight: 600; margin: 8px 0; display: flex; align-items: center; gap: 12px; color: var(--cs-text); }
+.vd-status-tag { font-size: 13px; }
+.vd-meta { display: flex; flex-wrap: wrap; gap: 24px; color: var(--cs-muted); font-size: 13px; }
+.vd-meta-item strong { color: var(--cs-text); margin-right: 4px; }
+.vd-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); margin-bottom: 16px; }
+.vd-balance-card { padding: 16px; }
+.vd-balance-grid { display: grid; grid-template-columns: 1fr 1fr 1fr 1.4fr; gap: 24px; align-items: center; }
+.vd-balance-cell { display: flex; flex-direction: column; gap: 4px; }
+.vd-balance-label { font-size: 13px; color: var(--cs-muted); }
+.vd-balance-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.vd-debit { color: #1d8cf8; }
+.vd-credit { color: #fd7e14; }
+.vd-balanced { color: var(--cs-success); }
+.vd-unbalanced { color: var(--cs-danger); }
+.vd-balance-status { justify-content: center; align-items: center; }
+.vd-entries-header { font-weight: 600; font-size: 15px; padding: 12px 16px; border-bottom: 1px solid var(--cs-border); color: var(--cs-text); }
+:deep(.vd-col-debit) { background-color: rgba(29, 140, 248, 0.05); }
+:deep(.vd-col-credit) { background-color: rgba(253, 126, 20, 0.05); }
+.vd-amount-debit { font-variant-numeric: tabular-nums; color: #1d8cf8; font-weight: 600; }
+.vd-amount-credit { font-variant-numeric: tabular-nums; color: #fd7e14; font-weight: 600; }
+.vd-muted { color: var(--cs-muted); }
+.vd-aux { font-size: 12px; color: var(--cs-muted); padding: 2px 6px; background: var(--cs-surface-subtle); border-radius: 3px; }
+.vd-actions { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); }
+.vd-actions-hint { flex: 1; font-size: 13px; }
+.vd-hint-warning { color: var(--cs-warning); }
+.vd-hint-info { color: var(--cs-muted); }
+.vd-hint-danger { color: var(--cs-danger); }
+.vd-hint-success { color: var(--cs-success); }
+.vd-actions-buttons { display: flex; gap: 12px; }
+.vd-void-context { background: var(--cs-surface-subtle); padding: 12px 16px; border-radius: 4px; margin-bottom: 16px; }
+.vd-void-context p { margin: 4px 0; font-size: 13px; }
+.vd-void-form { display: grid; gap: var(--cs-space-3); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

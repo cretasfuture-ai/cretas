@@ -1,8 +1,9 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
-import ElementPlus, { ElMessage, ElMessageBox } from 'element-plus';
+import ElementPlus, { ElMessage } from 'element-plus';
 import Adjustments from '../list.vue';
+import { adjustmentStubs, closeConfirmModal, confirmButton } from './adjustmentStubs';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import type { FactoryRole, User } from '@/types/auth';
@@ -44,7 +45,7 @@ function approved(balanceAfter: number | null, extra: Partial<Row> = {}) {
   return { success: true, message: '', data: { ...row, approvalStatus: 'APPROVED', balanceAfter, ...extra } };
 }
 async function page() {
-  wrapper = mount(Adjustments, { attachTo: document.body, global: { plugins: [pinia, ElementPlus] } });
+  wrapper = mount(Adjustments, { attachTo: document.body, global: { plugins: [pinia, ElementPlus], stubs: adjustmentStubs } });
   await flushPromises();
   return wrapper;
 }
@@ -53,10 +54,10 @@ async function open(w: VueWrapper) {
   const button = w.findAll('button').find(b => b.text() === '审批');
   expect(button, 'rendered approval action').toBeDefined();
   await button!.trigger('click'); await flushPromises();
-  return Array.from(document.body.querySelectorAll('.el-message-box__message')).map(n => n.textContent).join('\n');
+  return Array.from(document.body.querySelectorAll('[data-testid="sales-confirm-message"]')).map(n => n.textContent).join('\n');
 }
 async function choice(text: string) {
-  const button = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.el-message-box button')).find(n => n.textContent?.trim() === text);
+  const button = confirmButton(text);
   expect(button, 'real confirmation button').toBeDefined();
   button!.click(); await flushPromises();
 }
@@ -99,13 +100,13 @@ export function registerBalanceCase(number: number) {
   afterEach(async () => {
     // The repository setup's enableAutoUnmount owns component teardown.
     wrapper = undefined;
-    ElMessageBox.close(); ElMessage.closeAll(); await flushPromises();
+    closeConfirmModal(); ElMessage.closeAll(); await flushPromises();
   });
   describe('FIN fresh rendered balance contract', () => {
     it(names[number - 1], async () => {
       if (number === 1) {
         const w = await page();
-        const headers = w.findAll('.el-table__header-wrapper th').map(n => n.text()).join('|');
+        const headers = w.findAll('thead th').map(n => n.text()).join('|');
         expect(headers).toContain('提交时余额'); expect(headers).toContain('待审批'); expect(headers).not.toContain('变动后余额');
       } else if (number === 2) {
         row.amount = -4; row.balanceAfter = 15;
@@ -142,7 +143,7 @@ export function registerBalanceCase(number: number) {
         await open(await page());
         useAuthStore().setUser(identity(number === 10 ? 'FIN-OTHER' : 'FIN-UNIT', number === 11 ? 87 : 86));
         await flushPromises();
-        const confirm = Array.from(document.body.querySelectorAll<HTMLButtonElement>('.el-message-box button')).find(n => n.textContent?.trim() === '确认审批');
+        const confirm = confirmButton('确认审批');
         confirm?.click(); await flushPromises();
         expect(api.post).not.toHaveBeenCalled(); expect(successText()).toBe('');
       } else if (number === 12 || number === 15) {
@@ -164,13 +165,13 @@ export function registerBalanceCase(number: number) {
         expect(w.text()).toContain('Newest list'); expect(w.text()).not.toContain('Stale list');
       } else if (number === 17) {
         row.operatedBy = 86; const w = await page(); expect(w.findAll('button').filter(b => b.text() === '审批')).toHaveLength(0);
-        await w.find('.el-table__body-wrapper input[type=checkbox]').setValue(true); await flushPromises();
+        await w.find('tbody input[type=checkbox]').setValue(true); await flushPromises();
         const bulk = w.findAll('button').find(b => b.text() === '批量审批'); expect(bulk).toBeDefined(); await bulk!.trigger('click'); await flushPromises();
         expect(document.body.textContent).toContain('均为您本人提交'); expect(api.post).not.toHaveBeenCalled();
       } else if (number === 18) {
         const p = usePermissionStore(); p.dbPermissions = { ...p.currentPermissions, finance: 'r' }; p.isDbLoaded = true;
         const w = await page(); expect(w.text()).toContain(row.counterpartyName); expect(w.findAll('button').filter(b => ['审批', '驳回'].includes(b.text()))).toHaveLength(0);
-        await w.find('.el-table__body-wrapper input[type=checkbox]').setValue(true); await flushPromises();
+        await w.find('tbody input[type=checkbox]').setValue(true); await flushPromises();
         const bulk = w.findAll('button').find(b => b.text() === '批量审批'); expect(bulk?.attributes('disabled')).toBeDefined(); expect(api.post).not.toHaveBeenCalled();
       } else if (number === 19) {
         row.amount = null; const w = await page(); expect(w.text()).toContain('应收 未知');

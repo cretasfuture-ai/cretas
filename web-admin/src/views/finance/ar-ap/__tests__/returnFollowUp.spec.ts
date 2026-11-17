@@ -2,6 +2,8 @@ import { mount, flushPromises } from '@vue/test-utils';
 import { reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
+const stubs = { ...nuxtUiStubs, UIcon: { template: '<i />' } };
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn(), replace: vi.fn() }));
 const route = reactive({ query: {} as Record<string, unknown> });
@@ -26,7 +28,7 @@ function financial(id = 'return-a', state = 'APPROVED') {
         sourceType: 'RETURN_ORDER', sourceId: id, createdAt: '2026-10-16T11:00:00' },
     ] } };
 }
-const render = (component: typeof Ledger | typeof Adjustments) => mount(component, { global: { plugins: [ElementPlus] } });
+const render = (component: typeof Ledger | typeof Adjustments) => mount(component, { global: { plugins: [ElementPlus], stubs } });
 
 beforeEach(() => {
   vi.clearAllMocks(); route.query = { returnOrderId: 'return-a' }; identity.factoryId = 'A'; identity.user.id = 1;

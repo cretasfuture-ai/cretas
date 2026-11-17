@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { nextTick, reactive } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import ElementPlus, { ElMessageBox } from 'element-plus';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 import PeriodPage from './index.vue';
 
 const api = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), push: vi.fn() }));
@@ -38,7 +38,6 @@ beforeEach(() => {
   identity.factoryId = 'F001';
   identity.user.id = 1;
   permissions.canWrite = true;
-  vi.spyOn(ElMessageBox, 'confirm').mockResolvedValue(true);
   api.get.mockImplementation((url: string) => {
     if (url.includes('/accounting-periods')) return Promise.resolve({ success: true, data: [period()] });
     if (url.includes('/finance/vouchers')) return Promise.resolve({ success: true, data: { totalElements: 4 } });
@@ -47,8 +46,9 @@ beforeEach(() => {
   api.post.mockResolvedValue({ success: true, data: period('CLOSED') });
 });
 
+const okBtn = (w: ReturnType<typeof render>) => w.get('[data-testid="sales-confirm-ok"]');
 function render() {
-  return mount(PeriodPage, { global: { plugins: [ElementPlus] } });
+  return mount(PeriodPage, { global: { stubs: { ...nuxtUiStubs, UIcon: { template: '<i />' } } } });
 }
 
 describe('期间结账恢复入口真实挂载行为', () => {
@@ -112,24 +112,36 @@ describe('期间结账恢复入口真实挂载行为', () => {
     await flushPromises();
     await wrapper.findAll('button').find(button => button.text() === '发起结账')!.trigger('click');
     await flushPromises();
+    expect(wrapper.get('[data-testid="sales-confirm-message"]').text()).toContain('确认前请在会计凭证中核对本期单据');
+    expect(wrapper.get('[data-testid="sales-confirm-message"]').text()).not.toContain('笔凭证');
+    expect(api.post).not.toHaveBeenCalled();
+    await okBtn(wrapper).trigger('click');
+    await flushPromises();
     expect(api.get.mock.calls.some(([url]) => String(url).includes('/finance/vouchers'))).toBe(false);
-    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
-    expect(ElMessageBox.confirm.mock.calls[0][0]).toContain('确认前请在会计凭证中核对本期单据');
-    expect(ElMessageBox.confirm.mock.calls[0][0]).not.toContain('笔凭证');
     expect(api.post).toHaveBeenCalledTimes(1);
+    expect(api.post.mock.calls[0][0]).toBe('/F001/finance/accounting-periods/request-close');
+    wrapper.unmount();
+  });
+
+  it('cancelling the request-close confirmation posts nothing', async () => {
+    const wrapper = render();
+    await flushPromises();
+    await wrapper.findAll('button').find(button => button.text() === '发起结账')!.trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-testid="sales-confirm-cancel"]').trigger('click');
+    await flushPromises();
+    expect(api.post).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
   it('prevents repeated request-close while the confirmation is open', async () => {
-    const confirmation = deferred<boolean>();
-    vi.mocked(ElMessageBox.confirm).mockReturnValueOnce(confirmation.promise);
     const wrapper = render();
     await flushPromises();
     const requestButton = wrapper.findAll('button').find(button => button.text() === '发起结账')!;
     await Promise.all([requestButton.trigger('click'), requestButton.trigger('click')]);
     await flushPromises();
-    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1);
-    confirmation.resolve(true);
+    expect(wrapper.findAll('[data-testid="sales-confirm-ok"]').length).toBe(1);
+    await okBtn(wrapper).trigger('click');
     await flushPromises();
     expect(api.post).toHaveBeenCalledTimes(1);
     wrapper.unmount();

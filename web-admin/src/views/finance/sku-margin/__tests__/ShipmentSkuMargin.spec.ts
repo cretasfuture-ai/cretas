@@ -1,27 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
-import { defineComponent, h, provide, inject, computed, reactive, type ComputedRef } from 'vue';
+import { reactive } from 'vue';
 const api = vi.hoisted(() => ({ get: vi.fn() }));
 const testRoute = reactive({ query: {} as Record<string, unknown> });
 vi.mock('vue-router', () => ({ useRoute: () => testRoute }));
 vi.mock('@/api/financeReport', () => ({ getShipmentSkuMargin: api.get }));
 import Panel from '../ShipmentSkuMargin.vue';
 
-const table = defineComponent({ props: ['data'], setup(p, { slots }) {
-  provide('rows', computed(() => p.data)); return () => h('div', slots.default?.());
-} });
-const column = defineComponent({ props: ['prop', 'label'], setup(p, { slots }) {
-  const rows = inject<ComputedRef<Record<string, unknown>[]>>('rows');
-  return () => h('div', { 'data-column': p.label }, (rows?.value ?? []).map(row =>
-    h('span', slots.default ? slots.default({ row }) : String(row[p.prop] ?? ''))));
-} });
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
+// 共享桩的 UAlert 只输出标题; 这里要断言类型 (data-type 由页面传入, 桩根节点透传)
 const stubs = {
-  'el-alert': { props: ['title', 'type'], template: '<div class="notice" :data-type="type">{{ title }}</div>' },
-  'el-descriptions': { template: '<div><slot /></div>' },
-  'el-descriptions-item': { props: ['label'], template: '<div>{{ label }}<slot /></div>' },
-  'el-table': table, 'el-table-column': column,
-  'el-button': { template: '<button><slot /></button>' },
-  'el-dialog': { props: ['modelValue', 'title'], template: '<section v-if="modelValue" role="dialog"><h2>{{ title }}</h2><slot /></section>' },
+  ...nuxtUiStubs,
+  UModal: { props: ['open', 'title'], template: '<section v-if="open" role="dialog"><h2>{{ title }}</h2><slot name="body" /></section>' },
 };
 const payload = {
   periodStart: '2026-10-01', periodEnd: '2026-10-31',
@@ -36,7 +26,7 @@ const payload = {
   reconciliationStatus: 'MATCH', reconciliationMessage: '实际出货与同期间已过账利润表一致',
   financialStatement: { totalRevenue: 720, totalCost: 346.12, grossProfit: 373.88, netProfit: 373.88 },
 };
-function page() { return mount(Panel, { props: { factoryId: 'NEW', period: ['2026-10-01', '2026-10-31'], refreshKey: 0 }, global: { stubs, directives: { loading: {} } } }); }
+function page() { return mount(Panel, { props: { factoryId: 'NEW', period: ['2026-10-01', '2026-10-31'], refreshKey: 0 }, global: { stubs } }); }
 beforeEach(() => { testRoute.query = {}; api.get.mockReset(); api.get.mockResolvedValue({ success: true, data: payload }); });
 describe('实际出货SKU毛利', () => {
   it('保留出货金额，并显示独立退货事实与利润表的整月核对', async () => {
@@ -87,7 +77,7 @@ describe('实际出货SKU毛利', () => {
     const wrapper = page(); await flushPromises();
     expect(api.get).toHaveBeenCalledWith('NEW', '2026-10-01', '2026-10-31');
     for (const text of ['9 公斤', '30 盒', '¥137.62', '¥208.50', '¥132.38', '¥241.50', '¥720.00', '¥346.12', '¥373.88', '51.9%']) expect(wrapper.text()).toContain(text);
-    expect(wrapper.find('.notice').attributes('data-type')).toBe('success');
+    expect(wrapper.find('[data-type]').attributes('data-type')).toBe('success');
   });
   it('刷新失败后清除旧数字，不用订单或零成本替代', async () => {
     const wrapper = page(); await flushPromises();
@@ -98,7 +88,7 @@ describe('实际出货SKU毛利', () => {
   });
   it('期间不完整或账表不符时显示真实警告', async () => {
     api.get.mockResolvedValue({ success: true, data: { ...payload, reconciliationStatus: 'PARTIAL_PERIOD', financialStatement: null, reconciliationMessage: '请选择完整会计月核对' } });
-    const wrapper = page(); await flushPromises(); expect(wrapper.find('.notice').attributes('data-type')).toBe('warning'); expect(wrapper.text()).toContain('请选择完整会计月核对');
+    const wrapper = page(); await flushPromises(); expect(wrapper.find('[data-type]').attributes('data-type')).toBe('warning'); expect(wrapper.text()).toContain('请选择完整会计月核对');
     api.get.mockResolvedValue({ success: true, data: { ...payload, reconciliationStatus: 'MISMATCH', reconciliationMessage: '账表存在差异' } });
     await wrapper.setProps({ refreshKey: 1 }); await flushPromises(); expect(wrapper.text()).toContain('账表存在差异');
   });
