@@ -515,6 +515,8 @@ public class AIIntentServiceImpl implements AIIntentService {
                         .mode(mode)
                         .userPermissions(userPermissions == null ? null : List.copyOf(userPermissions))
                         .askPolicy(askPolicyResolver == null ? null : askPolicyResolver.resolve(factoryId))
+                        // PR-4 业务域: 版本对上 Python 才按业务域缩小决策层候选 (只缩小给模型看的列表, 不授权任何东西)
+                        .catalogVersion(com.cretas.aims.ai.catalog.IntentDomainTable.catalogVersion().orElse(null))
                         .options(PythonIntentMatchRequest.Options.builder()
                                 .enableLlmFallback(Boolean.TRUE)
                                 .timeoutMs(30000)
