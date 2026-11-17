@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, reactive } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn } from '@/types/csTable';
+// 通用确认弹窗 (UModal, 取代 Element 的命令式确认框: 它在 Nuxt UI 弹层之上点不了)。
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
@@ -24,6 +27,7 @@ const canWrite = computed(() => permissionStore.canWrite('finance'));
 
 // ==================== State ====================
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const loading = ref(false);
 const tableData = ref<VoucherTemplate[]>([]);
 
@@ -160,17 +164,18 @@ async function submitForm() {
 // ==================== Actions ====================
 
 async function handleDelete(row: VoucherTemplate) {
+  const confirmed = await confirmRef.value!.ask({
+    title: '确认删除',
+    message: `确认删除凭证模板「${row.name}」？删除后不可恢复。`,
+    confirmText: '确认删除',
+    danger: true,
+  });
+  if (confirmed === null) return;
   try {
-    await ElMessageBox.confirm(
-      `确认删除凭证模板「${row.name}」？删除后不可恢复。`,
-      '确认删除',
-      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
-    );
     await deleteVoucherTemplate(factoryId.value, row.id);
     ElMessage.success('凭证模板已删除');
     loadData();
   } catch (e) {
-    if (e === 'cancel') return;
     ElMessage({
       message: e instanceof Error ? e.message : '删除失败，请检查网络',
       type: 'error',
@@ -182,18 +187,18 @@ async function handleDelete(row: VoucherTemplate) {
 
 async function handleSetDefault(row: VoucherTemplate) {
   if (row.isDefault) return;
+  const confirmed = await confirmRef.value!.ask({
+    title: '确认设为默认',
+    message: `将「${row.name}」设为 ${VOUCHER_TYPE_LABEL[row.voucherType]} 类型的默认模板？` +
+      '同类型的其他默认模板将被自动取消。',
+    confirmText: '确认',
+  });
+  if (confirmed === null) return;
   try {
-    await ElMessageBox.confirm(
-      `将「${row.name}」设为 ${VOUCHER_TYPE_LABEL[row.voucherType]} 类型的默认模板？` +
-        '同类型的其他默认模板将被自动取消。',
-      '确认设为默认',
-      { confirmButtonText: '确认', cancelButtonText: '取消' },
-    );
     await setVoucherTemplateDefault(factoryId.value, row.id);
     ElMessage.success('已设为默认模板');
     loadData();
   } catch (e) {
-    if (e === 'cancel') return;
     ElMessage({
       message: e instanceof Error ? e.message : '操作失败，请检查网络',
       type: 'error',
@@ -203,216 +208,130 @@ async function handleSetDefault(row: VoucherTemplate) {
   }
 }
 
+const VOUCHER_TYPE_ITEMS = Object.entries(VOUCHER_TYPE_LABEL).map(([value, label]) => ({ value, label }));
+const DIRECTION_ITEMS = Object.entries(DIRECTION_LABEL).map(([value, label]) => ({ value, label }));
+const columns: CsTableColumn<VoucherTemplate>[] = [
+  { id: 'name', header: '模板名称' },
+  { id: 'voucherType', header: '凭证类型' },
+  { id: 'entries', header: '分录数' },
+  { id: 'description', header: '说明' },
+  { id: 'isActive', header: '状态' },
+  { id: 'actions', header: '操作' },
+];
+
 onMounted(() => loadData());
 </script>
 
 <template>
-  <div class="page-wrapper" v-loading="loading">
-    <el-card shadow="never">
-      <template #header>
-        <div style="display:flex;justify-content:space-between;align-items:center">
-          <div>
-            <span style="font-size:16px;font-weight:600">凭证模板管理</span>
-            <span style="font-size:13px;color:#909399;margin-left:12px">
-              配置科目↔付款类型映射，凭证生成时优先使用模板
-            </span>
-          </div>
-          <el-button v-if="canWrite" type="primary" @click="openCreate">
-            + 新建模板
-          </el-button>
+  <div class="page" data-testid="finance-voucher-template-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>凭证模板管理</h2>
+        <span class="count">配置科目↔付款类型映射，凭证生成时优先使用模板</span>
+        <div class="head-actions">
+          <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="vt-create" @click="openCreate">新建模板</UButton>
         </div>
-      </template>
+      </header>
 
-      <!-- 空状态 -->
-      <el-empty
-        v-if="!loading && tableData.length === 0"
-        description="暂无凭证模板。点击「新建模板」配置科目↔付款类型映射，凭证生成时将优先匹配模板规则。"
-        style="padding:40px 0"
-      />
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="vt-table">
+        <template #empty>暂无凭证模板。点击「新建模板」配置科目↔付款类型映射，凭证生成时将优先匹配模板规则。</template>
+        <template #name-cell="{ row }">
+          <span class="name">{{ row.original.name }}</span>
+          <UBadge v-if="row.original.isDefault" color="success" variant="soft" class="ml-2">默认</UBadge>
+        </template>
+        <template #voucherType-cell="{ row }">{{ VOUCHER_TYPE_LABEL[row.original.voucherType as VoucherType] || row.original.voucherType }}</template>
+        <template #entries-cell="{ row }">{{ row.original.entries?.length ?? 0 }} 行</template>
+        <template #description-cell="{ row }"><span class="desc">{{ row.original.description || '-' }}</span></template>
+        <template #isActive-cell="{ row }">
+          <UBadge :color="row.original.isActive ? 'success' : 'neutral'" variant="soft">{{ row.original.isActive ? '启用' : '停用' }}</UBadge>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton variant="link" size="xs" data-testid="vt-edit" @click="openEdit(row.original)">编辑</UButton>
+            <UButton v-if="canWrite && !row.original.isDefault" color="success" variant="link" size="xs" data-testid="vt-default" @click="handleSetDefault(row.original)">设为默认</UButton>
+            <UButton v-if="canWrite" color="error" variant="link" size="xs" data-testid="vt-delete" @click="handleDelete(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
+    </section>
 
-      <el-table v-else :data="tableData" border stripe>
-        <el-table-column prop="name" label="模板名称" min-width="160">
-          <template #default="{ row }">
-            <span style="font-weight:500">{{ row.name }}</span>
-            <el-tag v-if="row.isDefault" type="success" size="small" style="margin-left:6px">默认</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="voucherType" label="凭证类型" width="130" align="center">
-          <template #default="{ row }">
-            {{ VOUCHER_TYPE_LABEL[row.voucherType as VoucherType] || row.voucherType }}
-          </template>
-        </el-table-column>
-        <el-table-column label="分录数" width="90" align="center">
-          <template #default="{ row }">
-            {{ row.entries?.length ?? 0 }} 行
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="说明" min-width="160">
-          <template #default="{ row }">
-            <span style="color:#606266;font-size:13px">{{ row.description || '-' }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="isActive" label="状态" width="90" align="center">
-          <template #default="{ row }">
-            <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
-              {{ row.isActive ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="200" align="center" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button
-              v-if="canWrite && !row.isDefault"
-              link
-              type="success"
-              size="small"
-              @click="handleSetDefault(row)"
-            >
-              设为默认
-            </el-button>
-            <el-button
-              v-if="canWrite"
-              link
-              type="danger"
-              size="small"
-              @click="handleDelete(row)"
-            >
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- 新建/编辑 dialog -->
-    <el-dialog
-      v-model="dialogVisible"
+    <!-- 新建/编辑 -->
+    <UModal
+      v-model:open="dialogVisible"
       :title="dialogMode === 'create' ? '新建凭证模板' : `编辑模板 — ${formData.name}`"
-      width="720px"
-      destroy-on-close
-      :close-on-click-modal="false"
+      description="配置凭证模板与分录规则"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[720px]', description: 'sr-only', footer: 'justify-end' }"
     >
-      <el-form label-width="90px">
-        <el-form-item label="模板名称" required>
-          <el-input
-            v-model="formData.name"
-            placeholder="例如：销售收款-标准模板"
-            maxlength="100"
-            show-word-limit
-          />
-        </el-form-item>
-        <el-form-item label="凭证类型" required>
-          <el-select v-model="formData.voucherType" placeholder="请选择凭证类型" style="width:100%">
-            <el-option
-              v-for="(label, k) in VOUCHER_TYPE_LABEL"
-              :key="k"
-              :label="label"
-              :value="k"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="说明">
-          <el-input
-            v-model="formData.description"
-            type="textarea"
-            :rows="2"
-            placeholder="可选，填写模板用途说明"
-            maxlength="200"
-            show-word-limit
-          />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-switch v-model="formData.isActive" active-text="启用" inactive-text="停用" />
-        </el-form-item>
+      <template #body>
+        <div class="form">
+          <UFormField label="模板名称" required>
+            <UInput v-model="formData.name" :maxlength="100" placeholder="例如：销售收款-标准模板" class="w-full" data-testid="vt-name" />
+          </UFormField>
+          <UFormField label="凭证类型" required>
+            <USelect v-model="formData.voucherType" :items="VOUCHER_TYPE_ITEMS" placeholder="请选择凭证类型" class="w-full" data-testid="vt-type" />
+          </UFormField>
+          <UFormField label="说明">
+            <UTextarea v-model="formData.description" :rows="2" :maxlength="200" placeholder="可选，填写模板用途说明" class="w-full" />
+          </UFormField>
+          <UFormField label="状态">
+            <USwitch v-model="formData.isActive" :label="formData.isActive ? '启用' : '停用'" />
+          </UFormField>
 
-        <!-- 分录行 -->
-        <el-divider>分录明细</el-divider>
-        <div style="margin-bottom:8px;color:#606266;font-size:13px">
-          配置借贷分录规则。amountExpression 使用 SpEL，如
-          <code>#order.totalAmount</code>、<code>#payroll.netAmount</code>。
-        </div>
-
-        <div
-          v-for="(entry, idx) in formData.entries"
-          :key="idx"
-          style="border:1px solid #e4e7ed;border-radius:4px;padding:12px;margin-bottom:8px;background:#fafafa"
-        >
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-            <span style="font-size:13px;font-weight:500;color:#303133">
-              第 {{ idx + 1 }} 行
-            </span>
-            <el-button
-              v-if="formData.entries.length > 1"
-              link
-              type="danger"
-              size="small"
-              @click="removeEntry(idx)"
-            >
-              删除此行
-            </el-button>
+          <div class="section">分录明细</div>
+          <div class="hint">
+            配置借贷分录规则。amountExpression 使用 SpEL，如
+            <code>#order.totalAmount</code>、<code>#payroll.netAmount</code>。
           </div>
-          <el-row :gutter="12">
-            <el-col :span="5">
-              <el-form-item label="科目代码" label-width="70px" required>
-                <el-input v-model="entry.subjectCode" placeholder="如 1122" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="7">
-              <el-form-item label="科目名称" label-width="70px" required>
-                <el-input v-model="entry.subjectName" placeholder="如 应收账款" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="5">
-              <el-form-item label="借贷方向" label-width="70px" required>
-                <el-select v-model="entry.direction" style="width:100%">
-                  <el-option
-                    v-for="(label, k) in DIRECTION_LABEL"
-                    :key="k"
-                    :label="label"
-                    :value="k as TemplateEntryDirection"
-                  />
-                </el-select>
-              </el-form-item>
-            </el-col>
-            <el-col :span="7">
-              <el-form-item label="金额表达式" label-width="80px">
-                <el-input
-                  v-model="entry.amountExpression"
-                  placeholder="#order.totalAmount"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
-          <el-row :gutter="12">
-            <el-col :span="14">
-              <el-form-item label="摘要描述" label-width="70px">
-                <el-input v-model="entry.description" placeholder="可选，凭证打印时显示" />
-              </el-form-item>
-            </el-col>
-            <el-col :span="10">
-              <el-form-item label="零时省略" label-width="70px">
-                <el-switch
-                  v-model="entry.omitWhenZero"
-                  active-text="是（税额为0时省略）"
-                  inactive-text="否"
-                />
-              </el-form-item>
-            </el-col>
-          </el-row>
+
+          <div v-for="(entry, idx) in formData.entries" :key="idx" class="entry" data-testid="vt-entry">
+            <div class="entry-head">
+              <span class="entry-title">第 {{ idx + 1 }} 行</span>
+              <UButton v-if="formData.entries.length > 1" color="error" variant="link" size="xs" @click="removeEntry(idx)">删除此行</UButton>
+            </div>
+            <div class="entry-grid">
+              <UFormField label="科目代码" required><UInput v-model="entry.subjectCode" placeholder="如 1122" class="w-full" /></UFormField>
+              <UFormField label="科目名称" required><UInput v-model="entry.subjectName" placeholder="如 应收账款" class="w-full" /></UFormField>
+              <UFormField label="借贷方向" required><USelect v-model="entry.direction" :items="DIRECTION_ITEMS" class="w-full" /></UFormField>
+              <UFormField label="金额表达式"><UInput v-model="entry.amountExpression" placeholder="#order.totalAmount" class="w-full" /></UFormField>
+              <UFormField label="摘要描述" class="span2"><UInput v-model="entry.description" placeholder="可选，凭证打印时显示" class="w-full" /></UFormField>
+              <UFormField label="零时省略" class="span2">
+                <USwitch v-model="entry.omitWhenZero" :label="entry.omitWhenZero ? '是（税额为0时省略）' : '否'" />
+              </UFormField>
+            </div>
+          </div>
+
+          <UButton color="neutral" variant="outline" class="w-full justify-center" data-testid="vt-add-entry" @click="addEntry">+ 添加分录行</UButton>
         </div>
-
-        <el-button plain @click="addEntry" style="width:100%;margin-top:4px">
-          + 添加分录行
-        </el-button>
-      </el-form>
-
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="submitForm">
-          {{ dialogMode === 'create' ? '创建' : '保存' }}
-        </el-button>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="saving" data-testid="vt-submit" @click="submitForm">{{ dialogMode === 'create' ? '创建' : '保存' }}</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
+
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.name { font-weight: 500; }
+.desc { color: var(--cs-muted); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.form { display: grid; gap: var(--cs-space-3); }
+.section { font-size: 13px; font-weight: 600; color: var(--cs-text); border-top: 1px solid var(--cs-border); padding-top: var(--cs-space-3); }
+.hint { color: var(--cs-muted); font-size: 13px; }
+.entry { border: 1px solid var(--cs-border); border-radius: var(--cs-radius); padding: var(--cs-space-3); background: var(--cs-surface-subtle); }
+.entry-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--cs-space-2); }
+.entry-title { font-size: 13px; font-weight: 500; color: var(--cs-text); }
+.entry-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--cs-space-2); }
+.entry-grid .span2 { grid-column: span 2; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+</style>

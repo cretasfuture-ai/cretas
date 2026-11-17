@@ -93,8 +93,10 @@ public class DigitalCrewService {
     /**
      * 测试接缝 (默认什么都不做): 并发上限测试在「数完件数」之后插一段等待, 把竞态窗口放宽到看得见,
      * 证明交办锁真的在起作用 (#1771 复审 低-1)。⛔ 生产代码不设置它。
+     * 包级可见 (#1771 第 3 轮 N1): 不作为 public 接缝暴露给任何调用方; 测试经同包的
+     * {@code DigitalCrewServiceTestSeams} (只在 src/test) 设置。
      */
-    public volatile Runnable afterOpenCountHook = () -> { };
+    volatile Runnable afterOpenCountHook = () -> { };
     public static final int INBOX_PAGE_SIZE_MAX = 100;
 
     /** 会话里取出的操作人: 类型 / id / 角色都来自 JWT, ⛔ 不来自请求体。 */
@@ -507,17 +509,23 @@ public class DigitalCrewService {
         if (proof == null) throw new BusinessException(400, "缺少确认凭据，请先预览");
         requireNotUsedElsewhere(factoryId, id);
         w = requireItem(factoryId, id);
-        if (w.getPreviewTokenId() != null) {
-            Long presented = previewTokens.readBoundTokenId(proof.proofToken(), factoryId, actor.id()).orElse(null);
-            if (!w.getPreviewTokenId().equals(presented)) {
-                throw new BusinessException(409, "这张确认凭据不是这件事的预览凭据，没有执行任何写操作")
-                        .withHint("在这件事上点「预览」重新生成凭据，再点确认");
-            }
+        if (w.getPreviewTokenId() == null) {
+            // 没有登记的凭据 (没预览过, 或对账发现上一张已失效 / 作废): 拿什么凭据来都认领不到, 快速拒绝, 不进「办理中」
+            throw new BusinessException(409, "这件事还没有有效的预览（或上次的预览已失效），没有执行任何写操作")
+                    .withHint("在这件事上点「预览」，看过改前改后再确认");
+        }
+        Long presented = previewTokens.readBoundTokenId(proof.proofToken(), factoryId, actor.id()).orElse(null);
+        if (!w.getPreviewTokenId().equals(presented)) {
+            throw new BusinessException(409, "这张确认凭据不是这件事的预览凭据，没有执行任何写操作")
+                    .withHint("在这件事上点「预览」重新生成凭据，再点确认");
         }
         String name = displayName(user);
-        Long claimedTokenId = w.getPreviewTokenId();
+        Long claimedTokenId = presented;
+        // 认领时库里还得是我出示的这张凭据 (#1771 第 3 轮 N3): 上面的比对和认领之间若被重新预览换了凭据,
+        // 认领影响 0 行、当场 409; 不比对的话会认领成功、拿旧凭据去确认, finish 又因凭据行 id 对不上不落结果,
+        // 事项卡在「办理中」直到超时对账 (≥15 分钟)。
         Integer claimed = tx.execute(s -> items.claimForConfirm(id, factoryId, actor.id(), name,
-                proof.commandDigest(), clock.get(), Status.DELEGATED, Status.CONFIRMING));
+                proof.commandDigest(), claimedTokenId, clock.get(), Status.DELEGATED, Status.CONFIRMING));
         if (claimed == null || claimed != 1) {
             DigitalCrewWorkItem cur = requireItem(factoryId, id);
             if (cur.getStatus() != Status.DELEGATED) {

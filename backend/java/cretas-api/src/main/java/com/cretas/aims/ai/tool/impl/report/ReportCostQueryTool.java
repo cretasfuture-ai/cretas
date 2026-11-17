@@ -70,7 +70,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                         "startDate", Map.of("type", "string", "format", "date", "description", "开始日期 yyyy-MM-dd，默认本月 1 号；「上周」填上周一，「本月」填 1 号"),
                         "endDate", Map.of("type", "string", "format", "date", "description", "结束日期 yyyy-MM-dd，默认今天；「上周」填上周日"),
                         "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配），不填则全部产品"),
-                        "period", Map.of("type", "string", "description", "快捷周期: last_week(上周) / this_week(本周) / this_month(本月) / last_month(上月)；与 startDate/endDate 同时给时以日期为准"),
+                        "period", Map.of("type", "string", "description", "快捷周期: last_week(上周) / this_week(本周) / this_month(本月) / last_month(上月)；与开始日期、结束日期同时给时以日期为准"),
                         "compareTo", Map.of("type", "string", "description", "对比基准: last_month=环比上月（用户说「和上月比」「比上个月」时填，上一期整体往前推一个月）；不填=上一个等长周期"),
                         "question", Map.of("type", "string", "description", "用户的原问题（仅记录）")
                 ),
