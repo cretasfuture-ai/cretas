@@ -128,6 +128,9 @@ class StreamTurnCollectorEntryParityContractTest {
     private static final String REPORT_WORK_INTENT = "WORK_PROCESS_TASK_COMPLETE";
     private static final String REPORT_WORK_TOOL = "work_process_task_complete";
     private static final String NO_TOOL_INTENT = "DAILY_CUSTOMER_FOLLOWUP";
+    /** 声明需要审批的写操作, 工具也是「先选要操作哪一个」那类 —— 顺序错了 (先列选项 / 先出确认卡) 就会露出来。 */
+    private static final String APPROVAL_WRITE_INTENT = "MATERIAL_BATCH_DELETE";
+    private static final String APPROVAL_WRITE_TOOL = "material_batch_delete";
     /** 本人这一页的会话 (Web / App 都带)。 */
     private static final String SESSION = "web-session-1";
     private static final String APP_SESSION = "app-session-1";
@@ -650,6 +653,120 @@ class StreamTurnCollectorEntryParityContractTest {
                 .isEqualTo(StreamTurnCollector.Route.STREAM);
     }
 
+    // ------------------------------------------------------------------ PR-3b 显式意图码: 两入口先判审批再出写确认
+
+    @Test
+    @DisplayName("PR-3b 要审批的写 (带意图码 + forceExecute): 两入口都 PENDING_APPROVAL, 不列选项、不出确认卡、不预览、不执行")
+    void explicitApprovalWriteStopsBeforeTheConfirmCardOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(Harness::choiceListingAsks, IntentExecuteRequest.builder()
+                .userInput("把 0601 那批鸡腿删了").intentCode(APPROVAL_WRITE_INTENT).mode("OPERATE")
+                .forceExecute(true).build());
+
+        assertExplicitParity(runs, "PENDING_APPROVAL");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getMessage()).as(entry + ": 现有审批文案").contains("需要审批").contains("未执行操作");
+            assertThat(h.shown.getRequiresApproval()).isTrue();
+            // 阴性对照: 不出确认卡、不落库 (工具层 / 预览 / 工具本体都 0 次)
+            assertThat(h.shown.getStatus()).isNotEqualTo("WRITE_CONFIRM_REQUIRED");
+            assertThat(h.choiceListingCalls()).as(entry + ": 审批在列可选对象之前").isZero();
+            assertThat(h.toolLayerCalls()).as(entry + ": 没到工具层").isZero();
+            assertThat(h.toolPreviewCalls()).as(entry + ": 没出预览").isZero();
+            assertThat(h.toolBodyCalls()).as(entry + ": 没写").isZero();
+            assertThat(h.executedIntents).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 免审批的写 (带意图码): 两入口都出同一张 W0 写确认卡, 都不到工具层")
+    void explicitWriteWithoutApprovalGetsTheSameConfirmCardOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(h -> { }, IntentExecuteRequest.builder()
+                .userInput("那批到货的鸡腿帮我登记进系统").intentCode(WRITE_INTENT).mode("OPERATE").build());
+
+        assertExplicitParity(runs, "WRITE_CONFIRM_REQUIRED");
+        assertThat(runs.get(Entry.EXECUTE).shown.getMessage()).isEqualTo(runs.get(Entry.STREAM).shown.getMessage())
+                .contains("新建原料批次");
+        for (Entry entry : Entry.values()) {
+            assertThat(runs.get(entry).toolLayerCalls()).as(entry + ": 确认之前不到工具层").isZero();
+            assertThat(runs.get(entry).toolBodyCalls()).isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 只读 (带意图码): 两入口都执行一次, SUCCESS")
+    void explicitReadExecutesOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(h -> { }, IntentExecuteRequest.builder()
+                .userInput("看下经营概况").intentCode(READ_INTENT).build());
+
+        assertExplicitParity(runs, "SUCCESS");
+        for (Entry entry : Entry.values()) {
+            assertThat(runs.get(entry).executedIntents).as(entry.name()).containsExactly(READ_INTENT);
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 需要先选对象的写 (带意图码报工): 两入口都先列可选对象 (抽参后), 不出空确认卡, 不执行")
+    void explicitChoiceWriteListsChoicesFirstOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(Harness::choiceListingAsks, IntentExecuteRequest.builder()
+                .userInput("我要报工，产量100").intentCode(REPORT_WORK_INTENT).mode("OPERATE").build());
+
+        assertExplicitParity(runs, "NEED_MORE_INFO");
+        for (Entry entry : Entry.values()) {
+            Harness h = runs.get(entry);
+            assertThat(h.shown.getMessage()).as(entry.name()).startsWith("请选择要操作的那一个");
+            assertThat(h.choiceListingCalls()).as(entry + ": 列了一次").isEqualTo(1);
+            org.mockito.Mockito.verify(h.toolDispatch).askWhichOneBeforeWriteGuard(
+                    any(), eq(FACTORY), any(), any(), eq(USER), eq(ROLE), eq(true));
+            assertThat(h.toolLayerCalls()).as(entry + ": 不执行").isZero();
+            assertThat(h.slotFillingCalls()).as(entry + ": 不走通用缺参追问").isZero();
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 预览 (带意图码 previewOnly): 两入口都走预览出口; 要审批的写也只预览 (审批管写入不管预览), 都不执行")
+    void explicitPreviewRunsThePreviewBranchOnBothEntries() throws Exception {
+        for (String code : List.of(WRITE_INTENT, APPROVAL_WRITE_INTENT)) {
+            String tool = WRITE_INTENT.equals(code) ? WRITE_TOOL : APPROVAL_WRITE_TOOL;
+            Map<Entry, Harness> runs = runAll(h -> {
+                h.choiceListingAsks();
+                h.previewSupported(tool);
+            }, IntentExecuteRequest.builder().userInput("先看下会改什么").intentCode(code).previewOnly(true).build());
+
+            assertExplicitParity(runs, "PREVIEW");
+            for (Entry entry : Entry.values()) {
+                Harness h = runs.get(entry);
+                assertThat(h.toolPreviewCalls()).as(code + " " + entry + ": 预览一次").isEqualTo(1);
+                assertThat(h.choiceListingCalls()).as(code + " " + entry + ": 预览不列选项").isZero();
+                assertThat(h.toolLayerCalls()).as(code + " " + entry + ": 不进执行出口").isZero();
+                assertThat(h.toolBodyCalls()).isZero();
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("PR-3b 咨询页 (mode=READ) 带意图码的写: 两入口都 READ_MODE_WRITE_BLOCKED, 先于审批与确认卡")
+    void explicitWriteInReadModeIsBlockedOnBothEntries() throws Exception {
+        Map<Entry, Harness> runs = runAll(Harness::choiceListingAsks, IntentExecuteRequest.builder()
+                .userInput("把 0601 那批鸡腿删了").intentCode(APPROVAL_WRITE_INTENT).mode("READ").build());
+
+        assertExplicitParity(runs, "READ_MODE_WRITE_BLOCKED");
+    }
+
+    /** 显式意图码: /execute 走编排器显式意图路径 (流式管线 0 次), 两入口都经过同一份停步 (各一次), 同状态同意图。 */
+    private static void assertExplicitParity(Map<Entry, Harness> runs, String expectedStatus) {
+        IntentExecuteResponse execute = runs.get(Entry.EXECUTE).shown;
+        IntentExecuteResponse stream = runs.get(Entry.STREAM).shown;
+        assertThat(execute.getStatus()).as("/execute").isEqualTo(expectedStatus);
+        assertThat(stream.getStatus()).as("/execute/stream").isEqualTo(expectedStatus);
+        assertThat(execute.getIntentCode()).as("两入口同意图").isEqualTo(stream.getIntentCode());
+        Harness executed = runs.get(Entry.EXECUTE);
+        assertThat(executed.orchestratorExecuteCalls()).as("/execute 进编排器显式意图路径").isEqualTo(1);
+        assertThat(executed.streamRuns()).isZero();
+        for (Entry entry : Entry.values()) {
+            assertThat(runs.get(entry).explicitGateCalls()).as(entry + ": 经过同一份显式意图停步").isEqualTo(1);
+        }
+    }
+
     // ------------------------------------------------------------------ 原普通入口独有步骤: PR-3 起两入口都跑
 
     @Test
@@ -1024,6 +1141,8 @@ class StreamTurnCollectorEntryParityContractTest {
         final AIIntentConfig writeIntent;
         final AIIntentConfig approvalIntent;
         final AIIntentConfig noToolIntent;
+        final AIIntentConfig approvalWriteIntent;
+        final Map<String, ToolExecutor> tools = new java.util.HashMap<>();
         IntentExecuteResponse toolResult;
         WorkdeskOutputSummarizer workdeskSummarizer;
         F006BossQuestionClient miniClient;
@@ -1058,6 +1177,9 @@ class StreamTurnCollectorEntryParityContractTest {
             intent(INVENTORY_INTENT, "库存报表", INVENTORY_TOOL, ToolExecutor.AccessMode.READ);
             intent(REPORT_WORK_INTENT, "完成工序任务", REPORT_WORK_TOOL, ToolExecutor.AccessMode.WRITE);
             noToolIntent = intent(NO_TOOL_INTENT, "今日客户跟进", null, ToolExecutor.AccessMode.READ);
+            approvalWriteIntent = intent(APPROVAL_WRITE_INTENT, "删除原料批次", APPROVAL_WRITE_TOOL,
+                    ToolExecutor.AccessMode.WRITE);
+            approvalWriteIntent.setRequiresApproval(true);
 
             when(toolDispatch.executeWithTool(any(), anyString(), any(), any(), any(), any(), any())).thenAnswer(inv -> {
                 IntentExecuteRequest seenRequest = inv.getArgument(2);
@@ -1104,7 +1226,12 @@ class StreamTurnCollectorEntryParityContractTest {
             if (toolName == null) {
                 return config;
             }
-            ToolExecutor tool = mock(ToolExecutor.class);
+            // 报工 / 审批写的工具是「先选要操作哪一个」那类 (编排器按 instanceof 判)
+            ToolExecutor tool = REPORT_WORK_TOOL.equals(toolName) || APPROVAL_WRITE_TOOL.equals(toolName)
+                    ? mock(ToolExecutor.class, org.mockito.Mockito.withSettings()
+                            .extraInterfaces(com.cretas.aims.ai.tool.ParameterChoiceResolver.class))
+                    : mock(ToolExecutor.class);
+            tools.put(toolName, tool);
             when(tool.getToolName()).thenReturn(toolName);
             when(tool.getAccessMode()).thenReturn(accessMode);
             when(toolRegistry.getExecutor(toolName)).thenReturn(Optional.of(tool));
@@ -1187,6 +1314,48 @@ class StreamTurnCollectorEntryParityContractTest {
 
         long llmChatCalls() {
             return invocations(llm, "chat") + invocations(llm, "chatCompletionStream");
+        }
+
+        long explicitGateCalls() {
+            return orchestrator == null ? 0 : invocations(orchestrator, "explicitIntentStopBeforeExecution");
+        }
+
+        long choiceListingCalls() {
+            return invocations(toolDispatch, "askWhichOneBeforeWriteGuard");
+        }
+
+        long toolPreviewCalls() {
+            return invocations(toolDispatch, "executeToolPreview");
+        }
+
+        long toolLayerCalls() {
+            return invocations(toolDispatch, "executeWithTool");
+        }
+
+        /** 工具本体被调用的次数 (execute = 真的写 / 查)。 */
+        long toolBodyCalls() {
+            return tools.values().stream().mapToLong(t -> invocations(t, "execute")).sum();
+        }
+
+        /** 「列出来选」的追问 (askWhichOneBeforeWriteGuard 多个可选时的形状)。 */
+        void choiceListingAsks() {
+            when(toolDispatch.askWhichOneBeforeWriteGuard(any(), anyString(), any(), any(), any(), any(), anyBoolean()))
+                    .thenAnswer(inv -> {
+                        AIIntentConfig seen = inv.getArgument(3);
+                        return IntentExecuteResponse.builder().intentRecognized(true).intentCode(seen.getIntentCode())
+                                .status("NEED_MORE_INFO").message("请选择要操作的那一个：1. 鸡腿 0601 批 2. 鸡腿 0602 批")
+                                .build();
+                    });
+        }
+
+        /** 工具支持安全预览; 预览出口回一张预览卡。 */
+        void previewSupported(String toolName) {
+            when(tools.get(toolName).supportsPreview()).thenReturn(true);
+            when(toolDispatch.executeToolPreview(any(), anyString(), any(), any(), any(), any())).thenAnswer(inv -> {
+                AIIntentConfig seen = inv.getArgument(3);
+                return IntentExecuteResponse.builder().intentRecognized(true).intentCode(seen.getIntentCode())
+                        .status("PREVIEW").message("将删除 1 个批次（预览，未执行）").build();
+            });
         }
 
         long orchestratorExecuteCalls() {

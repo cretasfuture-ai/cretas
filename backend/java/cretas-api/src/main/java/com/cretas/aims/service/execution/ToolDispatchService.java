@@ -1251,7 +1251,7 @@ public class ToolDispatchService {
     /**
      * 一线角色 + 写操作 + 未开放 ⇒ 拒绝 (不出确认卡、不执行)。其它情况返回 null, 继续原有流程。
      */
-    private IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
+    public IntentExecuteResponse frontlineWriteDenied(ToolExecutor tool, String factoryId,
                                                        AIIntentConfig intent, String userRole) {
         if (frontlineWriteGrants == null) {
             return null;
