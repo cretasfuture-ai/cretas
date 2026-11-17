@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "backend/java/cretas-api/src/main/resources/ai/factory-intent-catalog.json"
 OUT = ROOT / "backend/java/cretas-api/src/main/resources/ai/intent-domain-table.json"
 
-CATALOG_VERSION = "2026-11-15.1"
+CATALOG_VERSION = "2026-11-17.1"
 
 DOMAINS = [
     ("PRODUCTION", "生产", "生产计划/批次/工序任务/排产/产能/生产效率与出成率"),
