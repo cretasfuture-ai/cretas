@@ -125,7 +125,7 @@ class WriteConfirmationStateBindingPostgresContractTest {
         repository.deleteAll();
         tool = new TaskTool(mapper);
         ToolDispatchService real = new ToolDispatchService(
-                mock(ToolRegistry.class), mapper, mock(DashScopeClient.class),
+                com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled(), mapper, mock(DashScopeClient.class),
                 mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
                 mock(CorrectionAgentService.class), mock(ExternalVerifierService.class),
                 mock(ToolResultValidatorService.class), mock(ParameterExtractionLearningService.class));
@@ -150,7 +150,7 @@ class WriteConfirmationStateBindingPostgresContractTest {
         AIIntentService intents = mock(AIIntentService.class);
         when(intents.getIntentByCode(FACTORY, INTENT)).thenReturn(Optional.of(intent()));
         when(intents.hasPermission(INTENT, ROLE)).thenReturn(true);
-        ToolRegistry registry = mock(ToolRegistry.class);
+        ToolRegistry registry = com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled();
         when(registry.getExecutor(TaskTool.NAME)).thenReturn(Optional.of(tool));
         orchestrator = new IntentExecutionOrchestrator(
                 intents, mock(IntentSemanticsParser.class), mock(SemanticCacheService.class),

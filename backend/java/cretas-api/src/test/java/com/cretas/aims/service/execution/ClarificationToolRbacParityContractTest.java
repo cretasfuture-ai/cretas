@@ -394,6 +394,16 @@ class ClarificationToolRbacParityContractTest {
                 .as("阴性对照: 网关放行的角色预检也放行").isEmpty();
     }
 
+    /** 源码里从签名起到下一个方法签名之前的一段 (找不到即红)。 */
+    private static String methodBody(String src, String signature) {
+        int start = src.indexOf(signature);
+        assertThat(start).as(signature.trim() + " 必须存在").isGreaterThan(0);
+        java.util.regex.Matcher next = java.util.regex.Pattern
+                .compile("\\n    (private|public|protected|static)[^\\n]*\\(").matcher(src);
+        assertThat(next.find(start + 10)).isTrue();
+        return src.substring(start, next.start());
+    }
+
     private AIIntentConfig intentConfig(String code) {
         return configService.getIntentByCode(FACTORY, code).orElseThrow();
     }
@@ -415,12 +425,14 @@ class ClarificationToolRbacParityContractTest {
     void executionSideGateInventoryIsPinned() throws Exception {
         String src = java.nio.file.Files.readString(java.nio.file.Path.of(
                 "src/main/java/com/cretas/aims/service/execution/ToolDispatchService.java"));
-        int start = src.indexOf("    private IntentExecuteResponse executeWithToolInScope(");
-        assertThat(start).as("executeWithToolInScope 必须存在").isGreaterThan(0);
-        java.util.regex.Matcher next = java.util.regex.Pattern
-                .compile("\\n    (private|public|protected|static)[^\\n]*\\(").matcher(src);
-        assertThat(next.find(start + 10)).isTrue();
-        String body = src.substring(start, next.start());
+        // 执行期的门 = executeWithToolInScope 本体 + 它委托的两个门方法 (PR-3b 把准入 / 旧角色检查的回复抽成一份,
+        // 预览出口也调它们); 三段拼起来数, 清单口径不变
+        String executeBody = methodBody(src, "    private IntentExecuteResponse executeWithToolInScope(");
+        assertThat(count(executeBody, "admissionRefusalResponse(")).as("执行出口真的调准入门").isEqualTo(1);
+        assertThat(count(executeBody, "legacyRoleDeniedResponse(")).as("执行出口真的调旧角色检查").isEqualTo(1);
+        String body = executeBody
+                + methodBody(src, "    private IntentExecuteResponse admissionRefusalResponse(")
+                + methodBody(src, "    private IntentExecuteResponse legacyRoleDeniedResponse(");
 
         Map<String, Integer> statuses = new java.util.TreeMap<>();
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\.status\\(\"([A-Z_]+)\"\\)").matcher(body);

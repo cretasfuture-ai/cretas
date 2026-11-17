@@ -564,11 +564,13 @@ class SupplierComparisonDispatchContractTest {
                     "F006", request(), 42L, "procurement_manager");
         }
 
-        assertThat(response.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
+        // PR-3b (Steve 定): 先判审批再出写确认 —— 声明审批的写在出确认卡之前就停, 不出确认卡
+        assertThat(response.getStatus()).isEqualTo("PENDING_APPROVAL");
         assertThat(response.getRequiresApproval()).isTrue();
         assertThat(dispatch.records).isEmpty();
         verify(tool, never()).execute(any(), anyMap());
 
+        // 带着服务端确认标记回来也一样停在审批 (确认不能顶替审批)
         IntentExecuteResponse approval;
         try (ActorRequest ignored = actor(factoryActor())) {
             IntentExecuteRequest serverConfirmed = request();
