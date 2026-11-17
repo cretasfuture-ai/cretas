@@ -19,9 +19,6 @@ import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { useChartInsight } from '@/composables/useChartInsight';
-import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
-import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 import {
   getFactoryCostStructure,
   getFactoryYieldTrend,
@@ -34,17 +31,23 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import request from '@/api/request';
 import {
+  COST_CATEGORY_COLORS,
   costCoverageText,
+  type CostCategory,
   fmtMoney,
   fmtPercent,
   fillCalendarDays,
   fmtQty,
+  NARROW_MAX_WIDTH,
   PIE_LABEL_MIN_PERCENT,
   productChartLabels,
+  productsByUnitCost,
   quantityParts,
   summaryYield,
   summaryYieldMissing,
+  unitCostLabel,
   unresolvedProductLabel,
+  yieldBasisText,
 } from './costAnalysisFormat';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
@@ -83,6 +86,9 @@ function getQueryDates() {
 const loading = ref(false);
 const loadError = ref('');
 
+/** 手机宽度：图例放图下、横条图少刻度、明细表改卡片。 */
+const isNarrow = ref(typeof window !== 'undefined' && window.innerWidth <= NARROW_MAX_WIDTH);
+
 const costData   = ref<CostStructureData | null>(null);
 const yieldData  = ref<YieldTrendData   | null>(null);
 const productData = ref<ProductCostCompareData | null>(null);
@@ -118,13 +124,16 @@ const hasAnyData = computed(() => hasAnyCostRows.value || hasYieldTrend.value ||
 const costPieSlices = computed(() => {
   const s = costData.value?.summary;
   if (!s || !canViewPrice.value) return [];
-  const entries = [
-    { name: '材料成本', value: s.totalMaterialCost  ?? 0 },
-    { name: '人工成本', value: s.totalLaborCost     ?? 0 },
-    { name: '设备成本', value: s.totalEquipmentCost ?? 0 },
-    { name: '其他成本', value: s.totalOtherCost     ?? 0 },
+  const entries: Array<{ category: CostCategory; value: number }> = [
+    { category: '材料', value: s.totalMaterialCost  ?? 0 },
+    { category: '人工', value: s.totalLaborCost     ?? 0 },
+    { category: '设备', value: s.totalEquipmentCost ?? 0 },
+    { category: '其他', value: s.totalOtherCost     ?? 0 },
   ];
-  return entries.filter(e => e.value > 0);
+  // 颜色与每日堆叠柱共用 COST_CATEGORY_COLORS：同一类成本两张图一个颜色。
+  return entries
+    .filter(e => e.value > 0)
+    .map(e => ({ name: `${e.category}成本`, value: e.value, itemStyle: { color: COST_CATEGORY_COLORS[e.category] } }));
 });
 
 const hasCostPie = computed(() => costPieSlices.value.length > 0);
@@ -151,6 +160,9 @@ function renderCostPie() {
     costPieChart = echarts.init(costPieRef.value, 'cretas');
   }
   const total = costPieSlices.value.reduce((s, e) => s + e.value, 0);
+  const narrow = isNarrow.value;
+  // 手机宽度：图例横排放到图下方、环居中——竖排图例放右侧会压在环上（11-17 评估 m_donut.png）。
+  const center = narrow ? ['50%', '40%'] : ['38%', '50%'];
   costPieChart.setOption({
     tooltip: {
       trigger: 'item',
@@ -158,9 +170,9 @@ function renderCostPie() {
         `${name}: ¥${fmtMoney(value)} (${percent.toFixed(1)}%)`,
     },
     legend: {
-      orient: 'vertical',
-      right: '4%',
-      top: 'center',
+      ...(narrow
+        ? { orient: 'horizontal', left: 'center', bottom: 0, itemGap: 12 }
+        : { orient: 'vertical', right: '4%', top: 'center' }),
       textStyle: { fontSize: 12 },
       // 占比放进图例：小扇区不再挤在图上
       formatter: (name: string) => {
@@ -171,8 +183,8 @@ function renderCostPie() {
     },
     series: [{
       type: 'pie',
-      radius: ['35%', '62%'],
-      center: ['38%', '50%'],
+      radius: narrow ? ['32%', '56%'] : ['35%', '62%'],
+      center,
       data: costPieSlices.value.map(e => (
         total && (e.value / total) * 100 < PIE_LABEL_MIN_PERCENT
           ? { ...e, label: { show: false }, labelLine: { show: false } }
@@ -187,20 +199,15 @@ function renderCostPie() {
       labelLayout: { hideOverlap: true },
       emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.2)' } },
     }],
-    graphic: [{
-      type: 'text',
-      left: '38%',
-      top: 'middle',
-      style: {
-        text: `¥${fmtMoney(total)}`,
-        fontSize: 13,
-        fontWeight: 'bold',
-        fill: '#1a2332',
-        textAlign: 'center',
-        textVerticalAlign: 'middle',
-      },
-      x: 0,
-    }],
+    // 环心总额用 title 定位到环中心：graphic 的 left 是包围盒左边，窄屏下文字会被裁成「¥79,29」。
+    title: {
+      text: `¥${fmtMoney(total)}`,
+      left: center[0],
+      top: center[1],
+      textAlign: 'center',
+      textVerticalAlign: 'middle',
+      textStyle: { fontSize: 13, fontWeight: 'bold', color: '#1a2332' },
+    },
   });
 }
 
@@ -209,8 +216,11 @@ function renderCostTrend() {
   if (!costTrendChart || costTrendChart.isDisposed?.()) {
     costTrendChart = echarts.init(costTrendRef.value, 'cretas');
   }
-  const rows = costData.value!.rows;
-  const dates = rows.map(r => r.statDate.slice(5)); // MM-DD
+  // 与出成率趋势同一种横轴：连续日历日，没生产的日子留空（两张时间图并排看不会误读）。
+  const days = fillCalendarDays(costData.value!.rows);
+  const dates = days.map(d => d.date.slice(5)); // MM-DD
+  const series = (key: 'totalMaterialCost' | 'totalLaborCost' | 'totalEquipmentCost' | 'totalOtherCost') =>
+    days.map(d => d.point?.[key] ?? null);
   costTrendChart.setOption({
     tooltip: {
       trigger: 'axis',
@@ -219,13 +229,13 @@ function renderCostTrend() {
     },
     legend: { data: ['材料', '人工', '设备', '其他'], bottom: 0, type: 'scroll' },
     grid: { top: 30, right: 20, bottom: 40, left: 60 },
-    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11 } },
+    xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, hideOverlap: true } },
     yAxis: { type: 'value', name: '成本(¥)', axisLabel: { formatter: (v: number) => fmtMoney(v) } },
     series: [
-      { name: '材料', type: 'bar', stack: 'cost', data: rows.map(r => r.totalMaterialCost  ?? null), itemStyle: { color: '#5470c6' } },
-      { name: '人工', type: 'bar', stack: 'cost', data: rows.map(r => r.totalLaborCost     ?? null), itemStyle: { color: '#91cc75' } },
-      { name: '设备', type: 'bar', stack: 'cost', data: rows.map(r => r.totalEquipmentCost ?? null), itemStyle: { color: '#fac858' } },
-      { name: '其他', type: 'bar', stack: 'cost', data: rows.map(r => r.totalOtherCost     ?? null), itemStyle: { color: '#ee6666' } },
+      { name: '材料', type: 'bar', stack: 'cost', data: series('totalMaterialCost'),  itemStyle: { color: COST_CATEGORY_COLORS.材料 } },
+      { name: '人工', type: 'bar', stack: 'cost', data: series('totalLaborCost'),     itemStyle: { color: COST_CATEGORY_COLORS.人工 } },
+      { name: '设备', type: 'bar', stack: 'cost', data: series('totalEquipmentCost'), itemStyle: { color: COST_CATEGORY_COLORS.设备 } },
+      { name: '其他', type: 'bar', stack: 'cost', data: series('totalOtherCost'),     itemStyle: { color: COST_CATEGORY_COLORS.其他 } },
     ],
   });
 }
@@ -252,7 +262,7 @@ function renderYieldTrend() {
     yAxis: {
       type: 'value',
       name: '出成率(%)',
-      min: known.length ? Math.max(0, Math.min(...known, 80) - 5) : 0,
+      min: known.length ? Math.max(0, Math.floor((Math.min(...known) - 5) / 5) * 5) : 0,
       max: 105,
       interval: 5,
       axisLabel: { formatter: (v: number) => (v > 100 ? '' : `${v}`) },
@@ -267,12 +277,8 @@ function renderYieldTrend() {
       symbolSize: 7,
       itemStyle: { color: '#f5576c' },
       lineStyle: { width: 2 },
-      markLine: {
-        symbol: 'none',
-        data: [{ yAxis: 80, name: '基准', lineStyle: { color: '#52c41a', type: 'dashed' },
-          label: { formatter: '基准 80%', position: 'insideStartTop' } }],
-        silent: true,
-      },
+      // 不画「基准线」：工厂没有配置成品批次的出成率目标（工序目标是逐道工序的），
+      // 写死一个 80% 会被当成工厂目标来读。
     }],
   });
 }
@@ -282,9 +288,12 @@ function renderProductBar() {
   if (!productBarChart || productBarChart.isDisposed?.()) {
     productBarChart = echarts.init(productBarRef.value, 'cretas');
   }
-  const prods = productData.value!.products.slice(0, 10); // top 10
-  const labels = productChartLabels(prods, id => productLabel(id, prods.find(p => p.productTypeId === id)?.productName));
   const canShow = canViewPrice.value;
+  // 有价格权限时比「单位成本」（谁贵），不比总成本（总成本主要反映产量大小）。
+  const prods = (canShow ? productsByUnitCost(productData.value!.products) : productData.value!.products)
+    .slice(0, 10);
+  const narrow = isNarrow.value;
+  const labels = productChartLabels(prods, id => productLabel(id, prods.find(p => p.productTypeId === id)?.productName));
   // 横向条形图：产品全名直接可读，不再被 x 轴截断成「演示·酱卤牛肉…」。
   productBarChart.setOption({
     tooltip: {
@@ -296,7 +305,7 @@ function renderProductBar() {
         if (!p) return '';
         const lines = [
           productLabel(p.productTypeId, p.productName),
-          ...(canShow ? [`总成本: ¥${fmtMoney(p.totalCost)}`] : []),
+          ...(canShow ? [`单位成本: ${unitCostLabel(p.costPerUnit, p.unit)}`, `总成本: ¥${fmtMoney(p.totalCost)}`] : []),
           `批次: ${p.batchCount}`,
           `实际产出: ${fmtQty(p.totalActualQty)} ${productUnit(p)}`,
           `出成率: ${fmtPercent(p.avgYieldRate)}`,
@@ -304,22 +313,25 @@ function renderProductBar() {
         return lines.join('<br/>');
       },
     },
-    grid: { top: 16, right: 64, bottom: 28, left: 8, containLabel: true },
+    grid: { top: 16, right: narrow ? 84 : 96, bottom: narrow ? 8 : 28, left: 8, containLabel: true },
+    // 手机宽度不画数值轴刻度（会挤成「5100000…」一串）：每根条右侧已经有金额标签。
     xAxis: canShow
-      ? { type: 'value', name: '总成本(¥)', axisLabel: { formatter: (v: number) => fmtMoney(v) } }
-      : { type: 'value', name: '出成率(%)', min: 0, max: 100 },
-    yAxis: { type: 'category', inverse: true, data: labels, axisLabel: { fontSize: 12, width: 220, overflow: 'break' } },
+      ? { type: 'value', name: narrow ? '' : '单位成本(¥)', splitNumber: 3,
+          axisLabel: { show: !narrow, formatter: (v: number) => fmtMoney(v, v < 100 ? 1 : 0) } }
+      : { type: 'value', name: narrow ? '' : '出成率(%)', min: 0, max: 100, axisLabel: { show: !narrow } },
+    yAxis: { type: 'category', inverse: true, data: labels,
+      axisLabel: { fontSize: 12, width: narrow ? 110 : 220, overflow: 'break' } },
     series: [{
       type: 'bar',
-      data: prods.map(p => (canShow ? p.totalCost : p.avgYieldRate)),
+      data: prods.map(p => (canShow ? p.costPerUnit : p.avgYieldRate)),
       barMaxWidth: 26,
       itemStyle: { color: canShow ? '#1b65a8' : '#5470c6', borderRadius: [0, 4, 4, 0] },
       label: {
         show: true,
         position: 'right',
         fontSize: 11,
-        formatter: ({ value }: { value: number | null }) =>
-          value == null ? '未填' : canShow ? `¥${fmtMoney(value)}` : `${value}%`,
+        formatter: ({ value, dataIndex }: { value: number | null; dataIndex: number }) =>
+          value == null ? '未填' : canShow ? unitCostLabel(value, prods[dataIndex]?.unit) : `${value}%`,
       },
     }],
   });
@@ -431,7 +443,7 @@ const summaryKpis = computed<Kpi[]>(() => {
     value: fmtPercent(y),
     hint: summaryYieldMissing(s)
       ? '缺批次数，后端未更新'
-      : y == null ? '暂无带出成率的批次' : `按 ${s.yieldBatchCount ?? 0} 批加权`,
+      : yieldBasisText(s.yieldBatchCount, s.batchCount),
   });
   if (canViewPrice.value) {
     kpis.push({
@@ -444,28 +456,8 @@ const summaryKpis = computed<Kpi[]>(() => {
   return kpis;
 });
 
-// ── Chart Insight wiring (useChartInsight per-chart) ──────────────────────────
-
-const costInsightPerms = computed(() => ({ canViewFinance: canViewPrice.value }));
-
-// 1. 成本结构饼图 (PIE PROPORTION, yMetric:cost)
-const { insight: costPieInsight, loading: costPieInsightLoading } = useChartInsight(
-  (): { chart: ChartWithMeta } | null => {
-    if (!hasCostPie.value) return null;
-    return {
-      chart: {
-        chartType: 'pie',
-        title: '成本结构占比',
-        meta: { xDim: 'category', yMetric: 'cost', aggregation: 'sum', domain: 'factory' },
-        config: {
-          series: [{ type: 'pie', data: costPieSlices.value }],
-        },
-      },
-    };
-  },
-  () => costInsightPerms.value,
-  { factoryId: () => factoryId.value, autoTier2: true },
-);
+// 成本结构图不挂自动洞察：规则模板话（「头部集中，材料成本 占比超过一半」）对 93.9% 说「超过一半」，
+// 像没看数，演示里扣分（11-17 评估第 9 条）。
 
 // 趋势类图（成本趋势 / 出成率趋势）不挂自动洞察：首尾比较得出的「整体下降 99.7%」会把
 // 正常的开工日波动说成异常，客户演示场景下误导大于帮助。
@@ -478,6 +470,11 @@ let resizeRaf = 0;
 let resizeObserver: ResizeObserver | null = null;
 
 function handleResize() {
+  const narrow = window.innerWidth <= NARROW_MAX_WIDTH;
+  if (narrow !== isNarrow.value) {
+    isNarrow.value = narrow;
+    renderAll(); // 图例位置 / 刻度随宽度切换，要重新 setOption
+  }
   if (resizeRaf) return;
   resizeRaf = requestAnimationFrame(() => {
     costPieChart?.resize();
@@ -592,11 +589,6 @@ onBeforeUnmount(() => {
               :image-size="60"
               class="fca-chart-empty"
             />
-            <ChartInsight
-              :insight="costPieInsight"
-              :loading="costPieInsightLoading"
-              depth="detailed"
-            />
           </div>
 
           <!-- 每日成本趋势堆叠柱 -->
@@ -623,7 +615,10 @@ onBeforeUnmount(() => {
       <div class="fca-section">
         <div class="fca-section-title">出成率趋势</div>
         <div class="fca-chart-card fca-chart-full">
-          <div class="fca-chart-title">出成率趋势（日度）</div>
+          <div class="fca-chart-title">
+            出成率趋势（日度）
+            <span class="fca-chart-note">出成率 = 良品 ÷ 实际产出</span>
+          </div>
           <div v-show="hasYieldTrend" ref="yieldTrendRef" class="fca-chart-body" />
           <el-empty
             v-if="!hasYieldTrend && !loading"
@@ -644,9 +639,10 @@ onBeforeUnmount(() => {
         </div>
         <div class="fca-chart-card fca-chart-full">
           <div class="fca-chart-title">
-            {{ canViewPrice ? '各产品总成本 (Top 10)' : '各产品出成率 (Top 10)' }}
+            {{ canViewPrice ? '各产品单位成本 (Top 10)' : '各产品出成率 (Top 10)' }}
+            <span v-if="canViewPrice" class="fca-chart-note">同单位的产品排在一起，盒和袋的单价不直接比大小</span>
           </div>
-          <div v-show="hasProducts" ref="productBarRef" class="fca-chart-body" />
+          <div v-show="hasProducts" ref="productBarRef" class="fca-chart-body fca-chart-body--bar" />
           <el-empty
             v-if="!hasProducts && !loading"
             description="暂无产品成本对比数据"
@@ -659,7 +655,37 @@ onBeforeUnmount(() => {
       <!-- ── 产品明细表格 (canViewPrice 或 仅出成率) ─────────── -->
       <div class="fca-section fca-detail-section" v-if="hasProducts">
         <div class="fca-section-title">产品明细</div>
-        <el-table :data="productData!.products" stripe border size="small" empty-text="暂无数据">
+        <!-- 手机宽度：卡片（产品 + 单位成本 + 总成本为主），老板最该看的列不藏在横向滚动里 -->
+        <div v-if="isNarrow" class="fca-product-cards">
+          <div v-for="row in productData!.products" :key="`${row.productTypeId}-${row.unit}`" class="fca-product-card">
+            <div class="fca-product-card-name">{{ productLabel(row.productTypeId, row.productName) }}</div>
+            <div v-if="canViewPrice" class="fca-product-card-main">
+              <div>
+                <small>单位成本</small>
+                <b>{{ unitCostLabel(row.costPerUnit, productUnit(row)) }}</b>
+                <small v-if="costCoverageText(row.costedBatchCount, row.batchCount)" class="fca-coverage">
+                  {{ costCoverageText(row.costedBatchCount, row.batchCount) }}
+                </small>
+              </div>
+              <div>
+                <small>总成本</small>
+                <b>{{ row.totalCost == null ? '—' : `¥${fmtMoney(row.totalCost)}` }}</b>
+              </div>
+            </div>
+            <div class="fca-product-card-meta">
+              <span>{{ row.batchCount }} 批</span>
+              <span>产出 {{ fmtQty(row.totalActualQty) }} {{ productUnit(row) }}</span>
+              <span>出成率 {{ fmtPercent(row.avgYieldRate) }}</span>
+            </div>
+            <div v-if="canViewPrice" class="fca-product-card-meta">
+              <span>材料 ¥{{ fmtMoney(row.totalMaterialCost) }}</span>
+              <span>人工 ¥{{ fmtMoney(row.totalLaborCost) }}</span>
+              <span>设备 ¥{{ fmtMoney(row.totalEquipmentCost) }}</span>
+              <span>其他 ¥{{ fmtMoney(row.totalOtherCost) }}</span>
+            </div>
+          </div>
+        </div>
+        <el-table v-else :data="productData!.products" stripe border size="small" empty-text="暂无数据">
           <el-table-column label="产品" min-width="180">
             <template #default="{ row }">
               <span :title="row.productTypeId">{{ productLabel(row.productTypeId, row.productName) }}</span>
@@ -689,6 +715,17 @@ onBeforeUnmount(() => {
             <el-table-column label="人工成本(¥)" width="110" align="right">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalLaborCost) }}
+              </template>
+            </el-table-column>
+            <!-- 设备、其他两列：材料 + 人工 + 设备 + 其他 = 总成本，各列能加出来 -->
+            <el-table-column label="设备成本(¥)" width="110" align="right">
+              <template #default="{ row }">
+                {{ fmtMoney(row.totalEquipmentCost) }}
+              </template>
+            </el-table-column>
+            <el-table-column label="其他成本(¥)" width="110" align="right">
+              <template #default="{ row }">
+                {{ fmtMoney(row.totalOtherCost) }}
               </template>
             </el-table-column>
             <el-table-column label="总成本(¥)" width="100" align="right">
@@ -905,6 +942,60 @@ onBeforeUnmount(() => {
   justify-content: center;
 }
 
+.fca-chart-note {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #86909c;
+}
+
+/* ── Product cards (narrow) ──────────────────── */
+.fca-product-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fca-product-card {
+  border: 1px solid var(--cs-border);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.fca-product-card-name {
+  font-weight: 600;
+  color: #1d2129;
+  margin-bottom: 8px;
+}
+
+.fca-product-card-main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.fca-product-card-main small {
+  display: block;
+  color: #86909c;
+  font-size: 12px;
+}
+
+.fca-product-card-main b {
+  font-size: 16px;
+  color: #1d2129;
+}
+
+.fca-product-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: #4e5969;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── RBAC mask ───────────────────────────────── */
 .fca-rbac-mask {
   background: #fff;
@@ -940,6 +1031,29 @@ onBeforeUnmount(() => {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;
+  }
+}
+
+@media (max-width: 640px) {
+  .fca-root {
+    padding: 12px;
+  }
+  /* KPI 两列排，不再四张竖排占满一屏 */
+  .fca-kpi-row {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .fca-kpi-card {
+    padding: 10px 12px;
+  }
+  .fca-kpi-value {
+    font-size: 1.25rem;
+  }
+  .fca-detail-section {
+    padding: 12px;
+  }
+  .fca-chart-body--bar {
+    height: 260px;
   }
 }
 </style>
