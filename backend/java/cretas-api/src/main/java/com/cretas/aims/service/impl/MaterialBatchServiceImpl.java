@@ -1135,6 +1135,15 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         List<MaterialBatchDTO> batchDTOs = batchPage.getContent().stream()
                 .map(materialBatchMapper::toDTO)
                 .collect(Collectors.toList());
+        // 与分仓库存查询同一口径: 填未结单预扣, availableQuantity 由 DTO 据此推导。
+        Map<String, BigDecimal> unsettledByBatch = getUnsettledConsumptionByBatchIds(
+                factoryId, batchDTOs.stream().map(MaterialBatchDTO::getId).collect(Collectors.toList()));
+        for (MaterialBatchDTO dto : batchDTOs) {
+            BigDecimal unsettled = unsettledByBatch.get(dto.getId());
+            if (unsettled != null) {
+                dto.setUnsettledConsumption(unsettled);
+            }
+        }
 
         return PageResponse.of(
                 batchDTOs,

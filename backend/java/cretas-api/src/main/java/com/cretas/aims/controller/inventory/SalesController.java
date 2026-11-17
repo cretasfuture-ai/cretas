@@ -104,6 +104,10 @@ public class SalesController {
     private final SalesPriceAdjustmentService priceAdjustmentService;
     private final ProductPackagingSpecService productPackagingSpecService;
 
+    /** 成品列表回填仓库名; 字段注入以保持既有直接 new 的测试可用。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
+
     /** Field injection keeps the controller's existing direct-construction tests stable. */
     @org.springframework.beans.factory.annotation.Autowired
     private FinishedGoodsFeedService finishedGoodsFeedService;
@@ -1022,9 +1026,30 @@ public class SalesController {
                                 ProductType::getName,
                                 (left, right) -> left,
                                 LinkedHashMap::new));
+        Map<String, String> warehouseNamesById = resolveWarehouseNames(factoryId, source);
         return source.stream()
-                .map(batch -> detachedFinishedGoods(batch, productNamesById.get(batch.getProductTypeId())))
+                .map(batch -> {
+                    FinishedGoodsBatch copy = detachedFinishedGoods(
+                            batch, productNamesById.get(batch.getProductTypeId()));
+                    if (copy != null && batch.getWarehouseId() != null) {
+                        copy.setWarehouseName(warehouseNamesById.get(batch.getWarehouseId()));
+                    }
+                    return copy;
+                })
                 .toList();
+    }
+
+    private Map<String, String> resolveWarehouseNames(String factoryId, List<FinishedGoodsBatch> source) {
+        if (factoryWarehouseRepository == null) {
+            return Map.of();
+        }
+        Map<String, String> names = new LinkedHashMap<>();
+        factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId).forEach(w -> {
+            if (w.getId() != null && w.getName() != null && !w.getName().isBlank()) {
+                names.put(w.getId(), w.getName());
+            }
+        });
+        return names;
     }
 
     private FinishedGoodsBatch detachedFinishedGoods(FinishedGoodsBatch source) {

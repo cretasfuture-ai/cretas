@@ -297,4 +297,44 @@ public class MaterialBatchDTO {
     public BigDecimal getRemainingQuantity() {
         return currentQuantity;
     }
+
+    /**
+     * 统一「可用」口径: {@code max(0, currentQuantity − unsettledConsumption)}。
+     * {@code unsettledConsumption} 为 null (该端点未查预扣) 时按 0 处理, 即可用 == 账面;
+     * {@code currentQuantity} 为 null 时返回 null, ⛔ 不返回 0 冒充「已无库存」。
+     * 批次列表与分仓库存查询两个端点都填 unsettledConsumption, 读到的是同一个数。
+     */
+    @JsonProperty("availableQuantity")
+    @Schema(description = "可用数量 = max(0, 当前数量 − 未结单预扣); 当前数量缺失时为 null")
+    public BigDecimal getAvailableQuantity() {
+        if (currentQuantity == null) {
+            return null;
+        }
+        BigDecimal held = unsettledConsumption != null ? unsettledConsumption : BigDecimal.ZERO;
+        return currentQuantity.subtract(held).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * 质量状态 (由批次状态推导, 不是独立存储的字段; 推导口径待 Steve 裁决):
+     * INSPECTING → PENDING (待检), DEFECTIVE/SCRAPPED → REJECTED, EXPIRED → EXPIRED,
+     * status 缺失 → null, 其余 → NORMAL。
+     */
+    @JsonProperty("qualityStatus")
+    @Schema(description = "质量状态: PENDING/REJECTED/EXPIRED/NORMAL, 由批次状态推导")
+    public String getQualityStatus() {
+        if (status == null) {
+            return null;
+        }
+        switch (status) {
+            case INSPECTING:
+                return "PENDING";
+            case DEFECTIVE:
+            case SCRAPPED:
+                return "REJECTED";
+            case EXPIRED:
+                return "EXPIRED";
+            default:
+                return "NORMAL";
+        }
+    }
 }
