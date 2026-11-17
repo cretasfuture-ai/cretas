@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.impl.finance.FinanceFigures;
 import com.cretas.aims.service.ReportService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -93,26 +94,30 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
             endDate = LocalDate.parse(endDateStr);
         }
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", ratioType);
         result.put("period", startDate + " 至 " + endDate);
+        // 金额与比率只看价格查看 (与 finance_roe / finance_roa / finance_dupont / #1801 利润表同一判定)。
+        // 看不到 ⇒ 不查库, 比率与金额键都不出现 (不是 0)。
+        if (!replyShowsPriceSpec(context, FinanceFigures.AMOUNT_SPEC)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceFigures.amountsHiddenMessage(ratioType + " 财务比率", "利润、资产、负债、权益"));
+            return result;
+        }
 
-        double totalRevenue = extractDouble(finance, "totalRevenue", 0);
-        double totalCost = extractDouble(finance, "totalCost", 0);
-        double totalAssets = extractDouble(finance, "totalAssets", 1);
-        double totalEquity = extractDouble(finance, "totalEquity", 1);
-        double currentAssets = extractDouble(finance, "currentAssets", 1);
-        double currentLiabilities = extractDouble(finance, "currentLiabilities", 1);
-        double totalLiabilities = extractDouble(finance, "totalLiabilities", 1);
-        double netProfit = totalRevenue - totalCost;
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+
+        Double totalRevenue = FinanceFigures.figure(finance, "totalRevenue");
+        Double totalAssets = FinanceFigures.positive(FinanceFigures.figure(finance, "totalAssets"));
+        Double totalEquity = FinanceFigures.figure(finance, "totalEquity");
+        Double currentAssets = FinanceFigures.figure(finance, "currentAssets");
+        Double currentLiabilities = FinanceFigures.positive(FinanceFigures.figure(finance, "currentLiabilities"));
+        Double totalLiabilities = FinanceFigures.figure(finance, "totalLiabilities");
+        Double inventory = FinanceFigures.figure(finance, "inventory");
         // 工艺保密: 财务报表的成本只算了调用者能看的计划而营收是全厂的, 报表已把利润置空 ——
         // 这里不能再拿两者相减造一个利润出来, 依赖利润的比率一律不给并说明原因
-        Object profitUnavailable = finance == null ? null
-                : finance.get("profitUnavailableReason") != null ? finance.get("profitUnavailableReason")
-                : finance.get("processSecretNote");
+        Object profitUnavailable = FinanceFigures.profitUnavailableReason(finance);
         if (profitUnavailable != null && java.util.Set.of("ROA", "ROE", "DUPONT").contains(ratioType)) {
             result.put("netProfit", null);
             result.put("unavailableReason", profitUnavailable.toString());
@@ -120,73 +125,112 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
             result.put("message", "利润不可计算（" + profitUnavailable + "），" + ratioType + " 不提供");
             return result;
         }
+        Double netProfit = FinanceFigures.netProfit(finance);
 
+        // 每个比率只在它自己的输入都在时才算; 缺一个 ⇒ 比率键不出现, 如实说「数据不足」(以前缺了按 0 / 1 顶, 出假值)
         String ratioName;
-
+        List<String> missing = new ArrayList<>();
+        List<String> visibleKeys = new ArrayList<>();
         switch (ratioType) {
             case "ROA":
                 ratioName = "资产收益率";
-                double roa = totalAssets > 0 ? (netProfit / totalAssets) * 100 : 0;
-                result.put("roa", roa);
-                result.put("netProfit", netProfit);
-                result.put("totalAssets", totalAssets);
+                if (netProfit == null) missing.add("净利润");
+                if (totalAssets == null) missing.add("总资产");
+                if (missing.isEmpty()) result.put("roa", (netProfit / totalAssets) * 100);
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance), List.of("totalAssets", "roa")));
+                putIfKnown(result, visibleKeys, "netProfit", netProfit);
+                putIfKnown(result, visibleKeys, "totalAssets", totalAssets);
                 result.put("industryReference", "食品加工 3%-8%");
                 break;
             case "ROE":
                 ratioName = "净资产收益率";
-                double roe = totalEquity > 0 ? (netProfit / totalEquity) * 100 : 0;
-                result.put("roe", roe);
-                result.put("netProfit", netProfit);
-                result.put("totalEquity", totalEquity);
+                Double equity = FinanceFigures.positive(totalEquity);
+                if (netProfit == null) missing.add("净利润");
+                if (equity == null) missing.add("股东权益");
+                if (missing.isEmpty()) result.put("roe", (netProfit / equity) * 100);
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance), List.of("totalEquity", "roe")));
+                putIfKnown(result, visibleKeys, "netProfit", netProfit);
+                putIfKnown(result, visibleKeys, "totalEquity", totalEquity);
                 result.put("industryReference", "食品加工 8%-15%");
                 break;
             case "LIQUIDITY":
                 ratioName = "流动比率";
-                double currentRatio = currentLiabilities > 0 ? currentAssets / currentLiabilities : 0;
-                double quickRatio = currentLiabilities > 0 ? (currentAssets * 0.7) / currentLiabilities : 0;
-                result.put("currentRatio", currentRatio);
-                result.put("quickRatio", quickRatio);
-                result.put("currentAssets", currentAssets);
-                result.put("currentLiabilities", currentLiabilities);
+                if (currentAssets == null) missing.add("流动资产");
+                if (currentLiabilities == null) missing.add("流动负债");
+                if (currentAssets != null && currentLiabilities != null) {
+                    result.put("currentRatio", currentAssets / currentLiabilities);
+                    if (inventory != null) {
+                        result.put("quickRatio", (currentAssets - inventory) / currentLiabilities);
+                    }
+                }
+                if (inventory == null) missing.add("存货");
+                visibleKeys.addAll(List.of("currentAssets", "currentLiabilities", "inventory", "currentRatio", "quickRatio"));
+                putIfKnown(result, visibleKeys, "currentAssets", currentAssets);
+                putIfKnown(result, visibleKeys, "currentLiabilities", currentLiabilities);
                 result.put("healthReference", "流动比率 > 2.0, 速动比率 > 1.0");
                 break;
             case "SOLVENCY":
                 ratioName = "偿债能力";
-                double debtRatio = totalAssets > 0 ? (totalLiabilities / totalAssets) * 100 : 0;
-                double equityRatio = totalAssets > 0 ? (totalEquity / totalAssets) * 100 : 0;
-                result.put("debtRatio", debtRatio);
-                result.put("equityRatio", equityRatio);
-                result.put("totalLiabilities", totalLiabilities);
-                result.put("totalAssets", totalAssets);
+                if (totalAssets == null) missing.add("总资产");
+                if (totalLiabilities == null) missing.add("总负债");
+                if (totalEquity == null) missing.add("股东权益");
+                if (totalAssets != null && totalLiabilities != null) {
+                    result.put("debtRatio", (totalLiabilities / totalAssets) * 100);
+                }
+                if (totalAssets != null && totalEquity != null) {
+                    result.put("equityRatio", (totalEquity / totalAssets) * 100);
+                }
+                visibleKeys.addAll(List.of("totalAssets", "totalLiabilities", "totalEquity", "debtRatio", "equityRatio"));
+                putIfKnown(result, visibleKeys, "totalLiabilities", totalLiabilities);
+                putIfKnown(result, visibleKeys, "totalAssets", totalAssets);
                 result.put("healthReference", "资产负债率 < 60%");
                 break;
             case "DUPONT":
                 ratioName = "杜邦分析";
-                double profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
-                double assetTurnover = totalAssets > 0 ? totalRevenue / totalAssets : 0;
-                double equityMultiplier = totalEquity > 0 ? totalAssets / totalEquity : 1;
-                double dupontRoe = (profitMargin / 100) * assetTurnover * equityMultiplier * 100;
-                result.put("profitMargin", profitMargin);
-                result.put("assetTurnover", assetTurnover);
-                result.put("equityMultiplier", equityMultiplier);
-                result.put("dupontROE", dupontRoe);
+                Double revenue = FinanceFigures.positive(totalRevenue);
+                Double equityD = FinanceFigures.positive(totalEquity);
+                Double profitMargin = netProfit != null && revenue != null ? (netProfit / revenue) * 100 : null;
+                Double assetTurnover = revenue != null && totalAssets != null ? revenue / totalAssets : null;
+                Double equityMultiplier = totalAssets != null && equityD != null ? totalAssets / equityD : null;
+                if (netProfit == null) missing.add("净利润");
+                if (revenue == null) missing.add("营业收入");
+                if (totalAssets == null) missing.add("总资产");
+                if (equityD == null) missing.add("股东权益");
+                if (profitMargin != null) result.put("profitMargin", profitMargin);
+                if (assetTurnover != null) result.put("assetTurnover", assetTurnover);
+                if (equityMultiplier != null) result.put("equityMultiplier", equityMultiplier);
+                if (missing.isEmpty()) {
+                    result.put("dupontROE", (profitMargin / 100) * assetTurnover * equityMultiplier * 100);
+                }
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance),
+                        List.of("totalRevenue", "totalAssets", "totalEquity",
+                                "profitMargin", "assetTurnover", "equityMultiplier", "dupontROE")));
                 break;
             default:
                 ratioName = ratioType;
                 break;
         }
+        // 只登记本比率用到的报表键与输出键; financeData 其余键 (分项成本、应收 / 应付 / 预收等) 出口按 web 同一判定处理
+        FinanceFigures.sameVisibilityForAmounts(visibleKeys);
 
         result.put("ratioName", ratioName);
-        result.put("message", ratioName + "分析完成，分析周期: " + startDate + " ~ " + endDate);
+        result.put("dataSufficient", missing.isEmpty());
+        if (!missing.isEmpty()) {
+            result.put("missingFields", missing);
+            result.put("message", ratioName + ": " + FinanceFigures.INSUFFICIENT + "（缺少" + String.join("、", missing)
+                    + "），分析周期: " + startDate + " ~ " + endDate);
+        } else {
+            result.put("message", ratioName + "分析完成，分析周期: " + startDate + " ~ " + endDate);
+        }
 
         return result;
     }
 
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
+    private static void putIfKnown(Map<String, Object> result, List<String> keys, String key, Double value) {
+        if (value != null) {
+            result.put(key, value);
+            keys.add(key);
+        }
     }
 
     @Override
