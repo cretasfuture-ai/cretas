@@ -14,15 +14,23 @@ import java.util.List;
  */
 public final class LaborProcessAllocator {
 
-    public enum Status { ALLOCATED, LABOR_TOTAL_UNKNOWN, HOURS_UNKNOWN, HOURS_NEGATIVE, NO_POSITIVE_HOURS }
+    public enum Status {
+        ALLOCATED, LABOR_TOTAL_UNKNOWN, HOURS_UNKNOWN, HOURS_NEGATIVE, NO_POSITIVE_HOURS,
+        /** 调用者无价格权限: 金额不给, 不是「数据没录」。 */
+        PRICE_MASKED,
+        /** 工艺保密产品且调用者无权看成本。 */
+        SECRET_HIDDEN
+    }
 
     public record ProcessHours(Integer processOrder, String processName, BigDecimal hours) {
     }
 
-    public record ProcessShare(Integer processOrder, String processName, BigDecimal hours, BigDecimal amount) {
+    public record ProcessShare(Integer processOrder, String processName, BigDecimal hours, BigDecimal allocatedCost) {
     }
 
-    public record Result(Status status, BigDecimal laborTotal, List<ProcessShare> shares) {
+    /** upstreamLaborCost: 上游转入的人工 (订单人工合计 − 本单各工序实际人工之和), 单列, 不参与本单工序分摊。 */
+    public record Result(Status status, BigDecimal laborCostTotal, BigDecimal upstreamLaborCost,
+                         List<ProcessShare> shares) {
     }
 
     private LaborProcessAllocator() {
@@ -33,6 +41,8 @@ public final class LaborProcessAllocator {
         if (laborTotal == null || laborTotal.signum() < 0) {
             return unknown(Status.LABOR_TOTAL_UNKNOWN, laborTotal, ps);
         }
+        // 先收到分: 上游金额可能是 4 位小数, 不先收的话各工序合计会和总额差不到一分
+        laborTotal = laborTotal.setScale(2, RoundingMode.HALF_UP);
         BigDecimal sum = BigDecimal.ZERO;
         for (ProcessHours p : ps) {
             if (p.hours() == null) return unknown(Status.HOURS_UNKNOWN, laborTotal, ps);
@@ -60,12 +70,12 @@ public final class LaborProcessAllocator {
             allocated = allocated.add(amt);
             out.add(new ProcessShare(p.processOrder(), p.processName(), p.hours(), amt));
         }
-        return new Result(Status.ALLOCATED, laborTotal, out);
+        return new Result(Status.ALLOCATED, laborTotal, null, out);
     }
 
     private static Result unknown(Status s, BigDecimal total, List<ProcessHours> ps) {
         List<ProcessShare> out = new ArrayList<>();
         for (ProcessHours p : ps) out.add(new ProcessShare(p.processOrder(), p.processName(), p.hours(), null));
-        return new Result(s, total, out);
+        return new Result(s, total, null, out);
     }
 }

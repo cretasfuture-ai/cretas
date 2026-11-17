@@ -6,7 +6,7 @@ import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.security.PriceMaskResolver;
 import com.cretas.aims.service.yield.costview.LaborProcessAllocator;
 import com.cretas.aims.service.yield.costview.ProductCostViewService;
-import com.cretas.aims.service.yield.costview.ProductUnitCostAggregator;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -22,7 +22,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 /**
- * 成本新视图 (口径 MATERIAL_PLUS_LABOR_PER_GOOD_OUTPUT, 与现有 perBoxCost 并存, 不替换)。
+ * 成本新视图 (口径 工单材料人工口径, 与现有 perBoxCost 并存, 不替换)。
  */
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/production")
@@ -37,7 +37,7 @@ public class ProductCostViewController {
     @RequirePermission({"production:read"})
     @GetMapping("/cost-summary/by-product")
     @Operation(summary = "产品→工单汇总与同产品加权单位成本 (含成本信号)")
-    public ApiResponse<List<ProductUnitCostAggregator.Group>> byProduct(
+    public ApiResponse<ProductCostViewService.ByProductResult> byProduct(
             @PathVariable String factoryId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate,

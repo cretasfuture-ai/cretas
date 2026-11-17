@@ -15,8 +15,8 @@ import java.util.List;
  *   <li>LABOR_ZERO: 人工为 0</li>
  * </ul>
  * 边界: 离散 ≥ 20% 报; 材料占比 &lt; 10% 才报 (恰好 10% 不报); 人工 &gt; 65% 才报 (恰好 65% 不报)。
- * 占比信号逐单给出; 离散信号是产品级一条。与 CostDeviationScanService 的「计划成本差异/物料平衡」
- * 是两类信号, 互不替换。
+ * 占比信号逐单给出; 离散信号是产品级一条。{@code detail} 只写单号, 数值放 {@code value} 字段,
+ * 这样工艺保密遮蔽能统一处理数值。与 CostDeviationScanService 的「计划成本差异/物料平衡」是两类信号。
  */
 public final class CostSignalEvaluator {
 
@@ -25,9 +25,11 @@ public final class CostSignalEvaluator {
     public static final BigDecimal MATERIAL_SHARE_FLOOR = new BigDecimal("0.10");
     public static final BigDecimal LABOR_SHARE_CEIL = new BigDecimal("0.65");
 
-    public record Sample(String orderId, String orderNumber, BigDecimal material, BigDecimal labor, BigDecimal unitCost) {
+    public record Sample(String orderId, String orderNumber, BigDecimal materialCost, BigDecimal laborCost,
+                         BigDecimal unitCost) {
     }
 
+    /** value: 离散率或占比 (0~1 的比例, 不是金额); 保密遮蔽时置 null。 */
     public record Signal(String code, String orderId, String orderNumber, BigDecimal value, String detail) {
     }
 
@@ -45,20 +47,18 @@ public final class CostSignalEvaluator {
                         .divide(min.unitCost(), 4, RoundingMode.HALF_UP);
                 if (spread.compareTo(SPREAD_THRESHOLD) >= 0) {
                     out.add(new Signal("UNIT_COST_SPREAD", null, null, spread,
-                            "最高 " + max.orderNumber() + " " + max.unitCost() + " / 最低 " + min.orderNumber() + " "
-                                    + min.unitCost() + ", 差 "
-                                    + spread.movePointRight(2).setScale(1, RoundingMode.HALF_UP) + "%"));
+                            "最高 " + max.orderNumber() + " / 最低 " + min.orderNumber()));
                 }
             }
         }
         for (Sample s : samples) {
-            BigDecimal direct = s.material().add(s.labor());
+            BigDecimal direct = s.materialCost().add(s.laborCost());
             if (direct.signum() <= 0) continue;
-            if (s.labor().signum() == 0) {
+            if (s.laborCost().signum() == 0) {
                 out.add(new Signal("LABOR_ZERO", s.orderId(), s.orderNumber(), BigDecimal.ZERO, "人工费为 0"));
             }
-            BigDecimal matShare = s.material().divide(direct, 4, RoundingMode.HALF_UP);
-            BigDecimal labShare = s.labor().divide(direct, 4, RoundingMode.HALF_UP);
+            BigDecimal matShare = s.materialCost().divide(direct, 4, RoundingMode.HALF_UP);
+            BigDecimal labShare = s.laborCost().divide(direct, 4, RoundingMode.HALF_UP);
             if (matShare.compareTo(MATERIAL_SHARE_FLOOR) < 0) {
                 out.add(new Signal("MATERIAL_SHARE_LOW", s.orderId(), s.orderNumber(), matShare, "材料占比低于 10%"));
             }
