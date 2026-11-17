@@ -170,11 +170,15 @@ CFG = AIConfig(decision_business_types="FACTORY", decision_auto_threshold=0.7, d
 def _match(dec, query, version, sem=(), history=None):
     orch = Orchestrator(semantic_matcher=Nothing(), classifier_matcher=Nothing(), llm_matcher=Nothing(),
                         decision_matcher=dec, candidate_retriever=FakeSemantic(list(sem)), config=CFG)
-    trace = exit_metrics.start_decision_trace()
-    res = asyncio.run(orch.match(query=query, factoryId="F006", businessType="FACTORY", userId="u", role="operator",
-                                 visible_intents=ALL + [CUSTOM], history=history or [], min_confidence=0.7,
-                                 enable_llm=True, catalog_version=version))
-    return res, trace
+    async def run():
+        # 痕迹在协程自己的上下文里开 (asyncio.run 复制上下文), 不漏到同线程后面的测试
+        trace = exit_metrics.start_decision_trace()
+        res = await orch.match(query=query, factoryId="F006", businessType="FACTORY", userId="u", role="operator",
+                               visible_intents=ALL + [CUSTOM], history=history or [], min_confidence=0.7,
+                               enable_llm=True, catalog_version=version)
+        return res, trace
+
+    return asyncio.run(run())
 
 
 @pytest.fixture(autouse=True)
