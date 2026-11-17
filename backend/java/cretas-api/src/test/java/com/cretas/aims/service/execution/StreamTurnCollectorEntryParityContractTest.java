@@ -147,7 +147,7 @@ class StreamTurnCollectorEntryParityContractTest {
             h.chatReplies(CHAT_REPLY);
             h.recognizerAnswers(IntentMatchResult.builder().userInput(input)
                     .matchMethod(IntentMatchResult.MatchMethod.NONE).confidence(0.0)
-                    .questionType(QuestionType.OPERATIONAL_COMMAND).build());
+                    .questionType(QuestionType.GENERAL_QUESTION).build());
         }, IntentExecuteRequest.builder().userInput(input).build());
 
         assertSameStatusAndIntent(runs, "COMPLETED");
@@ -1015,7 +1015,7 @@ class StreamTurnCollectorEntryParityContractTest {
         org.mockito.Mockito.doReturn(QuestionType.OPERATIONAL_COMMAND).when(h.knowledgeBase).detectQuestionType(input);
         h.recognizerAnswers(IntentMatchResult.builder().userInput(input)
                 .matchMethod(IntentMatchResult.MatchMethod.NONE).confidence(0.0)
-                .questionType(QuestionType.OPERATIONAL_COMMAND).build());
+                .questionType(QuestionType.GENERAL_QUESTION).build());
         F006BossQuestionClient mini = mock(F006BossQuestionClient.class);
         when(mini.shouldRoute(FACTORY, USER, ROLE)).thenReturn(true);
         when(mini.stream(anyString(), any(), anyString(), anyString(), anyBoolean(), any(), any(), any()))
