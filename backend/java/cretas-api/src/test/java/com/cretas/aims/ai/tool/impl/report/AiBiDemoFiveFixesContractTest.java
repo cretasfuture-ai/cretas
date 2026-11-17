@@ -33,7 +33,9 @@ class AiBiDemoFiveFixesContractTest {
             "近三个月成本趋势, 92",
             "最近两周报工, 14",
             "最近的批次, 7",
-            "近二十五天, 25"})
+            "近二十五天, 25",
+            "查询7天内到期的原料, 7",
+            "7天内到期的原料, 7"})
     void recentNDaysAllowsSpacesAndChineseNumerals(String text, long expectedDays) {
         TimeNormalizationRules.TimeRange r = new TimeNormalizationRules().normalize(text, NOW).orElseThrow();
         long days = ChronoUnit.DAYS.between(r.getStart().toLocalDate(), NOW.toLocalDate());
@@ -75,6 +77,13 @@ class AiBiDemoFiveFixesContractTest {
         // 「牛肉酱」不以「牛肉」结尾, 单独一个也不锁定
         List<ProductType> onlySauce = List.of(p("牛肉酱", "FINISHED_PRODUCT"));
         assertEquals("未找到:牛肉", ReportToolSchemas.resolveProduct(onlySauce, "牛肉成本").describe());
+    }
+
+    @Test
+    void arabicDaysAgoAfterChineseTextStillWorks() {
+        // 「查一下3天前」: 阿拉伯数字前面紧贴汉字照常认 (#1810 复审 High)
+        TimeNormalizationRules.TimeRange r = new TimeNormalizationRules().normalize("查一下3天前的批次", NOW).orElseThrow();
+        assertEquals(NOW.toLocalDate().minusDays(3), r.getStart().toLocalDate());
     }
 
     @ParameterizedTest(name = "{0} 不是时间")

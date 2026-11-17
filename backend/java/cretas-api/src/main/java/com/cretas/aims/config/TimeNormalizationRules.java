@@ -72,8 +72,11 @@ public class TimeNormalizationRules {
     private static final String YEAR_PREFIX = "(今年|本年|明年|下一年|去年|上一年|前年)";
     /** 「最近 / 过去 / 近」+ 数量; 数量前后允许空格 (演示题「最近 30 天」曾因空格落到「最近」= 7 天)。 */
     private static final String RECENT_PREFIX = "(?:最近|过去|(?<![附接将邻临])近)\\s*";
-    /** 独立的数量: 前面不能紧贴汉字或数字 (「统一天前」「第一天内」「12345天前」都不是时间)。 */
-    private static final String BARE_COUNT = "(?<![\\p{IsHan}\\d])";
+    /**
+     * 「N天前 / N天内」前面没有「最近」时的数量: 阿拉伯数字只防前面紧贴数字 (「12345天前」), 「查一下3天前」照常认;
+     * 中文数字前面不能紧贴汉字 (「统一天前」「第一天内」不是时间)。两个分组, 用 {@link #countOf} 取命中的那个。
+     */
+    private static final String BARE_COUNT_TEXT = "(?:(?<!\\d)(\\d{1,4})|(?<!\\p{IsHan})([一二两三四五六七八九十]{1,3}))";
     /** 阿拉伯数字或「两 / 三 / 十二 / 三十 / 二十五」。 */
     private static final String COUNT_TEXT = "(\\d{1,4}|[一二两三四五六七八九十]{1,3})";
     private static final String MONTH_TEXT = "(\\d{1,2}|[一二三四五六七八九十]{1,3})";
@@ -249,16 +252,16 @@ public class TimeNormalizationRules {
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile(BARE_COUNT + COUNT_TEXT + "\\s*天前"),
+                Pattern.compile(BARE_COUNT_TEXT + "\\s*天前"),
                 (now, m) -> {
-                    int days = parseCount(m.group(1));
+                    int days = countOf(m);
                     return dayRange(now, -days);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile(BARE_COUNT + COUNT_TEXT + "\\s*天内"),
+                Pattern.compile(BARE_COUNT_TEXT + "\\s*天内"),
                 (now, m) -> {
-                    int days = parseCount(m.group(1));
+                    int days = countOf(m);
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
                 }
         );
@@ -470,6 +473,11 @@ public class TimeNormalizationRules {
     }
 
     /** 「30」「两」「三」「十二」「三十」「二十五」→ 数量; 认不出抛异常 (调用方记日志并跳过这条规则)。 */
+    /** {@link #BARE_COUNT_TEXT} 两个分组里命中的那个。 */
+    static int countOf(Matcher m) {
+        return parseCount(m.group(1) != null ? m.group(1) : m.group(2));
+    }
+
     static int parseCount(String text) {
         if (text.chars().allMatch(Character::isDigit)) {
             return Integer.parseInt(text);
