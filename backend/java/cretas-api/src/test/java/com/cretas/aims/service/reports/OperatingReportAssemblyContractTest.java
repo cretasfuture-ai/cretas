@@ -49,6 +49,25 @@ class OperatingReportAssemblyContractTest {
         assertEquals(new BigDecimal("100.00000000"),people.stream().filter(m->m.label().equals("Recorded seller 同比")).findFirst().orElseThrow().value());
         assertNull(people.stream().filter(m->m.label().equals("Recorded seller 环比")).findFirst().orElseThrow().value());
     }
+    @Test void metricsCarryPreviousValueAndDetailRefWithoutInventingMissingOnes(){
+        Map<String,Object> sales=Map.of("summary",Map.of("orderCount",1,"assignedOrderCount",1,"totalAmountWithTax",200),
+                "unassigned",Map.of("orderCount",0,"taxableAmount",0,"taxAmount",0,"totalAmountWithTax",0),
+                "rank",List.of(Map.of("salespersonId",7,"salespersonName","S","orderCount",1,"taxableAmount",200,"taxAmount",0,"totalAmountWithTax",200)));
+        var snapshot=new OperatingReportAssembler().assemble(new OperatingReportAssembler.Input("daily",LocalDate.of(2026,1,2),LocalDate.of(2026,1,2),"t",List.of(),sales,
+                Map.of("summary",Map.of("totalAmountWithTax",100),"rank",List.of(Map.of("salespersonId",7,"totalAmountWithTax",80))),Map.of(),
+                Map.of(),Map.of(),Map.of(),List.of(),Map.of(),List.of(),Map.of()));
+        var taxed=metric(snapshot,"sales.taxed");
+        assertEquals(new BigDecimal("100"),taxed.previousValue());
+        assertEquals("sales-preset/salesperson-performance",taxed.detail().endpoint());
+        assertEquals("2026-01-02",taxed.detail().params().get("startDate"));
+        assertEquals(new BigDecimal("80"),metric(snapshot,"salesperson.id:7.sales").previousValue());
+        assertNull(metric(snapshot,"sales.previous").detail(),"比较期指标不得指向当期明细");
+        assertNull(metric(snapshot,"sales.mom").detail(),"派生指标没有单一明细来源, 不编造");
+        assertNull(metric(snapshot,"margin.revenue").previousValue(),"没查上期的指标不填 previous");
+        assertEquals("sales-preset.gross-margin",metric(snapshot,"margin.revenue").detail().endpoint());
+        assertEquals("ar-ap/aging",metric(snapshot,"aging.total").detail().endpoint());
+        assertEquals("finance/report/income-statement",metric(snapshot,"income.netProfit").detail().endpoint());
+    }
     @Test void ratioRejectsMissingZeroAndNegativeDenominators(){
         assertNull(OperatingReportAssembler.ratio(BigDecimal.ONE,null));
         assertNull(OperatingReportAssembler.ratio(BigDecimal.ONE,BigDecimal.ZERO));

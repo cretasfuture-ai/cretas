@@ -170,6 +170,9 @@ public class WorkflowInstanceController {
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
             @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
@@ -186,7 +189,8 @@ public class WorkflowInstanceController {
         }
 
         // 2. 查 pending instances (Spring Data 0-based pageable, 但暴露给前端用 1-based)
-        Pageable pageable = PageRequest.of(page - 1, size);
+        boolean scan = hasTextFilter(keyword, approverRole, initiator);
+        Pageable pageable = scan ? PageRequest.of(0, FILTER_SCAN_CAP) : PageRequest.of(page - 1, size);
         Page<ApprovalWorkflowInstance> instances = workflowEngine.findPendingForRole(
                 factoryId, userRole, moduleCode, pageable);
 
@@ -299,9 +303,103 @@ public class WorkflowInstanceController {
             dtos.add(dto);
         }
 
+        if (scan) {
+            warnIfScanTruncated("pending", instances);
+            return ApiResponse.success(sliceFiltered(
+                    applyTextFilters(dtos, keyword, approverRole, initiator), page, size));
+        }
         PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
                 dtos, page, size, instances.getTotalElements());
         return ApiResponse.success(response);
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getPendingForUser(
+            String factoryId, String authorization, String moduleCode, int page, int size) {
+        return getPendingForUser(factoryId, authorization, moduleCode, null, null, null, page, size);
+    }
+
+    // ───── 筛选 (G9, 2026-11-18) ─────
+    // 筛选是后端真实过滤 (不是前端本地筛): 先扫描最多 FILTER_SCAN_CAP 条再筛再分页,
+    // 否则「第 1 页 20 条里本地筛」会漏掉其它页的命中。超过上限只告警, 不静默当全量。
+    private static final int FILTER_SCAN_CAP = 2000;
+
+    private static boolean hasText(String s) {
+        return s != null && !s.isBlank();
+    }
+
+    private static boolean hasTextFilter(String keyword, String approverRole, String initiator) {
+        return hasText(keyword) || hasText(approverRole) || hasText(initiator);
+    }
+
+    private void warnIfScanTruncated(String view, Page<?> scanned) {
+        if (scanned.getTotalElements() > FILTER_SCAN_CAP) {
+            log.warn("OA {} 带筛选只扫描前 {} 条, 实际共 {} 条, 结果可能不全",
+                    view, FILTER_SCAN_CAP, scanned.getTotalElements());
+        }
+    }
+
+    private static boolean containsIgnoreCase(String hay, String needle) {
+        return hay != null && hay.toLowerCase(java.util.Locale.ROOT)
+                .contains(needle.trim().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    static List<WorkflowInstancePendingDTO> applyTextFilters(
+            List<WorkflowInstancePendingDTO> in, String keyword, String approverRole, String initiator) {
+        List<WorkflowInstancePendingDTO> out = new ArrayList<>();
+        for (WorkflowInstancePendingDTO d : in) {
+            if (hasText(approverRole)
+                    && (d.getApproverRoles() == null || !d.getApproverRoles().contains(approverRole.trim()))) {
+                continue;
+            }
+            if (hasText(initiator) && !containsIgnoreCase(d.getInitiatedByUsername(), initiator)) {
+                continue;
+            }
+            if (hasText(keyword)
+                    && !(containsIgnoreCase(d.getBusinessSummary(), keyword)
+                    || containsIgnoreCase(d.getBusinessCode(), keyword)
+                    || containsIgnoreCase(d.getBusinessEntityId(), keyword)
+                    || containsIgnoreCase(d.getCounterpartyName(), keyword)
+                    || containsIgnoreCase(d.getModuleLabel(), keyword)
+                    || containsIgnoreCase(d.getCurrentNodeLabel(), keyword)
+                    || containsIgnoreCase(d.getInitiatedByUsername(), keyword))) {
+                continue;
+            }
+            out.add(d);
+        }
+        return out;
+    }
+
+    static PageResponse<WorkflowInstancePendingDTO> sliceFiltered(
+            List<WorkflowInstancePendingDTO> filtered, int page, int size) {
+        int total = filtered.size();
+        int from = (int) Math.min((long) (page - 1) * size, total);
+        int to = Math.min(from + size, total);
+        return PageResponse.of(new ArrayList<>(filtered.subList(from, to)), page, size, (long) total);
+    }
+
+    /** 个人视图 (我发起/已处理/抄送我) 的统一筛选分页: 无筛选走原分页, 有筛选先扫描再筛再分页。 */
+    private ApiResponse<PageResponse<WorkflowInstancePendingDTO>> personalView(
+            String view, int page, int size,
+            String moduleCode, String keyword, String approverRole, String initiator,
+            java.util.function.Function<Pageable, Page<ApprovalWorkflowInstance>> fetch,
+            java.util.function.Function<List<ApprovalWorkflowInstance>, List<WorkflowInstancePendingDTO>> hydrate) {
+        boolean scan = hasText(moduleCode) || hasTextFilter(keyword, approverRole, initiator);
+        if (!scan) {
+            Page<ApprovalWorkflowInstance> instances = fetch.apply(PageRequest.of(page - 1, size));
+            return ApiResponse.success(PageResponse.of(
+                    hydrate.apply(instances.getContent()), page, size, instances.getTotalElements()));
+        }
+        Page<ApprovalWorkflowInstance> scanned = fetch.apply(PageRequest.of(0, FILTER_SCAN_CAP));
+        warnIfScanTruncated(view, scanned);
+        List<ApprovalWorkflowInstance> content = scanned.getContent();
+        if (hasText(moduleCode)) {
+            content = content.stream()
+                    .filter(i -> moduleCode.trim().equals(i.getModuleCode()))
+                    .toList();
+        }
+        return ApiResponse.success(sliceFiltered(
+                applyTextFilters(hydrate.apply(content), keyword, approverRole, initiator), page, size));
     }
 
     /**
@@ -662,6 +760,10 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyCreated(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
 
@@ -670,15 +772,15 @@ public class WorkflowInstanceController {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
 
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCreatedBy(
-                factoryId, user.getId(), pageable);
+        return personalView("my-created", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findCreatedBy(factoryId, user.getId(), pageable),
+                content -> hydrateInstances(factoryId, content, user));
+    }
 
-        List<WorkflowInstancePendingDTO> dtos = hydrateInstances(factoryId, instances.getContent(), user);
-
-        PageResponse<WorkflowInstancePendingDTO> response = PageResponse.of(
-                dtos, page, size, instances.getTotalElements());
-        return ApiResponse.success(response);
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getMyCreated(
+            String factoryId, String authorization, int page, int size) {
+        return getMyCreated(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**
@@ -727,18 +829,25 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getActed(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         User user = resolveCurrentUser(authorization);
         if (user == null) {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findActedBy(
-                factoryId, user.getId(), pageable);
-        return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent(), true),
-                page, size, instances.getTotalElements()));
+        return personalView("acted", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findActedBy(factoryId, user.getId(), pageable),
+                content -> hydrateInstances(factoryId, content, true));
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getActed(
+            String factoryId, String authorization, int page, int size) {
+        return getActed(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**
@@ -750,6 +859,10 @@ public class WorkflowInstanceController {
     public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getCopied(
             @PathVariable @NotBlank String factoryId,
             @RequestHeader("Authorization") String authorization,
+            @RequestParam(required = false) String moduleCode,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String approverRole,
+            @RequestParam(required = false) String initiator,
             @RequestParam(defaultValue = "1") @Min(1) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         User user = resolveCurrentUser(authorization);
@@ -757,12 +870,15 @@ public class WorkflowInstanceController {
             throw new BusinessException(401, "未授权 — JWT 解析失败");
         }
         String role = user.getRoleCode() == null ? "" : user.getRoleCode();
-        Pageable pageable = PageRequest.of(page - 1, size);
-        Page<ApprovalWorkflowInstance> instances = workflowEngine.findCopiedTo(
-                factoryId, user.getId(), role, pageable);
-        return ApiResponse.success(PageResponse.of(
-                hydrateInstances(factoryId, instances.getContent(), user),
-                page, size, instances.getTotalElements()));
+        return personalView("copied", page, size, moduleCode, keyword, approverRole, initiator,
+                pageable -> workflowEngine.findCopiedTo(factoryId, user.getId(), role, pageable),
+                content -> hydrateInstances(factoryId, content, user));
+    }
+
+    /** 兼容旧调用点 (无附加筛选)。 */
+    public ApiResponse<PageResponse<WorkflowInstancePendingDTO>> getCopied(
+            String factoryId, String authorization, int page, int size) {
+        return getCopied(factoryId, authorization, null, null, null, null, page, size);
     }
 
     /**

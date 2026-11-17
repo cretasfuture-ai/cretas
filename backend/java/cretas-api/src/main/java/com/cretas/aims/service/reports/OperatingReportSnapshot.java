@@ -38,6 +38,25 @@ public record OperatingReportSnapshot(
     public record Insight(InsightKind kind, String metricId, Action action) { }
     public record SourceReceipt(String endpoint, String fetchedAt, String basis) { }
     public record Section(String id, String title, boolean priceSensitive, String basis, List<Metric> metrics) { }
+    /**
+     * previousValue: 上一期间同口径值 (取数时已查到才有; 没查到就是 null, 不编造)。
+     * detail: 这个数字背后的逐条记录从哪查 —— 同一取数接口 + 同一参数, 前端用它下钻到记录明细。
+     * 旧快照没有这两个字段, 解码为 null。
+     */
     public record Metric(String id, String label, BigDecimal value, String unit,
-                         String missingReason, BigDecimal coverage, String sourcePath) { }
+                         String missingReason, BigDecimal coverage, String sourcePath,
+                         BigDecimal previousValue, DetailRef detail) {
+        public Metric(String id, String label, BigDecimal value, String unit,
+                      String missingReason, BigDecimal coverage, String sourcePath) {
+            this(id, label, value, unit, missingReason, coverage, sourcePath, null, null);
+        }
+        public Metric withPrevious(BigDecimal previous) {
+            return new Metric(id, label, value, unit, missingReason, coverage, sourcePath, previous, detail);
+        }
+        public Metric withDetail(DetailRef ref) {
+            return new Metric(id, label, value, unit, missingReason, coverage, sourcePath, previousValue, ref);
+        }
+    }
+    /** 明细下钻引用: endpoint 与 SourceReceipt.endpoint 同名, params 是取数时用的同一组参数。 */
+    public record DetailRef(String endpoint, java.util.Map<String, String> params) { }
 }

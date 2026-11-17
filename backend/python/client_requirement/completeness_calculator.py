@@ -87,8 +87,75 @@ ENTITY_FIELD_MAP = {
             "equipment_name", "type", "total_running_hours",
             "last_maintenance_date", "status"
         ]
-    }
+    },
+    # ── 主数据 (G4): 物料 / 客户 / 供应商 —— 设置页「主数据：条数与缺口」的数据源 ──
+    # text_fields: 文本列, 空串 / 全空白按「缺」算 (主数据里手填空格很常见, 只数 NOT NULL 会虚高)。
+    "MATERIAL_TYPE": {
+        "table": "raw_material_types",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "category", "unit", "unit_price", "storage_type", "shelf_life_days", "tax_rate"],
+        "text_fields": ["code", "name", "category", "unit", "storage_type"],
+    },
+    "CUSTOMER": {
+        "table": "customers",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "type", "contact_name", "contact_phone", "shipping_address",
+                   "tax_number", "payment_terms", "credit_limit", "assigned_sales_user_id"],
+        "text_fields": ["code", "name", "type", "contact_name", "contact_phone", "shipping_address",
+                        "tax_number", "payment_terms"],
+    },
+    "SUPPLIER": {
+        "table": "suppliers",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "contact_name", "contact_phone", "address",
+                   "tax_number", "payment_terms", "bank_name", "bank_account"],
+        "text_fields": ["code", "name", "contact_name", "contact_phone", "address",
+                        "tax_number", "payment_terms", "bank_name", "bank_account"],
+    },
 }
+
+MASTER_DATA_ENTITY_TYPES = ["MATERIAL_TYPE", "CUSTOMER", "SUPPLIER"]
+# 默认只算原来的 5 个生产实体, 主数据由调用方显式要 (设置页), 不改变既有页面的返回行数。
+DEFAULT_ENTITY_TYPES = [t for t in ENTITY_FIELD_MAP if t not in MASTER_DATA_ENTITY_TYPES]
+
+
+def _count_expr(config: Dict[str, Any], field: str) -> str:
+    """COUNT 表达式: 文本列把空白当缺失。field 只来自 ENTITY_FIELD_MAP 白名单, 不拼用户输入。"""
+    if field in config.get("text_fields", []):
+        return f"COUNT(NULLIF(BTRIM({field}), '')) as cnt_{field}"
+    return f"COUNT({field}) as cnt_{field}"
+
+
+def build_completeness_query(entity_type: str) -> str:
+    config = ENTITY_FIELD_MAP[entity_type]
+    count_exprs = ", ".join(_count_expr(config, f) for f in config["fields"])
+    return f"""
+                        SELECT COUNT(*) as total, {count_exprs}
+                        FROM {config["table"]}
+                        WHERE {config["factory_filter"]} = $1 AND deleted_at IS NULL
+                    """
+
+
+def build_missing_query(entity_type: str, field: str, count: bool = False) -> str:
+    """缺失记录明细查询: entity_type / field 必须在白名单内, 否则抛 ValueError (不拼任意列名)。"""
+    config = ENTITY_FIELD_MAP.get(entity_type)
+    if config is None:
+        raise ValueError(f"unknown entity_type: {entity_type}")
+    if field not in config["fields"]:
+        raise ValueError(f"unknown field for {entity_type}: {field}")
+    label = config.get("label_field")
+    label_expr = f"{label}::text AS label" if label else "NULL::text AS label"
+    missing = (f"({field} IS NULL OR BTRIM({field}) = '')" if field in config.get("text_fields", [])
+               else f"{field} IS NULL")
+    if count:
+        return (f"SELECT COUNT(*) FROM {config['table']} "
+                f"WHERE {config['factory_filter']} = $1 AND deleted_at IS NULL AND {missing}")
+    return (f"SELECT id::text AS id, {label_expr} FROM {config['table']} "
+            f"WHERE {config['factory_filter']} = $1 AND deleted_at IS NULL AND {missing} "
+            f"ORDER BY id LIMIT $2")
 
 
 # Restaurant POS entity types — live in smartbi_db silver layer, RLS-protected.
@@ -295,7 +362,7 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
     # Default to manufacturing entities only — POS entities must be opted in
     # explicitly by the caller (frontend selects them when tenant is restaurant)
     # so manufacturing tenants don't see spurious zero-record POS rows.
-    types_to_check = entity_types or list(ENTITY_FIELD_MAP.keys())
+    types_to_check = entity_types or DEFAULT_ENTITY_TYPES
 
     # Split entity types by datasource — manufacturing (cretas_db) vs POS (smartbi_db).
     manufacturing_types = [t for t in types_to_check if t in ENTITY_FIELD_MAP]
@@ -308,17 +375,10 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
             async with pool.acquire() as conn:
                 for entity_type in manufacturing_types:
                     config = ENTITY_FIELD_MAP[entity_type]
-                    table = config["table"]
-                    factory_col = config["factory_filter"]
                     fields = config["fields"]
 
                     # Build query: COUNT(*) and COUNT(field) for each field
-                    count_exprs = ", ".join([f"COUNT({f}) as cnt_{f}" for f in fields])
-                    query = f"""
-                        SELECT COUNT(*) as total, {count_exprs}
-                        FROM {table}
-                        WHERE {factory_col} = $1 AND deleted_at IS NULL
-                    """
+                    query = build_completeness_query(entity_type)
 
                     row = await conn.fetchrow(query, factory_id)
                     total = row["total"] if row else 0
@@ -371,6 +431,43 @@ async def api_compute_completeness(req: CompletenessRequest, request: Request):
         #    —— 异常文本里裹着凭证，被原样返给了任何已认证调用方。
         #    详情留在服务端日志（上面这行 exc_info=True 已经记全）。
         raise HTTPException(status_code=500, detail="数据完整度计算失败，详见服务端日志")
+
+
+class MissingRecordsRequest(BaseModel):
+    factory_id: Optional[str] = None
+    entity_type: str
+    field: str
+    limit: int = 50
+
+
+@router.post("/completeness/missing")
+async def api_missing_records(req: MissingRecordsRequest, request: Request):
+    """缺失记录明细下钻 (G7): 返回某实体某字段缺失的记录 id + 名称, 最多 limit 条 (上限 200)。
+
+    返回 total_missing 是真实缺失总数 (不是 limit 截断后的条数), 前端据此显示「还有 N 条」。
+    """
+    factory_id = require_same_factory(request, req.factory_id)
+    limit = max(1, min(req.limit, 200))
+    try:
+        query = build_missing_query(req.entity_type, req.field)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="不支持的实体类型或字段")
+    count_query = build_missing_query(req.entity_type, req.field, count=True)
+    pool = await _get_db_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, factory_id, limit)
+            total = await conn.fetchval(count_query, factory_id)
+        return {"success": True, "data": {
+            "entity_type": req.entity_type, "field": req.field,
+            "total_missing": int(total or 0),
+            "records": [{"id": r["id"], "label": r["label"]} for r in rows],
+        }}
+    except Exception as e:
+        logger.error(f"Completeness missing-records failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="缺失记录查询失败，详见服务端日志")
+    finally:
+        await pool.close()
 
 
 @router.get("/completeness/trend")
