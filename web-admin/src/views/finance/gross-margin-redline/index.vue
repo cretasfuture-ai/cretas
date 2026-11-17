@@ -20,8 +20,10 @@
 import { ref, computed, onMounted, reactive } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn } from '@/types/csTable';
+import { formatDateTime } from '@/utils/dateFormat';
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import { get } from '@/api/request';
 import type { ApiResponse } from '@/types/api';
 import {
@@ -35,6 +37,7 @@ import {
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 
 /** 仅财务/超管 (finance:read_write) 可写。控制新建/编辑/删除按钮显隐。 */
 const canWrite = computed(() => permissionStore.canWrite('finance'));
@@ -62,7 +65,8 @@ async function loadProductTypes() {
 function productTypeName(id: string | null): string {
   if (id == null) return '全局默认 (所有产品)';
   const found = productTypes.value.find((p) => String(p.id) === String(id));
-  return found ? found.name : `ID:${id}`;
+  // 产品已停用/不在启用列表时不外露内部 ID
+  return found ? found.name : '未知产品（可能已停用）';
 }
 
 /** 小数 → 百分比展示 (0.3 → 30). */
@@ -76,18 +80,22 @@ function toPercent(decimal: number): number {
 
 const configs = ref<FactoryGrossMarginConfig[]>([]);
 const listLoading = ref(false);
+const loadFailed = ref(false);
 
 async function loadList() {
   if (!factoryId.value) return;
   listLoading.value = true;
+  loadFailed.value = false;
   try {
     const res = await listGrossMarginConfigs(factoryId.value);
     if (res.success && res.data) {
       configs.value = res.data;
     } else {
+      loadFailed.value = true;
       ElMessage({ message: res.message || '加载失败', type: 'error', duration: 0, showClose: true });
     }
   } catch (e: any) {
+    loadFailed.value = true;
     const msg = e?.response?.data?.message || '网络错误，请重试';
     ElMessage({ message: msg, type: 'error', duration: 0, showClose: true });
   } finally {
@@ -196,16 +204,14 @@ async function handleSubmit() {
 
 async function handleDelete(row: FactoryGrossMarginConfig) {
   const scopeLabel = productTypeName(row.productTypeId);
-  try {
-    await ElMessageBox.confirm(
-      `确认删除「${scopeLabel}」的毛利红线 (${toPercent(row.targetGrossMargin)}%)？` +
-        `删除后该范围将跳过红线检查，报价不再触发低于红线预警。`,
-      '删除确认',
-      { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' },
-    );
-  } catch {
-    return;
-  }
+  const ok = await confirmRef.value!.ask({
+    title: '删除确认',
+    message: `确认删除「${scopeLabel}」的毛利红线 (${toPercent(row.targetGrossMargin)}%)？` +
+      `删除后该范围将跳过红线检查，报价不再触发低于红线预警。`,
+    confirmText: '确认删除',
+    danger: true,
+  });
+  if (ok === null) return;
   try {
     const res = await deleteGrossMarginConfig(factoryId.value, row.id);
     if (res.success) {
@@ -220,6 +226,30 @@ async function handleDelete(row: FactoryGrossMarginConfig) {
   }
 }
 
+// 适用产品下拉: 「全局默认」用哨兵值 (下拉值不能为空串), 提交前换回 null
+const GLOBAL = '__GLOBAL__';
+const productItems = computed(() => [
+  { label: '全局默认 (所有产品)', value: GLOBAL },
+  ...productTypes.value.map((pt) => ({ label: pt.name, value: String(pt.id) })),
+]);
+const scopeValue = computed(() => formData.productTypeId ?? GLOBAL);
+function onScopePick(v: unknown) {
+  const s = String(v ?? GLOBAL);
+  formData.productTypeId = s === GLOBAL ? null : s;
+}
+
+const columns = computed<CsTableColumn<FactoryGrossMarginConfig>[]>(() => {
+  const cols: CsTableColumn<FactoryGrossMarginConfig>[] = [
+    { id: 'scope', header: '适用范围' },
+    { id: 'margin', header: '目标毛利率', meta: { class: { th: 'text-right', td: 'text-right' } } },
+    { id: 'isActive', header: '状态' },
+    { id: 'description', header: '备注' },
+    { id: 'updatedAt', header: '更新时间' },
+  ];
+  if (canWrite.value) cols.push({ id: 'actions', header: '操作' });
+  return cols;
+});
+
 // ============================================================================
 // 初始化
 // ============================================================================
@@ -230,143 +260,101 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="gross-margin-page">
-    <div class="page-header">
-      <h2 class="title">毛利红线配置</h2>
-      <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">新建红线</el-button>
-    </div>
-
-    <el-alert
-      type="info"
-      :closable="false"
-      title="毛利红线控制报价/下单前的低毛利预警 — productTypeId 留空表示工厂级全局默认红线。产品级配置优先级高于全局。仅财务经理 / 工厂超管可配置。"
-      style="margin-bottom: 16px"
+  <div class="page" data-testid="gross-margin-page">
+    <UAlert
+      color="info"
+      variant="soft"
+      icon="i-lucide-info"
+      title="毛利红线控制报价/下单前的低毛利预警 — 适用产品选「全局默认」表示工厂级默认红线。产品级配置优先级高于全局。仅财务经理 / 工厂超管可配置。"
+      class="mb-4"
     />
+    <UAlert v-if="loadFailed" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="redline-load-error"
+      title="毛利红线配置暂时没取到，请点「刷新」重试。" />
 
-    <el-card shadow="never" v-loading="listLoading">
-      <el-table :data="configs" stripe empty-text="暂无毛利红线配置，点击右上角「新建红线」添加">
-        <el-table-column label="适用范围" min-width="220">
-          <template #default="{ row }">
-            <span v-if="row.productTypeId == null">
-              <el-tag type="warning" size="small">全局默认</el-tag>
-            </span>
-            <span v-else>{{ productTypeName(row.productTypeId) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="目标毛利率" align="right" min-width="130">
-          <template #default="{ row }">
-            <strong>{{ toPercent(row.targetGrossMargin) }}%</strong>
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" align="center" min-width="80">
-          <template #default="{ row }">
-            <el-tag :type="row.isActive ? 'success' : 'info'" size="small">
-              {{ row.isActive ? '启用' : '禁用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="description" label="备注" min-width="200">
-          <template #default="{ row }">{{ row.description || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="更新时间" min-width="160">
-          <template #default="{ row }">{{ row.updatedAt ?? row.createdAt }}</template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" align="center" min-width="140" fixed="right">
-          <template #default="{ row }">
-            <el-button :icon="Edit" link type="primary" @click="openEdit(row)">编辑</el-button>
-            <el-button :icon="Delete" link type="danger" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>毛利红线配置</h2>
+        <span class="count">共 {{ configs.length }} 条</span>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="listLoading" data-testid="redline-refresh" @click="loadList">刷新</UButton>
+          <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="redline-create" @click="openCreate">新建红线</UButton>
+        </div>
+      </header>
 
-    <!-- 新建/编辑 Dialog -->
-    <el-dialog
-      v-model="dialogVisible"
-      :title="dialogTitle"
-      width="520px"
-      :close-on-click-modal="false"
-    >
-      <el-form label-position="top">
-        <el-form-item label="适用产品 (留空 = 全局默认)">
-          <el-select
-            v-model="formData.productTypeId"
-            clearable
-            filterable
-            placeholder="全局默认 (所有产品)"
-            style="width: 100%"
-            :disabled="dialogMode === 'edit'"
-          >
-            <el-option
-              v-for="pt in productTypes"
-              :key="pt.id"
-              :label="pt.name"
-              :value="String(pt.id)"
-            />
-          </el-select>
-          <div class="form-hint">
-            留空表示工厂级全局默认红线，优先级低于产品级配置。
-            <span v-if="dialogMode === 'edit'">（编辑时不可更改适用范围）</span>
+      <UTable :data="configs" :columns="columns" :loading="listLoading" class="cs-table" data-testid="redline-table">
+        <template #empty>暂无毛利红线配置，点击右上角「新建红线」添加</template>
+        <template #scope-cell="{ row }">
+          <UBadge v-if="row.original.productTypeId == null" color="warning" variant="soft">全局默认</UBadge>
+          <span v-else>{{ productTypeName(row.original.productTypeId) }}</span>
+        </template>
+        <template #margin-cell="{ row }"><strong class="num">{{ toPercent(row.original.targetGrossMargin) }}%</strong></template>
+        <template #isActive-cell="{ row }">
+          <UBadge :color="row.original.isActive ? 'success' : 'neutral'" variant="soft">{{ row.original.isActive ? '启用' : '禁用' }}</UBadge>
+        </template>
+        <template #description-cell="{ row }">{{ row.original.description || '—' }}</template>
+        <template #updatedAt-cell="{ row }">{{ formatDateTime(row.original.updatedAt ?? row.original.createdAt) }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton variant="link" size="xs" icon="i-lucide-pencil" data-testid="redline-edit" @click="openEdit(row.original)">编辑</UButton>
+            <UButton color="error" variant="link" size="xs" icon="i-lucide-trash-2" data-testid="redline-delete" @click="handleDelete(row.original)">删除</UButton>
           </div>
-        </el-form-item>
+        </template>
+      </UTable>
+    </section>
 
-        <el-form-item label="目标毛利率 (%)" required>
-          <el-input-number
-            v-model="formData.marginPercent"
-            :min="0.01"
-            :max="99.99"
-            :precision="2"
-            :step="1"
-            style="width: 200px"
-          />
-          <div class="form-hint">报价对应毛利低于此值时触发"低于红线"预警 (非阻断)。须在 0%~100% 之间。</div>
-        </el-form-item>
-
-        <el-form-item label="状态">
-          <el-switch v-model="formData.isActive" active-text="启用" inactive-text="禁用" />
-        </el-form-item>
-
-        <el-form-item label="备注">
-          <el-input
-            v-model="formData.description"
-            type="textarea"
-            :rows="2"
-            placeholder="可选说明 (e.g. 镇级商务餐厅主力品类红线)"
-            maxlength="500"
-            show-word-limit
-          />
-        </el-form-item>
-      </el-form>
-
-      <template #footer>
-        <el-button @click="dialogVisible = false" :disabled="submitting">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmit">
-          {{ dialogMode === 'create' ? '创建' : '保存' }}
-        </el-button>
+    <!-- 新建/编辑弹窗 -->
+    <UModal
+      v-model:open="dialogVisible"
+      :title="dialogTitle"
+      description="配置目标毛利率"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[540px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div class="form">
+          <UFormField label="适用产品" :help="dialogMode === 'edit' ? '编辑时不可更改适用范围' : '选「全局默认」表示工厂级默认红线，优先级低于产品级配置。'">
+            <USelectMenu
+              :model-value="scopeValue"
+              value-key="value"
+              :items="productItems"
+              :disabled="dialogMode === 'edit'"
+              placeholder="全局默认 (所有产品)"
+              class="w-full"
+              data-testid="redline-scope"
+              @update:model-value="onScopePick"
+            />
+          </UFormField>
+          <UFormField label="目标毛利率 (%)" required help="报价对应毛利低于此值时触发「低于红线」预警 (非阻断)。须在 0%~100% 之间。">
+            <UInputNumber v-model="formData.marginPercent" :min="0.01" :max="99.99" :step="1" :step-snapping="false" :format-options="{ maximumFractionDigits: 2 }" class="w-48" data-testid="redline-percent" />
+          </UFormField>
+          <UFormField label="状态">
+            <USwitch v-model="formData.isActive" :label="formData.isActive ? '启用' : '禁用'" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="formData.description" :rows="2" :maxlength="500" placeholder="可选说明 (如: 镇级商务餐厅主力品类红线)" class="w-full" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" :disabled="submitting" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" data-testid="redline-submit" @click="handleSubmit">{{ dialogMode === 'create' ? '创建' : '保存' }}</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
 <style scoped>
-.gross-margin-page {
-  padding: 20px;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.page-header .title {
-  font-size: 20px;
-  font-weight: 600;
-  margin: 0;
-  color: #303133;
-}
-.form-hint {
-  font-size: 12px;
-  color: #909399;
-  margin-top: 4px;
-}
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.form { display: grid; gap: var(--cs-space-3); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.num { font-variant-numeric: tabular-nums; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

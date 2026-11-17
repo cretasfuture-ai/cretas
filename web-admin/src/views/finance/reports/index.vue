@@ -5,7 +5,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Money, TrendCharts, Coin, Download } from '@element-plus/icons-vue';
+import type { CsTableColumn } from '@/types/csTable';
 import { toDateString } from '@/utils/dateFormat';
 
 const authStore = useAuthStore();
@@ -15,6 +15,7 @@ const canRead = computed(() => permissionStore.canAccess('finance'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
+const loadFailed = ref(false);
 const dateRange = ref<[Date, Date]>([
   new Date(new Date().setDate(new Date().getDate() - 30)),
   new Date()
@@ -58,39 +59,40 @@ interface CostAnalysisResponse {
 // P0-2: 卡片 format 函数统一签名 (v: number | null | undefined => string)
 // 因为 profitMargin 可能为 null (后端 P0-1 Bug C 修复后，毛利率 >100% 或 <-100% 返 null)
 type StatFormat = (v: number | null | undefined) => string;
-const fmtCurrency: StatFormat = (v) => (v ?? 0).toLocaleString('zh-CN', { minimumFractionDigits: 2 });
-const fmtPercent: StatFormat = (v) => v == null ? 'N/A' : v.toFixed(1);
+// 没有值显示「—」, 不当 0 (毛利润取不到不等于毛利润为 0)
+const fmtCurrency: StatFormat = (v) => v == null ? '—' : v.toLocaleString('zh-CN', { minimumFractionDigits: 2 });
+const fmtPercent: StatFormat = (v) => v == null ? '—' : v.toFixed(1);
 
 const statCards = computed<Array<{
   title: string;
   value: number | null | undefined;
   unit: string;
-  icon: unknown;
+  icon: string;
   color: string;
   format: StatFormat;
 }>>(() => [
   {
     title: '总收入',
-    value: financeData.value.totalRevenue ?? 0,
+    value: financeData.value.totalRevenue,
     unit: '元',
-    icon: Money,
+    icon: 'i-lucide-banknote',
     color: CS_TOKENS.primary,
     format: fmtCurrency
   },
   {
     title: '总成本',
-    value: financeData.value.totalCost ?? 0,
+    value: financeData.value.totalCost,
     unit: '元',
-    icon: Coin,
-    color: '#e6a23c',
+    icon: 'i-lucide-coins',
+    color: 'var(--cs-warning)',
     format: fmtCurrency
   },
   {
     title: '毛利润',
-    value: financeData.value.grossProfit ?? 0,
+    value: financeData.value.grossProfit,
     unit: '元',
-    icon: TrendCharts,
-    color: '#67c23a',
+    icon: 'i-lucide-trending-up',
+    color: 'var(--cs-success)',
     format: fmtCurrency
   },
   {
@@ -98,8 +100,8 @@ const statCards = computed<Array<{
     // profitMargin 可能为 null — null 时显示 "N/A"，单位也清空
     value: financeData.value.profitMargin,
     unit: financeData.value.profitMargin == null ? '' : '%',
-    icon: TrendCharts,
-    color: '#f56c6c',
+    icon: 'i-lucide-percent',
+    color: 'var(--cs-danger)',
     format: fmtPercent
   }
 ]);
@@ -153,6 +155,7 @@ async function loadFinanceData() {
   if (!factoryId.value) return;
 
   loading.value = true;
+  loadFailed.value = false;
   try {
     if (!dateRange.value) return;
     const [startDate, endDate] = dateRange.value;
@@ -168,12 +171,14 @@ async function loadFinanceData() {
     ]);
 
     if (!profitRes.success || !costRes.success) {
+      loadFailed.value = true;
       ElMessage.error('加载财务数据失败');
       return;
     }
 
     financeData.value = mapResponses(profitRes.data, costRes.data);
   } catch (error) {
+    loadFailed.value = true;
     console.error('加载财务数据失败:', error);
     ElMessage.error('加载财务数据失败，请检查网络连接');
   } finally {
@@ -203,7 +208,7 @@ function mapResponses(
   };
   // 毛利额 (元) — backend GROSS_PROFIT
   const gp = findMetric('GROSS_PROFIT');
-  out.grossProfit = gp != null ? Number(gp) : 0;
+  out.grossProfit = gp != null ? Number(gp) : undefined;
   // 毛利率 (%) — backend GROSS_MARGIN. 后端可能返 null (毛利率>100% 或 <-100% 时，P0-1 Bug C 修复)
   const gm = findMetric('GROSS_MARGIN');
   out.profitMargin = gm != null ? Number(gm) : null;
@@ -256,9 +261,30 @@ function formatDate(date: Date | null | undefined) {
   return toDateString(date);
 }
 
+// 日期范围: 两个原生日期输入 (取代 el-date-picker, Nuxt UI 页面里不混用 Element 控件)
+const startStr = computed({
+  get: () => formatDate(dateRange.value?.[0]),
+  set: (v: string) => { if (v) { dateRange.value = [new Date(`${v}T00:00:00`), dateRange.value[1]]; handleDateChange(); } },
+});
+const endStr = computed({
+  get: () => formatDate(dateRange.value?.[1]),
+  set: (v: string) => { if (v) { dateRange.value = [dateRange.value[0], new Date(`${v}T00:00:00`)]; handleDateChange(); } },
+});
+function setRangeDays(days: number) {
+  dateRange.value = [new Date(Date.now() - days * 24 * 60 * 60 * 1000), new Date()];
+  handleDateChange();
+}
+
 function handleDateChange() {
   loadFinanceData();
 }
+
+const costColumns: CsTableColumn<{ name: string; value: number; percentage: string }>[] = [
+  { accessorKey: 'name', header: '成本类型' },
+  { id: 'value', header: '金额 (元)', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'percentage', header: '占比' },
+];
+const barColor = (p: string) => (parseFloat(p) > 50 ? 'var(--cs-danger)' : parseFloat(p) > 30 ? 'var(--cs-warning)' : 'var(--cs-success)');
 
 function handleExport() {
   const data = financeData.value;
@@ -295,224 +321,84 @@ function handleExport() {
 </script>
 
 <template>
-  <div class="page-wrapper" v-loading="loading">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span class="page-title">财务分析(Excel)</span>
-          <div class="header-actions">
-            <el-date-picker
-              v-model="dateRange"
-              type="daterange"
-              range-separator="至"
-              start-placeholder="开始日期"
-              end-placeholder="结束日期"
-              :shortcuts="[
-                { text: '最近一周', value: () => [new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), new Date()] },
-                { text: '最近一月', value: () => [new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), new Date()] },
-                { text: '最近三月', value: () => [new Date(Date.now() - 90 * 24 * 60 * 60 * 1000), new Date()] }
-              ]"
-              @change="handleDateChange"
-            />
-            <el-button v-if="canViewPrice" type="primary" :icon="Download" @click="handleExport">
-              导出报表
-            </el-button>
-          </div>
+  <div class="page" data-testid="finance-reports-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>财务分析(Excel)</h2>
+        <div class="head-actions">
+          <UInput v-model="startStr" type="date" class="w-40" data-testid="reports-start" />
+          <span class="muted">至</span>
+          <UInput v-model="endStr" type="date" class="w-40" data-testid="reports-end" />
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(7)">最近一周</UButton>
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(30)">最近一月</UButton>
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(90)">最近三月</UButton>
+          <UButton v-if="canViewPrice" icon="i-lucide-download" data-testid="reports-export" @click="handleExport">导出报表</UButton>
         </div>
-      </template>
+      </header>
 
-      <template v-if="canViewPrice">
-      <!-- 统计卡片 -->
-      <div class="stat-cards">
-        <el-card v-for="card in statCards" :key="card.title" class="stat-card" shadow="hover">
-          <div class="stat-content">
-            <div class="stat-icon" :style="{ backgroundColor: `${card.color}20`, color: card.color }">
-              <el-icon :size="24"><component :is="card.icon" /></el-icon>
-            </div>
-            <div class="stat-info">
-              <div class="stat-title">{{ card.title }}</div>
-              <div class="stat-value" :style="{ color: card.color }">
-                {{ card.format(card.value) }} <span class="stat-unit">{{ card.unit }}</span>
+      <div class="body">
+        <template v-if="canViewPrice">
+          <UAlert v-if="loadFailed" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-load-error"
+            title="财务数据暂时没取到，下方金额显示为「—」，请调整日期范围重试。" />
+
+          <!-- 统计卡片 -->
+          <div class="stat-cards" data-testid="reports-stat-cards">
+            <div v-for="card in statCards" :key="card.title" class="stat-card">
+              <div class="stat-icon" :style="{ backgroundColor: `color-mix(in srgb, ${card.color} 14%, transparent)`, color: card.color }">
+                <UIcon :name="card.icon" class="size-6" />
+              </div>
+              <div class="stat-info">
+                <div class="stat-title">{{ card.title }}</div>
+                <div class="stat-value" :style="{ color: card.color }">
+                  {{ card.format(card.value) }} <span class="stat-unit">{{ card.unit }}</span>
+                </div>
               </div>
             </div>
           </div>
-        </el-card>
-      </div>
 
-      <!-- 成本分解 -->
-      <div class="section">
-        <h3 class="section-title">成本分解</h3>
-        <el-table
-          v-if="hasCostBreakdown"
-          :data="costBreakdown"
-          stripe
-          border
-          style="width: 100%"
-        >
-          <el-table-column prop="name" label="成本类型" width="180" />
-          <el-table-column label="金额 (元)" min-width="200">
-            <template #default="{ row }">
-              <span class="cost-value">{{ row.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</span>
+          <!-- 成本分解 -->
+          <h3 class="section-title">成本分解</h3>
+          <UTable v-if="hasCostBreakdown" :data="costBreakdown" :columns="costColumns" class="cs-table" data-testid="reports-cost-table">
+            <template #value-cell="{ row }"><span class="num">{{ row.original.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</span></template>
+            <template #percentage-cell="{ row }">
+              <div class="bar-wrap">
+                <div class="bar"><div class="bar-fill" :style="{ width: `${Math.min(100, parseFloat(row.original.percentage))}%`, background: barColor(row.original.percentage) }" /></div>
+                <span class="num">{{ row.original.percentage }}%</span>
+              </div>
             </template>
-          </el-table-column>
-          <el-table-column label="占比" width="150">
-            <template #default="{ row }">
-              <el-progress
-                :percentage="parseFloat(row.percentage)"
-                :color="row.percentage > 50 ? '#f56c6c' : row.percentage > 30 ? '#e6a23c' : '#67c23a'"
-                :format="() => `${row.percentage}%`"
-              />
-            </template>
-          </el-table-column>
-        </el-table>
-        <el-empty
-          v-else
-          description="该期无成本细分数据 — 可在「成本分析」页面查看明细或检查 Excel 上传是否包含 原材料 / 人工 / 制造费用 列"
-          :image-size="100"
-          class="cost-empty-state"
-        />
-      </div>
+          </UTable>
+          <p v-else class="empty" data-testid="reports-cost-empty">该期无成本细分数据 — 可在「成本分析」页面查看明细或检查 Excel 上传是否包含 原材料 / 人工 / 制造费用 列</p>
 
-      <!-- 提示信息 -->
-      <div class="info-section">
-        <el-alert
-          title="数据说明"
-          type="info"
-          :closable="false"
-          show-icon
-        >
-          <template #default>
-            当前显示的是所选日期范围内的财务汇总数据。详细的成本分析请前往"成本分析"页面查看。
-          </template>
-        </el-alert>
+          <UAlert color="info" variant="soft" icon="i-lucide-info" class="mt-4" title="数据说明"
+            description="当前显示的是所选日期范围内的财务汇总数据。详细的成本分析请前往「成本分析」页面查看。" />
+        </template>
+        <p v-else class="empty" data-testid="reports-no-permission">您没有查看价格/财务数据的权限</p>
       </div>
-      </template>
-      <el-empty v-else description="您没有查看价格/财务数据的权限" />
-    </el-card>
+    </section>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-    overflow: auto;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-
-  .page-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-color-primary, #303133);
-  }
-
-  .header-actions {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-  }
-}
-
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  :deep(.el-card__body) {
-    padding: 16px;
-  }
-}
-
-.stat-content {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.stat-info {
-  flex: 1;
-}
-
-.stat-title {
-  font-size: 13px;
-  color: #909399;
-  margin-bottom: 4px;
-}
-
-.stat-value {
-  font-size: 22px;
-  font-weight: 600;
-}
-
-.stat-unit {
-  font-size: 12px;
-  font-weight: normal;
-  margin-left: 4px;
-}
-
-.section {
-  margin-bottom: 24px;
-}
-
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-  margin-bottom: 16px;
-  padding-left: 10px;
-  border-left: 3px solid var(--el-color-primary);
-}
-
-.cost-value {
-  font-weight: 500;
-  color: #303133;
-}
-
-.cost-empty-state {
-  padding: 32px 0;
-  background: #fafbfc;
-  border-radius: 4px;
-}
-
-.info-section {
-  margin-top: auto;
-}
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.head-actions { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: var(--cs-space-2); }
+.body { padding: var(--cs-space-5); }
+.muted { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.stat-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--cs-space-4); margin-bottom: var(--cs-space-6); }
+.stat-card { display: flex; align-items: center; gap: var(--cs-space-4); padding: var(--cs-space-4); background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); }
+.stat-icon { width: 48px; height: 48px; border-radius: var(--cs-radius); display: flex; align-items: center; justify-content: center; }
+.stat-info { flex: 1; }
+.stat-title { font-size: 13px; color: var(--cs-muted); margin-bottom: 4px; }
+.stat-value { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-unit { font-size: 12px; font-weight: normal; margin-left: 4px; }
+.section-title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); margin: 0 0 var(--cs-space-3); padding-left: 10px; border-left: 3px solid var(--cs-primary); }
+.bar-wrap { display: flex; align-items: center; gap: var(--cs-space-2); }
+.bar { flex: 1; height: 6px; border-radius: 3px; background: var(--cs-surface-subtle); overflow: hidden; min-width: 80px; }
+.bar-fill { height: 100%; }
+.empty { padding: var(--cs-space-6) 0; text-align: center; color: var(--cs-muted); font-size: 13px; background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm); }
+.num { font-variant-numeric: tabular-nums; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
