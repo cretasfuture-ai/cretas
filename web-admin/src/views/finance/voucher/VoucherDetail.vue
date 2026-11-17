@@ -27,11 +27,11 @@ import {
   sumCredit,
   isBalanced,
   VOUCHER_STATUS_LABEL,
-  VOUCHER_TYPE_LABEL,
   AUXILIARY_TYPE_LABEL,
   SOURCE_BUSINESS_TYPE_LABEL as EXISTING_SOURCE_LABEL,
   type Voucher,
 } from '@/api/voucher';
+import { voucherTypeText } from '@/utils/enumDisplay';
 
 const route = useRoute();
 const router = useRouter();
@@ -188,7 +188,7 @@ const voucherTypeLabel = computed(() => {
   if (!voucher.value) return '';
   if (isVoucherReversal.value) return sourceBusinessTypeLabel(voucher.value.sourceBusinessType);
   if (['DISPOSAL_RECORD', 'DISPOSAL_RECORD_REVISION'].includes(voucher.value.sourceBusinessType)) return '存货报废损失';
-  return VOUCHER_TYPE_LABEL[voucher.value.voucherType] ?? voucher.value.voucherType;
+  return voucherTypeText(voucher.value.voucherType);
 });
 
 const SOURCE_BUSINESS_TYPE_LABEL: Record<string, string> = {

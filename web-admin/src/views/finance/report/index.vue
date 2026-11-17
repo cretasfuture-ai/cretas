@@ -1,16 +1,11 @@
 <template>
-  <div class="three-statements">
-    <el-tabs v-model="activeTab" type="card" class="report-tabs">
-      <el-tab-pane label="资产负债表" name="balance-sheet">
-        <BalanceSheet v-if="activeTab === 'balance-sheet'" />
-      </el-tab-pane>
-      <el-tab-pane label="利润表" name="income-statement">
-        <IncomeStatement v-if="activeTab === 'income-statement'" />
-      </el-tab-pane>
-      <el-tab-pane label="现金流量表" name="cash-flow">
-        <CashFlow v-if="activeTab === 'cash-flow'" />
-      </el-tab-pane>
-    </el-tabs>
+  <div class="p-4" data-testid="three-statements">
+    <UTabs v-model="activeTab" :items="TAB_ITEMS" :content="false" />
+    <div class="mt-4">
+      <BalanceSheet v-if="activeTab === 'balance-sheet'" />
+      <IncomeStatement v-else-if="activeTab === 'income-statement'" />
+      <CashFlow v-else-if="activeTab === 'cash-flow'" />
+    </div>
   </div>
 </template>
 
@@ -23,17 +18,12 @@ import CashFlow from './CashFlow.vue';
 
 const route = useRoute();
 const activeTab = ref('balance-sheet');
+const TAB_ITEMS = [
+  { label: '资产负债表', value: 'balance-sheet' },
+  { label: '利润表', value: 'income-statement' },
+  { label: '现金流量表', value: 'cash-flow' },
+];
 watch(() => route.query.tab, tab => {
   activeTab.value = typeof tab === 'string' && ['balance-sheet', 'income-statement', 'cash-flow'].includes(tab) ? tab : 'balance-sheet';
 }, { immediate: true });
 </script>
-
-<style scoped>
-.three-statements {
-  padding: 16px;
-}
-
-.report-tabs :deep(.el-tabs__content) {
-  padding: 0;
-}
-</style>
