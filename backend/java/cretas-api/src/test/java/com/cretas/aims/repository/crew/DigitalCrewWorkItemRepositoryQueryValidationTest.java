@@ -19,6 +19,7 @@ import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.PreviewTokenService;
 import com.cretas.aims.service.crew.DigitalCrewService;
 import com.cretas.aims.service.crew.DigitalCrewService.Actor;
+import com.cretas.aims.service.crew.DigitalCrewServiceTestSeams;
 import com.cretas.aims.service.execution.RealPermissionOrderOrchestratorFixture;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -192,6 +193,16 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         DigitalCrewService.AskView v = service.ask(F, PLANNER, "planner", "明天加一个 500kg 的卤牛肉计划", null);
         assertThat(v.kind()).isEqualTo("DELEGATED");
         return v.item().id();
+    }
+
+    @Autowired private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
+    /** 测试里直接跑 @Modifying 查询 (模拟并发的另一个请求): 单独一个提交的事务。 */
+    private <T> T inTx(java.util.function.Supplier<T> work) {
+        org.springframework.transaction.support.TransactionTemplate t =
+                new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+        t.setPropagationBehavior(org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return t.execute(st -> work.get());
     }
 
     private DigitalCrewWorkItem reread(Long id) {
@@ -814,13 +825,13 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
         });
         // 把「数件数 → 插入」之间的窗口放宽到 300ms: 有交办锁时这段等待在锁里, 各线程依次通过;
         // 没有锁时 6 个线程都会数到 19、都去插入 —— 变异 (去掉锁) 因此一定看得见 (第一版没有这段, 去掉锁也是绿的)。
-        service.afterOpenCountHook = () -> {
+        DigitalCrewServiceTestSeams.setAfterOpenCountHook(service, () -> {
             try {
                 Thread.sleep(300);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        };
+        });
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(threads);
         int delegated = 0;
         int refused = 0;
@@ -848,11 +859,136 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
             }
         } finally {
             pool.shutdownNow();
-            service.afterOpenCountHook = () -> { };
+            DigitalCrewServiceTestSeams.setAfterOpenCountHook(service, null);
         }
         assertThat(delegated).as("只剩 1 个名额, 只有 1 件交办成功").isEqualTo(1);
         assertThat(refused).isEqualTo(threads - 1);
         assertThat(items.countOpenByUser(F, PLANNER.id(), Status.DELEGATED)).isEqualTo(cap);
+    }
+
+    // ==================== #1771 第 3 轮复审 N1–N3 ====================
+
+    /**
+     * N1: 服务上不留 public 的可变实例字段当测试接缝 —— 任何拿到这个 bean 的生产代码都能改它。
+     * 守的是性质 (没有 public 非 final 实例字段), 不是某一个字段名; 接缝经同包、只在 src/test 的 DigitalCrewServiceTestSeams 设置。
+     */
+    @Test
+    void serviceExposesNoPublicMutableInstanceFieldAsATestSeam() {
+        List<String> exposed = java.util.Arrays.stream(DigitalCrewService.class.getDeclaredFields())
+                .filter(f -> java.lang.reflect.Modifier.isPublic(f.getModifiers()))
+                .filter(f -> !java.lang.reflect.Modifier.isStatic(f.getModifiers()))
+                .filter(f -> !java.lang.reflect.Modifier.isFinal(f.getModifiers()))
+                .map(java.lang.reflect.Field::getName).toList();
+        assertThat(exposed).as("public 可变实例字段").isEmpty();
+        // 阳性对照: 接缝仍在、测试仍能经包级入口设置它 (并发上限测试靠它把竞态窗口放宽)
+        assertThat(java.util.Arrays.stream(DigitalCrewService.class.getDeclaredFields())
+                .map(java.lang.reflect.Field::getName)).contains("afterOpenCountHook");
+    }
+
+    /**
+     * N2: B 作废了 A 的凭据 (cancelPendingById 成功) 后去做预览; 这段时间里有人打开「等我确认」, 读路径对账
+     * 回读到 A 那张已作废 (终态没写入), 把凭据行 id 清成 null。B 落库时库里是 null 而不是「我作废时看到的那张」——
+     * 这不是别人预览过, B 的预览必须登记上, 不能当场作废自己的凭据并给出假 409。
+     */
+    @Test
+    void reconcileClearingTheRetiredTokenDoesNotTurnTheNextPreviewIntoA409() {
+        Long id = delegateOne();
+        previewMintsPerUser();
+        service.preview(F, PLANNER, id);
+        assertThat(reread(id).getPreviewTokenId()).isEqualTo(501L);
+        // 501 在被 B 作废之前是 PENDING (B 预览开头的对账不动它), 作废之后回读为 CANCELLED
+        java.util.concurrent.atomic.AtomicBoolean retired = new java.util.concurrent.atomic.AtomicBoolean();
+        when(previewTokens.cancelPendingById(eq(501L), eq(F), eq(PLANNER.id()), anyString())).thenAnswer(inv -> {
+            retired.set(true);
+            return true;
+        });
+        when(previewTokens.readBoundStatusById(501L, F, PLANNER.id())).thenAnswer(inv ->
+                Optional.of(retired.get() ? TokenStatus.CANCELLED : TokenStatus.PENDING));
+        when(intents.preview(eq(F), any(), eq(BOSS.id()), anyString())).thenAnswer(inv -> {
+            // B 在等预览时, 计划员打开「等我确认」触发对账
+            service.inbox(F, PLANNER);
+            assertThat(reread(id).getPreviewTokenId()).as("对账把已作废的 501 清掉了 (前提成立)").isNull();
+            IntentExecuteResponse.ConfirmableAction action = new IntentExecuteResponse.ConfirmableAction();
+            action.setConfirmToken("tok-" + BOSS.id());
+            action.setCommandDigest(DIGEST);
+            action.setExpiresAt(Instant.now().plusSeconds(300));
+            return IntentExecuteResponse.builder().status("PREVIEW").confirmableAction(action).build();
+        });
+
+        service.preview(F, BOSS, id);
+
+        DigitalCrewWorkItem w = reread(id);
+        assertThat(w.getPreviewTokenId()).isEqualTo(502L);
+        assertThat(w.getPreviewedByUserId()).isEqualTo(BOSS.id());
+        verify(previewTokens, never()).cancelPendingById(eq(502L), anyString(), anyLong(), anyString());
+    }
+
+    /**
+     * N2 阴性对照: 同样的时序, 但 B 等预览时插进来的是另一个人的预览 (库里是别人的非空凭据) ⇒ 仍然 409、B 作废自己那张。
+     * 放宽只放过「被对账清成 null」, 不放过真的插队。
+     */
+    @Test
+    void anotherPreviewSlippingInWhileWaitingIsStillA409() {
+        Long id = delegateOne();
+        previewMintsPerUser();
+        service.preview(F, PLANNER, id);
+        when(previewTokens.cancelPendingById(eq(501L), eq(F), eq(PLANNER.id()), anyString())).thenReturn(true);
+        when(intents.preview(eq(F), any(), eq(BOSS.id()), anyString())).thenAnswer(inv -> {
+            // 另一个人 (99) 的预览抢先落库: 库里换成别人的非空行 599
+            assertThat(inTx(() -> items.stampPreviewReplacingToken(id, F, 99L, DIGEST, 599L, 501L, LocalDateTime.now(),
+                    Status.DELEGATED))).isEqualTo(1);
+            IntentExecuteResponse.ConfirmableAction action = new IntentExecuteResponse.ConfirmableAction();
+            action.setConfirmToken("tok-" + BOSS.id());
+            action.setCommandDigest(DIGEST);
+            action.setExpiresAt(Instant.now().plusSeconds(300));
+            return IntentExecuteResponse.builder().status("PREVIEW").confirmableAction(action).build();
+        });
+
+        assertThatThrownBy(() -> service.preview(F, BOSS, id)).isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+        assertThat(reread(id).getPreviewTokenId()).isEqualTo(599L);
+        verify(previewTokens).cancelPendingById(eq(502L), eq(F), eq(BOSS.id()), anyString());
+    }
+
+    /**
+     * N3: 厂长拿第一张凭据 (行 501) 来确认, 「凭据是这件事的」比对过了; 在认领之前, 他在另一个窗口重新预览, 事项改记行 502
+     * (同一个人、同一个摘要)。认领必须比对凭据行 id: 影响 0 行 ⇒ 当场 409, 不进「办理中」、确认链路一次都不调。
+     * 不比对时认领成功, 用作废了的 501 去确认, finish 因行 id 对不上不落结果, 事项卡在「办理中」直到超时对账 (≥15 分钟)。
+     */
+    @Test
+    void claimComparesTheTokenRowSoAReplacedPreviewFailsFastInsteadOfStickingInConfirming() {
+        Long id = delegateOne();
+        previewMints(DIGEST);
+        service.preview(F, BOSS, id);
+        assertThat(reread(id).getPreviewTokenId()).isEqualTo(501L);
+        when(previewTokens.readBoundTokenId("proof-token-1", F, BOSS.id())).thenAnswer(inv -> {
+            // 比对之后、认领之前: 同一个人重新预览, 事项换成行 502
+            assertThat(inTx(() -> items.stampPreviewReplacingToken(id, F, BOSS.id(), DIGEST, 502L, 501L,
+                    LocalDateTime.now(), Status.DELEGATED))).isEqualTo(1);
+            return Optional.of(501L);
+        });
+        when(intents.confirm(eq(F), any(), eq(BOSS.id()), anyString()))
+                .thenReturn(IntentExecuteResponse.builder().status("FAILED").message("凭据已作废").build());
+        tokenReadsBack(BOSS, TokenStatus.CANCELLED);
+
+        assertThatThrownBy(() -> service.confirm(F, BOSS, id, proof())).isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+
+        verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
+        DigitalCrewWorkItem w = reread(id);
+        assertThat(w.getStatus()).as("不卡在办理中").isEqualTo(Status.DELEGATED);
+        assertThat(w.getPreviewTokenId()).isEqualTo(502L);
+        assertThat(w.getConfirmedAt()).isNull();
+    }
+
+    /** N3 配套: 没有登记的凭据 (从没预览 / 对账清掉了失效的) ⇒ 确认快速 409, 不认领、不调确认链路。 */
+    @Test
+    void confirmWithoutARegisteredTokenFailsFast() {
+        Long id = delegateOne();
+        assertThatThrownBy(() -> service.confirm(F, BOSS, id, proof())).isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(409));
+        verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
+        assertThat(reread(id).getStatus()).isEqualTo(Status.DELEGATED);
     }
 
     @Test
