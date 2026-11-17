@@ -2688,6 +2688,16 @@
       "secondary_domain": "HR"
     },
     {
+      "intent_code": "SCHEDULING_RUSH_ORDER_ANALYSIS",
+      "domain": "PRODUCTION",
+      "action": "ANALYZE",
+      "domain_basis": "D10-production",
+      "action_basis": "A04-analyze",
+      "legacy_category": "ANALYSIS",
+      "tool_name": "scheduling_rush_order_impact",
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "SCHEDULING_SET_AUTO",
       "domain": "PRODUCTION",
       "action": "UPDATE",
