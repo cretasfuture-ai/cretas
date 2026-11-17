@@ -80,7 +80,9 @@ export interface CostStructureResponse {
 /** One point on the yield trend */
 export interface YieldTrendPoint {
   statDate: string;
+  /** 出成率 = 良品 ÷ 实际产出 × 100，只算有出成率的批次 */
   avgYieldRate: number | null;
+  yieldBatchCount?: number;
   batchCount: number;
   totalActualQty: number | null;
   totalGoodQty: number | null;
@@ -117,6 +119,8 @@ export interface ProductCostItem {
   costPerUnit: number | null;
   /** 有成本的批次数；单位成本只基于这些批次 */
   costedBatchCount?: number;
+  /** 有出成率（报了良品与实际产出）的批次数；出成率只基于这些批次 */
+  yieldBatchCount?: number;
 }
 
 export interface ProductCostCompareData {
