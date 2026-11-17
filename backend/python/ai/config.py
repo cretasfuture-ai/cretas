@@ -50,6 +50,8 @@ class AIConfig:
     # 合并理解 (INTENT-DISTILL E, 2026-11-11): 「目的 + 粗选 (+ 对话动作 / 参数 / 是否先问)」一次结构化调用,
     # Choice (读概率) 只在需要时才调。缺省关, 行为与旧版一致; 门槛的来由见 ai/matcher/decision.py 的 E 线说明。
     decision_merged: bool = False
+    # 业务域缩小决策层候选 (意图蒸馏③ PR-4)。缺省开; AI_DOMAIN_SCOPE=0 关 (不重发即可回到全目录, 见 ai/intent_domain.py)。
+    domain_scope_enabled: bool = True
     # 合并输出的 clarify_probability >= 此值 ⇒ 这一轮先问 (按钮澄清)。
     # 0.5 取自开发集平台 [0.3, 0.7] 的中点: 该区间内两个方向的错误数都不变 (见 PR 回执), 不靠门槛压某一方向。
     decision_clarify_threshold: float = 0.5
@@ -111,6 +113,7 @@ class AIConfig:
             rerank_pool_k=int(os.environ.get("AI_RERANK_POOL_K", "50")),
             rerank_top_k=int(os.environ.get("AI_RERANK_TOP_K", "10")),
             decision_merged=os.environ.get("AI_DECISION_MERGED", "0").strip().lower() in ("1", "true", "yes", "on"),
+            domain_scope_enabled=os.environ.get("AI_DOMAIN_SCOPE", "1").strip().lower() not in ("0", "false", "no", "off"),
             decision_clarify_threshold=float(os.environ.get("AI_DECISION_CLARIFY_THRESHOLD", "0.5")),
             decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
             decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),

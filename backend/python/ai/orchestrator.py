@@ -42,6 +42,11 @@ from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
 from ai.matcher.decision import domain_scope, intent_domain_of, with_task_state
+
+
+def _option_set_hash(rows) -> str:
+    from ai.api import option_set_hash  # 函数内导入: ai.api 导入本模块
+    return option_set_hash(rows)
 from ai.db import _is_write_row
 from ai.matcher.decision import (ASK_KEY, CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, NON_INTENT_KEYS, RequestPurpose,
                                  intent_text)
@@ -117,10 +122,20 @@ class Orchestrator:
             exit_metrics.set_decision_none_reason(None)
             exit_metrics.set_luna_failure_reason(None)
             fallback_reason = None
+            scope_state: Dict[str, Any] = {}
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
                                                     history, task_state=task_state, ask_policy=ask_policy,
-                                                    catalog_version=catalog_version)
+                                                    catalog_version=catalog_version, scope_state=scope_state)
+                if scope_state.get("used") and self._wants_wide_retry(result):
+                    # 业务域收窄后判成「以上都不是 / 先问清楚 / 没答出来」: 可能是域判错把对的意图挤掉了。
+                    # 不许静默答「没有这个功能」(不降级原则) ⇒ 用全部可见意图再判一次 (宁可放宽)。
+                    result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
+                                                        history, task_state=task_state, ask_policy=ask_policy,
+                                                        catalog_version=catalog_version, scope_state=scope_state,
+                                                        widen=True)
+                    if result is not None:
+                        result.timingMs = {**(result.timingMs or {}), "domainRetryWide": 1}
             except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
@@ -133,6 +148,10 @@ class Orchestrator:
                     for key, value in intent_domain_of(chosen).items():
                         exit_metrics.note_trace(key, value)
                 return result
+            if scope_state.get("used") and not scope_state.get("widened"):
+                # 决策层没答出来、旧路径答 ⇒ 这次的候选集合不是缩小后的那份 (L1)
+                exit_metrics.note_trace("domainScope", "narrowed_legacy_fallback")
+                exit_metrics.note_trace("optionSetHash", _option_set_hash(visible_intents))
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
             # 回落要留痕: 「三层答的」与「三层没答出来、旧路径答的」在结果上必须分得开
@@ -162,6 +181,8 @@ class Orchestrator:
         task_state: Optional[Dict[str, Any]] = None,
         ask_policy: Optional[str] = None,
         catalog_version: Optional[str] = None,
+        scope_state: Optional[Dict[str, Any]] = None,
+        widen: bool = False,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -202,24 +223,45 @@ class Orchestrator:
         # ===== 第 1 层: 业务域缩小「给模型看的」候选 (PR-4) =====
         # 只换粗选 / 合并理解提示词里列的意图。by_code 仍是全部可见意图: 精确表 (上面) 与语义召回补足的候选
         # 不受业务域限制 (语义召回 = 兜底), 权限 / 写确认 / 审批仍全在 Java 侧照旧。
-        scope = domain_scope(query, visible_intents, catalog_version,
-                             contextual=bool(turns) or bool(task_state))
-        llm_visible = scope.rows
+        state = scope_state if scope_state is not None else {}
+        if widen:
+            scope = None
+        elif not getattr(self.config, "domain_scope_enabled", True):
+            scope = None
+            if catalog_version is not None:
+                exit_metrics.note_trace("domainScope", "disabled")
+        else:
+            scope = domain_scope(query, visible_intents, catalog_version,
+                                 contextual=bool(turns) or bool(task_state))
+        narrowed = scope is not None and scope.narrowed
+        llm_visible = scope.rows if narrowed else visible_intents
         if catalog_version is not None:
             # 只有带了业务域表版本的请求 (PR-4 起的 Java) 才记业务域痕迹; 老请求的痕迹与改动前逐字相同
             exit_metrics.note_trace("catalogVersion", catalog_version)
-            exit_metrics.note_trace("domainScope", scope.reason)
-            exit_metrics.note_trace("domains", sorted(scope.domains))
-        if scope.narrowed:
+            if widen:
+                exit_metrics.note_trace("domainScope", "narrowed_retry_wide")
+                exit_metrics.note_trace("optionSetHash", _option_set_hash(visible_intents))
+                state["widened"] = True
+            elif scope is not None:
+                exit_metrics.note_trace("domains", sorted(scope.domains))
+                # 收窄了但还没交给模型: 先记「没用上」, 真交给粗选 / 合并理解时才改成 narrowed (L1)
+                exit_metrics.note_trace("domainScope", "narrowed_unused" if narrowed else scope.reason)
+
+        def use_scope() -> None:
+            """粗选 / 合并理解真的拿缩小后的列表去问模型时调用: 这时才算收窄生效。"""
+            if not narrowed:
+                return
+            state["used"] = True
             timing["domainNarrowed"] = 1
             timing["domainCandidates"] = len(llm_visible)
+            exit_metrics.note_trace("domainScope", "narrowed")
             exit_metrics.note_trace("domainCandidates", len(llm_visible))
             # 候选集合变了 ⇒ 这道题的「选项集合」跟着变 (飞轮蒸馏按它分题)
-            from ai.api import option_set_hash
-            exit_metrics.note_trace("optionSetHash", option_set_hash(llm_visible))
+            exit_metrics.note_trace("optionSetHash", _option_set_hash(llm_visible))
 
         retriever = self.candidate_retriever or self.semantic_matcher
         if getattr(self.config, "decision_merged", False):
+            use_scope()
             merged = await self._match_merged(query, factoryId, businessType, role, visible_intents, history,
                                               retriever, by_code, timing, t0, llm_visible=llm_visible)
             if merged is not None:
@@ -255,6 +297,7 @@ class Orchestrator:
         # ===== ② 候选: LLM 粗选 ‖ 向量召回 (并行), 合并去重 =====
         t = time.time()
         if codes is None:
+            use_scope()
             sem, short = await asyncio.gather(
                 retriever.match(query, factoryId=factoryId, businessType=businessType),
                 self.decision_matcher.shortlist(query, role, llm_visible, history),
@@ -322,6 +365,18 @@ class Orchestrator:
             return None
         return self._result_from_probs(probs, special, query, by_code, visible_intents, timing, t0,
                                        ask_tier=ask_tier)
+
+    @staticmethod
+    def _wants_wide_retry(result: Optional[IntentMatchResultDto]) -> bool:
+        """收窄后的结论是否该用全部意图重判: 没答出来 / 以上都不是 / 先问清楚 (按钮澄清) ⇒ 是;
+        直接办 ⇒ 否; 说话目的不是「现在办」或明确取消 ⇒ 否 (那与候选是哪些无关)。"""
+        if result is None:
+            return True
+        timing = result.timingMs or {}
+        if any(timing.get(k) for k in ("mergedCancel", "requestPurposeInformation", "requestPurposeUnresolved",
+                                       "requestPurposeUnavailable")):
+            return False
+        return result.bestMatch is None or bool(result.requiresConfirmation)
 
     async def _match_merged(self, query, factoryId, businessType, role, visible_intents, history,
                             retriever, by_code, timing, t0,

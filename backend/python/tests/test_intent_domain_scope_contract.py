@@ -224,3 +224,156 @@ def test_exact_phrase_hit_outside_the_detected_domain_still_wins():
     res, _trace = _match(dec, "考勤看一下", VERSION)
     assert res.bestMatch.intentCode == "CAMERA_SUBSCRIBE" and res.matchMethod == MatchMethod.EXACT
     assert dec.shortlist_visible is None
+
+
+# ---------------- 终审修改项 (M1 / M2 / L1 / L2) ----------------
+
+from dataclasses import replace  # noqa: E402
+
+from ai.matcher.candidates import BlendRetriever  # noqa: E402
+from ai.matcher.decision import Understanding  # noqa: E402
+
+
+class SeqDecision(FakeDecision):
+    """每次粗选记下看到的候选; Choice 按调用次序返回 probs_seq 里的分布。"""
+
+    def __init__(self, short, probs_seq):
+        super().__init__(short, probs_seq[0])
+        self.probs_seq, self.shortlist_seen = list(probs_seq), []
+
+    async def shortlist(self, query, role, visible, history=None):
+        self.shortlist_seen.append(_codes(visible))
+        self.shortlist_visible = _codes(visible)
+        return self.short
+
+    async def choose(self, query, role, options, history=None, special_options=False):
+        self.choice_options = [o["intent_code"] for o in options]
+        i = min(len(self.shortlist_seen), len(self.probs_seq)) - 1
+        return dict(self.probs_seq[i])
+
+
+def _match_cfg(dec, query, version, cfg, sem_retriever=None, rerank=None):
+    orch = Orchestrator(semantic_matcher=Nothing(), classifier_matcher=Nothing(), llm_matcher=Nothing(),
+                        decision_matcher=dec, candidate_retriever=sem_retriever or FakeSemantic([]), config=cfg,
+                        rerank_client=rerank)
+
+    async def run():
+        trace = exit_metrics.start_decision_trace()
+        res = await orch.match(query=query, factoryId="F006", businessType="FACTORY", userId="u", role="operator",
+                               visible_intents=ALL + [CUSTOM], history=[], min_confidence=0.7,
+                               enable_llm=True, catalog_version=version)
+        return res, trace
+
+    return asyncio.run(run())
+
+
+def test_m1_narrowed_clarify_is_rejudged_with_every_intent():
+    # 收窄后只拿到低把握 (= 先问清楚 / 出按钮) ⇒ 用全部意图再判一次, 不能就此收场
+    dec = SeqDecision(["CLOCK_IN"], [{"CLOCK_IN": 0.4}, {"CLOCK_IN": 0.95}])
+    res, trace = _match_cfg(dec, "考勤看一下", VERSION, CFG)
+    assert len(dec.shortlist_seen) == 2
+    assert dec.shortlist_seen[0] < _codes(ALL + [CUSTOM])          # 第一次: 收窄的列表
+    assert dec.shortlist_seen[1] == _codes(ALL + [CUSTOM])          # 第二次: 全部可见意图
+    assert res.bestMatch.intentCode == "CLOCK_IN" and not res.requiresConfirmation
+    assert res.timingMs.get("domainRetryWide") == 1
+    assert trace["domainScope"] == "narrowed_retry_wide"
+    from ai.api import option_set_hash
+    assert trace["optionSetHash"] == option_set_hash(ALL + [CUSTOM])
+
+
+def test_m1_direct_answer_after_narrowing_is_not_rejudged():
+    # 对照: 收窄后直接办 ⇒ 不重判 (重判只为兜「没答出来 / 以上都不是 / 先问」)
+    dec = SeqDecision(["CLOCK_IN"], [{"CLOCK_IN": 0.95}, {"CLOCK_IN": 0.95}])
+    res, trace = _match_cfg(dec, "考勤看一下", VERSION, CFG)
+    assert len(dec.shortlist_seen) == 1 and trace["domainScope"] == "narrowed"
+    assert "domainRetryWide" not in res.timingMs
+
+
+def test_m1_no_answer_without_narrowing_is_not_rejudged():
+    # 对照: 没带表版本 (没收窄) 时先问就是先问, 不会多调一次模型
+    dec = SeqDecision(["CLOCK_IN"], [{"CLOCK_IN": 0.4}, {"CLOCK_IN": 0.95}])
+    res, _trace = _match_cfg(dec, "考勤看一下", None, CFG)
+    assert len(dec.shortlist_seen) == 1 and res.requiresConfirmation
+
+
+def test_m1_craft_sentence_reaches_production_intents():
+    s = intent_domain.scope("看下工艺标准", ALL, TABLE, VERSION)
+    assert s.narrowed and {"PRODUCTION", "QUALITY"} <= s.domains
+    assert _of("PRODUCTION") <= _codes(s.rows) and _of("QUALITY") <= _codes(s.rows)
+
+
+class MergedDecision(FakeDecision):
+    def __init__(self, target, candidates):
+        super().__init__([], {})
+        self.target, self.cands, self.understand_visible = target, candidates, None
+
+    async def understand(self, query, role, visible, history=None):
+        self.understand_visible = _codes(visible)
+        return Understanding(purpose=RequestPurpose.CURRENT, act="NEW_TASK", candidates=list(self.cands),
+                             target=self.target, confidence=0.95, alternatives=[], clarify_probability=0.0,
+                             clarify_reason="", parameters=[])
+
+
+def test_m2_merged_understanding_sees_the_narrowed_list_and_recalled_candidates_stay_valid():
+    cfg = replace(CFG, decision_merged=True)
+    # 合并理解只看到 HR 域 (+ 通用入口); 目标却是语义召回补回来的域外意图 (摄像头订阅) —— 它仍是合法候选
+    dec = MergedDecision("CAMERA_SUBSCRIBE", ["CLOCK_IN"])
+    res, trace = _match_cfg(dec, "考勤看一下", VERSION, cfg, sem_retriever=FakeSemantic([("CAMERA_SUBSCRIBE", 0.6)]))
+    assert dec.understand_visible is not None and "CAMERA_SUBSCRIBE" not in dec.understand_visible
+    assert "CLOCK_IN" in dec.understand_visible and _of("SYSTEM") <= dec.understand_visible
+    assert dec.understand_visible < _codes(ALL + [CUSTOM])
+    assert res.bestMatch.intentCode == "CAMERA_SUBSCRIBE" and res.timingMs.get("choiceSkipped") == 1
+    assert trace["domainScope"] == "narrowed"
+
+
+class FakeBlend(BlendRetriever):
+    def __init__(self, order):
+        super().__init__(pool=None)
+        self.order = order
+
+    async def match(self, query, factoryId, businessType, top_k=None):
+        return [CandidateIntentDto(intentCode=c, confidence=0.5, matchMethod=MatchMethod.SEMANTIC) for c in self.order]
+
+
+class FakeRerank:
+    async def scores(self, query, documents):
+        return [1.0 - 0.1 * i for i in range(len(documents))]
+
+
+def test_l1_rerank_path_does_not_claim_narrowing():
+    # 重排路不调粗选: 收窄的列表没交给模型, 痕迹里不能写 narrowed, optionSetHash 也不换
+    cfg = replace(CFG, decision_candidates="rerank", rerank_pool_k=50, rerank_top_k=2)
+    dec = SeqDecision(["CLOCK_IN"], [{"CLOCK_IN": 0.95}])
+    res, trace = _match_cfg(dec, "考勤看一下", VERSION, cfg, sem_retriever=FakeBlend(["CLOCK_IN", "CLOCK_OUT"]),
+                            rerank=FakeRerank())
+    assert dec.shortlist_seen == []  # 证明真走了重排路
+    assert res.bestMatch.intentCode == "CLOCK_IN"
+    assert trace["domainScope"] == "narrowed_unused" and "domainNarrowed" not in res.timingMs
+    assert "optionSetHash" not in trace and "domainCandidates" not in trace
+
+
+def test_l1_legacy_fallback_after_narrowing_is_not_recorded_as_narrowed():
+    # 粗选空、语义召回空 ⇒ 决策层没答出来 ⇒ 全量重判仍没答出来 ⇒ 旧路径答: 痕迹不能停在 narrowed
+    dec = SeqDecision([], [{}])
+    _res, trace = _match_cfg(dec, "考勤看一下", VERSION, CFG)
+    assert len(dec.shortlist_seen) == 2
+    assert trace["domainScope"] == "narrowed_retry_wide"
+    from ai.api import option_set_hash
+    assert trace["optionSetHash"] == option_set_hash(ALL + [CUSTOM])
+
+
+def test_l2_switch_off_shows_every_intent():
+    cfg = replace(CFG, domain_scope_enabled=False)
+    dec = SeqDecision(["CLOCK_IN"], [{"CLOCK_IN": 0.95}])
+    res, trace = _match_cfg(dec, "考勤看一下", VERSION, cfg)
+    assert dec.shortlist_seen == [_codes(ALL + [CUSTOM])]
+    assert trace["domainScope"] == "disabled" and "domainNarrowed" not in res.timingMs
+
+
+@pytest.mark.parametrize("value,enabled", [(None, True), ("1", True), ("0", False), ("off", False)])
+def test_l2_switch_reads_env(monkeypatch, value, enabled):
+    if value is None:
+        monkeypatch.delenv("AI_DOMAIN_SCOPE", raising=False)
+    else:
+        monkeypatch.setenv("AI_DOMAIN_SCOPE", value)
+    assert AIConfig.from_env().domain_scope_enabled is enabled

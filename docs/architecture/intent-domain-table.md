@@ -1,4 +1,4 @@
-# 意图业务域分类表（catalog_version 2026-11-17.1）
+# 意图业务域分类表（catalog_version 2026-11-18.1）
 
 意图蒸馏第③步业务域维度（方案第 2 节第 1 层）。#1772 建表与覆盖闸；PR-4 加次业务域、业务词并接进识别路径（见第 7 节）。
 
@@ -191,8 +191,12 @@ Java 资源 `ai/factory-intent-catalog.json` 的 `canonical_intents`（Python `b
 
 - **在哪收窄**：Python 决策层 `ai/orchestrator.py::_match_decision`，在精确短语表之后、模型粗选 / 合并理解之前。规则在 `ai/intent_domain.py`，决策层入口 `ai/matcher/decision.py::domain_scope`。只换「粗选 / 合并理解提示词里列哪些意图」：精确短语表、语义召回补进细选的候选不受业务域限制，Java 侧的权限、写操作确认、审批、竞品拒答（`OwnFactoryDataOnlyGuard`）、带意图码先判审批全部照旧。
 - **怎么判域**：表里每个业务域的 `keywords`（生成脚本 `KEYWORD_DOMAINS`，一个词可以牵几个相邻域，如「出库」= 仓储 + 销售 + 质检 + 生产），整句子串命中取并集。SYSTEM / ANALYTICS 不设词。
+- **收窄后没判出来就全量重判**：只有粗选 / 合并理解真用上了缩小后的列表，且结论是「以上都不是」「先问清楚 / 置信不够出按钮」或决策层没答出来时，用全部可见意图再判一次（痕迹 `domainScope=narrowed_retry_wide`，结果 `timingMs.domainRetryWide=1`）。域判错不能静默答成「没有这个功能」。说话目的不是「现在办」或明确取消的不重判。
 - **兜底（宁可放宽）**：表外意图（工厂自建）永远留下；SYSTEM / ANALYTICS 主域或次域的意图永远留下；判不出域、命中超过 4 个域、带对话历史或任务状态、Java 没带或带了不同的 `catalogVersion`、表读不了 ⇒ 一律不收窄。
 - **版本握手**：Java `IntentDomainTable.catalogVersion()` 随识别请求下发 `catalogVersion`；Python 只在与自己副本版本相同时收窄。Java 与 Python 分开发布，先发哪个都不会收窄错。
 - **决策层输出**：带了表版本的请求，决策痕迹（`decisionTrace`，随结果回 Java 进飞轮）多 `catalogVersion` / `domainScope` / `domains` / `domainCandidates` / `domain` / `secondaryDomain`；收窄时 `optionSetHash` 按缩小后的候选重算。不带表版本的老请求痕迹逐字不变。
+- **开关**：Python 环境变量 `AI_DOMAIN_SCOPE`（默认开，`0` 关），关了不重发即可回到全目录（痕迹 `domainScope=disabled`）。
+- **痕迹只写真用上的**：重排路不调粗选，记 `narrowed_unused`，不换 `optionSetHash`；决策层没答出来回落旧路径记 `narrowed_legacy_fallback` 并把 `optionSetHash` 换回全部可见意图。
+- **版本与内容绑定**：生成脚本里 `CONTENT_SHA256` 钉住本版表内容的摘要；改了规则 / 人工清单 / 业务词 / 次域而不升 `CATALOG_VERSION`，脚本（含 `--check`）rc=1。
 - **业务域不授权任何东西**：动作类型、业务域都不进任何闸。
 - **改词的口径**：v3 开发半边的候选保留率（金标仍在缩小后的候选里）必须是 100%，另用 Steve 金标 300 题核对；封存半边不碰。读数与准确率前后对比见 PR 描述，复现脚本 `tests/semantic-read/domain_scope_eval.py`。

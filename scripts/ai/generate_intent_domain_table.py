@@ -26,7 +26,9 @@ OUT = ROOT / "backend/java/cretas-api/src/main/resources/ai/intent-domain-table.
 # Python 决策层读的同步副本 (逐字节相同, 由 backend/python/tests/test_intent_domain_scope_contract.py 钉住)
 PY_OUT = ROOT / "backend/python/ai/data/intent-domain-table.json"
 
-CATALOG_VERSION = "2026-11-17.1"
+CATALOG_VERSION = "2026-11-18.1"
+# 本版表内容的摘要 (content_sha256)。改了规则 / 人工清单 / 业务词 / 次域 ⇒ 生成脚本 rc=1, 直到同时升 CATALOG_VERSION 并更新这里。
+CONTENT_SHA256 = "2c5ab438c88338bda767c478484374fb122fbc38139281b911a51c2dd4e86a6b"
 
 DOMAINS = [
     ("PRODUCTION", "生产", "生产计划/批次/工序任务/排产/产能/生产效率与出成率"),
@@ -262,7 +264,7 @@ KEYWORD_DOMAINS = {
     # 生产
     "生产": (P, W, Q, S, T), "排产": (P, W, B), "产能": (P,), "工序": (P, Q), "报工": (P, Q, H), "开工": (P, Q),
     "完工": (P,), "产量": (P, S), "出成率": (P,), "效率": (P, W, H, E), "加工": (P, W), "车间": (P, Q, H),
-    "产线": (P, W, Q, E), "生产线": (P, W, Q, E), "工单": (P,), "投料": (P, W), "配方": (P, Q, R), "bom": (P, F, R),
+    "产线": (P, W, Q, E), "生产线": (P, W, Q, E), "工单": (P,), "工艺": (P, Q), "投料": (P, W), "配方": (P, Q, R), "bom": (P, F, R),
     "任务": (P, W, Q),
     # 仓储
     "库存": (W, S, B, P), "入库": (W, B, Q), "出库": (W, S, Q, P), "领料": (W, P), "领用": (W, P), "盘点": (W,),
@@ -390,6 +392,13 @@ def build():
     }
 
 
+def content_sha256(table) -> str:
+    """表内容 (除版本号外的全部字段) 的摘要; 键排序, 与缩进 / 版本号无关。"""
+    import hashlib
+    body = {k: v for k, v in table.items() if k != "catalog_version"}
+    return hashlib.sha256(json.dumps(body, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
@@ -400,12 +409,18 @@ def main():
         print(f"cannot measure: {exc}", file=sys.stderr)
         return 2
     text = json.dumps(table, ensure_ascii=False, indent=2) + "\n"
+    digest = content_sha256(table)
+    if digest != CONTENT_SHA256:
+        # 内容变了版本号必须跟着变: Python 只在 Java 下发的版本与自己副本相同时收窄, 同号不同内容会两边各按各的表判
+        print(f"table content changed (sha256 {digest}) but CONTENT_SHA256 pins {CONTENT_SHA256} for "
+              f"{CATALOG_VERSION}: bump CATALOG_VERSION and set CONTENT_SHA256 = \"{digest}\"", file=sys.stderr)
+        return 1
     if args.check:
         stale = [p for p in (OUT, PY_OUT) if (p.read_text(encoding="utf-8") if p.exists() else "") != text]
         if stale:
             print(f"stale (rerun the generator): {[str(p) for p in stale]}", file=sys.stderr)
             return 1
-        print(f"ok: {len(table['intents'])} intents")
+        print(f"ok: {len(table['intents'])} intents, {CATALOG_VERSION} sha256 {digest[:12]}")
         return 0
     for p in (OUT, PY_OUT):
         with open(p, "w", encoding="utf-8", newline="\n") as f:
