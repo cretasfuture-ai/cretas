@@ -5,6 +5,7 @@ import InvoicesTab from '../InvoicesTab.vue';
 import PaymentsTab from '../PaymentsTab.vue';
 import QuotesTab from '../QuotesTab.vue';
 import { ApiError } from '@/types/api';
+import { customerTabStubs } from './customerTabStubs';
 
 const get = vi.hoisted(() => vi.fn());
 vi.mock('@/api/request', () => ({ get }));
@@ -12,13 +13,7 @@ vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => ({ factoryId: ref('
 vi.mock('@/store/modules/permission', () => ({ usePermissionStore: () => ({ canViewPrice: ref(true) }) }));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
-const global = { stubs: {
-  'el-skeleton': true,
-  'el-empty': { props: ['description'], template: '<p>{{description}}</p>' },
-  'el-result': { props: ['title'], template: '<p>{{title}}</p>' },
-  'el-button': { template: '<button><slot /></button>' },
-  'el-table': true, 'el-table-column': true, 'el-tag': true, 'el-pagination': true,
-} };
+const global = { stubs: customerTabStubs };
 describe.each([
   ['开票', InvoicesTab, '/F1/finance/invoices/by-customer'],
   ['收款', PaymentsTab, '/F1/finance/payments/by-customer'],

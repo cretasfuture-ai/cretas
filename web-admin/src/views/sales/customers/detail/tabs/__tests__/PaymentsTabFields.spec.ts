@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { ref } from 'vue';
-import ElementPlus from 'element-plus';
+import { customerTabStubs } from './customerTabStubs';
 import PaymentsTab from '../PaymentsTab.vue';
 
 vi.mock('@/api/request', () => ({ get: vi.fn(async () => ({ success:true, data:{
@@ -16,12 +16,12 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 describe('customer payment field contract', () => {
   it.each([true,false])('renders persisted payment fields with price access %s', async allowed => {
     priceAccess.value=allowed;
-    const wrapper=mount(PaymentsTab,{props:{customerId:'C1'},global:{plugins:[ElementPlus]}});
+    const wrapper=mount(PaymentsTab,{props:{customerId:'C1'},global:{stubs:customerTabStubs}});
     await flushPromises();
     const text=wrapper.text();
     expect(text).toContain('PAY-20261016-0001');
     expect(text).toContain('2026-10-16');
-    expect(text).toContain('BANK_TRANSFER');
+    expect(text).toContain('银行转账'); expect(text).not.toContain('BANK_TRANSFER');
     expect(text).toContain('scope receipt');
     if(allowed) { expect(text).toContain('62.00'); }
     else { expect(text).toContain('****'); expect(text).not.toContain('62.00'); }

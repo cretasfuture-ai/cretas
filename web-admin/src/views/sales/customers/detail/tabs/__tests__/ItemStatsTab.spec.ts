@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { ref } from 'vue';
 import ItemStatsTab from '../ItemStatsTab.vue';
+import { customerTabStubs } from './customerTabStubs';
 
 const mockGet = vi.fn();
 vi.mock('@/api/request', () => ({
@@ -20,17 +21,14 @@ vi.mock('@/store/modules/permission', () => ({
 }));
 
 const globalStubs = {
-  'el-skeleton': { template: '<div />' },
-  'el-empty': { props: ['description', 'imageSize'], template: '<div class="el-empty"><slot /></div>' },
-  'el-alert': { props: ['type', 'title'], template: '<div class="el-alert">{{ title }}</div>' },
-  'el-table': {
-    props: ['data', 'defaultSort'],
-    template: '<div class="el-table-stub" :data-rows-json="JSON.stringify(data)"><slot /></div>',
+  ...customerTabStubs,
+  // 聚合结果经 data-rows-json 读出来 (UTable 桩只渲染列, 不暴露 data)
+  UTable: {
+    props: ['data', 'columns'],
+    template: '<div class="el-table-stub" :data-rows-json="JSON.stringify(data)" />',
   },
-  'el-table-column': { props: ['label', 'prop'], template: '<div />' },
-  'el-button': { template: '<button><slot /></button>' },
-  'el-icon': { template: '<i />' },
-  'el-result': { props: ['title'], template: '<div>{{ title }}</div>' },
+  UAlert: { props: ['title'], template: '<div class="el-alert">{{ title }}</div>' },
+  UEmpty: { props: ['description'], template: '<div class="el-empty">{{ description }}</div>' },
 };
 
 describe('ItemStatsTab — aggregation', () => {

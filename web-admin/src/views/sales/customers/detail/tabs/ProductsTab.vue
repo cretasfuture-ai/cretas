@@ -7,45 +7,39 @@
   <div class="products-tab">
     <div class="toolbar">
       <span class="title">产品 (基于近 {{ orderCount }} 个销售单聚合)</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-alert
+    <UAlert
       v-if="hitCap"
-      type="warning"
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
       :title="`聚合基于近 ${SCAN_CAP} 单 — 全量请用导出/报表系统`"
-      show-icon
-      :closable="false"
-      style="margin-bottom: 12px"
+      class="cap-alert"
     />
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无购买产品记录" :image-size="80" />
-    <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
-    </div>
+    <div v-if="state === 'loading'" class="skeleton"><USkeleton v-for="i in 5" :key="i" class="h-9 w-full" /></div>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-package" description="该客户暂无购买产品记录" />
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
 
     <template v-else>
-      <el-table :data="rows" border stripe size="small" :default-sort="{ prop: 'orderCount', order: 'descending' }">
-        <el-table-column label="产品名" prop="productName" min-width="220" show-overflow-tooltip />
-        <el-table-column label="购买订单数" prop="orderCount" sortable width="140" align="right" />
-        <el-table-column label="累计数量" prop="totalQuantity" sortable width="160" align="right">
-          <template #default="{ row }">{{ formatNum(row.totalQuantity) }} {{ row.unit || '' }}</template>
-        </el-table-column>
-        <el-table-column label="首次购买" prop="firstDate" width="120" sortable />
-        <el-table-column label="最近购买" prop="lastDate" width="120" sortable />
-      </el-table>
+      <UTable v-model:sorting="sorting" :data="rows" :columns="columns" class="cs-table" data-testid="customer-products-table">
+        <template v-for="key in SORTABLE_IDS" :key="key" #[`${key}-header`]="{ column }">
+          <button type="button" class="sort-th" @click="column.toggleSorting(column.getIsSorted() === 'asc')">
+            {{ SORTABLE_LABELS[key] }}
+            <UIcon :name="column.getIsSorted() === 'asc' ? 'i-lucide-arrow-up' : column.getIsSorted() === 'desc' ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up-down'" class="sort-icon" :class="{ active: !!column.getIsSorted() }" />
+          </button>
+        </template>
+        <template #totalQuantity-cell="{ row }"><span class="num">{{ formatNum(row.original.totalQuantity) }} {{ row.original.unit || '' }}</span></template>
+      </UTable>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -87,6 +81,17 @@ const errorMsg = ref('');
 const rows = ref<ProductRow[]>([]);
 const orderCount = ref(0);
 const hitCap = ref(false);
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const SORTABLE_LABELS: Record<string, string> = { orderCount: '购买订单数', totalQuantity: '累计数量', firstDate: '首次购买', lastDate: '最近购买' };
+const SORTABLE_IDS = Object.keys(SORTABLE_LABELS);
+const sorting = ref<{ id: string; desc: boolean }[]>([{ id: 'orderCount', desc: true }]);
+const columns: TableColumn<ProductRow>[] = [
+  { accessorKey: 'productName', header: '产品名', enableSorting: false },
+  { accessorKey: 'orderCount', id: 'orderCount', header: '购买订单数', meta: R },
+  { accessorKey: 'totalQuantity', id: 'totalQuantity', header: '累计数量', meta: R },
+  { accessorKey: 'firstDate', id: 'firstDate', header: '首次购买' },
+  { accessorKey: 'lastDate', id: 'lastDate', header: '最近购买' },
+];
 
 function formatNum(v?: number): string {
   if (v == null) return '—';
@@ -150,8 +155,16 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.products-tab { padding: 8px 0; }
+.products-tab { padding: 12px 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.toolbar .title { font-size: 14px; color: var(--el-text-color-secondary); }
-.error-panel { padding: 24px 0; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.num { font-variant-numeric: tabular-nums; }
+.skeleton { display: grid; gap: 8px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+.cap-alert { margin-bottom: 12px; }
+.sort-th { border: 0; background: transparent; padding: 0; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
+.sort-icon { width: 12px; height: 12px; color: var(--cs-muted); opacity: 0.6; }
+.sort-icon.active { color: var(--cs-primary); opacity: 1; }
 </style>
