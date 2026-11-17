@@ -462,3 +462,10 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   POS: 'POS',
   OTHER: '其他',
 };
+
+/** 月结对账结论 (accounting-period 「月结报表」列)。 */
+export const RECONCILIATION_STATUS_LABELS: Record<string, string> = {
+  PASS: '通过',
+  WARNING: '有提示',
+  FAIL: '未通过',
+};

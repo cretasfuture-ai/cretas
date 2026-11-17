@@ -4,11 +4,14 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Refresh, WarningFilled } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { formatAmount } from '@/utils/tableFormatters';
 import type { TableRow } from '@/types/api';
-import { enumLabel } from '@/utils/enumDisplay';
+import { enumLabel, PAYMENT_METHOD_LABELS } from '@/utils/enumDisplay';
+import { badgeColor, type ElementTagType } from '@/utils/csBadge';
+import type { CsTableColumn } from '@/types/csTable';
+// 通用确认弹窗 (UModal, 取代 Element 的命令式确认框: 它 在 Nuxt UI 弹层之上点不了)。
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import { getReturnFinancialFollowUp, validReturnOrderId } from '@/api/returnFinancialFollowUp';
 import { getReturnRefundByRequest } from '@/api/inventory';
 
@@ -75,6 +78,7 @@ const factoryId = computed(() => authStore.factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 const canWriteFinance = computed(() => permissionStore.canWrite('finance'));
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const settleDialogVisible = ref(false);
 const settleSubmitting = ref(false);
 const settleRow = ref<TableRow | null>(null);
@@ -129,15 +133,12 @@ async function settlePayable() {
     return;
   }
 
-  try {
-    await ElMessageBox.confirm(
-      `确认向 ${row.counterpartyName || '该供应商'} 付款 ${formatAmount(settleForm.value.amount)} 并核销此应付？`,
-      '确认付款核销',
-      { confirmButtonText: '确认付款', cancelButtonText: '取消', type: 'warning' },
-    );
-  } catch {
-    return;
-  }
+  const confirmed = await confirmRef.value!.ask({
+    title: '确认付款核销',
+    message: `确认向 ${row.counterpartyName || '该供应商'} 付款 ${formatAmount(settleForm.value.amount)} 并核销此应付？`,
+    confirmText: '确认付款',
+  });
+  if (confirmed === null) return;
 
   settleSubmitting.value = true;
   try {
@@ -192,10 +193,11 @@ const txTypeMap: Record<string, { text: string; type: string }> = {
   AP_ADJUSTMENT: { text: '应付调整', type: 'info' },
 };
 
-const paymentMethodMap: Record<string, string> = {
-  CASH: '现金', BANK_TRANSFER: '银行转账', WECHAT: '微信', ALIPAY: '支付宝',
-  CHECK: '支票', CREDIT: '赊账', POS: 'POS', OTHER: '其他',
-};
+const SETTLE_METHOD_ITEMS = ['BANK_TRANSFER', 'CASH', 'WECHAT', 'ALIPAY', 'CHECK', 'OTHER']
+  .map(value => ({ value, label: PAYMENT_METHOD_LABELS[value] }));
+const PAGE_SIZE_ITEMS = [10, 20, 50].map(value => ({ value, label: `${value} 条/页` }));
+const methodText = (code: unknown) => (code ? enumLabel(code, PAYMENT_METHOD_LABELS) : '-');
+
 
 function finiteNumber(value: unknown): number {
   const number = Number(value);
@@ -403,280 +405,276 @@ function handleTxPageChange(page: number) { txPagination.value.page = page; load
 function handleTxSizeChange(size: number) { txPagination.value.size = size; txPagination.value.page = 1; loadTransactions(); }
 function handleTxTypeChange() { txPagination.value.page = 1; loadTransactions(); }
 function handleAgingTypeChange() { void loadAging(); }
+const TAB_ITEMS = computed(() => [
+  ...(hasReturnContext.value ? [] : [{ label: '财务概览', value: 'overview', slot: 'overview' as const }]),
+  { label: '应收账款', value: 'receivable', slot: 'receivable' as const },
+  ...(hasReturnContext.value ? [] : [
+    { label: '应付账款', value: 'payable', slot: 'payable' as const },
+    { label: '账龄分析', value: 'aging', slot: 'aging' as const },
+  ]),
+]);
+
+type TxRow = TableRow;
+function typeKey(row: TxRow): string {
+  return String(row.sourceType === 'RETURN_REFUND_REVERSAL' ? 'RETURN_REFUND_REVERSAL' : row.transactionType);
+}
+const typeText = (row: TxRow) => txTypeMap[typeKey(row)]?.text || enumLabel(row.transactionType);
+const typeColor = (row: TxRow) => badgeColor((txTypeMap[String(row.transactionType)]?.type || 'info') as ElementTagType);
+const approvalText = (row: TxRow) => approvalStatusMap[String(row.approvalStatus)]?.text || enumLabel(row.approvalStatus);
+const approvalColor = (row: TxRow) => badgeColor((approvalStatusMap[String(row.approvalStatus)]?.type || 'info') as ElementTagType);
+
+const RIGHT = { class: { th: 'text-right', td: 'text-right' } };
+function txColumns(counterparty: string, withActions: boolean): CsTableColumn<TxRow>[] {
+  const cols: CsTableColumn<TxRow>[] = [
+    { accessorKey: 'transactionNumber', header: '交易编号' },
+    { accessorKey: 'counterpartyName', header: counterparty },
+    { id: 'transactionType', header: '类型' },
+    { id: 'amount', header: '金额', meta: RIGHT },
+  ];
+  if (!overview.value?.scopeApplied) cols.push({ id: 'balanceAfter', header: '交易后余额（历史快照）', meta: RIGHT });
+  if (transactions.value.some(r => isAdjustmentRow(r))) cols.push({ id: 'approval', header: '审批状态' });
+  cols.push(
+    { id: 'paymentMethod', header: '支付方式' },
+    { accessorKey: 'transactionDate', header: '日期' },
+  );
+  if (!withActions) cols.push({ accessorKey: 'dueDate', header: '到期日' });
+  cols.push({ id: 'source', header: '来源单据' }, { accessorKey: 'remark', header: '备注' });
+  if (withActions) cols.push({ id: 'actions', header: '操作' });
+  return cols;
+}
+
+const agingColumns = computed<CsTableColumn<TxRow>[]>(() => [
+  { accessorKey: 'counterpartyName', header: agingType.value === 'CUSTOMER' ? '客户' : '供应商' },
+  { id: 'total', header: '未清合计', meta: RIGHT },
+  { id: 'current', header: '未到期', meta: RIGHT },
+  { id: 'days1_30', header: '1-30天', meta: RIGHT },
+  { id: 'days31_60', header: '31-60天', meta: RIGHT },
+  { id: 'days61_90', header: '61-90天', meta: RIGHT },
+  { id: 'days91_120', header: '91-120天', meta: RIGHT },
+  { id: 'days120plus', header: '120天以上', meta: RIGHT },
+]);
 </script>
 
 <template>
-  <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <span class="page-title">应收应付管理</span>
-          <el-button :icon="Refresh" @click="refreshFinancialData">刷新</el-button>
+  <div class="page" data-testid="finance-arap-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>应收应付管理</h2>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" data-testid="arap-refresh" @click="refreshFinancialData">刷新</UButton>
         </div>
-      </template>
+      </header>
 
-      <el-alert v-if="hasReturnContext" :title="sourceError || `仅显示退货单 ${sourceReturnNumber || '正在核对'} 的应收调整，保留历次驳回和重提记录`" :type="sourceError ? 'error' : 'info'" :closable="false">
-        <el-button v-if="sourceReturnId" link type="primary" @click="openSourceReturn(sourceReturnId)">返回原退货单</el-button>
-        <el-button link @click="router.replace({ query: {} })">查看全部流水</el-button>
-      </el-alert>
-      <el-alert v-if="canViewPrice && overview?.scopeApplied" type="info" :closable="false" show-icon
-        title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
-      <el-tabs v-if="canViewPrice" v-model="activeTab">
-        <!-- 概览 Tab -->
-        <el-tab-pane v-if="!hasReturnContext" label="财务概览" name="overview">
-          <el-alert v-if="overviewLoading" title="正在读取财务概览…" type="info" :closable="false" show-icon />
-          <el-alert v-else-if="overviewError" :title="overviewError" type="error" :closable="false" show-icon />
-          <div class="stat-cards" v-else-if="overview">
-            <el-card class="stat-card ar" shadow="hover">
-              <div class="stat-label">应收总额</div>
-              <div class="stat-value">{{ formatAmount(overview.totalReceivable) }}</div>
-              <!-- 🟡 F006 采购 audit fix (Bug 2): 后端按交易对手(客户/供应商)聚合欠款笔数, 非单据/发票行数
-                   (ar_ap_transactions 是流水式台账, 无法干净拆出"未结发票行"概念). 文案改"家"避免误导. -->
-              <div class="stat-sub">{{ overview.receivableCount || 0 }} 家客户未结</div>
-            </el-card>
-            <el-card class="stat-card ap" shadow="hover">
-              <div class="stat-label">应付总额</div>
-              <div class="stat-value">{{ formatAmount(overview.totalPayable) }}</div>
-              <div class="stat-sub">{{ overview.payableCount || 0 }} 家供应商未结</div>
-            </el-card>
-            <el-card class="stat-card net" shadow="hover">
-              <div class="stat-label">净额 (应收-应付)</div>
-              <div class="stat-value">{{ formatAmount((overview.totalReceivable || 0) - (overview.totalPayable || 0)) }}</div>
-              <div class="stat-sub">{{ (overview.totalReceivable || 0) > (overview.totalPayable || 0) ? '净应收' : '净应付' }}</div>
-            </el-card>
-            <el-card class="stat-card overdue" shadow="hover">
-              <div class="stat-label">逾期金额（应收+应付）</div>
-              <div class="stat-value">{{ formatAmount(overdueTotal(overview)) }}</div>
-              <div class="stat-sub">{{ overdueCount(overview) }} 笔逾期（应收+应付）</div>
-            </el-card>
-          </div>
-          <el-empty v-else description="暂无数据" />
-        </el-tab-pane>
+      <div class="body">
+        <UAlert v-if="hasReturnContext" :color="sourceError ? 'error' : 'info'" variant="soft" icon="i-lucide-info" class="mb-3" data-testid="arap-return-context"
+          :title="sourceError || `仅显示退货单 ${sourceReturnNumber || '正在核对'} 的应收调整，保留历次驳回和重提记录`">
+          <template #description>
+            <div class="alert-actions">
+              <UButton v-if="sourceReturnId" variant="link" size="xs" @click="openSourceReturn(sourceReturnId)">返回原退货单</UButton>
+              <UButton color="neutral" variant="link" size="xs" @click="router.replace({ query: {} })">查看全部流水</UButton>
+            </div>
+          </template>
+        </UAlert>
+        <UAlert v-if="canViewPrice && overview?.scopeApplied" color="info" variant="soft" icon="i-lucide-info" class="mb-3"
+          title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
 
-        <!-- 应收 Tab -->
-        <el-tab-pane label="应收账款" name="receivable">
-          <div class="tab-toolbar">
-            <el-button :icon="Refresh" @click="txTypeFilter = 'CUSTOMER'; loadTransactions()">刷新</el-button>
-          </div>
-          <el-table empty-text="暂无数据" :data="transactions" border stripe v-loading="loading">
-            <el-table-column prop="transactionNumber" label="交易编号" width="150" />
-            <el-table-column prop="counterpartyName" label="客户" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="transactionType" label="类型" width="120" align="center">
-              <template #default="{ row }">
-                <el-tag :type="(txTypeMap[row.transactionType]?.type) || 'info'" size="small">
-                  {{ txTypeMap[row.sourceType === 'RETURN_REFUND_REVERSAL' ? 'RETURN_REFUND_REVERSAL' : row.transactionType]?.text || enumLabel(row.transactionType) }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="amount" label="金额" width="130" align="right">
-              <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
-            </el-table-column>
-            <el-table-column v-if="!overview?.scopeApplied" prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
-              <template #default="{ row }">
-                {{ formatAmount(row.balanceAfter) }}
-                <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
-                  content="调整待审批, 余额为提交前快照; 审批通过后才会更新" placement="top">
-                  <el-icon style="color:#E6A23C;margin-left:4px;vertical-align:middle"><WarningFilled /></el-icon>
-                </el-tooltip>
-              </template>
-            </el-table-column>
-            <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
-                  {{ approvalStatusMap[row.approvalStatus]?.text || enumLabel(row.approvalStatus) }}
-                </el-tag>
-                <el-text v-if="row.sourceType === 'RETURN_REFUND_REVERSAL'" type="warning" size="small">请从退款详情审核</el-text>
-                <span v-if="!isAdjustmentRow(row)">-</span>
-              </template>
-            </el-table-column>
-            <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
-              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || enumLabel(row.paymentMethod) : '-' }}</template>
-            </el-table-column>
-            <el-table-column prop="transactionDate" label="日期" width="120" />
-            <el-table-column prop="dueDate" label="到期日" width="120" />
-            <el-table-column label="来源单据" width="150"><template #default="{ row }"><el-button v-if="row.sourceType === 'RETURN_ORDER' && validReturnOrderId(row.sourceId)" link type="primary" @click="openSourceReturn(row.sourceId)">查看原退货单</el-button><el-button v-else-if="(row.sourceType === 'RETURN_REFUND' || row.sourceType === 'RETURN_REFUND_REVERSAL') && validRefundRequestId(row.sourceId)" link type="primary" @click="openSourceRefund(row)">{{ row.sourceType === 'RETURN_REFUND_REVERSAL' ? '查看撤销退款' : '查看退款与流水' }}</el-button><span v-else>-</span></template></el-table-column>
-            <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-          </el-table>
-        </el-tab-pane>
+        <UTabs v-if="canViewPrice" v-model="activeTab" :items="TAB_ITEMS" variant="link" :ui="{ trigger: 'px-[10px] py-[8px] text-[13px]', content: 'pt-3' }" data-testid="arap-tabs">
+          <!-- 概览 -->
+          <template #overview>
+            <UAlert v-if="overviewLoading" color="info" variant="soft" icon="i-lucide-info" title="正在读取财务概览…" />
+            <UAlert v-else-if="overviewError" color="error" variant="soft" icon="i-lucide-circle-alert" :title="overviewError" />
+            <div v-else-if="overview" class="stat-cards" data-testid="arap-overview">
+              <div class="stat-card ar">
+                <div class="stat-label">应收总额</div>
+                <div class="stat-value">{{ formatAmount(overview.totalReceivable) }}</div>
+                <!-- 🟡 F006 采购 audit fix (Bug 2): 后端按交易对手(客户/供应商)聚合欠款笔数, 非单据/发票行数
+                     (ar_ap_transactions 是流水式台账, 无法干净拆出"未结发票行"概念). 文案改"家"避免误导. -->
+                <div class="stat-sub">{{ overview.receivableCount || 0 }} 家客户未结</div>
+              </div>
+              <div class="stat-card ap">
+                <div class="stat-label">应付总额</div>
+                <div class="stat-value">{{ formatAmount(overview.totalPayable) }}</div>
+                <div class="stat-sub">{{ overview.payableCount || 0 }} 家供应商未结</div>
+              </div>
+              <div class="stat-card net">
+                <div class="stat-label">净额 (应收-应付)</div>
+                <div class="stat-value">{{ formatAmount((overview.totalReceivable || 0) - (overview.totalPayable || 0)) }}</div>
+                <div class="stat-sub">{{ (overview.totalReceivable || 0) > (overview.totalPayable || 0) ? '净应收' : '净应付' }}</div>
+              </div>
+              <div class="stat-card overdue">
+                <div class="stat-label">逾期金额（应收+应付）</div>
+                <div class="stat-value">{{ formatAmount(overdueTotal(overview)) }}</div>
+                <div class="stat-sub">{{ overdueCount(overview) }} 笔逾期（应收+应付）</div>
+              </div>
+            </div>
+            <div v-else class="empty">暂无数据</div>
+          </template>
 
-        <!-- 应付 Tab -->
-        <el-tab-pane v-if="!hasReturnContext" label="应付账款" name="payable">
-          <el-table :data="transactions" border stripe v-loading="loading">
-            <el-table-column prop="transactionNumber" label="交易编号" width="150" />
-            <el-table-column prop="counterpartyName" label="供应商" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="transactionType" label="类型" width="120" align="center">
-              <template #default="{ row }">
-                <el-tag :type="(txTypeMap[row.transactionType]?.type) || 'info'" size="small">
-                  {{ txTypeMap[row.sourceType === 'RETURN_REFUND_REVERSAL' ? 'RETURN_REFUND_REVERSAL' : row.transactionType]?.text || enumLabel(row.transactionType) }}
-                </el-tag>
+          <!-- 应收 -->
+          <template #receivable>
+            <div class="tab-toolbar">
+              <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" @click="txTypeFilter = 'CUSTOMER'; loadTransactions()">刷新</UButton>
+            </div>
+            <UTable :data="transactions" :columns="txColumns('客户', false)" :loading="loading" class="cs-table" data-testid="arap-receivable-table">
+              <template #empty>暂无数据</template>
+              <template #transactionType-cell="{ row }">
+                <UBadge :color="typeColor(row.original)" variant="soft">{{ typeText(row.original) }}</UBadge>
               </template>
-            </el-table-column>
-            <el-table-column prop="amount" label="金额" width="130" align="right">
-              <template #default="{ row }">{{ formatAmount(row.amount) }}</template>
-            </el-table-column>
-            <el-table-column v-if="!overview?.scopeApplied" prop="balanceAfter" label="交易后余额（历史快照）" width="170" align="right">
-              <template #default="{ row }">
-                {{ formatAmount(row.balanceAfter) }}
-                <el-tooltip v-if="isAdjustmentRow(row) && row.approvalStatus === 'PENDING'"
-                  content="调整待审批, 余额为提交前快照; 审批通过后才会更新" placement="top">
-                  <el-icon style="color:#E6A23C;margin-left:4px;vertical-align:middle"><WarningFilled /></el-icon>
-                </el-tooltip>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount as number) }}</span></template>
+              <template #balanceAfter-cell="{ row }">
+                <span class="num">{{ formatAmount(row.original.balanceAfter as number) }}</span>
+                <UIcon v-if="isAdjustmentRow(row.original) && row.original.approvalStatus === 'PENDING'" name="i-lucide-triangle-alert" class="warn-icon"
+                  title="调整待审批, 余额为提交前快照; 审批通过后才会更新" />
               </template>
-            </el-table-column>
-            <el-table-column v-if="transactions.some((r) => isAdjustmentRow(r))" label="审批状态" width="100" align="center">
-              <template #default="{ row }">
-                <el-tag v-if="isAdjustmentRow(row)" :type="approvalStatusMap[row.approvalStatus]?.type || 'info'" size="small">
-                  {{ approvalStatusMap[row.approvalStatus]?.text || enumLabel(row.approvalStatus) }}
-                </el-tag>
-                <el-text v-if="row.sourceType === 'RETURN_REFUND_REVERSAL'" type="warning" size="small">请从退款详情审核</el-text>
-                <span v-if="!isAdjustmentRow(row)">-</span>
+              <template #approval-cell="{ row }">
+                <UBadge v-if="isAdjustmentRow(row.original)" :color="approvalColor(row.original)" variant="soft">{{ approvalText(row.original) }}</UBadge>
+                <span v-if="row.original.sourceType === 'RETURN_REFUND_REVERSAL'" class="warn-text">请从退款详情审核</span>
+                <span v-if="!isAdjustmentRow(row.original)">-</span>
               </template>
-            </el-table-column>
-            <el-table-column prop="paymentMethod" label="支付方式" width="110" align="center">
-              <template #default="{ row }">{{ row.paymentMethod ? paymentMethodMap[row.paymentMethod] || enumLabel(row.paymentMethod) : '-' }}</template>
-            </el-table-column>
-            <el-table-column prop="transactionDate" label="日期" width="120" />
-            <el-table-column label="来源单据" width="150"><template #default="{ row }"><el-button v-if="row.sourceType === 'RETURN_ORDER' && validReturnOrderId(row.sourceId)" link type="primary" @click="openSourceReturn(row.sourceId)">查看原退货单</el-button><el-button v-else-if="(row.sourceType === 'RETURN_REFUND' || row.sourceType === 'RETURN_REFUND_REVERSAL') && validRefundRequestId(row.sourceId)" link type="primary" @click="openSourceRefund(row)">{{ row.sourceType === 'RETURN_REFUND_REVERSAL' ? '查看撤销退款' : '查看退款与流水' }}</el-button><span v-else>-</span></template></el-table-column>
-            <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-            <el-table-column label="操作" width="140" align="center" fixed="right">
-              <template #default="{ row }">
-                <el-button
-                  v-if="canSettlePayable(row)"
-                  type="primary"
-                  link
-                  size="small"
-                  @click="openSettleDialog(row)"
-                >付款并核销</el-button>
+              <template #paymentMethod-cell="{ row }">{{ methodText(row.original.paymentMethod) }}</template>
+              <template #source-cell="{ row }">
+                <UButton v-if="row.original.sourceType === 'RETURN_ORDER' && validReturnOrderId(row.original.sourceId)" variant="link" size="xs" @click="openSourceReturn(row.original.sourceId)">查看原退货单</UButton>
+                <UButton v-else-if="(row.original.sourceType === 'RETURN_REFUND' || row.original.sourceType === 'RETURN_REFUND_REVERSAL') && validRefundRequestId(row.original.sourceId)" variant="link" size="xs" @click="openSourceRefund(row.original)">{{ row.original.sourceType === 'RETURN_REFUND_REVERSAL' ? '查看撤销退款' : '查看退款与流水' }}</UButton>
                 <span v-else>-</span>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
+            </UTable>
+          </template>
 
-        <!-- 账龄 Tab -->
-        <el-tab-pane v-if="!hasReturnContext" label="账龄分析" name="aging">
-          <div class="tab-toolbar">
-            <el-radio-group v-model="agingType" @change="handleAgingTypeChange">
-              <el-radio-button value="CUSTOMER">应收账龄</el-radio-button>
-              <el-radio-button value="SUPPLIER">应付账龄</el-radio-button>
-            </el-radio-group>
-          </div>
-          <el-alert v-if="agingLoading" title="正在读取账龄分析…" type="info" :closable="false" show-icon style="margin-bottom:12px" />
-          <el-alert v-else-if="agingError" :title="agingError" type="error" :closable="false" show-icon style="margin-bottom:12px" />
-          <el-alert v-else title="账龄按发票剩余未清金额统计；与含退款及撤销的净应收不同。" type="info" :closable="false" show-icon style="margin-bottom:12px" />
-          <el-table v-if="!agingLoading && !agingError" :data="agingData" border stripe>
-            <el-table-column prop="counterpartyName" :label="agingType === 'CUSTOMER' ? '客户' : '供应商'" min-width="160" />
-            <el-table-column prop="total" label="未清合计" width="130" align="right">
-              <template #default="{ row }">{{ formatAmount(row.total) }}</template>
-            </el-table-column>
-            <el-table-column prop="current" label="未到期" width="110" align="right">
-              <template #default="{ row }">{{ formatAmount(row.current) }}</template>
-            </el-table-column>
-            <el-table-column prop="days1_30" label="1-30天" width="110" align="right">
-              <template #default="{ row }">{{ formatAmount(row.days1_30) }}</template>
-            </el-table-column>
-            <el-table-column prop="days31_60" label="31-60天" width="110" align="right">
-              <template #default="{ row }">{{ formatAmount(row.days31_60) }}</template>
-            </el-table-column>
-            <el-table-column prop="days61_90" label="61-90天" width="110" align="right">
-              <template #default="{ row }">{{ formatAmount(row.days61_90) }}</template>
-            </el-table-column>
-            <el-table-column prop="days91_120" label="91-120天" width="110" align="right">
-              <template #default="{ row }">{{ formatAmount(row.days91_120) }}</template>
-            </el-table-column>
-            <el-table-column prop="days120plus" label="120天以上" width="110" align="right">
-              <template #default="{ row }">
-                <span :style="{ color: row.days120plus > 0 ? '#f56c6c' : '' }">{{ formatAmount(row.days120plus) }}</span>
+          <!-- 应付 -->
+          <template #payable>
+            <UTable :data="transactions" :columns="txColumns('供应商', true)" :loading="loading" class="cs-table" data-testid="arap-payable-table">
+              <template #empty>暂无数据</template>
+              <template #transactionType-cell="{ row }">
+                <UBadge :color="typeColor(row.original)" variant="soft">{{ typeText(row.original) }}</UBadge>
               </template>
-            </el-table-column>
-          </el-table>
-        </el-tab-pane>
-      </el-tabs>
+              <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount as number) }}</span></template>
+              <template #balanceAfter-cell="{ row }">
+                <span class="num">{{ formatAmount(row.original.balanceAfter as number) }}</span>
+                <UIcon v-if="isAdjustmentRow(row.original) && row.original.approvalStatus === 'PENDING'" name="i-lucide-triangle-alert" class="warn-icon"
+                  title="调整待审批, 余额为提交前快照; 审批通过后才会更新" />
+              </template>
+              <template #approval-cell="{ row }">
+                <UBadge v-if="isAdjustmentRow(row.original)" :color="approvalColor(row.original)" variant="soft">{{ approvalText(row.original) }}</UBadge>
+                <span v-if="row.original.sourceType === 'RETURN_REFUND_REVERSAL'" class="warn-text">请从退款详情审核</span>
+                <span v-if="!isAdjustmentRow(row.original)">-</span>
+              </template>
+              <template #paymentMethod-cell="{ row }">{{ methodText(row.original.paymentMethod) }}</template>
+              <template #source-cell="{ row }">
+                <UButton v-if="row.original.sourceType === 'RETURN_ORDER' && validReturnOrderId(row.original.sourceId)" variant="link" size="xs" @click="openSourceReturn(row.original.sourceId)">查看原退货单</UButton>
+                <UButton v-else-if="(row.original.sourceType === 'RETURN_REFUND' || row.original.sourceType === 'RETURN_REFUND_REVERSAL') && validRefundRequestId(row.original.sourceId)" variant="link" size="xs" @click="openSourceRefund(row.original)">{{ row.original.sourceType === 'RETURN_REFUND_REVERSAL' ? '查看撤销退款' : '查看退款与流水' }}</UButton>
+                <span v-else>-</span>
+              </template>
+              <template #actions-cell="{ row }">
+                <UButton v-if="canSettlePayable(row.original)" variant="link" size="xs" data-testid="arap-settle" @click="openSettleDialog(row.original)">付款并核销</UButton>
+                <span v-else>-</span>
+              </template>
+            </UTable>
+          </template>
 
-      <el-empty v-else description="您没有查看价格/财务数据的权限" />
+          <!-- 账龄 -->
+          <template #aging>
+            <div class="tab-toolbar">
+              <UButton :variant="agingType === 'CUSTOMER' ? 'solid' : 'outline'" :color="agingType === 'CUSTOMER' ? 'primary' : 'neutral'" data-testid="aging-customer" @click="agingType = 'CUSTOMER'; handleAgingTypeChange()">应收账龄</UButton>
+              <UButton :variant="agingType === 'SUPPLIER' ? 'solid' : 'outline'" :color="agingType === 'SUPPLIER' ? 'primary' : 'neutral'" data-testid="aging-supplier" @click="agingType = 'SUPPLIER'; handleAgingTypeChange()">应付账龄</UButton>
+            </div>
+            <UAlert v-if="agingLoading" color="info" variant="soft" icon="i-lucide-info" class="mb-3" title="正在读取账龄分析…" />
+            <UAlert v-else-if="agingError" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-3" :title="agingError" />
+            <UAlert v-else color="info" variant="soft" icon="i-lucide-info" class="mb-3" title="账龄按发票剩余未清金额统计；与含退款及撤销的净应收不同。" />
+            <UTable v-if="!agingLoading && !agingError" :data="agingData" :columns="agingColumns" class="cs-table" data-testid="arap-aging-table">
+              <template #empty>暂无数据</template>
+              <template #total-cell="{ row }"><span class="num">{{ formatAmount(row.original.total as number) }}</span></template>
+              <template #current-cell="{ row }"><span class="num">{{ formatAmount(row.original.current as number) }}</span></template>
+              <template #days1_30-cell="{ row }"><span class="num">{{ formatAmount(row.original.days1_30 as number) }}</span></template>
+              <template #days31_60-cell="{ row }"><span class="num">{{ formatAmount(row.original.days31_60 as number) }}</span></template>
+              <template #days61_90-cell="{ row }"><span class="num">{{ formatAmount(row.original.days61_90 as number) }}</span></template>
+              <template #days91_120-cell="{ row }"><span class="num">{{ formatAmount(row.original.days91_120 as number) }}</span></template>
+              <template #days120plus-cell="{ row }">
+                <span class="num" :class="{ bad: Number(row.original.days120plus) > 0 }">{{ formatAmount(row.original.days120plus as number) }}</span>
+              </template>
+            </UTable>
+          </template>
+        </UTabs>
 
-      <el-dialog
-        v-model="settleDialogVisible"
-        title="付款并核销未清应付"
-        width="520px"
-        :close-on-click-modal="false"
-      >
-        <el-descriptions v-if="settleRow" :column="1" border style="margin-bottom: 16px">
-          <el-descriptions-item label="供应商">{{ settleRow.counterpartyName || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="采购单">{{ settleRow.purchaseOrderId || '-' }}</el-descriptions-item>
-          <el-descriptions-item label="未清金额">{{ formatAmount(payableOutstanding(settleRow)) }}</el-descriptions-item>
-        </el-descriptions>
-        <el-form label-width="100px">
-          <el-form-item label="付款金额" required>
-            <el-input-number
-              v-model="settleForm.amount"
-              :min="0.01"
-              :max="payableOutstanding(settleRow || {})"
-              :precision="2"
-              style="width: 100%"
-            />
-          </el-form-item>
-          <el-form-item label="付款方式" required>
-            <el-select v-model="settleForm.paymentMethod" style="width: 100%">
-              <el-option label="银行转账" value="BANK_TRANSFER" />
-              <el-option label="现金" value="CASH" />
-              <el-option label="微信" value="WECHAT" />
-              <el-option label="支付宝" value="ALIPAY" />
-              <el-option label="支票" value="CHECK" />
-              <el-option label="其他" value="OTHER" />
-            </el-select>
-          </el-form-item>
-          <el-form-item label="付款凭证号" required>
-            <el-input v-model="settleForm.paymentReference" maxlength="100" placeholder="银行流水号或付款凭证号" />
-          </el-form-item>
-          <el-form-item label="备注">
-            <el-input v-model="settleForm.remark" type="textarea" :rows="2" maxlength="500" />
-          </el-form-item>
-        </el-form>
-        <template #footer>
-          <el-button @click="settleDialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="settleSubmitting" @click="settlePayable">确认付款</el-button>
-        </template>
-      </el-dialog>
+        <div v-else class="empty" data-testid="arap-no-permission">您没有查看价格/财务数据的权限</div>
+      </div>
 
       <!-- 交易记录分页 -->
-      <div v-if="canViewPrice && (activeTab === 'receivable' || activeTab === 'payable')" class="pagination-wrapper">
-        <el-pagination v-model:current-page="txPagination.page" v-model:page-size="txPagination.size"
-          :page-sizes="[10, 20, 50]" :total="txPagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handleTxPageChange" @size-change="handleTxSizeChange" />
-      </div>
-    </el-card>
+      <footer v-if="canViewPrice && (activeTab === 'receivable' || activeTab === 'payable')" class="pager">
+        <span class="count">共 {{ txPagination.total }} 条</span>
+        <USelect :model-value="txPagination.size" :items="PAGE_SIZE_ITEMS" class="w-28" data-testid="arap-page-size" @update:model-value="(v: unknown) => handleTxSizeChange(Number(v))" />
+        <UPagination :page="txPagination.page" :items-per-page="txPagination.size" :total="txPagination.total" show-edges :sibling-count="1" @update:page="handleTxPageChange" />
+      </footer>
+    </section>
+
+    <!-- 付款并核销 -->
+    <UModal
+      v-model:open="settleDialogVisible"
+      title="付款并核销未清应付"
+      description="向供应商付款并核销未清应付"
+      :dismissible="false"
+      :ui="{ content: 'max-w-[520px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div class="form">
+          <dl v-if="settleRow" class="desc" data-testid="settle-summary">
+            <dt>供应商</dt><dd>{{ settleRow.counterpartyName || '-' }}</dd>
+            <dt>采购单</dt><dd>{{ settleRow.purchaseOrderId || '-' }}</dd>
+            <dt>未清金额</dt><dd>{{ formatAmount(payableOutstanding(settleRow)) }}</dd>
+          </dl>
+          <UFormField label="付款金额" required>
+            <!-- 不绑 :max / 不吸附步长: 超限由 settlePayable 校验并提示 -->
+            <UInputNumber v-model="settleForm.amount" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ minimumFractionDigits: 2, maximumFractionDigits: 2 }" class="w-full" data-testid="settle-amount" />
+          </UFormField>
+          <UFormField label="付款方式" required>
+            <USelect v-model="settleForm.paymentMethod" :items="SETTLE_METHOD_ITEMS" class="w-full" />
+          </UFormField>
+          <UFormField label="付款凭证号" required>
+            <UInput v-model="settleForm.paymentReference" :maxlength="100" placeholder="银行流水号或付款凭证号" class="w-full" data-testid="settle-reference" />
+          </UFormField>
+          <UFormField label="备注">
+            <UTextarea v-model="settleForm.remark" :rows="2" :maxlength="500" class="w-full" />
+          </UFormField>
+        </div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="settleDialogVisible = false">取消</UButton>
+        <UButton :loading="settleSubmitting" data-testid="settle-submit" @click="settlePayable">确认付款</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; display: flex; flex-direction: column; padding: 20px; }
-}
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-}
-.stat-cards {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 20px;
-}
-.stat-card {
-  text-align: center;
-  padding: 20px;
-  border-radius: 8px;
-  .stat-label { font-size: 13px; color: #909399; margin-bottom: 8px; }
-  .stat-value { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
-  .stat-sub { font-size: 12px; color: #b1b3b8; }
-  &.ar .stat-value { color: #e6a23c; }
-  &.ap .stat-value { color: #f56c6c; }
-  &.net .stat-value { color: var(--el-color-primary); }
-  &.overdue .stat-value { color: #f56c6c; }
-}
-.tab-toolbar { display: flex; gap: 12px; margin-bottom: 16px; }
-.pagination-wrapper { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #ebeef5; margin-top: 16px; }
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.body { padding: var(--cs-space-3) var(--cs-space-5) var(--cs-space-4); }
+.alert-actions { display: flex; gap: var(--cs-space-2); }
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--cs-space-3); padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
+.form { display: grid; gap: var(--cs-space-3); }
+.desc { display: grid; grid-template-columns: 80px 1fr; gap: 6px var(--cs-space-3); margin: 0; font-size: 13px; }
+.desc dt { color: var(--cs-muted); }
+.desc dd { margin: 0; color: var(--cs-text); word-break: break-all; }
+.stat-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--cs-space-4); margin-bottom: var(--cs-space-4); }
+.stat-card { text-align: center; padding: var(--cs-space-5); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); background: var(--cs-surface); }
+.stat-label { font-size: 13px; color: var(--cs-muted); margin-bottom: 8px; }
+.stat-value { font-size: 24px; font-weight: 700; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.stat-sub { font-size: 12px; color: var(--cs-muted); }
+.stat-card.ar .stat-value { color: var(--cs-warning); }
+.stat-card.ap .stat-value { color: var(--cs-danger); }
+.stat-card.net .stat-value { color: var(--cs-primary); }
+.stat-card.overdue .stat-value { color: var(--cs-danger); }
+.tab-toolbar { display: flex; gap: var(--cs-space-2); margin-bottom: var(--cs-space-3); }
+.empty { padding: 40px 0; text-align: center; color: var(--cs-muted); font-size: 13px; }
+.num { font-variant-numeric: tabular-nums; }
+.bad { color: var(--cs-danger); }
+.warn-icon { color: var(--cs-warning); margin-left: 4px; vertical-align: middle; }
+.warn-text { color: var(--cs-warning); font-size: 12px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
