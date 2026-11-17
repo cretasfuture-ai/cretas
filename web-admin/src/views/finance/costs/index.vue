@@ -4,8 +4,11 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
-import { Refresh, Search } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import type { CsTableColumn } from '@/types/csTable';
+import type { CsBadgeColor } from '@/utils/csBadge';
+import { enumLabel, FINANCE_TRANSACTION_TYPE_LABELS } from '@/utils/enumDisplay';
+import { cleanFinanceRemark } from '../financeDisplay';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -14,10 +17,16 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
 const overview = ref<TableRow | null>(null);
+const overviewFailed = ref(false);
 const transactions = ref<TableRow[]>([]);
-const pagination = ref({ page: 1, size: 10, total: 0 });
-const agingData = ref<TableRow[]>([]);
-const searchType = ref('');
+const pagination = ref({ page: 1, size: 20, total: 0 });
+const ALL = 'ALL';
+const searchType = ref(ALL);
+const TYPE_ITEMS = [
+  { label: '全部类型', value: ALL },
+  { label: '客户 (应收)', value: 'CUSTOMER' },
+  { label: '供应商 (应付)', value: 'SUPPLIER' },
+];
 
 onMounted(() => {
   loadOverview();
@@ -28,21 +37,17 @@ async function loadOverview() {
   if (!factoryId.value) return;
 
   loading.value = true;
+  overviewFailed.value = false;
   try {
-    const [overviewRes, arAgingRes, apAgingRes] = await Promise.allSettled([
-      get(`/${factoryId.value}/finance/overview`),
-      get(`/${factoryId.value}/finance/aging`, { params: { counterpartyType: 'CUSTOMER' } }),
-      get(`/${factoryId.value}/finance/aging`, { params: { counterpartyType: 'SUPPLIER' } })
-    ]);
-
-    if (overviewRes.status === 'fulfilled' && overviewRes.value.success) {
-      overview.value = overviewRes.value.data;
-    }
-    if (arAgingRes.status === 'fulfilled' && arAgingRes.value.success) {
-      agingData.value = arAgingRes.value.data || [];
+    const overviewRes = await get(`/${factoryId.value}/finance/overview`);
+    if (overviewRes.success) {
+      overview.value = overviewRes.data;
+    } else {
+      overviewFailed.value = true;
     }
   } catch (error) {
     console.error('加载概览失败:', error);
+    overviewFailed.value = true;
     ElMessage.error('加载财务概览失败');
   } finally {
     loading.value = false;
@@ -57,7 +62,7 @@ async function loadTransactions() {
       page: pagination.value.page,
       size: pagination.value.size
     };
-    if (searchType.value) {
+    if (searchType.value !== ALL) {
       params.counterpartyType = searchType.value;
     }
 
@@ -72,7 +77,8 @@ async function loadTransactions() {
 }
 
 function handleRefresh() {
-  searchType.value = '';
+  searchType.value = ALL;
+  pagination.value.page = 1;
   loadOverview();
   loadTransactions();
 }
@@ -87,318 +93,150 @@ function handlePageChange(page: number) {
   loadTransactions();
 }
 
-function handleSizeChange(size: number) {
-  pagination.value.size = size;
-  pagination.value.page = 1;
-  loadTransactions();
-}
-
+/** 金额: 没有值(null/undefined/非数字)显示「—」, 不当 0 显示。 */
 function formatMoney(val: unknown) {
-  if (val === null || val === undefined) return '¥0.00';
+  if (val === null || val === undefined || val === '') return '—';
   const n = Number(val);
-  return isNaN(n) ? '¥0.00' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return isNaN(n) ? '—' : '¥' + n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatDate(val: string | null) {
-  if (!val) return '-';
+  if (!val) return '—';
   return val.substring(0, 10);
 }
 
-function getTransactionTypeText(type: string) {
-  const map: Record<string, string> = {
-    RECEIVABLE: '应收挂账',
-    AR_INVOICE: '应收开票',
-    AR_PAYMENT: '客户付款',
-    // chart audit P2-1: AR/AP adjustment 之前显 raw enum.
-    AR_ADJUSTMENT: '应收调整',
-    AP_ADJUSTMENT: '应付调整',
-    PAYABLE: '应付挂账',
-    AP_INVOICE: '应付开票',
-    AP_PAYMENT: '供应商付款',
-    ADJUSTMENT: '手工调整'
-  };
-  return map[type] || type || '-';
+function typeText(type: unknown) {
+  return enumLabel(type, FINANCE_TRANSACTION_TYPE_LABELS);
 }
 
-function getTransactionTypeTag(type: string) {
-  const map: Record<string, string> = {
+function typeColor(type: string): CsBadgeColor {
+  const map: Record<string, CsBadgeColor> = {
     RECEIVABLE: 'warning',
     AR_INVOICE: 'warning',
     AR_PAYMENT: 'success',
-    PAYABLE: 'danger',
-    AP_INVOICE: 'danger',
+    PAYABLE: 'error',
+    AP_INVOICE: 'error',
     AP_PAYMENT: 'primary',
-    ADJUSTMENT: 'info'
   };
-  return map[type] || 'info';
+  return map[type] || 'neutral';
 }
+
+const columns = computed<CsTableColumn<TableRow>[]>(() => {
+  const cols: CsTableColumn<TableRow>[] = [
+    { accessorKey: 'transactionNumber', header: '交易编号' },
+    { id: 'transactionType', header: '类型' },
+    { accessorKey: 'counterpartyName', header: '客户/供应商' },
+  ];
+  if (canViewPrice.value) cols.push({ id: 'amount', header: '金额', meta: { class: { th: 'text-right', td: 'text-right' } } });
+  if (canViewPrice.value && overview.value && !overview.value.scopeApplied) {
+    cols.push({ id: 'balanceAfter', header: '余额', meta: { class: { th: 'text-right', td: 'text-right' } } });
+  }
+  cols.push(
+    { id: 'transactionDate', header: '交易日期' },
+    { id: 'dueDate', header: '到期日' },
+    { id: 'remark', header: '备注' },
+  );
+  return cols;
+});
 </script>
 
 <template>
-  <div class="page-wrapper" v-loading="loading" empty-text="暂无数据">
-    <el-alert v-if="canViewPrice && overview?.scopeApplied" type="info" :closable="false" show-icon
+  <div class="page" data-testid="finance-costs-page">
+    <UAlert v-if="canViewPrice && overview?.scopeApplied" color="info" variant="soft" icon="i-lucide-info"
       title="仅显示当前授权范围内的账目与金额，不代表全工厂余额。" />
-    <!-- 财务概览 KPI -->
-    <div class="kpi-row" v-if="overview">
-      <div v-if="canViewPrice" class="kpi-card receivable">
+    <UAlert v-if="overviewFailed" color="error" variant="soft" icon="i-lucide-circle-alert" data-testid="costs-overview-error"
+      title="财务概览暂时没取到，下方金额显示为「—」，请点右上角「刷新」重试。" />
+
+    <!-- 财务概览 KPI: 取不到时显示「—」, 不显示 0 -->
+    <div class="kpi-row">
+      <div v-if="canViewPrice" class="kpi-card receivable" data-testid="kpi-receivable">
         <div class="kpi-label">应收总额</div>
-        <div class="kpi-value">{{ formatMoney(overview.totalReceivable) }}</div>
-        <div class="kpi-sub">逾期: {{ formatMoney(overview.overdueReceivable) }}</div>
+        <div class="kpi-value">{{ formatMoney(overview?.totalReceivable) }}</div>
+        <div class="kpi-sub">逾期: {{ formatMoney(overview?.overdueReceivable) }}</div>
       </div>
-      <div v-if="canViewPrice" class="kpi-card payable">
+      <div v-if="canViewPrice" class="kpi-card payable" data-testid="kpi-payable">
         <div class="kpi-label">应付总额</div>
-        <div class="kpi-value">{{ formatMoney(overview.totalPayable) }}</div>
-        <div class="kpi-sub">逾期: {{ formatMoney(overview.overduePayable) }}</div>
+        <div class="kpi-value">{{ formatMoney(overview?.totalPayable) }}</div>
+        <div class="kpi-sub">逾期: {{ formatMoney(overview?.overduePayable) }}</div>
       </div>
-      <div v-if="canViewPrice" class="kpi-card net">
+      <div v-if="canViewPrice" class="kpi-card net" data-testid="kpi-net">
         <div class="kpi-label">净额 (应收-应付)</div>
         <div class="kpi-value" :class="{
-          'positive': ((overview.totalReceivable || 0) - (overview.totalPayable || 0)) >= 0,
-          'negative': ((overview.totalReceivable || 0) - (overview.totalPayable || 0)) < 0
+          'positive': overview && ((overview.totalReceivable || 0) - (overview.totalPayable || 0)) >= 0,
+          'negative': overview && ((overview.totalReceivable || 0) - (overview.totalPayable || 0)) < 0
         }">
-          {{ formatMoney((overview.totalReceivable || 0) - (overview.totalPayable || 0)) }}
+          {{ overview ? formatMoney((overview.totalReceivable || 0) - (overview.totalPayable || 0)) : '—' }}
         </div>
       </div>
-      <div class="kpi-card count">
+      <div class="kpi-card count" data-testid="kpi-count">
         <div class="kpi-label">本月交易笔数</div>
         <!-- ⛔ 不要 `|| 0`: 「后端没下发这个字段」和「本月一笔交易都没有」是两件事,
-             而 `undefined || 0` 把前者翻译成了后者。2026-08-28 实拍: 这里写着
-             「本月交易笔数 0」而正下方「交易记录 共 32 条」全在本月。
-             后端已补上这三个字段; 万一仍然缺, 显示「—」让人看得出是缺数据。 -->
-        <div class="kpi-value">{{ overview.monthlyTransactionCount ?? '—' }}</div>
-        <div class="kpi-sub">客户: {{ overview.customerCount ?? '—' }} / 供应商: {{ overview.supplierCount ?? '—' }}</div>
+             而 `undefined || 0` 把前者翻译成了后者 (2026-08-28 实拍)。缺数据显示「—」。 -->
+        <div class="kpi-value">{{ overview?.monthlyTransactionCount ?? '—' }}</div>
+        <div class="kpi-sub">客户: {{ overview?.customerCount ?? '—' }} / 供应商: {{ overview?.supplierCount ?? '—' }}</div>
       </div>
     </div>
 
-    <!-- 无数据时的概览占位 -->
-    <div class="kpi-row" v-else-if="!loading">
-      <div v-if="canViewPrice" class="kpi-card receivable">
-        <div class="kpi-label">应收总额</div>
-        <div class="kpi-value">¥0.00</div>
-      </div>
-      <div v-if="canViewPrice" class="kpi-card payable">
-        <div class="kpi-label">应付总额</div>
-        <div class="kpi-value">¥0.00</div>
-      </div>
-      <div v-if="canViewPrice" class="kpi-card net">
-        <div class="kpi-label">净额</div>
-        <div class="kpi-value">¥0.00</div>
-      </div>
-      <div class="kpi-card count">
-        <div class="kpi-label">交易笔数</div>
-        <div class="kpi-value">0</div>
-      </div>
-    </div>
-
-    <!-- 交易记录表格 -->
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">交易记录</span>
-            <span class="data-count">共 {{ pagination.total }} 条记录</span>
-          </div>
-          <div class="header-right">
-            <el-button :icon="Refresh" @click="handleRefresh">刷新</el-button>
-          </div>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>交易记录</h2>
+        <span class="count">共 {{ pagination.total }} 条记录</span>
+        <div class="head-actions">
+          <USelect v-model="searchType" :items="TYPE_ITEMS" class="w-40" data-testid="costs-type-filter" />
+          <UButton icon="i-lucide-search" data-testid="costs-search" @click="handleSearch">搜索</UButton>
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" data-testid="costs-refresh" @click="handleRefresh">刷新</UButton>
         </div>
-      </template>
+      </header>
 
-      <div class="search-bar">
-        <el-select v-model="searchType" placeholder="全部类型" clearable style="width: 150px">
-          <el-option label="客户 (应收)" value="CUSTOMER" />
-          <el-option label="供应商 (应付)" value="SUPPLIER" />
-        </el-select>
-        <el-button type="primary" :icon="Search" @click="handleSearch">搜索</el-button>
-      </div>
+      <UTable :data="transactions" :columns="columns" :loading="loading" class="cs-table" data-testid="costs-table">
+        <template #empty>暂无交易记录</template>
+        <template #transactionType-cell="{ row }">
+          <UBadge :color="typeColor(row.original.transactionType as string)" variant="soft">{{ typeText(row.original.transactionType) }}</UBadge>
+        </template>
+        <template #amount-cell="{ row }">
+          <span class="num" :class="{ 'text-income': row.original.transactionType === 'AR_PAYMENT', 'text-expense': row.original.transactionType === 'PAYABLE' }">{{ formatMoney(row.original.amount) }}</span>
+        </template>
+        <template #balanceAfter-cell="{ row }"><span class="num">{{ formatMoney(row.original.balanceAfter) }}</span></template>
+        <template #transactionDate-cell="{ row }">{{ formatDate((row.original.transactionDate || row.original.createdAt) as string | null) }}</template>
+        <template #dueDate-cell="{ row }">{{ formatDate(row.original.dueDate as string | null) }}</template>
+        <template #remark-cell="{ row }"><span class="remark">{{ cleanFinanceRemark(row.original.remark) }}</span></template>
+      </UTable>
 
-      <el-table :data="transactions" stripe border style="width: 100%">
-        <el-table-column prop="transactionNumber" label="交易编号" width="160" />
-        <el-table-column prop="transactionType" label="类型" width="120" align="center">
-          <template #default="{ row }">
-            <el-tag :type="getTransactionTypeTag(row.transactionType)" size="small">
-              {{ getTransactionTypeText(row.transactionType) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="counterpartyName" label="客户/供应商" min-width="150" show-overflow-tooltip />
-        <el-table-column v-if="canViewPrice" prop="amount" label="金额" width="130" align="right">
-          <template #default="{ row }">
-            <span :class="{ 'text-income': row.transactionType === 'AR_PAYMENT', 'text-expense': row.transactionType === 'PAYABLE' }">
-              {{ formatMoney(row.amount) }}
-            </span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice && overview && !overview.scopeApplied" prop="balanceAfter" label="余额" width="130" align="right">
-          <template #default="{ row }">
-            {{ formatMoney(row.balanceAfter) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="transactionDate" label="交易日期" width="120">
-          <template #default="{ row }">
-            {{ formatDate(row.transactionDate || row.createdAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="dueDate" label="到期日" width="120">
-          <template #default="{ row }">
-            {{ formatDate(row.dueDate) }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="remark" label="备注" min-width="150" show-overflow-tooltip />
-      </el-table>
-
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
-      </div>
-    </el-card>
+      <footer v-if="pagination.total > pagination.size" class="pager">
+        <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
+      </footer>
+    </section>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  overflow-y: auto;
-  padding: 0;
-}
-
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-}
-
-.kpi-card {
-  background: #fff;
-  border: 1px solid var(--border-color-lighter, #ebeef5);
-  border-radius: 8px;
-  padding: 20px;
-  text-align: center;
-
-  .kpi-label {
-    font-size: 13px;
-    color: var(--text-color-secondary, #909399);
-    margin-bottom: 8px;
-  }
-
-  .kpi-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-color-primary, #303133);
-    line-height: 1.3;
-  }
-
-  .kpi-sub {
-    font-size: 12px;
-    color: var(--text-color-secondary, #909399);
-    margin-top: 6px;
-  }
-
-  &.receivable {
-    border-top: 3px solid #E6A23C;
-    .kpi-value { color: #E6A23C; }
-  }
-
-  &.payable {
-    border-top: 3px solid #F56C6C;
-    .kpi-value { color: #F56C6C; }
-  }
-
-  &.net {
-    border-top: 3px solid var(--el-color-primary);
-    .positive { color: #67C23A; }
-    .negative { color: #F56C6C; }
-  }
-
-  &.count {
-    border-top: 3px solid #67C23A;
-    .kpi-value { color: #67C23A; }
-  }
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-color-primary, #303133);
-    }
-
-    .data-count {
-      font-size: 13px;
-      color: var(--text-color-secondary, #909399);
-    }
-  }
-}
-
-.search-bar {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.el-table {
-  flex: 1;
-}
-
-.text-income { color: #67C23A; font-weight: 600; }
-.text-expense { color: #F56C6C; font-weight: 600; }
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
-  margin-top: 16px;
-}
-
-@media (max-width: 1200px) {
-  .kpi-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .kpi-row {
-    grid-template-columns: 1fr;
-  }
-}
+<style scoped>
+.page { padding: var(--cs-space-4); display: flex; flex-direction: column; gap: var(--cs-space-4); }
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--cs-space-4); }
+.kpi-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); padding: var(--cs-space-5); text-align: center; border-top-width: 3px; }
+.kpi-label { font-size: 13px; color: var(--cs-muted); margin-bottom: var(--cs-space-2); }
+.kpi-value { font-size: 22px; font-weight: 700; color: var(--cs-text); line-height: 1.3; font-variant-numeric: tabular-nums; }
+.kpi-sub { font-size: 12px; color: var(--cs-muted); margin-top: 6px; }
+.kpi-card.receivable { border-top-color: var(--cs-warning); }
+.kpi-card.receivable .kpi-value { color: var(--cs-warning); }
+.kpi-card.payable { border-top-color: var(--cs-danger); }
+.kpi-card.payable .kpi-value { color: var(--cs-danger); }
+.kpi-card.net { border-top-color: var(--cs-primary); }
+.kpi-card.net .positive { color: var(--cs-success); }
+.kpi-card.net .negative { color: var(--cs-danger); }
+.kpi-card.count { border-top-color: var(--cs-success); }
+.kpi-card.count .kpi-value { color: var(--cs-success); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.pager { display: flex; justify-content: flex-end; padding: var(--cs-space-3) var(--cs-space-5); border-top: 1px solid var(--cs-border); }
+.num { font-variant-numeric: tabular-nums; }
+.text-income { color: var(--cs-success); font-weight: 600; }
+.text-expense { color: var(--cs-danger); font-weight: 600; }
+.remark { color: var(--cs-muted); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+@media (max-width: 1200px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px) { .kpi-row { grid-template-columns: 1fr; } }
 </style>

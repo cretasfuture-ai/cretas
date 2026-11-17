@@ -69,7 +69,9 @@ export type SourceBusinessType =
   | 'WASTAGE_RECORD'
   | 'PAYROLL_RECORD'
   | 'PL_CLOSING'
-  | 'COST_CARRYOVER';
+  | 'COST_CARRYOVER'
+  | 'INVENTORY_STOCKTAKE'
+  | 'SEMI_FINISHED_STOCKTAKE';
 
 export interface Voucher {
   id: string;
@@ -302,6 +304,8 @@ export const SOURCE_BUSINESS_TYPE_LABEL: Record<SourceBusinessType, string> = {
   PAYROLL_RECORD: '工资发放',
   PL_CLOSING: '损益结转',
   COST_CARRYOVER: '成本结转',
+  INVENTORY_STOCKTAKE: '库存盘点',
+  SEMI_FINISHED_STOCKTAKE: '半成品盘点',
 };
 
 export const AUXILIARY_TYPE_LABEL: Record<AuxiliaryType, string> = {
