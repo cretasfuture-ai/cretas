@@ -64,10 +64,13 @@ class ReplyTextPriceSweepContractTest {
     static {
         // ── CHECKED: 本 PR 起按字段判定 ──
         reviewed("crm/CustomerPriceMemoryQueryTool.java", Verdict.CHECKED, "unitPrice");
+        reviewed("finance/FinanceLiquidityTool.java", Verdict.CHECKED, "流动资产 / 流动负债 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceRoaTool.java", Verdict.CHECKED, "净利润 / 总资产 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceRoeTool.java", Verdict.CHECKED, "净利润 / 股东权益 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
+        reviewed("finance/FinanceSolvencyTool.java", Verdict.CHECKED, "总负债 / 总资产 (价格查看 FinanceFigures.AMOUNT_SPEC; 见 FinanceRatioAmountVisibilityContractTest)");
         reviewed("foodsafety/RecallLossEstimateTool.java", Verdict.CHECKED, "totalEstimatedLoss…brandLoss");
         reviewed("foodsafety/RegulatoryReportGenerateTool.java", Verdict.CHECKED, "estimatedLoss");
         reviewed("hr/ExpenseRequestQueryTool.java", Verdict.CHECKED, "total / 类别 / amount");
-        reviewed("indicator/IndicatorQueryTool.java", Verdict.CHECKED, "金额 / 毛利 / 财务类指标 currentValue / trend.value 与文字里的数值+单位 (replyShowsPriceSpec VALUE_SPEC; 扫描命中的是货币单位判定正则, 见 IndicatorMoneyValueVisibilityContractTest)");
         reviewed("pricing/PricingTestCalculateTool.java", Verdict.CHECKED, "originalPrice / finalPrice / totalDiscount");
         reviewed("purchase/ProcurementOrderCreateTool.java", Verdict.CHECKED, "estimatedUnitPrice / estimatedBudget");
         reviewed("report/ReportBomCostRankTool.java", Verdict.CHECKED, "totalCost (无权限整份金额与图不出, 见 ReportBomCostRankToolContractTest)");
@@ -91,15 +94,18 @@ class ReplyTextPriceSweepContractTest {
         reviewed("rules/RuleTestEvaluateTool.java", Verdict.NOT_PRICE_SENSITIVE, "工具描述里的规则举例");
     }
 
-    /** 非注释行里, 字符串字面量含 ¥ / 万元 / 以「元」结尾。 */
-    private static final Pattern MONEY_LITERAL = Pattern.compile("\"[^\"\\n]*(?:¥|万元)|元\"");
+    /**
+     * 非注释行里, 字符串字面量含 ¥ / 万元 / 以「元」结尾 —— 含「元」后跟转义换行再收尾 ({@code "元\n"}):
+     * 以前只认 {@code 元"}, 多行回复里逐行写「350元\n」的工具 (ROE / ROA / 流动比率 …) 不在分母里 (#1806 复审 L4)。
+     */
+    private static final Pattern MONEY_LITERAL = Pattern.compile("\"[^\"\\n]*(?:¥|万元)|元(?:\\\\n)*\"");
     private static final Pattern CHECK_CALL = Pattern.compile("replyShows(?:Amounts?|PriceSpec)\\(");
 
     @Test
     void everyToolThatWritesMoneyIntoTextIsReviewed() throws IOException {
         Set<String> found = moneyTextFiles();
         // Dedicated restaurant implementations were removed; keep an exact non-vacuous denominator.
-        assertThat(found).as("工厂目录金额文本审计分母").hasSize(24);
+        assertThat(found).as("工厂目录金额文本审计分母").hasSize(27);
 
         Set<String> unreviewed = new TreeSet<>(found);
         unreviewed.removeAll(REVIEWED.keySet());

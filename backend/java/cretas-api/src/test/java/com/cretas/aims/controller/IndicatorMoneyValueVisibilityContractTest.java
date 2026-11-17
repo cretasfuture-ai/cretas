@@ -2,10 +2,12 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.impl.indicator.IndicatorAlertTool;
 import com.cretas.aims.ai.tool.impl.indicator.IndicatorComparisonTool;
 import com.cretas.aims.ai.tool.impl.indicator.IndicatorQueryTool;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.indicator.Indicator;
+import com.cretas.aims.entity.indicator.IndicatorThreshold;
 import com.cretas.aims.entity.indicator.IndicatorVersion;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.indicator.IndicatorComputationRepository;
@@ -129,7 +131,21 @@ class IndicatorMoneyValueVisibilityContractTest {
         v.setPeriodEnd(LocalDate.of(2026, 11, 16));
         v.setComputedAt(LocalDateTime.of(2026, 11, 16, 8, 0));
         v.setComputeSource("REAL_BUSINESS:" + i.getCode());
+        v.setAlertLevel("GREEN");
         return v;
+    }
+
+    /** 种子里 RESTAURANT_DISH_MARGIN 的 GREEN ≥ 60: 看到 GREEN 就知道毛利率 ≥ 60% (复审 M3)。 */
+    private static IndicatorThreshold greenAtLeast(Indicator i, String value) {
+        IndicatorThreshold t = new IndicatorThreshold();
+        t.setId("thr-" + i.getId());
+        t.setFactoryId(F);
+        t.setIndicatorId(i.getId());
+        t.setAlertLevel("GREEN");
+        t.setOperator("GTE");
+        t.setThresholdValue(new BigDecimal(value));
+        t.setIsActive(true);
+        return t;
     }
 
     private final IndicatorRepository indicators = mock(IndicatorRepository.class);
@@ -143,9 +159,12 @@ class IndicatorMoneyValueVisibilityContractTest {
             IndicatorVersion v = version(i, i.getLastValue());
             when(versions.findFirstByIndicatorIdOrderByComputedAtDesc(i.getId())).thenReturn(Optional.of(v));
             when(versions.findInWindow(eq(i.getId()), any(), any())).thenReturn(List.of(v));
-            when(thresholds.findByIndicatorIdAndIsActiveTrue(i.getId())).thenReturn(List.of());
+            when(versions.findByIndicatorIdOrderByComputedAtDesc(eq(i.getId()), any()))
+                    .thenReturn(new org.springframework.data.domain.PageImpl<>(List.of(v)));
+            when(thresholds.findByIndicatorIdAndIsActiveTrue(i.getId())).thenReturn(List.of(greenAtLeast(i, "60")));
         }
         when(indicators.findByFactoryIdAndIsActiveTrueOrderByDisplayOrderAscNameAsc(F)).thenReturn(List.of(MARGIN, YIELD));
+        when(indicators.findActiveByFactoryId(F)).thenReturn(List.of(MARGIN, YIELD));
     }
 
     private <T extends AbstractBusinessTool> T wire(T tool, PriceFieldResponseAdvice priceView) {
@@ -215,6 +234,18 @@ class IndicatorMoneyValueVisibilityContractTest {
             assertEquals("HIDDEN", data.get("valueStatus").asText());
             assertTrue(out.get("message").asText().contains("按当前账号的权限配置不显示"), out.get("message").asText());
         }
+        // 告警级别与阈值会夹出数值区间: 与数值同进同出
+        assertEquals(account.sees, data.has("breachLevel"), "breachLevel: " + data);
+        assertEquals(account.sees, data.has("latestAlertLevel"), "latestAlertLevel: " + data);
+        assertEquals(account.sees, data.has("thresholds"), "thresholds: " + data);
+        assertEquals(account.sees, data.get("trend").get(0).has("alertLevel"), "trend[0].alertLevel: " + data);
+        if (account.sees) {
+            assertEquals("GREEN", data.get("breachLevel").asText());
+            assertEquals(0, new BigDecimal("60").compareTo(data.get("thresholds").get(0).get("value").decimalValue()));
+        } else {
+            assertFalse(data.toString().contains("GREEN"), "任何位置都不该带出告警级别: " + data);
+            assertFalse(out.get("message").asText().contains("GREEN"), out.get("message").asText());
+        }
     }
 
     @ParameterizedTest(name = "{0}")
@@ -227,6 +258,39 @@ class IndicatorMoneyValueVisibilityContractTest {
         assertMarginValue(account.sees, byCode(rows, "code", "RESTAURANT_DISH_MARGIN"), "currentValue", "margin row");
         JsonNode yield = byCode(rows, "code", "FACTORY_YIELD_RATE");
         assertEquals(0, new BigDecimal("96.5").compareTo(yield.get("currentValue").decimalValue()), yield.toString());
+        // 告警级别与数值同进同出; 被藏的行不参与「最严重」(否则 worstIndicator 把级别带出去)
+        JsonNode margin = byCode(rows, "code", "RESTAURANT_DISH_MARGIN");
+        assertEquals(account.sees, margin.has("breachLevel"), margin.toString());
+        assertEquals(account.sees, margin.has("thresholdsCount"), margin.toString());
+        assertEquals("GREEN", yield.get("breachLevel").asText(), "良品率级别照常: " + yield);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Account.class)
+    @DisplayName("AI indicator_alert: 毛利率当前值与级别按口径; 看不到就不进告警名单, 只报有几个不显示")
+    void indicatorAlertGatesMoneyRows(Account account) throws Exception {
+        JsonNode out = execute(wire(new IndicatorAlertTool(), priceViewFor(account.held)), "{\"min_severity\":\"ALL\"}");
+        JsonNode data = out.get("data");
+        JsonNode breached = data.get("breached");
+        boolean marginListed = false;
+        for (JsonNode row : breached) {
+            if ("RESTAURANT_DISH_MARGIN".equals(row.path("code").asText())) {
+                marginListed = true;
+                assertEquals(0, new BigDecimal("62.5").compareTo(row.get("currentValue").decimalValue()), row.toString());
+            }
+        }
+        assertEquals(account.sees, marginListed, "毛利率在不在告警名单: " + data);
+        byCode(breached, "code", "FACTORY_YIELD_RATE");
+        String message = out.get("message").asText();
+        assertFalse(message.contains("62.5"), message);
+        if (account.sees) {
+            assertFalse(data.has("valueHidden"), data.toString());
+        } else {
+            assertEquals(1, data.get("valueHiddenCount").asInt(), data.toString());
+            assertEquals("RESTAURANT_DISH_MARGIN", data.get("valueHidden").get(0).asText());
+            assertTrue(message.contains("按当前账号的权限配置不显示"), message);
+            assertFalse(data.toString().contains("62.5"), data.toString());
+        }
     }
 
     @ParameterizedTest(name = "{0}")
@@ -241,6 +305,14 @@ class IndicatorMoneyValueVisibilityContractTest {
         JsonNode detail = webGet(mvc, "/ind-rdm");
         assertMarginValue(account.sees, detail, "lastValue", "detail");
         assertMarginValue(account.sees, detail.get("latestVersion"), "value", "detail.latestVersion");
+        // 阈值与版本告警级别会夹出数值区间, 与数值同进同出 (复审 M3)
+        assertEquals(account.sees, detail.has("thresholds"), "detail.thresholds: " + detail);
+        assertEquals(account.sees, detail.get("latestVersion").has("alertLevel"), "latestVersion.alertLevel: " + detail);
+        assertEquals(account.sees, webGet(mvc, "/ind-rdm/versions").get("content").get(0).has("alertLevel"), "versions alertLevel");
+        assertEquals(account.sees, webGet(mvc, "/ind-rdm/measurements").get(0).has("alertLevel"), "measurements alertLevel");
+        JsonNode yieldDetail = webGet(mvc, "/ind-fyr");
+        assertEquals(1, yieldDetail.get("thresholds").size(), "良品率阈值照常: " + yieldDetail);
+        assertEquals("GREEN", yieldDetail.get("latestVersion").get("alertLevel").asText());
 
         assertMarginValue(account.sees, webGet(mvc, "/ind-rdm/measurements").get(0), "value", "measurements[0]");
         assertTrue(webGet(mvc, "/ind-fyr/measurements").get(0).has("value"), "良品率趋势照常给");
@@ -276,6 +348,7 @@ class IndicatorMoneyValueVisibilityContractTest {
     @DisplayName("哪些指标算金额 / 毛利 / 财务类: 只看指标已有的分类 / 单位 / 编码 / 名称")
     void classifiesSeededIndicators() {
         record Row(String code, String name, String category, String unit, boolean money) { }
+        assertTrue(IndicatorQueryTool.carriesMoneyFigure(null), "认不出 ⇒ 当金额 (fail closed)");
         List<Row> rows = List.of(
                 new Row("RESTAURANT_DISH_MARGIN", "菜品毛利率", "RESTAURANT", "%", true),
                 new Row("RESTAURANT_AVG_ORDER_VALUE", "平均客单价", "RESTAURANT", "元", true),
@@ -286,7 +359,23 @@ class IndicatorMoneyValueVisibilityContractTest {
                 new Row("RESTAURANT_TABLE_TURNOVER", "翻台率", "RESTAURANT", "次/天", false),
                 new Row("B2B_ORDER_COUNT_MTD", "本月订单数", "FACTORY", "单", false),
                 new Row("QUALITY_REJECT_RATE", "质检不合格率", "QUALITY", "%", false),
-                new Row("FOOD_SAFETY_HACCP_VIOLATIONS", "HACCP 违规次数", "FOOD_SAFETY", "次", false));
+                new Row("FOOD_SAFETY_HACCP_VIOLATIONS", "HACCP 违规次数", "FOOD_SAFETY", "次", false),
+                new Row("RESTAURANT_WASTAGE_RATE", "食材损耗率", "RESTAURANT", "%", false),
+                new Row("INVENTORY_TURNOVER_RATE", "库存周转率", "INVENTORY", "次/月", false),
+                new Row("FACTORY_PLAN_ACHIEVE_RATE", "生产计划达成率", "FACTORY", "%", false),
+                new Row("RESTAURANT_FOOD_SAFETY_PASS", "食品安全检查通过率", "RESTAURANT", "%", false),
+                // 管理员自建 (POST /canvas-indicators 编码 / 名称 / 单位自由填): 复审 M4 列出的漏判形状
+                new Row("AVG_TICKET_PRICE", "客单价", "RESTAURANT", null, true),
+                new Row("CUSTOM_KPI_1", "客单价", "RESTAURANT", "", true),
+                new Row("CUSTOM_KPI_2", "本周退款金额", "SALES", null, true),
+                new Row("ORDER_AMOUNT_TOTAL", "订单汇总", "FACTORY", null, true),
+                new Row("STORE_GMV", "门店流水", "RESTAURANT", null, true),
+                new Row("CUSTOM_KPI_3", "出口额", "SALES", "USD", true),
+                new Row("CUSTOM_KPI_4", "出口额", "SALES", "$", true),
+                new Row("CUSTOM_KPI_5", "月度流水", "FACTORY", "万", true),
+                new Row("CUSTOM_KPI_6", "人均工资", "FACTORY", null, true),
+                new Row("CUSTOM_KPI_7", "应收账款余额", "FACTORY", null, true),
+                new Row("CUSTOM_KPI_8", "原料单价", "FACTORY", "元/kg", true));
         for (Row r : rows) {
             Indicator i = indicator("x", r.code(), r.name(), r.category(), r.unit(), "1");
             assertEquals(r.money(), IndicatorQueryTool.carriesMoneyFigure(i), r.toString());

@@ -47,6 +47,11 @@ public class IndicatorTreeNodeResponse {
     @Schema(description = "同级排序顺序")
     private Integer displayOrder;
 
+    /** 金额类指标且调用者没有价格查看口径时为 true (前端显示「无权限查看」, 不是「待配置」); 可见时不出现。 */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    @Schema(description = "数值按权限配置不显示 (仅为 true 时出现)")
+    private Boolean valueHidden;
+
     @Schema(description = "子节点列表")
     @Builder.Default
     private List<IndicatorTreeNodeResponse> children = new ArrayList<>();

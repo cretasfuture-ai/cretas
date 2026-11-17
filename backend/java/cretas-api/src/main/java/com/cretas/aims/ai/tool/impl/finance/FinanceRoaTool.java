@@ -61,18 +61,19 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         Map<String, Object> result = new HashMap<>();
         result.put("ratioType", "ROA");
         result.put("period", startDate + " 至 " + endDate);
-        // 与 ROE / 杜邦 / web GET /reports/finance 同一组金额键、同一个判定
-        if (!replyShowsAmounts(context, FinanceRoeTool.FINANCE_AMOUNT_KEYS)) {
+        // 金额与比率只看价格查看 (与 ROE / 杜邦 / #1801 利润表同口径, 不另要 finance:read_write)
+        if (!replyShowsPriceSpec(context, FinanceFigures.AMOUNT_SPEC)) {
             result.put("amountsHidden", true);
-            result.put("message", FinanceRoeTool.amountsHiddenMessage("资产收益率(ROA)", "净利润、总资产"));
+            result.put("message", FinanceFigures.amountsHiddenMessage("资产收益率(ROA)", "净利润、总资产"));
             return result;
         }
 
         Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
         result.put("financeData", finance);
+        FinanceFigures.sameVisibilityForAmounts(finance, List.of("netProfit", "totalAssets", "roa"));
 
-        Double netProfit = FinanceRoeTool.figure(finance, "totalProfit");
-        Double totalAssets = FinanceRoeTool.figure(finance, "totalAssets");
+        Double netProfit = FinanceFigures.netProfit(finance);
+        Double totalAssets = FinanceFigures.figure(finance, "totalAssets");
         List<String> missing = new ArrayList<>();
         if (netProfit == null) missing.add("净利润");
         if (totalAssets == null || totalAssets <= 0) missing.add("总资产");
@@ -83,9 +84,9 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         if (!missing.isEmpty()) {
             result.put("dataSufficient", false);
             result.put("missingFields", missing);
-            sb.append("资产收益率(ROA): ").append(FinanceRoeTool.INSUFFICIENT).append("（缺少")
+            sb.append("资产收益率(ROA): ").append(FinanceFigures.INSUFFICIENT).append("（缺少")
                     .append(String.join("、", missing)).append("）");
-            FinanceRoeTool.appendProfitReason(sb, finance);
+            FinanceFigures.appendProfitReason(sb, finance);
             result.put("message", sb.toString());
             return result;
         }
@@ -93,6 +94,8 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         double roa = (netProfit / totalAssets) * 100;
         result.put("dataSufficient", true);
         result.put("roa", roa);
+        result.put("netProfit", netProfit);
+        result.put("totalAssets", totalAssets);
         sb.append("资产收益率(ROA): ").append(String.format("%.2f%%", roa)).append("\n");
         sb.append("  净利润: ").append(String.format("%.0f", netProfit)).append("元\n");
         sb.append("  总资产: ").append(String.format("%.0f", totalAssets)).append("元\n");

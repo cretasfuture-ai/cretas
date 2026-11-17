@@ -58,40 +58,51 @@ public class FinanceLiquidityTool extends AbstractBusinessTool {
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
-        double currentAssets = extractDouble(finance, "currentAssets", 1);
-        double currentLiabilities = extractDouble(finance, "currentLiabilities", 1);
-
-        double currentRatio = currentLiabilities > 0 ? currentAssets / currentLiabilities : 0;
-        double quickRatio = currentLiabilities > 0 ? (currentAssets * 0.7) / currentLiabilities : 0;
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", "LIQUIDITY");
         result.put("period", startDate + " 至 " + endDate);
-        result.put("currentRatio", currentRatio);
-        result.put("quickRatio", quickRatio);
+        // 金额与比率只看价格查看 (与 ROE / ROA / 杜邦 / #1801 利润表同口径)
+        if (!replyShowsPriceSpec(context, FinanceFigures.AMOUNT_SPEC)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceFigures.amountsHiddenMessage("流动比率 / 速动比率", "流动资产、流动负债"));
+            return result;
+        }
+
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+        FinanceFigures.sameVisibilityForAmounts(finance, List.of("currentAssets", "currentLiabilities", "currentRatio", "quickRatio"));
+
+        Double currentAssets = FinanceFigures.figure(finance, "currentAssets");
+        Double currentLiabilities = FinanceFigures.positive(FinanceFigures.figure(finance, "currentLiabilities"));
+        Double inventory = FinanceFigures.figure(finance, "inventory");
+        // 缺数 ⇒ 不出比率 (以前缺了按 1 算; 速动比率按流动资产 × 0.7 估, 都是假数)
+        Double currentRatio = currentAssets != null && currentLiabilities != null
+                ? currentAssets / currentLiabilities : null;
+        Double quickRatio = currentAssets != null && currentLiabilities != null && inventory != null
+                ? (currentAssets - inventory) / currentLiabilities : null;
+        List<String> missing = new ArrayList<>();
+        if (currentAssets == null) missing.add("流动资产");
+        if (currentLiabilities == null) missing.add("流动负债");
+        if (inventory == null) missing.add("存货");
+
+        if (currentRatio != null) result.put("currentRatio", currentRatio);
+        if (quickRatio != null) result.put("quickRatio", quickRatio);
+        result.put("dataSufficient", missing.isEmpty());
+        if (!missing.isEmpty()) result.put("missingFields", missing);
 
         StringBuilder sb = new StringBuilder();
         sb.append("流动比率分析\n");
         sb.append("分析周期: ").append(startDate).append(" ~ ").append(endDate).append("\n\n");
-        sb.append("流动比率: ").append(String.format("%.2f", currentRatio)).append("\n");
-        sb.append("速动比率: ").append(String.format("%.2f", quickRatio)).append("\n");
-        sb.append("  流动资产: ").append(String.format("%.0f", currentAssets)).append("元\n");
-        sb.append("  流动负债: ").append(String.format("%.0f", currentLiabilities)).append("元\n");
+        sb.append("流动比率: ").append(currentRatio != null ? String.format("%.2f", currentRatio) : FinanceFigures.INSUFFICIENT).append("\n");
+        sb.append("速动比率: ").append(quickRatio != null ? String.format("%.2f", quickRatio) : FinanceFigures.INSUFFICIENT).append("\n");
+        if (currentAssets != null) sb.append("  流动资产: ").append(String.format("%.0f", currentAssets)).append("元\n");
+        if (currentLiabilities != null) sb.append("  流动负债: ").append(String.format("%.0f", currentLiabilities)).append("元\n");
+        if (!missing.isEmpty()) sb.append("  缺少: ").append(String.join("、", missing)).append("\n");
         sb.append("  健康参考: 流动比率 > 2.0, 速动比率 > 1.0");
 
         result.put("message", sb.toString());
 
         return result;
-    }
-
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
 
     /** spec §8.2 只读查询, 无副作用 */

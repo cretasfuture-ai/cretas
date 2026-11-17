@@ -1,7 +1,6 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.config.RequireRole;
-import com.cretas.aims.ai.tool.impl.indicator.IndicatorQueryTool;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.entity.indicator.IndicatorComputation;
@@ -17,8 +16,8 @@ import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
-import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.service.indicator.IndicatorValueVisibility;
 import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
@@ -145,12 +144,16 @@ public class CanvasIndicatorsController {
         boolean showValue = valueVisibility().test(i);
         Map<String, Object> data = serializeIndicator(i, showValue);
 
-        // Thresholds
-        List<Map<String, Object>> thresholds = new ArrayList<>();
-        for (IndicatorThreshold t : thresholdRepository.findByIndicatorIdAndIsActiveTrue(id)) {
-            thresholds.add(serializeThreshold(t));
+        // Thresholds —— 阈值会夹出数值区间, 与数值同进同出
+        if (showValue) {
+            List<Map<String, Object>> thresholds = new ArrayList<>();
+            for (IndicatorThreshold t : thresholdRepository.findByIndicatorIdAndIsActiveTrue(id)) {
+                thresholds.add(serializeThreshold(t));
+            }
+            data.put("thresholds", thresholds);
+        } else {
+            data.put("thresholdsHidden", true);
         }
-        data.put("thresholds", thresholds);
 
         // Computations
         List<Map<String, Object>> comps = new ArrayList<>();
@@ -657,40 +660,11 @@ public class CanvasIndicatorsController {
     // ============================================================
 
     /**
-     * 金额 / 毛利 / 财务类指标 ({@link IndicatorQueryTool#carriesMoneyFigure}) 的数值, 这个请求的调用者看不看得到:
-     * 价格查看口径 ({@link IndicatorQueryTool#VALUE_SPEC}), 经 {@link PriceFieldResponseAdvice#showsSpec} 按权限配置判,
-     * 与 AI 的 indicator_query / indicator_comparison 同一个判定 (Steve: 不写死角色)。其余指标照旧给。
-     * 一个请求只问一次; 查不到调用者 / 平台代看 / 判定器没装配 ⇒ 看不到 (fail closed, 与响应层同)。
+     * 金额类指标的数值 / 告警级别 / 阈值, 这个请求的调用者看不看得到 —— {@link IndicatorValueVisibility} (与 /indicators、
+     * AI 指标工具同一判定; 一个请求只问一次; 查不到调用者 / 平台代看 / 判定器没装配 ⇒ 看不到)。其余指标照旧给。
      */
     private java.util.function.Predicate<Indicator> valueVisibility() {
-        Boolean[] sees = new Boolean[1];
-        return i -> {
-            if (!IndicatorQueryTool.carriesMoneyFigure(i)) {
-                return true;
-            }
-            if (sees[0] == null) {
-                sees[0] = callerSeesMoneyValues();
-            }
-            return sees[0];
-        };
-    }
-
-    private boolean callerSeesMoneyValues() {
-        if (priceView == null) {
-            return false;
-        }
-        if (!(org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
-                instanceof org.springframework.web.context.request.ServletRequestAttributes attrs)) {
-            return false;
-        }
-        jakarta.servlet.http.HttpServletRequest request = attrs.getRequest();
-        if (PlatformFactoryViewReadPolicy.isView(request)) {
-            return false;
-        }
-        Object raw = request.getAttribute("userId");
-        Long userId = raw instanceof Number n ? Long.valueOf(n.longValue())
-                : raw instanceof String str && str.matches("\\d+") ? Long.valueOf(str) : null;
-        return userId != null && priceView.showsSpec(userId, IndicatorQueryTool.VALUE_SPEC);
+        return IndicatorValueVisibility.forCurrentRequest(priceView);
     }
 
     private Map<String, Object> serializeIndicator(Indicator i, boolean showValue) {
@@ -748,13 +722,14 @@ public class CanvasIndicatorsController {
         m.put("indicatorId", v.getIndicatorId());
         m.put("periodStart", v.getPeriodStart());
         m.put("periodEnd", v.getPeriodEnd());
+        m.put("computedAt", v.getComputedAt());
         if (showValue) {
             m.put("value", v.getValue());
+            m.put("alertLevel", v.getAlertLevel());
         } else {
+            // 告警级别会夹出数值区间, 与数值同进同出
             m.put("valueHidden", true);
         }
-        m.put("computedAt", v.getComputedAt());
-        m.put("alertLevel", v.getAlertLevel());
         m.put("computeSource", v.getComputeSource());
         return m;
     }

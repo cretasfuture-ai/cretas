@@ -2,9 +2,11 @@ package com.cretas.aims.ai.tool.impl.finance;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.impl.report.ReportFinanceRatioTool;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
+import com.cretas.aims.security.PriceSensitiveContext;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.ReportService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -34,43 +36,71 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * ROE / ROA / 杜邦 三个工具: 回复文字放在结果的 message 键, 以前无条件写出净利润、股东权益、总资产和由它们算出的比率,
- * 出口 maskedViewFor 不遮 message; 缺数时把收入 / 成本当 0、资产 / 权益当 1, 算出假的比率
- * (getFinanceReport 根本不给 totalAssets / totalEquity ⇒ 线上 ROE = 净利润 / 1 × 100%)。
+ * 财务比率工具 (finance_roe / finance_roa / finance_dupont / finance_liquidity / finance_solvency 与同意图的
+ * report_finance_ratio): 以前无条件写出净利润、股东权益、总资产、流动资产等金额和由它们算出的比率; 缺数时收入 / 成本当 0、
+ * 资产 / 权益 / 负债当 1, 算出假的比率 (getFinanceReport 根本不给 totalAssets / totalEquity ⇒ 线上 ROE = 净利润 / 1 × 100%)。
  *
- * <p>现在: 金额与比率按 web GET /reports/finance 上同名字段的同一个遮挡判定 (真实 {@link PriceFieldResponseAdvice},
- * 权限只来自一组权限码, 不看角色名) 同进同出; 缺数 ⇒「数据不足，无法计算」, 不出数。全部走工具真实的 execute 入口。
+ * <p>现在 (与 #1801 利润表、指标中心同口径, Steve 11-17): 金额与比率只看价格查看权限 ({@link FinanceFigures#AMOUNT_SPEC},
+ * 经真实 {@link PriceFieldResponseAdvice#showsSpec}, 权限只来自一组权限码, 不看角色名), 不另要 finance:read_write;
+ * 过门后出口 (maskedViewFor) 也不按键名剥。缺数 ⇒「数据不足，无法计算」, 不出数。全部走工具真实的 execute 入口,
+ * 与 ToolDispatchService 直调分支一样记录按口径可见的键再经出口遮挡。
  */
-@DisplayName("ROE / ROA / 杜邦: 金额与比率和 web 财务报表同一判定; 缺数不出假值")
+@DisplayName("财务比率: 金额与比率按价格查看口径 (不另要财务读写); 缺数不出假值")
 class FinanceRatioAmountVisibilityContractTest {
 
     private static final long USER_ID = 7L;
     private final ObjectMapper mapper = new ObjectMapper();
 
-    /** 财务读写 + 价格查看: web /reports/finance 上营收 / 成本 / 利润都看得到。 */
+    /** 价格查看 + 财务读写。 */
     private static final Set<String> FINANCE_MANAGER = Set.of("finance:read_write", "procurement:price:view", "analytics:read");
-    /** 财务查看 + 价格查看 (过得了工具门槛), 但没有财务读写: web 上营收 / 成本 / 利润被遮 (Rule 2b)。 */
-    private static final Set<String> FINANCE_READ_ONLY = Set.of("finance:read", "procurement:price:view", "analytics:read");
+    /** 价格查看 + 财务查看, 没有财务读写: 按 #1801 口径看得到 (以前本 PR 把它钉成看不到)。 */
+    private static final Set<String> PRICE_VIEW_NO_RW = Set.of("finance:read", "procurement:price:view", "analytics:read");
+    /** 财务读写, 没有价格查看: 看不到 (以前 Rule 2b 判定下看得到, 与指标侧不一致)。 */
+    private static final Set<String> RW_NO_PRICE_VIEW = Set.of("finance:read_write", "finance:read", "analytics:read");
 
     enum Ratio {
-        ROE(FinanceRoeTool::new, "roe", "净资产收益率(ROE)"),
-        ROA(FinanceRoaTool::new, "roa", "资产收益率(ROA)"),
-        DUPONT(FinanceDupontTool::new, "dupontROE", "ROE");
+        ROE(FinanceRoeTool::new, "{}", "roe", "净资产收益率(ROE)", "20.00%", "350元"),
+        ROA(FinanceRoaTool::new, "{}", "roa", "资产收益率(ROA)", "7.00%", "350元"),
+        DUPONT(FinanceDupontTool::new, "{}", "dupontROE", "ROE", "20.00%", null),
+        LIQUIDITY(FinanceLiquidityTool::new, "{}", "currentRatio", "流动比率", "2.50", "3000元"),
+        SOLVENCY(FinanceSolvencyTool::new, "{}", "debtRatio", "资产负债率", "65.00%", "3250元"),
+        REPORT_ROE(ReportFinanceRatioTool::new, "{\"ratioType\":\"ROE\"}", "roe", "净资产收益率", null, null),
+        REPORT_LIQUIDITY(ReportFinanceRatioTool::new, "{\"ratioType\":\"LIQUIDITY\"}", "currentRatio", "流动比率", null, null),
+        REPORT_SOLVENCY(ReportFinanceRatioTool::new, "{\"ratioType\":\"SOLVENCY\"}", "debtRatio", "偿债能力", null, null);
 
         final Supplier<AbstractBusinessTool> factory;
+        final String args;
         final String ratioKey;
         final String label;
+        /** 文字里的比率 (null = 该工具文字不写数, 只在字段里)。 */
+        final String ratioText;
+        /** 文字里的一个金额 (null = 不写金额)。 */
+        final String amountText;
 
-        Ratio(Supplier<AbstractBusinessTool> factory, String ratioKey, String label) {
+        Ratio(Supplier<AbstractBusinessTool> factory, String args, String ratioKey, String label,
+              String ratioText, String amountText) {
             this.factory = factory;
+            this.args = args;
             this.ratioKey = ratioKey;
             this.label = label;
+            this.ratioText = ratioText;
+            this.amountText = amountText;
+        }
+
+        /** 完整报表下的比率值: ROE 350/1750, ROA 350/5000, 杜邦 = ROE, 流动 3000/1200, 资产负债 3250/5000。 */
+        double expected() {
+            return switch (this) {
+                case ROE, DUPONT, REPORT_ROE -> 20.0;
+                case ROA -> 7.0;
+                case LIQUIDITY, REPORT_LIQUIDITY -> 2.5;
+                case SOLVENCY, REPORT_SOLVENCY -> 65.0;
+            };
         }
     }
 
     @AfterEach
     void clearPriceContext() {
-        com.cretas.aims.security.PriceSensitiveContext.clear();
+        PriceSensitiveContext.clear();
     }
 
     private static PriceFieldResponseAdvice priceViewFor(Set<String> held) {
@@ -92,15 +122,19 @@ class FinanceRatioAmountVisibilityContractTest {
         return advice;
     }
 
-    /** 收入 1000, 成本 650 ⇒ 利润 350, 利润率 35%; 总资产 5000, 股东权益 1750。 */
+    /** 收入 1000, 成本 650 ⇒ 利润 350; 总资产 5000, 股东权益 1750, 总负债 3250; 流动资产 3000, 流动负债 1200, 存货 600。 */
     private static Map<String, Object> completeReport() {
         Map<String, Object> m = realShapeReport();
         m.put("totalAssets", new BigDecimal("5000"));
         m.put("totalEquity", new BigDecimal("1750"));
+        m.put("totalLiabilities", new BigDecimal("3250"));
+        m.put("currentAssets", new BigDecimal("3000"));
+        m.put("currentLiabilities", new BigDecimal("1200"));
+        m.put("inventory", new BigDecimal("600"));
         return m;
     }
 
-    /** ProductionReportServiceImpl#getFinanceReport 线上的样子: 没有 totalAssets / totalEquity。 */
+    /** ProductionReportServiceImpl#getFinanceReport 线上的样子: 没有资产 / 权益 / 负债。 */
     private static Map<String, Object> realShapeReport() {
         Map<String, Object> m = new HashMap<>();
         m.put("totalRevenue", new BigDecimal("1000"));
@@ -111,61 +145,76 @@ class FinanceRatioAmountVisibilityContractTest {
         return m;
     }
 
-    private record Run(String message, Map<String, Object> data, ReportService reports) { }
+    /** raw = 工具原始结果; exit = 经出口 maskedViewFor (生产直调分支同样先记录按口径可见的键再遮)。 */
+    private record Run(String message, Map<String, Object> raw, Map<String, Object> exit, ReportService reports) { }
 
     @SuppressWarnings("unchecked")
     private Run run(Ratio ratio, Set<String> held, Map<String, Object> report) throws Exception {
         AbstractBusinessTool tool = ratio.factory.get();
         ReportService reports = mock(ReportService.class);
         when(reports.getFinanceReport(eq("F1"), any(), any())).thenReturn(report);
+        PriceFieldResponseAdvice priceView = priceViewFor(held);
         ReflectionTestUtils.setField(tool, "reportService", reports);
         ReflectionTestUtils.setField(tool, "objectMapper", mapper);
-        ReflectionTestUtils.setField(tool, "priceView", priceViewFor(held));
-        JsonNode r = mapper.readTree(tool.execute(ToolCall.of("t1", tool.getToolName(), "{}"),
-                Map.of("factoryId", "F1", "userId", USER_ID)));
+        ReflectionTestUtils.setField(tool, "priceView", priceView);
+        PriceSensitiveContext.startRecordingVisible();
+        String json;
+        Set<String> visibleKeys;
+        try {
+            json = tool.execute(ToolCall.of("t1", tool.getToolName(), ratio.args), Map.of("factoryId", "F1", "userId", USER_ID));
+        } finally {
+            visibleKeys = PriceSensitiveContext.stopRecordingVisible();
+        }
+        JsonNode r = mapper.readTree(json);
         assertTrue(r.get("success").asBoolean(), r.toString());
         Map<String, Object> data = mapper.convertValue(r.get("data"), Map.class);
-        return new Run((String) data.get("message"), data, reports);
+        PriceSensitiveContext.approveKeys(data, visibleKeys);
+        Map<String, Object> exit = (Map<String, Object>) priceView.maskedViewFor(data, USER_ID);
+        return new Run((String) data.get("message"), data, exit, reports);
     }
 
-    /** web 对照: 同一个 advice 遮 GET /reports/finance 那一份 Map 后, 营收 / 利润还在不在。 */
-    @SuppressWarnings("unchecked")
-    private static boolean webShowsProfit(Set<String> held) {
-        Map<String, Object> view = (Map<String, Object>) priceViewFor(held).maskedViewFor(realShapeReport(), USER_ID);
-        assertEquals(view.get("totalRevenue") != null, view.get("totalProfit") != null, "web 上营收与利润应同进同出: " + view);
-        return view.get("totalProfit") != null;
-    }
-
-    @ParameterizedTest(name = "{0}")
-    @EnumSource(Ratio.class)
-    @DisplayName("有财务读写: 数据齐 ⇒ 比率与金额都给, 与 web 一致 (阳性对照)")
-    void financeManagerSeesRatioAndAmounts(Ratio ratio) throws Exception {
-        assertTrue(webShowsProfit(FINANCE_MANAGER));
-        Run run = run(ratio, FINANCE_MANAGER, completeReport());
-        assertEquals(Boolean.TRUE, run.data().get("dataSufficient"), run.data().toString());
-        assertTrue(run.data().get(ratio.ratioKey) instanceof Number, run.data().toString());
-        // ROE = 350 / 1750 = 20%; ROA = 350 / 5000 = 7%; 杜邦 = 35% × 0.2 × 2.857 = 20%
-        String expected = switch (ratio) {
-            case ROE, DUPONT -> "20.00%";
-            case ROA -> "7.00%";
-        };
-        assertEquals(Double.parseDouble(expected.replace("%", "")),
-                ((Number) run.data().get(ratio.ratioKey)).doubleValue(), 1e-6, run.data().toString());
-        assertTrue(run.message().contains(expected), run.message());
-        if (ratio != Ratio.DUPONT) {
-            assertTrue(run.message().contains("350元"), run.message());
+    private static void assertSees(Ratio ratio, Run run) {
+        assertEquals(Boolean.TRUE, run.raw().get("dataSufficient"), run.raw().toString());
+        for (Map<String, Object> view : List.of(run.raw(), run.exit())) {
+            assertTrue(view.get(ratio.ratioKey) instanceof Number, ratio.ratioKey + " 应给: " + view);
+            assertEquals(ratio.expected(), ((Number) view.get(ratio.ratioKey)).doubleValue(), 1e-6, view.toString());
+        }
+        // 出口不按键名 (Rule 2b) 剥掉报表金额: 有价格查看就给 (与 #1801 利润表同)
+        @SuppressWarnings("unchecked")
+        Map<String, Object> financeData = (Map<String, Object>) run.exit().get("financeData");
+        assertNotNull(financeData.get("totalRevenue"), "出口剥掉了营收: " + financeData);
+        if (ratio.ratioText != null) {
+            assertTrue(run.message().contains(ratio.ratioText), run.message());
+        }
+        if (ratio.amountText != null) {
+            assertTrue(run.message().contains(ratio.amountText), run.message());
         }
     }
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Ratio.class)
-    @DisplayName("只有财务查看 (web 上利润被遮): 比率与金额都不给 —— 字段不存在、不是 0, 文字里没有数, 也不查库")
-    void financeReadOnlyGetsNoRatioNoAmounts(Ratio ratio) throws Exception {
-        assertFalse(webShowsProfit(FINANCE_READ_ONLY), "前提: web 对这个账号遮利润");
-        Run run = run(ratio, FINANCE_READ_ONLY, completeReport());
-        assertEquals(Boolean.TRUE, run.data().get("amountsHidden"), run.data().toString());
-        for (String key : List.of("roe", "roa", "dupontROE", "profitMargin", "assetTurnover", "equityMultiplier", "financeData")) {
-            assertFalse(run.data().containsKey(key), key + " 不该出现 (也不是 0): " + run.data());
+    @DisplayName("价格查看 + 财务读写: 数据齐 ⇒ 比率与金额都给 (阳性对照)")
+    void financeManagerSeesRatioAndAmounts(Ratio ratio) throws Exception {
+        assertSees(ratio, run(ratio, FINANCE_MANAGER, completeReport()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Ratio.class)
+    @DisplayName("有价格查看、没有财务读写: 看得到 (口径只看价格查看), 出口也不剥")
+    void priceViewWithoutReadWriteSees(Ratio ratio) throws Exception {
+        assertSees(ratio, run(ratio, PRICE_VIEW_NO_RW, completeReport()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Ratio.class)
+    @DisplayName("有财务读写、没有价格查看: 比率与金额都不给 —— 字段不存在、不是 0, 文字里没有数, 也不查库")
+    void readWriteWithoutPriceViewSeesNothing(Ratio ratio) throws Exception {
+        Run run = run(ratio, RW_NO_PRICE_VIEW, completeReport());
+        assertEquals(Boolean.TRUE, run.raw().get("amountsHidden"), run.raw().toString());
+        for (String key : List.of("roe", "roa", "dupontROE", "profitMargin", "assetTurnover", "equityMultiplier",
+                "currentRatio", "quickRatio", "debtRatio", "equityRatio", "netProfit", "totalAssets", "totalEquity",
+                "totalLiabilities", "currentAssets", "currentLiabilities", "financeData")) {
+            assertFalse(run.raw().containsKey(key), key + " 不该出现 (也不是 0): " + run.raw());
         }
         String m = run.message();
         assertTrue(m.contains("按当前账号的权限配置不显示"), m);
@@ -175,21 +224,22 @@ class FinanceRatioAmountVisibilityContractTest {
 
     @ParameterizedTest(name = "{0}")
     @EnumSource(Ratio.class)
-    @DisplayName("线上真实形状 (没有总资产 / 股东权益): 说「数据不足，无法计算」, 不出比率 (以前按 1 算出假值)")
+    @DisplayName("线上真实形状 (没有资产 / 权益 / 负债): 说「数据不足，无法计算」, 不出比率 (以前按 1 算出假值)")
     void missingBalanceSheetFiguresMeansNoRatio(Ratio ratio) throws Exception {
         Run run = run(ratio, FINANCE_MANAGER, realShapeReport());
-        assertEquals(Boolean.FALSE, run.data().get("dataSufficient"), run.data().toString());
-        assertFalse(run.data().containsKey(ratio.ratioKey), "缺数时比率键不该出现 (也不是 0): " + run.data());
-        assertTrue(run.message().contains(ratio.label + ": 数据不足，无法计算"), run.message());
-        // 旧代码: 权益 / 资产缺 ⇒ 按 1 算 ⇒ 350 / 1 × 100 = 35000%
-        assertFalse(run.message().contains("35000"), run.message());
+        assertEquals(Boolean.FALSE, run.raw().get("dataSufficient"), run.raw().toString());
+        assertFalse(run.raw().containsKey(ratio.ratioKey), "缺数时比率键不该出现 (也不是 0): " + run.raw());
+        assertTrue(run.message().contains(FinanceFigures.INSUFFICIENT), run.message());
+        // 旧代码: 权益 / 资产缺 ⇒ 按 1 算 ⇒ 350 / 1 × 100 = 35000%; 流动 / 负债按 1 ⇒ 1.00 / 100.00%
+        assertFalse(run.message().contains("35000") || run.message().contains("100.00%")
+                || run.message().contains("流动比率: 1.00"), run.message());
         @SuppressWarnings("unchecked")
-        List<String> missing = (List<String>) run.data().get("missingFields");
-        assertTrue(missing.contains(ratio == Ratio.ROE ? "股东权益" : "总资产"), String.valueOf(missing));
+        List<String> missing = (List<String>) run.raw().get("missingFields");
+        assertFalse(missing == null || missing.isEmpty(), run.raw().toString());
     }
 
     @ParameterizedTest(name = "{0}")
-    @EnumSource(Ratio.class)
+    @EnumSource(value = Ratio.class, names = {"ROE", "ROA", "DUPONT", "REPORT_ROE"})
     @DisplayName("成本没录 (报表利润为 null): 不把成本当 0 算成「全额都是利润」, 说数据不足")
     void unknownCostMeansNoProfitAndNoRatio(Ratio ratio) throws Exception {
         Map<String, Object> report = completeReport();
@@ -197,12 +247,24 @@ class FinanceRatioAmountVisibilityContractTest {
         report.put("totalProfit", null);
         report.put("profitMargin", null);
         Run run = run(ratio, FINANCE_MANAGER, report);
-        assertFalse(run.data().containsKey(ratio.ratioKey), run.data().toString());
+        assertFalse(run.raw().containsKey(ratio.ratioKey), run.raw().toString());
         @SuppressWarnings("unchecked")
-        List<String> missing = (List<String>) run.data().get("missingFields");
+        List<String> missing = (List<String>) run.raw().get("missingFields");
         assertTrue(missing.contains("净利润"), String.valueOf(missing));
         // 旧代码: 成本按 0 ⇒ 利润 = 营收 1000 ⇒ ROE 57.14% / ROA 20.00%
         assertFalse(run.message().contains("57.14") || run.message().contains("1000元"), run.message());
+    }
+
+    @Test
+    @DisplayName("流动比率缺存货: 流动比率照给, 速动比率说数据不足 (以前按流动资产 × 0.7 估)")
+    void quickRatioNeedsInventory() throws Exception {
+        Map<String, Object> report = completeReport();
+        report.remove("inventory");
+        Run run = run(Ratio.LIQUIDITY, FINANCE_MANAGER, report);
+        assertEquals(2.5, ((Number) run.raw().get("currentRatio")).doubleValue(), 1e-6);
+        assertFalse(run.raw().containsKey("quickRatio"), run.raw().toString());
+        assertTrue(run.message().contains("速动比率: " + FinanceFigures.INSUFFICIENT), run.message());
+        assertFalse(run.message().contains("1.75"), "3000 × 0.7 / 1200 的估算不该出现: " + run.message());
     }
 
     @Test
@@ -211,22 +273,17 @@ class FinanceRatioAmountVisibilityContractTest {
         Map<String, Object> report = completeReport();
         report.remove("totalEquity");
         Run run = run(Ratio.DUPONT, FINANCE_MANAGER, report);
-        assertEquals(35.0, ((Number) run.data().get("profitMargin")).doubleValue(), 1e-6);
-        assertEquals(0.2, ((Number) run.data().get("assetTurnover")).doubleValue(), 1e-6);
-        assertFalse(run.data().containsKey("equityMultiplier"), run.data().toString());
-        assertFalse(run.data().containsKey("dupontROE"), run.data().toString());
+        assertEquals(35.0, ((Number) run.raw().get("profitMargin")).doubleValue(), 1e-6);
+        assertEquals(0.2, ((Number) run.raw().get("assetTurnover")).doubleValue(), 1e-6);
+        assertFalse(run.raw().containsKey("equityMultiplier"), run.raw().toString());
+        assertFalse(run.raw().containsKey("dupontROE"), run.raw().toString());
         assertTrue(run.message().contains("权益乘数: 数据不足，无法计算"), run.message());
     }
 
     @Test
-    @DisplayName("三个工具问的是同一组金额键, 且就是 web /reports/finance 会遮的那几个利润 / 营收键")
-    void sameAmountKeysAsWebFinanceReport() {
-        assertEquals(List.of("totalRevenue", "totalCost", "totalProfit", "profitMargin", "totalAssets", "totalEquity"),
-                List.of(FinanceRoeTool.FINANCE_AMOUNT_KEYS));
-        PriceFieldResponseAdvice readOnly = priceViewFor(FINANCE_READ_ONLY);
-        for (String key : List.of("totalRevenue", "totalCost", "totalProfit", "profitMargin")) {
-            assertFalse(readOnly.showsKey(USER_ID, key), key);
-            assertTrue(priceViewFor(FINANCE_MANAGER).showsKey(USER_ID, key), key);
-        }
+    @DisplayName("口径就是价格查看, 与指标中心 / #1801 利润表同一个常量")
+    void amountSpecIsPriceView() {
+        assertEquals(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION, FinanceFigures.AMOUNT_SPEC);
+        assertEquals(com.cretas.aims.service.indicator.IndicatorValueVisibility.VALUE_SPEC, FinanceFigures.AMOUNT_SPEC);
     }
 }

@@ -248,6 +248,17 @@ public class PriceFieldResponseAdvice implements ResponseBodyAdvice<Object> {
             "(?i)^(.*ToPriceFactor|.*_to_price_factor|.*ConversionFactor|.*_conversion_factor|.*换算系数)$"
     );
 
+    /**
+     * 这个名字 (键名 / 指标编码 / 指标名称) 看起来是不是金额: 与 Rule 2b 同一张词表 ({@link #FINANCE_COLUMN_KEY_REGEX}),
+     * 去掉单位换算系数 ({@link #NON_MONEY_KEY_REGEX})。给不是 Map 键、但同样要按金额判定的地方复用 (例如指标中心按指标定义
+     * 判断数值是不是金额), 免得各自维护一张更窄的词表。null ⇒ false。
+     */
+    public static boolean looksLikeMoneyKey(String name) {
+        return name != null
+                && FINANCE_COLUMN_KEY_REGEX.matcher(name).matches()
+                && !NON_MONEY_KEY_REGEX.matcher(name).matches();
+    }
+
     /** Path segments where dynamic Map keys (e.g. department name) are the column header for numeric price data. */
     private static final Pattern DYNAMIC_KEY_PRICE_CONTAINER_REGEX = Pattern.compile(
             "(?i)^(trendComparison|trendChart|crosstab|pivot)$"

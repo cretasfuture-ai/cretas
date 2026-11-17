@@ -58,41 +58,49 @@ public class FinanceSolvencyTool extends AbstractBusinessTool {
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
-        double totalAssets = extractDouble(finance, "totalAssets", 1);
-        double totalLiabilities = extractDouble(finance, "totalLiabilities", 1);
-        double totalEquity = extractDouble(finance, "totalEquity", 1);
-
-        double debtRatio = totalAssets > 0 ? (totalLiabilities / totalAssets) * 100 : 0;
-        double equityRatio = totalAssets > 0 ? (totalEquity / totalAssets) * 100 : 0;
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", "SOLVENCY");
         result.put("period", startDate + " 至 " + endDate);
-        result.put("debtRatio", debtRatio);
-        result.put("equityRatio", equityRatio);
+        // 金额与比率只看价格查看 (与 ROE / ROA / 杜邦 / #1801 利润表同口径)
+        if (!replyShowsPriceSpec(context, FinanceFigures.AMOUNT_SPEC)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceFigures.amountsHiddenMessage("资产负债率 / 权益比率", "总负债、总资产、股东权益"));
+            return result;
+        }
+
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+        FinanceFigures.sameVisibilityForAmounts(finance, List.of("totalLiabilities", "totalAssets", "debtRatio", "equityRatio"));
+
+        Double totalAssets = FinanceFigures.positive(FinanceFigures.figure(finance, "totalAssets"));
+        Double totalLiabilities = FinanceFigures.figure(finance, "totalLiabilities");
+        Double totalEquity = FinanceFigures.figure(finance, "totalEquity");
+        // 缺数 ⇒ 不出比率 (以前缺了按 1 算, 资产负债率 = 1 / 1 = 100% 这类假数)
+        Double debtRatio = totalAssets != null && totalLiabilities != null ? (totalLiabilities / totalAssets) * 100 : null;
+        Double equityRatio = totalAssets != null && totalEquity != null ? (totalEquity / totalAssets) * 100 : null;
+        List<String> missing = new ArrayList<>();
+        if (totalAssets == null) missing.add("总资产");
+        if (totalLiabilities == null) missing.add("总负债");
+        if (totalEquity == null) missing.add("股东权益");
+
+        if (debtRatio != null) result.put("debtRatio", debtRatio);
+        if (equityRatio != null) result.put("equityRatio", equityRatio);
+        result.put("dataSufficient", missing.isEmpty());
+        if (!missing.isEmpty()) result.put("missingFields", missing);
 
         StringBuilder sb = new StringBuilder();
         sb.append("偿债能力分析\n");
         sb.append("分析周期: ").append(startDate).append(" ~ ").append(endDate).append("\n\n");
-        sb.append("资产负债率: ").append(String.format("%.2f%%", debtRatio)).append("\n");
-        sb.append("权益比率: ").append(String.format("%.2f%%", equityRatio)).append("\n");
-        sb.append("  总负债: ").append(String.format("%.0f", totalLiabilities)).append("元\n");
-        sb.append("  总资产: ").append(String.format("%.0f", totalAssets)).append("元\n");
+        sb.append("资产负债率: ").append(debtRatio != null ? String.format("%.2f%%", debtRatio) : FinanceFigures.INSUFFICIENT).append("\n");
+        sb.append("权益比率: ").append(equityRatio != null ? String.format("%.2f%%", equityRatio) : FinanceFigures.INSUFFICIENT).append("\n");
+        if (totalLiabilities != null) sb.append("  总负债: ").append(String.format("%.0f", totalLiabilities)).append("元\n");
+        if (totalAssets != null) sb.append("  总资产: ").append(String.format("%.0f", totalAssets)).append("元\n");
+        if (!missing.isEmpty()) sb.append("  缺少: ").append(String.join("、", missing)).append("\n");
         sb.append("  健康参考: 资产负债率 < 60%");
 
         result.put("message", sb.toString());
 
         return result;
-    }
-
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
 
     /** spec §8.2 只读查询, 无副作用 */
