@@ -99,7 +99,10 @@ class ToolParameterDescriptionLeakScanTest {
         ScanResult r = scanRegisteredTools();
         long optionalCamel = r.findings().stream()
                 .filter(f -> f.rule().equals("驼峰字段名") && !f.required()).count();
-        assertThat(optionalCamel).as("可选参数描述里的驼峰字段名条数 (修了就把 OPTIONAL_CAMEL_CEILING 往下调)")
+        List<Finding> optional = r.findings().stream()
+                .filter(f -> f.rule().equals("驼峰字段名") && !f.required()).toList();
+        assertThat(optionalCamel).as("可选参数描述里的驼峰字段名条数 (修了就把 OPTIONAL_CAMEL_CEILING 往下调); 全部命中: %s",
+                        String.join(" | ", optional.stream().map(Finding::toString).toList()))
                 .isLessThanOrEqualTo(OPTIONAL_CAMEL_CEILING);
     }
 
