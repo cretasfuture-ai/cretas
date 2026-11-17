@@ -167,6 +167,13 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.UserRepository userRepository;
 
+    /** 退货按发货价冲减且 ≠ 订单价时给财务的提醒 (与待补账告警同一通道)。required=false 兼容单测构造。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.notification.NotificationService notificationService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.transaction.PlatformTransactionManager transactionManager;
+
     public ReturnOrderServiceImpl(ReturnOrderRepository returnOrderRepository,
                                    ReturnOrderItemRepository returnOrderItemRepository,
                                    ArApService arApService,
@@ -199,12 +206,15 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             throw salesReturnEvidenceError("销售实物退货必须关联源销售订单",
                     "请提供真实销售订单号后再登记实物退货；无货退款不需要入库证据");
         }
+        Map<Integer, ShippedLinePrice> shippedPriceByLine = new HashMap<>();
         if (physicalSalesReturn) {
-            sourceBatchIdsByLine = deriveOrValidateSalesReturnBatchEvidence(factoryId, request, null);
+            sourceBatchIdsByLine = deriveOrValidateSalesReturnBatchEvidence(
+                    factoryId, request, null, shippedPriceByLine);
         }
-        // 缺价回填(Steve 2026-11-17): 销售退货行单价为 null(前端缺价/被遮时不再发 0, #1796)
-        // → 按来源销售订单行单价回填; 找不到来源订单行价直接拒绝创建, ⛔ 不落 0。
-        List<BigDecimal> resolvedUnitPrices = resolveReturnUnitPrices(factoryId, returnType, request);
+        // 缺价回填(Steve 2026-11-17 / 11-18 改 B): 销售退货行单价为 null(前端缺价/被遮时不再发 0, #1796)
+        // → 先按批次定位到的本厂原发货行单价, 发货行无价再按来源订单行单价; 都没有直接拒绝创建, ⛔ 不落 0。
+        List<ResolvedReturnPrice> resolvedUnitPrices =
+                resolveReturnUnitPrices(factoryId, returnType, request, shippedPriceByLine);
 
         // Round 11 T2: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
@@ -262,10 +272,11 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             item.setProductTypeId(itemDTO.getProductTypeId());
             item.setItemName(itemDTO.getItemName());
             item.setQuantity(itemDTO.getQuantity());
-            BigDecimal unitPrice = resolvedUnitPrices.get(itemIndex);
+            ResolvedReturnPrice resolvedPrice = resolvedUnitPrices.get(itemIndex);
+            BigDecimal unitPrice = resolvedPrice.unitPrice();
             item.setUnitPrice(unitPrice);
             item.setBatchNumber(itemDTO.getBatchNumber());
-            item.setReason(itemDTO.getReason());
+            item.setReason(withPriceSourceNote(itemDTO.getReason(), resolvedPrice));
 
             BigDecimal lineAmount = BigDecimal.ZERO;
             if (unitPrice != null && itemDTO.getQuantity() != null) {
@@ -328,6 +339,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             log.warn("Publish ReturnOrderCreatedEvent failed for {}: {}", order.getId(), e.getMessage());
         }
 
+        remindFinanceOfShipmentPriceDifferences(factoryId, order, request.getItems(), resolvedUnitPrices);
+
         log.info("创建退货单: factoryId={}, returnNumber={}, type={}, items={}",
                 factoryId, returnNumber, returnType, items.size());
         return order;
@@ -341,6 +354,17 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
      */
     private Map<Integer, String> deriveOrValidateSalesReturnBatchEvidence(
             String factoryId, CreateReturnOrderRequest request, String excludedReturnOrderId) {
+        return deriveOrValidateSalesReturnBatchEvidence(factoryId, request, excludedReturnOrderId, null);
+    }
+
+    /**
+     * @param shippedPriceOut 非 null 时, 按退货行序号写入该行定位到的本厂原发货行单价证据 (M2 / Steve 2026-11-18:
+     *                        退货缺价先按发货价冲减, 应收是按发货行价挂的)。与批次定位同一条路径、同一组 allocation,
+     *                        ⛔ 不另写一份批次→发货行定位。
+     */
+    private Map<Integer, String> deriveOrValidateSalesReturnBatchEvidence(
+            String factoryId, CreateReturnOrderRequest request, String excludedReturnOrderId,
+            Map<Integer, ShippedLinePrice> shippedPriceOut) {
         if (salesOrderItemRepository == null || salesDeliveryRecordRepository == null
                 || salesDeliveryItemBatchAllocationRepository == null || finishedGoodsBatchRepository == null) {
             throw salesReturnEvidenceError("当前销售订单缺少可核验的实际发货批次记录",
@@ -371,14 +395,17 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                         "请按实际发货批次分别登记退货，并先拆分相同 SKU 的订单行");
             }
             SalesOrderItem orderLine = matchingLines.get(0);
+            Map<String, String> deliveryNumberById = new HashMap<>();
             List<SalesDeliveryItem> shippedItems = shippedItemsForOrderLine(
-                    factoryId, request.getSourceOrderId(), orderLine);
+                    factoryId, request.getSourceOrderId(), orderLine, deliveryNumberById);
             List<SalesDeliveryItemBatchAllocation> allocations = new ArrayList<>();
             Map<String, String> shipmentIdByDeliveryItemId = new HashMap<>();
+            Map<String, SalesDeliveryItem> deliveryItemById = new HashMap<>();
             for (SalesDeliveryItem deliveryItem : shippedItems) {
                 if (deliveryItem == null || deliveryItem.getId() == null) continue;
                 String deliveryItemId = String.valueOf(deliveryItem.getId());
                 shipmentIdByDeliveryItemId.put(deliveryItemId, trimToNull(deliveryItem.getDeliveryRecordId()));
+                deliveryItemById.put(deliveryItemId, deliveryItem);
                 List<SalesDeliveryItemBatchAllocation> rows =
                         salesDeliveryItemBatchAllocationRepository.findByFactoryIdAndDeliveryItemId(
                                 factoryId, deliveryItemId);
@@ -439,6 +466,10 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             }
             List<SalesDeliveryItemBatchAllocation> selected = byBatch.values().iterator().next();
             String batchId = byBatch.keySet().iterator().next();
+            if (shippedPriceOut != null) {
+                shippedPriceOut.put(itemIndex, shippedLinePrice(
+                        selected, deliveryItemById, shipmentIdByDeliveryItemId, deliveryNumberById));
+            }
             evidenceByLine.put(itemIndex, new SalesReturnBatchEvidence(
                     itemIndex, item, orderLine, selected, batchId, requestedShipmentId, candidateShipmentIds));
             sourceBatchIdsToLock.add(batchId);
@@ -560,7 +591,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     }
 
     private List<SalesDeliveryItem> shippedItemsForOrderLine(
-            String factoryId, String sourceOrderId, SalesOrderItem orderLine) {
+            String factoryId, String sourceOrderId, SalesOrderItem orderLine,
+            Map<String, String> deliveryNumberById) {
         List<SalesDeliveryRecord> deliveries = salesDeliveryRecordRepository.findBySalesOrderId(sourceOrderId);
         if (deliveries == null) return List.of();
         List<SalesDeliveryItem> result = new ArrayList<>();
@@ -569,6 +601,10 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                     || !Objects.equals(sourceOrderId, trimToNull(delivery.getSalesOrderId()))
                     || (delivery.getStatus() != SalesDeliveryStatus.SHIPPED
                         && delivery.getStatus() != SalesDeliveryStatus.DELIVERED)) continue;
+            if (deliveryNumberById != null && !isBlank(delivery.getId())) {
+                String number = trimToNull(delivery.getDeliveryNumber());
+                deliveryNumberById.put(trimToNull(delivery.getId()), number != null ? number : trimToNull(delivery.getId()));
+            }
             List<SalesDeliveryItem> items = delivery.getItems() == null
                     ? List.of() : delivery.getItems();
             for (SalesDeliveryItem item : items) {
@@ -1039,22 +1075,81 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     }
 
     /**
-     * 每个退货行最终用的单价(与 request.items 同序)。销售退货行单价为 null 时按来源销售订单行单价回填:
-     * 订单行按 sourceOrderId + factoryId 查, 按 productTypeId 对上; 对上的行价格必须唯一且非空。
-     * 找不到(无来源订单 / 没有该产品的行 / 行没价 / 同产品多行价格不一)一律 422 拒绝创建, ⛔ 不落 0。
-     * 已带单价(含确定的 0)的行与采购退货不动。
+     * 退货行定位到的本厂原发货行单价证据。
+     * unitPrice 非 null: 选中批次对应的发货行价唯一; unitPrice 为 null 且 ambiguity 为 null: 发货行都没价 (退回订单价);
+     * ambiguity 非 null: 同一批次对应多条不同价 (或有价/无价混在一起) 的发货行, 不猜, 拒绝。
      */
-    private List<BigDecimal> resolveReturnUnitPrices(String factoryId, ReturnType returnType,
-                                                     CreateReturnOrderRequest request) {
-        List<BigDecimal> prices = new ArrayList<>();
+    record ShippedLinePrice(BigDecimal unitPrice, String deliveryNumbers, String ambiguity) {
+    }
+
+    /** 退货行最终单价 + 来源 (SHIPMENT 发货价 / ORDER 订单价 / null 请求自带), 与 request.items 同序。 */
+    private record ResolvedReturnPrice(BigDecimal unitPrice, String source, BigDecimal orderPrice,
+                                       String deliveryNumbers) {
+    }
+
+    static final String PRICE_SOURCE_SHIPMENT = "SHIPMENT";
+    static final String PRICE_SOURCE_ORDER = "ORDER";
+
+    private static ShippedLinePrice shippedLinePrice(List<SalesDeliveryItemBatchAllocation> selected,
+                                                     Map<String, SalesDeliveryItem> deliveryItemById,
+                                                     Map<String, String> shipmentIdByDeliveryItemId,
+                                                     Map<String, String> deliveryNumberById) {
+        Set<BigDecimal> prices = new TreeSet<>(); // compareTo 去重: 10 与 10.00 同价
+        boolean lineWithoutPrice = false;
+        Set<String> deliveryNumbers = new TreeSet<>();
+        for (SalesDeliveryItemBatchAllocation allocation : selected) {
+            String deliveryItemId = trimToNull(allocation.getDeliveryItemId());
+            SalesDeliveryItem deliveryItem = deliveryItemById.get(deliveryItemId);
+            if (deliveryItem == null || deliveryItem.getUnitPrice() == null) {
+                lineWithoutPrice = true;
+                continue;
+            }
+            prices.add(deliveryItem.getUnitPrice());
+            String shipmentId = shipmentIdByDeliveryItemId.get(deliveryItemId);
+            if (shipmentId != null) {
+                deliveryNumbers.add(deliveryNumberById.getOrDefault(shipmentId, shipmentId));
+            }
+        }
+        String numbers = deliveryNumbers.isEmpty() ? null : String.join("、", deliveryNumbers);
+        if (prices.isEmpty()) {
+            return new ShippedLinePrice(null, null, null);
+        }
+        // 同一批次落在多条发货行上: 现有数据里没有「每条发货行已退多少」的记录, 退货数量不能如实分到某一条,
+        // 所以价不唯一(含有价/无价混在一起)一律拒绝, 与订单行「同产品多价拒绝」一致。
+        if (prices.size() > 1) {
+            return new ShippedLinePrice(null, numbers,
+                    "这个批次在发货单 " + numbers + " 里按不同单价发过多次，无法确定按哪个发货价冲减");
+        }
+        if (lineWithoutPrice) {
+            return new ShippedLinePrice(null, numbers,
+                    "这个批次对应的发货行有的有单价、有的没有，无法确定按哪个价冲减");
+        }
+        return new ShippedLinePrice(prices.iterator().next(), numbers, null);
+    }
+
+    /**
+     * 每个退货行最终用的单价(与 request.items 同序)。销售退货行单价为 null 时回填, 取价顺序 (Steve 2026-11-18, 复审 M2):
+     * ① 按该行批次定位到的本厂原发货行单价 (应收按发货行价挂, 冲减要对得上); ② 发货行无价 → 来源销售订单行单价
+     * (按 sourceOrderId + factoryId 查, 按 productTypeId 对上, 价格必须唯一且非空); ③ 都没有 → 422 拒绝, ⛔ 不落 0。
+     * 发货价不唯一也拒绝。已带单价(含确定的 0)的行与采购退货不动。
+     */
+    private List<ResolvedReturnPrice> resolveReturnUnitPrices(String factoryId, ReturnType returnType,
+                                                              CreateReturnOrderRequest request,
+                                                              Map<Integer, ShippedLinePrice> shippedPriceByLine) {
+        List<ResolvedReturnPrice> prices = new ArrayList<>();
         List<SalesOrderItem> orderLines = null;
-        for (CreateReturnOrderRequest.ReturnOrderItemDTO dto : request.getItems()) {
+        for (int index = 0; index < request.getItems().size(); index++) {
+            CreateReturnOrderRequest.ReturnOrderItemDTO dto = request.getItems().get(index);
             if (dto.getUnitPrice() != null || returnType != ReturnType.SALES_RETURN) {
-                prices.add(dto.getUnitPrice());
+                prices.add(new ResolvedReturnPrice(dto.getUnitPrice(), null, null, null));
                 continue;
             }
             String label = dto.getItemName() != null ? dto.getItemName()
                     : (dto.getProductTypeId() != null ? dto.getProductTypeId() : "未知产品");
+            ShippedLinePrice shipped = shippedPriceByLine.get(index);
+            if (shipped != null && shipped.ambiguity() != null) {
+                throw missingReturnPrice(label, shipped.ambiguity());
+            }
             if (isBlank(request.getSourceOrderId()) || salesOrderItemRepository == null) {
                 throw missingReturnPrice(label, "该退货没有关联来源销售订单，无法按订单价回填");
             }
@@ -1076,20 +1171,107 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                     candidates.add(line.getUnitPrice()); // TreeSet 按 compareTo 去重: 100 与 100.00 算同价
                 }
             }
+            BigDecimal orderPrice = candidates.size() == 1 && !lineWithoutPrice
+                    ? candidates.iterator().next() : null;
+            if (shipped != null && shipped.unitPrice() != null) {
+                prices.add(new ResolvedReturnPrice(shipped.unitPrice(), PRICE_SOURCE_SHIPMENT, orderPrice,
+                        shipped.deliveryNumbers()));
+                continue;
+            }
             if (candidates.isEmpty()) {
                 throw missingReturnPrice(label, lineWithoutPrice
                         ? "来源销售订单的这一行也没有单价"
                         : "来源销售订单里找不到这个产品的订单行");
             }
-            if (candidates.size() > 1 || lineWithoutPrice) {
+            if (orderPrice == null) {
                 throw missingReturnPrice(label, lineWithoutPrice
                         ? "来源销售订单里这个产品有多个订单行，其中有的行没有单价，无法确定按哪个价回填"
                         : "来源销售订单里这个产品有多个订单行且单价不一致，无法确定按哪个价回填");
             }
-            prices.add(candidates.iterator().next());
+            prices.add(new ResolvedReturnPrice(orderPrice, PRICE_SOURCE_ORDER, orderPrice, null));
         }
         return prices;
     }
+
+    /** 回填行在行原因上追加单价来源, 让退货行能看出用的是发货价还是订单价 (不加列)。 */
+    private static String withPriceSourceNote(String reason, ResolvedReturnPrice resolved) {
+        if (resolved.source() == null) return reason;
+        String note = PRICE_SOURCE_SHIPMENT.equals(resolved.source())
+                ? "[单价来源: 发货价 " + resolved.unitPrice().toPlainString()
+                        + (resolved.deliveryNumbers() != null ? ", 发货单 " + resolved.deliveryNumbers() : "") + "]"
+                : "[单价来源: 订单价 " + resolved.unitPrice().toPlainString() + "]";
+        String base = isBlank(reason) ? "" : reason.trim() + " ";
+        int room = REASON_MAX - note.length() - 1;
+        if (base.length() > room) {
+            base = base.substring(0, Math.max(room, 0)) + "…";
+        }
+        return base + note;
+    }
+
+    private static final int REASON_MAX = 500;
+
+    /**
+     * 数字员工标注 (Steve 2026-11-18): 采用的发货价 ≠ 订单行价时退货照常成功, 另给财务一条提醒。
+     * 复用待补账告警同一通道 ({@link com.cretas.aims.service.notification.NotificationService#notifyRole} →
+     * finance_manager); 退货事务提交后、在独立事务里发, 发送失败只记 log.error, ⛔ 不回滚退货。
+     * 结构化日志 RETURN_PRICE_SOURCE_DIFF 总是写, 通知发不出时它是唯一线索。
+     */
+    private void remindFinanceOfShipmentPriceDifferences(String factoryId, ReturnOrder order,
+                                                         List<CreateReturnOrderRequest.ReturnOrderItemDTO> dtos,
+                                                         List<ResolvedReturnPrice> resolved) {
+        List<String> lines = new ArrayList<>();
+        for (int i = 0; i < resolved.size(); i++) {
+            ResolvedReturnPrice r = resolved.get(i);
+            if (!PRICE_SOURCE_SHIPMENT.equals(r.source()) || r.orderPrice() == null
+                    || r.orderPrice().compareTo(r.unitPrice()) == 0) {
+                continue;
+            }
+            CreateReturnOrderRequest.ReturnOrderItemDTO dto = dtos.get(i);
+            String product = dto.getItemName() != null ? dto.getItemName() : dto.getProductTypeId();
+            lines.add("产品 " + product + " 按发货价 " + r.unitPrice().toPlainString() + " 冲减, 订单价 "
+                    + r.orderPrice().toPlainString() + ", 来源发货单 "
+                    + (r.deliveryNumbers() != null ? r.deliveryNumbers() : "未知"));
+        }
+        if (lines.isEmpty()) return;
+        String title = "[提醒] 销售退货按发货价冲减, 与订单价不同";
+        String body = "退货单 " + order.getReturnNumber() + ": " + String.join("; ", lines)
+                + "。退货已按发货价登记 (应收按发货价挂账), 请核对是否发货时让价。";
+        log.warn("RETURN_PRICE_SOURCE_DIFF factoryId={} returnOrderId={} returnNumber={} detail={}",
+                factoryId, order.getId(), order.getReturnNumber(), lines);
+        Runnable send = () -> {
+            if (notificationService == null) {
+                log.error("退货发货价提醒未发出(通知服务不可用), 仅有日志: returnNumber={}", order.getReturnNumber());
+                return;
+            }
+            try {
+                if (transactionManager != null) {
+                    org.springframework.transaction.support.TransactionTemplate tx =
+                            new org.springframework.transaction.support.TransactionTemplate(transactionManager);
+                    tx.setPropagationBehavior(
+                            org.springframework.transaction.TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+                    tx.executeWithoutResult(s -> notificationService.notifyRole(factoryId, FINANCE_ALERT_ROLE, title, body));
+                } else {
+                    notificationService.notifyRole(factoryId, FINANCE_ALERT_ROLE, title, body);
+                }
+            } catch (RuntimeException e) {
+                log.error("退货发货价提醒发送失败(退货已保存): returnNumber={}", order.getReturnNumber(), e);
+            }
+        };
+        if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override
+                        public void afterCommit() {
+                            send.run();
+                        }
+                    });
+        } else {
+            send.run();
+        }
+    }
+
+    /** 与待补账告警同一接收角色 (ArPostingPendingService.ALERT_ROLE)。 */
+    static final String FINANCE_ALERT_ROLE = "finance_manager";
 
     private static BusinessException missingReturnPrice(String label, String why) {
         return new BusinessException(422, "退货行「" + label + "」缺少单价：" + why + "，不能按 0 登记退货")
