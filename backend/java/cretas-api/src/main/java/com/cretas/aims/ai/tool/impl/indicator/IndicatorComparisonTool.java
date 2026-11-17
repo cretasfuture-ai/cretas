@@ -121,6 +121,9 @@ public class IndicatorComparisonTool extends AbstractBusinessTool {
         List<String> notFound = new ArrayList<>();
         int worstRank = -1;
         String worstCode = null;
+        List<String> valueHidden = new ArrayList<>();
+        // 同 indicator_query / web 指标中心: 金额 / 毛利 / 财务类指标的数值与告警级别按价格查看口径给, 只问一次
+        Boolean seesMoneyValues = null;
 
         for (String code : codes) {
             Optional<Indicator> opt =
@@ -144,9 +147,23 @@ public class IndicatorComparisonTool extends AbstractBusinessTool {
             row.put("name", i.getName());
             row.put("category", i.getCategory());
             row.put("unit", i.getUnit());
+            boolean showValue = !IndicatorQueryTool.carriesMoneyFigure(i);
+            if (!showValue) {
+                if (seesMoneyValues == null) {
+                    seesMoneyValues = replyShowsPriceSpec(context, IndicatorQueryTool.VALUE_SPEC);
+                }
+                showValue = seesMoneyValues;
+            }
+            latestOpt.ifPresent(v -> row.put("computedAt", v.getComputedAt()));
+            if (!showValue) {
+                // 告警级别会夹出数值区间, 与数值同进同出; 也不参与「最严重」(否则 worstIndicator 把级别带出去)
+                row.put("valueHidden", true);
+                valueHidden.add(i.getCode());
+                rows.add(row);
+                continue;
+            }
             row.put("currentValue", currentValue);
             row.put("breachLevel", breachLevel);
-            latestOpt.ifPresent(v -> row.put("computedAt", v.getComputedAt()));
             row.put("thresholdsCount", thresholds.size());
             rows.add(row);
 
@@ -164,11 +181,17 @@ public class IndicatorComparisonTool extends AbstractBusinessTool {
         if (!notFound.isEmpty()) {
             data.put("notFound", notFound);
         }
+        if (!valueHidden.isEmpty()) {
+            data.put("valueHidden", valueHidden);
+        }
         data.put("worstIndicator", worstCode);
         data.put("worstSeverity", worstRank >= 0 ? severityName(worstRank) : null);
 
         String summary = buildSummary(rows.size(), codes.size(),
                 worstCode, worstRank, notFound);
+        if (!valueHidden.isEmpty()) {
+            summary += "；" + String.join(", ", valueHidden) + IndicatorQueryTool.VALUE_HIDDEN_MESSAGE;
+        }
         return buildSimpleResult(summary, data);
     }
 

@@ -58,24 +58,45 @@ public class FinanceRoeTool extends AbstractBusinessTool {
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
-        double totalRevenue = extractDouble(finance, "totalRevenue", 0);
-        double totalCost = extractDouble(finance, "totalCost", 0);
-        double totalEquity = extractDouble(finance, "totalEquity", 1);
-        double netProfit = totalRevenue - totalCost;
-
-        double roe = totalEquity > 0 ? (netProfit / totalEquity) * 100 : 0;
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", "ROE");
         result.put("period", startDate + " 至 " + endDate);
-        result.put("roe", roe);
+        // 金额与比率只看价格查看 (与 #1801 利润表 / 指标中心同口径, 不另要 finance:read_write)
+        if (!replyShowsPriceSpec(context, FinanceFigures.AMOUNT_SPEC)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceFigures.amountsHiddenMessage("净资产收益率(ROE)", "净利润、股东权益"));
+            return result;
+        }
+
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+        FinanceFigures.sameVisibilityForAmounts(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance),
+                List.of("totalEquity", "netProfit", "roe")));
+
+        Double netProfit = FinanceFigures.netProfit(finance);
+        Double totalEquity = FinanceFigures.figure(finance, "totalEquity");
+        List<String> missing = new ArrayList<>();
+        if (netProfit == null) missing.add("净利润");
+        if (totalEquity == null || totalEquity <= 0) missing.add("股东权益");
 
         StringBuilder sb = new StringBuilder();
         sb.append("净资产收益率分析\n");
         sb.append("分析周期: ").append(startDate).append(" ~ ").append(endDate).append("\n\n");
+        if (!missing.isEmpty()) {
+            result.put("dataSufficient", false);
+            result.put("missingFields", missing);
+            sb.append("净资产收益率(ROE): ").append(FinanceFigures.INSUFFICIENT).append("（缺少")
+                    .append(String.join("、", missing)).append("）");
+            FinanceFigures.appendProfitReason(sb, finance);
+            result.put("message", sb.toString());
+            return result;
+        }
+
+        double roe = (netProfit / totalEquity) * 100;
+        result.put("dataSufficient", true);
+        result.put("roe", roe);
+        result.put("netProfit", netProfit);
+        result.put("totalEquity", totalEquity);
         sb.append("净资产收益率(ROE): ").append(String.format("%.2f%%", roe)).append("\n");
         sb.append("  净利润: ").append(String.format("%.0f", netProfit)).append("元\n");
         sb.append("  股东权益: ").append(String.format("%.0f", totalEquity)).append("元\n");
@@ -84,13 +105,6 @@ public class FinanceRoeTool extends AbstractBusinessTool {
         result.put("message", sb.toString());
 
         return result;
-    }
-
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
 
     /** spec §8.2 只读查询, 无副作用 */
