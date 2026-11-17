@@ -13,7 +13,6 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -23,7 +22,8 @@ import static org.mockito.Mockito.when;
 /**
  * #1813 终审 L1: 流式管线的复合句闸只挡了 SSE 短语快捷; 决策层关 / 异常 / 空时回落到旧管线, 以及决策层之前的
  * 「质检 / 趋势」放行入口, 都经 {@code IntentRecognitionPipelineServiceImpl.tryEarlyPhraseMatch} 再匹配一次同一张短语表。
- * 这里配真实短语表, 证明那一处同样不再把带条件 / 多个子问的句子截走, 无条件的短语照旧命中。
+ * 这里配真实短语表, 证明普通入口 (决策层回落) 同样不再把带条件 / 多个子问的句子截走, 无条件的短语照旧命中。
+ * 「质检 / 趋势」放行入口 (expectedCodes 非空) 按 G2 设计不判, 由 IntentRecognitionRoleRepickPermissionTest 等守。
  */
 @DisplayName("旧管线早期短语: 与流式同一道复合句闸")
 class IntentEarlyPhraseCompoundGateContractTest {
@@ -82,16 +82,5 @@ class IntentEarlyPhraseCompoundGateContractTest {
         assertThat(result).isPresent();
         assertThat(result.get().getBestMatch().getIntentCode())
                 .isEqualTo(knowledge.matchPhrase(input, "FACTORY").orElseThrow());
-    }
-
-    @ParameterizedTest(name = "「{0}」")
-    @ValueSource(strings = {"现在牛前腱还有多少库存？"})
-    @DisplayName("放行入口 (expectedCodes 非空) 也过同一道闸")
-    void expectedCodeEntryIsGatedToo(String input) {
-        String code = knowledge.matchSpecificPhrase(input, "FACTORY").orElse(null);
-        assertThat(code).as("前提: 放行入口的短语表也命中这句").isNotNull();
-        Optional<IntentMatchResult> result = ReflectionTestUtils.invokeMethod(pipeline, "tryEarlyPhraseMatch",
-                input, FACTORY, "FACTORY", Set.of(code));
-        assertThat(result).isEmpty();
     }
 }

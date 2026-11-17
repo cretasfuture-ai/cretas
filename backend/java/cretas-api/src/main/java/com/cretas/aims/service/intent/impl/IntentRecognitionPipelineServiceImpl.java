@@ -837,12 +837,16 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 ? knowledgeBase.matchPhrase(phraseInput, domain)
                 : knowledgeBase.matchSpecificPhrase(phraseInput, domain);
         if (match.isEmpty() || (!expectedCodes.isEmpty() && !expectedCodes.contains(match.get()))) return Optional.empty();
-        // #1813 终审 L1: 与流式管线短语快捷同一道复合句闸 —— 决策层关 / 异常 / 空时回落到这里, 以及决策层之前的
-        // 「质检 / 趋势」放行入口, 带条件或多个子问的句子都不再被句中短语截走 (交给后面的识别)。
-        Optional<java.util.Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(phraseInput, domain);
+        // #1813 终审 L1: 与流式管线短语快捷同一道复合句闸 —— 决策层关 / 异常 / 空时回落到这里 (普通入口), 带条件或
+        // 多个子问的句子不再被句中短语截走 (交给后面的识别)。
+        // 「质检 / 趋势」放行入口 (expectedCodes 非空) 不判: 它只认 matchSpecificPhrase 的够具体短语, 设计上就是让
+        // 「查一下最近的质检记录」「这周产量环比怎么样」这类带时间 / 比较说法的句子先于决策层直达
+        // (G2, IntentRecognitionRoleRepickPermissionTest / Quality|ProductionPhrasePythonContractTest 守)。
+        Optional<java.util.Map.Entry<String, String>> hit = expectedCodes.isEmpty()
+                ? knowledgeBase.matchPhraseHit(phraseInput, domain) : Optional.empty();
         String hitPhrase = hit != null && hit.isPresent() && match.get().equals(hit.get().getValue())
                 ? hit.get().getKey() : null;
-        if (!com.cretas.aims.service.execution.PhraseShortcutEligibility.isUnconditionedSimple(
+        if (expectedCodes.isEmpty() && !com.cretas.aims.service.execution.PhraseShortcutEligibility.isUnconditionedSimple(
                 phraseInput, hitPhrase, match.get())) {
             log.info("[EarlyPhrase] 带条件/复合问句不走短语: phrase='{}', intent={}", hitPhrase, match.get());
             return Optional.empty();
