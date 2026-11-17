@@ -2322,17 +2322,25 @@ def _sales_cost_missing_flags(sales_rows: list[dict]) -> list[bool]:
 
     Excel 上传没映射到成本列时写入的是 0 (ExcelDataPersistenceServiceImpl.getDecimalValue
     缺值返回 BigDecimal.ZERO, 写入端修复记为后续), 单看一行分不清「成本真是 0」和「没录」。
-    所以按上传批次 (upload_id) 判断:
+    所以按 (上传批次 upload_id, 订单月份) 判断:
       - 成本为 null → 没录 (明确缺值)
-      - 同一批次里有金额的行成本全是 0/null → 这一批没录成本列, 整批算缺数
-      - 同一批次里有别的行成本有数 → 成本 0 的行是真 0 (赠品/样品/运费), 照常计入
-    没金额 (null 或 0) 的行不需要成本, 不算缺数。upload_id 为空的行视为同一批。
+      - 同一批、同一月里有金额的行成本全是 0/null → 这批这个月没录成本, 算缺数
+      - 同一批、同一月里有别的行成本有数 → 成本 0 的行是真 0 (赠品/样品/运费), 照常计入
+    键里带月份: 否则同一批上传里 10 月有成本、11 月成本格为空 (写成 0) 时, 查 10–11 月
+    会把 11 月当真 0 算出毛利率 100%, 只查 11 月却是「—」, 结果取决于查询区间 (#1809 复审)。
+    没金额 (null 或 0) 的行不需要成本, 不算缺数。upload_id / order_date 为空的行各自归为一组。
+    已知读取端分不出: 同一批、同一月里某个产品的成本整列为空 (写成 0) 而别的产品有成本,
+    这些 0 会被当成真 0 —— 归写入端后续项 (缺值写 NULL)。
     """
+    def _key(r: dict):
+        d = r.get("order_date")
+        return (r.get("upload_id"), _get_period_key(d, "MONTH") if d is not None else None)
+
     batch_has_cost: dict = {}
     for r in sales_rows:
         if not _has_amount(r):
             continue
-        batch = r.get("upload_id")
+        batch = _key(r)
         if not _cost_is_zero_or_null(r):
             batch_has_cost[batch] = True
         else:
@@ -2346,7 +2354,7 @@ def _sales_cost_missing_flags(sales_rows: list[dict]) -> list[bool]:
             flags.append(True)
         else:
             flags.append(_to_decimal(r["cost"]) == Decimal("0")
-                         and not batch_has_cost.get(r.get("upload_id"), False))
+                         and not batch_has_cost.get(_key(r), False))
     return flags
 
 

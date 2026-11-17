@@ -112,29 +112,50 @@ const statCards = computed<Array<{
 ]);
 
 // 成本分解表格
-const costBreakdown = computed(() => [
-  { name: '原材料成本', value: financeData.value.materialCost ?? 0, percentage: getPercentage('material') },
-  { name: '人工成本', value: financeData.value.laborCost ?? 0, percentage: getPercentage('labor') },
-  { name: '设备成本', value: financeData.value.equipmentCost ?? 0, percentage: getPercentage('equipment') },
-  { name: '其他成本', value: financeData.value.otherCost ?? 0, percentage: getPercentage('other') }
-]);
+// 分母 = 总成本 (卡片同一个数); 构成合计小于总成本时, 加一行「未拆分」显示差额,
+// 否则只录了原材料时会显示「原材料占 100%」(#1809 复审 2 轮低2)。
+// 总成本缺数 → 占比一律「—」(复审 H1: 曾 `totalCost ?? 1` 除以 1 → 几百万 %)。
+// 构成合计大于总成本 (构成含只有成本没有收入的期, 卡片总成本不含) → 用构成合计作分母, 不超过 100%。
+const breakdownTotal = computed(() => {
+  const d = financeData.value;
+  return (d.materialCost ?? 0) + (d.laborCost ?? 0) + (d.equipmentCost ?? 0) + (d.otherCost ?? 0);
+});
+const shareDenominator = computed((): number | null => {
+  const total = financeData.value.totalCost;
+  if (total == null) return null;
+  return Math.max(total, breakdownTotal.value);
+});
+const unallocatedCost = computed((): number => {
+  const total = financeData.value.totalCost;
+  return total != null && total > breakdownTotal.value ? total - breakdownTotal.value : 0;
+});
+
+const costBreakdown = computed(() => {
+  const rows = [
+    { name: '原材料成本', value: financeData.value.materialCost ?? 0, percentage: sharePercent(financeData.value.materialCost) },
+    { name: '人工成本', value: financeData.value.laborCost ?? 0, percentage: sharePercent(financeData.value.laborCost) },
+    { name: '设备成本', value: financeData.value.equipmentCost ?? 0, percentage: sharePercent(financeData.value.equipmentCost) },
+    { name: '其他成本', value: financeData.value.otherCost ?? 0, percentage: sharePercent(financeData.value.otherCost) },
+  ];
+  if (unallocatedCost.value > 0) {
+    rows.push({ name: '未拆分', value: unallocatedCost.value, percentage: sharePercent(unallocatedCost.value) });
+  }
+  return rows;
+});
 
 // 当 4 个分类全部为 0 时, 显示空状态而不是 4 行 0.00 / 0.0%
 // (chart audit P0-2 副发现: structureChart.data 真空时 backend 返 [], FE 应区分
 // "0 数据" vs "全分类都是 0" — 前者是数据真空, 后者可能是分类未配置或时间窗内无成本)
-const hasCostBreakdown = computed(() =>
-  costBreakdown.value.some((row) => row.value > 0),
-);
+const hasCostBreakdown = computed(() => breakdownTotal.value > 0);
 
-// 成本构成占比。总成本缺数时一律「—」(PR #1809 复审 H1: 曾 `totalCost ?? 1` 除以 1 → 几百万 %)。
-// 分母用构成本身的合计: 构成来自整个区间的 COST 记录, 卡片总成本只含收入、成本都有的期,
-// 两者可能不同, 用构成合计保证占比加起来是 100%、不会超过 100%。
+function sharePercent(value: number | undefined): string {
+  const denominator = shareDenominator.value;
+  if (denominator == null) return '—';
+  return denominator > 0 ? (((value ?? 0) / denominator) * 100).toFixed(1) : '0.0';
+}
+
 function getPercentage(type: string): string {
-  if (financeData.value.totalCost == null) return '—';
-  const d = financeData.value;
-  const breakdownTotal = (d.materialCost ?? 0) + (d.laborCost ?? 0) + (d.equipmentCost ?? 0) + (d.otherCost ?? 0);
-  const value = d[`${type}Cost` as keyof typeof d] as number ?? 0;
-  return breakdownTotal > 0 ? ((value / breakdownTotal) * 100).toFixed(1) : '0.0';
+  return sharePercent(financeData.value[`${type}Cost` as keyof typeof financeData.value] as number | undefined);
 }
 
 // 财务数据是否为空 (无营收/成本/明细) — 用于默认期落地自动展开判断
@@ -330,6 +351,7 @@ function handleExport() {
     ['  人工成本', String(data.laborCost ?? 0), getPercentage('labor')],
     ['  设备成本', String(data.equipmentCost ?? 0), getPercentage('equipment')],
     ['  其他成本', String(data.otherCost ?? 0), getPercentage('other')],
+    ...(unallocatedCost.value > 0 ? [['  未拆分', String(unallocatedCost.value), sharePercent(unallocatedCost.value)]] : []),
     ['毛利润', orMissing(data.grossProfit), '-'],
     ['利润率(%)', data.profitMargin == null ? '缺数据' : data.profitMargin.toFixed(1), '-']
   ];

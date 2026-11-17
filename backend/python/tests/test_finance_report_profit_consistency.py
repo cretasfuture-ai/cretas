@@ -290,3 +290,17 @@ def test_finance_month_with_cost_but_no_revenue_is_left_out_of_gross():
     oct_, nov = mod._build_profit_chart_from_finance_data(finance["REVENUE"], finance["COST"], "MONTH")
     assert (oct_["revenue"], oct_["cost"], oct_["grossProfit"]) == (10000, 6000, 4000)
     assert (nov["revenue"], nov["cost"], nov["grossProfit"]) == (None, 500, None)
+
+
+def test_same_upload_cost_in_october_does_not_cover_empty_november():
+    """复审 2 轮中1: 同一批上传 10 月有成本、11 月成本格为空 (写成 0)。
+    查 10–11 月与只查 11 月, 11 月都必须是缺数 —— 结果不能取决于查询区间。"""
+    oct_rows = [{"amount": Decimal("10000"), "cost": Decimal("6000"), "order_date": date(2026, 10, 5), "upload_id": 9}]
+    nov_rows = [{"amount": Decimal("5000"), "cost": Decimal("0"), "order_date": date(2026, 11, 5), "upload_id": 9}]
+
+    both = mod._aggregate_profit_by_period_sales(oct_rows + nov_rows, "MONTH")
+    nov_only = mod._aggregate_profit_by_period_sales(nov_rows, "MONTH")
+    assert (both[1]["cost"], both[1]["grossMargin"]) == (None, None)
+    assert (nov_only[0]["cost"], nov_only[0]["grossMargin"]) == (None, None)
+    assert _metrics(oct_rows + nov_rows)["GROSS_MARGIN"]["value"] is None
+    assert _metrics(nov_rows)["GROSS_MARGIN"]["value"] is None

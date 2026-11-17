@@ -362,16 +362,19 @@ describe('reports 财务分析', () => {
     expect(w.findAll('[data-testid="reports-cost-share-missing"]').length).toBe(4);
     expect(w.find('[data-testid="reports-cost-missing"]').exists()).toBe(true);
   });
-  it('cost share stays within 100% when total cost is known', async () => {
+  // 复审 2 轮低2: 只录了原材料 50,000、总成本 120,000 → 原材料占 41.7%, 差额 70,000 进「未拆分」(58.3%),
+  // 不是「原材料占 100%」
+  it('cost share uses total cost as denominator and shows the unallocated remainder', async () => {
     mocks.get.mockResolvedValue({ success: true, data: {
-      metrics: [{ metricCode: 'GROSS_PROFIT', value: 30000 }, { metricCode: 'GROSS_MARGIN', value: 37.5 }],
-      trendChart: { data: [{ period: '2026-10', revenue: 80000, cost: 50000, grossProfit: 30000, grossMargin: 37.5 }] },
-      structureChart: { data: [{ category: '原材料', value: 40000 }, { category: '人工', value: 10000 }] } } });
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: 80000 }, { metricCode: 'GROSS_MARGIN', value: 40 }],
+      trendChart: { data: [{ period: '2026-10', revenue: 200000, cost: 120000, grossProfit: 80000, grossMargin: 40 }] },
+      structureChart: { data: [{ category: '原材料', value: 50000 }] } } });
     const w = mount(ReportsPage, { global: { stubs } });
     await flushPromises();
     const table = w.get('[data-testid="reports-cost-table"]').text();
-    expect(table).toContain('80.0%');
-    expect(table).toContain('20.0%');
+    expect(table).toMatch(/原材料成本\s*50,000\.00\s*41\.7%/);
+    expect(table).toMatch(/未拆分\s*70,000\.00\s*58\.3%/);
+    expect(table).not.toContain('100.0%');
   });
   // 复审低 2 / M2: 只有成本没有收入的期 → 不计入合计, 有提示; 合计 收入 - 成本 == 毛利
   it('a period with cost but no revenue is left out of the totals and explained', async () => {
