@@ -8,6 +8,7 @@ vi.mock('@/api/financeReport', () => ({ getIncomeStatement: api.get }));
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => auth }));
 vi.mock('vue-router', () => ({ useRoute: () => route }));
 vi.mock('element-plus', async original => ({ ...await original<typeof import('element-plus')>(), ElMessage: api.message }));
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 import Panel from '../IncomeStatement.vue';
 
 const link = { factoryId: 'NEW', periodStart: '2026-10-01', periodEnd: '2026-10-31' };
@@ -17,17 +18,7 @@ function result(factory = 'NEW', month = 10, revenue = 720) {
     incomeTax: 0, netProfit: revenue-346.12, grossMarginStatus: 'CALCULABLE', pendingDraftVoucherCount: 0,
     revenues: [], costs: [], expenses: [] } };
 }
-const stubs = {
-  'el-card': { template: '<div><slot name="header" /><slot /></div>' },
-  'el-button': { template: '<button><slot /></button>' },
-  'el-date-picker': { template: '<div />' },
-  'el-alert': { props: ['title'], template: '<div role="alert">{{ title }}<slot name="title" /></div>' },
-  'el-skeleton': { template: '<div>正在读取</div>' },
-  'el-empty': { props: ['description'], template: '<div>{{ description }}</div>' },
-  'el-row': { template: '<div><slot /></div>' }, 'el-col': { template: '<div><slot /></div>' },
-  'el-table': { template: '<div><slot /></div>' }, 'el-table-column': { template: '<div />' },
-  'el-collapse': { template: '<div><slot /></div>' }, 'el-collapse-item': { template: '<div><slot /></div>' },
-};
+const stubs = { ...nuxtUiStubs };
 function page() { return mount(Panel, { global: { stubs } }); }
 beforeEach(() => { auth.factoryId = 'NEW'; route.query = { ...link }; api.get.mockReset(); api.message.mockReset(); api.get.mockResolvedValue(result()); });
 describe('同厂同期间利润表', () => {
