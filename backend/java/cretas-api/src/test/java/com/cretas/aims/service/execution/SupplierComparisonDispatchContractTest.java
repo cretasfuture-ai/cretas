@@ -181,7 +181,7 @@ class SupplierComparisonDispatchContractTest {
         assertThat(request.getIntentCode()).isNull();
         IntentExecuteResponse response;
         try (ActorRequest ignored = actor(factoryActor())) {
-            response = fixture.orchestrator.execute("F006", request, 42L, "purchaser");
+            response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", request, 42L, "purchaser");
         }
         assertThat(response.getIntentCode()).isEqualTo(SupplierComparisonReadIntent.CODE);
         assertUnavailable(response);
@@ -219,7 +219,7 @@ class SupplierComparisonDispatchContractTest {
 
         try (ActorRequest ignored = actor(new AuthenticatedActor(
                 AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin"))) {
-            IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+            IntentExecuteResponse response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006",
                     IntentExecuteRequest.builder().userInput("未知查询").build(),
                     42L, "platform_admin");
             assertThat(response.getStatus()).isEqualTo("NEED_CLARIFICATION");
@@ -276,7 +276,7 @@ class SupplierComparisonDispatchContractTest {
                             .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
                                     Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
                 }
-                IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+                IntentExecuteResponse response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006",
                         IntentExecuteRequest.builder().userInput("查询缺少批次").context("client-spoof".equals(kind) ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006", "userRole", "procurement_manager")) : new HashMap<>()).build(),
                         42L, "procurement_manager");
                 assertThat(response.getStatus()).isEqualTo("UNEXPECTED_DISPATCH");
@@ -311,7 +311,7 @@ class SupplierComparisonDispatchContractTest {
                         .questionType(com.cretas.aims.config.IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
         try (ActorRequest ignored = actor(factoryActor())) {
-            IntentExecuteResponse response = fixture.orchestrator.execute("F006",
+            IntentExecuteResponse response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006",
                     IntentExecuteRequest.builder().userInput("查询缺少批次").build(),
                     42L, "procurement_manager");
             assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
@@ -348,7 +348,7 @@ class SupplierComparisonDispatchContractTest {
                         .setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
                                 Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
             }
-            fixture.orchestrator.execute("F006",
+            OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006",
                     IntentExecuteRequest.builder().userInput("未知查询").context(
                             "client-spoof".equals(kind)
                                     ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006"))
@@ -371,7 +371,7 @@ class SupplierComparisonDispatchContractTest {
                 .thenReturn(com.cretas.aims.dto.intent.IntentMatchResult.builder().build());
         ReflectionTestUtils.setField(fixture.orchestrator, "aiIntentService", recognizer);
         try (ActorRequest ignored = actor(factoryActor())) {
-            fixture.orchestrator.execute("F006", IntentExecuteRequest.builder().userInput("未知查询").sessionId("supplier-session-1").context(new HashMap<>()).build(), 42L, "procurement_manager");
+            OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", IntentExecuteRequest.builder().userInput("未知查询").sessionId("supplier-session-1").context(new HashMap<>()).build(), 42L, "procurement_manager");
         }
         verify(recognizer).recognizeIntentWithConfidence(anyString(), eq("F006"), eq(3),
                 eq(42L), eq("procurement_manager"), eq("supplier-session-1"), any(), any());
@@ -407,7 +407,7 @@ class SupplierComparisonDispatchContractTest {
         IntentExecuteResponse response;
         try (ActorRequest ignored = actor(new AuthenticatedActor(
                 AuthenticatedActorType.PLATFORM_ADMIN, 42L, "F006", "platform_admin"))) {
-            response = fixture.orchestrator.execute("F006",
+            response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006",
                     IntentExecuteRequest.builder().userInput("读取公开工厂资料").build(),
                     42L, "platform_admin");
         }
@@ -471,8 +471,11 @@ class SupplierComparisonDispatchContractTest {
                                     Map.of("type", "FACTORY_USER", "id", 42L, "factoryId", "F006"));
                     IntentExecuteResponse denied = "explicit-api".equals(mode)
                             ? fixture.orchestrator.executeWithExplicitIntent("F006", deniedRequest, 42L, "procurement_manager")
-                            : fixture.orchestrator.execute("F006", deniedRequest, 42L, "procurement_manager");
-                    assertThat(denied.getStatus()).as("%s / %s", kind, mode).isEqualTo("NO_PERMISSION");
+                            : OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", deniedRequest, 42L, "procurement_manager");
+                    // PR-3: 自然语言 (无意图码) 走流式管线, 会话归属不过时回 SESSION_OWNERSHIP_DENIED (App 同一句);
+                    // 带意图码的显式路径仍是编排器的 NO_PERMISSION。两者都在碰会话 / 识别 / 工具之前拒
+                    assertThat(denied.getStatus()).as("%s / %s", kind, mode)
+                            .isEqualTo("natural".equals(mode) ? "SESSION_OWNERSHIP_DENIED" : "NO_PERMISSION");
                 }
                 verifyNoInteractions(memory, sessions, recognizer);
                 verify(read, never()).execute(any(), anyMap());
@@ -839,7 +842,7 @@ class SupplierComparisonDispatchContractTest {
                 .build();
         IntentExecuteResponse naturalResponse;
         try (ActorRequest ignored = actor(currentActor)) {
-            naturalResponse = fixture.orchestrator.execute("F006", natural, 42L, "procurement_manager");
+            naturalResponse = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", natural, 42L, "procurement_manager");
         }
         assertActorDenied(naturalResponse, dispatch, tool);
     }
@@ -958,7 +961,7 @@ class SupplierComparisonDispatchContractTest {
         when(registry.getExecutor("unrelated_read_tool")).thenReturn(Optional.of(other));
         IntentExecuteResponse response;
         try (ActorRequest ignored = actor(factoryActor())) {
-            response = fixture.orchestrator.execute("F006", IntentExecuteRequest.builder()
+            response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", IntentExecuteRequest.builder()
                     .userInput("核对本次往来资料凭据ZQ781").context(new HashMap<>()).build(), 42L, "procurement_manager");
         }
         verify(recognizer).recognizeIntentWithConfidence(anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any());
@@ -967,14 +970,37 @@ class SupplierComparisonDispatchContractTest {
             assertUnavailable(response);
             verify(tool).execute(any(), anyMap());
         } else {
-            assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+            // PR-3: 自然语言走流式管线 —— 本厂没有在用的供应商比价意图时如实「不可用」(NO_MATCH), 权限不够时 NO_PERMISSION;
+            // 两种都不执行任何工具
+            assertThat(response.getStatus()).isEqualTo(
+                    List.of("inactive", "foreign").contains(state) ? "NO_MATCH" : "NO_PERMISSION");
             verify(tool, never()).execute(any(), anyMap());
+            // PR-3 复审 M1: 本厂停用 / 非本厂的比价意图 (NO_MATCH) 与无权限一样, /execute envelope 不许报成功
+            com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> body = executeEnvelope(response);
+            assertThat(body.getSuccess()).as("%s: 没执行, envelope 不报成功", state).isFalse();
+            assertThat(body.getMessage()).isNotBlank().isNotEqualTo("操作成功");
         }
         verifyNoInteractions((SupplierService) ReflectionTestUtils.getField(tool, "supplierService"));
     }
 
+    /** /execute 的 envelope (AIIntentConfigController#envelopeByInnerStatus, 真实方法)。 */
+    @SuppressWarnings("unchecked")
+    private static com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse> executeEnvelope(IntentExecuteResponse r) {
+        com.cretas.aims.controller.AIIntentConfigController controller = org.mockito.Mockito.mock(
+                com.cretas.aims.controller.AIIntentConfigController.class,
+                org.mockito.Mockito.withSettings().defaultAnswer(org.mockito.Mockito.CALLS_REAL_METHODS));
+        org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>> entity =
+                (org.springframework.http.ResponseEntity<com.cretas.aims.dto.common.ApiResponse<IntentExecuteResponse>>)
+                        ReflectionTestUtils.invokeMethod(controller, "envelopeByInnerStatus", r);
+        assertThat(entity).isNotNull();
+        return entity.getBody();
+    }
+
     @ParameterizedTest
-    @ValueSource(strings = {"valid", "missing", "platform", "platform-scoped", "foreign", "different-id", "spoof", "inactive", "permission-denied"})
+    // PR-3: 「valid / inactive」的续轮 (原编排器续轮处理器, 已删) 由流式用例覆盖:
+    // SupplierComparisonStreamingContractTest#publicSlotContinuationCanonicalizesSupplierAuthorityBeforeRealToolDispatch /
+    // #slotSupplierActorDenialPrecedesAnswerCheckAndSessionMutation。这里只留「身份不对时碰会话之前就拒」。
+    @ValueSource(strings = {"missing", "platform", "platform-scoped", "foreign", "different-id", "spoof", "permission-denied"})
     void supplierContinuationIsAdmittedBeforeAnySessionMutation(String kind) throws Exception {
         SupplierPriceComparisonTool tool = spy(realSupplierTool());
         DispatchFixture dispatch = newDispatch(false, Optional.empty());
@@ -1004,7 +1030,7 @@ class SupplierComparisonDispatchContractTest {
         };
         IntentExecuteResponse response;
         try (ActorRequest ignored = actor(current)) {
-            response = fixture.orchestrator.execute("F006", IntentExecuteRequest.builder()
+            response = OrdinaryEntryPipeline.execute(fixture.orchestrator, "F006", IntentExecuteRequest.builder()
                     .userInput("补充资料ZQ781").sessionId("SUPPLIER-SESSION")
                     .context("spoof".equals(kind) ? new HashMap<>(Map.of("userId", 42L, "factoryId", "F006", "role", "platform_admin")) : new HashMap<>())
                     .build(), 42L, "procurement_manager");
@@ -1014,7 +1040,9 @@ class SupplierComparisonDispatchContractTest {
             verify(conversation).continueConversation(anyString(), any(), anyString(), anyString());
             verify(conversation).endConversation(anyString(), any(), anyString(), anyString());
         } else {
-            assertThat(response.getStatus()).isEqualTo("NO_PERMISSION");
+            // PR-3: 流式管线 —— 点名会话但不是绑定本厂本人的账号: 建立会话之前就拒 (SESSION_OWNERSHIP_DENIED)
+            assertThat(response.getStatus()).isEqualTo(
+                    "permission-denied".equals(kind) ? "NO_PERMISSION" : "SESSION_OWNERSHIP_DENIED");
             verify(conversation, never()).continueConversation(anyString(), any(), anyString(), anyString());
             verify(conversation, never()).endConversation(anyString(), any(), anyString(), anyString());
             verify(conversation, never()).cancelConversation(anyString(), any(), anyString());
@@ -1155,9 +1183,6 @@ class SupplierComparisonDispatchContractTest {
         ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", permissionGate);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuard);
         ReflectionTestUtils.setField(orchestrator, "dynamicToolSelectionService", mock(DynamicToolSelectionService.class));
-        for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
-            ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
-        }
         com.cretas.aims.config.IntentKnowledgeBase knowledge = new com.cretas.aims.config.IntentKnowledgeBase();
         knowledge.initDefaults();
         ReflectionTestUtils.setField(orchestrator, "knowledgeBase", knowledge);

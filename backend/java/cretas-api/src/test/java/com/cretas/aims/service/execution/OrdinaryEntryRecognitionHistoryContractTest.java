@@ -101,8 +101,7 @@ class OrdinaryEntryRecognitionHistoryContractTest {
         BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
         when(businessTypeGate.check(any(), any())).thenReturn(Optional.empty());
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
-        ReflectionTestUtils.setField(orchestrator, "recognitionHistoryResolver",
-                new RecognitionHistoryResolver(memory));
+        OrdinaryEntryPipeline.bind(orchestrator, new RecognitionHistoryResolver(memory));
         OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
         FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
     }
@@ -126,7 +125,7 @@ class OrdinaryEntryRecognitionHistoryContractTest {
     private void executeAsFactoryUser(IntentExecuteRequest request) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
-            orchestrator.execute(FACTORY, request, USER, ROLE);
+            OrdinaryEntryPipeline.execute(orchestrator, FACTORY, request, USER, ROLE);
         }
     }
 

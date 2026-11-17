@@ -292,8 +292,8 @@ class ChatNoFabricatedNumbersEntryContractTest {
         }
 
         String chatSite() {
-            return entry == Entry.ORDINARY ? IntentExecutionOrchestrator.CHAT_FACT_GUARD_SITE
-                    : SseStreamingService.CHAT_FACT_GUARD_SITE;
+            // PR-3: 两个入口的闲聊都是流式管线那一份 (普通入口的闲聊模型分支随识别分支删了)
+            return SseStreamingService.CHAT_FACT_GUARD_SITE;
         }
 
         List<String> systemPrompts() {
@@ -334,7 +334,7 @@ class ChatNoFabricatedNumbersEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    return ordinary().execute(FACTORY, request, USER, ROLE);
+                    return OrdinaryEntryPipeline.execute(ordinary(), FACTORY, request, USER, ROLE);
                 }
                 sse = sse();
                 ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", mock(SseEmitter.class), FACTORY,

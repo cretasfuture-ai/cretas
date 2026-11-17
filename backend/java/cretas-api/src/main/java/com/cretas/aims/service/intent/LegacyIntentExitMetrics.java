@@ -20,7 +20,7 @@ import java.util.function.BooleanSupplier;
  * 这里<b>只计数、只打日志</b>, ⛔ 不改任何出口的行为; 计数本身出任何错都吞掉。
  *
  * <ul>
- *   <li>{@value #SITE_EXECUTE_PHRASE}: {@code IntentExecutionOrchestrator} 的短语直达 (子串匹配, 命中即按显式意图执行),
+ *   <li>{@value #SITE_EXECUTE_PHRASE}: {@code SseStreamingService} 管线的短语直达 (两个入口共用, 意图蒸馏③ PR-3 起; 命中即定意图、不经识别),
  *       出口名 {@code java_phrase_shortcut}</li>
  *   <li>{@value #SITE_RECOGNIZE_EARLY_PHRASE}: {@code AIIntentServiceImpl} 指定两个意图 (QUALITY_CHECK_QUERY /
  *       REPORT_TRENDS) 的早期短语, 出口名 {@code java_early_phrase}</li>

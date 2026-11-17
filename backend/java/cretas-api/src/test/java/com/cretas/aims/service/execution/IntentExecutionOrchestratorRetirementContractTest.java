@@ -73,7 +73,7 @@ class IntentExecutionOrchestratorRetirementContractTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"restaurant_owner", "restaurant_manager", "restaurant_chef", "restaurant_purchaser"})
     void oldRolesCannotReachRecognitionExecutionOrConfirmation(String role) {
         var request = com.cretas.aims.dto.ai.IntentExecuteRequest.builder().userInput("你好").build();
-        assertThat(orchestrator.execute("F006", request, 7L, role).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
+        assertThat(OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 7L, role).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
         assertThat(orchestrator.executeWithExplicitIntent("F006", request, 7L, role).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
         assertThat(orchestrator.confirm("F006", null, 7L, role).getStatus()).isEqualTo("UNSUPPORTED_CAPABILITY");
         for (String field : new String[]{"aiIntentService", "dashScopeClient", "toolRegistry", "conversationService", "dynamicToolSelectionService"}) {
@@ -85,7 +85,7 @@ class IntentExecutionOrchestratorRetirementContractTest {
     void explicitRetiredIntentCannotFallThroughToFactoryRecognition() {
         var request = com.cretas.aims.dto.ai.IntentExecuteRequest.builder()
                 .intentCode("RESTAURANT_BESTSELLER_QUERY").userInput("你好").build();
-        assertThat(orchestrator.execute("F006", request, 7L, "factory_super_admin").getStatus())
+        assertThat(OrdinaryEntryPipeline.execute(orchestrator, "F006", request, 7L, "factory_super_admin").getStatus())
                 .isEqualTo("UNSUPPORTED_CAPABILITY");
         org.mockito.Mockito.verifyNoInteractions(org.springframework.test.util.ReflectionTestUtils.getField(orchestrator, "aiIntentService"));
     }
@@ -97,7 +97,7 @@ class IntentExecutionOrchestratorRetirementContractTest {
                 .thenThrow(new IllegalStateException("metadata unavailable"));
         org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "configService", config);
         var request = com.cretas.aims.dto.ai.IntentExecuteRequest.builder().userInput("你好").build();
-        assertThat(orchestrator.execute("R_QINGHUAJIAO_REAL", request, 7L, "factory_super_admin").getStatus())
+        assertThat(OrdinaryEntryPipeline.execute(orchestrator, "R_QINGHUAJIAO_REAL", request, 7L, "factory_super_admin").getStatus())
                 .isEqualTo("UNSUPPORTED_CAPABILITY");
         org.mockito.Mockito.verifyNoInteractions(org.springframework.test.util.ReflectionTestUtils.getField(orchestrator, "aiIntentService"));
     }

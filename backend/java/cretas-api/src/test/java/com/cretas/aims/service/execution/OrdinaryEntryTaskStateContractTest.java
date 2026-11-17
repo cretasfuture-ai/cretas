@@ -111,7 +111,7 @@ class OrdinaryEntryTaskStateContractTest {
 
         taskState = new ConversationTaskStateService(repo);
         taskState.setEnabled(true);
-        ReflectionTestUtils.setField(orchestrator, "taskStateService", taskState);
+        OrdinaryEntryPipeline.bind(orchestrator, taskState);
 
         ToolExecutor tool = mock(ToolExecutor.class);
         when(tool.getToolName()).thenReturn("work_process_task_complete");
@@ -156,7 +156,7 @@ class OrdinaryEntryTaskStateContractTest {
 
         // 第 2 轮: 仍带旧 sessionId 说「继续」 —— 不能落进 continueConversation 得到「对话状态异常」
         IntentExecuteResponse resumed = execute("继续");
-        assertThat(resumed.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(resumed.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(resumed.getSessionId()).isEqualTo(sessionId);
         assertThat(resumed.getMessage()).contains("完成工序").contains("工序任务ID").doesNotContain("对话状态异常");
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
@@ -183,7 +183,7 @@ class OrdinaryEntryTaskStateContractTest {
         IntentExecuteResponse response = execute("继续完成工序任务1830");
 
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
-        assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getMetadata() == null || !Boolean.TRUE.equals(response.getMetadata().get("taskResumed"))).as("没有恢复任务").isTrue();
         assertThat(sessions.get(sessionId).getCollectedParameters()).doesNotContainKey("taskId");
     }
 
@@ -195,7 +195,7 @@ class OrdinaryEntryTaskStateContractTest {
 
         IntentExecuteResponse response = execute("继续完成工序", taskB);
 
-        assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getMetadata() == null || !Boolean.TRUE.equals(response.getMetadata().get("taskResumed"))).as("没有恢复任务").isTrue();
         assertThat(sessions.get(taskB).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
         assertThat(sessions.get(sessionId).getStatus()).as("A 这一轮没被恢复").isEqualTo(SessionStatus.SUSPENDED);
         verify(aiIntentService).recognizeIntentWithConfidence(eq("继续完成工序"), eq(F), eq(3), eq(USER),
@@ -203,7 +203,7 @@ class OrdinaryEntryTaskStateContractTest {
 
         // 下一轮再说同一句 (这时没有正在问的任务) → 恢复 A
         IntentExecuteResponse next = execute("继续完成工序", taskB);
-        assertThat(next.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(next.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(next.getSessionId()).isEqualTo(sessionId);
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
     }
@@ -213,7 +213,7 @@ class OrdinaryEntryTaskStateContractTest {
     void continuingTheOpenTaskItselfRepeatsTheQuestion() {
         IntentExecuteResponse response = execute("继续完成工序");
 
-        assertThat(response.getStatus()).isEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getStatus()).isEqualTo("NEED_MORE_INFO");
         assertThat(response.getSessionId()).isEqualTo(sessionId);
         assertThat(response.getMessage()).contains("工序任务ID");
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.ACTIVE);
@@ -231,7 +231,7 @@ class OrdinaryEntryTaskStateContractTest {
                 String.valueOf((Object) inv.getArgument(0)).contains("报工") ? Optional.of(INTENT) : Optional.empty());
         execute("先看下库存，回头再报工");
         IntentExecuteResponse response = execute("继续，别报工了");
-        assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getMetadata() == null || !Boolean.TRUE.equals(response.getMetadata().get("taskResumed"))).as("没有恢复任务").isTrue();
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
     }
 
@@ -241,7 +241,7 @@ class OrdinaryEntryTaskStateContractTest {
         when(knowledgeBase.matchPhrase("完成工序")).thenReturn(Optional.of(INTENT));
         execute("先看下库存，回头再报工");
         IntentExecuteResponse response = execute("完成工序");
-        assertThat(response.getStatus()).isNotEqualTo("CONVERSATION_CONTINUE");
+        assertThat(response.getMetadata() == null || !Boolean.TRUE.equals(response.getMetadata().get("taskResumed"))).as("没有恢复任务").isTrue();
         assertThat(sessions.get(sessionId).getStatus()).isEqualTo(SessionStatus.SUSPENDED);
     }
 
@@ -314,7 +314,7 @@ class OrdinaryEntryTaskStateContractTest {
     private IntentExecuteResponse execute(String input, String sid) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
-            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sid)
+            return OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(input).sessionId(sid)
                     .build(), USER, ROLE);
         }
     }

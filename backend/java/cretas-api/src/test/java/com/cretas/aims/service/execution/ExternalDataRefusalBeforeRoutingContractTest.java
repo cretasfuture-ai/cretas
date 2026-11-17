@@ -134,7 +134,8 @@ class ExternalDataRefusalBeforeRoutingContractTest {
     @ValueSource(strings = {"viewer", "sales_manager"})
     void ordinaryEntryRefusesBeforeRecognitionAndPermission(String role) {
         try (AuthenticatedActor.ActorScope ignored = as(role)) {
-            IntentExecuteResponse r = ordinary().execute(FACTORY,
+            // PR-3: 普通入口 (/execute, 无意图码) = 门面 → StreamTurnCollector → 流式管线 (OrdinaryEntryPipeline 同一接线)
+            IntentExecuteResponse r = OrdinaryEntryPipeline.execute(ordinary(), FACTORY,
                     IntentExecuteRequest.builder().userInput(Q18).mode("READ").build(), USER, role);
             assertRefusedWithoutRoutingOrQuery(r, role);
         }
@@ -176,14 +177,16 @@ class ExternalDataRefusalBeforeRoutingContractTest {
         appender.start();
         logger.addAppender(appender);
         try (AuthenticatedActor.ActorScope ignored = as("viewer")) {
-            ordinary().execute(FACTORY, IntentExecuteRequest.builder().userInput(Q18).mode("READ").build(), USER, "viewer");
+            OrdinaryEntryPipeline.execute(ordinary(), FACTORY,
+                    IntentExecuteRequest.builder().userInput(Q18).mode("READ").build(), USER, "viewer");
         } finally {
             logger.detachAppender(appender);
         }
         List<String> tagged = appender.list.stream().map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
                 .filter(m -> m.contains("[PreRoutingRefusal]")).toList();
         assertThat(tagged).hasSize(1);
-        assertThat(tagged.get(0)).contains("EXTERNAL_DATA_REFUSED").contains("entry=ordinary").contains(FACTORY)
+        // PR-3: /execute 普通入口跑流式管线, 拒答出自管线那一处守卫 (entry=stream); 编排器旧普通入口分支已删
+        assertThat(tagged.get(0)).contains("EXTERNAL_DATA_REFUSED").contains("entry=stream").contains(FACTORY)
                 .doesNotContain("卤牛肉").doesNotContain("竞争对手");
     }
 
@@ -199,7 +202,7 @@ class ExternalDataRefusalBeforeRoutingContractTest {
         when(recognizer.recognizeIntentWithConfidence(anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt(),
                 any(), any(), any(), any(), any(), any())).thenReturn(noMatch);
         try (AuthenticatedActor.ActorScope ignored = as("viewer")) {
-            IntentExecuteResponse r = ordinary().execute(FACTORY,
+            IntentExecuteResponse r = OrdinaryEntryPipeline.execute(ordinary(), FACTORY,
                     IntentExecuteRequest.builder().userInput(text).mode("READ").build(), USER, "viewer");
             assertThat(r == null ? null : r.getStatus()).as(text).isNotEqualTo("EXTERNAL_DATA_REFUSED");
         }

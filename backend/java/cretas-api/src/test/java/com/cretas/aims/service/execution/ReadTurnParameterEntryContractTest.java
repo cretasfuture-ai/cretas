@@ -522,13 +522,8 @@ class ReadTurnParameterEntryContractTest {
                 ReflectionTestUtils.setField(orchestrator, "configService", config);
                 ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
                 ReflectionTestUtils.setField(orchestrator, "resultFormatterService", formatter);
-                ReflectionTestUtils.setField(orchestrator, "recognitionHistoryResolver",
-                        new RecognitionHistoryResolver(memory));
                 OrchestratorPriceViewTestSupport.callerSeesAllAmounts(orchestrator);
                 FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
-                for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
-                    ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
-                }
             } else {
                 FactoryRepository factories = mock(FactoryRepository.class);
                 Factory factory = new Factory();
@@ -547,6 +542,8 @@ class ReadTurnParameterEntryContractTest {
                 ReflectionTestUtils.setField(sse, "intentPermissionGate", gate);
                 ReflectionTestUtils.setField(sse, "conversationMemoryService", memory);
                 ReflectionTestUtils.setField(sse, "resultFormatterService", formatter);
+                // 生产接线: 管线每轮的共用步骤 (对话记忆 / readQuery 只有编排器那一份, PR-3)
+                OrdinaryEntryPipeline.attachTurnSteps(sse);
                 org.mockito.Mockito.doAnswer(call -> {
                     events.add(new Object[]{call.getArgument(1), call.getArgument(2)});
                     return null;
@@ -596,7 +593,8 @@ class ReadTurnParameterEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    return orchestrator.execute(FACTORY, request, USER, ROLE);
+                    return OrdinaryEntryPipeline.execute(orchestrator, FACTORY, request, USER, ROLE,
+                            new RecognitionHistoryResolver(memory));
                 }
                 ReflectionTestUtils.invokeMethod(sse, "executeStreamAsync", emitter, FACTORY, request, USER, ROLE);
             }
