@@ -23,8 +23,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "backend/java/cretas-api/src/main/resources/ai/factory-intent-catalog.json"
 OUT = ROOT / "backend/java/cretas-api/src/main/resources/ai/intent-domain-table.json"
+# Python 决策层读的同步副本 (逐字节相同, 由 backend/python/tests/test_intent_domain_scope_contract.py 钉住)
+PY_OUT = ROOT / "backend/python/ai/data/intent-domain-table.json"
 
-CATALOG_VERSION = "2026-11-15.1"
+CATALOG_VERSION = "2026-11-17.1"
 
 DOMAINS = [
     ("PRODUCTION", "生产", "生产计划/批次/工序任务/排产/产能/生产效率与出成率"),
@@ -207,6 +209,101 @@ UNCERTAIN = {
     "RECEIVE_QUALITY_CHECK_TODAY": "今日待质检批次（提醒仓管通知质量主管）：质检 vs 仓储",
 }
 
+# 次业务域 (PR-4): 存疑点里写明了「另一个候选域」的行, 取那个域。识别时主域或次域命中都算。
+# 只有域存疑的行才有; 存疑点只关于动作 (审批 vs 改、名为查实为分析、读写不一致、对话控制) 的行没有。
+# 「生产 vs 采购 vs 仓储」这种三选的只取一个次域 (见注释), 第三个靠「跨域句子并集」兜住。
+SECONDARY_DOMAIN = {
+    "CUSTOMER_NOTIFY_BATCH": "SALES",
+    "INVENTORY_FREEZE": "QUALITY",
+    "SHORTAGE_ANALYSIS": "PROCUREMENT",  # 三选: 生产 / 采购 / 仓储; 手工理由写「也可算采购域」
+    "PURCHASE_FINANCE_APPROVE": "FINANCE",
+    "RETURN_ORDER_LIST": "PROCUREMENT",
+    "RETURN_ORDER_CREATE": "PROCUREMENT",
+    "RETURN_ORDER_APPROVE": "PROCUREMENT",
+    "STOCK_ALERT": "PROCUREMENT",
+    "SUPPLIER_QUALIFICATION_CREATE": "QUALITY",
+    "SUPPLIER_QUALIFICATION_LOOKUP": "QUALITY",
+    "SUPPLIER_QUALIFICATION_QUERY_EXPIRING": "QUALITY",
+    "SUPPLIER_QUALIFICATION_ALERT": "QUALITY",
+    "FACTORY_MR_CLOSE": "PRODUCTION",
+    "FACTORY_MR_GENERATE": "PRODUCTION",
+    "FACTORY_MR_QUERY_PENDING": "PRODUCTION",
+    "WAGE_COST_SUMMARY": "FINANCE",
+    "COMMISSION_PENDING_TOTAL": "FINANCE",
+    "COST_QUERY": "PRODUCTION",
+    "REPORT_BOM_COST_RANK": "PRODUCTION",
+    "REPORT_LABOR_COST_SHARE": "HR",
+    "REPORT_COST_VARIANCE": "PRODUCTION",
+    "PRODUCT_TYPE_QUERY": "SALES",
+    "PRODUCT_UPDATE": "SALES",
+    "PRODUCT_CREATE_FLYWHEEL": "SALES",
+    "CONVERSION_RATE_UPDATE": "WAREHOUSE",
+    "BUSINESS_LINK_QUERY": "SYSTEM",
+    "GATE_DIAGNOSE_BATCH": "QUALITY",
+    "PDA_SCAN_TASK_GENERATE": "SYSTEM",
+    "FOOD_SAMPLE_TRACE": "TRACE",
+    "COLD_CHAIN_MONITORING": "QUALITY",
+    "COLD_CHAIN_TEMP_QUERY": "QUALITY",
+    "COLD_CHAIN_ALERT_ACTIVE": "QUALITY",
+    "COLD_CHAIN_ALERT_ACKNOWLEDGE": "QUALITY",
+    "SCHEDULING_LIST": "HR",
+    "RECEIVE_QUALITY_CHECK_TODAY": "WAREHOUSE",
+}
+
+# 业务词 (PR-4 识别第 1 层): 一句话里出现某个业务词 ⇒ 这句话可能属于它后面列的那几个域 (取并集)。
+# 一个词常常牵着相邻的几个域 (「出库」既是仓储也是销售发货, 「到货」既是仓储也是采购交期, 「客户」牵着
+# 质检的客户标准、溯源的按客户反查、财务的应收): 宁可多带一个域, 不能把本来能识别的意图挤出候选。
+# SYSTEM / ANALYTICS 不设词: 它们是跨域通用入口, 永远在候选里。太泛的词 (批次、报表、数据、情况、货) 不放。
+# 调词的口径: 验收集 v3 开发半边的「候选保留率」(金标意图仍在缩小后的候选里), 另用 Steve 金标 300 题核对,
+# 读数见 PR 描述; 封存半边不碰。
+P, W, Q, S, B, F, H, E, T, R = ("PRODUCTION", "WAREHOUSE", "QUALITY", "SALES", "PROCUREMENT", "FINANCE", "HR",
+                                "EQUIPMENT", "TRACE", "RND")
+KEYWORD_DOMAINS = {
+    # 生产
+    "生产": (P, W, Q, S, T), "排产": (P, W, B), "产能": (P,), "工序": (P, Q), "报工": (P, Q, H), "开工": (P, Q),
+    "完工": (P,), "产量": (P, S), "出成率": (P,), "效率": (P, W, H, E), "加工": (P, W), "车间": (P, Q, H),
+    "产线": (P, W, Q, E), "生产线": (P, W, Q, E), "工单": (P,), "投料": (P, W), "配方": (P, Q, R), "bom": (P, F, R),
+    "任务": (P, W, Q),
+    # 仓储
+    "库存": (W, S, B, P), "入库": (W, B, Q), "出库": (W, S, Q, P), "领料": (W, P), "领用": (W, P), "盘点": (W,),
+    "调拨": (W,), "仓库": (W, P), "原料": (W, B, T, P, Q), "原材料": (W, B, T, P, Q, F), "物料": (W, B, P),
+    "收货": (W, B, Q), "到货": (W, B), "备料": (W, P), "冻结": (W, Q), "周转": (W,), "临期": (W, Q),
+    "过期": (W, Q, B), "保质期": (W, Q), "冷库": (W, E), "库": (W, E), "哪一批": (T, W),
+    # 质检
+    "质检": (Q, W), "质量": (Q, S, W, B), "检验": (Q,), "检测": (Q,), "合格": (Q, S, W), "放行": (Q, W, S),
+    "留样": (Q,), "样品": (Q, R), "召回": (Q, S, T, W), "haccp": (Q,), "ssop": (Q,), "添加剂": (Q,), "食安": (Q,),
+    "食品安全": (Q,), "卫生": (Q,), "消毒": (Q,), "清洁": (Q,), "抽检": (Q,), "不良": (Q,), "ccp": (Q,),
+    "微生物": (Q,), "标准": (Q, S),
+    # 销售
+    "客户": (S, Q, T, F, P), "订单": (S, B, P, F), "销售": (S, F), "发货": (S, W, P), "出货": (S, W, P),
+    "发走": (S, W), "退货": (S, Q, B), "商机": (S,), "报价": (S, B), "提成": (S, F), "送货": (S, B),
+    "销量": (S, P), "卖": (S, W),
+    # 采购
+    "供应商": (B, Q, W), "采购": (B, W, S), "请购": (B,), "进价": (B, F), "进货": (B, W), "资质": (B, Q),
+    "涨价": (B, F),
+    # 财务
+    "财务": (F,), "成本": (F, P, B, H), "毛利": (F, S), "利润": (F, S), "发票": (F,), "开票": (F, S), "应收": (F, S),
+    "应付": (F, B), "收款": (F, S), "付款": (F, B), "回款": (F, S), "货款": (F, S, B), "对账": (F, S),
+    "账单": (F, S), "科目": (F,), "凭证": (F,), "关账": (F,), "资产负债": (F,), "现金流": (F,), "税": (F,),
+    # 人事
+    "考勤": (H,), "打卡": (H,), "请假": (H,), "加班": (H,), "工资": (H, F), "薪资": (H, F), "报销": (H, F),
+    "员工": (H, P), "排班": (H, P), "迟到": (H,), "晚到": (H,), "早退": (H,), "缺勤": (H,), "出勤": (H,),
+    "工时": (H, P),
+    # 设备
+    "设备": (E, P), "告警": (E, W, Q, P), "报警": (E, W, Q), "警告": (E, W, Q, P), "电子秤": (E, W), "秤": (E, W),
+    "称重": (E, W), "摄像头": (E,), "监控": (E, Q), "冷链": (E, Q), "温度": (E, Q), "维修": (E,), "保养": (E,),
+    "校准": (E,), "故障": (E,),
+    # 溯源
+    "溯源": (T, Q), "追溯": (T, Q), "追踪": (T, S), "源头": (T,), "全链路": (T,), "流向": (T, S),
+    "从哪来": (T, B, W), "去向": (T, S), "关联": (T,), "链路": (T,), "上下游": (T,),
+    # 研发
+    "研发": (R,), "打样": (R,), "新品": (R, P),
+}
+DOMAIN_KEYWORDS = {code: [] for code, _n, _d in DOMAINS}
+for _word, _doms in KEYWORD_DOMAINS.items():
+    for _dom in _doms:
+        DOMAIN_KEYWORDS[_dom].append(_word)
+
 
 def first(rules, code):
     for rid, pattern, value in rules:
@@ -225,8 +322,21 @@ def build():
     action_codes = {a[0] for a in ACTIONS}
     out, undecided = [], []
     codes = {r["intent_code"] for r in rows}
-    for stale in [c for c in list(MANUAL_DOMAIN) + list(MANUAL_ACTION) + list(UNCERTAIN) if c not in codes]:
-        undecided.append(f"manual/uncertain entry for unknown intent: {stale}")
+    for stale in [c for c in list(MANUAL_DOMAIN) + list(MANUAL_ACTION) + list(UNCERTAIN) + list(SECONDARY_DOMAIN)
+                  if c not in codes]:
+        undecided.append(f"manual/uncertain/secondary entry for unknown intent: {stale}")
+    for code, sec in SECONDARY_DOMAIN.items():
+        if code not in UNCERTAIN:
+            undecided.append(f"secondary_domain only for uncertain rows: {code}")
+        if sec not in domain_codes:
+            undecided.append(f"secondary_domain {sec} is not a declared domain: {code}")
+    if set(DOMAIN_KEYWORDS) != domain_codes:
+        undecided.append(f"DOMAIN_KEYWORDS must list every domain: {sorted(set(DOMAIN_KEYWORDS) ^ domain_codes)}")
+    for dom, words in DOMAIN_KEYWORDS.items():
+        if dom in ("SYSTEM", "ANALYTICS") and words:
+            undecided.append(f"{dom} is a cross-domain entry and must have no keywords")
+        if dom not in ("SYSTEM", "ANALYTICS") and not words:
+            undecided.append(f"{dom} has no keywords")
     for r in rows:
         code = r["intent_code"]
         if code in MANUAL_DOMAIN:
@@ -259,6 +369,11 @@ def build():
         if code in UNCERTAIN:
             row["uncertain"] = True
             row["uncertain_note"] = UNCERTAIN[code]
+        if code in SECONDARY_DOMAIN:
+            if SECONDARY_DOMAIN[code] == domain:
+                undecided.append(f"{code}: secondary_domain equals primary {domain}")
+                continue
+            row["secondary_domain"] = SECONDARY_DOMAIN[code]
         out.append(row)
     if undecided:
         print("UNDECIDED (add a rule or a manual entry with a reason):", file=sys.stderr)
@@ -269,7 +384,7 @@ def build():
         "schema_version": 1,
         "catalog_version": CATALOG_VERSION,
         "source": "ai/factory-intent-catalog.json canonical_intents (generated by scripts/ai/generate_intent_domain_table.py; this file is the reviewed table, edit the script and regenerate)",
-        "domains": [{"code": c, "name_zh": n, "description": d} for c, n, d in DOMAINS],
+        "domains": [{"code": c, "name_zh": n, "description": d, "keywords": DOMAIN_KEYWORDS[c]} for c, n, d in DOMAINS],
         "actions": [{"code": c, "name_zh": n} for c, n in ACTIONS],
         "intents": out,
     }
@@ -286,15 +401,16 @@ def main():
         return 2
     text = json.dumps(table, ensure_ascii=False, indent=2) + "\n"
     if args.check:
-        current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if current != text:
-            print("intent-domain-table.json is stale; rerun the generator", file=sys.stderr)
+        stale = [p for p in (OUT, PY_OUT) if (p.read_text(encoding="utf-8") if p.exists() else "") != text]
+        if stale:
+            print(f"stale (rerun the generator): {[str(p) for p in stale]}", file=sys.stderr)
             return 1
         print(f"ok: {len(table['intents'])} intents")
         return 0
-    with open(OUT, "w", encoding="utf-8", newline="\n") as f:
-        f.write(text)
-    print(f"wrote {OUT} ({len(table['intents'])} intents)")
+    for p in (OUT, PY_OUT):
+        with open(p, "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+        print(f"wrote {p} ({len(table['intents'])} intents)")
     return 0
 
 

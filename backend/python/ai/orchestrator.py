@@ -41,7 +41,7 @@ from ai.dto import (
 from ai.matcher import fusion as fusion_module
 from ai.matcher import semantic as semantic_module
 from ai.matcher.candidates import BlendRetriever
-from ai.matcher.decision import with_task_state
+from ai.matcher.decision import domain_scope, intent_domain_of, with_task_state
 from ai.db import _is_write_row
 from ai.matcher.decision import (ASK_KEY, CLARIFY_KEY, DIALOGUE_ACTS, NONE_KEY, NON_INTENT_KEYS, RequestPurpose,
                                  intent_text)
@@ -97,11 +97,14 @@ class Orchestrator:
         enable_llm: bool = True,
         task_state: Optional[Dict[str, Any]] = None,
         ask_policy: Optional[str] = None,
+        catalog_version: Optional[str] = None,
     ) -> IntentMatchResultDto:
         """三层识别对开启的业态生效; 其余业态 (以及三层拿不到结果时) 走旧的 5-8 级。
 
         ``task_state``: 服务端任务状态摘要 (Java TaskStateSummary 白名单), 只给决策层提示词; 旧 5-8 级不用。
         ``ask_policy``: 本厂先问档位 (Java 读 factory_thresholds ai.intent.ask_policy), 见 ai/ask_policy.py。
+        ``catalog_version``: Java 业务域表的版本 (PR-4)。与本进程的表版本相同才按业务域缩小决策层候选;
+        没带 / 不同 ⇒ 不收窄 (Java 与 Python 分开发布, 版本对不上时宁可放宽)。旧 5-8 级不用。
         """
         # Matchers/classifiers may return historical head IDs; final matching
         # must still obey the reviewed retirement policy while preserving
@@ -116,13 +119,19 @@ class Orchestrator:
             fallback_reason = None
             try:
                 result = await self._match_decision(query, factoryId, businessType, role, visible_intents,
-                                                    history, task_state=task_state, ask_policy=ask_policy)
+                                                    history, task_state=task_state, ask_policy=ask_policy,
+                                                    catalog_version=catalog_version)
             except Exception as ex:
                 logger.exception("decision layer failed, falling back to legacy stages")
                 fallback_reason = "decision_" + exit_metrics.classify_exception(ex)
                 result = None
             if result is not None:
                 exit_metrics.observe_decision_answered()
+                # 决策层输出业务域 (飞轮按域分组): 选中意图的主域 / 次域, 表外意图为 None (只对带表版本的请求)
+                if catalog_version is not None:
+                    chosen = result.bestMatch.intentCode if result.bestMatch is not None else None
+                    for key, value in intent_domain_of(chosen).items():
+                        exit_metrics.note_trace(key, value)
                 return result
             legacy = await self._match_legacy(query, factoryId, businessType, userId, role, visible_intents,
                                               history, min_confidence, enable_llm)
@@ -152,6 +161,7 @@ class Orchestrator:
         history: Optional[List[Dict[str, Any]]] = None,
         task_state: Optional[Dict[str, Any]] = None,
         ask_policy: Optional[str] = None,
+        catalog_version: Optional[str] = None,
     ) -> Optional[IntentMatchResultDto]:
         """① 已审核精确表 → ② 读概率决策 → ③ 置信不够则 requiresConfirmation (Java 出按钮)。
 
@@ -189,10 +199,29 @@ class Orchestrator:
                 return self._build_result(query=query, top_candidates=[cand], method=MatchMethod.EXACT,
                                           visible_intents=visible_intents, min_confidence=0.0, timing=timing)
 
+        # ===== 第 1 层: 业务域缩小「给模型看的」候选 (PR-4) =====
+        # 只换粗选 / 合并理解提示词里列的意图。by_code 仍是全部可见意图: 精确表 (上面) 与语义召回补足的候选
+        # 不受业务域限制 (语义召回 = 兜底), 权限 / 写确认 / 审批仍全在 Java 侧照旧。
+        scope = domain_scope(query, visible_intents, catalog_version,
+                             contextual=bool(turns) or bool(task_state))
+        llm_visible = scope.rows
+        if catalog_version is not None:
+            # 只有带了业务域表版本的请求 (PR-4 起的 Java) 才记业务域痕迹; 老请求的痕迹与改动前逐字相同
+            exit_metrics.note_trace("catalogVersion", catalog_version)
+            exit_metrics.note_trace("domainScope", scope.reason)
+            exit_metrics.note_trace("domains", sorted(scope.domains))
+        if scope.narrowed:
+            timing["domainNarrowed"] = 1
+            timing["domainCandidates"] = len(llm_visible)
+            exit_metrics.note_trace("domainCandidates", len(llm_visible))
+            # 候选集合变了 ⇒ 这道题的「选项集合」跟着变 (飞轮蒸馏按它分题)
+            from ai.api import option_set_hash
+            exit_metrics.note_trace("optionSetHash", option_set_hash(llm_visible))
+
         retriever = self.candidate_retriever or self.semantic_matcher
         if getattr(self.config, "decision_merged", False):
             merged = await self._match_merged(query, factoryId, businessType, role, visible_intents, history,
-                                              retriever, by_code, timing, t0)
+                                              retriever, by_code, timing, t0, llm_visible=llm_visible)
             if merged is not None:
                 return merged
             # 合并调用拿不到合法输出 ⇒ 回落下面原来的分开调用 (留痕, 不猜)
@@ -228,7 +257,7 @@ class Orchestrator:
         if codes is None:
             sem, short = await asyncio.gather(
                 retriever.match(query, factoryId=factoryId, businessType=businessType),
-                self.decision_matcher.shortlist(query, role, visible_intents, history),
+                self.decision_matcher.shortlist(query, role, llm_visible, history),
                 return_exceptions=True,
             )
             timing["retrievalMs"] = int((time.time() - t) * 1000)
@@ -295,7 +324,8 @@ class Orchestrator:
                                        ask_tier=ask_tier)
 
     async def _match_merged(self, query, factoryId, businessType, role, visible_intents, history,
-                            retriever, by_code, timing, t0) -> Optional[IntentMatchResultDto]:
+                            retriever, by_code, timing, t0,
+                            llm_visible: Optional[List[Dict[str, Any]]] = None) -> Optional[IntentMatchResultDto]:
         """合并理解 (1 次) → 只在需要时 Choice (第 2 次)。返回 None = 合并输出不可用, 调用方走分开调用。
 
         Choice 触发条件 (INTENT-DISTILL E, 门槛来由见 config / PR 回执):
@@ -309,7 +339,9 @@ class Orchestrator:
         """
         t = time.time()
         sem_task = asyncio.ensure_future(retriever.match(query, factoryId=factoryId, businessType=businessType))
-        u = await self.decision_matcher.understand(query, role, visible_intents, history)
+        # llm_visible: 按业务域缩小后给提示词的候选 (PR-4); 没给 = 全部可见意图
+        u = await self.decision_matcher.understand(query, role, llm_visible if llm_visible is not None else visible_intents,
+                                                   history)
         timing["understandMs"] = int((time.time() - t) * 1000)
         if u is None:
             sem_task.cancel()
