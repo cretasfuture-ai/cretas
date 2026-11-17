@@ -488,7 +488,7 @@ public class SseStreamingService {
                                 .requiresConfirmation(false)
                                 .questionType(QuestionType.OPERATIONAL_COMMAND)
                                 .build(),
-                        factoryPackRoute);
+                        factoryPackRoute, false, true);
                 return;
             }
             if (factoryPackConstrained
@@ -513,7 +513,7 @@ public class SseStreamingService {
                         "EXPLICIT"));
                 executeAndStreamResult(
                         emitter, factoryId, request, intent, userId, userRole, startTime,
-                        explicitMatch, factoryPackRoute);
+                        explicitMatch, factoryPackRoute, false, true);
                 return;
             }
 
@@ -1100,19 +1100,34 @@ public class SseStreamingService {
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute)
             throws IOException {
         executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
-                matchResult, factoryPackRoute, false);
+                matchResult, factoryPackRoute, false, false);
     }
 
-    /**
-     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
-     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
-     */
     private void executeAndStreamResult(SseEmitter emitter, String factoryId,
                                          IntentExecuteRequest request, AIIntentConfig intent,
                                          Long userId, String userRole, long startTime,
                                          IntentMatchResult matchResult,
                                          FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
                                          boolean permissionAlreadyChecked)
+            throws IOException {
+        executeAndStreamResult(emitter, factoryId, request, intent, userId, userRole, startTime,
+                matchResult, factoryPackRoute, permissionAlreadyChecked, false);
+    }
+
+    /**
+     * @param permissionAlreadyChecked 调用方刚用 {@link #permissionDeniedMessage} 判过且放行 —— 不重算
+     *        (每个请求只算一次意图权限; 其它入口一律传 false)。
+     * @param explicitIntentCode 请求带了意图码 (App 澄清按钮点选): 执行前的停步走编排器
+     *        {@link IntentExecutionOrchestrator#explicitIntentStopBeforeExecution} —— 与 /execute 显式意图路径同一份
+     *        (先判审批再出写确认、先列可选对象、预览分支; PR-3b)。识别分支传 false (它在 7a.5 / 7a.6 已抽参、列过选项)。
+     */
+    private void executeAndStreamResult(SseEmitter emitter, String factoryId,
+                                         IntentExecuteRequest request, AIIntentConfig intent,
+                                         Long userId, String userRole, long startTime,
+                                         IntentMatchResult matchResult,
+                                         FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute,
+                                         boolean permissionAlreadyChecked,
+                                         boolean explicitIntentCode)
             throws IOException {
         if (!permissionAlreadyChecked) {
             String deniedMessage = permissionDeniedMessage(factoryId, intent, userId, userRole);
@@ -1129,33 +1144,45 @@ public class SseStreamingService {
             return;
         }
 
-        // 咨询 tab 拦写 + 审批: 与普通入口同一个方法、同一个谓词 (IntentTurnSharedSteps)。
-        // 显式意图码 / 能力包路径不经过识别分支的 6.5, 在这里过; 识别分支到这里已判过, 再判结果相同。
-        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
-                request, intent, intentAccessModeFilter, writeGuardService);
-        if (readModeBlocked != null) {
-            streamTerminalResponse(emitter, readModeBlocked, startTime);
-            return;
-        }
-        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
-            streamTerminalResponse(emitter,
-                    IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
-            return;
-        }
-
-        // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
-        // honest empty-state + domain next-action, instead of executing a tool with no data.
-        if (!factoryPackRoute.isConstrained()) {
-            Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
-            if (gate.isPresent()) {
-                IntentExecuteResponse gateResponse = gate.get();
-                sendSseEvent(emitter, "result", gateResponse);
-                sendSseEvent(emitter, "complete", Map.of(
-                        "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
-                        "totalLatencyMs", System.currentTimeMillis() - startTime
-                ));
-                emitter.complete();
+        if (explicitIntentCode && turnSteps != null) {
+            // 显式意图码: 咨询页拦写 → 审批 → 业态门 → 先列可选对象 → 一线未开放 → W0 写确认卡 → 预览,
+            // 与 /execute 显式意图路径同一个方法。生产上 turnSteps 必在 (启动校验 verifyTurnStepsWired);
+            // 只有裸构造的单测缺席, 那时退回下面的咨询页拦写 / 审批 / 业态门 (顺序同样是先审批)。
+            IntentExecuteResponse stopped = turnSteps.explicitIntentStopBeforeExecution(
+                    factoryId, request, intent, userId, userRole, factoryPackRoute);
+            if (stopped != null) {
+                streamTerminalResponse(emitter, stopped, startTime);
                 return;
+            }
+        } else {
+            // 咨询 tab 拦写 + 审批: 与普通入口同一个方法、同一个谓词 (IntentTurnSharedSteps)。
+            // 识别分支到这里已判过 6.5, 再判结果相同。
+            IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                    request, intent, intentAccessModeFilter, writeGuardService);
+            if (readModeBlocked != null) {
+                streamTerminalResponse(emitter, readModeBlocked, startTime);
+                return;
+            }
+            if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+                streamTerminalResponse(emitter,
+                        IntentTurnSharedSteps.approvalResponse(intent, writeGuardService, toolRegistry), startTime);
+                return;
+            }
+
+            // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type →
+            // honest empty-state + domain next-action, instead of executing a tool with no data.
+            if (!factoryPackRoute.isConstrained()) {
+                Optional<IntentExecuteResponse> gate = businessTypeGate.check(factoryId, intent);
+                if (gate.isPresent()) {
+                    IntentExecuteResponse gateResponse = gate.get();
+                    sendSseEvent(emitter, "result", gateResponse);
+                    sendSseEvent(emitter, "complete", Map.of(
+                            "status", gateResponse.getStatus() != null ? gateResponse.getStatus() : "NOT_APPLICABLE",
+                            "totalLatencyMs", System.currentTimeMillis() - startTime
+                    ));
+                    emitter.complete();
+                    return;
+                }
             }
         }
 

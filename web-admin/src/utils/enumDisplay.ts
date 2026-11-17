@@ -428,3 +428,37 @@ export function enumLabel(
     || ROLE_LABELS[normalized]
     || `未知状态（${normalized}）`;
 }
+
+/** 财务交易流水类型 (finance/costs 交易记录) —— 之前写在页面里, 抽到这里与其它枚举同源。 */
+export const FINANCE_TRANSACTION_TYPE_LABELS: Record<string, string> = {
+  RECEIVABLE: '应收挂账',
+  AR_INVOICE: '应收开票',
+  AR_PAYMENT: '客户付款',
+  AR_ADJUSTMENT: '应收调整',
+  AP_ADJUSTMENT: '应付调整',
+  PAYABLE: '应付挂账',
+  AP_INVOICE: '应付开票',
+  AP_PAYMENT: '供应商付款',
+  ADJUSTMENT: '手工调整',
+};
+
+/**
+ * 盘点过账生成的凭证类型 (prod 凭证列表实测出现 INVENTORY_STOCKTAKE; api/voucher.ts 的 VoucherType 联合
+ * 里没有它们, 不能直接并进 VOUCHER_TYPE_LABEL —— 凭证模板编辑器拿那张表当可选类型下拉)。
+ */
+export const VOUCHER_STOCKTAKE_TYPE_LABELS: Record<string, string> = {
+  INVENTORY_STOCKTAKE: '库存盘点',
+  SEMI_FINISHED_STOCKTAKE: '半成品盘点',
+};
+
+/** 收款方式 (`PaymentMethod`)。CREDIT 与全局表一致写「赊账」(旧页面写「信用」)。 */
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  BANK_TRANSFER: '银行转账',
+  CASH: '现金',
+  WECHAT: '微信',
+  ALIPAY: '支付宝',
+  CHECK: '支票',
+  CREDIT: '赊账',
+  POS: 'POS',
+  OTHER: '其他',
+};

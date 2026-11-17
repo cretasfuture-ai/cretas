@@ -55,7 +55,7 @@ class IntentResponseAiModeContractTest {
     @BeforeEach
     void setUp() {
         orchestrator = mock(IntentExecutionOrchestrator.class, CALLS_REAL_METHODS);
-        tools = mock(ToolRegistry.class);
+        tools = com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled();
         ReflectionTestUtils.setField(orchestrator, "toolRegistry", tools);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
         var metadata = mock(IntentConfigManagementService.class);
@@ -147,8 +147,9 @@ class IntentResponseAiModeContractTest {
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", mock(BusinessTypeGate.class));
         var response = OrdinaryEntryPipeline.execute(orchestrator, "F006", IntentExecuteRequest.builder().intentCode(intent.getIntentCode())
                 .userInput("预览产品").previewOnly(true).build(), 1707L, "viewer");
-        assertThat(response.getStatus()).isEqualTo("FAILED");
-        assertThat(response.getMessage()).contains("预览模式暂不支持");
+        // PR-3b 终审 L1: 与工具层执行出口同一状态 (前端 aiWriteConfirm 按 PREVIEW_UNSUPPORTED 映射)
+        assertThat(response.getStatus()).isEqualTo("PREVIEW_UNSUPPORTED");
+        assertThat(response.getMessage()).contains("不支持安全预览", "未执行");
         assertThat(response.getAiMode()).isEqualTo("WRITE");
         assertThat(response.getConfirmableAction()).isNull();
         assertThat(response.getResultData()).isNull();

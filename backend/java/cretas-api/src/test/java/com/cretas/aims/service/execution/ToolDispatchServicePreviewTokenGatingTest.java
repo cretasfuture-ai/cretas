@@ -62,7 +62,7 @@ class ToolDispatchServicePreviewTokenGatingTest {
     @BeforeEach
     void setUp() {
         dispatch = new ToolDispatchService(
-                mock(ToolRegistry.class),
+                com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled(),
                 mapper,
                 mock(DashScopeClient.class),
                 mock(ToolCallRedundancyService.class),

@@ -502,89 +502,11 @@ public class IntentExecutionOrchestrator {
             return factoryPackDecision;
         }
 
-        // P1 读写分块 §4.4: 咨询 tab (mode=READ) 兜底 — 显式意图/短语短路路径命中写意图同样拦截,
-        // 先于 W0 写确认门 (READ 模式下不该出现确认卡, 只给跳转提示)。
-        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
-                request, intent, intentAccessModeFilter, writeGuardService);
-        if (readModeBlocked != null) {
-            return readModeBlocked;
-        }
-
-        // W0 write-guard (intent-w0) — SITE A: the convergence point all explicit-code / forced /
-        // multi-intent / phrase-shortcut / conversation-continuation paths funnel through. The guard
-        // is deliberately NOT conditioned on request.getForceExecute() (which is hard-set true by the
-        // multi-intent and conversation-continuation paths and is exactly what must NOT skip the
-        // guard). previewOnly requests are allowed (they preview, not execute). Confirmation is
-        // process-local authority issued only after an atomic single-use token claim; raw request
-        // context values such as confirmed=true are never trusted.
-        java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
-        if (writeGuardService.isWriteIntent(intent)
-                && !Boolean.TRUE.equals(request.getPreviewOnly())
-                && !writeGuardService.isConfirmed(ctx)) {
-            // 缺「要操作哪一个」(「我要报工，产量100」经短语快捷通道到这里): 先列本人可选的让他选,
-            // 不出一张不知道报哪一道的空确认卡 (prod 2026-11-14 F006)。只有一个时带出来, 仍出下面的确认卡。
-            IntentExecuteResponse choiceAsked = askWhichOneBeforeWriteGuard(
-                    factoryId, request, intent, userId, userRole);
-            if (choiceAsked != null) {
-                return choiceAsked;
-            }
-            log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
-                    intent.getIntentCode(), request.getForceExecute());
-            IntentExecuteResponse confirmCard = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("WRITE_CONFIRM_REQUIRED")
-                    .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
-                    .requiresApproval(true)
-                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
-                    .aiMode("WRITE")
-                    .executedAt(java.time.LocalDateTime.now())
-                    .build();
-            // 选对象类写工具 (报工): 确认卡带上已定下的 taskId / 产量 (形状同 SSE), App 拿它请求 /preview;
-            // 预览照常重绑主体、过本人可报。其它写意图的确认卡不变。
-            choiceResolverTool(intent).ifPresent(tool -> SseStreamingService.attachPreviewParams(confirmCard, request, tool));
-            return confirmCard;
-        }
-
-        // Approval governs the mutation, not its read-only TCC preview. Keeping
-        // previewOnly outside this gate lets the user inspect before/after and
-        // impact details before deciding whether to request approval/confirm.
-        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
-            return buildApprovalResponse(intent);
-        }
-
-        // 业态门控 (Sprint 13 #305): this explicit-intent path is reached for an explicit
-        // intentCode AND for phrase-shortcut matches (execute() #0 / #0.2 delegate here),
-        // bypassing the gate in the main matching flow. Gate here too so a domain-exclusive
-        // intent (e.g. RESTAURANT_ECONOMICS_ANALYSIS) on a mismatched factory.type returns the
-        // honest "本厂非该业态" empty-state instead of executing a tool with no data.
-        if (!factoryPackRoute.isConstrained()) {
-            IntentExecuteResponse businessTypeGate = checkBusinessTypeGate(factoryId, intent);
-            if (businessTypeGate != null) {
-                return businessTypeGate;
-            }
-        }
-
-        // Preview mode
-        if (Boolean.TRUE.equals(request.getPreviewOnly()) && intent.getToolName() != null && !intent.getToolName().isEmpty()) {
-            Optional<ToolExecutor> previewToolOpt = toolRegistry.getExecutor(intent.getToolName());
-            if (previewToolOpt.isPresent() && previewToolOpt.get().supportsPreview()) {
-                IntentExecuteResponse preview = toolDispatchService.executeToolPreview(
-                        previewToolOpt.get(), factoryId, request, intent, userId, userRole);
-                applyAiModeStamp(preview, intent, intent.getToolName());
-                return preview;
-            }
-            IntentExecuteResponse unsupportedPreview = IntentExecuteResponse.builder()
-                    .intentRecognized(true)
-                    .intentCode(intent.getIntentCode())
-                    .intentName(intent.getIntentName())
-                    .status("FAILED")
-                    .message("预览模式暂不支持此意图类型")
-                    .executedAt(LocalDateTime.now())
-                    .build();
-            applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());
-            return unsupportedPreview;
+        // 咨询页拦写 → 审批 → 业态门 → 先列可选对象 → 一线未开放 → W0 写确认卡 → 预览: 两入口一份 (PR-3b)
+        IntentExecuteResponse stopped = explicitIntentStopBeforeExecution(
+                factoryId, request, intent, userId, userRole, factoryPackRoute);
+        if (stopped != null) {
+            return stopped;
         }
 
         // Tool 执行
@@ -1042,6 +964,114 @@ public class IntentExecutionOrchestrator {
         return IntentExecuteResponse.builder().status(status).aiMode("WRITE")
                 .intentCode("PURCHASE_ORDER_CREATE").message(message).formattedText(message)
                 .resultData(outcome).executedAt(LocalDateTime.now()).build();
+    }
+
+    /**
+     * 显式意图码 (Web 按钮点选 / 参数确认后执行、App 澄清按钮): 权限与能力包决定之后、执行之前的停步 ——
+     * 唯一实现, 编排器显式意图路径 (SITE A) 与流式显式意图路径都调它 (意图蒸馏③ PR-3b, Steve 定「先判审批再出写确认」)。
+     *
+     * <p>顺序 (⛔ 不要调换, {@code StreamTurnCollectorEntryParityContractTest} 的显式意图用例守着):
+     * <ol>
+     *   <li>咨询页 (mode=READ) 拦写 —— READ 模式下不该出现确认卡;</li>
+     *   <li>审批 —— 声明需要审批的请求 (含 previewOnly) 在这里就停, 返回 PENDING_APPROVAL, 不列可选对象、
+     *       不出确认卡、不预览 (不铸令牌)、不执行 (PR-3b 前编排器是先出确认卡、确认时才判审批; 预览放行);</li>
+     *   <li>业态门 (能力包受限路由不判);</li>
+     *   <li>写操作 (非预览、未确认): 先列可选对象 → 一线未开放的写如实拒 (不出确认卡) → W0 写确认卡;</li>
+     *   <li>预览 (previewOnly): 支持安全预览的工具只预览 (预览出口自己再判工具开关 / 身份 / 一线 / 旧角色检查);
+     *       不支持 → PREVIEW_UNSUPPORTED, 不执行 (与工具层执行出口同一状态)。</li>
+     * </ol>
+     *
+     * <p>W0 写确认 (intent-w0) SITE A: 不看 forceExecute (多意图子请求把它恒设 true, 那正是不能跳过的);
+     * 确认凭据只来自原子单次占用令牌之后的进程内标记, 请求里的 confirmed=true 一律不认。工具层 SITE B 仍在, 是兜底。
+     *
+     * @return 这一轮到此为止的回答 (已补 aiMode); null = 照常执行
+     */
+    public IntentExecuteResponse explicitIntentStopBeforeExecution(
+            String factoryId, IntentExecuteRequest request, AIIntentConfig intent,
+            Long userId, String userRole, FactoryCapabilityPackRoutingPolicy.Route factoryPackRoute) {
+        IntentExecuteResponse readModeBlocked = IntentTurnSharedSteps.readModeWriteBlocked(
+                request, intent, intentAccessModeFilter, writeGuardService);
+        if (readModeBlocked != null) {
+            return readModeBlocked;
+        }
+
+        if (IntentTurnSharedSteps.stopsForApproval(intent, request)) {
+            log.info("显式意图需要审批, 在写确认之前停下: intentCode={}", intent.getIntentCode());
+            return buildApprovalResponse(intent);
+        }
+
+        // 业态门控 (Sprint 13 #305): domain-exclusive intent on a mismatched factory.type → honest
+        // "本厂非该业态" empty-state instead of a confirm card / a tool run with no data.
+        if (factoryPackRoute == null || !factoryPackRoute.isConstrained()) {
+            IntentExecuteResponse businessTypeGateResponse = checkBusinessTypeGate(factoryId, intent);
+            if (businessTypeGateResponse != null) {
+                return businessTypeGateResponse;
+            }
+        }
+
+        boolean previewOnly = Boolean.TRUE.equals(request.getPreviewOnly());
+        Optional<ToolExecutor> boundTool = intent.getToolName() == null || intent.getToolName().isBlank()
+                ? Optional.empty() : toolRegistry.getExecutor(intent.getToolName());
+        java.util.Map<String, Object> ctx = request.getContext() != null ? request.getContext() : java.util.Map.of();
+        boolean writeOperation = writeGuardService.isWriteIntent(intent)
+                || boundTool.map(writeGuardService::isWriteTool).orElse(false);
+        if (writeOperation && !previewOnly && !writeGuardService.isConfirmed(ctx)) {
+            // 缺「要操作哪一个」(「我要报工，产量100」): 先列本人可选的让他选, 不出一张不知道报哪一道的空确认卡
+            // (prod 2026-11-14 F006)。只有一个时带出来, 仍出下面的确认卡。
+            IntentExecuteResponse choiceAsked = askWhichOneBeforeWriteGuard(
+                    factoryId, request, intent, userId, userRole);
+            if (choiceAsked != null) {
+                return choiceAsked;
+            }
+            // 一线角色 + 未开放的写: 如实拒, 不出确认卡 (原来 App 在工具层 SITE B 才拒, /execute 先出卡、预览时才拒)
+            if (boundTool.isPresent()) {
+                IntentExecuteResponse frontlineDenied = toolDispatchService.frontlineWriteDenied(
+                        boundTool.get(), factoryId, intent, userRole);
+                if (frontlineDenied != null) {
+                    applyAiModeStamp(frontlineDenied, intent, intent.getToolName());
+                    return frontlineDenied;
+                }
+            }
+            log.info("W0 write-guard: blocked write intent {} (forceExecute={}, confirmed=false)",
+                    intent.getIntentCode(), request.getForceExecute());
+            IntentExecuteResponse confirmCard = IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    .status("WRITE_CONFIRM_REQUIRED")
+                    .message("「" + intent.getIntentName() + "」是写入/修改操作，执行前需要确认。")
+                    .requiresApproval(true)
+                    // P1 读写分块: 确认卡属写路径, 显式标记 (早退路径不经 6.95 统一 stamp)
+                    .aiMode("WRITE")
+                    .executedAt(java.time.LocalDateTime.now())
+                    .build();
+            // 确认卡带上已定下的工具参数 (形状同流式工具层那张卡), App / Web 拿它请求 /preview;
+            // 预览照常重绑主体、过本人可报。
+            boundTool.ifPresent(tool -> SseStreamingService.attachPreviewParams(confirmCard, request, tool));
+            return confirmCard;
+        }
+
+        if (previewOnly && intent.getToolName() != null && !intent.getToolName().isEmpty()) {
+            if (boundTool.isPresent() && boundTool.get().supportsPreview()) {
+                IntentExecuteResponse preview = toolDispatchService.executeToolPreview(
+                        boundTool.get(), factoryId, request, intent, userId, userRole);
+                applyAiModeStamp(preview, intent, intent.getToolName());
+                return preview;
+            }
+            IntentExecuteResponse unsupportedPreview = IntentExecuteResponse.builder()
+                    .intentRecognized(true)
+                    .intentCode(intent.getIntentCode())
+                    .intentName(intent.getIntentName())
+                    // 与工具层执行出口 (ToolDispatchService) 同一状态与文案; 前端 aiWriteConfirm 按 PREVIEW_UNSUPPORTED 映射
+                    .status("PREVIEW_UNSUPPORTED")
+                    .message("该工具不支持安全预览，未执行任何操作。")
+                    .formattedText("该工具不支持安全预览，未执行任何操作。")
+                    .executedAt(LocalDateTime.now())
+                    .build();
+            applyAiModeStamp(unsupportedPreview, intent, intent.getToolName());
+            return unsupportedPreview;
+        }
+        return null;
     }
 
     /** 意图绑的工具是「先选要操作哪一个」那类 (ParameterChoiceResolver, 如报工) 时返回它。 */
