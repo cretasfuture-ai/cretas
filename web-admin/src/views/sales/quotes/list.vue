@@ -402,7 +402,7 @@ async function handleRevise(row: TableRow) {
           <UFormField label="BOM ID"><UInput v-model="createForm.bomId" placeholder="可选, 用于成本参考" class="w-full" /></UFormField>
           <UFormField label="录价人" required><UInput v-model="createForm.quotedByName" placeholder="销售运营部具体的人 (不是岗位)" class="w-full" data-testid="quote-quoted-by" /></UFormField>
           <UFormField label="录价人 ID">
-            <UInputNumber v-model="createForm.quotedByUserId" :min="0" :increment="false" :decrement="false" placeholder="user_id" class="w-48" />
+            <UInputNumber v-model="createForm.quotedByUserId" :min="0" :step-snapping="false" :increment="false" :decrement="false" placeholder="user_id" class="w-48" />
           </UFormField>
           <UFormField label="备注"><UTextarea v-model="createForm.remarks" :rows="3" placeholder="如: 客户老王肉制品厂咨询" class="w-full" /></UFormField>
         </div>
