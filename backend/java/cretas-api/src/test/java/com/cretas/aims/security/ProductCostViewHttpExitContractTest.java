@@ -47,7 +47,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
  * <p>服务层的保密遮蔽在这里被<b>故意关掉</b> (mask 不隐藏任何产品), 所以无权账号拿到 null 金额只能是响应裁剪器的功劳:
  * 这证明新接口的字段名/productTypeId 能被现有保密裁剪认出, 不依赖服务层那一道。</p>
  */
-class ProductCostViewHttpExitSecurityTest {
+class ProductCostViewHttpExitContractTest {
 
     static final String F = "F-A";
     static final String SECRET = "P17";
