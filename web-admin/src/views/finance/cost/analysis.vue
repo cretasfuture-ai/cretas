@@ -1,11 +1,8 @@
 <script setup lang="ts">
-import { CS_TOKENS } from '@/styles/csTokens';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
-import { ElMessage } from 'element-plus';
-import { TrendCharts, Money, Document } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
 
 const authStore = useAuthStore();
@@ -15,7 +12,8 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
 const costData = ref<TableRow | null>(null);
-const dateRange = ref<[Date, Date] | null>(null);
+const startDate = ref('');
+const endDate = ref('');
 
 onMounted(() => {
   loadData();
@@ -38,155 +36,50 @@ async function loadData() {
   }
 }
 
+function fmt(v: unknown): string {
+  // 没拿到数据显示「—」, 不显示 0
+  if (v === null || v === undefined || v === '') return '—';
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toLocaleString() : '—';
+}
+
 const statCards = computed(() => [
-  {
-    title: '本月总成本',
-    value: costData.value?.totalCost ?? 0,
-    unit: '元',
-    icon: Money,
-    color: CS_TOKENS.primary
-  },
-  {
-    title: '原材料成本',
-    value: costData.value?.materialCost ?? 0,
-    unit: '元',
-    icon: Document,
-    color: '#67c23a'
-  },
-  {
-    title: '人工成本',
-    value: costData.value?.laborCost ?? 0,
-    unit: '元',
-    icon: TrendCharts,
-    color: '#e6a23c'
-  }
+  { key: 'total', title: '本月总成本', value: fmt(costData.value?.totalCost), unit: '元', icon: 'i-lucide-wallet', cls: 'text-primary bg-primary/10' },
+  { key: 'material', title: '原材料成本', value: fmt(costData.value?.materialCost), unit: '元', icon: 'i-lucide-file-text', cls: 'text-success bg-success/10' },
+  { key: 'labor', title: '人工成本', value: fmt(costData.value?.laborCost), unit: '元', icon: 'i-lucide-trending-up', cls: 'text-warning bg-warning/10' },
 ]);
 </script>
 
 <template>
-  <div class="page-container">
-    <el-card class="search-card">
-      <el-form inline>
-        <el-form-item label="日期范围">
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="loadData">查询</el-button>
-        </el-form-item>
-      </el-form>
-    </el-card>
+  <div class="flex flex-col gap-4 p-5" data-testid="cost-analysis-page">
+    <section class="flex flex-wrap items-end gap-3 rounded-lg border border-default bg-default p-4">
+      <UFormField label="开始日期">
+        <UInput v-model="startDate" type="date" data-testid="cost-start-date" />
+      </UFormField>
+      <UFormField label="结束日期">
+        <UInput v-model="endDate" type="date" data-testid="cost-end-date" />
+      </UFormField>
+      <UButton icon="i-lucide-search" :loading="loading" data-testid="cost-query" @click="loadData">查询</UButton>
+    </section>
 
     <template v-if="canViewPrice">
-      <el-row :gutter="20" class="stat-cards">
-        <el-col v-for="card in statCards" :key="card.title" :xs="24" :sm="8">
-          <el-card class="stat-card" shadow="hover">
-            <div class="stat-content">
-              <div class="stat-info">
-                <span class="stat-title">{{ card.title }}</span>
-                <span class="stat-value" :style="{ color: card.color }">
-                  {{ card.value.toLocaleString() }}
-                  <small>{{ card.unit }}</small>
-                </span>
-              </div>
-              <el-icon class="stat-icon" :style="{ backgroundColor: card.color + '20', color: card.color }">
-                <component :is="card.icon" />
-              </el-icon>
-            </div>
-          </el-card>
-        </el-col>
-      </el-row>
+      <div class="grid grid-cols-1 gap-4 sm:grid-cols-3" data-testid="cost-stat-cards">
+        <div v-for="card in statCards" :key="card.key" class="flex items-center justify-between rounded-lg border border-default bg-default p-4" :data-testid="`cost-card-${card.key}`">
+          <div class="flex flex-col gap-2">
+            <span class="text-sm text-muted">{{ card.title }}</span>
+            <span class="text-2xl font-semibold" :class="card.cls.split(' ')[0]">{{ card.value }}<small v-if="card.value !== '—'" class="ml-1 text-sm font-normal">{{ card.unit }}</small></span>
+          </div>
+          <span class="flex size-12 items-center justify-center rounded-lg text-2xl" :class="card.cls"><UIcon :name="card.icon" /></span>
+        </div>
+      </div>
 
-      <el-row :gutter="20">
-        <el-col :span="12">
-          <el-card>
-            <template #header>
-              <span>成本趋势分析</span>
-            </template>
-            <div class="chart-placeholder">
-              <el-empty description="图表加载中..." />
-            </div>
-          </el-card>
-        </el-col>
-        <el-col :span="12">
-          <el-card>
-            <template #header>
-              <span>成本结构分析</span>
-            </template>
-            <div class="chart-placeholder">
-              <el-empty description="图表加载中..." />
-            </div>
-          </el-card>
-        </el-col>
-      </el-row>
+      <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section v-for="t in ['成本趋势分析', '成本结构分析']" :key="t" class="rounded-lg border border-default bg-default">
+          <header class="border-b border-default px-4 py-3 font-medium">{{ t }}</header>
+          <div class="flex h-[300px] items-center justify-center text-muted">图表加载中...</div>
+        </section>
+      </div>
     </template>
-    <el-empty v-else description="您没有查看价格/成本数据的权限" />
-
+    <div v-else class="py-12 text-center text-muted" data-testid="cost-no-permission">您没有查看价格/成本数据的权限</div>
   </div>
 </template>
-
-<style lang="scss" scoped>
-.page-container {
-  padding: 20px;
-}
-.search-card {
-  margin-bottom: 20px;
-}
-.stat-cards {
-  margin-bottom: 20px;
-
-  .stat-card {
-    margin-bottom: 20px;
-  }
-
-  .stat-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .stat-info {
-    display: flex;
-    flex-direction: column;
-  }
-
-  .stat-title {
-    font-size: 14px;
-    color: #999;
-    margin-bottom: 8px;
-  }
-
-  .stat-value {
-    font-size: 24px;
-    font-weight: 600;
-
-    small {
-      font-size: 14px;
-      font-weight: 400;
-      margin-left: 4px;
-    }
-  }
-
-  .stat-icon {
-    width: 48px;
-    height: 48px;
-    border-radius: 8px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 24px;
-  }
-}
-
-.chart-placeholder {
-  height: 300px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-</style>

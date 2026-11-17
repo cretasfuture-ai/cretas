@@ -33,7 +33,12 @@ final class ReportToolSchemas {
      * @param catalog     本次请求已加载的本厂在用产品 (null = 没有目录); 工具复用它, 不再查第二次
      */
     record ProductResolution(ProductScope scope, List<ProductType> products, String keyword,
-                             List<String> suggestions, List<ProductType> catalog) {
+                             List<String> suggestions, List<ProductType> catalog, String inferredFrom) {
+
+        ProductResolution(ProductScope scope, List<ProductType> products, String keyword,
+                          List<String> suggestions, List<ProductType> catalog) {
+            this(scope, products, keyword, suggestions, catalog, null);
+        }
 
         boolean isAll() { return scope == ProductScope.ALL; }
 
@@ -45,6 +50,10 @@ final class ReportToolSchemas {
         String leadIn(boolean singleProductOnly) {
             if (scope == ProductScope.ALL) return "按全厂统计：";
             if (scope != ProductScope.MATCHED || (singleProductOnly && products.size() > 1)) return null;
+            if (inferredFrom != null) {
+                return "「" + inferredFrom + "」按成品「" + productNames().get(0) + "」统计（名称以「" + inferredFrom
+                        + "」结尾的在售成品只有这一个，半成品不算；不是这个请说完整产品名）：";
+            }
             StringBuilder sb = new StringBuilder("按产品");
             for (String n : productNames()) sb.append("「").append(n).append("」");
             return sb.append("统计：").toString();
@@ -188,6 +197,24 @@ final class ReportToolSchemas {
         String rest = stripQuestionWords(k);
         if (rest == null) return all(catalog);
         String restKey = rest.toLowerCase(Locale.ROOT);
+        // 中文名词中心在词尾: 「酱卤牛肉250g」是一种卤牛肉, 「牛肉酱」不是牛肉。在售成品 (非半成品) 里
+        // 去掉前缀装饰 (「演示·」) 和规格 (「250g」) 后以原话结尾的恰好一个 → 直接按它答并写明 (Steve 11-12: 能按默认执行就执行并说明)
+        String headKey = restKey.replaceAll("[的总\\s]+$", "");
+        if (headKey.length() >= 2) {
+            List<ProductType> headHits = new ArrayList<>();
+            int sellableContaining = 0;   // 名称里含这个词的在售产品 (「牛肉酱」「牛肉丸」也算): 不止一个就仍请用户说完整名
+            for (ProductType t : catalog) {
+                if (!com.cretas.aims.entity.enums.ProductCategory.isSellable(t.getProductCategory())) continue;
+                String n = normalizedName(t);
+                if (n != null && n.contains(headKey)) sellableContaining++;
+                String head = headName(t);
+                if (head != null && head.endsWith(headKey)) headHits.add(t);
+            }
+            if (headHits.size() == 1 && sellableContaining == 1) {
+                return new ProductResolution(ProductScope.MATCHED, List.copyOf(headHits), null, List.of(), catalog,
+                        rest.replaceAll("[的总\\s]+$", ""));
+            }
+        }
         List<String> suggestions = new ArrayList<>();
         for (ProductType t : catalog) {
             String n = normalizedName(t);
@@ -212,6 +239,18 @@ final class ReportToolSchemas {
     private static String normalizedName(ProductType t) {
         if (t == null || t.getId() == null || t.getName() == null) return null;
         String n = t.getName().trim().toLowerCase(Locale.ROOT);
+        return n.isEmpty() ? null : n;
+    }
+
+    /** 产品名的中心部分: 去掉最后一个「·」之前的前缀和末尾的规格 / 括号说明, 小写; 「演示·酱卤牛肉250g」→「酱卤牛肉」。 */
+    static String headName(ProductType t) {
+        String n = normalizedName(t);
+        if (n == null) return null;
+        int dot = Math.max(n.lastIndexOf('·'), n.lastIndexOf('・'));
+        if (dot >= 0 && dot < n.length() - 1) n = n.substring(dot + 1);
+        n = n.replaceAll("[（(【\\[].*?[)）】\\]]", "")
+                .replaceAll("\\s*\\d+(?:\\.\\d+)?\\s*(?:g|kg|克|千克|公斤|斤|ml|l|毫升|升|袋|盒|包|只|个|瓶|罐)?\\s*$", "")
+                .trim();
         return n.isEmpty() ? null : n;
     }
 
