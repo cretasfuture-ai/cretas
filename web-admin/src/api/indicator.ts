@@ -104,6 +104,8 @@ export interface IndicatorListResponse {
   lastValue?: number | null;
   lastComputedAt?: string | null;
   displayOrder?: number | null;
+  /** 金额类指标且当前账号没有价格查看权限: 数值 / 阈值不下发, 显示「无权限查看」(不是「未计算」)。 */
+  valueHidden?: boolean;
 }
 
 /**
@@ -138,6 +140,8 @@ export interface IndicatorValueResponse {
   status?: IndicatorValueStatus;
   periodStart?: string;
   periodEnd?: string;
+  /** 金额类指标且当前账号没有价格查看权限: value 为 null, 显示「无权限查看」。 */
+  valueHidden?: boolean;
 }
 
 /**
@@ -166,6 +170,8 @@ export interface IndicatorTreeNodeResponse {
   lastComputedAt?: string | null;
   alertLevel?: AlertLevel;
   displayOrder?: number | null;
+  /** 金额类指标且当前账号没有价格查看权限: 显示「无权限查看」, 不算「待配置」。 */
+  valueHidden?: boolean;
   children?: IndicatorTreeNodeResponse[];
 }
 
@@ -197,10 +203,12 @@ export interface IndicatorVersionResponse {
   indicatorCode?: string;
   periodStart: string;
   periodEnd: string;
-  value: number;
+  /** valueHidden 时为 null (不是 0) */
+  value: number | null;
   computedAt: string;
   alertLevel: AlertLevel;
   computeSource?: string;
+  valueHidden?: boolean;
 }
 
 /**
