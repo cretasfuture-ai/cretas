@@ -269,9 +269,6 @@ class SupplierComparisonMultiIntentContractTest {
         ReflectionTestUtils.setField(orchestrator, "intentPermissionGate", gate);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", writeGuard);
         ReflectionTestUtils.setField(orchestrator, "dynamicToolSelectionService", mock(DynamicToolSelectionService.class));
-        for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
-            ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
-        }
         ReflectionTestUtils.setField(orchestrator, "knowledgeBase", new IntentKnowledgeBase());
         ReflectionTestUtils.setField(orchestrator, "configService", mock(IntentConfigManagementService.class));
         ReflectionTestUtils.setField(orchestrator, "queryPreprocessorService",

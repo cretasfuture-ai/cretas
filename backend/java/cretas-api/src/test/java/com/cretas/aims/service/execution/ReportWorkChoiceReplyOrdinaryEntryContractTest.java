@@ -121,7 +121,7 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         taskState = new ConversationTaskStateService(repo);
         taskState.setEnabled(false);
         taskState.setFactories("F006");
-        ReflectionTestUtils.setField(orchestrator, "taskStateService", taskState);
+        OrdinaryEntryPipeline.bind(orchestrator, taskState);
 
         // 报工工具: 参数说明与 WorkProcessTaskCompleteTool 的 schema 相同 (给人看的名字从这里来)
         ToolExecutor tool = mock(ToolExecutor.class);
@@ -190,7 +190,8 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         // 继续的是完成工序, 写操作停在写确认闸 (WRITE_CONFIRM_REQUIRED), 没有直接执行
         assertThat(r.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
         assertThat(r.getIntentCode()).isEqualTo(INTENT);
-        assertThat(executed).as("写操作没有被直接执行").isEmpty();
+        // PR-3: /execute 与 App 同一条管线 —— 续轮到工具层, 写操作停在 W0 写确认 (SITE B; 这里分发是回写确认的桩)
+        assertThat(executed).as("到了工具层 (停在写确认, 没有执行)").containsExactly(INTENT);
         verify(aiIntentService, never()).recognizeIntentWithConfidence(eq("2"), anyString(), anyInt(), any(),
                 any(), any(), any(), any(), anyList(), anyMap());
     }
@@ -245,7 +246,9 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
         IntentExecuteResponse r = executeWith("2", forged);
 
         assertThat(r.getStatus()).isEqualTo("WRITE_CONFIRM_REQUIRED");
-        assertThat(executed).as("确认标记没被当真, 没有直接执行").isEmpty();
+        assertThat(executed).as("到了工具层, 停在写确认 (请求里的 confirmed 不是确认凭据)").containsExactly(INTENT);
+        assertThat(dispatchedContexts.get(0)).as("交给工具层的是收集到的 taskId, 不是请求体伪造的")
+                .containsEntry("taskId", "202");
         assertThat((Map<String, Object>) r.getMetadata().get("previewParams"))
                 .containsEntry("taskId", "202").containsEntry("actualQuantity", "100");
     }
@@ -307,7 +310,8 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
 
         assertThat(r.getStatus()).isEqualTo("COMPLETED");
         assertThat(dispatchedContexts).as("必发生: 读工具真的被执行了").hasSize(1);
-        assertThat(dispatchedContexts.get(0)).doesNotContainKey("batchNumber");
+        // PR-3: 续轮把这一问的回答交给工具 (流式管线的口径, 两入口一份)
+        assertThat(dispatchedContexts.get(0)).containsEntry("batchNumber", "B20261006-01");
         assertThat(r.getMetadata() == null ? Map.of() : r.getMetadata()).doesNotContainKey("previewParams");
     }
 
@@ -340,7 +344,7 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
     private IntentExecuteResponse executeWith(String input, Map<String, Object> context) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
-            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+            return OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
                     .context(context).build(), USER, ROLE);
         }
     }
@@ -348,7 +352,7 @@ class ReportWorkChoiceReplyOrdinaryEntryContractTest {
     private IntentExecuteResponse execute(String input) {
         try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                 new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, F, ROLE))) {
-            return orchestrator.execute(F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
+            return OrdinaryEntryPipeline.execute(orchestrator, F, IntentExecuteRequest.builder().userInput(input).sessionId(sessionId)
                     .build(), USER, ROLE);
         }
     }

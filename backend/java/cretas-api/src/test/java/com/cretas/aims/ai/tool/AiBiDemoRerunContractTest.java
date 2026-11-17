@@ -118,7 +118,7 @@ class AiBiDemoRerunContractTest {
     void permissionDenialNamesTheRequiredPermissionAndWhoToAsk() {
         ToolRbacGuard guard = new ToolRbacGuard();
         String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "price_history_query", "procurement:read");
-        assertTrue(msg.contains("采购查看") && msg.contains("工厂管理员"), msg);
+        assertTrue(msg.contains("采购管理（查看）") && msg.contains("工厂管理员"), msg);
         // 一线用户看不懂内部标识: 不显示工具名 / 权限码
         assertFalse(msg.contains("price_history_query") || msg.contains("procurement:read"), msg);
         assertFalse(guard.denyMessage(Map.of("userRole", "x"), "some_unmapped_tool", "x:y").contains("some_unmapped_tool"));
@@ -184,10 +184,10 @@ class AiBiDemoRerunContractTest {
         ToolRbacGuard guard = new ToolRbacGuard();
         String msg = guard.denyMessage(Map.of("userRole", "finance_manager"), "x_tool", "quality:read_write");
         assertFalse(msg.contains("finance_manager") || msg.contains("quality:read_write") || msg.contains("x_tool"), msg);
-        assertTrue(msg.contains("对应模块的操作权限") && !msg.contains("查看权限"), msg);
+        assertTrue(msg.contains("质量管理（操作）") && !msg.contains("查看"), msg);
         // 第 3 轮表 C: 断言整句, 写权限后面不能再跟「可以查看」
         assertEquals("您当前的角色 (财务主管) 没有权限使用「该功能」。此操作涉及敏感数据/库存/资金, 需要授权角色。"
-                + "需要的权限: 对应模块的操作权限（拥有其中任一项权限的角色可以使用）。"
+                + "需要的权限: 质量管理（操作）（拥有其中任一项权限的角色可以使用）。"
                 + "建议: 请在系统对应页面由有权限的角色 (如仓储主管/财务/管理员) 操作, 或联系工厂管理员为您的账号开通权限。", msg);
         assertFalse(msg.contains("查看"), msg);
     }

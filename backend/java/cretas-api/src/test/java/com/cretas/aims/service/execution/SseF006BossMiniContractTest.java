@@ -79,6 +79,15 @@ class SseF006BossMiniContractTest {
         when(businessTypeGate.resolveDomain("F006")).thenReturn("FACTORY");
         when(businessTypeGate.resolveDomain("F007")).thenReturn("FACTORY");
         ReflectionTestUtils.setField(service, "businessTypeGate", businessTypeGate);
+        // 生产接线: 早期通用问法路由 (分析流 / 食品知识) 只有编排器那一份, 管线每轮都调 (PR-3)
+        IntentExecutionOrchestrator turnSteps = OrdinaryEntryPipeline.attachTurnSteps(service);
+        // PR-3 复审 M2: 分析流准入要 analytics (调用者是有这项权限的角色); 门缺席时按拒绝 (fail closed)
+        IntentPermissionGate analyticsGate = org.mockito.Mockito.mock(IntentPermissionGate.class);
+        org.mockito.Mockito.when(analyticsGate.check(org.mockito.ArgumentMatchers.argThat(i -> i != null
+                        && IntentExecutionOrchestrator.ANALYSIS_FLOW_PERMISSION.equals(i.getRequiredPermission())),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(IntentPermissionGate.PermissionCheck.allowed());
+        ReflectionTestUtils.setField(turnSteps, "intentPermissionGate", analyticsGate);
         when(memory.getOrCreateContext(anyString(), anyLong(), any())).thenAnswer(call ->
                 ConversationContext.builder().factoryId(call.getArgument(0)).userId(call.getArgument(1))
                         .sessionId(SESSION).build());
@@ -301,8 +310,15 @@ class SseF006BossMiniContractTest {
                 .matchMethod(IntentMatchResult.MatchMethod.NONE)
                 .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND).build());
         execute("F006", 77L, "factory_super_admin", false);
-        verifyNoInteractions(mini, cloud);
-        verify(intents).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
+        // PR-3: 两入口同一条早期路由 —— 在用的食品知识按显式意图走, 分析请求进分析流 (原普通入口口径, App 也一样);
+        // 本地老板问答通道都不接 (守的就是这一条)
+        verifyNoInteractions(mini);
+        if ("active-food".equals(route)) {
+            verifyNoInteractions(cloud);
+        } else {
+            verify(analysis).detectAnalysisTopic(QUESTION);
+        }
+        verify(intents, never()).recognizeIntentWithConfidence(eq(QUESTION), eq("F006"), eq(3), eq(77L),
                 eq("factory_super_admin"), any(), any(), any(), eq(List.of()));
     }
 

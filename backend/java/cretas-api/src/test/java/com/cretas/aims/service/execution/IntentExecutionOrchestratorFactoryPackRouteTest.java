@@ -109,57 +109,8 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
         verifyNoInteractions(harness.toolRegistry, harness.toolDispatchService);
     }
 
-    @Test
-    void phraseFastPathWithSessionStillPassesPackAndSkipsContinuationAndExtraLlm() {
-        Harness harness = new Harness();
-        AIIntentConfig intent = intent(
-                "PROCESSING_BATCH_DETAIL", "processing_batch_detail", "批次详情");
-        ToolExecutor executor = mock(ToolExecutor.class);
-        // spec §8.2: 读工具须显式声明 READ (未声明按 WRITE 是 fail-closed 底线)
-        when(executor.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
-        IntentExecuteResponse executed = IntentExecuteResponse.builder()
-                .intentRecognized(true)
-                .intentCode("PROCESSING_BATCH_DETAIL")
-                .status("COMPLETED")
-                .message("批次进度查询完成")
-                .build();
-        when(harness.knowledgeBase.matchPhrase("查看批次进度", "FACTORY"))
-                .thenReturn(Optional.of("PROCESSING_BATCH_DETAIL"));
-        when(harness.aiIntentService.getIntentByCode("F001", "PROCESSING_BATCH_DETAIL"))
-                .thenReturn(Optional.of(intent));
-        when(harness.aiIntentService.hasPermission("PROCESSING_BATCH_DETAIL", "operator"))
-                .thenReturn(true);
-        when(harness.writeGuardService.isWriteIntent(intent)).thenReturn(false);
-        when(harness.toolRegistry.getExecutor("processing_batch_detail"))
-                .thenReturn(Optional.of(executor));
-        when(harness.toolDispatchService.executeWithTool(
-                any(), anyString(), any(), any(), anyLong(), anyString(), any()))
-                .thenReturn(executed);
-
-        IntentExecuteResponse response = harness.execute(
-                "F001",
-                IntentExecuteRequest.builder()
-                        .userInput("查看批次进度")
-                        .sessionId("continued-session")
-                        .build(),
-                7L,
-                "operator");
-
-        assertThat(response.getStatus()).isEqualTo("COMPLETED");
-        verify(harness.toolDispatchService).executeWithTool(
-                any(), anyString(), any(), any(), anyLong(), anyString(), any());
-        verify(harness.aiIntentService, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), anyLong(), anyString(), anyString(), any(), any());
-        verifyNoInteractions(
-                harness.conversationService,
-                harness.analysisRouterService,
-                harness.agentOrchestrator,
-                harness.ragRouterService,
-                harness.dashScopeClient,
-                harness.ownerToolGateway,
-                harness.principalFactory);
-        verify(harness.factoryRepository, times(1)).findById("F001");
-    }
+    // PR-3: 「能力包受限时短语快捷仍过包」守的是编排器的短语快捷 (随识别分支删了); 流式管线在能力包受限时根本不走短语快捷,
+    // 由识别 + 包白名单决定 (SseStreamingServiceFactoryPackRouteTest)。
 
     @Test
     void recognizerSelectedPackExternalToolReturnsControlledNoMatch() {
@@ -257,7 +208,7 @@ class IntentExecutionOrchestratorFactoryPackRouteTest {
             try (var ignored = com.cretas.aims.security.AuthenticatedActor.trustedAsyncScope(
                     new com.cretas.aims.security.AuthenticatedActor(
                             com.cretas.aims.security.AuthenticatedActorType.FACTORY_USER, userId, factoryId, role))) {
-                return orchestrator.execute(factoryId, request, userId, role);
+                return OrdinaryEntryPipeline.execute(orchestrator, factoryId, request, userId, role);
             }
         }
 

@@ -54,8 +54,8 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     private FactoryAgentTraceRecorder factoryTraceRecorder;
 
     /**
-     * /execute 改走流式管线的适配层 (PR-2b)。null = 部分上下文 / 单测直接构造 ⇒ 一律原分支。
-     * 回退杆: cretas.ai.execute.via-stream=false (PR-3 删)。
+     * /execute 走流式管线的适配层 (PR-2b; PR-3 起识别 / 执行只有这一条管线, 回退杆已删)。
+     * null 只出现在部分上下文 / 单测直接构造: 那时只有带意图码的显式路径可用 (见 {@link #runTurn})。
      */
     @Autowired(required = false)
     private StreamTurnCollector streamTurnCollector;
@@ -70,20 +70,27 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
         long startedNanos = System.nanoTime();
         IntentExecuteResponse response;
         try (IntentFlywheelTurnContext.Scope flywheel = IntentFlywheelTurnContext.open()) {
-            // PR-2b: 已对齐的那一类请求走流式管线 (同线程收集最后一个 result), 其余留原分支 —— 见 StreamTurnCollector
-            StreamTurnCollector.Route route = streamTurnCollector == null
-                    ? StreamTurnCollector.Route.LEGACY_SWITCH_OFF
-                    : streamTurnCollector.route(factoryId, request, userId);
-            log.debug("[execute] route={} factoryId={}", route, factoryId);
-            response = route.viaStream()
-                    ? streamTurnCollector.collect(factoryId, request, userId, userRole)
-                    : orchestrator.execute(factoryId, request, userId, userRole);
+            response = runTurn(factoryId, request, userId, userRole);
             // 飞轮 entry 仍记 NORMAL (两条路都是普通入口)
             recordFlywheel(factoryId, userId, request, response, flywheel.turn(), startedNanos);
         }
         populateConversationRound(factoryId, userId, request, response);
         recordFactoryTrace(factoryId, userId, userRole, response, startedNanos);
         return response;
+    }
+
+    /**
+     * 一轮 = 流式管线 (同线程收集最后一个 result, 见 {@link StreamTurnCollector});
+     * 只有带显式意图码的请求走编排器的显式意图路径 (预览 / 确认共用的写确认收敛点)。
+     */
+    private IntentExecuteResponse runTurn(String factoryId, IntentExecuteRequest request, Long userId, String userRole) {
+        StreamTurnCollector.Route route = streamTurnCollector == null
+                ? StreamTurnCollector.Route.EXPLICIT_INTENT
+                : streamTurnCollector.route(request);
+        log.debug("[execute] route={} factoryId={}", route, factoryId);
+        return route.viaStream()
+                ? streamTurnCollector.collect(factoryId, request, userId, userRole)
+                : orchestrator.execute(factoryId, request, userId, userRole);
     }
 
     private void recordFlywheel(String factoryId, Long userId, IntentExecuteRequest request,
@@ -110,7 +117,8 @@ public class IntentExecutorServiceImpl implements IntentExecutorService {
     public IntentExecuteResponse preview(String factoryId, IntentExecuteRequest request,
                                          Long userId, String userRole) {
         request.setPreviewOnly(true);
-        IntentExecuteResponse response = orchestrator.execute(factoryId, request, userId, userRole);
+        // 带意图码 (按钮 / 数字班组): 编排器显式意图路径的预览; 不带: 流式管线识别后按 previewOnly 只预览 (PR-3)
+        IntentExecuteResponse response = runTurn(factoryId, request, userId, userRole);
         populateConversationRound(factoryId, userId, request, response);
         return response;
     }

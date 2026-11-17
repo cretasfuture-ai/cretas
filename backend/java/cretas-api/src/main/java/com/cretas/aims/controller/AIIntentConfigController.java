@@ -378,16 +378,31 @@ public class AIIntentConfigController {
         return ResponseEntity.ok(ApiResponse.success(hasInnerMessage ? innerMessage : "已处理", response));
     }
 
-    /** 明确表示「这次没成」的状态。NEED_MORE_INFO 不算失败, 但它也绝不该说「操作成功」。 */
+    /**
+     * 明确表示「这次没成」的状态。NEED_MORE_INFO 不算失败, 但它也绝不该说「操作成功」。
+     *
+     * <p>意图蒸馏③ PR-3 起 /execute 跑流式管线, 多了两种拒绝 (复审 M1):
+     * {@code SESSION_OWNERSHIP_DENIED} (点名的会话不属于当前本厂账号, 如平台账号) 与
+     * {@code NO_MATCH} (流式管线只在「本厂供应商比价意图停用 / 不属本厂」时把它作为结果状态, 原普通入口回的是 NO_PERMISSION)。
+     * 两者都没执行, ⛔ 不许被 envelope 报成功。
+     */
     private boolean isFailureStatus(String status) {
         return "FAILED".equals(status)
                 || "NO_PERMISSION".equals(status)
-                || "NOT_RECOGNIZED".equals(status);
+                || "NOT_RECOGNIZED".equals(status)
+                || "SESSION_OWNERSHIP_DENIED".equals(status)
+                || "NO_MATCH".equals(status);
     }
 
     private String defaultFailureMessage(String status) {
         if ("NO_PERMISSION".equals(status)) {
             return "当前账号没有执行该操作的权限，请联系管理员开通后重试。";
+        }
+        if ("SESSION_OWNERSHIP_DENIED".equals(status)) {
+            return "当前 AI 会话身份已失效或不属于当前工厂，未执行。请重新发起会话。";
+        }
+        if ("NO_MATCH".equals(status)) {
+            return "该功能当前不可用，未执行。请联系工厂管理员核对功能配置。";
         }
         if ("NOT_RECOGNIZED".equals(status)) {
             return "没有识别出你要做的操作，请换一种说法，或补充具体的单据号、物料名和时间范围。";

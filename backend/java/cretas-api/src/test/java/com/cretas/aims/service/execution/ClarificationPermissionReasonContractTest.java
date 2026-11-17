@@ -131,7 +131,7 @@ class ClarificationPermissionReasonContractTest {
                 s.clarify(match("SKU_GROSS_MARGIN", "REPORT_SALES_MARGIN_SUMMARY"), FACTORY, USER, ROLE, "READ");
 
         assertThat(c.status()).isEqualTo("PERMISSION_DENIED");
-        assertThat(c.message()).contains("需要的权限").contains("财务查看").contains("财务管理")
+        assertThat(c.message()).contains("需要的权限").contains("财务管理（查看）").contains("财务管理（操作）")
                 .doesNotContain("当前没有可安全提供的业务选项").doesNotContain("finance:");
         // 与直接执行这个工具时 ToolDispatchService W9 回的那句同一份 (同一个 enforcer、同一个上下文构造)
         java.util.Map<String, Object> trusted = new java.util.HashMap<>();
@@ -172,7 +172,7 @@ class ClarificationPermissionReasonContractTest {
         ClarificationCandidateService.Clarification deniedFirst =
                 s.clarify(match("SKU_GROSS_MARGIN", "TOOL_NOT_REGISTERED"), FACTORY, USER, ROLE, "READ");
         assertThat(deniedFirst.status()).isEqualTo("PERMISSION_DENIED");
-        assertThat(deniedFirst.message()).contains("财务查看");
+        assertThat(deniedFirst.message()).contains("财务管理（查看）");
     }
 
     @Test

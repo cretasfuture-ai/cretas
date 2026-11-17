@@ -378,9 +378,6 @@ class DemoConversationAdmissionContractTest {
         BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
         when(businessTypeGate.check(anyString(), any())).thenReturn(Optional.empty());
         ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
-        for (String counter : List.of("branchToolDirect", "branchSkill", "branchDynamic", "branchNoMatch")) {
-            ReflectionTestUtils.setField(orchestrator, counter, new java.util.concurrent.atomic.AtomicLong());
-        }
         return orchestrator;
     }
 

@@ -596,6 +596,8 @@ class SseConversationPaginationContractTest {
             when(businessTypeGate.resolveDomain(FACTORY)).thenReturn("FACTORY");
             ReflectionTestUtils.setField(service, "intentPermissionGate", permissionGate);
             ReflectionTestUtils.setField(service, "conversationMemoryService", memory);
+            // 生产上管线每轮都接编排器的共用步骤 (对话记忆只有那一份, PR-3)
+            OrdinaryEntryPipeline.attachTurnSteps(service);
             doNothing().when(service).sendSseEvent(any(), anyString(), any());
             when(memory.getOrCreateContext(eq(FACTORY), eq(USER), isNull())).thenReturn(context);
             when(memory.getOrCreateContext(eq(FACTORY), eq(USER), eq(SESSION))).thenReturn(context);

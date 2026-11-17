@@ -244,7 +244,7 @@ class ClarificationChoiceReplyEntryContractTest {
             try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(
                     new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE))) {
                 if (entry == Entry.ORDINARY) {
-                    IntentExecuteResponse response = ordinary().execute(FACTORY, request, USER, ROLE);
+                    IntentExecuteResponse response = OrdinaryEntryPipeline.execute(ordinary(), FACTORY, request, USER, ROLE);
                     lastExecutedInput = request.getUserInput();
                     return response;
                 }
