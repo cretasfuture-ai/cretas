@@ -5014,26 +5014,6 @@ class YieldReportServiceImplTest {
     }
 
     @Test
-    void submitReport_rejectsOutputPlusDefectPlusByproductAboveInput() {
-        YieldReportRequest req = legacyReq("100", "90");
-        req.setDefectQuantity(new BigDecimal("8"));
-        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
-        bp.setName("料头"); bp.setQuantity(new BigDecimal("5")); bp.setUnit("kg");   // 90+8+5=103>100
-        req.setByproducts(List.of(bp));
-
-        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
-                .isInstanceOf(BusinessException.class).hasMessageContaining("超过了投入");
-        verify(reportRepo, never()).save(any(ProductionReport.class));
-    }
-
-    @Test
-    void submitReport_allowsOutputEqualToInputBoundary() {
-        YieldReportRequest req = legacyReq("100", "92");
-        req.setDefectQuantity(new BigDecimal("8"));   // 92+8=100 刚好
-        assertThatCode(() -> svc.submitReport("F006", 1L, 5L, req)).doesNotThrowAnyException();
-    }
-
-    @Test
     void submitReport_rejectsSegmentWithSameStartAndEnd() {
         YieldReportRequest req = legacyReq("100", "90");
         YieldReportRequest.LaborSegment seg = new YieldReportRequest.LaborSegment();
@@ -5164,5 +5144,31 @@ class YieldReportServiceImplTest {
         when(reportRepo.findById(9L)).thenReturn(Optional.of(foreign));
         assertThatThrownBy(() -> svc.voidWeighing("F006", 9L, 5L, "x")).isInstanceOf(BusinessException.class)
                 .hasMessageContaining("不存在");
+    }
+
+    @Test
+    void submitReport_outputAboveInput_savesAndReturnsHintInsteadOfBlocking() {
+        YieldReportRequest req = legacyReq("100", "90");
+        req.setDefectQuantity(new BigDecimal("8"));
+        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
+        bp.setName("料头"); bp.setQuantity(new BigDecimal("5")); bp.setUnit("kg");   // 90+8+5=103>100
+
+        req.setByproducts(List.of(bp));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(99L);                       // 照常保存
+        assertThat(out.get("outputExceedsInput")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("producedTotal")).isEqualByComparingTo("103");
+        assertThat((BigDecimal) out.get("inputQuantity")).isEqualByComparingTo("100");
+        verify(reportRepo).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_outputWithinInput_hasNoHintField() {
+        YieldReportRequest req = legacyReq("100", "92");
+        req.setDefectQuantity(new BigDecimal("8"));   // 刚好 100
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(out).doesNotContainKey("outputExceedsInput");
     }
 }

@@ -146,37 +146,6 @@ public final class WeighingEntryRules {
         }
     }
 
-    /**
-     * 产出 (良品 + 不良 + 同单位副产品) 不得超过投入。只在投入 / 产出单位完全一致且投入 &gt; 0 时判
-     * (单位不同无法比较, 交给既有的单位换算与守恒软告警), 不把「不可比」当成「超了」。
-     *
-     * @param priorProduced 本次之前同一道工序已经报过的 良品+不良+副产品 (同产出单位), 分次产出时累计比较
-     */
-    public static void assertOutputWithinInput(BigDecimal input, String inputUnit, BigDecimal output,
-                                               String outputUnit, BigDecimal defect,
-                                               List<YieldReportRequest.Byproduct> byproducts,
-                                               BigDecimal priorProduced) {
-        if (input == null || input.signum() <= 0 || output == null) return;
-        if (inputUnit == null || outputUnit == null || !inputUnit.trim().equalsIgnoreCase(outputUnit.trim())) return;
-        BigDecimal total = output;
-        if (defect != null) total = total.add(defect);
-        if (byproducts != null) {
-            for (YieldReportRequest.Byproduct b : byproducts) {
-                if (b == null || b.getQuantity() == null || b.getUnit() == null) continue;
-                if (b.getUnit().trim().equalsIgnoreCase(outputUnit.trim())) total = total.add(b.getQuantity());
-            }
-        }
-        if (priorProduced != null) total = total.add(priorProduced);
-        if (total.compareTo(input) > 0) {
-            throw new BusinessException(400, "产出（良品 + 不良 + 副产品）超过了投入")
-                    .withCode("YIELD_OUTPUT_EXCEEDS_INPUT")
-                    .withHint("投入 " + input.stripTrailingZeros().toPlainString() + " " + inputUnit
-                            + "，产出合计 " + total.stripTrailingZeros().toPlainString() + " " + outputUnit
-                            + "；请核对投入、良品、不良、副产品的称重")
-                    .withHintTarget("outputQuantity");
-        }
-    }
-
     /** 不良按字典项分摊: 逐行 defectId 必填且不重复、kg &gt; 0, 合计 ≤ 总不良 (总不良必须已清点)。 */
     public static void assertDefectBreakdown(BigDecimal defectQuantity,
                                              List<YieldReportRequest.DefectShare> shares) {
@@ -215,5 +184,34 @@ public final class WeighingEntryRules {
                             + defectQuantity.stripTrailingZeros().toPlainString() + " kg")
                     .withHintTarget("defectBreakdown");
         }
+    }
+
+    /**
+     * 产出 (良品 + 不良 + 同单位副产品, 加上本道此前已报的同口径量) 大于投入时的提示, 只提示不拦
+     * (加调味料 / 加水的工序产出本来就可以大于投入)。投入 / 产出单位不同或投入 ≤ 0 → 不可比 → null。
+     */
+    public static java.util.Map<String, Object> outputExceedsInputHint(
+            BigDecimal input, String inputUnit, BigDecimal output, String outputUnit, BigDecimal defect,
+            List<YieldReportRequest.Byproduct> byproducts, BigDecimal priorProduced) {
+        if (input == null || input.signum() <= 0 || output == null) return null;
+        if (inputUnit == null || outputUnit == null || !inputUnit.trim().equalsIgnoreCase(outputUnit.trim())) {
+            return null;
+        }
+        BigDecimal total = output;
+        if (defect != null) total = total.add(defect);
+        if (byproducts != null) {
+            for (YieldReportRequest.Byproduct b : byproducts) {
+                if (b == null || b.getQuantity() == null || b.getUnit() == null) continue;
+                if (b.getUnit().trim().equalsIgnoreCase(outputUnit.trim())) total = total.add(b.getQuantity());
+            }
+        }
+        if (priorProduced != null) total = total.add(priorProduced);
+        if (total.compareTo(input) <= 0) return null;
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("outputExceedsInput", true);
+        m.put("inputQuantity", input);
+        m.put("producedTotal", total);
+        m.put("unit", outputUnit);
+        return m;
     }
 }

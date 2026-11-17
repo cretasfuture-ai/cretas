@@ -449,10 +449,8 @@ public class YieldReportServiceImpl implements YieldReportService {
         List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
         boolean isFirstReportForTask = existingTaskReports.isEmpty();
 
-        // 副产品限产品目录; 产出(良品+不良+副产品)不得超过投入 (服务端兜底, 不只靠前端)
+        // 副产品限产品目录 (服务端兜底, 不只靠前端)
         assertByproductsInCatalog(factoryId, effByproducts);
-        assertReportOutputWithinInput(req, isOutput, isLegacy, effInput, effInputUnit, effOutput, effOutputUnit,
-                effByproducts, existingTaskReports);
 
         // 包装模板继承: 仅首条报工继承 (packagingDetail 跨报工拼接累加, 多阶段/多次报工各自继承会重复计成本)。
         // req 显式传值优先; 仅当本次未传且为该 task 首条报工时, 从工序定义继承一次。
@@ -775,6 +773,29 @@ public class YieldReportServiceImpl implements YieldReportService {
                     factoryId, sumInput, effOutput, sumInputUnit, effOutputUnit,
                     effByproducts, effWaste, effSampleRetain);
             if (balanceWarning != null) out.put("balanceWarning", balanceWarning);
+        }
+
+        // 产出(良品+不良+副产品)大于投入: 已定「不硬拦, 只提示」(加调味料/加水的工序产出本就可以大于投入),
+        // 照常保存, 回给前端一个明确字段; 不改数。
+        if (isLegacy || isOutput) {
+            BigDecimal hintInput = isLegacy ? effInput : existingTaskReports.stream()
+                    .map(ProductionReport::getInputQuantity).filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            String hintInUnit = isLegacy ? effInputUnit : existingTaskReports.stream()
+                    .map(ProductionReport::getInputUnit).filter(Objects::nonNull).findFirst().orElse(null);
+            BigDecimal prior = BigDecimal.ZERO;
+            if (isOutput && effOutputUnit != null) {
+                for (ProductionReport pr : existingTaskReports) {
+                    if (pr.getOutputQuantity() != null && pr.getOutputUnit() != null
+                            && pr.getOutputUnit().trim().equalsIgnoreCase(effOutputUnit.trim())) {
+                        prior = prior.add(pr.getOutputQuantity());
+                        if (pr.getDefectQuantity() != null) prior = prior.add(pr.getDefectQuantity());
+                    }
+                }
+            }
+            Map<String, Object> exceeds = com.cretas.aims.service.yield.WeighingEntryRules.outputExceedsInputHint(
+                    hintInput, hintInUnit, effOutput, effOutputUnit, req.getDefectQuantity(), effByproducts, prior);
+            if (exceeds != null) out.putAll(exceeds);
         }
 
         // 2026-08-17: 未配「半成品产出编号」时必须出声, ⛔ 不许静默。
@@ -2853,50 +2874,6 @@ public class YieldReportServiceImpl implements YieldReportService {
                         .withHintTarget("byproducts");
             }
         }
-    }
-
-    private void assertReportOutputWithinInput(YieldReportRequest req, boolean isOutput, boolean isLegacy,
-                                               BigDecimal effInput, String effInputUnit,
-                                               BigDecimal effOutput, String effOutputUnit,
-                                               List<YieldReportRequest.Byproduct> effByproducts,
-                                               List<ProductionReport> existingTaskReports) {
-        if (effOutput == null) return;
-        BigDecimal input;
-        String inUnit;
-        BigDecimal prior = BigDecimal.ZERO;
-        if (isLegacy) {
-            input = effInput;
-            inUnit = effInputUnit;
-        } else if (isOutput) {
-            input = existingTaskReports.stream().map(ProductionReport::getInputQuantity)
-                    .filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
-            inUnit = existingTaskReports.stream().map(ProductionReport::getInputUnit)
-                    .filter(Objects::nonNull).findFirst().orElse(null);
-            for (ProductionReport pr : existingTaskReports) {
-                if (pr.getOutputQuantity() != null && effOutputUnit != null && pr.getOutputUnit() != null
-                        && pr.getOutputUnit().trim().equalsIgnoreCase(effOutputUnit.trim())) {
-                    prior = prior.add(pr.getOutputQuantity());
-                    if (pr.getDefectQuantity() != null) prior = prior.add(pr.getDefectQuantity());
-                    if (pr.getByproducts() != null) {
-                        for (Map<String, Object> bp : pr.getByproducts()) {
-                            Object q = bp.get("quantity");
-                            Object u = bp.get("unit");
-                            if (q != null && u != null && u.toString().trim().equalsIgnoreCase(effOutputUnit.trim())) {
-                                try {
-                                    prior = prior.add(new BigDecimal(q.toString()));
-                                } catch (NumberFormatException ignore) {
-                                    // 历史脏数据: 无法解析的副产品量不参与累计
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } else {
-            return;
-        }
-        com.cretas.aims.service.yield.WeighingEntryRules.assertOutputWithinInput(
-                input, inUnit, effOutput, effOutputUnit, req.getDefectQuantity(), effByproducts, prior);
     }
 
     /**
