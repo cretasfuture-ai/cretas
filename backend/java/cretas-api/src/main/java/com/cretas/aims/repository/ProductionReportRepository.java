@@ -164,6 +164,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
     @Query(value = """
         SELECT
             COALESCE(process_category, '未分类') as process_category,
+            output_unit as unit,
             COALESCE(SUM(CAST(output_quantity AS DECIMAL(12,2))), 0) as output,
             COALESCE(SUM(CAST(good_quantity AS DECIMAL(12,2))), 0) as good,
             COALESCE(SUM(CAST(defect_quantity AS DECIMAL(12,2))), 0) as defect,
@@ -173,8 +174,8 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
           AND report_type = 'PROGRESS'
           AND report_date BETWEEN :startDate AND :endDate
           AND deleted_at IS NULL
-        GROUP BY process_category
-        ORDER BY output DESC
+        GROUP BY COALESCE(process_category, '未分类'), output_unit
+        ORDER BY process_category, output_unit
         """, nativeQuery = true)
     List<Map<String, Object>> getProcessBreakdown(
             @Param("factoryId") String factoryId,

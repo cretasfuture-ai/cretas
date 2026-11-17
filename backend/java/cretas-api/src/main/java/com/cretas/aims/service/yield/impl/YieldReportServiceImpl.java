@@ -322,6 +322,9 @@ public class YieldReportServiceImpl implements YieldReportService {
                         .orElse(false));
         com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
                 req.getBusinessDate(), req.getLaborSegments(), clock);
+        com.cretas.aims.service.yield.WeighingEntryRules.assertSegmentsStartBeforeEnd(req.getLaborSegments());
+        com.cretas.aims.service.yield.WeighingEntryRules.assertDefectBreakdown(
+                req.getDefectQuantity(), req.getDefectBreakdown());
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -445,6 +448,11 @@ public class YieldReportServiceImpl implements YieldReportService {
         // 前置查该 task 已有 YIELD 报工: 决定是否首条 + 作双写求和基数
         List<ProductionReport> existingTaskReports = reportRepo.findYieldReportsByTask(factoryId, t.getId());
         boolean isFirstReportForTask = existingTaskReports.isEmpty();
+
+        // 副产品限产品目录; 产出(良品+不良+副产品)不得超过投入 (服务端兜底, 不只靠前端)
+        assertByproductsInCatalog(factoryId, effByproducts);
+        assertReportOutputWithinInput(req, isOutput, isLegacy, effInput, effInputUnit, effOutput, effOutputUnit,
+                effByproducts, existingTaskReports);
 
         // 包装模板继承: 仅首条报工继承 (packagingDetail 跨报工拼接累加, 多阶段/多次报工各自继承会重复计成本)。
         // req 显式传值优先; 仅当本次未传且为该 task 首条报工时, 从工序定义继承一次。
@@ -615,6 +623,18 @@ public class YieldReportServiceImpl implements YieldReportService {
                     }
                 }
             }
+        }
+
+        if (req.getDefectBreakdown() != null && !req.getDefectBreakdown().isEmpty() && !isInput && !isSegment) {
+            Map<String, Object> fields = r.getCustomFields() == null
+                    ? new LinkedHashMap<>() : new LinkedHashMap<>(r.getCustomFields());
+            fields.put("defectBreakdown", req.getDefectBreakdown().stream().map(d -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("defectId", d.getDefectId().trim());
+                m.put("kg", d.getKg());
+                return m;
+            }).collect(Collectors.toList()));
+            r.setCustomFields(fields);
         }
 
         // 缺口 06: 多主料按份额汇合时, 偏差 >±2pp 必须带原因; 快照并入 customFields.blendRatio。
@@ -1444,6 +1464,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         if (bps == null || bps.isEmpty()) return null;
         return bps.stream().map(b -> {
             Map<String, Object> m = new LinkedHashMap<>();
+            if (b.getProductTypeId() != null && !b.getProductTypeId().isBlank()) {
+                m.put("productTypeId", b.getProductTypeId().trim());
+            }
             m.put("name", b.getName());
             m.put("quantity", b.getQuantity());
             if (b.getUnit() != null) m.put("unit", b.getUnit());
@@ -2805,6 +2828,160 @@ public class YieldReportServiceImpl implements YieldReportService {
                 }
             });
         }
+    }
+
+    /** 副产品行带 productTypeId 时必须是本厂启用中的产品 (限产品目录)。 */
+    private void assertByproductsInCatalog(String factoryId, List<YieldReportRequest.Byproduct> byproducts) {
+        if (byproducts == null || byproducts.isEmpty()) return;
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        for (YieldReportRequest.Byproduct b : byproducts) {
+            if (b != null && b.getProductTypeId() != null && !b.getProductTypeId().isBlank()) {
+                ids.add(b.getProductTypeId().trim());
+            }
+        }
+        if (ids.isEmpty()) return;
+        Map<String, com.cretas.aims.entity.ProductType> found = new HashMap<>();
+        for (com.cretas.aims.entity.ProductType pt : productTypeRepository.findByFactoryIdAndIdIn(factoryId, ids)) {
+            found.put(pt.getId(), pt);
+        }
+        for (String id : ids) {
+            com.cretas.aims.entity.ProductType pt = found.get(id);
+            if (pt == null || Boolean.FALSE.equals(pt.getIsActive())) {
+                throw new BusinessException(400, "副产品不在产品目录里: " + id)
+                        .withCode("BYPRODUCT_NOT_IN_CATALOG")
+                        .withHint("副产品只能从本厂启用中的产品目录里选；目录里没有请先到产品管理新增")
+                        .withHintTarget("byproducts");
+            }
+        }
+    }
+
+    private void assertReportOutputWithinInput(YieldReportRequest req, boolean isOutput, boolean isLegacy,
+                                               BigDecimal effInput, String effInputUnit,
+                                               BigDecimal effOutput, String effOutputUnit,
+                                               List<YieldReportRequest.Byproduct> effByproducts,
+                                               List<ProductionReport> existingTaskReports) {
+        if (effOutput == null) return;
+        BigDecimal input;
+        String inUnit;
+        BigDecimal prior = BigDecimal.ZERO;
+        if (isLegacy) {
+            input = effInput;
+            inUnit = effInputUnit;
+        } else if (isOutput) {
+            input = existingTaskReports.stream().map(ProductionReport::getInputQuantity)
+                    .filter(Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add);
+            inUnit = existingTaskReports.stream().map(ProductionReport::getInputUnit)
+                    .filter(Objects::nonNull).findFirst().orElse(null);
+            for (ProductionReport pr : existingTaskReports) {
+                if (pr.getOutputQuantity() != null && effOutputUnit != null && pr.getOutputUnit() != null
+                        && pr.getOutputUnit().trim().equalsIgnoreCase(effOutputUnit.trim())) {
+                    prior = prior.add(pr.getOutputQuantity());
+                    if (pr.getDefectQuantity() != null) prior = prior.add(pr.getDefectQuantity());
+                    if (pr.getByproducts() != null) {
+                        for (Map<String, Object> bp : pr.getByproducts()) {
+                            Object q = bp.get("quantity");
+                            Object u = bp.get("unit");
+                            if (q != null && u != null && u.toString().trim().equalsIgnoreCase(effOutputUnit.trim())) {
+                                try {
+                                    prior = prior.add(new BigDecimal(q.toString()));
+                                } catch (NumberFormatException ignore) {
+                                    // 历史脏数据: 无法解析的副产品量不参与累计
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            return;
+        }
+        com.cretas.aims.service.yield.WeighingEntryRules.assertOutputWithinInput(
+                input, inUnit, effOutput, effOutputUnit, req.getDefectQuantity(), effByproducts, prior);
+    }
+
+    /**
+     * 撤销单笔称重 (不是整批冲销): 原因必填、留痕在报工自己的 custom_fields.voidAudit、软删本笔、
+     * 退回它的半成品过账 + 生产仓占用、重算任务累计产出与批次人工成本。
+     * 下游已领用本笔产出 / 已结清 / 已冲销 的不许撤 (409, 指明去处理哪一头)。
+     */
+    @Override
+    @Transactional
+    public Map<String, Object> voidWeighing(String factoryId, Long reportId, Long operatorId, String reason) {
+        if (reason == null || reason.isBlank()) {
+            throw new BusinessException(400, "撤销称重必须填写原因")
+                    .withCode("WEIGHING_VOID_REASON_REQUIRED")
+                    .withHint("请写明为什么撤销这一笔（例如：秤读数录错、重复提交）").withHintTarget("reason");
+        }
+        ProductionReport r = reportRepo.findById(reportId)
+                .filter(x -> factoryId.equals(x.getFactoryId()))
+                .orElseThrow(() -> new BusinessException(404, "称重记录不存在: " + reportId));
+        if (r.getDeletedAt() != null) {
+            throw new BusinessException(409, "这一笔称重已经撤销过了").withCode("WEIGHING_ALREADY_VOIDED");
+        }
+        if (!YIELD.equals(r.getReportType())) {
+            throw new BusinessException(400, "只能撤销称重（逐道报工）记录").withCode("WEIGHING_VOID_NOT_YIELD");
+        }
+        if (Boolean.TRUE.equals(r.getSettled()) || r.getReversalOfId() != null) {
+            throw new BusinessException(409, "这一笔已结清或本身是冲销记录，不能单笔撤销")
+                    .withCode("WEIGHING_VOID_SETTLED")
+                    .withHint("已结清的请走整批冲销流程");
+        }
+        WorkProcessTask t = r.getWorkProcessTaskId() == null ? null
+                : taskRepo.findByFactoryIdAndId(factoryId, r.getWorkProcessTaskId()).orElse(null);
+        if (t != null) {
+            // 下游已领用会在这里抛 409, 整个事务回滚, 不会留下「已撤销但库存还在」
+            wipInventoryService.reverseReportPosting(factoryId, r, t, operatorId);
+        }
+        if (workshopReservationService != null) {
+            workshopReservationService.releaseForReport(factoryId, r);
+        }
+        Map<String, Object> fields = r.getCustomFields() == null
+                ? new LinkedHashMap<>() : new LinkedHashMap<>(r.getCustomFields());
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("reason", reason.strip());
+        audit.put("operatorId", operatorId);
+        audit.put("at", LocalDateTime.now().toString());
+        fields.put("voidAudit", audit);
+        r.setCustomFields(fields);
+        r.setDeletedAt(LocalDateTime.now());
+        reportRepo.save(r);
+
+        BigDecimal remaining = BigDecimal.ZERO;
+        if (t != null) {
+            remaining = reportRepo.findYieldReportsByTask(factoryId, t.getId()).stream()
+                    .filter(x -> !x.getId().equals(r.getId()))
+                    .map(ProductionReport::getOutputQuantity).filter(Objects::nonNull)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            t.setActualQuantity(remaining);
+            if (remaining.signum() == 0 && t.getStatus() == WorkProcessTask.Status.COMPLETED) {
+                t.setStatus(WorkProcessTask.Status.IN_PROGRESS);
+                t.setCompletedAt(null);
+                t.setCompletedBy(null);
+            }
+            taskRepo.save(t);
+        }
+        rollupLaborCostAfterVoid(factoryId, r.getBatchId());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("reportId", reportId);
+        out.put("voided", true);
+        out.put("taskActualQuantity", remaining);
+        return out;
+    }
+
+    /** 撤销后重算批次人工成本; 与 rollupLaborCostToBatch 不同: 剩余全无人工成本时清成 null (不留已撤销那笔的钱)。 */
+    private void rollupLaborCostAfterVoid(String factoryId, Long batchId) {
+        if (batchId == null) return;
+        BigDecimal total = null;
+        for (ProductionReport rpt : reportRepo.findYieldReportsByBatch(factoryId, batchId)) {
+            if (rpt.getLaborCost() != null) {
+                total = (total == null ? BigDecimal.ZERO : total).add(rpt.getLaborCost());
+            }
+        }
+        ProductionBatch pb = productionBatchRepository.findByIdAndFactoryId(batchId, factoryId).orElse(null);
+        if (pb == null) return;
+        pb.setLaborCost(total);
+        pb.calculateMetrics();
+        productionBatchRepository.save(pb);
     }
 
     /**

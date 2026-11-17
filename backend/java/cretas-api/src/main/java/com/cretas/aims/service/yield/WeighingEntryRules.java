@@ -123,4 +123,97 @@ public final class WeighingEntryRules {
             return null;   // 格式问题交给原有的工时计算路径处理, 这里只管「是不是在未来」
         }
     }
+
+    // ==================== 生产缺口补齐: 服务端兜底校验 ====================
+
+    /**
+     * 时段起止不能相同 (零时长)。结束早于开始仍按跨零点处理 (R36 既有口径, 夜班合法), 不在这里拦。
+     * 格式不对的 HH:mm 交给原有工时计算路径, 这里不判。
+     */
+    public static void assertSegmentsStartBeforeEnd(List<YieldReportRequest.LaborSegment> segments) {
+        if (segments == null) return;
+        for (int i = 0; i < segments.size(); i++) {
+            YieldReportRequest.LaborSegment s = segments.get(i);
+            if (s == null) continue;
+            LocalTime start = parse(s.getStartTime());
+            LocalTime end = parse(s.getEndTime());
+            if (start != null && end != null && start.equals(end)) {
+                throw new BusinessException(400, "结束时间不能和开始时间相同")
+                        .withCode("WEIGHING_TIME_RANGE_EMPTY")
+                        .withHint("请核对第 " + (i + 1) + " 段的起止时间：结束必须晚于开始（跨零点的夜班请写成结束早于开始）")
+                        .withHintTarget("laborSegments[" + i + "].endTime");
+            }
+        }
+    }
+
+    /**
+     * 产出 (良品 + 不良 + 同单位副产品) 不得超过投入。只在投入 / 产出单位完全一致且投入 &gt; 0 时判
+     * (单位不同无法比较, 交给既有的单位换算与守恒软告警), 不把「不可比」当成「超了」。
+     *
+     * @param priorProduced 本次之前同一道工序已经报过的 良品+不良+副产品 (同产出单位), 分次产出时累计比较
+     */
+    public static void assertOutputWithinInput(BigDecimal input, String inputUnit, BigDecimal output,
+                                               String outputUnit, BigDecimal defect,
+                                               List<YieldReportRequest.Byproduct> byproducts,
+                                               BigDecimal priorProduced) {
+        if (input == null || input.signum() <= 0 || output == null) return;
+        if (inputUnit == null || outputUnit == null || !inputUnit.trim().equalsIgnoreCase(outputUnit.trim())) return;
+        BigDecimal total = output;
+        if (defect != null) total = total.add(defect);
+        if (byproducts != null) {
+            for (YieldReportRequest.Byproduct b : byproducts) {
+                if (b == null || b.getQuantity() == null || b.getUnit() == null) continue;
+                if (b.getUnit().trim().equalsIgnoreCase(outputUnit.trim())) total = total.add(b.getQuantity());
+            }
+        }
+        if (priorProduced != null) total = total.add(priorProduced);
+        if (total.compareTo(input) > 0) {
+            throw new BusinessException(400, "产出（良品 + 不良 + 副产品）超过了投入")
+                    .withCode("YIELD_OUTPUT_EXCEEDS_INPUT")
+                    .withHint("投入 " + input.stripTrailingZeros().toPlainString() + " " + inputUnit
+                            + "，产出合计 " + total.stripTrailingZeros().toPlainString() + " " + outputUnit
+                            + "；请核对投入、良品、不良、副产品的称重")
+                    .withHintTarget("outputQuantity");
+        }
+    }
+
+    /** 不良按字典项分摊: 逐行 defectId 必填且不重复、kg &gt; 0, 合计 ≤ 总不良 (总不良必须已清点)。 */
+    public static void assertDefectBreakdown(BigDecimal defectQuantity,
+                                             List<YieldReportRequest.DefectShare> shares) {
+        if (shares == null || shares.isEmpty()) return;
+        if (defectQuantity == null) {
+            throw new BusinessException(400, "按不良项分摊前请先填写不良总量")
+                    .withCode("DEFECT_BREAKDOWN_WITHOUT_TOTAL")
+                    .withHint("「没清点」和「确认零不良」是两件事：请先填不良总量（0 也要填）")
+                    .withHintTarget("defectQuantity");
+        }
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        BigDecimal sum = BigDecimal.ZERO;
+        for (int i = 0; i < shares.size(); i++) {
+            YieldReportRequest.DefectShare s = shares.get(i);
+            if (s == null || s.getDefectId() == null || s.getDefectId().isBlank()) {
+                throw new BusinessException(400, "不良分摊第 " + (i + 1) + " 行缺少不良项")
+                        .withCode("DEFECT_BREAKDOWN_ID_REQUIRED")
+                        .withHint("请选择不良项").withHintTarget("defectBreakdown[" + i + "].defectId");
+            }
+            if (!seen.add(s.getDefectId().trim())) {
+                throw new BusinessException(400, "不良项重复：" + s.getDefectId())
+                        .withCode("DEFECT_BREAKDOWN_DUPLICATE")
+                        .withHint("同一个不良项只填一行，数量合并").withHintTarget("defectBreakdown[" + i + "].defectId");
+            }
+            if (s.getKg() == null || s.getKg().signum() <= 0) {
+                throw new BusinessException(400, "不良分摊第 " + (i + 1) + " 行的重量必须大于 0")
+                        .withCode("DEFECT_BREAKDOWN_KG_INVALID")
+                        .withHint("没有这一项就删掉这一行").withHintTarget("defectBreakdown[" + i + "].kg");
+            }
+            sum = sum.add(s.getKg());
+        }
+        if (sum.compareTo(defectQuantity) > 0) {
+            throw new BusinessException(400, "不良分摊合计超过了不良总量")
+                    .withCode("DEFECT_BREAKDOWN_EXCEEDS_TOTAL")
+                    .withHint("分摊合计 " + sum.stripTrailingZeros().toPlainString() + " kg，不良总量 "
+                            + defectQuantity.stripTrailingZeros().toPlainString() + " kg")
+                    .withHintTarget("defectBreakdown");
+        }
+    }
 }

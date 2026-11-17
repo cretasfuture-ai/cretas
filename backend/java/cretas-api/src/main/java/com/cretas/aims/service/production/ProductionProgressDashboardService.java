@@ -29,7 +29,8 @@ public class ProductionProgressDashboardService {
         List<Object[]> planRows = entityManager.createNativeQuery(
             "SELECT p.id, p.plan_number, p.planned_quantity, p.actual_quantity, " +
             "       p.status, p.source_customer_name, " +
-            "       COALESCE(pt.name, '未命名') as product_name " +
+            "       COALESCE(pt.name, '未命名') as product_name, " +
+            "       p.planned_date, p.expected_completion_date " +
             "FROM production_plans p " +
             "LEFT JOIN product_types pt ON pt.id = p.product_type_id " +
             "WHERE p.factory_id = :factoryId " +
@@ -82,6 +83,8 @@ public class ProductionProgressDashboardService {
             String rawStatus = row[4] != null ? row[4].toString() : "PENDING";
             String customerName = (String) row[5];
             String productName = (String) row[6];
+            LocalDate plannedDate = toLocalDate(row[7]);
+            LocalDate dueDate = toLocalDate(row[8]);
 
             Map<String, BigDecimal> processes = reportsByProduct.getOrDefault(productName, Collections.emptyMap());
             BigDecimal reportedQty = processes.values().stream()
@@ -135,6 +138,13 @@ public class ProductionProgressDashboardService {
             plan.put("reportedQuantity", reportedQty);
             plan.put("progressPct", progressPct);
             plan.put("status", planStatus);
+            // 时间进度 / 超期 / 落后: 缺起止日期就是 null (不知道), 不当 0% 也不当没超期
+            Integer timePct = timeProgressPct(plannedDate, dueDate, targetDate);
+            plan.put("plannedDate", plannedDate == null ? null : plannedDate.toString());
+            plan.put("dueDate", dueDate == null ? null : dueDate.toString());
+            plan.put("timeProgressPct", timePct);
+            plan.put("overdue", isOverdue(dueDate, targetDate, isDone));
+            plan.put("behind", isBehind(timePct, progressPct, isDone));
             plan.put("processes", processList);
             plans.add(plan);
 
@@ -164,8 +174,50 @@ public class ProductionProgressDashboardService {
         summary.put("totalPlannedQuantity", totalPlanned);
         summary.put("totalReportedQuantity", totalReported);
 
+        long overduePlans = plans.stream().filter(p -> Boolean.TRUE.equals(p.get("overdue"))).count();
+        long behindPlans = plans.stream().filter(p -> Boolean.TRUE.equals(p.get("behind"))).count();
+        summary.put("overduePlans", overduePlans);
+        summary.put("behindPlans", behindPlans);
+
+        // 当日报工笔数 + 最近报工 (称重逐道报工 YIELD 与旧进度报工 PROGRESS, 软删的不算)
+        Number reportCount = (Number) entityManager.createNativeQuery(
+            "SELECT COUNT(*) FROM production_reports " +
+            "WHERE factory_id = :factoryId AND report_date = :date " +
+            "  AND report_type IN ('YIELD','PROGRESS') AND deleted_at IS NULL"
+        ).setParameter("factoryId", factoryId).setParameter("date", targetDate).getSingleResult();
+        summary.put("todayReportCount", reportCount == null ? 0L : reportCount.longValue());
+
+        @SuppressWarnings("unchecked")
+        List<Object[]> recentRows = entityManager.createNativeQuery(
+            "SELECT r.id, r.created_at, r.reporter_name, r.report_kind, r.output_quantity, r.output_unit, " +
+            "       r.input_quantity, r.input_unit, COALESCE(pt.name, r.product_name) AS product_name, wp.process_name " +
+            "FROM production_reports r " +
+            "LEFT JOIN product_types pt ON pt.id = r.product_type_id " +
+            "LEFT JOIN work_process_tasks t ON t.id = r.work_process_task_id " +
+            "LEFT JOIN work_processes wp ON wp.id = t.work_process_id " +
+            "WHERE r.factory_id = :factoryId AND r.report_date = :date " +
+            "  AND r.report_type IN ('YIELD','PROGRESS') AND r.deleted_at IS NULL " +
+            "ORDER BY r.created_at DESC, r.id DESC LIMIT 10"
+        ).setParameter("factoryId", factoryId).setParameter("date", targetDate).getResultList();
+        List<Map<String, Object>> recent = new ArrayList<>();
+        for (Object[] r : recentRows) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("reportId", ((Number) r[0]).longValue());
+            m.put("createdAt", r[1] == null ? null : r[1].toString());
+            m.put("reporterName", r[2]);
+            m.put("reportKind", r[3]);
+            m.put("outputQuantity", r[4]);
+            m.put("outputUnit", r[5]);
+            m.put("inputQuantity", r[6]);
+            m.put("inputUnit", r[7]);
+            m.put("productName", r[8]);
+            m.put("processName", r[9]);
+            recent.add(m);
+        }
+
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("date", targetDate.toString());
+        data.put("recentReports", recent);
         data.put("summary", summary);
         data.put("plans", plans);
         return data;
@@ -184,6 +236,36 @@ public class ProductionProgressDashboardService {
             case "IN_PROGRESS", "PAUSED" -> "IN_PROGRESS";
             default -> "PENDING";
         };
+    }
+
+    /**
+     * 时间进度 % = (看板日期 − 计划日) / (交期 − 计划日), 夹在 0..100。
+     * 缺计划日或交期 → null; 交期不晚于计划日 → 看板日期到了交期算 100, 否则 0。
+     */
+    static Integer timeProgressPct(LocalDate start, LocalDate due, LocalDate today) {
+        if (start == null || due == null) return null;
+        long span = java.time.temporal.ChronoUnit.DAYS.between(start, due);
+        long passed = java.time.temporal.ChronoUnit.DAYS.between(start, today);
+        if (span <= 0) return today.isBefore(due) ? 0 : 100;
+        return (int) Math.max(0, Math.min(100, Math.round(passed * 100.0 / span)));
+    }
+
+    /** 超期 = 有交期、看板日期已过交期、计划没完成。 */
+    static boolean isOverdue(LocalDate due, LocalDate today, boolean done) {
+        return due != null && !done && today.isAfter(due);
+    }
+
+    /** 落后 = 有时间进度、没完成、数量进度低于时间进度。 */
+    static boolean isBehind(Integer timePct, int progressPct, boolean done) {
+        return timePct != null && !done && progressPct < timePct;
+    }
+
+    private static LocalDate toLocalDate(Object v) {
+        if (v == null) return null;
+        if (v instanceof LocalDate d) return d;
+        if (v instanceof java.sql.Date d) return d.toLocalDate();
+        if (v instanceof java.util.Date d) return new java.sql.Date(d.getTime()).toLocalDate();
+        return LocalDate.parse(v.toString().substring(0, 10));
     }
 
     private BigDecimal toBigDecimal(Object val) {

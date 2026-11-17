@@ -167,6 +167,17 @@ public interface ProductionPlanService {
      * 获取生产计划列表（分页）
       */
     PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest);
+
+    /** 同上, 补产品 / 单位 / 批量单号筛选 (三项可选)。 */
+    PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter);
+
+    /**
+     * 四态计数 (受同一组筛选约束, 但不受 status 约束): pending 待开工 (PLANNED/PENDING)、inProgress 进行中
+     * (IN_PROGRESS/PAUSED/PENDING_APPROVAL)、completed、cancelled; draft (PREPARED 草稿) 单列, total = 全部。
+     */
+    java.util.Map<String, Long> getProductionPlanStatusCounts(String factoryId, String keyword,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter);
      /**
      * 按状态获取生产计划
       */

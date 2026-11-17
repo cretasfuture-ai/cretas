@@ -24,7 +24,7 @@ public class ProductionAnalyticsServiceImpl {
     public ProductionDashboardResponse getProductionDashboard(String factoryId, LocalDate startDate, LocalDate endDate) {
         List<Map<String, Object>> dailyTrend = reportRepo.getDailyProductionTrend(factoryId, startDate, endDate);
         List<Map<String, Object>> byProduct = reportRepo.getProductBreakdown(factoryId, startDate, endDate);
-        List<Map<String, Object>> byProcess = reportRepo.getProcessBreakdown(factoryId, startDate, endDate);
+        List<Map<String, Object>> byProcess = withDefectRate(reportRepo.getProcessBreakdown(factoryId, startDate, endDate));
         Map<String, Object> summary = reportRepo.getProgressSummary(factoryId, startDate, endDate);
 
         // 计算环比
@@ -51,8 +51,31 @@ public class ProductionAnalyticsServiceImpl {
         return reportRepo.getProductBreakdown(factoryId, startDate, endDate);
     }
 
+    /**
+     * 按工序 + 单位分组 (不同单位不相加); 每行补 defectRate = 不良 / 产出, 产出为 0 时返回 null (不是 0)。
+     * 口径: 产出 (output) 是该工序上报的产出合计, 不良 (defect) 是同口径下的不良合计。
+     */
     public List<Map<String, Object>> getByProcess(String factoryId, LocalDate startDate, LocalDate endDate) {
-        return reportRepo.getProcessBreakdown(factoryId, startDate, endDate);
+        return withDefectRate(reportRepo.getProcessBreakdown(factoryId, startDate, endDate));
+    }
+
+    static List<Map<String, Object>> withDefectRate(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map<String, Object> r : rows) {
+            Map<String, Object> m = new LinkedHashMap<>(r);
+            m.put("defectRate", defectRate(r.get("defect"), r.get("output")));
+            out.add(m);
+        }
+        return out;
+    }
+
+    /** 零分母 / 缺值 → null, 其余 4 位小数 (0.0125 = 1.25%)。 */
+    static BigDecimal defectRate(Object defect, Object output) {
+        if (defect == null || output == null) return null;
+        BigDecimal d = new BigDecimal(defect.toString());
+        BigDecimal o = new BigDecimal(output.toString());
+        if (o.signum() <= 0) return null;
+        return d.divide(o, 4, RoundingMode.HALF_UP);
     }
 
     // ==================== 人效分析 ====================

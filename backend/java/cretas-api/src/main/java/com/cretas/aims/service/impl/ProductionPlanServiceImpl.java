@@ -531,6 +531,26 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         };
     }
 
+    /** 产品 / 单位 / 批量单号 (生产批次号, 计划下任一批次命中)。 */
+    private Specification<ProductionPlan> planFilter(com.cretas.aims.dto.production.ProductionPlanListFilter f) {
+        return (root, query, cb) -> {
+            if (f == null) return cb.conjunction();
+            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
+            if (f.productTypeId() != null) predicates.add(cb.equal(root.get("productTypeId"), f.productTypeId()));
+            if (f.plannedUnit() != null) predicates.add(cb.equal(root.get("plannedUnit"), f.plannedUnit()));
+            if (f.batchNumber() != null) {
+                var sub = query.subquery(String.class);
+                var b = sub.from(com.cretas.aims.entity.ProductionBatch.class);
+                sub.select(b.get("id").as(String.class)).where(
+                        cb.equal(b.get("productionPlanId"), root.get("id")),
+                        cb.like(cb.lower(b.get("batchNumber")), "%" + f.batchNumber().toLowerCase(Locale.ROOT) + "%"));
+                predicates.add(cb.exists(sub));
+            }
+            return predicates.isEmpty() ? cb.conjunction()
+                    : cb.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
+        };
+    }
+
     private Specification<ProductionPlan> planStatus(ProductionPlanStatus status) {
         return (root, query, cb) -> cb.equal(root.get("status"), status);
     }
@@ -3236,6 +3256,36 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest) {
+        return getProductionPlanList(factoryId, pageRequest,
+                com.cretas.aims.dto.production.ProductionPlanListFilter.NONE);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public java.util.Map<String, Long> getProductionPlanStatusCounts(String factoryId, String keyword,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter) {
+        List<Long> creatorIds = visiblePlanCreators(factoryId);
+        String kw = keyword != null && !keyword.isBlank() ? keyword.trim() : null;
+        Specification<ProductionPlan> base = planScope(factoryId, creatorIds)
+                .and(planKeyword(kw)).and(planFilter(filter));
+        java.util.Map<String, Long> out = new java.util.LinkedHashMap<>();
+        out.put("pending", productionPlanRepository.count(base.and(planStatusIn(
+                List.of(ProductionPlanStatus.PLANNED, ProductionPlanStatus.PENDING)))));
+        out.put("inProgress", productionPlanRepository.count(base.and(planStatusIn(
+                List.of(ProductionPlanStatus.IN_PROGRESS, ProductionPlanStatus.PAUSED,
+                        ProductionPlanStatus.PENDING_APPROVAL)))));
+        out.put("completed", productionPlanRepository.count(base.and(planStatus(ProductionPlanStatus.COMPLETED))));
+        out.put("cancelled", productionPlanRepository.count(base.and(planStatus(ProductionPlanStatus.CANCELLED))));
+        out.put("draft", productionPlanRepository.count(base.and(planStatus(ProductionPlanStatus.PREPARED))));
+        out.put("total", productionPlanRepository.count(base));
+        return out;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<ProductionPlanDTO> getProductionPlanList(String factoryId, PageRequest pageRequest,
+            com.cretas.aims.dto.production.ProductionPlanListFilter filter) {
+        Specification<ProductionPlan> extra = planFilter(filter);
         Sort sort = Sort.by(
                 pageRequest.getSortDirection().equalsIgnoreCase("DESC") ?
                 Sort.Direction.DESC : Sort.Direction.ASC,
@@ -3265,23 +3315,23 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
                 planPage = productionPlanRepository.findAll(
                         planScope(factoryId, creatorIds)
                                 .and(planStatusIn(List.of(ProductionPlanStatus.PENDING, ProductionPlanStatus.IN_PROGRESS)))
-                                .and(planKeyword(keyword)), pageable);
+                                .and(planKeyword(keyword)).and(extra), pageable);
                 log.info("按未完成状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, statusFilter, keyword);
             } else {
                 try {
                     ProductionPlanStatus status = ProductionPlanStatus.valueOf(statusFilter);
                     planPage = productionPlanRepository.findAll(
-                            planScope(factoryId, creatorIds).and(planStatus(status)).and(planKeyword(keyword)), pageable);
+                            planScope(factoryId, creatorIds).and(planStatus(status)).and(planKeyword(keyword)).and(extra), pageable);
                     log.info("按状态过滤生产计划: factoryId={}, status={}, keyword={}", factoryId, status, keyword);
                 } catch (IllegalArgumentException e) {
                     log.warn("无效的状态值: {}, 返回全部数据 (keyword={})", pageRequest.getStatus(), keyword);
                     planPage = productionPlanRepository.findAll(
-                            planScope(factoryId, creatorIds).and(planKeyword(keyword)), pageable);
+                            planScope(factoryId, creatorIds).and(planKeyword(keyword)).and(extra), pageable);
                 }
             }
         } else {
             planPage = productionPlanRepository.findAll(
-                    planScope(factoryId, creatorIds).and(planKeyword(keyword)), pageable);
+                    planScope(factoryId, creatorIds).and(planKeyword(keyword)).and(extra), pageable);
         }
 
         List<ProductionPlanDTO> planDTOs = planPage.getContent().stream()

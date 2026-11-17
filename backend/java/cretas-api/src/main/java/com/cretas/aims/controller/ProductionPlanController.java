@@ -373,10 +373,29 @@ public class ProductionPlanController {
     public ApiResponse<PageResponse<ProductionPlanDTO>> getProductionPlanList(
             @Parameter(description = "工厂ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
-            @Valid PageRequest pageRequest) {
+            @Valid PageRequest pageRequest,
+            @Parameter(description = "产品 (productTypeId)") @RequestParam(required = false) String productTypeId,
+            @Parameter(description = "计划单位") @RequestParam(required = false) String plannedUnit,
+            @Parameter(description = "批量单号 (生产批次号, 模糊)") @RequestParam(required = false) String batchNumber) {
 
-        PageResponse<ProductionPlanDTO> response = productionPlanService.getProductionPlanList(factoryId, pageRequest);
+        PageResponse<ProductionPlanDTO> response = productionPlanService.getProductionPlanList(factoryId, pageRequest,
+                com.cretas.aims.dto.production.ProductionPlanListFilter.of(productTypeId, plannedUnit, batchNumber));
         return ApiResponse.success(response);
+    }
+
+    /**
+     * 生产计划四态计数 (待开工 / 进行中 / 已完成 / 已取消, 草稿单列): 受关键词与产品 / 单位 / 批量单号约束, 不受 status 约束。
+     */
+    @GetMapping("/status-counts")
+    @Operation(summary = "生产计划四态计数")
+    public ApiResponse<java.util.Map<String, Long>> getProductionPlanStatusCounts(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String productTypeId,
+            @RequestParam(required = false) String plannedUnit,
+            @RequestParam(required = false) String batchNumber) {
+        return ApiResponse.success(productionPlanService.getProductionPlanStatusCounts(factoryId, keyword,
+                com.cretas.aims.dto.production.ProductionPlanListFilter.of(productTypeId, plannedUnit, batchNumber)));
     }
 
     /**

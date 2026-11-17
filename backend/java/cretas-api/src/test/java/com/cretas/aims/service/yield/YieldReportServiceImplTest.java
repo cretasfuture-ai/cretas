@@ -4995,4 +4995,174 @@ class YieldReportServiceImplTest {
         verify(reportRepo).save(cap.capture());
         assertThat(cap.getValue().getGoodQuantity()).isEqualByComparingTo("1000");
     }
+
+    // ==================== 生产缺口补齐: 称重报工服务端校验 / 副产品目录 / 不良分摊 / 撤销单笔 ====================
+
+    private YieldReportRequest legacyReq(String in, String out) {
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal(in)); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal(out)); req.setOutputUnit("kg");
+        return req;
+    }
+
+    @Test
+    void submitReport_rejectsOutputPlusDefectPlusByproductAboveInput() {
+        YieldReportRequest req = legacyReq("100", "90");
+        req.setDefectQuantity(new BigDecimal("8"));
+        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
+        bp.setName("料头"); bp.setQuantity(new BigDecimal("5")); bp.setUnit("kg");   // 90+8+5=103>100
+        req.setByproducts(List.of(bp));
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("超过了投入");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_allowsOutputEqualToInputBoundary() {
+        YieldReportRequest req = legacyReq("100", "92");
+        req.setDefectQuantity(new BigDecimal("8"));   // 92+8=100 刚好
+        assertThatCode(() -> svc.submitReport("F006", 1L, 5L, req)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void submitReport_rejectsSegmentWithSameStartAndEnd() {
+        YieldReportRequest req = legacyReq("100", "90");
+        YieldReportRequest.LaborSegment seg = new YieldReportRequest.LaborSegment();
+        seg.setStartTime("08:00"); seg.setEndTime("08:00"); seg.setHeadcount(3);
+        req.setLaborSegments(List.of(seg));
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("结束时间不能和开始时间相同");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_byproductMustBeInProductCatalog() {
+        YieldReportRequest req = legacyReq("100", "80");
+        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
+        bp.setProductTypeId("PT-GHOST"); bp.setName("肥油"); bp.setQuantity(new BigDecimal("3")); bp.setUnit("kg");
+        req.setByproducts(List.of(bp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不在产品目录");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_multipleCatalogByproductsAreStoredWithProductTypeId() {
+        YieldReportRequest req = legacyReq("100", "80");
+        YieldReportRequest.Byproduct a = new YieldReportRequest.Byproduct();
+        a.setProductTypeId("PT-1"); a.setName("肥油"); a.setQuantity(new BigDecimal("3")); a.setUnit("kg");
+        YieldReportRequest.Byproduct b = new YieldReportRequest.Byproduct();
+        b.setProductTypeId("PT-2"); b.setName("骨头"); b.setQuantity(new BigDecimal("4")); b.setUnit("kg");
+        req.setByproducts(List.of(a, b));
+        ProductType p1 = new ProductType(); p1.setId("PT-1"); p1.setIsActive(true);
+        ProductType p2 = new ProductType(); p2.setId("PT-2"); p2.setIsActive(true);
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(p1, p2));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getByproducts()).hasSize(2);
+        assertThat(cap.getValue().getByproducts().get(1)).containsEntry("productTypeId", "PT-2");
+    }
+
+    @Test
+    void submitReport_defectBreakdownStoredAndCappedByTotalDefect() {
+        YieldReportRequest ok = legacyReq("100", "80");
+        ok.setDefectQuantity(new BigDecimal("5"));
+        YieldReportRequest.DefectShare d1 = new YieldReportRequest.DefectShare();
+        d1.setDefectId("D-1"); d1.setKg(new BigDecimal("3"));
+        YieldReportRequest.DefectShare d2 = new YieldReportRequest.DefectShare();
+        d2.setDefectId("D-2"); d2.setKg(new BigDecimal("2"));
+        ok.setDefectBreakdown(List.of(d1, d2));
+        svc.submitReport("F006", 1L, 5L, ok);
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getCustomFields()).containsKey("defectBreakdown");
+
+        // 合计 3+3=6 > 总不良 5 → 拒绝
+        YieldReportRequest bad = legacyReq("100", "80");
+        bad.setDefectQuantity(new BigDecimal("5"));
+        YieldReportRequest.DefectShare d3 = new YieldReportRequest.DefectShare();
+        d3.setDefectId("D-3"); d3.setKg(new BigDecimal("3"));
+        bad.setDefectBreakdown(List.of(d1, d3));
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, bad))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("超过了不良总量");
+    }
+
+    private ProductionReport weighing(long id, BigDecimal out) {
+        return ProductionReport.builder().id(id).factoryId("F006").batchId(1L).reportType("YIELD")
+                .workProcessTaskId(10L).outputQuantity(out).build();
+    }
+
+    @Test
+    void voidWeighing_requiresReason() {
+        assertThatThrownBy(() -> svc.voidWeighing("F006", 7L, 5L, "  "))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("必须填写原因");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void voidWeighing_softDeletesLeavesAuditAndRecomputesTaskTotal() {
+        ProductionReport target = weighing(7L, new BigDecimal("30"));
+        ProductionReport other = weighing(8L, new BigDecimal("50"));
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        t.setStatus(WorkProcessTask.Status.COMPLETED);
+        t.setActualQuantity(new BigDecimal("80"));
+        when(reportRepo.findById(7L)).thenReturn(Optional.of(target));
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of(target, other));
+        when(reportRepo.findYieldReportsByBatch("F006", 1L)).thenReturn(List.of(other));
+
+        Map<String, Object> out = svc.voidWeighing("F006", 7L, 5L, "秤读数录错");
+
+        assertThat(target.getDeletedAt()).isNotNull();
+        assertThat(target.getCustomFields()).containsKey("voidAudit");
+        assertThat(((Map<?, ?>) target.getCustomFields().get("voidAudit")).get("reason")).isEqualTo("秤读数录错");
+        assertThat(t.getActualQuantity()).isEqualByComparingTo("50");   // 只剩另一笔, 不含被撤销那笔
+        assertThat(out.get("taskActualQuantity")).isEqualTo(new BigDecimal("50"));
+        verify(wipInventoryService).reverseReportPosting("F006", target, t, 5L);
+    }
+
+    @Test
+    void voidWeighing_downstreamConsumedPropagates409AndLeavesReportUntouched() {
+        ProductionReport target = weighing(7L, new BigDecimal("30"));
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        when(reportRepo.findById(7L)).thenReturn(Optional.of(target));
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        doThrow(new BusinessException(409, "这笔产出已被下一道领用")).when(wipInventoryService)
+                .reverseReportPosting(anyString(), any(), any(), any());
+
+        assertThatThrownBy(() -> svc.voidWeighing("F006", 7L, 5L, "录错"))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("已被下一道领用");
+        assertThat(target.getDeletedAt()).isNull();
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void voidWeighing_alreadyVoidedAndOtherFactoryRefused() {
+        ProductionReport voided = weighing(7L, BigDecimal.TEN);
+        voided.setDeletedAt(java.time.LocalDateTime.now());
+        when(reportRepo.findById(7L)).thenReturn(Optional.of(voided));
+        assertThatThrownBy(() -> svc.voidWeighing("F006", 7L, 5L, "x")).isInstanceOf(BusinessException.class)
+                .hasMessageContaining("已经撤销过");
+
+        ProductionReport foreign = weighing(9L, BigDecimal.TEN);
+        foreign.setFactoryId("OTHER");
+        when(reportRepo.findById(9L)).thenReturn(Optional.of(foreign));
+        assertThatThrownBy(() -> svc.voidWeighing("F006", 9L, 5L, "x")).isInstanceOf(BusinessException.class)
+                .hasMessageContaining("不存在");
+    }
 }
