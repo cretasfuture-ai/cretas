@@ -14,14 +14,16 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Refresh } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import { formatAmount } from '@/utils/tableFormatters';
 import { handleCatchError } from '@/utils/errorToast';
 import type { TableRow } from '@/types/api';
 import { useRouter } from 'vue-router';
 import { toDateString } from '@/utils/dateFormat';
 import { canOrderFromQuote } from './quoteOrderContract';
+import type { CsTableColumn } from '@/types/csTable';
+import SalesConfirmModal from '../components/SalesConfirmModal.vue';
+import { useSalesPickers } from '../components/useSalesPickers';
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -30,6 +32,8 @@ const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
+const pickers = useSalesPickers(() => authStore.factoryId);
 const loading = ref(false);
 const submitting = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -37,14 +41,47 @@ const pagination = ref({ page: 1, size: 10, total: 0 });
 const statusFilter = ref<string>('');
 
 // 状态枚举
-const statusMap: Record<string, { text: string; type: 'info' | 'warning' | 'success' | 'danger' | '' }> = {
-  DRAFT: { text: '草稿', type: 'info' },
+const statusMap: Record<string, { text: string; type: 'neutral' | 'warning' | 'success' | 'error' }> = {
+  DRAFT: { text: '草稿', type: 'neutral' },
   PENDING_QUOTE: { text: '待录价', type: 'warning' },
   PENDING_APPROVAL: { text: '待审批', type: 'warning' },
   APPROVED: { text: '已批准', type: 'success' },
-  REJECTED: { text: '已驳回', type: 'danger' },
-  EXPIRED: { text: '已过期', type: 'info' },
+  REJECTED: { text: '已驳回', type: 'error' },
+  EXPIRED: { text: '已过期', type: 'neutral' },
 };
+const STATUS_FILTER_ALL = 'ALL';
+const STATUS_FILTER_ITEMS = [
+  { label: '全部状态', value: STATUS_FILTER_ALL },
+  { label: '待录价', value: 'PENDING_QUOTE' },
+  { label: '待审批', value: 'PENDING_APPROVAL' },
+  { label: '已批准', value: 'APPROVED' },
+  { label: '已驳回', value: 'REJECTED' },
+  { label: '已过期', value: 'EXPIRED' },
+];
+// USelect 的选项值不能是空串: 页面内用 ALL 表示不筛, 请求时再还原成空
+const statusSelect = computed({
+  get: () => statusFilter.value || STATUS_FILTER_ALL,
+  set: (v: string) => { statusFilter.value = v === STATUS_FILTER_ALL ? '' : v; handleStatusChange(); },
+});
+const QUOTE_TYPE_ITEMS = [
+  { label: '固定报价', value: 'FIXED' },
+  { label: '可议价', value: 'NEGOTIABLE' },
+];
+const R = { class: { th: 'text-right', td: 'text-right' } };
+// 单价 / 毛利率两列按 canViewPrice 整列去掉 (遮蔽时不显示 0, 也不留空列)
+const columns = computed<CsTableColumn<TableRow>[]>(() => [
+  { accessorKey: 'quoteNo', header: '报价单号' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'customerId', header: '客户' },
+  { accessorKey: 'productTypeId', header: '产品' },
+  { id: 'quoteType', header: '报价类型' },
+  ...(canViewPrice.value ? [{ id: 'unitPrice', header: '单价', meta: R }, { id: 'marginRate', header: '毛利率', meta: R }] : []),
+  { id: 'quotedByName', header: '录价人' },
+  { id: 'approverName', header: '审批人' },
+  { id: 'validUntil', header: '有效期至' },
+  { id: 'revision', header: '修订' },
+  { id: 'actions', header: '操作' },
+]);
 
 // 创建报价对话框
 const createDialogVisible = ref(false);
@@ -100,6 +137,11 @@ async function loadData() {
   }
 }
 
+function onPageUpdate(p: number) {
+  if (p === pagination.value.page) return;
+  handlePageChange(p);
+}
+
 function handleStatusChange() {
   pagination.value.page = 1;
   loadData();
@@ -124,6 +166,7 @@ function openCreateDialog() {
     remarks: '',
   };
   createDialogVisible.value = true;
+  if (!pickers.customerItems.value.length || !pickers.productItems.value.length) void pickers.load();
 }
 
 async function handleCreate() {
@@ -204,13 +247,15 @@ async function handleSubmitPrice() {
 // ──────────────────────────────────────────────
 async function handleApprove(row: TableRow) {
   if (submitting.value) return;
+  const comment = await confirmRef.value!.ask({
+    title: '主管审批',
+    message: `审批通过报价 ${row.quoteNo}? 单价 ${formatAmount(Number(row.unitPrice))}/${row.unit}, 可选填备注:`,
+    confirmText: '通过',
+    input: { label: '备注', placeholder: '(选填)', type: 'textarea' },
+  });
+  if (comment === null) return;
+  submitting.value = true;
   try {
-    const { value: comment } = await ElMessageBox.prompt(
-      `审批通过报价 ${row.quoteNo}? 单价 ${formatAmount(Number(row.unitPrice))}/${row.unit}, 可选填备注:`,
-      '主管审批',
-      { confirmButtonText: '通过', cancelButtonText: '取消', inputPlaceholder: '(选填)' }
-    );
-    submitting.value = true;
     const res = await put(`/${factoryId.value}/quotes/${row.id}/approve`, {
       approverName: '主管',
       comment: comment || '',
@@ -221,19 +266,22 @@ async function handleApprove(row: TableRow) {
     } else {
       ElMessage.error(res.message || '审批失败');
     }
-  } catch { /* cancelled */ }
+  } catch (e) { console.error('[失败]', e); }
   finally { submitting.value = false; }
 }
 
 async function handleReject(row: TableRow) {
   if (submitting.value) return;
+  const reason = await confirmRef.value!.ask({
+    title: '主管驳回',
+    message: `驳回报价 ${row.quoteNo}`,
+    confirmText: '驳回',
+    danger: true,
+    input: { label: '驳回原因', placeholder: '请填写驳回原因', required: true, errorText: '驳回原因必填', type: 'textarea' },
+  });
+  if (reason === null) return;
+  submitting.value = true;
   try {
-    const { value: reason } = await ElMessageBox.prompt('请填写驳回原因', '主管驳回', {
-      confirmButtonText: '驳回',
-      cancelButtonText: '取消',
-      inputValidator: (v) => !!v || '驳回原因必填',
-    });
-    submitting.value = true;
     const res = await put(`/${factoryId.value}/quotes/${row.id}/reject`, {
       approverName: '主管',
       reason,
@@ -244,19 +292,21 @@ async function handleReject(row: TableRow) {
     } else {
       ElMessage.error(res.message || '驳回失败');
     }
-  } catch { /* cancelled */ }
+  } catch (e) { console.error('[失败]', e); }
   finally { submitting.value = false; }
 }
 
 async function handleRevise(row: TableRow) {
   if (submitting.value) return;
+  const reason = await confirmRef.value!.ask({
+    title: '修订报价',
+    message: '客户砍价后重新报价? 填写修订原因:',
+    confirmText: '确认修订',
+    input: { label: '修订原因', required: true, errorText: '修订原因必填', type: 'textarea' },
+  });
+  if (reason === null) return;
+  submitting.value = true;
   try {
-    const { value: reason } = await ElMessageBox.prompt(
-      '客户砍价后重新报价? 填写修订原因:',
-      '修订报价',
-      { confirmButtonText: '确认修订', cancelButtonText: '取消', inputValidator: (v) => !!v || '修订原因必填' }
-    );
-    submitting.value = true;
     const res = await put(`/${factoryId.value}/quotes/${row.id}/revise`, { reason });
     if (res.success) {
       ElMessage.success(`已发起重新报价 (第 ${res.data?.revisionCount || 1} 次修订)`);
@@ -264,196 +314,156 @@ async function handleRevise(row: TableRow) {
     } else {
       ElMessage.error(res.message || '修订失败');
     }
-  } catch { /* cancelled */ }
+  } catch (e) { console.error('[失败]', e); }
   finally { submitting.value = false; }
 }
 </script>
 
 <template>
-  <div class="page-wrapper">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">销售运营报价</span>
-            <el-tag type="info" size="small">共 {{ pagination.total }} 条</el-tag>
-          </div>
-          <div class="header-right">
-            <el-select v-model="statusFilter" placeholder="按状态筛选" clearable style="width: 160px"
-                       @change="handleStatusChange">
-              <el-option label="待录价" value="PENDING_QUOTE" />
-              <el-option label="待审批" value="PENDING_APPROVAL" />
-              <el-option label="已批准" value="APPROVED" />
-              <el-option label="已驳回" value="REJECTED" />
-              <el-option label="已过期" value="EXPIRED" />
-            </el-select>
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreateDialog">
-              新建报价
-            </el-button>
-          </div>
+  <div class="page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>销售运营报价</h2>
+        <span class="count">共 {{ pagination.total }} 条</span>
+        <div class="head-actions">
+          <USelect v-model="statusSelect" :items="STATUS_FILTER_ITEMS" class="w-40" data-testid="quote-status-filter" />
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" @click="loadData">刷新</UButton>
+          <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="quote-create" @click="openCreateDialog">新建报价</UButton>
         </div>
-      </template>
+      </header>
 
-      <el-alert
-        type="info"
-        :closable="false"
-        title="客户原话: 销售运营部统一报价, 必须指定到人不是岗位"
-        description="3 段式: 提交 PENDING_QUOTE → 录价 PENDING_APPROVAL → 主管审批 APPROVED → 销售可下单"
-        style="margin-bottom: 16px"
-      />
-
-      <el-table v-loading="loading" :data="tableData" border stripe>
-        <el-table-column prop="quoteNo" label="报价单号" min-width="170" />
-        <el-table-column label="状态" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag :type="statusMap[row.status]?.type || 'info'" size="small">
-              {{ statusMap[row.status]?.text || row.status }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column prop="customerId" label="客户" min-width="120" show-overflow-tooltip />
-        <el-table-column prop="productTypeId" label="产品" min-width="120" show-overflow-tooltip />
-        <el-table-column label="报价类型" width="100" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.quoteType === 'FIXED'" size="small" type="success">固定</el-tag>
-            <el-tag v-else-if="row.quoteType === 'NEGOTIABLE'" size="small" type="warning">议价</el-tag>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" label="单价" width="120" align="right">
-          <template #default="{ row }">
-            <span v-if="row.unitPrice">{{ formatAmount(row.unitPrice) }}/{{ row.unit }}</span>
-            <span v-else style="color:#909399">未报价</span>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canViewPrice" label="毛利率" width="90" align="right">
-          <template #default="{ row }">
-            <span v-if="row.marginRate" :style="{ color: Number(row.marginRate) >= 0.3 ? '#67c23a' : '#e6a23c' }">
-              {{ (Number(row.marginRate) * 100).toFixed(1) }}%
-            </span>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="quotedByName" label="录价人" width="120">
-          <template #default="{ row }">{{ row.quotedByName || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="approverName" label="审批人" width="120">
-          <template #default="{ row }">{{ row.approverName || '-' }}</template>
-        </el-table-column>
-        <el-table-column prop="validUntil" label="有效期至" width="110" />
-        <el-table-column label="修订" width="70" align="center">
-          <template #default="{ row }">
-            <el-tag v-if="row.revisionCount && row.revisionCount > 0" size="small" type="warning">
-              v{{ row.revisionCount }}
-            </el-tag>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="300" align="center" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="canWrite && canOrderFromQuote(row, toDateString(new Date()))" type="primary" link size="small"
-                       @click="router.push({ path: '/sales/orders/new', query: { quoteId: String(row.id) } })">按报价下单</el-button>
-            <el-button v-if="row.status === 'PENDING_QUOTE' && canWrite" type="primary" link size="small"
-                       @click="openSubmitPriceDialog(row)">录价</el-button>
-            <el-button v-if="row.status === 'PENDING_APPROVAL' && canWrite" type="success" link size="small"
-                       @click="handleApprove(row)">通过</el-button>
-            <el-button v-if="row.status === 'PENDING_APPROVAL' && canWrite" type="danger" link size="small"
-                       @click="handleReject(row)">驳回</el-button>
-            <el-button v-if="['REJECTED','APPROVED'].includes(row.status) && canWrite" type="warning" link size="small"
-                       @click="handleRevise(row)">修订</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          :page-size="pagination.size"
-          :total="pagination.total"
-          layout="total, prev, pager, next"
-          @current-change="handlePageChange"
+      <div class="body">
+        <UAlert
+          color="info"
+          variant="subtle"
+          title="客户原话: 销售运营部统一报价, 必须指定到人不是岗位"
+          description="3 段式: 提交 PENDING_QUOTE → 录价 PENDING_APPROVAL → 主管审批 APPROVED → 销售可下单"
+          class="mb-3"
         />
+
+        <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="quote-table">
+          <template #empty>暂无报价单</template>
+          <template #status-cell="{ row }">
+            <UBadge :color="statusMap[row.original.status as string]?.type || 'neutral'" variant="soft">{{ statusMap[row.original.status as string]?.text || row.original.status }}</UBadge>
+          </template>
+          <template #quoteType-cell="{ row }">
+            <UBadge v-if="row.original.quoteType === 'FIXED'" color="success" variant="soft">固定</UBadge>
+            <UBadge v-else-if="row.original.quoteType === 'NEGOTIABLE'" color="warning" variant="soft">议价</UBadge>
+            <span v-else>—</span>
+          </template>
+          <template #unitPrice-cell="{ row }">
+            <span v-if="row.original.unitPrice" class="num">{{ formatAmount(row.original.unitPrice as number) }}/{{ row.original.unit }}</span>
+            <span v-else class="muted">未报价</span>
+          </template>
+          <template #marginRate-cell="{ row }">
+            <span v-if="row.original.marginRate" class="num" :class="Number(row.original.marginRate) >= 0.3 ? 'good' : 'warn'">{{ (Number(row.original.marginRate) * 100).toFixed(1) }}%</span>
+            <span v-else>—</span>
+          </template>
+          <template #quotedByName-cell="{ row }">{{ row.original.quotedByName || '—' }}</template>
+          <template #approverName-cell="{ row }">{{ row.original.approverName || '—' }}</template>
+          <template #validUntil-cell="{ row }">{{ row.original.validUntil || '—' }}</template>
+          <template #revision-cell="{ row }">
+            <UBadge v-if="row.original.revisionCount && (row.original.revisionCount as number) > 0" color="warning" variant="soft">v{{ row.original.revisionCount }}</UBadge>
+            <span v-else>—</span>
+          </template>
+          <template #actions-cell="{ row }">
+            <div class="row-actions">
+              <UButton v-if="canWrite && canOrderFromQuote(row.original, toDateString(new Date()))" variant="link" size="xs"
+                       @click="router.push({ path: '/sales/orders/new', query: { quoteId: String(row.original.id) } })">按报价下单</UButton>
+              <UButton v-if="row.original.status === 'PENDING_QUOTE' && canWrite" variant="link" size="xs"
+                       @click="openSubmitPriceDialog(row.original)">录价</UButton>
+              <UButton v-if="row.original.status === 'PENDING_APPROVAL' && canWrite" color="success" variant="link" size="xs"
+                       @click="handleApprove(row.original)">通过</UButton>
+              <UButton v-if="row.original.status === 'PENDING_APPROVAL' && canWrite" color="error" variant="link" size="xs"
+                       @click="handleReject(row.original)">驳回</UButton>
+              <UButton v-if="['REJECTED','APPROVED'].includes(row.original.status as string) && canWrite" color="warning" variant="link" size="xs"
+                       @click="handleRevise(row.original)">修订</UButton>
+            </div>
+          </template>
+        </UTable>
+
+        <div class="pager">
+          <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="onPageUpdate" />
+        </div>
       </div>
-    </el-card>
+    </section>
 
     <!-- ─── 创建报价对话框 ─── -->
-    <el-dialog v-model="createDialogVisible" title="新建销售运营报价" width="600px" destroy-on-close>
-      <el-form label-width="120px">
-        <el-form-item label="客户 ID" required>
-          <el-input v-model="createForm.customerId" placeholder="选填客户 UUID 或编码" />
-        </el-form-item>
-        <el-form-item label="产品 ID" required>
-          <el-input v-model="createForm.productTypeId" placeholder="如 PT-F001-001" />
-        </el-form-item>
-        <el-form-item label="样品 ID">
-          <el-input v-model="createForm.sampleId" placeholder="可选, 报价由样品驱动" />
-        </el-form-item>
-        <el-form-item label="BOM ID">
-          <el-input v-model="createForm.bomId" placeholder="可选, 用于成本参考" />
-        </el-form-item>
-        <el-form-item label="录价人" required>
-          <el-input v-model="createForm.quotedByName" placeholder="销售运营部具体的人 (不是岗位)" />
-        </el-form-item>
-        <el-form-item label="录价人 ID">
-          <el-input-number v-model="createForm.quotedByUserId" :min="0" placeholder="user_id" style="width: 200px" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="createForm.remarks" type="textarea" :rows="3" placeholder="如: 客户老王肉制品厂咨询" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreate">提交</el-button>
+    <UModal v-model:open="createDialogVisible" title="新建销售运营报价" description="创建报价单并指定录价人" :ui="{ content: 'max-w-[600px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="客户" required>
+            <USelectMenu :model-value="createForm.customerId || undefined" value-key="value" :items="pickers.customerItems.value" :loading="pickers.loading.value" placeholder="请选择客户" class="w-full" data-testid="quote-customer" @update:model-value="createForm.customerId = String($event ?? '')" />
+          </UFormField>
+          <UFormField label="产品" required>
+            <USelectMenu :model-value="createForm.productTypeId || undefined" value-key="value" :items="pickers.productItems.value" :loading="pickers.loading.value" placeholder="请选择产品（成品 / 半成品）" class="w-full" data-testid="quote-product" @update:model-value="createForm.productTypeId = String($event ?? '')" />
+          </UFormField>
+          <UFormField label="样品 ID"><UInput v-model="createForm.sampleId" placeholder="可选, 报价由样品驱动" class="w-full" /></UFormField>
+          <UFormField label="BOM ID"><UInput v-model="createForm.bomId" placeholder="可选, 用于成本参考" class="w-full" /></UFormField>
+          <UFormField label="录价人" required><UInput v-model="createForm.quotedByName" placeholder="销售运营部具体的人 (不是岗位)" class="w-full" data-testid="quote-quoted-by" /></UFormField>
+          <UFormField label="录价人 ID">
+            <UInputNumber v-model="createForm.quotedByUserId" :min="0" :step-snapping="false" :increment="false" :decrement="false" placeholder="user_id" class="w-48" />
+          </UFormField>
+          <UFormField label="备注"><UTextarea v-model="createForm.remarks" :rows="3" placeholder="如: 客户老王肉制品厂咨询" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="createDialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" data-testid="quote-create-submit" @click="handleCreate">提交</UButton>
+      </template>
+    </UModal>
 
     <!-- ─── 录价对话框 ─── -->
-    <el-dialog v-model="submitPriceDialogVisible" :title="`录价 — ${submitPriceForm.quoteNo}`" width="560px" destroy-on-close>
-      <el-form label-width="110px">
-        <el-form-item label="报价类型">
-          <el-radio-group v-model="submitPriceForm.quoteType">
-            <el-radio value="FIXED">固定报价</el-radio>
-            <el-radio value="NEGOTIABLE">可议价</el-radio>
-          </el-radio-group>
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="单价" required>
-          <el-input-number v-model="submitPriceForm.unitPrice" :min="0" :precision="2" style="width: 200px" />
-          <el-input v-model="submitPriceForm.unit" style="width: 80px; margin-left: 8px" placeholder="单位" />
-        </el-form-item>
-        <el-form-item label="最小起订量">
-          <el-input-number v-model="submitPriceForm.minOrderQty" :min="0" :precision="3" style="width: 200px" />
-        </el-form-item>
-        <el-form-item v-if="canViewPrice" label="成本单价">
-          <el-input-number v-model="submitPriceForm.costPrice" :min="0" :precision="2" style="width: 200px" />
-          <span style="margin-left: 12px; color:#909399; font-size:12px">内部参考, 不展示给客户</span>
-        </el-form-item>
-        <el-form-item label="有效期至">
-          <el-date-picker v-model="submitPriceForm.validUntil" type="date" value-format="YYYY-MM-DD" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="submitPriceForm.remarks" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="submitPriceDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSubmitPrice">提交审批</el-button>
+    <UModal v-model:open="submitPriceDialogVisible" :title="`录价 — ${submitPriceForm.quoteNo}`" description="录入单价并提交审批" :ui="{ content: 'max-w-[560px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="报价类型"><USelect v-model="submitPriceForm.quoteType" :items="QUOTE_TYPE_ITEMS" class="w-48" /></UFormField>
+          <UFormField v-if="canViewPrice" label="单价" required>
+            <div class="inline">
+              <UInputNumber v-model="submitPriceForm.unitPrice" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ maximumFractionDigits: 2 }" class="w-48" data-testid="quote-unit-price" />
+              <UInput v-model="submitPriceForm.unit" placeholder="单位" class="w-20" />
+            </div>
+          </UFormField>
+          <UFormField label="最小起订量">
+            <UInputNumber v-model="submitPriceForm.minOrderQty" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ maximumFractionDigits: 3 }" class="w-48" />
+          </UFormField>
+          <UFormField v-if="canViewPrice" label="成本单价">
+            <div class="inline">
+              <UInputNumber v-model="submitPriceForm.costPrice" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ maximumFractionDigits: 2 }" class="w-48" />
+              <span class="muted small">内部参考, 不展示给客户</span>
+            </div>
+          </UFormField>
+          <UFormField label="有效期至"><UInput v-model="submitPriceForm.validUntil" type="date" class="w-48" /></UFormField>
+          <UFormField label="备注"><UTextarea v-model="submitPriceForm.remarks" :rows="2" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="submitPriceDialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" data-testid="quote-submit-price" @click="handleSubmitPrice">提交审批</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper { height: 100%; width: 100%; display: flex; flex-direction: column; }
-.page-card { flex: 1; display: flex; flex-direction: column;
-  :deep(.el-card__header) { padding: 16px 20px; border-bottom: 1px solid #ebeef5; }
-  :deep(.el-card__body) { flex: 1; padding: 20px; overflow-y: auto; }
-}
-.card-header { display: flex; justify-content: space-between; align-items: center;
-  .header-left { display: flex; align-items: center; gap: 12px;
-    .page-title { font-size: 16px; font-weight: 600; color: #303133; }
-  }
-  .header-right { display: flex; gap: 8px; align-items: center; }
-}
-.pagination-wrapper { margin-top: 16px; display: flex; justify-content: flex-end; }
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.body { padding: var(--cs-space-4) var(--cs-space-5); }
+.pager { display: flex; justify-content: flex-end; margin-top: var(--cs-space-4); }
+.form { display: grid; gap: var(--cs-space-3); }
+.inline { display: flex; align-items: center; gap: var(--cs-space-2); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); flex-wrap: wrap; }
+.num { font-variant-numeric: tabular-nums; }
+.muted { color: var(--cs-muted); }
+.small { font-size: var(--cs-font-small); }
+.good { color: var(--cs-success); }
+.warn { color: var(--cs-warning); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
