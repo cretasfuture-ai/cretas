@@ -6,7 +6,7 @@ import java.time.LocalDate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class ProductionProgressTimeRulesTest {
+class ProductionProgressTimeRulesContractTest {
 
     private static final LocalDate START = LocalDate.of(2026, 11, 10);
     private static final LocalDate DUE = LocalDate.of(2026, 11, 20);

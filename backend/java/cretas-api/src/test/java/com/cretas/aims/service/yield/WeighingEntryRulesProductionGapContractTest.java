@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-class WeighingEntryRulesProductionGapTest {
+class WeighingEntryRulesProductionGapContractTest {
 
     private static YieldReportRequest.DefectShare share(String id, String kg) {
         YieldReportRequest.DefectShare s = new YieldReportRequest.DefectShare();

@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
-class ProductionGapQueriesJpaContextTest {
+class ProductionGapRequisitionRepositoryQueryValidationTest {
 
     private static final String F = "F-JPA-GAP";
 
