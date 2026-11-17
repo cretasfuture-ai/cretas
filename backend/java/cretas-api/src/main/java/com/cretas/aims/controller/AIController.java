@@ -483,9 +483,9 @@ public class AIController {
             @RequestParam(defaultValue = "pdf") String format, HttpServletRequest httpRequest) {
         boolean prices = canViewReportPrices(factoryId, httpRequest);
         MobileDTO.AICostAnalysisResponse detail = aiEnterpriseService.getReportDetail(factoryId, reportId, prices);
-        if (!Boolean.TRUE.equals(detail.getSuccess())) throw new BusinessException(409, "生成失败的报告不能导出");
+        if (!Boolean.TRUE.equals(detail.getSuccess())) throw new BusinessException(409, "生成失败的报告不能导出").withHint("请回到报告列表重新生成报告，生成成功后再导出");
         String text = prices && detail.getReportAnalysis() != null ? detail.getReportAnalysis() : detail.getAnalysis();
-        if (text == null || text.isBlank()) throw new BusinessException(409, "报告没有可导出的内容");
+        if (text == null || text.isBlank()) throw new BusinessException(409, "报告没有可导出的内容").withHint("请重新生成报告后再导出；仍为空请联系管理员检查取数");
         String fmt = format == null ? "" : format.toLowerCase(java.util.Locale.ROOT);
         byte[] bytes; String type;
         if ("pdf".equals(fmt)) { bytes = operatingReportExporter.pdf(text, "经营分析报告"); type = com.cretas.aims.service.reports.OperatingReportExporter.PDF; }
