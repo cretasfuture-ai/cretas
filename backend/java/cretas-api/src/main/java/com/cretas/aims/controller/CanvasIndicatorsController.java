@@ -1,6 +1,7 @@
 package com.cretas.aims.controller;
 
 import com.cretas.aims.config.RequireRole;
+import com.cretas.aims.ai.tool.impl.indicator.IndicatorQueryTool;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.entity.indicator.Indicator;
 import com.cretas.aims.entity.indicator.IndicatorComputation;
@@ -16,6 +17,8 @@ import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.repository.lineage.BatchLineageClosureRepository;
 import com.cretas.aims.repository.lineage.BatchLineageEdgeRepository;
+import com.cretas.aims.security.PlatformFactoryViewReadPolicy;
+import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.service.lineage.LineageGraphAssembler;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator;
 import com.cretas.aims.service.workflow.SandboxedSpelEvaluator.SpelEvaluationFailure;
@@ -79,6 +82,10 @@ public class CanvasIndicatorsController {
     private final BatchLineageClosureRepository closureRepository;
     private final SandboxedSpelEvaluator spelEvaluator;
 
+    /** 价格 / 财务可见性的唯一判定 (与响应层、AI 工具同一个)。没装配时金额类指标数值一律不给。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PriceFieldResponseAdvice priceView;
+
     /** SpEL formula max length (mirrors SandboxedSpelEvaluator.MAX_SPEL_LENGTH). */
     private static final int FORMULA_MAX_LENGTH = 2000;
 
@@ -110,8 +117,9 @@ public class CanvasIndicatorsController {
                         factoryId, category.toUpperCase());
 
         List<Map<String, Object>> data = new ArrayList<>(rows.size());
+        java.util.function.Predicate<Indicator> showsValue = valueVisibility();
         for (Indicator i : rows) {
-            data.add(serializeIndicator(i));
+            data.add(serializeIndicator(i, showsValue.test(i)));
         }
         return ApiResponse.success("操作成功", data);
     }
@@ -134,7 +142,8 @@ public class CanvasIndicatorsController {
                     "请确认 id 与工厂归属", null, null);
         }
         Indicator i = opt.get();
-        Map<String, Object> data = serializeIndicator(i);
+        boolean showValue = valueVisibility().test(i);
+        Map<String, Object> data = serializeIndicator(i, showValue);
 
         // Thresholds
         List<Map<String, Object>> thresholds = new ArrayList<>();
@@ -153,7 +162,7 @@ public class CanvasIndicatorsController {
 
         // Latest version snapshot (if any)
         versionRepository.findFirstByIndicatorIdOrderByComputedAtDesc(id)
-                .ifPresent(v -> data.put("latestVersion", serializeVersion(v)));
+                .ifPresent(v -> data.put("latestVersion", serializeVersion(v, showValue)));
 
         return ApiResponse.success("操作成功", data);
     }
@@ -230,7 +239,7 @@ public class CanvasIndicatorsController {
 
         Indicator saved = indicatorRepository.saveAndFlush(i);
         log.info("POST /canvas-indicators created id={} code={}", saved.getId(), saved.getCode());
-        return ApiResponse.success("创建成功", serializeIndicator(saved));
+        return ApiResponse.success("创建成功", serializeIndicator(saved, valueVisibility().test(saved)));
     }
 
     @PutMapping("/{id}")
@@ -289,7 +298,7 @@ public class CanvasIndicatorsController {
         }
 
         Indicator saved = indicatorRepository.saveAndFlush(i);
-        return ApiResponse.success("更新成功", serializeIndicator(saved));
+        return ApiResponse.success("更新成功", serializeIndicator(saved, valueVisibility().test(saved)));
     }
 
     @DeleteMapping("/{id}")
@@ -328,9 +337,10 @@ public class CanvasIndicatorsController {
         Pageable pageable = PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100));
         Page<IndicatorVersion> p = versionRepository.findByIndicatorIdOrderByComputedAtDesc(id, pageable);
 
+        boolean showValue = valueVisibility().test(opt.get());
         List<Map<String, Object>> rows = new ArrayList<>(p.getContent().size());
         for (IndicatorVersion v : p.getContent()) {
-            rows.add(serializeVersion(v));
+            rows.add(serializeVersion(v, showValue));
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("content", rows);
@@ -366,9 +376,10 @@ public class CanvasIndicatorsController {
                     "请使用 ISO-8601 格式 (例 2026-05-21T00:00:00)", null, null);
         }
         List<IndicatorVersion> rows = versionRepository.findInWindow(id, fromTs, toTs);
+        boolean showValue = valueVisibility().test(opt.get());
         List<Map<String, Object>> data = new ArrayList<>(rows.size());
         for (IndicatorVersion v : rows) {
-            data.add(serializeVersion(v));
+            data.add(serializeVersion(v, showValue));
         }
         return ApiResponse.success("操作成功", data);
     }
@@ -469,7 +480,11 @@ public class CanvasIndicatorsController {
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("id", id);
-        data.put("value", value);
+        if (valueVisibility().test(i)) {
+            data.put("value", value);
+        } else {
+            data.put("valueHidden", true);
+        }
         data.put("computedAt", v.getComputedAt());
         data.put("note", "stub — Day 4 后切实计算引擎");
         return ApiResponse.success("重算完成", data);
@@ -541,6 +556,7 @@ public class CanvasIndicatorsController {
 
         // Build vue-flow style nodes + edges
         List<Map<String, Object>> flowNodes = new ArrayList<>(indicators.size());
+        java.util.function.Predicate<Indicator> showsValue = valueVisibility();
         Map<String, Integer> categoryCol = new HashMap<>();
         for (Indicator i : indicators) {
             int col = categoryCol.getOrDefault(i.getCategory(), 0);
@@ -553,7 +569,11 @@ public class CanvasIndicatorsController {
             n.put("code", i.getCode());
             n.put("category", i.getCategory());
             n.put("unit", i.getUnit());
-            n.put("lastValue", i.getLastValue());
+            if (showsValue.test(i)) {
+                n.put("lastValue", i.getLastValue());
+            } else {
+                n.put("valueHidden", true);
+            }
             n.put("x", x);
             n.put("y", y);
             flowNodes.add(n);
@@ -636,7 +656,44 @@ public class CanvasIndicatorsController {
     // Serialization helpers
     // ============================================================
 
-    private Map<String, Object> serializeIndicator(Indicator i) {
+    /**
+     * 金额 / 毛利 / 财务类指标 ({@link IndicatorQueryTool#carriesMoneyFigure}) 的数值, 这个请求的调用者看不看得到:
+     * 价格查看口径 ({@link IndicatorQueryTool#VALUE_SPEC}), 经 {@link PriceFieldResponseAdvice#showsSpec} 按权限配置判,
+     * 与 AI 的 indicator_query / indicator_comparison 同一个判定 (Steve: 不写死角色)。其余指标照旧给。
+     * 一个请求只问一次; 查不到调用者 / 平台代看 / 判定器没装配 ⇒ 看不到 (fail closed, 与响应层同)。
+     */
+    private java.util.function.Predicate<Indicator> valueVisibility() {
+        Boolean[] sees = new Boolean[1];
+        return i -> {
+            if (!IndicatorQueryTool.carriesMoneyFigure(i)) {
+                return true;
+            }
+            if (sees[0] == null) {
+                sees[0] = callerSeesMoneyValues();
+            }
+            return sees[0];
+        };
+    }
+
+    private boolean callerSeesMoneyValues() {
+        if (priceView == null) {
+            return false;
+        }
+        if (!(org.springframework.web.context.request.RequestContextHolder.getRequestAttributes()
+                instanceof org.springframework.web.context.request.ServletRequestAttributes attrs)) {
+            return false;
+        }
+        jakarta.servlet.http.HttpServletRequest request = attrs.getRequest();
+        if (PlatformFactoryViewReadPolicy.isView(request)) {
+            return false;
+        }
+        Object raw = request.getAttribute("userId");
+        Long userId = raw instanceof Number n ? Long.valueOf(n.longValue())
+                : raw instanceof String str && str.matches("\\d+") ? Long.valueOf(str) : null;
+        return userId != null && priceView.showsSpec(userId, IndicatorQueryTool.VALUE_SPEC);
+    }
+
+    private Map<String, Object> serializeIndicator(Indicator i, boolean showValue) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", i.getId());
         m.put("factoryId", i.getFactoryId());
@@ -648,7 +705,11 @@ public class CanvasIndicatorsController {
         m.put("isActive", i.getIsActive());
         m.put("computeStrategy", i.getComputeStrategy());
         m.put("cacheTtlSeconds", i.getCacheTtlSeconds());
-        m.put("lastValue", i.getLastValue());
+        if (showValue) {
+            m.put("lastValue", i.getLastValue());
+        } else {
+            m.put("valueHidden", true);
+        }
         m.put("lastComputedAt", i.getLastComputedAt());
         m.put("displayOrder", i.getDisplayOrder());
         m.put("config", i.getConfig());
@@ -681,13 +742,17 @@ public class CanvasIndicatorsController {
         return m;
     }
 
-    private Map<String, Object> serializeVersion(IndicatorVersion v) {
+    private Map<String, Object> serializeVersion(IndicatorVersion v, boolean showValue) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("id", v.getId());
         m.put("indicatorId", v.getIndicatorId());
         m.put("periodStart", v.getPeriodStart());
         m.put("periodEnd", v.getPeriodEnd());
-        m.put("value", v.getValue());
+        if (showValue) {
+            m.put("value", v.getValue());
+        } else {
+            m.put("valueHidden", true);
+        }
         m.put("computedAt", v.getComputedAt());
         m.put("alertLevel", v.getAlertLevel());
         m.put("computeSource", v.getComputeSource());

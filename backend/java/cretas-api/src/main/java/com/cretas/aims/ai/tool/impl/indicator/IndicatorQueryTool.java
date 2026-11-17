@@ -60,6 +60,40 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
     /** 趋势最大返回行数, 防止 LLM context bloat. */
     private static final int MAX_TREND_ROWS = 60;
 
+    /**
+     * 金额 / 毛利 / 财务类指标的数值按这个价格口径给 —— web 指标中心与 AI 两个指标工具同一个 (Steve: 谁能看取决于权限配置)。
+     */
+    public static final String VALUE_SPEC = com.cretas.aims.security.PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION;
+
+    static final String VALUE_HIDDEN_MESSAGE =
+            " 的数值按当前账号的权限配置不显示（金额 / 毛利 / 财务类指标，与 web 指标中心同一判定，需要价格查看权限）";
+
+    private static final java.util.regex.Pattern MONEY_UNIT =
+            java.util.regex.Pattern.compile("(?i).*(元|¥|￥|CNY|RMB).*");
+
+    private static final java.util.regex.Pattern MONEY_CODE_OR_NAME =
+            java.util.regex.Pattern.compile("(?i).*(MARGIN|PROFIT|COST|REVENUE|毛利|利润|成本|营收|收入).*");
+
+    /**
+     * 这个指标的数值是不是金额 / 毛利 / 财务数字。只用指标已有的定义字段:
+     * 分类 FINANCE; 或单位是货币 (元、元/单位、¥…); 或编码 / 名称是毛利、利润、成本、营收
+     * (菜品毛利率 RESTAURANT_DISH_MARGIN 的分类是 RESTAURANT、单位是 %, 只能靠编码 / 名称认出)。
+     * 良品率、翻台率、合格率、违规次数这类不是。
+     */
+    public static boolean carriesMoneyFigure(Indicator i) {
+        if (i == null) {
+            return true;
+        }
+        if ("FINANCE".equalsIgnoreCase(i.getCategory())) {
+            return true;
+        }
+        if (i.getUnit() != null && MONEY_UNIT.matcher(i.getUnit()).matches()) {
+            return true;
+        }
+        return (i.getCode() != null && MONEY_CODE_OR_NAME.matcher(i.getCode()).matches())
+                || (i.getName() != null && MONEY_CODE_OR_NAME.matcher(i.getName()).matches());
+    }
+
     @Override
     public String getToolName() {
         return "indicator_query";
@@ -188,12 +222,20 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
                 : (latestOpt.isPresent() || indicator.getLastComputedAt() != null
                         ? "NO_DATA" : "NOT_COMPUTED");
         String breachLevel = evaluateBreachLevel(currentValue, thresholds);
+        // 金额 / 毛利 / 财务类指标的数值: 与 web 指标中心 (CanvasIndicatorsController) 同一判定 —— 价格查看口径,
+        // 经 PriceFieldResponseAdvice#showsSpec 按权限配置判, 不看角色名。看不到 ⇒ 数值省略 (不是 0)。
+        boolean showValues = !carriesMoneyFigure(indicator) || replyShowsPriceSpec(context, VALUE_SPEC);
 
         // 6) Build result
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("indicator", serializeIndicator(indicator));
-        result.put("currentValue", currentValue);
-        result.put("valueStatus", valueStatus);
+        if (showValues) {
+            result.put("currentValue", currentValue);
+            result.put("valueStatus", valueStatus);
+        } else {
+            result.put("valueStatus", "HIDDEN");
+            result.put("valueHidden", true);
+        }
         result.put("source", valueSource);
         result.put("breachLevel", breachLevel);
         result.put("latestComputedAt", latestOpt.map(IndicatorVersion::getComputedAt)
@@ -204,12 +246,14 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
             result.put("latestAlertLevel", v.getAlertLevel());
         });
         result.put("thresholds", serializeThresholds(thresholds));
-        result.put("trend", serializeTrend(trend));
+        result.put("trend", serializeTrend(trend, showValues));
         result.put("trendSize", trend.size());
         result.put("periodStart", periodStart);
         result.put("periodEnd", periodEnd);
 
-        String summary = buildSummaryText(indicator, currentValue, breachLevel, trend.size());
+        String summary = showValues
+                ? buildSummaryText(indicator, currentValue, breachLevel, trend.size())
+                : indicator.getName() + VALUE_HIDDEN_MESSAGE;
         return buildSimpleResult(summary, result);
     }
 
@@ -304,13 +348,17 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
         return rows;
     }
 
-    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions) {
+    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions, boolean showValues) {
         List<Map<String, Object>> rows = new ArrayList<>(versions.size());
         for (IndicatorVersion v : versions) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("periodStart", v.getPeriodStart());
             m.put("periodEnd", v.getPeriodEnd());
-            m.put("value", v.getValue());
+            if (showValues) {
+                m.put("value", v.getValue());
+            } else {
+                m.put("valueHidden", true);
+            }
             m.put("alertLevel", v.getAlertLevel());
             m.put("computedAt", v.getComputedAt());
             rows.add(m);

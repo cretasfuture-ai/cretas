@@ -58,24 +58,41 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
-        double totalRevenue = extractDouble(finance, "totalRevenue", 0);
-        double totalCost = extractDouble(finance, "totalCost", 0);
-        double totalAssets = extractDouble(finance, "totalAssets", 1);
-        double netProfit = totalRevenue - totalCost;
-
-        double roa = totalAssets > 0 ? (netProfit / totalAssets) * 100 : 0;
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", "ROA");
         result.put("period", startDate + " 至 " + endDate);
-        result.put("roa", roa);
+        // 与 ROE / 杜邦 / web GET /reports/finance 同一组金额键、同一个判定
+        if (!replyShowsAmounts(context, FinanceRoeTool.FINANCE_AMOUNT_KEYS)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceRoeTool.amountsHiddenMessage("资产收益率(ROA)", "净利润、总资产"));
+            return result;
+        }
+
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+
+        Double netProfit = FinanceRoeTool.figure(finance, "totalProfit");
+        Double totalAssets = FinanceRoeTool.figure(finance, "totalAssets");
+        List<String> missing = new ArrayList<>();
+        if (netProfit == null) missing.add("净利润");
+        if (totalAssets == null || totalAssets <= 0) missing.add("总资产");
 
         StringBuilder sb = new StringBuilder();
         sb.append("资产收益率分析\n");
         sb.append("分析周期: ").append(startDate).append(" ~ ").append(endDate).append("\n\n");
+        if (!missing.isEmpty()) {
+            result.put("dataSufficient", false);
+            result.put("missingFields", missing);
+            sb.append("资产收益率(ROA): ").append(FinanceRoeTool.INSUFFICIENT).append("（缺少")
+                    .append(String.join("、", missing)).append("）");
+            FinanceRoeTool.appendProfitReason(sb, finance);
+            result.put("message", sb.toString());
+            return result;
+        }
+
+        double roa = (netProfit / totalAssets) * 100;
+        result.put("dataSufficient", true);
+        result.put("roa", roa);
         sb.append("资产收益率(ROA): ").append(String.format("%.2f%%", roa)).append("\n");
         sb.append("  净利润: ").append(String.format("%.0f", netProfit)).append("元\n");
         sb.append("  总资产: ").append(String.format("%.0f", totalAssets)).append("元\n");
@@ -84,13 +101,6 @@ public class FinanceRoaTool extends AbstractBusinessTool {
         result.put("message", sb.toString());
 
         return result;
-    }
-
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
 
     /** spec §8.2 只读查询, 无副作用 */

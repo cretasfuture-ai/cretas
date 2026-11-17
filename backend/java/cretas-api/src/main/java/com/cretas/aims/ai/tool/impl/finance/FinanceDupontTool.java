@@ -58,48 +58,66 @@ public class FinanceDupontTool extends AbstractBusinessTool {
         LocalDate startDate = LocalDate.now().minusDays(30);
         LocalDate endDate = LocalDate.now();
 
-        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
-
-        double totalRevenue = extractDouble(finance, "totalRevenue", 0);
-        double totalCost = extractDouble(finance, "totalCost", 0);
-        double totalAssets = extractDouble(finance, "totalAssets", 1);
-        double totalEquity = extractDouble(finance, "totalEquity", 1);
-        double netProfit = totalRevenue - totalCost;
-
-        double profitMargin = totalRevenue > 0 ? (netProfit / totalRevenue) * 100 : 0;
-        double assetTurnover = totalAssets > 0 ? totalRevenue / totalAssets : 0;
-        double equityMultiplier = totalEquity > 0 ? totalAssets / totalEquity : 1;
-        double dupontRoe = (profitMargin / 100) * assetTurnover * equityMultiplier * 100;
-
         Map<String, Object> result = new HashMap<>();
-        result.put("financeData", finance);
         result.put("ratioType", "DUPONT");
         result.put("period", startDate + " 至 " + endDate);
-        result.put("profitMargin", profitMargin);
-        result.put("assetTurnover", assetTurnover);
-        result.put("equityMultiplier", equityMultiplier);
-        result.put("dupontROE", dupontRoe);
+        // 与 ROE / ROA / web GET /reports/finance 同一组金额键、同一个判定
+        if (!replyShowsAmounts(context, FinanceRoeTool.FINANCE_AMOUNT_KEYS)) {
+            result.put("amountsHidden", true);
+            result.put("message", FinanceRoeTool.amountsHiddenMessage("杜邦分析", "净利润、营业收入、总资产、股东权益"));
+            return result;
+        }
+
+        Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
+        result.put("financeData", finance);
+
+        Double totalRevenue = FinanceRoeTool.figure(finance, "totalRevenue");
+        Double netProfit = FinanceRoeTool.figure(finance, "totalProfit");
+        Double totalAssets = FinanceRoeTool.figure(finance, "totalAssets");
+        Double totalEquity = FinanceRoeTool.figure(finance, "totalEquity");
+
+        // 每个因素只在它自己的输入都在时才算; 缺一个 ⇒ 该因素与 ROE 都说「数据不足」, ⛔ 不拿 0 / 1 顶
+        Double profitMargin = netProfit != null && totalRevenue != null && totalRevenue > 0
+                ? (netProfit / totalRevenue) * 100 : null;
+        Double assetTurnover = totalRevenue != null && totalAssets != null && totalAssets > 0
+                ? totalRevenue / totalAssets : null;
+        Double equityMultiplier = totalAssets != null && totalEquity != null && totalEquity > 0
+                ? totalAssets / totalEquity : null;
+
+        List<String> missing = new ArrayList<>();
+        if (netProfit == null) missing.add("净利润");
+        if (totalRevenue == null || totalRevenue <= 0) missing.add("营业收入");
+        if (totalAssets == null || totalAssets <= 0) missing.add("总资产");
+        if (totalEquity == null || totalEquity <= 0) missing.add("股东权益");
+
+        if (profitMargin != null) result.put("profitMargin", profitMargin);
+        if (assetTurnover != null) result.put("assetTurnover", assetTurnover);
+        if (equityMultiplier != null) result.put("equityMultiplier", equityMultiplier);
 
         StringBuilder sb = new StringBuilder();
         sb.append("杜邦分析\n");
         sb.append("分析周期: ").append(startDate).append(" ~ ").append(endDate).append("\n\n");
         sb.append("杜邦分析三因素分解:\n");
-        sb.append("  销售净利率: ").append(String.format("%.2f%%", profitMargin)).append("\n");
-        sb.append("  资产周转率: ").append(String.format("%.2f", assetTurnover)).append("次\n");
-        sb.append("  权益乘数: ").append(String.format("%.2f", equityMultiplier)).append("\n");
-        sb.append("  ROE = ").append(String.format("%.2f%%", dupontRoe)).append("\n");
-        sb.append("  (净利率 × 周转率 × 权益乘数)");
+        sb.append("  销售净利率: ").append(profitMargin != null ? String.format("%.2f%%", profitMargin) : FinanceRoeTool.INSUFFICIENT).append("\n");
+        sb.append("  资产周转率: ").append(assetTurnover != null ? String.format("%.2f次", assetTurnover) : FinanceRoeTool.INSUFFICIENT).append("\n");
+        sb.append("  权益乘数: ").append(equityMultiplier != null ? String.format("%.2f", equityMultiplier) : FinanceRoeTool.INSUFFICIENT).append("\n");
+        if (missing.isEmpty()) {
+            double dupontRoe = (profitMargin / 100) * assetTurnover * equityMultiplier * 100;
+            result.put("dataSufficient", true);
+            result.put("dupontROE", dupontRoe);
+            sb.append("  ROE = ").append(String.format("%.2f%%", dupontRoe)).append("\n");
+            sb.append("  (净利率 × 周转率 × 权益乘数)");
+        } else {
+            result.put("dataSufficient", false);
+            result.put("missingFields", missing);
+            sb.append("  ROE: ").append(FinanceRoeTool.INSUFFICIENT).append("（缺少")
+                    .append(String.join("、", missing)).append("）");
+            FinanceRoeTool.appendProfitReason(sb, finance);
+        }
 
         result.put("message", sb.toString());
 
         return result;
-    }
-
-    private double extractDouble(Map<String, Object> map, String key, double defaultVal) {
-        if (map == null || !map.containsKey(key)) return defaultVal;
-        Object val = map.get(key);
-        if (val instanceof Number) return ((Number) val).doubleValue();
-        try { return Double.parseDouble(String.valueOf(val)); } catch (Exception e) { return defaultVal; }
     }
 
     /** spec §8.2 只读查询, 无副作用 */
