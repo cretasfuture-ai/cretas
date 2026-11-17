@@ -64,7 +64,7 @@ function onOpenChange(next: boolean) {
   else open.value = next;
 }
 
-defineExpose({ ask });
+defineExpose({ ask, close: () => settle(null) });
 </script>
 
 <template>
@@ -90,5 +90,5 @@ defineExpose({ ask });
 </template>
 
 <style scoped>
-.msg { margin: 0; color: var(--cs-text); font-size: 13px; line-height: 1.6; }
+.msg { margin: 0; white-space: pre-line; color: var(--cs-text); font-size: 13px; line-height: 1.6; }
 </style>
