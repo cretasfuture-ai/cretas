@@ -7,61 +7,38 @@
   <div class="quotes-tab">
     <div class="toolbar">
       <span class="title">报价单</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
-
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无报价单" :image-size="80">
-      <el-button type="primary" @click="goCreate">创建报价单</el-button>
-    </el-empty>
-
-    <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
-    </div>
+    <div v-if="state === 'loading'" class="skeleton"><USkeleton v-for="i in 5" :key="i" class="h-9 w-full" /></div>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-file-text" description="该客户暂无报价单">
+      <template #actions><UButton @click="goCreate">创建报价单</UButton></template>
+    </UEmpty>
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
 
     <template v-else>
-      <el-table :data="quotes" border stripe size="small">
-        <el-table-column label="报价单号" prop="quoteNo" width="170" />
-        <el-table-column label="创建日期" prop="createdAt" width="170">
-          <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="状态" prop="status" width="110">
-          <template #default="{ row }">
-            <el-tag size="small" :type="statusTagType(row.status)">{{ row.status }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="产品 ID" prop="productTypeId" min-width="140" show-overflow-tooltip />
-        <el-table-column label="报价" align="right" width="140">
-          <template #default="{ row }">
-            <span v-if="canViewPrice">{{ formatMoney(row.unitPrice) }}<template v-if="row.unit">/{{ row.unit }}</template></span>
-            <span v-else class="masked">****</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="有效期" prop="validUntil" width="120" />
-      </el-table>
+      <UTable :data="quotes" :columns="columns" class="cs-table" data-testid="customer-quotes-table">
+        <template #createdAt-cell="{ row }">{{ formatDate(row.original.createdAt) }}</template>
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ quoteStatusText(row.original.status) }}</UBadge></template>
+        <template #unitPrice-cell="{ row }">
+          <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.unitPrice) }}<template v-if="row.original.unit">/{{ row.original.unit }}</template></span>
+          <span v-else class="masked">****</span>
+        </template>
+      </UTable>
 
-      <el-pagination
-        class="pagination"
-        background
-        layout="prev, pager, next, total"
-        :total="totalElements"
-        :page-size="pageSize"
-        :current-page="currentPage"
-        @current-change="onPageChange"
-      />
+      <div class="pager">
+        <span class="total">共 {{ totalElements }} 条</span>
+        <UPagination :page="currentPage" :items-per-page="pageSize" :total="totalElements" show-edges :sibling-count="1" @update:page="onPageChange" />
+      </div>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { quoteStatusText, statusColor } from './customerTabLabels';
 import { useRouter } from 'vue-router';
-import { Refresh } from '@element-plus/icons-vue';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -102,6 +79,15 @@ const quotes = ref<QuoteRow[]>([]);
 const totalElements = ref(0);
 const currentPage = ref(1);
 const pageSize = 20;
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const columns: TableColumn<QuoteRow>[] = [
+  { accessorKey: 'quoteNo', header: '报价单号' },
+  { id: 'createdAt', header: '创建日期' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'productTypeId', header: '产品 ID' },
+  { id: 'unitPrice', header: '报价', meta: R },
+  { accessorKey: 'validUntil', header: '有效期' },
+];
 
 function formatMoney(v: number | null | undefined): string {
   if (v == null) return '—';
@@ -111,14 +97,6 @@ function formatMoney(v: number | null | undefined): string {
 function formatDate(s?: string): string {
   if (!s) return '—';
   return new Date(s).toLocaleString('zh-CN', { hour12: false });
-}
-
-function statusTagType(status?: string): 'success' | 'warning' | 'info' | 'danger' {
-  if (!status) return 'info';
-  if (status === 'APPROVED') return 'success';
-  if (status === 'PENDING') return 'warning';
-  if (status === 'REJECTED' || status === 'CANCELLED') return 'danger';
-  return 'info';
 }
 
 async function fetchList() {
@@ -167,10 +145,14 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.quotes-tab { padding: 8px 0; }
+.quotes-tab { padding: 12px 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.toolbar .title { font-size: 14px; color: var(--el-text-color-secondary); }
-.pagination { margin-top: 16px; justify-content: flex-end; display: flex; }
-.masked { color: var(--el-text-color-secondary); font-family: monospace; letter-spacing: 2px; user-select: none; }
-.error-panel { padding: 24px 0; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: 12px; margin-top: 16px; }
+.total { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.num { font-variant-numeric: tabular-nums; }
+.skeleton { display: grid; gap: 8px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
