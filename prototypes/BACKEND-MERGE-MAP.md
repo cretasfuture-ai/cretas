@@ -96,5 +96,5 @@
 
 ## 八、没覆盖到的
 
-- `tools/*.cjs` 里的服务逻辑（`product-cost-workspace`、`ledger-facts`、`report-insights`、`list-analysis-service` 等）没有进对照，是下一轮要读的。
-- 六膳门侧的黑湖读取与对账逻辑（`liushanmen-v1`）不在这张表里。
+- 页面级对照已补：见 `PAGE-BACKEND-MAP.md`（85 个路由 + 4 个服务，明细在 `page-map/`），`product-cost-workspace`、`ledger-facts`、`report-insights`、`list-analysis-service` 和六膳门对账（缺）都在 E 组。Steve 已裁决的 11 项口径和可直接补的缺口也列在那里。
+- 仍没覆盖：各页规则实现的逐条比对（那张表只确认接口与字段在不在）。
