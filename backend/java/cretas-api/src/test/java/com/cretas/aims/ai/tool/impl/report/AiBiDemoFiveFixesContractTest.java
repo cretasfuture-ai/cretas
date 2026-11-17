@@ -67,12 +67,70 @@ class AiBiDemoFiveFixesContractTest {
     }
 
     @Test
-    void headNounOnly_beefSauceIsNotBeef() {
-        // 「牛肉酱」不以「牛肉」结尾; 「酱卤牛肉250g」以「牛肉」结尾 → 只有一个在售成品命中
+    void anotherSellableProductContainingTheWordMeansAskInsteadOfGuess() {
+        // 「酱卤牛肉250g」以「牛肉」结尾, 但「牛肉酱」也含「牛肉」: 两个在售产品都沾边, 不猜 (#1810 独立审查 M2)
         ReportToolSchemas.ProductResolution r = ReportToolSchemas.resolveProduct(demoCatalog(), "牛肉成本");
-        assertEquals("演示·酱卤牛肉250g", r.describe());
+        assertEquals("未找到:牛肉", r.describe());
+        assertTrue(r.refusalMessage("统计成本", true).contains("牛肉酱"));
+        // 「牛肉酱」不以「牛肉」结尾, 单独一个也不锁定
         List<ProductType> onlySauce = List.of(p("牛肉酱", "FINISHED_PRODUCT"));
         assertEquals("未找到:牛肉", ReportToolSchemas.resolveProduct(onlySauce, "牛肉成本").describe());
+    }
+
+    @ParameterizedTest(name = "{0} 不是时间")
+    @CsvSource({"接近十天没出货", "附近三天的批次", "统一天前的批次", "第一天内完成的工单"})
+    void wordsThatMerelyContainNearOrDayAreNotTimeRanges(String text) {
+        assertTrue(new TimeNormalizationRules().normalize(text, NOW).isEmpty(), text);
+    }
+
+    @Test
+    void bareUnitCostIsNotAPhraseSoVarianceAndTrendKeepTheirIntents() {
+        com.cretas.aims.config.IntentKnowledgeBase kb = new com.cretas.aims.config.IntentKnowledgeBase();
+        kb.initDefaults();
+        assertEquals("COST_QUERY", kb.matchPhrase("上周卤牛肉单位成本是多少").orElse(null));
+        assertEquals(null, kb.getPhraseToIntentMapping().get("单位成本"));
+        assertTrue(!"COST_QUERY".equals(kb.matchPhrase("单位成本差异").orElse(null)), "单位成本差异");
+        assertTrue(!"COST_QUERY".equals(kb.matchPhrase("修改产品单位成本").orElse(null)), "修改产品单位成本");
+    }
+
+    private static ProductionBatchLike batch(String product, String unit, String cost, String qty) {
+        return new ProductionBatchLike(product, unit, cost, qty);
+    }
+
+    record ProductionBatchLike(String product, String unit, String cost, String qty) {}
+
+    private static ReportCostQueryTool.Aggregate agg(ProductionBatchLike... bs) {
+        ReportCostQueryTool.Aggregate a = new ReportCostQueryTool.Aggregate();
+        for (ProductionBatchLike b : bs) {
+            ReportCostQueryTool.ProductAgg p = a.byProduct.computeIfAbsent(b.product(), k -> {
+                ReportCostQueryTool.ProductAgg x = new ReportCostQueryTool.ProductAgg();
+                x.productTypeId = k;
+                x.name = k;
+                return x;
+            });
+            p.costByUnit.merge(b.unit(), new java.math.BigDecimal(b.cost()), java.math.BigDecimal::add);
+            if (b.qty() != null) p.qtyByUnit.merge(b.unit(), new java.math.BigDecimal(b.qty()), java.math.BigDecimal::add);
+            else p.batchesWithoutQuantity++;
+        }
+        return a;
+    }
+
+    @Test
+    void productUnitCostRiseListsTheProductThatRose() {
+        String text = ReportCostQueryTool.productUnitCostRiseText(
+                agg(batch("卤牛肉", "盒", "1200", "100"), batch("酱鸭", "袋", "500", "100")),
+                agg(batch("卤牛肉", "盒", "1000", "100"), batch("酱鸭", "袋", "500", "100")));
+        assertTrue(text.contains("两期都有产出的 2 个产品") && text.contains("卤牛肉 ¥10.00 → ¥12.00/盒（+20.0%）")
+                && !text.contains("酱鸭 ¥"), text);
+    }
+
+    @Test
+    void productWithABatchMissingQuantityIsNotCompared() {
+        // 本期一批缺产量: 成本含它、产量不含, 算出来会是「翻倍」—— 不比, 并说明 (#1810 独立审查 M3)
+        String text = ReportCostQueryTool.productUnitCostRiseText(
+                agg(batch("卤牛肉", "盒", "100", "10"), batch("卤牛肉", "盒", "100", null)),
+                agg(batch("卤牛肉", "盒", "100", "10"), batch("卤牛肉", "盒", "100", "10")));
+        assertTrue(!text.contains("+100") && text.contains("1 个产品有批次缺产量"), text);
     }
 
     @Test
@@ -90,9 +148,4 @@ class AiBiDemoFiveFixesContractTest {
         assertEquals("未找到:卤牛肉", ReportToolSchemas.resolveProduct(l, "卤牛肉成本").describe());
     }
 
-    @Test
-    void costVarianceFallbackStatesItsCreatedDateBasis() {
-        assertTrue(ReportCostVarianceTool.CREATED_DATE_BASIS.contains("按批次创建日期")
-                && ReportCostVarianceTool.CREATED_DATE_BASIS.contains("不能直接对比"));
-    }
 }

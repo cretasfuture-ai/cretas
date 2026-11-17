@@ -202,14 +202,15 @@ final class ReportToolSchemas {
         String headKey = restKey.replaceAll("[的总\\s]+$", "");
         if (headKey.length() >= 2) {
             List<ProductType> headHits = new ArrayList<>();
+            int sellableContaining = 0;   // 名称里含这个词的在售产品 (「牛肉酱」「牛肉丸」也算): 不止一个就仍请用户说完整名
             for (ProductType t : catalog) {
+                if (!com.cretas.aims.entity.enums.ProductCategory.isSellable(t.getProductCategory())) continue;
+                String n = normalizedName(t);
+                if (n != null && n.contains(headKey)) sellableContaining++;
                 String head = headName(t);
-                if (head != null && head.endsWith(headKey)
-                        && com.cretas.aims.entity.enums.ProductCategory.isSellable(t.getProductCategory())) {
-                    headHits.add(t);
-                }
+                if (head != null && head.endsWith(headKey)) headHits.add(t);
             }
-            if (headHits.size() == 1) {
+            if (headHits.size() == 1 && sellableContaining == 1) {
                 return new ProductResolution(ProductScope.MATCHED, List.copyOf(headHits), null, List.of(), catalog,
                         rest.replaceAll("[的总\\s]+$", ""));
             }

@@ -71,7 +71,9 @@ public class TimeNormalizationRules {
      */
     private static final String YEAR_PREFIX = "(今年|本年|明年|下一年|去年|上一年|前年)";
     /** 「最近 / 过去 / 近」+ 数量; 数量前后允许空格 (演示题「最近 30 天」曾因空格落到「最近」= 7 天)。 */
-    private static final String RECENT_PREFIX = "(?:最近|过去|近)\\s*";
+    private static final String RECENT_PREFIX = "(?:最近|过去|(?<![附接将邻临])近)\\s*";
+    /** 独立的数量: 前面不能紧贴汉字或数字 (「统一天前」「第一天内」「12345天前」都不是时间)。 */
+    private static final String BARE_COUNT = "(?<![\\p{IsHan}\\d])";
     /** 阿拉伯数字或「两 / 三 / 十二 / 三十 / 二十五」。 */
     private static final String COUNT_TEXT = "(\\d{1,4}|[一二两三四五六七八九十]{1,3})";
     private static final String MONTH_TEXT = "(\\d{1,2}|[一二三四五六七八九十]{1,3})";
@@ -247,14 +249,14 @@ public class TimeNormalizationRules {
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile(COUNT_TEXT + "\\s*天前"),
+                Pattern.compile(BARE_COUNT + COUNT_TEXT + "\\s*天前"),
                 (now, m) -> {
                     int days = parseCount(m.group(1));
                     return dayRange(now, -days);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile(COUNT_TEXT + "\\s*天内"),
+                Pattern.compile(BARE_COUNT + COUNT_TEXT + "\\s*天内"),
                 (now, m) -> {
                     int days = parseCount(m.group(1));
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);

@@ -3071,7 +3071,7 @@ public class IntentKnowledgeBase {
         // 演示题 Q01「上周卤牛肉单位成本是多少」曾在 成本查询 / 利润表 / 现金流量表 之间弹选择 (2026-11-17)
         phraseToIntentMapping.put("单位成本是多少", "COST_QUERY");
         phraseToIntentMapping.put("单位成本多少", "COST_QUERY");
-        phraseToIntentMapping.put("单位成本", "COST_QUERY");
+        // ⛔ 不登记裸「单位成本」: 子串匹配会把「单位成本差异 / 趋势 / 分析」「修改产品单位成本」也抢成 COST_QUERY (#1810 独立审查)
         phraseToIntentMapping.put("和上月比哪个成本涨了", "COST_QUERY");
         phraseToIntentMapping.put("和上月比成本", "COST_QUERY");
         phraseToIntentMapping.put("跟上月比哪个成本涨了", "COST_QUERY");

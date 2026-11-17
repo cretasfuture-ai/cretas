@@ -287,6 +287,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             }
             if (b.getActualQuantity() == null || b.getActualQuantity().signum() <= 0) {
                 batchesWithoutQuantity++;   // 分项金额含这批, 产量不含: 按单位折算时分子分母批次集合不一致, riserText 据此退回总额口径
+                p.batchesWithoutQuantity++; // 按产品比单位成本时同理: 这个产品两期里有一期缺产量就不比
             }
         }
 
@@ -363,6 +364,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         String productTypeId;
         String name;
         int batches;
+        int batchesWithoutQuantity;
         BigDecimal total = BigDecimal.ZERO;
         BigDecimal labor = BigDecimal.ZERO;
         final Map<String, BigDecimal> qtyByUnit = new LinkedHashMap<>();
@@ -561,11 +563,16 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
      */
     static String productUnitCostRiseText(Aggregate cur, Aggregate prev) {
         List<Object[]> rises = new ArrayList<>();   // {name, unit, before, now, pct}
-        int compared = 0;
+        java.util.Set<String> comparedProducts = new java.util.HashSet<>();
+        int skippedMissingQty = 0;
         for (Map.Entry<String, ProductAgg> e : cur.byProduct.entrySet()) {
             ProductAgg now = e.getValue();
             ProductAgg before = prev.byProduct.get(e.getKey());
             if (before == null) continue;
+            // 有批次缺产量: 成本含它、产量不含, 单位成本会被抬高 (#1810 独立审查) —— 这个产品不比
+            if (now.batchesWithoutQuantity > 0 || before.batchesWithoutQuantity > 0) { skippedMissingQty++; continue; }
+            // 同一产品一期里有两种写法归一后相同的单位 (kg / KG): 分不清哪份算哪份, 不比
+            if (hasDuplicateUnitKeys(now.qtyByUnit.keySet()) || hasDuplicateUnitKeys(before.qtyByUnit.keySet())) continue;
             for (Map.Entry<String, BigDecimal> q : now.qtyByUnit.entrySet()) {
                 String unit = q.getKey();
                 BigDecimal prevQty = null;
@@ -576,17 +583,19 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                 if (q.getValue().signum() <= 0 || prevQty == null || prevQty.signum() <= 0) continue;
                 BigDecimal a = now.costByUnit.get(unit).divide(q.getValue(), 4, RoundingMode.HALF_UP);
                 BigDecimal b = before.costByUnit.get(prevUnitKey).divide(prevQty, 4, RoundingMode.HALF_UP);
-                compared++;
+                comparedProducts.add(e.getKey());
                 if (a.compareTo(b) > 0 && b.signum() > 0) {
                     BigDecimal pct = a.subtract(b).multiply(HUNDRED).divide(b, 1, RoundingMode.HALF_UP);
                     rises.add(new Object[]{now.name, unit.isEmpty() ? "单位" : unit, b, a, pct});
                 }
             }
         }
-        if (compared == 0) return "\n按产品比：两期没有同一单位都有产出的产品，单位成本无法逐个比较。";
-        if (rises.isEmpty()) return "\n按产品比：两期都有产出的 " + compared + " 个产品（同一单位），单位成本都没有上涨。";
+        int compared = comparedProducts.size();
+        String skipped = skippedMissingQty > 0 ? "；另有 " + skippedMissingQty + " 个产品有批次缺产量，没有比" : "";
+        if (compared == 0) return "\n按产品比：两期没有同一单位都有产出的产品，单位成本无法逐个比较" + skipped + "。";
+        if (rises.isEmpty()) return "\n按产品比：两期都有产出的 " + compared + " 个产品（同一单位），单位成本都没有上涨" + skipped + "。";
         rises.sort((x, y) -> ((BigDecimal) y[4]).compareTo((BigDecimal) x[4]));
-        StringBuilder sb = new StringBuilder("\n按产品比（两期都有产出的 " + compared + " 个产品，按单位成本）：单位成本上涨的有 " + rises.size() + " 个");
+        StringBuilder sb = new StringBuilder("\n按产品比（两期都有产出的 " + compared + " 个产品，按单位成本" + skipped + "）：单位成本上涨的有 " + rises.size() + " 项");
         for (int i = 0; i < Math.min(3, rises.size()); i++) {
             Object[] r = rises.get(i);
             sb.append(i == 0 ? "：" : "；").append(r[0]).append(" ¥")
@@ -595,6 +604,15 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                     .append("（+").append(r[4]).append("%）");
         }
         return sb.append("。").toString();
+    }
+
+    private static boolean hasDuplicateUnitKeys(java.util.Set<String> units) {
+        java.util.Set<String> keys = new java.util.HashSet<>();
+        for (String u : units) {
+            String k = com.cretas.aims.service.unit.impl.UnitContractServiceImpl.normalizeLookupKey(u);
+            if (!keys.add(String.valueOf(k))) return true;
+        }
+        return false;
     }
 
     /**

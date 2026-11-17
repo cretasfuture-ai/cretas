@@ -223,7 +223,7 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 } else {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
                             .append(" 期间创建的批次 ").append(costVarianceData.getBatchCount())
-                            .append(" 个，实际成本合计 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
+                            .append(" 个，实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
                             .append("。").append(CREATED_DATE_BASIS);
                     if (costVarianceData.getProcessSecretNote() != null) msg.append(costVarianceData.getProcessSecretNote());
                 }
