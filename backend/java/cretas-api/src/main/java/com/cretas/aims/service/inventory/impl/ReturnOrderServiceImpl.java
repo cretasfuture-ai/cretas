@@ -1039,12 +1039,6 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
     }
 
     /**
-     * 销售退货的销项税额, 与发货挂账同一口径 (SalesServiceImpl#taxInclusiveShippedValueBeforeDiscount):
-     * 每行 含税额 = 数量 × 报价含税单价 (有则用) 或 round(未税额 × (1 + 税率)), 税额 = 含税额 − 未税额。
-     * 退货行没有源订单行 id, 按 SKU + 未税单价回源销售单行; 同 SKU 只有一种税率时只按 SKU。
-     * 找不到源行时按销售单默认税率, 再没有视为 0 税 (与无税率数据的旧单一致)。
-     */
-    /**
      * 每个退货行最终用的单价(与 request.items 同序)。销售退货行单价为 null 时按来源销售订单行单价回填:
      * 订单行按 sourceOrderId + factoryId 查, 按 productTypeId 对上; 对上的行价格必须唯一且非空。
      * 找不到(无来源订单 / 没有该产品的行 / 行没价 / 同产品多行价格不一)一律 422 拒绝创建, ⛔ 不落 0。
@@ -1088,7 +1082,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                         : "来源销售订单里找不到这个产品的订单行");
             }
             if (candidates.size() > 1 || lineWithoutPrice) {
-                throw missingReturnPrice(label, "来源销售订单里这个产品有多个订单行且单价不一致，无法确定按哪个价回填");
+                throw missingReturnPrice(label, lineWithoutPrice
+                        ? "来源销售订单里这个产品有多个订单行，其中有的行没有单价，无法确定按哪个价回填"
+                        : "来源销售订单里这个产品有多个订单行且单价不一致，无法确定按哪个价回填");
             }
             prices.add(candidates.iterator().next());
         }
@@ -1101,6 +1097,12 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
                 .withHint("请在退货单里填写该行单价，或先在来源销售订单补全单价后再登记退货");
     }
 
+    /**
+     * 销售退货的销项税额, 与发货挂账同一口径 (SalesServiceImpl#taxInclusiveShippedValueBeforeDiscount):
+     * 每行 含税额 = 数量 × 报价含税单价 (有则用) 或 round(未税额 × (1 + 税率)), 税额 = 含税额 − 未税额。
+     * 退货行没有源订单行 id, 按 SKU + 未税单价回源销售单行; 同 SKU 只有一种税率时只按 SKU。
+     * 找不到源行时按销售单默认税率, 再没有视为 0 税 (与无税率数据的旧单一致)。
+     */
     private BigDecimal salesReturnTaxAmount(String sourceOrderId, List<ReturnOrderItem> items) {
         if (sourceOrderId == null || sourceOrderId.isBlank() || salesOrderRepository == null) {
             return BigDecimal.ZERO;

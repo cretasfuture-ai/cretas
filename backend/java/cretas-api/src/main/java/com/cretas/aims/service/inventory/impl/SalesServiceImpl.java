@@ -6171,21 +6171,6 @@ public class SalesServiceImpl implements SalesService {
     }
 
     /**
-     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 复核口径: 无需挂账 —— 不调挂账、不告警,
-     * 发货事务内留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表)。
-     *
-     * <p>四条同时成立才放行, 否则按失败(待补账 + 告警), 由人补价/核对:
-     * <ol>
-     *   <li>本次应收含税合计 {@code compareTo(0) == 0} (0 与 0.00 都算零, 0.01 不算);</li>
-     *   <li>有发货明细 —— 空明细时头额默认 0, 那个 0 不是「确定为 0」;</li>
-     *   <li>每一行: 实发数量非空, 发货行单价非空且为 0;</li>
-     *   <li>每一行挂得上订单行, 且订单行单价非空且为 0、报价含税单价为空或为 0。
-     *       与提审校验 {@code validatePriceBeforeFinanceReview} 同一缺价口径: 订单行单价为空 = 价格没维护, 不是赠品;
-     *       订单行有价而发货行录成 0 = 误录, 不是赠品。</li>
-     * </ol>
-     * 由此「全额折扣算出 0」「极小单价舍入成 0」都不放行(订单行/发货行单价不为 0)。
-     */
-    /**
      * 缺价回填(Steve 2026-11-17): 发货行单价为 null 时, 按来源订单行(按 salesOrderItemId 对上)的单价回填,
      * 并按「Σ 实发量 × 单价」重算发货单头额。订单行按 salesOrderId + factoryId 查(不读别厂订单行)。
      * 订单行也没价 / 对不上订单行的保持 null —— ⛔ 不记 0, 挂账段由 {@link #firstUnpricedDeliveryLine} 按失败处理。
@@ -6246,6 +6231,21 @@ public class SalesServiceImpl implements SalesService {
         return null;
     }
 
+    /**
+     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 复核口径: 无需挂账 —— 不调挂账、不告警,
+     * 发货事务内留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表)。
+     *
+     * <p>四条同时成立才放行, 否则按失败(待补账 + 告警), 由人补价/核对:
+     * <ol>
+     *   <li>本次应收含税合计 {@code compareTo(0) == 0} (0 与 0.00 都算零, 0.01 不算);</li>
+     *   <li>有发货明细 —— 空明细时头额默认 0, 那个 0 不是「确定为 0」;</li>
+     *   <li>每一行: 实发数量非空, 发货行单价非空且为 0;</li>
+     *   <li>每一行挂得上订单行, 且订单行单价非空且为 0、报价含税单价为空或为 0。
+     *       与提审校验 {@code validatePriceBeforeFinanceReview} 同一缺价口径: 订单行单价为空 = 价格没维护, 不是赠品;
+     *       订单行有价而发货行录成 0 = 误录, 不是赠品。</li>
+     * </ol>
+     * 由此「全额折扣算出 0」「极小单价舍入成 0」都不放行(订单行/发货行单价不为 0)。
+     */
     static boolean isKnownZeroShipmentValue(SalesOrder order, SalesDeliveryRecord record, BigDecimal shippedValue) {
         if (order == null || record == null || shippedValue == null
                 || shippedValue.compareTo(BigDecimal.ZERO) != 0) {
