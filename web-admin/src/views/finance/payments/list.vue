@@ -172,7 +172,9 @@ const submitting = ref(false);
 const selectedSO = computed<SalesOrderOption | null>(() =>
   salesOrderOptions.value.find(o => String(o.id) === recordForm.value.salesOrderId) || null
 );
-const remainingAmount = computed<number>(() => salesOrderRemainingAmount(selectedSO.value));
+const remainingAmount = computed<number>(() => {
+  return salesOrderRemainingAmount(selectedSO.value);
+});
 const recordOverLimit = computed<boolean>(() =>
   Number(recordForm.value.amount || 0) > remainingAmount.value + 0.001
 );

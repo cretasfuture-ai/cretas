@@ -378,7 +378,7 @@ const columns = computed<CsTableColumn<TableRow>[]>(() => {
           <UBadge :color="financeStatusColor(row.original.status)" variant="soft">{{ statusText(row.original.status) }}</UBadge>
         </template>
         <template #pdf-cell="{ row }">
-          <InvoicePdfDownload v-if="row.original.invoicePdfUrl" :factory-id="factoryId" :invoice-id="String(row.original.id)" :file-name="row.original.invoiceFileName as string | undefined" />
+          <InvoicePdfDownload v-if="row.original.invoicePdfUrl" :factory-id="factoryId" :invoice-id="row.original.id" :file-name="row.original.invoiceFileName" />
           <span v-else>—</span>
         </template>
         <!-- F-INV-1 gap-fill: OCR 识别结果 (供财务核对) -->
