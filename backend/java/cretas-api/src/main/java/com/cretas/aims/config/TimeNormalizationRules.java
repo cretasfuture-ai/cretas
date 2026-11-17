@@ -70,6 +70,10 @@ public class TimeNormalizationRules {
      * 使用 BiFunction 支持动态参数提取
      */
     private static final String YEAR_PREFIX = "(今年|本年|明年|下一年|去年|上一年|前年)";
+    /** 「最近 / 过去 / 近」+ 数量; 数量前后允许空格 (演示题「最近 30 天」曾因空格落到「最近」= 7 天)。 */
+    private static final String RECENT_PREFIX = "(?:最近|过去|近)\\s*";
+    /** 阿拉伯数字或「两 / 三 / 十二 / 三十 / 二十五」。 */
+    private static final String COUNT_TEXT = "(\\d{1,4}|[一二两三四五六七八九十]{1,3})";
     private static final String MONTH_TEXT = "(\\d{1,2}|[一二三四五六七八九十]{1,3})";
     /** 「N月之前/以前/前」(前后接 年/天/后 的不算: 前年/前天/前后)。 */
     private static final String BEFORE_WORD = "(?:以前|之前|前(?![年天后]))";
@@ -222,37 +226,37 @@ public class TimeNormalizationRules {
 
         // === 动态模糊时间 (需要提取数字) ===
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)天"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*天"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
+                    int days = parseCount(m.group(1));
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)周"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*(?:周|个星期|个礼拜)"),
                 (now, m) -> {
-                    int weeks = Integer.parseInt(m.group(1));
+                    int weeks = parseCount(m.group(1));
                     return TimeRange.of(now.minusWeeks(weeks).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("最近(\\d+)个月"),
+                Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*个月"),
                 (now, m) -> {
-                    int months = Integer.parseInt(m.group(1));
+                    int months = parseCount(m.group(1));
                     return TimeRange.of(now.minusMonths(months).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("(\\d+)天前"),
+                Pattern.compile(COUNT_TEXT + "\\s*天前"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
+                    int days = parseCount(m.group(1));
                     return dayRange(now, -days);
                 }
         );
         TIME_PATTERNS.put(
-                Pattern.compile("(\\d+)天内"),
+                Pattern.compile(COUNT_TEXT + "\\s*天内"),
                 (now, m) -> {
-                    int days = Integer.parseInt(m.group(1));
+                    int days = parseCount(m.group(1));
                     return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
                 }
         );
@@ -461,6 +465,29 @@ public class TimeNormalizationRules {
             case "前年" -> -2;
             default -> 0;
         };
+    }
+
+    /** 「30」「两」「三」「十二」「三十」「二十五」→ 数量; 认不出抛异常 (调用方记日志并跳过这条规则)。 */
+    static int parseCount(String text) {
+        if (text.chars().allMatch(Character::isDigit)) {
+            return Integer.parseInt(text);
+        }
+        String digits = "一二三四五六七八九";
+        String t = text.replace('两', '二');
+        int ten = t.indexOf('十');
+        int value;
+        if (ten < 0) {
+            if (t.length() != 1) throw new IllegalArgumentException("认不出的数量: " + text);
+            value = digits.indexOf(t.charAt(0)) + 1;
+        } else {
+            if (ten > 1 || t.length() - ten > 2) throw new IllegalArgumentException("认不出的数量: " + text);
+            int tens = ten == 0 ? 1 : digits.indexOf(t.charAt(0)) + 1;
+            int units = ten == t.length() - 1 ? 0 : digits.indexOf(t.charAt(ten + 1)) + 1;
+            if (tens <= 0 || (ten < t.length() - 1 && units <= 0)) throw new IllegalArgumentException("认不出的数量: " + text);
+            value = tens * 10 + units;
+        }
+        if (value <= 0) throw new IllegalArgumentException("认不出的数量: " + text);
+        return value;
     }
 
     /** 「3」「十二」「一」→ 月份数字; 认不出返回 -1。 */
