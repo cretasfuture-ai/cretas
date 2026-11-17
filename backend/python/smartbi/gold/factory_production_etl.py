@@ -84,6 +84,18 @@ def _to_float_or_none(v) -> Optional[float]:
         return None
 
 
+def batch_yield_rate(good_qty, actual_qty) -> Optional[float]:
+    """批次出成率 (%) = 良品 ÷ 实际产出 × 100；任一缺失或实际产出 ≤ 0 → None (不知道 ≠ 0)。
+
+    唯一实现: Silver ETL 与 /factory/* 读端点都调这里, 两处口径不会漂。
+    """
+    good = _to_float_or_none(good_qty)
+    actual = _to_float_or_none(actual_qty)
+    if good is None or actual is None or actual <= 0:
+        return None
+    return round(good / actual * 100, 4)
+
+
 # ── Stage 1: Silver — sync_fact_production_batch ──────────────────────────────
 
 async def sync_fact_production_batch(
@@ -168,7 +180,11 @@ async def sync_fact_production_batch(
     other_costs = [_to_float_or_none(r["other_cost"]) for r in rows]
     total_costs = [_to_float_or_none(r["total_cost"]) for r in rows]
     unit_costs = [_to_float_or_none(r["unit_cost"]) for r in rows]
-    yield_rates = [_to_float_or_none(r["yield_rate"]) for r in rows]
+    # 出成率口径 = 良品 ÷ 实际产出 × 100, 与 Java ProductionBatch.calculateMetrics 及 AI 问答
+    # (ReportBatchYieldRankTool) 同一定义。⛔ 不照抄 production_batches.yield_rate 存量列:
+    # 它是派生列, 数量被改后会冻结旧值 (2026-11-18 prod 实测 LSMDEMO/F006: 列均值 80.00,
+    # 按定义 良品÷实际 = 100.00), 页面 80% 与 AI 100% 两个数就是这么来的。
+    yield_rates = [batch_yield_rate(g, a) for g, a in zip(good_qtys, actual_qtys)]
 
     async with smartbi_pool.acquire() as dst:
         async with dst.transaction():

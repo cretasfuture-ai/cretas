@@ -102,3 +102,61 @@ export function costCoverageText(costedBatchCount: number | undefined, batchCoun
   if (costedBatchCount == null || costedBatchCount >= batchCount) return null;
   return `${costedBatchCount}/${batchCount} 批有成本`;
 }
+
+/** 成本类别配色：环形图与每日堆叠柱共用一份，同一类成本在两张图里同一个颜色。 */
+export const COST_CATEGORY_COLORS = {
+  材料: '#1b65a8',
+  人工: '#52a36b',
+  设备: '#e0a526',
+  其他: '#d9534f',
+} as const;
+
+export type CostCategory = keyof typeof COST_CATEGORY_COLORS;
+
+/** 窄屏阈值：手机宽度下图例移到图下方、明细表改卡片。 */
+export const NARROW_MAX_WIDTH = 640;
+
+/**
+ * 产品对比按单位成本排：同单位的产品放在一起比（盒和袋的单价不能直接比大小），
+ * 产品多的单位组在前；组内单位成本高的在前；算不出单位成本的放最后。
+ */
+export function productsByUnitCost<T extends { unit?: string | null; costPerUnit?: number | null }>(
+  products: T[],
+): T[] {
+  const groupSize = new Map<string, number>();
+  for (const p of products) {
+    const key = p.unit ?? '';
+    groupSize.set(key, (groupSize.get(key) ?? 0) + 1);
+  }
+  return [...products].sort((a, b) => {
+    const aKnown = a.costPerUnit != null;
+    const bKnown = b.costPerUnit != null;
+    if (aKnown !== bKnown) return aKnown ? -1 : 1;
+    const ua = a.unit ?? '';
+    const ub = b.unit ?? '';
+    if (ua !== ub) {
+      const bySize = (groupSize.get(ub) ?? 0) - (groupSize.get(ua) ?? 0);
+      return bySize !== 0 ? bySize : ua.localeCompare(ub);
+    }
+    return (b.costPerUnit ?? 0) - (a.costPerUnit ?? 0);
+  });
+}
+
+/** 单位成本标签「¥16.24/盒」；算不出给「未填」，不是 ¥0。 */
+export function unitCostLabel(costPerUnit: number | null | undefined, unit: string | null | undefined): string {
+  if (costPerUnit == null || !Number.isFinite(costPerUnit)) return '未填';
+  return `¥${fmtMoney(costPerUnit, 2)}/${unit || '单位未提供'}`;
+}
+
+/**
+ * 平均出成率的说明：分母是「有出成率的批次」。全部批次都有时说「按 N 批加权」，
+ * 部分批次没报良品/实际时说「N/M 批有出成率」，不让没有数的批次把「按 10 批」撑大。
+ */
+export function yieldBasisText(yieldBatchCount: number | null | undefined, batchCount: number | null | undefined): string {
+  const n = yieldBatchCount ?? 0;
+  const total = batchCount ?? 0;
+  if (n <= 0) return '暂无带出成率的批次';
+  if (total > n) return `${n}/${total} 批有出成率，按这 ${n} 批加权`;
+  return `按 ${n} 批加权`;
+}
+
