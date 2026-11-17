@@ -3,6 +3,7 @@
  * Base: /api/mobile/{factoryId}/sales-needs.
  */
 import request from './request';
+import { requireFactoryId } from './currentFactoryId';
 
 export type SalesNeedStatus = 'DRAFT' | 'CONFIRMED' | 'CONVERTED_TO_SO' | 'CANCELLED';
 export type SalesNeedPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
@@ -54,15 +55,7 @@ export interface SalesNeedPage {
   size: number;
 }
 
-function getFactoryId(factoryId?: string): string {
-  if (factoryId) return factoryId;
-  const raw = localStorage.getItem('user');
-  if (!raw) throw new Error('未登录');
-  const p = JSON.parse(raw) as { factoryId?: string; factoryUser?: { factoryId?: string } };
-  const fid = p?.factoryUser?.factoryId ?? p?.factoryId;
-  if (!fid) throw new Error('当前账号未绑定工厂');
-  return fid;
-}
+const getFactoryId = requireFactoryId;
 
 const base = (fid?: string) => `/${getFactoryId(fid)}/sales-needs`;
 
