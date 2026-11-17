@@ -70,6 +70,20 @@ describe('ar-ap 应收应付', () => {
     expect(w.text()).toContain('¥800.00');
   });
 
+  it('credit-note types are mapped to Chinese (no 未知状态 / raw code)', async () => {
+    mocks.get.mockImplementation(async (url: string) => {
+      if (url.endsWith('/finance/overview')) return { success: true, data: { totalReceivable: 1, totalPayable: 1 } };
+      if (url.endsWith('/finance/transactions')) return { success: true, data: { content: [{ ...apRow, transactionType: 'AP_CREDIT_NOTE' }], totalElements: 1 } };
+      return { success: true, data: [] };
+    });
+    const w = mount(ArApPage, { global: { stubs } });
+    await flushPromises();
+    await btn(w, '应付账款').trigger('click');
+    await flushPromises();
+    expect(w.text()).toContain('应付冲减');
+    expect(w.text()).not.toMatch(/AP_CREDIT_NOTE|未知状态/);
+  });
+
   it('price-masked: no tabs, no money anywhere, not even a 0', async () => {
     mocks.perm.canViewPrice = false;
     setup();

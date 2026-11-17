@@ -187,6 +187,8 @@ const txTypeMap: Record<string, { text: string; type: string }> = {
   AR_PAYMENT: { text: '客户回款', type: 'success' },
   AR_ADJUSTMENT: { text: '应收调整', type: 'info' },
   AR_REFUND: { text: '客户退款结清', type: 'warning' },
+  AR_CREDIT_NOTE: { text: '应收冲减', type: 'info' },
+  AP_CREDIT_NOTE: { text: '应付冲减', type: 'info' },
   RETURN_REFUND_REVERSAL: { text: '退款撤销调整', type: 'info' },
   AP_INVOICE: { text: '应付挂账', type: 'danger' },
   AP_PAYMENT: { text: '供应商付款', type: 'success' },

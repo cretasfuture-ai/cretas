@@ -107,6 +107,14 @@ describe('VoucherDetail 凭证详情', () => {
     expect(w.text()).not.toMatch(/DRAFT|SALES_ORDER|SALES_RECEIPT/);
     expect(w.find('[data-testid="voucher-entries-table"]').text()).toContain('¥10.00');
   });
+  it('已过账凭证: 不显示「过账」按钮 (迁移前同为 disabled, 现按状态隐藏更清楚), 提示不可编辑', async () => {
+    mocks.getVoucherDetail.mockResolvedValue({ ...v, status: 'POSTED' });
+    const w = mountIt();
+    await flushPromises();
+    expect(w.text()).toContain('已过账');
+    expect(w.text()).toContain('不可编辑');
+    expect(w.find('[data-testid="voucher-post"]').exists()).toBe(false);
+  });
   it('过账: 先弹确认, 取消不发请求, 确认后才过账', async () => {
     mocks.getVoucherDetail.mockResolvedValue(v);
     mocks.postVoucher.mockResolvedValue({ ...v, status: 'POSTED' });

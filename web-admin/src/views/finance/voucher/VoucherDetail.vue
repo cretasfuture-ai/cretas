@@ -587,7 +587,7 @@ onBeforeUnmount(() => { pageActive.value = false; ++requestSequence; });
         <span v-else class="vd-hint-success">凭证已平衡, 可过账.</span>
       </div>
       <div class="vd-actions-buttons">
-        <UButton :disabled="!canPost" data-testid="voucher-post" @click="onPost">过账</UButton>
+        <UButton v-if="isDraft" :disabled="!canPost" data-testid="voucher-post" @click="onPost">过账</UButton>
         <UButton
           v-if="!isProtectedRefundVoucher"
           color="error"
