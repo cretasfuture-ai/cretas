@@ -45,7 +45,7 @@ import static org.mockito.Mockito.when;
 @DisplayName("销售退货缺价回填: null 按订单行价回填 / 订单行也无价拒绝 / 真 0 与正常价不变")
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class ReturnOrderMissingUnitPriceBackfillTest {
+class ReturnOrderMissingUnitPriceBackfillContractTest {
 
     private static final String F = "F-RTPRICE";
     private static final String SO = "SO-RTPRICE-1";
