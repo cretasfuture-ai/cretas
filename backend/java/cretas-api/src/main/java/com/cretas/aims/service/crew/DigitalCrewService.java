@@ -312,7 +312,8 @@ public class DigitalCrewService {
         AIIntentConfig intent = resp.getIntentCode() == null ? null
                 : intentConfigs.getIntentByCode(factoryId, resp.getIntentCode()).orElse(null);
         String requiredPermission = intent == null ? null : intent.getRequiredPermission();
-        String module = DigitalCrewCatalog.moduleOf(requiredPermission);
+        // 逗号 = 任一即可 (与意图权限门 IntentPermissionGate 同一拆法); 模块取这位员工管得着的那一个
+        String module = DigitalCrewCatalog.moduleOf(requiredPermission, member);
         if (module != null && !member.modules().contains(module)) {
             String owner = DigitalCrewCatalog.ownerOf(module).map(Member::key).orElse(null);
             String ownerName = owner == null ? "其他岗位" : DigitalCrewCatalog.member(owner).map(Member::name).orElse(owner);
@@ -441,7 +442,7 @@ public class DigitalCrewService {
         int p = Math.max(0, page);
         int sz = size <= 0 ? INBOX_PAGE_SIZE_DEFAULT : Math.min(size, INBOX_PAGE_SIZE_MAX);
         List<String> codes = items.findDistinctRequiredPermissions(factoryId, Status.DELEGATED);
-        List<String> allowed = codes.stream().filter(c -> permissions.hasPermission(user, c)).toList();
+        List<String> allowed = codes.stream().filter(c -> holds(user, c)).toList();
         List<String> denied = codes.stream().filter(c -> !allowed.contains(c)).toList();
         org.springframework.data.domain.Page<DigitalCrewWorkItem> mine = allowed.isEmpty()
                 ? org.springframework.data.domain.Page.empty(PageRequest.of(p, sz))
@@ -611,7 +612,7 @@ public class DigitalCrewService {
 
     private void requireRejecter(User user, Actor actor, DigitalCrewWorkItem w) {
         boolean creator = Objects.equals(w.getCreatedByUserId(), actor.id());
-        if (!creator && !permissions.hasPermission(user, w.getRequiredPermission())) {
+        if (!creator && !holds(user, w.getRequiredPermission())) {
             throw new BusinessException(403, "你没有处理这件事的权限（需要 " + w.getRequiredPermission() + "）");
         }
     }
@@ -857,7 +858,7 @@ public class DigitalCrewService {
     }
 
     private void requireConfirmPermission(User user, DigitalCrewWorkItem w) {
-        if (!permissions.hasPermission(user, w.getRequiredPermission())) {
+        if (!holds(user, w.getRequiredPermission())) {
             throw new BusinessException(403, "你没有确认这件事的权限（需要 " + w.getRequiredPermission() + "），服务端已拒绝，没有执行任何写操作");
         }
     }
@@ -913,7 +914,7 @@ public class DigitalCrewService {
     private ItemView view(DigitalCrewWorkItem w, User viewer) {
         String memberName = DigitalCrewCatalog.member(w.getMemberKey()).map(Member::name).orElse(w.getMemberKey());
         boolean canConfirm = viewer != null && w.getStatus() == Status.DELEGATED
-                && permissions.hasPermission(viewer, w.getRequiredPermission());
+                && holds(viewer, w.getRequiredPermission());
         boolean previewedByMe = viewer != null && Objects.equals(w.getPreviewedByUserId(), viewer.getId());
         return new ItemView(w.getId(), w.getMemberKey(), memberName, w.getIntentCode(), w.getIntentName(), w.getTitle(),
                 w.getUserInput(), w.getModule(), w.getRequiredPermission(), w.getStatus().name(), w.getStatus().label(),
@@ -972,11 +973,16 @@ public class DigitalCrewService {
         return r;
     }
 
-    /** 写级别权限码: 只有这种码才交办 (确认人必须持有它)。 */
+    /** 写级别权限码: 只有这种码才交办 (确认人必须持有它)。逗号分隔的「任一」码要每一个都是写级别。 */
     static boolean isWriteLevel(String permission) {
-        if (permission == null) return false;
-        String p = permission.strip();
-        return p.endsWith(":read_write") || p.endsWith(":write");
+        List<String> codes = com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(permission);
+        return !codes.isEmpty() && codes.stream().allMatch(p -> p.endsWith(":read_write") || p.endsWith(":write"));
+    }
+
+    /** 事项登记的权限码 (逗号 = 任一即可, 与意图权限门同口径): 持有其中任一个即算有权限。 */
+    private boolean holds(User user, String requiredPermission) {
+        return com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(requiredPermission).stream()
+                .anyMatch(c -> permissions.hasPermission(user, c));
     }
 
     private static String nz(String a, String b) {
