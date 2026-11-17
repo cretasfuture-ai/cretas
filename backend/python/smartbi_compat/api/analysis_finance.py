@@ -1953,8 +1953,22 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
         factory_id, "COST", range_.start_date, range_.end_date
     )
     has_finance_data = bool(revenue_records or cost_records)
+    # 收入/成本是否「有数」(缺数 ≠ 0)。有数据但缺收入或缺成本时, 毛利/毛利率/ROI
+    # 一律 null, 不拿 0 顶上算出 100% 毛利率 (F006 只有销售数据、没成本列时的真实事故)。
+    revenue_known = True
+    cost_known = True
+    has_any_data = has_finance_data
 
     if has_finance_data:
+        revenue_known = any(
+            r.get("category") and "收入" in r["category"]
+            and r.get("actual_amount") is not None
+            for r in revenue_records
+        )
+        cost_known = any(
+            r.get("total_cost") is not None or r.get("actual_amount") is not None
+            for r in cost_records
+        )
         # Java line 367-388
         total_revenue = sum(
             (
@@ -1992,6 +2006,9 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
         sales_rows = await _query_finance_sales_fallback(
             factory_id, range_.start_date, range_.end_date
         )
+        has_any_data = bool(sales_rows)
+        revenue_known = any(r.get("amount") is not None for r in sales_rows)
+        cost_known = _sales_cost_complete(sales_rows)
         # Java line 394-403: revenue + cost from sales rows
         total_revenue = sum(
             (
@@ -2033,6 +2050,11 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
         if (gross_margin_raw > Decimal("100") or gross_margin_raw < Decimal("-100"))
         else gross_margin_raw
     )
+    # 有数据但收入或成本缺数 → 毛利口径不成立。完全无数据 (F999 空态) 保留 Java golden 的 0。
+    gross_incomplete = has_any_data and not (revenue_known and cost_known)
+    if gross_incomplete:
+        gross_profit = None
+        gross_margin = None
 
     # Java line 446-453 — net margin (only when net_profit available + revenue > 0)
     if net_profit is not None and total_revenue > Decimal("0"):
@@ -2052,34 +2074,44 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
     )
 
     # Java line 481-483 — ROI = grossProfit.divide(totalCost, 4, HALF_UP).multiply(100)
-    if total_cost > Decimal("0"):
+    if gross_incomplete:
+        roi = None
+    elif total_cost > Decimal("0"):
         roi = (
-            (gross_profit / total_cost).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+            ((total_revenue - total_cost) / total_cost).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
             * Decimal("100")
         )
     else:
         roi = Decimal("0")
 
     # Alert levels
-    gross_margin_alert = (
-        _determine_gross_margin_alert(gross_margin) if gross_margin is not None else "RED"
-    )
+    if gross_incomplete:
+        # 缺数不是「毛利率偏低」: 不给 RED, 否则 insights 会编出「当前毛利率为 N/A，低于行业标准15%」
+        gross_margin_alert = "YELLOW"
+    else:
+        gross_margin_alert = (
+            _determine_gross_margin_alert(gross_margin) if gross_margin is not None else "RED"
+        )
     # Java line 461-466: GREEN if net_profit is null OR >= 0, RED if < 0
     if net_profit is None:
         net_profit_alert = "GREEN"
     else:
         net_profit_alert = "GREEN" if net_profit >= Decimal("0") else "RED"
-    roi_alert = _determine_roi_alert(roi)
+    roi_alert = _determine_roi_alert(roi) if roi is not None else "YELLOW"
+    missing_desc = "所选期间缺少收入或成本数据，无法计算"
 
     return [
         _new_metric_result_dict(
             metric_code="GROSS_PROFIT",
             metric_name="毛利额",
-            value=_decimal_to_number(gross_profit.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            formatted_value=_format_currency(gross_profit),
+            value=(
+                _decimal_to_number(gross_profit.quantize(Decimal("0.01"), ROUND_HALF_UP))
+                if gross_profit is not None else None
+            ),
+            formatted_value=_format_currency(gross_profit) if gross_profit is not None else "N/A",
             unit="元",
-            alert_level="GREEN",
-            description="销售收入减去销售成本",
+            alert_level="GREEN" if gross_profit is not None else "YELLOW",
+            description="销售收入减去销售成本" if not gross_incomplete else missing_desc,
         ),
         _new_metric_result_dict(
             metric_code="GROSS_MARGIN",
@@ -2094,7 +2126,7 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
             ),
             unit="%",
             alert_level=gross_margin_alert,
-            description="毛利额占销售收入的比例",
+            description="毛利额占销售收入的比例" if not gross_incomplete else missing_desc,
         ),
         _new_metric_result_dict(
             metric_code="NET_PROFIT",
@@ -2128,8 +2160,13 @@ async def _get_profit_metrics(factory_id: str, range_: DateRange) -> list:
         _new_metric_result_dict(
             metric_code="ROI",
             metric_name="投入产出比",
-            value=_decimal_to_number(roi.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            formatted_value=f"{roi.quantize(Decimal('0.01'), ROUND_HALF_UP)}%",
+            value=(
+                _decimal_to_number(roi.quantize(Decimal("0.01"), ROUND_HALF_UP))
+                if roi is not None else None
+            ),
+            formatted_value=(
+                f"{roi.quantize(Decimal('0.01'), ROUND_HALF_UP)}%" if roi is not None else "N/A"
+            ),
             unit="%",
             alert_level=roi_alert,
             description="毛利额与成本的比率",
@@ -2187,8 +2224,33 @@ def _build_profit_chart_from_finance_data(
     all_periods = sorted(set(revenue_by_period.keys()) | set(cost_by_period.keys()))
     chart_data: list[dict] = []
     for pk in all_periods:
-        revenue = revenue_by_period.get(pk, Decimal("0"))
-        cost = cost_by_period.get(pk, Decimal("0"))
+        # 某期只有收入没有成本 (或反之) = 该期缺数, 不按 0 算 (否则毛利=收入、毛利率=100%)
+        revenue = revenue_by_period.get(pk)
+        cost = cost_by_period.get(pk)
+        net_profit = net_profit_by_period.get(pk)
+        chart_data.append(_new_profit_point(pk, revenue, cost, net_profit,
+                                            net_defaults_to_gross=True))
+    return chart_data
+
+
+def _new_profit_point(
+    period_key: str,
+    revenue: Optional[Decimal],
+    cost: Optional[Decimal],
+    net_profit: Optional[Decimal],
+    net_defaults_to_gross: bool,
+) -> dict:
+    """One profit trend point, 6 keys [period, revenue, cost, grossProfit, netProfit, grossMargin].
+
+    revenue/cost None = 该期缺数 → grossProfit/grossMargin 也 None (同一口径, 不用 0 兜底)。
+    grossMargin >100% or <-100% → None (Java line 332-335 clamp)。
+    """
+    def _num(v: Optional[Decimal]):
+        return _decimal_to_number(v.quantize(Decimal("0.01"), ROUND_HALF_UP)) if v is not None else None
+
+    gross_profit: Optional[Decimal] = None
+    gross_margin: Optional[Decimal] = None
+    if revenue is not None and cost is not None:
         gross_profit = revenue - cost
         if revenue > Decimal("0"):
             # Rule 10: divide quantize FIRST then multiply.
@@ -2203,74 +2265,78 @@ def _build_profit_chart_from_finance_data(
             if (gross_margin_raw > Decimal("100") or gross_margin_raw < Decimal("-100"))
             else gross_margin_raw
         )
-        net_profit = net_profit_by_period.get(pk, gross_profit)
+    if net_profit is None and net_defaults_to_gross:
+        net_profit = gross_profit
 
-        chart_data.append({
-            "period": pk,
-            "revenue": _decimal_to_number(revenue.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            "cost": _decimal_to_number(cost.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            "grossProfit": _decimal_to_number(gross_profit.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            "netProfit": _decimal_to_number(net_profit.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            "grossMargin": (
-                _decimal_to_number(gross_margin.quantize(Decimal("0.01"), ROUND_HALF_UP))
-                if gross_margin is not None else None
-            ),
-        })
-    return chart_data
+    return {
+        "period": period_key,
+        "revenue": _num(revenue),
+        "cost": _num(cost),
+        "grossProfit": _num(gross_profit),
+        "netProfit": _num(net_profit),
+        "grossMargin": _num(gross_margin),
+    }
+
+
+def _sales_row_cost_missing(r: dict) -> bool:
+    """销售行有金额但成本为空或 0 = 没录成本。
+
+    Excel 上传缺成本列时写入的是 0 (ExcelDataPersistenceServiceImpl.getDecimalValue
+    缺值返回 BigDecimal.ZERO), 所以销售数据里「成本 0」与「没有成本」分不开, 按缺数处理。
+    """
+    amount = r.get("amount")
+    if amount is None or _to_decimal(amount) == Decimal("0"):
+        return False
+    cost = r.get("cost")
+    return cost is None or _to_decimal(cost) == Decimal("0")
+
+
+def _sales_cost_complete(sales_rows: list[dict]) -> bool:
+    """所有有金额的销售行都录了成本, 才算成本有数。"""
+    return not any(_sales_row_cost_missing(r) for r in sales_rows)
 
 
 def _aggregate_profit_by_period_sales(
     sales_rows: list[dict], period: str
 ) -> list[dict]:
-    """Mirror Java `FinanceAnalysisServiceImpl.aggregateProfitByPeriod` line 1423-1447.
+    """Sales-fallback trend aggregator (finance_data 为空, 只有 smart_bi_sales_data 时)。
 
-    Sales-fallback chart aggregator. Used when finance_data is empty but
-    smart_bi_sales_data has rows (餐饮 tenants).
-
-    Differs from `_build_profit_chart_from_finance_data`:
-      - emits **4 keys per point**: [period, grossProfit, netProfit, grossMargin]
-        (NOT 6 keys — no `revenue` / `cost`)
-      - `netProfit = grossProfit * 0.70` (Java line 1440 hardcoded — known quirk;
-        assumes 30% expense ratio. PR-B preserves this for byte parity.)
-      - `grossMargin` does NOT clamp >100/<-100 → null (Java line 1441-1443
-        emits raw value or 0). For sales rows revenue is never huge negative,
-        so this rarely matters in practice; we mirror Java behavior literally.
+    有意偏离 Java `aggregateProfitByPeriod` (2026-11-17 财务报表「收入 0 / 利润率 100%」事故):
+      - 每点输出与 finance_data 路径相同的 6 键 [period, revenue, cost, grossProfit,
+        netProfit, grossMargin]; Java 只给 4 键 (没有 revenue/cost), 前端加总只能得 0。
+      - 某期有金额的销售行没录成本 (null 或 0) → 该期 cost / grossProfit / grossMargin = null,
+        不再按成本 0 算出毛利 = 收入、毛利率 100%。
+      - netProfit = null: 销售数据里没有费用, Java 的 `毛利 × 0.70` 是编出来的数, 不输出。
+      - grossMargin 与 finance_data 路径同样 clamp (>100% / <-100% → null)。
 
     Period aggregation via TreeMap → Python `sorted(by_period.keys())`.
     """
-    by_period: dict[str, dict[str, Decimal]] = {}
+    by_period: dict[str, dict] = {}
     for r in sales_rows:
         if r.get("order_date") is None:
             continue
         key = _get_period_key(r["order_date"], period)
         slot = by_period.setdefault(
-            key, {"profit": Decimal("0"), "revenue": Decimal("0")}
+            key, {"revenue": Decimal("0"), "cost": Decimal("0"), "cost_missing": False}
         )
-        revenue = _to_decimal(r.get("amount") or 0)
-        cost = _to_decimal(r.get("cost") or 0)
-        slot["profit"] += revenue - cost
-        slot["revenue"] += revenue
+        if r.get("amount") is not None:
+            slot["revenue"] += _to_decimal(r["amount"])
+        if _sales_row_cost_missing(r):
+            slot["cost_missing"] = True
+        elif r.get("cost") is not None:
+            # Bug B 防御: 历史数据可能存负成本, 与 metrics 路径一致取 abs
+            slot["cost"] += abs(_to_decimal(r["cost"]))
 
-    out: list[dict] = []
-    for key in sorted(by_period.keys()):
-        slot = by_period[key]
-        gross = slot["profit"]
-        net = (gross * Decimal("0.70")).quantize(Decimal("0.01"), ROUND_HALF_UP)
-        if slot["revenue"] > Decimal("0"):
-            # Rule 10: divide quantize FIRST then multiply.
-            gm = (
-                (gross / slot["revenue"]).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
-                * Decimal("100")
-            )
-        else:
-            gm = Decimal("0")
-        out.append({
-            "period": key,
-            "grossProfit": _decimal_to_number(gross.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-            "netProfit": _decimal_to_number(net),
-            "grossMargin": _decimal_to_number(gm.quantize(Decimal("0.01"), ROUND_HALF_UP)),
-        })
-    return out
+    return [
+        _new_profit_point(
+            key,
+            by_period[key]["revenue"],
+            None if by_period[key]["cost_missing"] else by_period[key]["cost"],
+            None,
+            net_defaults_to_gross=False,
+        )
+        for key in sorted(by_period.keys())
+    ]
 
 
 async def _get_profit_trend_chart(
@@ -2300,9 +2366,8 @@ async def _get_profit_trend_chart(
         chart_data = _build_profit_chart_from_finance_data(revenue_data, cost_data, period)
     else:
         # PR-B sales fallback: when finance_data empty, aggregate by period from
-        # smart_bi_sales_data (Java line 237-249). Returns 4-key points (period,
-        # grossProfit, netProfit=gross*0.70, grossMargin) — differs from main
-        # path's 6-key points.
+        # smart_bi_sales_data (Java line 237-249). Emits the same 6-key points as
+        # the finance_data path (see _aggregate_profit_by_period_sales).
         sales_rows = await _query_finance_sales_fallback(
             factory_id, start_date, end_date
         )
