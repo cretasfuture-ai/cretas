@@ -113,12 +113,15 @@ public final class IntentTurnSharedSteps {
     // ==================== 审批 ====================
 
     /**
-     * 审批谓词 (两入口一份): 意图声明了需要审批, 且这次不是只读预览。
-     * 不看敏感级别 (声明了就要审批); 不看 forceExecute (那是客户端带来的字段, 不能替审批放行)。
+     * 审批谓词 (两入口一份): 意图声明了需要审批。
+     * 不看敏感级别 (声明了就要审批); 不看 forceExecute (那是客户端带来的字段, 不能替审批放行);
+     * 也不看 previewOnly (PR-3b 终审 M2, 已定口径「要审批的写不出确认卡」): 预览会铸确认令牌、出确认按钮,
+     * 要审批的操作在预览时一样停在 PENDING_APPROVAL, 不调预览、不铸令牌。
+     *
+     * @param request 保留参数 (调用方不变); 结论不取决于它
      */
     public static boolean stopsForApproval(AIIntentConfig intent, IntentExecuteRequest request) {
-        return intent != null && Boolean.TRUE.equals(intent.getRequiresApproval())
-                && !(request != null && Boolean.TRUE.equals(request.getPreviewOnly()));
+        return intent != null && Boolean.TRUE.equals(intent.getRequiresApproval());
     }
 
     /** 审批回复: AI 入口不提交、不核验审批, 如实说没执行。 */

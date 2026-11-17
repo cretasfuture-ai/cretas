@@ -84,7 +84,7 @@ class WorkProcessReportChoiceContractTest {
     @BeforeEach
     void setUp() {
         dispatch = new ToolDispatchService(
-                mock(ToolRegistry.class), mapper, mock(DashScopeClient.class),
+                com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled(), mapper, mock(DashScopeClient.class),
                 mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
                 mock(CorrectionAgentService.class), mock(ExternalVerifierService.class),
                 mock(ToolResultValidatorService.class), mock(ParameterExtractionLearningService.class));

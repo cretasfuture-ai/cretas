@@ -62,7 +62,7 @@ class PurchaseTaskConfirmBoundaryContractTest {
     void setUp() {
         tokenService = mock(PreviewTokenService.class);
         dispatch = mock(ToolDispatchService.class);
-        registry = mock(ToolRegistry.class);
+        registry = com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled();
         controlled = mock(ControlledPurchaseTaskExecutionService.class);
         canonicalTool = mock(ToolExecutor.class);
         orchestrator = new IntentExecutionOrchestrator(
@@ -326,7 +326,7 @@ class PurchaseTaskConfirmBoundaryContractTest {
     }
 
     private ToolDispatchService actualDispatch() {
-        ToolDispatchService actual = new ToolDispatchService(mock(ToolRegistry.class), new ObjectMapper(),
+        ToolDispatchService actual = new ToolDispatchService(com.cretas.aims.testsupport.ToolRegistryStubs.allToolsEnabled(), new ObjectMapper(),
                 mock(DashScopeClient.class), mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
                 mock(CorrectionAgentService.class), mock(ExternalVerifierService.class), mock(ToolResultValidatorService.class),
                 mock(ParameterExtractionLearningService.class));
