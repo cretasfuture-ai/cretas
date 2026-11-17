@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { h, KeepAlive, reactive, ref } from 'vue';
+import { defineComponent, h, KeepAlive, reactive, ref } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import ElementPlus from 'element-plus';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 import VoucherDetail from '../VoucherDetail.vue';
 
 const api = vi.hoisted(() => ({
@@ -51,10 +51,14 @@ vi.mock('@/api/voucher', () => ({
   SOURCE_BUSINESS_TYPE_LABEL: { SALES_ORDER: '销售订单', PURCHASE_ORDER: '采购订单' },
 }));
 vi.mock('@/api/inventory', () => ({ getReturnRefundByRequest: api.refundByRequest }));
-vi.mock('element-plus', async () => {
-  const actual = await vi.importActual<typeof import('element-plus')>('element-plus');
-  return { ...actual, ElMessageBox: { ...actual.ElMessageBox, confirm: api.confirm } };
+// 过账确认走 SalesConfirmModal.ask (UModal): 桩成直接转调 api.confirm, true=确认('') / false=取消(null)。
+const ConfirmStub = defineComponent({
+  setup(_p, { expose }) {
+    expose({ ask: (o: unknown) => Promise.resolve(api.confirm(o)).then((ok: unknown) => (ok === false ? null : '')) });
+    return () => null;
+  },
 });
+const stubs = { ...nuxtUiStubs, SalesConfirmModal: ConfirmStub };
 
 function voucher(id: string, sourceBusinessType = 'RETURN_REFUND', sourceBusinessId = 'return-a') {
   return {
@@ -74,7 +78,7 @@ function voucher(id: string, sourceBusinessType = 'RETURN_REFUND', sourceBusines
 }
 
 function render() {
-  return mount(VoucherDetail, { global: { plugins: [ElementPlus] } });
+  return mount(VoucherDetail, { global: { stubs } });
 }
 
 function deferred<T>() {
@@ -217,7 +221,7 @@ describe('凭证详情真实挂载行为', () => {
     const visible = ref(true);
     const wrapper = mount({
       setup: () => () => h(KeepAlive, null, { default: () => visible.value ? h(VoucherDetail) : null }),
-    }, { global: { plugins: [ElementPlus] } });
+    }, { global: { stubs } });
     await flushPromises();
     visible.value = false;
     await flushPromises();

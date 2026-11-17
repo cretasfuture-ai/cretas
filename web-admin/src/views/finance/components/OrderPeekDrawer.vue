@@ -22,6 +22,8 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { purchaseTaxIncludedUnitPrice } from '@/views/procurement/orders/purchaseOrderTaxInclusivePricing';
 import { displayUnit, canonicalUnitCode } from '@/utils/unitPricing';
+import { enumLabel, SALES_ORDER_STATUS_LABELS, PURCHASE_ORDER_STATUS_LABELS } from '@/utils/enumDisplay';
+import type { CsTableColumn } from '@/types/csTable';
 
 const props = defineProps<{
   /** 订单 id。为空 -> 抽屉不发请求 */
@@ -153,6 +155,38 @@ function lineUnitPriceLabel(row: Record<string, unknown>): string {
   return unit ? `${price} / ${displayUnit(unit)}` : price;
 }
 
+/** 头部信息: 含税领先、未税殿后 (owner 裁定); 状态走中文枚举。 */
+const descItems = computed<Array<{ label: string; value: string }>>(() => {
+  const o = order.value;
+  if (!o) return [];
+  const statusLabels = props.kind === 'purchase' ? PURCHASE_ORDER_STATUS_LABELS : SALES_ORDER_STATUS_LABELS;
+  return [
+    { label: '订单号', value: text(o.orderNumber ?? o.purchaseNumber) },
+    { label: props.kind === 'purchase' ? '供应商' : '客户', value: text(o.customerName ?? o.supplierName) },
+    { label: '状态', value: enumLabel(o.status, statusLabels, '-') },
+    { label: '下单日期', value: text(o.orderDate) },
+    { label: '含税总额', value: moneyIfKnown(taxInclusiveTotal.value) },
+    { label: '税率', value: formatAuthoritativeTaxRate(lineTaxRates.value) },
+    { label: '未税总额', value: money(o.totalAmount) },
+    { label: '已开票', value: money(o.invoicedAmount) },
+    { label: '已收/付款', value: money(o.paidAmount) },
+  ];
+});
+
+const itemColumns = computed<CsTableColumn<Record<string, unknown>>[]>(() => {
+  const right = { meta: { class: { th: 'text-right', td: 'text-right' } } };
+  const cols: CsTableColumn<Record<string, unknown>>[] = [
+    { id: 'name', header: '品名' },
+    { id: 'quantity', header: '数量', ...right },
+    { id: 'unit', header: '单位' },
+  ];
+  if (canViewPrice.value) {
+    cols.push({ id: 'unitPrice', header: '单价（含税）', ...right });
+    cols.push({ id: 'subtotal', header: '小计（含税）', ...right });
+  }
+  return cols;
+});
+
 async function load() {
   if (!props.orderId || !factoryId.value) {
     order.value = null;
@@ -182,82 +216,74 @@ watch(() => [visible.value, props.orderId], ([open]) => { if (open) void load();
 </script>
 
 <template>
-  <el-drawer v-model="visible" :title="title" size="520px" direction="rtl" destroy-on-close>
-    <div v-loading="loading">
-      <!-- ⛔ 403 与真故障分开: 权限不足时说清是权限边界, 不说「请重试」(重试一万次也没用) -->
-      <el-alert
-        v-if="errorKind === 'forbidden'"
-        type="warning" :closable="false" show-icon
-        title="没有权限查看这张订单"
-        description="这需要对应模块的读取权限，请联系管理员。"
-      />
-      <el-alert
-        v-else-if="errorKind === 'failed'"
-        type="error" :closable="false" show-icon
-        title="订单加载失败"
-        description="网络或服务异常，请刷新后重试。"
-      />
+  <!-- 非模态 + 无遮罩: 模态 USlideover 会给 body 加 pointer-events:none, 抽屉下面的列表/弹窗点不了。 -->
+  <USlideover
+    v-model:open="visible"
+    :modal="false"
+    :overlay="false"
+    side="right"
+    :title="title"
+    description="订单只读速览"
+    :ui="{ content: 'cs-slide peek-slide', description: 'sr-only' }"
+  >
+    <template #body>
+      <div data-testid="order-peek">
+        <p v-if="loading" class="peek-loading">加载中…</p>
+        <!-- ⛔ 403 与真故障分开: 权限不足时说清是权限边界, 不说「请重试」(重试一万次也没用) -->
+        <UAlert
+          v-if="errorKind === 'forbidden'"
+          color="warning" variant="soft" icon="i-lucide-triangle-alert"
+          title="没有权限查看这张订单"
+          description="这需要对应模块的读取权限，请联系管理员。"
+        />
+        <UAlert
+          v-else-if="errorKind === 'failed'"
+          color="error" variant="soft" icon="i-lucide-circle-alert"
+          title="订单加载失败"
+          description="网络或服务异常，请刷新后重试。"
+        />
 
-      <template v-else-if="order">
-        <el-tag type="info" size="small" class="peek-readonly">只读速览</el-tag>
-        <el-descriptions :column="2" border size="small" class="peek-desc">
-          <el-descriptions-item label="订单号">
-            {{ text(order.orderNumber ?? order.purchaseNumber) }}
-          </el-descriptions-item>
-          <el-descriptions-item :label="props.kind === 'purchase' ? '供应商' : '客户'">
-            {{ text(order.customerName ?? order.supplierName) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">{{ text(order.status) }}</el-descriptions-item>
-          <el-descriptions-item label="下单日期">{{ text(order.orderDate) }}</el-descriptions-item>
+        <template v-else-if="order">
+          <UBadge color="neutral" variant="soft" size="sm" class="peek-readonly">只读速览</UBadge>
+          <dl class="peek-desc">
+            <div v-for="d in descItems" :key="d.label" class="desc-item" :data-label="d.label">
+              <dt>{{ d.label }}</dt>
+              <dd>{{ d.value }}</dd>
+            </div>
+          </dl>
           <!--
             缺陷 30 续 (2026-09-01): 🔒 owner 裁定「先算含税总额、说清税率、再倒算未税总额」——
-            含税领先, 未税作为反算结果殿后。⚠️ 含税总额是**前端现算**(untaxedTotal + taxAmountTotal),
-            ⛔ 不是 order.totalAmountWithTax —— 那个字段名在这两个端点上从不存在(见函数注释)。
-            缺陷 30 再续 (2026-09-02): ⚠️ 「税率」不跟着这条反算规则 —— 它读的是明细行的
-            权威 taxRate 字段(见 lineTaxRates 注释), 与含税/未税两个"现算"的总额是两条
-            独立的路, 互不依赖。
+            含税领先, 未税作为反算结果殿后(见 descItems 顺序)。⚠️ 含税总额是**前端现算**
+            (untaxedTotal + taxAmountTotal), ⛔ 不是 order.totalAmountWithTax。
+            「税率」读明细行权威 taxRate, 与两个现算总额互不依赖。
           -->
-          <el-descriptions-item label="含税总额">{{ moneyIfKnown(taxInclusiveTotal) }}</el-descriptions-item>
-          <el-descriptions-item label="税率">{{ formatAuthoritativeTaxRate(lineTaxRates) }}</el-descriptions-item>
-          <el-descriptions-item label="未税总额">{{ money(order.totalAmount) }}</el-descriptions-item>
-          <el-descriptions-item label="已开票">{{ money(order.invoicedAmount) }}</el-descriptions-item>
-          <el-descriptions-item label="已收/付款">{{ money(order.paidAmount) }}</el-descriptions-item>
-        </el-descriptions>
-
-        <div class="peek-section">明细</div>
-        <!-- 🔴「查不到」不能长成「没有」: 空明细要说出来, ⛔ 不留一张静默空表 -->
-        <el-empty v-if="!items.length" description="这张订单没有明细行" :image-size="60" />
-        <el-table v-else :data="items" size="small" border :scrollbar-always-on="true">
-          <el-table-column label="品名" min-width="150">
-            <template #default="{ row }">{{ text(row.productName ?? row.materialName) }}</template>
-          </el-table-column>
-          <el-table-column label="数量" width="90" align="right">
-            <template #default="{ row }">{{ text(row.quantity) }}</template>
-          </el-table-column>
-          <el-table-column label="单位" width="70" align="center">
-            <template #default="{ row }">{{ text(row.unit) }}</template>
-          </el-table-column>
-          <!--
-            缺陷 30 续: 原来这里**没有单价列**, 只有一个恒为「—」的「小计」——
-            `row.totalAmount ?? row.subtotal` 两个属性在 PurchaseOrderItem/SalesOrderItem
-            上都不存在, 真正的字段是 unitPrice + taxRate(算单价) / lineAmountWithTax(小计)。
-            单价按 🔒 owner 裁定显含税(与 procurement/orders/detail.vue 同一套算法, 复用
-            purchaseTaxIncludedUnitPrice, ⛔ 不再拼一份新公式)。
-          -->
-          <el-table-column v-if="canViewPrice" label="单价（含税）" min-width="130" align="right">
-            <template #default="{ row }">{{ lineUnitPriceLabel(row) }}</template>
-          </el-table-column>
-          <el-table-column v-if="canViewPrice" label="小计（含税）" width="110" align="right">
-            <template #default="{ row }">{{ moneyIfKnown(financeNumber(row.lineAmountWithTax)) }}</template>
-          </el-table-column>
-        </el-table>
-      </template>
-    </div>
-  </el-drawer>
+          <div class="peek-section">明细</div>
+          <!-- 🔴「查不到」不能长成「没有」: 空明细要说出来, ⛔ 不留一张静默空表 -->
+          <p v-if="!items.length" class="peek-empty">这张订单没有明细行</p>
+          <UTable v-else :data="items" :columns="itemColumns" class="cs-table" data-testid="order-peek-items">
+            <template #name-cell="{ row }">{{ text(row.original.productName ?? row.original.materialName) }}</template>
+            <template #quantity-cell="{ row }">{{ text(row.original.quantity) }}</template>
+            <template #unit-cell="{ row }">{{ text(row.original.unit) }}</template>
+            <template #unitPrice-cell="{ row }">{{ lineUnitPriceLabel(row.original) }}</template>
+            <template #subtotal-cell="{ row }">{{ moneyIfKnown(financeNumber(row.original.lineAmountWithTax)) }}</template>
+          </UTable>
+        </template>
+      </div>
+    </template>
+  </USlideover>
 </template>
 
 <style scoped>
 .peek-readonly { margin-bottom: 10px; }
-.peek-desc { margin-bottom: 16px; }
+.peek-loading, .peek-empty { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.peek-desc { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; margin: 0 0 16px; border: 1px solid var(--cs-border); background: var(--cs-border); }
+.desc-item { display: flex; gap: var(--cs-space-2); padding: 6px 8px; background: var(--cs-surface); font-size: 13px; }
+.desc-item dt { flex: none; width: 5.5em; color: var(--cs-muted); }
+.desc-item dd { margin: 0; color: var(--cs-text); min-width: 0; word-break: break-all; }
 .peek-section { font-weight: 600; margin: 8px 0; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+</style>
+<style>
+.peek-slide { --cs-slide-width: 560px; }
 </style>

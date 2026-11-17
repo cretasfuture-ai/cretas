@@ -12,15 +12,12 @@
  *   本文件                     钉「点开真的看到含税总额/单价/小计的**实际数字**」——
  *                              走的是渲染出来的文案, 只桩掉 HTTP + 两个 store。
  *
- * ⚠️ el-table/el-table-column 必须是**会按行渲染**的桩(与 pending.vue 那份
- *    mount.spec.ts 同一个理由): shallowMount 或不桩直接 mount 时, 未注册的
- *    Element Plus 组件不会真的按 :data 遍历, 明细行会渲染成空, 「小计缺失」和
- *    「压根没渲染」会长成同一个读数。
+ * ⚠️ UTable 用 nuxtUiStubs 里**会按行渲染**的桩: 不桩时明细行渲染成空,
+ *    「小计缺失」和「压根没渲染」会长成同一个读数。
  */
 import { flushPromises, mount } from '@vue/test-utils';
-import { computed, defineComponent, h, inject, provide } from 'vue';
-import type { ComputedRef } from 'vue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const harness = vi.hoisted(() => ({
   get: vi.fn(),
@@ -36,73 +33,31 @@ vi.mock('@/store/modules/permission', () => ({
 
 import OrderPeekDrawer from '../OrderPeekDrawer.vue';
 
-const ROWS_KEY = 'stub-table-rows';
-
-/** 把 :data 交给下面的列去渲染 —— 与 oaApprovalRefreshesOtherTabs.mount.spec.ts 同一份手法。 */
-const ElTableStub = defineComponent({
-  name: 'ElTable',
-  props: { data: { type: Array, default: () => [] } },
-  setup(props, { slots }) {
-    provide(ROWS_KEY, computed(() => props.data));
-    return () => h('div', { class: 'stub-table' }, slots.default?.());
-  },
-});
-
-const ElTableColumnStub = defineComponent({
-  name: 'ElTableColumn',
-  props: { label: { type: String, default: '' } },
-  setup(props, { slots }) {
-    const rows = inject<ComputedRef<unknown[]>>(ROWS_KEY, computed(() => []));
-    return () => h(
-      'div',
-      { class: 'stub-column', 'data-col-label': props.label },
-      rows.value.map((row) => h('div', { class: 'stub-cell' }, slots.default?.({ row }))),
-    );
-  },
-});
-
-const ElDescriptionsItemStub = defineComponent({
-  name: 'ElDescriptionsItem',
-  props: { label: { type: String, default: '' } },
-  setup(props, { slots }) {
-    return () => h(
-      'div',
-      { class: 'desc-item', 'data-label': props.label },
-      [`${props.label}：`, ...(slots.default?.() ?? [])],
-    );
-  },
-});
-
-const PassThrough = (name: string) => defineComponent({
-  name,
-  setup(_props, { slots }) {
-    return () => h('div', { class: `stub-${name}` }, slots.default?.());
-  },
-});
+/** 头部字段: 渲染成 `label：value` 文本, 与旧断言口径一致。 */
+function item(wrapper: ReturnType<typeof mount>, label: string) {
+  const n = wrapper.find(`[data-label="${label}"]`);
+  return {
+    exists: () => n.exists(),
+    text: () => (n.exists() ? `${label}：${n.find('dd').text()}` : ''),
+  };
+}
+/** 明细表某列(按表头)的全部单元格文本。 */
+function colCells(wrapper: ReturnType<typeof mount>, header: string): string[] | null {
+  const ths = wrapper.findAll('th').map((t) => t.text());
+  const idx = ths.indexOf(header);
+  if (idx < 0) return null;
+  return wrapper.findAll('tbody tr').map((tr) => tr.findAll('td')[idx].text());
+}
 
 /**
  * ⚠️ OrderPeekDrawer 的取数 watcher 是 `watch(() => [visible.value, orderId], ...)`,
- * **没有** `immediate: true` —— 生产上这是对的(抽屉初始是关的, 用户点开才是一次
- * "变化"), 但测试如果直接拿 `visible: true` 当初始 prop 挂载, watcher 从「一直是 true」
- * 到「还是 true」不算变化, `load()` 永远不会被调用。⇒ 必须先挂载成"关闭", 再
- * setProps 触发一次真正的 open, 与生产上「用户点开」是同一种触发方式。
+ * **没有** `immediate: true` —— 必须先挂载成"关闭", 再 setProps 触发一次真正的 open,
+ * 与生产上「用户点开」是同一种触发方式。
  */
 async function mountDrawer(orderId = 'po-1') {
   const wrapper = mount(OrderPeekDrawer, {
     props: { visible: false, orderId: null, kind: 'purchase' },
-    global: {
-      directives: { loading: {} },
-      stubs: {
-        ElDrawer: PassThrough('ElDrawer'),
-        ElAlert: PassThrough('ElAlert'),
-        ElTag: PassThrough('ElTag'),
-        ElEmpty: PassThrough('ElEmpty'),
-        ElDescriptions: PassThrough('ElDescriptions'),
-        ElDescriptionsItem: ElDescriptionsItemStub,
-        ElTable: ElTableStub,
-        ElTableColumn: ElTableColumnStub,
-      },
-    },
+    global: { stubs: nuxtUiStubs },
   });
   await wrapper.setProps({ visible: true, orderId });
   await flushPromises();
@@ -152,11 +107,11 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     expect(wrapper.text(), '订单号都没渲染出来 —— 组件没挂载成功, 后面的断言无意义')
       .toContain('PO-20260901-0004');
 
-    const inclusive = wrapper.find('[data-label="含税总额"]');
-    const rate = wrapper.find('[data-label="税率"]');
-    const untaxed = wrapper.find('[data-label="未税总额"]');
+    const inclusive = item(wrapper, '含税总额');
+    const rate = item(wrapper, '税率');
+    const untaxed = item(wrapper, '未税总额');
     expect(inclusive.exists() && rate.exists() && untaxed.exists(),
-      '三个 descriptions-item 都应该渲染出来').toBe(true);
+      '三个字段都应该渲染出来').toBe(true);
     expect(inclusive.text()).toBe('含税总额：¥847.50');
     expect(rate.text()).toBe('税率：13%');
     expect(untaxed.text()).toBe('未税总额：¥750.00');
@@ -169,18 +124,15 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     expect(inclusiveIdx, '含税应该排在未税前面(owner 裁定「先算含税」)').toBeLessThan(untaxedIdx);
 
     // 明细: 单价列 + 小计列都要有, 且至少两行是不同的真实数字(⛔ 不是只验总计)。
-    const priceCol = wrapper.find('[data-col-label="单价（含税）"]');
-    const subtotalCol = wrapper.find('[data-col-label="小计（含税）"]');
-    expect(priceCol.exists() && subtotalCol.exists(), '单价列/小计列都应该渲染出来').toBe(true);
-
-    const priceCells = priceCol.findAll('.stub-cell').map((c) => c.text());
-    const subtotalCells = subtotalCol.findAll('.stub-cell').map((c) => c.text());
-    expect(priceCells.length, '阳性对照: 三行都应该渲染出来').toBe(3);
+    const priceCells = colCells(wrapper, '单价（含税）');
+    const subtotalCells = colCells(wrapper, '小计（含税）');
+    expect(priceCells && subtotalCells, '单价列/小计列都应该渲染出来').toBeTruthy();
+    expect(priceCells!.length, '阳性对照: 三行都应该渲染出来').toBe(3);
     // 第一行 500 元/箱 * 1.13 = 565.00/箱; 第二行 50 元/kg * 1.13 = 56.50/kg —— 单位不同, 数字不同。
-    expect(priceCells[0]).toBe('¥565.00 / 箱');
-    expect(priceCells[1]).toBe('¥56.50 / kg');
-    expect(subtotalCells[0]).toBe('¥282.50');
-    expect(subtotalCells[1]).toBe('¥282.50');
+    expect(priceCells![0]).toBe('¥565.00 / 箱');
+    expect(priceCells![1]).toBe('¥56.50 / kg');
+    expect(subtotalCells![0]).toBe('¥282.50');
+    expect(subtotalCells![1]).toBe('¥282.50');
   });
 
   it('硬约束9: 「未税总额有值」是设计上必然出现的对照 —— 与「含税不是 0/不等未税」配对读', async () => {
@@ -194,12 +146,12 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     await flushPromises();
 
     // 必发生的对照: 未税总额一定要正常渲染(证明组件没有整体崩溃/没挂载)。
-    const untaxed = wrapper.find('[data-label="未税总额"]');
+    const untaxed = item(wrapper, '未税总额');
     expect(untaxed.text(), '未税总额没渲染 —— 组件可能整体没挂载, 下面「含税不对」的读数无意义')
       .toBe('未税总额：¥750.00');
 
     // 待验证的对照: 含税总额必须显式「不知道」——
-    const inclusive = wrapper.find('[data-label="含税总额"]');
+    const inclusive = item(wrapper, '含税总额');
     expect(inclusive.text(), '税额未知时含税总额应显示「—」').toBe('含税总额：—');
     // ⛔ 阴性对照双保险: 既不许是「¥0.00」也不许悄悄等于未税的「¥750.00」
     expect(inclusive.text()).not.toContain('¥0.00');
@@ -210,7 +162,7 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
     // 这份数据本来就知道税率, 只是不知道税额合计。⇒ 税率应该照常显示 13%,
     // 不该因为一个不相关的字段是 null 就跟着说「不知道」(那是旧的反算实现遗留的
     // 耦合, 已经被本次修复解开)。
-    const rate = wrapper.find('[data-label="税率"]');
+    const rate = item(wrapper, '税率');
     expect(rate.text(), '明细行税率仍然可读, 不应该被 taxAmount=null 连带隐藏')
       .toBe('税率：13%');
   });
@@ -246,7 +198,7 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
 
     expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0001');
 
-    const rate = wrapper.find('[data-label="税率"]');
+    const rate = item(wrapper, '税率');
     // 阳性断言: 权威值必须真的渲染出来了(硬约束 9 —— 不能只验证"坏值不在", 还要
     // 验证"对的值在")。
     expect(rate.text(), '应该显示库里的权威税率 13%, 不是反算出的 12.99%')
@@ -285,7 +237,7 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
 
     expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0002');
 
-    const rate = wrapper.find('[data-label="税率"]');
+    const rate = item(wrapper, '税率');
     expect(rate.text(), '逐行税率不一致时应显式说「多税率」').toBe('税率：多税率');
     // 阴性对照: 不许悄悄挑了 13 或 6, 也不许显示 (19÷200×100=9.5) 这个加权平均。
     expect(rate.text()).not.toContain('13%');
@@ -320,7 +272,7 @@ describe('OrderPeekDrawer 含税/未税实际数字', () => {
 
     expect(wrapper.text(), '订单没渲染出来 —— 后面的断言无意义').toContain('PO-20260902-0003');
 
-    const rate = wrapper.find('[data-label="税率"]');
+    const rate = item(wrapper, '税率');
     expect(rate.text(), '明细行读不到税率, 不许显示 0% 或任何猜测值').toBe('税率：—');
     expect(rate.text()).not.toContain('0%');
   });
@@ -347,7 +299,7 @@ describe('OrderPeekDrawer S5-12 采购价可见性', () => {
     });
     const wrapper = await mountDrawer();
     expect(wrapper.text(), '订单没渲染出来').toContain('PO-20260901-0004');
-    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：—');
+    expect(item(wrapper, '未税总额').text()).toBe('未税总额：—');
     expect(wrapper.text()).not.toContain('¥0.00');
   });
 
@@ -355,13 +307,13 @@ describe('OrderPeekDrawer S5-12 采购价可见性', () => {
     harness.permission = { canViewPrice: true, canViewPurchasePrice: false, canAccess: (m: string) => m === 'finance' };
     harness.get.mockResolvedValue({ success: true, data: orderWithTax() });
     const wrapper = await mountDrawer();
-    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：¥750.00');
+    expect(item(wrapper, '未税总额').text()).toBe('未税总额：¥750.00');
   });
 
   it('旧名单里但既无采购读也无财务读 → 采购金额一律「—」', async () => {
     harness.permission = { canViewPrice: true, canViewPurchasePrice: false, canAccess: (_m: string) => false };
     harness.get.mockResolvedValue({ success: true, data: orderWithTax() });
     const wrapper = await mountDrawer();
-    expect(wrapper.find('[data-label="未税总额"]').text()).toBe('未税总额：—');
+    expect(item(wrapper, '未税总额').text()).toBe('未税总额：—');
   });
 });

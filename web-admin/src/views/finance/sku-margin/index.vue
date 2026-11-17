@@ -3,10 +3,11 @@ import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { post } from '@/api/request';
-import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
 import ShipmentSkuMargin from './ShipmentSkuMargin.vue';
+import type { CsTableColumn } from '@/types/csTable';
+import type { CsBadgeColor } from '@/utils/csBadge';
 import { useRoute } from 'vue-router';
 import { readMarginPeriod } from './shipmentMarginNavigation';
 import {
@@ -37,8 +38,56 @@ watch(() => [route.query.periodStart, route.query.periodEnd], () => {
 });
 type SortKey = 'quantity' | 'realizedRevenue' | 'realizedCost' | 'realizedMargin'
   | 'catalogPrice' | 'catalogUnitCost' | 'catalogMargin';
-const sortField = ref<SortKey>('realizedMargin');
-const sortOrder = ref<'ascending' | 'descending'>('descending');
+// 排序: 表头点击写 sorting (UTable v-model:sorting), 实际排序仍由 paginatedData 自己做 (null 永远排最后)
+const sorting = ref<{ id: string; desc: boolean }[]>([{ id: 'realizedMargin', desc: true }]);
+const sortField = computed<SortKey>(() => {
+  const id = sorting.value[0]?.id ?? '';
+  return (id in SORT_VALUE ? id : 'realizedMargin') as SortKey;
+});
+const sortOrder = computed<'ascending' | 'descending'>(() => (sorting.value.length === 0 || sorting.value[0].desc ? 'descending' : 'ascending'));
+// 日期区间: 两个原生 date 输入, 两端都填好才触发查询
+const startStr = ref(dateRange.value?.[0] ?? '');
+const endStr = ref(dateRange.value?.[1] ?? '');
+watch(dateRange, (v) => { startStr.value = v?.[0] ?? ''; endStr.value = v?.[1] ?? ''; });
+function onDateInput() {
+  if (startStr.value && endStr.value) {
+    dateRange.value = [startStr.value, endStr.value];
+    handleSearch();
+  } else if (!startStr.value && !endStr.value && dateRange.value) {
+    dateRange.value = null;
+    handleSearch();
+  }
+}
+function setRangeDays(days: number) {
+  const e = new Date();
+  const s = new Date();
+  s.setDate(s.getDate() - days);
+  const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  dateRange.value = [fmt(s), fmt(e)];
+  handleSearch();
+}
+const referenceOpen = ref(false);
+function toggleReference() {
+  referenceOpen.value = !referenceOpen.value;
+  if (referenceOpen.value) void nextTick(initChart);
+}
+const PAGE_SIZE_ITEMS = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, value: n }));
+const R = { class: { th: 'text-right', td: 'text-right' } };
+const SORT_LABELS: Record<string, string> = {
+  quantity: '订单数量', realizedRevenue: '订单收入', realizedCost: '订单成本快照', realizedMargin: '订单毛利率',
+  catalogPrice: '目录·售价', catalogUnitCost: '目录·单位成本', catalogMargin: '目录价理论毛利率',
+};
+const SORTABLE_IDS = Object.keys(SORT_LABELS);
+const columns: CsTableColumn<SkuMarginRow>[] = [
+  { id: 'productName', accessorKey: 'productName', header: '产品名称', enableSorting: false },
+  { id: 'quantity', header: '订单数量', meta: R },
+  { id: 'realizedRevenue', header: '订单收入', meta: R },
+  { id: 'realizedCost', header: '订单成本快照', meta: R },
+  { id: 'realizedMargin', header: '订单毛利率', meta: { class: { th: 'text-center', td: 'text-center' } } },
+  { id: 'catalogPrice', header: '目录·售价', meta: R },
+  { id: 'catalogUnitCost', header: '目录·单位成本', meta: R },
+  { id: 'catalogMargin', header: '目录价理论毛利率', meta: { class: { th: 'text-center', td: 'text-center' } } },
+];
 // 没有明细时的真实原因 (后端给的话 / 请求失败的话), 不再声称「API 尚未接入」
 const emptyNotice = ref<{ show: boolean; type: 'info' | 'warning' | 'error'; text: string }>(
   { show: false, type: 'info', text: '' },
@@ -255,10 +304,10 @@ async function loadData() {
 }
 
 // ---------- helpers ----------
-function getMarginTagType(rate: number): string {
+function getMarginTagType(rate: number): CsBadgeColor {
   if (rate >= 30) return 'success';
   if (rate >= 15) return 'warning';
-  return 'danger';
+  return 'error';
 }
 
 // ---------- pagination & sorting ----------
@@ -283,11 +332,6 @@ const paginatedData = computed(() => {
   const start = (pagination.value.page - 1) * pagination.value.size;
   return sorted.slice(start, start + pagination.value.size);
 });
-
-function handleSortChange({ prop, order }: { prop: string; order: string | null }) {
-  sortField.value = (prop in SORT_VALUE ? prop : 'realizedMargin') as SortKey;
-  sortOrder.value = (order as 'ascending' | 'descending') || 'descending';
-}
 
 function handlePageChange(page: number) {
   pagination.value.page = page;
@@ -315,376 +359,178 @@ function handleRefresh() {
 </script>
 
 <template>
-  <div class="page-wrapper" v-loading="loading">
-    <el-card class="page-card" shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">SKU毛利率分析</span>
-            <span class="data-count">共 {{ pagination.total }} 个SKU</span>
-          </div>
-          <div class="header-right">
-            <el-date-picker
-              v-model="dateRange"
-              type="daterange"
-              range-separator="至"
-              start-placeholder="开始日期"
-              end-placeholder="结束日期"
-              value-format="YYYY-MM-DD"
-              style="width: 280px"
-              :shortcuts="[
-                { text: '最近一周', value: () => { const e = new Date(); const s = new Date(); s.setDate(s.getDate() - 7); return [s, e]; } },
-                { text: '最近一月', value: () => { const e = new Date(); const s = new Date(); s.setMonth(s.getMonth() - 1); return [s, e]; } },
-                { text: '最近三月', value: () => { const e = new Date(); const s = new Date(); s.setMonth(s.getMonth() - 3); return [s, e]; } },
-              ]"
-              @change="handleSearch"
+  <div class="page" data-testid="finance-sku-margin-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>SKU毛利率分析</h2>
+        <span class="count">共 {{ pagination.total }} 个SKU</span>
+        <div class="head-actions">
+          <UInput v-model="startStr" type="date" class="w-40" data-testid="margin-start" @change="onDateInput" />
+          <span class="muted">至</span>
+          <UInput v-model="endStr" type="date" class="w-40" data-testid="margin-end" @change="onDateInput" />
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(7)">最近一周</UButton>
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(30)">最近一月</UButton>
+          <UButton color="neutral" variant="outline" size="sm" @click="setRangeDays(90)">最近三月</UButton>
+          <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" data-testid="margin-refresh" @click="handleRefresh">刷新</UButton>
+        </div>
+      </header>
+
+      <div class="body">
+        <p v-if="loading" class="muted" data-testid="margin-loading">加载中…</p>
+        <template v-if="canViewPrice">
+          <ShipmentSkuMargin :factory-id="factoryId ?? ''" :period="dateRange" :refresh-key="shipmentRefresh" />
+
+          <UButton color="neutral" variant="subtle" :icon="referenceOpen ? 'i-lucide-chevron-down' : 'i-lucide-chevron-right'"
+            class="ref-toggle" data-testid="margin-reference-toggle" @click="toggleReference">订单与目录参考（保留原始成本）</UButton>
+          <div v-if="referenceOpen" class="reference" data-testid="margin-reference">
+            <!-- 没有明细时的真实原因 (后端文案 / 请求失败原因) -->
+            <UAlert
+              v-if="emptyNotice.show"
+              class="empty-notice mb-4"
+              :color="emptyNotice.type"
+              variant="soft"
+              :icon="emptyNotice.type === 'info' ? 'i-lucide-info' : emptyNotice.type === 'error' ? 'i-lucide-circle-alert' : 'i-lucide-triangle-alert'"
+              :data-type="emptyNotice.type"
+              :title="emptyNotice.text"
             />
-            <el-button :icon="Refresh" @click="handleRefresh">刷新</el-button>
-          </div>
-        </div>
-      </template>
 
-      <template v-if="canViewPrice">
-      <ShipmentSkuMargin :factory-id="factoryId ?? ''" :period="dateRange" :refresh-key="shipmentRefresh" />
-      <el-collapse @change="() => nextTick(initChart)">
-      <el-collapse-item title="订单与目录参考（保留原始成本）" name="reference">
-      <!-- 没有明细时的真实原因 (后端文案 / 请求失败原因) -->
-      <el-alert
-        v-if="emptyNotice.show"
-        class="empty-notice"
-        :type="emptyNotice.type"
-        :closable="false"
-        show-icon
-        :title="emptyNotice.text"
-        style="margin-bottom: 16px;"
-      />
-
-      <template v-if="!emptyNotice.show">
-      <!-- 两种口径的定义: 分开给, 不互相顶替 -->
-      <div class="definitions">
-        <div class="definition realized-def">
-          <b>订单毛利（成本快照）</b>: 销售订单明细折后未税收入减去订单保存的成本，只统计有售价且已回填成本的明细；
-          <template v-if="answeredPeriod">
-            统计期间 {{ answeredPeriod.startDate }} 至 {{ answeredPeriod.endDate }}{{ answeredPeriod.defaultPeriod ? ' (默认最近 30 天)' : '' }}。
-          </template>
-        </div>
-        <div class="definition financial-basis-note">
-          本页使用订单成本快照。出货后的成本更正按实际批次在财务结转中体现；核对已过账收入、销售成本和利润，请
-          <a href="/finance/three-statements">查看已过账财务报表</a>。
-        </div>
-        <div class="definition catalog-def">
-          <b>目录价理论毛利</b>: 产品目录价 vs 最近一条已算出单位成本的批次 (三价对比看板同口径)。
-        </div>
-        <div v-if="truncatedNotice" class="definition">{{ truncatedNotice }}</div>
-      </div>
-
-      <!-- KPI Row: 只统计有实际销售毛利率的 SKU (算不出来的不当 0 拉低平均) -->
-      <div class="kpi-row">
-        <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value kpi-avg" :style="{ color: getMarginColor(kpi.avgMargin) }">
-            {{ fmtPct(kpi.avgMargin) }}
-          </div>
-          <div class="kpi-label">产品毛利率简单平均</div>
-          <div class="kpi-sub">{{ kpi.ratedCount }} / {{ kpi.skuCount }} 个SKU有订单毛利率</div>
-        </el-card>
-        <el-card shadow="hover" class="kpi-card best">
-          <div class="kpi-value kpi-best" :style="{ color: kpi.bestSku.rate === null ? '#909399' : '#67C23A' }">
-            {{ fmtPct(kpi.bestSku.rate) }}
-          </div>
-          <div class="kpi-label">最高毛利SKU</div>
-          <div class="kpi-sub">{{ kpi.bestSku.name }}</div>
-        </el-card>
-        <el-card shadow="hover" class="kpi-card worst">
-          <div class="kpi-value kpi-worst" :style="{ color: kpi.worstSku.rate === null ? '#909399' : '#F56C6C' }">
-            {{ fmtPct(kpi.worstSku.rate) }}
-          </div>
-          <div class="kpi-label">最低毛利SKU</div>
-          <div class="kpi-sub">{{ kpi.worstSku.name }}</div>
-        </el-card>
-        <el-card shadow="hover" class="kpi-card">
-          <div class="kpi-value" style="color: var(--el-color-primary)">
-            {{ kpi.skuCount }}
-          </div>
-          <div class="kpi-label">SKU数量</div>
-        </el-card>
-      </div>
-
-      <!-- Bar Chart: Top 10 SKUs by 实际销售毛利率 -->
-      <div class="chart-section">
-        <h3 class="section-title">前10名产品订单毛利率</h3>
-        <div ref="chartRef" class="chart-container"></div>
-      </div>
-
-      <!-- Main Table -->
-      <div class="table-section">
-        <h3 class="section-title">SKU 毛利率明细</h3>
-        <el-table
-          :data="paginatedData"
-          stripe
-          border
-          style="width: 100%"
-          :default-sort="{ prop: 'realizedMargin', order: 'descending' }"
-          @sort-change="handleSortChange"
-          empty-text="暂无SKU毛利率数据"
-        >
-          <el-table-column prop="productName" label="产品名称" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="quantity" label="订单数量" width="100" align="right" sortable="custom">
-            <template #default="{ row }">
-              <span class="cell-quantity">{{ row.quantity === null ? NA : row.quantity.toLocaleString() }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="realizedRevenue" label="订单收入" width="130" align="right" sortable="custom">
-            <template #default="{ row }">
-              <span class="cell-realized-revenue">{{ fmtMoney(row.realized.revenue) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="realizedCost" label="订单成本快照" width="130" align="right" sortable="custom">
-            <template #default="{ row }">
-              <span class="cell-realized-cost">{{ fmtMoney(row.realized.cost) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="realizedMargin" label="订单毛利率" min-width="190" align="center" sortable="custom">
-            <template #default="{ row }">
-              <div class="cell-realized-margin">
-                <el-tag
-                  v-if="row.realized.marginRate !== null"
-                  :type="getMarginTagType(row.realized.marginRate)"
-                  size="small"
-                  effect="light"
-                >
-                  {{ fmtPct(row.realized.marginRate) }}
-                </el-tag>
-                <template v-else>
-                  <span class="na">{{ NA }}</span>
-                  <div v-if="row.realized.reason" class="na-reason">{{ row.realized.reason }}</div>
-                </template>
-                <div v-if="row.realized.note" class="cell-note">{{ row.realized.note }}</div>
+            <template v-if="!emptyNotice.show">
+              <!-- 两种口径的定义: 分开给, 不互相顶替 -->
+              <div class="definitions">
+                <div class="definition realized-def">
+                  <b>订单毛利（成本快照）</b>: 销售订单明细折后未税收入减去订单保存的成本，只统计有售价且已回填成本的明细；
+                  <template v-if="answeredPeriod">
+                    统计期间 {{ answeredPeriod.startDate }} 至 {{ answeredPeriod.endDate }}{{ answeredPeriod.defaultPeriod ? ' (默认最近 30 天)' : '' }}。
+                  </template>
+                </div>
+                <div class="definition financial-basis-note">
+                  本页使用订单成本快照。出货后的成本更正按实际批次在财务结转中体现；核对已过账收入、销售成本和利润，请
+                  <a href="/finance/three-statements">查看已过账财务报表</a>。
+                </div>
+                <div class="definition catalog-def">
+                  <b>目录价理论毛利</b>: 产品目录价 vs 最近一条已算出单位成本的批次 (三价对比看板同口径)。
+                </div>
+                <div v-if="truncatedNotice" class="definition">{{ truncatedNotice }}</div>
               </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="catalogPrice" label="目录·售价" width="120" align="right" sortable="custom">
-            <template #default="{ row }">
-              <span class="cell-catalog-price">{{ fmtMoney(row.catalog.price) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="catalogUnitCost" label="目录·单位成本" width="130" align="right" sortable="custom">
-            <template #default="{ row }">
-              <span class="cell-catalog-cost">{{ fmtMoney(row.catalog.unitCost) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column prop="catalogMargin" label="目录价理论毛利率" min-width="190" align="center" sortable="custom">
-            <template #default="{ row }">
-              <div class="cell-catalog-margin">
-                <el-tag
-                  v-if="row.catalog.marginRate !== null"
-                  :type="getMarginTagType(row.catalog.marginRate)"
-                  size="small"
-                  effect="light"
-                >
-                  {{ fmtPct(row.catalog.marginRate) }}
-                </el-tag>
-                <template v-else>
-                  <span class="na">{{ NA }}</span>
-                  <div v-if="row.catalog.reason" class="na-reason">{{ row.catalog.reason }}</div>
-                </template>
-              </div>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
 
-      <!-- Pagination -->
-      <div class="pagination-wrapper">
-        <el-pagination
-          v-model:current-page="pagination.page"
-          v-model:page-size="pagination.size"
-          :page-sizes="[10, 20, 50, 100]"
-          :total="pagination.total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="handlePageChange"
-          @size-change="handleSizeChange"
-        />
+              <!-- KPI Row: 只统计有实际销售毛利率的 SKU (算不出来的不当 0 拉低平均) -->
+              <div class="kpi-row">
+                <div class="kpi-card">
+                  <div class="kpi-value kpi-avg" :style="{ color: getMarginColor(kpi.avgMargin) }">{{ fmtPct(kpi.avgMargin) }}</div>
+                  <div class="kpi-label">产品毛利率简单平均</div>
+                  <div class="kpi-sub">{{ kpi.ratedCount }} / {{ kpi.skuCount }} 个SKU有订单毛利率</div>
+                </div>
+                <div class="kpi-card best">
+                  <div class="kpi-value kpi-best" :style="{ color: kpi.bestSku.rate === null ? '#909399' : '#67C23A' }">{{ fmtPct(kpi.bestSku.rate) }}</div>
+                  <div class="kpi-label">最高毛利SKU</div>
+                  <div class="kpi-sub" :title="kpi.bestSku.name">{{ kpi.bestSku.name }}</div>
+                </div>
+                <div class="kpi-card worst">
+                  <div class="kpi-value kpi-worst" :style="{ color: kpi.worstSku.rate === null ? '#909399' : '#F56C6C' }">{{ fmtPct(kpi.worstSku.rate) }}</div>
+                  <div class="kpi-label">最低毛利SKU</div>
+                  <div class="kpi-sub" :title="kpi.worstSku.name">{{ kpi.worstSku.name }}</div>
+                </div>
+                <div class="kpi-card">
+                  <div class="kpi-value kpi-count">{{ kpi.skuCount }}</div>
+                  <div class="kpi-label">SKU数量</div>
+                </div>
+              </div>
+
+              <!-- Bar Chart: Top 10 SKUs by 实际销售毛利率 -->
+              <div class="chart-section">
+                <h3 class="section-title">前10名产品订单毛利率</h3>
+                <div ref="chartRef" class="chart-container"></div>
+              </div>
+
+              <!-- Main Table -->
+              <div class="table-section">
+                <h3 class="section-title">SKU 毛利率明细</h3>
+                <UTable v-model:sorting="sorting" :sorting-options="{ manualSorting: true }" :data="paginatedData" :columns="columns" class="cs-table" data-testid="margin-table">
+                  <template #empty>暂无SKU毛利率数据</template>
+                  <template v-for="key in SORTABLE_IDS" :key="key" #[`${key}-header`]="{ column }">
+                    <button type="button" class="sort-th" @click="column.toggleSorting(column.getIsSorted() === 'asc')">
+                      {{ SORT_LABELS[key] }}
+                      <UIcon :name="column.getIsSorted() === 'asc' ? 'i-lucide-arrow-up' : column.getIsSorted() === 'desc' ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up-down'"
+                        class="sort-icon" :class="{ active: !!column.getIsSorted() }" />
+                    </button>
+                  </template>
+                  <template #productName-cell="{ row }"><span :title="row.original.productName">{{ row.original.productName }}</span></template>
+                  <template #quantity-cell="{ row }"><span class="cell-quantity">{{ row.original.quantity === null ? NA : row.original.quantity.toLocaleString() }}</span></template>
+                  <template #realizedRevenue-cell="{ row }"><span class="cell-realized-revenue">{{ fmtMoney(row.original.realized.revenue) }}</span></template>
+                  <template #realizedCost-cell="{ row }"><span class="cell-realized-cost">{{ fmtMoney(row.original.realized.cost) }}</span></template>
+                  <template #realizedMargin-cell="{ row }">
+                    <div class="cell-realized-margin">
+                      <UBadge v-if="row.original.realized.marginRate !== null" :color="getMarginTagType(row.original.realized.marginRate)" variant="soft">
+                        {{ fmtPct(row.original.realized.marginRate) }}
+                      </UBadge>
+                      <template v-else>
+                        <span class="na">{{ NA }}</span>
+                        <div v-if="row.original.realized.reason" class="na-reason">{{ row.original.realized.reason }}</div>
+                      </template>
+                      <div v-if="row.original.realized.note" class="cell-note">{{ row.original.realized.note }}</div>
+                    </div>
+                  </template>
+                  <template #catalogPrice-cell="{ row }"><span class="cell-catalog-price">{{ fmtMoney(row.original.catalog.price) }}</span></template>
+                  <template #catalogUnitCost-cell="{ row }"><span class="cell-catalog-cost">{{ fmtMoney(row.original.catalog.unitCost) }}</span></template>
+                  <template #catalogMargin-cell="{ row }">
+                    <div class="cell-catalog-margin">
+                      <UBadge v-if="row.original.catalog.marginRate !== null" :color="getMarginTagType(row.original.catalog.marginRate)" variant="soft">
+                        {{ fmtPct(row.original.catalog.marginRate) }}
+                      </UBadge>
+                      <template v-else>
+                        <span class="na">{{ NA }}</span>
+                        <div v-if="row.original.catalog.reason" class="na-reason">{{ row.original.catalog.reason }}</div>
+                      </template>
+                    </div>
+                  </template>
+                </UTable>
+              </div>
+
+              <!-- Pagination -->
+              <footer class="pager">
+                <USelect :model-value="pagination.size" :items="PAGE_SIZE_ITEMS" class="w-28" data-testid="margin-page-size" @update:model-value="(v: number) => handleSizeChange(Number(v))" />
+                <UPagination :page="pagination.page" :items-per-page="pagination.size" :total="pagination.total" show-edges :sibling-count="1" @update:page="handlePageChange" />
+              </footer>
+            </template>
+          </div>
+        </template>
+        <p v-else class="empty" data-testid="margin-no-permission">您没有查看价格/财务数据的权限</p>
       </div>
-      </template>
-      </el-collapse-item>
-      </el-collapse>
-      </template>
-      <el-empty v-else description="您没有查看价格/财务数据的权限" />
-    </el-card>
+    </section>
   </div>
 </template>
 
-<style lang="scss" scoped>
-.page-wrapper {
-  height: 100%;
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.page-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-
-  :deep(.el-card__header) {
-    padding: 16px 20px;
-    border-bottom: 1px solid var(--border-color-lighter, #ebeef5);
-  }
-
-  :deep(.el-card__body) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    padding: 20px;
-    overflow: auto;
-  }
-}
-
-.card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-
-  .header-left {
-    display: flex;
-    align-items: baseline;
-    gap: 12px;
-
-    .page-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: var(--text-color-primary, #303133);
-    }
-
-    .data-count {
-      font-size: 13px;
-      color: var(--text-color-secondary, #909399);
-    }
-  }
-
-  .header-right {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-  }
-}
-
-.kpi-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.kpi-card {
-  text-align: center;
-
-  :deep(.el-card__body) {
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-
-  .kpi-value {
-    font-size: 28px;
-    font-weight: 700;
-    line-height: 1.2;
-    margin-bottom: 4px;
-  }
-
-  .kpi-label {
-    font-size: 13px;
-    color: var(--text-color-secondary, #909399);
-  }
-
-  .kpi-sub {
-    font-size: 12px;
-    color: var(--text-color-secondary, #909399);
-    margin-top: 4px;
-    max-width: 160px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.chart-section {
-  margin-bottom: 24px;
-}
-
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-  margin-bottom: 16px;
-  padding-left: 10px;
-  border-left: 3px solid var(--el-color-primary);
-}
-
-.chart-container {
-  width: 100%;
-  height: 360px;
-}
-
-.table-section {
-  flex: 1;
-}
-
-.pagination-wrapper {
-  display: flex;
-  justify-content: flex-end;
-  padding-top: 16px;
-  border-top: 1px solid var(--border-color-lighter, #ebeef5);
-  margin-top: 16px;
-}
-
-@media (max-width: 1200px) {
-  .kpi-row {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-
-@media (max-width: 768px) {
-  .kpi-row {
-    grid-template-columns: 1fr;
-  }
-
-  .chart-container {
-    height: 280px;
-  }
-}
-.definitions {
-  margin-bottom: 16px;
-  padding: 10px 14px;
-  background: var(--el-fill-color-light, #f5f7fa);
-  border-radius: 4px;
-  font-size: 13px;
-  line-height: 1.7;
-  color: #606266;
-}
-
-.na {
-  color: #909399;
-}
-
-.na-reason {
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: #909399;
-  white-space: normal;
-}
-
-.cell-note {
-  margin-top: 2px;
-  font-size: 12px;
-  line-height: 1.4;
-  color: #E6A23C;
-  white-space: normal;
-}
-
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { font-size: 13px; color: var(--cs-muted); }
+.head-actions { margin-left: auto; display: flex; align-items: center; flex-wrap: wrap; gap: var(--cs-space-2); }
+.body { padding: var(--cs-space-5); }
+.muted { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.ref-toggle { margin-bottom: var(--cs-space-3); }
+.empty { padding: var(--cs-space-6) 0; text-align: center; color: var(--cs-muted); font-size: 13px; background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm); }
+.definitions { margin-bottom: var(--cs-space-4); padding: 10px 14px; background: var(--cs-surface-subtle); border-radius: var(--cs-radius-sm); font-size: 13px; line-height: 1.7; color: var(--cs-text); }
+.definitions a { color: var(--cs-primary); }
+.kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--cs-space-4); margin-bottom: var(--cs-space-6); }
+.kpi-card { display: flex; flex-direction: column; align-items: center; text-align: center; padding: var(--cs-space-4); background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); }
+.kpi-value { font-size: 28px; font-weight: 700; line-height: 1.2; margin-bottom: 4px; font-variant-numeric: tabular-nums; }
+.kpi-count { color: var(--cs-primary); }
+.kpi-label { font-size: 13px; color: var(--cs-muted); }
+.kpi-sub { font-size: 12px; color: var(--cs-muted); margin-top: 4px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chart-section { margin-bottom: var(--cs-space-6); }
+.section-title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); margin: 0 0 var(--cs-space-3); padding-left: 10px; border-left: 3px solid var(--cs-primary); }
+.chart-container { width: 100%; height: 360px; }
+.pager { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding-top: var(--cs-space-4); border-top: 1px solid var(--cs-border); margin-top: var(--cs-space-4); }
+.na { color: var(--cs-muted); }
+.na-reason { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--cs-muted); white-space: normal; }
+.cell-note { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--cs-warning); white-space: normal; }
+.sort-th { border: 0; background: transparent; padding: 0; display: inline-flex; align-items: center; gap: 4px; font: inherit; color: inherit; cursor: pointer; }
+.sort-icon { width: 12px; height: 12px; color: var(--cs-muted); opacity: 0.6; }
+.sort-icon.active { color: var(--cs-primary); opacity: 1; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 4px; min-height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); font-variant-numeric: tabular-nums; }
+@media (max-width: 1200px) { .kpi-row { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px) { .kpi-row { grid-template-columns: 1fr; } .chart-container { height: 280px; } }
 </style>
