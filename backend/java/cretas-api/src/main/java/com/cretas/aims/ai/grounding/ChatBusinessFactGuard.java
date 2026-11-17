@@ -75,7 +75,7 @@ public class ChatBusinessFactGuard {
     private static final Pattern QUESTION_SUBJECT = Pattern.compile(
             "销售|销量|卖得|卖了|卖出|卖掉|好卖|畅销|营收|营业额|收入|生意|业绩|利润|毛利|成本|产量|产值|生产"
                     + "|出.{0,3}货|发.{0,3}货|库存|存货|质检|合格率|良品率|不良|订单|采购|回款|应收|应付|损耗|报废"
-                    + "|入库|出库|产能|开工");
+                    + "|入库|出库|产能|开工|出成率|成品率|得率|出品率");
 
     /** 问情况 / 问数量 / 问变化 (「怎么提高」「如何做」这类咨询不在这里, 也不靠句末问号 / 吗 / 呢判业务)。 */
     private static final Pattern QUESTION_ASK = Pattern.compile(
@@ -112,7 +112,7 @@ public class ChatBusinessFactGuard {
     private static final Pattern METRIC_WORD = Pattern.compile(
             "同比|环比|增长|增加|下降|减少|上涨|下滑|提升|上升|销售|销量|营收|营业额|收入|利润|毛利|成本|产量|产值"
                     + "|出货|发货|库存|订单|合格率|良品率|不良率|完成率|达成率|占比|份额|业绩|生意|回款|损耗率|报废率"
-                    + "|开工率|利用率|出勤率");
+                    + "|开工率|利用率|出勤率|出成率|成品率|得率|出品率");
 
     /** 业务数量单位 (紧跟在数后面)。「个」只在不是「个月 / 个原则」这类量词时算。 */
     private static final Pattern QUANTITY_UNIT = Pattern.compile(

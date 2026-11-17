@@ -70,6 +70,10 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
     @Autowired
     private SupplierRepository supplierRepository;
 
+    /** 名字 → 本厂供应商 (全名精确 / 称呼核心 / 包含候选)。缺席 (裸构造的单测) = 只按编号查。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver entityResolver;
+
     @Override
     public String getToolName() {
         return "supplier_can_order_check";
@@ -90,8 +94,13 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
 
         Map<String, Object> supplierId = new HashMap<>();
         supplierId.put("type", "string");
-        supplierId.put("description", "供应商编号 (必填)");
+        supplierId.put("description", "供应商编号, 或用户说的供应商完整名称 (原样保留「演示·」等前缀和分隔符)");
         properties.put("supplierId", supplierId);
+
+        Map<String, Object> supplierName = new HashMap<>();
+        supplierName.put("type", "string");
+        supplierName.put("description", "供应商名称 (用户原话里的完整名称, 含「·」等分隔符和前缀, 不要删减)");
+        properties.put("supplierName", supplierName);
 
         schema.put("properties", properties);
         schema.put("required", List.of("supplierId"));
@@ -109,7 +118,48 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
         String supplierId = getString(params, "supplierId");
         log.info("supplier_can_order_check — factory={} supplier={}", factoryId, supplierId);
 
-        Optional<Supplier> supOpt = supplierRepository.findByIdAndFactoryId(supplierId, factoryId);
+        String supplierName = getString(params, "supplierName");
+        Optional<Supplier> supOpt = supplierId == null ? Optional.empty()
+                : supplierRepository.findByIdAndFactoryId(supplierId, factoryId);
+        // 2026-11-17 F006 数字文员「给演示·华东食材供应商下个采购单」: 抽参给的是名字 (还丢了「演示·」前缀),
+        // 按编号查不到就直接报「不存在」。编号查不到时按名字解析: 全名命中唯一 → 用它; 同名多个 / 只有包含候选 →
+        // 全部列出让人选 (⛔ 不自动选, 哪怕只有一个); 一个候选都没有才说没有。
+        if (supOpt.isEmpty() && entityResolver != null) {
+            String name = supplierName != null && !supplierName.isBlank() ? supplierName : supplierId;
+            if (name != null && !name.isBlank()) {
+                com.cretas.aims.service.entity.FactoryEntityResolver.Resolution resolution = entityResolver.resolve(
+                        factoryId, com.cretas.aims.service.entity.EntityKind.SUPPLIER, name);
+                if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.UNIQUE) {
+                    supplierId = resolution.matches().get(0).id();
+                    supOpt = supplierRepository.findByIdAndFactoryId(supplierId, factoryId);
+                } else {
+                    Map<String, Object> result = new HashMap<>();
+                    boolean listed;
+                    if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.MULTIPLE) {
+                        List<com.cretas.aims.ai.tool.SameNameMatches.Match> rows = new ArrayList<>();
+                        for (com.cretas.aims.service.entity.FactoryEntityResolver.Candidate c
+                                : com.cretas.aims.ai.tool.SameNameMatches.listedCandidates(resolution)) {
+                            rows.add(com.cretas.aims.ai.tool.SameNameMatches.matchOf(c, null));
+                        }
+                        com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "供应商", resolution, rows);
+                        listed = true;
+                    } else {
+                        listed = com.cretas.aims.ai.tool.SameNameMatches.annotateSuggestions(result, "供应商", resolution);
+                    }
+                    if (listed) {
+                        Map<String, Object> data = new LinkedHashMap<>();
+                        data.put("canOrder", null);
+                        data.put("supplierName", resolution.query());
+                        data.put("reason", "SUPPLIER_NEEDS_CHOICE");
+                        data.put("matchCount", resolution.matches().size());
+                        data.put("suggestionCount", resolution.suggestions().size());
+                        result.put("data", data);
+                        result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
+                        return result;
+                    }
+                }
+            }
+        }
         if (supOpt.isEmpty()) {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("canOrder", false);
