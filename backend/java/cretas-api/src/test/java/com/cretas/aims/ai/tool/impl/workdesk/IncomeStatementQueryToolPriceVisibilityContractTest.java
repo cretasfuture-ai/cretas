@@ -8,6 +8,7 @@ import com.cretas.aims.entity.User;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.PriceSensitive;
+import com.cretas.aims.security.PriceSensitiveContext;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.finance.IncomeStatementService;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -36,6 +37,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * 利润表 AI 工具的毛利 / 毛利率 / 金额可见性与 web 利润表同一判定 (#1788 漏网: 只读号拿到 grossMarginPercent / netMarginPercent)。
+ * Steve 2026-11-17 定: 有价格查看就能看利润表金额 (与 web 一致), 不另要 finance:read_write。
  *
  * <p>走工具真实入口 {@code execute(ToolCall, context)}, 判定用真实 {@link PriceFieldResponseAdvice}, 权限只来自一组配置的权限码
  * (不看角色名); 结论在原始结果和经 {@code maskedViewFor} (生产出口) 遮挡后两处都取。
@@ -53,7 +55,6 @@ class IncomeStatementQueryToolPriceVisibilityContractTest {
     private static final List<String> MONEY_AND_RATE_KEYS = List.of(
             "revenues", "costs", "expenses", "totalRevenue", "totalCost", "grossProfit", "totalExpense",
             "operatingProfit", "incomeTax", "netProfit", "grossMarginPercent", "netMarginPercent");
-    private static final List<String> MONEY_KEYS = MONEY_AND_RATE_KEYS.subList(0, 10);
 
     private final ObjectMapper mapper = new ObjectMapper();
 
@@ -109,12 +110,31 @@ class IncomeStatementQueryToolPriceVisibilityContractTest {
         ReflectionTestUtils.setField(tool, "incomeStatementService", service);
         ReflectionTestUtils.setField(tool, "objectMapper", mapper);
         ReflectionTestUtils.setField(tool, "priceView", priceView);
-        JsonNode r = mapper.readTree(tool.execute(ToolCall.of("t1", tool.getToolName(), "{\"startYear\":2026,\"startMonth\":11}"),
-                Map.of("factoryId", "F1", "userId", USER_ID)));
+        // 与 ToolDispatchService 直调分支同样: 执行期间记录按口径可见的属性, 执行后绑定到结果数据, 再经出口 maskedViewFor
+        PriceSensitiveContext.startRecordingVisible();
+        String json;
+        java.util.Set<String> visibleKeys;
+        try {
+            json = tool.execute(ToolCall.of("t1", tool.getToolName(), "{\"startYear\":2026,\"startMonth\":11}"),
+                    Map.of("factoryId", "F1", "userId", USER_ID));
+        } finally {
+            visibleKeys = PriceSensitiveContext.stopRecordingVisible();
+        }
+        JsonNode r = mapper.readTree(json);
         assertTrue(r.get("success").asBoolean(), r.toString());
         Map<String, Object> raw = mapper.convertValue(r.get("data").get("data"), Map.class);
+        PriceSensitiveContext.approveKeys(raw, visibleKeys);
         return new Exit(r.get("data").get("message").asText(), raw,
                 (Map<String, Object>) priceView.maskedViewFor(raw, USER_ID));
+    }
+
+    /** web 对照: 同一个 advice 遮 web 利润表的类型化 DTO 后, 毛利还在不在。 */
+    @SuppressWarnings("unchecked")
+    private static boolean webShowsGrossProfit(Set<String> held) {
+        IncomeStatementDTO dto = IncomeStatementDTO.builder()
+                .totalRevenue(new BigDecimal("100000")).grossProfit(new BigDecimal("40000")).build();
+        Map<String, Object> view = (Map<String, Object>) priceViewFor(held).maskedViewFor(dto, USER_ID);
+        return view.get("grossProfit") != null;
     }
 
     private static void assertNoFigures(String message) {
@@ -152,20 +172,40 @@ class IncomeStatementQueryToolPriceVisibilityContractTest {
     }
 
     @Test
-    @DisplayName("有价格查看、只有财务查看: 毛利率 / 净利率照给 (文字与字段同进同出), 金额字段与文字都不出")
-    void priceViewFinanceReadGetsRatesButNoAmounts() throws Exception {
+    @DisplayName("有价格查看、只有财务查看 (没有 finance:read_write): 与 web 一样金额、毛利率都给, 出口遮挡后金额仍在")
+    void priceViewFinanceReadSeesAmountsLikeWeb() throws Exception {
         Exit exit = run(PRICE_VIEW_FINANCE_READ, service());
 
-        assertTrue(exit.message().contains("毛利率 40.00%"), exit.message());
+        assertTrue(exit.message().contains("营业收入 ¥100000"), exit.message());
+        assertTrue(exit.message().contains("毛利 ¥40000"), exit.message());
         assertTrue(exit.message().contains("净利率 25.00%"), exit.message());
-        assertFalse(exit.message().contains("¥") || exit.message().contains("100000"), exit.message());
         for (Map<String, Object> data : List.of(exit.raw(), exit.masked())) {
-            assertEquals(0, new BigDecimal(String.valueOf(data.get("grossMarginPercent"))).compareTo(new BigDecimal("40.00")), data.toString());
-            assertEquals(0, new BigDecimal(String.valueOf(data.get("netMarginPercent"))).compareTo(new BigDecimal("25.00")), data.toString());
-            for (String key : MONEY_KEYS) {
-                assertFalse(data.containsKey(key), key + " 不该出现: " + data);
+            String where = (data == exit.masked() ? "出口遮挡后: " : "原始结果: ") + data;
+            for (String key : List.of("totalRevenue", "grossProfit", "netProfit", "grossMarginPercent")) {
+                org.junit.jupiter.api.Assertions.assertNotNull(data.get(key), key + " 被剥掉了 —— " + where);
             }
+            assertEquals(0, new BigDecimal(String.valueOf(data.get("totalRevenue"))).compareTo(new BigDecimal("100000")), where);
+            assertEquals(0, new BigDecimal(String.valueOf(data.get("grossProfit"))).compareTo(new BigDecimal("40000")), where);
+            assertEquals(0, new BigDecimal(String.valueOf(data.get("netProfit"))).compareTo(new BigDecimal("25000")), where);
+            assertEquals(0, new BigDecimal(String.valueOf(data.get("grossMarginPercent"))).compareTo(new BigDecimal("40.00")), where);
+            Object costLine = ((Map<?, ?>) ((List<?>) data.get("costs")).get(0)).get("amount");
+            assertEquals(0, new BigDecimal(String.valueOf(costLine)).compareTo(new BigDecimal("60000")), where);
+            assertFalse(data.containsKey("marginHidden") || data.containsKey("amountsHidden"), where);
         }
+    }
+
+    @Test
+    @DisplayName("web 对照: 同一账号 web 利润表上毛利在不在, AI 就给不给 (只读号不给, 价格查看给)")
+    void aiFollowsWebForEachAccount() throws Exception {
+        for (Set<String> held : List.of(VIEWER, PRICE_VIEW_FINANCE_READ, FINANCE_RW_NO_PRICE_VIEW, FINANCE_MANAGER)) {
+            PriceSensitiveContext.clear();
+            boolean web = webShowsGrossProfit(held);
+            Exit exit = run(held, service());
+            assertEquals(web, exit.masked().get("grossProfit") != null, held + " web=" + web + " ai=" + exit.masked());
+            assertEquals(web, exit.message().contains("毛利 ¥40000"), held + ": " + exit.message());
+        }
+        assertFalse(webShowsGrossProfit(VIEWER));
+        assertTrue(webShowsGrossProfit(PRICE_VIEW_FINANCE_READ));
     }
 
     @Test
@@ -188,5 +228,17 @@ class IncomeStatementQueryToolPriceVisibilityContractTest {
         String web = IncomeStatementDTO.class.getDeclaredField("grossProfit").getAnnotation(PriceSensitive.class).permission();
         assertEquals(web, IncomeStatementQueryTool.PRICE_SPEC);
         assertEquals(PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION, IncomeStatementQueryTool.PRICE_SPEC);
+    }
+
+    @Test
+    @DisplayName("IncomeStatementDTO 里所有 @PriceSensitive 字段口径相同 (工具只问 grossProfit 那一个, 别的字段换口径就红)")
+    void everyPriceSensitiveFieldOfTheIncomeStatementSharesOneSpec() {
+        Map<String, String> specs = new java.util.TreeMap<>();
+        for (java.lang.reflect.Field f : IncomeStatementDTO.class.getDeclaredFields()) {
+            PriceSensitive ps = f.getAnnotation(PriceSensitive.class);
+            if (ps != null) specs.put(f.getName(), ps.permission());
+        }
+        assertEquals(10, specs.size(), "@PriceSensitive 字段数变了, 复核本工具的前置门: " + specs);
+        assertEquals(Set.of(IncomeStatementQueryTool.PRICE_SPEC), Set.copyOf(specs.values()), specs.toString());
     }
 }

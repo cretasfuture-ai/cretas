@@ -149,4 +149,18 @@ class BomReverseQueryToolPriceVisibilityContractTest {
                 .getAnnotation(PriceSensitive.class).permission();
         assertEquals(web, BomReverseQueryTool.COST_DELTA_SPEC);
     }
+
+    @Test
+    @DisplayName("MaterialReplacementImpact (含 RecipeImpact) 里所有 @PriceSensitive 字段口径相同 (工具只问 totalCostDelta 那一个)")
+    void everyPriceSensitiveFieldSharesOneSpec() {
+        Map<String, String> specs = new java.util.TreeMap<>();
+        for (Class<?> c : List.of(MaterialReplacementImpact.class, MaterialReplacementImpact.RecipeImpact.class)) {
+            for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+                PriceSensitive ps = f.getAnnotation(PriceSensitive.class);
+                if (ps != null) specs.put(c.getSimpleName() + "." + f.getName(), ps.permission());
+            }
+        }
+        assertEquals(6, specs.size(), "@PriceSensitive 字段数变了, 复核本工具的置空清单 hideCostFields: " + specs);
+        assertEquals(Set.of(BomReverseQueryTool.COST_DELTA_SPEC), Set.copyOf(specs.values()), specs.toString());
+    }
 }
