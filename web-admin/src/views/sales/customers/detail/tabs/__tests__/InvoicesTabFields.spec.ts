@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { mount, flushPromises } from '@vue/test-utils';
 import { ref } from 'vue';
-import ElementPlus from 'element-plus';
+import { customerTabStubs } from './customerTabStubs';
 import InvoicesTab from '../InvoicesTab.vue';
 
 vi.mock('@/api/request', () => ({ get: vi.fn(async () => ({ success:true, data:{
@@ -16,7 +16,7 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 describe('customer invoice field contract', () => {
   it.each([true,false])('renders persisted invoice fields with price access %s', async allowed => {
     priceAccess.value=allowed;
-    const wrapper=mount(InvoicesTab,{props:{customerId:'C1'},global:{plugins:[ElementPlus]}});
+    const wrapper=mount(InvoicesTab,{props:{customerId:'C1'},global:{stubs:customerTabStubs}});
     await flushPromises();
     const text=wrapper.text();
     expect(text).toContain('INV-20261016-0001');
