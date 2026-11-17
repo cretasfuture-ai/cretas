@@ -96,5 +96,5 @@
 
 ## 八、没覆盖到的
 
-- 页面级对照已补：见 `PAGE-BACKEND-MAP.md`（85 个路由 + 4 个服务，明细在 `page-map/`），`product-cost-workspace`、`ledger-facts`、`report-insights`、`list-analysis-service` 和六膳门对账（缺）都在 E 组。需要 Steve 裁决的口径和可直接补的缺口也列在那里。
+- 页面级对照已补：见 `PAGE-BACKEND-MAP.md`（85 个路由 + 4 个服务，明细在 `page-map/`），`product-cost-workspace`、`ledger-facts`、`report-insights`、`list-analysis-service` 和六膳门对账（缺）都在 E 组。Steve 已裁决的 11 项口径和可直接补的缺口也列在那里。
 - 仍没覆盖：各页规则实现的逐条比对（那张表只确认接口与字段在不在）。
