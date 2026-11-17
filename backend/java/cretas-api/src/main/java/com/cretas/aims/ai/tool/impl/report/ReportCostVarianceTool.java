@@ -25,6 +25,12 @@ import java.util.*;
 @Component
 public class ReportCostVarianceTool extends AbstractBusinessTool {
 
+    /**
+     * 成本差异报表按批次创建日期取批次 (含未完工), 成本查询 / 成本分析页按完工日只算已完成批次;
+     * 同一期间两个数会不同, 回复里写明口径, ⛔ 不让用户看到两个对不上的「批次数」(演示题 Q14 vs Q07, 2026-11-17)。
+     */
+    static final String CREATED_DATE_BASIS = "（口径：按批次创建日期统计，含未完工批次；与「成本查询」按完工日只算已完成批次的口径不同，两个数不能直接对比。）";
+
     @Autowired
     private ReportService reportService;
 
@@ -212,12 +218,13 @@ public class ReportCostVarianceTool extends AbstractBusinessTool {
                 // 按产品查的报表不走缓存、每次按调用者现算, 没带说明就是这个产品的批次一个都没被隐藏 —— 照写它自己的合计
                 if (totalWithheld(factoryId, productTypeId, costVarianceData)) {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
-                            .append(" 批次数 ").append(costVarianceData.getBatchCount())
+                            .append(" 期间创建的批次 ").append(costVarianceData.getBatchCount()).append(" 个")
                             .append("；实际总成本含工艺保密产品，不提供给 AI。");
                 } else {
                     msg.append("可提供的真实读数：").append(startDate).append(" ~ ").append(endDate)
-                            .append(" 实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
-                            .append("，批次数 ").append(costVarianceData.getBatchCount()).append("。");
+                            .append(" 期间创建的批次 ").append(costVarianceData.getBatchCount())
+                            .append(" 个，实际总成本 ¥").append(costVarianceData.getTotalActualCost().toPlainString())
+                            .append("。").append(CREATED_DATE_BASIS);
                     if (costVarianceData.getProcessSecretNote() != null) msg.append(costVarianceData.getProcessSecretNote());
                 }
             }

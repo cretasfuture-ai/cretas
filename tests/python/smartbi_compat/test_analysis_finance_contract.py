@@ -562,8 +562,13 @@ class TestProfitMetricsArithmetic:
         assert m["NET_PROFIT"]["value"] == 0
         assert m["NET_MARGIN"]["value"] == 0
 
-    def test_total_cost_zero_roi_zero(self):
-        """No COST records → total_cost = 0 → ROI = 0 (div-zero defense, Java line 481)."""
+    def test_revenue_without_cost_records_is_missing_not_zero(self):
+        """有收入、没有任何 COST 记录 = 成本缺数, 不是成本 0。
+
+        旧行为 (仿 Java): total_cost=0 → 毛利=收入、毛利率=100%、ROI=0 —— 2026-11-17
+        财务报表页「总成本 0 / 利润率 100%」就是这个口径。现在毛利/毛利率/ROI 一律 null,
+        且毛利率不标 RED (缺数不是「毛利率偏低」)。
+        """
         from datetime import date
         from decimal import Decimal
         async def fake(_fid, rt, _s, _e):
@@ -573,9 +578,10 @@ class TestProfitMetricsArithmetic:
             return []
         result = self._run("F", self._build_range(), fake)
         m = self._by_code(result)
-        assert m["ROI"]["value"] == 0
-        # ROI = 0 → YELLOW (per _determine_roi_alert: 0 < 20 but >= 0)
-        assert m["ROI"]["alertLevel"] == "YELLOW"
+        assert m["GROSS_PROFIT"]["value"] is None
+        assert m["GROSS_MARGIN"]["value"] is None
+        assert m["GROSS_MARGIN"]["alertLevel"] != "RED"
+        assert m["ROI"]["value"] is None
 
     def test_total_cost_positive_roi_computes(self):
         """revenue=100k, cost=50k → ROI = 50000/50000*100 = 100 → GREEN (>=20)."""
@@ -746,9 +752,9 @@ class TestProfitMetricsSalesFallback:
         # Net margin also null (depends on net_profit)
         assert m["NET_MARGIN"]["value"] is None
 
-    def test_fallback_net_profit_computed_in_trendchart(self):
-        """trendChart fallback uses gross*0.70 for netProfit (Java line 1440 quirk).
-        Distinct from metrics fallback which sets netProfit=null."""
+    def test_fallback_trendchart_point_carries_revenue_and_cost(self):
+        """销售回退的趋势点与 finance_data 路径同为 6 键, 带 revenue/cost (前端用它加总
+        总收入/总成本); netProfit=null —— 销售数据没有费用, 不再输出 Java 的「毛利×0.70」。"""
         from datetime import date
         from decimal import Decimal
         async def fake_finance_empty(_fid, _rt, _s, _e): return []
@@ -758,13 +764,15 @@ class TestProfitMetricsSalesFallback:
                  "order_date": date(2025, 6, 1)},
             ]
         chart = self._run_trend(fake_finance_empty, fake_sales)
-        # 4-key points (sales fallback shape, not 6-key)
         assert len(chart["data"]) == 1
         point = chart["data"][0]
-        assert set(point.keys()) == {"period", "grossProfit", "netProfit", "grossMargin"}
-        # gross = 40000, net = 40000 * 0.70 = 28000.0 → numeric 28000
+        assert list(point.keys()) == [
+            "period", "revenue", "cost", "grossProfit", "netProfit", "grossMargin"]
+        assert point["revenue"] == 100000
+        assert point["cost"] == 60000
         assert point["grossProfit"] == 40000
-        assert point["netProfit"] == 28000
+        assert point["grossMargin"] == 40
+        assert point["netProfit"] is None
 
 
 class TestProfitTrendChartArithmetic:
@@ -830,10 +838,12 @@ class TestProfitTrendChartArithmetic:
         assert chart["data"][0]["revenue"] == 50000
         assert chart["data"][0]["cost"] == 30000
         assert chart["data"][0]["grossProfit"] == 20000
-        # Mar: revenue 70k, no cost → cost 0, gross 70k
+        # Mar: revenue 70k, no cost record → 该期成本缺数 (不是 0), 毛利/毛利率也不给值
+        # (旧口径 cost 0 → gross 70k → 毛利率 100%, 即 2026-11-17 财务报表页假值)
         assert chart["data"][1]["revenue"] == 70000
-        assert chart["data"][1]["cost"] == 0
-        assert chart["data"][1]["grossProfit"] == 70000
+        assert chart["data"][1]["cost"] is None
+        assert chart["data"][1]["grossProfit"] is None
+        assert chart["data"][1]["grossMargin"] is None
 
     def test_negative_revenue_minus_cost_emits_negative_gross(self):
         """cost > revenue in a period → grossProfit < 0 emitted (no clamp; only margin clamps)."""

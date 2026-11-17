@@ -58,11 +58,16 @@ public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrew
                               @Param("digest") String digest, @Param("newTokenId") Long newTokenId,
                               @Param("now") LocalDateTime now, @Param("delegated") Status delegated);
 
-    /** 同上, 「我作废时看到的那张」是 expectedOld。 */
+    /**
+     * 同上, 「我作废时看到的那张」是 expectedOld。库里是 null 也算没人插队 (#1771 第 3 轮 N2): 我作废 expectedOld 之后、
+     * 落库之前, 读路径的对账会把这张已作废 (终态没写入) 的凭据行 id 清成 null —— 这不是别人预览过; 别人预览过时库里是
+     * 别人的非空行 id, 仍然影响 0 行。和 {@link #stampPreviewIfNoToken} 并发时谁先写谁赢, 恰好一方登记上。
+     */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE DigitalCrewWorkItem w SET w.previewedByUserId = :userId, w.previewedAt = :now, w.commandDigest = :digest,"
             + " w.previewTokenId = :newTokenId, w.updatedAt = :now, w.version = w.version + 1"
-            + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated AND w.previewTokenId = :expectedOld")
+            + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated"
+            + " AND (w.previewTokenId = :expectedOld OR w.previewTokenId IS NULL)")
     int stampPreviewReplacingToken(@Param("id") Long id, @Param("factoryId") String factoryId, @Param("userId") Long userId,
                                    @Param("digest") String digest, @Param("newTokenId") Long newTokenId,
                                    @Param("expectedOld") Long expectedOld, @Param("now") LocalDateTime now,
@@ -100,16 +105,16 @@ public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrew
             String factoryId, String memberKey, Long createdByUserId, String userInput, Status status);
 
     /**
-     * 原子认领: 只有本厂、仍是已交办、由本人预览且凭据摘要相同的事项才转「办理中」。返回 1 = 认领到。
-     * 两个确认请求并发时只有一个拿到 1, 另一个 0 (不执行)。
+     * 原子认领: 只有本厂、仍是已交办、由本人预览、凭据摘要相同、且登记的凭据行 id 仍是出示的那张的事项才转「办理中」。
+     * 返回 1 = 认领到。两个确认请求并发时只有一个拿到 1, 另一个 0 (不执行); 期间被重新预览换了凭据也是 0 (#1771 第 3 轮 N3)。
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE DigitalCrewWorkItem w SET w.status = :confirming, w.confirmedByUserId = :userId,"
             + " w.confirmedByName = :userName, w.confirmedAt = :now, w.updatedAt = :now, w.version = w.version + 1"
             + " WHERE w.id = :id AND w.factoryId = :factoryId AND w.status = :delegated"
-            + " AND w.previewedByUserId = :userId AND w.commandDigest = :digest")
+            + " AND w.previewedByUserId = :userId AND w.commandDigest = :digest AND w.previewTokenId = :tokenId")
     int claimForConfirm(@Param("id") Long id, @Param("factoryId") String factoryId, @Param("userId") Long userId,
                         @Param("userName") String userName, @Param("digest") String digest,
-                        @Param("now") LocalDateTime now,
+                        @Param("tokenId") Long tokenId, @Param("now") LocalDateTime now,
                         @Param("delegated") Status delegated, @Param("confirming") Status confirming);
 }
