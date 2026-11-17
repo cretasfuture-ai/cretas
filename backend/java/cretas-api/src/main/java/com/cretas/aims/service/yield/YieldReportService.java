@@ -77,10 +77,4 @@ public interface YieldReportService {
      * 返回 {settledCount: N}
      */
     Map<String, Object> autoSettleByMaterialBatch(String factoryId, Long batchId, String materialBatchId);
-
-    /**
-     * 撤销单笔称重: 原因必填并留痕, 软删本笔, 退回半成品过账与生产仓占用, 重算任务累计产出 / 批次人工成本。
-     * 下游已领用 / 已结清 → 409。返回 {reportId, voided, taskActualQuantity}
-     */
-    Map<String, Object> voidWeighing(String factoryId, Long reportId, Long operatorId, String reason);
 }
