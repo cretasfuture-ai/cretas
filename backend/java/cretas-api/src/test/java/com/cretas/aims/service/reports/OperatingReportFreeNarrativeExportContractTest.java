@@ -9,7 +9,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static com.cretas.aims.service.reports.OperatingReportSnapshot.*;
 
 /** 自由业务结论 (数字只来自指标) + 导出 PDF/PPTX + 0 单日说法。 */
-class OperatingReportFreeNarrativeAndExportTest {
+class OperatingReportFreeNarrativeExportContractTest {
     private final ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
     private final OperatingReportCodec codec = new OperatingReportCodec(mapper);
 
