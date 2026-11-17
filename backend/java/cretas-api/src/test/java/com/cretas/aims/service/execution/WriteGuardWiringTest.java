@@ -221,6 +221,11 @@ class WriteGuardWiringTest {
     void readIntent_isNotBlocked_andDispatches() {
         AIIntentConfig intent = readIntent("material_batch_query");
         stubIntent(intent);
+        // 只读工具要声明 READ: 未声明的工具按写算 (fail closed), PR-3b 起 SITE A 与工具层 SITE B 用同一个判定
+        ToolExecutor readTool = mock(ToolExecutor.class);
+        when(readTool.getToolName()).thenReturn("material_batch_query");
+        when(readTool.getAccessMode()).thenReturn(ToolExecutor.AccessMode.READ);
+        when(toolRegistry.getExecutor(eq("material_batch_query"))).thenReturn(Optional.of(readTool));
         stubDispatchReturns();
 
         IntentExecuteRequest request = IntentExecuteRequest.builder()

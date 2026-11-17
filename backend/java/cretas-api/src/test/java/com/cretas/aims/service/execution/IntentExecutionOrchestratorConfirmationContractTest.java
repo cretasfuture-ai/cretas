@@ -81,6 +81,10 @@ class IntentExecutionOrchestratorConfirmationContractTest {
                 mock(QueryPreprocessorService.class));
         ReflectionTestUtils.setField(orchestrator, "previewTokenService", tokenService);
         ReflectionTestUtils.setField(orchestrator, "writeGuardService", new WriteGuardService());
+        // 生产上是必需的 @Autowired; PR-3b 起业态门在 W0 写确认之前判 (与流式一致), 不业态门控
+        BusinessTypeGate businessTypeGate = mock(BusinessTypeGate.class);
+        when(businessTypeGate.check(any(), any())).thenReturn(Optional.empty());
+        ReflectionTestUtils.setField(orchestrator, "businessTypeGate", businessTypeGate);
         when(tokenService.claimToken(TOKEN, FACTORY, USER, DIGEST)).thenReturn(claimResult());
         when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
         FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
