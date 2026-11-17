@@ -344,6 +344,43 @@ export const RETURN_ORDER_STATUS_LABELS: Record<string, string> = {
   COMPLETED: '已完成',
 };
 
+/** `InvoiceStatus` (backend/.../enums/InvoiceStatus.java) —— 措辞与财务开票列表一致。 */
+export const INVOICE_STATUS_LABELS: Record<string, string> = {
+  REQUESTED: '待审核',
+  APPROVED: '已审核',
+  ISSUED: '已开具',
+  REJECTED: '已驳回',
+  CANCELLED: '已取消',
+};
+
+/** `InvoiceType` displayName (InvoiceType.java)。 */
+export const INVOICE_TYPE_LABELS: Record<string, string> = {
+  NORMAL: '普通发票',
+  SPECIAL: '增值税专票',
+  DIGITAL: '数电票',
+  RECEIPT: '收据',
+  NONE: '不开票',
+  OTHER: '其他',
+};
+
+/** `PaymentRecordStatus` (收款单)。 */
+export const PAYMENT_RECORD_STATUS_LABELS: Record<string, string> = {
+  PENDING: '待核实',
+  VERIFIED: '已核实',
+  REJECTED: '已驳回',
+};
+
+/** 销售报价单状态 (sales/quotes/list.vue 同款, 另含后端会写入的 QUOTED)。 */
+export const QUOTE_STATUS_LABELS: Record<string, string> = {
+  DRAFT: '草稿',
+  PENDING_QUOTE: '待录价',
+  QUOTED: '已报价',
+  PENDING_APPROVAL: '待审批',
+  APPROVED: '已批准',
+  REJECTED: '已驳回',
+  EXPIRED: '已过期',
+};
+
 /**
  * 单据追踪抽屉: documentType → 该单据的状态表。
  *
