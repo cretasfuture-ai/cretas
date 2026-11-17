@@ -23,6 +23,7 @@ import { toDateString } from '@/utils/dateFormat';
 import { canOrderFromQuote } from './quoteOrderContract';
 import type { CsTableColumn } from '@/types/csTable';
 import SalesConfirmModal from '../components/SalesConfirmModal.vue';
+import { useSalesPickers } from '../components/useSalesPickers';
 
 const authStore = useAuthStore();
 const router = useRouter();
@@ -32,6 +33,7 @@ const canWrite = computed(() => permissionStore.canWrite('sales'));
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
+const pickers = useSalesPickers(() => authStore.factoryId);
 const loading = ref(false);
 const submitting = ref(false);
 const tableData = ref<TableRow[]>([]);
@@ -164,6 +166,7 @@ function openCreateDialog() {
     remarks: '',
   };
   createDialogVisible.value = true;
+  if (!pickers.customerItems.value.length || !pickers.productItems.value.length) void pickers.load();
 }
 
 async function handleCreate() {
@@ -389,8 +392,12 @@ async function handleRevise(row: TableRow) {
     <UModal v-model:open="createDialogVisible" title="新建销售运营报价" description="创建报价单并指定录价人" :ui="{ content: 'max-w-[600px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
-          <UFormField label="客户 ID" required><UInput v-model="createForm.customerId" placeholder="选填客户 UUID 或编码" class="w-full" data-testid="quote-customer-id" /></UFormField>
-          <UFormField label="产品 ID" required><UInput v-model="createForm.productTypeId" placeholder="如 PT-F001-001" class="w-full" data-testid="quote-product-id" /></UFormField>
+          <UFormField label="客户" required>
+            <USelectMenu :model-value="createForm.customerId || undefined" value-key="value" :items="pickers.customerItems.value" :loading="pickers.loading.value" placeholder="请选择客户" class="w-full" data-testid="quote-customer" @update:model-value="createForm.customerId = String($event ?? '')" />
+          </UFormField>
+          <UFormField label="产品" required>
+            <USelectMenu :model-value="createForm.productTypeId || undefined" value-key="value" :items="pickers.productItems.value" :loading="pickers.loading.value" placeholder="请选择产品（成品 / 半成品）" class="w-full" data-testid="quote-product" @update:model-value="createForm.productTypeId = String($event ?? '')" />
+          </UFormField>
           <UFormField label="样品 ID"><UInput v-model="createForm.sampleId" placeholder="可选, 报价由样品驱动" class="w-full" /></UFormField>
           <UFormField label="BOM ID"><UInput v-model="createForm.bomId" placeholder="可选, 用于成本参考" class="w-full" /></UFormField>
           <UFormField label="录价人" required><UInput v-model="createForm.quotedByName" placeholder="销售运营部具体的人 (不是岗位)" class="w-full" data-testid="quote-quoted-by" /></UFormField>

@@ -4,6 +4,8 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { CsTableColumn } from '@/types/csTable';
 import SalesConfirmModal from '../components/SalesConfirmModal.vue';
+import { useSalesPickers } from '../components/useSalesPickers';
+import { useAuthStore } from '@/store/modules/auth';
 import { handleCatchError } from '@/utils/errorToast';
 import {
   listSalesNeeds,
@@ -18,6 +20,11 @@ import {
 } from '@/api/salesNeed';
 
 const router = useRouter();
+const authStore = useAuthStore();
+const pickers = useSalesPickers(() => authStore.factoryId);
+// 客户名 / 产品名是冗余显示字段: 选中客户 / 产品后自动带出, 不让用户手填
+function onCustomerPick(id: string): void { form.customerId = id; form.customerName = pickers.customerName(id); }
+function onProductPick(id: string): void { form.productId = id; form.productName = pickers.productName(id); }
 
 const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const list = ref<SalesNeed[]>([]);
@@ -78,6 +85,7 @@ function openCreate(): void {
     remark: '',
   });
   dialogVisible.value = true;
+  if (!pickers.customerItems.value.length || !pickers.productItems.value.length) void pickers.load();
 }
 
 async function submitCreate(): Promise<void> {
@@ -248,10 +256,12 @@ onMounted(load);
     <UModal v-model:open="dialogVisible" title="新建客户需求" description="录入客户需求" :ui="{ content: 'max-w-[600px]', description: 'sr-only', footer: 'justify-end' }">
       <template #body>
         <div class="form">
-          <UFormField label="客户ID" required><UInput v-model="form.customerId" placeholder="客户 ID (UUID)" class="w-full" data-testid="need-customer-id" /></UFormField>
-          <UFormField label="客户名称"><UInput v-model="form.customerName" placeholder="客户名称 (冗余, 用于显示)" class="w-full" /></UFormField>
-          <UFormField label="产品ID" required><UInput v-model="form.productId" placeholder="ProductType ID" class="w-full" data-testid="need-product-id" /></UFormField>
-          <UFormField label="产品名称"><UInput v-model="form.productName" placeholder="产品名称 (冗余)" class="w-full" /></UFormField>
+          <UFormField label="客户" required>
+            <USelectMenu :model-value="form.customerId || undefined" value-key="value" :items="pickers.customerItems.value" :loading="pickers.loading.value" placeholder="请选择客户" class="w-full" data-testid="need-customer" @update:model-value="onCustomerPick" />
+          </UFormField>
+          <UFormField label="产品" required>
+            <USelectMenu :model-value="form.productId || undefined" value-key="value" :items="pickers.productItems.value" :loading="pickers.loading.value" placeholder="请选择产品（成品 / 半成品）" class="w-full" data-testid="need-product" @update:model-value="onProductPick" />
+          </UFormField>
           <UFormField label="数量" required>
             <UInputNumber v-model="form.qtyDemand" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ maximumFractionDigits: 4 }" class="w-48" />
           </UFormField>
