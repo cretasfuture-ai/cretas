@@ -20,13 +20,16 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Every canonical intent in ai/factory-intent-catalog.json must have exactly one row with a
  * declared business domain and a declared action type; no row may point at an intent that is not
- * canonical. The resource is not wired into recognition yet (PR-4), so this gate only guards the
- * data. The checker is also run against a deliberately broken copy so a green result proves the
+ * canonical. PR-4 wires it into recognition (Python ai/intent_domain.py narrows the decision-layer
+ * candidates; behaviour gates in backend/python/tests/test_intent_domain_scope_contract.py), so this
+ * gate also guards secondary_domain and the per-domain keywords. The checker is also run against a deliberately broken copy so a green result proves the
  * instrument can go red.</p>
  */
 class IntentDomainTableContractTest {
 
     private static final int MAX_DOMAINS = 14;
+    /** 跨域通用入口: 识别时不因为「域已确定」被排除 (表第 3 节), Python ai/intent_domain.py ALWAYS_CANDIDATE_DOMAINS。 */
+    private static final Set<String> CROSS_DOMAIN = Set.of("SYSTEM", "ANALYTICS");
 
     private static JsonNode readTable() {
         try (InputStream in = IntentDomainTableContractTest.class.getResourceAsStream("/ai/intent-domain-table.json")) {
@@ -69,6 +72,12 @@ class IntentDomainTableContractTest {
             if (row.path("uncertain").asBoolean(false) && row.path("uncertain_note").asText("").isBlank()) {
                 out.add("uncertain row without note: " + code);
             }
+            if (row.has("secondary_domain")) {
+                String secondary = row.path("secondary_domain").asText("");
+                if (!domains.contains(secondary)) out.add("undeclared secondary_domain " + secondary + ": " + code);
+                if (secondary.equals(domain)) out.add("secondary_domain equals primary: " + code);
+                if (!row.path("uncertain").asBoolean(false)) out.add("secondary_domain on a row that is not uncertain: " + code);
+            }
         }
         for (String code : canonicalCodes) {
             if (!seen.contains(code)) out.add("canonical intent missing from table: " + code);
@@ -76,6 +85,16 @@ class IntentDomainTableContractTest {
         for (String domain : domains) {
             if (!usedDomains.contains(domain)) out.add("declared domain never used: " + domain);
         }
+        // 业务词: SYSTEM / ANALYTICS 是跨域通用入口, 不设词 (设了就会被当成一个可以收窄到的域);
+        // 其它每个业务域都要有词, 否则那个域永远判不出来
+        for (JsonNode d : table.path("domains")) {
+            String code = d.path("code").asText("");
+            boolean crossDomain = CROSS_DOMAIN.contains(code);
+            int words = d.path("keywords").size();
+            if (crossDomain && words > 0) out.add("cross-domain entry must have no keywords: " + code);
+            if (!crossDomain && words == 0) out.add("business domain without keywords: " + code);
+        }
+        if (!domains.containsAll(CROSS_DOMAIN)) out.add("cross-domain entries not declared: " + CROSS_DOMAIN);
         return out;
     }
 
@@ -96,6 +115,28 @@ class IntentDomainTableContractTest {
     }
 
     @Test
+    void secondaryDomainsComeFromTheUncertainListAndJavaSendsTheTableVersion() {
+        JsonNode table = readTable();
+        int secondary = 0;
+        int uncertain = 0;
+        for (JsonNode row : table.path("intents")) {
+            if (row.path("uncertain").asBoolean(false)) uncertain++;
+            if (row.has("secondary_domain")) {
+                secondary++;
+                assertThat(IntentDomainTable.secondaryDomainOf(row.path("intent_code").asText()))
+                        .contains(row.path("secondary_domain").asText());
+            }
+        }
+        // 第 5 节 52 条存疑里, 存疑点写明了另一个候选域的 35 条有次域; 其余 17 条只关于动作, 没有次域
+        assertThat(uncertain).isEqualTo(52);
+        assertThat(secondary).isEqualTo(35);
+        assertThat(IntentDomainTable.catalogVersion()).contains(table.path("catalog_version").asText());
+        assertThat(IntentDomainTable.domainOf("COLD_CHAIN_TEMP_QUERY")).contains("EQUIPMENT");
+        assertThat(IntentDomainTable.secondaryDomainOf("COLD_CHAIN_TEMP_QUERY")).contains("QUALITY");
+        assertThat(IntentDomainTable.domainOf("F006_CUSTOM_NOT_IN_TABLE")).isEmpty();
+    }
+
+    @Test
     void checkerGoesRedWhenAnIntentLosesItsDomainOrIsMissing() {
         Set<String> canonical = FactoryIntentCatalog.canonicalCodes();
 
@@ -106,6 +147,19 @@ class IntentDomainTableContractTest {
         JsonNode noAction = readTable().deepCopy();
         ((ObjectNode) noAction.path("intents").get(1)).put("action", "");
         assertThat(problems(noAction, canonical)).anyMatch(p -> p.startsWith("no action: "));
+
+        JsonNode badSecondary = readTable().deepCopy();
+        ObjectNode row3 = (ObjectNode) badSecondary.path("intents").get(3);
+        row3.put("secondary_domain", row3.path("domain").asText());
+        assertThat(problems(badSecondary, canonical)).anyMatch(p -> p.startsWith("secondary_domain equals primary: "));
+        row3.put("secondary_domain", "NOT_A_DOMAIN");
+        assertThat(problems(badSecondary, canonical)).anyMatch(p -> p.startsWith("undeclared secondary_domain "));
+
+        JsonNode keywordOnSystem = readTable().deepCopy();
+        for (JsonNode d : keywordOnSystem.path("domains")) {
+            if ("SYSTEM".equals(d.path("code").asText())) ((ObjectNode) d).putArray("keywords").add("系统");
+        }
+        assertThat(problems(keywordOnSystem, canonical)).contains("cross-domain entry must have no keywords: SYSTEM");
 
         JsonNode missingRow = readTable().deepCopy();
         ((com.fasterxml.jackson.databind.node.ArrayNode) missingRow.path("intents")).remove(2);

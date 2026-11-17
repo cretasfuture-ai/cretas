@@ -21,7 +21,7 @@ import {
 } from '@/api/voucher';
 import { formatAmount } from '@/utils/tableFormatters';
 import { badgeColor, type ElementTagType } from '@/utils/csBadge';
-import { enumLabel, VOUCHER_STOCKTAKE_TYPE_LABELS } from '@/utils/enumDisplay';
+import { enumLabel, voucherTypeText } from '@/utils/enumDisplay';
 import { formatDateTime } from '@/utils/dateFormat';
 import type { CsTableColumn } from '@/types/csTable';
 import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
@@ -77,7 +77,7 @@ const TYPE_ITEMS = [{ label: '全部类型', value: ALL }, ...Object.entries(VOU
 const SOURCE_ITEMS = [{ label: '全部来源业务', value: ALL }, ...Object.entries(SOURCE_BUSINESS_TYPE_LABEL).map(([value, label]) => ({ label, value }))];
 // 没登记的来源业务不外露英文码, 统一写「其他业务」
 const sourceText = (t: unknown) => SOURCE_BUSINESS_TYPE_LABEL[t as SourceBusinessType] ?? (t ? '其他业务' : '—');
-const typeText = (t: unknown) => VOUCHER_TYPE_LABEL[t as VoucherType] ?? VOUCHER_STOCKTAKE_TYPE_LABELS[String(t)] ?? (t ? '其他类型' : '—');
+const typeText = voucherTypeText;
 
 const columns: CsTableColumn<Voucher>[] = [
   { id: 'select', header: '选择', enableSorting: false },

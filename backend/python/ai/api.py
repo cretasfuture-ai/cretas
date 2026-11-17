@@ -146,6 +146,8 @@ async def _do_match(
         # 任务状态单独一个字段 (INTENT-DISTILL-20261111 第二批): 只进决策层提示词, 不占最近对话轮数、不影响重排
         task_state=body.taskState,
         ask_policy=body.askPolicy,
+        # PR-4: 业务域表版本, 决策层按它决定要不要按业务域缩小候选
+        catalog_version=body.catalogVersion,
         min_confidence=min_confidence,
         enable_llm=enable_llm,
     )

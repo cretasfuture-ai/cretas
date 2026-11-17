@@ -30,6 +30,33 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+# ===== 第 1 层: 业务域 (意图蒸馏第③步 PR-4, 方案第 2 节) =====
+# 先判这句话属于哪个 (或哪几个) 业务域, 再只把这些域的意图交给粗选 / 合并理解提示词。规则与兜底在 ai/intent_domain.py;
+# 这里是决策层用的入口: 表读不了 ⇒ 不收窄 (宁可放宽), 不让识别因为业务域失败。
+def domain_scope(query: str, visible: List[Dict[str, Any]], catalog_version: Optional[str],
+                 contextual: bool = False):
+    from ai import intent_domain
+    try:
+        table = intent_domain.get_table()
+    except intent_domain.IntentDomainTableError as ex:
+        logger.warning("intent domain table unavailable, not narrowing: %s", ex)
+        table = None
+    return intent_domain.scope(query, visible, table, catalog_version, contextual=contextual)
+
+
+def intent_domain_of(code: Optional[str]) -> Dict[str, Optional[str]]:
+    """决策层输出的业务域: 选中意图的主域 / 次域; 表外意图 (工厂自建) 两个都是 None。"""
+    from ai import intent_domain
+    if not code:
+        return {"domain": None, "secondaryDomain": None}
+    try:
+        table = intent_domain.get_table()
+    except intent_domain.IntentDomainTableError:
+        return {"domain": None, "secondaryDomain": None}
+    return {"domain": table.domain_of(code), "secondaryDomain": table.secondary_of(code)}
+
+
 LETTERS = "ABCDEFGHIJKLMNOPQRST"
 
 # 两个特殊出口 (2026-10-03): 没有它们时模型只能在候选里硬选一个 ——「先别入库」也得挑个功能,

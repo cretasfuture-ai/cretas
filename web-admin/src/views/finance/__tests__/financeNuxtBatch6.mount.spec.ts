@@ -279,4 +279,118 @@ describe('reports 财务分析', () => {
     expect(cards).toContain('100.00');
     expect(cards).toMatch(/毛利润\s*—/);
   });
+
+  // 2026-11-17 F006 实测: 趋势点没有 revenue/cost, metrics 却给了毛利 29706.35、毛利率 100
+  // → 页面显示「总收入 0 / 总成本 0 / 毛利 29,706 / 利润率 100%」自相矛盾。
+  const f006Metrics = [
+    { metricCode: 'GROSS_PROFIT', metricName: '毛利额', value: 29706.35 },
+    { metricCode: 'GROSS_MARGIN', metricName: '毛利率', value: 100 },
+  ];
+  it('F006 prod shape (trend without revenue/cost): no 0 totals and no 100% margin', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: { metrics: f006Metrics, trendChart: { data: [
+      { period: '2026-10', grossProfit: 21872.88, netProfit: 15311.02, grossMargin: 100 },
+      { period: '2026-11', grossProfit: 7833.47, netProfit: 5483.43, grossMargin: 100 },
+    ] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const cards = w.get('[data-testid="reports-stat-cards"]').text();
+    expect(cards).toMatch(/总收入\s*—/);
+    expect(cards).toMatch(/总成本\s*—/);
+    expect(cards).toMatch(/毛利润\s*—/);
+    expect(cards).toMatch(/利润率\s*—/);
+    expect(cards).not.toContain('0.00');
+    expect(cards).not.toContain('100.0');
+  });
+  it('sales revenue known but cost missing: real revenue, cost/profit/margin dashed, reason shown', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: {
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: null }, { metricCode: 'GROSS_MARGIN', value: null }],
+      trendChart: { data: [
+        { period: '2026-10', revenue: 21872.88, cost: null, grossProfit: null, netProfit: null, grossMargin: null },
+        { period: '2026-11', revenue: 7833.47, cost: null, grossProfit: null, netProfit: null, grossMargin: null },
+      ] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const cards = w.get('[data-testid="reports-stat-cards"]').text();
+    expect(cards).toContain('29,706.35');
+    expect(cards).toMatch(/总成本\s*—/);
+    expect(cards).toMatch(/毛利润\s*—/);
+    expect(cards).toMatch(/利润率\s*—/);
+    expect(w.find('[data-testid="reports-cost-missing"]').exists()).toBe(true);
+  });
+  it('even if backend still sends a margin, it is hidden while cost is missing (one 口径)', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: { metrics: f006Metrics, trendChart: { data: [
+      { period: '2026-10', revenue: 29706.35, cost: null, grossProfit: null, grossMargin: null },
+    ] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const cards = w.get('[data-testid="reports-stat-cards"]').text();
+    expect(cards).toMatch(/毛利润\s*—/);
+    expect(cards).toMatch(/利润率\s*—/);
+  });
+  it('positive control: complete data → revenue - cost = profit, margin shown, no cost-missing notice', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: {
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: 5000 }, { metricCode: 'GROSS_MARGIN', value: 33.33 }],
+      trendChart: { data: [
+        { period: '2026-10', revenue: 10000, cost: 7000, grossProfit: 3000, grossMargin: 30 },
+        { period: '2026-11', revenue: 5000, cost: 3000, grossProfit: 2000, grossMargin: 40 },
+      ] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const cards = w.get('[data-testid="reports-stat-cards"]').text();
+    expect(cards).toMatch(/总收入\s*15,000\.00/);
+    expect(cards).toMatch(/总成本\s*10,000\.00/);
+    expect(cards).toMatch(/毛利润\s*5,000\.00/);
+    expect(cards).toMatch(/利润率\s*33\.3/);
+    expect(w.find('[data-testid="reports-cost-missing"]').exists()).toBe(false);
+  });
+
+  // PR #1809 复审 H1: 10 月有成本构成, 11 月缺成本 → 总成本未知; 占比曾按 `totalCost ?? 1` 除以 1 = 5000000.0%
+  it('cost share is a dash (no millions of %) when total cost is unknown but a cost structure exists', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: {
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: null }, { metricCode: 'GROSS_MARGIN', value: null }],
+      trendChart: { data: [
+        { period: '2026-10', revenue: 80000, cost: 50000, grossProfit: 30000, grossMargin: 37.5 },
+        { period: '2026-11', revenue: 20000, cost: null, grossProfit: null, grossMargin: null },
+      ] },
+      structureChart: { data: [{ category: '原材料', value: 50000, percentage: 100 }] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const table = w.get('[data-testid="reports-cost-table"]').text();
+    expect(table).toContain('50,000.00');
+    expect(table).not.toMatch(/\d{4,}\.\d%/);
+    expect(table).not.toContain('5000000');
+    expect(w.findAll('[data-testid="reports-cost-share-missing"]').length).toBe(4);
+    expect(w.find('[data-testid="reports-cost-missing"]').exists()).toBe(true);
+  });
+  // 复审 2 轮低2: 只录了原材料 50,000、总成本 120,000 → 原材料占 41.7%, 差额 70,000 进「未拆分」(58.3%),
+  // 不是「原材料占 100%」
+  it('cost share uses total cost as denominator and shows the unallocated remainder', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: {
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: 80000 }, { metricCode: 'GROSS_MARGIN', value: 40 }],
+      trendChart: { data: [{ period: '2026-10', revenue: 200000, cost: 120000, grossProfit: 80000, grossMargin: 40 }] },
+      structureChart: { data: [{ category: '原材料', value: 50000 }] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const table = w.get('[data-testid="reports-cost-table"]').text();
+    expect(table).toMatch(/原材料成本\s*50,000\.00\s*41\.7%/);
+    expect(table).toMatch(/未拆分\s*70,000\.00\s*58\.3%/);
+    expect(table).not.toContain('100.0%');
+  });
+  // 复审低 2 / M2: 只有成本没有收入的期 → 不计入合计, 有提示; 合计 收入 - 成本 == 毛利
+  it('a period with cost but no revenue is left out of the totals and explained', async () => {
+    mocks.get.mockResolvedValue({ success: true, data: {
+      metrics: [{ metricCode: 'GROSS_PROFIT', value: 4000 }, { metricCode: 'GROSS_MARGIN', value: 40 }],
+      trendChart: { data: [
+        { period: '2026-10', revenue: 10000, cost: 6000, grossProfit: 4000, grossMargin: 40 },
+        { period: '2026-11', revenue: null, cost: 500, grossProfit: null, grossMargin: null },
+      ] } } });
+    const w = mount(ReportsPage, { global: { stubs } });
+    await flushPromises();
+    const cards = w.get('[data-testid="reports-stat-cards"]').text();
+    expect(cards).toMatch(/总收入\s*10,000\.00/);
+    expect(cards).toMatch(/总成本\s*6,000\.00/);
+    expect(cards).toMatch(/毛利润\s*4,000\.00/);
+    expect(cards).toMatch(/利润率\s*40\.0/);
+    expect(w.get('[data-testid="reports-revenue-missing"]').attributes('title') ?? w.get('[data-testid="reports-revenue-missing"]').text()).toContain('2026-11');
+  });
 });

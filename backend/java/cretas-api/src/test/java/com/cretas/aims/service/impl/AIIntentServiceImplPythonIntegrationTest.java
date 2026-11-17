@@ -154,6 +154,21 @@ class AIIntentServiceImplPythonIntegrationTest {
     }
 
     @Test
+    void pythonRequestCarriesTheIntentDomainTableVersion() {
+        // PR-4: Python 只在版本对上时按业务域缩小决策层候选; 不带版本 = 不收窄。真实发出去的请求必须带上表版本。
+        when(cache.get(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
+        org.mockito.ArgumentCaptor<PythonIntentMatchRequest> sent =
+                org.mockito.ArgumentCaptor.forClass(PythonIntentMatchRequest.class);
+        when(pythonClient.match(sent.capture())).thenReturn(buildRealMatch("CLOCK_IN", "考勤看一下"));
+
+        service.recognizeIntentWithConfidence("考勤看一下", "F001", 3, 22L, "admin", null);
+
+        String expected = com.cretas.aims.ai.catalog.IntentDomainTable.catalogVersion().orElseThrow();
+        org.junit.jupiter.api.Assertions.assertFalse(expected.isBlank());
+        org.junit.jupiter.api.Assertions.assertEquals(expected, sent.getValue().getCatalogVersion());
+    }
+
+    @Test
     void recentTurns_bypassResultCacheAndReachPython() {
         // 第 3b 步: 带上下文的轮次不读也不写按原话缓存的结果 (对照见上面两条: 不带上下文时会读会写)
         IntentMatchResult py = buildRealMatch("WORK_PROCESS_TASK_COMPLETE", "好了");

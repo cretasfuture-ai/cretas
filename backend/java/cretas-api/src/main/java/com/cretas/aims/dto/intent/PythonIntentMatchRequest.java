@@ -61,6 +61,13 @@ public class PythonIntentMatchRequest {
      */
     private String askPolicy;
 
+    /**
+     * 意图蒸馏第③步 PR-4: 业务域表 {@code ai/intent-domain-table.json} 的 catalog_version
+     * ({@link com.cretas.aims.ai.catalog.IntentDomainTable})。Python 同步副本版本相同才按业务域缩小决策层候选;
+     * null / 不同 ⇒ 不收窄。业务域不授权任何东西。
+     */
+    private String catalogVersion;
+
     @Data
     @Builder
     @NoArgsConstructor
