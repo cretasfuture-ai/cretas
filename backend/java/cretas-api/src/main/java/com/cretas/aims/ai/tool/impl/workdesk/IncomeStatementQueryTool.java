@@ -117,6 +117,26 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         log.info("income_statement_query — factory={} start={}-{} end={}-{}",
                 factoryId, startYear, startMonth, endYear, endMonth);
 
+        String periodLabel = (startYear.equals(endYear) && startMonth.equals(endMonth))
+                ? String.format("%d-%02d", startYear, startMonth)
+                : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
+
+        // 与 web 利润表 (GET /api/mobile/{factoryId}/finance/report/income-statement: 类门 finance:read | finance:read_write, 金额字段按
+        // IncomeStatementDTO 上 @PriceSensitive 的口径遮) 同一判定, 经 PriceFieldResponseAdvice#showsSpec 按权限配置判:
+        // 看不到 ⇒ 收入 / 成本 / 毛利 / 利润 / 毛利率 / 净利率整份不给, 不查库; 看得到 ⇒ 全部给 (不再另看 finance:read_write)。
+        // 毛利率 / 净利率由这些金额算出, 只由这一道门守。
+        if (!replyShowsPriceSpec(context, PRICE_SPEC)) {
+            Map<String, Object> hidden = new LinkedHashMap<>();
+            hidden.put("factoryId", factoryId);
+            hidden.put("startYear", startYear);
+            hidden.put("startMonth", startMonth);
+            hidden.put("endYear", endYear);
+            hidden.put("endMonth", endMonth);
+            hidden.put("amountsHidden", true);
+            hidden.put("marginHidden", true);
+            return buildSimpleResult(periodLabel + " " + HIDDEN_MESSAGE, hidden);
+        }
+
         IncomeStatementDTO dto = incomeStatementService.generate(
                 factoryId, startYear, startMonth, endYear, endMonth);
 
@@ -166,14 +186,12 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                 ? List.of() : List.of(marginStatusMessage));
 
         // 计算毛利率 (R2 context, 方便 LLM 输出)
+        java.math.BigDecimal grossMarginPercent = null;
         if (marginStatus == IncomeStatementDTO.GrossMarginStatus.CALCULABLE
                 && dto.getTotalRevenue() != null && dto.getTotalRevenue().signum() > 0
                 && dto.getGrossProfit() != null) {
-            data.put("grossMarginPercent",
-                    dto.getGrossProfit().multiply(java.math.BigDecimal.valueOf(100))
-                            .divide(dto.getTotalRevenue(), 2, java.math.RoundingMode.HALF_UP));
-        } else {
-            data.put("grossMarginPercent", null);
+            grossMarginPercent = dto.getGrossProfit().multiply(java.math.BigDecimal.valueOf(100))
+                    .divide(dto.getTotalRevenue(), 2, java.math.RoundingMode.HALF_UP);
         }
         java.math.BigDecimal netMarginPercent = null;
         if (marginStatus == IncomeStatementDTO.GrossMarginStatus.CALCULABLE
@@ -182,15 +200,15 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
             netMarginPercent = dto.getNetProfit().multiply(java.math.BigDecimal.valueOf(100))
                     .divide(dto.getTotalRevenue(), 2, java.math.RoundingMode.HALF_UP);
         }
+        data.put("grossMarginPercent", grossMarginPercent);
         data.put("netMarginPercent", netMarginPercent);
+        // 与 web 同一份 DTO、同一个门: 这些属性按 @PriceSensitive 口径可见, 出口 (maskedViewFor) 不再按键名
+        // (Rule 2b, 要 finance:read_write) 剥掉 —— 有价格查看的账号对话里与 web 上看到的一样 (参照 ReportCostVarianceTool)
+        sameVisibilityAsRest(dto);
 
         data.put("actionHint", "/finance/three-statements?type=income-statement"
                 + "&startYear=" + startYear + "&startMonth=" + startMonth
                 + "&endYear=" + endYear + "&endMonth=" + endMonth);
-
-        String periodLabel = (startYear.equals(endYear) && startMonth.equals(endMonth))
-                ? String.format("%d-%02d", startYear, startMonth)
-                : String.format("%d-%02d 至 %d-%02d", startYear, startMonth, endYear, endMonth);
 
         // Sheet 7/22 空成功类: 全零期间此前返回 "营业收入 ¥0.00 / … ¥0.00" 的
         // 零值 dump — 看似查询成功, 实为无数据。改为定向缺数说明, 不用零值替代。
@@ -207,10 +225,7 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
         }
 
         String message;
-        if (!replyShowsAmounts(context, "totalRevenue", "totalCost", "grossProfit", "operatingProfit", "netProfit")) {
-            // 文字与利润表各金额字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001)
-            message = String.format("%s 利润表已查到 (金额按权限不显示)", periodLabel);
-        } else if (missingCostData) {
+        if (missingCostData) {
             message = String.format(
                     "%s 利润表: 营业收入 ¥%s；%s。请先补录或同步成本凭证后再查询毛利率和利润",
                     periodLabel, dto.getTotalRevenue(), marginStatusMessage);
@@ -225,6 +240,28 @@ public class IncomeStatementQueryTool extends AbstractBusinessTool {
                     : " / 净利率暂不可计算";
         }
         return buildSimpleResult(message, data);
+    }
+
+    /**
+     * web 利润表 ({@link IncomeStatementDTO}) 金额字段上 {@code @PriceSensitive} 的口径, 直接读注解 (web 改口径, 这里跟着变)。
+     * 毛利率 / 净利率由这些金额算出, 同一口径; 不写死角色, 谁能看由权限配置决定。
+     */
+    static final String PRICE_SPEC = webIncomeStatementSpec();
+
+    static final String HIDDEN_MESSAGE = "利润表的营业收入、成本、毛利、利润及毛利率、净利率按当前账号的权限配置不显示"
+            + "（与 web 利润表同一判定，需要价格查看权限）；需要请联系工厂管理员开通。";
+
+    private static String webIncomeStatementSpec() {
+        try {
+            com.cretas.aims.security.PriceSensitive annotation = IncomeStatementDTO.class
+                    .getDeclaredField("grossProfit").getAnnotation(com.cretas.aims.security.PriceSensitive.class);
+            if (annotation == null) {
+                throw new IllegalStateException("IncomeStatementDTO.grossProfit 没有 @PriceSensitive");
+            }
+            return annotation.permission();
+        } catch (NoSuchFieldException e) {
+            throw new IllegalStateException("IncomeStatementDTO.grossProfit 不存在", e);
+        }
     }
 
     static YearMonth[] resolvePeriod(Map<String, Object> params, LocalDate today) {

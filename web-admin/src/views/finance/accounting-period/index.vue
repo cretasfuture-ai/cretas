@@ -5,7 +5,7 @@
  * 防呆设计 (per fool-proof-design.md):
  * - Rule 2 (context): 每行显 {year}-{month} + 状态 tag
  * - Rule 3 (constrained input): 反结账原因 dropdown + 其他 textarea
- * - Rule 5 (dead-end nav): CLOSED 行的 "尝试修改凭证" 走 ElMessageBox.confirm
+ * - Rule 5 (dead-end nav): CLOSED 行的 "尝试修改凭证" 走确认弹窗
  *   "期间已结账, 是否反结账?" → 跳转此页 + auto-open dialog
  *
  * Route: /finance/accounting-period
@@ -15,9 +15,13 @@ import { ref, computed, watch, onMounted, onActivated, onDeactivated } from 'vue
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { get, post } from '@/api/request';
-import { Refresh, Lock, Unlock, Calendar, Finished } from '@element-plus/icons-vue';
+import { badgeColor } from '@/utils/csBadge';
+import { enumLabel, RECONCILIATION_STATUS_LABELS } from '@/utils/enumDisplay';
+import type { CsTableColumn } from '@/types/csTable';
+// 通用确认弹窗 (UModal, 取代 Element 的命令式确认框: 它在 Nuxt UI 弹层之上点不了)。
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import {
   computeAdjustWindow,
   reconciliationTagType,
@@ -84,6 +88,7 @@ const router = useRouter();
 const factoryId = computed(() => authStore.factoryId ?? '');
 const canWrite = computed(() => permissionStore.canWrite('finance'));
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const loading = ref(false);
 const periods = ref<AccountingPeriod[]>([]);
 const periodError = ref('');
@@ -278,18 +283,15 @@ async function handleRequestClose(period: AccountingPeriod) {
   const context = captureActionContext();
   mutationBusy.value = true;
   try {
-    await ElMessageBox.confirm(
-      `确认对 ${period.year}-${String(period.month).padStart(2, '0')} 期间发起结账?\n\n` +
-      '确认前请在会计凭证中核对本期单据.\n' +
-      '提交后将走财务负责人审批流程.\n' +
-      `审批通过前凭证仍可修改; 审批通过后凭证将被锁定.`,
-      '发起结账',
-      {
-        confirmButtonText: '发起结账',
-        cancelButtonText: '取消',
-        type: 'warning',
-      }
-    );
+    const confirmed = await confirmRef.value!.ask({
+      title: '发起结账',
+      message: `确认对 ${period.year}-${String(period.month).padStart(2, '0')} 期间发起结账? ` +
+        '确认前请在会计凭证中核对本期单据. ' +
+        '提交后将走财务负责人审批流程. ' +
+        '审批通过前凭证仍可修改; 审批通过后凭证将被锁定.',
+      confirmText: '发起结账',
+    });
+    if (confirmed === null) return;
     if (!isCurrentAction(context)) return;
     const res = await post<AccountingPeriod>(
       `/${context.factoryId}/finance/accounting-periods/request-close`,
@@ -302,7 +304,7 @@ async function handleRequestClose(period: AccountingPeriod) {
       periodError.value = res.message || '发起结账失败，请重试';
     }
   } catch (error) {
-    if (isCurrentAction(context) && error !== 'cancel' && error !== 'close') {
+    if (isCurrentAction(context)) {
       periodError.value = error instanceof Error ? error.message : '发起结账失败，请重试';
     }
   } finally {
@@ -315,18 +317,16 @@ async function handleConfirmClose(period: AccountingPeriod) {
   const context = captureActionContext();
   mutationBusy.value = true;
   try {
-    await ElMessageBox.confirm(
-      `确认结账 ${period.year}-${String(period.month).padStart(2, '0')} 期间?\n\n` +
-      '确认前请在会计凭证中核对本期单据.\n' +
-      '结账后所有凭证不可修改 / 过账 / 作废.\n' +
-      `如需修改, 必须先反结账 (审计日志会留痕).`,
-      '确认结账',
-      {
-        confirmButtonText: '确认结账',
-        cancelButtonText: '取消',
-        type: 'error',
-      }
-    );
+    const confirmed = await confirmRef.value!.ask({
+      title: '确认结账',
+      message: `确认结账 ${period.year}-${String(period.month).padStart(2, '0')} 期间? ` +
+        '确认前请在会计凭证中核对本期单据. ' +
+        '结账后所有凭证不可修改 / 过账 / 作废. ' +
+        '如需修改, 必须先反结账 (审计日志会留痕).',
+      confirmText: '确认结账',
+      danger: true,
+    });
+    if (confirmed === null) return;
     if (!isCurrentAction(context)) return;
     const res = await post<AccountingPeriod>(
       `/${context.factoryId}/finance/accounting-periods/confirm-close`,
@@ -339,7 +339,7 @@ async function handleConfirmClose(period: AccountingPeriod) {
       periodError.value = res.message || '确认结账失败，请重试';
     }
   } catch (error) {
-    if (isCurrentAction(context) && error !== 'cancel' && error !== 'close') {
+    if (isCurrentAction(context)) {
       periodError.value = error instanceof Error ? error.message : '确认结账失败，请重试';
     }
   } finally {
@@ -478,21 +478,13 @@ async function confirmMonthClose() {
       monthCloseError.value = '';
       await loadPeriods();
       // 防呆 R5 dead-end nav: 结账后跳报表
-      try {
-        await ElMessageBox.confirm(
-          `${target.year}-${String(target.month).padStart(2, '0')} 月结完成, 利润表已生成.\n` +
-          `是否立即查看财务报表?`,
-          '月结完成',
-          {
-            confirmButtonText: '查看报表',
-            cancelButtonText: '稍后',
-            type: 'success',
-          }
-        );
-        router.push('/finance/three-statements');
-      } catch {
-        // 用户选"稍后", 不跳转
-      }
+      const viewReport = await confirmRef.value!.ask({
+        title: '月结完成',
+        message: `${target.year}-${String(target.month).padStart(2, '0')} 月结完成, 利润表已生成. 是否立即查看财务报表?`,
+        confirmText: '查看报表',
+      });
+      // 用户选"稍后" (null), 不跳转
+      if (viewReport !== null) router.push('/finance/three-statements');
     } else if (isCurrentAction(context) && res.success === false) {
       monthCloseError.value = res.message || '月结执行失败，请重试';
     }
@@ -547,332 +539,205 @@ onDeactivated(() => {
   pageIsActive = false;
   invalidatePageContext();
 });
+const reconciliationText = (status: string | undefined) => enumLabel(status, RECONCILIATION_STATUS_LABELS);
+
+const columns: CsTableColumn<AccountingPeriod>[] = [
+  { id: 'period', header: '期间' },
+  { id: 'status', header: '状态' },
+  { id: 'openedAt', header: '打开时间' },
+  { id: 'closedAt', header: '结账时间' },
+  { id: 'window', header: '调整窗口' },
+  { id: 'report', header: '月结报表' },
+  { id: 'reopen', header: '最近反结账' },
+  { id: 'actions', header: '操作' },
+];
+const checkColumns: CsTableColumn<CheckItem>[] = [
+  { accessorKey: 'name', header: '校验项' },
+  { id: 'result', header: '结果' },
+  { id: 'detail', header: '说明' },
+];
 </script>
 
 <template>
-  <div class="accounting-period-page">
-    <el-card>
-      <template #header>
-        <div class="header">
-          <h2>
-            <el-icon><Calendar /></el-icon>
-            期间结账管理
-          </h2>
-          <div class="actions">
-            <el-button :loading="loading" @click="loadPeriods" :icon="Refresh">刷新</el-button>
-            <el-button
-              type="primary"
-              :icon="Unlock"
-              :disabled="!canWrite || mutationBusy"
-              @click="openDialogVisible = true">
-              打开期间
-            </el-button>
-          </div>
+  <div class="page" data-testid="finance-period-page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>期间结账管理</h2>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" data-testid="period-refresh" @click="loadPeriods">刷新</UButton>
+          <UButton icon="i-lucide-lock-open" :disabled="!canWrite || mutationBusy" data-testid="period-open" @click="openDialogVisible = true">打开期间</UButton>
         </div>
-      </template>
+      </header>
 
-      <el-alert
-        title="期间结账机制说明"
-        type="info"
-        :closable="false"
-        show-icon>
-        <template #default>
-          <ul style="padding-left: 20px; margin: 5px 0;">
-            <li><b>开账中</b>: 凭证可写入 / 过账 / 作废</li>
-            <li><b>审批中</b>: 财务发起结账, 等待财务负责人审批, 凭证仍可修改</li>
-            <li><b>已结账</b>: 存在调整窗口时可在窗口内调整; 未设置窗口或窗口结束后锁定. 月结报表以本期实际生成结果为准. 反结账必须填写原因 (审计日志)</li>
-            <li><b>一键月结</b>: 月初触发 — 对账校验 → 生成利润表 → 快照锁定 → 结账 + 开启 20 天调整窗口 (月初出报表, 留调整窗口)</li>
-            <li>每月 1 号 02:00 自动对上月 OPEN 期间发起结账请求</li>
-          </ul>
-        </template>
-      </el-alert>
-
-      <el-alert
-        v-if="periodError"
-        :title="periodError"
-        type="error"
-        :closable="false"
-        show-icon
-        style="margin-top: 12px;"
-      />
-
-      <el-table
-        v-loading="loading"
-        :data="periods"
-        style="margin-top: 16px;"
-        empty-text="尚无期间记录 — 点击「打开期间」开始">
-        <el-table-column label="期间" min-width="120">
-          <template #default="{ row }">
-            <span class="period-name">
-              {{ row.year }}-{{ String(row.month).padStart(2, '0') }}
-            </span>
+      <div class="body">
+        <UAlert color="info" variant="soft" icon="i-lucide-info" title="期间结账机制说明">
+          <template #description>
+            <ul class="rules">
+              <li><b>开账中</b>: 凭证可写入 / 过账 / 作废</li>
+              <li><b>审批中</b>: 财务发起结账, 等待财务负责人审批, 凭证仍可修改</li>
+              <li><b>已结账</b>: 存在调整窗口时可在窗口内调整; 未设置窗口或窗口结束后锁定. 月结报表以本期实际生成结果为准. 反结账必须填写原因 (审计日志)</li>
+              <li><b>一键月结</b>: 月初触发 — 对账校验 → 生成利润表 → 快照锁定 → 结账 + 开启 20 天调整窗口 (月初出报表, 留调整窗口)</li>
+              <li>每月 1 号 02:00 自动对上月 OPEN 期间发起结账请求</li>
+            </ul>
           </template>
-        </el-table-column>
+        </UAlert>
 
-        <el-table-column label="状态" width="120">
-          <template #default="{ row }">
-            <el-tag :type="STATUS_TAG_TYPE[row.status as PeriodStatus]">
-              {{ STATUS_LABEL[row.status as PeriodStatus] }}
-            </el-tag>
+        <UAlert v-if="periodError" color="error" variant="soft" icon="i-lucide-circle-alert" class="mt-3" data-testid="period-error" :title="periodError" />
+
+        <UTable :data="periods" :columns="columns" :loading="loading" class="cs-table mt-3" data-testid="period-table">
+          <template #empty>尚无期间记录 — 点击「打开期间」开始</template>
+          <template #period-cell="{ row }">
+            <span class="period-name">{{ row.original.year }}-{{ String(row.original.month).padStart(2, '0') }}</span>
           </template>
-        </el-table-column>
-
-        <el-table-column label="打开时间" width="180">
-          <template #default="{ row }">
-            <span v-if="row.openedAt">{{ row.openedAt.replace('T', ' ').slice(0, 19) }}</span>
+          <template #status-cell="{ row }">
+            <UBadge :color="badgeColor(STATUS_TAG_TYPE[row.original.status as PeriodStatus])" variant="soft">{{ STATUS_LABEL[row.original.status as PeriodStatus] }}</UBadge>
+          </template>
+          <template #openedAt-cell="{ row }">
+            <span v-if="row.original.openedAt">{{ row.original.openedAt.replace('T', ' ').slice(0, 19) }}</span>
             <span v-else class="muted">—</span>
           </template>
-        </el-table-column>
-
-        <el-table-column label="结账时间" width="180">
-          <template #default="{ row }">
-            <span v-if="row.closedAt">{{ row.closedAt.replace('T', ' ').slice(0, 19) }}</span>
+          <template #closedAt-cell="{ row }">
+            <span v-if="row.original.closedAt">{{ row.original.closedAt.replace('T', ' ').slice(0, 19) }}</span>
             <span v-else class="muted">—</span>
           </template>
-        </el-table-column>
-
-        <!-- Wave2 月结: 调整窗口截止 + 倒计时 (邓总20天窗口) -->
-        <el-table-column label="调整窗口" min-width="170">
-          <template #default="{ row }">
-            <template v-if="row.status === 'CLOSED'">
-              <el-tag
-                :type="periodAdjustWindow(row).state === 'OPEN_WINDOW' ? 'warning' : 'info'"
-                size="small">
-                {{ periodAdjustWindow(row).label }}
-              </el-tag>
-              <div v-if="row.adjustDeadline" class="muted small">
-                截止 {{ row.adjustDeadline.replace('T', ' ').slice(0, 10) }}
-              </div>
+          <!-- Wave2 月结: 调整窗口截止 + 倒计时 (邓总20天窗口) -->
+          <template #window-cell="{ row }">
+            <template v-if="row.original.status === 'CLOSED'">
+              <UBadge :color="periodAdjustWindow(row.original).state === 'OPEN_WINDOW' ? 'warning' : 'neutral'" variant="soft">{{ periodAdjustWindow(row.original).label }}</UBadge>
+              <div v-if="row.original.adjustDeadline" class="muted small">截止 {{ row.original.adjustDeadline.replace('T', ' ').slice(0, 10) }}</div>
             </template>
             <span v-else class="muted">—</span>
           </template>
-        </el-table-column>
-
-        <!-- Wave2 月结: 净利润快照 + 对账结论 -->
-        <el-table-column label="月结报表" min-width="180">
-          <template #default="{ row }">
-            <template v-if="row.status === 'CLOSED' && row.reportReadyAt">
+          <!-- Wave2 月结: 净利润快照 + 对账结论 -->
+          <template #report-cell="{ row }">
+            <template v-if="row.original.status === 'CLOSED' && row.original.reportReadyAt">
               <div>
-                <el-tag :type="reconciliationTagType(row.reconciliationStatus)" size="small">
-                  对账 {{ row.reconciliationStatus || '—' }}
-                </el-tag>
+                <UBadge :color="badgeColor(reconciliationTagType(row.original.reconciliationStatus))" variant="soft">对账 {{ reconciliationText(row.original.reconciliationStatus) }}</UBadge>
               </div>
-              <div class="muted small">
-                净利 {{ row.netProfitSnapshot != null ? row.netProfitSnapshot : '—' }}
-              </div>
+              <div class="muted small">净利 {{ row.original.netProfitSnapshot != null ? row.original.netProfitSnapshot : '—' }}</div>
             </template>
             <span v-else class="muted">—</span>
           </template>
-        </el-table-column>
-
-        <el-table-column label="最近反结账" min-width="200">
-          <template #default="{ row }">
-            <div v-if="row.reopenedAt">
-              <div>{{ row.reopenedAt.replace('T', ' ').slice(0, 19) }}</div>
-              <div class="muted small">{{ row.reopenReason }}</div>
+          <template #reopen-cell="{ row }">
+            <div v-if="row.original.reopenedAt">
+              <div>{{ row.original.reopenedAt.replace('T', ' ').slice(0, 19) }}</div>
+              <div class="muted small">{{ row.original.reopenReason }}</div>
             </div>
             <span v-else class="muted">—</span>
           </template>
-        </el-table-column>
-
-        <el-table-column label="操作" width="300" fixed="right">
-          <template #default="{ row }">
-            <!-- Wave2 一键月结: OPEN / PENDING_CLOSE 行可触发 (CLOSED 隐藏, 防重复 R4) -->
-            <el-button
-              v-if="row.status !== 'CLOSED'"
-              size="small"
-              type="success"
-              :icon="Finished"
-              :disabled="!canWrite || mutationBusy"
-              @click="handleMonthClose(row)">
-              一键月结
-            </el-button>
-            <el-button
-              v-if="row.status === 'OPEN'"
-              size="small"
-              type="warning"
-              :icon="Lock"
-              :disabled="!canWrite || mutationBusy"
-              @click="handleRequestClose(row)">
-              发起结账
-            </el-button>
-            <el-button
-              v-if="row.status === 'PENDING_CLOSE'"
-              size="small"
-              type="danger"
-              :icon="Lock"
-              :disabled="!canWrite || mutationBusy"
-              @click="handleConfirmClose(row)">
-              确认结账
-            </el-button>
-            <el-button
-              v-if="row.status === 'CLOSED'"
-              size="small"
-              type="primary"
-              :icon="Unlock"
-              :disabled="!canWrite || mutationBusy"
-              @click="openReopenDialog(row)">
-              反结账
-            </el-button>
+          <template #actions-cell="{ row }">
+            <div class="row-actions">
+              <!-- Wave2 一键月结: OPEN / PENDING_CLOSE 行可触发 (CLOSED 隐藏, 防重复 R4) -->
+              <UButton v-if="row.original.status !== 'CLOSED'" color="success" variant="link" size="xs" :disabled="!canWrite || mutationBusy" data-testid="period-month-close" @click="handleMonthClose(row.original)">一键月结</UButton>
+              <UButton v-if="row.original.status === 'OPEN'" color="warning" variant="link" size="xs" :disabled="!canWrite || mutationBusy" data-testid="period-request-close" @click="handleRequestClose(row.original)">发起结账</UButton>
+              <UButton v-if="row.original.status === 'PENDING_CLOSE'" color="error" variant="link" size="xs" :disabled="!canWrite || mutationBusy" data-testid="period-confirm-close" @click="handleConfirmClose(row.original)">确认结账</UButton>
+              <UButton v-if="row.original.status === 'CLOSED'" variant="link" size="xs" :disabled="!canWrite || mutationBusy" data-testid="period-reopen" @click="openReopenDialog(row.original)">反结账</UButton>
+            </div>
           </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- 打开期间 dialog -->
-    <el-dialog
-      v-model="openDialogVisible"
-      title="打开期间"
-      width="400px">
-      <el-form label-width="80px">
-        <el-form-item label="年度">
-          <el-input-number v-model="openForm.year" :min="2020" :max="2100" />
-        </el-form-item>
-        <el-form-item label="月份">
-          <el-input-number v-model="openForm.month" :min="1" :max="12" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="openDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="mutationBusy" :disabled="!canWrite || mutationBusy" @click="handleOpenPeriod">确认</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 反结账 dialog — 防呆 Rule 3 dropdown + 其他 textarea -->
-    <el-dialog
-      v-model="reopenDialogVisible"
-      title="反结账"
-      width="500px">
-      <template v-if="reopenForm.period">
-        <el-alert
-          :title="`反结账 ${reopenForm.period.year}-${String(reopenForm.period.month).padStart(2,'0')} 期间`"
-          type="warning"
-          :closable="false"
-          show-icon>
-          反结账后, 该期间凭证可继续修改 / 过账 / 作废. 操作会留审计日志 (反结账人 / 时间 / 原因永久保留).
-        </el-alert>
-
-        <el-form label-width="100px" style="margin-top: 16px;">
-          <el-form-item label="原因类别" required>
-            <el-select
-              v-model="reopenForm.reasonType"
-              placeholder="请选择反结账原因"
-              style="width: 100%;">
-              <el-option
-                v-for="r in REOPEN_REASON_PRESETS"
-                :key="r.value"
-                :value="r.value"
-                :label="r.label" />
-            </el-select>
-          </el-form-item>
-
-          <el-form-item
-            v-if="reopenForm.reasonType === '其他'"
-            label="具体原因"
-            required>
-            <el-input
-              v-model="reopenForm.reasonExtra"
-              type="textarea"
-              :rows="3"
-              placeholder="请详细描述反结账原因 (审计日志永久保留)"
-              maxlength="500"
-              show-word-limit />
-          </el-form-item>
-        </el-form>
-      </template>
-
-      <template #footer>
-        <el-button @click="reopenDialogVisible = false">取消</el-button>
-        <el-button type="danger" :loading="mutationBusy" :disabled="!canWrite || mutationBusy" @click="handleReopen">确认反结账</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Wave2 一键月结: 对账预显 dialog (防呆 R1 预先显示边界) -->
-    <el-dialog
-      v-model="monthClosePreviewVisible"
-      title="月结对账预览"
-      width="600px">
-      <div v-loading="monthCloseLoading">
-        <el-alert v-if="monthCloseError" :title="monthCloseError" type="error" :closable="false" show-icon />
-        <template v-if="monthClosePreview">
-          <el-alert
-            :title="`${monthClosePreview.year}-${String(monthClosePreview.month).padStart(2,'0')} 月结对账 — ${monthClosePreview.canClose ? '可执行结账' : '存在阻塞项, 暂不可结账'}`"
-            :type="monthClosePreview.canClose ? (monthClosePreview.reconciliationStatus === 'PASS' ? 'success' : 'warning') : 'error'"
-            :closable="false"
-            show-icon>
-            月结将: 对账校验 → 生成利润表 → 快照锁定 → 结账并开启 20 天调整窗口.
-            结账后报表立即生成, 调整窗口内凭证仍可调整, 窗口结束后锁定.
-          </el-alert>
-
-          <el-table :data="monthClosePreview.checks" style="margin-top: 16px;" size="small">
-            <el-table-column label="校验项" min-width="160">
-              <template #default="{ row }">{{ row.name }}</template>
-            </el-table-column>
-            <el-table-column label="结果" width="90">
-              <template #default="{ row }">
-                <el-tag :type="row.passed ? 'success' : (row.severity === 'BLOCKING' ? 'danger' : 'warning')" size="small">
-                  {{ row.passed ? '通过' : (row.severity === 'BLOCKING' ? '阻塞' : '提示') }}
-                </el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="说明" min-width="240">
-              <template #default="{ row }">
-                <span :class="{ muted: row.passed }">{{ row.detail }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-        <el-empty v-else-if="!monthCloseLoading" description="无对账数据" />
+        </UTable>
       </div>
+    </section>
 
-      <template #footer>
-        <el-button @click="monthClosePreviewVisible = false">取消</el-button>
-        <el-button
-          type="success"
-          :loading="monthCloseLoading"
-          :disabled="!canWrite || mutationBusy || !monthClosePreview?.canClose"
-          @click="confirmMonthClose">
-          确认月结
-        </el-button>
+    <!-- 打开期间 -->
+    <UModal
+      v-model:open="openDialogVisible"
+      title="打开期间"
+      description="打开一个会计期间"
+      :ui="{ content: 'max-w-[400px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div class="form">
+          <UFormField label="年度">
+            <UInputNumber v-model="openForm.year" :min="2020" :max="2100" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ useGrouping: false }" class="w-full" data-testid="period-open-year" />
+          </UFormField>
+          <UFormField label="月份">
+            <UInputNumber v-model="openForm.month" :min="1" :max="12" :step-snapping="false" :increment="false" :decrement="false" class="w-full" data-testid="period-open-month" />
+          </UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="openDialogVisible = false">取消</UButton>
+        <UButton :loading="mutationBusy" :disabled="!canWrite || mutationBusy" data-testid="period-open-submit" @click="handleOpenPeriod">确认</UButton>
+      </template>
+    </UModal>
+
+    <!-- 反结账 — 防呆 Rule 3 dropdown + 其他 textarea -->
+    <UModal
+      v-model:open="reopenDialogVisible"
+      title="反结账"
+      description="反结账需选择原因"
+      :ui="{ content: 'max-w-[500px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div v-if="reopenForm.period" class="form">
+          <UAlert color="warning" variant="soft" icon="i-lucide-triangle-alert"
+            :title="`反结账 ${reopenForm.period.year}-${String(reopenForm.period.month).padStart(2,'0')} 期间`"
+            description="反结账后, 该期间凭证可继续修改 / 过账 / 作废. 操作会留审计日志 (反结账人 / 时间 / 原因永久保留)." />
+          <UFormField label="原因类别" required>
+            <USelect v-model="reopenForm.reasonType" :items="REOPEN_REASON_PRESETS" placeholder="请选择反结账原因" class="w-full" data-testid="period-reopen-reason" />
+          </UFormField>
+          <UFormField v-if="reopenForm.reasonType === '其他'" label="具体原因" required>
+            <UTextarea v-model="reopenForm.reasonExtra" :rows="3" :maxlength="500" placeholder="请详细描述反结账原因 (审计日志永久保留)" class="w-full" data-testid="period-reopen-extra" />
+          </UFormField>
+        </div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="reopenDialogVisible = false">取消</UButton>
+        <UButton color="error" :loading="mutationBusy" :disabled="!canWrite || mutationBusy" data-testid="period-reopen-submit" @click="handleReopen">确认反结账</UButton>
+      </template>
+    </UModal>
+
+    <!-- Wave2 一键月结: 对账预显 (防呆 R1 预先显示边界) -->
+    <UModal
+      v-model:open="monthClosePreviewVisible"
+      title="月结对账预览"
+      description="月结前的对账校验结果"
+      :ui="{ content: 'max-w-[600px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div class="form" data-testid="month-close-preview">
+          <div v-if="monthCloseLoading" class="muted">正在读取对账结果…</div>
+          <UAlert v-if="monthCloseError" color="error" variant="soft" icon="i-lucide-circle-alert" :title="monthCloseError" />
+          <template v-if="monthClosePreview">
+            <UAlert
+              :color="monthClosePreview.canClose ? (monthClosePreview.reconciliationStatus === 'PASS' ? 'success' : 'warning') : 'error'"
+              variant="soft"
+              icon="i-lucide-info"
+              :title="`${monthClosePreview.year}-${String(monthClosePreview.month).padStart(2,'0')} 月结对账 — ${monthClosePreview.canClose ? '可执行结账' : '存在阻塞项, 暂不可结账'}`"
+              description="月结将: 对账校验 → 生成利润表 → 快照锁定 → 结账并开启 20 天调整窗口. 结账后报表立即生成, 调整窗口内凭证仍可调整, 窗口结束后锁定." />
+            <UTable :data="monthClosePreview.checks" :columns="checkColumns" class="cs-table" data-testid="month-close-checks">
+              <template #result-cell="{ row }">
+                <UBadge :color="row.original.passed ? 'success' : (row.original.severity === 'BLOCKING' ? 'error' : 'warning')" variant="soft">{{ row.original.passed ? '通过' : (row.original.severity === 'BLOCKING' ? '阻塞' : '提示') }}</UBadge>
+              </template>
+              <template #detail-cell="{ row }"><span :class="{ muted: row.original.passed }">{{ row.original.detail }}</span></template>
+            </UTable>
+          </template>
+          <div v-else-if="!monthCloseLoading && !monthCloseError" class="muted">无对账数据</div>
+        </div>
+      </template>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="monthClosePreviewVisible = false">取消</UButton>
+        <UButton color="success" :loading="monthCloseLoading" :disabled="!canWrite || mutationBusy || !monthClosePreview?.canClose" data-testid="month-close-confirm" @click="confirmMonthClose">确认月结</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
 <style scoped>
-.accounting-period-page {
-  padding: 16px;
-}
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.header h2 {
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.actions {
-  display: flex;
-  gap: 8px;
-}
-
-.period-name {
-  font-family: 'Consolas', monospace;
-  font-weight: 600;
-  font-size: 15px;
-}
-
-.muted {
-  color: #909399;
-}
-
-.small {
-  font-size: 12px;
-}
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.body { padding: var(--cs-space-4) var(--cs-space-5); }
+.rules { padding-left: 20px; margin: 5px 0; list-style: disc; }
+.form { display: grid; gap: var(--cs-space-3); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.period-name { font-family: 'Consolas', monospace; font-weight: 600; font-size: 15px; }
+.muted { color: var(--cs-muted); }
+.small { font-size: 12px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 4px; min-height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

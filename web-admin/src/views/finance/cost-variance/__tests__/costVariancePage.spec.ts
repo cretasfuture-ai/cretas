@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
-import ElementPlus from 'element-plus';
 import { reactive } from 'vue';
+import { nuxtUiStubs } from '@/__tests__/helpers/nuxtUiStubs';
 
 const api = vi.hoisted(() => ({ report: vi.fn(), plan: vi.fn(), message: vi.fn(), download: vi.fn() }));
 const auth = reactive({ factoryId: 'F006' });
@@ -75,7 +75,7 @@ beforeEach(() => {
 });
 
 function mountPage() {
-  return mount(Page, { global: { plugins: [ElementPlus] }, attachTo: document.body });
+  return mount(Page, { global: { stubs: nuxtUiStubs }, attachTo: document.body });
 }
 
 describe('成本差异报表 (缺口 09/10)', () => {
@@ -112,7 +112,7 @@ describe('成本差异报表 (缺口 09/10)', () => {
     expect(wrapper.get('[data-testid="summary-rework-variance"]').text()).toContain('1 个回料差已计入合计');
     const table = wrapper.get('[data-testid="cost-variance-plans"]').text();
     expect(table).toContain('回投 2.5 kg');
-    const rows = Array.from(wrapper.get('[data-testid="cost-variance-plans"]').element.querySelectorAll('.el-table__body tr'));
+    const rows = Array.from(wrapper.get('[data-testid="cost-variance-plans"]').element.querySelectorAll('tbody tr'));
     const noRework = rows.find((r) => r.textContent?.includes('PLAN-QA-NORW'));
     const reworkCell = noRework?.querySelectorAll('td')[7]?.textContent ?? '';
     expect(reworkCell).toContain('无回料');

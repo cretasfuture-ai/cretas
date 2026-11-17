@@ -3,13 +3,12 @@ import { reactive } from 'vue';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
 import Adjustments from '../list.vue';
+import { adjustmentStubs, closeConfirmModal, confirmButton } from './adjustmentStubs';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
   refundByRequest: vi.fn(),
-  confirm: vi.fn(),
-  prompt: vi.fn(),
   push: vi.fn(),
 }));
 
@@ -35,13 +34,6 @@ vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => identity }));
 vi.mock('@/store/modules/permission', () => ({
   usePermissionStore: () => ({ canWrite: () => true, canViewPrice: true }),
 }));
-vi.mock('element-plus', async () => {
-  const actual = await vi.importActual<typeof import('element-plus')>('element-plus');
-  return {
-    ...actual,
-    ElMessageBox: { ...actual.ElMessageBox, confirm: mocks.confirm, prompt: mocks.prompt },
-  };
-});
 
 const reversalRow = {
   id: 'REV-1', factoryId: 'F001', transactionType: 'AR_ADJUSTMENT', counterpartyType: 'CUSTOMER',
@@ -60,7 +52,7 @@ let rows: Array<typeof reversalRow | typeof ordinaryRow>;
 let wrapper: VueWrapper | undefined;
 
 function render() {
-  wrapper = mount(Adjustments, { global: { plugins: [ElementPlus] } });
+  wrapper = mount(Adjustments, { attachTo: document.body, global: { plugins: [ElementPlus], stubs: adjustmentStubs } });
   return wrapper;
 }
 
@@ -76,11 +68,10 @@ beforeEach(() => {
     returnOrderId: 'return-a',
     request: { id: 'RF-1', reversal: { ledger: { id: 'REV-1' } } },
   });
-  mocks.confirm.mockResolvedValue(true);
-  mocks.prompt.mockResolvedValue({ value: '核对原因' });
 });
 
 afterEach(() => {
+  closeConfirmModal();
   wrapper?.unmount();
   wrapper = undefined;
 });
@@ -89,7 +80,7 @@ describe('调整审批中的退款撤销专用入口', () => {
   it('keeps the pending reversal visible but disables selection and ordinary actions', async () => {
     const w = render();
     await flushPromises();
-    const reversalTableRow = w.findAll('.el-table__body-wrapper tbody tr').find(row => row.text().includes('请从原退款详情审核'));
+    const reversalTableRow = w.findAll('tbody tr').find(row => row.text().includes('请从原退款详情审核'));
     expect(reversalTableRow).toBeDefined();
     expect(reversalTableRow!.text()).toContain('待审批');
     expect(reversalTableRow!.find('input[type="checkbox"]').attributes('disabled')).toBeDefined();
@@ -103,7 +94,8 @@ describe('调整审批中的退款撤销专用入口', () => {
     vm.selectedRows = [{ ...reversalRow }];
     await vm.handleBatchReject();
     await vm.handleReject({ ...reversalRow });
-    expect(mocks.prompt).not.toHaveBeenCalled();
+    // 撤销流水不弹任何确认 / 驳回原因框, 也不发请求
+    expect(document.body.querySelector('[data-testid="sales-confirm-message"]')).toBeNull();
     expect(mocks.post).not.toHaveBeenCalled();
   });
 
@@ -161,7 +153,11 @@ describe('调整审批中的退款撤销专用入口', () => {
     await approvalButtons.at(-1)!.trigger('click');
     await flushPromises();
 
-    expect(mocks.confirm).toHaveBeenCalled();
+    expect(document.body.querySelector('[data-testid="sales-confirm-message"]')?.textContent).toContain('确认审批通过该调整');
+    expect(mocks.post).not.toHaveBeenCalled();
+    confirmButton('确认审批')!.click();
+    await flushPromises();
+
     expect(mocks.post).toHaveBeenCalledWith('/F001/finance/adjustment/ADJ-1/approve');
   });
 });

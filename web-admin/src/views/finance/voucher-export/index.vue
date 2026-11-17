@@ -5,7 +5,7 @@
  * 防呆设计 (per fool-proof-design.md):
  * - Rule 1: 日期范围必填, 缺失禁用导出
  * - Rule 2: CRUD dialog 带配置名称/编号作上下文
- * - Rule 3: 删除操作用 ElMessageBox.confirm 而非即时删除
+ * - Rule 3: 删除操作先弹确认 (SalesConfirmModal) 而非即时删除
  * - Rule 4: 导出防重 (loading 态 disabled); 新建配置 409 提示 "已有，请使用更新操作"
  * - Rule 5: SP6 未完成提示 + next action
  * - 4位一体: error toast sticky(duration:0, showClose=true), 后端真实 message
@@ -29,8 +29,10 @@
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Download, Plus, Edit, Delete, Refresh } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
+import type { CsTableColumn } from '@/types/csTable';
+// 通用确认弹窗 (UModal, 取代 ElMessageBox)。
+import SalesConfirmModal from '@/views/sales/components/SalesConfirmModal.vue';
 import { get, post, put, del } from '@/api/request';
 import request from '@/api/request';
 
@@ -89,6 +91,8 @@ const factoryId = computed(() => authStore.factoryId ?? '');
 const canRead = computed(() => permissionStore.canAccess('finance'));
 const canWrite = computed(() => permissionStore.canWrite('finance'));
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
+
 // ============================================================
 // Export state
 // ============================================================
@@ -134,6 +138,16 @@ const kingdeeEdition = ref<KingdeeEdition>('YXSKY_XLSX');
 const selectedKingdeeEdition = computed<KingdeeEditionDef>(
   () => KINGDEE_EDITIONS.find((e) => e.value === kingdeeEdition.value) ?? KINGDEE_EDITIONS[0]
 );
+
+// 日期范围: 两个原生日期输入, 仍落在同一个 exportDateRange 上 (清空任一端 => 不能导出)。
+const rangeStart = computed({
+  get: () => exportDateRange.value?.[0] ?? '',
+  set: (v: string) => { exportDateRange.value = [v ?? '', exportDateRange.value?.[1] ?? '']; },
+});
+const rangeEnd = computed({
+  get: () => exportDateRange.value?.[1] ?? '',
+  set: (v: string) => { exportDateRange.value = [exportDateRange.value?.[0] ?? '', v ?? '']; },
+});
 
 const canExport = computed(() =>
   !!exportDateRange.value && !!exportDateRange.value[0] && !!exportDateRange.value[1]
@@ -473,11 +487,13 @@ async function handleConfigSave() {
 async function handleConfigDelete(row: VoucherExportConfigDTO) {
   if (!factoryId.value) return;
   // Rule 3: 删除前 confirm + 上下文
-  await ElMessageBox.confirm(
-    `确认删除 "${row.targetSystem}" 导出配置？此操作不可恢复。`,
-    '删除确认',
-    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
-  );
+  const ok = await confirmRef.value!.ask({
+    title: '删除确认',
+    message: `确认删除 "${row.targetSystem}" 导出配置？此操作不可恢复。`,
+    confirmText: '删除',
+    danger: true,
+  });
+  if (ok === null) return;
   try {
     const res = await del(`/${factoryId.value}/finance/export-config/${row.id}`);
     if (res.success) {
@@ -540,11 +556,13 @@ async function handleMappingSave() {
 async function handleMappingDelete(row: VoucherSubjectMappingDTO) {
   if (!factoryId.value) return;
   const label = SETTLEMENT_TYPE_LABELS[row.settlementType] ?? row.settlementType;
-  await ElMessageBox.confirm(
-    `确认删除结算方式「${label}」的科目映射？`,
-    '删除确认',
-    { type: 'warning', confirmButtonText: '删除', cancelButtonText: '取消' }
-  );
+  const ok = await confirmRef.value!.ask({
+    title: '删除确认',
+    message: `确认删除结算方式「${label}」的科目映射？`,
+    confirmText: '删除',
+    danger: true,
+  });
+  if (ok === null) return;
   try {
     const res = await del(`/${factoryId.value}/finance/subject-mappings/${row.id}`);
     if (res.success) {
@@ -572,6 +590,86 @@ function getSettlementLabel(st: SettlementType): string {
 }
 
 // ============================================================
+// Nuxt UI 选项 / 列定义 (USelect 不接受空字符串值, 用哨兵值映射回原有的 '' / null 语义)
+// ============================================================
+const TARGET_SYSTEM_ITEMS = [
+  { label: '金蝶', value: 'KINGDEE' },
+  { label: '用友', value: 'YONYOU' },
+  { label: '通用', value: 'CUSTOM' },
+];
+const CONFIG_TARGET_ITEMS = [
+  { label: '金蝶', value: 'KINGDEE' },
+  { label: '金蝶云星空', value: 'KINGDEE_YXSKY' },
+  { label: '金蝶KIS/K3', value: 'KINGDEE_KIS' },
+  { label: '用友', value: 'YONYOU' },
+  { label: '通用', value: 'CUSTOM' },
+];
+const SETTLEMENT_ITEMS = (Object.keys(SETTLEMENT_TYPE_LABELS) as SettlementType[])
+  .map((v) => ({ label: SETTLEMENT_TYPE_LABELS[v], value: v }));
+const NONE = '__NONE__';
+const BUSINESS_TYPE_ITEMS = [
+  { label: '通用（不区分）', value: NONE },
+  { label: '采购', value: 'PURCHASE' },
+  { label: '销售', value: 'SALES' },
+];
+const BUSINESS_TYPE_LABELS: Record<string, string> = { PURCHASE: '采购', SALES: '销售' };
+function businessTypeText(v: string | null | undefined): string {
+  if (v === null || v === undefined || v === '') return '通用';
+  return BUSINESS_TYPE_LABELS[v] ?? v;
+}
+const businessTypeModel = computed({
+  get: () => mappingForm.value.businessType ?? NONE,
+  set: (v: string) => { mappingForm.value.businessType = v === NONE ? null : v; },
+});
+const remarkModel = computed({
+  get: () => mappingForm.value.remark ?? '',
+  set: (v: string) => { mappingForm.value.remark = v === '' ? null : v; },
+});
+const configSelectItems = computed(() => [
+  { label: '使用默认配置', value: NONE },
+  ...configList.value.map((cfg) => ({
+    label: `${getTargetSystemLabel(cfg.targetSystem)} — ${cfg.colVoucherNo}`,
+    value: cfg.id ?? '',
+  })),
+]);
+const selectedConfigModel = computed({
+  get: () => selectedConfigId.value || NONE,
+  set: (v: string) => { selectedConfigId.value = v === NONE ? '' : v; },
+});
+
+const configColumns = computed<CsTableColumn<VoucherExportConfigDTO>[]>(() => {
+  const cols: CsTableColumn<VoucherExportConfigDTO>[] = [
+    { id: 'targetSystem', header: '目标系统' },
+    { accessorKey: 'colVoucherNo', header: '凭证字号列名' },
+    { accessorKey: 'colDate', header: '日期列名' },
+    { accessorKey: 'colSummary', header: '摘要列名' },
+    { accessorKey: 'colSubjectCode', header: '科目编码列名' },
+    { accessorKey: 'colSubjectName', header: '科目名称列名' },
+    { accessorKey: 'colDebit', header: '借方金额列名' },
+    { accessorKey: 'colCredit', header: '贷方金额列名' },
+    { accessorKey: 'colAuxiliary', header: '辅助核算列名' },
+    { accessorKey: 'colCurrency', header: '币别列名' },
+    { id: 'isActive', header: '状态' },
+  ];
+  if (canWrite.value) cols.push({ id: 'actions', header: '操作' });
+  return cols;
+});
+
+const mappingColumns = computed<CsTableColumn<VoucherSubjectMappingDTO>[]>(() => {
+  const cols: CsTableColumn<VoucherSubjectMappingDTO>[] = [
+    { id: 'settlementType', header: '结算方式' },
+    { id: 'businessType', header: '业务类型' },
+    { accessorKey: 'debitSubjectCode', header: '借方科目代码' },
+    { accessorKey: 'debitSubjectName', header: '借方科目名称' },
+    { accessorKey: 'creditSubjectCode', header: '贷方科目代码' },
+    { accessorKey: 'creditSubjectName', header: '贷方科目名称' },
+    { id: 'remark', header: '备注' },
+  ];
+  if (canWrite.value) cols.push({ id: 'actions', header: '操作' });
+  return cols;
+});
+
+// ============================================================
 // Init
 // ============================================================
 onMounted(async () => {
@@ -580,469 +678,247 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="page-container">
-    <div class="page-header">
-      <h2 class="page-title">凭证导出</h2>
-    </div>
-
+  <div class="page" data-testid="voucher-export-page">
     <!-- === 导出操作区 === -->
-    <el-card shadow="never" class="section-card">
-      <template #header>
-        <span class="section-title">凭证序时账 / 科目余额表导出</span>
-      </template>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>凭证导出</h2>
+        <span class="count">凭证序时账 / 科目余额表 / 常用账簿</span>
+      </header>
 
-      <el-form :inline="true" class="export-form">
-        <el-form-item label="期间范围" required>
-          <el-date-picker
-            v-model="exportDateRange"
-            type="daterange"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 260px"
-          />
-        </el-form-item>
-        <el-form-item label="目标系统">
-          <el-select v-model="exportTargetSystem" style="width: 120px">
-            <el-option label="金蝶" value="KINGDEE" />
-            <el-option label="用友" value="YONYOU" />
-            <el-option label="通用" value="CUSTOM" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="列名配置">
-          <el-select
-            v-model="selectedConfigId"
-            placeholder="使用默认配置"
-            clearable
-            style="width: 200px"
-          >
-            <el-option
-              v-for="cfg in configList"
-              :key="cfg.id"
-              :label="`${getTargetSystemLabel(cfg.targetSystem)} — ${cfg.colVoucherNo}`"
-              :value="cfg.id ?? ''"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="primary"
-            :icon="Download"
-            :loading="exportLoading"
-            :disabled="!canExport || !canWrite"
-            @click="handleVoucherExport"
-          >
-            导出凭证序时账
-          </el-button>
-          <el-button
-            :icon="Download"
-            :loading="balanceExportLoading"
-            :disabled="!canExport || !canWrite"
-            @click="handleBalanceExport"
-          >
-            导出科目余额表
-          </el-button>
-        </el-form-item>
-      </el-form>
+      <div class="export-body">
+        <div class="export-row">
+          <UFormField label="期间范围" required>
+            <div class="range">
+              <UInput v-model="rangeStart" type="date" class="w-40" data-testid="export-start" />
+              <span class="range-sep">至</span>
+              <UInput v-model="rangeEnd" type="date" class="w-40" data-testid="export-end" />
+            </div>
+          </UFormField>
+          <UFormField label="目标系统">
+            <USelect v-model="exportTargetSystem" :items="TARGET_SYSTEM_ITEMS" class="w-32" data-testid="export-target" />
+          </UFormField>
+          <UFormField label="列名配置">
+            <USelect v-model="selectedConfigModel" :items="configSelectItems" class="w-56" data-testid="export-config-select" />
+          </UFormField>
+          <div class="export-actions">
+            <UButton
+              icon="i-lucide-download"
+              :loading="exportLoading"
+              :disabled="!canExport || !canWrite"
+              data-testid="export-voucher"
+              @click="handleVoucherExport"
+            >导出凭证序时账</UButton>
+            <UButton
+              color="neutral" variant="outline"
+              icon="i-lucide-download"
+              :loading="balanceExportLoading"
+              :disabled="!canExport || !canWrite"
+              data-testid="export-balance"
+              @click="handleBalanceExport"
+            >导出科目余额表</UButton>
+          </div>
+        </div>
 
-      <el-form :inline="true" class="export-form kingdee-import-form">
-        <el-form-item label="金蝶版本/格式">
-          <el-select v-model="kingdeeEdition" style="width: 300px">
-            <el-option
-              v-for="ed in KINGDEE_EDITIONS"
-              :key="ed.value"
-              :label="ed.label"
-              :value="ed.value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button
-            type="success"
-            :icon="Download"
-            :loading="kingdeeTemplateLoading"
-            :disabled="!canExport || !canWrite"
-            @click="handleKingdeeImportTemplate"
-          >
-            导出{{ selectedKingdeeEdition.label }}
-          </el-button>
-        </el-form-item>
-        <el-form-item>
+        <div class="export-row">
+          <UFormField label="金蝶版本/格式">
+            <USelect v-model="kingdeeEdition" :items="KINGDEE_EDITIONS" class="w-80" data-testid="export-kingdee-edition" />
+          </UFormField>
+          <div class="export-actions">
+            <UButton
+              color="success"
+              icon="i-lucide-download"
+              :loading="kingdeeTemplateLoading"
+              :disabled="!canExport || !canWrite"
+              data-testid="export-kingdee"
+              @click="handleKingdeeImportTemplate"
+            >导出{{ selectedKingdeeEdition.label }}</UButton>
+          </div>
           <span class="form-hint">
             按贵司实际使用的金蝶版本选择: 云星空→.xlsx; KIS专业版→.xls; KIS标准版/迷你版/K3→.dbf
           </span>
-        </el-form-item>
-      </el-form>
+        </div>
 
-      <div class="ledger-report-grid">
-        <div
-          v-for="report in ledgerReports"
-          :key="report.type"
-          class="ledger-report-panel"
-        >
-          <div class="ledger-report-top">
-            <span class="ledger-report-title">{{ report.label }}</span>
-            <el-button
-              size="small"
-              :icon="Download"
-              :loading="ledgerExportLoading[report.type]"
-              :disabled="!canExport || !canRead"
-              @click="handleLedgerExport(report)"
-            >
-              导出
-            </el-button>
-          </div>
-          <div class="ledger-header-preview">
-            <el-tag
-              v-for="header in report.headers"
-              :key="`${report.type}-${header}`"
-              size="small"
-              effect="plain"
-            >
-              {{ header }}
-            </el-tag>
+        <div class="ledger-report-grid">
+          <div
+            v-for="report in ledgerReports"
+            :key="report.type"
+            class="ledger-report-panel"
+          >
+            <div class="ledger-report-top">
+              <span class="ledger-report-title">{{ report.label }}</span>
+              <UButton
+                size="xs" color="neutral" variant="outline"
+                icon="i-lucide-download"
+                :loading="ledgerExportLoading[report.type]"
+                :disabled="!canExport || !canRead"
+                :data-testid="`export-ledger-${report.type}`"
+                @click="handleLedgerExport(report)"
+              >导出</UButton>
+            </div>
+            <div class="ledger-header-preview">
+              <UBadge
+                v-for="header in report.headers"
+                :key="`${report.type}-${header}`"
+                color="neutral" variant="outline" size="sm"
+              >{{ header }}</UBadge>
+            </div>
           </div>
         </div>
-      </div>
 
-      <el-alert
-        v-if="!canRead"
-        title="导出需要财务读取权限，当前账号无权操作"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
-      <el-alert
-        v-else-if="!canWrite"
-        title="凭证序时账 / 科目余额表导出需要财务读写权限；常用账簿导出使用财务读取权限"
-        type="warning"
-        :closable="false"
-        show-icon
-      />
-      <el-alert
-        v-if="!canExport && canRead"
-        title="请先选择期间日期范围再导出"
-        type="info"
-        :closable="false"
-        show-icon
-      />
-    </el-card>
+        <UAlert
+          v-if="!canRead"
+          color="warning" variant="soft" icon="i-lucide-triangle-alert"
+          title="导出需要财务读取权限，当前账号无权操作"
+        />
+        <UAlert
+          v-else-if="!canWrite"
+          color="warning" variant="soft" icon="i-lucide-triangle-alert"
+          title="凭证序时账 / 科目余额表导出需要财务读写权限；常用账簿导出使用财务读取权限"
+        />
+        <UAlert
+          v-if="!canExport && canRead"
+          color="info" variant="soft" icon="i-lucide-info"
+          title="请先选择期间日期范围再导出"
+        />
+      </div>
+    </section>
 
     <!-- === 导出配置 CRUD === -->
-    <el-card shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header-row">
-          <span class="section-title">凭证导出配置（列名映射）</span>
-          <div>
-            <el-button size="small" :icon="Refresh" circle @click="loadConfigs" />
-            <el-button
-              v-if="canWrite"
-              type="primary"
-              size="small"
-              :icon="Plus"
-              @click="openConfigCreate"
-            >
-              新建配置
-            </el-button>
-          </div>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>凭证导出配置（列名映射）</h2>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" size="xs" icon="i-lucide-refresh-cw" aria-label="刷新" title="刷新" :loading="configLoading" @click="loadConfigs" />
+          <UButton v-if="canWrite" size="xs" icon="i-lucide-plus" data-testid="config-create" @click="openConfigCreate">新建配置</UButton>
         </div>
-      </template>
+      </header>
 
-      <el-table
-        v-loading="configLoading"
-        :data="configList"
-        border
-        stripe
-        style="width: 100%"
-        empty-text="暂无配置，点击「新建配置」创建"
-        size="small"
-      >
-        <el-table-column label="目标系统" width="90">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.targetSystem === 'KINGDEE' ? 'primary' : 'success'">
-              {{ getTargetSystemLabel(row.targetSystem) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="凭证字号列名" prop="colVoucherNo" width="110" />
-        <el-table-column label="日期列名" prop="colDate" width="90" />
-        <el-table-column label="摘要列名" prop="colSummary" width="90" />
-        <el-table-column label="科目编码列名" prop="colSubjectCode" width="110" />
-        <el-table-column label="科目名称列名" prop="colSubjectName" width="110" />
-        <el-table-column label="借方金额列名" prop="colDebit" width="110" />
-        <el-table-column label="贷方金额列名" prop="colCredit" width="110" />
-        <el-table-column label="辅助核算列名" prop="colAuxiliary" width="110" />
-        <el-table-column label="币别列名" prop="colCurrency" width="90" />
-        <el-table-column label="状态" width="70">
-          <template #default="{ row }">
-            <el-tag size="small" :type="row.isActive ? 'success' : 'info'">
-              {{ row.isActive ? '启用' : '停用' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" :icon="Edit" link type="primary" @click="openConfigEdit(row)">
-              编辑
-            </el-button>
-            <el-button size="small" :icon="Delete" link type="danger" @click="handleConfigDelete(row)">
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      <UTable :data="configList" :columns="configColumns" :loading="configLoading" class="cs-table" data-testid="config-table">
+        <template #empty>暂无配置，点击「新建配置」创建</template>
+        <template #targetSystem-cell="{ row }">
+          <UBadge :color="row.original.targetSystem === 'KINGDEE' ? 'primary' : 'success'" variant="soft">{{ getTargetSystemLabel(row.original.targetSystem) }}</UBadge>
+        </template>
+        <template #isActive-cell="{ row }">
+          <UBadge :color="row.original.isActive ? 'success' : 'neutral'" variant="soft">{{ row.original.isActive ? '启用' : '停用' }}</UBadge>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton variant="link" size="xs" icon="i-lucide-pencil" data-testid="config-edit" @click="openConfigEdit(row.original)">编辑</UButton>
+            <UButton color="error" variant="link" size="xs" icon="i-lucide-trash-2" data-testid="config-delete" @click="handleConfigDelete(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
+    </section>
 
     <!-- === 科目映射 CRUD === -->
-    <el-card shadow="never" class="section-card">
-      <template #header>
-        <div class="card-header-row">
-          <div>
-            <span class="section-title">结算属性 → 会计科目映射</span>
-            <el-tooltip content="配置采购结算属性对应的会计借贷科目，用于自动生成凭证分录" placement="right">
-              <el-icon style="margin-left: 6px; color: #999; cursor: help;"><el-icon-info-filled /></el-icon>
-            </el-tooltip>
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2 title="配置采购结算属性对应的会计借贷科目，用于自动生成凭证分录">结算属性 → 会计科目映射</h2>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" size="xs" icon="i-lucide-refresh-cw" aria-label="刷新" title="刷新" :loading="mappingLoading" @click="loadMappings" />
+          <UButton v-if="canWrite" size="xs" icon="i-lucide-plus" data-testid="mapping-create" @click="openMappingCreate">新增映射</UButton>
+        </div>
+      </header>
+
+      <UTable :data="mappingList" :columns="mappingColumns" :loading="mappingLoading" class="cs-table" data-testid="mapping-table">
+        <template #empty>暂无科目映射配置</template>
+        <template #settlementType-cell="{ row }">{{ getSettlementLabel(row.original.settlementType) }}</template>
+        <template #businessType-cell="{ row }">{{ businessTypeText(row.original.businessType) }}</template>
+        <template #remark-cell="{ row }">{{ row.original.remark ?? '—' }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton variant="link" size="xs" icon="i-lucide-pencil" data-testid="mapping-edit" @click="openMappingEdit(row.original)">编辑</UButton>
+            <UButton color="error" variant="link" size="xs" icon="i-lucide-trash-2" data-testid="mapping-delete" @click="handleMappingDelete(row.original)">删除</UButton>
           </div>
-          <div>
-            <el-button size="small" :icon="Refresh" circle @click="loadMappings" />
-            <el-button
-              v-if="canWrite"
-              type="primary"
-              size="small"
-              :icon="Plus"
-              @click="openMappingCreate"
-            >
-              新增映射
-            </el-button>
-          </div>
+        </template>
+      </UTable>
+    </section>
+
+    <!-- Dialog: 导出配置 新建/编辑 -->
+    <UModal
+      v-model:open="configDialogVisible"
+      :title="`${configDialogMode === 'create' ? '新建' : '编辑'} — 凭证导出配置（${getTargetSystemLabel(configForm.targetSystem)}）`"
+      description="设置导出文件的列名"
+      :ui="{ content: 'max-w-[600px]', description: 'sr-only', footer: 'justify-end' }"
+    >
+      <template #body>
+        <div class="dialog-form">
+          <UFormField label="目标系统" required hint="同工厂同目标系统只能有一个配置">
+            <USelect v-model="configForm.targetSystem" :items="CONFIG_TARGET_ITEMS" :disabled="configDialogMode === 'edit'" class="w-full" data-testid="config-target" />
+          </UFormField>
+          <UFormField label="凭证字号列名"><UInput v-model="configForm.colVoucherNo" class="w-full" /></UFormField>
+          <UFormField label="日期列名"><UInput v-model="configForm.colDate" class="w-full" /></UFormField>
+          <UFormField label="摘要列名"><UInput v-model="configForm.colSummary" class="w-full" /></UFormField>
+          <UFormField label="科目编码列名"><UInput v-model="configForm.colSubjectCode" class="w-full" /></UFormField>
+          <UFormField label="科目名称列名"><UInput v-model="configForm.colSubjectName" class="w-full" /></UFormField>
+          <UFormField label="借方金额列名"><UInput v-model="configForm.colDebit" class="w-full" /></UFormField>
+          <UFormField label="贷方金额列名"><UInput v-model="configForm.colCredit" class="w-full" /></UFormField>
+          <UFormField label="辅助核算列名"><UInput v-model="configForm.colAuxiliary" class="w-full" /></UFormField>
+          <UFormField label="币别列名"><UInput v-model="configForm.colCurrency" class="w-full" /></UFormField>
+          <UFormField v-if="configDialogMode === 'edit'" label="状态">
+            <USwitch v-model="configForm.isActive" :label="configForm.isActive ? '启用' : '停用'" />
+          </UFormField>
         </div>
       </template>
-
-      <el-table
-        v-loading="mappingLoading"
-        :data="mappingList"
-        border
-        stripe
-        style="width: 100%"
-        empty-text="暂无科目映射配置"
-        size="small"
-      >
-        <el-table-column label="结算方式" width="130">
-          <template #default="{ row }">{{ getSettlementLabel(row.settlementType) }}</template>
-        </el-table-column>
-        <el-table-column label="业务类型" width="100">
-          <template #default="{ row }">{{ row.businessType ?? '通用' }}</template>
-        </el-table-column>
-        <el-table-column label="借方科目代码" prop="debitSubjectCode" width="110" />
-        <el-table-column label="借方科目名称" prop="debitSubjectName" min-width="110" show-overflow-tooltip />
-        <el-table-column label="贷方科目代码" prop="creditSubjectCode" width="110" />
-        <el-table-column label="贷方科目名称" prop="creditSubjectName" min-width="110" show-overflow-tooltip />
-        <el-table-column label="备注" prop="remark" min-width="120" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.remark ?? '—' }}</template>
-        </el-table-column>
-        <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" :icon="Edit" link type="primary" @click="openMappingEdit(row)">
-              编辑
-            </el-button>
-            <el-button size="small" :icon="Delete" link type="danger" @click="handleMappingDelete(row)">
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
-
-    <!-- ============================================================
-         Dialog: 导出配置 新建/编辑
-         ============================================================ -->
-    <el-dialog
-      v-model="configDialogVisible"
-      :title="`${configDialogMode === 'create' ? '新建' : '编辑'} — 凭证导出配置（${getTargetSystemLabel(configForm.targetSystem)}）`"
-      width="600px"
-      @close="configDialogVisible = false"
-    >
-      <el-form :model="configForm" label-width="110px" class="dialog-form">
-        <el-form-item label="目标系统" required>
-          <el-select v-model="configForm.targetSystem" :disabled="configDialogMode === 'edit'">
-            <el-option label="金蝶" value="KINGDEE" />
-            <el-option label="金蝶云星空" value="KINGDEE_YXSKY" />
-            <el-option label="金蝶KIS/K3" value="KINGDEE_KIS" />
-            <el-option label="用友" value="YONYOU" />
-            <el-option label="通用" value="CUSTOM" />
-          </el-select>
-          <span class="form-hint">同工厂同目标系统只能有一个配置</span>
-        </el-form-item>
-        <el-form-item label="凭证字号列名">
-          <el-input v-model="configForm.colVoucherNo" />
-        </el-form-item>
-        <el-form-item label="日期列名">
-          <el-input v-model="configForm.colDate" />
-        </el-form-item>
-        <el-form-item label="摘要列名">
-          <el-input v-model="configForm.colSummary" />
-        </el-form-item>
-        <el-form-item label="科目编码列名">
-          <el-input v-model="configForm.colSubjectCode" />
-        </el-form-item>
-        <el-form-item label="科目名称列名">
-          <el-input v-model="configForm.colSubjectName" />
-        </el-form-item>
-        <el-form-item label="借方金额列名">
-          <el-input v-model="configForm.colDebit" />
-        </el-form-item>
-        <el-form-item label="贷方金额列名">
-          <el-input v-model="configForm.colCredit" />
-        </el-form-item>
-        <el-form-item label="辅助核算列名">
-          <el-input v-model="configForm.colAuxiliary" />
-        </el-form-item>
-        <el-form-item label="币别列名">
-          <el-input v-model="configForm.colCurrency" />
-        </el-form-item>
-        <el-form-item v-if="configDialogMode === 'edit'" label="状态">
-          <el-switch v-model="configForm.isActive" active-text="启用" inactive-text="停用" />
-        </el-form-item>
-      </el-form>
       <template #footer>
-        <el-button @click="configDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="configSaveLoading" @click="handleConfigSave">
-          {{ configDialogMode === 'create' ? '创建' : '保存' }}
-        </el-button>
+        <UButton color="neutral" variant="outline" @click="configDialogVisible = false">取消</UButton>
+        <UButton :loading="configSaveLoading" data-testid="config-save" @click="handleConfigSave">{{ configDialogMode === 'create' ? '创建' : '保存' }}</UButton>
       </template>
-    </el-dialog>
+    </UModal>
 
-    <!-- ============================================================
-         Dialog: 科目映射 新增/编辑
-         ============================================================ -->
-    <el-dialog
-      v-model="mappingDialogVisible"
+    <!-- Dialog: 科目映射 新增/编辑 -->
+    <UModal
+      v-model:open="mappingDialogVisible"
       :title="`${editingMappingId ? '编辑' : '新增'} — 科目映射（${getSettlementLabel(mappingForm.settlementType)}）`"
-      width="500px"
-      @close="mappingDialogVisible = false"
+      description="设置结算方式对应的借贷科目"
+      :ui="{ content: 'max-w-[500px]', description: 'sr-only', footer: 'justify-end' }"
     >
-      <el-form :model="mappingForm" label-width="110px" class="dialog-form">
-        <el-form-item label="结算方式" required>
-          <el-select v-model="mappingForm.settlementType">
-            <el-option
-              v-for="(label, value) in SETTLEMENT_TYPE_LABELS"
-              :key="value"
-              :label="label"
-              :value="value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="业务类型">
-          <el-select v-model="mappingForm.businessType" clearable placeholder="通用（不区分）">
-            <el-option label="采购" value="PURCHASE" />
-            <el-option label="销售" value="SALES" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="借方科目代码" required>
-          <el-input v-model="mappingForm.debitSubjectCode" placeholder="如 1405" />
-        </el-form-item>
-        <el-form-item label="借方科目名称">
-          <el-input v-model="mappingForm.debitSubjectName" placeholder="如 原材料" />
-        </el-form-item>
-        <el-form-item label="贷方科目代码" required>
-          <el-input v-model="mappingForm.creditSubjectCode" placeholder="如 2202" />
-        </el-form-item>
-        <el-form-item label="贷方科目名称">
-          <el-input v-model="mappingForm.creditSubjectName" placeholder="如 应付账款" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input
-            v-model="mappingForm.remark"
-            type="textarea"
-            :rows="2"
-            placeholder="可选说明"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="mappingDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="mappingSaveLoading" @click="handleMappingSave">
-          保存
-        </el-button>
+      <template #body>
+        <div class="dialog-form">
+          <UFormField label="结算方式" required>
+            <USelect v-model="mappingForm.settlementType" :items="SETTLEMENT_ITEMS" class="w-full" data-testid="mapping-settlement" />
+          </UFormField>
+          <UFormField label="业务类型">
+            <USelect v-model="businessTypeModel" :items="BUSINESS_TYPE_ITEMS" class="w-full" data-testid="mapping-business" />
+          </UFormField>
+          <UFormField label="借方科目代码" required><UInput v-model="mappingForm.debitSubjectCode" placeholder="如 1405" class="w-full" data-testid="mapping-debit-code" /></UFormField>
+          <UFormField label="借方科目名称"><UInput v-model="mappingForm.debitSubjectName" placeholder="如 原材料" class="w-full" /></UFormField>
+          <UFormField label="贷方科目代码" required><UInput v-model="mappingForm.creditSubjectCode" placeholder="如 2202" class="w-full" data-testid="mapping-credit-code" /></UFormField>
+          <UFormField label="贷方科目名称"><UInput v-model="mappingForm.creditSubjectName" placeholder="如 应付账款" class="w-full" /></UFormField>
+          <UFormField label="备注"><UTextarea v-model="remarkModel" :rows="2" placeholder="可选说明" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="mappingDialogVisible = false">取消</UButton>
+        <UButton :loading="mappingSaveLoading" data-testid="mapping-save" @click="handleMappingSave">保存</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
 <style scoped>
-.page-container {
-  padding: 20px;
-  background-color: #F4F6F9;
-  min-height: 100%;
-}
-.page-header {
-  margin-bottom: 16px;
-}
-.page-title {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1B65A8;
-  margin: 0;
-}
-.section-card {
-  margin-bottom: 16px;
-  border-radius: 10px;
-  box-shadow: 0 2px 12px rgba(27, 101, 168, 0.06);
-}
-.section-title {
-  font-size: 15px;
-  font-weight: 600;
-  color: #303133;
-}
-.card-header-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-.export-form {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.kingdee-import-form {
-  margin-top: -4px;
-}
-.ledger-report-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 10px;
-  margin: 12px 0;
-}
-.ledger-report-panel {
-  border: 1px solid #DCDFE6;
-  border-radius: 8px;
-  padding: 12px;
-  background: #fff;
-}
-.ledger-report-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-.ledger-report-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #303133;
-}
-.ledger-header-preview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.dialog-form {
-  padding: 0 8px;
-}
-.form-hint {
-  font-size: 12px;
-  color: #999;
-  margin-left: 8px;
-}
+.page { padding: var(--cs-space-4); display: grid; gap: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.export-body { padding: var(--cs-space-4) var(--cs-space-5); display: grid; gap: var(--cs-space-3); }
+.export-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--cs-space-3); }
+.export-actions { display: flex; gap: var(--cs-space-2); }
+.range { display: flex; align-items: center; gap: var(--cs-space-2); }
+.range-sep { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.ledger-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.ledger-report-panel { border: 1px solid var(--cs-border); border-radius: 8px; padding: 12px; background: var(--cs-surface); }
+.ledger-report-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.ledger-report-title { font-size: 14px; font-weight: 600; color: var(--cs-text); }
+.ledger-header-preview { display: flex; flex-wrap: wrap; gap: 6px; }
+.dialog-form { display: grid; gap: var(--cs-space-3); }
+.form-hint { font-size: 12px; color: var(--cs-muted); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>
