@@ -25,10 +25,11 @@ def _req():
                            state=SimpleNamespace(factory_id=FACTORY, role="factory_super_admin"))
 
 
-def _fact(day, pid, unit, actual, cost, yield_rate):
+def _fact(day, pid, unit, actual, cost, yield_rate, good="same"):
+    """yield_rate 是 production_batches 的存量列 (可能冻结); 读端点必须按 良品÷实际 现算。"""
     return {
         "product_type_id": pid, "unit": unit, "planned_qty": actual, "actual_qty": actual,
-        "good_qty": actual, "yield_rate": yield_rate, "material_cost": cost, "labor_cost": None,
+        "good_qty": actual if good == "same" else good, "yield_rate": yield_rate, "material_cost": cost, "labor_cost": None,
         "equipment_cost": None, "other_cost": None, "total_cost": cost, "stat_date": day,
         "batch_count": 1,
     }
@@ -98,7 +99,8 @@ async def test_summary_yield_is_weighted_by_batch_count(patched):
                 "total_cost": 10.0, "version": 1, "updated_at": None}
 
     g = patched(
-        [_fact(day1, "P1", "kg", 10.0, 10.0, 100.0)] * 1 + [_fact(day2, "P1", "kg", 10.0, 10.0, 80.0)] * 9,
+        [_fact(day1, "P1", "kg", 10.0, 10.0, 100.0)] * 1
+        + [_fact(day2, "P1", "kg", 10.0, 10.0, 80.0, good=8.0)] * 9,
         rollup=[roll(day1, 1, 100.0, 10.0), roll(day2, 9, 80.0, 90.0)],
     )
     summary = (await g.cost_structure(_req(), None, None))["data"]["summary"]
@@ -114,6 +116,62 @@ async def test_summary_yield_is_null_when_no_day_has_yield(patched):
            "avg_yield_rate": None, "total_material_cost": None, "total_labor_cost": None,
            "total_equipment_cost": None, "total_other_cost": None, "total_cost": None,
            "version": 1, "updated_at": None}
-    g = patched([_fact(day, "P1", "kg", 5.0, None, None)], rollup=[row])
+    g = patched([_fact(day, "P1", "kg", 5.0, None, None, good=None)], rollup=[row])
     summary = (await g.cost_structure(_req(), None, None))["data"]["summary"]
     assert summary["avgYieldRate"] is None and summary["yieldBatchCount"] == 0
+
+
+# ── LSM-COSTBI-B: 出成率口径统一为 良品÷实际 (与 AI 问答同一定义) ─────────────────
+
+
+def _roll(day, batches, qty, rate=80.0):
+    return {"factory_id": FACTORY, "stat_date": day, "product_type_id": None,
+            "batch_count": batches, "total_planned_qty": qty, "total_actual_qty": qty,
+            "total_good_qty": qty, "avg_yield_rate": rate, "total_material_cost": 10.0,
+            "total_labor_cost": None, "total_equipment_cost": None, "total_other_cost": None,
+            "total_cost": 10.0, "version": 1, "updated_at": None}
+
+
+async def test_frozen_yield_column_is_not_reported(patched):
+    """LSMDEMO 实测: 存量列 80.00, 良品=实际 ⇒ 按定义 100%。页面不能再给 80 而 AI 给 100。"""
+    day = date(2026, 11, 1)
+    g = patched([_fact(day, "P1", "盒", 100.0, 10.0, 80.0)] * 3, rollup=[_roll(day, 3, 300.0)])
+    summary = (await g.cost_structure(_req(), None, None))["data"]["summary"]
+    assert summary["avgYieldRate"] == pytest.approx(100.0)
+    trend = (await g.yield_trend(_req(), None, None, None))["data"]["trend"]
+    assert trend[0]["avgYieldRate"] == pytest.approx(100.0)
+    product = (await g.product_cost_compare(_req(), None, None))["data"]["products"][0]
+    assert product["avgYieldRate"] == pytest.approx(100.0)
+
+
+async def test_yield_batch_count_counts_only_batches_with_yield(patched):
+    """卤味三拼 1 批没报良品: 汇总要说「按 9 批」, 不是 10 批。"""
+    day = date(2026, 11, 1)
+    facts = [_fact(day, "P1", "盒", 100.0, 10.0, 80.0, good=90.0)] * 9         + [_fact(day, "P2", "盒", 100.0, 10.0, 80.0, good=None)]
+    g = patched(facts, rollup=[_roll(day, 10, 1000.0)])
+    data = (await g.cost_structure(_req(), None, None))["data"]
+    assert data["summary"]["batchCount"] == 10
+    assert data["summary"]["yieldBatchCount"] == 9
+    assert data["summary"]["avgYieldRate"] == pytest.approx(90.0)
+    assert data["rows"][0]["yieldBatchCount"] == 9
+    products = {p["productTypeId"]: p for p in
+                (await g.product_cost_compare(_req(), None, None))["data"]["products"]}
+    assert products["P2"]["avgYieldRate"] is None and products["P2"]["yieldBatchCount"] == 0
+    assert products["P1"]["yieldBatchCount"] == 9
+
+
+async def test_yield_trend_single_product_filters_fact_rows(patched):
+    day = date(2026, 11, 1)
+    facts = [_fact(day, "P1", "盒", 100.0, 10.0, 80.0, good=50.0),
+             _fact(day, "P2", "盒", 100.0, 10.0, 80.0, good=100.0)]
+    g = patched(facts, rollup=[dict(_roll(day, 1, 100.0), product_type_id="P1")])
+    trend = (await g.yield_trend(_req(), None, None, "P1"))["data"]["trend"]
+    assert trend[0]["avgYieldRate"] == pytest.approx(50.0) and trend[0]["yieldBatchCount"] == 1
+
+
+def test_batch_yield_rate_definition():
+    from smartbi.gold.factory_production_etl import batch_yield_rate
+    assert batch_yield_rate(90, 100) == pytest.approx(90.0)
+    assert batch_yield_rate(None, 100) is None
+    assert batch_yield_rate(5, 0) is None
+    assert batch_yield_rate(5, None) is None
