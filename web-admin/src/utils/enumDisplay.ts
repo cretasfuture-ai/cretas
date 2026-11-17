@@ -454,6 +454,33 @@ export const VOUCHER_STOCKTAKE_TYPE_LABELS: Record<string, string> = {
   SEMI_FINISHED_STOCKTAKE: '半成品盘点',
 };
 
+/**
+ * 凭证类型全集 (后端 VoucherType 枚举 12 个值 + 盘点过账来源码); 凭证详情头部和凭证列表共用, 不再露原码。
+ * TRANSFER 后端枚举里没有, 只是历史/外部数据里见过的写法, 兜底给「调拨」; 其余未知码显示「其他类型」, 不露英文。
+ * 与 api/voucher.ts 的 VOUCHER_TYPE_LABEL 必须一致 (enumDisplay.spec 钉住)。
+ */
+const VOUCHER_TYPE_TEXT: Record<string, string> = {
+  SALES_RECEIPT: '销售收款',
+  PURCHASE_PAYMENT: '采购付款',
+  INVENTORY_TRANSFER: '库存调拨',
+  EXPENSE: '报销',
+  WAGE: '工资发放',
+  RETURN: '退货',
+  DEPRECATION: '折旧',
+  PL_CLOSING: '损益结转',
+  INVENTORY_STOCKTAKE: '库存盘点',
+  COST_CARRYOVER: '销售成本结转',
+  CASH_RECEIPT: '现金收款',
+  CASH_PAYMENT: '现金付款',
+  SEMI_FINISHED_STOCKTAKE: '半成品盘点',
+  TRANSFER: '调拨',
+};
+export function voucherTypeText(code: unknown): string {
+  const c = String(code ?? '').trim();
+  if (!c) return '—';
+  return VOUCHER_TYPE_TEXT[c] ?? '其他类型';
+}
+
 /** 收款方式 (`PaymentMethod`)。CREDIT 与全局表一致写「赊账」(旧页面写「信用」)。 */
 export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   BANK_TRANSFER: '银行转账',
