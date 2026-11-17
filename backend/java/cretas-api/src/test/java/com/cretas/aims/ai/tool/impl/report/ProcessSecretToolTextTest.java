@@ -235,7 +235,8 @@ class ProcessSecretToolTextTest {
     private Map<String, Object> financeRatio(String ratioType, Map<String, Object> finance) throws Exception {
         ReportService reports = mock(ReportService.class);
         when(reports.getFinanceReport(eq(FACTORY), any(), any())).thenReturn(finance);
-        ReportFinanceRatioTool tool = new ReportFinanceRatioTool();
+        // 测的是工艺保密 / 缺数, 调用者本就看得到金额 (看不到那一侧见 FinanceRatioAmountVisibilityContractTest)
+        ReportFinanceRatioTool tool = com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(new ReportFinanceRatioTool());
         ReflectionTestUtils.setField(tool, "reportService", reports);
         return tool.doExecute(FACTORY, new HashMap<>(Map.of("ratioType", ratioType)), Map.of());
     }
@@ -246,6 +247,7 @@ class ProcessSecretToolTextTest {
         finance.put("totalCost", new BigDecimal("5555.56"));   // 只算了调用者能看的计划
         finance.put("totalAssets", new BigDecimal("1000000"));
         finance.put("totalEquity", new BigDecimal("500000"));
+        finance.put("totalLiabilities", new BigDecimal("500000"));
         if (reasonKey != null) finance.put(reasonKey, ProcessSecretLlmCostScope.note(1));
         return finance;
     }

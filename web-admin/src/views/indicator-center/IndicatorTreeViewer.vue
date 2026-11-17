@@ -42,7 +42,10 @@
             <el-tag v-if="data.weight" size="small" type="info" effect="plain">
               权重 {{ data.weight }}
             </el-tag>
-            <span v-if="hasValue(data)" class="node-value" :class="`value-${alertLevelClass(data.alertLevel)}`">
+            <el-tag v-if="data.valueHidden" size="small" type="info" effect="plain" class="node-hidden-tag">
+              无权限查看
+            </el-tag>
+            <span v-else-if="hasValue(data)" class="node-value" :class="`value-${alertLevelClass(data.alertLevel)}`">
               {{ formatValue(data.lastValue) }}{{ data.unit || '' }}
             </span>
             <el-tag
@@ -77,6 +80,7 @@
       <span>
         <span class="dot dot-green" /> 已计算 {{ valueStats.computed }}
         <span class="dot dot-yellow" /> 待配置 {{ valueStats.uncomputed }}
+        <template v-if="valueStats.hidden"> · 无权限查看 {{ valueStats.hidden }}</template>
       </span>
       <el-tooltip
         content="树视图节点状态显示数据可用性 (已计算 vs 待配置). 红黄绿告警状态见'指标列表'视图各 card."
@@ -208,11 +212,14 @@ const alertCounts = computed(() => {
 const valueStats = computed(() => {
   let computedCount = 0;
   let uncomputed = 0;
+  let hidden = 0;
   flatNodes.value.forEach(n => {
-    if (hasValue(n)) computedCount++;
+    // 按权限没给数值的不算「待配置」(那是在说没配, 不如实)
+    if (n.valueHidden) hidden++;
+    else if (hasValue(n)) computedCount++;
     else uncomputed++;
   });
-  return { computed: computedCount, uncomputed };
+  return { computed: computedCount, uncomputed, hidden };
 });
 
 // ============ helpers ============

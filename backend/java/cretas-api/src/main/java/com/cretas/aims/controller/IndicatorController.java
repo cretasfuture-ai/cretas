@@ -4,6 +4,7 @@ import com.cretas.aims.controller.dto.indicator.IndicatorDetailResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorListResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorTreeNodeResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorValueResponse;
+import com.cretas.aims.controller.dto.indicator.IndicatorVersionResponse;
 import com.cretas.aims.controller.dto.indicator.ThresholdResponse;
 import com.cretas.aims.controller.dto.indicator.IndicatorApplicabilityResponse;
 import com.cretas.aims.dto.common.ApiResponse;
@@ -19,6 +20,8 @@ import com.cretas.aims.repository.indicator.IndicatorTreeNodeRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
 import com.cretas.aims.service.indicator.IndicatorQueryService;
 import com.cretas.aims.service.indicator.FactoryIndicatorApplicabilityService;
+import com.cretas.aims.service.indicator.IndicatorValueVisibility;
+import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.AuthenticatedActor;
 import com.cretas.aims.entity.enums.DataScope;
 import com.cretas.aims.security.DataScopeContext;
@@ -100,6 +103,19 @@ public class IndicatorController {
     private final FactoryIndicatorApplicabilityService applicabilityService;
     private final DataScopeResolver dataScopeResolver;
 
+    /**
+     * 价格 / 财务可见性的唯一判定 (与响应层、/canvas-indicators、AI 指标工具同一个, 见 {@link IndicatorValueVisibility})。
+     * 金额类指标的数值、告警级别、阈值只给价格查看口径看得到的调用者; 没装配 ⇒ 一律不给 (fail closed)。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PriceFieldResponseAdvice priceView;
+
+    private java.util.function.Predicate<Indicator> valueVisibility() {
+        return IndicatorValueVisibility.forCurrentRequest(priceView);
+    }
+
+    static final String THRESHOLDS_HIDDEN_MESSAGE = "该指标的阈值按当前账号的权限配置不显示（金额类指标，需要价格查看权限）";
+
     @GetMapping("/applicability")
     @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "读取指标适用性", description = "只读配置适用性说明，不代表已有运行数据")
@@ -169,8 +185,11 @@ public class IndicatorController {
         } else {
             indicators = indicatorRepository.findActiveByFactoryId(factoryId);
         }
+        java.util.function.Predicate<Indicator> showsValue = valueVisibility();
         List<IndicatorListResponse> result = indicators.stream()
-                .map(IndicatorListResponse::fromEntity)
+                .map(ind -> showsValue.test(ind)
+                        ? IndicatorListResponse.fromEntity(ind)
+                        : IndicatorListResponse.fromEntity(ind).hideValue())
                 .collect(Collectors.toList());
         return ApiResponse.success(result);
     }
@@ -200,7 +219,31 @@ public class IndicatorController {
                 .map(IndicatorTreeNodeResponse::fromEntity)
                 .peek(root -> attachChildren(root, factoryId))
                 .collect(Collectors.toList());
+        markHiddenValues(tree, factoryId);
         return ApiResponse.success(tree);
+    }
+
+    /** 树节点不带数值; 金额类且调用者看不到的节点标 valueHidden, 前端如实说「无权限查看」而不是「待配置」。 */
+    private void markHiddenValues(List<IndicatorTreeNodeResponse> nodes, String factoryId) {
+        if (nodes.isEmpty()) {
+            return;
+        }
+        Map<String, Indicator> byId = new HashMap<>();
+        for (Indicator ind : indicatorRepository.findActiveByFactoryId(factoryId)) {
+            byId.put(ind.getId(), ind);
+        }
+        java.util.function.Predicate<Indicator> showsValue = valueVisibility();
+        java.util.ArrayDeque<IndicatorTreeNodeResponse> todo = new java.util.ArrayDeque<>(nodes);
+        while (!todo.isEmpty()) {
+            IndicatorTreeNodeResponse n = todo.pop();
+            Indicator ind = byId.get(n.getIndicatorId());
+            if (ind != null && !showsValue.test(ind)) {
+                n.setValueHidden(Boolean.TRUE);
+            }
+            if (n.getChildren() != null) {
+                todo.addAll(n.getChildren());
+            }
+        }
     }
 
     /**
@@ -250,7 +293,8 @@ public class IndicatorController {
                 .orElseThrow(() -> indicatorNotFound(code, factoryId));
         List<IndicatorThreshold> thresholds = indicatorThresholdRepository
                 .findActiveByIndicatorIdAndFactoryId(ind.getId(), factoryId);
-        return ApiResponse.success(IndicatorDetailResponse.fromEntity(ind, thresholds));
+        IndicatorDetailResponse detail = IndicatorDetailResponse.fromEntity(ind, thresholds);
+        return ApiResponse.success(valueVisibility().test(ind) ? detail : detail.hideValue());
     }
 
     // ============================================================
@@ -296,7 +340,7 @@ public class IndicatorController {
         IndicatorValueResult result = indicatorQueryService.computeForCode(code, factoryId, start, end);
         IndicatorValueResponse resp = IndicatorValueResponse.fromWithIndicator(
                 ind, result, start, end);
-        return ApiResponse.success(resp);
+        return ApiResponse.success(valueVisibility().test(ind) ? resp : resp.hideValue());
     }
 
     // ============================================================
@@ -326,7 +370,7 @@ public class IndicatorController {
     @GetMapping("/{code}/versions")
     @RequirePermission({"analytics:read", "analytics:read_write"})
     @Operation(summary = "指标历史快照 (分页)", description = "用于趋势图; 默认 50 条/页, 上限 200")
-    public ApiResponse<PageResponse<IndicatorVersion>> getVersions(
+    public ApiResponse<PageResponse<IndicatorVersionResponse>> getVersions(
             @Parameter(description = "工厂 ID", required = true, example = "F001")
             @PathVariable @NotBlank String factoryId,
             @Parameter(description = "指标编码", required = true, example = "FACTORY_YIELD_RATE")
@@ -381,7 +425,12 @@ public class IndicatorController {
         int from = (page - 1) * size;
         int to = Math.min(from + size, all.size());
         List<IndicatorVersion> pageContent = from < to ? all.subList(from, to) : List.of();
-        PageResponse<IndicatorVersion> resp = PageResponse.of(pageContent, page, size, total);
+        // 以前直接返回实体 (带 value / alertLevel); 先转 DTO, 金额类指标再按同一判定遮值与告警级别
+        boolean showValue = valueVisibility().test(ind);
+        List<IndicatorVersionResponse> rows = pageContent.stream()
+                .map(v -> IndicatorVersionResponse.fromEntity(v, showValue))
+                .collect(Collectors.toList());
+        PageResponse<IndicatorVersionResponse> resp = PageResponse.of(rows, page, size, total);
         return ApiResponse.success(resp);
     }
 
@@ -409,6 +458,10 @@ public class IndicatorController {
         Indicator ind = indicatorRepository
                 .findByCodeAndFactoryIdAndDeletedAtIsNull(code, factoryId)
                 .orElseThrow(() -> indicatorNotFound(code, factoryId));
+        if (!valueVisibility().test(ind)) {
+            // 阈值会夹出数值区间 (GREEN >= 60 => 毛利率 >= 60%), 与数值同进同出; 如实说按权限不显示, 不说「没配置」
+            return ApiResponse.success(THRESHOLDS_HIDDEN_MESSAGE, List.of());
+        }
         List<IndicatorThreshold> thresholds = indicatorThresholdRepository
                 .findActiveByIndicatorIdAndFactoryId(ind.getId(), factoryId);
         List<ThresholdResponse> result = thresholds.stream()
@@ -472,7 +525,7 @@ public class IndicatorController {
         IndicatorValueResult result = indicatorQueryService.computeForCode(code, factoryId, start, end);
         IndicatorValueResponse resp = IndicatorValueResponse.fromWithIndicator(
                 ind, result, start, end);
-        return ApiResponse.success("指标重算成功", resp);
+        return ApiResponse.success("指标重算成功", valueVisibility().test(ind) ? resp : resp.hideValue());
     }
 
     // ============================================================
