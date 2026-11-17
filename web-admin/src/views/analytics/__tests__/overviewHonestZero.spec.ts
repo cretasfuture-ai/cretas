@@ -205,101 +205,35 @@ describe('工厂侧概览 —— 三态', () => {
 });
 
 // ───────────────────────── 餐饮侧 ─────────────────────────
+// 2026-11-18: /api/smartbi/restaurant-ops/summary 后端从未提供, 餐饮概览块与其三态测试一并删除。
+// 现在餐饮租户只显示「暂不可用」, 且不发任何请求 —— 这里守住这两点, 防止死调用被加回来。
 
-const RESTAURANT_SOURCED = ['领料', '损耗', '盘点', '食材成本'] as const;
-
-const OPS_BUSY = {
-  success: true,
-  data: {
-    totals: {
-      totalRequisitions: 128, totalReqQty: 940.5, totalReqCost: 86400,
-      totalWastage: 12, totalWastageCost: 3200,
-      totalStocktaking: 6, totalShortage: 18.5, activeDays: 27,
-    },
-    top5Ingredients: [{ name: '牛腩', category: '肉类', cost: 12800 }],
-  },
-};
-const OPS_TRUE_ZERO = {
-  success: true,
-  data: {
-    totals: {
-      totalRequisitions: 0, totalReqQty: 0, totalReqCost: 0,
-      totalWastage: 0, totalWastageCost: 0,
-      totalStocktaking: 0, totalShortage: 0, activeDays: 0,
-    },
-    top5Ingredients: [],
-  },
-};
-
-describe('餐饮侧概览 —— 三态', () => {
+describe('餐饮租户概览 —— 暂不可用', () => {
   beforeEach(() => {
     factoryType.value = 'RESTAURANT';
   });
 
-  it('阳性对照: 端点正常时照常渲染真实读数', async () => {
-    pythonFetchMock.mockResolvedValue(OPS_BUSY);
+  it('明确提示暂不可用, 不渲染任何指标卡 (⛔ 不印 0)', async () => {
     const wrapper = await mountView();
 
-    expect(statValue(wrapper, '领料')).toContain('128');
-    expect(statValue(wrapper, '损耗')).toContain('¥');
-    expect(statValue(wrapper, '盘点')).toContain('18.5');
-    expect(wrapper.find('.ops-failed-alert').exists()).toBe(false);
-    expect(elMessageError).not.toHaveBeenCalled();
+    expect(wrapper.find('.el-alert').text()).toContain('餐饮运营概览暂不可用');
+    expect(wrapper.find('[data-stat]').exists()).toBe(false);
   });
 
-  it('🔴 端点抛错: ⛔ 一个 0 都不许印, 而且必须有一个用户看得见的信号', async () => {
-    pythonFetchMock.mockRejectedValue(new Error('500 Internal Server Error'));
-    const wrapper = await mountView();
+  it('不再请求 restaurant-ops, 也不发制造业概览请求', async () => {
+    await mountView();
 
-    for (const t of RESTAURANT_SOURCED) {
-      const shown = statValue(wrapper, t);
-      expect(
-        shown,
-        `「${t}」在端点失败时印出了 0/¥0 —— 店长读到的是「这个月什么都没干」, `
-          + '而真相是我们一条都没查到。',
-      ).not.toMatch(/0/);
-      expect(shown).toBe('—');
-    }
-    // ¥ 也要收掉: 「¥—」读起来仍像一个金额
-    expect(statValue(wrapper, '损耗')).not.toContain('¥');
-    // 🔴 这条 catch 原本连 toast 都没有 —— 用户完全收不到「出事了」的信号
-    expect(elMessageError, '餐饮侧读取失败时没有任何用户可见信号').toHaveBeenCalled();
-    expect(wrapper.find('.ops-failed-alert').exists(), '缺少解释「—」含义的失败横幅').toBe(true);
+    expect(pythonFetchMock).not.toHaveBeenCalled();
+    expect(apiGet).not.toHaveBeenCalled();
   });
 
-  it('🔴 端点成功且真的是 0 时必须照印 0 —— 否则上一条是恒真式', async () => {
-    pythonFetchMock.mockResolvedValue(OPS_TRUE_ZERO);
+  it('阴性对照: 工厂租户没有这条提示且照常发请求', async () => {
+    factoryType.value = 'FACTORY';
+    routeFactory();
     const wrapper = await mountView();
 
-    expect(
-      statValue(wrapper, '领料'),
-      '端点成功且返回 0, 却印成了 — 。真读数 0 必须活下来。',
-    ).toBe('0');
-    // 「损耗 ¥0」是好消息, 必须说得出口
-    expect(statValue(wrapper, '损耗')).toBe('¥0');
-    expect(statValue(wrapper, '盘点')).toBe('0');
-    expect(wrapper.find('.ops-failed-alert').exists()).toBe(false);
-    expect(elMessageError).not.toHaveBeenCalled();
-  });
-
-  it('success:false 也算读不到, ⛔ 不许把初始 0 当成读数留在界面上', async () => {
-    pythonFetchMock.mockResolvedValue({ success: false, message: '租户无权限' });
-    const wrapper = await mountView();
-
-    expect(statValue(wrapper, '领料')).toBe('—');
-    expect(wrapper.find('.ops-failed-alert').exists()).toBe(true);
-    expect(elMessageError).toHaveBeenCalled();
-  });
-
-  it('Top 食材那一格失败时不许把成本印成 ¥0', async () => {
-    pythonFetchMock.mockRejectedValue(new Error('boom'));
-    const wrapper = await mountView();
-
-    const card = statCard(wrapper, 'Top 食材');
-    expect(card.exists()).toBe(true);
-    expect(
-      card.find('.stat-footer').text().trim(),
-      '读不到时印「¥0」= 把「不知道」说成「零成本」',
-    ).not.toContain('¥0');
+    expect(wrapper.text()).not.toContain('餐饮运营概览暂不可用');
+    expect(apiGet).toHaveBeenCalled();
+    expect(wrapper.find('[data-stat]').exists()).toBe(true);
   });
 });
