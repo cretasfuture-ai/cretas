@@ -31,7 +31,11 @@ const financeData = ref<{
   laborCost?: number;
   equipmentCost?: number;
   otherCost?: number;
-  dailyStats?: Array<{ date: string; revenue: number; cost: number; profit: number }>;
+  /** 有收入但成本缺数 (如销售数据没录成本) — 页面提示原因 */
+  costMissing?: boolean;
+  /** 只有成本没有收入的期 (未计入卡片合计) — 页面提示原因 */
+  revenueMissingPeriods?: string[];
+  dailyStats?: Array<{ date: string; revenue: number | null; cost: number | null; profit: number | null }>;
 }>({});
 
 // 后端响应类型 (来自 GET /smart-bi/analysis/finance?analysisType=profit/cost)
@@ -49,7 +53,8 @@ interface ChartConfigDTO<T = Record<string, unknown>> {
 }
 interface ProfitAnalysisResponse {
   metrics?: MetricResultDTO[];
-  trendChart?: ChartConfigDTO<{ period: string; revenue: number; cost: number; grossProfit: number; netProfit?: number; grossMargin: number | null }>;
+  // revenue/cost 缺数时为 null (旧后端销售回退路径直接不给这两个字段)
+  trendChart?: ChartConfigDTO<{ period: string; revenue?: number | null; cost?: number | null; grossProfit: number | null; netProfit?: number | null; grossMargin: number | null }>;
 }
 interface CostAnalysisResponse {
   structureChart?: ChartConfigDTO<{ category?: string; name?: string; value: number; percentage?: number }>;
@@ -107,31 +112,57 @@ const statCards = computed<Array<{
 ]);
 
 // 成本分解表格
-const costBreakdown = computed(() => [
-  { name: '原材料成本', value: financeData.value.materialCost ?? 0, percentage: getPercentage('material') },
-  { name: '人工成本', value: financeData.value.laborCost ?? 0, percentage: getPercentage('labor') },
-  { name: '设备成本', value: financeData.value.equipmentCost ?? 0, percentage: getPercentage('equipment') },
-  { name: '其他成本', value: financeData.value.otherCost ?? 0, percentage: getPercentage('other') }
-]);
+// 分母 = 总成本 (卡片同一个数); 构成合计小于总成本时, 加一行「未拆分」显示差额,
+// 否则只录了原材料时会显示「原材料占 100%」(#1809 复审 2 轮低2)。
+// 总成本缺数 → 占比一律「—」(复审 H1: 曾 `totalCost ?? 1` 除以 1 → 几百万 %)。
+// 构成合计大于总成本 (构成含只有成本没有收入的期, 卡片总成本不含) → 用构成合计作分母, 不超过 100%。
+const breakdownTotal = computed(() => {
+  const d = financeData.value;
+  return (d.materialCost ?? 0) + (d.laborCost ?? 0) + (d.equipmentCost ?? 0) + (d.otherCost ?? 0);
+});
+const shareDenominator = computed((): number | null => {
+  const total = financeData.value.totalCost;
+  if (total == null) return null;
+  return Math.max(total, breakdownTotal.value);
+});
+const unallocatedCost = computed((): number => {
+  const total = financeData.value.totalCost;
+  return total != null && total > breakdownTotal.value ? total - breakdownTotal.value : 0;
+});
+
+const costBreakdown = computed(() => {
+  const rows = [
+    { name: '原材料成本', value: financeData.value.materialCost ?? 0, percentage: sharePercent(financeData.value.materialCost) },
+    { name: '人工成本', value: financeData.value.laborCost ?? 0, percentage: sharePercent(financeData.value.laborCost) },
+    { name: '设备成本', value: financeData.value.equipmentCost ?? 0, percentage: sharePercent(financeData.value.equipmentCost) },
+    { name: '其他成本', value: financeData.value.otherCost ?? 0, percentage: sharePercent(financeData.value.otherCost) },
+  ];
+  if (unallocatedCost.value > 0) {
+    rows.push({ name: '未拆分', value: unallocatedCost.value, percentage: sharePercent(unallocatedCost.value) });
+  }
+  return rows;
+});
 
 // 当 4 个分类全部为 0 时, 显示空状态而不是 4 行 0.00 / 0.0%
 // (chart audit P0-2 副发现: structureChart.data 真空时 backend 返 [], FE 应区分
 // "0 数据" vs "全分类都是 0" — 前者是数据真空, 后者可能是分类未配置或时间窗内无成本)
-const hasCostBreakdown = computed(() =>
-  costBreakdown.value.some((row) => row.value > 0),
-);
+const hasCostBreakdown = computed(() => breakdownTotal.value > 0);
 
-function getPercentage(type: string) {
-  const total = financeData.value.totalCost ?? 1;
-  const value = financeData.value[`${type}Cost` as keyof typeof financeData.value] as number ?? 0;
-  return total > 0 ? ((value / total) * 100).toFixed(1) : '0.0';
+function sharePercent(value: number | undefined): string {
+  const denominator = shareDenominator.value;
+  if (denominator == null) return '—';
+  return denominator > 0 ? (((value ?? 0) / denominator) * 100).toFixed(1) : '0.0';
+}
+
+function getPercentage(type: string): string {
+  return sharePercent(financeData.value[`${type}Cost` as keyof typeof financeData.value] as number | undefined);
 }
 
 // 财务数据是否为空 (无营收/成本/明细) — 用于默认期落地自动展开判断
 function isFinanceDataEmpty(): boolean {
   const d = financeData.value;
-  const hasRevenue = !!d.totalRevenue;
-  const hasCost = !!d.totalCost;
+  const hasRevenue = d.totalRevenue != null && d.totalRevenue !== 0;
+  const hasCost = d.totalCost != null && d.totalCost !== 0;
   const hasStats = Array.isArray(d.dailyStats) && d.dailyStats.length > 0;
   return !hasRevenue && !hasCost && !hasStats;
 }
@@ -206,29 +237,47 @@ function mapResponses(
     const m = metrics.find(x => x.metricCode === code);
     return m ? m.value : undefined;
   };
-  // 毛利额 (元) — backend GROSS_PROFIT
-  const gp = findMetric('GROSS_PROFIT');
-  out.grossProfit = gp != null ? Number(gp) : undefined;
-  // 毛利率 (%) — backend GROSS_MARGIN. 后端可能返 null (毛利率>100% 或 <-100% 时，P0-1 Bug C 修复)
-  const gm = findMetric('GROSS_MARGIN');
-  out.profitMargin = gm != null ? Number(gm) : null;
-
   // --- Profit trendChart → totalRevenue/totalCost/dailyStats ---
+  // 缺数 ≠ 0 (字段缺失或 null 都算缺数), 与后端 metrics 同一口径 (PR #1809 复审 M2):
+  //  - 任一期有收入没成本 → 总成本/毛利/利润率「—」, 总收入照常给出, 提示缺成本。
+  //  - 只有成本没有收入的期 → 不计入四张卡片 (后端毛利也只算收入、成本都有的期), 提示原因。
+  //  - 合计只加收入、成本都有的期, 所以 总收入 - 总成本 == 毛利。
+  // 2026-11-17: 后端销售回退路径曾不给 revenue/cost, 这里按 0 加总 → 总收入 0、总成本 0。
   const profitTrend = profitData?.trendChart?.data ?? [];
-  let totalRevenue = 0;
-  let totalCost = 0;
-  const dailyStats: Array<{ date: string; revenue: number; cost: number; profit: number }> = [];
-  for (const p of profitTrend) {
-    const revenue = Number(p.revenue ?? 0);
-    const cost = Number(p.cost ?? 0);
-    const profit = Number(p.grossProfit ?? 0);
-    totalRevenue += revenue;
-    totalCost += cost;
-    dailyStats.push({ date: p.period, revenue, cost, profit });
+  const costMissingPeriods = profitTrend.filter(p => p.revenue != null && p.cost == null);
+  const revenueMissingPeriods = profitTrend.filter(p => p.revenue == null && p.cost != null);
+  const matched = profitTrend.filter(p => p.revenue != null && p.cost != null);
+  const sum = (rows: typeof profitTrend, field: 'revenue' | 'cost') =>
+    rows.reduce((acc, p) => acc + Number(p[field]), 0);
+  out.costMissing = costMissingPeriods.length > 0;
+  out.revenueMissingPeriods = revenueMissingPeriods.map(p => p.period);
+  if (out.costMissing) {
+    const withRevenue = profitTrend.filter(p => p.revenue != null);
+    out.totalRevenue = sum(withRevenue, 'revenue');
+    out.totalCost = undefined;
+  } else if (matched.length > 0) {
+    out.totalRevenue = sum(matched, 'revenue');
+    out.totalCost = sum(matched, 'cost');
+  } else {
+    out.totalRevenue = undefined;
+    out.totalCost = undefined;
   }
-  out.totalRevenue = totalRevenue;
-  out.totalCost = totalCost;
-  out.dailyStats = dailyStats;
+  out.dailyStats = profitTrend.map(p => ({
+    date: p.period,
+    revenue: p.revenue ?? null,
+    cost: p.cost ?? null,
+    profit: p.grossProfit ?? null,
+  }));
+
+  // 毛利额 (元) / 毛利率 (%) — backend GROSS_PROFIT / GROSS_MARGIN。
+  // 只有收入、成本都有数时才显示, 保证四张卡片同一口径 (毛利 = 收入 - 成本);
+  // 否则毛利、利润率一律「—」, 不出现「收入 0 / 毛利 29,706 / 利润率 100%」。
+  // GROSS_MARGIN 也可能因 >100% 或 <-100% 被后端置 null (P0-1 Bug C)。
+  const totalsKnown = out.totalRevenue != null && out.totalCost != null;
+  const gp = findMetric('GROSS_PROFIT');
+  out.grossProfit = totalsKnown && gp != null ? Number(gp) : undefined;
+  const gm = findMetric('GROSS_MARGIN');
+  out.profitMargin = totalsKnown && gm != null ? Number(gm) : null;
 
   // --- Cost structureChart → materialCost/laborCost/equipmentCost/otherCost ---
   // 后端 PIE data items 来自 createPieDataItem(category, value, total) — 字段是 category/value/percentage
@@ -288,21 +337,23 @@ const barColor = (p: string) => (parseFloat(p) > 50 ? 'var(--cs-danger)' : parse
 
 function handleExport() {
   const data = financeData.value;
-  if (!data || (!data.totalRevenue && !data.totalCost)) {
+  if (!data || (data.totalRevenue == null && data.totalCost == null)) {
     ElMessage.warning('暂无数据可导出');
     return;
   }
   const [startDate, endDate] = dateRange.value;
   const headers = ['项目', '金额(元)', '占比(%)'];
+  const orMissing = (v: number | null | undefined) => (v == null ? '缺数据' : String(v));
   const rows = [
-    ['总收入', String(data.totalRevenue ?? 0), '-'],
-    ['总成本', String(data.totalCost ?? 0), '100.0'],
+    ['总收入', orMissing(data.totalRevenue), '-'],
+    ['总成本', orMissing(data.totalCost), data.totalCost == null ? '-' : '100.0'],
     ['  原材料成本', String(data.materialCost ?? 0), getPercentage('material')],
     ['  人工成本', String(data.laborCost ?? 0), getPercentage('labor')],
     ['  设备成本', String(data.equipmentCost ?? 0), getPercentage('equipment')],
     ['  其他成本', String(data.otherCost ?? 0), getPercentage('other')],
-    ['毛利润', String(data.grossProfit ?? 0), '-'],
-    ['利润率(%)', data.profitMargin == null ? 'N/A' : data.profitMargin.toFixed(1), '-']
+    ...(unallocatedCost.value > 0 ? [['  未拆分', String(unallocatedCost.value), sharePercent(unallocatedCost.value)]] : []),
+    ['毛利润', orMissing(data.grossProfit), '-'],
+    ['利润率(%)', data.profitMargin == null ? '缺数据' : data.profitMargin.toFixed(1), '-']
   ];
   const csvContent = '\uFEFF' + [
     [`财务报表 (${formatDate(startDate)} ~ ${formatDate(endDate)})`],
@@ -340,6 +391,12 @@ function handleExport() {
         <template v-if="canViewPrice">
           <UAlert v-if="loadFailed" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-load-error"
             title="财务数据暂时没取到，下方金额显示为「—」，请调整日期范围重试。" />
+          <UAlert v-else-if="financeData.costMissing" color="warning" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-cost-missing"
+            title="所选期间的数据没有成本，总成本、毛利润和利润率暂时算不出来，显示为「—」。"
+            description="上传的销售/财务 Excel 补上成本列后即可计算。" />
+          <UAlert v-if="!loadFailed && financeData.revenueMissingPeriods?.length" color="warning" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-revenue-missing"
+            :title="`${financeData.revenueMissingPeriods.join('、')} 只有成本、没有收入数据，未计入下方合计和毛利。`"
+            description="补上这些期间的收入数据后即可一并计算。" />
 
           <!-- 统计卡片 -->
           <div class="stat-cards" data-testid="reports-stat-cards">
@@ -361,10 +418,11 @@ function handleExport() {
           <UTable v-if="hasCostBreakdown" :data="costBreakdown" :columns="costColumns" class="cs-table" data-testid="reports-cost-table">
             <template #value-cell="{ row }"><span class="num">{{ row.original.value.toLocaleString('zh-CN', { minimumFractionDigits: 2 }) }}</span></template>
             <template #percentage-cell="{ row }">
-              <div class="bar-wrap">
+              <div v-if="row.original.percentage !== '—'" class="bar-wrap">
                 <div class="bar"><div class="bar-fill" :style="{ width: `${Math.min(100, parseFloat(row.original.percentage))}%`, background: barColor(row.original.percentage) }" /></div>
                 <span class="num">{{ row.original.percentage }}%</span>
               </div>
+              <span v-else class="num" data-testid="reports-cost-share-missing">—</span>
             </template>
           </UTable>
           <p v-else class="empty" data-testid="reports-cost-empty">该期无成本细分数据 — 可在「成本分析」页面查看明细或检查 Excel 上传是否包含 原材料 / 人工 / 制造费用 列</p>
