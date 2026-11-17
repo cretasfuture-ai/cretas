@@ -115,8 +115,9 @@ describe('销售侧私有状态表与后端枚举对齐（客户点名的两处�
   it('车辆字典：未登记的码走 enumLabel，不许把英文原码吐给用户', () => {
     expect(vehiclePage).toContain("import { enumLabel } from '@/utils/enumDisplay'");
     // 被守的行为：兜底不是 `|| row.status`。
-    expect(vehiclePage).toContain('enumLabel(row.status)');
+    expect(vehiclePage).toContain('enumLabel(row.original.status)');
     expect(vehiclePage, '仍在把后端英文原码当兜底显示').not.toContain('?.text || row.status');
+    expect(vehiclePage, '仍在把后端英文原码当兜底显示').not.toContain('?.text || row.original.status');
   });
 
   it('销售付款申请：状态清单必须覆盖 PaymentRequestStatus 全部取值', () => {

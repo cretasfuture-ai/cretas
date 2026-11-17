@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { reactive, nextTick } from 'vue';
+import { reactive, nextTick, defineComponent, h } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
-import ElementPlus from 'element-plus';
+import { nuxtUiStubs } from '@/views/procurement/suppliers/__tests__/nuxtUiStubs';
 import FormalDeliveries from '../FormalDeliveries.vue';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn(), push: vi.fn(), auth: { factoryId: 'A' } }));
@@ -10,7 +10,16 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock('@/store/modules/auth', () => ({ useAuthStore: () => mocks.auth }));
 const result = (content: object[], totalElements = content.length) => ({ success: true, data: { content, totalElements } });
 const mother = { id: 'delivery-id', deliveryNumber: 'DEL-M', salesOrderId: 'order-id', recordRole: 'MASTER', status: 'PENDING_SPLIT', items: [{ id: 1, productName: '鱼', deliveredQuantity: 12, unit: 'kg' }, { id: 2, productName: '虾', deliveredQuantity: 3, unit: '箱' }] };
-const render = () => mount(FormalDeliveries, { global: { plugins: [ElementPlus] } });
+// vitest 无 Nuxt UI 插件: UTable 沿用共享桩 (真渲染每行每列); UButton 要把 disabled 落到 DOM, UPagination 要能 emit。
+const UButton = defineComponent({
+  name: 'UButton', props: { disabled: { type: Boolean, default: false } }, emits: ['click'],
+  setup: (p, { slots, emit }) => () => h('button', { disabled: p.disabled || undefined, onClick: () => emit('click') }, slots.default?.()),
+});
+const UPagination = defineComponent({
+  name: 'UPagination', props: { page: { type: Number, default: 1 }, total: { type: Number, default: 0 } }, emits: ['update:page'],
+  setup: () => () => h('nav'),
+});
+const render = () => mount(FormalDeliveries, { global: { stubs: { ...nuxtUiStubs, UButton, UPagination } } });
 
 beforeEach(() => { mocks.get.mockReset(); mocks.push.mockReset(); mocks.auth = reactive({ factoryId: 'A' }); });
 describe('formal delivery read model', () => {
@@ -23,7 +32,7 @@ describe('formal delivery read model', () => {
     const buttons = wrapper.findAll('button').filter(button => button.text() === '查看销售订单');
     await buttons[0].trigger('click'); expect(mocks.push).toHaveBeenCalledWith('/sales/orders/order-id');
     expect(buttons[2].attributes('disabled')).toBeDefined();
-    wrapper.findComponent({ name: 'ElPagination' }).vm.$emit('current-change', 2); await flushPromises();
+    wrapper.findComponent({ name: 'UPagination' }).vm.$emit('update:page', 2); await flushPromises();
     expect(mocks.get).toHaveBeenLastCalledWith('/A/sales/deliveries', { params: { page: 2, size: 10 } });
     expect(wrapper.find('input').exists()).toBe(false);
   });

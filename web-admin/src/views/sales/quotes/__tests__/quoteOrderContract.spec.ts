@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { canOrderFromQuote } from '../quoteOrderContract';
 
 const source=readFileSync(resolve(dirname(fileURLToPath(import.meta.url)),'../list.vue'),'utf8');
-const button=source.match(/<el-button v-if="canWrite && canOrderFromQuote[\s\S]*?按报价下单<\/el-button>/)?.[0];
+const button=source.match(/<UButton v-if="canWrite && canOrderFromQuote[\s\S]*?按报价下单<\/UButton>/)?.[0];
 if(!button)throw new Error('Missing real quote-to-order action');
 describe('approved quote to sales order',()=>{
   it.each(['PENDING_QUOTE','PENDING_APPROVAL','REJECTED','EXPIRED'])('blocks %s',status=>{
@@ -20,7 +20,7 @@ describe('approved quote to sales order',()=>{
   });
   it.each([true,false])('real button respects sales write permission %s',canWrite=>{
     const calls: unknown[]=[];
-    const w=mount(defineComponent({template:button,setup:()=>({canWrite,row:{id:'Q-62',status:'APPROVED'},canOrderFromQuote,toDateString:()=> '2026-10-17',router:{push:(r:unknown)=>calls.push(r)}})}),{global:{stubs:{ElButton:{template:'<button><slot /></button>'}}}});
+    const w=mount(defineComponent({template:button,setup:()=>({canWrite,row:{original:{id:'Q-62',status:'APPROVED'}},canOrderFromQuote,toDateString:()=> '2026-10-17',router:{push:(r:unknown)=>calls.push(r)}})}),{global:{stubs:{UButton:{emits:['click'],template:"<button @click=\"$emit('click')\"><slot /></button>"}}}});
     expect(w.find('button').exists()).toBe(canWrite);
     if(canWrite){w.find('button').trigger('click');expect(calls).toEqual([{path:'/sales/orders/new',query:{quoteId:'Q-62'}}]);}
   });

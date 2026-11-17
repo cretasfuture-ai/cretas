@@ -8,9 +8,10 @@ import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { get, post, put, del } from '@/api/request';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
+import { ElMessage } from 'element-plus';
 import type { TableRow } from '@/types/api';
+import type { CsTableColumn } from '@/types/csTable';
+import SalesConfirmModal from '../components/SalesConfirmModal.vue';
 import { enumLabel } from '@/utils/enumDisplay';
 
 const authStore = useAuthStore();
@@ -18,6 +19,7 @@ const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
 const canWrite = computed(() => permissionStore.canWrite('warehouse'));
 
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const loading = ref(false);
 const tableData = ref<TableRow[]>([]);
 
@@ -87,11 +89,12 @@ async function handleSave() {
 }
 
 async function handleDelete(row: TableRow) {
+  const ok = await confirmRef.value!.ask({ title: '删除确认', message: `确定删除车辆「${row.plateNumber}」?`, confirmText: '删除', danger: true });
+  if (ok === null) return;
   try {
-    await ElMessageBox.confirm(`确定删除车辆「${row.plateNumber}」?`, '删除确认', { type: 'warning' });
     const res = await del(`/${factoryId.value}/vehicles/${row.id}`);
     if (res.success) { ElMessage.success('删除成功'); loadData(); }
-  } catch { /* cancel */ }
+  } catch (e) { console.error(e); }
 }
 
 /**
@@ -117,98 +120,92 @@ async function handleDelete(row: TableRow) {
  * 权威来源 3 处已核对一致: Java 枚举 `Vehicle.VehicleStatus`、
  * RN `vehicleApiClient.ts` 的 `Vehicle['status']` 联合类型、本表。
  */
-const statusMap: Record<string, { text: string; type: string }> = {
+const statusMap: Record<string, { text: string; type: 'success' | 'warning' | 'neutral' }> = {
   available: { text: '可用', type: 'success' },
   loading: { text: '装货中', type: 'warning' },  // 出货时被锁定
   dispatched: { text: '已发车', type: 'warning' },
-  maintenance: { text: '维护中', type: 'info' },
+  maintenance: { text: '维护中', type: 'neutral' },
 };
+const STATUS_ITEMS = Object.entries(statusMap).map(([value, meta]) => ({ label: meta.text, value }));
+const columns: CsTableColumn<TableRow>[] = [
+  { accessorKey: 'plateNumber', header: '车牌号' },
+  { accessorKey: 'vehicleType', header: '车型' },
+  { accessorKey: 'driver', header: '司机' },
+  { accessorKey: 'phone', header: '联系电话' },
+  { id: 'capacity', header: '载重 (kg)', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'currentLoad', header: '当前载重 (kg)', meta: { class: { th: 'text-right', td: 'text-right' } } },
+  { id: 'status', header: '状态' },
+  { id: 'actions', header: '操作' },
+];
+function statusColor(status: unknown) { return statusMap[String(status)]?.type ?? 'neutral'; }
 </script>
 
 <template>
-  <div class="page-wrapper">
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-header">
-          <div class="header-left">
-            <span class="page-title">车辆字典</span>
-            <span class="data-count">出货 / 调拨时可选的车辆列表</span>
-          </div>
-          <div class="header-right">
-            <el-button :icon="Refresh" @click="loadData">刷新</el-button>
-            <el-button v-if="canWrite" type="primary" :icon="Plus" @click="openCreate">新建车辆</el-button>
-          </div>
+  <div class="page">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>车辆字典</h2>
+        <span class="count">出货 / 调拨时可选的车辆列表</span>
+        <div class="head-actions">
+          <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" data-testid="vehicle-refresh" @click="loadData">刷新</UButton>
+          <UButton v-if="canWrite" icon="i-lucide-plus" data-testid="vehicle-create" @click="openCreate">新建车辆</UButton>
         </div>
-      </template>
+      </header>
 
-      <el-table v-loading="loading" :data="tableData" stripe>
-        <el-table-column prop="plateNumber" label="车牌号" width="140" />
-        <el-table-column prop="vehicleType" label="车型" width="120" />
-        <el-table-column prop="driver" label="司机" width="120" />
-        <el-table-column prop="phone" label="联系电话" width="140" />
-        <el-table-column prop="capacity" label="载重 (kg)" width="120" />
-        <el-table-column prop="currentLoad" label="当前载重 (kg)" width="140" />
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="(statusMap[row.status]?.type as any) || 'info'" size="small">
-              {{ statusMap[row.status]?.text || enumLabel(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="canWrite" link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button v-if="canWrite" link type="danger" :icon="DeleteIcon" @click="handleDelete(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-    </el-card>
+      <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="vehicle-table">
+        <template #empty>暂无车辆</template>
+        <template #capacity-cell="{ row }"><span class="num">{{ row.original.capacity ?? '—' }}</span></template>
+        <template #currentLoad-cell="{ row }"><span class="num">{{ row.original.currentLoad ?? '—' }}</span></template>
+        <template #status-cell="{ row }">
+          <UBadge :color="statusColor(row.original.status)" variant="soft">{{ statusMap[row.original.status as string]?.text || enumLabel(row.original.status) }}</UBadge>
+        </template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton v-if="canWrite" variant="link" size="xs" icon="i-lucide-pencil" @click="openEdit(row.original)">编辑</UButton>
+            <UButton v-if="canWrite" color="error" variant="link" size="xs" icon="i-lucide-trash-2" @click="handleDelete(row.original)">删除</UButton>
+          </div>
+        </template>
+      </UTable>
+    </section>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="500px" destroy-on-close>
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="车牌号" required>
-          <el-input v-model="form.plateNumber" placeholder="如 沪 A12345" />
-        </el-form-item>
-        <el-form-item label="车型">
-          <el-input v-model="form.vehicleType" placeholder="如 厢式货车 / 冷藏车" />
-        </el-form-item>
-        <el-form-item label="司机姓名">
-          <el-input v-model="form.driver" />
-        </el-form-item>
-        <el-form-item label="司机电话">
-          <el-input v-model="form.phone" />
-        </el-form-item>
-        <el-form-item label="载重 (kg)">
-          <el-input-number v-model="form.capacity" :min="0" :precision="2" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="form.status" style="width: 100%">
+    <UModal v-model:open="dialogVisible" :title="dialogTitle" description="车辆信息" :ui="{ content: 'max-w-[500px]', description: 'sr-only', footer: 'justify-end' }">
+      <template #body>
+        <div class="form">
+          <UFormField label="车牌号" required><UInput v-model="form.plateNumber" placeholder="如 沪 A12345" class="w-full" data-testid="vehicle-plate" /></UFormField>
+          <UFormField label="车型"><UInput v-model="form.vehicleType" placeholder="如 厢式货车 / 冷藏车" class="w-full" /></UFormField>
+          <UFormField label="司机姓名"><UInput v-model="form.driver" class="w-full" /></UFormField>
+          <UFormField label="司机电话"><UInput v-model="form.phone" class="w-full" /></UFormField>
+          <UFormField label="载重 (kg)">
+            <UInputNumber v-model="form.capacity" :min="0" :step-snapping="false" :increment="false" :decrement="false" :format-options="{ maximumFractionDigits: 2 }" class="w-full" />
+          </UFormField>
+          <UFormField label="状态">
             <!-- 选项由 statusMap 生成 —— 那张表已经和后端 VehicleStatus 枚举对齐,
                  手写第二份必然再漂一次(上一次就是这么坏的)。 -->
-            <el-option
-              v-for="(meta, code) in statusMap"
-              :key="code"
-              :label="meta.text"
-              :value="code"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="form.notes" type="textarea" :rows="2" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="dialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleSave">保存</el-button>
+            <USelect v-model="form.status" :items="STATUS_ITEMS" class="w-full" />
+          </UFormField>
+          <UFormField label="备注"><UTextarea v-model="form.notes" :rows="2" class="w-full" /></UFormField>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer>
+        <UButton color="neutral" variant="outline" @click="dialogVisible = false">取消</UButton>
+        <UButton :loading="submitting" data-testid="vehicle-save" @click="handleSave">保存</UButton>
+      </template>
+    </UModal>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
 <style scoped>
-.page-wrapper { padding: 20px; }
-.card-header { display: flex; justify-content: space-between; align-items: center; }
-.header-left { display: flex; align-items: baseline; gap: 12px; }
-.page-title { font-size: 18px; font-weight: 600; }
-.data-count { font-size: 13px; color: #909399; }
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.form { display: grid; gap: var(--cs-space-3); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.num { font-variant-numeric: tabular-nums; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

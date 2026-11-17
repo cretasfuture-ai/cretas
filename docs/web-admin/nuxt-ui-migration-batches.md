@@ -44,6 +44,7 @@
 - 第 5 批：销售订单/客户（销售 45 页，按 订单 / 客户 / 报价 / 发运 分 3 小批）
   - 5a/5b（#1776、#1787，已合）：销售订单类。
   - **5c 客户详情页签（已完成，7 个文件）**：`sales/customers/detail/tabs/` 下的 `QuotesTab`、`ProductsTab`、`ItemStatsTab`、`InvoicesTab`、`PaymentsTab`、`ReturnsTab`、`AttachmentsTab`，整页换 `UTable` / `UBadge` / `UEmpty` / `UAlert` / `UPagination` / `UButton`，新增 `data-testid`（`customer-*-table`）；价格/金额列无权限仍显示 `****`（不显示 0），商品统计/产品的可排序表头沿用销售订单页的写法。spec 改用 `detail/tabs/__tests__/customerTabStubs.ts`（通用桩 + UEmpty/UAlert/UPagination）。留下：`sales/customers/list.vue`（862 行，含新增/编辑 Element 弹窗）、`tracking/list.vue`（新建弹窗 `create-dialog.vue` 与 `ElMessageBox` 删除确认是 Element，需整体迁）、`TrackingTab`、`SalesUserHistoryTab`（带变更业务员 `el-dialog`/`el-form`）、`customerFormProgressive.source.spec.ts` 里的 `el-table` 仅是被守的源码字符串，不是页面。客户详情外框的 `el-tabs` 未动。
+  - **5d：销售报价/发运/零散列表（5 页）**：`sales/quotes/list`（单价/毛利率整列按 canViewPrice 去掉）、`vehicles/list`、`reminders/MyReminders`、`needs/list`、`shipments/FormalDeliveries`。确认/带输入的确认（原 `ElMessageBox`）统一走新组件 `sales/components/SalesConfirmModal.vue`（UModal，`ask()` 返回 Promise，取消为 null）。`payment-requests`、`customer-tracking` 已无 `<el-table`，未动；`LegacyShipments`、`orders/*`、`returns/*`、`customers/*` 不在本批。
 - 之后：财务、人事、系统、smart-bi、平台编辑器（编辑器类整页多为画布，最后评估是否迁）。
 
 不在批次内：`platform` 里的流程/画布编辑器、ECharts 图表本身（保留）。
