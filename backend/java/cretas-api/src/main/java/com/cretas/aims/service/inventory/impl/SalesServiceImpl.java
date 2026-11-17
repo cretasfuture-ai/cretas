@@ -3769,9 +3769,9 @@ public class SalesServiceImpl implements SalesService {
                     throw new IllegalStateException("无法自动挂账: 销售订单不存在 " + record.getSalesOrderId());
                 }
                 if (!hasText(order.getCustomerId())) {
-                    // Steve 2026-11-16 口径: 没有客户的订单按正常跳过 —— 不写待补账、不告警, 只留 INFO。
-                    log.info("应收自动挂账跳过(订单无客户, 按正常跳过不写待补账): factoryId={}, salesOrderId={}, deliveryId={}",
-                            factoryId, order.getId(), record.getId());
+                    // Steve 2026-11-16 复核口径: 没有客户的订单仍按失败处理(待补账 + 告警), 不静默;
+                    // (#1789 曾把它改成正常跳过, 本次按最终口径恢复)。
+                    throw new IllegalStateException("无法自动挂账: 销售订单没有客户 " + order.getId());
                 } else {
                     // 🔴🔒 2026-08-28 会计正确性修复: 应收金额必须反映【实发】, 不是【订单】。
                     //
@@ -3837,8 +3837,16 @@ public class SalesServiceImpl implements SalesService {
                         if (isKnownZeroShipmentValue(order, record, shippedValue)) {
                             // Steve 2026-11-16 口径: 零金额发货(赠品/样品)按正常跳过 —— 不写待补账、不告警。
                             // 只放开真赠品/样品: 发货行与订单行单价都确定为 0; 缺价/误录/空明细算出的 0 仍按失败处理。
-                            log.info("应收自动挂账跳过(零金额发货, 按正常跳过不写待补账): factoryId={}, salesOrderId={}, deliveryId={}, 实发含税={}",
+                            log.info("应收自动挂账跳过(零金额发货, 无需挂账): factoryId={}, salesOrderId={}, deliveryId={}, 实发含税={}",
                                     factoryId, order.getId(), record.getId(), shippedValue);
+                            // 追溯: 在发货事务内留一行 RESOLVED / ZERO_AMOUNT(不告警、不进默认的待处理列表),
+                            // 以后查「这单为什么没有应收」有据可循, 不沉默丢失。
+                            if (receivablePendingService != null) {
+                                receivablePendingService.recordNoPostingNeeded(factoryId, record.getId(),
+                                        record.getDeliveryNumber(), record.getSalesOrderId(), order.getCustomerId(),
+                                        order.getCreatedBy(), shippedValue, userId, "ZERO_AMOUNT",
+                                        "零金额发货(发货行与订单行单价均为 0, 赠品/样品), 无需挂账");
+                            }
                         } else {
                             postedShippedValue = shippedValue;
                             final SalesOrder postOrder = order;

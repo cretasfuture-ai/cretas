@@ -71,7 +71,7 @@ import static org.mockito.Mockito.when;
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @Import({ArPostingPendingService.class})
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@DisplayName("发货挂账: 零金额 / 无客户按正常跳过, 不写待补账不告警; 真实失败仍待补账 + 告警")
+@DisplayName("发货挂账: 零金额=无需挂账(留 RESOLVED/ZERO_AMOUNT 追溯行, 不告警); 无客户订单与真实失败仍待补账 + 告警")
 class ArPostingSkipZeroAndNoCustomerContractTest {
 
     private static final String F = "F-ARSKIP-1";
@@ -107,7 +107,14 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
 
             assertThat(shipped.getStatus()).as(zero + ": 发货成功").isEqualTo(SalesDeliveryStatus.SHIPPED);
             assertThat(shipped.getItems()).as("确实是有明细的发货").hasSize(1);
-            assertThat(pendingRepo.findAll()).as(zero + ": 不写待补账(连意图行也没有)").isEmpty();
+            assertThat(openPending()).as(zero + ": 没有待处理(PENDING)的待补账").isEmpty();
+            var trace = pendingRepo.findAll();
+            assertThat(trace).as(zero + ": 留一行追溯记录").hasSize(1);
+            assertThat(trace.get(0).getStatus()).isEqualTo(ArPostingPendingStatus.RESOLVED);
+            assertThat(trace.get(0).getFailureReason()).startsWith("ZERO_AMOUNT:");
+            assertThat(trace.get(0).getDeliveryId()).isEqualTo(DELIVERY_ID);
+            assertThat(trace.get(0).getResolvedAt()).isNotNull();
+            assertThat(trace.get(0).getAmount()).isEqualByComparingTo("0");
             verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
             verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
@@ -192,8 +199,8 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     @Test
-    @DisplayName("没有客户的订单(null 或空串): 按正常跳过 —— 无待补账行、无告警、不调挂账")
-    void orderWithoutCustomerIsSkippedWithoutPendingOrAlert() {
+    @DisplayName("没有客户的订单(null 或空串): 仍按失败 —— 待补账(PENDING) + 告警, 发货成功, 不调挂账")
+    void orderWithoutCustomerIsStillFailure() {
         for (String customer : new String[]{null, "", "  "}) {
             clean();
             ArApService arApService = mock(ArApService.class);
@@ -202,10 +209,24 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
             SalesDeliveryRecord shipped = shipInTx(sales);
 
             assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
-            assertThat(pendingRepo.findAll()).as("customer=[" + customer + "]: 不写待补账").isEmpty();
-            verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
+            assertThat(openPending()).as("customer=[" + customer + "]: 落待补账").hasSize(1);
+            assertThat(openPending().get(0).getFailureReason()).contains("没有客户");
+            verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
             verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
         }
+    }
+
+    @Test
+    @DisplayName("追溯行幂等 + 不影响默认列表: 同一发运单同一原因只留一行, 默认(PENDING)列表看不到, status=RESOLVED 能查到")
+    void zeroAmountTraceRowIsIdempotentAndHiddenFromDefaultList() {
+        for (int i = 0; i < 2; i++) {
+            service.recordNoPostingNeeded(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                    BigDecimal.ZERO, 7L, "ZERO_AMOUNT", "零金额发货");
+        }
+        assertThat(pendingRepo.findAll()).hasSize(1);
+        assertThat(service.list(F, ArPostingPendingStatus.PENDING, 1, 20).getTotalElements()).isZero();
+        assertThat(service.list(F, ArPostingPendingStatus.RESOLVED, 1, 20).getTotalElements()).isEqualTo(1);
+        verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

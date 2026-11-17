@@ -11,6 +11,7 @@ import { get, post } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft, Refresh } from '@element-plus/icons-vue';
 import { formatAmount } from '@/utils/tableFormatters';
+import { knownUnitPrice } from '@/views/sales/orders/deliveryPricePayload';
 import { formatDateTime } from '@/utils/dateFormat';
 import { VOUCHER_STATUS_LABEL } from '@/api/voucher';
 import type { TableRow } from '@/types/api';
@@ -175,6 +176,12 @@ function refundLedgerMatchesQuery(request: NonNullable<ReturnRefund['request']>,
 
 function actorLabel(id: number | null | undefined): string {
   return id == null ? '待核对' : `编号 #${id}`;
+}
+
+// 缺价(被遮/未录)的行小计显示「-」, 不是 0.00; 真 0 价照常得 0。
+function returnLineSubtotal(row: { quantity?: unknown; unitPrice?: unknown }): number | null {
+  const price = knownUnitPrice(row.unitPrice);
+  return price === undefined ? null : (Number(row.quantity) || 0) * price;
 }
 
 function moneyLabel(amount: number | null | undefined): string {
@@ -1078,7 +1085,7 @@ function goBack() {
             <template #default="{ row }">{{ formatAmount(row.unitPrice) }}</template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" label="小计" width="120" align="right">
-            <template #default="{ row }">{{ formatAmount((Number(row.quantity) || 0) * (Number(row.unitPrice) || 0)) }}</template>
+            <template #default="{ row }">{{ formatAmount(returnLineSubtotal(row)) }}</template>
           </el-table-column>
           <el-table-column label="行原因" min-width="160" show-overflow-tooltip>
             <template #default="{ row }">{{ row.reason || '-' }}</template>

@@ -102,7 +102,7 @@ import {
 } from './salesOrderListUx';
 import { toDateString } from '@/utils/dateFormat';
 import { createAutoFullChildShipment, isFullQuickDeliveryPlan } from './deliveryAutoChild';
-import { buildQuickDeliveryItems, withKnownUnitPrice } from './deliveryPricePayload';
+import { buildQuickDeliveryItems, knownUnitPrice, withKnownUnitPrice } from './deliveryPricePayload';
 import { allocationNoticeLines } from './shipmentAllocationNotices';
 
 // Quick action dialogs
@@ -268,7 +268,7 @@ const returnDialogItems = computed(() => {
       materialTypeId: null as string | null,
       productTypeId: it.productTypeId ? String(it.productTypeId) : null,
       itemName: String(it.productName || it.productTypeName || '-'),
-      unitPrice: Number(it.unitPrice) || 0,
+      unitPrice: knownUnitPrice(it.unitPrice),
       // Cap at delivered qty (can't refund what was never shipped) — same
       // rule as detail.vue's openReturnDialog.
       maxQuantity: delivered,
