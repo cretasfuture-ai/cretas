@@ -70,7 +70,7 @@ public class FinanceSolvencyTool extends AbstractBusinessTool {
 
         Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
         result.put("financeData", finance);
-        FinanceFigures.sameVisibilityForAmounts(finance, List.of("totalLiabilities", "totalAssets", "debtRatio", "equityRatio"));
+        FinanceFigures.sameVisibilityForAmounts(List.of("totalLiabilities", "totalAssets", "totalEquity", "debtRatio", "equityRatio"));
 
         Double totalAssets = FinanceFigures.positive(FinanceFigures.figure(finance, "totalAssets"));
         Double totalLiabilities = FinanceFigures.figure(finance, "totalLiabilities");

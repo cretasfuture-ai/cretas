@@ -70,7 +70,9 @@ public class FinanceDupontTool extends AbstractBusinessTool {
 
         Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
         result.put("financeData", finance);
-        FinanceFigures.sameVisibilityForAmounts(finance, FinanceFigures.RATIO_KEYS);
+        FinanceFigures.sameVisibilityForAmounts(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance),
+                List.of("totalRevenue", "totalAssets", "totalEquity",
+                        "profitMargin", "assetTurnover", "equityMultiplier", "dupontROE")));
 
         Double totalRevenue = FinanceFigures.figure(finance, "totalRevenue");
         Double netProfit = FinanceFigures.netProfit(finance);

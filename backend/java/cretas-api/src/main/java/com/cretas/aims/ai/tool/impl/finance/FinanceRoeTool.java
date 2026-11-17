@@ -70,7 +70,8 @@ public class FinanceRoeTool extends AbstractBusinessTool {
 
         Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
         result.put("financeData", finance);
-        FinanceFigures.sameVisibilityForAmounts(finance, List.of("netProfit", "totalEquity", "roe"));
+        FinanceFigures.sameVisibilityForAmounts(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance),
+                List.of("totalEquity", "netProfit", "roe")));
 
         Double netProfit = FinanceFigures.netProfit(finance);
         Double totalEquity = FinanceFigures.figure(finance, "totalEquity");

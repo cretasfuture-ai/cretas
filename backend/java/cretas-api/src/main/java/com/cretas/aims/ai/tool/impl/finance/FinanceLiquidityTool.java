@@ -70,7 +70,7 @@ public class FinanceLiquidityTool extends AbstractBusinessTool {
 
         Map<String, Object> finance = reportService.getFinanceReport(factoryId, startDate, endDate);
         result.put("financeData", finance);
-        FinanceFigures.sameVisibilityForAmounts(finance, List.of("currentAssets", "currentLiabilities", "currentRatio", "quickRatio"));
+        FinanceFigures.sameVisibilityForAmounts(List.of("currentAssets", "currentLiabilities", "inventory", "currentRatio", "quickRatio"));
 
         Double currentAssets = FinanceFigures.figure(finance, "currentAssets");
         Double currentLiabilities = FinanceFigures.positive(FinanceFigures.figure(finance, "currentLiabilities"));

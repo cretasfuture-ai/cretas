@@ -137,6 +137,7 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
                 if (netProfit == null) missing.add("净利润");
                 if (totalAssets == null) missing.add("总资产");
                 if (missing.isEmpty()) result.put("roa", (netProfit / totalAssets) * 100);
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance), List.of("totalAssets", "roa")));
                 putIfKnown(result, visibleKeys, "netProfit", netProfit);
                 putIfKnown(result, visibleKeys, "totalAssets", totalAssets);
                 result.put("industryReference", "食品加工 3%-8%");
@@ -147,6 +148,7 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
                 if (netProfit == null) missing.add("净利润");
                 if (equity == null) missing.add("股东权益");
                 if (missing.isEmpty()) result.put("roe", (netProfit / equity) * 100);
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance), List.of("totalEquity", "roe")));
                 putIfKnown(result, visibleKeys, "netProfit", netProfit);
                 putIfKnown(result, visibleKeys, "totalEquity", totalEquity);
                 result.put("industryReference", "食品加工 8%-15%");
@@ -162,6 +164,7 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
                     }
                 }
                 if (inventory == null) missing.add("存货");
+                visibleKeys.addAll(List.of("currentAssets", "currentLiabilities", "inventory", "currentRatio", "quickRatio"));
                 putIfKnown(result, visibleKeys, "currentAssets", currentAssets);
                 putIfKnown(result, visibleKeys, "currentLiabilities", currentLiabilities);
                 result.put("healthReference", "流动比率 > 2.0, 速动比率 > 1.0");
@@ -177,6 +180,7 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
                 if (totalAssets != null && totalEquity != null) {
                     result.put("equityRatio", (totalEquity / totalAssets) * 100);
                 }
+                visibleKeys.addAll(List.of("totalAssets", "totalLiabilities", "totalEquity", "debtRatio", "equityRatio"));
                 putIfKnown(result, visibleKeys, "totalLiabilities", totalLiabilities);
                 putIfKnown(result, visibleKeys, "totalAssets", totalAssets);
                 result.put("healthReference", "资产负债率 < 60%");
@@ -198,13 +202,16 @@ public class ReportFinanceRatioTool extends AbstractBusinessTool {
                 if (missing.isEmpty()) {
                     result.put("dupontROE", (profitMargin / 100) * assetTurnover * equityMultiplier * 100);
                 }
+                visibleKeys.addAll(FinanceFigures.keys(FinanceFigures.profitInputKeys(finance),
+                        List.of("totalRevenue", "totalAssets", "totalEquity",
+                                "profitMargin", "assetTurnover", "equityMultiplier", "dupontROE")));
                 break;
             default:
                 ratioName = ratioType;
                 break;
         }
-        visibleKeys.addAll(FinanceFigures.RATIO_KEYS);
-        FinanceFigures.sameVisibilityForAmounts(finance, visibleKeys);
+        // 只登记本比率用到的报表键与输出键; financeData 其余键 (分项成本、应收 / 应付 / 预收等) 出口按 web 同一判定处理
+        FinanceFigures.sameVisibilityForAmounts(visibleKeys);
 
         result.put("ratioName", ratioName);
         result.put("dataSufficient", missing.isEmpty());

@@ -14,8 +14,9 @@ import java.util.Map;
  *
  * <p>口径 (与 #1801 利润表同, Steve 11-17): 金额与由金额算出的比率只看价格查看权限 ({@link #AMOUNT_SPEC},
  * 经 PriceFieldResponseAdvice#showsSpec 按权限配置判), 不另要 finance:read_write。过了这道门的结果, 出口不再按键名
- * (Rule 2b = finance:read_write) 把金额剥掉 ({@link #sameVisibilityForAmounts}), 否则「有价格查看、无财务读写」
- * 的账号文字里有数、字段里却是 null。
+ * (Rule 2b = finance:read_write) 把<b>本工具用到的</b>金额与比率剥掉 ({@link #sameVisibilityForAmounts}), 否则「有价格查看、
+ * 无财务读写」的账号文字里有数、字段里却是 null; 报表里其余键仍按 web 同一判定处理。
+ * (键名像金额的比率, 如 currentRatio 含 rent、profitMargin 含 profit, 也要登记。)
  */
 public final class FinanceFigures {
 
@@ -26,12 +27,6 @@ public final class FinanceFigures {
     public static final String AMOUNT_SPEC = PriceFieldResponseAdvice.PRICE_VIEW_PERMISSION;
 
     public static final String INSUFFICIENT = "数据不足，无法计算";
-
-    /**
-     * 比率键: 键名像金额的 (currentRatio 含 rent、profitMargin 含 profit) 出口会按 Rule 2b 剥, 过了价格门的一并登记为可见。
-     */
-    public static final List<String> RATIO_KEYS = List.of("roe", "roa", "dupontROE", "profitMargin", "assetTurnover",
-            "equityMultiplier", "currentRatio", "quickRatio", "debtRatio", "equityRatio");
 
     /** 缺数 / 非数字 ⇒ null (不知道就是不知道, ⛔ 不兜成 0 或 1 —— 以前兜底出假的 ROE / ROA / 流动比率)。 */
     public static Double figure(Map<String, Object> map, String key) {
@@ -81,15 +76,34 @@ public final class FinanceFigures {
     }
 
     /**
-     * 已按 {@link #AMOUNT_SPEC} 判定看得到: 把这次写出的金额键登记为「按口径可见」, 出口不再按键名规则剥
-     * (与 AbstractTool#sameVisibilityAsRest 同一机制, 只在对话直调工具的记录期间生效)。
+     * 净利润 ({@link #netProfit}) 实际读了报表哪几个键: 报表给了 totalProfit 就只读它, 否则读营收与成本。
      */
-    public static void sameVisibilityForAmounts(Map<String, Object> finance, Collection<String> extraKeys) {
-        List<String> keys = new ArrayList<>(extraKeys);
-        if (finance != null) {
-            keys.add("financeData");
-            keys.addAll(finance.keySet());
+    public static List<String> profitInputKeys(Map<String, Object> finance) {
+        if (finance != null && finance.containsKey("totalProfit")) {
+            return List.of("totalProfit");
         }
-        PriceSensitiveContext.recordVisibleKeys(keys);
+        return List.of("totalRevenue", "totalCost");
+    }
+
+    /**
+     * 已按 {@link #AMOUNT_SPEC} 判定看得到: <b>只</b>把本工具算比率实际读的报表键和写出的金额 / 比率键登记为「按口径可见」,
+     * 出口对这些键不再按键名规则剥 (与 AbstractTool#sameVisibilityAsRest 同一机制, 只在对话直调工具的记录期间生效)。
+     *
+     * <p>⛔ 不登记整份报表: financeData 里没参与计算的键 (分项成本、应收 / 应付 / 预收等) 留给出口按 web
+     * GET /reports/finance 同一个判定 (PriceFieldResponseAdvice 的键名规则) 处理 —— 以前整份登记, 「有价格查看、无财务读写」
+     * 的账号经比率工具拿到了 web 对它遮掉的分项成本 (#1806 复审「中」)。
+     */
+    public static void sameVisibilityForAmounts(Collection<String> usedKeys) {
+        PriceSensitiveContext.recordVisibleKeys(new ArrayList<>(usedKeys));
+    }
+
+    /** 拼接键列表 (报表输入键 + 输出键)。 */
+    @SafeVarargs
+    public static List<String> keys(Collection<String>... groups) {
+        List<String> all = new ArrayList<>();
+        for (Collection<String> g : groups) {
+            all.addAll(g);
+        }
+        return all;
     }
 }

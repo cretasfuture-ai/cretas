@@ -87,6 +87,18 @@ class FinanceRatioAmountVisibilityContractTest {
             this.amountText = amountText;
         }
 
+        /** 本比率实际读的报表键 (completeReport 有 totalProfit ⇒ 净利润只读它)。 */
+        Set<String> usedInputs() {
+            return switch (this) {
+                case ROE, REPORT_ROE -> Set.of("totalProfit", "totalEquity");
+                case ROA -> Set.of("totalProfit", "totalAssets");
+                // profitMargin 是杜邦的输出 (= 净利润 / 营收, 由上面两项算出), 与报表同名键同值
+                case DUPONT -> Set.of("totalProfit", "totalRevenue", "totalAssets", "totalEquity", "profitMargin");
+                case LIQUIDITY, REPORT_LIQUIDITY -> Set.of("currentAssets", "currentLiabilities", "inventory");
+                case SOLVENCY, REPORT_SOLVENCY -> Set.of("totalAssets", "totalLiabilities", "totalEquity");
+            };
+        }
+
         /** 完整报表下的比率值: ROE 350/1750, ROA 350/5000, 杜邦 = ROE, 流动 3000/1200, 资产负债 3250/5000。 */
         double expected() {
             return switch (this) {
@@ -142,11 +154,23 @@ class FinanceRatioAmountVisibilityContractTest {
         m.put("totalProfit", new BigDecimal("350"));
         m.put("profitMargin", 35.0);
         m.put("accountsReceivable", new BigDecimal("80"));
+        // 线上报表还有这些键, 不参与任何比率: 分项成本 / 应付 / 预收 (数值取得独特, 便于在出口 JSON 里搜)
+        m.put("materialCost", new BigDecimal("411.11"));
+        m.put("laborCost", new BigDecimal("122.22"));
+        m.put("equipmentCost", new BigDecimal("83.33"));
+        m.put("otherCost", new BigDecimal("33.34"));
+        m.put("accountsPayable", new BigDecimal("277.77"));
+        m.put("customerPrepayments", new BigDecimal("66.66"));
         return m;
     }
 
+    /** 分项成本: web GET /reports/finance 对「有价格查看、无财务读写」按键名规则遮掉, 比率工具也不该给。 */
+    private static final Map<String, String> COST_BREAKDOWN = Map.of(
+            "materialCost", "411.11", "laborCost", "122.22", "equipmentCost", "83.33", "otherCost", "33.34");
+
     /** raw = 工具原始结果; exit = 经出口 maskedViewFor (生产直调分支同样先记录按口径可见的键再遮)。 */
-    private record Run(String message, Map<String, Object> raw, Map<String, Object> exit, ReportService reports) { }
+    private record Run(String message, Map<String, Object> raw, Map<String, Object> exit, ReportService reports,
+                       PriceFieldResponseAdvice priceView) { }
 
     @SuppressWarnings("unchecked")
     private Run run(Ratio ratio, Set<String> held, Map<String, Object> report) throws Exception {
@@ -170,7 +194,7 @@ class FinanceRatioAmountVisibilityContractTest {
         Map<String, Object> data = mapper.convertValue(r.get("data"), Map.class);
         PriceSensitiveContext.approveKeys(data, visibleKeys);
         Map<String, Object> exit = (Map<String, Object>) priceView.maskedViewFor(data, USER_ID);
-        return new Run((String) data.get("message"), data, exit, reports);
+        return new Run((String) data.get("message"), data, exit, reports, priceView);
     }
 
     private static void assertSees(Ratio ratio, Run run) {
@@ -179,10 +203,12 @@ class FinanceRatioAmountVisibilityContractTest {
             assertTrue(view.get(ratio.ratioKey) instanceof Number, ratio.ratioKey + " 应给: " + view);
             assertEquals(ratio.expected(), ((Number) view.get(ratio.ratioKey)).doubleValue(), 1e-6, view.toString());
         }
-        // 出口不按键名 (Rule 2b) 剥掉报表金额: 有价格查看就给 (与 #1801 利润表同)
+        // 出口不按键名 (Rule 2b) 剥掉本比率用到的报表金额: 有价格查看就给 (与 #1801 利润表同)
         @SuppressWarnings("unchecked")
         Map<String, Object> financeData = (Map<String, Object>) run.exit().get("financeData");
-        assertNotNull(financeData.get("totalRevenue"), "出口剥掉了营收: " + financeData);
+        for (String used : ratio.usedInputs()) {
+            assertNotNull(financeData.get(used), "出口剥掉了本比率用到的 " + used + ": " + financeData);
+        }
         if (ratio.ratioText != null) {
             assertTrue(run.message().contains(ratio.ratioText), run.message());
         }
@@ -203,6 +229,63 @@ class FinanceRatioAmountVisibilityContractTest {
     @DisplayName("有价格查看、没有财务读写: 看得到 (口径只看价格查看), 出口也不剥")
     void priceViewWithoutReadWriteSees(Ratio ratio) throws Exception {
         assertSees(ratio, run(ratio, PRICE_VIEW_NO_RW, completeReport()));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Ratio.class)
+    @DisplayName("有价格查看、没有财务读写: 报表里没参与本比率的键与 web GET /reports/finance 同一判定 —— 分项成本遮掉, 不因比率工具整份放行 (#1806 复审「中」)")
+    void priceViewWithoutReadWriteUnusedKeysFollowWebJudgment(Ratio ratio) throws Exception {
+        Map<String, Object> report = completeReport();
+        Run run = run(ratio, PRICE_VIEW_NO_RW, report);
+        // web 那一侧: ReportController#getFinanceReport 原样返回报表 Map, 由同一个 PriceFieldResponseAdvice 按同一个判定遮
+        // (没有任何按口径放行的键) —— maskedViewFor 与响应层共用 decide + stripPriceFields
+        @SuppressWarnings("unchecked")
+        Map<String, Object> web = (Map<String, Object>) run.priceView().maskedViewFor(new HashMap<>(report), USER_ID);
+        // 阳性对照: web 对这个账号确实遮分项成本 (否则下面的阴性断言没意义)
+        for (String k : COST_BREAKDOWN.keySet()) {
+            assertNull(web.get(k), "web 判定应遮 " + k + ": " + web);
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exitFinance = (Map<String, Object>) run.exit().get("financeData");
+        assertNotNull(exitFinance, run.exit().toString());
+        int compared = 0;
+        for (String key : report.keySet()) {
+            if (ratio.usedInputs().contains(key)) continue;
+            assertSameFigure(web.get(key), exitFinance.get(key), key + " 与 web 判定不一致: web=" + web + " ai=" + exitFinance);
+            compared++;
+        }
+        assertTrue(compared >= COST_BREAKDOWN.size() + 3, "参与比对的未用键太少: " + compared);
+        // 阴性: 分项成本的键在出口是 null, 数值在出口 JSON 与文字里都搜不到
+        String exitJson = mapper.writeValueAsString(run.exit());
+        for (Map.Entry<String, String> e : COST_BREAKDOWN.entrySet()) {
+            assertNull(exitFinance.get(e.getKey()), e.getKey() + " 不该给: " + exitFinance);
+            assertFalse(exitJson.contains(e.getValue()), e.getKey() + "=" + e.getValue() + " 出现在出口: " + exitJson);
+            assertFalse(run.message().contains(e.getValue()), run.message());
+        }
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @EnumSource(Ratio.class)
+    @DisplayName("价格查看 + 财务读写: 报表其余键 (分项成本 / 应收 / 应付 / 预收) 照常可见")
+    void financeManagerStillSeesUnusedReportKeys(Ratio ratio) throws Exception {
+        Run run = run(ratio, FINANCE_MANAGER, completeReport());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> exitFinance = (Map<String, Object>) run.exit().get("financeData");
+        for (Map.Entry<String, String> e : COST_BREAKDOWN.entrySet()) {
+            assertSameFigure(new BigDecimal(e.getValue()), exitFinance.get(e.getKey()), e.getKey() + ": " + exitFinance);
+        }
+        assertSameFigure(new BigDecimal("80"), exitFinance.get("accountsReceivable"), exitFinance.toString());
+        assertSameFigure(new BigDecimal("277.77"), exitFinance.get("accountsPayable"), exitFinance.toString());
+        assertSameFigure(new BigDecimal("66.66"), exitFinance.get("customerPrepayments"), exitFinance.toString());
+    }
+
+    private static void assertSameFigure(Object expected, Object actual, String msg) {
+        if (expected == null || actual == null) {
+            assertEquals(expected, actual, msg);
+            return;
+        }
+        assertTrue(expected instanceof Number && actual instanceof Number, msg);
+        assertEquals(((Number) expected).doubleValue(), ((Number) actual).doubleValue(), 1e-9, msg);
     }
 
     @ParameterizedTest(name = "{0}")
