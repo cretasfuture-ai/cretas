@@ -48,6 +48,12 @@ MODEL_TAG = ENV.get("MODEL_TAG") or "bge-reranker-v2-m3-ft-r2-20261004"
 if not KEY:
     raise SystemExit("RERANK_KEY missing in .env — refusing to start without auth")
 
+# MLX 按每种输入 shape 留着 Metal buffer 复用, 不设上限只涨不还: 2026-11-18 实测连续跑 2 天 6 小时
+# 进程 footprint 38GB (模型本身 fp16 约 1.1GB), 把同机常驻的 ollama 8b 兜底和黑湖 27B 挤出内存。
+# 上限之外的空闲 buffer 会被释放; 上限只影响复用率, 不影响结果。默认 1GB, 可用 .env 的 MLX_CACHE_LIMIT_MB 调。
+CACHE_LIMIT_MB = int(ENV.get("MLX_CACHE_LIMIT_MB") or os.environ.get("MLX_CACHE_LIMIT_MB") or 1024)
+mx.set_cache_limit(CACHE_LIMIT_MB * 1024 * 1024)
+
 TOK = AutoTokenizer.from_pretrained(MODEL_DIR)
 MODEL = load(MODEL_DIR, mx.float16)
 LOCK = threading.Lock()
@@ -73,7 +79,10 @@ class RerankRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"ok": True, "model": MODEL_TAG, "device": "mlx-fp16"}
+    mb = lambda b: round(b / 1048576)  # noqa: E731
+    return {"ok": True, "model": MODEL_TAG, "device": "mlx-fp16",
+            "memoryMb": {"active": mb(mx.get_active_memory()), "cache": mb(mx.get_cache_memory()),
+                         "peak": mb(mx.get_peak_memory()), "cacheLimit": CACHE_LIMIT_MB}}
 
 
 @app.post("/rerank")

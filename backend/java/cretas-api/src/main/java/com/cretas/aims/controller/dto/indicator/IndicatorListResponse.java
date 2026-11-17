@@ -66,6 +66,14 @@ public class IndicatorListResponse {
     private ActionHint actionHint;
 
     /**
+     * 金额类指标且调用者没有价格查看口径时为 true (值 / 告警级别 / 阈值已置空, 见 IndicatorValueVisibility);
+     * 前端据此显示「无权限查看」, 不是「未计算」。可见时不出现。
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    @Schema(description = "数值按权限配置不显示 (仅为 true 时出现)")
+    private Boolean valueHidden;
+
+    /**
      * 从实体投影 DTO.
      */
     public static IndicatorListResponse fromEntity(Indicator ind) {
@@ -83,5 +91,11 @@ public class IndicatorListResponse {
                 .isActive(ind.getIsActive())
                 .actionHint(ActionHint.fromConfig(ind.getConfig()))
                 .build();
+    }
+    /** 数值按权限配置不显示: 值置空并标 valueHidden (不是 0)。 */
+    public IndicatorListResponse hideValue() {
+        this.lastValue = null;
+        this.valueHidden = Boolean.TRUE;
+        return this;
     }
 }
