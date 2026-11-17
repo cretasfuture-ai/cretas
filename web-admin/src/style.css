@@ -300,14 +300,18 @@ body {
 /* ============================================================
  * Links
  * ============================================================ */
-a {
-  color: var(--primary-color);
-  text-decoration: none;
-  transition: color var(--transition-fast);
-}
+/* 放进 legacy-reset 层：未分层的 a{color} 优先级高于 Tailwind utilities 层，
+ * 会把 <UButton to=...>（渲染成 <a>）的 text-inverted 白字盖成蓝字，主按钮变成「蓝底蓝字」的空白块。 */
+@layer legacy-reset {
+  a {
+    color: var(--primary-color);
+    text-decoration: none;
+    transition: color var(--transition-fast);
+  }
 
-a:hover {
-  color: var(--color-primary-light);
+  a:hover {
+    color: var(--color-primary-light);
+  }
 }
 
 /* ============================================================

@@ -25,7 +25,9 @@ const go = (to?: string) => { if (to) void router.push(to); };
         <small v-if="i.sub">{{ i.sub }}</small>
       </li>
     </ul>
-    <p v-else-if="s.state === 'ok'" class="muted">现在没有。</p>
+    <!-- 数字与说明同源：有数量却没有明细行（服务端只给总数的来源）时不能写「现在没有」 -->
+    <p v-else-if="s.state === 'ok' && s.count > 0" class="muted" data-testid="src-detail-hint">共 {{ s.count }} 项，点右上角「{{ s.linkLabel }}」查看明细。</p>
+    <p v-else-if="s.state === 'ok'" class="muted" data-testid="src-empty">现在没有。</p>
   </section>
 </template>
 
