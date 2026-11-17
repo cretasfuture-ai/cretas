@@ -41,7 +41,7 @@ import static org.mockito.Mockito.when;
  * (不看角色名); 结论在原始结果和经 {@code maskedViewFor} (生产出口) 遮挡后两处都取。
  */
 @DisplayName("利润表 AI 工具: 毛利率 / 金额按价格查看权限配置给, 看不到就不出现, 也不变成 0")
-class IncomeStatementQueryToolPriceVisibilityTest {
+class IncomeStatementQueryToolPriceVisibilityContractTest {
 
     private static final long USER_ID = 1L;
     private static final Set<String> VIEWER = Set.of("finance:read", "production:read");

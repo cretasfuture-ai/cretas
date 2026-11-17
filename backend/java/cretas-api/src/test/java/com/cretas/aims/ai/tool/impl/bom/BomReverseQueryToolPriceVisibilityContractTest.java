@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * <p>走真实入口 {@code execute(ToolCall, context)}, 判定用真实 {@link PriceFieldResponseAdvice}, 权限只来自配置的权限码。
  */
 @DisplayName("物料替换成本影响: 成本差额 / 单价按价格查看权限配置给, 看不到就不写、字段为空不为 0")
-class BomReverseQueryToolPriceVisibilityTest {
+class BomReverseQueryToolPriceVisibilityContractTest {
 
     private static final long USER_ID = 1L;
     private final ObjectMapper mapper = new ObjectMapper();
