@@ -73,6 +73,8 @@ public class TransferServiceImpl implements TransferService {
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     @Autowired
     private WarehouseTransferMovementRepository warehouseMovementRepository;
+    @Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -956,7 +958,25 @@ public class TransferServiceImpl implements TransferService {
         Page<InternalTransfer> result = (statuses == null || statuses.isEmpty())
                 ? transferRepository.findByFactoryId(factoryId, pageRequest)
                 : transferRepository.findByFactoryIdAndStatusIn(factoryId, statuses, pageRequest);
+        fillWarehouseNames(factoryId, result.getContent());
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    /** 回填调出/调入仓库名; 仓库不属于本厂或已删除时留 null。 */
+    private void fillWarehouseNames(String factoryId, List<InternalTransfer> transfers) {
+        if (factoryWarehouseRepository == null || transfers == null || transfers.isEmpty()) {
+            return;
+        }
+        java.util.Map<String, String> names = new java.util.HashMap<>();
+        factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId).forEach(w -> {
+            if (w.getId() != null && w.getName() != null) {
+                names.put(w.getId(), w.getName());
+            }
+        });
+        for (InternalTransfer t : transfers) {
+            t.setSourceWarehouseName(names.get(t.getSourceWarehouseId()));
+            t.setTargetWarehouseName(names.get(t.getTargetWarehouseId()));
+        }
     }
 
     // ==================== 状态机流转 ====================
