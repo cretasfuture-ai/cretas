@@ -71,6 +71,7 @@
             <div class="summary-text">
               <div class="summary-num">{{ stats.total }}</div>
               <div class="summary-label">总指标</div>
+              <div v-if="stats.hidden" class="summary-label" data-testid="indicator-hidden-count">其中 {{ stats.hidden }} 个无权限查看</div>
             </div>
           </div>
         </el-card>
@@ -336,11 +337,14 @@ const stats = computed(() => {
     if (indicator.status) return indicator.status;
     return indicator.lastValue == null ? 'NOT_COMPUTED' : 'AVAILABLE';
   };
+  // 按权限没给数值的指标单独数, 不算进「缺数 / 未计算」(那是在说没算, 不如实)
+  const visible = indicators.value.filter(i => !i.valueHidden);
   return {
     total,
-    available: indicators.value.filter(i => statusOf(i) === 'AVAILABLE' && i.lastValue != null).length,
-    missing: indicators.value.filter(i => ['NO_DATA', 'NOT_COMPUTED'].includes(statusOf(i))).length,
-    failed: indicators.value.filter(i => statusOf(i) === 'FAILED').length,
+    available: visible.filter(i => statusOf(i) === 'AVAILABLE' && i.lastValue != null).length,
+    missing: visible.filter(i => ['NO_DATA', 'NOT_COMPUTED'].includes(statusOf(i))).length,
+    failed: visible.filter(i => statusOf(i) === 'FAILED').length,
+    hidden: indicators.value.length - visible.length,
   };
 });
 
@@ -388,7 +392,7 @@ async function loadList() {
     );
     if (!mounted.value || seq !== requestSeq || factoryId.value !== currentFactoryId || actorKey.value !== currentActor) return;
     const nextIndicators = await Promise.all(list.map(async (indicator): Promise<DashboardIndicator> => {
-      if (!ACTUAL_FLOW_CODES.has(indicator.code)) return indicator;
+      if (!ACTUAL_FLOW_CODES.has(indicator.code) || indicator.valueHidden) return indicator;
       try {
         const current = await getIndicatorValue(currentFactoryId, indicator.code, {
           periodStart: range[0],
@@ -397,9 +401,10 @@ async function loadList() {
         const status = current.status || (current.value == null ? 'NO_DATA' : 'AVAILABLE');
         return {
           ...indicator,
-          lastValue: status === 'AVAILABLE' ? current.value : null,
+          lastValue: status === 'AVAILABLE' && !current.valueHidden ? current.value : null,
           lastComputedAt: status === 'AVAILABLE' ? current.computedAt ?? null : null,
           status,
+          valueHidden: current.valueHidden === true,
           periodStart: current.periodStart || range[0],
           periodEnd: current.periodEnd || range[1],
         };
@@ -461,6 +466,7 @@ function indicatorToCardData(ind: DashboardIndicator) {
     unit: ind.unit,
     lastValue: ind.lastValue,
     lastComputedAt: ind.lastComputedAt,
+    valueHidden: ind.valueHidden === true,
     status: ind.status,
     periodStart: ind.periodStart,
     periodEnd: ind.periodEnd,

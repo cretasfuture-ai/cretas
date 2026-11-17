@@ -235,6 +235,8 @@ class IndicatorAlertToolTest {
         Method m = IndicatorAlertTool.class.getDeclaredMethod(
                 "doExecute", String.class, Map.class, Map.class);
         m.setAccessible(true);
+        // 测的是告警评估, 调用者本就看得到金额类指标 (看不到那一侧见 IndicatorMoneyValueVisibilityContractTest)
+        com.cretas.aims.ai.tool.ToolPriceViewTestSupport.callerSeesAllAmounts(tool);
         Map<String, Object> ctx = new HashMap<>();
         ctx.put("factoryId", FACTORY_ID);
         ctx.put("userId", 1L);

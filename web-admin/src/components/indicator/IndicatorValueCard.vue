@@ -19,6 +19,9 @@
         <el-tag v-if="isMirrored" type="warning" size="small" class="source-tag" effect="plain">
           示例
         </el-tag>
+        <el-tag v-else-if="isHidden" type="info" size="small" class="source-tag" effect="plain">
+          无权限查看
+        </el-tag>
         <el-tag v-else-if="isFailed" type="danger" size="small" class="source-tag" effect="plain">
           计算失败
         </el-tag>
@@ -30,7 +33,7 @@
         </el-tag>
       </div>
       <el-tag
-        v-if="indicator.alertLevel && !isFailed && !isMissingData"
+        v-if="indicator.alertLevel && !isHidden && !isFailed && !isMissingData"
         :type="alertTagType"
         size="small"
         effect="dark"
@@ -52,7 +55,7 @@
       </div>
     </div>
 
-    <div v-if="indicator.lastComputedAt && !isFailed && !isMissingData" class="card-footer">
+    <div v-if="indicator.lastComputedAt && !isHidden && !isFailed && !isMissingData" class="card-footer">
       <el-icon><Clock /></el-icon>
       <span>{{ relativeTime(indicator.lastComputedAt) }}</span>
       <span v-if="periodLabel" class="period-label">{{ periodLabel }}</span>
@@ -116,6 +119,8 @@ interface CardData {
   computeStrategy?: string;
   alertLevel?: 'GREEN' | 'YELLOW' | 'RED' | null;
   actionHint?: ActionHint | null;
+  /** 后端按权限配置没下发数值 (金额类指标, 需要价格查看权限)。 */
+  valueHidden?: boolean;
 }
 
 interface Props {
@@ -135,14 +140,18 @@ const props = withDefaults(defineProps<Props>(), {
 // remains stable while Phase B installs real-business indicators.
 const MIRRORED_CODES: string[] = [];
 const isMirrored = computed(() => MIRRORED_CODES.includes(props.indicator.code));
+// 金额类指标按权限配置没给数值: 如实说「无权限查看」, 不能说成「未计算 / 待配置 / 暂无数据」
+const isHidden = computed(() => props.indicator.valueHidden === true);
 const isUnconfigured = computed(() =>
+  !isHidden.value &&
   !isMirrored.value &&
   !props.indicator.status &&
   (props.indicator.lastValue === null || props.indicator.lastValue === undefined)
 );
 const isFailed = computed(() => props.indicator.status === 'FAILED');
 const isMissingData = computed(() =>
-  props.indicator.status === 'NO_DATA' || props.indicator.status === 'NOT_COMPUTED'
+  !isHidden.value &&
+  (props.indicator.status === 'NO_DATA' || props.indicator.status === 'NOT_COMPUTED')
 );
 
 const emit = defineEmits<{
@@ -171,6 +180,7 @@ const hasValue = computed(() =>
 );
 
 const formattedValue = computed(() => {
+  if (isHidden.value) return '无权限查看';
   if (!hasValue.value || isFailed.value || isMissingData.value) return '—';
   const v = props.indicator.lastValue as number;
   if (Math.abs(v) < 1000) {
@@ -180,6 +190,7 @@ const formattedValue = computed(() => {
 });
 
 const statusText = computed(() => {
+  if (isHidden.value) return '无权限查看（需要价格查看权限）';
   if (isFailed.value) return '计算失败';
   if (isMissingData.value) return '暂无业务数据';
   if (isUnconfigured.value) return '未配置';
@@ -194,7 +205,7 @@ const periodLabel = computed(() => {
 });
 
 const alertLevelClass = computed(() => {
-  if (isFailed.value || isMissingData.value) return 'neutral';
+  if (isHidden.value || isFailed.value || isMissingData.value) return 'neutral';
   if (!props.indicator.alertLevel) return 'neutral';
   return props.indicator.alertLevel.toLowerCase();
 });

@@ -8,6 +8,7 @@ import com.cretas.aims.entity.indicator.IndicatorVersion;
 import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.repository.indicator.IndicatorThresholdRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
+import com.cretas.aims.service.indicator.IndicatorValueVisibility;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -139,7 +140,21 @@ public class IndicatorAlertTool extends AbstractBusinessTool {
         // 2) For each, evaluate breach
         List<Map<String, Object>> breached = new ArrayList<>();
         int totalScanned = indicators.size();
+        // 金额 / 毛利 / 财务类指标: 当前值与告警级别按价格查看口径 (与 indicator_query / web 指标中心同一判定)。
+        // 看不到 ⇒ 不评估、不进 breached[] (在不在告警名单里本身就是级别); 只报「有几个不显示」, 数的是全部被藏的指标,
+        // 不是被藏且在告警的, 所以个数不带出级别。
+        List<String> valueHidden = new ArrayList<>();
+        Boolean seesMoneyValues = null;
         for (Indicator i : indicators) {
+            if (IndicatorValueVisibility.carriesMoneyFigure(i)) {
+                if (seesMoneyValues == null) {
+                    seesMoneyValues = replyShowsPriceSpec(context, IndicatorValueVisibility.VALUE_SPEC);
+                }
+                if (!seesMoneyValues) {
+                    valueHidden.add(i.getCode());
+                    continue;
+                }
+            }
             Optional<IndicatorVersion> latestOpt =
                     versionRepository.findFirstByIndicatorIdOrderByComputedAtDesc(i.getId());
             BigDecimal currentValue = latestOpt
@@ -186,8 +201,17 @@ public class IndicatorAlertTool extends AbstractBusinessTool {
         if (category != null && !category.isEmpty()) {
             data.put("category", category);
         }
+        if (!valueHidden.isEmpty()) {
+            data.put("valueHidden", valueHidden);
+            data.put("valueHiddenCount", valueHidden.size());
+        }
 
-        String summary = buildSummary(redCount, yellowCount, breached.size(), totalScanned, category);
+        String summary = buildSummary(redCount, yellowCount, breached.size(),
+                totalScanned - valueHidden.size(), category);
+        if (!valueHidden.isEmpty()) {
+            summary += "；另有 " + valueHidden.size() + " 个指标 (" + String.join(", ", valueHidden) + ")"
+                    + IndicatorValueVisibility.VALUE_HIDDEN_MESSAGE;
+        }
         return buildSimpleResult(summary, data);
     }
 

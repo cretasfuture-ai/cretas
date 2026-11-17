@@ -7,6 +7,7 @@ import com.cretas.aims.entity.indicator.IndicatorVersion;
 import com.cretas.aims.repository.indicator.IndicatorRepository;
 import com.cretas.aims.repository.indicator.IndicatorThresholdRepository;
 import com.cretas.aims.repository.indicator.IndicatorVersionRepository;
+import com.cretas.aims.service.indicator.IndicatorValueVisibility;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -59,6 +60,16 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
 
     /** 趋势最大返回行数, 防止 LLM context bloat. */
     private static final int MAX_TREND_ROWS = 60;
+
+    /** 金额类指标的数值、告警级别与阈值按这个价格口径给 —— 见 {@link IndicatorValueVisibility} (web 与 AI 共用)。 */
+    public static final String VALUE_SPEC = IndicatorValueVisibility.VALUE_SPEC;
+
+    static final String VALUE_HIDDEN_MESSAGE = IndicatorValueVisibility.VALUE_HIDDEN_MESSAGE;
+
+    /** 委托 {@link IndicatorValueVisibility#carriesMoneyFigure} (唯一判定)。 */
+    public static boolean carriesMoneyFigure(Indicator i) {
+        return IndicatorValueVisibility.carriesMoneyFigure(i);
+    }
 
     @Override
     public String getToolName() {
@@ -188,28 +199,47 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
                 : (latestOpt.isPresent() || indicator.getLastComputedAt() != null
                         ? "NO_DATA" : "NOT_COMPUTED");
         String breachLevel = evaluateBreachLevel(currentValue, thresholds);
+        // 金额 / 毛利 / 财务类指标的数值、告警级别、阈值: 与 web 指标中心同一判定 (IndicatorValueVisibility) —— 价格查看口径,
+        // 经 PriceFieldResponseAdvice#showsSpec 按权限配置判, 不看角色名。看不到 ⇒ 这些键省略 (不是 0)。
+        boolean showValues = !carriesMoneyFigure(indicator) || replyShowsPriceSpec(context, VALUE_SPEC);
 
         // 6) Build result
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("indicator", serializeIndicator(indicator));
-        result.put("currentValue", currentValue);
-        result.put("valueStatus", valueStatus);
+        if (showValues) {
+            result.put("currentValue", currentValue);
+            result.put("valueStatus", valueStatus);
+        } else {
+            result.put("valueStatus", "HIDDEN");
+            result.put("valueHidden", true);
+        }
         result.put("source", valueSource);
-        result.put("breachLevel", breachLevel);
+        // 告警级别与阈值会夹出数值区间 (GREEN ≥ 60 ⇒ 毛利率 ≥ 60%), 与数值同进同出
+        if (showValues) {
+            result.put("breachLevel", breachLevel);
+        }
         result.put("latestComputedAt", latestOpt.map(IndicatorVersion::getComputedAt)
                 .orElse(indicator.getLastComputedAt()));
         latestOpt.ifPresent(v -> {
             result.put("latestPeriodStart", v.getPeriodStart());
             result.put("latestPeriodEnd", v.getPeriodEnd());
-            result.put("latestAlertLevel", v.getAlertLevel());
+            if (showValues) {
+                result.put("latestAlertLevel", v.getAlertLevel());
+            }
         });
-        result.put("thresholds", serializeThresholds(thresholds));
-        result.put("trend", serializeTrend(trend));
+        if (showValues) {
+            result.put("thresholds", serializeThresholds(thresholds));
+        } else {
+            result.put("thresholdsHidden", true);
+        }
+        result.put("trend", serializeTrend(trend, showValues));
         result.put("trendSize", trend.size());
         result.put("periodStart", periodStart);
         result.put("periodEnd", periodEnd);
 
-        String summary = buildSummaryText(indicator, currentValue, breachLevel, trend.size());
+        String summary = showValues
+                ? buildSummaryText(indicator, currentValue, breachLevel, trend.size())
+                : indicator.getName() + VALUE_HIDDEN_MESSAGE;
         return buildSimpleResult(summary, result);
     }
 
@@ -304,14 +334,18 @@ public class IndicatorQueryTool extends AbstractBusinessTool {
         return rows;
     }
 
-    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions) {
+    private List<Map<String, Object>> serializeTrend(List<IndicatorVersion> versions, boolean showValues) {
         List<Map<String, Object>> rows = new ArrayList<>(versions.size());
         for (IndicatorVersion v : versions) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("periodStart", v.getPeriodStart());
             m.put("periodEnd", v.getPeriodEnd());
-            m.put("value", v.getValue());
-            m.put("alertLevel", v.getAlertLevel());
+            if (showValues) {
+                m.put("value", v.getValue());
+                m.put("alertLevel", v.getAlertLevel());
+            } else {
+                m.put("valueHidden", true);
+            }
             m.put("computedAt", v.getComputedAt());
             rows.add(m);
         }
