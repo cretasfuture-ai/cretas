@@ -8,7 +8,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class CostViewPureLogicTest {
+class CostViewPureLogicContractTest {
 
     private static BigDecimal bd(String s) {
         return new BigDecimal(s);
