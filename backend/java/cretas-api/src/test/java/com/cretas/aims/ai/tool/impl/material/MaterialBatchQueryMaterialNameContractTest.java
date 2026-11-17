@@ -28,7 +28,7 @@ import static org.mockito.Mockito.when;
  * 说了原料名也不筛。真的: 工具、实体解析器; 桩: 服务与仓库。
  */
 @DisplayName("原料批次查询: 说了原料名就按它筛, 不退回全部")
-class MaterialBatchQueryMaterialNameTest {
+class MaterialBatchQueryMaterialNameContractTest {
 
     private static final String FACTORY = "F006";
 
@@ -36,7 +36,7 @@ class MaterialBatchQueryMaterialNameTest {
     private final FactoryEntityDirectoryRepository directory = mock(FactoryEntityDirectoryRepository.class);
     private final MaterialBatchQueryTool tool = new MaterialBatchQueryTool();
 
-    MaterialBatchQueryMaterialNameTest() {
+    MaterialBatchQueryMaterialNameContractTest() {
         ReflectionTestUtils.setField(tool, "materialBatchService", service);
         ReflectionTestUtils.setField(tool, "entityResolver",
                 new FactoryEntityResolver(directory, mock(FlywheelMasterDataRepository.class)));

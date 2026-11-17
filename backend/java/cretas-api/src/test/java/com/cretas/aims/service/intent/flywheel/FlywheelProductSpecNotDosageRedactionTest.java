@@ -14,7 +14,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * (送给决策模型的文本不经这层脱敏 —— 只有飞轮落库用它, 见 IntentFlywheelRecorder.persist。)
  */
 @DisplayName("飞轮脱敏: 产品名里的规格不当用量")
-class FlywheelProductSpecNotDosageTest {
+class FlywheelProductSpecNotDosageRedactionTest {
 
     private static final String INPUT = "帮我建个生产计划：明天做 2 吨演示·酱卤牛肉250g，周五交演示·上海连锁餐饮";
     private static final String PRODUCT = "演示·酱卤牛肉250g";

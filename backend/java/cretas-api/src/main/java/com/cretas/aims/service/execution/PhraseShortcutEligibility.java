@@ -20,15 +20,24 @@ import java.util.regex.Pattern;
  *
  * <p>句首时间词不算条件 (P1-A 既有设计): 短语表剥掉句首时间词再匹配, 工具从原话里解析时间
  * (「这个月卖得怎么样」「上个月毛利率多少」照走短语, 工具查的是那个月; 「上个月」写成「本月」的是标题, 已在格式化修)。
- * 续上一件事的说法 ({@link #CONVERSATION_CONTROL_INTENTS}, 「继续报工」) 不带查询条件, 不判。
+ * 续上一件事的说法 (「继续报工」) 和不看条件的能力说明 (供应商比价) 不判, 见 {@link #CONVERSATION_CONTROL_INTENTS}。
  */
 public final class PhraseShortcutEligibility {
 
     /** 允许短语之外剩下的字数 (「先看下库存」里的「先」)。 */
     static final int MAX_RESIDUAL_CHARS = 1;
 
-    /** 对话控制类意图: 说的是「接着上一件事」, 后面跟的是那件事的名字, 不是查询条件。 */
-    static final java.util.Set<String> CONVERSATION_CONTROL_INTENTS = java.util.Set.of("CONTEXT_CONTINUE");
+    /**
+     * 不看条件的意图, 不判:
+     * <ul>
+     *   <li>CONTEXT_CONTINUE: 说的是「接着上一件事」, 后面跟的是那件事的名字, 不是查询条件;</li>
+     *   <li>SUPPLIER_PRICE_COMPARISON: 代码自有的只读能力说明 ({@link SupplierComparisonReadIntent}, 不在库里的决策目录),
+     *       工具不论物料 / 供应商都只答「未接入真实报价、不能比价」, 句中条件丢不了; 交给决策层反而认不到它,
+     *       权限闸也就轮不到它把关 (SupplierComparisonDispatchContractTest 守)。</li>
+     * </ul>
+     */
+    static final java.util.Set<String> CONVERSATION_CONTROL_INTENTS = java.util.Set.of(
+            "CONTEXT_CONTINUE", SupplierComparisonReadIntent.CODE);
 
     private static final Pattern PUNCT_AND_SPACE = Pattern.compile("[\\s\\p{P}\\p{S}　]+");
 

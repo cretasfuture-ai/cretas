@@ -103,7 +103,7 @@ class DigitalCrewRecognitionFixesEntryContractTest {
     }
 
     @Test
-    @DisplayName("句首时间词不算条件 (P1-A): 「上个月毛利率多少？」照走短语, 工具按原话解析时间; 「本月」标题错在格式化 (ReportPeriodLabelTest)")
+    @DisplayName("句首时间词不算条件 (P1-A): 「上个月毛利率多少？」照走短语, 工具按原话解析时间; 「本月」标题错在格式化 (ReportPeriodLabelContractTest)")
     void leadingTimeWordKeepsThePhraseShortcut() throws Exception {
         StreamTurnCollectorEntryParityContractTest.Harness h = harness();
         String input = "上个月毛利率多少？";

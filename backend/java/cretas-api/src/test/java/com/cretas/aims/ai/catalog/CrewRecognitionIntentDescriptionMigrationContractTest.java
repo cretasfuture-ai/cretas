@@ -14,10 +14,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * BATCH_UPDATE 描述写着「计划产量」。钉住迁移: 新说法放在最前 (只带前 3 个), BATCH_UPDATE 写明不用于新建。
  */
 @DisplayName("迁移 V20261117_83: 建计划 / 快过期 / 出成率的意图描述与说法")
-class CrewRecognitionIntentDescriptionMigrationTest {
+class CrewRecognitionIntentDescriptionMigrationContractTest {
 
     private static String sql() throws Exception {
-        try (InputStream in = CrewRecognitionIntentDescriptionMigrationTest.class.getResourceAsStream(
+        try (InputStream in = CrewRecognitionIntentDescriptionMigrationContractTest.class.getResourceAsStream(
                 "/db/flyway/V20261117_83__crew_recognition_intent_descriptions.sql")) {
             assertThat(in).as("迁移文件在 classpath").isNotNull();
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);

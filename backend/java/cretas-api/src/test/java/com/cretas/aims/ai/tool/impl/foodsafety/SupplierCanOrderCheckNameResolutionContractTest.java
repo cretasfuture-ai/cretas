@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
  * 桩: 仓库。
  */
 @DisplayName("供应商下单检查: 名字带「·」前缀时不说不存在")
-class SupplierCanOrderCheckNameResolutionTest {
+class SupplierCanOrderCheckNameResolutionContractTest {
 
     private static final String FACTORY = "F006";
     private static final String FULL = "演示·华东食材供应商";
@@ -35,7 +35,7 @@ class SupplierCanOrderCheckNameResolutionTest {
     private final FactoryEntityDirectoryRepository directory = mock(FactoryEntityDirectoryRepository.class);
     private final SupplierCanOrderCheckTool tool = new SupplierCanOrderCheckTool();
 
-    SupplierCanOrderCheckNameResolutionTest() {
+    SupplierCanOrderCheckNameResolutionContractTest() {
         ReflectionTestUtils.setField(tool, "supplierRepository", suppliers);
         SupplierQualificationRepository quals = mock(SupplierQualificationRepository.class);
         when(quals.findByFactoryIdAndSupplierIdAndStatusIn(anyString(), anyString(), any())).thenReturn(List.of());

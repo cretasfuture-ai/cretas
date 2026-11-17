@@ -12,7 +12,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 标题写成「本月 (10-01 ~ 10-31)」。「本月 / 本周 …」只在窗口截到今天时成立。
  */
 @DisplayName("报表标题: 过去的一段不叫「本月」")
-class ReportPeriodLabelTest {
+class ReportPeriodLabelContractTest {
 
     @Test
     @DisplayName("上个月 (窗口在今天之前结束) → 只写日期, 不写「本月」")

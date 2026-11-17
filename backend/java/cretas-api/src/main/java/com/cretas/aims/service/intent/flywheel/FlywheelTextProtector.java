@@ -211,7 +211,8 @@ public class FlywheelTextProtector {
             }
             addPeople(dictionary, factoryId);
             if (options.redactProductNames()) {
-                for (String n : entities.redactionNames(factoryId, EntityKind.PRODUCT)) {
+                // 产品名单与上面「规格不当用量」用的是同一份 (只查一次解析器, 四份名单各一处)
+                for (String n : productNames) {
                     add(dictionary, n, Kind.PRODUCT, 2);
                 }
             }
