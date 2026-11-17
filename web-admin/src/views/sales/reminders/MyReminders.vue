@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import {
   listReminders,
   snoozeReminder,
@@ -10,8 +10,11 @@ import {
   type ReminderStatus,
 } from '@/api/reminder';
 import { toDateString } from '@/utils/dateFormat';
+import type { CsTableColumn } from '@/types/csTable';
+import SalesConfirmModal from '../components/SalesConfirmModal.vue';
 
 const router = useRouter();
+const confirmRef = ref<InstanceType<typeof SalesConfirmModal>>();
 const reminders = ref<Reminder[]>([]);
 const total = ref(0);
 const page = ref(0);
@@ -36,9 +39,29 @@ async function load(): Promise<void> {
   }
 }
 
-function statusTag(status: ReminderStatus): { type: 'warning' | 'info' | 'success'; label: string } {
+const STATUS_FILTERS = [
+  { value: 'PENDING,SNOOZED', label: '活跃' },
+  { value: 'PENDING', label: '仅待处理' },
+  { value: 'SNOOZED', label: '仅已延后' },
+  { value: 'DISMISSED', label: '已处理' },
+];
+const columns: CsTableColumn<Reminder>[] = [
+  { id: 'type', header: '类型' },
+  { id: 'dueDate', header: '到期日' },
+  { accessorKey: 'message', header: '内容' },
+  { id: 'status', header: '状态' },
+  { id: 'snoozedUntil', header: '延后至' },
+  { id: 'actions', header: '操作' },
+];
+function pickStatus(v: string): void {
+  if (statusFilter.value === v) return;
+  statusFilter.value = v;
+  onStatusChange();
+}
+
+function statusTag(status: ReminderStatus): { type: 'warning' | 'neutral' | 'success'; label: string } {
   if (status === 'PENDING') return { type: 'warning', label: '待处理' };
-  if (status === 'SNOOZED') return { type: 'info', label: '已延后' };
+  if (status === 'SNOOZED') return { type: 'neutral', label: '已延后' };
   return { type: 'success', label: '已处理' };
 }
 
@@ -52,17 +75,18 @@ const isOverdue = computed(() => (dueDate: string) => {
 });
 
 async function handleSnooze(r: Reminder): Promise<void> {
+  const value = await confirmRef.value!.ask({
+    title: '延后提醒',
+    message: '把这条提醒延后到哪一天?',
+    input: { label: '延后到 (YYYY-MM-DD)', initial: defaultSnoozeDate(), required: true, pattern: /^\d{4}-\d{2}-\d{2}$/, errorText: '请输入 YYYY-MM-DD 格式' },
+  });
+  if (value === null) return;
   try {
-    const { value } = await ElMessageBox.prompt('延后到 (YYYY-MM-DD)', '延后提醒', {
-      inputPattern: /^\d{4}-\d{2}-\d{2}$/,
-      inputErrorMessage: '请输入 YYYY-MM-DD 格式',
-      inputValue: defaultSnoozeDate(),
-    });
     await snoozeReminder(r.id, value);
     ElMessage.success('已延后');
     load();
   } catch {
-    // 取消
+    // 拦截器已提示失败原因
   }
 }
 
@@ -73,13 +97,14 @@ function defaultSnoozeDate(): string {
 }
 
 async function handleDismiss(r: Reminder): Promise<void> {
+  const ok = await confirmRef.value!.ask({ title: '确认', message: '标记此提醒为已处理?' });
+  if (ok === null) return;
   try {
-    await ElMessageBox.confirm('标记此提醒为已处理?', '确认', { type: 'warning' });
     await dismissReminder(r.id);
     ElMessage.success('已处理');
     load();
   } catch {
-    // 取消
+    // 拦截器已提示失败原因
   }
 }
 
@@ -95,6 +120,7 @@ function onStatusChange(): void {
 }
 
 function onPageChange(p: number): void {
+  if (p - 1 === page.value) return;
   page.value = p - 1;
   load();
 }
@@ -103,86 +129,61 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="my-reminders">
-    <div class="header">
-      <h2>我的提醒</h2>
-      <el-radio-group v-model="statusFilter" @change="onStatusChange">
-        <el-radio-button label="PENDING,SNOOZED">活跃</el-radio-button>
-        <el-radio-button label="PENDING">仅待处理</el-radio-button>
-        <el-radio-button label="SNOOZED">仅已延后</el-radio-button>
-        <el-radio-button label="DISMISSED">已处理</el-radio-button>
-      </el-radio-group>
-    </div>
+  <div class="page my-reminders">
+    <section class="cs-card">
+      <header class="cs-card-head">
+        <h2>我的提醒</h2>
+        <span class="count">共 {{ total }} 条</span>
+        <div class="seg head-actions" data-testid="reminder-status-filter">
+          <UButton
+            v-for="f in STATUS_FILTERS"
+            :key="f.value"
+            size="sm"
+            :color="statusFilter === f.value ? 'primary' : 'neutral'"
+            :variant="statusFilter === f.value ? 'solid' : 'outline'"
+            @click="pickStatus(f.value)"
+          >{{ f.label }}</UButton>
+        </div>
+      </header>
 
-    <el-table v-loading="loading" :data="reminders" stripe>
-      <el-table-column prop="type" label="类型" width="120">
-        <template #default="{ row }">{{ typeLabel(row.type) }}</template>
-      </el-table-column>
-      <el-table-column prop="dueDate" label="到期日" width="140">
-        <template #default="{ row }">
-          <span :class="{ 'overdue': isOverdue(row.dueDate) && row.status === 'PENDING' }">
-            {{ row.dueDate }}
-          </span>
+      <UTable :data="reminders" :columns="columns" :loading="loading" class="cs-table" data-testid="reminder-table">
+        <template #empty>暂无提醒</template>
+        <template #type-cell="{ row }">{{ typeLabel(row.original.type) }}</template>
+        <template #dueDate-cell="{ row }">
+          <span :class="{ overdue: isOverdue(row.original.dueDate) && row.original.status === 'PENDING' }">{{ row.original.dueDate }}</span>
         </template>
-      </el-table-column>
-      <el-table-column prop="message" label="内容" min-width="300" />
-      <el-table-column prop="status" label="状态" width="100">
-        <template #default="{ row }">
-          <el-tag :type="statusTag(row.status).type" size="small">
-            {{ statusTag(row.status).label }}
-          </el-tag>
+        <template #status-cell="{ row }">
+          <UBadge :color="statusTag(row.original.status).type" variant="soft">{{ statusTag(row.original.status).label }}</UBadge>
         </template>
-      </el-table-column>
-      <el-table-column prop="snoozedUntil" label="延后至" width="120" />
-      <el-table-column label="操作" width="240" fixed="right">
-        <template #default="{ row }">
-          <el-button size="small" link @click="goSource(row)">查看来源</el-button>
-          <el-button
-            v-if="row.status !== 'DISMISSED'"
-            size="small"
-            link
-            @click="handleSnooze(row)"
-          >延后</el-button>
-          <el-button
-            v-if="row.status !== 'DISMISSED'"
-            size="small"
-            type="success"
-            link
-            @click="handleDismiss(row)"
-          >处理</el-button>
+        <template #snoozedUntil-cell="{ row }">{{ row.original.snoozedUntil ?? '—' }}</template>
+        <template #actions-cell="{ row }">
+          <div class="row-actions">
+            <UButton variant="link" size="xs" @click="goSource(row.original)">查看来源</UButton>
+            <UButton v-if="row.original.status !== 'DISMISSED'" variant="link" size="xs" @click="handleSnooze(row.original)">延后</UButton>
+            <UButton v-if="row.original.status !== 'DISMISSED'" color="success" variant="link" size="xs" @click="handleDismiss(row.original)">处理</UButton>
+          </div>
         </template>
-      </el-table-column>
-    </el-table>
+      </UTable>
 
-    <el-pagination
-      v-if="total > 0"
-      :current-page="page + 1"
-      :page-size="size"
-      :total="total"
-      layout="prev, pager, next, total"
-      @current-change="onPageChange"
-      class="pagination"
-    />
+      <div v-if="total > 0" class="pager">
+        <UPagination :page="page + 1" :items-per-page="size" :total="total" show-edges :sibling-count="1" @update:page="onPageChange" />
+      </div>
+    </section>
+
+    <SalesConfirmModal ref="confirmRef" />
   </div>
 </template>
 
-<style lang="scss" scoped>
-.my-reminders {
-  padding: 16px;
-  .header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 16px;
-    h2 { margin: 0; }
-  }
-  .overdue {
-    color: #f56c6c;
-    font-weight: 600;
-  }
-  .pagination {
-    margin-top: 16px;
-    justify-content: flex-end;
-  }
-}
+<style scoped>
+.page { padding: var(--cs-space-4); }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: baseline; gap: var(--cs-space-3); padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
+.head-actions { margin-left: auto; display: flex; align-items: center; gap: var(--cs-space-2); }
+.row-actions { display: flex; align-items: center; gap: var(--cs-space-2); }
+.pager { display: flex; justify-content: flex-end; padding: var(--cs-space-4) var(--cs-space-5); }
+.overdue { color: var(--cs-danger); font-weight: 600; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
 </style>

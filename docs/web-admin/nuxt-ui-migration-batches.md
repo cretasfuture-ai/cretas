@@ -42,6 +42,7 @@
 - **第 3 批续：仓库列表页（5 页）**：`warehouse/inventory/index.vue`、`shipments/list.vue`（确认出库弹窗 UModal、详情 USlideover；规格换算的 `ElMessageBox` 在模态 UModal 下点不了，所以那一步先收起弹窗、问完或取消后还原）、`wastage-reports/index.vue`（照片上传改原生 file 输入）、`unordered-inbound-applications/index.vue`（撤回确认改 UModal）、`salted-deductions/index.vue`。留下：`stocktakes`（2476 行，含盘点录入高密度编辑表）、`semi-finished-stocktakes`、`materials/list`（1442 行，含入库批次编辑/称重）、`material-types/list`（2442 行）、`MaterialPriceTrendView`、`PendingPurchaseReceivingPanel`。
 - 第 4 批：质量（`quality/ccp|cold-chain|returns|defects|param-deviation`，含质检记录列表本体）
 - 第 5 批：销售订单/客户（销售 45 页，按 订单 / 客户 / 报价 / 发运 分 3 小批）
+- **第 5 批 d：销售报价/发运/零散列表（5 页）**：`sales/quotes/list`（单价/毛利率整列按 canViewPrice 去掉）、`vehicles/list`、`reminders/MyReminders`、`needs/list`、`shipments/FormalDeliveries`。确认/带输入的确认（原 `ElMessageBox`）统一走新组件 `sales/components/SalesConfirmModal.vue`（UModal，`ask()` 返回 Promise，取消为 null）。`payment-requests`、`customer-tracking` 已无 `<el-table`，未动；`LegacyShipments`、`orders/*`、`returns/*`、`customers/*` 不在本批。
 - 之后：财务、人事、系统、smart-bi、平台编辑器（编辑器类整页多为画布，最后评估是否迁）。
 
 不在批次内：`platform` 里的流程/画布编辑器、ECharts 图表本身（保留）。

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
+import type { CsTableColumn } from '@/types/csTable';
 
 interface DeliveryItem { id: number; productName?: string; deliveredQuantity?: number | string | null; unit?: string }
 interface Delivery {
@@ -22,6 +23,16 @@ const loading = ref(false);
 const error = ref('');
 let requestVersion = 0;
 
+const columns: CsTableColumn<Delivery>[] = [
+  { accessorKey: 'deliveryNumber', header: '发货单号' },
+  { id: 'role', header: '记录类型' },
+  { id: 'order', header: '销售订单' },
+  { id: 'customer', header: '客户' },
+  { id: 'items', header: '产品 / 单据数量' },
+  { id: 'status', header: '状态' },
+  { accessorKey: 'deliveryDate', header: '发货日期' },
+  { id: 'actions', header: '操作' },
+];
 function roleLabel(row: Delivery): string {
   if (row.parentDeliveryId || row.recordRole === 'SHIPMENT') return '子发运单';
   if (row.recordRole === 'MASTER') return '母发货单';
@@ -61,31 +72,44 @@ watch(factoryId, () => { page.value = 1; total.value = 0; void load(); }, { imme
 onBeforeUnmount(() => { ++requestVersion; });
 </script>
 <template>
-  <el-card>
-    <template #header><div class="header"><span>正式发货记录</span><el-button :loading="loading" @click="load">刷新</el-button></div></template>
-    <el-alert class="explanation" type="info" :closable="false" title="母发货单记录计划，子发运单记录各次发运；单次发货单沿用原有流程。各行数量按产品和单位展示，不跨单合计。" />
-    <div v-if="error" role="alert" class="load-error"><el-alert :title="error" type="error" :closable="false" /><el-button @click="load">重试</el-button></div>
-    <el-table v-else :data="rows" v-loading="loading" row-key="id" border stripe empty-text="暂无正式发货记录">
-      <el-table-column prop="deliveryNumber" label="发货单号" min-width="180" />
-      <el-table-column label="记录类型" min-width="150"><template #default="{ row }">
-        <div>{{ roleLabel(row) }}</div><div v-if="row.shipmentSequence != null">第 {{ row.shipmentSequence }} 次发运</div>
-      </template></el-table-column>
-      <el-table-column label="销售订单" min-width="170"><template #default="{ row }">{{ row.orderNumber || row.salesOrderId || '未关联销售订单' }}</template></el-table-column>
-      <el-table-column label="客户" min-width="130"><template #default="{ row }">{{ row.customerName || row.customerId || '未提供' }}</template></el-table-column>
-      <el-table-column label="产品 / 单据数量" min-width="220"><template #default="{ row }">
-        <div v-for="item in row.items || []" :key="item.id" class="item-line">{{ item.productName || '未提供产品名称' }}：{{ item.deliveredQuantity ?? '未提供数量' }} {{ item.unit || '未提供单位' }}</div><span v-if="!row.items?.length">未提供明细</span>
-      </template></el-table-column>
-      <el-table-column label="状态" min-width="130"><template #default="{ row }">{{ statuses[row.status] || row.status || '未提供' }}</template></el-table-column>
-      <el-table-column prop="deliveryDate" label="发货日期" min-width="120" />
-      <el-table-column label="操作" width="130" fixed="right"><template #default="{ row }"><el-button type="primary" link :disabled="!row.salesOrderId" @click="viewOrder(row)">查看销售订单</el-button></template></el-table-column>
-    </el-table>
-    <el-pagination v-if="!error" :current-page="page" :page-size="size" :total="total" :disabled="loading" layout="total, prev, pager, next" class="pagination" @current-change="changePage" />
-  </el-card>
+  <section class="cs-card">
+    <header class="cs-card-head">
+      <h2>正式发货记录</h2>
+      <UButton color="neutral" variant="outline" icon="i-lucide-refresh-cw" :loading="loading" @click="load">刷新</UButton>
+    </header>
+    <div class="body">
+      <UAlert class="explanation" color="info" variant="subtle" title="母发货单记录计划，子发运单记录各次发运；单次发货单沿用原有流程。各行数量按产品和单位展示，不跨单合计。" />
+      <div v-if="error" role="alert" class="load-error"><UAlert :title="error" color="error" variant="subtle" /><UButton color="neutral" variant="outline" @click="load">重试</UButton></div>
+      <UTable v-else :data="rows" :columns="columns" :loading="loading" class="cs-table" data-testid="formal-deliveries-table">
+        <template #empty>暂无正式发货记录</template>
+        <template #role-cell="{ row }">
+          <div>{{ roleLabel(row.original) }}</div><div v-if="row.original.shipmentSequence != null">第 {{ row.original.shipmentSequence }} 次发运</div>
+        </template>
+        <template #order-cell="{ row }">{{ row.original.orderNumber || row.original.salesOrderId || '未关联销售订单' }}</template>
+        <template #customer-cell="{ row }">{{ row.original.customerName || row.original.customerId || '未提供' }}</template>
+        <template #items-cell="{ row }">
+          <div v-for="item in row.original.items || []" :key="item.id" class="item-line">{{ item.productName || '未提供产品名称' }}：{{ item.deliveredQuantity ?? '未提供数量' }} {{ item.unit || '未提供单位' }}</div><span v-if="!row.original.items?.length">未提供明细</span>
+        </template>
+        <template #status-cell="{ row }">{{ statuses[row.original.status] || row.original.status || '未提供' }}</template>
+        <template #actions-cell="{ row }"><UButton color="primary" variant="link" size="xs" :disabled="!row.original.salesOrderId" @click="viewOrder(row.original)">查看销售订单</UButton></template>
+      </UTable>
+      <div v-if="!error" class="pager">
+        <span class="count">共 {{ total }} 条</span>
+        <UPagination :page="page" :items-per-page="size" :total="total" :disabled="loading" show-edges :sibling-count="1" @update:page="changePage" />
+      </div>
+    </div>
+  </section>
 </template>
 <style scoped>
-.header { display: flex; align-items: center; justify-content: space-between; }
-.explanation { margin-bottom: 16px; }
-.load-error { display: grid; gap: 12px; justify-items: start; }
-.pagination { margin-top: 20px; justify-content: flex-end; }
+.cs-card { background: var(--cs-surface); border: 1px solid var(--cs-border); border-radius: var(--cs-radius); min-width: 0; }
+.cs-card-head { display: flex; align-items: center; justify-content: space-between; padding: var(--cs-space-4) var(--cs-space-5); border-bottom: 1px solid var(--cs-border); }
+.cs-card-head h2 { margin: 0; font-size: var(--cs-type-title); font-weight: 650; color: var(--cs-text); }
+.body { padding: var(--cs-space-4) var(--cs-space-5); }
+.explanation { margin-bottom: var(--cs-space-4); }
+.load-error { display: grid; gap: var(--cs-space-3); justify-items: start; }
+.pager { display: flex; align-items: center; justify-content: flex-end; gap: var(--cs-space-3); margin-top: var(--cs-space-4); }
+.count { color: var(--cs-muted); font-size: var(--cs-font-small); }
 .item-line + .item-line { margin-top: 6px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 6px; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); vertical-align: middle; }
 </style>
