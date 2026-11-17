@@ -80,4 +80,22 @@ class SupplierCanOrderCheckNameResolutionContractTest {
         Map<String, Object> result = run("西北粮油公司");
         assertThat(String.valueOf(result)).contains("SUPPLIER_NOT_FOUND");
     }
+    @Test
+    @DisplayName("#1813 终审 L2: 抽参只给 supplierName (没有 supplierId) → 不在必填校验处追问, 按名字查")
+    void supplierNameAloneIsEnough() {
+        assertThat(tool.validateRequiredParams(new HashMap<>(Map.of("supplierName", FULL)))).isEmpty();
+        assertThat(tool.validateRequiredParams(new HashMap<>(Map.of("supplierId", "SUP-7")))).isEmpty();
+        assertThat(tool.validateRequiredParams(new HashMap<>()))
+                .as("阴性对照: 两个都没有仍追问").containsExactly("supplierId");
+        assertThat((java.util.List<?>) tool.getParametersSchema().get("required")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("只给 supplierName 的完整名 → 唯一命中, 按它的编号做资质检查")
+    void supplierNameAloneResolves() throws Exception {
+        Map<String, Object> params = new HashMap<>();
+        params.put("supplierName", FULL);
+        Map<String, Object> result = tool.doExecute(FACTORY, params, Map.of());
+        assertThat(String.valueOf(result)).contains("SUP-7").doesNotContain("SUPPLIER_NOT_FOUND");
+    }
 }

@@ -94,7 +94,7 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
 
         Map<String, Object> supplierId = new HashMap<>();
         supplierId.put("type", "string");
-        supplierId.put("description", "供应商编号, 或用户说的供应商完整名称 (原样保留「演示·」等前缀和分隔符)");
+        supplierId.put("description", "供应商编号, 或用户说的供应商完整名称 (原样保留「演示·」等前缀和分隔符); 与 supplierName 至少给一个");
         properties.put("supplierId", supplierId);
 
         Map<String, Object> supplierName = new HashMap<>();
@@ -103,13 +103,25 @@ public class SupplierCanOrderCheckTool extends AbstractBusinessTool {
         properties.put("supplierName", supplierName);
 
         schema.put("properties", properties);
-        schema.put("required", List.of("supplierId"));
+        // #1813 终审 L2: supplierId / supplierName 二选一 (抽参只给名字也能查), 两个都没有才追问 (见 validateRequiredParams)。
+        // 不用顶层 anyOf: 部分模型的函数调用不接受顶层组合 schema。
+        schema.put("required", List.of());
         return schema;
     }
 
     @Override
     protected List<String> getRequiredParameters() {
         return List.of("supplierId");
+    }
+
+    /** 二选一: 有编号或有名字就够, 都没有才按缺 supplierId 追问。 */
+    @Override
+    protected List<String> validateRequiredParams(Map<String, Object> params) {
+        String name = getString(params, "supplierName");
+        if (name != null && !name.isBlank()) {
+            return new ArrayList<>();
+        }
+        return super.validateRequiredParams(params);
     }
 
     @Override

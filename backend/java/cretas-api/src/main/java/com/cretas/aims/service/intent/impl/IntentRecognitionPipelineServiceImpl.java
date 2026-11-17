@@ -837,6 +837,16 @@ public class IntentRecognitionPipelineServiceImpl implements IntentRecognitionPi
                 ? knowledgeBase.matchPhrase(phraseInput, domain)
                 : knowledgeBase.matchSpecificPhrase(phraseInput, domain);
         if (match.isEmpty() || (!expectedCodes.isEmpty() && !expectedCodes.contains(match.get()))) return Optional.empty();
+        // #1813 终审 L1: 与流式管线短语快捷同一道复合句闸 —— 决策层关 / 异常 / 空时回落到这里, 以及决策层之前的
+        // 「质检 / 趋势」放行入口, 带条件或多个子问的句子都不再被句中短语截走 (交给后面的识别)。
+        Optional<java.util.Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(phraseInput, domain);
+        String hitPhrase = hit != null && hit.isPresent() && match.get().equals(hit.get().getValue())
+                ? hit.get().getKey() : null;
+        if (!com.cretas.aims.service.execution.PhraseShortcutEligibility.isUnconditionedSimple(
+                phraseInput, hitPhrase, match.get())) {
+            log.info("[EarlyPhrase] 带条件/复合问句不走短语: phrase='{}', intent={}", hitPhrase, match.get());
+            return Optional.empty();
+        }
         AIIntentConfig cfg = configService.getAllIntents(factoryId).stream()
                 .filter(c -> match.get().equals(c.getIntentCode()))
                 .filter(c -> Boolean.TRUE.equals(c.getIsActive()) && c.getDeletedAt() == null)

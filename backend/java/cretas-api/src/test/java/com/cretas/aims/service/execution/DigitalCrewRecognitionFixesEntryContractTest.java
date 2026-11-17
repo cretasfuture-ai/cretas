@@ -126,6 +126,22 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(inputsSeenByTool).as("工具拿到的是带「上个月」的原话").containsExactly(input);
     }
 
+    @ParameterizedTest(name = "「{0}」")
+    @CsvSource({"本月营收", "上月净利率", "本周发货"})
+    @DisplayName("#1813 终审 M1: 时间词开头的短语一字不差说出来, 照走短语快捷 (改前剩下「营收」被拒)")
+    void timePrefixedPhraseSpokenVerbatimStillShortcuts(String input) throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        java.util.Map.Entry<String, String> hit = h.knowledgeBase.matchPhraseHit(input, "FACTORY").orElse(null);
+        assertThat(hit).as("前提: 真实短语表命中这句").isNotNull();
+        assertThat(hit.getKey()).as("前提: 命中的就是这条时间词开头的短语本身").isEqualTo(input);
+        h.intent(hit.getValue(), hit.getValue(), hit.getValue().toLowerCase(), ToolExecutor.AccessMode.READ);
+
+        ask(h, "accountant", input);
+
+        assertThat(h.recognitionCalls()).as("短语直达, 不经决策层").isZero();
+        assertThat(h.executedIntents).containsExactly(hit.getValue());
+    }
+
     // ------------------------------------------------------------------ 问题六: 出成率是业务问法, 不进闲聊 / 本地兜底
 
     @Test

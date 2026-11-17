@@ -75,10 +75,22 @@ public final class PhraseShortcutEligibility {
         return residual(input, phrase).length() <= MAX_RESIDUAL_CHARS;
     }
 
-    /** 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。短语不在原话里 (剥过数量 / 时间才命中) = 原话全部。 */
+    /**
+     * 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。短语不在原话里 (剥过数量 / 时间才命中) = 原话全部。
+     *
+     * <p>句首时间词两边一起剥 (#1813 终审 M1): 短语表里有约 93 条以时间词开头的短语 (本月营收 / 上月净利率 / 本周发货),
+     * 只剥原话不剥短语时, 一字不差说出「本月营收」反而剩下「营收」被拒。短语与原话一样先剥句首时间词再比
+     * (句首时间词不算条件, 工具按原话里的时间查, 同 P1-A)。
+     */
     static String residual(String input, String phrase) {
-        String normalized = PUNCT_AND_SPACE.matcher(IntentKnowledgeBase.stripLeadingTime(input.toLowerCase())).replaceAll("");
-        String p = PUNCT_AND_SPACE.matcher(phrase.toLowerCase()).replaceAll("");
+        return withoutPhrase(normalize(input), normalize(phrase));
+    }
+
+    private static String normalize(String text) {
+        return PUNCT_AND_SPACE.matcher(IntentKnowledgeBase.stripLeadingTime(text.toLowerCase())).replaceAll("");
+    }
+
+    private static String withoutPhrase(String normalized, String p) {
         int at = p.isEmpty() ? -1 : normalized.indexOf(p);
         String rest = at < 0 ? normalized : normalized.substring(0, at) + normalized.substring(at + p.length());
         return FILLER.matcher(rest).replaceAll("");
