@@ -1318,18 +1318,6 @@
       "route_type": "TOOL"
     },
     {
-      "intent_code": "INVENTORY_FINISHED_GOODS_INBOUND_STATUS",
-      "intent_name": "成品入库状态",
-      "intent_category": "DATA_QUERY",
-      "description": "只读: 按批次号或产品名查成品有没有入库、入了多少、可用还是待检, 没入库的给生产状态; 不含价格。",
-      "tool_name": "finished_goods_inbound_status",
-      "required_entities": null,
-      "is_active": true,
-      "business_type": "FACTORY",
-      "factory_id": null,
-      "route_type": "TOOL"
-    },
-    {
       "intent_code": "INVENTORY_GAIN_INBOUND",
       "intent_name": "盘盈入库",
       "intent_category": "DATA_OPERATION",

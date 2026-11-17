@@ -3133,13 +3133,6 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("在哪条线上", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
         phraseToIntentMapping.put("在哪个车间上班", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
         phraseToIntentMapping.put("员工在哪条产线", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
-        // 成品入库了没 (只读) — 「成品入库」本身仍指入库登记 (写), 带疑问的才到查询
-        phraseToIntentMapping.put("包装好后入库", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
-        phraseToIntentMapping.put("包装后入库了没", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
-        phraseToIntentMapping.put("成品入库了没", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
-        phraseToIntentMapping.put("成品入库了吗", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
-        phraseToIntentMapping.put("成品入库状态", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
-        phraseToIntentMapping.put("成品有没有入库", "INVENTORY_FINISHED_GOODS_INBOUND_STATUS");
         // 排清洁计划 (写, 走确认卡)
         phraseToIntentMapping.put("清洁计划给排", "SSOP_SCHEDULE_PLAN_CREATE");
         phraseToIntentMapping.put("排一下清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
