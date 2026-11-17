@@ -1,10 +1,14 @@
 <script setup lang="ts">
 // App.vue - 根组件
 // 角色同步在路由守卫中处理，避免循环依赖
+// UApp 提供 Nuxt UI 的 TooltipProvider/Toaster/Overlay；没有它任何页面里的 UTooltip 会在 setup 抛错。
+// locale 仍由 plugins/nuxtUiLocale 在 app 级 provide（UApp 会继承）；弹层 z-index 见 styles/nuxt-ui.css（1100–1200，低于 Element 的 2000）。
 </script>
 
 <template>
-  <router-view />
+  <UApp>
+    <router-view />
+  </UApp>
 </template>
 
 <style>

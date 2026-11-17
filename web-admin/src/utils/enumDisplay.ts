@@ -436,6 +436,9 @@ export const FINANCE_TRANSACTION_TYPE_LABELS: Record<string, string> = {
   AR_PAYMENT: '客户付款',
   AR_ADJUSTMENT: '应收调整',
   AP_ADJUSTMENT: '应付调整',
+  AR_CREDIT_NOTE: '应收冲减',
+  AP_CREDIT_NOTE: '应付冲减',
+  AR_REFUND: '客户退款结清',
   PAYABLE: '应付挂账',
   AP_INVOICE: '应付开票',
   AP_PAYMENT: '供应商付款',
@@ -461,4 +464,11 @@ export const PAYMENT_METHOD_LABELS: Record<string, string> = {
   CREDIT: '赊账',
   POS: 'POS',
   OTHER: '其他',
+};
+
+/** 月结对账结论 (accounting-period 「月结报表」列)。 */
+export const RECONCILIATION_STATUS_LABELS: Record<string, string> = {
+  PASS: '通过',
+  WARNING: '有提示',
+  FAIL: '未通过',
 };
