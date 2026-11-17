@@ -7,44 +7,30 @@
   <div class="attachments-tab">
     <div class="toolbar">
       <span class="title">文件附件</span>
-      <el-button :icon="Refresh" @click="fetchList" :loading="state === 'loading'">刷新</el-button>
+      <UButton icon="i-lucide-refresh-cw" color="neutral" variant="outline" :loading="state === 'loading'" @click="fetchList">刷新</UButton>
     </div>
 
-    <el-skeleton v-if="state === 'loading'" :rows="5" animated />
-    <el-empty v-else-if="state === 'empty'" description="该客户暂无附件" :image-size="80">
-      <p class="hint">附件上传请在客户编辑页或相关业务单据上传后自动归档.</p>
-    </el-empty>
-    <div v-else-if="state === 'error'" class="error-panel">
-      <el-result icon="error" :title="errorMsg">
-        <template #extra>
-          <el-button type="primary" @click="fetchList">重试</el-button>
-        </template>
-      </el-result>
-    </div>
+    <div v-if="state === 'loading'" class="skeleton"><USkeleton v-for="i in 5" :key="i" class="h-9 w-full" /></div>
+    <UEmpty v-else-if="state === 'empty'" icon="i-lucide-paperclip" description="该客户暂无附件">
+      <template #actions><p class="hint">附件上传请在客户编辑页或相关业务单据上传后自动归档.</p></template>
+    </UEmpty>
+    <UAlert v-else-if="state === 'error'" color="error" variant="subtle" :title="errorMsg" :actions="[{ label: '重试', color: 'error', variant: 'outline', onClick: fetchList }]" />
 
     <template v-else>
-      <el-table :data="attachments" border stripe size="small">
-        <el-table-column label="文件名" prop="fileName" min-width="220" show-overflow-tooltip />
-        <el-table-column label="大小" prop="fileSize" width="100">
-          <template #default="{ row }">{{ formatSize(row.fileSize) }}</template>
-        </el-table-column>
-        <el-table-column label="类型" prop="contentType" width="160" show-overflow-tooltip />
-        <el-table-column label="上传时间" prop="createdAt" width="170">
-          <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="130" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" @click="download(row)">下载</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <UTable :data="attachments" :columns="columns" class="cs-table" data-testid="customer-attachments-table">
+        <template #fileSize-cell="{ row }">{{ formatSize(row.original.fileSize) }}</template>
+        <template #createdAt-cell="{ row }">{{ formatDate(row.original.createdAt) }}</template>
+        <template #actions-cell="{ row }">
+          <UButton variant="link" size="xs" @click="download(row.original)">下载</UButton>
+        </template>
+      </UTable>
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
-import { Refresh } from '@element-plus/icons-vue';
+import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -66,6 +52,13 @@ const { factoryId } = storeToRefs(authStore);
 const state = ref<'loading' | 'ready' | 'empty' | 'error'>('loading');
 const errorMsg = ref('');
 const attachments = ref<Attachment[]>([]);
+const columns: TableColumn<Attachment>[] = [
+  { accessorKey: 'fileName', header: '文件名' },
+  { id: 'fileSize', header: '大小' },
+  { accessorKey: 'contentType', header: '类型' },
+  { id: 'createdAt', header: '上传时间' },
+  { id: 'actions', header: '操作' },
+];
 
 function formatSize(b?: number): string {
   if (b == null) return '—';
@@ -116,9 +109,13 @@ onMounted(fetchList);
 </script>
 
 <style scoped>
-.attachments-tab { padding: 8px 0; }
+.attachments-tab { padding: 12px 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.toolbar .title { font-size: 14px; color: var(--el-text-color-secondary); }
-.hint { color: var(--el-text-color-secondary); font-size: 12px; margin-top: 8px; }
-.error-panel { padding: 24px 0; }
+.toolbar .title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); }
+.masked { color: var(--cs-muted); font-family: monospace; letter-spacing: 2px; user-select: none; }
+.num { font-variant-numeric: tabular-nums; }
+.skeleton { display: grid; gap: 8px; }
+:deep(.cs-table th) { height: 32px; padding-block: 4px; font-size: var(--cs-font-small); font-weight: 500; color: var(--cs-muted); background: var(--cs-surface-subtle); white-space: nowrap; }
+:deep(.cs-table td) { font-size: 13px; padding-block: 0; height: var(--cs-row-height); color: var(--cs-text); border-color: var(--cs-border); }
+.hint { color: var(--cs-muted); font-size: var(--cs-font-small); margin: 0; }
 </style>

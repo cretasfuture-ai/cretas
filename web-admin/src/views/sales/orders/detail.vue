@@ -61,7 +61,7 @@ import {
 import { toDateString } from '@/utils/dateFormat';
 import { formatUnitPrice, salesOrderDisplayMoney, salesOrderReceivableAmount, salesOrderRemainingAmount, warehouseNameById, type WarehouseIdNameLike } from './salesOrderDisplay';
 import { createAutoFullChildShipment } from './deliveryAutoChild';
-import { withKnownUnitPrice } from './deliveryPricePayload';
+import { knownUnitPrice, withKnownUnitPrice } from './deliveryPricePayload';
 import { allocationNoticeLines, allocationNoticesOf, needsPackagingConfirmation, type ShipmentAllocationNotice } from './shipmentAllocationNotices';
 import { useNativeDemoAdapters } from '@/demo/f006NativeBridge';
 import { priceSourceLabel } from '@/api/customerPriceList';
@@ -1244,7 +1244,7 @@ function openReturnDialog() {
       return {
         productTypeId: String(it.productTypeId || ''),
         itemName: String(it.productName || it.productTypeName || '-'),
-        unitPrice: Number(it.unitPrice) || 0,
+        unitPrice: knownUnitPrice(it.unitPrice),
         maxQuantity: delivered, // can't refund more than delivered
         selected: delivered > 0,
         quantity: delivered,

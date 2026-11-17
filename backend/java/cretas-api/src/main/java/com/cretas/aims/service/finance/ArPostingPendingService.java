@@ -153,6 +153,35 @@ public class ArPostingPendingService {
         repository.save(r);
     }
 
+    /**
+     * 「无需挂账」的追溯行(如零金额发货): 在调用方(发货)事务内写一行 RESOLVED, 原因 = reasonCode + 说明,
+     * 不告警、不进默认的待处理(PENDING)列表; 同一发运单同一 reasonCode 只留一行(幂等)。
+     */
+    public void recordNoPostingNeeded(String factoryId, String deliveryId, String deliveryNumber,
+                                      String salesOrderId, String customerId, Long ownerId, BigDecimal amount,
+                                      Long operatedBy, String reasonCode, String note) {
+        boolean exists = repository
+                .findFirstByFactoryIdAndDeliveryIdAndStatus(factoryId, deliveryId, ArPostingPendingStatus.RESOLVED)
+                .filter(r -> r.getFailureReason() != null && r.getFailureReason().startsWith(reasonCode + ":"))
+                .isPresent();
+        if (exists) {
+            return;
+        }
+        ArPostingPending r = new ArPostingPending();
+        r.setFactoryId(factoryId);
+        r.setDeliveryId(deliveryId);
+        r.setDeliveryNumber(deliveryNumber);
+        r.setSalesOrderId(salesOrderId);
+        r.setCustomerId(customerId);
+        r.setOwnerId(ownerId);
+        r.setAmount(amount);
+        r.setFailureReason(reasonCode + ": " + note);
+        r.setStatus(ArPostingPendingStatus.RESOLVED);
+        r.setOperatedBy(operatedBy);
+        r.setResolvedAt(java.time.LocalDateTime.now());
+        repository.save(r);
+    }
+
     /** 挂账成功(或幂等命中)后把意图行置 RESOLVED; 关闭失败只记日志(行保持 PENDING, 可见可查)。 */
     private void closeIntent(String factoryId, String deliveryId, String note) {
         try {
