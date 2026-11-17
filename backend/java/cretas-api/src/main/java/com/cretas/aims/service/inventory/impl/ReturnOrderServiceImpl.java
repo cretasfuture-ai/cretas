@@ -202,6 +202,9 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         if (physicalSalesReturn) {
             sourceBatchIdsByLine = deriveOrValidateSalesReturnBatchEvidence(factoryId, request, null);
         }
+        // 缺价回填(Steve 2026-11-17): 销售退货行单价为 null(前端缺价/被遮时不再发 0, #1796)
+        // → 按来源销售订单行单价回填; 找不到来源订单行价直接拒绝创建, ⛔ 不落 0。
+        List<BigDecimal> resolvedUnitPrices = resolveReturnUnitPrices(factoryId, returnType, request);
 
         // Round 11 T2: Canvas Integration Template hook 1 — DB-driven validation
         if (validationRuleEvaluator != null) {
@@ -259,13 +262,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             item.setProductTypeId(itemDTO.getProductTypeId());
             item.setItemName(itemDTO.getItemName());
             item.setQuantity(itemDTO.getQuantity());
-            item.setUnitPrice(itemDTO.getUnitPrice());
+            BigDecimal unitPrice = resolvedUnitPrices.get(itemIndex);
+            item.setUnitPrice(unitPrice);
             item.setBatchNumber(itemDTO.getBatchNumber());
             item.setReason(itemDTO.getReason());
 
             BigDecimal lineAmount = BigDecimal.ZERO;
-            if (itemDTO.getUnitPrice() != null && itemDTO.getQuantity() != null) {
-                lineAmount = itemDTO.getQuantity().multiply(itemDTO.getUnitPrice())
+            if (unitPrice != null && itemDTO.getQuantity() != null) {
+                lineAmount = itemDTO.getQuantity().multiply(unitPrice)
                         .setScale(2, BigDecimal.ROUND_HALF_UP);
             }
             item.setLineAmount(lineAmount);
@@ -1040,6 +1044,63 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
      * 退货行没有源订单行 id, 按 SKU + 未税单价回源销售单行; 同 SKU 只有一种税率时只按 SKU。
      * 找不到源行时按销售单默认税率, 再没有视为 0 税 (与无税率数据的旧单一致)。
      */
+    /**
+     * 每个退货行最终用的单价(与 request.items 同序)。销售退货行单价为 null 时按来源销售订单行单价回填:
+     * 订单行按 sourceOrderId + factoryId 查, 按 productTypeId 对上; 对上的行价格必须唯一且非空。
+     * 找不到(无来源订单 / 没有该产品的行 / 行没价 / 同产品多行价格不一)一律 422 拒绝创建, ⛔ 不落 0。
+     * 已带单价(含确定的 0)的行与采购退货不动。
+     */
+    private List<BigDecimal> resolveReturnUnitPrices(String factoryId, ReturnType returnType,
+                                                     CreateReturnOrderRequest request) {
+        List<BigDecimal> prices = new ArrayList<>();
+        List<SalesOrderItem> orderLines = null;
+        for (CreateReturnOrderRequest.ReturnOrderItemDTO dto : request.getItems()) {
+            if (dto.getUnitPrice() != null || returnType != ReturnType.SALES_RETURN) {
+                prices.add(dto.getUnitPrice());
+                continue;
+            }
+            String label = dto.getItemName() != null ? dto.getItemName()
+                    : (dto.getProductTypeId() != null ? dto.getProductTypeId() : "未知产品");
+            if (isBlank(request.getSourceOrderId()) || salesOrderItemRepository == null) {
+                throw missingReturnPrice(label, "该退货没有关联来源销售订单，无法按订单价回填");
+            }
+            if (orderLines == null) {
+                orderLines = salesOrderItemRepository
+                        .findBySalesOrderIdAndSalesOrderFactoryId(request.getSourceOrderId(), factoryId);
+                if (orderLines == null) orderLines = List.of();
+            }
+            Set<BigDecimal> candidates = new TreeSet<>();
+            boolean lineWithoutPrice = false;
+            for (SalesOrderItem line : orderLines) {
+                if (line == null || dto.getProductTypeId() == null
+                        || !Objects.equals(dto.getProductTypeId(), line.getProductTypeId())) {
+                    continue;
+                }
+                if (line.getUnitPrice() == null) {
+                    lineWithoutPrice = true;
+                } else {
+                    candidates.add(line.getUnitPrice()); // TreeSet 按 compareTo 去重: 100 与 100.00 算同价
+                }
+            }
+            if (candidates.isEmpty()) {
+                throw missingReturnPrice(label, lineWithoutPrice
+                        ? "来源销售订单的这一行也没有单价"
+                        : "来源销售订单里找不到这个产品的订单行");
+            }
+            if (candidates.size() > 1 || lineWithoutPrice) {
+                throw missingReturnPrice(label, "来源销售订单里这个产品有多个订单行且单价不一致，无法确定按哪个价回填");
+            }
+            prices.add(candidates.iterator().next());
+        }
+        return prices;
+    }
+
+    private static BusinessException missingReturnPrice(String label, String why) {
+        return new BusinessException(422, "退货行「" + label + "」缺少单价：" + why + "，不能按 0 登记退货")
+                .withCode("RETURN_UNIT_PRICE_MISSING")
+                .withHint("请在退货单里填写该行单价，或先在来源销售订单补全单价后再登记退货");
+    }
+
     private BigDecimal salesReturnTaxAmount(String sourceOrderId, List<ReturnOrderItem> items) {
         if (sourceOrderId == null || sourceOrderId.isBlank() || salesOrderRepository == null) {
             return BigDecimal.ZERO;
