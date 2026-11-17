@@ -67,6 +67,7 @@ class ReplyTextPriceSweepContractTest {
         reviewed("foodsafety/RecallLossEstimateTool.java", Verdict.CHECKED, "totalEstimatedLoss…brandLoss");
         reviewed("foodsafety/RegulatoryReportGenerateTool.java", Verdict.CHECKED, "estimatedLoss");
         reviewed("hr/ExpenseRequestQueryTool.java", Verdict.CHECKED, "total / 类别 / amount");
+        reviewed("indicator/IndicatorQueryTool.java", Verdict.CHECKED, "金额 / 毛利 / 财务类指标 currentValue / trend.value 与文字里的数值+单位 (replyShowsPriceSpec VALUE_SPEC; 扫描命中的是货币单位判定正则, 见 IndicatorMoneyValueVisibilityContractTest)");
         reviewed("pricing/PricingTestCalculateTool.java", Verdict.CHECKED, "originalPrice / finalPrice / totalDiscount");
         reviewed("purchase/ProcurementOrderCreateTool.java", Verdict.CHECKED, "estimatedUnitPrice / estimatedBudget");
         reviewed("report/ReportBomCostRankTool.java", Verdict.CHECKED, "totalCost (无权限整份金额与图不出, 见 ReportBomCostRankToolContractTest)");
@@ -98,7 +99,7 @@ class ReplyTextPriceSweepContractTest {
     void everyToolThatWritesMoneyIntoTextIsReviewed() throws IOException {
         Set<String> found = moneyTextFiles();
         // Dedicated restaurant implementations were removed; keep an exact non-vacuous denominator.
-        assertThat(found).as("工厂目录金额文本审计分母").hasSize(23);
+        assertThat(found).as("工厂目录金额文本审计分母").hasSize(24);
 
         Set<String> unreviewed = new TreeSet<>(found);
         unreviewed.removeAll(REVIEWED.keySet());
