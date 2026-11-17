@@ -16,7 +16,8 @@
 
     <template v-else>
       <UTable :data="invoices" :columns="columns" class="cs-table" data-testid="customer-invoices-table">
-        <template #status-cell="{ row }"><UBadge color="neutral" variant="soft">{{ row.original.status }}</UBadge></template>
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ invoiceStatusText(row.original.status) }}</UBadge></template>
+        <template #invoiceType-cell="{ row }">{{ invoiceTypeText(row.original.invoiceType) }}</template>
         <template #amount-cell="{ row }">
           <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.amount) }}</span>
           <span v-else class="masked">****</span>
@@ -43,6 +44,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { invoiceStatusText, invoiceTypeText, statusColor } from './customerTabLabels';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -82,7 +84,7 @@ const pageSize = 20;
 const R = { class: { th: 'text-right', td: 'text-right' } };
 const columns: TableColumn<InvoiceRow>[] = [
   { accessorKey: 'invoiceNumber', header: '发票号' },
-  { accessorKey: 'invoiceType', header: '类型' },
+  { id: 'invoiceType', header: '类型' },
   { id: 'status', header: '状态' },
   { id: 'amount', header: '不含税', meta: R },
   { id: 'taxAmount', header: '税额', meta: R },

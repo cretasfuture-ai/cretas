@@ -19,7 +19,7 @@
     <template v-else>
       <UTable :data="quotes" :columns="columns" class="cs-table" data-testid="customer-quotes-table">
         <template #createdAt-cell="{ row }">{{ formatDate(row.original.createdAt) }}</template>
-        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ row.original.status }}</UBadge></template>
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ quoteStatusText(row.original.status) }}</UBadge></template>
         <template #unitPrice-cell="{ row }">
           <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.unitPrice) }}<template v-if="row.original.unit">/{{ row.original.unit }}</template></span>
           <span v-else class="masked">****</span>
@@ -37,6 +37,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { quoteStatusText, statusColor } from './customerTabLabels';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
@@ -96,14 +97,6 @@ function formatMoney(v: number | null | undefined): string {
 function formatDate(s?: string): string {
   if (!s) return '—';
   return new Date(s).toLocaleString('zh-CN', { hour12: false });
-}
-
-function statusColor(status?: string): 'success' | 'warning' | 'neutral' | 'error' {
-  if (!status) return 'neutral';
-  if (status === 'APPROVED') return 'success';
-  if (status === 'PENDING') return 'warning';
-  if (status === 'REJECTED' || status === 'CANCELLED') return 'error';
-  return 'neutral';
 }
 
 async function fetchList() {

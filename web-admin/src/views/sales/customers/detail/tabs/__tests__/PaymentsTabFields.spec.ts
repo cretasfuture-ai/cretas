@@ -21,7 +21,7 @@ describe('customer payment field contract', () => {
     const text=wrapper.text();
     expect(text).toContain('PAY-20261016-0001');
     expect(text).toContain('2026-10-16');
-    expect(text).toContain('BANK_TRANSFER');
+    expect(text).toContain('银行转账'); expect(text).not.toContain('BANK_TRANSFER');
     expect(text).toContain('scope receipt');
     if(allowed) { expect(text).toContain('62.00'); }
     else { expect(text).toContain('****'); expect(text).not.toContain('62.00'); }

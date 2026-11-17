@@ -20,7 +20,8 @@
 
     <template v-else>
       <UTable :data="returns" :columns="columns" class="cs-table" data-testid="customer-returns-table">
-        <template #status-cell="{ row }"><UBadge color="neutral" variant="soft">{{ row.original.status }}</UBadge></template>
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ returnStatusText(row.original.status) }}</UBadge></template>
+        <template #remark-cell="{ row }">{{ cleanRemark(row.original.remark) }}</template>
         <template #totalAmount-cell="{ row }">
           <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.totalAmount) }}</span>
           <span v-else class="masked">****</span>
@@ -38,6 +39,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { cleanRemark, returnStatusText, statusColor } from './customerTabLabels';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -79,7 +81,7 @@ const columns: TableColumn<ReturnRow>[] = [
   { id: 'status', header: '状态' },
   { id: 'totalAmount', header: '金额', meta: R },
   { accessorKey: 'reason', header: '原因' },
-  { accessorKey: 'remark', header: '备注' },
+  { id: 'remark', header: '备注' },
 ];
 
 function formatMoney(v?: number | null): string {

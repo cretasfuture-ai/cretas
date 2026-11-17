@@ -16,7 +16,8 @@
 
     <template v-else>
       <UTable :data="payments" :columns="columns" class="cs-table" data-testid="customer-payments-table">
-        <template #status-cell="{ row }"><UBadge color="neutral" variant="soft">{{ row.original.status }}</UBadge></template>
+        <template #status-cell="{ row }"><UBadge :color="statusColor(row.original.status)" variant="soft">{{ paymentStatusText(row.original.status) }}</UBadge></template>
+        <template #paymentMethod-cell="{ row }">{{ paymentMethodText(row.original.paymentMethod) }}</template>
         <template #amount-cell="{ row }">
           <span v-if="canViewPrice" class="num">{{ formatMoney(row.original.amount) }}</span>
           <span v-else class="masked">****</span>
@@ -34,6 +35,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
+import { paymentMethodText, paymentStatusText, statusColor } from './customerTabLabels';
 import { ElMessage } from 'element-plus';
 import { storeToRefs } from 'pinia';
 import { useAuthStore } from '@/store/modules/auth';
@@ -73,7 +75,7 @@ const R = { class: { th: 'text-right', td: 'text-right' } };
 const columns: TableColumn<PaymentRow>[] = [
   { accessorKey: 'paymentNumber', header: '收款单号' },
   { accessorKey: 'paymentDate', header: '收款日期' },
-  { accessorKey: 'paymentMethod', header: '方式' },
+  { id: 'paymentMethod', header: '方式' },
   { id: 'status', header: '状态' },
   { id: 'amount', header: '金额', meta: R },
   { accessorKey: 'remark', header: '备注' },
