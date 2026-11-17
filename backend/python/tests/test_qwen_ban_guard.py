@@ -82,6 +82,29 @@ def test_local_embedding_names_are_allowed(model):
     assert not llm_router.is_banned_embedding_model(model), model
 
 
+def test_backfill_script_default_is_not_banned():
+    """默认值也是禁用对象: backfill 的 --correct-model 默认不得指向 qwen-max 系列。"""
+    import inspect
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "backfill_teacher_model", _BACKEND_PY / "scripts" / "backfill_teacher_model.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    default = inspect.signature(mod.run_backfill).parameters["correct_value"].default
+    assert not llm_router.is_paid_denied(default), default
+
+
+def test_java_and_env_defaults_are_not_banned():
+    java = _JAVA_MAIN / "java" / "com" / "cretas" / "aims" / "config" / "DashScopeConfig.java"
+    text = java.read_text(encoding="utf-8")
+    m = re.search(r'private String model = "([^"]+)"', text)
+    assert m and not llm_router.is_paid_denied(m.group(1)), m and m.group(1)
+    env = (_BACKEND_PY / "smartbi" / ".env.example").read_text(encoding="utf-8")
+    for line in env.splitlines():
+        if line.startswith("LLM_MODEL="):
+            assert not llm_router.is_paid_denied(line.split("=", 1)[1]), line
+
+
 # 静态闸: 形状 = DashScope 文本向量模型名 或 qwen 系 embedding 名。
 _EMBED_CALL = re.compile(r"text-embedding-v\d|qwen[\w.\-]*embedding", re.IGNORECASE)
 _BACKEND_PY = Path(__file__).resolve().parents[1]

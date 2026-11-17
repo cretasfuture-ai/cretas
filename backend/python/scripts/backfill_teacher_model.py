@@ -6,19 +6,19 @@ This script updates those rows to the correct value.
 
 Best-effort heuristic: rows with source='chart_insight' and teacher_model='chart'
 were produced during corpus seeding, which runs with CHART_INSIGHT_LLM_SLOT=REVIEW.
-Update them to the value of --correct-model (default: 'qwen3-max').
+Update them to the value of --correct-model (default: 'qwen3.7-max-2026-06-08').
 
 Usage:
     cd backend/python
     # Dry-run — see what would change:
     PYTHONPATH=.:smartbi python scripts/backfill_teacher_model.py --dry-run
 
-    # Apply with the correct model name (default qwen3-max):
+    # Apply with the correct model name (default qwen3.7-max-2026-06-08):
     PYTHONPATH=.:smartbi python scripts/backfill_teacher_model.py
 
     # Explicit DSN:
     PYTHONPATH=.:smartbi python scripts/backfill_teacher_model.py \
-        --dsn postgresql://user:pass@host/db --correct-model qwen3-max
+        --dsn postgresql://user:pass@host/db --correct-model qwen3.7-max-2026-06-08
 
 The script is idempotent: re-running after a successful backfill will find 0 rows to update.
 """
@@ -101,7 +101,7 @@ async def _make_pool(dsn: Optional[str]):
 
 async def run_backfill(
     wrong_value: str = "chart",
-    correct_value: str = "qwen3-max",
+    correct_value: str = "qwen3.7-max-2026-06-08",
     dry_run: bool = False,
     dsn: Optional[str] = None,
 ) -> dict:
@@ -109,7 +109,7 @@ async def run_backfill(
 
     Args:
         wrong_value: The stale teacher_model value to replace (default: 'chart').
-        correct_value: The correct model name to write (default: 'qwen3-max').
+        correct_value: The correct model name to write (default: 'qwen3.7-max-2026-06-08').
         dry_run: If True, count affected rows but do not update.
         dsn: Optional asyncpg DSN override.
 
@@ -180,8 +180,8 @@ def main() -> None:
         help="Stale teacher_model value to replace (default: 'chart').",
     )
     parser.add_argument(
-        "--correct-model", default="qwen3-max",
-        help="Correct model name to write (default: 'qwen3-max'). "
+        "--correct-model", default="qwen3.7-max-2026-06-08",
+        help="Correct model name to write (default: 'qwen3.7-max-2026-06-08'). "
              "Matches the model behind SLOT.REVIEW in the aliyun_b/c quota.",
     )
     parser.add_argument(
