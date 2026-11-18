@@ -18,7 +18,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-class ListSummaryServiceImplQualityInspectionTest {
+class ListSummaryServiceImplQualityInspectionContractTest {
 
     private ListSummaryServiceImpl service;
     private Query query;
