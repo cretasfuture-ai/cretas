@@ -16,6 +16,7 @@ case "$1 $2" in
     case "$*" in
       *mergeCommit*) if [ "$(cat "$S/state")" = MERGED ]; then echo "MERGED sha-$h"; else echo "OPEN "; fi;;
       *"--jq .headRefOid"*) echo "$h";;
+      *"--jq .id"*) echo "PR_node_99";;
       *) echo "$(cat "$S/state") $h $(cat "$S/mergeable") main";;
     esac;;
   "pr checks")
@@ -24,6 +25,7 @@ case "$1 $2" in
     [ -f "$f" ] && cat "$f"; [ -f "$f" ] && grep -q pending "$f" && exit 8; exit 0;;
   "pr update-branch") cat "$S/next_head" > "$S/head"; echo "updated";;
   "api graphql")
+    case "$*" in *enqueuePullRequest*) case "$*" in *"h=$h"*) echo '{"data":{"enqueuePullRequest":{"mergeQueueEntry":{"state":"QUEUED"}}}}'; exit 0;; *) echo "head mismatch" >&2; exit 1;; esac;; esac
     # 队列读数: "<qon> <state> <inq> <sha>"; qseq 每行用一次, 用完沿用最后一行; 无 qseq 则无队列
     q=$(cat "$S/queue" 2>/dev/null || echo false)
     # qerr: 前 N 次读模拟 GraphQL 出错 (jq 在 data=null 时打出 "false null null ")
@@ -98,7 +100,7 @@ setup 11; echo MERGED > "$S/state"; run
 # S12 队列开: 绿了即使落后也不 update-branch, 入队 (不带 --squash), 在队里两轮后 MERGED
 setup 12; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; echo 3 > "$S/behind.h1"; echo h9 > "$S/next_head"
 printf "OPEN false \nOPEN true \nOPEN true \nMERGED false shaQ\n" > "$S/qseq"; run
-[ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*sha=shaQ.*queue=on' "$S/out" && ! called "pr update-branch" && called "pr merge 99 --match-head-commit h1" && ! called "squash" && ok S12-queue-merge || bad S12-queue-merge
+[ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*sha=shaQ.*queue=on' "$S/out" && ! called "pr update-branch" && called "enqueuePullRequest" && called "h=h1" && ! called "pr merge" && ! called "squash" && ok S12-queue-merge || bad S12-queue-merge
 
 # S13 队列开: 入队后被踢出 (队列里检查没过) -> RED
 setup 13; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"

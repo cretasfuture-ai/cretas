@@ -51,7 +51,12 @@ qstate() {
 enqueue_and_wait() {
   local out mrc q qon s inq sha seen=0 miss=0
   say "head=${head:0:10} green, base $base has merge queue -> enqueue"
-  out=$("$GH" pr merge "$PR" --match-head-commit "$head" 2>&1); mrc=$?
+  # 直接用 enqueuePullRequest 入队: `gh pr merge` 在队列分支上走 enablePullRequestAutoMerge,
+  # 本仓库没开 auto-merge 会被拒 (2026-11-18 #1866 实测 "Auto merge is not allowed")。
+  # expectedHeadOid 保证入队的就是刚判绿的这个头。
+  local nid
+  nid=$("$GH" pr view "$PR" --json id --jq .id 2>&1)
+  out=$("$GH" api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}'     -f id="$nid" -f h="$head" 2>&1); mrc=$?
   while :; do
     expired && finish UNMEASURED "reason=timeout-in-queue head=$head seen=$seen queue=on" 2
     nap
