@@ -1,4 +1,4 @@
-import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
+import { DOMWrapper, flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ElementPlus from 'element-plus';
 import type { SourceIndividual } from '@/api/sourceIndividual';
@@ -58,14 +58,20 @@ async function openDialog(wrapper: VueWrapper) {
   await flushPromises();
 }
 
-async function typeReason(wrapper: VueWrapper, text: string) {
-  const textarea = wrapper.find('[data-testid="revoke-reason"] textarea');
+/** el-dialog 会 teleport 到 body, 弹窗内的元素要从 body 上找。 */
+function body() {
+  return new DOMWrapper(document.body);
+}
+
+async function typeReason(_wrapper: VueWrapper, text: string) {
+  // el-input 把非 class/style 的 attrs 透传到内部 textarea 上, 两种落点都认。
+  const textarea = body().find('textarea[data-testid="revoke-reason"], [data-testid="revoke-reason"] textarea');
   expect(textarea.exists()).toBe(true);
   await textarea.setValue(text);
 }
 
-async function submit(wrapper: VueWrapper) {
-  await wrapper.find('[data-testid="revoke-submit"]').trigger('click');
+async function submit(_wrapper: VueWrapper) {
+  await body().find('[data-testid="revoke-submit"]').trigger('click');
   await flushPromises();
 }
 
@@ -86,7 +92,7 @@ describe('源头个体档案 — 撤销要先填原因', () => {
 
     expect(revokeMock).not.toHaveBeenCalled();
     expect(requestMock.del).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-testid="revoke-error"]').text()).toContain('请填写撤销原因');
+    expect(body().find('[data-testid="revoke-error"]').text()).toContain('请填写撤销原因');
     wrapper.unmount();
   });
 
@@ -102,7 +108,7 @@ describe('源头个体档案 — 撤销要先填原因', () => {
     expect(revokeMock).toHaveBeenCalledWith('F006', 'si-1', '录入错误');
     expect(requestMock.del).not.toHaveBeenCalled();
     expect(listMock).toHaveBeenCalledTimes(2);
-    expect(wrapper.find('[data-testid="revoke-error"]').exists()).toBe(false);
+    expect(body().find('[data-testid="revoke-error"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -115,8 +121,8 @@ describe('源头个体档案 — 撤销要先填原因', () => {
     await submit(wrapper);
 
     expect(revokeMock).toHaveBeenCalledTimes(1);
-    expect(wrapper.find('[data-testid="revoke-error"]').text()).toContain('MB-20261118-001');
-    expect(wrapper.find('[data-testid="revoke-submit"]').exists()).toBe(true);
+    expect(body().find('[data-testid="revoke-error"]').text()).toContain('MB-20261118-001');
+    expect(body().find('[data-testid="revoke-submit"]').exists()).toBe(true);
     expect(listMock).toHaveBeenCalledTimes(1);
     wrapper.unmount();
   });

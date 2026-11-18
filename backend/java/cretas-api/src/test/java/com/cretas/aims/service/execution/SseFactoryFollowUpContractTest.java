@@ -156,7 +156,7 @@ class SseFactoryFollowUpContractTest {
             when(materials.findByFactoryIdAndCreatedByIn(eq("F006"), anyList(), any(Pageable.class)))
                     .thenReturn(Page.empty());
             MaterialBatchServiceImpl materialService = new MaterialBatchServiceImpl(materials, null, null,
-                    new MaterialBatchMapper(), null, null, null, null);
+                    new MaterialBatchMapper(), org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
             ReflectionTestUtils.setField(materialService, "dataScopeResolver",
                     new DataScopeResolver(users, mock(RoleDefinitionRepository.class)));
             MaterialBatchQueryTool inventory = new MaterialBatchQueryTool();
