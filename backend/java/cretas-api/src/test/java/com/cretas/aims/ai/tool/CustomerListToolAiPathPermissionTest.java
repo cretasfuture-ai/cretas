@@ -361,6 +361,14 @@ class CustomerListToolAiPathPermissionTest {
                 .hasSizeGreaterThan(100);
 
         List<String> touchesCustomerData = new ArrayList<>();
+        // 工具名 -> 生产实际生效的码 (ToolRbacEnforcer.resolveRequiredPermissions: 工具自声明优先, 再回退映射表)。
+        // ⚠️ 2026-11-18: 只读 TOOL_PERMISSION_MAP 会把「在工具上自声明门」的工具 (S6 gated-data 口径,
+        //    如 accounts_receivable_aging 声明 finance:read(_write)) 误判为没门, 所以下面判据也接受生产实际码。
+        // 🔴 已知残余 (未在本 PR 处理, 登记不是豁免): 自声明会盖掉映射表 —— CustomerActiveTool 自声明
+        //    多了 warehouse:read_write (#1358), 生产 AI 面比 HTTP /active 宽; 映射表那份仍是裁定四码,
+        //    所以本闸按「映射表或实际码任一合规」对它仍是绿的。收紧它是权限行为变更, 需另开任务裁定。
+        Map<String, Set<String>> effectiveCodes = new HashMap<>();
+        ToolRbacEnforcer resolver = new ToolRbacEnforcer();
         List<String> uninstantiable = new ArrayList<>();
         for (Class<?> c : toolClasses) {
             boolean touches = false;
@@ -376,7 +384,9 @@ class CustomerListToolAiPathPermissionTest {
             }
             try {
                 Object instance = c.getDeclaredConstructor().newInstance();
-                touchesCustomerData.add(((ToolExecutor) instance).getToolName());
+                ToolExecutor te = (ToolExecutor) instance;
+                touchesCustomerData.add(te.getToolName());
+                effectiveCodes.put(te.getToolName(), resolver.resolveRequiredPermissions(te));
             } catch (ReflectiveOperationException e) {
                 // ⛔ 不 continue 了事: 拿不到名字 = 这一个没量到, 必须计数并贴出来 (形态 C′)
                 uninstantiable.add(c.getSimpleName() + " (" + e.getClass().getSimpleName() + ")");
@@ -400,12 +410,13 @@ class CustomerListToolAiPathPermissionTest {
 
         List<String> unaccounted = new ArrayList<>();
         for (String toolName : touchesCustomerData) {
-            Set<String> codes = ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(toolName);
+            Set<String> mapped = ToolRbacEnforcer.TOOL_PERMISSION_MAP.get(toolName);
+            Set<String> effective = effectiveCodes.get(toolName);
             // ⚠️ 判据是「码集是裁定四码的**非空子集**」而不是「恰好等于」——
             //    写工具挂的是 {sales:read_write} / {sales:read_write, finance:read_write},
             //    它们比四码**更窄**, 同样保证只有裁定那几类角色过得去。
             //    ⛔ 反过来, 挂 production:* 之类的码不算「已登记」: 那种门 production_manager 照样过。
-            boolean gated = codes != null && !codes.isEmpty() && RULING_CODES.containsAll(codes);
+            boolean gated = withinRuling(mapped) || withinRuling(effective);
             boolean registered = REGISTERED_NOT_GATED.containsKey(toolName);
             if (!gated && !registered) {
                 unaccounted.add(toolName);
@@ -417,6 +428,10 @@ class CustomerListToolAiPathPermissionTest {
                         + "也没在 REGISTERED_NOT_GATED 里登记理由。⛔ 二选一, 不许留空 —— "
                         + "「登记」也要写清楚它为什么不构成名单泄漏")
                 .isEmpty();
+    }
+
+    private static boolean withinRuling(Set<String> codes) {
+        return codes != null && !codes.isEmpty() && RULING_CODES.containsAll(codes);
     }
 
     /** 登记清单里的理由不许是空话 —— 空字符串等于没登记。 */
@@ -431,6 +446,39 @@ class CustomerListToolAiPathPermissionTest {
         assertThat(REGISTERED_NOT_GATED.keySet())
                 .as("⛔ 同上, 对没有 HTTP 对位的那几个也成立")
                 .doesNotContainAnyElementsOf(RULING_CODED_WITHOUT_HTTP_COUNTERPART);
+    }
+
+    /**
+     * {@code accounts_receivable_aging} (#1865 起) 默认分支走 {@code CustomerRepository} 出全厂客户欠款排名
+     * (客户名 + 余额)。它的门在工具自身: {@code AccountsReceivableAgingTool#getRequiredPermissions}
+     * = finance:read_write | finance:read, 与 HTTP {@code ArApController#getAgingAnalysis} 同码,
+     * 由 enforcer 优先采用。本条用<b>真实工具实例</b>走 enforcer, 钉住生产经理被拒、财务读放行。
+     */
+    @Test
+    @DisplayName("🔴 accounts_receivable_aging (客户欠款排名) 真实工具实例: production_manager 拒绝, 持 finance:read 放行")
+    void accountsReceivableAgingGatedOnAiPath() {
+        ToolExecutor real = new com.cretas.aims.ai.tool.impl.workdesk.AccountsReceivableAgingTool();
+        assertThat(enforcer.resolveRequiredPermissions(real))
+                .as("实际生效码必须是裁定四码的非空子集")
+                .isNotEmpty()
+                .isSubsetOf(RULING_CODES);
+
+        when(permissionService.hasAnyPermission(any(), any(String[].class))).thenReturn(false);
+        assertThat(enforcer.check(real, ctx(PRODUCTION_MANAGER_UID, "production_manager")).isAllowed())
+                .as("生产经理经 AI 问「哪个客户欠款最多」不能拿到全厂客户名单 + 余额")
+                .isFalse();
+
+        when(permissionService.hasAnyPermission(any(), any(String[].class)))
+                .thenAnswer(inv -> {
+                    Object[] args = inv.getArguments();
+                    for (int i = 1; i < args.length; i++) {
+                        if ("finance:read".equals(String.valueOf(args[i]))) return true;
+                    }
+                    return false;
+                });
+        assertThat(enforcer.check(real, ctx(SALES_MANAGER_UID, "sales_manager")).isAllowed())
+                .as("阴性对照: 持 finance:read 的账号放行 —— 证明拒绝来自门而非一律拒")
+                .isTrue();
     }
 
     /**
