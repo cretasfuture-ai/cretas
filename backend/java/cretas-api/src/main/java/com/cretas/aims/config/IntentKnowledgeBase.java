@@ -3056,6 +3056,27 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出成率最低的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最低", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率最高的批次", "REPORT_BATCH_YIELD_RANK");
+        // 急单影响分析 (只读, 2026-11-17 新增; BP 第 8 页): 以前没有急单 / 插单 / 齐套类意图, 这类说法被别的规则截走。
+        // 全部 >= 4 字, 走长短语包含匹配; 「急单」「插单」两字单词不单独登记, 免得抢走无关句子。
+        phraseToIntentMapping.put("急单原料够不够", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        // 不登记光秃秃的「产线排不排得开」(「明天产线排不排得开」是普通排产问题, 不该拉进急单工具);
+        // 只认「原料够不够 + 产线排不排得开」连问 (BP 原话的问法, 问的就是插一单能不能做)。
+        phraseToIntentMapping.put("原料够不够，产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("原料够不够,产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("原料够不够产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("插单排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单能不能插", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("能不能插单", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单能不能做", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单影响分析", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("插单影响分析", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单影响", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("插单影响", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单齐套", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("插单齐套", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("急单够不够", "SCHEDULING_RUSH_ORDER_ANALYSIS");
         // 财务复跑 (2026-11-15): 标准成本差异走成本差异; 「和上月比」走成本查询的环比上月
         phraseToIntentMapping.put("实际成本和标准成本差多少", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("实际成本与标准成本差多少", "REPORT_COST_VARIANCE");
