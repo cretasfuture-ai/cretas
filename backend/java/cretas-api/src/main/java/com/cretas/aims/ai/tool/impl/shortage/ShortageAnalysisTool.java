@@ -1,6 +1,9 @@
 package com.cretas.aims.ai.tool.impl.shortage;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.shortage.ShortageAnalysisService;
 import com.cretas.aims.service.shortage.dto.ProcurementSuggestion;
 import com.cretas.aims.service.shortage.dto.ProductionPlanSuggestion;
@@ -10,7 +13,10 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.Set;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +46,15 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
     @Lazy
     private ShortageAnalysisService shortageService;
 
+    @Autowired
+    @Lazy
+    private SalesService salesService;
+
+    /** 全厂缺料总览最多分析的在途订单数 (按交期最近的先查)。 */
+    static final int OVERVIEW_ORDER_LIMIT = 20;
+    private static final Set<SalesOrderStatus> NOT_OPEN = Set.of(SalesOrderStatus.DRAFT, SalesOrderStatus.COMPLETED,
+            SalesOrderStatus.CANCELLED, SalesOrderStatus.SHORT_CLOSED, SalesOrderStatus.FINANCE_REJECTED);
+
     @Override
     public String getToolName() {
         return "shortage_analyze";
@@ -65,13 +80,14 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
         Map<String, Object> schema = new HashMap<>();
         schema.put("type", "object");
         schema.put("properties", properties);
-        schema.put("required", List.of("salesOrderId"));
+        // 不给订单号 = 看全厂在途订单哪些缺料、缺什么
+        schema.put("required", List.of());
         return schema;
     }
 
     @Override
     protected List<String> getRequiredParameters() {
-        return List.of("salesOrderId");
+        return List.of();
     }
 
     @Override
@@ -79,6 +95,9 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
                                             Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
         String salesOrderId = getString(params, "salesOrderId");
+        if (salesOrderId == null || salesOrderId.isBlank()) {
+            return overview(factoryId);
+        }
         log.info("[shortage_analyze] factoryId={}, salesOrderId={}", factoryId, salesOrderId);
 
         ShortageReport report = shortageService.analyzeForSalesOrder(factoryId, salesOrderId);
@@ -101,6 +120,55 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
         result.put("analysisSummary", report.getSummary());
         // 前端 (RN AIChat) 识别此 hint 自动渲染 <ShortageChainCard> 而非纯文字 reply
         result.put("displayHint", "chain-card");
+        return result;
+    }
+
+    /**
+     * 没指定订单: 把在途订单 (交期最近的 OVERVIEW_ORDER_LIMIT 单) 逐单做缺料分析,
+     * 只列有缺口的订单 + 缺的物料名称与数量。分析失败的订单计数后明说, 不当成「不缺」。
+     */
+    Map<String, Object> overview(String factoryId) {
+        List<SalesOrder> open = new ArrayList<>();
+        for (SalesOrder order : salesService.getSalesOrders(factoryId, 1, 100).getContent()) {
+            if (order.getStatus() != null && !NOT_OPEN.contains(order.getStatus())) {
+                open.add(order);
+            }
+        }
+        open.sort(Comparator.comparing(SalesOrder::getRequiredDeliveryDate, Comparator.nullsLast(Comparator.naturalOrder())));
+        List<SalesOrder> checked = open.size() > OVERVIEW_ORDER_LIMIT ? open.subList(0, OVERVIEW_ORDER_LIMIT) : open;
+        List<Map<String, Object>> rows = new ArrayList<>();
+        int failed = 0;
+        for (SalesOrder order : checked) {
+            try {
+                ShortageReport report = shortageService.analyzeForSalesOrder(factoryId, order.getId());
+                if (report.getMaterialShortages() == null || report.getMaterialShortages().isEmpty()) {
+                    continue;
+                }
+                List<Map<String, Object>> materials = new ArrayList<>();
+                for (var m : report.getMaterialShortages()) {
+                    Map<String, Object> mm = new LinkedHashMap<>();
+                    mm.put("materialName", m.getMaterialTypeName());
+                    mm.put("shortfallQuantity", m.getShortfallQuantity());
+                    mm.put("unit", m.getQuantityUnit());
+                    materials.add(mm);
+                }
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("orderNumber", order.getOrderNumber());
+                row.put("customerName", order.getCustomerName());
+                row.put("requiredDeliveryDate", order.getRequiredDeliveryDate() == null ? null : order.getRequiredDeliveryDate().toString());
+                row.put("shortages", materials);
+                rows.add(row);
+            } catch (RuntimeException e) {
+                failed++;
+                log.warn("[shortage_analyze] 总览中订单 {} 分析失败: {}", order.getOrderNumber(), e.toString());
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "SUCCESS");
+        result.put("orderShortages", rows);
+        result.put("openOrderCount", open.size());
+        result.put("checkedOrderCount", checked.size());
+        result.put("failedOrderCount", failed);
         return result;
     }
 
