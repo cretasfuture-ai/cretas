@@ -233,15 +233,17 @@ public class TimeNormalizationRules {
         TIME_PATTERNS.put(
                 Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*天"),
                 (now, m) -> {
+                    // 「最近 N 天」含今天共 N 天 (与页面默认 N 天窗口一致): 起点 = 今天 - (N-1)
                     int days = parseCount(m.group(1));
-                    return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
+                    return TimeRange.of(now.minusDays(Math.max(0, days - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
                 Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*(?:周|个星期|个礼拜)"),
                 (now, m) -> {
+                    // 「最近 N 周」= 含今天共 7N 天
                     int weeks = parseCount(m.group(1));
-                    return TimeRange.of(now.minusWeeks(weeks).with(LocalTime.MIN), now);
+                    return TimeRange.of(now.minusDays(Math.max(0, weeks * 7L - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
@@ -273,11 +275,11 @@ public class TimeNormalizationRules {
         );
         TIME_PATTERNS.put(
                 Pattern.compile("最近"),
-                (now, m) -> TimeRange.of(now.minusDays(7).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(6).with(LocalTime.MIN), now) // 含今天共 7 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("近期"),
-                (now, m) -> TimeRange.of(now.minusDays(14).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(13).with(LocalTime.MIN), now) // 含今天共 14 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("早上|上午"),
