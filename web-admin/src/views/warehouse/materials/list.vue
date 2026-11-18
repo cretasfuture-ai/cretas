@@ -12,6 +12,7 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
+import { batchStatusDisplay, formatDateTimeMinute, isDepletedAvailableBatch } from './batchDisplay';
 import { enumLabel, MATERIAL_BATCH_STATUS_LABELS } from '@/utils/enumDisplay';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
@@ -294,6 +295,10 @@ function getStatusType(status: string) {
  */
 function getStatusText(status: string) {
   return enumLabel(status?.toUpperCase(), MATERIAL_BATCH_STATUS_LABELS);
+}
+
+function batchTagType(row: TableRow | null): string {
+  return isDepletedAvailableBatch(row) ? 'info' : getStatusType(String(row?.status ?? ''));
 }
 
 // ==================== View Dialog ====================
@@ -837,7 +842,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="expiryDate" label="过期日期" width="120" />
@@ -914,7 +919,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
@@ -990,8 +995,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
+            <el-tag :type="batchTagType(row)" size="small">
+              {{ batchStatusDisplay(row, getStatusText).text }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1057,10 +1062,10 @@ async function handleGenerateLabel(row: TableRow) {
           <span v-else>-</span>
         </el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(String(viewRecord.status || ''))">{{ getStatusText(String(viewRecord.status || '')) }}</el-tag>
+          <el-tag :type="batchTagType(viewRecord)">{{ batchStatusDisplay(viewRecord, getStatusText).text }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="入库时间">{{ viewRecord.createdAt || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="入库时间">{{ formatDateTimeMinute(viewRecord.createdAt) }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
         <el-descriptions-item label="合同号">{{ viewRecord.contractNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="供应商批次号">{{ viewRecord.supplierBatchNumber || '-' }}</el-descriptions-item>
