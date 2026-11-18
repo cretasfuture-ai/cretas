@@ -18,7 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * #1814 终审补测: 多候选时段怎么挑 (L1)、排不开 (L1)、计数与明细对不上 (M2)、链式口径 (L5)、
  * 口语中文数字 (L3)、「产线排不排得开」不再单独拉进急单 (L2)。
  */
-class RushOrderImpactPickAndParseTest {
+class RushOrderImpactPickAndParseContractTest {
 
     private static final String RUSH = "SCHEDULING_RUSH_ORDER_ANALYSIS";
 
