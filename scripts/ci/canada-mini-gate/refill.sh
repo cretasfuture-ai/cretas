@@ -32,6 +32,9 @@ while :; do
     rm -rf "$1"; cp -cR "$2" "$1"; cd "$1"
     echo "/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" > .path
     printf "CRETAS_RELEASE_LOCK=%s\n" "$4" > .env
+    # macOS 上 launchd 起的进程没有 locale, PostgreSQL 17 启动报
+    # 「postmaster became multithreaded during startup / Set the LC_ALL」(2026-11-18 run 44294244372)。
+    printf "%s\n" "LC_ALL=en_US.UTF-8" "LANG=en_US.UTF-8" >> .env
     # 本机镜像 (2026-11-18): 任务开始前钩子把镜像增量更新, 任务里的 git 改走镜像 (见 job-started.sh)。
     if [ -d /Users/ghgate/mirror/cretas.git ] && [ -x /Users/ghgate/hooks/job-started.sh ]; then
       printf "%s\n" "ACTIONS_RUNNER_HOOK_JOB_STARTED=/Users/ghgate/hooks/job-started.sh" \
