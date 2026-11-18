@@ -98,7 +98,10 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
         data.put("basis", "销售额 = 销售订单明细折后未税收入（有售价的明细）；毛利 = 已回填成本明细的收入 − 成本；与 SKU 毛利率「实际销售毛利」同口径");
-        if (!replyShowsPriceSpec(context, SkuGrossMarginTool.MARGIN_RATE_SPEC) || !replyShowsAmount(context, "marginRate")) {
+        boolean marginHidden = !replyShowsPriceSpec(context, SkuGrossMarginTool.MARGIN_RATE_SPEC) || !replyShowsAmount(context, "marginRate");
+        // 「销售额是多少」也走本工具 (#1853): 看不到毛利的角色, 销售额只要「revenue」本身看得见就照给, 毛利 / 成本 / 覆盖率一个字不写
+        boolean salesOnly = marginHidden && replyShowsAmount(context, "revenue");
+        if (marginHidden && !salesOnly) {
             data.put("marginHidden", true);
             return buildSimpleResult(start + " 至 " + end + " 的" + SkuGrossMarginTool.MARGIN_RATE_HIDDEN_MESSAGE, data);
         }
@@ -129,6 +132,17 @@ public class ReportSalesMarginSummaryTool extends AbstractBusinessTool {
 
         data.put("productCount", summary.get("productCount"));
         data.put("excludedProductCount", excludedProtected);
+        if (salesOnly) {
+            data.put("marginHidden", true);
+            data.put("revenue", money(revenue));
+            StringBuilder only = new StringBuilder();
+            only.append(start).append(" 至 ").append(end).append(" 销售额 ¥").append(money(revenue)).append("（共 ")
+                    .append(summary.get("productCount")).append(" 个产品）。毛利按当前账号的权限配置不显示。");
+            if (excludedProtected > 0) {
+                only.append("\n").append(ProcessSecretLlmCostScope.note(excludedProtected));
+            }
+            return buildSimpleResult(only.toString(), data);
+        }
         if (!showAmounts) {
             return amountsHiddenResult(start, end, summary, margin, showCoverage ? coverage : null, excludedProtected, rank, data);
         }
