@@ -4,6 +4,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { get, put } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import type { TableRow } from '@/types/api';
+import { ROLE_LABELS } from '@/utils/enumDisplay';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -289,7 +290,9 @@ onMounted(async () => {
         <el-table-column prop="displayName" label="角色名称" width="120" />
         <el-table-column prop="name" label="角色标识" width="180">
           <template #default="{ row }">
-            <code>{{ row.name }}</code>
+            <el-tooltip :content="`系统代码：${row.name}`" placement="top">
+              <span data-testid="role-ident">{{ ROLE_LABELS[row.name] || row.displayName || row.name }}</span>
+            </el-tooltip>
           </template>
         </el-table-column>
         <el-table-column prop="description" label="描述" />

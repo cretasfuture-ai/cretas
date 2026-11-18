@@ -82,7 +82,7 @@ const modeDescription = computed(() => {
     case 'MANUAL_CONFIRM':
       return '人工确认: AI 生成排产建议, 等待主管确认后才生效 (推荐, 安全)';
     case 'DISABLED':
-      return '已禁用: 不触发任何自动排产, PP 创建后需完全手动操作';
+      return '已禁用: 不触发任何自动排产, 生产计划创建后需完全手动操作';
     default:
       return '';
   }
@@ -115,7 +115,7 @@ const modeDescription = computed(() => {
       :closable="false"
     >
       <template #title>
-        排产链路两阶段: ① SO 财审 → 自动建生产计划 PP (供应链联动, 不受本页控制) ② PP 生成后是否进入排程 (本页设置 = 此阶段开关)
+        排产链路分两步：① 销售订单财务审核通过后，系统自动建立生产计划（与供应链联动，不受本页控制）② 生产计划生成后是否进入排程（本页设置就是这一步的开关）
       </template>
     </el-alert>
 
@@ -135,7 +135,7 @@ const modeDescription = computed(() => {
             inactive-text="关闭"
           />
           <div class="form-hint">
-            控制 PP 创建后是否进入排程链 (是 isAutoSchedulingEnabled gate). 关闭后, 模式与阈值都不生效, PP 仍由供应链自动创建但停留在 PENDING 等人工排程.
+            控制生产计划创建后是否自动进入排程。关闭后，下面的模式与阈值都不生效；生产计划仍会由供应链自动创建，但停留在「待排程」状态，等人工排程。
           </div>
         </el-form-item>
 
