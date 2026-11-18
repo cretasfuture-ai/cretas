@@ -114,8 +114,13 @@ def filtered_problems(name, doc, patterns_file_text=None):
     if not ch:
         bad.append("%s: 没有 changes 作业" % name)
     else:
-        if ch.get("runs-on") != "ubuntu-latest":
-            bad.append("%s/changes: runs-on 必须是字面量 ubuntu-latest, 实得 %r" % (name, ch.get("runs-on")))
+        # java-gate-pr 的 changes 随 PG 分片走 canada-mini (#1876), 只放行与 test-public-repo-hosted-only.sh
+        # 白名单逐字相同的那条路由 (fork PR / ci-hosted 标签仍落 ubuntu-latest); 其余 workflow 仍必须字面量。
+        mini_route = ("${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+                      " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}")
+        allowed = {"ubuntu-latest", mini_route} if name == "java-gate-pr" else {"ubuntu-latest"}
+        if ch.get("runs-on") not in allowed:
+            bad.append("%s/changes: runs-on 必须是字面量 ubuntu-latest (java-gate-pr 另许 mini 路由原文), 实得 %r" % (name, ch.get("runs-on")))
         if not isinstance(ch.get("timeout-minutes"), int):
             bad.append("%s/changes: 缺 timeout-minutes" % name)
         if "steps.filter.outputs.run" not in str((ch.get("outputs") or {}).get("run", "")):
