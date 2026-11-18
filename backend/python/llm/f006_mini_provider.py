@@ -84,6 +84,8 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
                 ) as client:
                     attempted = True
                     async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+                        if response.is_error:
+                            await response.aread()  # 先读完错误体, 流关闭后 except 里才取得到
                         response.raise_for_status()
                         yield {"type": "meta", "provider": PROVIDER, "model": MODEL,
                                "thinking": enable_thinking, "correlationId": correlation}
@@ -139,7 +141,7 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
         upstream = ""
         if isinstance(exc, httpx.HTTPStatusError):
             try:
-                body = (await exc.response.aread()).decode("utf-8", "replace")[:200]
+                body = exc.response.text[:200]
             except Exception:
                 body = "<unreadable>"
             upstream = " upstream_status=%s upstream_body=%r" % (exc.response.status_code, body)
