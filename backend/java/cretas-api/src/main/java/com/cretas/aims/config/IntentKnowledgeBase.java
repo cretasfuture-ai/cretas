@@ -1183,6 +1183,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("产品利润", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("单品利润", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("哪个产品赚钱", "SKU_GROSS_MARGIN");
+        // 「毛利最低 / 最高的产品」排名问法 (LSMDEMO 2026-11-18 原话「这个月毛利最低的产品是哪些？」没有短语, 掉进智能指标 Skill 被追问「要查哪个指标」);
+        // 整句形态都列出来: 短语快捷要求整句拿掉短语后基本不剩字 (PhraseShortcutEligibility), 工具按原话里的「最低 / 最高」定排序方向。
+        for (String metric : new String[]{"毛利", "毛利率"}) {
+            for (String dir : new String[]{"最低", "最差", "最高", "最好"}) {
+                String core = metric + dir;
+                for (String tail : new String[]{"的产品是哪些", "的产品有哪些", "的产品是什么", "的产品是哪个", "的产品", "的是哪些产品", "的sku"}) {
+                    phraseToIntentMapping.put(core + tail, "SKU_GROSS_MARGIN");
+                }
+                phraseToIntentMapping.put("哪些产品" + core, "SKU_GROSS_MARGIN");
+                phraseToIntentMapping.put("哪个产品" + core, "SKU_GROSS_MARGIN");
+            }
+        }
 
         // === 库存相关 (使用实际存在的意图代码) ===
         phraseToIntentMapping.put("库存查询", "REPORT_INVENTORY");
