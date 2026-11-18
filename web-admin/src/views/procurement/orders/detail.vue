@@ -419,7 +419,7 @@ const priceDataSourceHintBanner = computed(() => {
   const missing = priceComparisons.value.filter(p => p.dataSourceHint != null).length;
   if (missing === 0) return null;
   // 至少 1 行有 hint → 显示通用解释 banner
-  return `三价对比基于"BOM 标准价 + 历次入库的移动均价". 新原料 / 尚未入库 / 未配 BOM 时部分对比项为空 — 这是业务正常状态, 不是数据 bug. ${missing}/${priceComparisons.value.length} 行有诊断信息, 鼠标悬停查看.`;
+  return `三价对比基于“BOM 标准价 + 历次入库的移动均价”。新原料、尚未入库或未配置 BOM 时，部分对比项会留空。${missing}/${priceComparisons.value.length} 行有说明，鼠标悬停可查看。`;
 });
 
 function formatVariance(val: number | null): string {
@@ -743,7 +743,7 @@ async function handleDownloadSupplyOrderPdf() {
           <el-button v-if="canReachWarehouseReceiving" type="primary" plain @click="goWarehouseReceive">前往仓储收货任务</el-button>
         </div>
         <el-empty
-          description="该原料的历史收货记录尚未接入 —— 后端还没有「按原料查历史收货」的接口。在补上之前这里不显示任何数据，以免与本单收货记录混淆。"
+          description="该原料的历史收货记录暂未在本页展示，本单收货情况请以上方收货信息为准"
           :image-size="60"
         />
 
