@@ -52,7 +52,7 @@ public class TraceFullTool extends AbstractBusinessTool {
         // batchNumber: 批次号（必需）
         Map<String, Object> batchNumber = new HashMap<>();
         batchNumber.put("type", "string");
-        batchNumber.put("description", "要完整溯源的生产批次号（销售单号请填 salesOrderNo）");
+        batchNumber.put("description", "要完整溯源的生产批次号（销售单号不要填这里）");
         properties.put("batchNumber", batchNumber);
 
         // salesOrderNo: 销售单号（按销售单追溯时用，与批次号二选一）
