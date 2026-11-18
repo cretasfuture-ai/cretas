@@ -84,6 +84,7 @@ PARALLEL_CONFIRM=
 ORDER=backend-first
 ORDER_EXPLICIT=false
 STAGE_BACKEND_CONFIRM=
+REMOTE_BUILD_HOST=
 # 默认【开】(2026-07-31 Steve 拍板)。
 #
 # 为什么翻过来: 默认关的时候, 整条 CI 制品链路(Java 制品 + 预热 + Web dist 取回)对日常发布
@@ -114,6 +115,7 @@ Usage:
     [--order backend-first|web-first] \
     [--stage-backend YES-STAGE] \
     [--no-prefer-ci-artifact] \
+    [--remote-build <ssh-alias>] \
     [--parallel-if-independent YES-INDEPENDENT-SERVICES]
 
 --prefer-ci-artifact (【默认开启】; 关掉用 --no-prefer-ci-artifact 或
@@ -144,6 +146,10 @@ while [ "$#" -gt 0 ]; do
         --stage-backend) STAGE_BACKEND_CONFIRM=${2:-}; shift 2 ;;
         --prefer-ci-artifact) PREFER_CI_ARTIFACT=true; shift ;;
         --no-prefer-ci-artifact) PREFER_CI_ARTIFACT=false; shift ;;
+        --remote-build)
+            REMOTE_BUILD_HOST=${2:-}
+            [ -n "$REMOTE_BUILD_HOST" ] || { echo "ERROR: --remote-build requires an ssh alias" >&2; exit 2; }
+            shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "ERROR: unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -156,6 +162,17 @@ done
 # 两个方向都显式导出。只导出 1 的话, `--no-prefer-ci-artifact` 配上环境里已有的
 # CRETAS_RELEASE_PREFER_CI_ARTIFACT=1, 会变成 Java 侧关掉而 Web 侧照样开 —— 又一个
 # "只在一半路径生效"的半吊子开关。决定只在这里做一次, 下游一律读这个导出值。
+# --remote-build <ssh 别名> (例如 canada-mini): Java 发布构建的 Maven 那一步搬到远程构建机,
+# 由 release-jar-manifest.sh 的 release_manifest_build_remote 执行 (Java 构建的三条路径都落到
+# 那个函数, 所以只能在这里导出、在那里分支)。manifest / stage / validate / deploy 门禁不变;
+# 远端拒绝 (北京时间 23:30–00:30、内存空闲 < 25%、正忙、提交未推到 origin) 时明确失败, 不回退本机。
+if [ -n "${REMOTE_BUILD_HOST:-}" ]; then
+    case "$REMOTE_BUILD_HOST" in
+        *[!A-Za-z0-9._@-]*|-*) echo "ERROR: invalid --remote-build host: $REMOTE_BUILD_HOST" >&2; exit 2 ;;
+    esac
+    export CRETAS_RELEASE_REMOTE_BUILD_HOST=$REMOTE_BUILD_HOST
+fi
+
 if [ "$PREFER_CI_ARTIFACT" = "true" ]; then
     export CRETAS_RELEASE_PREFER_CI_ARTIFACT=1
 else
