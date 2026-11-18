@@ -31,6 +31,10 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
     @Autowired
     private MaterialBatchService materialBatchService;
 
+    /** 物料名 → 本厂原料类型 (全名精确 / 包含候选)。缺席 (裸构造的单测) = 说了物料名也只能按编号筛。 */
+    @Autowired(required = false)
+    private com.cretas.aims.service.entity.FactoryEntityResolver entityResolver;
+
     @Override
     public String getToolName() {
         return "material_batch_query";
@@ -105,6 +109,12 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         materialTypeId.put("description", "原料类型ID，精确匹配");
         properties.put("materialTypeId", materialTypeId);
 
+        // materialName: 用户说的原料名 (2026-11-17 F006「现在牛前腱还有多少库存？」没按物料过滤, 回了全部 84 条)
+        Map<String, Object> materialName = new HashMap<>();
+        materialName.put("type", "string");
+        materialName.put("description", "原料名称（用户说了哪种原料就填它，如「牛前腱」；按本厂原料主数据解析后筛选）");
+        properties.put("materialName", materialName);
+
         // status: 状态（可选）
         // 状态词表 (含「即将过期」等要换个问法的说法): 对话里说的状态由 AbstractBusinessTool 统一认 (StatusFilter)
         // enum 取自批次状态枚举本身: 以前手写的列表里有不存在的状态、又漏了 DEPLETED。
@@ -168,6 +178,36 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         // 解析筛选参数
         String batchNumber = getString(params, "batchNumber");
         String materialTypeId = getString(params, "materialTypeId");
+        String materialName = getString(params, "materialName");
+        // 说了原料名: 解析成本厂原料类型再筛。唯一命中 → 按它筛; 多个 / 只有包含候选 → 列出来让人选;
+        // 一个都没有 → 说没有这种原料。⛔ 都不退回「不筛」(那就是把全部批次当成这一种原料的库存报出去)
+        if ((materialTypeId == null || materialTypeId.isBlank()) && materialName != null && !materialName.isBlank()
+                && entityResolver != null) {
+            com.cretas.aims.service.entity.FactoryEntityResolver.Resolution resolution = entityResolver.resolve(
+                    factoryId, com.cretas.aims.service.entity.EntityKind.MATERIAL, materialName.trim());
+            if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.UNIQUE) {
+                materialTypeId = resolution.matches().get(0).id();
+            } else {
+                Map<String, Object> result = new HashMap<>();
+                if (resolution.status() == com.cretas.aims.service.entity.FactoryEntityResolver.Status.MULTIPLE) {
+                    List<com.cretas.aims.ai.tool.SameNameMatches.Match> rows = new ArrayList<>();
+                    for (com.cretas.aims.service.entity.FactoryEntityResolver.Candidate c
+                            : com.cretas.aims.ai.tool.SameNameMatches.listedCandidates(resolution)) {
+                        rows.add(com.cretas.aims.ai.tool.SameNameMatches.matchOf(c, null));
+                    }
+                    com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "原料", resolution, rows);
+                } else if (!com.cretas.aims.ai.tool.SameNameMatches.annotateSuggestions(result, "原料", resolution)) {
+                    com.cretas.aims.ai.tool.SameNameMatches.annotate(result, "原料", resolution.query(), 0, List.of());
+                }
+                Map<String, Object> data = new LinkedHashMap<>();
+                data.put("materialName", resolution.query());
+                data.put("matchCount", resolution.matches().size());
+                data.put("suggestionCount", resolution.suggestions().size());
+                result.put("data", data);
+                result.put("message", com.cretas.aims.ai.tool.SameNameMatches.reply(result));
+                return result;
+            }
+        }
         // ERP-S6-10: 对话里说的状态 (「已用完」) 已由 AbstractBusinessTool 按 status 词表认成代码放进 params;
         // 说了却认不出的在那里就 400 了, 不会静默变成「不限状态」。
         String status = getString(params, "status");
@@ -223,6 +263,7 @@ public class MaterialBatchQueryTool extends AbstractBusinessTool {
         Map<String, Object> queryConditions = new HashMap<>();
         if (batchNumber != null) queryConditions.put("batchNumber", batchNumber);
         if (materialTypeId != null) queryConditions.put("materialTypeId", materialTypeId);
+        if (materialName != null) queryConditions.put("materialName", materialName);
         if (status != null) queryConditions.put("status", status);
         if (startDate != null) queryConditions.put("startDate", startDate.toString());
         if (endDate != null) queryConditions.put("endDate", endDate.toString());
