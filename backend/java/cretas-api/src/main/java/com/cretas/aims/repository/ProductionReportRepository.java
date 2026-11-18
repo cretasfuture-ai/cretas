@@ -512,7 +512,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             pp.id AS plan_id,
             pp.plan_number AS plan_number,
             pp.product_type_id AS product_type_id,
-            ptp.name AS product_name,
+            CASE WHEN ptp.name IS NULL OR LEFT(ptp.name, 22) = '__RAW_WORKFLOW_OWNER__' THEN COALESCE(rmtp.name, ptp.name) ELSE ptp.name END AS product_name,
             pr.report_date AS report_date,
             pr.input_quantity AS input_quantity,
             pr.input_unit AS input_unit,
@@ -527,6 +527,7 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
         LEFT JOIN production_batches pb ON pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
         LEFT JOIN production_plans pp ON pp.id = pb.production_plan_id
         LEFT JOIN product_types ptp ON ptp.id = pp.product_type_id
+        LEFT JOIN raw_material_types rmtp ON rmtp.id = pp.product_type_id AND rmtp.factory_id = pp.factory_id AND rmtp.deleted_at IS NULL
         WHERE pr.factory_id = :factoryId
           AND pr.report_type = 'YIELD'
           AND pr.deleted_at IS NULL
