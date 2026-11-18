@@ -101,5 +101,50 @@ fs.utimesSync(f9, past, past);
 const t9 = run('exec-4', transcript('g', 445000));
 assert(t9 && t9.additionalContext.includes('还没看到交接文件'), 'T9: 硬线之前的交接不算');
 
+// ---- 交班遗留扫描 (2026-11-18: 被接手的 BP 协调会话标题不是 Organizer｜, 一直置顶没归档) ----
+function recX(cli, fields) {
+  fs.writeFileSync(path.join(store, `local_${cli}.json`), JSON.stringify({ sessionId: `local_${cli}`, cliSessionId: cli, ...fields }));
+}
+function runScan(sid, tp) {
+  process.env.CRETAS_LEFTOVER_SCAN_MS = '-1'; // 测试里每次都扫
+  try { return run(sid, tp); } finally { delete process.env.CRETAS_LEFTOVER_SCAN_MS; }
+}
+const ago = (h) => Date.now() - h * 3600 * 1000;
+const has = (o, s) => !!(o && o.additionalContext.includes(s));
+
+// T10 阳性 B: 现任 organizer 的前任标题不是 Organizer｜、没归档、空闲 2 小时 -> 报出前任 id
+recX('coord-old', { title: '产品与传统软件对比研究', isArchived: false, lastActivityAt: ago(2) });
+recX('org-bp', { title: 'Organizer｜BP 对比 deck｜第 2 任｜11-18', spawnedFrom: { sessionId: 'local_coord-old' } });
+const t10 = runScan('org-bp', transcript('h', 100000));
+assert(has(t10, '[organizer] 交班遗留:') && has(t10, 'local_coord-old') && has(t10, '前任'), 'T10: 应报出没归档的前任');
+assert(has(t10, '交班流程'), 'T10: 首次仍带交班流程原文');
+
+// T11 名单没变 -> 不重复说
+assert.strictEqual(runScan('org-bp', transcript('h', 100000)), null, 'T11: 名单不变不重复');
+
+// T12 阳性 A: 标题已改「[已交班…」但没归档 -> 名单变了, 再说一次, 两个都在
+recX('org-old', { title: '[已交班→第 6 任] Organizer｜降本｜第 5 任｜11-15', isArchived: false, lastActivityAt: ago(1) });
+const t12 = runScan('org-bp', transcript('h', 100000));
+assert(has(t12, 'local_org-old') && has(t12, '已改名交班') && has(t12, 'local_coord-old'), 'T12: 名单变了要再报, 含两类');
+
+// T13 阴性: 两个都归档了 -> 不说
+recX('coord-old', { title: '产品与传统软件对比研究', isArchived: true, lastActivityAt: ago(2) });
+recX('org-old', { title: '[已交班→第 6 任] Organizer｜降本｜第 5 任｜11-15', isArchived: true, lastActivityAt: ago(1) });
+assert.strictEqual(runScan('org-bp', transcript('h', 100000)), null, 'T13: 都归档了不报');
+assert.strictEqual(stateOf('org-bp').leftoverKey, '', 'T13: 扫到的名单应为空 (不是靠「名单没变不重复」静音)');
+
+// T14 阴性: 前任标题仍是 Organizer｜ (交班进行中) / 前任刚活动过 -> 不报
+recX('org-a5', { title: 'Organizer｜意图｜第 5 任｜11-18', isArchived: false, lastActivityAt: ago(3) });
+recX('org-a6', { title: 'Organizer｜意图｜第 6 任｜11-18', spawnedFrom: { sessionId: 'local_org-a5' } });
+recX('coord-busy', { title: '某协调会话', isArchived: false, lastActivityAt: Date.now() });
+recX('org-c2', { title: 'Organizer｜C｜第 2 任｜11-18', spawnedFrom: { sessionId: 'local_coord-busy' } });
+const t14 = runScan('org-a6', transcript('i', 100000));
+assert(t14 && !has(t14, '[organizer] 交班遗留:'), 'T14: 交班进行中/前任刚活动 不报 (只有交班流程原文)');
+
+// T15 阴性: 执行会话不扫
+recX('coord-old2', { title: '旧协调', isArchived: false, lastActivityAt: ago(5) });
+recX('exec-x', { title: '执行线 x', spawnedFrom: { sessionId: 'local_coord-old2' } });
+assert.strictEqual(runScan('exec-x', transcript('j', 100000)), null, 'T15: 执行会话不扫遗留');
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log('session-health: 9/9 passed');
+console.log('session-health: 15/15 passed');
