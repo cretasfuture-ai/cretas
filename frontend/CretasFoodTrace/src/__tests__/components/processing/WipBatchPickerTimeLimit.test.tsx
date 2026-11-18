@@ -18,6 +18,7 @@ import {
   remainingMinutesAt,
   timeLimitBlockReason,
   timeLimitLine,
+  timeLimitWarningOf,
 } from '../../../utils/processTimeLimit';
 
 jest.mock('../../../services/api/yieldReportApi', () => {
@@ -114,6 +115,13 @@ describe('时限文字', () => {
     expect(timeLimitBlockReason(expired('W'), NOW)).toBe('已超时 35 分钟，请找质检员处置');
     expect(timeLimitBlockReason(status('W'), NOW)).toBeNull();
     expect(timeLimitBlockReason(undefined, NOW)).toBeNull();
+    // PROTO-Q41 阴性对照: 只警告档同一份超时状态不挡, 也不限量
+    const warnOnly = { ...expired('W'), blockOnExceed: false };
+    expect(timeLimitBlockReason(warnOnly, NOW)).toBeNull();
+    expect(wipDrawableQuantity(row('W'), warnOnly)).toBe(50);
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'W 已超时' })).toBe('W 已超时');
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: '' })).toBeNull();
+    expect(timeLimitWarningOf({ success: false, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'x' })).toBeNull();
   });
 
   it('待检和超时同时有: 取较小的量', () => {
@@ -157,6 +165,18 @@ describe('WipBatchPicker 工序时限', () => {
     fireEvent.press(screen.getByText('重新加载'));
     await act(async () => { await Promise.resolve(); });
     expect(mockedLimits.getTaskStatuses).toHaveBeenCalledTimes(2);
+  });
+
+  it('PROTO-Q41 只警告档: 全部超时的行照样能选, 写后端警告, 不提示找质检员才能领', async () => {
+    const reason = 'W-1 已超时 35 分钟（本厂超时只警告，可以领用，会留一条超时记录供复盘）';
+    givenRows([row('W-1')], [{ ...expired('W-1'), blockOnExceed: false, reason }]);
+    const onChange = jest.fn();
+    mount({ onChange });
+
+    expect(await screen.findByText(reason)).toBeTruthy();
+    expect(screen.queryByText('已超时 35 分钟，请找质检员处置')).toBeNull();
+    fireEvent.press(screen.getByTestId('wip-row-W-1'));
+    expect(onChange).toHaveBeenCalled();
   });
 
   it('按笔部分超时: 可领写能领的量, 另一行写超时量, 投入上限给能领的量', async () => {

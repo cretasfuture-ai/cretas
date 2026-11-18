@@ -48,6 +48,18 @@ describe('WorkflowTimeLimitConfigDrawer', () => {
     wrapper.unmount();
   });
 
+  it('PROTO-Q41 说明按开关写: 默认只警告并留痕, 开了超时拦截才不能领用; 不再无条件说「不能领用」', async () => {
+    const wrapper = mountDrawer();
+    await flushPromises();
+    const scope = body('[data-testid="time-limit-drawer-scope"]').textContent ?? '';
+    expect(scope).toContain('默认超时只警告');
+    expect(scope).toContain('供复盘');
+    expect(scope).toContain('production.time_limit.block_on_exceed');
+    // 「不能领用」只能出现在「开了超时拦截后」那一句里
+    expect(scope.indexOf('不能领用')).toBeGreaterThan(scope.indexOf('超时拦截'));
+    wrapper.unmount();
+  });
+
   it('只读: 不能保存', async () => {
     const wrapper = mountDrawer(false);
     await flushPromises();
