@@ -40,7 +40,7 @@ public class OperatingReportCodec {
         try {
             if (raw == null || raw.length() > 65536) throw new IllegalArgumentException();
             String json = raw.trim();
-            if (json.startsWith("```json") && json.endsWith("```")) json = json.substring(7, json.length() - 3).trim();
+            json = extractJson(json);
             var root = mapper.readTree(json);
             if (!root.isObject() || root.size() != 1 || !root.path("insights").isArray() || root.path("insights").size() > 20) throw new IllegalArgumentException();
             Map<String, OperatingReportSnapshot.Metric> metrics = snapshot.sections().stream().flatMap(s -> s.metrics().stream())
@@ -64,8 +64,10 @@ public class OperatingReportCodec {
 
 
     private static final java.util.regex.Pattern PLACEHOLDER = java.util.regex.Pattern.compile("\\{\\{([^{}]+)\\}\\}");
+    /** 开发口径: 指标 id / 字段名 / 接口名 (形如 sales.mom、indicator_code、gross-margin) 不许出现在给老板看的正文里。 */
+    private static final java.util.regex.Pattern DEV_TOKEN = java.util.regex.Pattern.compile("[A-Za-z]+(?:[._-][A-Za-z0-9]+)+");
     private static final java.util.regex.Pattern DIGITS = java.util.regex.Pattern.compile("[0-9０-９]+");
-    private static final java.util.regex.Pattern CN_QUANTITY = java.util.regex.Pattern.compile("[一二两三四五六七八九十百千万亿]+[成倍个点元万%％]");
+    private static final java.util.regex.Pattern CN_QUANTITY = java.util.regex.Pattern.compile("[一二两三四五六七八九十百千万亿]+(?:[成倍元万%％]|个点)|百分之");
 
     /**
      * 自由业务结论: 模型输出 {"conclusions":[{"text":"...","refs":["指标id"]}]}。
@@ -76,7 +78,7 @@ public class OperatingReportCodec {
         try {
             if (raw == null || raw.length() > 65536) throw new IllegalArgumentException();
             String json = raw.trim();
-            if (json.startsWith("```json") && json.endsWith("```")) json = json.substring(7, json.length() - 3).trim();
+            json = extractJson(json);
             var root = mapper.readTree(json);
             if (!root.isObject() || root.size() != 1 || !root.path("conclusions").isArray() || root.path("conclusions").size() > 8) throw new IllegalArgumentException();
             Map<String, OperatingReportSnapshot.Metric> metrics = metricsById(snapshot);
@@ -99,6 +101,8 @@ public class OperatingReportCodec {
                 var digits = DIGITS.matcher(bare);
                 while (digits.find()) if (!labelDigits.contains(digits.group())) throw new IllegalArgumentException();
                 if (CN_QUANTITY.matcher(bare).find()) throw new IllegalArgumentException();
+                var dev = DEV_TOKEN.matcher(bare);
+                while (dev.find()) if (metrics.values().stream().noneMatch(m -> m.label() != null && m.label().contains(dev.group()))) throw new IllegalArgumentException();
                 result.add(new OperatingReportSnapshot.Insight(OperatingReportSnapshot.InsightKind.NARRATIVE, null, null, text, List.copyOf(refs)));
             }
             return List.copyOf(result);
@@ -109,7 +113,7 @@ public class OperatingReportCodec {
     public List<OperatingReportSnapshot.Insight> parseModelOutput(String raw, OperatingReportSnapshot snapshot) {
         try {
             String json = raw == null ? "" : raw.trim();
-            if (json.startsWith("```json") && json.endsWith("```")) json = json.substring(7, json.length() - 3).trim();
+            json = extractJson(json);
             if (mapper.readTree(json).has("conclusions")) return parseConclusions(raw, snapshot);
         } catch (com.fasterxml.jackson.core.JsonProcessingException ignored) { }
         return parseInsights(raw, snapshot);
@@ -151,6 +155,7 @@ public class OperatingReportCodec {
         StringBuilder text = new StringBuilder("# 经营分析报告\n\n报告期间：")
                 .append(snapshot.periodStart()).append(" 至 ").append(snapshot.periodEnd())
                 .append("\n取数时间：").append(snapshot.fetchedAt()).append("\n\n");
+        if (noOrders(snapshot)) text.append("> ").append(NO_DATA_NOTICE).append("\n\n");
         for (OperatingReportSnapshot.Section section : snapshot.sections()) {
             if (section.priceSensitive() && !canViewPrices) continue;
             text.append("## ").append(label(section.title())).append("\n")
@@ -160,9 +165,9 @@ public class OperatingReportCodec {
                 if (metric.value() == null && PROCESS_SECRET_MASK.equals(metric.missingReason())) text.append(PROCESS_SECRET_MASK);
                 else if (metric.value() == null && CO_PRODUCT_MASK.equals(metric.missingReason())) text.append(CO_PRODUCT_MASK);
                 else if (metric.value() == null) text.append("数据缺失（").append(label(metric.missingReason())).append("）");
-                else text.append(metric.value().stripTrailingZeros().toPlainString()).append(label(metric.unit()));
+                else text.append(plain(metric)).append(label(metric.unit()));
                 if (metric.coverage() != null) text.append("；覆盖率 ")
-                        .append(metric.coverage().multiply(java.math.BigDecimal.valueOf(100)).stripTrailingZeros().toPlainString()).append('%');
+                        .append(metric.coverage().multiply(java.math.BigDecimal.valueOf(100)).setScale(1, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()).append('%');
                 else if (metric.missingReason() != null && metric.value() != null)
                     text.append("；").append(label(metric.missingReason()));
                 text.append('\n');
@@ -170,14 +175,14 @@ public class OperatingReportCodec {
             if (section.metrics().isEmpty()) text.append("- 无查询记录；覆盖率不可计算\n");
             text.append('\n');
         }
-        text.append("## 取数来源与时间基准\n");
+        text.append("## 数据来源与统计口径\n");
         for (OperatingReportSnapshot.SourceReceipt source : snapshot.sources()) {
-            text.append("- ").append(label(source.endpoint())).append("；")
-                    .append(label(source.basis())).append("；").append(label(source.fetchedAt())).append('\n');
+            text.append("- ").append(label(sourceName(source.endpoint()))).append("；")
+                    .append(label(sourceBasis(source.basis()))).append("；取数时间 ").append(label(source.fetchedAt())).append('\n');
         }
         text.append('\n');
         if (canViewPrices) {
-            text.append("## AI 经营解读与建议\n");
+            text.append("## 经营解读与建议\n");
             Map<String, OperatingReportSnapshot.Metric> metrics = metricsById(snapshot);
             boolean any = false;
             if (snapshot.insights() != null) for (var insight : snapshot.insights()) {
@@ -200,9 +205,80 @@ public class OperatingReportCodec {
                         .append("财务段为所在自然月口径，库存与应收为取数时点余额，可单独参考。\n");
                 any = true;
             }
-            if (!any) text.append("本期未生成可展示的业务结论；数字见上述查询快照。\n");
+            if (!any) text.append("本期未生成可展示的业务结论；数字见上方各项数据。\n");
+            appendFollowUp(text, snapshot, metrics);
         } else text.append("财务段落与 AI 财务解读已按价格权限裁剪。\n");
         return text.toString();
+    }
+
+    /** 模型常把 JSON 包在 ``` 围栏 (带不带 json 标记都有) 或前后加一句说明: 取第一个 { 到最后一个 } 之间; 内容仍须通过全部结构与指标校验。 */
+    static String extractJson(String raw) {
+        String s = raw == null ? "" : raw.trim();
+        int a = s.indexOf('{'), b = s.lastIndexOf('}');
+        return a >= 0 && b > a ? s.substring(a, b + 1) : s;
+    }
+
+    static final String NO_DATA_NOTICE = "所选期间内没有销售订单，下面各项销售数字为 0 属于业务本身为零，并非数据丢失。建议换一个有订单的日期或月份重新生成。";
+
+    static boolean noOrders(OperatingReportSnapshot snapshot) {
+        var orders = metricsById(snapshot).get("sales.orders");
+        return orders != null && orders.value() != null && orders.value().signum() == 0;
+    }
+
+    /** 列表预览用的一句话摘要: 全 0 期间给明确提示, 否则取首条可显示的业务结论; 没有返回 null 由调用方回退。 */
+    public String previewLine(OperatingReportSnapshot snapshot) {
+        if (snapshot.status() != OperatingReportSnapshot.Status.SUCCESS || snapshot.sections() == null) return null;
+        if (noOrders(snapshot)) return "该期间没有销售订单，各项销售数据为 0，建议换一个有订单的期间。";
+        var metrics = metricsById(snapshot);
+        if (snapshot.insights() != null) for (var insight : snapshot.insights())
+            if (insight.kind() == OperatingReportSnapshot.InsightKind.NARRATIVE) {
+                var filled = fillNarrative(insight.text() == null ? "" : insight.text(), metrics);
+                if (filled.isPresent()) return filled.get();
+            }
+        return null;
+    }
+
+    /** 跟进分析: 由已校验的解读动作汇总, 每条说清跟进什么; 没有可跟进项就如实写明。 */
+    private void appendFollowUp(StringBuilder text, OperatingReportSnapshot snapshot, Map<String, OperatingReportSnapshot.Metric> metrics) {
+        java.util.LinkedHashSet<String> items = new java.util.LinkedHashSet<>();
+        if (snapshot.insights() != null) for (var insight : snapshot.insights()) {
+            if (insight.kind() == OperatingReportSnapshot.InsightKind.NARRATIVE || insight.action() == null) continue;
+            var metric = metrics.get(insight.metricId());
+            items.add((metric == null ? "" : label(metric.label()) + "：") + actionText(insight.action()));
+        }
+        text.append("\n## 跟进分析\n");
+        if (items.isEmpty()) text.append("- 本期数据没有需要专门跟进的缺口，可按日常节奏复核销售、回款与库存。\n");
+        else for (String item : items) text.append("- ").append(item).append('\n');
+    }
+
+    private static String actionText(OperatingReportSnapshot.Action action) {
+        return switch (action) { case VERIFY_COST -> "核查并补齐成本记录。"; case VERIFY_ADDRESS -> "核查订单与客户地址。"; case VERIFY_SALESPERSON -> "补齐订单业务员归属。"; case FOLLOW_UP_COLLECTION -> "跟进客户回款与逾期应收。"; case REVIEW_PROFIT -> "复核已过账凭证与盈利情况。"; case REVIEW_INVENTORY -> "核查库存余量与预留安排。"; case REVIEW_SALES -> "复核销售结构与比较期间。"; };
+    }
+
+    /** 数字展示: 百分比保留至多三位小数 (不取整), 其余保持原精度去尾零。 */
+    private static String plain(OperatingReportSnapshot.Metric metric) {
+        var v = "%".equals(metric.unit()) ? metric.value().setScale(3, java.math.RoundingMode.HALF_UP) : metric.value();
+        return v.stripTrailingZeros().toPlainString();
+    }
+
+    /** 取数来源的业务名称 (原为接口路径等开发口径)。 */
+    static String sourceName(String endpoint) {
+        String e = endpoint == null ? "" : endpoint;
+        if (e.contains("regional-comparison")) return "地区销售对比";
+        if (e.contains("salesperson-performance")) return "业务员销售业绩";
+        if (e.contains("gross-margin")) return "产品毛利分析";
+        if (e.contains("ar-ap/aging")) return "应收账龄";
+        if (e.contains("income-statement")) return "利润表";
+        if (e.contains("stock-summary")) return "库存汇总";
+        return "经营数据";
+    }
+
+    static String sourceBasis(String basis) {
+        if (basis == null) return "";
+        return basis.replace("as of ", "截至 ").replace("; outstanding balance by due date", "，按到期日统计未收余额")
+                .replace(" POSTED-only", "（仅含已过账凭证）").replace(" province", "（按省份）")
+                .replace("current company-owned available remainder after reservations; Java repeatable-read", "取数时点公司自有批次可用余量（已扣除预留）")
+                .replace("..", " 至 ");
     }
 
     public OperatingReportSnapshot.Failure failure(OperatingReportSnapshot snapshot) {

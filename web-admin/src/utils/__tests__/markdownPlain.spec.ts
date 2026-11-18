@@ -12,6 +12,11 @@ describe('markdownToPlainSummary', () => {
     const out = markdownToPlainSummary('| 指标 | 数值 |\n|---|---|\n| 营收 | 12 |', 200);
     expect(out).toBe('指标 数值 营收 12');
   });
+  it('后端转义的 \\# 与 &lt; 也不外露符号', () => {
+    const out = markdownToPlainSummary('## 业务 \\#3 线 &lt;提示&gt;\n- **回款** 跟进', 200);
+    expect(out).toBe('业务 #3 线 <提示> 回款 跟进');
+    expect(out).not.toMatch(/\\|&lt;|\*\*/);
+  });
   it('超长按字数截断并补省略号；空值返回空串', () => {
     expect(markdownToPlainSummary('字'.repeat(100), 10)).toBe('字'.repeat(10) + '…');
     expect(markdownToPlainSummary(undefined)).toBe('');
