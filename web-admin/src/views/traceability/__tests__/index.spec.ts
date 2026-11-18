@@ -89,6 +89,16 @@ async function search(wrapper: VueWrapper, batchNumber: string) {
   await wrapper.find('form.query-bar').trigger('submit');
   await flushPromises();
   await nextTick();
+  await showListView(wrapper);
+}
+
+/** 追溯线默认是图; 本文件的断言针对分段列表, 查询后切到「列表」。图本身见 traceDagView.spec.ts。 */
+async function showListView(wrapper: VueWrapper) {
+  const radio = wrapper.find('[data-testid="trace-view-list"] input');
+  if (radio.exists()) {
+    await radio.setValue(true);
+    await nextTick();
+  }
 }
 
 beforeEach(() => {
@@ -320,6 +330,20 @@ describe('溯源查询页 — 最近批次与销售单入口', () => {
 });
 
 describe('溯源查询页 — 溯源码卡', () => {
+  it('追溯线默认是图; 切到「列表」才出分段列表, 切回图又收起', async () => {
+    getFullTraceMock.mockImplementation(() => ok(sixCattleTrace()));
+    const wrapper = mountPage();
+    await wrapper.find('input[data-testid="batch-input"]').setValue('PB-2026-001');
+    await wrapper.find('form.query-bar').trigger('submit');
+    await flushPromises();
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(true);
+    expect(wrapper.find('[data-testid="lineage-card"]').exists()).toBe(false);
+    await wrapper.find('[data-testid="trace-view-list"] input').setValue(true);
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(false);
+    expect(wrapper.find('[data-testid="lineage-card"]').exists()).toBe(true);
+    await wrapper.find('[data-testid="trace-view-graph"] input').setValue(true);
+    expect(wrapper.find('[data-testid="trace-dag"]').exists()).toBe(true);
+  });
   it('③ traceCode: null ⇒ 「未打印标签」, ⛔ 不拿批次号顶到溯源码的位置', async () => {
     getFullTraceMock.mockImplementation(() => ok(noLabelTrace()));
     const wrapper = mountPage();
@@ -720,12 +744,14 @@ describe('溯源查询页 — 带参直开', () => {
       template: '<KeepAlive><TracePage v-if="visible" /></KeepAlive>',
     }, { global: { plugins: [ElementPlus] } });
     await flushPromises();
+    await showListView(parent as unknown as VueWrapper);
     expect(parent.find('[data-testid="quality-card"]').exists()).toBe(false);
     visible.value = false;
     await nextTick();
     visible.value = true;
     await flushPromises();
     expect(getFullTraceMock).toHaveBeenCalledTimes(2);
+    await showListView(parent as unknown as VueWrapper);
     expect(parent.get('[data-testid="quality-card"]').text()).toContain('李四');
     parent.unmount();
   });

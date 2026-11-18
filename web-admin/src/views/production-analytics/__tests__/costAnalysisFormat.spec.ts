@@ -10,6 +10,10 @@ import {
   summaryYield,
   summaryYieldMissing,
   unresolvedProductLabel,
+  productsByUnitCost,
+  unitCostLabel,
+  yieldBasisText,
+  COST_CATEGORY_COLORS,
 } from '../costAnalysisFormat';
 
 describe('成本分析: 数字格式', () => {
@@ -116,5 +120,40 @@ describe('成本分析: 单位成本覆盖提示', () => {
   it('全部有成本或后端没给就不提示', () => {
     expect(costCoverageText(5, 5)).toBeNull();
     expect(costCoverageText(undefined, 5)).toBeNull();
+  });
+});
+
+describe('成本分析: 产品对比按单位成本 (LSM-COSTBI-B 第 3 项)', () => {
+  const p = (id: string, unit: string, costPerUnit: number | null, totalCost: number) =>
+    ({ productTypeId: id, unit, costPerUnit, totalCost });
+  it('比单位成本而不是总成本：产量大的便宜产品不排第一', () => {
+    const sorted = productsByUnitCost([p('大产量便宜', '盒', 10, 30000), p('小产量贵', '盒', 25, 900)]);
+    expect(sorted.map((x) => x.productTypeId)).toEqual(['小产量贵', '大产量便宜']);
+  });
+  it('不同单位分组，不把盒和袋的单价混排；算不出的放最后', () => {
+    const sorted = productsByUnitCost([
+      p('袋A', '袋', 50, 1), p('盒A', '盒', 10, 1), p('盒B', '盒', 20, 1), p('盒无成本', '盒', null, 0),
+    ]);
+    expect(sorted.map((x) => x.productTypeId)).toEqual(['盒B', '盒A', '袋A', '盒无成本']);
+  });
+  it('单位成本标签带单位，缺失写「未填」不是 ¥0', () => {
+    expect(unitCostLabel(16.236, '盒')).toBe('¥16.24/盒');
+    expect(unitCostLabel(null, '盒')).toBe('未填');
+  });
+});
+
+describe('成本分析: 平均出成率分母 (LSM-COSTBI-B 第 4 项)', () => {
+  it('部分批次没有出成率时说清楚 9/10，不说「按 10 批」', () => {
+    expect(yieldBasisText(9, 10)).toBe('9/10 批有出成率，按这 9 批加权');
+    expect(yieldBasisText(10, 10)).toBe('按 10 批加权');
+    expect(yieldBasisText(0, 10)).toBe('暂无带出成率的批次');
+  });
+});
+
+describe('成本分析: 两张图同一套成本颜色 (LSM-COSTBI-B 第 6 项)', () => {
+  it('四类成本各有且只有一个颜色，互不相同', () => {
+    const colors = Object.values(COST_CATEGORY_COLORS);
+    expect(Object.keys(COST_CATEGORY_COLORS)).toEqual(['材料', '人工', '设备', '其他']);
+    expect(new Set(colors).size).toBe(4);
   });
 });

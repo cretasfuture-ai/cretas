@@ -49,6 +49,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
 - 🔴 **CI 由 organizer 统一盯**（Steve 2026-11-10）：开了 PR 的执行会话按应用规定不能自己轮询 CI，Auto-fix 只在变红时叫醒它，**CI 全绿没有任何通知** ⇒ 不叫它就一直干等（2026-11-10 #1556/#1557/#1560 各空等十几到几十分钟）。所以：
   - 执行会话一报出 PR 号，organizer 就挂一个监视，**每个 PR 一个**。用 Monitor 或后台命令都可以，等待期间不耗 token。不要等会话来请求，也不要让它「自己盯」。
+  - 🔴 **默认用一键监视合并**：`bash .claude/tools/pr-watch-merge.sh <PR>`（Bash `run_in_background`），它自己做「等全绿 → 落后就 update-branch 再等绿 → `--match-head-commit` squash 合并」，只在 MERGED / RED / CONFLICT / CLOSED / 超时时退出一次；要先审再合就加 `--no-merge`。⛔ 不要再「绿了醒来 update → 再挂 → 再醒来合」。依据：2026-11-18 一周效果检查，organizer 花费 33% 是被自己后台命令通知叫醒（901 次）；同日 #1836/#1837 手工挂了 6 次监视。需要独立终审、要先发布 `--phase build` 的 PR 仍按原流程，审完再挂它。
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
   - 停了马上通知对应会话：绿了让它合并发布，红了让它定位修复。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
@@ -83,7 +84,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
   3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，之后完成/阻塞/PR 号直接回复这条消息的发件人」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
-  5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
+  5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。前任标题不是「Organizer｜」也照样归档（2026-11-18：BP 协调会话「产品与传统软件对比研究」被就地提升出的 BP 第 2 任接手后一直置顶没归档，因为它不叫 Organizer，没人认领这一步）；指示别的会话就地接任 organizer 的，接任方负责归档前任。机械提醒：`session-health.js` 在 organizer 会话里每 10 分钟扫一次本机会话记录，列出「交班遗留」（已改名「[已交班…」没归档的，和现任 Organizer 的 spawnedFrom 前任没归档的），看到就处理或转给对应现任。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
   6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
   - **执行线收尾归现任**（Steve 2026-11-14）：交班 detach 出去的执行线没有父会话，但仍归现任 organizer 收尾。PR 合并或关闭的会话由应用设置 `auto_archive_on_pr_close`（11-14 已开）自动归档；没有 PR 的线（设计、验收、原型、一次性检查）交付后由现任归档，归档前确认 worktree 干净且没有未推提交。依据：11-14 有 21 个已合并或已交班的会话空闲没人归档，每个占一个 claude 进程（约 100–400MB），这批会话 CLI 合计约 4GB 内存。
   - **会话命名**：organizer「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后的老 organizer「[已交班→第 N+1 任] <原名>」；执行会话「<批次>·<线名>：<做什么>」。

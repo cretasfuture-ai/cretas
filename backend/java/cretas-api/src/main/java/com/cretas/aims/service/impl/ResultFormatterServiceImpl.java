@@ -704,7 +704,14 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         return sb.toString();
     }
 
-    private String buildPeriodLabel(String period, String startDate, String endDate) {
+    static String buildPeriodLabel(String period, String startDate, String endDate) {
+        // 2026-11-17 F006「上个月毛利率多少？」: 工具拿到的是显式日期 10-01~10-31, period 却是默认的 month,
+        // 标题写成「本月 (10-01 ~ 10-31)」。「本月 / 本周 …」只在窗口截到今天时成立; 窗口在今天之前结束 = 过去的一段, 只写日期。
+        if (startDate != null && endDate != null && endsBeforeToday(endDate)) {
+            String start = startDate.length() >= 10 ? startDate.substring(0, 10) : startDate;
+            String end = endDate.length() >= 10 ? endDate.substring(0, 10) : endDate;
+            return start + " ~ " + end;
+        }
         if (period == null) return "";
         String periodName = switch (period) {
             case "today" -> "今日";
@@ -720,6 +727,15 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             return periodName + " (" + start + " ~ " + end + ")";
         }
         return periodName;
+    }
+
+    private static boolean endsBeforeToday(String endDate) {
+        try {
+            String day = endDate.length() >= 10 ? endDate.substring(0, 10) : endDate;
+            return java.time.LocalDate.parse(day).isBefore(java.time.LocalDate.now());
+        } catch (RuntimeException e) {
+            return false;
+        }
     }
 
     private String formatInventoryReport(Map<String, Object> data, String periodLabel) {
