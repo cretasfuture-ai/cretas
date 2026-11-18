@@ -12,6 +12,17 @@ import com.cretas.aims.service.shortage.CostDeviationCaseWriter.Applied;
 import com.cretas.aims.service.shortage.CostDeviationEvaluator.Outcome;
 import com.cretas.aims.service.shortage.CostDeviationEvaluator.Reading;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
+import com.cretas.aims.entity.production.PlanStandardCostLine;
+import com.cretas.aims.repository.production.PlanStandardCostLineRepository;
+import com.cretas.aims.service.unit.UnitContractService;
+import com.cretas.aims.service.unit.UnitConversionContext;
+import com.cretas.aims.service.unit.UnitConversionResult;
+import com.cretas.aims.service.unit.UnitUsageScene;
+import org.springframework.beans.factory.annotation.Autowired;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.function.Function;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -56,6 +67,11 @@ public class CostDeviationScanService {
     private final MaterialBalanceService balanceService;
     private final ProcessSecretLlmCostScope costScope;
     private final CostDeviationCaseWriter writer;
+    /** 物料平衡差异金额估价用; required=false: 纯单测可不给, 不给就维持金额未知。 */
+    @Autowired(required = false)
+    private PlanStandardCostLineRepository standardCostLineRepository;
+    @Autowired(required = false)
+    private UnitContractService unitContractService;
     private final CostDeviationNotifier notifier;
     private final CostDeviationScanDefaults defaults;
 
@@ -128,12 +144,52 @@ public class CostDeviationScanService {
         for (MaterialBalanceTableDTO.PlanBlock block : table.getPlans()) {
             if (block.getPlanId() == null) continue; // 没挂计划的报工没有处理实例的归属
             try {
-                record(factoryId, CostDeviationEvaluator.evaluateBalance(block, threshold), trigger, tally);
+                record(factoryId, CostDeviationEvaluator.evaluateBalance(block, threshold,
+                        balancePricer(factoryId, block.getPlanId())), trigger, tally);
             } catch (RuntimeException ex) {
                 log.warn("损耗异常扫描: 计划 {} 写入失败: {}", block.getPlanId(), ex.getMessage());
                 tally.failed++;
             }
         }
+    }
+
+    /**
+     * 物料平衡差异金额的单价 (LSM-COSTBI 第 11 项): 以前物料平衡只有数量, 金额一律「未知」。
+     * 用开计划时的主料单价快照, 单位换算走单位契约 (⛔ 不比字符串、不猜换算率)。
+     * 多个主料 / 没有快照 / 单位换不过去 ⇒ 定不了价, 原因写进摘要, 金额仍未知。
+     * 依赖缺席 (纯单测) ⇒ null, 维持旧行为。
+     */
+    Function<MaterialBalanceTableDTO.Row, CostDeviationEvaluator.RowPrice> balancePricer(String factoryId, String planId) {
+        if (standardCostLineRepository == null || unitContractService == null) return null;
+        List<PlanStandardCostLine> mains = standardCostLineRepository
+                .findByFactoryIdAndPlanIdOrderByIdAsc(factoryId, planId).stream()
+                .filter(l -> PlanStandardCostLine.TYPE_MATERIAL.equals(l.getLineType()))
+                .filter(l -> PlanStandardCostLine.BASIS_RAW_INPUT_SHARE.equals(l.getStandardBasis()))
+                .toList();
+        if (mains.isEmpty()) {
+            return r -> CostDeviationEvaluator.RowPrice.unknown("这张计划没有主料单价快照");
+        }
+        if (mains.size() > 1) {
+            return r -> CostDeviationEvaluator.RowPrice.unknown("有多个主料, 不能按单一单价折算");
+        }
+        PlanStandardCostLine main = mains.get(0);
+        if (main.getUnitPrice() == null || main.getPriceUnit() == null) {
+            return r -> CostDeviationEvaluator.RowPrice.unknown("开计划时主料没有单价");
+        }
+        String name = main.getMaterialName() == null ? "主料" : "主料「" + main.getMaterialName() + "」";
+        String basis = "按" + name + "开计划时单价估算";
+        Map<String, CostDeviationEvaluator.RowPrice> byUnit = new HashMap<>();
+        return r -> byUnit.computeIfAbsent(String.valueOf(r.getUnit()), u -> {
+            if (r.getUnit() == null) return CostDeviationEvaluator.RowPrice.unknown("工序报工没有单位");
+            UnitConversionResult one = unitContractService.convert(BigDecimal.ONE, new UnitConversionContext(
+                    factoryId, null, r.getUnit(), main.getPriceUnit(), LocalDateTime.now(), UnitUsageScene.PRODUCTION,
+                    12, RoundingMode.HALF_UP));
+            if (one == null || !one.succeeded() || one.quantity() == null) {
+                return CostDeviationEvaluator.RowPrice.unknown("报工单位 " + r.getUnit() + " 换算不到单价单位 "
+                        + main.getPriceUnit());
+            }
+            return new CostDeviationEvaluator.RowPrice(main.getUnitPrice().multiply(one.quantity()), basis, null);
+        });
     }
 
     private void record(String factoryId, Reading r, String trigger, Tally tally) {

@@ -51,7 +51,10 @@ public class CostDeviationCaseWriter {
             create(factoryId, r, trigger);
             return Applied.CREATED;
         }
-        if (r.fingerprint().equals(open.getInputFingerprint())) return Applied.UNCHANGED;
+        if (r.fingerprint().equals(open.getInputFingerprint())) {
+            backfillEstimatedAmount(open, r);
+            return Applied.UNCHANGED;
+        }
 
         CostDeviationCaseDetail d = detailRepository.findById(open.getId())
                 .orElseThrow(() -> new IllegalStateException("成本异常实例缺读数: " + open.getId()));
@@ -72,6 +75,20 @@ public class CostDeviationCaseWriter {
         event(open, ShortageCaseEvent.EventType.REFRESHED, open.getStage(), trigger,
                 (within ? "读数已回到阈值内, 仍需负责人给出结论: " : "读数变化: ") + r.summary(), null);
         return within ? Applied.BELOW_THRESHOLD : Applied.REFRESHED;
+    }
+
+    /**
+     * 物料平衡的差异金额是按单价快照估的, 不进指纹 (LSM-COSTBI 第 11 项)。报工事实没变时,
+     * 已开着的实例只补上 / 更新估价和摘要, 不记「读数变化」事件, 也不改阶段。
+     */
+    private void backfillEstimatedAmount(ShortageCase open, Reading r) {
+        if (r.sourceType() != ShortageCase.SourceType.MATERIAL_BALANCE || r.amount() == null) return;
+        detailRepository.findById(open.getId()).ifPresent(d -> {
+            if (d.getAmountVariance() != null && d.getAmountVariance().compareTo(r.amount()) == 0) return;
+            d.setAmountVariance(r.amount());
+            d.setSummary(r.summary());
+            detailRepository.save(d);
+        });
     }
 
     private void create(String factoryId, Reading r, String trigger) {
