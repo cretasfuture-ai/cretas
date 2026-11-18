@@ -372,7 +372,7 @@ function buildRankingInsight(
   const labels = categoryLabels(chart.config);
   const totals = totalsByIndex(chart.config);
   const all: Point[] = totals
-    .map((v, i) => (v === null ? null : { label: labels[i] ?? `项目${i + 1}`, value: v, unit: chart.pointUnits?.[i] }))
+    .map((v, i): Point | null => (v === null ? null : { label: labels[i] ?? `项目${i + 1}`, value: v, unit: chart.pointUnits?.[i] }))
     .filter((p): p is Point => p !== null && p.value > 0);
   if (all.length < 2) return null;
 
