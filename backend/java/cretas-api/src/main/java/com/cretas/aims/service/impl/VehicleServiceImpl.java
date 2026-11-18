@@ -72,8 +72,10 @@ public class VehicleServiceImpl implements VehicleService {
     public VehicleDTO createVehicle(String factoryId, VehicleDTO request) {
         log.info("创建车辆: factoryId={}, plateNumber={}", factoryId, request.getPlateNumber());
 
-        // 检查车牌号是否已存在
-        if (vehicleRepository.findByFactoryIdAndPlateNumber(factoryId, request.getPlateNumber()).isPresent()) {
+        request.setPlateNumber(normalizePlate(request.getPlateNumber()));
+        request.setCapacity(resolveCapacityKg(request));
+        // 检查车牌号是否已存在 (大小写不敏感、忽略首尾空白)
+        if (!vehicleRepository.findAllByFactoryIdAndNormalizedPlate(factoryId, request.getPlateNumber()).isEmpty()) {
             throw new BusinessException(409, "车牌号已存在: " + request.getPlateNumber())
                     .withHint("请使用其他车牌号, 或编辑现有车辆")
                     .withHintTarget("plateNumber");
@@ -103,9 +105,12 @@ public class VehicleServiceImpl implements VehicleService {
         Vehicle vehicle = vehicleRepository.findByIdAndFactoryId(vehicleId, factoryId)
                 .orElseThrow(() -> new ResourceNotFoundException("车辆不存在: " + vehicleId));
 
-        // 如果修改了车牌号，检查是否重复
-        if (request.getPlateNumber() != null && !request.getPlateNumber().equals(vehicle.getPlateNumber())) {
-            if (vehicleRepository.findByFactoryIdAndPlateNumber(factoryId, request.getPlateNumber()).isPresent()) {
+        request.setCapacity(resolveCapacityKg(request));
+        // 如果修改了车牌号，检查是否重复 (大小写不敏感、忽略首尾空白; 自己不算重复)
+        String newPlate = request.getPlateNumber() == null ? null : normalizePlate(request.getPlateNumber());
+        if (newPlate != null && !newPlate.equals(normalizePlate(vehicle.getPlateNumber()))) {
+            request.setPlateNumber(newPlate);
+            if (!vehicleRepository.findAllByFactoryIdAndNormalizedPlate(factoryId, newPlate).isEmpty()) {
                 throw new BusinessException(409, "车牌号已存在: " + request.getPlateNumber())
                         .withHint("请使用其他车牌号")
                         .withHintTarget("plateNumber");
@@ -193,6 +198,32 @@ public class VehicleServiceImpl implements VehicleService {
         log.info("车辆删除成功（软删除）: id={}", vehicleId);
     }
 
+    /** 车牌口径: 去首尾空白并转大写 (原型按大写比较); 空串视为缺失。 */
+    static String normalizePlate(String plate) {
+        if (plate == null || plate.isBlank()) {
+            throw new BusinessException(400, "车牌号不能为空").withHintTarget("plateNumber");
+        }
+        return plate.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    /** 载重口径统一为 kg: 只传吨则 ×1000; 两者都传必须一致。都没传返回 null。 */
+    static BigDecimal resolveCapacityKg(VehicleDTO request) {
+        BigDecimal kg = request.getCapacity();
+        BigDecimal tons = request.getCapacityTons();
+        if (tons == null) {
+            return kg;
+        }
+        if (tons.signum() < 0) {
+            throw new BusinessException(400, "载重不能为负数").withHintTarget("capacityTons");
+        }
+        BigDecimal fromTons = tons.multiply(new BigDecimal("1000"));
+        if (kg != null && kg.compareTo(fromTons) != 0) {
+            throw new BusinessException(400, "载重 capacity(kg) 与 capacityTons(吨) 不一致")
+                    .withHint("只传其中一个, 或保证 kg = 吨 × 1000").withHintTarget("capacityTons");
+        }
+        return fromTons;
+    }
+
     /**
      * 实体转DTO
      */
@@ -204,6 +235,8 @@ public class VehicleServiceImpl implements VehicleService {
                 .driver(vehicle.getDriverName())
                 .phone(vehicle.getDriverPhone())
                 .capacity(vehicle.getCapacity())
+                .capacityTons(vehicle.getCapacity() == null ? null
+                        : vehicle.getCapacity().divide(new BigDecimal("1000"), 3, java.math.RoundingMode.HALF_UP))
                 .currentLoad(vehicle.getCurrentLoad())
                 .status(vehicle.getStatus() != null ? vehicle.getStatus().name() : "available")
                 .vehicleType(vehicle.getVehicleType())
