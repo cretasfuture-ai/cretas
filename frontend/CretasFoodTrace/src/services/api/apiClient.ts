@@ -4,7 +4,7 @@ import { API_BASE_URL } from '../../constants/config';
 import { useAuthStore } from '../../store/authStore';
 import { logger } from '../../utils/logger';
 import { currentActionId } from '../activityTracker';
-import { Alert } from 'react-native';
+import { appAlert } from '../../components/ui/AppDialog';
 import { timeLimitWarningOf } from '../../utils/processTimeLimit';
 
 // 创建ApiClient专用logger
@@ -73,7 +73,7 @@ class ApiClient {
         // PROTO-Q41: 工序时限「只警告」档 —— 投料成功了, 但超时 / 没登记解冻的警告要让操作员看到
         const timeLimitWarning = timeLimitWarningOf(response.data);
         if (timeLimitWarning) {
-          Alert.alert('投料时限提醒', timeLimitWarning);
+          appAlert('投料时限提醒', timeLimitWarning);
         }
         return response.data;
       },
