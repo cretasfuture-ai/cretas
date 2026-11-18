@@ -36,6 +36,8 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import ChartSkeleton from '@/components/smartbi/ChartSkeleton.vue';
 import { enhanceChartDefaults } from '@/composables/useChartEnhancer';
 import TemplateGrid from './components/TemplateGrid.vue';
+import RegionSalesList from './components/RegionSalesList.vue';
+import { manufacturingQuickQuestions } from './components/dashboardQuickQuestions';
 import type { ChartWithMeta } from './components/chartInsight';
 import ChartInsight from './components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
@@ -73,8 +75,7 @@ interface DepartmentRank {
 // 前端使用的区域排行数据
 interface RegionRank {
   name: string;
-  sales: number;
-  percentage: number;
+  value: number;
 }
 
 // 前端使用的 AI 洞察
@@ -281,7 +282,8 @@ const departmentRanking = computed<DepartmentRank[]>(() => {
   }));
 });
 
-// 区域排行数据 (从 rankings 提取)
+// 区域排行原始数据 (从 rankings 提取); 占比由 RegionSalesList 用 regionShare.ts 计算,
+// 无数据/数据不可信时整块显示空状态, 不渲染区域数字。
 const regionRanking = computed<RegionRank[]>(() => {
   if (!dashboardData.value?.rankings) return [];
 
@@ -289,13 +291,9 @@ const regionRanking = computed<RegionRank[]>(() => {
     || dashboardData.value.rankings['区域']
     || [];
 
-  // 计算总值用于百分比
-  const total = regionRankings.reduce((sum, item) => sum + item.value, 0);
-
   return regionRankings.map(item => ({
     name: item.name,
-    sales: item.value,
-    percentage: total > 0 ? Math.round((item.value / total) * 100) : 0
+    value: item.value
   }));
 });
 
@@ -460,12 +458,6 @@ const restaurantQuickQuestions = [
   { text: '周末周中对比', icon: Clock },
   { text: '峰值月份', icon: DataLine },
   { text: '优惠券使用情况', icon: Histogram }
-];
-const manufacturingQuickQuestions = [
-  { text: '本月销售额如何?', icon: TrendCharts },
-  { text: '哪个部门业绩最好?', icon: Histogram },
-  { text: '利润率变化趋势如何?', icon: DataLine },
-  { text: '客户增长情况怎样?', icon: User }
 ];
 const quickQuestions = computed(() =>
   isRestaurantTenant.value ? restaurantQuickQuestions : manufacturingQuickQuestions
@@ -1917,7 +1909,7 @@ onUnmounted(() => {
 
     <!-- 排行榜区 -->
     <el-row :gutter="16" class="ranking-section" v-loading="loading" aria-label="排行榜">
-      <el-col v-if="!isRestaurantTenant && departmentRanking.length > 0" :xs="24" :md="regionRanking.length > 0 ? 12 : 24">
+      <el-col v-if="!isRestaurantTenant && departmentRanking.length > 0" :xs="24" :md="12">
         <CapabilityGate card-id="dashboard_dept_ranking" :requires="['staff_name', 'net_amount']">
         <el-card class="ranking-card">
           <template #header>
@@ -1947,9 +1939,9 @@ onUnmounted(() => {
         </el-card>
         </CapabilityGate>
       </el-col>
-      <!-- P2-18: 区域销售分布空时整个 col 隐藏, 部门排行 col 自动扩宽到 24. 避免大片"暂无区域销售数据" 占屏 -->
+      <!-- 区域销售分布: 无数据时整块显示空状态(说明缺什么数据), 不渲染区域数字 -->
       <el-col
-        v-if="!isRestaurantTenant && regionRanking.length > 0"
+        v-if="!isRestaurantTenant"
         :xs="24"
         :md="departmentRanking.length > 0 ? 12 : 24"
       >
@@ -1962,20 +1954,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div class="ranking-list">
-            <div
-              v-for="item in regionRanking"
-              :key="item.name"
-              class="ranking-item region-item"
-            >
-              <div class="region-name">{{ item.name }}</div>
-              <div class="region-bar-wrapper">
-                <div class="region-bar" :class="'rank-bar-' + Math.min(regionRanking.indexOf(item), 3)" :style="{ width: item.percentage + '%' }"></div>
-              </div>
-              <div class="region-value">
-                <span class="value">{{ formatMoney(item.sales) }}</span>
-                <span class="percent">{{ item.percentage }}%</span>
-              </div>
-            </div>
+            <RegionSalesList :items="regionRanking" />
           </div>
         </el-card>
         </CapabilityGate>
@@ -2450,65 +2429,6 @@ onUnmounted(() => {
 
       &.growth-down {
         color: var(--el-color-danger, #FF5630);
-      }
-    }
-
-    .region-item {
-      border-radius: 6px;
-      padding: 12px 8px;
-      margin: 0 -8px;
-      transition: background 0.2s ease;
-
-      &:hover {
-        background: var(--el-fill-color-light, #F4F6F9);
-
-        .region-bar {
-          filter: brightness(1.1);
-        }
-      }
-
-      .region-name {
-        width: 80px;
-        font-size: 14px;
-        color: var(--el-text-color-primary, #1A2332);
-      }
-
-      .region-bar-wrapper {
-        flex: 1;
-        height: 8px;
-        background: #F4F6F9;
-        border-radius: 4px;
-        margin: 0 12px;
-        overflow: hidden;
-
-        .region-bar {
-          height: 100%;
-          background: linear-gradient(90deg, #2D8B57, #4C9AFF);
-          border-radius: 4px;
-          transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1), filter 0.2s ease;
-
-          &.rank-bar-0 { background: linear-gradient(90deg, #2D8B57, #4C9AFF); }
-          &.rank-bar-1 { background: linear-gradient(90deg, #36B37E, #57D9A3); }
-          &.rank-bar-2 { background: linear-gradient(90deg, #FFAB00, #FFC400); }
-          &.rank-bar-3 { background: linear-gradient(90deg, #A0AEC0, #CBD5E0); }
-        }
-      }
-
-      .region-value {
-        width: 100px;
-        text-align: right;
-
-        .value {
-          font-size: 14px;
-          color: var(--el-text-color-primary, #1A2332);
-          font-weight: 500;
-        }
-
-        .percent {
-          font-size: 12px;
-          color: var(--color-text-secondary);
-          margin-left: 8px;
-        }
       }
     }
   }
