@@ -27,18 +27,34 @@ class ResourceAdmission(unittest.TestCase):
                 else:
                     with self.assertRaises(RuntimeError):m.identity()
 
+def colima_list(ci_status='Running',rc=0,raw=None):
+    rows=[] if ci_status is None else [dict(name='ci',status=ci_status)]
+    text=raw if raw is not None else '\n'.join(json.dumps(r) for r in [dict(name='default',status='Stopped')]+rows)
+    return mock.Mock(returncode=rc,stdout=text)
+
 class ActiveBuildGate(unittest.TestCase):
     def test_native_or_ci_busy_and_guest_errors_refuse(self):
-        for native,guest,marker,expected in [(0,0,'',True),(1,0,'F006_CI_BUSY_v1',True),(1,0,'F006_CI_IDLE_v1',False),(1,255,'',True)]:
-            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=native),mock.Mock(returncode=guest,stdout=marker)]):
+        for native,guest,marker,expected in [(1,0,'F006_CI_BUSY_v1',True),(1,0,'F006_CI_IDLE_v1',False),(1,255,'',True)]:
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=native),colima_list(),mock.Mock(returncode=guest,stdout=marker)]):
                 self.assertEqual(m.active_build(),expected)
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=0)]):self.assertTrue(m.active_build())
+    def test_retired_ci_guest_stopped_or_absent_is_idle(self):
+        for status in ['Stopped',None]:
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),colima_list(status)]) as run:
+                self.assertFalse(m.active_build())
+                self.assertEqual(run.call_count,2)  # never ssh into (or start) a stopped guest
+    def test_unreadable_or_other_ci_state_is_not_idle(self):
+        for listing in [colima_list(rc=1),colima_list(raw=''),colima_list(raw='not json'),colima_list('Broken'),colima_list('')]:
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),listing]):self.assertTrue(m.active_build())
     def test_guest_cli_error_one_is_not_misread_as_no_worker(self):
-        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=1,stdout='')]):self.assertTrue(m.active_build())
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),colima_list(),mock.Mock(returncode=1,stdout='')]):self.assertTrue(m.active_build())
     def test_success_without_exact_idle_marker_is_not_idle(self):
         for text in ['', 'F006_CI_UNKNOWN_v1', 'warning\nF006_CI_IDLE_v1']:
-            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=0,stdout=text)]):self.assertTrue(m.active_build())
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),colima_list(),mock.Mock(returncode=0,stdout=text)]):self.assertTrue(m.active_build())
     def test_timeout_is_not_idle(self):
         with mock.patch.object(m.subprocess,'run',side_effect=m.subprocess.TimeoutExpired('guest',3)):
+            with self.assertRaises(m.subprocess.TimeoutExpired):m.active_build()
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),m.subprocess.TimeoutExpired('colima',3)]):
             with self.assertRaises(m.subprocess.TimeoutExpired):m.active_build()
 
 class RequestContract(unittest.TestCase):

@@ -60,9 +60,31 @@ def sample(timeout=2):
         free_gib=shutil.disk_usage(Path.home()).free/GIB)
 
 
+def ci_guest_state():
+    # 'Running' / 'Stopped' / other colima status, 'absent' when colima lists instances but no ci,
+    # 'unknown' when the list cannot be read. Timeouts propagate like the guest query below.
+    r=subprocess.run(['/opt/homebrew/bin/colima','list','--json'],capture_output=True,text=True,timeout=3)
+    if r.returncode!=0:return 'unknown'
+    states={}
+    for line in r.stdout.splitlines():
+        if not line.strip():continue
+        try:row=json.loads(line)
+        except ValueError:return 'unknown'
+        if not isinstance(row,dict):return 'unknown'
+        states[row.get('name')]=row.get('status')
+    if not states:return 'unknown'
+    if 'ci' not in states:return 'absent'
+    return states['ci'] if isinstance(states['ci'],str) and states['ci'] else 'unknown'
+
+
 def active_build():
     if subprocess.run(['pgrep','-x','xcodebuild'],stdout=subprocess.DEVNULL,timeout=2).returncode==0:
         return True
+    # 2026-11-18 Steve: the ci guest is retired. A ci guest that colima reports Stopped, or that
+    # no longer exists, runs no CI => idle. An unreadable list or any other state stays busy.
+    state=ci_guest_state()
+    if state in ('Stopped','absent'):return False
+    if state!='Running':return True
     # Read-only guest query. A missing/unreachable CI guest fails closed, never starts it.
     probe=("import subprocess,sys;p=subprocess.run(['pgrep','-x','Runner.Worker'],stdout=subprocess.DEVNULL);"
            "print('F006_CI_BUSY_v1' if p.returncode==0 else 'F006_CI_IDLE_v1' if p.returncode==1 else 'F006_CI_UNKNOWN_v1');"
