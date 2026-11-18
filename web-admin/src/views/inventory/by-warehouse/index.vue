@@ -373,7 +373,8 @@ const productEmptyText = computed<string>(() =>
 const warehousePickedByUser = ref(false);
 let autoPickingWarehouse = false;
 function inventoryBatchTotal(): number {
-  return (data.value?.materialCount ?? 0) + (data.value?.productCount ?? 0);
+  // 页面默认先看「原料库存」，所以以原料批次数为准；仓库只有成品批次时用户仍会看到空的原料表。
+  return data.value?.materialCount ?? 0;
 }
 async function autoSelectWarehouseWithBatches(): Promise<void> {
   if (warehousePickedByUser.value || !data.value || inventoryBatchTotal() > 0) return;
