@@ -51,6 +51,29 @@ public class MaterialBalanceService {
         return build(rows, t);
     }
 
+    /** 按批次拆开的物料平衡: 每个块只含一个批次 (批次号原样), 同一套阈值与保密排除。 */
+    public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {}
+
+    public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate) {
+        ProcessSecretAggregateExclusions.Scope excluded =
+                aggregateExclusions.forCurrentCaller(factoryId, "material balance by batch");
+        List<Map<String, Object>> rows = reportRepo.findYieldReportsForBalance(factoryId, startDate, endDate,
+                "", excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
+        Thresholds t = thresholdProvider.forFactory(factoryId);
+        Map<String, List<Map<String, Object>>> byBatch = new LinkedHashMap<>();
+        for (Map<String, Object> r : rows) {
+            String no = str(r.get("batch_number"));
+            if (no == null) continue; // 没有批次号的报工没法按批次说, 不进这个视图
+            byBatch.computeIfAbsent(no, k -> new ArrayList<>()).add(r);
+        }
+        List<MaterialBalanceTableDTO.PlanBlock> blocks = new ArrayList<>();
+        for (List<Map<String, Object>> group : byBatch.values()) {
+            blocks.addAll(build(group, t).getPlans());
+        }
+        return new BatchBalance(t.warn().multiply(HUNDRED).stripTrailingZeros(),
+                t.red().multiply(HUNDRED).stripTrailingZeros(), blocks);
+    }
+
     public MaterialBalanceTableDTO build(List<Map<String, Object>> rows, Thresholds t) {
         // plan -> process -> task -> reports
         Map<String, Map<String, Map<Object, List<Map<String, Object>>>>> tree = new LinkedHashMap<>();

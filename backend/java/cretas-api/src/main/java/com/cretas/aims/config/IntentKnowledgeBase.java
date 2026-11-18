@@ -3133,6 +3133,22 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("最近出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
+        // 2026-11-18 BP 问题 28: 损耗异常 / 某工序出成率 / 出成率为什么掉了 走出成率工具的工序视图
+        // (「最近有哪些损耗异常」以前没有短语 → 决策层判成质检, 答「质检不合格率 0%」; 守卫 YieldLossProcessRoutingContractTest)
+        phraseToIntentMapping.put("最近有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪道工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么掉了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么下降", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么低了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率掉在哪", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("掉在哪道工序", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("本月生产了多少批次，合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("本月生产了多少批次合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("生产了多少批次，合格率多少", "QUALITY_STATS");
