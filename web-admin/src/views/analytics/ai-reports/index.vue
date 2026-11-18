@@ -6,6 +6,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
 import { formatReportTime, renderReportMarkdown } from './reportMarkdown';
+import { markdownToPlainSummary } from '@/utils/markdownPlain';
 import type { AIReportDetail, AIReportSummary, OperatingReportType } from '@/api/aiReports';
 
 const auth = useAuthStore();
@@ -21,7 +22,10 @@ const error = ref('');
 const detailError = ref('');
 const filter = ref('');
 const generationType = ref<OperatingReportType>('daily');
-const selectedDate = ref(new Date());
+// 日报默认选昨天：今天还没收盘，生成「今天」的日报只会得到空报告。
+// 「昨天无数据时自动取最近有数据的日期」需要后端提供经营数据最近日期接口，前端无现成来源，暂不做。
+const defaultReportDate = () => { const d = new Date(); d.setDate(d.getDate() - 1); return d; };
+const selectedDate = ref(defaultReportDate());
 const detailOpen = ref(false);
 const factoryId = computed(() => auth.factoryId);
 const canGenerate = computed(() => auth.factoryType === 'FACTORY' && permissions.canViewPrice);
@@ -32,6 +36,8 @@ const labels: Record<string, string> = { daily: '日报', weekly: '周报', mont
 const dateText = formatReportTime;
 const bodyHtml = computed(() => renderReportMarkdown(body.value));
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+// 列表预览：摘要里常带 Markdown 标记（# ## - **），先转纯文本再取前 80 字。
+const summaryPreview = (row: AIReportSummary) => markdownToPlainSummary(row.failureReason || row.financialSummaryText || row.summaryText, 80) || '打开查看全文';
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '报告加载失败，请重试。';
 async function load() {
   if (!factoryId.value) { error.value = '请先选择工厂。'; reports.value = []; return; }
@@ -119,7 +125,7 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
       <el-table-column label="报告期间" min-width="210"><template #default="{ row }">{{ row.periodStart || '—' }} 至 {{ row.periodEnd || '—' }}</template></el-table-column>
       <el-table-column label="状态与说明" min-width="320"><template #default="{ row }">
         <el-tag :type="row.generationStatus === 'FAILED' ? 'danger' : 'success'">{{ row.generationStatus === 'FAILED' ? '生成失败' : '已生成' }}</el-tag>
-        <p class="summary">{{ row.failureReason || row.financialSummaryText || row.summaryText || '打开查看全文' }}</p>
+        <p class="summary">{{ summaryPreview(row) }}</p>
       </template></el-table-column>
       <el-table-column label="生成时间" width="180"><template #default="{ row }">{{ dateText(row.createdAt) }}</template></el-table-column>
       <el-table-column width="100"><template #default="{ row }"><el-button link type="primary" @click.stop="openReport(row.id)">查看全文</el-button></template></el-table-column>
