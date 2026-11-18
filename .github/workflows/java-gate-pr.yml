@@ -335,19 +335,17 @@ jobs:
           key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
           restore-keys: maven-gate-
 
-      # 自建 runner 和发布构建共用 canada-mini: 发布优先。发布构建持有 ~/cretas-build/.build.lock
-      # (remote-java-build-worker.sh, mkdir 锁 + pid) 时先等它结束, 最多 20 分钟; 托管机上直接跳过。
-      - name: Yield to release builds (self-hosted only)
+      # 自建 runner (canada-mini) 的隔离与资源读数。runner 是一次性 JIT runner, 跑在无密码、非管理员的
+      # ghgate 账户下, 每个任务一个全新目录; 发布优先由 mini 上的补位脚本 (~rex/gh-gate/refill.sh) 保证:
+      # 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。这里只读数: 账户、rex 目录不可读、空闲内存。
+      - name: Self-hosted isolation reading (self-hosted only)
         if: ${{ runner.environment == 'self-hosted' }}
         shell: bash
         run: |
           set -u
-          lock="$HOME/cretas-build/.build.lock"; waited=0
-          while [ -d "$lock" ] && kill -0 "$(cat "$lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; do
-            [ "$waited" -ge 1200 ] && { echo "::error::发布构建占锁超过 20 分钟, 本分片放弃 (重跑即可)"; exit 1; }
-            sleep 15; waited=$((waited + 15))
-          done
-          echo "READING: RELEASE_LOCK_WAIT=${waited}s runner=${RUNNER_NAME:-?} free=$(/usr/bin/memory_pressure 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')%"
+          if ls /Users/rex >/dev/null 2>&1; then rex_home=readable; else rex_home=denied; fi
+          echo "READING: SELF_HOSTED user=$(id -un) admin=$(id -Gn | tr ' ' '\n' | grep -cx admin) rex_home=$rex_home runner=${RUNNER_NAME:-?} free=$(/usr/bin/memory_pressure 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')%"
+          [ "$rex_home" = denied ] || { echo "::error::自建 runner 能读 /Users/rex (部署密钥/令牌所在), 隔离失效"; exit 1; }
 
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
