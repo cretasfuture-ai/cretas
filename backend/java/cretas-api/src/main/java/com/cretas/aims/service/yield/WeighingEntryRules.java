@@ -195,8 +195,8 @@ public final class WeighingEntryRules {
         if (sum.compareTo(defectQuantity) > 0) {
             throw new BusinessException(400, "不良分摊合计超过了不良总量")
                     .withCode("DEFECT_BREAKDOWN_EXCEEDS_TOTAL")
-                    .withHint("分摊合计 " + sum.stripTrailingZeros().toPlainString() + " " + defectUnit.trim()
-                            + "，不良总量 " + defectQuantity.stripTrailingZeros().toPlainString() + " " + defectUnit.trim())
+                    .withHint("分摊合计 " + sum.stripTrailingZeros().toPlainString() + " " + com.cretas.aims.service.unit.UnitDisplayNames.display(defectUnit.trim())
+                            + "，不良总量 " + defectQuantity.stripTrailingZeros().toPlainString() + " " + com.cretas.aims.service.unit.UnitDisplayNames.display(defectUnit.trim()))
                     .withHintTarget("defectBreakdown");
         }
         return CHECK_COMPARED;
