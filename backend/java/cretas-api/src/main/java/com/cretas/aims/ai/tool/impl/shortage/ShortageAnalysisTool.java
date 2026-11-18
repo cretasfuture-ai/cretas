@@ -50,6 +50,10 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
     @Lazy
     private SalesService salesService;
 
+    @Autowired
+    @Lazy
+    private com.cretas.aims.service.PermissionService permissionService;
+
     /** 全厂缺料总览最多分析的在途订单数 (按交期最近的先查)。 */
     static final int OVERVIEW_ORDER_LIMIT = 20;
     private static final Set<SalesOrderStatus> NOT_OPEN = Set.of(SalesOrderStatus.DRAFT, SalesOrderStatus.COMPLETED,
@@ -96,7 +100,7 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
                                             Map<String, Object> context) throws Exception {
         String salesOrderId = getString(params, "salesOrderId");
         if (salesOrderId == null || salesOrderId.isBlank()) {
-            return overview(factoryId);
+            return overview(factoryId, canSeeCustomer(factoryId, context));
         }
         log.info("[shortage_analyze] factoryId={}, salesOrderId={}", factoryId, salesOrderId);
 
@@ -124,10 +128,27 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
     }
 
     /**
+     * 总览里的客户名称只给有销售读权限 (sales:read / sales:read_write) 的角色; 生产、采购等角色只看订单号、交期、缺料名称和数量。
+     * 认不出角色或权限服务不可用 = 不给 (宁缺勿漏)。
+     */
+    private boolean canSeeCustomer(String factoryId, Map<String, Object> context) {
+        if (context == null || permissionService == null) {
+            return false;
+        }
+        Object role = context.get("userRole") != null ? context.get("userRole") : context.get("role");
+        if (role == null) {
+            return false;
+        }
+        String roleCode = role.toString();
+        return permissionService.roleHasPermission(factoryId, roleCode, "sales:read")
+                || permissionService.roleHasPermission(factoryId, roleCode, "sales:read_write");
+    }
+
+    /**
      * 没指定订单: 把在途订单 (交期最近的 OVERVIEW_ORDER_LIMIT 单) 逐单做缺料分析,
      * 只列有缺口的订单 + 缺的物料名称与数量。分析失败的订单计数后明说, 不当成「不缺」。
      */
-    Map<String, Object> overview(String factoryId) {
+    Map<String, Object> overview(String factoryId, boolean withCustomer) {
         List<SalesOrder> open = new ArrayList<>();
         for (SalesOrder order : salesService.getSalesOrders(factoryId, 1, 100).getContent()) {
             if (order.getStatus() != null && !NOT_OPEN.contains(order.getStatus())) {
@@ -154,7 +175,9 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
                 }
                 Map<String, Object> row = new LinkedHashMap<>();
                 row.put("orderNumber", order.getOrderNumber());
-                row.put("customerName", order.getCustomerName());
+                if (withCustomer) {
+                    row.put("customerName", order.getCustomerName());
+                }
                 row.put("requiredDeliveryDate", order.getRequiredDeliveryDate() == null ? null : order.getRequiredDeliveryDate().toString());
                 row.put("shortages", materials);
                 rows.add(row);
@@ -184,6 +207,7 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        return java.util.Set.of("procurement:read", "procurement:read_write", "production:read", "production:read_write", "quality:read", "quality:read_write", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write");
+        // 2026-11-18 集成裁定: 全厂总览读销售订单, 放行销售/财务/采购读 + 生产读 (计划员排产要看在途订单); 无 sales:read 的角色总览里不出客户名称
+        return java.util.Set.of("finance:read", "procurement:read", "production:read", "production:read_write", "sales:read", "sales:read_write");
     }
 }

@@ -96,4 +96,31 @@ class ShortageOverviewContractTest {
         Map<String, Object> result = tool.doExecute("F", new HashMap<>(Map.of("salesOrderId", "SO-1")), Map.of());
         assertThat(result).containsKey("shortage").doesNotContainKey("orderShortages");
     }
+
+    @Test
+    void overviewHidesCustomerNameFromRolesWithoutSalesReadButKeepsOrderShortageFacts() throws Exception {
+        ReflectionTestUtils.setField(tool, "salesService", salesService);
+        ReflectionTestUtils.setField(tool, "shortageService", analysis);
+        com.cretas.aims.service.PermissionService perms = mock(com.cretas.aims.service.PermissionService.class);
+        when(perms.roleHasPermission("F", "sales_manager", "sales:read")).thenReturn(true);
+        ReflectionTestUtils.setField(tool, "permissionService", perms);
+        when(salesService.getSalesOrders("F", 1, 100)).thenReturn(PageResponse.of(
+                List.of(order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")), 1, 100, 1L));
+        when(analysis.analyzeForSalesOrder("F", "a")).thenReturn(report("a",
+                new MaterialShortfall("m1", "牛腱", new BigDecimal("100"), new BigDecimal("40"), new BigDecimal("60"), "kg")));
+
+        // 生产角色 (无 sales:read): 有订单号、交期、缺料名称与数量, 没有客户名称
+        Map<String, Object> asProduction = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "production_manager"));
+        String rows = asProduction.get("orderShortages").toString();
+        assertThat(rows).contains("SO-A").contains("牛腱").contains("2026-11-20").doesNotContain("甲客户");
+
+        // 阴性对照: 没有角色信息同样不出客户; 销售角色才出
+        assertThat(tool.doExecute("F", new HashMap<>(), Map.of()).get("orderShortages").toString()).doesNotContain("甲客户");
+        assertThat(tool.doExecute("F", new HashMap<>(), Map.of("userRole", "sales_manager")).get("orderShortages").toString())
+                .contains("甲客户");
+
+        // 门槛: 生产读放行, 质检/仓储读不再放行 (总览读的是销售订单)
+        assertThat(tool.getRequiredPermissions()).contains("production:read", "sales:read", "finance:read", "procurement:read")
+                .doesNotContain("warehouse:read", "quality:read");
+    }
 }

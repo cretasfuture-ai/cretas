@@ -3951,7 +3951,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["procurement:read", "procurement:read_write", "production:read", "production:read_write", "quality:read", "quality:read_write", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
+    requiredPermissions: ["finance:read", "procurement:read", "production:read", "production:read_write", "sales:read", "sales:read_write"]
     version: "1.0.0"
     domainTags: ["shortage"]
     overrideFlags:

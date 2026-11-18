@@ -5410,6 +5410,10 @@ public class IntentKnowledgeBase {
         // 报工
         phraseToIntentMapping.put("报工情况", "REPORT_WORKSHOP_DAILY");
         phraseToIntentMapping.put("报工查询", "REPORT_WORKSHOP_DAILY");
+        // 2026-11-18 线上 probe report_work_stats: 「报工产量统计」整句被决策层 LLM 判成写意图 (#1813 只放行整句短语, 残余「报工统计」落决策层); 登记整句短语直达只读报表
+        phraseToIntentMapping.put("报工产量统计", "REPORT_PRODUCTION");
+        phraseToIntentMapping.put("报工统计", "REPORT_PRODUCTION");
+        phraseToIntentMapping.put("报工汇总", "REPORT_PRODUCTION");
         // 员工管理
         phraseToIntentMapping.put("新建员工", "USER_CREATE");
         phraseToIntentMapping.put("员工账号", "USER_CREATE");
