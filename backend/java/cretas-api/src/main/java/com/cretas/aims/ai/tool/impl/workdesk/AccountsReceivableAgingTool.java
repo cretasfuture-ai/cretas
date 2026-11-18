@@ -51,6 +51,7 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "应收查询. 默认按客户欠款(客户应收余额)从多到少排名, 回答'哪个客户欠款最多/欠款排名/应收多少'; "
+                + "用户问'逾期应收' / '催收' / '先催哪几张单' 时 view 填 overdue (逾期总数 + 建议先催的单据); "
                 + "用户问'应收账龄' / '账龄分析' / '60 天以上欠款' / '坏账风险' / 'AR aging' / '应收老化' 时 view 填 aging "
                 + "(按账龄分桶, 60+ 天为高风险). read-only.";
     }
@@ -61,8 +62,8 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
         schema.put("type", "object");
         Map<String, Object> view = new HashMap<>();
         view.put("type", "string");
-        view.put("enum", List.of("owed_ranking", "aging"));
-        view.put("description", "owed_ranking(默认)=客户欠款排名; aging=应收账龄分析");
+        view.put("enum", List.of("owed_ranking", "aging", "overdue"));
+        view.put("description", "owed_ranking(默认)=客户欠款排名; aging=应收账龄分析; overdue=逾期应收与先催哪几张单(催收/逾期)");
         Map<String, Object> props = new HashMap<>();
         props.put("view", view);
         schema.put("properties", props);
@@ -79,6 +80,9 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
         log.info("accounts_receivable_aging — factory={}", factoryId);
+        if ("overdue".equalsIgnoreCase(getString(params, "view"))) {
+            return doOverdueCollection(factoryId, context);
+        }
         if (!"aging".equalsIgnoreCase(getString(params, "view"))) {
             return doOwedRanking(factoryId, context);
         }
@@ -175,7 +179,13 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
             return buildSimpleResult(none, data);
         }
         List<Map<String, Object>> ranking = new java.util.ArrayList<>();
+        // 逾期催收是账龄页口径 (挂账流水): 有逾期单据时它先说, 客户余额排名另起一段并标明口径名称, 两种口径不混在一起
+        String overdueBlock = overdueCollectionBlock(factoryId, showAmounts, data);
         StringBuilder msg = new StringBuilder();
+        if (!overdueBlock.isEmpty()) {
+            msg.append(overdueBlock).append("\n\n");
+            msg.append("【客户应收余额口径（经营分析页，与上面逾期口径不同）】\n");
+        }
         msg.append(showAmounts
                 ? String.format("客户欠款共 %d 家、合计 ¥%s，欠款最多的是 %s。", owing.size(),
                         total.setScale(2, java.math.RoundingMode.HALF_UP), owing.get(0).getName())
@@ -194,23 +204,100 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
             msg.append("\n另有 ").append(prepaidCount).append(" 个客户预收款")
                .append(showAmounts ? " ¥" + prepaid.setScale(2, java.math.RoundingMode.HALF_UP) : "").append("（不计入欠款）。");
         }
-        // 同一问常带「应付」「逾期」: 按挂账流水 (与账龄视图同源同范围) 补一段, 口径与上面的客户余额不同, 明说
-        msg.append(ledgerOverdueAndPayableLine(factoryId, showAmounts));
+        // 同一问常带「应付」: 按挂账流水 (与账龄视图同源同范围) 补一段, 口径与客户余额不同, 明说
+        msg.append(ledgerPayableLine(factoryId, showAmounts, overdueBlock.isEmpty()));
         data.put("ranking", ranking);
         if (showAmounts) data.put("totalAmount", total);
         return buildSimpleResult(msg.toString(), data);
     }
 
-    /** 逾期应收 + 应付 (挂账流水口径)。金额只在可见时写; 流水里没有记录就如实说没有, 不写成 0 元。 */
-    private String ledgerOverdueAndPayableLine(String factoryId, boolean showAmounts) {
+    static final int COLLECT_TOP_N = 3;
+
+    /** 逾期催收视图: 只给账龄页口径的逾期总数 + 建议先催的单据, 另附应付一句。 */
+    private Map<String, Object> doOverdueCollection(String factoryId, Map<String, Object> context) {
+        boolean showAmounts = replyShowsAmounts(context, "totalAmount", "highRiskAmount");
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("mode", "OVERDUE_COLLECTION");
+        data.put("source", "应收挂账流水 (与账龄页同口径)");
+        data.put("actionHint", "/finance/ar-ap?tab=aging&type=CUSTOMER");
+        String block = overdueCollectionBlock(factoryId, showAmounts, data);
+        if (block.isEmpty()) {
+            block = "应收流水里没有已逾期的记录，暂时没有需要催收的单据。";
+        }
+        return buildSimpleResult(block + ledgerPayableLine(factoryId, showAmounts, false), data);
+    }
+
+    /**
+     * 「逾期应收 + 建议先催」文字块 (账龄页口径)。没有逾期单据返回空串。
+     * 排序 = 逾期天数 x 未结清金额 从大到小, 取前 {@link #COLLECT_TOP_N} 张; 逐张写单号 / 客户 / 金额 / 逾期天数 / 理由。
+     */
+    private String overdueCollectionBlock(String factoryId, boolean showAmounts, Map<String, Object> data) {
+        List<Map<String, Object>> docs = arApService.getOverdueReceivableDocuments(factoryId);
+        if (docs == null || docs.isEmpty()) {
+            return "";
+        }
+        java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+        java.util.Set<Object> parties = new java.util.LinkedHashSet<>();
+        long maxDays = 0;
+        java.math.BigDecimal maxAmt = java.math.BigDecimal.ZERO;
+        for (Map<String, Object> d : docs) {
+            total = total.add(decimal(d.get("outstanding")));
+            parties.add(d.get("counterpartyName"));
+            maxDays = Math.max(maxDays, ((Number) d.get("daysOverdue")).longValue());
+            maxAmt = maxAmt.max(decimal(d.get("outstanding")));
+        }
+        List<Map<String, Object>> sorted = new java.util.ArrayList<>(docs);
+        sorted.sort((a, b) -> score(b).compareTo(score(a)));
         StringBuilder sb = new StringBuilder();
-        sb.append("\n另按挂账流水（与账龄视图同口径，和上面的客户余额口径不同）：");
-        java.math.BigDecimal[] ar = overdueSplit(arApService.getAgingAnalysis(factoryId, CounterpartyType.CUSTOMER));
-        if (ar[2].signum() == 0) {
+        sb.append("【逾期应收（账龄页口径：挂账流水里已过到期日的未结清单据）】\n");
+        sb.append("逾期应收共 ").append(parties.size()).append(" 家客户、").append(docs.size()).append(" 张单据");
+        if (showAmounts) sb.append("，合计 ¥").append(total.setScale(2, java.math.RoundingMode.HALF_UP));
+        sb.append("。\n建议先催（按逾期天数x金额排序，前 ")
+          .append(Math.min(COLLECT_TOP_N, sorted.size())).append(" 张）：");
+        List<Map<String, Object>> top = new java.util.ArrayList<>();
+        int n = 0;
+        for (Map<String, Object> d : sorted) {
+            if (n >= COLLECT_TOP_N) break;
+            n++;
+            long days = ((Number) d.get("daysOverdue")).longValue();
+            java.math.BigDecimal amt = decimal(d.get("outstanding"));
+            boolean longest = days == maxDays;
+            boolean biggest = amt.compareTo(maxAmt) == 0;
+            String reason = longest && biggest && showAmounts ? "逾期最久且金额最大"
+                    : longest ? "逾期最久"
+                    : biggest && showAmounts ? "金额最大"
+                    : "逾期 " + days + " 天且金额较大，综合排序靠前";
+            Object docNo = d.get("transactionNumber") == null ? "（未编号）" : d.get("transactionNumber");
+            sb.append("\n").append(n).append(". 单号 ").append(docNo)
+              .append("，客户 ").append(d.get("counterpartyName"));
+            if (showAmounts) sb.append("，金额 ¥").append(amt.setScale(2, java.math.RoundingMode.HALF_UP));
+            sb.append("，逾期 ").append(days).append(" 天，理由：").append(reason);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("transactionNumber", docNo);
+            row.put("customerName", d.get("counterpartyName"));
+            if (showAmounts) row.put("outstanding", amt.setScale(2, java.math.RoundingMode.HALF_UP));
+            row.put("daysOverdue", days);
+            row.put("reason", reason);
+            top.add(row);
+        }
+        data.put("overdueDocumentCount", docs.size());
+        data.put("overdueCustomerCount", parties.size());
+        if (showAmounts) data.put("overdueAmount", total);
+        data.put("collectFirst", top);
+        return sb.toString();
+    }
+
+    private static java.math.BigDecimal score(Map<String, Object> d) {
+        return java.math.BigDecimal.valueOf(((Number) d.get("daysOverdue")).longValue())
+                .multiply(decimal(d.get("outstanding")));
+    }
+
+    /** 应付 (挂账流水口径)。金额只在可见时写; 流水里没有记录就如实说没有, 不写成 0 元。 */
+    private String ledgerPayableLine(String factoryId, boolean showAmounts, boolean noOverdueAr) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\n【应付（挂账流水口径）】");
+        if (noOverdueAr) {
             sb.append("应收流水里没有已逾期的记录；");
-        } else {
-            sb.append("逾期应收（已过到期日）").append(ar[2].intValue()).append(" 家客户")
-              .append(showAmounts ? "，共 ¥" + ar[1].setScale(2, java.math.RoundingMode.HALF_UP) : "").append("；");
         }
         List<Map<String, Object>> payRows = arApService.getAgingAnalysis(factoryId, CounterpartyType.SUPPLIER);
         java.math.BigDecimal[] ap = overdueSplit(payRows);
