@@ -38,6 +38,10 @@ public final class CostDeviationExplanation {
                 + "%, 阈值 " + plain(d.getThresholdPct()) + "%", plan));
         if (cost && !mask && d.getAmountVariance() != null) {
             facts.add(new Fact("成本差异金额合计 " + plain(d.getAmountVariance()) + " 元", plan + " 成本差异"));
+        } else if (!cost && !mask && d.getAmountVariance() != null) {
+            // 物料平衡金额 = 超阈值工序未解释差额 × 开计划时主料单价 (单位契约换算), 是估算
+            facts.add(new Fact("超阈值工序未解释差额折合约 " + plain(d.getAmountVariance()) + " 元 (按开计划时主料单价估算)",
+                    plan + " 标准成本快照"));
         }
         if (d.getUnknownItemCount() > 0) {
             facts.add(new Fact("另有 " + d.getUnknownItemCount() + (cost ? " 项" : " 道工序") + "算不出, 不在上述读数内",
