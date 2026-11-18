@@ -52,8 +52,16 @@
           <span v-else class="masked">****</span>
         </div>
         <div>
-          <span class="label">当前业务员:</span>
-          <strong>{{ resolvedSalesUserName }}</strong>
+          <template v-if="hasArchiveSalesUser || !latestOrderSalesperson">
+            <span class="label">当前业务员:</span>
+            <strong>{{ resolvedSalesUserName }}</strong>
+          </template>
+          <template v-else>
+            <span class="label">最近订单业务员:</span>
+            <el-tooltip content="客户档案尚未分配业务员；这是该客户最近一张销售单上填写的业务员，两者是不同的数据" placement="top">
+              <strong data-testid="latest-order-salesperson">{{ latestOrderSalesperson }}</strong>
+            </el-tooltip>
+          </template>
         </div>
       </div>
     </div>
@@ -74,6 +82,8 @@ const props = defineProps<{
   loading?: boolean;
   /** Optional override — if backend customer.assignedSalesUserName is already populated, prop unused. */
   assignedSalesUserName?: string;
+  /** 档案未分配业务员时的回退展示: 该客户最近一张销售单上的业务员 (非档案归属)。 */
+  latestOrderSalesperson?: string | null;
 }>();
 
 const permissionStore = usePermissionStore();
@@ -88,6 +98,10 @@ const resolvedSalesUserName = computed(() => {
   const id = props.customer?.assignedSalesUserId;
   return id ? `User #${id}` : '未分配';
 });
+
+const hasArchiveSalesUser = computed(() => Boolean(
+  props.customer?.assignedSalesUserName || props.assignedSalesUserName || props.customer?.assignedSalesUserId,
+));
 
 function formatMoney(v: number | null | undefined): string {
   if (v == null) return '—';

@@ -7,6 +7,10 @@ import { ElMessage } from 'element-plus';
 import { FullScreen, Refresh } from '@element-plus/icons-vue';
 import { useChartInsight } from '@/composables/useChartInsight';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import DateWindowFallbackNotice from '@/components/common/DateWindowFallbackNotice.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
+import { resolveWindowWithFallback, type DateWindow } from '@/utils/dateWindowFallback';
 
 interface ProductionData {
   productTypeId: string;
@@ -44,6 +48,11 @@ function onFullscreenChange() {
 const selectedPeriod = ref('today');
 const customDateRange = ref<[Date, Date] | null>(null);
 const productionData = ref<ProductionData[]>([]);
+const loadError = ref('');
+// 默认窗口（今日/本周/本月）没数据时自动回退到最近有数据的区间，并明示；用户可一键切回原窗口。
+const windowNotice = ref('');
+const windowFellBack = ref(false);
+const PERIOD_LABEL: Record<string, string> = { today: '今日', week: '最近 7 天', month: '本月' };
 
 // 图表实例
 let productionChart: echarts.ECharts | null = null;
@@ -115,25 +124,42 @@ onUnmounted(() => {
   document.removeEventListener('fullscreenchange', onFullscreenChange);
 });
 
-async function loadProductionData() {
+async function fetchProduction(w: DateWindow): Promise<ProductionData[]> {
+  const response = await get(`/${factoryId.value}/reports/production-by-product`, {
+    params: { startDate: w.start, endDate: w.end }
+  });
+  if (response.success === false) throw new Error(response.message || '加载生产数据失败');
+  const rows = (response.success && response.data ? response.data : []) as ProductionData[];
+  // 按产量从大到小排序
+  return [...rows].sort((a, b) => b.totalQuantity - a.totalQuantity);
+}
+
+async function loadProductionData(opts: { fallback?: boolean } = {}) {
   if (!factoryId.value) return;
   loading.value = true;
+  loadError.value = '';
+  windowNotice.value = '';
+  windowFellBack.value = false;
   try {
     const { startDate, endDate } = getDateRange();
-    const response = await get(`/${factoryId.value}/reports/production-by-product`, {
-      params: { startDate, endDate }
-    });
-    if (response.success && response.data) {
-      // 按产量从大到小排序
-      productionData.value = (response.data as ProductionData[]).sort(
-        (a, b) => b.totalQuantity - a.totalQuantity
-      );
-      updateChart();
-    } else if (response.success === false) {
-      ElMessage.error(response.message || '加载生产数据失败');
+    const original: DateWindow = { start: startDate, end: endDate };
+    const label = PERIOD_LABEL[selectedPeriod.value];
+    if (opts.fallback !== false && label && selectedPeriod.value !== 'custom') {
+      const outcome = await resolveWindowWithFallback({
+        original, windowLabel: label, fetchWindow: fetchProduction, hasData: (d) => d.length > 0,
+      });
+      productionData.value = outcome.data;
+      windowNotice.value = outcome.notice;
+      windowFellBack.value = outcome.fellBack;
+    } else {
+      productionData.value = await fetchProduction(original);
     }
+    await nextTick();
+    updateChart();
   } catch (error) {
     console.error('加载生产数据失败:', error);
+    productionData.value = [];
+    loadError.value = loadErrorText(error, '加载生产数据失败');
     ElMessage.error('加载生产数据失败，请重试');
   } finally {
     loading.value = false;
@@ -148,6 +174,13 @@ function initChart() {
 }
 
 function updateChart() {
+  // 空态分支用 v-if 摘掉过图表 DOM：数据回来后 DOM 是新的，旧实例要换掉。
+  const el = document.getElementById('production-bar-chart');
+  if (el && productionChart && productionChart.getDom() !== el) {
+    productionChart.dispose();
+    productionChart = null;
+  }
+  if (!productionChart) initChart();
   if (!productionChart) return;
 
   const data = productionData.value;
@@ -344,8 +377,15 @@ function handleRefresh() {
             </el-tag>
           </div>
         </template>
+        <DateWindowFallbackNotice :notice="windowNotice" :fell-back="windowFellBack" @restore="loadProductionData({ fallback: false })" />
         <div v-if="productionData.length === 0 && !loading" class="empty-state">
-          <el-empty description="暂无生产数据" />
+          <ListEmptyExplain
+            :load-error="loadError"
+            :filtered="selectedPeriod === 'custom'"
+            empty-title="所选时间段没有生产记录"
+            empty-hint="报表统计已完成报工的产量；车间报工后这里才有数据，可换「本周 / 本月」或自定义日期查看。"
+            @retry="loadProductionData()"
+          />
         </div>
         <div v-else id="production-bar-chart" class="chart"></div>
         <!-- U6: useChartInsight — RANKING insight on production quantities -->

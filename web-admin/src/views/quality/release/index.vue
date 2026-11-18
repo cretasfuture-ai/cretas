@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 质检放行 (缺口 11, owner 2026-10-25)。
  *
@@ -180,7 +181,8 @@ onMounted(() => {
     <el-tabs v-model="activeTab">
       <el-tab-pane :label="`待检 (${pending.length})`" name="pending">
         <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" show-icon class="mb" />
-        <el-table v-loading="loading" :data="pending" stripe empty-text="暂无待检批次" data-testid="qc-pending-table">
+        <el-table v-loading="loading" :data="pending" stripe data-testid="qc-pending-table">
+          <template #empty><ListEmptyExplain empty-title="没有待检批次" empty-hint="批次入库或完工后需要质检放行的会出现在这里；没有待检批次说明都已处理。" /></template>
           <el-table-column label="形态" width="110">
             <template #default="{ row }">
               <el-tag :type="tagType(row)">{{ row.formLabel }}</el-tag>
@@ -218,7 +220,8 @@ onMounted(() => {
       </el-tab-pane>
 
       <el-tab-pane label="放行记录" name="records">
-        <el-table v-loading="recordsLoading" :data="records" stripe empty-text="暂无放行记录">
+        <el-table v-loading="recordsLoading" :data="records" stripe>
+          <template #empty><ListEmptyExplain empty-title="还没有放行记录" empty-hint="批次质检放行或拒绝后会在这里留下记录。" /></template>
           <el-table-column label="结论" width="100">
             <template #default="{ row }">
               <el-tag :type="row.decision === 'RELEASED' ? 'success' : 'danger'">

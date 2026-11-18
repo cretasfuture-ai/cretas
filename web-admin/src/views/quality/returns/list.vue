@@ -261,7 +261,7 @@ onMounted(load);
         <UButton v-if="filterStatus || filterTarget" color="neutral" variant="link" size="xs" @click="clearFilters">清除筛选</UButton>
       </div>
       <UTable :data="rows" :columns="columns" :loading="loading" class="cs-table">
-        <template #empty><div class="cs-empty-art"><img :src="iconReturns" alt="" width="96"><span>暂无退回单</span></div></template>
+        <template #empty><div class="cs-empty-art"><img :src="iconReturns" alt="" width="96"><span>还没有质检退回单，质检不合格的批次退回上游时会在这里登记</span></div></template>
         <template #targetType-cell="{ row }">
           <UBadge :color="row.original.targetType === 'SUPPLIER' ? 'primary' : 'warning'" variant="soft">
             {{ RETURN_TARGET_LABELS[String(row.original.targetType) as QualityReturnTargetType] }}

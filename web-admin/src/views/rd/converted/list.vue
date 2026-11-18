@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
@@ -109,6 +110,7 @@ onMounted(() => loadData());
       </div>
 
       <el-table :data="tableData" border stripe>
+        <template #empty><ListEmptyExplain empty-title="还没有已转样品库的记录" empty-hint="研发样品评审通过并转入样品库后，会出现在这里；先在「研发样品管理」里推进样品。" /></template>
         <el-table-column prop="sampleCode" label="样品编码" width="180" />
         <el-table-column prop="name" label="产品名称" min-width="140" />
         <el-table-column prop="customerName" label="客户名称" min-width="120" show-overflow-tooltip />
