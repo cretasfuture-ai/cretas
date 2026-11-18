@@ -6449,7 +6449,7 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "my_wage_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.hr.MyWageQueryTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
@@ -6469,7 +6469,7 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "employee_work_location_query"
     implementationClass: "com.cretas.aims.ai.tool.impl.hr.EmployeeWorkLocationQueryTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: READ
     riskLevel: LOW
     supportsPreview: false
@@ -6489,7 +6489,7 @@ descriptors:
     governanceStatus: REVIEW_REQUIRED
   - toolName: "ssop_schedule_plan"
     implementationClass: "com.cretas.aims.ai.tool.impl.foodsafety.SsopSchedulePlanTool"
-    provenance: LEGACY_INFERRED
+    provenance: EXPLICIT
     actionType: WRITE
     riskLevel: MEDIUM
     supportsPreview: true
