@@ -26,7 +26,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 跨天、多轮实现、需要保留环境/调查结果的工作可使用持久独立会话；遵守当前工具、用户授权和唯一写 Owner 交接规则。不要按 PR 数或会话闲置时长机械切换载体，不假定旧工具名或历史消息能力仍可用。
 - 🔴 **载体怎么选**（Steve 2026-11-18；每开一个会话就多一个常驻进程、一个 worktree、一组 MCP 子进程，并且应用要轮询它的 git）。从上往下，第一条适用的就用它：
   1. **本会话、本目录直接做**：几次工具调用就完的事、只读查询/诊断、同一 PR 的连续改动、organizer 自己的台账/规则（fastlane）。
-  2. **subagent（Agent 工具）**：结果这一轮就要拿回来用、一次性、边界清楚——广搜用 `Explore`，取证用 `probe`，独立审查，按评论逐条改同一份产物；要写代码就用 `executor` + `isolation: "worktree"`。⛔ 跨天、要 Steve 对话的活不给 subagent；名下有 subagent 在跑时不交班。
+  2. **subagent（Agent 工具）**：结果这一轮就要拿回来用、一次性、边界清楚——广搜用 `Explore`，取证用 `probe`，独立审查，按评论逐条改同一份产物；要写代码就用 `executor`（常规，Sonnet）或 `executor-redline`（红线，Opus）+ `isolation: "worktree"`。⛔ 跨天、要 Steve 对话的活不给 subagent；名下有 subagent 在跑时不交班。
   3. **独立会话 + 自己的 worktree**（`start_session`）：能独立出一个 PR、要跨多轮 CI/返工或跨天的；要 Steve 直接对话或验收的；需要单独负责人的红线任务。
   4. **共用 worktree**：只有只读会话可以共用（审查、截图对比、问答分叉）。同一 PR 的返工用 SendMessage 发给原会话，不新开。⛔ 两个会写代码的会话不共用目录；会碰同一文件、要跑构建、要切分支的一律分开；⛔ 不与马上要交班或归档的会话共用目录（归档会连带清理，11-17 原型第 19 任的执行线、六膳门第 2 任都共用了前任目录）。
   - **同一份产物只能有一个会话在改**（同一个 deck、同一个文件）：11-17 BP 对比 deck 被拆成 5 个会话分别按评论改。这类活交给原会话或 subagent 顺序做。
@@ -34,7 +34,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - **全机上限**（所有批次合计，含 subagent）：写代码的执行线同时 ≤ 8 条，Maven 同时 ≤ 2 个（见下文「全机资源预算」）。超了就排队，一批互不依赖的线先开 2 条，其余在 ACTIVE 记「待开」。8 条是按 11-18 卡死时的规模估的，盯一两周看卡顿和排队时长再调。
 - 🔴 **派执行线不出卡片**（Steve 2026-11-17：「不用我授权就自动开」）：应用只在 Steve 自己从桌面端发消息的那一轮允许 `start_session` 直接开会话；被别的会话消息 / 通知 / 定时叫醒的回合、Steve 从 Remote Control 发的回合，只能出卡片，这是应用限制，⛔ 不要绕。所以：
   - Steve 桌面端发消息的回合 ⇒ `start_session`（`initiation: "user_asked"`）开持久会话。
-  - 其它回合 ⇒ ⛔ 不开卡片，改用 **Agent 工具开后台子代理**：`subagent_type: "executor"`、`isolation: "worktree"`、`run_in_background: true`，按下面的分档传 `model`，prompt 写全任务包（ID、Base SHA、目标/完成条件、允许范围、验收命令、要求它推分支开 PR 并回报 PR 号）。子代理不需要任何人点击，结束时自动通知你。
+  - 其它回合 ⇒ ⛔ 不开卡片，改用 **Agent 工具开后台子代理**：`subagent_type` 按下面的分档选 `"executor"`（常规，Sonnet）或 `"executor-redline"`（红线，Opus）、`isolation: "worktree"`、`run_in_background: true`，prompt 写全任务包（ID、Base SHA、目标/完成条件、允许范围、验收命令、要求它推分支开 PR 并回报 PR 号）。子代理不需要任何人点击，结束时自动通知你。
   - 子代理挂在本 organizer 进程上：**名下还有后台子代理在跑时不交班、不归档本会话**（会被杀掉），交接里写清每个子代理的 worktree/分支，接手方据此核对。
   - 需要跨天、多轮返工、或要 Steve 直接对话的线，才等到 Steve 桌面端发消息那一轮再开持久会话；在那之前不出卡片，记一行「待开会话」。
 - **模型按任务风险分档**（Steve 2026-11-13；取代「执行线一律 Opus」——那句原意是 09-07「执行活别继承 organizer 的 Fable」，不是不许用 Sonnet）。派每条线前先说一句它属于哪档，start_session 显式传 `model`/`effort`，开完用 get_session 核对实际模型：
@@ -44,14 +44,20 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - **organizer ⇒ Opus**，靠短会话控成本。
   - effort 一律 medium 起步（只读可 low），卡住、被纠正或需要更深推理时有证据再升 high。质量靠红线的独立终审和验证，不靠全线用强模型。
   - 改档后盯一两周：Sonnet 线的 CI 红、返工、被终审打回次数明显高于 Opus 线，就把那类任务挪回 Opus 并在这里写明。
+  - 🔴 **按档选执行车道**（Steve 2026-11-18：「不是所有 executor 都用 Sonnet，得分情况」）：子代理分成两个——常规开发用 `subagent_type: "executor"`（Sonnet），红线任务和红线的独立终审用 `subagent_type: "executor-redline"`（Opus）。选哪个就定了模型，不靠派活时记得传 `model`；拿不准算哪档的按红线算。`start_session` 同理每次都显式传 `model`：常规线 `"sonnet"`，红线 `"opus"`，不传就会沿用 organizer 自己的 Opus。依据：11-12 起一周，常规执行会话里有 60 个用的是 Opus（约 $488，Sonnet 同类 67 个约 $226）；后台子代理 Opus 165 个约 $740，因为 executor 默认写死了 Opus。Opus 占全部花费的 82%。
   - **Fable 5.2 只在卡住时用**（Steve 2026-11-15）：Opus 线升到 `high` 后仍卡住（同一问题再修两轮 CI 仍红，或再被独立审查打回），才开 Fable 5.2 新会话重做，`effort` 显式传 `medium`（Fable 默认 `high`，不传会多花一档）；⛔ 不把任何线默认设成 Fable。每次升级（升 `high` 和换 Fable 都算）在 `~/.claude/context-handoff/check-findings.jsonl` 记一行，id 以 `escalation-` 开头，写任务、升到哪档、做成没有、花费、轮数；攒到约 10 条再评估难题线是否固定用 Fable。依据：官方迁移指南把 Opus 5.5 定为大多数工作的默认，Opus 调高 effort 仍不达标才换；Fable 读缓存与 Opus 同价、其余约两倍，按本周花费结构同样步数约 1.5 倍，要少用约 1/3 步才不亏；卡住类会话最多占主会话花费 24%，专门跑同题对照（约 $250–350）不划算。
 - 每个切片只维护一份任务说明、一条在飞记录和一份证据索引。ACTIVE 的 ID/状态/Owner/Base/scope 与阻塞摘要 ≤ 300 字，详情进 `docs/dispatch/archive/`；不要求模型、effort、编排方式等固定列。
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
+- 🔴 **会话间消息要少发**（Steve 2026-11-18）：每条跨会话消息都会叫醒对方跑一整轮，花费主要是重读上下文，和消息长短关系不大，所以要减的是条数，不是字数。
+  - 执行线只在四种时候给 organizer 发消息：**PR 已开**（附 PR 号，发一次）、**阻塞或需要裁决**、**无 PR 的线交付完成**、**被点名要求的回执**（如交班后确认接上）。⛔ 不发「收到」「开始做了」「rebase 完了」「修完推上去了在等 CI」这类进度：PR 监视按头 SHA 自己看得到。
+  - organizer 发出的消息，对方不必回的，末尾写「不用回复」（CI 红了让它修、转告信息、裁决结果）；需要回的写明回什么（如「只回 PR 号」）。几件事合成一条发，不连发。
+  - 派线的任务包、交班后发给执行线的「我是现任 organizer」消息里都带上这条回报口径。
+  - 依据：11-18 一周效果检查，organizer 花费 23% 来自会话间消息；11-11 起各批 organizer 被会话间消息叫醒约 580 次，每次平均约 $0.3（按标价折算的额度），其中「rebase 完了 / 已推等 CI / 阶段进度」这类监视本来就能看到的占相当一部分。
 - 🔴 **CI 由 organizer 统一盯**（Steve 2026-11-10）：开了 PR 的执行会话按应用规定不能自己轮询 CI，Auto-fix 只在变红时叫醒它，**CI 全绿没有任何通知** ⇒ 不叫它就一直干等（2026-11-10 #1556/#1557/#1560 各空等十几到几十分钟）。所以：
   - 执行会话一报出 PR 号，organizer 就挂一个监视，**每个 PR 一个**。用 Monitor 或后台命令都可以，等待期间不耗 token。不要等会话来请求，也不要让它「自己盯」。
   - 🔴 **默认用一键监视合并**：`bash .claude/tools/pr-watch-merge.sh <PR>`（Bash `run_in_background`），它自己做「等全绿 → 落后就 update-branch 再等绿 → `--match-head-commit` squash 合并」，只在 MERGED / RED / CONFLICT / CLOSED / 超时时退出一次；要先审再合就加 `--no-merge`。⛔ 不要再「绿了醒来 update → 再挂 → 再醒来合」。依据：2026-11-18 一周效果检查，organizer 花费 33% 是被自己后台命令通知叫醒（901 次）；同日 #1836/#1837 手工挂了 6 次监视。需要独立终审、要先发布 `--phase build` 的 PR 仍按原流程，审完再挂它。
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
-  - 停了马上通知对应会话：绿了让它合并发布，红了让它定位修复。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
+  - 停了马上处理：红了通知对应会话定位修复（写「修完推上去即可，不用回复」）；绿了由 organizer 自己合并发布（Steve 2026-11-11：有 organizer 的批次合并/发布归 organizer），不给执行线发消息，合并后它由 `auto_archive_on_pr_close` 收走。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
 - 🔴 **全机资源预算**（Steve 2026-11-18）：几个批次的 organizer 共用这一台 Windows，各派各的线时彼此看不见，所以每任 organizer 派线、开构建前都按全机算，不只算自己这批：
   - **本机 Java 构建（mvn）同时最多 2 个**，所有批次合计。开构建前先数：`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | ? CommandLine -match 'plexus-classworlds').Count"`；已有 2 个就排队，先做别的步骤或等它结束。执行线和子代理的任务包里写上这条。Mac mini 构建车道（`canada-mini`，国内、M4 Pro 64GB）配好后，构建优先放到 mini 上。
@@ -82,7 +88,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）；**`set_pinned self true` 把自己置顶**（置顶的会话不受「PR 合并自动归档」影响）。
      - 🔴 依据（2026-11-16）：意图第 8 任、原型第 15 任都被自己合并的 PR（#1782/#1780）触发 `auto_archive_on_pr_close` 归档，两个批次一度无人管；同期置顶的降本第 5 任 PR 合并后没被归档。⛔ 不要关这个应用设置（执行会话靠它回收）。另外 organizer 自己开/合的 PR（台账 fastlane 等）合并前先 `unbind_pr`，别让 PR 绑在 organizer 会话上。
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
-  3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，之后完成/阻塞/PR 号直接回复这条消息的发件人」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
+  3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，请回一句确认接上；之后只在 PR 已开/阻塞/完成时回复这条消息的发件人，进度不用报」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
   5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。前任标题不是「Organizer｜」也照样归档（2026-11-18：BP 协调会话「产品与传统软件对比研究」被就地提升出的 BP 第 2 任接手后一直置顶没归档，因为它不叫 Organizer，没人认领这一步）；指示别的会话就地接任 organizer 的，接任方负责归档前任。机械提醒：`session-health.js` 在 organizer 会话里每 10 分钟扫一次本机会话记录，列出「交班遗留」（已改名「[已交班…」没归档的，和现任 Organizer 的 spawnedFrom 前任没归档的），看到就处理或转给对应现任。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
   6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
