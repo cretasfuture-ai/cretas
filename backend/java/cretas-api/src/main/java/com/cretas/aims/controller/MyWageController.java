@@ -4,20 +4,10 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.user.UserDTO;
 import com.cretas.aims.dto.wage.MyWageResponse;
-import com.cretas.aims.entity.HourlyRateRule;
-import com.cretas.aims.entity.PayrollRecord;
-import com.cretas.aims.entity.PieceRateRule;
-import com.cretas.aims.entity.WageCalculation;
-import com.cretas.aims.entity.WorkerDailyEfficiency;
-import com.cretas.aims.entity.enums.WageMode;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.PayrollRecordRepository;
-import com.cretas.aims.repository.WageCalculationRepository;
-import com.cretas.aims.repository.WorkerDailyEfficiencyRepository;
 import com.cretas.aims.service.MobileService;
+import com.cretas.aims.service.MyWageQueryService;
 import com.cretas.aims.service.PermissionService;
-import com.cretas.aims.service.WageCalculationService;
-import com.cretas.aims.service.WagePolicyService;
 import com.cretas.aims.utils.TokenUtils;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -31,19 +21,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.TreeMap;
-import java.util.stream.Collectors;
 
 /**
  * 「我的工资」—— 车间工人只读自己工资的端点 (2026-08-25)。
@@ -98,16 +78,8 @@ import java.util.stream.Collectors;
 public class MyWageController {
 
     private final MobileService mobileService;
-    private final WagePolicyService wagePolicyService;
-    private final WageCalculationService wageCalculationService;
-    private final WorkerDailyEfficiencyRepository workerDailyEfficiencyRepository;
-    private final WageCalculationRepository wageCalculationRepository;
-    private final PayrollRecordRepository payrollRecordRepository;
-
-    /** {@code PayrollRecord.status} 全集 —— 与 {@code WageCalculationService.PAYROLL_STATUS_*} 一致。 */
-    private static final String STATUS_PENDING = "PENDING";
-    private static final String STATUS_APPROVED = "APPROVED";
-    private static final String STATUS_PAID = "PAID";
+    /** 取数与组装 (与 AI 工具 my_wage_query 共用); 身份判断留在本类 {@link #requireSelf}。 */
+    private final MyWageQueryService myWageQueryService;
 
     /** 我的工资单历史默认/最大条数。 */
     private static final int PAYROLL_HISTORY_DEFAULT_LIMIT = 12;
@@ -135,82 +107,10 @@ public class MyWageController {
 
         UserDTO me = requireSelf(factoryId, httpRequest);
         YearMonth ym = parseMonth(month);
-        LocalDate monthStart = ym.atDay(1);
-        LocalDate monthEnd = ym.atEndOfMonth();
 
         log.info("[MyWage] 查询本人工资: factoryId={}, workerId={}, month={}", factoryId, me.getId(), ym);
 
-        List<WorkerDailyEfficiency> effs = workerDailyEfficiencyRepository
-                .findByWorkerAndDateRange(factoryId, me.getId(), monthStart, monthEnd);
-
-        WageMode mode = wagePolicyService.resolveModeForEmployee(factoryId, me.getId());
-        String mixedHint = wagePolicyService.resolveEffectivePolicy(factoryId, me.getId())
-                .map(p -> p.getMixedFormulaHint())
-                .orElse(null);
-
-        // --- 时薪: 只有 HOURLY / MIXED 才该有. 拿不到就说清是哪一种「没有」 ---
-        MyWageResponse.HourlyRateInfo hourlyRate = null;
-        String hourlyRateUnavailableReason;
-        if (mode == WageMode.HOURLY || mode == WageMode.MIXED) {
-            Optional<HourlyRateRule> hRule =
-                    wagePolicyService.findEffectiveHourlyRate(factoryId, me.getId(), monthStart);
-            if (hRule.isPresent()) {
-                HourlyRateRule r = hRule.get();
-                hourlyRate = new MyWageResponse.HourlyRateInfo(
-                        r.getId(), r.getBaseHourlyRate(), r.getOvertimeMultiplier(),
-                        r.getEffectiveFrom(), r.getEffectiveTo());
-                hourlyRateUnavailableReason = null;
-            } else {
-                hourlyRateUnavailableReason = "NO_HOURLY_RATE_RULE";
-            }
-        } else {
-            hourlyRateUnavailableReason = "NOT_APPLICABLE_FOR_MODE";
-        }
-
-        // --- 系统试算 (wage_calculation): 每月 1 号 scheduler 自动跑上月, 本月通常还没有 ---
-        MyWageResponse.Calculation calculation = null;
-        String calculationUnavailableReason = "NOT_CALCULATED_YET";
-        Optional<WageCalculation> calcOpt = wageCalculationRepository
-                .findByFactoryIdAndEmployeeIdAndPeriodMonth(factoryId, me.getId(), monthStart);
-        if (calcOpt.isPresent()) {
-            WageCalculation c = calcOpt.get();
-            calculation = new MyWageResponse.Calculation(
-                    c.getMode() == null ? null : c.getMode().name(),
-                    c.getHourlyAmount(), c.getOvertimeAmount(), c.getPieceRateAmount(),
-                    c.getTotalAmount(), c.getTotalHours(), c.getOvertimeHours(),
-                    c.getTotalPieceCount(), c.getNotes(), c.getUpdatedAt());
-            calculationUnavailableReason = null;
-        }
-
-        // --- 工资单 (payroll_records): 周期与该月有重叠的全部, 按状态分开汇总 ---
-        List<PayrollRecord> overlapping = payrollRecordRepository
-                .findByFactoryIdAndWorkerId(factoryId, me.getId()).stream()
-                .filter(p -> p.getPeriodStart() != null && p.getPeriodEnd() != null)
-                .filter(p -> !p.getPeriodStart().isAfter(monthEnd) && !p.getPeriodEnd().isBefore(monthStart))
-                .sorted(Comparator.comparing(PayrollRecord::getPeriodStart).reversed())
-                .toList();
-        List<MyWageResponse.Payroll> payrolls = overlapping.stream().map(this::toPayroll).toList();
-
-        return ApiResponse.success(new MyWageResponse(
-                factoryId,
-                me.getId(),
-                displayName(me),
-                ym.toString(),
-                monthStart,
-                monthEnd,
-                mode.name(),
-                wageModeLabel(mode),
-                mixedHint,
-                toWorkTotals(effs),
-                toWorkRecords(effs),
-                toPieceRates(factoryId, effs, monthEnd),
-                hourlyRate,
-                hourlyRateUnavailableReason,
-                calculation,
-                calculationUnavailableReason,
-                payrolls,
-                payrolls.isEmpty() ? null : toPayrollTotals(overlapping),
-                payrolls.isEmpty() ? "NO_PAYROLL_FOR_PERIOD" : null));
+        return ApiResponse.success(myWageQueryService.monthly(factoryId, me.getId(), displayName(me), ym));
     }
 
     /**
@@ -235,15 +135,7 @@ public class MyWageController {
         log.info("[MyWage] 查询本人工资单历史: factoryId={}, workerId={}, limit={}",
                 factoryId, me.getId(), effectiveLimit);
 
-        List<MyWageResponse.Payroll> history = payrollRecordRepository
-                .findByFactoryIdAndWorkerId(factoryId, me.getId()).stream()
-                .filter(p -> p.getPeriodStart() != null)
-                .sorted(Comparator.comparing(PayrollRecord::getPeriodStart).reversed())
-                .limit(effectiveLimit)
-                .map(this::toPayroll)
-                .toList();
-
-        return ApiResponse.success(history);
+        return ApiResponse.success(myWageQueryService.payrollHistory(factoryId, me.getId(), effectiveLimit));
     }
 
     // ==================== 身份 ====================
@@ -292,173 +184,4 @@ public class MyWageController {
         }
     }
 
-    private static String wageModeLabel(WageMode mode) {
-        return switch (mode) {
-            case PIECE_RATE -> "按件算";
-            case HOURLY -> "按小时算";
-            case MIXED -> "按小时 + 按件";
-        };
-    }
-
-    private static MyWageResponse.WorkTotals toWorkTotals(List<WorkerDailyEfficiency> effs) {
-        int pieces = 0;
-        int qualified = 0;
-        int defects = 0;
-        int minutes = 0;
-        int rowsMissingPieceCount = 0;
-        Set<LocalDate> days = new java.util.HashSet<>();
-        for (WorkerDailyEfficiency e : effs) {
-            if (e.getTotalPieceCount() == null) {
-                // ⚠️ 不静默当成 0 —— 数出来, 让前端能说「有 N 条报工没记件数, 汇总偏低」。
-                rowsMissingPieceCount++;
-            } else {
-                pieces += e.getTotalPieceCount();
-            }
-            if (e.getQualifiedCount() != null) {
-                qualified += e.getQualifiedCount();
-            }
-            if (e.getDefectCount() != null) {
-                defects += e.getDefectCount();
-            }
-            if (e.getEffectiveWorkMinutes() != null) {
-                minutes += e.getEffectiveWorkMinutes();
-            }
-            if (e.getWorkDate() != null) {
-                days.add(e.getWorkDate());
-            }
-        }
-        return new MyWageResponse.WorkTotals(
-                effs.size(), days.size(), pieces, qualified, defects, minutes, rowsMissingPieceCount);
-    }
-
-    private static List<MyWageResponse.WorkRecord> toWorkRecords(List<WorkerDailyEfficiency> effs) {
-        return effs.stream()
-                .sorted(Comparator.comparing(WorkerDailyEfficiency::getWorkDate,
-                        Comparator.nullsLast(Comparator.reverseOrder())))
-                .map(e -> new MyWageResponse.WorkRecord(
-                        e.getId(),
-                        e.getWorkDate(),
-                        e.getProcessStageType(),
-                        e.getProductTypeId(),
-                        e.getWorkstationName(),
-                        e.getTotalPieceCount(),
-                        e.getQualifiedCount(),
-                        e.getDefectCount(),
-                        e.getEffectiveWorkMinutes(),
-                        e.getSourceBatchId(),
-                        e.getUpdatedAt()))
-                .toList();
-    }
-
-    /**
-     * 该月出现过的每道工序, 各查一次它适用的计件单价规则。
-     *
-     * <p>查不到规则的工序<b>照样返回一条</b>, 只是 rate 全 null + {@code NO_PIECE_RATE_RULE} ——
-     * 「这道工序没配单价」正是工人最需要知道的事 (他干了活但没人给这活定过价), ⛔ 不许过滤掉。
-     */
-    private List<MyWageResponse.PieceRateInfo> toPieceRates(
-            String factoryId, List<WorkerDailyEfficiency> effs, LocalDate asOf) {
-
-        Map<String, Integer> piecesByStage = new TreeMap<>(Comparator.nullsLast(Comparator.naturalOrder()));
-        for (WorkerDailyEfficiency e : effs) {
-            int pieces = e.getTotalPieceCount() == null ? 0 : e.getTotalPieceCount();
-            piecesByStage.merge(e.getProcessStageType(), pieces, Integer::sum);
-        }
-
-        List<MyWageResponse.PieceRateInfo> out = new ArrayList<>();
-        for (Map.Entry<String, Integer> entry : piecesByStage.entrySet()) {
-            String stage = entry.getKey();
-            Optional<PieceRateRule> ruleOpt =
-                    wageCalculationService.findEffectivePieceRateRule(factoryId, stage, asOf);
-            if (ruleOpt.isPresent()) {
-                PieceRateRule r = ruleOpt.get();
-                out.add(new MyWageResponse.PieceRateInfo(
-                        stage, entry.getValue(), r.getId(), r.getName(),
-                        r.getTier1Threshold(), r.getTier1Rate(),
-                        r.getTier2Threshold(), r.getTier2Rate(),
-                        r.getTier3Threshold(), r.getTier3Rate(),
-                        null));
-            } else {
-                out.add(new MyWageResponse.PieceRateInfo(
-                        stage, entry.getValue(), null, null,
-                        null, null, null, null, null, null,
-                        "NO_PIECE_RATE_RULE"));
-            }
-        }
-        return out;
-    }
-
-    private MyWageResponse.Payroll toPayroll(PayrollRecord p) {
-        String status = p.getStatus();
-        return new MyWageResponse.Payroll(
-                p.getId(),
-                p.getPeriodStart(),
-                p.getPeriodEnd(),
-                p.getPeriodType(),
-                status,
-                payrollStatusLabel(status),
-                STATUS_PAID.equals(status),
-                p.getBaseSalary(),
-                p.getPieceRateWage(),
-                p.getOvertimeWage(),
-                p.getOvertimeHours(),
-                p.getBonusAmount(),
-                p.getDeductionAmount(),
-                p.getTotalWage(),
-                p.getTotalPieceCount(),
-                p.getTotalWorkHours(),
-                p.getApprovedAt(),
-                p.getPaidAt());
-    }
-
-    private static String payrollStatusLabel(String status) {
-        if (status == null) {
-            return "状态未知";
-        }
-        return switch (status) {
-            case STATUS_PENDING -> "待审核";
-            case STATUS_APPROVED -> "已审核, 还没发";
-            case STATUS_PAID -> "已发放";
-            // 数据里出现了三态之外的值 —— 不假装认识它, 把原值透出去。
-            default -> "状态未知(" + status + ")";
-        };
-    }
-
-    /**
-     * 按状态分开求和。⛔ 不提供跨状态的总计 —— 见
-     * {@link MyWageResponse.PayrollTotals} 的 javadoc。
-     */
-    private static MyWageResponse.PayrollTotals toPayrollTotals(List<PayrollRecord> records) {
-        Map<String, List<PayrollRecord>> byStatus = records.stream()
-                .collect(Collectors.groupingBy(
-                        p -> p.getStatus() == null ? "" : p.getStatus(),
-                        LinkedHashMap::new,
-                        Collectors.toList()));
-
-        List<PayrollRecord> paid = byStatus.getOrDefault(STATUS_PAID, List.of());
-        List<PayrollRecord> approved = byStatus.getOrDefault(STATUS_APPROVED, List.of());
-        List<PayrollRecord> pending = byStatus.getOrDefault(STATUS_PENDING, List.of());
-
-        return new MyWageResponse.PayrollTotals(
-                sumOrNull(paid), paid.size(),
-                sumOrNull(approved), approved.size(),
-                sumOrNull(pending), pending.size());
-    }
-
-    /**
-     * ⛔ 一张单都没有时返回 {@code null} 而不是 {@code ZERO} ——
-     * 「这一档没有单」和「这一档合计 0 元」是两件事, 前者前端要显示「—」。
-     */
-    private static BigDecimal sumOrNull(List<PayrollRecord> records) {
-        if (records.isEmpty()) {
-            return null;
-        }
-        BigDecimal total = BigDecimal.ZERO;
-        for (PayrollRecord p : records) {
-            if (p.getTotalWage() != null) {
-                total = total.add(p.getTotalWage());
-            }
-        }
-        return total;
-    }
 }

@@ -3129,6 +3129,38 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("BOM配方成本最高的产品", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("BOM 配方成本最高的产品是哪个", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("BOM 成本最高的产品", "REPORT_BOM_COST_RANK");
+        // 意图蒸馏 v3 复核缺口 (2026-11-17 新增意图; 只加更长更具体的说法, 不改既有短语的指向):
+        // 新建客户 (写, 走确认卡) — 「客户资料」本身仍指客户名单, 带「录/建」动作的才到新建
+        phraseToIntentMapping.put("客户资料帮我录", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("录一下客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("帮我录客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("录入客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("新建客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("新建客户", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("添加新客户", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("建个客户档案", "CUSTOMER_CREATE");
+        // 我的工资 (只读, 只看本人) — 比「工资条」(考勤统计) 更长的本人说法优先
+        phraseToIntentMapping.put("工资条能提前", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("这个月的工资条", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我的工资条", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("把我工资算", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我的工资", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我这个月工资", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("看看我的工资", "HR_MY_WAGE_QUERY");
+        // 查员工在哪个车间/哪条线 (只读, 只给工作信息)
+        phraseToIntentMapping.put("哪个车间的啊", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("是哪个车间的", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("现在在哪条线", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("在哪条线上", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("在哪个车间上班", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("员工在哪条产线", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        // 排清洁计划 (写, 走确认卡)
+        phraseToIntentMapping.put("清洁计划给排", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排一下清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("清洁计划排一下", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排明天的清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("安排清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
         phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
