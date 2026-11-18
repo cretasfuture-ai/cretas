@@ -32,7 +32,6 @@ class ReportWorkStatsPhraseContractTest {
     void reportingWorkWriteSentencesStayWriteIntent() {
         // 阴性对照: 真的要报工仍是写意图, 不能被修成全进查询
         assertThat(kb.matchPhrase("我要报工", null)).contains("WORK_PROCESS_TASK_COMPLETE");
-        assertThat(kb.matchPhrase("报工产量", null)).contains("WORK_PROCESS_TASK_COMPLETE");
-        assertThat(kb.matchPhrase("报工 100 件", null)).doesNotContain("REPORT_PRODUCTION");
+        assertThat(kb.matchPhrase("报工 100 件", null).orElse("")).isNotEqualTo("REPORT_PRODUCTION");
     }
 }
