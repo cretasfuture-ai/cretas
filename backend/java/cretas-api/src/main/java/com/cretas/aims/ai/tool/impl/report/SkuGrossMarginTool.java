@@ -87,6 +87,13 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         return List.of();
     }
 
+    private static final java.util.regex.Pattern LOWEST_WORDS = java.util.regex.Pattern.compile("最低|最差|最少|倒数|末位|垫底|最不赚钱|亏钱");
+
+    /** 原话是不是在问「最低 / 最差 / 倒数」那一头。 */
+    static boolean asksLowest(String userInput) {
+        return userInput != null && LOWEST_WORDS.matcher(userInput).find();
+    }
+
     /** 测试可覆盖; 生产用服务器本地日期 (后端全线 GMT+8)。 */
     protected LocalDate today() {
         return LocalDate.now();
@@ -189,7 +196,11 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         for (Candidate c : candidates.values()) {
             items.add(buildItem(factoryId, c, start, end, defaultPeriod));
         }
-        boolean lowestFirst = "lowest".equalsIgnoreCase(getString(params, "sortOrder"));
+        String sortOrder = getString(params, "sortOrder");
+        // 参数抽取没给方向时, 用原话兜底: 「毛利最低的产品」被默认成从高到低是答非所问 (LSMDEMO 2026-11-18)
+        boolean lowestFirst = sortOrder == null || sortOrder.isBlank()
+                ? asksLowest(getString(params, "originalUserInput") != null ? getString(params, "originalUserInput") : getString(params, "userInput"))
+                : "lowest".equalsIgnoreCase(sortOrder);
         // 没有毛利率的 (没数据) 始终排最后, 不因升序跑到「最低」前面
         Comparator<BigDecimal> rateOrder = lowestFirst ? Comparator.<BigDecimal>naturalOrder() : Comparator.<BigDecimal>reverseOrder();
         items.sort(Comparator

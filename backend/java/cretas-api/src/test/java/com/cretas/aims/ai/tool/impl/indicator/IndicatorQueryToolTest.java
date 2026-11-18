@@ -181,7 +181,8 @@ class IndicatorQueryToolTest {
 
         assertEquals("NOT_FOUND", data.get("status"));
         assertEquals("NOPE", data.get("indicatorCode"));
-        assertTrue(((String) result.get("message")).contains("不存在"));
+        assertTrue(((String) result.get("message")).contains("暂不支持"));
+        assertFalse(((String) result.get("message")).contains("NOPE"));
     }
 
     @Test
