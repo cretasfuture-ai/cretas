@@ -1086,7 +1086,84 @@ class StreamTurnCollectorEntryParityContractTest {
         assertThat(run.harness.slotFillingCalls()).isZero();
     }
 
+    @Test
+    @DisplayName("BP 第 8 页: 数字计划员收到急单原话 → 短语表识别成急单影响分析 → 归计划员管、只读直答, 四项都有输出或说缺什么")
+    void digitalCrewPlannerRushOrderReachesRushOrderAnalysis() throws Exception {
+        String input = "周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？";
+        Harness h = new Harness(Entry.EXECUTE);
+        // 识别: 用真实短语表 (外部模型不参与); 识别器桩只把短语表的结论原样交给管线
+        String matched = h.knowledgeBase.matchPhrase(input).orElse(null);
+        assertThat(matched).as("真实短语表把急单原话识别成新意图").isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        AIIntentConfig rush = h.intent(matched, "急单影响分析", "scheduling_rush_order_impact",
+                ToolExecutor.AccessMode.READ);
+        rush.setRequiredPermission(null); // 迁移不设: 读意图不比 App 更严
+        h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(rush)
+                .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH).confidence(0.98)
+                .requiresConfirmation(false).questionType(QuestionType.OPERATIONAL_COMMAND).build());
+
+        // 工具: 真实 RushOrderImpactTool 跑这句原话 (本厂有酱牛肉 / 料够 / 交期前没有插单时段), 结果交给答复
+        com.cretas.aims.ai.tool.impl.scheduling.RushOrderImpactTool tool =
+                new com.cretas.aims.ai.tool.impl.scheduling.RushOrderImpactTool();
+        com.cretas.aims.repository.ProductTypeRepository products = mock(com.cretas.aims.repository.ProductTypeRepository.class);
+        com.cretas.aims.entity.ProductType beef = new com.cretas.aims.entity.ProductType();
+        beef.setId("QA-PT-JNR");
+        beef.setName("酱牛肉");
+        beef.setUnit("kg");
+        when(products.findVisibleByFactoryIdAndIsActiveTrue(FACTORY)).thenReturn(List.of(beef));
+        com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor assessor =
+                mock(com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor.class);
+        when(assessor.assess(eq(FACTORY), eq("QA-PT-JNR"), org.mockito.ArgumentMatchers.argThat(q -> q != null && q.compareTo(new java.math.BigDecimal("2000")) == 0))).thenReturn(
+                new com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor.Assessment(
+                        com.cretas.aims.service.scheduling.UrgentInsertMaterialAssessor.Status.OK, null,
+                        "QA-RECIPE-JNR", 2, List.of(), "fp"));
+        com.cretas.aims.repository.InsertSlotRepository slots = mock(com.cretas.aims.repository.InsertSlotRepository.class);
+        when(slots.findByFactoryIdAndStatus(FACTORY, "available")).thenReturn(List.of());
+        ReflectionTestUtils.setField(tool, "productTypeRepository", products);
+        ReflectionTestUtils.setField(tool, "materialAssessor", assessor);
+        ReflectionTestUtils.setField(tool, "insertSlotRepository", slots);
+        ReflectionTestUtils.setField(tool, "urgentInsertService", mock(com.cretas.aims.service.UrgentInsertService.class));
+        ReflectionTestUtils.setField(tool, "objectMapper", new ObjectMapper().findAndRegisterModules());
+        String json = tool.execute(com.cretas.aims.ai.dto.ToolCall.of("t", "scheduling_rush_order_impact",
+                new ObjectMapper().writeValueAsString(Map.of("userInput", input))), Map.of("factoryId", FACTORY, "userId", USER));
+        String toolMessage = new ObjectMapper().readTree(json).path("data").path("message").asText();
+        assertThat(toolMessage).as(json).isNotBlank();
+        h.toolReturns(IntentExecuteResponse.builder().intentRecognized(true).intentCode(matched).status("SUCCESS")
+                .message(toolMessage).formattedText(toolMessage).build());
+
+        DigitalCrewService.AskView view = crewAskWith(h, input);
+
+        assertThat(view.kind()).as("只读直答: 不越界、不交办").isEqualTo("ANSWER");
+        assertThat(view.intentCode()).isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        assertThat(h.executedIntents).as("只读工具真的被调度一次").containsExactly("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        assertThat(view.text()).contains("1. 物料够不够").contains("够。")
+                .contains("2. 产线和人手排不排得开").contains("3. 要挪哪几张原单、各晚多久")
+                .contains("算不出来，缺交期").contains("可插单时段")
+                .contains("4. 方案草案").contains("待负责人确认");
+        assertThat(view.item()).as("只读: 不进「等我确认」").isNull();
+    }
+
     private record CrewRun(DigitalCrewService.AskView view, Harness harness) { }
+
+    private static DigitalCrewService.AskView crewAskWith(Harness h, String input) throws Exception {
+        DigitalCrewWorkItemRepository items = mock(DigitalCrewWorkItemRepository.class);
+        UserRepository users = mock(UserRepository.class);
+        User me = new User();
+        me.setId(USER);
+        when(users.findById(USER)).thenReturn(Optional.of(me));
+        DigitalCrewService.AskView view;
+        try (AuthenticatedActor.ActorScope ignored = AuthenticatedActor.trustedAsyncScope(h.actor())) {
+            DigitalCrewService crew = new DigitalCrewService(items, mock(DigitalCrewMemberSettingRepository.class),
+                    mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
+                    mock(DigitalCrewDelegationLockRepository.class), users, mock(PermissionService.class), h.facade(),
+                    h.recognizer, mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
+                    mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+            view = crew.ask(FACTORY, new DigitalCrewService.Actor(AuthenticatedActorType.FACTORY_USER, USER, ROLE),
+                    "planner", input, SESSION);
+        }
+        assertThat(h.streamRuns()).as("阳性对照: 经门面跑了流式管线一次").isEqualTo(1);
+        org.mockito.Mockito.verifyNoInteractions(items);
+        return view;
+    }
 
     private static CrewRun crewAsk(boolean hasWritePermission) throws Exception {
         String input = "那批到货的鸡腿帮我登记进系统";
