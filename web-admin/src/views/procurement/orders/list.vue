@@ -73,6 +73,7 @@ import {
   purchaseTaxIncludedUnitPrice,
   purchaseUntaxedUnitPrice,
 } from './purchaseOrderTaxInclusivePricing';
+import { purchaseLineMoney, roundMoney } from './purchaseOrderMoney';
 import {
   listSupplierMaterials,
   listSupplierPurchaseSpecs,
@@ -105,7 +106,8 @@ const {
   columns: () => [
     { key: 'purchaseType', label: '类型' },
     { key: 'orderDate', label: '下单日期' },
-    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '总金额' }] : []),
+    // PROTO-DEMO-PO-TAX: totalAmount 是未税总额 (含税 = totalAmount + taxAmount), 标签照实写。
+    ...(canViewPrice.value ? [{ key: 'totalAmount', label: '未税总额' }] : []),
     { key: 'attachments', label: '附件' },
   ],
   defaults: PROCUREMENT_DEFAULT_COLUMNS,
@@ -332,14 +334,21 @@ function itemAmountPreview(item: ProcurementOrderItem) {
   return pricingAmountPreview(item);
 }
 
+// PROTO-DEMO-PO-TAX: 与后端同一口径 (行未税先取两位 → 含税 = 未税×(1+税率) 取两位 → 税额 = 差),
+// 预览与保存后的详情一分不差。
 function itemTaxPreview(item: ProcurementOrderItem): { untaxed: number; tax: number; taxed: number } | null {
-  const amount = itemAmountPreview(item).amount;
-  const rate = Number(item.taxRate);
-  if (amount == null || !Number.isFinite(rate)) return null;
-  const untaxed = Number(amount);
-  const tax = Number((untaxed * rate / 100).toFixed(2));
-  return { untaxed, tax, taxed: Number((untaxed + tax).toFixed(2)) };
+  const money = purchaseLineMoney(itemAmountPreview(item).amount, item.taxRate);
+  return money ? { untaxed: money.untaxed, tax: money.tax, taxed: money.taxIncluded } : null;
 }
+
+/** 表单合计: 未税合计 + 税额合计 = 含税合计; 任一行算不出就不给合计 (⛔ 不把缺价行当 0)。 */
+const formMoneyTotal = computed(() => {
+  const lines = form.value.items.map(itemTaxPreview);
+  if (!lines.length || lines.some((line) => line == null)) return null;
+  const untaxed = roundMoney(lines.reduce((sum, line) => sum + (line?.untaxed ?? 0), 0));
+  const tax = roundMoney(lines.reduce((sum, line) => sum + (line?.tax ?? 0), 0));
+  return { untaxed, tax, taxed: roundMoney(untaxed + tax) };
+});
 
 const suppliers = ref<TableRow[]>([]);
 // R-4 拼音/首字母搜索: filter-method 场景下 el-select 关掉内建字面过滤,
@@ -629,8 +638,14 @@ function onTaxIncludedPriceEdited(item: ProcurementOrderItem): void {
 }
 
 function onTaxRateEdited(item: ProcurementOrderItem): void {
+  // 改税率: 含税单价是用户录的, 保持不变; 未税单价按新税率反算, 税额/含税金额随之重算。
   item.unitPrice = purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice, item.taxRate);
   item.lineAmount = null;
+  // 先录含税价、后选税率时, 录价那一刻算不出未税价, priceSource 被记成 MISSING;
+  // 选了税率算出来了就要改回来, 否则提示仍说「未配置采购价」。
+  if (item.priceSource === 'MISSING' && item.unitPrice !== null && hasConfiguredPrice(item.taxIncludedUnitPrice)) {
+    item.priceSource = 'MANUAL';
+  }
 }
 
 async function onSupplierMaterialChange(item: ProcurementOrderItem): Promise<void> {
@@ -1554,7 +1569,7 @@ async function handleAiFill(params: TableRow) {
         <el-table-column
           v-if="canViewPrice && procurementColumnVisible('totalAmount')"
           prop="totalAmount"
-          label="总金额"
+          label="未税总额"
           width="130"
           align="right"
           sortable
@@ -1948,6 +1963,11 @@ async function handleAiFill(params: TableRow) {
           <span class="derived-cell"><em>含税金额</em>{{ itemTaxPreview(item) ? itemTaxPreview(item)?.taxed.toFixed(2) : '-' }}</span>
         </div>
         </div>
+        <div v-if="formMoneyTotal" class="item-money-total" data-testid="po-form-money-total">
+          <span>未税合计 <strong data-testid="po-form-untaxed">{{ formMoneyTotal.untaxed.toFixed(2) }}</strong></span>
+          <span>税额合计 <strong data-testid="po-form-tax">{{ formMoneyTotal.tax.toFixed(2) }}</strong></span>
+          <span>含税合计 <strong data-testid="po-form-tax-included">{{ formMoneyTotal.taxed.toFixed(2) }}</strong></span>
+        </div>
         <el-button style="width: 100%; margin-top: 8px" @click="addItem">+ 添加行</el-button>
         </div>
       </el-form>
@@ -2068,6 +2088,12 @@ async function handleAiFill(params: TableRow) {
 .derived-cell {
   font-variant-numeric: tabular-nums; font-feature-settings: 'tnum';
   em { font-style: normal; color: #909399; margin-right: 4px; }
+}
+/* 表单合计: 未税合计 + 税额合计 = 含税合计 (与销售订单同口径)。 */
+.item-money-total {
+  display: flex; justify-content: flex-end; gap: 18px; padding: 6px 2px 0;
+  font-size: 13px; color: #606266; font-variant-numeric: tabular-nums;
+  strong { color: #303133; margin-left: 4px; }
 }
 .price-input-cell { display: flex; align-items: center; gap: 4px; }
 .price-source-icon { color: #909399; font-size: 14px; cursor: help; flex-shrink: 0; }
