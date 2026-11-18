@@ -19,9 +19,36 @@ LOG=/Users/rex/gh-gate/slot-$SLOT.log
 log() { echo "$(date '+%F %T') slot=$SLOT $*" >> "$LOG"; }
 lock_held() { [ -d "$LOCK" ] && ps -p "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" >/dev/null 2>&1; }
 
+# 按需起 runner (Steve 2026-11-18「没跑的时候不占内存, 用的时候才占」): 空闲时只有这个循环 (~10MB),
+# 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等 $LABEL 的 job 数 >= 本槽在空闲槽里的名次才起。
+# 排队数缓存在 $QCACHE, 20 秒内各槽共用一次查询 (省 API 额度)。
+QCACHE=/Users/rex/gh-gate/queued.cache
+IDLE_KILL_SEC=180
+mini_queued() {
+  local age=999 n=0 r c
+  [ -f "$QCACHE" ] && age=$(( $(date +%s) - $(stat -f %m "$QCACHE") ))
+  if [ "$age" -ge 20 ] && mkdir "$QCACHE.lock" 2>/dev/null; then
+    for r in $( { gh api "repos/$REPO/actions/workflows/java-gate-pr.yml/runs?status=queued&per_page=30" -q '.workflow_runs[].id'
+                  gh api "repos/$REPO/actions/workflows/java-gate-pr.yml/runs?status=in_progress&per_page=30" -q '.workflow_runs[].id'; } 2>>"$LOG"); do
+      c=$(gh api "repos/$REPO/actions/runs/$r/jobs?per_page=100" \
+            -q "[.jobs[]|select(.status==\"queued\" and (.labels|index(\"$LABEL\")))]|length" 2>>"$LOG") || continue
+      n=$((n + ${c:-0}))
+    done
+    echo "$n" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
+    rmdir "$QCACHE.lock"
+  fi
+  cat "$QCACHE" 2>/dev/null || echo 0
+}
+slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
+idle_rank() { local k r=1; for k in $(seq 1 $((SLOT - 1))); do slot_busy "$k" || r=$((r + 1)); done; echo "$r"; }
+
 log "start"
 while :; do
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
+  # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
+  [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null
+  q=$(mini_queued); rank=$(idle_rank)
+  if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
   jit=$(gh api -X POST "repos/$REPO/actions/runners/generate-jitconfig" \
         -f name="$name" -F runner_group_id=1 -f "labels[]=$LABEL" -f work_folder="../work-$SLOT" \
@@ -43,8 +70,25 @@ while :; do
         "GIT_CONFIG_VALUE_0=https://github.com/cretasfuture-ai/cretas" >> .env
     fi
     ./run.sh --jitconfig "$3"
-  ' _ "$WORK" "$PKG" "$jit" "$LOCK" >> "$LOG" 2>&1
-  rc=$?
+  ' _ "$WORK" "$PKG" "$jit" "$LOCK" >> "$LOG" 2>&1 &
+  pid=$!
+  # 起了但 $IDLE_KILL_SEC 秒内没领到活 (别的槽先接走了) 就收掉, 并删掉这条 runner 注册。
+  waited=0
+  while ps -p "$pid" >/dev/null 2>&1; do  # ⛔ 不用 kill -0: pid 是 root 的 sudo, rex 发信号会 EPERM
+    if [ "$waited" -ge "$IDLE_KILL_SEC" ] && ! pgrep -f "/Users/ghgate/slot-$SLOT/bin/Runner.Worker" >/dev/null 2>&1; then
+      log "idle ${waited}s without a job, stop $name"
+      sudo -n -u ghgate pkill -f "/Users/ghgate/slot-$SLOT/bin/Runner.Listener" 2>/dev/null
+      sleep 5
+      rid=$(gh api "repos/$REPO/actions/runners?per_page=100" -q ".runners[]|select(.name==\"$name\")|.id" 2>>"$LOG")
+      [ -n "$rid" ] && gh api -X DELETE "repos/$REPO/actions/runners/$rid" 2>>"$LOG"
+      break
+    fi
+    pgrep -f "/Users/ghgate/slot-$SLOT/bin/Runner.Worker" >/dev/null 2>&1 && waited=-100000
+    sleep 5; waited=$((waited + 5))
+  done
+  wait "$pid"; rc=$?
+  # 任务结束后不留进程: 本槽检出目录下起的 java / postgres 等一律结束, 空闲时不占内存。
+  sudo -n -u ghgate pkill -f "/Users/ghgate/work-$SLOT/" 2>/dev/null
   sudo -n -u ghgate rm -rf "$WORK" /Users/ghgate/.m2/repository/com/cretas 2>/dev/null
   log "runner $name exited rc=$rc"
   sleep 3

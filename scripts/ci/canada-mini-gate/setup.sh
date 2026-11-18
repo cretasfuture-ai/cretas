@@ -34,7 +34,7 @@ done
 
 mkdir -p /Users/rex/gh-gate
 cp /tmp/gh-gate-refill.sh /Users/rex/gh-gate/refill.sh && chmod 755 /Users/rex/gh-gate/refill.sh
-for i in 1 2; do
+for i in 1 2 3 4; do  # 4 槽 (2026-11-18 Steve 要求 4 片并行; 按需起, 空闲不占内存)
   plist=/Users/rex/Library/LaunchAgents/com.cretas.gh-gate-$i.plist
   cat > "$plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
