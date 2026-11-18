@@ -218,7 +218,11 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     name: postgres-reversal-concurrency-shard (${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
+    # 2026-11-18 (Steve 撤销「公开仓库禁自建 runner」, 前提实测更快): 本仓库分支的 PR 和合并队列跑在
+    # canada-mini 自建 runner (标签 cretas-mini-pg, 2 台); fork PR 一律托管 (陌生人代码不上我们的机器)。
+    # 逃生口: 给 PR 打 `ci-hosted` 标签 = 回托管 (mini 离线时 job 会一直排队, 不会自动回落)。
+    # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false
@@ -330,6 +334,20 @@ jobs:
           path: ~/.m2/repository
           key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
           restore-keys: maven-gate-
+
+      # 自建 runner 和发布构建共用 canada-mini: 发布优先。发布构建持有 ~/cretas-build/.build.lock
+      # (remote-java-build-worker.sh, mkdir 锁 + pid) 时先等它结束, 最多 20 分钟; 托管机上直接跳过。
+      - name: Yield to release builds (self-hosted only)
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: |
+          set -u
+          lock="$HOME/cretas-build/.build.lock"; waited=0
+          while [ -d "$lock" ] && kill -0 "$(cat "$lock/pid" 2>/dev/null || echo 0)" 2>/dev/null; do
+            [ "$waited" -ge 1200 ] && { echo "::error::发布构建占锁超过 20 分钟, 本分片放弃 (重跑即可)"; exit 1; }
+            sleep 15; waited=$((waited + 15))
+          done
+          echo "READING: RELEASE_LOCK_WAIT=${waited}s runner=${RUNNER_NAME:-?} free=$(/usr/bin/memory_pressure 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')%"
 
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api

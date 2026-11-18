@@ -10,7 +10,8 @@ paths:
 ## 🔴 现行（2026-10-25，owner 决定）
 
 - 仓库 `cretasfuture-ai/cretas` 已转 **public**。全部工作流 `runs-on: ubuntu-latest`（公开仓库托管 runner 免费、不限分钟、4 vCPU / 16 GB，免费计划最多并发 20 个 job）。
-- ⛔ **任何 job 都不许再指向自建 runner**：公开仓库谁都能提 PR，自建路由会让陌生人的代码在我们的机器上执行。闸 `scripts/tests/test-public-repo-hosted-only.sh`（全部托管 + 原自建 job 带超时 + Java 显式堆）；`switch_ci_runner.py self-hosted` 直接拒绝。
+- ⛔ **除登记的例外，job 不许指向自建 runner**：公开仓库谁都能提 PR，自建路由会让陌生人的代码在我们的机器上执行。闸 `scripts/tests/test-public-repo-hosted-only.sh`（全部托管 + 原自建 job 带超时 + Java 显式堆）；`switch_ci_runner.py self-hosted` 直接拒绝。
+- **唯一例外（2026-11-18，Steve 撤销「公开仓库禁自建」，前提实测 mini 更快）**：Java Gate `postgres-reversal-concurrency-shard` 在本仓库分支 PR 和合并队列上跑 canada-mini（仓库级 runner `canada-mini-gate-1/2`，标签 `cretas-mini-pg`，launchd 常驻，目录 `~/gh-gate-N`），fork PR 落托管。表达式逐字登记在闸的 `SELF_HOSTED_ALLOWED`，必须带「`merge_group` 或 `head.repo.full_name == github.repository`」守卫，阴性对照钉住去掉守卫即红。mini 离线时 job 会一直排队不回落：给 PR 打 `ci-hosted` 标签回托管，合并队列要回托管只能改表达式。发布构建优先：分片先等 `~/cretas-build/.build.lock` 释放（最多 20 分钟）。新增例外先在闸里登记，⛔ 不手改别的 job。
 - 外部 PR：仓库设置 `fork-pr-contributor-approval = all_external_contributors`，外部贡献者的 PR 必须我们点批准才运行；外部贡献者没有写权限，合并只能由组织成员做。
 - 托管机上的差异已在工作流里处理：测试库用 PGDG 装 PostgreSQL 17（`run-with-test-postgres.sh`，托管镜像自带 16）；Java Gate `CRETAS_JAVA_FORK_XMX=6g`、nightly `CRETAS_JAVA_NIGHTLY_XMX=12g` 写在 job env；Fresh DB 预检在托管机上跳过 Aurora 身份检查、保留资源/Docker/JDK/Maven 检查。
 - Aurora、本机轻任务槽、小检查槽全部退役（`tools/ci/windows-*` 只作历史）。要恢复自建 runner，必须先把仓库改回 private。
