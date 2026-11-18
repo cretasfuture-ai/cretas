@@ -19,6 +19,7 @@ from common.tenant_identity import require_same_factory
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import asyncpg
+import httpx
 import os
 import json
 import logging
@@ -127,16 +128,40 @@ ENTITY_FIELD_MAP = {
 
 MASTER_DATA_ENTITY_TYPES = ["MATERIAL_TYPE", "CUSTOMER", "SUPPLIER"]
 
-# 主数据明细下钻 (id + 名称) 等同于吐名单, 必须和 Java 对应名册同口径 (Python 侧只有 JWT 角色, 没有权限码, 所以镜像角色集):
-#  * 客户: CustomerController 名单 owner 裁定 (2026-09-06) 只给 销售/财务/工厂管理员/运营 (L1 sales|finance r/rw);
-#  * 供应商/物料: 名单导出要求 procurement|finance r/rw, 即 采购/财务/仓管/工厂管理员。
-# 角色集改动要和 Java 一起改; 其余角色 403。平台管理员与工厂管理员始终放行。
-_ADMIN = {"factory_super_admin", "platform_admin", "platform_super_admin"}
-MASTER_DATA_DRILLDOWN_ROLES = {
-    "CUSTOMER": _ADMIN | {"sales_manager", "finance_manager", "cashier", "operations_coordinator"},
-    "SUPPLIER": _ADMIN | {"procurement_manager", "finance_manager", "cashier", "warehouse_manager"},
-    "MATERIAL_TYPE": _ADMIN | {"procurement_manager", "finance_manager", "warehouse_manager"},
+# 主数据明细下钻 (id + 名称) 等同于吐名单, 判据必须和 Java 对应名册接口**同一个权限码**, 不在 Python 写死角色:
+# 谁有这些权限由 Java 的 L2 工厂覆盖 → L1 角色权限 → 兜底三层配置决定 (工厂改了权限立即生效),
+# Python 这里只负责把权限码交给 Java 判 (见 _java_role_has_any_permission)。
+# 码与 Java 的对应关系 (tests/test_completeness_master_data_endpoint.py 会读 Java 源码核对, 改一边另一边必须跟):
+#  * CUSTOMER      -> CustomerController 名单的 ROSTER_SALES_RW/R + ROSTER_FINANCE_RW/R
+#  * SUPPLIER      -> SupplierController 导出的 @RequirePermission (供应商列表本身对所有人开放, 导出是最严的一档)
+#  * MATERIAL_TYPE -> PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION (原料类型维护)
+MASTER_DATA_DRILLDOWN_PERMISSIONS = {
+    "CUSTOMER": ["sales:read_write", "sales:read", "finance:read_write", "finance:read"],
+    "SUPPLIER": ["procurement:read", "procurement:read_write", "finance:read", "finance:read_write"],
+    "MATERIAL_TYPE": ["material_type:maintain"],
 }
+
+JAVA_API_BASE = os.getenv("JAVA_API_BASE", "http://localhost:10010")
+
+
+async def _java_role_has_any_permission(factory_id: str, role: str, codes: List[str]) -> bool:
+    """问 Java: 这个工厂里这个岗位有没有 codes 里任意一个权限 (Java 合并 L2/L1/兜底后回答)。
+
+    Java 不可达 / 回错时抛 503, ⛔ 不当成「有权」放行, 也不退回写死的角色表。
+    """
+    headers = {"X-Internal-Key": os.getenv("INTERNAL_API_SECRET", "")}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(
+                f"{JAVA_API_BASE}/api/internal/permissions/role-check",
+                params={"factoryId": factory_id, "role": role, "code": codes},
+                headers=headers,
+            )
+        resp.raise_for_status()
+        return bool(resp.json()["data"]["allowed"])
+    except Exception as exc:  # noqa: BLE001 - 任何失败都按「判不了」处理
+        logger.error(f"[completeness] 权限校验服务不可用: {exc}")
+        raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
 # 默认只算原来的 5 个生产实体, 主数据由调用方显式要 (设置页), 不改变既有页面的返回行数。
 DEFAULT_ENTITY_TYPES = [t for t in ENTITY_FIELD_MAP if t not in MASTER_DATA_ENTITY_TYPES]
 
@@ -483,11 +508,12 @@ async def api_missing_records(req: MissingRecordsRequest, request: Request):
         query = build_missing_query(req.entity_type, req.field)
     except ValueError:
         raise HTTPException(status_code=400, detail="不支持的实体类型或字段")
-    allowed = MASTER_DATA_DRILLDOWN_ROLES.get(req.entity_type)
-    if allowed is not None:
+    # 主数据三类按权限码判 (在任何取库之前); 其余 (生产实体: 批次等) 沿用本厂可见性, 有意不加岗位门。
+    codes = MASTER_DATA_DRILLDOWN_PERMISSIONS.get(req.entity_type)
+    if codes is not None:
         role = str(getattr(request.state, "role", "") or "").lower()
-        if role not in allowed:
-            raise HTTPException(status_code=403, detail="当前角色无权查看该名单的缺失明细")
+        if not role or not await _java_role_has_any_permission(factory_id, role, codes):
+            raise HTTPException(status_code=403, detail="当前岗位无权查看该名单的缺失明细")
     count_query = build_missing_query(req.entity_type, req.field, count=True)
     pool = await _get_db_pool()
     try:

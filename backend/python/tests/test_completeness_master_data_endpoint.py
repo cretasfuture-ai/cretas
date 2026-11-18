@@ -125,27 +125,101 @@ def _client(monkeypatch, role, factory="F001", total=321):
 URL = "/api/client-requirement/completeness/missing"
 
 
+def _grants(monkeypatch, granted):
+    """假 Java 权限判定: granted = {(factory, role): {权限码, ...}}; 记录每次被问的 (工厂, 岗位, 码)。"""
+    asked = []
+
+    async def fake(factory_id, role, codes):
+        asked.append((factory_id, role, list(codes)))
+        return bool(set(codes) & granted.get((factory_id, role), set()))
+
+    monkeypatch.setattr(cc, "_java_role_has_any_permission", fake)
+    return asked
+
+
 def test_unprivileged_role_gets_403_and_no_query_runs(monkeypatch):
     c, log = _client(monkeypatch, "operator")
+    _grants(monkeypatch, {})
     r = c.post(URL, json={"entity_type": "CUSTOMER", "field": "credit_limit"})
     assert r.status_code == 403 and log == []
     r = c.post(URL, json={"entity_type": "SUPPLIER", "field": "bank_account"})
     assert r.status_code == 403 and log == []
 
 
-def test_roster_roles_are_not_interchangeable(monkeypatch):
-    # 采购看得到供应商, 看不到客户; 销售反之
-    c, _ = _client(monkeypatch, "procurement_manager")
+def test_same_role_allowed_in_factory_a_but_revoked_in_factory_b(monkeypatch):
+    # 工厂在 L2 收回权限后, Python 立刻跟 (判据来自 Java 权限, 不是写死的岗位名)
+    granted = {("A", "dispatcher"): {"sales:read"}}
+    ca, _ = _client(monkeypatch, "dispatcher", factory="A")
+    asked = _grants(monkeypatch, granted)
+    assert ca.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
+    cb, log_b = _client(monkeypatch, "dispatcher", factory="B")
+    asked = _grants(monkeypatch, granted)
+    assert cb.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403
+    assert log_b == [] and asked[-1][:2] == ("B", "dispatcher")
+
+
+def test_role_not_in_old_hardcoded_list_is_allowed_when_permission_is_granted(monkeypatch):
+    # viewer / dispatcher 这类过去会被写死角色表误拒的岗位, 只要有权限码就能看
+    c, _ = _client(monkeypatch, "viewer")
+    _grants(monkeypatch, {("F001", "viewer"): {"procurement:read"}})
     assert c.post(URL, json={"entity_type": "SUPPLIER", "field": "address"}).status_code == 200
-    assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "address"}).status_code == 400  # address 非客户列
     assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403
+
+
+def test_permission_codes_sent_to_java_are_the_entity_group(monkeypatch):
     c, _ = _client(monkeypatch, "sales_manager")
+    asked = _grants(monkeypatch, {("F001", "sales_manager"): {"sales:read_write"}})
     assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
+    assert asked[-1][2] == cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["CUSTOMER"]
     assert c.post(URL, json={"entity_type": "SUPPLIER", "field": "address"}).status_code == 403
+    assert asked[-1][2] == cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["SUPPLIER"]
+
+
+def test_permission_service_down_is_503_not_allowed(monkeypatch):
+    c, log = _client(monkeypatch, "factory_super_admin")
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            raise RuntimeError("connection refused")
+
+        async def __aexit__(self, *a):
+            return False
+
+    monkeypatch.setattr(cc.httpx, "AsyncClient", _Boom)
+    r = c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"})
+    assert r.status_code == 503 and log == []
+
+
+def _java_src(rel):
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[3] / "backend/java/cretas-api/src/main/java/com/cretas/aims" / rel
+    if not p.exists():
+        pytest.skip(f"Java 源码不在此检出中: {p}")
+    return p.read_text(encoding="utf-8")
+
+
+def test_python_permission_codes_equal_the_java_endpoints_codes():
+    import re
+    customer = _java_src("controller/CustomerController.java")
+    roster = [re.search(rf'{n}\s*=\s*"([^"]+)"', customer).group(1)
+              for n in ("ROSTER_SALES_RW", "ROSTER_SALES_R", "ROSTER_FINANCE_RW", "ROSTER_FINANCE_R")]
+    assert sorted(cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["CUSTOMER"]) == sorted(roster)
+
+    supplier = _java_src("controller/SupplierController.java")
+    export = re.search(r'@RequirePermission\(\{([^}]*)\}\)\s*@GetMapping\("/export"\)', supplier).group(1)
+    assert sorted(cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["SUPPLIER"]) == sorted(re.findall(r'"([^"]+)"', export))
+
+    perm = _java_src("service/PermissionService.java")
+    maintain = re.search(r'MATERIAL_TYPE_MAINTAIN_PERMISSION\s*=\s*"([^"]+)"', perm).group(1)
+    assert cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["MATERIAL_TYPE"] == [maintain]
 
 
 def test_privileged_role_gets_total_from_count_not_from_limit(monkeypatch):
     c, log = _client(monkeypatch, "factory_super_admin", total=321)
+    _grants(monkeypatch, {("F001", "factory_super_admin"): {"procurement:read", "finance:read"}})
     r = c.post(URL, json={"entity_type": "SUPPLIER", "field": "contact", "limit": 1000})
     assert r.status_code == 200
     d = r.json()["data"]
@@ -166,6 +240,23 @@ def test_bad_whitelist_is_400_even_for_admin(monkeypatch, entity, field):
     assert c.post(URL, json={"entity_type": entity, "field": field}).status_code == 400 and log == []
 
 
-def test_empty_master_table_overall_is_none_not_zero():
-    # 没有任何记录 ≠ 全部缺失
-    assert cc.CompletenessResult(entity_type="SUPPLIER", total_records=0, field_completeness={}).overall_completeness is None
+def test_empty_master_table_overall_is_none_not_zero_but_production_stays_zero(monkeypatch):
+    # 走真实的 compute_completeness 分支: 没有记录 (total=0) 时主数据 overall 为 None, 生产实体保持旧的 0
+    class _C:
+        async def fetchrow(self, q, *a):
+            return {"total": 0}
+
+    class _P(_FakePool):
+        pass
+
+    pool = _P(_C())
+
+    async def fake_pool():
+        return pool
+
+    monkeypatch.setattr(cc, "_get_db_pool", fake_pool)
+    import asyncio
+    res = asyncio.run(cc.compute_completeness("F001", ["SUPPLIER", "EQUIPMENT"]))
+    by = {r.entity_type: r for r in res}
+    assert by["SUPPLIER"].overall_completeness is None
+    assert by["EQUIPMENT"].overall_completeness == 0

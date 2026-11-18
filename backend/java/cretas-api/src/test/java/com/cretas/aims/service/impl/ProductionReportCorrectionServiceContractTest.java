@@ -393,6 +393,30 @@ class ProductionReportCorrectionServiceContractTest {
     }
 
     @Test
+    void approvalSummariesBatchKeepsFactoryBoundaryOnCorrectionAndReport() {
+        ProductionReportCorrection mine = correction();            // F006 / COR-1 / report 10
+        ProductionReportCorrection foreignCorrection = correction();
+        foreignCorrection.setId("COR-X");
+        foreignCorrection.setFactoryId("F001");                    // 别厂的修正记录
+        ProductionReport sameFactory = report();
+        when(correctionRepository.findAllById(any())).thenReturn(List.of(mine, foreignCorrection));
+        when(reportRepository.findAllById(any())).thenReturn(List.of(sameFactory));
+
+        var out = service.approvalSummaries("F006", List.of("COR-1", "COR-X"));
+
+        assertThat(out).containsOnlyKeys("COR-1");                 // 别厂修正不出现
+        assertThat(out.get("COR-1")).containsKey("reportKind");
+
+        // 修正属于本厂, 但挂的报工属于他厂: 摘要在, 但不带他厂报工的 reportKind/outputUnit
+        ProductionReport foreignReport = report();
+        foreignReport.setFactoryId("OTHER");
+        when(correctionRepository.findAllById(any())).thenReturn(List.of(mine));
+        when(reportRepository.findAllById(any())).thenReturn(List.of(foreignReport));
+        assertThat(service.approvalSummaries("F006", List.of("COR-1")).get("COR-1"))
+                .doesNotContainKeys("reportKind", "outputUnit");
+    }
+
+    @Test
     void missingWorkflowFailsClosedWithoutChangingEffectiveReport() {
         ProductionReport report = report();
         when(reportRepository.findByIdAndFactoryIdForUpdate(10L, "F006")).thenReturn(Optional.of(report));
