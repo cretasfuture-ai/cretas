@@ -1,5 +1,5 @@
 -- @write-intent-required-permission
--- 启用的写意图补 required_permission (2026-11-18 合入, 原 V20261117_81 因 main 已到 V20261117_83 上调; 2026-11-17, 数字班组「系统里没有登记谁有权确认，所以不交办」)。
+-- 启用的写意图补 required_permission (2026-11-18 合入, 原 V20261117_81 上调到 main 与在飞 PR 的 V20261118_71 之上; 2026-11-17, 数字班组「系统里没有登记谁有权确认，所以不交办」)。
 --
 -- 现象: 数字仓管「今天到的 500kg 牛肉前腱子入原料仓」→ RECEIVE_CONFIRM_CREATE → READ_MODE_WRITE_BLOCKED, 但意图没登记
 -- 权限码, 数字班组不知道谁有权确认, 整件拒绝; 质检员的写操作整组交办不了, 建生产计划同样。
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS ai_intent_required_permission_bak_20261118 (
     backed_up_at            TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 COMMENT ON TABLE ai_intent_required_permission_bak_20261118 IS
-    'V20261118_53 补 required_permission 前的旧值 (回滚依据, 见迁移头注释); 只增不改';
+    'V20261118_81 补 required_permission 前的旧值 (回滚依据, 见迁移头注释); 只增不改';
 
 INSERT INTO ai_intent_required_permission_bak_20261118 (id, intent_code, factory_id, old_required_permission, new_required_permission)
 SELECT c.id, c.intent_code, c.factory_id, c.required_permission, v.perm

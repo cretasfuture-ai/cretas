@@ -65,7 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * + 真 {@link PermissionServiceImpl} (内置岗位矩阵) + 真 {@link IntentPermissionGate}。
  *
  * <p>意图配置<b>不手写</b>: required_permission 取自迁移层 ({@link WriteIntentPermissionSources#migratedPermissions()},
- * 即 V20261118_53 跑完后的值) —— 迁移里把这一行置空, 这里就回到「没有登记」而红。
+ * 即 V20261118_81 跑完后的值) —— 迁移里把这一行置空, 这里就回到「没有登记」而红。
  *
  * <p>识别 / 执行编排器是桩, 但按编排器同一顺序用真组件出状态: 先意图权限门 ({@link IntentPermissionGate#check}, 无权限 ⇒ NO_PERMISSION),
  * 再咨询 tab 写拦截 ({@link IntentTurnSharedSteps#readModeWriteBlocked}, ⇒ READ_MODE_WRITE_BLOCKED)。
