@@ -77,10 +77,10 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(497);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(500); // 2026-11-18 v3 复核缺口: +3 EXPLICIT 新工具 (my_wage_query / employee_work_location_query READ·LOW; ssop_schedule_plan WRITE·MEDIUM·preview), customer_create 补 preview
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(461);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
-        assertThat(statistics.total()).isEqualTo(497);
+        assertThat(statistics.total()).isEqualTo(500);
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
         assertThat(statistics.legacy()).isEqualTo(461);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
@@ -102,16 +102,16 @@ class ToolDescriptorCatalogTest {
         // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
         // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 362L,
-                ToolExecutor.ActionType.WRITE, 62L,
+                ToolExecutor.ActionType.READ, 364L,
+                ToolExecutor.ActionType.WRITE, 63L,
                 ToolExecutor.ActionType.UPDATE, 31L,
                 ToolExecutor.ActionType.DELETE, 11L,
                 ToolExecutor.ActionType.ANALYZE, 11L,
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 421L,
-                ToolExecutor.RiskLevel.MEDIUM, 68L,
+                ToolExecutor.RiskLevel.LOW, 423L,
+                ToolExecutor.RiskLevel.MEDIUM, 69L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
         // previewSupported 36 → 37 (+1): RestaurantDishDeleteTool 新增 doPreview() 实现 —— 安全改进
@@ -123,7 +123,7 @@ class ToolDescriptorCatalogTest {
         // 周转框发出 + 归还 / 质检任务 + 不良登记), 同 ToolDescriptorInventoryDriftTest 的 override supportsPreview 44 → 52。
         // Controlled purchase now requires a real preview and current procurement permission.
         // user_disable v3 adds a zero-write preview; its FACTORY chat intent stays retired.
-        assertThat(statistics.previewSupported()).isEqualTo(54);
+        assertThat(statistics.previewSupported()).isEqualTo(56); // +2: ssop_schedule_plan / customer_create (2026-11-18)
         // 2026-10-06: 44 → 45 (+1): report_sku_gross_margin 现在声明 procurement:price:view
         // (它返回售价/收入/成本/毛利, 门与 App 里同一份数据的入口同口径; 见下方登记)。
         // Supplier comparison v2 declares the existing procurement/finance read permission policy.
@@ -135,7 +135,7 @@ class ToolDescriptorCatalogTest {
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 470L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 473L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 12L,
                 ToolGovernanceStatus.APPROVED, 15L,
                 ToolGovernanceStatus.WAIVED, 0L));

@@ -1237,7 +1237,7 @@
       "intent_code": "HR_EMPLOYEE_WORK_LOCATION_QUERY",
       "intent_name": "查员工在哪个车间哪条线",
       "intent_category": "DATA_QUERY",
-      "description": "只读: 按姓名查本厂员工的车间/部门、岗位、今天排在哪条产线、手上在做的批次; 只给工作信息不给手机号等个人信息, 同名或只给姓时先列候选按工号选。",
+      "description": "只读: 按姓名查本厂员工的车间/部门、岗位、今天排班排在哪条产线 (没排班就说没排班); 只给工作信息不给手机号等个人信息, 同名或只给姓时先列候选按工号选。",
       "tool_name": "employee_work_location_query",
       "required_entities": null,
       "is_active": true,

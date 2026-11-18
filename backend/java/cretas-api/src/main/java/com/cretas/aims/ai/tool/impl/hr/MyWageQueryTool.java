@@ -207,9 +207,13 @@ public class MyWageQueryTool extends AbstractBusinessTool {
         return AccessMode.READ;
     }
 
-    /** 与 App「我的工资」({@code MyWageController} 类级门) 同一个码; 只看本人由 doExecute 保证。 */
+    /**
+     * 与 App「我的工资」({@code MyWageController} 类级门) 同一个码; 只看本人由 doExecute 保证。
+     * 写字面量而不引常量: 描述符清单按源码字面量核对 (ToolDescriptorInventoryDriftTest); 与
+     * {@link PermissionService#SELF_WAGE_VIEW_PERMISSION} 相等由 IntentGapV3ToolsContractTest 钉住。
+     */
     @Override
     public Set<String> getRequiredPermissions() {
-        return Set.of(PermissionService.SELF_WAGE_VIEW_PERMISSION);
+        return Set.of("hr:self_wage:view");
     }
 }

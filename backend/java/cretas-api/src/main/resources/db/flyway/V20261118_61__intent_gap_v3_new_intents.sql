@@ -1,4 +1,4 @@
--- V20261118_21__intent_gap_v3_new_intents.sql
+-- V20261118_61__intent_gap_v3_new_intents.sql
 -- @write-intent-required-permission
 --
 -- 意图蒸馏 v3 人工复核 (INTENT-DISTILL-20261111): 两个强模型都找不到合适意图、目录确实缺的 4 类, Steve 已拍板「缺的加上」
@@ -7,7 +7,7 @@
 --   CUSTOMER_CREATE                 -> customer_create               (写, MEDIUM; sales/finance:read_write, 同 POST /customers)
 --   SSOP_SCHEDULE_PLAN_CREATE       -> ssop_schedule_plan            (写, MEDIUM; quality:read_write, 同 ssop_procedure_create)
 --   HR_MY_WAGE_QUERY                -> my_wage_query                 (读, LOW;  hr:self_wage:view, 只看本人)
---   HR_EMPLOYEE_WORK_LOCATION_QUERY -> employee_work_location_query  (读, LOW;  hr/scheduling/production 读, 只给工作信息)
+--   HR_EMPLOYEE_WORK_LOCATION_QUERY -> employee_work_location_query  (读, LOW;  生产/采购/销售/排班 读 (同 App 员工名单口径), 只给工作信息)
 -- 全局行 (factory_id NULL), 与 V20261103_135 / V20261115_11 一致; 幂等: ON CONFLICT (intent_code) 只覆盖本迁移的 4 行,
 -- required_permission 只补空 (已有值不动)。
 -- 写意图权限码 (WriteIntentRequiredPermissionContractTest 读下面的二元组, 逗号 = 任一即可):
@@ -35,7 +35,7 @@ VALUES
      90, true, 'FACTORY', NULL, NOW(), NOW()),
     (gen_random_uuid(), 'HR_EMPLOYEE_WORK_LOCATION_QUERY', '查员工在哪个车间哪条线', 'DATA_QUERY', 'employee_work_location_query', 'LOW',
      '["在哪条线","哪个车间的","在哪个车间","员工在哪条产线"]'::jsonb,
-     '只读: 按姓名查本厂员工的车间/部门、岗位、今天排在哪条产线、手上在做的批次; 只给工作信息不给手机号等个人信息, 同名或只给姓时先列候选按工号选。',
+     '只读: 按姓名查本厂员工的车间/部门、岗位、今天排班排在哪条产线 (没排班就说没排班); 只给工作信息不给手机号等个人信息, 同名或只给姓时先列候选按工号选。',
      90, true, 'FACTORY', NULL, NOW(), NOW())
 ON CONFLICT (intent_code) DO UPDATE SET
     intent_name         = EXCLUDED.intent_name,

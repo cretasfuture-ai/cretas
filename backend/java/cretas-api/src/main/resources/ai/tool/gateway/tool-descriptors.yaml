@@ -6455,8 +6455,9 @@ descriptors:
     supportsPreview: false
     requiresPermission: false
     requiredPermissions: ["hr:self_wage:view"]
+    allowedRoles: []
     version: "1.0.0"
-    domainTags: ["query"]
+    domainTags: ["my"]
     overrideFlags:
       actionType: false
       riskLevel: false
@@ -6474,9 +6475,10 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["hr:read", "hr:read_write", "scheduling:read", "production:read"]
+    requiredPermissions: ["production:read", "procurement:read", "sales:read", "scheduling:read"]
+    allowedRoles: []
     version: "1.0.0"
-    domainTags: ["query"]
+    domainTags: ["employee"]
     overrideFlags:
       actionType: false
       riskLevel: false
@@ -6495,6 +6497,7 @@ descriptors:
     supportsPreview: true
     requiresPermission: false
     requiredPermissions: ["quality:read_write"]
+    allowedRoles: []
     version: "1.0.0"
     domainTags: ["ssop"]
     overrideFlags:

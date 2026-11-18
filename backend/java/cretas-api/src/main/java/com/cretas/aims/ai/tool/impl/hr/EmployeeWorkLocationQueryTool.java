@@ -1,13 +1,10 @@
 package com.cretas.aims.ai.tool.impl.hr;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.BatchWorkSession;
 import com.cretas.aims.entity.LineSchedule;
-import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.WorkerAssignment;
-import com.cretas.aims.repository.BatchWorkSessionRepository;
 import com.cretas.aims.repository.LineScheduleRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.UserRepository;
@@ -17,7 +14,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -34,7 +30,10 @@ import java.util.stream.Collectors;
  * 已有的 {@code query_employee_profile} 返回整份 UserDTO (含手机号等), 不适合在对话里给。
  *
  * <h2>只给工作信息</h2>
- * 每个人只投影 {@link #WORK_FIELDS}: 姓名、工号、车间/部门、岗位、今天排在哪条线、手上正在做的批次。
+ * 每个人只投影 {@link #WORK_FIELDS}: 姓名、工号、车间/部门、岗位、今天排在哪条线。
+ * 产线以当天排班为准 (WorkerAssignment → LineSchedule → ProductionLine), 没排班就明说「今天没有排班」不猜;
+ * 车间取用户档案的 department。⛔ 不给「手上在做的批次」: 报工批次在 App 里只给 work_report:read, 这个工具的
+ * 权限 (hr / scheduling / production 读) 更宽, 给了就是 AI 多于 App (GatedDataToolAiPathPermissionTest)。
  * ⛔ 手机号、邮箱、身份证号、工资/时薪、出生日期等一律不出 —— 投影是白名单, 不是黑名单
  * (见 {@code EmployeeWorkLocationQueryToolTest} 对返回字段的白名单断言)。
  *
@@ -48,7 +47,7 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
 
     /** 返回给对话的员工字段白名单。 */
     static final Set<String> WORK_FIELDS = Set.of(
-            "name", "employeeCode", "department", "position", "todayLines", "currentBatches");
+            "name", "employeeCode", "department", "position", "todayLines");
 
     /** 候选列表 (同名待选) 的字段白名单。 */
     static final Set<String> CANDIDATE_FIELDS = Set.of("name", "employeeCode", "department", "position");
@@ -63,8 +62,6 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     private LineScheduleRepository lineScheduleRepository;
     @Autowired
     private ProductionLineRepository productionLineRepository;
-    @Autowired
-    private BatchWorkSessionRepository batchWorkSessionRepository;
 
     @Override
     public String getToolName() {
@@ -73,7 +70,7 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "按姓名查本厂员工现在在哪个车间、哪条产线、什么岗位、手上在做哪个批次。只返回工作信息, 不返回手机号等个人信息;"
+        return "按姓名查本厂员工现在在哪个车间、哪条产线 (按今天排班)、什么岗位。只返回工作信息, 不返回手机号等个人信息;"
                 + " 同名或只说了姓 (如「老张」) 时先列出候选让用户按工号选。";
     }
 
@@ -189,7 +186,6 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     private Map<String, Object> workInfo(String factoryId, User u) {
         Map<String, Object> e = candidate(u);
         e.put("todayLines", todayLines(factoryId, u.getId()));
-        e.put("currentBatches", currentBatches(factoryId, u.getId()));
         return e;
     }
 
@@ -224,32 +220,6 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
         return out;
     }
 
-    /** 今天正在做 (已分配/进行中、未签退) 的本厂生产批次。 */
-    private List<Map<String, Object>> currentBatches(String factoryId, Long userId) {
-        LocalDateTime now = LocalDateTime.now();
-        List<BatchWorkSession> sessions = batchWorkSessionRepository
-                .findByEmployeeIdAndTimeRange(userId, now.toLocalDate().atStartOfDay(), now);
-        List<Map<String, Object>> out = new ArrayList<>();
-        for (BatchWorkSession s : sessions) {
-            if (!"assigned".equals(s.getStatus()) && !"working".equals(s.getStatus())) {
-                continue;
-            }
-            if (s.getCheckOutTime() != null) {
-                continue;
-            }
-            ProductionBatch b = s.getBatch();
-            if (b == null || !factoryId.equals(b.getFactoryId())) {
-                continue;
-            }
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("batchNumber", b.getBatchNumber());
-            m.put("productName", b.getProductName());
-            m.put("since", s.getCheckInTime());
-            out.add(m);
-        }
-        return out;
-    }
-
     @SuppressWarnings("unchecked")
     private static String describe(Map<String, Object> e) {
         StringBuilder sb = new StringBuilder();
@@ -261,16 +231,10 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
         sb.append(", 岗位 ").append(e.get("position") == null ? "未登记" : e.get("position"));
         List<Map<String, Object>> lines = (List<Map<String, Object>>) e.get("todayLines");
         if (lines.isEmpty()) {
-            sb.append("; 今天排班里没有分到产线");
+            sb.append("; 今天没有排班, 不知道在哪条线 (排班里没有分到产线)");
         } else {
             sb.append("; 今天排在 ").append(lines.stream().map(l -> String.valueOf(l.get("lineName")))
                     .distinct().collect(Collectors.joining("、")));
-        }
-        List<Map<String, Object>> batches = (List<Map<String, Object>>) e.get("currentBatches");
-        if (!batches.isEmpty()) {
-            sb.append("; 手上在做 ").append(batches.stream()
-                    .map(b -> b.get("batchNumber") + (b.get("productName") == null ? "" : "(" + b.get("productName") + ")"))
-                    .collect(Collectors.joining("、")));
         }
         sb.append("。");
         return sb.toString();
@@ -288,6 +252,8 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
      */
     @Override
     public Set<String> getRequiredPermissions() {
-        return Set.of("hr:read", "hr:read_write", "scheduling:read", "production:read");
+        // 与 App 员工名单 (UserRepository#findByFactoryIdAndIsActive) 同宽: 生产/采购/销售读; 排班读看当天产线排程。
+        // 不含 hr:read —— 那份名单不给只有 hr 读的角色 (hr_admin); 不多也不少于 App (GatedDataToolAiPathPermissionTest)。
+        return Set.of("production:read", "procurement:read", "sales:read", "scheduling:read");
     }
 }
