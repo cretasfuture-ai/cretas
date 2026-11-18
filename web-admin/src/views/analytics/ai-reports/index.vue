@@ -41,7 +41,9 @@ const dateText = formatReportTime;
 const bodyHtml = computed(() => renderReportMarkdown(body.value));
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 // 列表预览：摘要里常带 Markdown 标记（# ## - **），先转纯文本再取前 80 字。
-const summaryPreview = (row: AIReportSummary) => markdownToPlainSummary(row.failureReason || row.financialSummaryText || row.summaryText, 80) || '打开查看全文';
+// 说明列里的取数时间是纳秒 ISO，先格式化为 YYYY-MM-DD HH:mm 再截断（复用详情页的 formatReportTime）。
+const stripReportTimes = (text?: string | null) => (text ? formatReportTime(text) : '');
+const summaryPreview = (row: AIReportSummary) => markdownToPlainSummary(stripReportTimes(row.failureReason || row.financialSummaryText || row.summaryText), 80) || '打开查看全文';
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '报告加载失败，请重试。';
 async function load() {
   if (!factoryId.value) { error.value = '请先选择工厂。'; reports.value = []; return; }

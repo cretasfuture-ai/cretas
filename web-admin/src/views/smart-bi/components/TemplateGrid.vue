@@ -55,7 +55,7 @@ function onGoUpload(_code: string) {
 }
 
 const props = defineProps<{
-  /** Page key (dashboard|finance|trend|restaurantv2) */
+  /** Page key (dashboard|finance|trend) */
   pageKey: string;
   /** Factory id — usually from useFactoryStore in parent */
   factoryId: string;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, unref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -54,7 +54,7 @@ const PAGE_SIZE_ITEMS = [10, 20, 50, 100].map((n) => ({ label: `${n} 条/页`, v
 const C = { class: { th: 'text-center', td: 'text-center' } };
 const columns: TableColumn<TableRow>[] = [
   { id: 'id', header: '质检编号' },
-  { accessorKey: 'batchNumber', header: '生产批次号', meta: { class: { td: 'max-w-44 truncate' } } },
+  { accessorKey: 'batchNumber', header: '生产批次号', meta: { class: { td: 'min-w-56 whitespace-nowrap' } } },
   { accessorKey: 'productName', header: '品名', meta: { class: { td: 'max-w-32 truncate' } } },
   { accessorKey: 'notes', header: '备注', meta: { class: { td: 'max-w-36 truncate' } } },
   { accessorKey: 'sampleSize', header: '抽样数', meta: C },
@@ -119,6 +119,14 @@ const summaryRequest = computed<ListSummaryRequest>(() => ({
   },
 }));
 const { summary: footerSummary, loading: footerLoading } = useListSummary('qualityInspection', summaryRequest);
+// 口径: 后端汇总的「共/合格/不合格…」数的是质检记录条数(quality_inspections 行数), 单位原为「项」,
+// 且只受结果筛选影响; 标题的条数受关键字/批次号/日期筛选。两处都是「条」, 但范围不同, 文案上区分。
+const FOOTER_LABELS: Record<string, string> = { '共': '全部记录' };
+const footerStats = computed(() => (unref(footerSummary)?.stats ?? []).map((st) => ({
+  ...st,
+  label: FOOTER_LABELS[st.label] ?? st.label,
+  unit: st.unit === '项' ? '条' : st.unit,
+})));
 
 // 新建对话框
 const dialogVisible = ref(false);
@@ -494,7 +502,7 @@ function registerDefect(row: TableRow) {
       <header class="cs-card-head">
         <img :src="iconVision" alt="" class="head-icon" width="40" height="40">
         <h2>质检记录管理</h2>
-        <span class="count">共 {{ pagination.total }} 条记录</span>
+        <span class="count">当前列表共 {{ pagination.total }} 条记录</span>
         <span class="spacer" />
         <UButton v-if="canWrite" icon="i-lucide-plus" :disabled="contextLoading || !!contextError" @click="handleCreate">新建质检</UButton>
       </header>
@@ -537,7 +545,7 @@ function registerDefect(row: TableRow) {
       </UTable>
 
       <TableFooter v-if="!hasBatchContext"
-        :stats="footerSummary?.stats ?? []"
+        :stats="footerStats"
         :loading="footerLoading"
         :show-export="false"
         @ai-analyze="() => ElMessage.info({ message: `AI 分析 (待接 SmartBI): 分析当前质检${formatSummaryForAI(footerSummary)}`, duration: 8000, showClose: true })"
