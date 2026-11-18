@@ -6,13 +6,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { VueFlow, Handle, Position, useVueFlow, type Edge, type Node } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
-import { Controls } from '@vue-flow/controls';
+import { Controls, ControlButton } from '@vue-flow/controls';
 import type { FullTraceResponse } from '@/api/traceability';
 import {
   buildTraceGraph,
   chainOf,
   dagFitZoom,
   DAG_COL_GAP,
+  DAG_MIN_ZOOM,
   DAG_FONT,
   DAG_NODE_H,
   DAG_NODE_W,
@@ -221,11 +222,12 @@ const STATE_CLASS: Record<NodeState, string> = {
         :nodes="flowNodes"
         :edges="flowEdges"
         :default-viewport="{ x: 12, y: 12, zoom }"
-        :min-zoom="0.2"
+        :min-zoom="DAG_MIN_ZOOM"
         :max-zoom="1.5"
         :nodes-draggable="false"
         :nodes-connectable="false"
         :elements-selectable="false"
+        @init="applyViewport"
         @pane-click="selectedId = null"
       >
         <template #node-trace="{ id, data }">
@@ -257,7 +259,16 @@ const STATE_CLASS: Record<NodeState, string> = {
           </div>
         </template>
         <Background pattern-color="#e2e8f0" :gap="20" />
-        <Controls />
+        <Controls>
+          <!-- 「适应」: 整图装得下才整图适应, 装不下按可读下限缩放并回到起点 (与默认视图一致), 不再缩到字读不出 -->
+          <template #control-fit-view>
+            <ControlButton title="适应（装不下时保持可读缩放并回到起点）" data-testid="trace-dag-fit" @click="applyViewport">
+              <svg viewBox="0 0 32 30" width="14" height="14" aria-hidden="true">
+                <path fill="currentColor" d="M3 4h9v3H6v6H3zM29 4h-9v3h6v6h3zM3 26h9v-3H6v-6H3zM29 26h-9v-3h6v-6h3z" />
+              </svg>
+            </ControlButton>
+          </template>
+        </Controls>
       </VueFlow>
     </div>
 

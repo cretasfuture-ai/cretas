@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { describe, expect, it } from 'vitest';
+import { useVueFlow } from '@vue-flow/core';
 import TraceDagView from '../TraceDagView.vue';
 import { buildTraceGraph, chainOf, dagFitZoom, DAG_FONT, DAG_MIN_ZOOM, DAG_MAX_ZOOM } from '../traceGraph';
 import { baseTrace, cattleNode, SEASONING_NODE, sixCattleTrace } from './fixtures';
@@ -206,5 +207,39 @@ describe('BP-53 默认视图字号与要点', () => {
     const h = parseInt((w.get('[data-testid="trace-dag-canvas"]').element as HTMLElement).style.height, 10);
     expect(h).toBeGreaterThanOrEqual(360);
     expect(h).toBeLessThanOrEqual(720);
+  });
+});
+
+describe('BP-54 默认缩放不低于可读下限', () => {
+  it('容器比整图窄很多(整图适应缩放 <0.5): 默认真实视口缩放 ≥ 0.5 且停在起点(左侧)', async () => {
+    const proto = HTMLElement.prototype;
+    const orig = Object.getOwnPropertyDescriptor(proto, 'clientWidth');
+    Object.defineProperty(proto, 'clientWidth', { configurable: true, get: () => 700 });
+    try {
+      const trace = sixCattleTrace();
+      const g = buildTraceGraph(trace);
+      const cols = Math.max(...g.nodes.map((n) => n.column)) + 1;
+      // 整图适应缩放会远低于 0.5, 才说明这条用例真的在守下限
+      expect((700 - 24) / (cols * 240 + (cols - 1) * 40)).toBeLessThan(0.5);
+      const w = await mountDag(trace);
+      const vp = useVueFlow('trace-dag-flow').viewport.value;
+      expect(vp.zoom).toBeGreaterThanOrEqual(0.5);
+      expect(vp.zoom * DAG_FONT.line).toBeGreaterThanOrEqual(11);
+      expect(vp.x).toBe(12);
+      // 手动缩到很小, 再点「适应」: 必须回到 ≥ 下限且在起点, 而不是整图缩到不可读
+      const flow = useVueFlow('trace-dag-flow');
+      await flow.setViewport({ x: 300, y: 5, zoom: 1.1 });
+      await w.get('[data-testid="trace-dag-fit"]').trigger('click');
+      await nextTick();
+      await new Promise((r) => setTimeout(r, 30));
+      const after = flow.viewport.value;
+      expect(after.zoom).toBeGreaterThanOrEqual(DAG_MIN_ZOOM);
+      expect(after.zoom).toBeGreaterThanOrEqual(0.5);
+      expect(after.x).toBe(12);
+      w.unmount();
+    } finally {
+      if (orig) Object.defineProperty(proto, 'clientWidth', orig);
+      else delete (proto as unknown as Record<string, unknown>).clientWidth;
+    }
   });
 });
