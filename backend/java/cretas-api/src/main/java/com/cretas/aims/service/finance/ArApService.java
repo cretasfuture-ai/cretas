@@ -285,6 +285,12 @@ public interface ArApService {
     /** 账龄分析（6桶） */
     List<Map<String, Object>> getAgingAnalysis(String factoryId, CounterpartyType counterpartyType);
 
+    /**
+     * 已逾期（到期日早于今天、未结清 &gt; 0）的应收单据明细，与 {@link #getAgingAnalysis} CUSTOMER 分支同源同范围同口径：
+     * 各行 outstanding 之和 == 账龄各逾期桶之和。每行 transactionNumber / counterpartyName / outstanding / dueDate / daysOverdue。
+     */
+    List<Map<String, Object>> getOverdueReceivableDocuments(String factoryId);
+
     /** 财务概览统计 */
     Map<String, Object> getFinanceOverview(String factoryId);
 

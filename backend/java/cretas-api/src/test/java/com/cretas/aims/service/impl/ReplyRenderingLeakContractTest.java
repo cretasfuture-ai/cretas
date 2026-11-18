@@ -113,12 +113,15 @@ class ReplyRenderingLeakContractTest {
                 agingRow("鲜湘缘", "12000", "5000", "0"), agingRow("味美", "8000", "0", "0")));
         when(arAp.getAgingAnalysis("F1", CounterpartyType.SUPPLIER)).thenReturn(List.of(
                 agingRow("供应商甲", "3000", "0", "1000")));
+        when(arAp.getOverdueReceivableDocuments("F1")).thenReturn(List.of(java.util.Map.of(
+                "transactionNumber", "AR-9", "counterpartyName", "鲜湘缘",
+                "outstanding", new BigDecimal("5000"), "daysOverdue", 12L)));
 
         String text = format("ACCOUNTS_RECEIVABLE_AGING", "ANALYSIS", runArToolPayload());
 
         assertNoInternalNames(text);
         assertThat(text).contains("欠款最多的是 鲜湘缘", "合计 ¥20000.00");
-        assertThat(text).contains("逾期应收").contains("1 家客户").contains("¥5000.00");
+        assertThat(text).contains("逾期应收").contains("1 家客户").contains("¥5000.00").contains("建议先催").contains("AR-9");
         assertThat(text).contains("应付未结清 1 家供应商").contains("¥3000.00").contains("其中已逾期 1 家");
     }
 
@@ -129,6 +132,9 @@ class ReplyRenderingLeakContractTest {
         when(customers.findByFactoryId("F1")).thenReturn(List.of(customer("鲜湘缘", "12000")));
         when(arAp.getAgingAnalysis("F1", CounterpartyType.CUSTOMER)).thenReturn(List.of(agingRow("鲜湘缘", "12000", "5000", "0")));
         when(arAp.getAgingAnalysis("F1", CounterpartyType.SUPPLIER)).thenReturn(List.of(agingRow("供应商甲", "3000", "0", "1000")));
+        when(arAp.getOverdueReceivableDocuments("F1")).thenReturn(List.of(java.util.Map.of(
+                "transactionNumber", "AR-9", "counterpartyName", "鲜湘缘",
+                "outstanding", new BigDecimal("5000"), "daysOverdue", 12L)));
 
         String text = format("ACCOUNTS_RECEIVABLE_AGING", "ANALYSIS", runArToolPayload());
 

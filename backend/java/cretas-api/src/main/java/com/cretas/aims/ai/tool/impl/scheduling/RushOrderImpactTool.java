@@ -124,11 +124,26 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         SaidQuantity saidQty = saidQuantity(params, said);
         BigDecimal qty = null;
         String qtyGap = null;
+        List<String> notes = new ArrayList<>();
+        if (product.note() != null) notes.add(product.note());
         if (saidQty == null) {
             qtyGap = "数量 (要做多少)";
         } else if (product.found() != null) {
             qty = RushOrderRequestParser.toProductUnit(saidQty, product.found().getUnit()).orElse(null);
-            if (qty == null) {
+            if (qty == null && RushOrderRequestParser.isWeightUnit(saidQty.unit())
+                    && !RushOrderRequestParser.isKgFamily(product.found().getUnit())
+                    && product.found().getUnit() != null && !product.found().getUnit().isBlank()) {
+                // 吨 / 斤 / 千克 → 产品单位 (盒 / 包 ...): 靠产品每单位的重量, 没有就如实说换不了
+                Optional<RushOrderRequestParser.Conversion> conv = RushOrderRequestParser.weightToUnits(saidQty,
+                        kgPerUnit(product.found()), product.found().getUnit());
+                if (conv.isPresent()) {
+                    qty = conv.get().quantity();
+                    notes.add("数量换算：" + conv.get().formula() + "。");
+                } else {
+                    qtyGap = "数量（产品「" + product.found().getName() + "」没有登记规格重量，无法把" + said(saidQty)
+                            + "换算成该产品的单位，请告诉我数量（" + product.found().getUnit() + "））";
+                }
+            } else if (qty == null) {
                 qtyGap = product.found().getUnit() == null || product.found().getUnit().isBlank()
                         ? "产品「" + product.found().getName() + "」没有登记计量单位, 无法把 " + said(saidQty) + " 对上产品单位"
                         : "单位换算: 你说的是「" + said(saidQty) + "」, 产品「" + product.found().getName() + "」按「"
@@ -148,6 +163,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         data.put("saidQuantity", saidQty == null ? null : said(saidQty));
         data.put("quantityInProductUnit", qty);
         data.put("deadline", deadline == null ? null : deadline.toString());
+        data.put("notes", notes);
 
         // ① 物料
         Assessment material = null;
@@ -197,12 +213,67 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         data.put("writesPerformed", false);
         data.put("basis", "原料按当前生效配方展开对照可领库存 (在途不计入可用); 产线 / 人手 / 挪单取交期前插单时段的只读影响分析;"
                 + " 订单单位按产品自带单位; 人手不够按工厂纪律口径只提示不硬拦。本次没有建计划、占时段或建预览。");
-        return buildSimpleResult(message(sections), data);
+        return buildSimpleResult(message(sections, notes), data);
     }
 
     // ------------------------------------------------------------------ 产品
 
-    record ProductLookup(ProductType found, String gap) {
+    record ProductLookup(ProductType found, String gap, String note) {
+        ProductLookup(ProductType found, String gap) {
+            this(found, gap, null);
+        }
+    }
+
+    /** 单件重量 (千克): 净含量 > 标准克重 > 名称 / 规格文字里的「250g」; 都没有返回 null (不猜)。 */
+    static BigDecimal kgPerUnit(ProductType p) {
+        BigDecimal nc = p.getNetContentQuantity();
+        if (nc != null && nc.signum() > 0 && p.getNetContentUnit() != null) {
+            String u = p.getNetContentUnit().trim().toLowerCase(Locale.ROOT);
+            if (u.equals("g") || u.equals("克")) return nc.divide(new BigDecimal("1000")).stripTrailingZeros();
+            if (u.equals("kg") || u.equals("千克") || u.equals("公斤")) return nc.stripTrailingZeros();
+        }
+        if (p.getGramsPerUnit() != null && p.getGramsPerUnit().signum() > 0) {
+            return p.getGramsPerUnit().divide(new BigDecimal("1000")).stripTrailingZeros();
+        }
+        return RushOrderRequestParser.kgFromSpecText(p.getSpecification())
+                .or(() -> RushOrderRequestParser.kgFromSpecText(p.getName())).orElse(null);
+    }
+
+    private static final java.util.regex.Pattern NAME_SPEC_SUFFIX = java.util.regex.Pattern.compile(
+            "\\s*\\d+(?:\\.\\d+)?\\s*(?:kg|千克|公斤|g|克|ml)(?:[*×x]\\d+\\S*)?(?:/\\S+)?\\s*$",
+            java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /** 去掉「演示·」「QA-」这类前缀和「250g」这类规格后缀后的核心名。 */
+    public static String coreName(String name) {
+        if (name == null) return "";
+        String n = name.strip();
+        int dot = Math.max(n.lastIndexOf('·'), n.lastIndexOf('・'));
+        if (dot >= 0 && dot < n.length() - 1) n = n.substring(dot + 1);
+        n = n.replaceFirst("^(?i)QA[-_]", "");
+        n = NAME_SPEC_SUFFIX.matcher(n).replaceFirst("");
+        return n.strip();
+    }
+
+    /** a 是 b 的子序列 (按顺序出现, 可以中间隔字): 「酱牛肉」是「酱卤牛肉」的子序列。 */
+    static boolean isSubsequence(String a, String b) {
+        int i = 0;
+        for (int j = 0; j < b.length() && i < a.length(); j++) {
+            if (a.charAt(i) == b.charAt(j)) i++;
+        }
+        return i == a.length();
+    }
+
+    /** 说的名称对上核心名: 包含, 或漏了 1 个字 (名称 ≥ 3 字才容错, 防「卤鸭」之类短名误撞)。 */
+    public static boolean fuzzyNameMatches(String said, String core) {
+        if (said.isEmpty() || core.isEmpty()) return false;
+        if (core.contains(said) || said.contains(core)) return core.length() >= 2;
+        return said.length() >= 3 && core.length() - said.length() == 1 && isSubsequence(said, core);
+    }
+
+    private static ProductLookup resolved(ProductType p, String saidName) {
+        String note = saidName != null && !saidName.equals(p.getName())
+                ? "产品：按「" + p.getName() + "」计算（你说的是「" + saidName + "」）。" : null;
+        return new ProductLookup(p, null, note);
     }
 
     private ProductLookup lookupProduct(String factoryId, String productName, String said) {
@@ -215,8 +286,14 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
             List<ProductType> contains = products.stream()
                     .filter(p -> p.getName() != null && (p.getName().contains(name) || name.contains(p.getName())))
                     .toList();
-            if (contains.size() == 1) return new ProductLookup(contains.get(0), null);
+            if (contains.size() == 1) return resolved(contains.get(0), name);
             if (contains.size() > 1) return ambiguous(name, contains);
+            // 容错: 去前缀 / 规格后缀后比, 唯一命中就用并说明, 多个就列出让用户选
+            String core = coreName(name);
+            List<ProductType> fuzzy = products.stream()
+                    .filter(p -> p.getName() != null && fuzzyNameMatches(core, coreName(p.getName()))).toList();
+            if (fuzzy.size() == 1) return resolved(fuzzy.get(0), name);
+            if (fuzzy.size() > 1) return ambiguous(name, fuzzy);
         }
         if (said != null && !said.isBlank()) {
             // 原话里出现的产品名, 取最长的那个 (「五香酱牛肉」优先于「酱牛肉」)
@@ -227,10 +304,28 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
             List<ProductType> top = mentioned.stream().filter(p -> p.getName().length() == longest).toList();
             if (top.size() == 1) return new ProductLookup(top.get(0), null);
             if (top.size() > 1) return ambiguous(top.get(0).getName(), top);
+            // 原话里没有完整产品名: 取原话里漏字 / 少前缀的写法 (「酱牛肉」对「演示·酱卤牛肉250g」)
+            List<ProductType> fuzzy = products.stream()
+                    .filter(p -> p.getName() != null && mentionText(said, coreName(p.getName())) != null).toList();
+            if (fuzzy.size() == 1) return resolved(fuzzy.get(0), mentionText(said, coreName(fuzzy.get(0).getName())));
+            if (fuzzy.size() > 1) return ambiguous(mentionText(said, coreName(fuzzy.get(0).getName())), fuzzy);
         }
         String what = name != null && !name.isEmpty() ? "本厂产品里叫「" + name + "」的产品 (没找到在用的同名产品)"
                 : "产品 (没说要做哪个产品, 或说的名称不在本厂在用产品里)";
         return new ProductLookup(null, what);
+    }
+
+    /** 原话里能对上 core 的片段 (core 本身, 或漏 1 字的 ≥ 3 字写法); 没有返回 null。 */
+    private static String mentionText(String said, String core) {
+        if (core.length() < 3) return null;
+        if (said.contains(core)) return core;
+        int len = core.length() - 1;
+        if (len < 3) return null;
+        for (int i = 0; i + len <= said.length(); i++) {
+            String sub = said.substring(i, i + len);
+            if (isSubsequence(sub, core)) return sub;
+        }
+        return null;
     }
 
     private static ProductLookup ambiguous(String name, Collection<ProductType> hits) {
@@ -257,7 +352,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
 
     private static Map<String, Object> materialSection(Assessment a, ProductType product, BigDecimal qty) {
         String basis = a.bomRecipeId() == null ? null
-                : "配方 " + a.bomRecipeId() + " 第 " + a.bomVersion() + " 版, " + product.getName() + " "
+                : "「" + product.getName() + "」当前配方第 " + a.bomVersion() + " 版, 展开 "
                 + plain(qty) + unit(product.getUnit()) + "; 可领库存 = 车间 / 物流 / 原料仓可领量, 在途不计入";
         return switch (a.status()) {
             case OK -> section("MATERIAL", "ENOUGH",
@@ -430,7 +525,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
             sb.append("产线算不出来，缺产能 / 设备配置。");
         }
         sb.append("交期前有 ").append(candidateCount).append(" 个可插单时段, 细算了 ").append(evaluated.size())
-                .append(" 个, 最合适的是「").append(nz(slot.getProductionLineName(), slot.getProductionLineId())).append("」")
+                .append(" 个, 最合适的是「").append(nz(slot.getProductionLineName(), "该产线")).append("」")
                 .append(fmt(slot.getStartTime())).append(" – ").append(fmt(slot.getEndTime())).append("。");
         sb.append("\n  产能：").append(nz(r.get("capacityMessage"), capOk ? "够" : "未核对"));
         sb.append("\n  设备：").append(nz(r.get("equipmentMessage"), eqOk ? "就绪" : "未核对"));
@@ -481,7 +576,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         for (Object o : plans) {
             Map<String, Object> p = o instanceof Map<?, ?> m ? (Map<String, Object>) m : beanToMap(o);
             Integer delay = p.get("delayMinutes") instanceof Number n ? n.intValue() : null;
-            sb.append("\n  ").append(++i).append(". ").append(nz(p.get("planNumber"), "计划 " + p.get("planId")));
+            sb.append("\n  ").append(++i).append(". ").append(nz(p.get("planNumber"), "某张原计划"));
             if (p.get("productName") != null) sb.append("（").append(p.get("productName")).append("）");
             if (p.get("customerName") != null) sb.append("，客户 ").append(p.get("customerName"));
             sb.append("：晚 ").append(delay == null ? "未知" : minutes(delay));
@@ -528,7 +623,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
                         : saidQty != null ? said(saidQty) : "数量未定")
                 .append("，交期 ").append(deadline == null ? "未定" : deadline.format(DAY)).append("。");
         if (best != null) {
-            sb.append("\n  安排：插到「").append(nz(best.slot().getProductionLineName(), best.slot().getProductionLineId()))
+            sb.append("\n  安排：插到「").append(nz(best.slot().getProductionLineName(), "该产线"))
                     .append("」").append(fmt(best.slot().getStartTime())).append(" – ").append(fmt(best.slot().getEndTime()))
                     .append("。");
         }
@@ -556,7 +651,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
             for (int i = 0; i < todo.size(); i++) sb.append("\n    ").append(i + 1).append(") ").append(todo.get(i));
         }
         sb.append("\n  下一步：负责人确认后，由有排产写权限的人在「紧急插单」按此时段生成预览再确认，系统会按最新数据重新核对一遍。");
-        Map<String, Object> s = section("DRAFT", "DRAFT", sb.toString(), "只生成文字, 不落任何业务写");
+        Map<String, Object> s = section("DRAFT", "DRAFT", sb.toString(), "这是分析建议，没有改动排产");
         s.put("blockingItems", todo);
         return s;
     }
@@ -577,8 +672,21 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         return s;
     }
 
-    private static String message(List<Map<String, Object>> sections) {
+    private static final java.util.regex.Pattern UUID_LIKE = java.util.regex.Pattern.compile(
+            "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+
+    /** 回复里不出内部编号: 上游文案 (产能 / 设备 / 人手说明) 万一带进 UUID, 兜底抹掉。 */
+    public static String scrubIds(String text) {
+        return text == null ? null : UUID_LIKE.matcher(text).replaceAll("（内部编号略）");
+    }
+
+    private static String message(List<Map<String, Object>> sections, List<String> notes) {
+        return scrubIds(buildMessage(sections, notes));
+    }
+
+    private static String buildMessage(List<Map<String, Object>> sections, List<String> notes) {
         StringBuilder sb = new StringBuilder("急单影响分析：");
+        for (String n : notes) sb.append("\n").append(n);
         for (Map<String, Object> s : sections) {
             sb.append("\n\n").append(s.get("title")).append("\n").append(s.get("text"));
             if (s.get("basis") != null) sb.append("\n  依据：").append(s.get("basis"));

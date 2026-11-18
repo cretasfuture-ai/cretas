@@ -1582,6 +1582,31 @@ public class ArApServiceImpl implements ArApService {
         return new ArrayList<>(agingMap.values());
     }
 
+    @Override
+    public List<Map<String, Object>> getOverdueReceivableDocuments(String factoryId) {
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null && owners.isEmpty()) return List.of();
+        LocalDate today = LocalDate.now();
+        List<ArApTransaction> invoices = owners == null
+                ? transactionRepository.findOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31))
+                : transactionRepository.findScopedOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31), owners);
+        List<Map<String, Object>> docs = new ArrayList<>();
+        for (ArApTransaction invoice : invoices) {
+            BigDecimal amt = effectiveOutstanding(invoice);
+            if (amt.signum() <= 0) continue;
+            // 与 getBucket 同判据: 到期日早于今天才算逾期
+            if (invoice.getDueDate() == null || !invoice.getDueDate().isBefore(today)) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("transactionNumber", invoice.getTransactionNumber());
+            row.put("counterpartyName", invoice.getCounterpartyName());
+            row.put("outstanding", amt);
+            row.put("dueDate", invoice.getDueDate());
+            row.put("daysOverdue", ChronoUnit.DAYS.between(invoice.getDueDate(), today));
+            docs.add(row);
+        }
+        return docs;
+    }
+
     private BigDecimal effectiveOutstanding(ArApTransaction invoice) {
         // 已知发票按剩余未清金额统计。历史 NEEDS_RECONCILIATION 的 NULL 仍保守取原值，
         // 与现有 open-item 回填政策一致，不能把未知欠款当成已结清。

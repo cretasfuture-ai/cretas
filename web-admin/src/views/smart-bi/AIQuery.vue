@@ -84,7 +84,8 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
-import { inferAiChartMeta } from './aiChartMeta';
+import { chartSignalsFromOption, inferAiChartMeta } from './components/chat/aiChartMeta';
+import { historyForSource } from './components/chat/aiChatContext';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
 import { chooseAiQueryRoute } from './components/chat/aiQueryRoute';
@@ -133,6 +134,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  /** 发出这条消息时选中的上传数据源 (null=未选); 历史上下文与洞察页脚按它隔离, 切源不串 (A7/A8) */
+  sourceUploadId?: number | null;
   chart?: {
     type: 'line' | 'bar' | 'pie';
     data: Record<string, unknown>;
@@ -273,7 +276,7 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title, msg.content, seriesData[0]?.name);
+  const meta = inferAiChartMeta({ chartType: ct, title, content: msg.content, ...chartSignalsFromOption(opt) });
 
   return {
     chartType: ct,
@@ -301,7 +304,7 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title, '', seriesData[0]?.name);
+  const meta = inferAiChartMeta({ chartType: ct, title, ...chartSignalsFromOption(opt) });
 
   return {
     chartType: ct,
@@ -1705,7 +1708,8 @@ async function handleSendMessage() {
     id: `user-${Date.now()}`,
     role: 'user',
     content: query,
-    timestamp: new Date()
+    timestamp: new Date(),
+    sourceUploadId: selectedUploadId.value ?? null,
   };
   chatHistory.value.push(userMessage);
 
@@ -1719,7 +1723,8 @@ async function handleSendMessage() {
     role: 'assistant',
     content: '',
     timestamp: new Date(),
-    loading: true
+    loading: true,
+    sourceUploadId: selectedUploadId.value ?? null,
   };
   chatHistory.value.push(loadingMessage);
 
@@ -1744,13 +1749,11 @@ async function handleSendMessage() {
   // backend LLM can resolve pronominal/temporal references ("这个月"/"它"/
   // "那家") from previous turns. Exclude the welcome message, loading
   // placeholder, and the current user message just pushed above.
-  const historyForContext = chatHistory.value
-    .filter((m) => m.id !== 'welcome' && m.id !== assistantId && !m.loading && m.content.trim())
-    .slice(-41, -1) // last 40 messages (20 Q+A pairs) before current user msg
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+  const historyForContext = historyForSource(
+    chatHistory.value,
+    selectedUploadId.value,
+    ['welcome', assistantId, userMessage.id],
+  );
 
   const requestParams = {
     query,
@@ -1875,7 +1878,10 @@ async function handleSendMessage() {
         }
 
         // Direct mutation instead of object spread
-        msg.content = customerSafeAnswer(finalContent);
+        // A9: 后端把建议里数据没有的金额改写了 (答案已流出, 以 done 里的终稿为准)
+        msg.content = customerSafeAnswer(
+          result.answer_replaced && result.answer ? result.answer : finalContent,
+        );
         msg.chart = chartData;
         msg.chartConfig = msg.chartConfig || result.charts?.[0];
         msg.insights = result.insights;
@@ -1952,7 +1958,8 @@ async function handleSendMessage() {
               chartConfig: response.charts?.[0],
               insights: response.insights,
               table: response.table as ChatMessage['table'],
-              loading: false
+              loading: false,
+              sourceUploadId: requestParams.uploadId ? Number(requestParams.uploadId) : null,
             };
             await nextTick();
             if (response.charts && response.charts.length > 0) {
@@ -2702,6 +2709,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- Chart Insight for single-chart message (bar/line/pie wired; exotic→null→renders nothing) -->
                 <ChartInsightProvider
                   v-if="shouldRenderAutoChartInsight(message)"
+                  :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}`"
                   :chart="messageChartWithMeta(message)"
                   :perms="{ canViewFinance: false }"
                   :factory-id="factoryId ?? ''"
@@ -2726,7 +2734,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <template v-if="message.charts && message.charts.length">
                   <ChartInsightProvider
                     v-for="(c, ci) in message.charts"
-                    :key="`insight-${message.id}__${ci}`"
+                    :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}__${ci}`"
                     :chart="multiChartWithMeta(c)"
                     :perms="{ canViewFinance: false }"
                     :factory-id="factoryId ?? ''"
