@@ -74,7 +74,9 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
                 "properties", Map.of(
                         "productName", Map.of("type", "string", "description", "产品名称(可选，模糊匹配，不填则查全部有销售或有目录价的产品)"),
                         "startDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的起始日期 yyyy-MM-dd(可选，默认最近30天)"),
-                        "endDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)")
+                        "endDate", Map.of("type", "string", "format", "date", "description", "实际销售毛利的结束日期 yyyy-MM-dd(可选，默认今天)"),
+                        "sortOrder", Map.of("type", "string", "enum", List.of("highest", "lowest"),
+                                "description", "排序方向(可选，默认 highest 毛利从高到低)。用户问'毛利最低/最差/末位/倒数/亏钱的产品'时填 lowest(从低到高)")
                 ),
                 "required", List.of()
         ));
@@ -187,9 +189,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         for (Candidate c : candidates.values()) {
             items.add(buildItem(factoryId, c, start, end, defaultPeriod));
         }
+        boolean lowestFirst = "lowest".equalsIgnoreCase(getString(params, "sortOrder"));
+        // 没有毛利率的 (没数据) 始终排最后, 不因升序跑到「最低」前面
+        Comparator<BigDecimal> rateOrder = lowestFirst ? Comparator.<BigDecimal>naturalOrder() : Comparator.<BigDecimal>reverseOrder();
         items.sort(Comparator
-                .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
-                .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(Comparator.<BigDecimal>reverseOrder()))
+                .comparing((Map<String, Object> i) -> rateOf(i, "realized"), Comparator.nullsLast(rateOrder))
+                .thenComparing(i -> rateOf(i, "catalog"), Comparator.nullsLast(rateOrder))
                 .thenComparing(i -> String.valueOf(i.get("productName"))));
         // 工艺保密: 当前调用者无权看的产品不按毛利排 (排名本身泄露毛利高低) —— 挪到最后, 按名称排
         com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret = llmCostScope.forCurrentCaller(factoryId);
@@ -208,12 +213,13 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         List<Map<String, Object>> shown = total > MAX_ITEMS ? new ArrayList<>(items.subList(0, MAX_ITEMS)) : items;
 
         Map<String, Object> data = resultData(shown, total, start, end, defaultPeriod);
-        Map<String, Object> chart = marginChart(shown, secret);
+        Map<String, Object> chart = marginChart(shown, secret, lowestFirst);
         if (chart != null) {
             data.put("charts", List.of(chart));
         }
+        data.put("sortOrder", lowestFirst ? "lowest" : "highest");
         return buildSimpleResult(buildMessage(shown, total, start, end, defaultPeriod, secret,
-                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS), replyShowsAmount(context, "costCoverage")),
+                        replyShowsAmounts(context, MARGIN_AMOUNT_KEYS), replyShowsAmount(context, "costCoverage"), lowestFirst),
                 data);
     }
 
@@ -223,6 +229,12 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
      */
     static Map<String, Object> marginChart(List<Map<String, Object>> items,
                                            com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
+        return marginChart(items, secret, false);
+    }
+
+    static Map<String, Object> marginChart(List<Map<String, Object>> items,
+                                           com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
+                                           boolean lowestFirst) {
         List<String> names = new ArrayList<>();
         List<BigDecimal> rates = new ArrayList<>();
         for (Map<String, Object> item : items) {
@@ -243,7 +255,7 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
         option.put("series", List.of(Map.of("type", "bar", "name", "实际销售毛利率(%)", "data", rates)));
         Map<String, Object> chart = new LinkedHashMap<>();
         chart.put("type", "bar");
-        chart.put("title", "SKU 实际销售毛利率排行（%，前 10）");
+        chart.put("title", lowestFirst ? "SKU 实际销售毛利率最低（%，从低到高前 10）" : "SKU 实际销售毛利率排行（%，前 10）");
         chart.put("option", option);
         return chart;
     }
@@ -432,12 +444,14 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     private String buildMessage(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret,
-                                boolean showAmounts, boolean showCoverage) {
+                                boolean showAmounts, boolean showCoverage, boolean lowest) {
+        this.lowestFirst.set(lowest);
         this.showAmounts.set(showAmounts);
         this.showCoverage.set(showCoverage);
         try {
             return buildMessageText(shown, total, start, end, defaultPeriod, secret);
         } finally {
+            this.lowestFirst.remove();
             this.showAmounts.remove();
             this.showCoverage.remove();
         }
@@ -445,6 +459,9 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
 
     /** 成本覆盖率进不进文字: 与字段 realized.costCoverage 经遮挡层后同进同出 (#1788 审查 M2)。 */
     private final ThreadLocal<Boolean> showCoverage = new ThreadLocal<>();
+
+    /** 本次回答的排序方向 (文字里写明是从低到高还是从高到低)。 */
+    private final ThreadLocal<Boolean> lowestFirst = ThreadLocal.withInitial(() -> false);
 
     /** 文字里的收入 / 成本 / 目录价 / 单位成本与 revenue / cost / price / unitCost 字段同进同出 (ERP-S6-MSG-TEXT-PRICE-LEAK-001) */
     private final ThreadLocal<Boolean> showAmounts = new ThreadLocal<>();
@@ -456,7 +473,8 @@ public class SkuGrossMarginTool extends AbstractBusinessTool {
     private String buildMessageText(List<Map<String, Object>> shown, int total, LocalDate start, LocalDate end,
                                 boolean defaultPeriod, com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.Excluded secret) {
         StringBuilder sb = new StringBuilder();
-        sb.append("SKU 毛利率共 ").append(total).append(" 个产品，两种口径分开给，不要混着看。")
+        sb.append("SKU 毛利率共 ").append(total).append(" 个产品（").append(lowestFirst.get() ? "按毛利率从低到高" : "按毛利率从高到低")
+          .append("），每个产品给实际销售毛利和目录价理论毛利两个数。")
           .append("「实际销售毛利」统计期间 ").append(start).append(" 至 ").append(end)
           .append(defaultPeriod ? "（默认最近 " + DEFAULT_PERIOD_DAYS + " 天）" : "").append("。\n");
         int n = 0;

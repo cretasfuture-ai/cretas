@@ -43,6 +43,12 @@ public interface ShortageAnalysisService {
     ShortageReport analyzeForSalesOrder(String factoryId, String salesOrderId);
 
     /**
+     * 全厂缺料总览用: 在途销售订单 (最近 100 单里剔除草稿/已完成/已取消/短交关闭/财务驳回), 按交期从近到远排序。
+     * 归缺料分析这一数据域 (与单订单缺料分析同权限口径); 订单里的客户名称是否展示由调用方按权限决定。
+     */
+    List<com.cretas.aims.entity.inventory.SalesOrder> listOpenOrdersForOverview(String factoryId);
+
+    /**
      * 基于报告中的原辅料短缺，给出每种短缺物料的采购建议 (供应商 / 单价 / leadDays / 三价对比)。
      *
      * <p>不创建采购单 — 仅返回建议。采购员在 RN 上点击"一键确认"才触发

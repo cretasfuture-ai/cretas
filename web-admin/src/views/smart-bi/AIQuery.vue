@@ -38,6 +38,7 @@ import { ref, computed, onMounted, onUnmounted, onBeforeUnmount, nextTick, watch
 import { useChartResize } from '@/composables/useChartResize';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { pickDefaultQuickQuestions } from './quickQuestions';
 import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads, nl2sql, logFeedback, type AnalysisResult, type AIInsightData, type ChartConfig, type UploadHistoryItem, type NL2SQLResponse } from '@/api/smartbi';
 import { executeIntent, fetchCachedXlsx, submitIntentFeedback, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -731,7 +732,9 @@ const quickQuestions = computed<string[]>(() => {
   const fname = item?.fileName || item?.originalFileName || '';
   const sname = (item as any)?.sheetName || '';
   const domain = inferDomainFromFilename(fname + ' ' + sname);
-  return quickQuestionsFor(authStore.businessDomain, domain);
+  // 按租户 + 数据集领域取题 (#1835); 工厂租户且没推断出专属领域时, 换成识别链已验证能正确路由的原话 (#1865)
+  const domainQuestions = quickQuestionsFor(authStore.businessDomain, domain);
+  return pickDefaultQuickQuestions(domainQuestions, domain === 'default', authStore.factoryType);
 });
 const queryPlaceholder = computed(() => {
   if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';

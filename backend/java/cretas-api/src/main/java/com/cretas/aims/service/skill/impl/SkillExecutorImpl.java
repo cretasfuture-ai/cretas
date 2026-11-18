@@ -716,12 +716,12 @@ public class SkillExecutorImpl implements SkillExecutor {
 
     private SkillResult missingParametersResult(String skillName, List<String> missingParams,
                                                 List<String> executedTools, long startTime) {
-        String message = "为了完成操作，还需要以下信息：" + String.join("、", missingParams)
-                + "。请补充后再试。";
-        Map<String, Object> data = new LinkedHashMap<>();
         List<String> questions = missingParams.stream()
                 .map(this::clarificationQuestion)
                 .toList();
+        // 一线用户看不懂内部字段名 (indicator_code 等): 文案只用问句, 字段名只留在 missingParameters 里给程序读
+        String message = "为了完成操作，还需要以下信息：" + String.join("", questions) + "请补充后再试。";
+        Map<String, Object> data = new LinkedHashMap<>();
         data.put("success", false);
         data.put("status", "NEED_MORE_INFO");
         data.put("needMoreInfo", true);
@@ -788,7 +788,27 @@ public class SkillExecutorImpl implements SkillExecutor {
             case "batchId", "batchNumber" -> "请提供批次号。";
             case "productId", "productTypeId" -> "请提供产品。";
             case "materialTypeId" -> "请提供原材料。";
-            default -> "请提供" + parameter + "。";
+            case "indicator_code", "indicator_codes" -> "请告诉我要查哪个指标（例如销售额、毛利）。";
+            case "customerId", "customerName", "supplierId", "supplierName",
+                 "salesOrderId", "orderId", "orderNumber", "startDate", "endDate", "date",
+                 "productName", "materialName" -> "请提供" + parameterLabel(parameter) + "。";
+            default -> parameter != null && parameter.matches("[A-Za-z0-9_]+")
+                    ? "请补充查询所需的关键信息（例如时间范围、对象名称）。"
+                    : "请提供" + parameter + "。";
+        };
+    }
+
+    /** 参数的中文称呼; 认不出的不拿字段名顶替, 统称「必要信息」。 */
+    static String parameterLabel(String parameter) {
+        return switch (parameter == null ? "" : parameter) {
+            case "batchId", "batchNumber" -> "批次号";
+            case "productId", "productTypeId", "productName" -> "产品";
+            case "materialTypeId", "materialName" -> "原材料";
+            case "customerId", "customerName" -> "客户";
+            case "supplierId", "supplierName" -> "供应商";
+            case "salesOrderId", "orderId", "orderNumber" -> "订单号";
+            case "startDate", "endDate", "date" -> "日期";
+            default -> "必要信息";
         };
     }
 
