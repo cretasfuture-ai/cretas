@@ -14,7 +14,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 
+import com.cretas.aims.entity.ProductionLine;
+import com.cretas.aims.entity.ProductionLineCapacityConfig;
+import com.cretas.aims.repository.ProductionLineCapacityConfigRepository;
+import com.cretas.aims.repository.ProductionLineRepository;
+
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -61,6 +67,15 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
     @Autowired
     private ProductionBatchRepository productionBatchRepository;
 
+    @Autowired
+    private ProductionLineRepository productionLineRepository;
+
+    @Autowired
+    private ProductionLineCapacityConfigRepository capacityConfigRepository;
+
+    /** 每班按 8 小时折算班次 (工厂没有班时配置, 口径写进回复)。 */
+    static final BigDecimal SHIFT_HOURS = new BigDecimal("8");
+
     @Override
     public String getToolName() {
         return "production_demand_query";
@@ -69,8 +84,8 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
     @Override
     public String getDescription() {
         return "查询当前工厂所有缺产订单 — 列出 (SO 总量 - 已发货 - 在产) > 0 的产品 + 推荐起产量 + "
-                + "推荐生产线. 用户问 '今天要起产什么?' / '订单缺产' / '排产建议' / '什么订单缺货要做' "
-                + "时调用. read-only.";
+                + "产线 + 所需人数与班次 (按产线标准人数、小时产能折算). 用户问 '今天要起产什么?' / '订单缺产' / "
+                + "'排产建议' / '什么订单缺货要做' / '这几个产品各需要多少人、排几个班' 时调用. read-only.";
     }
 
     @Override
@@ -81,6 +96,11 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
                         "maxRows", Map.of(
                                 "type", "integer",
                                 "description", "返回最多多少行 (默认 20)"
+                        ),
+                        "productNames", Map.of(
+                                "type", "array",
+                                "items", Map.of("type", "string"),
+                                "description", "只看这些产品 (取自上一轮回答里列出的产品名, 如「这三个产品」); 不传则看全部缺产产品"
                         )
                 ),
                 "required", List.of()
@@ -147,28 +167,100 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         deductInProgressProduction(factoryId, demandByProduct);
 
         // 4. 过滤 net > 0, 排序 + 限制行数
-        List<ProductDemand> nonEmpty = demandByProduct.values().stream()
+        List<ProductDemand> shortage = demandByProduct.values().stream()
                 .filter(pd -> pd.getNetShortage().compareTo(BigDecimal.ZERO) > 0)
                 .sorted(Comparator.comparing(ProductDemand::getNetShortage).reversed())
-                .limit(maxRows)
                 .collect(Collectors.toList());
 
-        if (nonEmpty.isEmpty()) {
+        if (shortage.isEmpty()) {
             return buildSimpleResult("所有缺货订单已有在产批次覆盖, 无需新排产",
                     buildEmptyEnvelope());
         }
 
-        // 5. 构建结果
-        List<Map<String, Object>> rows = nonEmpty.stream()
-                .map(this::toRow)
-                .collect(Collectors.toList());
+        // 4b. 指定产品 (承接上一轮的「这几个产品」): 匹配不上就列出候选让用户选, 不猜
+        List<String> wanted = requestedProductNames(params);
+        List<ProductDemand> nonEmpty;
+        if (wanted.isEmpty()) {
+            nonEmpty = shortage.stream().limit(maxRows).collect(Collectors.toList());
+        } else {
+            nonEmpty = shortage.stream()
+                    .filter(pd -> matchesAny(pd.getProductName(), wanted))
+                    .limit(maxRows)
+                    .collect(Collectors.toList());
+            if (nonEmpty.isEmpty()) {
+                String names = shortage.stream().limit(10)
+                        .map(pd -> pd.getProductName() != null ? pd.getProductName() : "(未命名)")
+                        .collect(Collectors.joining("、"));
+                Map<String, Object> data = buildEmptyEnvelope();
+                data.put("needProductChoice", true);
+                return buildSimpleResult("没有找到您指的产品。最近待排产的产品有：" + names
+                        + "。请告诉我是哪几个。", data);
+            }
+        }
+
+        // 5. 构建结果 (人数/班次按产线配置折算)
+        List<Map<String, Object>> rows = new ArrayList<>();
+        StringBuilder text = new StringBuilder();
+        text.append(String.format("找到 %d 个待排产产品 (已扣已发货 + 在产)：\n", nonEmpty.size()));
+        int idx = 1;
+        for (ProductDemand pd : nonEmpty) {
+            Map<String, Object> row = toRow(factoryId, pd);
+            rows.add(row);
+            text.append(idx++).append(". ").append(describeRow(row)).append('\n');
+        }
+        text.append("口径：所需班次 = 待产量 ÷ 产线小时产能 ÷ ").append(SHIFT_HOURS.toPlainString())
+                .append(" 小时/班 (向上取整)；每班人数 = 产线标准人数。");
 
         Map<String, Object> data = new HashMap<>();
         data.put("totalCount", nonEmpty.size());
         data.put("products", rows);
+        return buildSimpleResult(text.toString(), data);
+    }
 
-        String msg = String.format("找到 %d 个待排产产品 (已扣已发货 + 在产)", nonEmpty.size());
-        return buildSimpleResult(msg, data);
+    private List<String> requestedProductNames(Map<String, Object> params) {
+        Object raw = params.get("productNames");
+        List<String> out = new ArrayList<>();
+        if (raw instanceof Collection<?> c) {
+            for (Object o : c) {
+                if (o != null && !o.toString().isBlank()) out.add(o.toString().trim());
+            }
+        } else if (raw instanceof String s && !s.isBlank()) {
+            for (String part : s.split("[,，、;；]")) {
+                if (!part.isBlank()) out.add(part.trim());
+            }
+        }
+        return out;
+    }
+
+    private boolean matchesAny(String productName, List<String> wanted) {
+        if (productName == null) return false;
+        for (String w : wanted) {
+            if (productName.contains(w) || w.contains(productName)) return true;
+        }
+        return false;
+    }
+
+    /** 数量与单位紧挨: 「2000 盒」。 */
+    static String qtyWithUnit(BigDecimal qty, String unit) {
+        String n = qty == null ? "0" : qty.stripTrailingZeros().toPlainString();
+        return unit == null || unit.isBlank() ? n : n + " " + unit;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String describeRow(Map<String, Object> row) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(row.get("productName")).append("：待产 ")
+                .append(qtyWithUnit((BigDecimal) row.get("netShortage"), (String) row.get("unit")));
+        sb.append("，产线 ").append(row.get("recommendedLineName"));
+        Object workers = row.get("requiredWorkersPerShift");
+        Object shifts = row.get("requiredShifts");
+        if (workers != null) sb.append("，每班 ").append(workers).append(" 人");
+        if (shifts != null) sb.append("，约 ").append(shifts).append(" 个班");
+        List<String> missing = (List<String>) row.get("staffingMissing");
+        if (missing != null && !missing.isEmpty()) {
+            sb.append("；算不出完整人数/班次，缺：").append(String.join("、", missing));
+        }
+        return sb.toString();
     }
 
     private void deductInProgressProduction(String factoryId, Map<String, ProductDemand> map) {
@@ -190,7 +282,7 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         }
     }
 
-    private Map<String, Object> toRow(ProductDemand pd) {
+    private Map<String, Object> toRow(String factoryId, ProductDemand pd) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("productTypeId", pd.getProductTypeId());
         row.put("productName", pd.getProductName() != null ? pd.getProductName() : "(未命名)");
@@ -199,15 +291,72 @@ public class ProductionDemandQueryTool extends AbstractBusinessTool {
         row.put("inProgressQuantity", pd.getInProgressQuantity());
         row.put("netShortage", pd.getNetShortage());
         row.put("recommendedQuantity", pd.getNetShortage());  // 默认推荐 = 净缺量
-        row.put("recommendedLine", recommendLineFor(pd));     // 简单规则: 默认 DEDICATED_LINE_A
         row.put("orderCount", pd.getOrderLineCount());
         row.put("orderRefs", pd.getOrderRefs());              // 最多 5 个 (productName + orderNumber)
+        applyStaffing(factoryId, pd, row);
         return row;
     }
 
-    /** 推荐生产线 — 简单规则: 默认 DEDICATED_LINE_A. 后续可接 ProductTypeMaster 或 BOM 配置. */
-    private String recommendLineFor(ProductDemand pd) {
-        return "DEDICATED_LINE_A";
+    /**
+     * 产线 + 人数 + 班次: 取与订单单位一致的小时产能 (产品专用行优先于通用行, 多行取最快),
+     * 产线名与标准人数来自产线配置; 缺什么就如实列出缺什么, 不套默认值、不外露内部码。
+     */
+    private void applyStaffing(String factoryId, ProductDemand pd, Map<String, Object> row) {
+        List<String> missing = new ArrayList<>();
+        row.put("recommendedLineName", "未配置产线");
+        row.put("staffingMissing", missing);
+        row.put("staffingBasis", "所需班次 = 待产量 ÷ 产线小时产能 ÷ " + SHIFT_HOURS.toPlainString()
+                + " 小时/班 (向上取整)；每班人数 = 产线标准人数");
+
+        List<ProductionLineCapacityConfig> effective = capacityConfigRepository
+                .findEffectiveForProduct(factoryId, pd.getProductTypeId(), LocalDateTime.now());
+        List<ProductionLineCapacityConfig> sameUnit = new ArrayList<>();
+        for (ProductionLineCapacityConfig c : effective) {
+            if (c.getCapacityPerHour() != null && c.getCapacityPerHour().signum() > 0
+                    && unitMatches(c, pd.getUnit())) {
+                sameUnit.add(c);
+            }
+        }
+        boolean hasSpecific = sameUnit.stream().anyMatch(c -> c.getProductTypeId() != null);
+        ProductionLineCapacityConfig best = sameUnit.stream()
+                .filter(c -> !hasSpecific || c.getProductTypeId() != null)
+                .max(Comparator.comparing(ProductionLineCapacityConfig::getCapacityPerHour))
+                .orElse(null);
+        if (best == null) {
+            missing.add("该产品按「" + pd.getUnit() + "」计的产线小时产能");
+            return;
+        }
+
+        ProductionLine line = productionLineRepository
+                .findByIdAndFactoryIdAndDeletedAtIsNull(best.getProductionLineId(), factoryId)
+                .orElse(null);
+        String lineName = line != null && line.getName() != null && !line.getName().isBlank()
+                ? ProductionLineLabels.display(line.getName()) : "未命名产线";
+        row.put("recommendedLineName", lineName);
+
+        BigDecimal hours = pd.getNetShortage().divide(best.getCapacityPerHour(), 1, RoundingMode.UP);
+        BigDecimal shifts = hours.divide(SHIFT_HOURS, 0, RoundingMode.CEILING).max(BigDecimal.ONE);
+        row.put("requiredLineHours", hours);
+        row.put("requiredShifts", shifts.intValue());
+
+        Integer standard = line != null ? line.getStandardWorkers() : null;
+        if (standard == null || standard <= 0) {
+            missing.add("产线「" + lineName + "」的标准人数");
+        } else {
+            row.put("requiredWorkersPerShift", standard);
+            row.put("requiredPersonShifts", standard * shifts.intValue());
+        }
+    }
+
+    private boolean unitMatches(ProductionLineCapacityConfig c, String orderUnit) {
+        if (orderUnit == null || c.getCapacityUnit() == null) return false;
+        String u = orderUnit.trim().toLowerCase();
+        return switch (c.getCapacityUnit()) {
+            case KG -> Set.of("kg", "千克", "公斤").contains(u);
+            case PIECE -> Set.of("件", "个", "pcs", "piece").contains(u);
+            case BATCH -> Set.of("批", "batch").contains(u);
+            case PACKAGE -> c.getPackageUnit() != null && c.getPackageUnit().trim().equalsIgnoreCase(u);
+        };
     }
 
     private Map<String, Object> buildEmptyEnvelope() {
