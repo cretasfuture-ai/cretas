@@ -39,6 +39,8 @@ SELF_HOSTED_ALLOWED = {
     ('java-gate-pr.yml', 'changes'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts-shard'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts'): MINI_PG_ROUTE,
 }
 HEAP = {
     ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
