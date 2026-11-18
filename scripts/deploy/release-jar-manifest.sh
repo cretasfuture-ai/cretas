@@ -253,6 +253,9 @@ release_manifest_write() {
     local maven_command=$4
     local target_tests=$5
     local build_wall_seconds=${6:-0}
+    # 7/8: 远程构建时由调用方传入【实际编译那台机器】的 JDK; 为空则读本机 JDK (原行为)。
+    local jdk_vendor_override=${7:-}
+    local jdk_version_override=${8:-}
     local build_commit backend_tree jdk_vendor jdk_version cache_dir jar_tmp manifest_tmp jar_sha jar_size
     local report report_tmp
 
@@ -265,9 +268,15 @@ release_manifest_write() {
 
     build_commit=$(git -C "$repo_root" rev-parse HEAD 2>/dev/null) || return 1
     backend_tree=$(git -C "$repo_root" rev-parse "HEAD:$RELEASE_BACKEND_PATH" 2>/dev/null) || return 1
-    jdk_vendor=$(release_manifest_java_property java.vendor) || return 1
-    jdk_version=$(release_manifest_java_property java.version) || return 1
+    if [ -n "$jdk_vendor_override" ] || [ -n "$jdk_version_override" ]; then
+        jdk_vendor=$jdk_vendor_override
+        jdk_version=$jdk_version_override
+    else
+        jdk_vendor=$(release_manifest_java_property java.vendor) || return 1
+        jdk_version=$(release_manifest_java_property java.version) || return 1
+    fi
     [ -n "$jdk_vendor" ] && [ -n "$jdk_version" ] || return 1
+    case "$jdk_vendor$jdk_version" in *$'\n'*|*$'\r'*) return 1 ;; esac
 
     cache_dir=$(dirname "$manifest")
     mkdir -p "$cache_dir" || return 1
@@ -390,6 +399,11 @@ release_manifest_build() {
         return 0
     fi
 
+    if [ -n "${CRETAS_RELEASE_REMOTE_BUILD_HOST:-}" ]; then
+        release_manifest_build_remote "$repo_root" "$target_tests" "$manifest"
+        return $?
+    fi
+
     if [ -n "${CRETAS_MAVEN_WRAPPER:-}" ]; then
         wrapper=$CRETAS_MAVEN_WRAPPER
     elif [[ "${OSTYPE:-}" == darwin* || "${OSTYPE:-}" == linux* ]]; then
@@ -413,6 +427,74 @@ release_manifest_build() {
     release_manifest_write "$repo_root" "$jar_path" "$manifest" "$command_text" "$target_tests" "$build_wall_seconds" || return 1
     printf 'Release manifest: %s\n' "$manifest"
     printf 'Release build report: %s\n' "${CRETAS_RELEASE_BUILD_REPORT_PATH:-$(dirname "$manifest")/$RELEASE_BUILD_REPORT_NAME}"
+}
+
+# 远程构建 (CRETAS_RELEASE_REMOTE_BUILD_HOST=<ssh 别名>, 例如 canada-mini): 只把 Maven 那一步搬到
+# 远端, 由 remote-java-build.sh 构建本机 HEAD 那个【已推到 origin】的提交并取回 JAR。
+# 之后与本地构建走同一个 release_manifest_write: clean 树 / build_commit / backend_tree / sha256
+# 照旧在本机算和校验, stage / validate / deploy 不知道也不需要知道 JAR 是哪台机器编的。
+# manifest 的 maven_command 以 "remote:<host> " 开头、jdk_* 记远端 JDK, 审计能看出来源。
+#
+# 远端拒绝 (时间窗 / 内存 / 忙 / 提交未推) 时【不】静默回退本机 Maven: 回退正是这条车道要避免的
+# 多路本机构建。明确失败, 由操作者决定等一会儿重跑还是去掉 --remote-build。
+release_manifest_build_remote() {
+    local repo_root=$1
+    local target_tests=$2
+    local manifest=$3
+    local host=$CRETAS_RELEASE_REMOTE_BUILD_HOST
+    local script_dir cache_dir pulled basis out_log rc test_includes
+    local remote_vendor remote_version remote_wall remote_sha command_text pulled_sha
+
+    script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+    cache_dir=$(dirname "$manifest")
+    mkdir -p "$cache_dir" || return 1
+    pulled="$cache_dir/.remote-pull.$$.jar"
+    basis="$cache_dir/$RELEASE_JAR_NAME"
+    out_log=$(mktemp) || return 1
+    test_includes=$(release_manifest_test_includes "$target_tests")
+
+    # if/else 形式: 调用方 (release_manifest_main) 开着 set -e, 裸调用非 0 会在打印原因、
+    # 清临时文件之前直接退出。
+    if "${CRETAS_REMOTE_JAVA_BUILD_CMD:-$script_dir/remote-java-build.sh}" \
+        --host "$host" --repo-root "$repo_root" \
+        --tests "$target_tests" --includes "$test_includes" \
+        --pull-to "$pulled" --basis "$basis" > "$out_log"; then
+        rc=0
+    else
+        rc=$?
+    fi
+    cat "$out_log"
+    if [ "$rc" -ne 0 ]; then
+        rm -f "$out_log" "$pulled"
+        echo "ERROR: remote Java build on $host failed (rc=$rc); not falling back to local Maven" >&2
+        return 1
+    fi
+
+    remote_vendor=$(awk -v k=REMOTE_JDK_VENDOR 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_version=$(awk -v k=REMOTE_JDK_VERSION 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_wall=$(awk -v k=REMOTE_MAVEN_WALL_SECONDS 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_sha=$(awk -v k=REMOTE_JAR_SHA256 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    rm -f "$out_log"
+    case "$remote_wall" in ''|*[!0-9]*) rm -f "$pulled"; echo "ERROR: remote build gave no wall time" >&2; return 1 ;; esac
+    [ -n "$remote_vendor" ] && [ -n "$remote_version" ] \
+        || { rm -f "$pulled"; echo "ERROR: remote build gave no JDK identity" >&2; return 1; }
+
+    # 取回的字节必须就是远端编出来的那个 (驱动脚本已校验过一次; 这里在写 manifest 之前独立再验,
+    # 不信任何一层的自述)。
+    [[ "$remote_sha" =~ ^[0-9a-f]{64}$ ]] \
+        && pulled_sha=$(sha256sum "$pulled" 2>/dev/null) \
+        && pulled_sha=${pulled_sha%% *} && [ "${pulled_sha,,}" = "$remote_sha" ] \
+        || { rm -f "$pulled"; echo "ERROR: pulled JAR sha256 does not match remote build sha256; manifest not written" >&2; return 1; }
+    release_manifest_require_clean_worktree "$repo_root" \
+        || { rm -f "$pulled"; echo "ERROR: worktree changed during remote release build; manifest not written" >&2; return 1; }
+    command_text="remote:$host mvn clean package -Dtest=$target_tests -Dcretas.testIncludes=$test_includes"
+    release_manifest_write "$repo_root" "$pulled" "$manifest" "$command_text" "$target_tests" \
+        "$remote_wall" "$remote_vendor" "$remote_version" \
+        || { rm -f "$pulled"; return 1; }
+    rm -f "$pulled"
+    printf 'Release JAR built remotely on %s in %ss\n' "$host" "$remote_wall"
+    printf 'Release manifest: %s\n' "$manifest"
+    printf 'Release build report: %s\n' "${CRETAS_RELEASE_BUILD_REPORT_PATH:-$cache_dir/$RELEASE_BUILD_REPORT_NAME}"
 }
 
 release_manifest_usage() {

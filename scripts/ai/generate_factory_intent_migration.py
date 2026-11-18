@@ -16,6 +16,10 @@ TARGET = ROOT / "backend/java/cretas-api/src/main/resources/db/flyway/V20261104_
 POST_V51_INTENTS = frozenset({
     "REPORT_BATCH_YIELD_RANK", "REPORT_BOM_COST_RANK",
     "REPORT_SALES_MARGIN_SUMMARY", "REPORT_LABOR_COST_SHARE",
+    "SCHEDULING_RUSH_ORDER_ANALYSIS",
+    # 2026-11-17 v3 review gaps, shipped by V20261118_61__intent_gap_v3_new_intents.sql
+    "CUSTOMER_CREATE", "HR_EMPLOYEE_WORK_LOCATION_QUERY", "HR_MY_WAGE_QUERY",
+    "SSOP_SCHEDULE_PLAN_CREATE",
 })
 
 

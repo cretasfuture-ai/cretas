@@ -13,8 +13,11 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -24,6 +27,8 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 public class OrderListTool extends AbstractBusinessTool {
+
+    private static final int WIDENED_DAYS = 30;
 
     private final SalesService salesService;
 
@@ -59,6 +64,10 @@ public class OrderListTool extends AbstractBusinessTool {
         // 订单日期 (含当天): 「上个月的销售订单」以前把时间丢了, 返回全部订单
         properties.put("startDate", TimeRangeFilter.dateProperty("订单日期开始 (含), YYYY-MM-DD"));
         properties.put("endDate", TimeRangeFilter.dateProperty("订单日期结束 (含), YYYY-MM-DD"));
+        properties.put("groupBy", Map.of(
+                "type", "string",
+                "enum", List.of("customer"),
+                "description", "按客户汇总 (每个客户的订单数与金额, 按订单数排名); 用户说「按客户汇总 / 各客户下单 / 哪个客户下单最多」时填 customer"));
         return Map.of(
                 "type", "object",
                 "properties", properties,
@@ -84,20 +93,32 @@ public class OrderListTool extends AbstractBusinessTool {
         LocalDate from = TimeRangeFilter.parseDate(params.get("startDate"), "startDate");
         LocalDate to = TimeRangeFilter.parseDate(params.get("endDate"), "endDate");
 
-        PageResponse<SalesOrder> orders;
-        if ((statusValue == null || statusValue.isBlank()) && from == null && to == null) {
-            orders = salesService.getSalesOrders(factoryId, page, size);
-        } else {
-            SalesOrderStatus status = null;
-            if (statusValue != null && !statusValue.isBlank()) {
-                try {
-                    status = SalesOrderStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
-                } catch (IllegalArgumentException exception) {
-                    throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
-                }
+        boolean byCustomer = wantsCustomerSummary(params);
+        boolean defaultWindow = Boolean.TRUE.equals(params.get(TimeRangeFilter.DEFAULT_WINDOW));
+        SalesOrderStatus status = null;
+        if (statusValue != null && !statusValue.isBlank()) {
+            try {
+                status = SalesOrderStatus.valueOf(statusValue.trim().toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException exception) {
+                throw new IllegalArgumentException("不支持的销售订单状态: " + statusValue);
             }
-            // 状态 / 日期都在数据库里、分页之前过滤, 并按 DataScope 收窄 (getSalesOrdersByStatus 不收窄)
-            orders = salesService.getSalesOrdersFiltered(factoryId, status, from, to, page, size);
+        }
+        // 汇总要看完整窗口内的订单 (不分页), 其余仍按页
+        int querySize = byCustomer ? 100 : size;
+        PageResponse<SalesOrder> orders = query(factoryId, status, from, to, byCustomer ? 1 : page, querySize);
+        String windowNotice = null;
+        if (defaultWindow && orders.getTotalElements() == 0 && from != null && to != null) {
+            // 默认「最近 N 天」没有订单: 不回「没有记录」, 找最近一次有订单的日期, 给出以它结尾的同长度一段
+            LocalDate latest = latestOrderDate(factoryId);
+            if (latest != null) {
+                long days = java.time.temporal.ChronoUnit.DAYS.between(from, to) + 1;
+                // 放宽成以最近一次订单日期结尾的 30 天 (7 天可能只截到一个零头)
+                LocalDate newFrom = latest.minusDays(WIDENED_DAYS - 1);
+                orders = query(factoryId, status, newFrom, latest, byCustomer ? 1 : page, querySize);
+                windowNotice = TimeRangeFilter.widenedNotice((int) days, latest, newFrom, latest);
+                from = newFrom;
+                to = latest;
+            }
         }
 
         log.info("查询销售订单列表 - factoryId={}, page={}, size={}, status={}",
@@ -110,7 +131,79 @@ public class OrderListTool extends AbstractBusinessTool {
         result.put("totalPages", orders.getTotalPages());
         result.put("source", "sales_orders");
         result.put("message", "查询到 " + orders.getTotalElements() + " 个销售订单");
+        if (windowNotice != null) {
+            result.put("windowNotice", windowNotice);
+            result.put("effectiveFrom", from.toString());
+            result.put("effectiveTo", to.toString());
+        }
+        if (byCustomer) {
+            result.put("customerSummary", summarizeByCustomer(orders));
+            result.put("groupBy", "customer");
+            long shown = orders.getContent().size();
+            if (orders.getTotalElements() > shown) {
+                result.put("summaryTruncated", true);
+            }
+        }
         return result;
+    }
+
+    private PageResponse<SalesOrder> query(String factoryId, SalesOrderStatus status, LocalDate from, LocalDate to,
+                                           int page, int size) {
+        if (status == null && from == null && to == null) {
+            return salesService.getSalesOrders(factoryId, page, size);
+        }
+        // 状态 / 日期都在数据库里、分页之前过滤, 并按 DataScope 收窄 (getSalesOrdersByStatus 不收窄)
+        return salesService.getSalesOrdersFiltered(factoryId, status, from, to, page, size);
+    }
+
+    /** 最近一次有订单的订单日期: 取最近创建的 100 单里最大的订单日期 (已按数据范围收窄); 没有订单为 null。 */
+    private LocalDate latestOrderDate(String factoryId) {
+        LocalDate latest = null;
+        PageResponse<SalesOrder> recent = salesService.getSalesOrders(factoryId, 1, 100);
+        for (SalesOrder order : recent == null ? List.<SalesOrder>of() : recent.getContent()) {
+            if (order.getOrderDate() != null && (latest == null || order.getOrderDate().isAfter(latest))) {
+                latest = order.getOrderDate();
+            }
+        }
+        return latest;
+    }
+
+    static boolean wantsCustomerSummary(Map<String, Object> params) {
+        if ("customer".equals(params.get("groupBy"))) {
+            return true;
+        }
+        Object said = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
+        if (!(said instanceof String text)) {
+            return false;
+        }
+        return text.contains("按客户") && (text.contains("汇总") || text.contains("统计") || text.contains("分组")
+                || text.contains("排名") || text.contains("合计"))
+                || text.contains("各客户") || text.contains("每个客户") || text.contains("哪个客户下单")
+                || text.contains("哪个客户订单") || text.contains("客户下单最多");
+    }
+
+    static List<Map<String, Object>> summarizeByCustomer(PageResponse<SalesOrder> orders) {
+        Map<String, Map<String, Object>> byName = new LinkedHashMap<>();
+        for (SalesOrder order : orders.getContent()) {
+            String name = order.getCustomerName() != null && !order.getCustomerName().isBlank()
+                    ? order.getCustomerName() : "未填写客户";
+            Map<String, Object> row = byName.computeIfAbsent(name, k -> {
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("customerName", k);
+                r.put("orderCount", 0);
+                r.put("totalAmount", BigDecimal.ZERO);
+                return r;
+            });
+            row.put("orderCount", (Integer) row.get("orderCount") + 1);
+            BigDecimal amount = order.getTotalAmount() == null ? BigDecimal.ZERO : order.getTotalAmount();
+            row.put("totalAmount", ((BigDecimal) row.get("totalAmount")).add(amount));
+        }
+        List<Map<String, Object>> rows = new ArrayList<>(byName.values());
+        rows.sort((a, b) -> {
+            int c = Integer.compare((Integer) b.get("orderCount"), (Integer) a.get("orderCount"));
+            return c != 0 ? c : ((BigDecimal) b.get("totalAmount")).compareTo((BigDecimal) a.get("totalAmount"));
+        });
+        return rows;
     }
 
     /** spec §8.2 只读查询, 无副作用 */

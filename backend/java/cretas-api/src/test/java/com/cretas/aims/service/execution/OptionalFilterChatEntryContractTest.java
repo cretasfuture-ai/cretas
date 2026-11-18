@@ -106,7 +106,8 @@ class OptionalFilterChatEntryContractTest {
         // 没说时间: 默认最近 7 天 (Steve 2026-11-12 口径 1)
         verify(sales).getSalesOrdersFiltered(eq(F), eq(SalesOrderStatus.CONFIRMED),
                 eq(java.time.LocalDate.now().minusDays(6)), eq(java.time.LocalDate.now()), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
+        // 性质: 主查询按日期过滤、不拿不限时间的整页 (size=20) 列表当结果; 默认窗口 0 条时只会另取最近 100 单找最近订单日期 (放宽逻辑)
+        verify(sales, never()).getSalesOrders(anyString(), anyInt(), eq(20));
         verify(llm, never()).chatWithTools(anyString(), anyString(), anyList());
     }
 
@@ -122,7 +123,8 @@ class OptionalFilterChatEntryContractTest {
         // 没说状态 = 不按状态筛; 没说时间 = 默认最近 7 天 (Steve 2026-11-12 口径 1)
         verify(sales).getSalesOrdersFiltered(eq(F), isNull(), eq(java.time.LocalDate.now().minusDays(6)),
                 eq(java.time.LocalDate.now()), anyInt(), anyInt());
-        verify(sales, never()).getSalesOrders(anyString(), anyInt(), anyInt());
+        // 性质: 主查询按日期过滤、不拿不限时间的整页 (size=20) 列表当结果; 默认窗口 0 条时只会另取最近 100 单找最近订单日期 (放宽逻辑)
+        verify(sales, never()).getSalesOrders(anyString(), anyInt(), eq(20));
     }
 
     @Test

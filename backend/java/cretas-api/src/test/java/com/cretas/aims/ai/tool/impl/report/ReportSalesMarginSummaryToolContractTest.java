@@ -122,6 +122,20 @@ class ReportSalesMarginSummaryToolContractTest {
     }
 
     @Test
+    void callerSeesSalesButNotMargin_stillGetsSalesAmount_noMarginNoCost() throws Exception {
+        // 审查 M1: 「销售额是多少」改走本工具后, 能看销售额、看不到毛利的角色仍要有答案
+        ReflectionTestUtils.setField(tool, "priceView", AiBiToolTestSupport.priceView(true, false));
+        stub(List.of(row("A", "卤牛肉", "1000", "1000", "600")));
+        JsonNode r = run();
+        JsonNode d = r.get("data").get("data");
+        String msg = r.get("data").get("message").asText();
+        assertTrue(msg.contains("销售额 ¥1000"), msg);
+        assertTrue(msg.contains("毛利按当前账号的权限配置不显示"), msg);
+        assertFalse(d.has("grossProfit") || d.has("marginRate") || d.has("cost") || d.has("costCoverage") || d.has("charts"), d.toString());
+        assertFalse(msg.contains("600") || msg.contains("40.0"), msg);
+    }
+
+    @Test
     void callerWithRateButWithoutAmountView_getsRateOnly_noAmountsNoCoverage() throws Exception {
         ReflectionTestUtils.setField(tool, "priceView", AiBiToolTestSupport.priceView(false, true));
         stub(List.of(row("A", "卤牛肉", "1000", "1000", "600")));

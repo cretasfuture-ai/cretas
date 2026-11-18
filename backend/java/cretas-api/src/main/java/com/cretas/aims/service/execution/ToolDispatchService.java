@@ -375,6 +375,8 @@ public class ToolDispatchService {
         params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, from + "~" + to);
         sources.put("startDate", ReadTurnParameters.Source.DEFAULT);
         sources.put("endDate", ReadTurnParameters.Source.DEFAULT);
+        // 工具据此在默认窗口 0 条时放宽到最近有数据的一段 (用户明确说的时间不放宽)
+        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.DEFAULT_WINDOW, Boolean.TRUE);
         addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
                 com.cretas.aims.ai.tool.ReadReplyNotices.DEFAULT_TIME_RANGE,
                 "没说时间，按最近 " + days + " 天（" + from + " 至 " + to + "）查询。",
@@ -696,7 +698,8 @@ public class ToolDispatchService {
                 }
 
                 // 2.6. 从预处理结果中提取时间范围
-                if (pq.hasTimeRange()) {
+                // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
+                if (pq.hasTimeRange() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());

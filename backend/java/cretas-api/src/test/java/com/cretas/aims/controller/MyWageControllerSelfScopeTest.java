@@ -131,11 +131,12 @@ class MyWageControllerSelfScopeTest {
     private MockMvc buildMockMvc() {
         MyWageController controller = new MyWageController(
                 mobileService,
-                wagePolicyService,
-                wageCalculationService,
-                workerDailyEfficiencyRepository,
-                wageCalculationRepository,
-                payrollRecordRepository);
+                new com.cretas.aims.service.MyWageQueryService(
+                        wagePolicyService,
+                        wageCalculationService,
+                        workerDailyEfficiencyRepository,
+                        wageCalculationRepository,
+                        payrollRecordRepository));
         return MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(
                         realPermissionService, userRepository, new ObjectMapper()))

@@ -72,8 +72,20 @@ public final class PhraseShortcutEligibility {
         if (phrase == null || phrase.isBlank()) {
             return true;
         }
-        return residual(input, phrase).length() <= MAX_RESIDUAL_CHARS;
+        String rest = residual(input, phrase);
+        if (intentCode != null && DATE_RANGE_OK_INTENTS.contains(intentCode)) {
+            // 「11月1日到18日销售额是多少」: 区间本身是工具的 startDate/endDate, 不是第二个子问 (2026-11-18 LSMDEMO:
+            // 这句被当成带条件交给决策层, 落到要 indicator_code 的指标工具)
+            rest = DATE_RANGE.matcher(rest).replaceAll("");
+        }
+        return rest.length() <= MAX_RESIDUAL_CHARS;
     }
+
+    /** 工具自己接受 startDate / endDate 的只读汇总意图: 句中的日期区间不算「带条件」。 */
+    static final java.util.Set<String> DATE_RANGE_OK_INTENTS = java.util.Set.of("REPORT_SALES_MARGIN_SUMMARY");
+
+    private static final Pattern DATE_RANGE = Pattern.compile(
+            "(\\d{4}年)?\\d{1,2}月(\\d{1,2}[日号]?)?|\\d{1,2}[日号]|[到至~—-]|从|自|截止|截至|今天|昨天|前天");
 
     /**
      * 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。短语不在原话里 (剥过数量 / 时间才命中) = 原话全部。
