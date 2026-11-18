@@ -369,11 +369,39 @@ const productEmptyText = computed<string>(() =>
 
 // ==================== 联动 watch ====================
 
+// 默认仓库没有任何批次时，自动换到第一个有批次的仓库（只在用户没有手动选过仓库时做一次）。
+const warehousePickedByUser = ref(false);
+let autoPickingWarehouse = false;
+function inventoryBatchTotal(): number {
+  // 页面默认先看「原料库存」，所以以原料批次数为准；仓库只有成品批次时用户仍会看到空的原料表。
+  return data.value?.materialCount ?? 0;
+}
+async function autoSelectWarehouseWithBatches(): Promise<void> {
+  if (warehousePickedByUser.value || !data.value || inventoryBatchTotal() > 0) return;
+  const original = selectedWarehouseId.value;
+  const others = warehouseOptions.value.filter((w) => w.id !== original);
+  if (others.length === 0) return;
+  autoPickingWarehouse = true;
+  try {
+    for (const w of others) {
+      selectedWarehouseId.value = w.id;
+      await loadInventory();
+      if (inventoryBatchTotal() > 0) return;
+    }
+    selectedWarehouseId.value = original;
+    await loadInventory();
+  } finally {
+    autoPickingWarehouse = false;
+  }
+}
+
 watch(selectedFactoryId, async (v) => {
   if (!v) return;
+  warehousePickedByUser.value = false;
   await loadWarehouses();
   if (selectedWarehouseId.value) {
     await loadInventory();
+    await autoSelectWarehouseWithBatches();
   } else {
     data.value = null;
   }
@@ -384,6 +412,7 @@ watch(selectedWarehouseId, async (v) => {
     data.value = null;
     return;
   }
+  if (autoPickingWarehouse) return;
   await loadInventory();
 });
 
@@ -433,6 +462,7 @@ onMounted(async () => {
           <el-select
             v-model="selectedWarehouseId"
             :loading="warehouseLoading"
+            @change="warehousePickedByUser = true"
             :disabled="!selectedFactoryId"
             placeholder="选择仓库"
             style="width: 220px"

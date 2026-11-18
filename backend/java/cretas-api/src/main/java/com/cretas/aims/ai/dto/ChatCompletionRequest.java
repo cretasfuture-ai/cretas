@@ -27,7 +27,7 @@ public class ChatCompletionRequest {
 
     /**
      * 模型名称
-     * 文本: qwen-plus, qwen-turbo, qwen-max
+     * 文本: qwen-plus-latest, qwen-turbo, qwen3.7-max-2026-06-08（qwen-max 系列已禁用）
      * 视觉: qwen2.5-vl-3b-instruct, qwen-vl-plus
      */
     private String model;

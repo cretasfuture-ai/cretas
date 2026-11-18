@@ -1051,7 +1051,7 @@ defineExpose({ loadTasks });
       :data="filteredTasks"
       v-loading="loading"
       :row-class-name="taskRowClass"
-      empty-text="当前分类暂无入库任务"
+      empty-text="当前分类暂无入库任务；已入库的批次请看上方「已入库批次」标签"
       border
       row-key="taskId"
     >

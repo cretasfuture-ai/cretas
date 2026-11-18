@@ -67,7 +67,6 @@ class DigitalCrewRecognitionFixesEntryContractTest {
 
     @ParameterizedTest(name = "{0}「{1}」")
     @CsvSource(delimiter = '|', value = {
-            "planner|周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？",
             "keeper|现在牛前腱还有多少库存？",
             "clerk|这个月销售额多少，哪个客户买得最多？"})
     @DisplayName("带条件 / 多个子问 → 不被句中短语截走, 交给决策层")
@@ -84,6 +83,22 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(h.executedIntents).as("执行的是决策层定的意图, 不是短语 %s", phraseCode)
                 .containsExactly(MODEL_INTENT);
         assertThat(run.view.intentCode()).isEqualTo(MODEL_INTENT);
+    }
+
+    @Test
+    @DisplayName("急单复合句 (#1884 有意放行): 只能由 SCHEDULING_RUSH_ORDER_ANALYSIS 接, 不落到其它短语, 也不经决策层")
+    void rushOrderCompoundSentenceIsTakenOnlyByTheRushIntent() throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        String input = "周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？";
+        String phraseCode = h.knowledgeBase.matchPhrase(input.toLowerCase().trim(), "FACTORY").orElse(null);
+        assertThat(phraseCode).as("前提: 真实短语表会命中这句").isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        h.intent(phraseCode, phraseCode, phraseCode.toLowerCase(), ToolExecutor.AccessMode.READ);
+        h.recognizerAnswers(answer(input, h.readIntent));
+
+        Run run = ask(h, "planner", input);
+
+        assertThat(h.executedIntents).as("只被急单意图接, 不是别的短语").containsExactly("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        assertThat(run.view.intentCode()).isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
     }
 
     @Test
