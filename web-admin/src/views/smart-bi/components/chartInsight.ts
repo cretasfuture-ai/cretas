@@ -75,6 +75,34 @@ export interface ChartWithMeta {
   previous?: { config?: ChartWithMeta['config'] } | null;
   /** 逐点单位（与类目轴一一对应），如单位成本的「盒」「kg」：不同单位不互相比大小 */
   pointUnits?: Array<string | undefined>;
+  /** 漏斗 / 桑基这类「环节接环节」的图：按环节顺序给出各环节的量（FLOW 族） */
+  flow?: FlowData | null;
+}
+
+/** FLOW 族的一个环节。value 为 null 表示这一环节没有可用的数，missing 写清缺的是什么。 */
+export interface FlowStage {
+  label: string;
+  value: number | null;
+  /** 显示单位：'元' 按金额写 ¥；'个'、'kg'、'袋'…… */
+  unit?: string;
+  /** 只有 compareKey 相同的环节才互相比；默认等于 unit。不同东西同单位（入库批次 / 生产批次）给不同的 key */
+  compareKey?: string;
+  /** 金额环节：没有价格权限时整段不出现 */
+  money?: boolean;
+  /** 统计口径（如「最近10张采购单」）：口径不同的环节不互相比 */
+  scope?: string;
+  /** value 为 null 时，缺的是什么（如「袋、盒两种单位，没法相加」） */
+  missing?: string;
+  /** 页面上这个读数的写法（卡片 / 提示框），给了就照抄，保证分析里的数与图上逐字一致 */
+  display?: string;
+}
+
+export interface FlowData {
+  /** funnel = 相邻阶段转化；chain = 每个环节只和前面最近的同单位环节比 */
+  kind: 'funnel' | 'chain';
+  stages: FlowStage[];
+  /** 附在结论后的口径说明（如「采购额只合计了列表里的10张单，共99张」） */
+  note?: string;
 }
 
 // ============================================================
@@ -602,6 +630,141 @@ export function buildKpiInsight(
 }
 
 // ============================================================
+// FLOW family generator (漏斗 / 桑基：环节接环节)
+// ============================================================
+
+/** 环节读数照页面卡片 / 提示框的写法：千分位、最多两位小数，不缩写成「万」，保证和图上的数逐字一致。 */
+function fmtFlowNum(v: number): string {
+  return Number(v.toFixed(2)).toLocaleString('zh-CN', { maximumFractionDigits: 2 });
+}
+
+function fmtFlowValue(stage: FlowStage): string {
+  if (stage.display) return stage.display;
+  if (stage.money || stage.unit === '元' || stage.unit === '¥') return `¥${fmtFlowNum(stage.value as number)}`;
+  return `${fmtFlowNum(stage.value as number)}${stage.unit ?? ''}`;
+}
+
+function flowRate(cur: number, base: number): string {
+  return fmtPct(cur / base);
+}
+
+/**
+ * FLOW：
+ * - funnel：相邻阶段的转化（后一阶段是前一阶段的百分之几），点出转化最低的一步和整体转化。
+ * - chain：每个环节只和「前面最近的、单位与口径都相同」的环节比；单位不同（元 / 批 / 数量）⛔ 不硬换算。
+ * - 金额环节在无价格权限时整段不出现（不出 ¥，也不拿它算比例）。
+ * - 缺数的环节照实说缺什么，不当 0。
+ */
+export function buildFlowInsight(
+  chart: ChartWithMeta,
+  permissions: UserPermissions,
+): InsightResult | null {
+  const flow = chart.flow;
+  if (!flow?.stages?.length) return null;
+  const gatedMoney = !permissions.canViewFinance;
+  const hiddenMoney = gatedMoney && flow.stages.some((s) => s.money);
+  const stages = flow.stages.filter((s) => !(s.money && gatedMoney));
+  const usable = (s: FlowStage) => s.value !== null && isFinite(s.value);
+  const keyOf = (s: FlowStage) => `${s.compareKey ?? s.unit ?? ''}|${s.scope ?? ''}`;
+  const missingText = stages
+    .filter((s) => !usable(s))
+    .map((s) => `${s.label}${s.missing ? `：${s.missing}` : '没有数'}`)
+    .join('；');
+  const tail = [
+    missingText ? `${missingText}。` : '',
+    flow.note ? `${flow.note}。` : '',
+    hiddenMoney ? '（无价格权限，不显示金额环节）' : '',
+  ].join('');
+
+  const live = stages.filter(usable);
+  if (!live.length) {
+    return missingText || flow.note ? finish(tail, '先补齐上面缺的数，再看各环节的变化。') : null;
+  }
+
+  // 每个环节找前面最近的同 key 环节
+  type Pair = { from: FlowStage; to: FlowStage; rate: number };
+  const pairs: Pair[] = [];
+  const zeroBases: FlowStage[] = [];
+  for (let i = 0; i < stages.length; i++) {
+    const to = stages[i];
+    if (!usable(to)) continue;
+    for (let j = i - 1; j >= 0; j--) {
+      const from = stages[j];
+      if (!usable(from) || keyOf(from) !== keyOf(to)) continue;
+      if ((from.value as number) > 0) pairs.push({ from, to, rate: (to.value as number) / (from.value as number) });
+      else if (!zeroBases.includes(from)) zeroBases.push(from);
+      break;
+    }
+  }
+
+  if (flow.kind === 'funnel') {
+    if (live.every((s) => s.value === 0)) {
+      return finish(
+        `${live.length}个阶段都是0${live[0].unit ?? ''}，还没有数据，算不出转化。${tail}`,
+        '先录入数据，再看哪一步转化最低。',
+      );
+    }
+    const first = live.find((s) => (s.value as number) > 0)!;
+    const last = live[live.length - 1];
+    const overall = first !== last && keyOf(first) === keyOf(last)
+      ? `从${first.label}（${fmtFlowValue(first)}）到${last.label}（${fmtFlowValue(last)}）整体${flowRate(last.value as number, first.value as number)}`
+      : '';
+    const worst = pairs.length ? pairs.reduce((w, p) => (p.rate < w.rate ? p : w)) : null;
+    const worstText = worst
+      ? `转化最低的是${worst.from.label}→${worst.to.label}，${fmtFlowValue(worst.from)}到${fmtFlowValue(worst.to)}，${flowRate(worst.to.value as number, worst.from.value as number)}`
+      : '';
+    const zeroText = zeroBases.length ? `${zeroBases.map((s) => s.label).join('、')}目前是0，下一步算不出转化` : '';
+    const body = [overall, worstText, zeroText].filter(Boolean).join('；');
+    if (!body) return tail ? finish(tail) : null;
+    return finish(
+      `${body}。${tail}`,
+      worst ? `先看卡在${worst.from.label}的${fmtFlowValue(worst.from)}，找出没往下走的原因。` : '先补齐各阶段数据再比较转化。',
+    );
+  }
+
+  // chain
+  const parts: string[] = [];
+  const firstLive = live[0];
+  const sameAsFirst = live.filter((s) => keyOf(s) === keyOf(firstLive));
+  const lastSame = sameAsFirst[sameAsFirst.length - 1];
+  if (lastSame !== firstLive && (firstLive.value as number) > 0) {
+    parts.push(
+      `${firstLive.label}${fmtFlowValue(firstLive)}，到${lastSame.label}${fmtFlowValue(lastSame)}，是开头的${flowRate(lastSame.value as number, firstLive.value as number)}`,
+    );
+  }
+  const drops = pairs.filter((p) => p.rate < 1);
+  const worst = drops.length ? drops.reduce((w, p) => (p.rate < w.rate ? p : w)) : null;
+  if (worst) {
+    parts.push(
+      `降得最多的是${worst.from.label}→${worst.to.label}，从${fmtFlowValue(worst.from)}到${fmtFlowValue(worst.to)}，剩${flowRate(worst.to.value as number, worst.from.value as number)}`,
+    );
+  }
+  const gains = pairs.filter((p) => p.rate > 1.0005);
+  if (gains.length) {
+    const g = gains.reduce((m, p) => (p.rate > m.rate ? p : m));
+    parts.push(`${g.from.label}→${g.to.label}多了${fmtPct(g.rate - 1)}`);
+  }
+  // 单位切换：后面换了单位、前面没有可比的环节，照实说不比
+  const switched = live.filter((s, i) => i > 0 && keyOf(s) !== keyOf(firstLive) && !pairs.some((p) => p.to === s)
+    && !live.slice(0, i).some((x) => keyOf(x) === keyOf(s)));
+  if (!pairs.length) {
+    parts.push(
+      `${live.map((s) => `${s.label}${fmtFlowValue(s)}`).join('、')}${live.length > 1 ? '，单位或口径各不相同，不互相换算' : ''}`,
+    );
+  } else if (switched.length) {
+    parts.push(`${switched.map((s) => `${s.label}${fmtFlowValue(s)}`).join('、')}，单位或口径不同，不和前面的环节换算`);
+  }
+  if (!parts.length) {
+    if (!tail) return null;
+    return finish(tail, '各环节单位不同，分别看各自的明细。');
+  }
+  const suggestion = worst
+    ? `先查${worst.from.label}这一步：对一下它的投入和交到下一步的量，看损耗在哪。`
+    : '各环节之间没有可直接比较的下降，分别核对各环节明细。';
+  return finish(`${parts.join('；')}。${tail}`, suggestion);
+}
+
+// ============================================================
 // Public API
 // ============================================================
 
@@ -632,6 +795,11 @@ export function buildChartInsight(
   if (!chart?.meta) return null;
 
   const ct = chart.chartType?.toLowerCase() ?? '';
+
+  // FLOW family：漏斗 / 桑基（环节接环节）
+  if (chart.flow || ct === 'funnel' || ct === 'sankey') {
+    return buildFlowInsight(chart, permissions);
+  }
 
   // PIE = PROPORTION family (U2: now implemented, not null)
   if (ct === 'pie') {
