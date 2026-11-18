@@ -186,6 +186,7 @@ def chart_from_groups(plan: Dict[str, Any], groups: List[Tuple[str, float]],
         return None
     labels = [p[0] for p in pairs]
     values = [p[1] for p in pairs]
+    labels_all, values_all = list(labels), list(values)
     measure = plan["measure"]
     dim_label = DIM_LABELS.get(plan["semantic"], plan["dimension"])
     period_label = f"{year}年{plan['month']}月 " if plan.get("month") and year else ""
@@ -225,6 +226,14 @@ def chart_from_groups(plan: Dict[str, Any], groups: List[Tuple[str, float]],
         }
         chart_type = "bar"
 
+    # 占比一律按「全部分组合计」这一个口径算 (图上的 {d}% 也是这个口径)；
+    # 有负数 (退货冲减) 时合计不是「整体」，不给占比，如实只给金额。
+    total = round(sum(values_all), 2)
+    shares_ok = total > 0 and all(v > 0 for v in values_all)
+    shares = [
+        {"label": n, "value": v, "pct": round(v / total * 100, 2) if shares_ok else None}
+        for n, v in zip(labels_all, values_all)
+    ]
     return {
         "type": chart_type,
         "title": title,
@@ -236,6 +245,10 @@ def chart_from_groups(plan: Dict[str, Any], groups: List[Tuple[str, float]],
             "year": year,
             "rows": int(rows),
             "groups": len(pairs),
+            "total": total,
+            "shares": shares,
+            "period_label": period_label.strip(),
+            "chart_type": chart_type,
         },
     }
 
@@ -413,3 +426,73 @@ def _primary_dim_of(data: Dict[str, Any], all_dims: Dict[str, Any], shares: List
         if share_labels and labels[:len(share_labels)] == share_labels:
             return dim
     return None
+
+
+# ---------------------------------------------------------------------------
+# 文字结论与图同源 (问题 51 返工, LSM-COSTBI-F3)
+# LLM 在流式路径里先于图出文字，且只看到样本/它自己的汇总，于是文字说「产品A 65.0%」
+# 图却是「DEMO产品C 43.99%」。图是全量现算的 (本模块)，所以结论以图为准：
+#   · chart_conclusion：由图数据 (question_chart.shares) 用代码写一句结论；
+#   · answer_matches_chart：LLM 文字里的每个百分数都必须能在图数据里找到出处；
+#   · reconcile_answer_with_chart：对不上就用代码结论替换，⛔ 不展示对不上的那句。
+# ---------------------------------------------------------------------------
+_PCT_IN_TEXT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*[%％]")
+_PCT_TOLERANCE = 0.15  # 个百分点；LLM 常把 43.97 写成 44.0
+
+
+def _allowed_percents(shares: List[Dict[str, Any]]) -> List[float]:
+    pcts = [float(s["pct"]) for s in shares if s.get("pct") is not None]
+    allowed = list(pcts)
+    run = 0.0
+    for p in pcts:  # 前 k 项合计、其余合计 (LLM 常这么写)
+        run += p
+        allowed.append(run)
+        allowed.append(100.0 - run)
+    if pcts:
+        allowed.append(100.0)
+    return allowed
+
+
+def chart_conclusion(qc: Dict[str, Any]) -> Optional[str]:
+    """由 question_chart 元数据 (和图同一份数) 写一句结论；数据不足返回 None。"""
+    shares = qc.get("shares") or []
+    if len(shares) < 2:
+        return None
+    measure = qc.get("measure") or "金额"
+    period = qc.get("period_label") or ""
+    prefix = f"{period}按{measure}看，" if period else f"按{measure}看，"
+    top, second = shares[0], shares[1]
+    if top.get("pct") is None:  # 有负数：不给占比
+        return (f"{prefix}{top['label']}最高，{_fmt_num(top['value'])}；"
+                f"其次是{second['label']}，{_fmt_num(second['value'])}。（数据含负值，未计算占比）")
+    text = (f"{prefix}{top['label']}占 {top['pct']:.2f}%（{_fmt_num(top['value'])}），排第一；"
+            f"{second['label']}占 {second['pct']:.2f}%（{_fmt_num(second['value'])}）")
+    rest = shares[2:]
+    if rest:
+        text += f"；其余 {len(rest)} 项合计占 {sum(s['pct'] for s in rest):.2f}%"
+    return text + "。"
+
+
+def answer_matches_chart(answer: str, qc: Dict[str, Any]) -> bool:
+    """文字里写的每个百分数都要是图数据里的占比 (或其前 k 项合计/其余合计)。"""
+    shares = qc.get("shares") or []
+    pcts_in_text = [float(m) for m in _PCT_IN_TEXT_RE.findall(answer or "")]
+    if not pcts_in_text:
+        return True
+    if not any(s.get("pct") is not None for s in shares):
+        return False  # 图没有占比口径 (含负数)，文字却报了占比
+    allowed = _allowed_percents(shares)
+    return all(any(abs(p - a) <= _PCT_TOLERANCE for a in allowed) for p in pcts_in_text)
+
+
+def reconcile_answer_with_chart(answer: str, chart: Optional[Dict[str, Any]]) -> Tuple[str, bool]:
+    """返回 (最终文字, 是否被代码结论替换)。图不是按问题现算的/对得上就原样返回。"""
+    if not chart or not isinstance(chart, dict):
+        return answer, False
+    qc = chart.get("question_chart")
+    if not isinstance(qc, dict) or answer_matches_chart(answer, qc):
+        return answer, False
+    conclusion = chart_conclusion(qc)
+    if not conclusion:
+        return answer, False
+    return conclusion, True
