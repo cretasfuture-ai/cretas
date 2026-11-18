@@ -23,8 +23,8 @@ import static org.mockito.Mockito.when;
  * 不带 / 带错密钥一律 403, 带着普通用户 JWT 也不行 (用户 JWT 不能当内部凭证)。
  * 密钥来自环境变量 INTERNAL_API_SECRET, 单测进程里它为空 —— 空密钥时无论带什么都拒 (fail closed)。
  */
-class InternalPermissionCheckAuthTest {
-    private static final String URI = "/api/internal/permissions/role-check";
+class InternalPermissionCheckSecurityTest {
+    private static final String URI = "/api/internal/permissions/user-check";
     private JwtAuthInterceptor interceptor;
 
     @BeforeEach

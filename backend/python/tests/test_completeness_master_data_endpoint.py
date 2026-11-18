@@ -5,6 +5,7 @@
     用 sqlite 对同一段表达式真实求值 (COALESCE/NULLIF/TRIM 语义一致), 样本取自各写入路径的实际形态。
   * 接口: TestClient + 假连接池, 守租户 403 / 角色 403 / 字段白名单 400 / limit 钳制 / total_missing 取 COUNT。
 """
+import os
 import sqlite3
 
 import pytest
@@ -101,7 +102,7 @@ class _FakePool:
         self.closed = True
 
 
-def _client(monkeypatch, role, factory="F001", total=321):
+def _client(monkeypatch, role, factory="F001", total=321, user_id=7):
     log = []
     pool = _FakePool(_FakeConn(log, total))
 
@@ -115,6 +116,7 @@ def _client(monkeypatch, role, factory="F001", total=321):
     async def _auth(request, call_next):
         request.state.factory_id = factory
         request.state.role = role
+        request.state.user_id = user_id
         request.state.auth_method = "jwt"
         return await call_next(request)
 
@@ -126,14 +128,14 @@ URL = "/api/client-requirement/completeness/missing"
 
 
 def _grants(monkeypatch, granted):
-    """假 Java 权限判定: granted = {(factory, role): {权限码, ...}}; 记录每次被问的 (工厂, 岗位, 码)。"""
+    """假 Java 权限判定: granted = {(factory, user_id): {权限码, ...}}; 记录每次被问的 (工厂, 用户, 码)。"""
     asked = []
 
-    async def fake(factory_id, role, codes):
-        asked.append((factory_id, role, list(codes)))
-        return bool(set(codes) & granted.get((factory_id, role), set()))
+    async def fake(factory_id, user_id, codes):
+        asked.append((factory_id, user_id, list(codes)))
+        return bool(set(codes) & granted.get((factory_id, user_id), set()))
 
-    monkeypatch.setattr(cc, "_java_role_has_any_permission", fake)
+    monkeypatch.setattr(cc, "_java_user_has_any_permission", fake)
     return asked
 
 
@@ -148,31 +150,120 @@ def test_unprivileged_role_gets_403_and_no_query_runs(monkeypatch):
 
 def test_same_role_allowed_in_factory_a_but_revoked_in_factory_b(monkeypatch):
     # 工厂在 L2 收回权限后, Python 立刻跟 (判据来自 Java 权限, 不是写死的岗位名)
-    granted = {("A", "dispatcher"): {"sales:read"}}
+    granted = {("A", 7): {"sales:read"}}
     ca, _ = _client(monkeypatch, "dispatcher", factory="A")
     asked = _grants(monkeypatch, granted)
     assert ca.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
     cb, log_b = _client(monkeypatch, "dispatcher", factory="B")
     asked = _grants(monkeypatch, granted)
     assert cb.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403
-    assert log_b == [] and asked[-1][:2] == ("B", "dispatcher")
+    assert log_b == [] and asked[-1][:2] == ("B", 7)
 
 
 def test_role_not_in_old_hardcoded_list_is_allowed_when_permission_is_granted(monkeypatch):
     # viewer / dispatcher 这类过去会被写死角色表误拒的岗位, 只要有权限码就能看
     c, _ = _client(monkeypatch, "viewer")
-    _grants(monkeypatch, {("F001", "viewer"): {"procurement:read"}})
+    _grants(monkeypatch, {("F001", 7): {"procurement:read"}})
     assert c.post(URL, json={"entity_type": "SUPPLIER", "field": "address"}).status_code == 200
     assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403
 
 
 def test_permission_codes_sent_to_java_are_the_entity_group(monkeypatch):
     c, _ = _client(monkeypatch, "sales_manager")
-    asked = _grants(monkeypatch, {("F001", "sales_manager"): {"sales:read_write"}})
+    asked = _grants(monkeypatch, {("F001", 7): {"sales:read_write"}})
     assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
     assert asked[-1][2] == cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["CUSTOMER"]
     assert c.post(URL, json={"entity_type": "SUPPLIER", "field": "address"}).status_code == 403
     assert asked[-1][2] == cc.MASTER_DATA_DRILLDOWN_PERMISSIONS["SUPPLIER"]
+
+
+def test_same_role_but_personally_revoked_user_gets_403(monkeypatch):
+    # 同岗位 (sales_manager) 两个人: 甲有权, 乙被个人 REVOKE —— 判据按人, 不按岗位
+    granted = {("F001", 1): {"sales:read"}}
+    c1, _ = _client(monkeypatch, "sales_manager", user_id=1)
+    _grants(monkeypatch, granted)
+    assert c1.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
+    c2, log2 = _client(monkeypatch, "sales_manager", user_id=2)
+    _grants(monkeypatch, granted)
+    assert c2.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403
+    assert log2 == []
+
+
+def test_missing_user_id_is_403(monkeypatch):
+    c, log = _client(monkeypatch, "sales_manager", user_id=None)
+    _grants(monkeypatch, {("F001", 7): {"sales:read"}})
+    assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 403 and log == []
+
+
+def _fake_httpx(monkeypatch, behavior):
+    """假 httpx.AsyncClient: behavior(url) -> 返回 (status, json) 或抛异常; 记录访问过的 url。"""
+    urls = []
+
+    class _Resp:
+        def __init__(self, status, body):
+            self.status_code, self._b = status, body
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"http {self.status_code}")
+
+        def json(self):
+            return self._b
+
+    class _Cli:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **kw):
+            urls.append((url, kw.get("params")))
+            status, body = behavior(url)
+            return _Resp(status, body)
+
+    monkeypatch.setattr(cc.httpx, "AsyncClient", _Cli)
+    return urls
+
+
+def test_blue_green_failover_10010_refused_falls_to_10020(monkeypatch):
+    monkeypatch.delenv("JAVA_API_BASE_URL", raising=False)
+    monkeypatch.delenv("BACKEND_BASE_URL", raising=False)
+
+    def behavior(url):
+        if ":10010" in url:
+            raise cc.httpx.ConnectError("refused")
+        return 200, {"data": {"allowed": True}}
+
+    urls = _fake_httpx(monkeypatch, behavior)
+    c, _ = _client(monkeypatch, "sales_manager")
+    assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 200
+    assert [u.split("/api/")[0] for u, _ in urls] == ["http://127.0.0.1:10010", "http://127.0.0.1:10020"]
+    assert urls[-1][1]["userId"] == 7 and urls[-1][1]["factoryId"] == "F001"
+
+
+def test_configured_base_does_not_fail_over_and_both_refused_is_503(monkeypatch):
+    monkeypatch.setenv("JAVA_API_BASE_URL", "http://127.0.0.1:10010")
+
+    def behavior(url):
+        raise cc.httpx.ConnectError("refused")
+
+    urls = _fake_httpx(monkeypatch, behavior)
+    c, log = _client(monkeypatch, "sales_manager")
+    assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 503
+    assert len(urls) == 1 and log == []
+
+
+def test_java_rejecting_the_internal_key_is_503_and_logged_as_config(monkeypatch, caplog):
+    monkeypatch.setenv("JAVA_API_BASE_URL", "http://127.0.0.1:10010")
+    _fake_httpx(monkeypatch, lambda url: (403, {}))
+    c, log = _client(monkeypatch, "sales_manager")
+    with caplog.at_level("ERROR"):
+        assert c.post(URL, json={"entity_type": "CUSTOMER", "field": "tax_number"}).status_code == 503
+    assert "config" in caplog.text and log == []
 
 
 def test_permission_service_down_is_503_not_allowed(monkeypatch):
@@ -197,6 +288,8 @@ def _java_src(rel):
     from pathlib import Path
     p = Path(__file__).resolve().parents[3] / "backend/java/cretas-api/src/main/java/com/cretas/aims" / rel
     if not p.exists():
+        if os.environ.get("CI"):
+            pytest.fail(f"CI 是全仓检出, Java 源码必须在: {p}")  # 跳过不算通过
         pytest.skip(f"Java 源码不在此检出中: {p}")
     return p.read_text(encoding="utf-8")
 
@@ -219,7 +312,7 @@ def test_python_permission_codes_equal_the_java_endpoints_codes():
 
 def test_privileged_role_gets_total_from_count_not_from_limit(monkeypatch):
     c, log = _client(monkeypatch, "factory_super_admin", total=321)
-    _grants(monkeypatch, {("F001", "factory_super_admin"): {"procurement:read", "finance:read"}})
+    _grants(monkeypatch, {("F001", 7): {"procurement:read", "finance:read"}})
     r = c.post(URL, json={"entity_type": "SUPPLIER", "field": "contact", "limit": 1000})
     assert r.status_code == 200
     d = r.json()["data"]

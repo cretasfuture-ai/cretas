@@ -15,7 +15,7 @@ context didn't propagate.
 """
 from fastapi import APIRouter, HTTPException, Request
 
-from common.tenant_identity import require_same_factory
+from common.tenant_identity import caller_user_id, require_same_factory
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import asyncpg
@@ -129,8 +129,8 @@ ENTITY_FIELD_MAP = {
 MASTER_DATA_ENTITY_TYPES = ["MATERIAL_TYPE", "CUSTOMER", "SUPPLIER"]
 
 # 主数据明细下钻 (id + 名称) 等同于吐名单, 判据必须和 Java 对应名册接口**同一个权限码**, 不在 Python 写死角色:
-# 谁有这些权限由 Java 的 L2 工厂覆盖 → L1 角色权限 → 兜底三层配置决定 (工厂改了权限立即生效),
-# Python 这里只负责把权限码交给 Java 判 (见 _java_role_has_any_permission)。
+# 谁有这些权限由 Java 的 L2 工厂覆盖 → L1 角色权限 → 兜底三层配置 + 个人覆盖决定 (改了最多 5 分钟后生效),
+# Python 这里只负责把权限码交给 Java 判 (见 _java_user_has_any_permission; Java 侧结果最多缓存 5 分钟)。
 # 码与 Java 的对应关系 (tests/test_completeness_master_data_endpoint.py 会读 Java 源码核对, 改一边另一边必须跟):
 #  * CUSTOMER      -> CustomerController 名单的 ROSTER_SALES_RW/R + ROSTER_FINANCE_RW/R
 #  * SUPPLIER      -> SupplierController 导出的 @RequirePermission (供应商列表本身对所有人开放, 导出是最严的一档)
@@ -141,27 +141,54 @@ MASTER_DATA_DRILLDOWN_PERMISSIONS = {
     "MATERIAL_TYPE": ["material_type:maintain"],
 }
 
-JAVA_API_BASE = os.getenv("JAVA_API_BASE", "http://localhost:10010")
+def _java_targets() -> List[str]:
+    """Java 的地址: 先用 java_base_url() (JAVA_API_BASE_URL / BACKEND_BASE_URL / 默认本机 10010);
+    没显式配置且默认是 10010 时, 10010 连不上再试蓝绿另一槽 10020 (与 cost_authorization 同一写法)。"""
+    from smartbi.services.factory_charts.finance_auth import java_base_url
+    base = java_base_url()
+    if not base:
+        raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+    configured = bool(os.getenv("JAVA_API_BASE_URL") or os.getenv("BACKEND_BASE_URL"))
+    targets = [base]
+    if not configured and base.endswith(":10010"):
+        targets.append(base[:-6] + ":10020")
+    return targets
 
 
-async def _java_role_has_any_permission(factory_id: str, role: str, codes: List[str]) -> bool:
-    """问 Java: 这个工厂里这个岗位有没有 codes 里任意一个权限 (Java 合并 L2/L1/兜底后回答)。
+async def _java_user_has_any_permission(factory_id: str, user_id: int, codes: List[str]) -> bool:
+    """问 Java: 这个工厂里这个用户 (含岗位 + 工厂覆盖 + 个人覆盖) 有没有 codes 里任意一个权限。
 
+    Java 的判定结果最多缓存 5 分钟, 工厂/个人改权限最多 5 分钟后在这里生效。
     Java 不可达 / 回错时抛 503, ⛔ 不当成「有权」放行, 也不退回写死的角色表。
     """
     headers = {"X-Internal-Key": os.getenv("INTERNAL_API_SECRET", "")}
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(
-                f"{JAVA_API_BASE}/api/internal/permissions/role-check",
-                params={"factoryId": factory_id, "role": role, "code": codes},
-                headers=headers,
-            )
-        resp.raise_for_status()
-        return bool(resp.json()["data"]["allowed"])
-    except Exception as exc:  # noqa: BLE001 - 任何失败都按「判不了」处理
-        logger.error(f"[completeness] 权限校验服务不可用: {exc}")
-        raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+    targets = _java_targets()
+    for index, target in enumerate(targets):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{target}/api/internal/permissions/user-check",
+                    params={"factoryId": factory_id, "userId": user_id, "code": codes},
+                    headers=headers,
+                )
+        except httpx.ConnectError as exc:
+            if index + 1 < len(targets):
+                continue  # 蓝绿另一槽
+            logger.error(f"[completeness] 权限校验服务连不上: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+        except Exception as exc:  # noqa: BLE001 - 任何其它失败都按「判不了」处理
+            logger.error(f"[completeness] 权限校验服务不可用: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+        if resp.status_code == 403:
+            # 内部密钥配错 (INTERNAL_API_SECRET 两边不一致): 不是宕机, 单独打 config 级错误便于排查
+            logger.error("[completeness] config: Java 拒绝内部密钥 (INTERNAL_API_SECRET 不一致?)")
+        try:
+            resp.raise_for_status()
+            return bool(resp.json()["data"]["allowed"])
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[completeness] 权限校验回应异常: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+    raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
 # 默认只算原来的 5 个生产实体, 主数据由调用方显式要 (设置页), 不改变既有页面的返回行数。
 DEFAULT_ENTITY_TYPES = [t for t in ENTITY_FIELD_MAP if t not in MASTER_DATA_ENTITY_TYPES]
 
@@ -511,9 +538,9 @@ async def api_missing_records(req: MissingRecordsRequest, request: Request):
     # 主数据三类按权限码判 (在任何取库之前); 其余 (生产实体: 批次等) 沿用本厂可见性, 有意不加岗位门。
     codes = MASTER_DATA_DRILLDOWN_PERMISSIONS.get(req.entity_type)
     if codes is not None:
-        role = str(getattr(request.state, "role", "") or "").lower()
-        if not role or not await _java_role_has_any_permission(factory_id, role, codes):
-            raise HTTPException(status_code=403, detail="当前岗位无权查看该名单的缺失明细")
+        user_id = caller_user_id(request)
+        if user_id is None or not await _java_user_has_any_permission(factory_id, user_id, codes):
+            raise HTTPException(status_code=403, detail="当前账号无权查看该名单的缺失明细")
     count_query = build_missing_query(req.entity_type, req.field, count=True)
     pool = await _get_db_pool()
     try:
