@@ -3,12 +3,23 @@
  * 溯源 DAG 追溯线 —— 原料批次 → 工序 → 本批次 → 质检 / 下游批次 / 出货 → 客户, 正查反查一张图。
  * 点节点 = 看详情 + 高亮它的整条上下游链路, 其余变淡。边的组装规则与缺口见 `traceGraph.ts`。
  */
-import { computed, ref, watch } from 'vue';
-import { VueFlow, Handle, Position, type Edge, type Node } from '@vue-flow/core';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { VueFlow, Handle, Position, useVueFlow, type Edge, type Node } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls } from '@vue-flow/controls';
 import type { FullTraceResponse } from '@/api/traceability';
-import { buildTraceGraph, chainOf, type TraceGraphNode, type TraceNodeKind } from './traceGraph';
+import {
+  buildTraceGraph,
+  chainOf,
+  dagFitZoom,
+  DAG_COL_GAP,
+  DAG_FONT,
+  DAG_NODE_H,
+  DAG_NODE_W,
+  DAG_ROW_GAP,
+  type TraceGraphNode,
+  type TraceNodeKind,
+} from './traceGraph';
 
 import '@vue-flow/core/dist/style.css';
 import '@vue-flow/core/dist/theme-default.css';
@@ -22,10 +33,11 @@ const emit = defineEmits<{
   (e: 'open-batch', batchNumber: string): void;
 }>();
 
-const NODE_W = 210;
-const NODE_H = 118;
-const COL_GAP = 90;
-const ROW_GAP = 18;
+const NODE_W = DAG_NODE_W;
+const NODE_H = DAG_NODE_H;
+const COL_GAP = DAG_COL_GAP;
+const ROW_GAP = DAG_ROW_GAP;
+const FLOW_ID = 'trace-dag-flow';
 
 const KIND_LABEL: Record<TraceNodeKind, string> = {
   upstream: '上游',
@@ -59,6 +71,44 @@ const positions = computed(() => {
   }
   return map;
 });
+
+// —— 自适应: 默认缩放跟容器宽度走 (有下限保可读), 容器高度跟图高走 ——
+const canvasEl = ref<HTMLElement | null>(null);
+const containerW = ref(0);
+const { setViewport } = useVueFlow(FLOW_ID);
+const graphSize = computed(() => {
+  let cols = 0;
+  let rows = 1;
+  const count = new Map<number, number>();
+  for (const n of graph.value.nodes) {
+    cols = Math.max(cols, n.column + 1);
+    count.set(n.column, (count.get(n.column) ?? 0) + 1);
+  }
+  for (const c of count.values()) rows = Math.max(rows, c);
+  return { w: cols * NODE_W + Math.max(0, cols - 1) * COL_GAP, h: rows * NODE_H + (rows - 1) * ROW_GAP };
+});
+const zoom = computed(() => dagFitZoom(containerW.value, graphSize.value.w));
+const canvasHeight = computed(() => Math.min(720, Math.max(360, Math.round(graphSize.value.h * zoom.value + 40))));
+function applyViewport() {
+  const y = Math.max(12, (canvasHeight.value - graphSize.value.h * zoom.value) / 2);
+  void setViewport({ x: 12, y, zoom: zoom.value });
+}
+let observer: ResizeObserver | null = null;
+onMounted(() => {
+  const el = canvasEl.value;
+  if (!el) return;
+  containerW.value = el.clientWidth;
+  if (typeof ResizeObserver !== 'undefined') {
+    observer = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0]?.contentRect.width ?? el.clientWidth);
+      if (w !== containerW.value) containerW.value = w;
+    });
+    observer.observe(el);
+  }
+  void nextTick(applyViewport);
+});
+onBeforeUnmount(() => observer?.disconnect());
+watch([zoom, canvasHeight, () => props.trace], () => { void nextTick(applyViewport); });
 
 type NodeState = 'selected' | 'chain' | 'dim' | 'normal';
 function stateOf(id: string): NodeState {
@@ -158,14 +208,19 @@ const STATE_CLASS: Record<NodeState, string> = {
   <div data-testid="trace-dag">
     <div class="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500" data-testid="trace-dag-columns">
       <span v-for="(c, i) in graph.columns.filter(Boolean)" :key="i">{{ c }}</span>
-      <span class="ml-auto">点节点看详情并高亮它的上下游链路，再点一次取消</span>
+      <span class="ml-auto">节点上直接显示要点；点节点看完整详情并高亮上下游链路，再点一次取消</span>
     </div>
-    <div class="trace-dag-canvas h-[460px] w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+    <div
+      ref="canvasEl"
+      class="trace-dag-canvas w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50"
+      :style="{ height: `${canvasHeight}px` }"
+      data-testid="trace-dag-canvas"
+    >
       <VueFlow
+        :id="FLOW_ID"
         :nodes="flowNodes"
         :edges="flowEdges"
-        :fit-view-on-init="true"
-        :fit-view-options="{ minZoom: 0.6, maxZoom: 1, padding: 0.1 }"
+        :default-viewport="{ x: 12, y: 12, zoom }"
         :min-zoom="0.2"
         :max-zoom="1.5"
         :nodes-draggable="false"
@@ -175,7 +230,8 @@ const STATE_CLASS: Record<NodeState, string> = {
       >
         <template #node-trace="{ id, data }">
           <div
-            class="w-[210px] cursor-pointer rounded-lg border bg-white p-2 text-left text-xs"
+            class="cursor-pointer overflow-hidden rounded-lg border bg-white p-2 text-left"
+            :style="{ width: `${NODE_W}px`, minHeight: `${NODE_H}px` }"
             :class="STATE_CLASS[data.state as NodeState]"
             :data-testid="`dag-node-${id}`"
             :data-node-id="id"
@@ -189,11 +245,11 @@ const STATE_CLASS: Record<NodeState, string> = {
           >
             <Handle type="target" :position="Position.Left" />
             <div class="mb-1 flex items-center justify-between gap-1">
-              <span class="truncate text-[11px] font-semibold text-slate-500">{{ KIND_LABEL[data.node.kind as TraceNodeKind] }}</span>
-              <span class="rounded px-1.5 py-0.5 text-[11px]" :class="TONE_CLASS[data.node.tone]">{{ data.node.statusText }}</span>
+              <span class="truncate font-semibold text-slate-500" :style="{ fontSize: `${DAG_FONT.label}px` }" data-testid="dag-node-kind">{{ KIND_LABEL[data.node.kind as TraceNodeKind] }}</span>
+              <span class="rounded px-1.5 py-0.5" :class="TONE_CLASS[data.node.tone]" :style="{ fontSize: `${DAG_FONT.label}px` }" data-testid="dag-node-status">{{ data.node.statusText }}</span>
             </div>
-            <div class="truncate text-sm font-semibold text-slate-900" :title="data.node.title">{{ data.node.title }}</div>
-            <div v-for="l in data.node.lines" :key="l.label" class="flex justify-between gap-2 text-slate-600">
+            <div class="truncate font-semibold text-slate-900" :style="{ fontSize: `${DAG_FONT.title}px`, lineHeight: 1.4 }" :title="data.node.title" data-testid="dag-node-title">{{ data.node.title }}</div>
+            <div v-for="l in data.node.lines" :key="l.label" class="flex justify-between gap-2 text-slate-600" :style="{ fontSize: `${DAG_FONT.line}px`, lineHeight: 1.45 }" data-testid="dag-node-line">
               <span class="shrink-0">{{ l.label }}</span>
               <span class="truncate" :class="{ 'text-slate-400': l.value === '未记录' }">{{ l.value }}</span>
             </div>
