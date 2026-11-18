@@ -11,6 +11,8 @@ import { usePermissionStore } from '@/store/modules/permission';
 import { get } from '@/api/request';
 import { getGoldDataRange } from '@/api/smartbi/dataRange';
 import { getKpiSummary, getTrendBundle } from '@/api/smartbi/gold';
+import { getFactorySalesSummary } from '@/api/smartbi/factoryOverview';
+import { buildSystemSalesKpiCards, hasSystemSalesCards, SYS_KEY, SYSTEM_SALES_PERIOD } from './dashboardSystemSales';
 import { ElMessage } from 'element-plus';
 import {
   TrendCharts,
@@ -169,6 +171,30 @@ const kpiData = computed(() => {
     (c.title || '').toLowerCase().includes(keyword)
   );
 
+  // 系统销售订单口径 (无上传数据时的回退, 与经营分析页「销售订单」同源)。
+  if (hasSystemSalesCards(cards)) {
+    const amt = findCard(SYS_KEY.amount);
+    const avg = findCard(SYS_KEY.avg);
+    const ord = findCard(SYS_KEY.orders);
+    const inflight = findCard(SYS_KEY.inFlight);
+    return {
+      totalRevenue: amt?.rawValue ?? null,
+      revenueGrowth: null as number | null,
+      revenueLabel: '订单金额',
+      totalProfit: avg?.rawValue ?? null,
+      profitGrowth: null as number | null,
+      profitLabel: '单均金额',
+      profitUnit: '元',
+      orderCount: ord?.rawValue ?? null,
+      orderGrowth: null as number | null,
+      orderLabel: '有效订单数',
+      customerCount: inflight?.rawValue ?? null,
+      customerGrowth: null as number | null,
+      customerLabel: '在途订单',
+      customerUnit: '张',
+    };
+  }
+
   // Gold-mode mapping (restaurant POS): total_revenue / bill_count / avg_bill_value / store_count.
   // Restaurants don't track profit or unique customers at this layer, so relabel slots 2-4 accordingly.
   const goldRev = findCard('total_revenue');
@@ -261,7 +287,8 @@ const isGoldMode = computed(() => {
   const cards = dashboardData.value?.kpiCards;
   if (!cards || cards.length === 0) return false;
   const has = (key: string) => cards.some(c => c.key === key);
-  return has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count');
+  return (has('total_revenue') && has('bill_count') && has('avg_bill_value') && has('store_count'))
+    || hasSystemSalesCards(cards);
 });
 
 // 部门排行数据 (从 rankings 提取)
@@ -1057,6 +1084,17 @@ async function loadGoldDashboardData() {
   }
 }
 
+async function loadSystemSalesCards() {
+  try {
+    return buildSystemSalesKpiCards(await getFactorySalesSummary());
+  } catch (e) {
+    console.warn('系统销售订单汇总加载失败, 驾驶舱保持空状态:', e);
+    return null;
+  }
+}
+
+const isSystemSalesSource = computed(() => dashboardData.value?.period === SYSTEM_SALES_PERIOD);
+
 async function loadDashboardData() {
   if (!factoryId.value) {
     ElMessage.warning('未获取到工厂ID，请重新登录');
@@ -1126,6 +1164,29 @@ async function loadDashboardData() {
       } else {
         fallbackRangeLabel.value = '';
         fallbackDateRange.value = null;
+      }
+
+      // 无上传/gold 数据时回退到业务库销售订单汇总 (与经营分析页同一接口, 租户来自登录)。
+      // 失败或无订单 → 保持空状态, 不造数。
+      const finalCards = dashboardData.value?.kpiCards || [];
+      if (!finalCards.some(c => c.rawValue != null && c.rawValue !== 0)) {
+        const sysCards = await loadSystemSalesCards();
+        if (sysCards) {
+          dashboardData.value = {
+            period: SYSTEM_SALES_PERIOD,
+            startDate: '',
+            endDate: '',
+            kpiCards: sysCards,
+            rankings: {},
+            charts: {},
+            aiInsights: [],
+            alerts: [],
+            generatedAt: new Date().toISOString(),
+          } as DashboardResponse;
+          fallbackRangeLabel.value = '';
+          fallbackDateRange.value = null;
+          return;
+        }
       }
 
       // Async load LLM insights (non-blocking, renders after KPIs+charts)
@@ -1776,6 +1837,20 @@ onUnmounted(() => {
       :showAction="canUpload"
       @action="goToUpload"
     />
+
+    <el-alert
+      v-if="isSystemSalesSource && !loading"
+      type="info"
+      :closable="false"
+      show-icon
+      style="margin-bottom: 12px;"
+      data-testid="system-sales-source-note"
+    >
+      <template #title>
+        暂无上传报表数据，以下 KPI 来自业务系统销售订单（全部历史，不含已取消、草稿、财务驳回）。图表与排行需要上传报表，更多见
+        <el-link type="primary" :underline="false" @click="router.push('/smart-bi/analysis-hub')">经营分析</el-link>。
+      </template>
+    </el-alert>
 
     <!-- Apr 24 UX: fallback-range notice (本月 empty, auto-switched to historical) -->
     <el-alert
