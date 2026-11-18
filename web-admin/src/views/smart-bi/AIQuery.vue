@@ -84,6 +84,7 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
+import { inferAiChartMeta } from './aiChartMeta';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
 import { chooseAiQueryRoute } from './components/chat/aiQueryRoute';
@@ -249,38 +250,6 @@ function extractChartLabels(opt: Record<string, unknown>, chartType: string): st
   return [];
 }
 
-function inferAiChartMeta(
-  chartType: string,
-  title: string,
-  content = '',
-): NonNullable<ChartWithMeta['meta']> {
-  const text = `${title} ${content}`;
-  const isReview = /评价|口碑|差评|星级|服务分|环境分|好评|低星|点评|美团/.test(text);
-  const isRevenue = /收入|营收|营业额|销售额|堂食|外卖|客单/.test(text);
-  const xDim = chartType === 'line'
-    ? 'time'
-    : /平台|点评|美团/.test(text)
-      ? 'channel'
-      : /门店|店/.test(text)
-        ? 'store'
-        : /菜品|口味|标签|好评词|差评词/.test(text)
-          ? 'product'
-          : 'category';
-  const yMetric = /占比|率/.test(text)
-    ? 'pct'
-    : isReview
-      ? 'count'
-      : isRevenue
-        ? 'revenue'
-        : 'quantity';
-  return {
-    xDim,
-    yMetric,
-    aggregation: /平均|均值/.test(text) ? 'avg' : 'sum',
-    domain: isReview || isRevenue ? 'restaurant' : 'factory',
-  };
-}
-
 function normalizeSeriesData(
   opt: Record<string, unknown>,
   chartType: string,
@@ -304,7 +273,7 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title, msg.content);
+  const meta = inferAiChartMeta(ct, title, msg.content, seriesData[0]?.name);
 
   return {
     chartType: ct,
@@ -332,7 +301,7 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title);
+  const meta = inferAiChartMeta(ct, title, '', seriesData[0]?.name);
 
   return {
     chartType: ct,
@@ -1886,9 +1855,14 @@ async function handleSendMessage() {
       if (idx !== -1) {
         const msg = chatHistory.value[idx];
         // If still loading (no chunks arrived), content is just status text — prefer result.answer
-        const finalContent = msg.loading
-          ? (result.answer || '分析完成')
-          : (msg.content || result.answer || '分析完成');
+        // 后端发现 LLM 文字和图数据对不上时, done.answer 是由图数据写的结论 (answer_corrected),
+        // 必须覆盖已流出的 LLM 文字, 否则文字说 65% 图上是 43.99%。
+        const answerCorrected = (result as { answer_corrected?: boolean }).answer_corrected === true;
+        const finalContent = answerCorrected && result.answer
+          ? result.answer
+          : msg.loading
+            ? (result.answer || '分析完成')
+            : (msg.content || result.answer || '分析完成');
 
         // Build chart data for compat
         let chartData: ChatMessage['chart'] | undefined;

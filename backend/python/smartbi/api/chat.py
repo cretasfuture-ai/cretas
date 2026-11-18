@@ -18,7 +18,7 @@ import json as _json
 import logging
 from datetime import date
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -1593,6 +1593,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
         except Exception as chart_err:
             logger.warning(f"Chart generation failed in general_analysis: {chart_err}")
         charts = _prefer_question_chart(query, df, charts)
+        answer, _ = _reconcile_answer_with_question_chart(answer, charts)
 
         # Sanitize insights to remove NaN/Infinity before JSON serialization
         insights = _sanitize_for_json(insights)
@@ -3251,6 +3252,10 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             else:
                 charts = _prefer_question_chart(query, df, charts)
 
+            # 问题 51 返工 (LSM-COSTBI-F3): 文字结论必须和图同源。LLM 文字已流出去了,
+            # 对不上图数据就用代码结论覆盖 (done.answer + answer_corrected, 前端据此替换)。
+            full_text, _answer_corrected = _reconcile_answer_with_question_chart(full_text, charts)
+
             if charts:
                 yield _sse_event("charts", charts)
 
@@ -3400,6 +3405,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             yield _sse_event("done", {
                 "success": True,
                 "answer": full_text,
+                "answer_corrected": _answer_corrected,
                 "charts": charts,
                 "log_id": _log_id,
                 "warning": _guard_warning,
@@ -3971,6 +3977,21 @@ def _prefer_question_chart(query: Optional[str], df, charts: List[Dict[str, Any]
         return charts
     logger.info(f"[question-chart] {qchart.get('question_chart')}")
     return [_sanitize_for_json(qchart)]
+
+
+def _reconcile_answer_with_question_chart(answer: str, charts: List[Dict[str, Any]]) -> Tuple[str, bool]:
+    """图是按问题现算的 (question_chart) 时, 文字里的占比必须出自同一份图数据; 对不上换代码结论。"""
+    try:
+        from smartbi.services.question_chart import reconcile_answer_with_chart
+        for c in charts or []:
+            if isinstance(c, dict) and c.get("question_chart"):
+                fixed, changed = reconcile_answer_with_chart(answer or "", c)
+                if changed:
+                    logger.warning("[question-chart] LLM answer disagreed with chart data; replaced by code conclusion")
+                return fixed, changed
+    except Exception as exc:
+        logger.warning(f"[question-chart] reconcile failed (keep answer): {exc}")
+    return answer, False
 
 
 async def _prefer_question_chart_for_upload(
