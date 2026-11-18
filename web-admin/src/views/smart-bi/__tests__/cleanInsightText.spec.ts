@@ -16,7 +16,7 @@ import { describe, it, expect } from 'vitest';
 function cleanInsightText(s: string): string {
   if (!s) return s;
   let t = s;
-  // Strip CJK entity brackets: [美团套餐券] → 美团套餐券; preserve [1]/[2] citations.
+  // Strip CJK entity brackets: [华东冷链客户] → 华东冷链客户; preserve [1]/[2] citations.
   t = t.replace(/[\[【]([^\[\]【】]*[一-鿿][^\[\]【】]*)[\]】]/g, '$1');
   // Remove markdown emphasis markers: **x** / __x__ / *x* / _x_
   t = t.replace(/\*\*([^*]+)\*\*/g, '$1');
@@ -118,7 +118,7 @@ describe('cleanInsightText — markdown stripping', () => {
 
 describe('cleanInsightText — CJK bracket stripping (existing stripEntityBrackets behavior)', () => {
   it('strips [CJK entity name] brackets', () => {
-    expect(cleanInsightText('[美团套餐券]消费增加')).toBe('美团套餐券消费增加');
+    expect(cleanInsightText('[华东冷链客户]消费增加')).toBe('华东冷链客户消费增加');
   });
 
   it('strips 【CJK entity name】 full-width brackets', () => {
@@ -131,8 +131,8 @@ describe('cleanInsightText — CJK bracket stripping (existing stripEntityBracke
   });
 
   it('strips entity brackets but preserves numeric citations in same string', () => {
-    const input = '[美团套餐券]排名第一[1]，[叮咚买菜]次之[2]';
-    expect(cleanInsightText(input)).toBe('美团套餐券排名第一[1]，叮咚买菜次之[2]');
+    const input = '[华东冷链客户]排名第一[1]，[南方食品批发]次之[2]';
+    expect(cleanInsightText(input)).toBe('华东冷链客户排名第一[1]，南方食品批发次之[2]');
   });
 });
 
@@ -162,7 +162,7 @@ describe('cleanInsightText — paragraph normalization', () => {
       '',
       '**总营收**本月达到 ¥78万，环比增长 *15%*。',
       '',
-      '- [美团套餐券]销售占比 45%[1]',
+      '- [华东冷链客户]销售占比 45%[1]',
       '- 堂食客单价 `¥120`',
       '',
       '> 建议: 加大外卖推广力度',
@@ -174,8 +174,8 @@ describe('cleanInsightText — paragraph normalization', () => {
     expect(result).not.toContain('*15%*');
     expect(result).not.toContain('`');
     expect(result).not.toContain('> 建议');
-    expect(result).not.toContain('[美团套餐券]');
-    expect(result).toContain('美团套餐券');
+    expect(result).not.toContain('[华东冷链客户]');
+    expect(result).toContain('华东冷链客户');
     expect(result).toContain('[1]');           // citation preserved
     expect(result).toContain('总营收');
     expect(result).toContain('· ');            // list item converted

@@ -28,13 +28,6 @@ export const PAGE_TEMPLATE_MAP: Record<string, readonly string[]> = {
     'weekday_weekend_pattern',
     'monthly_anomaly',
   ],
-  restaurantv2: [
-    'dish_sales_top_n',
-    'dish_slow_movers',
-    'dish_category_breakdown',
-    'combo_usage_rate',
-    'time_slot_revenue',
-  ],
 } as const;
 
 export type TemplatePageKey = keyof typeof PAGE_TEMPLATE_MAP;
@@ -67,15 +60,6 @@ export const TEMPLATE_TITLES: Record<string, string> = {
   period_comparison_trend: '营收趋势对比',
   weekday_weekend_pattern: '周末平日对比',
   monthly_anomaly: '月度异常',
-  // 菜品
-  dish_sales_top_n: '热销菜品 Top N',
-  dish_slow_movers: '慢销菜品',
-  dish_category_breakdown: '菜品分类明细',
-  dish_by_table_type: '桌位类型菜品',
-  dish_time_slot_matrix: '菜品 × 时段矩阵',
-  dish_store_drill: '菜品 × 门店下钻',
-  combo_usage_rate: '套餐使用率',
-  time_slot_revenue: '时段营业额',
   // 渠道 / 门店 / 员工
   channel_analysis: '堂食外卖渠道',
   store_performance: '门店业绩',
@@ -104,11 +88,6 @@ export const TEMPLATE_REQUIRED_FIELDS: Record<string, string> = {
   revenue_management_report: '营业额 / 渠道 / 门店',
   stored_value_card_consumption: '储值卡消费金额 / 会员ID',
   groupon_channel_breakdown: '渠道 / 代金券类型 / 消费金额',
-  dish_sales_top_n: '菜品名称 / 销量 / 金额',
-  dish_slow_movers: '菜品名称 / 销量',
-  dish_category_breakdown: '菜品分类 / 销售数据',
-  combo_usage_rate: '套餐使用记录',
-  time_slot_revenue: '时间 / 营业额',
   monthly_trend: '时间字段 + 数值指标',
   period_comparison_trend: '时间字段 + 数值指标 (≥2 月)',
   weekday_weekend_pattern: '每日营业数据',
@@ -127,11 +106,6 @@ export const RESTAURANT_ONLY_TEMPLATE_CODES: ReadonlySet<string> = new Set([
   'revenue_management_report',
   'stored_value_card_consumption',
   'groupon_channel_breakdown',
-  'dish_sales_top_n',
-  'dish_slow_movers',
-  'dish_category_breakdown',
-  'combo_usage_rate',
-  'time_slot_revenue',
 ]);
 
 /** 按业务域(auth store businessDomain: FACTORY/RESTAURANT/LOGISTICS)过滤模板。

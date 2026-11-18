@@ -102,6 +102,23 @@ _PAID_MODEL_DENYLIST: frozenset = frozenset({
     "qwen3.5-122b-a10b",      # not on allowlist
 })
 
+# 2026-11-18 Steve 裁定: qwen-max 系列整体禁用(不止裸名, 带日期/-latest/-preview 的也禁)。
+# 只按前缀禁 qwen3-max / qwen-max, 不禁 qwen3.7-max-2026-06-08 —— 那是当前免费的质量主力型号。
+_PAID_MODEL_PREFIX_DENYLIST: tuple = ("qwen3-max", "qwen-max")
+
+
+def is_paid_denied(model: str) -> bool:
+    """单一判定入口: 精确名单 ∪ 禁用前缀。call_chain / call_chain_stream / vl_client 都用它。"""
+    m = (model or "").strip().lower()
+    return m in _PAID_MODEL_DENYLIST or m.startswith(_PAID_MODEL_PREFIX_DENYLIST)
+
+
+# 2026-11-18 Steve 裁定: 不用 Qwen 向量模型(text-embedding-* / qwen*-embedding)。
+# 生产 embedding 只用本地 gte-base-zh(Java embedding-service, gRPC)。
+def is_banned_embedding_model(model: str) -> bool:
+    m = (model or "").strip().lower()
+    return "embedding" in m and ("text-embedding" in m or "qwen" in m)
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Billing-safe model registry (per-(account, model)) — 2026-07-01 rebuild.
 # Console scrape 2026-06-30/07-01 (aliyun a/b/c), live-probe verified (~40 pairs,
@@ -332,8 +349,7 @@ _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
 # 链序(人写): 快且稳的在前。只有同时在 `_LOGPROB_VERIFIED` 里的才进池。
 _LOGPROB_ORDER: List[Tuple[str, str]] = [
     ("openai", "gpt-4.1-mini"),
-    # 停用中(`_DISABLED_ACCOUNTS`), 由 `_build_chain` 滤掉; 留着是为了恢复时不用重写顺序。
-    ("aliyun_a_vl", "qwen3.7-flash"),
+    # 2026-11-18 Steve 裁定: 意图决策不再使用 qwen3.7-flash(登记表里的证据条目保留, 但不进决策池)。
     ("aliyun_a_vl", "qwen3.8-flash"),
 ]
 
@@ -966,8 +982,8 @@ def _refuse_reason(account: str, model: str,
     if (account, model) == ("aliyun_a_vl", "deepseek-v4.1-flash"):
         if os.getenv("LLM_WAREHOUSE_V41_ENABLED") != "1":
             return "warehouse_v41_not_enabled"  # explicit production enable required
-    if model in _PAID_MODEL_DENYLIST:
-        return "paid_denylist"           # final veto on known-catastrophic bare names
+    if is_paid_denied(model):
+        return "paid_denylist"           # final veto: qwen-max 系列 + 已知灾难裸名(2026-11-18 起含前缀)
     exp = _SAFE_MODELS.get((account, model))
     if exp is not None and today >= exp:
         return "expired"                 # free grant lapsed → may bill → hard-drop

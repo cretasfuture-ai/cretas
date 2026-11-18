@@ -4,7 +4,7 @@
 (gpt-6-luna, 原生全选项概率, `call_decision_choice`), 失败再回落下面第 2 步的读 logprobs 链;
 没配时与原来完全一样, 只走阿里云 qwen 读 logprobs 链。粗选仍是 SLOT.DECISION 的短 JSON 生成。
 
-两次快调用, 都走 SLOT.DECISION (qwen3.7-flash 链头):
+两次快调用, 都走 SLOT.DECISION (qwen3.8-flash 链头; 2026-11-18 起不再用 qwen3.7-flash):
   1. 粗选: 全目录 (代码｜名称) -> 最多 8 个候选 (短 JSON 生成; 目录是静态前缀, 吃隐式缓存)
   2. 细选: 候选 (粗选 + 向量补足, 最多 20 个) 编成字母 A-T, 前缀续写「答案：」,
      max_tokens=1, 读首 token 的 top_logprobs -> 每个候选一个概率
