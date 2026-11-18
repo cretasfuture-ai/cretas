@@ -69,7 +69,7 @@ work=$(mktemp -d)
 printf 'built on mini\n' > "$work/Main.class"
 (cd "$work" && jar --create --file remote.jar Main.class)
 cp "$work/remote.jar" "$pull_to"
-sha=$(sha256sum "$pull_to" | awk '{print $1}')
+sha=$(sha256sum "$pull_to"); sha=${sha%% *}
 [ "$FAKE_MODE" != badsha ] || sha=$(printf '%064d' 0)
 echo "REMOTE_JAR_PATH=/Users/rex/cretas-build/out/x.jar"
 echo "REMOTE_JAR_SHA256=$sha"
@@ -128,8 +128,8 @@ grep -q 'not falling back to local Maven' "$TMP_ROOT/refused.log" || fail "refus
 # 3. 受限接收端
 RC="$TMP_ROOT/rc"; mkdir -p "$RC/cache" "$RC/w"
 printf 'hi\n' > "$RC/w/a.txt"; (cd "$RC/w" && jar --create --file t.jar a.txt)
-J="$RC/w/t.jar"; S=$(sha256sum "$J" | awk '{print $1}'); N=$(wc -c < "$J" | tr -d '[:space:]')
-printf 'notzip' > "$RC/w/nz"; NZS=$(sha256sum "$RC/w/nz" | awk '{print $1}')
+J="$RC/w/t.jar"; S=$(sha256sum "$J"); S=${S%% *}; N=$(wc -c < "$J"); N=${N//[[:space:]]/}
+printf 'notzip' > "$RC/w/nz"; NZS=$(sha256sum "$RC/w/nz"); NZS=${NZS%% *}
 recv() { CRETAS_REMOTE_JAR_CACHE_DIR="$RC/cache" CRETAS_STAGE_RECEIVE_LOG="$RC/log" SSH_ORIGINAL_COMMAND="$1" bash "$RECEIVER"; }
 expect_rc() {
     local want=$1 label=$2 cmd=$3 input=${4:-/dev/null} got

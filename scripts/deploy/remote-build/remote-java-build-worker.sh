@@ -131,7 +131,8 @@ started=$(date +%s)
 mvn_rc=$?
 wall=$(( $(date +%s) - started ))
 kill "$SAMPLER" 2>/dev/null; wait "$SAMPLER" 2>/dev/null; SAMPLER=
-free_min=$(sort -n "$ROOT/logs/mem-$COMMIT.log" | head -1)
+free_min=$(sort -n "$ROOT/logs/mem-$COMMIT.log")
+free_min=${free_min%%$'\n'*}
 
 if [ "$mvn_rc" -ne 0 ]; then
     tail -60 "$LOGF" >&2
@@ -147,11 +148,12 @@ out="$ROOT/out/$COMMIT.jar"
 cp -f "$jar" "$out.tmp" && mv -f "$out.tmp" "$out" || fail copy_out
 # 只留最近 3 份产物。
 ls -t "$ROOT"/out/*.jar 2>/dev/null | tail -n +4 | while read -r old; do rm -f "$old"; done
-sha=$(/usr/bin/shasum -a 256 "$out" | awk '{print $1}')
+sha=$(/usr/bin/shasum -a 256 "$out") || fail sha_unreadable
+sha=${sha%% *}
 size=$(wc -c < "$out" | tr -d '[:space:]')
 props=$("$JDK/bin/java" -XshowSettings:properties -version 2>&1)
-vendor=$(printf '%s\n' "$props" | sed -nE 's/^[[:space:]]*java\.vendor[[:space:]]*=[[:space:]]*//p' | head -1)
-version=$(printf '%s\n' "$props" | sed -nE 's/^[[:space:]]*java\.version[[:space:]]*=[[:space:]]*//p' | head -1)
+vendor=$(sed -nE '/^[[:space:]]*java\.vendor[[:space:]]*=/{s/^[^=]*=[[:space:]]*//p;q;}' <<< "$props")
+version=$(sed -nE '/^[[:space:]]*java\.version[[:space:]]*=/{s/^[^=]*=[[:space:]]*//p;q;}' <<< "$props")
 
 stage_status=not-requested
 if [ "$STAGE_FROM_REMOTE" = 1 ]; then

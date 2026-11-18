@@ -443,7 +443,7 @@ release_manifest_build_remote() {
     local manifest=$3
     local host=$CRETAS_RELEASE_REMOTE_BUILD_HOST
     local script_dir cache_dir pulled basis out_log rc test_includes
-    local remote_vendor remote_version remote_wall remote_sha command_text
+    local remote_vendor remote_version remote_wall remote_sha command_text pulled_sha
 
     script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     cache_dir=$(dirname "$manifest")
@@ -470,10 +470,10 @@ release_manifest_build_remote() {
         return 1
     fi
 
-    remote_vendor=$(sed -n 's/^REMOTE_JDK_VENDOR=//p' "$out_log" | tail -1)
-    remote_version=$(sed -n 's/^REMOTE_JDK_VERSION=//p' "$out_log" | tail -1)
-    remote_wall=$(sed -n 's/^REMOTE_MAVEN_WALL_SECONDS=//p' "$out_log" | tail -1)
-    remote_sha=$(sed -n 's/^REMOTE_JAR_SHA256=//p' "$out_log" | tail -1)
+    remote_vendor=$(awk -v k=REMOTE_JDK_VENDOR 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_version=$(awk -v k=REMOTE_JDK_VERSION 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_wall=$(awk -v k=REMOTE_MAVEN_WALL_SECONDS 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
+    remote_sha=$(awk -v k=REMOTE_JAR_SHA256 'index($0, k "=") == 1 { v = substr($0, length(k) + 2) } END { print v }' "$out_log")
     rm -f "$out_log"
     case "$remote_wall" in ''|*[!0-9]*) rm -f "$pulled"; echo "ERROR: remote build gave no wall time" >&2; return 1 ;; esac
     [ -n "$remote_vendor" ] && [ -n "$remote_version" ] \
@@ -482,7 +482,8 @@ release_manifest_build_remote() {
     # 取回的字节必须就是远端编出来的那个 (驱动脚本已校验过一次; 这里在写 manifest 之前独立再验,
     # 不信任何一层的自述)。
     [[ "$remote_sha" =~ ^[0-9a-f]{64}$ ]] \
-        && [ "$(sha256sum "$pulled" 2>/dev/null | awk '{print tolower($1)}')" = "$remote_sha" ] \
+        && pulled_sha=$(sha256sum "$pulled" 2>/dev/null) \
+        && pulled_sha=${pulled_sha%% *} && [ "${pulled_sha,,}" = "$remote_sha" ] \
         || { rm -f "$pulled"; echo "ERROR: pulled JAR sha256 does not match remote build sha256; manifest not written" >&2; return 1; }
     release_manifest_require_clean_worktree "$repo_root" \
         || { rm -f "$pulled"; echo "ERROR: worktree changed during remote release build; manifest not written" >&2; return 1; }

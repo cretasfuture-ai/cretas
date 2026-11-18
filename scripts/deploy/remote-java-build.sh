@@ -72,11 +72,13 @@ COMMIT=$(git -C "$REPO_ROOT" rev-parse HEAD) || exit 1
 TREE=$(git -C "$REPO_ROOT" rev-parse "HEAD:backend/java/cretas-api") || exit 1
 
 # 1. 上传 worker 到内容寻址的文件名, 再核对远端哈希 (防 CRLF / 截断)。
-worker_sha=$(sha256sum "$WORKER" | awk '{print $1}')
+worker_sha=$(sha256sum "$WORKER") || exit 1
+worker_sha=${worker_sha%% *}
 remote_worker="$REMOTE_ROOT/worker-$worker_sha.sh"
 ssh "${SSH_OPTS[@]}" "$HOST" "mkdir -p $REMOTE_ROOT && cat > $remote_worker" < "$WORKER" \
     || { echo "ERROR: cannot upload worker to $HOST" >&2; exit 1; }
-got_sha=$(ssh "${SSH_OPTS[@]}" "$HOST" "/usr/bin/shasum -a 256 $remote_worker" </dev/null | awk '{print $1}')
+got_sha=$(ssh "${SSH_OPTS[@]}" "$HOST" "/usr/bin/shasum -a 256 $remote_worker" </dev/null) || got_sha=
+got_sha=${got_sha%% *}
 [ "$got_sha" = "$worker_sha" ] \
     || { echo "ERROR: worker hash mismatch on $HOST (got ${got_sha:-none})" >&2; exit 1; }
 
@@ -115,7 +117,7 @@ fi
 pull_started=$(date +%s)
 rsync -az --stats --timeout=120 "$HOST:$remote_jar" "$(ssh_local_path "$PULL_TO")" > "$out_log.rsync" 2>&1
 pull_rc=$?
-literal=$(sed -nE 's/^Literal data: ([0-9,]+) bytes.*/\1/p' "$out_log.rsync" | head -1)
+literal=$(sed -nE '/^Literal data: /{s/^Literal data: ([0-9,]+) bytes.*/\1/p;q;}' "$out_log.rsync")
 rm -f "$out_log.rsync"
 if [ "$pull_rc" -ne 0 ]; then
     rm -f "$PULL_TO"
@@ -125,7 +127,9 @@ fi
 printf 'PULL_SECONDS=%s\n' "$(( $(date +%s) - pull_started ))"
 printf 'PULL_LITERAL_BYTES=%s\n' "${literal//,/}"
 
-local_sha=$(sha256sum "$PULL_TO" | awk '{print tolower($1)}')
+local_sha=$(sha256sum "$PULL_TO") || local_sha=
+local_sha=${local_sha%% *}
+local_sha=${local_sha,,}
 [ "$local_sha" = "$remote_sha" ] \
     || { rm -f "$PULL_TO"; echo "ERROR: pulled JAR sha256 $local_sha != remote $remote_sha" >&2; exit 1; }
 unzip -tqq "$PULL_TO" >/dev/null 2>&1 \
