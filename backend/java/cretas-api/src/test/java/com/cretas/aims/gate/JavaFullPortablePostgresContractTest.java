@@ -146,6 +146,11 @@ class JavaFullPortablePostgresContractTest {
                     .redirectErrorStream(true);
             builder.directory(workspace.toFile());
             builder.environment().put("GITHUB_WORKSPACE", shellPath(workspace));
+            // The run block is `set -u` and writes under $RUNNER_TEMP, which only the Actions runner
+            // provides. Give it a private dir so the test does not depend on running inside Actions
+            // (2026-11-18: failed with "RUNNER_TEMP: unbound variable" on a plain canada-mini shell).
+            Path runnerTemp = Files.createDirectories(workspace.resolve("runner-temp"));
+            builder.environment().put("RUNNER_TEMP", shellPath(runnerTemp));
             builder.environment().put("FAKE_LOG", shellPath(log));
             builder.environment().put("FAKE_REPORT", shellPath(report));
             builder.environment().put("FAKE_R10_REPORT", shellPath(r10Report));
