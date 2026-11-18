@@ -218,7 +218,7 @@ const kpiData = computed(() => {
       orderGrowth: null as number | null,
       customerCount: goldStores.rawValue ?? null,
       customerGrowth: null as number | null,
-      customerLabel: authStore.factoryType === 'RESTAURANT' ? '门店数' : '网点数',
+      customerLabel: authStore.factoryType === 'RESTAURANT' ? '门店数' : '销售网点数',
       customerUnit: '家',
     };
   }

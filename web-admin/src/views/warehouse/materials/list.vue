@@ -50,14 +50,33 @@ const receivingFilter = computed<ReceivingTaskFilter>(() =>
 const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
   ? `${pagination.value.total} 个批次`
   : `${receivingCounts.value[receivingFilter.value]} 项任务`);
+// 默认落点：没有待处理任务、但已有入库批次时，直接打开「已入库批次」，避免用户一进来看到空表。
+// 只在用户没有点过标签、URL 没指定 view 时自动切换一次。
+const inboundTabTouched = ref(false);
+const receivingCountsLoaded = ref(false);
 function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
   receivingCounts.value = counts;
+  receivingCountsLoaded.value = true;
 }
+function handleInboundTabChange(): void {
+  inboundTabTouched.value = true;
+}
+watch(
+  [() => receivingCounts.value.ALL, () => pagination.value.total, receivingCountsLoaded],
+  ([taskTotal, batchTotal, loaded]) => {
+    if (inboundTabTouched.value || !loaded) return;
+    if (activeInboundTab.value === 'ALL' && taskTotal === 0 && batchTotal > 0) {
+      activeInboundTab.value = 'BATCHES';
+      inboundTabTouched.value = true;
+    }
+  },
+);
 
 watch(
   () => route.query.view,
   (view) => {
     const normalized = String(view || '').toUpperCase();
+    if (normalized) inboundTabTouched.value = true;
     if (normalized === 'BATCHES' || normalized === 'INVENTORY') activeInboundTab.value = 'BATCHES';
     else if (normalized === 'RECEIVING' || normalized === 'TASKS') activeInboundTab.value = 'ALL';
   },
@@ -776,7 +795,7 @@ async function handleGenerateLabel(row: TableRow) {
         </div>
       </template>
 
-      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
+      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs" @tab-change="handleInboundTabChange">
         <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
         <el-tab-pane :label="`待收货 ${receivingCounts.WAITING_RECEIVE}`" name="WAITING_RECEIVE" />
         <el-tab-pane :label="`收货中 ${receivingCounts.RECEIVING}`" name="RECEIVING" />

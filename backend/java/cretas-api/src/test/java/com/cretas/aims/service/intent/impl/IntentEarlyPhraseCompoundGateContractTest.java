@@ -65,13 +65,24 @@ class IntentEarlyPhraseCompoundGateContractTest {
 
     @ParameterizedTest(name = "「{0}」")
     @ValueSource(strings = {
-            "周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？",
             "现在牛前腱还有多少库存？",
             "这个月销售额多少，哪个客户买得最多？"})
     @DisplayName("带条件 / 多个子问 → 早期短语不截走 (交给后面的识别)")
     void compoundSentenceIsNotTakenByTheEarlyPhrase(String input) {
         assertThat(knowledge.matchPhrase(input, "FACTORY")).as("前提: 真实短语表会命中这句").isPresent();
         assertThat(early(input)).isEmpty();
+    }
+
+    @ParameterizedTest(name = "「{0}」")
+    @ValueSource(strings = {
+            "周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？",
+            "周五要交2吨酱牛肉急单，原料够不够，产线排不排得开？"})
+    @DisplayName("急单分析自己从原话解析交期/数量/品名 (#1884 有意放行): 复合句只能落到 SCHEDULING_RUSH_ORDER_ANALYSIS")
+    void rushOrderSentenceIsTakenOnlyByTheRushIntent(String input) {
+        assertThat(knowledge.matchPhrase(input, "FACTORY")).as("前提: 真实短语表会命中这句").isPresent();
+        Optional<IntentMatchResult> result = early(input);
+        assertThat(result).isPresent();
+        assertThat(result.get().getBestMatch().getIntentCode()).isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
     }
 
     @ParameterizedTest(name = "「{0}」")

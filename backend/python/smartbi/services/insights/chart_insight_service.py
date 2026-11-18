@@ -165,7 +165,7 @@ def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
         return InsightResult(
             finding=f"{change_text}，最高点在{peak_label}，最低点在{low_label}。",
             implication="这说明问题不只看单个点，要看最近几期是不是同方向变化。",
-            suggestion="建议先排查最高点和最低点对应的活动、门店或库存动作，再看最近 3 个点是否持续走高或走低。",
+            suggestion="建议先排查最高点和最低点对应的订单、产线或库存动作，再看最近 3 个点是否持续走高或走低。",
             source="template",
             tier=2,
             input_hash=input_hash,
@@ -183,8 +183,8 @@ def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
         if bot > 0 and top / bot < 1.05:
             return InsightResult(
                 finding=f"{top_label}和{bot_label}差距很小，基本可以按同一水平看。",
-                implication="这类图不适合硬分第一名和末位，重点应该看两边的客流、客单价、排班和差评有没有结构差异。",
-                suggestion="建议不要因为这张图单独做大促，先用同一套备货和排班基准，再去查午晚市、客单价和差评标签是否有明显差别。",
+                implication="这类图不适合硬分第一名和末位，重点应该看两边的产量、出成率、单价和客户结构有没有差异。",
+                suggestion="建议不要因为这张图单独做大促，先用同一套备货和排产基准，再去查产量、出成率、毛利和客户结构是否有明显差别。",
                 source="template",
                 tier=2,
                 input_hash=input_hash,
@@ -192,7 +192,7 @@ def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
         ratio_text = f"{top / bot:.1f}倍" if bot > 0 else "差距很大"
         return InsightResult(
             finding=f"{top_label}排第一，占整体{_fmt_pct(top_share)}；末位是{bot_label}，头尾大约差{ratio_text}。",
-            implication="如果第一名占比过高，经营会更依赖少数门店或少数菜品；如果尾部长期偏低，就会拖慢整体效率。",
+            implication="如果第一名占比过高，经营会更依赖少数客户或少数产品；如果尾部长期偏低，就会拖慢整体效率。",
             suggestion="建议把第一名当作参考样本，但重点排查末位的供给、价格、曝光和执行问题，先做一轮小范围调整再复看排名。",
             source="template",
             tier=2,
@@ -218,7 +218,7 @@ def _deterministic_insight(ctx: ChartInsightContext) -> Optional[InsightResult]:
     return InsightResult(
         finding=f"这张图有 {len(values)} 个数据点，最高值是{_fmt_plain_number(max(values))}，最低值是{_fmt_plain_number(min(values))}。",
         implication="高低差已经足够明显，适合先找差异最大的维度。",
-        suggestion="建议先按最高和最低两组做对比，确认是客流、价格、库存还是执行动作导致差异。",
+        suggestion="建议先按最高和最低两组做对比，确认是产量、价格、库存还是执行动作导致差异。",
         source="template",
         tier=2,
         input_hash=input_hash,

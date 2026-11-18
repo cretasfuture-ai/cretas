@@ -345,7 +345,8 @@ const chartOption = computed(() => {
 // Replace the common ones with 白话 equivalents. Applied last so any
 // future frontend-only rewording doesn't require a backend deploy.
 const INSIGHT_REPLACEMENTS: Array<[RegExp, string]> = [
-  [/余下梯队收敛明显/g, '其余门店之间差距不大'],
+  // 维度 Top N 的维度可能是产品/客户/产线等，不能写死「门店」(#1912 复查发现食品厂驾驶舱仍显示「其余门店」)
+  [/余下梯队收敛明显/g, '其余各项之间差距不大'],
   [/可复盘成功因素用于复制/g, '可以总结做对了什么再用一次'],
   [/堂食客单价/g, '堂食人均消费'],
   [/人均订单量/g, '人均下单次数'],
