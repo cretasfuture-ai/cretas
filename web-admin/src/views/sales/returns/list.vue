@@ -32,6 +32,8 @@ import { safePrint } from '@/api/printApi';
 import { useListSummary } from '@/composables/useListSummary';
 import { formatSummaryForAI } from '@/utils/aiSummaryContext';
 import type { ListSummaryRequest } from '@/types/listSummary';
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -121,6 +123,9 @@ const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
 const filterStatus = ref('');
+const loadError = ref('');
+
+function clearFilters() { filterStatus.value = ''; handleSearch(); }
 
 // U-FOOTER-1
 // KPI-vs-list drift fix (2026-07): filterStatus MUST be declared BEFORE this
@@ -168,6 +173,7 @@ onMounted(() => loadData());
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
+  loadError.value = '';
   try {
     const params: TableRow = {
       returnType: 'SALES_RETURN',
@@ -180,9 +186,11 @@ async function loadData() {
       tableData.value = res.data.content || res.data.list || [];
       pagination.value.total = res.data.totalElements || res.data.total || 0;
     } else if (res.success === false) {
-      ElMessage.error(res.message || '加载退货单失败');
+      tableData.value = [];
+      loadError.value = res.message || '加载退货单失败';
+      ElMessage.error(loadError.value);
     }
-  } catch { /* interceptor */ }
+  } catch (e) { tableData.value = []; loadError.value = loadErrorText(e, '加载退货单失败'); /* interceptor 已弹 toast */ }
   finally { loading.value = false; }
 }
 
@@ -211,7 +219,17 @@ function viewDetail(row: TableRow) { router.push(`/sales/returns/${row.id}`); }
         </div>
       </template>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无退货单" stripe border style="width: 100%">
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            :filtered="!!filterStatus"
+            empty-title="还没有销售退货单"
+            empty-hint="客户退货时，在「销售订单」详情里登记退货，登记后会出现在这里，随后走提交、审批、处理流程。"
+            @retry="loadData"
+            @clear-filter="clearFilters"
+          />
+        </template>
         <el-table-column prop="returnNumber" label="退货单号" width="200" />
         <el-table-column label="客户" min-width="160" show-overflow-tooltip>
           <template #default="{ row }">{{ row.counterpartyName || row.customerName || row.counterpartyId || '-' }}</template>

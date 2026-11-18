@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
@@ -966,7 +967,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table>
       </template>
 
-      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty><ListEmptyExplain empty-title="还没有入库批次" empty-hint="采购到货验收或生产完工入库后，批次会出现在这里；也可点「入库」手动登记。" /></template>
         <el-table-column prop="batchNumber" label="批次号" width="160" />
         <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>

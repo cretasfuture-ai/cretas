@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -451,7 +452,7 @@ function getStatusText(status: string) {
           />
 
           <UTable :data="pendingData" :columns="pendingColumns" :loading="pendingLoading" class="cs-table" data-testid="shipments-pending-table">
-            <template #empty>暂无待确认发货单</template>
+            <template #empty><ListEmptyExplain empty-title="没有待确认的发货单" empty-hint="销售订单发货后生成的发货单会在这里等待确认；全部确认完毕时为空。" /></template>
             <template #deliveryNumber-cell="{ row }">{{ dash(row.original.deliveryNumber) }}</template>
             <template #customer-cell="{ row }">{{ row.original.customer?.name || row.original.customerName || row.original.customerId || '-' }}</template>
             <template #deliveryDate-cell="{ row }">{{ dash(row.original.deliveryDate) }}</template>
@@ -503,7 +504,7 @@ function getStatusText(status: string) {
           </div>
 
           <UTable :data="tableData" :columns="legacyColumns" :loading="loading" class="cs-table" data-testid="shipments-legacy-table">
-            <template #empty>暂无数据</template>
+            <template #empty><ListEmptyExplain empty-title="还没有出货记录" empty-hint="在销售订单里点「发货」后，出货记录会出现在这里。" /></template>
             <template #shipmentNumber-cell="{ row }">{{ dash(row.original.shipmentNumber) }}</template>
             <template #customerName-cell="{ row }">{{ row.original.customerName || row.original.customerId || '-' }}</template>
             <template #product-cell="{ row }">{{ row.original.productName || row.original.productBatchNumber || '-' }}</template>
