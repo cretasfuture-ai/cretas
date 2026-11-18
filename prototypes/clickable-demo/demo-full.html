@@ -1,0 +1,2079 @@
+<title>Cretas 原型演示</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* 布局：顶栏 + 左侧菜单（工作台 / 业务）+ 右侧页面；窄屏菜单变横向滚动条。颜色沿用统一原型的 --cs 蓝灰体系 */
+:root {
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --subtle: #f7f9fc;
+  --fg: #1a293d;
+  --fg2: #52647a;
+  --line: #e1e7ef;
+  --brand: #1b65a8;
+  --brand-soft: #eaf2fa;
+  --ok: #24724f;
+  --ok-soft: #e4f3ee;
+  --warn: #8f6420;
+  --warn-soft: #f8f0df;
+  --risk: #b0443f;
+  --risk-soft: #f8e9e8;
+  --idle: #9aaabd;
+  --on: #ffffff;
+  --font: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1722; --card: #17212f; --subtle: #1b2738; --fg: #e6edf6; --fg2: #a9b8cc; --line: #26344a;
+    --brand: #5aa3e0; --brand-soft: #16304a; --ok: #5cc2a4; --ok-soft: #14332b;
+    --warn: #e0b765; --warn-soft: #3a2f16; --risk: #e48b86; --risk-soft: #3d2120; --idle: #6d7f96; --on: #0f1722;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1722; --card: #17212f; --subtle: #1b2738; --fg: #e6edf6; --fg2: #a9b8cc; --line: #26344a;
+  --brand: #5aa3e0; --brand-soft: #16304a; --ok: #5cc2a4; --ok-soft: #14332b;
+  --warn: #e0b765; --warn-soft: #3a2f16; --risk: #e48b86; --risk-soft: #3d2120; --idle: #6d7f96; --on: #0f1722;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.6 var(--font); font-variant-numeric: tabular-nums;
+  padding-block: 0 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+h1 { font-size: 20px; margin: 0; line-height: 1.3; }
+h2 { font-size: 15px; margin: 0; }
+h3 { font-size: 14px; margin: 0; }
+small, .muted { color: var(--fg2); font-size: 12px; }
+.shell { max-width: 1240px; margin: 0 auto; }
+.top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding-block: 14px; }
+.brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.brand b { font-size: 16px; }
+.demo-note { background: var(--warn-soft); color: var(--fg); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; }
+.body { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 800px) { .body { grid-template-columns: minmax(0, 1fr); } }
+.nav { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 8px; }
+.nav { max-height: calc(100vh - 16px); overflow-y: auto; }
+@media (max-width: 800px) { .nav { position: static; max-height: 50vh; } }
+.nav .grp { font-weight: 600; }
+.nav .grp i { font-style: normal; font-weight: 400; color: var(--fg2); font-size: 12px; }
+.nav .grp[aria-expanded="true"] i { color: var(--brand); }
+.nav .sb { padding-left: 22px; font-size: 13px; }
+.bar { display: grid; grid-template-columns: minmax(70px, 150px) minmax(0, 1fr) minmax(70px, auto); gap: 10px; align-items: center; margin: 7px 0; font-size: 13px; }
+.bar .bt { background: var(--subtle); border-radius: 4px; height: 12px; overflow: hidden; display: block; }
+.bar .bt i { display: block; height: 100%; border-radius: 4px; }
+.bar b { text-align: right; font-weight: 600; }
+.board { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; align-items: start; }
+.board .col { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.board .colh { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px; }
+.board .kc { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.sw > div { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 12px; min-width: 0; }
+.sw i { display: block; height: 38px; }
+.sw span { display: block; padding: 5px 8px; color: var(--fg2); overflow-wrap: anywhere; }
+.sw b { color: var(--fg); display: block; font-weight: 600; font-size: 13px; }
+code { font: 12px var(--mono); background: var(--subtle); padding: 1px 5px; border-radius: 4px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.step { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; font-size: 13px; }
+.step small { color: var(--fg2); }
+textarea:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.nav .sec { font-size: 11px; color: var(--fg2); letter-spacing: .08em; padding: 8px 10px 2px; }
+.nav button { border: 0; background: transparent; text-align: left; padding: 8px 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; gap: 10px; white-space: nowrap; }
+.nav button:hover { background: var(--brand-soft); }
+.nav button[aria-current="page"] { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.badge { background: var(--risk); color: var(--on); border-radius: 999px; font-size: 11px; min-width: 18px; padding: 0 6px; text-align: center; line-height: 18px; }
+.nav .more { font-size: 12px; color: var(--fg2); padding: 10px; border-top: 1px solid var(--line); margin-top: 6px; }
+.page { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ph { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: flex-end; }
+.ph p { margin: 0 0 2px; color: var(--fg2); font-size: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; text-align: left; }
+.kpi:hover { border-color: var(--brand); }
+.kpi span { display: block; color: var(--fg2); font-size: 12px; }
+.kpi strong { display: block; font-size: 26px; font-weight: 600; line-height: 1.25; }
+.kpi small { color: var(--brand); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.card > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.card .in { padding: 12px 14px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.grid3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: start; }
+@media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); } }
+.link { border: 0; background: none; color: var(--brand); padding: 2px 4px; font-size: 12.5px; }
+.link:hover { text-decoration: underline; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 6px 12px; }
+.btn:hover { border-color: var(--brand); color: var(--brand); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on); }
+.btn.primary:hover { filter: brightness(1.08); color: var(--on); }
+.btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+.btn.sm { padding: 2px 9px; font-size: 12.5px; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--subtle); color: var(--fg2); font-weight: 600; white-space: nowrap; font-size: 12px; }
+td.n, th.n { text-align: right; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.pick { background: var(--brand-soft); }
+td small { display: block; }
+.pill { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.run { background: var(--brand-soft); color: var(--brand); }
+.pill.risk { background: var(--risk-soft); color: var(--risk); }
+.pill.mute { background: var(--subtle); color: var(--fg2); border: 1px solid var(--line); }
+.track { display: flex; height: 10px; border-radius: 4px; overflow: hidden; background: var(--subtle); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; margin-top: 10px; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.list > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.list > div:last-child { border-bottom: 0; }
+.list .t { min-width: 0; flex: 1 1 220px; }
+.list .t b { font-weight: 600; }
+.list .t small { display: block; }
+.tabs { display: inline-flex; background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+.tabs button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; color: var(--fg2); }
+.tabs button[aria-pressed="true"] { background: var(--card); color: var(--brand); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--card); color: var(--fg2); border-radius: 999px; padding: 3px 12px; font-size: 12.5px; }
+.chip[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.empty { color: var(--fg2); padding: 22px 14px; text-align: center; }
+.issue { border-bottom: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.issue:last-child { border-bottom: 0; }
+.issue .hd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.issue ul { margin: 0; padding-left: 18px; color: var(--fg2); font-size: 12.5px; }
+.issue .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.closer { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.closer input[type=text] { min-width: 0; width: 100%; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.sevbar { width: 4px; align-self: stretch; border-radius: 2px; background: var(--idle); }
+.form { display: grid; gap: 12px; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--fg2); min-width: 0; }
+label.f input, label.f select, .tools input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); min-width: 0; width: 100%; }
+.tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tools input { flex: 1 1 160px; }
+.sub { display: grid; gap: 6px; }
+.sub .r { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: 8px; align-items: center; }
+.sub select, .sub input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); min-width: 0; width: 100%; }
+.preview { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; }
+.preview .k { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.preview .k span { display: block; font-size: 12px; color: var(--fg2); }
+.preview .k b { font-size: 17px; font-weight: 600; }
+.errs { margin: 0; padding-left: 18px; color: var(--risk); font-size: 12.5px; }
+.pickrow { cursor: pointer; }
+.pickrow:hover { background: var(--brand-soft); }
+.comp { display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: var(--subtle); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.facts span { display: block; font-size: 12px; color: var(--fg2); }
+.facts b { font-size: 16px; font-weight: 600; }
+.notice { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }
+.notice.ok { background: var(--ok-soft); }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: calc(100% - 32px); }
+.ov { position: fixed; inset: 0; background: rgba(10, 18, 30, .5); z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dlg { background: var(--card); border-radius: 10px; max-width: 520px; width: 100%; max-height: 85vh; overflow: auto; padding: 16px 18px; border: 1px solid var(--line); }
+.dlg dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 12px 0; font-size: 13px; }
+.dlg dt { color: var(--fg2); }
+.dlg dd { margin: 0; overflow-wrap: anywhere; }
+a { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="shell">
+  <div class="top">
+    <div class="brand"><b>Cretas</b><span class="muted">统一原型 · 可点击演示</span></div>
+    <button class="btn sm" data-act="reset">还原示例数据</button>
+  </div>
+  <div class="demo-note">
+    <span>演示用示例数据：工厂、工单、数字都是虚构的，不含任何客户数据。操作只改页面内存，刷新即还原。</span>
+    <span class="muted">示例时间：2026-11-16 15:30（北京时间）</span>
+  </div>
+  <div class="body">
+    <nav class="nav" id="nav" aria-label="菜单"></nav>
+    <main class="page" id="page"></main>
+  </div>
+</div>
+<div id="layer"></div>
+
+<script>
+var MENU = [["数字班组",[["班组首页","/crew"],["工作记录与额度","/crew/ledger"],["班组入职","/crew/onboard"]]],["个人 OA",[["待我处理","/workflow/pending"],["我发起的","/workflow/my-created"],["已处理","/workflow/acted"],["抄送我的","/workflow/copied"],["协同任务","/collab/tasks"]]],["采购管理",[["采购需求","/procurement/requisitions/my"],["待审批","/procurement/requisitions/pending-approval"],["采购订单","/procurement/orders"],["采购建议","/procurement/ai-purchase"],["供应商","/procurement/suppliers"],["价格表","/procurement/price-lists"],["缺料异常","/production/shortage-cases"]]],["销售管理",[["订单","/sales/orders"],["发运记录","/sales/shipments"],["退货","/sales/returns"],["应收与收款","/lsm/receivables"],["客户管理","/sales/customers"],["客户价目表","/lsm/customer-prices"],["交付风险","/production/delivery-risks"],["车辆字典","/sales/vehicles"],["销售付款申请","/sales/payment-requests"],["缺料异常","/production/shortage-cases"]]],["生产管理",[["生产计划","/production/plans"],["领料","/production/material-flow"],["生产批次","/production/batches"],["生产报工","/production/approval"],["称重报工","/production/weigh"],["生产查询","/production/analysis-query"],["缺料异常","/production/shortage-cases"],["状态看板","/production/kanban"],["车间大屏","/dashboard/production-progress"],["在制品","/production/wip"],["工序配置","/production/process-hub"],["出成标准","/production/yield-standard"],["SKU 管理","/system/products"],["交付风险","/production/delivery-risks"],["工程变更通知","/production/bom/ecns"],["BOM调价建议","/production/bom/price-adjustments"],["委外收发","/lsm/outsource"]]],["仓储管理",[["入库任务与批次","/warehouse/materials"],["无单申请","/warehouse/unordered-inbound-applications"],["出库执行","/warehouse/shipments"],["调拨单","/transfer/list"],["库存查询","/warehouse/inventory-query"],["进销存汇总","/lsm/stock-summary"],["库存调整单","/warehouse/inventory-adjustments"],["入库批次","/lsm/inbound-batches"],["盘点任务","/warehouse/stocktake-query"],["仓位与平面图","/warehouse/storage-locations"],["原料字典","/warehouse/material-types"],["物料分类","/warehouse/material-segments"],["报损管理","/warehouse/wastage-reports"],["源头个体档案","/warehouse/source-individuals"]]],["质量管理",[["质量检验","/quality/inspections"],["检验标准","/quality/standards"],["不良分析","/quality/defects"],["CCP 监控记录","/quality/ccp"],["质检退回单","/quality/returns"],["废弃处理","/quality/disposals"],["批次召回","/quality/recalls"],["工艺参数偏离","/quality/param-deviation"],["冷链超温批次","/quality/cold-chain"],["包装标签拍检","/quality/label-qc"],["缺料异常","/production/shortage-cases"]]],["数据与分析",[["AI 经营报告","/analytics/ai-reports"],["经营驾驶舱","/smart-bi/dashboard"],["领域概览","/analytics/overview"],["经营主题","/smart-bi/analysis-hub"],["进销存","/analytics/supply-chain"],["物料均价","/warehouse/material-price-trend"],["成本分析","/lsm/cost"],["对账（Cretas ↔ 黑湖）","/lsm/reconcile"],["异常预警","/analytics/alert-dashboard"],["数据问答","/smart-bi/analysis"],["文件导入","/smart-bi/upload"],["映射复核","/smart-bi/mapping-review"],["数据检查","/smart-bi/data-completeness"],["查询模板","/smart-bi/query-templates"],["自定义报表","/unified/reports"]]],["设置",[["视觉质检训练","/quality/vision-training"],["设置","/g/settings"],["数字班组配置","/crew/settings"]]]];
+
+/* ---------- 示例数据（虚构） ---------- */
+var TODAY = '2026-11-16', NOW = '2026-11-16T15:30';
+var ORDER_STATE = { '0': ['新建', 'mute', '#9aaabd'], '10': ['执行中', 'run', '#1b65a8'], '20': ['已结束', 'ok', '#4a9c7b'], '30': ['已取消', 'mute', '#b0b6c1'] };
+var ORDERS = [
+  { id: 'GD-1116-01', product: '酱牛肉', plan: 800, st: '10', line: '一车间', day: '2026-11-16', code: 'P-0101' },
+  { id: 'GD-1116-02', product: '卤鸡爪', plan: 1200, st: '10', line: '一车间', day: '2026-11-16', code: 'P-0207' },
+  { id: 'GD-1116-03', product: '川味香肠', plan: 600, st: '10', line: '二车间', day: '2026-11-16', code: 'P-0312' },
+  { id: 'GD-1116-09', product: '肉丸', plan: 700, st: '10', line: '二车间', day: '2026-11-16', code: 'P-0418' },
+  { id: 'GD-1117-06', product: '酱牛肉', plan: 800, st: '0', line: '一车间', day: '2026-11-17', code: 'P-0101' },
+  { id: 'GD-1117-07', product: '卤鸡爪', plan: 1200, st: '0', line: '一车间', day: '2026-11-17', code: 'P-0207' },
+  { id: 'GD-1115-04', product: '五香豆干', plan: 1000, st: '20', line: '三车间', day: '2026-11-15', code: 'P-0533' },
+  { id: 'GD-1115-05', product: '辣椒酱', plan: 500, st: '20', line: '三车间', day: '2026-11-15', code: 'P-0640' },
+  { id: 'GD-1114-08', product: '烤鸭', plan: 400, st: '30', line: '二车间', day: '2026-11-14', code: 'P-0702' }
+];
+var APPROVALS = 3, PRODUCTS = 14;
+var TASKS = [
+  { id: 't1', order: 'GD-1116-01', product: '酱牛肉', proc: '煮制', run: true, std: 68, tol: 5 },
+  { id: 't2', order: 'GD-1116-01', product: '酱牛肉', proc: '分切', run: true, std: 96, tol: 2 },
+  { id: 't3', order: 'GD-1116-02', product: '卤鸡爪', proc: '卤制', run: true, std: 82, tol: 4 },
+  { id: 't4', order: 'GD-1116-03', product: '川味香肠', proc: '灌肠', run: true, std: null, tol: null },
+  { id: 't5', order: 'GD-1116-09', product: '肉丸', proc: '成型', run: true, std: 97, tol: 2 },
+  { id: 't6', order: 'GD-1116-09', product: '肉丸', proc: '蒸煮', run: true, std: 90, tol: 3 },
+  { id: 't7', order: 'GD-1117-06', product: '酱牛肉', proc: '煮制', run: false, std: 68, tol: 5 }
+];
+var DEFECTS = ['破碎', '变形', '污染'], BYPRODUCTS = ['碎肉', '汤汁渣'];
+var STOCK_IN = [
+  { no: 'CG-1114-003', type: '采购入库', at: '2026-11-14 09:20', lines: 3 },
+  { no: 'CP-1115-011', type: '成品入库', at: '2026-11-15 17:40', lines: 2 },
+  { no: 'CG-1116-001', type: '采购入库', at: '2026-11-16 07:55', lines: 5 }
+];
+var BATCHES = [
+  { no: 'B-1103-02', product: '牛腱', exp: '2026-11-15' },
+  { no: 'B-1107-05', product: '鸡爪', exp: '2026-11-18' },
+  { no: 'B-1110-01', product: '香肠肠衣', exp: '2026-11-21' },
+  { no: 'B-1105-03', product: '辣椒酱', exp: '2026-11-22' }
+];
+var SOURCES = [
+  ['汇报', '数字员工汇报', '数字员工扫描数据后发现的问题和提醒'],
+  ['预警', '规则预警', '协同任务规则触发、还没处理的提醒'],
+  ['对账', '对账差异', 'Cretas 与黑湖两边记录对不上的'],
+  ['缺口', '数据缺口', '缺数据、算不出的地方'],
+  ['疑点', '数据疑点', '录入可能有误的记录，只列出来找谁核']
+];
+var ISSUES = [
+  { k: 'i1', src: '汇报', lv: '高', title: 'GD-1117-06 酱牛肉明天开工，牛腱不够', sum: '库存 420 kg，工单需求 560 kg，缺 140 kg。', basis: ['库存快照 11-16 08:00：牛腱 420 kg', '工单配方：每 100 kg 成品用牛腱 70 kg', '在途采购单 CG-1116-001 未含牛腱'], owner: '采购', at: '11-16 09:12' },
+  { k: 'i2', src: '汇报', lv: '中', title: 'GD-1116-09 肉丸蒸煮得率连续偏低', sum: '最近 3 笔得率 84.1%、85.0%、83.6%，标准 90%±3。', basis: ['称重记录 3 笔，均低于标准下限 87%', '同工序上周均值 89.4%'], owner: '车间', at: '11-16 11:40' },
+  { k: 'i3', src: '预警', lv: '中', title: 'GD-1116-03 灌肠已开工 40 分钟，还没做首检', sum: '按规则，开工 30 分钟内要登记首检。', basis: ['任务开工 14:50', '首检记录 0 条'], owner: '质检', at: '11-16 15:20' },
+  { k: 'i4', src: '预警', lv: '低', title: 'GD-1116-02 卤制超过计划结束时间 1.5 小时', sum: '计划 14:00 结束，现在还在执行。', basis: ['计划结束 14:00', '当前 15:30，仍为「执行中」'], owner: '车间', at: '11-16 15:30' },
+  { k: 'i5', src: '对账', lv: '中', title: '称重报工和黑湖报工对不上：GD-1116-01 煮制', sum: 'Cretas 良品 212 kg，黑湖 220 kg，差 8 kg（3.6%）。', basis: ['Cretas：称重 1 笔，良品 212 kg', '黑湖：报工 1 笔，良品 220 kg', '两边口径：黑湖未扣皮重，差值接近皮重 2 kg × 4 筐'], owner: '车间', at: '11-16 10:05' },
+  { k: 'i6', src: '对账', lv: '中', title: '入库单 CG-1114-003 还没建批次', sum: '黑湖采购入库 3 行，Cretas 没有关联批次，已 2 天。', basis: ['入库时间 11-14 09:20', '近 7 天内，超出提醒线（2 天）'], owner: '仓库', at: '11-16 08:00' },
+  { k: 'i7', src: '缺口', lv: '中', title: 'GD-1115-05 辣椒酱缺人工工时，算不出单位成本', sum: '工序任务没有登记工时，成本页显示「算不出」，不当 0 处理。', basis: ['材料：已领料 7,250 元', '人工：0 条工时记录'], owner: '车间', at: '11-16 08:00' },
+  { k: 'i8', src: '缺口', lv: '低', title: '川味香肠灌肠工序没有得率标准', sum: '称重时无法判定达标，只记录得率。', basis: ['工艺库：该工序标准得率为空'], owner: '工艺', at: '11-16 08:00' },
+  { k: 'i9', src: '疑点', lv: '低', title: 'GD-1116-02 卤制称重：投入 12 kg，良品 1,180 kg', sum: '投入远小于良品，疑似少打了一位或单位填错。', basis: ['称重记录 11-16 13:12', '同任务其他记录投入 1,100 kg 左右'], owner: '车间', at: '11-16 13:12' }
+];
+var COSTS = [
+  { id: 'GD-1115-04', product: '五香豆干', st: '20', out: 960, mat: 18420, lab: 3150, std: 22.0 },
+  { id: 'GD-1115-05', product: '辣椒酱', st: '20', out: 480, mat: 7250, lab: null, std: 15.0 },
+  { id: 'GD-1110-05', product: '川味香肠', st: '20', out: 570, mat: 17640, lab: 2520, std: 34.0 },
+  { id: 'GD-1109-03', product: '卤鸡爪', st: '20', out: 1130, mat: 21800, lab: 2960, std: 22.5 },
+  { id: 'GD-1108-02', product: '酱牛肉', st: '20', out: 760, mat: 31400, lab: 3420, std: 42.5 },
+  { id: 'GD-1116-01', product: '酱牛肉', st: '10', out: 212, mat: 31600, lab: 2880, std: 42.5 },
+  { id: 'GD-1116-02', product: '卤鸡爪', st: '10', out: null, mat: 14200, lab: 1610, std: 22.5 }
+];
+var SEED_RECORDS = [{ id: 'r0', taskId: 't1', inputKg: 320, goodGrossKg: 214, tareKg: 2, goodKg: 212, defects: [], defectKg: 0, byproducts: [{ name: '汤汁渣', kg: 6 }], byproductKg: 6, lossKg: 102, start: '2026-11-16T09:10', end: '2026-11-16T10:40', revoked: false }];
+
+/* ---------- 状态 ---------- */
+var S, TITLES = { today: '今天', todo: '待办', issues: '发现的问题', cost: '成本分析', weigh: '称重报工' };
+function fresh() {
+  return { page: 'today', role: 'shop', records: JSON.parse(JSON.stringify(SEED_RECORDS)), rid: 1, batched: {}, issue: {}, closing: '', conc: '',
+    tb: {}, tab: {}, sw: {}, openG: {}, srcFilter: '', showClosed: false, costFilter: 'all', costPick: 'GD-1115-04', task: 't2', onlyRun: true, q: '', picked: 0 };
+}
+S = fresh();
+
+/* ---------- 工具 ---------- */
+function $(s, r) { return (r || document).querySelector(s); }
+function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }); }
+function days(a, b) { return Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 864e5); }
+var toastTimer;
+function toast(t) {
+  var el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); el.textContent = t;
+  $('#layer').appendChild(el); clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 2600);
+}
+function weighedIds() { var o = {}; S.records.forEach(function (r) { if (!r.revoked) o[r.taskId] = 1; }); return o; }
+function taskOf(id) { return TASKS.filter(function (t) { return t.id === id; })[0]; }
+function openIssues() { return ISSUES.filter(function (i) { return !S.issue[i.k] || S.issue[i.k].s === 'todo'; }).filter(function (i) { return !S.issue[i.k]; }); }
+function todoSets() {
+  var w = weighedIds();
+  var toWeigh = TASKS.filter(function (t) { return t.run && !w[t.id]; });
+  var toBatch = STOCK_IN.filter(function (o) { return !S.batched[o.no]; });
+  var exp = BATCHES.map(function (b) { return { no: b.no, product: b.product, exp: b.exp, left: days(b.exp, TODAY) }; }).filter(function (b) { return b.left <= 7; }).sort(function (a, b) { return a.left - b.left; });
+  var confirm = ISSUES.filter(function (i) { return S.issue[i.k] && S.issue[i.k].s === 'todo'; });
+  return { toWeigh: toWeigh, toBatch: toBatch, exp: exp, confirm: confirm };
+}
+function costOf(c) {
+  var reason = null;
+  if (c.st !== '20') reason = '工单未结束，不和标准比较';
+  else if (c.lab == null) reason = '缺任务人工';
+  else if (!c.out) reason = '没有产出量';
+  var unit = reason ? null : (c.mat + c.lab) / c.out;
+  return { unit: unit, reason: reason, dev: unit == null ? null : (unit - c.std) / c.std };
+}
+function go(p) { if (location.hash !== '#' + p) location.hash = p; else render(); }
+function pill(text, cls) { return '<span class="pill ' + (cls || '') + '">' + esc(text) + '</span>'; }
+
+/* ---------- 菜单 ---------- */
+function renderNav() {
+  var ts = todoSets(), nTodo = ts.toWeigh.length + ts.toBatch.length + ts.exp.length + ts.confirm.length, nIss = openIssues().length;
+  function it(id, title, badge, cls) { return '<button' + (cls ? ' class="' + cls + '"' : '') + ' data-go="' + id + '"' + (S.page === id ? ' aria-current="page"' : '') + '><span>' + esc(title) + '</span>' + (badge ? '<span class="badge">' + badge + '</span>' : '') + '</button>'; }
+  var h = '<div class="sec">工作台</div>' + it('today', '今天') + it('todo', '待办', nTodo) + it('issues', '发现的问题', nIss) + '<div class="sec">全部功能</div>';
+  MENU.forEach(function (g) {
+    var cur = g[1].some(function (x) { return pid(x[1]) === S.page; }), open = S.openG[g[0]] === undefined ? cur : S.openG[g[0]];
+    h += '<button class="grp" data-grp="' + esc(g[0]) + '" aria-expanded="' + open + '"><span>' + esc(g[0]) + '</span><i>' + g[1].length + '</i></button>';
+    if (open) g[1].forEach(function (x) { h += it(pid(x[1]), x[0], 0, 'sb'); });
+  });
+  $('#nav').innerHTML = h + '<div class="more">菜单和页面名取自原型，页面里的数据都是虚构示例。原型的地图、组件库、源码位置在「原型资料」。</div>';
+}
+
+/* ---------- 今天 ---------- */
+function pageToday() {
+  var counts = {}; ORDERS.forEach(function (o) { counts[o.st] = (counts[o.st] || 0) + 1; });
+  var comparable = COSTS.filter(function (c) { return costOf(c).unit != null; }).length;
+  var kpis = [['生产工单', ORDERS.length, 'orders', '生产工单'], ['待审批报工', APPROVALS, 'approval', '报工审批'], ['产品档案', PRODUCTS, 'products', '产品档案'], ['可比较成本工单', comparable, 'cost', '']];
+  var track = ['0', '10', '20', '30'].map(function (k) { return '<i style="width:' + (counts[k] || 0) / ORDERS.length * 100 + '%;background:' + ORDER_STATE[k][2] + '" title="' + ORDER_STATE[k][0] + ' ' + (counts[k] || 0) + '"></i>'; }).join('');
+  var legend = ['0', '10', '20', '30'].map(function (k) { return '<span><i style="background:' + ORDER_STATE[k][2] + '"></i>' + ORDER_STATE[k][0] + ' <b>' + (counts[k] || 0) + '</b></span>'; }).join('');
+  var rows = ORDERS.slice(0, 8).map(function (o) { return '<tr><td>' + o.id + '<small>' + o.product + '</small></td><td class="n">' + fmt(o.plan) + ' kg</td><td>' + pill(ORDER_STATE[o.st][0], ORDER_STATE[o.st][1]) + '</td><td><button class="link" data-order="' + o.id + '">详情</button></td></tr>'; }).join('');
+  var iss = openIssues().filter(function (i) { return i.src === '缺口' || i.src === '疑点'; }).slice(0, 4);
+  var issHtml = iss.length ? iss.map(function (i) { return '<div><div class="t"><b>' + esc(i.title) + '</b><small>' + esc(i.sum) + '</small></div><button class="link" data-go="issues">去处理</button></div>'; }).join('') : '<div class="empty">当前没有需要核对的缺口和疑点。</div>';
+  return '<div class="ph"><div><p>示例食品厂 · 工厂运营</p><h1>工厂总览</h1></div><small>采集核验 2026-11-16 08:00 · 快照日 11-16</small></div>' +
+    '<div class="kpis">' + kpis.map(function (k) { return '<button class="kpi" data-kpi="' + k[2] + '" data-name="' + k[3] + '"><span>' + k[0] + '</span><strong>' + k[1] + '</strong><small>查看记录 →</small></button>'; }).join('') + '</div>' +
+    '<div class="grid2"><section class="card"><header><h2>生产执行</h2><small>按工单状态计数；取消单单列，不计作待执行需求</small></header><div class="in"><div class="track">' + track + '</div><div class="legend">' + legend + '</div></div>' +
+    '<div class="tbl"><table><thead><tr><th>工单 / 产品</th><th class="n">计划量</th><th>状态</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
+    '<div class="page"><section class="card"><header><h2>常用业务</h2></header><div class="in" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+    '<button class="btn" data-go="weigh" style="text-align:left"><b>称重报工</b><small style="display:block">逐笔称重 · 一屏完成</small></button>' +
+    '<button class="btn" data-go="cost" style="text-align:left"><b>成本核对</b><small style="display:block">实际材料 · 任务人工</small></button>' +
+    '<button class="btn" data-go="todo" style="text-align:left"><b>我的待办</b><small style="display:block">按岗位分</small></button>' +
+    '<button class="btn" data-go="issues" style="text-align:left"><b>发现的问题</b><small style="display:block">五类来源</small></button></div></section>' +
+    '<section class="card"><header><h2>需要核对</h2><small>未满足核算条件</small></header><div class="list">' + issHtml + '</div></section></div></div>';
+}
+
+/* ---------- 待办 ---------- */
+function pageTodo() {
+  var ts = todoSets();
+  var shop = '<section class="card"><header><h2>待称重任务（执行中）</h2>' + pill(ts.toWeigh.length + ' 项', ts.toWeigh.length ? '' : 'ok') + '</header><div class="list">' +
+    (ts.toWeigh.length ? ts.toWeigh.map(function (t) { return '<div><div class="t"><b>' + t.order + ' · ' + t.proc + '</b><small>' + t.product + ' · 执行中，还没有称重记录</small></div><button class="btn sm primary" data-weigh="' + t.id + '">去称重</button></div>'; }).join('') : '<div class="empty">执行中的任务都已称重。</div>') + '</div></section>';
+  var store = '<section class="card"><header><h2>待建批次</h2>' + pill(ts.toBatch.length + ' 项', ts.toBatch.length ? '' : 'ok') + '<small>近 7 天入库单里，还没有关联 Cretas 批次的</small></header><div class="list">' +
+    (ts.toBatch.length ? ts.toBatch.map(function (o) { return '<div><div class="t"><b>' + o.no + '</b><small>' + o.type + ' · ' + o.at + ' · ' + o.lines + ' 行</small></div><button class="btn sm primary" data-batch="' + o.no + '">建批次</button></div>'; }).join('') : '<div class="empty">近 7 天的入库单都已建批次。</div>') + '</div></section>' +
+    '<section class="card"><header><h2>临期批次</h2>' + pill(ts.exp.length + ' 个', ts.exp.length ? 'risk' : 'ok') + '<small>到期日在 7 天内，已过期单列</small></header><div class="list">' +
+    ts.exp.map(function (b) { return '<div><div class="t"><b>' + b.no + ' · ' + b.product + '</b><small>到期 ' + b.exp + '</small></div>' + (b.left < 0 ? pill('已过期 ' + (-b.left) + ' 天', 'risk') : pill('还剩 ' + b.left + ' 天', b.left <= 2 ? 'risk' : '')) + '</div>'; }).join('') + '</div></section>';
+  var conf = '<section class="card"><header><h2>等我确认</h2>' + pill(ts.confirm.length + ' 项', ts.confirm.length ? '' : 'ok') + '<small>从「发现的问题」转来的待办</small></header><div class="list">' +
+    (ts.confirm.length ? ts.confirm.map(function (i) { return '<div><div class="t"><b>' + esc(i.title) + '</b><small>负责：' + i.owner + '</small></div><span><button class="btn sm primary" data-confirm="' + i.k + '">确认</button> <button class="link" data-undo="' + i.k + '">撤回</button></span></div>'; }).join('') : '<div class="empty">没有等你确认的事项。在「发现的问题」里点「转待办」会出现在这里。</div>') + '</div></section>';
+  return '<div class="ph"><div><p>示例食品厂 · 按岗位</p><h1>待办</h1></div><div class="tabs" role="group" aria-label="岗位"><button data-role="shop" aria-pressed="' + (S.role === 'shop') + '">车间</button><button data-role="store" aria-pressed="' + (S.role === 'store') + '">仓库</button></div></div>' +
+    (S.role === 'shop' ? shop : store) + conf;
+}
+
+/* ---------- 发现的问题 ---------- */
+function pageIssues() {
+  var all = ISSUES, open = all.filter(function (i) { return !S.issue[i.k]; }), closed = all.filter(function (i) { return S.issue[i.k] && S.issue[i.k].s === 'closed'; });
+  var shown = open.filter(function (i) { return !S.srcFilter || i.src === S.srcFilter; });
+  var chips = '<button class="chip" data-src="" aria-pressed="' + (!S.srcFilter) + '">全部 ' + open.length + '</button>' + SOURCES.map(function (s) {
+    var n = open.filter(function (i) { return i.src === s[0]; }).length;
+    return '<button class="chip" data-src="' + s[0] + '" aria-pressed="' + (S.srcFilter === s[0]) + '" title="' + esc(s[2]) + '">' + s[1] + ' ' + n + '</button>';
+  }).join('');
+  var lvCls = { '高': 'risk', '中': '', '低': 'mute' };
+  var cards = shown.map(function (i) {
+    var closer = S.closing === i.k ? '<div class="closer"><div class="chips" role="group" aria-label="结论">' + ['已处理', '误报', '接受偏差'].map(function (c) { return '<button class="chip" data-conc="' + c + '" aria-pressed="' + (S.conc === c) + '">' + c + '</button>'; }).join('') + '</div><input type="text" id="note" placeholder="写一句原因，例如：已补录工时" aria-label="关闭原因"><div class="acts"><button class="btn sm primary" data-close-ok="' + i.k + '">确认关闭</button><button class="link" data-close-cancel>取消</button></div></div>' : '';
+    return '<div class="issue"><div class="hd">' + pill(i.lv, lvCls[i.lv]) + pill(i.src, 'run') + '<b>' + esc(i.title) + '</b></div><div>' + esc(i.sum) + '</div><ul>' + i.basis.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul><small>负责：' + i.owner + ' · ' + i.at + '</small>' +
+      (closer || '<div class="acts"><button class="btn sm" data-totodo="' + i.k + '">转待办</button><button class="btn sm" data-closing="' + i.k + '">关闭…</button></div>') + '</div>';
+  }).join('');
+  var closedHtml = '';
+  if (closed.length) {
+    closedHtml = '<section class="card"><header><h2>已关闭</h2><button class="link" data-toggle-closed>' + (S.showClosed ? '收起' : '展开 ' + closed.length + ' 条') + '</button></header>' +
+      (S.showClosed ? '<div class="list">' + closed.map(function (i) { var v = S.issue[i.k]; return '<div><div class="t"><b>' + esc(i.title) + '</b><small>结论：' + v.c + ' · ' + esc(v.n) + '</small></div><button class="link" data-restore="' + i.k + '">恢复</button></div>'; }).join('') + '</div>' : '') + '</section>';
+  }
+  var recon = '<section class="card"><header><h2>对账概览</h2><small>两边记录是否对得上</small></header><div class="tbl"><table><thead><tr><th>对账项</th><th>负责</th><th class="n">已对上</th><th class="n">有差异</th></tr></thead><tbody><tr><td>称重报工 ↔ 黑湖报工</td><td>车间</td><td class="n">11</td><td class="n">' + (S.issue.i5 ? 0 : 1) + '</td></tr><tr><td>入库批次 ↔ 黑湖入库单</td><td>仓库</td><td class="n">7</td><td class="n">' + (S.issue.i6 || S.batched['CG-1114-003'] ? 0 : 1) + '</td></tr></tbody></table></div></section>';
+  return '<div class="ph"><div><p>示例食品厂 · 五类来源</p><h1>发现的问题</h1></div><small>只读来源，关闭只改这里的状态，不改任何一边的数据</small></div>' +
+    '<div class="chips">' + chips + '</div>' +
+    '<section class="card">' + (cards || '<div class="empty">这一类没有未处理的问题。</div>') + '</section>' + recon + closedHtml;
+}
+
+/* ---------- 成本分析 ---------- */
+function pageCost() {
+  var rows = COSTS.map(function (c) { return { c: c, r: costOf(c) }; }).filter(function (x) { return S.costFilter === 'all' || (S.costFilter === 'ok' ? x.r.unit != null : x.r.unit == null); });
+  var okN = COSTS.filter(function (c) { return costOf(c).unit != null; }).length;
+  var worst = COSTS.map(function (c) { return { c: c, r: costOf(c) }; }).filter(function (x) { return x.r.dev != null; }).sort(function (a, b) { return Math.abs(b.r.dev) - Math.abs(a.r.dev); })[0];
+  var body = rows.map(function (x) {
+    var c = x.c, r = x.r;
+    return '<tr class="pickrow' + (S.costPick === c.id ? ' pick' : '') + '" data-cost="' + c.id + '" tabindex="0"><td>' + c.id + '<small>' + c.product + '</small></td><td>' + pill(ORDER_STATE[c.st][0], ORDER_STATE[c.st][1]) + '</td><td class="n">' + (c.out == null ? '未产出' : fmt(c.out) + ' kg') + '</td><td class="n">' + fmt(c.mat) + '</td><td class="n">' + (c.lab == null ? '未记录' : fmt(c.lab)) + '</td><td class="n">' + (r.unit == null ? '<span class="muted">算不出</span>' : '<b>' + fmt(r.unit, 2) + '</b>') + '</td><td class="n">' + fmt(c.std, 2) + '</td><td class="n">' + (r.dev == null ? '—' : '<span style="color:var(--' + (Math.abs(r.dev) > .05 ? 'risk' : 'ok') + ')">' + (r.dev > 0 ? '+' : '') + (r.dev * 100).toFixed(1) + '%</span>') + '</td></tr>';
+  }).join('');
+  var pick = COSTS.filter(function (c) { return c.id === S.costPick; })[0], detail = '';
+  if (pick) {
+    var r = costOf(pick), tot = pick.mat + (pick.lab || 0);
+    detail = '<section class="card"><header><h2>' + pick.id + ' · ' + pick.product + '</h2>' + pill(ORDER_STATE[pick.st][0], ORDER_STATE[pick.st][1]) + '</header><div class="in" style="display:grid;gap:14px">' +
+      '<div class="facts"><div><span>材料（实际领料）</span><b>' + fmt(pick.mat) + ' 元</b></div><div><span>任务人工</span><b>' + (pick.lab == null ? '未记录' : fmt(pick.lab) + ' 元') + '</b></div><div><span>产出</span><b>' + (pick.out == null ? '未产出' : fmt(pick.out) + ' kg') + '</b></div><div><span>单位成本</span><b>' + (r.unit == null ? '算不出' : fmt(r.unit, 2) + ' 元/kg') + '</b></div></div>' +
+      '<div><small>成本构成</small><div class="comp" aria-hidden="true"><i style="width:' + pick.mat / tot * 100 + '%;background:var(--brand)"></i><i style="width:' + (pick.lab || 0) / tot * 100 + '%;background:var(--ok)"></i></div><div class="legend"><span><i style="background:var(--brand)"></i>材料 ' + (pick.mat / tot * 100).toFixed(0) + '%</span><span><i style="background:var(--ok)"></i>人工 ' + (pick.lab == null ? '未记录' : (pick.lab / tot * 100).toFixed(0) + '%') + '</span></div></div>' +
+      (r.reason ? '<div class="notice"><b>不能核对：</b>' + r.reason + '。这里显示「算不出」，不会用 0 代替。</div>' : '<div class="notice ok">材料和人工都有记录，单位成本 ' + fmt(r.unit, 2) + ' 元/kg，标准 ' + fmt(pick.std, 2) + '，偏差 ' + (r.dev > 0 ? '+' : '') + (r.dev * 100).toFixed(1) + '%。</div>') +
+      '<small>来源：生产工单、领退料单、任务工时。原型里每个来源都能跳回对应页面，这版没收入。</small></div></section>';
+  }
+  return '<div class="ph"><div><p>示例食品厂 · 核对</p><h1>成本分析</h1></div><small>金额为示例，单位元；币种待确认</small></div>' +
+    '<div class="kpis"><div class="kpi"><span>可比较工单</span><strong>' + okN + '</strong></div><div class="kpi"><span>需核对</span><strong>' + (COSTS.length - okN) + '</strong></div><div class="kpi"><span>偏差最大</span><strong style="font-size:18px">' + (worst ? worst.c.product + ' ' + (worst.r.dev > 0 ? '+' : '') + (worst.r.dev * 100).toFixed(1) + '%' : '—') + '</strong></div></div>' +
+    '<div class="chips"><button class="chip" data-cf="all" aria-pressed="' + (S.costFilter === 'all') + '">全部</button><button class="chip" data-cf="ok" aria-pressed="' + (S.costFilter === 'ok') + '">可比较</button><button class="chip" data-cf="no" aria-pressed="' + (S.costFilter === 'no') + '">需核对</button></div>' +
+    '<section class="card"><div class="tbl"><table><thead><tr><th>工单 / 产品</th><th>状态</th><th class="n">产出</th><th class="n">材料（元）</th><th class="n">人工（元）</th><th class="n">单位成本</th><th class="n">标准</th><th class="n">偏差</th></tr></thead><tbody>' + body + '</tbody></table></div></section>' + detail;
+}
+
+/* ---------- 称重报工 ---------- */
+function pageWeigh() {
+  var w = weighedIds(), k = S.q.trim().toLowerCase();
+  var list = TASKS.filter(function (t) { return (!S.onlyRun || t.run) && (!k || (t.order + t.product + t.proc).toLowerCase().indexOf(k) >= 0); });
+  var rows = list.map(function (t) {
+    var n = S.records.filter(function (r) { return r.taskId === t.id && !r.revoked; }).length;
+    return '<tr class="pickrow' + (S.task === t.id ? ' pick' : '') + '" data-task="' + t.id + '" tabindex="0"><td>' + t.order + '<small>' + t.product + ' · ' + t.proc + '</small></td><td>' + (t.run ? (n ? pill('已称 ' + n + ' 笔', 'ok') : pill('待称重')) : pill('未开始', 'mute')) + '</td></tr>';
+  }).join('') || '<tr><td colspan="2" class="empty">没有符合的任务。</td></tr>';
+  var t = taskOf(S.task);
+  var recs = S.records.filter(function (r) { return r.taskId === S.task; });
+  var live = recs.filter(function (r) { return !r.revoked; });
+  var inKg = live.reduce(function (a, r) { return a + r.inputKg; }, 0), gKg = live.reduce(function (a, r) { return a + r.goodKg; }, 0);
+  var recHtml = recs.length ? '<div class="tbl"><table><thead><tr><th>时间</th><th class="n">投入</th><th class="n">良品</th><th class="n">次品</th><th class="n">副产</th><th class="n">损耗</th><th></th></tr></thead><tbody>' + recs.map(function (r) {
+    return '<tr' + (r.revoked ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + r.end.slice(5).replace('T', ' ') + '</td><td class="n">' + fmt(r.inputKg, 1) + '</td><td class="n">' + fmt(r.goodKg, 1) + '</td><td class="n">' + fmt(r.defectKg, 1) + '</td><td class="n">' + fmt(r.byproductKg, 1) + '</td><td class="n">' + fmt(r.lossKg, 1) + '</td><td>' + (r.revoked ? pill('已撤销', 'mute') : '<button class="link" data-revoke="' + r.id + '">撤销</button>') + '</td></tr>';
+  }).join('') + '</tbody></table></div>' : '<div class="empty">这个任务还没有称重记录。</div>';
+  var sum = '';
+  if (t && live.length) {
+    var y = inKg ? gKg / inKg * 100 : null, st = '';
+    if (t.std == null) st = pill('该工序没有标准，不判定', 'mute');
+    else st = Math.abs(y - t.std) <= t.tol ? pill('达标', 'ok') : pill('偏离标准', 'risk');
+    sum = '<div class="in" style="border-top:1px solid var(--line)"><b>' + live.length + ' 笔合计：</b>投入 ' + fmt(inKg, 1) + ' kg，良品 ' + fmt(gKg, 1) + ' kg，得率 ' + fmt(y, 1) + '% ' + st + (t.std != null ? ' <small>标准 ' + t.std + '% ±' + t.tol + '</small>' : '') + '</div>';
+  }
+  var form = t ? '<section class="card"><header><h2>' + t.order + ' · ' + t.proc + '</h2><small>' + t.product + (t.run ? '' : ' · 任务未开始，不能称重') + '</small></header><div class="in form" id="wform">' +
+    '<div class="row2"><label class="f">投入量（kg）<input id="f-in" type="number" inputmode="decimal" min="0" step="0.1" placeholder="例如 320"></label><label class="f">良品毛重（kg）<input id="f-gross" type="number" inputmode="decimal" min="0" step="0.1" placeholder="含容器"></label><label class="f">容器皮重（kg）<input id="f-tare" type="number" inputmode="decimal" min="0" step="0.1" value="0"></label></div>' +
+    '<div class="row2"><label class="f">开始时间<input id="f-start" type="datetime-local" value="2026-11-16T14:00"></label><label class="f">结束时间<input id="f-end" type="datetime-local" value="2026-11-16T15:20"></label></div>' +
+    '<div class="sub"><div class="acts" style="display:flex;justify-content:space-between;align-items:center"><small>次品</small><button class="link" type="button" data-addrow="d">＋ 添加次品</button></div><div id="rows-d"></div></div>' +
+    '<div class="sub"><div style="display:flex;justify-content:space-between;align-items:center"><small>副产品</small><button class="link" type="button" data-addrow="b">＋ 添加副产品</button></div><div id="rows-b"></div></div>' +
+    '<div class="preview" id="preview"></div><div><button class="btn primary" id="save" data-save' + (t.run ? '' : ' disabled') + '>保存称重</button></div></div></section>' : '';
+  return '<div class="ph"><div><p>示例食品厂 · 一屏完成</p><h1>称重报工</h1></div><small>写入只在本页内存里，不回写黑湖</small></div>' +
+    '<div class="grid3"><section class="card"><header><h2>任务</h2><label class="chip" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="onlyrun"' + (S.onlyRun ? ' checked' : '') + '> 只看执行中</label></header><div class="in tools"><input id="tq" type="search" placeholder="工单号 / 产品 / 工序" value="' + esc(S.q) + '" aria-label="搜索任务"></div><div class="tbl"><table><tbody>' + rows + '</tbody></table></div></section>' +
+    '<div class="page">' + form + '<section class="card"><header><h2>称重记录</h2><small>' + (t ? t.proc : '') + '</small></header>' + recHtml + sum + '</section></div></div>';
+}
+
+/* 称重表单：读取 / 预览 / 保存 */
+function subRow(kind) {
+  var opts = (kind === 'd' ? DEFECTS : BYPRODUCTS).map(function (n) { return '<option>' + n + '</option>'; }).join('');
+  return '<div class="r" data-kind="' + kind + '"><select aria-label="名称">' + opts + '</select><input type="number" inputmode="decimal" min="0" step="0.1" placeholder="kg" aria-label="重量 kg"><button class="link" type="button" data-delrow>删除</button></div>';
+}
+function readForm() {
+  function num(id) { var v = $(id).value; return v === '' ? null : parseFloat(v); }
+  function sub(k) { return Array.prototype.map.call(document.querySelectorAll('#rows-' + k + ' .r'), function (r) { var v = r.querySelector('input').value; return { name: r.querySelector('select').value, kg: v === '' ? 0 : parseFloat(v) }; }); }
+  return { inKg: num('#f-in'), gross: num('#f-gross'), tare: num('#f-tare'), start: $('#f-start').value, end: $('#f-end').value, defects: sub('d'), by: sub('b') };
+}
+function calc(f) {
+  var errs = [], t = taskOf(S.task);
+  var empty = f.inKg == null || f.gross == null;
+  if (f.inKg != null && f.inKg <= 0) errs.push('投入量要大于 0');
+  if (f.gross != null && f.gross <= 0) errs.push('良品毛重要大于 0');
+  var tare = f.tare == null ? 0 : f.tare;
+  if (tare < 0) errs.push('皮重不能是负数');
+  if (f.gross != null && tare > f.gross) errs.push('皮重不能大于毛重');
+  if (f.defects.concat(f.by).some(function (x) { return !(x.kg >= 0); })) errs.push('次品和副产品重量不能是负数');
+  if (f.start && f.end && f.end < f.start) errs.push('结束时间早于开始时间');
+  if (f.end && f.end > '2026-11-16T15:35') errs.push('结束时间晚于现在（示例时间 15:30）');
+  var good = empty ? null : f.gross - tare;
+  var dk = f.defects.reduce(function (a, x) { return a + (x.kg || 0); }, 0), bk = f.by.reduce(function (a, x) { return a + (x.kg || 0); }, 0);
+  var loss = empty ? null : f.inKg - good - dk - bk;
+  if (loss != null && loss < -1e-6) errs.push('出料合计比投入多 ' + fmt(-loss, 1) + ' kg，请核对');
+  var y = (empty || f.inKg <= 0) ? null : good / f.inKg * 100;
+  return { errs: errs, empty: empty, good: good, dk: dk, bk: bk, loss: loss, y: y, t: t };
+}
+function updatePreview() {
+  var el = $('#preview'); if (!el) return;
+  var f = readForm(), c = calc(f), t = c.t, st;
+  if (c.y == null || c.errs.length) st = pill('填完才判定', 'mute');
+  else if (t.std == null) st = pill('该工序没有标准，不判定', 'mute');
+  else st = Math.abs(c.y - t.std) <= t.tol ? pill('达标', 'ok') : pill('偏离标准 ' + (c.y - t.std > 0 ? '+' : '') + (c.y - t.std).toFixed(1) + ' 点', 'risk');
+  el.innerHTML = '<div class="k"><div><span>良品净重</span><b>' + (c.good == null ? '—' : fmt(c.good, 1) + ' kg') + '</b></div><div><span>次品 + 副产</span><b>' + fmt(c.dk + c.bk, 1) + ' kg</b></div><div><span>损耗</span><b>' + (c.loss == null || c.loss < 0 ? '—' : fmt(c.loss, 1) + ' kg') + '</b></div><div><span>得率</span><b>' + (c.y == null ? '—' : fmt(c.y, 1) + '%') + '</b></div></div><div>' + st + (t.std != null ? ' <small>标准 ' + t.std + '% ±' + t.tol + '</small>' : '') + '</div>' + (c.errs.length ? '<ul class="errs">' + c.errs.map(function (e) { return '<li>' + e + '</li>'; }).join('') + '</ul>' : '');
+  var b = $('#save'); if (b) b.disabled = !t.run || c.empty || c.errs.length > 0;
+}
+function saveWeigh() {
+  var f = readForm(), c = calc(f);
+  if (c.empty || c.errs.length) return;
+  S.records.push({ id: 'r' + (S.rid++), taskId: S.task, inputKg: f.inKg, goodGrossKg: f.gross, tareKg: f.tare || 0, goodKg: c.good, defects: f.defects, defectKg: c.dk, byproducts: f.by, byproductKg: c.bk, lossKg: c.loss, start: f.start, end: f.end, revoked: false });
+  toast('已保存称重：' + c.t.order + ' ' + c.t.proc + '，得率 ' + fmt(c.y, 1) + '%');
+  render();
+}
+
+/* ---------- 弹窗 ---------- */
+function openOrder(id) {
+  var o = ORDERS.filter(function (x) { return x.id === id; })[0]; if (!o) return;
+  $('#layer').innerHTML = '<div class="ov" data-close-dlg><div class="dlg" role="dialog" aria-modal="true" aria-label="工单详情"><h2>' + o.id + ' · ' + o.product + '</h2><dl><dt>状态</dt><dd>' + ORDER_STATE[o.st][0] + '</dd><dt>计划量</dt><dd>' + fmt(o.plan) + ' kg</dd><dt>产线</dt><dd>' + o.line + '</dd><dt>计划日</dt><dd>' + o.day + '</dd><dt>产品编码</dt><dd>' + o.code + '</dd></dl><small>来源只读，不回写黑湖。</small><div style="margin-top:12px;text-align:right"><button class="btn" data-close-dlg-btn autofocus>关闭</button></div></div></div>';
+}
+function closeDlg() { $('#layer').innerHTML = ''; }
+
+/* ---------- 渲染与事件 ---------- */
+/* ---------- 通用页面引擎：每个页面由 reg(路由, 页面描述) 登记，描述由若干「块」组成 ---------- */
+var FN = { today: pageToday, todo: pageTodo, issues: pageIssues, cost: pageCost, weigh: pageWeigh };
+var SPECIAL = { '/dashboard': 'today', '/g/today': 'today', '/g/todo': 'todo', '/crew/issues': 'issues', '/lsm/cost': 'cost', '/production/weigh': 'weigh' };
+function pid(route) { return SPECIAL[route] || route.slice(1).replace(/\//g, '-'); }
+var REG = {}, BYID = {}, BLOCKS = {}, BLK = {};
+function reg(route, spec) { REG[route] = spec; BYID[pid(route)] = route; }
+MENU.forEach(function (g) { g[1].forEach(function (x) { BYID[pid(x[1])] = x[1]; }); });
+function titleOf(route) { var t = route; MENU.forEach(function (g) { g[1].forEach(function (x) { if (x[1] === route) t = x[0]; }); }); return t; }
+function groupOf(id) { var r = ''; MENU.forEach(function (g) { g[1].forEach(function (x) { if (!r && pid(x[1]) === id) r = g[0]; }); }); return r; }
+function cell(v, c) {
+  if (v == null || v === '') return '<span class="muted">—</span>';
+  if (typeof v === 'number') return fmt(v, (c && c.d) || 0);
+  if (c && c.p) return autoPill(v);
+  return esc(v);
+}
+function plain(v, c) { return v == null || v === '' ? '—' : typeof v === 'number' ? fmt(v, (c && c.d) || 0) : String(v); }
+function autoPill(v) {
+  var s = String(v), cls = '';
+  if (/待整理/.test(s)) cls = '';
+  else if (/(已完成|合格|已审批|已通过|正常|通过|已处理|已入库|已发货|已收款|已确认|启用|达标|已对上|成功|已签收|已结清|已接入)/.test(s) && !/不合格|未通过/.test(s)) cls = 'ok';
+  else if (/可查看/.test(s)) cls = 'run';
+  else if (/(超期|不合格|驳回|过期|缺料|异常|高|失败|拒绝|超温|差异|召回|逾期|报废|未对上|未通过|缺口)/.test(s)) cls = 'risk';
+  else if (/(已取消|草稿|未开始|停用|已作废|已关闭|低)/.test(s)) cls = 'mute';
+  else if (/(执行中|进行中|处理中|待审批|审批中|生产中|运输中|检验中|待处理|新建|待)/.test(s)) cls = 'run';
+  return pill(s, cls);
+}
+function blk(b, key) { var f = BLK[b.t]; return f ? f(b, key) : '<div class="notice">未知块类型：' + esc(b.t) + '</div>'; }
+function card(title, inner, right, pad) { return '<section class="card">' + (title || right ? '<header><h2>' + esc(title || '') + '</h2>' + (right || '') + '</header>' : '') + (pad === false ? inner : '<div class="in">' + inner + '</div>') + '</section>'; }
+BLK.kpis = function (b) {
+  return '<div class="kpis">' + b.items.map(function (k) { return '<div class="kpi"><span>' + esc(k[0]) + '</span><strong>' + (typeof k[1] === 'number' ? fmt(k[1], k[3] || 0) : esc(k[1])) + '</strong>' + (k[2] ? '<small style="color:var(--fg2)">' + esc(k[2]) + '</small>' : '') + '</div>'; }).join('') + '</div>';
+};
+BLK.text = function (b) { return '<div class="notice' + (b.tone === 'ok' ? ' ok' : '') + '">' + esc(b.text) + '</div>'; };
+BLK.table = function (b, key) {
+  BLOCKS[key] = b;
+  var st = S.tb[key] || (S.tb[key] = { q: '', f: {}, n: 15 }), cols = b.cols, all = b.rows || [];
+  var rows = all.map(function (r, i) { return { r: r, i: i }; }).filter(function (x) {
+    if (st.q) { var t = st.q.toLowerCase(); if (!cols.some(function (c) { return String(x.r[c.k] == null ? '' : x.r[c.k]).toLowerCase().indexOf(t) >= 0; })) return false; }
+    for (var k in st.f) { if (st.f[k] && String(x.r[k]) !== st.f[k]) return false; }
+    return true;
+  });
+  var fch = (b.filters || []).filter(function (k) { return cols.some(function (c) { return c.k === k; }); }).map(function (k) {
+    var col = cols.filter(function (c) { return c.k === k; })[0], vals = [];
+    all.forEach(function (r) { var v = String(r[k]); if (vals.indexOf(v) < 0) vals.push(v); });
+    return '<div class="chips"><small style="align-self:center">' + esc(col ? col.l : k) + '</small><button class="chip" data-tbf="' + key + '|' + k + '|" aria-pressed="' + (!st.f[k]) + '">全部</button>' + vals.map(function (v) { return '<button class="chip" data-tbf="' + key + '|' + k + '|' + esc(v) + '" aria-pressed="' + (st.f[k] === v) + '">' + esc(v) + '</button>'; }).join('') + '</div>';
+  }).join('');
+  var click = b.detail !== false;
+  var shown = rows.slice(0, st.n);
+  var body = shown.length ? shown.map(function (x) {
+    return '<tr' + (click ? ' class="pickrow" data-tbrow="' + key + '|' + x.i + '" tabindex="0"' : '') + '>' + cols.map(function (c) { return '<td' + (c.n ? ' class="n"' : '') + '>' + cell(x.r[c.k], c) + '</td>'; }).join('') + '</tr>';
+  }).join('') : '<tr><td colspan="' + cols.length + '" class="empty">没有符合条件的记录。</td></tr>';
+  var acts = (b.actions || []).map(function (a) { return '<button class="btn sm" data-toast="' + esc(a.msg || '已执行（示例）') + '">' + esc(a.l) + '</button>'; }).join(' ');
+  var tools = (b.search === false ? '' : '<div class="tools"><input data-tbq="' + key + '" type="search" placeholder="搜索" aria-label="搜索" value="' + esc(st.q) + '"></div>') + fch;
+  return '<section class="card"><header><h2>' + esc(b.title || '') + '</h2><span>' + acts + '</span></header>' + (tools ? '<div class="in" style="display:grid;gap:8px">' + tools + '</div>' : '') +
+    '<div class="tbl"><table><thead><tr>' + cols.map(function (c) { return '<th' + (c.n ? ' class="n"' : '') + '>' + esc(c.l) + '</th>'; }).join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+    '<div class="in" style="display:flex;justify-content:space-between;align-items:center"><small>共 ' + rows.length + ' 条' + (rows.length !== all.length ? '（全部 ' + all.length + ' 条）' : '') + (click ? ' · 点一行看详情' : '') + '</small>' + (rows.length > st.n ? '<button class="link" data-tbmore="' + key + '">显示更多</button>' : '') + '</div></section>';
+};
+BLK.bars = function (b) {
+  var mx = Math.max.apply(null, b.items.map(function (i) { return i[1]; }).concat([1]));
+  return card(b.title, b.items.map(function (i) {
+    var tone = i[2] === 'risk' ? 'var(--risk)' : i[2] === 'ok' ? 'var(--ok)' : i[2] === 'warn' ? 'var(--warn)' : 'var(--brand)';
+    return '<div class="bar"><span>' + esc(i[0]) + '</span><span class="bt"><i style="width:' + Math.max(1, i[1] / mx * 100) + '%;background:' + tone + '"></i></span><b>' + fmt(i[1], b.d || 0) + (b.unit ? ' ' + esc(b.unit) : '') + '</b></div>';
+  }).join(''));
+};
+BLK.line = function (b) {
+  var W = 640, H = 240, pl = 50, pr = 18, pt = 16, pb = 30, pal = ['var(--brand)', 'var(--ok)', 'var(--warn)', 'var(--risk)'], vals = [];
+  b.series.forEach(function (s) { s.data.forEach(function (v) { if (v != null) vals.push(v); }); });
+  var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals); if (mn === mx) { mn -= 1; mx += 1; }
+  var pad = (mx - mn) * .1; mn = b.zero ? 0 : mn - pad; mx += pad;
+  var n = b.labels.length;
+  function X(i) { return pl + i * (W - pl - pr) / Math.max(1, n - 1); }
+  function Y(v) { return pt + (1 - (v - mn) / (mx - mn)) * (H - pt - pb); }
+  var g = '', t, step = Math.ceil(n / 8);
+  for (t = 0; t <= 4; t++) { var v = mn + (mx - mn) * t / 4, y = Y(v); g += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--line)"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--fg2);font-size:11px">' + fmt(v, b.d || 0) + '</text>'; }
+  b.labels.forEach(function (l, i) { if (i % step === 0) g += '<text x="' + X(i) + '" y="' + (H - 8) + '" text-anchor="middle" style="fill:var(--fg2);font-size:11px">' + esc(l) + '</text>'; });
+  b.series.forEach(function (s, si) {
+    var pts = [], last = null;
+    s.data.forEach(function (v, i) { if (v != null) { pts.push(X(i).toFixed(1) + ',' + Y(v).toFixed(1)); last = [X(i), Y(v), v]; } });
+    g += '<polyline points="' + pts.join(' ') + '" style="fill:none;stroke:' + pal[si % 4] + ';stroke-width:2"/>';
+    if (last) g += '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="4" style="fill:' + pal[si % 4] + '"/><text x="' + last[0] + '" y="' + (last[1] - 9) + '" text-anchor="end" style="fill:var(--fg);font-size:11px;font-weight:600">' + fmt(last[2], b.d || 0) + '</text>';
+  });
+  var legend = b.series.length > 1 ? '<div class="legend">' + b.series.map(function (s, si) { return '<span><i style="background:' + pal[si % 4] + '"></i>' + esc(s.name) + '</span>'; }).join('') + '</div>' : '';
+  return card((b.title || '') + (b.unit ? '（' + b.unit + '）' : ''), '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img" aria-label="' + esc(b.title || '趋势图') + '">' + g + '</svg>' + legend);
+};
+BLK.board = function (b) {
+  return '<div class="board">' + b.columns.map(function (c) {
+    return '<div class="col"><div class="colh"><b>' + esc(c.title) + '</b><span class="pill mute">' + c.cards.length + '</span></div>' + c.cards.map(function (k) { return '<div class="kc"><b>' + esc(k.t) + '</b>' + (k.s ? '<small style="display:block">' + esc(k.s) + '</small>' : '') + (k.tag ? '<div style="margin-top:4px">' + autoPill(k.tag) + '</div>' : '') + '</div>'; }).join('') + '</div>';
+  }).join('') + '</div>';
+};
+BLK.list = function (b) {
+  return card(b.title, '<div class="list" style="margin:-12px -14px">' + b.items.map(function (i) {
+    return '<div><div class="t"><b>' + esc(i.t) + '</b>' + (i.s ? '<small>' + esc(i.s) + '</small>' : '') + '</div><span>' + (i.tag ? autoPill(i.tag) : '') + (i.act ? ' <button class="btn sm" ' + (i.act.copy ? 'data-copy="' + esc(i.act.copy) + '"' : 'data-toast="' + esc(i.act.msg || '已执行（示例）') + '"') + '>' + esc(i.act.l) + '</button>' : '') + '</span></div>';
+  }).join('') + '</div>');
+};
+BLK.swatches = function (b) {
+  return card(b.title, '<div class="sw">' + b.items.map(function (s) { return '<div><i style="background:' + esc(s[2]) + '"></i><span><b>' + esc(s[1]) + '</b>' + esc(s[2]) + '<br><code>' + esc(s[0]) + '</code></span></div>'; }).join('') + '</div>');
+};
+BLK.kv = function (b) { return card(b.title, '<div class="facts">' + b.rows.map(function (r) { return '<div><span>' + esc(r[0]) + '</span><b>' + esc(plain(r[1])) + '</b></div>'; }).join('') + '</div>'); };
+BLK.steps = function (b) {
+  return card(b.title, '<div class="steps">' + b.items.map(function (s, i) {
+    var cls = s.state === 'done' ? 'ok' : s.state === 'now' ? 'run' : 'mute';
+    return '<div class="step"><span class="pill ' + cls + '">' + (i + 1) + '</span><b>' + esc(s.t) + '</b>' + (s.s ? '<small>' + esc(s.s) + '</small>' : '') + '</div>';
+  }).join('') + '</div>');
+};
+BLK.tabs = function (b, key) {
+  var i = S.tab[key] || 0;
+  return '<div class="tabs" role="group">' + b.tabs.map(function (t, j) { return '<button data-tab="' + key + '|' + j + '" aria-pressed="' + (i === j) + '">' + esc(t.label) + '</button>'; }).join('') + '</div>' +
+    (b.tabs[i].blocks || []).map(function (x, j) { return blk(x, key + '.' + i + '.' + j); }).join('');
+};
+BLK.toggles = function (b, key) {
+  return card(b.title, '<div class="list" style="margin:-12px -14px">' + b.items.map(function (it, i) {
+    var k = key + '.' + i, on = S.sw[k] === undefined ? !!it.on : S.sw[k];
+    return '<div><div class="t"><b>' + esc(it.label) + '</b>' + (it.hint ? '<small>' + esc(it.hint) + '</small>' : '') + '</div><label class="chip" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-sw="' + k + '"' + (on ? ' checked' : '') + '> ' + (on ? '开' : '关') + '</label></div>';
+  }).join('') + '</div>');
+};
+BLK.form = function (b) {
+  return card(b.title, '<div class="form"><div class="row2">' + b.fields.map(function (f) {
+    var inp = f.type === 'select' ? '<select>' + (f.options || []).map(function (o) { return '<option' + (o === f.value ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>' :
+      f.type === 'textarea' ? '<textarea rows="3" style="padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:inherit;width:100%">' + esc(f.value || '') + '</textarea>' :
+        '<input type="' + (f.type || 'text') + '" value="' + esc(f.value == null ? '' : f.value) + '"' + (f.ph ? ' placeholder="' + esc(f.ph) + '"' : '') + '>';
+    return '<label class="f">' + esc(f.label) + inp + '</label>';
+  }).join('') + '</div><div><button class="btn primary" data-toast="' + esc(b.msg || '已提交（示例，不保存）') + '">' + esc(b.submit || '提交') + '</button></div></div>');
+};
+function pageGeneric(id) {
+  var route = BYID[id], sp = REG[route], grp = groupOf(id);
+  if (!sp) return '<div class="ph"><div><p>' + esc(grp) + '</p><h1>' + esc(titleOf(route || id)) + '</h1></div></div><section class="card"><div class="empty">这个页面在原型里有，演示版还没做示例。</div></section>';
+  return '<div class="ph"><div><p>' + esc(grp + (sp.sub ? ' · ' + sp.sub : '')) + '</p><h1>' + esc(sp.title) + '</h1></div>' + (sp.src ? pill(sp.src, 'mute') : '') + '</div>' +
+    (sp.gap ? '<div class="notice"><b>缺口：</b>' + esc(sp.gap) + '</div>' : '') + (sp.blocks || []).map(function (b, i) { return blk(b, id + '.' + i); }).join('');
+}
+function openPairs(title, pairs, go) {
+  $('#layer').innerHTML = '<div class="ov" data-close-dlg><div class="dlg" role="dialog" aria-modal="true" aria-label="详情"><h2>' + esc(title) + '</h2><dl>' + pairs.map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join('') + '</dl><small>示例数据，只读。</small><div style="margin-top:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end">' + (go ? '<button class="btn primary" data-go="' + esc(go) + '">打开这页</button>' : '') + '<button class="btn" data-close-dlg-btn>关闭</button></div></div></div>';
+}
+function render() {
+  var h = location.hash.replace('#', '') || 'today';
+  if (!FN[h] && !BYID[h]) h = 'today';
+  var changed = S.page !== h; S.page = h;
+  renderNav();
+  var fn = FN[h];
+  $('#page').innerHTML = fn ? fn() : pageGeneric(h);
+  if (h === 'weigh') updatePreview();
+  if (changed) { try { window.scrollTo(0, 0); } catch (e) { /* 忽略 */ } }
+}
+/* data-a-production.js */
+reg('/production/plans', { title:'生产工单', sub:'计划与执行记录', src:'黑湖只读',
+  gap:'工单、工序任务和逐笔报工来自黑湖，这里只读；完工入库字段黑湖没有返回，闭环里「入」显示为问号，不拿别的数据顶替。',
+  blocks:[
+    {t:'kpis', items:[['工单总数',9,'今天 2026-11-16'],['执行中',4,'GD-1116-01、02、03、09'],['已超期 / 落后',2,'GD-1116-09 超期，GD-1116-02 落后'],['未开始',2,'GD-1117-06、07']]},
+    {t:'table', title:'生产工单', filters:['status','schedule'],
+      cols:[{k:'projectCode',l:'工单'},{k:'productName',l:'产品'},{k:'status',l:'状态',p:1},{k:'planAmount',l:'计划量',n:1},{k:'good',l:'工单良品',n:1},{k:'unit',l:'单位'},{k:'workPct',l:'工单进度'},{k:'timePct',l:'时间进度'},{k:'schedule',l:'工期',p:1},{k:'tasks',l:'工序任务',n:1},{k:'reports',l:'报工',n:1},{k:'loop',l:'闭环'}],
+      rows:[
+        {projectCode:'GD-1116-01',productName:'酱牛肉',status:'执行中',planAmount:800,good:520,unit:'kg',workPct:'65.0%',timePct:'66.7%',schedule:'正常',tasks:5,reports:6,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-15 至 2026-11-17','路线对应':'已对应当前工艺路线'}},
+        {projectCode:'GD-1116-02',productName:'卤鸡爪',status:'执行中',planAmount:1200,good:900,unit:'kg',workPct:'75.0%',timePct:'100.0%',schedule:'落后',tasks:5,reports:7,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-14 至 2026-11-16','说明':'今天是计划结束日，时间进度比工单进度多 25 个百分点'}},
+        {projectCode:'GD-1116-03',productName:'川味香肠',status:'执行中',planAmount:600,good:150,unit:'kg',workPct:'25.0%',timePct:'33.3%',schedule:'正常',tasks:4,reports:3,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-16 至 2026-11-18'}},
+        {projectCode:'GD-1116-09',productName:'肉丸',status:'执行中',planAmount:700,good:560,unit:'kg',workPct:'80.0%',timePct:'100.0%',schedule:'已超期',tasks:4,reports:5,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-13 至 2026-11-15','说明':'已过计划结束日 1 天仍未结束'}},
+        {projectCode:'GD-1117-06',productName:'酱牛肉',status:'新建',planAmount:800,good:0,unit:'kg',workPct:'0.0%',timePct:'未开始',schedule:'未开始',tasks:5,reports:0,loop:'领— 产— 入?',_d:{'计划时间':'2026-11-17 至 2026-11-18'}},
+        {projectCode:'GD-1117-07',productName:'卤鸡爪',status:'新建',planAmount:1200,good:0,unit:'kg',workPct:'0.0%',timePct:'未开始',schedule:'未开始',tasks:5,reports:0,loop:'领— 产— 入?',_d:{'计划时间':'2026-11-17 至 2026-11-19'}},
+        {projectCode:'GD-1115-04',productName:'五香豆干',status:'已结束',planAmount:1000,good:960,unit:'kg',workPct:'96.0%',timePct:'100.0%',schedule:'已完成',tasks:4,reports:8,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-14 至 2026-11-15'}},
+        {projectCode:'GD-1115-05',productName:'辣椒酱',status:'已结束',planAmount:500,good:480,unit:'kg',workPct:'96.0%',timePct:'100.0%',schedule:'已完成',tasks:3,reports:4,loop:'领✓ 产✓ 入?',_d:{'计划时间':'2026-11-14 至 2026-11-15'}},
+        {projectCode:'GD-1114-08',productName:'烤鸭',status:'已取消',planAmount:400,good:0,unit:'kg',workPct:'0.0%',timePct:'已取消',schedule:'已取消',tasks:3,reports:0,loop:'领— 产— 入?',_d:{'计划时间':'2026-11-14 至 2026-11-15','说明':'黑湖里已取消，不再计入进度'}}
+      ],
+      actions:[{l:'导出',msg:'已按当前筛选导出工单清单（示例）'}]}
+  ]});
+
+reg('/production/material-flow', { title:'领料', sub:'来源业务记录', src:'黑湖只读',
+  gap:'这里只有已发和退回的实际记录；每张工单应领多少（需求）、实际耗用多少，黑湖没有提供，所以不显示净耗和差异。',
+  blocks:[
+    {t:'kpis', items:[['领料出库',6,'单据（张）'],['退料入库',2,'单据（张）'],['领料合计','1,830','kg（只加同单位）'],['退料合计','60','kg']]},
+    {t:'table', title:'领料与退料明细', filters:['kind'],
+      cols:[{k:'bizAt',l:'业务时间'},{k:'orderNo',l:'单号'},{k:'kind',l:'动作'},{k:'product',l:'物料'},{k:'qty',l:'数量',n:1,d:1},{k:'unit',l:'单位'},{k:'wh',l:'仓库'},{k:'rel',l:'关联工单'}],
+      rows:[
+        {bizAt:'2026-11-16 08:10',orderNo:'LL-1116-001',kind:'领料',product:'牛腱肉',qty:1160,unit:'kg',wh:'原料冷库',rel:'GD-1116-01'},
+        {bizAt:'2026-11-16 08:40',orderNo:'LL-1116-002',kind:'领料',product:'卤料包',qty:16,unit:'袋',wh:'辅料库',rel:'GD-1116-01'},
+        {bizAt:'2026-11-15 14:20',orderNo:'LL-1115-003',kind:'领料',product:'鸡爪',qty:1420,unit:'kg',wh:'原料冷库',rel:'GD-1116-02'},
+        {bizAt:'2026-11-16 09:15',orderNo:'LL-1116-004',kind:'领料',product:'猪前腿肉',qty:510,unit:'kg',wh:'原料冷库',rel:'GD-1116-03'},
+        {bizAt:'2026-11-13 10:30',orderNo:'LL-1113-005',kind:'领料',product:'肉丸坯',qty:820,unit:'kg',wh:'半成品库',rel:'GD-1116-09'},
+        {bizAt:'2026-11-14 13:50',orderNo:'LL-1114-006',kind:'领料',product:'豆干坯',qty:1150,unit:'kg',wh:'半成品库',rel:'GD-1115-04'},
+        {bizAt:'2026-11-16 10:05',orderNo:'TL-1116-001',kind:'退料',product:'牛腱肉',qty:40,unit:'kg',wh:'原料冷库',rel:'GD-1116-01'},
+        {bizAt:'2026-11-15 17:40',orderNo:'TL-1115-002',kind:'退料',product:'鸡爪',qty:20,unit:'kg',wh:'原料冷库',rel:'GD-1116-02'}
+      ],
+      actions:[{l:'导出',msg:'已导出领退料明细（示例）'}]}
+  ]});
+
+reg('/production/batches', { title:'生产批次', sub:'按工单展示', src:'黑湖只读',
+  gap:'黑湖没有独立的生产批次号，这里按工单展示；批次号和完工入库批次黑湖未返回，不自己编号。要看原料批次追溯，去入库批次页。',
+  blocks:[
+    {t:'kpis', items:[['工单（批次）',9],['执行中',4],['已结束',2],['良品合计','3,570','kg（同单位相加）']]},
+    {t:'table', title:'按工单展示的生产批次', filters:['status'],
+      cols:[{k:'projectCode',l:'工单'},{k:'productName',l:'产品'},{k:'status',l:'状态',p:1},{k:'good',l:'良品',n:1},{k:'unit',l:'单位'},{k:'reports',l:'报工笔数',n:1},{k:'lastReport',l:'最近报工'},{k:'stockIn',l:'完工入库批次'}],
+      rows:[
+        {projectCode:'GD-1116-01',productName:'酱牛肉',status:'执行中',good:520,unit:'kg',reports:6,lastReport:'2026-11-16 15:10',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1116-02',productName:'卤鸡爪',status:'执行中',good:900,unit:'kg',reports:7,lastReport:'2026-11-16 14:20',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1116-03',productName:'川味香肠',status:'执行中',good:150,unit:'kg',reports:3,lastReport:'2026-11-16 13:40',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1116-09',productName:'肉丸',status:'执行中',good:560,unit:'kg',reports:5,lastReport:'2026-11-16 11:05',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1117-06',productName:'酱牛肉',status:'新建',good:0,unit:'kg',reports:0,lastReport:'无报工',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1117-07',productName:'卤鸡爪',status:'新建',good:0,unit:'kg',reports:0,lastReport:'无报工',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1115-04',productName:'五香豆干',status:'已结束',good:960,unit:'kg',reports:8,lastReport:'2026-11-15 17:20',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1115-05',productName:'辣椒酱',status:'已结束',good:480,unit:'kg',reports:4,lastReport:'2026-11-15 16:00',stockIn:'黑湖未返回'},
+        {projectCode:'GD-1114-08',productName:'烤鸭',status:'已取消',good:0,unit:'kg',reports:0,lastReport:'无报工',stockIn:'黑湖未返回'}
+      ]}
+  ]});
+
+reg('/production/approval', { title:'生产报工 · 只读', sub:'逐笔产出 · 审批在黑湖办理', src:'黑湖只读',
+  gap:'每一笔都是黑湖的原始报工，不叠加成工单良品；审批只能在黑湖办理，这里没有通过、驳回按钮。人工列要有工价规则才算，没配置的显示「未配置」。',
+  blocks:[
+    {t:'kpis', items:[['近两天报工',10,'笔'],['待审批',3,'在黑湖办理'],['已审批',7],['今日报工',5,'2026-11-16']]},
+    {t:'table', title:'逐笔报工', filters:['approvalStatus','process'],
+      cols:[{k:'id',l:'报工ID'},{k:'project',l:'来源工单'},{k:'process',l:'工序'},{k:'taskId',l:'任务ID'},{k:'good',l:'良品',n:1},{k:'unit',l:'单位'},{k:'approvalStatus',l:'审批',p:1},{k:'labor',l:'人工（工价规则）'},{k:'endAt',l:'报工结束'}],
+      rows:[
+        {id:'BG-1116-001',project:'GD-1116-01',process:'蒸煮卤制',taskId:'T-0311',good:120,unit:'kg',approvalStatus:'待审批',labor:'未配置',endAt:'2026-11-16 15:10'},
+        {id:'BG-1116-002',project:'GD-1116-02',process:'包装',taskId:'T-0322',good:180,unit:'kg',approvalStatus:'待审批',labor:'0.8 工时',endAt:'2026-11-16 14:20'},
+        {id:'BG-1116-003',project:'GD-1116-03',process:'腌制',taskId:'T-0334',good:150,unit:'kg',approvalStatus:'待审批',labor:'未配置',endAt:'2026-11-16 13:40'},
+        {id:'BG-1116-004',project:'GD-1116-09',process:'包装',taskId:'T-0347',good:200,unit:'kg',approvalStatus:'已审批',labor:'1.0 工时',endAt:'2026-11-16 11:05'},
+        {id:'BG-1116-005',project:'GD-1116-01',process:'腌制',taskId:'T-0309',good:400,unit:'kg',approvalStatus:'已审批',labor:'未配置',endAt:'2026-11-16 10:30'},
+        {id:'BG-1115-006',project:'GD-1115-04',process:'包装',taskId:'T-0288',good:480,unit:'kg',approvalStatus:'已审批',labor:'1.6 工时',endAt:'2026-11-15 17:20'},
+        {id:'BG-1115-007',project:'GD-1115-05',process:'灌装',taskId:'T-0291',good:240,unit:'kg',approvalStatus:'已审批',labor:'0.9 工时',endAt:'2026-11-15 16:00'},
+        {id:'BG-1115-008',project:'GD-1116-09',process:'冷却',taskId:'T-0343',good:360,unit:'kg',approvalStatus:'已审批',labor:'未配置',endAt:'2026-11-15 15:10'},
+        {id:'BG-1115-009',project:'GD-1116-02',process:'蒸煮卤制',taskId:'T-0318',good:520,unit:'kg',approvalStatus:'已审批',labor:'未配置',endAt:'2026-11-15 11:30'},
+        {id:'BG-1115-010',project:'GD-1115-04',process:'干燥',taskId:'T-0285',good:480,unit:'kg',approvalStatus:'已审批',labor:'1.2 工时',endAt:'2026-11-15 09:40'}
+      ],
+      actions:[{l:'去黑湖审批',msg:'审批在黑湖办理，这里只读（示例提示）'}]}
+  ]});
+
+reg('/production/analysis-query', { title:'生产分析', sub:'生产查询与分析', src:'黑湖只读',
+  gap:'黑湖没有废品原因、工时和设备时间，所以不做损耗分析和设备效率；不同单位的数量不相加，按产品加单位分组。汇总全部由程序计算。',
+  blocks:[
+    {t:'kpis', items:[['工单',9,'快照日 2026-11-16'],['计划量合计','7,200','kg'],['良品合计','3,570','kg'],['良品 ÷ 计划','49.6%','同单位 kg']]},
+    {t:'table', title:'按产品汇总', filters:['unit'],
+      cols:[{k:'name',l:'产品'},{k:'unit',l:'单位'},{k:'n',l:'工单数',n:1},{k:'plan',l:'计划量',n:1},{k:'good',l:'良品',n:1},{k:'rate',l:'良品 ÷ 计划'}],
+      rows:[
+        {name:'酱牛肉',unit:'kg',n:2,plan:1600,good:520,rate:'32.5%'},
+        {name:'卤鸡爪',unit:'kg',n:2,plan:2400,good:900,rate:'37.5%'},
+        {name:'川味香肠',unit:'kg',n:1,plan:600,good:150,rate:'25.0%'},
+        {name:'肉丸',unit:'kg',n:1,plan:700,good:560,rate:'80.0%'},
+        {name:'五香豆干',unit:'kg',n:1,plan:1000,good:960,rate:'96.0%'},
+        {name:'辣椒酱',unit:'kg',n:1,plan:500,good:480,rate:'96.0%'},
+        {name:'烤鸭',unit:'kg',n:1,plan:400,good:0,rate:'0.0%（已取消）'}
+      ]},
+    {t:'line', title:'近 14 天报工笔数', unit:'笔', d:0, zero:true,
+      labels:['11-03','11-04','11-05','11-06','11-07','11-08','11-09','11-10','11-11','11-12','11-13','11-14','11-15','11-16'],
+      series:[{name:'报工笔数',data:[3,4,5,2,0,4,6,5,6,7,5,6,5,5]}]}
+  ]});
+
+reg('/production/kanban', { title:'状态看板', sub:'工单状态看板', src:'黑湖只读',
+  gap:'按黑湖工单状态分列；卡片只读，不能拖动改状态，状态要在黑湖办理，这里不回写。',
+  blocks:[
+    {t:'board', columns:[
+      {title:'新建（2）', cards:[
+        {t:'GD-1117-06', s:'酱牛肉 · 计划 800 kg · 良品 0 kg', tag:'未开始'},
+        {t:'GD-1117-07', s:'卤鸡爪 · 计划 1,200 kg · 良品 0 kg', tag:'未开始'}]},
+      {title:'执行中（4）', cards:[
+        {t:'GD-1116-01', s:'酱牛肉 · 计划 800 kg · 良品 520 kg · 工单进度 65.0%', tag:'正常'},
+        {t:'GD-1116-02', s:'卤鸡爪 · 计划 1,200 kg · 良品 900 kg · 工单进度 75.0%', tag:'落后'},
+        {t:'GD-1116-03', s:'川味香肠 · 计划 600 kg · 良品 150 kg · 工单进度 25.0%', tag:'正常'},
+        {t:'GD-1116-09', s:'肉丸 · 计划 700 kg · 良品 560 kg · 工单进度 80.0%', tag:'已超期'}]},
+      {title:'已结束（2）', cards:[
+        {t:'GD-1115-04', s:'五香豆干 · 计划 1,000 kg · 良品 960 kg', tag:'已完成'},
+        {t:'GD-1115-05', s:'辣椒酱 · 计划 500 kg · 良品 480 kg', tag:'已完成'}]},
+      {title:'已取消（1）', cards:[
+        {t:'GD-1114-08', s:'烤鸭 · 计划 400 kg · 良品 0 kg', tag:'已取消'}]}
+    ]}
+  ]});
+
+reg('/dashboard/production-progress', { title:'车间大屏', sub:'工单进度大屏', src:'黑湖只读',
+  gap:'黑湖没有车间、产线、设备、工位维度的数据，本屏不画产线图，也不显示设备状态；只展示工单进度和最近报工。办理去工单、报工和称重报工。',
+  blocks:[
+    {t:'kpis', items:[['执行中工单',4],['已超期 / 落后',2,'肉丸超期，卤鸡爪落后'],['今日报工笔数',5,'2026-11-16 15:30'],['未开始工单',2]]},
+    {t:'bars', title:'执行中工单 · 工单进度（良品 ÷ 计划量）', unit:'%', d:1,
+      items:[['GD-1116-01 酱牛肉',65.0,'ok'],['GD-1116-02 卤鸡爪',75.0,'risk'],['GD-1116-03 川味香肠',25.0,'ok'],['GD-1116-09 肉丸',80.0,'risk']]},
+    {t:'bars', title:'执行中工单 · 时间进度（已用天数 ÷ 计划天数）', unit:'%', d:1,
+      items:[['GD-1116-01 酱牛肉',66.7],['GD-1116-02 卤鸡爪',100.0],['GD-1116-03 川味香肠',33.3],['GD-1116-09 肉丸',100.0]]},
+    {t:'table', title:'最近报工', search:false, detail:false,
+      cols:[{k:'endAt',l:'报工结束'},{k:'project',l:'来源工单'},{k:'process',l:'工序'},{k:'good',l:'良品（kg）',n:1}],
+      rows:[
+        {endAt:'2026-11-16 15:10',project:'GD-1116-01',process:'蒸煮卤制',good:120},
+        {endAt:'2026-11-16 14:20',project:'GD-1116-02',process:'包装',good:180},
+        {endAt:'2026-11-16 13:40',project:'GD-1116-03',process:'腌制',good:150},
+        {endAt:'2026-11-16 11:05',project:'GD-1116-09',process:'包装',good:200},
+        {endAt:'2026-11-16 10:30',project:'GD-1116-01',process:'腌制',good:400}
+      ]}
+  ]});
+
+reg('/production/wip', { title:'在制品与效率', sub:'工序 × 工单 · 效率与达标率', src:'黑湖只读',
+  gap:'在制品来自黑湖工序任务；标准工时黑湖没有，由 Cretas 补充且不回写；没有标准的工序只显示「无标准」，不给达标率。只到工序，不做个人排名。',
+  blocks:[
+    {t:'tabs', tabs:[
+      {label:'在制品（工序 × 工单）', blocks:[
+        {t:'text', text:'格子 = 该工序已批准良品 / 任务计划量。「停在」是第一个没完成的已记录工序。当前堵点：包装 2 张、蒸煮卤制 1 张。'},
+        {t:'table', title:'工序 × 工单', filters:['stuck'],
+          cols:[{k:'p',l:'工单'},{k:'prod',l:'产品'},{k:'stuck',l:'停在'},{k:'c1',l:'备料清洗'},{k:'c2',l:'腌制'},{k:'c3',l:'蒸煮卤制'},{k:'c4',l:'冷却'},{k:'c5',l:'包装'}],
+          rows:[
+            {p:'GD-1116-01',prod:'酱牛肉',stuck:'蒸煮卤制',c1:'800/800 完成',c2:'800/800 完成',c3:'320/800 进行中',c4:'未开始',c5:'未开始'},
+            {p:'GD-1116-02',prod:'卤鸡爪',stuck:'包装',c1:'1200/1200 完成',c2:'1200/1200 完成',c3:'1200/1200 完成',c4:'1200/1200 完成',c5:'900/1200 进行中'},
+            {p:'GD-1116-03',prod:'川味香肠',stuck:'腌制',c1:'600/600 完成',c2:'150/600 进行中',c3:'—',c4:'未开始',c5:'未开始'},
+            {p:'GD-1116-09',prod:'肉丸',stuck:'包装',c1:'700/700 完成',c2:'—',c3:'700/700 完成',c4:'700/700 完成',c5:'560/700 进行中'},
+            {p:'GD-1115-04',prod:'五香豆干',stuck:'已全部完成',c1:'1000/1000 完成',c2:'1000/1000 完成',c3:'—',c4:'—',c5:'960/1000 完成'},
+            {p:'GD-1115-05',prod:'辣椒酱',stuck:'已全部完成',c1:'500/500 完成',c2:'—',c3:'—',c4:'—',c5:'480/500 完成'}
+          ]}
+      ]},
+      {label:'效率与达标率', blocks:[
+        {t:'text', text:'报工时段规则未配置：配置班次后才按班次拆分有效工时、休息和班外加班；黑湖原工时不变。'},
+        {t:'table', title:'按工序汇总（只到工序）', filters:['std'],
+          cols:[{k:'proc',l:'工序'},{k:'std',l:'标准（秒/单位）'},{k:'tasks',l:'任务',n:1},{k:'comp',l:'可计算',n:1},{k:'stdH',l:'标准工时'},{k:'effH',l:'有效工时（黑湖）'},{k:'eff',l:'实际效率'},{k:'ok',l:'达标率'},{k:'note',l:'说明'}],
+          rows:[
+            {proc:'备料清洗',std:'18 / kg',tasks:8,comp:8,stdH:'3.2 小时',effH:'3.6 小时',eff:'88.9%',ok:'75.0%',note:'6 / 8 个任务达标'},
+            {proc:'腌制',std:'无标准',tasks:7,comp:0,stdH:'不能算',effH:'5.1 小时',eff:'不能算',ok:'不能算',note:'没有标准工时，可点补充标准'},
+            {proc:'蒸煮卤制',std:'30 / kg',tasks:7,comp:6,stdH:'4.0 小时',effH:'4.4 小时',eff:'90.9%',ok:'66.7%',note:'1 个任务单位不一致，未参与计算'},
+            {proc:'冷却',std:'无标准',tasks:5,comp:0,stdH:'不能算',effH:'2.8 小时',eff:'不能算',ok:'不能算',note:'没有标准工时'},
+            {proc:'包装',std:'12 / kg',tasks:9,comp:9,stdH:'3.0 小时',effH:'3.2 小时',eff:'93.8%',ok:'77.8%',note:'7 / 9 个任务达标'},
+            {proc:'杀菌',std:'20 / kg',tasks:3,comp:3,stdH:'1.2 小时',effH:'1.3 小时',eff:'92.3%',ok:'66.7%',note:'2 / 3 个任务达标'}
+          ],
+          actions:[{l:'补充标准工时',msg:'标准工时由 Cretas 补充，不回写黑湖（示例提示）'},{l:'配置班次',msg:'班次规则示例：白班 08:00-17:00，休息 12:00-13:00'}]}
+      ]}
+    ]}
+  ]});
+
+reg('/production/process-hub', { title:'工序配置', sub:'工艺目录 · 画布 · 节点用料', src:'黑湖只读',
+  gap:'工艺路线和标准用料来自黑湖当前配置，只读；历史工艺版本没有取得，只显示「当前参考」，不画成已确认的历史工艺；用料类别未确认的不归入原料、辅料或包材。',
+  blocks:[
+    {t:'tabs', tabs:[
+      {label:'工艺目录', blocks:[
+        {t:'table', title:'已记录工序', filters:['bind'],
+          cols:[{k:'code',l:'工序编码'},{k:'name',l:'工序'},{k:'tasks',l:'任务数',n:1},{k:'boms',l:'BOM绑定',n:1},{k:'bind',l:'用料绑定'}],
+          rows:[
+            {code:'P01',name:'备料清洗',tasks:8,boms:12,bind:'已绑定'},
+            {code:'P02',name:'腌制',tasks:7,boms:9,bind:'已绑定'},
+            {code:'P03',name:'蒸煮卤制',tasks:7,boms:8,bind:'已绑定'},
+            {code:'P04',name:'冷却',tasks:5,boms:0,bind:'未绑定'},
+            {code:'P05',name:'包装',tasks:9,boms:6,bind:'已绑定'},
+            {code:'P06',name:'杀菌',tasks:3,boms:0,bind:'未绑定'}
+          ]}
+      ]},
+      {label:'画布', blocks:[
+        {t:'steps', title:'GD-1116-01 酱牛肉 · 工序路线（当前参考）', items:[
+          {t:'备料清洗', s:'投入牛腱肉 · 产出清洗后牛腱肉 · 可报工', state:'done'},
+          {t:'腌制', s:'投入清洗后牛腱肉、食盐 · 产出腌制牛腱肉 · 可报工', state:'done'},
+          {t:'蒸煮卤制', s:'投入腌制牛腱肉、卤料包 · 产出卤制酱牛肉 · 可报工', state:'now'},
+          {t:'冷却', s:'投入卤制酱牛肉 · 产出冷却酱牛肉', state:'todo'},
+          {t:'包装', s:'投入冷却酱牛肉、真空袋 · 产出酱牛肉成品 · 可报工', state:'todo'}]},
+        {t:'text', text:'画布只读，不能拖动改工艺。看不到历史工艺版本，当前路线只是「当前参考」。'}
+      ]},
+      {label:'节点用料', blocks:[
+        {t:'table', title:'本工单产品的标准用料（当前参考，非历史配方）', filters:['proc'],
+          cols:[{k:'mat',l:'用料'},{k:'proc',l:'挂接工序'},{k:'qty',l:'标准量 / 基数'},{k:'kind',l:'类别'},{k:'src',l:'源行'}],
+          rows:[
+            {mat:'牛腱肉',proc:'备料清洗',qty:'1.45 kg / 1 kg',kind:'原料',src:'BOM-0101'},
+            {mat:'食盐',proc:'腌制',qty:'0.03 kg / 1 kg',kind:'辅料',src:'BOM-0102'},
+            {mat:'卤料包',proc:'蒸煮卤制',qty:'0.02 袋 / 1 kg',kind:'辅料',src:'BOM-0103'},
+            {mat:'真空袋',proc:'包装',qty:'1 个 / 0.5 kg',kind:'包材',src:'BOM-0104'},
+            {mat:'纸箱',proc:'包装',qty:'1 个 / 10 kg',kind:'类别未确认',src:'BOM-0105'}
+          ]}
+      ]}
+    ]}
+  ]});
+
+reg('/production/yield-standard', { title:'标准出成率', sub:'出成标准', src:'Cretas 主来源',
+  gap:'黑湖没有标准出成率数据，标准由 Cretas 补充、按工序维护，不回写黑湖。实际出成率看称重报工，按工单对比标准；没有称重记录的工序不显示实际值。',
+  blocks:[
+    {t:'kpis', items:[['已设标准的工序',6],['允许偏离','± 3 ~ 5','个百分点'],['最近修改','2026-11-12','示例员工']]},
+    {t:'table', title:'各工序标准出成率', filters:['proc'],
+      cols:[{k:'proc',l:'工序'},{k:'rate',l:'标准出成率'},{k:'tol',l:'允许偏离'},{k:'by',l:'设置人 / 时间'},{k:'why',l:'原因'}],
+      rows:[
+        {proc:'备料清洗',rate:'92.00%',tol:'± 3 个百分点',by:'示例员工 · 2026-11-05 09:20',why:'按去筋去膜后的平均得率设定'},
+        {proc:'腌制',rate:'102.00%',tol:'± 3 个百分点',by:'示例员工 · 2026-11-05 09:25',why:'腌制吸水增重，可超过 100%'},
+        {proc:'蒸煮卤制',rate:'62.00%',tol:'± 5 个百分点',by:'示例员工 · 2026-11-12 14:10',why:'近一个月称重平均 61.4%，上调 1 个点'},
+        {proc:'冷却',rate:'99.00%',tol:'± 3 个百分点',by:'示例员工 · 2026-11-05 09:30',why:'冷却只有少量水分损失'},
+        {proc:'包装',rate:'99.50%',tol:'± 3 个百分点',by:'示例员工 · 2026-11-05 09:35',why:'含封口试机损耗'},
+        {proc:'杀菌',rate:'100.00%',tol:'± 3 个百分点',by:'示例员工 · 2026-11-08 16:00',why:'杀菌不应有重量变化'}
+      ],
+      actions:[{l:'新增 / 修改标准',msg:'修改标准需要填原因，旧标准留痕不删除（示例提示）'}]},
+    {t:'text', text:'标准可录到 150%（腌制、复水类工序可能超过 100%）；称重报工里实际出成率达到或超过 100% 的记录标「数据疑点」，只标不改原值。'}
+  ]});
+
+reg('/system/products', { title:'产品', sub:'产品、工艺与BOM', src:'黑湖只读',
+  gap:'产品、工艺和 BOM 条目来自黑湖当前配置，只读；历史版本没有取得。',
+  blocks:[
+    {t:'tabs', tabs:[
+      {label:'产品', blocks:[
+        {t:'table', title:'产品', filters:['unit'],
+          cols:[{k:'code',l:'产品编码'},{k:'name',l:'产品'},{k:'unit',l:'单位'},{k:'orders',l:'关联工单',n:1},{k:'boms',l:'BOM条目',n:1},{k:'route',l:'工艺路线'}],
+          rows:[
+            {code:'CP-001',name:'酱牛肉',unit:'kg',orders:2,boms:8,route:'备料清洗 → 腌制 → 蒸煮卤制 → 冷却 → 包装'},
+            {code:'CP-002',name:'卤鸡爪',unit:'kg',orders:2,boms:7,route:'备料清洗 → 腌制 → 蒸煮卤制 → 冷却 → 包装'},
+            {code:'CP-003',name:'川味香肠',unit:'kg',orders:1,boms:7,route:'备料清洗 → 腌制 → 冷却 → 包装'},
+            {code:'CP-004',name:'肉丸',unit:'kg',orders:1,boms:6,route:'备料清洗 → 蒸煮卤制 → 冷却 → 包装'},
+            {code:'CP-005',name:'五香豆干',unit:'kg',orders:1,boms:5,route:'备料清洗 → 腌制 → 包装'},
+            {code:'CP-006',name:'辣椒酱',unit:'kg',orders:1,boms:6,route:'备料清洗 → 包装'},
+            {code:'CP-007',name:'烤鸭',unit:'kg',orders:1,boms:5,route:'备料清洗 → 腌制 → 杀菌 → 包装'}
+          ]}
+      ]},
+      {label:'标准用料总表', blocks:[
+        {t:'table', title:'标准用料', filters:['product'],
+          cols:[{k:'id',l:'BOM行ID'},{k:'product',l:'产出产品'},{k:'mat',l:'用料'},{k:'qty',l:'标准量 / 基数'},{k:'kind',l:'类别'}],
+          rows:[
+            {id:'BOM-0101',product:'酱牛肉',mat:'牛腱肉',qty:'1.45 kg / 1 kg',kind:'原料'},
+            {id:'BOM-0102',product:'酱牛肉',mat:'食盐',qty:'0.03 kg / 1 kg',kind:'辅料'},
+            {id:'BOM-0201',product:'卤鸡爪',mat:'鸡爪',qty:'1.18 kg / 1 kg',kind:'原料'},
+            {id:'BOM-0202',product:'卤鸡爪',mat:'卤料包',qty:'0.02 袋 / 1 kg',kind:'辅料'},
+            {id:'BOM-0301',product:'川味香肠',mat:'猪前腿肉',qty:'0.85 kg / 1 kg',kind:'原料'},
+            {id:'BOM-0302',product:'川味香肠',mat:'肠衣',qty:'2 米 / 1 kg',kind:'包材'},
+            {id:'BOM-0601',product:'辣椒酱',mat:'干辣椒',qty:'0.60 kg / 1 kg',kind:'原料'}
+          ]}
+      ]}
+    ]}
+  ]});
+
+reg('/production/bom/ecns', { title:'工程变更通知', sub:'黑湖没有此类数据', src:'只读来源',
+  gap:'黑湖接口里没有 BOM 或工艺的变更单，也没有生产版本号，所以这里没有变更申请、影响范围和生效版本可显示。不造数据，也不留自由文本补充入口：变更单要挂在具体版本上，没有版本号的登记会变成对不上任何版本的孤立记录。',
+  blocks:[
+    {t:'text', text:'黑湖没有此类数据。这页现在只写缺口和能替代的入口。'},
+    {t:'kv', title:'缺口说明', rows:[
+      ['缺什么','变更单：申请人、变更内容、影响的产品和工序、生效日期，以及生效版本'],
+      ['找谁补','要黑湖开放变更单接口，或确认以后由 Cretas 自建；在这之前本页不造数据'],
+      ['现在能看什么','工序配置里的「节点用料」是当前用料依据；本地工作流保存的版本记录了每次工艺改动的时间和原因']]},
+    {t:'list', title:'替代入口', items:[
+      {t:'看 BOM 用料依据', s:'工序配置里的节点用料页签', act:{l:'打开',msg:'示例：跳到工序配置的节点用料'}},
+      {t:'打开工序配置', s:'工艺目录、画布和用料', act:{l:'打开',msg:'示例：跳到工序配置'}}]}
+  ]});
+
+reg('/production/bom/price-adjustments', { title:'BOM调价建议', sub:'原料价变动 → 成本影响 → 调价建议（只作建议）', src:'黑湖只读',
+  gap:'只作建议：本页没有批准、保存或改价按钮，不回写黑湖，不改客户价目表，不改配方行单价，采纳与否由人自己办理。成本只含已识别的直接成本（材料加人工），不含制造费用；价格不稳定的原料先核价，不出建议。',
+  blocks:[
+    {t:'kpis', items:[['原料价有变动',4,'种'],['受影响产品',3,'个，没有半成品传导'],['价格不稳定',1,'种，先核价不出建议'],['只有 1 个价格点',1,'种，无法判断变动']]},
+    {t:'tabs', tabs:[
+      {label:'调价建议', blocks:[
+        {t:'text', text:'建议价 = 客户价目表现价 + 每单位成本变化（保持每单位毛利额不变）；另列保持「成本占售价比」不变的算法。成本下降时同一公式给的是降价空间，不是要求降价。'},
+        {t:'table', title:'调价建议（元 / kg）', filters:['product'],
+          cols:[{k:'product',l:'产品'},{k:'customer',l:'客户'},{k:'price',l:'现价',n:1,d:2},{k:'delta',l:'每单位成本变化',n:1,d:2},{k:'keepMargin',l:'建议价（保持毛利额）',n:1,d:2},{k:'keepRatio',l:'建议价（保持成本占比）',n:1,d:2},{k:'ratio',l:'成本占售价（现 → 后）'}],
+          rows:[
+            {product:'酱牛肉',customer:'示例客户甲',price:78,delta:5.22,keepMargin:83.22,keepRatio:85.92,ratio:'65.9% → 72.6%',_d:{'依据':'牛腱肉均价上涨，领料用量 1.45 kg / 1 kg','单位成本':'51.40（黑湖领退料成本单价）'}},
+            {product:'酱牛肉',customer:'示例客户乙',price:76,delta:5.22,keepMargin:81.22,keepRatio:83.72,ratio:'67.6% → 74.5%'},
+            {product:'酱牛肉',customer:'示例客户丙',price:80,delta:5.22,keepMargin:85.22,keepRatio:88.13,ratio:'64.3% → 70.8%'},
+            {product:'卤鸡爪',customer:'示例客户甲',price:36,delta:0.71,keepMargin:36.71,keepRatio:37.17,ratio:'60.6% → 62.5%',_d:{'依据':'鸡爪均价上涨，领料用量 1.18 kg / 1 kg','单位成本':'21.80'}},
+            {product:'川味香肠',customer:'示例客户丙',price:48,delta:1.19,keepMargin:49.19,keepRatio:49.89,ratio:'62.9% → 64.4%',_d:{'依据':'猪前腿肉均价上涨，领料用量 0.85 kg / 1 kg','单位成本':'30.20'}}
+          ]},
+        {t:'text', text:'辣椒酱：干辣椒价格不稳定，先核价，暂不给建议。'}
+      ]},
+      {label:'原料价变动', blocks:[
+        {t:'table', title:'原料价变动（元 / kg，最近一次采购价对比此前均价）', filters:['state'],
+          cols:[{k:'name',l:'原料'},{k:'kind',l:'类别'},{k:'base',l:'此前均价',n:1,d:2},{k:'latest',l:'最新价',n:1,d:2},{k:'delta',l:'变动',n:1,d:2},{k:'pct',l:'变动幅度'},{k:'vendor',l:'来源'},{k:'state',l:'状态'}],
+          rows:[
+            {name:'牛腱肉',kind:'原料',base:52.00,latest:55.62,delta:3.62,pct:'+6.96%',vendor:'示例供应商甲 · 采购订单',state:'上涨'},
+            {name:'鸡爪',kind:'原料',base:14.80,latest:15.40,delta:0.60,pct:'+4.05%',vendor:'示例供应商乙 · 采购订单',state:'上涨'},
+            {name:'猪前腿肉',kind:'原料',base:21.50,latest:22.90,delta:1.40,pct:'+6.51%',vendor:'示例供应商甲 · 采购订单',state:'上涨'},
+            {name:'卤料包',kind:'辅料',base:9.60,latest:9.60,delta:0,pct:'0.00%',vendor:'示例供应商丙 · 采购订单',state:'不变'},
+            {name:'真空袋',kind:'包材',base:0.42,latest:0.40,delta:-0.02,pct:'-4.76%',vendor:'示例供应商丙 · 采购订单',state:'下降'},
+            {name:'干辣椒',kind:'原料',base:'不能算',latest:'不能算',delta:'不能算',pct:'—',vendor:'示例供应商乙 · 近 5 笔差异过大',state:'价格不稳定'},
+            {name:'食盐',kind:'辅料',base:'不能算',latest:2.10,delta:'不能算',pct:'—',vendor:'示例供应商丙 · 只有 1 笔',state:'仅 1 个价格点'}
+          ]}
+      ]},
+      {label:'缺什么', blocks:[
+        {t:'list', title:'算不出的地方', items:[
+          {t:'半成品没有单独定价', s:'客户价目表没有半成品的价格行，成本受影响但给不出售价建议'},
+          {t:'制造费用没有分摊数据', s:'成本只含材料和人工，水电、折旧不在内'},
+          {t:'干辣椒、食盐价格点不足', s:'近期采购价不稳定或只有 1 笔，先核价再看'}]}
+      ]}
+    ]}
+  ]});
+
+reg('/lsm/outsource', { title:'委外收发', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖委外任务与发料、收货记录，只读。计划、已发料、实收、退回分列，不互相代替；委外费用和结算黑湖没有返回，这里不显示金额。',
+  blocks:[
+    {t:'kpis', items:[['委外任务',5],['已完成',2],['部分收货',2],['未收货',1]]},
+    {t:'tabs', tabs:[
+      {label:'委外任务', blocks:[
+        {t:'table', title:'委外任务', filters:['state','vendor'],
+          cols:[{k:'no',l:'任务'},{k:'vendor',l:'委外方'},{k:'product',l:'产品（工序）'},{k:'plan',l:'计划',n:1},{k:'issued',l:'已发料',n:1},{k:'real',l:'实收',n:1},{k:'back',l:'退回',n:1},{k:'unit',l:'单位'},{k:'state',l:'状态',p:1}],
+          rows:[
+            {no:'WW-1112-01',vendor:'示例供应商甲',product:'五香豆干（烘干）',plan:1000,issued:1000,real:960,back:0,unit:'kg',state:'已完成'},
+            {no:'WW-1113-02',vendor:'示例供应商乙',product:'辣椒酱（灌装）',plan:500,issued:500,real:480,back:0,unit:'kg',state:'已完成'},
+            {no:'WW-1114-03',vendor:'示例供应商甲',product:'肉丸（速冻）',plan:700,issued:700,real:360,back:0,unit:'kg',state:'进行中'},
+            {no:'WW-1115-04',vendor:'示例供应商丙',product:'卤鸡爪（真空包装）',plan:600,issued:600,real:0,back:0,unit:'kg',state:'待收货'},
+            {no:'WW-1116-05',vendor:'示例供应商乙',product:'川味香肠（灌肠）',plan:300,issued:150,real:0,back:0,unit:'kg',state:'进行中'}
+          ]}
+      ]},
+      {label:'发料 / 退料', blocks:[
+        {t:'table', title:'发料与退料记录', filters:['act'],
+          cols:[{k:'no',l:'委外单'},{k:'act',l:'动作'},{k:'product',l:'产品'},{k:'qty',l:'数量',n:1},{k:'unit',l:'单位'},{k:'at',l:'业务时间'}],
+          rows:[
+            {no:'WF-1112-01',act:'发料',product:'五香豆干',qty:1000,unit:'kg',at:'2026-11-12 09:00'},
+            {no:'WF-1113-02',act:'发料',product:'辣椒酱',qty:500,unit:'kg',at:'2026-11-13 10:20'},
+            {no:'WF-1114-03',act:'发料',product:'肉丸',qty:700,unit:'kg',at:'2026-11-14 08:30'},
+            {no:'WF-1115-04',act:'发料',product:'卤鸡爪',qty:600,unit:'kg',at:'2026-11-15 13:40'},
+            {no:'WF-1116-05',act:'发料',product:'川味香肠',qty:150,unit:'kg',at:'2026-11-16 09:10'}
+          ]}
+      ]},
+      {label:'收货 / 退货', blocks:[
+        {t:'table', title:'收货与退货记录', filters:['act'],
+          cols:[{k:'no',l:'委外单'},{k:'act',l:'动作'},{k:'product',l:'产品'},{k:'qty',l:'数量',n:1},{k:'unit',l:'单位'},{k:'at',l:'业务时间'}],
+          rows:[
+            {no:'WS-1114-01',act:'收货',product:'五香豆干',qty:960,unit:'kg',at:'2026-11-14 16:30'},
+            {no:'WS-1115-02',act:'收货',product:'辣椒酱',qty:480,unit:'kg',at:'2026-11-15 15:00'},
+            {no:'WS-1115-03',act:'收货',product:'肉丸',qty:200,unit:'kg',at:'2026-11-15 17:10'},
+            {no:'WS-1116-04',act:'收货',product:'肉丸',qty:160,unit:'kg',at:'2026-11-16 11:20'},
+            {no:'WS-1116-05',act:'退货',product:'肉丸',qty:0,unit:'kg',at:'无退货记录'}
+          ]}
+      ]}
+    ]}
+  ]});
+
+reg('/production/shortage-cases', { title:'缺料异常', sub:'缺料事件与处理', src:'黑湖只读',
+  gap:'缺口量取黑湖采购需求的「缺口」字段（需求量减已下达采购量），不自己推算也不展开 BOM。黑湖采购需求没有「影响哪张订单或工单」的字段，所以不写影响范围；要看订单交期风险去交付风险页。只读，补采购回采购需求和采购订单办理。',
+  blocks:[
+    {t:'kpis', items:[['有缺口的采购需求',4,'共 7 条'],['缺口最大','肠衣 600 米'],['已过计划到货日',1,'PR-1116-03']]},
+    {t:'table', title:'采购需求与缺口', filters:['state'],
+      cols:[{k:'code',l:'采购需求'},{k:'mat',l:'物料'},{k:'req',l:'需求量',n:1},{k:'rel',l:'已下达采购',n:1},{k:'rec',l:'已收货',n:1},{k:'lack',l:'缺口',n:1},{k:'unit',l:'单位'},{k:'due',l:'计划到货'},{k:'state',l:'状态',p:1}],
+      rows:[
+        {code:'PR-1115-01',mat:'肠衣',req:1200,rel:600,rec:0,lack:600,unit:'米',due:'2026-11-17',state:'缺料'},
+        {code:'PR-1115-02',mat:'猪前腿肉',req:450,rel:300,rec:300,lack:150,unit:'kg',due:'2026-11-16',state:'缺料'},
+        {code:'PR-1116-03',mat:'鸡爪',req:1400,rel:1000,rec:0,lack:400,unit:'kg',due:'已过计划到货日（2026-11-15）',state:'缺料'},
+        {code:'PR-1116-04',mat:'牛腱肉',req:1200,rel:1200,rec:1200,lack:0,unit:'kg',due:'2026-11-14',state:'正常'},
+        {code:'PR-1116-05',mat:'卤料包',req:60,rel:40,rec:0,lack:20,unit:'袋',due:'2026-11-17',state:'缺料'},
+        {code:'PR-1116-06',mat:'真空袋',req:5000,rel:5000,rec:5000,lack:0,unit:'个',due:'2026-11-13',state:'正常'},
+        {code:'PR-1116-07',mat:'干辣椒',req:300,rel:300,rec:120,lack:0,unit:'kg',due:'2026-11-16',state:'正常',_d:{'说明':'没有缺口，但已收货只到 120 kg，余下 180 kg 还在路上'}}
+      ],
+      actions:[{l:'转待办',msg:'已转为采购待办（示例提示）'}]}
+  ]});
+
+reg('/production/delivery-risks', { title:'交付风险', sub:'交期 × 计划进度 × 齐套', src:'黑湖只读',
+  gap:'订单交期、计划进度、齐套三项合起来看；生产和销售两处菜单是同一页，只读，办理回销售订单和缺料异常。订单没有交期或没有关联工单的，写「不能判断」，不猜。',
+  blocks:[
+    {t:'kpis', items:[['高风险',2,'卤鸡爪、肉丸'],['中风险',3],['低风险',2],['不能判断',1,'烤鸭订单没填交期']]},
+    {t:'table', title:'未完成销售订单', filters:['risk','kit'],
+      cols:[{k:'no',l:'订单'},{k:'customer',l:'客户'},{k:'product',l:'产品 · 待交'},{k:'due',l:'交期'},{k:'kit',l:'齐套'},{k:'progress',l:'计划进度'},{k:'risk',l:'风险',p:1},{k:'reason',l:'原因'}],
+      rows:[
+        {no:'SO-1115-02',customer:'示例客户乙',product:'卤鸡爪 1,200 kg',due:'2026-11-16（今天到期）',kit:'部分（缺 1 项）',progress:'GD-1116-02 工单进度 75.0%，落后',risk:'高',reason:'今天到期，工单落后；卤料包缺 20 袋'},
+        {no:'SO-1115-03',customer:'示例客户丙',product:'肉丸 700 kg',due:'2026-11-15（已逾期 1 天）',kit:'齐套',progress:'GD-1116-09 工单进度 80.0%，已超期',risk:'高',reason:'已逾期且工单未结束，良品 560 / 700 kg'},
+        {no:'SO-1116-01',customer:'示例客户甲',product:'酱牛肉 800 kg',due:'2026-11-17（还有 1 天）',kit:'齐套',progress:'GD-1116-01 工单进度 65.0%，正常',risk:'中',reason:'距交期 1 天，良品 520 / 800 kg'},
+        {no:'SO-1116-04',customer:'示例客户甲',product:'川味香肠 600 kg',due:'2026-11-18（还有 2 天）',kit:'缺料（缺 2 项）',progress:'GD-1116-03 工单进度 25.0%，正常',risk:'中',reason:'肠衣、猪前腿肉有缺口，计划到货 11-16 至 11-17'},
+        {no:'SO-1116-06',customer:'示例客户丙',product:'卤鸡爪 1,200 kg',due:'2026-11-20（还有 4 天）',kit:'部分（缺 1 项）',progress:'GD-1117-07 未开始',risk:'中',reason:'鸡爪缺 400 kg，已过计划到货日'},
+        {no:'SO-1116-05',customer:'示例客户乙',product:'酱牛肉 800 kg',due:'2026-11-19（还有 3 天）',kit:'齐套',progress:'GD-1117-06 未开始',risk:'低',reason:'物料齐套，时间充裕'},
+        {no:'SO-1116-07',customer:'示例客户丙',product:'五香豆干 1,000 kg',due:'2026-11-18（还有 2 天）',kit:'齐套',progress:'GD-1115-04 已结束，良品 960 kg',risk:'低',reason:'工单已完成，发货另看发运记录'},
+        {no:'SO-1116-08',customer:'示例客户乙',product:'烤鸭 400 kg',due:'未填写',kit:'不能判断',progress:'关联工单 GD-1114-08 已取消',risk:'不能判断',reason:'订单没填交期，关联工单已取消'}
+      ],
+      actions:[{l:'看缺料异常',msg:'示例：跳到缺料异常页'}]}
+  ]});
+
+/* data-b-trade.js */
+// b-trade：采购、销售、个人 OA、协同任务 共 19 页
+// ===== 采购 =====
+reg('/procurement/requisitions/my', { title:'采购需求', sub:'黑湖只读', src:'黑湖只读',
+  gap:'来自黑湖物料需求，只读。缺料数按黑湖返回值显示，这里不重算；下达采购、收货在黑湖办理。建议供应商黑湖没给的写「未返回」。',
+  blocks:[
+  {t:'kpis', items:[['需求单',10,'含已取消 1 张'],['缺料中',5,'缺料数大于 0，不含已取消'],['缺料合计','算不出','单位不同（kg、个），不相加'],['今日到货',0,'计划到货 11-16 无']]},
+  {t:'table', title:'物料需求', cols:[
+    {k:'no',l:'需求单'},{k:'m',l:'物料'},{k:'q',l:'需求',n:1,d:0},{k:'rel',l:'已下达',n:1,d:0},{k:'rec',l:'已收',n:1,d:0},{k:'lack',l:'缺料',n:1,d:0},{k:'u',l:'单位'},{k:'due',l:'计划到货'},{k:'v',l:'建议供应商'},{k:'s',l:'状态',p:1}],
+    rows:[
+    {no:'QG-1115-01',m:'牛腱',q:1000,rel:1000,rec:1000,lack:0,u:'kg',due:'2026-11-14',v:'示例供应商甲',s:'已完成',_d:{'对应工单':'GD-1116-01 酱牛肉'}},
+    {no:'QG-1115-02',m:'鸡爪（生）',q:1400,rel:1400,rec:700,lack:0,u:'kg',due:'2026-11-17',v:'示例供应商乙',s:'进行中',_d:{'对应工单':'GD-1116-02 卤鸡爪','说明':'已下达，还差 700 kg 未到'}},
+    {no:'QG-1115-03',m:'猪后腿肉',q:700,rel:400,rec:0,lack:300,u:'kg',due:'2026-11-18',v:'示例供应商丙',s:'未完成',_d:{'对应工单':'GD-1116-03 川味香肠 / GD-1116-09 肉丸'}},
+    {no:'QG-1115-04',m:'香料包',q:60,rel:60,rec:60,lack:0,u:'kg',due:'2026-11-15',v:'示例供应商甲',s:'已完成'},
+    {no:'QG-1116-05',m:'干辣椒',q:300,rel:0,rec:0,lack:300,u:'kg',due:'2026-11-18',v:'未返回',s:'未完成',_d:{'对应工单':'GD-1115-05 辣椒酱后续补货'}},
+    {no:'QG-1114-06',m:'鲜鸭',q:420,rel:0,rec:0,lack:0,u:'只',due:'2026-11-17',v:'示例供应商丙',s:'已取消',_d:{'原因':'GD-1114-08 烤鸭已取消，需求随之取消'}},
+    {no:'QG-1113-07',m:'黄豆',q:1100,rel:1100,rec:1100,lack:0,u:'kg',due:'2026-11-15',v:'示例供应商乙',s:'已完成',_d:{'对应工单':'GD-1115-04 五香豆干'}},
+    {no:'QG-1116-08',m:'牛腱',q:880,rel:0,rec:0,lack:880,u:'kg',due:'2026-11-18',v:'示例供应商甲',s:'未完成',_d:{'对应工单':'GD-1117-06 酱牛肉'}},
+    {no:'QG-1116-09',m:'包装袋',q:3000,rel:0,rec:0,lack:3000,u:'个',due:'2026-11-19',v:'未返回',s:'未完成'},
+    {no:'QG-1116-10',m:'真空袋',q:2000,rel:0,rec:0,lack:2000,u:'个',due:'2026-11-19',v:'未返回',s:'未完成'}],
+    filters:['s','m'], actions:[{l:'导出',msg:'已导出当前列表（示例，不会真的生成文件）'},{l:'转待办',msg:'已把缺料项转成协同任务（示例）'}]}
+]});
+
+reg('/procurement/requisitions/pending-approval', { title:'待审批请购', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'只列黑湖采购需求里审批状态不是「已审批」的，只读；审批在黑湖办理，这里不能通过或驳回。黑湖没有提交人、审批人字段，页面不显示谁在等谁审。',
+  blocks:[
+  {t:'kpis', items:[['待审批',5,'全部来自采购需求'],['其中有缺口',5,'缺口都大于 0'],['最早到货','2026-11-18','QG-1115-03、QG-1116-05、QG-1116-08']]},
+  {t:'table', title:'待审批的采购需求', cols:[
+    {k:'no',l:'需求单'},{k:'p',l:'产品'},{k:'q',l:'需求数量',n:1,d:0},{k:'u',l:'单位'},{k:'lack',l:'缺口',n:1,d:0},{k:'due',l:'计划到货'},{k:'a',l:'审批',p:1}],
+    rows:[
+    {no:'QG-1115-03',p:'猪后腿肉',q:700,u:'kg',lack:300,due:'2026-11-18',a:'待审批'},
+    {no:'QG-1116-05',p:'干辣椒',q:300,u:'kg',lack:300,due:'2026-11-18',a:'待审批'},
+    {no:'QG-1116-08',p:'牛腱',q:880,u:'kg',lack:880,due:'2026-11-18',a:'待审批',_d:{'对应工单':'GD-1117-06 酱牛肉'}},
+    {no:'QG-1116-09',p:'包装袋',q:3000,u:'个',lack:3000,due:'2026-11-19',a:'待审批'},
+    {no:'QG-1116-10',p:'真空袋',q:2000,u:'个',lack:2000,due:'2026-11-19',a:'待审批'}],
+    filters:['a'], actions:[{l:'去黑湖审批',msg:'审批在黑湖办理，这里只读（示例）'}]}
+]});
+
+reg('/procurement/orders', { title:'采购订单', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖采购订单，只读。收货、退货数量按黑湖返回值；金额黑湖未返回币种，按原值显示。下单与审批在黑湖。',
+  blocks:[
+  {t:'kpis', items:[['采购订单',7,'含已取消 1 张'],['含税金额合计',88880,'不含已取消，币种未返回',2],['未收齐',2,'CG-1113-02、CG-1114-03']]},
+  {t:'table', title:'采购订单', cols:[
+    {k:'no',l:'单号'},{k:'v',l:'供应商'},{k:'t',l:'采购日期'},{k:'due',l:'计划到货'},{k:'q',l:'采购数',n:1,d:0},{k:'r',l:'已收',n:1,d:0},{k:'a',l:'含税金额',n:1,d:2},{k:'s',l:'状态',p:1}],
+    rows:[
+    {no:'CG-1112-01',v:'示例供应商甲',t:'2026-11-12',due:'2026-11-14',q:1000,r:1000,a:62000,s:'已完成',_d:{'物料':'牛腱 1000 kg × 62.00','关联销售单':'XS-1112-01'}},
+    {no:'CG-1113-02',v:'示例供应商乙',t:'2026-11-13',due:'2026-11-17',q:1400,r:700,a:19600,s:'进行中',_d:{'物料':'鸡爪（生）1400 kg × 14.00','未清':'700 kg'}},
+    {no:'CG-1114-03',v:'示例供应商丙',t:'2026-11-14',due:'2026-11-18',q:400,r:0,a:8400,s:'未完成',_d:{'物料':'猪后腿肉 400 kg × 21.00','未清':'400 kg'}},
+    {no:'CG-1113-04',v:'示例供应商甲',t:'2026-11-13',due:'2026-11-15',q:60,r:60,a:5700,s:'已完成',_d:{'物料':'香料包 60 kg × 95.00'}},
+    {no:'CG-1112-05',v:'示例供应商乙',t:'2026-11-12',due:'2026-11-15',q:1100,r:1100,a:5280,s:'已完成',_d:{'物料':'黄豆 1100 kg × 4.80'}},
+    {no:'CG-1114-06',v:'示例供应商丙',t:'2026-11-14',due:'2026-11-17',q:420,r:0,a:7560,s:'已取消',_d:{'物料':'鲜鸭 420 只 × 18.00','原因':'烤鸭工单取消'}},
+    {no:'CG-1105-07',v:'示例供应商丁',t:'2026-11-05',due:'2026-11-08',q:1000,r:1000,a:800,s:'已完成',_d:{'物料':'真空袋 1000 个 × 0.80'}}],
+    filters:['s','v'], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+reg('/procurement/ai-purchase', { title:'采购建议', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'只列黑湖采购需求里「缺口大于 0」的项。不自动下单，不推算安全库存；黑湖没有补货规则，所以不给建议数量，只列缺口。',
+  blocks:[
+  {t:'text', text:'这里只是把有缺口的采购需求挑出来，不会替你下单，也没有安全库存和补货规则可算。'},
+  {t:'table', title:'有缺口的采购需求', cols:[
+    {k:'no',l:'需求单'},{k:'p',l:'产品'},{k:'q',l:'需求数量',n:1,d:0},{k:'u',l:'单位'},{k:'lack',l:'缺口',n:1,d:0},{k:'due',l:'计划到货'},{k:'a',l:'审批',p:1}],
+    rows:[
+    {no:'QG-1115-03',p:'猪后腿肉',q:700,u:'kg',lack:300,due:'2026-11-18',a:'待审批'},
+    {no:'QG-1116-05',p:'干辣椒',q:300,u:'kg',lack:300,due:'2026-11-18',a:'待审批'},
+    {no:'QG-1116-08',p:'牛腱',q:880,u:'kg',lack:880,due:'2026-11-18',a:'待审批'},
+    {no:'QG-1116-09',p:'包装袋',q:3000,u:'个',lack:3000,due:'2026-11-19',a:'待审批'},
+    {no:'QG-1116-10',p:'真空袋',q:2000,u:'个',lack:2000,due:'2026-11-19',a:'待审批'}],
+    filters:['u'], actions:[{l:'转待办',msg:'已转成协同任务，提醒采购员跟进（示例）'}]},
+  {t:'bars', title:'缺口（按单位分别看，不同单位不相加）', unit:'kg', d:0, items:[['牛腱（kg）',880,'risk'],['猪后腿肉（kg）',300,'warn'],['干辣椒（kg）',300,'warn']]}
+]});
+
+reg('/procurement/suppliers', { title:'供应商', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖供应商档案与账本，只读。黑湖应付、付款接口返回 0 条，所以只显示账本汇总；采购订单、待开票、委外任务在详情里看。账本没返回的写「未返回」，不当 0。',
+  blocks:[
+  {t:'kpis', items:[['供应商',5,'含 1 家账本未返回'],['采购额合计',93680,'示例供应商甲～丁，币种未返回',2],['待付款合计',10980,'按账本汇总',2]]},
+  {t:'table', title:'供应商档案与账本', cols:[
+    {k:'code',l:'编码'},{k:'name',l:'名称'},{k:'days',l:'账期（天）',n:1},{k:'pa',l:'采购额',n:1,d:2},{k:'pr',l:'待收货额',n:1,d:2},{k:'pi',l:'待开票额',n:1,d:2},{k:'pp',l:'待付款',n:1,d:2}],
+    rows:[
+    {code:'V001',name:'示例供应商甲',days:30,pa:67700,pr:0,pi:62000,pp:5700,_d:{'采购订单':'CG-1112-01、CG-1113-04','价目表':'牛腱 62.00、香料包 95.00'}},
+    {code:'V002',name:'示例供应商乙',days:30,pa:24880,pr:9800,pi:5280,pp:5280,_d:{'采购订单':'CG-1113-02、CG-1112-05'}},
+    {code:'V003',name:'示例供应商丙',days:15,pa:8400,pr:8400,pi:0,pp:0,_d:{'采购订单':'CG-1114-03（CG-1114-06 已取消）'}},
+    {code:'V004',name:'示例供应商丁',days:'未返回',pa:800,pr:0,pi:800,pp:0,_d:{'采购订单':'CG-1105-07'}},
+    {code:'V005',name:'示例供应商戊',days:'未返回',pa:'未返回',pr:'未返回',pi:'未返回',pp:'未返回',_d:{'说明':'黑湖有档案，没有账本数据'}}],
+    filters:[], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+reg('/procurement/price-lists', { title:'价格表', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖没有供应商价目表数据（0 条）；客户价目表在「客户价目表」页。下面是由采购订单明细看到的近期采购单价，只是参考，不是价目表，也不是库存成本均价。',
+  blocks:[
+  {t:'text', text:'供应商价目表：黑湖返回 0 条，这里没有可显示的价目。'},
+  {t:'table', title:'参考：近期采购订单里的采购单价（不是价目表）', cols:[
+    {k:'p',l:'物料'},{k:'v',l:'供应商'},{k:'no',l:'采购单'},{k:'t',l:'采购日期'},{k:'pr',l:'单价',n:1,d:2},{k:'u',l:'单位'}],
+    rows:[
+    {p:'牛腱',v:'示例供应商甲',no:'CG-1112-01',t:'2026-11-12',pr:62,u:'kg'},
+    {p:'鸡爪（生）',v:'示例供应商乙',no:'CG-1113-02',t:'2026-11-13',pr:14,u:'kg'},
+    {p:'猪后腿肉',v:'示例供应商丙',no:'CG-1114-03',t:'2026-11-14',pr:21,u:'kg'},
+    {p:'香料包',v:'示例供应商甲',no:'CG-1113-04',t:'2026-11-13',pr:95,u:'kg'},
+    {p:'黄豆',v:'示例供应商乙',no:'CG-1112-05',t:'2026-11-12',pr:4.8,u:'kg'},
+    {p:'真空袋',v:'示例供应商丁',no:'CG-1105-07',t:'2026-11-05',pr:0.8,u:'个'}],
+    filters:['v'], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+// ===== 销售 =====
+reg('/sales/orders', { title:'销售订单', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖销售订单，只读。已发、退货按黑湖返回值；开单与审批仍在黑湖。「对照价目表」只是拿客户价目表做参考，不覆盖黑湖单价，也不回写。黑湖没返回价目表有效期，无法按有效期筛。',
+  blocks:[
+  {t:'kpis', items:[['销售订单',9,'含已取消 1 张'],['含税金额合计',250500,'不含已取消，币种未返回',2],['已逾期',1,'XS-1110-08，计划 11-14 未发完'],['待发货',5,'未完成 3 张 + 进行中 2 张']]},
+  {t:'table', title:'销售订单', cols:[
+    {k:'no',l:'单号'},{k:'c',l:'客户'},{k:'t',l:'下单'},{k:'due',l:'计划交货'},{k:'q',l:'数量（kg）',n:1,d:0},{k:'sh',l:'已发（kg）',n:1,d:0},{k:'a',l:'含税金额',n:1,d:2},{k:'ref',l:'对照价目表'},{k:'s',l:'状态',p:1}],
+    rows:[
+    {no:'XS-1112-01',c:'示例客户甲',t:'2026-11-12',due:'2026-11-14',q:500,sh:500,a:42500,ref:'一致',s:'已完成',_d:{'明细':'酱牛肉 500 kg × 85.00'}},
+    {no:'XS-1113-02',c:'示例客户乙',t:'2026-11-13',due:'2026-11-15',q:800,sh:800,a:25600,ref:'一致',s:'已完成',_d:{'明细':'卤鸡爪 800 kg × 32.00'}},
+    {no:'XS-1114-03',c:'示例客户丙',t:'2026-11-14',due:'2026-11-15',q:1000,sh:1000,a:18000,ref:'一致',s:'已完成',_d:{'明细':'五香豆干 1000 kg × 18.00','对应工单':'GD-1115-04'}},
+    {no:'XS-1114-04',c:'示例客户甲',t:'2026-11-14',due:'2026-11-17',q:600,sh:300,a:28800,ref:'一致',s:'进行中',_d:{'明细':'川味香肠 600 kg × 48.00','对应工单':'GD-1116-03'}},
+    {no:'XS-1115-05',c:'示例客户乙',t:'2026-11-15',due:'2026-11-17',q:700,sh:0,a:18200,ref:'低于参考价 1.00',s:'未完成',_d:{'明细':'肉丸 700 kg × 26.00（参考价 27.00）','对应工单':'GD-1116-09'}},
+    {no:'XS-1115-06',c:'示例客户丙',t:'2026-11-15',due:'2026-11-17',q:800,sh:0,a:68000,ref:'一致',s:'未完成',_d:{'明细':'酱牛肉 800 kg × 85.00','对应工单':'GD-1117-06'}},
+    {no:'XS-1116-07',c:'示例客户甲',t:'2026-11-16',due:'2026-11-18',q:1200,sh:0,a:38400,ref:'一致',s:'未完成',_d:{'明细':'卤鸡爪 1200 kg × 32.00','对应工单':'GD-1117-07'}},
+    {no:'XS-1110-08',c:'示例客户丙',t:'2026-11-10',due:'2026-11-14 · 已逾期',q:500,sh:200,a:11000,ref:'无有效价目',s:'进行中',_d:{'明细':'辣椒酱 500 kg × 22.00','对应工单':'GD-1115-05','说明':'丙的价目表里没有辣椒酱，无法对照'}},
+    {no:'XS-1113-09',c:'示例客户乙',t:'2026-11-13',due:'2026-11-15',q:400,sh:0,a:24000,ref:'一致',s:'已取消',_d:{'明细':'烤鸭 400 kg × 60.00','对应工单':'GD-1114-08 已取消'}}],
+    filters:['s','c'], actions:[{l:'导出',msg:'已导出当前列表（示例）'},{l:'转待办',msg:'已把逾期订单转成协同任务（示例）'}]}
+]});
+
+reg('/sales/shipments', { title:'发运记录', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖销售出库单，只读。销售出库不等于销售订单，要按关联单号对照。黑湖没有车辆、司机、签收回单，这里看不到物流在途和签收情况。',
+  blocks:[
+  {t:'kpis', items:[['出库单',6,'本页示例'],['待审批',1,'CK-1116-06'],['今日出库',2,'11-16 当天']]},
+  {t:'table', title:'销售出库单', cols:[
+    {k:'no',l:'单号'},{k:'ty',l:'类型'},{k:'d',l:'业务时间'},{k:'s',l:'状态',p:1},{k:'n',l:'行数',n:1,d:0},{k:'p',l:'品项'},{k:'rel',l:'关联单号'}],
+    rows:[
+    {no:'CK-1114-01',ty:'销售出库',d:'2026-11-14',s:'已审批',n:1,p:'酱牛肉',rel:'XS-1112-01'},
+    {no:'CK-1115-02',ty:'销售出库',d:'2026-11-15',s:'已审批',n:1,p:'卤鸡爪',rel:'XS-1113-02'},
+    {no:'CK-1115-03',ty:'销售出库',d:'2026-11-15',s:'已审批',n:1,p:'五香豆干',rel:'XS-1114-03'},
+    {no:'CK-1116-04',ty:'销售出库',d:'2026-11-16',s:'已审批',n:1,p:'川味香肠',rel:'XS-1114-04',_d:{'说明':'订单 600 kg，本次先发 300 kg'}},
+    {no:'CK-1116-05',ty:'销售出库',d:'2026-11-16',s:'已审批',n:1,p:'辣椒酱',rel:'XS-1110-08',_d:{'说明':'订单 500 kg，累计已发 200 kg'}},
+    {no:'CK-1116-06',ty:'销售出库',d:'2026-11-16',s:'待审批',n:1,p:'卤鸡爪',rel:'XS-1116-07'}],
+    filters:['s'], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+reg('/sales/returns', { title:'销售退货', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖销售退货入库单，只读。黑湖没有单独的退货申请单据，退货原因、审批流不在这里，也看不到退货是否已处理。',
+  blocks:[
+  {t:'kpis', items:[['退货入库单',5,'本页示例'],['待审批',1,'TH-1116-01'],['无关联订单',1,'TH-1109-05']]},
+  {t:'table', title:'销售退货入库单', cols:[
+    {k:'no',l:'单号'},{k:'ty',l:'类型'},{k:'d',l:'业务时间'},{k:'s',l:'状态',p:1},{k:'n',l:'行数',n:1,d:0},{k:'p',l:'品项'},{k:'rel',l:'关联单号'}],
+    rows:[
+    {no:'TH-1116-01',ty:'销售退货入库',d:'2026-11-16',s:'待审批',n:1,p:'五香豆干',rel:'XS-1114-03'},
+    {no:'TH-1115-02',ty:'销售退货入库',d:'2026-11-15',s:'已审批',n:1,p:'卤鸡爪',rel:'XS-1113-02'},
+    {no:'TH-1113-03',ty:'销售退货入库',d:'2026-11-13',s:'已审批',n:1,p:'酱牛肉',rel:'XS-1112-01'},
+    {no:'TH-1110-04',ty:'销售退货入库',d:'2026-11-10',s:'已审批',n:1,p:'辣椒酱',rel:'无'},
+    {no:'TH-1109-05',ty:'销售退货入库',d:'2026-11-09',s:'已审批',n:1,p:'肉丸',rel:'无'}],
+    filters:['s'], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+reg('/sales/customers', { title:'客户', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖客户档案与客户账本，只读。账本金额按黑湖返回；应收、收款、待开票、价目表在详情页签里。账本没返回的写「未返回」，没有业务的写 0，两者不混。',
+  blocks:[
+  {t:'kpis', items:[['客户',5,'含 1 家账本未返回'],['合同额合计',250500,'甲乙丙，不含已取消',2],['待收款合计',60400,'等于应收页待收合计',2]]},
+  {t:'table', title:'客户档案与账本', cols:[
+    {k:'code',l:'编码'},{k:'name',l:'名称'},{k:'days',l:'账期（天）',n:1},{k:'ca',l:'合同额',n:1,d:2},{k:'ps',l:'待发货额',n:1,d:2},{k:'pi',l:'待开票额',n:1,d:2},{k:'pr',l:'待收款',n:1,d:2}],
+    rows:[
+    {code:'C001',name:'示例客户甲',days:30,ca:109700,ps:52800,pi:56900,pr:14400,_d:{'销售订单':'XS-1112-01、XS-1114-04、XS-1116-07','应收':'YS-1116-04 待收 14400.00'}},
+    {code:'C002',name:'示例客户乙',days:30,ca:43800,ps:18200,pi:25600,pr:23600,_d:{'销售订单':'XS-1113-02、XS-1115-05','应收':'YS-1115-02 待收 15600.00；YS-0910-06 待收 8000.00（逾期）'}},
+    {code:'C003',name:'示例客户丙',days:30,ca:97000,ps:74600,pi:22400,pr:22400,_d:{'销售订单':'XS-1114-03、XS-1115-06、XS-1110-08','应收':'YS-1115-03 待收 18000.00；YS-1116-05 待收 4400.00'}},
+    {code:'C004',name:'示例客户丁',days:15,ca:0,ps:0,pi:0,pr:0,_d:{'说明':'有档案有账本，目前没有业务往来'}},
+    {code:'C005',name:'示例客户戊',days:'未返回',ca:'未返回',ps:'未返回',pi:'未返回',pr:'未返回',_d:{'说明':'黑湖有档案，没有账本数据'}}],
+    filters:[], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+reg('/sales/vehicles', { title:'车辆字典', sub:'黑湖只读 · 缺口写明', src:'Cretas 补充',
+  gap:'黑湖没有车辆数据。这里是 Cretas 补充的车辆字典（主数据），车牌号不能重复；「司机」只能人手填，不从黑湖拉取，也不关联人员档案。记录来源标「Cretas 补充」，不回写黑湖，撤销必须写原因。',
+  blocks:[
+  {t:'table', title:'车辆', cols:[
+    {k:'plate',l:'车牌号'},{k:'type',l:'车型'},{k:'driver',l:'司机'},{k:'load',l:'载重（吨）',n:1,d:1},{k:'note',l:'备注'},{k:'src',l:'来源'}],
+    rows:[
+    {plate:'示A-0001',type:'冷藏厢式货车',driver:'示例员工（手填）',load:2.5,note:'送酱牛肉、卤鸡爪',src:'Cretas 补充'},
+    {plate:'示A-0002',type:'冷藏厢式货车',driver:'示例员工（手填）',load:5,note:'送大客户',src:'Cretas 补充'},
+    {plate:'示A-0003',type:'普通厢式货车',driver:'',load:3,note:'送干货、豆干',src:'Cretas 补充'},
+    {plate:'示A-0004',type:'冷藏面包车',driver:'示例员工（手填）',load:1,note:'市内小单',src:'Cretas 补充'},
+    {plate:'示A-0005',type:'冷藏厢式货车',driver:'',load:8,note:'外租，按趟',src:'Cretas 补充'}],
+    filters:['type'], actions:[{l:'新增车辆',msg:'示例：这里会弹出新增表单，车牌号重复会被拦下'}]},
+  {t:'form', title:'补充一辆车', fields:[{label:'车牌号',type:'text',ph:'必填，不能和已有的重复'},{label:'车型',type:'text'},{label:'司机',type:'text',ph:'手填，不关联人员档案'},{label:'载重（吨）',type:'number'},{label:'备注',type:'text'}], submit:'保存', msg:'示例页面，没有真的保存'}
+]});
+
+reg('/sales/payment-requests', { title:'销售付款申请', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖没有销售付款申请数据；财务模块在本原型中关闭，这里不提供申请入口。',
+  blocks:[
+  {t:'text', text:'黑湖没有销售付款申请数据，这一页没有可显示的单据。'},
+  {t:'kv', title:'这页现在是什么状态', rows:[['数据来源','黑湖没有此类数据（0 条）'],['申请入口','没有；财务模块在本原型中关闭'],['想看付款情况','到「应收与收款」看应收、收款、待开票'],['谁来补','需要时由业务线确认补充入口，不拿别的数据顶替']]}
+]});
+
+reg('/lsm/receivables', { title:'应收与收款', sub:'应收 · 收款 · 待开票', src:'黑湖只读',
+  gap:'黑湖应收、收款、待开票，只读。应付、付款接口返回 0 条。金额币种黑湖未返回，按原值显示。',
+  blocks:[
+  {t:'kpis', items:[['待收合计',60400,'8 张应收单',2],['逾期待收',8000,'1 张：YS-0910-06',2],['本月已收',72100,'5 张收款单，不限本月',2],['待开票',6,'出入库单 6 张']]},
+  {t:'tabs', tabs:[
+    {label:'应收', blocks:[{t:'table', title:'应收单', cols:[
+      {k:'no',l:'应收单'},{k:'c',l:'客户'},{k:'d',l:'日期'},{k:'a',l:'应收',n:1,d:2},{k:'st',l:'已结算',n:1,d:2},{k:'p',l:'待收',n:1,d:2},{k:'e',l:'到期'},{k:'s',l:'状态',p:1}],
+      rows:[
+      {no:'YS-1116-04',c:'示例客户甲',d:'2026-11-16',a:14400,st:0,p:14400,e:'2026-12-16',s:'未到期',_d:{'来源':'CK-1116-04 川味香肠 300 kg'}},
+      {no:'YS-1116-05',c:'示例客户丙',d:'2026-11-16',a:4400,st:0,p:4400,e:'2026-12-16',s:'未到期',_d:{'来源':'CK-1116-05 辣椒酱 200 kg'}},
+      {no:'YS-1115-02',c:'示例客户乙',d:'2026-11-15',a:25600,st:10000,p:15600,e:'2026-12-15',s:'部分收款'},
+      {no:'YS-1115-03',c:'示例客户丙',d:'2026-11-15',a:18000,st:0,p:18000,e:'2026-12-15',s:'未到期'},
+      {no:'YS-1114-01',c:'示例客户甲',d:'2026-11-14',a:42500,st:42500,p:0,e:'2026-12-14',s:'已结清'},
+      {no:'YS-1020-07',c:'示例客户丙',d:'2026-10-20',a:9600,st:9600,p:0,e:'2026-11-19',s:'已结清'},
+      {no:'YS-1005-08',c:'示例客户甲',d:'2026-10-05',a:6000,st:6000,p:0,e:'2026-11-04',s:'已结清'},
+      {no:'YS-0910-06',c:'示例客户乙',d:'2026-09-10',a:12000,st:4000,p:8000,e:'2026-10-10',s:'逾期',_d:{'说明':'已逾期 37 天，待收 8000.00'}}],
+      filters:['s','c'], actions:[{l:'导出',msg:'已导出应收单（示例）'},{l:'转待办',msg:'已把逾期应收转成协同任务，提醒销售内勤催收（示例）'}]}]},
+    {label:'收款', blocks:[{t:'table', title:'收款单', cols:[
+      {k:'no',l:'收款单'},{k:'c',l:'客户'},{k:'d',l:'日期'},{k:'m',l:'方式'},{k:'a',l:'实收',n:1,d:2}],
+      rows:[
+      {no:'SK-1115-01',c:'示例客户甲',d:'2026-11-15',m:'银行转账',a:42500,_d:{'对应应收':'YS-1114-01'}},
+      {no:'SK-1114-02',c:'示例客户乙',d:'2026-11-14',m:'银行转账',a:10000,_d:{'对应应收':'YS-1115-02'}},
+      {no:'SK-1105-03',c:'示例客户乙',d:'2026-11-05',m:'现金',a:4000,_d:{'对应应收':'YS-0910-06'}},
+      {no:'SK-1030-04',c:'示例客户丙',d:'2026-10-30',m:'银行转账',a:9600,_d:{'对应应收':'YS-1020-07'}},
+      {no:'SK-1010-05',c:'示例客户甲',d:'2026-10-10',m:'银行转账',a:6000,_d:{'对应应收':'YS-1005-08'}}],
+      filters:['m','c']}]},
+    {label:'待开票', blocks:[{t:'table', title:'待开票的出入库单', cols:[
+      {k:'no',l:'出入库单'},{k:'c',l:'客户'},{k:'ty',l:'类型'},{k:'d',l:'业务时间'},{k:'so',l:'关联销售单'},{k:'pr',l:'单价',n:1,d:2}],
+      rows:[
+      {no:'CK-1114-01',c:'示例客户甲',ty:'销售出库',d:'2026-11-14',so:'XS-1112-01',pr:85},
+      {no:'CK-1115-02',c:'示例客户乙',ty:'销售出库',d:'2026-11-15',so:'XS-1113-02',pr:32},
+      {no:'CK-1115-03',c:'示例客户丙',ty:'销售出库',d:'2026-11-15',so:'XS-1114-03',pr:18},
+      {no:'CK-1116-04',c:'示例客户甲',ty:'销售出库',d:'2026-11-16',so:'XS-1114-04',pr:48},
+      {no:'CK-1116-05',c:'示例客户丙',ty:'销售出库',d:'2026-11-16',so:'XS-1110-08',pr:22},
+      {no:'TH-1116-01',c:'示例客户丙',ty:'销售退货入库',d:'2026-11-16',so:'XS-1114-03',pr:'未返回'}],
+      filters:['ty','c']}]}
+  ]}
+]});
+
+reg('/lsm/customer-prices', { title:'客户价目表', sub:'黑湖只读', src:'黑湖只读',
+  gap:'黑湖客户价目表，只读。黑湖供应商价目表接口返回 0 条，本页只有客户价；黑湖没返回有效期和币种，无法按有效期筛选。',
+  blocks:[
+  {t:'kpis', items:[['价目条目',10,'3 个客户'],['有成交的',7,'最近成交与平均有值'],['未成交',3,'最近成交写「无成交」']]},
+  {t:'table', title:'客户价目', cols:[
+    {k:'c',l:'客户'},{k:'p',l:'产品'},{k:'code',l:'编码'},{k:'spec',l:'规格'},{k:'price',l:'价格（每 kg）',n:1,d:2},{k:'last',l:'最近成交',n:1,d:2},{k:'avg',l:'平均',n:1,d:2}],
+    rows:[
+    {c:'示例客户甲',p:'酱牛肉',code:'SP-001',spec:'真空袋装',price:85,last:85,avg:84.6},
+    {c:'示例客户甲',p:'卤鸡爪',code:'SP-002',spec:'散装',price:32,last:32,avg:32},
+    {c:'示例客户甲',p:'川味香肠',code:'SP-003',spec:'真空袋装',price:48,last:48,avg:47.5},
+    {c:'示例客户甲',p:'五香豆干',code:'SP-005',spec:'散装',price:18,last:'无成交',avg:'无成交'},
+    {c:'示例客户乙',p:'卤鸡爪',code:'SP-002',spec:'散装',price:32,last:32,avg:32},
+    {c:'示例客户乙',p:'肉丸',code:'SP-004',spec:'袋装',price:27,last:26,avg:26.5,_d:{'说明':'最近一单 XS-1115-05 开 26.00，低于参考价 1.00'}},
+    {c:'示例客户乙',p:'烤鸭',code:'SP-007',spec:'整只',price:60,last:60,avg:60},
+    {c:'示例客户丙',p:'酱牛肉',code:'SP-001',spec:'真空袋装',price:85,last:85,avg:85},
+    {c:'示例客户丙',p:'五香豆干',code:'SP-005',spec:'散装',price:18,last:18,avg:18},
+    {c:'示例客户丙',p:'川味香肠',code:'SP-003',spec:'真空袋装',price:48,last:'无成交',avg:'无成交'}],
+    filters:['c','p'], actions:[{l:'导出',msg:'已导出当前列表（示例）'}]}
+]});
+
+// ===== 个人 OA =====
+reg('/workflow/pending', { title:'待我处理', sub:'个人 OA · 审批中心', src:'只读来源',
+  gap:'只读聚合，办理回到各自的页面。本原型不识别登录人，用「负责岗位」筛选代替「我」。黑湖报工审批没有审批人字段，没法按个人切分，办理在黑湖。',
+  blocks:[
+  {t:'kpis', items:[['等我处理',8,'协同任务 5 + 黑湖报工审批 3'],['最早到期','2026-11-15','XT-1115-04 超期 1 天'],['今日到期',2,'XT-1116-01、XT-1116-03']]},
+  {t:'table', title:'审批单列表', cols:[
+    {k:'no',l:'单据'},{k:'title',l:'标题'},{k:'ty',l:'类型'},{k:'node',l:'当前节点',p:1},{k:'who',l:'发起 / 申请人'},{k:'role',l:'负责岗位'},{k:'at',l:'时间'}],
+    rows:[
+    {no:'XT-1115-04',title:'设备 · 蒸煮锅 温度探头校准',ty:'协同任务',node:'进行中',who:'车间主管',role:'设备员',at:'截止 2026-11-15（超期 1 天）'},
+    {no:'XT-1116-01',title:'质量 · 酱牛肉 水分偏高复检',ty:'协同任务',node:'进行中',who:'车间主管',role:'质检员',at:'截止 2026-11-16'},
+    {no:'XT-1116-03',title:'首检 · 肉丸 斩拌',ty:'协同任务',node:'未开始',who:'车间主管',role:'质检员',at:'截止 2026-11-16'},
+    {no:'XT-1116-02',title:'缺料 · 干辣椒 采购跟进',ty:'协同任务',node:'未开始',who:'计划员',role:'采购员',at:'截止 2026-11-17'},
+    {no:'XT-1115-05',title:'插单 · GD-1117-07 卤鸡爪 确认排产',ty:'协同任务',node:'未开始',who:'销售内勤',role:'计划员',at:'截止 2026-11-17'},
+    {no:'报工 B-1116-001',title:'酱牛肉',ty:'黑湖报工审批',node:'待审批',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-16 09:10'},
+    {no:'报工 B-1116-002',title:'卤鸡爪',ty:'黑湖报工审批',node:'待审批',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-16 10:20'},
+    {no:'报工 B-1116-003',title:'川味香肠',ty:'黑湖报工审批',node:'待审批',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-16 13:05'}],
+    filters:['ty','role'], actions:[{l:'去办理',msg:'协同任务到「协同任务」办理，报工审批到「生产报工」页（示例）'}]}
+]});
+
+reg('/workflow/my-created', { title:'我发起的', sub:'个人 OA · 审批中心', src:'只读来源',
+  gap:'协同任务按创建人列出，创建人是任务里记录的岗位名，不是登录账号。黑湖没有「发起人」字段，报工、请购都无法判断是谁发起，这里不列。',
+  blocks:[
+  {t:'kpis', items:[['我发起的',8,'协同任务，按发起人岗位筛'],['还没做完',5,'未开始 3 + 进行中 2'],['已关闭',3,'已完成 2 + 已取消 1']]},
+  {t:'table', title:'审批单列表', cols:[
+    {k:'no',l:'单据'},{k:'title',l:'标题'},{k:'ty',l:'类型'},{k:'node',l:'当前节点',p:1},{k:'who',l:'发起人'},{k:'role',l:'负责岗位'},{k:'at',l:'时间'}],
+    rows:[
+    {no:'XT-1116-01',title:'质量 · 酱牛肉 水分偏高复检',ty:'协同任务',node:'进行中',who:'车间主管',role:'质检员',at:'截止 2026-11-16'},
+    {no:'XT-1116-02',title:'缺料 · 干辣椒 采购跟进',ty:'协同任务',node:'未开始',who:'计划员',role:'采购员',at:'截止 2026-11-17'},
+    {no:'XT-1116-03',title:'首检 · 肉丸 斩拌',ty:'协同任务',node:'未开始',who:'车间主管',role:'质检员',at:'截止 2026-11-16'},
+    {no:'XT-1115-04',title:'设备 · 蒸煮锅 温度探头校准',ty:'协同任务',node:'进行中',who:'车间主管',role:'设备员',at:'截止 2026-11-15（超期 1 天）'},
+    {no:'XT-1115-05',title:'插单 · GD-1117-07 卤鸡爪 确认排产',ty:'协同任务',node:'未开始',who:'销售内勤',role:'计划员',at:'截止 2026-11-17'},
+    {no:'XT-1114-06',title:'质量 · 五香豆干 抽检记录补录',ty:'协同任务',node:'已完成',who:'车间主管',role:'质检员',at:'截止 2026-11-15'},
+    {no:'XT-1113-07',title:'缺料 · 猪后腿肉 到货确认',ty:'协同任务',node:'已完成',who:'计划员',role:'仓管',at:'截止 2026-11-14'},
+    {no:'XT-1114-08',title:'其他 · 烤鸭取消 物料退回',ty:'协同任务',node:'已取消',who:'计划员',role:'仓管',at:'截止 2026-11-15'}],
+    filters:['who','node'], actions:[{l:'去协同任务',msg:'办理回到「协同任务」页（示例）'}]}
+]});
+
+reg('/workflow/acted', { title:'已处理', sub:'个人 OA · 审批中心', src:'只读来源',
+  gap:'协同任务：已完成、已取消的任务。黑湖报工审批：已批准、未通过的，办理在黑湖，这里只读，按报工时间最新在前；黑湖没有审批人字段，不能按个人切分。',
+  blocks:[
+  {t:'kpis', items:[['已处理',6,'协同任务 3 + 黑湖报工审批 3'],['未通过',1,'B-1115-006 辣椒酱'],['已取消',1,'XT-1114-08']]},
+  {t:'table', title:'审批单列表', cols:[
+    {k:'no',l:'单据'},{k:'title',l:'标题'},{k:'ty',l:'类型'},{k:'node',l:'当前节点',p:1},{k:'who',l:'发起 / 申请人'},{k:'role',l:'负责岗位'},{k:'at',l:'时间'}],
+    rows:[
+    {no:'报工 B-1115-004',title:'五香豆干',ty:'黑湖报工审批',node:'已批准',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-15 16:40'},
+    {no:'报工 B-1115-005',title:'辣椒酱',ty:'黑湖报工审批',node:'已批准',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-15 14:10'},
+    {no:'报工 B-1115-006',title:'辣椒酱',ty:'黑湖报工审批',node:'未通过',who:'黑湖未提供',role:'黑湖未提供',at:'2026-11-15 09:30'},
+    {no:'XT-1114-06',title:'质量 · 五香豆干 抽检记录补录',ty:'协同任务',node:'已完成',who:'车间主管',role:'质检员',at:'截止 2026-11-15'},
+    {no:'XT-1113-07',title:'缺料 · 猪后腿肉 到货确认',ty:'协同任务',node:'已完成',who:'计划员',role:'仓管',at:'截止 2026-11-14'},
+    {no:'XT-1114-08',title:'其他 · 烤鸭取消 物料退回',ty:'协同任务',node:'已取消',who:'计划员',role:'仓管',at:'截止 2026-11-15'}],
+    filters:['ty','node']}
+]});
+
+reg('/workflow/copied', { title:'抄送我的', sub:'个人 OA · 审批中心', src:'只读来源',
+  gap:'黑湖没有此类数据：快照里没有抄送关系，协同任务也没有抄送字段。需要时再由业务线确认补充入口，本页不造数据、不拿别的数据顶替。',
+  blocks:[
+  {t:'kpis', items:[['抄送我的',0,'没有数据来源，不是「没人抄送」']]},
+  {t:'text', text:'黑湖和协同任务都没有抄送字段，所以这一页是空的。这不代表没有人抄送你。'},
+  {t:'kv', title:'这一视图的数据来源与缺口', rows:[['黑湖报工审批','没有抄送关系'],['协同任务','没有抄送字段'],['想看和我有关的任务','到「待我处理」或「协同任务」按负责岗位找']]}
+]});
+
+reg('/collab/tasks', { title:'协同任务', sub:'指派与跟进', src:'Cretas 主来源',
+  gap:'负责人的姓名是手填的，没有可核实的人员名单，标「未核实人员」。「指派给 Agent」只是预留入口，本轮不接执行，不会自动改任何数据。状态、超期、评论数由代码算；提醒规则固定 3 条，只生成提醒，不改业务数据。',
+  blocks:[
+  {t:'kpis', items:[['任务总数',8,'含已关闭 3'],['未做完',5,'未开始 3 + 进行中 2'],['超期',1,'XT-1115-04 超期 1 天'],['今日到期',2,'未做完的']]},
+  {t:'board', columns:[
+    {title:'未开始（3）', cards:[
+      {t:'XT-1116-02 缺料 · 干辣椒 采购跟进', s:'采购员 · 截止 11-17', tag:'高'},
+      {t:'XT-1116-03 首检 · 肉丸 斩拌', s:'质检员 · 截止 11-16', tag:'中'},
+      {t:'XT-1115-05 插单 · GD-1117-07 卤鸡爪 确认排产', s:'计划员 · 截止 11-17', tag:'中'}]},
+    {title:'进行中（2）', cards:[
+      {t:'XT-1116-01 质量 · 酱牛肉 水分偏高复检', s:'质检员 · 截止 11-16', tag:'高'},
+      {t:'XT-1115-04 设备 · 蒸煮锅 温度探头校准', s:'设备员 · 截止 11-15', tag:'超期 1 天'}]},
+    {title:'已完成（2）', cards:[
+      {t:'XT-1114-06 质量 · 五香豆干 抽检记录补录', s:'质检员 · 截止 11-15', tag:'已完成'},
+      {t:'XT-1113-07 缺料 · 猪后腿肉 到货确认', s:'仓管 · 截止 11-14', tag:'已完成'}]},
+    {title:'已取消（1）', cards:[
+      {t:'XT-1114-08 其他 · 烤鸭取消 物料退回', s:'仓管 · 截止 11-15', tag:'已取消'}]}
+  ]},
+  {t:'table', title:'任务列表', cols:[
+    {k:'no',l:'任务号'},{k:'ty',l:'类型'},{k:'title',l:'标题'},{k:'who',l:'负责人'},{k:'due',l:'截止'},{k:'pri',l:'优先级',p:1},{k:'s',l:'状态',p:1}],
+    rows:[
+    {no:'XT-1116-01',ty:'质量',title:'酱牛肉 水分偏高复检',who:'质检员 · 示例员工（未核实人员）',due:'2026-11-16',pri:'高',s:'进行中',_d:{'发起人':'车间主管','关联单据':'GD-1116-01 酱牛肉'}},
+    {no:'XT-1116-02',ty:'缺料',title:'干辣椒 采购跟进',who:'采购员',due:'2026-11-17',pri:'高',s:'未开始',_d:{'发起人':'计划员','关联单据':'QG-1116-05'}},
+    {no:'XT-1116-03',ty:'首检',title:'肉丸 斩拌',who:'质检员',due:'2026-11-16',pri:'中',s:'未开始',_d:{'发起人':'车间主管','关联单据':'GD-1116-09 肉丸'}},
+    {no:'XT-1115-04',ty:'设备',title:'蒸煮锅 温度探头校准',who:'设备员',due:'2026-11-15',pri:'中',s:'进行中',_d:{'发起人':'车间主管','超期':'1 天'}},
+    {no:'XT-1115-05',ty:'插单',title:'GD-1117-07 卤鸡爪 确认排产',who:'计划员',due:'2026-11-17',pri:'中',s:'未开始',_d:{'发起人':'销售内勤','关联单据':'GD-1117-07 卤鸡爪'}},
+    {no:'XT-1114-06',ty:'质量',title:'五香豆干 抽检记录补录',who:'质检员',due:'2026-11-15',pri:'低',s:'已完成',_d:{'发起人':'车间主管','关联单据':'GD-1115-04 五香豆干'}},
+    {no:'XT-1113-07',ty:'缺料',title:'猪后腿肉 到货确认',who:'仓管',due:'2026-11-14',pri:'中',s:'已完成',_d:{'发起人':'计划员','关联单据':'CG-1114-03'}},
+    {no:'XT-1114-08',ty:'其他',title:'烤鸭取消 物料退回',who:'仓管',due:'2026-11-15',pri:'低',s:'已取消',_d:{'发起人':'计划员','原因':'GD-1114-08 烤鸭已取消'}}],
+    filters:['s','ty'], actions:[{l:'新建任务',msg:'示例：这里会打开新建任务抽屉，可从异常说明整理草稿'},{l:'规则与日志',msg:'示例：固定 3 条提醒规则，只生成提醒、不改业务数据'}]}
+]});
+
+/* data-c-stock-quality.js */
+reg('/warehouse/materials', { title:'入库记录', sub:'入库任务与批次', src:'来源业务记录',
+  blocks:[
+    {t:'kpis', items:[['入库任务', 8, '本周'], ['已完成', 5], ['待收货 / 收货中', 3, '含 1 个收货中'], ['已收数量合计', 4900, 'kg，已完成任务之和', 0]]},
+    {t:'table', title:'入库任务', cols:[{k:'no',l:'任务号'},{k:'src',l:'来源'},{k:'from',l:'来源单据'},{k:'name',l:'物料'},{k:'plan',l:'计划数量(kg)',n:1,d:0},{k:'got',l:'已收数量(kg)',n:1,d:0},{k:'st',l:'状态',p:1},{k:'batch',l:'入库批次'},{k:'wh',l:'仓库'}],
+      rows:[
+        {no:'RT-1114-01',src:'采购入库',from:'PO-1114-01',name:'牛腱',plan:1200,got:1200,st:'已完成',batch:'CG1114-01',wh:'原料冷库',_d:{'供应商':'示例供应商甲'}},
+        {no:'RT-1113-02',src:'采购入库',from:'PO-1113-02',name:'猪前腿肉',plan:800,got:800,st:'已完成',batch:'CG1113-05',wh:'原料冷库',_d:{'供应商':'示例供应商乙','提示':'来料检验不合格，批次待处置'}},
+        {no:'RT-1115-03',src:'采购入库',from:'PO-1115-03',name:'生鸡爪',plan:1500,got:1500,st:'已完成',batch:'CG1115-02',wh:'原料冷库',_d:{'供应商':'示例供应商乙'}},
+        {no:'RT-1116-04',src:'采购入库',from:'PO-1116-04',name:'肠衣',plan:300,got:0,st:'待收货',batch:'未建批次',wh:'辅料库',_d:{'供应商':'示例供应商甲','预计到货':'2026-11-17'}},
+        {no:'RT-1116-05',src:'采购入库',from:'PO-1116-05',name:'干辣椒',plan:600,got:200,st:'收货中',batch:'未建批次',wh:'常温库',_d:{'供应商':'示例供应商丙','提示':'分批到货，已收 200kg'}},
+        {no:'RT-1115-06',src:'生产入库',from:'GD-1115-04',name:'五香豆干',plan:1000,got:1000,st:'已完成',batch:'P1115-04',wh:'成品冷库'},
+        {no:'RT-1115-07',src:'生产入库',from:'GD-1115-05',name:'辣椒酱',plan:500,got:500,st:'已完成',batch:'P1115-05',wh:'常温库'},
+        {no:'RT-1116-08',src:'生产入库',from:'GD-1116-01',name:'酱牛肉',plan:800,got:0,st:'待收货',batch:'未建批次',wh:'成品冷库',_d:{'提示':'工单执行中，尚未入库'}}
+      ], filters:['src','st'], actions:[{l:'新建批次',msg:'已打开新建批次（示例页不保存）'},{l:'导出',msg:'已导出入库任务（示例）'}]}
+  ]});
+
+reg('/warehouse/unordered-inbound-applications', { title:'无订单入库申请', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖没有「申请」这一层数据，只有已审批的普通入库、其它入库单；申请与审批在黑湖办理，Cretas 不补写申请。下面只是只读对照，不是申请。',
+  blocks:[
+    {t:'text', text:'这里看不到待审批的无订单入库申请。表里是黑湖已审批的普通入库、其它入库单，用来对照。'},
+    {t:'table', title:'已审批的普通入库 / 其它入库单（对照）', cols:[{k:'no',l:'单号'},{k:'type',l:'类型'},{k:'at',l:'业务时间'},{k:'st',l:'状态',p:1},{k:'n',l:'行数',n:1,d:0},{k:'items',l:'品项'},{k:'rel',l:'关联单号'}],
+      rows:[
+        {no:'RK-1116-011',type:'普通入库',at:'2026-11-16 09:20',st:'已审批',n:2,items:'肠衣、盐',rel:'无'},
+        {no:'RK-1115-008',type:'其它入库',at:'2026-11-15 16:40',st:'已审批',n:1,items:'包装箱',rel:'无'},
+        {no:'RK-1114-006',type:'普通入库',at:'2026-11-14 10:05',st:'已审批',n:3,items:'干辣椒、花椒、八角 等',rel:'无'},
+        {no:'RK-1113-004',type:'其它入库',at:'2026-11-13 14:30',st:'已审批',n:1,items:'真空袋',rel:'无'},
+        {no:'RK-1112-003',type:'普通入库',at:'2026-11-12 08:50',st:'已审批',n:2,items:'牛腱、猪前腿肉',rel:'无'},
+        {no:'RK-1110-001',type:'其它入库',at:'2026-11-10 11:15',st:'已审批',n:1,items:'冰袋',rel:'无'}
+      ], filters:['type']}
+  ]});
+
+reg('/warehouse/shipments', { title:'出库记录', sub:'出库执行', src:'来源业务记录',
+  blocks:[
+    {t:'kpis', items:[['出库单', 8, '本周'], ['已完成', 5], ['待出库 / 出库中', 3], ['销售出库数量', 2250, 'kg，已完成', 0]]},
+    {t:'table', title:'出库单', cols:[{k:'no',l:'出库单号'},{k:'type',l:'类型'},{k:'to',l:'去向'},{k:'name',l:'品项'},{k:'qty',l:'数量(kg)',n:1,d:0},{k:'st',l:'状态',p:1},{k:'wh',l:'仓库'},{k:'at',l:'业务时间'}],
+      rows:[
+        {no:'CK-1116-01',type:'销售出库',to:'示例客户甲',name:'酱牛肉',qty:350,st:'已完成',wh:'成品冷库',at:'2026-11-16 08:30'},
+        {no:'CK-1116-02',type:'销售出库',to:'示例客户乙',name:'五香豆干',qty:500,st:'已完成',wh:'成品冷库',at:'2026-11-16 10:10'},
+        {no:'CK-1116-03',type:'领料出库',to:'GD-1116-01',name:'牛腱',qty:900,st:'已完成',wh:'原料冷库',at:'2026-11-16 07:20',_d:{'说明':'已发数量，不等于实耗'}},
+        {no:'CK-1116-04',type:'领料出库',to:'GD-1116-02',name:'生鸡爪',qty:1300,st:'已完成',wh:'原料冷库',at:'2026-11-16 07:40'},
+        {no:'CK-1116-05',type:'领料出库',to:'GD-1116-03',name:'肠衣',qty:100,st:'出库中',wh:'辅料库',at:'2026-11-16 14:50'},
+        {no:'CK-1116-06',type:'销售出库',to:'示例客户丙',name:'辣椒酱',qty:500,st:'已完成',wh:'常温库',at:'2026-11-16 11:00'},
+        {no:'CK-1116-07',type:'销售出库',to:'示例客户甲',name:'卤鸡爪',qty:600,st:'待出库',wh:'成品冷库',at:'2026-11-16 15:00',_d:{'提示':'待质检放行'}},
+        {no:'CK-1116-08',type:'调拨出库',to:'常温库',name:'干辣椒',qty:200,st:'待出库',wh:'原料冷库',at:'2026-11-16 15:20'}
+      ], filters:['type','st']}
+  ]});
+
+reg('/transfer/list', { title:'调拨单', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'开单与审批仍在黑湖办理，这里只读；调拨在途数量黑湖不单独给，对方签收前按「在途」看，不计入本仓。',
+  blocks:[
+    {t:'kpis', items:[['调拨单据', 6], ['调拨出库', 3], ['调拨入库', 3], ['未签收', 1, '对方签收前属在途']]},
+    {t:'table', title:'调拨单据', cols:[{k:'no',l:'单号'},{k:'type',l:'类型'},{k:'at',l:'业务时间'},{k:'st',l:'状态',p:1},{k:'n',l:'行数',n:1,d:0},{k:'items',l:'品项'},{k:'rel',l:'关联单号'}],
+      rows:[
+        {no:'DB-1116-03',type:'调拨出库',at:'2026-11-16 15:20',st:'待审批',n:1,items:'干辣椒',rel:'DB-1116-03R'},
+        {no:'DB-1115-02',type:'调拨出库',at:'2026-11-15 14:00',st:'已完成',n:2,items:'牛腱、猪前腿肉',rel:'DB-1115-02R'},
+        {no:'DB-1115-02R',type:'调拨入库',at:'2026-11-15 15:10',st:'已完成',n:2,items:'牛腱、猪前腿肉',rel:'DB-1115-02'},
+        {no:'DB-1113-01',type:'调拨出库',at:'2026-11-13 09:30',st:'已完成',n:1,items:'肠衣',rel:'DB-1113-01R'},
+        {no:'DB-1113-01R',type:'调拨入库',at:'2026-11-13 10:20',st:'已完成',n:1,items:'肠衣',rel:'DB-1113-01'},
+        {no:'DB-1116-03R',type:'调拨入库',at:'2026-11-16 15:30',st:'待审批',n:1,items:'干辣椒',rel:'DB-1116-03'}
+      ], filters:['type','st']}
+  ]});
+
+reg('/warehouse/inventory-query', { title:'库存查询', sub:'来源业务记录', src:'来源业务记录',
+  blocks:[
+    {t:'kpis', items:[['物料行', 9, '物料 × 仓库'], ['有余额', 7], ['零库存', 1], ['负库存', 1, '需核对']]},
+    {t:'table', title:'库存（按物料与仓库）', cols:[{k:'name',l:'物料'},{k:'wh',l:'仓库'},{k:'qty',l:'在库数量',n:1,d:0},{k:'unit',l:'单位'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {name:'牛腱',wh:'原料冷库',qty:1320,unit:'kg',st:'有余额'},
+        {name:'生鸡爪',wh:'原料冷库',qty:950,unit:'kg',st:'有余额'},
+        {name:'猪前腿肉',wh:'原料冷库',qty:1150,unit:'kg',st:'有余额',_d:{'提示':'批次 CG1113-05 待处置'}},
+        {name:'肠衣',wh:'辅料库',qty:230,unit:'kg',st:'有余额'},
+        {name:'干辣椒',wh:'常温库',qty:420,unit:'kg',st:'有余额'},
+        {name:'五香豆干',wh:'成品冷库',qty:500,unit:'kg',st:'有余额'},
+        {name:'酱牛肉',wh:'成品冷库',qty:350,unit:'kg',st:'有余额'},
+        {name:'烤鸭',wh:'成品冷库',qty:0,unit:'kg',st:'零库存',_d:{'说明':'GD-1114-08 已取消，无产出'}},
+        {name:'真空袋',wh:'辅料库',qty:-30,unit:'个',st:'负库存',_d:{'说明':'出库先于入库登记，需补录入库或调整'}}
+      ], filters:['wh','st']}
+  ]});
+
+reg('/lsm/stock-summary', { title:'进销存汇总', sub:'期初、入、出、期末', src:'来源业务记录',
+  blocks:[
+    {t:'text', text:'统计区间 2026-11-01 至 2026-11-16。期末 = 期初 + 入 - 出，每行与合计都对得上。', tone:'ok'},
+    {t:'kpis', items:[['期初合计', 4050, 'kg', 0], ['入库合计', 18500, 'kg', 0], ['出库合计', 17630, 'kg', 0], ['期末合计', 4920, 'kg，= 4050 + 18500 - 17630', 0]]},
+    {t:'table', title:'按物料汇总', cols:[{k:'name',l:'物料'},{k:'open',l:'期初(kg)',n:1,d:0},{k:'in',l:'入(kg)',n:1,d:0},{k:'out',l:'出(kg)',n:1,d:0},{k:'close',l:'期末(kg)',n:1,d:0}],
+      rows:[
+        {name:'牛腱',open:1200,in:3600,out:3480,close:1320},
+        {name:'生鸡爪',open:800,in:4800,out:4650,close:950},
+        {name:'肠衣',open:150,in:600,out:520,close:230},
+        {name:'干辣椒',open:300,in:900,out:780,close:420},
+        {name:'猪前腿肉',open:1000,in:3200,out:3050,close:1150},
+        {name:'五香豆干',open:400,in:3000,out:2900,close:500},
+        {name:'酱牛肉',open:200,in:2400,out:2250,close:350}
+      ], search:false}
+  ]});
+
+reg('/warehouse/inventory-adjustments', { title:'库存调整单', sub:'单条调整', src:'来源业务记录',
+  blocks:[
+    {t:'kpis', items:[['调整单', 6, '近 5 天'], ['已审批', 3], ['待审批', 2], ['已驳回', 1]]},
+    {t:'table', title:'库存调整单', cols:[{k:'no',l:'调整单号'},{k:'date',l:'日期'},{k:'name',l:'物料'},{k:'wh',l:'仓库'},{k:'before',l:'调整前',n:1,d:0},{k:'after',l:'调整后',n:1,d:0},{k:'diff',l:'差异',n:1,d:0},{k:'why',l:'原因'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {no:'TZ-1116-01',date:'2026-11-16',name:'牛腱',wh:'原料冷库',before:1330,after:1320,diff:-10,why:'解冻损耗',st:'已审批'},
+        {no:'TZ-1115-02',date:'2026-11-15',name:'生鸡爪',wh:'原料冷库',before:960,after:950,diff:-10,why:'盘点差异',st:'已审批'},
+        {no:'TZ-1115-03',date:'2026-11-15',name:'肠衣',wh:'辅料库',before:225,after:230,diff:5,why:'盘点差异',st:'已审批'},
+        {no:'TZ-1114-04',date:'2026-11-14',name:'干辣椒',wh:'常温库',before:425,after:420,diff:-5,why:'受潮剔除',st:'待审批'},
+        {no:'TZ-1113-05',date:'2026-11-13',name:'猪前腿肉',wh:'原料冷库',before:1160,after:1150,diff:-10,why:'称重误差',st:'已驳回',_d:{'驳回原因':'差异原因不充分，请补称重记录'}},
+        {no:'TZ-1112-06',date:'2026-11-12',name:'五香豆干',wh:'成品冷库',before:502,after:500,diff:-2,why:'抽检留样',st:'待审批'}
+      ], filters:['st','wh'], actions:[{l:'新建调整单',msg:'已打开新建调整单（示例页不保存）'}]}
+  ]});
+
+reg('/lsm/inbound-batches', { title:'入库批次', sub:'Cretas 主来源 · 批次与到期', src:'Cretas 主来源',
+  blocks:[
+    {t:'text', text:'批次号、生产日期、保质期、到期日和入库数量以这里录入为准；黑湖入库单只读，用来关联和对账，不回写黑湖。今天 2026-11-16，剩余 7 天及以内算临期。'},
+    {t:'kpis', items:[['批次数', 8], ['临期', 2, '剩余 7 天内'], ['已过期', 1], ['待处置', 1, '来料检验不合格']]},
+    {t:'table', title:'入库批次（先到期先出）', cols:[{k:'no',l:'批次号'},{k:'kind',l:'类型'},{k:'name',l:'物料或产品'},{k:'qty',l:'入库数量(kg)',n:1,d:0},{k:'pd',l:'生产日期'},{k:'shelf',l:'保质期(天)',n:1,d:0},{k:'exp',l:'到期日'},{k:'left',l:'剩余天数',n:1,d:0},{k:'st',l:'状态',p:1},{k:'wh',l:'仓库'}],
+      rows:[
+        {no:'P1110-06',kind:'生产入库',name:'肉丸',qty:120,pd:'2026-10-20',shelf:25,exp:'2026-11-14',left:-2,st:'已过期',wh:'成品冷库',_d:{'处理':'已登记报损 120kg'}},
+        {no:'CG1113-05',kind:'采购入库',name:'猪前腿肉',qty:800,pd:'2026-11-13',shelf:5,exp:'2026-11-18',left:2,st:'待处置',wh:'原料冷库',_d:{'检验单':'QC-1116-02','原因':'到货温度超限'}},
+        {no:'CG1115-02',kind:'采购入库',name:'生鸡爪',qty:1500,pd:'2026-11-15',shelf:7,exp:'2026-11-22',left:6,st:'临期',wh:'原料冷库'},
+        {no:'CG1114-01',kind:'采购入库',name:'牛腱',qty:1200,pd:'2026-11-12',shelf:90,exp:'2027-02-10',left:86,st:'正常',wh:'原料冷库'},
+        {no:'CG1101-04',kind:'采购入库',name:'干辣椒',qty:900,pd:'2026-11-01',shelf:180,exp:'2027-04-30',left:165,st:'正常',wh:'常温库'},
+        {no:'P1115-04',kind:'生产入库',name:'五香豆干',qty:1000,pd:'2026-11-15',shelf:120,exp:'2027-03-15',left:119,st:'正常',wh:'成品冷库'},
+        {no:'P1115-05',kind:'生产入库',name:'辣椒酱',qty:500,pd:'2026-11-15',shelf:180,exp:'2027-05-14',left:179,st:'正常',wh:'常温库'},
+        {no:'CG1108-03',kind:'采购入库',name:'肠衣',qty:300,pd:'2026-11-08',shelf:365,exp:'2027-11-08',left:357,st:'正常',wh:'辅料库'}
+      ], filters:['kind','st'], actions:[{l:'新建批次',msg:'已打开新建批次（示例页不保存）'}]}
+  ]});
+
+reg('/warehouse/stocktake-query', { title:'盘点任务', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖没有盘点任务和盘点结果数据，盘点在黑湖办理；盘点后的单条差异请在「库存调整单」里记。',
+  blocks:[
+    {t:'text', text:'这里暂时看不到盘点任务：黑湖没有返回盘点任务，也没有盘点结果。'},
+    {t:'list', title:'目前能做的', items:[
+      {t:'库存调整单', s:'盘点发现的单条差异，在库存调整单里写原因并提交审批', tag:'可用', act:{l:'转库存调整', msg:'已转到库存调整单（示例）'}},
+      {t:'库存查询', s:'按仓库、物料看当前在库数量', tag:'可用'}
+    ]}
+  ]});
+
+reg('/warehouse/storage-locations', { title:'仓库档案', sub:'仓库、区域与库位', src:'来源业务记录',
+  blocks:[
+    {t:'table', title:'仓库档案', cols:[{k:'name',l:'仓库'},{k:'code',l:'编码'},{k:'kind',l:'类型'},{k:'pos',l:'有余额品项',n:1,d:0},{k:'zero',l:'零库存',n:1,d:0},{k:'neg',l:'负库存',n:1,d:0},{k:'zones',l:'区域数',n:1,d:0},{k:'locs',l:'库位数',n:1,d:0},{k:'img',l:'平面图',p:1}],
+      rows:[
+        {name:'原料冷库',code:'WH-01',kind:'冷藏',pos:3,zero:0,neg:0,zones:3,locs:24,img:'已上传',_d:{'来源状态':'来源码 1（含义待确认）'}},
+        {name:'辅料库',code:'WH-02',kind:'常温',pos:1,zero:0,neg:1,zones:2,locs:12,img:'未上传',_d:{'来源状态':'来源码 1（含义待确认）'}},
+        {name:'常温库',code:'WH-03',kind:'常温',pos:1,zero:0,neg:0,zones:2,locs:16,img:'已上传',_d:{'来源状态':'来源码 1（含义待确认）'}},
+        {name:'成品冷库',code:'WH-04',kind:'冷藏',pos:2,zero:1,neg:0,zones:2,locs:20,img:'未上传',_d:{'来源状态':'来源码 1（含义待确认）'}}
+      ], filters:['kind']},
+    {t:'kv', title:'原料冷库 · 库位布局', rows:[['区域','A 区（牛羊肉）、B 区（禽类）、C 区（猪肉）'],['库位','24 个，编码形如 A-01-01'],['平面图','已上传，库位摆放保存在本页'],['说明','区域、库位、平面图只在本页保存，不回写黑湖']]}
+  ]});
+
+reg('/warehouse/material-types', { title:'物料类型字典', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖没有单独维护的原料类型字典，只有产品档案里的「来源类型」字段，下面是它的计数。',
+  blocks:[
+    {t:'table', title:'来源类型分布', cols:[{k:'k',l:'来源类型'},{k:'code',l:'黑湖代码'},{k:'n',l:'产品数',n:1,d:0}],
+      rows:[
+        {k:'外购',code:'1',n:11,_d:{'例子':'牛腱、生鸡爪、猪前腿肉、肠衣、干辣椒'}},
+        {k:'自制',code:'0',n:7,_d:{'例子':'酱牛肉、卤鸡爪、川味香肠、肉丸、五香豆干、辣椒酱、烤鸭'}}
+      ], search:false},
+    {t:'text', text:'共 18 个产品。外购 11 + 自制 7 = 18。'}
+  ]});
+
+reg('/warehouse/material-segments', { title:'物料分类', sub:'黑湖只读 · 缺口写明', src:'黑湖只读',
+  gap:'黑湖产品档案没有物料分类（大类、中类）字段，不用「来源类型」顶替。',
+  blocks:[
+    {t:'text', text:'这里没有物料分类可看：黑湖没有这个字段。分类要先在黑湖或 Cretas 里定下来才有数据。'},
+    {t:'kv', title:'需要补什么', rows:[['大类','肉类、禽类、辅料、包材、成品（待定）'],['中类','待定'],['数据来源','暂无']]}
+  ]});
+
+reg('/warehouse/wastage-reports', { title:'报损管理', sub:'黑湖只读 · 缺口写明', src:'Cretas 补充',
+  gap:'黑湖没有报损数据。这里是 Cretas 补充入口：只记报损事实，不扣黑湖库存、不回写黑湖；报损后的质量处置、财务报废审批不在本页。',
+  blocks:[
+    {t:'kpis', items:[['报损记录', 6], ['重量合计', 153, 'kg（不含按瓶计的 12 瓶）', 0]]},
+    {t:'table', title:'报损记录', cols:[{k:'date',l:'报损日期'},{k:'name',l:'物料或产品'},{k:'batch',l:'批次号'},{k:'qty',l:'报损数量',n:1,d:0},{k:'unit',l:'单位'},{k:'wh',l:'仓库'},{k:'why',l:'报损原因'},{k:'src',l:'来源'}],
+      rows:[
+        {date:'2026-11-16',name:'牛腱',batch:'CG1114-01',qty:8,unit:'kg',wh:'原料冷库',why:'解冻滴水超标',src:'Cretas 补充'},
+        {date:'2026-11-15',name:'生鸡爪',batch:'CG1115-02',qty:15,unit:'kg',wh:'原料冷库',why:'外观变色',src:'Cretas 补充'},
+        {date:'2026-11-14',name:'肉丸',batch:'P1110-06',qty:120,unit:'kg',wh:'成品冷库',why:'超过保质期',src:'Cretas 补充'},
+        {date:'2026-11-12',name:'肠衣',batch:'CG1108-03',qty:4,unit:'kg',wh:'辅料库',why:'破损',src:'Cretas 补充'},
+        {date:'2026-11-11',name:'辣椒酱',batch:'P1105-02',qty:12,unit:'瓶',wh:'常温库',why:'瓶盖胀气',src:'Cretas 补充'},
+        {date:'2026-11-10',name:'五香豆干',batch:'P1108-03',qty:6,unit:'kg',wh:'成品冷库',why:'包装漏气',src:'Cretas 补充'}
+      ], filters:['wh'], actions:[{l:'导出',msg:'已导出报损记录（示例）'}]},
+    {t:'form', title:'补充一条报损', fields:[{label:'报损日期',type:'date'},{label:'物料或产品',type:'text'},{label:'批次号',type:'text'},{label:'报损数量',type:'number'},{label:'单位',type:'text',value:'kg'},{label:'仓库',type:'select',options:['原料冷库','辅料库','常温库','成品冷库']},{label:'报损原因',type:'text'}], submit:'保存补充记录', msg:'示例页不保存；真实页保存后来源记为 Cretas 补充，撤销必须写原因'}
+  ]});
+
+reg('/warehouse/source-individuals', { title:'源头个体档案', sub:'黑湖只读 · 缺口写明', src:'Cretas 补充',
+  gap:'黑湖没有活体、胴体来源数据。这里是 Cretas 补充入口：记个体编号、来源和关联入库批次，供追溯到源头；不拉人员字段。',
+  blocks:[
+    {t:'table', title:'源头个体', cols:[{k:'code',l:'个体编号'},{k:'kind',l:'类型'},{k:'sp',l:'品种'},{k:'from',l:'来源'},{k:'inDate',l:'进场日期'},{k:'batch',l:'关联入库批次'},{k:'src',l:'来源标记'}],
+      rows:[
+        {code:'NJ-1112-001',kind:'胴体',sp:'黄牛',from:'示例养殖场甲',inDate:'2026-11-12',batch:'CG1114-01',src:'Cretas 补充'},
+        {code:'NJ-1112-002',kind:'胴体',sp:'黄牛',from:'示例养殖场甲',inDate:'2026-11-12',batch:'CG1114-01',src:'Cretas 补充'},
+        {code:'ZJ-1113-001',kind:'胴体',sp:'生猪',from:'示例养殖场乙',inDate:'2026-11-13',batch:'CG1113-05',src:'Cretas 补充'},
+        {code:'ZJ-1113-002',kind:'胴体',sp:'生猪',from:'示例养殖场乙',inDate:'2026-11-13',batch:'CG1113-05',src:'Cretas 补充'},
+        {code:'JY-1115-001',kind:'活体',sp:'肉鸡',from:'示例养殖场丙',inDate:'2026-11-15',batch:'CG1115-02',src:'Cretas 补充'},
+        {code:'YZ-1109-001',kind:'活体',sp:'肉鸭',from:'示例养殖场丙',inDate:'2026-11-09',batch:'未关联',src:'Cretas 补充'}
+      ], filters:['kind','sp'], actions:[{l:'补充一条',msg:'已打开补充表单（示例页不保存）'}]}
+  ]});
+
+reg('/quality/inspections', { title:'质量检验', sub:'按阶段检验', src:'Cretas 主来源',
+  gap:'黑湖检验单只读，检验项、检验规范、检验结果在黑湖都是 0 条；这里的检验结论由代码按标准上下限判定，处置由人选。',
+  blocks:[
+    {t:'kpis', items:[['检验单', 9], ['已提交', 8], ['不合格', 2], ['合格率', '75.00%', '6 张合格 / 8 张已提交']]},
+    {t:'text', text:'按阶段：来料 3、生产 2、入库 1、发货 2、其他 1。'},
+    {t:'table', title:'检验单', cols:[{k:'no',l:'检验单号'},{k:'stage',l:'阶段'},{k:'obj',l:'对象'},{k:'std',l:'标准'},{k:'verdict',l:'结论',p:1},{k:'disp',l:'处置'},{k:'at',l:'检验时间'}],
+      rows:[
+        {no:'QC-1116-01',stage:'来料',obj:'牛腱 CG1114-01',std:'来料验收（肉类）',verdict:'合格',disp:'放行',at:'2026-11-16 08:10'},
+        {no:'QC-1116-02',stage:'来料',obj:'猪前腿肉 CG1113-05',std:'来料验收（肉类）',verdict:'不合格',disp:'待批次处置',at:'2026-11-16 08:40',_d:{'不合格项':'到货温度 7.5℃，上限 4℃'}},
+        {no:'QC-1116-03',stage:'来料',obj:'生鸡爪 CG1115-02',std:'来料验收（肉类）',verdict:'合格',disp:'放行',at:'2026-11-15 16:20'},
+        {no:'QC-1116-04',stage:'生产',obj:'GD-1116-01 酱牛肉',std:'蒸煮过程检验',verdict:'合格',disp:'放行',at:'2026-11-16 11:30'},
+        {no:'QC-1116-05',stage:'生产',obj:'GD-1116-03 川味香肠',std:'灌装过程检验',verdict:'不合格',disp:'返工',at:'2026-11-16 13:50',_d:{'不合格项':'灌装重量偏低'}},
+        {no:'QC-1116-06',stage:'入库',obj:'五香豆干 P1115-04',std:'成品入库检验',verdict:'合格',disp:'放行',at:'2026-11-15 17:10'},
+        {no:'QC-1116-07',stage:'发货',obj:'酱牛肉 示例客户甲',std:'成品出厂检验',verdict:'合格',disp:'放行',at:'2026-11-16 08:00'},
+        {no:'QC-1116-08',stage:'发货',obj:'卤鸡爪 示例客户甲',std:'成品出厂检验',verdict:'草稿',disp:'未处置',at:'2026-11-16 15:10'},
+        {no:'QC-1115-09',stage:'其他',obj:'辣椒酱 留样',std:'留样复检',verdict:'合格',disp:'放行',at:'2026-11-15 14:00'}
+      ], filters:['stage','verdict'], actions:[{l:'新建检验',msg:'已打开新建检验（示例页不保存）'}]}
+  ]});
+
+reg('/quality/standards', { title:'检验标准', sub:'按阶段维护', src:'Cretas 补充',
+  blocks:[
+    {t:'text', text:'标准值由人填写，不由 AI 生成；保存会生成新版本，旧版本保留。'},
+    {t:'table', title:'检验标准', cols:[{k:'name',l:'标准名称'},{k:'stage',l:'阶段'},{k:'scope',l:'适用对象'},{k:'items',l:'检验项数',n:1,d:0},{k:'ver',l:'版本'},{k:'first',l:'首检'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {name:'来料验收（肉类）',stage:'来料',scope:'本阶段全部原材料',items:5,ver:'v3',first:'否',st:'启用',_d:{'检验项':'到货温度、外观色泽、气味、包装完整、证件齐全'}},
+        {name:'蒸煮过程检验',stage:'生产',scope:'酱牛肉工单',items:3,ver:'v2',first:'是（蒸煮工序）',st:'启用',_d:{'检验项':'中心温度、蒸煮时间、感官'}},
+        {name:'灌装过程检验',stage:'生产',scope:'川味香肠工单',items:3,ver:'v1',first:'是（灌装工序）',st:'启用',_d:{'检验项':'灌装重量、封口、气泡'}},
+        {name:'成品入库检验',stage:'入库',scope:'本阶段全部成品',items:4,ver:'v2',first:'否',st:'启用',_d:{'检验项':'包装、标签、净含量、储存温度'}},
+        {name:'成品出厂检验',stage:'发货',scope:'本阶段全部成品',items:5,ver:'v4',first:'否',st:'启用',_d:{'检验项':'感官、包装标签、温度、净含量、批号'}},
+        {name:'留样复检',stage:'其他',scope:'任意对象',items:3,ver:'v1',first:'否',st:'启用'},
+        {name:'来料验收（旧版辅料）',stage:'来料',scope:'辅料',items:2,ver:'v1',first:'否',st:'停用'}
+      ], filters:['stage','st'], actions:[{l:'新建标准',msg:'已打开新建标准（示例页不保存）'}]}
+  ]});
+
+reg('/quality/defects', { title:'不良分析', sub:'不良品项分布', src:'Cretas 主来源',
+  gap:'报工里没有采集具体不良项，所以不良「品项」的分布算不出，不显示 0%；下面按工序看报工的良品数和不良数。不做按人员排名。',
+  blocks:[
+    {t:'kpis', items:[['良品合计', 24330, 'kg', 0], ['不良合计', 300, 'kg', 0], ['总不良率', '1.22%', '300 ÷ (24330 + 300)']]},
+    {t:'bars', title:'各工序不良数', unit:'kg', d:0, items:[['包装',118,'risk'],['灌装',62,'warn'],['蒸煮',55,'warn'],['腌制滚揉',30],['解冻清洗',20],['速冻',15]]},
+    {t:'table', title:'工序不良分布', cols:[{k:'p',l:'工序'},{k:'good',l:'良品(kg)',n:1,d:0},{k:'bad',l:'不良(kg)',n:1,d:0},{k:'rate',l:'不良率(%)',n:1,d:2}],
+      rows:[
+        {p:'解冻清洗',good:4780,bad:20,rate:0.42},
+        {p:'腌制滚揉',good:4750,bad:30,rate:0.63},
+        {p:'蒸煮',good:4700,bad:55,rate:1.16},
+        {p:'灌装',good:2300,bad:62,rate:2.63},
+        {p:'包装',good:4600,bad:118,rate:2.5},
+        {p:'速冻',good:3200,bad:15,rate:0.47}
+      ], search:false},
+    {t:'list', title:'不良品项字典（质量人员维护）', items:[
+      {t:'包装破损或漏气', s:'用于包装工序', tag:'启用'},
+      {t:'重量不足', s:'用于灌装、称重工序', tag:'启用'},
+      {t:'色泽异常', s:'用于蒸煮、腌制工序', tag:'启用'},
+      {t:'异物', s:'全工序通用', tag:'启用'}
+    ]}
+  ]});
+
+reg('/quality/ccp', { title:'CCP 监控记录', sub:'工序关键控制点监控', src:'Cretas 补充',
+  gap:'黑湖没有 CCP 数据，这里只存 Cretas 补充记录；是否偏离按关键限值计算，偏离只提示「建议扣留本批及下游」，不自动扣留。',
+  blocks:[
+    {t:'kpis', items:[['监控记录', 8, '本周'], ['偏离', 2], ['合格', 6]]},
+    {t:'table', title:'CCP 监控记录', cols:[{k:'no',l:'记录号'},{k:'proc',l:'工序'},{k:'point',l:'监控点'},{k:'low',l:'下限',n:1,d:1},{k:'up',l:'上限',n:1,d:1},{k:'val',l:'实测值',n:1,d:1},{k:'unit',l:'单位'},{k:'gd',l:'工单'},{k:'at',l:'监控时间'},{k:'res',l:'结果',p:1}],
+      rows:[
+        {no:'CCP-1116-01',proc:'蒸煮',point:'中心温度',low:75,up:100,val:82.5,unit:'℃',gd:'GD-1116-01',at:'2026-11-16 10:20',res:'合格'},
+        {no:'CCP-1116-02',proc:'蒸煮',point:'中心温度',low:75,up:100,val:72.5,unit:'℃',gd:'GD-1116-01',at:'2026-11-16 11:05',res:'偏离',_d:{'建议':'建议扣留本批及下游，未自动扣留'}},
+        {no:'CCP-1116-03',proc:'速冻',point:'出库中心温度',low:-30,up:-18,val:-20.5,unit:'℃',gd:'GD-1116-02',at:'2026-11-16 09:40',res:'合格'},
+        {no:'CCP-1116-04',proc:'金属探测',point:'探测灵敏度',low:1.5,up:2,val:1.8,unit:'mm',gd:'GD-1116-03',at:'2026-11-16 13:10',res:'合格'},
+        {no:'CCP-1116-05',proc:'冷藏',point:'库温',low:0,up:4,val:5.2,unit:'℃',gd:'GD-1116-09',at:'2026-11-16 12:30',res:'偏离',_d:{'建议':'建议扣留本批及下游，未自动扣留'}},
+        {no:'CCP-1115-06',proc:'蒸煮',point:'中心温度',low:75,up:100,val:80,unit:'℃',gd:'GD-1115-04',at:'2026-11-15 14:20',res:'合格'},
+        {no:'CCP-1115-07',proc:'金属探测',point:'探测灵敏度',low:1.5,up:2,val:1.7,unit:'mm',gd:'GD-1115-05',at:'2026-11-15 15:50',res:'合格'},
+        {no:'CCP-1115-08',proc:'杀菌',point:'杀菌温度',low:85,up:95,val:90,unit:'℃',gd:'GD-1115-05',at:'2026-11-15 10:30',res:'合格'}
+      ], filters:['proc','res'], actions:[{l:'新增监控记录',msg:'已打开新增监控记录（示例页不保存）'}]}
+  ]});
+
+reg('/quality/returns', { title:'质检退回单', sub:'不合格退回处理', src:'Cretas 补充',
+  gap:'黑湖没有退回单数据；这里的记录不能改，只能写处理结果关闭，或写原因作废。',
+  blocks:[
+    {t:'kpis', items:[['退回单', 6], ['进行中', 2], ['已关闭', 3], ['已作废', 1]]},
+    {t:'table', title:'质检退回单', cols:[{k:'no',l:'退回单号'},{k:'obj',l:'退回对象'},{k:'insp',l:'来源检验单'},{k:'qty',l:'数量',n:1,d:0},{k:'unit',l:'单位'},{k:'to',l:'退回给'},{k:'why',l:'退回原因'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {no:'TH-1116-01',obj:'猪前腿肉 CG1113-05',insp:'QC-1116-02',qty:800,unit:'kg',to:'示例供应商乙',why:'到货温度超限',st:'进行中'},
+        {no:'TH-1116-02',obj:'GD-1116-03 川味香肠',insp:'QC-1116-05',qty:45,unit:'kg',to:'灌装工序',why:'灌装重量偏低，返工',st:'进行中'},
+        {no:'TH-1113-03',obj:'生鸡爪 CG1112-07',insp:'QC-1113-02',qty:120,unit:'kg',to:'示例供应商乙',why:'外观变色',st:'已关闭',_d:{'处理结果':'供应商已补发 120kg'}},
+        {no:'TH-1112-04',obj:'干辣椒 CG1101-04',insp:'QC-1112-01',qty:30,unit:'kg',to:'示例供应商丙',why:'受潮结块',st:'已关闭',_d:{'处理结果':'抵扣下批货款'}},
+        {no:'TH-1111-05',obj:'肠衣 CG1108-03',insp:'未关联',qty:6,unit:'kg',to:'示例供应商甲',why:'破损',st:'已关闭',_d:{'处理结果':'供应商同意换货'}},
+        {no:'TH-1110-06',obj:'辣椒酱 P1105-02',insp:'未关联',qty:20,unit:'瓶',to:'包装工序',why:'录入错误',st:'已作废',_d:{'作废原因':'对象填错，已重新登记'}}
+      ], filters:['st'], actions:[{l:'新建退回单',msg:'已打开新建退回单（示例页不保存）'}]}
+  ]});
+
+reg('/quality/disposals', { title:'废弃处理', sub:'废弃（报废、销毁）记录', src:'Cretas 补充',
+  gap:'黑湖没有废弃数据；废弃方式有报废、销毁、退供应商、回炉返工，可挂入库批次。记录不能改，只能关闭或作废。',
+  blocks:[
+    {t:'kpis', items:[['废弃记录', 6], ['报废', 2], ['销毁', 1], ['退供应商 / 回炉', 3]]},
+    {t:'table', title:'废弃处理记录', cols:[{k:'no',l:'记录号'},{k:'obj',l:'废弃对象'},{k:'batch',l:'入库批次'},{k:'qty',l:'数量',n:1,d:0},{k:'unit',l:'单位'},{k:'method',l:'废弃方式'},{k:'why',l:'原因'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {no:'FQ-1116-01',obj:'肉丸',batch:'P1110-06',qty:120,unit:'kg',method:'销毁',why:'超过保质期',st:'进行中'},
+        {no:'FQ-1116-02',obj:'川味香肠半成品',batch:'未挂批次',qty:45,unit:'kg',method:'回炉返工',why:'灌装重量偏低',st:'进行中'},
+        {no:'FQ-1115-03',obj:'生鸡爪',batch:'CG1115-02',qty:15,unit:'kg',method:'报废',why:'外观变色',st:'已关闭',_d:{'处理结果':'已倒入废弃桶并登记'}},
+        {no:'FQ-1114-04',obj:'牛腱',batch:'CG1114-01',qty:8,unit:'kg',method:'报废',why:'解冻滴水超标',st:'已关闭',_d:{'处理结果':'已处理'}},
+        {no:'FQ-1112-05',obj:'干辣椒',batch:'CG1101-04',qty:30,unit:'kg',method:'退供应商',why:'受潮结块',st:'已关闭',_d:{'处理结果':'已退示例供应商丙'}},
+        {no:'FQ-1111-06',obj:'五香豆干',batch:'P1108-03',qty:6,unit:'kg',method:'报废',why:'包装漏气',st:'已作废',_d:{'作废原因':'重复登记'}}
+      ], filters:['method','st'], actions:[{l:'新建废弃记录',msg:'已打开新建废弃记录（示例页不保存）'}]}
+  ]});
+
+reg('/quality/recalls', { title:'批次召回', sub:'按 C 批次发起召回', src:'Cretas 补充',
+  gap:'黑湖没有召回数据。选入库批次发起召回；进行中的召回会让该批次进入「待处置」扣留，先到期先出的建议会跳过它。同一批次同时只能有一条进行中的召回。',
+  blocks:[
+    {t:'kpis', items:[['召回记录', 5], ['进行中', 2], ['已关闭', 3]]},
+    {t:'table', title:'批次召回', cols:[{k:'no',l:'召回号'},{k:'batch',l:'入库批次'},{k:'name',l:'物料或产品'},{k:'level',l:'召回等级'},{k:'why',l:'召回原因'},{k:'at',l:'发起时间'},{k:'st',l:'状态',p:1}],
+      rows:[
+        {no:'ZH-1116-01',batch:'CG1113-05',name:'猪前腿肉',level:'二级',why:'到货温度超限，来料检验不合格',at:'2026-11-16 09:00',st:'进行中',_d:{'影响范围':'800kg 已入原料冷库，尚未领用'}},
+        {no:'ZH-1116-02',batch:'P1110-06',name:'肉丸',level:'三级',why:'超过保质期仍在库',at:'2026-11-16 08:30',st:'进行中',_d:{'影响范围':'120kg 在成品冷库，未发货'}},
+        {no:'ZH-1108-03',batch:'P1101-04',name:'川味香肠',level:'二级',why:'标签生产日期错误',at:'2026-11-08 10:00',st:'已关闭',_d:{'处理结果':'已追回 180kg，重新贴标'}},
+        {no:'ZH-1030-04',batch:'P1025-02',name:'酱牛肉',level:'一级',why:'金属异物投诉',at:'2026-10-30 15:00',st:'已关闭',_d:{'处理结果':'全部追回 240kg 并销毁'}},
+        {no:'ZH-1022-05',batch:'P1020-01',name:'辣椒酱',level:'三级',why:'瓶盖胀气',at:'2026-10-22 11:20',st:'已关闭',_d:{'处理结果':'已退回 36 瓶'}}
+      ], filters:['level','st'], actions:[{l:'发起召回',msg:'已打开发起召回（示例页不保存）'}]}
+  ]});
+
+reg('/quality/param-deviation', { title:'工艺参数偏离', sub:'只写缺口', src:'只读来源',
+  gap:'需要工序的工艺设定值（温度、时间、转速等）和设备或人工采集的实测值，才能判断偏离并扣留本批及下游。黑湖报工只有数量和重量，没有这类参数，Cretas 也还没有采集入口。',
+  blocks:[
+    {t:'text', text:'这页暂时没有数据。先要定下参数从哪里来。'},
+    {t:'kv', title:'缺口说明', rows:[['缺什么','工艺设定值，以及设备或人工采集的实测值'],['为什么算不出','黑湖报工只有数量和重量，没有温度、时间、转速'],['谁来定','数据来源要先定：接设备采集，还是在 CCP 监控记录之外另开参数记录'],['现在能用','CCP 监控记录里的关键限值偏离']]}
+  ]});
+
+reg('/quality/cold-chain', { title:'冷链超温批次', sub:'只写缺口', src:'只读来源',
+  gap:'需要冷库、冷藏车的逐时温度读数和批次出入库时间，才能判断哪些批次超温。黑湖没有温度数据；入库批次只有仓库与数量。',
+  blocks:[
+    {t:'text', text:'这页暂时没有数据，超温批次算不出。'},
+    {t:'kv', title:'缺口说明', rows:[['缺什么','冷库、冷藏车的逐时温度读数'],['还缺','批次进出冷库的时间'],['现在有的','入库批次的仓库和数量，没有温度'],['谁来定','温度采集来源待定（设备或手工）；批次对应关系找入库批次']]}
+  ]});
+
+reg('/quality/label-qc', { title:'包装标签拍检', sub:'按批次拍检', src:'Cretas 补充',
+  gap:'黑湖没有标签拍检数据。按七项标签内容逐项记合格、不合格或不适用，有一项不合格即判不合格；原型不存照片，只写照片说明。',
+  blocks:[
+    {t:'kpis', items:[['拍检记录', 6], ['合格', 4], ['不合格', 2]]},
+    {t:'text', text:'七项：品名、配料表、保质期、生产日期、批号、净含量、储存条件。'},
+    {t:'table', title:'包装标签拍检', cols:[{k:'no',l:'记录号'},{k:'prod',l:'产品'},{k:'batch',l:'入库批次'},{k:'who',l:'检查人'},{k:'at',l:'检查时间'},{k:'bad',l:'不合格项'},{k:'res',l:'结论',p:1}],
+      rows:[
+        {no:'BQ-1116-01',prod:'五香豆干',batch:'P1115-04',who:'质检员甲',at:'2026-11-16 08:20',bad:'无',res:'合格'},
+        {no:'BQ-1116-02',prod:'辣椒酱',batch:'P1115-05',who:'质检员甲',at:'2026-11-16 08:50',bad:'无',res:'合格'},
+        {no:'BQ-1116-03',prod:'酱牛肉',batch:'未挂批次',who:'质检员乙',at:'2026-11-16 10:30',bad:'生产日期',res:'不合格',_d:{'照片说明':'日期喷码模糊，第二排漏喷'}},
+        {no:'BQ-1115-04',prod:'卤鸡爪',batch:'未挂批次',who:'质检员乙',at:'2026-11-15 15:40',bad:'无',res:'合格'},
+        {no:'BQ-1115-05',prod:'川味香肠',batch:'未挂批次',who:'质检员甲',at:'2026-11-15 11:10',bad:'配料表、净含量',res:'不合格',_d:{'照片说明':'配料表缺过敏原提示，净含量与实重不符'}},
+        {no:'BQ-1114-06',prod:'肉丸',batch:'P1110-06',who:'质检员乙',at:'2026-11-14 09:30',bad:'无',res:'合格'}
+      ], filters:['res'], actions:[{l:'新增拍检',msg:'已打开新增拍检（示例页不保存）'}]}
+  ]});
+
+/* data-d-analytics.js */
+reg('/analytics/ai-reports', { title:'AI 经营报告', sub:'周报与月报 · 事实表', src:'黑湖只读', gap:'成本类数字算不出：黑湖没有按工单分摊的成本口径，报告里写「算不出」，不用 0 代替；模型解读只在点击后才生成，模型不可用时只看事实表。', blocks:[
+ {t:'text', text:'上周（2026-11-09 至 11-15）事实表已生成，每个数字都带来源和依据条数，点开能回到对应记录；本周还没结束，数字只算到 2026-11-16。'},
+ {t:'kpis', items:[['上周结束工单', 2, 'GD-1115-04、GD-1115-05'],['上周报工笔数', 46, '较前一周 +4'],['上周不良率', '2.05%', '前一周 2.54%'],['仍在执行中工单', 4, '其中已超期 1 张']]},
+ {t:'table', title:'上周事实表（周报）', cols:[{k:'grp',l:'类别'},{k:'name',l:'指标'},{k:'cur',l:'本期',n:1},{k:'prev',l:'上期',n:1},{k:'cnt',l:'依据（条）',n:1},{k:'src',l:'来源'}], rows:[
+  {grp:'工单',name:'实际结束的工单',cur:'2 张',prev:'3 张',cnt:2,src:'黑湖工单状态'},
+  {grp:'工单',name:'仍在执行中的工单',cur:'4 张',prev:'3 张',cnt:4,src:'黑湖工单状态'},
+  {grp:'工单',name:'其中已超期',cur:'1 张',prev:'0 张',cnt:1,src:'计划结束日早于今天',_d:{'超期工单':'GD-1116-03 川味香肠，计划结束日已过'}},
+  {grp:'生产计划',name:'计划量（本期结束工单）',cur:'1500 kg',prev:'2100 kg',cnt:2,src:'黑湖工单计划量'},
+  {grp:'报工',name:'报工笔数',cur:'46 笔',prev:'42 笔',cnt:46,src:'黑湖报工记录'},
+  {grp:'报工',name:'良品量',cur:'3820 kg',prev:'3650 kg',cnt:46,src:'黑湖报工记录'},
+  {grp:'报工',name:'不良量',cur:'80 kg',prev:'95 kg',cnt:46,src:'黑湖报工记录'},
+  {grp:'报工',name:'不良率',cur:'2.05%',prev:'2.54%',cnt:46,src:'不良 ÷（良品 + 不良）'},
+  {grp:'成本',name:'本期工单成本合计',cur:'算不出',prev:'算不出',cnt:0,src:'黑湖没有分摊口径',_d:{'说明':'缺口：没有按工单分摊的人工与制造费用，不推算。'}} ],
+  filters:['grp'], actions:[{l:'留档本期',msg:'已留档：2026-11-09 至 11-15 周报（示例，不保存）'},{l:'生成模型解读',msg:'示例页不接模型，仅展示事实表'}]},
+ {t:'list', title:'已留档的报告', items:[
+  {t:'周报 2026-11-02 至 11-08', s:'留档于 2026-11-09 09:10 · 数据版本与来源已固定', tag:'已完成', act:{l:'查看',msg:'示例：打开留档快照'}},
+  {t:'周报 2026-10-26 至 11-01', s:'留档于 2026-11-02 08:55', tag:'已完成', act:{l:'查看',msg:'示例：打开留档快照'}},
+  {t:'月报 2026-10', s:'留档于 2026-11-03 10:20', tag:'已完成', act:{l:'查看',msg:'示例：打开留档快照'}},
+  {t:'周报 2026-11-09 至 11-15', s:'本期事实表已生成，还没留档', tag:'待留档', act:{l:'去留档',msg:'已留档（示例）'}} ]} ]});
+
+reg('/smart-bi/dashboard', { title:'经营驾驶舱', sub:'一屏看产量、交期、不良和库存', src:'Cretas 主来源', blocks:[
+ {t:'kpis', items:[['今日执行中工单', 4, '计划量合计 3300 kg'],['近 7 天实际产量', 18730, 'kg'],['近 7 天不良率', '2.1%', '较前 7 天 -0.4 个百分点'],['临期批次', 3, '7 天内到期']]},
+ {t:'line', title:'近 7 天产量：计划与实际', unit:'kg', d:0, zero:true, labels:['11-10','11-11','11-12','11-13','11-14','11-15','11-16'], series:[{name:'计划',data:[2800,3000,2900,3200,3100,1200,3300]},{name:'实际',data:[2650,2900,2780,3100,2950,1100,3250]}]},
+ {t:'table', title:'今日执行中工单', cols:[{k:'code',l:'工单号'},{k:'prod',l:'产品'},{k:'qty',l:'计划量(kg)',n:1},{k:'done',l:'已报良品(kg)',n:1},{k:'st',l:'状态',p:1}], rows:[
+  {code:'GD-1116-01',prod:'酱牛肉',qty:800,done:520,st:'执行中'},
+  {code:'GD-1116-02',prod:'卤鸡爪',qty:1200,done:760,st:'执行中'},
+  {code:'GD-1116-03',prod:'川味香肠',qty:600,done:410,st:'逾期'},
+  {code:'GD-1116-09',prod:'肉丸',qty:700,done:300,st:'执行中'},
+  {code:'GD-1117-06',prod:'酱牛肉',qty:800,done:'未开工',st:'新建'} ], filters:['st']} ]});
+
+reg('/analytics/overview', { title:'领域概览', sub:'各业务领域的关键数字与入口', src:'Cretas 主来源', blocks:[
+ {t:'kpis', items:[['生产：执行中工单', 4, '另有 2 张新建'],['质量：今日合格率', '97.9%', '检验 48 批'],['库存：在库物料', 6, '种原料，合计 6300 kg'],['异常：未处理预警', 8, '其中高 3']]},
+ {t:'bars', title:'各领域未处理事项（条）', unit:'条', d:0, items:[['生产',5,'warn'],['质量',3,'risk'],['库存',4,'warn'],['采购',2],['销售',1],['设备',2,'warn']]},
+ {t:'table', title:'领域入口', cols:[{k:'area',l:'领域'},{k:'key',l:'今日要看的数字'},{k:'val',l:'读数',n:1},{k:'st',l:'状态',p:1}], rows:[
+  {area:'生产',key:'执行中工单',val:4,st:'正常'},
+  {area:'质量',key:'不合格批次',val:1,st:'异常'},
+  {area:'库存',key:'7 天内到期批次',val:3,st:'待处理'},
+  {area:'采购',key:'待到货订单',val:5,st:'进行中'},
+  {area:'销售',key:'待发货订单',val:6,st:'进行中'},
+  {area:'设备',key:'逾期保养',val:2,st:'逾期'} ], filters:['st']} ]});
+
+reg('/smart-bi/analysis-hub', { title:'经营主题', sub:'财务口径 · 按主题看经营数字', src:'黑湖只读', gap:'毛利率算不出：有 2 批原料没有入库价，毛利不能只按已有价格的批次算，先标「算不出」；成本分摊口径见成本分析页。', blocks:[
+ {t:'kpis', items:[['本月营业收入(元)', 1286400, '截至 11-16'],['本月应收未收(元)', 392800, '占收入 30.5%'],['本月采购入库额(元)', 764300, '含 2 批缺价'],['毛利率', '算不出', '缺价批次未补']]},
+ {t:'tabs', tabs:[
+  {label:'收入与应收', blocks:[{t:'table', title:'按客户', cols:[{k:'c',l:'客户'},{k:'rev',l:'本月收入(元)',n:1},{k:'ar',l:'应收未收(元)',n:1},{k:'age',l:'最长账龄(天)',n:1}], rows:[
+   {c:'示例客户甲',rev:468000,ar:120000,age:22},{c:'示例客户乙',rev:352400,ar:98800,age:15},{c:'示例客户丙',rev:241000,ar:86000,age:31},{c:'示例客户丁',rev:139000,ar:52000,age:9},{c:'示例客户戊',rev:86000,ar:36000,age:5} ]}]},
+  {label:'采购与成本', blocks:[{t:'table', title:'按产品大类', cols:[{k:'p',l:'产品'},{k:'cost',l:'原料成本(元)',n:1},{k:'mg',l:'毛利率'},{k:'note',l:'说明'}], rows:[
+   {p:'酱牛肉',cost:212000,mg:'31.2%',note:'价格齐全'},{p:'卤鸡爪',cost:168000,mg:'26.8%',note:'价格齐全'},{p:'川味香肠',cost:96000,mg:'算不出',note:'1 批猪前腿肉缺入库价'},{p:'肉丸',cost:74000,mg:'算不出',note:'1 批淀粉缺入库价'},{p:'五香豆干',cost:48000,mg:'22.4%',note:'价格齐全'} ]}]} ]} ]});
+
+reg('/analytics/supply-chain', { title:'进销存', sub:'期初、入、出、期末', src:'Cretas 主来源', blocks:[
+ {t:'kpis', items:[['期初(kg)', 6450, '2026-11-01'],['本期入库(kg)', 14500],['本期出库(kg)', 14650],['期末(kg)', 6300, '期初 + 入 - 出']]},
+ {t:'table', title:'原料进销存（2026-11-01 至 11-16）', cols:[{k:'m',l:'物料'},{k:'b',l:'期初(kg)',n:1},{k:'i',l:'入库(kg)',n:1},{k:'o',l:'出库(kg)',n:1},{k:'e',l:'期末(kg)',n:1},{k:'st',l:'状态',p:1}], rows:[
+  {m:'牛腱子',b:1200,i:3000,o:3300,e:900,st:'正常'},
+  {m:'鸡爪',b:2500,i:6000,o:5800,e:2700,st:'正常'},
+  {m:'猪前腿肉',b:800,i:2400,o:2500,e:700,st:'缺料'},
+  {m:'黄豆',b:1500,i:2000,o:2200,e:1300,st:'正常'},
+  {m:'干辣椒',b:300,i:500,o:450,e:350,st:'正常'},
+  {m:'鸭胚',b:150,i:600,o:400,e:350,st:'正常'} ], filters:['st'], actions:[{l:'导出',msg:'示例：已导出进销存表'}]},
+ {t:'bars', title:'期末库存占比', unit:'kg', d:0, items:[['鸡爪',2700],['黄豆',1300],['牛腱子',900],['猪前腿肉',700,'warn'],['干辣椒',350],['鸭胚',350]]} ]});
+
+reg('/warehouse/material-price-trend', { title:'物料均价趋势', sub:'黑湖只读 · 缺口写明', src:'黑湖只读', gap:'只有有入库价的月份才出均价；黑湖入库单里没填单价的批次不参与计算，不用 0 补。2026-11 月只算到 11-16。', blocks:[
+ {t:'line', title:'主要原料月均价', unit:'元/kg', d:1, labels:['2026-04','2026-05','2026-06','2026-07','2026-08','2026-09','2026-10','2026-11'], series:[
+  {name:'牛腱子',data:[52.0,52.8,53.5,54.2,55.0,54.6,53.9,54.4]},
+  {name:'鸡爪',data:[18.2,18.6,19.4,20.1,20.8,20.3,19.7,19.9]},
+  {name:'猪前腿肉',data:[21.5,22.0,23.1,24.0,23.6,22.8,22.4,22.9]}]},
+ {t:'table', title:'本月与上月对比', cols:[{k:'m',l:'物料'},{k:'cur',l:'11 月均价',n:1,d:1},{k:'prev',l:'10 月均价',n:1,d:1},{k:'chg',l:'涨跌'},{k:'n',l:'参与批次',n:1},{k:'miss',l:'缺价批次',n:1}], rows:[
+  {m:'牛腱子',cur:54.4,prev:53.9,chg:'+0.9%',n:5,miss:0},
+  {m:'鸡爪',cur:19.9,prev:19.7,chg:'+1.0%',n:7,miss:0},
+  {m:'猪前腿肉',cur:22.9,prev:22.4,chg:'+2.2%',n:4,miss:1},
+  {m:'黄豆',cur:'算不出',prev:5.1,chg:'算不出',n:0,miss:2},
+  {m:'干辣椒',cur:26.3,prev:25.8,chg:'+1.9%',n:2,miss:0} ], filters:[]} ]});
+
+reg('/lsm/reconcile', { title:'对账（Cretas ↔ 黑湖）', sub:'称重报工 · 入库批次', src:'Cretas 主来源', gap:'黑湖数据每天 08:00 采集一次，差额以表上写的时点为准；本页只对照，不改任何一边，也不回写黑湖。', blocks:[
+ {t:'text', text:'称重报工、入库批次以 Cretas 为主来源，黑湖值只作对照；有差额和只在一边的记录写明找谁核对。黑湖数据时点：2026-11-16 08:00。'},
+ {t:'tabs', tabs:[
+  {label:'称重报工', blocks:[
+   {t:'kpis', items:[['一致',4],['有差额',3],['只在 Cretas',2],['只在黑湖',1]]},
+   {t:'table', title:'称重报工 ↔ 黑湖报工（按工序任务，良品 kg）', cols:[{k:'k',l:'工序任务'},{k:'c',l:'Cretas(kg)',n:1,d:1},{k:'b',l:'黑湖(kg)',n:1,d:1},{k:'df',l:'差额(kg)',n:1,d:1},{k:'st',l:'对账结果',p:1},{k:'o',l:'找谁核对'}], rows:[
+    {k:'GD-1116-01 卤制',c:520,b:520,df:0,st:'一致',o:'车间'},
+    {k:'GD-1116-02 卤制',c:760,b:752,df:8,st:'有差额',o:'车间'},
+    {k:'GD-1116-03 灌肠',c:410,b:410,df:0,st:'一致',o:'车间'},
+    {k:'GD-1116-09 成型',c:300,b:288.5,df:11.5,st:'有差额',o:'车间'},
+    {k:'GD-1115-04 切块',c:1000,b:1000,df:0,st:'一致',o:'车间'},
+    {k:'GD-1115-05 装罐',c:500,b:'黑湖没有记录',df:'算不出',st:'只在 Cretas',o:'车间（黑湖没有记录）'},
+    {k:'GD-1115-05 杀菌',c:496,b:'黑湖没有记录',df:'算不出',st:'只在 Cretas',o:'车间（黑湖没有记录）'},
+    {k:'GD-1115-04 包装',c:'Cretas 没有记录',b:980,df:'算不出',st:'只在黑湖',o:'车间（Cretas 没有记录）'},
+    {k:'GD-1114-08 腌制',c:400,b:392,df:8,st:'有差额',o:'车间'},
+    {k:'GD-1116-01 包装',c:515,b:515,df:0,st:'一致',o:'车间'} ], filters:['st'], actions:[{l:'转待办',msg:'已转为核对待办（示例）'}]}]},
+  {label:'入库批次', blocks:[
+   {t:'kpis', items:[['一致',4],['有差额',2],['只在 Cretas',1],['只在黑湖',1]]},
+   {t:'table', title:'入库批次 ↔ 黑湖入库单（按黑湖入库单行，kg）', cols:[{k:'k',l:'黑湖入库单行'},{k:'m',l:'物料'},{k:'c',l:'Cretas(kg)',n:1},{k:'b',l:'黑湖(kg)',n:1},{k:'st',l:'对账结果',p:1},{k:'o',l:'找谁核对'}], rows:[
+    {k:'RK-1114-01',m:'牛腱子',c:1500,b:1500,st:'一致',o:'仓库'},
+    {k:'RK-1114-02',m:'鸡爪',c:3000,b:2980,st:'有差额',o:'仓库'},
+    {k:'RK-1115-01',m:'猪前腿肉',c:1200,b:1200,st:'一致',o:'仓库'},
+    {k:'RK-1115-02',m:'黄豆',c:1000,b:1000,st:'一致',o:'仓库'},
+    {k:'RK-1115-03',m:'干辣椒',c:250,b:'黑湖没有记录',st:'只在 Cretas',o:'仓库（黑湖没有记录）'},
+    {k:'RK-1116-01',m:'鸭胚',c:'Cretas 没有记录',b:300,st:'只在黑湖',o:'仓库（Cretas 没有记录）'},
+    {k:'RK-1116-02',m:'牛腱子',c:1500,b:1480,st:'有差额',o:'仓库'},
+    {k:'RK-1116-03',m:'鸡爪',c:3000,b:3000,st:'一致',o:'仓库'} ], filters:['st']}]} ]} ]});
+
+reg('/analytics/alert-dashboard', { title:'异常预警', sub:'各领域的预警汇总与处理状态', src:'规则示例', blocks:[
+ {t:'kpis', items:[['未处理预警', 8],['高', 3, '需今天处理'],['中', 3],['低', 2]]},
+ {t:'table', title:'预警清单', cols:[{k:'t',l:'时间'},{k:'type',l:'类型'},{k:'obj',l:'对象'},{k:'desc',l:'说明'},{k:'lv',l:'级别',p:1},{k:'st',l:'处理状态',p:1}], rows:[
+  {t:'11-16 14:20',type:'超温',obj:'冷库 2 号',desc:'温度 6.8℃，超过 4℃ 上限已 40 分钟',lv:'高',st:'待处理'},
+  {t:'11-16 13:05',type:'缺料',obj:'猪前腿肉',desc:'库存 700 kg，GD-1117-06 前需 900 kg',lv:'高',st:'处理中'},
+  {t:'11-16 11:40',type:'工单超期',obj:'GD-1116-03',desc:'川味香肠计划结束日已过，已报良品 410/600 kg',lv:'高',st:'待处理'},
+  {t:'11-16 10:10',type:'临期',obj:'RK-1109-03 干辣椒',desc:'还有 5 天到期，在库 120 kg',lv:'中',st:'待处理'},
+  {t:'11-16 09:30',type:'不合格',obj:'检验 JY-1116-07',desc:'肉丸菌落总数不合格，已隔离',lv:'中',st:'处理中'},
+  {t:'11-15 17:00',type:'设备保养逾期',obj:'真空包装机 2 号',desc:'保养计划逾期 3 天',lv:'中',st:'待处理'},
+  {t:'11-15 15:20',type:'对账差额',obj:'GD-1116-09 成型',desc:'Cretas 与黑湖差 11.5 kg',lv:'低',st:'待处理'},
+  {t:'11-15 09:00',type:'单价缺失',obj:'RK-1114-05 黄豆',desc:'入库单没填单价，均价算不出',lv:'低',st:'已完成'} ], filters:['lv','st'], actions:[{l:'转待办',msg:'已转为协同待办（示例）'}]} ]});
+
+reg('/smart-bi/analysis', { title:'数据问答', sub:'用日常说法问经营数字', src:'规则示例', gap:'示例页不接 AI，下面的问答是摆出来的样子；真实问答只回答能从记录里查到的数字，查不到就说查不到。', blocks:[
+ {t:'form', title:'问一个问题', fields:[{label:'问题', type:'textarea', ph:'例如：上周酱牛肉的不良率是多少'},{label:'范围', type:'select', options:['最近 7 天','本月','上月','自定义']}], submit:'提问', msg:'示例页不接 AI，没有真正发出提问'},
+ {t:'list', title:'示例问答', items:[
+  {t:'上周酱牛肉的不良率是多少？', s:'答：2.3%（不良 18 kg，良品 780 kg，依据 6 笔报工）', tag:'已完成', act:{l:'看依据',msg:'示例：展开 6 笔报工'}},
+  {t:'哪些原料 7 天内到期？', s:'答：3 个批次，干辣椒 120 kg、鸡爪 300 kg、鸭胚 80 kg', tag:'已完成', act:{l:'转待办',msg:'已转为待办（示例）'}},
+  {t:'川味香肠这个月毛利率多少？', s:'答：算不出，有 1 批猪前腿肉没有入库价', tag:'异常', act:{l:'去补价',msg:'示例：跳到入库批次'}},
+  {t:'本周哪张工单最可能延期？', s:'答：GD-1116-03，已超期，已报良品 410/600 kg', tag:'已完成', act:{l:'看工单',msg:'示例：打开工单'}} ]} ]});
+
+reg('/smart-bi/upload', { title:'文件导入', sub:'把表格文件导入做分析', src:'只读来源', gap:'导入只进分析区，不改黑湖和生产记录；表头对不上的列进「映射复核」，不自动猜。', blocks:[
+ {t:'form', title:'导入文件', fields:[{label:'数据类型', type:'select', options:['销售明细','采购明细','费用明细','其他表格']},{label:'文件名', type:'text', ph:'选择 xlsx 或 csv 文件'},{label:'所属月份', type:'date'}], submit:'开始导入', msg:'示例页没有真正导入文件'},
+ {t:'table', title:'最近导入', cols:[{k:'t',l:'导入时间'},{k:'f',l:'文件'},{k:'type',l:'类型'},{k:'rows',l:'行数',n:1},{k:'bad',l:'未识别行',n:1},{k:'st',l:'状态',p:1}], rows:[
+  {t:'11-16 10:05',f:'十一月销售明细.xlsx',type:'销售明细',rows:386,bad:0,st:'已完成'},
+  {t:'11-15 16:40',f:'十月费用明细.xlsx',type:'费用明细',rows:142,bad:6,st:'待复核'},
+  {t:'11-14 09:30',f:'采购对照表.csv',type:'采购明细',rows:97,bad:0,st:'已完成'},
+  {t:'11-12 14:12',f:'客户清单.xlsx',type:'其他表格',rows:54,bad:3,st:'待复核'},
+  {t:'11-10 11:00',f:'十月销售明细.xlsx',type:'销售明细',rows:412,bad:0,st:'已完成'} ], filters:['st']} ]});
+
+reg('/smart-bi/mapping-review', { title:'映射复核', sub:'导入表的列名和系统字段对得上吗', src:'只读来源', blocks:[
+ {t:'kpis', items:[['待复核', 4],['已确认', 11],['驳回', 1]]},
+ {t:'table', title:'列映射', cols:[{k:'f',l:'来自文件'},{k:'col',l:'表里的列名'},{k:'to',l:'对应的字段'},{k:'conf',l:'把握'},{k:'st',l:'状态',p:1}], rows:[
+  {f:'十月费用明细.xlsx',col:'金额合计',to:'费用金额',conf:'高',st:'已审批'},
+  {f:'十月费用明细.xlsx',col:'部门',to:'费用归属部门',conf:'高',st:'已审批'},
+  {f:'十月费用明细.xlsx',col:'备注2',to:'未识别',conf:'低',st:'待审批'},
+  {f:'客户清单.xlsx',col:'客户名称',to:'客户',conf:'高',st:'已审批'},
+  {f:'客户清单.xlsx',col:'联系方式',to:'未识别',conf:'低',st:'待审批'},
+  {f:'客户清单.xlsx',col:'区域',to:'销售区域',conf:'中',st:'待审批'},
+  {f:'客户清单.xlsx',col:'信用',to:'信用额度',conf:'中',st:'驳回'} ], filters:['st'], actions:[{l:'确认所选',msg:'已确认（示例）'}]} ]});
+
+reg('/smart-bi/data-completeness', { title:'数据检查', sub:'分析用到的数据缺不缺', src:'Cretas 主来源', gap:'完整度只数「有没有填」，不判断填得对不对；缺的项直接列出，不用默认值补。', blocks:[
+ {t:'bars', title:'各类数据完整度', unit:'%', d:1, items:[['工单与报工',99.2,'ok'],['入库单价',94.5,'warn'],['客户信息',88.0,'warn'],['物料主数据',96.7,'ok'],['设备保养记录',72.5,'risk']]},
+ {t:'table', title:'缺失明细', cols:[{k:'type',l:'数据类型'},{k:'miss',l:'缺什么'},{k:'n',l:'条数',n:1},{k:'who',l:'谁来补'},{k:'st',l:'状态',p:1}], rows:[
+  {type:'入库单价',miss:'黄豆 2 批没填单价',n:2,who:'仓库',st:'待处理'},
+  {type:'入库单价',miss:'猪前腿肉 1 批没填单价',n:1,who:'仓库',st:'待处理'},
+  {type:'客户信息',miss:'没填结算周期',n:6,who:'销售',st:'待处理'},
+  {type:'设备保养记录',miss:'最近一次保养日期未记录',n:11,who:'设备管理员',st:'处理中'},
+  {type:'物料主数据',miss:'没填计量单位换算',n:4,who:'仓库',st:'已完成'} ], filters:['type']} ]});
+
+reg('/smart-bi/query-templates', { title:'查询模板', sub:'常用问法存成模板，下次一点就出', src:'规则示例', blocks:[
+ {t:'table', title:'模板列表', cols:[{k:'name',l:'模板名'},{k:'q',l:'问法'},{k:'owner',l:'创建人'},{k:'used',l:'本月使用',n:1},{k:'st',l:'状态',p:1}], rows:[
+  {name:'周不良率',q:'上周各产品不良率，按产品排序',owner:'质量主管',used:12,st:'启用'},
+  {name:'临期批次',q:'7 天内到期的批次，按到期日排序',owner:'仓库主管',used:21,st:'启用'},
+  {name:'超期工单',q:'计划结束日已过但还在执行的工单',owner:'计划员',used:9,st:'启用'},
+  {name:'客户应收账龄',q:'各客户应收未收和最长账龄',owner:'财务',used:6,st:'启用'},
+  {name:'月度采购均价',q:'各原料本月采购均价对比上月',owner:'采购主管',used:4,st:'草稿'},
+  {name:'旧版产量表',q:'每日产量按产线汇总（已被周报取代）',owner:'示例员工',used:0,st:'停用'} ], filters:['st'], actions:[{l:'新建模板',msg:'示例页不保存模板'}]} ]});
+
+reg('/unified/reports', { title:'自定义报表', sub:'报表模板与周期快照', src:'只读来源', gap:'模板和快照只存在报表区，不改业务数据；同单位才相加，缺值不计入合计并单列，0 保留。', blocks:[
+ {t:'tabs', tabs:[
+  {label:'报表模板', blocks:[{t:'table', title:'模板', cols:[{k:'name',l:'报表名'},{k:'src',l:'数据来源'},{k:'grp',l:'按什么分组'},{k:'m',l:'汇总什么'},{k:'cyc',l:'周期'},{k:'st',l:'状态',p:1}], rows:[
+   {name:'周会产量表',src:'生产工单',grp:'产品',m:'计划量 求和',cyc:'每周',st:'待生成'},
+   {name:'不良分布',src:'报工记录',grp:'工序',m:'不良量 求和',cyc:'每周',st:'已完成'},
+   {name:'原料到货',src:'入库批次',grp:'物料',m:'入库量 求和',cyc:'每月',st:'已完成'},
+   {name:'客户发货',src:'发货单',grp:'客户',m:'发货量 求和',cyc:'每月',st:'待生成'},
+   {name:'工单状态个数',src:'生产工单',grp:'状态',m:'工单数 计数',cyc:'不定期',st:'草稿'} ], filters:['st'], actions:[{l:'新建报表',msg:'示例页不保存模板'}]}]},
+  {label:'周期快照', blocks:[{t:'table', title:'已生成的快照', cols:[{k:'t',l:'生成时间'},{k:'name',l:'报表'},{k:'gr',l:'分组数',n:1},{k:'rec',l:'记录数',n:1},{k:'miss',l:'缺值条数',n:1},{k:'st',l:'状态',p:1}], rows:[
+   {t:'11-16 09:00',name:'不良分布',gr:5,rec:46,miss:0,st:'已完成'},
+   {t:'11-09 09:00',name:'不良分布',gr:5,rec:42,miss:0,st:'已完成'},
+   {t:'11-03 09:00',name:'原料到货',gr:6,rec:23,miss:2,st:'已完成'},
+   {t:'11-02 09:00',name:'周会产量表',gr:7,rec:9,miss:0,st:'已完成'},
+   {t:'10-26 09:00',name:'周会产量表',gr:7,rec:11,miss:1,st:'已完成'} ], filters:['name']}]} ]} ]});
+
+reg('/quality/vision-training', { title:'视觉质检训练', sub:'只写缺口（下沉到设置）', src:'只读来源', gap:'这一页只说明缺什么。拍照识别的标注、训练、上线审核都还没有做；真正的入口放在「设置 / 数字班组配置」，不占日常菜单。', blocks:[
+ {t:'text', text:'这是 AI 能力配置，不是日常质检操作，已经下沉到设置。质检员日常检验仍然走检验单。'},
+ {t:'kv', title:'现在有什么、缺什么', rows:[['标注样本','未记录：还没有收集合格与不合格的照片'],['训练任务','没有：训练环境未接'],['识别结果回写检验单','没有：不会自动改检验结论'],['上线前审核','未定：需要质量主管签字后才启用'],['入口位置','设置 / 数字班组配置']]},
+ {t:'list', title:'要补的事', items:[
+  {t:'收集样本照片', s:'每种缺陷至少 50 张，含光线变化', tag:'未开始', act:{l:'转待办',msg:'已转为待办（示例）'}},
+  {t:'确认缺陷分类', s:'和质检员对齐：破皮、变色、漏包装等', tag:'未开始', act:{l:'转待办',msg:'已转为待办（示例）'}},
+  {t:'定上线审核人', s:'谁看识别结果、谁能放行', tag:'待审批', act:{l:'转待办',msg:'已转为待办（示例）'}} ]} ]});
+
+reg('/g/settings', { title:'设置', sub:'重整方案 · 骨架', src:'规则示例', gap:'这一页把主数据、规则、权限、数字班组配置、数据与日志都放到一处，不占日常菜单；示例页的开关点了不保存。', blocks:[
+ {t:'tabs', tabs:[
+  {label:'主数据', blocks:[{t:'table', title:'主数据完整度', cols:[{k:'d',l:'主数据'},{k:'n',l:'条数',n:1},{k:'gap',l:'缺口'},{k:'who',l:'谁来补'}], rows:[
+   {d:'物料',n:48,gap:'4 条没填计量单位换算',who:'仓库'},
+   {d:'客户',n:36,gap:'6 条没填结算周期',who:'销售'},
+   {d:'供应商',n:21,gap:'完整',who:'采购'},
+   {d:'客户价目表',n:112,gap:'未记录：部分产品没有 11 月价格',who:'销售'},
+   {d:'计量单位',n:12,gap:'完整',who:'管理员'} ], search:false}]},
+  {label:'规则与阈值', blocks:[{t:'toggles', title:'业务规则开关', items:[
+   {label:'缺料开工拦截', hint:'开了以后缺料不能开工，强制开工要写原因', on:false},
+   {label:'毛利红线提醒', hint:'毛利率低于设定值时提醒财务', on:true},
+   {label:'工艺保密', hint:'隐藏中间工序，只显示原料来源', on:false},
+   {label:'四眼复核', hint:'重要单据由第二个人复核', on:false}]}]},
+  {label:'数据与日志', blocks:[{t:'kv', title:'数据管理', rows:[['文件导入','最近一次 2026-11-16 10:05'],['映射复核','待复核 4 条'],['数据检查','入库单价完整度 94.5%'],['数据备份','每天 02:00 自动备份，最近一次成功']]}]} ]} ]});
+
+reg('/crew', { title:'班组首页', sub:'数字班组', blocks:[
+ {t:'kpis', items:[['本厂启用', '5 / 5', '位数字员工'],['今天办成', 3, '只数「已办成」的事'],['等我确认', 4, '条'],['发现的问题', 7, '条，按快照现算']]},
+ {t:'board', columns:[
+  {title:'工作中', cards:[
+   {t:'数字计划员', s:'工单进度、齐套与缺料、急单安排。今天出了 1 份急单影响说明', tag:'进行中'},
+   {t:'数字仓管', s:'库存、入库批次、临期与盘点。盯着 3 个临期批次', tag:'进行中'},
+   {t:'数字质检员', s:'检验单与不良分析。肉丸不合格已转协同任务', tag:'处理中'}]},
+  {title:'待命', cards:[
+   {t:'数字文员', s:'销售、采购单据的查询与跟进，开单仍在黑湖', tag:'正常'},
+   {t:'数字成本会计', s:'出成率、工单成本、对账差异，发现费料生成核对待办', tag:'正常'}]} ]},
+ {t:'text', text:'「今天办成」只数工作记录里「已办成」的事（任务办完、回读核实）；已交办、原型演示未执行都不计。'} ]});
+
+reg('/crew/ledger', { title:'工作记录与额度', sub:'数字班组', gap:'这里的额度只是记录，不是计费系统；真实计费、额度包、对账单还没有做。', blocks:[
+ {t:'kpis', items:[['已办成（扣额度）', 10],['已交办（等人办完，不扣）', 5],['消耗业务额度（累计）', 10, '每件已办成 1 个'],['今天消耗额度', 3, '2026-11-16']]},
+ {t:'table', title:'按数字员工', cols:[{k:'e',l:'数字员工'},{k:'h',l:'已交办',n:1},{k:'d',l:'已办成',n:1},{k:'f',l:'没办成',n:1},{k:'u',l:'结果不明',n:1},{k:'demo',l:'原型演示未执行',n:1},{k:'q',l:'额度',n:1}], rows:[
+  {e:'数字文员',h:1,d:2,f:0,u:0,demo:0,q:2},
+  {e:'数字仓管',h:1,d:3,f:0,u:1,demo:0,q:3},
+  {e:'数字计划员',h:2,d:2,f:1,u:0,demo:1,q:2},
+  {e:'数字质检员',h:1,d:1,f:0,u:0,demo:0,q:1},
+  {e:'数字成本会计',h:0,d:2,f:0,u:0,demo:1,q:2} ], search:false, detail:false},
+ {t:'table', title:'最近工作记录', cols:[{k:'t',l:'时间'},{k:'e',l:'数字员工'},{k:'what',l:'事项'},{k:'r',l:'结果',p:1},{k:'q',l:'额度',n:1},{k:'ref',l:'依据（回读到的记录）'},{k:'by',l:'确认人'}], rows:[
+  {t:'11-16 14:35',e:'数字仓管',what:'临期干辣椒转优先领用',r:'已完成',q:1,ref:'协同任务 XT-1116-04 已完成',by:'仓库主管'},
+  {t:'11-16 11:20',e:'数字计划员',what:'GD-1117-06 缺料影响说明',r:'已完成',q:1,ref:'协同任务 XT-1116-02 已完成',by:'计划员'},
+  {t:'11-16 09:45',e:'数字成本会计',what:'GD-1115-05 出成核对',r:'已完成',q:1,ref:'核对待办 HD-1116-01 已关闭',by:'财务'},
+  {t:'11-15 16:10',e:'数字质检员',what:'肉丸不合格转协同任务',r:'已交办',q:0,ref:'没有可核实的记录',by:'质量主管'},
+  {t:'11-15 15:00',e:'数字计划员',what:'急单插入排产草案',r:'没办成',q:0,ref:'任务被取消',by:'计划员'},
+  {t:'11-15 10:30',e:'数字仓管',what:'盘点差异登记',r:'结果不明',q:0,ref:'没有可核实的记录',by:'仓库主管'},
+  {t:'11-14 17:20',e:'数字文员',what:'客户甲发货跟进',r:'已完成',q:1,ref:'协同任务 XT-1114-09 已完成',by:'销售'},
+  {t:'11-14 13:00',e:'数字成本会计',what:'演示：工单成本核对',r:'原型演示未执行',q:0,ref:'没有可核实的记录',by:'财务'} ], filters:['e','r'], actions:[{l:'导出 CSV',msg:'示例：已导出工作记录'}]} ]});
+
+reg('/crew/onboard', { title:'班组入职', sub:'数字班组', gap:'目前用文字口述工艺，语音转写还没接；口述里的温度、时长，报工没有对应字段，先进工序说明。', blocks:[
+ {t:'steps', title:'新产品上岗四步', items:[
+  {t:'说清产品和工艺', s:'厂长口述这款产品怎么做', state:'done'},
+  {t:'整理出的工序与记录要求', s:'对照黑湖已报过的工序，对不上的不自动新建', state:'now'},
+  {t:'确认规则', s:'出成标准、偏离提醒；不填就不设标准', state:'todo'},
+  {t:'每位数字员工的上岗条件', s:'只看资料有没有，不评价好坏', state:'todo'} ]},
+ {t:'form', title:'① 说清产品和工艺', fields:[{label:'产品', type:'select', options:['酱牛肉','卤鸡爪','川味香肠','肉丸','五香豆干','辣椒酱','烤鸭']},{label:'口述做法', type:'textarea', ph:'例如：先腌制，再卤制，最后真空包装、贴标'}], submit:'整理工序', msg:'示例页没有真正整理，也不保存'},
+ {t:'table', title:'整理出的工序（示例：酱牛肉）', cols:[{k:'n',l:'序号',n:1},{k:'p',l:'工序'},{k:'rec',l:'要记'},{k:'h',l:'黑湖报工情况',p:1}], rows:[
+  {n:1,p:'腌制',rec:'投入、良品、不良、起止时间',h:'已完成'},
+  {n:2,p:'卤制',rec:'投入、良品、不良、起止时间',h:'已完成'},
+  {n:3,p:'切块',rec:'投入、良品、不良',h:'已完成'},
+  {n:4,p:'真空包装',rec:'良品、不良、起止时间',h:'已完成'},
+  {n:5,p:'金属检测',rec:'黑湖没有这道工序的报工字段',h:'未开始'} ], detail:false} ]});
+
+reg('/crew/settings', { title:'数字班组配置', sub:'设置', gap:'一线岗位和数字员工的对应关系目前是写死的，还不能按工厂改；保存启用要写原因，保存后回读并留调整记录。', blocks:[
+ {t:'toggles', title:'本厂启用哪几位数字员工', items:[
+  {label:'数字文员', hint:'销售、采购单据的查询与跟进', on:true},
+  {label:'数字仓管', hint:'库存、入库批次、临期与盘点', on:true},
+  {label:'数字计划员', hint:'工单进度、齐套与缺料、急单安排', on:true},
+  {label:'数字质检员', hint:'检验单、检验标准、不良分析', on:true},
+  {label:'数字成本会计', hint:'出成率、工单成本、对账差异', on:true}]},
+ {t:'table', title:'一线岗位 → 手机端入口', cols:[{k:'role',l:'一线岗位'},{k:'crew',l:'手机端入口'},{k:'on',l:'本厂是否启用',p:1}], rows:[
+  {role:'操作员',crew:'数字计划员',on:'启用'},
+  {role:'仓管员',crew:'数字仓管',on:'启用'},
+  {role:'质检员',crew:'数字质检员',on:'启用'},
+  {role:'计划员',crew:'数字计划员',on:'启用'},
+  {role:'文员',crew:'数字文员',on:'停用'} ], detail:false, search:false},
+ {t:'text', text:'停用的员工不再出现在班组首页、手机端入口和「发现的问题」里；已有记录保留。'} ]});
+
+/* data-e-proto.js */
+/* 原型资料：页面地图、组件库、源码、怎么打开（由 gen-proto.cjs 从原页面地图数据生成） */
+MENU.push(['原型资料', [['页面地图', '/proto/map'], ['组件库', '/proto/lib'], ['源码位置', '/proto/src'], ['怎么打开', '/proto/open']]]);
+var PROTO_ROWS = [{"group":"今天","entry":"今天","page":"今天","route":"/g/today","state":"已接入"},{"group":"数字班组","entry":"班组首页","page":"班组首页","route":"/crew","state":"已接入"},{"group":"数字班组","entry":"工作记录与额度","page":"工作记录与额度","route":"/crew/ledger","state":"已接入"},{"group":"数字班组","entry":"班组入职","page":"班组入职","route":"/crew/onboard","state":"已接入"},{"group":"待办","entry":"待办","page":"待办","route":"/g/todo","state":"已接入"},{"group":"发现的问题","entry":"发现的问题","page":"发现的问题","route":"/crew/issues","state":"已接入"},{"group":"概览","entry":"岗位首页","page":"首页","route":"/dashboard","state":"已接入"},{"group":"个人 OA","entry":"审批中心","page":"待我处理","route":"/workflow/pending","state":"已接入"},{"group":"个人 OA","entry":"审批中心","page":"我发起的","route":"/workflow/my-created","state":"已接入"},{"group":"个人 OA","entry":"审批中心","page":"已处理","route":"/workflow/acted","state":"已接入"},{"group":"个人 OA","entry":"审批中心","page":"抄送我的","route":"/workflow/copied","state":"已接入"},{"group":"个人 OA","entry":"协同任务","page":"协同任务","route":"/collab/tasks","state":"已接入"},{"group":"采购管理","entry":"采购需求","page":"采购需求","route":"/procurement/requisitions/my","state":"已接入"},{"group":"采购管理","entry":"采购需求","page":"待审批","route":"/procurement/requisitions/pending-approval","state":"已接入"},{"group":"采购管理","entry":"采购订单","page":"采购订单","route":"/procurement/orders","state":"已接入"},{"group":"采购管理","entry":"采购建议","page":"采购建议","route":"/procurement/ai-purchase","state":"已接入"},{"group":"采购管理","entry":"供应商资料","page":"供应商","route":"/procurement/suppliers","state":"已接入"},{"group":"采购管理","entry":"供应商资料","page":"价格表","route":"/procurement/price-lists","state":"已接入"},{"group":"采购管理","entry":"缺料异常","page":"缺料异常","route":"/production/shortage-cases","state":"已接入"},{"group":"销售管理","entry":"销售业务","page":"订单","route":"/sales/orders","state":"已接入"},{"group":"销售管理","entry":"销售业务","page":"发运记录","route":"/sales/shipments","state":"已接入"},{"group":"销售管理","entry":"销售业务","page":"退货","route":"/sales/returns","state":"已接入"},{"group":"销售管理","entry":"应收与收款","page":"应收与收款","route":"/lsm/receivables","state":"已接入"},{"group":"销售管理","entry":"客户管理","page":"客户管理","route":"/sales/customers","state":"已接入"},{"group":"销售管理","entry":"客户价目表","page":"客户价目表","route":"/lsm/customer-prices","state":"已接入"},{"group":"销售管理","entry":"交付风险","page":"交付风险","route":"/production/delivery-risks","state":"已接入"},{"group":"销售管理","entry":"车辆字典","page":"车辆字典","route":"/sales/vehicles","state":"已接入"},{"group":"销售管理","entry":"销售付款申请","page":"销售付款申请","route":"/sales/payment-requests","state":"已接入"},{"group":"销售管理","entry":"缺料异常","page":"缺料异常","route":"/production/shortage-cases","state":"已接入"},{"group":"生产管理","entry":"计划执行","page":"生产计划","route":"/production/plans","state":"已接入"},{"group":"生产管理","entry":"计划执行","page":"领料","route":"/production/material-flow","state":"可查看"},{"group":"生产管理","entry":"计划执行","page":"生产批次","route":"/production/batches","state":"已接入"},{"group":"生产管理","entry":"计划执行","page":"生产报工","route":"/production/approval","state":"已接入"},{"group":"生产管理","entry":"计划执行","page":"称重报工","route":"/production/weigh","state":"已接入"},{"group":"生产管理","entry":"生产分析","page":"生产查询","route":"/production/analysis-query","state":"已接入"},{"group":"生产管理","entry":"生产分析","page":"缺料异常","route":"/production/shortage-cases","state":"已接入"},{"group":"生产管理","entry":"生产总览","page":"状态看板","route":"/production/kanban","state":"已接入"},{"group":"生产管理","entry":"生产总览","page":"车间大屏","route":"/dashboard/production-progress","state":"已接入"},{"group":"生产管理","entry":"生产总览","page":"在制品","route":"/production/wip","state":"已接入"},{"group":"生产管理","entry":"工序与标准","page":"工序配置","route":"/production/process-hub","state":"已接入"},{"group":"生产管理","entry":"工序与标准","page":"出成标准","route":"/production/yield-standard","state":"已接入"},{"group":"生产管理","entry":"SKU 管理","page":"SKU 管理","route":"/system/products","state":"已接入"},{"group":"生产管理","entry":"交付风险","page":"交付风险","route":"/production/delivery-risks","state":"已接入"},{"group":"生产管理","entry":"工程变更通知","page":"工程变更通知","route":"/production/bom/ecns","state":"已接入"},{"group":"生产管理","entry":"BOM调价建议","page":"BOM调价建议","route":"/production/bom/price-adjustments","state":"已接入"},{"group":"生产管理","entry":"委外收发","page":"委外收发","route":"/lsm/outsource","state":"已接入"},{"group":"仓储管理","entry":"入库与批次","page":"入库任务与批次","route":"/warehouse/materials","state":"可查看"},{"group":"仓储管理","entry":"入库与批次","page":"无单申请","route":"/warehouse/unordered-inbound-applications","state":"已接入"},{"group":"仓储管理","entry":"出库执行","page":"出库执行","route":"/warehouse/shipments","state":"可查看"},{"group":"仓储管理","entry":"调拨单","page":"调拨单","route":"/transfer/list","state":"已接入"},{"group":"仓储管理","entry":"库存查询","page":"库存查询","route":"/warehouse/inventory-query","state":"可查看"},{"group":"仓储管理","entry":"库存查询","page":"进销存汇总","route":"/lsm/stock-summary","state":"已接入"},{"group":"仓储管理","entry":"库存查询","page":"库存调整单","route":"/warehouse/inventory-adjustments","state":"已接入"},{"group":"仓储管理","entry":"入库批次","page":"入库批次","route":"/lsm/inbound-batches","state":"已接入"},{"group":"仓储管理","entry":"盘点任务","page":"盘点任务","route":"/warehouse/stocktake-query","state":"已接入"},{"group":"仓储管理","entry":"仓位与平面图","page":"仓位与平面图","route":"/warehouse/storage-locations","state":"可查看"},{"group":"仓储管理","entry":"物料资料","page":"原料字典","route":"/warehouse/material-types","state":"已接入"},{"group":"仓储管理","entry":"物料资料","page":"物料分类","route":"/warehouse/material-segments","state":"已接入"},{"group":"仓储管理","entry":"报损管理","page":"报损管理","route":"/warehouse/wastage-reports","state":"已接入"},{"group":"仓储管理","entry":"源头个体档案","page":"源头个体档案","route":"/warehouse/source-individuals","state":"已接入"},{"group":"质量管理","entry":"质量检验","page":"质量检验","route":"/quality/inspections","state":"已接入"},{"group":"质量管理","entry":"检验标准","page":"检验标准","route":"/quality/standards","state":"已接入"},{"group":"质量管理","entry":"不良分析","page":"不良分析","route":"/quality/defects","state":"已接入"},{"group":"质量管理","entry":"CCP 监控记录","page":"CCP 监控记录","route":"/quality/ccp","state":"已接入"},{"group":"质量管理","entry":"质检退回单","page":"质检退回单","route":"/quality/returns","state":"已接入"},{"group":"质量管理","entry":"废弃处理","page":"废弃处理","route":"/quality/disposals","state":"已接入"},{"group":"质量管理","entry":"批次召回","page":"批次召回","route":"/quality/recalls","state":"已接入"},{"group":"质量管理","entry":"工艺参数偏离","page":"工艺参数偏离","route":"/quality/param-deviation","state":"已接入"},{"group":"质量管理","entry":"冷链超温批次","page":"冷链超温批次","route":"/quality/cold-chain","state":"已接入"},{"group":"质量管理","entry":"包装标签拍检","page":"包装标签拍检","route":"/quality/label-qc","state":"已接入"},{"group":"质量管理","entry":"缺料异常","page":"缺料异常","route":"/production/shortage-cases","state":"已接入"},{"group":"数据与分析","entry":"AI 经营报告","page":"AI 经营报告","route":"/analytics/ai-reports","state":"已接入"},{"group":"数据与分析","entry":"经营总览","page":"经营驾驶舱","route":"/smart-bi/dashboard","state":"待整理"},{"group":"数据与分析","entry":"经营总览","page":"领域概览","route":"/analytics/overview","state":"待整理"},{"group":"数据与分析","entry":"经营分析","page":"经营主题","route":"/smart-bi/analysis-hub","state":"已接入"},{"group":"数据与分析","entry":"经营分析","page":"进销存","route":"/analytics/supply-chain","state":"待整理"},{"group":"数据与分析","entry":"经营分析","page":"物料均价","route":"/warehouse/material-price-trend","state":"已接入"},{"group":"数据与分析","entry":"成本分析","page":"成本分析","route":"/lsm/cost","state":"已接入"},{"group":"数据与分析","entry":"对账（Cretas ↔ 黑湖）","page":"对账（Cretas ↔ 黑湖）","route":"/lsm/reconcile","state":"已接入"},{"group":"数据与分析","entry":"异常预警","page":"异常预警","route":"/analytics/alert-dashboard","state":"待整理"},{"group":"数据与分析","entry":"数据工作台","page":"数据问答","route":"/smart-bi/analysis","state":"待整理"},{"group":"数据与分析","entry":"数据工作台","page":"文件导入","route":"/smart-bi/upload","state":"待整理"},{"group":"数据与分析","entry":"数据工作台","page":"映射复核","route":"/smart-bi/mapping-review","state":"待整理"},{"group":"数据与分析","entry":"数据工作台","page":"数据检查","route":"/smart-bi/data-completeness","state":"待整理"},{"group":"数据与分析","entry":"数据工作台","page":"查询模板","route":"/smart-bi/query-templates","state":"待整理"},{"group":"数据与分析","entry":"自定义报表","page":"自定义报表","route":"/unified/reports","state":"已接入"},{"group":"设置","entry":"视觉质检训练","page":"视觉质检训练","route":"/quality/vision-training","state":"已接入"},{"group":"设置","entry":"设置","page":"设置","route":"/g/settings","state":"已接入"},{"group":"设置","entry":"数字班组配置","page":"数字班组配置","route":"/crew/settings","state":"已接入"}];
+reg('/proto/map', { title: '页面地图', sub: '原型的全部菜单和页面', src: '取自原型菜单', blocks: [
+  { t: 'kpis', items: [['菜单分组', 13], ['菜单入口', 63], ['不重复的页面', 85], ['已接入', 71], ['可查看', 5], ['待整理', 9]] },
+  { t: 'table', title: '全部页面', cols: [{ k: 'group', l: '分组' }, { k: 'entry', l: '菜单入口' }, { k: 'page', l: '页面' }, { k: 'route', l: '路由' }, { k: 'state', l: '原型状态', p: 1 }], rows: PROTO_ROWS.map(function (r) { return Object.assign({}, r, { _go: pid(r.route), _d: { 说明: '点「打开这页」可以在演示里看它的示例页' } }); }), filters: ['group', 'state'] },
+  { t: 'text', text: '「待整理」的页面在原型里还没做完。这个演示里它们的示例页，是按页面名和业务常识补的，只用来看大概形态。' },
+  { t: 'list', title: '三种状态的意思', items: [
+    { t: '已接入', s: '页面按新外观和新菜单做好，可以操作', tag: '已接入' },
+    { t: '可查看', s: '能打开看，部分操作还没接', tag: '可查看' },
+    { t: '待整理', s: '沿用原版页面，菜单位置已定，页面内容还没整理', tag: '待整理' }] }
+] });
+reg('/proto/lib', { title: '组件库', sub: '统一原型用的组件和设计变量', blocks: [
+  { t: 'list', title: '技术栈', items: [
+    { t: 'Nuxt UI 4.12.0', s: 'App、Card、Button、Badge、Modal，做外壳、卡片、按钮和弹窗' },
+    { t: 'Tailwind 4.3.3', s: '图标用 Lucide' },
+    { t: 'Element Plus 2.13', s: '密集表格、选择器、抽屉继续用它' },
+    { t: 'ECharts 6.1 和 Vue Flow 1.48', s: '图表，和工序画布' },
+    { t: '一套 --cs-* 变量', s: '同时管 Nuxt UI 和 Element，外观统一' }] },
+  { t: 'list', title: '外壳尺寸', items: [
+    { t: '侧栏 232px，可折叠', s: '手机上是抽屉导航' },
+    { t: '顶栏 61px', s: '含工作区切换、菜单搜索（Ctrl K）' },
+    { t: '侧栏顶部有「常用」', s: '按账号保存，最多 12 个' },
+    { t: '圆角 10px', s: '尊重「减少动效」设置' }] },
+  { t: 'swatches', title: '设计变量', items: [['--cs-brand', '品牌蓝', '#1b65a8'], ['--cs-brand-soft', '浅蓝', '#eaf2fa'], ['--cs-page', '页面底', '#f4f6f9'], ['--cs-card', '卡片', '#ffffff'], ['--cs-text', '正文', '#1a293d'], ['--cs-text-2', '次级正文', '#41536a'], ['--cs-line', '边框', '#e5eaf1'], ['--cs-ok', '成功', '#29816b'], ['--cs-warn', '提醒', '#b38336'], ['--cs-risk', '风险', '#bb635f']] },
+  { t: 'table', title: '组件库里的页面', detail: false, search: false, cols: [{ k: 'f', l: '文件' }, { k: 'u', l: '用途' }], rows: [
+    { f: 'CanvasPage.vue', u: '工序规划画布' }, { f: 'PlansPage.vue', u: '生产计划' }, { f: 'AnalyticsPage.vue', u: '数据分析' }, { f: 'AiPage.vue', u: 'AI / Excel 工作台' }, { f: 'PlatformPage.vue', u: '平台治理' },
+    { f: 'fusion/CostOverview.vue', u: '成本概览，配色和组件组合的基准页' }, { f: 'ChartPanel.vue、Icon.vue、NativeBusiness.vue', u: '图表容器、图标、业务页嵌入' }] },
+  { t: 'text', text: '系统组件库是一套沙盒，不改账号权限和业务数据。' }
+] });
+reg('/proto/src', { title: '源码位置', sub: '原型在仓库里的哪些目录', blocks: [
+  { t: 'text', text: '全部在仓库 prototypes/ 下，合并请求 cretasfuture-ai/cretas#1741。' },
+  { t: 'table', title: '目录', detail: false, search: false, cols: [{ k: 'd', l: '目录' }, { k: 'c', l: '内容' }], rows: [
+    { d: 'unified-v1/src', c: '统一原型页面，72 个 Vue 文件' },
+    { d: 'unified-v1/public', c: 'shell.js、pages-d.js 等补丁层，给编译好的味美页面套外壳' },
+    { d: 'unified-v1/spec', c: '规格与决策：DECISIONS、MIGRATION-PLAN、各批审计' },
+    { d: 'component-library', c: '系统组件库，含旧版 web-admin 快照 legacy-src' },
+    { d: 'ydwm-nuxt-system、ydwm-v1/public', c: '味美的 Nuxt UI 源码、设计变量 design-system' },
+    { d: 'blacklake-v35', c: '黑湖复刻原型的自写脚本与对照摘要' }] },
+  { t: 'bars', title: '72 个页面按业务分布', unit: '页', items: [['production 生产', 16], ['supply 供应', 16], ['crew 数字班组', 13], ['frame / frame-g 外壳', 9], ['home 首页与分析', 7], ['cost 成本', 5], ['quality 质量', 4], ['collab 协同', 2]] },
+  { t: 'text', text: '没收进仓库的有：味美原版的编译产物、各客户的数据和测试状态、黑湖复刻的页面与样式（第三方资源，仓库是公开的）。' }
+] });
+reg('/proto/open', { title: '怎么打开', sub: '真原型在本机运行，这里是在线演示', blocks: [
+  { t: 'text', text: '你现在看的是在线演示：菜单和页面照原型，数据全是虚构的，操作不保存。真原型是一组本机服务，里面有客户数据，所以没有做成在线版。' },
+  { t: 'list', title: '本机打开', items: [
+    { t: '统一入口  http://127.0.0.1:19063/open', s: '代理 19060（味美），并嵌入 19062（另一个工厂的工作区）', act: { l: '复制', copy: 'http://127.0.0.1:19063/open' } },
+    { t: '重启统一入口  accounts\\unified-v1\\tools\\restart.ps1', s: '只在运行原型的那台电脑上有效', act: { l: '复制', copy: 'accounts\\unified-v1\\tools\\restart.ps1' } }] },
+  { t: 'text', text: '这几个地址只在运行原型的那台电脑上有效，手机和别人的电脑打不开。' }
+] });
+
+window.addEventListener('hashchange', render);
+document.addEventListener('input', function (e) {
+  if (e.target.dataset && e.target.dataset.tbq) {
+    var tk = e.target.dataset.tbq, tp = e.target.selectionStart; (S.tb[tk] || (S.tb[tk] = { q: '', f: {}, n: 15 })).q = e.target.value; S.tb[tk].n = 15; render();
+    var tn = document.querySelector('[data-tbq="' + tk + '"]'); if (tn) { tn.focus(); try { tn.setSelectionRange(tp, tp); } catch (x) { /* 忽略 */ } } return;
+  }
+  if (e.target.id === 'tq') { S.q = e.target.value; var p = e.target.selectionStart; render(); var n = $('#tq'); if (n) { n.focus(); n.setSelectionRange(p, p); } return; }
+  if (e.target.closest && e.target.closest('#wform')) updatePreview();
+});
+document.addEventListener('change', function (e) {
+  if (e.target.dataset && e.target.dataset.sw) { S.sw[e.target.dataset.sw] = e.target.checked; toast((e.target.checked ? '已开启' : '已关闭') + '（示例，不保存）'); render(); return; }
+  if (e.target.id === 'onlyrun') { S.onlyRun = e.target.checked; render(); return; }
+  if (e.target.closest && e.target.closest('#wform')) updatePreview();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeDlg();
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('tr.pickrow')) { e.preventDefault(); e.target.click(); }
+});
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-go],[data-order],[data-kpi],[data-role],[data-weigh],[data-batch],[data-confirm],[data-undo],[data-src],[data-totodo],[data-closing],[data-conc],[data-close-ok],[data-close-cancel],[data-toggle-closed],[data-restore],[data-cf],[data-cost],[data-task],[data-revoke],[data-addrow],[data-delrow],[data-save],[data-act],[data-close-dlg],[data-close-dlg-btn],[data-grp],[data-tbf],[data-tbrow],[data-tbmore],[data-tab],[data-toast],[data-copy]');
+  if (!el) return;
+  var d = el.dataset;
+  if (d.grp) { var g0 = d.grp, cur0 = (MENU.filter(function (g) { return g[0] === g0; })[0] || [0, []])[1].some(function (x) { return pid(x[1]) === S.page; }); S.openG[g0] = !(S.openG[g0] === undefined ? cur0 : S.openG[g0]); renderNav(); return; }
+  if (d.tbf) { var pf = d.tbf.split('|'), sf = S.tb[pf[0]] || (S.tb[pf[0]] = { q: '', f: {}, n: 15 }); sf.f[pf[1]] = pf.slice(2).join('|'); sf.n = 15; render(); return; }
+  if (d.tbrow) { var pr = d.tbrow.split('|'), tb = BLOCKS[pr[0]], row = tb.rows[+pr[1]]; var pairs = tb.cols.map(function (c) { return [c.l, plain(row[c.k], c)]; }); Object.keys(row._d || {}).forEach(function (k) { pairs.push([k, plain(row._d[k])]); }); openPairs(plain(row[tb.cols[0].k]), pairs, row._go); return; }
+  if (d.copy) { var ct = d.copy, okc = function () { toast('已复制'); }; try { navigator.clipboard.writeText(ct).then(okc, function () { toast('复制被拦了，请手动选中文字复制'); }); } catch (x) { toast('复制被拦了，请手动选中文字复制'); } return; }
+  if (d.tbmore) { S.tb[d.tbmore].n += 15; render(); return; }
+  if (d.tab) { var pt = d.tab.split('|'); S.tab[pt[0]] = +pt[1]; render(); return; }
+  if (d.toast) { toast(d.toast); return; }
+  if (el.hasAttribute('data-close-dlg') && e.target !== el && !el.hasAttribute('data-close-dlg-btn')) return;
+  if ('closeDlg' in d || 'closeDlgBtn' in d) { closeDlg(); return; }
+  if (d.go) { closeDlg(); go(d.go); return; }
+  if (d.order) { openOrder(d.order); return; }
+  if (d.kpi) { if (d.kpi === 'cost') go('cost'); else toast('原型里这里会跳到「' + d.name + '」页，这版没收入'); return; }
+  if (d.role) { S.role = d.role; render(); return; }
+  if (d.weigh) { S.task = d.weigh; S.onlyRun = true; S.q = ''; go('weigh'); return; }
+  if (d.batch) { S.batched[d.batch] = true; toast('已为 ' + d.batch + ' 建批次（示例）'); render(); return; }
+  if (d.confirm) { S.issue[d.confirm] = { s: 'closed', c: '已处理', n: '已转待办并确认' }; toast('已确认'); render(); return; }
+  if (d.undo) { delete S.issue[d.undo]; toast('已撤回到「发现的问题」'); render(); return; }
+  if ('src' in d) { S.srcFilter = d.src; render(); return; }
+  if (d.totodo) { S.issue[d.totodo] = { s: 'todo' }; toast('已转待办，见「待办」里的「等我确认」'); render(); return; }
+  if (d.closing) { S.closing = d.closing; S.conc = ''; render(); return; }
+  if (d.conc) { S.conc = d.conc; var n = $('#note'), v = n ? n.value : ''; render(); var n2 = $('#note'); if (n2) n2.value = v; return; }
+  if (d.closeOk) {
+    var note = ($('#note').value || '').trim();
+    if (!S.conc) { toast('先选一个结论：已处理 / 误报 / 接受偏差'); return; }
+    if (!note) { toast('再写一句原因'); return; }
+    S.issue[d.closeOk] = { s: 'closed', c: S.conc, n: note }; S.closing = ''; S.conc = ''; toast('已关闭，可在「已关闭」里恢复'); render(); return;
+  }
+  if ('closeCancel' in d) { S.closing = ''; S.conc = ''; render(); return; }
+  if ('toggleClosed' in d) { S.showClosed = !S.showClosed; render(); return; }
+  if (d.restore) { delete S.issue[d.restore]; toast('已恢复'); render(); return; }
+  if (d.cf) { S.costFilter = d.cf; render(); return; }
+  if (d.cost) { S.costPick = d.cost; render(); return; }
+  if (d.task) { S.task = d.task; render(); return; }
+  if (d.revoke) { S.records.forEach(function (r) { if (r.id === d.revoke) r.revoked = true; }); toast('已撤销这笔称重'); render(); return; }
+  if (d.addrow) { $('#rows-' + d.addrow).insertAdjacentHTML('beforeend', subRow(d.addrow)); updatePreview(); return; }
+  if ('delrow' in d) { var r = el.closest('.r'); r.parentNode.removeChild(r); updatePreview(); return; }
+  if ('save' in d) { saveWeigh(); return; }
+  if (d.act === 'reset') { S = fresh(); closeDlg(); toast('已还原示例数据'); location.hash = 'today'; render(); }
+});
+if (!TITLES[location.hash.replace('#', '')]) S.page = 'today';
+render();
+</script>
