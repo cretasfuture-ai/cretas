@@ -76,6 +76,56 @@ function sessionTitle(cliId) {
 }
 const isOrganizerTitle = (t) => typeof t === 'string' && /^Organizer[｜|]/.test(t);
 
+// 交班遗留: 已被接手却没归档的会话 (2026-11-18: BP 协调会话「产品与传统软件对比研究」把协调交给
+// 「Organizer｜BP 对比 deck｜第 2 任」后一直置顶没归档; 它标题不是 Organizer｜, 交班流程第 5 步没人认领)。
+// 两类: A 标题已改成「[已交班…」但没归档; B 是某个现任 Organizer 会话的 spawnedFrom 前任、标题已不是 Organizer｜、没归档。
+// 前任标题仍是 Organizer｜ = 交班还在进行, 不报。都要求空闲 >= 30 分钟, 避开交班当轮。
+// 返回 null = 没量到 (读不到会话记录)。
+function loadRecords() {
+  const root = sessionStoreRoot();
+  if (!fs.existsSync(root)) return null;
+  const out = [];
+  for (const a of fs.readdirSync(root)) {
+    const da = path.join(root, a);
+    if (!fs.statSync(da).isDirectory()) continue;
+    for (const b of fs.readdirSync(da)) {
+      const db = path.join(da, b);
+      if (!fs.statSync(db).isDirectory()) continue;
+      for (const f of fs.readdirSync(db)) {
+        if (!/^local_.*\.json$/.test(f)) continue;
+        try { out.push(JSON.parse(fs.readFileSync(path.join(db, f), 'utf8'))); } catch (_) { /* 半截文件 */ }
+      }
+    }
+  }
+  return out;
+}
+function handoverLeftovers(recs, now, idleMs = 30 * 60 * 1000) {
+  const byId = new Map(recs.map((r) => [r.sessionId, r]));
+  const live = (r) => r && r.isArchived !== true;
+  const idle = (r) => now - (Number(r.lastActivityAt) || 0) >= idleMs;
+  const out = new Map();
+  for (const r of recs) {
+    if (!live(r)) continue;
+    const t = r.title || '';
+    if (/^\[已交班/.test(t) && idle(r)) out.set(r.sessionId, `${t}（已改名交班, 没归档）`);
+    if (isOrganizerTitle(t)) {
+      const pid = r.spawnedFrom && r.spawnedFrom.sessionId;
+      const p = pid && byId.get(pid);
+      if (live(p) && !isOrganizerTitle(p.title) && idle(p) && !out.has(pid)) {
+        out.set(pid, `${p.title || '(无标题)'}（现任「${t}」的前任, 没归档）`);
+      }
+    }
+  }
+  return [...out].map(([id, why]) => ({ id, why })).sort((x, y) => (x.id < y.id ? -1 : 1));
+}
+function leftoverBlock(list) {
+  return [
+    `[organizer] 交班遗留: ${list.length} 个会话已被接手或已交班, 还没归档 (id 来自本机会话记录):`,
+    ...list.map((x) => `  - ${x.why} = ${x.id}`),
+    '  处理: get_session 核对它名下没有未 detach 的在飞线、worktree 干净无未推提交 -> set_pinned false -> archive_session。不是你批次的, 发给对应现任 organizer 处理; 故意保留的写进交接并说明原因。',
+  ].join('\n');
+}
+
 // 交班流程原文: 运行时从 organizer SKILL.md 截取, 不另抄一份 (形态 D)
 function handoverSection() {
   const p = process.env.CRETAS_ORGANIZER_SKILL || path.join(__dirname, '..', 'skills', 'organizer', 'SKILL.md');
@@ -185,6 +235,23 @@ function main(input) {
     st.briefed = true;
     brief = organizerBlock('本会话是 organizer: 交班 (含被交班) 时照下面做');
   }
+  // organizer: 每 10 分钟扫一次交班遗留; 名单变了就说, 没变则 6 小时再说一次
+  let leftover = null;
+  const scanEvery = process.env.CRETAS_LEFTOVER_SCAN_MS !== undefined ? Number(process.env.CRETAS_LEFTOVER_SCAN_MS) : 10 * 60 * 1000;
+  if (st.org === true && now - (st.leftoverAt || 0) > scanEvery) {
+    st.leftoverAt = now;
+    const recs = loadRecords();
+    if (recs !== null) {
+      const list = handoverLeftovers(recs, now);
+      const key = list.map((x) => x.id).join(',');
+      if (list.length && (key !== st.leftoverKey || now - (st.leftoverSaidAt || 0) > 6 * 3600 * 1000)) {
+        leftover = leftoverBlock(list);
+        st.leftoverSaidAt = now;
+      }
+      st.leftoverKey = key;
+    }
+  }
+  if (leftover) brief = brief ? brief + '\n' + leftover : leftover;
   fs.writeFileSync(sp + '.tmp', JSON.stringify(st), 'utf8');
   fs.renameSync(sp + '.tmp', sp);
   if (!speak) return [brief, nag].filter(Boolean).join('\n') || null;
@@ -208,7 +275,7 @@ function main(input) {
     ...how,
   ];
   const text = (level === 2 ? hard : soft).join('\n');
-  if (st.org === true) return text + '\n' + organizerBlock('organizer 到线了, 交班按下面的流程走 (上面「交接 ≤ 15 行」同样适用)');
+  if (st.org === true) return text + '\n' + organizerBlock('organizer 到线了, 交班按下面的流程走 (上面「交接 ≤ 15 行」同样适用)') + (leftover ? '\n' + leftover : '');
   return brief ? brief + '\n' + text : text;
 }
 
