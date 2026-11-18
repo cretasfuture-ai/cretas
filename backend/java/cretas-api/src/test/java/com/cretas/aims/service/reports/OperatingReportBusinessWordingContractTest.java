@@ -45,10 +45,11 @@ class OperatingReportBusinessWordingContractTest {
         assertThrows(IllegalArgumentException.class, () -> codec.parseModelOutput(bad2, s));
     }
 
-    @Test void renderedBodyUsesBusinessWordsKeepsPercentDecimalsAndHasFollowUp() {
+    @Test void renderedBodyUsesBusinessWordsRoundsPercentAndHasFollowUp() {
         var insights = List.of(new Insight(InsightKind.REVIEW_RECORDED_VALUE, "sales.mom", Action.REVIEW_SALES));
         String text = codec.render(snapshot("5", insights), true);
-        assertTrue(text.contains("8.224%"), text);
+        assertTrue(text.contains("环比：8%"), text);
+        assertFalse(text.contains("8.224"), text);
         assertTrue(text.contains("覆盖率 33.3%"), text);
         assertTrue(text.contains("## 跟进分析"), text);
         assertTrue(text.contains("环比：复核销售结构与比较期间。"), text);
@@ -64,5 +65,35 @@ class OperatingReportBusinessWordingContractTest {
         assertTrue(text.contains(OperatingReportCodec.NO_DATA_NOTICE), text);
         assertEquals("该期间没有销售订单，各项销售数据为 0，建议换一个有订单的期间。", codec.previewLine(s));
         assertNull(codec.previewLine(snapshot("5", List.of())));
+    }
+
+    private Metric m(String id, String v, String unit) { return new Metric(id, id, new BigDecimal(v), unit, null, null, "x"); }
+
+    /** LSM-COSTBI-A3: F006 报告 14748 形状的数值 + 模型多写单位的输出。 */
+    @Test void narrativeRoundsPercentTwoDecimalAmountsAndCollapsesDuplicateUnits() {
+        var metrics = java.util.Map.of(
+                "mom", m("mom", "8.224", "%"), "yoy", m("yoy", "33.646", "%"), "rate", m("rate", "48.157", "%"),
+                "amt", m("amt", "118866.6875", "元"), "inv", m("inv", "1997.81875", "元"), "x", m("x", "40572", "元"));
+        assertEquals("环比 8%，同比 34%，毛利率 48%。",
+                OperatingReportCodec.fillNarrative("环比 {{mom}}，同比 {{yoy}}%，毛利率 {{rate}} %。", metrics).orElseThrow());
+        assertEquals("销售 118866.69元，存货 1997.82元，成本 40572元。",
+                OperatingReportCodec.fillNarrative("销售 {{amt}}，存货 {{inv}}元，成本 {{x}} 元。", metrics).orElseThrow());
+        assertEquals("8%", OperatingReportCodec.fillNarrative("{{mom}}%%", metrics).orElseThrow());
+    }
+
+    @Test void structuredSectionAndPreviewUseSameFormat() {
+        var metrics = List.of(m("a", "118866.6875", "元"), m("b", "54.599", "%"));
+        var s = new OperatingReportSnapshot(SCHEMA, Status.SUCCESS, "monthly", "2026-10-01", "2026-10-31", "2026-11-01T00:00:00Z",
+                List.of(), List.of(new Section("sales", "销售", true, "x", metrics)),
+                List.of(new Insight(InsightKind.REVIEW_RECORDED_VALUE, "b", Action.REVIEW_SALES)), null);
+        String text = codec.render(s, true);
+        assertTrue(text.contains("a：118866.69元"), text);
+        assertTrue(text.contains("b：55%"), text);
+        assertFalse(text.contains("%%"), text);
+        var withConclusion = s.withInsights(codec.parseModelOutput(
+                "{\"conclusions\":[{\"text\":\"毛利率 {{b}}% 需关注\",\"refs\":[\"b\"]}]}", s));
+        String preview = codec.previewLine(withConclusion);
+        assertEquals(-1, String.valueOf(preview).indexOf("%%"), preview);
+        assertTrue(String.valueOf(preview).contains("55%"), preview);
     }
 }

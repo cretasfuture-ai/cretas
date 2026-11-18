@@ -125,9 +125,22 @@ public class OperatingReportCodec {
     }
 
     static String formatValue(OperatingReportSnapshot.Metric metric) {
-        java.math.BigDecimal v = metric.value().setScale(2, java.math.RoundingMode.HALF_UP).stripTrailingZeros();
         String unit = metric.unit() == null ? "" : metric.unit();
-        return v.toPlainString() + unit;
+        return display(metric.value(), unit) + unit;
+    }
+
+    /** 数字展示口径 (BP 47/08b): 百分比取整, 其余 (金额等) 两位小数去尾零。结构化段落与叙述占位同走这一处。 */
+    static String display(java.math.BigDecimal value, String unit) {
+        int scale = "%".equals(unit) ? 0 : 2;
+        return value.setScale(scale, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+    }
+
+    private static final java.util.regex.Pattern DUP_PERCENT = java.util.regex.Pattern.compile("([%％])(?:[ \\u00a0]*[%％])+");
+    private static final java.util.regex.Pattern DUP_YUAN = java.util.regex.Pattern.compile("元(?:[ \\u00a0]*元)+");
+
+    /** 模型常在 {{占位}} 后再写一遍单位 (占位值已带单位) —— 兜底去掉重复的 % 与 元。 */
+    static String collapseDuplicateUnits(String text) {
+        return DUP_YUAN.matcher(DUP_PERCENT.matcher(text).replaceAll("$1")).replaceAll("元");
     }
 
     /** 占位符换成真实指标值; 引用的指标已被遮 / 无值 → 返回 empty (整条不显示)。 */
@@ -140,7 +153,7 @@ public class OperatingReportCodec {
             m.appendReplacement(out, java.util.regex.Matcher.quoteReplacement(formatValue(metric)));
         }
         m.appendTail(out);
-        return Optional.of(out.toString());
+        return Optional.of(collapseDuplicateUnits(out.toString()));
     }
 
     /** 工艺保密遮挡标记 (与其他页面「已保密」一致): 值为 null 且缺失原因是它, 正文显示「已保密」而不是「数据缺失」。 */
@@ -255,10 +268,9 @@ public class OperatingReportCodec {
         return switch (action) { case VERIFY_COST -> "核查并补齐成本记录。"; case VERIFY_ADDRESS -> "核查订单与客户地址。"; case VERIFY_SALESPERSON -> "补齐订单业务员归属。"; case FOLLOW_UP_COLLECTION -> "跟进客户回款与逾期应收。"; case REVIEW_PROFIT -> "复核已过账凭证与盈利情况。"; case REVIEW_INVENTORY -> "核查库存余量与预留安排。"; case REVIEW_SALES -> "复核销售结构与比较期间。"; };
     }
 
-    /** 数字展示: 百分比保留至多三位小数 (不取整), 其余保持原精度去尾零。 */
+    /** 数字展示: 百分比取整, 金额等两位小数 (与叙述占位同口径)。 */
     private static String plain(OperatingReportSnapshot.Metric metric) {
-        var v = "%".equals(metric.unit()) ? metric.value().setScale(3, java.math.RoundingMode.HALF_UP) : metric.value();
-        return v.stripTrailingZeros().toPlainString();
+        return display(metric.value(), metric.unit());
     }
 
     /** 取数来源的业务名称 (原为接口路径等开发口径)。 */
