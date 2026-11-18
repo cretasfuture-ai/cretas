@@ -110,7 +110,7 @@ public class ReportSchedulingListTool extends AbstractBusinessTool {
                 factoryId, startDate, endDate, null, PageRequest.of(pageNum, pageSize));
 
         Map<String, Object> result = new HashMap<>();
-        result.put("plans", plans.getContent());
+        result.put("plans", plans.getContent().stream().map(com.cretas.aims.ai.tool.impl.scheduling.SchedulingPlanViews::toMap).collect(java.util.stream.Collectors.toList()));
         result.put("total", plans.getTotalElements());
         result.put("totalPages", plans.getTotalPages());
         result.put("currentPage", pageNum);
@@ -126,7 +126,7 @@ public class ReportSchedulingListTool extends AbstractBusinessTool {
             for (SchedulingPlanDTO plan : plans.getContent()) {
                 sb.append(i++).append(". ")
                   .append(plan.getPlanName() != null ? plan.getPlanName() : "未编号")
-                  .append(" | 状态: ").append(plan.getStatus() != null ? plan.getStatus() : "未知")
+                  .append(" | 状态: ").append(com.cretas.aims.ai.tool.impl.scheduling.SchedulingPlanViews.statusLabel(plan.getStatus()))
                   .append("\n");
                 if (i > 5) break;
             }
