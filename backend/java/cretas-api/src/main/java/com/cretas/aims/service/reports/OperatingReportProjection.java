@@ -88,8 +88,17 @@ public class OperatingReportProjection {
             metrics.addAll(masked);
             sections.add(new OperatingReportSnapshot.Section(section.id(),section.title(),section.priceSensitive(),section.basis(),metrics));
         }
+        // 被遮产品的名字 (指标标签「<产品名> 毛利」的首段): 自由结论只要点了名也整条不给, 不依赖模型老实填 refs
+        java.util.Set<String> maskedNames=new java.util.HashSet<>();
+        for(OperatingReportSnapshot.Section section:snapshot.sections())for(OperatingReportSnapshot.Metric metric:section.metrics())
+            if(maskedIds.contains(metric.id())&&metric.label()!=null){String name=metric.label().split(" ")[0];if(!name.isBlank())maskedNames.add(name);}
         java.util.List<OperatingReportSnapshot.Insight> insights=snapshot.insights()==null?null
-                :snapshot.insights().stream().filter(i->i.metricId()==null||!maskedIds.contains(i.metricId())).toList();
+                :snapshot.insights().stream().filter(i->{
+                    if(i.kind()==OperatingReportSnapshot.InsightKind.NARRATIVE)
+                        return (i.refs()==null||i.refs().stream().noneMatch(maskedIds::contains))
+                                &&(i.text()==null||maskedNames.stream().noneMatch(i.text()::contains));
+                    return i.metricId()==null||!maskedIds.contains(i.metricId());
+                }).toList();
         return new OperatingReportSnapshot(snapshot.schema(),snapshot.status(),snapshot.reportType(),snapshot.periodStart(),snapshot.periodEnd(),
                 snapshot.fetchedAt(),snapshot.sources(),sections,insights,snapshot.failure(),snapshot.audit());
     }

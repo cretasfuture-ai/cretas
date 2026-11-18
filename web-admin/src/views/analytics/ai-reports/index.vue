@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
+import { exportAIReport, generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
+import type { ReportExportFormat } from '@/api/aiReports';
 import type { AIReportDetail, AIReportSummary, OperatingReportType } from '@/api/aiReports';
 
 const auth = useAuthStore();
@@ -14,6 +15,9 @@ const router = useRouter();
 const reports = ref<AIReportSummary[]>([]);
 const report = ref<AIReportDetail | null>(null);
 const loading = ref(false);
+// 首次读取完成前不许显示「暂无报告」: 列表还没回来时空表格会把空态文字露在加载遮罩下面 (E13: 首次打开像没有报告, 刷新才出现)
+const loaded = ref(false);
+const emptyText = computed(() => (loading.value || !loaded.value) && !error.value ? '报告加载中…' : '暂无报告');
 const generating = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
@@ -38,8 +42,8 @@ async function load() {
   try {
     const response = await listAIReports(factoryId.value, filter.value || undefined);
     if (!response.success || !response.data) throw new Error(response.message || '报告列表读取失败。');
-    if (epoch === readEpoch) reports.value = response.data.reports;
-  } catch (failure) { if (epoch === readEpoch) error.value = failureText(failure); }
+    if (epoch === readEpoch) { reports.value = response.data.reports; loaded.value = true; }
+  } catch (failure) { if (epoch === readEpoch) { error.value = failureText(failure); loaded.value = true; } }
   finally { if (epoch === readEpoch) loading.value = false; }
 }
 async function openReport(id: number, updateRoute = true) {
@@ -81,13 +85,25 @@ function download() {
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = `经营报告-${report.value.reportId}.md`; anchor.click();
   URL.revokeObjectURL(url);
 }
+const exporting = ref<ReportExportFormat | ''>('');
+async function exportFile(format: ReportExportFormat) {
+  if (!factoryId.value || !report.value || report.value.generationStatus === 'FAILED' || !report.value.success || exporting.value) return;
+  exporting.value = format;
+  try {
+    const blob = await exportAIReport(factoryId.value, report.value.reportId, format);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `经营报告-${report.value.reportId}.${format}`; anchor.click();
+    URL.revokeObjectURL(url);
+  } catch (failure) { ElMessage.error(failureText(failure)); }
+  finally { exporting.value = ''; }
+}
 function rowClick(row: AIReportSummary) { void openReport(row.id); }
 function closeDetail() {
   if (route.params.reportId) void router.replace({ name: 'AnalyticsAIReports' });
 }
 watch(filter, () => void load());
 watch(() => route.params.reportId, (id) => { if (id && Number.isSafeInteger(Number(id))) void openReport(Number(id), false); });
-watch([factoryId, () => auth.currentRole, () => auth.user?.id], () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; detailOpen.value = false; void load(); });
+watch([factoryId, () => auth.currentRole, () => auth.user?.id], () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; loaded.value = false; detailOpen.value = false; void load(); });
 onMounted(() => { void load(); if (route.params.reportId) void openReport(Number(route.params.reportId), false); });
 </script>
 
@@ -112,7 +128,7 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
         <el-button type="primary" :loading="generating" @click="generate">生成报告</el-button>
       </div>
     </div>
-    <el-table v-loading="loading" :data="reports" empty-text="暂无报告" @row-click="rowClick">
+    <el-table v-loading="loading" :data="reports" :empty-text="emptyText" @row-click="rowClick">
       <el-table-column label="类型" width="100"><template #default="{ row }">{{ labels[row.reportType] || row.reportType }}</template></el-table-column>
       <el-table-column label="报告期间" min-width="210"><template #default="{ row }">{{ row.periodStart || '—' }} 至 {{ row.periodEnd || '—' }}</template></el-table-column>
       <el-table-column label="状态与说明" min-width="320"><template #default="{ row }">
@@ -131,7 +147,7 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
           <pre class="report-body">{{ body }}</pre>
         </template>
       </div>
-      <template #footer><el-button v-if="body" @click="download">下载当前可见全文</el-button><el-button @click="detailOpen = false">关闭</el-button></template>
+      <template #footer><template v-if="body && report && report.success"><el-button type="primary" :loading="exporting === 'pdf'" @click="exportFile('pdf')">导出 PDF</el-button><el-button :loading="exporting === 'pptx'" @click="exportFile('pptx')">导出 PPT</el-button></template><el-button v-if="body" @click="download">下载文本（.md）</el-button><el-button @click="detailOpen = false">关闭</el-button></template>
     </el-dialog>
   </section>
 </template>
