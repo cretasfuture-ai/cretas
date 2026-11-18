@@ -15,6 +15,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.mapper.MaterialBatchMapper;
 import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.MaterialConsumptionRepository;
+import com.cretas.aims.security.DataScopeContext;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Collections;
@@ -48,7 +49,14 @@ class MaterialBatchListUnsettledContractTest {
         PageRequest pr = new PageRequest();
         pr.setPage(1);
         pr.setSize(20);
-        PageResponse<MaterialBatchDTO> out = service.getMaterialBatchList("F1", pr);
+        DataScopeContext.push(DataScopeContext.builder().userId(1L).factoryId("F1")
+                .roleCode("factory_super_admin").scope(com.cretas.aims.entity.enums.DataScope.ALL).column("created_by").build());
+        PageResponse<MaterialBatchDTO> out;
+        try {
+            out = service.getMaterialBatchList("F1", pr);
+        } finally {
+            DataScopeContext.pop();
+        }
 
         MaterialBatchDTO h = out.getContent().get(0);
         MaterialBatchDTO f = out.getContent().get(1);
