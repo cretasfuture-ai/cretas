@@ -10,6 +10,10 @@ import type { CsTableColumn } from '@/types/csTable';
 import type { CsBadgeColor } from '@/utils/csBadge';
 import { useRoute } from 'vue-router';
 import { readMarginPeriod } from './shipmentMarginNavigation';
+import ChartSortControl from '@/components/common/ChartSortControl.vue';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { sortChartRows, type ChartSortMode } from '@/utils/chartSort';
+import { buildSkuMarginInsight, skuTopRows, r1 } from '@/utils/chartPageInsights';
 import {
   readSkuMarginResponse,
   fmtPct,
@@ -111,6 +115,13 @@ const SORT_VALUE: Record<SortKey, (r: SkuMarginRow) => number | null> = {
   catalogMargin: (r) => r.catalog.marginRate,
 };
 
+// 图表排列方式（问题 50）：先取毛利率前 10，再按所选方式排列显示
+const chartSort = ref<ChartSortMode>('valueDesc');
+// 一图一分析（问题 40）：和图同一份行数据现算
+const skuInsight = computed(() => buildSkuMarginInsight(
+  tableData.value.map((r) => ({ name: r.productName, rate: r.realized.marginRate })),
+));
+
 /** 有「实际销售毛利率」的行 (null 不参与任何统计 / 排名, ⛔ 不当 0) */
 const ratedRows = computed(() => tableData.value.filter((r) => r.realized.marginRate !== null));
 
@@ -158,10 +169,12 @@ function initChart() {
 
   chartInstance = echarts.init(chartRef.value, 'cretas');
 
-  const top10 = [...ratedRows.value]
-    .sort((a, b) => (b.realized.marginRate as number) - (a.realized.marginRate as number))
-    .slice(0, 10)
-    .reverse(); // reverse so highest is at top of horizontal bar
+  const picked = skuTopRows(ratedRows.value.map((r) => ({ row: r, rate: r.realized.marginRate })))
+    .map((x) => x.row);
+  // 横向柱图 y 轴自下而上，reverse 后第一名在最上面
+  const top10 = sortChartRows(
+    picked, chartSort.value, (r) => r.realized.marginRate, (r) => r.productName,
+  ).reverse();
 
   if (top10.length === 0) {
     chartInstance.setOption({
@@ -171,7 +184,7 @@ function initChart() {
   }
 
   const names = top10.map((r) => r.productName);
-  const rates = top10.map((r) => Math.round((r.realized.marginRate as number) * 10) / 10);
+  const rates = top10.map((r) => r1(r.realized.marginRate as number));
 
   chartInstance.setOption({
     tooltip: {
@@ -237,7 +250,7 @@ onBeforeUnmount(() => {
 });
 
 // Re-draw chart when data changes
-watch(tableData, async () => {
+watch([tableData, chartSort], async () => {
   await nextTick();
   initChart();
 });
@@ -439,7 +452,9 @@ function handleRefresh() {
               <!-- Bar Chart: Top 10 SKUs by 实际销售毛利率 -->
               <div class="chart-section">
                 <h3 class="section-title">前10名产品订单毛利率</h3>
+                <ChartSortControl v-model="chartSort" class="chart-sort" data-testid="margin-chart-sort" />
                 <div ref="chartRef" class="chart-container"></div>
+                <ChartInsight :insight="skuInsight" depth="detailed" class="chart-insight-slot" data-testid="margin-chart-insight" />
               </div>
 
               <!-- Main Table -->
@@ -522,6 +537,8 @@ function handleRefresh() {
 .chart-section { margin-bottom: var(--cs-space-6); }
 .section-title { font-size: var(--cs-type-section); font-weight: 600; color: var(--cs-text); margin: 0 0 var(--cs-space-3); padding-left: 10px; border-left: 3px solid var(--cs-primary); }
 .chart-container { width: 100%; height: 360px; }
+.chart-sort { margin-bottom: var(--cs-space-2); }
+.chart-insight-slot { margin-top: var(--cs-space-2); }
 .pager { display: flex; justify-content: flex-end; align-items: center; gap: var(--cs-space-3); padding-top: var(--cs-space-4); border-top: 1px solid var(--cs-border); margin-top: var(--cs-space-4); }
 .na { color: var(--cs-muted); }
 .na-reason { margin-top: 2px; font-size: 12px; line-height: 1.4; color: var(--cs-muted); white-space: normal; }
