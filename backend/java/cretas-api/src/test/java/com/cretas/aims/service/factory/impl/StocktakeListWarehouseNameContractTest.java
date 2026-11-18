@@ -17,7 +17,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.test.util.ReflectionTestUtils;
 
-class StocktakeListWarehouseNameTest {
+class StocktakeListWarehouseNameContractTest {
 
     @Test
     void listCarriesWarehouseNameAndLeavesUnknownNull() {

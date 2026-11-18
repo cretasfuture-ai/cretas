@@ -7,6 +7,8 @@ import com.cretas.aims.dto.source.SourceIndividualLookupResult;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +39,9 @@ import java.util.UUID;
 public class SourceIndividualService {
 
     private final SourceIndividualRepository repository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private MaterialBatchRepository materialBatchRepository;
 
     // ── 读 ────────────────────────────────────────────────────────────────
 
@@ -218,16 +223,43 @@ public class SourceIndividualService {
         repository.delete(require(factoryId, id));
     }
 
-    /** 撤销: 必须写原因, 先落原因再软删, 行保留可查。 */
+    /**
+     * 撤销: 必填原因(≤255), 已被原料批次引用的个体不许撤销(撤销会让它从溯源链里消失);
+     * 先落原因/撤销人/时间再软删, 行保留, 可经 {@link #listRevoked} 查回。
+     */
     @Transactional
-    public void revoke(String factoryId, String id, String reason) {
-        if (!StringUtils.hasText(reason)) {
+    public SourceIndividualDTO revoke(String factoryId, String id, String reason, String revokedBy) {
+        String r = reason == null ? null : reason.trim();
+        if (!StringUtils.hasText(r)) {
             throw new BusinessException(400, "撤销原因不能为空");
         }
+        if (r.length() > 255) {
+            throw new BusinessException(400, "撤销原因最长 255 字");
+        }
         SourceIndividual entity = require(factoryId, id);
-        entity.setRevokeReason(reason.trim());
-        repository.saveAndFlush(entity);
+        List<MaterialBatch> used = materialBatchRepository
+                .findByFactoryIdAndSourceIndividualIdOrderByReceiptDateDesc(factoryId, id);
+        if (!used.isEmpty()) {
+            String batchNos = used.stream().limit(5).map(MaterialBatch::getBatchNumber)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, "已被批次 " + batchNos
+                    + (used.size() > 5 ? " 等 " + used.size() + " 个批次" : "") + " 使用，不能撤销")
+                    .withCode("IN_USE")
+                    .withHint("先处理引用它的批次, 再撤销该个体档案");
+        }
+        entity.setRevokeReason(r);
+        entity.setRevokedBy(revokedBy);
+        entity.setRevokedAt(java.time.LocalDateTime.now());
+        SourceIndividualDTO dto = toDTO(repository.saveAndFlush(entity));
         repository.delete(entity);
+        return dto;
+    }
+
+    /** 已撤销档案(只读), 带 factory_id。 */
+    @Transactional(readOnly = true)
+    public List<SourceIndividualDTO> listRevoked(String factoryId) {
+        return repository.findRevokedByFactoryId(factoryId).stream()
+                .map(SourceIndividualService::toDTO).toList();
     }
 
     private static String requireValidType(String raw) {
@@ -348,6 +380,8 @@ public class SourceIndividualService {
                 .individualType(e.getIndividualType())
                 .entryDate(e.getEntryDate())
                 .revokeReason(e.getRevokeReason())
+                .revokedBy(e.getRevokedBy())
+                .revokedAt(e.getRevokedAt())
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .version(e.getVersion())

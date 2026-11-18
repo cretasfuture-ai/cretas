@@ -61,6 +61,12 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
                                            @Param("keyword") String keyword,
                                            Pageable pageable);
 
+    /** 已撤销(软删)档案; native 才能绕过实体上的 @Where, 必须带 factory_id。 */
+    @Query(value = "SELECT * FROM source_individuals WHERE factory_id = :factoryId "
+            + "AND deleted_at IS NOT NULL AND revoke_reason IS NOT NULL ORDER BY revoked_at DESC",
+            nativeQuery = true)
+    List<SourceIndividual> findRevokedByFactoryId(@Param("factoryId") String factoryId);
+
     boolean existsByFactoryIdAndIndividualCode(String factoryId, String individualCode);
 
     // ── 系谱反查 (FEAT-RN-SOURCE-INDIVIDUAL-DETAIL-20260915) ──────────────

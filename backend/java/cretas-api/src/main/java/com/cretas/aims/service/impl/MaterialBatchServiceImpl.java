@@ -1139,10 +1139,8 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         Map<String, BigDecimal> unsettledByBatch = getUnsettledConsumptionByBatchIds(
                 factoryId, batchDTOs.stream().map(MaterialBatchDTO::getId).collect(Collectors.toList()));
         for (MaterialBatchDTO dto : batchDTOs) {
-            BigDecimal unsettled = unsettledByBatch.get(dto.getId());
-            if (unsettled != null) {
-                dto.setUnsettledConsumption(unsettled);
-            }
+            // 已查询: 没有未结单预扣的批次预扣量就是 0(不是未知)。
+            dto.setUnsettledConsumption(unsettledByBatch.getOrDefault(dto.getId(), BigDecimal.ZERO));
         }
 
         return PageResponse.of(

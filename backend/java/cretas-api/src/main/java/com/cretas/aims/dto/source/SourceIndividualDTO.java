@@ -85,6 +85,12 @@ public class SourceIndividualDTO {
     @Schema(description = "撤销原因 (仅撤销后有值)")
     private String revokeReason;
 
+    @Schema(description = "撤销人 (仅撤销后有值)")
+    private String revokedBy;
+
+    @Schema(description = "撤销时间 (仅撤销后有值)")
+    private LocalDateTime revokedAt;
+
     @Schema(description = "创建时间")
     private LocalDateTime createdAt;
 

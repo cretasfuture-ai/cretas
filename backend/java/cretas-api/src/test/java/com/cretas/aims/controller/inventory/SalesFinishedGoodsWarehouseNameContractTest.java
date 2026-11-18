@@ -14,7 +14,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
-class SalesFinishedGoodsWarehouseNameTest {
+class SalesFinishedGoodsWarehouseNameContractTest {
 
     private FinishedGoodsBatch batch(String id, String warehouseId) {
         FinishedGoodsBatch b = new FinishedGoodsBatch();

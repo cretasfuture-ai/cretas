@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
 
-class TransferListWarehouseNameTest {
+class TransferListWarehouseNameContractTest {
 
     private static FactoryWarehouse wh(String id, String name) {
         FactoryWarehouse w = new FactoryWarehouse();

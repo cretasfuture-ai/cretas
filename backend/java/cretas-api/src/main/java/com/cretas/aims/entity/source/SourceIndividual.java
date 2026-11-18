@@ -165,6 +165,14 @@ public class SourceIndividual extends BaseEntity {
     @Column(name = "revoke_reason", length = 255)
     private String revokeReason;
 
+    /** 撤销人(用户 ID 字符串)。 */
+    @Column(name = "revoked_by", length = 64)
+    private String revokedBy;
+
+    /** 撤销时间。 */
+    @Column(name = "revoked_at")
+    private java.time.LocalDateTime revokedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     @Builder.Default

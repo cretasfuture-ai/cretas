@@ -3,5 +3,7 @@
 ALTER TABLE source_individuals ADD COLUMN individual_type VARCHAR(16);
 ALTER TABLE source_individuals ADD COLUMN entry_date DATE;
 ALTER TABLE source_individuals ADD COLUMN revoke_reason VARCHAR(255);
+ALTER TABLE source_individuals ADD COLUMN revoked_by VARCHAR(64);
+ALTER TABLE source_individuals ADD COLUMN revoked_at TIMESTAMP;
 ALTER TABLE source_individuals ADD CONSTRAINT chk_source_individual_type
     CHECK (individual_type IS NULL OR individual_type IN ('LIVE', 'CARCASS'));
