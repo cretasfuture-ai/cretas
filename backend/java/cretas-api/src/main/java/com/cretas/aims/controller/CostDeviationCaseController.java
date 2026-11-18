@@ -333,8 +333,30 @@ public class CostDeviationCaseController {
                 .orElseThrow(() -> new BusinessException(404, "异常不存在或不属于本厂"));
     }
 
-    /** 产品名没存 (产品已删除或查不到) 时列表上的如实说法, 不显示空白或内部占位。 */
+    /** 计划的产品在档案里真查不到 (已删除或不存在) 时的如实说法, 不显示空白或内部占位。 */
     static final String PRODUCT_MISSING_LABEL = "产品已删除或不存在";
+    /** 产品档案在, 但只有内部占位名 (挂原料的工艺图且原料档案也查不到) 时的如实说法。 */
+    static final String PRODUCT_UNNAMED_LABEL = "产品档案没有可显示的名称";
+
+    /**
+     * BP 问题 44: 明细里 product_name 为空不等于产品被删了 —— 挂原料的工艺图计划 (产品名是
+     * {@code __RAW_WORKFLOW_OWNER__…} 占位) 写入时名字被置空, 列表原先一律说「产品已删除或不存在」, 是假话。
+     * 出口按计划的 productTypeId 回查真实名称 (原料挂靠的显示原料名, 与排程页同一份规则);
+     * 只有产品档案真查不到才说「已删除或不存在」。
+     */
+    private String productLabel(String factoryId, CostDeviationCaseDetail d) {
+        if (d.getProductName() != null && !d.getProductName().isBlank()) return d.getProductName();
+        String productTypeId = d.getPlanId() == null ? null
+                : planRepository.findByIdAndFactoryId(d.getPlanId(), factoryId)
+                        .map(ProductionPlan::getProductTypeId).orElse(null);
+        return productLabel(productTypeId == null ? null : varianceService.productName(factoryId, productTypeId));
+    }
+
+    static String productLabel(String resolvedName) {
+        if (resolvedName == null || resolvedName.isBlank()) return PRODUCT_MISSING_LABEL;
+        if (resolvedName.startsWith("__") || resolvedName.startsWith("RMT_")) return PRODUCT_UNNAMED_LABEL;
+        return resolvedName;
+    }
 
     private CaseView view(ShortageCase c, CostDeviationCaseDetail d, boolean mask) {
         String owner = c.getOwnerUserId() == null ? null
@@ -347,7 +369,7 @@ public class CostDeviationCaseController {
             default -> c.getStage().label();
         };
         return new CaseView(c.getId(), c.getSourceType().name(), cost ? "成本差异" : "物料损耗", d.getPlanId(),
-                d.getPlanNumber(), d.getProductName() != null ? d.getProductName() : PRODUCT_MISSING_LABEL, c.getStage().name(), stageLabel, c.getOwnerRole(),
+                d.getPlanNumber(), productLabel(c.getFactoryId(), d), c.getStage().name(), stageLabel, c.getOwnerRole(),
                 c.getOwnerUserId(), owner, d.getMetricPct(), d.getThresholdPct(),
                 mask ? null : d.getAmountVariance(), mask, d.getUnknownItemCount(), d.getSummary(),
                 d.getBelowThresholdAt(), d.getResolutionCode() == null ? null : d.getResolutionCode().name(),
