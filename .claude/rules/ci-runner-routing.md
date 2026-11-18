@@ -14,7 +14,7 @@ paths:
 - **唯一例外（2026-11-18，Steve 撤销「公开仓库禁自建」，前提实测 mini 更快）**：Java Gate `postgres-reversal-concurrency-shard` 在本仓库分支 PR 和合并队列上跑 canada-mini（仓库级 runner `canada-mini-gate-1/2`，标签 `cretas-mini-pg`，launchd 常驻，目录 `~/gh-gate-N`），fork PR 落托管。表达式逐字登记在闸的 `SELF_HOSTED_ALLOWED`，必须带「`merge_group` 或 `head.repo.full_name == github.repository`」守卫，阴性对照钉住去掉守卫即红。mini 离线时 job 会一直排队不回落：给 PR 打 `ci-hosted` 标签回托管，合并队列要回托管只能改表达式。发布构建优先：分片先等 `~/cretas-build/.build.lock` 释放（最多 20 分钟）。新增例外先在闸里登记，⛔ 不手改别的 job。
 - 外部 PR：仓库设置 `fork-pr-contributor-approval = all_external_contributors`，外部贡献者的 PR 必须我们点批准才运行；外部贡献者没有写权限，合并只能由组织成员做。
 - 托管机上的差异已在工作流里处理：测试库用 PGDG 装 PostgreSQL 17（`run-with-test-postgres.sh`，托管镜像自带 16）；Java Gate `CRETAS_JAVA_FORK_XMX=6g`、nightly `CRETAS_JAVA_NIGHTLY_XMX=12g` 写在 job env；Fresh DB 预检在托管机上跳过 Aurora 身份检查、保留资源/Docker/JDK/Maven 检查。
-- Aurora、本机轻任务槽、小检查槽全部退役（`tools/ci/windows-*` 只作历史）。要恢复自建 runner，必须先把仓库改回 private。
+- Aurora、本机轻任务槽、小检查槽全部退役（`tools/ci/windows-*` 只作历史）。「要恢复自建 runner 必须先改回 private」已由 Steve 2026-11-18 撤销（托管并发只有 20 个 job，CI 长期排队；mini 实测更快）：仓库保持 public，自建只走下面登记的例外，fork PR 永远托管。
 - **慢 job 必须拆分片，跑满托管并发**（2026-11-10）：托管并发上限 20 个 job，单个 job 不许独占 30–40 分钟。Java Gate 的 `fast-contracts`、`postgres-reversal-concurrency` 已用 `strategy.matrix` 拆成 4 片（`*-shard` job，`runs-on: ubuntu-latest` 字面量），类名哈希取模分片（`scripts/ci/shard-tests.py`），同名汇总 job 保留原 job 名聚合各片结论（`needs` + `if: always()`，任一片非 success 即红），分支保护不变。目标单片 ≤10 分钟，超了就加片数。新增 PG 测试类写进 `scripts/ci/java-gate-pg-tests.txt`（一行一类），新增 fast 闸命名模式写进 `scripts/ci/java-gate-fast-patterns.txt`；⛔ 不要往 workflow 的 `-Dtest` 行追加（并行 PR 会在同一行冲突）。闸 `scripts/tests/test-java-gate-shards-cover-selector.sh` 钉住「所有分片并集 == 选择器全集、无重叠、matrix 不漏片」。
 - 判据仍是实际 job 的 `runner_name`（托管机形如 `GitHub Actions N`），不看配置。
 
@@ -25,4 +25,4 @@ paths:
 - **时区覆盖**：托管 runner 是 UTC，开发机是东八区，同一断言两边各跑一遍。`Date.now() + 8h` 这类「平移 UTC 轴假装某时区」的写法必须用 UTC getter 读回。⛔ 别在 Windows 原生 shell 里用 `TZ=x cmd`（不传进 node）。
 - **判据看 job 实际落在哪**：`gh api repos/cretasfuture-ai/cretas/actions/jobs/<id> --jq .runner_name`，不看配置。
 
-自建 runner 时期（Aurora / 加拿大 VM / 本机 WSL）的完整原文、六关接入、故障切换实测，全部移到 `docs/rules-casebook/ci-runner-routing-cases.md` 末尾「退役前规则原文」一节，恢复自建 runner 前必读（且须先把仓库改回 private）。
+自建 runner 时期（Aurora / 加拿大 VM / 本机 WSL）的完整原文、六关接入、故障切换实测，全部移到 `docs/rules-casebook/ci-runner-routing-cases.md` 末尾「退役前规则原文」一节，新增自建例外前必读（public 下的防线是本仓库守卫 + 闸登记，见上面「唯一例外」）。
