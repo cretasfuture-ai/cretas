@@ -17,12 +17,24 @@ export interface AiQueryRouteInput {
   hasAnyWrite: boolean;
   /** 下拉选了上传数据源, 或页面已载入数据行。 */
   hasAnalysisData: boolean;
+  /** 本轮问题原文; 以动作词开头(建/录入/新增/删除/提交/审批…)的仍交给 Java, 由它出「请切换到操作页」卡。 */
+  question?: string;
+}
+
+const WRITE_ACTION_PREFIX = /^\s*(请|帮我|麻烦|我要|我想|给我)?\s*(新建|创建|新增|添加|建立|建一个|建个|建|录入|登记|入库|出库|删除|删掉|删|提交|审批|批准|驳回|修改|更新|取消|作废)/;
+
+/** 「给五花肉入库 200kg」这类 给…入库/出库 句式。 */
+const WRITE_GIVE_STOCK = /^\s*给.{1,20}(入库|出库)/;
+
+/** 问题明显是写操作(动作词开头)。「分析/统计/查看」等分析类开头不算。 */
+export function looksLikeWriteAction(question: string | undefined): boolean {
+  return !!question && (WRITE_ACTION_PREFIX.test(question) || WRITE_GIVE_STOCK.test(question));
 }
 
 export type AiQueryRoute = 'upload-analysis' | 'java-intent';
 
 export function chooseAiQueryRoute(input: AiQueryRouteInput): AiQueryRoute {
   const operate = input.tab === 'operate' && input.hasAnyWrite;
-  if (!operate && input.hasAnalysisData) return 'upload-analysis';
+  if (!operate && input.hasAnalysisData && !looksLikeWriteAction(input.question)) return 'upload-analysis';
   return 'java-intent';
 }
