@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.foodsafety;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.BatchReferenceClarifier;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.repository.ShipmentRecordRepository;
@@ -47,6 +49,9 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
 
     @Autowired
     private ShipmentRecordRepository shipmentRecordRepository;
+
+    @Autowired
+    private ProductionBatchRepository productionBatchRepository;
 
     @Override
     public String getToolName() {
@@ -95,6 +100,10 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
         String batchNumber = getString(params, "batchNumber");
+        // 「成品批次 / 这个批次」是泛称不是批次号: 不查, 追问并列最近批次
+        if (BatchReferenceClarifier.isGenericReference(batchNumber)) {
+            return BatchReferenceClarifier.clarify(productionBatchRepository, factoryId, "往回追原料批次和供应商");
+        }
         log.info("batch_full_trace — factory={} batch={}", factoryId, batchNumber);
 
         // 1. 调 TraceabilityService 拿 full trace (原料 + 供应商 + 加工记录)
