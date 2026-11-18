@@ -65,7 +65,7 @@ public class ProductCostViewService {
         List<ProductUnitCostAggregator.Group> out = new ArrayList<>();
         for (ProductUnitCostAggregator.Group g : groups) {
             boolean mask = g.productTypeId() == null ? anyHidden : hidden.contains(g.productTypeId());
-            out.add(mask ? g.secretMasked() : g);
+            out.add(mask ? g.maskedForSecret() : g);
         }
         return new ByProductResult(ProductUnitCostAggregator.BASIS, ProductUnitCostAggregator.BASIS_LABEL, total,
                 orders.size(), truncated, maskPrice, out);

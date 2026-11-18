@@ -46,7 +46,7 @@ public final class ProductUnitCostAggregator {
                         List<OrderLine> orders, List<CostSignalEvaluator.Signal> signals) {
 
         /** 工艺保密: 无权者看不到该产品的任何金额, 只留单号和「已保密」标记。 */
-        public Group secretMasked() {
+        public Group maskedForSecret() {
             List<OrderLine> lines = new ArrayList<>();
             for (OrderLine l : orders) {
                 lines.add(new OrderLine(l.orderId(), l.orderNumber(), null, null, null, null, l.ineligibleReason()));
