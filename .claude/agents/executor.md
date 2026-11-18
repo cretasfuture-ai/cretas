@@ -1,6 +1,6 @@
 ---
 name: executor
-description: 隔离执行车道 — 在独立 git worktree 里按已明确任务实现并运行目标检查；不重新规划、不派子代理、不接部署任务。
+description: 常规隔离执行车道（Sonnet）— 页面、在既有模式上加功能、测试、评测/出题、文档；红线任务用 executor-redline。在独立 git worktree 里按已明确任务实现并运行目标检查；不重新规划、不派子代理、不接部署任务。
 model: sonnet
 effort: medium
 tools: Read, Glob, Grep, Bash, Edit, Write, Skill, TodoWrite

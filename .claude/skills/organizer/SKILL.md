@@ -26,7 +26,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 跨天、多轮实现、需要保留环境/调查结果的工作可使用持久独立会话；遵守当前工具、用户授权和唯一写 Owner 交接规则。不要按 PR 数或会话闲置时长机械切换载体，不假定旧工具名或历史消息能力仍可用。
 - 🔴 **载体怎么选**（Steve 2026-11-18；每开一个会话就多一个常驻进程、一个 worktree、一组 MCP 子进程，并且应用要轮询它的 git）。从上往下，第一条适用的就用它：
   1. **本会话、本目录直接做**：几次工具调用就完的事、只读查询/诊断、同一 PR 的连续改动、organizer 自己的台账/规则（fastlane）。
-  2. **subagent（Agent 工具）**：结果这一轮就要拿回来用、一次性、边界清楚——广搜用 `Explore`，取证用 `probe`，独立审查，按评论逐条改同一份产物；要写代码就用 `executor` + `isolation: "worktree"`。⛔ 跨天、要 Steve 对话的活不给 subagent；名下有 subagent 在跑时不交班。
+  2. **subagent（Agent 工具）**：结果这一轮就要拿回来用、一次性、边界清楚——广搜用 `Explore`，取证用 `probe`，独立审查，按评论逐条改同一份产物；要写代码就用 `executor`（常规，Sonnet）或 `executor-redline`（红线，Opus）+ `isolation: "worktree"`。⛔ 跨天、要 Steve 对话的活不给 subagent；名下有 subagent 在跑时不交班。
   3. **独立会话 + 自己的 worktree**（`start_session`）：能独立出一个 PR、要跨多轮 CI/返工或跨天的；要 Steve 直接对话或验收的；需要单独负责人的红线任务。
   4. **共用 worktree**：只有只读会话可以共用（审查、截图对比、问答分叉）。同一 PR 的返工用 SendMessage 发给原会话，不新开。⛔ 两个会写代码的会话不共用目录；会碰同一文件、要跑构建、要切分支的一律分开；⛔ 不与马上要交班或归档的会话共用目录（归档会连带清理，11-17 原型第 19 任的执行线、六膳门第 2 任都共用了前任目录）。
   - **同一份产物只能有一个会话在改**（同一个 deck、同一个文件）：11-17 BP 对比 deck 被拆成 5 个会话分别按评论改。这类活交给原会话或 subagent 顺序做。
@@ -34,7 +34,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - **全机上限**（所有批次合计，含 subagent）：写代码的执行线同时 ≤ 8 条，Maven 同时 ≤ 2 个（见下文「全机资源预算」）。超了就排队，一批互不依赖的线先开 2 条，其余在 ACTIVE 记「待开」。8 条是按 11-18 卡死时的规模估的，盯一两周看卡顿和排队时长再调。
 - 🔴 **派执行线不出卡片**（Steve 2026-11-17：「不用我授权就自动开」）：应用只在 Steve 自己从桌面端发消息的那一轮允许 `start_session` 直接开会话；被别的会话消息 / 通知 / 定时叫醒的回合、Steve 从 Remote Control 发的回合，只能出卡片，这是应用限制，⛔ 不要绕。所以：
   - Steve 桌面端发消息的回合 ⇒ `start_session`（`initiation: "user_asked"`）开持久会话。
-  - 其它回合 ⇒ ⛔ 不开卡片，改用 **Agent 工具开后台子代理**：`subagent_type: "executor"`、`isolation: "worktree"`、`run_in_background: true`，按下面的分档传 `model`，prompt 写全任务包（ID、Base SHA、目标/完成条件、允许范围、验收命令、要求它推分支开 PR 并回报 PR 号）。子代理不需要任何人点击，结束时自动通知你。
+  - 其它回合 ⇒ ⛔ 不开卡片，改用 **Agent 工具开后台子代理**：`subagent_type` 按下面的分档选 `"executor"`（常规，Sonnet）或 `"executor-redline"`（红线，Opus）、`isolation: "worktree"`、`run_in_background: true`，prompt 写全任务包（ID、Base SHA、目标/完成条件、允许范围、验收命令、要求它推分支开 PR 并回报 PR 号）。子代理不需要任何人点击，结束时自动通知你。
   - 子代理挂在本 organizer 进程上：**名下还有后台子代理在跑时不交班、不归档本会话**（会被杀掉），交接里写清每个子代理的 worktree/分支，接手方据此核对。
   - 需要跨天、多轮返工、或要 Steve 直接对话的线，才等到 Steve 桌面端发消息那一轮再开持久会话；在那之前不出卡片，记一行「待开会话」。
 - **模型按任务风险分档**（Steve 2026-11-13；取代「执行线一律 Opus」——那句原意是 09-07「执行活别继承 organizer 的 Fable」，不是不许用 Sonnet）。派每条线前先说一句它属于哪档，start_session 显式传 `model`/`effort`，开完用 get_session 核对实际模型：
@@ -44,7 +44,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - **organizer ⇒ Opus**，靠短会话控成本。
   - effort 一律 medium 起步（只读可 low），卡住、被纠正或需要更深推理时有证据再升 high。质量靠红线的独立终审和验证，不靠全线用强模型。
   - 改档后盯一两周：Sonnet 线的 CI 红、返工、被终审打回次数明显高于 Opus 线，就把那类任务挪回 Opus 并在这里写明。
-  - 🔴 **默认是 Sonnet，Opus 要点名**（Steve 2026-11-18）：`executor` 子代理的默认模型已改成 Sonnet；红线任务和红线的独立终审在 Agent 调用里显式传 `model: "opus"`，常规的不传或传 `"sonnet"`。`start_session` 每次都显式传 `model`：常规线传 `"sonnet"`，红线传 `"opus"`。不传就会沿用 organizer 自己的 Opus。依据：11-12 起一周，常规执行会话里有 60 个用的是 Opus（约 $488，Sonnet 同类 67 个约 $226）；后台子代理 Opus 165 个约 $740，因为 executor 默认写死了 Opus。Opus 占全部花费的 82%。
+  - 🔴 **按档选执行车道**（Steve 2026-11-18：「不是所有 executor 都用 Sonnet，得分情况」）：子代理分成两个——常规开发用 `subagent_type: "executor"`（Sonnet），红线任务和红线的独立终审用 `subagent_type: "executor-redline"`（Opus）。选哪个就定了模型，不靠派活时记得传 `model`；拿不准算哪档的按红线算。`start_session` 同理每次都显式传 `model`：常规线 `"sonnet"`，红线 `"opus"`，不传就会沿用 organizer 自己的 Opus。依据：11-12 起一周，常规执行会话里有 60 个用的是 Opus（约 $488，Sonnet 同类 67 个约 $226）；后台子代理 Opus 165 个约 $740，因为 executor 默认写死了 Opus。Opus 占全部花费的 82%。
   - **Fable 5.2 只在卡住时用**（Steve 2026-11-15）：Opus 线升到 `high` 后仍卡住（同一问题再修两轮 CI 仍红，或再被独立审查打回），才开 Fable 5.2 新会话重做，`effort` 显式传 `medium`（Fable 默认 `high`，不传会多花一档）；⛔ 不把任何线默认设成 Fable。每次升级（升 `high` 和换 Fable 都算）在 `~/.claude/context-handoff/check-findings.jsonl` 记一行，id 以 `escalation-` 开头，写任务、升到哪档、做成没有、花费、轮数；攒到约 10 条再评估难题线是否固定用 Fable。依据：官方迁移指南把 Opus 5.5 定为大多数工作的默认，Opus 调高 effort 仍不达标才换；Fable 读缓存与 Opus 同价、其余约两倍，按本周花费结构同样步数约 1.5 倍，要少用约 1/3 步才不亏；卡住类会话最多占主会话花费 24%，专门跑同题对照（约 $250–350）不划算。
 - 每个切片只维护一份任务说明、一条在飞记录和一份证据索引。ACTIVE 的 ID/状态/Owner/Base/scope 与阻塞摘要 ≤ 300 字，详情进 `docs/dispatch/archive/`；不要求模型、effort、编排方式等固定列。
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
