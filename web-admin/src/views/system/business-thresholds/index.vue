@@ -21,6 +21,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
+import { thresholdDisplayName } from './thresholdLabel';
 import { usePermissionStore } from '@/store/modules/permission';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -121,14 +122,14 @@ async function onSaveRow(row: EditableRow) {
         maxValue: row.maxValue,
         enabled: row._editEnabled,
       });
-      ElMessage.success(`「${row.thresholdKey}」已保存为本厂配置`);
+      ElMessage.success(`「${thresholdDisplayName(row)}」已保存为本厂配置`);
     } else {
       await updateThreshold(factoryId.value, row.id, {
         thresholdValue: row._editValue,
         enabled: row._editEnabled,
         version: row.version,
       });
-      ElMessage.success(`「${row.thresholdKey}」已保存`);
+      ElMessage.success(`「${thresholdDisplayName(row)}」已保存`);
     }
     await loadCurrent();
   } catch (e) {
@@ -224,9 +225,11 @@ onMounted(() => {
           style="width: 100%"
           empty-text="此分类下暂无阈值配置"
         >
-          <el-table-column prop="thresholdKey" label="键" min-width="230">
+          <el-table-column prop="thresholdKey" label="配置项" min-width="230">
             <template #default="{ row }">
-              <code class="key-cell">{{ row.thresholdKey }}</code>
+              <el-tooltip :content="`配置键：${row.thresholdKey}`" placement="top">
+                <span class="key-cell" :data-key="row.thresholdKey">{{ thresholdDisplayName(row) }}</span>
+              </el-tooltip>
               <!-- 继承行必须一眼看得出来: 它现在用的是全局默认值, 本厂还没有自己的配置。
                    不标出来的话, 用户分不清"这是本厂设的"还是"这是所有厂共用的"。 -->
               <el-tag v-if="row.inherited" size="small" type="info" effect="plain" class="inherit-tag">
@@ -362,8 +365,7 @@ onMounted(() => {
 }
 
 .key-cell {
-  font-family: var(--el-font-family-mono, ui-monospace, monospace);
-  font-size: 12px;
+  font-size: 13px;
   background: var(--el-fill-color-light);
   padding: 2px 6px;
   border-radius: 3px;

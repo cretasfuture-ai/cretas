@@ -157,6 +157,10 @@ const shortcuts = [
 const loading = ref(false);
 const loadError = ref('');
 const noSystemData = ref(false);
+// PROTO-DEMO-ARAP: 后端给 null (算不出) 时如实说明缺什么, 不把 null 读成「毛利润 0 元」
+const PROFIT_SOURCE_NOTE = '毛利按已上传的财务/销售报表计算（系统内订单与生产成本尚未接入此看板）';
+const grossProfitUnavailable = ref('');
+const netProfitUnavailable = ref('');
 
 // AbortController: cancel in-flight requests when filters change
 let financeAbortController: AbortController | null = null;
@@ -1187,6 +1191,8 @@ async function loadFinanceData() {
 
   loading.value = true;
   loadError.value = '';
+  grossProfitUnavailable.value = '';
+  netProfitUnavailable.value = '';
   // Reset previous chart/warnings to avoid stale data when switching analysis types
   chartConfig.value = null;
   warnings.value = [];
@@ -1246,6 +1252,11 @@ async function loadFinanceData() {
             const code = String(m.metricCode || '');
             const mappedKey = metricCodeMap[code];
             if (mappedKey) flat[mappedKey] = m.value;
+            if (m.value == null && (code === 'GROSS_PROFIT' || code === 'NET_PROFIT')) {
+              const why = String(m.description || '缺少收入或成本数据，无法计算');
+              if (code === 'GROSS_PROFIT') grossProfitUnavailable.value = `${why}；${PROFIT_SOURCE_NOTE}`;
+              else netProfitUnavailable.value = `${why}；${PROFIT_SOURCE_NOTE}`;
+            }
           }
           // Derive budgetTotal and budgetUsed from BUDGET_REMAINING + BUDGET_EXECUTION
           // remaining = budget - actual, execution = actual/budget * 100
@@ -1414,8 +1425,9 @@ async function loadFinanceData() {
       await loadDynamicData(firstUpload.id);
       return;
     }
-    // 无上传数据时才显示友好提示（info 而非 error）
-    loadError.value = '系统财务数据暂不可用，请上传 Excel 数据进行分析';
+    // 无上传数据时: 如实说明请求失败及原因, 不笼统地叫用户「上传 Excel」
+    const reason = error instanceof Error && error.message ? `（${error.message}）` : '';
+    loadError.value = `财务数据加载失败${reason}，请稍后刷新重试；若持续失败请联系管理员`;
   } finally {
     if (!signal?.aborted) {
       loading.value = false;
@@ -2183,8 +2195,14 @@ onUnmounted(() => {
           <CapabilityGate card-id="finance_pnl" :requires="['date', 'gross_amount', 'discount_amount', 'net_amount']">
           <el-card class="kpi-card kpi-accent-0">
             <div class="kpi-label">毛利润</div>
-            <div class="kpi-value" :style="{ color: kpiData.grossProfit < 0 ? '#dc2626' : undefined }">{{ formatMoney(kpiData.grossProfit) }}<small class="kpi-unit">元</small></div>
-            <div class="kpi-sub">毛利率 {{ formatPercent(kpiData.grossProfitMargin) }}</div>
+            <template v-if="grossProfitUnavailable">
+              <div class="kpi-value" data-testid="fa-gross-profit">—</div>
+              <div class="kpi-sub" data-testid="fa-gross-profit-why">{{ grossProfitUnavailable }}</div>
+            </template>
+            <template v-else>
+              <div class="kpi-value" data-testid="fa-gross-profit" :style="{ color: kpiData.grossProfit < 0 ? '#dc2626' : undefined }">{{ formatMoney(kpiData.grossProfit) }}<small class="kpi-unit">元</small></div>
+              <div class="kpi-sub">毛利率 {{ formatPercent(kpiData.grossProfitMargin) }}</div>
+            </template>
           </el-card>
           </CapabilityGate>
         </el-col>
@@ -2192,8 +2210,14 @@ onUnmounted(() => {
           <CapabilityGate card-id="finance_pnl" :requires="['date', 'gross_amount', 'discount_amount', 'net_amount']">
           <el-card class="kpi-card kpi-accent-1">
             <div class="kpi-label">净利润</div>
-            <div class="kpi-value" :style="{ color: kpiData.netProfit < 0 ? '#dc2626' : undefined }">{{ formatMoney(kpiData.netProfit) }}<small class="kpi-unit">元</small></div>
-            <div class="kpi-sub">净利率 {{ formatPercent(kpiData.netProfitMargin) }}</div>
+            <template v-if="netProfitUnavailable">
+              <div class="kpi-value" data-testid="fa-net-profit">—</div>
+              <div class="kpi-sub" data-testid="fa-net-profit-why">{{ netProfitUnavailable }}</div>
+            </template>
+            <template v-else>
+              <div class="kpi-value" data-testid="fa-net-profit" :style="{ color: kpiData.netProfit < 0 ? '#dc2626' : undefined }">{{ formatMoney(kpiData.netProfit) }}<small class="kpi-unit">元</small></div>
+              <div class="kpi-sub">净利率 {{ formatPercent(kpiData.netProfitMargin) }}</div>
+            </template>
           </el-card>
           </CapabilityGate>
         </el-col>

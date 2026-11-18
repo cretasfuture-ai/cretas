@@ -124,7 +124,7 @@ public class OrderListTool extends AbstractBusinessTool {
         log.info("查询销售订单列表 - factoryId={}, page={}, size={}, status={}",
                 factoryId, page, size, statusValue);
         Map<String, Object> result = new HashMap<>();
-        result.put("orders", orders.getContent());
+        result.put("orders", toSummaries(orders.getContent()));
         result.put("total", orders.getTotalElements());
         result.put("page", orders.getPage());
         result.put("size", orders.getSize());
@@ -166,6 +166,40 @@ public class OrderListTool extends AbstractBusinessTool {
             }
         }
         return latest;
+    }
+
+    /**
+     * 订单摘要: 只取标量字段, 不碰 LAZY 的 items / suppliedMaterials。流式入口 (intent-sse 线程) 没有 Hibernate Session,
+     * 以前把 JPA 实体直接放进 data, 序列化到 items 时 LazyInitializationException = 用户看到「结果处理失败」。
+     * 回复文字 (ResultFormatterServiceImpl.formatOrderListBody) 只用 orderNumber / customerName / totalAmount / status。
+     */
+    /** 单张订单的标量摘要 (不碰 LAZY 集合); OrderQueryTool / OrderTodayTool 共用。 */
+    static Map<String, Object> toSummary(SalesOrder order) {
+        Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", order.getId());
+            row.put("orderNumber", order.getOrderNumber());
+            row.put("customerId", order.getCustomerId());
+            row.put("customerName", order.getCustomerName());
+            row.put("orderDate", order.getOrderDate());
+            row.put("requiredDeliveryDate", order.getRequiredDeliveryDate());
+            row.put("status", order.getStatus() == null ? null : order.getStatus().name());
+            row.put("totalAmount", order.getTotalAmount());
+            row.put("discountAmount", order.getDiscountAmount());
+            row.put("taxAmount", order.getTaxAmount());
+            row.put("salesperson", order.getSalesperson());
+            row.put("remark", order.getRemark());
+        return row;
+    }
+
+    static List<Map<String, Object>> toSummaries(List<SalesOrder> orders) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (orders == null) {
+            return rows;
+        }
+        for (SalesOrder order : orders) {
+            rows.add(toSummary(order));
+        }
+        return rows;
     }
 
     static boolean wantsCustomerSummary(Map<String, Object> params) {

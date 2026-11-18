@@ -72,6 +72,11 @@ public final class PhraseShortcutEligibility {
         if (phrase == null || phrase.isBlank()) {
             return true;
         }
+        if (intentCode != null && SELF_PARSING_CONDITION_INTENTS.contains(intentCode)) {
+            // 急单分析工具自己从原话里解析交期 / 数量 / 品名 (「周五要交2吨酱牛肉急单, 原料够不够, 产线排不排得开」,
+            // BP 原话): 句中条件正是它的输入, 不是第二个子问 (2026-11-18 prod [SSE-EarlyPhrase] residual 被拦落到澄清)
+            return true;
+        }
         String rest = residual(input, phrase);
         if (intentCode != null && DATE_RANGE_OK_INTENTS.contains(intentCode)) {
             // 「11月1日到18日销售额是多少」: 区间本身是工具的 startDate/endDate, 不是第二个子问 (2026-11-18 LSMDEMO:
@@ -80,6 +85,9 @@ public final class PhraseShortcutEligibility {
         }
         return rest.length() <= MAX_RESIDUAL_CHARS;
     }
+
+    /** 条件由工具自己从原话解析的意图, 命中即放行。只放这一个, 其它意图仍按残留字数判。 */
+    static final java.util.Set<String> SELF_PARSING_CONDITION_INTENTS = java.util.Set.of("SCHEDULING_RUSH_ORDER_ANALYSIS");
 
     /** 工具自己接受 startDate / endDate 的只读汇总意图: 句中的日期区间不算「带条件」。 */
     static final java.util.Set<String> DATE_RANGE_OK_INTENTS = java.util.Set.of("REPORT_SALES_MARGIN_SUMMARY");

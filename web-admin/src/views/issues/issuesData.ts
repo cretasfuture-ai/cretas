@@ -20,6 +20,7 @@
  */
 import { reactive } from 'vue';
 import type { IssueDispositionView, IssueSourceType } from '@/api/issues';
+import { ROLE_LABELS } from '@/utils/enumDisplay';
 
 export const READ_TIMEOUT_MS = 10_000;
 
@@ -121,6 +122,15 @@ export class ReadTimeoutError extends Error {
 const errMsg = (e: unknown) => (e instanceof Error && e.message ? e.message : '读取失败');
 const asRows = (v: unknown): Row[] => (Array.isArray(v) ? (v as Row[]) : []);
 const str = (v: unknown) => (v === null || v === undefined ? '' : String(v));
+/**
+ * 「找谁」：后端 ownerRole 是角色码（production_manager），显示中文角色名（BP 问题 44）。
+ * 复用角色中文的单一来源 ROLE_LABELS；未登记的码原样显示，不臆造中文。
+ */
+export const ownerRoleLabel = (v: unknown): string => {
+  const code = str(v).trim();
+  return ROLE_LABELS[code] ?? code;
+};
+const ownerOf = (r: Row) => str(r.ownerName) || ownerRoleLabel(r.ownerRole) || undefined;
 const minute = (v: unknown) => str(v).replace('T', ' ').slice(0, 16);
 export const issueKey = (t: Issue['sourceType'], id: string) => `${t}:${id}`;
 
@@ -178,7 +188,7 @@ export function createIssuesLoader(deps: IssuesDeps) {
       sourceLabel: '缺料异常',
       title: `缺料 · 订单 ${str(r.salesOrderNumber) || str(r.sourceId)}`,
       summary: `${str(r.stageLabel)}${Number(r.gapLineCount) > 0 ? ` · ${Number(r.gapLineCount)} 种物料有缺口` : ''}`,
-      owner: str(r.ownerRole) || undefined, at: minute(r.lastRefreshedAt),
+      owner: ownerRoleLabel(r.ownerRole) || undefined, at: minute(r.lastRefreshedAt),
       link: '/production/shortage-cases', linkLabel: '去缺料异常',
     }));
   };
@@ -194,7 +204,7 @@ export function createIssuesLoader(deps: IssuesDeps) {
         sourceLabel: '交付风险',
         title: unknown ? `交付数据不够判断 · ${order}` : `可能延期 · ${order}`,
         summary: `${str(r.stageLabel)}${r.dueDate ? ' · 交期 ' + str(r.dueDate).slice(0, 10) : ''}${unknown ? ' · 不算正常，也不算风险' : ''}`,
-        owner: str(r.ownerName) || str(r.ownerRole) || undefined, at: minute(r.assessedAt),
+        owner: ownerOf(r), at: minute(r.assessedAt),
         link: '/production/delivery-risks', linkLabel: '去交付风险',
       } satisfies Issue;
     });
@@ -207,7 +217,7 @@ export function createIssuesLoader(deps: IssuesDeps) {
       category: 'rule', sourceLabel: '工艺参数偏离',
       title: `工艺参数偏离 · ${[r.processName, r.paramLabel].filter(Boolean).map(str).join(' · ') || '参数'}`,
       summary: [r.batchNumber ? '批次 ' + str(r.batchNumber) : '', str(r.stageLabel)].filter(Boolean).join(' · '),
-      owner: str(r.ownerName) || str(r.ownerRole) || undefined, at: minute(r.observedAt || r.lastRefreshedAt),
+      owner: ownerOf(r), at: minute(r.observedAt || r.lastRefreshedAt),
       link: '/quality/param-deviation', linkLabel: '去工艺参数偏离',
     }));
   };
@@ -221,7 +231,7 @@ export function createIssuesLoader(deps: IssuesDeps) {
       summary: [str(r.productName),
         r.metricPct != null && r.thresholdPct != null ? `偏离 ${str(r.metricPct)}%（阈值 ${str(r.thresholdPct)}%）` : '',
         str(r.stageLabel)].filter(Boolean).join(' · '),
-      owner: str(r.ownerName) || str(r.ownerRole) || undefined, at: minute(r.lastRefreshedAt),
+      owner: ownerOf(r), at: minute(r.lastRefreshedAt),
       link: '/finance/cost-deviation-cases', linkLabel: '去成本 / 损耗异常',
     }));
   };

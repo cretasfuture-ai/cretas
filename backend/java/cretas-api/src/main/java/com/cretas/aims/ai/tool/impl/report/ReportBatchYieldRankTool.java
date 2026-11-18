@@ -90,7 +90,6 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
             end = today;
             start = today.minusDays(29);
         }
-        boolean defaultWindow = startText == null && endText == null && period == null;
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
@@ -171,8 +170,8 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                     "option", option)));
         }
         String text = message(shown, ranked.size(), completed, noYield, withheld, start, end, lowestFirst, keyword);
-        if (defaultWindow && completed == 0 && withheld == 0) {
-            // 默认窗口没数据: 不让用户以为「没有批次」, 说明最近一次已完成批次的日期 (往前看一年)
+        if (completed == 0 && withheld == 0) {
+            // 窗口 (默认的、或「最近」这类对话补的) 没数据: 不让用户以为「没有批次」, 说明最近一次已完成批次的日期 (往前看一年)
             LocalDate latest = latestCompletedDate(factoryId, today, keyword);
             data.put("latestCompletedBatchDate", latest == null ? null : latest.toString());
             text = latest == null

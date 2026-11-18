@@ -1,5 +1,5 @@
 <template>
-  <section class="tpl-grid-section">
+  <section v-if="codes.length > 0" class="tpl-grid-section">
     <header class="tpl-grid-header">
       <div class="tpl-grid-title">
  <span class="tpl-grid-icon"></span>
@@ -43,9 +43,11 @@ import {
   getAnalysisResults,
   type AnalysisResultItem,
 } from '@/api/smartbi/analysisResults';
-import { getPageCodes } from '../composables/useTemplateMap';
+import { getVisiblePageCodes } from '../composables/useTemplateMap';
+import { useAuthStore } from '@/store/modules/auth';
 
 const router = useRouter();
+const authStore = useAuthStore();
 
 // UX P2-10: 空 state CTA — 跳 SmartBI 主页 (含上传入口)
 function onGoUpload(_code: string) {
@@ -67,7 +69,7 @@ const items = ref<AnalysisResultItem[]>([]);
 const missingCodes = ref<string[]>([]);
 const neverCodes = ref<string[]>([]);
 
-const codes = computed(() => getPageCodes(props.pageKey));
+const codes = computed(() => getVisiblePageCodes(props.pageKey, authStore.businessDomain));
 
 const itemsMap = computed(() => {
   const m: Record<string, AnalysisResultItem> = {};

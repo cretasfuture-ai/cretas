@@ -73,6 +73,9 @@ public class AIController {
     private com.cretas.aims.service.reports.OperatingReportReadAccess operatingReadAccess;
 
     @Autowired
+    private com.cretas.aims.service.reports.OperatingReportExporter operatingReportExporter;
+
+    @Autowired
     private AIAnalysisService basicAIService;
 
     @Autowired
@@ -466,6 +469,32 @@ public class AIController {
                 factoryId, request.getReportType(), response.getReportId());
 
         return ApiResponse.success(response);
+    }
+
+    /**
+     * 导出经营报告 PDF / PPTX。正文取自与详情接口同一份按调用者权限裁剪后的文本
+     * (价格权限、工艺保密都已处理), 导出不会比页面多给内容; 失败报告不给导出。
+     */
+    @GetMapping("/reports/{reportId}/export")
+    @Operation(summary = "导出AI报告", description = "format=pdf 或 pptx")
+    public ResponseEntity<byte[]> exportReport(
+            @PathVariable @Parameter(description = "工厂ID") String factoryId,
+            @PathVariable @Parameter(description = "报告ID") Long reportId,
+            @RequestParam(defaultValue = "pdf") String format, HttpServletRequest httpRequest) {
+        boolean prices = canViewReportPrices(factoryId, httpRequest);
+        MobileDTO.AICostAnalysisResponse detail = aiEnterpriseService.getReportDetail(factoryId, reportId, prices);
+        if (!Boolean.TRUE.equals(detail.getSuccess())) throw new BusinessException(409, "生成失败的报告不能导出").withHint("请回到报告列表重新生成报告，生成成功后再导出");
+        String text = prices && detail.getReportAnalysis() != null ? detail.getReportAnalysis() : detail.getAnalysis();
+        if (text == null || text.isBlank()) throw new BusinessException(409, "报告没有可导出的内容").withHint("请重新生成报告后再导出；仍为空请联系管理员检查取数");
+        String fmt = format == null ? "" : format.toLowerCase(java.util.Locale.ROOT);
+        byte[] bytes; String type;
+        if ("pdf".equals(fmt)) { bytes = operatingReportExporter.pdf(text, "经营分析报告"); type = com.cretas.aims.service.reports.OperatingReportExporter.PDF; }
+        else if ("pptx".equals(fmt)) { bytes = operatingReportExporter.pptx(text, "经营分析报告"); type = com.cretas.aims.service.reports.OperatingReportExporter.PPTX; }
+        else throw new BusinessException(400, "format 只支持 pdf 或 pptx");
+        return ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=\"operating-report-" + reportId + "." + fmt + "\"")
+                .header("Content-Type", type)
+                .body(bytes);
     }
 
     private boolean canViewReportPrices(String factoryId, HttpServletRequest request) {
