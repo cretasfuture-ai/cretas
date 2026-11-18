@@ -49,8 +49,11 @@ import {
   formatQueryTime,
   formatTimeRange,
   isBlank,
+  boxGapLines,
+  qualityStatusCellText,
   qualityStatusLabel,
   qualityStatusTag,
+  traceProductName,
   shipmentStatusLabel,
   shipmentStatusTag,
   type EmptySectionKey,
@@ -381,8 +384,7 @@ function boxText(totals?: BoxTotals | null): string {
   const known = totals.knownBoxSubtotal != null ? `；已能折算的部分 ${totals.knownBoxSubtotal} 箱` : '';
   return `无法折算（${totals.unknownSourceCount} 项缺少箱规或发货扣减数据）${known}`;
 }
-const boxGapMessages = computed(() =>
-  (recallImpact.value?.boxExposure?.gaps ?? []).map((g) => g.message).filter((m): m is string => !!m));
+const boxGapMessages = computed(() => boxGapLines(recallImpact.value?.boxExposure?.gaps ?? []));
 
 // ── 生产信息: 空值行不渲染 ──────────────────────────────────────────────────
 const productionRows = computed(() => {
@@ -390,7 +392,7 @@ const productionRows = computed(() => {
   if (!p) return [];
   const rows: Array<{ label: string; value: string }> = [
     { label: '批次号', value: p.batchNumber },
-    { label: '产品名称', value: p.productName },
+    { label: '产品名称', value: traceProductName(p.productName) },
     { label: '生产工厂', value: p.factoryName },
     { label: '生产日期', value: p.productionDate },
     { label: '负责人', value: p.supervisorName ?? '' },
@@ -568,9 +570,13 @@ function openIndividual(id: string) {
       <el-empty v-else-if="recentBatches.length === 0" description="暂无最近批次" :image-size="60" data-testid="recent-batches-empty" />
       <el-table v-else :data="recentBatches" size="small" data-testid="recent-batches-table">
         <el-table-column prop="batchNumber" label="批次号" min-width="170" />
-        <el-table-column prop="productName" label="产品" min-width="140" />
+        <el-table-column label="产品" min-width="140">
+          <template #default="{ row }">{{ traceProductName(row.productName) }}</template>
+        </el-table-column>
         <el-table-column prop="productionDate" label="生产日期" min-width="130" />
-        <el-table-column prop="qualityStatus" label="质量" min-width="100" />
+        <el-table-column label="质量" min-width="100">
+          <template #default="{ row }"><span data-testid="recent-batch-quality">{{ qualityStatusCellText(row.qualityStatus) }}</span></template>
+        </el-table-column>
         <el-table-column prop="completedQuantity" label="数量" min-width="90" />
         <el-table-column label="操作" width="90">
           <template #default="{ row }">

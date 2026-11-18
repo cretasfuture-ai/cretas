@@ -200,7 +200,11 @@ public class F006BossQuestionClient {
         return new IOException(switch (code) {
             case "MINI_BUSY" -> "本地 AI 正忙，请稍后重试";
             case "MINI_TIMEOUT" -> "本地 AI 响应超时，请重试";
-            default -> "本地 AI 未能完成回答，请稍后重试";
+            // 2026-11-17 F006 数字成本会计: 只显示「未能完成回答」, 看不出是没连上还是答一半断了。原因说出来, 不静默
+            case "MINI_UNAVAILABLE" -> "本地 AI 没能回答：本地模型服务连不上或返回了无法使用的内容，请稍后重试";
+            case "MINI_INCOMPLETE" -> "本地 AI 没能回答：回答中途中断，请重试";
+            default -> "本地 AI 没能回答（原因代码 "
+                    + (code != null && code.matches("[A-Z_]{1,40}") ? code : "UNKNOWN") + "），请稍后重试";
         });
     }
 }
