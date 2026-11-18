@@ -42,3 +42,11 @@ beforeEach(() => {
 afterEach(() => {
   localStorage.clear();
 });
+
+// vue-flow（溯源追溯线、审批画布）在 jsdom 里需要 ResizeObserver / SVG getBBox; 缺了就补一个空实现。
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} } as typeof ResizeObserver;
+}
+if (typeof SVGElement !== 'undefined' && !SVGElement.prototype.getBBox) {
+  SVGElement.prototype.getBBox = () => ({ x: 0, y: 0, width: 100, height: 40, top: 0, right: 100, bottom: 40, left: 0 }) as DOMRect;
+}

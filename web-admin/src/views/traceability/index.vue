@@ -62,6 +62,7 @@ import LineageNodeRow from './LineageNodeRow.vue';
 import IndividualDrawer from './IndividualDrawer.vue';
 import BatchDispositionEvidence from './BatchDispositionEvidence.vue';
 import PotTracePanel from '@/components/pot/PotTracePanel.vue';
+import TraceDagView from './TraceDagView.vue';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -95,6 +96,9 @@ const salesLookupError = ref('');
 let salesLookupSequence = 0;
 let recentLookupSequence = 0;
 const salesDocumentTrace = ref<BusinessDocumentTrace | null>(null);
+
+/** 追溯线「图 / 列表」切换, 默认图。 */
+const viewMode = ref<'graph' | 'list'>('graph');
 
 const drawerVisible = ref(false);
 const drawerIndividualId = ref<string | null>(null);
@@ -669,8 +673,28 @@ function openIndividual(id: string) {
         <span>{{ banner }}</span>
       </div>
 
+      <!-- 追溯线: 图 / 列表 切换, 默认图 -->
+      <el-card shadow="never" class="content-card" data-testid="trace-view-card">
+        <template #header>
+          <span class="card-title">追溯线</span>
+          <el-radio-group v-model="viewMode" size="small" class="card-title__trailing" data-testid="trace-view-toggle">
+            <el-radio-button value="graph" data-testid="trace-view-graph">图</el-radio-button>
+            <el-radio-button value="list" data-testid="trace-view-list">列表</el-radio-button>
+          </el-radio-group>
+        </template>
+        <TraceDagView
+          v-if="viewMode === 'graph'"
+          :trace="trace"
+          @open-individual="openIndividual"
+          @open-evidence="openBatchEvidence"
+          @open-quality="openBatchQuality"
+          @open-batch="(b: string) => router.push({ path: '/production/traceability', query: { batchNumber: b } })"
+        />
+        <p v-else class="muted">下方为分段列表：来源链、加工环节、质检记录、出货记录。</p>
+      </el-card>
+
       <!-- 来源链 -->
-      <el-card shadow="never" class="content-card" data-testid="lineage-card">
+      <el-card v-if="viewMode === 'list'" shadow="never" class="content-card" data-testid="lineage-card">
         <template #header>
           <span class="card-title">来源链</span>
           <span v-if="ancestorCount > 0" class="card-title__trailing">
@@ -747,7 +771,7 @@ function openIndividual(id: string) {
       />
 
       <!-- 加工环节 -->
-      <el-card v-if="processingStages.length > 0" shadow="never" class="content-card" data-testid="processing-card">
+      <el-card v-if="viewMode === 'list' && processingStages.length > 0" shadow="never" class="content-card" data-testid="processing-card">
         <template #header>
           <span class="card-title">加工环节</span>
           <span class="card-title__trailing">{{ processingStages.length }} 道工序</span>
@@ -814,7 +838,7 @@ function openIndividual(id: string) {
           <p class="recall-box-hint">箱数按包装快照折算，是记录数量的折算，不代表实物封箱数。</p>
         </template>
       </el-card>
-      <el-card v-if="qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
+      <el-card v-if="viewMode === 'list' && qualityInspections.length > 0" shadow="never" class="content-card" data-testid="quality-card">
         <template #header>
           <span class="card-title">质检记录</span>
           <span class="card-title__trailing">{{ qualityInspections.length }} 次</span>
@@ -845,7 +869,7 @@ function openIndividual(id: string) {
       </el-card>
 
       <!-- 出货 -->
-      <el-card v-if="shipments.length > 0" shadow="never" class="content-card" data-testid="shipment-card">
+      <el-card v-if="viewMode === 'list' && shipments.length > 0" shadow="never" class="content-card" data-testid="shipment-card">
         <template #header>
           <span class="card-title">出货记录</span>
           <span class="card-title__trailing">{{ shipments.length }} 单</span>
