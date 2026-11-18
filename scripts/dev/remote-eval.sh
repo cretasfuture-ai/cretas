@@ -82,10 +82,13 @@ if [ "$KIND" = eval ]; then
     case "$rc" in 0|1|2) ;; *) rc=2 ;; esac
 else
     cd "$BASE/repo" || { echo 2 > "$RUN/rc"; exit 0; }
-    mkdir -p "$RUN/evidence"
+    # harness 要求证据目录落在仓库内被 gitignore 的 tmp/ 之下; 跑完再搬进 $RUN 回传
+    EVD="$BASE/repo/tmp/remote-eval/$RUN_ID/evidence"
+    mkdir -p "$EVD"
     nice -n 10 node scripts/e2e/production-readonly/cli-runner.mjs --production-readonly \
-        --scenario "$SCENARIOS" --evidence-dir "$RUN/evidence" > "$RUN/result.log" 2> "$RUN/stderr.log"
+        --scenario "$SCENARIOS" --evidence-dir "$EVD" > "$RUN/result.log" 2> "$RUN/stderr.log"
     rc=$?
+    mkdir -p "$RUN/evidence" && cp -R "$EVD/." "$RUN/evidence/" && rm -rf "$BASE/repo/tmp/remote-eval/$RUN_ID"
     # CLI 把「没跑起来」和「场景失败」都退 1: 有 runId 的 JSON 报告才算量到。
     if ! grep -q '"runId"' "$RUN/result.log"; then rc=2; fi
     if [ "$rc" != 2 ] && ! grep -q '"actualBusinessWrites": 0' "$RUN/result.log"; then
