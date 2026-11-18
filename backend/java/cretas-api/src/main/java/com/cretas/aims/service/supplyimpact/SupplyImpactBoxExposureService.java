@@ -295,7 +295,9 @@ public class SupplyImpactBoxExposureService {
         for (String code : source.getGaps()) {
             String key = sourceId + "|" + code;
             if (propagated.add(key)) {
-                gaps.add(gap(code, "来源 " + sourceId + " 的箱数事实不完整: " + code));
+                String shown = source.getBatchNumber() != null && !source.getBatchNumber().isBlank()
+                        ? "批次 " + source.getBatchNumber() : "某来源（批次号未记录）";
+                gaps.add(gap(code, shown + " 的箱数事实不完整"));
             }
         }
     }
