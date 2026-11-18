@@ -23,7 +23,15 @@ case "$1 $2" in
     f="$S/checks.$h.$c"; while [ ! -f "$f" ] && [ $c -gt 1 ]; do c=$((c-1)); f="$S/checks.$h.$c"; done
     [ -f "$f" ] && cat "$f"; [ -f "$f" ] && grep -q pending "$f" && exit 8; exit 0;;
   "pr update-branch") cat "$S/next_head" > "$S/head"; echo "updated";;
+  "api graphql")
+    # 队列读数: "<qon> <state> <inq> <sha>"; qseq 每行用一次, 用完沿用最后一行; 无 qseq 则无队列
+    q=$(cat "$S/queue" 2>/dev/null || echo false)
+    if [ -f "$S/qseq" ]; then
+      n=$(( $(cat "$S/qn" 2>/dev/null || echo 0) + 1 )); echo $n > "$S/qn"
+      l=$(sed -n "${n}p" "$S/qseq"); [ -z "$l" ] && l=$(tail -1 "$S/qseq"); echo "$q $l"
+    else echo "$q $(cat "$S/state") false "; fi;;
   "pr merge")
+    [ "$(cat "$S/queue" 2>/dev/null)" = true ] && case "$*" in *--squash*) echo "queue sets strategy" >&2; exit 1;; *) echo "queued"; exit 0;; esac
     case "$*" in *"--match-head-commit $h"*) echo MERGED > "$S/state"; echo "merged";; *) echo "head mismatch" >&2; exit 1;; esac;;
   *)
     if [ "$1" = api ]; then cat "$S/behind.$h" 2>/dev/null || echo 0; else echo "fake gh: unhandled $*" >&2; exit 1; fi;;
@@ -36,7 +44,7 @@ ok() { pass=$((pass+1)); echo "PASS $1"; }
 bad() { failn=$((failn+1)); echo "FAIL $1"; }
 setup() { S="$T/s$1"; rm -rf "$S"; mkdir -p "$S"; echo OPEN > "$S/state"; echo MERGEABLE > "$S/mergeable"; echo h1 > "$S/head"; : > "$S/calls"; }
 G=$'\t'
-run() { FAKE_GH_STATE="$S" PR_WATCH_GH="$FAKE" PR_WATCH_INTERVAL=0 bash "$SCRIPT" 99 "$@" > "$S/out" 2>&1; echo $? > "$S/rc"; }
+run() { FAKE_GH_STATE="$S" PR_WATCH_GH="$FAKE" PR_WATCH_INTERVAL=0 bash "$SCRIPT" 99 --timeout-sec 90 "$@" > "$S/out" 2>&1; echo $? > "$S/rc"; }
 rc() { cat "$S/rc"; }
 called() { grep -q -- "$1" "$S/calls"; }
 
@@ -84,6 +92,28 @@ setup 10; printf "pass${G}build\n" > "$S/checks.h1.1"; echo 1 > "$S/behind.h1"; 
 # S11 已合并 -> rc=0 直接退出
 setup 11; echo MERGED > "$S/state"; run
 [ "$(rc)" = 0 ] && grep -q 'already-merged' "$S/out" && ok S11-already || bad S11-already
+
+# S12 队列开: 绿了即使落后也不 update-branch, 入队 (不带 --squash), 在队里两轮后 MERGED
+setup 12; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; echo 3 > "$S/behind.h1"; echo h9 > "$S/next_head"
+printf "OPEN false \nOPEN true \nOPEN true \nMERGED false shaQ\n" > "$S/qseq"; run
+[ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*sha=shaQ.*queue=on' "$S/out" && ! called "pr update-branch" && called "pr merge 99 --match-head-commit h1" && ! called "squash" && ok S12-queue-merge || bad S12-queue-merge
+
+# S13 队列开: 入队后被踢出 (队列里检查没过) -> RED
+setup 13; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"
+printf "OPEN false \nOPEN true \nOPEN false \n" > "$S/qseq"; run
+[ "$(rc)" = 1 ] && grep -q 'RESULT=RED.*dequeued' "$S/out" && ok S13-queue-dequeued-red || bad S13-queue-dequeued-red
+
+# S14 队列开: 入队命令后一直不在队列 -> UNMEASURED, 不当成功
+setup 14; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; printf "OPEN false \n" > "$S/qseq"; run
+[ "$(rc)" = 2 ] && grep -q 'RESULT=UNMEASURED.*not-enqueued' "$S/out" && ok S14-queue-not-enqueued || bad S14-queue-not-enqueued
+
+# S15 队列开 + --no-merge -> GREEN, 不入队
+setup 15; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; run --no-merge
+[ "$(rc)" = 0 ] && grep -q 'RESULT=GREEN.*queue=on' "$S/out" && ! called "pr merge" && ok S15-queue-no-merge || bad S15-queue-no-merge
+
+# S16 队列开但有检查失败 -> RED, 不入队 (红不进队)
+setup 16; echo true > "$S/queue"; printf "fail${G}build\n" > "$S/checks.h1.1"; run
+[ "$(rc)" = 1 ] && ! called "pr merge" && ok S16-queue-red-not-enqueued || bad S16-queue-red-not-enqueued
 
 rm -rf "$T"
 echo "TOTAL=$((pass+failn)) PASS=$pass FAIL=$failn"
