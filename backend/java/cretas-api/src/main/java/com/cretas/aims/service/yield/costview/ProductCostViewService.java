@@ -61,7 +61,10 @@ public class ProductCostViewService {
         Set<String> ids = new LinkedHashSet<>();
         for (ProductUnitCostAggregator.Group g : groups) if (g.productTypeId() != null) ids.add(g.productTypeId());
         Set<String> hidden = secretMask.hiddenFor(factoryId, ids, SECRET_REF);
-        boolean anyHidden = !hidden.isEmpty() || secretMask.anyHidden(factoryId, SECRET_REF);
+        // anyHidden 会给本厂每个保密产品写审计: 只在确有「产品未知」的组时才问 (懒求值)
+        boolean hasUnknownProductGroup = groups.stream().anyMatch(g -> g.productTypeId() == null);
+        boolean anyHidden = hasUnknownProductGroup
+                && (!hidden.isEmpty() || secretMask.anyHidden(factoryId, SECRET_REF));
         List<ProductUnitCostAggregator.Group> out = new ArrayList<>();
         for (ProductUnitCostAggregator.Group g : groups) {
             boolean mask = g.productTypeId() == null ? anyHidden : hidden.contains(g.productTypeId());
@@ -74,10 +77,33 @@ public class ProductCostViewService {
     static ProductUnitCostAggregator.OrderPoint toPoint(OrderCostBreakdownDTO cb, boolean maskPrice) {
         boolean hasLabor = cb.getLaborDetails() != null && !cb.getLaborDetails().isEmpty();
         boolean customerSupplied = cb.getCustomerSuppliedItemCount() != null && cb.getCustomerSuppliedItemCount() > 0;
+        // 上游只在 auditEligible (选了 BOM/工作流/净重) 时写缺项码; 普通计划缺价只把明细 amount 置 null,
+        // 所以再按明细认缺口: 非客供却没有金额 / 状态 MISSING_PRICE 的原料行, 以及没有金额的人工行
+        boolean rawGap = false;
+        if (cb.getRawMaterialDetails() != null) {
+            for (OrderCostBreakdownDTO.RawMaterialDetail d : cb.getRawMaterialDetails()) {
+                boolean supplied = "CUSTOMER_SUPPLIED".equals(d.getCollectionStatus())
+                        || "CUSTOMER_SUPPLIED".equals(d.getPriceSource());
+                if ("MISSING_PRICE".equals(d.getCollectionStatus()) || (!supplied && d.getAmount() == null)) {
+                    rawGap = true;
+                    break;
+                }
+            }
+        }
+        boolean laborGap = false;
+        if (cb.getLaborDetails() != null) {
+            for (OrderCostBreakdownDTO.LaborDetail d : cb.getLaborDetails()) {
+                if (d.getAmount() == null) {
+                    laborGap = true;
+                    break;
+                }
+            }
+        }
         // productTypeId 为 null = 一张单挂了多个计划/产品 (上游 uniqueOrNull), 不挑一个冒充
         return new ProductUnitCostAggregator.OrderPoint(cb.getOrderId(), cb.getOrderNumber(), cb.getProductTypeId(),
                 cb.getProductName(), cb.getOutputUnit(), cb.getRawMaterialCost(), cb.getLaborCost(),
-                cb.getOutputQuantity(), cb.getMissingCostItems(), hasLabor, customerSupplied, maskPrice);
+                cb.getOutputQuantity(), cb.getMissingCostItems(), hasLabor, customerSupplied, maskPrice,
+                rawGap, laborGap);
     }
 
     public LaborProcessAllocator.Result laborAllocation(String factoryId, String orderId, boolean maskPrice) {

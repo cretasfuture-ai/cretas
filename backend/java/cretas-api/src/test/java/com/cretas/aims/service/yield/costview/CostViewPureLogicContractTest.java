@@ -79,7 +79,7 @@ class CostViewPureLogicContractTest {
                                                            boolean customer, boolean masked) {
         return new ProductUnitCostAggregator.OrderPoint(no, no, product, "产品", unit,
                 m == null ? null : bd(m), l == null ? null : bd(l), g == null ? null : bd(g),
-                missing, hasLabor, customer, masked);
+                missing, hasLabor, customer, masked, false, false);
     }
 
     @Test
@@ -263,12 +263,80 @@ class CostViewPureLogicContractTest {
 
     @Test
     void service_maskedCallerGetsMaskedFlagAndNoFakeZeroTotals() {
-        var svc = service(List.of(so("o1")), cb("o1", "PLAIN", "50", "50"));
+        // 生产形状: 脱敏时上游把金额置 null
+        OrderCostBreakdownDTO masked = cb("o1", "PLAIN", "50", "50");
+        masked.setRawMaterialCost(null);
+        masked.setLaborCost(null);
+        masked.setLaborDetails(null);
+        var svc = service(List.of(so("o1")), masked);
         var res = svc.byProduct("F", LocalDate.now().minusDays(1), LocalDate.now(), true);
         assertTrue(res.priceMasked());
         var g = res.groups().get(0);
         assertEquals("PRICE_MASKED", g.orders().get(0).ineligibleReason());
+        assertNull(g.orders().get(0).materialCost());
+        assertNull(g.orders().get(0).laborCost());
         assertNull(g.sumMaterialCost());
+    }
+
+    @Test
+    void L1_pricemaskedRowBlanksAmountsEvenIfUpstreamLeaksThem() {
+        var g = ProductUnitCostAggregator.aggregate(List.of(
+                pt("A", "P1", "kg", "50", "50", "100", List.of(), true, false, true))).get(0);
+        assertNull(g.orders().get(0).materialCost());
+        assertNull(g.orders().get(0).laborCost());
+        assertNull(g.orders().get(0).outputQuantity());
+    }
+
+    @Test
+    void NM1_ordinaryPlanMissingPriceOnlyNullsDetailAmount_stillIneligible() {
+        // 生产形状: 非正式计划缺价 → missingCostItems 为空, 只有明细 amount=null / MISSING_PRICE
+        OrderCostBreakdownDTO noPrice = cb("o1", "P1", "10", "50");
+        noPrice.setRawMaterialDetails(List.of(OrderCostBreakdownDTO.RawMaterialDetail.builder()
+                .batchNumber("b1").amount(null).collectionStatus("MISSING_PRICE").build()));
+        OrderCostBreakdownDTO noLabor = cb("o2", "P1", "50", "10");
+        noLabor.setLaborDetails(List.of(OrderCostBreakdownDTO.LaborDetail.builder().processOrder(1)
+                .laborMinutes(60).amount(null).build()));
+        OrderCostBreakdownDTO ok = cb("o3", "P1", "50", "50");
+        ok.setRawMaterialDetails(List.of(OrderCostBreakdownDTO.RawMaterialDetail.builder()
+                .batchNumber("b2").amount(bd("50")).collectionStatus("COLLECTED").build()));
+        OrderCostBreakdownDTO customer = cb("o4", "P1", "0", "50");
+        customer.setCustomerSuppliedItemCount(0);
+        customer.setRawMaterialDetails(List.of(OrderCostBreakdownDTO.RawMaterialDetail.builder()
+                .batchNumber("b3").amount(BigDecimal.ZERO).collectionStatus("CUSTOMER_SUPPLIED")
+                .priceSource("CUSTOMER_SUPPLIED").build()));
+        var svc = service(List.of(so("o1"), so("o2"), so("o3"), so("o4")), noPrice, noLabor, ok, customer);
+        var g = svc.byProduct("F", LocalDate.now().minusDays(1), LocalDate.now(), false).groups().get(0);
+        assertEquals("MATERIAL_PRICE_MISSING", g.orders().get(0).ineligibleReason());
+        assertEquals("LABOR_UNKNOWN", g.orders().get(1).ineligibleReason());
+        assertNull(g.orders().get(2).ineligibleReason()); // 正常单可核算
+        assertNull(g.orders().get(3).ineligibleReason()); // 客供行 amount=0 不算缺口
+        assertEquals(2, g.eligibleCount());
+    }
+
+    @Test
+    void NM2_anyHiddenIsOnlyAskedWhenThereIsAnUnknownProductGroup() {
+        SalesOrderRepository repo = mock(SalesOrderRepository.class);
+        when(repo.findByFactoryIdAndDateRange(anyString(), any(), any())).thenReturn(List.of(so("o1")));
+        OrderCostBreakdownService bs = mock(OrderCostBreakdownService.class);
+        when(bs.compute(anyString(), eq("o1"), anyBoolean())).thenReturn(cb("o1", "PLAIN", "50", "50"));
+        ProcessSecretCostMask mask = mock(ProcessSecretCostMask.class);
+        when(mask.hiddenFor(anyString(), any(Collection.class), anyString())).thenReturn(Set.of());
+        new ProductCostViewService(repo, bs, mask).byProduct("F", LocalDate.now().minusDays(1), LocalDate.now(), false);
+        org.mockito.Mockito.verify(mask, org.mockito.Mockito.never()).anyHidden(anyString(), anyString());
+
+        // 有「产品未知」的组 (多计划单) 时才问
+        when(bs.compute(anyString(), eq("o1"), anyBoolean())).thenReturn(cb("o1", null, "50", "50"));
+        new ProductCostViewService(repo, bs, mask).byProduct("F", LocalDate.now().minusDays(1), LocalDate.now(), false);
+        org.mockito.Mockito.verify(mask, org.mockito.Mockito.times(1)).anyHidden(anyString(), anyString());
+    }
+
+    @Test
+    void NL2_secretMaskedGroupCarriesNoSignalCodes() {
+        var g = ProductUnitCostAggregator.aggregate(List.of(
+                op("A", "kg", "5", "95", "100"), op("B", "kg", "60", "60", "100"), op("C", "kg", "55", "55", "100")))
+                .get(0);
+        assertFalse(g.signals().isEmpty()); // 前提: 原本有信号
+        assertTrue(g.maskedForSecret().signals().isEmpty());
     }
 
     @Test

@@ -33,7 +33,7 @@ public final class ProductUnitCostAggregator {
     public record OrderPoint(String orderId, String orderNumber, String productTypeId, String productName,
                              String unit, BigDecimal materialCost, BigDecimal laborCost, BigDecimal outputQuantity,
                              List<String> missingCostItems, boolean hasLaborDetails, boolean customerSupplied,
-                             boolean priceMasked) {
+                             boolean priceMasked, boolean rawPriceGap, boolean laborAmountGap) {
     }
 
     public record OrderLine(String orderId, String orderNumber, BigDecimal materialCost, BigDecimal laborCost,
@@ -51,12 +51,9 @@ public final class ProductUnitCostAggregator {
             for (OrderLine l : orders) {
                 lines.add(new OrderLine(l.orderId(), l.orderNumber(), null, null, null, null, l.ineligibleReason()));
             }
-            List<CostSignalEvaluator.Signal> sig = new ArrayList<>();
-            for (CostSignalEvaluator.Signal s : signals) {
-                sig.add(new CostSignalEvaluator.Signal(s.code(), s.orderId(), s.orderNumber(), null, s.detail()));
-            }
+            // 信号代码 (材料占比低/人工占比高/离散) 本身就是配比的粗粒度信息, 保密产品被遮后一并不给
             return new Group(productTypeId, productName, unit, basis, basisLabel, null, null, null, null,
-                    eligibleCount, priceMasked, true, lines, sig);
+                    eligibleCount, priceMasked, true, lines, List.of());
         }
     }
 
@@ -83,8 +80,10 @@ public final class ProductUnitCostAggregator {
                 masked |= p.priceMasked();
                 String reason = ineligible(p);
                 if (reason != null) {
-                    lines.add(new OrderLine(p.orderId(), p.orderNumber(), p.materialCost(), p.laborCost(),
-                            p.outputQuantity(), null, reason));
+                    // 价格脱敏的行主动置 null (纵深防御: 不依赖上游 maskCosts 一个字段都不漏)
+                    boolean m = p.priceMasked();
+                    lines.add(new OrderLine(p.orderId(), p.orderNumber(), m ? null : p.materialCost(),
+                            m ? null : p.laborCost(), m ? null : p.outputQuantity(), null, reason));
                     continue;
                 }
                 BigDecimal direct = p.materialCost().add(p.laborCost());
@@ -124,6 +123,9 @@ public final class ProductUnitCostAggregator {
         if (p.laborCost() == null) return "LABOR_UNKNOWN";
         if (hasMissing(p, "RAW_MATERIAL")) return "MATERIAL_PRICE_MISSING";
         if (hasMissing(p, "LABOR_COST_UNKNOWN") || hasMissing(p, "LABOR_RATE_OR_TIME")) return "LABOR_UNKNOWN";
+        // 非正式计划 (没选 BOM/工作流/净重) 上游不写缺项码, 只把明细金额置 null → 以明细为准
+        if (p.rawPriceGap()) return "MATERIAL_PRICE_MISSING";
+        if (p.laborAmountGap()) return "LABOR_UNKNOWN";
         if (p.laborCost().signum() == 0 && !p.hasLaborDetails()) return "LABOR_UNKNOWN";
         if (p.materialCost().signum() < 0 || p.laborCost().signum() < 0) return "NEGATIVE_COST";
         if (p.outputQuantity() == null || p.outputQuantity().signum() <= 0) return "NO_POSITIVE_OUTPUT";

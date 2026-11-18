@@ -55,6 +55,7 @@ class ProductCostViewHttpExitContractTest {
 
     ProcessSecretAccessService access;
     MockMvc mvc;
+    volatile boolean priceMasked = false;
 
     @BeforeEach
     void setUp() {
@@ -72,12 +73,16 @@ class ProductCostViewHttpExitContractTest {
         SalesOrderRepository orders = mock(SalesOrderRepository.class);
         when(orders.findByFactoryIdAndDateRange(anyString(), any(), any())).thenReturn(List.of(so("o1"), so("o2")));
         OrderCostBreakdownService breakdown = mock(OrderCostBreakdownService.class);
-        when(breakdown.compute(anyString(), eq("o1"), anyBoolean())).thenReturn(cb("o1", SECRET));
-        when(breakdown.compute(anyString(), eq("o2"), anyBoolean())).thenReturn(cb("o2", PLAIN));
+        // 生产形状: maskPrice=true 时上游 maskCosts 把金额置 null
+        when(breakdown.compute(anyString(), eq("o1"), anyBoolean())).thenAnswer(inv ->
+                (Boolean) inv.getArgument(2) ? maskedCb("o1", SECRET) : cb("o1", SECRET));
+        when(breakdown.compute(anyString(), eq("o2"), anyBoolean())).thenAnswer(inv ->
+                (Boolean) inv.getArgument(2) ? maskedCb("o2", PLAIN) : cb("o2", PLAIN));
         ProcessSecretCostMask noHide = mock(ProcessSecretCostMask.class);
         when(noHide.hiddenFor(anyString(), any(java.util.Collection.class), anyString())).thenReturn(Set.of());
         PriceMaskResolver price = mock(PriceMaskResolver.class);
-        when(price.shouldMaskPrice(any())).thenReturn(false);
+        // 无 procurement:price:view 的账号 = 控制器里 shouldMaskPrice 返回 true
+        when(price.shouldMaskPrice(any())).thenAnswer(inv -> priceMasked);
 
         ProductCostViewController controller = new ProductCostViewController(
                 new ProductCostViewService(orders, breakdown, noHide), price);
@@ -99,6 +104,15 @@ class ProductCostViewHttpExitContractTest {
                 .laborDetails(List.of(OrderCostBreakdownDTO.LaborDetail.builder().processOrder(1).processName("切")
                         .laborMinutes(60).amount(new BigDecimal("50")).build()))
                 .customerSuppliedItemCount(0).build();
+    }
+
+    /** 脱敏形状: 与上游 OrderCostBreakdownService.maskCosts 一致, 金额置 null (不是 0)。 */
+    static OrderCostBreakdownDTO maskedCb(String id, String product) {
+        OrderCostBreakdownDTO d = cb(id, product);
+        d.setRawMaterialCost(null);
+        d.setLaborCost(null);
+        d.setLaborDetails(null);
+        return d;
     }
 
     static AuthenticatedActor user(long id) {
@@ -137,6 +151,28 @@ class ProductCostViewHttpExitContractTest {
         JsonNode plain = group(data, PLAIN);
         assertNotNull(plain.get("weightedUnitCost"));
         assertEquals(0, new BigDecimal("1.0000").compareTo(plain.get("weightedUnitCost").decimalValue()));
+    }
+
+    /**
+     * 价格权限阴性对照: 无 procurement:price:view = 控制器 shouldMaskPrice 为 true。
+     * 说明: PriceFieldResponseAdvice 只清 @PriceSensitive 字段和特定 Map 键, 这几个 record 两者都不是,
+     * 所以这条路径的价格保护靠 maskPrice 标志端到端生效; 本用例证明它在 HTTP 出口真的生效, 且是 null 不是 0。
+     */
+    @Test
+    void callerWithoutPriceViewGetsNullAmountsAndMaskedFlag_notZero() throws Exception {
+        priceMasked = true;
+        JsonNode data = call(user(10), Outcome.ALLOW);
+        assertTrue(data.get("priceMasked").asBoolean(), data.toString());
+        for (String product : List.of(SECRET, PLAIN)) {
+            JsonNode g = group(data, product);
+            assertTrue(g.get("sumMaterialCost").isNull(), g.toString());
+            assertTrue(g.get("sumLaborCost").isNull(), g.toString());
+            assertTrue(g.get("weightedUnitCost").isNull(), g.toString());
+            JsonNode line = g.get("orders").get(0);
+            assertTrue(line.get("materialCost").isNull(), line.toString());
+            assertTrue(line.get("laborCost").isNull(), line.toString());
+            assertEquals("PRICE_MASKED", line.get("ineligibleReason").asText());
+        }
     }
 
     @Test
