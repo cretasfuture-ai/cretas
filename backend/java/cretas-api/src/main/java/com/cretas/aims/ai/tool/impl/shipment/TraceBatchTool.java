@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.shipment;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.service.TraceabilityService;
+import com.cretas.aims.service.trace.SalesOrderTraceService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -27,6 +28,9 @@ public class TraceBatchTool extends AbstractBusinessTool {
     @Autowired
     private TraceabilityService traceabilityService;
 
+    @Autowired
+    private SalesOrderTraceService salesOrderTraceService;
+
     @Override
     public String getToolName() {
         return "trace_batch";
@@ -48,10 +52,17 @@ public class TraceBatchTool extends AbstractBusinessTool {
         // batchNumber: 批次号（必需）
         Map<String, Object> batchNumber = new HashMap<>();
         batchNumber.put("type", "string");
-        batchNumber.put("description", "要溯源的批次号");
+        batchNumber.put("description", "要溯源的生产批次号（销售单号请填 salesOrderNo）");
         properties.put("batchNumber", batchNumber);
 
+        // salesOrderNo: 销售单号（按销售单追溯时用，与批次号二选一）
+        Map<String, Object> salesOrderNo = new HashMap<>();
+        salesOrderNo.put("type", "string");
+        salesOrderNo.put("description", "销售单号（如 SO-20261105-001）。用户说「追溯销售单/订单 XXX」时填这里，不要填到 batchNumber");
+        properties.put("salesOrderNo", salesOrderNo);
+
         schema.put("properties", properties);
+        // 批次号与销售单号二选一，见 validateRequiredParams
         schema.put("required", Arrays.asList("batchNumber"));
 
         return schema;
@@ -62,18 +73,45 @@ public class TraceBatchTool extends AbstractBusinessTool {
         return Arrays.asList("batchNumber");
     }
 
+    /** 批次号或销售单号给一个就算齐。 */
+    @Override
+    protected List<String> validateRequiredParams(Map<String, Object> params) {
+        if (!getString(params, "salesOrderNo", "").isBlank()) {
+            return new ArrayList<>();
+        }
+        return super.validateRequiredParams(params);
+    }
+
     @Override
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params, Map<String, Object> context) throws Exception {
         log.info("执行批次溯源 - 工厂ID: {}, 参数: {}", factoryId, params);
 
         // 获取参数
-        String batchNumber = getString(params, "batchNumber");
+        String batchNumber = getString(params, "batchNumber", "").trim();
+        String salesOrderNo = getString(params, "salesOrderNo", "").trim();
+
+        // 销售单号：明确给了 salesOrderNo，或「批次号」其实是销售单号（没有同号批次时）→ 按销售单追溯
+        if (salesOrderNo.isBlank() && salesOrderTraceService.isSalesOrderTarget(factoryId, batchNumber)) {
+            salesOrderNo = batchNumber;
+        }
+        if (!salesOrderNo.isBlank()) {
+            Map<String, Object> bySalesOrder = salesOrderTraceService.trace(factoryId, salesOrderNo);
+            log.info("按销售单追溯完成 - 销售单号: {}, 找到: {}", salesOrderNo, bySalesOrder.get("found"));
+            return bySalesOrder;
+        }
 
         // 调用溯源服务
         TraceabilityDTO.BatchTraceResponse traceResponse = traceabilityService.getBatchTrace(factoryId, batchNumber);
 
-        // 构建返回结果
         Map<String, Object> result = new HashMap<>();
+        if (traceResponse == null) {
+            // 查不到不能报成功：否则对话里只剩一个批次号，像「查到了但没内容」
+            result.put("success", false);
+            result.put("found", false);
+            result.put("batchNumber", batchNumber);
+            result.put("message", "没有查到批次 " + batchNumber + "，请核对批次号；如果这是销售单号，请说「追溯销售单 " + batchNumber + "」。");
+            return result;
+        }
         result.put("success", true);
         result.put("batchNumber", batchNumber);
         result.put("traceInfo", traceResponse);
@@ -86,7 +124,7 @@ public class TraceBatchTool extends AbstractBusinessTool {
     @Override
     protected String getParameterQuestion(String paramName) {
         Map<String, String> questions = Map.of(
-            "batchNumber", "请问要溯源哪个批次？请提供批次号。"
+            "batchNumber", "请问要溯源哪个批次？请提供批次号或销售单号。"
         );
         return questions.getOrDefault(paramName, super.getParameterQuestion(paramName));
     }

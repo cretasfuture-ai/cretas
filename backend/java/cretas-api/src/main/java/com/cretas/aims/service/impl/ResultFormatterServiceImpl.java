@@ -274,6 +274,12 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatTraceResult(Map<String, Object> data) {
+        // 按销售单追溯 / 查不到：工具已经写好分段文字，原样给用户，不再退回只剩「批次号」的壳
+        String message = getString(data, "message");
+        if (message != null && !message.isBlank()
+                && (data.containsKey("salesOrderNo") || Boolean.FALSE.equals(data.get("found")))) {
+            return message;
+        }
         StringBuilder sb = new StringBuilder("溯源信息：\n");
         String batchNumber = getString(data, "batchNumber");
         if (batchNumber != null) {
