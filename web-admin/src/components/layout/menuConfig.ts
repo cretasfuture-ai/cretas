@@ -447,10 +447,11 @@ const rawMenuConfig: MenuItem[] = [
       //    餐饮租户不从这里管账号。⛔ 不要把它当成待修缺陷「顺手修好」。
       { path: '/system/users', title: '账号管理', icon: '', module: 'system', groupLabel: '账号权限' },
       { path: '/system/roles', title: '角色权限', icon: '', module: 'system' },
-      // 权限矩阵只读页 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。
-      // module: 'system' 与后端端点的 @RequirePermission 同码 —— ⛔ 不加 roles 白名单,
-      // 否则「菜单可见」与「接口可进」会分叉。
-      { path: '/system/permission-matrix', title: '权限矩阵', icon: '', module: 'system' },
+      // 权限矩阵 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906)。改的是全平台表 ⇒ 平台专属
+      // (2026-11-18 PROTO-DEMO-PERM): 后端读写两个端点都叠了 @RequireRole({"platform_admin"}),
+      // 这里的 roles 与它同一份名单 —— 工厂账号 (含 factory_super_admin / permission_admin) 菜单不可见、接口 403。
+      // 闸: permissionGateMatchesBackend.spec.ts 对着后端源文件钉住两侧一致。
+      { path: '/system/permission-matrix', title: '权限矩阵', icon: '', module: 'system', roles: ['platform_admin'] },
       { path: '/hr/employees', title: '员工档案', icon: '', module: 'hr', groupLabel: '员工组织' },
       { path: '/hr/departments', title: '部门管理', icon: '', module: 'hr' },
       { path: '/hr/work-types', title: '工种字典', icon: '', module: 'hr' },

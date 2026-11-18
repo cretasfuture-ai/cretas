@@ -70,7 +70,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "allIntents", key = "#factoryId")
     public List<AIIntentConfig> getAllIntents(String factoryId) {
         log.debug("getAllIntents(factoryId={})", factoryId);
-        return projectVisible(factoryId, intentRepository.findByFactoryIdOrPlatformLevel(factoryId));
+        return cacheSafe(projectVisible(factoryId, intentRepository.findByFactoryIdOrPlatformLevel(factoryId)));
     }
 
     @Override
@@ -78,7 +78,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "allIntents_legacy")
     public List<AIIntentConfig> getAllIntents() {
         log.debug("getAllIntents()");
-        return FactoryIntentCatalog.project(intentRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc());
+        return cacheSafe(FactoryIntentCatalog.project(intentRepository.findByIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc()));
     }
 
     @Override
@@ -86,9 +86,9 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     public List<AIIntentConfig> getIntentsByCategory(String factoryId, String category) {
         if (factoryId == null || factoryId.isBlank()) {
             log.warn("getIntentsByCategory called without factoryId");
-            return List.of();
+            return cacheSafe(List.of());
         }
-        return projectVisible(factoryId, intentRepository.findByFactoryIdAndCategory(factoryId, category));
+        return cacheSafe(projectVisible(factoryId, intentRepository.findByFactoryIdAndCategory(factoryId, category)));
     }
 
     @Override
@@ -96,7 +96,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "intentsByCategory_legacy", key = "#category")
     public List<AIIntentConfig> getIntentsByCategory(String category) {
         log.warn("Deprecated getIntentsByCategory() called without factoryId");
-        return FactoryIntentCatalog.project(intentRepository.findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc(category));
+        return cacheSafe(FactoryIntentCatalog.project(intentRepository.findByIntentCategoryAndIsActiveTrueAndDeletedAtIsNullOrderByPriorityDesc(category)));
     }
 
     @Override
@@ -104,9 +104,9 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     public List<AIIntentConfig> getIntentsBySensitivity(String factoryId, String sensitivityLevel) {
         if (factoryId == null || factoryId.isBlank()) {
             log.warn("getIntentsBySensitivity called without factoryId");
-            return List.of();
+            return cacheSafe(List.of());
         }
-        return projectVisible(factoryId, intentRepository.findByFactoryIdAndSensitivity(factoryId, sensitivityLevel));
+        return cacheSafe(projectVisible(factoryId, intentRepository.findByFactoryIdAndSensitivity(factoryId, sensitivityLevel)));
     }
 
     @Override
@@ -121,10 +121,10 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     public List<String> getAllCategories(String factoryId) {
         if (factoryId == null || factoryId.isBlank()) {
             log.warn("getAllCategories called without factoryId");
-            return List.of();
+            return cacheSafe(List.of());
         }
-        return getAllIntents(factoryId).stream().map(AIIntentConfig::getIntentCategory)
-                .filter(java.util.Objects::nonNull).distinct().toList();
+        return cacheSafe(getAllIntents(factoryId).stream().map(AIIntentConfig::getIntentCategory)
+                .filter(java.util.Objects::nonNull).distinct().toList());
     }
 
     @Override
@@ -132,8 +132,23 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
     @Cacheable(value = "intentCategories_legacy")
     public List<String> getAllCategories() {
         log.warn("Deprecated getAllCategories() called without factoryId");
-        return getAllIntents().stream().map(AIIntentConfig::getIntentCategory)
-                .filter(java.util.Objects::nonNull).distinct().toList();
+        return cacheSafe(getAllIntents().stream().map(AIIntentConfig::getIntentCategory)
+                .filter(java.util.Objects::nonNull).distinct().toList());
+    }
+
+    /**
+     * {@code @Cacheable} 方法的<b>顶层</b>返回值必须是 {@link java.util.ArrayList}。
+     *
+     * <p>2026-11-18 prod 事故 (追踪码 9C029606 / 367759CB, 一线角色 AI 操作权限页每次打开都报错):
+     * {@code Stream.toList()} / {@code List.of()} 的运行时类型是 final 的 {@code ImmutableCollections$ListN},
+     * Redis 序列化器用 {@code DefaultTyping.NON_FINAL}, 顶层 final 类型<b>不写类型标记</b> ⇒ 写进 Redis 的是
+     * {@code [["…AIIntentConfig",{…}],…]}, 读回来时要的却是 {@code ["java.util.…",[…]]} ⇒
+     * {@code SerializationException: Unexpected token (START_ARRAY), expected VALUE_STRING}。
+     * 第一次未命中成功并写入毒条目, 之后每次命中都 500。嵌在 Map 里的同类集合没事 (那里声明类型是 Object)。
+     * 守卫测试: {@code IntentConfigCacheRoundTripTest}。
+     */
+    private static <T> List<T> cacheSafe(List<T> rows) {
+        return new java.util.ArrayList<>(rows);
     }
 
     private List<AIIntentConfig> projectVisible(String factoryId, List<AIIntentConfig> rows) {

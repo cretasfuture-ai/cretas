@@ -1806,13 +1806,13 @@ meta: { requiresAuth: true, title: '调拨单列表', module: 'inventory', bread
           // 权限矩阵**只读**页 (ARCH-PERMISSION-ADMIN-L1-EDITOR-20260906 step 1)。
           // module 必须是 'system' —— 与后端 PermissionMatrixController 的
           // @RequirePermission({"system:read","system:read_write"}) 是同一个权限码。
-          // ⛔ 不要改成别的模块或加 roles 白名单: 那会让「菜单看得见」与「接口进得去」
-          //    两个判据分叉, 症状是「看得见点进去 403」(本仓反复踩的形态)。
+          // 2026-11-18 (PROTO-DEMO-PERM): 全平台表 ⇒ 平台专属, roles 与后端 @RequireRole({"platform_admin"})
+          //    同一份名单, 菜单项也带同样的 roles —— 三处一致由 permissionGateMatchesBackend.spec.ts 钉住。
           {
             path: 'permission-matrix',
             name: 'SystemPermissionMatrix',
             component: () => import('@/views/system/permission-matrix/index.vue'),
-            meta: { requiresAuth: true, title: '权限矩阵', module: 'system', breadcrumbParent: '人事管理' }
+            meta: { requiresAuth: true, title: '权限矩阵', module: 'system', roles: ['platform_admin'], breadcrumbParent: '人事管理' }
           },
           {
             path: 'logs',
