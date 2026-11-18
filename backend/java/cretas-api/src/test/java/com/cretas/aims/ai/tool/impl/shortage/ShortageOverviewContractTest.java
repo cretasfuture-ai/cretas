@@ -5,10 +5,14 @@ import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.orchestration.MaterialShortfall;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
+import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.ResultFormatterServiceImpl;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.orchestration.BomExpansionService;
+import com.cretas.aims.service.orchestration.InventoryMatchingService;
 import com.cretas.aims.service.shortage.ShortageAnalysisService;
 import com.cretas.aims.service.shortage.dto.ShortageReport;
+import com.cretas.aims.service.shortage.impl.ShortageAnalysisServiceImpl;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -20,16 +24,18 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * 生产数字专员 C: 「哪些订单可能交不了货？缺什么料？」
- * 修前回「排产建议清单」, 没有订单号、没有缺料名称与数量。shortage_analyze 不给订单号 = 在途订单缺料总览。
+ * 缺料分析不给订单号 = 看全厂在途订单哪些缺料、缺什么 (2026-11-18 工作台答非所问)。
+ * 总览读的是全厂销售订单: 有销售/财务/采购/生产读权限才给, 无 sales:read 不出客户名称; 带订单号的单订单分析不受影响。
  */
 class ShortageOverviewContractTest {
 
-    private final SalesService salesService = mock(SalesService.class);
     private final ShortageAnalysisService analysis = mock(ShortageAnalysisService.class);
+    private final PermissionService perms = mock(PermissionService.class);
     private final ShortageAnalysisTool tool = new ShortageAnalysisTool();
 
     private SalesOrder order(String id, String no, SalesOrderStatus status, String due) {
@@ -47,39 +53,43 @@ class ShortageOverviewContractTest {
                 .fullySatisfied(shortfalls.length == 0).build();
     }
 
-    @Test
-    void listsOnlyOpenOrdersWithShortageAndNamesMaterialAndQuantity() throws Exception {
-        ReflectionTestUtils.setField(tool, "salesService", salesService);
+    private void wire() {
         ReflectionTestUtils.setField(tool, "shortageService", analysis);
-        List<SalesOrder> rows = List.of(
-                order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20"),
+        ReflectionTestUtils.setField(tool, "permissionService", perms);
+        when(perms.roleHasPermission("F", "production_manager", "production:read")).thenReturn(true);
+        when(perms.roleHasPermission("F", "sales_manager", "sales:read")).thenReturn(true);
+    }
+
+    private MaterialShortfall beef() {
+        return new MaterialShortfall("m1", "牛腱", new BigDecimal("100"), new BigDecimal("40"), new BigDecimal("60"), "kg");
+    }
+
+    @Test
+    void listsOpenOrdersWithShortageAndNamesMaterialAndQuantity() throws Exception {
+        wire();
+        when(analysis.listOpenOrdersForOverview("F")).thenReturn(List.of(
                 order("b", "SO-B", SalesOrderStatus.CONFIRMED, "2026-11-19"),
-                order("c", "SO-C", SalesOrderStatus.COMPLETED, "2026-11-01"),
-                order("d", "SO-D", SalesOrderStatus.CANCELLED, "2026-11-01"));
-        when(salesService.getSalesOrders("F", 1, 100)).thenReturn(PageResponse.of(rows, 1, 100, 4L));
-        when(analysis.analyzeForSalesOrder("F", "a")).thenReturn(report("a",
-                new MaterialShortfall("m1", "牛腱", new BigDecimal("100"), new BigDecimal("40"), new BigDecimal("60"), "kg")));
+                order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")));
+        when(analysis.analyzeForSalesOrder("F", "a")).thenReturn(report("a", beef()));
         when(analysis.analyzeForSalesOrder("F", "b")).thenReturn(report("b"));
 
-        Map<String, Object> result = tool.doExecute("F", new HashMap<>(), Map.of());
+        Map<String, Object> result = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "production_manager"));
 
         assertThat(result.get("openOrderCount")).isEqualTo(2);
         assertThat(result.get("failedOrderCount")).isEqualTo(0);
         String reply = new ResultFormatterServiceImpl().format(IntentExecuteResponse.builder()
                 .intentCode("SHORTAGE_ANALYSIS").intentCategory("DATA_QUERY").status("SUCCESS").resultData(result).build());
-        assertThat(reply).contains("SO-A").contains("牛腱 60kg").doesNotContain("SO-B").doesNotContain("SO-C");
+        assertThat(reply).contains("SO-A").contains("牛腱 60kg").doesNotContain("SO-B");
         assertThat(reply).doesNotContain("trace").doesNotContain("排产建议");
     }
 
     @Test
     void failedAnalysisIsCountedNotTreatedAsNoShortage() throws Exception {
-        ReflectionTestUtils.setField(tool, "salesService", salesService);
-        ReflectionTestUtils.setField(tool, "shortageService", analysis);
-        when(salesService.getSalesOrders("F", 1, 100)).thenReturn(PageResponse.of(
-                List.of(order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")), 1, 100, 1L));
+        wire();
+        when(analysis.listOpenOrdersForOverview("F")).thenReturn(List.of(order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")));
         when(analysis.analyzeForSalesOrder("F", "a")).thenThrow(new IllegalStateException("boom"));
 
-        Map<String, Object> result = tool.doExecute("F", new HashMap<>(), Map.of());
+        Map<String, Object> result = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "production_manager"));
 
         assertThat(result.get("failedOrderCount")).isEqualTo(1);
         String reply = new ResultFormatterServiceImpl().format(IntentExecuteResponse.builder()
@@ -88,39 +98,57 @@ class ShortageOverviewContractTest {
     }
 
     @Test
-    void singleOrderStillUsesTheSingleOrderPath() throws Exception {
-        // 阴性对照: 给了订单号仍走原来的单订单分析 (返回 salesOrderId/shortage, 不是总览)
-        ReflectionTestUtils.setField(tool, "salesService", salesService);
-        ReflectionTestUtils.setField(tool, "shortageService", analysis);
+    void singleOrderStillUsesTheSingleOrderPathForAnyRole() throws Exception {
+        // 阴性对照: 给了订单号仍走原来的单订单分析, 不看总览权限 (仓管/质检带订单号的原有用法不受影响)
+        wire();
         when(analysis.analyzeForSalesOrder("F", "SO-1")).thenReturn(report("SO-1"));
-        Map<String, Object> result = tool.doExecute("F", new HashMap<>(Map.of("salesOrderId", "SO-1")), Map.of());
+        Map<String, Object> result = tool.doExecute("F", new HashMap<>(Map.of("salesOrderId", "SO-1")),
+                Map.of("userRole", "warehouse_worker"));
         assertThat(result).containsKey("shortage").doesNotContainKey("orderShortages");
     }
 
     @Test
-    void overviewHidesCustomerNameFromRolesWithoutSalesReadButKeepsOrderShortageFacts() throws Exception {
-        ReflectionTestUtils.setField(tool, "salesService", salesService);
-        ReflectionTestUtils.setField(tool, "shortageService", analysis);
-        com.cretas.aims.service.PermissionService perms = mock(com.cretas.aims.service.PermissionService.class);
-        when(perms.roleHasPermission("F", "sales_manager", "sales:read")).thenReturn(true);
-        ReflectionTestUtils.setField(tool, "permissionService", perms);
-        when(salesService.getSalesOrders("F", 1, 100)).thenReturn(PageResponse.of(
-                List.of(order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")), 1, 100, 1L));
-        when(analysis.analyzeForSalesOrder("F", "a")).thenReturn(report("a",
-                new MaterialShortfall("m1", "牛腱", new BigDecimal("100"), new BigDecimal("40"), new BigDecimal("60"), "kg")));
+    void overviewIsDeniedForRolesWithoutAnyOrderReadPermissionAndDoesNotTouchOrders() throws Exception {
+        wire();
+        Map<String, Object> noPerm = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "warehouse_worker"));
+        assertThat(noPerm.get("status")).isEqualTo("NEED_MORE_INFO");
+        assertThat(noPerm.get("message").toString()).contains("订单号");
+        assertThat(tool.doExecute("F", new HashMap<>(), Map.of()).get("status")).isEqualTo("NEED_MORE_INFO");
+        verify(analysis, never()).listOpenOrdersForOverview("F");
+    }
 
-        // 生产角色 (无 sales:read): 有订单号、交期、缺料名称与数量, 没有客户名称
-        Map<String, Object> asProduction = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "production_manager"));
-        String rows = asProduction.get("orderShortages").toString();
-        assertThat(rows).contains("SO-A").contains("牛腱").contains("2026-11-20").doesNotContain("甲客户");
+    @Test
+    void overviewHidesCustomerNameFromRolesWithoutSalesRead() throws Exception {
+        wire();
+        when(analysis.listOpenOrdersForOverview("F")).thenReturn(List.of(order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20")));
+        when(analysis.analyzeForSalesOrder("F", "a")).thenReturn(report("a", beef()));
 
-        // 阴性对照: 没有角色信息同样不出客户; 销售角色才出
-        assertThat(tool.doExecute("F", new HashMap<>(), Map.of()).get("orderShortages").toString()).doesNotContain("甲客户");
+        String asProduction = tool.doExecute("F", new HashMap<>(), Map.of("userRole", "production_manager"))
+                .get("orderShortages").toString();
+        assertThat(asProduction).contains("SO-A").contains("牛腱").contains("2026-11-20").doesNotContain("甲客户");
+        // 阳性对照: 销售角色才出客户名称
         assertThat(tool.doExecute("F", new HashMap<>(), Map.of("userRole", "sales_manager")).get("orderShortages").toString())
                 .contains("甲客户");
+    }
 
-        // 门槛: 生产读放行, 质检/仓储读不再放行 (总览读的是销售订单)
-        assertThat(tool.getRequiredPermissions()).contains("production:read", "sales:read", "finance:read", "procurement:read")
-                .doesNotContain("warehouse:read", "quality:read");
+    @Test
+    void toolLevelPermissionsAreUnchangedSoSingleOrderUsersAreNotLockedOut() {
+        assertThat(tool.getRequiredPermissions()).contains("warehouse:read", "quality:read", "production:read", "sales:read");
+    }
+
+    @Test
+    void serviceListsOnlyOpenOrdersSortedByDueDate() {
+        ShortageAnalysisServiceImpl service = new ShortageAnalysisServiceImpl(
+                mock(InventoryMatchingService.class), mock(BomExpansionService.class));
+        SalesService sales = mock(SalesService.class);
+        ReflectionTestUtils.setField(service, "salesService", sales);
+        when(sales.getSalesOrders("F", 1, 100)).thenReturn(PageResponse.of(List.of(
+                order("a", "SO-A", SalesOrderStatus.CONFIRMED, "2026-11-20"),
+                order("b", "SO-B", SalesOrderStatus.CONFIRMED, "2026-11-19"),
+                order("c", "SO-C", SalesOrderStatus.COMPLETED, "2026-11-01"),
+                order("d", "SO-D", SalesOrderStatus.CANCELLED, "2026-11-01")), 1, 100, 4L));
+
+        assertThat(service.listOpenOrdersForOverview("F")).extracting(SalesOrder::getOrderNumber)
+                .containsExactly("SO-B", "SO-A");
     }
 }

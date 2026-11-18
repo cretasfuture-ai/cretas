@@ -1,9 +1,7 @@
 package com.cretas.aims.ai.tool.impl.shortage;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
-import com.cretas.aims.entity.enums.SalesOrderStatus;
 import com.cretas.aims.entity.inventory.SalesOrder;
-import com.cretas.aims.service.inventory.SalesService;
 import com.cretas.aims.service.shortage.ShortageAnalysisService;
 import com.cretas.aims.service.shortage.dto.ProcurementSuggestion;
 import com.cretas.aims.service.shortage.dto.ProductionPlanSuggestion;
@@ -15,8 +13,6 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
-import java.util.Set;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,16 +44,10 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
 
     @Autowired
     @Lazy
-    private SalesService salesService;
-
-    @Autowired
-    @Lazy
     private com.cretas.aims.service.PermissionService permissionService;
 
     /** 全厂缺料总览最多分析的在途订单数 (按交期最近的先查)。 */
     static final int OVERVIEW_ORDER_LIMIT = 20;
-    private static final Set<SalesOrderStatus> NOT_OPEN = Set.of(SalesOrderStatus.DRAFT, SalesOrderStatus.COMPLETED,
-            SalesOrderStatus.CANCELLED, SalesOrderStatus.SHORT_CLOSED, SalesOrderStatus.FINANCE_REJECTED);
 
     @Override
     public String getToolName() {
@@ -100,6 +90,9 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
                                             Map<String, Object> context) throws Exception {
         String salesOrderId = getString(params, "salesOrderId");
         if (salesOrderId == null || salesOrderId.isBlank()) {
+            if (!canSeeOverview(factoryId, context)) {
+                return overviewDenied();
+            }
             return overview(factoryId, canSeeCustomer(factoryId, context));
         }
         log.info("[shortage_analyze] factoryId={}, salesOrderId={}", factoryId, salesOrderId);
@@ -131,6 +124,33 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
      * 总览里的客户名称只给有销售读权限 (sales:read / sales:read_write) 的角色; 生产、采购等角色只看订单号、交期、缺料名称和数量。
      * 认不出角色或权限服务不可用 = 不给 (宁缺勿漏)。
      */
+    private static final String[] OVERVIEW_PERMISSIONS = {"sales:read", "sales:read_write", "finance:read",
+            "procurement:read", "production:read", "production:read_write"};
+
+    /** 不给订单号的全厂总览读的是全厂在途订单: 只给有销售/财务/采购/生产读权限的角色; 带订单号的单订单分析不受影响。 */
+    private boolean canSeeOverview(String factoryId, Map<String, Object> context) {
+        if (context == null || permissionService == null) {
+            return false;
+        }
+        Object role = context.get("userRole") != null ? context.get("userRole") : context.get("role");
+        if (role == null) {
+            return false;
+        }
+        for (String code : OVERVIEW_PERMISSIONS) {
+            if (permissionService.roleHasPermission(factoryId, role.toString(), code)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private Map<String, Object> overviewDenied() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "NEED_MORE_INFO");
+        result.put("message", "看全厂缺料需要销售、财务、采购或生产的查看权限；请告诉我具体订单号，我按订单帮你查缺什么料。");
+        return result;
+    }
+
     private boolean canSeeCustomer(String factoryId, Map<String, Object> context) {
         if (context == null || permissionService == null) {
             return false;
@@ -149,13 +169,7 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
      * 只列有缺口的订单 + 缺的物料名称与数量。分析失败的订单计数后明说, 不当成「不缺」。
      */
     Map<String, Object> overview(String factoryId, boolean withCustomer) {
-        List<SalesOrder> open = new ArrayList<>();
-        for (SalesOrder order : salesService.getSalesOrders(factoryId, 1, 100).getContent()) {
-            if (order.getStatus() != null && !NOT_OPEN.contains(order.getStatus())) {
-                open.add(order);
-            }
-        }
-        open.sort(Comparator.comparing(SalesOrder::getRequiredDeliveryDate, Comparator.nullsLast(Comparator.naturalOrder())));
+        List<SalesOrder> open = shortageService.listOpenOrdersForOverview(factoryId);
         List<SalesOrder> checked = open.size() > OVERVIEW_ORDER_LIMIT ? open.subList(0, OVERVIEW_ORDER_LIMIT) : open;
         List<Map<String, Object>> rows = new ArrayList<>();
         int failed = 0;
@@ -207,7 +221,6 @@ public class ShortageAnalysisTool extends AbstractBusinessTool {
      */
     @Override
     public java.util.Set<String> getRequiredPermissions() {
-        // 2026-11-18 集成裁定: 全厂总览读销售订单, 放行销售/财务/采购读 + 生产读 (计划员排产要看在途订单); 无 sales:read 的角色总览里不出客户名称
-        return java.util.Set.of("finance:read", "procurement:read", "production:read", "production:read_write", "sales:read", "sales:read_write");
+        return java.util.Set.of("procurement:read", "procurement:read_write", "production:read", "production:read_write", "quality:read", "quality:read_write", "sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write");
     }
 }
