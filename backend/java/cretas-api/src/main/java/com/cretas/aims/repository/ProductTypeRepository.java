@@ -172,9 +172,15 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
 
-    /** 当前生成前缀下的所有编码；Service 解析纯数字后缀并取最大值。 */
-    @Query("SELECT p.code FROM ProductType p WHERE p.factoryId = :factoryId " +
-           "AND SUBSTRING(p.code, 1, LENGTH(:prefix)) = :prefix")
+    /**
+     * 当前生成前缀下的所有编码；Service 解析纯数字后缀并取最大值。
+     * 必须是原生 SQL: JPQL 会被实体上的 {@code @Where(deleted_at IS NULL)} 过滤掉软删行, 而唯一约束
+     * uk_product_types_factory_code (factory_id, code) 对软删行同样生效, 漏算会生成已被占用的编码
+     * (F006: 活行最大 0038, 软删行占到 0048, 预览出 CPF0060039 保存即 409)。
+     */
+    @Query(value = "SELECT code FROM product_types WHERE factory_id = :factoryId " +
+           "AND SUBSTRING(code, 1, LENGTH(CAST(:prefix AS VARCHAR(200)))) = CAST(:prefix AS VARCHAR(200))",
+           nativeQuery = true)
     List<String> findCodesByFactoryIdAndGeneratedPrefix(@Param("factoryId") String factoryId,
                                                         @Param("prefix") String prefix);
 

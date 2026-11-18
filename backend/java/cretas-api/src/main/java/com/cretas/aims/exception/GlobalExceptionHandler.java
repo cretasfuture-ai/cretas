@@ -607,6 +607,43 @@ public class GlobalExceptionHandler {
      *   - PUT   → "更新失败: 关联资源已失效" + "请刷新页面后重新选择"
      *   - DELETE/其他 → 保留原 "无法删除" wording (已经准确)
      */
+    /** 唯一约束冲突的用户可见文案; 不含任何数据库列名。 */
+    record UniqueConflictText(String message, String actionHint, String hintTarget) {}
+
+    private static final java.util.Map<String, String> UNIQUE_COLUMN_LABELS = java.util.Map.of(
+            "code", "编码",
+            "name", "名称",
+            "phone", "手机号",
+            "username", "用户名",
+            "batch_number", "批次号",
+            "employee_code", "工号");
+
+    /**
+     * 把 PG 报的唯一约束列 (如 "factory_id, code") 翻成用户语言。租户列 factory_id 不属于用户可改字段, 先剔除;
+     * 认得的业务列给出具体提示, 不认得的给通用提示, 原始列名永远不外露 (调用方已写日志)。
+     */
+    static UniqueConflictText describeUniqueConflict(String columns) {
+        String field = null;
+        for (String c : columns.split(",")) {
+            String col = c.trim().toLowerCase();
+            if (!col.equals("factory_id") && !col.isEmpty()) {
+                field = col;
+                break;
+            }
+        }
+        String label = field == null ? null : UNIQUE_COLUMN_LABELS.get(field);
+        if ("code".equals(field)) {
+            return new UniqueConflictText("编码已存在，请换一个编码或留空自动生成",
+                    "请换一个编码，或留空由系统自动生成", "code");
+        }
+        if (label != null) {
+            return new UniqueConflictText("数据已存在，请勿重复提交",
+                    "请检查「" + label + "」是否已存在，或返回列表查看已存在记录", field);
+        }
+        return new UniqueConflictText("数据已存在，请勿重复提交",
+                "请检查表单中的唯一字段是否已存在,或返回列表查看已存在记录", null);
+    }
+
     @ExceptionHandler(DataIntegrityViolationException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ApiResponse<?> handleDataIntegrityViolationException(
@@ -663,9 +700,13 @@ public class GlobalExceptionHandler {
             java.util.regex.Matcher uvm = java.util.regex.Pattern
                 .compile("Key \\(([^)]+)\\)=\\(").matcher(raw);
             if (uvm.find()) {
+                // 约束列名 (factory_id, code) 是内部字段名, 只进日志, 不进用户提示。
                 String col = uvm.group(1);
-                actionHint = "请检查表单中字段「" + col + "」是否已存在,或返回列表查看已存在记录";
-                hintTarget = col;
+                log.warn("[{}] 唯一约束冲突列: {}", traceId, col);
+                UniqueConflictText text = describeUniqueConflict(col);
+                message = text.message();
+                actionHint = text.actionHint();
+                hintTarget = text.hintTarget();
             } else {
                 actionHint = "请检查表单中的唯一字段是否已存在,或返回列表查看已存在记录";
             }
