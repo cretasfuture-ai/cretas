@@ -135,9 +135,17 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
         status = 504
         yield {"type": "error", "code": "MINI_TIMEOUT", "message": "本地 AI 响应超时，请重试"}
     except (httpx.HTTPError, ValueError, TypeError) as exc:
+        # 2026-11-19: 上游 4xx/5xx 只记状态码和响应体前 200 字 (网关错误体不含提问/回答原文)
+        upstream = ""
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                body = (await exc.response.aread()).decode("utf-8", "replace")[:200]
+            except Exception:
+                body = "<unreadable>"
+            upstream = " upstream_status=%s upstream_body=%r" % (exc.response.status_code, body)
         # 2026-11-17: 原因只记异常类型 (不记内容, 可能含回答原文), 便于从日志区分「连不上」与「回答格式不对」
         try:
-            logger.warning("f006_boss_question failed correlation=%s reason=%s", correlation, type(exc).__name__)
+            logger.warning("f006_boss_question failed correlation=%s reason=%s%s", correlation, type(exc).__name__, upstream)
         except Exception:
             pass
         yield {"type": "error", "code": "MINI_UNAVAILABLE",
