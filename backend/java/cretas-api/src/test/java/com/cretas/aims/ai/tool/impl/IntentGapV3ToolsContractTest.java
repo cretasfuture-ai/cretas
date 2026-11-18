@@ -233,7 +233,8 @@ class IntentGapV3ToolsContractTest {
             u.setFactoryId(FACTORY);
             u.setFullName(name);
             u.setEmployeeCode(code);
-            u.setDepartment("一车间");
+            u.setUsername("u" + code);
+            u.setDepartment("production"); // 库里存的是英文部门码
             u.setPosition("包装");
             u.setPhone("13800000000");
             u.setEmail("x@example.com");
@@ -251,8 +252,10 @@ class IntentGapV3ToolsContractTest {
             @SuppressWarnings("unchecked")
             Map<String, Object> employee = (Map<String, Object>) data.get("employee");
             assertThat(employee.keySet()).isSubsetOf(Set.of(
-                    "name", "employeeCode", "department", "position", "todayLines"));
-            assertThat(employee).containsEntry("department", "一车间");
+                    "name", "username", "department", "todayLines"));
+            // 英文码要翻成与 App 员工名录同一个显示名 (DepartmentDisplayNames), ⛔ 不原样给 production
+            assertThat(employee).containsEntry("department", "生产部");
+            assertThat(String.valueOf(out.get("message"))).contains("生产部").doesNotContain("production");
             String text = String.valueOf(out);
             assertThat(text).doesNotContain("13800000000").doesNotContain("x@example.com");
             assertThat(String.valueOf(out.get("message"))).contains("今天没有排班");
@@ -270,8 +273,25 @@ class IntentGapV3ToolsContractTest {
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> candidates = (List<Map<String, Object>>) data.get("candidates");
             candidates.forEach(c -> assertThat(c.keySet())
-                    .isSubsetOf(Set.of("name", "employeeCode", "department", "position")));
+                    .isSubsetOf(Set.of("name", "username", "department")));
             assertThat(String.valueOf(out)).doesNotContain("13800000000");
+        }
+
+        @Test
+        @DisplayName("只是包含 (没有全名命中) 哪怕只有一位也不直接给, 先列候选; 按账号点名后才给")
+        void containsOnlyMatchAsksFirstEvenWhenSingle() throws Exception {
+            when(users.findByFactoryIdAndIsActive(FACTORY, true)).thenReturn(List.of(user(1, "张三丰", "011")));
+            Map<String, Object> out = call(tool, "doExecute", FACTORY, Map.of("name", "三丰"), Map.of("userId", 1L));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> data = (Map<String, Object>) out.get("data");
+            assertThat(data).containsEntry("status", "NEEDS_SELECTION").containsEntry("total", 1);
+            assertThat(String.valueOf(out.get("message"))).contains("没有全名叫「三丰」");
+
+            Map<String, Object> picked = call(tool, "doExecute", FACTORY,
+                    Map.of("name", "三丰", "username", "u011"), Map.of("userId", 1L));
+            @SuppressWarnings("unchecked")
+            Map<String, Object> pickedData = (Map<String, Object>) picked.get("data");
+            assertThat(pickedData).containsEntry("status", "FOUND");
         }
     }
 

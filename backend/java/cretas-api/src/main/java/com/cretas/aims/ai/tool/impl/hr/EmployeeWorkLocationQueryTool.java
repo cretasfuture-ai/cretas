@@ -9,6 +9,7 @@ import com.cretas.aims.repository.LineScheduleRepository;
 import com.cretas.aims.repository.ProductionLineRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.WorkerAssignmentRepository;
+import com.cretas.aims.utils.DepartmentDisplayNames;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -29,28 +30,27 @@ import java.util.stream.Collectors;
  * <p>复核原话:「你说的那个老张, 哪个车间的啊」「帮我查下张三现在在哪条线」。目录里原来没有查员工的意图;
  * 已有的 {@code query_employee_profile} 返回整份 UserDTO (含手机号等), 不适合在对话里给。
  *
- * <h2>只给工作信息</h2>
- * 每个人只投影 {@link #WORK_FIELDS}: 姓名、工号、车间/部门、岗位、今天排在哪条线。
+ * <h2>只给工作信息 (与 App 员工名录同一组字段)</h2>
+ * 每个人只投影 {@link #WORK_FIELDS}: 姓名、账号、车间/部门 (中文显示名, {@link DepartmentDisplayNames#display})、今天排在哪条线。
+ * 与 {@code UserController} 员工名录给的字段对齐, 不给工号、岗位。
  * 产线以当天排班为准 (WorkerAssignment → LineSchedule → ProductionLine), 没排班就明说「今天没有排班」不猜;
- * 车间取用户档案的 department。⛔ 不给「手上在做的批次」: 报工批次在 App 里只给 work_report:read, 这个工具的
- * 权限 (hr / scheduling / production 读) 更宽, 给了就是 AI 多于 App (GatedDataToolAiPathPermissionTest)。
- * ⛔ 手机号、邮箱、身份证号、工资/时薪、出生日期等一律不出 —— 投影是白名单, 不是黑名单
- * (见 {@code EmployeeWorkLocationQueryToolTest} 对返回字段的白名单断言)。
+ * 车间取用户档案的 department。⛔ 不给「手上在做的批次」: 报工批次在 App 里只给 work_report:read, 给了就是 AI 多于 App
+ * (GatedDataToolAiPathPermissionTest)。⛔ 手机号、邮箱、身份证号、工资/时薪、出生日期等一律不出 —— 投影是白名单, 不是黑名单
+ * (见 {@code IntentGapV3ToolsContractTest.EmployeeWhere} 对返回字段的白名单断言)。
  *
- * <h2>同名先列出来</h2>
- * 按姓名匹配到多个人 (或「老张」这种只给姓) 时不猜, 返回 {@code NEEDS_SELECTION} + 候选 (姓名/工号/车间/岗位),
- * 让用户按工号再问一次。只在本厂已启用账号里找。
+ * <h2>拿不准就列出来</h2>
+ * 只有全名完全相同且只有一位时才直接给; 同名多位、「老张」这种只给姓、或只是名字里包含 (没有全名命中) 时都不猜,
+ * 返回 {@code NEEDS_SELECTION} + 候选 (姓名/账号/车间), 让用户按账号再问一次。只在本厂已启用账号里找。
  */
 @Slf4j
 @Component
 public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
 
     /** 返回给对话的员工字段白名单。 */
-    static final Set<String> WORK_FIELDS = Set.of(
-            "name", "employeeCode", "department", "position", "todayLines");
+    static final Set<String> WORK_FIELDS = Set.of("name", "username", "department", "todayLines");
 
-    /** 候选列表 (同名待选) 的字段白名单。 */
-    static final Set<String> CANDIDATE_FIELDS = Set.of("name", "employeeCode", "department", "position");
+    /** 候选列表 (待选) 的字段白名单。 */
+    static final Set<String> CANDIDATE_FIELDS = Set.of("name", "username", "department");
 
     private static final int MAX_CANDIDATES = 10;
 
@@ -70,8 +70,8 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
 
     @Override
     public String getDescription() {
-        return "按姓名查本厂员工现在在哪个车间、哪条产线 (按今天排班)、什么岗位。只返回工作信息, 不返回手机号等个人信息;"
-                + " 同名或只说了姓 (如「老张」) 时先列出候选让用户按工号选。";
+        return "按姓名查本厂员工在哪个车间、今天排在哪条产线 (按排班)。只返回工作信息, 不返回手机号等个人信息;"
+                + " 同名、只说了姓 (如「老张」) 或名字对不上全名时先列出候选让用户按账号选。";
     }
 
     @Override
@@ -81,8 +81,8 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
         Map<String, Object> properties = new LinkedHashMap<>();
         properties.put("name", Map.of("type", "string",
                 "description", "员工姓名, 可只给姓加老/小 (如 张三 / 老张)"));
-        properties.put("employeeCode", Map.of("type", "string",
-                "description", "工号 (同名时用来指定是哪一位)"));
+        properties.put("username", Map.of("type", "string",
+                "description", "账号 (候选里给的, 用来指定是哪一位)"));
         schema.put("properties", properties);
         schema.put("required", List.of("name"));
         return schema;
@@ -105,12 +105,15 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     protected Map<String, Object> doExecute(String factoryId, Map<String, Object> params,
                                             Map<String, Object> context) throws Exception {
         String name = getString(params, "name", "").trim();
-        String employeeCode = getString(params, "employeeCode");
+        String username = getString(params, "username");
 
-        List<User> matches = findByName(factoryId, name);
-        if (employeeCode != null && !employeeCode.isBlank()) {
-            String code = employeeCode.trim();
-            matches = matches.stream().filter(u -> code.equals(u.getEmployeeCode())).toList();
+        NameMatch match = findByName(factoryId, name);
+        List<User> matches = match.users();
+        boolean picked = false;
+        if (username != null && !username.isBlank()) {
+            String un = username.trim();
+            matches = matches.stream().filter(u -> un.equals(u.getUsername())).toList();
+            picked = true;
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
@@ -118,9 +121,10 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
         if (matches.isEmpty()) {
             result.put("status", "NOT_FOUND");
             result.put("total", 0);
-            return buildSimpleResult("本厂没有找到叫「" + name + "」的在职员工, 请核对姓名或工号。", result);
+            return buildSimpleResult("本厂没有找到叫「" + name + "」的在职员工, 请核对姓名或账号。", result);
         }
-        if (matches.size() > 1) {
+        // 只有「全名完全相同且只有一位」或用户已按账号点名时才直接给; 只给姓 / 只是包含 ⇒ 哪怕只有一位也先确认。
+        if (matches.size() > 1 || (!match.exact() && !picked)) {
             List<Map<String, Object>> candidates = matches.stream()
                     .limit(MAX_CANDIDATES)
                     .map(this::candidate)
@@ -129,11 +133,13 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
             result.put("total", matches.size());
             result.put("candidates", candidates);
             String list = candidates.stream()
-                    .map(c -> c.get("name") + (c.get("employeeCode") == null ? "" : "(工号 " + c.get("employeeCode") + ")")
+                    .map(c -> c.get("name") + (c.get("username") == null ? "" : "(账号 " + c.get("username") + ")")
                             + (c.get("department") == null ? "" : " " + c.get("department")))
                     .collect(Collectors.joining("、"));
-            return buildSimpleResult("找到 " + matches.size() + " 位「" + name + "」: " + list
-                    + "。你要查的是哪一位? 告诉我工号就行。", result);
+            String head = matches.size() > 1
+                    ? "找到 " + matches.size() + " 位「" + name + "」: "
+                    : "没有全名叫「" + name + "」的员工, 最接近的是: ";
+            return buildSimpleResult(head + list + "。你要查的是哪一位? 告诉我账号就行。", result);
         }
 
         User u = matches.get(0);
@@ -144,10 +150,14 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
         return buildSimpleResult(describe(employee), result);
     }
 
-    /** 本厂已启用账号里按姓名找: 全名相等优先; 其次全名包含; 「老张/小张」按姓找。 */
-    List<User> findByName(String factoryId, String name) {
+    /** 按姓名找的结果; exact = 全名完全相同 (否则是按姓或包含找到的, 不能直接当成那个人)。 */
+    record NameMatch(List<User> users, boolean exact) {
+    }
+
+    /** 本厂已启用账号里按姓名找: 全名相等优先; 其次「老张/小张」按姓; 再次全名包含。 */
+    NameMatch findByName(String factoryId, String name) {
         if (name == null || name.isBlank()) {
-            return List.of();
+            return new NameMatch(List.of(), false);
         }
         List<User> active = userRepository.findByFactoryIdAndIsActive(factoryId, true).stream()
                 .filter(u -> Objects.equals(factoryId, u.getFactoryId()))
@@ -155,15 +165,15 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
                 .toList();
         List<User> exact = active.stream().filter(u -> name.equals(u.getFullName().trim())).toList();
         if (!exact.isEmpty()) {
-            return exact;
+            return new NameMatch(exact, true);
         }
         String surname = surnameOnly(name);
         if (surname != null) {
-            return active.stream().filter(u -> u.getFullName().trim().startsWith(surname))
-                    .sorted(Comparator.comparing(User::getFullName)).toList();
+            return new NameMatch(active.stream().filter(u -> u.getFullName().trim().startsWith(surname))
+                    .sorted(Comparator.comparing(User::getFullName)).toList(), false);
         }
-        return active.stream().filter(u -> u.getFullName().contains(name))
-                .sorted(Comparator.comparing(User::getFullName)).toList();
+        return new NameMatch(active.stream().filter(u -> u.getFullName().contains(name))
+                .sorted(Comparator.comparing(User::getFullName)).toList(), false);
     }
 
     /** 「老张」「小李」⇒ 张 / 李; 其它返回 null。 */
@@ -177,9 +187,9 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     private Map<String, Object> candidate(User u) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("name", u.getFullName());
-        c.put("employeeCode", u.getEmployeeCode());
-        c.put("department", u.getDepartment());
-        c.put("position", u.getPosition());
+        c.put("username", u.getUsername());
+        // 与 App 员工名录同一个翻译 (UserController 名录 / UserMapper): 英文部门码给中文显示名, ⛔ 不原样给 production
+        c.put("department", DepartmentDisplayNames.display(u.getDepartment()));
         return c;
     }
 
@@ -224,11 +234,10 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     private static String describe(Map<String, Object> e) {
         StringBuilder sb = new StringBuilder();
         sb.append(e.get("name"));
-        if (e.get("employeeCode") != null) {
-            sb.append(" (工号 ").append(e.get("employeeCode")).append(")");
+        if (e.get("username") != null) {
+            sb.append(" (账号 ").append(e.get("username")).append(")");
         }
         sb.append(": 车间/部门 ").append(e.get("department") == null ? "未登记" : e.get("department"));
-        sb.append(", 岗位 ").append(e.get("position") == null ? "未登记" : e.get("position"));
         List<Map<String, Object>> lines = (List<Map<String, Object>>) e.get("todayLines");
         if (lines.isEmpty()) {
             sb.append("; 今天没有排班, 不知道在哪条线 (排班里没有分到产线)");
@@ -247,13 +256,12 @@ public class EmployeeWorkLocationQueryTool extends AbstractBusinessTool {
     }
 
     /**
-     * 员工姓名/车间/岗位在 App 里经人事读 (员工档案) 给到; 排班分到哪条线经排程读
-     * ({@code SchedulingController} scheduling:read / production:read) 给到。取两者之并, 不比 App 更宽。
+     * 与 App 员工名录 (UserRepository#findByFactoryIdAndIsActive 的读接口) 同宽: production / procurement / sales 读;
+     * 加 scheduling:read 看当天产线排程 ({@code SchedulingController})。不含 hr:read —— 那份名录不给只有 hr 读的角色
+     * (hr_admin); 不多也不少于 App, 由 GatedDataToolAiPathPermissionTest 钉住。
      */
     @Override
     public Set<String> getRequiredPermissions() {
-        // 与 App 员工名单 (UserRepository#findByFactoryIdAndIsActive) 同宽: 生产/采购/销售读; 排班读看当天产线排程。
-        // 不含 hr:read —— 那份名单不给只有 hr 读的角色 (hr_admin); 不多也不少于 App (GatedDataToolAiPathPermissionTest)。
         return Set.of("production:read", "procurement:read", "sales:read", "scheduling:read");
     }
 }

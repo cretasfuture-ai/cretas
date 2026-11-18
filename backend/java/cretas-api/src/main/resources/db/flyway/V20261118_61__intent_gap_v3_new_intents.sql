@@ -35,7 +35,7 @@ VALUES
      90, true, 'FACTORY', NULL, NOW(), NOW()),
     (gen_random_uuid(), 'HR_EMPLOYEE_WORK_LOCATION_QUERY', '查员工在哪个车间哪条线', 'DATA_QUERY', 'employee_work_location_query', 'LOW',
      '["在哪条线","哪个车间的","在哪个车间","员工在哪条产线"]'::jsonb,
-     '只读: 按姓名查本厂员工的车间/部门、岗位、今天排班排在哪条产线 (没排班就说没排班); 只给工作信息不给手机号等个人信息, 同名或只给姓时先列候选按工号选。',
+     '只读: 按姓名查本厂员工的车间/部门、今天排班排在哪条产线 (没排班就说没排班); 只给工作信息不给手机号等个人信息, 同名、只给姓或对不上全名时先列候选按账号选。',
      90, true, 'FACTORY', NULL, NOW(), NOW())
 ON CONFLICT (intent_code) DO UPDATE SET
     intent_name         = EXCLUDED.intent_name,
