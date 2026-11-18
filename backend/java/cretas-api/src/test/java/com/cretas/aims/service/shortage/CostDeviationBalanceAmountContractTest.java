@@ -113,7 +113,7 @@ class CostDeviationBalanceAmountContractTest {
         Reading r = scannedReading();
         // 1 kg = 2 斤, 20 元/斤 → 40 元/kg; 超阈值的只有切配 10 kg → 400.00
         assertThat(r.amount()).isEqualByComparingTo("400.00");
-        assertThat(r.summary()).contains("差异金额按主料「猪后腿」开计划时单价估算");
+        assertThat(r.summary()).contains("差异金额按绝对值合计 (未解释损耗约 400 元), 按主料「猪后腿」开计划时单价估算");
         ArgumentCaptor<UnitConversionContext> ctx = ArgumentCaptor.forClass(UnitConversionContext.class);
         verify(units).convert(eq(BigDecimal.ONE), ctx.capture());
         assertThat(ctx.getValue().factoryId()).isEqualTo("F1");   // 换算按本厂单位契约, 不跨厂
@@ -179,6 +179,17 @@ class CostDeviationBalanceAmountContractTest {
         assertThat(priced(block(row("切配", "10", "13", "kg")), "40").fingerprint()).isNotEqualTo(a.fingerprint());
     }
 
+    // #1911 终审 P2: 正负差额不能抵消 (切配 +10kg、腌制 −10kg 以前合计成 ¥0); 单道负差额不是负金额
+    @Test
+    void oppositeSignGaps_doNotCancel_andAreReportedSeparately() {
+        Reading both = priced(block(row("切配", "10", "12.5", "kg"), row("腌制", "-10", "-12.5", "kg")), "40");
+        assertThat(both.amount()).isEqualByComparingTo("800.00");
+        assertThat(both.summary()).contains("未解释损耗约 400 元").contains("产出多出约 400 元");
+        Reading onlyOver = priced(block(row("腌制", "-10", "-12.5", "kg")), "40");
+        assertThat(onlyOver.amount()).isEqualByComparingTo("400.00");
+        assertThat(onlyOver.summary()).contains("产出多出约 400 元").doesNotContain("未解释损耗");
+    }
+
     // ---------- writer: 指纹不变时补写估价; 已关闭的实例不被重开 ----------
 
     private final ShortageCaseRepository cases = mock(ShortageCaseRepository.class);
@@ -214,6 +225,45 @@ class CostDeviationBalanceAmountContractTest {
         when(details.findById("c1")).thenReturn(Optional.of(d));
         assertThat(writer.apply("F1", priced(GAP, "40"), "T")).isEqualTo(Applied.UNCHANGED);
         verify(details, never()).save(any());
+    }
+
+    // 终审 follow-up: 新读数定不了价 (快照被删 / 单位契约改了) ⇒ 清掉旧估价, 摘要换成说明原因的那份
+    @Test
+    void writer_sameFacts_butPriceNoLongerKnown_clearsTheStaleEstimate() {
+        Reading unpriceable = CostDeviationEvaluator.evaluateBalance(GAP, FIVE,
+                r -> CostDeviationEvaluator.RowPrice.unknown("有多个主料, 不能按单一单价折算"));
+        ShortageCase open = new ShortageCase();
+        open.setId("c1");
+        open.setInputFingerprint(unpriceable.fingerprint());
+        CostDeviationCaseDetail d = new CostDeviationCaseDetail();
+        d.setAmountVariance(new BigDecimal("400.00"));
+        d.setSummary(priced(GAP, "40").summary());
+        when(cases.findOpenForUpdate(any(), any(), any())).thenReturn(Optional.of(open));
+        when(details.findById("c1")).thenReturn(Optional.of(d));
+
+        assertThat(writer.apply("F1", unpriceable, "T")).isEqualTo(Applied.UNCHANGED);
+        assertThat(d.getAmountVariance()).isNull();
+        assertThat(d.getSummary()).contains("差异金额算不出: 有多个主料");
+        verify(details).save(d);
+        verifyNoInteractions(events);
+    }
+
+    // 终审 follow-up: 详情的金额说明写真实原因; 有金额时标明是估算
+    @Test
+    void impactAmountNote_quotesTheRealReason_andMarksEstimates() {
+        CostDeviationCaseDetail unknown = new CostDeviationCaseDetail();
+        unknown.setSummary(CostDeviationEvaluator.evaluateBalance(GAP, FIVE,
+                r -> CostDeviationEvaluator.RowPrice.unknown("报工单位 盒 换算不到单价单位 斤")).summary());
+        assertThat(com.cretas.aims.controller.CostDeviationCaseController.amountNote(unknown, null))
+                .isEqualTo("金额未知: 报工单位 盒 换算不到单价单位 斤");
+        CostDeviationCaseDetail est = new CostDeviationCaseDetail();
+        est.setSummary(priced(GAP, "40").summary());
+        assertThat(com.cretas.aims.controller.CostDeviationCaseController.amountNote(est, new BigDecimal("400.00")))
+                .startsWith("估算");
+        // 成本差异的金额是实算, 不标估算
+        CostDeviationCaseDetail cost = new CostDeviationCaseDetail();
+        cost.setSummary("成本差异率 9%");
+        assertThat(com.cretas.aims.controller.CostDeviationCaseController.amountNote(cost, new BigDecimal("120"))).isNull();
     }
 
     @Test

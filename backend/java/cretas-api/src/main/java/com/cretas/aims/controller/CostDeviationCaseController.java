@@ -261,11 +261,22 @@ public class CostDeviationCaseController {
         return new BatchView(b.getBatchNumber(), b.getStatus() == null ? null : b.getStatus().name());
     }
 
+    /** 金额为空时写真实原因 (评估器写进摘要的「差异金额算不出: …」); 物料平衡的金额是估算, 标明。 */
+    public static String amountNote(CostDeviationCaseDetail d, BigDecimal amount) {
+        String summary = d.getSummary() == null ? "" : d.getSummary();
+        if (amount != null) {
+            return summary.contains("差异金额按绝对值合计") ? "估算: 超阈值工序未解释差额 × 开计划时主料单价, 损耗与多出按绝对值合计" : null;
+        }
+        String marker = "差异金额算不出: ";
+        int i = summary.indexOf(marker);
+        if (i >= 0) return "金额未知: " + summary.substring(i + marker.length());
+        return "金额未知: 没有可比较的单价, 不估算";
+    }
+
     private Impact impact(String factoryId, CostDeviationCaseDetail d, PlanCostVarianceDTO v, MaterialBalanceTableDTO.PlanBlock b,
                           int batchCount, boolean mask) {
         BigDecimal amount = mask ? null : d.getAmountVariance();
-        String note = mask ? "无采购价查看权限, 金额已隐藏"
-                : amount == null ? "金额未知: 物料平衡只有数量, 没有单价口径" : null;
+        String note = mask ? "无采购价查看权限, 金额已隐藏" : amountNote(d, amount);
         BigDecimal unit = null;
         if (amount != null && v != null && v.getOutputQuantity() != null && v.getOutputQuantity().signum() > 0) {
             unit = amount.divide(v.getOutputQuantity(), 4, RoundingMode.HALF_UP);

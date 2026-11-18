@@ -172,6 +172,8 @@ export default function TimeRangeCostAnalysisScreen() {
           // 完工计划数 / 平均每计划成本: 口径与总成本一致 (结束时间在区间内的计划); 后端给 null 就显示「—」
           planCount: backendData.planCount ?? null,
           avgCostPerPlan: backendData.avgCostPerPlan == null ? null : Number(backendData.avgCostPerPlan),
+          // 有完工计划没录成本时平均值算不出, 后端给原因
+          avgCostPerPlanNote: backendData.avgCostPerPlanNote ?? null,
           costBreakdown: {
             rawMaterials: Number(backendData.materialCost || 0),
             labor: Number(backendData.laborCost || 0),
@@ -401,6 +403,11 @@ export default function TimeRangeCostAnalysisScreen() {
                     </Text>
                   </View>
                 </View>
+                {costSummary.avgCostPerPlan == null && costSummary.avgCostPerPlanNote ? (
+                  <Text variant="bodySmall" style={styles.summaryLabel}>
+                    {costSummary.avgCostPerPlanNote}
+                  </Text>
+                ) : null}
               </Card.Content>
             </Card>
 

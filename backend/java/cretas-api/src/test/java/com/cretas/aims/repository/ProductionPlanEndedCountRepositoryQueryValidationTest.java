@@ -86,6 +86,9 @@ class ProductionPlanEndedCountRepositoryQueryValidationTest {
         // 同口径: 成本合计正好是这 3 个计划的 (100 + 0 + 50), 没混进区间外 / 未结束 / 别厂的 999
         assertEquals(0, new BigDecimal("150").compareTo(repo.calculateTotalCostBetweenDates(FID, FROM, TO)));
         assertEquals(1L, repo.countEndedBetweenDates("F-OTHER", FROM, TO));
+        // 分母: 完工 3 个里 PP-EC-2 四项成本全空, 录了成本的只有 2 个 (平均值只在两数相等时才给)
+        assertEquals(2L, repo.countCostRecordedEndedBetweenDates(FID, FROM, TO));
+        assertEquals(1L, repo.countCostRecordedEndedBetweenDates("F-OTHER", FROM, TO));
     }
 
     @Test

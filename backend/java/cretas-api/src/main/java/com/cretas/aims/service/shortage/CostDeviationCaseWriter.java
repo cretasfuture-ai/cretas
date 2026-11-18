@@ -82,9 +82,11 @@ public class CostDeviationCaseWriter {
      * 已开着的实例只补上 / 更新估价和摘要, 不记「读数变化」事件, 也不改阶段。
      */
     private void backfillEstimatedAmount(ShortageCase open, Reading r) {
-        if (r.sourceType() != ShortageCase.SourceType.MATERIAL_BALANCE || r.amount() == null) return;
+        if (r.sourceType() != ShortageCase.SourceType.MATERIAL_BALANCE) return;
         detailRepository.findById(open.getId()).ifPresent(d -> {
-            if (d.getAmountVariance() != null && d.getAmountVariance().compareTo(r.amount()) == 0) return;
+            // 新读数定不了价 (如单价快照被删、单位契约改了) ⇒ 清掉旧估价并换上说明原因的摘要, 不留过期金额
+            if (r.amount() == null ? d.getAmountVariance() == null
+                    : d.getAmountVariance() != null && d.getAmountVariance().compareTo(r.amount()) == 0) return;
             d.setAmountVariance(r.amount());
             d.setSummary(r.summary());
             detailRepository.save(d);

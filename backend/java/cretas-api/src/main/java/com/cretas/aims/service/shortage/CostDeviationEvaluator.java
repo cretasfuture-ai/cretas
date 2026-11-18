@@ -102,7 +102,10 @@ public final class CostDeviationEvaluator {
         if (unknown > 0) summary += ", 另有 " + unknown + " 道工序算不出";
         BigDecimal amount = null;
         if (pricer != null && !overRows.isEmpty()) {
-            BigDecimal sum = BigDecimal.ZERO;
+            // 正差额 (投入没对上, 未解释损耗) 和负差额 (产出比投入多) 都是异常, 按绝对值合计、分开写进摘要;
+            // ⛔ 不带符号相加: +10kg 和 −10kg 两道工序会抵消成 ¥0, 读成「没有差异」(#1911 终审 P2)
+            BigDecimal shortValue = BigDecimal.ZERO;
+            BigDecimal overValue = BigDecimal.ZERO;
             String basis = null;
             String why = null;
             for (MaterialBalanceTableDTO.Row r : overRows) {
@@ -111,12 +114,18 @@ public final class CostDeviationEvaluator {
                     why = p != null && p.reason() != null ? p.reason() : "未解释差额没有数量";
                     break;
                 }
-                sum = sum.add(r.getUnexplained().multiply(p.price()));
+                BigDecimal value = r.getUnexplained().multiply(p.price());
+                if (value.signum() >= 0) shortValue = shortValue.add(value);
+                else overValue = overValue.add(value.negate());
                 basis = p.basis();
             }
             if (why == null) {
-                amount = sum.setScale(2, RoundingMode.HALF_UP);
-                if (basis != null) summary += "; 差异金额" + basis;
+                amount = shortValue.add(overValue).setScale(2, RoundingMode.HALF_UP);
+                List<String> parts = new ArrayList<>();
+                if (shortValue.signum() > 0) parts.add("未解释损耗约 " + plain(shortValue.setScale(2, RoundingMode.HALF_UP)) + " 元");
+                if (overValue.signum() > 0) parts.add("产出多出约 " + plain(overValue.setScale(2, RoundingMode.HALF_UP)) + " 元");
+                summary += "; 差异金额按绝对值合计" + (parts.isEmpty() ? "" : " (" + String.join("、", parts) + ")")
+                        + (basis != null ? ", " + basis : "");
             } else {
                 summary += "; 差异金额算不出: " + why;
             }

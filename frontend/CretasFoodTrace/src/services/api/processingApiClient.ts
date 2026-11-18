@@ -151,6 +151,8 @@ export interface TimeRangeCostAnalysis {
   planCount?: number | null;
   /** totalCost ÷ planCount; 成本未知或没有计划时为 null */
   avgCostPerPlan?: number | null;
+  /** 有完工计划没录成本时, 为什么平均值算不出 */
+  avgCostPerPlanNote?: string | null;
   batches: BatchCostData[];
   summary: {
     averageCostPerBatch: number;

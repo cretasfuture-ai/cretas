@@ -314,6 +314,18 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
                                 @Param("endDate") LocalDateTime endDate);
 
     /**
+     * {@link #countEndedBetweenDates} 里四项实际成本至少录了一项的计划数。
+     * 只有它等于完工计划数时, 平均每计划成本才有意义 (没录成本的计划不能当 0 进分母)。
+     */
+    @Query("SELECT COUNT(p) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +
+           "AND p.endTime BETWEEN :startDate AND :endDate " +
+           "AND (p.actualMaterialCost IS NOT NULL OR p.actualLaborCost IS NOT NULL " +
+           "OR p.actualEquipmentCost IS NOT NULL OR p.actualOtherCost IS NOT NULL)")
+    long countCostRecordedEndedBetweenDates(@Param("factoryId") String factoryId,
+                                            @Param("startDate") LocalDateTime startDate,
+                                            @Param("endDate") LocalDateTime endDate);
+
+    /**
      * 计算指定日期范围内的原材料成本
      */
     @Query("SELECT SUM(p.actualMaterialCost) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +
