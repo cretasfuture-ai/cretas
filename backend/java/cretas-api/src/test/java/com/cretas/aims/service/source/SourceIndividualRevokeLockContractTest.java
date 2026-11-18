@@ -16,6 +16,8 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.util.ReflectionTestUtils;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -57,8 +59,11 @@ class SourceIndividualRevokeLockContractTest {
     @Autowired SourceIndividualRepository repository;
     @Autowired MaterialBatchRepository materialBatchRepository;
     @Autowired PlatformTransactionManager txManager;
+    @PersistenceContext EntityManager entityManager;
     private SourceIndividualService service;
     private TransactionTemplate tx;
+    /** 批次 created_by 有到 users 的 FK —— 每条用例自建并提交工厂+用户, ⛔ 不依赖别的测试类留在共享 H2 里的行。 */
+    private Long userId;
 
     @BeforeEach
     void setUp() {
@@ -68,11 +73,13 @@ class SourceIndividualRevokeLockContractTest {
     }
 
     private String newIndividual(String factory) {
+        userId = tx.execute(s -> SourceIndividualTestUsers.persistUser(entityManager, factory));
+        assertThat(userId).isNotNull();
         return tx.execute(s -> service.create(factory,
                 CreateSourceIndividualRequest.builder().individualCode("LK-" + UUID.randomUUID()).build()).getId());
     }
 
-    private static MaterialBatch batchFor(String factory, String individualId) {
+    private MaterialBatch batchFor(String factory, String individualId) {
         MaterialBatch mb = new MaterialBatch();
         mb.setId("MB-LK-" + UUID.randomUUID());
         mb.setFactoryId(factory);
@@ -84,7 +91,7 @@ class SourceIndividualRevokeLockContractTest {
         mb.setUsedQuantity(BigDecimal.ZERO);
         mb.setReservedQuantity(BigDecimal.ZERO);
         mb.setStatus(MaterialBatchStatus.AVAILABLE);
-        mb.setCreatedBy(1L);
+        mb.setCreatedBy(userId);
         mb.setSourceIndividualId(individualId);
         mb.setCustomFields(null);
         return mb;

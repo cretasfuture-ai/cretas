@@ -126,7 +126,8 @@ class SourceIndividualRevokeContractTest {
         mb.setUsedQuantity(BigDecimal.ZERO);
         mb.setReservedQuantity(BigDecimal.ZERO);
         mb.setStatus(MaterialBatchStatus.AVAILABLE);
-        mb.setCreatedBy(1L);
+        // created_by 有 FK: 用本用例自建的用户, ⛔ 不写死 1L(只在别的类恰好留下 id=1 时才过)。
+        mb.setCreatedBy(SourceIndividualTestUsers.persistUser(em.getEntityManager(), FACTORY));
         mb.setSourceIndividualId(dto.getId());
         mb.setCustomFields(null);
         em.persist(mb);
