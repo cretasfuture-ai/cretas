@@ -39,6 +39,10 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
 
     static final int RANK_TOP_N = 5;
 
+    /** 财务行级范围 (仅本人 / 部门): 客户余额排名是全厂视图, 范围受限时不出 (账龄路径按 scopeOwners 收窄)。 */
+    @Autowired
+    private com.cretas.aims.service.finance.FinanceRowScopeQuery financeRowScopeQuery;
+
     @Override
     public String getToolName() {
         return "accounts_receivable_aging";
@@ -138,6 +142,14 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
 
     /** 客户欠款排名: 客户应收余额 > 0 从多到少, 预收(余额 < 0)单独一句不混进应收。 */
     private Map<String, Object> doOwedRanking(String factoryId, Map<String, Object> context) {
+        if (financeRowScopeQuery == null || financeRowScopeQuery.creators(factoryId) != null) {
+            // creators != null = 财务范围不是全厂 (空列表 = 一行都看不到); 查不到范围按受限处理 (fail closed)
+            Map<String, Object> restricted = new LinkedHashMap<>();
+            restricted.put("mode", "OWED_RANKING");
+            restricted.put("scopeRestricted", true);
+            return buildSimpleResult("客户欠款排名需要全厂财务数据范围，当前账号的财务范围受限，不显示全厂客户欠款。"
+                    + "可以问「应收账龄」查看你权限范围内的应收。", restricted);
+        }
         List<com.cretas.aims.entity.Customer> owing = customerRepository.findCustomersWithOutstandingBalance(factoryId);
         java.math.BigDecimal prepaid = java.math.BigDecimal.ZERO;
         int prepaidCount = 0;

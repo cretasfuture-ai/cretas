@@ -220,5 +220,8 @@ class PurchasePriceRiseAndSalesAmountRoutingContractTest {
     void realPaymentRecordRequests_stillWrite() {
         assertEquals("FINANCE_PAYMENT_RECORD", route("登记一笔收款"));
         assertEquals("FINANCE_PAYMENT_RECORD", route("录入收款"));
+        // 审查 M2: 带「已 / 收到」的登记说法仍判写意图
+        assertEquals("FINANCE_PAYMENT_RECORD", route("张三已收款 3000 元记一下"));
+        assertEquals("FINANCE_PAYMENT_RECORD", route("收到预收款 1 万"));
     }
 }

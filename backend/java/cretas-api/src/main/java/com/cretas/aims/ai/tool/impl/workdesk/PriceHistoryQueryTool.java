@@ -309,6 +309,7 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
         List<Map<String, Object>> top = new ArrayList<>(rows.subList(0, Math.min(RANK_TOP_N, rows.size())));
         data.put("ranking", top);
         StringBuilder sb = new StringBuilder();
+        sb.append("未指定原料，以下为全厂原料涨幅排名。");
         sb.append(String.format("原料进价涨幅排名（口径：近 %d 天加权均价 vs 此前 %d 天，%s）：",
                 RANK_RECENT_DAYS, RANK_BASE_DAYS, window));
         int i = 1;

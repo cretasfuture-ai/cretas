@@ -8131,6 +8131,7 @@ public class IntentKnowledgeBase {
      * 原有方法保持向后兼容（默认走工厂路径）
      */
     public Optional<String> matchPhrase(String input) {
+        input = withoutGroundedDataBlock(input);
         Optional<String> result = doMatchPhrase(input, phraseToIntentMapping);
         if (result.isPresent()) return result;
         return doMatchPhrase(input, commonPhraseMapping);
@@ -8160,8 +8161,10 @@ public class IntentKnowledgeBase {
     static boolean onlyNounContext(String text, String word) {
         int at = text.indexOf(word);
         if (at < 0) return false;
+        // 句中有「收到 / 登记 / 记一下 / 入账 / 录入」是在做登记, 不是在说名词 (「收到预收款 1 万」「张三已收款 3000 元记一下」)
+        if (text.matches("(?s).*(收到|登记|记一|记录|入账|录入|已收款|收了).*")) return false;
         while (at >= 0) {
-            boolean noun = (at > 0 && "预应待已未".indexOf(text.charAt(at - 1)) >= 0)
+            boolean noun = (at > 0 && "预应待".indexOf(text.charAt(at - 1)) >= 0)
                     || (at + word.length() < text.length() && text.charAt(at + word.length()) == '额');
             if (!noun) return false;
             at = text.indexOf(word, at + word.length());
