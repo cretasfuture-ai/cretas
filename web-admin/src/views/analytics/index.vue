@@ -644,7 +644,7 @@ function formatPercent(num: Reading): string {
 
 .stat-unavailable .stat-link {
   margin-left: 4px;
-  color: #409eff;
+  color: var(--cs-primary);
   text-decoration: none;
 }
 
