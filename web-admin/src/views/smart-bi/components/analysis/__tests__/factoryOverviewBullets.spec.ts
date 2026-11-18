@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   factoryFinanceOverview,
+  NO_ARAP_LEDGER_TEXT,
   factorySalesOverview,
   factoryTrendOverview,
   factoryKpiOverview,
@@ -53,7 +54,7 @@ describe('factorySalesOverview (销售订单)', () => {
 describe('factoryFinanceOverview (往来余额)', () => {
   it('只写有记录的余额; 收入/成本/利润不从这里出', () => {
     const o = factoryFinanceOverview({ accountsReceivable: 212577.96, accountsPayable: 2959123, customerPrepayments: 16507.02, totalRevenue: 0, totalCost: null, totalProfit: null });
-    expect(o.bullets).toEqual(['应收账款余额 21.26万元', '应付账款余额 295.91万元', '客户预收款 1.65万元']);
+    expect(o.bullets).toEqual(['应收账款余额 21.26万元', '应付账款余额 295.91万元', '其中客户预收 1.65万元，已在应收余额中抵减']);
     expect(o.bullets.join()).not.toContain('收入');
     expect(o.unavailableMetrics).toEqual(expect.arrayContaining(['营业收入', '毛利', '净利润']));
   });
@@ -62,6 +63,22 @@ describe('factoryFinanceOverview (往来余额)', () => {
     const o = factoryFinanceOverview({ accountsReceivable: null, accountsPayable: null, customerPrepayments: null });
     expect(o.bullets).toEqual([]);
     expect(o.empty).toBe('业务系统里还没有应收、应付或预收记录');
+  });
+
+  it('没有挂账单据 (LSMDEMO 形状): 写明「尚未生成挂账单据」, 不显示金额', () => {
+    const o = factoryFinanceOverview({ accountsReceivable: 0, accountsPayable: 0, customerPrepayments: 0, arApLedgerEntryCount: 0, hasArApLedgerEntries: false });
+    expect(o.bullets).toEqual([]);
+    expect(o.empty).toBe(NO_ARAP_LEDGER_TEXT);
+    expect(o.summary).toContain('尚未生成挂账单据');
+    expect(o.dataScope).toContain('与「财务管理 → 应收应付」同一口径');
+  });
+
+  it('有挂账单据而余额为 0: 如实写 0, 不当成「没有记录」', () => {
+    const o = factoryFinanceOverview({ accountsReceivable: 0, accountsPayable: 0, customerPrepayments: 0, arApLedgerEntryCount: 3, hasArApLedgerEntries: true });
+    expect(o.empty).toBeNull();
+    expect(o.bullets[0]).toMatch(/^应收账款余额 /);
+    expect(o.bullets[1]).toMatch(/^应付账款余额 /);
+    expect(o.bullets).toHaveLength(2);
   });
 });
 

@@ -99,6 +99,10 @@ export interface FactoryFinanceLike {
   accountsReceivable?: Num;
   accountsPayable?: Num;
   customerPrepayments?: Num;
+  /** 挂账单据条数 / 有无挂账单据 (后端与「财务管理 → 应收应付」同一份实现) */
+  arApLedgerEntryCount?: Num;
+  hasArApLedgerEntries?: boolean | null;
+  arApNote?: string | null;
   // 下面几项不用: 收入取自空的发货表 (查不到时后端填 0), 成本/利润在这里也常为空;
   // 损益以「财务」看板上传的报表为准
   totalRevenue?: Num;
@@ -106,15 +110,22 @@ export interface FactoryFinanceLike {
   totalProfit?: Num;
 }
 
+export const NO_ARAP_LEDGER_TEXT = '本厂尚未生成挂账单据（应收按已发货/已确认未收款挂账，应付按已入库/已确认未付款挂账），应收、应付暂无余额可统计';
+
 export function factoryFinanceOverview(f: FactoryFinanceLike | null | undefined): OverviewBlock {
   const bullets: string[] = [];
-  if (f && has(f.accountsReceivable)) bullets.push(`应收账款余额 ${fmtWan(f.accountsReceivable)}`);
-  if (f && has(f.accountsPayable)) bullets.push(`应付账款余额 ${fmtWan(f.accountsPayable)}`);
-  if (f && has(f.customerPrepayments)) bullets.push(`客户预收款 ${fmtWan(f.customerPrepayments)}`);
+  const noLedger = f?.hasArApLedgerEntries === false;
+  if (f && !noLedger) {
+    if (has(f.accountsReceivable)) bullets.push(`应收账款余额 ${fmtWan(f.accountsReceivable)}`);
+    if (has(f.accountsPayable)) bullets.push(`应付账款余额 ${fmtWan(f.accountsPayable)}`);
+    if (has(f.customerPrepayments) && (f.customerPrepayments as number) > 0) {
+      bullets.push(`其中客户预收 ${fmtWan(f.customerPrepayments)}，已在应收余额中抵减`);
+    }
+  }
   return block(
     bullets,
-    '业务系统里还没有应收、应付或预收记录',
-    '业务系统往来余额，截至今天；收入、成本、利润以下方「财务」看板上传的报表为准',
+    noLedger ? NO_ARAP_LEDGER_TEXT : '业务系统里还没有应收、应付或预收记录',
+    '按挂账单据统计，与「财务管理 → 应收应付」同一口径，截至今天；收入、成本、利润以下方「财务」看板为准',
     ['营业收入', '营业成本', '毛利', '毛利率', '净利润'],
   );
 }
