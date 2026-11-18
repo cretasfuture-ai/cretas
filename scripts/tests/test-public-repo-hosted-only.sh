@@ -33,9 +33,12 @@ FORMERLY_SELF_HOSTED = {
 }
 # 自建路由白名单: (工作流, job) -> runs-on 原文。只放行本仓库分支 PR / 合并队列; fork PR 必须落 ubuntu-latest。
 SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+MINI_PG_ROUTE = "${{ " + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}"
+# PG 这条线: 判定作业 changes + 4 片分片 + 汇总作业 (首尾不挪, 分片仍要等托管机排队)。
 SELF_HOSTED_ALLOWED = {
-    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'):
-        "${{ " + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}",
+    ('java-gate-pr.yml', 'changes'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
 }
 HEAP = {
     ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
