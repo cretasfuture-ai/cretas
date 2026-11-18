@@ -43,7 +43,7 @@ public class ProcessTimeLimitEvent extends BaseEntity {
     }
 
     /**
-     * 这条记录是怎么来的 (PROTO-Q41, V20261118_71)。存量行 = BLOCKED。
+     * 这条记录是怎么来的 (PROTO-Q41, V20261118_99)。存量行 = BLOCKED。
      * 只警告档的两类是复盘记录: 判不合格只记结论、不动库存, 也不被质检放行判废闸当成判废。
      */
     public static final class RecordKind {
