@@ -33,7 +33,8 @@ class FactoryEntityResolverWiringSourceContractTest {
     /**
      * 注入 FactoryEntityResolver 的类 —— 登记表。它能按名字解析出本厂客户 / 员工, 新的使用方要在这里登记,
      * 并自己答清「谁有权看解析出来的对象」(考勤按 hr:read, CRM / 记忆价按 TOOL_PERMISSION_MAP 的客户四码;
-     * 填参数只换名字不外露对象)。
+     * 填参数只换名字不外露对象; 2026-11-17 供应商可否下单检查按 procurement:read/read_write、原料批次查询按
+     * warehouse/inventory 读权限 —— 两者只在本厂内按名字解析供应商 / 原料, 解析出的对象就是工具本来就能列的本厂数据)。
      */
     private static final Set<String> REGISTERED_CONSUMERS = Set.of(
             "service/execution/ToolDispatchService.java",
@@ -45,7 +46,9 @@ class FactoryEntityResolverWiringSourceContractTest {
             "ai/tool/impl/crm/CustomerPriceMemoryQueryTool.java",
             "ai/tool/impl/hr/AttendanceHistoryTool.java",
             "ai/tool/impl/hr/AttendanceStatusTool.java",
-            "ai/tool/impl/hr/AttendanceTodayTool.java");
+            "ai/tool/impl/hr/AttendanceTodayTool.java",
+            "ai/tool/impl/foodsafety/SupplierCanOrderCheckTool.java",
+            "ai/tool/impl/material/MaterialBatchQueryTool.java");
 
     private static String code(String relative) throws IOException {
         Path p = MAIN.resolve(relative);
