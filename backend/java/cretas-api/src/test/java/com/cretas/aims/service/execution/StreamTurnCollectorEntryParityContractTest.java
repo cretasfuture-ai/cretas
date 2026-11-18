@@ -1175,7 +1175,8 @@ class StreamTurnCollectorEntryParityContractTest {
                     mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
                     mock(DigitalCrewDelegationLockRepository.class), users, mock(PermissionService.class), h.facade(),
                     h.recognizer, mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
-                    mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+                    mock(FactoryBusinessTypeResolver.class), mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
+                    mock(PlatformTransactionManager.class));
             view = crew.ask(FACTORY, new DigitalCrewService.Actor(AuthenticatedActorType.FACTORY_USER, USER, ROLE),
                     "planner", input, SESSION);
         }

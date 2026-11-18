@@ -169,11 +169,58 @@ class WriteIntentRequiredPermissionContractTest {
     @Test
     void theMigrationsOnlyFillBlanksOnLiveRows() {
         // 迁移层的语义 = 「补空」: 已经登记过的值 (含 prod 上手工回填的) 不被覆盖, 已软删的行不动
+        int marked = 0;
         for (Resource r : WriteIntentPermissionSources.markedMigrations()) {
-            String sql = WriteIntentPermissionSources.read(r).replaceAll("\\s+", " ");
-            assertThat(sql).as(r.getFilename())
-                    .contains("deleted_at IS NULL")
-                    .contains("required_permission IS NULL OR btrim(c.required_permission) = ''");
+            marked++;
+            assertThat(overwriteReason(WriteIntentPermissionSources.read(r))).as(r.getFilename()).isNull();
         }
+        assertThat(marked).as("阳性对照: 至少扫到本 PR 的补空迁移").isPositive();
+    }
+
+    @Test
+    void theFillBlanksCheckRejectsOverwrites() {
+        // 阴性对照: 两种形态各自去掉「只补空」就必须被判出来
+        String update = "UPDATE ai_intent_configs c SET required_permission = b.new_required_permission"
+                + " FROM x b WHERE c.id = b.id AND c.deleted_at IS NULL";
+        assertThat(overwriteReason(update)).isNotNull();
+        assertThat(overwriteReason(update + " AND (c.required_permission IS NULL OR btrim(c.required_permission) = '')")).isNull();
+        String upsert = "INSERT INTO ai_intent_configs (intent_code, required_permission) VALUES ('A', 'x:read_write')"
+                + " ON CONFLICT (intent_code) DO UPDATE SET required_permission = EXCLUDED.required_permission";
+        assertThat(overwriteReason(upsert)).isNotNull();
+        assertThat(overwriteReason(upsert.replace("required_permission = EXCLUDED.required_permission",
+                "required_permission = COALESCE(ai_intent_configs.required_permission, EXCLUDED.required_permission)"))).isNull();
+        assertThat(overwriteReason(upsert.replace("required_permission = EXCLUDED.required_permission",
+                "required_permission = COALESCE(ai_intent_configs.required_permission, EXCLUDED.required_permission),"
+                        + " required_permission = EXCLUDED.required_permission"))).isNotNull();
+    }
+
+    /**
+     * 带标记的迁移只许两种「补空」形态, 返回 null = 合格:
+     * <ol>
+     *   <li>UPDATE 补空: 只碰未软删行, 且只碰现值为空/空白的行 (本 PR 的迁移);</li>
+     *   <li>新意图 upsert (如 V20261118_61): ON CONFLICT 里 required_permission 唯一的赋值是
+     *       {@code COALESCE(ai_intent_configs.required_permission, EXCLUDED.required_permission)}, 已有值不覆盖。</li>
+     * </ol>
+     */
+    static String overwriteReason(String rawSql) {
+        String sql = rawSql.replaceAll("--[^\n]*", " ").replaceAll("\\s+", " ");
+        java.util.regex.Matcher assign = java.util.regex.Pattern
+                .compile("(?i)(?<![\\w.])required_permission\\s*=\\s*(\\w+\\s*\\([^)]*\\)|[^,;]+?)(?=\\s*(?:,|;|$| WHERE | FROM ))").matcher(sql);
+        List<String> rhs = new ArrayList<>();
+        while (assign.find()) rhs.add(assign.group(1).trim());
+        if (rhs.isEmpty()) return null; // 没有赋值 (只在 INSERT 列表里写新行): 不会覆盖已有值
+        boolean isUpsert = sql.matches("(?is).*ON CONFLICT .* DO UPDATE SET .*");
+        if (isUpsert) {
+            for (String v : rhs) {
+                if (!v.replaceAll("\\s", "").equalsIgnoreCase(
+                        "COALESCE(ai_intent_configs.required_permission,EXCLUDED.required_permission)")) {
+                    return "upsert 覆盖了 required_permission: " + v;
+                }
+            }
+            return null;
+        }
+        if (!sql.contains("deleted_at IS NULL")) return "UPDATE 没限定未软删行";
+        if (!sql.contains("required_permission IS NULL OR btrim(c.required_permission) = ''")) return "UPDATE 没限定只补空";
+        return null;
     }
 }
