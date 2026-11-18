@@ -345,16 +345,25 @@ public class CostDeviationCaseController {
      * 只有产品档案真查不到才说「已删除或不存在」。
      */
     private String productLabel(String factoryId, CostDeviationCaseDetail d) {
-        if (d.getProductName() != null && !d.getProductName().isBlank()) return d.getProductName();
+        String stored = d.getProductName();
+        boolean storedPresent = stored != null && !stored.isBlank();
+        // 已存名字也要清洗: 存成内部占位 (RMT_… / __…) 的不直接露给人看
+        if (storedPresent && !isInternalName(stored)) return stored;
         String productTypeId = d.getPlanId() == null ? null
                 : planRepository.findByIdAndFactoryId(d.getPlanId(), factoryId)
                         .map(ProductionPlan::getProductTypeId).orElse(null);
-        return productLabel(productTypeId == null ? null : varianceService.productName(factoryId, productTypeId));
+        String label = productLabel(productTypeId == null ? null : varianceService.productName(factoryId, productTypeId));
+        // 存过占位名 ⇒ 写入时产品是在的; 回查不到真名也不能说成「已删除」
+        return storedPresent && PRODUCT_MISSING_LABEL.equals(label) ? PRODUCT_UNNAMED_LABEL : label;
+    }
+
+    private static boolean isInternalName(String name) {
+        return name.startsWith("__") || name.startsWith("RMT_");
     }
 
     static String productLabel(String resolvedName) {
         if (resolvedName == null || resolvedName.isBlank()) return PRODUCT_MISSING_LABEL;
-        if (resolvedName.startsWith("__") || resolvedName.startsWith("RMT_")) return PRODUCT_UNNAMED_LABEL;
+        if (isInternalName(resolvedName)) return PRODUCT_UNNAMED_LABEL;
         return resolvedName;
     }
 

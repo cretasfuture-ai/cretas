@@ -106,16 +106,23 @@ class CostDeviationCaseProductLabelContractTest {
                 {"c-gone", "p-gone", null, "PT-DELETED"},          // 产品档案真查不到
                 {"c-stored", "p-stored", "【演示L1】酱牛肉 250g", "PT-1"}, // 已存名字照用, 不回查
                 {"c-anon", "p-anon", null, "RMT_F006_LSM_Y"},      // 产品在但只有内部占位名
+                {"c-storedRaw", "p-storedRaw", "RMT_F006_LSM_Z", "RMT_F006_LSM_Z"}, // 已存名就是 RMT_ 占位, 回查也没真名
+                {"c-storedRawResolvable", "p-sr2", "__RAW_WORKFLOW_OWNER__RMT_F006_LSM_X", "RMT_F006_LSM_X"}, // 已存占位, 回查有真名
         });
         when(varianceService.productName(F, "RMT_F006_LSM_X")).thenReturn("西装鸡（16只）");
         when(varianceService.productName(F, "PT-DELETED")).thenReturn(null);
         when(varianceService.productName(F, "RMT_F006_LSM_Y")).thenReturn("RMT_F006_LSM_Y");
+        when(varianceService.productName(F, "RMT_F006_LSM_Z")).thenReturn(null);
 
         Map<String, String> l = labels();
         assertThat(l.get("c-raw")).isEqualTo("西装鸡（16只）");
         assertThat(l.get("c-gone")).isEqualTo(CostDeviationCaseController.PRODUCT_MISSING_LABEL);
         assertThat(l.get("c-stored")).isEqualTo("【演示L1】酱牛肉 250g");
         assertThat(l.get("c-anon")).isEqualTo(CostDeviationCaseController.PRODUCT_UNNAMED_LABEL);
+        // 复审 M: 已存的名字也清洗, 存成 RMT_ 占位的不露内部编号, 也不说成「已删除」
+        assertThat(l.get("c-storedRaw")).isEqualTo(CostDeviationCaseController.PRODUCT_UNNAMED_LABEL);
+        assertThat(l.get("c-storedRawResolvable")).isEqualTo("西装鸡（16只）");
+        assertThat(l.values()).noneMatch(v -> v.startsWith("RMT_") || v.startsWith("__"));
         // 只有真查不到的那一条说「已删除」
         assertThat(l.values().stream().filter(CostDeviationCaseController.PRODUCT_MISSING_LABEL::equals).count()).isEqualTo(1);
     }
