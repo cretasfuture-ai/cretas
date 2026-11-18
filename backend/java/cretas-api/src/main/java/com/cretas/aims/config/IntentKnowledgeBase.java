@@ -7994,6 +7994,14 @@ public class IntentKnowledgeBase {
     }
 
     public Optional<String> matchPhrase(String input, String businessDomain) {
+        return matchPhraseHit(input, businessDomain).map(Map.Entry::getValue);
+    }
+
+    /**
+     * 与 {@link #matchPhrase(String, String)} 同一张表、同一套命中规则, 连同命中的短语 (key) 一起返回。
+     * 给短语快捷通道判「这句话是不是只有这个短语」用 (2026-11-17 F006 数字班组: 复合问句被句中短语截走)。
+     */
+    public Optional<Map.Entry<String, String>> matchPhraseHit(String input, String businessDomain) {
         if (input == null || input.trim().isEmpty()) {
             return Optional.empty();
         }
@@ -8003,13 +8011,13 @@ public class IntentKnowledgeBase {
         Map<String, String> businessSpecificMap = phraseToIntentMapping;
 
         // 2. 先在业态专用 Map 中匹配
-        Optional<String> result = doMatchPhrase(input, businessSpecificMap);
+        Optional<Map.Entry<String, String>> result = doMatchPhraseEntry(input, businessSpecificMap);
         if (result.isPresent()) {
             return result;
         }
 
         // 3. 回退到公共 Map
-        result = doMatchPhrase(input, commonPhraseMapping);
+        result = doMatchPhraseEntry(input, commonPhraseMapping);
         if (result.isPresent()) return result;
 
         // 4. P1-A: 剥离开头的时间前缀后再试一次
@@ -8020,11 +8028,16 @@ public class IntentKnowledgeBase {
         //    NB: 仅剥离「开头」的时间词, 不动句中/句尾, 因此非时间短语 ("哪个菜卖得好") 完全不受影响。
         String timeStripped = stripLeadingTimePhrase(input);
         if (timeStripped != null && !timeStripped.equals(input.trim())) {
-            result = doMatchPhrase(timeStripped, businessSpecificMap);
+            result = doMatchPhraseEntry(timeStripped, businessSpecificMap);
             if (result.isPresent()) return result;
-            return doMatchPhrase(timeStripped, commonPhraseMapping);
+            return doMatchPhraseEntry(timeStripped, commonPhraseMapping);
         }
         return Optional.empty();
+    }
+
+    /** 整句是不是「[我要]报工 [+ 产量]」那类说法 (报工短语自带的整句约束, 见 {@link #REPORT_WORK_SENTENCE})。 */
+    public static boolean isReportWorkSentence(String input) {
+        return input != null && REPORT_WORK_SENTENCE.matcher(input.trim().toLowerCase()).matches();
     }
 
     /**
@@ -8042,6 +8055,11 @@ public class IntentKnowledgeBase {
      * @return 剥离前导时间词后的字符串; 若开头没有时间词则返回 {@code input.trim()} (调用方据此判断是否有变化)
      */
     String stripLeadingTimePhrase(String input) {
+        return stripLeadingTime(input);
+    }
+
+    /** {@link #stripLeadingTimePhrase} 的静态版 (同一条正则): 短语快捷判「整句是不是只有这个短语」时先剥句首时间词。 */
+    public static String stripLeadingTime(String input) {
         if (input == null) return null;
         String trimmed = input.trim();
         java.util.regex.Matcher m = LEADING_TIME_PREFIX.matcher(trimmed);
