@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # GUARDS=.github/workflows/rn-gate.yml,.github/workflows/web-admin-gate.yml,.github/workflows/python-gate.yml,.github/workflows/crosslang-contract-gate.yml,.github/workflows/source-hygiene.yml,.github/workflows/web-dist.yml,.github/workflows/java-gate-pr.yml,.github/workflows/java-full-nightly.yml,.github/workflows/jpa-gate-main.yml,.github/workflows/java-artifact.yml,.github/workflows/tool-inventory-gate.yml,.github/workflows/ops-script-tests.yml,.github/workflows/soft-delete-scan-surface.yml,.github/workflows/secret-regression.yml,.github/workflows/scheduler-canary.yml,.github/workflows/artifact-reaper.yml,.github/workflows/reap-orphan-testenvs.yml
-# GUARDS=.github/workflows/fresh-db-progress.yml,scripts/ci/switch_ci_runner.py
+# GUARDS=.github/workflows/fresh-db-progress.yml,scripts/ci/switch_ci_runner.py,scripts/ci/route-mini-or-hosted.sh
 # 2026-10-25: 仓库已转 public, CI 全部走 GitHub 托管 runner (owner 决定, 自建 runner 退役)。
 # 公开仓库里任何人都能提 PR; 只要还有一个 job 指向自建 runner, 陌生人的 PR 代码就可能在
 # 我们自己的机器上执行。所以这道闸钉三件事:
@@ -33,12 +33,25 @@ FORMERLY_SELF_HOSTED = {
 }
 # 自建路由白名单: (工作流, job) -> runs-on 原文。只放行本仓库分支 PR / 合并队列; fork PR 必须落 ubuntu-latest。
 SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
-MINI_PG_ROUTE = "${{ " + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}"
-# PG 这条线: 判定作业 changes + 4 片分片 + 汇总作业 (首尾不挪, 分片仍要等托管机排队)。
+# 2026-11-18 mini 优先、满了溢出: 先读 changes 作业 (托管机上) 的路由输出, 守卫照旧串在后面 ——
+# 路由输出只能把作业从 mini 挪到托管, 不能让 fork PR 上 mini。
+# 2026-11-19 Steve: mini 槽 1-4 = cretas-mini-pg (PG 线, 输出 runner_pg), 槽 5 = cretas-mini-fast
+# (fast-contracts 专用, 输出 runner_fast); fast 只有第 3 片可能上 mini, 其余 3 片托管并行。
+GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
+MINI_PG_ROUTE = ("${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && " + SAME_REPO_GUARD + GUARD_TAIL
+                 + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
+MINI_FAST_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && "
+                         + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
+MINI_FAST_SUMMARY_ROUTE = ("${{ needs.changes.outputs.runner_fast == 'cretas-mini-fast' && " + SAME_REPO_GUARD + GUARD_TAIL
+                           + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
+UNROUTED = "${{ " + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubuntu-latest' }}"
+# PG 线 4 片分片 + 汇总, fast-contracts 4 片分片 + 汇总。判定/路由作业 changes 必须是托管字面量
+# (放 mini 上的话 mini 一满它自己也排队, 溢出失效), 所以不在白名单里。
 SELF_HOSTED_ALLOWED = {
-    ('java-gate-pr.yml', 'changes'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts-shard'): MINI_FAST_SHARD_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts'): MINI_FAST_SUMMARY_ROUTE,
 }
 HEAP = {
     ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
@@ -134,6 +147,25 @@ if not violations('negative-control.yml', elsewhere):
     ok = False
 else:
     print('  ok - 阴性对照: 白名单表达式挪到未登记的 job 被判红')
+unrouted = sample.replace('probe', 'fast-contracts-shard').replace('[self-hosted, cretas]', UNROUTED)
+if not violations('java-gate-pr.yml', unrouted):
+    print('FAIL: 阴性对照: 不读路由输出 (mini 满了不溢出) 的旧表达式没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: 不读路由输出的旧表达式被判红')
+changes_block = dict(jobs((WF / 'java-gate-pr.yml').read_text(encoding='utf-8'))).get('changes', '')
+print('READING: java-gate-pr/changes runs-on=%r' % runs_on(changes_block))
+if (runs_on(changes_block) != 'ubuntu-latest' or 'route-mini-or-hosted.sh' not in changes_block
+        or 'MINI_LABEL: cretas-mini-pg' not in changes_block or 'MINI_LABEL: cretas-mini-fast' not in changes_block):
+    print('FAIL: java-gate-pr/changes 必须跑在 ubuntu-latest 并按 cretas-mini-pg / cretas-mini-fast 各调一次 route-mini-or-hosted.sh')
+    ok = False
+all_fast = sample.replace('probe', 'fast-contracts-shard').replace(
+    '[self-hosted, cretas]', MINI_FAST_SHARD_ROUTE.replace('matrix.shard == 3 && ', ''))
+if not violations('java-gate-pr.yml', all_fast):
+    print('FAIL: 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 被判红')
 present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
 print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
 

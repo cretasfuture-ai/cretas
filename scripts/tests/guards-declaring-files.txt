@@ -37,4 +37,5 @@ test-merge-queue-ready.sh
 test-ai-live-probe.sh
 test-intent-acceptance-leak-gate.sh
 test-remote-java-build.sh
+test-route-mini-or-hosted.sh
 test-fast-shard-context-cache-cap.sh
