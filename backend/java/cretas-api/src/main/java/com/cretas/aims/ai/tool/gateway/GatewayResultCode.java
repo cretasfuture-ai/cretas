@@ -31,5 +31,10 @@ public enum GatewayResultCode {
      * Pre-execution business-state check failed (object changed after preview, precondition no longer
      * holds, state unreadable or not comparable). The Tool was not invoked; nothing was written.
      */
-    PREVIEW_STALE
+    PREVIEW_STALE,
+    /**
+     * Pre-execution business-state check could not compare the object's state (the token recorded no
+     * prior state and the Tool cannot supply one). Not retryable by re-previewing; nothing was written.
+     */
+    CONFIRM_NOT_SUPPORTED
 }

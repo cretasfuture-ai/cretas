@@ -254,6 +254,56 @@ class GatewayPreExecutionStateCheckContractTest {
         assertThat(status(minted)).isEqualTo(TokenStatus.FAILED);
     }
 
+    // ==================== 空快照: 白名单豁免 / 其余照常核对 ====================
+
+    @Test
+    void whitelistedEmptySnapshotTokenSkipsTheRecheckAndIsCounted() {
+        // 画布式签发: 签发方自己跑过一次预览 (网关 PREVIEW 模式), 凭据不记改前值, 类型 CANVAS_DIFF
+        ToolExecutionResult issuerPreview = gateway.execute(previewCommand());
+        assertThat(issuerPreview.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        Minted minted = mintBound("CANVAS_DIFF", TaskTool.NAME, Map.of());
+        long exemptionsBefore = gateway.recheckExemptionCount();
+
+        ToolExecutionResult result = gateway.execute(command(minted.proof(), "idem-" + UUID.randomUUID()));
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        assertThat(tool.previews.get()).as("只有签发方那 1 次预览, 执行前没有再核对").isEqualTo(1);
+        assertThat(tool.executions.get()).isEqualTo(1);
+        assertThat(gateway.recheckExemptionCount()).as("豁免留了计数").isEqualTo(exemptionsBefore + 1);
+        assertThat(status(minted)).isEqualTo(TokenStatus.CONFIRMED);
+    }
+
+    @Test
+    void createOnlyToolWithEmptySnapshotSkipsTheRecheck() {
+        tool.createsNewRecordOnly = true;
+        Minted minted = mintBound(TaskTool.NAME, "NEW", Map.of());
+
+        ToolExecutionResult result = gateway.execute(command(minted.proof(), "idem-" + UUID.randomUUID()));
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.SUCCEEDED);
+        assertThat(tool.previews.get()).as("新建型不核对: 执行前 0 次预览").isZero();
+        assertThat(tool.executions.get()).isEqualTo(1);
+    }
+
+    @Test
+    void nonWhitelistedEmptySnapshotIsRefusedAsNotComparableLikeTheLegacyEntry() {
+        tool.reportsPriorState = false; // 工具给不出改前值, 凭据也没记 → 无法核对
+        Minted minted = mintBound(TaskTool.NAME, "12", Map.of());
+
+        ToolExecutionResult result = gateway.execute(command(minted.proof(), "idem-" + UUID.randomUUID()));
+
+        assertThat(result.status()).isEqualTo(ToolExecutionStatus.FAILED);
+        assertThat(result.payload().path("status").asText()).isEqualTo("CONFIRM_NOT_SUPPORTED");
+        assertThat(result.payload().path("reason").asText()).isEqualTo("NOT_COMPARABLE");
+        assertThat(result.payload().path("needsRepreview").asBoolean(true)).isFalse();
+        assertThat(result.message()).isEqualTo(PreviewStateRecheck.NOT_COMPARABLE_MESSAGE);
+        assertThat(tool.executions.get()).as("无法核对就不执行").isZero();
+        assertThat(tool.previews.get()).as("确实跑了执行前核对").isEqualTo(1);
+        assertThat(status(minted)).isEqualTo(TokenStatus.FAILED);
+        assertThat(audit(result).getResultCode())
+                .as("账本结果码与回执口径一致").isEqualTo(GatewayResultCode.CONFIRM_NOT_SUPPORTED.name());
+    }
+
     // ==================== 认领绑业务对象 ====================
 
     @Test
@@ -332,6 +382,24 @@ class GatewayPreExecutionStateCheckContractTest {
                 action.getExpiresAt(), row.getEntityType(), row.getEntityId()));
     }
 
+    /** 不经预览直接签发 (画布 / 自动任务 / AI 建产品那样), 改前值由调用方给。 */
+    private Minted mintBound(String entityType, String entityId, Map<String, Object> currentValues) {
+        IntentPreviewToken token = previewTokens.createBoundToken(new PreviewTokenService.BoundTokenRequest(
+                FACTORY, USER, null, "GW_DIRECT_" + UUID.randomUUID(), "direct issue", TaskTool.NAME, VERSION,
+                ToolExecutionMode.EXECUTE, entityType, entityId, "UPDATE", Map.of("taskId", 12),
+                currentValues, Map.of(), 300));
+        return new Minted(new ConfirmationProof(token.getToken(), token.getCommandDigest(),
+                token.getExpiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant(), entityType, entityId));
+    }
+
+    private ToolExecutionCommand previewCommand() {
+        String id = "gw-preview-" + UUID.randomUUID();
+        return new ToolExecutionCommand(id, id, id + "-trace", TaskTool.NAME, VERSION,
+                mapper.createObjectNode().put("taskId", 12), principal, ToolExecutionSource.AI_CHAT,
+                ToolExecutionMode.PREVIEW, Optional.empty(), Optional.empty(), Optional.empty(),
+                Instant.now().plusSeconds(30));
+    }
+
     private static ConfirmationProof withSubject(ConfirmationProof proof, String entityType, String entityId) {
         return new ConfirmationProof(proof.proofToken(), proof.commandDigest(), proof.expiresAt(),
                 entityType, entityId);
@@ -380,6 +448,8 @@ class GatewayPreExecutionStateCheckContractTest {
         final AtomicInteger executions = new AtomicInteger();
         final AtomicInteger previews = new AtomicInteger();
         volatile boolean failPreview;
+        volatile boolean createsNewRecordOnly;
+        volatile boolean reportsPriorState = true;
         private final ObjectMapper mapper;
 
         TaskTool(ObjectMapper mapper) {
@@ -396,6 +466,7 @@ class GatewayPreExecutionStateCheckContractTest {
         @Override public boolean supportsPreview() { return true; }
         @Override public ActionType getActionType() { return ActionType.UPDATE; }
         @Override public AccessMode getAccessMode() { return AccessMode.WRITE; }
+        @Override public boolean previewCreatesNewRecordOnly() { return createsNewRecordOnly; }
 
         @Override
         public String preview(ToolCall toolCall, Map<String, Object> context) throws Exception {
@@ -410,7 +481,9 @@ class GatewayPreExecutionStateCheckContractTest {
             data.put("status", "PREVIEW");
             data.put("canDo", "待开始".equals(state.get("状态")));
             data.put("message", "待开始".equals(state.get("状态")) ? "确认开始任务 12？" : "任务 12 已经开始。");
-            data.put("currentValues", current);
+            if (reportsPriorState) {
+                data.put("currentValues", current);
+            }
             data.put("newValues", Map.of("状态", "进行中", "负责人", state.get("负责人")));
             return mapper.writeValueAsString(Map.of("success", true, "data", data));
         }

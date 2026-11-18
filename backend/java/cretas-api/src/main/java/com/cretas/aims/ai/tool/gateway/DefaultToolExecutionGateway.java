@@ -23,11 +23,27 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Production fail-closed implementation of the governed Tool execution boundary. */
 @Component
 @RequiredArgsConstructor
 public class DefaultToolExecutionGateway implements ToolExecutionGateway {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DefaultToolExecutionGateway.class);
+
+    /**
+     * 签发时就没有「预览 → 隔一段时间再确认」窗口的凭据类型, 空快照时豁免执行前核对 (白名单, 只收不放):
+     * 自动任务在触发当刻按授权铸凭据; 画布配置走服务端方案绑定 (300s 内并发覆盖另记待办)。
+     * 另外只新建记录的工具 ({@link ToolExecutor#previewCreatesNewRecordOnly()}) 也豁免。
+     * 其余空快照一律照常核对 → 「无法核对」拒绝, 与老入口同口径 (fail-closed)。
+     */
+    static final Set<String> EMPTY_SNAPSHOT_EXEMPT_ENTITY_TYPES = Set.of("AUTONOMOUS_GRANT", "CANVAS_DIFF");
+
+    /** 豁免执行前核对的次数 (留痕; 每次另有一条 info 日志)。 */
+    private final AtomicLong recheckExemptions = new AtomicLong();
 
     private static final int LEGACY_FAILURE_STATUS_MAX_LENGTH = 64;
     private static final int LEGACY_FAILURE_MESSAGE_MAX_LENGTH = 1_000;
@@ -520,9 +536,9 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
      * 预览之后对象被改过 / 前提不再成立 / 重读失败 / 无法核对 → 本次不执行工具, 凭据记失败 (确定没写入),
      * 回执 {@code status=PREVIEW_STALE} (重新预览能解决) 或 {@code CONFIRM_NOT_SUPPORTED} 与老入口一致。
      *
-     * <p>凭据没有记改前值 (空快照) 时不核对: 这类凭据的签发方没有「预览 → 隔一段时间再确认」的窗口可比,
-     * 各自另有绑定 —— 自动任务在触发当刻按授权铸凭据、画布配置走服务端方案绑定、AI 建产品只新建记录。
-     * 一旦签发方记了改前值, 这里就按它核对, 不再区分签发方。</p>
+     * <p>凭据没有记改前值 (空快照) 时, 只有白名单豁免 ({@link #exemptFromRecheck}): 只新建记录的工具、
+     * 自动任务凭据、画布配置凭据; 豁免每次打 info 日志并计数。其余空快照照常核对, 得到「无法核对」→
+     * {@code CONFIRM_NOT_SUPPORTED}, 与老入口一致。</p>
      */
     private Optional<ToolExecutionResult> recheckBusinessState(
             ToolExecutionCommand command,
@@ -531,7 +547,11 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
             Lease lease,
             ToolExecutionIdempotencyRecord idempotencyRecord,
             String auditEventId) {
-        if (!hasRecordedPriorState(lease.recordedPriorState())) {
+        if (!hasRecordedPriorState(lease.recordedPriorState())
+                && exemptFromRecheck(resolved.executor(), lease.issuedEntityType())) {
+            long exemptions = recheckExemptions.incrementAndGet();
+            log.info("执行前业务状态核对豁免 (空快照白名单): tool={}, entityType={}, source={}, exemptions={}",
+                    command.toolName(), lease.issuedEntityType(), command.source(), exemptions);
             return Optional.empty();
         }
         PreviewStateRecheck.ConfirmStateCheck check;
@@ -555,8 +575,18 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         if (check.proceed()) {
             return Optional.empty();
         }
-        // 工具没被调用: 凭据记确定的失败 (不是结果不明), 与老入口一致。
-        safelyResolve(lease, false);
+        // 工具没被调用: 凭据记确定的失败 (不是结果不明), 与老入口一致。释放失败重试一次;
+        // 仍失败则留痕, 账本记 CONFIRMATION_RESOLUTION_UNCERTAIN (凭据停在执行中, 由对账任务收成「结果不明」,
+        // 用户照提示重新预览; 工具没被调用, 不存在写入半态)。
+        boolean released = safelyResolve(lease, false) || safelyResolve(lease, false);
+        if (!released) {
+            log.warn("执行前核对未通过但凭据释放失败, 凭据将由对账收口: tool={}, code={}",
+                    command.toolName(), check.code());
+        }
+        // 账本结果码与回执口径一致: 重新预览能解决 → PREVIEW_STALE; 无法核对 → CONFIRM_NOT_SUPPORTED
+        GatewayResultCode ledgerCode = !released
+                ? GatewayResultCode.CONFIRMATION_RESOLUTION_UNCERTAIN
+                : check.repreviewHelps() ? GatewayResultCode.PREVIEW_STALE : GatewayResultCode.CONFIRM_NOT_SUPPORTED;
         ObjectNode stale = JsonNodeFactory.instance.objectNode();
         stale.put("success", false);
         stale.put("status", check.responseStatus());
@@ -570,9 +600,20 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                 auditEventId,
                 ToolExecutionIdempotencyRecord.State.FAILED,
                 ToolExecutionStatus.FAILED,
-                GatewayResultCode.PREVIEW_STALE,
+                ledgerCode,
                 stale,
                 check.message()));
+    }
+
+    /** 空快照豁免白名单: 只新建记录的工具, 或签发即执行 / 另有服务端绑定的凭据类型。 */
+    static boolean exemptFromRecheck(ToolExecutor executor, String issuedEntityType) {
+        return executor.previewCreatesNewRecordOnly()
+                || (issuedEntityType != null && EMPTY_SNAPSHOT_EXEMPT_ENTITY_TYPES.contains(issuedEntityType));
+    }
+
+    /** 自本进程启动以来豁免执行前核对的次数。 */
+    long recheckExemptionCount() {
+        return recheckExemptions.get();
     }
 
     private boolean hasRecordedPriorState(String recordedPriorStateJson) {

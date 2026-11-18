@@ -120,13 +120,14 @@ public class AiProductCreateController {
                 confirmationToken, factoryId, body, identity.userId());
         IntentPreviewToken token = boundExecution.token();
         Map<String, Object> persistedParameters = boundExecution.parameters();
-        // 认领绑业务对象: 预览时按 (PRODUCT_TYPE, 产品名) 签发, 确认时按本次提交的产品名说出期望值
+        // 认领绑业务对象: 预览时按 (PRODUCT_TYPE, 产品名) 签发。期望值取凭据持久化参数里的产品名
+        // (与签发值同源, 属纵深防御而非独立校验; 提交体已由 requireBoundToken 要求与持久化参数逐字段相等)
         ConfirmationProof proof = new ConfirmationProof(
                 token.getToken(),
                 token.getCommandDigest(),
                 token.getExpiresAt().atZone(ZoneId.systemDefault()).toInstant(),
                 "PRODUCT_TYPE",
-                text(body.get("productName")));
+                text(persistedParameters.get("productName")));
         String idempotencyKey = "fixed-http-"
                 + ToolCommandDigest.persistentSecretFingerprint(token.getToken());
         String idempotencyHash = ToolCommandDigest.persistentSecretFingerprint(idempotencyKey);

@@ -354,6 +354,8 @@ class UserDisableConfirmationContractTest {
         IntentPreviewToken token = IntentPreviewToken.builder()
                 .token(tokenValue).factoryId("F-CONFIRM").tenantId("F-CONFIRM").userId(10L)
                 .entityType("user_disable").entityId("11")
+                // 与 ToolDispatchService 预览铸出的凭据一样记下改前值: 网关执行前按它核对 (非白名单空快照会被拒)
+                .currentValues("{\"currentStatus\":\"ACTIVE\"}")
                 .toolName("user_disable").descriptorVersion("3.0.0")
                 .executionMode(ToolExecutionMode.EXECUTE).commandDigest(digest)
                 .status(IntentPreviewToken.TokenStatus.PENDING)

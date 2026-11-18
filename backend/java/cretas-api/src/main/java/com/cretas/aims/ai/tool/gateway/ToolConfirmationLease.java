@@ -67,7 +67,7 @@ public class ToolConfirmationLease {
         }
         return Optional.of(new Lease(
                 proof.proofToken(), claim.getClaimId(), persistedParameters.deepCopy(),
-                token.getCurrentValues()));
+                token.getCurrentValues(), token.getEntityType()));
     }
 
     public boolean resolve(Lease lease, boolean success) {
@@ -95,15 +95,16 @@ public class ToolConfirmationLease {
      * @param recordedPriorState the business-state snapshot (JSON) the issuer recorded at preview
      *                           time, or {@code null}/blank/{@code "{}"} when none was recorded; the
      *                           gateway re-checks it before executing ({@link PreviewStateRecheck}).
+     * @param issuedEntityType   the object type the token was issued for (decides the empty-snapshot exemption)
      */
     public record Lease(String proofToken, String claimId, JsonNode persistedParameters,
-                        String recordedPriorState) {
+                        String recordedPriorState, String issuedEntityType) {
         public Lease {
             persistedParameters = persistedParameters.deepCopy();
         }
 
         public Lease(String proofToken, String claimId, JsonNode persistedParameters) {
-            this(proofToken, claimId, persistedParameters, null);
+            this(proofToken, claimId, persistedParameters, null, null);
         }
 
         @Override
