@@ -247,7 +247,8 @@ _QUERY_DOMAIN_TO_CAP: dict[str, str] = {
 }
 
 
-def should_short_circuit(query_domain: Optional[str], caps: DatasetCapabilities) -> Optional[str]:
+def should_short_circuit(query_domain: Optional[str], caps: DatasetCapabilities,
+                         field_names: Optional[list] = None) -> Optional[str]:
     """If query_domain has a known capability requirement that this dataset
     lacks, return a short-circuit message string. Else return None (proceed
     to LLM normally).
@@ -273,7 +274,17 @@ def should_short_circuit(query_domain: Optional[str], caps: DatasetCapabilities)
         "## 数据范围说明\n",
         f"本数据集**不含 {domain_label}** 字段，无法回答关于「{query_domain}」的分析。",
     ]
-    if present:
+    if field_names:
+        # A10: 列全部字段名, 不只能力标签 (实测只列出「时间/日期」, 漏了良品/废品/人数)。
+        msg_parts.append(
+            f"\n\n**当前数据集的全部字段 (共 {len(field_names)} 个)**: "
+            + "、".join(str(n) for n in field_names) + "。"
+        )
+        msg_parts.append(
+            f"\n\n**建议**: 换问上述字段能回答的问题，"
+            f"或切换到含 {domain_label} 字段的数据源后重试。"
+        )
+    elif present:
         msg_parts.append(
             f"\n\n**当前数据集包含**: {', '.join(present[:5])}"
             + ("，等" if len(present) > 5 else "")
