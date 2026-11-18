@@ -2634,6 +2634,18 @@
       "route_type": "TOOL"
     },
     {
+      "intent_code": "SCHEDULING_RUSH_ORDER_ANALYSIS",
+      "intent_name": "急单影响分析",
+      "intent_category": "ANALYSIS",
+      "description": "急单/插单影响分析 (只读): 给定产品、数量(按产品自带单位)和交期, 回答原料够不够缺多少、交期前产线和人手排不排得开、要挪哪几张原计划各晚多久, 并出一份待负责人确认的文字方案草案; 不建计划不占时段, 算不出来的项说缺什么。",
+      "tool_name": "scheduling_rush_order_impact",
+      "required_entities": null,
+      "is_active": true,
+      "business_type": "FACTORY",
+      "factory_id": null,
+      "route_type": "TOOL"
+    },
+    {
       "intent_code": "SCHEDULING_SET_AUTO",
       "intent_name": "排产全自动",
       "intent_category": "SYSTEM",
