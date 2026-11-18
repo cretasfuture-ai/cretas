@@ -1160,10 +1160,14 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             }
             Set<BigDecimal> candidates = new TreeSet<>();
             boolean lineWithoutPrice = false;
+            boolean quotedGrossLine = false;
             for (SalesOrderItem line : orderLines) {
                 if (line == null || dto.getProductTypeId() == null
                         || !Objects.equals(dto.getProductTypeId(), line.getProductTypeId())) {
                     continue;
+                }
+                if (line.getQuotedGrossUnitPrice() != null) {
+                    quotedGrossLine = true;
                 }
                 if (line.getUnitPrice() == null) {
                     lineWithoutPrice = true;
@@ -1173,7 +1177,8 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
             }
             BigDecimal orderPrice = candidates.size() == 1 && !lineWithoutPrice
                     ? candidates.iterator().next() : null;
-            if (shipped != null && shipped.unitPrice() != null) {
+            if (shipped != null && shipped.unitPrice() != null
+                    && usableShipmentPrice(shipped.unitPrice(), orderPrice, quotedGrossLine)) {
                 prices.add(new ResolvedReturnPrice(shipped.unitPrice(), PRICE_SOURCE_SHIPMENT, orderPrice,
                         shipped.deliveryNumbers()));
                 continue;
@@ -1193,13 +1198,37 @@ public class ReturnOrderServiceImpl implements ReturnOrderService {
         return prices;
     }
 
-    /** 回填行在行原因上追加单价来源, 让退货行能看出用的是发货价还是订单价 (不加列)。 */
+    /**
+     * 定位到的发货行价能否用于冲减 (复审 #1804 H1/M2):
+     * <ul>
+     * <li>订单行是报价含税行 (quotedGrossUnitPrice 非空): 发货挂账按订单报价含税价挂、不看发货行价
+     *     (SalesServiceImpl 报价行口径), 所以退货也按订单价, 不走发货价、不提醒;</li>
+     * <li>发货价为 0: 与发货挂账 {@code SalesServiceImpl.isKnownZeroShipmentValue} 同一判据,
+     *     只有订单行价也确定为 0 才认 (真赠品/样品); 否则这 0 是缺价/误录 (挂账侧按失败进待补账),
+     *     视为发货行无价, 走订单价或拒绝, ⛔ 不按 0 冲减。</li>
+     * </ul>
+     */
+    static boolean usableShipmentPrice(BigDecimal shipmentPrice, BigDecimal orderPrice, boolean quotedGrossLine) {
+        if (quotedGrossLine) {
+            return false;
+        }
+        if (shipmentPrice.signum() == 0) {
+            return orderPrice != null && orderPrice.signum() == 0;
+        }
+        return true;
+    }
+
+    /**
+     * 回填行在行原因上追加单价来源, 让退货行能看出用的是发货价还是订单价 (不加列)。
+     * ⛔ 不写金额: unitPrice 是 @PriceSensitive, 原因是普通字段, 写金额会让无价格权限的角色 (仓管) 看到单价
+     * (复审 #1804 M1)。金额只进财务提醒与 RETURN_PRICE_SOURCE_DIFF 日志。
+     */
     private static String withPriceSourceNote(String reason, ResolvedReturnPrice resolved) {
         if (resolved.source() == null) return reason;
         String note = PRICE_SOURCE_SHIPMENT.equals(resolved.source())
-                ? "[单价来源: 发货价 " + resolved.unitPrice().toPlainString()
+                ? "[单价来源: 发货价"
                         + (resolved.deliveryNumbers() != null ? ", 发货单 " + resolved.deliveryNumbers() : "") + "]"
-                : "[单价来源: 订单价 " + resolved.unitPrice().toPlainString() + "]";
+                : "[单价来源: 订单价]";
         String base = isBlank(reason) ? "" : reason.trim() + " ";
         int room = REASON_MAX - note.length() - 1;
         if (base.length() > room) {

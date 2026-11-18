@@ -30,6 +30,8 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -45,6 +47,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -121,7 +124,8 @@ class ReturnOrderShipmentPriceBackfillContractTest {
         assertThat(saved.getUnitPrice()).isEqualByComparingTo("9.00");
         assertThat(saved.getLineAmount()).isEqualByComparingTo("36.00");
         assertThat(order.getTotalAmount()).isEqualByComparingTo("36.00");
-        assertThat(saved.getReason()).startsWith("客户退回").contains("单价来源: 发货价 9.00").contains("FH-0001");
+        assertThat(saved.getReason()).startsWith("客户退回").contains("单价来源: 发货价").contains("FH-0001")
+                .doesNotContain("9.00").doesNotContain("10.00"); // M1: 原因是普通字段, 不得带价
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(notificationService).notifyRole(eq(F), eq("finance_manager"), anyString(), body.capture());
         assertThat(body.getValue())
@@ -157,7 +161,7 @@ class ReturnOrderShipmentPriceBackfillContractTest {
         ReturnOrderItem saved = savedItems().get(0);
         assertThat(saved.getUnitPrice()).isEqualByComparingTo("10.00");
         assertThat(saved.getLineAmount()).isEqualByComparingTo("30.00");
-        assertThat(saved.getReason()).contains("单价来源: 订单价 10.00");
+        assertThat(saved.getReason()).contains("单价来源: 订单价").doesNotContain("10");
         verify(notificationService, never()).notifyRole(any(), any(), any(), any());
     }
 
@@ -180,8 +184,8 @@ class ReturnOrderShipmentPriceBackfillContractTest {
     void otherFactoryShipmentIsNotHit() {
         orderLine("10.00");
         shipment(F, "DEL-1", "FH-0001", 21L, null, F);
-        // 别厂的发货单与 allocation: 即便仓库按本厂键返回了它 (模拟误命中), 也必须被工厂过滤掉
-        shipment(OTHER, "DEL-X", "FH-X", 31L, "7.00", OTHER);
+        // 别厂的发货单: 它的 allocation 桩故意返回本厂键 (F) 的行, 让发货单级 factory_id 过滤成为唯一防线 (复审 L1)
+        shipment(OTHER, "DEL-X", "FH-X", 31L, "7.00", F);
 
         service.createReturnOrder(F, request("1"), 7L);
 
@@ -223,9 +227,109 @@ class ReturnOrderShipmentPriceBackfillContractTest {
         verify(notificationService).notifyRole(eq(F), eq("finance_manager"), anyString(), anyString());
     }
 
+    @Test
+    @DisplayName("复审 H1: 发货行价 0、订单价 10 → 不按 0 冲减, 用订单价 10 (与挂账侧 isKnownZeroShipmentValue 同判据), 不提醒")
+    void zeroShipmentPriceWithNonZeroOrderPriceIsNotUsed() {
+        orderLine("10.00");
+        shipment(F, "DEL-1", "FH-0001", 21L, "0", F);
+
+        service.createReturnOrder(F, request("3"), 7L);
+
+        ReturnOrderItem saved = savedItems().get(0);
+        assertThat(saved.getUnitPrice()).isEqualByComparingTo("10.00");
+        assertThat(saved.getLineAmount()).isEqualByComparingTo("30.00");
+        assertThat(saved.getReason()).contains("单价来源: 订单价");
+        verify(notificationService, never()).notifyRole(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("复审 H1 对照: 发货行价 0 且订单价也确定为 0 (真赠品) → 认发货价 0")
+    void zeroShipmentPriceWithZeroOrderPriceIsUsed() {
+        orderLine("0");
+        shipment(F, "DEL-1", "FH-0001", 21L, "0.00", F);
+
+        service.createReturnOrder(F, request("3"), 7L);
+
+        ReturnOrderItem saved = savedItems().get(0);
+        assertThat(saved.getUnitPrice()).isEqualByComparingTo("0");
+        assertThat(saved.getReason()).contains("单价来源: 发货价");
+        verify(notificationService, never()).notifyRole(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("复审 M2: 报价含税订单行 (含税 11.30 / 未税 10) 发货价 9 → 按订单价 10 冲减, 不走发货价, 不提醒")
+    void quotedGrossOrderLineUsesOrderPriceNotShipmentPrice() {
+        SalesOrderItem line = orderLine("10.00");
+        line.setQuotedGrossUnitPrice(new BigDecimal("11.30"));
+        shipment(F, "DEL-1", "FH-0001", 21L, "9.00", F);
+
+        service.createReturnOrder(F, request("2"), 7L);
+
+        ReturnOrderItem saved = savedItems().get(0);
+        assertThat(saved.getUnitPrice()).isEqualByComparingTo("10.00");
+        assertThat(saved.getReason()).contains("单价来源: 订单价");
+        verify(notificationService, never()).notifyRole(any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("复审 L2: 同一批次两条发货行一条 9.00 一条没价 → 拒绝, 不静默取有价那条")
+    void sameBatchMixedPricedAndUnpricedShipmentLinesIsRejected() {
+        orderLine("10.00");
+        SalesDeliveryRecord d = shipment(F, "DEL-1", "FH-0001", 21L, "9.00", F);
+        List<SalesDeliveryItem> items = new ArrayList<>(d.getItems());
+        items.add(deliveryItem("DEL-1", 22L, null));
+        d.setItems(items);
+        when(allocationRepository.findByFactoryIdAndDeliveryItemId(F, "22"))
+                .thenReturn(List.of(allocation(F, "22", "5")));
+
+        assertThatThrownBy(() -> service.createReturnOrder(F, request("1"), 7L))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("有的有单价、有的没有");
+        verify(returnOrderItemRepository, never()).saveAll(anyList());
+    }
+
+    @Test
+    @DisplayName("复审 M3: 事务内创建时提交前不发提醒, afterCommit 回调后恰好发 1 次")
+    void reminderIsSentOnlyAfterCommit() {
+        orderLine("10.00");
+        shipment(F, "DEL-1", "FH-0001", 21L, "9.00", F);
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.createReturnOrder(F, request("4"), 7L);
+            verify(notificationService, never()).notifyRole(any(), any(), any(), any());
+
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).isNotEmpty();
+            syncs.forEach(TransactionSynchronization::afterCommit);
+
+            verify(notificationService, times(1))
+                    .notifyRole(eq(F), eq("finance_manager"), anyString(), anyString());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    @DisplayName("复审 M3: 事务回滚 (只走 afterCompletion(ROLLED_BACK)) → 不发提醒")
+    void reminderIsNotSentWhenTransactionRollsBack() {
+        orderLine("10.00");
+        shipment(F, "DEL-1", "FH-0001", 21L, "9.00", F);
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.createReturnOrder(F, request("4"), 7L);
+            List<TransactionSynchronization> syncs = TransactionSynchronizationManager.getSynchronizations();
+            assertThat(syncs).isNotEmpty();
+            syncs.forEach(sync -> sync.afterCompletion(TransactionSynchronization.STATUS_ROLLED_BACK));
+
+            verify(notificationService, never()).notifyRole(any(), any(), any(), any());
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
     // ---------------------------------------------------------------- fixtures
 
-    private void orderLine(String unitPrice) {
+    private SalesOrderItem orderLine(String unitPrice) {
         SalesOrderItem line = new SalesOrderItem();
         line.setId(11L);
         line.setProductTypeId(PT);
@@ -233,6 +337,7 @@ class ReturnOrderShipmentPriceBackfillContractTest {
         line.setUnitPrice(unitPrice == null ? null : new BigDecimal(unitPrice));
         when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId(SO, F))
                 .thenReturn(new ArrayList<>(List.of(line)));
+        return line;
     }
 
     /** 一张已发货的发货单, 一行 (对上订单行 11), 本批次分配 5 kg; allocation 一律按本厂键 (F) 挂在仓库桩上。 */
