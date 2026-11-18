@@ -77,7 +77,7 @@ import { computed, onMounted, ref, watch, nextTick } from 'vue';
 import * as echarts from 'echarts';
 import type { ECharts } from 'echarts';
 import type { AnalysisResultItem } from '@/api/smartbi/analysisResults';
-import { visibleKpiEntries } from './templateKpis';
+import { visibleKpiEntries, localizeKpiKey } from './templateKpis';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
   getTemplateTitle,
@@ -117,101 +117,7 @@ const formattedDate = computed(() => {
   }
 });
 
-// English KPI key → 中文. Templates emit mixed camelCase keys; map the
-// common ones here so users see localized labels. Unknown keys fall
-// through to the raw key (better than blocking render).
-const KPI_LABEL_MAP: Record<string, string> = {
-  // generic totals
-  total: '合计',
-  totalRevenue: '营业额',
-  totalTracked: '统计总数',
-  totalOrders: '订单总数',
-  totalItemCount: '明细总数',
-  grandTotal: '总计',
-  grandRevenue: '营业额',
-  grandOrders: '订单总数',
-  grandAmount: '合计金额',
-  revenue: '营业额',
-  orders: '订单数',
-  orderCount: '订单数',
-  billCount: '单数',
-  avgBillValue: '客单价',
-  avgOrder: '平均客单',
-  storeCount: '门店数',
-  dayCount: '天数',
-  periodCount: '期数',
-  monthCount: '月份数',
-  latestMonth: '最近月份',
-  latestRevenue: '最近月营业额',
-  // peaks / extremes
-  peakValue: '峰值',
-  peakPeriod: '峰值日期',
-  peakMonth: '峰值月份',
-  peakArea: '峰值区域',
-  peakSlot: '峰值时段',
-  peakRevenue: '峰值营业额',
-  // R5-9: two "worst/trough" keys used to read identically. Differentiate:
-  // worstMonth = the worst single value; troughMonth = the smoothed trough
-  // point from anomaly detection.
-  worstMonth: '最差月份',
-  troughMonth: '平滑低谷月',
-  // stats
-  max: '最大值',
-  min: '最小值',
-  mean: '均值',
-  std: '标准差',
-  median: '中位数',
-  avg: '平均值',
-  // deltas / ratios
-  deltaPct: '波动率(%)',
-  dodDeltaPct: '环比(%)',
-  yoyDeltaPct: '同比(%)',
-  sharePct: '占比(%)',
-  netSharePct: '到账率(%)',
-  anomalyCount: '异常月数',
-  weekdayAvgOrder: '工作日均客单',
-  weekendAvgOrder: '周末均客单',
-  weekendOrderShare: '周末订单占比(%)',
-  // dimensions (generic top_n / category_distribution / anomaly)
-  dimCount: '维度数',
-  topLabel: 'Top 项',
-  topValue: 'Top 值',
-  topSharePct: 'Top 占比(%)',
-  topCategory: 'Top 分类',
-  categoryCount: '分类数',
-  topCategoryShare: 'Top 分类占比(%)',
-  // finance
-  netRevenue: '实收',
-  grossRevenue: '应收',
-  hasCostData: '是否含成本',
-  topSlot: '主要时段',
-  topChannel: '主要渠道',
-  topPlatform: '最大平台',
-  topPlatformAmount: '最大平台金额',
-  platformCount: '平台数',
-  // stored value card
-  cardTotal: '储值卡消费',
-  cardOrders: '储值卡笔数',
-  // dish / product
-  topDishName: '热销菜品',
-  topDishQty: '热销销量',
-  topDishRevenue: '热销营收',
-  distinctDishes: '菜品总数',
-  bottomDish: '最滞销菜品',
-  bottomQty: '最滞销销量',
-  nearZeroCount: '近零销量数',
-  // combo
-  comboOrders: '套餐订单数',
-  topComboName: '热销套餐',
-  usageRatePct: '使用率(%)',
-  // product
-  topProduct: '热销商品',
-  topProductRevenue: '热销商品营收',
-};
-
-function localizeKpiKey(key: string): string {
-  return KPI_LABEL_MAP[key] || key;
-}
+// KPI 英文键 → 中文: 见 ./templateKpis.ts 的 KPI_LABEL_MAP / localizeKpiKey
 
 /** Format a large number with 中式万/亿 units.
  * - |n| >= 1e8 → "X.XX亿"
@@ -243,7 +149,7 @@ function formatNumberCN(n: number): string {
  * is small enough to stay in 千分位 format. */
 const CURRENCY_KEY_RE = /(?:^|[A-Z_])(?:revenue|amount|cost|price|avgorder|avgbill|peakvalue|topvalue|grandamount|topplatformamount|netrevenue|grossrevenue|carddeposit|cardtotal)(?:$|[A-Z_])/i;
 
-function formatKpiValue(value: unknown, key?: string): { text: string; isLong: boolean } {
+function formatKpiValue(value: unknown, key?: string, unitIsMoney = true): { text: string; isLong: boolean } {
   if (value === null || value === undefined) return { text: '—', isLong: false };
   if (typeof value === 'boolean') {
     return { text: value ? '是' : '否', isLong: false };
@@ -251,7 +157,8 @@ function formatKpiValue(value: unknown, key?: string): { text: string; isLong: b
   if (typeof value === 'number') {
     const isPercent = key ? /Pct|Share|Rate|占比/i.test(key) : false;
     const isCount = key ? /Count|Orders|Bills|Qty|Total$/i.test(key) && Number.isInteger(value) && Math.abs(value) < 1e6 : false;
-    const isCurrency = key ? CURRENCY_KEY_RE.test(key) : false;
+    // 模板自带 unit 且不是「元」(如产量 kg) 时, peakValue / totalRevenue 不是钱, 不加 ¥
+    const isCurrency = unitIsMoney && key ? CURRENCY_KEY_RE.test(key) : false;
     let text: string;
     if (isPercent) {
       text = value.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -277,12 +184,14 @@ const kpis = computed(() => {
   // (or — placeholder) wastes a slot. Filter so non-money KPIs fill the 4 slots.
   // Context fields (unit / aggregation) are never KPIs — see templateKpis.ts.
   const hideMoney = !canViewPrice.value;
+  const unit = props.item?.kpiValues?.unit;
+  const unitIsMoney = unit === undefined || unit === null || unit === '' || unit === '元';
   return visibleKpiEntries(
     props.item?.kpiValues,
     (key) => hideMoney && CURRENCY_KEY_RE.test(key),
   )
     .map(([key, value]) => {
-      const formatted = formatKpiValue(value, key);
+      const formatted = formatKpiValue(value, key, unitIsMoney);
       return {
         label: localizeKpiKey(key),
         value: formatted.text,

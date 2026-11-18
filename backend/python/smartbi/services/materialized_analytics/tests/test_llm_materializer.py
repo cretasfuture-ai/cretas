@@ -250,7 +250,7 @@ async def test_distillation_sample_captured_on_success(monkeypatch):
     results = _make_results()
     _patch_llm(monkeypatch, json.dumps({
         "executive_summary": "整体营收稳健。" * 3,
-        "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
+        "insights": {"top_n_by_dim": "产品 A 因核心商圈渠道贡献过半; 建议复制到其他渠道。"},
     }, ensure_ascii=False))
 
     # factory domain: restaurant rows are not training data (餐饮废弃, 2026-10-29 待办第 7 条)
@@ -295,7 +295,7 @@ async def test_distillation_desensitized_for_factory_without_training_consent(mo
     results = _make_results()
     _patch_llm(monkeypatch, json.dumps({
         "executive_summary": "整体营收稳健。" * 3,
-        "insights": {"top_n_by_dim": "门店 A 因核心商圈贡献过半; 建议复制选址。"},
+        "insights": {"top_n_by_dim": "产品 A 因核心商圈渠道贡献过半; 建议复制到其他渠道。"},
     }, ensure_ascii=False))
 
     await lm.generate_llm_insights(results, "factory", factory_id="F_NO_CONSENT")

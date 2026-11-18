@@ -46,6 +46,7 @@ import { buildBackendColumnLabels, resolveColumnLabel, columnMinWidth } from './
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
 import { pickDefaultDataSource } from './composables/useDataSourceSelect';
+import { buildWelcomeText, quickQuestionsFor } from './aiQueryGreeting';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ChatDotRound,
@@ -648,40 +649,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
 //
 // Heuristic: 用 file_name + sheet_name 关键词推断 domain. 错了无功能损失,
 // 只是少一个相关 chip — fallback 到通用销售 chip 组.
-const QUICK_QUESTIONS_BY_DOMAIN: Record<string, string[]> = {
-  // 评价/口碑数据
-  review: [
-    '客户评价情况', '差评最多的门店', '哪些菜品差评多',
-    'VIP 评价情况', '投诉最集中的问题', '哪个城市评价最低',
-    '服务分排名', '环境分对比'
-  ],
-  // 会员/储值/会员卡数据
-  member: [
-    '会员卡数据有什么发现', 'VIP 占比', '充值最多的会员',
-    '会员等级分布', '余额最高的客户', '会员消费频次',
-    '储值卡使用率', '会员流失率'
-  ],
-  // 财务/利润/收入报表
-  finance: [
-    '总营业额', '哪家店利润最高', '成本结构',
-    '毛利率排名', '门店营收对比', '同比增长',
-    '费用占比', '收入趋势'
-  ],
-  // 库存/进销存
-  inventory: [
-    '库存周转情况', '滞销库存', '采购金额排名',
-    '损耗率', '进货 Top 10', '库存预警'
-  ],
-  // 默认 — 餐饮销售场景. Apr 28 2026 (UX audit): trimmed chips that often
-  // hit capability_short_circuit on minimal sales datasets (e.g. xmx_real
-  // doesn't have staff/coupon/payment cols). Kept ones that work on any
-  // sales dataset with 商品/门店/销售金额 columns.
-  default: [
-    '畅销品 Top 5', '哪家店业绩最好', '慢销菜品',
-    '周末周中对比', '总营业额', '门店销售对比',
-    '商品分类占比', '客单价分析'
-  ],
-};
+// 快捷问题表与工厂/餐饮分组见 ./aiQueryGreeting.ts (LSM-COSTBI 第 9 项: 工厂租户不出餐饮词)
 
 // Some uploads have filenames that arrive as GBK bytes mis-decoded as
 // Latin-1 (e.g. "评价下载" → "ÆÀ¼ÛÏÂÔØ"). The Excel parser reads .xls/.csv
@@ -756,7 +724,7 @@ const quickQuestions = computed<string[]>(() => {
   const fname = item?.fileName || item?.originalFileName || '';
   const sname = (item as any)?.sheetName || '';
   const domain = inferDomainFromFilename(fname + ' ' + sname);
-  return QUICK_QUESTIONS_BY_DOMAIN[domain] || QUICK_QUESTIONS_BY_DOMAIN.default;
+  return quickQuestionsFor(authStore.businessDomain, domain);
 });
 const queryPlaceholder = computed(() => {
   if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';
@@ -764,11 +732,14 @@ const queryPlaceholder = computed(() => {
 });
 
 function buildWelcomeMessage(): string {
-  const sourceHint = dataSourceLabel.value
-    ? `\n\n当前${dataSourceLabel.value}`
-    : '\n\n提示：暂无上传数据，建议先在"数据分析"页面上传 Excel 文件。';
-  return `您好！我是 SmartBI 智能助手，可以帮您分析销售、财务、库存等数据。您可以选择下方的分析模板快速开始，或直接输入问题。${sourceHint}`;
+  return buildWelcomeText(authStore.businessDomain, dataSourceLabel.value);
 }
+
+// 问候语随数据源更新: 之前只在挂载时写一次, 切换数据源后仍显示旧文件名 (LSM-COSTBI 第 9 项)
+watch(dataSourceLabel, () => {
+  const welcome = chatHistory.value.find(m => m.id === 'welcome');
+  if (welcome) welcome.content = buildWelcomeMessage();
+});
 
 // 自动补全候选 — 覆盖 35 个模板的高频 sample_queries(177 中精选)
 // 命中这里的任何 query → Python RAG 秒回(sim=1.0 via template embedding)
