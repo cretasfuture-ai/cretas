@@ -39,7 +39,7 @@ import static org.mockito.Mockito.when;
  * 走工具真实入口 execute(ToolCall, context): 泛称 → 不查批次、回追问 + 最近批次; 真批次号 → 照常查且原样出现。
  */
 @ExtendWith(MockitoExtension.class)
-class GenericBatchReferenceClarifyTest {
+class GenericBatchReferenceClarifyContractTest {
 
     private static final String FACTORY_ID = "LSMDEMO";
     private static final String REAL_BATCH = "DEMO-20261118-PB-013";
