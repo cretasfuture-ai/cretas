@@ -199,7 +199,16 @@ describe('工厂侧概览 —— 三态', () => {
         `「${t}」没有任何赋值点(loadOverviewData 只打四个端点, 后端 overview 也不返回这些字段), `
           + '它印的 0 是永久的初值, 与数据和加载成败都无关 —— 那是最纯粹的假读数。',
       ).toBe('—');
-      expect(statCard(wrapper, t).text()).toContain('尚未接入');
+      const text = statCard(wrapper, t).text();
+      // 性质: 不是开发口吻, 不印数字(含 0), 且给出指路说明 + 可点链接
+      expect(text).not.toContain('尚未接入');
+      expect(text).not.toMatch(/[0-9]/);
+      expect(text).toContain(t === '销售' ? '销售数据请到「经营分析 › 销售」查看' : '成本数据请到「成本分析」查看');
+      const link = statCard(wrapper, t).find('a.stat-link');
+      expect(link.exists()).toBe(true);
+      expect(link.attributes('to')).toBe(
+        t === '销售' ? '/smart-bi/analysis-hub?tab=sales' : '/production-analytics/cost',
+      );
     }
   });
 });

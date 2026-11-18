@@ -17,7 +17,7 @@ import { useAuthStore } from '../../store/authStore';
 import { QI_COLORS, type QualityInspectorStackParamList } from '../../types/qualityInspector';
 import { getErrorMsg } from '../../utils/errorHandler';
 import { getFactoryId } from '../../utils/factoryIdHelper';
-import { formatDuration } from '../../utils/processTimeLimit';
+import { formatDuration, recordKindText } from '../../utils/processTimeLimit';
 import { canDecideTimeoutEvent } from '../../utils/qualityClosurePermissions';
 import { shared } from './qualityClosureShared';
 import {
@@ -99,6 +99,9 @@ export default function QITimeoutDecisionScreen() {
         <Text style={shared.cardSub}>起算：{startText(event)}</Text>
         <Text style={shared.cardSub}>截止：{formatBackendTime(event.deadlineAt)} · 已超时 {overdueText(event, openedAt)}</Text>
         <Text style={[shared.cardSub, styles.qty]}>超时数量：{timeoutQuantity(event)}</Text>
+        {recordKindText(event) ? (
+          <Text style={shared.cardSub} testID="timeout-record-kind">{recordKindText(event)}</Text>
+        ) : null}
       </View>
 
       {!canDecide ? (

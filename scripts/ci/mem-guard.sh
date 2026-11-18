@@ -24,10 +24,27 @@ PATTERN="${MEMGUARD_FORK_PATTERN:-surefirebooter}"
 PARENT="${MEMGUARD_PARENT_PID:-$PPID}"
 
 meminfo_mb() { awk -v k="$1" '$1==k":" {printf "%d", $2/1024}' /proc/meminfo; }
+# macOS (canada-mini 自建 runner, 2026-11-18) 没有 /proc: 可用 = free+inactive+speculative 页, swap 读 sysctl, RSS 读 ps。
+if [ ! -r /proc/meminfo ]; then
+  meminfo_mb() {
+    case "$1" in
+      MemAvailable) vm_stat | awk '/page size of/ {ps=$8} /Pages (free|inactive|speculative)/ {gsub("\\.","",$NF); n+=$NF} END {printf "%d", n*ps/1048576}' ;;
+      SwapTotal) sysctl -n vm.swapusage | awk '{v=$3; sub("M","",v); printf "%d", v}' ;;
+      SwapFree) sysctl -n vm.swapusage | awk '{v=$9; sub("M","",v); printf "%d", v}' ;;
+    esac
+  }
+fi
+fork_rss_mb() {
+  if [ -r "/proc/$1/status" ]; then awk '$1=="VmRSS:" {printf "%d", $2/1024}' "/proc/$1/status"
+  else ps -o rss= -p "$1" 2>/dev/null | awk '{printf "%d", $1/1024}'; fi
+}
 last_class() { grep -a "Running com\." "$OUT" 2>/dev/null | tail -1 | sed 's/.*Running //' ; }
-# surefire 用 `sh -c "... java ... surefirebooter.jar"` 起 fork, pgrep -f 会先命中 sh 壳 (RSS 1MB), 所以只认 comm=java。
-fork_pid() { ps -eo pid=,comm=,args= 2>/dev/null | awk -v p="$PATTERN" '$2=="java" && index($0,p) {print $1; exit}'; }
+# surefire 用 `sh -c "... java ... surefirebooter.jar"` 起 fork, pgrep -f 会先命中 sh 壳 (RSS 1MB), 所以只认 comm=java
+# (macOS 的 comm 是完整路径, 取最后一段比)。
+fork_pid() { ps -eo pid=,comm=,args= 2>/dev/null | awk -v p="$PATTERN" '{n=split($2,a,"/")} a[n]=="java" && index($0,p) {print $1; exit}'; }
 
+# macOS 没有 timeout(1): 有 gtimeout 用它, 都没有就直接调 jcmd
+TIMEOUT_CMD="timeout 5"; command -v timeout >/dev/null 2>&1 || { command -v gtimeout >/dev/null 2>&1 && TIMEOUT_CMD="gtimeout 5" || TIMEOUT_CMD=""; }
 low=0
 tick=0
 start=$(date +%s)
@@ -38,15 +55,15 @@ while kill -0 "$PARENT" 2>/dev/null; do
   swap_used=$((swap_total - swap_free))
   pid=$(fork_pid)
   rss=0
-  if [ -n "$pid" ] && [ -r "/proc/$pid/status" ]; then
-    rss=$(awk '$1=="VmRSS:" {printf "%d", $2/1024}' "/proc/$pid/status")
+  if [ -n "$pid" ]; then
+    rss=$(fork_rss_mb "$pid"); rss=${rss:-0}
   fi
   now=$(( $(date +%s) - start ))
 
   if [ $((tick % (PRINT_EVERY / INTERVAL > 0 ? PRINT_EVERY / INTERVAL : 1))) -eq 0 ]; then
     heap=""
     if [ -n "$pid" ] && command -v jcmd >/dev/null 2>&1; then
-      heap=$(timeout 5 jcmd "$pid" GC.heap_info 2>/dev/null | grep -E "garbage-first|Metaspace" | tr -s ' ' | tr '\n' ';' | cut -c1-260)
+      heap=$(${TIMEOUT_CMD} jcmd "$pid" GC.heap_info 2>/dev/null | grep -E "garbage-first|Metaspace" | tr -s ' ' | tr '\n' ';' | cut -c1-260)
     fi
     echo "MEMGUARD t=${now}s avail=${avail}MB swap_used=${swap_used}MB fork_pid=${pid:-none} fork_rss=${rss}MB last_class=$(last_class) heap=[${heap}]"
   fi

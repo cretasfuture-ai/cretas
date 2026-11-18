@@ -36,9 +36,6 @@ vi.mock('@/composables/useChartInsight', async () => {
   const { ref } = await import('vue');
   return { useChartInsight: () => ({ insight: ref(null), loading: ref(false) }) };
 });
-vi.mock('@/views/smart-bi/components/ChartInsight.vue', () => ({
-  default: { name: 'ChartInsight', template: '<div class="chart-insight" />' },
-}));
 
 import SkuMargin from '../index.vue';
 import { readSkuMarginResponse, fmtPct, fmtMoney } from '../skuMarginData';
@@ -241,7 +238,10 @@ describe('KPI 只统计有实际销售毛利率的 SKU', () => {
     expect(wrapper.find('.kpi-avg').text()).toBe('18.4%');
     expect(wrapper.text()).toContain('2 / 3 个SKU有订单毛利率');
     expect(wrapper.text()).toContain('产品毛利率简单平均');
-    expect(wrapper.find('.chart-insight').exists()).toBe(false);
+    // 一图一分析（问题 40）接上后，性质仍然成立：毛利率是比率，分析里只比较高低，不出现合计/占比
+    const insight = wrapper.find('.chart-insight-container').text();
+    expect(insight).toContain('从 36.8%（牛肉酱）到 0%（保本产品）');
+    expect(insight).not.toMatch(/占比|合计|总计|总和/);
     expect(wrapper.find('.kpi-best').text()).toBe('36.8%');
     expect(wrapper.find('.kpi-worst').text()).toBe('0.0%');
   });

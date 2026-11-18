@@ -49,6 +49,15 @@
       <div class="chart-area">
         <div ref="chartContainer" class="chart-canvas"></div>
       </div>
+      <!-- 一图一分析（问题 40）：按当前数据现算，FLOW 族（相邻阶段转化） -->
+      <ChartInsightProvider
+        :chart="funnelInsight"
+        :perms="insightPerms"
+        :factory-id="factoryId"
+        :auto-tier2="false"
+        depth="detailed"
+        class="funnel-insight"
+      />
 
       <!-- Stats table -->
       <el-table :data="stats" style="margin-top: 24px">
@@ -102,6 +111,10 @@ import {
   getFunnelStats,
 } from '@/api/salesOpportunity';
 import { useAuthStore } from '@/store/modules/auth';
+import { usePermissionStore } from '@/store/modules/permission';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
+import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
+import { funnelInsightChart } from './funnelInsight';
 
 const router = useRouter();
 const authStore = useAuthStore();
@@ -113,6 +126,11 @@ const currentUserId = computed<number>(
 const onlyMine = ref(false);
 const loading = ref(false);
 const stats = ref<FunnelStatEntry[]>([]);
+
+const loaded = ref(false);
+const permissionStore = usePermissionStore();
+const insightPerms = computed<UserPermissions>(() => ({ canViewFinance: permissionStore.canViewPrice }));
+const funnelInsight = computed(() => funnelInsightChart(stats.value, loaded.value));
 
 const chartContainer = ref<HTMLDivElement | null>(null);
 let chartInstance: ECharts | null = null;
@@ -146,8 +164,10 @@ async function loadStats() {
       (a, b) =>
         stageMeta(a.stage).order - stageMeta(b.stage).order,
     );
+    loaded.value = true;
     renderChart();
   } catch (e: unknown) {
+    loaded.value = false;
     const msg = e instanceof Error ? e.message : '加载漏斗数据失败';
     ElMessage.error(msg);
   } finally {
@@ -317,6 +337,9 @@ watch(() => stats.value, () => {
 .chart-canvas {
   width: 100%;
   height: 100%;
+}
+.funnel-insight {
+  margin-top: 12px;
 }
 .empty-state {
   margin-top: 32px;

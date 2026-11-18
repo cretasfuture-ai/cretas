@@ -119,7 +119,7 @@ public class DynamicToolSelectionService {
         try {
             com.cretas.aims.dto.ai.PreprocessedQuery pq = queryPreprocessorService.preprocessRulesOnly(userQuery);
             com.cretas.aims.config.TimeNormalizationRules.TimeRange range = pq == null ? null : pq.getPrimaryTimeRange();
-            if (range != null && range.isValid()) {
+            if (range != null && range.isValid() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(userQuery)) {
                 String from = range.getStart().toLocalDate().toString();
                 String to = range.getEnd().toLocalDate().toString();
                 params.put("startDate", from);

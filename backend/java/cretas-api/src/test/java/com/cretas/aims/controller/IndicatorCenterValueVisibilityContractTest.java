@@ -245,7 +245,9 @@ class IndicatorCenterValueVisibilityContractTest {
         if (!account.sees) {
             assertTrue(r.get("message").asText().contains("按当前账号的权限配置不显示"), "如实说, 不说没配置: " + r);
         }
-        assertFalse(!account.sees && r.toString().contains("80"), r.toString());
+        // 只看业务字段 (data/message), 不扫整串: 响应里的 timestamp 纳秒段会偶然含 "80" 让本断言抖动
+        String bizPart = r.path("data").toString() + "|" + r.path("message").asText();
+        assertFalse(!account.sees && bizPart.contains("80"), r.toString());
 
         assertEquals(1, call(mvc, get(BASE + "/thresholds/FACTORY_YIELD_RATE")).get("data").size(), "良品率阈值照常");
         assertEquals(1, call(mvc, get(BASE + "/FACTORY_YIELD_RATE")).get("data").get("thresholds").size());

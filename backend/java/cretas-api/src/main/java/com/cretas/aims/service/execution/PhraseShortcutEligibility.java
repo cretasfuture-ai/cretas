@@ -72,8 +72,28 @@ public final class PhraseShortcutEligibility {
         if (phrase == null || phrase.isBlank()) {
             return true;
         }
-        return residual(input, phrase).length() <= MAX_RESIDUAL_CHARS;
+        if (intentCode != null && SELF_PARSING_CONDITION_INTENTS.contains(intentCode)) {
+            // 急单分析工具自己从原话里解析交期 / 数量 / 品名 (「周五要交2吨酱牛肉急单, 原料够不够, 产线排不排得开」,
+            // BP 原话): 句中条件正是它的输入, 不是第二个子问 (2026-11-18 prod [SSE-EarlyPhrase] residual 被拦落到澄清)
+            return true;
+        }
+        String rest = residual(input, phrase);
+        if (intentCode != null && DATE_RANGE_OK_INTENTS.contains(intentCode)) {
+            // 「11月1日到18日销售额是多少」: 区间本身是工具的 startDate/endDate, 不是第二个子问 (2026-11-18 LSMDEMO:
+            // 这句被当成带条件交给决策层, 落到要 indicator_code 的指标工具)
+            rest = DATE_RANGE.matcher(rest).replaceAll("");
+        }
+        return rest.length() <= MAX_RESIDUAL_CHARS;
     }
+
+    /** 条件由工具自己从原话解析的意图, 命中即放行。只放这一个, 其它意图仍按残留字数判。 */
+    static final java.util.Set<String> SELF_PARSING_CONDITION_INTENTS = java.util.Set.of("SCHEDULING_RUSH_ORDER_ANALYSIS");
+
+    /** 工具自己接受 startDate / endDate 的只读汇总意图: 句中的日期区间不算「带条件」。 */
+    static final java.util.Set<String> DATE_RANGE_OK_INTENTS = java.util.Set.of("REPORT_SALES_MARGIN_SUMMARY");
+
+    private static final Pattern DATE_RANGE = Pattern.compile(
+            "(\\d{4}年)?\\d{1,2}月(\\d{1,2}[日号]?)?|\\d{1,2}[日号]|[到至~—-]|从|自|截止|截至|今天|昨天|前天");
 
     /**
      * 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。短语不在原话里 (剥过数量 / 时间才命中) = 原话全部。

@@ -353,9 +353,26 @@ class Orchestrator:
         else:
             probs = await self.decision_matcher.choose(query, role, [by_code[c] for c in codes], history)
         timing["decisionMs"] = int((time.time() - t) * 1000)
+        timing_before_purpose = dict(timing)
         # 说话意图不是「现在办」⇒ 不采用刚选出的业务意图 (结论在这里才用到, 前面一直在并行跑)
         purpose_result = await purpose_block()
         if purpose_result is not None:
+            # 说话意图只回「说不清」(UNRESOLVED), 而决策层本身已判定要先问并给出 >= 2 个候选 ⇒ 出按钮, 不出纯文字追问。
+            # (2026-11-18: 目的分类换成 qwen3.8-flash 后, 「这个客户的量给我弄一下」这类含糊办事请求被判 UNRESOLVED,
+            #  把 Luna 已算好的按钮澄清盖成了文字, 用户没法点选。)
+            if purpose_result.timingMs.get("requestPurposeUnresolved"):
+                buttons = None
+                if fallback is not None:
+                    buttons = self._result_from_fallback(fallback, query, by_code, visible_intents,
+                                                         dict(timing_before_purpose), t0)
+                elif probs:
+                    buttons = self._result_from_probs(probs, special, query, by_code, visible_intents,
+                                                      dict(timing_before_purpose), t0, ask_tier=ask_tier)
+                if (buttons is not None and buttons.requiresConfirmation and len(buttons.topCandidates) >= 2
+                        and (buttons.timingMs or {}).get("decisionClarify")):
+                    buttons.timingMs["requestPurposeUnresolved"] = 1
+                    buttons.timingMs["purposeUnresolvedButtons"] = 1
+                    return buttons
             return purpose_result
         if fallback is not None:
             return self._result_from_fallback(fallback, query, by_code, visible_intents, timing, t0)

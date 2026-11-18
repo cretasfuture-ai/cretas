@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.crm;
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
 import com.cretas.aims.dto.customer.CreateCustomerRequest;
 import com.cretas.aims.dto.customer.CustomerDTO;
+import com.cretas.aims.repository.CustomerRepository;
 import com.cretas.aims.service.CustomerService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,6 +17,9 @@ public class CustomerCreateTool extends AbstractBusinessTool {
 
     @Autowired
     private CustomerService customerService;
+
+    @Autowired
+    private CustomerRepository customerRepository;
 
     @Override
     public String getToolName() {
@@ -86,6 +90,61 @@ public class CustomerCreateTool extends AbstractBusinessTool {
         result.put("customer", customer);
         result.put("message", "客户创建成功: " + customer.getName());
         return result;
+    }
+
+    /**
+     * 写确认卡 (2026-11-17 绑意图 CUSTOMER_CREATE 时补): 确认前先给「将新建哪个客户」与同名是否已存在,
+     * 不落库。同名判断与 {@code CustomerServiceImpl#createCustomer} 的 409 同一条
+     * ({@code existsByFactoryIdAndName}), 卡片上先说清, 不等点了确认才报错。
+     */
+    @Override
+    public boolean supportsPreview() {
+        return true;
+    }
+
+    /** 只新建客户、不改已有客户 (确认前状态核对按新建型处理, 见 ToolExecutor#previewCreatesNewRecordOnly)。 */
+    @Override
+    public boolean previewCreatesNewRecordOnly() {
+        return true;
+    }
+
+    @Override
+    protected Map<String, Object> doPreview(String factoryId, Map<String, Object> params,
+                                            Map<String, Object> context) throws Exception {
+        String name = getString(params, "name");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", "PREVIEW");
+        result.put("name", name);
+        result.put("contactPerson", getString(params, "contactPerson"));
+        result.put("phone", getString(params, "phone"));
+        result.put("shippingAddress", getString(params, "shippingAddress"));
+        result.put("type", getString(params, "type"));
+        if (name == null || name.isBlank()) {
+            result.put("canDo", false);
+            result.put("message", "⚠️ 还缺客户名称, 请告诉我客户叫什么。");
+            return result;
+        }
+        if (customerRepository.existsByFactoryIdAndName(factoryId, name.trim())) {
+            result.put("canDo", false);
+            result.put("status", "DUPLICATE");
+            result.put("message", "ℹ️ 本厂已经有叫「" + name.trim() + "」的客户, 不重复新建。要改资料请说「修改客户」。");
+            return result;
+        }
+        result.put("canDo", true);
+        StringBuilder sb = new StringBuilder("📋 将新建客户「").append(name.trim()).append("」");
+        appendIfPresent(sb, "联系人", getString(params, "contactPerson"));
+        appendIfPresent(sb, "电话", getString(params, "phone"));
+        appendIfPresent(sb, "收货地址", getString(params, "shippingAddress"));
+        appendIfPresent(sb, "类型", getString(params, "type"));
+        sb.append("。确认后创建。");
+        result.put("message", sb.toString());
+        return result;
+    }
+
+    private static void appendIfPresent(StringBuilder sb, String label, String value) {
+        if (value != null && !value.isBlank()) {
+            sb.append(", ").append(label).append(" ").append(value.trim());
+        }
     }
 
     /** spec §8.2 有副作用, 须走 W0 写确认闸 */

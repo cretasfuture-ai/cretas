@@ -169,7 +169,33 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                     "title", "批次出成率（%，" + (lowestFirst ? "最低" : "最高") + "前 " + shown.size() + "）",
                     "option", option)));
         }
-        return buildSimpleResult(message(shown, ranked.size(), completed, noYield, withheld, start, end, lowestFirst, keyword), data);
+        String text = message(shown, ranked.size(), completed, noYield, withheld, start, end, lowestFirst, keyword);
+        if (completed == 0 && withheld == 0) {
+            // 窗口 (默认的、或「最近」这类对话补的) 没数据: 不让用户以为「没有批次」, 说明最近一次已完成批次的日期 (往前看一年)
+            LocalDate latest = latestCompletedDate(factoryId, today, keyword);
+            data.put("latestCompletedBatchDate", latest == null ? null : latest.toString());
+            text = latest == null
+                    ? text + "\n近一年内也没有已完成的批次记录。"
+                    : text + "\n最近一次已完成批次是 " + latest + "，想看那段时间可以说「" + latest.getMonthValue() + "月出成率最低的批次」。";
+        }
+        return buildSimpleResult(text, data);
+    }
+
+    private LocalDate latestCompletedDate(String factoryId, LocalDate today, String keyword) {
+        List<ProductionBatch> wide = batchRepository.findBatchesInDateRange(
+                factoryId, today.minusDays(365).atStartOfDay(), today.plusDays(1).atStartOfDay());
+        LocalDate latest = null;
+        if (wide != null) {
+            for (ProductionBatch b : wide) {
+                if (b.getStatus() != ProductionBatchStatus.COMPLETED || "CLERK_WIP".equals(b.getBatchType())) continue;
+                if (keyword != null && (b.getProductName() == null
+                        || !b.getProductName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT)))) continue;
+                java.time.LocalDateTime t = b.getEndTime() != null ? b.getEndTime() : b.getUpdatedAt();
+                if (t == null) continue;
+                if (latest == null || t.toLocalDate().isAfter(latest)) latest = t.toLocalDate();
+            }
+        }
+        return latest;
     }
 
     private static String message(List<Map<String, Object>> shown, int rankedCount, int completed, int noYield,

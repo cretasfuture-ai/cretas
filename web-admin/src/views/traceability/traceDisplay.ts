@@ -264,6 +264,28 @@ export function formatTimeRange(start?: string | null, end?: string | null): str
   return `${s} ~ ${sameDay ? e.slice(11) : e}`;
 }
 
+// ── 损耗率 ──────────────────────────────────────────────────────────────────
+
+/**
+ * 工序「损耗率」显示: 只由投入/产出重量现算, ⛔ 不读后端 lossRate 字段
+ * (历史工序记录该字段是百分数 0-100, 工艺单路径是比例 0-1, 口径不一, 乘 100 会得到 10000.0% 这类数)。
+ * 投入 5% 损耗: 217.5 → 206.625 显示「5.0%」; 产出大于投入显示「增重 x%」; 投入为 0/缺失/单位不一致显示「—」。
+ */
+export function formatStageLossRate(
+  input?: number | null,
+  output?: number | null,
+  unitsComparable = true,
+): { text: string; reason: string } {
+  if (input == null || output == null || !Number.isFinite(input) || !Number.isFinite(output)) {
+    return { text: '—', reason: '投入或产出未记录, 无法计算' };
+  }
+  if (!unitsComparable) return { text: '—', reason: '投入与产出单位不一致, 无法计算' };
+  if (input <= 0) return { text: '—', reason: '投入为 0, 无法计算' };
+  const pct = ((input - output) / input) * 100;
+  if (pct < 0) return { text: `增重 ${(-pct).toFixed(1)}%`, reason: '产出大于投入(如加料), 按增重显示' };
+  return { text: `${pct.toFixed(1)}%`, reason: '(投入 - 产出) / 投入' };
+}
+
 // ── 小工具 ──────────────────────────────────────────────────────────────────
 
 export function isBlank(value: unknown): boolean {
@@ -277,4 +299,12 @@ export function isBlank(value: unknown): boolean {
 export function joinPresent(parts: Array<string | null | undefined>): string | null {
   const present = parts.filter((p): p is string => !!p && `${p}`.trim().length > 0);
   return present.length === 0 ? null : present.join(' · ');
+}
+
+/**
+ * 质检节点/行的显示名: 「质检 + 结论」。后端只有内部 inspectionId (UUID), 没有业务编号,
+ * ⛔ 不拿它的片段(如 #823d7330)当编号显示给用户。
+ */
+export function inspectionNodeTitle(result?: string | null): string {
+  return `质检 ${qualityStatusLabel(result) || '待定'}`;
 }

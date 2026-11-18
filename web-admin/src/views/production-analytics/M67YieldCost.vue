@@ -340,6 +340,14 @@
       <el-card shadow="never" class="mb">
         <template #header><b>批次溯源 (原料 → 各道工序 → 成品, 宽度=物料重量kg)</b></template>
         <div ref="sankeyEl" style="height: 320px"></div>
+        <ChartInsightProvider
+          :chart="sankeyInsight"
+          :perms="insightPerms"
+          :factory-id="factoryId || ''"
+          :auto-tier2="false"
+          depth="detailed"
+          class="m67-insight"
+        />
       </el-card>
 
       <!-- 多批混锅溯源 (多对多) — 数据驱动, 仅当该批有多个上游来源时显示 -->
@@ -349,6 +357,14 @@
           <span class="hint">实时从批次关联溯源 — 一锅熟制来自 {{ mixRels.length }} 个上游批次, 按实测投料量逐批归集 (Excel 做不到的"多对多")</span>
         </template>
         <div ref="mixEl" style="height: 300px"></div>
+        <ChartInsightProvider
+          :chart="mixInsight"
+          :perms="insightPerms"
+          :factory-id="factoryId || ''"
+          :auto-tier2="false"
+          depth="detailed"
+          class="m67-insight"
+        />
 
         <!-- 成本按混批比例真拆 (异质成本: 成本占比 ≠ 重量占比) -->
         <div v-if="mixCostSplit.hasCost" class="mix-cost">
@@ -387,6 +403,10 @@ import echarts from '@/utils/echarts';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
 import KPICard from '@/components/smartbi/KPICard.vue';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
+import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
+import { usePermissionStore } from '@/store/modules/permission';
+import { mixSankeyInsightChart, yieldSankeyInsightChart } from './yieldFlowInsight';
 import {
   calculateYieldRate,
   collectionDisplay,
@@ -1122,6 +1142,16 @@ const costBreakdown = computed(() => {
   });
 });
 
+// ── 一图一分析（问题 40）：两张桑基图各一句现算结论，FLOW 族（只和前面最近的同单位环节比）──
+const permissionStore = usePermissionStore();
+const insightPerms = computed<UserPermissions>(() => ({ canViewFinance: permissionStore.canViewPrice }));
+const sankeyInsight = computed(() => yieldSankeyInsightChart(groupedSteps.value));
+const mixInsight = computed(() => mixSankeyInsightChart(
+  mixRels.value.map((r, i) => ({ name: r.batchNumber || r.batchId || ('上游' + (i + 1)), quantity: r.quantity, unit: r.unit })),
+  finiteNumber(data.value?.totalLastOutput),
+  data.value?.lastOutputUnit,
+));
+
 function renderSankey() {
   if (!sankeyEl.value || !groupedSteps.value.length) return;
   if (!chart) chart = echarts.init(sankeyEl.value);
@@ -1270,18 +1300,17 @@ function renderMix() {
   const seen = new Set<string>();
   const addNode = (name: string, color: string) => { if (!seen.has(name)) { seen.add(name); nodes.push({ name, itemStyle: { color } }); } };
   const links: { source: string; target: string; value: number; unit?: string }[] = [];
-  let totalIn = 0;
   mixRels.value.forEach((r, i) => {
     const src = r.batchNumber || r.batchId || ('上游' + (i + 1));
     const v = Number(r.quantity || 0);
-    totalIn += v;
     addNode(src, palette[i % palette.length]);
     links.push({ source: src, target: SZ, value: v, unit: r.unit });
   });
   addNode(SZ, '#fac858');
-  addNode(FG, '#91cc75');
-  const fgVal = Number(data.value?.totalLastOutput || totalIn);
-  links.push({ source: SZ, target: FG, value: fgVal, unit: data.value?.lastOutputUnit });
+  if (finiteNumber(data.value?.totalLastOutput) != null) addNode(FG, '#91cc75');
+  // 末道产出没报工时不画成品这一段（⛔ 不拿投料量顶替成品，分析里照实说缺）
+  const fgVal = finiteNumber(data.value?.totalLastOutput);
+  if (fgVal != null) links.push({ source: SZ, target: FG, value: fgVal, unit: data.value?.lastOutputUnit });
   mixChart.setOption({
     tooltip: { trigger: 'item', renderMode: 'richText', formatter: (p: any) => p.dataType === 'edge' ? `${p.data.source} → ${p.data.target}: ${p.data.value} ${displayAuditUnit(p.data.unit)}` : p.name },
     series: [{
@@ -1382,6 +1411,7 @@ onBeforeUnmount(() => { window.removeEventListener('resize', onResize); chart?.d
 .ctrls { display: flex; align-items: center; gap: 8px; }
 .gw { color: var(--cs-muted); font-size: 13px; }
 .mb { margin-bottom: 16px; }
+.m67-insight { margin-top: 8px; }
 .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
 .hint { color: var(--cs-muted); font-size: 12px; margin-left: 8px; }
 .mix-note { color: var(--cs-muted); font-size: 13px; background: #f4f6fa; border-radius: 6px; padding: 10px 12px; margin-top: 8px; }
