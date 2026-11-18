@@ -1,3 +1,4 @@
+import { SHIPMENT_COST_SOURCE_INCOMPLETE } from './financeReportCodes';
 /**
  * Sprint 7 T3 — 财务三表 API client.
  *
@@ -170,7 +171,8 @@ export interface ShipmentSkuMargin {
 
 export function getShipmentSkuMargin(factoryId: string, periodStart: string, periodEnd: string) {
   return get<ShipmentSkuMargin>(`/${factoryId}/finance/report/shipment-sku-margin`,
-    { params: { periodStart, periodEnd } });
+    // 出货扣库不完整 (409) 由页面内说明, 不让全局拦截器弹红窗; 其它错误照旧走全局提示。
+    { params: { periodStart, periodEnd }, _handledErrorCodes: [SHIPMENT_COST_SOURCE_INCOMPLETE] });
 }
 
 export function getIncomeStatement(

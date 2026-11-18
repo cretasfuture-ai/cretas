@@ -1,5 +1,5 @@
 import type { FullTraceResponse, LineageNode } from '@/api/traceability';
-import { qualityStatusLabel, shipmentStatusLabel, nodeTypeLabel, UNNAMED_NODE_TEXT } from './traceDisplay';
+import { qualityStatusLabel, shipmentStatusLabel, nodeTypeLabel, inspectionNodeTitle, formatQueryTime, UNNAMED_NODE_TEXT } from './traceDisplay';
 
 /**
  * 溯源 DAG 的纯函数组装 —— 只用现有 `getFullTrace` 返回的数据, 不碰后端契约。
@@ -57,6 +57,25 @@ export interface TraceGraph {
 }
 
 export const MISSING = '未记录';
+
+/**
+ * 追溯线图的版式与字号 (默认视图要直接读得出来, 1440 宽演示截图可读)。
+ * 节点内字号是「未缩放」的基准值, 实际屏幕字号 = 基准 × 视图缩放; 缩放被 DAG_MIN_ZOOM 兜底,
+ * 所以主标题实际 ≥ 14px、次要信息 ≥ 12px (图宽装不下时靠拖动/缩放控件看, 不再把字缩到看不清)。
+ */
+export const DAG_NODE_W = 240;
+export const DAG_NODE_H = 150;
+export const DAG_COL_GAP = 40;
+export const DAG_ROW_GAP = 16;
+export const DAG_FONT = { title: 17, line: 15, label: 15 } as const;
+export const DAG_MIN_ZOOM = 0.85;
+export const DAG_MAX_ZOOM = 1.15;
+
+/** 按容器宽度算默认缩放: 刚好装下就用装下的比例, 装不下取下限 (保可读), 宽裕时最多放大到上限。 */
+export function dagFitZoom(containerWidth: number, graphWidth: number): number {
+  if (!(containerWidth > 0) || !(graphWidth > 0)) return 1;
+  return Math.min(DAG_MAX_ZOOM, Math.max(DAG_MIN_ZOOM, (containerWidth - 24) / graphWidth));
+}
 
 function qty(quantity?: number | null, unit?: string | null): string {
   if (quantity == null) return MISSING;
@@ -203,8 +222,11 @@ export function buildTraceGraph(trace: FullTraceResponse): TraceGraph {
         id,
         kind: 'quality',
         column: col,
-        title: `质检 #${q.inspectionId ? q.inspectionId.slice(-8) : MISSING}`,
+        // 后端没有给检验单业务编号, inspectionId 是内部 ID, ⛔ 不截一段当编号显示: 标题 = 「质检 + 结论」, 批次号放要点行。
+        title: inspectionNodeTitle(q.result),
         lines: [
+          { label: '批次', value: text(p.batchNumber) },
+          { label: '检验日期', value: text(formatQueryTime(q.inspectionDate)) },
           { label: '检验员', value: text(q.inspectorName) },
           { label: '抽检合格率', value: q.passRate != null ? `${q.passRate}%` : MISSING },
         ],

@@ -300,3 +300,11 @@ export function joinPresent(parts: Array<string | null | undefined>): string | n
   const present = parts.filter((p): p is string => !!p && `${p}`.trim().length > 0);
   return present.length === 0 ? null : present.join(' · ');
 }
+
+/**
+ * 质检节点/行的显示名: 「质检 + 结论」。后端只有内部 inspectionId (UUID), 没有业务编号,
+ * ⛔ 不拿它的片段(如 #823d7330)当编号显示给用户。
+ */
+export function inspectionNodeTitle(result?: string | null): string {
+  return `质检 ${qualityStatusLabel(result) || '待定'}`;
+}
