@@ -155,8 +155,8 @@ class ProductionGapPostgresRepositoryQueryValidationTest {
     }
 
     private void seed() {
-        processes.save(WorkProcess.builder().id("WP-PG-CUT").factoryId(F).processName("切丁").build());
-        processes.save(WorkProcess.builder().id("WP-PG-OTHER").factoryId(OTHER).processName("别厂工序").build());
+        processes.save(WorkProcess.builder().id("WP-PG-CUT").factoryId(F).processName("切丁").defaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED).build());
+        processes.save(WorkProcess.builder().id("WP-PG-OTHER").factoryId(OTHER).processName("别厂工序").defaultOutputMaterialKind(com.cretas.aims.entity.enums.WorkProcessOutputMaterialKind.SEMI_FINISHED).build());
 
         ProductionPlan p1 = plan("PLAN-PG-1", "PP-PG-001", F);
         p1.setPlannedDate(TODAY);
@@ -174,18 +174,18 @@ class ProductionGapPostgresRepositoryQueryValidationTest {
         tasks.save(task(OTHER, bOther.getId(), "WP-PG-OTHER", 1, WorkProcessTask.Status.IN_PROGRESS));
 
         // 称重: 三阶段 INPUT (无产出) + OUTPUT (良品 95kg, 不良 5kg) + 旧式整合 (30 盒, 没清点不良)
-        reports.save(yield(F, taskWeighed, "INPUT", null, null, null, new BigDecimal("100")));
-        reports.save(yield(F, taskWeighed, "OUTPUT", "95", "kg", "5", null));
-        reports.save(yield(F, taskWeighed, null, "30", "盒", null, null));
+        reports.save(yieldReport(F, taskWeighed, "INPUT", null, null, null, new BigDecimal("100")));
+        reports.save(yieldReport(F, taskWeighed, "OUTPUT", "95", "kg", "5", null));
+        reports.save(yieldReport(F, taskWeighed, null, "30", "盒", null, null));
         // 已软删的称重: 不算报工, 也不算「已称重」
-        ProductionReport voided = yield(F, taskOnlyVoidedWeighing, "OUTPUT", "999", "kg", "0", null);
+        ProductionReport voided = yieldReport(F, taskOnlyVoidedWeighing, "OUTPUT", "999", "kg", "0", null);
         voided.setDeletedAt(LocalDateTime.now());
         reports.save(voided);
         // 旧进度报工: 切丁 100kg 不良 5; 未分类 10kg
         reports.save(progress(F, "切丁", "100", "kg", "5"));
         reports.save(progress(F, null, "10", "kg", null));
         // 别厂
-        reports.save(yield(OTHER, null, "OUTPUT", "777", "kg", "7", null));
+        reports.save(yieldReport(OTHER, null, "OUTPUT", "777", "kg", "7", null));
         reports.save(progress(OTHER, "切丁", "500", "kg", "50"));
 
         FactoryMaterialRequisition a = req("REQ-GAP-1", "PP-GAP-001", "含50%脂五花", Status.ISSUED, LocalDate.of(2026, 11, 10));
@@ -382,7 +382,7 @@ class ProductionGapPostgresRepositoryQueryValidationTest {
         return t;
     }
 
-    private static ProductionReport yield(String factory, Long taskId, String kind, String out, String unit,
+    private static ProductionReport yieldReport(String factory, Long taskId, String kind, String out, String unit,
                                           String defect, BigDecimal input) {
         return ProductionReport.builder().factoryId(factory).workerId(1L).reportType("YIELD").reportKind(kind)
                 .reportDate(TODAY).workProcessTaskId(taskId)
