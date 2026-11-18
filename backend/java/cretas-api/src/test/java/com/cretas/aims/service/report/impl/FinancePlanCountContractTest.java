@@ -55,6 +55,7 @@ class FinancePlanCountContractTest {
                 mock(TimeClockRecordRepository.class), mock(ReworkRecordRepository.class), mock(SalesOrderRepository.class),
                 mock(ProductionLineRepository.class), mock(FactorySettingsRepository.class));
         ReflectionTestUtils.setField(service, "llmCostScope", scope(protectedIds, planRows));
+        ReflectionTestUtils.setField(service, "arApService", mock(com.cretas.aims.service.finance.ArApService.class));
         return service;
     }
 
