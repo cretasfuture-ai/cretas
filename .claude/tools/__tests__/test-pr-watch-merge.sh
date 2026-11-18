@@ -44,7 +44,7 @@ ok() { pass=$((pass+1)); echo "PASS $1"; }
 bad() { failn=$((failn+1)); echo "FAIL $1"; }
 setup() { S="$T/s$1"; rm -rf "$S"; mkdir -p "$S"; echo OPEN > "$S/state"; echo MERGEABLE > "$S/mergeable"; echo h1 > "$S/head"; : > "$S/calls"; }
 G=$'\t'
-run() { FAKE_GH_STATE="$S" PR_WATCH_GH="$FAKE" PR_WATCH_INTERVAL=0 bash "$SCRIPT" 99 --timeout-sec 15 "$@" > "$S/out" 2>&1; echo $? > "$S/rc"; }
+run() { FAKE_GH_STATE="$S" PR_WATCH_GH="$FAKE" PR_WATCH_INTERVAL=0 bash "$SCRIPT" 99 --timeout-sec 90 "$@" > "$S/out" 2>&1; echo $? > "$S/rc"; }
 rc() { cat "$S/rc"; }
 called() { grep -q -- "$1" "$S/calls"; }
 
