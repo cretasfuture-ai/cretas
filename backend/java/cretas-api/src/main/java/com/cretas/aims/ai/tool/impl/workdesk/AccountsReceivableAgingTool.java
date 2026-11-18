@@ -194,9 +194,60 @@ public class AccountsReceivableAgingTool extends AbstractBusinessTool {
             msg.append("\n另有 ").append(prepaidCount).append(" 个客户预收款")
                .append(showAmounts ? " ¥" + prepaid.setScale(2, java.math.RoundingMode.HALF_UP) : "").append("（不计入欠款）。");
         }
+        // 同一问常带「应付」「逾期」: 按挂账流水 (与账龄视图同源同范围) 补一段, 口径与上面的客户余额不同, 明说
+        msg.append(ledgerOverdueAndPayableLine(factoryId, showAmounts));
         data.put("ranking", ranking);
         if (showAmounts) data.put("totalAmount", total);
         return buildSimpleResult(msg.toString(), data);
+    }
+
+    /** 逾期应收 + 应付 (挂账流水口径)。金额只在可见时写; 流水里没有记录就如实说没有, 不写成 0 元。 */
+    private String ledgerOverdueAndPayableLine(String factoryId, boolean showAmounts) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n另按挂账流水（与账龄视图同口径，和上面的客户余额口径不同）：");
+        java.math.BigDecimal[] ar = overdueSplit(arApService.getAgingAnalysis(factoryId, CounterpartyType.CUSTOMER));
+        if (ar[2].signum() == 0) {
+            sb.append("应收流水里没有已逾期的记录；");
+        } else {
+            sb.append("逾期应收（已过到期日）").append(ar[2].intValue()).append(" 家客户")
+              .append(showAmounts ? "，共 ¥" + ar[1].setScale(2, java.math.RoundingMode.HALF_UP) : "").append("；");
+        }
+        List<Map<String, Object>> payRows = arApService.getAgingAnalysis(factoryId, CounterpartyType.SUPPLIER);
+        java.math.BigDecimal[] ap = overdueSplit(payRows);
+        long payCount = payRows == null ? 0 : payRows.stream().filter(r -> decimal(r.get("total")).signum() > 0).count();
+        if (payCount == 0) {
+            sb.append("应付流水里没有未结清的记录。");
+        } else {
+            sb.append("应付未结清 ").append(payCount).append(" 家供应商")
+              .append(showAmounts ? "，共 ¥" + ap[0].setScale(2, java.math.RoundingMode.HALF_UP) : "")
+              .append(ap[2].signum() > 0
+                      ? "，其中已逾期 " + ap[2].intValue() + " 家" + (showAmounts ? " ¥" + ap[1].setScale(2, java.math.RoundingMode.HALF_UP) : "")
+                      : "，没有已逾期的")
+              .append("。");
+        }
+        return sb.toString();
+    }
+
+    /** 返回 [未结清合计, 逾期金额, 有逾期的对手数] (逾期 = 已过到期日, 即 1-30 天及更久各桶)。 */
+    private static java.math.BigDecimal[] overdueSplit(List<Map<String, Object>> rows) {
+        java.math.BigDecimal total = java.math.BigDecimal.ZERO;
+        java.math.BigDecimal overdue = java.math.BigDecimal.ZERO;
+        long overdueParties = 0;
+        if (rows != null) {
+            for (Map<String, Object> row : rows) {
+                java.math.BigDecimal rowTotal = decimal(row.get("total"));
+                if (rowTotal.signum() <= 0) continue;
+                total = total.add(rowTotal);
+                java.math.BigDecimal late = decimal(row.get("days1_30")).add(decimal(row.get("days31_60")))
+                        .add(decimal(row.get("days61_90"))).add(decimal(row.get("days91_120")))
+                        .add(decimal(row.get("days120plus")));
+                if (late.signum() > 0) {
+                    overdue = overdue.add(late);
+                    overdueParties++;
+                }
+            }
+        }
+        return new java.math.BigDecimal[]{total, overdue, java.math.BigDecimal.valueOf(overdueParties)};
     }
 
     /** spec §8.2 只读查询, 无副作用 */
