@@ -54,8 +54,9 @@ const STATUS_RANK: Record<ApprovalCatalogStatus, number> = {
   archived: 4,
   'legacy-migration-required': 5,
   'canvas-conflict': 6,
-  'business-not-wired': 7,
-  unconfigured: 8,
+  unconfigured: 7,
+  // 暂未接入审批的业务排在最后: 已接入的先看, 未接入的不抢眼
+  'business-not-wired': 8,
 }
 
 function workflowRank(workflow: ApprovalWorkflowDTO): number {

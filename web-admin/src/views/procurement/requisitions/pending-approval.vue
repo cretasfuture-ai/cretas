@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 待审批请购单 — Sprint 6 W2-A.
  *
@@ -202,11 +203,11 @@ async function confirmReject() {
       <el-table
         v-loading="loading"
         :data="tableData"
-        empty-text="当前无待审请购单"
         stripe
         border
         style="width: 100%"
       >
+        <template #empty><ListEmptyExplain empty-title="当前没有待审批的请购单" empty-hint="请购单提交后会出现在这里等待审批；没有则说明都已处理。" /></template>
         <el-table-column prop="requisitionNumber" label="单号" width="200" />
         <el-table-column prop="requesterId" label="请购人" width="100" align="center">
           <template #default="{ row }">{{ personLabel(row.requesterId) }}</template>

@@ -48,7 +48,10 @@
                   <div v-if="diff.type === 'PRODUCT_PROCESS_WORKFLOW_SPEC'" class="workflow-change-preview" data-testid="workflow-spec-preview">
                     <template v-if="diff.proposal">
                       <strong>全部 {{ diff.proposal.rows.length }} 项改动</strong>
-                      <p class="preview-impact">生成后将替换整个当前画布，可撤销；未匹配的工序会在应用时新建。这里仅列出实际将写入画布的改动，请核对生成结果后保存。</p>
+                      <p class="preview-impact">AI 没提到的现有配置（单位、辅料、物料绑定等）保留原值；只列出实际会写入画布的改动，可撤销；未匹配的工序会在应用时新建。</p>
+                      <p v-if="clearRows(diff).length" class="preview-clears-hint" role="alert" data-testid="workflow-clears-hint">
+                        其中 {{ clearRows(diff).length }} 项会删除或清空现有配置（标红），请逐项勾选确认后才能应用；还剩 {{ unconfirmedClearCount(diff) }} 项未确认。
+                      </p>
                       <div v-if="false" class="workflow-plan-steps" aria-label="AI 方案工序明细">
                         <div v-for="(step, stepIndex) in getSpecSteps(diff.proposal.spec)" :key="stepIndex" data-testid="workflow-spec-step">
                           <strong>{{ stepIndex + 1 }} · {{ step.process }}</strong>
@@ -62,10 +65,29 @@
                         <li v-for="warning in diff.proposal.warnings" :key="warning">未采纳：{{ warning }}</li>
                       </ul>
                       <ol class="workflow-change-list">
-                        <li v-for="row in diff.proposal.rows" :key="row.path" :data-change-path="row.path" data-testid="workflow-change-row">{{ row.text }}</li>
+                        <li
+                          v-for="row in diff.proposal.rows"
+                          :key="row.path"
+                          :data-change-path="row.path"
+                          :class="{ 'workflow-change-row--clears': row.clears }"
+                          :data-clears="row.clears ? 'true' : undefined"
+                          data-testid="workflow-change-row"
+                        >
+                          <label v-if="row.clears && diff.proposal.state === 'pending'" class="clear-confirm">
+                            <input
+                              type="checkbox"
+                              data-testid="workflow-clear-confirm"
+                              :checked="diff.proposal.confirmedClears.includes(row.path)"
+                              :disabled="diff.proposal.applying"
+                              @change="toggleClearConfirm(diff, row.path, ($event.target as HTMLInputElement).checked)"
+                            />
+                            <span>确认</span>
+                          </label>
+                          {{ row.text }}
+                        </li>
                       </ol>
                       <div v-if="diff.proposal.state === 'pending'" class="workflow-preview-actions">
-                        <el-button type="primary" :disabled="disabled || loading || diff.proposal.applying" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
+                        <el-button type="primary" :disabled="disabled || loading || diff.proposal.applying || unconfirmedClearCount(diff) > 0" data-testid="workflow-spec-apply" @click="applySpecProposal(diff, msg.sourceIdentity)">应用配置</el-button>
                         <el-button :disabled="diff.proposal.applying" data-testid="workflow-spec-cancel" @click="cancelSpecProposal(diff)">取消</el-button>
                       </div>
                       <p v-else role="status">{{ diff.proposal.state === 'cancelled' ? '已取消，画布没有改动。' : '已提交应用，请检查画布后保存。' }}</p>
@@ -122,7 +144,7 @@
                   data-testid="ai-chat-skeleton-bar"
                   :style="{ width: `${w}%` }"
                 />
-                <span class="skeleton-caption">正在生成工序草稿…</span>
+                <span class="skeleton-caption">{{ loadingCaption }}</span>
               </div>
             </div>
           </div>
@@ -196,6 +218,8 @@ interface ChatDiff {
     state: 'pending' | 'submitted' | 'cancelled';
     applying?: boolean;
     warnings?: string[];
+    /** BP-38: 已逐项勾选确认的「清空/删除现有配置」行 (row.path)。行刷新后清零重来。 */
+    confirmedClears: string[];
   };
 }
 
@@ -231,6 +255,8 @@ const props = withDefaults(defineProps<{
   context?: Record<string, unknown>;
   contextLabel?: string;
   quickPrompts?: string[];
+  /** BP-38: 判定为只读检查的问题只要结论 —— 请求带 intent=check, 返回的任何改动方案一律丢弃。 */
+  isCheckOnly?: (text: string) => boolean;
   previewSpec?: (spec: unknown) => WorkflowAiPreview | Promise<WorkflowAiPreview>;
   applySpec?: (draft: Record<string, unknown>, sourceIdentity: SourceIdentity) => void | SpecApplyResult | Promise<void | SpecApplyResult>;
 }>(), {
@@ -261,6 +287,7 @@ const placeholder = computed(() => (
 
 const input = ref('');
 const loading = ref(false);
+const loadingCaption = ref('正在生成工序草稿…');
 const historyVisible = ref(false);
 const panelRef = ref<HTMLElement | null>(null);
 const contextChipRef = ref<HTMLElement | null>(null);
@@ -329,12 +356,14 @@ async function send(): Promise<void> {
   const endpoint = props.endpoint;
   const moduleCode = props.moduleCode;
   const context = props.context;
+  const checkOnly = props.isCheckOnly?.(text) === true;
   const generation = ++requestGeneration;
   messages.value.forEach(message => message.diffPreview?.forEach(cancelSpecProposal));
   historyVisible.value = true;
   input.value = '';
   pushMessage({ role: 'user', content: text, sourceIdentity }, true);
   loading.value = true;
+  loadingCaption.value = checkOnly ? '正在检查当前 Workflow…' : '正在生成工序草稿…';
   const timer = startAiRequestTimer();
   activeTimer = timer;
   try {
@@ -345,10 +374,21 @@ async function send(): Promise<void> {
       params: {
         productTypeId: sourceIdentity.productTypeId,
         context,
+        ...(checkOnly ? { intent: 'check' } : {}),
       },
     }, { signal: timer.signal });
     if (!isCurrentRequest(generation, sourceIdentity)) return;
     const data = res.data ?? {};
+    if (checkOnly) {
+      // BP-38: 检查只给结论。即便后端/模型仍带回方案, 也不预览、不编译、不给「应用」按钮。
+      const ignored = Array.isArray(data.diffs) && data.diffs.length > 0;
+      pushMessage({
+        role: 'assistant',
+        content: `${data.reply || '没有拿到检查结论，请重试。'}${ignored ? '\n\n（检查类问题不生成改动，AI 附带的改动方案已忽略，画布没有改动。）' : ''}`,
+        sourceIdentity,
+      });
+      return;
+    }
     // D1 B-1: when diffs are empty (tool failure surfaced as error reply), show guidance text
     const hasDiffs = Array.isArray(data.diffs) && data.diffs.length > 0;
     const preparedDiffs = await Promise.all((data.diffs || []).map(prepareDiff));
@@ -417,7 +457,24 @@ async function prepareDiff(diff: ChatDiff): Promise<ChatDiff> {
   const spec = JSON.parse(JSON.stringify(diff.params.spec ?? null));
   const preview = await props.previewSpec?.(spec);
   if (!preview || preview.ok === false) return { ...diff, previewError: preview && preview.ok === false ? preview.message : '当前画布无法预览，未应用配置。' };
-  return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, warnings: preview.warnings, state: 'pending' } };
+  return { ...diff, proposal: { spec, rows: preview.rows, revision: preview.revision, warnings: preview.warnings, state: 'pending', confirmedClears: [] } };
+}
+
+/** BP-38: 会删除/清空现有配置的行 —— 标红, 且必须逐项勾选。 */
+function clearRows(diff: ChatDiff): WorkflowAiChangeRow[] {
+  return diff.proposal?.rows.filter(row => row.clears) ?? [];
+}
+
+function unconfirmedClearCount(diff: ChatDiff): number {
+  const confirmed = diff.proposal?.confirmedClears ?? [];
+  return clearRows(diff).filter(row => !confirmed.includes(row.path)).length;
+}
+
+function toggleClearConfirm(diff: ChatDiff, path: string, checked: boolean): void {
+  const proposal = diff.proposal;
+  if (!proposal || proposal.state !== 'pending' || proposal.applying) return;
+  const rest = proposal.confirmedClears.filter(item => item !== path);
+  proposal.confirmedClears = checked ? [...rest, path] : rest;
 }
 
 function getSpecSteps(spec: unknown): Record<string, unknown>[] {
@@ -438,6 +495,11 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
   const proposal = diff.proposal;
   if (!proposal || proposal.state !== 'pending' || props.disabled || loading.value
     || proposal.applying || !sourceIdentity || !isCurrentSource(sourceIdentity)) return;
+  // 按钮已置灰; 这里再拦一次, 别的入口(键盘/脚本)也绕不过逐项确认。
+  if (unconfirmedClearCount(diff) > 0) {
+    diff.previewError = '有会清空现有配置的改动尚未逐项确认，未应用。';
+    return;
+  }
   proposal.applying = true;
   let recheck: WorkflowAiPreview | undefined;
   try {
@@ -461,6 +523,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     proposal.rows = recheck.rows;
     proposal.revision = recheck.revision;
     proposal.warnings = recheck.warnings;
+    proposal.confirmedClears = [];
     proposal.applying = false;
     diff.previewError = '画布已变化，已刷新全部改动，请重新审核并应用。';
     return;
@@ -494,6 +557,7 @@ async function applySpecProposal(diff: ChatDiff, sourceIdentity?: SourceIdentity
     proposal.rows = applyResult.preview.rows;
     proposal.revision = applyResult.preview.revision;
     proposal.warnings = applyResult.preview.warnings;
+    proposal.confirmedClears = [];
     proposal.applying = false;
     diff.previewError = '应用前画布计划发生变化，已刷新改动，请重新审核。';
     return;
@@ -694,6 +758,10 @@ function getMissingProcesses(params: Record<string, unknown>): MissingProcess[] 
 .preview-impact { color: var(--el-text-color-secondary); margin: 6px 0; }
 .workflow-change-list { padding-left: 22px; margin: 8px 0; }
 .workflow-change-list li { margin: 5px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.preview-clears-hint { color: var(--el-color-danger); margin: 6px 0; font-weight: 600; }
+.workflow-change-list li.workflow-change-row--clears { color: var(--el-color-danger); }
+.clear-confirm { display: inline-flex; align-items: center; gap: 2px; margin-right: 6px; cursor: pointer; }
+.clear-confirm input { margin: 0; accent-color: var(--el-color-danger); }
 .workflow-preview-actions { display: flex; gap: 8px; margin-top: 10px; }
 
 .diff-item {
