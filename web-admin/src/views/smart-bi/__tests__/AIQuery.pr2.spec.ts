@@ -157,6 +157,29 @@ describe('PR2 ①: 路由', () => {
     expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
   });
 
+  it('选了数据源但问题以动作词开头(新增/录入/删除…): 仍交给 Java 出「请切换操作页」卡, 不走 Python', async () => {
+    executeIntentMock.mockResolvedValue({
+      status: 'READ_MODE_WRITE_BLOCKED', intentRecognized: true, aiMode: 'READ',
+      message: '这是操作类请求，请切换到【操作】页处理。', sessionId: 's',
+    });
+    const w = await mountPage('FACTORY');
+    (w.vm as unknown as Vm).selectedUploadId = 1;
+    await flushPromises();
+    await send(w, '给五花肉入库 200kg');
+    await send(w, '新增一个客户');
+    expect(executeIntentMock).toHaveBeenCalledTimes(2);
+    expect(chatAnalysisStreamMock).not.toHaveBeenCalled();
+  });
+
+  it('阴性对照: 分析类问题(含「删除」等字眼但不在开头)照常走 Python', async () => {
+    const w = await mountPage('FACTORY');
+    (w.vm as unknown as Vm).selectedUploadId = 1;
+    await flushPromises();
+    await send(w, '分析本月销售额，统计新增客户数和删除的订单');
+    expect(executeIntentMock).not.toHaveBeenCalled();
+    expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
+  });
+
   it('阴性对照: 没选数据源仍先问 Java 意图层', async () => {
     executeIntentMock.mockResolvedValue({ status: 'SUCCESS', intentRecognized: true, message: 'ok', sessionId: 's' });
     const w = await mountPage('FACTORY');

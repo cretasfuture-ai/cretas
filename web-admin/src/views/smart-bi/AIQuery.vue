@@ -1256,6 +1256,7 @@ async function tryJavaIntentChat(
     tab: activeAiTab.value,
     hasAnyWrite: hasAnyWrite.value,
     hasAnalysisData,
+    question: query,
   }) === 'upload-analysis') {
     return 'fall-through';
   }
