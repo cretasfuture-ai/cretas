@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 // 不良品处置/放行 (Quality Disposition) —— 质量主管人工决策界面。
 //
 // 接入既有、此前无 UI 的 QualityDispositionController:
@@ -561,11 +562,11 @@ onMounted(() => {
           <el-table
             :data="inspectionRows"
             v-loading="inspectionLoading"
-            empty-text="暂无待处置质检记录"
             stripe
             border
             style="width: 100%"
           >
+            <template #empty><ListEmptyExplain empty-title="没有待处置的质检记录" empty-hint="质检不合格的批次会出现在这里等待处置；没有则说明暂无不合格批次。" /></template>
             <el-table-column label="生产批次" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">{{ batchLabel(row.productionBatchId) }}</template>
             </el-table-column>
@@ -641,11 +642,11 @@ onMounted(() => {
           <el-table
             :data="filteredApprovalRows"
             v-loading="approvalLoading"
-            empty-text="暂无待审批的处置申请"
             stripe
             border
             style="width: 100%"
           >
+            <template #empty><ListEmptyExplain empty-title="没有待审批的处置申请" empty-hint="提交处置申请后会出现在这里等待审批。" /></template>
             <el-table-column label="生产批次" min-width="200" show-overflow-tooltip>
               <template #default="{ row }">
                 {{ row.batchNumber || batchLabel(row.productionBatchId) }}

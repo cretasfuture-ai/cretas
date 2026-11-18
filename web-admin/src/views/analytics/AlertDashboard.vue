@@ -12,6 +12,8 @@ import { useAuthStore } from '@/store/modules/auth'
 import { usePermissionStore } from '@/store/modules/permission'
 import { ElMessage } from 'element-plus'
 import { marked } from 'marked'
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue'
+import { loadErrorText } from '@/utils/listEmptyState'
 import DOMPurify from 'dompurify'
 
 const authStore = useAuthStore()
@@ -26,6 +28,7 @@ const canTriggerDetection = computed(() => permissionStore.canWrite('equipment')
 // --- State ---
 const loading = ref(false)
 const loadingAlerts = ref(false)
+const alertsError = ref('')
 const detecting = ref(false)
 const resolving = ref(false)
 
@@ -151,8 +154,16 @@ async function loadData() {
   await loadAlerts()
 }
 
+function clearAlertFilters() {
+  filterStatus.value = ''
+  filterLevel.value = ''
+  currentPage.value = 1
+  loadAlerts()
+}
+
 async function loadAlerts() {
   loadingAlerts.value = true
+  alertsError.value = ''
   try {
     const params: Record<string, unknown> = {
       page: currentPage.value - 1,
@@ -169,10 +180,14 @@ async function loadAlerts() {
       alerts.value = data.content || []
       totalAlerts.value = data.totalElements || 0
     } else {
-      ElMessage.error(res?.message || '加载告警列表失败')
+      alerts.value = []
+      alertsError.value = res?.message || '加载告警列表失败'
+      ElMessage.error(alertsError.value)
     }
   } catch (e) {
     console.error('Load alerts failed:', e)
+    alerts.value = []
+    alertsError.value = loadErrorText(e, '加载告警列表失败')
     ElMessage.error('加载告警列表失败，请稍后重试')
   } finally {
     loadingAlerts.value = false
@@ -323,7 +338,17 @@ onMounted(() => {
     </div>
 
     <!-- Alert List -->
-    <el-table :data="alerts" stripe border v-loading="loadingAlerts" empty-text="暂无数据" style="margin-top: 16px">
+    <el-table :data="alerts" stripe border v-loading="loadingAlerts" style="margin-top: 16px">
+      <template #empty>
+        <ListEmptyExplain
+          :load-error="alertsError"
+          :filtered="!!filterStatus || !!filterLevel"
+          empty-title="当前没有生产异常预警"
+          empty-hint="系统按产能、良品率、OEE 等指标对比基线自动检测，指标偏离才会产生预警；没有预警说明各项指标正常，有权限的账号可点右上角「手动检测」立即检测一次。"
+          @retry="loadAlerts"
+          @clear-filter="clearAlertFilters"
+        />
+      </template>
       <el-table-column prop="level" label="级别" width="80">
         <template #default="{ row }">
           <el-tag :type="row.level === 'CRITICAL' ? 'danger' : row.level === 'WARNING' ? 'warning' : 'info'" size="small">

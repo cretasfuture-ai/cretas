@@ -11,6 +11,8 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
+import DateWindowFallbackNotice from '@/components/common/DateWindowFallbackNotice.vue';
+import { resolveWindowWithFallback, type DateWindow } from '@/utils/dateWindowFallback';
 import { Search } from '@element-plus/icons-vue';
 import {
   getLaborAchievementSummary,
@@ -76,33 +78,57 @@ const selectedProductTypeId = ref<string | null>(null);
 
 const summaryList = ref<LaborAchievementSummaryDTO[]>([]);
 const loading = ref(false);
+// 默认「近30天」没数据时回退到最近有数据的 30 天窗口并明示；用户可一键切回原窗口。
+const windowNotice = ref('');
+const windowFellBack = ref(false);
+let originalWindow: DateWindow | null = null;
 
-async function loadData() {
+async function fetchSummary(w: DateWindow): Promise<LaborAchievementSummaryDTO[]> {
+  const res = await getLaborAchievementSummary(factoryId.value, w.start, w.end, selectedProductTypeId.value || null);
+  if (!res.success || !res.data) throw new Error(res.message || '加载失败');
+  return res.data;
+}
+
+async function loadData(opts: { fallback?: boolean } = {}) {
   if (!factoryId.value) return;
   if (!dateRange.value?.[0] || !dateRange.value?.[1]) {
     ElMessage({ message: '请选择日期范围', type: 'warning', duration: 3000 });
     return;
   }
   loading.value = true;
+  windowNotice.value = '';
+  windowFellBack.value = false;
   try {
-    const res = await getLaborAchievementSummary(
-      factoryId.value,
-      dateRange.value[0],
-      dateRange.value[1],
-      selectedProductTypeId.value || null,
-    );
-    if (res.success && res.data) {
-      summaryList.value = res.data;
-      await nextTick();
-      renderCharts();
+    const original: DateWindow = { start: dateRange.value[0], end: dateRange.value[1] };
+    if (opts.fallback) {
+      const outcome = await resolveWindowWithFallback({
+        original, windowLabel: '最近 30 天', fetchWindow: fetchSummary,
+        hasData: (rows) => rows.some((r) => (r.batchCount ?? 0) > 0),
+      });
+      summaryList.value = outcome.data;
+      windowNotice.value = outcome.notice;
+      windowFellBack.value = outcome.fellBack;
+      if (outcome.fellBack) {
+        originalWindow = outcome.originalWindow;
+        dateRange.value = [outcome.window.start, outcome.window.end];
+      }
     } else {
-      ElMessage({ message: res.message || '加载失败', type: 'error', duration: 0, showClose: true });
+      summaryList.value = await fetchSummary(original);
     }
-  } catch {
-    ElMessage({ message: '网络错误，请重试', type: 'error', duration: 0, showClose: true });
+    await nextTick();
+    renderCharts();
+  } catch (e) {
+    summaryList.value = [];
+    ElMessage({ message: e instanceof Error && e.message ? e.message : '加载失败', type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
+}
+
+function restoreOriginalWindow() {
+  if (!originalWindow) return;
+  dateRange.value = [originalWindow.start, originalWindow.end];
+  void loadData();
 }
 
 // ============================================================================
@@ -342,7 +368,7 @@ function achievementRateClass(rate: number | null, alert: LaborAchievementAlert 
 
 onMounted(async () => {
   await loadProductTypes();
-  await loadData();
+  await loadData({ fallback: true });
 });
 </script>
 
@@ -359,6 +385,8 @@ onMounted(async () => {
       title="达成率 = 实际工时 / 计划工时 × 100%。计划工时取自工序配置 estimatedMinutes；未配置时显示 —。成本字段对非财务角色不可见。"
       style="margin-bottom: 16px"
     />
+
+    <DateWindowFallbackNotice :notice="windowNotice" :fell-back="windowFellBack" @restore="restoreOriginalWindow" />
 
     <!-- 查询条件 -->
     <el-card shadow="never" class="filter-card">
@@ -390,7 +418,7 @@ onMounted(async () => {
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :icon="Search" :loading="loading" @click="loadData">
+          <el-button type="primary" :icon="Search" :loading="loading" @click="loadData()">
             查询
           </el-button>
         </el-form-item>
