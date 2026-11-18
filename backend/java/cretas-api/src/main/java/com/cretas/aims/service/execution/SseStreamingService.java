@@ -885,6 +885,15 @@ public class SseStreamingService {
             if (phrase.isEmpty()) {
                 return null;
             }
+            // 2026-11-17 F006 数字班组: 带条件 (物料 / 时间 / 客户) 或多个子问的句子不走短语快捷, 交给决策层
+            Optional<Map.Entry<String, String>> hit = knowledgeBase.matchPhraseHit(userInput.toLowerCase().trim(), "FACTORY");
+            String hitPhrase = hit != null && hit.isPresent() && phrase.get().equals(hit.get().getValue())
+                    ? hit.get().getKey() : null;
+            if (!PhraseShortcutEligibility.isUnconditionedSimple(userInput, hitPhrase, phrase.get())) {
+                log.info("[SSE-EarlyPhrase] 带条件/复合问句不走短语快捷: phrase='{}', residual='{}'", hitPhrase,
+                        PhraseShortcutEligibility.residual(userInput, hitPhrase));
+                return null;
+            }
             String code = phrase.get();
             if (com.cretas.aims.ai.catalog.FactoryIntentCatalog.isRetiredIntent(code)) {
                 return null;
@@ -901,12 +910,15 @@ public class SseStreamingService {
                 return null;
             }
             log.info("[SSE-EarlyPhrase] phrase shortcut: input='{}', intentCode={}", userInput, code);
-            return IntentMatchResult.builder()
+            IntentMatchResult shortcut = IntentMatchResult.builder()
                     .userInput(userInput)
                     .bestMatch(configured.get())
                     .confidence(0.96)
                     .matchMethod(IntentMatchResult.MatchMethod.PHRASE_MATCH)
                     .build();
+            // 飞轮: 短语快捷不经识别层, 这里补记本轮定下的意图 (否则 decided_intent_code 为空)
+            com.cretas.aims.service.intent.flywheel.IntentFlywheelTurnContext.noteRecognition(shortcut);
+            return shortcut;
         } catch (Exception e) {
             log.debug("[SSE-EarlyPhrase] shortcut failed (fall through): {}", e.getMessage());
             return null;
