@@ -1030,7 +1030,8 @@ public class SalesController {
         return source.stream()
                 .map(batch -> {
                     FinishedGoodsBatch copy = detachedFinishedGoods(
-                            batch, productNamesById.get(batch.getProductTypeId()));
+                            batch, batch.getProductTypeId() == null
+                                    ? null : productNamesById.get(batch.getProductTypeId()));
                     if (copy != null && batch.getWarehouseId() != null) {
                         copy.setWarehouseName(warehouseNamesById.get(batch.getWarehouseId()));
                     }
