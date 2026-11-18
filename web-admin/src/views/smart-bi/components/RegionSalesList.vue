@@ -9,11 +9,9 @@ import { buildRegionShares, formatSharePercent, type RegionShareInput } from './
 
 const props = defineProps<{
   items: ReadonlyArray<RegionShareInput>;
-  /** 驾驶舱是否有真实指标数据; 没有时区域分布一律视为无数据 */
-  hasData: boolean;
 }>();
 
-const rows = computed(() => (props.hasData ? buildRegionShares(props.items) : []));
+const rows = computed(() => (buildRegionShares(props.items)));
 </script>
 
 <template>
@@ -29,7 +27,8 @@ const rows = computed(() => (props.hasData ? buildRegionShares(props.items) : []
       </div>
       <div class="region-value">
         <span class="value">{{ formatNumber(item.sales, 1) }}</span>
-        <span class="percent">{{ formatSharePercent(item.percentage) }}</span>
+        <span class="sep" aria-hidden="true"> · </span>
+        <span class="percent">占比 {{ formatSharePercent(item.percentage) }}</span>
       </div>
     </div>
   </div>
@@ -37,7 +36,7 @@ const rows = computed(() => (props.hasData ? buildRegionShares(props.items) : []
     v-else
     class="region-empty"
     :image-size="80"
-    description="暂无区域销售数据：需要含「区域」和「销售额」两列的销售数据，请先上传 Excel"
+    description="暂无可用的区域销售数据：需要含「区域」和「销售额」两列的销售数据（金额须为非负数），请先上传 Excel"
   />
 </template>
 
@@ -92,7 +91,7 @@ const rows = computed(() => (props.hasData ? buildRegionShares(props.items) : []
 }
 
 .region-value {
-  width: 110px;
+  width: 150px;
   text-align: right;
 
   .value {
@@ -101,10 +100,14 @@ const rows = computed(() => (props.hasData ? buildRegionShares(props.items) : []
     font-weight: 500;
   }
 
+  .sep {
+    color: var(--color-text-secondary);
+    margin: 0 4px;
+  }
+
   .percent {
     font-size: 12px;
     color: var(--color-text-secondary);
-    margin-left: 8px;
   }
 }
 </style>

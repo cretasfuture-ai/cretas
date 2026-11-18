@@ -1954,7 +1954,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div class="ranking-list">
-            <RegionSalesList :items="regionRanking" :has-data="hasData" />
+            <RegionSalesList :items="regionRanking" />
           </div>
         </el-card>
         </CapabilityGate>
