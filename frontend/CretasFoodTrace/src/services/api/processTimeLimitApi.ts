@@ -73,6 +73,11 @@ export interface ProcessTimeLimitEvent {
   decidedByName: string | null;
   decidedAt: string | null;
   validUntil: string | null;
+  /**
+   * 这条记录怎么来的 (PROTO-Q41): BLOCKED = 超时被拦 (判不合格自动转出); WARN_EXCEEDED / WARN_START_MISSING =
+   * 只警告档的复盘记录 (判不合格只记结论, 不动库存, 报损走报损流程)。旧后端不带字段 = BLOCKED。
+   */
+  recordKind?: 'BLOCKED' | 'WARN_EXCEEDED' | 'WARN_START_MISSING';
 }
 
 class ProcessTimeLimitApi {

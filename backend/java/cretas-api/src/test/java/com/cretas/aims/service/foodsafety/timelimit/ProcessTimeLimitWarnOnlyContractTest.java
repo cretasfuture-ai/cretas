@@ -97,6 +97,7 @@ class ProcessTimeLimitWarnOnlyContractTest {
     private final ProcessTimeLimitEventRepository eventRepo = mock(ProcessTimeLimitEventRepository.class);
     private final ProcessTimeLimitEventWriter writer = mock(ProcessTimeLimitEventWriter.class);
     private final ProductionPlanRepository planRepo = mock(ProductionPlanRepository.class);
+    private final QcReleaseService qcRelease = mock(QcReleaseService.class);
 
     private LocalDateTime now = T0;
     private ProcessTimeLimitService service;
@@ -107,7 +108,7 @@ class ProcessTimeLimitWarnOnlyContractTest {
         service = new ProcessTimeLimitService(portRepo, taskRepo, mock(WorkProcessRepository.class), batchRepo,
                 planRepo, instanceRepo, reportRepo, semiRepo, txnRepo, materialRepo,
                 mock(FinishedGoodsBatchRepository.class), edgeRepo, markRepo, eventRepo, writer,
-                mock(QcReleaseService.class), mock(WarehouseResolver.class),
+                qcRelease, mock(WarehouseResolver.class),
                 mock(com.cretas.aims.repository.ProductProcessWorkflowRevisionRepository.class),
                 new com.fasterxml.jackson.databind.ObjectMapper(),
                 new com.cretas.aims.service.processentry.IntermediateOwnershipGuard(planRepo, batchRepo,
@@ -210,6 +211,7 @@ class ProcessTimeLimitWarnOnlyContractTest {
         assertEquals("11", event.getValue().getTargetId());
         assertEquals(7L, event.getValue().getBlockedBy());
         assertEquals(T0.plusMinutes(120), event.getValue().getDeadlineAt());
+        assertEquals(ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED, event.getValue().getRecordKind());
     }
 
     @Test
@@ -223,13 +225,28 @@ class ProcessTimeLimitWarnOnlyContractTest {
         assertEquals(ProcessTimeLimitService.CODE_EXCEEDED, e.getErrorCode());
         assertEquals("BLOCKING", e.getSeverity());
         assertTrue(e.getMessage().contains("不能领用"), e.getMessage());
-        verify(writer, times(1)).openIfAbsent(any());
+        ArgumentCaptor<ProcessTimeLimitEvent> event = ArgumentCaptor.forClass(ProcessTimeLimitEvent.class);
+        verify(writer, times(1)).openIfAbsent(event.capture());
+        assertEquals(ProcessTimeLimitEvent.RecordKind.BLOCKED, event.getValue().getRecordKind());
     }
 
     @Test
-    @DisplayName("开关读法: 只有显式 1 才拦; 0 / 2 / 没配都是只警告")
+    @DisplayName("开关读法: 只认 0 / 1; 1 (含前后空格) 才拦; 0 / 没配 / 写错 (2、true、1.0、空串) 都按默认只警告; 保存时拒收非 0/1")
     void onlyExplicitOneBlocks() {
-        for (String v : List.of("0", "2")) {
+        assertTrue(DisciplineFixtures.policy(Map.of(ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, " 1 "))
+                .timeLimitBlockOnExceed(F));
+        assertFalse(DisciplineFixtures.defaults().timeLimitBlockOnExceed(F));
+        for (String v : List.of("0", "2", "true", "1.0", "")) {
+            assertFalse(DisciplineFixtures.policy(Map.of(ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, v))
+                    .timeLimitBlockOnExceed(F), "值=[" + v + "]");
+            if (!v.equals("0")) {
+                assertTrue(ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, v) != null,
+                        "保存时应拒收 [" + v + "]");
+            }
+        }
+        assertEquals(null, ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, "1"));
+        assertEquals(null, ThresholdKeys.validateSemantics(ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, "0"));
+        for (String v : List.of("0", "2", "true")) {
             service.setDisciplinePolicy(DisciplineFixtures.policy(Map.of(
                     ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, v)));
             SemiFinishedInventory semi = expiredSemi();
@@ -249,7 +266,18 @@ class ProcessTimeLimitWarnOnlyContractTest {
         System.out.println("[PROTO-Q41] start-missing warnings=" + warnings);
         assertEquals(1, warnings.size(), "" + warnings);
         assertTrue(warnings.get(0).contains("还没有登记开始解冻") && warnings.get(0).contains("补登"), warnings.get(0));
-        verify(writer, never()).openIfAbsent(any());
+        assertTrue(warnings.get(0).contains("复盘记录"), warnings.get(0));
+        ArgumentCaptor<ProcessTimeLimitEvent> event = ArgumentCaptor.forClass(ProcessTimeLimitEvent.class);
+        verify(writer, times(1)).openIfAbsent(event.capture());
+        ProcessTimeLimitEvent e = event.getValue();
+        assertEquals(ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING, e.getRecordKind());
+        assertEquals(ProcessTimeLimitEvent.Status.OPEN, e.getStatus());
+        assertEquals("A", e.getTargetId());
+        assertEquals("in-RAW", e.getWorkflowPortId());
+        assertEquals(now, e.getStartAt());
+        assertEquals(now, e.getDeadlineAt());
+        assertEquals(now, e.getCoveredUntil());
+        assertEquals(null, e.getExpiredQuantity());
     }
 
     @Test
@@ -261,6 +289,7 @@ class ProcessTimeLimitWarnOnlyContractTest {
                 () -> service.assertRawFeedForTask(F, task, batch, null, 7L));
         assertEquals(409, e.getCode());
         assertEquals(ProcessTimeLimitService.CODE_START_MISSING, e.getErrorCode());
+        verify(writer, never()).openIfAbsent(any());
     }
 
     // ------------------------------------------------------------------ 页面状态同口径
@@ -376,5 +405,137 @@ class ProcessTimeLimitWarnOnlyContractTest {
         TimeLimitWarningResponseAdvice.attach(hinted, List.of("w1", "w2"));
         assertEquals("先前的提示\nw1\nw2", hinted.getActionHint());
         assertEquals("WARNING", hinted.getSeverity());
+    }
+
+    // ------------------------------------------------------------------ 复审 M1: 复盘记录判不合格不自动报废
+
+    private ProcessTimeLimitEvent openEvent(String type, String id, String kind) {
+        ProcessTimeLimitEvent event = ProcessTimeLimitEvent.builder().id(1L).factoryId(F).targetType(type).targetId(id)
+                .batchNumber("W-1").expiredQuantity(BigDecimal.valueOf(15)).recheckValidMinutes(30)
+                .status(ProcessTimeLimitEvent.Status.OPEN).recordKind(kind).build();
+        when(eventRepo.findByIdAndFactoryIdForUpdate(1L, F)).thenReturn(Optional.of(event));
+        when(eventRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+        return event;
+    }
+
+    @Test
+    @DisplayName("M1 只警告档: 半成品复盘记录判不合格只记结论, 不按超时量转出库存; 接口提示去报损")
+    void warnRecordRejectRecordsConclusionOnly() {
+        ProcessTimeLimitEvent event = openEvent("SEMI_FINISHED", "11", ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED);
+        com.cretas.aims.controller.ProcessTimeLimitController controller = new com.cretas.aims.controller.ProcessTimeLimitController(service);
+        ApiResponse<ProcessTimeLimitEvent> res = controller.decide(F, 1L,
+                new ProcessTimeLimitService.DecisionCommand("REJECTED", "复盘: 超时 35 分钟仍投, 感官异常"), 7L, "qc");
+        verify(qcRelease, never()).writeOffSemi(any(), any(), any(), any(), any());
+        verify(semiRepo, never()).findByIdAndFactoryIdForUpdate(any(), any());
+        assertEquals(ProcessTimeLimitEvent.Status.REJECTED, event.getStatus());
+        assertEquals("复盘: 超时 35 分钟仍投, 感官异常", event.getConclusion());
+        assertTrue(res.getMessage().contains("报损"), res.getMessage());
+    }
+
+    @Test
+    @DisplayName("M1 只警告档: 原料复盘记录判不合格不把批次置不合格")
+    void warnRecordRejectLeavesBatchStatus() {
+        openEvent("RAW_MATERIAL_BATCH", "A", ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
+        service.decide(F, 1L, new ProcessTimeLimitService.DecisionCommand("REJECTED", "没登记解冻"), 7L, "qc");
+        verify(materialRepo, never()).findByIdAndFactoryIdForUpdate(any(), any());
+    }
+
+    @Test
+    @DisplayName("M1 阴性对照: 拦截档 (BLOCKED) 判不合格照原行为按超时量转出; 接口仍说「已判定不合格」")
+    void blockedRecordRejectStillWritesOff() {
+        openEvent("SEMI_FINISHED", "11", ProcessTimeLimitEvent.RecordKind.BLOCKED);
+        SemiFinishedInventory semi = SemiFinishedInventory.builder().id(11L).factoryId(F).intermediateBatchNo("W-1")
+                .producedQuantity(BigDecimal.valueOf(100)).consumedQuantity(BigDecimal.valueOf(70)).unit("kg").build();
+        when(semiRepo.findByIdAndFactoryIdForUpdate(11L, F)).thenReturn(Optional.of(semi));
+        ApiResponse<ProcessTimeLimitEvent> res = new com.cretas.aims.controller.ProcessTimeLimitController(service)
+                .decide(F, 1L, new ProcessTimeLimitService.DecisionCommand("REJECTED", "超时报废"), 7L, "qc");
+        ArgumentCaptor<BigDecimal> quantity = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(qcRelease).writeOffSemi(eq(F), eq(semi), quantity.capture(), eq(7L), any());
+        assertEquals(0, BigDecimal.valueOf(15).compareTo(quantity.getValue()));
+        assertEquals("已判定不合格", res.getMessage());
+    }
+
+    @Test
+    @DisplayName("M1 判废闸: 复盘记录判不合格不算对批次的判废; 拦截档判废照算 (阴性对照)")
+    void rejectionGuardIgnoresWarnRecords() {
+        com.cretas.aims.repository.quality.QcReleaseRecordRepository qcRepo =
+                mock(com.cretas.aims.repository.quality.QcReleaseRecordRepository.class);
+        when(qcRepo.findByTarget(any(), any(), any())).thenReturn(List.of());
+        MaterialBatch batch = new MaterialBatch();
+        batch.setId("A");
+        batch.setFactoryId(F);
+        ProcessTimeLimitEvent warn = ProcessTimeLimitEvent.builder().status(ProcessTimeLimitEvent.Status.REJECTED)
+                .recordKind(ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED).decidedAt(T0).build();
+        when(eventRepo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(F, "RAW_MATERIAL_BATCH", "A",
+                ProcessTimeLimitEvent.Status.REJECTED)).thenReturn(List.of(warn));
+        assertFalse(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.rejected(qcRepo, eventRepo, batch));
+
+        ProcessTimeLimitEvent blocked = ProcessTimeLimitEvent.builder().status(ProcessTimeLimitEvent.Status.REJECTED)
+                .recordKind(ProcessTimeLimitEvent.RecordKind.BLOCKED).decidedAt(T0).build();
+        when(eventRepo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(F, "RAW_MATERIAL_BATCH", "A",
+                ProcessTimeLimitEvent.Status.REJECTED)).thenReturn(List.of(warn, blocked));
+        assertTrue(com.cretas.aims.service.quality.release.MaterialQcRejectionGuard.rejected(qcRepo, eventRepo, batch));
+    }
+
+    // ------------------------------------------------------------------ 复审 M2: 未登记解冻的复盘记录
+
+    @Test
+    @DisplayName("M2 未登记解冻的复盘记录放行了也不豁免计时 (它不是对超时的复检)")
+    void startMissingReleaseDoesNotWaiveTheClock() {
+        SemiFinishedInventory semi = expiredSemi();
+        ProcessTimeLimitEvent released = ProcessTimeLimitEvent.builder().workflowPortId("in-SKU")
+                .coveredUntil(now).status(ProcessTimeLimitEvent.Status.RELEASED)
+                .recordKind(ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING).build();
+        when(eventRepo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(eq(F), anyString(), anyString(),
+                eq(ProcessTimeLimitEvent.Status.RELEASED))).thenReturn(List.of(released));
+        assertEquals(1, service.assertSemiFeedForTask(F, task, semi, BigDecimal.TEN, 7L).size(),
+                "复盘记录被当成放行就不会再警告");
+    }
+
+    @Test
+    @DisplayName("M2 去重: 未登记解冻同一批次同一工序只留一条; 换工序另记; 不占超时那一格, 超时也不占它的格")
+    void writerDedupesStartMissingPerBatchAndPort() {
+        ProcessTimeLimitEventRepository repo = mock(ProcessTimeLimitEventRepository.class);
+        ProcessTimeLimitEventWriter realWriter = new ProcessTimeLimitEventWriter(repo);
+        ProcessTimeLimitEvent openMissing = ProcessTimeLimitEvent.builder().targetId("A").workflowPortId("in-RAW")
+                .status(ProcessTimeLimitEvent.Status.OPEN).recordKind(ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING).build();
+        when(repo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(F, "RAW_MATERIAL_BATCH", "A",
+                ProcessTimeLimitEvent.Status.OPEN)).thenReturn(List.of(openMissing));
+
+        ProcessTimeLimitEvent samePort = candidate("in-RAW", ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
+        realWriter.openIfAbsent(samePort);
+        verify(repo, never()).save(samePort);
+
+        ProcessTimeLimitEvent otherPort = candidate("in-RAW-2", ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
+        realWriter.openIfAbsent(otherPort);
+        verify(repo, times(1)).save(otherPort);
+
+        ProcessTimeLimitEvent exceeded = candidate("in-RAW", ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED);
+        realWriter.openIfAbsent(exceeded);
+        verify(repo, times(1)).save(exceeded);
+
+        // 已有超时待处置: 再超时不重复写 (原行为), 但未登记解冻的复盘记录照写
+        ProcessTimeLimitEvent openBlocked = ProcessTimeLimitEvent.builder().targetId("A").workflowPortId("in-RAW")
+                .status(ProcessTimeLimitEvent.Status.OPEN).recordKind(ProcessTimeLimitEvent.RecordKind.BLOCKED).build();
+        when(repo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(F, "RAW_MATERIAL_BATCH", "A",
+                ProcessTimeLimitEvent.Status.OPEN)).thenReturn(List.of(openBlocked));
+        ProcessTimeLimitEvent again = candidate("in-RAW", ProcessTimeLimitEvent.RecordKind.BLOCKED);
+        realWriter.openIfAbsent(again);
+        verify(repo, never()).save(again);
+        ProcessTimeLimitEvent missingWhileBlocked = candidate("in-RAW", ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
+        realWriter.openIfAbsent(missingWhileBlocked);
+        verify(repo, times(1)).save(missingWhileBlocked);
+    }
+
+    private static ProcessTimeLimitEvent candidate(String port, String kind) {
+        return ProcessTimeLimitEvent.builder().factoryId(F).targetType("RAW_MATERIAL_BATCH").targetId("A")
+                .workflowPortId(port).status(ProcessTimeLimitEvent.Status.OPEN).recordKind(kind).build();
+    }
+
+    @Test
+    @DisplayName("实体默认: builder 不指定时是 BLOCKED (存量语义), 无参构造同样")
+    void recordKindDefaultsToBlocked() {
+        assertEquals(ProcessTimeLimitEvent.RecordKind.BLOCKED, ProcessTimeLimitEvent.builder().build().getRecordKind());
+        assertEquals(ProcessTimeLimitEvent.RecordKind.BLOCKED, new ProcessTimeLimitEvent().getRecordKind());
     }
 }

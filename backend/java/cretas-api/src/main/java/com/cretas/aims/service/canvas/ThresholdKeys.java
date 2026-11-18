@@ -445,6 +445,10 @@ public final class ThresholdKeys {
         if (thresholdKey == null || value == null) {
             return null;
         }
+        if (PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED.equals(thresholdKey)) {
+            String v = value.trim();
+            return v.equals("0") || v.equals("1") ? null : "工序超时拦截只能填 0 (只警告) 或 1 (拦截)";
+        }
         if (CREDIT_CHECK_MODE.equals(thresholdKey)) {
             String v = value.trim().toUpperCase();
             return (v.equals("OFF") || v.equals("WARN") || v.equals("BLOCK"))

@@ -31,6 +31,10 @@ public class ProcessTimeLimitController {
 
     private final ProcessTimeLimitService service;
 
+    /** 只警告档复盘记录判不合格 (PROTO-Q41): 不自动报废, 指到报损入口。 */
+    static final String REVIEW_REJECT_MESSAGE = "已记录判不合格结论。这是只警告档的复盘记录，系统不会自动报废库存；"
+            + "剩余的料要报损请到网页「仓库管理 → 报损管理」或 App「报损单」提交";
+
     @Operation(summary = "这道工序可选来源的时限状态 (App)")
     @RequirePermission({"quality:read_write", "quality:read", "production:read", "production:read_write"})
     @GetMapping("/tasks/{taskId}")
@@ -102,7 +106,10 @@ public class ProcessTimeLimitController {
             @RequestAttribute("userId") Long userId,
             @RequestAttribute(value = "username", required = false) String username) {
         ProcessTimeLimitEvent saved = service.decide(factoryId, eventId, body, userId, username);
-        String msg = ProcessTimeLimitEvent.Status.RELEASED.equals(saved.getStatus()) ? "已复检放行" : "已判定不合格";
+        String msg = ProcessTimeLimitEvent.Status.RELEASED.equals(saved.getStatus()) ? "已复检放行"
+                : ProcessTimeLimitEvent.RecordKind.isWarn(saved.getRecordKind())
+                        ? REVIEW_REJECT_MESSAGE
+                        : "已判定不合格";
         return ApiResponse.success(msg, saved);
     }
 }

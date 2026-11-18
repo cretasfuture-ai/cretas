@@ -102,3 +102,18 @@ export function backendActionHint(body: unknown): string {
   const data = (body ?? {}) as { actionHint?: string | null; hint?: string | null };
   return data.actionHint ?? data.hint ?? '';
 }
+
+/** 只警告档的复盘记录 (PROTO-Q41): 判不合格只记结论、不动库存。 */
+export function isReviewRecord(item: { recordKind?: string | null }): boolean {
+  return item.recordKind === 'WARN_EXCEEDED' || item.recordKind === 'WARN_START_MISSING';
+}
+
+/** 记录类型给人看的一句; 被拦的原有记录返回 null (不用多说)。 */
+export function recordKindText(item: { recordKind?: string | null }): string | null {
+  if (item.recordKind === 'WARN_EXCEEDED') return '只警告档的复盘记录：超时后照常投料了';
+  if (item.recordKind === 'WARN_START_MISSING') return '只警告档的复盘记录：没登记开始解冻就投料了';
+  return null;
+}
+
+export const REVIEW_REJECT_TIP = '这是复盘记录，判不合格只记结论，不会自动报废库存；剩余的料要报损请到「报损管理」（App 为「报损单」）提交';
+export const START_MISSING_RELEASE_TIP = '放行只记复盘结论，这批料仍按时限计时；请补登开始解冻';

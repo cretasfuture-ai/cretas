@@ -396,8 +396,9 @@ public class ProcessTimeLimitService {
             if (!block) {
                 log.info("[时限] 只警告: 未登记开始解冻仍投料 factory={} target={}:{} user={}",
                         factoryId, s.targetType(), s.targetId(), userId);
+                recordEvent(factoryId, e, userId, ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING);
                 return label + " 还没有登记开始解冻，算不出「" + e.processName() + "」的投料时限。"
-                        + "本厂超时只警告，这次照常投料；请在时限面板补登「开始解冻」";
+                        + "本厂超时只警告，这次照常投料，已记一条复盘记录；请在时限面板补登「开始解冻」";
             }
             throw new BusinessException(409, label + " 还没有登记开始解冻，「" + e.processName() + "」不能投料")
                     .withCode(CODE_START_MISSING)
@@ -417,7 +418,8 @@ public class ProcessTimeLimitService {
         if (e.config().perLot() && quantity != null && quantity.compareTo(s.drawableQuantity()) <= 0) {
             return null;
         }
-        recordBlocked(factoryId, e, userId);
+        recordEvent(factoryId, e, userId, block
+                ? ProcessTimeLimitEvent.RecordKind.BLOCKED : ProcessTimeLimitEvent.RecordKind.WARN_EXCEEDED);
         if (block) {
             throw exceeded(e, quantity, label);
         }
@@ -452,9 +454,15 @@ public class ProcessTimeLimitService {
                                 + "; 或改选没有超时的批次", com.cretas.aims.service.gate.GateRoutes.QC_RELEASE).build());
     }
 
-    private void recordBlocked(String factoryId, Evaluation e, Long userId) {
+    /**
+     * 写一条待处置 / 待复盘记录。{@code WARN_START_MISSING} 没有起算点: 起止与覆盖时刻都记为发生时刻,
+     * 超时量为空 (这类记录不参与放行豁免, 判不合格也不动库存)。
+     */
+    private void recordEvent(String factoryId, Evaluation e, Long userId, String kind) {
         SourceStatus s = e.status();
         WorkflowTaskPort port = e.port();
+        boolean startMissing = ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING.equals(kind);
+        LocalDateTime at = now();
         try {
             eventWriter.openIfAbsent(ProcessTimeLimitEvent.builder()
                     .factoryId(factoryId)
@@ -469,15 +477,16 @@ public class ProcessTimeLimitService {
                     .limitMinutes(s.limitMinutes())
                     .startEvent(s.startEvent())
                     .mixRule(e.config().mixRule())
-                    .startAt(e.expiredStart())
-                    .deadlineAt(e.expiredDeadline())
-                    .blockedAt(now())
+                    .startAt(startMissing ? at : e.expiredStart())
+                    .deadlineAt(startMissing ? at : e.expiredDeadline())
+                    .blockedAt(at)
                     .blockedBy(userId)
-                    .expiredQuantity(s.expiredQuantity())
+                    .expiredQuantity(startMissing ? null : s.expiredQuantity())
                     .unit(s.unit())
-                    .coveredUntil(e.coveredUntil())
+                    .coveredUntil(startMissing ? at : e.coveredUntil())
                     .recheckValidMinutes(e.config().recheckValidMinutes())
                     .status(ProcessTimeLimitEvent.Status.OPEN)
+                    .recordKind(kind)
                     .build());
         } catch (RuntimeException ex) {
             // 留痕失败不能把「超时」这个结论吞掉: 拦截档照样拦, 只警告档照样带警告; 下一次超时投料时再写
@@ -693,6 +702,11 @@ public class ProcessTimeLimitService {
         if (release) {
             event.setValidUntil(event.getRecheckValidMinutes() == null
                     ? null : now.plusMinutes(event.getRecheckValidMinutes()));
+        } else if (ProcessTimeLimitEvent.RecordKind.isWarn(event.getRecordKind())) {
+            // 只警告档的复盘记录 (PROTO-Q41 复审 M1): 料已经照常投下去了, 事件记的超时量对不上现有库存,
+            // 自动转出会报废没超时的料、而超时的料早在下游。只记结论; 实际报损走报损流程
+            log.info("[时限] 复盘记录判不合格, 不自动转出 factory={} event={} kind={}",
+                    factoryId, eventId, event.getRecordKind());
         } else {
             writeOff(factoryId, event, userId);
         }
@@ -867,6 +881,8 @@ public class ProcessTimeLimitService {
         List<ProcessTimeLimitEvent> releases = eventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(
                         factoryId, source.type(), source.id(), ProcessTimeLimitEvent.Status.RELEASED).stream()
                 .filter(e -> Objects.equals(e.getWorkflowPortId(), port.getWorkflowPortId()))
+                // 「未登记解冻」的复盘结论不是对超时的复检: 不能拿它豁免计时 (PROTO-Q41)
+                .filter(e -> !ProcessTimeLimitEvent.RecordKind.WARN_START_MISSING.equals(e.getRecordKind()))
                 .toList();
         boolean paused;
         List<LotClock> clocks;

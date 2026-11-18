@@ -19,7 +19,15 @@ import {
 } from '@/api/processTimeLimit';
 import { handleCatchError } from '@/utils/errorToast';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
-import { formatBackendTime, formatDuration, parseBackendTime } from '@/utils/processTimeLimit';
+import {
+  REVIEW_REJECT_TIP,
+  START_MISSING_RELEASE_TIP,
+  formatBackendTime,
+  formatDuration,
+  isReviewRecord,
+  parseBackendTime,
+  recordKindText,
+} from '@/utils/processTimeLimit';
 
 const props = defineProps<{ factoryId: string }>();
 const emit = defineEmits<{ count: [value: number] }>();
@@ -71,10 +79,12 @@ const decisionTip = computed(() => {
   const item = current.value;
   if (!item || !decision.value) return '';
   if (decision.value === 'RELEASED') {
+    if (item.recordKind === 'WARN_START_MISSING') return START_MISSING_RELEASE_TIP;
     return item.recheckValidMinutes == null
       ? '放行后这批料不再限时'
       : `放行后 ${formatDuration(item.recheckValidMinutes)} 内可以领用，过了还要再处置`;
   }
+  if (isReviewRecord(item)) return REVIEW_REJECT_TIP;
   return item.targetType === 'SEMI_FINISHED'
     ? `判不合格后，超时的 ${qty(item)} 从库存转出，不能再领用`
     : '判不合格后，整批标为不合格，不能再领用';
@@ -209,6 +219,9 @@ defineExpose({ reload });
             <dt>批次号</dt><dd>{{ current.batchNumber || '—' }}</dd>
             <dt>工序 / 时限</dt><dd>{{ current.processName || '—' }} · {{ formatDuration(current.limitMinutes) }}</dd>
             <dt>超时</dt><dd>{{ overdueText(current) }} · 数量 {{ qty(current) }}</dd>
+            <template v-if="recordKindText(current)">
+              <dt>记录类型</dt><dd data-testid="timeout-record-kind">{{ recordKindText(current) }}</dd>
+            </template>
           </dl>
           <UFormField label="处置结果" required>
             <div class="radios">

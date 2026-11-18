@@ -11,6 +11,8 @@ import {
   remainingText,
   timeLimitBlocks,
   timeLimitWarningOf,
+  isReviewRecord,
+  recordKindText,
 } from '@/utils/processTimeLimit';
 import type { ProcessTimeLimitStatus } from '@/api/processTimeLimit';
 import type { WorkflowPortDescriptor } from '@/api/processSheet';
@@ -97,6 +99,15 @@ describe('时限文字', () => {
     expect(timeLimitWarningOf({ success: true, errorCode: 'OTHER', actionHint: 'x' })).toBeNull();
     expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: '  ' })).toBeNull();
     expect(timeLimitWarningOf(null)).toBeNull();
+  });
+
+  it('PROTO-Q41 复盘记录: 只警告档两类才算, 被拦的原有记录 (含旧后端不带字段) 不算', () => {
+    expect(isReviewRecord({ recordKind: 'WARN_EXCEEDED' })).toBe(true);
+    expect(isReviewRecord({ recordKind: 'WARN_START_MISSING' })).toBe(true);
+    expect(isReviewRecord({ recordKind: 'BLOCKED' })).toBe(false);
+    expect(isReviewRecord({})).toBe(false);
+    expect(recordKindText({ recordKind: 'WARN_START_MISSING' })).toContain('没登记开始解冻');
+    expect(recordKindText({ recordKind: 'BLOCKED' })).toBeNull();
   });
 });
 
