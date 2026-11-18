@@ -1708,7 +1708,7 @@
       "intent_code": "PRICE_HISTORY_QUERY",
       "intent_name": "价格历史查询",
       "intent_category": "QUERY",
-      "description": "按 materialTypeId 输出最近 N 个月加权 AVG + 同比趋势. read-only. 受 PriceSensitive 影响, 仓管员角色看不到 unitPrice.",
+      "description": "按 materialTypeId 输出最近 N 个月加权 AVG + 同比趋势; 不指定物料时按原料比较近期进价涨幅并排名(原料/前后均价/涨幅%/时间窗). read-only. 受 PriceSensitive 影响, 仓管员角色看不到 unitPrice.",
       "tool_name": "price_history_query",
       "required_entities": null,
       "is_active": true,
