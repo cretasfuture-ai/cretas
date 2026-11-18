@@ -226,6 +226,16 @@ describe('BP-54 默认缩放不低于可读下限', () => {
       expect(vp.zoom).toBeGreaterThanOrEqual(0.5);
       expect(vp.zoom * DAG_FONT.line).toBeGreaterThanOrEqual(11);
       expect(vp.x).toBe(12);
+      // 手动缩到很小, 再点「适应」: 必须回到 ≥ 下限且在起点, 而不是整图缩到不可读
+      const flow = useVueFlow('trace-dag-flow');
+      await flow.setViewport({ x: 300, y: 5, zoom: 1.1 });
+      await w.get('[data-testid="trace-dag-fit"]').trigger('click');
+      await nextTick();
+      await new Promise((r) => setTimeout(r, 30));
+      const after = flow.viewport.value;
+      expect(after.zoom).toBeGreaterThanOrEqual(DAG_MIN_ZOOM);
+      expect(after.zoom).toBeGreaterThanOrEqual(0.5);
+      expect(after.x).toBe(12);
       w.unmount();
     } finally {
       if (orig) Object.defineProperty(proto, 'clientWidth', orig);
