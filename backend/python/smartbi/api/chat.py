@@ -2904,7 +2904,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         should_short_circuit,
                     )
                     _query_domain = classify_query_domain(request.effective_query)
-                    _short_circuit_msg = should_short_circuit(_query_domain, _caps_obj)
+                    from smartbi.services.row_level_qa import all_field_names as _rl_all_fields
+                    _short_circuit_msg = should_short_circuit(
+                        _query_domain, _caps_obj,
+                        field_names=_rl_all_fields(field_meta, df),
+                    )
                     if _short_circuit_msg:
                         logger.info(
                             f"[stream] capability short-circuit: domain={_query_domain} "
@@ -2923,6 +2927,65 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         return  # early exit — saved the LLM call
                 except Exception as _sc_err:
                     logger.warning(f"[stream] capability short-circuit failed: {_sc_err}")
+
+            # 行级确定性计算 (味美实测 A1-A5/A10): 问答原先只拿「全表列统计 + 前几行样本」,
+            # 无法定位/筛选/分组。这里由 LLM 出结构化查询计划, 服务端在整份数据上执行,
+            # 真实结果行交给 LLM 措辞; 指标缺失直接拒答并列全字段。
+            _rl_block = ""
+            _rl_active = False
+            if request.effective_query:
+                try:
+                    from smartbi.services.row_level_qa import (
+                        all_field_names as _rl_names,
+                        answer_row_level as _rl_answer,
+                        load_upload_frame as _rl_load,
+                        TooManyRows as _RlTooMany,
+                    )
+                    _rl_df = df
+                    if _question_chart_upload_id is not None:
+                        # 样本只有 200 行: 行级计算要读该上传的全部行 (按租户过滤)。
+                        from smartbi.config import get_pg_pool as _rl_get_pool
+                        _rl_pool = await _rl_get_pool()
+                        async with _rl_pool.acquire() as _rl_conn:
+                            _rl_df = await _rl_load(
+                                _rl_conn, _question_chart_upload_id, trusted_factory_id
+                            )
+                    _rl_fm = field_meta if 'field_meta' in locals() else None
+
+                    async def _rl_llm(_p: str, _s: str) -> str:
+                        return await insight_gen._call_llm(_p, _s, max_tokens=700)
+
+                    _rl_out = await _rl_answer(
+                        request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm
+                    )
+                    if _rl_out.kind == "refuse":
+                        for i in range(0, len(_rl_out.text), 60):
+                            yield _sse_event("chunk", _rl_out.text[i:i + 60])
+                        yield _sse_event("done", {
+                            "success": True,
+                            "answer": _rl_out.text,
+                            "charts": [],
+                            "source": "field_metric_mismatch_refusal",
+                            "processingTimeMs": int((time.time() - start_time) * 1000),
+                        })
+                        return
+                    if _rl_out.kind in ("computed", "uncomputed"):
+                        _rl_block = "\n" + _rl_out.text
+                        _rl_active = True
+                except _RlTooMany as _rl_big:
+                    _rl_block = (
+                        "\n## 行级计算未完成\n数据量超过行级计算上限 (" + str(_rl_big) + ")。"
+                        "回答规则: 不得指出具体是哪一天/哪一行/哪个产品, 只可引用全量聚合数字, "
+                        "并明说本次未能逐行计算。\n"
+                    )
+                    _rl_active = True
+                except Exception as _rl_err:
+                    logger.warning(f"[stream] row-level qa failed: {_rl_err}")
+                    _rl_block = (
+                        "\n## 行级计算未完成\n本次逐行计算失败。回答规则: 不得指出具体是哪一天/"
+                        "哪一行/哪个产品, 不得对比率求平均, 并明说本次未能逐行计算。\n"
+                    )
+                    _rl_active = True
 
             # Bug #19 fix (Apr 17 2026): inject authoritative full-data aggregates
             # so LLM doesn't guess from 200-row sample.
@@ -2950,13 +3013,16 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # of the system_role prefix that every call shares — expected
             # cache hit rate ~23% → ~50%, prompt size 4K → 3K tokens, TTFT
             # 5-15s → 3-8s on cache hit.
+            _sample_caveat = (
+                "，只用于了解字段样貌，禁止据此回答「哪一行/哪一天/哪个产品」" if _rl_active else ""
+            )
             prompt = f"""{session_context_block}用户问题：{analysis_ctx}
 
 {field_summary}
 {capability_hint}
-## 数据概览 (样本)
+## 数据概览 (样本{_sample_caveat})
 {data_summary}
-{real_agg_block}
+{real_agg_block}{_rl_block}
 {financial_metrics}"""
 
             system_role = (
@@ -2997,6 +3063,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # LLM costing 10-12s; cache hit returns in 200ms.
             _llm_cache_hit = None
             if (request.allow_tenant_data_fallback
+                    and not _rl_active  # 行级计算过的问题不读旧缓存 (旧答案可能是样本猜的)
                     and not chat_session_parent and _session_factory_id
                     and request.effective_query):
                 try:
