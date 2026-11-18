@@ -1,6 +1,7 @@
 import type { Component } from 'vue';
 import dayjs from 'dayjs';
 import { Box, Goods, Operation, QuestionFilled, Van } from '@element-plus/icons-vue';
+import { isRawWorkflowOwnerAnchorName } from '@/constants/rawWorkflowOwnerAnchor';
 
 /**
  * 溯源页与个体抽屉共用的**显示**映射 —— 文案与 el-tag 色型的唯一出处。
@@ -97,6 +98,60 @@ export function qualityStatusTag(status?: string | null): TagType {
     default:
       return 'info';
   }
+}
+
+/** 表格单元格用: 认识的码给中文, 认不出来按全站约定写「未知状态（原码）」, 空值返回空串。 */
+export function qualityStatusCellText(status?: string | null): string {
+  if (status == null || `${status}`.trim() === '') return '';
+  const label = qualityStatusLabel(status);
+  return label !== status ? (label ?? '') : `未知状态（${status}）`;
+}
+
+// ── 产品名 ──────────────────────────────────────────────────────────────────
+
+/** 批次挂在「多产出计划」的内部锚点产品上时的说法: 不暴露 __RAW_WORKFLOW_OWNER__ 内部常量。 */
+export const UNLINKED_PRODUCT_TEXT = '未关联产品';
+
+export function traceProductName(name?: string | null): string {
+  if (name == null || `${name}`.trim() === '') return '';
+  return isRawWorkflowOwnerAnchorName(name) ? UNLINKED_PRODUCT_TEXT : name;
+}
+
+// ── 召回箱数缺口 ────────────────────────────────────────────────────────────
+
+const BOX_GAP_LABEL: Record<string, string> = {
+  BOX_PACKAGING_SNAPSHOT_UNKNOWN: '箱数未记录（缺少按箱的包装规格）',
+  BOX_UNIT_CONVERSION_UNKNOWN: '箱数无法折算（单位换算不上）',
+  PHYSICAL_QUANTITY_UNKNOWN: '在库数量未记录',
+  RESERVED_QUANTITY_UNKNOWN: '预留数量未记录',
+  SHIPMENT_DEDUCTION_UNKNOWN: '发货扣减数量未记录',
+  SHIPMENT_LINE_FACT_MISSING: '发货明细未记录',
+  FINISHED_BATCH_FACT_MISSING: '成品批次信息缺失',
+  SHIPMENT_EDGE_FACT_MISSING: '部分发货单没有成品扣减记录',
+  SHIPMENT_DEDUCTION_INCOMPLETE: '部分成品批次的发货扣减与已发数量不一致',
+};
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+/**
+ * 召回箱数缺口给人看的一行。认识的缺口码用中文; 认不出来的才退回后端 message,
+ * 且把里面的 UUID 抹掉 (内部主键不展示)。⛔ 不显示 `BOX_..._UNKNOWN` 这类内部码。
+ */
+export function boxGapText(gap: { code?: string | null; message?: string | null }): string {
+  const code = gap.code ?? '';
+  if (Object.prototype.hasOwnProperty.call(BOX_GAP_LABEL, code)) return BOX_GAP_LABEL[code];
+  const message = (gap.message ?? '').replace(UUID_RE, '').replace(/\s{2,}/g, ' ').trim();
+  return message;
+}
+
+/** 去重后的缺口文案: 多个来源同一种缺口只列一行。 */
+export function boxGapLines(gaps: ReadonlyArray<{ code?: string | null; message?: string | null }>): string[] {
+  const seen = new Set<string>();
+  for (const g of gaps) {
+    const text = boxGapText(g);
+    if (text) seen.add(text);
+  }
+  return [...seen];
 }
 
 // ── 出货状态 ────────────────────────────────────────────────────────────────

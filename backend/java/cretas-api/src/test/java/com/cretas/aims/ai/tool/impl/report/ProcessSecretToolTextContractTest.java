@@ -30,7 +30,7 @@ import static org.mockito.Mockito.*;
  * 出口 5: AI 工具结果里直接进模型上下文的文本 (preformattedPrompt / message) 不写保密产品的成本、毛利。
  * 跑在工具的 doExecute 上 (同包可见), 断言打在工具返回的文本字段上。
  */
-class ProcessSecretToolTextTest {
+class ProcessSecretToolTextContractTest {
 
     private final List<ProductionBatch> batches = List.of(
             batch(1L, SECRET, SECRET_PLAN, SECRET_COST, new BigDecimal("100")),
@@ -208,7 +208,9 @@ class ProcessSecretToolTextTest {
 
     @Test
     void costVarianceMessageLeavesOutTheFactoryTotalThatIncludesProtectedProducts() throws Exception {
-        assertThat(varianceMessage(protectedScope())).doesNotContain("13333.33").contains("批次数 3", "工艺保密");
+        // 守的性质: 含保密产品的工厂总额不给 AI, 但批次数这个真实读数照给 (文案随 #1810 改成「批次 3 个」, 不钉整句)
+        assertThat(varianceMessage(protectedScope())).doesNotContain("13333.33").contains("工艺保密")
+                .containsPattern("批次\\s*3\\s*个");
         assertThat(varianceMessage(unprotectedScope())).contains("实际总成本 ¥13333.33");
         try (var ignored = as(owner())) {
             assertThat(varianceMessage(protectedScope())).contains("实际总成本 ¥13333.33");
