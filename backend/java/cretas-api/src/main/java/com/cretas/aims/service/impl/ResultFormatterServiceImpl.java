@@ -663,8 +663,20 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "INCOME_STATEMENT_QUERY" -> formatIncomeStatement(topLevel);
             case "BALANCE_SHEET_QUERY" -> formatBalanceSheet(topLevel);
             case "CASHFLOW_STATEMENT_QUERY" -> formatCashflowStatement(topLevel);
-            default -> formatReportGeneric(data);
+            default -> formatReportDefault(topLevel, data);
         };
+    }
+
+    /**
+     * 报表类意图没有专用格式化器时: 工具自己写好的那句话 (message) 优先, 它按权限决定了金额写不写;
+     * 没有 message 才退回只含中文标签指标的通用拼接。⛔ 不把 data 里的字段名 (owingCustomerCount 等) 打给用户。
+     */
+    private String formatReportDefault(Map<String, Object> topLevel, Map<String, Object> data) {
+        String message = getString(topLevel, "message");
+        if (message != null && !message.isBlank() && message.trim().length() >= 10) {
+            return message.trim();
+        }
+        return formatReportGeneric(data);
     }
 
     // Sprint 12: finance 3-statement formatters — emit ≥80-char business-content message
@@ -1244,8 +1256,11 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             if (val instanceof Number && metricCount < 6) {
                 double dval = ((Number) val).doubleValue();
                 if (dval != 0.0) {
+                    String label = humanizeKey(entry.getKey());
+                    // 不认识的字段名 (驼峰英文) 不给用户看: 宁可少一项也不外露内部字段名
+                    if (label.equals(entry.getKey())) continue;
                     if (metricCount > 0) sb.append(" | ");
-                    sb.append(entry.getKey()).append(": ").append(QUANTITY_FORMATTER.format(dval));
+                    sb.append(label).append(": ").append(QUANTITY_FORMATTER.format(dval));
                     metricCount++;
                 }
             }
@@ -2112,6 +2127,18 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "utilizationRate" -> "利用率(%)";
             case "activeCount" -> "活跃数量";
             case "pendingCount" -> "待处理数量";
+            case "owingCustomerCount" -> "欠款客户数";
+            case "totalAmount" -> "合计金额";
+            case "totalCount" -> "总数";
+            case "highRiskAmount" -> "60天以上高风险金额";
+            case "highRiskCount" -> "60天以上高风险客户数";
+            case "productCount" -> "产品数";
+            case "revenue" -> "销售额";
+            case "costedRevenue" -> "已回填成本的销售额";
+            case "cost" -> "成本";
+            case "grossProfit" -> "毛利";
+            case "marginRate" -> "毛利率(%)";
+            case "costCoverage" -> "成本覆盖率(%)";
             default -> key;
         };
     }
@@ -2198,8 +2225,23 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "in_stock" -> "在库";
             case "consumed" -> "已消耗";
             case "expired" -> "已过期";
-            default -> status;
+            default -> orderStatusDisplayName(status);
         };
+    }
+
+    /** 销售订单 / 采购订单状态枚举的中文名 (复用枚举自带的 displayName); 认不出原样返回。 */
+    private static String orderStatusDisplayName(String status) {
+        String code = status.trim().toUpperCase();
+        try {
+            return com.cretas.aims.entity.enums.SalesOrderStatus.valueOf(code).getDisplayName();
+        } catch (IllegalArgumentException ignored) {
+            // 不是销售订单状态, 继续试采购订单
+        }
+        try {
+            return com.cretas.aims.entity.enums.PurchaseOrderStatus.valueOf(code).getDisplayName();
+        } catch (IllegalArgumentException ignored) {
+            return status;
+        }
     }
 
     private String translateQualityResult(String result) {
