@@ -1702,7 +1702,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
         if _session_can_persist:
             try:
-                from smartbi.services.chat_session_service import ChatSessionService
+                from smartbi.services.chat_session_service import ChatSessionService, parent_for_upload
                 from smartbi.config import get_pg_pool as _get_pool_session
                 _session_pool = await _get_pool_session()
                 if _session_pool is not None:
@@ -1711,6 +1711,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         request.session_id, _session_factory_id,
                         user_id=_session_user_id,
                     )
+                    # A7: 上一轮是在另一个数据源上问的, 不能当「延续上一轮」喂给这一轮
+                    # (实测切源后新问题原样复读上一题答案)。
+                    _parent_before_upload_check = chat_session_parent
+                    chat_session_parent = parent_for_upload(
+                        chat_session_parent, validated_upload_id,
+                    )
+                    if _parent_before_upload_check and not chat_session_parent:
+                        logger.info(
+                            f"[chat-session] DROP parent: data source changed "
+                            f"{_parent_before_upload_check.get('parent_upload_id')} -> {validated_upload_id}"
+                        )
                     if chat_session_parent:
                         logger.info(
                             f"[chat-session] HIT session={request.session_id[:8]}... "
@@ -2984,7 +2995,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     "## 回答格式 (强制 — 3 段落, 总长 ≤ 200 字)\n"
                     "1. **结论** (1 句话, 含数字): 直接回答 user 的问题\n"
                     "2. **关键发现** (1-2 句, 含数字 + 实体): 解释/支持结论\n"
-                    "3. **行动建议** (2 项, 用 - 开头): 具体可做, 含负责人 + 时间 + 预期收益\n\n"
+                    "3. **行动建议** (2 项, 用 - 开头): 具体可做, 含负责人 + 时间; 金额/收益只许引用数据里出现过的数字, "
+                    "没有金额或成本列就不写金额, 写 '需要成本数据才能估算金额'\n\n"
                     "避免: 大段铺陈/套话/'建议补充数据'类废话/超过 200 字. "
                     "严格控制字数 — LLM 输出每多 100 字, 用户多等 3 秒."
                 )
@@ -3322,6 +3334,19 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             except Exception as guard_err:
                 logger.warning(f"[stream] numeric guard check failed: {guard_err}")
 
+            # A9: 建议里的金额必须在 LLM 拿到的数据里找得到, 否则改写 (答案已流出, 靠 done 覆盖)。
+            _answer_replaced = False
+            try:
+                from smartbi.services.llm_guard import strip_unsupported_money_claims
+                _support = prompt[len(session_context_block):] if session_context_block else prompt
+                _clean_text, _removed_claims = strip_unsupported_money_claims(full_text, _support)
+                if _removed_claims:
+                    logger.warning(f"[stream] unsupported money claims rewritten: {_removed_claims}")
+                    full_text = _clean_text
+                    _answer_replaced = True
+            except Exception as _mc_err:
+                logger.warning(f"[stream] money-claim check failed (non-fatal): {_mc_err}")
+
             # v4 B2-B (Apr 26 2026): write LLM answer to cache BEFORE done
             # event — async generator gets cancelled by client right after
             # yield done, so any code after yield never runs. _spawn_bg
@@ -3403,6 +3428,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 "charts": charts,
                 "log_id": _log_id,
                 "warning": _guard_warning,
+                "answer_replaced": _answer_replaced,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 
