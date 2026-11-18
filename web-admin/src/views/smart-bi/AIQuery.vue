@@ -85,6 +85,8 @@ import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
+import { chooseAiQueryRoute } from './components/chat/aiQueryRoute';
+import { sanitizeFactoryAiText } from './components/chat/factoryAiText';
 import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
 
 // Render markdown content safely
@@ -184,6 +186,8 @@ interface ChatMessage {
   // glossary: term → 通俗定义 for the expandable 字段说明 block + local meta-Q answers.
   // chartGuide: one-liner explaining how to read the chart.
   suggestedFollowups?: Array<{ label: string; question: string; ownerActionScenario?: string }>;
+  // NEED_CLARIFICATION 的可点选项 (SELECT_INTENT.actionName), 点了按问题发送。
+  clarifyActions?: string[];
   glossary?: Record<string, string>;
   chartGuide?: string;
   // UI local state for the expandable 字段说明/怎么看图 block.
@@ -694,11 +698,14 @@ function inferDomainFromFilename(name: string): string {
   return 'default';
 }
 
+// 页头数字专员头像 (public/ 下静态图; 用绑定而不是字面量, 避免被 Vite 当模块资源解析)
+const agentAvatarSrc = '/digital-employees/accountant.png';
 // Factory-only free-question analysis is an explicit child mode.
 const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory');
 
 function customerSafeAnswer(text: string): string {
-  return text;
+  // 对话标准 V3: 不给业务用户看英文字段名/状态码 (问题 52)
+  return sanitizeFactoryAiText(text);
 }
 const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
@@ -1241,13 +1248,15 @@ async function tryJavaIntentChat(
   const idx = () => chatHistory.value.findIndex((m) => m.id === assistantId);
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
-  // Built-in analysis templates describe the selected dataset. A generic
-  // operational report can otherwise consume a sales question as production KPI.
-  // Keep this exact allowlist read-only; ordinary questions and 操作 still use
-  // the intent gateway and its confirmation/permission checks.
+  // 问题 51: 咨询页选了数据源 ⇒ 整个跳过 Java 意图层, 直接走上传数据问答 (Python)。
+  // 否则 Java 会把「各产品的销售额占比」当成 indicator_code/操作类/生产看板吃掉。
+  // 操作页(有写权限)或没有数据源仍走 Java, 写操作预览/确认链不变。
   const hasAnalysisData = Boolean(selectedUploadId.value) || currentData.value.length > 0;
-  if (activeAiTab.value === 'consult' && hasAnalysisData
-      && queryTemplates.some(template => template.query === query)) {
+  if (chooseAiQueryRoute({
+    tab: activeAiTab.value,
+    hasAnyWrite: hasAnyWrite.value,
+    hasAnalysisData,
+  }) === 'upload-analysis') {
     return 'fall-through';
   }
   try {
@@ -1583,6 +1592,13 @@ async function tryJavaIntentChat(
             question: String(f.question),
             ownerActionScenario: f.ownerActionScenario,
           }));
+      }
+      if (responseStatus === 'NEED_CLARIFICATION' && Array.isArray(res.suggestedActions)) {
+        const picks = res.suggestedActions
+          .filter((a) => a?.actionCode === 'SELECT_INTENT' && typeof a.actionName === 'string' && a.actionName.trim())
+          .map((a) => String(a.actionName).trim())
+          .slice(0, 8);
+        if (picks.length > 0) msg.clarifyActions = picks;
       }
       msg.content = customerSafeAnswer(res.message || res.formattedText || '请补充信息后继续。');
       msg.loading = false;
@@ -2507,6 +2523,10 @@ function handleKeydown(event: KeyboardEvent) {
           <el-icon><ChatDotRound /></el-icon>
           {{ 'AI 智能问答' }}
         </h1>
+        <div class="header-agent" data-testid="header-agent">
+          <img class="header-agent-avatar" :src="agentAvatarSrc" alt="" width="32" height="32" />
+          <span class="header-agent-name">数字专员 · 数据分析</span>
+        </div>
       </div>
       <div class="header-right">
         <el-select
@@ -2875,6 +2895,23 @@ function handleKeydown(event: KeyboardEvent) {
                   </el-button>
                 </div>
 
+                <!-- 澄清选项: 竖排占满列宽, 点了按问题发送 (标准 F4: 澄清不出反馈) -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.clarifyActions?.length ?? 0) > 0"
+                  class="message-clarify-actions"
+                >
+                  <button
+                    v-for="(a, i) in message.clarifyActions"
+                    :key="i"
+                    type="button"
+                    class="clarify-action-btn"
+                    :data-testid="`suggested-action-${i}`"
+                    @click="triggerRelatedFollowup(a)"
+                  >
+                    {{ a }}
+                  </button>
+                </div>
+
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
                      Template hits get a logId via _log_template_hit_safe in chat.py. -->
                 <div
@@ -3058,6 +3095,14 @@ function handleKeydown(event: KeyboardEvent) {
   flex-wrap: wrap;  // E1 Apr 17 2026: mobile 窄屏 header-left + header-right 换行, 避免标题被挤竖排
   gap: 8px;
 
+  .header-agent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    .header-agent-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+    .header-agent-name { font-size: 14px; color: var(--el-text-color-secondary); }
+  }
   .header-left {
     flex-shrink: 0;
     min-width: 0;  // allow flex child to shrink below content size
@@ -3390,6 +3435,26 @@ function handleKeydown(event: KeyboardEvent) {
     flex-wrap: wrap;
   }
 
+  .message-clarify-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    margin-top: 12px;
+    .clarify-action-btn {
+      width: 100%;
+      min-height: 48px;
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 15px;
+      color: var(--el-text-color-primary);
+      background: var(--el-fill-color-lighter);
+      border: 1px solid var(--el-border-color);
+      border-radius: 12px;
+      cursor: pointer;
+      &:hover { border-color: var(--el-color-primary); }
+    }
+  }
   .message-related-followups {
     display: flex;
     gap: 6px;
