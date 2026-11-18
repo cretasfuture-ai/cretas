@@ -139,6 +139,16 @@ public class FactoryDisciplinePolicy {
         return v < 0 ? DEFAULT_THAW_BACKFILL_MAX_MINUTES : v;
     }
 
+    // ===================== 工序时限超时拦不拦 (PROTO-Q41, 2026-11-18) =====================
+
+    /**
+     * 只有显式 1 才拦 (默认 0 = Steve 2026-11-18 拍板「默认只警告」: 超时 / 未登记开始解冻照常投料、留痕、带警告);
+     * 写错的值按关 (与其它整数开关同一读法)。
+     */
+    public boolean timeLimitBlockOnExceed(String factoryId) {
+        return thresholds.getInteger(factoryId, ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, 0) == 1;
+    }
+
     // ===================== A14 补录窗口 =====================
 
     /**

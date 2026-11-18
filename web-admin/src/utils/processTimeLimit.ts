@@ -72,6 +72,18 @@ export function crossedDeadline(status: ProcessTimeLimitStatus, nowMs: number): 
   return minutes != null && minutes < 0;
 }
 
+/** 本厂超时是否拦领用 (PROTO-Q41)。旧后端不带字段 = 原行为 (拦)。 */
+export function timeLimitBlocks(status: Pick<ProcessTimeLimitStatus, 'blockOnExceed'>): boolean {
+  return status.blockOnExceed !== false;
+}
+
+/** 后端成功响应里带回的投料时限警告 (errorCode = TIME_LIMIT_WARNING); 没有返回 null。 */
+export function timeLimitWarningOf(body: unknown): string | null {
+  const data = (body ?? {}) as { success?: unknown; errorCode?: unknown; actionHint?: unknown };
+  if (data.success !== true || data.errorCode !== 'TIME_LIMIT_WARNING') return null;
+  return typeof data.actionHint === 'string' && data.actionHint.trim() ? data.actionHint : null;
+}
+
 /** 按笔算时只有一部分超时: 要把能领的和超时的分开写。 */
 export function hasPartialExpiry(status: ProcessTimeLimitStatus): boolean {
   return status.perLot && Number(status.expiredQuantity ?? 0) > 0 && Number(status.drawableQuantity ?? 0) > 0;

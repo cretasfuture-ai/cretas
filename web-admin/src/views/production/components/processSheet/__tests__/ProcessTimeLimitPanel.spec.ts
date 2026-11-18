@@ -9,6 +9,8 @@ import {
   parseBackendTime,
   remainingMinutesAt,
   remainingText,
+  timeLimitBlocks,
+  timeLimitWarningOf,
 } from '@/utils/processTimeLimit';
 import type { ProcessTimeLimitStatus } from '@/api/processTimeLimit';
 import type { WorkflowPortDescriptor } from '@/api/processSheet';
@@ -81,6 +83,20 @@ describe('时限文字', () => {
     expect(hasPartialExpiry(status({ perLot: true, expiredQuantity: 10, drawableQuantity: 40 }))).toBe(true);
     expect(hasPartialExpiry(status({ perLot: true, expiredQuantity: 50, drawableQuantity: 0 }))).toBe(false);
     expect(hasPartialExpiry(status({ perLot: false, expiredQuantity: 10, drawableQuantity: 40 }))).toBe(false);
+  });
+
+  it('PROTO-Q41 开关: 只有后端明说 false 才是只警告; 旧后端不带字段按拦截', () => {
+    expect(timeLimitBlocks(status({ blockOnExceed: false }))).toBe(false);
+    expect(timeLimitBlocks(status({ blockOnExceed: true }))).toBe(true);
+    expect(timeLimitBlocks(status())).toBe(true);
+  });
+
+  it('PROTO-Q41 成功响应里的时限警告: 只认 success + TIME_LIMIT_WARNING', () => {
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'W-1 已超时' })).toBe('W-1 已超时');
+    expect(timeLimitWarningOf({ success: false, errorCode: 'TIME_LIMIT_WARNING', actionHint: 'x' })).toBeNull();
+    expect(timeLimitWarningOf({ success: true, errorCode: 'OTHER', actionHint: 'x' })).toBeNull();
+    expect(timeLimitWarningOf({ success: true, errorCode: 'TIME_LIMIT_WARNING', actionHint: '  ' })).toBeNull();
+    expect(timeLimitWarningOf(null)).toBeNull();
   });
 });
 
@@ -162,6 +178,16 @@ describe('ProcessTimeLimitPanel', () => {
     const wrapper = mountPanel();
     await flushPromises();
     expect(wrapper.get('[data-testid="time-limit-partial"]').text()).toBe('可领 35 kg，已超时 15 kg');
+  });
+
+  it('PROTO-Q41 只警告档的按笔部分超时: 不说「可领」, 说明都能投料', async () => {
+    state.get.mockResolvedValue(ok([status({
+      state: 'EXPIRED', perLot: true, expiredQuantity: 15, drawableQuantity: 35, blockOnExceed: false,
+    })]));
+    const wrapper = mountPanel();
+    await flushPromises();
+    expect(wrapper.get('[data-testid="time-limit-partial"]').text())
+      .toBe('未超时 35 kg，已超时 15 kg（本厂只警告，都能投料）');
   });
 
   it('要登记解冻: 确认后发 START/THAW, 然后刷新', async () => {

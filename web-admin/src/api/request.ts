@@ -9,6 +9,7 @@ import type { ApiData } from '@/types/api';
 import { markClientErrorReported, reportClientError, reportRequestFailure } from '@/utils/clientErrorReporter';
 import { currentActionId } from '@/utils/activityTracker';
 import { sandboxRequestUrl } from '@/demo/f006Sandbox';
+import { timeLimitWarningOf } from '@/utils/processTimeLimit';
 import {
   factoryViewTokenForRequest,
   isFactoryViewRequest,
@@ -390,6 +391,19 @@ request.interceptors.response.use(
           rich.actionHint,
           data.data,
         ));
+      }
+      // PROTO-Q41: 工序时限「只警告」档 —— 投料成功了, 但要让人看到超时 / 没登记解冻的那句警告
+      const timeLimitWarning = timeLimitWarningOf(data);
+      if (timeLimitWarning && !(response.config as { _silent?: boolean })._silent) {
+        void import('@/utils/singletonNotification').then(({ showSingletonNotification }) => {
+          showSingletonNotification({
+            title: '投料时限提醒',
+            message: timeLimitWarning,
+            type: 'warning',
+            duration: 0,
+            showClose: true,
+          });
+        });
       }
       return data;
     }

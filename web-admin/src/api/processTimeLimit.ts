@@ -69,6 +69,11 @@ export interface ProcessTimeLimitStatus {
   perLot: boolean;
   /** 进行中的暂停登记 id。 */
   pauseMarkId?: number | null;
+  /**
+   * 本厂超时拦不拦 (PROTO-Q41, 工厂开关 production.time_limit.block_on_exceed): false = 只警告 (默认),
+   * 超时 / 没登记解冻也能投料; 旧后端没有这个字段时按拦截理解。
+   */
+  blockOnExceed?: boolean;
 }
 
 export interface ProcessTimeMark {

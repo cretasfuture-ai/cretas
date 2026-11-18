@@ -39,9 +39,14 @@ export function formatDuration(minutes: number): string {
   return rest === 0 ? `${hours} 小时` : `${hours} 小时 ${rest} 分`;
 }
 
-/** 这批料因时限现在一点也领不了的原因 (null = 能领, 能领多少看 timeLimitDrawable)。 */
+/** 本厂超时是否拦领用 (PROTO-Q41)。旧后端不带字段 = 原行为 (拦)。 */
+export function timeLimitBlocks(status: Pick<ProcessTimeLimitStatus, 'blockOnExceed'> | undefined): boolean {
+  return status?.blockOnExceed !== false;
+}
+
+/** 这批料因时限现在一点也领不了的原因 (null = 能领, 能领多少看 timeLimitDrawable)。只警告档一律 null。 */
 export function timeLimitBlockReason(status: ProcessTimeLimitStatus | undefined, nowMs: number): string | null {
-  if (!status) return null;
+  if (!status || !timeLimitBlocks(status)) return null;
   if (status.state === 'START_MISSING') return status.reason ?? '还没有登记开始解冻，不能领用';
   if (status.state !== 'EXPIRED' || Number(status.drawableQuantity ?? 0) > 0) return null;
   const minutes = remainingMinutesAt(status, nowMs);
@@ -50,9 +55,10 @@ export function timeLimitBlockReason(status: ProcessTimeLimitStatus | undefined,
     : '已超时，请找质检员处置';
 }
 
-/** 时限允许领的量; null = 时限不限量 (没有超时的部分)。 */
+/** 时限允许领的量; null = 时限不限量 (没有超时的部分, 或本厂只警告)。 */
 export function timeLimitDrawable(status: ProcessTimeLimitStatus | undefined): number | null {
-  if (!status || (status.state !== 'EXPIRED' && Number(status.expiredQuantity ?? 0) <= 0)) return null;
+  if (!status || !timeLimitBlocks(status)) return null;
+  if (status.state !== 'EXPIRED' && Number(status.expiredQuantity ?? 0) <= 0) return null;
   return Math.max(0, Number(status.drawableQuantity ?? 0));
 }
 
@@ -65,6 +71,10 @@ export function timeLimitExpiredQuantity(status: ProcessTimeLimitStatus | undefi
 export function timeLimitLine(status: ProcessTimeLimitStatus | undefined, nowMs: number): string | null {
   if (!status) return null;
   if (status.state === 'NOT_STARTED' || status.state === 'RELEASED') return status.reason;
+  // 只警告档: 超时 / 没登记解冻不拦, 但要把后端那句警告 (带「本厂只警告」) 写出来
+  if (!timeLimitBlocks(status) && (status.state === 'EXPIRED' || status.state === 'START_MISSING')) {
+    return status.reason ?? '已超时，本厂只警告，可以领用';
+  }
   const minutes = remainingMinutesAt(status, nowMs);
   if (minutes == null) return status.reason;
   if (minutes < 0) return status.state === 'EXPIRED' ? null : '时限已到，能不能领以提交结果为准';
@@ -78,6 +88,13 @@ export function crossedDeadline(status: ProcessTimeLimitStatus, nowMs: number): 
   if (status.state !== 'OK' && status.state !== 'WARNING') return false;
   const minutes = remainingMinutesAt(status, nowMs);
   return minutes != null && minutes < 0;
+}
+
+/** 后端成功响应里带回的投料时限警告 (errorCode = TIME_LIMIT_WARNING); 没有返回 null。与网页同一口径。 */
+export function timeLimitWarningOf(body: unknown): string | null {
+  const data = (body ?? {}) as { success?: unknown; errorCode?: unknown; actionHint?: unknown };
+  if (data.success !== true || data.errorCode !== 'TIME_LIMIT_WARNING') return null;
+  return typeof data.actionHint === 'string' && data.actionHint.trim() ? data.actionHint : null;
 }
 
 /** 后端的下一步提示: 统一响应里的字段叫 actionHint; hint 是旧写法。 */
