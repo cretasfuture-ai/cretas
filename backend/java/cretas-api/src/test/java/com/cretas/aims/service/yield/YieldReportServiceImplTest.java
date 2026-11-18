@@ -5070,7 +5070,8 @@ class YieldReportServiceImplTest {
         svc.submitReport("F006", 1L, 5L, ok);
         ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
         verify(reportRepo).save(cap.capture());
-        assertThat(cap.getValue().getCustomFields()).containsKey("defectBreakdown");
+        assertThat(cap.getValue().getCustomFields()).containsKey("defectBreakdown")
+                .containsEntry("defectBreakdownCheck", "COMPARED");
 
         // 合计 3+3=6 > 总不良 5 → 拒绝
         YieldReportRequest bad = legacyReq("100", "80");
@@ -5080,6 +5081,62 @@ class YieldReportServiceImplTest {
         bad.setDefectBreakdown(List.of(d1, d3));
         assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, bad))
                 .isInstanceOf(BusinessException.class).hasMessageContaining("超过了不良总量");
+    }
+
+    @Test
+    void submitReport_defectBreakdownInOtherUnitIsNotComparedButFlagged() {
+        // 复审 M4: 产出单位是盒, 不良 2 盒, 分摊 3kg —— kg 与盒比不出结论: 不拒绝、不当成已核对, 标 UNIT_MISMATCH
+        YieldReportRequest req = legacyReq("100", "80");
+        req.setOutputUnit("盒");
+        req.setDefectQuantity(new BigDecimal("2"));
+        YieldReportRequest.DefectShare d = new YieldReportRequest.DefectShare();
+        d.setDefectId("D-1"); d.setKg(new BigDecimal("3"));
+        req.setDefectBreakdown(List.of(d));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getCustomFields()).containsEntry("defectBreakdownCheck", "UNIT_MISMATCH");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) cap.getValue().getCustomFields().get("defectBreakdown");
+        assertThat(lines.get(0)).containsEntry("unit", "kg");
+        assertThat(out.get("defectBreakdownCheck")).isEqualTo("UNIT_MISMATCH");
+    }
+
+    @Test
+    void submitReport_outputStageHintCountsPriorByproductsAndFlagsMixedUnits() {
+        // 复审 M6: 投入 100kg; 此前一笔产出 40 + 不良 5 + 料头 6 (kg); 本笔 50 ⇒ 101 > 100。
+        // 旧实现此前各笔不计副产品 ⇒ 95, 漏提示。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        ProductionReport input = ProductionReport.builder().reportKind("INPUT")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg").build();
+        ProductionReport priorOut = ProductionReport.builder().reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("40")).outputUnit("kg").defectQuantity(new BigDecimal("5"))
+                .byproducts(List.of(Map.of("name", "料头", "quantity", 6, "unit", "kg"))).build();
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(input, priorOut));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(604L); return r;
+        });
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setMarkComplete(false);
+        req.setOutputQuantity(new BigDecimal("50"));
+        req.setOutputUnit("kg");
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(out.get("outputExceedsInput")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("producedTotal")).isEqualByComparingTo("101");
+
+        // 此前那笔的副产品单位是「个」: 不可比 ⇒ 不提示, 标 UNIT_MISMATCH
+        ProductionReport priorPieces = ProductionReport.builder().reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("40")).outputUnit("kg")
+                .byproducts(List.of(Map.of("name", "骨头", "quantity", "3", "unit", "个"))).build();
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(input, priorPieces));
+        Map<String, Object> mixed = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(mixed).doesNotContainKey("outputExceedsInput")
+                .containsEntry("outputInputCheck", "UNIT_MISMATCH");
     }
 
     @Test

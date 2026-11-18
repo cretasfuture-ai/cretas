@@ -18,6 +18,9 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 待称重任务总览: 执行中且还没有任何称重的工序任务, 今日计划的排前面。只读。
@@ -40,21 +43,24 @@ public class WeighingPendingTaskService {
     @Transactional(readOnly = true)
     public List<PendingTask> list(String factoryId, LocalDate today) {
         List<WorkProcessTask> tasks = taskRepository.findInProgressWithoutWeighing(factoryId);
+        // 批量取批次 / 计划 / 工序 (每类一条查询, 不随任务数增长), 全部按本厂过滤
         Map<Long, ProductionBatch> batches = new HashMap<>();
+        Set<Long> batchIds = tasks.stream().map(WorkProcessTask::getProductionBatchId).filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (!batchIds.isEmpty()) {
+            for (ProductionBatch b : batchRepository.findByIdInAndFactoryId(batchIds, factoryId)) batches.put(b.getId(), b);
+        }
         Map<String, ProductionPlan> plans = new HashMap<>();
+        Set<String> planIds = batches.values().stream().map(ProductionBatch::getProductionPlanId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (!planIds.isEmpty()) {
+            for (ProductionPlan p : planRepository.findByFactoryIdAndIdIn(factoryId, planIds)) plans.put(p.getId(), p);
+        }
         Map<String, WorkProcess> processes = new HashMap<>();
-        for (WorkProcessTask t : tasks) {
-            if (t.getProductionBatchId() != null && !batches.containsKey(t.getProductionBatchId())) {
-                ProductionBatch b = batchRepository.findByIdAndFactoryId(t.getProductionBatchId(), factoryId).orElse(null);
-                batches.put(t.getProductionBatchId(), b);
-                if (b != null && b.getProductionPlanId() != null && !plans.containsKey(b.getProductionPlanId())) {
-                    plans.put(b.getProductionPlanId(),
-                            planRepository.findByIdAndFactoryId(b.getProductionPlanId(), factoryId).orElse(null));
-                }
-            }
-            if (t.getWorkProcessId() != null && !processes.containsKey(t.getWorkProcessId())) {
-                processes.put(t.getWorkProcessId(), processRepository.findById(t.getWorkProcessId()).orElse(null));
-            }
+        List<String> processIds = tasks.stream().map(WorkProcessTask::getWorkProcessId).filter(Objects::nonNull)
+                .distinct().toList();
+        if (!processIds.isEmpty()) {
+            for (WorkProcess wp : processRepository.findByFactoryIdAndIdIn(factoryId, processIds)) processes.put(wp.getId(), wp);
         }
         return tasks.stream().map(t -> {
             ProductionBatch b = batches.get(t.getProductionBatchId());

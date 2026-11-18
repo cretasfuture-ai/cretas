@@ -90,7 +90,12 @@ public class FactoryMaterialRequisitionController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageRequest pg = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<FactoryMaterialRequisition> result = service.list(factoryId, status, keyword, planNumber, fromDate, toDate, pg);
+        boolean noNewFilter = (keyword == null || keyword.isBlank()) && (planNumber == null || planNumber.isBlank())
+                && fromDate == null && toDate == null;
+        // 没带新筛选 ⇒ 仍走原有列表 (与旧接口行为一致); 带了才走筛选查询
+        Page<FactoryMaterialRequisition> result = noNewFilter
+                ? service.list(factoryId, status, pg)
+                : service.list(factoryId, status, keyword, planNumber, fromDate, toDate, pg);
         return ResponseEntity.ok(Map.of("success", true, "data", result));
     }
 

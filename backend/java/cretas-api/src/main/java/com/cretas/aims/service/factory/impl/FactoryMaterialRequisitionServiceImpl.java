@@ -846,8 +846,11 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return repository.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
     }
 
-    private static String likePattern(String v) {
-        return v == null || v.isBlank() ? null : "%" + v.trim().toLowerCase(java.util.Locale.ROOT) + "%";
+    /** 用户输入当字面量: % _ 和转义符 ! 本身都转义 (查询里 LIKE ... ESCAPE '!'), 输入「50%」不再匹配一切。 */
+    static String likePattern(String v) {
+        if (v == null || v.isBlank()) return null;
+        return "%" + com.cretas.aims.dto.production.ProductionPlanListFilter.escapeLike(
+                v.trim().toLowerCase(java.util.Locale.ROOT)) + "%";
     }
 
     @Override

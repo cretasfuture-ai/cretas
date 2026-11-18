@@ -146,10 +146,21 @@ public final class WeighingEntryRules {
         }
     }
 
-    /** 不良按字典项分摊: 逐行 defectId 必填且不重复、kg &gt; 0, 合计 ≤ 总不良 (总不良必须已清点)。 */
-    public static void assertDefectBreakdown(BigDecimal defectQuantity,
-                                             List<YieldReportRequest.DefectShare> shares) {
-        if (shares == null || shares.isEmpty()) return;
+    /** 单位对得上才比: 已比 / 单位不一致 (不比, 只标出)。 */
+    public static final String CHECK_COMPARED = "COMPARED";
+    public static final String CHECK_UNIT_MISMATCH = "UNIT_MISMATCH";
+
+    /**
+     * 不良按字典项分摊: 逐行 defectId 必填且不重复、数量 &gt; 0 (总不良必须已清点)。
+     *
+     * <p>单位口径 (复审 M4): 不良总量 defectQuantity 跟着产出单位 defectUnit 走 (可能是「盒」「个」)。
+     * 每行的单位 = 行内 unit; 旧字段 kg 只表示「单位 kg」。只有<b>每一行</b>的单位都与 defectUnit 相同,
+     * 才比较「合计 ≤ 总不良」并返回 {@link #CHECK_COMPARED}; 任何一行单位不同或不知道 ⇒ 不比 (kg 和盒比不出结论),
+     * 返回 {@link #CHECK_UNIT_MISMATCH} 由调用方标出。shares 为空 ⇒ null (没分摊)。
+     */
+    public static String assertDefectBreakdown(BigDecimal defectQuantity, String defectUnit,
+                                               List<YieldReportRequest.DefectShare> shares) {
+        if (shares == null || shares.isEmpty()) return null;
         if (defectQuantity == null) {
             throw new BusinessException(400, "按不良项分摊前请先填写不良总量")
                     .withCode("DEFECT_BREAKDOWN_WITHOUT_TOTAL")
@@ -158,6 +169,7 @@ public final class WeighingEntryRules {
         }
         java.util.Set<String> seen = new java.util.HashSet<>();
         BigDecimal sum = BigDecimal.ZERO;
+        boolean sameUnit = defectUnit != null && !defectUnit.isBlank();
         for (int i = 0; i < shares.size(); i++) {
             YieldReportRequest.DefectShare s = shares.get(i);
             if (s == null || s.getDefectId() == null || s.getDefectId().isBlank()) {
@@ -170,48 +182,85 @@ public final class WeighingEntryRules {
                         .withCode("DEFECT_BREAKDOWN_DUPLICATE")
                         .withHint("同一个不良项只填一行，数量合并").withHintTarget("defectBreakdown[" + i + "].defectId");
             }
-            if (s.getKg() == null || s.getKg().signum() <= 0) {
-                throw new BusinessException(400, "不良分摊第 " + (i + 1) + " 行的重量必须大于 0")
-                        .withCode("DEFECT_BREAKDOWN_KG_INVALID")
-                        .withHint("没有这一项就删掉这一行").withHintTarget("defectBreakdown[" + i + "].kg");
+            BigDecimal q = s.effectiveQuantity();
+            if (q == null || q.signum() <= 0) {
+                throw new BusinessException(400, "不良分摊第 " + (i + 1) + " 行的数量必须大于 0")
+                        .withCode("DEFECT_BREAKDOWN_QUANTITY_INVALID")
+                        .withHint("没有这一项就删掉这一行").withHintTarget("defectBreakdown[" + i + "].quantity");
             }
-            sum = sum.add(s.getKg());
+            if (!sameUnitOf(s.effectiveUnit(), defectUnit)) sameUnit = false;
+            sum = sum.add(q);
         }
+        if (!sameUnit) return CHECK_UNIT_MISMATCH;
         if (sum.compareTo(defectQuantity) > 0) {
             throw new BusinessException(400, "不良分摊合计超过了不良总量")
                     .withCode("DEFECT_BREAKDOWN_EXCEEDS_TOTAL")
-                    .withHint("分摊合计 " + sum.stripTrailingZeros().toPlainString() + " kg，不良总量 "
-                            + defectQuantity.stripTrailingZeros().toPlainString() + " kg")
+                    .withHint("分摊合计 " + sum.stripTrailingZeros().toPlainString() + " " + defectUnit.trim()
+                            + "，不良总量 " + defectQuantity.stripTrailingZeros().toPlainString() + " " + defectUnit.trim())
                     .withHintTarget("defectBreakdown");
         }
+        return CHECK_COMPARED;
+    }
+
+    /** 一个带单位的量 (投入 / 产出 / 不良 / 副产品)。 */
+    public record Qty(BigDecimal quantity, String unit) {
     }
 
     /**
-     * 产出 (良品 + 不良 + 同单位副产品, 加上本道此前已报的同口径量) 大于投入时的提示, 只提示不拦
-     * (加调味料 / 加水的工序产出本来就可以大于投入)。投入 / 产出单位不同或投入 ≤ 0 → 不可比 → null。
+     * 产出 &gt; 投入的提示, 只提示不拦 (加调味料 / 加水的工序产出本来就可以大于投入)。复审 M6:
+     * <ul>
+     *   <li>inputs = 本道累计投入 (三阶段: 此前各笔 INPUT; 旧式整合: 本笔), produced = 本道累计产出
+     *       (良品 + 不良 + <b>全部</b>副产品, 此前各笔与本笔同一口径)。</li>
+     *   <li>没有投入或投入合计 ≤ 0 ⇒ null (没有可比的东西)。</li>
+     *   <li>任何一项数量非零却缺单位或与投入单位不同 ⇒ 不比也不提示, 返回 {outputInputCheck: UNIT_MISMATCH}
+     *       (kg 和个加不到一起, 少算一项可能漏提示, 多算一项可能误提示)。</li>
+     *   <li>同单位且产出合计 &gt; 投入合计 ⇒ {outputExceedsInput: true, inputQuantity, producedTotal, unit}; 否则 null。</li>
+     * </ul>
      */
-    public static java.util.Map<String, Object> outputExceedsInputHint(
-            BigDecimal input, String inputUnit, BigDecimal output, String outputUnit, BigDecimal defect,
-            List<YieldReportRequest.Byproduct> byproducts, BigDecimal priorProduced) {
-        if (input == null || input.signum() <= 0 || output == null) return null;
-        if (inputUnit == null || outputUnit == null || !inputUnit.trim().equalsIgnoreCase(outputUnit.trim())) {
-            return null;
-        }
-        BigDecimal total = output;
-        if (defect != null) total = total.add(defect);
-        if (byproducts != null) {
-            for (YieldReportRequest.Byproduct b : byproducts) {
-                if (b == null || b.getQuantity() == null || b.getUnit() == null) continue;
-                if (b.getUnit().trim().equalsIgnoreCase(outputUnit.trim())) total = total.add(b.getQuantity());
+    public static java.util.Map<String, Object> outputExceedsInputHint(List<Qty> inputs, List<Qty> produced) {
+        String unit = null;
+        BigDecimal in = BigDecimal.ZERO;
+        boolean mismatch = false;
+        if (inputs != null) {
+            for (Qty q : inputs) {
+                if (q == null || q.quantity() == null || q.quantity().signum() == 0) continue;
+                if (q.unit() == null || q.unit().isBlank()) { mismatch = true; continue; }
+                if (unit == null) unit = q.unit().trim();
+                else if (!sameUnitOf(unit, q.unit())) mismatch = true;
+                in = in.add(q.quantity());
             }
         }
-        if (priorProduced != null) total = total.add(priorProduced);
-        if (total.compareTo(input) <= 0) return null;
+        if (!mismatch && (unit == null || in.signum() <= 0)) return null;
+        BigDecimal total = BigDecimal.ZERO;
+        if (produced != null) {
+            for (Qty q : produced) {
+                if (q == null || q.quantity() == null || q.quantity().signum() == 0) continue;
+                if (!sameUnitOf(unit, q.unit())) { mismatch = true; continue; }
+                total = total.add(q.quantity());
+            }
+        }
         java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        if (mismatch) {
+            m.put("outputInputCheck", CHECK_UNIT_MISMATCH);
+            return m;
+        }
+        if (total.compareTo(in) <= 0) return null;
+        m.put("outputInputCheck", CHECK_COMPARED);
         m.put("outputExceedsInput", true);
-        m.put("inputQuantity", input);
+        m.put("inputQuantity", in);
         m.put("producedTotal", total);
-        m.put("unit", outputUnit);
+        m.put("unit", unit);
         return m;
+    }
+
+    /**
+     * 同一个单位吗: 按单位契约的跨语言归一码比 (kg / 公斤 / 千克 同码; 件 / 个 / 只 各自独立),
+     * ⛔ 不比裸字符串 (BareUnitEqualityRatchetContractTest)。缺单位 = 不知道 = 不同。
+     */
+    private static boolean sameUnitOf(String a, String b) {
+        if (a == null || b == null || a.isBlank() || b.isBlank()) return false;
+        return java.util.Objects.equals(
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(a),
+                com.cretas.aims.service.unit.impl.UnitContractServiceImpl.crossLanguageCode(b));
     }
 }

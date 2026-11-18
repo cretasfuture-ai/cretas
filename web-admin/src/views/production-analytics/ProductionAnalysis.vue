@@ -18,6 +18,7 @@ import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 import { toDateString } from '@/utils/dateFormat';
+import { processPieByUnit } from './processPieByUnit';
 
 // ==================== 状态 ====================
 
@@ -232,13 +233,13 @@ function renderProductChart() {
 function renderProcessChart() {
   if (!processChartRef.value || !dashboard.value || !hasProcessData.value) return;
   if (!processChart || processChart.isDisposed?.()) processChart = echarts.init(processChartRef.value, 'cretas');
-  const data = dashboard.value.byProcess;
+  const pie = processPieByUnit(dashboard.value.byProcess);
   processChart.setOption({
     tooltip: { trigger: 'item', confine: true, formatter: '{b}: {c} ({d}%)' },
     legend: { orient: 'vertical', right: 10, top: 'center' },
     series: [{
       type: 'pie', radius: ['35%', '65%'], center: ['40%', '50%'],
-      data: data.map(d => ({ name: d.process_category, value: d.output })),
+      data: pie.slices,
       emphasis: { itemStyle: { shadowBlur: 10, shadowOffsetX: 0, shadowColor: 'rgba(0,0,0,0.2)' } },
       label: { formatter: '{b}\n{d}%' },
     }],
@@ -261,9 +262,11 @@ const hasProductData = computed(() => gold.hasProducts.value);
 
 // 工序分布: Java byProcess (gold 无工序维度)
 const hasProcessData = computed(() => {
-  const data = dashboard.value?.byProcess ?? [];
-  return data.some(d => Number(d.output) > 0);
+  return processPie.value.slices.length > 0;
 });
+
+// 饼图只在同一单位内算占比 (kg 与盒不进同一分母); 其它单位如实注明未计入
+const processPie = computed(() => processPieByUnit(dashboard.value?.byProcess));
 
 // ==================== Chart Insight ====================
 // LINE 1: 日产出趋势 (trendChart) — gold totalActualQty, xDim:'time', TREND
@@ -336,8 +339,8 @@ const { insight: prodProductInsight, loading: prodProductInsightLoading } = useC
 
 const { insight: prodProcessInsight, loading: prodProcessInsightLoading } = useChartInsight(
   (): { chart: ChartWithMeta } | null => {
-    const data = dashboard.value?.byProcess;
-    if (!data || data.length < 2) return null;
+    const pie = processPieByUnit(dashboard.value?.byProcess);
+    if (pie.slices.length < 2) return null;
     return {
       chart: {
         chartType: 'pie',
@@ -346,7 +349,7 @@ const { insight: prodProcessInsight, loading: prodProcessInsightLoading } = useC
         config: {
           series: [{
             type: 'pie',
-            data: data.map(d => ({ name: d.process_category, value: d.output })),
+            data: pie.slices,
           }],
         },
       },
@@ -472,7 +475,10 @@ onBeforeUnmount(() => {
         <ChartInsight :insight="prodProductInsight" :loading="prodProductInsightLoading" depth="detailed" />
       </div>
       <div class="chart-card">
-        <div class="chart-title">工序产出分布</div>
+        <div class="chart-title">
+          工序产出分布<template v-if="processPie.unit">（单位 {{ processPie.unit }}）</template>
+          <span v-if="processPie.otherUnits.length" class="chart-unit-note">{{ processPie.otherUnits.join('、') }} 单位的产出未计入此图</span>
+        </div>
         <div v-show="hasProcessData" ref="processChartRef" class="chart-body" />
         <el-empty v-if="!hasProcessData" description="该期暂无工序数据" :image-size="80" class="chart-empty" />
         <!-- Insight: PIE PROPORTION (factory, xDim:category, yMetric:quantity) -->
@@ -502,6 +508,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.chart-unit-note { margin-left: 8px; font-size: 12px; font-weight: normal; color: var(--el-text-color-secondary); }
 .production-analysis {
   padding: 20px;
   min-height: calc(100vh - 64px);

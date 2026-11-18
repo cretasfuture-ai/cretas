@@ -531,24 +531,9 @@ public class ProductionPlanServiceImpl implements ProductionPlanService {
         };
     }
 
-    /** 产品 / 单位 / 批量单号 (生产批次号, 计划下任一批次命中)。 */
+    /** 产品 / 单位 / 批量单号 —— 见 ProductionPlanListFilter#toSpecification。 */
     private Specification<ProductionPlan> planFilter(com.cretas.aims.dto.production.ProductionPlanListFilter f) {
-        return (root, query, cb) -> {
-            if (f == null) return cb.conjunction();
-            var predicates = new ArrayList<jakarta.persistence.criteria.Predicate>();
-            if (f.productTypeId() != null) predicates.add(cb.equal(root.get("productTypeId"), f.productTypeId()));
-            if (f.plannedUnit() != null) predicates.add(cb.equal(root.get("plannedUnit"), f.plannedUnit()));
-            if (f.batchNumber() != null) {
-                var sub = query.subquery(String.class);
-                var b = sub.from(com.cretas.aims.entity.ProductionBatch.class);
-                sub.select(b.get("id").as(String.class)).where(
-                        cb.equal(b.get("productionPlanId"), root.get("id")),
-                        cb.like(cb.lower(b.get("batchNumber")), "%" + f.batchNumber().toLowerCase(Locale.ROOT) + "%"));
-                predicates.add(cb.exists(sub));
-            }
-            return predicates.isEmpty() ? cb.conjunction()
-                    : cb.and(predicates.toArray(jakarta.persistence.criteria.Predicate[]::new));
-        };
+        return f == null ? (root, query, cb) -> cb.conjunction() : f.toSpecification();
     }
 
     private Specification<ProductionPlan> planStatus(ProductionPlanStatus status) {

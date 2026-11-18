@@ -66,14 +66,15 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
             List<Status> statuses, java.time.LocalDateTime before);
 
     /**
-     * 领料单列表的筛选查询。kw / plan 由调用方预先拼成小写 "%x%" (null = 不筛); from/to 作用于需求日期 required_date。
+     * 领料单列表的筛选查询。kw / plan 由调用方预先拼成小写 "%x%" (null = 不筛), 用户输入里的 % _ ! 已按 ESCAPE '!' 转义
+     * (见 FactoryMaterialRequisitionServiceImpl#likePattern); from/to 作用于需求日期 required_date。
      * 参数侧 IS NULL 一律 CAST(... AS string) 给 PG 类型提示 (见 database-entity-sync 规则)。
      */
     @Query("SELECT r FROM FactoryMaterialRequisition r WHERE r.factoryId = :factoryId AND r.deletedAt IS NULL "
             + "AND (CAST(:status AS string) IS NULL OR r.status = :status) "
-            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw "
-            + "     OR LOWER(r.productName) LIKE :kw OR LOWER(r.productionPlanNumber) LIKE :kw) "
-            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan) "
+            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw ESCAPE '!' "
+            + "     OR LOWER(r.productName) LIKE :kw ESCAPE '!' OR LOWER(r.productionPlanNumber) LIKE :kw ESCAPE '!') "
+            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan ESCAPE '!') "
             + "AND (CAST(:fromDate AS string) IS NULL OR r.requiredDate >= :fromDate) "
             + "AND (CAST(:toDate AS string) IS NULL OR r.requiredDate <= :toDate)")
     Page<FactoryMaterialRequisition> search(@Param("factoryId") String factoryId, @Param("status") Status status,
@@ -91,9 +92,9 @@ public interface FactoryMaterialRequisitionRepository extends JpaRepository<Fact
             + "WHERE r.factoryId = :factoryId AND r.deletedAt IS NULL "
             + "AND r.status <> :excluded "
             + "AND (CAST(:status AS string) IS NULL OR r.status = :status) "
-            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw "
-            + "     OR LOWER(r.productName) LIKE :kw OR LOWER(r.productionPlanNumber) LIKE :kw) "
-            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan) "
+            + "AND (CAST(:kw AS string) IS NULL OR LOWER(r.requisitionNo) LIKE :kw ESCAPE '!' "
+            + "     OR LOWER(r.productName) LIKE :kw ESCAPE '!' OR LOWER(r.productionPlanNumber) LIKE :kw ESCAPE '!') "
+            + "AND (CAST(:plan AS string) IS NULL OR LOWER(r.productionPlanNumber) LIKE :plan ESCAPE '!') "
             + "AND (CAST(:fromDate AS string) IS NULL OR r.requiredDate >= :fromDate) "
             + "AND (CAST(:toDate AS string) IS NULL OR r.requiredDate <= :toDate) "
             + "GROUP BY i.materialTypeId, i.materialName, i.unit ORDER BY i.materialName, i.unit")

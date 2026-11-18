@@ -232,14 +232,30 @@ public class YieldReportRequest {
     }
 
     /**
-     * 不良按字典项分摊的一行: 哪个不良项、多少 kg。
-     * 全部行的 kg 之和不得超过 {@link YieldReportRequest#defectQuantity}; 落 custom_fields.defectBreakdown。
+     * 不良按字典项分摊的一行: 哪个不良项、多少、什么单位。
+     * 单位与产出单位 (= 不良总量的单位) 一致时, 全部行之和不得超过 {@link YieldReportRequest#defectQuantity};
+     * 单位不一致则不比较, 落库时标 defectBreakdownCheck=UNIT_MISMATCH (见 WeighingEntryRules#assertDefectBreakdown)。
+     * 落 custom_fields.defectBreakdown。
      * defectId 暂不校验字典存在性 (不良项字典由质量线 E 建, 建成后在 WeighingEntryRules 接入)。
      */
     @Data
     public static class DefectShare {
         private String defectId;
+        /** 数量, 单位见 {@link #unit}。 */
+        private BigDecimal quantity;
+        /** quantity 的单位; 空 = 不知道 (不与不良总量比较)。 */
+        private String unit;
+        /** 旧字段: 以 kg 计的数量 (quantity 为空时才用, 单位视为 kg)。 */
         private BigDecimal kg;
+
+        public BigDecimal effectiveQuantity() {
+            return quantity != null ? quantity : kg;
+        }
+
+        public String effectiveUnit() {
+            if (quantity != null) return unit == null || unit.isBlank() ? null : unit.trim();
+            return kg != null ? "kg" : null;
+        }
     }
 
     /** 画布一道工序的一个半成品产出端口的填报值。 */

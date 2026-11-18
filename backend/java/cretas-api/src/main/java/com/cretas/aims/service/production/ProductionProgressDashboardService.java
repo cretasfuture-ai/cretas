@@ -21,6 +21,10 @@ public class ProductionProgressDashboardService {
     @PersistenceContext
     private EntityManager entityManager;
 
+    /** 「一笔报工」: PROGRESS, 或 YIELD 的产出行 (OUTPUT / 旧式整合)。 */
+    static final String REPORT_ROW_FILTER =
+            "(report_type = 'PROGRESS' OR (report_type = 'YIELD' AND (report_kind IS NULL OR report_kind = 'OUTPUT')))";
+
     public Map<String, Object> getDashboard(String factoryId, LocalDate date) {
         LocalDate targetDate = date != null ? date : LocalDate.now();
         log.info("[B8 打屏] 查询生产进度 factoryId={} date={}", factoryId, targetDate);
@@ -179,13 +183,15 @@ public class ProductionProgressDashboardService {
         summary.put("overduePlans", overduePlans);
         summary.put("behindPlans", behindPlans);
 
-        // 当日报工笔数 + 最近报工 (称重逐道报工 YIELD 与旧进度报工 PROGRESS, 软删的不算)
+        // 当日报工笔数 + 最近报工: 只算「报工」行 —— 旧进度报工 PROGRESS + 称重的产出行 (YIELD 的 OUTPUT /
+        // 旧式整合 report_kind 为空)。三阶段称重的 INPUT / SEGMENT 行是同一次报工的投入 / 工时, 不另算一笔
+        // (复审 L5: 否则一次称重最多计 3 笔, 最近报工里还会出现产出为空的行)。软删的不算。
         Number reportCount = (Number) entityManager.createNativeQuery(
             "SELECT COUNT(*) FROM production_reports " +
             "WHERE factory_id = :factoryId AND report_date = :date " +
-            "  AND report_type IN ('YIELD','PROGRESS') AND deleted_at IS NULL"
+            "  AND " + REPORT_ROW_FILTER + " AND deleted_at IS NULL"
         ).setParameter("factoryId", factoryId).setParameter("date", targetDate).getSingleResult();
-        summary.put("todayReportCount", reportCount == null ? 0L : reportCount.longValue());
+        summary.put("todayReportCount", reportCount == null ? null : reportCount.longValue());
 
         @SuppressWarnings("unchecked")
         List<Object[]> recentRows = entityManager.createNativeQuery(
@@ -196,7 +202,7 @@ public class ProductionProgressDashboardService {
             "LEFT JOIN work_process_tasks t ON t.id = r.work_process_task_id " +
             "LEFT JOIN work_processes wp ON wp.id = t.work_process_id " +
             "WHERE r.factory_id = :factoryId AND r.report_date = :date " +
-            "  AND r.report_type IN ('YIELD','PROGRESS') AND r.deleted_at IS NULL " +
+            "  AND " + REPORT_ROW_FILTER.replace("report_", "r.report_") + " AND r.deleted_at IS NULL " +
             "ORDER BY r.created_at DESC, r.id DESC LIMIT 10"
         ).setParameter("factoryId", factoryId).setParameter("date", targetDate).getResultList();
         List<Map<String, Object>> recent = new ArrayList<>();

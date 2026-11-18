@@ -323,8 +323,9 @@ public class YieldReportServiceImpl implements YieldReportService {
         com.cretas.aims.service.yield.WeighingEntryRules.assertNotLaterThanNow(
                 req.getBusinessDate(), req.getLaborSegments(), clock);
         com.cretas.aims.service.yield.WeighingEntryRules.assertSegmentsStartBeforeEnd(req.getLaborSegments());
-        com.cretas.aims.service.yield.WeighingEntryRules.assertDefectBreakdown(
-                req.getDefectQuantity(), req.getDefectBreakdown());
+        // 复审 M4: 不良总量跟产出单位走; 分摊行单位一致才比合计, 不一致不比并标出 (UNIT_MISMATCH)
+        String defectBreakdownCheck = com.cretas.aims.service.yield.WeighingEntryRules.assertDefectBreakdown(
+                req.getDefectQuantity(), req.getOutputUnit(), req.getDefectBreakdown());
         if (req.getWorkProcessTaskId() == null) {
             throw new BusinessException(400, "缺少必填字段: workProcessTaskId")
                     .withHint("请选择工序任务").withHintTarget("workProcessTaskId");
@@ -629,9 +630,11 @@ public class YieldReportServiceImpl implements YieldReportService {
             fields.put("defectBreakdown", req.getDefectBreakdown().stream().map(d -> {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("defectId", d.getDefectId().trim());
-                m.put("kg", d.getKg());
+                m.put("quantity", d.effectiveQuantity());
+                m.put("unit", d.effectiveUnit());
                 return m;
             }).collect(Collectors.toList()));
+            fields.put("defectBreakdownCheck", defectBreakdownCheck);
             r.setCustomFields(fields);
         }
 
@@ -777,25 +780,33 @@ public class YieldReportServiceImpl implements YieldReportService {
 
         // 产出(良品+不良+副产品)大于投入: 已定「不硬拦, 只提示」(加调味料/加水的工序产出本就可以大于投入),
         // 照常保存, 回给前端一个明确字段; 不改数。
+        // 复审 M6: 投入 / 产出都按本道累计、同一口径 (良品 + 不良 + 全部副产品, 此前各笔与本笔一样算);
+        // 任何一项单位与投入不同 ⇒ 不比不提示, 回 outputInputCheck=UNIT_MISMATCH。
         if (isLegacy || isOutput) {
-            BigDecimal hintInput = isLegacy ? effInput : existingTaskReports.stream()
-                    .map(ProductionReport::getInputQuantity).filter(Objects::nonNull)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-            String hintInUnit = isLegacy ? effInputUnit : existingTaskReports.stream()
-                    .map(ProductionReport::getInputUnit).filter(Objects::nonNull).findFirst().orElse(null);
-            BigDecimal prior = BigDecimal.ZERO;
-            if (isOutput && effOutputUnit != null) {
+            List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> hintInputs = new ArrayList<>();
+            List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> hintProduced = new ArrayList<>();
+            if (isLegacy) {
+                hintInputs.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(effInput, effInputUnit));
+            } else {
                 for (ProductionReport pr : existingTaskReports) {
-                    if (pr.getOutputQuantity() != null && pr.getOutputUnit() != null
-                            && pr.getOutputUnit().trim().equalsIgnoreCase(effOutputUnit.trim())) {
-                        prior = prior.add(pr.getOutputQuantity());
-                        if (pr.getDefectQuantity() != null) prior = prior.add(pr.getDefectQuantity());
+                    if (pr.getReportKind() == null || "INPUT".equals(pr.getReportKind())) {
+                        hintInputs.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(
+                                pr.getInputQuantity(), pr.getInputUnit()));
+                    }
+                    if (pr.getReportKind() == null || "OUTPUT".equals(pr.getReportKind())) {
+                        hintProduced.addAll(producedQuantities(pr.getOutputQuantity(), pr.getOutputUnit(),
+                                pr.getDefectQuantity(), pr.getByproducts()));
                     }
                 }
             }
+            hintProduced.addAll(producedQuantities(effOutput, effOutputUnit, req.getDefectQuantity(),
+                    toByproductMaps(effByproducts)));
             Map<String, Object> exceeds = com.cretas.aims.service.yield.WeighingEntryRules.outputExceedsInputHint(
-                    hintInput, hintInUnit, effOutput, effOutputUnit, req.getDefectQuantity(), effByproducts, prior);
+                    hintInputs, hintProduced);
             if (exceeds != null) out.putAll(exceeds);
+        }
+        if (defectBreakdownCheck != null && !isInput && !isSegment) {
+            out.put("defectBreakdownCheck", defectBreakdownCheck);
         }
 
         // 2026-08-17: 未配「半成品产出编号」时必须出声, ⛔ 不许静默。
@@ -2849,6 +2860,23 @@ public class YieldReportServiceImpl implements YieldReportService {
                 }
             });
         }
+    }
+
+    /** 一笔报工的产出构成: 良品、不良 (同产出单位)、每一行副产品 (各自单位)。 */
+    private static List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> producedQuantities(
+            BigDecimal output, String outputUnit, BigDecimal defect, List<Map<String, Object>> byproducts) {
+        List<com.cretas.aims.service.yield.WeighingEntryRules.Qty> out = new ArrayList<>();
+        out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(output, outputUnit));
+        out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(defect, outputUnit));
+        if (byproducts != null) {
+            for (Map<String, Object> b : byproducts) {
+                if (b == null || b.get("quantity") == null) continue;
+                Object u = b.get("unit");
+                out.add(new com.cretas.aims.service.yield.WeighingEntryRules.Qty(
+                        new BigDecimal(b.get("quantity").toString()), u == null ? null : u.toString()));
+            }
+        }
+        return out;
     }
 
     /** 副产品行带 productTypeId 时必须是本厂启用中的产品 (限产品目录)。 */
