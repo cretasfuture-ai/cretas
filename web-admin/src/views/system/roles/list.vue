@@ -291,7 +291,7 @@ onMounted(async () => {
         <el-table-column prop="name" label="角色标识" width="180">
           <template #default="{ row }">
             <el-tooltip :content="`系统代码：${row.name}`" placement="top">
-              <span data-testid="role-ident">{{ ROLE_LABELS[row.name] || row.displayName || row.name }}</span>
+              <span data-testid="role-ident" :data-role-code="row.name">{{ ROLE_LABELS[row.name] || row.displayName || row.name }}</span>
             </el-tooltip>
           </template>
         </el-table-column>
