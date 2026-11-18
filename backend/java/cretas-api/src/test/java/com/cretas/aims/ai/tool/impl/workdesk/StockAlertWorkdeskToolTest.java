@@ -32,6 +32,12 @@ class StockAlertWorkdeskToolTest {
     @Mock
     private MaterialBatchService materialBatchService;
 
+    @Mock
+    private com.cretas.aims.repository.SupplierMaterialRepository supplierMaterialRepository;
+
+    @Mock
+    private com.cretas.aims.repository.SupplierRepository supplierRepository;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -105,6 +111,42 @@ class StockAlertWorkdeskToolTest {
         assertEquals(0, data.get("total"));
         String msg = (String) result.get("message");
         assertTrue(msg.contains("没有") || msg.contains("充足"));
+    }
+
+    @Test
+    @DisplayName("UT-SAW-05: 推荐供应商 — 有供应关系给供应商名, 没维护的如实说明 (采购数字专员 I)")
+    @SuppressWarnings("unchecked")
+    void recommendsMaintainedSupplierAndAdmitsWhenNone() throws Exception {
+        Map<String, Object> w1 = new HashMap<>();
+        w1.put("materialTypeId", "M1"); w1.put("materialName", "牛腱");
+        w1.put("currentStock", 20.0); w1.put("safetyStock", 100.0); w1.put("unit", "kg");
+        Map<String, Object> w2 = new HashMap<>(w1);
+        w2.put("materialTypeId", "M2"); w2.put("materialName", "花椒");
+        when(materialBatchService.getLowStockWarnings(anyString())).thenReturn(List.of(w1, w2));
+
+        com.cretas.aims.entity.SupplierMaterial link = new com.cretas.aims.entity.SupplierMaterial();
+        link.setSupplierId("S1");
+        link.setActive(true);
+        link.setPreferred(true);
+        link.setLeadTimeDays(3);
+        when(supplierMaterialRepository.findByFactoryIdAndMaterialTypeIdOrderByActiveDescPreferredDescCreatedAtDesc(FACTORY_ID, "M1"))
+                .thenReturn(List.of(link));
+        com.cretas.aims.entity.Supplier supplier = new com.cretas.aims.entity.Supplier();
+        supplier.setId("S1");
+        supplier.setName("甲供应商");
+        when(supplierRepository.findByIdAndFactoryId("S1", FACTORY_ID)).thenReturn(java.util.Optional.of(supplier));
+
+        Map<String, Object> result = invoke("doExecute", FACTORY_ID, Map.of(), ctx());
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        List<Map<String, Object>> warnings = (List<Map<String, Object>>) data.get("warnings");
+
+        Map<String, Object> beef = warnings.get(0);
+        assertEquals("甲供应商", ((Map<String, Object>) beef.get("recommendedSupplier")).get("name"));
+        assertTrue(beef.get("displayHint").toString().contains("推荐供应商 甲供应商"));
+        // 阴性对照: 没维护供应关系的原料不编供应商
+        Map<String, Object> pepper = warnings.get(1);
+        assertNull(pepper.get("recommendedSupplier"));
+        assertTrue(pepper.get("supplierNote").toString().contains("还没有维护供应商"));
     }
 
     // ── helpers ──

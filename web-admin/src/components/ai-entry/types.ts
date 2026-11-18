@@ -122,9 +122,9 @@ export const PURCHASE_ORDER_CONFIG: AiEntryConfig = {
   welcomeMessage: '你好！我可以帮你快速创建采购单。',
   scopeLabel: '仅限采购单相关操作',
   examples: [
-    '从XX供应商采购500kg大豆，下周三交货',
-    '紧急采购200kg小麦粉和100kg食用油，供应商YY',
-    '创建采购单：供应商ZZ，大豆300kg单价5元',
+    '从XX供应商采购500[单位][原料名]，下周三交货',
+    '紧急采购200[单位][原料A]和100[单位][原料B]，供应商YY',
+    '创建采购单：供应商ZZ，[原料名]300[单位]单价5元',
   ],
   tutorialSteps: [
     { title: '描述采购', description: '说出供应商、原料名称、数量等，支持同时添加多种原料', icon: '1' },
@@ -148,9 +148,9 @@ export const SALES_ORDER_CONFIG: AiEntryConfig = {
   welcomeMessage: '你好！我可以帮你快速创建销售单。',
   scopeLabel: '仅限销售单相关操作',
   examples: [
-    '给 [客户名] 创建1000kg [产品名] 订单，下周五交货',
-    '新建销售单：客户XX，[产品A]500kg，[产品B]200kg',
-    '创建订单给YY客户，[产品名]800kg单价12元，送到XX路',
+    '给 [客户名] 创建100[单位][产品名完整名称含规格]的订单，下周五交货',
+    '新建销售单：客户XX，[产品A]500[单位]，[产品B]200[单位]',
+    '创建订单给YY客户，[产品名]800[单位]单价12元，送到XX路',
   ],
   tutorialSteps: [
     { title: '描述订单', description: '说出客户名称、产品、数量等，支持同时添加多种产品', icon: '1' },
