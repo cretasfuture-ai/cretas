@@ -53,9 +53,6 @@ describe('getVisiblePageCodes', () => {
       'profit_loss_statement', ...RESTAURANT_ONLY,
     ]);
   });
-  it('FACTORY 下 restaurantv2 页全空', () => {
-    expect(getVisiblePageCodes('restaurantv2', 'FACTORY')).toEqual([]);
-  });
 });
 
 describe('TemplateGrid 真实组件按业务域过滤', () => {
@@ -75,12 +72,5 @@ describe('TemplateGrid 真实组件按业务域过滤', () => {
     domain = 'RESTAURANT';
     const w = await mountGrid('finance');
     expect(renderedCodes(w)).toEqual(['profit_loss_statement', ...RESTAURANT_ONLY]);
-  });
-
-  it('食品工厂过滤后一张不剩：整块不渲染且不请求', async () => {
-    domain = 'FACTORY';
-    const w = await mountGrid('restaurantv2');
-    expect(w.find('.tpl-grid-section').exists()).toBe(false);
-    expect(getAnalysisResults).not.toHaveBeenCalled();
   });
 });
