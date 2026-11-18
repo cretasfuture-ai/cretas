@@ -44,6 +44,9 @@ public class SupplierServiceImpl implements SupplierService {
     private com.cretas.aims.repository.inventory.PurchaseOrderItemRepository purchaseOrderItemRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.CounterpartyLedgerSummaryService ledgerSummaryService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.datacenter.OperationLogService operationLogService;
 
     /** Canvas V2: DB-driven validation rules */
@@ -399,11 +402,16 @@ public class SupplierServiceImpl implements SupplierService {
         statistics.put("creditLimit", supplier.getCreditLimit());
         statistics.put("currentBalance", supplier.getCurrentBalance());
         statistics.put("isActive", supplier.getIsActive());
-        // TODO: 添加订单统计、供货统计等信息
-        statistics.put("totalOrders", 0);
-        statistics.put("totalAmount", BigDecimal.ZERO);
-        statistics.put("averageDeliveryDays", 0);
-        statistics.put("onTimeDeliveryRate", 0.0);
+        if (ledgerSummaryService == null) {
+            throw new BusinessException(503, "账本汇总服务不可用");
+        }
+        Map<String, Object> ledger = ledgerSummaryService.supplierSummary(factoryId, supplierId);
+        statistics.putAll(ledger);
+        // 兼容旧键; 交期/准时率目前没有口径, 返回 null 而不是 0
+        statistics.put("totalOrders", ledger.get("committedOrderCount"));
+        statistics.put("totalAmount", ledger.get("purchaseAmount"));
+        statistics.put("averageDeliveryDays", null);
+        statistics.put("onTimeDeliveryRate", null);
         return statistics;
     }
     @Override

@@ -474,6 +474,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, request.getSupplierId(), item, itemDTO);
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
+            applyPriceTrace(item, itemDTO);
             item.setRemark(itemDTO.getRemark());
             item.setSpecification(itemDTO.getSpecification());
             item.setBoxQuantity(itemDTO.getBoxQuantity());
@@ -2023,6 +2024,7 @@ public class PurchaseServiceImpl implements PurchaseService {
             item.setQuantity(itemDTO.getQuantity());
             applySupplierPurchaseContract(factoryId, order.getSupplierId(), item, itemDTO);
             applyPurchaseTaxContract(item, itemDTO.getTaxRate());
+            applyPriceTrace(item, itemDTO);
             item.setRemark(itemDTO.getRemark());
             item.setContractNumber(blankToNull(itemDTO.getContractNumber()));
             items.add(item);
@@ -4563,6 +4565,18 @@ public class PurchaseServiceImpl implements PurchaseService {
     }
 
     /** 空串与全空白一律存 NULL —— 行级合同号为空要能回落到单头, 存 "" 会让回落判断失效。 */
+    /** G3: 单价来源与参考价留痕. 原样保存客户端算好的来源/参考价/偏离, 不在服务端猜. */
+    static void applyPriceTrace(PurchaseOrderItem item, CreatePurchaseOrderRequest.PurchaseOrderItemDTO dto) {
+        if (dto.getReferencePrice() != null && dto.getReferencePrice().signum() < 0) {
+            throw new BusinessException(400, "参考价不能为负数");
+        }
+        item.setPriceSource(blankToNull(dto.getPriceSource()));
+        item.setReferencePrice(dto.getReferencePrice());
+        item.setReferencePriceListId(blankToNull(dto.getReferencePriceListId()));
+        item.setReferencePriceListName(blankToNull(dto.getReferencePriceListName()));
+        item.setPriceDeviationPct(dto.getPriceDeviationPct());
+    }
+
     private static String blankToNull(String value) {
         if (value == null) return null;
         String trimmed = value.trim();

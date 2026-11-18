@@ -4,6 +4,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.inventory.CreatePriceListRequest;
+import com.cretas.aims.dto.inventory.UpdatePriceListRequest;
 import com.cretas.aims.entity.inventory.PriceList;
 import com.cretas.aims.entity.inventory.PriceListItem;
 import com.cretas.aims.exception.ResourceNotFoundException;
@@ -200,6 +201,109 @@ public class PriceListController {
         priceListRepository.delete(priceList);
         log.info("删除价格表: priceListId={}", priceListId);
         return ApiResponse.success("价格表删除成功", null);
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PutMapping("/{priceListId}")
+    @Operation(summary = "更新价格表表头(名称/生效期/备注)")
+    public ApiResponse<PriceList> updatePriceList(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @Valid @RequestBody UpdatePriceListRequest request) {
+        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
+        if (request.getEffectiveTo() != null && request.getEffectiveTo().isBefore(request.getEffectiveFrom())) {
+            throw new com.cretas.aims.exception.BusinessException(400, "失效日期不能早于生效日期");
+        }
+        priceList.setName(request.getName());
+        priceList.setEffectiveFrom(request.getEffectiveFrom());
+        priceList.setEffectiveTo(request.getEffectiveTo());
+        priceList.setRemark(request.getRemark());
+        priceList = priceListRepository.save(priceList);
+        log.info("更新价格表: priceListId={}", priceListId);
+        return ApiResponse.success("价格表更新成功", priceList);
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PatchMapping("/{priceListId}/active")
+    @Operation(summary = "启用/停用价格表")
+    public ApiResponse<PriceList> setActive(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @RequestBody Map<String, Boolean> body) {
+        Boolean active = body == null ? null : body.get("active");
+        if (active == null) {
+            throw new com.cretas.aims.exception.BusinessException(400, "active 不能为空");
+        }
+        PriceList priceList = requireFactoryPriceList(factoryId, priceListId);
+        priceList.setIsActive(active);
+        priceList = priceListRepository.save(priceList);
+        log.info("价格表启停: priceListId={}, active={}", priceListId, active);
+        return ApiResponse.success(active ? "价格表已启用" : "价格表已停用", priceList);
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PostMapping("/{priceListId}/items")
+    @Operation(summary = "新增价格条目")
+    public ApiResponse<PriceListItem> addItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
+        requireFactoryPriceList(factoryId, priceListId);
+        PriceListItem item = new PriceListItem();
+        item.setPriceListId(priceListId);
+        applyItem(item, dto);
+        return ApiResponse.success("价格条目已新增", priceListItemRepository.save(item));
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @PutMapping("/{priceListId}/items/{itemId}")
+    @Operation(summary = "修改价格条目")
+    public ApiResponse<PriceListItem> updateItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @PathVariable Long itemId,
+            @Valid @RequestBody CreatePriceListRequest.PriceItemDTO dto) {
+        requireFactoryPriceList(factoryId, priceListId);
+        PriceListItem item = requireItem(priceListId, itemId);
+        applyItem(item, dto);
+        return ApiResponse.success("价格条目已更新", priceListItemRepository.save(item));
+    }
+
+    @RequirePermission({"sales:read_write", "finance:read_write", "procurement:read_write"})
+    @DeleteMapping("/{priceListId}/items/{itemId}")
+    @Operation(summary = "删除价格条目")
+    public ApiResponse<Void> deleteItem(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String priceListId,
+            @PathVariable Long itemId) {
+        requireFactoryPriceList(factoryId, priceListId);
+        priceListItemRepository.delete(requireItem(priceListId, itemId));
+        return ApiResponse.success("价格条目已删除", null);
+    }
+
+    private PriceListItem requireItem(String priceListId, Long itemId) {
+        return priceListItemRepository.findById(itemId)
+                .filter(i -> priceListId.equals(i.getPriceListId()))
+                .orElseThrow(() -> new ResourceNotFoundException("价格条目不存在"));
+    }
+
+    private void applyItem(PriceListItem item, CreatePriceListRequest.PriceItemDTO dto) {
+        if (dto.getStandardPrice().signum() < 0
+                || (dto.getMinPrice() != null && dto.getMinPrice().signum() < 0)
+                || (dto.getMaxPrice() != null && dto.getMaxPrice().signum() < 0)) {
+            throw new com.cretas.aims.exception.BusinessException(400, "价格不能为负数");
+        }
+        if (dto.getMinPrice() != null && dto.getMaxPrice() != null && dto.getMinPrice().compareTo(dto.getMaxPrice()) > 0) {
+            throw new com.cretas.aims.exception.BusinessException(400, "最低限价不能高于最高限价");
+        }
+        item.setMaterialTypeId(dto.getMaterialTypeId());
+        item.setProductTypeId(dto.getProductTypeId());
+        item.setItemName(dto.getItemName());
+        item.setUnit(dto.getUnit());
+        item.setStandardPrice(dto.getStandardPrice());
+        item.setMinPrice(dto.getMinPrice());
+        item.setMaxPrice(dto.getMaxPrice());
+        item.setRemark(dto.getRemark());
     }
 
     private PriceList requireFactoryPriceList(String factoryId, String priceListId) {
