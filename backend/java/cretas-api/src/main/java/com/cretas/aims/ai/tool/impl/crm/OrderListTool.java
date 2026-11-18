@@ -173,13 +173,9 @@ public class OrderListTool extends AbstractBusinessTool {
      * 以前把 JPA 实体直接放进 data, 序列化到 items 时 LazyInitializationException = 用户看到「结果处理失败」。
      * 回复文字 (ResultFormatterServiceImpl.formatOrderListBody) 只用 orderNumber / customerName / totalAmount / status。
      */
-    static List<Map<String, Object>> toSummaries(List<SalesOrder> orders) {
-        List<Map<String, Object>> rows = new ArrayList<>();
-        if (orders == null) {
-            return rows;
-        }
-        for (SalesOrder order : orders) {
-            Map<String, Object> row = new LinkedHashMap<>();
+    /** 单张订单的标量摘要 (不碰 LAZY 集合); OrderQueryTool / OrderTodayTool 共用。 */
+    static Map<String, Object> toSummary(SalesOrder order) {
+        Map<String, Object> row = new LinkedHashMap<>();
             row.put("id", order.getId());
             row.put("orderNumber", order.getOrderNumber());
             row.put("customerId", order.getCustomerId());
@@ -192,7 +188,16 @@ public class OrderListTool extends AbstractBusinessTool {
             row.put("taxAmount", order.getTaxAmount());
             row.put("salesperson", order.getSalesperson());
             row.put("remark", order.getRemark());
-            rows.add(row);
+        return row;
+    }
+
+    static List<Map<String, Object>> toSummaries(List<SalesOrder> orders) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (orders == null) {
+            return rows;
+        }
+        for (SalesOrder order : orders) {
+            rows.add(toSummary(order));
         }
         return rows;
     }
