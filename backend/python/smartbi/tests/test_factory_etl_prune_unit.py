@@ -86,7 +86,7 @@ def test_no_fact_rows_means_no_source_query_and_no_delete():
     out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
     assert out == {"fact": 0, "agg": 0}
     assert cretas.calls == []
-    assert not any("DELETE" in s for s, _ in smartbi.calls)
+    assert not any("DELETE FROM fact_production_batch" in s for s, _ in smartbi.calls)
 
 
 def test_nothing_soft_deleted_at_source_means_no_delete():
@@ -94,7 +94,7 @@ def test_nothing_soft_deleted_at_source_means_no_delete():
     cretas = _Conn([("FROM production_batches", [])])
     out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
     assert out == {"fact": 0, "agg": 0}
-    assert not any("DELETE" in s for s, _ in smartbi.calls)
+    assert not any("DELETE FROM fact_production_batch" in s for s, _ in smartbi.calls)
 
 
 def test_source_query_is_factory_scoped_and_only_asks_for_soft_deleted():
@@ -169,3 +169,14 @@ def test_orchestrator_prune_runs_before_gold_and_counts_reported(monkeypatch):
     stats = _run(etl.run_factory_etl(None, None, "F006"))
     assert order == ["silver", "prune", "gold"]
     assert (stats.silver_pruned, stats.gold_pruned) == (3, 2)
+
+
+def test_orphan_rollup_sweep_is_factory_scoped_and_sets_tenant_first():
+    """孤儿日汇总扫描：语句里必须按 factory_id 限定（RLS 之外的第二道保险，真库测试里 RLS 会掩盖这个漏洞），且先设租户。"""
+    smartbi = _Conn([])
+    n = _run(etl._sweep_orphan_rollups(_Pool(smartbi), "F006"))
+    assert n == 0
+    assert smartbi.calls[0][1] == ("F006",) and "set_config" in smartbi.calls[0][0]
+    sql, args = smartbi.calls[1]
+    assert "a.factory_id = $1::varchar" in sql and args == ("F006",)
+    assert "product_type_id IS NULL" in sql

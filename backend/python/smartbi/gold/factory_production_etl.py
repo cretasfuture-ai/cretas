@@ -281,7 +281,7 @@ async def sync_fact_production_batch(
 
 # ── Stage 1a: Silver/Gold 清理 — 源头已软删批次 ───────────────────────────────
 
-async def prune_soft_deleted_fact_batches(
+async def _prune_facts_and_product_agg(
     cretas_pool: asyncpg.Pool,
     smartbi_pool: asyncpg.Pool,
     factory_id: str,
@@ -297,10 +297,9 @@ async def prune_soft_deleted_fact_batches(
       状态变了但没删的批次、源头已不存在的行都不动。
     - 全程带 factory_id：fact 读写按 factory_id + RLS 租户；源头查询按 factory_id，
       别的工厂的批次即使 id 相同也不会被命中。
-    - agg 只删「本次被清掉的 fact 行所在的 (日期, 产品)」且已没有任何 fact 行的那些行
-      (产品行) 以及这些日期上已没有任何 fact 行的全产品日汇总行；
-      其余 agg 行（含 seed 脚本直接写入的演示数据）不碰。仍有活 fact 行的 (日期, 产品)
-      交给随后的 materialize_factory_gold 重算。
+    - 产品行 agg 只删「本次被清掉的 fact 行所在的 (日期, 产品)」且已没有任何 fact 行的那些行；
+      全产品日汇总行由 _sweep_orphan_rollups 处理。其余 agg 行（含 seed 脚本直接写入的演示数据）
+      不碰。仍有活 fact 行的 (日期, 产品) / 日期交给随后的 materialize_factory_gold 重算。
     """
     stats = {"fact": 0, "agg": 0}
 
@@ -347,7 +346,6 @@ async def prune_soft_deleted_fact_batches(
             dated = [(r["stat_date"], r["product_type_id"]) for r in deleted if r["stat_date"] is not None]
             pair_dates = [d for d, p in dated if p is not None]
             pair_products = [p for d, p in dated if p is not None]
-            all_dates = sorted({d for d, _ in dated})
 
             if pair_dates:
                 r1 = await dst.execute(
@@ -366,26 +364,57 @@ async def prune_soft_deleted_fact_batches(
                     factory_id, pair_dates, pair_products,
                 )
                 stats["agg"] += int(r1.split()[-1]) if r1 else 0
-            if all_dates:
-                r2 = await dst.execute(
-                    """
-                    DELETE FROM agg_factory_batch_daily a
-                    WHERE a.factory_id = $1::varchar
-                      AND a.product_type_id IS NULL
-                      AND a.stat_date = ANY($2::date[])
-                      AND NOT EXISTS (
-                            SELECT 1 FROM fact_production_batch f
-                            WHERE f.factory_id = a.factory_id
-                              AND f.stat_date = a.stat_date)
-                    """,
-                    factory_id, all_dates,
-                )
-                stats["agg"] += int(r2.split()[-1]) if r2 else 0
 
     logger.info(
         "[factory-etl] prune: removed fact=%d agg=%d for factory=%s (source batches soft-deleted)",
         stats["fact"], stats["agg"], factory_id,
     )
+    return stats
+
+
+async def _sweep_orphan_rollups(smartbi_pool: asyncpg.Pool, factory_id: str) -> int:
+    """删掉「全产品日汇总」孤儿行：这一天没有任何 fact 行，且这一天也没有任何分产品 agg 行。
+
+    为什么要单独扫 (2026-11-18 q49 补充): 全产品汇总行 (product_type_id IS NULL) 只有该日期上
+    还有 fact 行时才会被 materialize_factory_gold 重算；一旦某天的 fact 行被删光（不管是
+    本模块清的还是人工删的），这行旧汇总就永远留着 —— 成本页「有出成率批次」因此显示 12/21
+    （21 = 13 个现存批次 + 8 个已删批次），正确是 12/13。
+
+    保守条件：这一天还有任何分产品 agg 行就不动（seed 脚本直写的演示 agg 是成套的产品行 + 汇总行，
+    不会因为没有 fact 行被误删）。仍有 fact 行的日期交给 materialize_factory_gold 用实际 fact 行数重算。
+    """
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            res = await dst.execute(
+                """
+                DELETE FROM agg_factory_batch_daily a
+                WHERE a.factory_id = $1::varchar
+                  AND a.product_type_id IS NULL
+                  AND NOT EXISTS (
+                        SELECT 1 FROM fact_production_batch f
+                        WHERE f.factory_id = a.factory_id AND f.stat_date = a.stat_date)
+                  AND NOT EXISTS (
+                        SELECT 1 FROM agg_factory_batch_daily p
+                        WHERE p.factory_id = a.factory_id AND p.stat_date = a.stat_date
+                          AND p.product_type_id IS NOT NULL)
+                """,
+                factory_id,
+            )
+    return int(res.split()[-1]) if res else 0
+
+
+async def prune_soft_deleted_fact_batches(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_id: str,
+) -> Dict[str, int]:
+    """清理源头已软删批次留在 Silver / Gold 里的行（见 _prune_facts_and_product_agg 与 _sweep_orphan_rollups）。
+
+    返回 {"fact": 删掉的 fact 行数, "agg": 删掉的 agg 行数（分产品 + 全产品日汇总）}。
+    """
+    stats = await _prune_facts_and_product_agg(cretas_pool, smartbi_pool, factory_id)
+    stats["agg"] += await _sweep_orphan_rollups(smartbi_pool, factory_id)
     return stats
 
 

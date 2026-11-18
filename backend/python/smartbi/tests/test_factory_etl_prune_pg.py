@@ -244,3 +244,49 @@ async def test_run_factory_etl_prunes_before_gold_and_reports(pool):
     f, _a, keys = await _counts(pool, "F006")
     assert f == 1  # 只剩活批次（本轮 upsert 进来的 1）
     assert [k for k in keys if k[1] == "P_DEAD"] == []
+
+
+async def _fact_count_by_day(pool, factory):
+    async with pool.acquire() as c:
+        async with c.transaction():
+            await c.execute("SELECT set_config('app.factory_id', $1, false)", factory)
+            rows = await c.fetch(
+                "SELECT stat_date, count(*) n FROM fact_production_batch WHERE factory_id=$1 GROUP BY 1", factory)
+    return {r["stat_date"]: r["n"] for r in rows}
+
+
+async def _assert_rollup_equals_fact_count(pool, factory):
+    """不变量（q49 补充）：全产品日汇总 batch_count == 该日 fact 行数；没有 fact 的日子不该有汇总行。"""
+    _, _, keys = await _counts(pool, factory)
+    rollup = {k[0]: k[2] for k in keys if k[1] is None}
+    facts = await _fact_count_by_day(pool, factory)
+    assert rollup == facts, f"rollup={rollup} facts={facts}"
+    assert sum(rollup.values()) == sum(facts.values())
+
+
+async def test_rollup_batch_count_equals_fact_rows_after_full_cycle(pool):
+    await _world(pool)
+    await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    await materialize_factory_gold(pool, "F006")
+    await _assert_rollup_equals_fact_count(pool, "F006")
+
+
+async def test_stale_rollups_left_by_manual_fact_delete_are_cleaned(pool):
+    """prod 的真实现状：fact 行和分产品 agg 行早被人工删了，全产品汇总行没跟着删 → 成本页显示 12/21（应 12/13）。
+    D1/D3：没有任何 fact、没有产品行的孤儿汇总（应删）；D2：还有 1 个活 fact，但汇总里仍记着 9（应重算为 1）。"""
+    d3 = date(2026, 10, 29)
+    await _seed_src(pool, "F006", 301, False)
+    await _seed_fact(pool, "F006", 301, "P_LIVE", D2)
+    async with pool.acquire() as c:
+        async with c.transaction():
+            await c.execute("SELECT set_config('app.factory_id', 'F006', false)")
+            await c.execute(
+                """INSERT INTO agg_factory_batch_daily (factory_id, stat_date, product_type_id, batch_count)
+                   VALUES ('F006', $1, NULL, 5), ('F006', $2, NULL, 9), ('F006', $3, NULL, 7)""", D1, D2, d3)
+    stats = await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    await materialize_factory_gold(pool, "F006")
+    assert stats["fact"] == 0 and stats["agg"] == 2  # D1、D3 两条孤儿汇总
+    _, _, keys = await _counts(pool, "F006")
+    rollup = {k[0]: k[2] for k in keys if k[1] is None}
+    assert rollup == {D2: 1}
+    await _assert_rollup_equals_fact_count(pool, "F006")
