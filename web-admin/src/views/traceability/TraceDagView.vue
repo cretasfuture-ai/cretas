@@ -226,6 +226,7 @@ const STATE_CLASS: Record<NodeState, string> = {
         :nodes-draggable="false"
         :nodes-connectable="false"
         :elements-selectable="false"
+        @init="applyViewport"
         @pane-click="selectedId = null"
       >
         <template #node-trace="{ id, data }">
