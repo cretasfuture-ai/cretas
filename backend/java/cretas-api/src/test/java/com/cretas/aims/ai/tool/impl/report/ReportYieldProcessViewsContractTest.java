@@ -2,6 +2,8 @@ package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
+import com.cretas.aims.entity.ProductionBatch;
+import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
@@ -27,7 +29,9 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,6 +44,8 @@ class ReportYieldProcessViewsContractTest {
     private final ObjectMapper mapper = new ObjectMapper();
     private final List<Map<String, Object>> balanceRows = new ArrayList<>();
     private ReportBatchYieldRankTool tool;
+    private YieldAnalysisService yield;
+    private ProductionBatchRepository batchRepo;
 
     private static ProcessYieldAggDTO agg(String name, String rate, int batches) {
         BigDecimal r = new BigDecimal(rate);
@@ -78,7 +84,7 @@ class ReportYieldProcessViewsContractTest {
         when(th.forFactory(anyString())).thenReturn(MaterialBalanceCalculator.Thresholds.DEFAULT);
         MaterialBalanceService balance = new MaterialBalanceService(reportRepo, excl, th, mapper);
 
-        YieldAnalysisService yield = mock(YieldAnalysisService.class);
+        yield = mock(YieldAnalysisService.class);
         when(yield.aggregateByProcess(eq("F1"), any(), any(), any())).thenAnswer(inv -> {
             LocalDate start = inv.getArgument(1);
             if (start.equals(LocalDate.of(2026, 11, 1)) || start.equals(LocalDate.of(2026, 10, 20))) {
@@ -93,7 +99,7 @@ class ReportYieldProcessViewsContractTest {
             return List.of(agg("清洗", "95.0", 40), agg("熟制杀菌", "90.0", 40), agg("包装", "99.0", 40));
         });
 
-        ProductionBatchRepository batchRepo = mock(ProductionBatchRepository.class);
+        batchRepo = mock(ProductionBatchRepository.class);
         tool = new ReportBatchYieldRankTool() {
             @Override
             protected LocalDate today() {
@@ -201,5 +207,86 @@ class ReportYieldProcessViewsContractTest {
         JsonNode data = run(q("最近有哪些批次出成率异常")).get("data").get("data");
         assertTrue(data.has("completedBatchCount"), data.toString());
         assertFalse(data.has("view"), data.toString());
+    }
+
+    private static ProductionBatch batch(String product, String typeId) {
+        ProductionBatch b = new ProductionBatch();
+        b.setProductName(product);
+        b.setProductTypeId(typeId);
+        b.setStatus(ProductionBatchStatus.COMPLETED);
+        return b;
+    }
+
+    @Test
+    void productName_lossAnomalyOnlyContainsThatProductsBatches() throws Exception {
+        when(batchRepo.findBatchesInDateRange(eq("F1"), any(), any())).thenReturn(List.of(batch("酱牛肉", "PT-BEEF"), batch("酱鸭", "PT-DUCK")));
+        JsonNode data = run("{\"userInput\":\"酱牛肉最近有哪些损耗异常\",\"productName\":\"酱牛肉\"}").get("data").get("data");
+        List<String> batches = new ArrayList<>();
+        data.get("rows").forEach(n -> {
+            batches.add(n.get("batchNumber").asText());
+            assertEquals("酱牛肉", n.get("productName").asText());
+        });
+        assertEquals(List.of("B1"), batches);
+        assertEquals(1, data.get("abnormalCount").asInt());
+        // 对照: 不带产品名仍是全厂 3 条
+        assertEquals(3, run(q("最近有哪些损耗异常")).get("data").get("data").get("abnormalCount").asInt());
+    }
+
+    @Test
+    void productName_processCompareFiltersYieldAggregateByProductTypeAndBatchesByName() throws Exception {
+        when(batchRepo.findBatchesInDateRange(eq("F1"), any(), any())).thenReturn(List.of(batch("酱牛肉", "PT-BEEF"), batch("酱鸭", "PT-DUCK")));
+        JsonNode r = run("{\"userInput\":\"酱牛肉这个月出成率为什么掉了\",\"productName\":\"酱牛肉\"}");
+        JsonNode data = r.get("data").get("data");
+        assertEquals("process_compare", data.get("view").asText());
+        verify(yield, atLeastOnce()).aggregateByProcess(eq("F1"), any(), any(), eq("PT-BEEF"));
+        assertTrue(data.get("productFilteredYield").asBoolean());
+        List<String> batches = new ArrayList<>();
+        data.get("biggestDropBatches").forEach(n -> batches.add(n.get("batchNumber").asText()));
+        assertEquals(List.of("B1"), batches, "酱鸭的 B4 不得出现");
+        assertFalse(r.get("data").get("message").asText().contains("未按"), r.toString());
+    }
+
+    @Test
+    void productName_mappingToSeveralProductTypes_saysItWasNotFilteredInsteadOfSilentlyAnsweringWholeFactory() throws Exception {
+        when(batchRepo.findBatchesInDateRange(eq("F1"), any(), any())).thenReturn(List.of(batch("酱牛肉A", "PT-1"), batch("酱牛肉B", "PT-2")));
+        JsonNode r = run("{\"userInput\":\"酱牛肉这个月出成率为什么掉了\",\"productName\":\"酱牛肉\"}");
+        assertFalse(r.get("data").get("data").get("productFilteredYield").asBoolean());
+        assertTrue(r.get("data").get("message").asText().contains("未按「酱牛肉」筛选"), r.toString());
+    }
+
+    @Test
+    void productName_withoutAnyBatch_saysSoAndReturnsNoRows() throws Exception {
+        JsonNode r = run("{\"userInput\":\"酱羊肉这个月出成率为什么掉了\",\"productName\":\"酱羊肉\"}");
+        assertEquals(0, r.get("data").get("data").get("rows").size());
+        assertTrue(r.get("data").get("message").asText().contains("没有找到名称含「酱羊肉」的批次"), r.toString());
+    }
+
+    @Test
+    void overlappingProcessNames_exactMatchWinsAndAnAbnormalBatchIsCountedOnce() throws Exception {
+        when(yield.aggregateByProcess(eq("F1"), any(), any(), any()))
+                .thenReturn(List.of(agg("杀菌", "85.0", 3), agg("熟制杀菌", "80.0", 12)));
+        balanceRow("B5", "酱牛肉", "杀菌", 3, "100", "80");   // 偏差 20% 红, 只属于「杀菌」
+        JsonNode rows = run("{\"view\":\"process\"}").get("data").get("data").get("rows");
+        int total = 0;
+        for (JsonNode row : rows) {
+            int n = row.get("abnormalBatchCount").asInt();
+            total += n;
+            assertEquals("杀菌".equals(row.get("processName").asText()) ? 1 : 2, n, row.toString());
+        }
+        assertEquals(3, total, "B1/B4/B5 各记一次");
+        // 说「杀菌」且有同名工序: 只认精确的那一行
+        JsonNode only = run("{\"processName\":\"杀菌\"}").get("data").get("data").get("rows");
+        assertEquals(1, only.size());
+        assertEquals("杀菌", only.get(0).get("processName").asText());
+    }
+
+    @Test
+    void yieldAndLossRankQuestion_staysBatchRanking_notLossAnomaly() throws Exception {
+        when(batchRepo.findBatchesInDateRange(eq("F1"), any(), any())).thenReturn(List.of());
+        JsonNode data = run(q("出成率和损耗率最低的批次")).get("data").get("data");
+        assertTrue(data.has("completedBatchCount"), data.toString());
+        assertFalse(data.has("view"), data.toString());
+        // 阴性对照: 带「异常」仍是损耗异常视图
+        assertEquals("loss_anomaly", run(q("损耗异常的批次")).get("data").get("data").get("view").asText());
     }
 }

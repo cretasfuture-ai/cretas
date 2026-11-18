@@ -52,16 +52,45 @@ final class ProcessYieldViews {
         }
     }
 
+    /** 问话里的产品条件: 物料平衡按产品名筛; 工序出成率聚合服务只认产品类型 ID, 能唯一对应才筛, 否则如实说明未筛。 */
+    record ProductScope(String keyword, String typeId, boolean none) {
+        static final ProductScope ALL = new ProductScope(null, null, false);
+
+        boolean active() { return keyword != null; }
+
+        /** 出成率聚合没能按产品筛 (对应多个产品类型): 要在回复里明说。 */
+        boolean yieldUnfiltered() { return keyword != null && typeId == null && !none; }
+
+        String note() {
+            if (none) return "\n近一年没有找到名称含「" + keyword + "」的批次，没有可汇总的数据。";
+            return yieldUnfiltered()
+                    ? "\n注意：「" + keyword + "」对应多个产品类型，工序出成率汇总未按「" + keyword + "」筛选（异常批次已按产品名筛选）。"
+                    : "";
+        }
+
+        boolean productMatches(String productName) {
+            return keyword == null || (productName != null
+                    && productName.toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT)));
+        }
+    }
+
+    static List<ProcessYieldAggDTO> aggregate(YieldAnalysisService yield, String factoryId, LocalDate s, LocalDate e,
+                                              ProductScope scope) {
+        if (scope.none()) return new ArrayList<>();
+        return yield.aggregateByProcess(factoryId, s, e, scope.typeId());
+    }
+
     record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows) {}
 
-    static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end) {
+    static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
+                           ProductScope scope) {
         MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end);
         List<Abnormal> out = new ArrayList<>();
         int incomparable = 0;
         for (MaterialBalanceTableDTO.PlanBlock block : bb.blocks()) {
             String batch = block.getBatchNumbers() == null || block.getBatchNumbers().isEmpty()
                     ? null : block.getBatchNumbers().get(0);
-            if (batch == null || block.getRows() == null) continue;
+            if (batch == null || block.getRows() == null || !scope.productMatches(block.getProductName())) continue;
             for (MaterialBalanceTableDTO.Row r : block.getRows()) {
                 if ("WARN".equals(r.getLevel()) || "RED".equals(r.getLevel())) {
                     out.add(new Abnormal(batch, block.getProductName(), r.getProcessName(), r.getLevel(),
@@ -83,6 +112,40 @@ final class ProcessYieldViews {
         return a.contains(k) || (a.length() >= 2 && k.contains(a));
     }
 
+    /**
+     * 异常批次的工序 (abnormalProcess) 算不算 rowProcess 这一行的: 精确同名先算; 有别的已知工序名与它精确同名时,
+     * 不再模糊归给 rowProcess (「杀菌」与「熟制杀菌」互相包含, 不能让同一条异常批次记两次); 都没精确命中才模糊。
+     */
+    static boolean attributes(String abnormalProcess, String rowProcess, java.util.Collection<String> knownNames) {
+        if (abnormalProcess == null || rowProcess == null) return false;
+        if (normalize(abnormalProcess).equals(normalize(rowProcess))) return true;
+        for (String n : knownNames) {
+            if (n != null && normalize(n).equals(normalize(abnormalProcess))) return false;
+        }
+        return nameMatches(abnormalProcess, rowProcess);
+    }
+
+    private static String normalize(String s) {
+        return s.replaceAll("\\s", "").toLowerCase(Locale.ROOT);
+    }
+
+    /** 用户给的工序关键词: 有已知工序名精确等于它就只认精确的, 否则模糊。 */
+    static boolean keywordMatches(String processName, String keyword, java.util.Collection<String> knownNames) {
+        for (String n : knownNames) {
+            if (n != null && normalize(n).equals(normalize(keyword))) {
+                return processName != null && normalize(processName).equals(normalize(keyword));
+            }
+        }
+        return nameMatches(processName, keyword);
+    }
+
+    private static List<String> names(List<ProcessYieldAggDTO> aggs, Balance bal) {
+        List<String> out = new ArrayList<>();
+        if (aggs != null) for (ProcessYieldAggDTO a : aggs) out.add(a.getProcessName());
+        for (Abnormal a : bal.abnormal()) out.add(a.processName());
+        return out;
+    }
+
     static BigDecimal pp(BigDecimal a, BigDecimal b) {
         return a == null || b == null ? null : a.subtract(b).setScale(1, RoundingMode.HALF_UP);
     }
@@ -93,11 +156,13 @@ final class ProcessYieldViews {
 
     // ---------------- 损耗异常 ----------------
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
-                                           LocalDate end, int limit, String processKeyword, String[] textOut) {
-        Balance b = balance(service, factoryId, start, end);
+                                           LocalDate end, int limit, String processKeyword, ProductScope scope,
+                                           String[] textOut) {
+        Balance b = balance(service, factoryId, start, end, scope);
+        List<String> known = names(null, b);
         List<Abnormal> all = new ArrayList<>();
         for (Abnormal a : b.abnormal()) {
-            if (processKeyword == null || nameMatches(a.processName(), processKeyword)) all.add(a);
+            if (processKeyword == null || keywordMatches(a.processName(), processKeyword, known)) all.add(a);
         }
         List<Abnormal> shown = all.size() > limit ? all.subList(0, limit) : all;
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -105,6 +170,7 @@ final class ProcessYieldViews {
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("view", "loss_anomaly");
+        data.put("productKeyword", scope.keyword());
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
         data.put("abnormalCount", all.size());
         data.put("incomparableCount", b.incomparableRows());
@@ -112,7 +178,8 @@ final class ProcessYieldViews {
         data.put("basis", BASIS);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(start).append(" 至 ").append(end).append(processKeyword != null ? "「" + processKeyword + "」" : "");
+        sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
+                .append(processKeyword != null ? "「" + processKeyword + "」" : "");
         if (all.isEmpty()) {
             sb.append(" 没有损耗异常的批次工序（未解释差额都在 ").append(pct(b.warnPct())).append(" 以内）。");
         } else {
@@ -138,13 +205,17 @@ final class ProcessYieldViews {
 
     // ---------------- 某工序近期出成率 ----------------
     static Map<String, Object> processTrend(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
-                                            LocalDate start, LocalDate end, String processKeyword, String[] textOut) {
+                                            LocalDate start, LocalDate end, String processKeyword, ProductScope scope,
+                                            String[] textOut) {
         long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
         LocalDate prevEnd = start.minusDays(1);
         LocalDate prevStart = prevEnd.minusDays(days - 1);
-        List<ProcessYieldAggDTO> cur = filter(yield.aggregateByProcess(factoryId, start, end, null), processKeyword);
-        List<ProcessYieldAggDTO> prev = yield.aggregateByProcess(factoryId, prevStart, prevEnd, null);
-        Balance bal = balance(balance, factoryId, start, end);
+        List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
+        List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope);
+        List<String> known = names(curAll, bal);
+        known.addAll(names(prev, bal));
+        List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
 
         List<Map<String, Object>> rows = new ArrayList<>();
         for (ProcessYieldAggDTO c : cur) {
@@ -152,7 +223,7 @@ final class ProcessYieldViews {
             Map<String, Object> row = processRow(c);
             row.put("previousAvgYieldRate", p == null ? null : p.getConversionRate());
             row.put("yieldRateChange", p == null ? null : pp(c.getConversionRate(), p.getConversionRate()));
-            long n = bal.abnormal().stream().filter(a -> nameMatches(a.processName(), c.getProcessName())).count();
+            long n = bal.abnormal().stream().filter(a -> attributes(a.processName(), c.getProcessName(), known)).count();
             row.put("abnormalBatchCount", n);
             rows.add(row);
         }
@@ -161,11 +232,14 @@ final class ProcessYieldViews {
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
         data.put("comparedWith", Map.of("startDate", prevStart.toString(), "endDate", prevEnd.toString()));
         data.put("processKeyword", processKeyword);
+        data.put("productKeyword", scope.keyword());
+        data.put("productFilteredYield", scope.active() && !scope.yieldUnfiltered());
         data.put("rows", rows);
         data.put("basis", BASIS);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(start).append(" 至 ").append(end).append(processKeyword != null ? "「" + processKeyword + "」" : "");
+        sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
+                .append(processKeyword != null ? "「" + processKeyword + "」" : "");
         if (rows.isEmpty()) {
             sb.append(" 没有工序出成率记录（需要该期间有按工序的报工投入和产出）。");
         } else {
@@ -185,8 +259,9 @@ final class ProcessYieldViews {
                 sb.append("，覆盖 ").append(r.get("batchCount")).append(" 个批次，异常批次 ")
                         .append(r.get("abnormalBatchCount")).append(" 个");
             }
-            appendAbnormalLines(sb, bal, rows.stream().map(r -> String.valueOf(r.get("processName"))).toList());
+            appendAbnormalLines(sb, bal, rows.stream().map(r -> String.valueOf(r.get("processName"))).toList(), known);
         }
+        sb.append(scope.note());
         sb.append("\n").append(BASIS);
         textOut[0] = sb.toString();
         return data;
@@ -195,9 +270,13 @@ final class ProcessYieldViews {
     // ---------------- 本月 vs 上月: 掉在哪道工序 ----------------
     static Map<String, Object> processCompare(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
                                               LocalDate start, LocalDate end, LocalDate prevStart, LocalDate prevEnd,
-                                              String processKeyword, String[] textOut) {
-        List<ProcessYieldAggDTO> cur = filter(yield.aggregateByProcess(factoryId, start, end, null), processKeyword);
-        List<ProcessYieldAggDTO> prev = yield.aggregateByProcess(factoryId, prevStart, prevEnd, null);
+                                              String processKeyword, ProductScope scope, String[] textOut) {
+        List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
+        List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope);
+        List<String> known = names(curAll, bal);
+        known.addAll(names(prev, bal));
+        List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
         List<Map<String, Object>> rows = new ArrayList<>();
         int notComparable = 0;
         for (ProcessYieldAggDTO c : cur) {
@@ -217,16 +296,17 @@ final class ProcessYieldViews {
                 && ((BigDecimal) rows.get(0).get("yieldRateChange")).signum() < 0) {
             worst = rows.get(0);
         }
-        Balance bal = balance(balance, factoryId, start, end);
         List<Map<String, Object>> worstBatches = new ArrayList<>();
         if (worst != null) {
             String wn = String.valueOf(worst.get("processName"));
             for (Abnormal a : bal.abnormal()) {
-                if (nameMatches(a.processName(), wn)) worstBatches.add(a.toMap(bal.warnPct()));
+                if (attributes(a.processName(), wn, known)) worstBatches.add(a.toMap(bal.warnPct()));
             }
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("view", "process_compare");
+        data.put("productKeyword", scope.keyword());
+        data.put("productFilteredYield", scope.active() && !scope.yieldUnfiltered());
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
         data.put("comparedWith", Map.of("startDate", prevStart.toString(), "endDate", prevEnd.toString()));
         data.put("rows", rows);
@@ -236,7 +316,7 @@ final class ProcessYieldViews {
         data.put("basis", BASIS);
 
         StringBuilder sb = new StringBuilder();
-        sb.append("本期 ").append(start).append(" 至 ").append(end).append(" 对比上期 ").append(prevStart).append(" 至 ")
+        sb.append(scope.active() ? "「" + scope.keyword() + "」" : "").append("本期 ").append(start).append(" 至 ").append(end).append(" 对比上期 ").append(prevStart).append(" 至 ")
                 .append(prevEnd).append(" 的工序出成率：");
         if (rows.isEmpty()) {
             sb.append("\n本期没有工序出成率记录，无法比较。");
@@ -267,16 +347,18 @@ final class ProcessYieldViews {
                 }
             }
         }
+        sb.append(scope.note());
         sb.append("\n").append(BASIS);
         textOut[0] = sb.toString();
         return data;
     }
 
-    private static void appendAbnormalLines(StringBuilder sb, Balance bal, List<String> processNames) {
+    private static void appendAbnormalLines(StringBuilder sb, Balance bal, List<String> processNames,
+                                            List<String> known) {
         List<Abnormal> hit = new ArrayList<>();
         for (Abnormal a : bal.abnormal()) {
             for (String n : processNames) {
-                if (nameMatches(a.processName(), n)) { hit.add(a); break; }
+                if (attributes(a.processName(), n, known)) { hit.add(a); break; }
             }
         }
         if (hit.isEmpty()) return;
@@ -303,11 +385,11 @@ final class ProcessYieldViews {
         return row;
     }
 
-    private static List<ProcessYieldAggDTO> filter(List<ProcessYieldAggDTO> all, String keyword) {
+    private static List<ProcessYieldAggDTO> filter(List<ProcessYieldAggDTO> all, String keyword, List<String> known) {
         List<ProcessYieldAggDTO> out = new ArrayList<>();
         if (all == null) return out;
         for (ProcessYieldAggDTO a : all) {
-            if (keyword == null || nameMatches(a.getProcessName(), keyword)) out.add(a);
+            if (keyword == null || keywordMatches(a.getProcessName(), keyword, known)) out.add(a);
         }
         return out;
     }
