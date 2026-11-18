@@ -65,12 +65,12 @@ public class CashflowStatementQueryTool extends AbstractBusinessTool {
 
         Map<String, Object> endYear = new HashMap<>();
         endYear.put("type", "integer");
-        endYear.put("description", "结束年 (可选, 默认 startYear)");
+        endYear.put("description", "结束年 (可选, 默认与起始年相同)");
         properties.put("endYear", endYear);
 
         Map<String, Object> endMonth = new HashMap<>();
         endMonth.put("type", "integer");
-        endMonth.put("description", "结束月 1-12 (可选, 默认 startMonth)");
+        endMonth.put("description", "结束月 1-12 (可选, 默认与起始月相同)");
         endMonth.put("minimum", 1);
         endMonth.put("maximum", 12);
         properties.put("endMonth", endMonth);

@@ -26,6 +26,7 @@ import { canonicalUnitCode, formatPriceUnit, formatUnitPrice, pricingAmountPrevi
 import { canDownloadSupplyOrder } from './purchaseOrderActionIa';
 import { buildDraftInquiryQuery } from '../inquiry-quotes/draftInquiryPrefill';
 import { purchaseTaxIncludedUnitPrice } from './purchaseOrderTaxInclusivePricing';
+import { formatPurchaseTaxRate, purchaseLineMoney, purchaseOrderMoneySummary } from './purchaseOrderMoney';
 // M-10 (2026-08-20 手动测试台账): 只借用类型做完全映射防漂移检查 (Record 要求覆盖
 // PurchaseOrderStatus 全部 11 个值), 详情页本身仍显示精确状态、不做归类, 所以不引入
 // 归类相关的常量/函数, 也不改这份 statusMap 自带的 financeReviewedBy 特判逻辑。
@@ -216,6 +217,14 @@ function purchaseLineAmount(row: TableRow) {
     convertedPricingQuantity: row.convertedPricingQuantity as number,
   });
 }
+
+/** 行未税 / 税额 / 含税（PROTO-DEMO-PO-TAX：与销售订单同口径，三个数对得上）。 */
+function purchaseLineTaxMoney(row: TableRow) {
+  return purchaseLineMoney(purchaseLineAmount(row).amount, row.taxRate, row.lineAmountWithTax);
+}
+
+/** 单头：totalAmount = 未税总额，taxAmount = 税额合计，含税总额 = 两者之和。 */
+const orderMoney = computed(() => purchaseOrderMoneySummary(order.value));
 
 function goEditDraft() {
   router.push({ path: '/procurement/orders', query: { edit: orderId.value } });
@@ -433,12 +442,9 @@ function varianceClass(val: number | null): string {
   return val > 0 ? 'variance-up' : val < 0 ? 'variance-down' : '';
 }
 
+// 后端 tax_rate 恒为百分数；旧写法把 ≤1 的值当小数乘 100, 让 tax_rate=0.13 的行显示成百分之十三, 而税额却按千分之一点三算。
 function formatTaxRate(rate: unknown): string {
-  if (rate == null || rate === '') return '-';
-  const numeric = Number(rate);
-  if (!Number.isFinite(numeric)) return '-';
-  const percent = numeric <= 1 ? numeric * 100 : numeric;
-  return `${percent.toFixed(2).replace(/\.?0+$/, '')}%`;
+  return formatPurchaseTaxRate(rate);
 }
 
 function priceRowClassName({ row }: { row: PriceComparison }): string {
@@ -552,8 +558,12 @@ async function handleDownloadSupplyOrderPdf() {
                ⚠️ 两个字段后端照发 (order.purchaseType / order.expectedDeliveryDate),
                只是这一页不显示 —— ⛔ 不要理解成后端没有它们。 -->
           <el-descriptions-item label="下单日期">{{ order.orderDate }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="总金额">{{ formatAmount(order.totalAmount) }}</el-descriptions-item>
-          <el-descriptions-item v-if="canViewPrice" label="税额">{{ formatAmount(order.taxAmount) }}</el-descriptions-item>
+          <!-- PROTO-DEMO-PO-TAX (2026-11-18, PO-20261118-0001): 原来只有「总金额 / 税额」两格,
+               「总金额」其实是未税 totalAmount, 用户看到 20.18 与 1.82 无从判断。与销售订单同口径:
+               未税总额 + 税额合计 = 含税总额, 三格并列。 -->
+          <el-descriptions-item v-if="canViewPrice" label="未税总额"><span data-testid="po-money-untaxed">{{ orderMoney ? formatAmount(orderMoney.untaxed) : '-' }}</span></el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="税额合计"><span data-testid="po-money-tax">{{ orderMoney ? formatAmount(orderMoney.tax) : '-' }}</span></el-descriptions-item>
+          <el-descriptions-item v-if="canViewPrice" label="含税总额"><span data-testid="po-money-tax-included">{{ orderMoney ? formatAmount(orderMoney.taxIncluded) : '-' }}</span></el-descriptions-item>
           <!-- OA 状态的码来自 ApprovalWorkflowInstance.InstanceStatus (RUNNING/APPROVED/…),
                ⛔ 不能用全局表兜底 —— RUNNING 在审批语境是「审批中」, 别处会是「运行中」。 -->
           <el-descriptions-item label="OA 状态">{{ approvalProgress.hasInstance ? enumLabel(approvalProgress.status, APPROVAL_INSTANCE_STATUS_LABELS) : (approvalProgress.message || '尚未发起') }}</el-descriptions-item>
@@ -636,9 +646,14 @@ async function handleDownloadSupplyOrderPdf() {
           </el-table-column>
           <el-table-column prop="quantity" label="采购数量" width="110" align="right" />
           <el-table-column prop="unit" label="单位" width="80" align="center" />
-          <el-table-column v-if="canViewPrice" prop="unitPrice" label="含税单价" width="120" align="right">
+          <el-table-column v-if="canViewPrice" prop="unitPrice" label="未税单价" width="120" align="right">
             <template #default="{ row }">
-              {{ formatUnitPrice(purchaseTaxIncludedUnitPrice(row.unitPrice, row.taxRate)) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}
+              <span data-testid="po-line-untaxed-price">{{ formatUnitPrice(row.unitPrice) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="含税单价" width="120" align="right">
+            <template #default="{ row }">
+              <span data-testid="po-line-tax-included-price">{{ formatUnitPrice(purchaseTaxIncludedUnitPrice(row.unitPrice, row.taxRate)) }} {{ formatPriceUnit(canonicalUnitCode(row.priceUnit || row.unit)) }}</span>
             </template>
           </el-table-column>
           <el-table-column v-if="canViewPrice" prop="taxRate" label="税率" width="90" align="right">
@@ -649,10 +664,20 @@ async function handleDownloadSupplyOrderPdf() {
                ⚠️ 理由是**读者不需要**, ⛔ 不是「因为现在恒为 0 所以删」——
                将来这单收了货、那一列有值了, 它**同样**不该出现在这一页。
                订单级的收货进度仍然在上面「采购履约与财务状态」里 (财务判断能不能付款要用)。 -->
-          <el-table-column v-if="canViewPrice" label="小计" width="130" align="right">
+          <el-table-column v-if="canViewPrice" label="未税小计" width="120" align="right">
             <template #default="{ row }">
-              <span v-if="purchaseLineAmount(row).amount != null">{{ formatAmount(purchaseLineAmount(row).amount) }}</span>
+              <span v-if="purchaseLineAmount(row).amount != null" data-testid="po-line-untaxed">{{ formatAmount(purchaseLineAmount(row).amount) }}</span>
               <span v-else class="text-secondary">{{ purchaseLineAmount(row).message }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="税额" width="100" align="right">
+            <template #default="{ row }">
+              <span data-testid="po-line-tax">{{ purchaseLineTaxMoney(row) ? formatAmount(purchaseLineTaxMoney(row)?.tax) : '-' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="canViewPrice" label="含税小计" width="120" align="right">
+            <template #default="{ row }">
+              <span data-testid="po-line-tax-included">{{ purchaseLineTaxMoney(row) ? formatAmount(purchaseLineTaxMoney(row)?.taxIncluded) : '-' }}</span>
             </template>
           </el-table-column>
           <!-- L3 报价可比: 草稿行发起比价, 选定报价回填这张草稿 (不另建采购单) -->
