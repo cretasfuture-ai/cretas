@@ -88,6 +88,10 @@ public class SalesController {
     private com.cretas.aims.security.DataScopeResolver dataScopeResolver;
 
     private final SalesService salesService;
+
+    /** G9 发货单检索 (字段注入, 不改构造器). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.SalesDeliverySearchService salesDeliverySearchService;
     private final MobileService mobileService;
     private final PermissionService permissionService;
     private final UserRepository userRepository;
@@ -877,9 +881,18 @@ public class SalesController {
     @RequirePermission({"sales:read_write", "sales:read"})
     public ApiResponse<PageResponse<SalesDeliveryRecord>> listDeliveries(
             @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String orderNumber,
+            @RequestParam(required = false) com.cretas.aims.entity.enums.SalesDeliveryStatus status,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fromDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate toDate,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int size) {
-        PageResponse<SalesDeliveryRecord> result = salesService.getDeliveryRecords(factoryId, page, size);
+        boolean filtered = (keyword != null && !keyword.isBlank()) || (orderNumber != null && !orderNumber.isBlank())
+                || status != null || fromDate != null || toDate != null;
+        PageResponse<SalesDeliveryRecord> result = filtered
+                ? salesDeliverySearchService.search(factoryId, keyword, orderNumber, status, fromDate, toDate, page, size)
+                : salesService.getDeliveryRecords(factoryId, page, size);
         return ApiResponse.success("查询成功", SalesDeliveryResponseCopies.page(result));
     }
 

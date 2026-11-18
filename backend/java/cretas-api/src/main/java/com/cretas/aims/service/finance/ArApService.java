@@ -236,6 +236,15 @@ public interface ArApService {
                                                    int page, int size);
 
     /**
+     * 应收单(AR_INVOICE)维度清单, 按到期日升序 (G6).
+     * overdueOnly = 待收为正且到期日已过 (待收为负/为零/未知 都不算逾期); unsettledOnly = 待收为正.
+     */
+    PageResponse<ArApTransaction> getReceivableItems(String factoryId, String counterpartyId,
+                                                     boolean overdueOnly, boolean unsettledOnly,
+                                                     java.time.LocalDate dueFrom, java.time.LocalDate dueTo,
+                                                     int page, int size);
+
+    /**
      * R28 P2 (R23 P5 deferred): list PENDING adjustments awaiting approval.
      * Filters: factoryId + approval_status='PENDING' + transaction_type IN
      * (AR_ADJUSTMENT, AP_ADJUSTMENT). Sorted newest first (created_at DESC).

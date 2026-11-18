@@ -236,6 +236,59 @@ public class ArApController {
     }
 
     /**
+     * 应收单维度清单 (G6): 到期日 / 待收 / 逾期天数.
+     * 逾期 = 待收为正且到期日已过; 待收为负(多收/冲减)、为零、未知(未对账)都不算逾期, overdueDays 为 0 或 null.
+     */
+    @GetMapping("/receivable-items")
+    @Operation(summary = "应收单清单 (到期日/待收/逾期天数)")
+    @RequirePermission({"finance:read_write", "finance:read"})
+    public ApiResponse<PageResponse<java.util.Map<String, Object>>> listReceivableItems(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam(required = false) String counterpartyId,
+            @RequestParam(defaultValue = "false") boolean overdueOnly,
+            @RequestParam(defaultValue = "false") boolean unsettledOnly,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueFrom,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate dueTo,
+            @RequestParam(defaultValue = "1") int page,
+            @RequestParam(defaultValue = "20") int size) {
+        PageResponse<ArApTransaction> raw = arApService.getReceivableItems(
+                factoryId, counterpartyId, overdueOnly, unsettledOnly, dueFrom, dueTo, page, size);
+        PageResponse<ArApTransaction> projected = projectTransactions(factoryId, raw);
+        LocalDate today = LocalDate.now();
+        List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
+        for (ArApTransaction t : projected.getContent()) {
+            rows.add(receivableRow(t, today));
+        }
+        return ApiResponse.success("查询成功", PageResponse.of(rows, page, size, projected.getTotalElements()));
+    }
+
+    /** 逾期口径见 listReceivableItems; 静态便于单测. */
+    static java.util.Map<String, Object> receivableRow(ArApTransaction t, LocalDate today) {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("id", t.getId());
+        m.put("transactionNumber", t.getTransactionNumber());
+        m.put("counterpartyId", t.getCounterpartyId());
+        m.put("counterpartyName", t.getCounterpartyName());
+        m.put("salesOrderId", t.getSalesOrderId());
+        m.put("transactionDate", t.getTransactionDate());
+        m.put("dueDate", t.getDueDate());
+        m.put("amount", t.getAmount());
+        m.put("settledAmount", t.getSettledAmount());
+        m.put("outstandingAmount", t.getOutstandingAmount());
+        m.put("paymentStatus", t.getPaymentStatus());
+        Boolean overdue = null;
+        Long overdueDays = null;
+        if (t.getOutstandingAmount() != null && t.getDueDate() != null) {
+            boolean late = t.getOutstandingAmount().signum() > 0 && t.getDueDate().isBefore(today);
+            overdue = late;
+            overdueDays = late ? java.time.temporal.ChronoUnit.DAYS.between(t.getDueDate(), today) : 0L;
+        }
+        m.put("overdue", overdue);
+        m.put("overdueDays", overdueDays);
+        return m;
+    }
+
+    /**
      * R28 P2 (R23 P5 deferred): list PENDING adjustments awaiting approval.
      * AR_ADJUSTMENT + AP_ADJUSTMENT types where approval_status='PENDING'.
      * Read endpoint: accepts finance:read_write OR finance:read OR finance:approve_adjustment.
