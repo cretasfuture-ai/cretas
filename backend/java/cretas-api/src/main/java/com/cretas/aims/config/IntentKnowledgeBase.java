@@ -1915,6 +1915,11 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("批次从哪来", "TRACE_BATCH");
         phraseToIntentMapping.put("溯源这个批次", "TRACE_BATCH");
         phraseToIntentMapping.put("全链路追溯", "TRACE_FULL");
+        // 按销售单追溯（销售单→计划→批次→原料/工序/质检/出货）：TRACE_FULL 工具认 salesOrderNo
+        phraseToIntentMapping.put("追溯销售单", "TRACE_FULL");
+        phraseToIntentMapping.put("销售单追溯", "TRACE_FULL");
+        phraseToIntentMapping.put("按销售单追溯", "TRACE_FULL");
+        phraseToIntentMapping.put("销售单的来源", "TRACE_FULL");
         phraseToIntentMapping.put("全链路溯源", "TRACE_FULL");
         phraseToIntentMapping.put("完整溯源", "TRACE_FULL");
         phraseToIntentMapping.put("从头到尾追踪", "TRACE_FULL");
