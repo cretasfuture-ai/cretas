@@ -32,6 +32,13 @@ while :; do
     rm -rf "$1"; cp -cR "$2" "$1"; cd "$1"
     echo "/opt/homebrew/opt/postgresql@17/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" > .path
     printf "CRETAS_RELEASE_LOCK=%s\n" "$4" > .env
+    # 本机镜像 (2026-11-18): 任务开始前钩子把镜像增量更新, 任务里的 git 改走镜像 (见 job-started.sh)。
+    if [ -d /Users/ghgate/mirror/cretas.git ] && [ -x /Users/ghgate/hooks/job-started.sh ]; then
+      printf "%s\n" "ACTIONS_RUNNER_HOOK_JOB_STARTED=/Users/ghgate/hooks/job-started.sh" \
+        "GIT_CONFIG_COUNT=1" \
+        "GIT_CONFIG_KEY_0=url.file:///Users/ghgate/mirror/cretas.git.insteadOf" \
+        "GIT_CONFIG_VALUE_0=https://github.com/cretasfuture-ai/cretas" >> .env
+    fi
     ./run.sh --jitconfig "$3"
   ' _ "$WORK" "$PKG" "$jit" "$LOCK" >> "$LOG" 2>&1
   rc=$?

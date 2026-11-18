@@ -41,7 +41,9 @@ jobs:
     # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
     # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
     runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    # 5 -> 10 (2026-11-18): mini 上整份历史拉取 5 分钟拉不完被取消; 现在任务 git 走本机镜像 (scripts/ci/canada-mini-gate/job-started.sh),
+    # 正常秒级, 10 分钟只是镜像缺失时直连 GitHub 的兜底。
+    timeout-minutes: 10
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
