@@ -67,7 +67,8 @@ jobs:
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-fast-patterns.txt 按类名哈希取模分 4 片并行;
     # 原 job 名 fast-contracts 由下面的汇总 job 保留 (分支保护/各会话判据不变)。
     name: fast-contracts-shard (${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
+    # 2026-11-18 (Steve「直接开始接托管那边的部分」): 和 PG 线同一条 canada-mini 路由, fork PR 仍托管。
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -380,7 +381,7 @@ jobs:
   fast-contracts:
     needs: [changes, fast-contracts-shard]
     if: ${{ always() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every shard to succeed
