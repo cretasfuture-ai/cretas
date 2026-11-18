@@ -119,6 +119,8 @@ public class SourceIndividualService {
                 .breed(trimToNull(request.getBreed()))
                 .sex(trimToNull(request.getSex()))
                 .birthDate(request.getBirthDate())
+                .individualType(requireValidType(request.getIndividualType()))
+                .entryDate(request.getEntryDate())
                 .originFarm(trimToNull(request.getOriginFarm()))
                 .externalGeneBankId(trimToNull(request.getExternalGeneBankId()))
                 .dnaSampleCode(trimToNull(request.getDnaSampleCode()))
@@ -175,6 +177,12 @@ public class SourceIndividualService {
         if (request.getBirthDate() != null) {
             entity.setBirthDate(request.getBirthDate());
         }
+        if (request.getIndividualType() != null) {
+            entity.setIndividualType(requireValidType(request.getIndividualType()));
+        }
+        if (request.getEntryDate() != null) {
+            entity.setEntryDate(request.getEntryDate());
+        }
         if (request.getOriginFarm() != null) {
             entity.setOriginFarm(trimToNull(request.getOriginFarm()));
         }
@@ -208,6 +216,30 @@ public class SourceIndividualService {
     @Transactional
     public void softDelete(String factoryId, String id) {
         repository.delete(require(factoryId, id));
+    }
+
+    /** 撤销: 必须写原因, 先落原因再软删, 行保留可查。 */
+    @Transactional
+    public void revoke(String factoryId, String id, String reason) {
+        if (!StringUtils.hasText(reason)) {
+            throw new BusinessException(400, "撤销原因不能为空");
+        }
+        SourceIndividual entity = require(factoryId, id);
+        entity.setRevokeReason(reason.trim());
+        repository.saveAndFlush(entity);
+        repository.delete(entity);
+    }
+
+    private static String requireValidType(String raw) {
+        String t = trimToNull(raw);
+        if (t == null) {
+            return null;
+        }
+        String upper = t.toUpperCase();
+        if (!upper.equals("LIVE") && !upper.equals("CARCASS")) {
+            throw new BusinessException(400, "个体类型只能是 LIVE(活体) 或 CARCASS(胴体): " + raw);
+        }
+        return upper;
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
@@ -313,6 +345,9 @@ public class SourceIndividualService {
                 .damIndividualId(e.getDamIndividualId())
                 .extAttributes(e.getExtAttributes())
                 .notes(e.getNotes())
+                .individualType(e.getIndividualType())
+                .entryDate(e.getEntryDate())
+                .revokeReason(e.getRevokeReason())
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .version(e.getVersion())

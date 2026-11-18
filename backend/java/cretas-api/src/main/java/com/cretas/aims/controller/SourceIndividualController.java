@@ -146,4 +146,18 @@ public class SourceIndividualController {
         sourceIndividualService.softDelete(factoryId, id);
         return ApiResponse.successMessage("删除成功");
     }
+
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{id}/revoke")
+    @Operation(summary = "撤销源头个体档案 (必填原因, 软删留痕)")
+    @com.cretas.aims.annotation.Loggable(module = "SOURCE_INDIVIDUAL", action = "REVOKE",
+            entityType = "SourceIndividual", entityIdParam = "id")
+    public ApiResponse<Void> revoke(
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id,
+            @RequestParam @NotBlank String reason) {
+        sourceIndividualService.revoke(factoryId, id, reason);
+        return ApiResponse.successMessage("已撤销");
+    }
 }
