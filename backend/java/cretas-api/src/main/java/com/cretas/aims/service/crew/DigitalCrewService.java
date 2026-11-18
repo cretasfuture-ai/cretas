@@ -303,6 +303,7 @@ public class DigitalCrewService {
 
         IntentExecuteRequest req = IntentExecuteRequest.builder()
                 .userInput(input).sessionId(sessionId == null || sessionId.isBlank() ? null : sessionId)
+                .intentCode(DigitalCrewCatalog.quickIntentFor(memberKey, input).orElse(null))
                 .mode("READ").build();
         IntentExecuteResponse resp = intents.execute(factoryId, req, actor.id(), actor.role());
         if (resp == null) throw new BusinessException(502, "没有收到识别结果，没有执行任何写操作，请重试");
