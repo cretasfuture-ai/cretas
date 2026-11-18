@@ -70,6 +70,21 @@ public class FinanceReportController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodEnd) {
         return ResponseEntity.ok(ApiResponse.success(shipmentSkuMarginService.generate(factoryId, periodStart, periodEnd)));
     }
+
+    /**
+     * 经营分析「财务」区块的系统毛利 (Steve 2026-11-18: 收入 = 发货收入, 与应收挂账同一批发运单)。
+     * 与 {@code /shipment-sku-margin} 同一个服务、同一份收入行与成本来源; 算不全时按缺什么如实降级。
+     * 金额按工厂权限配置的财务读权限可见 (S5-12 {@code @PriceScope}: 默认口径换成 finance:read, 由
+     * PriceVisibility 只看配置判定); 无权时金额为 null, 状态 / 条数 / 原因照常返回。
+     */
+    @GetMapping("/shipped-gross-profit")
+    @com.cretas.aims.security.PriceScope("finance:read")
+    public ResponseEntity<ApiResponse<com.cretas.aims.dto.finance.report.ShippedGrossProfitDTO>> shippedGrossProfit(
+            @PathVariable String factoryId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodStart,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate periodEnd) {
+        return ResponseEntity.ok(ApiResponse.success(shipmentSkuMarginService.summarize(factoryId, periodStart, periodEnd)));
+    }
     @Autowired(required = false)
     private BusinessRowScope businessRowScope;
     @Autowired(required = false)

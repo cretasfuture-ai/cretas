@@ -51,6 +51,7 @@ import DynamicChartRenderer from '@/components/smartbi/DynamicChartRenderer.vue'
 import ChartTypeSelector from '@/components/smartbi/ChartTypeSelector.vue';
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import TemplateGrid from './components/TemplateGrid.vue';
+import ShippedGrossProfitCard from './components/ShippedGrossProfitCard.vue';
 import type { ChartConfig } from '@/types/smartbi';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
@@ -1177,6 +1178,10 @@ watch([analysisType, dateRange], () => {
 // 旧实现 .toISOString() 抛 TypeError. 同 SalesAnalysis.vue 修复.
 const formatDate = toApiDateString;
 
+// PROTO-GP-SHIPPED (Steve 2026-11-18): 系统毛利按发货收入, 与上方日期范围同一期间
+const shippedGpPeriod = computed<[string, string] | null>(() =>
+  dateRange.value ? [formatDate(dateRange.value[0]), formatDate(dateRange.value[1])] : null);
+
 async function loadFinanceData() {
   if (!factoryId.value || !dateRange.value) return;
 
@@ -2174,6 +2179,15 @@ onUnmounted(() => {
         </el-card>
       </el-col>
     </el-row>
+
+    <!-- PROTO-GP-SHIPPED: 系统毛利 (收入 = 发货收入) 在前; 下方上传报表口径的毛利润/净利润只作补充对照。
+         金额可见性由后端按权限配置判定, 卡片自己说明无权 / 缺发货确认 / 成本不全。 -->
+    <ShippedGrossProfitCard
+      v-if="!isRestaurantTenant && analysisType === 'profit' && factoryId && shippedGpPeriod"
+      :factory-id="factoryId"
+      :period-start="shippedGpPeriod[0]"
+      :period-end="shippedGpPeriod[1]"
+    />
 
     <!-- 财务 KPI (manufacturing tenants 原路径) -->
     <el-row v-else-if="canViewPrice" :gutter="16" class="kpi-section" v-loading="loading">
