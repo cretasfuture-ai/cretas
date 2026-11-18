@@ -1,4 +1,4 @@
--- V20261118_41__scheduling_rush_order_analysis_intent.sql
+-- V20261118_55__scheduling_rush_order_analysis_intent.sql
 --
 -- 急单影响分析意图 (融资 BP 第 8 页「急单先把影响算清」, 2026-11-17): 数字计划员收到「周五要交 2 吨酱牛肉急单,
 -- 原料够不够, 产线排不排得开?」时, 依次答 ① 原料够不够缺多少 ② 产线和人手 ③ 要挪哪几张原单各晚多久 ④ 方案草案。
