@@ -716,7 +716,9 @@ public class SkillExecutorImpl implements SkillExecutor {
 
     private SkillResult missingParametersResult(String skillName, List<String> missingParams,
                                                 List<String> executedTools, long startTime) {
-        String message = "为了完成操作，还需要以下信息：" + String.join("、", missingParams)
+        // 给用户看的是中文名称, ⛔ 不外露 batchNumber / customerId 这类字段名 (missingParameters 字段仍保留原名供程序用)
+        String message = "为了完成操作，还需要以下信息：" + missingParams.stream()
+                .map(SkillExecutorImpl::parameterLabel).distinct().collect(java.util.stream.Collectors.joining("、"))
                 + "。请补充后再试。";
         Map<String, Object> data = new LinkedHashMap<>();
         List<String> questions = missingParams.stream()
@@ -784,11 +786,20 @@ public class SkillExecutorImpl implements SkillExecutor {
     }
 
     private String clarificationQuestion(String parameter) {
-        return switch (parameter) {
-            case "batchId", "batchNumber" -> "请提供批次号。";
-            case "productId", "productTypeId" -> "请提供产品。";
-            case "materialTypeId" -> "请提供原材料。";
-            default -> "请提供" + parameter + "。";
+        return "请提供" + parameterLabel(parameter) + "。";
+    }
+
+    /** 参数的中文称呼; 认不出的不拿字段名顶替, 统称「必要信息」。 */
+    static String parameterLabel(String parameter) {
+        return switch (parameter == null ? "" : parameter) {
+            case "batchId", "batchNumber" -> "批次号";
+            case "productId", "productTypeId", "productName" -> "产品";
+            case "materialTypeId", "materialName" -> "原材料";
+            case "customerId", "customerName" -> "客户";
+            case "supplierId", "supplierName" -> "供应商";
+            case "salesOrderId", "orderId", "orderNumber" -> "订单号";
+            case "startDate", "endDate", "date" -> "日期";
+            default -> "必要信息";
         };
     }
 

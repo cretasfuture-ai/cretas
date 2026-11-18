@@ -68,7 +68,8 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
 
         Map<String, Object> batchNumber = new HashMap<>();
         batchNumber.put("type", "string");
-        batchNumber.put("description", "批次号 (必填), e.g. B-20260518-A03");
+        // ⛔ 描述里不放示例批次号: 模型会把示例当成用户说的批次 (实测: 没给批次号, 它自己选了示例批次去查)
+        batchNumber.put("description", "批次号 (必填); 用户没说出批次号时不要猜, 向用户追问");
         properties.put("batchNumber", batchNumber);
 
         schema.put("properties", properties);
@@ -124,10 +125,31 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
         data.put("affectedShipmentCount", affectedShipments.size());
         data.put("actionHint", "/quality/recall?batchNumber=" + batchNumber);
 
-        String message = String.format(
-                "🔗 批次 %s 全追溯: %d 笔出货, 影响 %d 家客户. 详见 trace 字段",
-                batchNumber, affectedShipments.size(), affectedCustomerIds.size());
+        String message = traceMessage(batchNumber, traceResp, affectedShipments.size(), affectedCustomerIds.size());
         return buildSimpleResult(message, data);
+    }
+
+    /** 回复正文: 先答「用了哪些原料批次、哪些供应商」, 再说出货影响; ⛔ 不指向内部字段名。 */
+    static String traceMessage(String batchNumber, TraceabilityDTO.FullTraceResponse trace, int shipmentCount, int customerCount) {
+        StringBuilder sb = new StringBuilder();
+        List<TraceabilityDTO.MaterialInfo> materials = trace == null ? null : trace.getMaterials();
+        if (trace == null) {
+            sb.append("批次 ").append(batchNumber).append(" 暂时没查到追溯记录。");
+        } else if (materials == null || materials.isEmpty()) {
+            sb.append("批次 ").append(batchNumber).append(" 没有登记投料的原料批次。");
+        } else {
+            sb.append("批次 ").append(batchNumber).append(" 用了 ").append(materials.size()).append(" 个原料批次：\n");
+            Set<String> suppliers = new LinkedHashSet<>();
+            for (TraceabilityDTO.MaterialInfo m : materials) {
+                sb.append("• ").append(m.getMaterialName() == null ? "未命名原料" : m.getMaterialName())
+                        .append("（批次 ").append(m.getBatchNumber() == null ? "未登记" : m.getBatchNumber())
+                        .append("，供应商 ").append(m.getSupplierName() == null ? "未登记" : m.getSupplierName()).append("）\n");
+                if (m.getSupplierName() != null) suppliers.add(m.getSupplierName());
+            }
+            sb.append("涉及供应商：").append(suppliers.isEmpty() ? "均未登记" : String.join("、", suppliers)).append("。\n");
+        }
+        sb.append("该批次出货 ").append(shipmentCount).append(" 笔，涉及 ").append(customerCount).append(" 家客户。");
+        return sb.toString();
     }
 
     /** spec §8.2 只读查询, 无副作用 */
