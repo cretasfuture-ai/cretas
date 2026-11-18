@@ -116,6 +116,10 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
                 String rest = formatIgnoringTimeNotice(response);
                 return rest == null ? timeNotice : timeNotice + "\n" + rest;
             }
+            String shortageOverview = formatShortageOverview(resultData);
+            if (shortageOverview != null) {
+                return shortageOverview;
+            }
             // 根据意图分类选择格式化器
             String formatted = switch (intentCategory) {
                 case "SHIPMENT" -> formatShipmentResult(intentCode, resultData);
@@ -371,20 +375,42 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatLowStockAlert(Map<String, Object> data) {
-        List<Map<String, Object>> alerts = getList(data, "alerts");
+        // 工具实际返回的是 warnings / safetyStock (旧版读 alerts / minStock, 有预警也会说「库存充足」)
+        List<Map<String, Object>> alerts = getList(data, "warnings");
+        if (alerts == null) alerts = getList(data, "alerts");
+        StringBuilder sb = new StringBuilder();
         if (alerts == null || alerts.isEmpty()) {
-            return "库存预警检查完成：当前所有原材料库存充足，暂无低库存预警项。系统将持续监控库存水位。";
+            sb.append("库存预警检查完成：当前所有原材料库存都在安全库存以上，暂无低库存预警项。");
+        } else {
+            sb.append(String.format("有 %d 种原料低于安全库存：\n\n", alerts.size()));
+            for (Map<String, Object> alert : alerts) {
+                BigDecimal currentStock = getBigDecimal(alert, "currentStock");
+                BigDecimal safety = getBigDecimal(alert, "safetyStock");
+                if (safety == null) safety = getBigDecimal(alert, "minStock");
+                String unit = getString(alert, "unit") == null ? "" : getString(alert, "unit");
+                sb.append(String.format("• %s：当前 %s%s，安全库存 %s%s\n",
+                        getString(alert, "materialName"),
+                        currentStock != null ? QUANTITY_FORMATTER.format(currentStock) : "?", unit,
+                        safety != null ? QUANTITY_FORMATTER.format(safety) : "?", unit));
+            }
         }
-
-        StringBuilder sb = new StringBuilder(String.format("发现 %d 项库存预警：\n\n", alerts.size()));
-        for (Map<String, Object> alert : alerts) {
-            String materialName = getString(alert, "materialName");
-            BigDecimal currentStock = getBigDecimal(alert, "currentStock");
-            BigDecimal minStock = getBigDecimal(alert, "minStock");
-            sb.append(String.format("• %s：当前 %s，低于最低库存 %s\n",
-                    materialName,
-                    currentStock != null ? QUANTITY_FORMATTER.format(currentStock) : "?",
-                    minStock != null ? QUANTITY_FORMATTER.format(minStock) : "?"));
+        if (data.get("expiringBatches") instanceof List<?>) {
+            List<Map<String, Object>> expiring = getList(data, "expiringBatches");
+            Integer days = getInteger(data, "expiringWarningDays");
+            sb.append("\n");
+            if (expiring == null || expiring.isEmpty()) {
+                sb.append(String.format("未来 %d 天内没有即将过期的原料批次。", days == null ? 7 : days));
+            } else {
+                sb.append(String.format("未来 %d 天内将过期的原料批次（%d 个）：\n\n", days == null ? 7 : days, expiring.size()));
+                for (Map<String, Object> batch : expiring) {
+                    BigDecimal qty = getBigDecimal(batch, "currentQuantity");
+                    sb.append(String.format("• %s（批次 %s）：剩 %s%s，%s 到期（还有 %s 天）\n",
+                            getString(batch, "materialName"), getString(batch, "batchNumber"),
+                            qty != null ? QUANTITY_FORMATTER.format(qty) : "?",
+                            getString(batch, "unit") == null ? "" : getString(batch, "unit"),
+                            getString(batch, "expireDate"), getInteger(batch, "remainingDays")));
+                }
+            }
         }
         return sb.toString();
     }
@@ -440,6 +466,16 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
     }
 
     private String formatExpiringAlert(Map<String, Object> data) {
+        String expiring = formatExpiringAlertBody(data);
+        if (data.get("lowStockWarnings") instanceof List<?>) {
+            Map<String, Object> low = new java.util.LinkedHashMap<>();
+            low.put("warnings", data.get("lowStockWarnings"));
+            return formatLowStockAlert(low) + "\n" + expiring;
+        }
+        return expiring;
+    }
+
+    private String formatExpiringAlertBody(Map<String, Object> data) {
         List<Map<String, Object>> batches = getList(data, "batches");
         if (batches == null) batches = getList(data, "content");
         if (batches == null || batches.isEmpty()) {
@@ -454,8 +490,10 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
                 break;
             }
             String name = getString(batch, "materialName");
-            String expDate = getString(batch, "expirationDate");
-            BigDecimal qty = getBigDecimal(batch, "quantity");
+            String expDate = getString(batch, "expireDate");
+            if (expDate == null) expDate = getString(batch, "expirationDate");
+            BigDecimal qty = getBigDecimal(batch, "currentQuantity");
+            if (qty == null) qty = getBigDecimal(batch, "quantity");
             sb.append(String.format("• %s：%s%s，过期日期 %s\n",
                     name != null ? name : "未知",
                     qty != null ? QUANTITY_FORMATTER.format(qty) : "?",
@@ -1364,7 +1402,81 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
         return sb.toString();
     }
 
+    /** 全厂缺料总览 (shortage_analyze 不指定订单): 订单号 + 缺的物料与数量; 没有缺口 / 有分析失败的订单都明说。 */
+    private String formatShortageOverview(Object resultData) {
+        Map<String, Object> data = asMap(com.cretas.aims.ai.tool.TimeRangeFilter.toolResultOf(resultData));
+        if (data == null || !(data.get("orderShortages") instanceof List<?>)) {
+            return null;
+        }
+        List<Map<String, Object>> rows = getList(data, "orderShortages");
+        Integer checked = getInteger(data, "checkedOrderCount");
+        Integer open = getInteger(data, "openOrderCount");
+        Integer failed = getInteger(data, "failedOrderCount");
+        StringBuilder sb = new StringBuilder();
+        if (rows == null || rows.isEmpty()) {
+            sb.append(String.format("已检查 %d 个在途销售订单（共 %d 个），没有发现原料缺口。", checked == null ? 0 : checked, open == null ? 0 : open));
+        } else {
+            sb.append(String.format("在途销售订单里有 %d 个存在原料缺口：\n", rows.size()));
+            for (Map<String, Object> row : rows) {
+                sb.append("\n").append(getString(row, "orderNumber"));
+                if (getString(row, "customerName") != null) sb.append("（").append(getString(row, "customerName")).append("）");
+                if (getString(row, "requiredDeliveryDate") != null) sb.append("，交期 ").append(getString(row, "requiredDeliveryDate"));
+                sb.append("，缺：");
+                List<Map<String, Object>> materials = getList(row, "shortages");
+                List<String> parts = new java.util.ArrayList<>();
+                if (materials != null) {
+                    for (Map<String, Object> m : materials) {
+                        BigDecimal q = getBigDecimal(m, "shortfallQuantity");
+                        parts.add(getString(m, "materialName") + " " + (q == null ? "?" : QUANTITY_FORMATTER.format(q))
+                                + (getString(m, "unit") == null ? "" : getString(m, "unit")));
+                    }
+                }
+                sb.append(String.join("、", parts));
+            }
+        }
+        if (checked != null && open != null && open > checked) {
+            sb.append(String.format("\n\n在途订单共 %d 个，这里按交期最近的先查了 %d 个。", open, checked));
+        }
+        if (failed != null && failed > 0) {
+            sb.append(String.format("\n\n另有 %d 个订单分析失败，没有计入上面的结果。", failed));
+        }
+        return sb.toString();
+    }
+
     private String formatOrderList(Map<String, Object> data) {
+        String windowNotice = getString(data, "windowNotice");
+        String body = formatOrderListBody(data);
+        return windowNotice == null || body == null ? body : windowNotice + "\n\n" + body;
+    }
+
+    /** 按客户汇总: 订单数多的在前, 合计一行; 汇总被截断 (>100 单) 时明说。 */
+    private String formatCustomerSummary(Map<String, Object> data, List<Map<String, Object>> summary) {
+        int orderTotal = 0;
+        BigDecimal amountTotal = BigDecimal.ZERO;
+        StringBuilder sb = new StringBuilder();
+        sb.append("按客户汇总（订单数从多到少）：\n\n| 客户 | 订单数 | 金额 |\n| --- | ---: | ---: |\n");
+        for (Map<String, Object> row : summary) {
+            Integer count = getInteger(row, "orderCount");
+            BigDecimal amount = getBigDecimal(row, "totalAmount");
+            orderTotal += count == null ? 0 : count;
+            if (amount != null) amountTotal = amountTotal.add(amount);
+            sb.append("| ").append(getString(row, "customerName")).append(" | ").append(count).append(" | ¥")
+                    .append(amount == null ? "0" : AMOUNT_FORMATTER.format(amount)).append(" |\n");
+        }
+        sb.append(String.format("\n共 %d 位客户、%d 单，合计 ¥%s。", summary.size(), orderTotal, AMOUNT_FORMATTER.format(amountTotal)));
+        if (Boolean.TRUE.equals(data.get("summaryTruncated"))) {
+            sb.append("订单很多，这里只汇总了最近的 100 单。");
+        }
+        Map<String, Object> top = summary.get(0);
+        sb.append(String.format("\n下单最多的是 %s（%s 单）。", getString(top, "customerName"), getInteger(top, "orderCount")));
+        return sb.toString();
+    }
+
+    private String formatOrderListBody(Map<String, Object> data) {
+        List<Map<String, Object>> summary = getList(data, "customerSummary");
+        if (summary != null && !summary.isEmpty()) {
+            return formatCustomerSummary(data, summary);
+        }
         List<Map<String, Object>> content = getList(data, "content");
         if (content == null) content = getList(data, "orders");
         Integer total = getInteger(data, "totalElements");
