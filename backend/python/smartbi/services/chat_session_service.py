@@ -578,7 +578,14 @@ class ChatSessionService:
                                 turn_count            = turn_count + 1,
                                 updated_at            = NOW(),
                                 expires_at            = NOW() + INTERVAL '1 hour',
-                                turns_history = COALESCE(turns_history, '[]'::jsonb) || $8::jsonb
+                                -- A7: 换了数据源就从新历史开始, 旧表的问答不再喂给下一轮
+                                turns_history = (
+                                    CASE
+                                        WHEN parent_upload_id <> $7
+                                        THEN '[]'::jsonb
+                                        ELSE COALESCE(turns_history, '[]'::jsonb)
+                                    END
+                                ) || $8::jsonb
                             WHERE factory_id = $1
                               AND user_id = $2
                               AND session_id = $3
@@ -683,6 +690,29 @@ class ChatSessionService:
         except Exception as e:
             logger.warning(f"[chat-session] prune failed: {e}")
             return 0
+
+
+def parent_for_upload(
+    parent: Optional[Dict[str, Any]], upload_id: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Drop the session parent when it was produced on a different data source.
+
+    A7 (2026-11-19): in one conversation the user switched the data source and the
+    next question came back as a verbatim repeat of the previous answer, because
+    the previous turn (a different upload) was injected as "延续上一轮的实体和数字".
+    The parent is only valid on the upload it was written for. When either side
+    does not know its upload (factory-wide synthesis turns write None) we keep it.
+    """
+    if not parent or upload_id is None:
+        return parent
+    parent_upload = parent.get("parent_upload_id")
+    if parent_upload is None:
+        return parent
+    try:
+        same = int(parent_upload) == int(upload_id)
+    except (TypeError, ValueError):
+        return parent
+    return parent if same else None
 
 
 def build_context_block(parent: Dict[str, Any]) -> str:
