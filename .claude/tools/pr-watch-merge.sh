@@ -103,7 +103,11 @@ while :; do
   if [ "$pend" -gt 0 ] || [ "$pass" -eq 0 ]; then say "head=${head:0:10} pending=$pend pass=$pass"; nap; continue; fi
 
   # 全绿: base 开了合并队列 -> 入队 (不 update-branch, 队列在最新 base 上重跑)
-  q=$(qstate "$base"); read -r qon _ <<<"$q"
+  # GraphQL 报错时 jq 会把 mergeQueue!=null 算成 false (data 为 null), 不能当「没开队列」:
+  # 同一次读数里 PR 状态不是 OPEN/MERGED/CLOSED 就是没读到, 重试。
+  # (2026-11-18 #1866: 一次读失败被当成无队列, 走了 --squash, 被队列拒绝。)
+  q=$(qstate "$base"); read -r qon qs _ <<<"$q"
+  case "$qs" in OPEN|MERGED|CLOSED) ;; *) qon=unreadable;; esac
   case "$qon" in
     true) [ "$MERGE" = 0 ] && finish GREEN "head=$head updates=$updates queue=on" 0; enqueue_and_wait;;
     false) ;;

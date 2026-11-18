@@ -26,6 +26,8 @@ case "$1 $2" in
   "api graphql")
     # 队列读数: "<qon> <state> <inq> <sha>"; qseq 每行用一次, 用完沿用最后一行; 无 qseq 则无队列
     q=$(cat "$S/queue" 2>/dev/null || echo false)
+    # qerr: 前 N 次读模拟 GraphQL 出错 (jq 在 data=null 时打出 "false null null ")
+    if [ -f "$S/qerr" ] && [ "$(cat "$S/qerr")" -gt 0 ]; then echo $(( $(cat "$S/qerr") - 1 )) > "$S/qerr"; echo "false null null "; exit 0; fi
     if [ -f "$S/qseq" ]; then
       n=$(( $(cat "$S/qn" 2>/dev/null || echo 0) + 1 )); echo $n > "$S/qn"
       l=$(sed -n "${n}p" "$S/qseq"); [ -z "$l" ] && l=$(tail -1 "$S/qseq"); echo "$q $l"
@@ -114,6 +116,14 @@ setup 15; echo true > "$S/queue"; printf "pass${G}build\n" > "$S/checks.h1.1"; r
 # S16 队列开但有检查失败 -> RED, 不入队 (红不进队)
 setup 16; echo true > "$S/queue"; printf "fail${G}build\n" > "$S/checks.h1.1"; run
 [ "$(rc)" = 1 ] && ! called "pr merge" && ok S16-queue-red-not-enqueued || bad S16-queue-red-not-enqueued
+
+# S17 开了队列但有一次队列读数出错 -> 不能当无队列走 --squash, 重读后入队
+setup 17; echo true > "$S/queue"; echo 1 > "$S/qerr"; printf "pass${G}build
+" > "$S/checks.h1.1"; printf "OPEN false 
+OPEN true 
+MERGED false shaQ
+" > "$S/qseq"; run
+[ "$(rc)" = 0 ] && grep -q 'RESULT=MERGED.*queue=on' "$S/out" && ! called "squash" && ok S17-queue-read-error-not-no-queue || bad S17-queue-read-error-not-no-queue
 
 rm -rf "$T"
 echo "TOTAL=$((pass+failn)) PASS=$pass FAIL=$failn"
