@@ -83,4 +83,21 @@ describe('分仓库存查询 —— 默认仓库自动换到有批次的仓库',
     expect(calls[calls.length - 1]).toBe('wh-log');
     wrapper.unmount();
   });
+
+  it('总仓只有成品批次、原料为空时仍换到有原料批次的仓库（页面默认先看原料）', async () => {
+    apiGet.mockImplementation((rawUrl: unknown) => {
+      const url = String(rawUrl ?? '');
+      if (url.includes('/factories/network')) return Promise.resolve({ success: true, data: [{ factoryId: 'F001', factoryName: '测试厂' }] });
+      if (url.includes('/factory/warehouses')) return Promise.resolve({ success: true, data: warehouses });
+      const id = decodeURIComponent(url.match(/warehouseId=([^&]+)/)?.[1] ?? '');
+      const base = inventoryFor(id, id === 'wh-raw' ? [{ id: 'b3', batchNumber: 'RAW-009', materialName: '鲜牛腱', currentQuantity: 9, quantityUnit: 'kg' }] : []);
+      if (id === 'wh-log') { base.data.productCount = 1; (base.data as Record<string, unknown>).products = [{ id: 'p1', batchNumber: 'FG-1', productName: '成品', currentQuantity: 1, quantityUnit: 'kg' }]; }
+      return Promise.resolve(base);
+    });
+    const wrapper = mount(InventoryByWarehouse, { global: { plugins: [ElementPlus] } });
+    await settle();
+    const calls = requestedWarehouses();
+    expect(calls[calls.length - 1]).toBe('wh-raw');
+    wrapper.unmount();
+  });
 });
