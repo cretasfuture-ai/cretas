@@ -1612,6 +1612,9 @@ public class ArApServiceImpl implements ArApService {
             overview.put("customerCount", 0L);
             overview.put("supplierCount", 0L);
             overview.put("transactionsByType", List.of());
+            overview.put("customerPrepayments", BigDecimal.ZERO);
+            overview.put("ledgerEntryCount", 0L);
+            overview.put("hasLedgerEntries", false);
             return overview;
         }
 
@@ -1668,6 +1671,13 @@ public class ArApServiceImpl implements ArApService {
                 .count();
         overview.put("payableCount", payableCounterpartyCount);
         overview.put("receivableCount", receivableCounterpartyCount);
+        // 客户预收 = 挂账净额为负的客户 (先收款后发货)。totalReceivable 是净额, 已抵减这部分;
+        // 单独给出是为了让经营分析页说清「应收净额里抵掉了多少预收」, 与本页同一份挂账数据。
+        overview.put("customerPrepayments", receivableRows.stream()
+                .map(row -> row[2] instanceof BigDecimal value ? value : BigDecimal.ZERO)
+                .filter(value -> value.signum() < 0)
+                .map(BigDecimal::negate)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
 
         // 🔴 2026-08-28 逐屏走查: 屏上「本月交易笔数 0 / 客户 0 / 供应商 0」, 而正下方
         //   「交易记录 共 32 条」全在本月 —— **同屏自相矛盾**。
@@ -1703,6 +1713,14 @@ public class ArApServiceImpl implements ArApService {
             typeStats.add(stat);
         }
         overview.put("transactionsByType", typeStats);
+        // PROTO-DEMO-ARAP: 区分「本厂没有挂账单据」与「挂账后余额为 0」。应收应付只按挂账单据
+        // (ar_ap_transactions, 未删除) 统计; 没有单据时页面要如实说「尚未生成挂账单据」, 不能读成「¥0 已结清」,
+        // 也不能拿客户/供应商主数据上的 current_balance 缓存去凑数。
+        long ledgerEntryCount = stats.stream()
+                .mapToLong(row -> row[1] instanceof Number n ? n.longValue() : 0L)
+                .sum();
+        overview.put("ledgerEntryCount", ledgerEntryCount);
+        overview.put("hasLedgerEntries", ledgerEntryCount > 0);
 
         return overview;
     }
