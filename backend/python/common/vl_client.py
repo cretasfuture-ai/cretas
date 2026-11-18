@@ -23,15 +23,19 @@ from enum import Enum
 # from this direct path. Fall back to a local replica if the import path is
 # unavailable (defensive — both must stay in sync).
 try:
-    from common.llm_router import _PAID_MODEL_DENYLIST
+    from common.llm_router import is_paid_denied
 except Exception:  # pragma: no cover - defensive only
-    _PAID_MODEL_DENYLIST = frozenset({
+    _FALLBACK_PAID = frozenset({
         "qwen3-max",
         "qwen3-max-2026-01-23",
         "qwen-max",
         "qwen-plus",
         "qwen3.5-122b-a10b",
     })
+
+    def is_paid_denied(model: str) -> bool:
+        m = (model or "").strip().lower()
+        return m in _FALLBACK_PAID or m.startswith(("qwen3-max", "qwen-max"))
 
 
 def load_env():
@@ -170,7 +174,7 @@ class QwenVLClient:
         #
         # Cost guard (fail loud, never silently bill): this direct lane bypasses
         # call_chain's denylist guard, so enforce it here too.
-        if use_model in _PAID_MODEL_DENYLIST:
+        if is_paid_denied(use_model):
             raise RuntimeError(
                 f"vl_client refusing PAID model {use_model} — set TEXT_MODEL/LLM_VL_MODEL to a free model"
             )
@@ -268,7 +272,7 @@ class QwenVLClient:
         #
         # Cost guard (fail loud, never silently bill): this direct lane bypasses
         # call_chain's denylist guard, so enforce it here too.
-        if use_model in _PAID_MODEL_DENYLIST:
+        if is_paid_denied(use_model):
             raise RuntimeError(
                 f"vl_client refusing PAID model {use_model} — set TEXT_MODEL/LLM_VL_MODEL to a free model"
             )

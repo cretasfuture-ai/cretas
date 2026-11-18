@@ -111,14 +111,15 @@ jobs:
         shard: [0, 1, 2, 3]
     # 2026-11-14: 正常一片 ≤16 分钟; 卡死会拖到平台 55 分钟取消。30 分钟必然是异常。
     timeout-minutes: 30
-    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 10g.
+    # GitHub-hosted (public repo: 4 vCPU / 16 GB): one shared surefire fork (Maven default) at 6g (2026-11-19: 10g→6g, 上下文缓存上限 8, 见 step 内根因)。
+    # 下面 2026-11-14 那段是降到 10g 时的历史记录。
     # 2026-11-14: 12g→10g (Maven 保持 2g: 1g 实测编译测试就 OOM)。实测 (PR #1700 MEMGUARD): 存活堆 >8g (8g 会 GC 死循环后 OOM), 12g 吃光整机
     # (无 swap ⇒ 日志断流, fork 内看门狗和步骤超时都不开火); 10g 下可用内存最低 1.2GB。
     # mem-guard.sh 每 30 秒打印 MEMGUARD 读数, 可用内存见底时在冻住前杀 fork。
     # Measured 2026-10-25: a shared fork reached 3759 tests in 13 min but OOMed at 6g; one fresh JVM per
     # class (-DreuseForks=false) took 44 min with 2 forks and >60 min with 3 (~700 Spring startups).
     env:
-      CRETAS_JAVA_FORK_XMX: 10g
+      CRETAS_JAVA_FORK_XMX: 6g
     steps:
       - uses: actions/checkout@v4
         with:
@@ -241,13 +242,20 @@ jobs:
           # 给非堆封顶, 让 fork 总占用有上界。
           # 根因 (PR #1700 MEMGUARD 实测): 共用 fork 的存活堆随 Spring 上下文缓存 (默认 32 个, 每个带 H2 + 全部实体) 涨到
           # 约 8GB+: 8g 下 337 秒顶满, 之后同一个类上 GC 死循环直到 OOM (3/4 片); 12g 吃光 16GB 整机 (无 swap) 而冻住;
-          # 10g 4/4 片通过但 runner 可用内存只剩 1.2GB。⛔ 不能靠压上下文缓存上限: 见 PG 分片注释, 中途淘汰会让共享库被关。
+          # 10g 4/4 片通过但 runner 可用内存只剩 1.2GB。
+          # 2026-11-19 复测 (本机同一份分片 0 类清单) 与修法: 每片启动 24-37 个不同上下文, 都装得进默认 32 格, 一个也不淘汰,
+          # 每个约 0.3-0.4GB ⇒ 存活堆涨到 10g (本机 246 次 Full GC 后空转, 7 分钟无 JUnit 事件被看门狗 halt, 丢最后 2 个类;
+          # CI 上表现为 OOM / mem-guard 杀 fork: #1896 #1904 #1905 的分片 0)。
+          # -Dspring.test.context.cache.maxSize=8 让最久未用的上下文被淘汰关闭: 上下文启动 36 -> 38 次, 清理后存活堆约 3.5-4GB,
+          # 6g 堆 0 次 Full GC, 逐类结果与基线一致。堆上限同步 10g -> 6g, 给托管机 16GB 留可用内存。
+          # ⚠️ 只适用于本 job: H2 + ddl-auto=create, 共享内存库不会因上下文关闭被 drop (application-test.properties)。
+          #    ⛔ 不要搬到 postgres-reversal-concurrency-shard: 那里压到 4 让共享 PG 库被别的上下文关闭, 95 个测试报 SQL 错。
           rc=0
           "$MVN" -B test \
             -Dtest="$TESTS" \
             -Dsurefire.failIfNoSpecifiedTests=false \
             -Dspring.profiles.active=test \
-            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g} -XX:+ExitOnOutOfMemoryError -XX:MaxMetaspaceSize=1g -XX:MaxDirectMemorySize=512m" \
+            -DargLine="-XX:+EnableDynamicAgentLoading -Xshare:off -Xmx${CRETAS_JAVA_FORK_XMX:-3g} -XX:+ExitOnOutOfMemoryError -XX:MaxMetaspaceSize=1g -XX:MaxDirectMemorySize=512m -Dspring.test.context.cache.maxSize=8" \
             2>&1 | tee "$MVN_OUT" || rc=${PIPESTATUS[0]}
           if [ "$rc" -ne 0 ]; then
             echo "::error::fast-contracts 分片失败 rc=$rc; 最后运行的测试类: $(grep -a 'Running com\.' "$MVN_OUT" | tail -1 | sed 's/.*Running //')"
