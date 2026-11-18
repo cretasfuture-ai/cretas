@@ -37,7 +37,7 @@ import static org.mockito.Mockito.when;
  *
  * <p>判据是往返 (写得出去 ≠ 读得回来), 用的是生产那一份序列化器, ⛔ 不自建 ObjectMapper。
  */
-class IntentConfigCacheRoundTripTest {
+class IntentConfigCacheRoundTripContractTest {
 
     private static final GenericJackson2JsonRedisSerializer SERIALIZER = CacheConfig.createRedisSerializer();
 

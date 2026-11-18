@@ -145,7 +145,7 @@ public class IntentConfigManagementServiceImpl implements IntentConfigManagement
      * {@code [["…AIIntentConfig",{…}],…]}, 读回来时要的却是 {@code ["java.util.…",[…]]} ⇒
      * {@code SerializationException: Unexpected token (START_ARRAY), expected VALUE_STRING}。
      * 第一次未命中成功并写入毒条目, 之后每次命中都 500。嵌在 Map 里的同类集合没事 (那里声明类型是 Object)。
-     * 守卫测试: {@code IntentConfigCacheRoundTripTest}。
+     * 守卫测试: {@code IntentConfigCacheRoundTripContractTest}。
      */
     private static <T> List<T> cacheSafe(List<T> rows) {
         return new java.util.ArrayList<>(rows);
