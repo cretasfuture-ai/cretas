@@ -404,13 +404,15 @@ const LineageChainTimeline: React.FC<LineageChainTimelineProps> = ({
   const dividerStyle = { marginVertical: theme.custom.spacing.m };
   const emptyTextStyle = { color: theme.colors.onSurfaceVariant, paddingVertical: theme.custom.spacing.s };
 
-  // 「来源 N 项」—— N 是后端按真实节点算的 nodeCount，这里只显示，⛔ 不在前端重新数。
+  // 「来源 N 项」—— 只数这张卡上列出来的上游节点。⛔ 不用 lineage.nodeCount: 它是「上游 + 下游」合计
+  // (内部视图带下游), 用它会让手机写「来源 6 项」而管理端写「4 个上游节点」(BP 对比 #15, DEMO-20261105-PB-001)。
+  const sourceNodeCount = (lineage?.ancestors ?? []).reduce((sum, g) => sum + (g.nodes?.length ?? 0), 0);
   const header = (
     <SectionHeader
       icon="file-tree-outline"
       title={title}
       trailing={
-        !!lineage && lineage.nodeCount > 0 ? t('traceability.lineage.sourceCount', { n: lineage.nodeCount }) : null
+        sourceNodeCount > 0 ? t('traceability.lineage.sourceCount', { n: sourceNodeCount }) : null
       }
     />
   );
