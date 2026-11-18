@@ -118,6 +118,7 @@ public class DigitalCrewService {
     private final PreviewTokenService previewTokens;
     private final FactoryCapabilityPackSelector packSelector;
     private final FactoryBusinessTypeResolver businessTypes;
+    private final DigitalCrewExecutionGate executionGate;
     private final TransactionTemplate tx;
     private final Supplier<LocalDateTime> clock;
 
@@ -133,6 +134,7 @@ public class DigitalCrewService {
                               PreviewTokenService previewTokens,
                               FactoryCapabilityPackSelector packSelector,
                               FactoryBusinessTypeResolver businessTypes,
+                              DigitalCrewExecutionGate executionGate,
                               PlatformTransactionManager transactionManager) {
         this.items = items;
         this.memberSettings = memberSettings;
@@ -146,6 +148,7 @@ public class DigitalCrewService {
         this.previewTokens = previewTokens;
         this.packSelector = packSelector;
         this.businessTypes = businessTypes;
+        this.executionGate = executionGate;
         this.tx = new TransactionTemplate(transactionManager);
         this.tx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.clock = () -> LocalDateTime.now(ZONE);
@@ -335,6 +338,13 @@ public class DigitalCrewService {
                         "这件事是写操作，但系统里没有登记谁有权确认，所以不交办。没有执行任何写操作。",
                         resp.getIntentCode(), resp.getIntentName(), pack, null, null, List.of(), resp.getSessionId());
             }
+            if (!isWriteLevel(requiredPermission) && hasReadLevelCode(requiredPermission)) {
+                // 读写混合码 (如请假提交 hr:read,hr:read_write): 本人有读权限就能办的个人自助操作, 不代办 (#1816 L2)
+                return new AskView("REFUSED", memberKey, resp.getStatus(),
+                        "这件事（" + nz(resp.getIntentName(), resp.getIntentCode()) + "）是个人自助操作，请自己办，数字班组不代办。"
+                                + "没有执行任何写操作。",
+                        resp.getIntentCode(), resp.getIntentName(), pack, null, null, List.of(), resp.getSessionId());
+            }
             if (!isWriteLevel(requiredPermission) || module == null) {
                 return new AskView("REFUSED", memberKey, resp.getStatus(),
                         "这件事是写操作，但登记的权限「" + requiredPermission + "」不是写权限，没法判断谁有权确认，所以不交办。"
@@ -441,14 +451,15 @@ public class DigitalCrewService {
         reconcile(factoryId, actor);
         int p = Math.max(0, page);
         int sz = size <= 0 ? INBOX_PAGE_SIZE_DEFAULT : Math.min(size, INBOX_PAGE_SIZE_MAX);
-        List<String> codes = items.findDistinctRequiredPermissions(factoryId, Status.DELEGATED);
-        List<String> allowed = codes.stream().filter(c -> holds(user, c)).toList();
-        List<String> denied = codes.stream().filter(c -> !allowed.contains(c)).toList();
+        // 按 (权限码, 意图) 分组判: 登记码 + 执行时真生效的工具门都过得了才算「我能确认」(#1816 终审 M1)
+        List<String> keys = items.findDistinctPermissionIntentKeys(factoryId, Status.DELEGATED);
+        List<String> allowed = keys.stream().filter(k -> canHandle(factoryId, user, permissionOfKey(k), intentOfKey(k))).toList();
+        List<String> denied = keys.stream().filter(k -> !allowed.contains(k)).toList();
         org.springframework.data.domain.Page<DigitalCrewWorkItem> mine = allowed.isEmpty()
                 ? org.springframework.data.domain.Page.empty(PageRequest.of(p, sz))
                 : items.findInboxPage(factoryId, Status.DELEGATED, allowed, PageRequest.of(p, sz));
         long hidden = denied.isEmpty() ? 0
-                : items.countByCodes(factoryId, Status.DELEGATED, denied);
+                : items.countByKeys(factoryId, Status.DELEGATED, denied);
         List<String> hiddenModules = denied.isEmpty() ? List.of()
                 : items.findDistinctModules(factoryId, Status.DELEGATED, denied).stream().sorted().toList();
         return new InboxView(mine.getContent().stream().map(w -> view(w, user)).toList(),
@@ -861,6 +872,10 @@ public class DigitalCrewService {
         if (!holds(user, w.getRequiredPermission())) {
             throw new BusinessException(403, "你没有确认这件事的权限（需要 " + w.getRequiredPermission() + "），服务端已拒绝，没有执行任何写操作");
         }
+        Optional<String> gate = executionGate.denyReason(w.getFactoryId(), user, w.getIntentCode());
+        if (gate.isPresent()) {
+            throw new BusinessException(403, "你确认了执行时也会被拒（" + gate.get() + "），服务端已拒绝，没有执行任何写操作");
+        }
     }
 
     private User requireUser(Actor actor) {
@@ -914,7 +929,7 @@ public class DigitalCrewService {
     private ItemView view(DigitalCrewWorkItem w, User viewer) {
         String memberName = DigitalCrewCatalog.member(w.getMemberKey()).map(Member::name).orElse(w.getMemberKey());
         boolean canConfirm = viewer != null && w.getStatus() == Status.DELEGATED
-                && holds(viewer, w.getRequiredPermission());
+                && canHandle(w.getFactoryId(), viewer, w.getRequiredPermission(), w.getIntentCode());
         boolean previewedByMe = viewer != null && Objects.equals(w.getPreviewedByUserId(), viewer.getId());
         return new ItemView(w.getId(), w.getMemberKey(), memberName, w.getIntentCode(), w.getIntentName(), w.getTitle(),
                 w.getUserInput(), w.getModule(), w.getRequiredPermission(), w.getStatus().name(), w.getStatus().label(),
@@ -977,6 +992,28 @@ public class DigitalCrewService {
     static boolean isWriteLevel(String permission) {
         List<String> codes = com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(permission);
         return !codes.isEmpty() && codes.stream().allMatch(p -> p.endsWith(":read_write") || p.endsWith(":write"));
+    }
+
+    /** 登记的码里有读级别的 (模块:read) —— 说明本人有读权限就能办, 是个人自助操作。 */
+    static boolean hasReadLevelCode(String permission) {
+        return com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(permission).stream()
+                .anyMatch(p -> p.endsWith(":read"));
+    }
+
+    /** 能确认 = 持有登记码 且 执行时的工具门 (一线开放 / 旧角色串 / 工具权限表) 也过得了。 */
+    private boolean canHandle(String factoryId, User user, String requiredPermission, String intentCode) {
+        return holds(user, requiredPermission) && executionGate.denyReason(factoryId, user, intentCode).isEmpty();
+    }
+
+    /** 收件箱分组键 = 权限码 + '|' + 意图码 (与 DigitalCrewWorkItemRepository 的 CONCAT 同一拼法)。 */
+    static String permissionOfKey(String key) {
+        int i = key.lastIndexOf('|');
+        return i < 0 ? key : key.substring(0, i);
+    }
+
+    static String intentOfKey(String key) {
+        int i = key.lastIndexOf('|');
+        return i < 0 ? null : key.substring(i + 1);
     }
 
     /** 事项登记的权限码 (逗号 = 任一即可, 与意图权限门同口径): 持有其中任一个即算有权限。 */

@@ -65,7 +65,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * + 真 {@link PermissionServiceImpl} (内置岗位矩阵) + 真 {@link IntentPermissionGate}。
  *
  * <p>意图配置<b>不手写</b>: required_permission 取自迁移层 ({@link WriteIntentPermissionSources#migratedPermissions()},
- * 即 V20261117_81 跑完后的值) —— 迁移里把这一行置空, 这里就回到「没有登记」而红。
+ * 即 V20261118_53 跑完后的值) —— 迁移里把这一行置空, 这里就回到「没有登记」而红。
  *
  * <p>识别 / 执行编排器是桩, 但按编排器同一顺序用真组件出状态: 先意图权限门 ({@link IntentPermissionGate#check}, 无权限 ⇒ NO_PERMISSION),
  * 再咨询 tab 写拦截 ({@link IntentTurnSharedSteps#readModeWriteBlocked}, ⇒ READ_MODE_WRITE_BLOCKED)。
@@ -131,10 +131,24 @@ class DigitalCrewWriteDelegationMvcContractTest {
         when(items.findByIdAndFactoryId(anyLong(), eq(F))).thenAnswer(inv -> saved.stream()
                 .filter(w -> w.getId().equals(inv.getArgument(0))).findFirst());
 
+        // 执行门用生产同一条 ToolPermissionChain + 真工具 (一线门 / 旧角色串 / 工具权限表), 不是桩 (#1816 终审 M1)
+        com.cretas.aims.ai.tool.ToolRbacEnforcer enforcer = new com.cretas.aims.ai.tool.ToolRbacEnforcer();
+        ReflectionTestUtils.setField(enforcer, "rbacGuard", rbac);
+        com.cretas.aims.service.execution.ToolPermissionChain chain = new com.cretas.aims.service.execution.ToolPermissionChain(
+                enforcer, new com.cretas.aims.service.intent.FrontlineAiWriteGrantService(
+                        mock(com.cretas.aims.repository.config.AiFrontlineIntentGrantRepository.class), writeGuard,
+                        mock(com.cretas.aims.service.intent.IntentConfigManagementService.class),
+                        mock(com.cretas.aims.ai.tool.ToolRegistry.class)));
+        Map<String, com.cretas.aims.ai.tool.ToolExecutor> tools = WriteIntentPermissionSources.tools();
+        com.cretas.aims.ai.tool.ToolRegistry registry = mock(com.cretas.aims.ai.tool.ToolRegistry.class);
+        when(registry.getExecutor(anyString())).thenAnswer(inv -> Optional.ofNullable(tools.get(inv.<String>getArgument(0))));
+        com.cretas.aims.service.crew.DigitalCrewExecutionGate executionGate =
+                new com.cretas.aims.service.crew.DigitalCrewExecutionGate(intentConfigs, registry, chain);
+
         DigitalCrewService service = new DigitalCrewService(items, mock(DigitalCrewMemberSettingRepository.class),
                 mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class), locks, users,
                 permissions, intents, intentConfigs, mock(PreviewTokenService.class),
-                mock(FactoryCapabilityPackSelector.class), mock(FactoryBusinessTypeResolver.class),
+                mock(FactoryCapabilityPackSelector.class), mock(FactoryBusinessTypeResolver.class), executionGate,
                 mock(PlatformTransactionManager.class));
         mvc = MockMvcBuilders.standaloneSetup(new DigitalCrewController(service))
                 .addInterceptors(new PermissionInterceptor(permissions, users, new ObjectMapper()))
@@ -144,6 +158,7 @@ class DigitalCrewWriteDelegationMvcContractTest {
         user(41L, "warehouse_manager");
         user(42L, "quality_inspector");
         user(43L, "dispatcher"); // warehouse/quality 只读: 没有入库 / 质检的写权限
+        user(44L, "quality_manager"); // 持有 quality:read_write, 但质检记录工具的旧角色串不含它
     }
 
     private void intent(String code, String name, String tool) {
@@ -207,6 +222,36 @@ class DigitalCrewWriteDelegationMvcContractTest {
                 .andExpect(jsonPath("$.data.item.canConfirm").value(true));
         assertThat(saved).hasSize(1);
         noBusinessWrite();
+    }
+
+    /**
+     * #1816 终审 M1: 只持有登记码不够 —— 质量经理有 quality:read_write, 但执行时质检记录工具的旧角色串不放行,
+     * 确认了也会被拒 ⇒ canConfirm=false, 服务端确认 403, 确认链路 0 次。
+     */
+    @Test
+    void holdingTheCodeButFailingTheToolGateCannotConfirm() throws Exception {
+        ask(44L, "quality_manager", "inspector", QC_TEXT)
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.kind").value("DELEGATED"))
+                .andExpect(jsonPath("$.data.intentCode").value("QUALITY_CHECK_CREATE"))
+                .andExpect(jsonPath("$.data.item.canConfirm").value(false));
+        assertThat(saved).hasSize(1);
+        noBusinessWrite();
+
+        DigitalCrewWorkItem w = saved.get(0);
+        w.setPreviewedByUserId(44L);
+        w.setCommandDigest("a".repeat(64));
+        String body = "{\"commandDigest\":\"" + "a".repeat(64) + "\",\"expiresAt\":\"" + Instant.now().plusSeconds(120)
+                + "\",\"requestId\":\"req-12345678\",\"idempotencyKey\":\"idem-12345678\"}";
+        mvc.perform(post("/api/mobile/" + F + "/digital-crew/items/" + w.getId() + "/confirm")
+                        .header("X-Cretas-Confirmation-Token", "proof-token-1")
+                        .contentType(MediaType.APPLICATION_JSON).content(body)
+                        .requestAttr("userId", 44L)
+                        .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 44L, F, "quality_manager")))
+                .andExpect(status().isForbidden());
+        verify(intents, never()).confirm(any(), any(), anyLong(), anyString());
+        verify(items, never()).claimForConfirm(any(), any(), any(), any(), any(), any(), any(), any(), any());
     }
 
     /**

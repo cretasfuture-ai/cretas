@@ -36,6 +36,8 @@ class WriteIntentRequiredPermissionContractTest {
      */
     static final Map<String, String> EXEMPT = Map.ofEntries(
             Map.entry("APPROVAL_ACTION_EXECUTE", "web 走 workflow 节点 approverRoles (canTransition), 无 @RequirePermission"),
+            Map.entry("CLOCK_IN", "一线打卡默认开放 (FrontlineAiWriteGrantService.DEFAULT_OPEN / V20261101_55); web 打卡是 hr:read_write, 登记会让操作员在 AI 里打不了卡 (#1816 终审 H1)"),
+            Map.entry("CLOCK_OUT", "同 CLOCK_IN (#1816 终审 H1)"),
             Map.entry("BATCH_CONSUMPTION_ADJUST", "web 只有 procurement:price:view (看价码), 工具另限超管/权限管理员"),
             Map.entry("CUSTOMER_NOTIFY_BATCH", "web 无召回客户通知接口; 工具限超管/权限管理员"),
             Map.entry("FACTORY_CONFIG_AGENT", "web 无 WorkflowTemplateService 保存接口"),
@@ -118,6 +120,50 @@ class WriteIntentRequiredPermissionContractTest {
             }
         }
         assertThat(bad).isEmpty();
+    }
+
+    /** 不算「普通角色」: 平台 / 工厂超管 / 权限管理员恒过工具门, 拿它们证明「有人能用这个码」是恒真式; 餐饮岗位已退役。 */
+    private static final Set<String> NOT_ORDINARY = Set.of("platform_admin", "factory_super_admin", "permission_admin",
+            "unactivated", "restaurant_manager", "restaurant_owner", "restaurant_chef", "restaurant_purchaser");
+
+    /**
+     * #1816 终审 M1 / 变异 W: 登记的每个「任一」码都必须有用 —— 有普通岗位持有它、且工具本身放普通岗位时, 至少一个持有人
+     * 在执行时也过得了工具那几道门 (一线开放名单 / 旧角色串 / 工具权限表与 getRequiredRoles, 即生产同一个 {@link com.cretas.aims.service.execution.ToolPermissionChain})。
+     * 一个码谁拿着都执行不了 = 意图层比执行门宽出来的一截 (例如质检记录多挂一个 production:read_write)。
+     * 岗位矩阵取 PermissionServiceImpl 内置矩阵 (工厂没有覆盖时的真实默认)。
+     */
+    @Test
+    void everyRegisteredCodeLetsSomeOrdinaryRolePassTheExecutionGate() {
+        ExecutionChainHarness chain = ExecutionChainHarness.build(WriteIntentPermissionSources.tools());
+        Map<String, WriteIntentPermissionSources.CatalogIntent> catalog = WriteIntentPermissionSources.catalogIntents();
+        List<String> useless = new ArrayList<>();
+        List<String> ordinaryRoles = new ArrayList<>();
+        for (com.cretas.aims.entity.enums.FactoryUserRole role : com.cretas.aims.entity.enums.FactoryUserRole.values()) {
+            if (!NOT_ORDINARY.contains(role.name())) ordinaryRoles.add(role.name());
+        }
+        int checked = 0, adminOnlyCode = 0, adminOnlyTool = 0, judged = 0;
+        for (Map.Entry<String, String> e : WriteIntentPermissionSources.migratedPermissions().entrySet()) {
+            WriteIntentPermissionSources.CatalogIntent row = catalog.get(e.getKey());
+            if (row == null || row.toolName() == null) continue;
+            // 工具自己只放管理员 (getRequiredRoles / 旧角色串 / 默认矩阵下没人有的「且」码): 登记码再宽, 普通岗位执行时也被工具拒,
+            // 意图层放过去不等于能执行; 数字班组的「谁能确认」由 DigitalCrewExecutionGate 按同一条链收窄 (M1)。
+            boolean toolAdmitsOrdinary = ordinaryRoles.stream()
+                    .anyMatch(r -> chain.passes(r, e.getKey(), row.toolName(), e.getValue()));
+            for (String code : IntentPermissionGate.splitCodes(e.getValue())) {
+                checked++;
+                List<String> holders = ordinaryRoles.stream().filter(r -> chain.holds(r, code)).toList();
+                if (holders.isEmpty()) { adminOnlyCode++; continue; } // 只有管理员持有的码: 不比执行门宽
+                if (!toolAdmitsOrdinary) { adminOnlyTool++; continue; }
+                judged++;
+                boolean someone = holders.stream().anyMatch(r -> chain.passes(r, e.getKey(), row.toolName(), e.getValue()));
+                if (!someone) useless.add(e.getKey() + ": " + code + " (tool=" + row.toolName() + ", holders=" + holders + ")");
+            }
+        }
+        System.out.println("[WriteIntentRequiredPermission] executionChainChecked=" + checked + " judged=" + judged
+                + " adminOnlyCode=" + adminOnlyCode + " adminOnlyTool=" + adminOnlyTool + " useless=" + useless.size());
+        assertThat(checked).as("阳性对照: 真的逐码查了").isGreaterThan(70);
+        assertThat(judged).as("阳性对照: 大部分码真的拿持有人去过了执行门, 不是全被跳过").isGreaterThan(60);
+        assertThat(useless).as("登记的码没有任何普通岗位能凭它执行 —— 比执行门宽; 去掉这个码, 或整条进 EXEMPT").isEmpty();
     }
 
     @Test
