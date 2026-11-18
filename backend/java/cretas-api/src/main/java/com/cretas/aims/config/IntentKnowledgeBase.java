@@ -3141,7 +3141,6 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
-        phraseToIntentMapping.put("出成率怎么样", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("哪道工序出成率", "REPORT_BATCH_YIELD_RANK");

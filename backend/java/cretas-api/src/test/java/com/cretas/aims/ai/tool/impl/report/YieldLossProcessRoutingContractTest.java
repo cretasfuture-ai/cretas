@@ -36,9 +36,20 @@ class YieldLossProcessRoutingContractTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"熟制杀菌最近出成率怎么样", "这个月出成率为什么掉了、掉在哪道工序", "这个月出成率为什么掉了", "各工序出成率"})
+    @ValueSource(strings = {"这个月出成率为什么掉了、掉在哪道工序", "这个月出成率为什么掉了", "各工序出成率"})
     void processYieldQuestionsGoToTheYieldTool(String q) {
         assertEquals("REPORT_BATCH_YIELD_RANK", route(q), q);
+    }
+
+    @Test
+    void plainYieldHowIsItIsLeftToTheRecognitionLayer_notShortcutNorQuality() {
+        // 「出成率怎么样」不做短语快捷 (DigitalCrewRecognitionFixesEntryContractTest 守: 这类问法要进识别层, 不被短语直达);
+        // 工序名由工具从原话里认, 不靠短语
+        for (String q : new String[]{"熟制杀菌最近出成率怎么样", "酱牛肉这个月的出成率怎么样？"}) {
+            String intent = route(q);
+            assertFalse(intent != null && intent.startsWith("QUALITY"), q + " -> " + intent);
+            assertEquals(null, intent, q);
+        }
     }
 
     @Test

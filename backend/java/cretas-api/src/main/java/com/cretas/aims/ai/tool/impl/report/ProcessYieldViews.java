@@ -43,7 +43,7 @@ final class ProcessYieldViews {
             m.put("productName", productName);
             m.put("processName", processName);
             m.put("level", level);
-            m.put("standardMaxDeviationPct", warnPct);
+            m.put("standardDeviationLimit", warnPct);
             m.put("deviationPct", deviationPct);
             m.put("inputQuantity", input);
             m.put("outputQuantity", output);

@@ -134,7 +134,7 @@ class ReportYieldProcessViewsContractTest {
         assertEquals("熟制杀菌", rows.get(0).get("processName").asText());
         assertEquals("酱牛肉", rows.get(0).get("productName").asText());
         assertEquals(30.0, rows.get(0).get("deviationPct").asDouble(), 0.001);
-        assertEquals(5, rows.get(0).get("standardMaxDeviationPct").asInt());
+        assertEquals(5, rows.get(0).get("standardDeviationLimit").asInt());
         assertEquals("B3", rows.get(1).get("batchNumber").asText());
         assertEquals("清洗", rows.get(1).get("processName").asText());
         assertTrue(msg.contains("B1") && msg.contains("B3") && msg.contains("B4") && msg.contains("标准 ≤ 5%") && msg.contains("实际偏差 30%"), msg);
