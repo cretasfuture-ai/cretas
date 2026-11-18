@@ -6,6 +6,9 @@
 export function markdownToPlainSummary(markdown: string | null | undefined, maxLen = 80): string {
   if (!markdown) return '';
   const text = markdown
+    // 后端为防注入转义过的 \# 与 &lt; &gt;：先还原再按 Markdown 规则清理
+    .replace(/\\([#*_`>|[\]()~-])/g, '$1')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
     .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
