@@ -43,7 +43,7 @@ export function previousRange(startDate: string, endDate: string): { startDate: 
 function pieConfig(summary: Partial<CostStructureSummary> | undefined | null): ChartWithMeta['config'] | null {
   if (!summary) return null;
   const data = COST_KEYS
-    .map(([name, key]) => ({ name, value: summary[key] }))
+    .map(([name, key]): { name: string; value: number | null | undefined } => ({ name, value: summary[key] }))
     .filter((d): d is { name: string; value: number } => typeof d.value === 'number' && d.value > 0);
   return data.length ? { series: [{ type: 'pie', data }] } : null;
 }
