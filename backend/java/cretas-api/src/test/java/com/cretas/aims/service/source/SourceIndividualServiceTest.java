@@ -7,6 +7,7 @@ import com.cretas.aims.dto.source.SourceIndividualLookupResult;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.entity.enums.DnaVerificationStatus;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -18,6 +19,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.data.jpa.repository.config.EnableJpaRepositories;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
 import java.util.Map;
@@ -47,12 +49,14 @@ class SourceIndividualServiceTest {
 
     @Autowired TestEntityManager entityManager;
     @Autowired SourceIndividualRepository repository;
+    @Autowired MaterialBatchRepository materialBatchRepository;
 
     private SourceIndividualService service;
 
     @BeforeEach
     void setUp() {
         service = new SourceIndividualService(repository);
+        ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
     }
 
     @Test
@@ -252,7 +256,7 @@ class SourceIndividualServiceTest {
     }
 
     @Test
-    @DisplayName("软删之后 getById 报 404, 列表里也没有了")
+    @DisplayName("撤销(软删)之后 getById 报 404, 列表里也没有了")
     void softDeleteRemovesItFromReads() {
         String id = service.create(FACTORY, CreateSourceIndividualRequest.builder()
                 .individualCode("SI-DEL").tagNumber("3330001").build()).getId();
@@ -263,7 +267,7 @@ class SourceIndividualServiceTest {
         PageResponse<SourceIndividualDTO> before = service.list(FACTORY, 1, 20, null);
         assertThat(before.getTotalElements()).isEqualTo(1L);
 
-        service.softDelete(FACTORY, id);
+        service.revoke(FACTORY, id, "录入错误", "1");
         flush();
 
         assertThatThrownBy(() -> service.getById(FACTORY, id))
@@ -284,7 +288,7 @@ class SourceIndividualServiceTest {
         assertThatThrownBy(() -> service.update("F-SVC-INTRUDER", id,
                 UpdateSourceIndividualRequest.builder().notes("x").build()))
                 .isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.softDelete("F-SVC-INTRUDER", id))
+        assertThatThrownBy(() -> service.revoke("F-SVC-INTRUDER", id, "越权撤销", "1"))
                 .isInstanceOf(BusinessException.class);
 
         // 阳性对照: 本厂读得到 —— 否则上面三条 404 可能只是「这条记录根本不存在」。

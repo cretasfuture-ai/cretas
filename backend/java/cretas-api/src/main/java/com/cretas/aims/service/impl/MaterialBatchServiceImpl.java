@@ -164,6 +164,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.warehouse.WarehouseLocationCatalog locationCatalog;
 
+    /**
+     * 批次挂源头个体前的校验(本厂/未撤销 + 锁个体行)。必注入 —— null 时只要请求带了
+     * sourceIndividualId 就拒绝(fail closed), ⛔ 不当「不校验」放过去。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.cretas.aims.service.source.SourceIndividualService sourceIndividualService;
+
     private final MaterialConsumptionRepository materialConsumptionRepository;
     private final ProductionPlanBatchUsageRepository productionPlanBatchUsageRepository;
     private final ExcelUtil excelUtil;
@@ -531,8 +538,13 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // T159-B R4: UoM dimension guard at 入库 (receipt) write time.
         checkInboundUnitCompatible(materialType, request.getQuantityUnit());
 
+        // 来源个体: 必须本厂、未撤销; 校验同时锁个体行到本事务提交(与撤销串行)。
+        String linkedSourceIndividualId =
+                requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
+
         // 创建批次
         MaterialBatch batch = materialBatchMapper.toEntity(request, factoryId, userId.longValue());
+        batch.setSourceIndividualId(linkedSourceIndividualId);
         batch.setSourceEventKey(request.getSourceEventKey());
         // 生成UUID作为ID
         batch.setId(java.util.UUID.randomUUID().toString());
@@ -972,15 +984,39 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("请刷新批次列表查看最新状态");
         }
 
+        // 来源个体: null = 不修改(partial); 非 null 必须本厂、未撤销, 并锁个体行(与撤销串行)。
+        String linkedSourceIndividualId = null;
+        if (request.getSourceIndividualId() != null) {
+            linkedSourceIndividualId = requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
+            if (linkedSourceIndividualId == null) {
+                throw new BusinessException(400, "来源个体编号不能为空白")
+                        .withHintTarget("sourceIndividualId");
+            }
+        }
+
         // 更新批次信息
         BigDecimal previousCurrentQuantity = batch.getCurrentQuantity();
         materialBatchMapper.updateEntity(batch, request);
+        if (linkedSourceIndividualId != null) {
+            batch.setSourceIndividualId(linkedSourceIndividualId);
+        }
         batch = materialBatchRepository.save(batch);
         if (batch.getCurrentQuantity().compareTo(previousCurrentQuantity) < 0) {
             publishStockChangedEventIfApplicable(factoryId, batch, "ADJUST");
         }
         log.info("更新原材料批次成功: batchId={}, callerRole={}", batchId, callerRole);
         return materialBatchMapper.toDTO(batch);
+    }
+
+    /** 见字段 {@link #sourceIndividualService}: 空 = 不挂个体; 非空必须过 requireLinkable。 */
+    private String requireLinkableSourceIndividual(String factoryId, String rawId) {
+        if (rawId == null || rawId.isBlank()) {
+            return null;
+        }
+        if (sourceIndividualService == null) {
+            throw new IllegalStateException("SourceIndividualService 未注入, 不能校验来源个体");
+        }
+        return sourceIndividualService.requireLinkable(factoryId, rawId);
     }
 
     @Override

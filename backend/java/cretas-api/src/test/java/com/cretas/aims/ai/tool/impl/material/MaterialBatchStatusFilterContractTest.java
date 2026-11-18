@@ -115,7 +115,9 @@ class MaterialBatchStatusFilterContractTest {
             MaterialBatch b = inv.getArgument(0);
             return MaterialBatchDTO.builder().id(b.getId()).status(b.getStatus()).build();
         });
-        service = new MaterialBatchServiceImpl(repo, null, null, mapper, null, null, null, null);
+        // 列表必然按批次查未结预扣(#1844 可用量口径) ⇒ 消耗仓储不能是 null; mock 默认返回空 = 无预扣。
+        service = new MaterialBatchServiceImpl(repo, null, null, mapper,
+                mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
         tool = new MaterialBatchQueryTool();
         ReflectionTestUtils.setField(tool, "materialBatchService", service);
         DataScopeContext.push(scope(DataScope.ALL));
