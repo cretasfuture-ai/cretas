@@ -79,10 +79,14 @@ class SalesOrderTraceContractTest {
         when(salesService.getSalesOrderById(F, "so-id-1")).thenReturn(o);
         ProductionPlan plan = new ProductionPlan();
         plan.setId("plan-1");
+        plan.setPlanNumber("PLAN-001");
+        plan.setPlannedQuantity(new java.math.BigDecimal("32.00"));
+        plan.setPlannedUnit("kg");
         when(planRepository.findByFactoryIdAndSourceOrderIdExact(F, "so-id-1")).thenReturn(List.of(plan));
         when(planRepository.findByFactoryIdAndSourceOrderIdsContaining(anyString(), anyString())).thenReturn(List.of());
         ProductionBatch pb = new ProductionBatch();
         pb.setBatchNumber("PB-001");
+        pb.setProductionPlanId("plan-1");
         when(batchRepository.findByFactoryIdAndProductionPlanIdIn(F, List.of("plan-1"))).thenReturn(List.of(pb));
         when(batchRepository.findByFactoryIdAndBatchNumber(F, SO_NO)).thenReturn(Optional.empty());
         when(traceabilityService.getFullTrace(F, "PB-001")).thenReturn(fullTrace());
@@ -98,7 +102,7 @@ class SalesOrderTraceContractTest {
                         TraceabilityDTO.ProcessingStageInfo.builder().stageName("解冻").stageOrder(1).build(),
                         TraceabilityDTO.ProcessingStageInfo.builder().stageName("卤制").stageOrder(2).build()))
                 .qualityInspections(List.of(TraceabilityDTO.QualityInfo.builder()
-                        .result("PASS").passRate(98.0).inspectorName("王质检").build()))
+                        .result("PASS").passRate(98.0).sampleSize(32.0).passCount(32.0).inspectorName("王质检").build()))
                 .shipments(List.of(TraceabilityDTO.ShipmentInfo.builder()
                         .shipmentNumber("SH-001").customerName("上海示例超市")
                         .shipmentDate(LocalDate.of(2026, 11, 6)).quantity(120.0).unit("kg")
@@ -121,6 +125,20 @@ class SalesOrderTraceContractTest {
         // 不外露字段名 / 英文 code / 「详见 trace 字段」
         assertThat(text).doesNotContain("PASS", "DELIVERED", "traceInfo", "batchNumber", "trace 字段");
         verify(traceabilityService).getFullTrace(F, "PB-001");
+    }
+
+    @Test
+    void replyHasProductionPlanSectionAndPassCountNotJustRate() throws Exception {
+        // 问题 39 收尾: 溯源链要单列生产计划 (计划号/产品/计划量); 质检要给件数 32/32, 不只一个百分比
+        wireOrderToOneBatch();
+
+        Map<String, Object> result = fullTool.doExecute(F, new HashMap<>(Map.of("batchNumber", SO_NO)), Map.of());
+
+        String text = (String) result.get("message");
+        assertThat(text).contains("生产计划", "PLAN-001", "产品 酱牛肉", "计划量 32kg");
+        assertThat(text).contains("32/32 合格", "合格率 98%");
+        // 生产计划是链路的第一节, 在原料之前
+        assertThat(text.indexOf("PLAN-001")).isLessThan(text.indexOf("牛腱"));
     }
 
     @Test
