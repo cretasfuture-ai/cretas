@@ -298,6 +298,7 @@ class RushOrderImpactToolDataContractTest {
         assertThat(nj.path("shortfall").decimalValue()).isEqualByComparingTo("700");
         assertThat(nj.path("onOrder").decimalValue()).isEqualByComparingTo("300");
         assertThat(nj.path("gapAfterOnOrder").decimalValue()).isEqualByComparingTo("400");
+        assertThat(nj.path("onOrderUnitMismatchLines").asInt()).isZero();
         assertThat(material.path("text").asText()).startsWith("不够").contains("QA-牛腱 缺 700kg").contains("在途未到 300kg");
 
         JsonNode line = section(root, "LINE_AND_LABOR");
@@ -324,6 +325,40 @@ class RushOrderImpactToolDataContractTest {
         assertThat(root.path("data").path("message").asText()).contains("1. 物料够不够").contains("2. 产线和人手排不排得开")
                 .contains("3. 要挪哪几张原单、各晚多久").contains("4. 方案草案");
         assertNothingWritten();
+    }
+
+    @Test
+    @DisplayName("M1 在途有单位不同的行 → 说「另有 N 行在途采购单位不同未计入」, ⛔ 不说「没有在途采购」; row 带计数")
+    void onOrderUnitMismatchIsNotReportedAsNoOnOrder() throws Exception {
+        stock.put("QA-RM-NJ", new BigDecimal("1800"));
+        stock.put("QA-RM-JL", new BigDecimal("150"));
+        when(supply.findOpenOrderRemaining(F, "QA-RM-NJ"))
+                .thenReturn(List.<Object[]>of(new Object[]{"箱", new BigDecimal("10")}));
+        slotThursdayMorning();
+
+        JsonNode material = section(run(SAID), "MATERIAL");
+        assertThat(material.path("status").asText()).isEqualTo("SHORT");
+        JsonNode nj = material.path("shortLines").get(0);
+        assertThat(nj.path("onOrderUnitMismatchLines").asInt()).isEqualTo(1);
+        assertThat(material.path("text").asText()).contains("另有 1 行在途采购单位不同未计入")
+                .doesNotContain("没有在途采购");
+    }
+
+    @Test
+    @DisplayName("M1 在途同单位 300kg + 1 行单位不同 → 「到货后仍缺」注明不含单位不同的在途")
+    void onOrderGapExcludesMismatchedLinesExplicitly() throws Exception {
+        stock.put("QA-RM-NJ", new BigDecimal("1800"));
+        stock.put("QA-RM-JL", new BigDecimal("150"));
+        when(supply.findOpenOrderRemaining(F, "QA-RM-NJ")).thenReturn(List.<Object[]>of(
+                new Object[]{"kg", new BigDecimal("300")}, new Object[]{"箱", new BigDecimal("10")}));
+        slotThursdayMorning();
+
+        JsonNode material = section(run(SAID), "MATERIAL");
+        JsonNode nj = material.path("shortLines").get(0);
+        assertThat(nj.path("onOrder").decimalValue()).isEqualByComparingTo("300");
+        assertThat(nj.path("onOrderUnitMismatchLines").asInt()).isEqualTo(1);
+        assertThat(material.path("text").asText()).contains("到货后仍缺 400kg（不含单位不同的在途）")
+                .contains("另有 1 行在途采购单位不同未计入");
     }
 
     @Test

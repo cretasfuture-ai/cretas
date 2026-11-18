@@ -3060,7 +3060,11 @@ public class IntentKnowledgeBase {
         // 全部 >= 4 字, 走长短语包含匹配; 「急单」「插单」两字单词不单独登记, 免得抢走无关句子。
         phraseToIntentMapping.put("急单原料够不够", "SCHEDULING_RUSH_ORDER_ANALYSIS");
         phraseToIntentMapping.put("急单产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
-        phraseToIntentMapping.put("产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        // 不登记光秃秃的「产线排不排得开」(「明天产线排不排得开」是普通排产问题, 不该拉进急单工具);
+        // 只认「原料够不够 + 产线排不排得开」连问 (BP 原话的问法, 问的就是插一单能不能做)。
+        phraseToIntentMapping.put("原料够不够，产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("原料够不够,产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
+        phraseToIntentMapping.put("原料够不够产线排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
         phraseToIntentMapping.put("急单排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
         phraseToIntentMapping.put("插单排不排得开", "SCHEDULING_RUSH_ORDER_ANALYSIS");
         phraseToIntentMapping.put("急单能不能插", "SCHEDULING_RUSH_ORDER_ANALYSIS");

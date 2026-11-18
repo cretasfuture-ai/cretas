@@ -28,7 +28,7 @@ public final class RushOrderRequestParser {
     }
 
     private static final Pattern QUANTITY = Pattern.compile(
-            "(\\d+(?:\\.\\d+)?|[一二两三四五六七八九十百]+)\\s*(吨|公吨|t(?![a-z])|千克|公斤|kg|斤|件|个|箱|批|袋|盒|包)",
+            "(\\d+(?:\\.\\d+)?|[零一二两三四五六七八九十百千]+)\\s*(吨|公吨|t(?![a-z])|千克|公斤|kg|斤|件|个|箱|批|袋|盒|包)",
             Pattern.CASE_INSENSITIVE);
 
     private static final Pattern WEEKDAY = Pattern.compile("(下下|下个?|这个?|本)?(?:周|星期|礼拜)([一二三四五六日天1-7])");
@@ -67,25 +67,33 @@ public final class RushOrderRequestParser {
                 return null;
             }
         }
-        // 简单中文数字: 两 / 十二 / 二十 / 三百
+        // 简单中文数字: 两 / 十二 / 二十 / 三百 / 三百零五 / 一千二百。
+        // 口语省略末位单位: 「两百五」= 250、「一千二」= 1200 (紧跟在 百/千 后面的单个数字按下一位补零);
+        // 「三百零五」有「零」隔开, 仍是 305。
         int total = 0;
-        int current = 0;
+        int digit = 0;
+        int lastUnit = 0;
+        boolean digitRightAfterUnit = false;
+        boolean prevWasUnit = false;
         for (char c : s.toCharArray()) {
             int d = "零一二三四五六七八九".indexOf(c);
             if (c == '两') d = 2;
+            int unit = c == '十' ? 10 : c == '百' ? 100 : c == '千' ? 1000 : 0;
             if (d >= 0) {
-                current = d;
-            } else if (c == '十') {
-                total += (current == 0 ? 1 : current) * 10;
-                current = 0;
-            } else if (c == '百') {
-                total += (current == 0 ? 1 : current) * 100;
-                current = 0;
+                digit = d;
+                digitRightAfterUnit = prevWasUnit && d != 0;
+                prevWasUnit = false;
+            } else if (unit > 0) {
+                total += (digit == 0 ? 1 : digit) * unit;
+                digit = 0;
+                lastUnit = unit;
+                digitRightAfterUnit = false;
+                prevWasUnit = true;
             } else {
                 return null;
             }
         }
-        total += current;
+        total += digitRightAfterUnit && lastUnit >= 100 ? digit * (lastUnit / 10) : digit;
         return total == 0 ? null : BigDecimal.valueOf(total);
     }
 

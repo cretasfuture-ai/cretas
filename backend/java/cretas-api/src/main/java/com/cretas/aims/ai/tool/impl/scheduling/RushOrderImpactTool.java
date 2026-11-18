@@ -275,11 +275,17 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
                         sb.append(" 缺 ").append(plain(l.shortfall())).append(unit(l.unit()))
                                 .append("（需要 ").append(plain(l.required())).append(unit(l.unit()))
                                 .append("，可领库存 ").append(plain(l.available())).append(unit(l.unit())).append("）");
+                        int mismatch = l.onOrderUnitMismatchLines();
                         if (l.onOrder() != null && l.onOrder().signum() > 0) {
                             sb.append("，在途未到 ").append(plain(l.onOrder())).append(unit(l.unit()))
                                     .append("，到货后仍缺 ").append(plain(l.gapAfterOnOrder())).append(unit(l.unit()));
-                        } else {
+                            if (mismatch > 0) sb.append("（不含单位不同的在途）");
+                        } else if (mismatch == 0) {
                             sb.append("，没有在途采购");
+                        }
+                        // 单位不同的在途行没换算进来: 只能说「不知道多少」, ⛔ 不说成「没有在途」
+                        if (mismatch > 0) {
+                            sb.append("，另有 ").append(mismatch).append(" 行在途采购单位不同未计入");
                         }
                     }
                     Map<String, Object> row = new LinkedHashMap<>();
@@ -290,6 +296,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
                     row.put("shortfall", l.shortfall());
                     row.put("onOrder", l.onOrder());
                     row.put("gapAfterOnOrder", l.gapAfterOnOrder());
+                    row.put("onOrderUnitMismatchLines", l.onOrderUnitMismatchLines());
                     lines.add(row);
                 }
                 Map<String, Object> s = section("MATERIAL", "SHORT", sb.toString(), basis);
@@ -403,7 +410,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         };
     }
 
-    private static Map<String, Object> lineSection(SlotOutcome best, List<SlotOutcome> evaluated, int candidateCount) {
+    static Map<String, Object> lineSection(SlotOutcome best, List<SlotOutcome> evaluated, int candidateCount) {
         Map<String, Object> r = best.resources();
         InsertSlot slot = best.slot();
         StringBuilder sb = new StringBuilder();
@@ -447,8 +454,12 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         return s;
     }
 
+    /** 链式影响的口径: 全厂按时间重叠判冲突, 不按产线区分 (多产线工厂会把别的线上的计划也算进来)。 */
+    static final String CHAIN_BASIS = "链式影响分析 (插单时段与已排计划的时间冲突 + 级联顺延); "
+            + "全厂按时间重叠判冲突, 未按产线区分, 别的产线上同时段的计划也会算进来";
+
     @SuppressWarnings("unchecked")
-    private static Map<String, Object> movedSection(SlotOutcome best) {
+    static Map<String, Object> movedSection(SlotOutcome best) {
         Map<String, Object> impact = best.impact();
         Object plansRaw = impact.get("impactedPlans");
         Object count = impact.get("affectedPlanCount");
@@ -456,9 +467,13 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
             return section("MOVED_ORDERS", "UNVERIFIED", "算不出来，缺完整的链式影响分析结果（影响等级 / 受影响计划数没有算出）。", null);
         }
         List<Object> plans = plansRaw instanceof List<?> l ? (List<Object>) l : List.of();
-        if (((Number) count).intValue() == 0 || plans.isEmpty()) {
-            return section("MOVED_ORDERS", "NONE", "不用挪原单：这个时段插进去，不推迟任何已排的生产计划。",
-                    "链式影响分析 (插单时段与已排计划的时间冲突 + 级联顺延)");
+        if (((Number) count).intValue() == 0) {
+            return section("MOVED_ORDERS", "NONE", "不用挪原单：这个时段插进去，不推迟任何已排的生产计划。", CHAIN_BASIS);
+        }
+        if (plans.isEmpty()) {
+            // 计数说有影响、明细却是空: 对不上就是不知道, ⛔ 不说成「不用挪」
+            return section("MOVED_ORDERS", "UNVERIFIED", "算不出来，缺受影响计划明细（链式影响分析说会影响 "
+                    + ((Number) count).intValue() + " 张原单，但没有给出是哪几张）。", CHAIN_BASIS);
         }
         StringBuilder sb = new StringBuilder("要挪 ").append(((Number) count).intValue()).append(" 张原单：");
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -483,8 +498,7 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
         if (details instanceof Map<?, ?> d && d.get("maxDelayMinutes") instanceof Number max) {
             sb.append("\n  最长晚 ").append(minutes(max.intValue()));
         }
-        Map<String, Object> s = section("MOVED_ORDERS", "MOVES", sb.toString(),
-                "链式影响分析 (插单时段与已排计划的时间冲突 + 级联顺延)");
+        Map<String, Object> s = section("MOVED_ORDERS", "MOVES", sb.toString(), CHAIN_BASIS);
         s.put("movedPlans", rows);
         return s;
     }
