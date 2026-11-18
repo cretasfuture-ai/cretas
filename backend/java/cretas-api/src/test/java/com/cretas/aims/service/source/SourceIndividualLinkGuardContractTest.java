@@ -182,7 +182,10 @@ class SourceIndividualLinkGuardContractTest {
         em.clear();
 
         assertThatThrownBy(() -> batchService.createMaterialBatch(FACTORY, inbound(id), 1L))
-                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(409));
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_REVOKED");
+                });
         verify(batchRepoMock, never()).save(any());
     }
 
@@ -193,7 +196,11 @@ class SourceIndividualLinkGuardContractTest {
         em.flush();
 
         assertThatThrownBy(() -> batchService.createMaterialBatch(FACTORY, inbound(foreign), 1L))
-                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(400));
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(400);
+                    // 钉住是哪一道闸拦的 —— 前面别的校验也会 400。
+                    assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_NOT_FOUND");
+                });
         verify(batchRepoMock, never()).save(any());
     }
 
@@ -235,7 +242,10 @@ class SourceIndividualLinkGuardContractTest {
         UpdateMaterialBatchRequest req = new UpdateMaterialBatchRequest();
         req.setSourceIndividualId(id);
         assertThatThrownBy(() -> batchService.updateMaterialBatch(FACTORY, "MB-LINK-UPD", req))
-                .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getCode()).isEqualTo(409));
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_REVOKED");
+                });
         verify(batchRepoMock, never()).save(any());
         assertThat(existing.getSourceIndividualId()).isNull();
     }
@@ -278,6 +288,7 @@ class SourceIndividualLinkGuardContractTest {
         req.setUnitPrice(BigDecimal.TEN);
         req.setReceiptDate(LocalDate.now());
         req.setSourceDocType("MANUAL_ADJUST");
+        req.setNotes("来源个体挂载闸测试");   // 手工调整入库必须有备注, 否则在更前面就 400 了
         req.setSourceIndividualId(sourceIndividualId);
         return req;
     }
