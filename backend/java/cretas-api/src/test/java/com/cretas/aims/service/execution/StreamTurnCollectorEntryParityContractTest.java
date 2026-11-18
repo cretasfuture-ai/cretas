@@ -1177,7 +1177,7 @@ class StreamTurnCollectorEntryParityContractTest {
         assertThat(executed.streamRuns()).as("/execute 跑的是流式管线 (一次)").isEqualTo(1);
     }
 
-    private static final class Harness {
+    static final class Harness {
         static final Map<String, Object> MASKED = Map.of("unitPrice", "***");
 
         final Entry entry;
@@ -1294,7 +1294,7 @@ class StreamTurnCollectorEntryParityContractTest {
                     .confidence(0.0).questionType(QuestionType.CONVERSATIONAL).build());
         }
 
-        private AIIntentConfig intent(String code, String name, String toolName, ToolExecutor.AccessMode accessMode) {
+        AIIntentConfig intent(String code, String name, String toolName, ToolExecutor.AccessMode accessMode) {
             AIIntentConfig config = AIIntentConfig.builder().intentCode(code).intentName(name)
                     .intentCategory("QUERY").businessType("COMMON").sensitivityLevel("MEDIUM")
                     .requiredPermission("any:read").toolName(toolName).build();

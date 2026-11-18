@@ -89,11 +89,21 @@ final class FlywheelValueMasker {
     }
 
     static String mask(String text, Scope scope, Collection<String> ingredients, Map<String, Integer> stats) {
+        return mask(text, scope, ingredients, List.of(), stats);
+    }
+
+    /**
+     * @param keepNames 本厂产品名: 名字里的数 (「演示·酱卤牛肉250g」的规格 250g) 是品名的一部分, 不是用量 / 数量,
+     *                  原样保留 (2026-11-17 F006 飞轮把「酱卤牛肉250g」记成「酱卤牛肉&lt;用量&gt;」)。只管数值, 不把产品名当配料。
+     */
+    static String mask(String text, Scope scope, Collection<String> ingredients, Collection<String> keepNames,
+                       Map<String, Integer> stats) {
         if (text == null || text.isEmpty() || !(scope.prices() || scope.recipe() || scope.quantities())) {
             return text;
         }
         List<Span> spans = new ArrayList<>();
         List<int[]> names = occurrences(text, ingredients);
+        names.addAll(occurrences(text, keepNames));
         List<int[]> ratios = new ArrayList<>();
         if (scope.recipe()) {
             Matcher r = COLON_RATIO.matcher(text);
