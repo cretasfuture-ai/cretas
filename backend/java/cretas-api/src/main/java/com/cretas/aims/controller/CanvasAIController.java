@@ -1059,8 +1059,10 @@ public class CanvasAIController {
                         ToolExecutionSource.HTTP_CONTROLLER,
                         ToolExecutionMode.EXECUTE,
                         Optional.of(ToolCommandDigest.persistentSecretFingerprint(token)),
+                        // 认领绑业务对象: 画布凭据签发时记的是 (CANVAS_DIFF, 工具名), 这里按本次提交的工具说出期望值
                         Optional.of(new ConfirmationProof(token, bound.commandDigest(),
-                                bound.expiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant())),
+                                bound.expiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant(),
+                                "CANVAS_DIFF", submittedTool)),
                         Optional.empty(),
                         Instant.now().plusSeconds(30));
             } catch (RuntimeException invalidCommand) {

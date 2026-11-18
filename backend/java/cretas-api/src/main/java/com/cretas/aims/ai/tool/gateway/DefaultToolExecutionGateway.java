@@ -206,6 +206,13 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         }
         Lease lease = leaseOptional.get();
 
+        // 执行前业务状态核对: 与老确认入口同一份规则 (PreviewStateRecheck)。凭据认领之后、工具执行之前。
+        Optional<ToolExecutionResult> staleBusinessState = recheckBusinessState(
+                command, current, resolved, lease, idempotencyRecord, auditEventId);
+        if (staleBusinessState.isPresent()) {
+            return staleBusinessState.get();
+        }
+
         try {
             JsonNode payload = executeResolved(
                     command, current, resolved, lease.persistedParameters());
@@ -424,16 +431,8 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         }
         JsonNode payload;
         try {
-            String arguments = objectMapper.writeValueAsString(command.parameters());
-            ToolCall toolCall = ToolCall.of(
-                    command.requestId(), command.toolName(), arguments);
-            ToolExecutor executor = resolved.executor();
-            try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
-                    PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
-                String rawResponse = executor.preview(
-                        toolCall, trustedExecutionContext(command, current, resolved));
-                payload = objectMapper.readTree(rawResponse);
-            }
+            payload = objectMapper.readTree(
+                    previewResolved(command, current, resolved, command.parameters()));
         } catch (Exception previewFailure) {
             return finishPreview(
                     command,
@@ -498,6 +497,95 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
 
     private static boolean canViewPrices(RehydratedPrincipal current) {
         return Boolean.TRUE.equals(current.executionContext().get("canViewPrices"));
+    }
+
+    /** The gateway's only preview call site: same trusted user, price scope and egress context as execution. */
+    private String previewResolved(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            JsonNode parameters) throws Exception {
+        String arguments = objectMapper.writeValueAsString(parameters);
+        ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
+        ToolExecutor executor = resolved.executor();
+        try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
+                PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
+            return executor.preview(toolCall, trustedExecutionContext(command, current, resolved));
+        }
+    }
+
+    /**
+     * 执行前业务状态核对 (与老入口 {@code IntentExecutionOrchestrator.confirm} 同一份规则
+     * {@link PreviewStateRecheck#recheck}): 凭据记下了预览时的改前值时, 用凭据绑定的参数重跑一次只读预览,
+     * 预览之后对象被改过 / 前提不再成立 / 重读失败 / 无法核对 → 本次不执行工具, 凭据记失败 (确定没写入),
+     * 回执 {@code status=PREVIEW_STALE} (重新预览能解决) 或 {@code CONFIRM_NOT_SUPPORTED} 与老入口一致。
+     *
+     * <p>凭据没有记改前值 (空快照) 时不核对: 这类凭据的签发方没有「预览 → 隔一段时间再确认」的窗口可比,
+     * 各自另有绑定 —— 自动任务在触发当刻按授权铸凭据、画布配置走服务端方案绑定、AI 建产品只新建记录。
+     * 一旦签发方记了改前值, 这里就按它核对, 不再区分签发方。</p>
+     */
+    private Optional<ToolExecutionResult> recheckBusinessState(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            Lease lease,
+            ToolExecutionIdempotencyRecord idempotencyRecord,
+            String auditEventId) {
+        if (!hasRecordedPriorState(lease.recordedPriorState())) {
+            return Optional.empty();
+        }
+        PreviewStateRecheck.ConfirmStateCheck check;
+        try {
+            Map<String, Object> boundParameters = objectMapper.convertValue(
+                    lease.persistedParameters(),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+            check = PreviewStateRecheck.recheck(
+                    resolved.executor(),
+                    lease.recordedPriorState(),
+                    boundParameters,
+                    // 重跑预览用凭据里原样持久化的参数 (就是随后要执行的那一份), 不经 Map 往返改数字表示
+                    ignoredCopy -> previewResolved(command, current, resolved, lease.persistedParameters()),
+                    objectMapper);
+        } catch (RuntimeException recheckUnavailable) {
+            // 核对本身出错: 工具还没被调用, 按「重读失败」拒绝 (fail-closed), 不让凭据停在执行中
+            check = PreviewStateRecheck.ConfirmStateCheck.reject(
+                    PreviewStateRecheck.ConfirmStateCheck.REREAD_FAILED, java.util.List.of(),
+                    PreviewStateRecheck.REREAD_FAILED_MESSAGE);
+        }
+        if (check.proceed()) {
+            return Optional.empty();
+        }
+        // 工具没被调用: 凭据记确定的失败 (不是结果不明), 与老入口一致。
+        safelyResolve(lease, false);
+        ObjectNode stale = JsonNodeFactory.instance.objectNode();
+        stale.put("success", false);
+        stale.put("status", check.responseStatus());
+        stale.put("reason", check.code());
+        stale.set("changedFields", objectMapper.valueToTree(check.changedFields()));
+        stale.put("needsRepreview", check.repreviewHelps());
+        stale.put("message", check.message());
+        return Optional.of(finishReserved(
+                command,
+                idempotencyRecord,
+                auditEventId,
+                ToolExecutionIdempotencyRecord.State.FAILED,
+                ToolExecutionStatus.FAILED,
+                GatewayResultCode.PREVIEW_STALE,
+                stale,
+                check.message()));
+    }
+
+    private boolean hasRecordedPriorState(String recordedPriorStateJson) {
+        if (recordedPriorStateJson == null || recordedPriorStateJson.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode recorded = objectMapper.readTree(recordedPriorStateJson);
+            // 读不出 / 不是对象: 记了却无法核对, 交给 recheck 按 REREAD_FAILED 拒绝 (fail-closed)
+            return recorded == null || !recorded.isObject() || recorded.size() > 0;
+        } catch (Exception unreadable) {
+            return true;
+        }
     }
 
     private ToolExecutionResult finishPreview(

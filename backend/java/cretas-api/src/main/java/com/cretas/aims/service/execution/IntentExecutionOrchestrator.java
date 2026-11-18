@@ -715,7 +715,7 @@ public class IntentExecutionOrchestrator {
 
             // 确认时比对状态 (Fable 审阅 §8.2): 重读对象当前的改前值, 与预览时记下的比对;
             // 预览之后有人改过 / 前提已不成立 / 无法核对 → 本次不执行, 让用户重新预览。
-            ToolDispatchService.ConfirmStateCheck stateCheck = toolDispatchService.recheckPreviewState(
+            com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck stateCheck = toolDispatchService.recheckPreviewState(
                     tool, intentConfig, token.getCurrentValues(), claimResult.getParameters(),
                     factoryId, userId, userRole);
             if (!stateCheck.proceed()) {
@@ -730,7 +730,8 @@ public class IntentExecutionOrchestrator {
                         .intentCode(intentCode)
                         // 重新预览能解决 → PREVIEW_STALE (前端给「重新生成预览」);
                         // 无法核对的工具重新预览还是一样 → CONFIRM_NOT_SUPPORTED (只给去业务页面), 不能原地打转
-                        .status(stateCheck.repreviewHelps() ? PREVIEW_STALE : CONFIRM_NOT_SUPPORTED)
+                        // (与执行网关同一口径: PreviewStateRecheck.ConfirmStateCheck#responseStatus)
+                        .status(stateCheck.responseStatus())
                         .message(stateCheck.message())
                         .formattedText(stateCheck.message())
                         .resultData(stale)
@@ -847,9 +848,9 @@ public class IntentExecutionOrchestrator {
 
     static final String OUTCOME_UNKNOWN = "OUTCOME_UNKNOWN";
     /** 确认前状态核对没过: 什么都没执行, 需要重新预览。 */
-    static final String PREVIEW_STALE = "PREVIEW_STALE";
+    static final String PREVIEW_STALE = com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.PREVIEW_STALE;
     /** 这个工具给不出可核对的改前值, 不能在助手里确认: 什么都没执行, 重新预览也没用, 去业务页面。 */
-    static final String CONFIRM_NOT_SUPPORTED = "CONFIRM_NOT_SUPPORTED";
+    static final String CONFIRM_NOT_SUPPORTED = com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.CONFIRM_NOT_SUPPORTED;
     /** 同一张凭据已经执行成功过: 这次没有重复执行。 */
     static final String ALREADY_EXECUTED = "ALREADY_EXECUTED";
 

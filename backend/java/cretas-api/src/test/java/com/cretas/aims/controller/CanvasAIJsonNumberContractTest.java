@@ -235,7 +235,7 @@ class CanvasAIJsonNumberContractTest {
                     .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
         }
         verify(gateway, times(1)).execute(any(ToolExecutionCommand.class));
-        verify(previewTokens, never()).claimToken(any(), any(), anyLong(), any());
+        verify(previewTokens, never()).claimTokenForSubject(any(), any(), anyLong(), any(), any(), any());
     }
 
     private CanvasAIController.AIRequest request(Map<String, Object> params) {

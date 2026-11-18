@@ -139,8 +139,8 @@ class CanvasAIGatewayApplyContractTest {
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("REUSED");
 
         verify(h.executor, times(1)).execute(any(ToolCall.class), any());
-        verify(h.previewTokens, times(1)).claimToken(
-                eq(h.token), eq(FACTORY), eq(7L), eq(h.digest));
+        verify(h.previewTokens, times(1)).claimTokenForSubject(
+                eq(h.token), eq(FACTORY), eq(7L), eq(h.digest), any(), any());
         verify(h.previewTokens, times(1)).resolveClaim(
                 eq(h.token), eq("claim-1"), eq(true), anyString());
         verify(h.idempotencyRepository, times(2)).saveAndFlush(any());
@@ -160,7 +160,7 @@ class CanvasAIGatewayApplyContractTest {
         assertThat(h.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
         verify(h.executor, times(1)).execute(any(ToolCall.class), any());
-        verify(h.previewTokens, times(1)).claimToken(anyString(), eq(FACTORY), eq(7L), anyString());
+        verify(h.previewTokens, times(1)).claimTokenForSubject(anyString(), eq(FACTORY), eq(7L), anyString(), any(), any());
     }
 
     @Test
@@ -175,7 +175,7 @@ class CanvasAIGatewayApplyContractTest {
         assertThat(h.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("UNKNOWN");
         verify(h.executor, never()).execute(any(ToolCall.class), any());
-        verify(h.previewTokens, times(1)).claimToken(anyString(), eq(FACTORY), eq(7L), anyString());
+        verify(h.previewTokens, times(1)).claimTokenForSubject(anyString(), eq(FACTORY), eq(7L), anyString(), any(), any());
 
         IntegrationHarness executing = integrationHarness(LocalDateTime.now().plusMinutes(5));
         executing.duplicateExisting(completedRecord(
@@ -183,7 +183,7 @@ class CanvasAIGatewayApplyContractTest {
         assertThat(executing.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("UNKNOWN");
         verify(executing.executor, never()).execute(any(ToolCall.class), any());
-        verify(executing.previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(executing.previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
     }
 
     @Test
@@ -236,13 +236,13 @@ class CanvasAIGatewayApplyContractTest {
         replay.duplicateExisting(completedRecord(ToolExecutionStatus.SUCCEEDED));
         assertThat(replay.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("REUSED");
-        verify(replay.previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(replay.previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(replay.executor, never()).execute(any(ToolCall.class), any());
 
         IntegrationHarness fresh = integrationHarness(LocalDateTime.now().minusMinutes(1));
         assertThat(fresh.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
-        verify(fresh.previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(fresh.previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(fresh.executor, never()).execute(any(ToolCall.class), any());
         verify(fresh.idempotencyRepository).saveAndFlush(any());
     }
@@ -259,7 +259,7 @@ class CanvasAIGatewayApplyContractTest {
         assertThat(tampered.items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
         verify(h.executor, never()).execute(any(ToolCall.class), any());
-        verify(h.previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(h.previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
 
         MobileService otherMobile = mock(MobileService.class);
         UserDTO other = new UserDTO();
@@ -292,7 +292,7 @@ class CanvasAIGatewayApplyContractTest {
                         "businessType", "FACTORY", "userId", 7L, "userRole", "permission_admin"))));
         assertThat(gatewayTenant.apply().items()).singleElement()
                 .extracting(CanvasAIController.ApplyDiffResult::status).isEqualTo("FAILURE");
-        verify(gatewayTenant.previewTokens, never()).claimToken(anyString(), anyString(), anyLong(), anyString());
+        verify(gatewayTenant.previewTokens, never()).claimTokenForSubject(anyString(), anyString(), anyLong(), anyString(), any(), any());
         verify(gatewayTenant.executor, never()).execute(any(ToolCall.class), any());
     }
 
@@ -410,7 +410,7 @@ class CanvasAIGatewayApplyContractTest {
                     .executionMode(ToolExecutionMode.EXECUTE).commandDigest(digest)
                     .expiresAt(expiresAt).status(IntentPreviewToken.TokenStatus.PENDING)
                     .build();
-            when(previewTokens.claimToken(token, FACTORY, 7L, digest))
+            when(previewTokens.claimTokenForSubject(token, FACTORY, 7L, digest, "CANVAS_DIFF", TOOL))
                     .thenReturn(PreviewTokenService.ClaimResult.success(
                             claimed, "claim-1", commandParameters(params)));
             when(previewTokens.resolveClaim(eq(token), eq("claim-1"), anyBoolean(), anyString()))
@@ -426,7 +426,7 @@ class CanvasAIGatewayApplyContractTest {
         }
 
         private void previewTokensClaimThrows() {
-            when(previewTokens.claimToken(token, FACTORY, 7L, digest))
+            when(previewTokens.claimTokenForSubject(token, FACTORY, 7L, digest, "CANVAS_DIFF", TOOL))
                     .thenThrow(new IllegalStateException("claim unavailable in integration fixture"));
         }
 

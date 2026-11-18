@@ -26,5 +26,10 @@ public enum GatewayResultCode {
     /** S6-04: a write refused by the autonomous policy (not a schedule, unbound or unstated outcome). */
     AUTONOMOUS_WRITE_DENIED,
     /** S6-04: delegated writes switched off (deployment, factory never switched on, or switched off). */
-    WRITES_SUSPENDED
+    WRITES_SUSPENDED,
+    /**
+     * Pre-execution business-state check failed (object changed after preview, precondition no longer
+     * holds, state unreadable or not comparable). The Tool was not invoked; nothing was written.
+     */
+    PREVIEW_STALE
 }

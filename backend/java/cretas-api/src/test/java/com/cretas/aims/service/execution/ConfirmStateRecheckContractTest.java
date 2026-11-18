@@ -56,7 +56,7 @@ class ConfirmStateRecheckContractTest {
         var check = recheck(tool, "{\"剩余数量\":12.5,\"状态\":\"可用\"}");
 
         assertThat(check.proceed()).isFalse();
-        assertThat(check.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.STATE_CHANGED);
+        assertThat(check.code()).isEqualTo(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.STATE_CHANGED);
         assertThat(check.changedFields()).containsExactly("剩余数量");
         assertThat(check.message()).contains("「剩余数量」").contains("重新预览");
     }
@@ -96,7 +96,7 @@ class ConfirmStateRecheckContractTest {
 
         var modifying = recheck(tool("{\"success\":true,\"data\":{\"canDo\":true,\"name\":\"x\"}}", false), "{}");
         assertThat(modifying.proceed()).isFalse();
-        assertThat(modifying.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE);
+        assertThat(modifying.code()).isEqualTo(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.NOT_COMPARABLE);
         // 无法核对的工具重新预览还是一样: 不许把用户送回同一张卡 (死循环), 只指去业务页面
         assertThat(modifying.repreviewHelps()).isFalse();
         assertThat(modifying.message()).doesNotContain("重新预览").contains("业务页面");
@@ -114,7 +114,7 @@ class ConfirmStateRecheckContractTest {
         var check = recheck(creator, "{}");
 
         assertThat(check.proceed()).isFalse();
-        assertThat(check.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.PRECONDITION_CHANGED);
+        assertThat(check.code()).isEqualTo(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.PRECONDITION_CHANGED);
         assertThat(check.message()).contains("名称已被占用");
     }
 
@@ -128,7 +128,7 @@ class ConfirmStateRecheckContractTest {
         var check = recheck(tool, "{\"状态\":\"可用\"}");
 
         assertThat(check.proceed()).isFalse();
-        assertThat(check.code()).isEqualTo(ToolDispatchService.ConfirmStateCheck.REREAD_FAILED);
+        assertThat(check.code()).isEqualTo(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.REREAD_FAILED);
         assertThat(check.repreviewHelps()).as("一时读不到: 重新预览可以").isTrue();
     }
 
@@ -147,7 +147,7 @@ class ConfirmStateRecheckContractTest {
                 .isEqualTo(ToolDispatchService.NEW_RECORD_ENTITY_ID);
     }
 
-    private ToolDispatchService.ConfirmStateCheck recheck(ToolExecutor tool, String recordedJson) {
+    private com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck recheck(ToolExecutor tool, String recordedJson) {
         return dispatch.recheckPreviewState(tool, intent, recordedJson, Map.of("id", 1), "F001", 1L, "FACTORY_ADMIN");
     }
 
