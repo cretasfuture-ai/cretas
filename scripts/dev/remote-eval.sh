@@ -59,7 +59,11 @@ RUN="$BASE/out/$RUN_ID"
 mkdir -p "$RUN" || exit 2
 exec 3>&1; exec 1>"$RUN/remote.log" 2>&1   # 远端诊断全落文件, 回传
 
-free=$(memory_pressure 2>/dev/null | awk '/free percentage/ {gsub("%","",$NF); print $NF}')
+mp_out=$(memory_pressure 2>/dev/null); mp_rc=$?
+free=""
+if [ "$mp_rc" -eq 0 ]; then
+    free=$(printf '%s\n' "$mp_out" | awk '/free percentage/ {gsub("%","",$NF); print $NF}')
+fi
 echo "aurora_free_memory_percent=${free:-unknown}"
 if [ -z "${free:-}" ] || [ "$free" -lt "$MIN_FREE" ]; then
     echo "NOT-MEASURED: 空闲内存 ${free:-unknown}% < ${MIN_FREE}%"; echo 2 > "$RUN/rc"; exit 0
