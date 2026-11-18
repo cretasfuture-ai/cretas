@@ -77,10 +77,10 @@ class ToolDescriptorCatalogTest {
         ToolDescriptorStatistics statistics = catalog.statistics();
 
         assertThat(catalog.inventory().schemaVersion()).isEqualTo(1);
-        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(497);
+        assertThat(catalog.inventory().expectedToolCount()).isEqualTo(498);
         assertThat(catalog.inventory().expectedLegacyCount()).isEqualTo(461);
         // Existing factory analysis adds one explicit, approved ANALYZE/LOW tool.
-        assertThat(statistics.total()).isEqualTo(497);
+        assertThat(statistics.total()).isEqualTo(498);
         // 2026-10-29 S6-04: alert_rule_toggle declares UPDATE/MEDIUM/v2/roles and gets the first SCHEDULER write policy.
         assertThat(statistics.legacy()).isEqualTo(461);
         // 2026-09-15: #815 新增 source_individual_query，EXPLICIT/READ/LOW/REVIEW_REQUIRED；
@@ -102,7 +102,7 @@ class ToolDescriptorCatalogTest {
         // 确认卡的影响说明要用「将修改……现有数据」措辞)。同 ToolDescriptorInventoryDriftTest 的
         // override actionType 61 → 63。riskLevel 桶不变 (UPDATE 的默认风险仍是 LOW)。
         assertThat(statistics.actionTypes()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.ActionType.READ, 362L,
+                ToolExecutor.ActionType.READ, 363L,
                 ToolExecutor.ActionType.WRITE, 62L,
                 ToolExecutor.ActionType.UPDATE, 31L,
                 ToolExecutor.ActionType.DELETE, 11L,
@@ -110,7 +110,7 @@ class ToolDescriptorCatalogTest {
                 ToolExecutor.ActionType.GENERATE, 15L,
                 ToolExecutor.ActionType.NOTIFY, 5L));
         assertThat(statistics.riskLevels()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolExecutor.RiskLevel.LOW, 421L,
+                ToolExecutor.RiskLevel.LOW, 422L,
                 ToolExecutor.RiskLevel.MEDIUM, 68L,
                 ToolExecutor.RiskLevel.HIGH, 8L,
                 ToolExecutor.RiskLevel.CRITICAL, 0L));
@@ -135,7 +135,7 @@ class ToolDescriptorCatalogTest {
         // governanceStatus: REVIEW_REQUIRED 553 → 558 (+5), #815 再增 1 → 559;
         //   Factory analysis adds one APPROVED tool; REVIEW_REQUIRED_P0 remains unchanged.
         assertThat(statistics.governanceStatuses()).containsExactlyInAnyOrderEntriesOf(Map.of(
-                ToolGovernanceStatus.REVIEW_REQUIRED, 470L,
+                ToolGovernanceStatus.REVIEW_REQUIRED, 471L,
                 ToolGovernanceStatus.REVIEW_REQUIRED_P0, 12L,
                 ToolGovernanceStatus.APPROVED, 15L,
                 ToolGovernanceStatus.WAIVED, 0L));
