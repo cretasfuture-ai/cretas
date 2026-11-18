@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { computed, onMounted, ref, watch } from 'vue';
 import { MODULE_LABELS } from './moduleLabels';
 import { useRoute, useRouter } from 'vue-router';
@@ -649,8 +650,8 @@ onMounted(async () => {
         :row-class-name="rowClassName"
         border
         stripe
-        empty-text="暂无待您审批的任务"
       >
+        <template #empty><ListEmptyExplain empty-title="没有待您审批的任务" empty-hint="别人发起并轮到您审批的单据会出现在这里；没有则说明暂无需要您处理的审批。" /></template>
         <!-- 权威表在后端, moduleLabel 由 DTO 下发; MODULE_LABELS 仅兜底 (见其定义处注释) -->
         <el-table-column label="业务类型" width="120">
           <template #default="{ row }">{{ row.moduleLabel || enumLabel(row.moduleCode, MODULE_LABELS) }}</template>
