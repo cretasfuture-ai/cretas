@@ -103,6 +103,7 @@ class WorkflowInstanceControllerTest {
     @Mock private SalesService salesService;
     @Mock private TransferService transferService;
     @Mock private FactoryStocktakeService stocktakeService;
+    @Mock private com.cretas.aims.service.ProductionReportCorrectionService productionReportCorrectionService;
 
     @InjectMocks private WorkflowInstanceController controller;
 
@@ -741,5 +742,54 @@ class WorkflowInstanceControllerTest {
 
         assertEquals(1, r.getTotalElements());
         assertEquals("i-po1", r.getContent().get(0).getInstanceId());
+    }
+
+    @Test
+    @DisplayName("G9: 扫描被 2000 条上限截断时响应带 truncated/scanLimit; 未截断不带")
+    void filtered_scan_over_cap_is_flagged_truncated() {
+        mockAuth(100L, "f006_finance", "finance_manager");
+        stubUsersForG9();
+        ApprovalWorkflowInstance po1 = buildInstance(
+                "i-po1", "wf-g9", "PURCHASE_ORDER", "po-1", List.of("approval_finance"), 301L);
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(po1), PageRequest.of(0, 2000), 2500L));
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", null, null, null, 1, 10).getData();
+        assertEquals(Boolean.TRUE, r.getTruncated(), "只扫了前 2000 条, 必须告诉前端结果不是全量");
+        assertEquals(2000, r.getScanLimit());
+
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(po1), PageRequest.of(0, 2000), 1L));
+        PageResponse<WorkflowInstancePendingDTO> ok = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PURCHASE_ORDER", null, null, null, 1, 10).getData();
+        org.junit.jupiter.api.Assertions.assertNull(ok.getTruncated());
+    }
+
+    @Test
+    @DisplayName("M4: 报工修正审批摘要一次批量取, 不逐条查库")
+    void report_correction_summaries_are_loaded_in_one_batch() {
+        ReflectionTestUtils.setField(controller, "productionReportCorrectionService", productionReportCorrectionService);
+        mockAuth(100L, "f006_finance", "finance_manager");
+        buildWorkflow("wf-g9", "财务审批", "finance_manager");
+        when(userRepository.findAllById(any())).thenReturn(List.of(buildUser(301L, "zhang_san", "operator")));
+        ApprovalWorkflowInstance c1 = buildInstance(
+                "i-c1", "wf-g9", "PRODUCTION_REPORT_CORRECTION", "corr-1", List.of("approval_finance"), 301L);
+        ApprovalWorkflowInstance c2 = buildInstance(
+                "i-c2", "wf-g9", "PRODUCTION_REPORT_CORRECTION", "corr-2", List.of("approval_finance"), 301L);
+        when(workflowEngine.findCreatedBy(eq(FACTORY_ID), eq(100L), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(c1, c2), PageRequest.of(0, 2000), 2L));
+        when(productionReportCorrectionService.approvalSummaries(eq(FACTORY_ID), any()))
+                .thenReturn(java.util.Map.of(
+                        "corr-1", java.util.Map.of("reportId", 11L, "processCategory", "切配"),
+                        "corr-2", java.util.Map.of("reportId", 12L, "processCategory", "包装")));
+
+        PageResponse<WorkflowInstancePendingDTO> r = controller.getMyCreated(
+                FACTORY_ID, AUTH_HEADER, "PRODUCTION_REPORT_CORRECTION", null, null, null, 1, 10).getData();
+
+        assertEquals(2, r.getContent().size());
+        assertEquals("报工 #11 修正（切配）", r.getContent().get(0).getBusinessSummary());
+        verify(productionReportCorrectionService, times(1)).approvalSummaries(eq(FACTORY_ID), any());
+        verify(productionReportCorrectionService, never()).approvalSummary(anyString(), anyString());
     }
 }

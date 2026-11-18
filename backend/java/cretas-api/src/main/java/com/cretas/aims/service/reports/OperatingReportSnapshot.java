@@ -16,6 +16,14 @@ public record OperatingReportSnapshot(
     public OperatingReportSnapshot withAudit(AuditReceipt receipt) {
         return new OperatingReportSnapshot(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,sections,insights,failure,receipt);
     }
+    /** 给模型的快照不带下钻引用 (模型用不到, 只会白白增加提示词体积); 落库快照仍保留 detail。 */
+    public OperatingReportSnapshot withoutDetails() {
+        List<Section> stripped = sections == null ? null : sections.stream()
+                .map(sec -> new Section(sec.id(), sec.title(), sec.priceSensitive(), sec.basis(),
+                        sec.metrics().stream().map(m -> m.withDetail(null)).toList()))
+                .toList();
+        return new OperatingReportSnapshot(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,stripped,insights,failure,audit);
+    }
     public OperatingReportSnapshot withInsights(List<Insight> selection) {
         return new OperatingReportSnapshot(schema,status,reportType,periodStart,periodEnd,fetchedAt,sources,sections,selection,failure,audit);
     }

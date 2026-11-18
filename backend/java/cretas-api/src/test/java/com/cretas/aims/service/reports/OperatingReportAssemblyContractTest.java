@@ -64,8 +64,13 @@ class OperatingReportAssemblyContractTest {
         assertNull(metric(snapshot,"sales.previous").detail(),"比较期指标不得指向当期明细");
         assertNull(metric(snapshot,"sales.mom").detail(),"派生指标没有单一明细来源, 不编造");
         assertNull(metric(snapshot,"margin.revenue").previousValue(),"没查上期的指标不填 previous");
-        assertEquals("sales-preset.gross-margin",metric(snapshot,"margin.revenue").detail().endpoint());
-        assertEquals("ar-ap/aging",metric(snapshot,"aging.total").detail().endpoint());
+        assertNull(metric(snapshot,"margin.revenue").detail(),"毛利不是可调的明细路由, 不挂引用");
+        assertNull(metric(snapshot,"aging.total").detail(),"账龄是当前时点数据, 历史报告不得指向今天的明细");
+        // 给模型的快照剥掉 detail (previousValue 保留), 落库快照不受影响
+        var forModel=snapshot.withoutDetails();
+        assertNull(metric(forModel,"sales.taxed").detail());
+        assertEquals(new BigDecimal("100"),metric(forModel,"sales.taxed").previousValue());
+        assertEquals("sales-preset/salesperson-performance",metric(snapshot,"sales.taxed").detail().endpoint());
         assertEquals("finance/report/income-statement",metric(snapshot,"income.netProfit").detail().endpoint());
     }
     @Test void ratioRejectsMissingZeroAndNegativeDenominators(){

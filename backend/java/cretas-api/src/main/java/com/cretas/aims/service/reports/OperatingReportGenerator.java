@@ -76,7 +76,7 @@ public class OperatingReportGenerator {
             int excludedProducts=((Number)promptHigh.get("excludedProtectedProductCount")).intValue();
             OperatingReportSnapshot promptSnapshot=assembler.assemble(new OperatingReportAssembler.Input(input.type(),input.start(),input.end(),
                     input.fetchedAt(),input.receipts(),input.sales(),input.previous(),input.lastYear(),input.region(),promptHigh,promptLow,
-                    input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage()));
+                    input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage())).withoutDetails();
             stage=OperatingReportSnapshot.Failure.MODEL_UNAVAILABLE;
             String system="你是食品工厂经营分析助手。只从已查询指标选择重点事项和建议，禁止编写数字或自由文字。只返回 JSON 对象 insights 数组，每项严格含 kind、metricId、action 三个字符串。";
             String prompt="可用 kind: MISSING_VALUE（值为null）、INCOMPLETE_COVERAGE（已知覆盖率小于完整）、REVIEW_RECORDED_VALUE（已有值）。可用 action: VERIFY_COST, VERIFY_ADDRESS, VERIFY_SALESPERSON, FOLLOW_UP_COLLECTION, REVIEW_PROFIT, REVIEW_INVENTORY, REVIEW_SALES。metricId必须逐字来自下列指标ID。没有重点时返回{\"insights\":[]}。禁止其他字段，禁止正文。\n";

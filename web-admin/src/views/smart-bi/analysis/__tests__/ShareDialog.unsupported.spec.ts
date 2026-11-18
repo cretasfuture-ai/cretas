@@ -6,8 +6,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 
-const postMock = vi.fn();
-vi.mock('@/api/request', () => ({ post: (...a: unknown[]) => postMock(...a) }));
 vi.mock('@/components/dialog', () => ({
   DesktopModal: {
     props: ['modelValue', 'contextLabel'],
@@ -29,7 +27,8 @@ describe('ShareDialog —— 暂不支持分享', () => {
     expect(wrapper.find('.el-result').text()).toContain('暂不支持分享');
     expect(wrapper.find('.ctx').text()).toContain('销售.xlsx (#7)');
     expect(wrapper.text()).not.toContain('生成分享链接');
-    expect(postMock).not.toHaveBeenCalled();
+    // 弹窗里不能有任何可操作控件 (按钮 / 输入框 / 链接): 没有东西可点, 才谈得上「不发请求、不造链接」
+    expect(wrapper.findAll('button, input, textarea, a').length).toBe(0);
   });
 
   it('阴性对照: 未调用 open 时弹窗不渲染', () => {

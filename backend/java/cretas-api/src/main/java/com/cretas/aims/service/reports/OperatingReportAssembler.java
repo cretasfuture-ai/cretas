@@ -146,15 +146,15 @@ public class OperatingReportAssembler {
         if (path.startsWith("salesperson-performance") || path.contains("(salesperson-performance")
                 || path.startsWith("sum(salesperson-performance")) return new DetailRef("sales-preset/salesperson-performance", range);
         if (path.startsWith("regional-comparison")) { range.put("level", "province"); return new DetailRef("sales-preset/regional-comparison", range); }
-        if (path.startsWith("gross-margin")) return new DetailRef("sales-preset.gross-margin", range);
-        if (path.contains("aging.")) return new DetailRef("ar-ap/aging", Map.of("counterpartyType", "CUSTOMER"));
+        // 时点类 (账龄 / 库存) 与毛利: 明细接口只能给「当前」数据 (或本就不是可调路由), 历史报告点开会对不上报告里的数字,
+        // 所以不挂 detail (和比较期指标同样处理), 不编造引用。
+        if (path.startsWith("gross-margin") || path.contains("aging.") || path.startsWith("stock-summary")) return null;
         if (path.startsWith("income-statement")) {
             Map<String,String> p = new LinkedHashMap<>();
             p.put("startYear", String.valueOf(input.start().getYear())); p.put("startMonth", String.valueOf(input.start().getMonthValue()));
             p.put("endYear", String.valueOf(input.end().getYear())); p.put("endMonth", String.valueOf(input.end().getMonthValue()));
             return new DetailRef("finance/report/income-statement", p);
         }
-        if (path.startsWith("stock-summary")) return new DetailRef("material-batches/stock-summary", Map.of());
         return null;
     }
 

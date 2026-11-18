@@ -45,6 +45,14 @@ public class PageResponse<T> {
     @Schema(description = "是否最后一页", example = "false")
     private Boolean last;
 
+    @Schema(description = "带筛选的扫描是否被上限截断: true 表示 totalElements 只是扫描范围内的命中数, 不是全量")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private Boolean truncated;
+
+    @Schema(description = "截断时的扫描上限 (最近 N 条)")
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    private Integer scanLimit;
+
     public static <T> PageResponse<T> of(List<T> content, Integer page, Integer size, Long totalElements) {
         PageResponse<T> response = new PageResponse<>();
         response.setContent(content);
