@@ -108,7 +108,10 @@ describe('采购订单详情页按「财务视角」裁剪 (owner 2026-08-20)', 
     const template = templateBlock();
     expect(template).toContain('历史');
     // 空态要说清「没接入」而不是「没有记录」—— 后者是假话
-    expect(template).toContain('尚未接入');
+    expect(template).toContain('暂未在本页展示');
+    expect(template).not.toContain('后端');
+    expect(template).not.toContain('接口');
+    expect(template).not.toContain('暂无该原料的历史收货记录');
     // ⑦ owner 说现在的行为没问题 ⇒ 这个入口保持原样
     expect(template).toContain('前往仓储收货任务');
   });

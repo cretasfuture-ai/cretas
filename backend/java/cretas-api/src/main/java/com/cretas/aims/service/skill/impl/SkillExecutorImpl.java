@@ -714,10 +714,11 @@ public class SkillExecutorImpl implements SkillExecutor {
         return value != null && (!(value instanceof String text) || !text.isBlank());
     }
 
-    private SkillResult missingParametersResult(String skillName, List<String> missingParams,
+    SkillResult missingParametersResult(String skillName, List<String> missingParams,
                                                 List<String> executedTools, long startTime) {
         List<String> questions = missingParams.stream()
                 .map(this::clarificationQuestion)
+                .distinct()   // indicator_code + indicator_codes (单查/对比两个工具) 同问「要查哪个指标」, 只问一遍
                 .toList();
         // 一线用户看不懂内部字段名 (indicator_code 等): 文案只用问句, 字段名只留在 missingParameters 里给程序读
         String message = "为了完成操作，还需要以下信息：" + String.join("", questions) + "请补充后再试。";

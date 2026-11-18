@@ -38,8 +38,12 @@ jobs:
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
   changes:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
+    # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    # 5 -> 10 (2026-11-18): mini 上整份历史拉取 5 分钟拉不完被取消; 现在任务 git 走本机镜像 (scripts/ci/canada-mini-gate/job-started.sh),
+    # 正常秒级, 10 分钟只是镜像缺失时直连 GitHub 的兜底。
+    timeout-minutes: 10
     outputs:
       run: ${{ steps.filter.outputs.run }}
     steps:
@@ -218,7 +222,11 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     name: postgres-reversal-concurrency-shard (${{ matrix.shard }}/4)
-    runs-on: ubuntu-latest
+    # 2026-11-18 (Steve 撤销「公开仓库禁自建 runner」, 前提实测更快): 本仓库分支的 PR 和合并队列跑在
+    # canada-mini 自建 runner (标签 cretas-mini-pg, 2 台); fork PR 一律托管 (陌生人代码不上我们的机器)。
+    # 逃生口: 给 PR 打 `ci-hosted` 标签 = 回托管 (mini 离线时 job 会一直排队, 不会自动回落)。
+    # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false
@@ -331,6 +339,18 @@ jobs:
           key: maven-gate-${{ hashFiles('backend/java/cretas-api/pom.xml') }}
           restore-keys: maven-gate-
 
+      # 自建 runner (canada-mini) 的隔离与资源读数。runner 是一次性 JIT runner, 跑在无密码、非管理员的
+      # ghgate 账户下, 每个任务一个全新目录; 发布优先由 mini 上的补位脚本 (~rex/gh-gate/refill.sh) 保证:
+      # 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。这里只读数: 账户、rex 目录不可读、空闲内存。
+      - name: Self-hosted isolation reading (self-hosted only)
+        if: ${{ runner.environment == 'self-hosted' }}
+        shell: bash
+        run: |
+          set -u
+          if ls /Users/rex >/dev/null 2>&1; then rex_home=readable; else rex_home=denied; fi
+          echo "READING: SELF_HOSTED user=$(id -un) admin=$(id -Gn | tr ' ' '\n' | grep -cx admin) rex_home=$rex_home runner=${RUNNER_NAME:-?} free=$(/usr/bin/memory_pressure 2>/dev/null | sed -nE 's/.*free percentage: ([0-9]+)%.*/\1/p')%"
+          [ "$rex_home" = denied ] || { echo "::error::自建 runner 能读 /Users/rex (部署密钥/令牌所在), 隔离失效"; exit 1; }
+
       - name: Prove PostgreSQL-only workflow and correction invariants
         working-directory: backend/java/cretas-api
         env:
@@ -373,7 +393,9 @@ jobs:
   postgres-reversal-concurrency:
     needs: [changes, postgres-reversal-concurrency-shard]
     if: ${{ always() && needs.changes.outputs.run != 'false' }}
-    runs-on: ubuntu-latest
+    # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
+    # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
+    runs-on: ${{ (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every shard to succeed

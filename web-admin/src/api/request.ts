@@ -543,8 +543,10 @@ request.interceptors.response.use(
       const method = String(originalRequest?.method || '').toUpperCase();
       const url = originalRequest?.url || '';
       const isSpringDefault = /资源不存在|no\s*resource|not\s*found/i.test(backendMsg);
+      // 接口路径只写 console，不展示给用户；同一句文案不带路径，并发多个 404 会被 showMessage 去重成一条。
+      if (isSpringDefault || !backendMsg) console.warn(`[api 404] ${method} ${url}`);
       const friendly = isSpringDefault || !backendMsg
-        ? `请求的接口不存在 (${method} ${url})。可能是后端未上线该功能,或当前账号无权访问。`
+        ? '该功能暂未开通或当前账号无权访问，请联系管理员。'
         : backendMsg;
       // Sprint 12 Phase D (#266): business-level 404 (e.g. 指标不存在) carries actionHint +
       // hintTarget — render rich notification with next-action button instead of plain toast.

@@ -69,7 +69,7 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
         Map<String, Object> batchNumber = new HashMap<>();
         batchNumber.put("type", "string");
         // ⛔ 描述里不放示例批次号: 模型会把示例当成用户说的批次 (实测: 没给批次号, 它自己选了示例批次去查)
-        batchNumber.put("description", "批次号 (必填); 用户没说出批次号时不要猜, 向用户追问");
+        batchNumber.put("description", "要往回追溯的成品批次号 (必填)");
         properties.put("batchNumber", batchNumber);
 
         schema.put("properties", properties);
@@ -80,6 +80,15 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
     @Override
     protected List<String> getRequiredParameters() {
         return List.of("batchNumber");
+    }
+
+    /** 缺批次号时对用户说的话 (不示例批次号: 模型会把示例当成用户说的批次)。 */
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        if ("batchNumber".equals(paramName)) {
+            return "请告诉我成品批次号，我帮你往回追原料批次和供应商。";
+        }
+        return super.getParameterQuestion(paramName);
     }
 
     @Override

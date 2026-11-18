@@ -67,7 +67,9 @@ describe('CapabilityGate', () => {
     });
     expect(wrapper.html()).not.toContain('REAL CONTENT');
     expect(wrapper.find('.capability-placeholder').exists()).toBe(true);
-    expect(wrapper.html()).toContain('profit');
+    // 客户话术：不露内部字段名
+    expect(wrapper.html()).not.toContain('profit');
+    expect(wrapper.html()).toContain('当前工厂暂未提供');
   });
 
   it('renders nothing when fallback="hide" and not satisfied', () => {

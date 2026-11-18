@@ -40,6 +40,10 @@ export interface ChartMeta {
   yMetric: 'revenue' | 'quantity' | 'margin' | 'cost' | 'count' | 'pct' | 'other';
   aggregation: 'sum' | 'avg' | 'max' | 'count';
   domain: 'restaurant' | 'factory' | 'finance';
+  /** 数值单位：'元'（默认按金额写 ¥）、'%'、'kg'、'件'……；不给时金额类按 ¥，其余只写数字 */
+  unit?: string;
+  /** 哪个方向算好：成本默认 lower，其余默认 higher；决定「最该看的那一项」 */
+  betterWhen?: 'higher' | 'lower';
 }
 
 export interface InsightResult {
@@ -67,6 +71,10 @@ export interface ChartWithMeta {
     series?: Array<{ name?: string; type?: string; data?: unknown[] }>;
     [key: string]: unknown;
   };
+  /** 上一期同口径数据（同样的 config 形状）；不给 → 不写环比，⛔ 不编 */
+  previous?: { config?: ChartWithMeta['config'] } | null;
+  /** 逐点单位（与类目轴一一对应），如单位成本的「盒」「kg」：不同单位不互相比大小 */
+  pointUnits?: Array<string | undefined>;
 }
 
 // ============================================================
@@ -79,12 +87,8 @@ const FINANCE_METRICS = new Set<ChartMeta['yMetric']>(['revenue', 'margin', 'cos
 /** xDim values that trigger RANKING family */
 const RANKING_DIMS = new Set<ChartMeta['xDim']>(['store', 'product', 'channel', 'category']);
 
-/** Minimum data points for TREND */
-const TREND_MIN_POINTS = 4;
-/** Minimum ratio threshold to call out as a meaningful multiplier (1.1x) */
-const RANKING_MIN_RATIO = 1.1;
-/** Percent change below this is considered "flat" (±5%) */
-const TREND_FLAT_THRESHOLD = 0.05;
+/** Minimum data points for TREND（日度图有 3 个点就能说均值和最差一天） */
+const TREND_MIN_POINTS = 3;
 
 /**
  * Extract numeric series values from a chart config.
@@ -147,6 +151,120 @@ function monotonicity(values: number[]): 'rising' | 'falling' | 'mixed' {
 }
 
 // ============================================================
+// Computed-insight helpers (LSM-COSTBI-D, 2026-11-18)
+//
+// 每张图一句「按当前数据现算」的结论 + 一句建议：
+// - 点出最该看的那一项：数值、占比、和上期比的变化（chart.previous 给了才算环比，⛔ 不编）
+// - 没有成本/价格查看权限（finance yMetric + !canViewFinance）：不出现金额，也不出现占比
+// - 不写「超过一半」「分布相对均衡」这类不看数也能说的模板话；中文与标签之间不留空格
+// ============================================================
+
+type Point = { label: string; value: number; unit?: string };
+
+/** 中文数字格式：≥1 万写「x.xx万」，≥100 取整加千分位，其余最多两位小数。 */
+function fmtNum(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 10000) return `${(v / 10000).toFixed(2).replace(/\.?0+$/, '')}万`;
+  if (abs >= 100) return Math.round(v).toLocaleString('zh-CN');
+  return String(Number(v.toFixed(2)));
+}
+
+function isMoneyMetric(meta: ChartMeta): boolean {
+  return FINANCE_METRICS.has(meta.yMetric) && (meta.unit == null || meta.unit === '元' || meta.unit === '¥');
+}
+
+function isPctMetric(meta: ChartMeta): boolean {
+  return meta.yMetric === 'pct' || meta.unit === '%';
+}
+
+/** 一个值带单位的写法；pointUnit 是逐点单位（如单位成本的「盒」「kg」）。 */
+function fmtValue(v: number, meta: ChartMeta, pointUnit?: string): string {
+  if (isPctMetric(meta)) return `${v.toFixed(1)}%`;
+  if (isMoneyMetric(meta)) return `¥${fmtNum(v)}${pointUnit ? `/${pointUnit}` : ''}`;
+  const unit = pointUnit ?? meta.unit ?? '';
+  return `${fmtNum(v)}${unit}`;
+}
+
+/** 两个值的差：百分比指标说「个百分点」，其余说相对变化 %。 */
+function fmtDelta(cur: number, base: number, meta: ChartMeta): { text: string; dir: '高' | '低' | '持平' } | null {
+  if (isPctMetric(meta)) {
+    const d = cur - base;
+    if (Math.abs(d) < 0.05) return { text: '', dir: '持平' };
+    return { text: `${Math.abs(d).toFixed(1)}个百分点`, dir: d > 0 ? '高' : '低' };
+  }
+  if (base === 0) return null;
+  const r = (cur - base) / Math.abs(base);
+  if (Math.abs(r) < 0.0005) return { text: '', dir: '持平' };
+  return { text: fmtPct(Math.abs(r)), dir: r > 0 ? '高' : '低' };
+}
+
+function vsPrevious(cur: number, prev: number | null | undefined, meta: ChartMeta, what = ''): string {
+  if (prev == null || !isFinite(prev)) return '';
+  const d = fmtDelta(cur, prev, meta);
+  if (!d) return '';
+  return d.dir === '持平' ? `，${what}与上期持平` : `，${what}比上期${d.dir}${d.text}`;
+}
+
+function financeGated(meta: ChartMeta, permissions: UserPermissions): boolean {
+  return FINANCE_METRICS.has(meta.yMetric) && !permissions.canViewFinance;
+}
+
+function betterDirection(meta: ChartMeta): 'higher' | 'lower' {
+  if (meta.betterWhen) return meta.betterWhen;
+  return meta.yMetric === 'cost' ? 'lower' : 'higher';
+}
+
+/** 类目轴标签：竖条图在 xAxis，横条图在 yAxis。 */
+function categoryLabels(config: ChartWithMeta['config']): string[] {
+  const fromX = extractLabels(config);
+  if (fromX.length) return fromX;
+  const y = (config as { yAxis?: unknown } | undefined)?.yAxis;
+  const first = Array.isArray(y) ? y[0] : y;
+  const data = (first as { data?: unknown } | undefined)?.data;
+  return Array.isArray(data) ? data.map((d) => String(d)) : [];
+}
+
+function numericAt(d: unknown): number | null {
+  if (typeof d === 'number' && isFinite(d)) return d;
+  if (d !== null && typeof d === 'object' && 'value' in d) {
+    const v = (d as { value?: unknown }).value;
+    if (typeof v === 'number' && isFinite(v)) return v;
+  }
+  return null;
+}
+
+/** 按类目位置把所有系列相加（堆叠图看合计）；某位置所有系列都没值 → null（缺数据，不当 0）。 */
+function totalsByIndex(config: ChartWithMeta['config']): Array<number | null> {
+  const series = config?.series ?? [];
+  const len = Math.max(categoryLabels(config).length, ...series.map((s) => (Array.isArray(s.data) ? s.data.length : 0)), 0);
+  const out: Array<number | null> = [];
+  for (let i = 0; i < len; i++) {
+    let sum = 0;
+    let seen = false;
+    for (const s of series) {
+      const v = Array.isArray(s.data) ? numericAt(s.data[i]) : null;
+      if (v !== null) {
+        sum += v;
+        seen = true;
+      }
+    }
+    out.push(seen ? sum : null);
+  }
+  return out;
+}
+
+function seriesTotals(config: ChartWithMeta['config']): Array<{ name: string; total: number }> {
+  return (config?.series ?? []).map((s, i) => ({
+    name: String(s.name ?? `系列${i + 1}`),
+    total: (Array.isArray(s.data) ? s.data : []).reduce<number>((acc, d) => acc + (numericAt(d) ?? 0), 0),
+  }));
+}
+
+function finish(finding: string, suggestion?: string): InsightResult {
+  return { finding, suggestion, source: 'rules', tier: 1 };
+}
+
+// ============================================================
 // TREND family generator
 // ============================================================
 
@@ -154,75 +272,92 @@ function buildTrendInsight(
   chart: ChartWithMeta,
   permissions: UserPermissions,
 ): InsightResult | null {
-  const values = extractValues(chart.config);
-  if (values.length < TREND_MIN_POINTS) return null;
+  const meta = chart.meta!;
+  const labels = categoryLabels(chart.config);
+  const totals = totalsByIndex(chart.config);
+  const points: Point[] = totals
+    .map((v, i) => (v === null ? null : { label: labels[i] ?? `第${i + 1}期`, value: v }))
+    .filter((p): p is Point => p !== null);
+  if (points.length < TREND_MIN_POINTS) return null;
 
-  const first = values[0];
-  const last = values[values.length - 1];
-  if (first === 0) return null; // can't compute meaningful % from zero base
+  const gated = financeGated(meta, permissions);
+  const gaps = totals.length - points.length;
+  const gapNote = gaps > 0 ? `（${gaps}个日期无数据，未计入）` : '';
+  const mean = points.reduce((s, p) => s + p.value, 0) / points.length;
+  const half = Math.floor(points.length / 2);
+  const firstHalf = points.slice(0, half);
+  const secondHalf = points.slice(points.length - half);
+  const avg = (ps: Point[]) => ps.reduce((s, p) => s + p.value, 0) / ps.length;
+  const halfDelta = half > 0 ? fmtDelta(avg(secondHalf), avg(firstHalf), meta) : null;
+  // 前后半段差不到 2%（百分比指标差不到 0.5 个百分点）算持平：日常波动不当成趋势说。
+  const halfFlat = half > 0 && (isPctMetric(meta)
+    ? Math.abs(avg(secondHalf) - avg(firstHalf)) < 0.5
+    : avg(firstHalf) !== 0 && Math.abs(avg(secondHalf) - avg(firstHalf)) / Math.abs(avg(firstHalf)) < 0.02);
+  const halfText = !halfDelta
+    ? ''
+    : halfFlat || halfDelta.dir === '持平'
+      ? '；前后半段基本持平'
+      : `；后半段比前半段${halfDelta.dir}${halfDelta.text}`;
+  const better = betterDirection(meta);
+  const averageLike = meta.aggregation === 'avg' || isPctMetric(meta);
 
-  const changePct = (last - first) / Math.abs(first);
-  const absChangePct = Math.abs(changePct);
-  const mono = monotonicity(values);
-
-  const isFinanceMetric = FINANCE_METRICS.has(chart.meta!.yMetric);
-
-  let direction: '上升' | '下降' | '平稳';
-  if (absChangePct <= TREND_FLAT_THRESHOLD) {
-    direction = '平稳';
-  } else if (changePct > 0) {
-    direction = '上升';
-  } else {
-    direction = '下降';
-  }
-
-  // Build finding sentence — always uses % ratios, never absolute ¥
-  let finding: string;
-  if (direction === '平稳') {
-    finding = `趋势平稳，区间波动 ${fmtPct(absChangePct)} 以内`;
-  } else {
-    const pctStr = fmtPct(absChangePct);
-    if (mono === 'mixed') {
-      // Non-monotonic but overall direction
-      finding = `整体${direction} ${pctStr}（期间有波动）`;
-    } else {
-      finding = `单调${direction}，累计变幅 ${pctStr}`;
+  if (averageLike) {
+    const worst = points.reduce((w, p) => (better === 'higher' ? (p.value < w.value ? p : w) : (p.value > w.value ? p : w)));
+    const d = fmtDelta(worst.value, mean, meta);
+    const prevTotals = chart.previous ? totalsByIndex(chart.previous.config).filter((v): v is number => v !== null) : [];
+    const prevMean = prevTotals.length ? prevTotals.reduce((s, v) => s + v, 0) / prevTotals.length : null;
+    if (gated) {
+      return finish(
+        `${worst.label}${better === 'higher' ? '最低' : '最高'}${halfText.replace(/^；/, '，')}${gapNote}。`,
+        `先查${worst.label}的明细。`,
+      );
     }
+    // 各期几乎一样（百分比指标差不到 0.5 个百分点，其余差不到 2%）：没有「最差的一天」可点名。
+    const hi = Math.max(...points.map((p) => p.value));
+    const lo = Math.min(...points.map((p) => p.value));
+    const noSpread = isPctMetric(meta) ? hi - lo < 0.5 : mean !== 0 && (hi - lo) / Math.abs(mean) < 0.02;
+    if (noSpread) {
+      return finish(
+        `${points.length}个日期都在${fmtValue(mean, meta)}左右${vsPrevious(mean, prevMean, meta, '平均')}，最高最低相差不到${isPctMetric(meta) ? '0.5个百分点' : '2%'}${gapNote}。`,
+        meta.domain === 'factory' && isPctMetric(meta)
+          ? '各期基本一致，不必逐日排查；长期不变时先确认报工是不是把良品直接填成了实际产出。'
+          : '各期基本一致，不必逐期排查。',
+      );
+    }
+    const worstWord = better === 'higher' ? '最低' : '最高';
+    const dText = d && d.dir !== '持平' ? `，比平均${d.dir}${d.text}` : '';
+    return finish(
+      `各期平均${fmtValue(mean, meta)}${vsPrevious(mean, prevMean, meta, '平均')}；${worst.label}${worstWord}，${fmtValue(worst.value, meta)}${dText}${halfText}${gapNote}。`,
+      `先查${worst.label}的批次明细，找出${better === 'higher' ? '拉低' : '推高'}的原因。`,
+    );
   }
 
-  // Implication — only use ratios, never absolute values
-  let implication: string | undefined;
-  if (direction === '上升') {
-    implication = '近期保持增长势头，关注是否具有持续性。';
-  } else if (direction === '下降') {
-    implication = '近期持续下行，建议排查是否有结构性变化。';
-  } else {
-    implication = '指标运行平稳，波动幅度较小。';
-  }
+  // 合计类（每日成本、每日产量……）：看峰值和合计
+  const peak = points.reduce((m, p) => (p.value > m.value ? p : m));
+  const total = points.reduce((s, p) => s + p.value, 0);
+  const ratio = mean !== 0 ? peak.value / mean : null;
+  const ratioText = ratio !== null ? `，是平均的${ratio.toFixed(1)}倍` : '';
+  const prevTotal = chart.previous
+    ? totalsByIndex(chart.previous.config).reduce<number>((s, v) => s + (v ?? 0), 0)
+    : null;
+  const parts = seriesTotals(chart.config).filter((s) => s.total > 0).sort((a, b) => b.total - a.total);
+  const mainPart = parts.length >= 2 && total > 0 ? parts[0] : null;
 
-  // Suggestion — observation verbs only (关注/排查/分析/了解); no causal prescriptions
-  let suggestion: string | undefined;
-  if (direction === '上升') {
-    suggestion = '关注增长的驱动因素，分析峰值时段特征。';
-  } else if (direction === '下降') {
-    suggestion = '排查下降时段的异常，了解环境因素变化。';
+  if (gated) {
+    return finish(
+      `${peak.label}最高${ratioText}${halfText}${gapNote}。（无成本查看权限，不显示金额和占比）`,
+      `先查${peak.label}的明细。`,
+    );
   }
-
-  // RBAC: finance metric without permission → strip any possible absolute value leakage
-  // Finding uses only % ratios so already safe; belt-and-suspenders regex guard below
-  if (isFinanceMetric && !permissions.canViewFinance) {
-    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
-    finding = finding.replace(absPattern, '(已脱敏)');
-    if (implication) implication = implication.replace(absPattern, '(已脱敏)');
-  }
-
-  return {
-    finding,
-    implication,
-    suggestion,
-    source: 'rules',
-    tier: 1,
-  };
+  const partText = mainPart ? `；其中${mainPart.name}占${fmtPct(mainPart.total / total)}` : '';
+  const finding =
+    `区间合计${fmtValue(total, meta)}${vsPrevious(total, prevTotal && prevTotal > 0 ? prevTotal : null, meta, '合计')}` +
+    `；${peak.label}最高，${fmtValue(peak.value, meta)}${ratioText}${partText}${halfText}${gapNote}。`;
+  const suggestion =
+    ratio !== null && ratio >= 1.5
+      ? `先查${peak.label}：比平均高${fmtPct(ratio - 1)}，看这一天的批次和${mainPart ? mainPart.name : '明细'}。`
+      : `各期差别不大（最高是平均的${ratio?.toFixed(1) ?? '—'}倍），重点看${mainPart ? mainPart.name : '合计'}有没有持续抬升。`;
+  return finish(finding, suggestion);
 }
 
 // ============================================================
@@ -233,75 +368,85 @@ function buildRankingInsight(
   chart: ChartWithMeta,
   permissions: UserPermissions,
 ): InsightResult | null {
-  const values = extractValues(chart.config);
-  const labels = extractLabels(chart.config);
+  const meta = chart.meta!;
+  const labels = categoryLabels(chart.config);
+  const totals = totalsByIndex(chart.config);
+  const all: Point[] = totals
+    .map((v, i): Point | null => (v === null ? null : { label: labels[i] ?? `项目${i + 1}`, value: v, unit: chart.pointUnits?.[i] }))
+    .filter((p): p is Point => p !== null && p.value > 0);
+  if (all.length < 2) return null;
 
-  if (values.length < 2) return null;
-
-  // Pair values with labels for sorted ranking
-  const paired: Array<{ label: string; value: number }> = values
-    .map((v, i) => ({ label: labels[i] ?? `项目${i + 1}`, value: v }))
-    .filter((p) => p.value > 0); // ignore non-positive entries
-
-  if (paired.length < 2) return null;
-
-  const sorted = [...paired].sort((a, b) => b.value - a.value);
-  const top = sorted[0];
-  const bottom = sorted[sorted.length - 1];
-  const total = sorted.reduce((s, p) => s + p.value, 0);
-
-  if (bottom.value <= 0) return null; // can't compute ratio with zero
-  const ratio = top.value / bottom.value;
-  if (ratio < RANKING_MIN_RATIO) return null; // not a measurable diff
-
-  const topSharePct = (top.value / total) * 100;
-  const isFinanceMetric = FINANCE_METRICS.has(chart.meta!.yMetric);
-
-  // Build finding — always uses ratio (dimensionless, safe) + top-share % — no absolute ¥
-  // Both finance and non-finance users get ratio/% output; this is always safe
-  const ratioStr = ratio.toFixed(1) + '倍';
-  const topShareStr = topSharePct.toFixed(1) + '%';
-
-  const finding = `${top.label} 排名最高，是末位 ${bottom.label} 的 ${ratioStr}；占合计 ${topShareStr}`;
-
-  // Implication
-  const implication =
-    topSharePct >= 50
-      ? `头部集中度高（${topShareStr}），头尾差距 ${ratioStr}。`
-      : `分布相对均衡，头部占比 ${topShareStr}，头尾差距 ${ratioStr}。`;
-
-  // Suggestion — observation verbs only
-  let suggestion: string | undefined;
-  if (ratio >= 3) {
-    suggestion = `关注 ${top.label} 与末位差距原因，分析各项目结构差异。`;
-  } else {
-    suggestion = `了解各项目间的差异因素，分析是否存在改进空间。`;
+  const sortedAll = [...all].sort((a, b) => b.value - a.value);
+  // 逐点单位不同（盒 / kg）时只在同单位里比，跨单位比大小没意义：取项目最多的那个单位组
+  // （一样多时取含最大值的那组）。
+  const unitCount = new Map<string, number>();
+  for (const p of all) unitCount.set(p.unit ?? '', (unitCount.get(p.unit ?? '') ?? 0) + 1);
+  const mixedUnits = unitCount.size > 1;
+  const topUnitKey = [...unitCount.entries()].sort((x, y) =>
+    y[1] - x[1] || (sortedAll.findIndex((p) => (p.unit ?? '') === x[0]) - sortedAll.findIndex((p) => (p.unit ?? '') === y[0])),
+  )[0][0];
+  const topUnit = topUnitKey || undefined;
+  const group = mixedUnits ? sortedAll.filter((p) => (p.unit ?? '') === topUnitKey) : sortedAll;
+  if (group.length < 2) {
+    const top = sortedAll[0];
+    const gated = financeGated(meta, permissions);
+    return finish(
+      gated
+        ? `${top.label}排第一；其余项目单位不同，不直接比大小。`
+        : `${top.label}最高，${fmtValue(top.value, meta, top.unit)}；其余项目单位不同，不直接比大小。`,
+      `先看${top.label}的明细构成。`,
+    );
   }
-
-  // RBAC belt-and-suspenders: strip any absolute ¥ if finance-gated
-  // (finding already only uses ratios/% so this is defensive only)
-  if (isFinanceMetric && !permissions.canViewFinance) {
-    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
-    return {
-      finding: finding.replace(absPattern, '(已脱敏)'),
-      implication: implication.replace(absPattern, '(已脱敏)'),
-      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
-      source: 'rules',
-      tier: 1,
-    };
+  const top = group[0];
+  const bottom = group[group.length - 1];
+  const mean = group.reduce((s, p) => s + p.value, 0) / group.length;
+  const total = group.reduce((s, p) => s + p.value, 0);
+  const ratio = top.value / mean;
+  const scope = mixedUnits ? `按${topUnit ?? '同一单位'}计的${group.length}项里，` : '';
+  const gated = financeGated(meta, permissions);
+  const sumLike = meta.aggregation === 'sum' || meta.aggregation === 'count';
+  const better = betterDirection(meta);
+  const flat = isPctMetric(meta) ? top.value - bottom.value < 0.5 : (top.value - bottom.value) / mean < 0.02;
+  if (flat) {
+    return finish(
+      gated
+        ? `${scope}${group.length}项差别很小。`
+        : `${scope}${group.length}项都在${fmtValue(mean, meta, top.unit)}左右，最高最低相差不到${isPctMetric(meta) ? '0.5个百分点' : '2%'}。`,
+      '各项差别不大，不必单独挑出哪一项。',
+    );
   }
+  const focus = better === 'lower' ? top : bottom;
+  const focusGap = fmtDelta(focus.value, mean, meta);
+  const focusGapText = focusGap && focusGap.dir !== '持平' ? `比平均${focusGap.dir}${focusGap.text}` : '与平均接近';
+  const checkWhat = meta.domain === 'factory' && meta.yMetric === 'cost' ? '用料和工时' : '明细构成';
+  const suggestion =
+    better === 'lower'
+      ? `先查${focus.label}：${focusGapText}，看${checkWhat}。`
+      : `先看${focus.label}：${focusGapText}，找出差在哪里。`;
 
-  return {
-    finding,
-    implication,
+  if (gated) {
+    return finish(
+      `${scope}${top.label}最高，是平均的${ratio.toFixed(1)}倍；最低是${bottom.label}。（无成本查看权限，不显示金额和占比）`,
+      suggestion,
+    );
+  }
+  const prevLabels = chart.previous ? categoryLabels(chart.previous.config) : [];
+  const prevTotals = chart.previous ? totalsByIndex(chart.previous.config) : [];
+  const prevIdx = prevLabels.indexOf(top.label);
+  const prevTop = prevIdx >= 0 ? prevTotals[prevIdx] : null;
+  const shareText = sumLike && !mixedUnits && total > 0 && group.length >= 3
+    ? `，前三合计占${fmtPct((group[0].value + group[1].value + group[2].value) / total)}`
+    : sumLike && !mixedUnits && total > 0
+      ? `，占合计${fmtPct(top.value / total)}`
+      : '';
+  return finish(
+    `${scope}${top.label}最高，${fmtValue(top.value, meta, top.unit)}，是平均的${ratio.toFixed(1)}倍${vsPrevious(top.value, prevTop, meta)}${shareText}；最低是${bottom.label}，${fmtValue(bottom.value, meta, bottom.unit)}。`,
     suggestion,
-    source: 'rules',
-    tier: 1,
-  };
+  );
 }
 
 // ============================================================
-// PROPORTION family generator (U2 — PIE charts)
+// PROPORTION family generator (PIE charts)
 // ============================================================
 
 /**
@@ -332,19 +477,16 @@ function extractPieSlices(config: ChartWithMeta['config']): Array<{ label: strin
 }
 
 /**
- * Build a Tier 1 insight for PROPORTION (PIE) charts.
- *
- * Contract:
- * - ≥2 positive slices required; otherwise null
- * - Finding: "X 占 {topShare}, 前二占 {top2Share}" (always % — no absolute ¥)
- * - Observation verbs only in suggestion; no causal prescriptions
- * - RBAC: finance yMetric + !canViewFinance → output only %, NEVER ¥
+ * PROPORTION (PIE)：最大一项的占比与金额，给了上期就算占比变化（个百分点）。
+ * - ≥2 个正值扇区，否则 null
+ * - 无成本查看权限：只说排序，不出金额和占比
  */
 export function buildProportionInsight(
   chart: ChartWithMeta,
   permissions: UserPermissions,
 ): InsightResult | null {
   if (!chart?.meta) return null;
+  const meta = chart.meta;
 
   const slices = extractPieSlices(chart.config).filter((s) => s.value > 0);
   if (slices.length < 2) return null;
@@ -352,237 +494,111 @@ export function buildProportionInsight(
   const sorted = [...slices].sort((a, b) => b.value - a.value);
   const total = sorted.reduce((s, p) => s + p.value, 0);
   if (total <= 0) return null;
+  const [top, second] = sorted;
 
-  const top = sorted[0];
-  const topShare = (top.value / total) * 100;
-  const top2Share = ((sorted[0].value + sorted[1].value) / total) * 100;
-
-  const topShareStr = topShare.toFixed(1) + '%';
-  const top2ShareStr = top2Share.toFixed(1) + '%';
-
-  // Finding: always % — no absolute ¥ at all (safe for all permission levels)
-  const finding = `${top.label} 占 ${topShareStr}，前二占 ${top2ShareStr}`;
-
-  // Implication
-  const implication =
-    topShare >= 50
-      ? `头部集中，${top.label} 占比超过一半。`
-      : `各组成部分分布相对均衡，最大项占比 ${topShareStr}。`;
-
-  // Suggestion — observation verbs only; no causal prescriptions
-  let suggestion: string | undefined;
-  if (topShare >= 70) {
-    suggestion = `关注 ${top.label} 的占比变化趋势，了解各类别构成是否稳定。`;
-  } else {
-    suggestion = `分析各组成部分的变动，了解结构变化的驱动因素。`;
+  if (financeGated(meta, permissions)) {
+    return finish(
+      `${top.label}是最大一项，其次是${second.label}。（无成本查看权限，不显示金额和占比）`,
+      `先看${top.label}的明细。`,
+    );
   }
 
-  // RBAC belt-and-suspenders (finding already has no ¥, defensive only)
-  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
-  if (isFinanceMetric && !permissions.canViewFinance) {
-    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
-    return {
-      finding: finding.replace(absPattern, '(已脱敏)'),
-      implication: implication.replace(absPattern, '(已脱敏)'),
-      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
-      source: 'rules',
-      tier: 1,
-    };
+  const share = top.value / total;
+  const prevSlices = chart.previous ? extractPieSlices(chart.previous.config).filter((s) => s.value > 0) : [];
+  const prevTotal = prevSlices.reduce((s, p) => s + p.value, 0);
+  const prevTop = prevSlices.find((s) => s.label === top.label);
+  let prevText = '';
+  if (prevTotal > 0 && prevTop) {
+    const d = (share - prevTop.value / prevTotal) * 100;
+    prevText = Math.abs(d) < 0.05 ? '，占比与上期持平' : `，占比比上期${d > 0 ? '高' : '低'}${Math.abs(d).toFixed(1)}个百分点`;
   }
 
-  return {
-    finding,
-    implication,
-    suggestion,
-    source: 'rules',
-    tier: 1,
-  };
+  if (share >= 0.4) {
+    const rest = sorted.slice(1, 3).map((s) => `${s.label}${fmtPct(s.value / total)}`).join('、');
+    return finish(
+      `${top.label}占${fmtPct(share)}（${fmtValue(top.value, meta)}）${prevText}，是最大一项；其次${rest}。`,
+      `${top.label}每降1%，合计约降${(share).toFixed(2)}%，先从${top.label}查起。`,
+    );
+  }
+  const k = Math.min(3, sorted.length);
+  const topK = sorted.slice(0, k).reduce((s, p) => s + p.value, 0);
+  return finish(
+    `最大的${top.label}占${fmtPct(share)}（${fmtValue(top.value, meta)}）${prevText}；前${k}项合计${fmtPct(topK / total)}，各项较分散。`,
+    `前${k}项一起看比只盯一项有效，先看${top.label}和${second.label}。`,
+  );
 }
 
 // ============================================================
-// COMPARISON family generator (U2 — 2 comparable series)
+// COMPARISON family generator (2 comparable series)
 // ============================================================
 
 /**
- * Build a Tier 1 insight for COMPARISON charts (2 comparable series).
- *
- * Contract:
- * - Exactly 2 series with at least 1 value each; otherwise null
- * - Finding: "A 较 B 高 N%" (uses only %, NEVER ¥ even for finance metrics)
- * - Observation verbs only; no causal prescriptions
- * - RBAC: finance yMetric + !canViewFinance → only % — NEVER absolute ¥
+ * COMPARISON：两条系列的合计差多少，并指出差距最大的那个类目。
+ * 只用 %，不出金额（两组都没权限时也安全）。
  */
 export function buildComparisonInsight(
   chart: ChartWithMeta,
   permissions: UserPermissions,
 ): InsightResult | null {
   if (!chart?.meta) return null;
+  void permissions;
 
   const series = chart.config?.series;
   if (!series || series.length < 2) return null;
+  const [a, b] = seriesTotals(chart.config).slice(0, 2);
+  if (!a || !b) return null;
+  if (b.total === 0) return null;
 
-  // Extract aggregate (sum) per series
-  const seriesValues: Array<{ name: string; total: number }> = [];
-  for (let i = 0; i < Math.min(series.length, 2); i++) {
-    const s = series[i];
-    if (!Array.isArray(s.data)) continue;
-    let total = 0;
-    for (const d of s.data) {
-      if (typeof d === 'number' && isFinite(d)) {
-        total += d;
-      } else if (d !== null && typeof d === 'object' && 'value' in d) {
-        const v = (d as { value?: unknown }).value;
-        if (typeof v === 'number' && isFinite(v)) total += v;
-      }
-    }
-    // Series name from config — often stored as series[i].name in ECharts
-    const sName = (s as { name?: unknown }).name;
-    seriesValues.push({ name: String(sName ?? `系列${i + 1}`), total });
+  const diff = (a.total - b.total) / Math.abs(b.total);
+  const higher = a.total >= b.total ? a : b;
+  const lower = higher === a ? b : a;
+  const labels = categoryLabels(chart.config);
+  let widest: { label: string; gap: number } | null = null;
+  for (let i = 0; i < labels.length; i++) {
+    const va = Array.isArray(series[0].data) ? numericAt(series[0].data[i]) : null;
+    const vb = Array.isArray(series[1].data) ? numericAt(series[1].data[i]) : null;
+    if (va === null || vb === null || vb === 0) continue;
+    const gap = Math.abs((va - vb) / vb);
+    if (!widest || gap > widest.gap) widest = { label: labels[i], gap };
   }
-
-  if (seriesValues.length < 2) return null;
-
-  const [serA, serB] = seriesValues;
-
-  // Need non-zero base to compute meaningful % difference
-  if (serB.total === 0 && serA.total === 0) return null;
-  if (serB.total === 0) {
-    // Can't compute ratio from zero base — return null (no fabrication)
-    return null;
-  }
-
-  const diffPct = (serA.total - serB.total) / Math.abs(serB.total);
-  const absDiffPct = Math.abs(diffPct);
-
-  // Always use % — NEVER absolute ¥ regardless of permissions
-  const diffStr = fmtPct(absDiffPct);
-  const isHigher = serA.total >= serB.total;
-  const higherName = isHigher ? serA.name : serB.name;
-  const lowerName = isHigher ? serB.name : serA.name;
-
-  const finding = `${higherName} 较 ${lowerName} 高 ${diffStr}`;
-
-  // Implication
-  const implication =
-    absDiffPct >= 0.2
-      ? `两者差距明显（${diffStr}），了解差异成因有助于优化决策。`
-      : `两者差距较小（${diffStr}），指标表现接近。`;
-
-  // Suggestion — observation verbs only
-  const suggestion = `分析两者差距的来源，了解各自影响因素是否存在结构差异。`;
-
-  // RBAC belt-and-suspenders
-  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
-  if (isFinanceMetric && !permissions.canViewFinance) {
-    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
-    return {
-      finding: finding.replace(absPattern, '(已脱敏)'),
-      implication: implication.replace(absPattern, '(已脱敏)'),
-      suggestion: suggestion.replace(absPattern, '(已脱敏)'),
-      source: 'rules',
-      tier: 1,
-    };
-  }
-
-  return {
-    finding,
-    implication,
-    suggestion,
-    source: 'rules',
-    tier: 1,
-  };
+  const widestText = widest ? `；差距最大在${widest.label}（${fmtPct(widest.gap)}）` : '';
+  return finish(
+    `${higher.name}较${lower.name}高${fmtPct(Math.abs(diff))}${widestText}。`,
+    widest ? `先对比${widest.label}这一项，看差距从哪来。` : `逐项对比${higher.name}和${lower.name}，看差距从哪来。`,
+  );
 }
 
 // ============================================================
-// KPI family generator (U2 — actual + target)
+// KPI family generator (actual + target)
 // ============================================================
 
 /**
- * Build a Tier 1 insight for KPI charts (actual + target or vs last period).
- *
- * Contract:
- * - Requires exactly 2 series: [actual-series, target-series] or [current, prior]
- * - Finding: "达成 N%" — ONLY %, NEVER absolute ¥ when isFinanceMetric && !canViewFinance
- * - For finance metrics + no finance permission: strip ALL absolute ¥, output only %
- * - Observation verbs only; no causal prescriptions
- *
- * KPI detection: chart.config.series has exactly 2 entries and meta is provided.
- * The caller routes to this family by setting chartType='kpi' or via explicit dispatch.
+ * KPI：达成率；有权限时补「还差多少」，无权限只给 %。
  */
 export function buildKpiInsight(
   chart: ChartWithMeta,
   permissions: UserPermissions,
 ): InsightResult | null {
   if (!chart?.meta) return null;
+  const meta = chart.meta;
 
   const series = chart.config?.series;
   if (!series || series.length < 2) return null;
 
-  // Extract first numeric value from each series (KPI: single-value series)
-  function firstValue(s: { type?: string; data?: unknown[] }): number | null {
-    if (!Array.isArray(s.data) || s.data.length === 0) return null;
-    const d = s.data[0];
-    if (typeof d === 'number' && isFinite(d)) return d;
-    if (d !== null && typeof d === 'object' && 'value' in d) {
-      const v = (d as { value?: unknown }).value;
-      if (typeof v === 'number' && isFinite(v)) return v;
-    }
-    return null;
-  }
-
-  const actual = firstValue(series[0]);
-  const target = firstValue(series[1]);
-
+  const actual = Array.isArray(series[0].data) ? numericAt(series[0].data[0]) : null;
+  const target = Array.isArray(series[1].data) ? numericAt(series[1].data[0]) : null;
   if (actual === null || target === null) return null;
-  if (target === 0) return null; // can't compute achievement % from zero target
+  if (target === 0) return null;
 
-  const achievementPct = (actual / target) * 100;
-  const achievementStr = achievementPct.toFixed(1) + '%';
-
-  const isFinanceMetric = FINANCE_METRICS.has(chart.meta.yMetric);
-
-  // KPI ¥ guard: finance metric + no finance permission → ONLY % output, NEVER ¥
-  // The finding itself only uses %, which is always safe
-  const finding = `达成 ${achievementStr}`;
-
-  // Implication
-  let implication: string;
-  if (achievementPct >= 100) {
-    implication = `已完成目标（达成率 ${achievementStr}）。`;
-  } else if (achievementPct >= 80) {
-    implication = `目标完成进度较好（达成率 ${achievementStr}），关注后续趋势。`;
-  } else {
-    implication = `目标完成率偏低（${achievementStr}），建议排查差距原因。`;
-  }
-
-  // Suggestion — observation verbs only
+  const achievement = actual / target;
+  const gated = financeGated(meta, permissions);
+  const gapText = achievement < 1 && !gated ? `，还差${fmtValue(target - actual, meta)}` : '';
+  const finding = `达成${(achievement * 100).toFixed(1)}%${gapText}。`;
   let suggestion: string | undefined;
-  if (achievementPct < 80) {
-    suggestion = `排查目标与实际的差距，了解影响达成的关键因素。`;
-  } else if (achievementPct >= 100) {
-    suggestion = `关注超额完成的持续性，分析是否存在系统性有利因素。`;
-  }
-
-  // RBAC: for finance metrics, ensure no absolute ¥ leaks through
-  // (our templates already use only %, but apply belt-and-suspenders)
-  if (isFinanceMetric && !permissions.canViewFinance) {
-    const absPattern = /¥[\d,.]+万?亿?|[\d,.]+万?亿?元/g;
-    return {
-      finding: finding.replace(absPattern, '(已脱敏)'),
-      implication: implication.replace(absPattern, '(已脱敏)'),
-      suggestion: suggestion?.replace(absPattern, '(已脱敏)'),
-      source: 'rules',
-      tier: 1,
-    };
-  }
-
-  return {
-    finding,
-    implication,
-    suggestion,
-    source: 'rules',
-    tier: 1,
-  };
+  if (achievement < 0.8) suggestion = `差距超过两成，先查拖后腿的那一块。`;
+  else if (achievement < 1) suggestion = `还差${(100 - achievement * 100).toFixed(1)}个百分点，盯住剩余进度。`;
+  else suggestion = `已超出目标${(achievement * 100 - 100).toFixed(1)}个百分点，确认是否可持续。`;
+  return finish(finding, suggestion);
 }
 
 // ============================================================

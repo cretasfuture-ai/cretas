@@ -122,6 +122,30 @@ export function getPageCodes(pageKey: string): readonly string[] {
   return PAGE_TEMPLATE_MAP[pageKey] || [];
 }
 
+/** 餐饮专属模板（储值卡/团购/门店营业额渠道/菜品等）：食品工厂、物流不展示。 */
+export const RESTAURANT_ONLY_TEMPLATE_CODES: ReadonlySet<string> = new Set([
+  'revenue_management_report',
+  'stored_value_card_consumption',
+  'groupon_channel_breakdown',
+  'dish_sales_top_n',
+  'dish_slow_movers',
+  'dish_category_breakdown',
+  'combo_usage_rate',
+  'time_slot_revenue',
+]);
+
+/** 按业务域(auth store businessDomain: FACTORY/RESTAURANT/LOGISTICS)过滤模板。
+ * 仅 FACTORY / LOGISTICS 隐藏餐饮专属；餐饮与未知(空)域保持原样。 */
+export function getVisiblePageCodes(
+  pageKey: string,
+  businessDomain: string | undefined,
+): readonly string[] {
+  const codes = getPageCodes(pageKey);
+  const domain = (businessDomain || '').toUpperCase();
+  if (domain !== 'FACTORY' && domain !== 'LOGISTICS') return codes;
+  return codes.filter((c) => !RESTAURANT_ONLY_TEMPLATE_CODES.has(c));
+}
+
 export function getTemplateTitle(code: string): string {
   return TEMPLATE_TITLES[code] || code;
 }
