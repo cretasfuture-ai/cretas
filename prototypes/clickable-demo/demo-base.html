@@ -1,0 +1,692 @@
+<title>Cretas 原型演示</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* 布局：顶栏 + 左侧菜单（工作台 / 业务）+ 右侧页面；窄屏菜单变横向滚动条。颜色沿用统一原型的 --cs 蓝灰体系 */
+:root {
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --subtle: #f7f9fc;
+  --fg: #1a293d;
+  --fg2: #52647a;
+  --line: #e1e7ef;
+  --brand: #1b65a8;
+  --brand-soft: #eaf2fa;
+  --ok: #24724f;
+  --ok-soft: #e4f3ee;
+  --warn: #8f6420;
+  --warn-soft: #f8f0df;
+  --risk: #b0443f;
+  --risk-soft: #f8e9e8;
+  --idle: #9aaabd;
+  --on: #ffffff;
+  --font: "Segoe UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1722; --card: #17212f; --subtle: #1b2738; --fg: #e6edf6; --fg2: #a9b8cc; --line: #26344a;
+    --brand: #5aa3e0; --brand-soft: #16304a; --ok: #5cc2a4; --ok-soft: #14332b;
+    --warn: #e0b765; --warn-soft: #3a2f16; --risk: #e48b86; --risk-soft: #3d2120; --idle: #6d7f96; --on: #0f1722;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1722; --card: #17212f; --subtle: #1b2738; --fg: #e6edf6; --fg2: #a9b8cc; --line: #26344a;
+  --brand: #5aa3e0; --brand-soft: #16304a; --ok: #5cc2a4; --ok-soft: #14332b;
+  --warn: #e0b765; --warn-soft: #3a2f16; --risk: #e48b86; --risk-soft: #3d2120; --idle: #6d7f96; --on: #0f1722;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.6 var(--font); font-variant-numeric: tabular-nums;
+  padding-block: 0 40px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+h1 { font-size: 20px; margin: 0; line-height: 1.3; }
+h2 { font-size: 15px; margin: 0; }
+h3 { font-size: 14px; margin: 0; }
+small, .muted { color: var(--fg2); font-size: 12px; }
+.shell { max-width: 1240px; margin: 0 auto; }
+.top { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; padding-block: 14px; }
+.brand { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.brand b { font-size: 16px; }
+.demo-note { background: var(--warn-soft); color: var(--fg); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; margin-bottom: 14px; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; justify-content: space-between; }
+.body { display: grid; grid-template-columns: 210px minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 800px) { .body { grid-template-columns: minmax(0, 1fr); } }
+.nav { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 2px; position: sticky; top: 8px; }
+.nav { max-height: calc(100vh - 16px); overflow-y: auto; }
+@media (max-width: 800px) { .nav { position: static; max-height: 50vh; } }
+.nav .grp { font-weight: 600; }
+.nav .grp i { font-style: normal; font-weight: 400; color: var(--fg2); font-size: 12px; }
+.nav .grp[aria-expanded="true"] i { color: var(--brand); }
+.nav .sb { padding-left: 22px; font-size: 13px; }
+.bar { display: grid; grid-template-columns: minmax(70px, 150px) minmax(0, 1fr) minmax(70px, auto); gap: 10px; align-items: center; margin: 7px 0; font-size: 13px; }
+.bar .bt { background: var(--subtle); border-radius: 4px; height: 12px; overflow: hidden; display: block; }
+.bar .bt i { display: block; height: 100%; border-radius: 4px; }
+.bar b { text-align: right; font-weight: 600; }
+.board { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; align-items: start; }
+.board .col { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.board .colh { display: flex; justify-content: space-between; align-items: center; padding: 2px 4px; }
+.board .kc { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.sw > div { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; font-size: 12px; min-width: 0; }
+.sw i { display: block; height: 38px; }
+.sw span { display: block; padding: 5px 8px; color: var(--fg2); overflow-wrap: anywhere; }
+.sw b { color: var(--fg); display: block; font-weight: 600; font-size: 13px; }
+code { font: 12px var(--mono); background: var(--subtle); padding: 1px 5px; border-radius: 4px; }
+.steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.step { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; font-size: 13px; }
+.step small { color: var(--fg2); }
+textarea:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+.nav .sec { font-size: 11px; color: var(--fg2); letter-spacing: .08em; padding: 8px 10px 2px; }
+.nav button { border: 0; background: transparent; text-align: left; padding: 8px 10px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; gap: 10px; white-space: nowrap; }
+.nav button:hover { background: var(--brand-soft); }
+.nav button[aria-current="page"] { background: var(--brand-soft); color: var(--brand); font-weight: 600; }
+.badge { background: var(--risk); color: var(--on); border-radius: 999px; font-size: 11px; min-width: 18px; padding: 0 6px; text-align: center; line-height: 18px; }
+.nav .more { font-size: 12px; color: var(--fg2); padding: 10px; border-top: 1px solid var(--line); margin-top: 6px; }
+.page { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.ph { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: flex-end; }
+.ph p { margin: 0 0 2px; color: var(--fg2); font-size: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.kpi { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; text-align: left; }
+.kpi:hover { border-color: var(--brand); }
+.kpi span { display: block; color: var(--fg2); font-size: 12px; }
+.kpi strong { display: block; font-size: 26px; font-weight: 600; line-height: 1.25; }
+.kpi small { color: var(--brand); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; min-width: 0; }
+.card > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.card .in { padding: 12px 14px; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; align-items: start; }
+.grid3 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: start; }
+@media (max-width: 960px) { .grid2, .grid3 { grid-template-columns: minmax(0, 1fr); } }
+.link { border: 0; background: none; color: var(--brand); padding: 2px 4px; font-size: 12.5px; }
+.link:hover { text-decoration: underline; }
+.btn { border: 1px solid var(--line); background: var(--card); border-radius: 6px; padding: 6px 12px; }
+.btn:hover { border-color: var(--brand); color: var(--brand); }
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--on); }
+.btn.primary:hover { filter: brightness(1.08); color: var(--on); }
+.btn:disabled { opacity: .5; cursor: not-allowed; filter: none; }
+.btn.sm { padding: 2px 9px; font-size: 12.5px; }
+.tbl { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { background: var(--subtle); color: var(--fg2); font-weight: 600; white-space: nowrap; font-size: 12px; }
+td.n, th.n { text-align: right; }
+tbody tr:last-child td { border-bottom: 0; }
+tr.pick { background: var(--brand-soft); }
+td small { display: block; }
+.pill { display: inline-block; font-size: 11.5px; padding: 0 7px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.run { background: var(--brand-soft); color: var(--brand); }
+.pill.risk { background: var(--risk-soft); color: var(--risk); }
+.pill.mute { background: var(--subtle); color: var(--fg2); border: 1px solid var(--line); }
+.track { display: flex; height: 10px; border-radius: 4px; overflow: hidden; background: var(--subtle); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; margin-top: 10px; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.list > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.list > div:last-child { border-bottom: 0; }
+.list .t { min-width: 0; flex: 1 1 220px; }
+.list .t b { font-weight: 600; }
+.list .t small { display: block; }
+.tabs { display: inline-flex; background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+.tabs button { border: 0; background: transparent; padding: 5px 14px; border-radius: 6px; color: var(--fg2); }
+.tabs button[aria-pressed="true"] { background: var(--card); color: var(--brand); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { border: 1px solid var(--line); background: var(--card); color: var(--fg2); border-radius: 999px; padding: 3px 12px; font-size: 12.5px; }
+.chip[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); color: var(--brand); }
+.empty { color: var(--fg2); padding: 22px 14px; text-align: center; }
+.issue { border-bottom: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; }
+.issue:last-child { border-bottom: 0; }
+.issue .hd { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.issue ul { margin: 0; padding-left: 18px; color: var(--fg2); font-size: 12.5px; }
+.issue .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.closer { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.closer input[type=text] { min-width: 0; width: 100%; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.sevbar { width: 4px; align-self: stretch; border-radius: 2px; background: var(--idle); }
+.form { display: grid; gap: 12px; }
+.row2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+label.f { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--fg2); min-width: 0; }
+label.f input, label.f select, .tools input { padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); min-width: 0; width: 100%; }
+.tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tools input { flex: 1 1 160px; }
+.sub { display: grid; gap: 6px; }
+.sub .r { display: grid; grid-template-columns: minmax(0, 1fr) 110px auto; gap: 8px; align-items: center; }
+.sub select, .sub input { padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); min-width: 0; width: 100%; }
+.preview { background: var(--subtle); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; }
+.preview .k { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; }
+.preview .k span { display: block; font-size: 12px; color: var(--fg2); }
+.preview .k b { font-size: 17px; font-weight: 600; }
+.errs { margin: 0; padding-left: 18px; color: var(--risk); font-size: 12.5px; }
+.pickrow { cursor: pointer; }
+.pickrow:hover { background: var(--brand-soft); }
+.comp { display: flex; height: 12px; border-radius: 4px; overflow: hidden; background: var(--subtle); }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+.facts span { display: block; font-size: 12px; color: var(--fg2); }
+.facts b { font-size: 16px; font-weight: 600; }
+.notice { background: var(--warn-soft); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }
+.notice.ok { background: var(--ok-soft); }
+.toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(18px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); padding: 8px 16px; border-radius: 8px; font-size: 13px; z-index: 30; max-width: calc(100% - 32px); }
+.ov { position: fixed; inset: 0; background: rgba(10, 18, 30, .5); z-index: 20; display: flex; align-items: center; justify-content: center; padding: 16px; }
+.dlg { background: var(--card); border-radius: 10px; max-width: 520px; width: 100%; max-height: 85vh; overflow: auto; padding: 16px 18px; border: 1px solid var(--line); }
+.dlg dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 12px 0; font-size: 13px; }
+.dlg dt { color: var(--fg2); }
+.dlg dd { margin: 0; overflow-wrap: anywhere; }
+a { color: var(--brand); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="shell">
+  <div class="top">
+    <div class="brand"><b>Cretas</b><span class="muted">统一原型 · 可点击演示</span></div>
+    <button class="btn sm" data-act="reset">还原示例数据</button>
+  </div>
+  <div class="demo-note">
+    <span>演示用示例数据：工厂、工单、数字都是虚构的，不含任何客户数据。操作只改页面内存，刷新即还原。</span>
+    <span class="muted">示例时间：2026-11-16 15:30（北京时间）</span>
+  </div>
+  <div class="body">
+    <nav class="nav" id="nav" aria-label="菜单"></nav>
+    <main class="page" id="page"></main>
+  </div>
+</div>
+<div id="layer"></div>
+
+<script>
+/*__MENU__*/
+/* ---------- 示例数据（虚构） ---------- */
+var TODAY = '2026-11-16', NOW = '2026-11-16T15:30';
+var ORDER_STATE = { '0': ['新建', 'mute', '#9aaabd'], '10': ['执行中', 'run', '#1b65a8'], '20': ['已结束', 'ok', '#4a9c7b'], '30': ['已取消', 'mute', '#b0b6c1'] };
+var ORDERS = [
+  { id: 'GD-1116-01', product: '酱牛肉', plan: 800, st: '10', line: '一车间', day: '2026-11-16', code: 'P-0101' },
+  { id: 'GD-1116-02', product: '卤鸡爪', plan: 1200, st: '10', line: '一车间', day: '2026-11-16', code: 'P-0207' },
+  { id: 'GD-1116-03', product: '川味香肠', plan: 600, st: '10', line: '二车间', day: '2026-11-16', code: 'P-0312' },
+  { id: 'GD-1116-09', product: '肉丸', plan: 700, st: '10', line: '二车间', day: '2026-11-16', code: 'P-0418' },
+  { id: 'GD-1117-06', product: '酱牛肉', plan: 800, st: '0', line: '一车间', day: '2026-11-17', code: 'P-0101' },
+  { id: 'GD-1117-07', product: '卤鸡爪', plan: 1200, st: '0', line: '一车间', day: '2026-11-17', code: 'P-0207' },
+  { id: 'GD-1115-04', product: '五香豆干', plan: 1000, st: '20', line: '三车间', day: '2026-11-15', code: 'P-0533' },
+  { id: 'GD-1115-05', product: '辣椒酱', plan: 500, st: '20', line: '三车间', day: '2026-11-15', code: 'P-0640' },
+  { id: 'GD-1114-08', product: '烤鸭', plan: 400, st: '30', line: '二车间', day: '2026-11-14', code: 'P-0702' }
+];
+var APPROVALS = 3, PRODUCTS = 14;
+var TASKS = [
+  { id: 't1', order: 'GD-1116-01', product: '酱牛肉', proc: '煮制', run: true, std: 68, tol: 5 },
+  { id: 't2', order: 'GD-1116-01', product: '酱牛肉', proc: '分切', run: true, std: 96, tol: 2 },
+  { id: 't3', order: 'GD-1116-02', product: '卤鸡爪', proc: '卤制', run: true, std: 82, tol: 4 },
+  { id: 't4', order: 'GD-1116-03', product: '川味香肠', proc: '灌肠', run: true, std: null, tol: null },
+  { id: 't5', order: 'GD-1116-09', product: '肉丸', proc: '成型', run: true, std: 97, tol: 2 },
+  { id: 't6', order: 'GD-1116-09', product: '肉丸', proc: '蒸煮', run: true, std: 90, tol: 3 },
+  { id: 't7', order: 'GD-1117-06', product: '酱牛肉', proc: '煮制', run: false, std: 68, tol: 5 }
+];
+var DEFECTS = ['破碎', '变形', '污染'], BYPRODUCTS = ['碎肉', '汤汁渣'];
+var STOCK_IN = [
+  { no: 'CG-1114-003', type: '采购入库', at: '2026-11-14 09:20', lines: 3 },
+  { no: 'CP-1115-011', type: '成品入库', at: '2026-11-15 17:40', lines: 2 },
+  { no: 'CG-1116-001', type: '采购入库', at: '2026-11-16 07:55', lines: 5 }
+];
+var BATCHES = [
+  { no: 'B-1103-02', product: '牛腱', exp: '2026-11-15' },
+  { no: 'B-1107-05', product: '鸡爪', exp: '2026-11-18' },
+  { no: 'B-1110-01', product: '香肠肠衣', exp: '2026-11-21' },
+  { no: 'B-1105-03', product: '辣椒酱', exp: '2026-11-22' }
+];
+var SOURCES = [
+  ['汇报', '数字员工汇报', '数字员工扫描数据后发现的问题和提醒'],
+  ['预警', '规则预警', '协同任务规则触发、还没处理的提醒'],
+  ['对账', '对账差异', 'Cretas 与黑湖两边记录对不上的'],
+  ['缺口', '数据缺口', '缺数据、算不出的地方'],
+  ['疑点', '数据疑点', '录入可能有误的记录，只列出来找谁核']
+];
+var ISSUES = [
+  { k: 'i1', src: '汇报', lv: '高', title: 'GD-1117-06 酱牛肉明天开工，牛腱不够', sum: '库存 420 kg，工单需求 560 kg，缺 140 kg。', basis: ['库存快照 11-16 08:00：牛腱 420 kg', '工单配方：每 100 kg 成品用牛腱 70 kg', '在途采购单 CG-1116-001 未含牛腱'], owner: '采购', at: '11-16 09:12' },
+  { k: 'i2', src: '汇报', lv: '中', title: 'GD-1116-09 肉丸蒸煮得率连续偏低', sum: '最近 3 笔得率 84.1%、85.0%、83.6%，标准 90%±3。', basis: ['称重记录 3 笔，均低于标准下限 87%', '同工序上周均值 89.4%'], owner: '车间', at: '11-16 11:40' },
+  { k: 'i3', src: '预警', lv: '中', title: 'GD-1116-03 灌肠已开工 40 分钟，还没做首检', sum: '按规则，开工 30 分钟内要登记首检。', basis: ['任务开工 14:50', '首检记录 0 条'], owner: '质检', at: '11-16 15:20' },
+  { k: 'i4', src: '预警', lv: '低', title: 'GD-1116-02 卤制超过计划结束时间 1.5 小时', sum: '计划 14:00 结束，现在还在执行。', basis: ['计划结束 14:00', '当前 15:30，仍为「执行中」'], owner: '车间', at: '11-16 15:30' },
+  { k: 'i5', src: '对账', lv: '中', title: '称重报工和黑湖报工对不上：GD-1116-01 煮制', sum: 'Cretas 良品 212 kg，黑湖 220 kg，差 8 kg（3.6%）。', basis: ['Cretas：称重 1 笔，良品 212 kg', '黑湖：报工 1 笔，良品 220 kg', '两边口径：黑湖未扣皮重，差值接近皮重 2 kg × 4 筐'], owner: '车间', at: '11-16 10:05' },
+  { k: 'i6', src: '对账', lv: '中', title: '入库单 CG-1114-003 还没建批次', sum: '黑湖采购入库 3 行，Cretas 没有关联批次，已 2 天。', basis: ['入库时间 11-14 09:20', '近 7 天内，超出提醒线（2 天）'], owner: '仓库', at: '11-16 08:00' },
+  { k: 'i7', src: '缺口', lv: '中', title: 'GD-1115-05 辣椒酱缺人工工时，算不出单位成本', sum: '工序任务没有登记工时，成本页显示「算不出」，不当 0 处理。', basis: ['材料：已领料 7,250 元', '人工：0 条工时记录'], owner: '车间', at: '11-16 08:00' },
+  { k: 'i8', src: '缺口', lv: '低', title: '川味香肠灌肠工序没有得率标准', sum: '称重时无法判定达标，只记录得率。', basis: ['工艺库：该工序标准得率为空'], owner: '工艺', at: '11-16 08:00' },
+  { k: 'i9', src: '疑点', lv: '低', title: 'GD-1116-02 卤制称重：投入 12 kg，良品 1,180 kg', sum: '投入远小于良品，疑似少打了一位或单位填错。', basis: ['称重记录 11-16 13:12', '同任务其他记录投入 1,100 kg 左右'], owner: '车间', at: '11-16 13:12' }
+];
+var COSTS = [
+  { id: 'GD-1115-04', product: '五香豆干', st: '20', out: 960, mat: 18420, lab: 3150, std: 22.0 },
+  { id: 'GD-1115-05', product: '辣椒酱', st: '20', out: 480, mat: 7250, lab: null, std: 15.0 },
+  { id: 'GD-1110-05', product: '川味香肠', st: '20', out: 570, mat: 17640, lab: 2520, std: 34.0 },
+  { id: 'GD-1109-03', product: '卤鸡爪', st: '20', out: 1130, mat: 21800, lab: 2960, std: 22.5 },
+  { id: 'GD-1108-02', product: '酱牛肉', st: '20', out: 760, mat: 31400, lab: 3420, std: 42.5 },
+  { id: 'GD-1116-01', product: '酱牛肉', st: '10', out: 212, mat: 31600, lab: 2880, std: 42.5 },
+  { id: 'GD-1116-02', product: '卤鸡爪', st: '10', out: null, mat: 14200, lab: 1610, std: 22.5 }
+];
+var SEED_RECORDS = [{ id: 'r0', taskId: 't1', inputKg: 320, goodGrossKg: 214, tareKg: 2, goodKg: 212, defects: [], defectKg: 0, byproducts: [{ name: '汤汁渣', kg: 6 }], byproductKg: 6, lossKg: 102, start: '2026-11-16T09:10', end: '2026-11-16T10:40', revoked: false }];
+
+/* ---------- 状态 ---------- */
+var S, TITLES = { today: '今天', todo: '待办', issues: '发现的问题', cost: '成本分析', weigh: '称重报工' };
+function fresh() {
+  return { page: 'today', role: 'shop', records: JSON.parse(JSON.stringify(SEED_RECORDS)), rid: 1, batched: {}, issue: {}, closing: '', conc: '',
+    tb: {}, tab: {}, sw: {}, openG: {}, srcFilter: '', showClosed: false, costFilter: 'all', costPick: 'GD-1115-04', task: 't2', onlyRun: true, q: '', picked: 0 };
+}
+S = fresh();
+
+/* ---------- 工具 ---------- */
+function $(s, r) { return (r || document).querySelector(s); }
+function esc(s) { return String(s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function fmt(n, d) { return n == null || isNaN(n) ? '—' : Number(n).toLocaleString('zh-CN', { minimumFractionDigits: d || 0, maximumFractionDigits: d || 0 }); }
+function days(a, b) { return Math.round((Date.parse(a + 'T00:00:00Z') - Date.parse(b + 'T00:00:00Z')) / 864e5); }
+var toastTimer;
+function toast(t) {
+  var el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); el.textContent = t;
+  $('#layer').appendChild(el); clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 2600);
+}
+function weighedIds() { var o = {}; S.records.forEach(function (r) { if (!r.revoked) o[r.taskId] = 1; }); return o; }
+function taskOf(id) { return TASKS.filter(function (t) { return t.id === id; })[0]; }
+function openIssues() { return ISSUES.filter(function (i) { return !S.issue[i.k] || S.issue[i.k].s === 'todo'; }).filter(function (i) { return !S.issue[i.k]; }); }
+function todoSets() {
+  var w = weighedIds();
+  var toWeigh = TASKS.filter(function (t) { return t.run && !w[t.id]; });
+  var toBatch = STOCK_IN.filter(function (o) { return !S.batched[o.no]; });
+  var exp = BATCHES.map(function (b) { return { no: b.no, product: b.product, exp: b.exp, left: days(b.exp, TODAY) }; }).filter(function (b) { return b.left <= 7; }).sort(function (a, b) { return a.left - b.left; });
+  var confirm = ISSUES.filter(function (i) { return S.issue[i.k] && S.issue[i.k].s === 'todo'; });
+  return { toWeigh: toWeigh, toBatch: toBatch, exp: exp, confirm: confirm };
+}
+function costOf(c) {
+  var reason = null;
+  if (c.st !== '20') reason = '工单未结束，不和标准比较';
+  else if (c.lab == null) reason = '缺任务人工';
+  else if (!c.out) reason = '没有产出量';
+  var unit = reason ? null : (c.mat + c.lab) / c.out;
+  return { unit: unit, reason: reason, dev: unit == null ? null : (unit - c.std) / c.std };
+}
+function go(p) { if (location.hash !== '#' + p) location.hash = p; else render(); }
+function pill(text, cls) { return '<span class="pill ' + (cls || '') + '">' + esc(text) + '</span>'; }
+
+/* ---------- 菜单 ---------- */
+function renderNav() {
+  var ts = todoSets(), nTodo = ts.toWeigh.length + ts.toBatch.length + ts.exp.length + ts.confirm.length, nIss = openIssues().length;
+  function it(id, title, badge, cls) { return '<button' + (cls ? ' class="' + cls + '"' : '') + ' data-go="' + id + '"' + (S.page === id ? ' aria-current="page"' : '') + '><span>' + esc(title) + '</span>' + (badge ? '<span class="badge">' + badge + '</span>' : '') + '</button>'; }
+  var h = '<div class="sec">工作台</div>' + it('today', '今天') + it('todo', '待办', nTodo) + it('issues', '发现的问题', nIss) + '<div class="sec">全部功能</div>';
+  MENU.forEach(function (g) {
+    var cur = g[1].some(function (x) { return pid(x[1]) === S.page; }), open = S.openG[g[0]] === undefined ? cur : S.openG[g[0]];
+    h += '<button class="grp" data-grp="' + esc(g[0]) + '" aria-expanded="' + open + '"><span>' + esc(g[0]) + '</span><i>' + g[1].length + '</i></button>';
+    if (open) g[1].forEach(function (x) { h += it(pid(x[1]), x[0], 0, 'sb'); });
+  });
+  $('#nav').innerHTML = h + '<div class="more">菜单和页面名取自原型，页面里的数据都是虚构示例。原型的地图、组件库、源码位置在「原型资料」。</div>';
+}
+
+/* ---------- 今天 ---------- */
+function pageToday() {
+  var counts = {}; ORDERS.forEach(function (o) { counts[o.st] = (counts[o.st] || 0) + 1; });
+  var comparable = COSTS.filter(function (c) { return costOf(c).unit != null; }).length;
+  var kpis = [['生产工单', ORDERS.length, 'orders', '生产工单'], ['待审批报工', APPROVALS, 'approval', '报工审批'], ['产品档案', PRODUCTS, 'products', '产品档案'], ['可比较成本工单', comparable, 'cost', '']];
+  var track = ['0', '10', '20', '30'].map(function (k) { return '<i style="width:' + (counts[k] || 0) / ORDERS.length * 100 + '%;background:' + ORDER_STATE[k][2] + '" title="' + ORDER_STATE[k][0] + ' ' + (counts[k] || 0) + '"></i>'; }).join('');
+  var legend = ['0', '10', '20', '30'].map(function (k) { return '<span><i style="background:' + ORDER_STATE[k][2] + '"></i>' + ORDER_STATE[k][0] + ' <b>' + (counts[k] || 0) + '</b></span>'; }).join('');
+  var rows = ORDERS.slice(0, 8).map(function (o) { return '<tr><td>' + o.id + '<small>' + o.product + '</small></td><td class="n">' + fmt(o.plan) + ' kg</td><td>' + pill(ORDER_STATE[o.st][0], ORDER_STATE[o.st][1]) + '</td><td><button class="link" data-order="' + o.id + '">详情</button></td></tr>'; }).join('');
+  var iss = openIssues().filter(function (i) { return i.src === '缺口' || i.src === '疑点'; }).slice(0, 4);
+  var issHtml = iss.length ? iss.map(function (i) { return '<div><div class="t"><b>' + esc(i.title) + '</b><small>' + esc(i.sum) + '</small></div><button class="link" data-go="issues">去处理</button></div>'; }).join('') : '<div class="empty">当前没有需要核对的缺口和疑点。</div>';
+  return '<div class="ph"><div><p>示例食品厂 · 工厂运营</p><h1>工厂总览</h1></div><small>采集核验 2026-11-16 08:00 · 快照日 11-16</small></div>' +
+    '<div class="kpis">' + kpis.map(function (k) { return '<button class="kpi" data-kpi="' + k[2] + '" data-name="' + k[3] + '"><span>' + k[0] + '</span><strong>' + k[1] + '</strong><small>查看记录 →</small></button>'; }).join('') + '</div>' +
+    '<div class="grid2"><section class="card"><header><h2>生产执行</h2><small>按工单状态计数；取消单单列，不计作待执行需求</small></header><div class="in"><div class="track">' + track + '</div><div class="legend">' + legend + '</div></div>' +
+    '<div class="tbl"><table><thead><tr><th>工单 / 产品</th><th class="n">计划量</th><th>状态</th><th></th></tr></thead><tbody>' + rows + '</tbody></table></div></section>' +
+    '<div class="page"><section class="card"><header><h2>常用业务</h2></header><div class="in" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">' +
+    '<button class="btn" data-go="weigh" style="text-align:left"><b>称重报工</b><small style="display:block">逐笔称重 · 一屏完成</small></button>' +
+    '<button class="btn" data-go="cost" style="text-align:left"><b>成本核对</b><small style="display:block">实际材料 · 任务人工</small></button>' +
+    '<button class="btn" data-go="todo" style="text-align:left"><b>我的待办</b><small style="display:block">按岗位分</small></button>' +
+    '<button class="btn" data-go="issues" style="text-align:left"><b>发现的问题</b><small style="display:block">五类来源</small></button></div></section>' +
+    '<section class="card"><header><h2>需要核对</h2><small>未满足核算条件</small></header><div class="list">' + issHtml + '</div></section></div></div>';
+}
+
+/* ---------- 待办 ---------- */
+function pageTodo() {
+  var ts = todoSets();
+  var shop = '<section class="card"><header><h2>待称重任务（执行中）</h2>' + pill(ts.toWeigh.length + ' 项', ts.toWeigh.length ? '' : 'ok') + '</header><div class="list">' +
+    (ts.toWeigh.length ? ts.toWeigh.map(function (t) { return '<div><div class="t"><b>' + t.order + ' · ' + t.proc + '</b><small>' + t.product + ' · 执行中，还没有称重记录</small></div><button class="btn sm primary" data-weigh="' + t.id + '">去称重</button></div>'; }).join('') : '<div class="empty">执行中的任务都已称重。</div>') + '</div></section>';
+  var store = '<section class="card"><header><h2>待建批次</h2>' + pill(ts.toBatch.length + ' 项', ts.toBatch.length ? '' : 'ok') + '<small>近 7 天入库单里，还没有关联 Cretas 批次的</small></header><div class="list">' +
+    (ts.toBatch.length ? ts.toBatch.map(function (o) { return '<div><div class="t"><b>' + o.no + '</b><small>' + o.type + ' · ' + o.at + ' · ' + o.lines + ' 行</small></div><button class="btn sm primary" data-batch="' + o.no + '">建批次</button></div>'; }).join('') : '<div class="empty">近 7 天的入库单都已建批次。</div>') + '</div></section>' +
+    '<section class="card"><header><h2>临期批次</h2>' + pill(ts.exp.length + ' 个', ts.exp.length ? 'risk' : 'ok') + '<small>到期日在 7 天内，已过期单列</small></header><div class="list">' +
+    ts.exp.map(function (b) { return '<div><div class="t"><b>' + b.no + ' · ' + b.product + '</b><small>到期 ' + b.exp + '</small></div>' + (b.left < 0 ? pill('已过期 ' + (-b.left) + ' 天', 'risk') : pill('还剩 ' + b.left + ' 天', b.left <= 2 ? 'risk' : '')) + '</div>'; }).join('') + '</div></section>';
+  var conf = '<section class="card"><header><h2>等我确认</h2>' + pill(ts.confirm.length + ' 项', ts.confirm.length ? '' : 'ok') + '<small>从「发现的问题」转来的待办</small></header><div class="list">' +
+    (ts.confirm.length ? ts.confirm.map(function (i) { return '<div><div class="t"><b>' + esc(i.title) + '</b><small>负责：' + i.owner + '</small></div><span><button class="btn sm primary" data-confirm="' + i.k + '">确认</button> <button class="link" data-undo="' + i.k + '">撤回</button></span></div>'; }).join('') : '<div class="empty">没有等你确认的事项。在「发现的问题」里点「转待办」会出现在这里。</div>') + '</div></section>';
+  return '<div class="ph"><div><p>示例食品厂 · 按岗位</p><h1>待办</h1></div><div class="tabs" role="group" aria-label="岗位"><button data-role="shop" aria-pressed="' + (S.role === 'shop') + '">车间</button><button data-role="store" aria-pressed="' + (S.role === 'store') + '">仓库</button></div></div>' +
+    (S.role === 'shop' ? shop : store) + conf;
+}
+
+/* ---------- 发现的问题 ---------- */
+function pageIssues() {
+  var all = ISSUES, open = all.filter(function (i) { return !S.issue[i.k]; }), closed = all.filter(function (i) { return S.issue[i.k] && S.issue[i.k].s === 'closed'; });
+  var shown = open.filter(function (i) { return !S.srcFilter || i.src === S.srcFilter; });
+  var chips = '<button class="chip" data-src="" aria-pressed="' + (!S.srcFilter) + '">全部 ' + open.length + '</button>' + SOURCES.map(function (s) {
+    var n = open.filter(function (i) { return i.src === s[0]; }).length;
+    return '<button class="chip" data-src="' + s[0] + '" aria-pressed="' + (S.srcFilter === s[0]) + '" title="' + esc(s[2]) + '">' + s[1] + ' ' + n + '</button>';
+  }).join('');
+  var lvCls = { '高': 'risk', '中': '', '低': 'mute' };
+  var cards = shown.map(function (i) {
+    var closer = S.closing === i.k ? '<div class="closer"><div class="chips" role="group" aria-label="结论">' + ['已处理', '误报', '接受偏差'].map(function (c) { return '<button class="chip" data-conc="' + c + '" aria-pressed="' + (S.conc === c) + '">' + c + '</button>'; }).join('') + '</div><input type="text" id="note" placeholder="写一句原因，例如：已补录工时" aria-label="关闭原因"><div class="acts"><button class="btn sm primary" data-close-ok="' + i.k + '">确认关闭</button><button class="link" data-close-cancel>取消</button></div></div>' : '';
+    return '<div class="issue"><div class="hd">' + pill(i.lv, lvCls[i.lv]) + pill(i.src, 'run') + '<b>' + esc(i.title) + '</b></div><div>' + esc(i.sum) + '</div><ul>' + i.basis.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul><small>负责：' + i.owner + ' · ' + i.at + '</small>' +
+      (closer || '<div class="acts"><button class="btn sm" data-totodo="' + i.k + '">转待办</button><button class="btn sm" data-closing="' + i.k + '">关闭…</button></div>') + '</div>';
+  }).join('');
+  var closedHtml = '';
+  if (closed.length) {
+    closedHtml = '<section class="card"><header><h2>已关闭</h2><button class="link" data-toggle-closed>' + (S.showClosed ? '收起' : '展开 ' + closed.length + ' 条') + '</button></header>' +
+      (S.showClosed ? '<div class="list">' + closed.map(function (i) { var v = S.issue[i.k]; return '<div><div class="t"><b>' + esc(i.title) + '</b><small>结论：' + v.c + ' · ' + esc(v.n) + '</small></div><button class="link" data-restore="' + i.k + '">恢复</button></div>'; }).join('') + '</div>' : '') + '</section>';
+  }
+  var recon = '<section class="card"><header><h2>对账概览</h2><small>两边记录是否对得上</small></header><div class="tbl"><table><thead><tr><th>对账项</th><th>负责</th><th class="n">已对上</th><th class="n">有差异</th></tr></thead><tbody><tr><td>称重报工 ↔ 黑湖报工</td><td>车间</td><td class="n">11</td><td class="n">' + (S.issue.i5 ? 0 : 1) + '</td></tr><tr><td>入库批次 ↔ 黑湖入库单</td><td>仓库</td><td class="n">7</td><td class="n">' + (S.issue.i6 || S.batched['CG-1114-003'] ? 0 : 1) + '</td></tr></tbody></table></div></section>';
+  return '<div class="ph"><div><p>示例食品厂 · 五类来源</p><h1>发现的问题</h1></div><small>只读来源，关闭只改这里的状态，不改任何一边的数据</small></div>' +
+    '<div class="chips">' + chips + '</div>' +
+    '<section class="card">' + (cards || '<div class="empty">这一类没有未处理的问题。</div>') + '</section>' + recon + closedHtml;
+}
+
+/* ---------- 成本分析 ---------- */
+function pageCost() {
+  var rows = COSTS.map(function (c) { return { c: c, r: costOf(c) }; }).filter(function (x) { return S.costFilter === 'all' || (S.costFilter === 'ok' ? x.r.unit != null : x.r.unit == null); });
+  var okN = COSTS.filter(function (c) { return costOf(c).unit != null; }).length;
+  var worst = COSTS.map(function (c) { return { c: c, r: costOf(c) }; }).filter(function (x) { return x.r.dev != null; }).sort(function (a, b) { return Math.abs(b.r.dev) - Math.abs(a.r.dev); })[0];
+  var body = rows.map(function (x) {
+    var c = x.c, r = x.r;
+    return '<tr class="pickrow' + (S.costPick === c.id ? ' pick' : '') + '" data-cost="' + c.id + '" tabindex="0"><td>' + c.id + '<small>' + c.product + '</small></td><td>' + pill(ORDER_STATE[c.st][0], ORDER_STATE[c.st][1]) + '</td><td class="n">' + (c.out == null ? '未产出' : fmt(c.out) + ' kg') + '</td><td class="n">' + fmt(c.mat) + '</td><td class="n">' + (c.lab == null ? '未记录' : fmt(c.lab)) + '</td><td class="n">' + (r.unit == null ? '<span class="muted">算不出</span>' : '<b>' + fmt(r.unit, 2) + '</b>') + '</td><td class="n">' + fmt(c.std, 2) + '</td><td class="n">' + (r.dev == null ? '—' : '<span style="color:var(--' + (Math.abs(r.dev) > .05 ? 'risk' : 'ok') + ')">' + (r.dev > 0 ? '+' : '') + (r.dev * 100).toFixed(1) + '%</span>') + '</td></tr>';
+  }).join('');
+  var pick = COSTS.filter(function (c) { return c.id === S.costPick; })[0], detail = '';
+  if (pick) {
+    var r = costOf(pick), tot = pick.mat + (pick.lab || 0);
+    detail = '<section class="card"><header><h2>' + pick.id + ' · ' + pick.product + '</h2>' + pill(ORDER_STATE[pick.st][0], ORDER_STATE[pick.st][1]) + '</header><div class="in" style="display:grid;gap:14px">' +
+      '<div class="facts"><div><span>材料（实际领料）</span><b>' + fmt(pick.mat) + ' 元</b></div><div><span>任务人工</span><b>' + (pick.lab == null ? '未记录' : fmt(pick.lab) + ' 元') + '</b></div><div><span>产出</span><b>' + (pick.out == null ? '未产出' : fmt(pick.out) + ' kg') + '</b></div><div><span>单位成本</span><b>' + (r.unit == null ? '算不出' : fmt(r.unit, 2) + ' 元/kg') + '</b></div></div>' +
+      '<div><small>成本构成</small><div class="comp" aria-hidden="true"><i style="width:' + pick.mat / tot * 100 + '%;background:var(--brand)"></i><i style="width:' + (pick.lab || 0) / tot * 100 + '%;background:var(--ok)"></i></div><div class="legend"><span><i style="background:var(--brand)"></i>材料 ' + (pick.mat / tot * 100).toFixed(0) + '%</span><span><i style="background:var(--ok)"></i>人工 ' + (pick.lab == null ? '未记录' : (pick.lab / tot * 100).toFixed(0) + '%') + '</span></div></div>' +
+      (r.reason ? '<div class="notice"><b>不能核对：</b>' + r.reason + '。这里显示「算不出」，不会用 0 代替。</div>' : '<div class="notice ok">材料和人工都有记录，单位成本 ' + fmt(r.unit, 2) + ' 元/kg，标准 ' + fmt(pick.std, 2) + '，偏差 ' + (r.dev > 0 ? '+' : '') + (r.dev * 100).toFixed(1) + '%。</div>') +
+      '<small>来源：生产工单、领退料单、任务工时。原型里每个来源都能跳回对应页面，这版没收入。</small></div></section>';
+  }
+  return '<div class="ph"><div><p>示例食品厂 · 核对</p><h1>成本分析</h1></div><small>金额为示例，单位元；币种待确认</small></div>' +
+    '<div class="kpis"><div class="kpi"><span>可比较工单</span><strong>' + okN + '</strong></div><div class="kpi"><span>需核对</span><strong>' + (COSTS.length - okN) + '</strong></div><div class="kpi"><span>偏差最大</span><strong style="font-size:18px">' + (worst ? worst.c.product + ' ' + (worst.r.dev > 0 ? '+' : '') + (worst.r.dev * 100).toFixed(1) + '%' : '—') + '</strong></div></div>' +
+    '<div class="chips"><button class="chip" data-cf="all" aria-pressed="' + (S.costFilter === 'all') + '">全部</button><button class="chip" data-cf="ok" aria-pressed="' + (S.costFilter === 'ok') + '">可比较</button><button class="chip" data-cf="no" aria-pressed="' + (S.costFilter === 'no') + '">需核对</button></div>' +
+    '<section class="card"><div class="tbl"><table><thead><tr><th>工单 / 产品</th><th>状态</th><th class="n">产出</th><th class="n">材料（元）</th><th class="n">人工（元）</th><th class="n">单位成本</th><th class="n">标准</th><th class="n">偏差</th></tr></thead><tbody>' + body + '</tbody></table></div></section>' + detail;
+}
+
+/* ---------- 称重报工 ---------- */
+function pageWeigh() {
+  var w = weighedIds(), k = S.q.trim().toLowerCase();
+  var list = TASKS.filter(function (t) { return (!S.onlyRun || t.run) && (!k || (t.order + t.product + t.proc).toLowerCase().indexOf(k) >= 0); });
+  var rows = list.map(function (t) {
+    var n = S.records.filter(function (r) { return r.taskId === t.id && !r.revoked; }).length;
+    return '<tr class="pickrow' + (S.task === t.id ? ' pick' : '') + '" data-task="' + t.id + '" tabindex="0"><td>' + t.order + '<small>' + t.product + ' · ' + t.proc + '</small></td><td>' + (t.run ? (n ? pill('已称 ' + n + ' 笔', 'ok') : pill('待称重')) : pill('未开始', 'mute')) + '</td></tr>';
+  }).join('') || '<tr><td colspan="2" class="empty">没有符合的任务。</td></tr>';
+  var t = taskOf(S.task);
+  var recs = S.records.filter(function (r) { return r.taskId === S.task; });
+  var live = recs.filter(function (r) { return !r.revoked; });
+  var inKg = live.reduce(function (a, r) { return a + r.inputKg; }, 0), gKg = live.reduce(function (a, r) { return a + r.goodKg; }, 0);
+  var recHtml = recs.length ? '<div class="tbl"><table><thead><tr><th>时间</th><th class="n">投入</th><th class="n">良品</th><th class="n">次品</th><th class="n">副产</th><th class="n">损耗</th><th></th></tr></thead><tbody>' + recs.map(function (r) {
+    return '<tr' + (r.revoked ? ' style="opacity:.5;text-decoration:line-through"' : '') + '><td>' + r.end.slice(5).replace('T', ' ') + '</td><td class="n">' + fmt(r.inputKg, 1) + '</td><td class="n">' + fmt(r.goodKg, 1) + '</td><td class="n">' + fmt(r.defectKg, 1) + '</td><td class="n">' + fmt(r.byproductKg, 1) + '</td><td class="n">' + fmt(r.lossKg, 1) + '</td><td>' + (r.revoked ? pill('已撤销', 'mute') : '<button class="link" data-revoke="' + r.id + '">撤销</button>') + '</td></tr>';
+  }).join('') + '</tbody></table></div>' : '<div class="empty">这个任务还没有称重记录。</div>';
+  var sum = '';
+  if (t && live.length) {
+    var y = inKg ? gKg / inKg * 100 : null, st = '';
+    if (t.std == null) st = pill('该工序没有标准，不判定', 'mute');
+    else st = Math.abs(y - t.std) <= t.tol ? pill('达标', 'ok') : pill('偏离标准', 'risk');
+    sum = '<div class="in" style="border-top:1px solid var(--line)"><b>' + live.length + ' 笔合计：</b>投入 ' + fmt(inKg, 1) + ' kg，良品 ' + fmt(gKg, 1) + ' kg，得率 ' + fmt(y, 1) + '% ' + st + (t.std != null ? ' <small>标准 ' + t.std + '% ±' + t.tol + '</small>' : '') + '</div>';
+  }
+  var form = t ? '<section class="card"><header><h2>' + t.order + ' · ' + t.proc + '</h2><small>' + t.product + (t.run ? '' : ' · 任务未开始，不能称重') + '</small></header><div class="in form" id="wform">' +
+    '<div class="row2"><label class="f">投入量（kg）<input id="f-in" type="number" inputmode="decimal" min="0" step="0.1" placeholder="例如 320"></label><label class="f">良品毛重（kg）<input id="f-gross" type="number" inputmode="decimal" min="0" step="0.1" placeholder="含容器"></label><label class="f">容器皮重（kg）<input id="f-tare" type="number" inputmode="decimal" min="0" step="0.1" value="0"></label></div>' +
+    '<div class="row2"><label class="f">开始时间<input id="f-start" type="datetime-local" value="2026-11-16T14:00"></label><label class="f">结束时间<input id="f-end" type="datetime-local" value="2026-11-16T15:20"></label></div>' +
+    '<div class="sub"><div class="acts" style="display:flex;justify-content:space-between;align-items:center"><small>次品</small><button class="link" type="button" data-addrow="d">＋ 添加次品</button></div><div id="rows-d"></div></div>' +
+    '<div class="sub"><div style="display:flex;justify-content:space-between;align-items:center"><small>副产品</small><button class="link" type="button" data-addrow="b">＋ 添加副产品</button></div><div id="rows-b"></div></div>' +
+    '<div class="preview" id="preview"></div><div><button class="btn primary" id="save" data-save' + (t.run ? '' : ' disabled') + '>保存称重</button></div></div></section>' : '';
+  return '<div class="ph"><div><p>示例食品厂 · 一屏完成</p><h1>称重报工</h1></div><small>写入只在本页内存里，不回写黑湖</small></div>' +
+    '<div class="grid3"><section class="card"><header><h2>任务</h2><label class="chip" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="onlyrun"' + (S.onlyRun ? ' checked' : '') + '> 只看执行中</label></header><div class="in tools"><input id="tq" type="search" placeholder="工单号 / 产品 / 工序" value="' + esc(S.q) + '" aria-label="搜索任务"></div><div class="tbl"><table><tbody>' + rows + '</tbody></table></div></section>' +
+    '<div class="page">' + form + '<section class="card"><header><h2>称重记录</h2><small>' + (t ? t.proc : '') + '</small></header>' + recHtml + sum + '</section></div></div>';
+}
+
+/* 称重表单：读取 / 预览 / 保存 */
+function subRow(kind) {
+  var opts = (kind === 'd' ? DEFECTS : BYPRODUCTS).map(function (n) { return '<option>' + n + '</option>'; }).join('');
+  return '<div class="r" data-kind="' + kind + '"><select aria-label="名称">' + opts + '</select><input type="number" inputmode="decimal" min="0" step="0.1" placeholder="kg" aria-label="重量 kg"><button class="link" type="button" data-delrow>删除</button></div>';
+}
+function readForm() {
+  function num(id) { var v = $(id).value; return v === '' ? null : parseFloat(v); }
+  function sub(k) { return Array.prototype.map.call(document.querySelectorAll('#rows-' + k + ' .r'), function (r) { var v = r.querySelector('input').value; return { name: r.querySelector('select').value, kg: v === '' ? 0 : parseFloat(v) }; }); }
+  return { inKg: num('#f-in'), gross: num('#f-gross'), tare: num('#f-tare'), start: $('#f-start').value, end: $('#f-end').value, defects: sub('d'), by: sub('b') };
+}
+function calc(f) {
+  var errs = [], t = taskOf(S.task);
+  var empty = f.inKg == null || f.gross == null;
+  if (f.inKg != null && f.inKg <= 0) errs.push('投入量要大于 0');
+  if (f.gross != null && f.gross <= 0) errs.push('良品毛重要大于 0');
+  var tare = f.tare == null ? 0 : f.tare;
+  if (tare < 0) errs.push('皮重不能是负数');
+  if (f.gross != null && tare > f.gross) errs.push('皮重不能大于毛重');
+  if (f.defects.concat(f.by).some(function (x) { return !(x.kg >= 0); })) errs.push('次品和副产品重量不能是负数');
+  if (f.start && f.end && f.end < f.start) errs.push('结束时间早于开始时间');
+  if (f.end && f.end > '2026-11-16T15:35') errs.push('结束时间晚于现在（示例时间 15:30）');
+  var good = empty ? null : f.gross - tare;
+  var dk = f.defects.reduce(function (a, x) { return a + (x.kg || 0); }, 0), bk = f.by.reduce(function (a, x) { return a + (x.kg || 0); }, 0);
+  var loss = empty ? null : f.inKg - good - dk - bk;
+  if (loss != null && loss < -1e-6) errs.push('出料合计比投入多 ' + fmt(-loss, 1) + ' kg，请核对');
+  var y = (empty || f.inKg <= 0) ? null : good / f.inKg * 100;
+  return { errs: errs, empty: empty, good: good, dk: dk, bk: bk, loss: loss, y: y, t: t };
+}
+function updatePreview() {
+  var el = $('#preview'); if (!el) return;
+  var f = readForm(), c = calc(f), t = c.t, st;
+  if (c.y == null || c.errs.length) st = pill('填完才判定', 'mute');
+  else if (t.std == null) st = pill('该工序没有标准，不判定', 'mute');
+  else st = Math.abs(c.y - t.std) <= t.tol ? pill('达标', 'ok') : pill('偏离标准 ' + (c.y - t.std > 0 ? '+' : '') + (c.y - t.std).toFixed(1) + ' 点', 'risk');
+  el.innerHTML = '<div class="k"><div><span>良品净重</span><b>' + (c.good == null ? '—' : fmt(c.good, 1) + ' kg') + '</b></div><div><span>次品 + 副产</span><b>' + fmt(c.dk + c.bk, 1) + ' kg</b></div><div><span>损耗</span><b>' + (c.loss == null || c.loss < 0 ? '—' : fmt(c.loss, 1) + ' kg') + '</b></div><div><span>得率</span><b>' + (c.y == null ? '—' : fmt(c.y, 1) + '%') + '</b></div></div><div>' + st + (t.std != null ? ' <small>标准 ' + t.std + '% ±' + t.tol + '</small>' : '') + '</div>' + (c.errs.length ? '<ul class="errs">' + c.errs.map(function (e) { return '<li>' + e + '</li>'; }).join('') + '</ul>' : '');
+  var b = $('#save'); if (b) b.disabled = !t.run || c.empty || c.errs.length > 0;
+}
+function saveWeigh() {
+  var f = readForm(), c = calc(f);
+  if (c.empty || c.errs.length) return;
+  S.records.push({ id: 'r' + (S.rid++), taskId: S.task, inputKg: f.inKg, goodGrossKg: f.gross, tareKg: f.tare || 0, goodKg: c.good, defects: f.defects, defectKg: c.dk, byproducts: f.by, byproductKg: c.bk, lossKg: c.loss, start: f.start, end: f.end, revoked: false });
+  toast('已保存称重：' + c.t.order + ' ' + c.t.proc + '，得率 ' + fmt(c.y, 1) + '%');
+  render();
+}
+
+/* ---------- 弹窗 ---------- */
+function openOrder(id) {
+  var o = ORDERS.filter(function (x) { return x.id === id; })[0]; if (!o) return;
+  $('#layer').innerHTML = '<div class="ov" data-close-dlg><div class="dlg" role="dialog" aria-modal="true" aria-label="工单详情"><h2>' + o.id + ' · ' + o.product + '</h2><dl><dt>状态</dt><dd>' + ORDER_STATE[o.st][0] + '</dd><dt>计划量</dt><dd>' + fmt(o.plan) + ' kg</dd><dt>产线</dt><dd>' + o.line + '</dd><dt>计划日</dt><dd>' + o.day + '</dd><dt>产品编码</dt><dd>' + o.code + '</dd></dl><small>来源只读，不回写黑湖。</small><div style="margin-top:12px;text-align:right"><button class="btn" data-close-dlg-btn autofocus>关闭</button></div></div></div>';
+}
+function closeDlg() { $('#layer').innerHTML = ''; }
+
+/* ---------- 渲染与事件 ---------- */
+/* ---------- 通用页面引擎：每个页面由 reg(路由, 页面描述) 登记，描述由若干「块」组成 ---------- */
+var FN = { today: pageToday, todo: pageTodo, issues: pageIssues, cost: pageCost, weigh: pageWeigh };
+var SPECIAL = { '/dashboard': 'today', '/g/today': 'today', '/g/todo': 'todo', '/crew/issues': 'issues', '/lsm/cost': 'cost', '/production/weigh': 'weigh' };
+function pid(route) { return SPECIAL[route] || route.slice(1).replace(/\//g, '-'); }
+var REG = {}, BYID = {}, BLOCKS = {}, BLK = {};
+function reg(route, spec) { REG[route] = spec; BYID[pid(route)] = route; }
+MENU.forEach(function (g) { g[1].forEach(function (x) { BYID[pid(x[1])] = x[1]; }); });
+function titleOf(route) { var t = route; MENU.forEach(function (g) { g[1].forEach(function (x) { if (x[1] === route) t = x[0]; }); }); return t; }
+function groupOf(id) { var r = ''; MENU.forEach(function (g) { g[1].forEach(function (x) { if (!r && pid(x[1]) === id) r = g[0]; }); }); return r; }
+function cell(v, c) {
+  if (v == null || v === '') return '<span class="muted">—</span>';
+  if (typeof v === 'number') return fmt(v, (c && c.d) || 0);
+  if (c && c.p) return autoPill(v);
+  return esc(v);
+}
+function plain(v, c) { return v == null || v === '' ? '—' : typeof v === 'number' ? fmt(v, (c && c.d) || 0) : String(v); }
+function autoPill(v) {
+  var s = String(v), cls = '';
+  if (/待整理/.test(s)) cls = '';
+  else if (/(已完成|合格|已审批|已通过|正常|通过|已处理|已入库|已发货|已收款|已确认|启用|达标|已对上|成功|已签收|已结清|已接入)/.test(s) && !/不合格|未通过/.test(s)) cls = 'ok';
+  else if (/可查看/.test(s)) cls = 'run';
+  else if (/(超期|不合格|驳回|过期|缺料|异常|高|失败|拒绝|超温|差异|召回|逾期|报废|未对上|未通过|缺口)/.test(s)) cls = 'risk';
+  else if (/(已取消|草稿|未开始|停用|已作废|已关闭|低)/.test(s)) cls = 'mute';
+  else if (/(执行中|进行中|处理中|待审批|审批中|生产中|运输中|检验中|待处理|新建|待)/.test(s)) cls = 'run';
+  return pill(s, cls);
+}
+function blk(b, key) { var f = BLK[b.t]; return f ? f(b, key) : '<div class="notice">未知块类型：' + esc(b.t) + '</div>'; }
+function card(title, inner, right, pad) { return '<section class="card">' + (title || right ? '<header><h2>' + esc(title || '') + '</h2>' + (right || '') + '</header>' : '') + (pad === false ? inner : '<div class="in">' + inner + '</div>') + '</section>'; }
+BLK.kpis = function (b) {
+  return '<div class="kpis">' + b.items.map(function (k) { return '<div class="kpi"><span>' + esc(k[0]) + '</span><strong>' + (typeof k[1] === 'number' ? fmt(k[1], k[3] || 0) : esc(k[1])) + '</strong>' + (k[2] ? '<small style="color:var(--fg2)">' + esc(k[2]) + '</small>' : '') + '</div>'; }).join('') + '</div>';
+};
+BLK.text = function (b) { return '<div class="notice' + (b.tone === 'ok' ? ' ok' : '') + '">' + esc(b.text) + '</div>'; };
+BLK.table = function (b, key) {
+  BLOCKS[key] = b;
+  var st = S.tb[key] || (S.tb[key] = { q: '', f: {}, n: 15 }), cols = b.cols, all = b.rows || [];
+  var rows = all.map(function (r, i) { return { r: r, i: i }; }).filter(function (x) {
+    if (st.q) { var t = st.q.toLowerCase(); if (!cols.some(function (c) { return String(x.r[c.k] == null ? '' : x.r[c.k]).toLowerCase().indexOf(t) >= 0; })) return false; }
+    for (var k in st.f) { if (st.f[k] && String(x.r[k]) !== st.f[k]) return false; }
+    return true;
+  });
+  var fch = (b.filters || []).filter(function (k) { return cols.some(function (c) { return c.k === k; }); }).map(function (k) {
+    var col = cols.filter(function (c) { return c.k === k; })[0], vals = [];
+    all.forEach(function (r) { var v = String(r[k]); if (vals.indexOf(v) < 0) vals.push(v); });
+    return '<div class="chips"><small style="align-self:center">' + esc(col ? col.l : k) + '</small><button class="chip" data-tbf="' + key + '|' + k + '|" aria-pressed="' + (!st.f[k]) + '">全部</button>' + vals.map(function (v) { return '<button class="chip" data-tbf="' + key + '|' + k + '|' + esc(v) + '" aria-pressed="' + (st.f[k] === v) + '">' + esc(v) + '</button>'; }).join('') + '</div>';
+  }).join('');
+  var click = b.detail !== false;
+  var shown = rows.slice(0, st.n);
+  var body = shown.length ? shown.map(function (x) {
+    return '<tr' + (click ? ' class="pickrow" data-tbrow="' + key + '|' + x.i + '" tabindex="0"' : '') + '>' + cols.map(function (c) { return '<td' + (c.n ? ' class="n"' : '') + '>' + cell(x.r[c.k], c) + '</td>'; }).join('') + '</tr>';
+  }).join('') : '<tr><td colspan="' + cols.length + '" class="empty">没有符合条件的记录。</td></tr>';
+  var acts = (b.actions || []).map(function (a) { return '<button class="btn sm" data-toast="' + esc(a.msg || '已执行（示例）') + '">' + esc(a.l) + '</button>'; }).join(' ');
+  var tools = (b.search === false ? '' : '<div class="tools"><input data-tbq="' + key + '" type="search" placeholder="搜索" aria-label="搜索" value="' + esc(st.q) + '"></div>') + fch;
+  return '<section class="card"><header><h2>' + esc(b.title || '') + '</h2><span>' + acts + '</span></header>' + (tools ? '<div class="in" style="display:grid;gap:8px">' + tools + '</div>' : '') +
+    '<div class="tbl"><table><thead><tr>' + cols.map(function (c) { return '<th' + (c.n ? ' class="n"' : '') + '>' + esc(c.l) + '</th>'; }).join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+    '<div class="in" style="display:flex;justify-content:space-between;align-items:center"><small>共 ' + rows.length + ' 条' + (rows.length !== all.length ? '（全部 ' + all.length + ' 条）' : '') + (click ? ' · 点一行看详情' : '') + '</small>' + (rows.length > st.n ? '<button class="link" data-tbmore="' + key + '">显示更多</button>' : '') + '</div></section>';
+};
+BLK.bars = function (b) {
+  var mx = Math.max.apply(null, b.items.map(function (i) { return i[1]; }).concat([1]));
+  return card(b.title, b.items.map(function (i) {
+    var tone = i[2] === 'risk' ? 'var(--risk)' : i[2] === 'ok' ? 'var(--ok)' : i[2] === 'warn' ? 'var(--warn)' : 'var(--brand)';
+    return '<div class="bar"><span>' + esc(i[0]) + '</span><span class="bt"><i style="width:' + Math.max(1, i[1] / mx * 100) + '%;background:' + tone + '"></i></span><b>' + fmt(i[1], b.d || 0) + (b.unit ? ' ' + esc(b.unit) : '') + '</b></div>';
+  }).join(''));
+};
+BLK.line = function (b) {
+  var W = 640, H = 240, pl = 50, pr = 18, pt = 16, pb = 30, pal = ['var(--brand)', 'var(--ok)', 'var(--warn)', 'var(--risk)'], vals = [];
+  b.series.forEach(function (s) { s.data.forEach(function (v) { if (v != null) vals.push(v); }); });
+  var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals); if (mn === mx) { mn -= 1; mx += 1; }
+  var pad = (mx - mn) * .1; mn = b.zero ? 0 : mn - pad; mx += pad;
+  var n = b.labels.length;
+  function X(i) { return pl + i * (W - pl - pr) / Math.max(1, n - 1); }
+  function Y(v) { return pt + (1 - (v - mn) / (mx - mn)) * (H - pt - pb); }
+  var g = '', t, step = Math.ceil(n / 8);
+  for (t = 0; t <= 4; t++) { var v = mn + (mx - mn) * t / 4, y = Y(v); g += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y + '" y2="' + y + '" style="stroke:var(--line)"/><text x="' + (pl - 6) + '" y="' + (y + 4) + '" text-anchor="end" style="fill:var(--fg2);font-size:11px">' + fmt(v, b.d || 0) + '</text>'; }
+  b.labels.forEach(function (l, i) { if (i % step === 0) g += '<text x="' + X(i) + '" y="' + (H - 8) + '" text-anchor="middle" style="fill:var(--fg2);font-size:11px">' + esc(l) + '</text>'; });
+  b.series.forEach(function (s, si) {
+    var pts = [], last = null;
+    s.data.forEach(function (v, i) { if (v != null) { pts.push(X(i).toFixed(1) + ',' + Y(v).toFixed(1)); last = [X(i), Y(v), v]; } });
+    g += '<polyline points="' + pts.join(' ') + '" style="fill:none;stroke:' + pal[si % 4] + ';stroke-width:2"/>';
+    if (last) g += '<circle cx="' + last[0] + '" cy="' + last[1] + '" r="4" style="fill:' + pal[si % 4] + '"/><text x="' + last[0] + '" y="' + (last[1] - 9) + '" text-anchor="end" style="fill:var(--fg);font-size:11px;font-weight:600">' + fmt(last[2], b.d || 0) + '</text>';
+  });
+  var legend = b.series.length > 1 ? '<div class="legend">' + b.series.map(function (s, si) { return '<span><i style="background:' + pal[si % 4] + '"></i>' + esc(s.name) + '</span>'; }).join('') + '</div>' : '';
+  return card((b.title || '') + (b.unit ? '（' + b.unit + '）' : ''), '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:auto;display:block" role="img" aria-label="' + esc(b.title || '趋势图') + '">' + g + '</svg>' + legend);
+};
+BLK.board = function (b) {
+  return '<div class="board">' + b.columns.map(function (c) {
+    return '<div class="col"><div class="colh"><b>' + esc(c.title) + '</b><span class="pill mute">' + c.cards.length + '</span></div>' + c.cards.map(function (k) { return '<div class="kc"><b>' + esc(k.t) + '</b>' + (k.s ? '<small style="display:block">' + esc(k.s) + '</small>' : '') + (k.tag ? '<div style="margin-top:4px">' + autoPill(k.tag) + '</div>' : '') + '</div>'; }).join('') + '</div>';
+  }).join('') + '</div>';
+};
+BLK.list = function (b) {
+  return card(b.title, '<div class="list" style="margin:-12px -14px">' + b.items.map(function (i) {
+    return '<div><div class="t"><b>' + esc(i.t) + '</b>' + (i.s ? '<small>' + esc(i.s) + '</small>' : '') + '</div><span>' + (i.tag ? autoPill(i.tag) : '') + (i.act ? ' <button class="btn sm" ' + (i.act.copy ? 'data-copy="' + esc(i.act.copy) + '"' : 'data-toast="' + esc(i.act.msg || '已执行（示例）') + '"') + '>' + esc(i.act.l) + '</button>' : '') + '</span></div>';
+  }).join('') + '</div>');
+};
+BLK.swatches = function (b) {
+  return card(b.title, '<div class="sw">' + b.items.map(function (s) { return '<div><i style="background:' + esc(s[2]) + '"></i><span><b>' + esc(s[1]) + '</b>' + esc(s[2]) + '<br><code>' + esc(s[0]) + '</code></span></div>'; }).join('') + '</div>');
+};
+BLK.kv = function (b) { return card(b.title, '<div class="facts">' + b.rows.map(function (r) { return '<div><span>' + esc(r[0]) + '</span><b>' + esc(plain(r[1])) + '</b></div>'; }).join('') + '</div>'); };
+BLK.steps = function (b) {
+  return card(b.title, '<div class="steps">' + b.items.map(function (s, i) {
+    var cls = s.state === 'done' ? 'ok' : s.state === 'now' ? 'run' : 'mute';
+    return '<div class="step"><span class="pill ' + cls + '">' + (i + 1) + '</span><b>' + esc(s.t) + '</b>' + (s.s ? '<small>' + esc(s.s) + '</small>' : '') + '</div>';
+  }).join('') + '</div>');
+};
+BLK.tabs = function (b, key) {
+  var i = S.tab[key] || 0;
+  return '<div class="tabs" role="group">' + b.tabs.map(function (t, j) { return '<button data-tab="' + key + '|' + j + '" aria-pressed="' + (i === j) + '">' + esc(t.label) + '</button>'; }).join('') + '</div>' +
+    (b.tabs[i].blocks || []).map(function (x, j) { return blk(x, key + '.' + i + '.' + j); }).join('');
+};
+BLK.toggles = function (b, key) {
+  return card(b.title, '<div class="list" style="margin:-12px -14px">' + b.items.map(function (it, i) {
+    var k = key + '.' + i, on = S.sw[k] === undefined ? !!it.on : S.sw[k];
+    return '<div><div class="t"><b>' + esc(it.label) + '</b>' + (it.hint ? '<small>' + esc(it.hint) + '</small>' : '') + '</div><label class="chip" style="display:flex;gap:6px;align-items:center"><input type="checkbox" data-sw="' + k + '"' + (on ? ' checked' : '') + '> ' + (on ? '开' : '关') + '</label></div>';
+  }).join('') + '</div>');
+};
+BLK.form = function (b) {
+  return card(b.title, '<div class="form"><div class="row2">' + b.fields.map(function (f) {
+    var inp = f.type === 'select' ? '<select>' + (f.options || []).map(function (o) { return '<option' + (o === f.value ? ' selected' : '') + '>' + esc(o) + '</option>'; }).join('') + '</select>' :
+      f.type === 'textarea' ? '<textarea rows="3" style="padding:7px 10px;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:inherit;width:100%">' + esc(f.value || '') + '</textarea>' :
+        '<input type="' + (f.type || 'text') + '" value="' + esc(f.value == null ? '' : f.value) + '"' + (f.ph ? ' placeholder="' + esc(f.ph) + '"' : '') + '>';
+    return '<label class="f">' + esc(f.label) + inp + '</label>';
+  }).join('') + '</div><div><button class="btn primary" data-toast="' + esc(b.msg || '已提交（示例，不保存）') + '">' + esc(b.submit || '提交') + '</button></div></div>');
+};
+function pageGeneric(id) {
+  var route = BYID[id], sp = REG[route], grp = groupOf(id);
+  if (!sp) return '<div class="ph"><div><p>' + esc(grp) + '</p><h1>' + esc(titleOf(route || id)) + '</h1></div></div><section class="card"><div class="empty">这个页面在原型里有，演示版还没做示例。</div></section>';
+  return '<div class="ph"><div><p>' + esc(grp + (sp.sub ? ' · ' + sp.sub : '')) + '</p><h1>' + esc(sp.title) + '</h1></div>' + (sp.src ? pill(sp.src, 'mute') : '') + '</div>' +
+    (sp.gap ? '<div class="notice"><b>缺口：</b>' + esc(sp.gap) + '</div>' : '') + (sp.blocks || []).map(function (b, i) { return blk(b, id + '.' + i); }).join('');
+}
+function openPairs(title, pairs, go) {
+  $('#layer').innerHTML = '<div class="ov" data-close-dlg><div class="dlg" role="dialog" aria-modal="true" aria-label="详情"><h2>' + esc(title) + '</h2><dl>' + pairs.map(function (p) { return '<dt>' + esc(p[0]) + '</dt><dd>' + esc(p[1]) + '</dd>'; }).join('') + '</dl><small>示例数据，只读。</small><div style="margin-top:12px;text-align:right;display:flex;gap:8px;justify-content:flex-end">' + (go ? '<button class="btn primary" data-go="' + esc(go) + '">打开这页</button>' : '') + '<button class="btn" data-close-dlg-btn>关闭</button></div></div></div>';
+}
+function render() {
+  var h = location.hash.replace('#', '') || 'today';
+  if (!FN[h] && !BYID[h]) h = 'today';
+  var changed = S.page !== h; S.page = h;
+  renderNav();
+  var fn = FN[h];
+  $('#page').innerHTML = fn ? fn() : pageGeneric(h);
+  if (h === 'weigh') updatePreview();
+  if (changed) { try { window.scrollTo(0, 0); } catch (e) { /* 忽略 */ } }
+}
+/*__DATA__*/
+window.addEventListener('hashchange', render);
+document.addEventListener('input', function (e) {
+  if (e.target.dataset && e.target.dataset.tbq) {
+    var tk = e.target.dataset.tbq, tp = e.target.selectionStart; (S.tb[tk] || (S.tb[tk] = { q: '', f: {}, n: 15 })).q = e.target.value; S.tb[tk].n = 15; render();
+    var tn = document.querySelector('[data-tbq="' + tk + '"]'); if (tn) { tn.focus(); try { tn.setSelectionRange(tp, tp); } catch (x) { /* 忽略 */ } } return;
+  }
+  if (e.target.id === 'tq') { S.q = e.target.value; var p = e.target.selectionStart; render(); var n = $('#tq'); if (n) { n.focus(); n.setSelectionRange(p, p); } return; }
+  if (e.target.closest && e.target.closest('#wform')) updatePreview();
+});
+document.addEventListener('change', function (e) {
+  if (e.target.dataset && e.target.dataset.sw) { S.sw[e.target.dataset.sw] = e.target.checked; toast((e.target.checked ? '已开启' : '已关闭') + '（示例，不保存）'); render(); return; }
+  if (e.target.id === 'onlyrun') { S.onlyRun = e.target.checked; render(); return; }
+  if (e.target.closest && e.target.closest('#wform')) updatePreview();
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') closeDlg();
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('tr.pickrow')) { e.preventDefault(); e.target.click(); }
+});
+document.addEventListener('click', function (e) {
+  var el = e.target.closest('[data-go],[data-order],[data-kpi],[data-role],[data-weigh],[data-batch],[data-confirm],[data-undo],[data-src],[data-totodo],[data-closing],[data-conc],[data-close-ok],[data-close-cancel],[data-toggle-closed],[data-restore],[data-cf],[data-cost],[data-task],[data-revoke],[data-addrow],[data-delrow],[data-save],[data-act],[data-close-dlg],[data-close-dlg-btn],[data-grp],[data-tbf],[data-tbrow],[data-tbmore],[data-tab],[data-toast],[data-copy]');
+  if (!el) return;
+  var d = el.dataset;
+  if (d.grp) { var g0 = d.grp, cur0 = (MENU.filter(function (g) { return g[0] === g0; })[0] || [0, []])[1].some(function (x) { return pid(x[1]) === S.page; }); S.openG[g0] = !(S.openG[g0] === undefined ? cur0 : S.openG[g0]); renderNav(); return; }
+  if (d.tbf) { var pf = d.tbf.split('|'), sf = S.tb[pf[0]] || (S.tb[pf[0]] = { q: '', f: {}, n: 15 }); sf.f[pf[1]] = pf.slice(2).join('|'); sf.n = 15; render(); return; }
+  if (d.tbrow) { var pr = d.tbrow.split('|'), tb = BLOCKS[pr[0]], row = tb.rows[+pr[1]]; var pairs = tb.cols.map(function (c) { return [c.l, plain(row[c.k], c)]; }); Object.keys(row._d || {}).forEach(function (k) { pairs.push([k, plain(row._d[k])]); }); openPairs(plain(row[tb.cols[0].k]), pairs, row._go); return; }
+  if (d.copy) { var ct = d.copy, okc = function () { toast('已复制'); }; try { navigator.clipboard.writeText(ct).then(okc, function () { toast('复制被拦了，请手动选中文字复制'); }); } catch (x) { toast('复制被拦了，请手动选中文字复制'); } return; }
+  if (d.tbmore) { S.tb[d.tbmore].n += 15; render(); return; }
+  if (d.tab) { var pt = d.tab.split('|'); S.tab[pt[0]] = +pt[1]; render(); return; }
+  if (d.toast) { toast(d.toast); return; }
+  if (el.hasAttribute('data-close-dlg') && e.target !== el && !el.hasAttribute('data-close-dlg-btn')) return;
+  if ('closeDlg' in d || 'closeDlgBtn' in d) { closeDlg(); return; }
+  if (d.go) { closeDlg(); go(d.go); return; }
+  if (d.order) { openOrder(d.order); return; }
+  if (d.kpi) { if (d.kpi === 'cost') go('cost'); else toast('原型里这里会跳到「' + d.name + '」页，这版没收入'); return; }
+  if (d.role) { S.role = d.role; render(); return; }
+  if (d.weigh) { S.task = d.weigh; S.onlyRun = true; S.q = ''; go('weigh'); return; }
+  if (d.batch) { S.batched[d.batch] = true; toast('已为 ' + d.batch + ' 建批次（示例）'); render(); return; }
+  if (d.confirm) { S.issue[d.confirm] = { s: 'closed', c: '已处理', n: '已转待办并确认' }; toast('已确认'); render(); return; }
+  if (d.undo) { delete S.issue[d.undo]; toast('已撤回到「发现的问题」'); render(); return; }
+  if ('src' in d) { S.srcFilter = d.src; render(); return; }
+  if (d.totodo) { S.issue[d.totodo] = { s: 'todo' }; toast('已转待办，见「待办」里的「等我确认」'); render(); return; }
+  if (d.closing) { S.closing = d.closing; S.conc = ''; render(); return; }
+  if (d.conc) { S.conc = d.conc; var n = $('#note'), v = n ? n.value : ''; render(); var n2 = $('#note'); if (n2) n2.value = v; return; }
+  if (d.closeOk) {
+    var note = ($('#note').value || '').trim();
+    if (!S.conc) { toast('先选一个结论：已处理 / 误报 / 接受偏差'); return; }
+    if (!note) { toast('再写一句原因'); return; }
+    S.issue[d.closeOk] = { s: 'closed', c: S.conc, n: note }; S.closing = ''; S.conc = ''; toast('已关闭，可在「已关闭」里恢复'); render(); return;
+  }
+  if ('closeCancel' in d) { S.closing = ''; S.conc = ''; render(); return; }
+  if ('toggleClosed' in d) { S.showClosed = !S.showClosed; render(); return; }
+  if (d.restore) { delete S.issue[d.restore]; toast('已恢复'); render(); return; }
+  if (d.cf) { S.costFilter = d.cf; render(); return; }
+  if (d.cost) { S.costPick = d.cost; render(); return; }
+  if (d.task) { S.task = d.task; render(); return; }
+  if (d.revoke) { S.records.forEach(function (r) { if (r.id === d.revoke) r.revoked = true; }); toast('已撤销这笔称重'); render(); return; }
+  if (d.addrow) { $('#rows-' + d.addrow).insertAdjacentHTML('beforeend', subRow(d.addrow)); updatePreview(); return; }
+  if ('delrow' in d) { var r = el.closest('.r'); r.parentNode.removeChild(r); updatePreview(); return; }
+  if ('save' in d) { saveWeigh(); return; }
+  if (d.act === 'reset') { S = fresh(); closeDlg(); toast('已还原示例数据'); location.hash = 'today'; render(); }
+});
+if (!TITLES[location.hash.replace('#', '')]) S.page = 'today';
+render();
+</script>
