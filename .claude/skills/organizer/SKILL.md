@@ -49,6 +49,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
 - 🔴 **CI 由 organizer 统一盯**（Steve 2026-11-10）：开了 PR 的执行会话按应用规定不能自己轮询 CI，Auto-fix 只在变红时叫醒它，**CI 全绿没有任何通知** ⇒ 不叫它就一直干等（2026-11-10 #1556/#1557/#1560 各空等十几到几十分钟）。所以：
   - 执行会话一报出 PR 号，organizer 就挂一个监视，**每个 PR 一个**。用 Monitor 或后台命令都可以，等待期间不耗 token。不要等会话来请求，也不要让它「自己盯」。
+  - 🔴 **默认用一键监视合并**：`bash .claude/tools/pr-watch-merge.sh <PR>`（Bash `run_in_background`），它自己做「等全绿 → 落后就 update-branch 再等绿 → `--match-head-commit` squash 合并」，只在 MERGED / RED / CONFLICT / CLOSED / 超时时退出一次；要先审再合就加 `--no-merge`。⛔ 不要再「绿了醒来 update → 再挂 → 再醒来合」。依据：2026-11-18 一周效果检查，organizer 花费 33% 是被自己后台命令通知叫醒（901 次）；同日 #1836/#1837 手工挂了 6 次监视。需要独立终审、要先发布 `--phase build` 的 PR 仍按原流程，审完再挂它。
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
   - 停了马上通知对应会话：绿了让它合并发布，红了让它定位修复。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
