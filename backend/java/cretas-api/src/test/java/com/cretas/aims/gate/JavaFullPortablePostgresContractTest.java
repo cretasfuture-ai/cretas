@@ -124,6 +124,52 @@ class JavaFullPortablePostgresContractTest {
                                boolean r10ReportExists) {
     }
 
+    static final String GNU_TIME_CALL = "/usr/bin/time -v ";
+    private static Boolean gnuTimeWorks;
+
+    /**
+     * The nightly run block wraps Maven in GNU {@code /usr/bin/time -v} (ubuntu-latest has it). BSD time on the
+     * canada-mini runner rejects {@code -v} ("illegal option -- v", 2026-11-18 #1885 fast shard 1), which made this
+     * test fail for a reason unrelated to what it guards (wrapper/Maven/report handling). Where GNU time works the
+     * block runs unchanged; elsewhere the call is swapped for a shim that honours {@code -o} and passes the exit code
+     * through. The swap must hit exactly once, so a reworded call cannot silently skip it.
+     */
+    static String portableTime(String runBlock, Path workspace) throws Exception {
+        int hits = runBlock.split(java.util.regex.Pattern.quote(GNU_TIME_CALL), -1).length - 1;
+        if (hits == 0 || gnuTimeWorks()) {
+            return runBlock;
+        }
+        assertThat(hits).as("GNU time call in nightly run block").isEqualTo(1);
+        Path shim = workspace.resolve("fake-gnu-time.sh");
+        Files.writeString(shim, """
+                #!/usr/bin/env bash
+                out=
+                while [ $# -gt 0 ]; do
+                  case "$1" in
+                    -v) shift ;;
+                    -o) out=$2; shift 2 ;;
+                    *) break ;;
+                  esac
+                done
+                rc=0
+                "$@" || rc=$?
+                if [ -n "$out" ]; then printf 'Exit status: %s\\n' "$rc" > "$out"; fi
+                exit "$rc"
+                """, StandardCharsets.UTF_8);
+        markExecutable(shim);
+        return runBlock.replace(GNU_TIME_CALL, "\"" + shellPath(shim) + "\" -v ");
+    }
+
+    private static synchronized boolean gnuTimeWorks() throws Exception {
+        if (gnuTimeWorks == null) {
+            Process probe = new ProcessBuilder(bashCommand(), "-c", "/usr/bin/time -v true")
+                    .redirectErrorStream(true).start();
+            probe.getInputStream().readAllBytes();
+            gnuTimeWorks = probe.waitFor() == 0;
+        }
+        return gnuTimeWorks;
+    }
+
     private static WorkflowRun runFakeWorkflow(String runBlock, Path workspace, Path log, Path report,
                                                 String mode) throws Exception {
         return runFakeWorkflow(runBlock, workspace, log, report, mode, null, null);
@@ -141,7 +187,8 @@ class JavaFullPortablePostgresContractTest {
         Path r10Report = workspace.resolve(
                 "target/surefire-reports/TEST-com.cretas.aims.service.config.impl.FactoryConfigServiceImplReorderIT.xml");
         try {
-            Files.writeString(script, runBlock, StandardCharsets.UTF_8, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.writeString(script, portableTime(runBlock, workspace), StandardCharsets.UTF_8,
+                    StandardOpenOption.TRUNCATE_EXISTING);
             ProcessBuilder builder = new ProcessBuilder(bashCommand(), script.toString())
                     .redirectErrorStream(true);
             builder.directory(workspace.toFile());
