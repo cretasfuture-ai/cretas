@@ -856,7 +856,7 @@ function openIndividual(id: string) {
         </template>
         <el-table :data="qualityInspections" size="default" data-testid="quality-table">
           <el-table-column label="检验编号" width="140">
-            <template #default="{ row }">质检 #{{ row.inspectionId?.slice(-8) || '-' }}</template>
+            <template #default="{ $index }">质检 第{{ $index + 1 }}次</template>
           </el-table-column>
           <el-table-column label="检验日期" width="120">
             <template #default="{ row }">{{ dateOnly(row.inspectionDate) }}</template>

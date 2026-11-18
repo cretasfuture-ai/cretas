@@ -2,7 +2,7 @@ import { mount } from '@vue/test-utils';
 import { nextTick } from 'vue';
 import { describe, expect, it } from 'vitest';
 import TraceDagView from '../TraceDagView.vue';
-import { buildTraceGraph, chainOf } from '../traceGraph';
+import { buildTraceGraph, chainOf, dagFitZoom, DAG_FONT, DAG_MIN_ZOOM, DAG_MAX_ZOOM } from '../traceGraph';
 import { baseTrace, cattleNode, SEASONING_NODE, sixCattleTrace } from './fixtures';
 import type { FullTraceResponse } from '@/api/traceability';
 
@@ -135,5 +135,76 @@ describe('TraceDagView 挂载', () => {
     expect(w.emitted('open-evidence')).toHaveLength(1);
     await w.get('[data-node-id="stage:0"]').trigger('click');
     expect(w.find('[data-testid="trace-dag-action"]').exists()).toBe(false);
+  });
+});
+
+const UUID_QC = '11111111-2222-3333-4444-823d7330abcd';
+function qcTrace(): FullTraceResponse {
+  return baseTrace({
+    qualityInspections: [
+      { inspectionId: UUID_QC, inspectionDate: '2026-09-10T08:00:00', inspectorName: '李四', result: 'PASSED', passRate: 98 },
+      { inspectionId: '99999999-0000-0000-0000-aaaabbbbcccc', inspectionDate: null, inspectorName: null, result: 'FAILED' },
+    ],
+  });
+}
+
+describe('BP-53 质检节点不显示内部短码', () => {
+  it('图数据: 质检节点标题/要点里没有 inspectionId 片段, 显示「质检 + 结论」与批次号', () => {
+    const g = buildTraceGraph(qcTrace());
+    const qcs = g.nodes.filter((n) => n.kind === 'quality');
+    expect(qcs).toHaveLength(2);
+    for (const n of qcs) {
+      const all = [n.title, n.statusText, ...n.lines.map((l) => `${l.label}${l.value}`)].join('|');
+      expect(all).not.toMatch(/#[0-9a-f]{8}/i);
+      expect(all).not.toContain('823d7330');
+      expect(all).not.toContain('aaaabbbbcccc');
+    }
+    expect(qcs[0].title).toBe('质检 已通过');
+    expect(qcs[1].title).toBe('质检 未通过');
+    expect(qcs[0].lines.find((l) => l.label === '批次')!.value).toBe(buildTraceGraph(qcTrace()).nodes.find((n) => n.kind === 'root')!.title);
+  });
+  it('真渲染: 质检节点 DOM 文本不含短码', async () => {
+    const w = await mountDag(qcTrace());
+    const qc = w.findAll('[data-kind="quality"]');
+    expect(qc).toHaveLength(2);
+    for (const n of qc) expect(n.text()).not.toMatch(/#[0-9a-f]{8}/i);
+    expect(qc[0].text()).toContain('质检 已通过');
+  });
+});
+
+describe('BP-53 默认视图字号与要点', () => {
+  it('基准字号 × 最低缩放: 主标题 ≥14px, 次要信息 ≥12px', () => {
+    expect(DAG_FONT.title * DAG_MIN_ZOOM).toBeGreaterThanOrEqual(14);
+    expect(DAG_FONT.line * DAG_MIN_ZOOM).toBeGreaterThanOrEqual(12);
+    expect(DAG_FONT.label * DAG_MIN_ZOOM).toBeGreaterThanOrEqual(12);
+  });
+  it('dagFitZoom 随容器宽度变化, 且被上下限夹住', () => {
+    expect(dagFitZoom(300, 3000)).toBe(DAG_MIN_ZOOM);
+    expect(dagFitZoom(10000, 1000)).toBe(DAG_MAX_ZOOM);
+    const a = dagFitZoom(1500, 1700);
+    const b = dagFitZoom(1700, 1700);
+    expect(b).toBeGreaterThan(a);
+    expect(dagFitZoom(0, 1000)).toBe(1);
+  });
+  it('真渲染: 节点上不点开就直接显示要点, 且字号来自基准常量', async () => {
+    const w = await mountDag(richTrace());
+    const stage = w.get('[data-node-id="stage:0"]');
+    expect(stage.text()).toContain('分割');
+    expect(stage.text()).toContain('张三');
+    expect(stage.text()).toContain('投入→产出');
+    const root = w.get('[data-node-id="root"]');
+    expect(root.text()).toContain('PB-2026-001');
+    expect(root.text()).toContain('数量');
+    expect(w.find('[data-testid="trace-dag-detail"]').exists()).toBe(false); // 未点开
+    expect(stage.get('[data-testid="dag-node-title"]').attributes('style')).toContain(`font-size: ${DAG_FONT.title}px`);
+    for (const l of stage.findAll('[data-testid="dag-node-line"]')) {
+      expect(l.attributes('style')).toContain(`font-size: ${DAG_FONT.line}px`);
+    }
+  });
+  it('画布高度随图高自适应 (内联样式, 非写死 460px)', async () => {
+    const w = await mountDag(richTrace());
+    const h = parseInt((w.get('[data-testid="trace-dag-canvas"]').element as HTMLElement).style.height, 10);
+    expect(h).toBeGreaterThanOrEqual(360);
+    expect(h).toBeLessThanOrEqual(720);
   });
 });
