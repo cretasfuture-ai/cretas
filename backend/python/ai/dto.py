@@ -439,6 +439,9 @@ class IntentMatchRequest(_CamelBase):
     # INTENT-DISTILL-20261111 第二批: 服务端任务状态摘要 (Java TaskStateSummary, 值已脱敏)。
     # 只加字段; None = 老客户端 / 开关关。进提示词前再按白名单清洗一次 (decision.sanitize_task_state)。
     taskState: Optional[Dict[str, Any]] = None
+    # 意图蒸馏第③步 PR-4: Java 业务域表 (ai/intent-domain-table.json) 的 catalog_version。与 Python 同步副本
+    # 版本相同才按业务域缩小决策层候选; None (老 Java) / 不同 ⇒ 不收窄。
+    catalogVersion: Optional[str] = None
 
 
 T = TypeVar("T")

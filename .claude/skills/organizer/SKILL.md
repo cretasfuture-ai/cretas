@@ -24,6 +24,14 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 
 - 一次性且边界清楚、确有隔离或复核收益的工作可交 subagent。同一链无需拆成侦察、分析、执行、审查四轮。
 - 跨天、多轮实现、需要保留环境/调查结果的工作可使用持久独立会话；遵守当前工具、用户授权和唯一写 Owner 交接规则。不要按 PR 数或会话闲置时长机械切换载体，不假定旧工具名或历史消息能力仍可用。
+- 🔴 **载体怎么选**（Steve 2026-11-18；每开一个会话就多一个常驻进程、一个 worktree、一组 MCP 子进程，并且应用要轮询它的 git）。从上往下，第一条适用的就用它：
+  1. **本会话、本目录直接做**：几次工具调用就完的事、只读查询/诊断、同一 PR 的连续改动、organizer 自己的台账/规则（fastlane）。
+  2. **subagent（Agent 工具）**：结果这一轮就要拿回来用、一次性、边界清楚——广搜用 `Explore`，取证用 `probe`，独立审查，按评论逐条改同一份产物；要写代码就用 `executor` + `isolation: "worktree"`。⛔ 跨天、要 Steve 对话的活不给 subagent；名下有 subagent 在跑时不交班。
+  3. **独立会话 + 自己的 worktree**（`start_session`）：能独立出一个 PR、要跨多轮 CI/返工或跨天的；要 Steve 直接对话或验收的；需要单独负责人的红线任务。
+  4. **共用 worktree**：只有只读会话可以共用（审查、截图对比、问答分叉）。同一 PR 的返工用 SendMessage 发给原会话，不新开。⛔ 两个会写代码的会话不共用目录；会碰同一文件、要跑构建、要切分支的一律分开；⛔ 不与马上要交班或归档的会话共用目录（归档会连带清理，11-17 原型第 19 任的执行线、六膳门第 2 任都共用了前任目录）。
+  - **同一份产物只能有一个会话在改**（同一个 deck、同一个文件）：11-17 BP 对比 deck 被拆成 5 个会话分别按评论改。这类活交给原会话或 subagent 顺序做。
+  - **只有 organizer 派写代码的线**：设计、调研、BP 等会话需要实现时，把需求交给对应批次的 organizer，⛔ 不自己批量开线（11-18 00:42 一个设计会话 4 分钟内开了 5 条后端线，同时还有另外 4 条在启动，CPU 打满）。
+  - **全机上限**（所有批次合计，含 subagent）：写代码的执行线同时 ≤ 8 条，Maven 同时 ≤ 2 个（见下文「全机资源预算」）。超了就排队，一批互不依赖的线先开 2 条，其余在 ACTIVE 记「待开」。8 条是按 11-18 卡死时的规模估的，盯一两周看卡顿和排队时长再调。
 - 🔴 **派执行线不出卡片**（Steve 2026-11-17：「不用我授权就自动开」）：应用只在 Steve 自己从桌面端发消息的那一轮允许 `start_session` 直接开会话；被别的会话消息 / 通知 / 定时叫醒的回合、Steve 从 Remote Control 发的回合，只能出卡片，这是应用限制，⛔ 不要绕。所以：
   - Steve 桌面端发消息的回合 ⇒ `start_session`（`initiation: "user_asked"`）开持久会话。
   - 其它回合 ⇒ ⛔ 不开卡片，改用 **Agent 工具开后台子代理**：`subagent_type: "executor"`、`isolation: "worktree"`、`run_in_background: true`，按下面的分档传 `model`，prompt 写全任务包（ID、Base SHA、目标/完成条件、允许范围、验收命令、要求它推分支开 PR 并回报 PR 号）。子代理不需要任何人点击，结束时自动通知你。
@@ -44,6 +52,11 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
   - 停了马上通知对应会话：绿了让它合并发布，红了让它定位修复。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
+- 🔴 **全机资源预算**（Steve 2026-11-18）：几个批次的 organizer 共用这一台 Windows，各派各的线时彼此看不见，所以每任 organizer 派线、开构建前都按全机算，不只算自己这批：
+  - **本机 Java 构建（mvn）同时最多 2 个**，所有批次合计。开构建前先数：`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | ? CommandLine -match 'plexus-classworlds').Count"`；已有 2 个就排队，先做别的步骤或等它结束。执行线和子代理的任务包里写上这条。Mac mini 构建车道（`canada-mini`，国内、M4 Pro 64GB）配好后，构建优先放到 mini 上。
+  - **派新线前先体检**：`bash .claude/tools/worktree-hygiene.sh --check` 超过 30，或可用内存低于约 8GB，先回收或排队，不开新线、新子代理。
+  - **每任交班时归档自己名下已交付、空闲的会话**（规则同「执行线收尾归现任」）；子代理的 worktree 用完由派它的 organizer 收。
+  - 依据：2026-11-18 00:09 桌面应用卡死重启。应用主进程反复阻塞在拉起 git 上，单次 1–5 秒，累计约 78 分钟。当时同时跑着 6 个 Maven（每个约 2GB）和 44–46 个 worktree，应用要给每个未归档会话的目录轮询 git 状态和 PR 检查，子进程约 170 个，内存约 12GB。
 - 已有验证按共享规则复用。合并后归档本批并释放 scope，并跑一次 `bash .claude/tools/worktree-hygiene.sh --auto` 回收本批已完成的 worktree（只回收干净且 PR 已合并的，分支保留）；完整发布回执已覆盖的服务检查不重复做，业务验收缺口单列。
 
 ## 会话收口与接手（Steve 2026-11-10）

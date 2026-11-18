@@ -344,6 +344,15 @@ describe('措辞：老板听得懂的话，不是图论词', () => {
     expect(queryByText(/跳/)).toBeNull();
   });
 
+  it('来源计数只数上游节点: nodeCount 含下游时不被带偏 (BP #15)', () => {
+    const base = threeLayerLineage();
+    const { getByText, queryByText } = render(
+      <LineageChainTimeline lineage={{ ...base, nodeCount: 6 }} showSupplier />
+    );
+    expect(getByText('来源 3 项')).toBeTruthy();
+    expect(queryByText('来源 6 项')).toBeNull();
+  });
+
   it('nodeCount=0 ⇒ 不显示计数（「来源 0 项」是句废话）', () => {
     const { queryByText, getByText } = render(
       <LineageChainTimeline

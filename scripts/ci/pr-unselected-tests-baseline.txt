@@ -98,7 +98,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/quality/Quali
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/rd/RdRequestCreateToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/rd/SampleApproveToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/rd/SampleCreateToolTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/report/ProcessSecretToolTextTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/source/SourceIndividualQueryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/system/AiValueSummaryToolTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/ai/tool/impl/system/FindingActionPlanToolTest.java

@@ -178,10 +178,12 @@ public class FlywheelTextProtector {
         }
         // 原料名单查不出 → 连「原文」都不知道该抹哪些配方值: 原文、密文、导出都不留 (fail-closed)
         List<String> ingredientNames;
+        List<String> productNames;
         String rawBaseline;
         try {
             ingredientNames = ingredients(factoryId);
-            rawBaseline = rawBaseline(input, ingredientNames);
+            productNames = products(factoryId);
+            rawBaseline = rawBaseline(input, ingredientNames, productNames);
         } catch (RuntimeException e) {
             log.warn("[flywheel] 原料名单查不出, 不留文本: factory={}, reason={}", factoryId, e.getClass().getSimpleName());
             return new Protected(SecrecyMode.TEXT_DROPPED, null, null, null, stats, "lookup_failed");
@@ -209,14 +211,15 @@ public class FlywheelTextProtector {
             }
             addPeople(dictionary, factoryId);
             if (options.redactProductNames()) {
-                for (String n : entities.redactionNames(factoryId, EntityKind.PRODUCT)) {
+                // 产品名单与上面「规格不当用量」用的是同一份 (只查一次解析器, 四份名单各一处)
+                for (String n : productNames) {
                     add(dictionary, n, Kind.PRODUCT, 2);
                 }
             }
             String out = replaceNames(input, dictionary, sessionKey, stats);
             out = maskPrivacy(out, stats);
             out = FlywheelValueMasker.mask(out, new FlywheelValueMasker.Scope(true, true, options.redactQuantities()),
-                    ingredientNames, stats);
+                    ingredientNames, productNames, stats);
             countUnmatched(out, stats);
             return new Protected(SecrecyMode.REDACTED, null, out, cipher, stats, notKept);
         } catch (RuntimeException e) {
@@ -232,13 +235,18 @@ public class FlywheelTextProtector {
      * 不在这里换人员姓名: 原文列给人工复核看「谁说了什么」, 姓名只在导出列换。
      */
     static String rawBaseline(String input, Collection<String> ingredientNames) {
+        return rawBaseline(input, ingredientNames, List.of());
+    }
+
+    /** 同上; {@code productNames} 里的数 (产品规格 250g) 是品名的一部分, 不抹。 */
+    static String rawBaseline(String input, Collection<String> ingredientNames, Collection<String> productNames) {
         if (input == null || input.isEmpty()) {
             return input;
         }
         Map<String, Integer> ignored = new LinkedHashMap<>();
         String out = maskPrivacy(input, ignored);
         return FlywheelValueMasker.mask(out, new FlywheelValueMasker.Scope(false, RECIPE_IN_ALL_FACTORIES, false),
-                ingredientNames, ignored);
+                ingredientNames, productNames, ignored);
     }
 
     private Protected plain(String factoryId, String sessionKey, String input, Map<String, Integer> stats) {
@@ -248,12 +256,13 @@ public class FlywheelTextProtector {
         // 全部算完才落到返回值上: 中途任一名单查不出, 原文与导出都不留 (不留半脱敏 / 未脱配方的文本)
         try {
             List<String> ingredientNames = ingredients(factoryId);
-            String raw = rawBaseline(input, ingredientNames);
+            List<String> productNames = products(factoryId);
+            String raw = rawBaseline(input, ingredientNames, productNames);
             Map<String, Kind> dictionary = new LinkedHashMap<>();
             addPeople(dictionary, factoryId);
             String export = maskPrivacy(replaceNames(input, dictionary, sessionKey, stats), stats);
             export = FlywheelValueMasker.mask(export, new FlywheelValueMasker.Scope(false, RECIPE_IN_ALL_FACTORIES, false),
-                    ingredientNames, stats);
+                    ingredientNames, productNames, stats);
             return new Protected(SecrecyMode.PLAIN, raw, export, null, stats, null);
         } catch (RuntimeException e) {
             log.warn("[flywheel] 名单查不出, 本条原文与导出文本都不留: factory={}, reason={}",
@@ -279,6 +288,17 @@ public class FlywheelTextProtector {
                     factoryId, e.getClass().getSimpleName());
             return Options.FAIL_CLOSED;
         }
+    }
+
+    /** 本厂产品名 (含规格, 如「演示·酱卤牛肉250g」): 名字里的数不当用量抹。查不出照样抛 (调用方 fail-closed)。 */
+    private List<String> products(String factoryId) {
+        List<String> out = new ArrayList<>();
+        for (String n : entities.redactionNames(factoryId, EntityKind.PRODUCT)) {
+            if (n != null && !n.isBlank()) {
+                out.add(n.trim());
+            }
+        }
+        return out;
     }
 
     private List<String> ingredients(String factoryId) {
