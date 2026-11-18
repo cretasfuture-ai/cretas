@@ -72,6 +72,14 @@ public class IndicatorDetailResponse {
     private List<ThresholdResponse> thresholds;
 
     /**
+     * 金额类指标且调用者没有价格查看口径时为 true (值 / 告警级别 / 阈值已置空, 见 IndicatorValueVisibility);
+     * 前端据此显示「无权限查看」, 不是「未计算」。可见时不出现。
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    @Schema(description = "数值按权限配置不显示 (仅为 true 时出现)")
+    private Boolean valueHidden;
+
+    /**
      * 从实体 + 阈值列表投影 DTO.
      */
     public static IndicatorDetailResponse fromEntity(Indicator ind, List<IndicatorThreshold> thresholdEntities) {
@@ -94,5 +102,12 @@ public class IndicatorDetailResponse {
                 .config(ind.getConfig())
                 .thresholds(thresholds)
                 .build();
+    }
+    /** 数值、阈值按权限配置不显示: 值置空、阈值清空并标 valueHidden (阈值会夹出数值区间)。 */
+    public IndicatorDetailResponse hideValue() {
+        this.lastValue = null;
+        this.thresholds = List.of();
+        this.valueHidden = Boolean.TRUE;
+        return this;
     }
 }

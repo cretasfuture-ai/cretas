@@ -378,12 +378,12 @@ class IndicatorControllerTest {
                 .thenReturn(List.of());
 
         // size=500 (over 200 cap), page=0 (below 1 floor)
-        ApiResponse<PageResponse<IndicatorVersion>> resp = controller.getVersions(
+        ApiResponse<PageResponse<com.cretas.aims.controller.dto.indicator.IndicatorVersionResponse>> resp = controller.getVersions(
                 FACTORY_ID, "FACTORY_YIELD_RATE", null, null, 0, 500, false);
 
         assertNotNull(resp);
         assertEquals(200, resp.getCode());
-        PageResponse<IndicatorVersion> page = resp.getData();
+        PageResponse<com.cretas.aims.controller.dto.indicator.IndicatorVersionResponse> page = resp.getData();
         assertEquals(Integer.valueOf(200), page.getSize(),
                 "size > 200 must be clamped to 200");
         assertEquals(Integer.valueOf(1), page.getPage(),
