@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -363,7 +364,7 @@ const columns = computed<CsTableColumn<TableRow>[]>(() => {
         title="发票列表暂时没取到，请点「搜索」重试。" />
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="invoice-table">
-        <template #empty>暂无发票</template>
+        <template #empty><ListEmptyExplain empty-title="还没有销售发票" empty-hint="销售订单发货并对账后，在这里开具或登记发票。" /></template>
         <!-- 🔴 2026-08-22: 「关联订单」列。点它开只读抽屉, ⛔ 不跳转。 -->
         <template #order-cell="{ row }">
           <UButton v-if="row.original.salesOrderId" variant="link" size="xs" data-testid="invoice-peek-order" @click="peekOrder(String(row.original.salesOrderId))">

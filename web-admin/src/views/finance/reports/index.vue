@@ -7,6 +7,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import type { CsTableColumn } from '@/types/csTable';
 import { toDateString } from '@/utils/dateFormat';
+import { ApiError } from '@/types/api';
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
@@ -16,6 +17,7 @@ const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 const loading = ref(false);
 const loadFailed = ref(false);
+const loadFailedText = ref('');
 const dateRange = ref<[Date, Date]>([
   new Date(new Date().setDate(new Date().getDate() - 30)),
   new Date()
@@ -168,7 +170,8 @@ function isFinanceDataEmpty(): boolean {
 }
 
 onMounted(async () => {
-  await loadFinanceData();
+  const ok = await loadFinanceData();
+  if (!ok) return; // 加载失败不再展开 12 个月重试（会把同一个错误再来一遍）
   // 优化默认落地 (2026-06-24): 财务数据来自 SmartBI 上传, 常落在更早会计期。
   // 近 30 天若无数据, 自动展开到近 12 个月重载一次, 让用户落地即见数据 (而非空状态)。
   if (isFinanceDataEmpty()) {
@@ -182,13 +185,13 @@ onMounted(async () => {
   }
 });
 
-async function loadFinanceData() {
-  if (!factoryId.value) return;
+async function loadFinanceData(): Promise<boolean> {
+  if (!factoryId.value) return false;
 
   loading.value = true;
   loadFailed.value = false;
   try {
-    if (!dateRange.value) return;
+    if (!dateRange.value) return false;
     const [startDate, endDate] = dateRange.value;
     const startStr = formatDate(startDate);
     const endStr = formatDate(endDate);
@@ -197,21 +200,26 @@ async function loadFinanceData() {
     // 后端返嵌套结构，前端需要 flat KPI 字段，所以双调用 + 字段映射
     const baseUrl = `/${factoryId.value}/smart-bi/analysis/finance?startDate=${startStr}&endDate=${endStr}`;
     const [profitRes, costRes] = await Promise.all([
-      get<ProfitAnalysisResponse>(`${baseUrl}&analysisType=profit`),
-      get<CostAnalysisResponse>(`${baseUrl}&analysisType=cost`)
+      get<ProfitAnalysisResponse>(`${baseUrl}&analysisType=profit`, { _silent: true }),
+      get<CostAnalysisResponse>(`${baseUrl}&analysisType=cost`, { _silent: true })
     ]);
 
     if (!profitRes.success || !costRes.success) {
       loadFailed.value = true;
-      ElMessage.error('加载财务数据失败');
-      return;
+      loadFailedText.value = profitRes.message || costRes.message || '';
+      return false;
     }
 
     financeData.value = mapResponses(profitRes.data, costRes.data);
+    return true;
   } catch (error) {
+    // 两个请求带 _silent，这里是唯一的错误出口：页面内一条说明，不再弹多条红色 toast；路径只进 console。
     loadFailed.value = true;
+    loadFailedText.value = error instanceof ApiError && error.status === 404
+      ? '财务分析功能暂未对当前工厂开通，请联系管理员。'
+      : '财务数据暂时没取到，请检查网络后重试。';
     console.error('加载财务数据失败:', error);
-    ElMessage.error('加载财务数据失败，请检查网络连接');
+    return false;
   } finally {
     loading.value = false;
   }
@@ -390,7 +398,7 @@ function handleExport() {
       <div class="body">
         <template v-if="canViewPrice">
           <UAlert v-if="loadFailed" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-load-error"
-            title="财务数据暂时没取到，下方金额显示为「—」，请调整日期范围重试。" />
+            :title="`${loadFailedText || '财务数据暂时没取到'}下方金额显示为「—」。`" />
           <UAlert v-else-if="financeData.costMissing" color="warning" variant="soft" icon="i-lucide-circle-alert" class="mb-4" data-testid="reports-cost-missing"
             title="所选期间的数据没有成本，总成本、毛利润和利润率暂时算不出来，显示为「—」。"
             description="上传的销售/财务 Excel 补上成本列后即可计算。" />

@@ -15,6 +15,8 @@ import {
   isRawWorkflowOwnerAnchorName,
 } from '@/constants/rawWorkflowOwnerAnchor';
 import { handleCatchError } from '@/utils/errorToast';
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
 import { listWarehouses } from '@/api/factoryWarehouse';
 import {
   auxAutoCalcNoteFor,
@@ -96,6 +98,7 @@ useNativeDemoAdapters('material-requisitions-native-demo', createNativeProductio
 const canPick = computed(() => permissionStore.canWrite('production') || permissionStore.canWrite('warehouse'));
 
 const loading = ref(false);
+const loadError = ref('');
 const submitting = ref(false);
 const tableData = ref<Requisition[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
@@ -324,6 +327,7 @@ function formatDateTime(value?: string | null): string {
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
+  loadError.value = '';
   try {
     const params: Record<string, unknown> = {
       page: pagination.value.page - 1,
@@ -343,12 +347,22 @@ async function loadData() {
           };
         }
       });
+    } else {
+      tableData.value = [];
+      loadError.value = res.message || '加载领料单失败';
     }
   } catch (e) {
+    tableData.value = [];
+    loadError.value = loadErrorText(e, '加载领料单失败');
     handleCatchError(e, '加载领料单失败');
   } finally {
     loading.value = false;
   }
+}
+
+function clearStatusFilter() {
+  statusFilter.value = '';
+  handleStatusChange();
 }
 
 function handleStatusChange() {
@@ -836,6 +850,16 @@ async function submitCancel() {
 
     <el-card shadow="never" class="content-card">
       <el-table v-loading="loading" :data="tableData" border stripe>
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            :filtered="!!statusFilter"
+            empty-title="还没有领料单"
+            empty-hint="领料单由生产计划生成：生产计划排定后，点右上角「按计划生成」，仓库按单备料、调拨、车间签收。"
+            @retry="loadData"
+            @clear-filter="clearStatusFilter"
+          />
+        </template>
         <el-table-column prop="requisitionNo" label="单号" min-width="150" />
         <el-table-column label="状态" width="100" align="center">
           <template #default="{ row }">

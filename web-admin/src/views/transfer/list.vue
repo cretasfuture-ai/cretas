@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
 import { ref, computed, onMounted, onActivated, onDeactivated, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -58,6 +60,7 @@ let draftRevision = 0;
 let validating = false;
 
 const loading = ref(false);
+const loadError = ref('');
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 10, total: 0 });
 
@@ -205,6 +208,7 @@ async function loadData() {
   if (!factoryId.value) return;
   const revision = draftRevision;
   loading.value = true;
+  loadError.value = '';
   try {
     const res = await get(`/${factoryId.value}/transfers`, {
       params: { page: pagination.value.page, size: pagination.value.size },
@@ -214,9 +218,14 @@ async function loadData() {
       tableData.value = res.data.content || [];
       pagination.value.total = res.data.totalElements || 0;
     } else if (res.success === false) {
-      ElMessage.error(res.message || '加载失败');
+      tableData.value = [];
+      loadError.value = res.message || '加载调拨单失败';
+      ElMessage.error(loadError.value);
     }
-  } catch { /* axios interceptor already displayed error toast */ }
+  } catch (e) {
+    if (revision === draftRevision) { tableData.value = []; loadError.value = loadErrorText(e, '加载调拨单失败'); }
+    /* axios interceptor already displayed error toast */
+  }
   finally { if (revision === draftRevision) loading.value = false; }
 }
 
@@ -660,7 +669,15 @@ function isOutbound(row: TableRow) { return row.sourceFactoryId === factoryId.va
         </div>
       </template>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            empty-title="还没有调拨单"
+            empty-hint="仓库之间或工厂之间要搬运库存时，点右上角「手动新建调拨单」登记；审批并确认入库后库存才会变动。"
+            @retry="loadData"
+          />
+        </template>
         <el-table-column prop="transferNumber" label="调拨编号" width="170" />
         <el-table-column label="方向" width="80" align="center">
           <template #default="{ row }">
