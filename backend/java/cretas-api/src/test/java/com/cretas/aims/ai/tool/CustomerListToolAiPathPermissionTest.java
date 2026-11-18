@@ -319,7 +319,7 @@ class CustomerListToolAiPathPermissionTest {
             "不传 customerId 时只回按月聚合的 series 且 customerName=null (⛔ 不能枚举); "
                     + "传了 customerId 才反查出那一个名字 —— 与 customer_stats 同形",
             "batch_trace_by_customer_date",
-            "必须先有 customerId (findByIdAndFactoryId 单条, ⛔ 不能枚举); 食安追溯域, "
+            "必须有 customerId 或 customerName 才查, 名称只在本厂客户里模糊命中, 只回命中的那一个客户的出货 (多个命中只回最多 5 个名字让用户说全称, ⛔ 不能枚举全厂); 食安追溯域, "
                     + "使用者是质量角色, 挂销售/财务码会打断追溯链",
             "customer_notify_batch",
             "召回通知: 客户集合来自**该批次的出货记录**而不是客户表枚举, 只回 customerCount + sampleNames; "
