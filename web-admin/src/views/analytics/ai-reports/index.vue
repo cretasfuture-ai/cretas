@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import { generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
+import { formatReportTime, renderReportMarkdown } from './reportMarkdown';
 import type { AIReportDetail, AIReportSummary, OperatingReportType } from '@/api/aiReports';
 
 const auth = useAuthStore();
@@ -28,7 +29,8 @@ const body = computed(() => report.value?.reportAnalysis ?? report.value?.analys
 let readEpoch = 0;
 let detailSequence = 0;
 const labels: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', batch: '批次报告', custom: '自定义报告' };
-const dateText = (value?: string) => value ? value.replace('T', ' ').slice(0, 19) : '—';
+const dateText = formatReportTime;
+const bodyHtml = computed(() => renderReportMarkdown(body.value));
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '报告加载失败，请重试。';
 async function load() {
@@ -128,7 +130,7 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
         <template v-if="report">
           <p class="detail-time">生成时间：{{ dateText(report.generatedAt) }}</p>
           <el-alert v-if="report.generationStatus === 'FAILED' || !report.success" title="生成失败" :description="report.errorMessage || '报告生成失败，请重新生成。'" type="error" :closable="false" show-icon />
-          <pre class="report-body">{{ body }}</pre>
+          <div class="report-body" data-testid="report-body" v-html="bodyHtml" />
         </template>
       </div>
       <template #footer><el-button v-if="body" @click="download">下载当前可见全文</el-button><el-button @click="detailOpen = false">关闭</el-button></template>
@@ -144,6 +146,9 @@ h1 { margin: 0 0 8px; font-size: 24px; color: #172c3e; }
 .report-toolbar { justify-content: space-between; flex-wrap: wrap; margin: 20px 0; }
 .summary { white-space: pre-wrap; max-height: 72px; overflow: hidden; color: #526170; line-height: 1.5; }
 .detail-content { min-height: 100px; }
-.report-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 14px; line-height: 1.9; color: #243746; background: #f7f9fa; padding: 20px; border-radius: 8px; }
+.report-body :deep(h1), .report-body :deep(h2), .report-body :deep(h3) { margin: 16px 0 8px; color: #172c3e; }
+.report-body :deep(ul), .report-body :deep(ol) { padding-left: 24px; }
+.report-body :deep(th), .report-body :deep(td) { border: 1px solid #dde3e8; padding: 4px 10px; }
+.report-body { overflow-wrap: anywhere; font-family: inherit; font-size: 14px; line-height: 1.9; color: #243746; background: #f7f9fa; padding: 20px; border-radius: 8px; }
 @media (max-width: 700px) { .page-heading, .generation-controls { align-items: stretch; flex-direction: column; } .report-page { padding: 16px; } }
 </style>
