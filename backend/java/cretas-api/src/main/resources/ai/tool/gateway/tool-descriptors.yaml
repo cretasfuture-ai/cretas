@@ -2,7 +2,7 @@
 # LEGACY_INFERRED, or APPROVED metadata lacking both permissions and allowed roles, remains review debt.
 # This inventory is an independent source-audit truth and is never sufficient by itself to execute.
 schemaVersion: 1
-expectedToolCount: 497
+expectedToolCount: 498
 expectedLegacyCount: 461
 descriptors:
   - toolName: "gate_diagnose_batch"
@@ -138,6 +138,27 @@ descriptors:
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["report", "production"]
+    overrideFlags:
+      actionType: true
+      riskLevel: true
+      supportsPreview: true
+      requiresPermission: false
+      hasPermission: false
+      requiredPermissions: false
+      version: true
+      domainTags: true
+    governanceStatus: REVIEW_REQUIRED
+  - toolName: "scheduling_rush_order_impact"
+    implementationClass: "com.cretas.aims.ai.tool.impl.scheduling.RushOrderImpactTool"
+    provenance: EXPLICIT
+    actionType: READ
+    riskLevel: LOW
+    supportsPreview: false
+    requiresPermission: false
+    requiredPermissions: []
+    allowedRoles: []
+    version: "1.0.0"
+    domainTags: ["scheduling", "production"]
     overrideFlags:
       actionType: true
       riskLevel: true
