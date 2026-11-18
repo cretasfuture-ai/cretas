@@ -873,6 +873,49 @@ public class PurchaseController {
         return pending || acted;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.service.inventory.PurchasePriceTrendService priceTrendService;
+
+    @GetMapping("/price-trend")
+    @Operation(summary = "采购均价趋势 (原料×月份加权均价, 服务端聚合)")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public ApiResponse<List<com.cretas.aims.service.inventory.PurchasePriceTrendService.Row>> priceTrend(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(required = false) String materialTypeId,
+            @RequestParam(required = false) String supplierId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        requirePurchasePrices(httpRequest);
+        return ApiResponse.success("查询成功", requireTrendService().trend(factoryId, from, to, materialTypeId, supplierId));
+    }
+
+    @GetMapping("/price-trend/export")
+    @Operation(summary = "导出采购均价趋势 (CSV)")
+    @RequirePermission({"procurement:read_write", "procurement:read"})
+    public org.springframework.http.ResponseEntity<byte[]> exportPriceTrend(
+            @PathVariable @NotBlank String factoryId,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+            @RequestParam @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+            @RequestParam(required = false) String materialTypeId,
+            @RequestParam(required = false) String supplierId,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        requirePurchasePrices(httpRequest);
+        var svc = requireTrendService();
+        byte[] csv = svc.exportCsv(svc.trend(factoryId, from, to, materialTypeId, supplierId));
+        return org.springframework.http.ResponseEntity.ok()
+                .header("Content-Disposition", "attachment; filename=purchase-price-trend.csv")
+                .contentType(org.springframework.http.MediaType.parseMediaType("text/csv;charset=UTF-8"))
+                .body(csv);
+    }
+
+    private com.cretas.aims.service.inventory.PurchasePriceTrendService requireTrendService() {
+        if (priceTrendService == null) {
+            throw new BusinessException(503, "采购均价趋势组件未就绪");
+        }
+        return priceTrendService;
+    }
+
     /** 只返回价格的入口: 看不到采购价就整个 403, 不返回一堆 null。 */
     private void requirePurchasePrices(jakarta.servlet.http.HttpServletRequest request) {
         if (!canViewPurchasePrices(request)) {
