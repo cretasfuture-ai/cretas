@@ -147,6 +147,10 @@ export interface TimeRangeCostAnalysis {
   laborCost: number;
   materialCost: number;
   equipmentCost: number;
+  /** 结束时间在区间内的计划数 (有工艺保密时只数调用者能看的); 与 totalCost 同口径 */
+  planCount?: number | null;
+  /** totalCost ÷ planCount; 成本未知或没有计划时为 null */
+  avgCostPerPlan?: number | null;
   batches: BatchCostData[];
   summary: {
     averageCostPerBatch: number;

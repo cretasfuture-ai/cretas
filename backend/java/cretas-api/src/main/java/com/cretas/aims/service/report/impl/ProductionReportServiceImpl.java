@@ -268,6 +268,15 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("otherCost", costOrNull(otherCost, hasPlansInWindow));
         report.put("totalCost", (materialCost == null && laborCost == null
                 && equipmentCost == null && otherCost == null && hasPlansInWindow) ? null : totalCost);
+        // 完工计划数 / 平均每计划成本 (LSM-COSTBI 第 12 项): 与成本同口径 (结束时间在区间内);
+        // 有工艺保密时成本只算能看的计划, 计划数也只数能看的; 成本未知或没有计划 ⇒ 平均值 null (⛔ 不当 0)
+        long endedPlans = productionPlanRepository.countEndedBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        long planCount = Math.max(0, endedPlans - (visibleCosts != null ? visibleCosts.excludedPlans() : 0));
+        report.put("planCount", planCount);
+        BigDecimal costForAvg = (BigDecimal) report.get("totalCost");
+        report.put("avgCostPerPlan", costForAvg == null || planCount == 0 ? null
+                : costForAvg.divide(BigDecimal.valueOf(planCount), 2, RoundingMode.HALF_UP));
         // 利润计算
         // ⛔ 成本未知时利润**算不出来** —— 原来 totalCost 兜 0, 于是「利润 = 营收」,
         //    一家没录成本的工厂会被报成「全额都是利润」。

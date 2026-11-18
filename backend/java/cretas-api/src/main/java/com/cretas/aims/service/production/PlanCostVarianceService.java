@@ -614,12 +614,8 @@ public class PlanCostVarianceService {
     static final String RECIPE_DECLARES_REWORK_REASON =
             "锁定配方登记了回料用量, 但开计划时的快照没有回料标准价, 回料差无法比较";
 
-    /**
-     * 标准回料: 锁定配方 (不可变版本) 不含回料行 → null (标准回料用量就是 0, 配方说的);
-     * 含回料行或读不到配方 → 原因 (⛔ 不当 0)。
-     */
     /** 主料算不出标准投入时, 调料行的原因是它派生出来的, 记到主料的根因上。 */
-    static final String DERIVED_FROM_PRIMARY = "算不出主料标准投入, 调料标准用量也算不出";
+    static final String DERIVED_FROM_PRIMARY = PlanCostVarianceCalculator.DERIVED_FROM_PRIMARY_REASON;
 
     /**
      * 「无法比较」的主因 (LSM-COSTBI 第 11 项): 以前只说「见各项原因」, 用户得逐行翻。
@@ -660,6 +656,10 @@ public class PlanCostVarianceService {
                 .orElse(null);
     }
 
+    /**
+     * 标准回料: 锁定配方 (不可变版本) 不含回料行 → null (标准回料用量就是 0, 配方说的);
+     * 含回料行或读不到配方 → 原因 (⛔ 不当 0)。
+     */
     private String reworkStandardUnknownReason(String factoryId, ProductionPlan plan) {
         if (bomRecipeItemRepository == null) {
             return "读不到锁定配方, 标准回料用量定不下来, 回料差无法比较";

@@ -304,6 +304,16 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
                                               @Param("endDate") LocalDateTime endDate);
 
     /**
+     * 结束时间在区间内的计划数 (含端点), 口径与 {@link #calculateTotalCostBetweenDates} 一致,
+     * 用来算「完工计划数 / 平均每计划成本」(LSM-COSTBI 第 12 项)。
+     */
+    @Query("SELECT COUNT(p) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +
+           "AND p.endTime BETWEEN :startDate AND :endDate")
+    long countEndedBetweenDates(@Param("factoryId") String factoryId,
+                                @Param("startDate") LocalDateTime startDate,
+                                @Param("endDate") LocalDateTime endDate);
+
+    /**
      * 计算指定日期范围内的原材料成本
      */
     @Query("SELECT SUM(p.actualMaterialCost) FROM ProductionPlan p WHERE p.factoryId = :factoryId " +

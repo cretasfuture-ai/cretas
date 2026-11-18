@@ -498,6 +498,9 @@ public final class PlanCostVarianceCalculator {
     /** Quantity-only view of the same frozen standard; does not require or return prices. */
     public record MaterialQuantity(String materialTypeId, BigDecimal quantity, String unit, String reason) { }
 
+    /** 调料 (按主料 kg 计) 的原因由主料派生; PlanCostVarianceService 归因主因时按它识别。 */
+    static final String DERIVED_FROM_PRIMARY_REASON = "算不出主料标准投入, 调料标准用量也算不出";
+
     public static List<MaterialQuantity> standardMaterialQuantities(List<PlanStandardCostLine> lines,
             BigDecimal outputQuantity, BigDecimal outputKg, boolean multiOutput) {
         Inputs input = new Inputs(lines, Map.of(), outputKg, outputQuantity, null, multiOutput,
@@ -527,7 +530,7 @@ public final class PlanCostVarianceCalculator {
             }
             case PlanStandardCostLine.BASIS_PER_RAW_INPUT_KG -> {
                 if (stdRawInputKg == null || line.getStandardRate() == null) {
-                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, "算不出主料标准投入, 调料标准用量也算不出");
+                    return new MaterialQuantity(line.getMaterialTypeId(), null, null, DERIVED_FROM_PRIMARY_REASON);
                 }
                 qty = stdRawInputKg.multiply(line.getStandardRate());
                 unit = "kg";
