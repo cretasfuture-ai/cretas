@@ -136,6 +136,48 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
       echo "  ok - refill 标签 $l 在 workflow 里有路由与 runs-on"
     fi
   done
+
+  # ── 空闲名次 (2026-11-19 run 44403277567: macOS `seq 1 0` 倒数输出「1 0」, 槽 1 名次成 3, 只剩 1 个排队作业时
+  #    PG 槽全不起)。PATH 前面放一个按 BSD 行为倒数的假 seq, 让 Linux 上也能复现; 全部槽空闲时名次必须是
+  #    同标签里的序号: 1=1 2=2 3=3 4=4 5=1 (槽 5 独占 fast 标签)。
+  mkdir -p "$WORK/bsdbin"
+  cat > "$WORK/bsdbin/seq" <<'SH'
+#!/usr/bin/env bash
+a=$1; b=$2
+if [ "$a" -le "$b" ]; then i=$a; while [ "$i" -le "$b" ]; do echo "$i"; i=$((i + 1)); done
+else i=$a; while [ "$i" -ge "$b" ]; do echo "$i"; i=$((i - 1)); done; fi
+SH
+  chmod +x "$WORK/bsdbin/seq"
+  rank_of_all() {  # $1 = 被测脚本
+    local i out=""
+    for i in 1 2 3 4 5; do out="$out $i=$(PATH="$WORK/bsdbin:$PATH" bash "$1" --idle-rank-of "$i" 2>&1)"; done
+    echo "$out"
+  }
+  want_rank=" 1=1 2=2 3=3 4=4 5=1"
+  got=$(rank_of_all "$REFILL")
+  echo "READING: refill idle ranks (BSD seq):$got"
+  if [ "$got" != "$want_rank" ]; then
+    echo "FAIL: refill.sh 空闲名次应为$want_rank"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - refill 空闲名次在 BSD seq 下正确"
+  fi
+  # 变异对照: 把循环改回 seq 写法, 名次必须变错。
+  RMUT="$WORK/refill-mutant.sh"
+  sed 's/for ((k = 1; k < s; k++)); do/for k in $(seq 1 $((s - 1))); do/' "$REFILL" > "$RMUT"
+  if ! grep -q 'for k in \$(seq 1' "$RMUT"; then
+    echo "FAIL: 名次变异没生效 (循环行找不到, 同步本测试的 sed)"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    mgot=$(rank_of_all "$RMUT")
+    echo "READING: mutant(seq) idle ranks:$mgot"
+    if [ "$mgot" = "$want_rank" ]; then
+      echo "FAIL: 名次变异对照: 改回 seq 后名次仍正确 —— 测试没复现 BSD 行为"
+      REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 名次变异对照: 改回 seq 后名次变错"
+    fi
+  fi
 fi
 [ "$PASSES" -ge 13 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 13)"; REAL_FAILS=$((REAL_FAILS + 1)); }
 

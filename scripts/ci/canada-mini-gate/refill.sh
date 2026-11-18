@@ -5,14 +5,28 @@
 # - 例外: 代码检出目录 ~ghgate/work-N 跨任务保留 (actions/checkout 每次 clean+reset)。2026-11-18 实测每单在全新
 #   目录整仓克隆时 mini→GitHub 拉取超时 (curl 56 / early EOF), PG 第 0 片死在 checkout; 保留后只做增量拉取。
 # - 发布优先: 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。
-# 用法: refill.sh <槽位号>      (refill.sh --label-of <槽位号> 只打印该槽的标签, 供仓库测试核对)
+# 用法: refill.sh <槽位号>      (--label-of <槽位号> 打印该槽标签, --idle-rank-of <槽位号> 打印空闲名次, 供仓库测试核对)
 set -u
 # 槽号 -> 标签 (2026-11-19 Steve: 第 5 槽专给 fast-contracts): GH_GATE_FAST_SLOTS 里的槽注册 cretas-mini-fast,
 # 其余槽 (1-4) 注册 cretas-mini-pg。⚠️ 标签与 java-gate-pr.yml 里 route-pg / route-fast 的 MINI_LABEL 一致,
 # 闸 scripts/tests/test-route-mini-or-hosted.sh 核对两边。
 FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
 slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
+slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
+# 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数): 编号比 $1 小、同标签、空闲的槽数 + 1。
+# ⛔ 不用 `seq 1 $((n-1))`: macOS (BSD) 的 `seq 1 0` 倒数输出「1 0」, 第 1 槽把自己和不存在的 0 号槽都算成空闲,
+#    名次变 3; 只剩 1 个排队作业时 4 个 PG 槽全不起 (2026-11-19 run 44403277567 汇总作业卡 1.5 小时, 队列超时踢出)。
+idle_rank() {
+  local s="$1" lbl k r=1
+  lbl=$(slot_label "$s")
+  for ((k = 1; k < s; k++)); do
+    [ "$(slot_label "$k")" = "$lbl" ] || continue
+    slot_busy "$k" || r=$((r + 1))
+  done
+  echo "$r"
+}
 if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
+if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
@@ -45,23 +59,13 @@ mini_queued() {
   fi
   cat "$QCACHE" 2>/dev/null || echo 0
 }
-slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
-# 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数)。
-idle_rank() {
-  local k r=1
-  for k in $(seq 1 $((SLOT - 1))); do
-    [ "$(slot_label "$k")" = "$LABEL" ] || continue
-    slot_busy "$k" || r=$((r + 1))
-  done
-  echo "$r"
-}
 
 log "start label=$LABEL"
 while :; do
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
   [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null
-  q=$(mini_queued); rank=$(idle_rank)
+  q=$(mini_queued); rank=$(idle_rank "$SLOT")
   if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
   jit=$(gh api -X POST "repos/$REPO/actions/runners/generate-jitconfig" \
