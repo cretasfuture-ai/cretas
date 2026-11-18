@@ -31,8 +31,10 @@ permissions:
   contents: read
 
 env:
-  # mini 优先、满了溢出的阈值: cretas-mini-pg 上排队作业数 >= 它就走托管 (mini 4 槽)。
-  MINI_QUEUE_THRESHOLD: '4'
+  # mini 优先、满了溢出的阈值: 该标签上排队作业数 >= 它就走托管。
+  # 2026-11-19 Steve: mini 槽 1-4 注册 cretas-mini-pg (PG 线), 槽 5 专给 fast-contracts (cretas-mini-fast)。
+  MINI_PG_QUEUE_THRESHOLD: '4'
+  MINI_FAST_QUEUE_THRESHOLD: '1'
 
 jobs:
   # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
@@ -43,8 +45,10 @@ jobs:
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
   changes:
     # 2026-11-18 mini 优先、满了溢出: 本作业兼做分片路由, ⛔ 必须在托管机上 (放 mini 上的话 mini 一满它自己也排队,
-    # 溢出就失效了)。路由脚本 scripts/ci/route-mini-or-hosted.sh 数 cretas-mini-pg 上排队的作业,
-    # 少于 MINI_QUEUE_THRESHOLD 输出 cretas-mini-pg, 否则 ubuntu-latest; 每次打一行 ROUTE=...
+    # 溢出就失效了)。路由脚本 scripts/ci/route-mini-or-hosted.sh 按标签各跑一次: 数该标签上排队的作业,
+    # 少于阈值输出该标签, 否则 ubuntu-latest; 每次打一行 ROUTE=... label=...
+    #   runner_pg   cretas-mini-pg   阈值 MINI_PG_QUEUE_THRESHOLD   (槽 1-4)
+    #   runner_fast cretas-mini-fast 阈值 MINI_FAST_QUEUE_THRESHOLD (槽 5, 只派 fast 第 3 片, 其余 3 片并行在托管)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -52,7 +56,8 @@ jobs:
       actions: read   # 路由脚本读 Java Gate 运行/作业列表
     outputs:
       run: ${{ steps.filter.outputs.run }}
-      runner: ${{ steps.route.outputs.runner }}
+      runner_pg: ${{ steps.route-pg.outputs.runner_pg }}
+      runner_fast: ${{ steps.route-fast.outputs.runner_fast }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,12 +72,25 @@ jobs:
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
       # 路由: 脚本恒 exit 0; 读不到排队数走托管并打 ROUTE=hosted reason=api-error。
       # 本步骤自己崩了 (输出为空) 时下游表达式同样落 ubuntu-latest。
-      - id: route
+      - id: route-pg
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          MINI_LABEL: cretas-mini-pg
+          MINI_QUEUE_THRESHOLD: ${{ env.MINI_PG_QUEUE_THRESHOLD }}
+          ROUTE_OUTPUT_KEY: runner_pg
+        run: bash scripts/ci/route-mini-or-hosted.sh
+      - id: route-fast
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          MINI_LABEL: cretas-mini-fast
+          MINI_QUEUE_THRESHOLD: ${{ env.MINI_FAST_QUEUE_THRESHOLD }}
+          ROUTE_OUTPUT_KEY: runner_fast
         run: bash scripts/ci/route-mini-or-hosted.sh
 
   fast-contracts-shard:
@@ -83,8 +101,10 @@ jobs:
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-fast-patterns.txt 按类名哈希取模分 4 片并行;
     # 原 job 名 fast-contracts 由下面的汇总 job 保留 (分支保护/各会话判据不变)。
     name: fast-contracts-shard (${{ matrix.shard }}/4)
-    # 2026-11-18 (Steve「直接开始接托管那边的部分」): 和 PG 线同一条 canada-mini 路由, fork PR 仍托管。
-    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    # 2026-11-18 (Steve「直接开始接托管那边的部分」) 上 canada-mini; 2026-11-19 Steve 改为 mini 第 5 槽 (标签
+    # cretas-mini-fast) 专给 fast: 只有第 3 片可能派去 mini (该标签没有排队时), 其余 3 片并行在托管, 不因串行变慢。
+    # (不派第 0 片: 2026-11-19 它在 mini 上有 OOM, 另一条线在查。) fork PR / ci-hosted 仍托管。
+    runs-on: ${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-fast' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -245,7 +265,7 @@ jobs:
     # 2026-11-18 mini 优先、满了溢出: 先看 changes 作业的路由输出 (mini 排队 >= 阈值 / 读不到 -> ubuntu-latest),
     # 守卫照旧串在后面, 路由输出只能把作业从 mini 挪到托管, fork PR 无论如何落托管。
     # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
-    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false
@@ -399,7 +419,7 @@ jobs:
   fast-contracts:
     needs: [changes, fast-contracts-shard]
     if: ${{ always() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
-    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.outputs.runner_fast == 'cretas-mini-fast' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-fast' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every shard to succeed
@@ -414,7 +434,7 @@ jobs:
     if: ${{ always() && needs.changes.outputs.run != 'false' }}
     # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
     # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
-    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Require every shard to succeed

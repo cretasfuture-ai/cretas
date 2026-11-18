@@ -1,6 +1,10 @@
 #!/bin/bash
 # 一次性: 建 ghgate 账户 (无密码 = 不能登录、非管理员、隐藏), 装 runner 包, 撤掉 rex 名下的常驻 runner, 起补位 LaunchAgent。
+# 用法: setup.sh [槽数]   默认 5 (2026-11-19 Steve: 槽 1-4 = cretas-mini-pg, 槽 5 = cretas-mini-fast 专给 fast-contracts;
+#        哪个槽注册哪个标签由 refill.sh 的 slot_label 决定)。
 set -euo pipefail
+SLOTS="${1:-5}"
+case "$SLOTS" in ''|*[!0-9]*|0) echo "槽数必须是正整数: $SLOTS" >&2; exit 2 ;; esac
 export PATH=/opt/homebrew/bin:$PATH
 U=ghgate
 if ! dscl . -read /Users/$U >/dev/null 2>&1; then
@@ -34,7 +38,7 @@ done
 
 mkdir -p /Users/rex/gh-gate
 cp /tmp/gh-gate-refill.sh /Users/rex/gh-gate/refill.sh && chmod 755 /Users/rex/gh-gate/refill.sh
-for i in 1 2 3 4; do  # 4 槽 (2026-11-18 Steve 要求 4 片并行; 按需起, 空闲不占内存)
+for i in $(seq 1 "$SLOTS"); do  # 按需起, 空闲不占内存; 槽 5 的检出目录 ~ghgate/work-5 由运维从 ~ghgate/seed 预置
   plist=/Users/rex/Library/LaunchAgents/com.cretas.gh-gate-$i.plist
   cat > "$plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>

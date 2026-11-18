@@ -35,16 +35,23 @@ FORMERLY_SELF_HOSTED = {
 SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
 # 2026-11-18 mini 优先、满了溢出: 先读 changes 作业 (托管机上) 的路由输出, 守卫照旧串在后面 ——
 # 路由输出只能把作业从 mini 挪到托管, 不能让 fork PR 上 mini。
-ROUTER_PREFIX = "needs.changes.outputs.runner == 'cretas-mini-pg' && "
-MINI_PG_ROUTE = "${{ " + ROUTER_PREFIX + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}"
-UNROUTED = "${{ " + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}"
+# 2026-11-19 Steve: mini 槽 1-4 = cretas-mini-pg (PG 线, 输出 runner_pg), 槽 5 = cretas-mini-fast
+# (fast-contracts 专用, 输出 runner_fast); fast 只有第 3 片可能上 mini, 其余 3 片托管并行。
+GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
+MINI_PG_ROUTE = ("${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && " + SAME_REPO_GUARD + GUARD_TAIL
+                 + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
+MINI_FAST_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && "
+                         + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
+MINI_FAST_SUMMARY_ROUTE = ("${{ needs.changes.outputs.runner_fast == 'cretas-mini-fast' && " + SAME_REPO_GUARD + GUARD_TAIL
+                           + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
+UNROUTED = "${{ " + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubuntu-latest' }}"
 # PG 线 4 片分片 + 汇总, fast-contracts 4 片分片 + 汇总。判定/路由作业 changes 必须是托管字面量
 # (放 mini 上的话 mini 一满它自己也排队, 溢出失效), 所以不在白名单里。
 SELF_HOSTED_ALLOWED = {
     ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
-    ('java-gate-pr.yml', 'fast-contracts-shard'): MINI_PG_ROUTE,
-    ('java-gate-pr.yml', 'fast-contracts'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts-shard'): MINI_FAST_SHARD_ROUTE,
+    ('java-gate-pr.yml', 'fast-contracts'): MINI_FAST_SUMMARY_ROUTE,
 }
 HEAP = {
     ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
@@ -148,9 +155,17 @@ else:
     print('  ok - 阴性对照: 不读路由输出的旧表达式被判红')
 changes_block = dict(jobs((WF / 'java-gate-pr.yml').read_text(encoding='utf-8'))).get('changes', '')
 print('READING: java-gate-pr/changes runs-on=%r' % runs_on(changes_block))
-if runs_on(changes_block) != 'ubuntu-latest' or 'route-mini-or-hosted.sh' not in changes_block:
-    print('FAIL: java-gate-pr/changes 必须跑在 ubuntu-latest 并调用 scripts/ci/route-mini-or-hosted.sh')
+if (runs_on(changes_block) != 'ubuntu-latest' or 'route-mini-or-hosted.sh' not in changes_block
+        or 'MINI_LABEL: cretas-mini-pg' not in changes_block or 'MINI_LABEL: cretas-mini-fast' not in changes_block):
+    print('FAIL: java-gate-pr/changes 必须跑在 ubuntu-latest 并按 cretas-mini-pg / cretas-mini-fast 各调一次 route-mini-or-hosted.sh')
     ok = False
+all_fast = sample.replace('probe', 'fast-contracts-shard').replace(
+    '[self-hosted, cretas]', MINI_FAST_SHARD_ROUTE.replace('matrix.shard == 3 && ', ''))
+if not violations('java-gate-pr.yml', all_fast):
+    print('FAIL: 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 被判红')
 present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
 print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
 

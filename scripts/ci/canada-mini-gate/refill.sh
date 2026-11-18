@@ -5,12 +5,18 @@
 # - 例外: 代码检出目录 ~ghgate/work-N 跨任务保留 (actions/checkout 每次 clean+reset)。2026-11-18 实测每单在全新
 #   目录整仓克隆时 mini→GitHub 拉取超时 (curl 56 / early EOF), PG 第 0 片死在 checkout; 保留后只做增量拉取。
 # - 发布优先: 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。
-# 用法: refill.sh <槽位号>
+# 用法: refill.sh <槽位号>      (refill.sh --label-of <槽位号> 只打印该槽的标签, 供仓库测试核对)
 set -u
+# 槽号 -> 标签 (2026-11-19 Steve: 第 5 槽专给 fast-contracts): GH_GATE_FAST_SLOTS 里的槽注册 cretas-mini-fast,
+# 其余槽 (1-4) 注册 cretas-mini-pg。⚠️ 标签与 java-gate-pr.yml 里 route-pg / route-fast 的 MINI_LABEL 一致,
+# 闸 scripts/tests/test-route-mini-or-hosted.sh 核对两边。
+FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
+slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
+if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
-LABEL=cretas-mini-pg
+LABEL=$(slot_label "$SLOT")
 PKG=/Users/ghgate/runner-pkg
 WORK=/Users/ghgate/slot-$SLOT
 LOCK=/Users/rex/cretas-build/.build.lock
@@ -20,9 +26,9 @@ log() { echo "$(date '+%F %T') slot=$SLOT $*" >> "$LOG"; }
 lock_held() { [ -d "$LOCK" ] && ps -p "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" >/dev/null 2>&1; }
 
 # 按需起 runner (Steve 2026-11-18「没跑的时候不占内存, 用的时候才占」): 空闲时只有这个循环 (~10MB),
-# 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等 $LABEL 的 job 数 >= 本槽在空闲槽里的名次才起。
-# 排队数缓存在 $QCACHE, 20 秒内各槽共用一次查询 (省 API 额度)。
-QCACHE=/Users/rex/gh-gate/queued.cache
+# 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等 $LABEL 的 job 数 >= 本槽在同标签空闲槽里的名次才起。
+# 排队数按标签缓存在 $QCACHE, 20 秒内同标签各槽共用一次查询 (省 API 额度)。
+QCACHE=/Users/rex/gh-gate/queued-$LABEL.cache
 IDLE_KILL_SEC=180
 mini_queued() {
   local age=999 n=0 r c
@@ -40,9 +46,17 @@ mini_queued() {
   cat "$QCACHE" 2>/dev/null || echo 0
 }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
-idle_rank() { local k r=1; for k in $(seq 1 $((SLOT - 1))); do slot_busy "$k" || r=$((r + 1)); done; echo "$r"; }
+# 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数)。
+idle_rank() {
+  local k r=1
+  for k in $(seq 1 $((SLOT - 1))); do
+    [ "$(slot_label "$k")" = "$LABEL" ] || continue
+    slot_busy "$k" || r=$((r + 1))
+  done
+  echo "$r"
+}
 
-log "start"
+log "start label=$LABEL"
 while :; do
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉

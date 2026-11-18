@@ -14,8 +14,11 @@
 #        queued <  阈值                                   -> mini   reason=below-threshold
 #        queued >= 阈值                                   -> hosted reason=mini-full
 #
-# 每次都打一行 `ROUTE=<mini|hosted> queued=<n|na> threshold=<t> reason=<...>`, 并向 $GITHUB_OUTPUT
-# 写 `runner=cretas-mini-pg|ubuntu-latest`。脚本本身恒 exit 0 (路由仪器坏了走托管, 不让判定作业红)。
+# 每次都打一行 `ROUTE=<mini|hosted> queued=<n|na> threshold=<t> reason=<...> label=<标签>`, 并向 $GITHUB_OUTPUT
+# 写 `<ROUTE_OUTPUT_KEY>=<标签>|ubuntu-latest`。
+# 同一 run 里按标签各调一次 (2026-11-19 Steve: mini 第 5 槽专给 fast-contracts):
+#   PG 线   MINI_LABEL=cretas-mini-pg   阈值 4 (槽 1-4)   -> runner_pg
+#   fast 线 MINI_LABEL=cretas-mini-fast 阈值 1 (槽 5)     -> runner_fast脚本本身恒 exit 0 (路由仪器坏了走托管, 不让判定作业红)。
 # workflow 里各分片的 runs-on 仍带「本仓库分支或合并队列」守卫, 本脚本输出只能把作业从 mini 挪到托管,
 # 不能反过来 (双保险, 闸 scripts/tests/test-public-repo-hosted-only.sh 逐字钉住表达式)。
 #
@@ -25,8 +28,9 @@
 #   HEAD_REPO          github.event.pull_request.head.repo.full_name (merge_group 下为空)
 #   PR_LABELS          PR 标签 JSON 数组 (toJSON(github.event.pull_request.labels.*.name)), 可空
 #   GITHUB_RUN_ID      本 run id (计数时排除)
-#   MINI_QUEUE_THRESHOLD  默认 4
-#   MINI_LABEL         默认 cretas-mini-pg
+#   MINI_QUEUE_THRESHOLD  默认 4 (该标签上排队作业数 >= 它就走托管)
+#   MINI_LABEL         默认 cretas-mini-pg (只数带这个标签的排队作业, mini 路由时输出它)
+#   ROUTE_OUTPUT_KEY   写进 $GITHUB_OUTPUT 的键名, 默认 runner
 #   ROUTE_WORKFLOW     默认 java-gate-pr.yml
 #   GH                 gh 可执行文件 (测试注入假 gh), 默认 gh
 set -uo pipefail
@@ -35,6 +39,7 @@ THRESHOLD="${MINI_QUEUE_THRESHOLD:-4}"
 LABEL="${MINI_LABEL:-cretas-mini-pg}"
 WORKFLOW="${ROUTE_WORKFLOW:-java-gate-pr.yml}"
 GH="${GH:-gh}"
+OUTPUT_KEY="${ROUTE_OUTPUT_KEY:-runner}"
 REPO="${GITHUB_REPOSITORY:-}"
 EVENT_NAME="${EVENT_NAME:-}"
 HEAD_REPO="${HEAD_REPO:-}"
@@ -44,12 +49,12 @@ RUN_ID="${GITHUB_RUN_ID:-}"
 emit() {
   local route="$1" queued="$2" reason="$3" runner
   if [ "$route" = "mini" ]; then runner="$LABEL"; else runner="ubuntu-latest"; fi
-  echo "ROUTE=$route queued=$queued threshold=$THRESHOLD reason=$reason"
+  echo "ROUTE=$route queued=$queued threshold=$THRESHOLD reason=$reason label=$LABEL"
   if [ "$reason" = "api-error" ] || [ "$reason" = "bad-threshold" ]; then
-    echo "::warning::Java Gate 路由读不到 mini 排队数 ($reason), 本次走托管"
+    echo "::warning::Java Gate 路由读不到 $LABEL 排队数 ($reason), 本次走托管"
   fi
   if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    echo "runner=$runner" >> "$GITHUB_OUTPUT"
+    echo "$OUTPUT_KEY=$runner" >> "$GITHUB_OUTPUT"
   fi
   exit 0
 }
