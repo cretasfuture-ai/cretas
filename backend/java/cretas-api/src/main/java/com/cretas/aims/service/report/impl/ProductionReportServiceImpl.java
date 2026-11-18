@@ -70,6 +70,25 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
 
+    /** 往来余额唯一来源: 挂账单据 (与应收应付页同一实现)。@Lazy 避免财务服务链的构造环。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.finance.ArApService arApService;
+
+    static final String NO_LEDGER_NOTE = "本厂尚未生成挂账单据（应收按已发货/已确认未收款挂账，应付按已入库/已确认未付款挂账）";
+
+    /** 应收 / 应付 / 客户预收取自 {@link com.cretas.aims.service.finance.ArApService#getFinanceOverview}, 不另算一份。 */
+    void putLedgerBalances(Map<String, Object> report, String factoryId) {
+        Map<String, Object> overview = arApService.getFinanceOverview(factoryId);
+        report.put("accountsReceivable", overview.get("totalReceivable"));
+        report.put("accountsPayable", overview.get("totalPayable"));
+        report.put("customerPrepayments", overview.get("customerPrepayments"));
+        report.put("arApLedgerEntryCount", overview.get("ledgerEntryCount"));
+        report.put("hasArApLedgerEntries", overview.get("hasLedgerEntries"));
+        if (Boolean.TRUE.equals(overview.get("scopeApplied"))) report.put("arApScopeApplied", true);
+        if (Boolean.FALSE.equals(overview.get("hasLedgerEntries"))) report.put("arApNote", NO_LEDGER_NOTE);
+    }
+
     /** 食品 DAG 缺口 09: 逐计划的标准成本差异 (开计划时快照)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.PlanCostVarianceService planCostVarianceService;
@@ -267,13 +286,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             report.put("profitMargin", null);
             report.put("profitUnavailableReason", "营收含工艺保密产品而成本不含，利润不可计算");
         }
-        // 应收应付 (R42 BUG-13: 仅正余额; 客户预付分开统计)
-        BigDecimal accountsReceivable = customerRepository.calculateTotalOutstandingBalance(factoryId);
-        BigDecimal accountsPayable = supplierRepository.calculateTotalOutstandingBalance(factoryId);
-        BigDecimal customerPrepayments = customerRepository.calculateTotalPrepayments(factoryId);
-        report.put("accountsReceivable", accountsReceivable != null ? accountsReceivable : BigDecimal.ZERO);
-        report.put("accountsPayable", accountsPayable != null ? accountsPayable : BigDecimal.ZERO);
-        report.put("customerPrepayments", customerPrepayments != null ? customerPrepayments : BigDecimal.ZERO);
+        // 应收应付: 与「财务管理 → 应收应付」同一份实现 (ArApService#getFinanceOverview, 挂账单据口径)。
+        // PROTO-DEMO-ARAP (2026-11-18): 原来读客户/供应商主数据上的 current_balance —— 那是可手改、可随整厂复制
+        // 带过来的缓存, 与挂账单据脱节 (LSMDEMO: 挂账单据 0 条, 经营分析页却显示应收 2.23 万 / 应付 288.87 万)。
+        putLedgerBalances(report, factoryId);
         return report;
     }
 

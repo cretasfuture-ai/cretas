@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { computed, onActivated, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
@@ -596,7 +597,7 @@ onActivated(() => {
         </template>
       </el-alert>
 
-      <el-empty v-if="!route.query.batchId && !recalls.length && !loading" description="请选择批次，或暂无召回记录" />
+      <ListEmptyExplain v-if="!route.query.batchId && !recalls.length && !loading" empty-title="还没有批次召回记录" empty-hint="发现已出库批次有质量或安全问题时，从批次追溯页选择批次发起召回；没有召回说明暂无此类事件。" />
 
       <div v-if="preview" class="recall-workspace">
         <el-card shadow="never" class="start-card">

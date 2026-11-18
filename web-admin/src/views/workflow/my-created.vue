@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 我发起的审批 — Sprint 5 Track A (C-MENU-PERSONAL-VIEW).
  *
@@ -145,8 +146,8 @@ onMounted(() => {
         v-loading="loading"
         :data="instances"
         stripe
-        empty-text="暂无您发起的审批"
       >
+        <template #empty><ListEmptyExplain empty-title="您还没有发起过审批" empty-hint="在请假、报销、采购等页面提交申请后，您发起的审批会出现在这里。" /></template>
         <el-table-column label="业务摘要" min-width="280">
           <template #default="{ row }">
             <span class="biz-summary">{{ row.businessSummary }}</span>

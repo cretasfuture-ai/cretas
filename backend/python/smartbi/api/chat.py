@@ -1592,6 +1592,7 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     charts.append(chart_entry)
         except Exception as chart_err:
             logger.warning(f"Chart generation failed in general_analysis: {chart_err}")
+        charts = _prefer_question_chart(query, df, charts)
 
         # Sanitize insights to remove NaN/Infinity before JSON serialization
         insights = _sanitize_for_json(insights)
@@ -2077,6 +2078,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 payload = format_cached_as_sse(
                                     tpl, user_q, intent_signals=intent_signals
                                 )
+                                # 问题 51: 按问题点名的维度改写占比缓存; 图型改成
+                                # ChartInsight 认得的 pie/bar/line (一图一分析)。
+                                from smartbi.services.question_chart import (
+                                    adapt_category_distribution, normalize_cached_charts,
+                                )
+                                payload = adapt_category_distribution(payload, user_q)
+                                payload["charts"] = normalize_cached_charts(payload.get("charts") or [])
                                 # Stream as SSE
                                 yield _sse_event("status", "正在整理已有经营分析...")
                                 # Chunk the answer in small pieces for streaming feel
@@ -2148,6 +2156,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
             # ── Data loading (same as general_analysis) ──
             data = request.data
+            # 问题 51: 下面从库里读的只是前 200 行样本; 按问题出图要对整份上传汇总。
+            _question_chart_upload_id: Optional[int] = None
             if request.allow_tenant_data_fallback and not data and request.sheet_id:
                 data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
@@ -2190,6 +2200,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 if rows:
                                     data = [_json.loads(r['row_data']) if isinstance(r['row_data'], str) else r['row_data'] for r in rows]  # noqa: E501
                                     logger.info(f"[stream] Loaded {len(data)} rows from upload {upload_id}")
+                                    _question_chart_upload_id = int(upload_id)
                                 # Bug #17 fix (Apr 17 2026): load field_definitions for prompt
                                 # So LLM knows which columns are measures/dimensions/times
                                 try:
@@ -3231,6 +3242,15 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             if '_cached_charts_override' in locals() and _cached_charts_override:
                 charts = _cached_charts_override
 
+            # 问题 51: 问题点名了维度/指标时, 用全量数据现算那一张图, 换掉
+            # 「Top 5 省份」/前 50 行抽样饼图这类和问题对不上的图。
+            if _question_chart_upload_id is not None:
+                charts = await _prefer_question_chart_for_upload(
+                    query, df, charts, _question_chart_upload_id, trusted_factory_id,
+                )
+            else:
+                charts = _prefer_question_chart(query, df, charts)
+
             if charts:
                 yield _sse_event("charts", charts)
 
@@ -3937,6 +3957,44 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
             "Content-Encoding": "identity",
         }
     )
+
+
+def _prefer_question_chart(query: Optional[str], df, charts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """问题点名了维度时返回 [按问题现算的那张图]; 认不出就原样返回 charts。"""
+    try:
+        from smartbi.services.question_chart import build_question_chart
+        qchart = build_question_chart(query or "", df)
+    except Exception as exc:  # 出图失败不影响文字答案
+        logger.warning(f"[question-chart] build failed (keep generic charts): {exc}")
+        return charts
+    if not qchart:
+        return charts
+    logger.info(f"[question-chart] {qchart.get('question_chart')}")
+    return [_sanitize_for_json(qchart)]
+
+
+async def _prefer_question_chart_for_upload(
+    query: Optional[str], sample_df, charts: List[Dict[str, Any]],
+    upload_id: int, factory_id: str,
+) -> List[Dict[str, Any]]:
+    """同 _prefer_question_chart, 但 sample_df 只是样本: 数在库里对整份上传汇总。"""
+    try:
+        from smartbi.config import get_pg_pool as _get_pool_qc
+        from smartbi.services.question_chart import build_question_chart_for_upload
+        pool = await _get_pool_qc()
+        if pool is None:
+            return charts
+        async with pool.acquire() as conn:
+            qchart = await build_question_chart_for_upload(
+                conn, upload_id, factory_id, query or "", sample_df,
+            )
+    except Exception as exc:  # 出图失败不影响文字答案
+        logger.warning(f"[question-chart] upload aggregate failed (keep generic charts): {exc}")
+        return charts
+    if not qchart:
+        return charts
+    logger.info(f"[question-chart] upload={upload_id} {qchart.get('question_chart')}")
+    return [_sanitize_for_json(qchart)]
 
 
 def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:

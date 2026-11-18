@@ -4,7 +4,10 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
-import { generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
+import { exportAIReport, generateAIReport, getAIReport, listAIReports } from '@/api/aiReports';
+import type { ReportExportFormat } from '@/api/aiReports';
+import { formatReportTime, renderReportMarkdown } from './reportMarkdown';
+import { markdownToPlainSummary } from '@/utils/markdownPlain';
 import type { AIReportDetail, AIReportSummary, OperatingReportType } from '@/api/aiReports';
 
 const auth = useAuthStore();
@@ -14,13 +17,19 @@ const router = useRouter();
 const reports = ref<AIReportSummary[]>([]);
 const report = ref<AIReportDetail | null>(null);
 const loading = ref(false);
+// 首次读取完成前不许显示「暂无报告」: 列表还没回来时空表格会把空态文字露在加载遮罩下面 (E13: 首次打开像没有报告, 刷新才出现)
+const loaded = ref(false);
+const emptyText = computed(() => (loading.value || !loaded.value) && !error.value ? '报告加载中…' : '暂无报告');
 const generating = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
 const detailError = ref('');
 const filter = ref('');
 const generationType = ref<OperatingReportType>('daily');
-const selectedDate = ref(new Date());
+// 日报默认选昨天：今天还没收盘，生成「今天」的日报只会得到空报告。
+// 「昨天无数据时自动取最近有数据的日期」需要后端提供经营数据最近日期接口，前端无现成来源，暂不做。
+const defaultReportDate = () => { const d = new Date(); d.setDate(d.getDate() - 1); return d; };
+const selectedDate = ref(defaultReportDate());
 const detailOpen = ref(false);
 const factoryId = computed(() => auth.factoryId);
 const canGenerate = computed(() => auth.factoryType === 'FACTORY' && permissions.canViewPrice);
@@ -28,8 +37,11 @@ const body = computed(() => report.value?.reportAnalysis ?? report.value?.analys
 let readEpoch = 0;
 let detailSequence = 0;
 const labels: Record<string, string> = { daily: '日报', weekly: '周报', monthly: '月报', batch: '批次报告', custom: '自定义报告' };
-const dateText = (value?: string) => value ? value.replace('T', ' ').slice(0, 19) : '—';
+const dateText = formatReportTime;
+const bodyHtml = computed(() => renderReportMarkdown(body.value));
 const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+// 列表预览：摘要里常带 Markdown 标记（# ## - **），先转纯文本再取前 80 字。
+const summaryPreview = (row: AIReportSummary) => markdownToPlainSummary(row.failureReason || row.financialSummaryText || row.summaryText, 80) || '打开查看全文';
 const failureText = (failure: unknown) => failure instanceof Error ? failure.message : '报告加载失败，请重试。';
 async function load() {
   if (!factoryId.value) { error.value = '请先选择工厂。'; reports.value = []; return; }
@@ -38,8 +50,8 @@ async function load() {
   try {
     const response = await listAIReports(factoryId.value, filter.value || undefined);
     if (!response.success || !response.data) throw new Error(response.message || '报告列表读取失败。');
-    if (epoch === readEpoch) reports.value = response.data.reports;
-  } catch (failure) { if (epoch === readEpoch) error.value = failureText(failure); }
+    if (epoch === readEpoch) { reports.value = response.data.reports; loaded.value = true; }
+  } catch (failure) { if (epoch === readEpoch) { error.value = failureText(failure); loaded.value = true; } }
   finally { if (epoch === readEpoch) loading.value = false; }
 }
 async function openReport(id: number, updateRoute = true) {
@@ -81,13 +93,25 @@ function download() {
   const anchor = document.createElement('a'); anchor.href = url; anchor.download = `经营报告-${report.value.reportId}.md`; anchor.click();
   URL.revokeObjectURL(url);
 }
+const exporting = ref<ReportExportFormat | ''>('');
+async function exportFile(format: ReportExportFormat) {
+  if (!factoryId.value || !report.value || report.value.generationStatus === 'FAILED' || !report.value.success || exporting.value) return;
+  exporting.value = format;
+  try {
+    const blob = await exportAIReport(factoryId.value, report.value.reportId, format);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a'); anchor.href = url; anchor.download = `经营报告-${report.value.reportId}.${format}`; anchor.click();
+    URL.revokeObjectURL(url);
+  } catch (failure) { ElMessage.error(failureText(failure)); }
+  finally { exporting.value = ''; }
+}
 function rowClick(row: AIReportSummary) { void openReport(row.id); }
 function closeDetail() {
   if (route.params.reportId) void router.replace({ name: 'AnalyticsAIReports' });
 }
 watch(filter, () => void load());
 watch(() => route.params.reportId, (id) => { if (id && Number.isSafeInteger(Number(id))) void openReport(Number(id), false); });
-watch([factoryId, () => auth.currentRole, () => auth.user?.id], () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; detailOpen.value = false; void load(); });
+watch([factoryId, () => auth.currentRole, () => auth.user?.id], () => { readEpoch += 1; detailSequence += 1; report.value = null; reports.value = []; loaded.value = false; detailOpen.value = false; void load(); });
 onMounted(() => { void load(); if (route.params.reportId) void openReport(Number(route.params.reportId), false); });
 </script>
 
@@ -112,12 +136,12 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
         <el-button type="primary" :loading="generating" @click="generate">生成报告</el-button>
       </div>
     </div>
-    <el-table v-loading="loading" :data="reports" empty-text="暂无报告" @row-click="rowClick">
+    <el-table v-loading="loading" :data="reports" :empty-text="emptyText" @row-click="rowClick">
       <el-table-column label="类型" width="100"><template #default="{ row }">{{ labels[row.reportType] || row.reportType }}</template></el-table-column>
       <el-table-column label="报告期间" min-width="210"><template #default="{ row }">{{ row.periodStart || '—' }} 至 {{ row.periodEnd || '—' }}</template></el-table-column>
       <el-table-column label="状态与说明" min-width="320"><template #default="{ row }">
         <el-tag :type="row.generationStatus === 'FAILED' ? 'danger' : 'success'">{{ row.generationStatus === 'FAILED' ? '生成失败' : '已生成' }}</el-tag>
-        <p class="summary">{{ row.failureReason || row.financialSummaryText || row.summaryText || '打开查看全文' }}</p>
+        <p class="summary">{{ summaryPreview(row) }}</p>
       </template></el-table-column>
       <el-table-column label="生成时间" width="180"><template #default="{ row }">{{ dateText(row.createdAt) }}</template></el-table-column>
       <el-table-column width="100"><template #default="{ row }"><el-button link type="primary" @click.stop="openReport(row.id)">查看全文</el-button></template></el-table-column>
@@ -128,10 +152,10 @@ onMounted(() => { void load(); if (route.params.reportId) void openReport(Number
         <template v-if="report">
           <p class="detail-time">生成时间：{{ dateText(report.generatedAt) }}</p>
           <el-alert v-if="report.generationStatus === 'FAILED' || !report.success" title="生成失败" :description="report.errorMessage || '报告生成失败，请重新生成。'" type="error" :closable="false" show-icon />
-          <pre class="report-body">{{ body }}</pre>
+          <div class="report-body" data-testid="report-body" v-html="bodyHtml" />
         </template>
       </div>
-      <template #footer><el-button v-if="body" @click="download">下载当前可见全文</el-button><el-button @click="detailOpen = false">关闭</el-button></template>
+      <template #footer><template v-if="body && report && report.success"><el-button type="primary" :loading="exporting === 'pdf'" @click="exportFile('pdf')">导出 PDF</el-button><el-button :loading="exporting === 'pptx'" @click="exportFile('pptx')">导出 PPT</el-button></template><el-button v-if="body" @click="download">下载文本（.md）</el-button><el-button @click="detailOpen = false">关闭</el-button></template>
     </el-dialog>
   </section>
 </template>
@@ -144,6 +168,9 @@ h1 { margin: 0 0 8px; font-size: 24px; color: #172c3e; }
 .report-toolbar { justify-content: space-between; flex-wrap: wrap; margin: 20px 0; }
 .summary { white-space: pre-wrap; max-height: 72px; overflow: hidden; color: #526170; line-height: 1.5; }
 .detail-content { min-height: 100px; }
-.report-body { white-space: pre-wrap; overflow-wrap: anywhere; font-family: inherit; font-size: 14px; line-height: 1.9; color: #243746; background: #f7f9fa; padding: 20px; border-radius: 8px; }
+.report-body :deep(h1), .report-body :deep(h2), .report-body :deep(h3) { margin: 16px 0 8px; color: #172c3e; }
+.report-body :deep(ul), .report-body :deep(ol) { padding-left: 24px; }
+.report-body :deep(th), .report-body :deep(td) { border: 1px solid #dde3e8; padding: 4px 10px; }
+.report-body { overflow-wrap: anywhere; font-family: inherit; font-size: 14px; line-height: 1.9; color: #243746; background: #f7f9fa; padding: 20px; border-radius: 8px; }
 @media (max-width: 700px) { .page-heading, .generation-controls { align-items: stretch; flex-direction: column; } .report-page { padding: 16px; } }
 </style>

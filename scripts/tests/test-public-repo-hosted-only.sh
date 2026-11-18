@@ -9,6 +9,8 @@
 #   2. 原来跑在自建 runner 上的工作流, 每个 job 仍带 timeout-minutes (托管 job 卡住同样占并发);
 #   3. Java 重任务在托管 16 GB 机器上显式给堆 (不给就退回 3g, fast-contracts 在这个类序下 OOM)。
 # 阳性对照: 扫到的 job 数 >= 25; 阴性对照: 一段带 [self-hosted, cretas] 的样本必须被判红。
+# 2026-11-18 例外 (Steve 撤销「公开仓库禁自建 runner」): 只放行 SELF_HOSTED_ALLOWED 里逐字登记的表达式,
+# 且表达式必须带「本仓库分支或合并队列」守卫 (fork PR 落托管)。阴性对照: 去掉守卫的同名 job 必须被判红。
 set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 PY=${PYTHON:-python3}
@@ -28,6 +30,15 @@ FORMERLY_SELF_HOSTED = {
     'jpa-gate-main.yml', 'java-artifact.yml', 'tool-inventory-gate.yml', 'ops-script-tests.yml',
     'soft-delete-scan-surface.yml', 'secret-regression.yml', 'scheduler-canary.yml',
     'artifact-reaper.yml', 'reap-orphan-testenvs.yml', 'fresh-db-progress.yml',
+}
+# 自建路由白名单: (工作流, job) -> runs-on 原文。只放行本仓库分支 PR / 合并队列; fork PR 必须落 ubuntu-latest。
+SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+MINI_PG_ROUTE = "${{ " + SAME_REPO_GUARD + " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}"
+# PG 这条线: 判定作业 changes + 4 片分片 + 汇总作业 (首尾不挪, 分片仍要等托管机排队)。
+SELF_HOSTED_ALLOWED = {
+    ('java-gate-pr.yml', 'changes'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
 }
 HEAP = {
     ('java-gate-pr.yml', 'fast-contracts-shard'): 'CRETAS_JAVA_FORK_XMX',
@@ -71,7 +82,10 @@ def violations(name, text):
         value = runs_on(block)
         if value is None:
             continue  # reusable-workflow callers (`uses:`) have no runs-on
-        if not HOSTED.match(value):
+        allowed = SELF_HOSTED_ALLOWED.get((name, job))
+        if allowed is not None and value == allowed and SAME_REPO_GUARD in value and value.endswith("|| 'ubuntu-latest' }}"):
+            pass  # 登记过的自建路由: fork PR 落托管
+        elif not HOSTED.match(value):
             bad.append('%s/%s runs-on %r is not a GitHub-hosted label' % (name, job, value))
         if name in FORMERLY_SELF_HOSTED and not re.search(r'^    timeout-minutes:\s*\d+', block, re.M):
             bad.append('%s/%s has no timeout-minutes' % (name, job))
@@ -106,6 +120,23 @@ if not violations('negative-control.yml', sample):
 else:
     print('  ok - 阴性对照: [self-hosted, cretas] 被判红')
 
+guardless = ('on: push\njobs:\n  postgres-reversal-concurrency-shard:\n'
+             "    runs-on: ${{ !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}\n"
+             '    timeout-minutes: 40\n    env:\n      CRETAS_JAVA_FORK_XMX: 10g\n    steps: []\n')
+if not violations('java-gate-pr.yml', guardless):
+    print('FAIL: 阴性对照: 不带本仓库守卫的自建路由没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: 不带本仓库守卫的自建路由被判红')
+elsewhere = sample.replace('[self-hosted, cretas]', list(SELF_HOSTED_ALLOWED.values())[0])
+if not violations('negative-control.yml', elsewhere):
+    print('FAIL: 阴性对照: 白名单表达式挪到未登记的 job 没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: 白名单表达式挪到未登记的 job 被判红')
+present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
+print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
+
 check = subprocess.run([sys.executable, str(ROOT / 'scripts/ci/switch_ci_runner.py'), '--check'],
                        cwd=ROOT, capture_output=True, text=True, encoding='utf-8', errors='replace')
 last = (check.stdout.strip().splitlines() or [''])[-1]
@@ -118,6 +149,6 @@ for p in problems:
     print('  ✗ ' + p)
 if problems:
     ok = False
-print('PASS: 全部 job 走 GitHub 托管 runner' if ok else 'FAIL')
+print('PASS: 全部 job 走 GitHub 托管 runner (登记的自建路由除外, 且 fork PR 落托管)' if ok else 'FAIL')
 sys.exit(0 if ok else 1)
 PY

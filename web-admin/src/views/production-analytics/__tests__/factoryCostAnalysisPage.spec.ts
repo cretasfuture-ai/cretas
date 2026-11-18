@@ -18,7 +18,7 @@ describe('FactoryCostAnalysis 页面接线', () => {
   });
 
   it('产品对比画单位成本，不画总成本', () => {
-    expect(page).toContain('productsByUnitCost(productData.value!.products)');
+    expect(page).toContain('(canShow ? productsByUnitCost(all) : all).slice(0, 10)');
     expect(page).toContain('canShow ? p.costPerUnit : p.avgYieldRate');
     expect(page).not.toContain('canShow ? p.totalCost : p.avgYieldRate');
   });
@@ -29,9 +29,30 @@ describe('FactoryCostAnalysis 页面接线', () => {
     expect(page).not.toContain('markLine');
   });
 
-  it('环形图下不再挂规则模板洞察', () => {
-    expect(page).not.toContain('<ChartInsight');
+  it('四张图都挂一图一分析，且只用现算结论（不走 Tier2 模板）', () => {
+    // 句子的「禁止模板话、要求现算」由 costInsightCharts.spec.ts 按真实形状的数据断言；这里守接线。
+    const providers = page.match(/<ChartInsightProvider[\s\S]*?\/>/g) ?? [];
+    expect(providers.map(p => p.match(/:chart="(\w+)"/)?.[1]).sort()).toEqual(
+      ['costPieInsight', 'costTrendInsight', 'productInsight', 'yieldInsight'],
+    );
+    for (const p of providers) {
+      expect(p).toContain(':auto-tier2="false"');
+      expect(p).toContain('depth="detailed"');
+      expect(p).toContain(':perms="insightPerms"');
+    }
+    expect(page).toContain('canViewFinance: canViewPrice.value');
     expect(page).not.toContain('useChartInsight');
+  });
+
+  it('产品条形图可切换排列方式，明细表每一列都能点表头排序', () => {
+    expect(page).toContain('<ChartSortControl v-if="hasProducts" v-model="productSortMode" />');
+    expect(page).toContain('watch(productSortMode, () => renderProductBar())');
+    const columns = page.match(/<el-table-column[^>]*>/g) ?? [];
+    expect(columns.length).toBe(11);
+    for (const c of columns) {
+      expect(c).toContain('sortable');
+      expect(c).toContain(':sort-method="tableSortBy(');
+    }
   });
 
   it('两张成本图共用一套类别颜色', () => {

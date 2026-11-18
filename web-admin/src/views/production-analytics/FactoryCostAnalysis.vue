@@ -13,7 +13,7 @@
  * 空状态: 无 gold 数据 → 白话提示 "该工厂暂无生产成本数据 — 报工填了成本才会显示".
  * 不碰后端 gold/ETL.
  */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
@@ -49,6 +49,18 @@ import {
   unresolvedProductLabel,
   yieldBasisText,
 } from './costAnalysisFormat';
+import {
+  costPieInsightChart,
+  costTrendInsightChart,
+  previousRange,
+  productInsightChart,
+  yieldTrendInsightChart,
+} from './costInsightCharts';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
+import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
+import ChartSortControl from '@/components/common/ChartSortControl.vue';
+import { sortChartRows, tableSortBy, TABLE_SORT_ORDERS, type ChartSortMode } from '@/utils/chartSort';
+import type { ProductCostItem } from '@/api/smartbi/factoryGold';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
@@ -93,6 +105,12 @@ const costData   = ref<CostStructureData | null>(null);
 const yieldData  = ref<YieldTrendData   | null>(null);
 const productData = ref<ProductCostCompareData | null>(null);
 const productTypes = ref<Record<string, { name: string; unit?: string | null }>>({});
+/** 上期（紧挨着的前一段等长区间）同口径数据，只给一图一分析算环比；取不到为 null，不写环比。 */
+const prevCostData = ref<CostStructureData | null>(null);
+const prevYieldData = ref<YieldTrendData | null>(null);
+const prevProductData = ref<ProductCostCompareData | null>(null);
+/** 产品对比条形图的排列方式（问题 50）：只改排列，不改是哪 10 个产品。 */
+const productSortMode = ref<ChartSortMode>('valueDesc');
 
 function unwrapProductTypes(value: unknown): Array<Record<string, unknown>> {
   const outer = (value as { data?: unknown } | null)?.data ?? value;
@@ -289,11 +307,9 @@ function renderProductBar() {
     productBarChart = echarts.init(productBarRef.value, 'cretas');
   }
   const canShow = canViewPrice.value;
-  // 有价格权限时比「单位成本」（谁贵），不比总成本（总成本主要反映产量大小）。
-  const prods = (canShow ? productsByUnitCost(productData.value!.products) : productData.value!.products)
-    .slice(0, 10);
+  const prods = productBarRows.value;
   const narrow = isNarrow.value;
-  const labels = productChartLabels(prods, id => productLabel(id, prods.find(p => p.productTypeId === id)?.productName));
+  const labels = productBarLabels.value;
   // 横向条形图：产品全名直接可读，不再被 x 轴截断成「演示·酱卤牛肉…」。
   productBarChart.setOption({
     tooltip: {
@@ -337,6 +353,54 @@ function renderProductBar() {
   });
 }
 
+/** 用当前标签规则给一组产品起图上名字（同一产品多单位时带单位）。 */
+function labelsFor(list: ProductCostItem[]): string[] {
+  return productChartLabels(list, id => productLabel(id, list.find(p => p.productTypeId === id)?.productName));
+}
+
+/**
+ * 条形图上的 10 个产品：有价格权限时按单位成本取 Top10（谁贵），不比总成本（总成本主要反映产量大小）；
+ * 再按「排列方式」重排。数值排序在同单位组内进行——盒和 kg 的单价不比大小。
+ */
+const productBarRows = computed<ProductCostItem[]>(() => {
+  const all = productData.value?.products ?? [];
+  const canShow = canViewPrice.value;
+  const top = (canShow ? productsByUnitCost(all) : all).slice(0, 10);
+  const names = labelsFor(top);
+  const nameOf = new Map(top.map((p, i) => [p, names[i]]));
+  return sortChartRows(
+    top,
+    productSortMode.value,
+    p => (canShow ? p.costPerUnit : p.avgYieldRate),
+    p => nameOf.get(p) ?? p.productTypeId,
+    canShow ? p => p.unit ?? '' : undefined,
+  );
+});
+const productBarLabels = computed(() => labelsFor(productBarRows.value));
+
+// ── 一图一分析（问题 40）：四张图各一句现算结论 + 一句建议，复用 smart-bi 的 ChartInsight ──
+// 不走 Tier2（autoTier2=false）：后端模板话正是 11-17 评估扣分的来源；结论只来自当前数据。
+const insightPerms = computed<UserPermissions>(() => ({ canViewFinance: canViewPrice.value }));
+const costPieInsight = computed(() =>
+  canViewPrice.value ? costPieInsightChart(costData.value, prevCostData.value) : null);
+const costTrendInsight = computed(() =>
+  canViewPrice.value ? costTrendInsightChart(costData.value, prevCostData.value) : null);
+const yieldInsight = computed(() =>
+  hasYieldTrend.value ? yieldTrendInsightChart(yieldData.value, prevYieldData.value) : null);
+const productInsight = computed(() => {
+  if (!hasProducts.value) return null;
+  const prev = prevProductData.value?.products ?? null;
+  const prevLabels = prev ? labelsFor(prev) : [];
+  const prevLabelOf = new Map((prev ?? []).map((p, i) => [p, prevLabels[i]]));
+  return productInsightChart(
+    productBarRows.value,
+    productBarLabels.value,
+    canViewPrice.value,
+    prev,
+    p => prevLabelOf.get(p) ?? p.productTypeId,
+  );
+});
+
 function renderAll() {
   if (renderTimer) clearTimeout(renderTimer);
   renderTimer = setTimeout(() => {
@@ -360,12 +424,21 @@ async function loadData() {
   const { startDate, endDate } = getQueryDates();
 
   try {
-    const [costRes, yieldRes, productRes, typeRes] = await Promise.all([
+    const prev = previousRange(startDate, endDate);
+    // 上期只用于一图一分析的环比：失败就当没有上期（不写环比），不影响本期展示。
+    const prevQuery = { factoryId: fid, ...prev };
+    const [costRes, yieldRes, productRes, typeRes, prevCostRes, prevYieldRes, prevProductRes] = await Promise.all([
       getFactoryCostStructure({ factoryId: fid, startDate, endDate }),
       getFactoryYieldTrend({ factoryId: fid, startDate, endDate }),
       getFactoryProductCostCompare({ factoryId: fid, startDate, endDate }),
       request.get<unknown>(`/${fid}/product-types/active`).catch((): null => null),
+      getFactoryCostStructure(prevQuery).catch((): null => null),
+      getFactoryYieldTrend(prevQuery).catch((): null => null),
+      getFactoryProductCostCompare(prevQuery).catch((): null => null),
     ]);
+    prevCostData.value = prevCostRes?.success && prevCostRes.data?.rows?.length ? prevCostRes.data : null;
+    prevYieldData.value = prevYieldRes?.success && prevYieldRes.data?.trend?.length ? prevYieldRes.data : null;
+    prevProductData.value = prevProductRes?.success && prevProductRes.data?.products?.length ? prevProductRes.data : null;
 
     productTypes.value = Object.fromEntries(unwrapProductTypes(typeRes).map(row => {
       const id = String(row.id || row.productTypeId || '');
@@ -456,13 +529,8 @@ const summaryKpis = computed<Kpi[]>(() => {
   return kpis;
 });
 
-// 成本结构图不挂自动洞察：规则模板话（「头部集中，材料成本 占比超过一半」）对 93.9% 说「超过一半」，
-// 像没看数，演示里扣分（11-17 评估第 9 条）。
-
-// 趋势类图（成本趋势 / 出成率趋势）不挂自动洞察：首尾比较得出的「整体下降 99.7%」会把
-// 正常的开工日波动说成异常，客户演示场景下误导大于帮助。
-
-// 产品对比图不挂自动洞察：「是末位产品的 7646 倍」这类首尾倍数对客户没有业务意义，还会放大 QA 测试产品的噪声。
+// 一图一分析的句子在 chartInsight 里按当前数据现算（11-17 评估第 9 条：模板话「占比超过一半」、
+// 首尾比较「整体下降 99.7%」、「末位的 7646 倍」都已换掉：占比写实数、趋势比前后半段、排名比平均）。
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
@@ -484,6 +552,8 @@ function handleResize() {
     resizeRaf = 0;
   });
 }
+
+watch(productSortMode, () => renderProductBar());
 
 onMounted(() => {
   loadData();
@@ -589,6 +659,14 @@ onBeforeUnmount(() => {
               :image-size="60"
               class="fca-chart-empty"
             />
+            <ChartInsightProvider
+              :chart="costPieInsight"
+              :perms="insightPerms"
+              :factory-id="factoryId"
+              :auto-tier2="false"
+              depth="detailed"
+              class="fca-insight"
+            />
           </div>
 
           <!-- 每日成本趋势堆叠柱 -->
@@ -600,6 +678,14 @@ onBeforeUnmount(() => {
               description="暂无成本数据"
               :image-size="60"
               class="fca-chart-empty"
+            />
+            <ChartInsightProvider
+              :chart="costTrendInsight"
+              :perms="insightPerms"
+              :factory-id="factoryId"
+              :auto-tier2="false"
+              depth="detailed"
+              class="fca-insight"
             />
           </div>
         </div>
@@ -629,6 +715,14 @@ onBeforeUnmount(() => {
               <span>该时间范围暂无出成率数据<br/>（需有 ≥ 2 天的报工记录且记录了实际产出量）</span>
             </template>
           </el-empty>
+          <ChartInsightProvider
+            :chart="yieldInsight"
+            :perms="insightPerms"
+            :factory-id="factoryId"
+            :auto-tier2="false"
+            depth="detailed"
+            class="fca-insight"
+          />
         </div>
       </div>
 
@@ -638,9 +732,12 @@ onBeforeUnmount(() => {
           {{ canViewPrice ? '产品成本对比' : '产品出成率对比' }}
         </div>
         <div class="fca-chart-card fca-chart-full">
-          <div class="fca-chart-title">
-            {{ canViewPrice ? '各产品单位成本 (Top 10)' : '各产品出成率 (Top 10)' }}
-            <span v-if="canViewPrice" class="fca-chart-note">同单位的产品排在一起，盒和袋的单价不直接比大小</span>
+          <div class="fca-chart-title fca-chart-title--with-tools">
+            <span>
+              {{ canViewPrice ? '各产品单位成本 (Top 10)' : '各产品出成率 (Top 10)' }}
+              <span v-if="canViewPrice" class="fca-chart-note">同单位的产品排在一起，盒和袋的单价不直接比大小</span>
+            </span>
+            <ChartSortControl v-if="hasProducts" v-model="productSortMode" />
           </div>
           <div v-show="hasProducts" ref="productBarRef" class="fca-chart-body fca-chart-body--bar" />
           <el-empty
@@ -648,6 +745,14 @@ onBeforeUnmount(() => {
             description="暂无产品成本对比数据"
             :image-size="80"
             class="fca-chart-empty"
+          />
+          <ChartInsightProvider
+            :chart="productInsight"
+            :perms="insightPerms"
+            :factory-id="factoryId"
+            :auto-tier2="false"
+            depth="detailed"
+            class="fca-insight"
           />
         </div>
       </div>
@@ -686,54 +791,54 @@ onBeforeUnmount(() => {
           </div>
         </div>
         <el-table v-else :data="productData!.products" stripe border size="small" empty-text="暂无数据">
-          <el-table-column label="产品" min-width="180">
+          <el-table-column label="产品" min-width="192" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => productLabel(r.productTypeId, r.productName))">
             <template #default="{ row }">
               <span :title="row.productTypeId">{{ productLabel(row.productTypeId, row.productName) }}</span>
             </template>
           </el-table-column>
-          <el-table-column prop="batchCount" label="批次数" width="80" align="right" />
-          <el-table-column label="单位" width="90" align="center">
+          <el-table-column prop="batchCount" label="批次数" width="92" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.batchCount)" />
+          <el-table-column label="单位" width="102" align="center" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.unit)">
             <template #default="{ row }">{{ productUnit(row) }}</template>
           </el-table-column>
-          <el-table-column label="实际产出" width="110" align="right">
+          <el-table-column label="实际产出" width="122" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalActualQty)">
             <template #default="{ row }">
               {{ fmtQty(row.totalActualQty) }}
             </template>
           </el-table-column>
-          <el-table-column label="出成率" width="90" align="center">
+          <el-table-column label="出成率" width="102" align="center" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.avgYieldRate)">
             <template #default="{ row }">
               {{ fmtPercent(row.avgYieldRate) }}
             </template>
           </el-table-column>
           <!-- 成本列仅 canViewPrice 可见 -->
           <template v-if="canViewPrice">
-            <el-table-column label="材料成本(¥)" width="110" align="right">
+            <el-table-column label="材料成本(¥)" width="122" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalMaterialCost)">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalMaterialCost) }}
               </template>
             </el-table-column>
-            <el-table-column label="人工成本(¥)" width="110" align="right">
+            <el-table-column label="人工成本(¥)" width="122" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalLaborCost)">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalLaborCost) }}
               </template>
             </el-table-column>
             <!-- 设备、其他两列：材料 + 人工 + 设备 + 其他 = 总成本，各列能加出来 -->
-            <el-table-column label="设备成本(¥)" width="110" align="right">
+            <el-table-column label="设备成本(¥)" width="122" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalEquipmentCost)">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalEquipmentCost) }}
               </template>
             </el-table-column>
-            <el-table-column label="其他成本(¥)" width="110" align="right">
+            <el-table-column label="其他成本(¥)" width="122" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalOtherCost)">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalOtherCost) }}
               </template>
             </el-table-column>
-            <el-table-column label="总成本(¥)" width="100" align="right">
+            <el-table-column label="总成本(¥)" width="112" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.totalCost)">
               <template #default="{ row }">
                 {{ fmtMoney(row.totalCost) }}
               </template>
             </el-table-column>
-            <el-table-column label="单位成本" width="150" align="right">
+            <el-table-column label="单位成本" width="162" align="right" sortable :sort-orders="TABLE_SORT_ORDERS" :sort-method="tableSortBy((r: ProductCostItem) => r.costPerUnit)">
               <template #default="{ row }">
                 <template v-if="row.costPerUnit != null">
                   ¥{{ fmtMoney(row.costPerUnit, 2) }}/{{ productUnit(row) }}
@@ -752,6 +857,18 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.fca-insight {
+  margin-top: 8px;
+}
+
+.fca-chart-title--with-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .fca-root {
   padding: 20px;
   min-height: calc(100vh - 64px);
