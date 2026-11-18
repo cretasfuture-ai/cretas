@@ -74,7 +74,10 @@ export function inferAiChartMeta(input: AiChartMetaInput): NonNullable<ChartMeta
   const legacyText = `${allText} ${input.content ?? ''}`;
   const isReview = REVIEW_WORDS.test(legacyText);
   const unit = detectUnit(metricText);
-  const isPct = RATE_WORDS.test(metricText) && !unit && looksLikePercentValues(input.values);
+  // 饼图扇区值是绝对值, 占比由分析自己除合计, 永不判成 pct (LSM-COSTBI-F3 #1901: 金额 62031.8 曾被写成 62031.8%)。
+  // values 未提供 (旧调用方只给系列名) 时不做数值范围核对; 提供了 (含空数组) 就必须都在 0–100。
+  const isPct = chartType !== 'pie' && RATE_WORDS.test(metricText) && !unit
+    && (input.values === undefined || looksLikePercentValues(input.values));
   const isMoney = !isPct && !unit && (MONEY_WORDS.test(metricText) || (!hasClue && REST_REVENUE_WORDS.test(text)));
 
   const xDim: ChartMeta['xDim'] = chartType === 'line'

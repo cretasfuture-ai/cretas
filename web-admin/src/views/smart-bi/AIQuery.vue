@@ -1858,9 +1858,14 @@ async function handleSendMessage() {
       if (idx !== -1) {
         const msg = chatHistory.value[idx];
         // If still loading (no chunks arrived), content is just status text — prefer result.answer
-        const finalContent = msg.loading
-          ? (result.answer || '分析完成')
-          : (msg.content || result.answer || '分析完成');
+        // 后端发现 LLM 文字和图数据对不上时, done.answer 是由图数据写的结论 (answer_corrected),
+        // 必须覆盖已流出的 LLM 文字, 否则文字说 65% 图上是 43.99%。
+        const answerCorrected = (result as { answer_corrected?: boolean }).answer_corrected === true;
+        const finalContent = answerCorrected && result.answer
+          ? result.answer
+          : msg.loading
+            ? (result.answer || '分析完成')
+            : (msg.content || result.answer || '分析完成');
 
         // Build chart data for compat
         let chartData: ChatMessage['chart'] | undefined;
