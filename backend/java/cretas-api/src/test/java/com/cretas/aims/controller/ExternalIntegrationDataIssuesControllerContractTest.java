@@ -31,7 +31,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /** 数据需修正清单从真实 controller 入口走到真实 service + 检测器 (仓库层 mock): 授权 / 租户 / 读不到 / 三态。 */
-class ExternalIntegrationDataIssuesControllerTest {
+class ExternalIntegrationDataIssuesControllerContractTest {
 
     static final String URL = "/api/mobile/{f}/external-integrations/blacklake/data-issues";
 

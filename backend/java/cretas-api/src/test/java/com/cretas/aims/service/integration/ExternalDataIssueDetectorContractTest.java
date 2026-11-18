@@ -12,7 +12,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** 黑湖报工数据需修正检测。样本形态取自 2026-11-18 23:09 快照 (11-05~11-18, 531 行) 实测的几条。 */
-class ExternalDataIssueDetectorTest {
+class ExternalDataIssueDetectorContractTest {
 
     static Row row(String date, String product, String process, String qty, String unit) {
         return new Row(LocalDate.parse(date), product, process, qty == null ? null : new BigDecimal(qty), unit);
