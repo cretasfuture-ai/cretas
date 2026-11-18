@@ -62,6 +62,9 @@ class FactoryEtlStats:
     """Per-stage row counts for observability."""
     silver_upserted: int = 0
     silver_report_upserted: int = 0
+    # 源头已软删批次对应的 Silver / Gold 行被清掉的数量（见 prune_soft_deleted_fact_batches）
+    silver_pruned: int = 0
+    gold_pruned: int = 0
     gold_product_rows: int = 0
     gold_daily_rollup_rows: int = 0
     errors: List[str] = field(default_factory=list)
@@ -274,6 +277,116 @@ async def sync_fact_production_batch(
     count = len(result)
     logger.info("[factory-etl] Silver: upserted %d rows for factory=%s", count, factory_id)
     return count
+
+
+# ── Stage 1a: Silver/Gold 清理 — 源头已软删批次 ───────────────────────────────
+
+async def prune_soft_deleted_fact_batches(
+    cretas_pool: asyncpg.Pool,
+    smartbi_pool: asyncpg.Pool,
+    factory_id: str,
+) -> Dict[str, int]:
+    """删掉「源头批次已软删」对应的 fact_production_batch 行，及因此失去全部事实行的 agg 行。
+
+    背景 (2026-11-18 q49): 上面的 upsert 只增不删。源头 production_batches 被软删
+    (deleted_at 非空) 后，fact / agg 里的旧行一直留着：成本页把它们算进去，产品又已软删
+    取不到名字，显示成「未命名产品」。
+
+    范围刻意收窄（宁可少删，不误删）：
+    - 只删 fact 里 source_pk 对应源头 **deleted_at IS NOT NULL** 的行。活批次、
+      状态变了但没删的批次、源头已不存在的行都不动。
+    - 全程带 factory_id：fact 读写按 factory_id + RLS 租户；源头查询按 factory_id，
+      别的工厂的批次即使 id 相同也不会被命中。
+    - agg 只删「本次被清掉的 fact 行所在的 (日期, 产品)」且已没有任何 fact 行的那些行
+      (产品行) 以及这些日期上已没有任何 fact 行的全产品日汇总行；
+      其余 agg 行（含 seed 脚本直接写入的演示数据）不碰。仍有活 fact 行的 (日期, 产品)
+      交给随后的 materialize_factory_gold 重算。
+    """
+    stats = {"fact": 0, "agg": 0}
+
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            fact_rows = await dst.fetch(
+                "SELECT source_pk FROM fact_production_batch WHERE factory_id = $1::varchar",
+                factory_id,
+            )
+    source_pks = [r["source_pk"] for r in fact_rows]
+    if not source_pks:
+        return stats
+
+    async with cretas_pool.acquire() as src:
+        gone_rows = await src.fetch(
+            """
+            SELECT id::text AS id
+            FROM production_batches
+            WHERE factory_id = $1::varchar
+              AND deleted_at IS NOT NULL
+              AND id::text = ANY($2::text[])
+            """,
+            factory_id, source_pks,
+        )
+    gone_pks = [r["id"] for r in gone_rows]
+    if not gone_pks:
+        return stats
+
+    async with smartbi_pool.acquire() as dst:
+        async with dst.transaction():
+            await _set_tenant(dst, factory_id)
+            deleted = await dst.fetch(
+                """
+                DELETE FROM fact_production_batch
+                WHERE factory_id = $1::varchar
+                  AND source_pk = ANY($2::text[])
+                RETURNING stat_date, product_type_id
+                """,
+                factory_id, gone_pks,
+            )
+            stats["fact"] = len(deleted)
+
+            dated = [(r["stat_date"], r["product_type_id"]) for r in deleted if r["stat_date"] is not None]
+            pair_dates = [d for d, p in dated if p is not None]
+            pair_products = [p for d, p in dated if p is not None]
+            all_dates = sorted({d for d, _ in dated})
+
+            if pair_dates:
+                r1 = await dst.execute(
+                    """
+                    DELETE FROM agg_factory_batch_daily a
+                    WHERE a.factory_id = $1::varchar
+                      AND a.product_type_id IS NOT NULL
+                      AND (a.stat_date, a.product_type_id) IN (
+                            SELECT * FROM UNNEST($2::date[], $3::text[]))
+                      AND NOT EXISTS (
+                            SELECT 1 FROM fact_production_batch f
+                            WHERE f.factory_id = a.factory_id
+                              AND f.stat_date = a.stat_date
+                              AND f.product_type_id = a.product_type_id)
+                    """,
+                    factory_id, pair_dates, pair_products,
+                )
+                stats["agg"] += int(r1.split()[-1]) if r1 else 0
+            if all_dates:
+                r2 = await dst.execute(
+                    """
+                    DELETE FROM agg_factory_batch_daily a
+                    WHERE a.factory_id = $1::varchar
+                      AND a.product_type_id IS NULL
+                      AND a.stat_date = ANY($2::date[])
+                      AND NOT EXISTS (
+                            SELECT 1 FROM fact_production_batch f
+                            WHERE f.factory_id = a.factory_id
+                              AND f.stat_date = a.stat_date)
+                    """,
+                    factory_id, all_dates,
+                )
+                stats["agg"] += int(r2.split()[-1]) if r2 else 0
+
+    logger.info(
+        "[factory-etl] prune: removed fact=%d agg=%d for factory=%s (source batches soft-deleted)",
+        stats["fact"], stats["agg"], factory_id,
+    )
+    return stats
 
 
 # ── Stage 1b: Silver — sync_fact_production_report ───────────────────────────
@@ -589,6 +702,15 @@ async def run_factory_etl(
         logger.exception("[factory-etl] Silver sync failed for %s", factory_id)
         # If batch Silver fails, skip Gold (nothing new to materialize)
         return stats
+
+    # Stage 1a: 清掉源头已软删批次留下的 fact / agg 行（失败不挡后面的 Gold 重算，但要记下来）
+    try:
+        pruned = await prune_soft_deleted_fact_batches(cretas_pool, smartbi_pool, factory_id)
+        stats.silver_pruned = pruned["fact"]
+        stats.gold_pruned = pruned["agg"]
+    except Exception as exc:
+        stats.errors.append(f"prune: {exc}")
+        logger.exception("[factory-etl] prune of soft-deleted batches failed for %s", factory_id)
 
     # Stage 1b: sync process-level reports (independent — failure doesn't block Gold)
     try:
