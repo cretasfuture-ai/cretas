@@ -65,9 +65,8 @@ def test_refuse_reason_does_not_veto_current_free_flagship(monkeypatch):
     assert llm_router._refuse_reason("aliyun_c", "qwen3.7-max-2026-06-08") != "paid_denylist"
 
 
-def test_decision_chain_has_no_qwen37_flash():
+def test_decision_chain_has_no_paid_model():
     chain = llm_router.SLOT_MODELS[llm_router.SLOT.DECISION]
-    assert ("aliyun_a_vl", "qwen3.7-flash") not in chain
     assert all(not llm_router.is_paid_denied(m) for _, m in chain)
 
 

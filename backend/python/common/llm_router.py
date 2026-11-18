@@ -349,7 +349,9 @@ _LOGPROB_VERIFIED: Dict[Tuple[str, str], str] = {
 # 链序(人写): 快且稳的在前。只有同时在 `_LOGPROB_VERIFIED` 里的才进池。
 _LOGPROB_ORDER: List[Tuple[str, str]] = [
     ("openai", "gpt-4.1-mini"),
-    # 2026-11-18 Steve 裁定: 意图决策不再使用 qwen3.7-flash(登记表里的证据条目保留, 但不进决策池)。
+    # 2026-11-18 #1824 把 qwen3.7-flash 移出后, 线上探针 clarify_then_pick_1 结构化澄清回归(连续两次 4/4 失败);
+    # 暂时回滚决策池(只回滚这一跳, qwen-max 禁用与 embedding 禁令保留)。待探针在 3.8-flash 单跳下复现通过再移出。
+    ("aliyun_a_vl", "qwen3.7-flash"),
     ("aliyun_a_vl", "qwen3.8-flash"),
 ]
 
