@@ -157,7 +157,7 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
                     .orElse(null);
         } else {
             return buildSimpleResult(
-                    "⚠️ 请提供 productTypeId 或 bomRecipeId (二选一)",
+                    "⚠️ 请告诉我是哪个产品或配方",
                     Map.of("status", "MISSING_PARAM", "actionHint", "/bom/recipes"));
         }
 
@@ -167,8 +167,7 @@ public class AdditiveBomComplianceCheckTool extends AbstractBusinessTool {
                     ? String.format("/bom/recipes?productTypeId=%s", productTypeId)
                     : "/bom/recipes";
             return buildSimpleResult(
-                    String.format("❓ 未找到激活 BOM (productTypeId=%s, bomRecipeId=%s). 请先在 BOM 模块配置激活配方",
-                            productTypeId, bomRecipeId),
+                    "❓ 没有找到这个产品当前生效的配方，请先在 BOM 模块配置并激活配方",
                     Map.of("status", "BOM_NOT_FOUND", "actionHint", hint));
         }
 
