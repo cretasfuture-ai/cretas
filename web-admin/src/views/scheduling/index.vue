@@ -207,7 +207,7 @@ function getProbabilityColor(prob: number) {
             {{ dashboard.lineStats.unattributedBatches }} 个批次未指定产线，未计入利用率
           </span>
           <span v-if="dashboard?.carryOverIdleBatches" :title="reasonOf('carryOverIdleBatches')">
-            跨日在产 {{ dashboard.carryOverIdleBatches }} 个（今日无报工）
+            跨日在产 {{ dashboard.carryOverIdleBatches }} 个（今日无活动）
           </span>
         </div>
       </el-card>

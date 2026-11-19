@@ -1,4 +1,4 @@
-import type { LineSchedule } from '@/api/scheduling';
+import type { LineSchedule, SchedulingDashboard } from '@/api/scheduling';
 
 /**
  * 调度实时监控的显示规则: 后端量不到的值是 null (工作流批次没有完成率 / 完成概率 / 派工人数),
@@ -38,7 +38,23 @@ export function formatWorkerCount(count: number | null | undefined): string {
   return count === null || count === undefined ? '-' : String(count);
 }
 
-/** 0~1 的比率: null → '暂无数据'。 */
+/** 0~1 的比率: null → '-'。 */
 export function formatRate(rate: number | null | undefined): string {
-  return rate === null || rate === undefined ? '暂无数据' : `${(rate * 100).toFixed(0)}%`;
+  return rate === null || rate === undefined ? '-' : `${(rate * 100).toFixed(0)}%`;
+}
+
+export function lineUtilizationDisplay(
+  dashboard: Pick<SchedulingDashboard, 'lineStats' | 'unavailableReasons'> | null,
+) {
+  const reasons = dashboard?.unavailableReasons;
+  const count = dashboard?.lineStats?.unattributedBatches ?? 0;
+  const hint = count > 0 ? `${count} 个批次未指定产线，未计入利用率` : null;
+  const rateReason = reasons?.['lineStats.utilizationRate'] || '今日有任务的启用产线 ÷ 启用产线';
+  const attributionReason = hint && (reasons?.['lineStats.unattributedBatches'] || hint);
+
+  return {
+    value: formatRate(dashboard?.lineStats?.utilizationRate),
+    hint,
+    title: attributionReason ? `${rateReason}\n${attributionReason}` : rateReason,
+  };
 }

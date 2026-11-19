@@ -20,7 +20,7 @@ import echarts from '@/utils/echarts';
 // chart-insight: BAR (progress → RANKING) + PIE (probability → PROPORTION)
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
-import { formatRate, formatWorkerCount, probabilityChartPoints, progressChartPoints } from './dashboardDisplay';
+import { formatWorkerCount, lineUtilizationDisplay, probabilityChartPoints, progressChartPoints } from './dashboardDisplay';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore();
@@ -28,6 +28,7 @@ const factoryId = computed(() => authStore.factoryId);
 
 const loading = ref(false);
 const dashboard = ref<SchedulingDashboard | null>(null);
+const lineUtilization = computed(() => lineUtilizationDisplay(dashboard.value));
 const todayPlans = ref<SchedulingPlan[]>([]);
 const selectedPlanId = ref<string | null>(null);
 const refreshInterval = ref<number | null>(null);
@@ -390,13 +391,11 @@ function getProbabilityColor(prob: number) {
         <div class="stat-content">
           <el-icon class="stat-icon" style="color: var(--el-color-warning)"><TrendCharts /></el-icon>
           <div class="stat-info">
-            <div
-              class="stat-value"
-              :title="dashboard.unavailableReasons?.['lineStats.utilizationRate'] || '今日有任务的启用产线 ÷ 启用产线'"
-            >
-              {{ formatRate(dashboard.lineStats?.utilizationRate) }}
+            <div class="stat-value" :title="lineUtilization.title">
+              {{ lineUtilization.value }}
             </div>
             <div class="stat-label">产线利用率</div>
+            <div v-if="lineUtilization.hint" class="stat-hint">{{ lineUtilization.hint }}</div>
           </div>
         </div>
       </el-card>
@@ -547,7 +546,7 @@ function getProbabilityColor(prob: number) {
 }
 
 .stat-card {
-  background: #16213e;
+  background: var(--el-bg-color-overlay);
   border: none;
 
   &.warning {
@@ -572,12 +571,18 @@ function getProbabilityColor(prob: number) {
     .stat-value {
       font-size: 32px;
       font-weight: 700;
-      color: #fff;
+      color: var(--el-text-color-primary);
     }
 
     .stat-label {
       font-size: 12px;
       color: #909399;
+    }
+
+    .stat-hint {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--el-color-warning);
     }
   }
 }

@@ -770,7 +770,7 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
                 .count();
             if (carryOverIdle > 0) {
                 unavailable.put("carryOverIdleBatches", "跨日在产 " + carryOverIdle
-                    + " 个 (今日无报工), 不计入今日排程与利用率");
+                    + " 个 (今日无活动), 不计入今日排程与利用率");
             }
         } else {
             unavailable.put("carryOverIdleBatches", "只在查看今天时统计; 过去某天当时有哪些批次在产量不到");
