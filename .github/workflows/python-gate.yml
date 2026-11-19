@@ -260,6 +260,13 @@ jobs:
             -k "not e2e and not integration" \
             --tb=short
 
+      - name: Factory ETL prune real PostgreSQL semantics (q49 + hard-delete)
+        # 真 PG 才能证明「活批次不删 / 他厂不动 / agg 只删失去全部事实行的键 / 汇总行 batch_count==fact 行数」。
+        # 这组测试带 integration 标记，上面的主 pytest 步骤 `-k "not integration"` 不跑它；
+        # 入口脚本断言恰好执行 14 条、0 失败、0 跳过（日志里 grep PRUNE_PG_GATE 与 test_factory_etl_prune_pg）。
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" python smartbi/tests/ci_prune_pg_gate.py
+
       - name: Factory AgentOps real PostgreSQL migration and trace contracts
         run: |
           bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" python -c '

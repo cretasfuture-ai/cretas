@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /** Personal OA "抄送我的": notify-node instances addressed to the current user or role. */
 import { ref, onMounted, computed } from 'vue';
 import { enumLabel } from '@/utils/enumDisplay';
@@ -114,7 +115,8 @@ onMounted(load);
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="instances" stripe empty-text="暂无抄送给您的审批">
+      <el-table v-loading="loading" :data="instances" stripe>
+        <template #empty><ListEmptyExplain empty-title="没有抄送给您的审批" empty-hint="别人发起审批时把您设为抄送人，单据会出现在这里。" /></template>
         <el-table-column label="业务摘要" min-width="280">
           <template #default="{ row }"><span class="biz-summary">{{ row.businessSummary }}</span></template>
         </el-table-column>

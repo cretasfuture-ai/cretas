@@ -285,6 +285,12 @@ class ProductCreateReceiptPostgresContractTest {
                 DescriptorProvenance.EXPLICIT);
         when(runtimeRegistry.resolve(any(), any())).thenReturn(
                 java.util.Optional.of(new ResolvedTool(descriptor, toolExecutor)));
+        // 替身必须带上真实 product_create 的声明: 只新建记录 (网关执行前核对按它豁免空快照)。
+        // 取值直接读真实工具类, 声明变了这里跟着变, 不会两份漂移。
+        boolean realCreateOnly = new ProductCreateTool().previewCreatesNewRecordOnly();
+        org.assertj.core.api.Assertions.assertThat(realCreateOnly)
+                .as("product_create 声明为只新建记录").isTrue();
+        when(toolExecutor.previewCreatesNewRecordOnly()).thenReturn(realCreateOnly);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setAttribute("factoryId", "F006");
         request.setAttribute("userId", "42");

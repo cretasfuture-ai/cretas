@@ -52,15 +52,48 @@ _MAX_TEMPLATES_IN_PROMPT = 20
 # attribution ("为什么 + 怎么办").
 _INSIGHT_CHAR_HINT = 180
 
-_SYSTEM_ROLE = (
-    "你是资深的餐饮 / 工厂经营分析顾问, 但要像跟门店老板面对面口头汇报一样说人话。"
-    "基于下面每个分析模块已经算好的 KPI 和关键数据, 为每个模块写一句自然、有归因、"
-    "可落地的经营洞察 (说清「现状 → 为什么 → 怎么办」), 再写一段跨模块的总览。"
-    "必须用大白话、口语化, 普通门店店长一看就懂; 严禁咨询黑话和抽象术语 ("
+_JARGON_BAN = (
+    "严禁咨询黑话和抽象术语 ("
     "例如「外溢效应」「梯队收敛」「品质趋同」「赋能」「抓手」「协同」「沉淀」「闭环」"
     "等一律不许用), 也不要堆砌形容词。建议要具体到能直接照着做。"
     "不要编造数据里没有的数字, 只解读给定的数字。"
 )
+
+# 历史餐饮上传 (Domain.RESTAURANT) 才用门店口吻。
+_SYSTEM_ROLE_RESTAURANT = (
+    "你是资深的餐饮经营分析顾问, 但要像跟门店老板面对面口头汇报一样说人话。"
+    "基于下面每个分析模块已经算好的 KPI 和关键数据, 为每个模块写一句自然、有归因、"
+    "可落地的经营洞察 (说清「现状 → 为什么 → 怎么办」), 再写一段跨模块的总览。"
+    "必须用大白话、口语化, 普通门店店长一看就懂; " + _JARGON_BAN
+)
+
+# 工厂数据 (含新上传的 UNKNOWN 域): 禁用餐饮词 (LSM-COSTBI 第 9 项)。
+FACTORY_FORBIDDEN_WORDS = ("门店", "店长", "套餐", "会员", "客单价", "翻台", "堂食", "外卖", "菜品", "餐饮")
+_SYSTEM_ROLE_FACTORY = (
+    "你是资深的食品工厂经营分析顾问, 要像跟工厂老板、生产主管面对面口头汇报一样说人话。"
+    "基于下面每个分析模块已经算好的 KPI 和关键数据, 为每个模块写一句自然、有归因、"
+    "可落地的经营洞察 (说清「现状 → 为什么 → 怎么办」), 再写一段跨模块的总览。"
+    "建议围绕生产、排产、原料、质量、成本、订单来写; 这是工厂数据, 不是餐厅, "
+    "不许出现「" + "」「".join(FACTORY_FORBIDDEN_WORDS) + "」这类餐饮用语。"
+    "必须用大白话、口语化, 车间主任一看就懂; " + _JARGON_BAN
+)
+
+# 兼容旧引用: 默认是工厂口吻
+_SYSTEM_ROLE = _SYSTEM_ROLE_FACTORY
+
+
+def is_restaurant_domain(domain: Optional[str]) -> bool:
+    return str(domain or "").strip().lower() == "restaurant"
+
+
+def _has_restaurant_words(text: str, domain: Optional[str]) -> bool:
+    if is_restaurant_domain(domain):
+        return False
+    return any(w in (text or "") for w in FACTORY_FORBIDDEN_WORDS)
+
+
+def system_role_for(domain: Optional[str]) -> str:
+    return _SYSTEM_ROLE_RESTAURANT if is_restaurant_domain(domain) else _SYSTEM_ROLE_FACTORY
 
 
 def _summarize_result_for_prompt(result: TemplateResult) -> Dict[str, Any]:
@@ -115,7 +148,9 @@ def _build_prompt(
         f'  }}\n'
         f'}}\n'
         f"要求: insights 的 key 必须严格用上面给定的 code; 每条都要有具体归因和下一步动作; "
-        f"必须用大白话口语化、店长一看就懂, 严禁咨询黑话/抽象术语 (如「外溢效应」"
+        f"必须用大白话口语化、{'店长' if is_restaurant_domain(domain) else '车间主任'}一看就懂, "
+        f"{'' if is_restaurant_domain(domain) else '这是工厂数据, 禁用门店/套餐/会员等餐饮用语; '}"
+        f"严禁咨询黑话/抽象术语 (如「外溢效应」"
         f"「梯队收敛」「趋同」「赋能」「抓手」「协同」「沉淀」); "
         f"禁止编造数据中不存在的数字; 禁止泛泛而谈 (如「建议优化经营策略」)。"
     )
@@ -158,6 +193,7 @@ async def generate_llm_insights(
         for r in applicable[:_MAX_TEMPLATES_IN_PROMPT]
     ]
     prompt = _build_prompt(prompt_payload, domain)
+    system_role = system_role_for(domain)
 
     # 内容未变跳过 LLM (榨干持久缓存): prompt 与上次 byte-identical (模板 KPI 没变) → 复用
     # 上次 LLM 输出, 跳过调用 (0 token)。可证明正确: 同一 prompt → 同一解析结果。复用已持久的
@@ -172,7 +208,7 @@ async def generate_llm_insights(
             from smartbi.services.insights import llm_client as llm
             raw = await llm.call_llm(
                 prompt,
-                system_role=_SYSTEM_ROLE,
+                system_role=system_role,
                 enable_thinking=False,
                 max_tokens=_MAX_TOKENS,
             )
@@ -211,11 +247,18 @@ async def generate_llm_insights(
         # Only accept a non-empty string that actually differs in substance.
         # An empty / non-string value MUST NOT clobber the rule insight.
         if isinstance(rich, str) and rich.strip():
+            if _has_restaurant_words(rich, domain):
+                # 工厂数据里模型仍写了餐饮词 → 不用, 保留规则洞察
+                logger.warning(f"[llm-mat] drop {r.code} insight: restaurant wording on factory data")
+                continue
             r.llm_insight = rich.strip()
             applied += 1
 
     exec_summary = parsed.get("executive_summary")
     if not (isinstance(exec_summary, str) and exec_summary.strip()):
+        exec_summary = None
+    elif _has_restaurant_words(exec_summary, domain):
+        logger.warning("[llm-mat] drop executive summary: restaurant wording on factory data")
         exec_summary = None
     else:
         exec_summary = exec_summary.strip()
@@ -238,7 +281,7 @@ async def generate_llm_insights(
         try:
             await _persist_distillation_sample(
                 prompt=prompt,
-                system_prompt=_SYSTEM_ROLE,
+                system_prompt=system_role,
                 teacher_output=raw,
                 business_type=domain,
                 factory_id=factory_id,

@@ -90,6 +90,7 @@ public class CanvasEncodingRuleController {
         String encodingPattern = required(body, "encodingPattern");
 
         validateLengths(entityType, ruleName, body.get("ruleDescription"), encodingPattern);
+        com.cretas.aims.service.EncodingRuleService.rejectSystemNumbered(entityType);
 
         // 防呆 Rule 4 (幂等): 同 (factoryId, entityType) 唯一性 check
         if (repository.existsByFactoryIdAndEntityType(factoryId, entityType)) {

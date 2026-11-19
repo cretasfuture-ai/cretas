@@ -49,6 +49,12 @@ public class UpdateSourceIndividualRequest {
     @Schema(description = "出生日期")
     private LocalDate birthDate;
 
+    @Schema(description = "个体类型 LIVE(活体)/CARCASS(胴体)")
+    private String individualType;
+
+    @Schema(description = "入场日期")
+    private LocalDate entryDate;
+
     @Size(max = 128, message = "来源场长度不能超过128")
     @Schema(description = "来源养殖场/牧场")
     private String originFarm;

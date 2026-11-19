@@ -124,12 +124,51 @@ export interface ReportComparison {
   rows: ComparisonRow[];
 }
 
+export type DataIssueType = 'COMPOUND_UNIT' | 'MIXED_UNIT' | 'ZERO_QTY' | 'MISSING_QTY';
+
+export interface DataIssue {
+  reportDate: string;
+  productName: string;
+  processName: string;
+  qty: number | null;
+  unit: string | null;
+  type: DataIssueType;
+  typeLabel: string;
+  suggestion: string;
+  owner: string;
+}
+
+export interface DataIssueCount {
+  type: DataIssueType;
+  label: string;
+  count: number;
+}
+
+/** 外部报工数据需修正清单（与报工对照同一份快照、同一 14 天窗口）。 */
+export interface DataIssues {
+  system: ExternalSystemCode;
+  label: string;
+  available: boolean;
+  reason: string | null;
+  asOf: string | null;
+  stale: boolean;
+  from: string | null;
+  to: string | null;
+  total: number;
+  counts: DataIssueCount[];
+  issues: DataIssue[];
+}
+
 export function listFactoryIntegrations(factoryId: string) {
   return get<ExternalIntegrationView[]>(`/${encodeURIComponent(factoryId)}/external-integrations`);
 }
 
 export function getReportComparison(factoryId: string, system: ExternalSystemCode) {
   return get<ReportComparison>(`/${encodeURIComponent(factoryId)}/external-integrations/${system}/report-comparison`);
+}
+
+export function getDataIssues(factoryId: string, system: ExternalSystemCode) {
+  return get<DataIssues>(`/${encodeURIComponent(factoryId)}/external-integrations/${system}/data-issues`);
 }
 
 // ------------------------------------------------------------------ 平台

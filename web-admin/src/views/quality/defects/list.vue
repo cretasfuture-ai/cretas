@@ -18,6 +18,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
 import iconDefects from '@/assets/quality/icon-defects.webp';
+import { inspectionNumberLabel, hasInspectionNumber } from '../inspectionNumber';
 import {
   listDefects,
   recordDefect,
@@ -92,7 +93,8 @@ const R = { class: { th: 'text-right', td: 'text-right' } };
 const columns: TableColumn<QualityDefect>[] = [
   { id: 'defectType', header: '缺陷类型' },
   { accessorKey: 'quantity', header: '数量', meta: R },
-  { accessorKey: 'qualityInspectionId', header: '关联质检 ID' },
+  // 显示质检业务编号, ⛔ 不显示内部 UUID (qualityInspectionId 只用于跳转/过滤)
+  { id: 'qualityInspection', header: '关联质检编号' },
   { accessorKey: 'cause', header: '原因' },
   { id: 'handlingAction', header: '处置动作' },
   { id: 'status', header: '状态' },
@@ -145,7 +147,9 @@ function handleFilterChange() {
 }
 
 function inspectionLabel(source: QualityInspectionSource): string {
-  const sourceName = source.batchNumber || source.productName || `质检 ${source.id.slice(0, 8)}`;
+  // 没批次号/品名时用业务编号认这条质检; 连编号都没有就写「质检记录」, ⛔ 不截内部 UUID
+  const sourceName = source.batchNumber || source.productName
+    || (hasInspectionNumber(source) ? `质检 ${inspectionNumberLabel(source)}` : '质检记录');
   const date = source.inspectionDate ? ` · ${source.inspectionDate}` : '';
   const result = source.result ? ` · ${source.result}` : '';
   return `${sourceName}${date}${result}`;
@@ -382,6 +386,7 @@ onMounted(load);
         <template #defectType-cell="{ row }">
           <UBadge color="primary" variant="soft">{{ DEFECT_TYPE_LABELS[String(row.original.defectType) as DefectType] || row.original.defectType }}</UBadge>
         </template>
+        <template #qualityInspection-cell="{ row }"><span class="qi-number">{{ inspectionNumberLabel({ inspectionNumber: row.original.qualityInspectionNumber }) }}</span></template>
         <template #handlingAction-cell="{ row }">{{ row.original.handlingAction || '-' }}</template>
         <template #status-cell="{ row }">
           <UBadge :color="badgeColor(statusTagType(row.original.status))" variant="soft">{{ DEFECT_STATUS_LABELS[String(row.original.status) as DefectStatus] || row.original.status }}</UBadge>
@@ -521,6 +526,7 @@ onMounted(load);
 </template>
 
 <style scoped>
+.qi-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .defect-list { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
 .head-icon { flex: none; object-fit: contain; }

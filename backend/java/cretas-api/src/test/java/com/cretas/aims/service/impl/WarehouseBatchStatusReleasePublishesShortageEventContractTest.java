@@ -35,7 +35,7 @@ class WarehouseBatchStatusReleasePublishesShortageEventContractTest {
     private final MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
     private final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
     private final MaterialBatchServiceImpl service = new MaterialBatchServiceImpl(
-            batches, null, null, mock(MaterialBatchMapper.class), null, null, null, null);
+            batches, null, null, mock(MaterialBatchMapper.class), org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
 
     private MaterialBatch batch(MaterialBatchStatus status) {
         MaterialBatch b = new MaterialBatch();

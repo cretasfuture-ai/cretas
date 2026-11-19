@@ -128,12 +128,13 @@ def test_same_sentence_asks_in_conservative_factory_and_executes_in_aggressive(_
 
 
 def test_ask_threshold_follows_the_factory_tier(_isolate):
-    """门槛也按档: 判断题 0.5 夹在激进门槛 (0.4) 与保守门槛 (0.6) 之间 ⇒ 激进档先问、保守档直接办。"""
+    """门槛也按档: 判断题 0.35 夹在保守门槛 (0.3, 2026-11-19 按史浩禾 300 题重校) 与激进门槛 (0.4) 之间
+    ⇒ 保守档先问、激进档直接办 (保守 = 多问, 门槛低)。"""
     cfg = AIConfig()
-    assert cfg.luna_ask_threshold_aggressive <= 0.5 < cfg.luna_ask_threshold  # 前提: 0.5 确实夹在两档之间
-    _isolate["p"] = 0.5
-    assert _asked(_post(ask_policy_value="AGGRESSIVE"))
-    assert not _asked(_post(ask_policy_value="CONSERVATIVE"))
+    assert cfg.luna_ask_threshold <= 0.35 < cfg.luna_ask_threshold_aggressive  # 前提: 0.35 确实夹在两档之间
+    _isolate["p"] = 0.35
+    assert _asked(_post(ask_policy_value="CONSERVATIVE"))
+    assert not _asked(_post(ask_policy_value="AGGRESSIVE"))
 
 
 def test_predicate_rules_follow_the_factory_tier(_isolate):

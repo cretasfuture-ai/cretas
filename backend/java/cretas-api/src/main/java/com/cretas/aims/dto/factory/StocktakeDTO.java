@@ -20,6 +20,8 @@ public class StocktakeDTO {
     private String factoryId;
     private String stocktakeNo;
     private String warehouseId;
+    /** 仓库名; 查不到仓库时为 null, 不拿 ID 冒充。 */
+    private String warehouseName;
     private String inventoryScope;
     private String periodMonth;
     private LocalDateTime inventoryCutoffAt;

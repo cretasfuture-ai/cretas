@@ -54,6 +54,35 @@ public final class DigitalCrewCatalog {
                             new Capability("查经营分析", "query", "analytics")),
                     List.of("/workdesk/finance-manager")));
 
+    /** 页面上的推荐问题: 点它等于直接问「这个意图」。 */
+    public record QuickQuestion(String text, String intentCode) {
+    }
+
+    /**
+     * 各位数字员工页面自带的推荐问题 → 固定读意图。演示者会直接点这些话, 不能让识别层把
+     * 「最近的采购订单」猜成销售订单列表、把「这个月的毛利情况」猜成利润表 (2026-11-18 LSMDEMO 实测)。
+     * 只含读意图; 只有「整句与推荐问题一字不差」才直连意图, 用户自己改过的话照常走识别。
+     * 前端 CrewMemberPage.vue 的推荐问题必须与这里逐字一致 (DigitalCrewQuickQuestionsContractTest 钉住)。
+     */
+    public static final Map<String, List<QuickQuestion>> QUICK_QUESTIONS = Map.of(
+            "clerk", List.of(new QuickQuestion("最近的销售订单", "ORDER_LIST"),
+                    new QuickQuestion("最近的采购订单", "PURCHASE_ORDER_LIST")),
+            "keeper", List.of(new QuickQuestion("最近的原料批次", "MATERIAL_BATCH_QUERY"),
+                    new QuickQuestion("待收货清单", "MATERIAL_TODAY_RECEIVING_QUERY")),
+            "planner", List.of(new QuickQuestion("各产线的生产进度", "PRODUCTION_PROGRESS_DASHBOARD"),
+                    new QuickQuestion("在制品批次有哪些", "MATERIAL_BATCH_WIP_QUERY")),
+            "inspector", List.of(new QuickQuestion("最近的质量报表", "REPORT_QUALITY"),
+                    new QuickQuestion("待质检批次", "RECEIVE_QUALITY_CHECK_TODAY")),
+            "accountant", List.of(new QuickQuestion("本月成本最高的产品", "COST_QUERY"),
+                    new QuickQuestion("这个月的毛利情况", "REPORT_SALES_MARGIN_SUMMARY")));
+
+    /** 整句等于该员工某条推荐问题时返回它绑定的意图码, 否则 empty。 */
+    public static Optional<String> quickIntentFor(String memberKey, String input) {
+        if (memberKey == null || input == null) return Optional.empty();
+        return QUICK_QUESTIONS.getOrDefault(memberKey, List.of()).stream()
+                .filter(q -> q.text().equals(input.strip())).map(QuickQuestion::intentCode).findFirst();
+    }
+
     /** 一线岗位 (手机端) → 默认数字员工; 按厂改了以表为准。与原型 DEMO_ROLES[*].mobile 相同。 */
     public static final Map<String, String> DEFAULT_ROLE_MAPPING;
 
@@ -84,5 +113,21 @@ public final class DigitalCrewCatalog {
         int i = p.indexOf(':');
         if (i <= 0) return null;
         return p.substring(0, i);
+    }
+
+    /**
+     * 逗号分隔的「任一」权限码 (如 {@code inventory:write,warehouse:read_write}) 归哪个模块:
+     * 有这位员工管得着的就取它 (按登记顺序第一个), 都管不着取第一个码的模块 (⇒ 指给该管的人); 空 / 不合规返回 null。
+     */
+    public static String moduleOf(String permission, Member member) {
+        List<String> modules = com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(permission).stream()
+                .map(DigitalCrewCatalog::moduleOf).toList();
+        if (modules.isEmpty() || modules.contains(null)) return null;
+        if (member != null) {
+            for (String m : modules) {
+                if (member.modules().contains(m)) return m;
+            }
+        }
+        return modules.get(0);
     }
 }

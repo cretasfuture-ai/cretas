@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 
 /**
@@ -240,17 +241,227 @@ final class GatedDataScan {
                 continue;
             }
             instances.put(name, instance);
-            Set<DataMethod> calls = new TreeSet<>((a, b) -> a.toString().compareTo(b.toString()));
-            for (Class<?> k = c; k != null && k.getName().startsWith("com.cretas.aims.ai.tool.impl"); k = k.getSuperclass()) {
-                callsPerMethod(k).values().forEach(calls::addAll);
-                // inner classes / lambdas compiled into nested classes
-                for (Class<?> nested : k.getDeclaredClasses()) {
-                    callsPerMethod(nested).values().forEach(calls::addAll);
-                }
-            }
-            toolCalls.put(name, calls);
+            toolCalls.put(name, callsOfTool(c, helperCalls.computeIfAbsent(name, k -> new TreeMap<>()), unresolvedHelperCalls));
             toolClasses.put(name, c);
         }
+    }
+
+    /**
+     * Independent helper classes a tool delegates to (2026-11-19, BP 问题 28 follow-up): tool → helper class
+     * → data methods reached only through that helper (not also called by the tool's own classes).
+     */
+    final Map<String, Map<String, Set<DataMethod>>> helperCalls = new LinkedHashMap<>();
+
+    /** Helper classes are looked for under this prefix; framework classes of the tool layer are not helpers. */
+    static final String HELPER_PREFIX = "com/cretas/aims/ai/tool/";
+    private static final Set<String> NOT_HELPERS = Set.of(
+            "com/cretas/aims/ai/tool/AbstractTool", "com/cretas/aims/ai/tool/AbstractBusinessTool",
+            "com/cretas/aims/ai/tool/ToolExecutor", "com/cretas/aims/ai/tool/ToolRegistry",
+            "com/cretas/aims/ai/tool/ToolRbacEnforcer", "com/cretas/aims/ai/tool/ToolRbacGuard");
+
+    /** A method of a class under {@link #HELPER_PREFIX}: internal class name + {@code name+descriptor}. */
+    record MethodRef(String owner, String key) {}
+
+    /** Per class: method → data methods it calls directly, method → helper methods it calls; abstract methods. */
+    private record ClassGraph(Map<String, Set<DataMethod>> data, Map<String, Set<MethodRef>> out,
+                              Set<String> abstracts, String superName, List<String> interfaces) {}
+
+    private static final Map<String, ClassGraph> GRAPHS = new HashMap<>();
+
+    /** Helper calls the scan could not resolve to a body (interface / abstract helper methods): must stay empty. */
+    final List<String> unresolvedHelperCalls = new ArrayList<>();
+
+    private static boolean isHelperOwner(String owner) {
+        if (owner.startsWith("[") || !owner.startsWith(HELPER_PREFIX)) return false;
+        String top = owner.contains("$") ? owner.substring(0, owner.indexOf('$')) : owner;
+        return !NOT_HELPERS.contains(top) && !isDataOwner(owner);
+    }
+
+    private static ClassGraph graph(String internal) throws IOException {
+        ClassGraph cached = GRAPHS.get(internal);
+        if (cached != null) return cached;
+        Map<String, Set<DataMethod>> data = new HashMap<>();
+        Map<String, Set<MethodRef>> out = new HashMap<>();
+        Set<String> abstracts = new HashSet<>();
+        String[] superName = {null};
+        List<String> interfaces = new ArrayList<>();
+        try (InputStream in = GatedDataScan.class.getResourceAsStream("/" + internal + ".class")) {
+            if (in == null) throw new IllegalStateException("no class file for helper " + internal);
+            new ClassReader(in).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public void visit(int v, int access, String name, String sig, String sup, String[] itfs) {
+                    superName[0] = sup;
+                    if (itfs != null) interfaces.addAll(Arrays.asList(itfs));
+                }
+
+                @Override
+                public MethodVisitor visitMethod(int access, String name, String desc, String sig, String[] ex) {
+                    String key = name + desc;
+                    if ((access & Opcodes.ACC_ABSTRACT) != 0) abstracts.add(key);
+                    Set<DataMethod> d = data.computeIfAbsent(key, k -> new HashSet<>());
+                    Set<MethodRef> o = out.computeIfAbsent(key, k -> new HashSet<>());
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(int op, String owner, String mname, String mdesc, boolean itf) {
+                            if (isDataOwner(owner)) d.add(new DataMethod(simpleName(owner), mname));
+                            else if (isHelperOwner(owner)) o.add(new MethodRef(owner, mname + mdesc));
+                        }
+
+                        @Override
+                        public void visitInvokeDynamicInsn(String n, String dd, org.springframework.asm.Handle bsm,
+                                Object... args) {
+                            for (Object arg : args) {
+                                if (!(arg instanceof org.springframework.asm.Handle h)) continue;
+                                if (isDataOwner(h.getOwner())) d.add(new DataMethod(simpleName(h.getOwner()), h.getName()));
+                                else if (isHelperOwner(h.getOwner())) o.add(new MethodRef(h.getOwner(), h.getName() + h.getDesc()));
+                            }
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        }
+        ClassGraph g = new ClassGraph(data, out, abstracts, superName[0], interfaces);
+        GRAPHS.put(internal, g);
+        return g;
+    }
+
+    /** The class (owner or a superclass under the prefix) that declares the method, or null. */
+    private static String declaringClass(MethodRef ref) throws IOException {
+        for (String k = ref.owner(); k != null && k.startsWith(HELPER_PREFIX); k = graph(k).superName()) {
+            if (graph(k).data().containsKey(ref.key())) return k;
+        }
+        return null;
+    }
+
+    /**
+     * Everything the tool's code can read: the tool class, its superclasses under {@code ai.tool.impl} and their
+     * nested classes (whole classes, lambdas included: fail closed), plus — method by method, transitively — every
+     * method of an independent class under {@code com.cretas.aims.ai.tool} that this code calls or references by
+     * method handle (2026-11-19: {@code ProcessYieldViews} calling {@code MaterialBalanceService} was invisible).
+     * Helpers are followed per method, not per class: a read tool that borrows one static formatter of a write tool
+     * does not read what that write tool writes. {@code viaHelpers}: helper simple name → data methods reached only
+     * through it (not also called by the tool's own classes).
+     */
+    static Set<DataMethod> callsOfTool(Class<?> c, Map<String, Set<DataMethod>> viaHelpers) throws IOException {
+        return callsOfTool(c, viaHelpers, new ArrayList<>());
+    }
+
+    static Set<DataMethod> callsOfTool(Class<?> c, Map<String, Set<DataMethod>> viaHelpers, List<String> unresolved)
+            throws IOException {
+        TreeSet<DataMethod> own = new TreeSet<>((a, b) -> a.toString().compareTo(b.toString()));
+        Set<DataMethod> deep = new HashSet<>();
+        Set<String> ownClasses = new HashSet<>();
+        List<MethodRef> frontier = new ArrayList<>();
+        // The tool class itself always counts (the positive-control stub lives outside every tool scan package);
+        // superclasses only while under ai.tool.impl, as before.
+        for (Class<?> k = c; k != null && (k == c || k.getName().startsWith("com.cretas.aims.ai.tool.impl")); k = k.getSuperclass()) {
+            for (Class<?> part : withNested(k)) {
+                ownClasses.add(internal(part));
+                // The tool class and its direct nested classes (what the scan always read) vs. nested-in-nested.
+                boolean direct = part == k || part.getDeclaringClass() == k;
+                callsPerMethod(part).values().forEach(direct ? own::addAll : deep::addAll);
+                graph(internal(part)).out().values().forEach(frontier::addAll);
+            }
+        }
+        Set<DataMethod> all = new TreeSet<>(own.comparator());
+        all.addAll(own);
+        all.addAll(deep);
+        Map<String, Set<DataMethod>> reachedBy = new TreeMap<>();
+        Set<DataMethod> freshDeep = new TreeSet<>(own.comparator());
+        freshDeep.addAll(deep);
+        freshDeep.removeAll(own);
+        if (!freshDeep.isEmpty()) reachedBy.put(c.getSimpleName() + "$nested", freshDeep);
+        Set<MethodRef> seen = new HashSet<>();
+        Set<String> initialised = new HashSet<>();
+        while (!frontier.isEmpty()) {
+            MethodRef ref = frontier.remove(frontier.size() - 1);
+            if (ownClasses.contains(ref.owner()) || !seen.add(ref)) continue;
+            String cls = declaringClass(ref);
+            if (cls == null || ownClasses.contains(cls)) {
+                // Inherited from outside the prefix (Object#toString, a record's accessors) carries no data; a
+                // method nowhere in the chain is a call the scan cannot follow.
+                if (cls == null && !ref.key().startsWith("<init>") && !isJdkInherited(ref)) {
+                    unresolved.add(c.getSimpleName() + " → " + ref.owner() + "#" + ref.key());
+                }
+                continue;
+            }
+            ClassGraph g = graph(cls);
+            if (g.abstracts().contains(ref.key())) {
+                // An interface / abstract helper method: follow every class under the prefix that implements it.
+                // Lambdas implementing it are no classes: their bodies are already counted where they are created
+                // (the tool's own classes, or a helper method reached here through the lambda's method handle).
+                for (String impl : implementors(cls)) {
+                    if (graph(impl).data().containsKey(ref.key()) && !graph(impl).abstracts().contains(ref.key())) {
+                        frontier.add(new MethodRef(impl, ref.key()));
+                    }
+                }
+                continue;
+            }
+            String top = cls.contains("$") ? cls.substring(0, cls.indexOf('$')) : cls;
+            String label = top.substring(top.lastIndexOf('/') + 1);
+            Set<DataMethod> d = new HashSet<>(g.data().getOrDefault(ref.key(), Set.of()));
+            frontier.addAll(g.out().getOrDefault(ref.key(), Set.of()));
+            if (initialised.add(cls)) {
+                d.addAll(g.data().getOrDefault("<clinit>()V", Set.of()));
+                frontier.addAll(g.out().getOrDefault("<clinit>()V", Set.of()));
+            }
+            all.addAll(d);
+            d.removeAll(own);
+            if (!d.isEmpty()) reachedBy.computeIfAbsent(label, k -> new TreeSet<>(own.comparator())).addAll(d);
+        }
+        viaHelpers.putAll(reachedBy);
+        return all;
+    }
+
+    private static Map<String, List<String>> implementorIndex;
+
+    /** Classes under the prefix (main code) whose supertypes, transitively, include {@code type}. */
+    private static List<String> implementors(String type) throws IOException {
+        if (implementorIndex == null) {
+            Map<String, List<String>> direct = new HashMap<>();
+            List<String> all = new ArrayList<>();
+            org.springframework.core.io.support.PathMatchingResourcePatternResolver resolver =
+                    new org.springframework.core.io.support.PathMatchingResourcePatternResolver();
+            for (org.springframework.core.io.Resource r : resolver.getResources("classpath*:" + HELPER_PREFIX + "**/*.class")) {
+                String url = r.getURL().toString();
+                if (url.contains("test-classes")) continue;
+                String internal = url.substring(url.indexOf(HELPER_PREFIX), url.length() - ".class".length());
+                all.add(internal);
+                ClassGraph g = graph(internal);
+                if (g.superName() != null) direct.computeIfAbsent(g.superName(), k -> new ArrayList<>()).add(internal);
+                for (String i : g.interfaces()) direct.computeIfAbsent(i, k -> new ArrayList<>()).add(internal);
+            }
+            implementorIndex = new HashMap<>();
+            for (String t : direct.keySet()) {
+                List<String> closure = new ArrayList<>();
+                List<String> todo = new ArrayList<>(direct.get(t));
+                while (!todo.isEmpty()) {
+                    String k = todo.remove(todo.size() - 1);
+                    if (closure.contains(k)) continue;
+                    closure.add(k);
+                    todo.addAll(direct.getOrDefault(k, List.of()));
+                }
+                implementorIndex.put(t, closure);
+            }
+        }
+        return implementorIndex.getOrDefault(type, List.of());
+    }
+
+    /** A call the class does not declare and that resolves outside the prefix (Object / Enum / Record methods). */
+    private static boolean isJdkInherited(MethodRef ref) {
+        String name = ref.key().substring(0, ref.key().indexOf('('));
+        return Set.of("toString", "hashCode", "equals", "getClass", "values", "valueOf", "ordinal", "name",
+                "compareTo", "getDeclaringClass").contains(name);
+    }
+
+    private static String internal(Class<?> k) {
+        return k.getName().replace('.', '/');
+    }
+
+    private static List<Class<?>> withNested(Class<?> k) {
+        List<Class<?>> out = new ArrayList<>(List.of(k));
+        for (int i = 0; i < out.size(); i++) out.addAll(Arrays.asList(out.get(i).getDeclaredClasses()));
+        return out;
     }
 
     /** Data methods the tool calls that only gated handlers serve → the codes admitting a caller to each. */

@@ -60,7 +60,7 @@ function syncQuery(name: string | number) {
       <el-tab-pane v-if="showAnalyticsTabs" label="生产数据分析" name="data-analysis" lazy>
         <PAProduction />
       </el-tab-pane>
-      <el-tab-pane label="BOM达成率分析" name="bom-achievement" lazy>
+      <el-tab-pane label="BOM用量对比" name="bom-achievement" lazy>
         <BomAchievement />
       </el-tab-pane>
       <el-tab-pane label="工序投入产出对比" name="process-io" lazy>

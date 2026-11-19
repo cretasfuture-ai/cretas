@@ -107,7 +107,7 @@ class MaterialBatchChatStatusContractTest {
         });
         tool = new MaterialBatchQueryTool();
         ReflectionTestUtils.setField(tool, "materialBatchService",
-                new MaterialBatchServiceImpl(repo, null, null, batchMapper, null, null, null, null));
+                new MaterialBatchServiceImpl(repo, null, null, batchMapper, mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null));
         ReflectionTestUtils.setField(tool, "objectMapper", mapper);
 
         llm = mock(DashScopeClient.class);

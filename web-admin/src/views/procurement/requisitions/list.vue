@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 全部请购单 — Sprint 6 W2-A.
  *
@@ -208,7 +209,7 @@ async function handleDelete(row: PurchaseRequisition) {
       </div>
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table">
-        <template #empty>暂无请购单</template>
+        <template #empty><ListEmptyExplain empty-title="还没有请购单" empty-hint="车间或仓库需要采购物料时，点右上角新建请购单，审批后转采购订单。" /></template>
         <template #requisitionNumber-cell="{ row }">{{ row.original.requisitionNumber }}</template>
         <template #requester-cell="{ row }">{{ personLabel(row.original.requesterId) }}</template>
         <template #items-cell="{ row }">

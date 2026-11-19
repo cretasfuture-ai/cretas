@@ -70,6 +70,25 @@ public class ProductionReportServiceImpl implements ProductionReportService {
     private final ProductionLineRepository productionLineRepository;
     private final FactorySettingsRepository factorySettingsRepository;
 
+    /** 往来余额唯一来源: 挂账单据 (与应收应付页同一实现)。@Lazy 避免财务服务链的构造环。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.finance.ArApService arApService;
+
+    static final String NO_LEDGER_NOTE = "本厂尚未生成挂账单据（应收按已发货/已确认未收款挂账，应付按已入库/已确认未付款挂账）";
+
+    /** 应收 / 应付 / 客户预收取自 {@link com.cretas.aims.service.finance.ArApService#getFinanceOverview}, 不另算一份。 */
+    void putLedgerBalances(Map<String, Object> report, String factoryId) {
+        Map<String, Object> overview = arApService.getFinanceOverview(factoryId);
+        report.put("accountsReceivable", overview.get("totalReceivable"));
+        report.put("accountsPayable", overview.get("totalPayable"));
+        report.put("customerPrepayments", overview.get("customerPrepayments"));
+        report.put("arApLedgerEntryCount", overview.get("ledgerEntryCount"));
+        report.put("hasArApLedgerEntries", overview.get("hasLedgerEntries"));
+        if (Boolean.TRUE.equals(overview.get("scopeApplied"))) report.put("arApScopeApplied", true);
+        if (Boolean.FALSE.equals(overview.get("hasLedgerEntries"))) report.put("arApNote", NO_LEDGER_NOTE);
+    }
+
     /** 食品 DAG 缺口 09: 逐计划的标准成本差异 (开计划时快照)。 */
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.service.production.PlanCostVarianceService planCostVarianceService;
@@ -241,7 +260,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         //      成本 SUM 为 null 却有 46 个计划          -> 成本**未知**, ⛔ 不是 ¥0
         //    ⇒ 判据: 窗口内有没有计划。没有计划 = 没生产 = 成本确实 0;
         //             有计划而成本列为空 = 没录 = 算不出来。
-        boolean hasPlansInWindow = productionPlanRepository.countByFactoryIdAndCreatedAtBetween(
+        // 成本按完工时间 (endTime) 落期, 所以「窗口内有没有计划」也要看完工的计划 (#1911 终审 P1):
+        // 10 天前创建、昨天完工、成本没录 —— 只看创建时间会判成「没生产」, 把不知道的成本写成 ¥0。
+        // 创建时间仍保留: 窗口内新建了计划也说明在生产, 成本空就是没录。
+        long endedPlans = productionPlanRepository.countEndedBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        boolean hasPlansInWindow = endedPlans > 0 || productionPlanRepository.countByFactoryIdAndCreatedAtBetween(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59)) > 0;
         report.put("materialCost", costOrNull(materialCost, hasPlansInWindow));
         report.put("laborCost", costOrNull(laborCost, hasPlansInWindow));
@@ -249,6 +273,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("otherCost", costOrNull(otherCost, hasPlansInWindow));
         report.put("totalCost", (materialCost == null && laborCost == null
                 && equipmentCost == null && otherCost == null && hasPlansInWindow) ? null : totalCost);
+        // 完工计划数 / 平均每计划成本 (LSM-COSTBI 第 12 项): 与成本同口径 (结束时间在区间内);
+        // 有工艺保密时成本只算能看的计划, 计划数也只数能看的; 成本未知或没有计划 ⇒ 平均值 null (⛔ 不当 0)
+        long planCount = Math.max(0, endedPlans - (visibleCosts != null ? visibleCosts.excludedPlans() : 0));
+        report.put("planCount", planCount);
+        // 有完工计划没录成本: 总额只含录了的, 除以全部完工数会把没录的当 0 拉低平均值 (10 个只录 2 个各 1000 → ¥200)。
+        // 全厂都录齐了才算平均值 (能看的计划是全厂的子集, 也一定录齐); 否则 null 并说明, 不编。
+        long costRecorded = planCount == 0 ? 0 : productionPlanRepository.countCostRecordedEndedBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        BigDecimal costForAvg = (BigDecimal) report.get("totalCost");
+        boolean allRecorded = planCount > 0 && costRecorded >= endedPlans;
+        report.put("avgCostPerPlan", costForAvg == null || !allRecorded ? null
+                : costForAvg.divide(BigDecimal.valueOf(planCount), 2, RoundingMode.HALF_UP));
+        if (planCount > 0 && !allRecorded) {
+            report.put("avgCostPerPlanNote", visibleCosts == null
+                    ? "完工计划 " + endedPlans + " 个, 只有 " + costRecorded + " 个录了成本, 平均每计划成本算不出"
+                    : "有完工计划没录成本, 平均每计划成本算不出");
+        }
         // 利润计算
         // ⛔ 成本未知时利润**算不出来** —— 原来 totalCost 兜 0, 于是「利润 = 营收」,
         //    一家没录成本的工厂会被报成「全额都是利润」。
@@ -267,13 +308,10 @@ public class ProductionReportServiceImpl implements ProductionReportService {
             report.put("profitMargin", null);
             report.put("profitUnavailableReason", "营收含工艺保密产品而成本不含，利润不可计算");
         }
-        // 应收应付 (R42 BUG-13: 仅正余额; 客户预付分开统计)
-        BigDecimal accountsReceivable = customerRepository.calculateTotalOutstandingBalance(factoryId);
-        BigDecimal accountsPayable = supplierRepository.calculateTotalOutstandingBalance(factoryId);
-        BigDecimal customerPrepayments = customerRepository.calculateTotalPrepayments(factoryId);
-        report.put("accountsReceivable", accountsReceivable != null ? accountsReceivable : BigDecimal.ZERO);
-        report.put("accountsPayable", accountsPayable != null ? accountsPayable : BigDecimal.ZERO);
-        report.put("customerPrepayments", customerPrepayments != null ? customerPrepayments : BigDecimal.ZERO);
+        // 应收应付: 与「财务管理 → 应收应付」同一份实现 (ArApService#getFinanceOverview, 挂账单据口径)。
+        // PROTO-DEMO-ARAP (2026-11-18): 原来读客户/供应商主数据上的 current_balance —— 那是可手改、可随整厂复制
+        // 带过来的缓存, 与挂账单据脱节 (LSMDEMO: 挂账单据 0 条, 经营分析页却显示应收 2.23 万 / 应付 288.87 万)。
+        putLedgerBalances(report, factoryId);
         return report;
     }
 

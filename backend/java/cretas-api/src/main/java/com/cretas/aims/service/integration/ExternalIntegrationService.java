@@ -272,6 +272,58 @@ public class ExternalIntegrationService {
                 isStale(s.getCollectedAt()), from, to, page.getTotalElements() > MAX_CRETAS_SCAN, rows);
     }
 
+    public record IssueTypeCount(String type, String label, int count) {
+    }
+
+    /**
+     * @param available false = 有授权但外部数据还没进来; issues 为空时页面写原因, ⛔ 不写「0 条」
+     * @param total 窗口内需修正的条数; 没问题 = 0 且 available = true (页面显示「未发现需修正的数据」)
+     */
+    public record DataIssues(String system, String label, boolean available, String reason, String asOf, boolean stale,
+                             LocalDate from, LocalDate to, int total, List<IssueTypeCount> counts,
+                             List<ExternalDataIssueDetector.Issue> issues) {
+    }
+
+    /**
+     * 外部报工数据需修正清单: 与 {@link #reportComparison} 同一份最近快照、同一授权校验、同一 14 天窗口。
+     * 只读; 快照读不出来抛 500 (页面报错, 不显示 0 条)。
+     */
+    @Transactional(readOnly = true)
+    public DataIssues dataIssues(String factoryId, String systemCode) {
+        FactoryExternalIntegration row = requireActive(factoryId, systemCode);
+        ExternalSystem system = ExternalSystem.of(row.getSystem()).orElseThrow();
+        Optional<ExternalSourceSnapshot> snapshot = snapshots.findFirstByFactoryIdAndSystemAndDatasetOrderByCollectedAtDesc(
+                factoryId, row.getSystem(), ExternalDataset.REPORT_OUTPUT.code());
+        if (snapshot.isEmpty() || !factoryId.equals(snapshot.get().getFactoryId())) {
+            return new DataIssues(row.getSystem(), system.label(), false, NOT_CONNECTED, null, false,
+                    null, null, 0, List.of(), List.of());
+        }
+        ExternalSourceSnapshot s = snapshot.get();
+        List<Map<String, Object>> external = readRows(s);
+        LocalDate to = external.stream().map(r -> parseDate(r.get("reportDate"))).filter(Objects::nonNull)
+                .max(Comparator.naturalOrder()).orElse(null);
+        List<ExternalDataIssueDetector.Issue> issues = List.of();
+        LocalDate from = null;
+        if (to != null) {
+            from = to.minusDays(COMPARISON_DAYS - 1L);
+            List<ExternalDataIssueDetector.Row> window = new ArrayList<>();
+            for (Map<String, Object> r : external) {
+                LocalDate d = parseDate(r.get("reportDate"));
+                if (d == null || d.isBefore(from) || d.isAfter(to)) continue;
+                window.add(new ExternalDataIssueDetector.Row(d, text(r.get("productName")), text(r.get("processName")),
+                        decimal(r.get("goodQty")), text(r.get("unit"))));
+            }
+            issues = ExternalDataIssueDetector.detect(window);
+        }
+        List<IssueTypeCount> counts = new ArrayList<>();
+        for (ExternalDataIssueDetector.Type t : ExternalDataIssueDetector.Type.values()) {
+            counts.add(new IssueTypeCount(t.name(), t.label(),
+                    (int) issues.stream().filter(i -> i.type().equals(t.name())).count()));
+        }
+        return new DataIssues(row.getSystem(), system.label(), true, null, beijingMinute(s.getCollectedAt()),
+                isStale(s.getCollectedAt()), from, to, issues.size(), counts, issues);
+    }
+
     private Map<Long, String> processNames(String factoryId, List<ProductionReport> list) {
         Set<Long> taskIds = list.stream().map(ProductionReport::getWorkProcessTaskId).filter(Objects::nonNull)
                 .collect(Collectors.toSet());

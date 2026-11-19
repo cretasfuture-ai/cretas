@@ -287,6 +287,12 @@ public final class ThresholdKeys {
     public static final String PRODUCTION_RECEIPT_OVER_RECEIVE_RATE = "production.receipt.over_receive_rate";
     /** A13 解冻开始最多往前补登的分钟数. Default = 480; 0 = 不允许补登。 */
     public static final String PRODUCTION_THAW_BACKFILL_MAX_MINUTES = "production.time_limit.thaw_backfill_max_minutes";
+    /**
+     * 工序时限超时是否拦领用 (PROTO-Q41, Steve 2026-11-18 拍板: 工厂开关, 默认只警告)。整数, 1 = 开; 其它 (含 0、写错) = 关。
+     * 关 (默认) = 超时 / 未登记开始解冻只警告: 照常投料, 超时写一条待处置留痕供复盘, 响应里带警告。
+     * 开 = 原行为: 409 拦住, 质检复检放行或判不合格后才能领。挡得住一个现场动作 (投料) ⇒ 闸门类。
+     */
+    public static final String PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED = "production.time_limit.block_on_exceed";
     /** A14 补录窗口天数. Default = 2 (T-2)。 */
     public static final String PRODUCTION_BACKDATE_MAX_DAYS = "production.backdate.max_days";
 
@@ -397,6 +403,7 @@ public final class ThresholdKeys {
             PRODUCTION_RECEIPT_OVER_RECEIVE_MODE,
             PRODUCTION_RECEIPT_OVER_RECEIVE_RATE,
             PRODUCTION_THAW_BACKFILL_MAX_MINUTES,
+            PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED,
             PRODUCTION_BACKDATE_MAX_DAYS,
             PRODUCTION_CAPACITY_PACKAGE_UNIT_MODE,
             QUALITY_INSPECTION_FAIL_SCOPE,
@@ -437,6 +444,10 @@ public final class ThresholdKeys {
     public static String validateSemantics(String thresholdKey, String value) {
         if (thresholdKey == null || value == null) {
             return null;
+        }
+        if (PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED.equals(thresholdKey)) {
+            String v = value.trim();
+            return v.equals("0") || v.equals("1") ? null : "工序超时拦截只能填 0 (只警告) 或 1 (拦截)";
         }
         if (CREDIT_CHECK_MODE.equals(thresholdKey)) {
             String v = value.trim().toUpperCase();

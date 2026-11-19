@@ -23,9 +23,18 @@ import time
 
 RUNTIME_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 MODEL = 'qwen3.8:27b'
-SYSTEM = ('你是白垩纪食品工厂助手。仅回答食品安全、生产和质量管理的通用咨询。'
-          '用中文给出简洁实用的建议，不超过300字。不能声称读取了工厂实时数据，'
-          '不能代用户执行业务操作。具体库存、订单或金额应引导使用系统查询。')
+# Authoritative persona. Mirrors backend/python/llm/f006_mini_provider.py _SYSTEM (pinned by
+# backend/python/tests/test_f006_mini_prompt_parity.py); the gateway never trusts the caller's text.
+SYSTEM = (
+    "你是「白垩纪」食品工厂管理系统里的工厂助手。「白垩纪」只是本系统的品牌名，"
+    "与古生物学、恐龙、地质年代没有任何关系，不要介绍或谈论这些。"
+    "仅回答食品安全、生产和质量管理的通用咨询，用中文给出简洁实用的建议，不超过300字。"
+    "你看不到本工厂的任何实时业务数据：不得给出任何业务数字或业务事实"
+    "（销售额、销量、营收、利润、成本、产量、出货量、库存、订单数、合格率、同比、环比、排名等），"
+    "也不得说某项业务在增长、下降、良好或不佳；不能代用户执行业务操作。"
+    "用户问到这类情况时，只回答需要先查一下真实数据，并请用户说明想查哪一项"
+    "（例如本月销售概况、出货记录、库存、生产报表）。"
+)
 LOCAL_GUIDANCE = ('补充要求：仅回答与问题有关的要点，最多4条，正文不超过200个字符（包括标点）。'
     '温控或冷链异常应先隔离受影响产品，由质检依据时间温度记录和SOP评估，不能仅凭外观、气味或口感判断安全。'
     '日期模糊须先隔离追溯，核实前不得擅改日期。生熟共台应优先改为物理分区；分时操作须先熟后生并彻底清洗消毒。')
@@ -60,9 +69,31 @@ def sample(timeout=2):
         free_gib=shutil.disk_usage(Path.home()).free/GIB)
 
 
+def ci_guest_state():
+    # 'Running' / 'Stopped' / other colima status, 'absent' when colima lists instances but no ci,
+    # 'unknown' when the list cannot be read. Timeouts propagate like the guest query below.
+    r=subprocess.run(['/opt/homebrew/bin/colima','list','--json'],capture_output=True,text=True,timeout=3)
+    if r.returncode!=0:return 'unknown'
+    states={}
+    for line in r.stdout.splitlines():
+        if not line.strip():continue
+        try:row=json.loads(line)
+        except ValueError:return 'unknown'
+        if not isinstance(row,dict):return 'unknown'
+        states[row.get('name')]=row.get('status')
+    if not states:return 'unknown'
+    if 'ci' not in states:return 'absent'
+    return states['ci'] if isinstance(states['ci'],str) and states['ci'] else 'unknown'
+
+
 def active_build():
     if subprocess.run(['pgrep','-x','xcodebuild'],stdout=subprocess.DEVNULL,timeout=2).returncode==0:
         return True
+    # 2026-11-18 Steve: the ci guest is retired. A ci guest that colima reports Stopped, or that
+    # no longer exists, runs no CI => idle. An unreadable list or any other state stays busy.
+    state=ci_guest_state()
+    if state in ('Stopped','absent'):return False
+    if state!='Running':return True
     # Read-only guest query. A missing/unreachable CI guest fails closed, never starts it.
     probe=("import subprocess,sys;p=subprocess.run(['pgrep','-x','Runner.Worker'],stdout=subprocess.DEVNULL);"
            "print('F006_CI_BUSY_v1' if p.returncode==0 else 'F006_CI_IDLE_v1' if p.returncode==1 else 'F006_CI_UNKNOWN_v1');"
@@ -114,18 +145,35 @@ def validate_request(raw):
     m=d.get('messages');opts=d.get('options')
     if (not isinstance(m,list) or len(m)!=2 or [x.get('role') for x in m if isinstance(x,dict)]!=['system','user']
             or any(set(x)!={'role','content'} or not isinstance(x['content'],str) for x in m)
-            or not 1<=len(m[1]['content'])<=2000 or m[0]['content']!=SYSTEM):
+            or not 1<=len(m[1]['content'])<=2000 or not 1<=len(m[0]['content'])<=2000):
         raise ValueError('request_messages')
     m[1]['content'].encode('utf-8') # Reject lone surrogates rather than truncating a malformed question.
     if (not isinstance(opts,dict) or set(opts)!={'temperature','num_predict'}
             or opts['temperature']!=0.4 or opts['num_predict']!=(768 if d['think'] else 384)):
         raise ValueError('request_options')
+    # The caller's system text is only shape-checked: the gateway always sends its own EFFECTIVE_SYSTEM,
+    # so persona drift between caller and gateway can no longer turn into a 400 (2026-11-19 boss-mini outage).
     # The caller cannot choose an engine, model path, context, tools or egress.
     return dict(model=MODEL,messages=[dict(role='system',content=EFFECTIVE_SYSTEM),m[1]],
         stream=True,stream_options={'include_usage':True},temperature=.4,top_k=20,
         top_p=.95,min_p=0,repeat_penalty=1,presence_penalty=0,
         max_tokens=768 if d['think'] else 384,cache_prompt=False,
         chat_template_kwargs={'enable_thinking':d['think']})
+
+
+def upstream_idle_timeout(deadline):
+    """Socket idle bound for the private engine: the remaining wall budget, never beyond it."""
+    return max(.1,deadline-time.monotonic())
+
+
+_REASON_CODE=re.compile(r'[a-z][a-z0-9_]{0,47}')
+
+
+def failure_reason(exc):
+    """Exception class plus this module's fixed validator code; never free text (no prompt/answer)."""
+    name=type(exc).__name__
+    code=str(exc.args[0]) if len(exc.args)==1 and isinstance(exc.args[0],str) else ''
+    return name+':'+code if _REASON_CODE.fullmatch(code) else name
 
 
 def translated_stream(response, guard, thinking):
@@ -137,6 +185,10 @@ def translated_stream(response, guard, thinking):
         if not line:raise RuntimeError('missing_native_terminal')
         if len(line)>131072:raise RuntimeError('native_line_size')
         if not line.strip():continue
+        # llama-server 0.40.6 writes a bare SSE comment ':' about every 30s while prompt processing has
+        # produced no token yet (recorded on Aurora 2026-11-19). Only that exact heartbeat is skipped;
+        # any other non-data line, including other comment text or 'event:' lines, still fails closed.
+        if line.rstrip(b'\r\n')==b':':continue
         if not line.startswith(b'data:'):raise RuntimeError('native_sse_format')
         raw=line[5:].strip()
         if raw==b'[DONE]':
@@ -348,12 +400,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             job_watcher=threading.Thread(target=rt.watch_jobs,args=(done,breach),daemon=True);job_watcher.start()
             rt.start_child()
             if breach.is_set():raise RuntimeError('startup_guard')
-            conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=25)
+            deadline=started+REQUEST_SECONDS
+            # llama-server emits no SSE byte until prompt processing ends (~18s for 285 prompt tokens,
+            # ~24s for 388, Aurora 2026-11-19), so the former fixed 25s socket timeout cut longer
+            # questions inside the wall budget. Idle reads may use the remaining wall budget, never
+            # more: the 50s wall deadline is unchanged.
+            conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=upstream_idle_timeout(deadline))
             conn.request('POST','/v1/chat/completions',json.dumps(payload).encode(),{'Content-Type':'application/json'})
             response=conn.getresponse()
             if response.status!=200:raise RuntimeError('upstream_status')
             self.send_response(200);self.send_header('Content-Type','application/x-ndjson');self.send_header('Connection','close');self.end_headers();sent=True
-            deadline=started+REQUEST_SECONDS
             def guard():
                 if time.monotonic()>deadline or breach.is_set():raise RuntimeError('stream_guard')
             for frame in translated_stream(response,guard,payload['chat_template_kwargs']['enable_thinking']):
@@ -362,8 +418,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if frame.get('done') is True:complete=True
             if not complete:raise RuntimeError('incomplete')
             rt.logger.info('request_completed')
-        except (OSError,ValueError,RuntimeError,http.client.HTTPException,subprocess.SubprocessError):
-            rt.logger.warning('request_failed resource_breach=%s',breach.is_set())
+        except (OSError,ValueError,RuntimeError,http.client.HTTPException,subprocess.SubprocessError) as exc:
+            rt.logger.warning('request_failed resource_breach=%s reason=%s headers_sent=%s elapsed_s=%.1f',
+                breach.is_set(),failure_reason(exc),sent,time.monotonic()-started)
             with contextlib.suppress(OSError):
                 if not sent:self.reply(503,'local_model_unavailable')
                 else:self.wfile.write(b'{"error":"local_model_unavailable"}\n');self.wfile.flush()

@@ -65,7 +65,7 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
     public String getDescription() {
         return "价格历史查询 — 按 materialTypeId 输出最近 N 个月每月加权平均采购价 + 同比趋势. "
                 + "LLM 触发场景: 采购员问 'X 物料历史价格' / '这次报价 Y 元/kg 贵吗?' / "
-                + "'X 物料涨价了多少' / '价格曲线' / '采购价对比'. read-only. "
+                + "'X 物料涨价了多少' / '价格曲线' / '采购价对比'; 不指定物料时出原料进价涨幅排名 ('哪些原料价格涨得最多'). read-only. "
                 + "默认 monthsBack=3 (上限 24). 受 PriceSensitive 影响, "
                 + "仓管员角色看不到 unitPrice (返 null + 提示).";
     }
@@ -78,7 +78,7 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
         Map<String, Object> properties = new HashMap<>();
         Map<String, Object> materialTypeId = new HashMap<>();
         materialTypeId.put("type", "string");
-        materialTypeId.put("description", "材料类型 ID (必填)");
+        materialTypeId.put("description", "材料类型 ID (可选; 不填 = 按原料比较近期进价涨幅, 出涨幅排名)");
         properties.put("materialTypeId", materialTypeId);
 
         Map<String, Object> monthsBack = new HashMap<>();
@@ -90,13 +90,13 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
         properties.put("monthsBack", monthsBack);
 
         schema.put("properties", properties);
-        schema.put("required", List.of("materialTypeId"));
+        schema.put("required", Collections.emptyList());
         return schema;
     }
 
     @Override
     protected List<String> getRequiredParameters() {
-        return List.of("materialTypeId");
+        return Collections.emptyList();
     }
 
     @Override
@@ -109,6 +109,9 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
                     "采购价历史只对有采购价查看权限的人开放 (按工厂权限配置; 未配置时为采购岗)。");
         }
         String materialTypeId = getString(params, "materialTypeId");
+        if (materialTypeId == null || materialTypeId.isBlank()) {
+            return doRiseRanking(factoryId, params);
+        }
         int monthsBack = clamp(getInteger(params, "monthsBack", DEFAULT_MONTHS_BACK),
                 1, MAX_MONTHS_BACK);
 
@@ -241,6 +244,100 @@ public class PriceHistoryQueryTool extends AbstractBusinessTool {
                             : "");
         }
         return buildSimpleResult(message, data);
+    }
+
+    /** 涨幅排名: 近期窗口 (最近 30 天) vs 此前窗口 (再往前 60 天) 的加权均价, 按涨幅% 降序取前 N。 */
+    static final int RANK_RECENT_DAYS = 30;
+    static final int RANK_BASE_DAYS = 60;
+    static final int RANK_TOP_N = 5;
+
+    private Map<String, Object> doRiseRanking(String factoryId, Map<String, Object> params) {
+        LocalDate today = LocalDate.now();
+        LocalDate recentStart = today.minusDays(RANK_RECENT_DAYS - 1L);
+        LocalDate baseEnd = recentStart.minusDays(1);
+        LocalDate baseStart = baseEnd.minusDays(RANK_BASE_DAYS - 1L);
+        String window = String.format("近期 %s~%s vs 此前 %s~%s", recentStart, today, baseStart, baseEnd);
+
+        List<PurchaseOrder> orders = purchaseOrderRepository.findByFactoryIdAndDateRange(factoryId, baseStart, today);
+        Map<String, RiseAgg> byMaterial = new LinkedHashMap<>();
+        int itemsWithoutPrice = 0;
+        for (PurchaseOrder po : orders) {
+            if (po.getOrderDate() == null) continue;
+            boolean recent = !po.getOrderDate().isBefore(recentStart);
+            for (PurchaseOrderItem item : purchaseOrderItemRepository.findByPurchaseOrderId(po.getId())) {
+                if (item.getUnitPrice() == null) { itemsWithoutPrice++; continue; }
+                BigDecimal qty = item.getQuantity() != null ? item.getQuantity() : BigDecimal.ZERO;
+                if (qty.compareTo(BigDecimal.ZERO) <= 0) continue;
+                String key = item.getMaterialTypeId() != null ? item.getMaterialTypeId()
+                        : String.valueOf(item.getMaterialName());
+                RiseAgg agg = byMaterial.computeIfAbsent(key, k -> new RiseAgg());
+                if (agg.name == null) agg.name = item.getMaterialName() != null ? item.getMaterialName() : key;
+                if (agg.unit == null) agg.unit = item.getUnit();
+                (recent ? agg.recent : agg.base).add(item.getUnitPrice(), qty);
+            }
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (RiseAgg a : byMaterial.values()) {
+            if (a.recent.qty.signum() <= 0 || a.base.qty.signum() <= 0) continue; // 缺一边没法比, 不编
+            BigDecimal before = a.base.avg();
+            BigDecimal after = a.recent.avg();
+            if (before.signum() <= 0) continue;
+            BigDecimal pct = after.subtract(before).multiply(new BigDecimal("100"))
+                    .divide(before, 1, RoundingMode.HALF_UP);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("materialName", a.name);
+            row.put("unit", a.unit);
+            row.put("beforeAvgPrice", before.setScale(2, RoundingMode.HALF_UP));
+            row.put("recentAvgPrice", after.setScale(2, RoundingMode.HALF_UP));
+            row.put("risePct", pct);
+            rows.add(row);
+        }
+        rows.sort((x, y) -> ((BigDecimal) y.get("risePct")).compareTo((BigDecimal) x.get("risePct")));
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("mode", "RISE_RANKING");
+        data.put("window", window);
+        data.put("comparableMaterials", rows.size());
+        data.put("itemsWithoutPriceVisibility", itemsWithoutPrice);
+        if (rows.isEmpty()) {
+            data.put("ranking", Collections.emptyList());
+            return buildSimpleResult(String.format(
+                    "近 %d 天没有足够的进价记录可比较涨幅（需同一原料在近 %d 天和此前 %d 天都有带单价的采购）。口径：%s。",
+                    RANK_RECENT_DAYS + RANK_BASE_DAYS, RANK_RECENT_DAYS, RANK_BASE_DAYS, window), data);
+        }
+        List<Map<String, Object>> top = new ArrayList<>(rows.subList(0, Math.min(RANK_TOP_N, rows.size())));
+        data.put("ranking", top);
+        StringBuilder sb = new StringBuilder();
+        sb.append("未指定原料，以下为全厂原料涨幅排名。");
+        sb.append(String.format("原料进价涨幅排名（口径：近 %d 天加权均价 vs 此前 %d 天，%s）：",
+                RANK_RECENT_DAYS, RANK_BASE_DAYS, window));
+        int i = 1;
+        for (Map<String, Object> r : top) {
+            BigDecimal pct = (BigDecimal) r.get("risePct");
+            sb.append(String.format("\n%d. %s：%s → %s%s，%s%s%%", i++, r.get("materialName"),
+                    r.get("beforeAvgPrice"), r.get("recentAvgPrice"),
+                    r.get("unit") != null ? " 元/" + r.get("unit") : " 元",
+                    pct.signum() > 0 ? "涨 " : pct.signum() < 0 ? "降 " : "持平 ", pct.abs().toPlainString()));
+        }
+        if (top.get(0).get("risePct") instanceof BigDecimal b && b.signum() <= 0) {
+            sb.append("\n（可比较的原料近期都没有涨价）");
+        }
+        return buildSimpleResult(sb.toString(), data);
+    }
+
+    private static final class RiseAgg {
+        String name;
+        String unit;
+        final Side recent = new Side();
+        final Side base = new Side();
+    }
+
+    private static final class Side {
+        BigDecimal amount = BigDecimal.ZERO;
+        BigDecimal qty = BigDecimal.ZERO;
+        void add(BigDecimal price, BigDecimal q) { amount = amount.add(price.multiply(q)); qty = qty.add(q); }
+        BigDecimal avg() { return amount.divide(qty, 4, RoundingMode.HALF_UP); }
     }
 
     private static int clamp(int v, int lo, int hi) {

@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.foodsafety;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.BatchReferenceClarifier;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.entity.ShipmentRecord;
 import com.cretas.aims.repository.ShipmentRecordRepository;
@@ -48,6 +50,9 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
     @Autowired
     private ShipmentRecordRepository shipmentRecordRepository;
 
+    @Autowired
+    private ProductionBatchRepository productionBatchRepository;
+
     @Override
     public String getToolName() {
         return "batch_full_trace";
@@ -68,7 +73,8 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
 
         Map<String, Object> batchNumber = new HashMap<>();
         batchNumber.put("type", "string");
-        batchNumber.put("description", "批次号 (必填), e.g. B-20260518-A03");
+        // ⛔ 描述里不放示例批次号: 模型会把示例当成用户说的批次 (实测: 没给批次号, 它自己选了示例批次去查)
+        batchNumber.put("description", "要往回追溯的成品批次号 (必填)");
         properties.put("batchNumber", batchNumber);
 
         schema.put("properties", properties);
@@ -81,10 +87,25 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
         return List.of("batchNumber");
     }
 
+    /** 缺批次号时对用户说的话 (不示例批次号: 模型会把示例当成用户说的批次)。 */
+    @Override
+    protected String getParameterQuestion(String paramName) {
+        if ("batchNumber".equals(paramName)) {
+            return "请告诉我成品批次号，我帮你往回追原料批次和供应商。";
+        }
+        return super.getParameterQuestion(paramName);
+    }
+
     @Override
     protected Map<String, Object> doExecute(String factoryId,
             Map<String, Object> params, Map<String, Object> context) throws Exception {
         String batchNumber = getString(params, "batchNumber");
+        // 「成品批次 / 这个批次」是泛称不是批次号: 不查, 追问并列最近批次
+        if (BatchReferenceClarifier.isGenericReference(batchNumber)) {
+            return BatchReferenceClarifier.clarify(productionBatchRepository, factoryId, "往回追原料批次和供应商");
+        }
+        // 用户用展示短标签 (PB-PLAN-…56643) 回选: 还原成完整批次号再查
+        batchNumber = BatchReferenceClarifier.resolveShortLabel(productionBatchRepository, factoryId, batchNumber);
         log.info("batch_full_trace — factory={} batch={}", factoryId, batchNumber);
 
         // 1. 调 TraceabilityService 拿 full trace (原料 + 供应商 + 加工记录)
@@ -124,10 +145,31 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
         data.put("affectedShipmentCount", affectedShipments.size());
         data.put("actionHint", "/quality/recall?batchNumber=" + batchNumber);
 
-        String message = String.format(
-                "🔗 批次 %s 全追溯: %d 笔出货, 影响 %d 家客户. 详见 trace 字段",
-                batchNumber, affectedShipments.size(), affectedCustomerIds.size());
+        String message = traceMessage(batchNumber, traceResp, affectedShipments.size(), affectedCustomerIds.size());
         return buildSimpleResult(message, data);
+    }
+
+    /** 回复正文: 先答「用了哪些原料批次、哪些供应商」, 再说出货影响; ⛔ 不指向内部字段名。 */
+    static String traceMessage(String batchNumber, TraceabilityDTO.FullTraceResponse trace, int shipmentCount, int customerCount) {
+        StringBuilder sb = new StringBuilder();
+        List<TraceabilityDTO.MaterialInfo> materials = trace == null ? null : trace.getMaterials();
+        if (trace == null) {
+            sb.append("批次 ").append(batchNumber).append(" 暂时没查到追溯记录。");
+        } else if (materials == null || materials.isEmpty()) {
+            sb.append("批次 ").append(batchNumber).append(" 没有登记投料的原料批次。");
+        } else {
+            sb.append("批次 ").append(batchNumber).append(" 用了 ").append(materials.size()).append(" 个原料批次：\n");
+            Set<String> suppliers = new LinkedHashSet<>();
+            for (TraceabilityDTO.MaterialInfo m : materials) {
+                sb.append("• ").append(m.getMaterialName() == null ? "未命名原料" : m.getMaterialName())
+                        .append("（批次 ").append(m.getBatchNumber() == null ? "未登记" : m.getBatchNumber())
+                        .append("，供应商 ").append(m.getSupplierName() == null ? "未登记" : m.getSupplierName()).append("）\n");
+                if (m.getSupplierName() != null) suppliers.add(m.getSupplierName());
+            }
+            sb.append("涉及供应商：").append(suppliers.isEmpty() ? "均未登记" : String.join("、", suppliers)).append("。\n");
+        }
+        sb.append("该批次出货 ").append(shipmentCount).append(" 笔，涉及 ").append(customerCount).append(" 家客户。");
+        return sb.toString();
     }
 
     /** spec §8.2 只读查询, 无副作用 */

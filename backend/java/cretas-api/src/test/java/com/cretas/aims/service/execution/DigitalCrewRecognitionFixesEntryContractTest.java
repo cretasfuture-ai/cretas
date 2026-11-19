@@ -67,7 +67,6 @@ class DigitalCrewRecognitionFixesEntryContractTest {
 
     @ParameterizedTest(name = "{0}「{1}」")
     @CsvSource(delimiter = '|', value = {
-            "planner|周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？",
             "keeper|现在牛前腱还有多少库存？",
             "clerk|这个月销售额多少，哪个客户买得最多？"})
     @DisplayName("带条件 / 多个子问 → 不被句中短语截走, 交给决策层")
@@ -84,6 +83,22 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(h.executedIntents).as("执行的是决策层定的意图, 不是短语 %s", phraseCode)
                 .containsExactly(MODEL_INTENT);
         assertThat(run.view.intentCode()).isEqualTo(MODEL_INTENT);
+    }
+
+    @Test
+    @DisplayName("急单复合句 (#1884 有意放行): 只能由 SCHEDULING_RUSH_ORDER_ANALYSIS 接, 不落到其它短语, 也不经决策层")
+    void rushOrderCompoundSentenceIsTakenOnlyByTheRushIntent() throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        String input = "周五要交 2 吨酱牛肉急单，原料够不够，产线排不排得开？";
+        String phraseCode = h.knowledgeBase.matchPhrase(input.toLowerCase().trim(), "FACTORY").orElse(null);
+        assertThat(phraseCode).as("前提: 真实短语表会命中这句").isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        h.intent(phraseCode, phraseCode, phraseCode.toLowerCase(), ToolExecutor.AccessMode.READ);
+        h.recognizerAnswers(answer(input, h.readIntent));
+
+        Run run = ask(h, "planner", input);
+
+        assertThat(h.executedIntents).as("只被急单意图接, 不是别的短语").containsExactly("SCHEDULING_RUSH_ORDER_ANALYSIS");
+        assertThat(run.view.intentCode()).isEqualTo("SCHEDULING_RUSH_ORDER_ANALYSIS");
     }
 
     @Test
@@ -162,6 +177,62 @@ class DigitalCrewRecognitionFixesEntryContractTest {
         assertThat(h.executedIntents).containsExactly("REPORT_BATCH_YIELD_RANK");
     }
 
+    // ------------------------------------------------------------------ 11-19: 「X 成本怎么构成」不进闲聊
+
+    @ParameterizedTest(name = "「{0}」")
+    @CsvSource(delimiter = '|', value = {"酱卤牛肉成本怎么构成|0", "酱卤牛肉的成本构成|1", "酱卤牛肉成本是怎么算的|0",
+            "演示·酱卤牛肉250g 的成本是怎么构成的？|0"})
+    @DisplayName("成本构成问法 → 执行成本查询, 不进闲聊兜底 (改前答「需要先查一下真实数据…」)")
+    void costCompositionQuestionGoesToRecognitionNotChat(String input, int expectedRecognitionCalls) throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        // 线上实测早期问题类型就是通用问法 (这才会走到「业务问法不进闲聊」的判定)
+        org.mockito.Mockito.doReturn(QuestionType.GENERAL_QUESTION).when(h.knowledgeBase).detectQuestionType(input);
+        h.chatReplies("需要先查一下真实数据，请您说明想查哪一项。");
+        AIIntentConfig cost = h.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        h.recognizerAnswers(answer(input, cost));
+
+        Run run = ask(h, "accountant", input);
+
+        assertThat(h.llmChatCalls()).as("没交给闲聊模型").isZero();
+        // 每句走哪条路是确定的: 句中带「成本怎么构成/怎么算」短语的由早期短语路由定成本查询 (0 次识别), 其余经决策层 (1 次)
+        assertThat(h.recognitionCalls()).as("识别次数按路径精确断言").isEqualTo(expectedRecognitionCalls);
+        assertThat(h.executedIntents).containsExactly("COST_QUERY");
+        assertThat(run.view.intentCode()).isEqualTo("COST_QUERY");
+    }
+
+    @Test
+    @DisplayName("阴性对照: 「怎么降低成本」是咨询, 仍走闲聊 (只放行成本构成/怎么算, 没有把咨询全放进识别)")
+    void howToReduceCostIsStillConsultation() throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness h = harness();
+        String input = "酱卤牛肉成本怎么降低";
+        org.mockito.Mockito.doReturn(QuestionType.GENERAL_QUESTION).when(h.knowledgeBase).detectQuestionType(input);
+        h.chatReplies("可以从原料采购和出成率入手。");
+
+        ask(h, "accountant", input);
+
+        assertThat(h.llmChatCalls()).as("咨询句照旧进闲聊").isEqualTo(1);
+        assertThat(h.recognitionCalls()).isZero();
+    }
+
+    @Test
+    @DisplayName("整句就是「成本怎么构成」→ 短语快捷直达成本查询; 带产品名的句子剩余字超限, 交决策层")
+    void barePhraseShortcutsAndProductNamedSentenceIsLeftToTheDecisionLayer() throws Exception {
+        StreamTurnCollectorEntryParityContractTest.Harness bare = harness();
+        bare.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        ask(bare, "accountant", "成本怎么构成");
+        assertThat(bare.recognitionCalls()).as("整句短语直达").isZero();
+        assertThat(bare.executedIntents).containsExactly("COST_QUERY");
+
+        StreamTurnCollectorEntryParityContractTest.Harness named = harness();
+        String input = "酱卤牛肉成本怎么构成";
+        assertThat(named.knowledgeBase.matchPhrase(input.toLowerCase(), "FACTORY")).as("前提: 句中短语会命中").contains("COST_QUERY");
+        AIIntentConfig cost = named.intent("COST_QUERY", "成本查询", "report_cost_query", ToolExecutor.AccessMode.READ);
+        named.recognizerAnswers(answer(input, cost));
+        ask(named, "accountant", input);
+        assertThat(named.recognitionCalls()).as("带产品名 → 决策层").isEqualTo(1);
+        assertThat(named.executedIntents).containsExactly("COST_QUERY");
+    }
+
     // ------------------------------------------------------------------ 对照: 现在好的两句不能变差
 
     @ParameterizedTest(name = "{0}「{1}」→ {2}")
@@ -225,7 +296,8 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                 mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
                 locks, users, mock(PermissionService.class), facade, h.recognizer,
                 mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
-                mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+                mock(FactoryBusinessTypeResolver.class), mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
+                mock(PlatformTransactionManager.class));
         DigitalCrewController controller = new DigitalCrewController(crew);
         MockHttpServletRequest http = new MockHttpServletRequest();
         AuthenticatedActor actor = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE);

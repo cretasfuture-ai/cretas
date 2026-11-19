@@ -49,7 +49,7 @@ class BatchReleaseDisciplineContractTest {
     private final MaterialBatchRepository batches = mock(MaterialBatchRepository.class);
     private final MaterialBatchReleaseRepository releases = mock(MaterialBatchReleaseRepository.class);
     private final MaterialBatchServiceImpl service = new MaterialBatchServiceImpl(
-            batches, null, null, mock(MaterialBatchMapper.class), null, null, null, null);
+            batches, null, null, mock(MaterialBatchMapper.class), org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
 
     private MaterialBatch batch(MaterialBatchStatus status, Map<String, String> config) {
         MaterialBatch b = new MaterialBatch();

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * 实时监控大屏
@@ -459,7 +460,7 @@ function getProbabilityColor(prob: number) {
           </div>
         </div>
       </div>
-      <el-empty v-else description="暂无排程数据" />
+      <ListEmptyExplain empty-title="当前没有进行中的排程" empty-hint="生产订单排程并下达到产线后，这里实时显示各产线的排程与人员；没有排程说明产线暂未安排生产。" />
     </el-card>
 
     <!-- 告警列表 -->

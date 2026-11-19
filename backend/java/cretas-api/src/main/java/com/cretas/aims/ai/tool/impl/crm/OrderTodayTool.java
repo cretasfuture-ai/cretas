@@ -47,7 +47,7 @@ public class OrderTodayTool extends AbstractBusinessTool {
         LocalDate today = LocalDate.now();
         List<SalesOrder> orders = salesOrderRepository.findByFactoryIdAndDateRange(factoryId, today, today);
         return Map.of(
-                "orders", orders,
+                "orders", OrderListTool.toSummaries(orders),
                 "total", orders.size(),
                 "orderDate", today,
                 "source", "sales_orders",

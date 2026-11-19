@@ -166,12 +166,42 @@ def status(v,history_offset=0):
                 'startedAt':m['started'],'endsAt':m['ends'],'intervalSeconds':60,'lastAttemptAt':last_attempt[0] if last_attempt else None,
                 'lastSuccessAt':success[0] if success else None,'nextRunAt':m['next_at'],'cycles':counts[0],
                 'successfulCycles':counts[1] or 0,'changedCycles':counts[2] or 0,'error':m['error'] or nightly.get('error') or ('采集已超过三分钟没有成功，请检查本机任务和网络。' if stale else None),
-                'nightly':nightly,
+                'nightly':nightly,'nightlyHealth':nightly_health(m['nightly']),
                 'gaps':[{'from':r['finished'],'to':r['next_at']} for r in c.execute("SELECT * FROM (SELECT finished,lead(started) OVER (ORDER BY started) AS next_at FROM cycle WHERE status='success') WHERE (julianday(next_at)-julianday(finished))*86400>150")],
                 'analysis':json.loads(m['analysis']) if m['analysis'] else {'status':'waiting','message':'等待首次采集与分析。'},'history':history,
                 'historyOffset':history_offset,'historyHasMore':history_offset+len(rows)<counts[0],
                 'dailyStats':[dict(r) for r in c.execute("SELECT date(started,'+8 hours') AS date,count(*) AS cycles,sum(status='success') AS successful,sum(changed) AS changed,sum(requests) AS requests FROM cycle GROUP BY date(started,'+8 hours') ORDER BY date DESC") ]}
     finally:c.close()
+
+
+NIGHTLY_STALE_HOURS=36
+NIGHTLY_OK,NIGHTLY_STALE,NIGHTLY_UNREADABLE=0,1,2
+
+
+def nightly_health(raw,at=None):
+    """Three states: 0 fresh / 1 lastSuccessAt older than 36h / 2 cannot be read (never reported as healthy)."""
+    try:
+        state=json.loads(raw) if isinstance(raw,(str,bytes)) and raw else None
+        success=state.get('lastSuccessAt') if isinstance(state,dict) else None
+        if not success:return {'state':NIGHTLY_UNREADABLE,'status':'unreadable','lastSuccessAt':None,'ageHours':None,'reason':'NIGHTLY_LAST_SUCCESS_MISSING'}
+        age=(instant(at or now())-instant(success)).total_seconds()/3600
+    except Exception as e:
+        return {'state':NIGHTLY_UNREADABLE,'status':'unreadable','lastSuccessAt':None,'ageHours':None,'reason':'NIGHTLY_STATE_UNREADABLE:'+type(e).__name__}
+    stale=age>NIGHTLY_STALE_HOURS
+    return {'state':NIGHTLY_STALE if stale else NIGHTLY_OK,'status':'stale' if stale else 'ok','lastSuccessAt':success,'ageHours':round(age,1),'reason':None}
+
+
+def nightly_health_from_db(path,at=None):
+    """Read-only probe for scripts: never creates or migrates the monitor database."""
+    try:
+        if not Path(path).is_absolute() or not Path(path).exists():raise FileNotFoundError('NIGHTLY_DB_MISSING')
+        c=sqlite3.connect('file:'+Path(path).as_posix()+'?mode=ro',uri=True,timeout=15)
+        try:row=c.execute('SELECT nightly FROM monitor LIMIT 1').fetchone()
+        finally:c.close()
+        if not row:raise ValueError('NIGHTLY_ROW_MISSING')
+    except Exception as e:
+        return {'state':NIGHTLY_UNREADABLE,'status':'unreadable','lastSuccessAt':None,'ageHours':None,'reason':'NIGHTLY_DB_UNREADABLE:'+type(e).__name__}
+    return nightly_health(row[0],at)
 
 
 def record_nightly(v,successful=None):
@@ -425,7 +455,11 @@ def load(data,metadata,configured,path,cycle_id=None):
 
 
 def main():
-    parser=argparse.ArgumentParser();parser.add_argument('--config',required=True);parser.add_argument('--once',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser();parser.add_argument('--config',required=True);parser.add_argument('--once',action='store_true');parser.add_argument('--nightly-health',action='store_true');args=parser.parse_args()
+    if args.nightly_health:
+        try:h=nightly_health_from_db(config(args.config)['db'])
+        except Exception as e:h={'state':NIGHTLY_UNREADABLE,'status':'unreadable','reason':'NIGHTLY_CONFIG_UNREADABLE:'+type(e).__name__}
+        print(json.dumps(h,ensure_ascii=False),flush=True);return h['state']
     v=config(args.config);initialize(v)
     while instant(now())<instant(status(v)['endsAt']):
         start=time.monotonic();ok=cycle(v)

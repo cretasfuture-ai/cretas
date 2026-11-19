@@ -97,7 +97,7 @@ public class WechatRecordCreateTool extends AbstractBusinessTool {
 
         Map<String, Object> recordTime = new HashMap<>();
         recordTime.put("type", "string");
-        recordTime.put("description", "可选 — 微信时间 ISO 格式. 留空默认现在");
+        recordTime.put("description", "可选 — 微信时间 ISO 格式. 用户没说就不要传该字段 (不要填 null/<nil>), 默认现在");
         properties.put("recordTime", recordTime);
 
         Map<String, Object> contactPerson = new HashMap<>();
@@ -199,9 +199,9 @@ public class WechatRecordCreateTool extends AbstractBusinessTool {
         String customerId = getString(params, "customerId");
         String directionStr = getString(params, "direction");
         String messageContent = getString(params, "messageContent");
-        String recordTimeStr = getString(params, "recordTime", null);
-        String contactPerson = getString(params, "contactPerson", null);
-        String remark = getString(params, "remark", null);
+        String recordTimeStr = optionalString(params, "recordTime");
+        String contactPerson = optionalString(params, "contactPerson");
+        String remark = optionalString(params, "remark");
         Long currentUserId = getUserId(context);
         String currentUserName = (String) context.get("userName");
 
@@ -258,6 +258,24 @@ public class WechatRecordCreateTool extends AbstractBusinessTool {
                 return result;
             }
             throw ex;
+        }
+    }
+
+    /**
+     * 可选参数读取: LLM 抽参对「没提到」的可选字段偶发填占位字面量 ("&lt;nil&gt;"/"null"/"None"/"N/A" 等),
+     * 一律按「未提供」处理 (recordTime 走默认现在), 不当真值。真值格式错误仍由调用方拒绝。
+     */
+    static String optionalString(Map<String, Object> params, String key) {
+        Object v = params.get(key);
+        if (v == null) return null;
+        String s = v.toString().trim();
+        if (s.isEmpty()) return null;
+        String lower = s.toLowerCase(java.util.Locale.ROOT);
+        switch (lower) {
+            case "<nil>", "nil", "<null>", "null", "none", "<none>", "undefined", "n/a", "na", "<empty>":
+                return null;
+            default:
+                return s;
         }
     }
 

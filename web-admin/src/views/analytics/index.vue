@@ -548,7 +548,7 @@ function formatPercent(num: Reading): string {
           <div class="stat-footer">
             <span>待发货: —</span>
           </div>
-          <div class="stat-unavailable">本页尚未接入销售数据源</div>
+          <div class="stat-unavailable">销售数据请到「经营分析 › 销售」查看 <router-link class="stat-link" to="/smart-bi/analysis-hub?tab=sales">前往查看</router-link></div>
         </el-card>
       </el-col>
 
@@ -564,7 +564,7 @@ function formatPercent(num: Reading): string {
           <div class="stat-footer">
             <span>平均: —</span>
           </div>
-          <div class="stat-unavailable">本页尚未接入成本数据源</div>
+          <div class="stat-unavailable">成本数据请到「成本分析」查看 <router-link class="stat-link" to="/production-analytics/cost">前往查看</router-link></div>
         </el-card>
       </el-col>
     </el-row>
@@ -640,6 +640,12 @@ function formatPercent(num: Reading): string {
   margin-top: 8px;
   font-size: 12px;
   color: #909399;
+}
+
+.stat-unavailable .stat-link {
+  margin-left: 4px;
+  color: var(--cs-primary);
+  text-decoration: none;
 }
 
 .stat-card {
