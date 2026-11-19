@@ -1790,7 +1790,14 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
         }
     }
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
+
     private StocktakeDTO enrichHeader(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
+        if (factoryWarehouseRepository != null && dto.getWarehouseId() != null && dto.getWarehouseName() == null) {
+            factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(dto.getWarehouseId(), factoryId)
+                    .ifPresent(w -> dto.setWarehouseName(w.getName()));
+        }
         LocalDateTime effectiveCutoff = effectiveInventoryCutoff(stocktake);
         if (dto.getInventoryCutoffAt() == null) {
             dto.setInventoryCutoffAt(effectiveCutoff);

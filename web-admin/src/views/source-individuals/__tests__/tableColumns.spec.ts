@@ -117,13 +117,13 @@ describe('源头个体档案 — 空字段不渲染 -', () => {
     const sparseCells = sparse.findAll('td').map((td) => td.text());
     expect(sparseCells).not.toContain('-');
     // 除编号与操作列, 其余格都是空串
-    expect(sparseCells.filter((t) => t !== '')).toEqual(['SL-CATTLE-007', '编辑删除']);
+    expect(sparseCells.filter((t) => t !== '')).toEqual(['SL-CATTLE-007', '编辑撤销']);
 
     // 阳性对照: 有值的那一行, 每一格都真的渲染出了值 —— 「空」不是「整张表都没渲染」
     const full = bodyRows.find((r) => r.text().includes('SL-BULL-001'))!;
     const fullCells = full.findAll('td').map((td) => td.text());
     expect(fullCells).toEqual([
-      'SL-BULL-001', '12345671', '已比中', 'CATTLE', '西门塔尔', '公', '2024-03-01', '胜龙一号场', '编辑删除',
+      'SL-BULL-001', '12345671', '已比中', 'CATTLE', '西门塔尔', '公', '2024-03-01', '胜龙一号场', '编辑撤销',
     ]);
   });
 });

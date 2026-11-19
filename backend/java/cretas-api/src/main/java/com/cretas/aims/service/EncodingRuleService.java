@@ -23,6 +23,26 @@ import java.util.Optional;
 public interface EncodingRuleService {
 
     /**
+     * 由系统自动编号、不受编码规则控制的单据类型 (PROTO-QC-NUMBER follow-up M2)。
+     * 质检记录的编号 QI-YYYYMMDD-NNNN 由数据库触发器发号 (V20261119_86), 这里配规则不会生效,
+     * 所以不让新建 (两个新建入口: EncodingRuleServiceImpl.createRule / CanvasEncodingRuleController.create),
+     * 也不出现在可配类型列表里。
+     */
+    java.util.Set<String> SYSTEM_NUMBERED_ENTITY_TYPES = java.util.Set.of("QUALITY_INSPECTION");
+
+    /** 拒绝为系统自动编号的单据类型新建编码规则 (400, 带提示)。 */
+    static void rejectSystemNumbered(String entityType) {
+        if (entityType != null
+                && SYSTEM_NUMBERED_ENTITY_TYPES.contains(entityType.trim().toUpperCase(java.util.Locale.ROOT))) {
+            throw new com.cretas.aims.exception.BusinessException(400,
+                    "质检记录由系统自动编号 (QI-日期-序号), 不能配置编码规则")
+                    .withCode("ENCODING_RULE_SYSTEM_NUMBERED")
+                    .withHint("质检记录编号按工厂按天自动递增, 无需配置; 请选择其它单据类型")
+                    .withHintTarget("entityType");
+        }
+    }
+
+    /**
      * 根据规则生成下一个编码
      *
      * @param factoryId 工厂ID

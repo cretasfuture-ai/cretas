@@ -69,6 +69,11 @@ export interface ProcessTimeLimitStatus {
   perLot: boolean;
   /** 进行中的暂停登记 id。 */
   pauseMarkId?: number | null;
+  /**
+   * 本厂超时拦不拦 (PROTO-Q41, 工厂开关 production.time_limit.block_on_exceed): false = 只警告 (默认),
+   * 超时 / 没登记解冻也能投料; 旧后端没有这个字段时按拦截理解。
+   */
+  blockOnExceed?: boolean;
 }
 
 export interface ProcessTimeMark {
@@ -103,6 +108,11 @@ export interface ProcessTimeLimitEvent {
   decidedByName: string | null;
   decidedAt: string | null;
   validUntil: string | null;
+  /**
+   * 这条记录怎么来的 (PROTO-Q41): BLOCKED = 超时被拦 (判不合格自动转出); WARN_EXCEEDED / WARN_START_MISSING =
+   * 只警告档的复盘记录 (判不合格只记结论, 不动库存, 报损走报损流程)。旧后端不带字段 = BLOCKED。
+   */
+  recordKind?: 'BLOCKED' | 'WARN_EXCEEDED' | 'WARN_START_MISSING';
 }
 
 const base = (factoryId: string) => `/${factoryId}/process-time-limits`;

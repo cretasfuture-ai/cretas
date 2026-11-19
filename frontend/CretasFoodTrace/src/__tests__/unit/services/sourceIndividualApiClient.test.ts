@@ -151,3 +151,36 @@ describe('读取类接口: 读不到就抛, ⛔ 不返回假的空结果', () =>
     expect(mocked.get).toHaveBeenCalledWith('/api/mobile/F006/source-individuals/by-tag/A%2FB%231');
   });
 });
+
+describe('revoke(): 撤销必须带原因, 走 POST /{id}/revoke 的请求体', () => {
+  it('原因 trim 后放进请求体, 返回后端的撤销结果', async () => {
+    mocked.post.mockResolvedValue({
+      success: true,
+      data: { id: 'si-1', individualCode: 'SI-1', revokeReason: '录入错误', revokedBy: '42' },
+    } as never);
+
+    const res = await sourceIndividualApiClient.revoke('si/1', '  录入错误 ');
+
+    expect(mocked.post).toHaveBeenCalledWith(
+      '/api/mobile/F006/source-individuals/si%2F1/revoke',
+      { reason: '录入错误' }
+    );
+    expect(mocked.delete).not.toHaveBeenCalled();
+    expect(res.revokedBy).toBe('42');
+  });
+
+  it('空原因 / 超 255 字 ⇒ 不发请求, 直接报错', async () => {
+    await expect(sourceIndividualApiClient.revoke('si-1', '   ')).rejects.toThrow('请填写撤销原因');
+    await expect(sourceIndividualApiClient.revoke('si-1', 'x'.repeat(256))).rejects.toThrow('255');
+    expect(mocked.post).not.toHaveBeenCalled();
+  });
+
+  it('409(被批次/系谱引用) ⇒ 原样抛出, ⛔ 不当成撤销成功', async () => {
+    mocked.post.mockRejectedValue(
+      Object.assign(new Error('已被批次 MB-1 使用，不能撤销'), {
+        response: { status: 409, data: { success: false, message: '已被批次 MB-1 使用，不能撤销' } },
+      })
+    );
+    await expect(sourceIndividualApiClient.revoke('si-1', '录入错误')).rejects.toThrow('MB-1');
+  });
+});

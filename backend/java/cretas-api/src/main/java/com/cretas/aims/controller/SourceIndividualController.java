@@ -5,6 +5,10 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.source.CreateSourceIndividualRequest;
+import com.cretas.aims.dto.source.RevokeSourceIndividualRequest;
+import com.cretas.aims.utils.TokenUtils;
+import java.util.List;
+import org.springframework.web.bind.annotation.RequestHeader;
 import com.cretas.aims.dto.source.SourceIndividualDTO;
 import com.cretas.aims.dto.source.SourceIndividualDetailDTO;
 import com.cretas.aims.dto.source.SourceIndividualLookupResult;
@@ -53,6 +57,7 @@ public class SourceIndividualController {
 
     private final SourceIndividualService sourceIndividualService;
     private final SourceIndividualDetailService sourceIndividualDetailService;
+    private final com.cretas.aims.service.MobileService mobileService;
 
     @RequirePermission({"warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"})
     @GetMapping
@@ -137,13 +142,43 @@ public class SourceIndividualController {
     @RequirePermission({"warehouse:read_write", "inventory:read_write"})
     @RequireModule("warehouse")
     @DeleteMapping("/{id}")
-    @Operation(summary = "删除源头个体档案 (软删)")
+    @Operation(summary = "删除源头个体档案 = 撤销 (必填原因, 已被批次引用 409)")
     @com.cretas.aims.annotation.Loggable(module = "SOURCE_INDIVIDUAL", action = "DELETE",
             entityType = "SourceIndividual", entityIdParam = "id")
-    public ApiResponse<Void> delete(
+    public ApiResponse<SourceIndividualDTO> delete(
+            @RequestHeader("Authorization") String authorization,
             @PathVariable @NotBlank String factoryId,
-            @PathVariable @NotBlank String id) {
-        sourceIndividualService.softDelete(factoryId, id);
-        return ApiResponse.successMessage("删除成功");
+            @PathVariable @NotBlank String id,
+            @Valid @RequestBody RevokeSourceIndividualRequest request) {
+        return doRevoke(authorization, factoryId, id, request);
+    }
+
+    @RequirePermission({"warehouse:read_write", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @PostMapping("/{id}/revoke")
+    @Operation(summary = "撤销源头个体档案 (原因在请求体, 必填≤255; 已被批次引用 409)")
+    @com.cretas.aims.annotation.Loggable(module = "SOURCE_INDIVIDUAL", action = "REVOKE",
+            entityType = "SourceIndividual", entityIdParam = "id")
+    public ApiResponse<SourceIndividualDTO> revoke(
+            @RequestHeader("Authorization") String authorization,
+            @PathVariable @NotBlank String factoryId,
+            @PathVariable @NotBlank String id,
+            @Valid @RequestBody RevokeSourceIndividualRequest request) {
+        return doRevoke(authorization, factoryId, id, request);
+    }
+
+    @RequirePermission({"warehouse:read", "warehouse:read_write", "inventory:read", "inventory:read_write"})
+    @RequireModule("warehouse")
+    @GetMapping("/revoked")
+    @Operation(summary = "已撤销源头个体档案 (只读, 含撤销原因/人/时间)")
+    public ApiResponse<List<SourceIndividualDTO>> listRevoked(@PathVariable @NotBlank String factoryId) {
+        return ApiResponse.success(sourceIndividualService.listRevoked(factoryId));
+    }
+
+    private ApiResponse<SourceIndividualDTO> doRevoke(String authorization, String factoryId, String id,
+                                                      RevokeSourceIndividualRequest request) {
+        Long userId = mobileService.getUserFromToken(TokenUtils.extractToken(authorization)).getId();
+        return ApiResponse.success("已撤销", sourceIndividualService.revoke(
+                factoryId, id, request.getReason(), userId == null ? null : String.valueOf(userId)));
     }
 }

@@ -76,7 +76,8 @@ class PreviewTokenServiceImplTest {
 
         assertThat(service.claimToken("legacy", "F001", 9L).isSuccess()).isFalse();
         verify(repository, never()).claimForExecution(
-                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any());
     }
 
     @Test
@@ -109,7 +110,7 @@ class PreviewTokenServiceImplTest {
         when(repository.claimForExecution(
                 eq("bound-scale"), eq("F001"), eq("F001"), eq(9L),
                 eq(bound.getCommandDigest()), eq(bound.getParametersHash()), eq("order_create"),
-                eq("1.4.0"), eq(ToolExecutionMode.EXECUTE), any(), any(), any(),
+                eq("1.4.0"), eq(ToolExecutionMode.EXECUTE), eq(""), eq(""), any(), any(), any(),
                 eq(TokenStatus.PENDING), eq(TokenStatus.EXECUTING))).thenReturn(1);
         when(repository.findByTokenAndClaimIdAndStatus(
                 eq("bound-scale"), any(), eq(TokenStatus.EXECUTING)))

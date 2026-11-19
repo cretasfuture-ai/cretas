@@ -42,6 +42,12 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class DefaultToolExecutionGatewayTest {
 
+    /**
+     * 这些用例测执行结果的分类, 不测执行前核对: 用空快照豁免白名单里的凭据类型, 让核对按设计跳过
+     * (执行前核对本身见 GatewayPreExecutionStateCheckContractTest)。
+     */
+    private static final String EXEMPT_ENTITY_TYPE = "CANVAS_DIFF";
+
     @Mock ToolPrincipalPolicy principalPolicy;
     @Mock ToolRuntimeRegistry runtimeRegistry;
     @Mock ToolConfirmationLease confirmationLease;
@@ -461,7 +467,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionIdempotencyRecord record = record(command, "audit-1");
         stubExecutable(command, record);
         Lease lease = new Lease(
-                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 99));
+                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 99), null, EXEMPT_ENTITY_TYPE);
         String digest = digest(command);
         when(confirmationLease.claim(command, currentPrincipal, digest))
                 .thenReturn(Optional.of(lease));
@@ -651,7 +657,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionIdempotencyRecord record = record(command, "audit-1");
         stubExecutable(command, record);
         Lease lease = new Lease(
-                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7));
+                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7), null, EXEMPT_ENTITY_TYPE);
         when(confirmationLease.claim(command, currentPrincipal, digest(command)))
                 .thenReturn(Optional.of(lease));
         when(confirmationLease.resolve(lease, false)).thenReturn(true);
@@ -730,7 +736,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionIdempotencyRecord record = record(command, "audit-1");
         stubExecutable(command, record);
         Lease lease = new Lease(
-                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7));
+                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7), null, EXEMPT_ENTITY_TYPE);
         when(confirmationLease.claim(command, currentPrincipal, digest(command)))
                 .thenReturn(Optional.of(lease));
         when(confirmationLease.resolve(lease, true)).thenReturn(false);
@@ -752,7 +758,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionIdempotencyRecord record = record(command, "audit-1");
         stubExecutable(command, record);
         Lease lease = new Lease(
-                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7));
+                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7), null, EXEMPT_ENTITY_TYPE);
         when(confirmationLease.claim(command, currentPrincipal, digest(command)))
                 .thenReturn(Optional.of(lease));
         when(confirmationLease.resolve(lease, true))
@@ -775,7 +781,7 @@ class DefaultToolExecutionGatewayTest {
         ToolExecutionIdempotencyRecord record = record(command, "audit-1");
         stubExecutable(command, record);
         Lease lease = new Lease(
-                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7));
+                "token-1", "claim-1", JsonNodeFactory.instance.objectNode().put("userId", 7), null, EXEMPT_ENTITY_TYPE);
         when(confirmationLease.claim(command, currentPrincipal, digest(command)))
                 .thenReturn(Optional.of(lease));
         when(confirmationLease.resolve(lease, true)).thenReturn(true);

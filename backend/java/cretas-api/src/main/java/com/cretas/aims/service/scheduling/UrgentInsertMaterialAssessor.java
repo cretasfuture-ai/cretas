@@ -207,11 +207,11 @@ public class UrgentInsertMaterialAssessor {
         }
         String unit = l.unit() == null ? "" : l.unit();
         StringBuilder sb = new StringBuilder()
-                .append(l.materialName()).append(" 缺 ").append(plain(l.shortfall())).append(unit)
-                .append("(需要 ").append(plain(l.required())).append(unit)
-                .append(", 可领库存 ").append(plain(l.available())).append(unit).append(")");
+                .append(l.materialName()).append(" 缺 ").append(shortfallText(l.shortfall(), unit)).append(unit)
+                .append("(需要 ").append(requiredText(l.required(), unit)).append(unit)
+                .append(", 可领库存 ").append(availableText(l.available(), unit)).append(unit).append(")");
         if (l.onOrder() != null && l.onOrder().signum() > 0) {
-            sb.append(", 在途未到 ").append(plain(l.onOrder())).append(unit).append(", 到货前不能插");
+            sb.append(", 在途未到 ").append(availableText(l.onOrder(), unit)).append(unit).append(", 到货前不能插");
         } else {
             sb.append(", 没有在途采购");
         }
@@ -231,6 +231,33 @@ public class UrgentInsertMaterialAssessor {
 
     private static String plain(BigDecimal v) {
         return v == null ? "?" : v.stripTrailingZeros().toPlainString();
+    }
+
+    /** 计件单位: 数量只能是整数个, 展示要取整; kg / g / L 等计量单位不在此列。 */
+    private static final java.util.Set<String> COUNT_UNITS = java.util.Set.of(
+            "个", "盒", "袋", "件", "箱", "只", "包", "瓶", "罐", "条", "块", "片", "枚", "套", "张", "支",
+            "桶", "卷", "副", "台", "粒", "颗", "根", "份", "杯", "串", "把", "罐装",
+            "pcs", "pc", "piece", "pieces", "box", "bag", "bottle", "can", "carton");
+
+    public static boolean isCountUnit(String unit) {
+        return unit != null && COUNT_UNITS.contains(unit.strip().toLowerCase(java.util.Locale.ROOT));
+    }
+
+    /** 缺口: 计件单位向上取整 (6290.386 → 6291), 计量单位原样。 */
+    public static String shortfallText(BigDecimal v, String unit) {
+        return isCountUnit(unit) && v != null
+                ? v.setScale(0, java.math.RoundingMode.CEILING).toPlainString() : plain(v);
+    }
+
+    /** 可领: 计件单位向下取整 (1709.614 → 1709), 保证 可领 + 缺口 ≥ 需要。 */
+    public static String availableText(BigDecimal v, String unit) {
+        return isCountUnit(unit) && v != null
+                ? v.setScale(0, java.math.RoundingMode.FLOOR).toPlainString() : plain(v);
+    }
+
+    /** 需要量 / 在途: 计件单位向上取整, 计量单位原样。 */
+    public static String requiredText(BigDecimal v, String unit) {
+        return shortfallText(v, unit);
     }
 
     public static String sha256(String s) {

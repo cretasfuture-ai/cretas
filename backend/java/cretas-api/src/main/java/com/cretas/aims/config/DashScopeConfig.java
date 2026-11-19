@@ -11,7 +11,7 @@ import jakarta.annotation.PostConstruct;
  * 阿里云 DashScope API 配置
  *
  * 支持通义千问系列模型：
- * - 文本模型: qwen-plus, qwen-turbo, qwen-max
+ * - 文本模型: qwen-plus-latest, qwen-turbo, qwen3.7-max-2026-06-08（qwen-max / qwen3-max 系列 2026-11-18 起禁用）
  * - 视觉模型: qwen2.5-vl-3b-instruct, qwen-vl-plus
  *
  * API 格式兼容 OpenAI，支持思考模式 (Thinking Mode)
@@ -44,9 +44,10 @@ public class DashScopeConfig {
 
     /**
      * 默认文本模型 (用于复杂查询)
-     * 可选: qwen-turbo (快速), qwen-plus (平衡), qwen-max (最强)
+     * 可选: qwen-turbo (快速), qwen-plus-latest (平衡), qwen3.7-max-2026-06-08 (最强, 免费清单内)
+     * 2026-11-18 Steve 裁定: qwen-max / qwen3-max 系列禁用, 默认不得指向它们。
      */
-    private String model = "qwen3-max-2026-01-23";  // free quota (was: qwen3.5-plus)
+    private String model = "qwen3.7-max-2026-06-08";  // free quota; 原默认 qwen3-max-2026-01-23 已禁用
 
     /**
      * 快速模型 (用于简单查询，如问候、简单问答)

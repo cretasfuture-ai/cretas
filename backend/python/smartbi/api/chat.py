@@ -18,7 +18,7 @@ import json as _json
 import logging
 from datetime import date
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence
+from typing import Any, AsyncGenerator, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -1592,6 +1592,8 @@ async def general_analysis(request: GeneralAnalysisRequest, http_request: Reques
                     charts.append(chart_entry)
         except Exception as chart_err:
             logger.warning(f"Chart generation failed in general_analysis: {chart_err}")
+        charts = _prefer_question_chart(query, df, charts)
+        answer, _ = _reconcile_answer_with_question_chart(answer, charts)
 
         # Sanitize insights to remove NaN/Infinity before JSON serialization
         insights = _sanitize_for_json(insights)
@@ -1701,7 +1703,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
         if _session_can_persist:
             try:
-                from smartbi.services.chat_session_service import ChatSessionService
+                from smartbi.services.chat_session_service import ChatSessionService, parent_for_upload
                 from smartbi.config import get_pg_pool as _get_pool_session
                 _session_pool = await _get_pool_session()
                 if _session_pool is not None:
@@ -1710,6 +1712,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         request.session_id, _session_factory_id,
                         user_id=_session_user_id,
                     )
+                    # A7: 上一轮是在另一个数据源上问的, 不能当「延续上一轮」喂给这一轮
+                    # (实测切源后新问题原样复读上一题答案)。
+                    _parent_before_upload_check = chat_session_parent
+                    chat_session_parent = parent_for_upload(
+                        chat_session_parent, validated_upload_id,
+                    )
+                    if _parent_before_upload_check and not chat_session_parent:
+                        logger.info(
+                            f"[chat-session] DROP parent: data source changed "
+                            f"{_parent_before_upload_check.get('parent_upload_id')} -> {validated_upload_id}"
+                        )
                     if chat_session_parent:
                         logger.info(
                             f"[chat-session] HIT session={request.session_id[:8]}... "
@@ -1811,6 +1824,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             return  # early exit — synthesis served the answer
             except Exception as e:
                 logger.warning(f"[stream] synthesis router failed, falling through: {e}")
+            _auto_pick = None
             try:
                 upload_id = (
                     validated_upload_id
@@ -1818,6 +1832,37 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     else None
                 )
                 user_q = (request.effective_query or "").strip()
+                # 味美 11-19 (B3): 「全部数据」(没选数据源) 时先按问题和各表列名/表名的重合度
+                # 选表; 一份都不沾边才走下面原来的模板匹配 / 行数最多。
+                if (
+                    request.allow_tenant_data_fallback
+                    and not upload_id
+                    and user_q
+                    and trusted_factory_id
+                ):
+                    try:
+                        from smartbi.services.upload_auto_select import pick_upload_for_question
+                        from smartbi.config import get_pg_pool as _get_pool_auto
+                        _pool_auto = await _get_pool_auto()
+                        if _pool_auto is not None:
+                            async with _pool_auto.acquire() as _conn_auto:
+                                _auto_pick = await pick_upload_for_question(
+                                    _conn_auto, trusted_factory_id, user_q
+                                )
+                        if _auto_pick is not None:
+                            upload_id = _auto_pick.upload_id
+                            logger.info(
+                                f"[stream] question-matched upload {upload_id} "
+                                f"({_auto_pick.label!r}, factory={trusted_factory_id})"
+                            )
+                            yield _sse_event("data_source", {
+                                "uploadId": _auto_pick.upload_id,
+                                "label": _auto_pick.label,
+                                "autoSelected": True,
+                            })
+                    except Exception as _ae:
+                        logger.warning(f"[stream] question-matched upload select failed: {_ae}")
+                        _auto_pick = None
                 # Bug G phase 2 (Apr 26 2026): template-aware upload selection.
                 # Phase 1 picked largest upload — broke for qhj where 32K 卡详情
                 # (no menu data) was largest but 6K 营业概况月报 (with menu data)
@@ -2077,6 +2122,13 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 payload = format_cached_as_sse(
                                     tpl, user_q, intent_signals=intent_signals
                                 )
+                                # 问题 51: 按问题点名的维度改写占比缓存; 图型改成
+                                # ChartInsight 认得的 pie/bar/line (一图一分析)。
+                                from smartbi.services.question_chart import (
+                                    adapt_category_distribution, normalize_cached_charts,
+                                )
+                                payload = adapt_category_distribution(payload, user_q)
+                                payload["charts"] = normalize_cached_charts(payload.get("charts") or [])
                                 # Stream as SSE
                                 yield _sse_event("status", "正在整理已有经营分析...")
                                 # Chunk the answer in small pieces for streaming feel
@@ -2148,6 +2200,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
 
             # ── Data loading (same as general_analysis) ──
             data = request.data
+            # 问题 51: 下面从库里读的只是前 200 行样本; 按问题出图要对整份上传汇总。
+            _question_chart_upload_id: Optional[int] = None
             if request.allow_tenant_data_fallback and not data and request.sheet_id:
                 data = get_sheet_data(trusted_factory_id, request.sheet_id)
 
@@ -2158,7 +2212,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     pool = await _get_pg_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            upload_id = validated_upload_id
+                            upload_id = validated_upload_id or (
+                                _auto_pick.upload_id if _auto_pick is not None else None
+                            )
                             if not upload_id:
                                 # Bug G fix (Apr 26 2026): factory-scoped + largest non-empty upload.
                                 factory_id_for_select = trusted_factory_id
@@ -2190,6 +2246,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 if rows:
                                     data = [_json.loads(r['row_data']) if isinstance(r['row_data'], str) else r['row_data'] for r in rows]  # noqa: E501
                                     logger.info(f"[stream] Loaded {len(data)} rows from upload {upload_id}")
+                                    _question_chart_upload_id = int(upload_id)
                                 # Bug #17 fix (Apr 17 2026): load field_definitions for prompt
                                 # So LLM knows which columns are measures/dimensions/times
                                 try:
@@ -2893,7 +2950,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         should_short_circuit,
                     )
                     _query_domain = classify_query_domain(request.effective_query)
-                    _short_circuit_msg = should_short_circuit(_query_domain, _caps_obj)
+                    from smartbi.services.row_level_qa import all_field_names as _rl_all_fields
+                    _short_circuit_msg = should_short_circuit(
+                        _query_domain, _caps_obj,
+                        field_names=_rl_all_fields(field_meta, df),
+                    )
                     if _short_circuit_msg:
                         logger.info(
                             f"[stream] capability short-circuit: domain={_query_domain} "
@@ -2912,6 +2973,65 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                         return  # early exit — saved the LLM call
                 except Exception as _sc_err:
                     logger.warning(f"[stream] capability short-circuit failed: {_sc_err}")
+
+            # 行级确定性计算 (味美实测 A1-A5/A10): 问答原先只拿「全表列统计 + 前几行样本」,
+            # 无法定位/筛选/分组。这里由 LLM 出结构化查询计划, 服务端在整份数据上执行,
+            # 真实结果行交给 LLM 措辞; 指标缺失直接拒答并列全字段。
+            _rl_block = ""
+            _rl_active = False
+            if request.effective_query:
+                try:
+                    from smartbi.services.row_level_qa import (
+                        all_field_names as _rl_names,
+                        answer_row_level as _rl_answer,
+                        load_upload_frame as _rl_load,
+                        TooManyRows as _RlTooMany,
+                    )
+                    _rl_df = df
+                    if _question_chart_upload_id is not None:
+                        # 样本只有 200 行: 行级计算要读该上传的全部行 (按租户过滤)。
+                        from smartbi.config import get_pg_pool as _rl_get_pool
+                        _rl_pool = await _rl_get_pool()
+                        async with _rl_pool.acquire() as _rl_conn:
+                            _rl_df = await _rl_load(
+                                _rl_conn, _question_chart_upload_id, trusted_factory_id
+                            )
+                    _rl_fm = field_meta if 'field_meta' in locals() else None
+
+                    async def _rl_llm(_p: str, _s: str) -> str:
+                        return await insight_gen._call_llm(_p, _s, max_tokens=700)
+
+                    _rl_out = await _rl_answer(
+                        request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm
+                    )
+                    if _rl_out.kind == "refuse":
+                        for i in range(0, len(_rl_out.text), 60):
+                            yield _sse_event("chunk", _rl_out.text[i:i + 60])
+                        yield _sse_event("done", {
+                            "success": True,
+                            "answer": _rl_out.text,
+                            "charts": [],
+                            "source": "field_metric_mismatch_refusal",
+                            "processingTimeMs": int((time.time() - start_time) * 1000),
+                        })
+                        return
+                    if _rl_out.kind in ("computed", "uncomputed"):
+                        _rl_block = "\n" + _rl_out.text
+                        _rl_active = True
+                except _RlTooMany as _rl_big:
+                    _rl_block = (
+                        "\n## 行级计算未完成\n数据量超过行级计算上限 (" + str(_rl_big) + ")。"
+                        "回答规则: 不得指出具体是哪一天/哪一行/哪个产品, 只可引用全量聚合数字, "
+                        "并明说本次未能逐行计算。\n"
+                    )
+                    _rl_active = True
+                except Exception as _rl_err:
+                    logger.warning(f"[stream] row-level qa failed: {_rl_err}")
+                    _rl_block = (
+                        "\n## 行级计算未完成\n本次逐行计算失败。回答规则: 不得指出具体是哪一天/"
+                        "哪一行/哪个产品, 不得对比率求平均, 并明说本次未能逐行计算。\n"
+                    )
+                    _rl_active = True
 
             # Bug #19 fix (Apr 17 2026): inject authoritative full-data aggregates
             # so LLM doesn't guess from 200-row sample.
@@ -2939,13 +3059,16 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # of the system_role prefix that every call shares — expected
             # cache hit rate ~23% → ~50%, prompt size 4K → 3K tokens, TTFT
             # 5-15s → 3-8s on cache hit.
+            _sample_caveat = (
+                "，只用于了解字段样貌，禁止据此回答「哪一行/哪一天/哪个产品」" if _rl_active else ""
+            )
             prompt = f"""{session_context_block}用户问题：{analysis_ctx}
 
 {field_summary}
 {capability_hint}
-## 数据概览 (样本)
+## 数据概览 (样本{_sample_caveat})
 {data_summary}
-{real_agg_block}
+{real_agg_block}{_rl_block}
 {financial_metrics}"""
 
             system_role = (
@@ -2973,7 +3096,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     "## 回答格式 (强制 — 3 段落, 总长 ≤ 200 字)\n"
                     "1. **结论** (1 句话, 含数字): 直接回答 user 的问题\n"
                     "2. **关键发现** (1-2 句, 含数字 + 实体): 解释/支持结论\n"
-                    "3. **行动建议** (2 项, 用 - 开头): 具体可做, 含负责人 + 时间 + 预期收益\n\n"
+                    "3. **行动建议** (2 项, 用 - 开头): 具体可做, 含负责人 + 时间; 金额/收益只许引用数据里出现过的数字, "
+                    "没有金额或成本列就不写金额, 写 '需要成本数据才能估算金额'\n\n"
                     "避免: 大段铺陈/套话/'建议补充数据'类废话/超过 200 字. "
                     "严格控制字数 — LLM 输出每多 100 字, 用户多等 3 秒."
                 )
@@ -2986,6 +3110,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # LLM costing 10-12s; cache hit returns in 200ms.
             _llm_cache_hit = None
             if (request.allow_tenant_data_fallback
+                    and not _rl_active  # 行级计算过的问题不读旧缓存 (旧答案可能是样本猜的)
                     and not chat_session_parent and _session_factory_id
                     and request.effective_query):
                 try:
@@ -3231,6 +3356,19 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             if '_cached_charts_override' in locals() and _cached_charts_override:
                 charts = _cached_charts_override
 
+            # 问题 51: 问题点名了维度/指标时, 用全量数据现算那一张图, 换掉
+            # 「Top 5 省份」/前 50 行抽样饼图这类和问题对不上的图。
+            if _question_chart_upload_id is not None:
+                charts = await _prefer_question_chart_for_upload(
+                    query, df, charts, _question_chart_upload_id, trusted_factory_id,
+                )
+            else:
+                charts = _prefer_question_chart(query, df, charts)
+
+            # 问题 51 返工 (LSM-COSTBI-F3): 文字结论必须和图同源。LLM 文字已流出去了,
+            # 对不上图数据就用代码结论覆盖 (done.answer + answer_corrected, 前端据此替换)。
+            full_text, _answer_corrected = _reconcile_answer_with_question_chart(full_text, charts)
+
             if charts:
                 yield _sse_event("charts", charts)
 
@@ -3301,6 +3439,19 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     logger.warning(f"[stream] {_guard_warning}")
             except Exception as guard_err:
                 logger.warning(f"[stream] numeric guard check failed: {guard_err}")
+
+            # A9: 建议里的金额必须在 LLM 拿到的数据里找得到, 否则改写 (答案已流出, 靠 done 覆盖)。
+            _answer_replaced = False
+            try:
+                from smartbi.services.llm_guard import strip_unsupported_money_claims
+                _support = prompt[len(session_context_block):] if session_context_block else prompt
+                _clean_text, _removed_claims = strip_unsupported_money_claims(full_text, _support)
+                if _removed_claims:
+                    logger.warning(f"[stream] unsupported money claims rewritten: {_removed_claims}")
+                    full_text = _clean_text
+                    _answer_replaced = True
+            except Exception as _mc_err:
+                logger.warning(f"[stream] money-claim check failed (non-fatal): {_mc_err}")
 
             # v4 B2-B (Apr 26 2026): write LLM answer to cache BEFORE done
             # event — async generator gets cancelled by client right after
@@ -3380,9 +3531,11 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             yield _sse_event("done", {
                 "success": True,
                 "answer": full_text,
+                "answer_corrected": _answer_corrected,
                 "charts": charts,
                 "log_id": _log_id,
                 "warning": _guard_warning,
+                "answer_replaced": _answer_replaced,
                 "processingTimeMs": int((time.time() - start_time) * 1000)
             })
 
@@ -3939,6 +4092,59 @@ async def multi_dimension_analysis_stream(request: MultiDimensionRequest, http_r
     )
 
 
+def _prefer_question_chart(query: Optional[str], df, charts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """问题点名了维度时返回 [按问题现算的那张图]; 认不出就原样返回 charts。"""
+    try:
+        from smartbi.services.question_chart import build_question_chart
+        qchart = build_question_chart(query or "", df)
+    except Exception as exc:  # 出图失败不影响文字答案
+        logger.warning(f"[question-chart] build failed (keep generic charts): {exc}")
+        return charts
+    if not qchart:
+        return charts
+    logger.info(f"[question-chart] {qchart.get('question_chart')}")
+    return [_sanitize_for_json(qchart)]
+
+
+def _reconcile_answer_with_question_chart(answer: str, charts: List[Dict[str, Any]]) -> Tuple[str, bool]:
+    """图是按问题现算的 (question_chart) 时, 文字里的占比必须出自同一份图数据; 对不上换代码结论。"""
+    try:
+        from smartbi.services.question_chart import reconcile_answer_with_chart
+        for c in charts or []:
+            if isinstance(c, dict) and c.get("question_chart"):
+                fixed, changed = reconcile_answer_with_chart(answer or "", c)
+                if changed:
+                    logger.warning("[question-chart] LLM answer disagreed with chart data; replaced by code conclusion")
+                return fixed, changed
+    except Exception as exc:
+        logger.warning(f"[question-chart] reconcile failed (keep answer): {exc}")
+    return answer, False
+
+
+async def _prefer_question_chart_for_upload(
+    query: Optional[str], sample_df, charts: List[Dict[str, Any]],
+    upload_id: int, factory_id: str,
+) -> List[Dict[str, Any]]:
+    """同 _prefer_question_chart, 但 sample_df 只是样本: 数在库里对整份上传汇总。"""
+    try:
+        from smartbi.config import get_pg_pool as _get_pool_qc
+        from smartbi.services.question_chart import build_question_chart_for_upload
+        pool = await _get_pool_qc()
+        if pool is None:
+            return charts
+        async with pool.acquire() as conn:
+            qchart = await build_question_chart_for_upload(
+                conn, upload_id, factory_id, query or "", sample_df,
+            )
+    except Exception as exc:  # 出图失败不影响文字答案
+        logger.warning(f"[question-chart] upload aggregate failed (keep generic charts): {exc}")
+        return charts
+    if not qchart:
+        return charts
+    logger.info(f"[question-chart] upload={upload_id} {qchart.get('question_chart')}")
+    return [_sanitize_for_json(qchart)]
+
+
 def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
     """Build charts based on the query keywords — extracted to share between stream and non-stream endpoints."""
     import re as _re
@@ -4058,6 +4264,29 @@ def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
 
     chart_data = data[:50] if len(data) > 50 else data
     charts: List[Dict[str, Any]] = []
+
+    # 页脚「数据驱动」按图里的数现算: 图的指标要跟问题相关 (问产量就画良品, 不是永远取前 3 个数值列)。
+    # 对不上任何列时保持原来的默认选列。
+    _asked_cols = []
+    try:
+        from smartbi.services.question_chart import relevant_measure_columns
+        _asked_cols = relevant_measure_columns(query or "", numeric_cols)
+    except Exception as _rel_err:
+        logger.warning(f"[chart] relevant column pick failed (keep default): {_rel_err}")
+    if _asked_cols:
+        numeric_cols = _asked_cols
+        # 比率列 (0~1 小数) 画成百分数, 否则 0.99 会被页脚当成「0.99%」
+        _scaled = [c for c in _asked_cols if '率' in c and df[c].notna().any() and df[c].abs().max() <= 1.5]
+        if _scaled:
+            chart_data = [
+                {**row, **{c: round(row[c] * 100, 2) for c in _scaled
+                           if isinstance(row.get(c), (int, float)) and row.get(c) is not None}}
+                for row in chart_data
+            ]
+        if any(w in (query or "") for w in ("哪天", "哪一天", "每天", "每日", "逐日", "各天")):
+            _date_like = next((c for c in df.columns if any(w in str(c) for w in ("日期", "date", "Date"))), None)
+            if _date_like:
+                label_field = _date_like
 
     if "趋势" in query or "变化" in query:
         if numeric_cols:

@@ -127,4 +127,34 @@ class ReportBatchYieldRankToolContractTest {
         add("B3", "酱鸭", "50", "49", ProductionBatchStatus.COMPLETED);
         assertEquals(1, run("{\"productName\":\"酱鸭\"}").get("data").get("data").get("rows").size());
     }
+
+    // ---- 2026-11-18 LSMDEMO「最近有哪些批次出成率异常？」: 「异常」不是产品名; 窗口没数据要说最近一次有数据的日期 ----
+    @Test
+    void anomalyWordIsNotAProductFilter() throws Exception {
+        add("B1", "卤牛肉", "100", "90", ProductionBatchStatus.COMPLETED);
+        JsonNode data = run("{\"productName\":\"异常\"}").get("data").get("data");
+        assertEquals(1, data.get("completedBatchCount").asInt());
+        // 阴性对照: 真产品名仍然过滤
+        assertEquals(0, run("{\"productName\":\"酱鸭\"}").get("data").get("data").get("completedBatchCount").asInt());
+    }
+
+    @Test
+    void emptyWindowNamesTheLatestCompletedBatchDateEvenWhenTheWindowCameFromTheSentence() throws Exception {
+        ProductionBatchRepository repo = mock(ProductionBatchRepository.class);
+        ProductionBatch old = new ProductionBatch();
+        old.setBatchNumber("B-OLD");
+        old.setProductName("卤牛肉");
+        old.setStatus(ProductionBatchStatus.COMPLETED);
+        old.setEndTime(LocalDate.of(2026, 9, 20).atStartOfDay());
+        when(repo.findBatchesInDateRange(eq("F1"), any(), any())).thenAnswer(inv -> {
+            java.time.LocalDateTime from = inv.getArgument(1);
+            return from.isBefore(LocalDate.of(2026, 10, 1).atStartOfDay()) ? List.of(old) : List.<ProductionBatch>of();
+        });
+        ReflectionTestUtils.setField(tool, "batchRepository", repo);
+        // 「最近」由对话预处理补成显式 startDate/endDate
+        JsonNode r = run("{\"startDate\":\"2026-11-11\",\"endDate\":\"2026-11-14\",\"productName\":\"异常\"}");
+        String msg = r.get("data").get("message").asText();
+        assertTrue(msg.contains("最近一次已完成批次是 2026-09-20"), msg);
+        assertFalse(msg.contains("「异常」"), msg);
+    }
 }

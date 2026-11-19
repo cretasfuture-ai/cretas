@@ -33,7 +33,8 @@ class FactoryIntentCatalogContractTest {
     }
     @Test
     void canonicalCatalogRetiresDedicatedCodesWithoutDeletingSharedFactoryCapabilities() {
-        assertThat(FactoryIntentCatalog.canonicalCodes()).hasSize(271);
+        // 2026-11-18 v3 复核缺口 +4 意图 (CUSTOMER_CREATE / HR_MY_WAGE_QUERY / HR_EMPLOYEE_WORK_LOCATION_QUERY / SSOP_SCHEDULE_PLAN_CREATE)
+        assertThat(FactoryIntentCatalog.canonicalCodes()).hasSize(275);
         assertThat(FactoryIntentCatalog.retiredCodes()).hasSize(81);
         FactoryIntentCatalog.retiredCodes().forEach(code -> {
             assertThat(FactoryIntentCatalog.isRetiredIntent(code)).isTrue();

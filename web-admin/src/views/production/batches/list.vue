@@ -15,6 +15,7 @@ import { safePrint } from '@/api/printApi';
 import AiEntryDrawer from '@/components/ai-entry/AiEntryDrawer.vue';
 import { PROCESS_TASK_CONFIG } from '@/components/ai-entry/types';
 import { useTableColumnWidth } from '@/composables/useTableColumnWidth';
+import { plannedBasisOf, plannedColumnLabel, plannedQuantityOrNull } from './plannedQuantityBasis';
 
 const router = useRouter();
 
@@ -119,6 +120,9 @@ async function handleAiFill(params: Record<string, unknown>) {
 
 const loading = ref(false);
 const tableData = ref<BatchTableRow[]>([]);
+// B4: 「计划数量」列的真实含义 (理论产能 / 计划数量), 见 plannedQuantityBasis.ts
+const plannedColumnText = computed(() => plannedColumnLabel(tableData.value));
+const plannedMixed = computed(() => plannedColumnText.value.includes('/'));
 const pagination = ref({ page: 1, size: 10, total: 0 });
 const searchForm = ref({
   batchNumber: '',
@@ -528,9 +532,9 @@ function getStatusText(status: string) {
   <div class="page-wrapper">
     <ConceptDisambiguationAlert
       here-name="生产批次"
-      here="已开工的实际「批次」（IN_PROGRESS / COMPLETED，记录实际产量、消耗、报工）"
+      :here="`已开工的实际「批次」（${getStatusText('IN_PROGRESS')} / ${getStatusText('COMPLETED')}，记录实际产量、消耗、报工）`"
       other-name="生产管理 → 生产计划"
-      other="未来要做什么的「计划」（PENDING / 待开工状态，可调整数量、日期）"
+      :other="`未来要做什么的「计划」（${getStatusText('PENDING')}状态，可调整数量、日期）`"
       other-path="/production/plans"
     />
     <el-card class="page-card" shadow="never">
@@ -627,13 +631,24 @@ function getStatusText(status: string) {
         </el-table-column>
         <el-table-column
           prop="plannedQuantity"
-          label="计划数量"
+          :label="plannedColumnText"
           :width="columnWidth('plannedQuantity')"
           align="right"
           sortable
           :render-header="sortableHeader"
           :sort-method="(a: TableSortRow, b: TableSortRow) => compareNullableNumber(a, b, 'plannedQuantity')"
-        />
+        >
+          <template #default="{ row }">
+            <!-- B4: 无计划数量时空着, 不显示 0; 混合列头时在理论产能的行上标明 -->
+            <template v-if="plannedQuantityOrNull(row) != null">
+              {{ plannedQuantityOrNull(row) }}<span
+                v-if="plannedMixed && plannedBasisOf(row) === 'THEORETICAL_CAPACITY'"
+                class="planned-basis-note"
+                data-testid="planned-basis-note"
+              >（理论产能）</span>
+            </template>
+          </template>
+        </el-table-column>
         <el-table-column
           prop="actualQuantity"
           label="实际数量"

@@ -1385,7 +1385,9 @@ watch([() => props.employeeNavigationPending, factoryId, actorId, () => authStor
   void nextTick(() => {
     if (generation !== initializationGeneration || props.employeeNavigationPending || initialQueryStarted) return;
   initialQueryStarted = true;
-  void triggerFollowupQuery();
+  // 数字专员对话模式: 挂载/刷新不替用户发问(此前会自动发「查询当前销售订单」且不带会话上下文,
+  // 空结果/失败时顶部出红条)。只有用户主动提问或点重试才走 /ai-intents/execute。
+  if (!props.digitalEmployee) void triggerFollowupQuery();
   void loadTodayPendingShipments();
   });
 }, { immediate: true, flush: 'sync' });

@@ -1,7 +1,7 @@
 /**
  * 质检员 App · 超时处置 (食品 DAG 缺口 14): 待处置清单 + 处置记录。
  *
- * 操作员领到超时的料被拦, 提示让质检员处置; 质检员不登网页 (MOBILE_ONLY_ROLES), 所以在 App 上补这页。
+ * 操作员领到超时的料 (只警告档照常投料并留痕, 拦截档被拦) 由质检员处置; 质检员不登网页 (MOBILE_ONLY_ROLES), 所以在 App 上补这页。
  * 行为照网页 web-admin/src/views/quality/release/ProcessTimeoutEventsTab.vue,
  * 接口 ProcessTimeLimitController GET /events、/events/records。
  * 入口与「去处置」按后端同一权限 (utils/qualityClosurePermissions), ⛔ 不写岗位名。
@@ -77,7 +77,7 @@ export default function QITimeoutScreen() {
       return (
         <EmptyBlock
           text="没有超时待处置的料"
-          hint="操作员领用时被时限拦下的料会出现在这里。"
+          hint="操作员领到超时的料会在这里留一条记录（本厂只警告时照常投料，开了超时拦截时会被拦下）。"
           actionText="返回首页"
           onAction={() => navigation.navigate('QIHome')}
         />

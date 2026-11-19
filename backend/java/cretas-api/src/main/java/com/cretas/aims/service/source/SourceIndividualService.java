@@ -7,6 +7,8 @@ import com.cretas.aims.dto.source.SourceIndividualLookupResult;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +39,9 @@ import java.util.UUID;
 public class SourceIndividualService {
 
     private final SourceIndividualRepository repository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private MaterialBatchRepository materialBatchRepository;
 
     // ── 读 ────────────────────────────────────────────────────────────────
 
@@ -119,6 +124,8 @@ public class SourceIndividualService {
                 .breed(trimToNull(request.getBreed()))
                 .sex(trimToNull(request.getSex()))
                 .birthDate(request.getBirthDate())
+                .individualType(requireValidType(request.getIndividualType()))
+                .entryDate(request.getEntryDate())
                 .originFarm(trimToNull(request.getOriginFarm()))
                 .externalGeneBankId(trimToNull(request.getExternalGeneBankId()))
                 .dnaSampleCode(trimToNull(request.getDnaSampleCode()))
@@ -175,6 +182,12 @@ public class SourceIndividualService {
         if (request.getBirthDate() != null) {
             entity.setBirthDate(request.getBirthDate());
         }
+        if (request.getIndividualType() != null) {
+            entity.setIndividualType(requireValidType(request.getIndividualType()));
+        }
+        if (request.getEntryDate() != null) {
+            entity.setEntryDate(request.getEntryDate());
+        }
         if (request.getOriginFarm() != null) {
             entity.setOriginFarm(trimToNull(request.getOriginFarm()));
         }
@@ -204,10 +217,99 @@ public class SourceIndividualService {
         return toDTO(repository.saveAndFlush(entity));
     }
 
-    /** 软删 —— 实体类上的 {@code @SQLDelete} 把它翻译成 {@code UPDATE … SET deleted_at = NOW()}。 */
+    /**
+     * 撤销: 必填原因(≤255); 已被原料批次引用、或已被别的个体当作父本/母本的个体不许撤销
+     * (撤销会让它从溯源链/系谱里消失); 先落原因/撤销人/时间再软删, 行保留,
+     * 可经 {@link #listRevoked} 查回。
+     *
+     * <p>🔴 先 {@code FOR UPDATE} 锁住个体行再查引用 —— 挂批次({@link #requireLinkable})和
+     * 挂系谱({@code requireParentInSameFactory})也锁同一行, 三者在这一行上串行。
+     * ⛔ 这里不再提供不查引用、不留原因的「直接软删」入口。
+     */
     @Transactional
-    public void softDelete(String factoryId, String id) {
-        repository.delete(require(factoryId, id));
+    public SourceIndividualDTO revoke(String factoryId, String id, String reason, String revokedBy) {
+        String r = reason == null ? null : reason.trim();
+        if (!StringUtils.hasText(r)) {
+            throw new BusinessException(400, "撤销原因不能为空");
+        }
+        if (r.length() > 255) {
+            throw new BusinessException(400, "撤销原因最长 255 字");
+        }
+        SourceIndividual entity = repository.lockByIdAndFactoryId(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "源头个体档案不存在: " + id));
+        List<SourceIndividual> offspring = repository.findOffspring(factoryId, id);
+        if (!offspring.isEmpty()) {
+            String codes = offspring.stream().limit(5).map(SourceIndividual::getIndividualCode)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, "已作为 " + offspring.size() + " 头个体(" + codes
+                    + (offspring.size() > 5 ? " 等" : "") + ")的父本/母本，不能撤销")
+                    .withCode("IN_USE_PEDIGREE")
+                    .withHint("先改正这些后代档案里的父本/母本, 再撤销该个体档案");
+        }
+        List<MaterialBatch> used = materialBatchRepository
+                .findByFactoryIdAndSourceIndividualIdOrderByReceiptDateDesc(factoryId, id);
+        if (!used.isEmpty()) {
+            String batchNos = used.stream().limit(5).map(MaterialBatch::getBatchNumber)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, "已被批次 " + batchNos
+                    + (used.size() > 5 ? " 等 " + used.size() + " 个批次" : "") + " 使用，不能撤销")
+                    .withCode("IN_USE")
+                    .withHint("先处理引用它的批次, 再撤销该个体档案");
+        }
+        entity.setRevokeReason(r);
+        entity.setRevokedBy(revokedBy);
+        entity.setRevokedAt(java.time.LocalDateTime.now());
+        SourceIndividualDTO dto = toDTO(repository.saveAndFlush(entity));
+        repository.delete(entity);
+        return dto;
+    }
+
+    /** 已撤销档案(只读), 带 factory_id。 */
+    @Transactional(readOnly = true)
+    public List<SourceIndividualDTO> listRevoked(String factoryId) {
+        return repository.findRevokedByFactoryId(factoryId).stream()
+                .map(SourceIndividualService::toDTO).toList();
+    }
+
+    /**
+     * 原料批次要挂这头个体前的校验: 必须是<b>本厂、未撤销</b>的档案, 否则拒绝。
+     *
+     * <p>库上 {@code material_batches.source_individual_id} 没有 FK(V20261101_42 刻意不加),
+     * 所以这是唯一一道闸。⚠️ 必须在调用方的写事务里调用 —— 这里对个体行加的
+     * {@code FOR UPDATE} 要一直持有到批次落库提交, 才能和 {@link #revoke} 串行。
+     *
+     * @return 归一化后的 id(空/空白 = 不挂个体, 返回 {@code null})
+     * @throws BusinessException 409 已撤销 / 400 不存在或不属于本工厂
+     */
+    @Transactional
+    public String requireLinkable(String factoryId, String rawId) {
+        String id = trimToNull(rawId);
+        if (id == null) {
+            return null;
+        }
+        if (repository.lockByIdAndFactoryId(id, factoryId).isPresent()) {
+            return id;
+        }
+        if (repository.countDeletedByIdAndFactoryId(id, factoryId) > 0) {
+            throw new BusinessException(409, "源头个体档案已撤销, 不能再挂到批次上: " + id)
+                    .withCode("SOURCE_INDIVIDUAL_REVOKED")
+                    .withHint("刷新个体列表, 选一个有效的个体档案");
+        }
+        throw new BusinessException(400, "源头个体档案不存在或不属于本工厂: " + id)
+                .withCode("SOURCE_INDIVIDUAL_NOT_FOUND")
+                .withHintTarget("sourceIndividualId");
+    }
+
+    private static String requireValidType(String raw) {
+        String t = trimToNull(raw);
+        if (t == null) {
+            return null;
+        }
+        String upper = t.toUpperCase();
+        if (!upper.equals("LIVE") && !upper.equals("CARCASS")) {
+            throw new BusinessException(400, "个体类型只能是 LIVE(活体) 或 CARCASS(胴体): " + raw);
+        }
+        return upper;
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
@@ -256,7 +358,8 @@ public class SourceIndividualService {
             throw new BusinessException(422, role + "不能指向个体自己")
                     .withCode("INVALID_PEDIGREE");
         }
-        if (repository.findByIdAndFactoryId(parentId, factoryId).isEmpty()) {
+        // 锁父本行: 与 revoke 的 FOR UPDATE 串行, 防止「刚通过校验, 父本就被撤销」。
+        if (repository.lockByIdAndFactoryId(parentId, factoryId).isEmpty()) {
             throw new BusinessException(422,
                     role + "个体档案不存在或不属于本工厂: " + parentId)
                     .withCode("INVALID_PEDIGREE")
@@ -313,6 +416,11 @@ public class SourceIndividualService {
                 .damIndividualId(e.getDamIndividualId())
                 .extAttributes(e.getExtAttributes())
                 .notes(e.getNotes())
+                .individualType(e.getIndividualType())
+                .entryDate(e.getEntryDate())
+                .revokeReason(e.getRevokeReason())
+                .revokedBy(e.getRevokedBy())
+                .revokedAt(e.getRevokedAt())
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .version(e.getVersion())

@@ -64,6 +64,7 @@
         row-key="id"
         style="width: 100%"
       >
+        <template #empty><ListEmptyExplain empty-title="还没有销售付款申请" empty-hint="客户需要预付或分期付款时，点右上角新建付款申请并关联销售订单；财务审批后进入收款。" /></template>
         <el-table-column label="申请单号" prop="requestNumber" width="170" />
         <!-- 销售方向: 显示销售订单号和客户名 -->
         <el-table-column label="销售订单" prop="salesOrderId" width="160">
@@ -412,6 +413,7 @@
 </template>
 
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'

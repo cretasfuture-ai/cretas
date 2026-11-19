@@ -19,6 +19,12 @@ import static org.mockito.Mockito.*;
 import static org.assertj.core.api.Assertions.*;
 
 class DataScopeRecordAccessContractTest {
+    // 本类断言「没有请求上下文时」每条读路径都走行级范围检查。DataScopeResolver.requireRecordAccess 看到线程上
+    // 残留的请求上下文 (资源名对不上) 会直接放行 —— 同一 fork 里前面的测试若把上下文留在本线程, 这里 12 条就假红
+    // (2026-11-19 #1927 合并组 / #1933 的 fast 第 3 片)。每条前后都清掉, 不依赖别的测试是否收尾。
+    @org.junit.jupiter.api.BeforeEach @org.junit.jupiter.api.AfterEach
+    void isolateRequestContext() { org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes(); }
+
     @ParameterizedTest @ValueSource(strings={"sales","purchase","material","customer","returns","quality"})
     void hiddenRecordCannotBeReadByDirectId(String resource) {
         var resolver=mock(DataScopeResolver.class);

@@ -114,6 +114,8 @@ def filtered_problems(name, doc, patterns_file_text=None):
     if not ch:
         bad.append("%s: 没有 changes 作业" % name)
     else:
+        # java-gate-pr 的 changes 兼做 mini/托管路由 (2026-11-18 #1888), ⛔ 必须在托管机上: 放 mini 上的话 mini 一满
+        # 它自己也排队, 溢出失效。#1887 曾临时放行 mini 路由原文, #1888 收回 —— 所有 workflow 一律字面量。
         if ch.get("runs-on") != "ubuntu-latest":
             bad.append("%s/changes: runs-on 必须是字面量 ubuntu-latest, 实得 %r" % (name, ch.get("runs-on")))
         if not isinstance(ch.get("timeout-minutes"), int):

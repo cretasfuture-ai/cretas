@@ -70,6 +70,25 @@ describe('ar-ap 应收应付', () => {
     expect(w.text()).toContain('¥800.00');
   });
 
+  it('PROTO-DEMO-ARAP: 没有挂账单据时写明「尚未生成挂账单据」; 有单据(余额 0 也算)时不写', async () => {
+    const mountWith = async (data: Record<string, unknown>) => {
+      mocks.get.mockImplementation(async (url: string) => {
+        if (url.endsWith('/finance/overview')) return { success: true, data };
+        if (url.endsWith('/finance/transactions')) return { success: true, data: { content: [], totalElements: 0 } };
+        return { success: true, data: [] };
+      });
+      const w = mount(ArApPage, { global: { stubs } });
+      await flushPromises();
+      return w;
+    };
+    const none = await mountWith({ totalReceivable: 0, totalPayable: 0, ledgerEntryCount: 0, hasLedgerEntries: false });
+    expect(none.text()).toContain('本厂尚未生成挂账单据');
+    expect(none.find('[data-testid="arap-overview"]').exists()).toBe(true);
+    const zero = await mountWith({ totalReceivable: 0, totalPayable: 0, ledgerEntryCount: 3, hasLedgerEntries: true });
+    expect(zero.text()).not.toContain('尚未生成挂账单据');
+    expect(zero.find('[data-testid="arap-overview"]').exists()).toBe(true);
+  });
+
   it('credit-note types are mapped to Chinese (no 未知状态 / raw code)', async () => {
     mocks.get.mockImplementation(async (url: string) => {
       if (url.endsWith('/finance/overview')) return { success: true, data: { totalReceivable: 1, totalPayable: 1 } };

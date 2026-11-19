@@ -74,6 +74,7 @@ class DigitalCrewConfirmPermissionMvcContractTest {
                 mock(com.cretas.aims.repository.crew.DigitalCrewDelegationLockRepository.class), users,
                 permissions, intents, mock(AIIntentService.class), previewTokens,
                 mock(FactoryCapabilityPackSelector.class), mock(FactoryBusinessTypeResolver.class),
+                mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
                 mock(PlatformTransactionManager.class));
         mvc = MockMvcBuilders.standaloneSetup(new DigitalCrewController(service))
                 .addInterceptors(new PermissionInterceptor(permissions, users, new ObjectMapper()))

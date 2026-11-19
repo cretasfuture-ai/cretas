@@ -88,7 +88,7 @@ class ConfirmedWriteFollowUpContractTest {
             when(h.materials.findById("MB-D")).thenReturn(Optional.of(batch));
             when(h.materials.save(any(MaterialBatch.class))).thenAnswer(call->call.getArgument(0));
             var consumptions=mock(MaterialConsumptionRepository.class);
-            var service=new MaterialBatchServiceImpl(h.materials,null,null,new MaterialBatchMapper(),null,null,null,null);
+            var service=new MaterialBatchServiceImpl(h.materials,null,null,new MaterialBatchMapper(),org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class),null,null,null);
             ReflectionTestUtils.setField(service,"materialConsumptionRepository",consumptions);
             ReflectionTestUtils.setField(service,"inventoryLowStockEventPublisher",
                 mock(com.cretas.aims.service.alerts.InventoryLowStockEventPublisher.class));

@@ -205,7 +205,8 @@ public class GatedDataToolAiPathPermissionTest {
     void everyToolIsClassified() {
         // Readings that must happen, or this gate guards nothing.
         assertThat(scan.uninstantiable).as("tools the scan cannot name are invisible to it").isEmpty();
-        assertThat(scan.toolCalls).hasSize(498);
+        // 2026-11-18 v3 复核缺口 +3 新工具 (my_wage_query / employee_work_location_query / ssop_schedule_plan)
+        assertThat(scan.toolCalls).hasSize(501);
         assertThat(scan.handlers).isGreaterThan(1000);
         for (String known : List.of("balance_sheet_query", "attendance_stats", "purchase_statistics", "order_list")) {
             assertThat(scan.gatedCalls(known)).as("%s must read gated data per the scan", known).isNotEmpty();
@@ -218,6 +219,53 @@ public class GatedDataToolAiPathPermissionTest {
             if (problem != null) problems.add(tool + ": " + problem);
         }
         assertThat(problems).as("unclassified or wrongly gated tools").isEmpty();
+    }
+
+    @Test
+    @DisplayName("🔴 工具委托的独立辅助类 (ai/tool/** 下) 里的数据调用也算工具读的 (ProcessYieldViews → MaterialBalanceService)")
+    void helperClassDataCallsCountAsTheTools() throws Exception {
+        // Reading that must happen: the case that showed the gap (PR #1942, BP 问题 28).
+        String yield = scan.toolClasses.entrySet().stream()
+                .filter(e -> e.getValue().getPackageName().endsWith(".report")
+                        && scan.helperCalls.getOrDefault(e.getKey(), Map.of()).containsKey("ProcessYieldViews"))
+                .map(Map.Entry::getKey).findFirst().orElse(null);
+        assertThat(yield).as("some report tool reaches data through ProcessYieldViews").isNotNull();
+        assertThat(scan.toolCalls.get(yield)).anyMatch(d -> d.owner().equals("MaterialBalanceService"));
+        StringBuilder listing = new StringBuilder();
+        int rows = 0;
+        for (Map.Entry<String, Map<String, Set<GatedDataScan.DataMethod>>> t : new TreeMap<>(scan.helperCalls).entrySet()) {
+            for (Map.Entry<String, Set<GatedDataScan.DataMethod>> h : t.getValue().entrySet()) {
+                for (GatedDataScan.DataMethod d : h.getValue()) {
+                    listing.append(t.getKey()).append('\t').append(h.getKey()).append('\t').append(d).append('\n');
+                    rows++;
+                }
+            }
+        }
+        java.nio.file.Files.writeString(java.nio.file.Path.of("target", "gated-data-helper-calls.tsv"), listing.toString());
+        assertThat(rows).as("tool → helper → data rows (listing in target/gated-data-helper-calls.tsv)").isGreaterThan(0);
+        assertThat(scan.unresolvedHelperCalls).as("helper calls the scan cannot follow to a body").isEmpty();
+
+        // Positive control: a tool with no gate that reads finance data only through a helper must be refused.
+        Map<String, Set<GatedDataScan.DataMethod>> via = new TreeMap<>();
+        Set<GatedDataScan.DataMethod> calls = GatedDataScan.callsOfTool(
+                com.cretas.aims.gatedcontrol.UngatedHelperDelegatingTool.class, via);
+        assertThat(via).containsKey("HelperReadingBalanceSheet");
+        GatedDataScan.DataMethod reached = via.get("HelperReadingBalanceSheet").iterator().next();
+        assertThat(scan.servedBy.get(reached)).as("%s is served by a read endpoint", reached).isNotEmpty();
+        assertThat(scan.servedBy.get(reached)).allMatch(GatedDataScan.Endpoint::gated);
+        String control = "helper_control_ungated";
+        scan.toolCalls.put(control, calls);
+        scan.instances.put(control, new com.cretas.aims.gatedcontrol.UngatedHelperDelegatingTool());
+        try {
+            assertThat(classify(control, scan.instances.get(control))).as("ungated tool reading gated data via helper")
+                    .isNotNull().contains("has no gate");
+            // Without the helper scan the same tool looks clean: that is the gap this test closes.
+            scan.toolCalls.put(control, new HashSet<>(calls) {{ removeAll(via.get("HelperReadingBalanceSheet")); }});
+            assertThat(classify(control, scan.instances.get(control))).isNull();
+        } finally {
+            scan.toolCalls.remove(control);
+            scan.instances.remove(control);
+        }
     }
 
     @Test

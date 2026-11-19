@@ -305,7 +305,8 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), " +
                 "       COUNT(*) FILTER (WHERE result = 'PASS') AS pass_cnt, " +
-                "       COUNT(*) FILTER (WHERE result = 'FAIL') AS fail_cnt " +
+                "       COUNT(*) FILTER (WHERE result = 'FAIL') AS fail_cnt, " +
+                "       COUNT(*) FILTER (WHERE result = 'CONDITIONAL') AS cond_cnt " +
                 "FROM quality_inspections WHERE factory_id = :fid");
         // quality_inspections 用 result 不是 status — 用专用 filter
         if (filter.containsKey("result") && filter.get("result") != null) {
@@ -323,12 +324,18 @@ public class ListSummaryServiceImpl implements ListSummaryService {
         long count = ((Number) row[0]).longValue();
         long pass = ((Number) row[1]).longValue();
         long fail = ((Number) row[2]).longValue();
+        long conditional = ((Number) row[3]).longValue();
+        // 其余 (PENDING 待检 / 空值 / 历史别名) 一并计入, 保证 合格+不合格+有条件放行+待判定 == 共
+        long other = count - pass - fail - conditional;
+        // 口径: 合格率 = 合格 / 全部 (含待判定、有条件放行), 与此前一致; 页面上标明口径。
         double passRate = count > 0 ? (pass * 100.0 / count) : 0.0;
         List<SummaryStat> stats = new ArrayList<>();
         stats.add(stat("共", count, "number", "项", false));
         stats.add(stat("合格", pass, "number", "项", false));
         stats.add(stat("不合格", fail, "number", "项", false));
-        stats.add(stat("合格率", BigDecimal.valueOf(passRate).setScale(1, RoundingMode.HALF_UP),
+        stats.add(stat("有条件放行", conditional, "number", "项", false));
+        stats.add(stat("待判定", other, "number", "项", false));
+        stats.add(stat("合格率(合格÷全部)", BigDecimal.valueOf(passRate).setScale(1, RoundingMode.HALF_UP),
                 "percent", "%", false));
         return ListSummaryResponse.builder().entityType("qualityInspection").stats(stats).build();
     }

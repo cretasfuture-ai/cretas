@@ -89,7 +89,7 @@ class IntentExecutionOrchestratorConfirmationContractTest {
         when(aiIntentService.hasPermission("ORDER_CREATE", ROLE)).thenReturn(true);
         FactoryAnalysisTestMetadata.bindNamedFactories(orchestrator);
         when(dispatchService.recheckPreviewState(any(), any(), any(), any(), any(), any(), any()))
-                .thenReturn(ToolDispatchService.ConfirmStateCheck.ok());
+                .thenReturn(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.ok());
     }
 
     // ==================== 写入确认三洞 (Fable 审阅 §8.2/§8.3) ====================
@@ -98,8 +98,8 @@ class IntentExecutionOrchestratorConfirmationContractTest {
     void staleStateRecheckRefusesBeforeAnyBusinessDispatch() {
         ToolExecutor tool = configuredTool();
         when(dispatchService.recheckPreviewState(eq(tool), any(), any(), any(), eq(FACTORY), eq(USER), eq(ROLE)))
-                .thenReturn(ToolDispatchService.ConfirmStateCheck.reject(
-                        ToolDispatchService.ConfirmStateCheck.STATE_CHANGED, java.util.List.of("数量"),
+                .thenReturn(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.reject(
+                        com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.STATE_CHANGED, java.util.List.of("数量"),
                         "预览之后「数量」已被改动"));
 
         IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
@@ -114,8 +114,8 @@ class IntentExecutionOrchestratorConfirmationContractTest {
     void notComparableToolIsSentToTheBusinessPageNotBackToTheSamePreview() {
         ToolExecutor tool = configuredTool();
         when(dispatchService.recheckPreviewState(eq(tool), any(), any(), any(), eq(FACTORY), eq(USER), eq(ROLE)))
-                .thenReturn(ToolDispatchService.ConfirmStateCheck.reject(
-                        ToolDispatchService.ConfirmStateCheck.NOT_COMPARABLE, java.util.List.of(),
+                .thenReturn(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.reject(
+                        com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.NOT_COMPARABLE, java.util.List.of(),
                         ToolDispatchService.NOT_COMPARABLE_MESSAGE));
 
         IntentExecuteResponse response = orchestrator.confirm(FACTORY, proof(), USER, ROLE);
