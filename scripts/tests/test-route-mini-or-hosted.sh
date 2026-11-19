@@ -286,6 +286,22 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
   else
     echo "  ok - 心跳写端/读端都接上"
   fi
+  # 睡眠/过热 (2026-11-19 半醒里跑满 -> Dark Wake Thermal Emergency): 领活前叫醒、作业期间禁止睡眠、有温度告警不领活。
+  mkdir -p "$WORK/pmsetbin"
+  printf '#!/usr/bin/env bash
+echo "$FAKE_THERM"
+' > "$WORK/pmsetbin/pmset"; chmod +x "$WORK/pmsetbin/pmset"
+  th() { PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="$2" bash "$1" --thermal-hot; }
+  REFILL_F="$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh"
+  tgot="ok=$(th "$REFILL_F" "$(printf 'Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'Thermal Warning Level set to 2.')"
+  echo "READING: refill thermal: $tgot"
+  if [ "$tgot" != "ok=no hot=yes" ]; then echo "FAIL: 温度判断应为 ok=no hot=yes"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 温度告警判断"; fi
+  w_full=$(grep -c '^  full_wake$' "$REFILL_F"); w_caf=$(grep -c 'caffeinate -i -s -w "\$pid"' "$REFILL_F"); w_hot=$(grep -c '^  if thermal_hot; then$' "$REFILL_F")
+  echo "READING: sleep guards full_wake=$w_full caffeinate_job=$w_caf thermal_gate=$w_hot"
+  if [ "$w_full" != 1 ] || [ "$w_caf" != 1 ] || [ "$w_hot" != 1 ]; then
+    echo "FAIL: refill.sh 要在领活前调 full_wake、作业期间 caffeinate -i -s -w \$pid、循环里有 thermal_hot 闸"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 叫醒/防睡/温度闸都接上"; fi
   # 变异对照: 删掉年龄判断, 过期心跳必须被查出来 (变异体只跑场景, 不递归)。
   HMUT="$WORK/route-hb-mutant.sh"
   grep -v 'HEARTBEAT-AGE-CHECK' "$SCRIPT" > "$HMUT"

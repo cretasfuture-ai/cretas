@@ -49,10 +49,21 @@ idle_rank() {
   done
   echo "$r"
 }
+# 睡眠/过热 (2026-11-19 实测): 10:14 loginwindow 软件睡眠后 mini 只被定时器叫到「半醒」(DarkWake), 一直没有
+# 完全醒; 半醒里跑满 CI -> 12:40「Sleep Service Back to Sleep」、13:35「Dark Wake Thermal Emergency」, 每次失联十几
+# 分钟。所以领活前先声明一次用户活动 (caffeinate -u = 动一下鼠标, 半醒 -> 完全醒), 作业期间持有「禁止系统睡眠」
+# (caffeinate -i -s -w <pid>, 作业结束自动释放; 本机 pmset sleep 本来就是 0); 系统记了温度/性能告警就先不领新活。
+full_wake() { command -v caffeinate >/dev/null 2>&1 && caffeinate -u -t 2 >/dev/null 2>&1; }
+thermal_hot() {  # pmset -g therm 里出现「告警级别」行且不是「No ... recorded」就算热
+  command -v pmset >/dev/null 2>&1 || return 1
+  pmset -g therm 2>/dev/null | grep -i "warning level" | grep -viq "no .*warning level has been recorded"
+}
+
 if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--enabled-of" ]; then if slot_enabled "${2:?slot}"; then echo yes; else echo no; fi; exit 0; fi
 if [ "${1:-}" = "--window" ]; then mini_window "${2:-}"; exit 0; fi
+if [ "${1:-}" = "--thermal-hot" ]; then if thermal_hot; then echo yes; else echo no; fi; exit 0; fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
@@ -112,6 +123,13 @@ while :; do
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
   [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null
+  if thermal_hot; then
+    [ "${hot:-0}" = 1 ] || log "thermal warning recorded, not taking new jobs: $(pmset -g therm 2>/dev/null | grep -i 'warning level' | tr '
+' ' ')"
+    hot=1; sleep 60; continue
+  fi
+  [ "${hot:-0}" = 1 ] && log "thermal warning cleared"
+  hot=0
   q=$(mini_queued); rank=$(idle_rank "$SLOT")
   if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
@@ -119,6 +137,7 @@ while :; do
         -f name="$name" -F runner_group_id=1 -f "labels[]=$LABEL" -f work_folder="../work-$SLOT" \
         -q .encoded_jit_config 2>>"$LOG")
   if [ -z "$jit" ]; then log "jitconfig failed, retry in 30s"; sleep 30; continue; fi
+  full_wake
   sudo -n -u ghgate -H /bin/bash -c '
     set -e
     rm -rf "$1"; cp -cR "$2" "$1"; cd "$1"
@@ -137,6 +156,8 @@ while :; do
     ./run.sh --jitconfig "$3"
   ' _ "$WORK" "$PKG" "$jit" "$LOCK" >> "$LOG" 2>&1 &
   pid=$!
+  # 作业期间禁止系统睡眠 (随 runner 进程退出自动释放)。
+  command -v caffeinate >/dev/null 2>&1 && caffeinate -i -s -w "$pid" >/dev/null 2>&1 &
   # 起了但 $IDLE_KILL_SEC 秒内没领到活 (别的槽先接走了) 就收掉, 并删掉这条 runner 注册。
   waited=0
   while ps -p "$pid" >/dev/null 2>&1; do  # ⛔ 不用 kill -0: pid 是 root 的 sudo, rex 发信号会 EPERM
