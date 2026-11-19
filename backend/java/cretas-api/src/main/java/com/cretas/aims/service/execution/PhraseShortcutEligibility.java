@@ -46,6 +46,14 @@ public final class PhraseShortcutEligibility {
             "帮我|帮忙|麻烦|请你|请|给我|我想|我要|想要|一下|看看|看下|查查|现在|目前|当前|一共|总共"
                     + "|吧|吗|呢|啊|呀|嘛|哦|了");
 
+    // 客户和品名只在同一分句内识别，避免把连接词后的子问并入参数。
+    private static final String TRACE_NAME = "(?=[\\p{L}\\p{N}])(?:(?!顺便|另外|然后|同时|再列出|再查|再看)[\\p{L}\\p{N}\\h]){1,255}?";
+    private static final Pattern CUSTOMER_DATE_TRACE_CLAUSE = Pattern.compile(
+            "(?:\\d{4}\\h*年\\h*)?\\d{1,2}\\h*月\\h*\\d{1,2}\\h*[日号]\\h*[,，]?\\h*"
+                    + "(?:发给|发往|卖给|送给|送到|发到)\\h*" + TRACE_NAME + "\\h*的\\h*"
+                    + TRACE_NAME + "\\h*[,，、]?\\h*是\\h*"
+                    + "(?:哪\\h*(?:一\\h*)?批|哪个批次|什么批次)(?:\\h*原料)?(?:\\h*做的)?");
+
     private PhraseShortcutEligibility() {
     }
 
@@ -77,7 +85,7 @@ public final class PhraseShortcutEligibility {
             // BP 原话): 句中条件正是它的输入, 不是第二个子问 (2026-11-18 prod [SSE-EarlyPhrase] residual 被拦落到澄清)
             return true;
         }
-        if ("PRODUCT_SALES_RANKING".equals(intentCode) && IntentKnowledgeBase.GROWTH_BREAKDOWN_PHRASES.contains(phrase)) {
+        if ("PRODUCT_PRODUCT_SALES_RANKING".equals(intentCode) && IntentKnowledgeBase.GROWTH_BREAKDOWN_PHRASES.contains(phrase)) {
             // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」: 两个月和百分数是增量拆分工具自己从原话解析的输入, 不是第二个子问
             return true;
         }
@@ -100,13 +108,19 @@ public final class PhraseShortcutEligibility {
             "(\\d{4}年)?\\d{1,2}月(\\d{1,2}[日号]?)?|\\d{1,2}[日号]|[到至~—-]|从|自|截止|截至|今天|昨天|前天");
 
     /**
-     * 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。短语不在原话里 (剥过数量 / 时间才命中) = 原话全部。
+     * 整句拿掉短语、标点、语气词后剩下的部分 (日志 / 测试读数用)。
+     * 一般短语不在原话里 (剥过数量 / 时间才命中) = 原话全部，客户日期追溯按可识别片段移除。
      *
      * <p>句首时间词两边一起剥 (#1813 终审 M1): 短语表里有约 93 条以时间词开头的短语 (本月营收 / 上月净利率 / 本周发货),
      * 只剥原话不剥短语时, 一字不差说出「本月营收」反而剩下「营收」被拒。短语与原话一样先剥句首时间词再比
      * (句首时间词不算条件, 工具按原话里的时间查, 同 P1-A)。
      */
     static String residual(String input, String phrase) {
+        if (IntentKnowledgeBase.CUSTOMER_DATE_TRACE_PHRASE.equals(phrase)) {
+            // 合成短语不在原话里。只移除一个能完整识别的追溯片段，保留其前后的子问。
+            String rest = CUSTOMER_DATE_TRACE_CLAUSE.matcher(input).replaceFirst("");
+            return FILLER.matcher(PUNCT_AND_SPACE.matcher(rest).replaceAll("")).replaceAll("");
+        }
         return withoutPhrase(normalize(input), normalize(phrase));
     }
 
