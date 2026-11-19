@@ -63,7 +63,7 @@ const snapshot = byPath(baseline.leaves as LeafChain[]);
  * 链上其它节（含叶子自身，如 revenue-report 自己的 FACTORY 隐藏）逐项不变。
  * 白名单外任何叶子有变化 ⇒ 红；白名单内叶子没按预期变（漏改）⇒ 也红。
  */
-const EXPECTED_CHANGES: ReadonlyArray<{ leaf: string; ancestor: string; field: keyof MenuItem; from: unknown; to: unknown }> = [
+const EXPECTED_CHANGES: Array<{ leaf: string; ancestor: string; field: keyof MenuItem; from: unknown; to: unknown }> = [
   '/smart-bi/dashboard',
   '/smart-bi/analysis',
   '/smart-bi/analysis-hub',
@@ -79,6 +79,14 @@ const EXPECTED_CHANGES: ReadonlyArray<{ leaf: string; ancestor: string; field: k
   '/smart-bi/fallback-log',
   '/smart-bi/calibration',
 ].map((leaf) => ({ leaf, ancestor: '/smart-bi', field: 'hideForFactoryTypes' as const, from: ['FACTORY'], to: undefined as undefined }));
+
+/**
+ * #1872 (PROTO-DEMO-PERM)：权限矩阵收成平台专属 —— 叶子自身新增 roles: ['platform_admin']（改前无 roles），
+ * 与后端 @RequireRole({"platform_admin"}) 同名单。只此一条，不动别的菜单。
+ */
+const PERMISSION_MATRIX_LEAF = '/system/permission-matrix';
+const PERMISSION_MATRIX_CHANGE = { leaf: PERMISSION_MATRIX_LEAF, ancestor: PERMISSION_MATRIX_LEAF, field: 'roles' as const, from: undefined as undefined, to: ['platform_admin'] };
+EXPECTED_CHANGES.push(PERMISSION_MATRIX_CHANGE);
 
 /** 快照 + 白名单 = 这次之后应有的链。白名单里写的「改前」值必须与快照一致，否则白名单本身写错了。 */
 function applyExpectedChanges(base: Map<string, Guard[]>): Map<string, Guard[]> {
@@ -150,12 +158,12 @@ describe('P2 菜单改组：每个菜单 path 的权限字段改前改后逐项�
       .filter(([, chain]) => chain.some((g) => g.path === '/smart-bi' && JSON.stringify(g.hideForFactoryTypes) === '["FACTORY"]'))
       .map(([path]) => path).sort();
     expect(affected).toHaveLength(14);
-    expect(EXPECTED_CHANGES.map((c) => c.leaf).sort()).toEqual(affected);
+    expect(EXPECTED_CHANGES.map((c) => c.leaf).sort()).toEqual([...affected, PERMISSION_MATRIX_LEAF].sort());
     // 白名单只把这 14 条链上 /smart-bi 一节的 hideForFactoryTypes 去掉，别的都与快照一样
     const changed = [...snapshot.entries()]
       .filter(([path, chain]) => JSON.stringify(before.get(path)) !== JSON.stringify(chain))
       .map(([path]) => path).sort();
-    expect(changed).toEqual(affected);
+    expect(changed).toEqual([...affected, PERMISSION_MATRIX_LEAF].sort());
     // 叶子自身的工厂隐藏不在白名单里：收入管理报表仍对工厂隐藏
     expect(before.get('/smart-bi/revenue-report')?.at(-1)).toMatchObject({ hideForFactoryTypes: ['FACTORY'] });
     // 物流调度的 FACTORY 隐藏不受影响
