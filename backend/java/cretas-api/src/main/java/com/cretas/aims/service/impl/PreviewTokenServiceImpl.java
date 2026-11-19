@@ -249,18 +249,45 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
     @Override
     @Transactional
     public ClaimResult claimToken(String token, String factoryId, Long userId) {
-        return claimTokenInternal(token, factoryId, userId, null);
+        return claimTokenInternal(token, factoryId, userId, null, null);
     }
 
     @Override
     @Transactional
     public ClaimResult claimToken(String token, String factoryId, Long userId,
                                   String proofCommandDigest) {
-        return claimTokenInternal(token, factoryId, userId, proofCommandDigest);
+        return claimTokenInternal(token, factoryId, userId, proofCommandDigest, null);
     }
 
+    @Override
+    @Transactional
+    public ClaimResult claimTokenForSubject(String token, String factoryId, Long userId,
+                                            String proofCommandDigest,
+                                            String expectedEntityType, String expectedEntityId) {
+        if (proofCommandDigest == null || proofCommandDigest.isBlank()) {
+            return ClaimResult.failure("确认凭据与预览命令不匹配");
+        }
+        return claimTokenInternal(token, factoryId, userId, proofCommandDigest,
+                new ExpectedSubject(subjectValue(expectedEntityType), subjectValue(expectedEntityId)));
+    }
+
+    /** The business object a claim is bound to; values are already normalized ({@code null} → ""). */
+    private record ExpectedSubject(String entityType, String entityId) { }
+
+    /** Same normalization as the claim predicate's {@code COALESCE(column, '')}. */
+    private static String subjectValue(String value) {
+        return value == null ? "" : value;
+    }
+
+    /**
+     * @param expectedSubject {@code null} = the caller has no independent expectation of the business
+     *                        object (legacy confirm entry, which re-derives everything from the row):
+     *                        the row's own issued object is used, so the predicate still pins the claim
+     *                        to the object that was read. Non-null = the gateway's expectation, which the
+     *                        row must match before and inside the atomic claim.
+     */
     private ClaimResult claimTokenInternal(String token, String factoryId, Long userId,
-                                           String proofCommandDigest) {
+                                           String proofCommandDigest, ExpectedSubject expectedSubject) {
         String tokenFingerprint = fingerprint(token);
         if (token == null || token.isBlank() || factoryId == null || factoryId.isBlank() || userId == null) {
             return ClaimResult.failure("令牌无效或已过期");
@@ -324,11 +351,21 @@ public class PreviewTokenServiceImpl implements PreviewTokenService {
             }
         }
 
+        ExpectedSubject subject = expectedSubject != null
+                ? expectedSubject
+                : new ExpectedSubject(subjectValue(existing.getEntityType()), subjectValue(existing.getEntityId()));
+        if (!subject.entityType().equals(subjectValue(existing.getEntityType()))
+                || !subject.entityId().equals(subjectValue(existing.getEntityId()))) {
+            log.warn("确认认领失败: tokenFingerprint={}, reason=subject-mismatch", tokenFingerprint);
+            return ClaimResult.failure("确认凭据与要执行的业务对象不匹配，请重新发起预览");
+        }
+
         String claimId = UUID.randomUUID().toString();
         int claimed = tokenRepository.claimForExecution(
                 token, factoryId, factoryId, userId, expectedCommandDigest,
                 expectedParametersHash, existing.getToolName(), existing.getDescriptorVersion(),
-                existing.getExecutionMode(), claimId, now, now,
+                existing.getExecutionMode(), subject.entityType(), subject.entityId(),
+                claimId, now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING);
         if (claimed != 1) {
             // 0 行: 可能是并发的另一次点击刚认领走 (EXECUTING / 已完成), 也可能是同时被新预览取消、刚好过期。

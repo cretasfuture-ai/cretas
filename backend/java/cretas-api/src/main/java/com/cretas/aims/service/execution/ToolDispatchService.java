@@ -11,6 +11,7 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.gateway.AuthenticatedToolPrincipalFactory;
 import com.cretas.aims.ai.tool.gateway.ExecutionPrincipal;
 import com.cretas.aims.ai.tool.gateway.LegacyToolMigrationRegistry;
+import com.cretas.aims.ai.tool.gateway.PreviewStateRecheck;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionCommand;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionGateway;
 import com.cretas.aims.ai.tool.gateway.ToolExecutionMode;
@@ -1789,200 +1790,35 @@ public class ToolDispatchService {
         return value == null || value.length() <= max ? value : value.substring(0, max);
     }
 
-    private static final java.util.regex.Pattern PRIOR_STATE_KEY = java.util.regex.Pattern.compile("^current(ly)?[A-Z].*");
-
     /**
-     * 预览给出的改前值快照, 铸凭据时存进凭据、确认时重算后比对, 两处必须用同一条规则。
-     * <ol>
-     *   <li>预览的 {@code currentValues} (或 currentValue / current) —— 工具明确给出的改前值;</li>
-     *   <li>没有时, 改动已有记录的工具取预览里以 {@code current} 开头的字段 (currentStatus、currentEnabled、
-     *       currentQuantity…): 状态流转类工具普遍这样报改前状态, 只是没包成 currentValues;</li>
-     *   <li>都没有 → 空 (新建型放行, 其余无法核对)。</li>
-     * </ol>
-     * 新建型工具不取第 2 类: 那类字段在新建工具里多半是旁证 (如「当前已有 N 条」), 不是被改对象的状态。
-     * 返回值不为 null; 只进凭据, 不改确认卡上展示的改前/改后。
+     * 预览给出的改前值快照: 铸凭据时存进凭据、确认时重算后比对。规则只有一份, 在
+     * {@link PreviewStateRecheck#priorStateSnapshot} —— 老确认入口与新执行网关共用。
      */
     Map<String, Object> priorStateSnapshot(ToolExecutor tool, Map<String, Object> previewData) {
-        Map<String, Object> explicit = extractPreviewSection(previewData, "currentValues", "currentValue", "current");
-        if (explicit != null) {
-            return explicit;
-        }
-        if (previewData == null || tool.previewCreatesNewRecordOnly()) {
-            return Map.of();
-        }
-        Map<String, Object> data = previewData.get("data") instanceof Map<?, ?> nested
-                ? (Map<String, Object>) nested : previewData;
-        Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
-        data.forEach((key, value) -> {
-            if (key != null && PRIOR_STATE_KEY.matcher(key).matches()) {
-                snapshot.put(key, value);
-            }
-        });
-        return snapshot;
+        return PreviewStateRecheck.priorStateSnapshot(tool, previewData);
     }
 
-    static final String NOT_COMPARABLE_MESSAGE =
-            "这个操作暂时不能在助手里确认：系统无法核对这条记录在预览之后有没有被别人改过，本次未执行。请到对应的业务页面办理。";
-
-    /** 确认前状态核对的结论。{@code proceed=false} 时本次确认不得执行工具。 */
-    record ConfirmStateCheck(boolean proceed, String code, List<String> changedFields, String message) {
-        static final String STATE_CHANGED = "STATE_CHANGED";
-        static final String PRECONDITION_CHANGED = "PRECONDITION_CHANGED";
-        static final String NOT_COMPARABLE = "NOT_COMPARABLE";
-
-        /** 重新预览能解决的才让用户重新预览; 无法核对的不能 (会原地打转)。 */
-        boolean repreviewHelps() {
-            return STATE_CHANGED.equals(code) || PRECONDITION_CHANGED.equals(code)
-                    || REREAD_FAILED.equals(code);
-        }
-
-        /** 确认时重读失败 (预览抛异常 / 记录的改前值读不出): 一时的, 重新预览可以。 */
-        static final String REREAD_FAILED = "REREAD_FAILED";
-
-        static ConfirmStateCheck ok() {
-            return new ConfirmStateCheck(true, "OK", List.of(), null);
-        }
-
-        static ConfirmStateCheck reject(String code, List<String> fields, String message) {
-            return new ConfirmStateCheck(false, code, fields == null ? List.of() : List.copyOf(fields), message);
-        }
-    }
+    static final String NOT_COMPARABLE_MESSAGE = PreviewStateRecheck.NOT_COMPARABLE_MESSAGE;
 
     /**
-     * 确认时重读对象当前状态: 用凭据里绑定的参数重跑一次<b>只读</b>预览, 拿这次的改前值
-     * ({@code currentValues}) 与铸凭据时记下的改前值逐字段比对。
-     * <ul>
-     *   <li>预览不再通过 (业务前提变了) → 拒绝, 带预览给的原因;</li>
-     *   <li>有字段不一致 (预览之后有人改过) → 拒绝, 写明哪些字段变了;</li>
-     *   <li>两次都给不出改前值: 只新建记录的工具 ({@link ToolExecutor#previewCreatesNewRecordOnly()}) 放行,
-     *       其余一律按「无法核对」拒绝 (fail-closed);</li>
-     *   <li>预览本身抛异常 → 拒绝 (什么都没执行, 不是「结果不明」)。</li>
-     * </ul>
-     * 本方法不执行任何写操作; 比对与执行之间的毫秒级窗口仍由各工具自己的业务校验兜底。
+     * 确认时重读对象当前状态 (老确认入口): 用凭据里绑定的参数, 经本类唯一的预览调用点
+     * ({@link #runReadOnlyPreview}, 同样的可信上下文、同样的参数形状) 重跑一次只读预览, 判定规则见
+     * {@link PreviewStateRecheck#recheck} —— 与 {@code DefaultToolExecutionGateway} 执行前核对同一份。
      */
-    ConfirmStateCheck recheckPreviewState(ToolExecutor tool, AIIntentConfig intent,
-                                          String storedCurrentValuesJson,
-                                          Map<String, Object> claimedParameters,
-                                          String factoryId, Long userId, String userRole) {
-        Map<String, Object> stored;
-        try {
-            stored = storedCurrentValuesJson == null || storedCurrentValuesJson.isBlank()
-                    ? Map.of()
-                    : objectMapper.readValue(storedCurrentValuesJson,
-                            new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
-        } catch (Exception e) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
-                    "预览时记录的改前值无法读取，本次未执行。请重新预览后再确认。");
-        }
-        if (stored == null) {
-            stored = Map.of();
-        }
-        if (!tool.supportsPreview()) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
-                    NOT_COMPARABLE_MESSAGE);
-        }
-
-        Map<String, Object> previewData;
-        try {
-            Map<String, Object> params = new HashMap<>(
-                    claimedParameters != null ? claimedParameters : Map.of());
+    PreviewStateRecheck.ConfirmStateCheck recheckPreviewState(ToolExecutor tool, AIIntentConfig intent,
+                                                              String storedCurrentValuesJson,
+                                                              Map<String, Object> claimedParameters,
+                                                              String factoryId, Long userId, String userRole) {
+        return PreviewStateRecheck.recheck(tool, storedCurrentValuesJson, claimedParameters, params -> {
             TrustedExecutionContext.enforcePrincipal(params, factoryId, userId, userRole);
-            // 与铸凭据时同一个预览入口 (同样的可信上下文、同样的参数形状), 不另开一条直调工具的路径
-            String resultJson = runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
-            previewData = objectMapper.readValue(resultJson,
-                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
-        } catch (Exception e) {
-            log.warn("确认前重读状态失败, 拒绝执行: tool={}, error={}", tool.getToolName(), e.getMessage());
-            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
-                    "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
-        }
-        if (previewData == null) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.REREAD_FAILED, List.of(),
-                    "确认前无法重新读取对象当前状态，本次未执行。请重新预览后再确认。");
-        }
-
-        IntentExecuteResponse blocked = blockedPreviewResponse(previewData, intent);
-        if (blocked != null) {
-            return ConfirmStateCheck.reject(ConfirmStateCheck.PRECONDITION_CHANGED, List.of(),
-                    "预览之后情况有变化，现在不能执行：" + blocked.getMessage() + " 本次未执行。");
-        }
-
-        Map<String, Object> fresh = priorStateSnapshot(tool, previewData);
-        if (stored.isEmpty() && fresh.isEmpty()) {
-            if (tool.previewCreatesNewRecordOnly()) {
-                return ConfirmStateCheck.ok();
+            try {
+                return runReadOnlyPreview(tool, intent, params, factoryId, userId, userRole);
+            } catch (Exception e) {
+                log.warn("确认前重读状态失败, 拒绝执行: tool={}, error={}", tool.getToolName(), e.getMessage());
+                throw e;
             }
-            // ⛔ 不回「请重新预览」: 重新预览还是给不出改前值, 用户会在同一张卡上死循环
-            return ConfirmStateCheck.reject(ConfirmStateCheck.NOT_COMPARABLE, List.of(),
-                    NOT_COMPARABLE_MESSAGE);
-        }
-
-        List<String> changed = changedFields(stored, fresh);
-        if (!changed.isEmpty()) {
-            String fields = changed.stream().map(f -> "「" + f + "」").collect(java.util.stream.Collectors.joining(""));
-            return ConfirmStateCheck.reject(ConfirmStateCheck.STATE_CHANGED, changed,
-                    "预览之后" + fields + "已被改动（与预览时的改前值不一致），本次未执行。请重新预览后再确认。");
-        }
-        return ConfirmStateCheck.ok();
+        }, objectMapper);
     }
-
-    private List<String> changedFields(Map<String, Object> stored, Map<String, Object> fresh) {
-        java.util.LinkedHashSet<String> keys = new java.util.LinkedHashSet<>(stored.keySet());
-        keys.addAll(fresh.keySet());
-        List<String> changed = new ArrayList<>();
-        for (String key : keys) {
-            if (!stored.containsKey(key) || !fresh.containsKey(key)) {
-                changed.add(key);
-                continue;
-            }
-            com.fasterxml.jackson.databind.JsonNode left = objectMapper.valueToTree(stored.get(key));
-            com.fasterxml.jackson.databind.JsonNode right = objectMapper.valueToTree(fresh.get(key));
-            if (!sameValue(left, right)) {
-                changed.add(key);
-            }
-        }
-        return changed;
-    }
-
-    /**
-     * 同一个值: 数字按数值比; 元素全是标量的数组按多重集合比 —— 「当前已订阅的设备」这类列表来自没有
-     * ORDER BY 的查询, 顺序不是状态, 按顺序比会把没人动过的记录误判成「被改过」。元素是对象的数组仍按顺序比
-     * (FIFO 推荐批次之类, 顺序就是内容)。
-     */
-    private static boolean sameValue(com.fasterxml.jackson.databind.JsonNode left,
-                                     com.fasterxml.jackson.databind.JsonNode right) {
-        if (left.isArray() && right.isArray() && left.size() == right.size()
-                && allScalars(left) && allScalars(right)) {
-            return sortedScalars(left).equals(sortedScalars(right));
-        }
-        return left.equals(NUMERIC_AWARE, right);
-    }
-
-    private static boolean allScalars(com.fasterxml.jackson.databind.JsonNode array) {
-        for (com.fasterxml.jackson.databind.JsonNode item : array) {
-            if (item.isContainerNode()) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static List<String> sortedScalars(com.fasterxml.jackson.databind.JsonNode array) {
-        List<String> values = new ArrayList<>();
-        for (com.fasterxml.jackson.databind.JsonNode item : array) {
-            values.add(item.isNumber() ? item.decimalValue().stripTrailingZeros().toPlainString() : item.toString());
-        }
-        java.util.Collections.sort(values);
-        return values;
-    }
-
-    /** 12.5 与 12.50、5 与 5.0 算同一个值: 序列化往返会改数字的表示, 不能让它被读成「改过」。 */
-    private static final java.util.Comparator<com.fasterxml.jackson.databind.JsonNode> NUMERIC_AWARE = (a, b) -> {
-        if (a.isNumber() && b.isNumber()) {
-            return a.decimalValue().compareTo(b.decimalValue());
-        }
-        return a.equals(b) ? 0 : 1;
-    };
 
     /**
      * 预览没通过时给出的回执; 预览通过 (或判不了) 返回 {@code null}。
@@ -2011,14 +1847,11 @@ public class ToolDispatchService {
         if (previewData == null) {
             return null;
         }
-        String reason = null;
+        // 「预览说不行」的判据只有一份 (确认前核对的 PRECONDITION_CHANGED 用的也是它)
+        String reason = PreviewStateRecheck.blockedReason(previewData);
         String status = PREVIEW_BLOCKED;
         List<String> questions = null;
         if (Boolean.FALSE.equals(previewData.get("success"))) {
-            reason = firstText(previewData.get("message"), previewData.get("error"));
-            if (reason == null) {
-                reason = "预览没有通过，未执行任何操作。";
-            }
             if (Boolean.TRUE.equals(previewData.get("needMoreInfo"))
                     || "NEED_MORE_INFO".equals(previewData.get("status"))) {
                 status = "NEED_MORE_INFO";
@@ -2030,15 +1863,6 @@ public class ToolDispatchService {
                             questions.add((String) item);
                         }
                     }
-                }
-            }
-        } else {
-            Object nested = previewData.get("data");
-            Map<String, Object> data = nested instanceof Map ? (Map<String, Object>) nested : previewData;
-            if (Boolean.FALSE.equals(data.get("canDo"))) {
-                reason = firstText(data.get("message"));
-                if (reason == null) {
-                    reason = "当前条件下不能执行这个操作，未执行任何操作。";
                 }
             }
         }
@@ -2146,45 +1970,12 @@ public class ToolDispatchService {
         }
     }
 
-    private static String firstText(Object... candidates) {
-        for (Object c : candidates) {
-            if (c instanceof String && !((String) c).isBlank()) {
-                return (String) c;
-            }
-        }
-        return null;
-    }
-
     /**
-     * 写操作影响契约 (2026-07-24): 从 doPreview 结果里按既有约定字段提取
-     * 改前/改后小节。兼容三种形态: 顶层 map / data 嵌套 / 标量值 (包成
-     * {"值": v})。任一 key 命中即返回; 全miss 返回 null (前端回落参数网格)。
+     * 写操作影响契约 (2026-07-24): 从 doPreview 结果里提取改前/改后小节 —— 规则在
+     * {@link PreviewStateRecheck#previewSection} (改前值快照用的也是它, 只留一份)。
      */
-    @SuppressWarnings("unchecked")
     private Map<String, Object> extractPreviewSection(Map<String, Object> previewData, String... keys) {
-        if (previewData == null) {
-            return null;
-        }
-        Map<String, Object> data = previewData;
-        Object nested = previewData.get("data");
-        if (nested instanceof Map) {
-            data = (Map<String, Object>) nested;
-        }
-        for (String key : keys) {
-            Object v = data.get(key);
-            if (v == null) {
-                v = previewData.get(key);
-            }
-            if (v instanceof Map) {
-                return (Map<String, Object>) v;
-            }
-            if (v != null) {
-                Map<String, Object> wrapped = new HashMap<>();
-                wrapped.put("值", v);
-                return wrapped;
-            }
-        }
-        return null;
+        return PreviewStateRecheck.previewSection(previewData, keys);
     }
 
     /**

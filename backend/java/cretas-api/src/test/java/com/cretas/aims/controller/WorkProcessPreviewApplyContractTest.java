@@ -129,7 +129,7 @@ class WorkProcessPreviewApplyContractTest {
         });
         when(previewTokens.readBoundSnapshot(eq("canvas-proof"), eq("F006"), eq(42L)))
                 .thenAnswer(invocation -> Optional.of(boundSnapshot(issuedRequest.get(), issuedDigest.get())));
-        when(previewTokens.claimToken(anyString(), eq("F006"), eq(42L), anyString()))
+        when(previewTokens.claimTokenForSubject(anyString(), eq("F006"), eq(42L), anyString(), any(), any()))
                 .thenAnswer(invocation -> {
                     String expectedDigest = invocation.getArgument(3);
                     PreviewTokenService.BoundTokenRequest request = issuedRequest.get();
@@ -182,7 +182,7 @@ class WorkProcessPreviewApplyContractTest {
         assertEquals(1, receipt.getData().applied());
         var saved = ArgumentCaptor.forClass(WorkProcess.class);
         verify(repository).save(saved.capture());
-        verify(previewTokens, times(1)).claimToken(eq("canvas-proof"), eq("F006"), eq(42L), anyString());
+        verify(previewTokens, times(1)).claimTokenForSubject(eq("canvas-proof"), eq("F006"), eq(42L), anyString(), any(), any());
         verify(previewTokens, times(1)).resolveClaim(eq("canvas-proof"), eq("canvas-claim"), eq(true), anyString());
         return saved.getValue();
     }
