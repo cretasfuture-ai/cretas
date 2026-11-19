@@ -167,11 +167,36 @@ def get_settings() -> Settings:
 # DataFrame numeric coercion utility
 # ==========================================
 
+import re as _re
+
+# 带字母的编码：字母数字混合（21014C、A-001），或用 + 连接的组合编码（26004+24004）
+_ALNUM_CODE_RE = _re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-_/.]*$")
+_PLUS_CODE_RE = _re.compile(r"^\d+(\s*\+\s*\d+)+$")
+
+
+def would_lose_code_values(series, converted) -> bool:
+    """True when coercing `series` to numeric would null out code-like values.
+
+    Placeholders such as "-", "N/A", "待定" in a measure column are NOT code-like,
+    so measure columns with a few placeholders still convert to numeric.
+    """
+    lost = series[converted.isna() & series.notna()]
+    for v in lost:
+        t = str(v).strip()
+        if _ALNUM_CODE_RE.match(t) or _PLUS_CODE_RE.match(t):
+            return True
+    return False
+
+
 def coerce_numeric_columns(df):
     """Coerce string columns that contain numeric values to numeric dtype.
 
     JSON data from PostgreSQL comes as strings. pd.select_dtypes(include=['number'])
     returns empty unless we explicitly convert. This fixes "No numeric measures detected".
+
+    A column is kept as text when converting would silently drop code-like values
+    (21014C, 26004+24004): material-code columns are mostly pure digits, and a >50%
+    numeric ratio must not turn the lettered ones into NaN.
     """
     import pandas as pd
     for col in df.columns:
@@ -182,6 +207,8 @@ def coerce_numeric_columns(df):
             if len(non_null) > 0:
                 numeric_count = converted.notna().sum()
                 if numeric_count / max(len(non_null), 1) > 0.5:
+                    if would_lose_code_values(df[col], converted):
+                        continue
                     df[col] = converted
     return df
 
