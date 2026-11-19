@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 /**
@@ -61,8 +62,17 @@ public class SourceIndividualDetailDTO {
     @Schema(description = "挂了该个体的原料批次, 最近入库在前; 没有就是空数组")
     private List<BatchSummary> batches;
 
-    @Schema(description = "上面那些原料批次往下游合并去重后的生产批次 / 成品批次 / 出货单")
+    @Schema(description = "当前挂载的原料批次往下游合并去重后的生产批次 / 成品批次 / 出货单")
     private Downstream downstream;
+
+    @Schema(description = "曾挂载且当前未挂到该个体的原料批次，每批取最近一次解除，按解除时间倒序")
+    private List<PreviouslyLinkedBatch> previouslyLinkedBatches;
+
+    @Schema(description = "曾挂载批次的下游召回查询结果，按节点合并去重")
+    private Downstream previouslyLinkedDownstream;
+
+    public record PreviouslyLinkedBatch(String batchId, String batchNumber, LocalDateTime unlinkedAt,
+                                        String reason, Long operatorId) {}
 
     /** 另一头个体的摘要 —— 只给系谱页一行要显示的东西, 不带 notes/extAttributes。 */
     @Data

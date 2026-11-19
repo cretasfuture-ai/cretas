@@ -531,12 +531,25 @@ public class LineageGraphAssembler {
     @Transactional(readOnly = true)
     public TraceabilityDTO.ImpactResponse assembleImpact(String factoryId, String rootType, String rootId,
                                                          int maxDepth) {
+        return assembleImpact(factoryId, rootType, rootId, maxDepth, false);
+    }
+
+    /**
+     * 批次归属由调用方读取的本厂解除日志证明。即使批次已归档，也可沿本厂的血缘边查询去向。
+     */
+    @Transactional(readOnly = true)
+    public TraceabilityDTO.ImpactResponse assembleAuditedMaterialBatchImpact(String factoryId, String batchId) {
+        return assembleImpact(factoryId, LineageEdgeRecorder.NODE_MATERIAL_BATCH, batchId, DEFAULT_MAX_DEPTH, true);
+    }
+
+    private TraceabilityDTO.ImpactResponse assembleImpact(String factoryId, String rootType, String rootId,
+                                                          int maxDepth, boolean rootVerifiedByAudit) {
         TraceabilityDTO.LineageSection section =
                 assemble(factoryId, rootType, rootId, maxDepth, true, false);
         // An empty graph only proves that no edges were returned. Verify the
         // root before reporting zero recorded impact. Existing graph evidence
         // remains queryable even if its historical root has been archived.
-        if (section.getNodeCount() == 0) {
+        if (section.getNodeCount() == 0 && !rootVerifiedByAudit) {
             requireExistingImpactRoot(factoryId, rootType, rootId);
         }
         List<TraceabilityDTO.LineageNode> all = section.getDescendants() == null
