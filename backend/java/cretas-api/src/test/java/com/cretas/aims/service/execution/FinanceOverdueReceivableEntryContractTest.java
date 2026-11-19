@@ -90,7 +90,9 @@ class FinanceOverdueReceivableEntryContractTest {
         F006BossQuestionClient mini = miniAnswers(h, FABRICATED);
         h.chatReplies(FABRICATED);
         AIIntentConfig ar = h.intent(AR_INTENT, "应收账龄", "accounts_receivable_aging", ToolExecutor.AccessMode.READ);
-        ar.setRequiredPermission("finance:read"); // 账龄工具的门 (finance:read / read_write), 归数字成本会计管
+        // 只用于数字班组的「归谁管」(DigitalCrewCatalog.moduleOf: finance 模块归数字成本会计); 不是权限闸的读数 ——
+        // harness 的 IntentPermissionGate 桩成恒放行, 没有 finance 权限被拒由 GatedDataToolAiPathPermissionTest 守。
+        ar.setRequiredPermission("finance:read");
         h.recognizerAnswers(recognized(ar));
         h.toolReturns(IntentExecuteResponse.builder().intentRecognized(true).intentCode(AR_INTENT)
                 .status("SUCCESS").message(TOOL_TEXT).formattedText(TOOL_TEXT).build());

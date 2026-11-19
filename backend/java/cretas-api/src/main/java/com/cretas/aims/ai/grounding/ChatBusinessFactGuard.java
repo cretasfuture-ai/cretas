@@ -87,34 +87,43 @@ public class ChatBusinessFactGuard {
      * 咨询 / 怎么做类问法: 先于业务问法判定。「怎么 / 怎样 / 如何」后面还跟着动作才是咨询
      * (「怎么样」「销量如何」「如何？」是在问情况, 不算); 「注意什么 / 建议 / 合适」同理。
      */
-    private static final String HOW_TO_OR_ADVICE =
-            "(?:怎么(?!样|这么|那么|又|会|还|突然|回事|下降|少|多|了)|怎样|如何)(?![?？。!！吗呢啊呀了，,]|$)(?!构成|组成|计算|核算|算)"
-                    + "|怎么办|注意|建议|办法|合适|适合";
     private static final Pattern CONSULT = Pattern.compile(
-            HOW_TO_OR_ADVICE + "|温度|什么|区别|意思|职责|在哪|哪里|好用");
-    /** 「怎么做 / 给建议」类咨询 (CONSULT 里不含概念词的那一半)。 */
-    private static final Pattern HOW_TO_ADVICE = Pattern.compile(HOW_TO_OR_ADVICE);
+            "(?:怎么(?!样|这么|那么|又|会|还|突然|回事|下降|少|多|了)|怎样|如何)(?![?？。!！吗呢啊呀了，,]|$)(?!构成|组成|计算|核算|算)"
+                    + "|怎么办|注意|建议|办法|合适|适合|温度|什么|区别|意思|职责|在哪|哪里|好用");
 
     /**
-     * 点名要本厂的哪几个对象: 「哪些客户」「哪几张单」「哪个产品」。问的是具体的业务记录, 只能查, 不能聊 ——
-     * 即使句子里还带「为什么」(含「什么」, 原先会被当成概念咨询)。「哪些因素 / 哪些方面 / 哪种方法」是咨询, 不算。
+     * 点名要本厂的哪几个对象: 「哪些客户」「哪几张单」「哪条产线」「哪一批原料」。「哪些因素 / 哪些方面 / 哪些情况下 /
+     * 哪种方法 / 哪个更好」是咨询, 不算。
      *
      * <p>触发 (2026-11-19 F006 财务数字专员, BP4 问题 48): 「哪些客户有逾期应收？先催哪几张单，为什么？」
-     * 因句末「为什么」被判成咨询, 进了闲聊 / 本地 27B 自由回答, 没查数, 只给通用建议 (账龄页实际 3 家逾期)。
+     * 因句末「为什么」里的「什么」被判成概念咨询, 进了闲聊 / 本地 27B 自由回答, 没查数 (账龄页实际 3 家逾期)。
      */
     private static final Pattern DATA_PICK = Pattern.compile(
-            "哪(?:些|几|个|家|位|笔|张|批)(?!因素|方面|原因|办法|方法|措施|环节|技巧|建议|要点|步骤|地方|更|最好)");
+            "哪一?(?:些|几|个|家|位|笔|张|批|条|款|类|种|天|台)"
+                    + "(?!因素|方面|原因|情况|办法|方法|措施|环节|技巧|建议|要点|步骤|地方|更|最好)");
+
+    /** 问原因的词: 只在「点名对象 + 业务主语」的句子里剥掉, 不让它里面的「什么」把整句判成概念咨询。 */
+    private static final Pattern REASON_ASK = Pattern.compile("为什么|什么原因");
+
+    /** 点名对象的句子里, 这些仍说明是在问规范 / 概念 (「生产 X 要遵循哪些标准」「哪些添加剂禁止」), 不是查本厂记录。 */
+    private static final Pattern PICK_CONCEPT = Pattern.compile("范围|标准|规定|规范|法规|禁止|职责|负责");
 
     /**
      * 这句话是不是在问业务情况 / 业务数字。是 ⇒ 调用方不许把它交给纯闲聊模型。
-     * 「外卖」这类含「卖」的非业务词先剥掉; 咨询句 (怎么降低成本 / 如何提高合格率 / 怎么创建订单) 先判非业务;
-     * 点名要哪几个业务对象的问法 ({@link #DATA_PICK}) 不被概念词 (什么 / 区别…) 判成咨询。
+     * 「外卖」这类含「卖」的非业务词先剥掉; 咨询句 (怎么降低成本 / 如何提高合格率 / 怎么创建订单) 先判非业务。
+     *
+     * <p>唯一的例外 (BP4-48): 点名要哪几个业务对象 ({@link #DATA_PICK}) + 业务主语 + 问原因 (为什么 / 什么原因) 时,
+     * 只剥掉问原因的词再判咨询 —— 其余概念词 (区别 / 意思 / 职责 / 温度 / 在哪 / 标准…) 和怎么做 / 建议照常否决。
+     * 不带问原因词的句子判定与改前完全相同。
      */
     public static boolean isBusinessQuestion(String input) {
         if (input == null || input.isBlank()) return false;
         String s = input.toLowerCase().replaceAll("\\s+", "").replace("外卖", "").replace("买卖", "");
         boolean subject = QUESTION_SUBJECT.matcher(s).find();
-        if (subject && DATA_PICK.matcher(s).find() && !HOW_TO_ADVICE.matcher(s).find()) return true;
+        if (subject && DATA_PICK.matcher(s).find() && REASON_ASK.matcher(s).find()) {
+            String rest = REASON_ASK.matcher(s).replaceAll("");
+            return !CONSULT.matcher(rest).find() && !PICK_CONCEPT.matcher(rest).find();
+        }
         if (CONSULT.matcher(s).find()) return false;
         return subject && QUESTION_ASK.matcher(s).find();
     }
