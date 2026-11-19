@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import date
+from unittest.mock import AsyncMock
 
 import pandas as pd
 import pytest
@@ -31,6 +32,15 @@ class FakeConnection:
         self.calls.append(('fetch', source, sql, params))
         return next(rows for name, marker, rows in self.rows_by_source if name == source)
 
+    async def fetchval(self, sql, *params):
+        assert "SELECT EXISTS" in sql and "FROM external_source_snapshots" in sql
+        assert "factory_id = $1" in sql and "external_system = 'blacklake'" in sql
+        assert "dataset = 'report_output'" in sql
+        self.calls.append(('fetchval', 'external_snapshot_metadata', sql, params))
+        return any(row["factory_id"] == params[0]
+                   for name, _, rows in self.rows_by_source if name == "external_snapshot_metadata"
+                   for row in rows)
+
 
 class FakePool:
     def __init__(self, rows_by_source, calls):
@@ -46,6 +56,42 @@ async def fake_loader(rows_by_source, calls):
     async def get_pool():
         return pool
     return get_pool
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("factory_id, has_snapshot", [("LIUSHANMEN", True), ("F006", False)],
+                         ids=["eligible-fact-read-failure", "ineligible-fact-read-skipped"])
+async def test_load_checks_blacklake_eligibility_before_reading_facts(monkeypatch, factory_id, has_snapshot):
+    from smartbi.services.factory_charts import blacklake_production
+
+    calls = []
+    get_pool = await fake_loader([
+        ('production', 'fact_production_batch', []),
+        ('sales', 'sales_orders so', []),
+        ('purchase', 'purchase_receive_records pr', []),
+        ('quality', 'quality_inspections qi', []),
+        ('process', 'fact_production_report', []),
+        ('settled', 'production_batches pb', []),
+        ('external_snapshot_metadata', 'external_source_snapshots', [{"factory_id": "LIUSHANMEN"}]),
+    ], calls)
+    monkeypatch.setattr(sources.config, 'get_pg_pool', get_pool)
+    monkeypatch.setattr(sources.config, 'get_cretas_pool', get_pool)
+    read = AsyncMock(side_effect=RuntimeError("SmartBI external facts unavailable"))
+    monkeypatch.setattr(blacklake_production, 'load_external_production', read)
+
+    datasets, errors, _ = await sources.load(
+        factory_id, request(period_type='month_range', year=2026, start_month=2, end_month=2), False,
+    )
+
+    probes = [call[3] for call in calls if call[0] == 'fetchval']
+    assert probes == [(factory_id,)]
+    assert datasets and all(not dataset.source.startswith(blacklake_production.SOURCE_KEY) for dataset in datasets)
+    if has_snapshot:
+        read.assert_awaited_once_with(factory_id, date(2026, 2, 1), date(2026, 2, 28))
+        assert errors == [{"source": "黑湖", "message": "黑湖生产数据读取失败，请重试"}]
+    else:
+        read.assert_not_awaited()
+        assert errors == []
 
 
 @pytest.mark.asyncio

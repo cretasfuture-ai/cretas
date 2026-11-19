@@ -1,8 +1,11 @@
 """Blacklake candidates keep production stages and units explicitly scoped."""
 from datetime import timezone
+import logging
 
 import pandas as pd
 
+from smartbi import config
+from smartbi.gold.external_production_etl import DEMO_FACTORY_PREFIX
 from smartbi.services.external_production import (
     FINISHED_PROCESS,
     SOURCE_KEY,
@@ -16,10 +19,37 @@ from .engine import Dataset, series_candidate
 from .metrics import Series
 
 _STAGE_SCOPE = "工序单独统计；同一批物料经过多个工序时，各工序的产量不相加"
+logger = logging.getLogger(__name__)
+
+
+async def _has_blacklake_snapshot(factory_id: str) -> bool:
+    """Check source metadata independently of the SmartBI fact reader."""
+    pool = await config.get_cretas_pool()
+    if pool is None:
+        raise RuntimeError("Cretas source pool unavailable")
+    async with pool.acquire() as conn:
+        return await conn.fetchval(
+            """SELECT EXISTS (
+                   SELECT 1 FROM external_source_snapshots
+                   WHERE factory_id = $1 AND external_system = 'blacklake' AND dataset = 'report_output'
+               )""",
+            factory_id,
+        )
 
 
 async def load(factory_id, request):
     from .sources import dates
+
+    if factory_id.startswith(DEMO_FACTORY_PREFIX):
+        return None, None
+    try:
+        has_snapshot = await _has_blacklake_snapshot(factory_id)
+    except Exception:
+        # Discovery failure does not establish that this factory has a feed.
+        logger.warning("External production source discovery failed for %s", factory_id, exc_info=True)
+        return None, None
+    if not has_snapshot:
+        return None, None
 
     start, end = dates(request)
     try:
