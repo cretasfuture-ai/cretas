@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 调整审批 — PENDING ar_ap_transactions adjustment 队列
  *
@@ -564,7 +565,7 @@ onBeforeUnmount(() => {
       </div>
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="adjustment-table">
-        <template #empty>暂无待审批调整</template>
+        <template #empty><ListEmptyExplain empty-title="没有待审批的调整" empty-hint="成本、价格或库存调整提交后会出现在这里等待审批。" /></template>
         <template #select-header>
           <UCheckbox :model-value="allSelected" :disabled="selectableRows.length === 0" data-testid="adjustment-select-all" @update:model-value="toggleAll(!!$event)" />
         </template>

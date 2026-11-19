@@ -15,6 +15,9 @@
 #   4 CLOSED     PR 被关了
 # 规矩 (全局 CLAUDE.md「等 CI」): 检查为空不算绿; 网络错误重试不当结论; 头 SHA 变了按新头判断; ⛔ 不带红合并。
 # 合并用 --match-head-commit, 合并前一刻头变了会被 GitHub 拒绝。
+# 合并队列 (Steve 2026-11-18 拍板开): base 开了队列时, 全绿后不 update-branch (队列自己在最新 base 上叠合重跑),
+#   `gh pr merge` 只是入队, PR 仍 OPEN; 之后查 isInMergeQueue 等到 MERGED 或出队。出队 = RED (队列里的检查没过),
+#   入队命令后连续 3 轮都不在队列也没合并 = UNMEASURED (没入上队, 要人看)。RESULT 行带 queue=on。
 set -u
 
 PR="${1:-}"; shift || true
@@ -38,6 +41,39 @@ say() { [ "$1" != "$last" ] && echo "$(date +%H:%M:%S) $1"; last="$1"; }
 finish() { echo "RESULT=$1 pr=$PR ${2:-}"; exit "$3"; }
 expired() { [ $(( $(date +%s) - START )) -ge "$TIMEOUT_SEC" ]; }
 nap() { sleep "$INTERVAL"; }
+# 一次 GraphQL 读: "<base 有队列 true|false> <state> <isInMergeQueue> <mergeCommit oid>"
+qstate() {
+  "$GH" api graphql -F owner='{owner}' -F name='{repo}' -F n="$PR" -F b="$1" \
+    -f query='query($owner:String!,$name:String!,$n:Int!,$b:String!){repository(owner:$owner,name:$name){mergeQueue(branch:$b){url} pullRequest(number:$n){state isInMergeQueue mergeCommit{oid}}}}' \
+    --jq '[(.data.repository.mergeQueue!=null), .data.repository.pullRequest.state, .data.repository.pullRequest.isInMergeQueue, (.data.repository.pullRequest.mergeCommit.oid // "")]|map(tostring)|join(" ")' 2>&1
+}
+# 入队并等结果 (不返回, 一定 finish)
+enqueue_and_wait() {
+  local out mrc q qon s inq sha seen=0 miss=0
+  say "head=${head:0:10} green, base $base has merge queue -> enqueue"
+  # 直接用 enqueuePullRequest 入队: `gh pr merge` 在队列分支上走 enablePullRequestAutoMerge,
+  # 本仓库没开 auto-merge 会被拒 (2026-11-18 #1866 实测 "Auto merge is not allowed")。
+  # expectedHeadOid 保证入队的就是刚判绿的这个头。
+  local nid
+  nid=$("$GH" pr view "$PR" --json id --jq .id 2>&1)
+  out=$("$GH" api graphql -f query='mutation($id:ID!,$h:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$h}){mergeQueueEntry{state}}}'     -f id="$nid" -f h="$head" 2>&1); mrc=$?
+  while :; do
+    expired && finish UNMEASURED "reason=timeout-in-queue head=$head seen=$seen queue=on" 2
+    nap
+    q=$(qstate "$base")
+    read -r qon s inq sha <<<"$q"
+    case "$s" in
+      MERGED) finish MERGED "head=$head sha=$sha queue=on" 0;;
+      CLOSED) finish CLOSED "head=$head queue=on" 4;;
+      OPEN) ;;
+      *) neterr=$((neterr+1)); say "queue state unreadable (retry #$neterr): ${q:0:80}"; continue;;
+    esac
+    if [ "$inq" = true ]; then seen=1; say "head=${head:0:10} in merge queue"
+    elif [ "$seen" = 1 ]; then finish RED "head=$head reason=dequeued-from-merge-queue queue=on" 1
+    else miss=$((miss+1)); [ "$miss" -ge 3 ] && finish UNMEASURED "reason=not-enqueued rc=$mrc out=${out:0:120} queue=on" 2
+    fi
+  done
+}
 
 while :; do
   expired && finish UNMEASURED "reason=timeout updates=$updates" 2
@@ -71,7 +107,19 @@ while :; do
   [ -n "$fail" ] && finish RED "head=$head failed=$fail" 1
   if [ "$pend" -gt 0 ] || [ "$pass" -eq 0 ]; then say "head=${head:0:10} pending=$pend pass=$pass"; nap; continue; fi
 
-  # 全绿: 看是否落后 base
+  # 全绿: base 开了合并队列 -> 入队 (不 update-branch, 队列在最新 base 上重跑)
+  # GraphQL 报错时 jq 会把 mergeQueue!=null 算成 false (data 为 null), 不能当「没开队列」:
+  # 同一次读数里 PR 状态不是 OPEN/MERGED/CLOSED 就是没读到, 重试。
+  # (2026-11-18 #1866: 一次读失败被当成无队列, 走了 --squash, 被队列拒绝。)
+  q=$(qstate "$base"); read -r qon qs _ <<<"$q"
+  case "$qs" in OPEN|MERGED|CLOSED) ;; *) qon=unreadable;; esac
+  case "$qon" in
+    true) [ "$MERGE" = 0 ] && finish GREEN "head=$head updates=$updates queue=on" 0; enqueue_and_wait;;
+    false) ;;
+    *) neterr=$((neterr+1)); say "queue check failed (retry #$neterr): ${q:0:80}"; nap; continue;;
+  esac
+
+  # 全绿且无队列: 看是否落后 base
   behind=$("$GH" api "repos/{owner}/{repo}/compare/$base...$head" --jq .behind_by 2>&1)
   if ! [[ "$behind" =~ ^[0-9]+$ ]]; then neterr=$((neterr+1)); say "compare failed (retry #$neterr): ${behind:0:80}"; nap; continue; fi
   if [ "$behind" -gt 0 ]; then

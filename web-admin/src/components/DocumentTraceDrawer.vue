@@ -10,6 +10,7 @@
  * 给重试按钮; 后端报的 missingLinks (记录了但解析不出来的链接) 也逐条显示, 不静默省略。
  */
 import { computed, ref, watch } from 'vue';
+import { formatLocalDateTimeMinute } from '@/utils/dateFormat';
 import type { ApiResponse } from '@/types/api';
 import type { DocumentTrace, TraceDocument } from '@/types/businessDocumentTrace';
 import {
@@ -144,7 +145,7 @@ watch(
             <el-timeline-item
               v-for="document in trace.documents"
               :key="documentKey(document)"
-              :timestamp="document.occurredAt || undefined"
+              :timestamp="formatLocalDateTimeMinute(document.occurredAt) || undefined"
               placement="top"
             >
               <el-card
@@ -194,7 +195,7 @@ watch(
                 {{ traceStatusLabel(selected.documentType, selected.status) }}
               </el-descriptions-item>
               <el-descriptions-item v-if="selected.occurredAt" label="发生时间">
-                {{ selected.occurredAt }}
+                {{ formatLocalDateTimeMinute(selected.occurredAt) }}
               </el-descriptions-item>
               <!-- 后端构建链路时本来就把实体读出来了, 关键字段一并带回 —— 零新增接口。
                    拿不到的字段后端**直接不放**, 所以这里不会渲染出空标签。 -->

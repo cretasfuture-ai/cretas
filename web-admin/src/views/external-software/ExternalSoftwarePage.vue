@@ -12,9 +12,13 @@ import { badgeColor, type ElementTagType } from '@/utils/csBadge';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePlatformFactoryContextStore } from '@/store/modules/platformFactoryContext';
 import {
+  getDataIssues,
   getReportComparison,
   listFactoryIntegrations,
   type ComparisonRow,
+  type DataIssue,
+  type DataIssues,
+  type DataIssueType,
   type ExternalIntegrationView,
   type MatchState,
   type ReportComparison,
@@ -42,6 +46,20 @@ const error = ref('');
 const integrations = ref<ExternalIntegrationView[]>([]);
 const comparison = ref<ReportComparison | null>(null);
 const stateFilter = ref<'ALL' | MatchState>('ALL');
+const dataIssues = ref<DataIssues | null>(null);
+const issueError = ref('');
+const issueFilter = ref<'ALL' | DataIssueType>('ALL');
+const visibleIssues = computed(() => (dataIssues.value?.issues ?? [])
+  .filter((i) => issueFilter.value === 'ALL' || i.type === issueFilter.value));
+const issueColumns: TableColumn<DataIssue>[] = [
+  { accessorKey: 'reportDate', header: '报工日' },
+  { accessorKey: 'productName', header: '产品' },
+  { id: 'process', header: '工序' },
+  { id: 'value', header: '黑湖里的原值' },
+  { accessorKey: 'typeLabel', header: '问题' },
+  { accessorKey: 'suggestion', header: '怎么改' },
+  { accessorKey: 'owner', header: '找谁改' },
+];
 
 const blacklake = computed(() => integrations.value.find((i) => i.system === 'blacklake') ?? null);
 const label = computed(() => blacklake.value?.label ?? '外部');
@@ -83,6 +101,19 @@ function errorText(e: unknown, fallback: string) {
   return e instanceof Error && e.message ? e.message : fallback;
 }
 
+// 需修正清单单独读: 读不到只在清单区块报错, 不拖垮上面的对照表, 也不显示成「0 条」
+async function loadIssues() {
+  issueError.value = '';
+  dataIssues.value = null;
+  try {
+    const r = await getDataIssues(factoryId.value, 'blacklake');
+    if (!r.success) throw new Error(r.message || '数据需修正清单读取失败');
+    dataIssues.value = r.data;
+  } catch (e) {
+    issueError.value = errorText(e, '数据需修正清单读取失败，请稍后重试');
+  }
+}
+
 async function load() {
   if (!factoryId.value) return;
   loading.value = true;
@@ -95,8 +126,10 @@ async function load() {
       const c = await getReportComparison(factoryId.value, 'blacklake');
       if (!c.success) throw new Error(c.message || '报工对照读取失败');
       comparison.value = c.data;
+      await loadIssues();
     } else {
       comparison.value = null;
+      dataIssues.value = null;
     }
   } catch (e) {
     error.value = errorText(e, '外部软件对照读取失败，请稍后重试');
@@ -148,6 +181,37 @@ onMounted(load);
             {{ d.label }}：{{ d.rowCount }} 行汇总，采集于 {{ d.collectedAt }}（北京时间）
           </p>
         </div>
+      </section>
+
+      <section v-if="issueError || (dataIssues && dataIssues.available)" class="cs-card" data-testid="issues-card">
+        <header class="cs-card-head">
+          <span>{{ label }}数据需修正</span>
+          <span v-if="dataIssues && dataIssues.from" class="muted">{{ dataIssues.from }} 至 {{ dataIssues.to }}，只列{{ label }}里的报工数据问题</span>
+        </header>
+        <UAlert v-if="issueError" color="error" variant="subtle" :title="issueError" description="下面的清单不代表没有问题" class="m-3" data-testid="issues-error" />
+        <template v-else-if="dataIssues">
+          <p v-if="dataIssues.total === 0" class="body" data-testid="issues-empty">未发现需修正的数据</p>
+          <template v-else>
+            <p class="body" data-testid="issues-summary">
+              共 {{ dataIssues.total }} 条需要修正：{{ dataIssues.counts.filter((c) => c.count > 0).map((c) => `${c.label} ${c.count} 条`).join('，') }}。
+              请把下面的修正意见转给车间，在{{ label }}里改好；这里不会改{{ label }}的数据。
+            </p>
+            <div class="filters">
+              <UButton size="sm" :variant="issueFilter === 'ALL' ? 'solid' : 'outline'" color="neutral" data-testid="issue-filter-ALL" @click="issueFilter = 'ALL'">
+                全部 {{ dataIssues.total }}
+              </UButton>
+              <UButton v-for="c in dataIssues.counts.filter((x) => x.count > 0)" :key="c.type" size="sm"
+                       :variant="issueFilter === c.type ? 'solid' : 'outline'" color="neutral"
+                       :data-testid="`issue-filter-${c.type}`" @click="issueFilter = c.type">
+                {{ c.label }} {{ c.count }}
+              </UButton>
+            </div>
+            <UTable :data="visibleIssues" :columns="issueColumns" class="cs-table" data-testid="issues-table">
+              <template #process-cell="{ row }">{{ row.original.processName || '工序未填' }}</template>
+              <template #value-cell="{ row }">{{ row.original.qty == null ? '数量没填' : qty(row.original.qty, row.original.unit) }}</template>
+            </UTable>
+          </template>
+        </template>
       </section>
 
       <section v-if="comparison && comparison.available" class="cs-card" data-testid="comparison-card">

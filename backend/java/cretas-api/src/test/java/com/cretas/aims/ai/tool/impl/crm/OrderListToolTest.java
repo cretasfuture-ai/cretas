@@ -28,7 +28,9 @@ class OrderListToolTest {
                 .doExecute("F001", Map.of(), Map.of());
 
         assertThat(result.get("source")).isEqualTo("sales_orders");
-        assertThat(result.get("orders")).isEqualTo(List.of(order));
+        assertThat(result.get("orders")).isEqualTo(OrderListTool.toSummaries(List.of(order)));
+        assertThat(((List<Map<String, Object>>) result.get("orders")).get(0))
+                .containsEntry("orderNumber", "SO-001").containsEntry("id", "SO-ID-1");
         assertThat(result.get("total")).isEqualTo(1L);
         verify(salesService).getSalesOrders("F001", 1, 20);
     }

@@ -640,9 +640,11 @@ public class QualityDispositionInventoryService {
         if (processTimeLimitEventRepository == null) {
             throw new IllegalStateException("工序时限处置记录仓储未注入，无法判断成品是否已因超时判废");
         }
-        return !processTimeLimitEventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(factoryId,
-                com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService.TargetType.FINISHED_GOODS,
-                fg.getId(), com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent.Status.REJECTED).isEmpty();
+        // 只警告档的复盘记录 (PROTO-Q41) 判不合格只记结论、不动库存, 不当成对这批货的判废
+        return processTimeLimitEventRepository.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(factoryId,
+                        com.cretas.aims.service.foodsafety.timelimit.ProcessTimeLimitService.TargetType.FINISHED_GOODS,
+                        fg.getId(), com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent.Status.REJECTED).stream()
+                .anyMatch(e -> !com.cretas.aims.entity.foodsafety.ProcessTimeLimitEvent.RecordKind.isWarn(e.getRecordKind()));
     }
 
     /** 需检产品 / 有未处理偏离: 回待检让质检放行 (缺口 11/13), 处置不替代那一步。 */

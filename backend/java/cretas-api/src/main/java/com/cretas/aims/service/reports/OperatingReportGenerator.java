@@ -31,6 +31,7 @@ public class OperatingReportGenerator {
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.consent.LlmEgressGuard llmEgressGuard=com.cretas.aims.service.consent.LlmEgressGuard.standalone();
     static final String EGRESS_SITE="operating-report";
+    static final String RETRY_HINT="\n上一次输出未通过校验。请只返回一个 JSON 对象 {\"conclusions\":[{\"text\":\"...\",\"refs\":[\"指标id\"]}]}：不要加说明文字或代码围栏；text 里不要出现任何阿拉伯数字或「三成」「两倍」之类的数量词；{{指标id}} 必须逐字取自快照、值不为 null，且同时列在 refs 里。";
     /** 工艺保密: 发给模型的快照不带当前调用者 (定时任务 = 无权) 无权查看的保密产品的成本/毛利 (Steve 10-29); 单测直接 new 本类时用「没有保密产品」的默认实例。 */
     @org.springframework.beans.factory.annotation.Autowired
     private com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope llmCostScope=com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope.standalone();
@@ -78,8 +79,8 @@ public class OperatingReportGenerator {
                     input.fetchedAt(),input.receipts(),input.sales(),input.previous(),input.lastYear(),input.region(),promptHigh,promptLow,
                     input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage()));
             stage=OperatingReportSnapshot.Failure.MODEL_UNAVAILABLE;
-            String system="你是食品工厂经营分析助手。只从已查询指标选择重点事项和建议，禁止编写数字或自由文字。只返回 JSON 对象 insights 数组，每项严格含 kind、metricId、action 三个字符串。";
-            String prompt="可用 kind: MISSING_VALUE（值为null）、INCOMPLETE_COVERAGE（已知覆盖率小于完整）、REVIEW_RECORDED_VALUE（已有值）。可用 action: VERIFY_COST, VERIFY_ADDRESS, VERIFY_SALESPERSON, FOLLOW_UP_COLLECTION, REVIEW_PROFIT, REVIEW_INVENTORY, REVIEW_SALES。metricId必须逐字来自下列指标ID。没有重点时返回{\"insights\":[]}。禁止其他字段，禁止正文。\n";
+            String system="你是食品工厂经营分析助手，面向老板写简短的经营判断和建议。只能依据下方「经营指标快照」里的指标写结论；快照里没有的事实一律不写。数字不许自己写：需要引用数字时写成 {{指标id}} 占位（指标id逐字取自快照），系统会替换成真实值；正文里不要出现任何阿拉伯数字或中文数量词（如「三成」「两倍」），可以写产品名、业务员名、地区名等快照里出现的名称。只返回 JSON 对象，形如 {\"conclusions\":[{\"text\":\"...\",\"refs\":[\"指标id\"]}]}，每条严格含 text 与 refs 两个字段，text 不超过 150 字，refs 列出该条用到的全部指标id，text 里的每个 {{指标id}} 必须在 refs 里。";
+            String prompt="请写 3 到 6 条结论，每条是业务判断加可执行建议，例如：哪个产品毛利最高或最低、环比同比变化说明什么、应收账龄风险、成本覆盖不全对判断的影响、该做什么。环比或同比有变化时，要说清变化主要来自哪些业务员、地区或产品（只用快照里有的名称，快照里没有依据就说明依据不足，不要编原因）。用老板听得懂的业务语言，text 里不要出现指标id、字段名、接口名或英文代码，指标id 只能写在 {{ }} 占位和 refs 里。只用值不为 null 的指标做占位；成本或毛利数据缺失时就说明缺什么、先补什么，不要猜。若订单数为 0，说明本期没有订单这一事实，不要写「数据缺失」。禁止其他字段。\n";
             var config=prompts.findFirstByFactoryIdAndReportTypeAndIsActiveTrueOrderByPriorityDesc(context.factoryId(),type)
                     .orElseGet(()->prompts.findFirstByFactoryIdIsNullAndReportTypeAndIsActiveTrueOrderByPriorityDesc(type).orElse(null));
             system+=llmCostScope.harnessFor(context.factoryId());
@@ -92,7 +93,17 @@ public class OperatingReportGenerator {
             // Existing configured application model client; no process, credential or provider override.
             String output=redacted.restoreJsonText(model.chat(redacted.text(0),redacted.text(1)));
             stage=OperatingReportSnapshot.Failure.MODEL_OUTPUT_INVALID;
-            snapshot=snapshot.withInsights(codec.parseInsights(output,snapshot)).withAudit(context.audit("SUCCESS"));
+            java.util.List<OperatingReportSnapshot.Insight> insights;
+            try{insights=codec.parseModelOutput(output,snapshot);}
+            catch(IllegalArgumentException firstReject){
+                // 小模型偶发漏字段 / 夹数字: 带着「上一版哪里不合格」重问一次; 仍不合格就如实记失败, 不降级、不造内容
+                log.warn("Operating report output rejected, retrying once: factory={}",context.factoryId());
+                stage=OperatingReportSnapshot.Failure.MODEL_UNAVAILABLE;
+                String retryOutput=redacted.restoreJsonText(model.chat(redacted.text(0),redacted.text(1)+RETRY_HINT));
+                stage=OperatingReportSnapshot.Failure.MODEL_OUTPUT_INVALID;
+                insights=codec.parseModelOutput(retryOutput,snapshot);
+            }
+            snapshot=snapshot.withInsights(insights).withAudit(context.audit("SUCCESS"));
             stage=OperatingReportSnapshot.Failure.GENERATION_FAILED;
             return store.save(context.factoryId(),snapshot,automatic);
         } catch(Exception exception){

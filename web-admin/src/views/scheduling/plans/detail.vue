@@ -22,6 +22,8 @@ import {
   type DailyAllocationDelay
 } from '@/api/scheduling';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { buildGanttInsight, ganttBarKind, type GanttItem } from '@/utils/chartPageInsights';
 import {
   ArrowLeft,
   Refresh,
@@ -145,6 +147,16 @@ function goWorkProcesses() {
   router.push('/system/work-processes');
 }
 const probabilities = ref<CompletionProbability[]>([]);
+// 一图一分析（问题 40）：和甘特图同一份排程、同一套颜色规则现算
+const ganttItems = computed<GanttItem[]>(() => (plan.value?.lineSchedules ?? []).map(s => ({
+  label: scheduleLabel(s),
+  line: s.productionLineName,
+  status: s.status,
+  prob: s.predictedCompletionProb ?? null,
+  startMs: new Date(s.plannedStartTime).getTime(),
+  endMs: new Date(s.plannedEndTime).getTime(),
+})));
+const ganttInsight = computed(() => buildGanttInsight(ganttItems.value));
 const ganttChart = ref<echarts.ECharts | null>(null);
 const ganttContainer = ref<HTMLElement | null>(null);
 const refreshInterval = ref<number | null>(null);
@@ -282,16 +294,13 @@ function updateGanttChart() {
     const lineIndex = lines.indexOf(s.productionLineName);
     const startTime = new Date(s.plannedStartTime).getTime();
     const endTime = new Date(s.plannedEndTime).getTime();
-    const prob = s.predictedCompletionProb || 0;
-
-    let color: string = CS_TOKENS.primary; // 默认蓝色
-    if (s.status === 'completed') {
-      color = '#67C23A'; // 绿色
-    } else if (s.status === 'in_progress') {
-      color = '#E6A23C'; // 黄色
-    } else if (s.status === 'delayed' || prob < 0.7) {
-      color = '#F56C6C'; // 红色
-    }
+    // 颜色规则与分析共用 ganttBarKind：完成概率缺失（未知）不再按 0 标红
+    const kind = ganttBarKind({ status: s.status, prob: s.predictedCompletionProb ?? null });
+    const color: string =
+      kind === 'completed' ? '#67C23A'
+        : kind === 'in_progress' ? '#E6A23C'
+          : kind === 'risk' ? '#F56C6C'
+            : CS_TOKENS.primary;
 
     return {
       name: scheduleLabel(s),
@@ -648,6 +657,7 @@ async function handleCompleteSchedule(schedule: LineSchedule) {
         </div>
       </template>
       <div ref="ganttContainer" class="gantt-container"></div>
+      <ChartInsight :insight="ganttInsight" depth="detailed" class="gantt-insight" data-testid="gantt-insight" />
     </el-card>
 
     <!-- 排程列表 -->

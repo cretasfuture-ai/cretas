@@ -25,6 +25,11 @@ public class MaterialLowStockAlertTool extends AbstractBusinessTool {
     @Autowired
     private MaterialBatchService materialBatchService;
 
+    /** 复合问法「库存快不够了？有没有快过期的？」第二问的触发词; 同样的临期口径见 MaterialExpiringAlertTool (默认 7 天)。 */
+    private static final java.util.regex.Pattern EXPIRY_WORDS =
+            java.util.regex.Pattern.compile("过期|临期|保质期|到期");
+    private static final int EXPIRING_DAYS = 7;
+
     @Override
     public String getToolName() {
         return "material_low_stock_alert";
@@ -79,6 +84,24 @@ public class MaterialLowStockAlertTool extends AbstractBusinessTool {
             result.put("warnings", formattedWarnings);
         }
 
+        // 同一句话里还问了「快过期」: 同步给出临期批次 (与 material_expiring_alert 同一服务、同一 7 天口径)
+        Object said = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
+        if (said instanceof String text && EXPIRY_WORDS.matcher(text).find()) {
+            List<Map<String, Object>> expiring = new ArrayList<>();
+            for (var batch : materialBatchService.getExpiringBatches(factoryId, EXPIRING_DAYS)) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("batchNumber", batch.getBatchNumber());
+                row.put("materialName", batch.getMaterialName());
+                row.put("expireDate", batch.getExpireDate() != null ? batch.getExpireDate().toString() : null);
+                row.put("remainingDays", batch.getRemainingDays());
+                row.put("currentQuantity", batch.getCurrentQuantity());
+                row.put("unit", batch.getUnit());
+                expiring.add(row);
+            }
+            expiring.sort(Comparator.comparing(r -> (Integer) r.get("remainingDays"), Comparator.nullsLast(Comparator.naturalOrder())));
+            result.put("expiringBatches", expiring);
+            result.put("expiringWarningDays", EXPIRING_DAYS);
+        }
         return result;
     }
 

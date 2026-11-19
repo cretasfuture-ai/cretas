@@ -3,6 +3,7 @@ package com.cretas.aims.entity.foodsafety;
 import com.cretas.aims.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
@@ -38,6 +39,26 @@ public class ProcessTimeLimitEvent extends BaseEntity {
         public static final String REJECTED = "REJECTED";
 
         private Status() {
+        }
+    }
+
+    /**
+     * 这条记录是怎么来的 (PROTO-Q41, V20261118_99)。存量行 = BLOCKED。
+     * 只警告档的两类是复盘记录: 判不合格只记结论、不动库存, 也不被质检放行判废闸当成判废。
+     */
+    public static final class RecordKind {
+        /** 超时被拦 (拦截档)。判不合格 = 按超时量转出 / 批次置不合格。 */
+        public static final String BLOCKED = "BLOCKED";
+        /** 只警告档: 超时照常投料。 */
+        public static final String WARN_EXCEEDED = "WARN_EXCEEDED";
+        /** 只警告档: 未登记开始解冻照常投料 (没有起算点, 不参与放行豁免)。 */
+        public static final String WARN_START_MISSING = "WARN_START_MISSING";
+
+        private RecordKind() {
+        }
+
+        public static boolean isWarn(String kind) {
+            return WARN_EXCEEDED.equals(kind) || WARN_START_MISSING.equals(kind);
         }
     }
 
@@ -126,4 +147,9 @@ public class ProcessTimeLimitEvent extends BaseEntity {
 
     @Column(name = "valid_until")
     private LocalDateTime validUntil;
+
+    /** {@link RecordKind}; 不能为空, 存量行由迁移默认 BLOCKED。 */
+    @Builder.Default
+    @Column(name = "record_kind", nullable = false, length = 24)
+    private String recordKind = RecordKind.BLOCKED;
 }

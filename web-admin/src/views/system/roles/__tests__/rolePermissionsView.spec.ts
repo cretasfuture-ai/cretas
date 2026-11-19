@@ -25,7 +25,7 @@ function openPage() {
 }
 async function viewWarehouse(wrapper: VueWrapper, code = 'warehouse_manager') {
   await flushPromises()
-  const row = wrapper.findAll('.el-table__row').find(row => row.text().includes(code))
+  const row = wrapper.findAll('.el-table__row').find(row => row.find(`[data-role-code="${code}"]`).exists())
   if (!row) throw new Error('warehouse row absent')
   const button = row.findAll('button').find(button => button.text() === '查看权限')
   if (!button) throw new Error('view permissions button absent')

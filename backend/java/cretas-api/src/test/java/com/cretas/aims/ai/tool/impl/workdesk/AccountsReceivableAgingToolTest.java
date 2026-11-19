@@ -49,22 +49,37 @@ class AccountsReceivableAgingToolTest {
     }
 
     @Test
-    @DisplayName("UT-ARA-02: doExecute — sums + extracts highRisk (60+ days)")
+    @DisplayName("UT-ARA-02: view=aging — sums + extracts highRisk (60+ days), 每客户一行的真实行形状")
     @SuppressWarnings("unchecked")
     void detectsHighRisk() throws Exception {
-        Map<String, Object> b1 = Map.of("bucket", "0-30", "amount", new BigDecimal("10000"), "count", 5L);
-        Map<String, Object> b2 = Map.of("bucket", "61-90", "amount", new BigDecimal("3000"), "count", 2L);
-        Map<String, Object> b3 = Map.of("bucket", "91-180", "amount", new BigDecimal("5000"), "count", 1L);
+        // getAgingAnalysis 真实形状: 每个客户一行, total + 各账龄列 (旧用例按「每桶一行」造数, 与实现脱节)
+        Map<String, Object> c1 = Map.of("counterpartyName", "甲", "total", new BigDecimal("10000"),
+                "days0_30", new BigDecimal("10000"));
+        Map<String, Object> c2 = Map.of("counterpartyName", "乙", "total", new BigDecimal("3000"),
+                "days61_90", new BigDecimal("3000"));
+        Map<String, Object> c3 = Map.of("counterpartyName", "丙", "total", new BigDecimal("5000"),
+                "days120plus", new BigDecimal("5000"));
         when(arApService.getAgingAnalysis(anyString(), eq(CounterpartyType.CUSTOMER)))
-                .thenReturn(List.of(b1, b2, b3));
+                .thenReturn(List.of(c1, c2, c3));
 
+        Map<String, Object> result = invoke("doExecute", FACTORY_ID, Map.of("view", "aging"), ctx());
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        // 甲只有 0-30 不算高风险; 乙 61-90、丙 120+ 是高风险
+        assertEquals(2L, data.get("highRiskCount"));
+        assertEquals(0, ((BigDecimal) data.get("highRiskAmount")).compareTo(new BigDecimal("8000")));
+        assertEquals(3L, data.get("totalCount"));
+        assertEquals(0, ((BigDecimal) data.get("totalAmount")).compareTo(new BigDecimal("18000")));
+    }
+
+    @Test
+    @DisplayName("UT-ARA-03: 不带 view 走默认欠款排名分支, 不走账龄分析 (逾期块在前的内容断言见 AccountsReceivableCollectFirstContractTest)")
+    @SuppressWarnings("unchecked")
+    void defaultViewIsOwedRankingNotAging() throws Exception {
         Map<String, Object> result = invoke("doExecute", FACTORY_ID, Map.of(), ctx());
         Map<String, Object> data = (Map<String, Object>) result.get("data");
-        // 0-30 not high risk, 61-90 + 91-180 are high risk
-        assertEquals(3L, data.get("highRiskCount"));
-        assertEquals(0, ((BigDecimal) data.get("highRiskAmount"))
-                .compareTo(new BigDecimal("8000")));
-        assertEquals(8L, data.get("totalCount"));
+        assertEquals("OWED_RANKING", data.get("mode"));
+        assertFalse(data.containsKey("highRiskCount"), "默认视图不应带账龄高风险字段");
+        org.mockito.Mockito.verifyNoInteractions(arApService);
     }
 
     // ── helpers ──

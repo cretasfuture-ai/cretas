@@ -1,0 +1,261 @@
+package com.cretas.aims.ai.tool.impl.scheduling;
+
+import java.math.BigDecimal;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.TemporalAdjusters;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+/**
+ * 急单原话里的数量 / 单位 / 交期 (纯函数, 不读库)。
+ *
+ * <p>模型抽出来的参数优先; 没有时才从原话里按规则读, 读不出就是「缺」, ⛔ 不猜默认值。
+ * 单位换算只做同一量纲的确定换算 (吨 / 斤 → 千克); 跨量纲 (箱 → 千克) 一律不换, 由调用方说「缺换算」。
+ */
+public final class RushOrderRequestParser {
+
+    private RushOrderRequestParser() {
+    }
+
+    /** 数量 + 用户说的单位 (原样); unit 为 null 表示没说单位。 */
+    public record SaidQuantity(BigDecimal value, String unit) {
+    }
+
+    private static final Pattern QUANTITY = Pattern.compile(
+            "(\\d+(?:\\.\\d+)?|[零一二两三四五六七八九十百千]+)\\s*(吨|公吨|t(?![a-z])|千克|公斤|kg|斤|件|个|箱|批|袋|盒|包)",
+            Pattern.CASE_INSENSITIVE);
+
+    private static final Pattern WEEKDAY = Pattern.compile("(下下|下个?|这个?|本)?(?:周|星期|礼拜)([一二三四五六日天1-7])");
+    private static final Pattern MONTH_DAY = Pattern.compile("(\\d{1,2})\\s*月\\s*(\\d{1,2})\\s*[日号]?");
+    private static final Pattern ISO_DATE = Pattern.compile("(\\d{4})-(\\d{1,2})-(\\d{1,2})");
+
+    public static Optional<SaidQuantity> quantityFromText(String text) {
+        if (text == null) return Optional.empty();
+        Matcher m = QUANTITY.matcher(text);
+        // 「插一个急单 酱牛肉 2 吨」里的「一个」是量词口语, 不是数量: 跳过「一个急单」(只有它就是没说数量)
+        while (m.find()) {
+            BigDecimal v = parseNumber(m.group(1));
+            if (v == null || v.signum() <= 0) continue;
+            SaidQuantity q = new SaidQuantity(v, m.group(2));
+            boolean article = "个".equals(m.group(2)) && ("一".equals(m.group(1)) || "1".equals(m.group(1)))
+                    && text.startsWith("急单", m.end());
+            if (!article) return Optional.of(q);
+        }
+        return Optional.empty();
+    }
+
+    /** 参数里的数量: 数字或数字字符串, 其它返回 null。 */
+    public static BigDecimal number(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof BigDecimal b) return b;
+        if (raw instanceof Number n) return new BigDecimal(n.toString());
+        String s = raw.toString().trim();
+        if (s.isEmpty()) return null;
+        try {
+            return new BigDecimal(s);
+        } catch (NumberFormatException e) {
+            return parseNumber(s);
+        }
+    }
+
+    static BigDecimal parseNumber(String s) {
+        if (s == null || s.isBlank()) return null;
+        if (s.chars().allMatch(c -> Character.isDigit(c) || c == '.')) {
+            try {
+                return new BigDecimal(s);
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        // 简单中文数字: 两 / 十二 / 二十 / 三百 / 三百零五 / 一千二百。
+        // 口语省略末位单位: 「两百五」= 250、「一千二」= 1200 (紧跟在 百/千 后面的单个数字按下一位补零);
+        // 「三百零五」有「零」隔开, 仍是 305。
+        int total = 0;
+        int digit = 0;
+        int lastUnit = 0;
+        boolean digitRightAfterUnit = false;
+        boolean prevWasUnit = false;
+        for (char c : s.toCharArray()) {
+            int d = "零一二三四五六七八九".indexOf(c);
+            if (c == '两') d = 2;
+            int unit = c == '十' ? 10 : c == '百' ? 100 : c == '千' ? 1000 : 0;
+            if (d >= 0) {
+                digit = d;
+                digitRightAfterUnit = prevWasUnit && d != 0;
+                prevWasUnit = false;
+            } else if (unit > 0) {
+                total += (digit == 0 ? 1 : digit) * unit;
+                digit = 0;
+                lastUnit = unit;
+                digitRightAfterUnit = false;
+                prevWasUnit = true;
+            } else {
+                return null;
+            }
+        }
+        total += digitRightAfterUnit && lastUnit >= 100 ? digit * (lastUnit / 10) : digit;
+        return total == 0 ? null : BigDecimal.valueOf(total);
+    }
+
+    /** 千克族单位 (产品单位或用户说的单位)。 */
+    static boolean isKgFamily(String unit) {
+        if (unit == null) return false;
+        String u = unit.trim().toLowerCase(Locale.ROOT);
+        return u.equals("kg") || u.equals("公斤") || u.equals("千克");
+    }
+
+    private static final Map<String, BigDecimal> TO_KG = Map.of(
+            "吨", new BigDecimal("1000"), "公吨", new BigDecimal("1000"), "t", new BigDecimal("1000"),
+            "斤", new BigDecimal("0.5"));
+
+    /**
+     * 把用户说的数量换成产品自带单位的数量。用户没说单位 = 按产品单位理解; 同名单位直接用;
+     * 产品按千克计而用户说吨 / 斤时做确定换算; 其余返回 empty (调用方说「缺换算」)。
+     */
+    public static Optional<BigDecimal> toProductUnit(SaidQuantity said, String productUnit) {
+        if (said == null || said.value() == null || productUnit == null || productUnit.isBlank()) {
+            return Optional.empty();
+        }
+        String saidUnit = said.unit();
+        if (saidUnit == null || saidUnit.isBlank()) return Optional.of(said.value());
+        String pu = productUnit.trim();
+        String su = saidUnit.trim();
+        if (pu.equalsIgnoreCase(su)) return Optional.of(said.value());
+        if (isKgFamily(pu) && isKgFamily(su)) return Optional.of(said.value());
+        if (isKgFamily(pu)) {
+            BigDecimal factor = TO_KG.get(su.toLowerCase(Locale.ROOT));
+            if (factor != null) return Optional.of(said.value().multiply(factor).stripTrailingZeros());
+        }
+        if (("件".equals(pu) || "个".equals(pu)) && ("件".equals(su) || "个".equals(su))) {
+            return Optional.of(said.value());
+        }
+        return Optional.empty();
+    }
+
+    /** 用户说的是重量 (吨 / 斤 / 千克族)。 */
+    public static boolean isWeightUnit(String unit) {
+        if (unit == null) return false;
+        String u = unit.trim().toLowerCase(Locale.ROOT);
+        return isKgFamily(u) || TO_KG.containsKey(u);
+    }
+
+    /** 重量 → 千克; 不是重量单位返回 empty。 */
+    public static Optional<BigDecimal> toKg(SaidQuantity said) {
+        if (said == null || said.value() == null || !isWeightUnit(said.unit())) return Optional.empty();
+        String u = said.unit().trim().toLowerCase(Locale.ROOT);
+        BigDecimal f = isKgFamily(u) ? BigDecimal.ONE : TO_KG.get(u);
+        return Optional.of(said.value().multiply(f).stripTrailingZeros());
+    }
+
+    /** 换算结果: 产品单位数量 + 面向用户的换算式。 */
+    public record Conversion(BigDecimal quantity, String formula) {
+    }
+
+    /**
+     * 重量按产品每单位的千克数换成产品单位 (如 2 吨 / 0.25 千克每盒 = 8000 盒)。不整除时向上取整并写明。
+     * 用户说的不是重量或 kgPerUnit 缺失 / 非正 → empty。
+     */
+    public static Optional<Conversion> weightToUnits(SaidQuantity said, BigDecimal kgPerUnit, String productUnit) {
+        Optional<BigDecimal> kg = toKg(said);
+        if (kg.isEmpty() || kgPerUnit == null || kgPerUnit.signum() <= 0 || productUnit == null) return Optional.empty();
+        BigDecimal exact = kg.get().divide(kgPerUnit, 6, java.math.RoundingMode.HALF_UP).stripTrailingZeros();
+        BigDecimal units = exact.setScale(0, java.math.RoundingMode.CEILING);
+        String kgText = kg.get().toPlainString();
+        String formula = plainNum(said.value()) + " " + said.unit() + " = " + kgText + " 千克 ÷ "
+                + kgPerUnit.stripTrailingZeros().toPlainString() + " 千克/" + productUnit + " = "
+                + (exact.compareTo(units) == 0 ? "" : exact.toPlainString() + "，向上取整为 ")
+                + units.toPlainString() + " " + productUnit;
+        return Optional.of(new Conversion(units, formula));
+    }
+
+    private static String plainNum(BigDecimal v) {
+        return v.stripTrailingZeros().toPlainString();
+    }
+
+    private static final Pattern SPEC_WEIGHT = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(kg|千克|公斤|g|克)(?![a-zA-Z*×x])",
+            Pattern.CASE_INSENSITIVE);
+
+    /** 从「演示·酱卤牛肉250g」这类名称 / 规格文字里读单件重量 (千克); 读不出 (或是 310g*42袋 这类多包装) 返回 empty。 */
+    public static Optional<BigDecimal> kgFromSpecText(String text) {
+        if (text == null) return Optional.empty();
+        Matcher m = SPEC_WEIGHT.matcher(text);
+        if (!m.find()) return Optional.empty();
+        BigDecimal v = new BigDecimal(m.group(1));
+        String u = m.group(2).toLowerCase(Locale.ROOT);
+        BigDecimal kg = u.equals("g") || u.equals("克") ? v.divide(new BigDecimal("1000")) : v;
+        return kg.signum() > 0 ? Optional.of(kg.stripTrailingZeros()) : Optional.empty();
+    }
+
+    /**
+     * 交期日: 参数 (yyyy-MM-dd 或 ISO 日期时间) 优先, 否则读原话里的「周五 / 下周三 / 明天 / 11月20日 / 2026-11-20」。
+     * 「周X」指今天起 (含今天) 最近的那个周X; 「下周X」指下一个自然周的周X。
+     */
+    public static Optional<LocalDate> deadline(Object param, String text, LocalDate today) {
+        if (param != null && !param.toString().isBlank()) {
+            String p = param.toString().trim();
+            try {
+                return Optional.of(p.length() > 10 ? LocalDateTime.parse(p).toLocalDate() : LocalDate.parse(p));
+            } catch (DateTimeParseException ignored) {
+                Optional<LocalDate> fromParamText = deadlineFromText(p, today);
+                if (fromParamText.isPresent()) return fromParamText;
+            }
+        }
+        return deadlineFromText(text, today);
+    }
+
+    static Optional<LocalDate> deadlineFromText(String text, LocalDate today) {
+        if (text == null) return Optional.empty();
+        Matcher iso = ISO_DATE.matcher(text);
+        if (iso.find()) {
+            try {
+                return Optional.of(LocalDate.of(Integer.parseInt(iso.group(1)), Integer.parseInt(iso.group(2)),
+                        Integer.parseInt(iso.group(3))));
+            } catch (RuntimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher md = MONTH_DAY.matcher(text);
+        if (md.find()) {
+            try {
+                LocalDate d = LocalDate.of(today.getYear(), Integer.parseInt(md.group(1)), Integer.parseInt(md.group(2)));
+                return Optional.of(d.isBefore(today) ? d.plusYears(1) : d);
+            } catch (RuntimeException e) {
+                return Optional.empty();
+            }
+        }
+        Matcher w = WEEKDAY.matcher(text);
+        if (w.find()) {
+            DayOfWeek dow = dayOfWeek(w.group(2));
+            String prefix = w.group(1);
+            if (prefix != null && prefix.startsWith("下")) {
+                int weeks = prefix.startsWith("下下") ? 2 : 1;
+                LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)).plusWeeks(weeks);
+                return Optional.of(monday.with(TemporalAdjusters.nextOrSame(dow)));
+            }
+            return Optional.of(today.with(TemporalAdjusters.nextOrSame(dow)));
+        }
+        if (text.contains("大后天")) return Optional.of(today.plusDays(3));
+        if (text.contains("后天")) return Optional.of(today.plusDays(2));
+        if (text.contains("明天")) return Optional.of(today.plusDays(1));
+        if (text.contains("今天")) return Optional.of(today);
+        return Optional.empty();
+    }
+
+    private static DayOfWeek dayOfWeek(String c) {
+        return switch (c) {
+            case "一", "1" -> DayOfWeek.MONDAY;
+            case "二", "2" -> DayOfWeek.TUESDAY;
+            case "三", "3" -> DayOfWeek.WEDNESDAY;
+            case "四", "4" -> DayOfWeek.THURSDAY;
+            case "五", "5" -> DayOfWeek.FRIDAY;
+            case "六", "6" -> DayOfWeek.SATURDAY;
+            default -> DayOfWeek.SUNDAY;
+        };
+    }
+}
