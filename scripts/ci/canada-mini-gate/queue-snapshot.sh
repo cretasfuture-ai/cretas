@@ -13,7 +13,8 @@ mini_queue_snapshot() {
 
   for status in queued in_progress; do
     pages=$("${GH:-gh}" api --paginate "repos/$repo/actions/runs?status=$status&per_page=100" -q "$run_filter") || return 1
-    ids=$(printf '%s\n' "$pages" | tr -d '\r' | awk -v workflows="$workflows" '
+    pages=${pages//$'\r'/}
+    ids=$(awk -v workflows="$workflows" '
       BEGIN { n = split(workflows, names, " "); for (i = 1; i <= n; i++) allowed[names[i]] = 1 }
       $1 == "total" && NF == 2 && $2 ~ /^[0-9]+$/ {
         if (headers++ && total != $2) bad = 1
@@ -25,7 +26,7 @@ mini_queue_snapshot() {
       }
       { bad = 1 }
       END { if (bad || !headers || total >= 1000 || count + 0 != total) exit 1 }
-    ') || return 1
+    ' <<< "$pages") || return 1
     all_ids="$all_ids $ids"
   done
 
@@ -35,7 +36,8 @@ mini_queue_snapshot() {
     case "$seen" in *" $id "*) continue ;; esac
     seen="$seen$id "
     pages=$("${GH:-gh}" api --paginate "repos/$repo/actions/runs/$id/jobs?filter=latest&per_page=100" -q "$job_filter") || return 1
-    counts=$(printf '%s\n' "$pages" | tr -d '\r' | awk '
+    pages=${pages//$'\r'/}
+    counts=$(awk '
       $1 == "total" && NF == 2 && $2 ~ /^[0-9]+$/ {
         if (headers++ && total != $2) bad = 1
         total = $2; next
@@ -51,7 +53,7 @@ mini_queue_snapshot() {
       }
       { bad = 1 }
       END { if (bad || !headers || count + 0 != total) exit 1; print queued + 0, busy + 0 }
-    ') || return 1
+    ' <<< "$pages") || return 1
     queued=$((queued + ${counts% *}))
     busy=$((busy + ${counts#* }))
   done
