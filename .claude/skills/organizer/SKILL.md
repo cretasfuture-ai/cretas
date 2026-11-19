@@ -87,7 +87,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 🔴 **交班流程**（Steve 2026-11-13；这一节取代此前零散的交班条款）。三条底线：**会话 id 只用系统给的**（自己的用 `get_session self`，对方的用消息的 `from` 地址），⛔ 交接文件、笔记目录名、记忆里的 id 一律不抄；**每条在飞执行线都要回执**才算接上；**老 organizer 确认交接完整后才归档它**。依据：本周 organizer 花费 $550 里 $271（49%）是被别的会话消息/通知唤醒的回合，交过班的 organizer 被叫醒 246 次；11-13 意图批次的新 organizer 把笔记目录名里的前任 id 当成自己的报给执行线；同日 #1652 在交班间隙一度无人盯 CI。
 
   **老 organizer（交出方）**
-  1. 写交接到 `~/.claude/context-handoff/handoff/`（仓库外，≤ 15 行）：在飞执行线（会话 id + 在做什么 + PR 号）、仍在挂的 PR 监视、合并排队、待 Steve 裁决、Base SHA、试过但放弃的路、下一步第一个动作。
+  1. 写交接到 `~/.claude/context-handoff/handoff/`（仓库外，≤ 15 行）：在飞执行线（会话 id + 在做什么 + PR 号）、仍在挂的 PR 监视、合并排队、待 Steve 裁决、Base SHA、试过但放弃的路、下一步第一个动作。另写一行**额度读数**：`get_usage` 的周额度% + `python C:/Users/Steve/agent-queue/tools/burn.py <当前%> <周窗口开始UTC> <重置UTC>` 的近 24h 速度与推算用完时间，以及本批在跑的 Claude 执行线 / Codex 执行线各几条。
   2. `start_session` 开新 organizer（Opus、medium，用 `title` 起名「Organizer｜<批次>｜第 N+1 任｜<MM-DD>」，**`initiation: "user_asked"`**——Steve 2026-11-16 在对话里明确要求「organizer 自动开，不用我点卡片确认」，这是他本人的指示，⛔ 不传 `offer` / `own_initiative`，那两种必出卡片），开完 `get_session` 核对模型。
      - 🔴 **不出卡片的唯一办法是挑对回合**：应用在「被别的会话消息 / 定时 / 后台通知叫醒的回合」里一律拒绝直接开会话，只能出卡片，这是应用限制，⛔ 不要绕。所以到收口点时先看本回合是谁叫醒的：是 Steve 自己发的消息 → 当场开；是别的会话 / 通知叫醒的 → **不开、不出卡片**，继续守着在飞 PR，记一行「待交班」，等 Steve 下一条桌面端消息那一轮再开（300K 软线本来就允许拖到下个边界；Remote Control 发来的回合同样开不了）。只有过了 400K 硬线且 Steve 长时间没发消息，才退回出卡片并说一行「新 organizer 是卡片 <task_id>，请点开」。
   3. 在新 organizer 发来「已接手」之前：**不 detach、不停 CI 监视、不停手**。不要替新 organizer 给执行线转述它的 id。
@@ -97,10 +97,11 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）；**`set_pinned self true` 把自己置顶**（置顶的会话不受「PR 合并自动归档」影响）。
      - 🔴 依据（2026-11-16）：意图第 8 任、原型第 15 任都被自己合并的 PR（#1782/#1780）触发 `auto_archive_on_pr_close` 归档，两个批次一度无人管；同期置顶的降本第 5 任 PR 合并后没被归档。⛔ 不要关这个应用设置（执行会话靠它回收）。另外 organizer 自己开/合的 PR（台账 fastlane 等）合并前先 `unbind_pr`，别让 PR 绑在 organizer 会话上。
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
+     - 🔴 **接手时重新评估 Claude/Codex 分摊**（Steve 2026-11-19）：自己再跑一次 `get_usage` + `burn.py`，按 `C:/Users/Steve/agent-queue/RULES-claude-codex-balance.md` 第 5 节定档（绿/黄/红/切换），据此决定本批接下来哪些执行走 Codex 任务卡、哪些留 Claude（只留红线终审与浏览器验收）；交接里在跑的 Claude 执行线做完手上 PR 就收，不续派。organizer 本身仍是 Claude，只有 ≥95% 且推算重置前用完才切 Codex（须由降本 organizer 先问 Steve 并得到明确同意——他还有 reset 可用）。
   3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，请回一句确认接上；之后只在 PR 已开/阻塞/完成时回复这条消息的发件人，进度不用报」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
   5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。前任标题不是「Organizer｜」也照样归档（2026-11-18：BP 协调会话「产品与传统软件对比研究」被就地提升出的 BP 第 2 任接手后一直置顶没归档，因为它不叫 Organizer，没人认领这一步）；指示别的会话就地接任 organizer 的，接任方负责归档前任。机械提醒：`session-health.js` 在 organizer 会话里每 10 分钟扫一次本机会话记录，列出「交班遗留」（已改名「[已交班…」没归档的，和现任 Organizer 的 spawnedFrom 前任没归档的），看到就处理或转给对应现任。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
-  6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
+  6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。另附一行额度读数与定档（周额度%、近 24h 速度、推算用完时间、档位、本批 Claude/Codex 执行线条数）。
   - **执行线收尾归现任**（Steve 2026-11-14）：交班 detach 出去的执行线没有父会话，但仍归现任 organizer 收尾。PR 合并或关闭的会话由应用设置 `auto_archive_on_pr_close`（11-14 已开）自动归档；没有 PR 的线（设计、验收、原型、一次性检查）交付后由现任归档，归档前确认 worktree 干净且没有未推提交。依据：11-14 有 21 个已合并或已交班的会话空闲没人归档，每个占一个 claude 进程（约 100–400MB），这批会话 CLI 合计约 4GB 内存。
   - **会话命名**：organizer「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后的老 organizer「[已交班→第 N+1 任] <原名>」；执行会话「<批次>·<线名>：<做什么>」。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。
