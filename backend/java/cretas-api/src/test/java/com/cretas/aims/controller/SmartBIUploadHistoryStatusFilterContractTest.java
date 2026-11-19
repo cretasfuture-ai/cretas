@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 味美 11-19 (B2): GET /uploads?status=COMPLETED 之前整个忽略 status,
  * 保存失败的上传 (FAILED) 也进了 AI 问数据的数据源下拉。
  */
-class SmartBIUploadHistoryStatusFilterTest {
+class SmartBIUploadHistoryStatusFilterContractTest {
 
     private static UploadHistoryDTO dto(long id, UploadStatus status) {
         return new UploadHistoryDTO(id, "f" + id + ".xlsx", "s", "GENERAL", 10, 3, status, LocalDateTime.now());
