@@ -38,7 +38,9 @@ chmod +x "$T/gh"
 reset() { rm -rf "$T/f"; mkdir -p "$T/f"; }
 run() { FAKE_DIR=$T/f GH=$T/gh MIN_AGE_SEC=180 "$SUT_BASH" "${SUTX:-$SUT}" "$@" > "$T/out" 2>&1; echo $? > "$T/rc"; }
 check() {  # <名> <期望 rc> <期望被取消的 id, 空格分隔, 排序>
-  local got_rc got_c; got_rc=$(cat "$T/rc"); got_c=$(sort -n "$T/f/cancelled" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+  local got_rc got_c=""; got_rc=$(cat "$T/rc")
+  # 不用管道: 先落变量再用不加引号的展开把换行并成单空格 (pipe-rc 闸)
+  if [ -f "$T/f/cancelled" ]; then got_c=$(sort -n "$T/f/cancelled") || got_c=SORT_FAILED; got_c=$(echo $got_c); fi
   n=$((n + 1))
   if [ "$got_rc" = "$2" ] && [ "$got_c" = "$3" ]; then echo "PASS $1 (rc=$got_rc cancelled=[$got_c])"
   else echo "FAIL $1: rc=$got_rc want=$2 cancelled=[$got_c] want=[$3]"; sed 's/^/    /' "$T/out"; fail=1; fi
