@@ -3343,7 +3343,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             "grid": {"left": "3%", "right": "4%", "bottom": "3%", "containLabel": True},
                         }
                     })
-                charts_extra = _build_charts_for_query(query, df, data)
+                charts_extra = _build_charts_for_query(
+                    query, df, data, field_meta if 'field_meta' in locals() else None)
                 if charts_extra:
                     charts.extend(charts_extra)
                 # (debug logging removed after Bug #20/#24 verified)
@@ -4145,7 +4146,7 @@ async def _prefer_question_chart_for_upload(
     return [_sanitize_for_json(qchart)]
 
 
-def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
+def _build_charts_for_query(query: str, df, data: list, field_meta: Optional[list] = None) -> List[Dict[str, Any]]:
     """Build charts based on the query keywords — extracted to share between stream and non-stream endpoints."""
     import re as _re
     from services.chart_builder import ChartBuilder
@@ -4246,6 +4247,12 @@ def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
 
     numeric_cols = [c for c in numeric_cols if not _is_index_column(c, df[c])]
     non_numeric_cols = [c for c in non_numeric_cols if not _is_index_column(c, df[c])]
+    # 页脚只对指标列聚合: 字段定义里不是 is_measure 的数值列 (批号等) 不进图
+    try:
+        from smartbi.services.question_chart import measure_columns_only
+        numeric_cols = measure_columns_only(numeric_cols, field_meta)
+    except Exception as _mc_err:
+        logger.warning(f"[chart] measure-only filter failed (keep columns): {_mc_err}")
 
     _column_xx_pat = _re.compile(r'^[Cc]olumn[_\s]?\d+$')
     named_numeric = [c for c in numeric_cols if not _column_xx_pat.match(c)]
