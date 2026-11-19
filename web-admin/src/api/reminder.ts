@@ -58,7 +58,8 @@ export function listReminders(params: {
 export function getReminderBadge(
   factoryId?: string,
 ): Promise<{ success: boolean; data: { pending: number } }> {
-  return request.get(`${basePath(factoryId)}/badge`);
+  // _silent: 无 reminder 读权限的角色会收到 403，由铃铛自行隐藏，不弹全局阻断弹窗
+  return request.get(`${basePath(factoryId)}/badge`, { _silent: true } as Record<string, unknown>);
 }
 
 /** Snooze. */

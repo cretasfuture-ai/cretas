@@ -3,11 +3,14 @@ import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { Bell } from '@element-plus/icons-vue';
 import { getReminderBadge } from '@/api/reminder';
+import { ApiError } from '@/types/api';
 import { usePermissionStore } from '@/store/modules/permission';
 
 const router = useRouter();
 const permissionStore = usePermissionStore();
 const pending = ref<number>(0);
+// 后端仍返回 403(前端权限快照与后端矩阵不一致)时的兜底: 隐藏铃铛并停止轮询。
+const forbidden = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
 
 // 与后端 ReminderController.badge 的 @RequirePermission 同一组:
@@ -25,8 +28,12 @@ async function refresh(): Promise<void> {
   try {
     const res = await getReminderBadge();
     pending.value = res?.data?.pending ?? 0;
-  } catch {
-    // 静默 — bell badge 失败不打扰用户
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 403) {
+      forbidden.value = true;
+      stop();
+    }
+    // 其它错误静默 — bell badge 失败不打扰用户，下一轮照常重试
   }
 }
 
@@ -42,7 +49,7 @@ function stop(): void {
 // 权限可能晚于组件挂载才加载完: 跟着 canSeeReminders 起停, 无权限时一次请求都不发。
 watch(canSeeReminders, (allowed) => {
   stop();
-  if (!allowed) return;
+  if (!allowed || forbidden.value) return;
   void refresh();
   timer = setInterval(refresh, 60_000);
 }, { immediate: true });
@@ -51,7 +58,7 @@ onBeforeUnmount(stop);
 </script>
 
 <template>
-  <el-tooltip v-if="canSeeReminders" content="我的提醒" placement="bottom">
+  <el-tooltip v-if="canSeeReminders && !forbidden" content="我的提醒" placement="bottom">
     <el-badge :value="pending" :hidden="pending === 0" :max="99" class="reminder-bell">
       <el-icon class="header-action" @click="goToReminders">
         <Bell />
