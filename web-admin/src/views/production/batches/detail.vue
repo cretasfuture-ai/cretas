@@ -207,6 +207,16 @@ const isEditMode = computed(() => route.query.mode === 'edit');
 
 const loading = ref(false);
 const batch = ref<TableRow | null>(null);
+interface StageRecordRow {
+  id?: number;
+  stageName?: string | null;
+  stageOrder?: number | null;
+  inputWeight?: number | null;
+  outputWeight?: number | null;
+  durationMinutes?: number | null;
+  endTime?: string | null;
+  notes?: string | null;
+}
 const timeline = ref<TableRow[]>([]);
 const attachmentRefreshKey = ref(0);
 // T4-D4 (issue #533): F006 customer wants 原料消耗记录 visible on batch detail.
@@ -229,6 +239,8 @@ const wipRows = ref<WipRowItem[]>([]);
 
 // T140: 工序任务明细
 const workProcessTasks = ref<WorkProcessTaskItem[]>([]);
+// B7: 没有逐道报工任务时, 兼读加工环节记录 (processing_stage_records, 导入/环节录入写这里), 标明来源
+const stageRecords = ref<StageRecordRow[]>([]);
 // T140: 工序详情抽屉
 const taskDrawerVisible = ref(false);
 const selectedTask = ref<WorkProcessTaskItem | null>(null);
@@ -272,12 +284,13 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const [batchRes, timelineRes, yieldRes, wipRes, tasksRes] = await Promise.allSettled([
+    const [batchRes, timelineRes, yieldRes, wipRes, tasksRes, stagesRes] = await Promise.allSettled([
       get(`/${factoryId.value}/processing/batches/${batchId.value}`),
       get(`/${factoryId.value}/processing/batches/${batchId.value}/timeline`),
       get(`/${factoryId.value}/production/batches/${batchId.value}/yield`),
       getBatchWip(factoryId.value, batchId.value),
-      getBatchWorkProcessTasks(factoryId.value, batchId.value)
+      getBatchWorkProcessTasks(factoryId.value, batchId.value),
+      get(`/${factoryId.value}/processing/batches/${batchId.value}/stages`)
     ]);
 
     if (batchRes.status === 'fulfilled' && batchRes.value.success) {
@@ -313,6 +326,10 @@ async function loadData() {
     } else {
       workProcessTasks.value = [];
     }
+
+    stageRecords.value = stagesRes.status === 'fulfilled' && stagesRes.value?.success && Array.isArray(stagesRes.value.data)
+      ? (stagesRes.value.data as StageRecordRow[]).slice().sort((a, b) => (a.stageOrder ?? 999) - (b.stageOrder ?? 999))
+      : [];
   } catch (error) {
     // Interceptor already shows specific sticky toast for ApiError.
     console.error('加载失败:', error);
@@ -1698,8 +1715,40 @@ function goToReversalList() {
             </div>
           </template>
           <!-- 诚实空态: 批次未 spawn 工序任务 (转为批次时还未点"生成工序任务") -->
+          <div v-if="workProcessTasks.length === 0 && stageRecords.length > 0" data-testid="stage-records-fallback">
+            <el-alert
+              type="info"
+              :closable="false"
+              show-icon
+              title="来源：加工环节记录（非 App 逐道报工）。本批次没有逐道报工任务，以下是已录入的工序记录。"
+              style="margin-bottom:8px"
+            />
+            <el-table :data="stageRecords" border stripe size="small" style="width: 100%">
+              <el-table-column label="道" width="60" align="center">
+                <template #default="{ row }">{{ row.stageOrder ?? '-' }}</template>
+              </el-table-column>
+              <el-table-column label="工序" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.stageName || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="投入" width="110" align="right">
+                <template #default="{ row }">{{ row.inputWeight != null ? formatNum(row.inputWeight) + ' kg' : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="产出" width="110" align="right">
+                <template #default="{ row }">{{ row.outputWeight != null ? formatNum(row.outputWeight) + ' kg' : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="时长(分)" width="90" align="right">
+                <template #default="{ row }">{{ row.durationMinutes ?? '—' }}</template>
+              </el-table-column>
+              <el-table-column label="结束时间" width="160">
+                <template #default="{ row }">{{ row.endTime ? formatDateTime(row.endTime) : '—' }}</template>
+              </el-table-column>
+              <el-table-column label="记录说明" min-width="260" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.notes || '—' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
           <el-empty
-            v-if="workProcessTasks.length === 0"
+            v-else-if="workProcessTasks.length === 0"
             description="暂无工序任务 (批次生产启动后可生成)"
             :image-size="60"
           />
