@@ -1824,6 +1824,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             return  # early exit — synthesis served the answer
             except Exception as e:
                 logger.warning(f"[stream] synthesis router failed, falling through: {e}")
+            _auto_pick = None
             try:
                 upload_id = (
                     validated_upload_id
@@ -1831,6 +1832,37 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     else None
                 )
                 user_q = (request.effective_query or "").strip()
+                # 味美 11-19 (B3): 「全部数据」(没选数据源) 时先按问题和各表列名/表名的重合度
+                # 选表; 一份都不沾边才走下面原来的模板匹配 / 行数最多。
+                if (
+                    request.allow_tenant_data_fallback
+                    and not upload_id
+                    and user_q
+                    and trusted_factory_id
+                ):
+                    try:
+                        from smartbi.services.upload_auto_select import pick_upload_for_question
+                        from smartbi.config import get_pg_pool as _get_pool_auto
+                        _pool_auto = await _get_pool_auto()
+                        if _pool_auto is not None:
+                            async with _pool_auto.acquire() as _conn_auto:
+                                _auto_pick = await pick_upload_for_question(
+                                    _conn_auto, trusted_factory_id, user_q
+                                )
+                        if _auto_pick is not None:
+                            upload_id = _auto_pick.upload_id
+                            logger.info(
+                                f"[stream] question-matched upload {upload_id} "
+                                f"({_auto_pick.label!r}, factory={trusted_factory_id})"
+                            )
+                            yield _sse_event("data_source", {
+                                "uploadId": _auto_pick.upload_id,
+                                "label": _auto_pick.label,
+                                "autoSelected": True,
+                            })
+                    except Exception as _ae:
+                        logger.warning(f"[stream] question-matched upload select failed: {_ae}")
+                        _auto_pick = None
                 # Bug G phase 2 (Apr 26 2026): template-aware upload selection.
                 # Phase 1 picked largest upload — broke for qhj where 32K 卡详情
                 # (no menu data) was largest but 6K 营业概况月报 (with menu data)
@@ -2180,7 +2212,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     pool = await _get_pg_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            upload_id = validated_upload_id
+                            upload_id = validated_upload_id or (
+                                _auto_pick.upload_id if _auto_pick is not None else None
+                            )
                             if not upload_id:
                                 # Bug G fix (Apr 26 2026): factory-scoped + largest non-empty upload.
                                 factory_id_for_select = trusted_factory_id
