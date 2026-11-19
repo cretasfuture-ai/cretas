@@ -99,6 +99,10 @@ public class TraceBatchTool extends AbstractBusinessTool {
         if (salesOrderNo.isBlank() && BatchReferenceClarifier.isGenericReference(batchNumber)) {
             return BatchReferenceClarifier.clarify(productionBatchRepository, factoryId, "帮你溯源");
         }
+        // 用户用展示短标签 (PB-PLAN-…56643) 回选: 还原成完整批次号
+        if (salesOrderNo.isBlank()) {
+            batchNumber = BatchReferenceClarifier.resolveShortLabel(productionBatchRepository, factoryId, batchNumber);
+        }
 
         // 销售单号：明确给了 salesOrderNo，或「批次号」其实是销售单号（没有同号批次时）→ 按销售单追溯
         if (salesOrderNo.isBlank() && salesOrderTraceService.isSalesOrderTarget(factoryId, batchNumber)) {

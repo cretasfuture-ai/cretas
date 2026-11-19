@@ -85,6 +85,7 @@ async def _run_job(job_id: str, factory_id: str) -> None:
         _running_jobs[job_id]["stats"] = {
             "silverUpserted":       etl_stats.silver_upserted,
             "silverPruned":         etl_stats.silver_pruned,
+            "silverPrunedHardDeleted": etl_stats.silver_pruned_hard_deleted,
             "goldPruned":           etl_stats.gold_pruned,
             "goldProductRows":      etl_stats.gold_product_rows,
             "goldDailyRollupRows":  etl_stats.gold_daily_rollup_rows,

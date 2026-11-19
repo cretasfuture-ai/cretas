@@ -30,15 +30,46 @@ class ResourceAdmission(unittest.TestCase):
 class ActiveBuildGate(unittest.TestCase):
     def test_native_or_ci_busy_and_guest_errors_refuse(self):
         for native,guest,marker,expected in [(0,0,'',True),(1,0,'F006_CI_BUSY_v1',True),(1,0,'F006_CI_IDLE_v1',False),(1,255,'',True)]:
-            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=native),mock.Mock(returncode=guest,stdout=marker)]):
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=native),mock.Mock(returncode=0,stdout='{"name":"ci","status":"Running"}\n'),mock.Mock(returncode=guest,stdout=marker)]):
                 self.assertEqual(m.active_build(),expected)
     def test_guest_cli_error_one_is_not_misread_as_no_worker(self):
-        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=1,stdout='')]):self.assertTrue(m.active_build())
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=0,stdout='{"name":"ci","status":"Running"}\n'),mock.Mock(returncode=1,stdout='')]):self.assertTrue(m.active_build())
     def test_success_without_exact_idle_marker_is_not_idle(self):
         for text in ['', 'F006_CI_UNKNOWN_v1', 'warning\nF006_CI_IDLE_v1']:
-            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=0,stdout=text)]):self.assertTrue(m.active_build())
+            with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),mock.Mock(returncode=0,stdout='{"name":"ci","status":"Running"}\n'),mock.Mock(returncode=0,stdout=text)]):self.assertTrue(m.active_build())
     def test_timeout_is_not_idle(self):
         with mock.patch.object(m.subprocess,'run',side_effect=m.subprocess.TimeoutExpired('guest',3)):
+            with self.assertRaises(m.subprocess.TimeoutExpired):m.active_build()
+
+class CiGuestRetired(unittest.TestCase):
+    """2026-11-18: colima ci guest retired; Stopped/absent is idle, anything unreadable stays busy."""
+    IDLE='F006_CI_IDLE_v1\n'
+    BUSY='F006_CI_BUSY_v1\n'
+    def run_gate(self,listing,guest=None,native=1):
+        # listing: (returncode, stdout) for `colima list --json`; guest: (returncode, stdout) or None = must not be queried
+        calls=[mock.Mock(returncode=native)]
+        if native!=0:calls.append(mock.Mock(returncode=listing[0],stdout=listing[1]))
+        if guest is not None:calls.append(mock.Mock(returncode=guest[0],stdout=guest[1]))
+        with mock.patch.object(m.subprocess,'run',side_effect=calls) as run:
+            result=m.active_build()
+        self.assertEqual(run.call_count,len(calls),'unexpected extra/missing subprocess call')
+        return result
+    def row(self,name,status):return json.dumps(dict(name=name,status=status))+'\n'
+    def test_stopped_ci_is_idle_without_guest_probe(self):
+        self.assertFalse(self.run_gate((0,self.row('ci','Stopped'))))
+    def test_absent_ci_is_idle_when_other_instances_listed(self):
+        self.assertFalse(self.run_gate((0,self.row('default','Running'))))
+    def test_running_ci_falls_through_to_guest_probe(self):
+        listing=(0,self.row('default','Stopped')+self.row('ci','Running'))
+        self.assertFalse(self.run_gate(listing,(0,self.IDLE)))
+        self.assertTrue(self.run_gate(listing,(0,self.BUSY)))
+    def test_unreadable_or_unknown_state_is_busy(self):
+        for listing in [(1,''),(0,'not json\n'),(0,''),(0,'[1]\n'),(0,self.row('ci','Starting')),(0,self.row('ci','')),(0,'{"name":"ci"}\n')]:
+            self.assertTrue(self.run_gate(listing),listing)
+    def test_xcodebuild_running_is_busy_without_colima_query(self):
+        self.assertTrue(self.run_gate(None,native=0))
+    def test_colima_list_timeout_propagates(self):
+        with mock.patch.object(m.subprocess,'run',side_effect=[mock.Mock(returncode=1),m.subprocess.TimeoutExpired('colima',3)]):
             with self.assertRaises(m.subprocess.TimeoutExpired):m.active_build()
 
 class RequestContract(unittest.TestCase):

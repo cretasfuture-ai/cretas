@@ -367,13 +367,14 @@ public class RushOrderImpactTool extends AbstractBusinessTool {
                     if (l.shortfall() == null) {
                         sb.append(" 不足 (当前账号无配方完整查看权, 不显示数量)");
                     } else {
-                        sb.append(" 缺 ").append(plain(l.shortfall())).append(unit(l.unit()))
-                                .append("（需要 ").append(plain(l.required())).append(unit(l.unit()))
-                                .append("，可领库存 ").append(plain(l.available())).append(unit(l.unit())).append("）");
+                        String u = l.unit();
+                        sb.append(" 缺 ").append(UrgentInsertMaterialAssessor.shortfallText(l.shortfall(), u)).append(unit(u))
+                                .append("（需要 ").append(UrgentInsertMaterialAssessor.requiredText(l.required(), u)).append(unit(u))
+                                .append("，可领库存 ").append(UrgentInsertMaterialAssessor.availableText(l.available(), u)).append(unit(u)).append("）");
                         int mismatch = l.onOrderUnitMismatchLines();
                         if (l.onOrder() != null && l.onOrder().signum() > 0) {
-                            sb.append("，在途未到 ").append(plain(l.onOrder())).append(unit(l.unit()))
-                                    .append("，到货后仍缺 ").append(plain(l.gapAfterOnOrder())).append(unit(l.unit()));
+                            sb.append("，在途未到 ").append(UrgentInsertMaterialAssessor.availableText(l.onOrder(), u)).append(unit(u))
+                                    .append("，到货后仍缺 ").append(UrgentInsertMaterialAssessor.shortfallText(l.gapAfterOnOrder(), u)).append(unit(u));
                             if (mismatch > 0) sb.append("（不含单位不同的在途）");
                         } else if (mismatch == 0) {
                             sb.append("，没有在途采购");

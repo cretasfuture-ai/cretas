@@ -39,7 +39,50 @@ public final class BatchReferenceClarifier {
         return true;
     }
 
-    /** 追问结果: message 为正文, data 带 status=NEED_MORE_INFO 与候选批次 (批次号原样, 不改写)。 */
+    private static final String GENERATED_PREFIX = "PB-PLAN-";
+    private static final int GENERATED_MIN_LENGTH = 24;
+    private static final int TAIL = 5;
+    private static final int RESOLVE_WINDOW = 50;
+    private static final java.util.regex.Pattern SHORT_LABEL =
+            java.util.regex.Pattern.compile("^(?:PB-PLAN-)?\\s*(?:…|\\.{2,3})\\s*([A-Za-z0-9]{3,})");
+
+    /** 计划号时间戳+随机串生成的长批次号 (PB-PLAN-…); 人工录入的短号不是。 */
+    static boolean isGeneratedLongNumber(String no) {
+        return no != null && no.startsWith(GENERATED_PREFIX) && no.length() >= GENERATED_MIN_LENGTH;
+    }
+
+    /** 给用户看的批次标签: 生成的长号缩成「PB-PLAN-…末5位」, 其余原样。数据里的 batchNumber 仍是完整号。 */
+    public static String displayLabel(String no) {
+        if (!isGeneratedLongNumber(no)) {
+            return no;
+        }
+        return GENERATED_PREFIX + "…" + no.substring(no.length() - TAIL);
+    }
+
+    /**
+     * 用户用短标签 (PB-PLAN-…56643 / …56643) 回选时, 在最近批次里按末位还原成完整批次号;
+     * 不是短标签、或对不上唯一一个长号时原样返回, 由下游照常处理。
+     */
+    public static String resolveShortLabel(ProductionBatchRepository repository, String factoryId, String value) {
+        if (value == null) {
+            return null;
+        }
+        java.util.regex.Matcher m = SHORT_LABEL.matcher(value.strip());
+        if (!m.find()) {
+            return value;
+        }
+        String tail = m.group(1);
+        List<String> hits = new ArrayList<>();
+        for (ProductionBatch b : repository.findByFactoryId(factoryId, PageRequest.of(0, RESOLVE_WINDOW)).getContent()) {
+            String no = b.getBatchNumber();
+            if (isGeneratedLongNumber(no) && no.endsWith(tail) && !hits.contains(no)) {
+                hits.add(no);
+            }
+        }
+        return hits.size() == 1 ? hits.get(0) : value;
+    }
+
+    /** 追问结果: message 为正文, data 带 status=NEED_MORE_INFO 与候选批次 (batchNumber 为完整号, label 为展示用短标签)。 */
     public static Map<String, Object> clarify(ProductionBatchRepository repository, String factoryId,
             String purpose) {
         Map<String, Object> resultShell = new LinkedHashMap<>();
@@ -47,6 +90,7 @@ public final class BatchReferenceClarifier {
         for (ProductionBatch b : repository.findByFactoryId(factoryId, PageRequest.of(0, CANDIDATE_LIMIT)).getContent()) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("batchNumber", b.getBatchNumber());
+            row.put("label", displayLabel(b.getBatchNumber()));
             row.put("productName", b.getProductName());
             LocalDateTime when = b.getEndTime() != null ? b.getEndTime()
                     : b.getStartTime() != null ? b.getStartTime() : b.getCreatedAt();
@@ -62,11 +106,11 @@ public final class BatchReferenceClarifier {
                 List<String> parts = new ArrayList<>();
                 if (c.get("productName") != null) parts.add(String.valueOf(c.get("productName")));
                 if (c.get("date") != null) parts.add(String.valueOf(c.get("date")));
-                sb.append("• ").append(c.get("batchNumber"));
+                sb.append("• ").append(c.get("label"));
                 if (!parts.isEmpty()) sb.append("（").append(String.join("，", parts)).append("）");
                 sb.append('\n');
             }
-            sb.append("直接回复其中一个批次号即可。");
+            sb.append("直接回复其中一个批次号（或上面的短标签）即可。");
         }
         resultShell.put("message", sb.toString());
         Map<String, Object> data = new LinkedHashMap<>();

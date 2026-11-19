@@ -2,7 +2,8 @@
 
 SQL 语义本身（活批次不删 / 他厂不动 / agg 只删失去全部事实行的键）由
 test_factory_etl_prune_pg.py 在真 PG 上证明；这里守的是「谁调它、带什么参数」：
-  - 只对源头 deleted_at IS NOT NULL 的批次动手，参数里带 factory_id；
+  - 只对源头 deleted_at IS NOT NULL（软删）或本厂源表已无此 id（硬删）的批次动手，参数里带 factory_id；
+  - 源头一条都没报回 =「不知道」，不当硬删、记错误；LSMDEMO 不做硬删清理；
   - 删除只用源头报回的 id，不会把没报回的活批次 id 也塞进去；
   - 没有 fact 行 / 没有已软删批次时不发任何删除；
   - 编排器里清理失败只记错误，不挡后面的 Gold 重算。
@@ -84,34 +85,78 @@ def test_no_fact_rows_means_no_source_query_and_no_delete():
     smartbi = _Conn([("SELECT source_pk", [])])
     cretas = _Conn([])
     out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
-    assert out == {"fact": 0, "agg": 0}
+    assert out == {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": []}
     assert cretas.calls == []
     assert not any("DELETE FROM fact_production_batch" in s for s, _ in smartbi.calls)
 
 
-def test_nothing_soft_deleted_at_source_means_no_delete():
+def _src(**ids):
+    """源头报回的行: _src(**{"1": False}) → id 1 存在且未软删。"""
+    return [{"id": k, "soft_deleted": v} for k, v in ids.items()]
+
+
+def test_nothing_deleted_at_source_means_no_delete():
     smartbi = _Conn([("SELECT source_pk", _fact("1", "2"))])
-    cretas = _Conn([("FROM production_batches", [])])
+    cretas = _Conn([("FROM production_batches", _src(**{"1": False, "2": False}))])
     out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
-    assert out == {"fact": 0, "agg": 0}
+    assert out == {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": []}
     assert not any("DELETE FROM fact_production_batch" in s for s, _ in smartbi.calls)
 
 
-def test_source_query_is_factory_scoped_and_only_asks_for_soft_deleted():
+def test_source_reports_nothing_is_unknown_not_hard_deleted():
+    """三态「不知道」：源头一条都没报回 → 不删、记错误（不能把查不到当已删除）。"""
+    smartbi = _Conn([("SELECT source_pk", _fact("1", "2"))])
+    cretas = _Conn([("FROM production_batches", [])])
+    out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
+    assert out["fact"] == 0 and out["fact_hard_deleted"] == 0
+    assert len(out["errors"]) == 1 and "hard-delete check skipped" in out["errors"][0]
+    assert not any("DELETE FROM fact_production_batch" in s for s, _ in smartbi.calls)
+
+
+def test_hard_deleted_ids_join_the_same_delete_as_soft_deleted():
+    smartbi = _Conn([
+        ("SELECT source_pk", _fact("1", "2", "3", "4")),
+        ("DELETE FROM fact_production_batch", [
+            {"source_pk": "2", "stat_date": None, "product_type_id": None},
+            {"source_pk": "4", "stat_date": None, "product_type_id": None},
+        ]),
+    ])
+    # 1 活 / 2 软删 / 3 活 / 4 源头不存在（硬删）
+    cretas = _Conn([("FROM production_batches", _src(**{"1": False, "2": True, "3": False}))])
+    out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
+    del_sql, del_args = next((s, a) for s, a in smartbi.calls if "DELETE FROM fact_production_batch" in s)
+    assert del_args[0] == "F006" and sorted(del_args[1]) == ["2", "4"]
+    assert out["fact"] == 2 and out["fact_hard_deleted"] == 1 and out["errors"] == []
+
+
+def test_lsmdemo_is_excluded_from_hard_delete_only():
+    smartbi = _Conn([
+        ("SELECT source_pk", _fact("1", "2", "4")),
+        ("DELETE FROM fact_production_batch", [{"source_pk": "2", "stat_date": None, "product_type_id": None}]),
+    ])
+    cretas = _Conn([("FROM production_batches", _src(**{"1": False, "2": True}))])
+    out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "LSMDEMO"))
+    _, del_args = next((s, a) for s, a in smartbi.calls if "DELETE FROM fact_production_batch" in s)
+    assert del_args[1] == ["2"], "LSMDEMO 只做软删清理，源头不存在的 4 不动"
+    assert out["fact_hard_deleted"] == 0
+
+
+def test_source_query_is_factory_scoped_and_reports_soft_deleted_flag():
     smartbi = _Conn([("SELECT source_pk", _fact("1", "2", "3"))])
     cretas = _Conn([("FROM production_batches", [])])
     _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
     sql, args = cretas.calls[0]
-    assert "factory_id = $1" in sql and "deleted_at IS NOT NULL" in sql
+    assert "factory_id = $1" in sql and "(deleted_at IS NOT NULL) AS soft_deleted" in sql
     assert args[0] == "F006" and sorted(args[1]) == ["1", "2", "3"]
 
 
 def test_delete_uses_only_ids_reported_gone_and_the_same_factory():
     smartbi = _Conn([
         ("SELECT source_pk", _fact("1", "2", "3")),
-        ("DELETE FROM fact_production_batch", [{"stat_date": None, "product_type_id": None}]),
+        ("DELETE FROM fact_production_batch", [{"source_pk": "2", "stat_date": None, "product_type_id": None}]),
     ])
-    cretas = _Conn([("FROM production_batches", [{"id": "2"}])])  # 只有 2 已软删，1/3 是活的
+    # 只有 2 已软删，1/3 是活的
+    cretas = _Conn([("FROM production_batches", _src(**{"1": False, "2": True, "3": False}))])
     out = _run(etl.prune_soft_deleted_fact_batches(_Pool(cretas), _Pool(smartbi), "F006"))
     assert out["fact"] == 1
     del_sql, del_args = next((s, a) for s, a in smartbi.calls if "DELETE FROM fact_production_batch" in s)
@@ -169,6 +214,31 @@ def test_orchestrator_prune_runs_before_gold_and_counts_reported(monkeypatch):
     stats = _run(etl.run_factory_etl(None, None, "F006"))
     assert order == ["silver", "prune", "gold"]
     assert (stats.silver_pruned, stats.gold_pruned) == (3, 2)
+
+
+def test_orchestrator_reports_skipped_hard_delete_check_and_gold_still_runs(monkeypatch):
+    gold_called: List[Any] = []
+
+    async def _silver(*a, **k):
+        return 1
+
+    async def _prune(*a, **k):
+        return {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": ["hard-delete check skipped: x"]}
+
+    async def _report(*a, **k):
+        return 0
+
+    async def _gold(*a, **k):
+        gold_called.append(1)
+        return {"product_daily": 1, "all_daily": 1}
+
+    monkeypatch.setattr(etl, "sync_fact_production_batch", _silver)
+    monkeypatch.setattr(etl, "prune_soft_deleted_fact_batches", _prune)
+    monkeypatch.setattr(etl, "sync_fact_production_report", _report)
+    monkeypatch.setattr(etl, "materialize_factory_gold", _gold)
+    stats = _run(etl.run_factory_etl(None, None, "F006"))
+    assert stats.errors == ["prune: hard-delete check skipped: x"]
+    assert gold_called
 
 
 def test_orphan_rollup_sweep_is_factory_scoped_and_sets_tenant_first():
