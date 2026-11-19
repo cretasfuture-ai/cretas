@@ -178,6 +178,8 @@ export interface ChatStreamCallbacks {
   onStatus?: (status: string) => void;
   onChunk?: (text: string) => void;
   onCharts?: (charts: ChartConfig[]) => void;
+  /** 「全部数据」时后端按问题自动选用的数据表 (味美 11-19 B3) */
+  onDataSource?: (info: { uploadId: number; label: string; autoSelected?: boolean }) => void;
   onDone?: (result: AnalysisResult) => void;
   onError?: (error: string) => void;
 }
@@ -288,6 +290,9 @@ function _dispatchSSEEvent(event: string, data: string, callbacks: ChatStreamCal
         break;
       case 'chunk':
         callbacks.onChunk?.(JSON.parse(data));
+        break;
+      case 'data_source':
+        callbacks.onDataSource?.(JSON.parse(data));
         break;
       case 'charts': {
         const charts = JSON.parse(data) as ChartConfig[];

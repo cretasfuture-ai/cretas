@@ -443,6 +443,9 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                         .build();
             } catch (Exception e) {
                 if (e instanceof BusinessException businessException) {
+                    // 味美 11-19 (B2): 保存失败的上传不能留在 COMPLETED —— 否则它仍出现在
+                    // AI 问数据的数据源下拉里 (按 status=COMPLETED 取)，还会被选成默认数据源。
+                    markConfirmFailed(uploadId, businessException.getMessage());
                     throw businessException;
                 }
                 log.error("Bug #43 path failed, fallback to full confirm: {}", e.getMessage(), e);
@@ -450,6 +453,14 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
             }
         }
         return confirmAndPersist(factoryId, parseResponse, confirmedMappings, dataType);
+    }
+
+    private void markConfirmFailed(Long uploadId, String reason) {
+        try {
+            dynamicPersistenceService.markUploadFailed(uploadId, "保存失败: " + reason);
+        } catch (Exception markErr) {
+            log.error("保存失败后标记上传 FAILED 也失败: uploadId={}, {}", uploadId, markErr.getMessage());
+        }
     }
 
     @Override

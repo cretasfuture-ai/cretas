@@ -193,6 +193,19 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
                 log.warn("Field definition backfill failed (non-blocking): {}", e.getMessage());
             }
 
+            // 4.55 味美 11-19 (B1): 行已在手，按实际取值补判映射认不出的列。
+            try {
+                List<SmartBiPgFieldDefinition> refined = FieldRoleInference.refine(
+                        fieldDefs, FieldRoleInference.valuesByColumn(
+                                previewData.size() > 200 ? previewData.subList(0, 200) : previewData));
+                if (!refined.isEmpty()) {
+                    fieldDefRepository.saveAll(refined);
+                    log.info("字段角色按取值补判 {} 列: uploadId={}", refined.size(), uploadId);
+                }
+            } catch (Exception e) {
+                log.warn("字段角色补判失败 (non-blocking): {}", e.getMessage());
+            }
+
             // 4.6 γ-1c (Apr 22 2026): delegate final classification to Python's unified
             // field_classifier so sync path matches async path. Fixes Java rule divergence
             // (bare 年|月|日 time false-positives, missing 账单号/商品结账总数/外部单号 overrides).
@@ -332,7 +345,39 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
             definitions.add(def);
         }
 
+        // 味美 11-19 (B1): 字段映射认不出的列三个角色全 false → 整表无指标 → 保存 422。
+        // 确认保存路径 (confirmAndPersist) 调到这里时行已入库，按实际取值补判;
+        // 首次上传路径此时还没行，用映射里的样本值补判，行入库后 persistDynamic 再补一次。
+        FieldRoleInference.refine(definitions, sampleValuesForRoleInference(uploadId, fieldMappings));
+
         return fieldDefRepository.saveAll(definitions);
+    }
+
+    /** 补判字段角色用的取值: 优先已入库的前 200 行，没有行时退回映射里的样本值。 */
+    private Map<String, List<Object>> sampleValuesForRoleInference(Long uploadId,
+                                                                   List<FieldMappingResult> fieldMappings) {
+        try {
+            org.springframework.data.domain.Page<SmartBiDynamicData> page =
+                    dynamicDataRepository.findByUploadIdOrderByRowIndex(
+                            uploadId, org.springframework.data.domain.PageRequest.of(0, 200));
+            if (page != null && page.hasContent()) {
+                List<Map<String, Object>> rows = new ArrayList<>();
+                for (SmartBiDynamicData d : page.getContent()) {
+                    if (d.getRowData() != null) rows.add(d.getRowData());
+                }
+                if (!rows.isEmpty()) return FieldRoleInference.valuesByColumn(rows);
+            }
+        } catch (Exception e) {
+            log.warn("字段角色补判读样本行失败 uploadId={}: {}", uploadId, e.getMessage());
+        }
+        Map<String, List<Object>> fromMappings = new LinkedHashMap<>();
+        for (FieldMappingResult mapping : fieldMappings) {
+            List<Object> samples = getSampleValues(mapping);
+            if (mapping.getOriginalColumn() != null && samples != null && !samples.isEmpty()) {
+                fromMappings.put(mapping.getOriginalColumn(), samples);
+            }
+        }
+        return fromMappings;
     }
 
     @Override
