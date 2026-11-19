@@ -125,6 +125,8 @@ class DigitalCrewWorkItemRepositoryQueryValidationTest {
     @MockBean private PreviewTokenService previewTokens;
     @MockBean private FactoryCapabilityPackSelector packSelector;
     @MockBean private FactoryBusinessTypeResolver businessTypes;
+    /** 执行门预判 (#1816 M1): 桩默认 Optional.empty() = 放行, 这里守的是登记码与库层分页; 执行门本身见 DigitalCrewWriteDelegationMvcContractTest。 */
+    @MockBean private com.cretas.aims.service.crew.DigitalCrewExecutionGate executionGate;
 
     @BeforeEach
     void setUp() {
