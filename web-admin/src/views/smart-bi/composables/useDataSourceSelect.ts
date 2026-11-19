@@ -15,6 +15,37 @@
  */
 import type { UploadHistoryItem } from '@/api/smartbi';
 
+/**
+ * 「全部数据」选项的下拉值 (PROTO-YDWM-B3)。
+ * 问数据 (AI) 默认选它: 不绑定某一份上传, 由后端按问题挑数据集。
+ * 之前默认选「最新一份上传」, 演示时容易问错表 (味美第 1/2 条)。
+ * 选中它时 selectedUploadId 保持 null, 所以所有 `selectedUploadId ?? ...` 的老逻辑不变。
+ */
+export const ALL_DATA_SOURCES = '__ALL__';
+
+/** 下拉选项值 -> selectedUploadId (全部数据 = null)。 */
+export function uploadIdFromSelection(v: number | string | null | undefined): number | null {
+  if (v === null || v === undefined || v === ALL_DATA_SOURCES) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** selectedUploadId -> 下拉选项值 (null = 全部数据)。 */
+export function selectionFromUploadId(id: number | null | undefined): number | string {
+  return id === null || id === undefined ? ALL_DATA_SOURCES : id;
+}
+
+/**
+ * 上传能不能当数据源 (PROTO-YDWM-B2)。
+ * 保存失败 / 解析失败的上传 (status 非 COMPLETED) 或没有一行数据的上传不进下拉。
+ * status 缺失按未知处理: 保留 (老接口不一定带), 只剔除明确失败/空的。
+ */
+export function isUsableUpload(d: Pick<UploadHistoryItem, 'status' | 'rowCount'>): boolean {
+  const status = (d.status || '').toUpperCase();
+  if (status && status !== 'COMPLETED') return false;
+  return !(typeof d.rowCount === 'number' && d.rowCount <= 0);
+}
+
 /** 评价类文件关键词 (文件名含其一即判为评价文件). */
 export const REVIEW_KEYWORDS = ['评价', '评论', '大众点评', '美团评价', '评分', 'review', 'comment'];
 

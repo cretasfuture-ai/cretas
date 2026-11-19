@@ -20,6 +20,7 @@ Usage:
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,13 @@ _DIMENSION_KEYWORDS: Tuple[str, ...] = (
 )
 
 
+# 时长单位：名字里带这些、内容又是数值 -> 时长/用量类指标
+_DURATION_UNIT_RE = re.compile(
+    r"(分钟|小时|分鐘|秒|工时|时长|(?<![a-z])(min|mins|hour|hours|hr|hrs|h)(?![a-z]))", re.IGNORECASE
+)
+# 数值但其实是标识：编码/编号/代码/序号/…号/id/code
+_CODE_LIKE_RE = re.compile(r"(编码|编号|代码|代号|序号|号码|号$|id$|code$)", re.IGNORECASE)
+
 # ─── Classifier ──────────────────────────────────────────────────────────────
 
 
@@ -151,6 +159,16 @@ def classify_column(
             "is_time": is_time,
             "semantic_type": _infer_semantic_type(name, role),
             "reason": f"explicit_override:{role}",
+        }
+
+    # 1.5 数值列 + 时长单位（分钟/小时/秒/min/h）= 时长指标，不是时间轴。
+    # 「醒发时间(分钟)」含「时间」关键词，不先拦住会被下面的时间规则吃掉（B1）。
+    # 只在内容是数值时生效；真正的日期列 dt=="DATE" 不受影响。
+    if dt == "NUMERIC" and _DURATION_UNIT_RE.search(name) and not _matches_any(name, _ID_LIKE_KEYWORDS):
+        return {
+            "original_name": name,
+            "is_measure": True, "is_dimension": False, "is_time": False,
+            "semantic_type": None, "reason": "numeric_duration_unit",
         }
 
     # 2. Time — most specific keyword class
@@ -210,6 +228,14 @@ def classify_column(
             "original_name": name,
             "is_measure": True, "is_dimension": False, "is_time": False,
             "semantic_type": cat, "reason": f"category_hint_{cat}",
+        }
+    if cat == "category" and dt == "NUMERIC" and not _CODE_LIKE_RE.search(name):
+        # 内容是数值、名字又不像编码/编号：按内容认指标（上游把「架次」之类误提示成
+        # category 时，不能让整张表没有指标）。编码/编号/产线号 仍走维度。
+        return {
+            "original_name": name,
+            "is_measure": True, "is_dimension": False, "is_time": False,
+            "semantic_type": None, "reason": "numeric_content_over_category_hint",
         }
     if cat == "category":
         return {
@@ -396,3 +422,16 @@ def find_category_column(classifications: List[Dict[str, object]]) -> Optional[s
         if c.get("is_dimension") and not c.get("is_time"):
             return c.get("original_name")  # type: ignore[return-value]
     return None
+
+
+def unusable_upload_reason(classifications: List[Dict[str, object]]) -> Optional[str]:
+    """Why an upload can never produce a chart, or None when it is usable.
+
+    A sheet with no measure column has nothing to aggregate: saving it later fails
+    with 422 "上传数据暂无可分析图表". The upload must be reported as FAILED up front
+    (PROTO-YDWM-B2) instead of being left COMPLETED, where it lingers in the data-source
+    dropdown and can even become the default source for AI Q&A.
+    """
+    if any(c.get("is_measure") for c in classifications):
+        return None
+    return "上传数据中没有可识别的数值指标列，无法生成图表，请检查表头和数据后重新上传"

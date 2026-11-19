@@ -1146,3 +1146,37 @@ Return JSON: {{"mappings": [{{"original": "col", "standard": "field_or_null", "c
         except json.JSONDecodeError as e:
             logger.warning(f"Failed to parse LLM response as JSON: {e}")
             return None
+
+
+def cover_unmapped_columns(
+    mappings: List[FieldMapping],
+    columns: List[str],
+    frame: Any,
+) -> List[FieldMapping]:
+    """Return ``mappings`` plus one pass-through FieldMapping per column nobody mapped.
+
+    PROTO-YDWM-B1: columns that no rule / embedding / LLM layer mapped (e.g. 温度, 架次,
+    小料kg) used to get no field_def at all, so a sheet of only such numeric columns had
+    zero measures and saving failed with 422 "上传数据暂无可分析图表". They now keep their
+    original name and a content-inferred data_type (NUMERIC/DATE/TEXT) so the unified
+    classifier can decide measure/dimension from the data. ``Unnamed: N`` header debris is
+    still skipped (same rule as the priority regex layer). Existing mappings are untouched.
+    """
+    covered = {m.original for m in mappings}
+    out = list(mappings)
+    for col in columns:
+        if col in covered or re.match(r"^Unnamed:\s*\d+$", str(col), re.IGNORECASE):
+            continue
+        try:
+            values = frame[col].tolist()
+        except Exception:  # duplicate/missing header: skip rather than guess
+            continue
+        out.append(FieldMapping(
+            original=col,
+            standard=None,
+            confidence=0.5,
+            method="content_inferred",
+            description="unmapped column kept as-is; type inferred from data",
+            data_type=SemanticMapper._infer_data_type(values),
+        ))
+    return out

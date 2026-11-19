@@ -46,7 +46,12 @@ import AiOperationCard from './components/chat/AiOperationCard.vue';
 import { buildBackendColumnLabels, resolveColumnLabel, columnMinWidth } from './components/chat/aiTableColumns';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
-import { pickDefaultDataSource } from './composables/useDataSourceSelect';
+import {
+  ALL_DATA_SOURCES,
+  isUsableUpload,
+  selectionFromUploadId,
+  uploadIdFromSelection,
+} from './composables/useDataSourceSelect';
 import { buildWelcomeText, quickQuestionsFor } from './aiQueryGreeting';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -435,8 +440,15 @@ const currentTableType = ref<string>('');
 // 数据源：自动加载最新上传作为分析上下文
 const dataSources = ref<UploadHistoryItem[]>([]);
 const selectedUploadId = ref<number | null>(null);
+// 下拉值 <-> selectedUploadId: 「全部数据」= null (PROTO-YDWM-B3)
+const dataSourceSelection = computed<number | string>({
+  get: () => selectionFromUploadId(selectedUploadId.value),
+  set: (v) => { selectedUploadId.value = uploadIdFromSelection(v); },
+});
+// 有可用数据: 选了具体上传, 或「全部数据」且至少有一份可用上传 (老逻辑里默认选中某份上传 = 有数据)
+const hasUploadedData = computed(() => Boolean(selectedUploadId.value) || dataSources.value.length > 0);
 const dataSourceLabel = computed(() => {
-  if (!selectedUploadId.value) return '';
+  if (!selectedUploadId.value) return dataSources.value.length > 0 ? '数据源：全部数据' : '';
   const item = dataSources.value.find(d => d.id === selectedUploadId.value);
   return item ? `数据源：${item.fileName || item.originalFileName || `上传#${item.id}`}` : '';
 });
@@ -1008,7 +1020,8 @@ onMounted(async () => {
   try {
     const res = await getUploadHistory({ status: 'COMPLETED' });
     if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-      const deduped = deduplicateUploads(res.data);
+      // B2: 保存/解析失败或空的上传不进下拉 (之前会留在列表里, 还会成默认数据源)
+      const deduped = deduplicateUploads(res.data.filter(isUsableUpload));
       dataSources.value = deduped;
 
       // #8 (2026-06-02): 默认数据源选择. 之前的逻辑会在最新非评价上传超过 1 小时时
@@ -1018,10 +1031,10 @@ onMounted(async () => {
       // 修复: pickDefaultDataSource 永远优先非评价、完整的上传 (POS/销售/财务数据),
       // 仅在完全没有非评价上传时才回退评价文件; 同名文件优先完整文件 (避开 _part1/(1)
       // 等分卷). 详见 composables/useDataSourceSelect.ts.
-      const chosen = pickDefaultDataSource(deduped);
-      if (chosen) {
-        selectedUploadId.value = chosen.id;
-      }
+      // B3 (2026-11-19 味美实测): 默认「全部数据」, 不再默认最新一份上传 (演示时容易问错表)。
+      // selectedUploadId 保持 null; 用户要钉住某份数据时在下拉里选。pickDefaultDataSource
+      // 仍保留在 composable 里给「钉住」场景复用, 但不再自动调用。
+      selectedUploadId.value = null;
     }
   } catch (e) {
     console.warn('加载上传列表失败:', e);
@@ -1226,7 +1239,7 @@ async function tryJavaIntentChat(
   // 问题 51: 咨询页选了数据源 ⇒ 整个跳过 Java 意图层, 直接走上传数据问答 (Python)。
   // 否则 Java 会把「各产品的销售额占比」当成 indicator_code/操作类/生产看板吃掉。
   // 操作页(有写权限)或没有数据源仍走 Java, 写操作预览/确认链不变。
-  const hasAnalysisData = Boolean(selectedUploadId.value) || currentData.value.length > 0;
+  const hasAnalysisData = hasUploadedData.value || currentData.value.length > 0;
   if (chooseAiQueryRoute({
     tab: activeAiTab.value,
     hasAnyWrite: hasAnyWrite.value,
@@ -1607,7 +1620,7 @@ async function tryJavaIntentChat(
     // Java didn't recognize intent — fall to Python if uploaded data present.
     const hasDataSource =
       currentData.value.length > 0 ||
-      Boolean(selectedUploadId.value);
+      hasUploadedData.value;
     if (!hasDataSource) {
       msg.content = customerSafeAnswer(
         res.message || res.formattedText || '没有理解您的问题，请补充具体的门店、菜品、指标和时间范围。',
@@ -1998,7 +2011,7 @@ async function handleSendMessage() {
 // NL2SQL 查询处理
 async function handleNL2SQLQuery(query: string) {
   if (!selectedUploadId.value) {
-    ElMessage.warning('请先选择数据源');
+    ElMessage.warning('SQL 直查需要先在右上角选定一份具体数据源（当前是「全部数据」）');
     return;
   }
 
@@ -2516,11 +2529,17 @@ function handleKeydown(event: KeyboardEvent) {
       <div class="header-right">
         <el-select
           v-if="dataSources.length > 0 && !false"
-          v-model="selectedUploadId"
+          v-model="dataSourceSelection"
+          data-testid="aiq-data-source-select"
           placeholder="选择数据源"
           size="small"
           style="width: 280px; margin-right: 8px"
         >
+          <el-option
+            :value="ALL_DATA_SOURCES"
+            label="全部数据"
+            data-testid="aiq-data-source-all"
+          />
           <el-option
             v-for="ds in dataSources"
             :key="ds.id"

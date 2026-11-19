@@ -457,7 +457,7 @@ async def _async_worker_impl(
         from smartbi.database.models import SmartBiPgFieldDefinition
         from smartbi.services.field_classifier import (
             classify_column, dedupe_column_names,
-            find_time_column, find_category_column,
+            find_time_column, find_category_column, unusable_upload_reason,
         )
 
         mapper = SemanticMapper()
@@ -470,6 +470,14 @@ async def _async_worker_impl(
             table_context=(upload.file_name or ""),  # bug fix: was unset -> table_type always None
         )
         _template_key = SemanticMapper._compute_template_key(real_headers)
+
+        # B1: columns no mapping layer recognised (温度/架次/小料kg…) still become
+        # field_defs, typed from content, so numeric ones count as measures.
+        from smartbi.services.semantic_mapper import cover_unmapped_columns
+        mapping_result.field_mappings = cover_unmapped_columns(
+            mapping_result.field_mappings, real_headers,
+            df_probe.iloc[:, real_cols_idx],
+        )
 
         # Wipe any stale field_defs for this upload, then bulk-insert new ones.
         db.query(SmartBiPgFieldDefinition).filter_by(upload_id=upload_id).delete()
@@ -651,6 +659,20 @@ async def _async_worker_impl(
         # --- Step 4: finalize ---
         # Populate field_mappings JSONB (FE needs this shape for field review
         # step; mirrors AutoParseResponse.fieldMappings contract).
+        # B2: a sheet with no measure column can never be charted (save -> 422).
+        # Report it FAILED now so it is not listed as a data source / default source.
+        _unusable = unusable_upload_reason(classifications)
+        if _unusable:
+            upload.upload_status = "FAILED"
+            upload.error_message = _unusable
+            upload.row_count = total_rows
+            upload.column_count = len(real_headers)
+            db.commit()
+            logger.warning(
+                f"[stream-worker] upload {upload_id}: FAILED, no measure columns "
+                f"(headers={real_headers[:8]!r})"
+            )
+            return
         upload.upload_status = "COMPLETED"
         upload.row_count = total_rows
         upload.column_count = len(real_headers)
