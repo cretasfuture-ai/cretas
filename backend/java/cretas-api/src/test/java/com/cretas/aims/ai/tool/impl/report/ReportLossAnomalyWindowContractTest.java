@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
@@ -45,17 +46,21 @@ class ReportLossAnomalyWindowContractTest {
     private ReportBatchYieldRankTool tool;
 
     private void report(String date, String batchNo, String process, String in, String out) {
+        report(date, batchNo, "酱牛肉", process, in, out);
+    }
+
+    private void report(String date, String batchNo, String product, String process, String in, String out) {
         Map<String, Object> m = new HashMap<>();
         m.put("report_id", (long) reports.size() + 1);
         m.put("task_id", (long) reports.size() + 100);
         m.put("process_order", 1);
         m.put("process_id", process);
         m.put("process_name", process);
-        m.put("batch_id", batchNo.hashCode() * 1L);
+        m.put("batch_id", batchNo == null ? null : batchNo.hashCode() * 1L);
         m.put("batch_number", batchNo);
         m.put("plan_id", "PL-" + batchNo);
         m.put("plan_number", "PN-" + batchNo);
-        m.put("product_name", "酱牛肉");
+        m.put("product_name", product);
         m.put("report_date", LocalDate.parse(date));
         m.put("input_quantity", new BigDecimal(in));
         m.put("input_unit", "kg");
@@ -89,7 +94,11 @@ class ReportLossAnomalyWindowContractTest {
                 return TODAY;
             }
         };
-        ReflectionTestUtils.setField(tool, "batchRepository", mock(ProductionBatchRepository.class));
+        ProductionBatchRepository batches = mock(ProductionBatchRepository.class);
+        when(batches.findBatchesInDateRange(eq("F1"), any(), any())).thenReturn(List.of(
+                ProductionBatch.builder().productName("鸡排").productTypeId("SKU-A").build(),
+                ProductionBatch.builder().productName("酱牛肉").productTypeId("SKU-B").build()));
+        ReflectionTestUtils.setField(tool, "batchRepository", batches);
         ReflectionTestUtils.setField(tool, "objectMapper", mapper);
         ReflectionTestUtils.setField(tool, "llmCostScope", ProcessSecretLlmCostScope.standalone());
         ReflectionTestUtils.setField(tool, "yieldAnalysisService", mock(YieldAnalysisService.class));
@@ -103,9 +112,15 @@ class ReportLossAnomalyWindowContractTest {
 
     /** 与 ToolDispatchService 一致: 预处理把原话时间换成 startDate/endDate, 原话放 userInput。 */
     private JsonNode run(String userInput, String start, String end) throws Exception {
-        String args = "{\"userInput\":\"" + userInput + "\",\"view\":\"loss_anomaly\""
-                + (start == null ? "" : ",\"startDate\":\"" + start + "\",\"endDate\":\"" + end + "\"") + "}";
-        return mapper.readTree(tool.execute(ToolCall.of("t", "report_batch_yield_rank", args),
+        return run(userInput, start, end, null, null);
+    }
+
+    private JsonNode run(String userInput, String start, String end, String product, String process) throws Exception {
+        var args = mapper.createObjectNode().put("userInput", userInput).put("view", "loss_anomaly");
+        if (start != null) args.put("startDate", start).put("endDate", end);
+        if (product != null) args.put("productName", product);
+        if (process != null) args.put("processName", process);
+        return mapper.readTree(tool.execute(ToolCall.of("t", "report_batch_yield_rank", args.toString()),
                 Map.of("factoryId", "F1", "userId", 1L)));
     }
 
@@ -171,6 +186,46 @@ class ReportLossAnomalyWindowContractTest {
         assertEquals(1, data(r).get("reportCountInWindow").asInt());
         assertTrue(msg(r).contains("没有损耗异常"), msg(r));
         assertFalse(msg(r).contains("没有任何报工记录"), msg(r));
+    }
+
+    @Test
+    void otherProductReportsDoNotMakeTheTargetProductWindowNonempty() throws Exception {
+        JsonNode target = run("鸡排有哪些损耗异常", "2026-11-01", "2026-11-19", "鸡排", null);
+        assertTrue(data(target).path("noReportsInWindow").asBoolean(), msg(target));
+        assertEquals(0, data(target).path("reportCountInWindow").asInt(-1));
+        assertTrue(data(target).path("latestReportDate").isNull());
+        assertFalse(msg(target).contains("有报工 "), msg(target));
+
+        JsonNode control = run("酱牛肉有哪些损耗异常", "2026-11-01", "2026-11-19", "酱牛肉", null);
+        assertEquals(4, data(control).path("reportCountInWindow").asInt(-1));
+        assertEquals(2, data(control).path("abnormalCount").asInt(-1));
+    }
+
+    @Test
+    void scopedHistorySkipsLaterReportsFromOtherProductsProcessesAndMissingBatches() throws Exception {
+        report("2026-11-12", "OTHER-PRODUCT", "鸡排", "熟制杀菌", "100", "80");
+        report("2026-11-11", "OTHER-PROCESS", "清洗", "100", "80");
+        report("2026-11-10", null, "熟制杀菌", "100", "80");
+        report("2026-11-04", "NEARBY-OTHER-PRODUCT", "鸡排", "熟制杀菌", "100", "80");
+        report("2026-11-04", "NEARBY-OTHER-PROCESS", "清洗", "100", "80");
+        report("2026-11-04", null, "熟制杀菌", "100", "80");
+        report("2026-10-29", "BEFORE-THE-SEVEN-DAYS", "熟制杀菌", "100", "80");
+
+        JsonNode r = run("酱牛肉熟制杀菌有哪些损耗异常", "2026-11-06", "2026-11-19", "酱牛肉", "熟制杀菌");
+        assertTrue(data(r).path("noReportsInWindow").asBoolean(), msg(r));
+        assertEquals(0, data(r).path("reportCountInWindow").asInt(-1));
+        assertEquals("2026-11-05", data(r).path("latestReportDate").asText());
+        assertEquals(2, data(r).path("abnormalNearLatestReport").asInt(-1));
+        assertTrue(msg(r).contains("2026-11-05") && msg(r).contains("2 个批次工序"), msg(r));
+    }
+
+    @Test
+    void exactProcessReportsCountEvenWhenOnlyAFuzzyProcessIsAbnormal() throws Exception {
+        report("2026-11-05", "EXACT-PROCESS", "杀菌", "100", "99");
+        JsonNode r = run("杀菌有哪些损耗异常", "2026-11-05", "2026-11-05", null, "杀菌");
+        assertEquals(1, data(r).path("reportCountInWindow").asInt(-1));
+        assertEquals(0, data(r).path("abnormalCount").asInt(-1));
+        assertTrue(msg(r).contains("有报工 1 条"), msg(r));
     }
 
     @Test

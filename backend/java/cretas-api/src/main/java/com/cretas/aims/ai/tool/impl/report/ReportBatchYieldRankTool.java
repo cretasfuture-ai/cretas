@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.TimeRangeFilter;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
@@ -115,12 +116,12 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
-        if (end.isAfter(today) && !start.isAfter(today)) {
-            // 「本周」等预处理给到周日: 未来的日子没有数据, 回答里不写成已经查过
-            end = today;
-        }
         String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
         View view = resolveView(factoryId, params, start, end, today);
+        if (view == View.LOSS_ANOMALY && end.isAfter(today) && !start.isAfter(today)) {
+            // 「本周」等预处理给到周日，只查询到今天。
+            end = today;
+        }
         String windowNotice = null;
         if (view == View.LOSS_ANOMALY && isBareRecentWindow(params, startText, endText, period, start, end, today)) {
             // 全局「最近」= 含今天 7 天, 对低频的报工 / 损耗异常太窄 (BP 问题 28: F006 最后一天报工 11-05, 7 天窗口一条都没有);
@@ -334,7 +335,11 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
             data = ProcessYieldViews.processCompare(yieldAnalysisService, materialBalanceService, factoryId, s, e, ps, pe,
                     processKeyword, scope, msg, alert);
         }
-        return buildSimpleResult(msg[0], data);
+        Map<String, Object> result = buildSimpleResult(msg[0], data);
+        if (view == View.LOSS_ANOMALY && params.containsKey(TimeRangeFilter.SAID)) {
+            result.put(TimeRangeFilter.APPLIED, Map.of("from", start.toString(), "to", end.toString()));
+        }
+        return result;
     }
 
     /**

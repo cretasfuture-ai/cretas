@@ -1,6 +1,7 @@
 package com.cretas.aims.service.execution;
 
 import com.cretas.aims.ai.client.DashScopeClient;
+import com.cretas.aims.ai.client.F006BossQuestionClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
@@ -8,19 +9,27 @@ import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckQueryTool;
+import com.cretas.aims.ai.tool.impl.report.ReportBatchYieldRankTool;
 import com.cretas.aims.ai.tool.impl.shipment.ShipmentQueryTool;
 import com.cretas.aims.config.ColloquialMappings;
+import com.cretas.aims.config.DashScopeConfig;
+import com.cretas.aims.config.IntentKnowledgeBase;
 import com.cretas.aims.config.TimeNormalizationRules;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
 import com.cretas.aims.dto.ai.IntentExecuteResponse;
 import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
+import com.cretas.aims.dto.cache.SemanticCacheHit;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.config.AIIntentConfig;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.repository.ProductionReportRepository;
+import com.cretas.aims.service.AIIntentService;
+import com.cretas.aims.service.AnalysisRouterService;
 import com.cretas.aims.service.ParameterExtractionLearningService;
 import com.cretas.aims.service.QualityInspectionService;
+import com.cretas.aims.service.SemanticCacheService;
 import com.cretas.aims.service.ShipmentRecordService;
 import com.cretas.aims.service.calibration.CorrectionAgentService;
 import com.cretas.aims.service.calibration.ExternalVerifierService;
@@ -31,17 +40,29 @@ import com.cretas.aims.service.impl.QueryPreprocessorServiceImpl;
 import com.cretas.aims.service.impl.ResultFormatterServiceImpl;
 import com.cretas.aims.service.inventory.PurchaseService;
 import com.cretas.aims.service.inventory.SalesService;
+import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
+import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.yield.balance.MaterialBalanceCalculator;
+import com.cretas.aims.service.yield.balance.MaterialBalanceService;
+import com.cretas.aims.service.yield.balance.MaterialBalanceThresholdProvider;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,8 +71,10 @@ import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -70,9 +93,12 @@ import static org.mockito.Mockito.when;
 class DateFilterChatEntryContractTest {
 
     private static final String F = "F-DATE-1";
+    private static final String ROLE = "factory_super_admin";
+    private static final LocalDate LOSS_TODAY = LocalDate.of(2026, 11, 19);
 
     private final ObjectMapper mapper = new ObjectMapper();
     private ToolDispatchService dispatch;
+    private ToolRegistry registry;
     private QueryPreprocessorServiceImpl preprocessor;
 
     private final LocalDate lastMonthStart = LocalDate.now().minusMonths(1).withDayOfMonth(1);
@@ -81,7 +107,7 @@ class DateFilterChatEntryContractTest {
 
     @BeforeEach
     void setUp() {
-        ToolRegistry registry = mock(ToolRegistry.class);
+        registry = mock(ToolRegistry.class);
         when(registry.isToolEnabledForFactory(anyString(), anyString())).thenReturn(true);
         dispatch = new ToolDispatchService(registry, mapper, mock(DashScopeClient.class),
                 mock(ToolCallRedundancyService.class), mock(SelfCorrectionService.class),
@@ -225,7 +251,125 @@ class DateFilterChatEntryContractTest {
         assertThat(String.valueOf(plain)).doesNotContain("不能按时间筛选");
     }
 
+    @ParameterizedTest
+    @CsvSource({
+            "最近一个月有哪些损耗异常, 2026-10-19, false",
+            "近30天有哪些损耗异常, 2026-10-21, false",
+            "近 30 天，有哪些损耗异常, 2026-10-21, false",
+            "最近有哪些损耗异常, 2026-10-21, true",
+            "本周有哪些损耗异常, 2026-11-16, false"
+    })
+    void lossAnomalySseShortcutQueriesAndReportsTheSameWindow(String sentence, String from, boolean widened)
+            throws Exception {
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        when(reports.findYieldReportsForBalance(eq(F), any(), any(), eq(""), any(), any())).thenReturn(List.of(Map.of(
+                "batch_number", "PB-POSITIVE", "report_date", LOSS_TODAY, "product_name", "酱牛肉",
+                "process_name", "熟制杀菌", "input_quantity", BigDecimal.valueOf(100),
+                "output_quantity", BigDecimal.valueOf(80), "input_unit", "kg", "output_unit", "kg")));
+        ProcessSecretAggregateExclusions exclusions = mock(ProcessSecretAggregateExclusions.class);
+        when(exclusions.forCurrentCaller(eq(F), anyString())).thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
+        MaterialBalanceThresholdProvider thresholds = mock(MaterialBalanceThresholdProvider.class);
+        when(thresholds.forFactory(F)).thenReturn(MaterialBalanceCalculator.Thresholds.DEFAULT);
+        ReportBatchYieldRankTool tool = withMapper(new ReportBatchYieldRankTool() {
+            @Override
+            protected LocalDate today() {
+                return LOSS_TODAY;
+            }
+        });
+        ReflectionTestUtils.setField(tool, "yieldAnalysisService", mock(YieldAnalysisService.class));
+        ReflectionTestUtils.setField(tool, "materialBalanceService",
+                new MaterialBalanceService(reports, exclusions, thresholds, mapper));
+        ReflectionTestUtils.setField(dispatch, "queryPreprocessorService", new QueryPreprocessorServiceImpl(
+                new TimeNormalizationRules() {
+                    @Override
+                    public NormalizationResult extractAndReplace(String text, LocalDateTime now) {
+                        return super.extractAndReplace(text, LOSS_TODAY.atTime(12, 0));
+                    }
+                }, new ColloquialMappings(), null, null, mapper, null, null));
+
+        AIIntentService recognizer = mock(AIIntentService.class);
+        configureSseIntent(recognizer, "REPORT_BATCH_YIELD_RANK", tool);
+        IntentExecuteResponse response = runSse(recognizer, sentence);
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        verify(recognizer, never()).recognizeIntentWithConfidence(
+                anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any(), any());
+        verify(reports).findYieldReportsForBalance(eq(F), eq(LocalDate.parse(from)), eq(LOSS_TODAY),
+                eq(""), any(), any());
+        var result = mapper.valueToTree(response.getResultData());
+        var data = result.path("data");
+        var period = data.path("period");
+        var applied = result.path("appliedTimeRange");
+        assertThat(period.path("startDate").asText()).isEqualTo(from);
+        assertThat(period.path("endDate").asText()).isEqualTo(LOSS_TODAY.toString());
+        assertThat(applied.path("from").asText()).isEqualTo(period.path("startDate").asText());
+        assertThat(applied.path("to").asText()).isEqualTo(period.path("endDate").asText());
+        assertThat(data.path("windowWidened").asBoolean()).isEqualTo(widened);
+        assertThat(data.path("abnormalCount").asInt()).isEqualTo(1);
+        assertThat(response.getMessage()).contains(from + " 至 " + LOSS_TODAY, "PB-POSITIVE");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"近两年销售额多少", "近两日销售额多少", "最近两年销售额多少", "近 30 天销售额多少"})
+    void salesWithNewPrefixFormsReachesRecognitionWithoutShortcut(String sentence) throws Exception {
+        AIIntentService recognizer = mock(AIIntentService.class);
+        ToolExecutor sales = mock(ToolExecutor.class);
+        when(sales.getToolName()).thenReturn("report_sales_margin_summary");
+        configureSseIntent(recognizer, "REPORT_SALES_MARGIN_SUMMARY", sales);
+
+        IntentExecuteResponse response = runSse(recognizer, sentence);
+
+        verify(recognizer).recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
+                any(), any(), any(), eq(List.of()));
+        verify(recognizer, never()).getIntentByCode(F, "REPORT_SALES_MARGIN_SUMMARY");
+        verify(registry, never()).getExecutor("report_sales_margin_summary");
+        assertThat(response.getIntentRecognized()).isFalse();
+    }
+
     // ------------------------------------------------------------------ helpers
+
+    private void configureSseIntent(AIIntentService recognizer, String code, ToolExecutor tool) {
+        AIIntentConfig intent = AIIntentConfig.builder().intentCode(code).intentName(code).intentCategory("QUERY")
+                .businessType("FACTORY").sensitivityLevel("LOW").toolName(tool.getToolName()).build();
+        when(recognizer.getIntentByCode(F, code)).thenReturn(Optional.of(intent));
+        when(recognizer.hasPermission(code, ROLE)).thenReturn(true);
+        when(registry.getExecutor(tool.getToolName())).thenReturn(Optional.of(tool));
+    }
+
+    private IntentExecuteResponse runSse(AIIntentService recognizer, String sentence) throws Exception {
+        when(recognizer.recognizeIntentWithConfidence(eq(sentence), eq(F), eq(3), any(), eq(ROLE),
+                any(), any(), any(), eq(List.of()))).thenReturn(IntentMatchResult.builder()
+                .matchMethod(IntentMatchResult.MatchMethod.NONE)
+                .questionType(IntentKnowledgeBase.QuestionType.OPERATIONAL_COMMAND)
+                .build());
+        IntentKnowledgeBase knowledge = new IntentKnowledgeBase();
+        knowledge.initDefaults();
+        SemanticCacheService cache = mock(SemanticCacheService.class);
+        when(cache.queryCache(F, sentence)).thenReturn(SemanticCacheHit.miss(0L));
+        SseStreamingService sse = spy(new SseStreamingService(recognizer, cache, knowledge,
+                mock(AnalysisRouterService.class), mapper, registry, dispatch, mock(DynamicToolSelectionService.class),
+                mock(DashScopeClient.class), mock(DashScopeConfig.class)));
+        BusinessTypeGate businessType = mock(BusinessTypeGate.class);
+        when(businessType.resolveDomain(F)).thenReturn("FACTORY");
+        when(businessType.check(anyString(), any())).thenReturn(Optional.empty());
+        ReflectionTestUtils.setField(sse, "businessTypeGate", businessType);
+        ReflectionTestUtils.setField(sse, "writeGuardService", new WriteGuardService());
+        IntentPermissionGate permissions = mock(IntentPermissionGate.class);
+        when(permissions.check(any(), any(), anyString())).thenReturn(IntentPermissionGate.PermissionCheck.allowed());
+        ReflectionTestUtils.setField(sse, "intentPermissionGate", permissions);
+        doNothing().when(sse).sendSseEvent(any(), anyString(), any());
+        SseEmitter emitter = mock(SseEmitter.class);
+        try {
+            sse.executeStreamAsync(emitter, F, IntentExecuteRequest.builder().userInput(sentence).build(),
+                    1L, ROLE, new F006BossQuestionClient.Cancellation());
+            var event = ArgumentCaptor.forClass(Object.class);
+            verify(sse).sendSseEvent(eq(emitter), eq("result"), event.capture());
+            return (IntentExecuteResponse) event.getValue();
+        } finally {
+            sse.destroy();
+        }
+    }
 
     private SalesService salesReturning() {
         SalesService sales = mock(SalesService.class);

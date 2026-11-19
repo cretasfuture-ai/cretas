@@ -5,6 +5,7 @@ import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import com.cretas.aims.service.shortage.CostDeviationThresholdService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
+import com.cretas.aims.service.yield.balance.MaterialBalanceService.BatchReports;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -117,7 +118,7 @@ final class ProcessYieldViews {
     }
 
     record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows,
-                   String alertSource, int reportCount) {}
+                   String alertSource) {}
 
     static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
                            ProductScope scope) {
@@ -131,8 +132,14 @@ final class ProcessYieldViews {
      */
     static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
                            ProductScope scope, AlertLine alert) {
-        BigDecimal alertPct = alert != null && alert.present() ? alert.pct() : null;
-        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end, alertPct);
+        return balance(service.blocksByBatch(factoryId, start, end, alertPct(alert)), scope, alert);
+    }
+
+    private static BigDecimal alertPct(AlertLine alert) {
+        return alert != null && alert.present() ? alert.pct() : null;
+    }
+
+    private static Balance balance(MaterialBalanceService.BatchBalance bb, ProductScope scope, AlertLine alert) {
         List<Abnormal> out = new ArrayList<>();
         int incomparable = 0;
         for (MaterialBalanceTableDTO.PlanBlock block : bb.blocks()) {
@@ -149,8 +156,7 @@ final class ProcessYieldViews {
             }
         }
         out.sort(Comparator.comparing((Abnormal a) -> a.deviationPct() == null ? BigDecimal.ZERO : a.deviationPct()).reversed());
-        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct != null ? alert.source() : null,
-                bb.reportCount());
+        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct(alert) != null ? alert.source() : null);
     }
 
     static boolean nameMatches(String processName, String keyword) {
@@ -204,18 +210,32 @@ final class ProcessYieldViews {
     }
 
     // ---------------- 损耗异常 ----------------
+    private static BatchReports lossReports(MaterialBalanceService service, String factoryId, LocalDate start,
+                                            LocalDate end, ProductScope scope, String processKeyword) {
+        BatchReports reports = service.batchReports(factoryId, start, end);
+        if (scope.active()) reports = reports.forProducts(scope::productMatches);
+        if (processKeyword == null) return reports;
+        String keyword = normalize(processKeyword);
+        boolean exact = reports.processNames().stream().anyMatch(name -> name != null && normalize(name).equals(keyword));
+        return reports.forProcesses(name -> exact
+                ? name != null && normalize(name).equals(keyword)
+                : nameMatches(name, processKeyword));
+    }
+
+    private static Balance lossBalance(MaterialBalanceService service, BatchReports reports,
+                                       AlertLine alert) {
+        return balance(service.blocksByBatch(reports, alertPct(alert)), ProductScope.ALL, alert);
+    }
+
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
                                            LocalDate end, int limit, String processKeyword, ProductScope scope,
                                            String[] textOut, AlertLine alert, String windowNotice) {
-        Balance b = balance(service, factoryId, start, end, scope, alert);
-        if (b.reportCount() == 0) {
-            return noReportsInWindow(service, factoryId, start, end, scope, textOut, alert, b, windowNotice);
+        BatchReports reports = lossReports(service, factoryId, start, end, scope, processKeyword);
+        Balance b = lossBalance(service, reports, alert);
+        if (reports.size() == 0) {
+            return noReportsInWindow(service, factoryId, start, end, scope, processKeyword, textOut, alert, b, windowNotice);
         }
-        List<String> known = names(null, b);
-        List<Abnormal> all = new ArrayList<>();
-        for (Abnormal a : b.abnormal()) {
-            if (processKeyword == null || keywordMatches(a.processName(), processKeyword, known)) all.add(a);
-        }
+        List<Abnormal> all = b.abnormal();
         List<Abnormal> shown = all.size() > limit ? all.subList(0, limit) : all;
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Abnormal a : shown) rows.add(a.toMap(b.warnPct()));
@@ -228,7 +248,7 @@ final class ProcessYieldViews {
         data.put("incomparableCount", b.incomparableRows());
         data.put("rows", rows);
         data.put("basis", basis(b));
-        data.put("reportCountInWindow", b.reportCount());
+        data.put("reportCountInWindow", reports.size());
         data.put("windowWidened", windowNotice != null);
 
         StringBuilder sb = new StringBuilder();
@@ -236,7 +256,7 @@ final class ProcessYieldViews {
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
                 .append(processKeyword != null ? "「" + processKeyword + "」" : "");
         if (all.isEmpty()) {
-            sb.append(" 有报工 ").append(b.reportCount()).append(" 条，没有损耗异常的批次工序（未解释差额都在 ").append(pct(b.warnPct())).append(" 以内）。");
+            sb.append(" 有报工 ").append(reports.size()).append(" 条，没有损耗异常的批次工序（未解释差额都在 ").append(pct(b.warnPct())).append(" 以内）。");
         } else {
             sb.append(" 共 ").append(all.size()).append(" 个批次工序损耗异常（未解释差额占投入超过 ")
                     .append(pct(b.warnPct())).append("），偏差最大的 ").append(shown.size()).append(" 个：");
@@ -263,14 +283,18 @@ final class ProcessYieldViews {
      * 该日前 7 天内超阈值的批次工序个数, 并提示改问「本月」「近 30 天」(BP 问题 28)。
      */
     private static Map<String, Object> noReportsInWindow(MaterialBalanceService service, String factoryId, LocalDate start,
-                                                         LocalDate end, ProductScope scope, String[] textOut,
+                                                         LocalDate end, ProductScope scope, String processKeyword, String[] textOut,
                                                          AlertLine alert, Balance empty, String windowNotice) {
-        LocalDate latest = service.latestReportDate(factoryId, start.minusDays(1), 365);
-        int nearby = 0;
+        LocalDate historyStart = start.minusDays(365);
+        // 多读六天，最近报工若正好在回溯边界，也能计算以该日为末日的完整七天。
+        BatchReports history = lossReports(service, factoryId, historyStart.minusDays(6), start.minusDays(1),
+                scope, processKeyword);
+        LocalDate latest = history.since(historyStart).latestDate();
+        Integer nearby = null;
         LocalDate nearFrom = null;
         if (latest != null) {
             nearFrom = latest.minusDays(6);
-            nearby = balance(service, factoryId, nearFrom, latest, scope, alert).abnormal().size();
+            nearby = lossBalance(service, history.since(nearFrom), alert).abnormal().size();
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("view", "loss_anomaly");
@@ -279,7 +303,7 @@ final class ProcessYieldViews {
         data.put("noReportsInWindow", true);
         data.put("reportCountInWindow", 0);
         data.put("latestReportDate", latest == null ? null : latest.toString());
-        data.put("abnormalNearLatestReport", latest == null ? null : nearby);
+        data.put("abnormalNearLatestReport", nearby);
         data.put("windowWidened", windowNotice != null);
         data.put("abnormalCount", 0);
         data.put("incomparableCount", 0);
@@ -288,11 +312,12 @@ final class ProcessYieldViews {
         StringBuilder sb = new StringBuilder();
         if (windowNotice != null) sb.append(windowNotice).append("\n");
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
+                .append(processKeyword != null ? "「" + processKeyword + "」" : "")
                 .append(" 这段时间没有任何报工记录，没法判断有没有损耗异常（不等于没有异常）。");
         if (latest == null) {
-            sb.append("近一年也没有报工记录。");
+            sb.append("所问期间之前，近一年也没有报工记录。");
         } else {
-            sb.append("最近一次报工是 ").append(latest).append("，").append(nearFrom).append(" 至 ").append(latest)
+            sb.append("所问期间之前最近一次报工是 ").append(latest).append("，").append(nearFrom).append(" 至 ").append(latest)
                     .append(" 有 ").append(nearby).append(" 个批次工序的未解释差额超过 ").append(pct(empty.warnPct()))
                     .append("。想看那段时间可以问「本月有哪些损耗异常」或「近 30 天有哪些损耗异常」，或直接说日期。");
         }
