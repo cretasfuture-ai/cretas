@@ -87,6 +87,7 @@ import {
 import type { TableRow } from '@/types/api';
 import { productAiGuard } from '@/utils/aiEntryGuards';
 import { canWriteProductMaster } from './productWriteGates';
+import { netContentGateMessage } from './productNetContentGate';
 
 // 产品分类定义 (全量 — 仅用于标签渲染/历史数据兼容; 原料/包辅材/调味品 是遗留物料类, 物料应在"原料类型字典"管理)
 const PRODUCT_CATEGORIES = [
@@ -1073,8 +1074,9 @@ async function handleSubmit() {
   try {
     await formRef.value.validate();
     applyCategoryUnitContract();
-    if (!isSemiFinishedSku.value && (!Number.isFinite(Number(netContentAmount.value)) || Number(netContentAmount.value) <= 0)) {
-      ElMessage.warning('请填写大于 0 的净含量');
+    const netContentMessage = netContentGateMessage(netContentAmount.value, isSemiFinishedSku.value);
+    if (netContentMessage) {
+      ElMessage.warning(netContentMessage);
       return;
     }
     // 提交前再次收敛，保证 API 永远收到规范文本和与基本单位一致的包装右侧单位。

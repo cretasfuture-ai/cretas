@@ -172,9 +172,24 @@ public interface ProductTypeRepository extends JpaRepository<ProductType, String
       */
     boolean existsByFactoryIdAndCode(String factoryId, String code);
 
-    /** 当前生成前缀下的所有编码；Service 解析纯数字后缀并取最大值。 */
-    @Query("SELECT p.code FROM ProductType p WHERE p.factoryId = :factoryId " +
-           "AND SUBSTRING(p.code, 1, LENGTH(:prefix)) = :prefix")
+    /**
+     * 同厂自动编码取号串行化: 事务级 advisory lock, 提交/回滚时释放。
+     * 不锁 factories 行: 那行的 FOR UPDATE 会与所有引用 factories(id) 的外键子表插入 (FOR KEY SHARE) 互斥,
+     * 还可能与「先插过子行、再自动编码」的并发事务互相等待成死锁。advisory lock 只与同一把 key 互斥。
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(hashtextextended(CAST(:lockKey AS text), 0))",
+            nativeQuery = true)
+    void lockGeneratedCodeSequence(@Param("lockKey") String lockKey);
+
+    /**
+     * 当前生成前缀下的所有编码；Service 解析纯数字后缀并取最大值。
+     * 必须是原生 SQL: JPQL 会被实体上的 {@code @Where(deleted_at IS NULL)} 过滤掉软删行, 而唯一约束
+     * uk_product_types_factory_code (factory_id, code) 对软删行同样生效, 漏算会生成已被占用的编码
+     * (F006: 活行最大 0038, 软删行占到 0048, 预览出 CPF0060039 保存即 409)。
+     */
+    @Query(value = "SELECT code FROM product_types WHERE factory_id = :factoryId " +
+           "AND SUBSTRING(code, 1, LENGTH(CAST(:prefix AS VARCHAR(200)))) = CAST(:prefix AS VARCHAR(200))",
+           nativeQuery = true)
     List<String> findCodesByFactoryIdAndGeneratedPrefix(@Param("factoryId") String factoryId,
                                                         @Param("prefix") String prefix);
 

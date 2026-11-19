@@ -1,6 +1,10 @@
 package com.cretas.aims.controller.permission;
 
 import com.cretas.aims.config.PermissionInterceptor;
+import com.cretas.aims.config.RequireRoleInterceptor;
+import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.security.AuthenticatedActor;
+import com.cretas.aims.security.AuthenticatedActorType;
 import com.cretas.aims.dto.permission.PermissionMatrixView;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.entity.permission.PlatformRolePermission;
@@ -26,6 +30,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -65,10 +70,12 @@ class PermissionMatrixControllerPermissionTest {
     @BeforeEach
     void setUp() {
         PermissionMatrixController controller =
-                new PermissionMatrixController(matrixViewService, writeService, userRepository);
+                new PermissionMatrixController(matrixViewService, writeService);
+        // 与 WebMvcConfig 同序: PermissionInterceptor(order 3) → RequireRoleInterceptor(order 4)
         mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .addInterceptors(new PermissionInterceptor(
-                        permissionService, userRepository, new ObjectMapper()))
+                        permissionService, userRepository, new ObjectMapper()),
+                        new RequireRoleInterceptor(new ObjectMapper()))
                 .build();
     }
 
@@ -119,12 +126,27 @@ class PermissionMatrixControllerPermissionTest {
         verify(matrixViewService, never()).build(any());
     }
 
+    /**
+     * 🔴 2026-11-18 (PROTO-DEMO-PERM): 权限矩阵是全平台的表, 工厂总监看都不该看到。
+     * 他过得了 system:read (超管短路) —— 拦住他的必须是 @RequireRole 那道闸, 措辞要能证明是它。
+     */
     @Test
-    void factorySuperAdminReachesTheServiceThroughTheSameInterceptor() throws Exception {
+    void factorySuperAdminCannotReadThePlatformMatrix() throws Exception {
         User user = user(2003L, "factory_super_admin");
         when(userRepository.findById(2003L)).thenReturn(Optional.of(user));
         when(permissionService.hasAnyPermission(user, "system:read", "system:read_write"))
                 .thenReturn(true);
+
+        mockMvc.perform(factoryActor(get(URL), 2003L, "factory_super_admin"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("FORBIDDEN"))
+                .andExpect(jsonPath("$.message").value("当前角色无权访问此接口，需要: platform_admin"));
+
+        verify(matrixViewService, never()).build(any());
+    }
+
+    @Test
+    void platformAdminReadsTheMatrix() throws Exception {
         when(matrixViewService.build("F006")).thenReturn(new PermissionMatrixView(
                 "F006",
                 List.of("system"),
@@ -136,11 +158,10 @@ class PermissionMatrixControllerPermissionTest {
                 List.of(),
                 List.of()));
 
-        mockMvc.perform(get(URL).requestAttr("userId", 2003L))
+        mockMvc.perform(platformActor(get(URL), 9001L))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.factoryId").value("F006"))
-                .andExpect(jsonPath("$.data.diffs.length()").value(1))
                 .andExpect(jsonPath("$.data.diffs[0].kind").value("override"));
 
         verify(matrixViewService).build("F006");
@@ -223,29 +244,109 @@ class PermissionMatrixControllerPermissionTest {
         verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
     }
 
+    /**
+     * 🔴 越权阴性对照 (PROTO-DEMO-PERM): 工厂超管 / 权限管理员都过得了 system:read_write
+     * (超管短路 / V20261101_37 的 rw), 修复前能改全平台 L1 —— 一个工厂改了所有工厂。
+     * 现在必须 403, 且写服务一次都没被调用。
+     */
     @Test
-    void permissionAdminWithSystemReadWriteReachesTheWriterAndGetsTheRereadValue() throws Exception {
+    void factorySuperAdminCannotWriteThePlatformTable() throws Exception {
+        User user = user(2003L, "factory_super_admin");
+        when(userRepository.findById(2003L)).thenReturn(Optional.of(user));
+        when(permissionService.hasAnyPermission(user, "system:read_write")).thenReturn(true);
+
+        mockMvc.perform(factoryActor(put(WRITE_URL), 2003L, "factory_super_admin")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"rw\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("当前角色无权访问此接口，需要: platform_admin"));
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void permissionAdminWithSystemReadWriteCannotWriteEither() throws Exception {
         User admin = user(2004L, "permission_admin");
         when(userRepository.findById(2004L)).thenReturn(Optional.of(admin));
         when(permissionService.hasAnyPermission(admin, "system:read_write")).thenReturn(true);
+
+        mockMvc.perform(factoryActor(put(WRITE_URL), 2004L, "permission_admin")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"r\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("当前角色无权访问此接口，需要: platform_admin"));
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    /** 工厂令牌里把角色写成 platform_admin 也不算 (RequireRoleInterceptor 只信平台令牌)。 */
+    @Test
+    void factoryTokenClaimingPlatformAdminRoleIsStillRejected() throws Exception {
+        User user = user(2006L, "platform_admin");
+        when(userRepository.findById(2006L)).thenReturn(Optional.of(user));
+        when(permissionService.hasAnyPermission(user, "system:read_write")).thenReturn(true);
+
+        mockMvc.perform(factoryActor(put(WRITE_URL), 2006L, "platform_admin")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"level\":\"rw\"}"))
+                .andExpect(status().isForbidden());
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    /**
+     * 第二道: 方法体内自己再判一次平台身份 —— 拦截器漏挂 / 注解被删时仍然拒绝。
+     * 直接调方法 (绕过全部拦截器) 模拟「闸没接上」。
+     */
+    @Test
+    void writeCellRejectsFactoryActorEvenWithoutInterceptors() {
+        PermissionMatrixController controller = new PermissionMatrixController(matrixViewService, writeService);
+        org.springframework.mock.web.MockHttpServletRequest req = new org.springframework.mock.web.MockHttpServletRequest();
+        req.setAttribute(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, 2003L, "F006", "factory_super_admin"));
+
+        assertThatThrownBy(() -> controller.writeCell("F006", "sales_manager", "warehouse",
+                new PermissionMatrixController.WriteCellRequest("rw", null), req))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).getCode()).isEqualTo(403));
+
+        verify(writeService, never()).write(any(), any(), any(), any(), any(), any());
+    }
+
+    /** 阳性对照: 平台管理员写得进去, 审计操作人取自平台身份 (id + 角色), 不去 users 表按 id 撞人。 */
+    @Test
+    void platformAdminReachesTheWriterAsThePlatformActor() throws Exception {
         PlatformRolePermission reread = new PlatformRolePermission();
         reread.setRoleCode("sales_manager");
         reread.setModuleCode("warehouse");
         reread.setPermissionLevel("r");
-        when(writeService.write(eq(admin), eq("F006"), eq("sales_manager"), eq("warehouse"), eq("r"), eq("仓管协同")))
+        org.mockito.ArgumentCaptor<User> actor = org.mockito.ArgumentCaptor.forClass(User.class);
+        when(writeService.write(actor.capture(), eq("F006"), eq("sales_manager"), eq("warehouse"), eq("r"), eq("仓管协同")))
                 .thenReturn(new PlatformRolePermissionWriteService.WriteResult(reread, 501L, "-"));
 
-        mockMvc.perform(put(WRITE_URL).requestAttr("userId", 2004L)
+        mockMvc.perform(platformActor(put(WRITE_URL), 9001L)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"level\":\"r\",\"reason\":\"仓管协同\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.role").value("sales_manager"))
-                .andExpect(jsonPath("$.data.module").value("warehouse"))
                 .andExpect(jsonPath("$.data.oldLevel").value("-"))
                 .andExpect(jsonPath("$.data.level").value("r"))
                 .andExpect(jsonPath("$.data.auditId").value(501));
 
-        verify(writeService).write(admin, "F006", "sales_manager", "warehouse", "r", "仓管协同");
+        assertThat(actor.getValue().getId()).isEqualTo(9001L);
+        assertThat(actor.getValue().getRoleCode()).isEqualTo("platform_admin");
+        verify(userRepository, never()).findById(9001L);
+    }
+
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder factoryActor(
+            org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder b, Long id, String role) {
+        return b.requestAttr("userId", id).requestAttr("role", role)
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                        new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, id, "F006", role));
+    }
+
+    private static org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder platformActor(
+            org.springframework.test.web.servlet.request.MockHttpServletRequestBuilder b, Long id) {
+        return b.requestAttr("userId", id).requestAttr("role", "platform_admin")
+                .requestAttr(AuthenticatedActor.REQUEST_ATTRIBUTE,
+                        new AuthenticatedActor(AuthenticatedActorType.PLATFORM_ADMIN, id, "PLATFORM", "platform_admin"));
     }
 
     /**

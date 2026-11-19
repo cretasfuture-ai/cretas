@@ -87,3 +87,50 @@ export function toMaterialDetail(item: SummaryItem): MaterialDetail {
     secretHidden: isSecretHidden(item),
   };
 }
+
+/** 一次最多读多少个批次来算 KPI; 超过时页面如实写「仅基于最近 N 个」, 不假装是全部。 */
+export const KPI_BATCH_CAP = 1000;
+const PAGE_SIZE = 100;
+
+export interface AllPagesResult<T> {
+  items: T[];
+  /** 服务端说一共有多少条 (可能大于 items.length, 即被 cap 截断) */
+  totalElements: number;
+  truncated: boolean;
+}
+
+/**
+ * 把分页接口读全 (B6: KPI 必须基于全部批次, 而不是当前页)。
+ * ⛔ 读不全也不假装全: 达到 cap 仍有剩余 ⇒ truncated=true, 由调用方在口径里写出来。
+ */
+export async function fetchAllPages<T>(
+  fetchPage: (page: number, size: number) => Promise<{ content: T[]; totalElements: number }>,
+  cap: number = KPI_BATCH_CAP,
+): Promise<AllPagesResult<T>> {
+  const items: T[] = [];
+  let totalElements = 0;
+  for (let page = 1; items.length < cap; page++) {
+    const res = await fetchPage(page, PAGE_SIZE);
+    totalElements = res.totalElements;
+    items.push(...res.content);
+    if (res.content.length === 0 || items.length >= totalElements) break;
+  }
+  const capped = items.length > cap ? items.slice(0, cap) : items;
+  return { items: capped, totalElements, truncated: capped.length < totalElements };
+}
+
+/** 限并发 map, 保持输入顺序。 */
+export async function mapWithConcurrency<T, R>(
+  items: T[], limit: number, fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
