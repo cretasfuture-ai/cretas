@@ -5,7 +5,6 @@ import com.cretas.aims.entity.ProductType;
 import com.cretas.aims.entity.enums.ProductCategory;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.CustomerRepository;
-import com.cretas.aims.repository.FactoryRepository;
 import com.cretas.aims.repository.ProductTypeRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,7 +18,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -47,7 +45,6 @@ class ProductTypeGeneratedCodeContractTest {
 
     @Mock private ProductTypeRepository productTypeRepository;
     @Mock private CustomerRepository customerRepository;
-    @Mock private FactoryRepository factoryRepository;
 
     private ProductTypeServiceImpl service;
 
@@ -56,7 +53,6 @@ class ProductTypeGeneratedCodeContractTest {
         service = new ProductTypeServiceImpl(productTypeRepository, new ObjectMapper(), customerRepository,
                 org.mockito.Mockito.mock(com.cretas.aims.service.workflow.WorkflowUnitReviewService.class),
                 org.mockito.Mockito.mock(com.cretas.aims.service.unit.ProductSpecificationConversionSyncService.class));
-        ReflectionTestUtils.setField(service, "factoryRepository", factoryRepository);
         when(productTypeRepository.save(any(ProductType.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -101,15 +97,15 @@ class ProductTypeGeneratedCodeContractTest {
     }
 
     @Test
-    @DisplayName("并发: 读 max 之前必须先拿厂行锁 (同厂自动编码创建串行)")
-    void takesFactoryRowLockBeforeReadingExistingCodes() {
+    @DisplayName("并发: 读 max 之前必须先拿同厂取号 advisory lock (同厂自动编码创建串行)")
+    void takesGeneratedCodeLockBeforeReadingExistingCodes() {
         when(productTypeRepository.findCodesByFactoryIdAndGeneratedPrefix(anyString(), anyString()))
                 .thenReturn(List.of());
 
         service.createProductType(FACTORY_ID, autoCodeDto());
 
-        InOrder order = inOrder(factoryRepository, productTypeRepository);
-        order.verify(factoryRepository).findByIdForUpdate(FACTORY_ID);
+        InOrder order = inOrder(productTypeRepository);
+        order.verify(productTypeRepository).lockGeneratedCodeSequence("product_code:" + FACTORY_ID);
         order.verify(productTypeRepository).findCodesByFactoryIdAndGeneratedPrefix(anyString(), anyString());
         order.verify(productTypeRepository).save(any(ProductType.class));
     }
@@ -123,7 +119,7 @@ class ProductTypeGeneratedCodeContractTest {
 
         service.createProductType(FACTORY_ID, dto);
 
-        org.mockito.Mockito.verifyNoInteractions(factoryRepository);
+        verify(productTypeRepository, org.mockito.Mockito.never()).lockGeneratedCodeSequence(anyString());
     }
 
     @Test

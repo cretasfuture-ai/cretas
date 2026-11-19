@@ -622,7 +622,14 @@ public class GlobalExceptionHandler {
      * 把 PG 报的唯一约束列 (如 "factory_id, code") 翻成用户语言。租户列 factory_id 不属于用户可改字段, 先剔除;
      * 认得的业务列给出具体提示, 不认得的给通用提示, 原始列名永远不外露 (调用方已写日志)。
      */
+    /** 只有这条约束对应的表单 (SKU) 支持「编码留空自动生成」; 其它表的 code 不一定能留空。 */
+    static final String PRODUCT_CODE_UNIQUE_CONSTRAINT = "uk_product_types_factory_code";
+
     static UniqueConflictText describeUniqueConflict(String columns) {
+        return describeUniqueConflict(columns, null);
+    }
+
+    static UniqueConflictText describeUniqueConflict(String columns, String constraintName) {
         String field = null;
         for (String c : columns.split(",")) {
             String col = c.trim().toLowerCase();
@@ -633,8 +640,11 @@ public class GlobalExceptionHandler {
         }
         String label = field == null ? null : UNIQUE_COLUMN_LABELS.get(field);
         if ("code".equals(field)) {
-            return new UniqueConflictText("编码已存在，请换一个编码或留空自动生成",
-                    "请换一个编码，或留空由系统自动生成", "code");
+            if (PRODUCT_CODE_UNIQUE_CONSTRAINT.equalsIgnoreCase(constraintName)) {
+                return new UniqueConflictText("编码已存在，请换一个编码或留空自动生成",
+                        "请换一个编码，或留空由系统自动生成", "code");
+            }
+            return new UniqueConflictText("编码已存在，请换一个编码", "请换一个编码", "code");
         }
         if (label != null) {
             return new UniqueConflictText("数据已存在，请勿重复提交",
@@ -703,7 +713,10 @@ public class GlobalExceptionHandler {
                 // 约束列名 (factory_id, code) 是内部字段名, 只进日志, 不进用户提示。
                 String col = uvm.group(1);
                 log.warn("[{}] 唯一约束冲突列: {}", traceId, col);
-                UniqueConflictText text = describeUniqueConflict(col);
+                java.util.regex.Matcher constraint = java.util.regex.Pattern
+                    .compile("unique constraint \"([^\"]+)\"").matcher(raw);
+                UniqueConflictText text = describeUniqueConflict(col,
+                        constraint.find() ? constraint.group(1) : null);
                 message = text.message();
                 actionHint = text.actionHint();
                 hintTarget = text.hintTarget();

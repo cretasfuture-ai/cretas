@@ -33,6 +33,28 @@ class GlobalExceptionHandlerUniqueConflictTextContractTest {
     }
 
     @Test
+    @DisplayName("阴性对照: 其它表 (factory_id, code) 撞约束只说换编码, 不提「留空自动生成」")
+    void otherTablesCodeConflictDoesNotSuggestLeavingCodeBlank() {
+        for (String constraint : new String[]{
+                "uk_customers_factory_code", "uk_suppliers_factory_code", "uk_raw_material_types_factory_code",
+                "ukf8x3k2factorycode"}) {
+            ApiResponse<?> resp = handler.handleDataIntegrityViolationException(
+                    new DataIntegrityViolationException("could not execute statement [ERROR: duplicate key value "
+                            + "violates unique constraint \"" + constraint + "\"\n  Detail: Key (factory_id, code)="
+                            + "(F006, C001) already exists.]"),
+                    new MockHttpServletRequest("POST", "/api/mobile/F006/customers"));
+
+            assertThat(resp.getCode()).as(constraint).isEqualTo(409);
+            assertThat(resp.getMessage()).as(constraint).isEqualTo("编码已存在，请换一个编码");
+            assertThat(resp.getHintTarget()).as(constraint).isEqualTo("code");
+            for (String visible : new String[]{resp.getMessage(), resp.getActionHint()}) {
+                assertThat(visible).as(constraint).doesNotContain("留空").doesNotContain("自动生成")
+                        .doesNotContain("factory_id");
+            }
+        }
+    }
+
+    @Test
     void unknownColumnsFallBackToGenericTextWithoutLeakingThem() {
         ApiResponse<?> resp = handler.handleDataIntegrityViolationException(
                 new DataIntegrityViolationException(
