@@ -19,9 +19,14 @@ slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>
 FULL_FROM=22
 FULL_UNTIL=8
 DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 2 5}"
+DAY_FULL_FILE="${GH_GATE_DAY_FULL_FILE:-/Users/rex/gh-gate/day-full}"
 mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_HOUR 可覆盖, 供测试)
   # ⛔ 不用 TZ=Asia/Shanghai: 没有时区数据的机器 (Git Bash 实测) 静默按 UTC 算, 时段整体错 8 小时。
   #    北京时间 = UTC + 8, 无夏令时。
+  # 白天也全开开关 (2026-11-19 Steve「放开白天派片」): 两端各一个, 要一起开关 ——
+  #   workflow (托管机上调 --window): 仓库变量 MINI_DAY_FULL=1 -> 环境变量 GH_GATE_DAY_FULL=1;
+  #   mini (槽启用): 文件 $DAY_FULL_FILE 存在。任一成立就整天按 full (PG 4 片都派、5 槽全开), 删掉即恢复按时段。
+  if [ "${GH_GATE_DAY_FULL:-}" = 1 ] || [ -f "$DAY_FULL_FILE" ]; then echo full; return 0; fi
   local h="${1:-${GH_GATE_HOUR:-$(( (10#$(date -u +%H) + 8) % 24 ))}}"
   h=$((10#$h))
   if [ "$h" -ge "$FULL_FROM" ] || [ "$h" -lt "$FULL_UNTIL" ]; then echo full; else echo day; fi

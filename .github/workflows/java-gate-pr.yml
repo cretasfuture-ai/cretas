@@ -81,7 +81,10 @@ jobs:
       # 路由: 脚本恒 exit 0; 读不到排队数走托管并打 ROUTE=hosted reason=api-error。
       # 本步骤自己崩了 (输出为空) 时下游表达式同样落 ubuntu-latest。
       # 时段 full/day (北京时间, 定义见 refill.sh mini_window); 失败时输出为空 = 按 day。
+      # 仓库变量 MINI_DAY_FULL=1 = 白天也按 full 派 (mini 端同时要有 ~/gh-gate/day-full, 见 refill.sh mini_window)。
       - id: window
+        env:
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
         run: echo "mini_window=$(bash scripts/ci/canada-mini-gate/refill.sh --window)" | tee -a "$GITHUB_OUTPUT"
       - id: route-pg
         env:
