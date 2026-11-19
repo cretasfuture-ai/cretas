@@ -534,7 +534,7 @@ const businessRoutes: RouteRecordRaw[] = [
             path: 'bom-achievement',
             name: 'BomAchievement',
             redirect: (to) => buildProductionAnalysisRedirect(to, 'bom-achievement'),
-            meta: { requiresAuth: true, title: 'BOM达成率分析', module: 'production' }
+            meta: { requiresAuth: true, title: 'BOM用量对比', module: 'production' }
           },
           // 标准出成率维护 (2026-09-05) —— 唯一的人工写入口。
           // 自动回写已删除 (owner 裁定「标准只能人改」), 而 recalculate-apply 端点

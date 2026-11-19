@@ -25,6 +25,9 @@ import {
   type AssignmentResult,
 } from './taskAssignment';
 import { shouldFocusAssignmentSection } from './assignmentDeepLink';
+import {
+  plannedBasisOf, plannedLabel, plannedQuantityOrNull, completionRatioPercent, completionRatioLabel, completionRatioHint,
+} from './plannedQuantityBasis';
 import { batchCostState, missingBatchCostLabels, readBatchCostEvidence, type BatchCostEvidence } from './batchCostEvidence';
 import { PROCESS_SECRET_LABEL, secretAwareCell } from '@/utils/processSecretField';
 
@@ -807,8 +810,15 @@ const goodRateDisplay = computed(() => {
 /** 良品数未知时不上色 —— 否则「未知」会被涂成绿色, 看起来像达标。 */
 const goodRateKnown = computed(() => batch.value?.goodQuantity != null);
 
+// B4/B5: 计划数量列的真实含义 (理论产能 / 计划数量) 与完成比例口径 (含不良总产量 ÷ 它), 见 plannedQuantityBasis.ts
+const plannedBasis = computed(() => plannedBasisOf(batch.value));
+const plannedQuantityLabel = computed(() => plannedLabel(plannedBasis.value));
+const plannedQuantityDisplay = computed(() => {
+  const planned = plannedQuantityOrNull(batch.value);
+  return planned == null ? '—' : formatNum(planned);
+});
 const efficiencyDisplay = computed(() =>
-  isCrossUnit.value ? '跨单位不可比' : formatPercent(batch.value?.efficiency));
+  isCrossUnit.value ? '跨单位不可比' : formatPercent(completionRatioPercent(batch.value)));
 const costEvidenceState = computed(() => batchCostState(costBatchMatches.value ? batchCost.value : null, batchCostLoading.value, batchCostError.value));
 const costAmountsVisible = computed(() => costEvidenceState.value === 'COMPLETE' || costEvidenceState.value === 'PARTIAL');
 // 补录入口的资格与“完整金额可展示”是两件事：PARTIAL/UNVERIFIED 且服务明确缺少
@@ -1017,9 +1027,9 @@ function goToReversalList() {
       <!-- KPI Cards -->
       <div class="kpi-row">
         <div class="kpi-card">
-          <div class="kpi-label">计划数量</div>
-          <div class="kpi-value">{{ formatNum(batch.plannedQuantity) }}</div>
-          <div class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
+          <div class="kpi-label" data-testid="batch-planned-label">{{ plannedQuantityLabel }}</div>
+          <div class="kpi-value" data-testid="batch-planned-value">{{ plannedQuantityDisplay }}</div>
+          <div v-if="plannedQuantityDisplay !== '—'" class="kpi-unit">{{ displayProcessUnit(batch.unit) }}</div>
         </div>
         <div class="kpi-card">
           <div class="kpi-label">{{ actualQuantityLabel }}</div>
@@ -1045,7 +1055,7 @@ function goToReversalList() {
           </div>
         </div>
         <div class="kpi-card">
-          <div class="kpi-label">总产量完成比例</div>
+          <div class="kpi-label">{{ completionRatioLabel(plannedBasis) }}</div>
           <div class="kpi-value">{{ efficiencyDisplay }}</div>
         </div>
         <div v-if="canViewPrice" class="kpi-card">
@@ -1106,7 +1116,10 @@ function goToReversalList() {
             <span class="section-title">产量与质量</span>
           </template>
           <el-descriptions :column="2" border>
-            <el-descriptions-item label="计划数量">{{ formatNum(batch.plannedQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
+            <el-descriptions-item :label="plannedQuantityLabel">
+              <template v-if="plannedQuantityDisplay !== '—'">{{ plannedQuantityDisplay }} {{ displayProcessUnit(batch.unit) }}</template>
+              <span v-else>—</span>
+            </el-descriptions-item>
             <el-descriptions-item label="总产量（含不良）">{{ formatNum(batch.actualQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="良品数量">{{ formatNum(batch.goodQuantity) }} {{ displayProcessUnit(batch.unit) }}</el-descriptions-item>
             <el-descriptions-item label="不良品数量">
@@ -1123,8 +1136,8 @@ function goToReversalList() {
                 {{ goodRateDisplay }}
               </span>
             </el-descriptions-item>
-            <el-descriptions-item label="总产量完成比例">
-              {{ efficiencyDisplay }}（含不良总产量 ÷ 计划数量）
+            <el-descriptions-item :label="completionRatioLabel(plannedBasis)">
+              {{ efficiencyDisplay }}（{{ completionRatioHint(plannedBasis) }}）
             </el-descriptions-item>
           </el-descriptions>
         </el-card>
@@ -2052,7 +2065,7 @@ function goToReversalList() {
         <template #default>
           <div style="font-size:13px;color:var(--cs-muted);line-height:1.6;margin-top:4px">
             产品: <strong>{{ batch?.productName || batch?.productType || '—' }}</strong><br>
-            计划数量: <strong>{{ batch?.plannedQuantity != null ? batch.plannedQuantity + ' ' + displayProcessUnit(batch.unit) : '—' }}</strong><br>
+            {{ plannedQuantityLabel }}: <strong>{{ plannedQuantityOrNull(batch) != null ? plannedQuantityOrNull(batch) + ' ' + displayProcessUnit(batch?.unit) : '—' }}</strong><br>
             当前状态: <strong>{{ batch ? getStatusText(batch.status) : '—' }}</strong>
           </div>
         </template>
