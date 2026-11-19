@@ -22,16 +22,23 @@ _STAGE_SCOPE = "工序单独统计；同一批物料经过多个工序时，各�
 logger = logging.getLogger(__name__)
 
 
+class SourceEligibilityUnavailable(RuntimeError):
+    """The tenant's external production source could not be verified."""
+
+
 async def _has_blacklake_snapshot(factory_id: str) -> bool:
-    """Check source metadata independently of the SmartBI fact reader."""
+    """Verify active authorization and snapshots in the Cretas source."""
     pool = await config.get_cretas_pool()
     if pool is None:
         raise RuntimeError("Cretas source pool unavailable")
     async with pool.acquire() as conn:
         return await conn.fetchval(
             """SELECT EXISTS (
-                   SELECT 1 FROM external_source_snapshots
-                   WHERE factory_id = $1 AND external_system = 'blacklake' AND dataset = 'report_output'
+                   SELECT 1 FROM external_source_snapshots AS s
+                   JOIN factory_external_integrations AS i
+                     ON i.factory_id = s.factory_id AND i.external_system = s.external_system
+                   WHERE s.factory_id = $1 AND s.external_system = 'blacklake'
+                     AND s.dataset = 'report_output' AND i.status = 'ACTIVE'
                )""",
             factory_id,
         )
@@ -44,10 +51,9 @@ async def load(factory_id, request):
         return None, None
     try:
         has_snapshot = await _has_blacklake_snapshot(factory_id)
-    except Exception:
-        # Discovery failure does not establish that this factory has a feed.
+    except Exception as exc:
         logger.warning("External production source discovery failed for %s", factory_id, exc_info=True)
-        return None, None
+        raise SourceEligibilityUnavailable from exc
     if not has_snapshot:
         return None, None
 

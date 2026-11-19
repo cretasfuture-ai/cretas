@@ -92,7 +92,13 @@ async def stores(monkeypatch):
                     row_count INTEGER NOT NULL, payload TEXT NOT NULL, payload_sha256 VARCHAR(64),
                     collector_run_id VARCHAR(80)
                 );
-                GRANT SELECT ON external_source_snapshots TO cbi_snapshot_reader;""")
+                CREATE TABLE factory_external_integrations (
+                    factory_id VARCHAR(50) NOT NULL, external_system VARCHAR(30) NOT NULL,
+                    status VARCHAR(20) NOT NULL, PRIMARY KEY (factory_id, external_system)
+                );
+                GRANT SELECT ON external_source_snapshots TO cbi_snapshot_reader;
+                GRANT SELECT (factory_id, external_system, status)
+                    ON factory_external_integrations TO cbi_snapshot_reader;""")
                 silver_admin = await asyncpg.connect(urlunsplit(silver))
                 try:
                     for filename in (
@@ -427,10 +433,11 @@ async def test_page_endpoint_uses_tenant_period_freshness_and_native_precedence(
 @pytest.mark.asyncio
 async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_llm(stores, monkeypatch):
     from smartbi.services.factory_charts import (
-        captured_sources, detail_store, finance_sources, operational_sources,
+        blacklake_production, captured_sources, detail_store, finance_sources, operational_sources,
         settled_sources, trusted_business_sources,
     )
     bronze, source, target = stores
+    await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
     await _snapshot(bronze, FACTORY, COLLECTED, [*PAYLOAD, _line("KG", "700", "6", code="POTHER")])
     assert await sync_external_production(source, target) == 1
 
@@ -470,3 +477,12 @@ async def test_factory_ask_data_uses_blacklake_facts_without_upload_or_remote_ll
     assert "黑湖生产报工" in result["facts"][0]["source"]
     assert "黑湖数据不含投入量，无法计算" in result["limitations"]
     assert CODE in result["analysisScopeLabel"]
+    await bronze.execute(
+        "UPDATE factory_external_integrations SET status = 'SUSPENDED' WHERE factory_id = $1",
+        FACTORY,
+    )
+    assert len(await _facts(target, FACTORY)) == 8
+    request = financial_dashboard.FactoryRecommendationRequest(
+        period_type="month_range", year=2026, start_month=11, end_month=11,
+    )
+    assert await blacklake_production.load(FACTORY, request) == (None, None)
