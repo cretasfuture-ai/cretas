@@ -72,4 +72,4 @@ Claude 周额度 ≥ 95%，且按近 24 小时消耗速度推算在下次重置�
 - 在独立队列模拟 CI 失败响应，验证带作业名和日志链接的信箱反馈、`done → running` 及回执超时后的 `running → blocked`。真实 GitHub 已覆盖阳性 `ci_green`。PowerShell 7.7.0 下四个入口按 `pwsh -NoProfile -Command "& { . ./入口.ps1 -DryRun }"` 检查通过。解析检查、`check_resident_rules.py`、`check_dispatch_active.py` 和 `git diff --check` 均通过。
 - Pilot PR 已关闭，远端测试分支、两条本地测试分支和两个测试 worktree 已删除，三条测试会话已归档。临时信任配置已恢复到测试前哈希。隔离队列的 `ledger.jsonl` 与回执、日志保存在 `C:\Users\Steve\cretas-dispatch-pilot-20261119`。
 - 未做 0.160.0 的完整终端交互复测。新隔离仓库首次启动需要在终端确认目录。正式队列当前为空，真实派工的验证使用隔离队列。
-- 交付 PR 开出后回填链接。
+- 交付 PR 已开，等待仓库检查。[交付 PR #1979](https://github.com/cretasfuture-ai/cretas/pull/1979)
