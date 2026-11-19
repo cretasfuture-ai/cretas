@@ -1143,7 +1143,7 @@ class StreamTurnCollectorEntryParityContractTest {
     }
 
     @Test
-    @DisplayName("#1816 L1: 写意图的权限码取自迁移层 (V20261119_71 跑完后的值), 经真实编排器门面 → DELEGATED; 置空 → 「没有登记」不交办")
+    @DisplayName("#1816 L1: 写意图的权限码取自迁移层 (V20261119_88 跑完后的值), 经真实编排器门面 → DELEGATED; 置空 → 「没有登记」不交办")
     void digitalCrewAskUsesTheMigratedPermissionThroughTheRealOrchestrator() throws Exception {
         String migrated = com.cretas.aims.ai.catalog.WriteIntentPermissionSources.migratedPermissions().get("RECEIVE_CONFIRM_CREATE");
         assertThat(migrated).as("迁移层登记了入库确认的权限码").isNotBlank();
