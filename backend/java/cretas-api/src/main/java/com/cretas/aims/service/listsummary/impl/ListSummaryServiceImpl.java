@@ -235,7 +235,7 @@ public class ListSummaryServiceImpl implements ListSummaryService {
                                                           LocalDate from, LocalDate to) {
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM time_clock_records " +
-                "WHERE factory_id = :fid");
+                "WHERE factory_id = :fid AND deleted_at IS NULL");
         appendStatusFilter(sql, filter);
         appendDateRange(sql, "clock_date", from, to);
         Query q = em.createNativeQuery(sql.toString());

@@ -3,6 +3,8 @@ package com.cretas.aims.service.listsummary.impl;
 import com.cretas.aims.dto.listsummary.ListSummaryRequest;
 import com.cretas.aims.dto.listsummary.ListSummaryResponse;
 import com.cretas.aims.entity.QualityInspection;
+import com.cretas.aims.entity.TimeClockRecord;
+import com.cretas.aims.repository.TimeClockRecordRepository;
 import com.cretas.aims.repository.QualityInspectionRepository;
 import com.cretas.aims.security.DataScopeResolver;
 import com.cretas.aims.service.MaterialBatchService;
@@ -20,6 +22,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -38,12 +41,15 @@ import static org.mockito.Mockito.mock;
 @EntityScan(basePackages = "com.cretas.aims.entity")
 @EnableJpaRepositories(basePackages = "com.cretas.aims.repository")
 @DisplayName("质检记录: 列表 total == 汇总 共 (软删口径一致)")
-class QualityInspectionListVsSummaryJpaTest {
+class ListVsSummarySoftDeleteContractTest {
 
     private static final String FACTORY = "F-JPA-QC-SUMMARY";
 
     @Autowired
     private QualityInspectionRepository repository;
+
+    @Autowired
+    private TimeClockRecordRepository clockRepository;
 
     @Autowired
     private EntityManager em;
@@ -104,5 +110,38 @@ class QualityInspectionListVsSummaryJpaTest {
         assertThat(stat(summary, "合格")).isEqualTo(1);
         assertThat(stat(summary, "不合格")).isEqualTo(1);
         assertThat(stat(summary, "待判定")).isEqualTo(1);
+    }
+
+    private TimeClockRecord clock() {
+        return TimeClockRecord.builder()
+                .factoryId(FACTORY)
+                .userId(1L)
+                .clockDate(LocalDate.of(2026, 11, 18))
+                .clockInTime(LocalDateTime.of(2026, 11, 18, 8, 0))
+                .build();
+    }
+
+    @Test
+    @DisplayName("考勤: 2 条在册 + 1 条软删, 列表(实体 @Where)条数 == 汇总 共 == 2")
+    void attendanceSummaryMatchesListWhenSoftDeletedRowsExist() {
+        em.createNativeQuery("SET REFERENTIAL_INTEGRITY FALSE").executeUpdate();
+        clockRepository.saveAndFlush(clock());
+        clockRepository.saveAndFlush(clock());
+        TimeClockRecord gone = clockRepository.saveAndFlush(clock());
+        int updated = em.createNativeQuery("UPDATE time_clock_records SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
+                .setParameter("id", gone.getId()).executeUpdate();
+        assertThat(updated).isEqualTo(1);
+        em.clear();
+        long physical = ((Number) em.createNativeQuery("SELECT COUNT(*) FROM time_clock_records WHERE factory_id = :f")
+                .setParameter("f", FACTORY).getSingleResult()).longValue();
+        assertThat(physical).isEqualTo(3);
+
+        long listCount = clockRepository.findByFactoryIdAndClockDate(FACTORY,
+                LocalDateTime.of(2026, 11, 18, 0, 0), LocalDateTime.of(2026, 11, 19, 0, 0)).size();
+        ListSummaryResponse summary = summaryService().computeSummary(FACTORY, "attendance",
+                new ListSummaryRequest(Map.of(), null, null, null));
+
+        assertThat(listCount).isEqualTo(2);
+        assertThat(stat(summary, "共")).isEqualTo(listCount);
     }
 }
