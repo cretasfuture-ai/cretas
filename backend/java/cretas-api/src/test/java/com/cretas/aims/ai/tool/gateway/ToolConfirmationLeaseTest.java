@@ -44,7 +44,7 @@ class ToolConfirmationLeaseTest {
                 ToolExecutionMode.EXECUTE, commandParameters);
         ToolExecutionCommand command = command(commandParameters, digest);
         IntentPreviewToken token = boundToken(digest, commandParameters);
-        when(previewTokenService.claimToken("opaque-token", "F-1", 42L, digest))
+        when(previewTokenService.claimTokenForSubject("opaque-token", "F-1", 42L, digest, "USER", "7"))
                 .thenReturn(PreviewTokenService.ClaimResult.success(
                         token, "claim-1", Map.of("userId", 7)));
 
@@ -64,7 +64,7 @@ class ToolConfirmationLeaseTest {
         ToolExecutionCommand command = command(commandParameters, digest);
         IntentPreviewToken drifted = boundToken(digest, commandParameters);
         drifted.setDescriptorVersion("9.9.9");
-        when(previewTokenService.claimToken("opaque-token", "F-1", 42L, digest))
+        when(previewTokenService.claimTokenForSubject("opaque-token", "F-1", 42L, digest, "USER", "7"))
                 .thenReturn(PreviewTokenService.ClaimResult.success(
                         drifted, "claim-1", Map.of("userId", 7)));
 
@@ -80,6 +80,28 @@ class ToolConfirmationLeaseTest {
 
         assertThat(leaseService.claim(command, command.principal(), "expected-digest")).isEmpty();
         verify(previewTokenService, org.mockito.Mockito.never())
+                .claimTokenForSubject(anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void proofThatDoesNotNameItsBusinessObjectIsNeverClaimed() {
+        JsonNode parameters = JsonNodeFactory.instance.objectNode().put("userId", 7);
+        String digest = ToolCommandDigest.commandDigest(
+                "F-1", 42L, "user_disable", "2.0.0", ToolExecutionMode.EXECUTE, parameters);
+        ExecutionPrincipal principal = command(parameters, digest).principal();
+        ToolExecutionCommand withoutSubject = new ToolExecutionCommand(
+                "request-1", "correlation-1", "trace-1", "user_disable", "2.0.0",
+                parameters, principal, ToolExecutionSource.AI_CHAT, ToolExecutionMode.EXECUTE,
+                Optional.of("idem-1"), Optional.of(new ConfirmationProof(
+                "opaque-token", digest, Instant.now().plusSeconds(60))),
+                Optional.empty(), Instant.now().plusSeconds(30));
+
+        assertThat(leaseService.claim(withoutSubject, principal, digest)).isEmpty();
+        verify(previewTokenService, org.mockito.Mockito.never())
+                .claimTokenForSubject(anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString(),
+                        org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        verify(previewTokenService, org.mockito.Mockito.never())
                 .claimToken(anyString(), anyString(), org.mockito.ArgumentMatchers.anyLong(), anyString());
     }
 
@@ -91,7 +113,7 @@ class ToolConfirmationLeaseTest {
                 "request-1", "correlation-1", "trace-1", "user_disable", "2.0.0",
                 parameters, principal, ToolExecutionSource.AI_CHAT, ToolExecutionMode.EXECUTE,
                 Optional.of("idem-1"), Optional.of(new ConfirmationProof(
-                "opaque-token", proofDigest, Instant.now().plusSeconds(60))),
+                "opaque-token", proofDigest, Instant.now().plusSeconds(60), "USER", "7")),
                 Optional.empty(), Instant.now().plusSeconds(30));
     }
 
@@ -102,6 +124,8 @@ class ToolConfirmationLeaseTest {
                 .tenantId("F-1")
                 .userId(42L)
                 .intentCode("USER_DISABLE")
+                .entityType("USER")
+                .entityId("7")
                 .toolName("user_disable")
                 .descriptorVersion("2.0.0")
                 .executionMode(ToolExecutionMode.EXECUTE)

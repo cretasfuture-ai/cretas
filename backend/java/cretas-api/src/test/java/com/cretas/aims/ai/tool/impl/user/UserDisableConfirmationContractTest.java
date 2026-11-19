@@ -353,11 +353,14 @@ class UserDisableConfirmationContractTest {
         String tokenValue = "bound-user-disable-token";
         IntentPreviewToken token = IntentPreviewToken.builder()
                 .token(tokenValue).factoryId("F-CONFIRM").tenantId("F-CONFIRM").userId(10L)
+                .entityType("user_disable").entityId("11")
+                // 与 ToolDispatchService 预览铸出的凭据一样记下改前值: 网关执行前按它核对 (非白名单空快照会被拒)
+                .currentValues("{\"currentStatus\":\"ACTIVE\"}")
                 .toolName("user_disable").descriptorVersion("3.0.0")
                 .executionMode(ToolExecutionMode.EXECUTE).commandDigest(digest)
                 .status(IntentPreviewToken.TokenStatus.PENDING)
                 .expiresAt(java.time.LocalDateTime.now().plusMinutes(5)).build();
-        when(previewTokenService.claimToken(tokenValue, "F-CONFIRM", 10L, digest))
+        when(previewTokenService.claimTokenForSubject(tokenValue, "F-CONFIRM", 10L, digest, "user_disable", "11"))
                 .thenReturn(PreviewTokenService.ClaimResult.success(token, "claim-1",
                         Map.of("targetUserId", 11)));
         when(previewTokenService.resolveClaim(tokenValue, "claim-1", true,
@@ -374,7 +377,8 @@ class UserDisableConfirmationContractTest {
                 "disable-trace", "user_disable", "3.0.0", parameters, principal,
                 ToolExecutionSource.AI_CHAT, ToolExecutionMode.EXECUTE,
                 Optional.of("disable-idempotency"),
-                Optional.of(new ConfirmationProof(tokenValue, digest, java.time.Instant.now().plusSeconds(120))),
+                Optional.of(new ConfirmationProof(tokenValue, digest, java.time.Instant.now().plusSeconds(120),
+                        "user_disable", "11")),
                 Optional.empty(), java.time.Instant.now().plusSeconds(60));
         when(principalPolicy.rehydrate(principal)).thenReturn(Optional.of(current));
         when(runtimeRegistry.resolve(command, principal))
@@ -417,7 +421,7 @@ class UserDisableConfirmationContractTest {
         assertThat(replay.status()).isEqualTo(ToolExecutionStatus.IDEMPOTENT_REPLAY);
         assertThat(replay.replayed()).isTrue();
         verify(userRepository, times(1)).deactivateIfEligible(eq("F-CONFIRM"), eq(11L), any());
-        verify(previewTokenService, times(1)).claimToken(tokenValue, "F-CONFIRM", 10L, digest);
+        verify(previewTokenService, times(1)).claimTokenForSubject(tokenValue, "F-CONFIRM", 10L, digest, "user_disable", "11");
         assertThat(persisted.get().getState()).isEqualTo(ToolExecutionIdempotencyRecord.State.SUCCEEDED);
     }
 

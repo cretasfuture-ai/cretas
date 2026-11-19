@@ -75,21 +75,20 @@ public class CostDeviationScanService {
     private final CostDeviationNotifier notifier;
     private final CostDeviationScanDefaults defaults;
 
+    /** 阈值解析只在 {@link CostDeviationThresholdService} 一处 (无状态, 用本服务同一份仓库与默认值构造, 构造器不变)。 */
+    private CostDeviationThresholdService thresholdReader() {
+        return new CostDeviationThresholdService(settingsRepository, defaults);
+    }
+
     public Thresholds thresholds(String factoryId) {
-        List<Object[]> rows = settingsRepository.findCostDeviationThresholdsByFactoryId(factoryId);
-        if (rows == null || rows.isEmpty()) return new Thresholds(null, null);
-        return new Thresholds((BigDecimal) rows.get(0)[0], (BigDecimal) rows.get(0)[1]);
+        CostDeviationThresholdService.Configured t = thresholdReader().configured(factoryId);
+        return new Thresholds(t.variancePct(), t.balancePct());
     }
 
     /** 工厂配的优先; 没配的那一类回退系统默认; 都没有 = null (没量到)。 */
     public EffectiveThresholds effectiveThresholds(String factoryId) {
-        Thresholds t = thresholds(factoryId);
-        BigDecimal v = t.variancePct() != null ? t.variancePct() : defaults.variancePct();
-        BigDecimal b = t.balancePct() != null ? t.balancePct() : defaults.balancePct();
-        boolean fromFactory = t.variancePct() != null || t.balancePct() != null;
-        boolean fromDefault = (t.variancePct() == null && v != null) || (t.balancePct() == null && b != null);
-        String source = fromFactory && fromDefault ? "MIXED" : fromFactory ? "FACTORY" : fromDefault ? "DEFAULT" : null;
-        return new EffectiveThresholds(new Thresholds(v, b), source);
+        CostDeviationThresholdService.Effective e = thresholdReader().effective(factoryId);
+        return new EffectiveThresholds(new Thresholds(e.variancePct(), e.balancePct()), e.source());
     }
 
     /** 传 null = 清除该项 (回到未配置)。 */

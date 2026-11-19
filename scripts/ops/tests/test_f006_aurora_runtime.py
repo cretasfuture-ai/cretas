@@ -198,11 +198,17 @@ class ProxyIntegration(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory();self.rt=m.Runtime(self.tmp.name)
         self.rt.start_child=mock.Mock();self.rt.stop_child=mock.Mock()
         self.frames=[dict(model=m.MODEL,message=dict(content='检查记录。'),done=False),dict(model=m.MODEL,message=dict(content=''),done=True,done_reason='stop',prompt_eval_count=12,eval_count=5)]
-        owner=self;self.drip=False;self.drip_connection=None
+        owner=self;self.drip=False;self.drip_connection=None;self.silent=False;self.delay=0
         class Upstream(http.server.BaseHTTPRequestHandler):
             def log_message(self,*a):pass
             def do_POST(self):
+                import time
                 owner.upstream_payload=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                if owner.silent or owner.delay:
+                    # Real llama-server: 200 headers at once, then no byte until prompt processing ends.
+                    self.send_response(200);self.send_header('Content-Type','text/event-stream');self.end_headers();self.wfile.flush()
+                    time.sleep(3 if owner.silent else owner.delay)
+                    if owner.silent:return
                 if owner.drip:
                     import time
                     owner.drip_connection=self.connection
@@ -221,6 +227,7 @@ class ProxyIntegration(unittest.TestCase):
                         parts.append(dict(model=x['model'],choices=[dict(index=0,delta=x.get('message',{}),finish_reason=None)]))
                 body=b''.join(('data: '+json.dumps(x)+'\n\n').encode() for x in parts)
                 if any(x.get('done') for x in owner.frames):body+=b'data: [DONE]\n\n'
+                if owner.delay:self.wfile.write(body);self.close_connection=True;return
                 self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
         self.upstream=http.server.ThreadingHTTPServer(('127.0.0.1',0),Upstream)
         self.gateway=http.server.ThreadingHTTPServer(('127.0.0.1',0),m.Handler);self.gateway.runtime=self.rt
@@ -382,6 +389,110 @@ class NativeSSEValidation(unittest.TestCase):
         import io
         for data in [b'x'*131073,b'{"model":"qwen3.8:27b"}\n',b'data: [DONE]\n']:
             with self.assertRaises(RuntimeError):list(m.translated_stream(io.BytesIO(data),lambda:None,False))
+
+FIXTURES=Path(__file__).with_name('fixtures')
+
+class RealLlamaServerSSE(unittest.TestCase):
+    """Byte-exact SSE recorded from the installed llama-server 0.40.6 on Aurora (2026-11-19), gateway profile and payload."""
+    def raw(self,think):return (FIXTURES/('llama-server-0.40.6-%s.sse'%('think' if think else 'nothink'))).read_bytes()
+    def run_raw(self,data,think):
+        import io
+        return list(m.translated_stream(io.BytesIO(data),lambda:None,think))
+    def test_real_streams_translate_to_a_complete_answer(self):
+        for think,usage in [(False,(285,70)),(True,(321,119))]:
+            with self.subTest(think=think):
+                rows=self.run_raw(self.raw(think),think)
+                self.assertEqual((rows[-1]['done'],rows[-1]['done_reason']),(True,'stop'))
+                self.assertEqual((rows[-1]['prompt_eval_count'],rows[-1]['eval_count']),usage)
+                self.assertTrue(''.join(r['message']['content'] for r in rows).strip())
+                self.assertEqual(bool(''.join(r['message'].get('thinking','') for r in rows[:-1])),think)
+    def test_real_heartbeat_stream_from_slow_prompt_processing_completes(self):
+        # Recorded under launchd Background QoS: four bare ':' SSE comments precede the first data frame.
+        data=(FIXTURES/'llama-server-0.40.6-nothink-heartbeat.sse').read_bytes()
+        self.assertTrue(data.startswith(b':\n\n:\n\n:\n\n:\n\ndata: '))
+        rows=self.run_raw(data,False)
+        self.assertEqual((rows[-1]['done'],rows[-1]['prompt_eval_count'],rows[-1]['eval_count']),(True,285,65))
+    def test_heartbeats_never_replace_a_terminal_or_carry_other_text(self):
+        data=(FIXTURES/'llama-server-0.40.6-nothink-heartbeat.sse').read_bytes()
+        done=data.rindex(b'data: [DONE]')
+        for name,variant in {'only_heartbeats':b':\n\n'*5,'heartbeat_instead_of_done':data[:done]+b':\n\n',
+                             'comment_text':b': ping\n\n'+data,'comment_with_payload':b':{"choices":[]}\n\n'+data}.items():
+            with self.subTest(variant=name),self.assertRaises(RuntimeError):self.run_raw(variant,False)
+    def test_truncated_or_altered_real_streams_still_fail_closed(self):
+        for think in (False,True):
+            data=self.raw(think);lines=data.split(b'\n')
+            done=data.rindex(b'data: [DONE]')
+            variants={
+                'no_done':data[:done],
+                'cut_mid_frame':data[:len(data)//2],
+                'cut_before_finish':b'\n'.join(lines[:len(lines)//2]),
+                'wrong_model':data.replace(b'"model":"qwen3.8:27b"',b'"model":"qwen3:8b"',1),
+                'length_finish':data.replace(b'"finish_reason":"stop"',b'"finish_reason":"length"'),
+                'no_usage':b'\n'.join(l for l in lines if b'"usage"' not in l),
+                'bad_usage_sum':data.replace(b'"total_tokens":',b'"total_tokens":1',1),
+                'error_frame':data[:done]+b'data: {"error":{"code":500,"message":"x"}}\n\n'+data[done:],
+                'non_sse_line':data[:done]+b'event: error\n\n'+data[done:],
+                'thinking_mismatch':data,
+            }
+            for name,variant in variants.items():
+                with self.subTest(think=think,variant=name):
+                    with self.assertRaises((RuntimeError,ValueError)):
+                        self.run_raw(variant,(not think) if name=='thinking_mismatch' else think)
+
+class UpstreamIdleBudget(ProxyIntegration):
+    """2026-11-19: llama-server sends no SSE byte until prompt processing ends (>25s under launchd
+    Background QoS); the private engine socket must wait for the remaining wall budget, never longer."""
+    def spy_timeouts(self):
+        real=m.http.client.HTTPConnection;seen=[]
+        def make(host,port,timeout=None,**kw):
+            if port==self.upstream.server_address[1]:seen.append(timeout)
+            return real(host,port,timeout=timeout,**kw)
+        return seen,mock.patch.object(m.http.client,'HTTPConnection',side_effect=make)
+    def test_engine_socket_waits_for_remaining_wall_budget(self):
+        seen,patch=self.spy_timeouts()
+        with patch:status,body=self.call()
+        self.assertEqual(status,200);self.assertIn(b'"done": true',body)
+        self.assertEqual(len(seen),1)
+        self.assertGreater(seen[0],m.REQUEST_SECONDS-2,'engine idle timeout shorter than the wall budget')
+        self.assertLessEqual(seen[0],m.REQUEST_SECONDS)
+    def test_silent_engine_never_outlives_the_wall_deadline(self):
+        import time
+        self.silent=True
+        with mock.patch.object(m,'REQUEST_SECONDS',.4):
+            start=time.monotonic();status,body=self.call();elapsed=time.monotonic()-start
+        self.assertLess(elapsed,1.5);self.assertEqual(status,200)
+        self.assertIn(b'"error"',body);self.assertNotIn(b'"done": true',body)
+        self.assertFalse(self.rt.request_lock.locked())
+    def test_slow_prompt_processing_inside_wall_budget_completes(self):
+        self.delay=.6
+        with mock.patch.object(m,'REQUEST_SECONDS',3):status,body=self.call()
+        self.assertEqual(status,200);self.assertIn(b'"done": true',body)
+
+class LaunchdSchedulingClass(unittest.TestCase):
+    def test_runtime_agent_is_not_background_qos(self):
+        # 2026-11-19 Aurora: llama-server inherits the agent's QoS. Under ProcessType Background a
+        # 285-token prompt took 143.7s (1.98 tok/s) vs 18.1s (15.8 tok/s) at default QoS, so no
+        # answer could fit the 50s wall deadline. Nice 10 and LowPriorityIO stay.
+        import plistlib
+        plist=plistlib.loads((Path(__file__).parents[1]/'launchd/com.cretas.f006-aurora-runtime.plist').read_bytes())
+        self.assertEqual(plist['ProcessType'],'Standard')
+        self.assertEqual((plist['Nice'],plist['LowPriorityIO']),(10,True))
+
+class FailureReasonLogging(ProxyIntegration):
+    def log_text(self):
+        for h in self.rt.logger.handlers:h.flush()
+        return (Path(self.tmp.name)/'state/runtime.log').read_text(encoding='utf-8')
+    def test_request_failed_names_the_validator_without_content(self):
+        self.frames[0]['model']='unexpected';self.call()
+        text=self.log_text()
+        self.assertIn('request_failed resource_breach=False reason=RuntimeError:native_frame_guard headers_sent=True',text)
+        for secret in ['检查记录','如何检查冷链',m.SYSTEM[:20]]:self.assertNotIn(secret,text)
+    def test_free_text_exception_messages_are_reduced_to_the_class(self):
+        self.assertEqual(m.failure_reason(TimeoutError('timed out')),'TimeoutError')
+        self.assertEqual(m.failure_reason(RuntimeError('native_truncated')),'RuntimeError:native_truncated')
+        self.assertEqual(m.failure_reason(ValueError('答案原文')),'ValueError')
+        self.assertEqual(m.failure_reason(m.json.JSONDecodeError('Expecting value','{"x":',4)),'JSONDecodeError')
+        self.assertEqual(m.failure_reason(BrokenPipeError(32,'Broken pipe')),'BrokenPipeError')
 
 class IncompleteConnectionShutdown(unittest.TestCase):
     def test_empty_partial_line_and_slow_headers_have_absolute_deadline(self):

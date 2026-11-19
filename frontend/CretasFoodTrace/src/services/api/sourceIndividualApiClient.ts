@@ -12,7 +12,7 @@ import type { LineageNode } from './traceabilityApiClient';
  *   GET    /api/mobile/{factoryId}/source-individuals/by-tag/{tagNumber}
  *   POST   /api/mobile/{factoryId}/source-individuals
  *   PUT    /api/mobile/{factoryId}/source-individuals/{id}
- *   DELETE /api/mobile/{factoryId}/source-individuals/{id}
+ *   POST   /api/mobile/{factoryId}/source-individuals/{id}/revoke   (撤销, body: { reason })
  *   POST   /api/mobile/{factoryId}/vision/verify
  *
  * ⛔ 本文件**不做**「失败时返回一个空的成功结果」那种兜底(核心原则 1)。
@@ -21,6 +21,9 @@ import type { LineageNode } from './traceabilityApiClient';
  */
 
 // ========== 类型 ==========
+
+/** 撤销原因最长字数, 与后端 RevokeSourceIndividualRequest 的 @Size(max = 255) 一致。 */
+export const REVOKE_REASON_MAX_LENGTH = 255;
 
 export type DnaVerificationStatus = 'UNSAMPLED' | 'SAMPLED' | 'MATCHED' | 'MISMATCH';
 
@@ -43,6 +46,10 @@ export interface SourceIndividual {
   damIndividualId?: string | null;
   extAttributes?: Record<string, unknown> | null;
   notes?: string | null;
+  /** 撤销信息: 仅撤销接口 / 已撤销列表返回时有值。 */
+  revokeReason?: string | null;
+  revokedBy?: string | null;
+  revokedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
   version?: number;
@@ -270,10 +277,24 @@ class SourceIndividualApiClient {
     return this.unwrap(response, '更新个体档案');
   }
 
-  async remove(id: string, factoryId?: string): Promise<void> {
-    await apiClient.delete<ApiEnvelope<void>>(
-      `${this.basePath(factoryId)}/${encodeURIComponent(id)}`
+  /**
+   * 撤销个体档案(取代旧的无原因删除)。原因必填、≤255 字, 走请求体。
+   * 已被原料批次引用或已作为父本/母本的个体, 后端回 409 并点名 —— 原样抛出, 由界面显示。
+   * ⛔ 空原因不发请求(后端也会 400, 但那条提示不告诉用户要填什么)。
+   */
+  async revoke(id: string, reason: string, factoryId?: string): Promise<SourceIndividual> {
+    const trimmed = (reason ?? '').trim();
+    if (!trimmed) {
+      throw new Error('请填写撤销原因');
+    }
+    if (trimmed.length > REVOKE_REASON_MAX_LENGTH) {
+      throw new Error(`撤销原因最长 ${REVOKE_REASON_MAX_LENGTH} 字`);
+    }
+    const response = await apiClient.post<ApiEnvelope<SourceIndividual>>(
+      `${this.basePath(factoryId)}/${encodeURIComponent(id)}/revoke`,
+      { reason: trimmed }
     );
+    return this.unwrap(response, '撤销个体档案');
   }
 
   /**

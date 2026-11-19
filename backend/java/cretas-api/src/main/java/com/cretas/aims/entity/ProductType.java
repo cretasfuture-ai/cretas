@@ -27,7 +27,8 @@ import org.hibernate.annotations.Where;
 @Entity
 @Table(name = "product_types",
        uniqueConstraints = {
-           @UniqueConstraint(columnNames = {"factory_id", "code"})
+           // 显式命名: GlobalExceptionHandler 按约束名识别 SKU 编码冲突 (#1873); 不命名时 Hibernate 生成随机名
+           @UniqueConstraint(name = "uk_product_types_factory_code", columnNames = {"factory_id", "code"})
        },
        indexes = {
            @Index(name = "idx_product_factory", columnList = "factory_id"),

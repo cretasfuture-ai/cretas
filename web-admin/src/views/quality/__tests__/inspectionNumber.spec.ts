@@ -35,4 +35,11 @@ describe('质检编号显示', () => {
     expect(defects).toContain('inspectionNumberLabel(source)');
     expect(defects).not.toContain('source.id.slice(0, 8)');
   });
+
+  it('不良列表「关联质检」列显示编号, 不再直接显示 qualityInspectionId', () => {
+    const defects = read('src/views/quality/defects/list.vue');
+    expect(defects).toContain('inspectionNumber: row.original.qualityInspectionNumber');
+    expect(defects).not.toContain("accessorKey: 'qualityInspectionId'");
+    expect(defects).not.toContain('关联质检 ID');
+  });
 });

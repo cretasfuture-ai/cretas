@@ -8,9 +8,9 @@ import { del, get, post, put } from '../request';
 import {
   DNA_STATUS_LABELS,
   createSourceIndividual,
-  deleteSourceIndividual,
   findSourceIndividualByTag,
   listSourceIndividuals,
+  revokeSourceIndividual,
   updateSourceIndividual,
 } from '../sourceIndividual';
 
@@ -40,8 +40,16 @@ describe('source individual API client', () => {
     await updateSourceIndividual('F006', 'abc', { species: 'CATTLE' });
     expect(mockedPut).toHaveBeenCalledWith('/F006/source-individuals/abc', { species: 'CATTLE' });
 
-    await deleteSourceIndividual('F006', 'abc');
-    expect(mockedDel).toHaveBeenCalledWith('/F006/source-individuals/abc');
+  });
+
+  it('revoke 走 POST /{id}/revoke 并把 trim 后的原因放请求体 —— ⛔ 不再发无原因的 DELETE', async () => {
+    await revokeSourceIndividual('F006', 'a/b', '  录入错误 ');
+    expect(mockedPost).toHaveBeenCalledWith(
+      '/F006/source-individuals/a%2Fb/revoke',
+      { reason: '录入错误' },
+      { _silent: true }
+    );
+    expect(mockedDel).not.toHaveBeenCalled();
   });
 
   it('url-encodes the tag number — tags are free text and may contain / or #', async () => {

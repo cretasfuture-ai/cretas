@@ -3164,6 +3164,13 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("比上月哪个成本涨了", "COST_QUERY");
         // 不收太宽的「哪个成本涨了」: 「哪个原料成本涨了」可能是原料价格趋势; 短语走向量相似, 越宽越容易抢别的意图
         phraseToIntentMapping.put("成本环比上月", "COST_QUERY");
+        // 成本构成 (2026-11-19 F006 实测「酱卤牛肉成本怎么构成」进了闲聊): 整句就是这些说法时直达; 带产品名的句子
+        // 剩余字数超限, 由复合句闸交给决策层 (描述见迁移 V20261120_21)。⛔ 不登记裸「成本构成」(「修改成本构成配置」类写操作会被抢)
+        phraseToIntentMapping.put("成本怎么构成", "COST_QUERY");
+        phraseToIntentMapping.put("成本是怎么构成的", "COST_QUERY");
+        phraseToIntentMapping.put("成本构成是什么", "COST_QUERY");
+        phraseToIntentMapping.put("成本是怎么算的", "COST_QUERY");
+        phraseToIntentMapping.put("成本怎么算的", "COST_QUERY");
         // AI 问答 BI 第 2 段 (只读, 2026-11-15 新增绑定; 不改既有意图): BOM 成本排行 / 本月销售额毛利 / 人工成本占比
         phraseToIntentMapping.put("BOM成本最高的产品", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("哪个产品BOM成本最高", "REPORT_BOM_COST_RANK");
@@ -8137,6 +8144,12 @@ public class IntentKnowledgeBase {
         // 短语只在解读指令那一句里找 (2026-11-18 经营分析页往来余额 AI 解读被「收款」判成写意图)。
         input = withoutGroundedDataBlock(input);
 
+        // 0. 「X月比Y月涨了…主要是哪个客户 / 产品带来的」换着说 (拉动 / 贡献 / 靠 / 涨的原因…) 也是同一个问题:
+        //    固定短语表只认几种说法, 换个说法就落到识别层被判成订单列表 (BP 问题 47, 11-19 追问答成 15 张订单)。
+        if (isGrowthAttribution(input)) {
+            return Optional.of(Map.entry(GROWTH_BREAKDOWN_PHRASES.get(0), "PRODUCT_SALES_RANKING"));
+        }
+
         // 1. Use the shared factory phrase map. Restaurant-specific mappings
         // were retired; the domain argument remains source-compatible.
         Map<String, String> businessSpecificMap = phraseToIntentMapping;
@@ -8172,6 +8185,24 @@ public class IntentKnowledgeBase {
             "哪个客户、哪个产品带来的", "哪个客户和哪个产品带来的", "哪个客户哪个产品带来的",
             "哪个客户带来的", "哪个产品带来的", "哪几个客户带来的", "哪些客户带来的", "哪些产品带来的",
             "哪个客户贡献的", "哪个产品贡献的", "哪些客户贡献的", "哪些产品贡献的");
+
+    private static final java.util.regex.Pattern GROWTH_MONTH_COMPARE = java.util.regex.Pattern.compile(
+            "(?:\\d{1,2}|[一二三四五六七八九十]{1,2})\\s*月(?:份)?\\s*(?:相)?比(?:起)?\\s*(?:\\d{1,2}|[一二三四五六七八九十]{1,2})\\s*月");
+    private static final java.util.regex.Pattern GROWTH_WORD = java.util.regex.Pattern.compile("涨|增|长|升|降|跌|下滑|减少|变化");
+    private static final java.util.regex.Pattern GROWTH_ATTRIBUTION_CUE = java.util.regex.Pattern.compile(
+            "带来|贡献|拉动|带动|导致|造成|推动|主要|哪个|哪些|哪几|原因|因为|靠");
+
+    /**
+     * 「X月比Y月 + 涨跌词 + 客户 / 产品 + 归因词」: 问某两个月之间变化来自哪些客户 / 产品。
+     * 三个条件缺一不可 (阴性: 「10月比9月的销售订单」没有涨跌词与归因, 「10月比9月涨了多少」没问客户 / 产品)。
+     */
+    public static boolean isGrowthAttribution(String input) {
+        if (input == null) return false;
+        return GROWTH_MONTH_COMPARE.matcher(input).find()
+                && GROWTH_WORD.matcher(input).find()
+                && (input.contains("客户") || input.contains("产品"))
+                && GROWTH_ATTRIBUTION_CUE.matcher(input).find();
+    }
 
     public static boolean isReportWorkSentence(String input) {
         return input != null && REPORT_WORK_SENTENCE.matcher(input.trim().toLowerCase()).matches();

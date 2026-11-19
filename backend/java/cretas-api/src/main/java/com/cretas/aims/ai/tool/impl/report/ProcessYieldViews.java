@@ -3,6 +3,7 @@ package com.cretas.aims.ai.tool.impl.report;
 import com.cretas.aims.dto.yield.MaterialBalanceTableDTO;
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.shortage.CostDeviationThresholdService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
 
 import java.math.BigDecimal;
@@ -33,6 +34,34 @@ final class ProcessYieldViews {
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     static final String BASIS = "口径：出成率 = 工序产出合计 ÷ 投入合计；损耗率 = 1 − 出成率；"
             + "异常批次 = 该批次该工序的物料平衡未解释差额占投入超过黄线（默认 5%，超 15% 为红，按本厂配置）。";
+
+    /**
+     * 本次回答实际用的异常线写进口径: 与「发现的问题」页同一个本厂损耗告警阈值时写明来源,
+     * 没配置才是物料平衡默认 (BP 问题 28: 两处口径不一致, 页上 3% 已立单, 这里 5% 答没有异常)。
+     */
+    static String basis(Balance b) {
+        if (b.alertSource() == null) {
+            return BASIS;
+        }
+        String source = CostDeviationThresholdService.FACTORY.equals(b.alertSource())
+                ? "本厂在「发现的问题」配置的损耗告警阈值"
+                : "「发现的问题」损耗告警的系统默认阈值，本厂未单独配置";
+        return "口径：出成率 = 工序产出合计 ÷ 投入合计；损耗率 = 1 − 出成率；"
+                + "异常批次 = 该批次该工序的物料平衡未解释差额占投入超过 " + pct(b.warnPct())
+                + "（" + source + "，与问题页同一个来源）。";
+    }
+
+    /**
+     * 「发现的问题」损耗告警线: pct 百分数 (如 3), source = FACTORY / DEFAULT (见 {@link CostDeviationThresholdService});
+     * NONE = 问题页也没有阈值, 用物料平衡自己的阈值并照实说明。
+     */
+    record AlertLine(BigDecimal pct, String source) {
+        static final AlertLine NONE = new AlertLine(null, null);
+
+        boolean present() {
+            return pct != null && pct.signum() > 0;
+        }
+    }
 
     /** 一条异常 (批次, 工序)。 */
     record Abnormal(String batchNumber, String productName, String processName, String level,
@@ -80,11 +109,23 @@ final class ProcessYieldViews {
         return yield.aggregateByProcess(factoryId, s, e, scope.typeId());
     }
 
-    record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows) {}
+    record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows,
+                   String alertSource) {}
 
     static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
                            ProductScope scope) {
-        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end);
+        return balance(service, factoryId, start, end, scope, AlertLine.NONE);
+    }
+
+    /**
+     * @param alert 「发现的问题」损耗告警阈值 (百分数, 如 3) 与来源; 有值时以它为异常线, 与问题页同一个来源;
+     *              NONE = 没有, 用本厂物料平衡阈值 (默认 5%)。BP 问题 28: 问题页对熟制杀菌偏离 3.7% (阈值 3%) 已立单,
+     *                 这里却按 5% 答「没有异常」。
+     */
+    static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
+                           ProductScope scope, AlertLine alert) {
+        BigDecimal alertPct = alert != null && alert.present() ? alert.pct() : null;
+        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end, alertPct);
         List<Abnormal> out = new ArrayList<>();
         int incomparable = 0;
         for (MaterialBalanceTableDTO.PlanBlock block : bb.blocks()) {
@@ -101,7 +142,7 @@ final class ProcessYieldViews {
             }
         }
         out.sort(Comparator.comparing((Abnormal a) -> a.deviationPct() == null ? BigDecimal.ZERO : a.deviationPct()).reversed());
-        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable);
+        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct != null ? alert.source() : null);
     }
 
     static boolean nameMatches(String processName, String keyword) {
@@ -157,8 +198,8 @@ final class ProcessYieldViews {
     // ---------------- 损耗异常 ----------------
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
                                            LocalDate end, int limit, String processKeyword, ProductScope scope,
-                                           String[] textOut) {
-        Balance b = balance(service, factoryId, start, end, scope);
+                                           String[] textOut, AlertLine alert) {
+        Balance b = balance(service, factoryId, start, end, scope, alert);
         List<String> known = names(null, b);
         List<Abnormal> all = new ArrayList<>();
         for (Abnormal a : b.abnormal()) {
@@ -175,7 +216,7 @@ final class ProcessYieldViews {
         data.put("abnormalCount", all.size());
         data.put("incomparableCount", b.incomparableRows());
         data.put("rows", rows);
-        data.put("basis", BASIS);
+        data.put("basis", basis(b));
 
         StringBuilder sb = new StringBuilder();
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
@@ -198,7 +239,7 @@ final class ProcessYieldViews {
         if (b.incomparableRows() > 0) {
             sb.append("\n另有 ").append(b.incomparableRows()).append(" 个批次工序单位不可比或没登记投入，没算偏差。");
         }
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(b));
         textOut[0] = sb.toString();
         return data;
     }
@@ -206,13 +247,13 @@ final class ProcessYieldViews {
     // ---------------- 某工序近期出成率 ----------------
     static Map<String, Object> processTrend(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
                                             LocalDate start, LocalDate end, String processKeyword, ProductScope scope,
-                                            String[] textOut) {
+                                            String[] textOut, AlertLine alert) {
         long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
         LocalDate prevEnd = start.minusDays(1);
         LocalDate prevStart = prevEnd.minusDays(days - 1);
         List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
         List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
-        Balance bal = balance(balance, factoryId, start, end, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope, alert);
         List<String> known = names(curAll, bal);
         known.addAll(names(prev, bal));
         List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
@@ -235,7 +276,7 @@ final class ProcessYieldViews {
         data.put("productKeyword", scope.keyword());
         data.put("productFilteredYield", scope.active() && !scope.yieldUnfiltered());
         data.put("rows", rows);
-        data.put("basis", BASIS);
+        data.put("basis", basis(bal));
 
         StringBuilder sb = new StringBuilder();
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
@@ -262,7 +303,7 @@ final class ProcessYieldViews {
             appendAbnormalLines(sb, bal, rows.stream().map(r -> String.valueOf(r.get("processName"))).toList(), known);
         }
         sb.append(scope.note());
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(bal));
         textOut[0] = sb.toString();
         return data;
     }
@@ -270,10 +311,11 @@ final class ProcessYieldViews {
     // ---------------- 本月 vs 上月: 掉在哪道工序 ----------------
     static Map<String, Object> processCompare(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
                                               LocalDate start, LocalDate end, LocalDate prevStart, LocalDate prevEnd,
-                                              String processKeyword, ProductScope scope, String[] textOut) {
+                                              String processKeyword, ProductScope scope, String[] textOut,
+                                              AlertLine alert) {
         List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
         List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
-        Balance bal = balance(balance, factoryId, start, end, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope, alert);
         List<String> known = names(curAll, bal);
         known.addAll(names(prev, bal));
         List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
@@ -313,7 +355,7 @@ final class ProcessYieldViews {
         data.put("biggestDropProcess", worst == null ? null : worst.get("processName"));
         data.put("biggestDropBatches", worstBatches);
         data.put("notComparableProcessCount", notComparable);
-        data.put("basis", BASIS);
+        data.put("basis", basis(bal));
 
         StringBuilder sb = new StringBuilder();
         sb.append(scope.active() ? "「" + scope.keyword() + "」" : "").append("本期 ").append(start).append(" 至 ").append(end).append(" 对比上期 ").append(prevStart).append(" 至 ")
@@ -348,7 +390,7 @@ final class ProcessYieldViews {
             }
         }
         sb.append(scope.note());
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(bal));
         textOut[0] = sb.toString();
         return data;
     }

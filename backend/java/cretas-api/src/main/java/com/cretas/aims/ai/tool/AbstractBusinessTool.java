@@ -285,10 +285,48 @@ public abstract class AbstractBusinessTool extends AbstractTool {
             Map.entry("supplierId", "供应商"),
             Map.entry("warningDays", "预警天数"),
             Map.entry("page", "页码"),
-            Map.entry("size", "每页数量")
+            Map.entry("size", "每页数量"),
+            Map.entry("productTypeId", "产品"),
+            Map.entry("productId", "产品"),
+            Map.entry("productName", "产品"),
+            Map.entry("recipeId", "配方"),
+            Map.entry("bomRecipeId", "配方"),
+            Map.entry("customerId", "客户"),
+            Map.entry("orderId", "订单"),
+            Map.entry("productionBatchId", "生产批次"),
+            Map.entry("materialBatchId", "原料批次"),
+            Map.entry("equipmentId", "设备"),
+            Map.entry("deviceId", "设备"),
+            Map.entry("employeeId", "员工"),
+            Map.entry("userId", "员工")
         );
 
-        return displayNames.getOrDefault(paramName, paramName);
+        String known = displayNames.get(paramName);
+        if (known != null) {
+            return known;
+        }
+        // 没登记的字段名 (全是英文字母 / 数字) 不原样发给用户: 取 schema 里写的中文说明的第一段, 再没有就说「相关信息」
+        if (paramName == null || !paramName.matches("[A-Za-z][A-Za-z0-9_.]*")) {
+            return paramName;
+        }
+        return schemaDescriptionLabel(paramName);
+    }
+
+    /** schema 里该参数的中文说明, 截到第一个分隔符 (— 。 ； ( 空格) 之前, 过长或没有中文就用「相关信息」。 */
+    private String schemaDescriptionLabel(String paramName) {
+        try {
+            Object props = getParametersSchema() == null ? null : getParametersSchema().get("properties");
+            if (props instanceof Map<?, ?> pm && pm.get(paramName) instanceof Map<?, ?> spec
+                    && spec.get("description") instanceof String desc) {
+                String head = desc.split("[—。；;(（,，\\s]", 2)[0].trim();
+                if (!head.isEmpty() && head.length() <= 12 && head.matches(".*[\u4e00-\u9fa5].*")) {
+                    return head;
+                }
+            }
+        } catch (RuntimeException ignored) {
+            // 取不到说明就用通用说法, 不影响追问本身
+        }
+        return "相关信息";
     }
 
     /**

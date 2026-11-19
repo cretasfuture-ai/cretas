@@ -116,4 +116,40 @@ class ExternalDataIssueDetectorContractTest {
                 row("2026-11-10", "B", "拆包", "1", "kg"));
         assertThat(ExternalDataIssueDetector.detect(rows)).isEmpty();
     }
+
+    /** LSM-BLACKLAKE-DQ-MIXUNIT: 同一报工日×产品×工序里 kg 与 盒 并存 (对照页把它们拼成「kg/盒」), 清单必须在这一天出条。 */
+    @Test
+    void sameDayKgAndBoxIsListedOnThatDay() {
+        List<Row> rows = new ArrayList<>();
+        rows.add(row("2026-11-16", "香嫩牛肉丝", "砍排修油", "1700", "kg"));
+        rows.add(row("2026-11-16", "香嫩牛肉丝", "砍排修油", "71.73", "盒"));
+        rows.add(row("2026-11-17", "香嫩牛肉丝", "砍排修油", "732.93", "kg"));
+        List<Issue> out = ExternalDataIssueDetector.detect(rows);
+        assertThat(out).hasSize(1);
+        assertThat(out.get(0).reportDate()).isEqualTo(LocalDate.parse("2026-11-16"));
+        assertThat(out.get(0).type()).isEqualTo("MIXED_UNIT");
+        assertThat(out.get(0).unit()).isEqualTo("盒");
+        assertThat(out.get(0).suggestion()).contains("kg");
+    }
+
+    /** 只有这一天、kg 与 盒 天数一样多: 两行都列出, 不硬选主单位。 */
+    @Test
+    void sameDayKgAndBoxWithNoOtherDaysListsBothRows() {
+        List<Row> rows = List.of(
+                row("2026-11-16", "香嫩牛肉丝", "砍排修油", "1700", "kg"),
+                row("2026-11-16", "香嫩牛肉丝", "砍排修油", "71.73", "盒"));
+        List<Issue> out = ExternalDataIssueDetector.detect(rows);
+        assertThat(out).hasSize(2);
+        assertThat(out).allMatch(i -> i.type().equals("MIXED_UNIT") && i.reportDate().equals(LocalDate.parse("2026-11-16")));
+    }
+
+    /** 阴性对照: 同一天同一单位 (含 kg/公斤 写法) 拆成多行, 不出条。 */
+    @Test
+    void sameDaySingleUnitSplitAcrossRowsIsNotFlagged() {
+        List<Row> rows = List.of(
+                row("2026-11-16", "香嫩牛肉丝", "砍排修油", "1700", "kg"),
+                row("2026-11-16", "香嫩牛肉丝", "砍排修油", "71.73", "公斤"),
+                row("2026-11-17", "香嫩牛肉丝", "砍排修油", "732.93", "kg"));
+        assertThat(ExternalDataIssueDetector.detect(rows)).isEmpty();
+    }
 }

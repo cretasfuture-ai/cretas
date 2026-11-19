@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.shortage.CostDeviationThresholdService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -38,6 +39,13 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBalanceService materialBalanceService;
+
+    /**
+     * 「发现的问题」页损耗异常的告警阈值来源; 问句里的「损耗异常」与它同一个线 (BP 问题 28)。
+     * 只读阈值配置数值与来源 (受控数据闸 INTERNAL), 不经 CostDeviationScanService (它还返回偏差业务数据)。
+     */
+    @Autowired(required = false)
+    private CostDeviationThresholdService costDeviationThresholdService;
 
     @Autowired(required = false)
     private ProcessSecretLlmCostScope llmCostScope = ProcessSecretLlmCostScope.standalone();
@@ -267,11 +275,13 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         if (params.get("limit") instanceof Number n && n.intValue() > 0) limit = Math.min(n.intValue(), MAX_LIMIT);
         String[] msg = new String[1];
         Map<String, Object> data;
+        ProcessYieldViews.AlertLine alert = alertLine(factoryId);
         if (view == View.LOSS_ANOMALY) {
-            data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg);
+            data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg,
+                    alert);
         } else if (view == View.PROCESS) {
             data = ProcessYieldViews.processTrend(yieldAnalysisService, materialBalanceService, factoryId, start, end,
-                    processKeyword, scope, msg);
+                    processKeyword, scope, msg, alert);
         } else {
             LocalDate s = start;
             LocalDate e = end;
@@ -292,9 +302,20 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                 ps = pe.minusDays(days - 1);
             }
             data = ProcessYieldViews.processCompare(yieldAnalysisService, materialBalanceService, factoryId, s, e, ps, pe,
-                    processKeyword, scope, msg);
+                    processKeyword, scope, msg, alert);
         }
         return buildSimpleResult(msg[0], data);
+    }
+
+    /**
+     * 「发现的问题」损耗(物料平衡)告警阈值与来源: 工厂配的 (FACTORY) 优先, 其次系统默认 (DEFAULT), 都没有 = NONE
+     * (NONE 时用物料平衡自己的阈值, 回答里写明用的是哪个; 默认值标明是默认, 不冒充本厂配置)。
+     */
+    private ProcessYieldViews.AlertLine alertLine(String factoryId) {
+        if (costDeviationThresholdService == null) return ProcessYieldViews.AlertLine.NONE;
+        CostDeviationThresholdService.BalanceAlert a = costDeviationThresholdService.balanceAlert(factoryId);
+        return a == null || a.pct() == null ? ProcessYieldViews.AlertLine.NONE
+                : new ProcessYieldViews.AlertLine(a.pct(), a.source());
     }
 
     /**

@@ -183,8 +183,9 @@ public class AutonomousToolRunner {
                     "AUTONOMOUS_GRANT", consumed.get().grantId(), "EXECUTE", safeParams, Map.of(), Map.of(),
                     (int) DEADLINE.toSeconds()));
             idempotencyKey = Optional.of(consumed.get().idempotencyKey());
+            // 认领绑业务对象: 凭据按 (AUTONOMOUS_GRANT, 本次消费的授权) 签发
             proof = Optional.of(new ConfirmationProof(token.getToken(), token.getCommandDigest(),
-                    Instant.now().plus(DEADLINE)));
+                    Instant.now().plus(DEADLINE), "AUTONOMOUS_GRANT", consumed.get().grantId()));
         }
         ToolExecutionCommand command = new ToolExecutionCommand(
                 source.name().toLowerCase() + "-" + UUID.randomUUID(),

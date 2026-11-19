@@ -138,9 +138,14 @@ public class OperatingReportCodec {
     private static final java.util.regex.Pattern DUP_PERCENT = java.util.regex.Pattern.compile("([%％])(?:[ \\u00a0]*[%％])+");
     private static final java.util.regex.Pattern DUP_YUAN = java.util.regex.Pattern.compile("元(?:[ \\u00a0]*元)+");
 
-    /** 模型常在 {{占位}} 后再写一遍单位 (占位值已带单位) —— 兜底去掉重复的 % 与 元。 */
+    /** 通用重复单位: 仅当紧跟数字时才去重 (避免误伤「天天」「万万」这类正常词)。 */
+    private static final java.util.regex.Pattern DUP_UNIT = java.util.regex.Pattern.compile(
+            "(?<=[0-9])(万元|万|元|个|天|次|kg|件|单|批|份)(?:[ \\u00a0]*\\1)+");
+
+    /** 模型常在 {{占位}} 后再写一遍单位 (占位值已带单位) —— 兜底去掉重复的 % 与常见计量单位 (元/万元/万/个/天/次/kg/件/单/批/份)。 */
     static String collapseDuplicateUnits(String text) {
-        return DUP_YUAN.matcher(DUP_PERCENT.matcher(text).replaceAll("$1")).replaceAll("元");
+        String t = DUP_YUAN.matcher(DUP_PERCENT.matcher(text).replaceAll("$1")).replaceAll("元");
+        return DUP_UNIT.matcher(t).replaceAll("$1");
     }
 
     /** 占位符换成真实指标值; 引用的指标已被遮 / 无值 → 返回 empty (整条不显示)。 */
@@ -259,9 +264,64 @@ public class OperatingReportCodec {
             var metric = metrics.get(insight.metricId());
             items.add((metric == null ? "" : label(metric.label()) + "：") + actionText(insight.action()));
         }
+        items.addAll(signalGaps(metrics));
         text.append("\n## 跟进分析\n");
         if (items.isEmpty()) text.append("- 本期数据没有需要专门跟进的缺口，可按日常节奏复核销售、回款与库存。\n");
         else for (String item : items) text.append("- ").append(item).append('\n');
+    }
+
+    private static java.math.BigDecimal val(Map<String, OperatingReportSnapshot.Metric> metrics, String id) {
+        var m = metrics.get(id);
+        return m == null ? null : m.value();
+    }
+
+    private static java.math.BigDecimal positive(Map<String, OperatingReportSnapshot.Metric> metrics, String id) {
+        var v = val(metrics, id);
+        return v != null && v.signum() > 0 ? v : null;
+    }
+
+    /** 跟进分析的缺口信号: 只读报告已算出的指标 (逾期应收 / 成本缺失 / 业务员与地址缺口 / 负毛利产品), 不新造数字; 没有信号返回空。 */
+    static java.util.List<String> signalGaps(Map<String, OperatingReportSnapshot.Metric> metrics) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        java.math.BigDecimal overdue = null;
+        for (String b : new String[]{"days1_30", "days31_60", "days61_90", "days91_120", "days120plus"}) {
+            var v = val(metrics, "aging." + b);
+            if (v != null) overdue = overdue == null ? v : overdue.add(v);
+        }
+        if (overdue != null && overdue.signum() > 0) {
+            var over90 = positive(metrics, "aging.over90");
+            out.add("逾期应收：共 " + display(overdue, "元") + " 元" + (over90 == null ? "" : "，其中 90 天以上 " + display(over90, "元") + " 元")
+                    + "，" + actionText(OperatingReportSnapshot.Action.FOLLOW_UP_COLLECTION));
+        }
+        var cost = metrics.get("margin.cost");
+        if (cost != null && cost.value() == null && !PROCESS_SECRET_MASK.equals(cost.missingReason()) && !CO_PRODUCT_MASK.equals(cost.missingReason())) {
+            out.add("产品成本整体缺失，毛利无法确认：" + actionText(OperatingReportSnapshot.Action.VERIFY_COST));
+        } else if (cost != null && cost.coverage() != null && cost.coverage().compareTo(java.math.BigDecimal.ONE) < 0) {
+            out.add("成本覆盖率仅 " + cost.coverage().multiply(java.math.BigDecimal.valueOf(100)).setScale(1, java.math.RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+                    + "%，未覆盖部分的毛利不可确认：" + actionText(OperatingReportSnapshot.Action.VERIFY_COST));
+        }
+        var unassigned = positive(metrics, "salesperson.unassigned");
+        var unassignedOrders = positive(metrics, "sales.unassigned");
+        if (unassigned != null || unassignedOrders != null) {
+            out.add("业务员归属缺口：" + (unassignedOrders == null ? "" : "未填业务员订单 " + display(unassignedOrders, "单") + " 单")
+                    + (unassigned == null ? "" : (unassignedOrders == null ? "" : "，") + "销售额 " + display(unassigned, "元") + " 元")
+                    + "，" + actionText(OperatingReportSnapshot.Action.VERIFY_SALESPERSON));
+        }
+        var noAddress = positive(metrics, "province.noAddress");
+        var unrecognized = positive(metrics, "province.unrecognized");
+        if (noAddress != null || unrecognized != null) {
+            out.add("地区归属缺口：" + (noAddress == null ? "" : "地址未填销售额 " + display(noAddress, "元") + " 元")
+                    + (unrecognized == null ? "" : (noAddress == null ? "" : "，") + "无法识别地区销售额 " + display(unrecognized, "元") + " 元")
+                    + "，" + actionText(OperatingReportSnapshot.Action.VERIFY_ADDRESS));
+        }
+        java.util.LinkedHashSet<String> negative = new java.util.LinkedHashSet<>();
+        for (var m : metrics.values()) {
+            if (m.id() != null && (m.id().startsWith("marginLow.") || m.id().startsWith("marginHigh.")) && m.id().endsWith(".rate")
+                    && m.value() != null && m.value().signum() < 0)
+                negative.add(m.label() + " " + display(m.value(), "%") + "%");
+        }
+        if (!negative.isEmpty()) out.add("产品毛利率为负：" + String.join("、", negative) + "，" + actionText(OperatingReportSnapshot.Action.REVIEW_PROFIT));
+        return out;
     }
 
     private static String actionText(OperatingReportSnapshot.Action action) {

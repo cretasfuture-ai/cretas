@@ -68,7 +68,7 @@ class IntentExecutionOrchestratorReadWriteModeTest {
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any()))
-                .thenReturn(ToolDispatchService.ConfirmStateCheck.ok());
+                .thenReturn(com.cretas.aims.ai.tool.gateway.PreviewStateRecheck.ConfirmStateCheck.ok());
         tokenService = mock(PreviewTokenService.class);
         orchestrator = new IntentExecutionOrchestrator(
                 aiIntentService,

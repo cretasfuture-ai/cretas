@@ -2,6 +2,7 @@ package com.cretas.aims.service.impl;
 
 import com.cretas.aims.ai.client.PythonLLMClient;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.ToolParameterGroups;
 import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.config.IntentSlotConfiguration;
 import com.cretas.aims.dto.ai.IntentExecuteRequest;
@@ -198,12 +199,24 @@ public class SlotFillingServiceImpl implements SlotFillingService {
         Map<String, Object> schema = tool.getParametersSchema();
         if (schema == null) return slots;
 
-        List<String> required = (List<String>) schema.get("required");
+        List<String> required = schema.get("required") instanceof List<?> r
+                ? (List<String>) r : new ArrayList<>();
         Map<String, Object> properties = (Map<String, Object>) schema.get("properties");
 
-        if (required == null || properties == null) return slots;
+        if (properties == null) return slots;
 
-        for (String paramName : required) {
+        // 「至少给一个」组 (批次号/销售单号, 客户编号/客户名称): 组内参数都要抽, 且单个都不是必填 ——
+        // 组里一个都没给由工具自己追问 (validateRequiredParams); 只对 required 里那一个追问, 会把
+        // 「追溯销售单 X」反问成「请提供生产批次号」(BP 问题 39)。
+        java.util.Set<String> anyOfMembers = ToolParameterGroups.memberNames(schema);
+        List<String> names = new ArrayList<>(required);
+        for (String member : anyOfMembers) {
+            if (!names.contains(member)) {
+                names.add(member);
+            }
+        }
+
+        for (String paramName : names) {
             Map<String, Object> propDef = (Map<String, Object>) properties.get(paramName);
             if (propDef == null) continue;
 
@@ -219,7 +232,7 @@ public class SlotFillingServiceImpl implements SlotFillingService {
                     .label(entityLabel != null ? entityLabel
                             : (description != null ? description : getParameterLabel(paramName)))
                     .type(mapJsonTypeToSlotType(type))
-                    .required(true)
+                    .required(!anyOfMembers.contains(paramName))
                     .validationHint(getParameterValidationHint(paramName))
                     .build();
             slots.add(slot);

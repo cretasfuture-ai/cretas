@@ -181,10 +181,8 @@ public class WarehouseInventoryController {
             Map<String, BigDecimal> unsettledByBatch =
                     materialBatchService.getUnsettledConsumptionByBatchIds(effectiveFactoryId, materialIds);
             for (MaterialBatchDTO dto : materials) {
-                BigDecimal unsettled = unsettledByBatch.get(dto.getId());
-                if (unsettled != null) {
-                    dto.setUnsettledConsumption(unsettled);
-                }
+                // 已查询: 没有未结单预扣的批次预扣量就是 0(不是未知)。
+                dto.setUnsettledConsumption(unsettledByBatch.getOrDefault(dto.getId(), BigDecimal.ZERO));
             }
         }
 

@@ -138,7 +138,7 @@ class MaterialIssueEntryGateContractTest {
 
     private MaterialBatchServiceImpl realWarehouseService() {
         MaterialBatchServiceImpl svc = new MaterialBatchServiceImpl(batches, null, null, mock(MaterialBatchMapper.class),
-                null, null, null, null);
+                org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
         ReflectionTestUtils.setField(svc, "materialConsumptionRepository", consumptions);
         ReflectionTestUtils.setField(svc, "materialTypeRepository", materialTypes);
         ReflectionTestUtils.setField(svc, "productionPlanRepository", plans);

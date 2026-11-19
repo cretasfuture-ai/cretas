@@ -30,6 +30,11 @@ public class ToolConfirmationLease {
         if (!constantTimeEquals(proof.commandDigest(), expectedCommandDigest)) {
             return Optional.empty();
         }
+        // The claim is bound to the business object the caller executes against; a proof that
+        // does not say which object is never claimed (fail-closed, nothing is consumed).
+        if (!proof.bindsSubject()) {
+            return Optional.empty();
+        }
         Long userId;
         try {
             userId = Long.valueOf(currentPrincipal.principalId());
@@ -37,8 +42,9 @@ public class ToolConfirmationLease {
             return Optional.empty();
         }
 
-        PreviewTokenService.ClaimResult claim = previewTokenService.claimToken(
-                proof.proofToken(), currentPrincipal.tenantId(), userId, expectedCommandDigest);
+        PreviewTokenService.ClaimResult claim = previewTokenService.claimTokenForSubject(
+                proof.proofToken(), currentPrincipal.tenantId(), userId, expectedCommandDigest,
+                proof.entityType(), proof.entityId());
         if (!claim.isSuccess() || claim.getToken() == null || claim.getClaimId() == null
                 || claim.getClaimId().isBlank() || claim.getParameters() == null) {
             return Optional.empty();
@@ -51,14 +57,17 @@ public class ToolConfirmationLease {
                 && command.toolName().equals(token.getToolName())
                 && command.expectedDescriptorVersion().equals(token.getDescriptorVersion())
                 && command.mode() == token.getExecutionMode()
-                && constantTimeEquals(expectedCommandDigest, token.getCommandDigest());
+                && constantTimeEquals(expectedCommandDigest, token.getCommandDigest())
+                && proof.entityType().equals(token.getEntityType())
+                && java.util.Objects.equals(blankToNull(proof.entityId()), blankToNull(token.getEntityId()));
         if (!exactBinding) {
             previewTokenService.resolveClaim(
                     proof.proofToken(), claim.getClaimId(), false, "gateway binding rejected");
             return Optional.empty();
         }
         return Optional.of(new Lease(
-                proof.proofToken(), claim.getClaimId(), persistedParameters.deepCopy()));
+                proof.proofToken(), claim.getClaimId(), persistedParameters.deepCopy(),
+                token.getCurrentValues(), token.getEntityType()));
     }
 
     public boolean resolve(Lease lease, boolean success) {
@@ -67,6 +76,10 @@ public class ToolConfirmationLease {
                 lease.claimId(),
                 success,
                 success ? "gateway execution completed" : "gateway execution failed");
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
     }
 
     private static boolean constantTimeEquals(String left, String right) {
@@ -78,9 +91,20 @@ public class ToolConfirmationLease {
                 right.getBytes(StandardCharsets.US_ASCII));
     }
 
-    public record Lease(String proofToken, String claimId, JsonNode persistedParameters) {
+    /**
+     * @param recordedPriorState the business-state snapshot (JSON) the issuer recorded at preview
+     *                           time, or {@code null}/blank/{@code "{}"} when none was recorded; the
+     *                           gateway re-checks it before executing ({@link PreviewStateRecheck}).
+     * @param issuedEntityType   the object type the token was issued for (decides the empty-snapshot exemption)
+     */
+    public record Lease(String proofToken, String claimId, JsonNode persistedParameters,
+                        String recordedPriorState, String issuedEntityType) {
         public Lease {
             persistedParameters = persistedParameters.deepCopy();
+        }
+
+        public Lease(String proofToken, String claimId, JsonNode persistedParameters) {
+            this(proofToken, claimId, persistedParameters, null, null);
         }
 
         @Override
