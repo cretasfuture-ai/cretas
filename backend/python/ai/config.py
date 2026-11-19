@@ -62,7 +62,7 @@ class AIConfig:
     #   "legacy" = 旧链 Luna → qwen 读 logprobs → _result_from_probs (回滚用)。
     # 退路自己的阈值与 Luna 的 decision_auto_threshold 分开, 见 fallback_combo.FallbackThresholds (AI_DECISION_FALLBACK_*)。
     decision_fallback: str = "combo"
-    # Luna 主路径的结论口径 (INTENT-DISTILL-20261111 第三批, 2026-11-14, 按史浩禾 39 题校准):
+    # Luna 主路径的结论口径 (INTENT-DISTILL-20261111 第三批, 2026-11-14, 按史浩禾 39 题校准; 保守档 2026-11-19 起改按他的 300 题重校):
     #   "v3" = Choice 之外并行问 Luna 一道判断题「这一轮是否必须先问」(decision.ASK_PREDICATE_RULES);
     #          判断题 >= luna_ask_threshold ⇒ 先问; 否则只读目标首选 >= luna_read_threshold 或领先第二名
     #          >= luna_margin 就按默认值直接办 (Java 写明默认), 写目标首选 >= luna_write_threshold 才交写确认卡。
@@ -74,7 +74,7 @@ class AIConfig:
     # (conservative 保守 = 上面的 v3 / aggressive 激进 = 按 Steve 300 题校的规则, 默认档)。全局开关优先:
     #   v1 = 旧口径 (回滚); v3 / conservative = 全部工厂保守; v4 / aggressive = 全部工厂激进。
     decision_luna_policy: str = "factory"
-    luna_ask_threshold: float = 0.6  # 保守档 (v3)
+    luna_ask_threshold: float = 0.3  # 保守档; 2026-11-19 按史浩禾 300 题重校 (原 0.6 按 39 题定), 见 tests/fixtures/ask_policy
     luna_ask_threshold_aggressive: float = 0.4  # 激进档; 来由见 steve300-calibrate-20261114.md
     luna_read_threshold: float = 0.15
     luna_margin: float = 0.3
@@ -118,7 +118,7 @@ class AIConfig:
             decision_choice_below=float(os.environ.get("AI_DECISION_CHOICE_BELOW", "0.8")),
             decision_fallback=(os.environ.get("AI_DECISION_FALLBACK", "combo").strip().lower() or "combo"),
             decision_luna_policy=(os.environ.get("AI_DECISION_LUNA_POLICY", "factory").strip().lower() or "factory"),
-            luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.6")),
+            luna_ask_threshold=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD", "0.3")),
             luna_ask_threshold_aggressive=float(os.environ.get("AI_DECISION_LUNA_ASK_THRESHOLD_AGGRESSIVE", "0.4")),
             luna_read_threshold=float(os.environ.get("AI_DECISION_LUNA_READ_THRESHOLD", "0.15")),
             luna_margin=float(os.environ.get("AI_DECISION_LUNA_MARGIN", "0.3")),

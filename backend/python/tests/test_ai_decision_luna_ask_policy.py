@@ -193,4 +193,4 @@ def test_env_selects_policy_and_thresholds(monkeypatch):
     monkeypatch.delenv("AI_DECISION_LUNA_ASK_THRESHOLD")
     cfg = AIConfig.from_env()
     assert (cfg.decision_luna_policy, cfg.luna_ask_threshold, cfg.luna_read_threshold, cfg.luna_margin,
-            cfg.luna_write_threshold) == ("factory", 0.6, 0.15, 0.3, 0.4)
+            cfg.luna_write_threshold) == ("factory", 0.3, 0.15, 0.3, 0.4)  # 保守档先问门槛 0.3: 2026-11-19 按史浩禾 300 题重校
