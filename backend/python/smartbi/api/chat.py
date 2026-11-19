@@ -4231,6 +4231,29 @@ def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
     chart_data = data[:50] if len(data) > 50 else data
     charts: List[Dict[str, Any]] = []
 
+    # 页脚「数据驱动」按图里的数现算: 图的指标要跟问题相关 (问产量就画良品, 不是永远取前 3 个数值列)。
+    # 对不上任何列时保持原来的默认选列。
+    _asked_cols = []
+    try:
+        from smartbi.services.question_chart import relevant_measure_columns
+        _asked_cols = relevant_measure_columns(query or "", numeric_cols)
+    except Exception as _rel_err:
+        logger.warning(f"[chart] relevant column pick failed (keep default): {_rel_err}")
+    if _asked_cols:
+        numeric_cols = _asked_cols
+        # 比率列 (0~1 小数) 画成百分数, 否则 0.99 会被页脚当成「0.99%」
+        _scaled = [c for c in _asked_cols if '率' in c and df[c].notna().any() and df[c].abs().max() <= 1.5]
+        if _scaled:
+            chart_data = [
+                {**row, **{c: round(row[c] * 100, 2) for c in _scaled
+                           if isinstance(row.get(c), (int, float)) and row.get(c) is not None}}
+                for row in chart_data
+            ]
+        if any(w in (query or "") for w in ("哪天", "哪一天", "每天", "每日", "逐日", "各天")):
+            _date_like = next((c for c in df.columns if any(w in str(c) for w in ("日期", "date", "Date"))), None)
+            if _date_like:
+                label_field = _date_like
+
     if "趋势" in query or "变化" in query:
         if numeric_cols:
             y_cols = numeric_cols[:3]
