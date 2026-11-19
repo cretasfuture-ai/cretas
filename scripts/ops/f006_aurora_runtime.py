@@ -161,6 +161,21 @@ def validate_request(raw):
         chat_template_kwargs={'enable_thinking':d['think']})
 
 
+def upstream_idle_timeout(deadline):
+    """Socket idle bound for the private engine: the remaining wall budget, never beyond it."""
+    return max(.1,deadline-time.monotonic())
+
+
+_REASON_CODE=re.compile(r'[a-z][a-z0-9_]{0,47}')
+
+
+def failure_reason(exc):
+    """Exception class plus this module's fixed validator code; never free text (no prompt/answer)."""
+    name=type(exc).__name__
+    code=str(exc.args[0]) if len(exc.args)==1 and isinstance(exc.args[0],str) else ''
+    return name+':'+code if _REASON_CODE.fullmatch(code) else name
+
+
 def translated_stream(response, guard, thinking):
     """Accept bounded native SSE and publish a terminal only after real usage + DONE."""
     content='';reasoning='';finish=None;usage=None
@@ -170,6 +185,10 @@ def translated_stream(response, guard, thinking):
         if not line:raise RuntimeError('missing_native_terminal')
         if len(line)>131072:raise RuntimeError('native_line_size')
         if not line.strip():continue
+        # llama-server 0.40.6 writes a bare SSE comment ':' about every 30s while prompt processing has
+        # produced no token yet (recorded on Aurora 2026-11-19). Only that exact heartbeat is skipped;
+        # any other non-data line, including other comment text or 'event:' lines, still fails closed.
+        if line.rstrip(b'\r\n')==b':':continue
         if not line.startswith(b'data:'):raise RuntimeError('native_sse_format')
         raw=line[5:].strip()
         if raw==b'[DONE]':
@@ -381,12 +400,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             job_watcher=threading.Thread(target=rt.watch_jobs,args=(done,breach),daemon=True);job_watcher.start()
             rt.start_child()
             if breach.is_set():raise RuntimeError('startup_guard')
-            conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=25)
+            deadline=started+REQUEST_SECONDS
+            # llama-server emits no SSE byte until prompt processing ends (~18s for 285 prompt tokens,
+            # ~24s for 388, Aurora 2026-11-19), so the former fixed 25s socket timeout cut longer
+            # questions inside the wall budget. Idle reads may use the remaining wall budget, never
+            # more: the 50s wall deadline is unchanged.
+            conn=http.client.HTTPConnection(HOST,MODEL_PORT,timeout=upstream_idle_timeout(deadline))
             conn.request('POST','/v1/chat/completions',json.dumps(payload).encode(),{'Content-Type':'application/json'})
             response=conn.getresponse()
             if response.status!=200:raise RuntimeError('upstream_status')
             self.send_response(200);self.send_header('Content-Type','application/x-ndjson');self.send_header('Connection','close');self.end_headers();sent=True
-            deadline=started+REQUEST_SECONDS
             def guard():
                 if time.monotonic()>deadline or breach.is_set():raise RuntimeError('stream_guard')
             for frame in translated_stream(response,guard,payload['chat_template_kwargs']['enable_thinking']):
@@ -395,8 +418,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if frame.get('done') is True:complete=True
             if not complete:raise RuntimeError('incomplete')
             rt.logger.info('request_completed')
-        except (OSError,ValueError,RuntimeError,http.client.HTTPException,subprocess.SubprocessError):
-            rt.logger.warning('request_failed resource_breach=%s',breach.is_set())
+        except (OSError,ValueError,RuntimeError,http.client.HTTPException,subprocess.SubprocessError) as exc:
+            rt.logger.warning('request_failed resource_breach=%s reason=%s headers_sent=%s elapsed_s=%.1f',
+                breach.is_set(),failure_reason(exc),sent,time.monotonic()-started)
             with contextlib.suppress(OSError):
                 if not sent:self.reply(503,'local_model_unavailable')
                 else:self.wfile.write(b'{"error":"local_model_unavailable"}\n');self.wfile.flush()
