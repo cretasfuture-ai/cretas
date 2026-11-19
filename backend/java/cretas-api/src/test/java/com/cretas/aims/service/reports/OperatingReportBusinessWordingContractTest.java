@@ -81,6 +81,47 @@ class OperatingReportBusinessWordingContractTest {
         assertEquals("8%", OperatingReportCodec.fillNarrative("{{mom}}%%", metrics).orElseThrow());
     }
 
+    private OperatingReportSnapshot withMetrics(List<Metric> metrics) {
+        return new OperatingReportSnapshot(SCHEMA, Status.SUCCESS, "monthly", "2026-10-01", "2026-10-31", "2026-11-01T00:00:00Z",
+                List.of(), List.of(new Section("x", "x", true, "x", metrics)), List.of(), null);
+    }
+
+    private static final String FALLBACK = "本期数据没有需要专门跟进的缺口";
+
+    /** LSM-COSTBI-REPORT-FOLLOWUP: 14749 形状 (逾期应收 4.9 万, 成本缺失) 不再落兜底句。 */
+    @Test void followUpListsOverdueReceivableAndMissingCostFromReportMetrics() {
+        var s = withMetrics(List.of(
+                m("sales.orders", "5", "单"),
+                m("aging.days1_30", "30000.456", "元"), m("aging.days31_60", "19000", "元"), m("aging.days61_90", "0", "元"),
+                m("aging.days91_120", "0", "元"), m("aging.days120plus", "0", "元"), m("aging.over90", "0", "元"),
+                new Metric("margin.cost", "已回填成本", null, "元", "成本缺失", new BigDecimal("0"), "x"),
+                m("salesperson.unassigned", "1200", "元"),
+                m("marginLow.p1.rate", "-3.4", "%")));
+        String text = codec.render(s, true);
+        String follow = text.substring(text.indexOf("## 跟进分析"));
+        assertFalse(follow.contains(FALLBACK), follow);
+        assertTrue(follow.contains("逾期应收：共 49000.46 元"), follow);
+        assertTrue(follow.contains("产品成本整体缺失"), follow);
+        assertTrue(follow.contains("业务员归属缺口"), follow);
+        assertTrue(follow.contains("marginLow.p1.rate -3%"), follow);
+    }
+
+    @Test void followUpFallsBackOnlyWhenNoGapSignal() {
+        var s = withMetrics(List.of(
+                m("sales.orders", "5", "单"), m("aging.days1_30", "0", "元"), m("aging.days31_60", "0", "元"),
+                new Metric("margin.cost", "已回填成本", new BigDecimal("100"), "元", null, new BigDecimal("1"), "x"),
+                m("salesperson.unassigned", "0", "元"), m("marginLow.p1.rate", "20", "%")));
+        String follow = codec.render(s, true);
+        assertTrue(follow.contains(FALLBACK), follow);
+        assertFalse(follow.contains("逾期应收"), follow);
+    }
+
+    @Test void duplicateUnitsCollapseForCommonUnitsButNotOrdinaryWords() {
+        for (String u : List.of("万元", "万", "个", "天", "次", "kg", "件", "单"))
+            assertEquals("共 5" + u, OperatingReportCodec.collapseDuplicateUnits("共 5" + u + " " + u), u);
+        assertEquals("天天向上，万万不可", OperatingReportCodec.collapseDuplicateUnits("天天向上，万万不可"));
+    }
+
     @Test void structuredSectionAndPreviewUseSameFormat() {
         var metrics = List.of(m("a", "118866.6875", "元"), m("b", "54.599", "%"));
         var s = new OperatingReportSnapshot(SCHEMA, Status.SUCCESS, "monthly", "2026-10-01", "2026-10-31", "2026-11-01T00:00:00Z",
