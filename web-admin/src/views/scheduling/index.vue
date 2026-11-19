@@ -203,6 +203,12 @@ function getProbabilityColor(prob: number) {
           <span :title="reasonOf('lineStats.averageEfficiency')">
             效率 {{ percentOrNone(dashboard?.lineStats?.averageEfficiency) }}
           </span>
+          <span v-if="dashboard?.lineStats?.unattributedBatches" :title="reasonOf('lineStats.unattributedBatches')">
+            {{ dashboard.lineStats.unattributedBatches }} 个批次未指定产线，未计入利用率
+          </span>
+          <span v-if="dashboard?.carryOverIdleBatches" :title="reasonOf('carryOverIdleBatches')">
+            跨日在产 {{ dashboard.carryOverIdleBatches }} 个（今日无报工）
+          </span>
         </div>
       </el-card>
 

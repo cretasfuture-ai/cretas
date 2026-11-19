@@ -254,13 +254,17 @@ export interface SchedulingDashboard {
     activeLines: number;
     /** 今日有任务的启用产线数 */
     occupiedLines?: number;
-    /** 有任务的启用产线 ÷ 启用产线 (0~1); 没有启用产线 → null */
+    /** 今日排程里没有产线归属的批次数 (未计入利用率) */
+    unattributedBatches?: number;
+    /** 有任务的启用产线 ÷ 启用产线 (0~1); 没有启用产线或今日任务全都没有产线 → null */
     utilizationRate: number | null;
     /** 后端暂不汇总 → null (原因见 unavailableReasons) */
     averageEfficiency: number | null;
   };
   alerts: SchedulingAlert[];
   todaySchedules: LineSchedule[];
+  /** 跨日在产且今日无活动的批次数 (不进今日排程与利用率); 只在看今天时有值, 否则 null */
+  carryOverIdleBatches?: number | null;
   /** 取值为 null 的指标 → 原因, 键如 "lineStats.utilizationRate" */
   unavailableReasons?: Record<string, string>;
 }

@@ -20,6 +20,7 @@ import echarts from '@/utils/echarts';
 // chart-insight: BAR (progress → RANKING) + PIE (probability → PROPORTION)
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
+import { formatRate, formatWorkerCount, probabilityChartPoints, progressChartPoints } from './dashboardDisplay';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore();
@@ -176,10 +177,11 @@ function updateCharts() {
 function updateProgressChart() {
   if (!progressChart.value || !dashboard.value?.todaySchedules) return;
 
-  const schedules = dashboard.value.todaySchedules;
-  const data = schedules.map(s => ({
-    name: s.batchNumber,
-    value: s.completionRate || 0,
+  // 没有完成率的行 (工作流批次) 不画: 画成 0% 会被当成「真的没进度」
+  const { points, skipped } = progressChartPoints(dashboard.value.todaySchedules);
+  const data = points.map(s => ({
+    name: s.name,
+    value: s.value,
     itemStyle: {
       color: s.status === 'completed' ? '#67C23A' :
              s.status === 'in_progress' ? '#E6A23C' :
@@ -189,7 +191,7 @@ function updateProgressChart() {
 
   const option: echarts.EChartsOption = {
     title: {
-      text: '排程进度',
+      text: skipped > 0 ? `排程进度（${skipped} 条无完成率未画）` : '排程进度',
       left: 'center',
       textStyle: { fontSize: 14 }
     },
@@ -243,20 +245,21 @@ function updateProgressChart() {
 function updateProbabilityChart() {
   if (!probabilityChart.value || !dashboard.value?.todaySchedules) return;
 
-  const schedules = dashboard.value.todaySchedules;
-  const data = schedules.map(s => ({
-    value: (s.predictedCompletionProb || 0) * 100,
-    name: s.batchNumber,
+  // 没有预测概率的行 (工作流批次) 不画: 记成 0 会把概率分布拉低
+  const { points, skipped } = probabilityChartPoints(dashboard.value.todaySchedules);
+  const data = points.map(s => ({
+    value: s.value,
+    name: s.name,
     itemStyle: {
-      color: (s.predictedCompletionProb || 0) >= 0.9 ? '#67C23A' :
-             (s.predictedCompletionProb || 0) >= 0.7 ? '#E6A23C' :
-             (s.predictedCompletionProb || 0) >= 0.5 ? '#F56C6C' : '#909399'
+      color: (s.probability ?? 0) >= 0.9 ? '#67C23A' :
+             (s.probability ?? 0) >= 0.7 ? '#E6A23C' :
+             (s.probability ?? 0) >= 0.5 ? '#F56C6C' : '#909399'
     }
   }));
 
   const option: echarts.EChartsOption = {
     title: {
-      text: '完成概率分布',
+      text: skipped > 0 ? `完成概率分布（${skipped} 条无预测未画）` : '完成概率分布',
       left: 'center',
       textStyle: { fontSize: 14 }
     },
@@ -391,7 +394,7 @@ function getProbabilityColor(prob: number) {
               class="stat-value"
               :title="dashboard.unavailableReasons?.['lineStats.utilizationRate'] || '今日有任务的启用产线 ÷ 启用产线'"
             >
-              {{ dashboard.lineStats?.utilizationRate == null ? '暂无数据' : `${(dashboard.lineStats.utilizationRate * 100).toFixed(0)}%` }}
+              {{ formatRate(dashboard.lineStats?.utilizationRate) }}
             </div>
             <div class="stat-label">产线利用率</div>
           </div>
@@ -463,7 +466,7 @@ function getProbabilityColor(prob: number) {
             </div>
             <div class="workers">
               <el-icon><User /></el-icon>
-              {{ schedule.assignedWorkerCount || 0 }}
+              {{ formatWorkerCount(schedule.assignedWorkerCount) }}
             </div>
           </div>
         </div>

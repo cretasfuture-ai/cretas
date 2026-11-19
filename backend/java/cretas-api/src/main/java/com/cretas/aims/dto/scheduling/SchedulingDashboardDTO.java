@@ -72,10 +72,19 @@ public class SchedulingDashboardDTO {
     /** 产线占用。 */
     private LineStats lineStats;
 
-    /** 今日排程: 当日调度计划的排程行 + 没被排程覆盖的在产工作流批次 (不重复计数)。 */
+    /** 今日排程: 当日调度计划的排程行 + 当天有活动、没被排程覆盖的工作流批次 (不重复计数)。 */
     private List<LineScheduleDTO> todaySchedules;
 
-    /** 取值为 null 的指标 → 原因 (键是字段路径, 如 "lineStats.utilizationRate")。 */
+    /**
+     * 跨日在产: 今天之前开工、此刻仍在产、今天没有任何活动的批次数 (不进今日排程与利用率)。
+     * 只在查看今天时统计, 其它日期 → null。
+     */
+    private Integer carryOverIdleBatches;
+
+    /**
+     * 取值为 null 或口径受限的指标 → 原因 (键是字段路径, 如 "lineStats.utilizationRate";
+     * "workerStats.workflowBatches" / "lineStats.unattributedBatches" 是口径说明, 对应字段不为 null)。
+     */
     private Map<String, String> unavailableReasons;
 
     @Data
@@ -113,7 +122,9 @@ public class SchedulingDashboardDTO {
         private Integer activeLines;
         /** 今日有任务的启用产线数 (利用率的分子)。 */
         private Integer occupiedLines;
-        /** occupiedLines / activeLines, 0~1; 没有启用产线 → null。 */
+        /** 今日排程里没有产线归属的工作流批次数 (未计入利用率)。 */
+        private Integer unattributedBatches;
+        /** occupiedLines / activeLines, 0~1; 没有启用产线, 或今日任务全都没有产线归属 → null。 */
         private BigDecimal utilizationRate;
         /** 量不到 → null, 原因见 unavailableReasons。 */
         private BigDecimal averageEfficiency;

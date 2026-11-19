@@ -12,6 +12,10 @@
 -- 共用函数 update_timestamp() 不动 (还有一百多张表在用)。
 --
 -- 幂等: 表不存在 (全新库, 表由别处建) 或触发器已摘, 都什么也不做; 重复执行无副作用。
+-- DROP TRIGGER 要拿 AccessExclusiveLock: 撞上长事务时 5 秒内拿不到就失败重试, 不长时间挡住后续读写。
+-- SET LOCAL 只作用于本迁移事务 (Flyway 对 PG 迁移默认开事务), 不会带到连接池里的其它会话。
+SET LOCAL lock_timeout = '5s';
+
 DO $$
 BEGIN
     IF to_regclass('public.scheduling_alerts') IS NOT NULL THEN

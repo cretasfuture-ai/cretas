@@ -6,6 +6,9 @@ import com.cretas.aims.dto.scheduling.SchedulingDashboardDTO;
 import com.cretas.aims.entity.Factory;
 import com.cretas.aims.entity.LineSchedule;
 import com.cretas.aims.entity.ProductType;
+import com.cretas.aims.entity.ProcessingStageRecord;
+import com.cretas.aims.entity.ProductionReport;
+import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.ProductionLine;
 import com.cretas.aims.entity.ProductionPlan;
@@ -184,7 +187,7 @@ class SchedulingDashboardPostgresContractTest {
             return new String[]{pending.getId(), running.getId()};
         });
 
-        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY);
+        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY, DAY);
         print("ONLY_SCHEDULE", d);
 
         assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getId).containsExactly(ids[0], ids[1]);
@@ -208,39 +211,97 @@ class SchedulingDashboardPostgresContractTest {
     }
 
     @Test
-    void onlyWorkflowInProgressBatchesShowUpAsTodaysScheduleWithoutAnySchedulingPlan() {
+    void workflowBatchesWithActivityOnTheDayShowUpAndIdleCarryOversAreOnlyCounted() {
         Long[] ids = tx.execute(s -> {
-            Long running = batch(factory, planA, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(8, 0), "REGULAR");
-            Long legacy = batch(factory, null, ProductionBatchStatus.PRODUCING, DAY.minusDays(1).atTime(20, 0), "REGULAR");
-            // 不该出现的: 中间工件 / 已完工 / 暂停 / 明天才开工 / 旁厂
+            Long stageOnly = batch(factory, planB, ProductionBatchStatus.IN_PROGRESS, DAY.minusDays(5).atTime(8, 0), "REGULAR");
+            stageRecord(factory, stageOnly, DAY.atTime(10, 0));                       // 今天有加工环节记录
+            Long reportOnly = batch(factory, null, ProductionBatchStatus.PRODUCING, DAY.minusDays(3).atTime(8, 0), "REGULAR");
+            report(factory, reportOnly, DAY);                                          // 今天有报工
+            Long doneToday = batch(factory, null, ProductionBatchStatus.COMPLETED, DAY.minusDays(1).atTime(8, 0), "REGULAR");
+            endAt(doneToday, DAY.atTime(15, 0));                                       // 今天完工
+            Long startedToday = batch(factory, planA, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(8, 0), "REGULAR");
+            // 长期在产、今天没动静: 不进今日排程, 只计「跨日在产」
+            Long stale = batch(factory, planA, ProductionBatchStatus.IN_PROGRESS, DAY.minusDays(30).atTime(8, 0), "REGULAR");
+            report(factory, stale, DAY.minusDays(1));                                  // 昨天的报工不算今天
+            report(other, stale, DAY);                                                 // 旁厂写的同批次 id 报工不算
+            // 不该出现的: 中间工件 / 暂停 / 取消 / 昨天完工 / 明天才开工 / 旁厂
             batch(factory, planB, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(9, 0), "CLERK_WIP");
-            batch(factory, planB, ProductionBatchStatus.COMPLETED, DAY.atTime(7, 0), "REGULAR");
             batch(factory, planB, ProductionBatchStatus.PAUSED, DAY.atTime(7, 0), "REGULAR");
+            batch(factory, planB, ProductionBatchStatus.CANCELLED, DAY.atTime(7, 0), "REGULAR");
+            endAt(batch(factory, planB, ProductionBatchStatus.COMPLETED, DAY.minusDays(2).atTime(7, 0), "REGULAR"),
+                    DAY.minusDays(1).atTime(18, 0));
             batch(factory, planB, ProductionBatchStatus.IN_PROGRESS, DAY.plusDays(1).atTime(6, 0), "REGULAR");
             batch(other, null, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(8, 0), "REGULAR");
-            return new Long[]{legacy, running};
+            return new Long[]{stageOnly, reportOnly, doneToday, startedToday, stale};
         });
 
-        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY);
+        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY, DAY);
         print("ONLY_WORKFLOW", d);
 
-        assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getBatchId).containsExactly(ids[0], ids[1]);
+        assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getBatchId)
+                .containsExactly(ids[0], ids[1], ids[2], ids[3]);
         assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getSource).containsOnly("WORKFLOW_BATCH");
-        assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getStatus).containsOnly("in_progress");
-        LineScheduleDTO fromPlanA = d.getTodaySchedules().get(1);
-        assertThat(fromPlanA.getId()).isEqualTo("batch-" + ids[1]);
+        assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getStatus)
+                .containsExactly("in_progress", "in_progress", "completed", "in_progress");
+        LineScheduleDTO fromPlanA = d.getTodaySchedules().get(3);
+        assertThat(fromPlanA.getId()).isEqualTo("batch-" + ids[3]);
         assertThat(fromPlanA.getProductionLineName()).as("产线取自所属计划的建议产线").isEqualTo("二号线");
         assertThat(fromPlanA.getPlanNumber()).isEqualTo(factory + "-PLAN-A");
         assertThat(fromPlanA.getPlannedQuantity()).as("单位可能不一致, 不填数量").isNull();
-        assertThat(d.getTotalSchedules()).isEqualTo(2);
-        assertThat(d.getInProgressSchedules()).isEqualTo(2);
+        assertThat(d.getTotalSchedules()).isEqualTo(4);
+        assertThat(d.getInProgressSchedules()).isEqualTo(3);
+        assertThat(d.getCompletedSchedules()).as("今天完工的批次照样算").isEqualTo(1);
+        assertThat(d.getCarryOverIdleBatches()).as("30 天前开工、今天无活动").isEqualTo(1);
+        assertThat(d.getUnavailableReasons().get("carryOverIdleBatches")).contains("跨日在产 1 个");
         assertThat(d.getPlanStats().getTotalPlans()).as("工作流批次不是调度计划").isZero();
-        assertThat(d.getLineStats().getOccupiedLines()).isEqualTo(1);
-        assertThat(d.getLineStats().getUtilizationRate()).isEqualByComparingTo("0.5");
+        // 一号线 (stageOnly 的计划 B) + 二号线 (startedToday 的计划 A); 没有计划的两个批次不计入且有原因
+        assertThat(d.getLineStats().getOccupiedLines()).isEqualTo(2);
+        assertThat(d.getLineStats().getUtilizationRate()).isEqualByComparingTo("1");
+        assertThat(d.getLineStats().getUnattributedBatches()).isEqualTo(2);
+        assertThat(d.getUnavailableReasons().get("lineStats.unattributedBatches")).isEqualTo("2 个批次未指定产线, 未计入利用率");
         assertThat(d.getWorkerStats().getTotalAssigned()).isZero();
         assertThat(d.getWorkerStats().getAveragePerformance()).isNull();
         assertThat(d.getUnavailableReasons()).containsKeys("workerStats.workflowBatches",
                 "workerStats.averagePerformance");
+    }
+
+    @Test
+    void lookingAtAnotherDayDoesNotMixInTodaysRunningBatches() {
+        Long[] ids = tx.execute(s -> {
+            Long runningToday = batch(factory, planA, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(8, 0), "REGULAR");
+            Long lastWeek = batch(factory, planB, ProductionBatchStatus.COMPLETED, DAY.minusDays(7).atTime(8, 0), "REGULAR");
+            endAt(lastWeek, DAY.minusDays(6).atTime(12, 0));
+            return new Long[]{runningToday, lastWeek};
+        });
+
+        SchedulingDashboardDTO past = crud.getDashboard(factory, DAY.minusDays(7), DAY);
+        SchedulingDashboardDTO tomorrow = crud.getDashboard(factory, DAY.plusDays(1), DAY);
+        SchedulingDashboardDTO today = crud.getDashboard(factory, DAY, DAY);
+        print("PAST", past);
+        print("TOMORROW", tomorrow);
+
+        assertThat(past.getTodaySchedules()).extracting(LineScheduleDTO::getBatchId).containsExactly(ids[1]);
+        assertThat(past.getCarryOverIdleBatches()).as("历史日期量不到当时在产").isNull();
+        assertThat(past.getUnavailableReasons()).containsKey("carryOverIdleBatches");
+        assertThat(tomorrow.getTodaySchedules()).isEmpty();
+        assertThat(tomorrow.getCarryOverIdleBatches()).isNull();
+        assertThat(tomorrow.getLineStats().getUtilizationRate()).as("明天没有任务: 真的是 0").isEqualByComparingTo("0");
+        assertThat(today.getTodaySchedules()).extracting(LineScheduleDTO::getBatchId).containsExactly(ids[0]);
+        assertThat(today.getCarryOverIdleBatches()).isZero();
+    }
+
+    @Test
+    void whenNoneOfTodaysBatchesHasALineUtilizationIsUnknownNotZero() {
+        tx.executeWithoutResult(s -> batch(factory, null, ProductionBatchStatus.IN_PROGRESS, DAY.atTime(8, 0), "REGULAR"));
+
+        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY, DAY);
+        print("ALL_UNATTRIBUTED", d);
+
+        assertThat(d.getTodaySchedules()).hasSize(1);
+        assertThat(d.getLineStats().getActiveLines()).isEqualTo(2);
+        assertThat(d.getLineStats().getUtilizationRate()).isNull();
+        assertThat(d.getLineStats().getUnattributedBatches()).isEqualTo(1);
+        assertThat(d.getUnavailableReasons().get("lineStats.utilizationRate")).contains("1 个批次都未指定产线");
     }
 
     @Test
@@ -255,7 +316,7 @@ class SchedulingDashboardPostgresContractTest {
             return new Object[]{r1.getId(), r2.getId(), b1, b2, b3};
         });
 
-        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY);
+        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY, DAY);
         print("BOTH", d);
 
         assertThat(d.getTodaySchedules()).extracting(LineScheduleDTO::getId)
@@ -276,7 +337,7 @@ class SchedulingDashboardPostgresContractTest {
     void noActiveLineMeansUtilizationIsUnknownNotZero() {
         jdbc.update("update production_lines set status = 'maintenance' where factory_id = ?", factory);
 
-        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY);
+        SchedulingDashboardDTO d = crud.getDashboard(factory, DAY, DAY);
         print("NO_LINES", d);
 
         assertThat(d.getLineStats().getActiveLines()).isZero();
@@ -304,6 +365,7 @@ class SchedulingDashboardPostgresContractTest {
         String alertId = alert(factory);
         String sql = new String(new ClassPathResource(MIGRATION).getInputStream().readAllBytes(), StandardCharsets.UTF_8);
 
+        assertThat(sql).as("DROP TRIGGER 要拿排他锁, 迁移须限时等锁").contains("lock_timeout = '5s'");
         jdbc.execute(sql);
         jdbc.execute(sql);   // 幂等: 第二遍什么也不做
 
@@ -421,6 +483,23 @@ class SchedulingDashboardPostgresContractTest {
         em.persist(a);
     }
 
+    private void endAt(Long batchId, LocalDateTime end) {
+        em.find(ProductionBatch.class, batchId).setEndTime(end);
+        em.flush();
+    }
+
+    private void report(String fid, Long batchId, LocalDate day) {
+        em.persist(ProductionReport.builder().factoryId(fid).batchId(batchId).workerId(1L)
+                .reportType(ProductionReport.ReportType.PROGRESS).reportDate(day).build());
+        em.flush();
+    }
+
+    private void stageRecord(String fid, Long batchId, LocalDateTime start) {
+        em.persist(ProcessingStageRecord.builder().factoryId(fid).productionBatchId(batchId)
+                .stageType(ProcessingStageType.TRIMMING).startTime(start).build());
+        em.flush();
+    }
+
     private Long batch(String fid, String planId, ProductionBatchStatus status, LocalDateTime start, String type) {
         ProductionBatch b = new ProductionBatch();
         b.setFactoryId(fid);
@@ -442,6 +521,6 @@ class SchedulingDashboardPostgresContractTest {
                 .map(r -> r.getSource() + ":" + r.getId() + ":" + r.getBatchId() + ":" + r.getStatus()).toList()
                 + " total=" + d.getTotalSchedules() + " inProgress=" + d.getInProgressSchedules()
                 + " lines=" + d.getLineStats() + " workers=" + d.getWorkerStats()
-                + " plans=" + d.getPlanStats() + " reasons=" + d.getUnavailableReasons().keySet());
+                + " plans=" + d.getPlanStats() + " carryOverIdle=" + d.getCarryOverIdleBatches() + " reasons=" + d.getUnavailableReasons().keySet());
     }
 }
