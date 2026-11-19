@@ -28,23 +28,26 @@ public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrew
     long countOpenByUser(@Param("factoryId") String factoryId, @Param("userId") Long userId,
                          @Param("status") Status status);
 
-    /** 本厂某状态的事项里出现过的权限码 (等我确认: 先逐个判登录人能不能确认, 再按码在库里分页)。 */
-    @Query("SELECT DISTINCT w.requiredPermission FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status")
-    List<String> findDistinctRequiredPermissions(@Param("factoryId") String factoryId, @Param("status") Status status);
+    /**
+     * 本厂某状态的事项里出现过的「权限码|意图码」(等我确认: 先逐组判登录人能不能确认 —— 登记码且执行时的工具门,
+     * #1816 终审 M1 —— 再按组在库里分页)。键的拼法与下面几条查询的 CONCAT 是同一个。
+     */
+    @Query("SELECT DISTINCT CONCAT(w.requiredPermission, '|', w.intentCode) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status")
+    List<String> findDistinctPermissionIntentKeys(@Param("factoryId") String factoryId, @Param("status") Status status);
 
-    /** 等我确认的一页: 本厂、该状态、权限码在「我能确认的」里; 总数来自同口径的 countQuery。 */
+    /** 等我确认的一页: 本厂、该状态、「权限码|意图码」在「我能确认的」里; 总数来自同口径的 countQuery。 */
     @Query(value = "SELECT w FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
-            + " AND w.requiredPermission IN :codes ORDER BY w.createdAt DESC, w.id DESC",
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys ORDER BY w.createdAt DESC, w.id DESC",
             countQuery = "SELECT COUNT(w) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
-                    + " AND w.requiredPermission IN :codes")
+                    + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
     org.springframework.data.domain.Page<DigitalCrewWorkItem> findInboxPage(
             @Param("factoryId") String factoryId, @Param("status") Status status,
-            @Param("codes") Collection<String> codes, Pageable pageable);
+            @Param("keys") Collection<String> keys, Pageable pageable);
 
     @Query("SELECT COUNT(w) FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
-            + " AND w.requiredPermission IN :codes")
-    long countByCodes(@Param("factoryId") String factoryId, @Param("status") Status status,
-                      @Param("codes") Collection<String> codes);
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
+    long countByKeys(@Param("factoryId") String factoryId, @Param("status") Status status,
+                     @Param("keys") Collection<String> keys);
 
     /**
      * 预览落库, 比较后再写 (#1771 复审 中-C): 只有本厂、仍是已交办、且凭据行 id 仍是「我作废时看到的那张」(这里: 没有)
@@ -74,9 +77,9 @@ public interface DigitalCrewWorkItemRepository extends JpaRepository<DigitalCrew
                                    @Param("delegated") Status delegated);
 
     @Query("SELECT DISTINCT w.module FROM DigitalCrewWorkItem w WHERE w.factoryId = :factoryId AND w.status = :status"
-            + " AND w.requiredPermission IN :codes")
+            + " AND CONCAT(w.requiredPermission, '|', w.intentCode) IN :keys")
     List<String> findDistinctModules(@Param("factoryId") String factoryId, @Param("status") Status status,
-                                     @Param("codes") Collection<String> codes);
+                                     @Param("keys") Collection<String> keys);
 
     /** 确认在途 (CONFIRMING) 超过时限的事项: 对账回收用。 */
     List<DigitalCrewWorkItem> findByFactoryIdAndStatusAndConfirmedAtBefore(
