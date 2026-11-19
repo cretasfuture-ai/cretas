@@ -14,11 +14,11 @@ FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
 slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
 # 时段 (2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」), 北京时间:
-#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1 = PG, 槽 5 = fast)。
+#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1、2 = PG, 槽 5 = fast; 2026-11-19 Steve「白天最多总计 3 个」)。
 # ⚠️ 唯一一份时段定义: java-gate-pr.yml 的 changes 作业也调 `refill.sh --window` 决定 PG 派几片上 mini。
 FULL_FROM=22
 FULL_UNTIL=8
-DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 5}"
+DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 2 5}"
 mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_HOUR 可覆盖, 供测试)
   # ⛔ 不用 TZ=Asia/Shanghai: 没有时区数据的机器 (Git Bash 实测) 静默按 UTC 算, 时段整体错 8 小时。
   #    北京时间 = UTC + 8, 无夏令时。
