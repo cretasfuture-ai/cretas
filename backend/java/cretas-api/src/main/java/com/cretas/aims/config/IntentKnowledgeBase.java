@@ -3133,6 +3133,22 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("出成率异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("最近出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
+        // 2026-11-18 BP 问题 28: 损耗异常 / 某工序出成率 / 出成率为什么掉了 走出成率工具的工序视图
+        // (「最近有哪些损耗异常」以前没有短语 → 决策层判成质检, 答「质检不合格率 0%」; 守卫 YieldLossProcessRoutingContractTest)
+        phraseToIntentMapping.put("最近有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪道工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么掉了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么下降", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么低了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率掉在哪", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("掉在哪道工序", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("本月生产了多少批次，合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("本月生产了多少批次合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("生产了多少批次，合格率多少", "QUALITY_STATS");
@@ -4034,6 +4050,11 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("销售前十", "PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("销售TOP10", "PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("销售前10", "PRODUCT_SALES_RANKING");
+        // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」(LSMDEMO 2026-11-18 BP 问题 47): 原来落到要 indicator_code 的指标 Skill 被追问;
+        // 产品销售排行工具自己从原话解析两个月并按客户 / 产品拆增量, 句中的月份与百分数不算「带条件」(见 GROWTH_BREAKDOWN_PHRASES)。
+        for (String p : GROWTH_BREAKDOWN_PHRASES) {
+            phraseToIntentMapping.put(p, "PRODUCT_SALES_RANKING");
+        }
         phraseToIntentMapping.put("发货排名", "SHIPMENT_RANKING");
         phraseToIntentMapping.put("出货排名", "SHIPMENT_RANKING");
         phraseToIntentMapping.put("供应商排名", "SUPPLIER_RANKING");
@@ -8146,6 +8167,12 @@ public class IntentKnowledgeBase {
     }
 
     /** 整句是不是「[我要]报工 [+ 产量]」那类说法 (报工短语自带的整句约束, 见 {@link #REPORT_WORK_SENTENCE})。 */
+    /** 「X月比Y月涨了…主要是哪个客户 / 产品带来的」归因问法的短语 (指向产品销售排行工具的增量拆分模式)。 */
+    public static final List<String> GROWTH_BREAKDOWN_PHRASES = List.of(
+            "哪个客户、哪个产品带来的", "哪个客户和哪个产品带来的", "哪个客户哪个产品带来的",
+            "哪个客户带来的", "哪个产品带来的", "哪几个客户带来的", "哪些客户带来的", "哪些产品带来的",
+            "哪个客户贡献的", "哪个产品贡献的", "哪些客户贡献的", "哪些产品贡献的");
+
     public static boolean isReportWorkSentence(String input) {
         return input != null && REPORT_WORK_SENTENCE.matcher(input.trim().toLowerCase()).matches();
     }

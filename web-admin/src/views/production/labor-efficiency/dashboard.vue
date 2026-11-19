@@ -22,6 +22,12 @@ import {
   type LaborAchievementAlert,
 } from '@/api/laborEfficiency';
 import { get } from '@/api/request';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import {
+  buildLaborProductInsight,
+  buildLaborBatchInsight,
+  buildLaborStepInsight,
+} from '@/utils/chartPageInsights';
 
 // Lazy-load ECharts to keep bundle small
 let echarts: typeof import('echarts') | null = null;
@@ -143,6 +149,26 @@ const perProductRows = computed(() =>
   summaryList.value.filter(r => r.productTypeId !== null),
 );
 
+// 批次趋势图的数据源与上限（画图和分析共用）
+const BATCH_CHART_CAP = 30;
+const trendSourceRow = computed(() => summaryList.value.find(r => r.productTypeId === null) ?? summaryList.value[0]);
+
+// 一图一分析（问题 40）：和各图同一份数据现算
+const productInsight = computed(() => buildLaborProductInsight(
+  perProductRows.value.map(r => ({ name: r.productName, rate: r.achievementRatePct ?? null, alert: r.achievementAlert })),
+));
+const batchInsight = computed(() => {
+  const src = trendSourceRow.value;
+  if (!src?.batchItems?.length) return null;
+  return buildLaborBatchInsight(
+    src.batchItems.slice(0, BATCH_CHART_CAP).map(b => ({ name: b.batchNumber, rate: b.achievementRatePct ?? null, alert: b.achievementAlert })),
+    { shownCap: BATCH_CHART_CAP, totalBatches: src.batchItems.length, productName: src.productName },
+  );
+});
+const stepInsight = computed(() => buildLaborStepInsight(
+  (currentStepBreakdown.value?.steps ?? []).map(s => ({ name: s.processName, actual: s.actualWorkMinutes ?? null, planned: s.plannedWorkMinutes ?? null })),
+));
+
 async function renderCharts() {
   const ec = await loadECharts();
 
@@ -193,10 +219,10 @@ async function renderCharts() {
   }
 
   // Chart 2: Batch-level trend for the first summary row (or overall row)
-  const trendSource = summaryList.value.find(r => r.productTypeId === null) ?? summaryList.value[0];
+  const trendSource = trendSourceRow.value;
   if (batchTrendChartRef.value && trendSource?.batchItems?.length) {
     const chart = ec.init(batchTrendChartRef.value);
-    const items = trendSource.batchItems.slice(0, 30); // cap display at 30 batches
+    const items = trendSource.batchItems.slice(0, BATCH_CHART_CAP); // cap display at 30 batches
     const batchNums = items.map(b => b.batchNumber);
     const rates = items.map(b => b.achievementRatePct ?? null);
 
@@ -472,11 +498,13 @@ onMounted(async () => {
       <el-col :span="12" :xs="24">
         <el-card shadow="never" class="chart-card">
           <div ref="achievementChartRef" style="height: 300px" />
+          <ChartInsight :insight="productInsight" depth="detailed" data-testid="labor-insight-product" />
         </el-card>
       </el-col>
       <el-col :span="12" :xs="24">
         <el-card shadow="never" class="chart-card">
           <div ref="batchTrendChartRef" style="height: 300px" />
+          <ChartInsight :insight="batchInsight" depth="detailed" data-testid="labor-insight-batch" />
         </el-card>
       </el-col>
     </el-row>
@@ -554,7 +582,8 @@ onMounted(async () => {
           </el-descriptions>
 
           <!-- Step 工时对比图 -->
-          <div ref="stepChartRef" style="height: 220px; margin-bottom: 16px" />
+          <div ref="stepChartRef" style="height: 220px; margin-bottom: 8px" />
+          <ChartInsight :insight="stepInsight" depth="detailed" style="margin-bottom: 16px" data-testid="labor-insight-step" />
 
           <!-- Step 明细表 -->
           <el-table :data="currentStepBreakdown.steps" size="small" border>

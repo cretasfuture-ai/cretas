@@ -95,6 +95,9 @@ public final class MaterialQcRejectionGuard {
                 ProcessTimeLimitService.TargetType.RAW_MATERIAL_BATCH)) {
             for (ProcessTimeLimitEvent e : repo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(
                     batch.getFactoryId(), type, batch.getId(), ProcessTimeLimitEvent.Status.REJECTED)) {
+                if (ProcessTimeLimitEvent.RecordKind.isWarn(e.getRecordKind())) {
+                    continue;   // 只警告档的复盘记录 (PROTO-Q41): 判不合格只记结论, 不是对这批的判废
+                }
                 any = true;
                 LocalDateTime at = e.getDecidedAt() != null ? e.getDecidedAt() : e.getBlockedAt();
                 if (at == null) {

@@ -260,7 +260,12 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         //      成本 SUM 为 null 却有 46 个计划          -> 成本**未知**, ⛔ 不是 ¥0
         //    ⇒ 判据: 窗口内有没有计划。没有计划 = 没生产 = 成本确实 0;
         //             有计划而成本列为空 = 没录 = 算不出来。
-        boolean hasPlansInWindow = productionPlanRepository.countByFactoryIdAndCreatedAtBetween(
+        // 成本按完工时间 (endTime) 落期, 所以「窗口内有没有计划」也要看完工的计划 (#1911 终审 P1):
+        // 10 天前创建、昨天完工、成本没录 —— 只看创建时间会判成「没生产」, 把不知道的成本写成 ¥0。
+        // 创建时间仍保留: 窗口内新建了计划也说明在生产, 成本空就是没录。
+        long endedPlans = productionPlanRepository.countEndedBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        boolean hasPlansInWindow = endedPlans > 0 || productionPlanRepository.countByFactoryIdAndCreatedAtBetween(
                 factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59)) > 0;
         report.put("materialCost", costOrNull(materialCost, hasPlansInWindow));
         report.put("laborCost", costOrNull(laborCost, hasPlansInWindow));
@@ -268,6 +273,23 @@ public class ProductionReportServiceImpl implements ProductionReportService {
         report.put("otherCost", costOrNull(otherCost, hasPlansInWindow));
         report.put("totalCost", (materialCost == null && laborCost == null
                 && equipmentCost == null && otherCost == null && hasPlansInWindow) ? null : totalCost);
+        // 完工计划数 / 平均每计划成本 (LSM-COSTBI 第 12 项): 与成本同口径 (结束时间在区间内);
+        // 有工艺保密时成本只算能看的计划, 计划数也只数能看的; 成本未知或没有计划 ⇒ 平均值 null (⛔ 不当 0)
+        long planCount = Math.max(0, endedPlans - (visibleCosts != null ? visibleCosts.excludedPlans() : 0));
+        report.put("planCount", planCount);
+        // 有完工计划没录成本: 总额只含录了的, 除以全部完工数会把没录的当 0 拉低平均值 (10 个只录 2 个各 1000 → ¥200)。
+        // 全厂都录齐了才算平均值 (能看的计划是全厂的子集, 也一定录齐); 否则 null 并说明, 不编。
+        long costRecorded = planCount == 0 ? 0 : productionPlanRepository.countCostRecordedEndedBetweenDates(
+                factoryId, startDate.atStartOfDay(), endDate.atTime(23, 59, 59));
+        BigDecimal costForAvg = (BigDecimal) report.get("totalCost");
+        boolean allRecorded = planCount > 0 && costRecorded >= endedPlans;
+        report.put("avgCostPerPlan", costForAvg == null || !allRecorded ? null
+                : costForAvg.divide(BigDecimal.valueOf(planCount), 2, RoundingMode.HALF_UP));
+        if (planCount > 0 && !allRecorded) {
+            report.put("avgCostPerPlanNote", visibleCosts == null
+                    ? "完工计划 " + endedPlans + " 个, 只有 " + costRecorded + " 个录了成本, 平均每计划成本算不出"
+                    : "有完工计划没录成本, 平均每计划成本算不出");
+        }
         // 利润计算
         // ⛔ 成本未知时利润**算不出来** —— 原来 totalCost 兜 0, 于是「利润 = 营收」,
         //    一家没录成本的工厂会被报成「全额都是利润」。

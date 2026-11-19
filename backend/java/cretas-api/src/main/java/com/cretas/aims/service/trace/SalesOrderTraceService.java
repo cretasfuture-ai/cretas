@@ -117,7 +117,7 @@ public class SalesOrderTraceService {
         result.put("found", true);
         result.put("planCount", plans.size());
         result.put("batchCount", batches.size());
-        result.put("message", render(order, batches.size(), traces, unreadable));
+        result.put("message", render(order, plans, batches, batches.size(), traces, unreadable));
         return result;
     }
 
@@ -143,7 +143,7 @@ public class SalesOrderTraceService {
 
     // ==================== 文字 ====================
 
-    static String render(SalesOrder order, int batchTotal,
+    static String render(SalesOrder order, List<ProductionPlan> plans, List<ProductionBatch> batches, int batchTotal,
                          List<TraceabilityDTO.FullTraceResponse> traces, List<String> unreadable) {
         StringBuilder sb = new StringBuilder();
         sb.append("销售单 ").append(order.getOrderNumber());
@@ -157,7 +157,32 @@ public class SalesOrderTraceService {
             return sb.toString();
         }
 
-        // 一、原料批次（跨生产批次按原料批次号去重）
+        // 一、生产计划（计划号 / 产品 / 计划量）。产品名取自该计划下批次的溯源明细。
+        Map<String, String> productByPlan = new LinkedHashMap<>();
+        for (ProductionBatch b : batches) {
+            for (TraceabilityDTO.FullTraceResponse t : traces) {
+                TraceabilityDTO.ProductionInfo p = t.getProduction();
+                if (p != null && notBlank(p.getProductName()) && Objects.equals(p.getBatchNumber(), b.getBatchNumber())
+                        && b.getProductionPlanId() != null) {
+                    productByPlan.putIfAbsent(b.getProductionPlanId(), p.getProductName().trim());
+                }
+            }
+        }
+        sb.append("\n一、生产计划（").append(plans.size()).append(" 个）\n");
+        for (ProductionPlan plan : plans) {
+            sb.append("- 计划 ").append(notBlank(plan.getPlanNumber()) ? plan.getPlanNumber().trim() : "（未编号）");
+            String product = productByPlan.get(plan.getId());
+            if (product != null) {
+                sb.append("，产品 ").append(product);
+            }
+            if (plan.getPlannedQuantity() != null) {
+                sb.append("，计划量 ").append(plan.getPlannedQuantity().stripTrailingZeros().toPlainString())
+                        .append(notBlank(plan.getPlannedUnit()) ? plan.getPlannedUnit().trim() : "");
+            }
+            sb.append("\n");
+        }
+
+        // 二、原料批次（跨生产批次按原料批次号去重）
         Map<String, TraceabilityDTO.MaterialInfo> materials = new LinkedHashMap<>();
         for (TraceabilityDTO.FullTraceResponse t : traces) {
             if (t.getMaterials() == null) {
@@ -169,7 +194,7 @@ public class SalesOrderTraceService {
                 materials.putIfAbsent(key, m);
             }
         }
-        sb.append("\n一、原料批次（").append(materials.size()).append(" 批）\n");
+        sb.append("\n二、原料批次（").append(materials.size()).append(" 批）\n");
         if (materials.isEmpty()) {
             sb.append("没有查到原料领用记录。\n");
         }
@@ -187,7 +212,7 @@ public class SalesOrderTraceService {
         }
 
         // 二、生产批次与工序
-        sb.append("\n二、生产批次与工序（共 ").append(batchTotal).append(" 个批次");
+        sb.append("\n三、生产批次与工序（共 ").append(batchTotal).append(" 个批次");
         if (batchTotal > traces.size() + unreadable.size()) {
             sb.append("，下面只展开前 ").append(traces.size() + unreadable.size()).append(" 个");
         }
@@ -209,7 +234,7 @@ public class SalesOrderTraceService {
         }
 
         // 三、质检
-        sb.append("\n三、质检\n");
+        sb.append("\n四、质检\n");
         boolean anyQuality = false;
         for (TraceabilityDTO.FullTraceResponse t : traces) {
             if (t.getQualityInspections() == null) {
@@ -220,6 +245,10 @@ public class SalesOrderTraceService {
                 String batchNo = t.getProduction() != null ? t.getProduction().getBatchNumber() : null;
                 sb.append("- ").append(notBlank(batchNo) ? "批次 " + batchNo + "：" : "")
                         .append(qualityResult(q.getResult()));
+                if (q.getPassCount() != null && q.getSampleSize() != null && q.getSampleSize() > 0) {
+                    // 件数与合格率同给: 「32/32 合格」比单独一个百分比更能核对
+                    sb.append("，").append(trim(q.getPassCount())).append("/").append(trim(q.getSampleSize())).append(" 合格");
+                }
                 if (q.getPassRate() != null) {
                     sb.append("，合格率 ").append(trim(q.getPassRate())).append("%");
                 }
@@ -234,7 +263,7 @@ public class SalesOrderTraceService {
         }
 
         // 四、出货与客户
-        sb.append("\n四、出货与客户\n");
+        sb.append("\n五、出货与客户\n");
         Set<String> shipmentSeen = new LinkedHashSet<>();
         boolean anyShipment = false;
         for (TraceabilityDTO.FullTraceResponse t : traces) {

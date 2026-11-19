@@ -235,6 +235,10 @@ class ProcessSecretDataLayerContractTest {
             // 质量处置 V1 的固定合格率/缺陷率判定阈值与空值动作，不是物料配比或标准出成。
             "releasePassRateMin", "conditionalPassRateMin", "reworkPassRateMin",
             "scrapDefectRateMin", "nullPassRateAction",
+            // ProcessYieldViews: 布尔标志「出成率是否已按产品筛选」, 不含任何比率值
+            "productFilteredYield",
+            // ProductSalesRankingTool: 两月销售额增量百分比, 销售指标不是配方
+            "totalGrowthPct",
             // 质量 / 运营 / 系统监控 / 意图识别 / 人事薪资 / 财务指标 / 设备 / 计划进度
             "percent", // 影响分析 Tool 参数: 涨价假设百分比, 不是配方份额
             "availabilityRate", "averagePassRate", "inspectionPassRatePct", // 质检合格率 (检验结果合格次数÷检验次数), 与配方无关

@@ -113,14 +113,24 @@ class ReportCostQueryToolContractTest {
         assertEquals(1200.00, beef.get("totalCost").asDouble(), 0.001);
         // 单位成本 = 1200 / (80+20) = 12 元/kg
         assertEquals(12.0, beef.get("unitCosts").get(0).get("unitCost").asDouble(), 0.0001);
-        // 对比: 总成本 1450 vs 700 -> +750 (+107.1%)
+        // 对比 (LSM-COSTBI 第 12 项): 本期 kg + 盒 两种单位 -> 不能按产量折算, 按每批平均比, ⛔ 不按总额比。
+        // 总额 1450 vs 700 是 +107.1% (批次多了自然涨); 每批平均 1450/3 = 483.33 vs 700/1 = 700 -> -216.67 (-31.0%)
         JsonNode total = null;
         for (JsonNode c : data.get("comparison")) {
             if ("总成本".equals(c.get("name").asText())) total = c;
         }
         assertNotNull(total);
-        assertEquals(750.0, total.get("change").asDouble(), 0.001);
-        assertEquals(107.1, total.get("changePct").asDouble(), 0.001);
+        assertEquals("PER_BATCH", total.get("basis").asText());
+        assertEquals(483.33, total.get("current").asDouble(), 0.001);
+        assertEquals(700.00, total.get("previous").asDouble(), 0.001);
+        assertEquals(-216.67, total.get("change").asDouble(), 0.001);
+        assertEquals(-31.0, total.get("changePct").asDouble(), 0.001);
+        String cmpMsg = r.get("data").get("message").asText();
+        assertTrue(cmpMsg.contains("按每批平均成本比"), cmpMsg);
+        assertTrue(cmpMsg.contains("总成本 ¥700.00 → ¥483.33/批（-31%）"), cmpMsg);
+        assertFalse(cmpMsg.contains("+107.1%"), cmpMsg);
+        assertFalse(cmpMsg.contains("口径"), cmpMsg);
+        assertFalse(cmpMsg.contains("成本已算全"), cmpMsg);
         // 出图: 饼 + 柱
         assertEquals(2, data.get("charts").size());
         assertTrue(r.get("data").get("message").asText().contains("总成本 ¥1450.00"));
@@ -366,7 +376,7 @@ class ReportCostQueryToolContractTest {
         }
     }
 
-    // N4: 有一批缺产量时, 分项金额含它、产量不含它 -> 不能按单位成本比, 退回总额口径并明说
+    // N4: 有一批缺产量时, 分项金额含它、产量不含它 -> 不能按单位成本比, 退回每批平均成本并明说 (第 12 项: 不再按总额)
     @Test
     void riserFallsBackToTotals_whenABatchHasNoQuantity() throws Exception {
         List<ProductionBatch> lastMonthSameDays = lastMonthSameDaysStub();
@@ -376,7 +386,8 @@ class ReportCostQueryToolContractTest {
         thisMonth.add(noQty);
         lastMonthSameDays.add(batch("卤牛肉", "300", "0", "0", "0", "40", "kg", ProductionBatchStatus.COMPLETED, false));
         String msg = run("{\"compareTo\":\"last_month\"}").get("data").get("message").asText();
-        assertTrue(msg.contains("按总额比"), msg);
+        assertTrue(msg.contains("按每批平均成本比"), msg);
+        assertFalse(msg.contains("按总额"), msg);
         assertFalse(msg.contains("元/kg"), msg);
     }
 
@@ -410,5 +421,32 @@ class ReportCostQueryToolContractTest {
         // 「环比」单独出现不是上月: 仍然是上一个等长周期
         String msg2 = run("{\"userInput\":\"成本环比\"}").get("data").get("message").asText();
         assertTrue(msg2.contains("对比上一个等长周期"), msg2);
+    }
+
+    // LSM-COSTBI 第 12 项: 环比按单位成本比, 不按总额。本期多做了一批, 总额 +60%, 但每 kg 成本其实降了 20%
+    @Test
+    void comparison_isPerUnitCost_notTotal_whenBothPeriodsShareOneUnit() throws Exception {
+        thisMonth.add(batch("卤牛肉", "400", "0", "0", "0", "100", "kg", ProductionBatchStatus.COMPLETED, false));
+        thisMonth.add(batch("卤牛肉", "400", "0", "0", "0", "100", "kg", ProductionBatchStatus.COMPLETED, false));
+        lastPeriod.add(batch("卤牛肉", "500", "0", "0", "0", "100", "kg", ProductionBatchStatus.COMPLETED, false));
+
+        JsonNode r = run("{}").get("data");
+        JsonNode total = null;
+        for (JsonNode c : r.get("data").get("comparison")) {
+            if ("总成本".equals(c.get("name").asText())) total = c;
+        }
+        assertNotNull(total);
+        assertEquals("PER_UNIT", total.get("basis").asText());
+        assertEquals("元/kg", total.get("unit").asText());
+        assertEquals(4.00, total.get("current").asDouble(), 0.001);    // 800 / 200 kg
+        assertEquals(5.00, total.get("previous").asDouble(), 0.001);   // 500 / 100 kg
+        assertEquals(-20.0, total.get("changePct").asDouble(), 0.001);
+        String msg = r.get("message").asText();
+        assertTrue(msg.contains("按每kg成本比"), msg);
+        assertTrue(msg.contains("总成本 ¥5.00 → ¥4.00/kg（-20%）"), msg);
+        assertFalse(msg.contains("+60%"), msg);   // 阴性对照: 总额涨幅不再出现
+        assertTrue(msg.contains("各分项都没有上涨"), msg);
+        assertFalse(msg.contains("口径"), msg);
+        assertFalse(msg.contains("成本已算全"), msg);
     }
 }

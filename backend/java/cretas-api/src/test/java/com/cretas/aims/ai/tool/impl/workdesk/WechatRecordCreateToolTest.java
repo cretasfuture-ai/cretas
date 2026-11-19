@@ -185,6 +185,49 @@ class WechatRecordCreateToolTest {
         assertTrue(ex.getMessage().contains("direction"));
     }
 
+    @Test
+    @DisplayName("UT-WCC-07: doExecute — recordTime 占位值 (<nil>/null/None/空) 按未提供处理, 不报格式非法")
+    void executeRecordTimePlaceholderTreatedAsAbsent() throws Exception {
+        WechatRecord saved = WechatRecord.builder().id(8L).factoryId(FACTORY_ID)
+                .customerId("c1").direction(WechatDirection.OUTBOUND)
+                .messageContent("x").recordTime(LocalDateTime.now()).createdBy(1L).build();
+        when(wechatRecordService.create(anyString(), anyString(), any(WechatDirection.class),
+                anyString(), any(Long.class), any(), isNull(), isNull(), isNull()))
+                .thenReturn(saved);
+        when(customerRepository.findByIdAndFactoryId(eq("c1"), anyString()))
+                .thenReturn(Optional.of(newCustomer()));
+
+        for (String placeholder : new String[]{"<nil>", "null", "None", "  ", "<NIL>"}) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("customerId", "c1");
+            params.put("direction", "OUTBOUND");
+            params.put("messageContent", "x");
+            params.put("recordTime", placeholder);
+            params.put("contactPerson", placeholder);
+            params.put("remark", placeholder);
+            Map<String, Object> result = invokeDoExecute(tool, FACTORY_ID, params, ctx());
+            assertTrue(result.get("message").toString().contains("id=8"), placeholder);
+        }
+    }
+
+    @Test
+    @DisplayName("UT-WCC-08: doExecute — 真非法 recordTime 仍 400 拒绝 (阴性对照), 合法 ISO 照常传入")
+    void executeRealInvalidRecordTimeStillRejected() throws Exception {
+        for (String bad : new String[]{"昨天下午", "2026/11/19 10:00", "not-a-time"}) {
+            Map<String, Object> params = new HashMap<>();
+            params.put("customerId", "c1");
+            params.put("direction", "OUTBOUND");
+            params.put("messageContent", "x");
+            params.put("recordTime", bad);
+            BusinessException ex = assertThrows(BusinessException.class,
+                    () -> invokeDoExecute(tool, FACTORY_ID, params, ctx()), bad);
+            assertEquals(400, ex.getCode());
+            assertTrue(ex.getMessage().contains("recordTime 格式非法"));
+        }
+        assertEquals("2026-11-19T10:00", WechatRecordCreateTool.optionalString(
+                Map.of("recordTime", "2026-11-19T10:00"), "recordTime"));
+    }
+
     // ── helpers ──
     private Customer newCustomer() {
         Customer c = new Customer();

@@ -180,13 +180,13 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
         data.put("withheldBatchCount", current.withheldBatches);
         data.put("previousCostedBatchCount", previous.costedBatches);
         data.put("previousCostIncompleteBatchCount", previous.incompleteBatches);
-        data.put("basis", "已完成批次的成本分项 (原料/人工/设备/其他); 成本未算全的批次不进合计; 单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量, 按单位分开算 (与成本分析页同口径); 批次按结束日落期");
+        data.put("basis", "已完工批次的成本分项 (原料/人工/设备/其他), 按完工日期算; 成本不全的批次不进合计; 单位成本 = 总成本 ÷ 实际产量, 不同单位分开算; 和上一期比时按单位成本 (两期同一单位且产量齐) 或每批平均成本比, 不按总额比");
 
         if (current.batchCount == 0) {
             String msg = "「" + start + " 至 " + end + "」" + (productLabel != null ? "「" + productLabel + "」这个产品没有" : "没有")
                     + "已完成的生产批次，无从统计成本。"
                     + (current.withheldBatches > 0 ? current.withheldNote() : "")
-                    + "（口径：只统计已完成批次；进行中的批次成本未结算，不计入。）";
+                    + "（只统计已完工的批次；还在生产中的批次成本没结算，不算在内。）";
             data.put("rows", List.of());
             return buildSimpleResult(msg, data);
         }
@@ -196,6 +196,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             data.put("composition", current.compositionList());
             data.put("products", current.productRows(MAX_PRODUCTS));
             data.put("comparison", comparison(current, previous));
+            if (previous.costedBatches > 0) data.put("comparisonBasis", compareBasis(current, previous).label());
             data.put("charts", charts(current));
         }
         return buildSimpleResult(buildMessage(current, previous, start, end, prevStart, prevEnd, productLabel, showAmounts, monthOverMonth), data);
@@ -398,22 +399,56 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
 
     // ==================== 对比 / 图表 / 文案 ====================
 
-    private List<Map<String, Object>> comparison(Aggregate cur, Aggregate prev) {
+    /**
+     * 和上一期怎么比 (LSM-COSTBI 第 12 项): 以前按总额比, 批次多了总额自然涨, 读成「成本涨了」是错的。
+     * 两期都只有同一个产出单位、且每批都有产量 → 按每单位产量的成本比; 否则按每批平均成本比, 并明说。
+     */
+    record CompareBasis(boolean perUnit, BigDecimal curDivisor, BigDecimal prevDivisor, String unit) {
+        String label() {
+            return perUnit ? "按每" + unit + "成本比" : "按每批平均成本比（两期产出单位不同或有批次缺产量，没法按产量折算）";
+        }
+
+        String suffix() {
+            return perUnit ? "/" + unit : "/批";
+        }
+    }
+
+    static CompareBasis compareBasis(Aggregate cur, Aggregate prev) {
+        BigDecimal curQty = cur.singleUnitQuantity();
+        BigDecimal prevQty = prev.singleUnitQuantity();
+        boolean perUnit = curQty != null && prevQty != null && curQty.signum() > 0 && prevQty.signum() > 0
+                && cur.batchesWithoutQuantity == 0 && prev.batchesWithoutQuantity == 0   // 分子分母必须是同一组批次
+                && sameOutputUnit(cur.singleUnit(), prev.singleUnit());
+        if (perUnit) {
+            String unit = cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit();
+            return new CompareBasis(true, curQty, prevQty, unit);
+        }
+        return new CompareBasis(false, BigDecimal.valueOf(Math.max(1, cur.costedBatches)),
+                BigDecimal.valueOf(Math.max(1, prev.costedBatches)), null);
+    }
+
+    private static List<Map<String, Object>> comparison(Aggregate cur, Aggregate prev) {
         List<Map<String, Object>> list = new ArrayList<>();
-        if (prev.costedBatches == 0) {
+        if (prev.costedBatches == 0 || cur.costedBatches == 0) {
             return list;
         }
-        addDelta(list, "原料", cur.material, prev.material);
-        addDelta(list, "人工", cur.labor, prev.labor);
-        addDelta(list, "设备", cur.equipment, prev.equipment);
-        addDelta(list, "其他", cur.other, prev.other);
-        addDelta(list, "总成本", cur.total, prev.total);
+        CompareBasis basis = compareBasis(cur, prev);
+        addDelta(list, basis, "原料", cur.material, prev.material);
+        addDelta(list, basis, "人工", cur.labor, prev.labor);
+        addDelta(list, basis, "设备", cur.equipment, prev.equipment);
+        addDelta(list, basis, "其他", cur.other, prev.other);
+        addDelta(list, basis, "总成本", cur.total, prev.total);
         return list;
     }
 
-    private void addDelta(List<Map<String, Object>> list, String name, BigDecimal now, BigDecimal before) {
+    private static void addDelta(List<Map<String, Object>> list, CompareBasis basis, String name,
+                                 BigDecimal nowTotal, BigDecimal beforeTotal) {
+        BigDecimal now = nowTotal.divide(basis.curDivisor(), 4, RoundingMode.HALF_UP);
+        BigDecimal before = beforeTotal.divide(basis.prevDivisor(), 4, RoundingMode.HALF_UP);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
+        m.put("basis", basis.perUnit() ? "PER_UNIT" : "PER_BATCH");
+        m.put("unit", "元" + basis.suffix());
         m.put("current", money(now));
         m.put("previous", money(before));
         m.put("change", money(now.subtract(before)));
@@ -469,7 +504,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             sb.append("。成本金额按当前账号权限不显示；需要金额请用有成本查看权限的账号。");
             return sb.toString();
         }
-        sb.append("，其中成本已算全 ").append(cur.costedBatches).append(" 个。");
+        sb.append("，其中成本齐全的 ").append(cur.costedBatches).append(" 个。");
         if (cur.incompleteBatches > 0) {
             sb.append("另有 ").append(cur.incompleteBatches).append(" 个批次成本未算全（如原料缺单价），不计入下面的合计。");
         }
@@ -477,7 +512,7 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
             sb.append(cur.withheldNote());
         }
         if (cur.costedBatches == 0) {
-            sb.append("没有成本已算全的批次，总成本和单位成本算不出。");
+            sb.append("没有成本齐全的批次，总成本和单位成本算不出。");
             return sb.toString();
         }
         sb.append("\n总成本 ¥").append(money(cur.total)).append("：");
@@ -500,23 +535,26 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
                     .append("，").append(p.batches).append(" 批，单位成本 ").append(p.unitCostText());
         }
         if (prev.costedBatches == 0) {
-            sb.append("\n对比：" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("）没有成本已算全的批次，无法给涨跌。");
+            sb.append("\n对比：" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("）没有成本齐全的批次，无法给涨跌。");
         } else {
-            sb.append("\n对比" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("，成本已算全 ")
+            CompareBasis basis = compareBasis(cur, prev);
+            sb.append("\n对比" + prevLabel + "（").append(prevStart).append(" 至 ").append(prevEnd).append("，成本齐全的 ")
                     .append(prev.costedBatches).append(" 个批次").append(prev.incompleteBatches > 0
-                            ? "，另有 " + prev.incompleteBatches + " 个成本未算全未计入" : "").append("）：");
+                            ? "，另有 " + prev.incompleteBatches + " 个成本未算全未计入" : "").append("），")
+                    .append(basis.label()).append("：");
             List<Map<String, Object>> cmp = comparison(cur, prev);
             for (int i = 0; i < cmp.size(); i++) {
                 Map<String, Object> c = cmp.get(i);
                 if (i > 0) sb.append("；");
-                sb.append(c.get("name")).append(" ").append(signed((BigDecimal) c.get("change")));
+                sb.append(c.get("name")).append(" ¥").append(c.get("previous")).append(" → ¥").append(c.get("current"))
+                        .append(basis.suffix());
                 if (c.get("changePct") != null) sb.append("（").append(signed((BigDecimal) c.get("changePct"))).append("%）");
             }
             sb.append("。");
             sb.append(riserText(cur, prev));
             if (showAmounts) sb.append(productUnitCostRiseText(cur, prev));
         }
-        sb.append("\n口径：只统计已完成批次（按结束日落期）；单位成本 = 成本已算全批次的总成本 ÷ 这些批次的实际产量，按单位分开算，与成本分析页一致。");
+        sb.append("\n说明：只统计已完工的批次，按完工日期算；单位成本 = 总成本 ÷ 实际产量，不同单位分开算，和成本分析页一致。");
         return sb.toString();
     }
 
@@ -527,34 +565,28 @@ public class ReportCostQueryTool extends AbstractBusinessTool {
      * 否则按总额比并明说是总额、没有按产量折算。只在 原料/人工/设备/其他 里比, 不含总成本。
      */
     static String riserText(Aggregate cur, Aggregate prev) {
-        BigDecimal curQty = cur.singleUnitQuantity();
-        BigDecimal prevQty = prev.singleUnitQuantity();
-        boolean perUnit = curQty != null && prevQty != null && curQty.signum() > 0 && prevQty.signum() > 0
-                && cur.batchesWithoutQuantity == 0 && prev.batchesWithoutQuantity == 0   // 分子分母必须是同一组批次
-                && sameOutputUnit(cur.singleUnit(), prev.singleUnit());
+        CompareBasis cb = compareBasis(cur, prev);
         String[] names = {"原料", "人工", "设备", "其他"};
         BigDecimal[] now = {cur.material, cur.labor, cur.equipment, cur.other};
         BigDecimal[] before = {prev.material, prev.labor, prev.equipment, prev.other};
         int top = -1;
         BigDecimal topChange = BigDecimal.ZERO;
         for (int i = 0; i < names.length; i++) {
-            BigDecimal a = perUnit ? now[i].divide(curQty, 4, RoundingMode.HALF_UP) : now[i];
-            BigDecimal b = perUnit ? before[i].divide(prevQty, 4, RoundingMode.HALF_UP) : before[i];
+            BigDecimal a = now[i].divide(cb.curDivisor(), 4, RoundingMode.HALF_UP);
+            BigDecimal b = before[i].divide(cb.prevDivisor(), 4, RoundingMode.HALF_UP);
             BigDecimal change = a.subtract(b);
             if (change.signum() > 0 && change.compareTo(topChange) > 0) {
                 top = i;
                 topChange = change;
             }
         }
-        String basis = perUnit ? "按每" + (cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit()) + "产量的单位成本比"
-                : "按总额比，没有按产量折算（产量、单位不同或有批次缺产量，产量变化会影响总额）";
+        String basis = cb.label();
         if (!cur.byProduct.keySet().equals(prev.byProduct.keySet())) {
             basis += "；两期的产品构成不同，涨跌里含产品结构变化";
         }
         if (top < 0) return "\n各分项都没有上涨（" + basis + "）。";
-        String amount = topChange.setScale(perUnit ? 2 : 2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
-        return "\n涨得最多的是" + names[top] + "：+" + amount + (perUnit ? " 元/" + (cur.singleUnit().isEmpty() ? "单位" : cur.singleUnit()) : " 元")
-                + "（" + basis + "）。";
+        String amount = topChange.setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString();
+        return "\n涨得最多的是" + names[top] + "：+" + amount + " 元" + cb.suffix() + "（" + basis + "）。";
     }
 
     /**

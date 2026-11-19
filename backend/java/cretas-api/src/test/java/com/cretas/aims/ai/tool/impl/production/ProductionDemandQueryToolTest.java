@@ -47,6 +47,12 @@ class ProductionDemandQueryToolTest {
     @Mock
     private ProductionBatchRepository productionBatchRepository;
 
+    @Mock
+    private com.cretas.aims.repository.ProductionLineRepository productionLineRepository;
+
+    @Mock
+    private com.cretas.aims.repository.ProductionLineCapacityConfigRepository capacityConfigRepository;
+
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
@@ -108,7 +114,8 @@ class ProductionDemandQueryToolTest {
         assertEquals(0, ((BigDecimal) p.get("totalDemand")).compareTo(new BigDecimal("10")));
         assertEquals(0, ((BigDecimal) p.get("netShortage")).compareTo(new BigDecimal("10")));
         assertEquals(0, ((BigDecimal) p.get("inProgressQuantity")).compareTo(BigDecimal.ZERO));
-        assertEquals("DEDICATED_LINE_A", p.get("recommendedLine"));
+        assertEquals("未配置产线", p.get("recommendedLineName"));
+        assertFalse(p.containsKey("recommendedLine"), "internal line code must not be exposed");
     }
 
     @Test

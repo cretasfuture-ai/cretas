@@ -1,6 +1,8 @@
 package com.cretas.aims.ai.tool.impl.shipment;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.ai.tool.BatchReferenceClarifier;
+import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.dto.traceability.TraceabilityDTO;
 import com.cretas.aims.service.TraceabilityService;
 import com.cretas.aims.service.trace.SalesOrderTraceService;
@@ -30,6 +32,9 @@ public class TraceBatchTool extends AbstractBusinessTool {
 
     @Autowired
     private SalesOrderTraceService salesOrderTraceService;
+
+    @Autowired
+    private ProductionBatchRepository productionBatchRepository;
 
     @Override
     public String getToolName() {
@@ -89,6 +94,11 @@ public class TraceBatchTool extends AbstractBusinessTool {
         // 获取参数
         String batchNumber = getString(params, "batchNumber", "").trim();
         String salesOrderNo = getString(params, "salesOrderNo", "").trim();
+
+        // 没有销售单号、批次号又是泛称（成品批次 / 这个批次）: 不查, 追问并列最近批次
+        if (salesOrderNo.isBlank() && BatchReferenceClarifier.isGenericReference(batchNumber)) {
+            return BatchReferenceClarifier.clarify(productionBatchRepository, factoryId, "帮你溯源");
+        }
 
         // 销售单号：明确给了 salesOrderNo，或「批次号」其实是销售单号（没有同号批次时）→ 按销售单追溯
         if (salesOrderNo.isBlank() && salesOrderTraceService.isSalesOrderTarget(factoryId, batchNumber)) {

@@ -72,7 +72,34 @@ export function crossedDeadline(status: ProcessTimeLimitStatus, nowMs: number): 
   return minutes != null && minutes < 0;
 }
 
+/** 本厂超时是否拦领用 (PROTO-Q41)。旧后端不带字段 = 原行为 (拦)。 */
+export function timeLimitBlocks(status: Pick<ProcessTimeLimitStatus, 'blockOnExceed'>): boolean {
+  return status.blockOnExceed !== false;
+}
+
+/** 后端成功响应里带回的投料时限警告 (errorCode = TIME_LIMIT_WARNING); 没有返回 null。 */
+export function timeLimitWarningOf(body: unknown): string | null {
+  const data = (body ?? {}) as { success?: unknown; errorCode?: unknown; actionHint?: unknown };
+  if (data.success !== true || data.errorCode !== 'TIME_LIMIT_WARNING') return null;
+  return typeof data.actionHint === 'string' && data.actionHint.trim() ? data.actionHint : null;
+}
+
 /** 按笔算时只有一部分超时: 要把能领的和超时的分开写。 */
 export function hasPartialExpiry(status: ProcessTimeLimitStatus): boolean {
   return status.perLot && Number(status.expiredQuantity ?? 0) > 0 && Number(status.drawableQuantity ?? 0) > 0;
 }
+
+/** 只警告档的复盘记录 (PROTO-Q41): 判不合格只记结论、不动库存。 */
+export function isReviewRecord(item: { recordKind?: string | null }): boolean {
+  return item.recordKind === 'WARN_EXCEEDED' || item.recordKind === 'WARN_START_MISSING';
+}
+
+/** 记录类型给人看的一句; 被拦的原有记录返回 null (不用多说)。 */
+export function recordKindText(item: { recordKind?: string | null }): string | null {
+  if (item.recordKind === 'WARN_EXCEEDED') return '只警告档的复盘记录：超时后照常投料了';
+  if (item.recordKind === 'WARN_START_MISSING') return '只警告档的复盘记录：没登记开始解冻就投料了';
+  return null;
+}
+
+export const REVIEW_REJECT_TIP = '这是复盘记录，判不合格只记结论，不会自动报废库存；剩余的料要报损请到「报损管理」（App 为「报损单」）提交';
+export const START_MISSING_RELEASE_TIP = '放行只记复盘结论，这批料仍按时限计时；请补登开始解冻';
