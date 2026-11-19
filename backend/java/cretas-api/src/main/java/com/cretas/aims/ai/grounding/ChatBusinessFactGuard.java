@@ -87,19 +87,36 @@ public class ChatBusinessFactGuard {
      * 咨询 / 怎么做类问法: 先于业务问法判定。「怎么 / 怎样 / 如何」后面还跟着动作才是咨询
      * (「怎么样」「销量如何」「如何？」是在问情况, 不算); 「注意什么 / 建议 / 合适」同理。
      */
-    private static final Pattern CONSULT = Pattern.compile(
+    private static final String HOW_TO_OR_ADVICE =
             "(?:怎么(?!样|这么|那么|又|会|还|突然|回事|下降|少|多|了)|怎样|如何)(?![?？。!！吗呢啊呀了，,]|$)(?!构成|组成|计算|核算|算)"
-                    + "|怎么办|注意|建议|办法|合适|适合|温度|什么|区别|意思|职责|在哪|哪里|好用");
+                    + "|怎么办|注意|建议|办法|合适|适合";
+    private static final Pattern CONSULT = Pattern.compile(
+            HOW_TO_OR_ADVICE + "|温度|什么|区别|意思|职责|在哪|哪里|好用");
+    /** 「怎么做 / 给建议」类咨询 (CONSULT 里不含概念词的那一半)。 */
+    private static final Pattern HOW_TO_ADVICE = Pattern.compile(HOW_TO_OR_ADVICE);
+
+    /**
+     * 点名要本厂的哪几个对象: 「哪些客户」「哪几张单」「哪个产品」。问的是具体的业务记录, 只能查, 不能聊 ——
+     * 即使句子里还带「为什么」(含「什么」, 原先会被当成概念咨询)。「哪些因素 / 哪些方面 / 哪种方法」是咨询, 不算。
+     *
+     * <p>触发 (2026-11-19 F006 财务数字专员, BP4 问题 48): 「哪些客户有逾期应收？先催哪几张单，为什么？」
+     * 因句末「为什么」被判成咨询, 进了闲聊 / 本地 27B 自由回答, 没查数, 只给通用建议 (账龄页实际 3 家逾期)。
+     */
+    private static final Pattern DATA_PICK = Pattern.compile(
+            "哪(?:些|几|个|家|位|笔|张|批)(?!因素|方面|原因|办法|方法|措施|环节|技巧|建议|要点|步骤|地方|更|最好)");
 
     /**
      * 这句话是不是在问业务情况 / 业务数字。是 ⇒ 调用方不许把它交给纯闲聊模型。
-     * 「外卖」这类含「卖」的非业务词先剥掉; 咨询句 (怎么降低成本 / 如何提高合格率 / 怎么创建订单) 先判非业务。
+     * 「外卖」这类含「卖」的非业务词先剥掉; 咨询句 (怎么降低成本 / 如何提高合格率 / 怎么创建订单) 先判非业务;
+     * 点名要哪几个业务对象的问法 ({@link #DATA_PICK}) 不被概念词 (什么 / 区别…) 判成咨询。
      */
     public static boolean isBusinessQuestion(String input) {
         if (input == null || input.isBlank()) return false;
         String s = input.toLowerCase().replaceAll("\\s+", "").replace("外卖", "").replace("买卖", "");
+        boolean subject = QUESTION_SUBJECT.matcher(s).find();
+        if (subject && DATA_PICK.matcher(s).find() && !HOW_TO_ADVICE.matcher(s).find()) return true;
         if (CONSULT.matcher(s).find()) return false;
-        return QUESTION_SUBJECT.matcher(s).find() && QUESTION_ASK.matcher(s).find();
+        return subject && QUESTION_ASK.matcher(s).find();
     }
 
     // ==================== 输出闸 ====================
