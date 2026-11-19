@@ -110,6 +110,10 @@ public class SourceIndividualService {
         }
 
         String newId = UUID.randomUUID().toString();
+        // 新 id 由服务端随机生成, 不可能已有后代 ⇒ 建档不会成环, 不做成环校验;
+        // 但父本/母本两行要按 id 有序加锁, 与 update 的有序加锁同序, 避免交叉等待。
+        lockInIdOrder(factoryId, java.util.Arrays.asList(
+                trimToNull(request.getSireIndividualId()), trimToNull(request.getDamIndividualId())));
         String sireId = requireParentInSameFactory(factoryId, request.getSireIndividualId(), newId, "父本");
         String damId = requireParentInSameFactory(factoryId, request.getDamIndividualId(), newId, "母本");
 
@@ -164,6 +168,13 @@ public class SourceIndividualService {
 
     @Transactional
     public SourceIndividualDTO update(String factoryId, String id, UpdateSourceIndividualRequest request) {
+        if (request.getSireIndividualId() != null || request.getDamIndividualId() != null) {
+            // 改系谱: 先按 id 有序锁住「自己 + 新父本/母本 + 它们的全部祖先」, 锁后重读父本指针判成环。
+            // ⚠️ 必须排在 require() 之前: 锁查询把自己这一行载入持久化上下文, require 拿到的是加锁时的最新值。
+            lockPedigreeAndRejectCycle(factoryId, id,
+                    pedigreeParent(request.getSireIndividualId(), id, "父本"),
+                    pedigreeParent(request.getDamIndividualId(), id, "母本"));
+        }
         SourceIndividual entity = require(factoryId, id);
 
         // partial body: 只写回非 null 的字段 (语义与 UpdateMaterialBatchRequest 一致)。
@@ -366,6 +377,119 @@ public class SourceIndividualService {
                     .withHint("先建立" + role + "的个体档案, 再回来填这一栏");
         }
         return parentId;
+    }
+
+    /** 一条系谱边的上限保护: 祖先超过这么多仍没走完, 视为数据异常, 拒绝而不是放行。 */
+    private static final int MAX_PEDIGREE_NODES = 10_000;
+    /** 加锁后祖先集合仍在变(别人同时改系谱)的重试轮数; 用尽就拒绝, ⛔ 不在没锁全的情况下放行。 */
+    private static final int MAX_PEDIGREE_LOCK_ROUNDS = 3;
+
+    /** 请求里的父本/母本: null = 不改, 空白 = 清空(都不需要成环校验); 指向自己直接 422。 */
+    private static String pedigreeParent(String raw, String selfId, String role) {
+        String parentId = trimToNull(raw);
+        if (parentId != null && parentId.equals(selfId)) {
+            throw new BusinessException(422, role + "不能指向个体自己")
+                    .withCode("INVALID_PEDIGREE");
+        }
+        return parentId;
+    }
+
+    /**
+     * 系谱成环校验 (#1844 终审 L-a)。
+     *
+     * <p>把 {@code selfId} 的父本/母本设成 P 时, 如果 P 的祖先链(父本、母本两条都走)里已经有 selfId,
+     * 写进去就成环 —— 409 {@code PEDIGREE_CYCLE}, 说清是哪一头。
+     *
+     * <p>🔴 并发: 两人同时把 X、A 设成对方的父本时, 只「各锁父本行」会交叉等待(PG 40P01 → 500)。
+     * 这里把「自己 + 新父本 + 新父本的全部祖先」<b>按 id 排序</b>后逐行 {@code FOR UPDATE}:
+     * 两边锁序一致, 后到的一方等先到的一方提交, 然后在<b>锁后</b>重读父本指针(标量查询, 不吃持久化上下文缓存),
+     * 看到对方刚写的那条边 ⇒ 稳定得到 409, 而不是死锁。
+     * 写系谱的一方总会锁住被改的那一行(自己), 而校验方锁住了它看到的整条祖先链, 所以任何一条会补成环的边
+     * 都要和校验方在某一行上串行。锁后祖先集合变大(加锁前后有人改了链)时: 新增的 id 全部排在已锁最大 id
+     * 之后才补锁再查(锁序仍单调), 否则直接 409 {@code PEDIGREE_BUSY} —— ⛔ 不乱序补锁 (#1968 L-1);
+     * 最多 {@link #MAX_PEDIGREE_LOCK_ROUNDS} 轮。
+     */
+    private void lockPedigreeAndRejectCycle(String factoryId, String selfId, String sireId, String damId) {
+        List<String> parents = java.util.stream.Stream.of(sireId, damId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        java.util.Set<String> want = new java.util.TreeSet<>();
+        want.add(selfId);
+        want.addAll(ancestorsIncluding(factoryId, parents));
+        java.util.Set<String> locked = new java.util.HashSet<>();
+        java.util.Map<String, String> codes = new java.util.HashMap<>();
+        for (int round = 0; round < MAX_PEDIGREE_LOCK_ROUNDS; round++) {
+            for (String lockId : want) {
+                if (locked.add(lockId)) {
+                    repository.lockByIdAndFactoryId(lockId, factoryId)
+                            .ifPresent(si -> codes.put(si.getId(), si.getIndividualCode()));
+                }
+            }
+            if (!codes.containsKey(selfId)) {
+                throw new BusinessException(404, "源头个体档案不存在: " + selfId);
+            }
+            // 锁后重读: 逐个父本判, 才能说清是父本还是母本那一侧成环。
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (String parentId : parents) {
+                java.util.Set<String> chain = ancestorsIncluding(factoryId, List.of(parentId));
+                if (chain.contains(selfId)) {
+                    String role = parentId.equals(sireId) ? "父本" : "母本";
+                    String parentCode = codes.getOrDefault(parentId, parentId);
+                    throw new BusinessException(409, role + "「" + parentCode + "」是「" + codes.get(selfId)
+                            + "」的后代, 设为" + role + "会让系谱成环")
+                            .withCode("PEDIGREE_CYCLE")
+                            .withHint("核对耳标/档案编号, 一头个体不能同时是另一头的祖先和后代")
+                            .withHintTarget(role.equals("父本") ? "sireIndividualId" : "damIndividualId");
+                }
+                seen.addAll(chain);
+            }
+            java.util.TreeSet<String> missing = new java.util.TreeSet<>(seen);
+            missing.removeAll(locked);
+            if (missing.isEmpty()) {
+                return;
+            }
+            // #1968 L-1: 补锁只许「全部排在已锁最大 id 之后」—— 否则就是乱序加锁, 能和按序加锁的事务交叉等待
+            // (PG 40P01 → 500)。⛔ 不乱序补锁, 直接 409 让用户重试。
+            if (missing.first().compareTo(java.util.Collections.max(locked)) < 0) {
+                throw pedigreeBusy();
+            }
+            want = missing;
+        }
+        throw pedigreeBusy();
+    }
+
+    private static BusinessException pedigreeBusy() {
+        return new BusinessException(409, "系谱正在被同时修改, 本次未保存")
+                .withCode("PEDIGREE_BUSY")
+                .withHint("稍后重试");
+    }
+
+    /** {@code starts} 本身 + 沿父本、母本两条链向上的全部祖先(本厂、未撤销)。 */
+    private java.util.Set<String> ancestorsIncluding(String factoryId, java.util.Collection<String> starts) {
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>(starts);
+        java.util.List<String> frontier = new java.util.ArrayList<>(starts);
+        while (!frontier.isEmpty()) {
+            if (seen.size() > MAX_PEDIGREE_NODES) {
+                throw new BusinessException(409, "系谱层级过多, 无法完成成环校验, 本次未保存")
+                        .withCode("PEDIGREE_TOO_DEEP");
+            }
+            java.util.List<String> next = new java.util.ArrayList<>();
+            for (Object[] row : repository.findParentLinks(factoryId, frontier)) {
+                for (int i = 1; i <= 2; i++) {
+                    Object parent = row[i];
+                    if (parent != null && seen.add(parent.toString())) {
+                        next.add(parent.toString());
+                    }
+                }
+            }
+            frontier = next;
+        }
+        return seen;
+    }
+
+    /** 按 id 排序逐行 {@code FOR UPDATE}(跳过 null); 与 {@link #lockPedigreeAndRejectCycle} 同一锁序。 */
+    private void lockInIdOrder(String factoryId, java.util.Collection<String> ids) {
+        ids.stream().filter(java.util.Objects::nonNull).distinct().sorted()
+                .forEach(lockId -> repository.lockByIdAndFactoryId(lockId, factoryId));
     }
 
     private SourceIndividual require(String factoryId, String id) {

@@ -285,6 +285,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /** #1844 L-d: 解除来源个体挂载的留痕 (同事务写, 写不进去就回滚)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.datacenter.OperationLogRepository operationLogRepository;
+
     /**
      * 一物一码 (转录 6.9 行62/68/105): 批次号由编码规则原子序号系统生成, 不手填防重码。
      * optional + fail-open: 无 EncodingRule 配置时回退到默认 MB-{FACTORY}-{YYYYMMDD}-{SEQ} 格式
@@ -987,6 +991,17 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 来源个体: null = 不修改(partial); 非 null 必须本厂、未撤销, 并锁个体行(与撤销串行)。
         String linkedSourceIndividualId = null;
         if (request.getSourceIndividualId() != null) {
+            // #1968 M-2: 已挂个体时不许经编辑直接改挂到另一个个体 —— 那等于不留痕地把原个体从召回范围里摘掉;
+            // 必须先走「解除挂载」(原因必填、写日志、已消耗批次另需权限) 再挂新的。回显同一个 id 照常放行。
+            String requestedId = request.getSourceIndividualId().trim();
+            String currentId = batch.getSourceIndividualId();
+            if (!requestedId.isEmpty() && currentId != null && !currentId.isBlank()
+                    && !currentId.equals(requestedId)) {
+                throw new BusinessException(409, "该批次已挂来源个体, 请先解除挂载再改挂其它个体")
+                        .withCode("SOURCE_INDIVIDUAL_ALREADY_LINKED")
+                        .withHint("在批次编辑里点「解除挂载」并填写原因, 然后再挂新的个体")
+                        .withHintTarget("sourceIndividualId");
+            }
             linkedSourceIndividualId = requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
             if (linkedSourceIndividualId == null) {
                 throw new BusinessException(400, "来源个体编号不能为空白")
@@ -2280,6 +2295,111 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         log.info("更正批次入库日期: factoryId={}, batchId={}, {} → {}, role={}, operatorId={}",
                 factoryId, batchId, oldReceiptDate, newReceiptDate, callerRole, operatorId);
+        return materialBatchMapper.toDTO(batch);
+    }
+
+    /**
+     * 解除挂载口径里的「已有消耗」: 返回给用户看的事实描述; 没有消耗返回 null。
+     * 三个来源任一命中即算: used_quantity &gt; 0 / 终态或在制占用状态 / 有消耗记录(带 factory_id 查)。
+     * ⚠️ 只看 used_quantity 不够: adjustBatchQuantity 的扣减写回 receipt_quantity, 不动 used_quantity。
+     * 消耗记录仓储不在 = 不知道有没有消耗 ⇒ 按「已消耗」处理 (fail closed)。
+     */
+    private String consumptionEvidence(String factoryId, MaterialBatch batch) {
+        if (batch.getUsedQuantity() != null && batch.getUsedQuantity().signum() > 0) {
+            return "已领用 " + batch.getUsedQuantity().stripTrailingZeros().toPlainString()
+                    + (batch.getQuantityUnit() == null ? "" : " " + batch.getQuantityUnit());
+        }
+        MaterialBatchStatus s = batch.getStatus();
+        if (s == MaterialBatchStatus.DEPLETED || s == MaterialBatchStatus.USED_UP
+                || s == MaterialBatchStatus.PRODUCING_RESERVED || s == MaterialBatchStatus.SCRAPPED) {
+            return "状态为「" + s.getDisplayName() + "」";
+        }
+        if (materialConsumptionRepository == null) {
+            return "消耗记录无法核对";
+        }
+        long records = materialConsumptionRepository.findByFactoryIdAndBatchIdPaged(
+                factoryId, batch.getId(), org.springframework.data.domain.PageRequest.of(0, 1)).getTotalElements();
+        if (records > 0) {
+            return "已有 " + records + " 条消耗记录";
+        }
+        return null;
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
+                                                   Long operatorId, String callerRole) {
+        // 入参校验排在读批次/写库之前: 被拒的请求一次写入都没发生过。
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty()) {
+            throw new BusinessException(400, "解除原因不能为空")
+                    .withHint("解除来源个体会改变这批原料的溯源源头, 必须说明为什么解除")
+                    .withHintTarget("reason");
+        }
+        if (trimmedReason.length() > CORRECTION_REASON_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "解除原因过长(" + trimmedReason.length() + "/" + CORRECTION_REASON_MAX_LENGTH + " 字)")
+                    .withHintTarget("reason");
+        }
+        MaterialBatch batch = materialBatchRepository.findById(batchId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+        if (!factoryId.equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "无权操作该批次")
+                    .withHint("请联系管理员确认批次归属或切换工厂账号");
+        }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+
+        String oldIndividualId = batch.getSourceIndividualId();
+        if (oldIndividualId == null || oldIndividualId.isBlank()) {
+            throw new BusinessException(409, "该批次没有挂来源个体, 无需解除")
+                    .withCode("SOURCE_INDIVIDUAL_NOT_LINKED")
+                    .withHint("刷新批次列表查看最新状态");
+        }
+        // #1968 M-2 (口径 a): 已有消耗的批次解除后, 它和下游会从按个体的谱系/召回里消失 ⇒ 另需权限,
+        // 按可配置权限码判 (默认仓储主管 + 厂长), ⛔ 不写死岗位, 提示里也不写岗位名; 权限服务缺失一律拒绝。
+        String consumption = consumptionEvidence(factoryId, batch);
+        if (consumption != null && (permissionService == null || !permissionService.roleHasConfiguredPermission(
+                factoryId, callerRole, PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION))) {
+            throw new BusinessException(409, "该批次" + consumption
+                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 需要「解除已消耗批次挂载」权限")
+                    .withCode("SOURCE_INDIVIDUAL_LINK_CONSUMED")
+                    .withHint("请联系管理员在权限配置中开通「解除已消耗批次挂载」权限");
+        }
+        // ⛔ 留痕器不在就不许改 —— 静默不留痕比报错危险。
+        if (operationLogRepository == null) {
+            throw new BusinessException(500, "操作日志不可用, 本次解除未执行")
+                    .withHint("留痕写不进去就不允许改动, 请联系技术支持");
+        }
+
+        java.util.Map<String, Object> oldValue = new java.util.HashMap<>();
+        oldValue.put("sourceIndividualId", oldIndividualId);
+        java.util.Map<String, Object> newValue = new java.util.HashMap<>();
+        newValue.put("sourceIndividualId", null);
+        java.util.Map<String, Object> diffRow = new java.util.HashMap<>();
+        diffRow.put("field", "sourceIndividualId");
+        diffRow.put("from", oldIndividualId);
+        diffRow.put("to", null);
+        com.cretas.aims.entity.datacenter.OperationLog trace = com.cretas.aims.entity.datacenter.OperationLog.builder()
+                .factoryId(factoryId)
+                .userId(operatorId)
+                .module("MATERIAL_BATCH")
+                .action("UNLINK_SOURCE_INDIVIDUAL")
+                .entityType("MaterialBatch")
+                .entityId(batchId)
+                .oldValue(oldValue)
+                .newValue(newValue)
+                .diff(java.util.List.of(diffRow))
+                .summary("解除批次 " + batch.getBatchNumber() + " 的来源个体 " + oldIndividualId
+                        + "; 原因: " + trimmedReason + "; 角色: " + callerRole)
+                .success(Boolean.TRUE)
+                .build();
+        // 同一个 @Transactional: 日志写不进去, 批次的改动一起回滚。
+        operationLogRepository.save(trace);
+
+        batch.setSourceIndividualId(null);
+        batch = materialBatchRepository.save(batch);
+        log.info("解除批次来源个体: factoryId={}, batchId={}, oldSourceIndividualId={}, role={}, operatorId={}",
+                factoryId, batchId, oldIndividualId, callerRole, operatorId);
         return materialBatchMapper.toDTO(batch);
     }
 

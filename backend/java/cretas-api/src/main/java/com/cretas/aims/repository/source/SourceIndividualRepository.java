@@ -110,6 +110,18 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
                                          @Param("parentId") String parentId);
 
     /**
+     * 系谱成环校验用: 一批个体各自的 {@code [id, sire_individual_id, dam_individual_id]}。
+     *
+     * <p>🔴 刻意是<b>标量投影</b>而不是返回实体: 成环校验在加锁<b>之后</b>要重读父本指针,
+     * 返回实体时 Hibernate 会把持久化上下文里早先载入的旧实例原样还回来(行已被别的事务改过也看不到),
+     * 标量投影每次都按列从库里读。带 factory_id; 已撤销个体由实体 {@code @Where} 排除。
+     */
+    @Query("SELECT si.id, si.sireIndividualId, si.damIndividualId FROM SourceIndividual si "
+            + "WHERE si.factoryId = :factoryId AND si.id IN :ids")
+    List<Object[]> findParentLinks(@Param("factoryId") String factoryId,
+                                   @Param("ids") java.util.Collection<String> ids);
+
+    /**
      * 同一父本的全部个体(<b>含调用方自己</b> —— 排除自身是服务层的事, 这里如实返回)。
      *
      * <p>「同一头种公牛的其它后代」是选种的最小闭环: 从一块好肉倒推到公牛, 再看它别的后代。

@@ -284,7 +284,9 @@ class ProcessSecretDataLayerContractTest {
             // APS 按天排: 某天这个计划占当天产线产能的比例, 是排程量, 不是配方
             "shareOfDay",
             // 物料平衡阈值 (缺口 #07), 厂级配置数, 不是配方
-            "warnPct", "redPct");
+            "warnPct", "redPct",
+            // 车间大屏: 计划的时间进度 (已过天数 ÷ 计划天数), 是排程进度, 不是配方
+            "timeProgressPct");
 
     @Test
     void everyRatioLikeMapKeyIsClassified() throws IOException {

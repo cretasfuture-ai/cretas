@@ -59,6 +59,15 @@ public interface PermissionService {
     String PAYMENT_DISBURSE_PERMISSION = "payment:disburse";
 
     /**
+     * 解除<b>已有消耗</b>(已领用 / 已耗尽 / 生产占用 / 已报废) 原料批次的来源个体挂载 (#1968 M-2 口径 a)。
+     * 解除会让该批次及其下游从按个体的谱系/召回里消失, 所以比未消耗批次多一道门槛。
+     * 默认仓储主管 + 厂长 (端点本身要求 warehouse/inventory 写权限, 默认岗位必须能走到这个端点),
+     * 工厂可在阈值设置里改岗位名单
+     * (ThresholdKeys.INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED)。
+     */
+    String SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION = "source_individual:unlink_consumed";
+
+    /**
      * 只有角色码 + 工厂 (没有 User 对象) 的调用方用的<b>通用</b>权限判定: 与 {@link #hasPermission} 走同一条解析链
      * (可配置岗位名单 / 模块权限 / 审批码), 只是不叠加个人覆盖。「我的待办」按角色聚合用。默认实现 false (测试替身用)。
      */

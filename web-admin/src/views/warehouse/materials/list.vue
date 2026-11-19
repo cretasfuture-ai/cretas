@@ -22,6 +22,8 @@ import type { ReceivingLifecycleCounts, ReceivingTaskFilter } from './warehouseI
 import { autoTotalWeightKg, autoWeightSkippedHint } from './autoWeight';
 import { toDateString } from '@/utils/dateFormat';
 import { groupBatchesBySourceDocument, type DocumentBatchGroup } from './groupBySourceDocument';
+import { getSourceIndividual } from '@/api/sourceIndividual';
+import { UNLINK_REASON_MAX_LENGTH, unlinkSourceIndividualPath, validateUnlinkReason } from './sourceIndividualUnlink';
 
 const router = useRouter();
 const route = useRoute();
@@ -335,6 +337,11 @@ const formDialogTitle = ref('入库登记');
 const formRef = ref<FormInstance>();
 const formSaving = ref(false);
 const editingId = ref<string | null>(null);
+/** 正在编辑的批次挂着的来源个体 (#1844 L-d); null = 没挂。 */
+const editingSourceIndividualId = ref<string | null>(null);
+/** 该个体的档案编号; 读不到时为 null, 界面如实说读不到, ⛔ 不拿 id 冒充编号。 */
+const editingSourceIndividualCode = ref<string | null>(null);
+const unlinkingSourceIndividual = ref(false);
 
 const formData = reactive({
   batchNumber: '',
@@ -487,6 +494,8 @@ watch(() => formData.receiptQuantity, () => { autoCalcWeightAndValue(); });
 
 function handleCreate() {
   editingId.value = null;
+  editingSourceIndividualId.value = null;
+  editingSourceIndividualCode.value = null;
   formDialogTitle.value = '入库登记';
   w02HintShown = false;
   weightHintShown = false;
@@ -517,7 +526,63 @@ function handleEdit(row: TableRow) {
     factoryNumber: row.factoryNumber || '',
     originPlace: row.originPlace || '',
   });
+  editingSourceIndividualId.value = row.sourceIndividualId ? String(row.sourceIndividualId) : null;
+  editingSourceIndividualCode.value = null;
+  if (editingSourceIndividualId.value) {
+    const linkedId = editingSourceIndividualId.value;
+    getSourceIndividual(factoryId.value, linkedId)
+      .then((res) => {
+        if (res.success && editingSourceIndividualId.value === linkedId) {
+          editingSourceIndividualCode.value = res.data?.individualCode ?? null;
+        }
+      })
+      .catch(() => { /* 编号读不到就显示「读不到」, 不影响解除 */ });
+  }
   formDialogVisible.value = true;
+}
+
+/**
+ * 解除批次的来源个体挂载 (#1844 L-d)。原因必填, 后端写操作日志;
+ * ⛔ 不走编辑提交体 (那里 sourceIndividualId 空白会 400, null 是「不改」)。
+ */
+async function handleUnlinkSourceIndividual() {
+  const batchId = editingId.value;
+  if (!batchId || !editingSourceIndividualId.value) return;
+  let reason: string;
+  try {
+    const result = await ElMessageBox.prompt(
+      '解除后，这批原料在溯源里不再追到该个体。请填写原因（会记入操作日志）。',
+      '解除来源个体挂载',
+      {
+        confirmButtonText: '解除挂载',
+        cancelButtonText: '取消',
+        inputType: 'textarea',
+        inputPlaceholder: `例如：挂错了个体（最多 ${UNLINK_REASON_MAX_LENGTH} 字）`,
+        inputValidator: validateUnlinkReason,
+      },
+    );
+    reason = String(result.value ?? '').trim();
+  } catch {
+    return; // 用户取消
+  }
+  unlinkingSourceIndividual.value = true;
+  try {
+    const res = await post(unlinkSourceIndividualPath(factoryId.value, batchId), { reason });
+    if (res.success) {
+      ElMessage.success('已解除来源个体挂载，已记录原因');
+      editingSourceIndividualId.value = null;
+      editingSourceIndividualCode.value = null;
+      loadData();
+    } else {
+      // ⛔ 不吞后端文案: 409「没挂个体」/ 403「无权」各有含义。
+      ElMessage({ message: res.message || '解除失败', type: 'error', duration: 0, showClose: true });
+    }
+  } catch (error) {
+    console.error('解除来源个体挂载失败:', error);
+    ElMessage({ message: '解除失败，请重试', type: 'error', duration: 0, showClose: true });
+  } finally {
+    unlinkingSourceIndividual.value = false;
+  }
 }
 
 /**
@@ -1245,6 +1310,28 @@ async function handleGenerateLabel(row: TableRow) {
         </el-form-item>
         <el-form-item label="产地">
           <el-input v-model="formData.originPlace" placeholder="原料产地（如：山东寿光，可选）" />
+        </el-form-item>
+        <!--
+          #1844 L-d: 挂错了个体要有一条能走的路。解除走独立端点(原因必填、写操作日志),
+          ⛔ 不放进编辑提交体 —— 那里 sourceIndividualId 空白会 400, null 是「不改」。
+        -->
+        <el-form-item v-if="editingId && editingSourceIndividualId" label="来源个体">
+          <div class="source-individual-link" data-testid="batch-source-individual">
+            <span v-if="editingSourceIndividualCode">档案 {{ editingSourceIndividualCode }}</span>
+            <span v-else class="text-secondary">已挂个体（档案编号未读到）</span>
+            <el-button
+              v-if="canWrite"
+              type="danger"
+              link
+              size="small"
+              :loading="unlinkingSourceIndividual"
+              data-testid="batch-source-individual-unlink"
+              @click="handleUnlinkSourceIndividual"
+            >
+              解除挂载
+            </el-button>
+          </div>
+          <div class="field-hint">挂错了个体可在这里解除，需填写原因并记入操作日志。</div>
         </el-form-item>
       </el-form>
       <template #footer>

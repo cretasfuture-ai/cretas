@@ -134,8 +134,11 @@ public class YieldReportRequest {
     /** 多时段×人数工时 (张权 多段开工/收工) */
     private List<LaborSegment> laborSegments;
 
-    /** 副产物明细 (料头/肥油/骨头) */
+    /** 副产物明细 (料头/肥油/骨头), 可多行; 行内 productTypeId 限产品目录 */
     private List<Byproduct> byproducts;
+
+    /** 不良按字典项分摊 (defectId + kg), Σkg ≤ defectQuantity; null/空 = 没分摊 */
+    private List<DefectShare> defectBreakdown;
 
     /** 损耗量; null=未录 */
     private BigDecimal wasteQuantity;
@@ -218,9 +221,41 @@ public class YieldReportRequest {
 
     @Data
     public static class Byproduct {
+        /**
+         * 副产品对应的产品目录项 (product_types.id)。给了就必须是本厂启用中的产品;
+         * 不给 = 旧版 App 只传名称, 保持原行为 (零回归), 但新版称重页必须选目录项。
+         */
+        private String productTypeId;
         private String name;
         private BigDecimal quantity;
         private String unit;
+    }
+
+    /**
+     * 不良按字典项分摊的一行: 哪个不良项、多少、什么单位。
+     * 单位与产出单位 (= 不良总量的单位) 一致时, 全部行之和不得超过 {@link YieldReportRequest#defectQuantity};
+     * 单位不一致则不比较, 落库时标 defectBreakdownCheck=UNIT_MISMATCH (见 WeighingEntryRules#assertDefectBreakdown)。
+     * 落 custom_fields.defectBreakdown。
+     * defectId 暂不校验字典存在性 (不良项字典由质量线 E 建, 建成后在 WeighingEntryRules 接入)。
+     */
+    @Data
+    public static class DefectShare {
+        private String defectId;
+        /** 数量, 单位见 {@link #unit}。 */
+        private BigDecimal quantity;
+        /** quantity 的单位; 空 = 不知道 (不与不良总量比较)。 */
+        private String unit;
+        /** 旧字段: 以 kg 计的数量 (quantity 为空时才用, 单位视为 kg)。 */
+        private BigDecimal kg;
+
+        public BigDecimal effectiveQuantity() {
+            return quantity != null ? quantity : kg;
+        }
+
+        public String effectiveUnit() {
+            if (quantity != null) return unit == null || unit.isBlank() ? null : unit.trim();
+            return kg != null ? "kg" : null;
+        }
     }
 
     /** 画布一道工序的一个半成品产出端口的填报值。 */

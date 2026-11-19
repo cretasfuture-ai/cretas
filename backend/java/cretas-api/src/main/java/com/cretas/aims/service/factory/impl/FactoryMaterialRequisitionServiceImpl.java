@@ -846,6 +846,39 @@ public class FactoryMaterialRequisitionServiceImpl implements FactoryMaterialReq
         return repository.findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, status, pageable);
     }
 
+    /** 用户输入当字面量: % _ 和转义符 ! 本身都转义 (查询里 LIKE ... ESCAPE '!'), 输入「50%」不再匹配一切。 */
+    static String likePattern(String v) {
+        if (v == null || v.isBlank()) return null;
+        return "%" + com.cretas.aims.dto.production.ProductionPlanListFilter.escapeLike(
+                v.trim().toLowerCase(java.util.Locale.ROOT)) + "%";
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<FactoryMaterialRequisition> list(String factoryId, Status status, String keyword, String planNumber,
+                                                 java.time.LocalDate fromDate, java.time.LocalDate toDate,
+                                                 Pageable pageable) {
+        return repository.search(factoryId, status, likePattern(keyword), likePattern(planNumber),
+                fromDate, toDate, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<MaterialSummaryRow> summarizeByMaterial(String factoryId, Status status, String keyword,
+                                                        String planNumber, java.time.LocalDate fromDate,
+                                                        java.time.LocalDate toDate) {
+        List<MaterialSummaryRow> rows = new java.util.ArrayList<>();
+        for (Object[] r : repository.summarizeByMaterial(factoryId, status, Status.CANCELLED, likePattern(keyword),
+                likePattern(planNumber), fromDate, toDate)) {
+            java.math.BigDecimal picked = (java.math.BigDecimal) r[3];
+            java.math.BigDecimal issued = (java.math.BigDecimal) r[4];
+            java.math.BigDecimal returned = (java.math.BigDecimal) r[5];
+            rows.add(new MaterialSummaryRow((String) r[0], (String) r[1], (String) r[2], picked, issued, returned,
+                    issued.subtract(returned)));
+        }
+        return rows;
+    }
+
     @Override
     @Transactional(readOnly = true)
     public List<FactoryMaterialRequisition> listByPlan(String factoryId, String productionPlanId) {

@@ -5,6 +5,7 @@ import com.cretas.aims.annotation.RequirePermission;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.service.datasuspect.DataSuspectService;
 import com.cretas.aims.service.yield.WeighingEntryRules;
+import com.cretas.aims.service.yield.WeighingPendingTaskService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ import java.util.List;
 public class ProductionDataSuspectController {
 
     private final DataSuspectService dataSuspectService;
+    private final WeighingPendingTaskService pendingTaskService;
 
     @RequirePermission({"production:read"})
     @GetMapping("/data-suspects")
@@ -46,5 +48,12 @@ public class ProductionDataSuspectController {
             @PathVariable String factoryId,
             @PathVariable Long taskId) {
         return ApiResponse.success(dataSuspectService.listTaskWeighings(factoryId, taskId));
+    }
+
+    @RequirePermission({"production:read"})
+    @GetMapping("/weigh/pending-tasks")
+    @Operation(summary = "待称重任务总览 (执行中且还没有任何称重, 今日计划排前面)")
+    public ApiResponse<List<WeighingPendingTaskService.PendingTask>> pendingTasks(@PathVariable String factoryId) {
+        return ApiResponse.success(pendingTaskService.list(factoryId, LocalDate.now(WeighingEntryRules.FACTORY_ZONE)));
     }
 }
