@@ -49,6 +49,8 @@ export interface QualityDefect {
   id: string;
   factoryId: string;
   qualityInspectionId: string;
+  /** 关联质检记录的业务编号 QI-YYYYMMDD-NNNN (后端按本厂回填); null = 未编号 */
+  qualityInspectionNumber?: string | null;
   materialId: string | null;
   defectType: DefectType;
   quantity: number;

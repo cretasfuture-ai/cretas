@@ -127,6 +127,8 @@ public class EncodingRuleServiceImpl implements EncodingRuleService {
         log.info("创建编码规则 - factoryId={}, entityType={}, ruleName={}",
                 rule.getFactoryId(), rule.getEntityType(), rule.getRuleName());
 
+        EncodingRuleService.rejectSystemNumbered(rule.getEntityType());
+
         // 检查是否已存在
         if (encodingRuleRepository.existsByFactoryIdAndEntityType(rule.getFactoryId(), rule.getEntityType())) {
             throw new BusinessException(409, "该实体类型的编码规则已存在")

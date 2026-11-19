@@ -438,4 +438,14 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      */
     @Query("SELECT q FROM QualityInspection q WHERE q.id IN :ids")
     List<QualityInspection> findByIdIn(@Param("ids") Collection<String> ids);
+
+    /**
+     * 不良记录列表回填「关联质检编号」: 本厂内这些质检记录的 [id, inspection_number]。
+     * 原生 SQL 故意不过 @Where —— 质检记录被软删后编号仍然是它的编号 (号不复用), 不良记录照样显示;
+     * ⚠️ factory_id 谓词是租户边界: 别厂的质检记录 id 即使被挂到本厂不良上也拿不到它的编号。
+     */
+    @Query(value = "SELECT q.id, q.inspection_number FROM quality_inspections q "
+            + "WHERE q.factory_id = :factoryId AND q.id IN (:ids)", nativeQuery = true)
+    List<Object[]> findInspectionNumbersByFactoryIdAndIdIn(@Param("factoryId") String factoryId,
+                                                            @Param("ids") Collection<String> ids);
 }

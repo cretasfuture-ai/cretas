@@ -222,6 +222,26 @@ class QualityInspectionNumberPostgresRepositoryQueryValidationTest {
                 Integer.class, FACTORY)).isEqualTo(2);
     }
 
+    @Test
+    void defectListNumberLookupStaysInsideFactoryAndKeepsSoftDeletedNumbers() {
+        migrate();
+        jdbc.update("INSERT INTO quality_inspections (id, inspection_number, factory_id, production_batch_id, inspector_id, "
+                + "inspection_date, sample_size, pass_count, fail_count, result, created_at, updated_at, deleted_at) VALUES "
+                + "('N-OWN', 'QI-20261110-0001', ?, 1, 1, CURRENT_DATE, 1, 1, 0, 'PASS', NOW(), NOW(), NULL), "
+                + "('N-DEL', 'QI-20261110-0002', ?, 1, 1, CURRENT_DATE, 1, 1, 0, 'PASS', NOW(), NOW(), NOW()), "
+                + "('N-OTHER', 'QI-20261110-0001', ?, 1, 1, CURRENT_DATE, 1, 1, 0, 'PASS', NOW(), NOW(), NULL)",
+                FACTORY, FACTORY, OTHER_FACTORY);
+
+        java.util.Map<String, String> numbers = new java.util.HashMap<>();
+        for (Object[] row : repository.findInspectionNumbersByFactoryIdAndIdIn(FACTORY, List.of("N-OWN", "N-DEL", "N-OTHER"))) {
+            numbers.put((String) row[0], (String) row[1]);
+        }
+        // 本厂的 (含已软删的那条) 拿得到编号; 别厂质检记录的编号即使 id 被传进来也拿不到
+        assertThat(numbers).containsOnly(
+                java.util.Map.entry("N-OWN", "QI-20261110-0001"),
+                java.util.Map.entry("N-DEL", "QI-20261110-0002"));
+    }
+
     private void migrate() {
         Flyway.configure().dataSource(dataSource).schemas(SCHEMA).defaultSchema(SCHEMA)
                 .locations("classpath:db/flyway").baselineOnMigrate(true).baselineVersion("20261119.85")
