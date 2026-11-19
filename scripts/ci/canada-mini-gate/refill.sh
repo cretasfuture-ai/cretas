@@ -128,8 +128,15 @@ beat() {
   [ -f "$HB_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$HB_STAMP") ))
   [ "$age" -ge "$HB_EVERY" ] || return 0
   touch "$HB_STAMP"  # 先占位: 同一分钟别的槽不再写
-  local p
-  p=$(sudo -n powermetrics --samplers thermal -i 1000 -n 1 2>/dev/null | sed -n 's/.*Current pressure level: *//p' | head -1)
+  local pm p= line
+  # 先落变量再解析, 不走管道 (闸 test-pipeline-tail-swallows-rc.sh): powermetrics 失败 (sudo 不放行) 要记一行, 不是静默空值。
+  if pm=$(sudo -n powermetrics --samplers thermal -i 1000 -n 1 2>/dev/null); then
+    while IFS= read -r line; do
+      case "$line" in *"Current pressure level:"*) p=${line##*Current pressure level:}; p=${p# }; p=${p# }; break;; esac
+    done <<< "$pm"
+  else
+    log "powermetrics failed rc=$?"
+  fi
   if [ -n "$p" ]; then
     [ "$p" = "$(cat "$PRESSURE_FILE" 2>/dev/null)" ] || log "thermal pressure: $p"
     echo "$p" > "$PRESSURE_FILE"
