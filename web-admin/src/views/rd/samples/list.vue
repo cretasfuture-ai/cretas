@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -382,6 +383,7 @@ async function addTrackingRecord() {
 
       <!-- 研发需求列表 -->
       <el-table v-if="activeTab === 'requests'" :data="tableData" border stripe>
+        <template #empty><ListEmptyExplain empty-title="还没有研发需求" empty-hint="客户提出新品需求后，点右上角新建研发需求，再逐步推进到打样、报价。" /></template>
         <el-table-column prop="requestNumber" label="需求编号" width="180" />
         <el-table-column prop="customerName" label="客户" min-width="130" />
         <el-table-column prop="requirements" label="需求描述" min-width="200" show-overflow-tooltip />
@@ -402,6 +404,7 @@ async function addTrackingRecord() {
 
       <!-- 样品列表 -->
       <el-table v-if="activeTab === 'samples'" :data="tableData" border stripe>
+        <template #empty><ListEmptyExplain empty-title="还没有研发样品" empty-hint="研发需求进入打样阶段后，样品记录会出现在这里。" /></template>
         <el-table-column prop="sampleCode" label="样品编码" width="180" />
         <el-table-column prop="name" label="样品名称" min-width="130" />
         <el-table-column prop="customerName" label="客户名称" min-width="110" show-overflow-tooltip />
@@ -434,6 +437,7 @@ async function addTrackingRecord() {
 
       <!-- 报价任务列表 -->
       <el-table v-if="activeTab === 'quotations'" :data="tableData" border stripe>
+        <template #empty><ListEmptyExplain empty-title="还没有样品报价" empty-hint="样品确认后，给客户的报价会出现在这里。" /></template>
         <el-table-column prop="taskNumber" label="任务编号" width="180" />
         <el-table-column v-if="canViewPrice" prop="totalCost" label="总成本" width="120" align="right">
           <template #default="{ row }">{{ row.totalCost || '-' }}</template>

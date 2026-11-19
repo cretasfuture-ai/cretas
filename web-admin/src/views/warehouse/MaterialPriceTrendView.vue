@@ -7,6 +7,8 @@ import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import { buildPriceTrendInsight, type PricePoint } from '@/utils/chartPageInsights';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -41,7 +43,8 @@ interface BatchData {
   id: string;
   batchNumber: string;
   unitPrice: number | null;
-  receivedDate: string;
+  /** 入库日期（后端字段名 receiptDate；旧页面读的 receivedDate 后端并没有，图的横轴是空的） */
+  receiptDate: string;
   quantity: number;
 }
 
@@ -107,15 +110,16 @@ async function handleExpandChange(row: MaterialRow, expandedRows: MaterialRow[])
 
   expandLoading.value[row.id] = true;
   try {
+    // 按物料类型取批次：/material-batches 列表接口没有 materialTypeId 过滤，
+    // 旧写法每个物料展开后画的是全部物料的批次混在一起
     const res = await get<{ content: BatchData[] } | BatchData[]>(
-      `/${factoryId.value}/material-batches`,
-      { params: { materialTypeId: row.id, size: 50, sort: 'receivedDate,asc' } }
+      `/${factoryId.value}/material-batches/material-type/${row.id}`
     );
     if (res.success && res.data) {
       const batches = Array.isArray(res.data)
         ? res.data
         : (res.data as { content: BatchData[] }).content || [];
-      expandBatches.value[row.id] = batches;
+      expandBatches.value[row.id] = [...batches].sort((a, b) => (a.receiptDate || '').localeCompare(b.receiptDate || ''));
     } else {
       expandBatches.value[row.id] = [];
     }
@@ -129,6 +133,19 @@ async function handleExpandChange(row: MaterialRow, expandedRows: MaterialRow[])
   initChart(row.id);
 }
 
+/** 图上画的那几批（有单价且 > 0）：画图和分析共用 */
+function batchesWithPrice(materialId: string): BatchData[] {
+  return (expandBatches.value[materialId] || []).filter(b => b.unitPrice != null && b.unitPrice > 0);
+}
+
+function priceInsight(row: MaterialRow) {
+  const points: PricePoint[] = batchesWithPrice(row.id).map(b => ({
+    date: (b.receiptDate || '').substring(0, 10),
+    price: b.unitPrice as number,
+  }));
+  return buildPriceTrendInsight(row.name, points, { unit: row.unit });
+}
+
 function initChart(materialId: string) {
   const el = document.getElementById(`price-chart-${materialId}`);
   if (!el) return;
@@ -137,8 +154,7 @@ function initChart(materialId: string) {
   const existing = chartInstances.value[materialId];
   if (existing && !existing.isDisposed?.()) existing.dispose();
 
-  const batches = expandBatches.value[materialId] || [];
-  const withPrice = batches.filter(b => b.unitPrice != null && b.unitPrice > 0);
+  const withPrice = batchesWithPrice(materialId);
 
   if (withPrice.length === 0) return;
 
@@ -146,7 +162,7 @@ function initChart(materialId: string) {
   chartInstances.value[materialId] = chart;
 
   const dates = withPrice.map(b => {
-    const d = b.receivedDate || '';
+    const d = b.receiptDate || '';
     return d.length >= 10 ? d.substring(0, 10) : d;
   });
   const prices = withPrice.map(b => b.unitPrice);
@@ -270,6 +286,7 @@ onBeforeUnmount(() => {
               >
                 <div class="chart-title">采购单价趋势</div>
                 <div :id="`price-chart-${row.id}`" class="chart-box"></div>
+                <ChartInsight :insight="priceInsight(row)" depth="detailed" class="price-insight" :data-testid="`price-insight-${row.id}`" />
               </div>
               <el-empty
                 v-else-if="!expandLoading[row.id]"

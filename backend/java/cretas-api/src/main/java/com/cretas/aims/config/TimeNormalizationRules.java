@@ -216,6 +216,23 @@ public class TimeNormalizationRules {
                     return TimeRange.of(first, first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX));
                 }
         );
+        // 不带年份的月份: 「10月各客户销售额排行」「10 月」(数字与「月」之间允许空格)。以前只认「今年10月」, 单说「10月」整个丢掉,
+        // 工具退回默认最近 7 天 (LSMDEMO 2026-11-18 只出 1 个客户)。没写年份取「不晚于当前月」的最近一次:
+        // 月份 <= 当前月 → 今年, 否则 → 去年 (问的是已发生的数据)。前面是年 / 区间连接符 / 并列词(和、「、」) / 数字的由上面的带年份规则管 (「今年3月和4月」是并列月份, 4月不能再单独拆成第二个区间);
+        // 后面跟 到/至/以来/之前/具体几号 的是区间、起止、具体日期, 同样不当单月 (宁可不认, 不猜)。
+        TIME_PATTERNS.put(
+                Pattern.compile("(?<![年到至和、\\-~—\\d])" + MONTH_TEXT + "\\s*月(?:份)?+(?!\\s*(?:到|至|-|~|—|以来|以后|之后|后|以前|之前|前|[和、]\\s*" + MONTH_TEXT + "月|起|开始|\\d{1,2}[日号]|[一二三四五六七八九十]{1,3}[日号]))"),
+                (now, m) -> {
+                    int month = parseMonthNumber(m.group(1));
+                    if (month < 1 || month > 12) {
+                        throw new IllegalArgumentException("月份超出范围: " + m.group(1));
+                    }
+                    int yearOffset = month > now.getMonthValue() ? -1 : 0;
+                    LocalDateTime first = now.plusYears(yearOffset).withDayOfMonth(1).withMonth(month)
+                            .with(LocalTime.MIN);
+                    return TimeRange.of(first, first.with(TemporalAdjusters.lastDayOfMonth()).with(LocalTime.MAX));
+                }
+        );
         TIME_PATTERNS.put(
                 Pattern.compile("(?:今年|本年)(?!" + MONTH_TEXT + "月(?:份)?\\s*" + BEFORE_WORD + ")"),
                 (now, m) -> yearRange(now, 0)
@@ -233,15 +250,17 @@ public class TimeNormalizationRules {
         TIME_PATTERNS.put(
                 Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*天"),
                 (now, m) -> {
+                    // 「最近 N 天」含今天共 N 天 (与页面默认 N 天窗口一致): 起点 = 今天 - (N-1)
                     int days = parseCount(m.group(1));
-                    return TimeRange.of(now.minusDays(days).with(LocalTime.MIN), now);
+                    return TimeRange.of(now.minusDays(Math.max(0, days - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
                 Pattern.compile(RECENT_PREFIX + COUNT_TEXT + "\\s*(?:周|个星期|个礼拜)"),
                 (now, m) -> {
+                    // 「最近 N 周」= 含今天共 7N 天
                     int weeks = parseCount(m.group(1));
-                    return TimeRange.of(now.minusWeeks(weeks).with(LocalTime.MIN), now);
+                    return TimeRange.of(now.minusDays(Math.max(0, weeks * 7L - 1)).with(LocalTime.MIN), now);
                 }
         );
         TIME_PATTERNS.put(
@@ -273,11 +292,11 @@ public class TimeNormalizationRules {
         );
         TIME_PATTERNS.put(
                 Pattern.compile("最近"),
-                (now, m) -> TimeRange.of(now.minusDays(7).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(6).with(LocalTime.MIN), now) // 含今天共 7 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("近期"),
-                (now, m) -> TimeRange.of(now.minusDays(14).with(LocalTime.MIN), now)
+                (now, m) -> TimeRange.of(now.minusDays(13).with(LocalTime.MIN), now) // 含今天共 14 天
         );
         TIME_PATTERNS.put(
                 Pattern.compile("早上|上午"),

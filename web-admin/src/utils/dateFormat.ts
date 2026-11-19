@@ -67,3 +67,15 @@ export function formatDate(dateStr?: string | null): string {
     return dateStr || '-';
   }
 }
+
+/**
+ * 后端 LocalDateTime / LocalDate 字符串 -> 展示串, 纯字符串处理, 不经 Date/UTC 换算(后端给的是不带时区的本地时间)。
+ * `2026-11-17T15:00:00` / `2026-11-18T15:23:02.873513` -> `2026-11-17 15:00`; `2026-11-17` -> `2026-11-17`。
+ * 空值返回 `empty`(默认空串); 认不出的格式原样返回, 不吞数据。
+ */
+export function formatLocalDateTimeMinute(value?: string | null, empty = ''): string {
+  if (value == null || `${value}`.trim() === '') return empty;
+  const m = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2}))?/.exec(`${value}`.trim());
+  if (!m) return `${value}`;
+  return m[2] ? `${m[1]} ${m[2]}:${m[3]}` : m[1];
+}

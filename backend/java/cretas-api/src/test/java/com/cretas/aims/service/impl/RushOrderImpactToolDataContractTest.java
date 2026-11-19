@@ -84,6 +84,7 @@ class RushOrderImpactToolDataContractTest {
     private final Map<String, BigDecimal> stock = new HashMap<>();
     private final List<ProductionPlan> pendingPlans = new ArrayList<>();
     private RushOrderImpactTool tool;
+    private ProductTypeRepository products;
 
     /** 每千克酱牛肉: 牛腱 1.25 kg, 酱料包 0.05 kg。 */
     private static final Map<String, BigDecimal> PER_KG = new LinkedHashMap<>();
@@ -132,7 +133,7 @@ class RushOrderImpactToolDataContractTest {
         });
         BomRecipeRepository recipes = mock(BomRecipeRepository.class);
         BomRecipe recipe = new BomRecipe();
-        recipe.setId("QA-RECIPE-JNR");
+        recipe.setId("f0dfebf5-1c2d-4e3f-8a9b-0123456789ab");
         recipe.setVersion(2);
         when(recipes.findByFactoryIdAndProductTypeIdAndIsCurrentTrueAndStatus(F, PT, BomRecipe.Status.ACTIVE))
                 .thenReturn(Optional.of(recipe));
@@ -151,7 +152,7 @@ class RushOrderImpactToolDataContractTest {
                 ProcessSecretRecipeGuard.class, secrets,
                 PlatformTransactionManager.class, mock(PlatformTransactionManager.class)));
 
-        ProductTypeRepository products = mock(ProductTypeRepository.class);
+        products = mock(ProductTypeRepository.class);
         ProductType product = new ProductType();
         product.setId(PT);
         product.setFactoryId(F);
@@ -414,5 +415,129 @@ class RushOrderImpactToolDataContractTest {
         assertThat(section(root, "LINE_AND_LABOR").path("text").asText()).startsWith("算不出来，缺产品");
         assertThat(section(root, "MOVED_ORDERS").path("text").asText()).startsWith("算不出来，缺产品");
         assertThat(section(root, "DRAFT").path("text").asText()).contains("产品未定");
+    }
+
+    // ------------------------------------------------------------------ 1118 急单回复修复: 产品容错 / 吨换盒 / 不外露内部信息
+
+    private static ProductType demoProduct(String id, String name, String unit) {
+        ProductType p = new ProductType();
+        p.setId(id);
+        p.setFactoryId(F);
+        p.setName(name);
+        p.setUnit(unit);
+        return p;
+    }
+
+    private void useProducts(ProductType... list) {
+        when(products.findVisibleByFactoryIdAndIsActiveTrue(F)).thenReturn(List.of(list));
+    }
+
+    private static final String RECIPE_UUID = "f0dfebf5-1c2d-4e3f-8a9b-0123456789ab";
+    private static final String UUID_RE = "[0-9a-f]{8}-[0-9a-f]{4}-";
+
+    @Test
+    @DisplayName("B1+B2 老板原话「酱牛肉 2 吨」: 唯一命中「演示·酱卤牛肉250g」并说明, 2 吨 = 2000kg / 0.25kg = 8000 盒 并写出换算式")
+    void bossPhraseMatchesDemoProductAndConvertsTonsToBoxes() throws Exception {
+        useProducts(demoProduct(PT, "演示·酱卤牛肉250g", "盒"), demoProduct("QA-PT-LY", "演示·卤鸭500g", "盒"));
+        stock.put("QA-RM-NJ", new BigDecimal("20000"));
+        stock.put("QA-RM-JL", new BigDecimal("1000"));
+        slotThursdayMorning();
+
+        JsonNode root = run("插一个急单 酱牛肉 2 吨，周五交，原料够不够，产线排不排得开？");
+        JsonNode data = root.path("data").path("data");
+        String message = root.path("data").path("message").asText();
+        assertThat(data.path("productName").asText()).isEqualTo("演示·酱卤牛肉250g");
+        assertThat(data.path("quantityInProductUnit").decimalValue()).isEqualByComparingTo("8000");
+        assertThat(message).contains("按「演示·酱卤牛肉250g」计算")
+                .contains("2 吨 = 2000 千克 ÷ 0.25 千克/盒 = 8000 盒");
+        assertThat(section(root, "MATERIAL").path("status").asText()).isEqualTo("ENOUGH");
+    }
+
+    @Test
+    @DisplayName("B1 走真实入口: 模型抽出 productName=酱牛肉 / 2 / 吨 (原话里没有产品名) 同样唯一命中并换算; 容错不误撞短名")
+    void productNameParamIsFuzzyMatched() throws Exception {
+        useProducts(demoProduct(PT, "演示·酱卤牛肉250g", "盒"), demoProduct("QA-PT-LY", "演示·卤鸭500g", "盒"));
+        stock.put("QA-RM-NJ", new BigDecimal("20000"));
+        stock.put("QA-RM-JL", new BigDecimal("1000"));
+        slotThursdayMorning();
+        Map<String, Object> args = new HashMap<>();
+        args.put("productName", "酱牛肉");
+        args.put("quantity", 2);
+        args.put("quantityUnit", "吨");
+        args.put("deadline", "2026-11-20");
+        JsonNode root = mapper.readTree(tool.execute(
+                ToolCall.of("t", "scheduling_rush_order_impact", mapper.writeValueAsString(args)),
+                Map.of("factoryId", F, "userId", 1L)));
+        JsonNode data = root.path("data").path("data");
+        assertThat(data.path("productName").asText()).isEqualTo("演示·酱卤牛肉250g");
+        assertThat(data.path("quantityInProductUnit").decimalValue()).isEqualByComparingTo("8000");
+        assertThat(RushOrderImpactTool.coreName("演示·酱卤牛肉250g")).isEqualTo("酱卤牛肉");
+        assertThat(RushOrderImpactTool.fuzzyNameMatches("酱牛肉", "卤鸭")).isFalse();
+        assertThat(RushOrderImpactTool.fuzzyNameMatches("酱鸭肉", "酱卤牛肉")).isFalse();
+    }
+
+    @Test
+    @DisplayName("B1 多个候选 (250g / 500g 两个规格): 不猜, 列出全部候选让用户选, 前三项说缺唯一的产品")
+    void ambiguousFuzzyMatchListsCandidates() throws Exception {
+        useProducts(demoProduct(PT, "演示·酱卤牛肉250g", "盒"), demoProduct("QA-PT-NJ5", "演示·酱卤牛肉500g", "盒"));
+        slotThursdayMorning();
+
+        JsonNode root = run("插一个急单 酱牛肉 2 吨，周五交");
+        JsonNode material = section(root, "MATERIAL");
+        assertThat(material.path("status").asText()).isEqualTo("UNVERIFIED");
+        assertThat(material.path("text").asText()).contains("演示·酱卤牛肉250g").contains("演示·酱卤牛肉500g")
+                .contains("请说全名");
+        verify(bom, never()).expandBOM(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("B2 产品没有规格重量: 不猜, 如实说无法把吨换算成产品单位, 请告诉我数量（盒）")
+    void tonsWithoutSpecWeightAreNotGuessed() throws Exception {
+        useProducts(demoProduct(PT, "演示·酱卤牛肉", "盒"));
+        slotThursdayMorning();
+
+        JsonNode root = run("插一个急单 演示·酱卤牛肉 2 吨，周五交");
+        JsonNode material = section(root, "MATERIAL");
+        assertThat(material.path("status").asText()).isEqualTo("UNVERIFIED");
+        assertThat(material.path("text").asText()).contains("无法把2吨换算成该产品的单位")
+                .contains("请告诉我数量（盒）");
+        verify(bom, never()).expandBOM(anyString(), anyString(), any());
+    }
+
+    @Test
+    @DisplayName("B2 规格重量取结构化净含量 (500 g/盒) 优先于名称; 不整除向上取整并写明")
+    void structuredNetContentWinsAndRoundsUp() throws Exception {
+        ProductType p = demoProduct(PT, "演示·酱卤牛肉250g", "盒");
+        p.setNetContentQuantity(new BigDecimal("300"));
+        p.setNetContentUnit("g");
+        useProducts(p);
+        stock.put("QA-RM-NJ", new BigDecimal("20000"));
+        stock.put("QA-RM-JL", new BigDecimal("1000"));
+        slotThursdayMorning();
+
+        JsonNode root = run("插一个急单 演示·酱卤牛肉250g 1 吨，周五交");
+        assertThat(root.path("data").path("data").path("quantityInProductUnit").decimalValue()).isEqualByComparingTo("3334");
+        assertThat(root.path("data").path("message").asText()).contains("1 吨 = 1000 千克 ÷ 0.3 千克/盒 = 3333.333333，向上取整为 3334 盒");
+    }
+
+    @Test
+    @DisplayName("C 回复不外露内部信息: 无 UUID (配方 id 是 UUID 时也不出)、无「不落任何业务写」; 配方用产品名 + 当前配方第 N 版")
+    void replyHasNoUuidOrDeveloperJargon() throws Exception {
+        useProducts(demoProduct(PT, "演示·酱卤牛肉250g", "盒"));
+        stock.put("QA-RM-NJ", new BigDecimal("20000"));
+        stock.put("QA-RM-JL", new BigDecimal("1000"));
+        slotThursdayMorning();
+
+        JsonNode root = run("插一个急单 酱牛肉 2 吨，周五交，原料够不够，产线排不排得开？");
+        String message = root.path("data").path("message").asText();
+        assertThat(message).doesNotContainPattern(UUID_RE).doesNotContain("不落任何业务写").doesNotContain(RECIPE_UUID);
+        assertThat(message).contains("当前配方第 2 版");
+        assertThat(section(root, "DRAFT").path("basis").asText()).doesNotContain("不落任何业务写");
+    }
+
+    @Test
+    @DisplayName("C 兜底: 上游文案万一带 UUID, 回复里也被抹掉")
+    void scrubIdsRemovesUuids() {
+        assertThat(RushOrderImpactTool.scrubIds("产线 f0dfebf5-1c2d-4e3f-8a9b-0123456789ab 满了")).doesNotContainPattern(UUID_RE);
     }
 }

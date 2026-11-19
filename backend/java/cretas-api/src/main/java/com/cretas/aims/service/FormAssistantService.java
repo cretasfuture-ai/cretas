@@ -15,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -109,11 +110,35 @@ public class FormAssistantService {
                 response = dashScopeClient.chatLowTemp(systemPrompt, sentInput);
             }
 
-            return parseFormParseResponse(redacted.restoreJsonText(response), formFields);
+            FormParseResult parsed = parseFormParseResponse(redacted.restoreJsonText(response), formFields);
+            return correctOrderResult(parsed, userInput, entityType);
         } catch (Exception e) {
             log.error("表单解析失败", e);
             return FormParseResult.error("解析失败: " + e.getMessage());
         }
+    }
+
+    private LocalDate factoryToday() {
+        String t = formPromptRegistry.today();
+        return t == null || t.isBlank() ? LocalDate.now(java.time.ZoneId.of("Asia/Shanghai")) : LocalDate.parse(t);
+    }
+
+    /** 销售/采购订单：用确定性规则校正模型的日期、名字截断、假供应商、假 0 单价。 */
+    private FormParseResult correctOrderResult(FormParseResult parsed, String userInput, String entityType) {
+        if (parsed == null || !parsed.isSuccess() || parsed.getFieldValues() == null) return parsed;
+        List<String> missing = parsed.getMissingRequiredFields() == null
+                ? new ArrayList<>() : new ArrayList<>(parsed.getMissingRequiredFields());
+        boolean changed = FormOrderInputPostProcessor.apply(userInput, entityType,
+                parsed.getFieldValues(), missing, factoryToday());
+        if (changed) {
+            parsed.setMissingRequiredFields(missing);
+            if (missing.contains("supplierName") && (parsed.getFollowUpQuestion() == null
+                    || parsed.getFollowUpQuestion().isBlank())) {
+                parsed.setFollowUpQuestion("请问这批采购的供应商是哪家？");
+            }
+            log.info("[FormAssistant] 订单解析经确定性校正: entityType={}", entityType);
+        }
+        return parsed;
     }
 
     private String buildFormParseSystemPrompt(String entityType, List<Map<String, Object>> formFields) {
@@ -138,7 +163,8 @@ public class FormAssistantService {
         // ("今天"/"明天"/"下周一"), 但此前只有生产计划那份告诉了模型今天几号,
         // 其余几份等于让模型拿训练截止日去猜。统一在这里补上。
         sb.append("工厂当前日期: ").append(formPromptRegistry.today())
-          .append(" (时区 Asia/Shanghai)。所有相对日期一律按它换算成 YYYY-MM-DD。\n\n");
+          .append(" (时区 Asia/Shanghai)。所有相对日期一律按它换算成 YYYY-MM-DD。\n");
+        sb.append(FormRelativeDateResolver.calendarForPrompt(factoryToday())).append("\n");
 
         if (formFields != null && !formFields.isEmpty()) {
             sb.append("表单字段定义:\n");

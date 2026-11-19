@@ -15,8 +15,10 @@ describe('procurement order tax rate column', () => {
 
   it('formats backend taxRate values without mock defaults', () => {
     expect(detailSource).toContain('function formatTaxRate(rate: unknown): string');
-    expect(detailSource).toContain("if (rate == null || rate === '') return '-'");
-    expect(detailSource).toContain('const percent = numeric <= 1 ? numeric * 100 : numeric');
+    // 后端 tax_rate 恒为百分数: 详情页委托 formatPurchaseTaxRate (行为断言在 purchaseOrderMoney.spec.ts)。
+    // ⛔ 不再把 ≤1 的值当小数乘 100 —— prod 有 0.13% 的行, 旧写法显示 13% 而税额按 0.13% 算。
+    expect(detailSource).toContain('return formatPurchaseTaxRate(rate);');
+    expect(detailSource).not.toContain('numeric <= 1 ? numeric * 100');
     expect(detailSource).not.toContain('mockTaxRate');
     expect(detailSource).not.toContain('13%');
   });

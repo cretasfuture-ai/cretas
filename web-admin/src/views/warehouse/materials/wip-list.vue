@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -86,7 +87,7 @@ function formatQuantity(row: TableRow): string {
 
     <section class="cs-card">
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="wip-table">
-        <template #empty>暂无在制品批次</template>
+        <template #empty><ListEmptyExplain empty-title="还没有在制品批次" empty-hint="生产领料投入后、产成品入库前的批次会出现在这里；还没有生产领料或已全部入库时为空。" /></template>
         <template #materialType-cell="{ row }">{{ row.original.materialType?.name || row.original.materialTypeId || '-' }}</template>
         <template #remaining-cell="{ row }"><span class="num">{{ formatQuantity(row.original) }}</span></template>
         <template #supplier-cell="{ row }">{{ row.original.supplier?.name || row.original.supplierId || '-' }}</template>

@@ -83,7 +83,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
 
         if (orderId != null && !orderId.isBlank()) {
             SalesOrder order = resolveOrder(factoryId, orderId);
-            result.put("order", order);
+            result.put("order", OrderListTool.toSummary(order));
             result.put("message", "销售订单查询成功");
             return result;
         }
@@ -91,7 +91,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
         if ("ORDER_TODAY".equalsIgnoreCase(queryType)) {
             LocalDate today = LocalDate.now();
             List<SalesOrder> orders = salesOrderRepository.findByFactoryIdAndDateRange(factoryId, today, today);
-            result.put("orders", orders);
+            result.put("orders", OrderListTool.toSummaries(orders));
             result.put("total", orders.size());
             result.put("orderDate", today);
             result.put("message", "查询到 " + orders.size() + " 个今日销售订单");
@@ -113,7 +113,7 @@ public class OrderQueryTool extends AbstractBusinessTool {
             // 按 DataScope 收窄 (getSalesOrdersByStatus 不收窄: SELF 角色会看到全厂这个状态的订单)
             orders = salesService.getSalesOrdersFiltered(factoryId, status, null, null, page, size);
         }
-        result.put("orders", orders.getContent());
+        result.put("orders", OrderListTool.toSummaries(orders.getContent()));
         result.put("total", orders.getTotalElements());
         result.put("page", orders.getPage());
         result.put("size", orders.getSize());

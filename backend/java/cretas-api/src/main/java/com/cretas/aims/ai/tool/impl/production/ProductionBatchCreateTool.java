@@ -188,6 +188,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
         result.put("inProgressQuantity", vc.inProgress);
         result.put("scheduledDate", vc.scheduledDate.toString());
         result.put("productionLine", vc.productionLine);
+        result.put("productionLineName", ProductionLineLabels.display(vc.productionLine));
         result.put("unit", vc.unit);
         result.put("salesOrderId", vc.salesOrderId);
         result.put("salesOrderNumber", vc.salesOrderNumber);
@@ -200,7 +201,7 @@ public class ProductionBatchCreateTool extends AbstractBusinessTool {
                 vc.quantity.stripTrailingZeros().toPlainString(),
                 vc.unit,
                 vc.scheduledDate,
-                vc.productionLine,
+                ProductionLineLabels.display(vc.productionLine),
                 vc.netShortage.stripTrailingZeros().toPlainString(),
                 vc.inProgress.stripTrailingZeros().toPlainString());
         result.put("message", msg);

@@ -50,7 +50,7 @@ function handleUnlock() {
   <!-- placeholder mode (default): show hint + CTA -->
   <div v-else-if="fallbackMode === 'placeholder'" class="capability-placeholder">
     <el-empty
-      :description="`此分析需上传含 ${missing.join(' / ')} 的数据`"
+      description="该分析所需的数据维度当前工厂暂未提供，上传相关数据后即可查看"
       :image-size="80"
     >
       <el-button

@@ -388,7 +388,7 @@ async function handleDelete(row: TableRow) {
   <div class="page-wrapper">
     <ConceptDisambiguationAlert
       here-name="客户"
-      here="向我们采购的下游买家（如「叮咚」「盒马」「永辉」），用于销售订单 / 应收账款"
+      here="向我们采购的下游买家（如「华东冷链商贸」「南方食品批发」「康乐超市」），用于销售订单 / 应收账款"
       other-name="采购管理 → 供应商"
       other="向我们供货的上游卖家（如肉联厂、包材厂），用于采购订单 / 应付账款"
       other-path="/procurement/suppliers"

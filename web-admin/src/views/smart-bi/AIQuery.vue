@@ -38,6 +38,7 @@ import { ref, computed, onMounted, onUnmounted, onBeforeUnmount, nextTick, watch
 import { useChartResize } from '@/composables/useChartResize';
 import { useRoute } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
+import { pickDefaultQuickQuestions } from './quickQuestions';
 import { chatAnalysis, chatAnalysisStream, getUploadHistory, deduplicateUploads, nl2sql, logFeedback, type AnalysisResult, type AIInsightData, type ChartConfig, type UploadHistoryItem, type NL2SQLResponse } from '@/api/smartbi';
 import { executeIntent, fetchCachedXlsx, submitIntentFeedback, type IntentExecuteResponse } from '@/api/smartbi/intent-chat';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -46,6 +47,7 @@ import { buildBackendColumnLabels, resolveColumnLabel, columnMinWidth } from './
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
 import { pickDefaultDataSource } from './composables/useDataSourceSelect';
+import { buildWelcomeText, quickQuestionsFor } from './aiQueryGreeting';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ChatDotRound,
@@ -82,8 +84,12 @@ import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
 import type { ChartWithMeta } from './components/chartInsight';
+import { chartSignalsFromOption, inferAiChartMeta } from './components/chat/aiChartMeta';
+import { historyForSource } from './components/chat/aiChatContext';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
 import { buildJavaIntentChartOption } from './components/chat/javaIntentChartAdapter';
+import { chooseAiQueryRoute } from './components/chat/aiQueryRoute';
+import { sanitizeFactoryAiText } from './components/chat/factoryAiText';
 import FactoryAnalysisChat from './FactoryAnalysisChat.vue';
 
 // Render markdown content safely
@@ -128,6 +134,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
+  /** 发出这条消息时选中的上传数据源 (null=未选); 历史上下文与洞察页脚按它隔离, 切源不串 (A7/A8) */
+  sourceUploadId?: number | null;
   chart?: {
     type: 'line' | 'bar' | 'pie';
     data: Record<string, unknown>;
@@ -183,6 +191,8 @@ interface ChatMessage {
   // glossary: term → 通俗定义 for the expandable 字段说明 block + local meta-Q answers.
   // chartGuide: one-liner explaining how to read the chart.
   suggestedFollowups?: Array<{ label: string; question: string; ownerActionScenario?: string }>;
+  // NEED_CLARIFICATION 的可点选项 (SELECT_INTENT.actionName), 点了按问题发送。
+  clarifyActions?: string[];
   glossary?: Record<string, string>;
   chartGuide?: string;
   // UI local state for the expandable 字段说明/怎么看图 block.
@@ -243,38 +253,6 @@ function extractChartLabels(opt: Record<string, unknown>, chartType: string): st
   return [];
 }
 
-function inferAiChartMeta(
-  chartType: string,
-  title: string,
-  content = '',
-): NonNullable<ChartWithMeta['meta']> {
-  const text = `${title} ${content}`;
-  const isReview = /评价|口碑|差评|星级|服务分|环境分|好评|低星|点评|美团/.test(text);
-  const isRevenue = /收入|营收|营业额|销售额|堂食|外卖|客单/.test(text);
-  const xDim = chartType === 'line'
-    ? 'time'
-    : /平台|点评|美团/.test(text)
-      ? 'channel'
-      : /门店|店/.test(text)
-        ? 'store'
-        : /菜品|口味|标签|好评词|差评词/.test(text)
-          ? 'product'
-          : 'category';
-  const yMetric = /占比|率/.test(text)
-    ? 'pct'
-    : isReview
-      ? 'count'
-      : isRevenue
-        ? 'revenue'
-        : 'quantity';
-  return {
-    xDim,
-    yMetric,
-    aggregation: /平均|均值/.test(text) ? 'avg' : 'sum',
-    domain: isReview || isRevenue ? 'restaurant' : 'factory',
-  };
-}
-
 function normalizeSeriesData(
   opt: Record<string, unknown>,
   chartType: string,
@@ -298,7 +276,7 @@ function messageChartWithMeta(msg: ChatMessage): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title, msg.content);
+  const meta = inferAiChartMeta({ chartType: ct, title, content: msg.content, ...chartSignalsFromOption(opt) });
 
   return {
     chartType: ct,
@@ -326,7 +304,7 @@ function multiChartWithMeta(cfg: ChartConfig): ChartWithMeta | null {
   const title = chartOptionTitle(opt, cfg.title ?? '');
   const xData = extractChartLabels(opt, ct);
   const seriesData = normalizeSeriesData(opt, ct);
-  const meta = inferAiChartMeta(ct, title);
+  const meta = inferAiChartMeta({ chartType: ct, title, ...chartSignalsFromOption(opt) });
 
   return {
     chartType: ct,
@@ -648,40 +626,7 @@ const RESTAURANT_TIME_FOLLOWUPS: Array<{
 //
 // Heuristic: 用 file_name + sheet_name 关键词推断 domain. 错了无功能损失,
 // 只是少一个相关 chip — fallback 到通用销售 chip 组.
-const QUICK_QUESTIONS_BY_DOMAIN: Record<string, string[]> = {
-  // 评价/口碑数据
-  review: [
-    '客户评价情况', '差评最多的门店', '哪些菜品差评多',
-    'VIP 评价情况', '投诉最集中的问题', '哪个城市评价最低',
-    '服务分排名', '环境分对比'
-  ],
-  // 会员/储值/会员卡数据
-  member: [
-    '会员卡数据有什么发现', 'VIP 占比', '充值最多的会员',
-    '会员等级分布', '余额最高的客户', '会员消费频次',
-    '储值卡使用率', '会员流失率'
-  ],
-  // 财务/利润/收入报表
-  finance: [
-    '总营业额', '哪家店利润最高', '成本结构',
-    '毛利率排名', '门店营收对比', '同比增长',
-    '费用占比', '收入趋势'
-  ],
-  // 库存/进销存
-  inventory: [
-    '库存周转情况', '滞销库存', '采购金额排名',
-    '损耗率', '进货 Top 10', '库存预警'
-  ],
-  // 默认 — 餐饮销售场景. Apr 28 2026 (UX audit): trimmed chips that often
-  // hit capability_short_circuit on minimal sales datasets (e.g. xmx_real
-  // doesn't have staff/coupon/payment cols). Kept ones that work on any
-  // sales dataset with 商品/门店/销售金额 columns.
-  default: [
-    '畅销品 Top 5', '哪家店业绩最好', '慢销菜品',
-    '周末周中对比', '总营业额', '门店销售对比',
-    '商品分类占比', '客单价分析'
-  ],
-};
+// 快捷问题表与工厂/餐饮分组见 ./aiQueryGreeting.ts (LSM-COSTBI 第 9 项: 工厂租户不出餐饮词)
 
 // Some uploads have filenames that arrive as GBK bytes mis-decoded as
 // Latin-1 (e.g. "评价下载" → "ÆÀ¼ÛÏÂÔØ"). The Excel parser reads .xls/.csv
@@ -726,11 +671,14 @@ function inferDomainFromFilename(name: string): string {
   return 'default';
 }
 
+// 页头数字专员头像 (public/ 下静态图; 用绑定而不是字面量, 避免被 Vite 当模块资源解析)
+const agentAvatarSrc = '/digital-employees/accountant.png';
 // Factory-only free-question analysis is an explicit child mode.
 const isFactoryAnalysisMode = computed(() => route.query.mode === 'factory');
 
 function customerSafeAnswer(text: string): string {
-  return text;
+  // 对话标准 V3: 不给业务用户看英文字段名/状态码 (问题 52)
+  return sanitizeFactoryAiText(text);
 }
 const ownerActionSessionId = ref('');
 const currentOwnerActionScenario = ref('');
@@ -756,7 +704,9 @@ const quickQuestions = computed<string[]>(() => {
   const fname = item?.fileName || item?.originalFileName || '';
   const sname = (item as any)?.sheetName || '';
   const domain = inferDomainFromFilename(fname + ' ' + sname);
-  return QUICK_QUESTIONS_BY_DOMAIN[domain] || QUICK_QUESTIONS_BY_DOMAIN.default;
+  // 按租户 + 数据集领域取题 (#1835); 工厂租户且没推断出专属领域时, 换成识别链已验证能正确路由的原话 (#1865)
+  const domainQuestions = quickQuestionsFor(authStore.businessDomain, domain);
+  return pickDefaultQuickQuestions(domainQuestions, domain === 'default', authStore.factoryType);
 });
 const queryPlaceholder = computed(() => {
   if (nl2sqlMode.value) return '输入数据查询，例如：各产品的销售额汇总';
@@ -764,11 +714,14 @@ const queryPlaceholder = computed(() => {
 });
 
 function buildWelcomeMessage(): string {
-  const sourceHint = dataSourceLabel.value
-    ? `\n\n当前${dataSourceLabel.value}`
-    : '\n\n提示：暂无上传数据，建议先在"数据分析"页面上传 Excel 文件。';
-  return `您好！我是 SmartBI 智能助手，可以帮您分析销售、财务、库存等数据。您可以选择下方的分析模板快速开始，或直接输入问题。${sourceHint}`;
+  return buildWelcomeText(authStore.businessDomain, dataSourceLabel.value);
 }
+
+// 问候语随数据源更新: 之前只在挂载时写一次, 切换数据源后仍显示旧文件名 (LSM-COSTBI 第 9 项)
+watch(dataSourceLabel, () => {
+  const welcome = chatHistory.value.find(m => m.id === 'welcome');
+  if (welcome) welcome.content = buildWelcomeMessage();
+});
 
 // 自动补全候选 — 覆盖 35 个模板的高频 sample_queries(177 中精选)
 // 命中这里的任何 query → Python RAG 秒回(sim=1.0 via template embedding)
@@ -1270,13 +1223,16 @@ async function tryJavaIntentChat(
   const idx = () => chatHistory.value.findIndex((m) => m.id === assistantId);
   const factoryId = authStore.factoryId;
   if (!factoryId) return 'fall-through';
-  // Built-in analysis templates describe the selected dataset. A generic
-  // operational report can otherwise consume a sales question as production KPI.
-  // Keep this exact allowlist read-only; ordinary questions and 操作 still use
-  // the intent gateway and its confirmation/permission checks.
+  // 问题 51: 咨询页选了数据源 ⇒ 整个跳过 Java 意图层, 直接走上传数据问答 (Python)。
+  // 否则 Java 会把「各产品的销售额占比」当成 indicator_code/操作类/生产看板吃掉。
+  // 操作页(有写权限)或没有数据源仍走 Java, 写操作预览/确认链不变。
   const hasAnalysisData = Boolean(selectedUploadId.value) || currentData.value.length > 0;
-  if (activeAiTab.value === 'consult' && hasAnalysisData
-      && queryTemplates.some(template => template.query === query)) {
+  if (chooseAiQueryRoute({
+    tab: activeAiTab.value,
+    hasAnyWrite: hasAnyWrite.value,
+    hasAnalysisData,
+    question: query,
+  }) === 'upload-analysis') {
     return 'fall-through';
   }
   try {
@@ -1613,6 +1569,13 @@ async function tryJavaIntentChat(
             ownerActionScenario: f.ownerActionScenario,
           }));
       }
+      if (responseStatus === 'NEED_CLARIFICATION' && Array.isArray(res.suggestedActions)) {
+        const picks = res.suggestedActions
+          .filter((a) => a?.actionCode === 'SELECT_INTENT' && typeof a.actionName === 'string' && a.actionName.trim())
+          .map((a) => String(a.actionName).trim())
+          .slice(0, 8);
+        if (picks.length > 0) msg.clarifyActions = picks;
+      }
       msg.content = customerSafeAnswer(res.message || res.formattedText || '请补充信息后继续。');
       msg.loading = false;
       return 'handled';
@@ -1745,7 +1708,8 @@ async function handleSendMessage() {
     id: `user-${Date.now()}`,
     role: 'user',
     content: query,
-    timestamp: new Date()
+    timestamp: new Date(),
+    sourceUploadId: selectedUploadId.value ?? null,
   };
   chatHistory.value.push(userMessage);
 
@@ -1759,7 +1723,8 @@ async function handleSendMessage() {
     role: 'assistant',
     content: '',
     timestamp: new Date(),
-    loading: true
+    loading: true,
+    sourceUploadId: selectedUploadId.value ?? null,
   };
   chatHistory.value.push(loadingMessage);
 
@@ -1784,13 +1749,11 @@ async function handleSendMessage() {
   // backend LLM can resolve pronominal/temporal references ("这个月"/"它"/
   // "那家") from previous turns. Exclude the welcome message, loading
   // placeholder, and the current user message just pushed above.
-  const historyForContext = chatHistory.value
-    .filter((m) => m.id !== 'welcome' && m.id !== assistantId && !m.loading && m.content.trim())
-    .slice(-41, -1) // last 40 messages (20 Q+A pairs) before current user msg
-    .map((m) => ({
-      role: m.role as 'user' | 'assistant',
-      content: m.content,
-    }));
+  const historyForContext = historyForSource(
+    chatHistory.value,
+    selectedUploadId.value,
+    ['welcome', assistantId, userMessage.id],
+  );
 
   const requestParams = {
     query,
@@ -1895,9 +1858,14 @@ async function handleSendMessage() {
       if (idx !== -1) {
         const msg = chatHistory.value[idx];
         // If still loading (no chunks arrived), content is just status text — prefer result.answer
-        const finalContent = msg.loading
-          ? (result.answer || '分析完成')
-          : (msg.content || result.answer || '分析完成');
+        // 后端发现 LLM 文字和图数据对不上时, done.answer 是由图数据写的结论 (answer_corrected),
+        // 必须覆盖已流出的 LLM 文字, 否则文字说 65% 图上是 43.99%。
+        const answerCorrected = (result as { answer_corrected?: boolean }).answer_corrected === true;
+        const finalContent = answerCorrected && result.answer
+          ? result.answer
+          : msg.loading
+            ? (result.answer || '分析完成')
+            : (msg.content || result.answer || '分析完成');
 
         // Build chart data for compat
         let chartData: ChatMessage['chart'] | undefined;
@@ -1910,7 +1878,10 @@ async function handleSendMessage() {
         }
 
         // Direct mutation instead of object spread
-        msg.content = customerSafeAnswer(finalContent);
+        // A9: 后端把建议里数据没有的金额改写了 (答案已流出, 以 done 里的终稿为准)
+        msg.content = customerSafeAnswer(
+          result.answer_replaced && result.answer ? result.answer : finalContent,
+        );
         msg.chart = chartData;
         msg.chartConfig = msg.chartConfig || result.charts?.[0];
         msg.insights = result.insights;
@@ -1987,7 +1958,8 @@ async function handleSendMessage() {
               chartConfig: response.charts?.[0],
               insights: response.insights,
               table: response.table as ChatMessage['table'],
-              loading: false
+              loading: false,
+              sourceUploadId: requestParams.uploadId ? Number(requestParams.uploadId) : null,
             };
             await nextTick();
             if (response.charts && response.charts.length > 0) {
@@ -2536,6 +2508,10 @@ function handleKeydown(event: KeyboardEvent) {
           <el-icon><ChatDotRound /></el-icon>
           {{ 'AI 智能问答' }}
         </h1>
+        <div class="header-agent" data-testid="header-agent">
+          <img class="header-agent-avatar" :src="agentAvatarSrc" alt="" width="32" height="32" />
+          <span class="header-agent-name">数字专员 · 数据分析</span>
+        </div>
       </div>
       <div class="header-right">
         <el-select
@@ -2733,6 +2709,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <!-- Chart Insight for single-chart message (bar/line/pie wired; exotic→null→renders nothing) -->
                 <ChartInsightProvider
                   v-if="shouldRenderAutoChartInsight(message)"
+                  :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}`"
                   :chart="messageChartWithMeta(message)"
                   :perms="{ canViewFinance: false }"
                   :factory-id="factoryId ?? ''"
@@ -2757,7 +2734,7 @@ function handleKeydown(event: KeyboardEvent) {
                 <template v-if="message.charts && message.charts.length">
                   <ChartInsightProvider
                     v-for="(c, ci) in message.charts"
-                    :key="`insight-${message.id}__${ci}`"
+                    :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}__${ci}`"
                     :chart="multiChartWithMeta(c)"
                     :perms="{ canViewFinance: false }"
                     :factory-id="factoryId ?? ''"
@@ -2902,6 +2879,23 @@ function handleKeydown(event: KeyboardEvent) {
                   >
                     {{ f.label }}
                   </el-button>
+                </div>
+
+                <!-- 澄清选项: 竖排占满列宽, 点了按问题发送 (标准 F4: 澄清不出反馈) -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && !message.streaming && (message.clarifyActions?.length ?? 0) > 0"
+                  class="message-clarify-actions"
+                >
+                  <button
+                    v-for="(a, i) in message.clarifyActions"
+                    :key="i"
+                    type="button"
+                    class="clarify-action-btn"
+                    :data-testid="`suggested-action-${i}`"
+                    @click="triggerRelatedFollowup(a)"
+                  >
+                    {{ a }}
+                  </button>
                 </div>
 
                 <!-- Feedback for both LLM and template answers (Apr 24 2026 extended).
@@ -3087,6 +3081,14 @@ function handleKeydown(event: KeyboardEvent) {
   flex-wrap: wrap;  // E1 Apr 17 2026: mobile 窄屏 header-left + header-right 换行, 避免标题被挤竖排
   gap: 8px;
 
+  .header-agent {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    .header-agent-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; }
+    .header-agent-name { font-size: 14px; color: var(--el-text-color-secondary); }
+  }
   .header-left {
     flex-shrink: 0;
     min-width: 0;  // allow flex child to shrink below content size
@@ -3419,6 +3421,26 @@ function handleKeydown(event: KeyboardEvent) {
     flex-wrap: wrap;
   }
 
+  .message-clarify-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    margin-top: 12px;
+    .clarify-action-btn {
+      width: 100%;
+      min-height: 48px;
+      padding: 10px 16px;
+      text-align: left;
+      font-size: 15px;
+      color: var(--el-text-color-primary);
+      background: var(--el-fill-color-lighter);
+      border: 1px solid var(--el-border-color);
+      border-radius: 12px;
+      cursor: pointer;
+      &:hover { border-color: var(--el-color-primary); }
+    }
+  }
   .message-related-followups {
     display: flex;
     gap: 6px;

@@ -376,6 +376,8 @@ public class ToolDispatchService {
         params.put(com.cretas.aims.ai.tool.TimeRangeFilter.SAID, from + "~" + to);
         sources.put("startDate", ReadTurnParameters.Source.DEFAULT);
         sources.put("endDate", ReadTurnParameters.Source.DEFAULT);
+        // 工具据此在默认窗口 0 条时放宽到最近有数据的一段 (用户明确说的时间不放宽)
+        params.put(com.cretas.aims.ai.tool.TimeRangeFilter.DEFAULT_WINDOW, Boolean.TRUE);
         addReadNotice(request, com.cretas.aims.ai.tool.ReadReplyNotices.notice(
                 com.cretas.aims.ai.tool.ReadReplyNotices.DEFAULT_TIME_RANGE,
                 "没说时间，按最近 " + days + " 天（" + from + " 至 " + to + "）查询。",
@@ -697,7 +699,8 @@ public class ToolDispatchService {
                 }
 
                 // 2.6. 从预处理结果中提取时间范围
-                if (pq.hasTimeRange()) {
+                // 用户原话里根本没说时间 (预处理按上下文补出的日期不算「你说的」): 不带时间参数, 也不出「不能按时间筛选」提示
+                if (pq.hasTimeRange() && com.cretas.aims.ai.tool.TimeRangeFilter.mentionsTime(request.getUserInput())) {
                     TimeNormalizationRules.TimeRange timeRange = pq.getPrimaryTimeRange();
                     if (timeRange != null && timeRange.isValid()) {
                         params.put("startDate", timeRange.getStart().toLocalDate().toString());
@@ -2010,6 +2013,62 @@ public class ToolDispatchService {
         return base;
     }
 
+    private static final String[] EMPTY_RESULT_RANGE_KEYS = {
+            "dateRange", "period", "month", "startDate", "endDate", "date", "rangeStart", "rangeEnd"};
+
+    /**
+     * 「查询成功但没有数据」: data 是空集合/空 Map, 或非空 Map 但每个值都是 null/空集合/空 Map/空串/数值 0。
+     * data 为 null 不算(写操作成功也常常没有 data, 仍走「操作已完成。」)。
+     */
+    @SuppressWarnings("unchecked")
+    static boolean isEmptyQueryData(Object data) {
+        if (data == null) return false;
+        if (data instanceof java.util.Collection<?> c) return c.isEmpty();
+        if (!(data instanceof Map<?, ?> map)) return false;
+        if (map.isEmpty()) return true;
+        boolean sawEmptyContainer = false;
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            Object v = e.getValue();
+            if (v == null) continue;
+            // 查询范围回显(startDate 等)不算「有数据」
+            if (v instanceof String && java.util.Arrays.asList(EMPTY_RESULT_RANGE_KEYS).contains(String.valueOf(e.getKey()))) continue;
+            if (v instanceof java.util.Collection<?> c) {
+                if (!c.isEmpty()) return false;
+                sawEmptyContainer = true;
+            } else if (v instanceof Map<?, ?> m) {
+                if (!m.isEmpty() && !isEmptyQueryData(m)) return false;
+                sawEmptyContainer = true;
+            } else if (v instanceof String str) {
+                if (!str.isBlank()) return false;
+            } else if (v instanceof Number n) {
+                if (n.doubleValue() != 0d) return false;
+            } else {
+                return false;
+            }
+        }
+        return sawEmptyContainer;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static String buildEmptyResultMessage(AIIntentConfig intent, Object data) {
+        String subject = intent != null && intent.getIntentName() != null && !intent.getIntentName().isBlank()
+                ? "「" + intent.getIntentName() + "」" : "你查询的内容";
+        String range = null;
+        if (data instanceof Map<?, ?> map) {
+            StringBuilder sb = new StringBuilder();
+            for (String k : EMPTY_RESULT_RANGE_KEYS) {
+                Object v = map.get(k);
+                if (v instanceof String str && !str.isBlank()) {
+                    if (sb.length() > 0) sb.append(" ");
+                    sb.append(str);
+                }
+            }
+            if (sb.length() > 0) range = sb.toString();
+        }
+        return "查询已完成，" + (range != null ? "在 " + range + " 内" : "这段时间内")
+                + "没有找到" + subject + "相关记录。可以换个时间范围或条件再查。";
+    }
+
     /**
      * 解析 Tool 执行结果为 IntentExecuteResponse
      */
@@ -2057,7 +2116,10 @@ public class ToolDispatchService {
             if (message == null) {
                 // Sprint 12: enriched fallback. Bare "执行失败" violates close-gate
                 // "≥80-char structured Chinese with concrete 数字/名称/日期, no placeholder".
-                if (success) {
+                if (success && isEmptyQueryData(data)) {
+                    // 查询成功但没有数据 ≠ 查询失败: 不能掉进下面「请补充…重试」的引导文案
+                    message = buildEmptyResultMessage(intent, data);
+                } else if (success) {
                     message = "操作已完成。";
                 } else {
                     message = "本次查询没有获得可展示的结果。请补充明确的业务对象、指标和时间范围后重试；"

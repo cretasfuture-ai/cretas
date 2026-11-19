@@ -14,6 +14,8 @@ import type { TableRow } from '@/types/api';
 // 改用底层 getUploadUrl + 直传 OSS (与 uploadAndRegister 内部一致, 跳过 register 步骤), 拿到
 // fileUrl 后推入 createForm.photoUrls — 提交时序不变 (仍是 photoUrls: string[] JSON.stringify)。
 import { getUploadUrl } from '@/api/attachment';
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
+import { loadErrorText } from '@/utils/listEmptyState';
 
 /* 组件全部是 Nuxt UI (UTable / UTabs / UModal / UFormField / USelectMenu / UInput / UTextarea / UBadge / UPagination) + --cs-*；弹窗里不放 Element 控件，照片缩略图用原生 img + 链接（取代 el-image 预览）。提示仍用 ElMessage。 */
 
@@ -68,6 +70,7 @@ function reasonLabel(val: string) {
 // List state
 // ────────────────────────────────────────────────────────────────────────────
 const loading = ref(false);
+const loadError = ref('');
 const tableData = ref<TableRow[]>([]);
 const pagination = ref({ page: 1, size: 20, total: 0 });
 const statusFilter = ref('');
@@ -100,6 +103,7 @@ const photoInput = ref<HTMLInputElement | null>(null);
 async function loadData() {
   if (!factoryId.value) return;
   loading.value = true;
+  loadError.value = '';
   try {
     const params: Record<string, unknown> = {
       page: pagination.value.page - 1,  // backend is 0-based; pagination.page is 1-based
@@ -112,8 +116,13 @@ async function loadData() {
       const d = res.data;
       tableData.value = d.content || d || [];
       pagination.value.total = d.totalElements ?? tableData.value.length;
+    } else {
+      tableData.value = [];
+      loadError.value = res.message || '加载报损记录失败';
     }
   } catch (e) {
+    tableData.value = [];
+    loadError.value = loadErrorText(e, '加载报损记录失败');
     ElMessage({ message: String((e as Error).message || '加载失败'), type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
@@ -129,6 +138,11 @@ function handleTabChange() {
   pagination.value.page = 1;
   statusFilter.value = '';
   loadData();
+}
+
+function clearStatusFilter() {
+  statusFilter.value = '';
+  handleFilterChange();
 }
 
 function handleFilterChange() {
@@ -569,7 +583,16 @@ onMounted(async () => {
       <UTabs v-model="tabModel" :items="tabItems" :content="false" variant="link" class="px-4" data-testid="wastage-tabs" />
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="wastage-table">
-        <template #empty>暂无报损记录</template>
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            :filtered="!!statusFilter"
+            :empty-title="activeTab === 'WAREHOUSE' ? '还没有仓库报损记录' : '还没有生产报损记录'"
+            empty-hint="库存破损、过期或生产损耗需要核销时，点右上角「新建报损」登记；审批通过并应用后才会扣减库存、计入损耗成本。"
+            @retry="loadData"
+            @clear-filter="clearStatusFilter"
+          />
+        </template>
         <template #warehouse-cell="{ row }">{{ warehouseName(row.original.warehouseId) }}</template>
         <template #batch-cell="{ row }">{{ batchLabel(row.original.materialBatchId) }}</template>
         <template #wastageQty-cell="{ row }"><span class="num">{{ row.original.wastageQty }}</span></template>

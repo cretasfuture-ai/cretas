@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { displayUnit } from '@/utils/unitPricing';
 import { useRoute, useRouter } from 'vue-router';
@@ -11,6 +12,7 @@ import CanvasAwareWrapper from '@/components/canvas/CanvasAwareWrapper.vue';
 import UpstreamMissingHint from '@/components/common/UpstreamMissingHint.vue';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell, fmtQty, formatAmount } from '@/utils/tableFormatters';
+import { batchStatusDisplay, formatDateTimeMinute, isDepletedAvailableBatch } from './batchDisplay';
 import { enumLabel, MATERIAL_BATCH_STATUS_LABELS } from '@/utils/enumDisplay';
 import type { FormInstance } from 'element-plus';
 import type { TableRow } from '@/types/api';
@@ -48,14 +50,33 @@ const receivingFilter = computed<ReceivingTaskFilter>(() =>
 const currentRecordCount = computed(() => activeInboundTab.value === 'BATCHES'
   ? `${pagination.value.total} 个批次`
   : `${receivingCounts.value[receivingFilter.value]} 项任务`);
+// 默认落点：没有待处理任务、但已有入库批次时，直接打开「已入库批次」，避免用户一进来看到空表。
+// 只在用户没有点过标签、URL 没指定 view 时自动切换一次。
+const inboundTabTouched = ref(false);
+const receivingCountsLoaded = ref(false);
 function handleReceivingCounts(counts: ReceivingLifecycleCounts): void {
   receivingCounts.value = counts;
+  receivingCountsLoaded.value = true;
 }
+function handleInboundTabChange(): void {
+  inboundTabTouched.value = true;
+}
+watch(
+  [() => receivingCounts.value.ALL, () => pagination.value.total, receivingCountsLoaded],
+  ([taskTotal, batchTotal, loaded]) => {
+    if (inboundTabTouched.value || !loaded) return;
+    if (activeInboundTab.value === 'ALL' && taskTotal === 0 && batchTotal > 0) {
+      activeInboundTab.value = 'BATCHES';
+      inboundTabTouched.value = true;
+    }
+  },
+);
 
 watch(
   () => route.query.view,
   (view) => {
     const normalized = String(view || '').toUpperCase();
+    if (normalized) inboundTabTouched.value = true;
     if (normalized === 'BATCHES' || normalized === 'INVENTORY') activeInboundTab.value = 'BATCHES';
     else if (normalized === 'RECEIVING' || normalized === 'TASKS') activeInboundTab.value = 'ALL';
   },
@@ -293,6 +314,10 @@ function getStatusType(status: string) {
  */
 function getStatusText(status: string) {
   return enumLabel(status?.toUpperCase(), MATERIAL_BATCH_STATUS_LABELS);
+}
+
+function batchTagType(row: TableRow | null): string {
+  return isDepletedAvailableBatch(row) ? 'info' : getStatusType(String(row?.status ?? ''));
 }
 
 // ==================== View Dialog ====================
@@ -770,7 +795,7 @@ async function handleGenerateLabel(row: TableRow) {
         </div>
       </template>
 
-      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs">
+      <el-tabs v-model="activeInboundTab" class="inbound-status-tabs" @tab-change="handleInboundTabChange">
         <el-tab-pane :label="`全部任务 ${receivingCounts.ALL}`" name="ALL" />
         <el-tab-pane :label="`待收货 ${receivingCounts.WAITING_RECEIVE}`" name="WAITING_RECEIVE" />
         <el-tab-pane :label="`收货中 ${receivingCounts.RECEIVING}`" name="RECEIVING" />
@@ -836,7 +861,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="expiryDate" label="过期日期" width="120" />
@@ -913,7 +938,7 @@ async function handleGenerateLabel(row: TableRow) {
                 </el-table-column>
                 <el-table-column label="状态" width="100" align="center">
                   <template #default="{ row: b }">
-                    <el-tag :type="getStatusType(b.status)" size="small">{{ getStatusText(b.status) }}</el-tag>
+                    <el-tag :type="batchTagType(b)" size="small">{{ batchStatusDisplay(b, getStatusText).text }}</el-tag>
                   </template>
                 </el-table-column>
                 <el-table-column prop="createdAt" label="入库时间" width="180" :formatter="formatDateTimeCell" />
@@ -966,7 +991,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table>
       </template>
 
-      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table v-if="viewMode === 'detail'" :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty><ListEmptyExplain empty-title="还没有入库批次" empty-hint="采购到货验收或生产完工入库后，批次会出现在这里；也可点「入库」手动登记。" /></template>
         <el-table-column prop="batchNumber" label="批次号" width="160" />
         <el-table-column label="原料类型" min-width="150" show-overflow-tooltip>
           <template #default="{ row }">{{ row.materialTypeName || row.materialName || '-' }}</template>
@@ -988,8 +1014,8 @@ async function handleGenerateLabel(row: TableRow) {
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100" align="center">
           <template #default="{ row }">
-            <el-tag :type="getStatusType(row.status)" size="small">
-              {{ getStatusText(row.status) }}
+            <el-tag :type="batchTagType(row)" size="small">
+              {{ batchStatusDisplay(row, getStatusText).text }}
             </el-tag>
           </template>
         </el-table-column>
@@ -1055,10 +1081,10 @@ async function handleGenerateLabel(row: TableRow) {
           <span v-else>-</span>
         </el-descriptions-item>
         <el-descriptions-item label="状态">
-          <el-tag :type="getStatusType(String(viewRecord.status || ''))">{{ getStatusText(String(viewRecord.status || '')) }}</el-tag>
+          <el-tag :type="batchTagType(viewRecord)">{{ batchStatusDisplay(viewRecord, getStatusText).text }}</el-tag>
         </el-descriptions-item>
         <el-descriptions-item label="过期日期">{{ viewRecord.expiryDate || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="入库时间">{{ viewRecord.createdAt || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="入库时间">{{ formatDateTimeMinute(viewRecord.createdAt) }}</el-descriptions-item>
         <el-descriptions-item label="备注">{{ viewRecord.notes || '-' }}</el-descriptions-item>
         <el-descriptions-item label="合同号">{{ viewRecord.contractNumber || '-' }}</el-descriptions-item>
         <el-descriptions-item label="供应商批次号">{{ viewRecord.supplierBatchNumber || '-' }}</el-descriptions-item>

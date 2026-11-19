@@ -25,7 +25,7 @@ public class OperatingReportAssembler {
         BigDecimal orderCount = number(summary.get("orderCount"));
         BigDecimal assigned = number(summary.get("assignedOrderCount"));
         BigDecimal assignmentCoverage = ratio(assigned, orderCount);
-        sections.add(section("orders", "销售订单与数据覆盖", false, "排除 DRAFT/CANCELLED 与软删除订单；销售订单期间口径", List.of(
+        sections.add(section("orders", "销售订单与数据覆盖", false, "不含草稿、已取消和已删除的订单，按订单所在期间统计", List.of(
                 metric("sales.orders", "订单数", orderCount, "单", "订单数缺失", null, "salesperson-performance.summary.orderCount"),
                 metric("sales.assigned", "已填业务员订单数", assigned, "单", "业务员信息缺失", assignmentCoverage, "salesperson-performance.summary.assignedOrderCount"),
                 metric("sales.unassigned", "未填业务员订单数", number(unassigned.get("orderCount")), "单", "业务员归属未知", assignmentCoverage, "salesperson-performance.unassigned.orderCount"))));
@@ -60,7 +60,7 @@ public class OperatingReportAssembler {
             people.add(metric("salesperson."+id+".yoy",name+" 同比",percentage(growth(number(row.get("totalAmountWithTax")),yearSales)),"%","去年同期归属缺失或基数不大于零",null,"(current-lastYear)/lastYear*100"));
         }
         people.add(metric("salesperson.unassigned", "未归属业务员销售额（不列入个人排行）", number(unassigned.get("totalAmountWithTax")), "元", "未填写业务员", assignmentCoverage, "salesperson-performance.unassigned.totalAmountWithTax"));
-        sections.add(section("salespeople", "业务员排行", true, "按既有 salesperson-performance 含税销售额排序；覆盖率按订单归属计算。比较按用户ID或既有姓名归属分别匹配，归属改变或同期缺记录时增长率未知。", people));
+        sections.add(section("salespeople", "业务员排行", true, "按含税销售额从高到低排序；覆盖率为已填业务员的订单占比。环比、同比按同一业务员匹配，业务员归属变化或对比期间没有记录时，增长率无法计算。", people));
 
         List<Metric> regions = new ArrayList<>();
         BigDecimal regionCoverage = number(map(input.region().get("summary")).get("recognizedShare"));
@@ -71,7 +71,7 @@ public class OperatingReportAssembler {
         }
         regions.add(metric("province.noAddress", "地址未填销售额（无法归省）", number(map(input.region().get("noAddress")).get("totalAmountWithTax")), "元", "订单与客户均无地址", regionCoverage, "regional-comparison.noAddress.totalAmountWithTax"));
         regions.add(metric("province.unrecognized", "无法识别地区销售额（不列入省份排行）", number(map(input.region().get("unrecognized")).get("totalAmountWithTax")), "元", "地区识别失败", regionCoverage, "regional-comparison.unrecognized.totalAmountWithTax"));
-        sections.add(section("provinces", "省份销售排行", true, "完全复用 address_region 地址优先级与识别口径；覆盖率为识别省份的含税金额占比。", regions));
+        sections.add(section("provinces", "省份销售排行", true, "按订单收货地址优先、客户地址其次识别省份；覆盖率为能识别省份的含税金额占比。", regions));
 
         Map<String,Object> marginSummary=map(input.marginHigh().get("summary"));
         BigDecimal costCoverage=number(marginSummary.get("costCoverage"));
@@ -93,7 +93,7 @@ public class OperatingReportAssembler {
         BigDecimal over90=add(sum(input.aging(),"days91_120"),sum(input.aging(),"days120plus"));
         aging.add(metric("aging.over90", "90天以上应收（坏账风险观察项）", over90, "元", "账龄完整性覆盖未知", null, "sum(days91_120)+sum(days120plus)"));
         aging.add(metric("aging.over90Share", "90天以上应收占比", percentage(ratio(over90,sum(input.aging(),"total"))), "%", "应收合计缺失或不大于零", null, "over90/total*100"));
-        sections.add(section("aging", "应收账龄与坏账风险", true, "截至取数当天，按到期日、未冲销余额复用 ArApService /aging；旧记录缺余额时沿接口取挂账原值。逾期不等于已确认坏账；坏账计提数据覆盖未知。", aging));
+        sections.add(section("aging", "应收账龄与坏账风险", true, "截至取数当天，按到期日统计未冲销余额；旧记录缺余额时取挂账原值。逾期不等于已确认坏账；坏账计提数据覆盖未知。", aging));
 
         boolean costsAvailable=Boolean.TRUE.equals(input.income().get("costDataAvailable"));
         List<Metric> profit=new ArrayList<>();
@@ -102,7 +102,7 @@ public class OperatingReportAssembler {
             String name=switch(key){case "totalRevenue"->"已过账营业收入";case "totalCost"->"已过账营业成本";case "grossProfit"->"利润表毛利";case "totalExpense"->"期间费用";case "operatingProfit"->"营业利润";case "incomeTax"->"所得税";case "netProfit"->"净利润";default->"待过账草稿凭证";};
             profit.add(metric("income."+key,name,needsCost&&!costsAvailable?null:number(input.income().get(key)),key.equals("pendingDraftVoucherCount")?"份":"元",needsCost&&!costsAvailable?"无已过账成本，利润不可确认；覆盖率未知":"已过账凭证口径，凭证完整性覆盖未知",null,"income-statement."+key));
         }
-        sections.add(section("income", "盈利与利润表", true, "复用 POSTED-only income-statement；日/周报此段展示覆盖所在自然月的月度财务口径，非日利润。期间："+input.start().withDayOfMonth(1)+" 至 "+input.end().withDayOfMonth(input.end().lengthOfMonth()), profit));
+        sections.add(section("income", "盈利与利润表", true, "仅含已过账凭证；日报、周报此段展示覆盖所在自然月的月度财务口径，非日利润。期间："+input.start().withDayOfMonth(1)+" 至 "+input.end().withDayOfMonth(input.end().lengthOfMonth()), profit));
 
         List<Metric> quantities=new ArrayList<>(), values=new ArrayList<>();
         for(Map<String,Object> row:input.inventory()) {
@@ -113,8 +113,8 @@ public class OperatingReportAssembler {
             boolean complete=coverage!=null&&coverage.compareTo(BigDecimal.ONE)==0;
             values.add(metric("inventory."+id+".value",name+" 存货价值",complete?number(row.get("totalValue")):null,"元",complete?null:"存在缺单价批次或价格覆盖率未知；不可把部分估值当总价值",coverage,"stock-summary["+id+"].totalValue"));
         }
-        sections.add(section("inventory", "存货数量", false, "取数时点公司自有批次可用余量，扣除已用与预留；按现有 stock-summary 范围和称重单位分组。非物理库存总量或历史日末结存。", quantities));
-        sections.add(section("inventoryValue", "存货估值与成本覆盖", true, "复用公司自有批次 stock-summary，按其既有范围（不声明排除 WIP）；价值只在完全相同余量/单位范围所有批次有单价时确认。成品与客户自有存货无同口径估值，覆盖率未知。", values));
+        sections.add(section("inventory", "存货数量", false, "取数时点公司自有批次可用余量，扣除已用与预留；按称重单位分组。非物理库存总量或历史日末结存。", quantities));
+        sections.add(section("inventoryValue", "存货估值与成本覆盖", true, "按公司自有批次的库存汇总范围；价值只在完全相同余量/单位范围所有批次有单价时确认。成品与客户自有存货无同口径估值，覆盖率未知。", values));
         return new OperatingReportSnapshot(SCHEMA,Status.SUCCESS,input.type(),input.start().toString(),input.end().toString(),input.fetchedAt(),input.receipts(),sections,null,null);
     }
 
@@ -138,8 +138,8 @@ public class OperatingReportAssembler {
             metrics.add(metric(id+"."+product+".rate",name+" 毛利率",percentage(number(row.get("marginRate"))),"%","成本缺失或分母不大于零",coverage,"gross-margin.rank["+product+"].marginRate*100"));
         }
         BigDecimal productCount=number(map(payload.get("summary")).get("productCount"));
-        String basis=byProfit?"从既有 gross-margin 返回产品按毛利金额排序":"完全复用 gross-margin 的高/低毛利率排序";
-        if(byProfit&&productCount!=null&&productCount.compareTo(BigDecimal.valueOf(rank.size()))>0) basis+="；仅接口返回产品范围，未覆盖全体产品，不能视为全厂高低榜";
+        String basis=byProfit?"按毛利金额从高到低排序":"按毛利率排序";
+        if(byProfit&&productCount!=null&&productCount.compareTo(BigDecimal.valueOf(rank.size()))>0) basis+="；仅覆盖已统计到的产品，不能视为全厂高低榜";
         return section(id,title,true,basis,metrics);
     }
     private Section section(String id,String title,boolean price,String basis,List<Metric> metrics){return new Section(id,title,price,basis,metrics);}

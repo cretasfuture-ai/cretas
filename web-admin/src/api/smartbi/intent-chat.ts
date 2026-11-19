@@ -17,6 +17,8 @@ export interface IntentExecuteResponse {
   message: string;
   formattedText: string;
   clarificationQuestions?: string[] | null;
+  /** NEED_CLARIFICATION 的可点选项: actionCode=SELECT_INTENT 的 actionName 是要重问的问题。 */
+  suggestedActions?: Array<{ actionCode?: string; actionName?: string }> | null;
   sessionId?: string | null;
   /** AI read/write separation (2026-07-23): which mode the backend resolved. */
   aiMode?: string;           // "READ" | "WRITE"

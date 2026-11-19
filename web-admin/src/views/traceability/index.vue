@@ -41,13 +41,14 @@ import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import type { BusinessDocumentTrace, TraceDocument } from '@/types/businessDocumentTrace';
 import { documentTraceTarget, traceDocumentLabel } from '@/utils/documentTraceNavigation';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
-import { formatDateTime } from '@/utils/dateFormat';
+import { formatDateTime, formatLocalDateTimeMinute } from '@/utils/dateFormat';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
 import {
   depthLabel,
   emptySectionsLine,
   formatQueryTime,
   formatTimeRange,
+  formatStageLossRate,
   isBlank,
   boxGapLines,
   qualityStatusCellText,
@@ -398,7 +399,7 @@ const productionRows = computed(() => {
     { label: '批次号', value: p.batchNumber },
     { label: '产品名称', value: traceProductName(p.productName) },
     { label: '生产工厂', value: p.factoryName },
-    { label: '生产日期', value: p.productionDate },
+    { label: '生产日期', value: formatLocalDateTimeMinute(p.productionDate) },
     { label: '负责人', value: p.supervisorName ?? '' },
     { label: '设备', value: p.equipmentName ?? '' },
     { label: '总产量（含不良）', value: p.quantity != null ? `${p.quantity} ${p.unit || ''}`.trim() : '' },
@@ -461,6 +462,12 @@ const queryTimeText = computed(() => formatQueryTime(trace.value?.queryTime));
 
 function percent(rate?: number | null): string {
   return rate == null ? '' : `${(rate * 100).toFixed(1)}%`;
+}
+function stageLoss(stage: ProcessingStageInfo) {
+  const legacyUnit = stage.stageType === 'PROCESS_SHEET' ? '' : 'kg';
+  const inUnit = stage.inputUnit || legacyUnit;
+  const outUnit = stage.outputUnit || legacyUnit;
+  return formatStageLossRate(stage.inputWeight, stage.outputWeight, inUnit === outUnit);
 }
 function processQuantities(stage: ProcessingStageInfo): string {
   if (stage.inputWeight == null || stage.outputWeight == null) return '';
@@ -577,7 +584,9 @@ function openIndividual(id: string) {
         <el-table-column label="产品" min-width="140">
           <template #default="{ row }">{{ traceProductName(row.productName) }}</template>
         </el-table-column>
-        <el-table-column prop="productionDate" label="生产日期" min-width="130" />
+        <el-table-column label="生产日期" min-width="130">
+          <template #default="{ row }">{{ formatLocalDateTimeMinute(row.productionDate) }}</template>
+        </el-table-column>
         <el-table-column label="质量" min-width="100">
           <template #default="{ row }"><span data-testid="recent-batch-quality">{{ qualityStatusCellText(row.qualityStatus) }}</span></template>
         </el-table-column>
@@ -791,7 +800,9 @@ function openIndividual(id: string) {
             </template>
           </el-table-column>
           <el-table-column label="损耗率" width="100">
-            <template #default="{ row }">{{ percent(row.lossRate) }}</template>
+            <template #default="{ row }">
+              <span :title="stageLoss(row).reason" data-testid="stage-loss-rate">{{ stageLoss(row).text }}</span>
+            </template>
           </el-table-column>
           <el-table-column label="合格率" width="100">
             <template #default="{ row }">{{ percent(row.passRate) }}</template>
@@ -845,7 +856,7 @@ function openIndividual(id: string) {
         </template>
         <el-table :data="qualityInspections" size="default" data-testid="quality-table">
           <el-table-column label="检验编号" width="140">
-            <template #default="{ row }">质检 #{{ row.inspectionId?.slice(-8) || '-' }}</template>
+            <template #default="{ $index }">质检 第{{ $index + 1 }}次</template>
           </el-table-column>
           <el-table-column label="检验日期" width="120">
             <template #default="{ row }">{{ dateOnly(row.inspectionDate) }}</template>

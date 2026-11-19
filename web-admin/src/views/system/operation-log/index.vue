@@ -59,6 +59,7 @@
     <!-- Table -->
     <el-card shadow="never" style="margin-top: 12px">
       <el-table :data="logs" stripe v-loading="loading" border>
+        <template #empty><ListEmptyExplain empty-title="所选条件下没有操作日志" empty-hint="用户在系统内的新增、修改、删除等操作会记录在这里；可放宽时间范围或清除筛选条件。" /></template>
         <el-table-column prop="createdAt" label="时间" width="220">
           <template #default="{ row }">{{ formatTime(row.createdAt) }}</template>
         </el-table-column>
@@ -177,6 +178,7 @@
 </template>
 
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { computed, onMounted, ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';

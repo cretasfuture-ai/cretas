@@ -1183,6 +1183,18 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("产品利润", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("单品利润", "SKU_GROSS_MARGIN");
         phraseToIntentMapping.put("哪个产品赚钱", "SKU_GROSS_MARGIN");
+        // 「毛利最低 / 最高的产品」排名问法 (LSMDEMO 2026-11-18 原话「这个月毛利最低的产品是哪些？」没有短语, 掉进智能指标 Skill 被追问「要查哪个指标」);
+        // 整句形态都列出来: 短语快捷要求整句拿掉短语后基本不剩字 (PhraseShortcutEligibility), 工具按原话里的「最低 / 最高」定排序方向。
+        for (String metric : new String[]{"毛利", "毛利率"}) {
+            for (String dir : new String[]{"最低", "最差", "最高", "最好"}) {
+                String core = metric + dir;
+                for (String tail : new String[]{"的产品是哪些", "的产品有哪些", "的产品是什么", "的产品是哪个", "的产品", "的是哪些产品", "的sku"}) {
+                    phraseToIntentMapping.put(core + tail, "SKU_GROSS_MARGIN");
+                }
+                phraseToIntentMapping.put("哪些产品" + core, "SKU_GROSS_MARGIN");
+                phraseToIntentMapping.put("哪个产品" + core, "SKU_GROSS_MARGIN");
+            }
+        }
 
         // === 库存相关 (使用实际存在的意图代码) ===
         phraseToIntentMapping.put("库存查询", "REPORT_INVENTORY");
@@ -1674,7 +1686,7 @@ public class IntentKnowledgeBase {
         // v11.2新增: 更多销售总览短语
         phraseToIntentMapping.put("本月销售", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("销售额", "REPORT_DASHBOARD_OVERVIEW");
-        phraseToIntentMapping.put("本月销售额", "REPORT_DASHBOARD_OVERVIEW");
+        phraseToIntentMapping.put("本月销售额", "REPORT_SALES_MARGIN_SUMMARY");
         phraseToIntentMapping.put("这周卖了多少", "REPORT_DASHBOARD_OVERVIEW");
         phraseToIntentMapping.put("卖了多少钱", "REPORT_DASHBOARD_OVERVIEW");
         // v11.3: 更多销售总览短语
@@ -1915,6 +1927,11 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("批次从哪来", "TRACE_BATCH");
         phraseToIntentMapping.put("溯源这个批次", "TRACE_BATCH");
         phraseToIntentMapping.put("全链路追溯", "TRACE_FULL");
+        // 按销售单追溯（销售单→计划→批次→原料/工序/质检/出货）：TRACE_FULL 工具认 salesOrderNo
+        phraseToIntentMapping.put("追溯销售单", "TRACE_FULL");
+        phraseToIntentMapping.put("销售单追溯", "TRACE_FULL");
+        phraseToIntentMapping.put("按销售单追溯", "TRACE_FULL");
+        phraseToIntentMapping.put("销售单的来源", "TRACE_FULL");
         phraseToIntentMapping.put("全链路溯源", "TRACE_FULL");
         phraseToIntentMapping.put("完整溯源", "TRACE_FULL");
         phraseToIntentMapping.put("从头到尾追踪", "TRACE_FULL");
@@ -3084,6 +3101,54 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("实际成本与标准成本", "REPORT_COST_VARIANCE");
         // 演示题单第二轮复跑 (2026-11-15): 「本月生产了多少批次，合格率多少」财务号落 QUALITY_STATS、管理员号落 SMART_INDICATOR_QUERY(要 indicator_code);
         // (Q12 原料采购价涨得最多: 两号意图不同, 财务号被权限拒绝是预期; 不加短语把它路由到无权限声明的预警工具去绕过, 权限由 Steve 裁决)
+        phraseToIntentMapping.put("这个月销售额", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额是多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("这个月销售额是多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月销售额多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("这个月销售额多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月卖了多少钱", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("这个月卖了多少钱", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月营业额", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("本月营业额是多少", "REPORT_SALES_MARGIN_SUMMARY");
+        // 2026-11-18 Steve 实测: 「哪些原料价格涨得最多」被价格预警(找异常)答非所问 → 价格历史的涨幅排名模式
+        phraseToIntentMapping.put("哪些原料价格涨得最多", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("哪些原料涨价最多", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("哪些原料涨得最多", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("原料价格涨幅排名", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("原料涨幅排行", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("哪些原料涨价了", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("原料进价涨幅排名", "PRICE_HISTORY_QUERY");
+        phraseToIntentMapping.put("哪个原料价格涨得最多", "PRICE_HISTORY_QUERY");
+        // 2026-11-18 LSMDEMO: 客户欠款排名 (读客户应收余额, 与经营分析页同口径); 账龄说法不动
+        phraseToIntentMapping.put("哪个客户欠款最多", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("哪个客户欠我们钱最多", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("谁欠款最多", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("客户欠款排名", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("客户欠款最多", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("客户欠款排行", "ACCOUNTS_RECEIVABLE_AGING");
+        phraseToIntentMapping.put("哪些客户欠款", "ACCOUNTS_RECEIVABLE_AGING");
+        // 2026-11-18 LSMDEMO: 「最近有哪些批次出成率异常」落到近 7 天已完成批次 0 个 → 走出成率排行 (默认 30 天, 无数据说明最近一次日期)
+        phraseToIntentMapping.put("最近有哪些批次出成率异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪些批次出成率异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("最近出成率异常的批次", "REPORT_BATCH_YIELD_RANK");
+        // 2026-11-18 BP 问题 28: 损耗异常 / 某工序出成率 / 出成率为什么掉了 走出成率工具的工序视图
+        // (「最近有哪些损耗异常」以前没有短语 → 决策层判成质检, 答「质检不合格率 0%」; 守卫 YieldLossProcessRoutingContractTest)
+        phraseToIntentMapping.put("最近有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("哪道工序出成率", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么掉了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么下降", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率为什么低了", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("出成率掉在哪", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("掉在哪道工序", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("本月生产了多少批次，合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("本月生产了多少批次合格率多少", "QUALITY_STATS");
         phraseToIntentMapping.put("生产了多少批次，合格率多少", "QUALITY_STATS");
@@ -3129,6 +3194,38 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("BOM配方成本最高的产品", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("BOM 配方成本最高的产品是哪个", "REPORT_BOM_COST_RANK");
         phraseToIntentMapping.put("BOM 成本最高的产品", "REPORT_BOM_COST_RANK");
+        // 意图蒸馏 v3 复核缺口 (2026-11-17 新增意图; 只加更长更具体的说法, 不改既有短语的指向):
+        // 新建客户 (写, 走确认卡) — 「客户资料」本身仍指客户名单, 带「录/建」动作的才到新建
+        phraseToIntentMapping.put("客户资料帮我录", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("录一下客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("帮我录客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("录入客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("新建客户资料", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("新建客户", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("添加新客户", "CUSTOMER_CREATE");
+        phraseToIntentMapping.put("建个客户档案", "CUSTOMER_CREATE");
+        // 我的工资 (只读, 只看本人) — 比「工资条」(考勤统计) 更长的本人说法优先
+        phraseToIntentMapping.put("工资条能提前", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("这个月的工资条", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我的工资条", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("把我工资算", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我的工资", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("我这个月工资", "HR_MY_WAGE_QUERY");
+        phraseToIntentMapping.put("看看我的工资", "HR_MY_WAGE_QUERY");
+        // 查员工在哪个车间/哪条线 (只读, 只给工作信息)
+        phraseToIntentMapping.put("哪个车间的啊", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("是哪个车间的", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("现在在哪条线", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("在哪条线上", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("在哪个车间上班", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        phraseToIntentMapping.put("员工在哪条产线", "HR_EMPLOYEE_WORK_LOCATION_QUERY");
+        // 排清洁计划 (写, 走确认卡)
+        phraseToIntentMapping.put("清洁计划给排", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排一下清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("清洁计划排一下", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排明天的清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("安排清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
+        phraseToIntentMapping.put("排清洁计划", "SSOP_SCHEDULE_PLAN_CREATE");
         phraseToIntentMapping.put("成本差异", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异分析", "REPORT_COST_VARIANCE");
         phraseToIntentMapping.put("成本差异报表", "REPORT_COST_VARIANCE");
@@ -3953,6 +4050,11 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("销售前十", "PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("销售TOP10", "PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("销售前10", "PRODUCT_SALES_RANKING");
+        // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」(LSMDEMO 2026-11-18 BP 问题 47): 原来落到要 indicator_code 的指标 Skill 被追问;
+        // 产品销售排行工具自己从原话解析两个月并按客户 / 产品拆增量, 句中的月份与百分数不算「带条件」(见 GROWTH_BREAKDOWN_PHRASES)。
+        for (String p : GROWTH_BREAKDOWN_PHRASES) {
+            phraseToIntentMapping.put(p, "PRODUCT_SALES_RANKING");
+        }
         phraseToIntentMapping.put("发货排名", "SHIPMENT_RANKING");
         phraseToIntentMapping.put("出货排名", "SHIPMENT_RANKING");
         phraseToIntentMapping.put("供应商排名", "SUPPLIER_RANKING");
@@ -4639,8 +4741,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("退货率", "REPORT_KPI");
         phraseToIntentMapping.put("退货统计", "REPORT_KPI");
         phraseToIntentMapping.put("退货数据", "REPORT_KPI");
-        phraseToIntentMapping.put("销售额是多少", "REPORT_KPI");
-        phraseToIntentMapping.put("销售额多少", "REPORT_KPI");
+        phraseToIntentMapping.put("销售额是多少", "REPORT_SALES_MARGIN_SUMMARY");
+        phraseToIntentMapping.put("销售额多少", "REPORT_SALES_MARGIN_SUMMARY");
 
         // v20-A/E: 复杂查询模式
         phraseToIntentMapping.put("还有多少库存", "MATERIAL_BATCH_QUERY");
@@ -5346,6 +5448,10 @@ public class IntentKnowledgeBase {
         // 报工
         phraseToIntentMapping.put("报工情况", "REPORT_WORKSHOP_DAILY");
         phraseToIntentMapping.put("报工查询", "REPORT_WORKSHOP_DAILY");
+        // 2026-11-18 线上 probe report_work_stats: 「报工产量统计」整句被决策层 LLM 判成写意图 (#1813 只放行整句短语, 残余「报工统计」落决策层); 登记整句短语直达只读报表
+        phraseToIntentMapping.put("报工产量统计", "REPORT_PRODUCTION");
+        phraseToIntentMapping.put("报工统计", "REPORT_PRODUCTION");
+        phraseToIntentMapping.put("报工汇总", "REPORT_PRODUCTION");
         // 员工管理
         phraseToIntentMapping.put("新建员工", "USER_CREATE");
         phraseToIntentMapping.put("员工账号", "USER_CREATE");
@@ -6634,7 +6740,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("KPI", "REPORT_KPI");
         phraseToIntentMapping.put("KPI dashboard", "REPORT_KPI");
         phraseToIntentMapping.put("今日生产报告", "REPORT_KPI");
-        phraseToIntentMapping.put("本月销售额", "REPORT_KPI");
+        phraseToIntentMapping.put("本月销售额", "REPORT_SALES_MARGIN_SUMMARY");
         phraseToIntentMapping.put("本月销售额统计", "REPORT_KPI");
         phraseToIntentMapping.put("每日生产", "REPORT_KPI");
         phraseToIntentMapping.put("生产报告", "REPORT_KPI");
@@ -8027,6 +8133,10 @@ public class IntentKnowledgeBase {
             return Optional.empty();
         }
 
+        // 页面按钮发出的「[xx数据] 数据摘要 + 解读指令」只读问句: 数据摘要里的词 (如「客户预收款」) 不是用户要做的事,
+        // 短语只在解读指令那一句里找 (2026-11-18 经营分析页往来余额 AI 解读被「收款」判成写意图)。
+        input = withoutGroundedDataBlock(input);
+
         // 1. Use the shared factory phrase map. Restaurant-specific mappings
         // were retired; the domain argument remains source-compatible.
         Map<String, String> businessSpecificMap = phraseToIntentMapping;
@@ -8057,6 +8167,12 @@ public class IntentKnowledgeBase {
     }
 
     /** 整句是不是「[我要]报工 [+ 产量]」那类说法 (报工短语自带的整句约束, 见 {@link #REPORT_WORK_SENTENCE})。 */
+    /** 「X月比Y月涨了…主要是哪个客户 / 产品带来的」归因问法的短语 (指向产品销售排行工具的增量拆分模式)。 */
+    public static final List<String> GROWTH_BREAKDOWN_PHRASES = List.of(
+            "哪个客户、哪个产品带来的", "哪个客户和哪个产品带来的", "哪个客户哪个产品带来的",
+            "哪个客户带来的", "哪个产品带来的", "哪几个客户带来的", "哪些客户带来的", "哪些产品带来的",
+            "哪个客户贡献的", "哪个产品贡献的", "哪些客户贡献的", "哪些产品贡献的");
+
     public static boolean isReportWorkSentence(String input) {
         return input != null && REPORT_WORK_SENTENCE.matcher(input.trim().toLowerCase()).matches();
     }
@@ -8116,6 +8232,7 @@ public class IntentKnowledgeBase {
      * 原有方法保持向后兼容（默认走工厂路径）
      */
     public Optional<String> matchPhrase(String input) {
+        input = withoutGroundedDataBlock(input);
         Optional<String> result = doMatchPhrase(input, phraseToIntentMapping);
         if (result.isPresent()) return result;
         return doMatchPhrase(input, commonPhraseMapping);
@@ -8129,6 +8246,33 @@ public class IntentKnowledgeBase {
     }
 
     /** 同 {@link #doMatchPhrase}, 但连同命中的短语一起返回 (调用方要判断命中的是不是够具体)。 */
+    private static final java.util.Set<String> COLLECT_PHRASES = java.util.Set.of("收款", "录入收款", "记录收款");
+
+    private static final java.util.regex.Pattern GROUNDED_DATA_QUERY = java.util.regex.Pattern.compile(
+            "^\\[[^\\]]{1,40}数据\\][\\s\\S]*?\\n\\n([\\s\\S]*解读[\\s\\S]*)$");
+
+    /** 「[标题数据] 摘要 空行 指令」→ 只留指令; 不是这个形状原样返回。 */
+    static String withoutGroundedDataBlock(String input) {
+        if (input == null) return null;
+        java.util.regex.Matcher m = GROUNDED_DATA_QUERY.matcher(input.trim());
+        return m.matches() ? m.group(1) : input;
+    }
+
+    /** word 在整句里出现的每一处前面都是 预/应/待/已/未, 或后面是 额/余额 —— 即只有名词用法。 */
+    static boolean onlyNounContext(String text, String word) {
+        int at = text.indexOf(word);
+        if (at < 0) return false;
+        // 句中有「收到 / 登记 / 记一下 / 入账 / 录入」是在做登记, 不是在说名词 (「收到预收款 1 万」「张三已收款 3000 元记一下」)
+        if (text.matches("(?s).*(收到|登记|记一|记录|入账|录入|已收款|收了).*")) return false;
+        while (at >= 0) {
+            boolean noun = (at > 0 && "预应待".indexOf(text.charAt(at - 1)) >= 0)
+                    || (at + word.length() < text.length() && text.charAt(at + word.length()) == '额');
+            if (!noun) return false;
+            at = text.indexOf(word, at + word.length());
+        }
+        return true;
+    }
+
     private Optional<Map.Entry<String, String>> doMatchPhraseEntry(String input, Map<String, String> phraseMap) {
         if (input == null || input.trim().isEmpty() || phraseMap.isEmpty()) {
             return Optional.empty();
@@ -8174,6 +8318,9 @@ public class IntentKnowledgeBase {
             // 这些查询会被它抢成完成工序并跳过决策层
             if (REPORT_WORK_PHRASES.contains(phrase) && !REPORT_WORK_SENTENCE.matcher(normalizedInput).matches()) {
                 continue;
+            }
+            if (COLLECT_PHRASES.contains(phrase) && onlyNounContext(normalizedInput, "收款")) {
+                continue;   // 「预收款 / 应收款 / 待收款 / 收款额」是名词, 不是「登记一笔收款」
             }
             boolean matchedInNormal = normalizedInput.contains(phrase);
             boolean matchedInStripped = !matchedInNormal && strippedInput.contains(phrase);

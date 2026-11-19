@@ -48,6 +48,27 @@ describe('RawTimeLimitNotice', () => {
     expect((await findByTestId('raw-time-limit-B')).props.children).toBe('还没有登记开始解冻，不能投料');
   });
 
+  it('PROTO-Q41 只警告档: 超时 / 没解冻不标红拦截, 显示后端那句「本厂只警告」', async () => {
+    getTaskStatuses.mockResolvedValue({
+      success: true,
+      data: [
+        status({
+          state: 'EXPIRED', remainingMinutes: -35, expiredQuantity: 10, drawableQuantity: 0, blockOnExceed: false,
+          reason: 'MB-A 已超时 35 分钟（本厂超时只警告，可以领用，会留一条超时记录供复盘）',
+        }),
+        status({
+          targetId: 'B', batchNumber: 'MB-B', state: 'START_MISSING', blockOnExceed: false,
+          reason: '还没有登记开始解冻，算不出时限（本厂超时只警告，可以投料；请补登开始解冻）',
+        }),
+      ],
+    });
+    const { findByTestId } = render(<RawTimeLimitNotice taskId={1} />);
+    const a = await findByTestId('raw-time-limit-A');
+    expect(a.props.children).toContain('本厂超时只警告');
+    expect(a.props.children).not.toContain('请找质检员处置');
+    expect((await findByTestId('raw-time-limit-B')).props.children).toContain('可以投料');
+  });
+
   it('加载失败不装作没有时限', async () => {
     getTaskStatuses.mockRejectedValue(new Error('net'));
     const { findByTestId } = render(<RawTimeLimitNotice taskId={1} />);
