@@ -15,7 +15,11 @@ glob 语义对齐 GitHub Actions 的 paths 过滤:
   `!p`  取反: 按顺序求值, 最后一条命中的模式决定结果 (与 GitHub 相同)
 
 判定 (⛔ 不许因为没量到而跳过 —— 宁可多跑):
-  事件不是 pull_request            ⇒ run=true (merge_group 队列跑全量; push/schedule/dispatch 行为不变)
+  事件不是 pull_request / merge_group ⇒ run=true (push/schedule/dispatch 行为不变)
+  merge_group (2026-11-19 Steve「合并组只跑改动相关检查」): base=merge_group.base_sha (目标分支头),
+    head=merge_group.head_sha (合并组提交 = 目标分支 + 队列里排在前面的 PR + 本 PR);
+    三点 diff 是这一组相对目标分支的全部改动 (≥ 本 PR 自己的改动), 判定与 PR 相同。
+    此前 merge_group 一律全量: 一组 22 个作业 vs PR 一次 10 个, 队列每重排一次就再跑一整套。
   base/head sha 缺失、git 出错、diff 为空 ⇒ run=true 并打 ::warning::
   有任一变更文件命中                ⇒ run=true
   全部不命中                        ⇒ run=false
@@ -102,9 +106,13 @@ def changed_files(base, head, cwd=None):
     return [l.strip() for l in r.stdout.splitlines() if l.strip()], None
 
 
+# 按 diff 判定的事件; 其余事件一律 run=true。
+DIFF_EVENTS = ("pull_request", "merge_group")
+
+
 def decide(event, base, head, pats, cwd=None):
     """返回 (run, changed_n, matched_list, warning)。"""
-    if event != "pull_request":
+    if event not in DIFF_EVENTS:
         return True, None, [], None
     if not base or not head:
         return True, None, [], "base/head sha 缺失 (base=%r head=%r), 按 run=true 处理" % (base, head)

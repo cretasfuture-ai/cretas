@@ -7,7 +7,8 @@
 #   (a) 在 pull_request 上【总是】报告结果 —— workflow 级 paths 过滤掉的 run 根本不出现,
 #       必需检查会永远挂起; ⇒ pull_request 不带 paths, 改由 changes 作业判定, 原作业按 run 跳过
 #       (被 if 跳过的作业对必需检查算通过);
-#   (b) 在 merge_group 事件上也运行 (队列里跑全量, 不做路径过滤)。
+#   (b) 在 merge_group 事件上也运行; 2026-11-19 起合并组也按 diff 判定 (base/head 取 merge_group 的
+#       base_sha/head_sha), 只跑改动相关的检查。
 #
 # 本闸钉:
 #   1. 11 个 PR workflow 都有 `merge_group: types: [checks_requested]`;
@@ -15,9 +16,11 @@
 #      (托管 runner 字面量 + timeout + outputs.run + 调 changed-paths.py 读自己的清单);
 #      每个非 changes 作业 needs changes, if 用 fail-safe 写法 `needs.changes.outputs.run != 'false'`
 #      并带 `!cancelled()` 或 `always()` (changes 自己失败时下游照跑, ⛔ 不让仪器坏掉变成「跳过=通过」);
+#      filter 步骤 BASE_SHA/HEAD_SHA 接 `pull_request.*.sha || merge_group.*_sha`;
 #      清单文件存在、含 changed-paths.py 与自身; 若 push 仍带 paths, 必须与清单 (去掉两条仪器行) 逐条相同 (形态 D);
 #   3. concurrency group 在 merge_group 下仍唯一 (含 github.ref), 否则队列运行互相取消;
-#   4. changed-paths.py 单测: `**` 跨目录 / `*` 不跨目录 / `**/` 含根 / `!` 取反 / 非 pull_request ⇒ true /
+#   4. changed-paths.py 单测: `**` 跨目录 / `*` 不跨目录 / `**/` 含根 / `!` 取反 / push 等 ⇒ true /
+#      merge_group 无命中 ⇒ false、有命中 ⇒ true、缺 sha ⇒ true + warning (并带变异对照) /
 #      diff 失败 ⇒ true + ::warning:: / 无命中 ⇒ false / 清单为空 ⇒ rc=2;
 #   5. 每份清单的样例路径命中与 GitHub paths 语义一致;
 #   阴性对照: 去掉某 workflow 的 merge_group、给 pull_request 加回 paths、拿掉某作业的 needs、
@@ -48,6 +51,8 @@ CP = os.path.join(ROOT, "scripts", "ci", "changed-paths.py")
 FILTERED = ["crosslang-contract-gate", "factory-agentops-gate", "fresh-db-progress", "java-gate-pr",
             "ops-script-tests", "python-gate", "rn-gate", "soft-delete-scan-surface", "web-admin-gate"]
 PLAIN = ["secret-regression", "source-hygiene"]
+MG_BASE = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+MG_HEAD = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 INFRA = ["scripts/ci/changed-paths.py"]  # + scripts/ci/trigger-paths/<name>.txt
 
 problems = []
@@ -125,6 +130,12 @@ def filtered_problems(name, doc, patterns_file_text=None):
         runs = [s for s in ch.get("steps") or [] if s.get("id") == "filter" and want in str(s.get("run", ""))]
         if not runs:
             bad.append("%s/changes: 没有 id=filter 的步骤运行 `%s`" % (name, want))
+        else:
+            # 合并组按 diff 判 (2026-11-19): 不接 merge_group 的 sha ⇒ 合并组里 sha 为空 ⇒ 兜底全量 (安全但白跑)
+            env = runs[0].get("env") or {}
+            for k, want_expr in (("BASE_SHA", MG_BASE), ("HEAD_SHA", MG_HEAD)):
+                if str(env.get(k, "")) != want_expr:
+                    bad.append("%s/changes: filter 步骤 %s 应为 %r, 实得 %r" % (name, k, want_expr, env.get(k)))
         if needs_of(ch):
             bad.append("%s/changes: changes 自己不该 needs 别的作业" % name)
     for jn, job in jobs.items():
@@ -211,10 +222,14 @@ neg += bool(concurrency_problems("neg", d))
 d = copy.deepcopy(docs["fresh-db-progress"])
 del d["jobs"]["changes"]
 neg += bool(filtered_problems("fresh-db-progress", d))
-print("READING: negative_controls_red=%d/6" % neg)
-if neg != 6:
-    problems.append("阴性对照只有 %d/6 判红 —— 判定函数恒真" % neg)
-ok("阴性对照: 去 merge_group / 加回 paths / 拿掉 needs / if 用 == 'true' / group 只用 PR 号 / 删 changes 都会红")
+d = copy.deepcopy(docs["python-gate"])
+[s for s in d["jobs"]["changes"]["steps"] if s.get("id") == "filter"][0]["env"]["BASE_SHA"] =     "${{ github.event.pull_request.base.sha }}"
+neg += bool(filtered_problems("python-gate", d))
+print("READING: negative_controls_red=%d/7" % neg)
+if neg != 7:
+    problems.append("阴性对照只有 %d/7 判红 —— 判定函数恒真" % neg)
+ok("阴性对照: 去 merge_group / 加回 paths / 拿掉 needs / if 用 == 'true' / group 只用 PR 号 / 删 changes / "
+   "filter 不接 merge_group sha 都会红")
 
 # ── 4. changed-paths.py 单测 ────────────────────────────────────────────────────
 def run_cp(args, cwd, env_extra=None):
@@ -307,7 +322,11 @@ try:
     if rc != 0 or val != "true":
         problems.append("changed-paths: 改名时旧路径没算命中 (rc=%d run=%s)\n%s" % (rc, val, out))
 
-    case("merge-group-always-true", ["web-admin/**"], ["docs/x.md"], "true", event="merge_group")
+    # 合并组按 diff 判 (2026-11-19): 无命中 ⇒ false, 有命中 ⇒ true, 缺 sha ⇒ true + warning
+    case("merge-group-no-match-false", ["web-admin/**"], ["docs/x.md"], "false", event="merge_group")
+    case("merge-group-match-true", ["web-admin/**"], ["web-admin/a.ts", "docs/x.md"], "true", event="merge_group")
+    case("merge-group-missing-sha-true", ["web-admin/**"], ["docs/x.md"], "true", event="merge_group",
+         head_sha="", base_sha="", want_warn=True)
     case("push-always-true", ["web-admin/**"], ["docs/x.md"], "true", event="push")
     case("missing-sha-true", ["web-admin/**"], ["docs/x.md"], "true", base_sha="", want_warn=True)
     case("bogus-sha-true", ["web-admin/**"], ["docs/x.md"], "true",
