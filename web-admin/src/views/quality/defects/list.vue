@@ -18,6 +18,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
 import iconDefects from '@/assets/quality/icon-defects.webp';
+import { inspectionNumberLabel, hasInspectionNumber } from '../inspectionNumber';
 import {
   listDefects,
   recordDefect,
@@ -145,7 +146,9 @@ function handleFilterChange() {
 }
 
 function inspectionLabel(source: QualityInspectionSource): string {
-  const sourceName = source.batchNumber || source.productName || `质检 ${source.id.slice(0, 8)}`;
+  // 没批次号/品名时用业务编号认这条质检; 连编号都没有就写「质检记录」, ⛔ 不截内部 UUID
+  const sourceName = source.batchNumber || source.productName
+    || (hasInspectionNumber(source) ? `质检 ${inspectionNumberLabel(source)}` : '质检记录');
   const date = source.inspectionDate ? ` · ${source.inspectionDate}` : '';
   const result = source.result ? ` · ${source.result}` : '';
   return `${sourceName}${date}${result}`;

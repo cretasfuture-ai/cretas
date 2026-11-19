@@ -87,6 +87,8 @@ export interface AssignDefectRequest {
 
 export interface QualityInspectionSource {
   id: string;
+  /** 质检业务编号 QI-YYYYMMDD-NNNN; null = 未编号 */
+  inspectionNumber?: string | null;
   productionBatchId?: number | null;
   batchNumber?: string | null;
   productName?: string | null;
