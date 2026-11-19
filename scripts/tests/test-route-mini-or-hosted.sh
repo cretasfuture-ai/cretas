@@ -204,6 +204,17 @@ SH
   if [ "$got" != "day=yynny night=yyyyy override=nynny" ]; then
     echo "FAIL: 启用应为 day=yynny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
   else echo "  ok - 按时段启用 + 覆盖文件优先"; fi
+  # 白天也全开开关 (2026-11-19 Steve「放开白天派片」): workflow 端环境变量 / mini 端文件, 任一成立白天也 full;
+  # 都不成立时上面的时段读数不变 (已由 want_win 钉住)。
+  touch "$WORK/day-full"
+  got="env=$(GH_GATE_DAY_FULL=1 bash "$REFILL" --window 12) file=$(GH_GATE_DAY_FULL_FILE="$WORK/day-full" bash "$REFILL" --window 12) off=$(GH_GATE_DAY_FULL=0 GH_GATE_DAY_FULL_FILE="$WORK/no-such-file" bash "$REFILL" --window 12)"
+  got="$got slots=$(GH_GATE_DAY_FULL_FILE="$WORK/day-full" en_all "$REFILL" 10 "$WORK/no-such-file")"
+  echo "READING: day-full switch: $got"
+  if [ "$got" != "env=full file=full off=day slots=yyyyy" ]; then
+    echo "FAIL: 白天全开开关应为 env=full file=full off=day slots=yyyyy"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 白天全开开关 (变量/文件) 生效, 关掉回到按时段"; fi
+  if grep -q 'GH_GATE_DAY_FULL: \${{ vars.MINI_DAY_FULL }}' "$WFY"; then echo "  ok - workflow 时段步骤接了 vars.MINI_DAY_FULL"
+  else echo "FAIL: java-gate-pr.yml 的 window 步骤必须把 vars.MINI_DAY_FULL 传给 GH_GATE_DAY_FULL"; REAL_FAILS=$((REAL_FAILS + 1)); fi
   # 变异对照: 去掉「< 8 点也算 full」, 凌晨必须被查出变成 day。
   WMUT="$WORK/refill-window-mutant.sh"
   sed 's/ || \[ "\$h" -lt "\$FULL_UNTIL" \]//' "$REFILL" > "$WMUT"
