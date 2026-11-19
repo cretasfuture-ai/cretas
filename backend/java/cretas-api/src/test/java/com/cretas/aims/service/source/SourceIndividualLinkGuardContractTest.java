@@ -286,6 +286,21 @@ class SourceIndividualLinkGuardContractTest {
     }
 
     @Test
+    @DisplayName("#1968 L-8 阳性对照: 未挂载的批次经编辑挂上本厂在档个体 → 保存且真的挂上 (不被误报 ALREADY_LINKED)")
+    void updateLinksAnUnlinkedBatch() {
+        String a = create(FACTORY, "L-SW-NEW").getId();
+        em.flush();
+        MaterialBatch existing = linkedBatch("MB-LINK-NEW", null);
+
+        UpdateMaterialBatchRequest req = new UpdateMaterialBatchRequest();
+        req.setSourceIndividualId(a);
+        batchService.updateMaterialBatch(FACTORY, "MB-LINK-NEW", req);
+
+        assertThat(existing.getSourceIndividualId()).isEqualTo(a);
+        verify(batchRepoMock).save(existing);
+    }
+
+    @Test
     @DisplayName("#1968 M-2 阳性对照: 回显同一个个体 id / 不传(null=不改) 照常保存, 挂载不变")
     void updateEchoingTheSameLinkOrOmittingItStillSaves() {
         String a = create(FACTORY, "L-SW-C").getId();

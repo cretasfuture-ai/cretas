@@ -2356,14 +2356,14 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
                     .withHint("刷新批次列表查看最新状态");
         }
         // #1968 M-2 (口径 a): 已有消耗的批次解除后, 它和下游会从按个体的谱系/召回里消失 ⇒ 另需权限,
-        // 按可配置权限码判 (默认质量经理 + 厂长), ⛔ 不写死岗位; 权限服务缺失一律拒绝。
+        // 按可配置权限码判 (默认仓储主管 + 厂长), ⛔ 不写死岗位, 提示里也不写岗位名; 权限服务缺失一律拒绝。
         String consumption = consumptionEvidence(factoryId, batch);
         if (consumption != null && (permissionService == null || !permissionService.roleHasConfiguredPermission(
                 factoryId, callerRole, PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION))) {
             throw new BusinessException(409, "该批次" + consumption
-                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 当前角色没有「解除已消耗批次的来源个体」权限")
+                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 需要「解除已消耗批次挂载」权限")
                     .withCode("SOURCE_INDIVIDUAL_LINK_CONSUMED")
-                    .withHint("请质量经理或工厂管理员处理; 工厂管理员可在阈值设置里把该权限授给其他岗位");
+                    .withHint("请联系管理员在权限配置中开通「解除已消耗批次挂载」权限");
         }
         // ⛔ 留痕器不在就不许改 —— 静默不留痕比报错危险。
         if (operationLogRepository == null) {

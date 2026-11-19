@@ -641,7 +641,7 @@ public class PermissionServiceImpl implements PermissionService {
                     com.cretas.aims.service.canvas.ThresholdKeys.SALES_PERMISSION_CANCEL_APPROVED_ORDER, ""),
             SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION, new ConfigurablePermission(
                     com.cretas.aims.service.canvas.ThresholdKeys.INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED,
-                    "quality_manager"));
+                    "warehouse_manager"));
 
     /** 用户路径与角色路径共用的唯一判定: 厂长恒有; 其余角色在配置名单 (或默认名单) 里才有。 */
     private boolean roleInConfiguredList(String factoryId, FactoryUserRole role, String permissionCode) {

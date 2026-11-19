@@ -85,7 +85,7 @@ public final class ThresholdKeys {
     /** 信用特批 (超信用额度被拦截时放行) 的岗位 → 默认只有厂长 (空) */
     public static final String CREDIT_PERMISSION_OVERRIDE = "credit.permission.override";
     /**
-     * 解除已有消耗原料批次的来源个体挂载 (#1968 M-2) 的岗位 → 默认 quality_manager, 厂长恒有。
+     * 解除已有消耗原料批次的来源个体挂载 (#1968 M-2) 的岗位 → 默认 warehouse_manager, 厂长恒有。
      * 权限码 PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION。
      */
     public static final String INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED =

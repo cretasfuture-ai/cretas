@@ -191,51 +191,52 @@ class MaterialBatchUnlinkSourceIndividualContractTest {
     }
 
     @Test
-    @DisplayName("已领用的批次 + 仓储主管(默认名单外) → 409 SOURCE_INDIVIDUAL_LINK_CONSUMED, 不写日志不改批次")
+    @DisplayName("已领用的批次 + 仓库员(默认名单外) → 409 SOURCE_INDIVIDUAL_LINK_CONSUMED, 不写日志不改批次")
     void consumedBatchNeedsTheExtraPermission() {
         MaterialBatch b = batch("F1", "SI-OLD");
         b.setUsedQuantity(new BigDecimal("5"));
         b.setQuantityUnit("kg");
 
         BusinessException e = catchThrowableOfType(
-                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_manager"),
+                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_worker"),
                 BusinessException.class);
 
         assertThat(e).isNotNull();
         assertThat(e.getCode()).isEqualTo(409);
         assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_LINK_CONSUMED");
-        assertThat(e.getMessage()).contains("已领用 5 kg");
+        assertThat(e.getMessage()).contains("已领用 5 kg").contains("解除已消耗批次挂载");
+        assertThat(e.getMessage() + e.getActionHint()).doesNotContain("质量经理").doesNotContain("仓储主管");
         assertThat(b.getSourceIndividualId()).isEqualTo("SI-OLD");
         verify(repo, never()).save(any());
         verifyNoInteractions(logRepo);
     }
 
     @Test
-    @DisplayName("已领用的批次 + 默认名单里的质量经理 → 能解除 (阳性对照: 不是一律拦)")
+    @DisplayName("已领用的批次 + 默认名单里的仓储主管 → 能解除 (阳性对照: 不是一律拦)")
     void consumedBatchUnlinksForTheDefaultPermittedRole() {
         MaterialBatch b = batch("F1", "SI-OLD");
         b.setUsedQuantity(new BigDecimal("5"));
 
-        service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "quality_manager");
+        service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_manager");
 
         assertThat(b.getSourceIndividualId()).isNull();
         verify(logRepo).save(any(OperationLog.class));
     }
 
     @Test
-    @DisplayName("权限按工厂配置走: 名单配成 warehouse_manager ⇒ 仓储主管能解除, 质量经理反而不能")
+    @DisplayName("权限按工厂配置走: 名单配成 warehouse_worker ⇒ 仓库员能解除, 仓储主管反而不能")
     void permissionFollowsFactoryConfiguration() {
-        configureUnlinkConsumedRoles("warehouse_manager");
+        configureUnlinkConsumedRoles("warehouse_worker");
         MaterialBatch b = batch("F1", "SI-OLD");
         b.setStatus(MaterialBatchStatus.USED_UP);
 
         BusinessException denied = catchThrowableOfType(
-                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "quality_manager"),
+                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_manager"),
                 BusinessException.class);
         assertThat(denied.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_LINK_CONSUMED");
         assertThat(b.getSourceIndividualId()).isEqualTo("SI-OLD");
 
-        service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_manager");
+        service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_worker");
         assertThat(b.getSourceIndividualId()).isNull();
     }
 
@@ -247,7 +248,7 @@ class MaterialBatchUnlinkSourceIndividualContractTest {
         when(consumptionRepo.findByFactoryIdAndBatchIdPaged(eq("F1"), eq("B-1"), any(Pageable.class))).thenReturn(one);
 
         BusinessException e = catchThrowableOfType(
-                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_manager"),
+                () -> service.unlinkSourceIndividual("F1", "B-1", "挂错了", 42L, "warehouse_worker"),
                 BusinessException.class);
 
         assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_LINK_CONSUMED");

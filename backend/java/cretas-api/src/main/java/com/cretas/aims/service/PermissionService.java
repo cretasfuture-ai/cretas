@@ -61,7 +61,8 @@ public interface PermissionService {
     /**
      * 解除<b>已有消耗</b>(已领用 / 已耗尽 / 生产占用 / 已报废) 原料批次的来源个体挂载 (#1968 M-2 口径 a)。
      * 解除会让该批次及其下游从按个体的谱系/召回里消失, 所以比未消耗批次多一道门槛。
-     * 默认质量经理 + 厂长, 工厂可在阈值设置里改岗位名单
+     * 默认仓储主管 + 厂长 (端点本身要求 warehouse/inventory 写权限, 默认岗位必须能走到这个端点),
+     * 工厂可在阈值设置里改岗位名单
      * (ThresholdKeys.INVENTORY_PERMISSION_SOURCE_INDIVIDUAL_UNLINK_CONSUMED)。
      */
     String SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION = "source_individual:unlink_consumed";
