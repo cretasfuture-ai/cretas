@@ -30,7 +30,7 @@ case "$W" in
     if [ -d "$W/.git" ]; then
       sp=$(git -C "$W" config --get core.sparseCheckout 2>/dev/null || true)
       if [ "$sp" = true ]; then
-        if rm -rf "$W"; then echo "READING: SPARSE_RESET removed=$W"
+        if rm -rf "$W" && mkdir -p "$W"; then echo "READING: SPARSE_RESET removed=$W"
         else echo "READING: SPARSE_RESET failed=$W"; fi
       else
         echo "READING: SPARSE_RESET not_sparse=$W"
