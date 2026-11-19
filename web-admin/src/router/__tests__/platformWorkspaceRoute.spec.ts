@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { isPlatformWorkspaceRoute } from '../guards';
 import { isFactoryViewPageRoute } from '@/store/modules/platformFactoryContext';
-import { platformMenuConfig } from '@/components/layout/menuConfig';
+import { menuConfig, platformMenuConfig } from '@/components/layout/menuConfig';
 
 describe('platform workspace route boundary', () => {
   it('keeps platform tools and factory console in the platform workspace', () => {
@@ -29,6 +29,17 @@ describe('platform workspace route boundary', () => {
     // 工厂自己的就绪页、工厂超级管理员也能用的页面不进平台侧栏
     expect(paths).not.toContain('/factory-readiness');
     expect(paths).not.toContain('/ops/agent-ops');
+  });
+
+  it('keeps the factory-level permission matrix out of the platform sidebar (needs a factoryId)', () => {
+    // 前提: 它在 menuConfig 里确实是 platform_admin 专属叶子 —— 否则下面的「不在」是恒真的
+    const leaf = menuConfig.flatMap((group) => group.children ?? [])
+      .find((item) => item.path === '/system/permission-matrix');
+    expect(leaf?.roles).toEqual(['platform_admin']);
+
+    const paths = platformMenuConfig.flatMap((group) => group.children ?? []).map((item) => item.path);
+    expect(paths).not.toContain('/system/permission-matrix');
+    expect(isPlatformWorkspaceRoute('/system/permission-matrix')).toBe(false);
   });
 
   it('does not treat factory daily routes as platform routes', () => {

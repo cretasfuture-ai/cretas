@@ -890,6 +890,29 @@ describe('溯源查询页 — 验厂证据包导出与召回箱数', () => {
     expect(card).not.toMatch(/(^|[^\d])0 箱/);
   });
 
+  it('B8 追溯范围内没有成品批次 ⇒ 说缺的是成品入库批次, 不让人去补箱规; 阴性对照: 有别的缺口时仍是原话', async () => {
+    const unknownTotals = { complete: false, totalBoxQuantity: null, knownBoxSubtotal: null, knownSourceCount: 0, unknownSourceCount: 1 };
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: {
+        stock: unknownTotals, shipped: unknownTotals,
+        gaps: [
+          { code: 'FINISHED_BATCH_SCOPE_EMPTY', message: '追溯范围没有可核验的成品批次, 箱数保持未知' },
+        ],
+      },
+    });
+    const wrapper = await loadBatch();
+    const stock = wrapper.get('[data-testid="recall-box-stock"]').text();
+    expect(stock).toContain('没有成品入库批次');
+    expect(stock).not.toContain('缺少箱规');
+    getRecallImpactMock.mockResolvedValue({
+      rootType: 'PRODUCTION_BATCH', rootId: '8',
+      boxExposure: { stock: unknownTotals, shipped: unknownTotals, gaps: [{ code: 'BOX_PACKAGING_SNAPSHOT_UNKNOWN', message: 'x' }] },
+    });
+    const other = await loadBatch();
+    expect(other.get('[data-testid="recall-box-stock"]').text()).toContain('缺少箱规或发货扣减数据');
+  });
+
   it('阴性对照: 影响面接口失败 ⇒ 显示取不到，不显示箱数', async () => {
     const wrapper = await loadBatch();
     expect(wrapper.get('[data-testid="recall-box-error"]').text()).toContain('暂时取不到');
