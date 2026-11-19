@@ -991,6 +991,17 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         // 来源个体: null = 不修改(partial); 非 null 必须本厂、未撤销, 并锁个体行(与撤销串行)。
         String linkedSourceIndividualId = null;
         if (request.getSourceIndividualId() != null) {
+            // #1968 M-2: 已挂个体时不许经编辑直接改挂到另一个个体 —— 那等于不留痕地把原个体从召回范围里摘掉;
+            // 必须先走「解除挂载」(原因必填、写日志、已消耗批次另需权限) 再挂新的。回显同一个 id 照常放行。
+            String requestedId = request.getSourceIndividualId().trim();
+            String currentId = batch.getSourceIndividualId();
+            if (!requestedId.isEmpty() && currentId != null && !currentId.isBlank()
+                    && !currentId.equals(requestedId)) {
+                throw new BusinessException(409, "该批次已挂来源个体, 请先解除挂载再改挂其它个体")
+                        .withCode("SOURCE_INDIVIDUAL_ALREADY_LINKED")
+                        .withHint("在批次编辑里点「解除挂载」并填写原因, 然后再挂新的个体")
+                        .withHintTarget("sourceIndividualId");
+            }
             linkedSourceIndividualId = requireLinkableSourceIndividual(factoryId, request.getSourceIndividualId());
             if (linkedSourceIndividualId == null) {
                 throw new BusinessException(400, "来源个体编号不能为空白")
@@ -2287,6 +2298,33 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
         return materialBatchMapper.toDTO(batch);
     }
 
+    /**
+     * 解除挂载口径里的「已有消耗」: 返回给用户看的事实描述; 没有消耗返回 null。
+     * 三个来源任一命中即算: used_quantity &gt; 0 / 终态或在制占用状态 / 有消耗记录(带 factory_id 查)。
+     * ⚠️ 只看 used_quantity 不够: adjustBatchQuantity 的扣减写回 receipt_quantity, 不动 used_quantity。
+     * 消耗记录仓储不在 = 不知道有没有消耗 ⇒ 按「已消耗」处理 (fail closed)。
+     */
+    private String consumptionEvidence(String factoryId, MaterialBatch batch) {
+        if (batch.getUsedQuantity() != null && batch.getUsedQuantity().signum() > 0) {
+            return "已领用 " + batch.getUsedQuantity().stripTrailingZeros().toPlainString()
+                    + (batch.getQuantityUnit() == null ? "" : " " + batch.getQuantityUnit());
+        }
+        MaterialBatchStatus s = batch.getStatus();
+        if (s == MaterialBatchStatus.DEPLETED || s == MaterialBatchStatus.USED_UP
+                || s == MaterialBatchStatus.PRODUCING_RESERVED || s == MaterialBatchStatus.SCRAPPED) {
+            return "状态为「" + s.getDisplayName() + "」";
+        }
+        if (materialConsumptionRepository == null) {
+            return "消耗记录无法核对";
+        }
+        long records = materialConsumptionRepository.findByFactoryIdAndBatchIdPaged(
+                factoryId, batch.getId(), org.springframework.data.domain.PageRequest.of(0, 1)).getTotalElements();
+        if (records > 0) {
+            return "已有 " + records + " 条消耗记录";
+        }
+        return null;
+    }
+
     @Override
     @Transactional
     public MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
@@ -2316,6 +2354,16 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
             throw new BusinessException(409, "该批次没有挂来源个体, 无需解除")
                     .withCode("SOURCE_INDIVIDUAL_NOT_LINKED")
                     .withHint("刷新批次列表查看最新状态");
+        }
+        // #1968 M-2 (口径 a): 已有消耗的批次解除后, 它和下游会从按个体的谱系/召回里消失 ⇒ 另需权限,
+        // 按可配置权限码判 (默认质量经理 + 厂长), ⛔ 不写死岗位; 权限服务缺失一律拒绝。
+        String consumption = consumptionEvidence(factoryId, batch);
+        if (consumption != null && (permissionService == null || !permissionService.roleHasConfiguredPermission(
+                factoryId, callerRole, PermissionService.SOURCE_INDIVIDUAL_UNLINK_CONSUMED_PERMISSION))) {
+            throw new BusinessException(409, "该批次" + consumption
+                    + ", 解除来源个体会让它和下游从按个体的召回/谱系里消失, 当前角色没有「解除已消耗批次的来源个体」权限")
+                    .withCode("SOURCE_INDIVIDUAL_LINK_CONSUMED")
+                    .withHint("请质量经理或工厂管理员处理; 工厂管理员可在阈值设置里把该权限授给其他岗位");
         }
         // ⛔ 留痕器不在就不许改 —— 静默不留痕比报错危险。
         if (operationLogRepository == null) {

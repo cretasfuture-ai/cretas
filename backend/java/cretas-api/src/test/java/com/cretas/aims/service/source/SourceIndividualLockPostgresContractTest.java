@@ -232,6 +232,111 @@ class SourceIndividualLockPostgresContractTest {
         assertThat(repository.findByIdAndFactoryId(a, factory).orElseThrow().getSireIndividualId()).isNull();
     }
 
+    /**
+     * #1968 M-1: 上面那条互设父本用例是<b>串行时序</b>(先到方整个跑完才放后到方), 守不住「按 id 排序加锁防死锁」。
+     * 这里用第三个事务 T0 先 {@code FOR UPDATE} 锁住 min(x,a), 让两个互设父本的 update <b>都</b>排进等锁队列
+     * (用 pg_stat_activity 的 wait_event_type='Lock' 计数确认, 不靠 sleep 猜), 再放开 T0。
+     * <ul>
+     *   <li>有序加锁: 两边第一把锁都是 min ⇒ 排在同一行上, 先排队的一方拿到后一路锁完提交, 后一方锁后重读看到环 ⇒ 409;</li>
+     *   <li>去掉排序(先锁自己): self=max 的一方先拿到自己那一行再等 min, self=min 的一方拿到 min 后要等 max ⇒ 必然 40P01。</li>
+     * </ul>
+     * 先排队的是 self=min 那一方(PG 行锁等待者按到达顺序拿锁), 这样「去掉排序」的变异下死锁是确定的。
+     */
+    @Test
+    @DisplayName("PG 强制交错: 两个互设父本的 update 同时排队等锁 → 一成一 409, 无 40P01, 库里不成环")
+    void forcedInterleavingOfMutualSireNeverDeadlocks() throws Exception {
+        String factory = "F-PGLK-D-" + UUID.randomUUID().toString().substring(0, 8);
+        String x = newIndividual(factory, "PGIL-X");
+        String a = tx.execute(s -> service.create(factory,
+                CreateSourceIndividualRequest.builder().individualCode("PGIL-A").build()).getId());
+        String lo = x.compareTo(a) < 0 ? x : a;
+        String hi = lo.equals(x) ? a : x;
+        assertThat(lockWaiters()).as("开始前不应有人在等锁(仪器基线)").isZero();
+
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(3);
+        try {
+            CountDownLatch holderLocked = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            java.util.concurrent.Future<?> holder = pool.submit(() -> tx.executeWithoutResult(s -> {
+                assertThat(jdbc.queryForList("SELECT id FROM source_individuals WHERE id = ? FOR UPDATE", lo))
+                        .hasSize(1);
+                holderLocked.countDown();
+                try {
+                    assertThat(release.await(60, TimeUnit.SECONDS)).isTrue();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            }));
+            assertThat(holderLocked.await(10, TimeUnit.SECONDS)).isTrue();
+
+            java.util.concurrent.Future<Throwable> selfLo = pool.submit(() -> attemptSetSire(factory, lo, hi));
+            awaitLockWaiters(1);
+            java.util.concurrent.Future<Throwable> selfHi = pool.submit(() -> attemptSetSire(factory, hi, lo));
+            awaitLockWaiters(2);
+
+            release.countDown();
+            holder.get(20, TimeUnit.SECONDS);
+            Throwable rLo = selfLo.get(30, TimeUnit.SECONDS);
+            Throwable rHi = selfHi.get(30, TimeUnit.SECONDS);
+
+            assertThat(isDeadlock(rLo)).as("self=min 一方不许 40P01: %s", rLo).isFalse();
+            assertThat(isDeadlock(rHi)).as("self=max 一方不许 40P01: %s", rHi).isFalse();
+            java.util.List<Throwable> errors = java.util.stream.Stream.of(rLo, rHi)
+                    .filter(java.util.Objects::nonNull).toList();
+            assertThat(errors).as("恰好一方失败 (rLo=%s, rHi=%s)", rLo, rHi).hasSize(1);
+            assertThat(errors.get(0)).isInstanceOfSatisfying(BusinessException.class, e -> {
+                assertThat(e.getCode()).isEqualTo(409);
+                assertThat(e.getErrorCode()).isEqualTo("PEDIGREE_CYCLE");
+            });
+            String sireOfX = repository.findByIdAndFactoryId(x, factory).orElseThrow().getSireIndividualId();
+            String sireOfA = repository.findByIdAndFactoryId(a, factory).orElseThrow().getSireIndividualId();
+            assertThat(a.equals(sireOfX) && x.equals(sireOfA)).as("库里成环了").isFalse();
+            assertThat(a.equals(sireOfX) || x.equals(sireOfA)).as("成功的那一方必须真的写进去了").isTrue();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private Throwable attemptSetSire(String factory, String self, String sire) {
+        try {
+            tx.executeWithoutResult(s -> service.update(factory, self,
+                    UpdateSourceIndividualRequest.builder().sireIndividualId(sire).build()));
+            return null;
+        } catch (Throwable t) {
+            return t;
+        }
+    }
+
+    private int lockWaiters() {
+        Integer n = jdbc.queryForObject("SELECT count(*) FROM pg_stat_activity "
+                + "WHERE datname = current_database() AND wait_event_type = 'Lock'", Integer.class);
+        return n == null ? -1 : n;
+    }
+
+    private void awaitLockWaiters(int expected) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+        int seen = lockWaiters();
+        while (seen < expected && System.nanoTime() < deadline) {
+            Thread.sleep(50);
+            seen = lockWaiters();
+        }
+        assertThat(seen).as("等锁的会话数没到 %d (pg_stat_activity wait_event_type='Lock')", expected)
+                .isGreaterThanOrEqualTo(expected);
+    }
+
+    private static boolean isDeadlock(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof java.sql.SQLException sql && "40P01".equals(sql.getSQLState())) {
+                return true;
+            }
+            if (c.getMessage() != null && c.getMessage().contains("deadlock detected")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static void sleep(long ms) {
         try {
             Thread.sleep(ms);

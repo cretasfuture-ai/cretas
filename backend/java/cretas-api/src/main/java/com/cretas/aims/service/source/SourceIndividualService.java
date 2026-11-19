@@ -405,8 +405,9 @@ public class SourceIndividualService {
      * 两边锁序一致, 后到的一方等先到的一方提交, 然后在<b>锁后</b>重读父本指针(标量查询, 不吃持久化上下文缓存),
      * 看到对方刚写的那条边 ⇒ 稳定得到 409, 而不是死锁。
      * 写系谱的一方总会锁住被改的那一行(自己), 而校验方锁住了它看到的整条祖先链, 所以任何一条会补成环的边
-     * 都要和校验方在某一行上串行。锁后祖先集合变大(加锁前后有人改了链)就补锁再查, 最多
-     * {@link #MAX_PEDIGREE_LOCK_ROUNDS} 轮。
+     * 都要和校验方在某一行上串行。锁后祖先集合变大(加锁前后有人改了链)时: 新增的 id 全部排在已锁最大 id
+     * 之后才补锁再查(锁序仍单调), 否则直接 409 {@code PEDIGREE_BUSY} —— ⛔ 不乱序补锁 (#1968 L-1);
+     * 最多 {@link #MAX_PEDIGREE_LOCK_ROUNDS} 轮。
      */
     private void lockPedigreeAndRejectCycle(String factoryId, String selfId, String sireId, String damId) {
         List<String> parents = java.util.stream.Stream.of(sireId, damId)
@@ -441,12 +442,23 @@ public class SourceIndividualService {
                 }
                 seen.addAll(chain);
             }
-            if (locked.containsAll(seen)) {
+            java.util.TreeSet<String> missing = new java.util.TreeSet<>(seen);
+            missing.removeAll(locked);
+            if (missing.isEmpty()) {
                 return;
             }
-            want = new java.util.TreeSet<>(seen);
+            // #1968 L-1: 补锁只许「全部排在已锁最大 id 之后」—— 否则就是乱序加锁, 能和按序加锁的事务交叉等待
+            // (PG 40P01 → 500)。⛔ 不乱序补锁, 直接 409 让用户重试。
+            if (missing.first().compareTo(java.util.Collections.max(locked)) < 0) {
+                throw pedigreeBusy();
+            }
+            want = missing;
         }
-        throw new BusinessException(409, "系谱正在被同时修改, 本次未保存")
+        throw pedigreeBusy();
+    }
+
+    private static BusinessException pedigreeBusy() {
+        return new BusinessException(409, "系谱正在被同时修改, 本次未保存")
                 .withCode("PEDIGREE_BUSY")
                 .withHint("稍后重试");
     }
