@@ -85,6 +85,7 @@ class RushOrderImpactToolDataContractTest {
     private final List<ProductionPlan> pendingPlans = new ArrayList<>();
     private RushOrderImpactTool tool;
     private ProductTypeRepository products;
+    private String shortUnit = "kg";
 
     /** 每千克酱牛肉: 牛腱 1.25 kg, 酱料包 0.05 kg。 */
     private static final Map<String, BigDecimal> PER_KG = new LinkedHashMap<>();
@@ -125,7 +126,7 @@ class RushOrderImpactToolDataContractTest {
                 } else {
                     MaterialShortfall sf = new MaterialShortfall(r.getMaterialTypeId(), r.getMaterialTypeName(),
                             r.getRequiredQuantity(), have, r.getRequiredQuantity().subtract(have));
-                    sf.setQuantityUnit("kg");
+                    sf.setQuantityUnit(shortUnit);
                     shorts.add(sf);
                 }
             }
@@ -329,7 +330,34 @@ class RushOrderImpactToolDataContractTest {
     }
 
     @Test
-    @DisplayName("M1 在途有单位不同的行 → 说「另有 N 行在途采购单位不同未计入」, ⛔ 不说「没有在途采购」; row 带计数")
+    @DisplayName("LSMDEMO 计件单位缺料数量取整: 缺口向上、可领向下, 可领+缺口 ≥ 需要; 走工具真实入口")
+    void countUnitShortageIsRoundedForDisplay() throws Exception {
+        shortUnit = "个";
+        stock.put("QA-RM-NJ", new BigDecimal("1709.614")); // 需要 2500, 缺 790.386
+        stock.put("QA-RM-JL", new BigDecimal("150"));
+        slotThursdayMorning();
+
+        JsonNode material = section(run(SAID), "MATERIAL");
+        String text = material.path("text").asText();
+        assertThat(text).contains("缺 791个").contains("需要 2500个").contains("可领库存 1709个")
+                .doesNotContain("790.386").doesNotContain("1709.614");
+        assertThat(1709 + 791).isGreaterThanOrEqualTo(2500);
+    }
+
+    @Test
+    @DisplayName("计量单位 kg 不取整 (阴性对照)")
+    void measuredUnitShortageKeepsDecimals() throws Exception {
+        shortUnit = "kg";
+        stock.put("QA-RM-NJ", new BigDecimal("1709.614"));
+        stock.put("QA-RM-JL", new BigDecimal("150"));
+        slotThursdayMorning();
+
+        String text = section(run(SAID), "MATERIAL").path("text").asText();
+        assertThat(text).contains("缺 790.386kg").contains("可领库存 1709.614kg");
+    }
+
+    @Test
+    @DisplayName("M1 在途有单位不同的行 →说「另有 N 行在途采购单位不同未计入」, ⛔ 不说「没有在途采购」; row 带计数")
     void onOrderUnitMismatchIsNotReportedAsNoOnOrder() throws Exception {
         stock.put("QA-RM-NJ", new BigDecimal("1800"));
         stock.put("QA-RM-JL", new BigDecimal("150"));

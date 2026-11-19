@@ -104,6 +104,8 @@ public class BatchFullTraceTool extends AbstractBusinessTool {
         if (BatchReferenceClarifier.isGenericReference(batchNumber)) {
             return BatchReferenceClarifier.clarify(productionBatchRepository, factoryId, "往回追原料批次和供应商");
         }
+        // 用户用展示短标签 (PB-PLAN-…56643) 回选: 还原成完整批次号再查
+        batchNumber = BatchReferenceClarifier.resolveShortLabel(productionBatchRepository, factoryId, batchNumber);
         log.info("batch_full_trace — factory={} batch={}", factoryId, batchNumber);
 
         // 1. 调 TraceabilityService 拿 full trace (原料 + 供应商 + 加工记录)
