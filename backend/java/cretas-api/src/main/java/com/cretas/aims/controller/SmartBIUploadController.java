@@ -535,7 +535,8 @@ public class SmartBIUploadController {
             org.springframework.data.domain.Pageable pageable = org.springframework.data.domain.PageRequest.of(
                     page, Math.min(size, 200));
             org.springframework.data.domain.Page<UploadHistoryDTO> dtoPage =
-                    pgUploadRepository.findUploadHistoryLightweight(factoryId, pageable);
+                    filterUploadHistoryByStatus(
+                            pgUploadRepository.findUploadHistoryLightweight(factoryId, pageable), status);
             // Issue #290: Spring Boot 3.2+ deprecated default Page Jackson
             // serialization → emits {} or null at FE which broke the upload
             // history page (data:null evidence in PR #286 §X.0). Explicit Map
@@ -546,6 +547,21 @@ public class SmartBIUploadController {
             log.error("Get upload history failed: {}", e.getMessage(), e);
             return ResponseEntity.ok(ApiResponse.error("Get upload history failed: " + ErrorSanitizer.sanitize(e)));
         }
+    }
+
+    /**
+     * 味美 11-19 (B2): status 参数之前被整个忽略 —— AI 问数据按 status=COMPLETED 取数据源下拉，
+     * 保存失败 (FAILED) 的上传照样出现在下拉里，还会被选成默认数据源。
+     * 在当前页内按状态过滤 (列表页 size ≤ 200，问数据只取第一页)。
+     */
+    static org.springframework.data.domain.Page<UploadHistoryDTO> filterUploadHistoryByStatus(
+            org.springframework.data.domain.Page<UploadHistoryDTO> page, String status) {
+        if (page == null || status == null || status.isBlank()) return page;
+        String wanted = status.trim();
+        List<UploadHistoryDTO> kept = page.getContent().stream()
+                .filter(d -> d.getStatus() != null && d.getStatus().equalsIgnoreCase(wanted))
+                .collect(java.util.stream.Collectors.toList());
+        return new org.springframework.data.domain.PageImpl<>(kept, page.getPageable(), kept.size());
     }
 
     /**

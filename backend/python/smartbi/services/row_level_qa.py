@@ -143,9 +143,13 @@ def _col_profile(df: pd.DataFrame, col: str) -> str:
 
 def build_plan_prompt(question: str, df: pd.DataFrame) -> str:
     cols = "\n".join(f"- {c} ({_col_profile(df, c)})" for c in df.columns)
+    hint = ""
+    if asks_week_on_non_week_table(question, df):
+        hint = ("\n注意: 数据表没有「周」列, 是按日表。不要 group_by 周 (字段不存在); "
+                "直接在日期行上排序/定位, 并在 note 写明「当前是按日表」。\n")
     return f"""数据表共 {len(df)} 行。全部字段:
 {cols}
-
+{hint}
 用户问题: {question}
 
 输出 JSON, 字段如下 (不用的可省略):
@@ -165,7 +169,101 @@ def build_plan_prompt(question: str, df: pd.DataFrame) -> str:
 3. 问「哪些 ... 没/超标/未」: 先用 filters 筛选, 再按需 group_by / 直接列行。
 4. 「率/占比」类: 不要对率列求 mean; 用 func=ratio, num/den 填组成它的数量列 (如 出成率=良品/(良品+废品+次品))。
 5. 字段名必须原样取自上面的列表。数据里没有被问的指标 (如问产量但无产量列、问成本但无成本列): intent=no_metric。问题不需要查具体数据 (闲聊/泛泛总结): intent=none。
-6. 全部筛选/聚合都针对整张表, 不要自己估算数值。"""
+6. 全部筛选/聚合都针对整张表, 不要自己估算数值。
+7. 问「一共/总共/合计/总计」: 要的是求和 (sum), 不是最大值; 不要只取排名第一的一项。"""
+
+
+# ---------------------------------------------------------------------------
+# 确定性规则 (不经 LLM, 同一问题每次结果一致): 计划数量 / 缺口 / 周粒度 / 编码列
+# ---------------------------------------------------------------------------
+
+_WEEK_ASK_RE = re.compile(r"(哪一?周|每周|各周|按周|第[几一二三四五六七八九十\d]+周|周达成|周产量)")
+TOTAL_WORDS = ("一共", "总共", "合计", "总计", "共计", "总数", "加起来")
+_CODE_NAME_RE = re.compile(r"(编码|编号|代码|批号|单号|工号|货号|条码|(?<![A-Za-z])(?:id|ID|Id)(?![a-z]))")
+_GAP_ASK_WORDS = ("没按计划", "未按计划", "没完成", "未完成", "没达成", "未达成", "缺口",
+                  "缺几个", "差几个", "没做完", "没按期")
+
+
+def asks_total(question: str) -> bool:
+    return any(w in (question or "") for w in TOTAL_WORDS)
+
+
+def is_code_column(name: str) -> bool:
+    return bool(_CODE_NAME_RE.search(str(name)))
+
+
+def asks_week_on_non_week_table(question: str, df: pd.DataFrame) -> bool:
+    if not _WEEK_ASK_RE.search(question or ""):
+        return False
+    return not any(("周" in str(c) or "week" in str(c).lower()) for c in df.columns)
+
+
+def _plan_count_columns(columns: Sequence[str]) -> Optional[tuple]:
+    """(计划数列, 已产出数列): 两个都唯一才返回, 认不准不猜。"""
+    def ok_plan(c: str) -> bool:
+        return ("计划" in c and "数" in c and not any(w in c for w in ("已", "外", "率", "达成", "缺口")))
+    def ok_done(c: str) -> bool:
+        return ("计划" in c and "数" in c and "缺口" not in c
+                and any(w in c for w in ("已产出", "已完成", "已达成")))
+    plans = [c for c in columns if ok_plan(str(c))]
+    dones = [c for c in columns if ok_done(str(c))]
+    if len(plans) == 1 and len(dones) == 1:
+        return plans[0], dones[0]
+    return None
+
+
+def with_gap_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """有「计划数 / 已产出数」成对列时加一列 缺口 = 计划 − 已产出 (逐行现算, 不是计划数本身)。"""
+    pair = _plan_count_columns([str(c) for c in df.columns])
+    if not pair:
+        return df
+    name = gap_column_name(pair)
+    if name in df.columns:
+        return df
+    out = df.copy()
+    out[name] = _to_num(df[pair[0]]) - _to_num(df[pair[1]])
+    return out
+
+
+def gap_column_name(pair: tuple) -> str:
+    return f"缺口数({pair[0]}-{pair[1]})"
+
+
+_PLAN_QTY_WORDS = ("产量", "数量", "kg", "公斤", "重量")
+
+
+def rule_based_plan(question: str, df: pd.DataFrame) -> Optional[tuple]:
+    """('refuse', 指标名) | ('plan', 原始计划 dict) | None。
+
+    1. 问「计划产量/计划数量」: 表里没有计划数量列 -> 有计划品项数就固定按品项数答 (并说明),
+       没有就拒答; 不拿「实产良品」顶替。
+    2. 问「没按计划完成/缺口」: 有 计划数+已产出数 成对列 -> 缺口 = 计划−已产出 逐行现算。
+    """
+    q = question or ""
+    cols = [str(c) for c in df.columns]
+    if re.search(r"计划\s*(产量|数量|产出)", q):
+        has_qty = any("计划" in c and any(w in c for w in _PLAN_QTY_WORDS) and "外" not in c for c in cols)
+        if not has_qty:
+            pair = _plan_count_columns(cols)
+            if not pair:
+                return ("refuse", "计划产量")
+            return ("plan", {
+                "intent": "compute", "sort_by": pair[0], "descending": True, "limit": 1,
+                "note": f"原表计划没有数量列 (只有「{pair[0]}」), 按计划品项数回答, 不是计划产量; "
+                        "不得拿实产良品顶替计划产量",
+            })
+    if any(w in q for w in _GAP_ASK_WORDS):
+        pair = _plan_count_columns(cols)
+        if pair:
+            gap = gap_column_name(pair)
+            return ("plan", {
+                "intent": "compute",
+                "filters": [{"col": gap, "op": ">", "value": 0}],
+                "sort_by": gap, "descending": True, "limit": 10,
+                "note": f"缺口 = {pair[0]} − {pair[1]} (逐行现算, 不是计划数本身); "
+                        "本表每行是一个时间段的品项数, 不含具体产品名",
+            })
+    return None
 
 
 def parse_plan(text: str) -> Optional[dict]:
@@ -309,6 +407,9 @@ class ExecResult:
     group_by: List[str] = field(default_factory=list)
     mode: str = "rows"
     pct_cols: set = field(default_factory=set)
+    code_cols: set = field(default_factory=set)
+    totals: Dict[str, Any] = field(default_factory=dict)
+    asks_total: bool = False
 
 
 def _apply_filter(df: pd.DataFrame, f: dict) -> pd.Series:
@@ -348,9 +449,13 @@ def _metric_value(sub: pd.DataFrame, m: dict):
     return float({"sum": n.sum, "mean": n.mean, "min": n.min, "max": n.max}[func]())
 
 
-def _fmt(v: Any, pct: bool = False) -> str:
+def _fmt(v: Any, pct: bool = False, code: bool = False) -> str:
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "(空)"
+    if code:  # 编码/ID 类列: 原样, 不加千分位, 不带 .0
+        if isinstance(v, float) and v == int(v):
+            return str(int(v))
+        return str(v)
     if pct:
         return f"{v * 100:.2f}%"
     if isinstance(v, bool):
@@ -363,7 +468,18 @@ def _fmt(v: Any, pct: bool = False) -> str:
     return s if len(s) <= 40 else s[:40] + "…"
 
 
-def execute_plan(df: pd.DataFrame, plan: dict) -> ExecResult:
+def execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
+    res = _execute_plan(df, plan, question)
+    res.asks_total = asks_total(question)
+    res.code_cols = {c for c in res.columns if is_code_column(c)}
+    if asks_week_on_non_week_table(question, df):
+        res.notes.append(
+            "当前数据源是按日表 (没有「周」列), 未按周汇总; 以下是按日结果, "
+            "回答须明说「这张是按日表」, 不得把某一天说成某一周")
+    return res
+
+
+def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
     total = len(df)
     notes: List[str] = []
     if plan["note"]:
@@ -395,10 +511,16 @@ def execute_plan(df: pd.DataFrame, plan: dict) -> ExecResult:
         sb = plan["sort_by"] if plan["sort_by"] in cols else (metrics[0]["name"])
         out = out.sort_values(sb, ascending=not plan["descending"], na_position="last")
         shown = out.head(plan["limit"])
-        res = ExecResult(cols, shown.values.tolist(), total, matched, fdesc, notes,
+        # astype(object): 混合 int/float 列 .values 会整体升成 float (编码 22002 -> 22002.0 -> 22,002)
+        res = ExecResult(cols, shown.astype(object).values.tolist(), total, matched, fdesc, notes,
                          group_by=gb, mode="grouped")
         res.notes.append(f"共 {len(out)} 个分组, 展示前 {len(shown)} 个")
         res.pct_cols = pct_cols
+        for m in metrics:  # 一共/总共/合计: 全部分组的求和, 不是排名第一的那一项
+            if m["func"] in ("sum", "count"):
+                t = out[m["name"]].sum(skipna=True)
+                res.totals[m["name"]] = int(t) if float(t) == int(t) else float(t)
+        res.notes.append(f"全部 {len(out)} 个分组共 {matched} 行")
         if plan["breakdown_by"] and len(out):
             top_key = out.iloc[0][gb].tolist()
             mask = pd.Series(True, index=work.index)
@@ -446,13 +568,17 @@ def execute_plan(df: pd.DataFrame, plan: dict) -> ExecResult:
             extra = ties[~ties.index.isin(head.index)].head(MAX_TIE_ROWS)
             if len(extra):
                 head = pd.concat([head, extra])
-                notes.append(f"另有 {len(extra)} 行与末位并列, 已一并列出")
+                notes.append(f"并列: 另有 {len(extra)} 行与末位同值 ({_fmt(thr)}), 已一并列出, "
+                             "回答须把并列的行全部说出来, 不得只说其中一个")
         if nan_n:
             notes.append(f"排序字段「{sb}」有 {nan_n} 行为空, 已排除出比较 (不是 0)")
         shown = head[show_cols]
         res = ExecResult(show_cols, shown.values.tolist(), total, matched, fdesc, notes, mode="rows",
                          pct_cols=_rate_cols(work, show_cols))
         res.notes.append(f"按「{sb}」{'降序' if plan['descending'] else '升序'}取前 {plan['limit']} 行")
+        if asks_total(question) and _to_num(work[sb]).notna().any():
+            tot = float(_to_num(work[sb]).sum())
+            res.totals[f"{sb}合计"] = int(tot) if tot == int(tot) else tot
         return res
     shown = work[show_cols].head(MAX_RESULT_ROWS)
     res = ExecResult(show_cols, shown.values.tolist(), total, matched, fdesc, notes, mode="rows",
@@ -487,12 +613,21 @@ def render_block(question: str, res: ExecResult) -> str:
     body = []
     for r in res.rows:
         body.append("| " + " | ".join(
-            _fmt(v, pct=(c in pct)) for c, v in zip(res.columns, r)) + " |")
+            _fmt(v, pct=(c in pct), code=(c in res.code_cols))
+            for c, v in zip(res.columns, r)) + " |")
     lines = [
         f"## 全表精确计算结果 (权威: 服务端在该数据集全部 {res.total_rows} 行上计算)",
         "回答规则: 数字、日期、产品、机台等只能取自下表同一行, 不得改写、拼接别的行的字段、"
-        "不得补充表里没有的日期/名称; 表里没有的信息直接说「数据里没有」。",
+        "不得补充表里没有的日期/名称; 表里没有的信息直接说「数据里没有」。"
+        "编码/编号/批号类的值原样书写, 不加千分位逗号。",
     ]
+    if res.totals:
+        tt = "; ".join(f"{k} = {_fmt(v)}" for k, v in res.totals.items())
+        lines.append(f"全部分组合计 (所有行求和): {tt}")
+        if res.asks_total:
+            top = (f"; 排名第一的一项 ({_fmt(res.rows[0][len(res.group_by)])}) 只是最大项, 不是总数"
+                   if res.mode == "grouped" and res.rows else "")
+            lines.append(f"问题问的是「一共/总共/合计」: 总数以上面的合计为准{top}。")
     if res.filters_desc:
         lines.append("筛选条件: " + "; ".join(res.filters_desc))
     lines.append(f"命中 {res.matched_rows} / {res.total_rows} 行")
@@ -539,28 +674,75 @@ async def answer_row_level(
     if not (question or "").strip() or df is None or df.empty:
         return RowLevelOutcome("none")
 
+    df = with_gap_columns(df)
+
+    rule = rule_based_plan(question, df)  # 确定性规则: 不经 LLM, 同一问题每次一致
+    if rule and rule[0] == "refuse":
+        return RowLevelOutcome("refuse", build_refusal(rule[1], field_names))
+
     missing = find_missing_concept(question, field_names)
     if missing:
         return RowLevelOutcome("refuse", build_refusal(missing, field_names))
 
-    try:
-        raw = await llm_call(build_plan_prompt(question, df), PLAN_SYSTEM)
-    except Exception as e:  # LLM 不可用: 如实标记未计算, 不退回样本猜
-        logger.warning("[row-level-qa] planner call failed: %s", e)
-        return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划不可用"))
-    plan = parse_plan(raw)
-    if plan is None:
-        return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划无法解析"))
+    if rule and rule[0] == "plan":
+        try:
+            vplan = validate_plan(rule[1], df)
+            res = execute_plan(df, vplan, question)
+        except PlanError as e:
+            return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=rule[1])
+        return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
 
-    intent = str(plan.get("intent") or "compute")
-    if intent == "none":
-        return RowLevelOutcome("none", plan=plan)
-    if intent == "no_metric":
-        return RowLevelOutcome("refuse", build_refusal(
-            str(plan.get("missing") or "被问的"), field_names), plan=plan)
-    try:
-        vplan = validate_plan(plan, df)
-        res = execute_plan(df, vplan)
-    except PlanError as e:
-        return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=plan)
-    return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
+    cache_key = (re.sub(r"\s+", "", question), tuple(str(c) for c in df.columns))
+    cached = _PLAN_CACHE.get(cache_key)
+    prompt = build_plan_prompt(question, df)
+    raw = cached
+    if raw is None:
+        try:
+            raw = await llm_call(prompt, PLAN_SYSTEM)
+        except Exception as e:  # LLM 不可用: 如实标记未计算, 不退回样本猜
+            logger.warning("[row-level-qa] planner call failed: %s", e)
+            return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划不可用"))
+
+    for attempt in (1, 2):
+        plan = parse_plan(raw)
+        if plan is None:
+            return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划无法解析"))
+        intent = str(plan.get("intent") or "compute")
+        if intent == "none":
+            _plan_cache_put(cache_key, raw)
+            return RowLevelOutcome("none", plan=plan)
+        if intent == "no_metric":
+            _plan_cache_put(cache_key, raw)
+            return RowLevelOutcome("refuse", build_refusal(
+                str(plan.get("missing") or "被问的"), field_names), plan=plan)
+        try:
+            vplan = validate_plan(plan, df)
+            res = execute_plan(df, vplan, question)
+        except PlanError as e:
+            if attempt == 1 and cached is None:
+                # 字段对不上 (如在按日表上 group_by 周): 把错误和真实字段交回规划器重写一次,
+                # 不让「行定位时好时坏」停在 uncomputed。
+                logger.info("[row-level-qa] plan invalid (%s), retrying once", e)
+                try:
+                    raw = await llm_call(
+                        prompt + f"\n\n上一次的计划无效: {e}。只能使用上面列出的字段, 请重新输出 JSON。",
+                        PLAN_SYSTEM)
+                except Exception as e2:
+                    logger.warning("[row-level-qa] planner retry failed: %s", e2)
+                    return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=plan)
+                continue
+            return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=plan)
+        _plan_cache_put(cache_key, raw)  # 只缓存校验并执行成功的计划: 同一原话+同一表头, 规划稳定
+        return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
+    return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason="查询规划无效"))
+
+
+# 规划结果按 (原话, 表头) 稳定: 同一问题两次问不会因 LLM 采样不同而一次拒答一次作答。
+_PLAN_CACHE: Dict[tuple, str] = {}
+_PLAN_CACHE_MAX = 256
+
+
+def _plan_cache_put(key: tuple, raw: str) -> None:
+    if len(_PLAN_CACHE) >= _PLAN_CACHE_MAX:
+        _PLAN_CACHE.pop(next(iter(_PLAN_CACHE)))
+    _PLAN_CACHE[key] = raw

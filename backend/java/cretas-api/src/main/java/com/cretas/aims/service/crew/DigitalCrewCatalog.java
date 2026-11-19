@@ -114,4 +114,20 @@ public final class DigitalCrewCatalog {
         if (i <= 0) return null;
         return p.substring(0, i);
     }
+
+    /**
+     * 逗号分隔的「任一」权限码 (如 {@code inventory:write,warehouse:read_write}) 归哪个模块:
+     * 有这位员工管得着的就取它 (按登记顺序第一个), 都管不着取第一个码的模块 (⇒ 指给该管的人); 空 / 不合规返回 null。
+     */
+    public static String moduleOf(String permission, Member member) {
+        List<String> modules = com.cretas.aims.service.execution.IntentPermissionGate.splitCodes(permission).stream()
+                .map(DigitalCrewCatalog::moduleOf).toList();
+        if (modules.isEmpty() || modules.contains(null)) return null;
+        if (member != null) {
+            for (String m : modules) {
+                if (member.modules().contains(m)) return m;
+            }
+        }
+        return modules.get(0);
+    }
 }

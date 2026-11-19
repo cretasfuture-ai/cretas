@@ -98,7 +98,7 @@ export const FACTORY_WORKSPACES: readonly FactoryWorkspace[] = [
     description: '连接批次追溯、生产报表和经营报告入口，核对事实与结果。',
     links: [
       { path: '/production/traceability', title: '批次追溯', description: '按批次查看现有溯源链路。', module: 'production' },
-      { path: '/production/analysis-query', title: '生产分析', description: '查看 BOM 达成率、工序投入产出和人效分析。', module: 'production' },
+      { path: '/production/analysis-query', title: '生产分析', description: '查看 BOM 用量对比、工序投入产出和人效分析。', module: 'production' },
       { path: '/analytics/ai-reports', title: '经营报告', description: '回看已生成的经营分析报告。', module: 'analytics' },
     ],
   },

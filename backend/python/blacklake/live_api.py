@@ -2,6 +2,7 @@
 import asyncio
 import os
 import json
+import sys
 from datetime import timedelta
 from fastapi import APIRouter, Request, HTTPException, Query
 from .period_api import context
@@ -114,8 +115,43 @@ async def nightly_tick(configured,current=None):
         else:live.record_nightly(v,True)
 
 
+_heal_state={'last':None,'alerted':None}
+
+
+def report_failure(action,exc):
+    # Constant error code + exception type only: no message text, credentials or SQL.
+    text=str(exc)
+    code=text if text and text.replace('_','').isalnum() and text.upper()==text else 'UNCODED'
+    print('[blacklake-live] %s failed code=%s type=%s'%(getattr(action,'__name__',str(action)),code,type(exc).__name__),file=sys.stderr,flush=True)
+
+
+async def maintenance_step(configured,current=None,ensure=None,health=None):
+    """Self-heal the WSL authority before the 23:55 nightly window and raise the stale alarm."""
+    from zoneinfo import ZoneInfo
+    from . import authority_guard
+    ensure=ensure or authority_guard.ensure_authority
+    current=(current or live.instant(live.now())).astimezone(ZoneInfo('Asia/Shanghai'))
+    first=_heal_state['last'] is None
+    in_lead=current.hour==23 and 30<=current.minute<55
+    last=_heal_state['last']
+    if (first or in_lead) and (last is None or (current-last).total_seconds()>=600):
+        _heal_state['last']=current
+        result=await asyncio.to_thread(ensure)
+        if result=='failed':print('[blacklake-live] authority self-heal failed code=PERIOD_COST_AUTHORITY_UNAVAILABLE',file=sys.stderr,flush=True)
+    v=live.config(os.environ['BLACKLAKE_LIVE_CONFIG'])
+    h=(health or live.nightly_health_from_db)(v['db'])
+    day=current.date()
+    if h['state']!=live.NIGHTLY_OK and _heal_state['alerted']!=day:
+        _heal_state['alerted']=day
+        print('[blacklake-live] ALERT nightly health state=%s status=%s lastSuccessAt=%s reason=%s'%(h['state'],h['status'],h.get('lastSuccessAt'),h.get('reason')),file=sys.stderr,flush=True)
+    return h
+
+
 async def analysis_loop(configured):
     while True:
+        try:await maintenance_step(configured)
+        except asyncio.CancelledError:raise
+        except Exception as e:report_failure(maintenance_step,e)
         await analysis_step(configured)
         await asyncio.sleep(30)
 
@@ -125,7 +161,8 @@ async def analysis_step(configured):
     for action in (analysis_tick,nightly_tick):
         try:await action(configured)
         except asyncio.CancelledError:raise
-        except Exception:
+        except Exception as e:
+            report_failure(action,e)
             try:
                 v=live.config(os.environ['BLACKLAKE_LIVE_CONFIG'])
                 if (v['tenant_id'],str(v['source_factory_id']),v['baselineRunId'])!=(configured['tenant_id'],str(configured['source_factory_id']),configured['run_id']):
@@ -140,4 +177,4 @@ async def analysis_step(configured):
                         info.update(status='pending_latest',message='最新数据分析暂未提交，保留数据自动重试；上次报告仅作历史查看。',summary=None,findings=[])
                         db.execute('UPDATE monitor SET analysis=? WHERE scope=?',(json.dumps(info,ensure_ascii=False),live.binding(v)))
                 db.close()
-            except Exception:pass
+            except Exception as e2:report_failure(analysis_step,e2)

@@ -240,7 +240,8 @@ class DigitalCrewRecognitionFixesEntryContractTest {
                 mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
                 locks, users, mock(PermissionService.class), facade, h.recognizer,
                 mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
-                mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+                mock(FactoryBusinessTypeResolver.class), mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
+                mock(PlatformTransactionManager.class));
         DigitalCrewController controller = new DigitalCrewController(crew);
         MockHttpServletRequest http = new MockHttpServletRequest();
         AuthenticatedActor actor = new AuthenticatedActor(AuthenticatedActorType.FACTORY_USER, USER, FACTORY, ROLE);

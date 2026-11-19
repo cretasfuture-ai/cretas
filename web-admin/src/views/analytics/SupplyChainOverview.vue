@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { formatNumber } from '@/utils/format-number';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { materialReceiptDateText } from './materialBatchReceipt';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
 import {
@@ -100,7 +101,8 @@ interface MaterialBatch {
   quantity: number;
   unit: string;
   status: string;
-  receivedDate: string;
+  receiptDate?: string | null;
+  inboundDate?: string | null;
 }
 
 interface ProductionBatch {
@@ -552,7 +554,9 @@ function salesStatusText(status: unknown): string {
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="receivedDate" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+              <el-table-column label="入库时间" width="180">
+                <template #default="{ row }">{{ materialReceiptDateText(row) }}</template>
+              </el-table-column>
             </el-table>
           </el-tab-pane>
 

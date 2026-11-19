@@ -1,5 +1,8 @@
 """prune_soft_deleted_fact_batches 的真 PostgreSQL 集成测试 (q49, 2026-11-18)。
 
+2026-11-19 补源头硬删（本厂源表已无此 id）：硬删被清 / 活批次不动 / 他厂同 id 不动 /
+源头读取失败或一条都没报回时 0 删除 / LSMDEMO 不做硬删清理 / 幂等。
+
 为什么要真库：「活批次不删 / 他厂不动 / agg 只删失去全部事实行的键」是 SQL 语义，
 假连接只能看到 SQL 文本，证明不了。这里用：
   * 真迁移文件 V20261002_01（FORCE ROW LEVEL SECURITY + tenant_isolation 策略都是真的）；
@@ -184,7 +187,7 @@ async def test_prune_is_idempotent_and_noop_when_nothing_soft_deleted(pool):
     await prune_soft_deleted_fact_batches(pool, pool, "F006")
     snap = await _counts(pool, "F006")
     again = await prune_soft_deleted_fact_batches(pool, pool, "F006")
-    assert again == {"fact": 0, "agg": 0}
+    assert again == {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": []}
     assert await _counts(pool, "F006") == snap
 
 
@@ -289,4 +292,118 @@ async def test_stale_rollups_left_by_manual_fact_delete_are_cleaned(pool):
     _, _, keys = await _counts(pool, "F006")
     rollup = {k[0]: k[2] for k in keys if k[1] is None}
     assert rollup == {D2: 1}
+    await _assert_rollup_equals_fact_count(pool, "F006")
+
+
+# ── 源头硬删（LSM-F006-HARDDEL-RESIDUE, 2026-11-19）──────────────────────────
+# 源表里本厂已没有这个 id = 物理删除。三态：存在 / 确认不存在 / 不知道(查询失败或一条都没报回) → 跳过。
+
+D3 = date(2026, 10, 29)
+
+
+async def _hard_world(pool):
+    """F006 fact: 401(P_HARD,D1,源头无) / 402(P_HARD,D2,F006 源头无但 F007 有同 id 活批次)
+                  403(P_LIVE,D1,活) / 404(P_LIVE,D1,源头无: 与活批次同产品同日) / 405(P_SOFT,D3,软删)
+       F007 fact: 402(P_X,D2,活) —— 他厂同 id 的阴性对照。"""
+    for pk, f, deleted in [(403, "F006", False), (405, "F006", True), (402, "F007", False)]:
+        await _seed_src(pool, f, pk, deleted)
+    await _seed_fact(pool, "F006", 401, "P_HARD", D1)
+    await _seed_fact(pool, "F006", 402, "P_HARD", D2)
+    await _seed_fact(pool, "F006", 403, "P_LIVE", D1)
+    await _seed_fact(pool, "F006", 404, "P_LIVE", D1)
+    await _seed_fact(pool, "F006", 405, "P_SOFT", D3)
+    await _seed_fact(pool, "F007", 402, "P_X", D2)
+    await materialize_factory_gold(pool, "F006")
+    await materialize_factory_gold(pool, "F007")
+
+
+async def _fact_pks(pool, factory):
+    async with pool.acquire() as c:
+        async with c.transaction():
+            await c.execute("SELECT set_config('app.factory_id', $1, false)", factory)
+            rows = await c.fetch("SELECT source_pk FROM fact_production_batch WHERE factory_id=$1", factory)
+    return sorted(r["source_pk"] for r in rows)
+
+
+async def test_hard_deleted_batches_are_pruned_live_and_other_factory_untouched(pool):
+    await _hard_world(pool)
+    before7 = await _counts(pool, "F007")
+    stats = await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    assert await _fact_pks(pool, "F006") == ["403"], "只剩活批次 403；401/402/404 源头已硬删、405 已软删"
+    assert stats["fact"] == 4 and stats["fact_hard_deleted"] == 3 and stats["errors"] == []
+    # 402 在 F007 源头有同 id 活批次：判定只看本厂源表，F006 的 402 仍按硬删清掉；F007 的 402 一行不动
+    assert await _counts(pool, "F007") == before7
+    await materialize_factory_gold(pool, "F006")
+    _, _, keys = await _counts(pool, "F006")
+    assert [k for k in keys if k[1] in ("P_HARD", "P_SOFT")] == []
+    assert (D1, "P_LIVE", 1) in keys, "与硬删批次同产品同日的活批次：agg 行留下并由 Gold 重算为 1"
+    await _assert_rollup_equals_fact_count(pool, "F006")
+
+
+async def test_hard_delete_prune_is_idempotent(pool):
+    await _hard_world(pool)
+    await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    await materialize_factory_gold(pool, "F006")
+    snap6, snap7 = await _counts(pool, "F006"), await _counts(pool, "F007")
+    again = await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    assert again == {"fact": 0, "agg": 0, "fact_hard_deleted": 0, "errors": []}
+    assert await _counts(pool, "F006") == snap6 and await _counts(pool, "F007") == snap7
+
+
+async def test_source_reports_none_of_the_ids_means_unknown_and_zero_deletes(pool):
+    """「不知道」：本厂源表一条都没报回来（库连错/源表被清空/看不到都长这样）→ 不能当成全部已硬删。"""
+    await _seed_fact(pool, "F006", 501, "P_A", D1)
+    await _seed_fact(pool, "F006", 502, "P_B", D2)
+    await _seed_src(pool, "F007", 501, False)  # 他厂有同 id 也不算本厂存在
+    await materialize_factory_gold(pool, "F006")
+    before = await _counts(pool, "F006")
+    stats = await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    assert stats["fact"] == 0 and stats["fact_hard_deleted"] == 0
+    assert any("hard-delete check skipped" in e for e in stats["errors"]), stats
+    assert await _counts(pool, "F006") == before
+
+
+async def test_source_read_failure_deletes_nothing(pool):
+    """「不知道」：源头查询报错 → 异常上抛，fact/agg 一行不删。"""
+    await _hard_world(pool)
+    before6, before7 = await _counts(pool, "F006"), await _counts(pool, "F007")
+    sup = await asyncpg.connect(_with_db(DSN, await _dbname(pool)))
+    try:
+        await sup.execute("REVOKE SELECT ON production_batches FROM " + ROLE)
+        with pytest.raises(asyncpg.PostgresError):
+            await prune_soft_deleted_fact_batches(pool, pool, "F006")
+    finally:
+        await sup.execute("GRANT SELECT ON production_batches TO " + ROLE)
+        await sup.close()
+    assert await _counts(pool, "F006") == before6 and await _counts(pool, "F007") == before7
+
+
+async def _dbname(pool):
+    async with pool.acquire() as c:
+        return await c.fetchval("SELECT current_database()")
+
+
+async def test_lsmdemo_hard_delete_residue_is_left_alone(pool):
+    """LSMDEMO 演示厂不做硬删清理（其残留另议）；软删清理照旧。"""
+    await _seed_src(pool, "LSMDEMO", 601, False)
+    await _seed_src(pool, "LSMDEMO", 603, True)
+    await _seed_fact(pool, "LSMDEMO", 601, "P_LIVE", D1)
+    await _seed_fact(pool, "LSMDEMO", 602, "P_HARD", D1)  # 源头无
+    await _seed_fact(pool, "LSMDEMO", 603, "P_SOFT", D2)
+    stats = await prune_soft_deleted_fact_batches(pool, pool, "LSMDEMO")
+    assert await _fact_pks(pool, "LSMDEMO") == ["601", "602"]
+    assert stats["fact"] == 1 and stats["fact_hard_deleted"] == 0 and stats["errors"] == []
+
+
+async def test_run_factory_etl_prunes_hard_deleted_and_reports(pool):
+    """真实入口 run_factory_etl：硬删残留被清，job stats 报 silver_pruned_hard_deleted。"""
+    async with pool.acquire() as c:
+        await c.execute(
+            """INSERT INTO production_batches (id, factory_id, deleted_at, status, product_type_id, end_time, total_cost)
+               VALUES (1,'F006',NULL,'COMPLETED','P_LIVE','2026-10-27 10:00',50)""")
+    await _seed_fact(pool, "F006", 7, "P_HARD", D2, 70)  # 源头已物理删除
+    stats = await run_factory_etl(pool, pool, "F006")
+    assert stats.errors == []
+    assert stats.silver_pruned == 1 and stats.silver_pruned_hard_deleted == 1
+    assert await _fact_pks(pool, "F006") == ["1"]
     await _assert_rollup_equals_fact_count(pool, "F006")

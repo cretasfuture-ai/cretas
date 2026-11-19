@@ -1824,6 +1824,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             return  # early exit — synthesis served the answer
             except Exception as e:
                 logger.warning(f"[stream] synthesis router failed, falling through: {e}")
+            _auto_pick = None
             try:
                 upload_id = (
                     validated_upload_id
@@ -1831,6 +1832,37 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     else None
                 )
                 user_q = (request.effective_query or "").strip()
+                # 味美 11-19 (B3): 「全部数据」(没选数据源) 时先按问题和各表列名/表名的重合度
+                # 选表; 一份都不沾边才走下面原来的模板匹配 / 行数最多。
+                if (
+                    request.allow_tenant_data_fallback
+                    and not upload_id
+                    and user_q
+                    and trusted_factory_id
+                ):
+                    try:
+                        from smartbi.services.upload_auto_select import pick_upload_for_question
+                        from smartbi.config import get_pg_pool as _get_pool_auto
+                        _pool_auto = await _get_pool_auto()
+                        if _pool_auto is not None:
+                            async with _pool_auto.acquire() as _conn_auto:
+                                _auto_pick = await pick_upload_for_question(
+                                    _conn_auto, trusted_factory_id, user_q
+                                )
+                        if _auto_pick is not None:
+                            upload_id = _auto_pick.upload_id
+                            logger.info(
+                                f"[stream] question-matched upload {upload_id} "
+                                f"({_auto_pick.label!r}, factory={trusted_factory_id})"
+                            )
+                            yield _sse_event("data_source", {
+                                "uploadId": _auto_pick.upload_id,
+                                "label": _auto_pick.label,
+                                "autoSelected": True,
+                            })
+                    except Exception as _ae:
+                        logger.warning(f"[stream] question-matched upload select failed: {_ae}")
+                        _auto_pick = None
                 # Bug G phase 2 (Apr 26 2026): template-aware upload selection.
                 # Phase 1 picked largest upload — broke for qhj where 32K 卡详情
                 # (no menu data) was largest but 6K 营业概况月报 (with menu data)
@@ -2180,7 +2212,9 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     pool = await _get_pg_pool()
                     if pool:
                         async with pool.acquire() as conn:
-                            upload_id = validated_upload_id
+                            upload_id = validated_upload_id or (
+                                _auto_pick.upload_id if _auto_pick is not None else None
+                            )
                             if not upload_id:
                                 # Bug G fix (Apr 26 2026): factory-scoped + largest non-empty upload.
                                 factory_id_for_select = trusted_factory_id
@@ -4230,6 +4264,29 @@ def _build_charts_for_query(query: str, df, data: list) -> List[Dict[str, Any]]:
 
     chart_data = data[:50] if len(data) > 50 else data
     charts: List[Dict[str, Any]] = []
+
+    # 页脚「数据驱动」按图里的数现算: 图的指标要跟问题相关 (问产量就画良品, 不是永远取前 3 个数值列)。
+    # 对不上任何列时保持原来的默认选列。
+    _asked_cols = []
+    try:
+        from smartbi.services.question_chart import relevant_measure_columns
+        _asked_cols = relevant_measure_columns(query or "", numeric_cols)
+    except Exception as _rel_err:
+        logger.warning(f"[chart] relevant column pick failed (keep default): {_rel_err}")
+    if _asked_cols:
+        numeric_cols = _asked_cols
+        # 比率列 (0~1 小数) 画成百分数, 否则 0.99 会被页脚当成「0.99%」
+        _scaled = [c for c in _asked_cols if '率' in c and df[c].notna().any() and df[c].abs().max() <= 1.5]
+        if _scaled:
+            chart_data = [
+                {**row, **{c: round(row[c] * 100, 2) for c in _scaled
+                           if isinstance(row.get(c), (int, float)) and row.get(c) is not None}}
+                for row in chart_data
+            ]
+        if any(w in (query or "") for w in ("哪天", "哪一天", "每天", "每日", "逐日", "各天")):
+            _date_like = next((c for c in df.columns if any(w in str(c) for w in ("日期", "date", "Date"))), None)
+            if _date_like:
+                label_field = _date_like
 
     if "趋势" in query or "变化" in query:
         if numeric_cols:

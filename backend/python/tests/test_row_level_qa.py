@@ -23,6 +23,13 @@ from smartbi.services.dataset_capabilities import detect_capabilities, should_sh
 RATE = "出成率(良品/(良品+废品+次品))"
 
 
+@pytest.fixture(autouse=True)
+def _fresh_plan_cache():
+    # 规划结果按 (原话, 表头) 缓存: 各用例的桩计划不同, 不能互相串。
+    getattr(rl, "_PLAN_CACHE", {}).clear()
+    yield
+
+
 # --------------------------- 合成表 (同味美列头) ---------------------------
 
 def daily_summary() -> pd.DataFrame:

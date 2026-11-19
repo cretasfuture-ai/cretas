@@ -1,20 +1,21 @@
 package com.cretas.aims.controller.permission;
 
 import com.cretas.aims.annotation.RequirePermission;
+import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
 import com.cretas.aims.dto.permission.PermissionMatrixView;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
-import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.service.permission.PermissionMatrixViewService;
 import com.cretas.aims.service.permission.PlatformRolePermissionWriteService;
+import com.cretas.aims.security.AuthenticatedActor;
+import jakarta.servlet.http.HttpServletRequest;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestAttribute;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -41,6 +42,14 @@ import org.springframework.web.bind.annotation.RestController;
  * (兜底矩阵说 {@code rw})。也就是说「权限管理员」这个角色<b>今天进不来这个页面</b>,
  * 而它恰好是本页 diff 列表里的第一条 —— 页面会把这件事自己显示出来。
  * 修它要写 L1 (加一条 Flyway), 那是 owner 裁定的 step 2, 本轮只读。
+ *
+ * <h3>🔴 2026-11-18 (PROTO-DEMO-PERM) 收成平台专属</h3>
+ * L1 是<b>全平台</b>表, 一次写入改所有工厂。之前门禁只有 {@code system:read_write}, 而
+ * {@code factory_super_admin} 走超管短路、{@code permission_admin} 被 V20261101_37 提到 rw ——
+ * 任何一个工厂的总监/权限管理员都能改<b>别的工厂</b>该角色的权限 (跨租户越权)。现在读写两个端点都叠
+ * {@code @RequireRole({"platform_admin"})}: {@code RequireRoleInterceptor} 只放带平台令牌的
+ * super_admin / platform_admin / developer, 工厂令牌里写平台角色名也不算。写端点在方法体里再判一次。
+ * 契约测试: {@code PermissionMatrixControllerPermissionTest}。
  */
 @RestController
 @RequestMapping("/api/mobile/{factoryId}/permissions")
@@ -50,11 +59,11 @@ public class PermissionMatrixController {
 
     private final PermissionMatrixViewService permissionMatrixViewService;
     private final PlatformRolePermissionWriteService writeService;
-    private final UserRepository userRepository;
 
     @GetMapping("/matrix")
     @Operation(summary = "角色 × 模块 权限矩阵 (L1 权威 + 硬编码兜底 + 分歧列表), 只读")
     @RequirePermission({"system:read", "system:read_write"})
+    @RequireRole({"platform_admin"})
     public ApiResponse<PermissionMatrixView> matrix(@PathVariable String factoryId) {
         return ApiResponse.success(permissionMatrixViewService.build(factoryId));
     }
@@ -68,23 +77,30 @@ public class PermissionMatrixController {
     /**
      * step-2 (owner 2026-09-06 裁定): 只写 L1 一格, 同事务写审计, 写后缓存全清。
      *
-     * <p>门禁 {@code system:read_write}: permission_admin 由 {@code V20261101_37} 提到 rw 后走得到;
-     * factory_super_admin / platform_admin 走超管短路。⚠️ L1 是全平台表, 一次写入影响所有工厂 —— 前端明示。
+     * <p>门禁 {@code system:read_write} + 平台管理员 (2026-11-18 起; 工厂账号一律 403, 见类注释)。
+     * ⚠️ L1 是全平台表, 一次写入影响所有工厂 —— 前端明示。
      * 餐饮角色 / 餐饮模块的格 400 (Steve: 餐饮不管)。守卫全在 {@link PlatformRolePermissionWriteService}, 这里不抄。
      */
     @PutMapping("/matrix/{role}/{module}")
     @Operation(summary = "写 L1 一格 (全平台生效), 同事务审计, 写后缓存失效")
     @RequirePermission({"system:read_write"})
+    @RequireRole({"platform_admin"})
     public ApiResponse<WriteCellResponse> writeCell(@PathVariable String factoryId,
                                                     @PathVariable String role,
                                                     @PathVariable String module,
                                                     @RequestBody WriteCellRequest body,
-                                                    @RequestAttribute(value = "userId", required = false) Long userId) {
-        // 操作人从 JwtAuthInterceptor 放进来的 userId 取; 取不到 ⇒ 403, ⛔ 不写 changed_by=NULL
-        User actor = userId == null ? null : userRepository.findById(userId).orElse(null);
-        if (actor == null) {
-            throw new BusinessException(403, "无法确认操作人, 拒绝写入权限");
+                                                    HttpServletRequest request) {
+        // 第二道 (与 @RequireRole 同义, 防注解被删/拦截器漏挂): 只有带平台令牌的平台管理员能写全平台表。
+        // 操作人取 JwtAuthInterceptor 建好的 AuthenticatedActor —— ⛔ 不拿平台账号的 id 去查 users 表
+        // (那是 platform_admins 的主键, 会把审计记到同 id 的某个工厂用户头上)。审计靠 changed_by_role 区分。
+        AuthenticatedActor platformActor = AuthenticatedActor.current(request)
+                .filter(AuthenticatedActor::hasFactoryBypass).orElse(null);
+        if (platformActor == null) {
+            throw new BusinessException(403, "全平台角色权限只能由平台管理员修改");
         }
+        User actor = new User();
+        actor.setId(platformActor.id());
+        actor.setRoleCode(platformActor.role());
         PlatformRolePermissionWriteService.WriteResult result = writeService.write(
                 actor, factoryId, role, module,
                 body == null ? null : body.level(), body == null ? null : body.reason());
