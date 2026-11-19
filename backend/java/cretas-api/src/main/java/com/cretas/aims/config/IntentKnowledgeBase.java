@@ -8150,6 +8150,12 @@ public class IntentKnowledgeBase {
             return Optional.of(Map.entry(GROWTH_BREAKDOWN_PHRASES.get(0), "PRODUCT_PRODUCT_SALES_RANKING"));
         }
 
+        // 0b. 「9 月 20 号发给 X 的 Y，是哪批原料做的」: 按日期 + 客户反查批次。决策模型按角色给的结果不稳定
+        //     (sales_manager 判成出货列表漏掉当天出货, 见 BP 问题 34 复测), 说法本身没有歧义, 走确定性短语。
+        if (isCustomerDateTrace(input)) {
+            return Optional.of(Map.entry(CUSTOMER_DATE_TRACE_PHRASE, "BATCH_TRACE_BY_CUSTOMER"));
+        }
+
         // 1. Use the shared factory phrase map. Restaurant-specific mappings
         // were retired; the domain argument remains source-compatible.
         Map<String, String> businessSpecificMap = phraseToIntentMapping;
@@ -8202,6 +8208,27 @@ public class IntentKnowledgeBase {
                 && GROWTH_WORD.matcher(input).find()
                 && (input.contains("客户") || input.contains("产品"))
                 && GROWTH_ATTRIBUTION_CUE.matcher(input).find();
+    }
+
+    /** 按日期 + 客户反查批次的归一短语 (只用于 matchPhraseHit 返回的命中短语 / 短语快捷放行判定, 不进短语表)。 */
+    public static final String CUSTOMER_DATE_TRACE_PHRASE = "发给客户的是哪批";
+
+    private static final java.util.regex.Pattern TRACE_DATE = java.util.regex.Pattern.compile(
+            "\\d{1,2}\\s*月\\s*\\d{1,2}\\s*[日号]");
+    private static final java.util.regex.Pattern TRACE_SHIPPED_TO = java.util.regex.Pattern.compile(
+            "(?:发给|发往|卖给|送给|送到|发到)\\s*\\S+");
+    private static final java.util.regex.Pattern TRACE_WHICH_BATCH = java.util.regex.Pattern.compile(
+            "哪\\s*(?:一)?批|哪个批次|什么批次");
+
+    /**
+     * 「X 月 Y 号发给 客户 的 产品, 是哪批 (原料) 做的」: 日期 + 发给某客户 + 问哪批, 三个条件缺一不可
+     * (阴性: 没有「哪批」是出货查询, 没有日期或客户是批次追溯的别的问法)。空格、全角标点不影响。
+     */
+    public static boolean isCustomerDateTrace(String input) {
+        if (input == null) return false;
+        return TRACE_DATE.matcher(input).find()
+                && TRACE_SHIPPED_TO.matcher(input).find()
+                && TRACE_WHICH_BATCH.matcher(input).find();
     }
 
     public static boolean isReportWorkSentence(String input) {

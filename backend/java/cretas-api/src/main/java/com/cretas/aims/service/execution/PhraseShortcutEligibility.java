@@ -81,6 +81,10 @@ public final class PhraseShortcutEligibility {
             // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」: 两个月和百分数是增量拆分工具自己从原话解析的输入, 不是第二个子问
             return true;
         }
+        if ("BATCH_TRACE_BY_CUSTOMER".equals(intentCode) && IntentKnowledgeBase.CUSTOMER_DATE_TRACE_PHRASE.equals(phrase)) {
+            // 「9 月 20 号发给上海连锁餐饮的酱卤牛肉是哪批原料做的」: 日期 / 客户 / 产品是追溯工具自己从原话抽的参数, 不是第二个子问
+            return true;
+        }
         String rest = residual(input, phrase);
         if (intentCode != null && DATE_RANGE_OK_INTENTS.contains(intentCode)) {
             // 「11月1日到18日销售额是多少」: 区间本身是工具的 startDate/endDate, 不是第二个子问 (2026-11-18 LSMDEMO:
