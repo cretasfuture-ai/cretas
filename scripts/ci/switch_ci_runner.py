@@ -59,8 +59,9 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 #    或换一台 Linux self-hosted), 不是这个脚本能解决的。
 WORKFLOWS = [
     "secret-regression.yml",
-    "web-admin-gate.yml",
-    "rn-gate.yml",
+    # 2026-11-19 (Steve「其他检查也上 mini」): web-admin-gate.yml / rn-gate.yml 移出本清单 —— 它们的
+    # vitest / jest 改为按 job 的 canada-mini 路由表达式 (与 java-gate-pr.yml 同), 不再是整份字面量切换;
+    # 由 scripts/tests/test-public-repo-hosted-only.sh 的 SELF_HOSTED_ALLOWED 逐字登记 (带本仓库守卫, fork PR 托管)。
     "python-gate.yml",
     "jpa-gate-main.yml",
     "java-artifact.yml",
@@ -101,7 +102,7 @@ HOSTED_JAVA_ANY = "    runs-on: ubuntu-latest  # java-heavy-any: self-hosted 时
 PAIRS = ((SELF, HOSTED), (SELF_JAVA, HOSTED_JAVA), (SELF_JAVA_ANY, HOSTED_JAVA_ANY))
 # Generic cretas also matches Aurora. Keep Web on the bounded Windows worker,
 # without changing any existing Java-heavy return markers or other workflows.
-WEB_WORKFLOWS = frozenset({"web-admin-gate.yml", "web-dist.yml"})
+WEB_WORKFLOWS = frozenset({"web-dist.yml"})  # web-admin-gate.yml 2026-11-19 起走按 job 的 mini 路由, 见上
 SELF_WEB = "    runs-on: [self-hosted, Linux, cretas, X64, windows-light]"
 # 2026-10-24: 不到 1 分钟的小检查原来和 vitest/pytest 挤在本机那一个轻任务槽里排队 (实测
 # 中位数 12–17 分钟)。现在走专用的 `cretas-quick` 标签: 本机 1 核 / 1G 的小检查槽只带这一个
