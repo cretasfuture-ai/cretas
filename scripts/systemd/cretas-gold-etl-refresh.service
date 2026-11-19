@@ -1,5 +1,5 @@
 [Unit]
-Description=Cretas gold ETL daily refresh (restaurant_ops + factory_production + supplier_price, all tenants)
+Description=Cretas daily factory production and supplier price Gold ETL
 Documentation=https://github.com/Stevenjxie/cretas/blob/main/backend/python/scripts/gold_etl_daily_refresh.py
 After=network-online.target cretas-python.service
 Wants=network-online.target

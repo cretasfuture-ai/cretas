@@ -20,7 +20,7 @@
 ## 上线后对账
 
 1. 以 Cretas 应用数据库的现有只读连接验证 `external_source_snapshots` 对 ETL 可读。仅对 `factory_id = 'LIUSHANMEN'`、`external_system = 'blacklake'`、`dataset = 'report_output'` 读取最新 `id`、`collected_at`、`row_count` 和报工日范围。
-2. 记录 SmartBI 事实表中六膳门黑湖的总行数、覆盖窗口行数和快照状态。迁移上线后，在 Python 服务目录用既有服务环境运行 `python -m smartbi.gold.external_production_etl --factory-id LIUSHANMEN`。再查同一谓词，按事实唯一键消重对账并抽查四种单位。同一快照复跑后比对事实行数、数量和快照 ID。既有工厂 Gold ETL 入口也会同步外部生产，确认生产调度在每日采集后覆盖六膳门。
+2. 记录 SmartBI 事实表中六膳门黑湖的总行数、覆盖窗口行数和快照状态。迁移上线后，在 Python 服务目录用既有服务环境运行 `python -m smartbi.gold.external_production_etl --factory-id LIUSHANMEN`。再查同一谓词，按事实唯一键消重对账并抽查四种单位。同一快照复跑后比对事实行数、数量和快照 ID。核对每日 03:30 的 `cretas-gold-etl-refresh.timer` 经 `python -m scripts.gold_etl_daily_refresh` 在采集后覆盖六膳门。作业日志应有本厂 `external_snapshots_synced=1`、`errors=[]`，以及全局 `failures=0`。
 3. 登录六膳门，打开「生产管理 → 生产分析查询 → 生产数据分析」，选择有黑湖报工的日期。截图留存默认趋势、单位/工序/产品切换后的数量与不良率、成品入库排行、采集时间和无法计算说明。另核对成本分析页的相同口径，与 F006 现有生产/成本读数做对照。
 4. 从「工厂问数 → 业务数据」逐题实测，记录回答、引用来源、日期/单位边界及对账结果。外部事实已通过工厂问数的业务来源接入。普通上传报表问数仍使用原上传数据源。多步比较、自然语言期间识别和各问题的模型选图以实测为准。
 

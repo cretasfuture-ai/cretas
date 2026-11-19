@@ -1,10 +1,13 @@
 """Real PostgreSQL source → Silver → FastAPI/ask-data regression tests."""
+import asyncio
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
@@ -93,7 +96,9 @@ async def stores(monkeypatch):
                 silver_admin = await asyncpg.connect(urlunsplit(silver))
                 try:
                     for filename in (
+                        "V20260916_01__agg_supplier_price.sql",
                         "V20261002_01__factory_production_gold.sql",
+                        "V20261003_01__agg_supplier_price_mb_dedup.sql",
                         "V20261004_01__fact_production_report.sql",
                         "V20261120_01__external_production_daily.sql",
                     ):
@@ -156,6 +161,132 @@ def _client():
     app.include_router(factory_production_gold.router, prefix="/api/smartbi")
     app.include_router(financial_dashboard.router, prefix="/api/smartbi/financial-dashboard")
     return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.fixture
+async def nightly_stores(stores):
+    bronze, _, _ = stores
+    await bronze.execute("""
+        CREATE TABLE production_batches (
+            id bigint PRIMARY KEY, factory_id varchar(50) NOT NULL, deleted_at timestamp,
+            batch_number text, product_type_id text, product_name text,
+            planned_quantity numeric, actual_quantity numeric, good_quantity numeric,
+            defect_quantity numeric, unit text, status text, start_time timestamp, end_time timestamp,
+            worker_count int, work_duration_minutes int, material_cost numeric, labor_cost numeric,
+            equipment_cost numeric, other_cost numeric, total_cost numeric, unit_cost numeric,
+            yield_rate numeric, is_trial boolean
+        );
+        CREATE TABLE production_reports (
+            id bigint PRIMARY KEY, factory_id varchar(50) NOT NULL, deleted_at timestamp,
+            report_type text, batch_id bigint, process_order int, process_category text,
+            report_date date, report_kind text, input_quantity numeric, output_quantity numeric,
+            good_quantity numeric, total_work_minutes int, total_workers int, labor_cost numeric,
+            material_cost numeric
+        );
+        CREATE TABLE material_batches (
+            id bigint PRIMARY KEY, factory_id varchar(50) NOT NULL, deleted_at timestamp,
+            material_type_id text, supplier_id text, purchase_date date, inbound_date timestamp,
+            unit_price numeric, receipt_quantity numeric, quantity_unit text
+        );
+        CREATE TABLE raw_material_types (id text PRIMARY KEY, deleted_at timestamp, name text);
+        CREATE TABLE suppliers (id text PRIMARY KEY, deleted_at timestamp, name text);
+        GRANT SELECT ON production_batches, production_reports, material_batches, raw_material_types,
+            suppliers TO cbi_snapshot_reader;
+    """)
+    await bronze.execute("""
+        INSERT INTO production_batches
+            (id, factory_id, batch_number, product_type_id, product_name,
+             status, end_time, actual_quantity, good_quantity, unit)
+        VALUES (12, $1, 'DEMO-12', 'fixture', 'Excluded fixture',
+                'COMPLETED', '2026-11-18 14:00:00', 99, 99, 'KG');
+    """, DEMO_FIXTURE)
+    await bronze.execute("""
+        INSERT INTO material_batches
+            (id, factory_id, material_type_id, purchase_date, unit_price, receipt_quantity, quantity_unit)
+        VALUES (32, $1, 'M32', '2026-11-18', 99, 10, 'KG');
+    """, DEMO_FIXTURE)
+    await _snapshot(bronze, DEMO_FIXTURE, COLLECTED, PAYLOAD)
+    return stores
+
+
+async def _run_nightly(stores, *args):
+    bronze, _, target = stores
+    db = urlsplit(DSN)
+    async with target.acquire() as conn:
+        target_db = await conn.fetchval("SELECT current_database()")
+    # Bind both pools explicitly to the same disposable loopback server as the fixtures.
+    env = {**os.environ, "POSTGRES_ENABLED": "true"}
+    for prefix, database, user in (
+        ("FOOD_KB_POSTGRES", await bronze.fetchval("SELECT current_database()"), "cbi_snapshot_reader"),
+        ("POSTGRES", target_db, "cbi_snapshot_silver"),
+    ):
+        env.update({
+            f"{prefix}_HOST": db.hostname,
+            f"{prefix}_PORT": str(db.port or 5432),
+            f"{prefix}_DB": database,
+            f"{prefix}_USER": user,
+            f"{prefix}_PASSWORD": "",
+        })
+    result = await asyncio.to_thread(
+        subprocess.run, [sys.executable, "-m", "scripts.gold_etl_daily_refresh", *args],
+        cwd=MIGRATIONS.parents[2], env=env, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=45,
+    )
+    print(result.stderr, end="")
+    return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_factory", [False, True], ids=["success", "partial-failure"])
+async def test_nightly_module_refreshes_external_and_native_factories(nightly_stores, failed_factory):
+    bronze, _, target = nightly_stores
+    await _snapshot(bronze, FACTORY, COLLECTED, PAYLOAD)
+    if failed_factory:
+        await _snapshot(bronze, "F001-BAD-FIXTURE", COLLECTED, {"invalid": "object instead of rows"})
+    await bronze.execute("""
+        INSERT INTO production_batches
+            (id, factory_id, batch_number, product_type_id, product_name,
+             status, end_time, actual_quantity, good_quantity, unit)
+        VALUES (11, 'F006', 'B-11', 'P11', 'Local F006',
+                'COMPLETED', '2026-11-18 14:00:00', 40, 38, 'KG');
+        INSERT INTO production_reports (id, factory_id, report_type, report_date, good_quantity)
+        VALUES (21, 'F-REPORT-ONLY', 'YIELD', '2026-11-18', 16);
+        INSERT INTO material_batches
+            (id, factory_id, material_type_id, supplier_id, purchase_date, unit_price, receipt_quantity, quantity_unit)
+        VALUES (31, 'F-SUPPLIER-ONLY', 'M31', 'S31', '2026-11-18', 8.5, 10, 'KG');
+    """)
+    result = await _run_nightly(nightly_stores)
+    assert result.returncode == int(failed_factory), result.stderr
+    # Reads from separate sessions prove the CLI committed both outputs.
+    external = await _facts(target, FACTORY)
+    assert len(external) == 7, "nightly CLI did not sync the Blacklake snapshot"
+    assert {r["unit"] for r in external} == {"KG", "只", "包", "盒"}
+    async with _tenant(target, "F006") as conn:
+        assert await conn.fetchval("""
+            SELECT total_good_qty FROM agg_factory_batch_daily
+            WHERE factory_id = 'F006' AND product_type_id IS NULL
+        """) == Decimal("38")
+    async with _tenant(target, "F-REPORT-ONLY") as conn:
+        assert await conn.fetchval("SELECT good_qty FROM fact_production_report") == Decimal("16")
+    async with _tenant(target, "F-SUPPLIER-ONLY") as conn:
+        assert await conn.fetchval("SELECT unit_price FROM agg_supplier_price") == Decimal("8.5")
+    assert DEMO_FIXTURE not in result.stderr
+    async with _tenant(target, DEMO_FIXTURE) as conn:
+        for table in ("fact_production_batch", "external_production_snapshot_state",
+                      "fact_external_production_daily", "agg_factory_batch_daily", "agg_supplier_price"):
+            assert await conn.fetchval(f"SELECT count(*) FROM {table}") == 0
+    assert f"runs={4 + int(failed_factory)} failures={int(failed_factory)}" in result.stderr
+    if failed_factory:
+        assert "factory_production factory=F001-BAD-FIXTURE failed" in result.stderr
+        assert await _facts(target, "F001-BAD-FIXTURE") == []
+
+
+@pytest.mark.asyncio
+async def test_nightly_module_exits_two_when_only_excluded_factories_exist(nightly_stores):
+    result = await _run_nightly(nightly_stores)
+    assert result.returncode == 2
+    assert "No eligible factories discovered" in result.stderr
+    assert DEMO_FIXTURE not in result.stderr
 
 
 @pytest.mark.asyncio
