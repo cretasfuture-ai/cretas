@@ -23,7 +23,7 @@ BEGIN
                JOIN pg_index i ON i.indexrelid = c.oid
                WHERE c.relname = v_target AND n.nspname = current_schema()
                  AND i.indrelid = 'product_types'::regclass AND i.indisunique) THEN
-        RAISE NOTICE 'V20261119_97: % 已存在, 不改', v_target;
+        RAISE NOTICE 'V20261120_41: % 已存在, 不改', v_target;
         RETURN;
     END IF;
 
@@ -39,7 +39,7 @@ BEGIN
 
     IF v_con IS NOT NULL THEN
         EXECUTE format('ALTER TABLE product_types RENAME CONSTRAINT %I TO %I', v_con, v_target);
-        RAISE NOTICE 'V20261119_97: 约束 % 改名为 %', v_con, v_target;
+        RAISE NOTICE 'V20261120_41: 约束 % 改名为 %', v_con, v_target;
         RETURN;
     END IF;
 
@@ -56,9 +56,9 @@ BEGIN
     LIMIT 1;
 
     IF v_idx IS NULL THEN
-        RAISE EXCEPTION 'V20261119_97: product_types 上找不到 (factory_id, code) 唯一约束或唯一索引';
+        RAISE EXCEPTION 'V20261120_41: product_types 上找不到 (factory_id, code) 唯一约束或唯一索引';
     END IF;
 
     EXECUTE format('ALTER INDEX %I RENAME TO %I', v_idx, v_target);
-    RAISE NOTICE 'V20261119_97: 唯一索引 % 改名为 %', v_idx, v_target;
+    RAISE NOTICE 'V20261120_41: 唯一索引 % 改名为 %', v_idx, v_target;
 END $$;

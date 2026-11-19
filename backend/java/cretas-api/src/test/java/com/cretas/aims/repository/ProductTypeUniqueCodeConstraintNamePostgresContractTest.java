@@ -25,7 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * GlobalExceptionHandler 靠这个名字给 SKU 编码冲突提示「留空自动生成」(#1873)。
  *
  * <p>prod 的表是 Hibernate 按未命名 @UniqueConstraint 建的唯一约束, 实名是随机串;
- * 迁移 V20261119_97 要把它改名。本用例: ① 实体建出的 schema 就是这个名字; ② 模拟 prod 的随机名唯一约束
+ * 迁移 V20261120_41 要把它改名。本用例: ① 实体建出的 schema 就是这个名字; ② 模拟 prod 的随机名唯一约束
  * (prod 实际形态, 走迁移分支 1), 跑迁移原文后改成目标名; ③ 只有随机名唯一索引时 (分支 2) 同样改名, 再跑一次幂等。
  */
 @DataJpaTest(showSql = false)
@@ -40,7 +40,7 @@ class ProductTypeUniqueCodeConstraintNamePostgresContractTest {
     private static final String TARGET = "uk_product_types_factory_code";
     private static final String PROD_LIKE_RANDOM = "ukd96kjf87wgjnvn95q1qyom8pg";
     private static final String MIGRATION =
-            "db/flyway/V20261119_97__product_types_unique_code_constraint_name.sql";
+            "db/flyway/V20261120_41__product_types_unique_code_constraint_name.sql";
 
     @DynamicPropertySource
     static void database(DynamicPropertyRegistry registry) {
