@@ -129,8 +129,21 @@ def needs_of(job_cfg):
     return [n] if isinstance(n, str) else list(n)
 
 
-def agg_ok(blk):
-    return bool(re.search(r"^    if:.*always\(\)", blk, re.M)) and "exit 1" in blk and '= "success"' in blk
+# 2026-11-19: 判定抽到 scripts/ci/java-gate-shard-summary.sh (被同 PR 更新的 run 取代时放行, 场景测试
+#   test-java-gate-shard-summary.sh)。汇总 job 要么内联 success 白名单, 要么把 needs.<shard>.result 交给该脚本,
+#   且脚本自己带 success 白名单 + exit 1。
+summary_src = open(os.path.join(root, "scripts/ci/java-gate-shard-summary.sh"), encoding="utf-8").read()
+
+
+def agg_ok(blk, agg=None, shard=None):
+    if not re.search(r"^    if:.*always\(\)", blk, re.M):
+        return False
+    if "exit 1" in blk and '= "success"' in blk:
+        return True
+    return bool(agg and shard
+                and ("RESULT: ${{ needs.%s.result }}" % shard) in blk
+                and ('run: bash scripts/ci/java-gate-shard-summary.sh %s "$RESULT"' % agg) in blk
+                and "exit 1" in summary_src and '= "success" ] && exit 0' in summary_src)
 
 
 for agg, shard in (("fast-contracts", "fast-contracts-shard"), ("postgres-reversal-concurrency", "postgres-reversal-concurrency-shard")):
@@ -139,9 +152,9 @@ for agg, shard in (("fast-contracts", "fast-contracts-shard"), ("postgres-revers
         sys.exit("FAIL: YAML 解析出的 jobs 里没有 %s —— 仪器和 workflow 对不上了" % agg)
     needs = needs_of(jobs_yaml[agg])
     print("READING: %s needs=%s" % (agg, needs))
-    if shard not in needs or not agg_ok(blk):
+    if shard not in needs or not agg_ok(blk, agg, shard):
         problems.append("%s 汇总 job 必须 needs %s、if 含 always()、非 success 就 exit 1" % (agg, shard))
-    if agg_ok(blk.replace("always()", "")):
+    if agg_ok(blk.replace("always()", ""), agg, shard):
         problems.append("%s: 阴性对照失效: 去掉 always() 没被判红" % agg)
     # 阴性对照: needs 里拿掉分片 (字符串与列表两种写法) 必须判红
     if shard in needs_of({"needs": [x for x in needs if x != shard]}) or shard in needs_of({"needs": "changes"}):
