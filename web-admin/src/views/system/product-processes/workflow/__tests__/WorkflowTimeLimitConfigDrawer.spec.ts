@@ -54,7 +54,13 @@ describe('WorkflowTimeLimitConfigDrawer', () => {
     const scope = body('[data-testid="time-limit-drawer-scope"]').textContent ?? '';
     expect(scope).toContain('默认超时只警告');
     expect(scope).toContain('供复盘');
-    expect(scope).toContain('production.time_limit.block_on_exceed');
+    // 不露英文配置名, 用业务阈值页上的中文名 (BP 问题 41 复测)
+    expect(scope).not.toContain('production.time_limit.block_on_exceed');
+    expect(scope).toContain('工序时限超时拦不拦领用');
+    // 默认那句只讲警告+留痕, 复检放行/判不合格只属于开了超时拦截之后
+    const defaultSentence = scope.slice(0, scope.indexOf('业务阈值'));
+    expect(defaultSentence).not.toContain('复检放行');
+    expect(scope.indexOf('复检放行')).toBeGreaterThan(scope.indexOf('超时拦截'));
     // 「不能领用」只能出现在「开了超时拦截后」那一句里
     expect(scope.indexOf('不能领用')).toBeGreaterThan(scope.indexOf('超时拦截'));
     wrapper.unmount();
