@@ -12,6 +12,7 @@
 export type PlannedQuantityBasis = 'PLAN' | 'THEORETICAL_CAPACITY';
 
 interface BatchLike {
+  [key: string]: unknown;
   plannedQuantity?: unknown;
   plannedUnit?: unknown;
   unit?: unknown;
