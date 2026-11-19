@@ -1,12 +1,25 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { Bell } from '@element-plus/icons-vue';
 import { getReminderBadge } from '@/api/reminder';
+import { usePermissionStore } from '@/store/modules/permission';
 
 const router = useRouter();
+const permissionStore = usePermissionStore();
 const pending = ref<number>(0);
 let timer: ReturnType<typeof setInterval> | null = null;
+
+// 与后端 ReminderController.badge 的 @RequirePermission 同一组:
+// sales:read / sales:read_write / finance:read / finance:read_write / system:read_write。
+// 没有这些权限的角色(如质量经理)请求会 403, 全局拦截器会弹红色 toast, 所以连铃铛带请求都不挂。
+const canSeeReminders = computed<boolean>(() => {
+  const readable = (module: 'sales' | 'finance') => {
+    const level = permissionStore.getPermissionLevel(module);
+    return level === 'r' || level === 'rw';
+  };
+  return readable('sales') || readable('finance') || permissionStore.getPermissionLevel('system') === 'rw';
+});
 
 async function refresh(): Promise<void> {
   try {
@@ -21,18 +34,24 @@ function goToReminders(): void {
   router.push('/sales/reminders');
 }
 
-onMounted(() => {
-  refresh();
-  timer = setInterval(refresh, 60_000);
-});
-
-onBeforeUnmount(() => {
+function stop(): void {
   if (timer) clearInterval(timer);
-});
+  timer = null;
+}
+
+// 权限可能晚于组件挂载才加载完: 跟着 canSeeReminders 起停, 无权限时一次请求都不发。
+watch(canSeeReminders, (allowed) => {
+  stop();
+  if (!allowed) return;
+  void refresh();
+  timer = setInterval(refresh, 60_000);
+}, { immediate: true });
+
+onBeforeUnmount(stop);
 </script>
 
 <template>
-  <el-tooltip content="我的提醒" placement="bottom">
+  <el-tooltip v-if="canSeeReminders" content="我的提醒" placement="bottom">
     <el-badge :value="pending" :hidden="pending === 0" :max="99" class="reminder-bell">
       <el-icon class="header-action" @click="goToReminders">
         <Bell />
