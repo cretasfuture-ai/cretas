@@ -56,7 +56,7 @@ run_case() {
   env GH="$WORK/gh" FAKE_FIX="$FIX" FAKE_GH_LOG="$log" GITHUB_OUTPUT="$ghout" \
       GITHUB_REPOSITORY=cretasfuture-ai/cretas EVENT_NAME=pull_request \
       HEAD_REPO=cretasfuture-ai/cretas PR_LABELS='["java"]' GITHUB_RUN_ID=999 \
-      MINI_QUEUE_THRESHOLD=4 "$@" bash "$SCRIPT" > "$out" 2>&1
+      MINI_QUEUE_THRESHOLD=4 ROUTE_NOW=1000000 MINI_HEARTBEAT=999990 "$@" bash "$SCRIPT" > "$out" 2>&1
   local rc=$? ok=1 why=""
   [ "$rc" = 0 ] || { ok=0; why="rc=$rc"; }
   grep -qxF "$want_line" "$out" || { ok=0; why="$why 缺行「$want_line」"; }
@@ -110,6 +110,12 @@ run_all() {
   run_case "fast 标签: 没有排队 -> mini (阈值 1)" \
     "ROUTE=mini queued=0 threshold=1 reason=below-threshold label=cretas-mini-fast" runner_fast=cretas-mini-fast any \
     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast
+  # mini 在线心跳 (2026-11-19): 排队数是 0 也不派 mini, 而且不去数排队 (不调 gh)。
+  run_case "心跳过期 (200s > 180s) -> hosted mini-offline, 不调 gh"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=999800
+  run_case "心跳缺失 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=
+  run_case "心跳不是数字 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=abc
+  run_case "心跳正好 180s (边界, 不算过期) -> mini"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     MINI_HEARTBEAT=999820
+  run_case "fast 标签心跳过期 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=1 reason=mini-offline label=cretas-mini-fast" runner_fast=ubuntu-latest none     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast MINI_HEARTBEAT=999000
 }
 
 echo "== 被测: $SCRIPT"
@@ -195,8 +201,8 @@ SH
   en_all() { local i out=""; for i in 1 2 3 4 5; do out="$out$(GH_GATE_HOUR="$2" GH_GATE_ENABLED_FILE="$3" bash "$1" --enabled-of "$i" | cut -c1)"; done; echo "$out"; }
   got="day=$(en_all "$REFILL" 10 "$WORK/no-such-file") night=$(en_all "$REFILL" 23 "$WORK/no-such-file") override=$(en_all "$REFILL" 23 "$WORK/enabled-slots")"
   echo "READING: refill enabled (y/n per slot 1-5): $got"
-  if [ "$got" != "day=ynnny night=yyyyy override=nynny" ]; then
-    echo "FAIL: 启用应为 day=ynnny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
+  if [ "$got" != "day=yynny night=yyyyy override=nynny" ]; then
+    echo "FAIL: 启用应为 day=yynny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
   else echo "  ok - 按时段启用 + 覆盖文件优先"; fi
   # 变异对照: 去掉「< 8 点也算 full」, 凌晨必须被查出变成 day。
   WMUT="$WORK/refill-window-mutant.sh"
@@ -266,7 +272,66 @@ SH
     echo "  ok - 守卫变异对照: 删掉一处守卫后查出"
   fi
 fi
-[ "$PASSES" -ge 13 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 13)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+[ "$PASSES" -ge 18 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 18)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+
+# ── 心跳: 写端 (refill.sh) 与读端 (workflow 两条路由都传 vars.MINI_HEARTBEAT) 必须都在 (形态 D/B: 接上没有)。
+if [ -z "${ROUTE_SCRIPT:-}" ]; then
+  hb_w=$(grep -c 'gh variable set MINI_HEARTBEAT' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  hb_r=$(grep -c 'MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}' "$ROOT_DIR/.github/workflows/java-gate-pr.yml")
+  hb_c=$(grep -c '^  beat$\|^    beat$' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  echo "READING: heartbeat writer=$hb_w readers=$hb_r beat_calls=$hb_c"
+  if [ "$hb_w" != 1 ] || [ "$hb_r" != 2 ] || [ "$hb_c" != 2 ]; then
+    echo "FAIL: 心跳没接全: refill.sh 要写 1 处并在空闲/忙碌两个循环里各调 1 次 beat, workflow 两条路由都要传 vars.MINI_HEARTBEAT"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 心跳写端/读端都接上"
+  fi
+  # 睡眠/过热 (2026-11-19 半醒里跑满 -> Dark Wake Thermal Emergency): 领活前叫醒、作业期间禁止睡眠、有温度告警不领活。
+  mkdir -p "$WORK/pmsetbin"
+  printf '#!/usr/bin/env bash
+echo "$FAKE_THERM"
+' > "$WORK/pmsetbin/pmset"; chmod +x "$WORK/pmsetbin/pmset"
+  th() { PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="$2" GH_GATE_PRESSURE_FILE="$WORK/no-pressure" bash "$1" --thermal-hot; }
+  # 温度压力文件: Nominal/Moderate 不算热, Heavy 算热
+  tp() { echo "$2" > "$WORK/pressure"; PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="Note: No thermal warning level has been recorded" GH_GATE_PRESSURE_FILE="$WORK/pressure" bash "$1" --thermal-hot; }
+  dw() { PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="$2" bash "$1" --darkwake; }
+  REFILL_F="$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh"
+  tgot="ok=$(th "$REFILL_F" "$(printf 'Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'Thermal Warning Level set to 2.')"
+  echo "READING: refill thermal: $tgot"
+  if [ "$tgot" != "ok=no hot=yes" ]; then echo "FAIL: 温度判断应为 ok=no hot=yes"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 温度告警判断"; fi
+  pgot="nominal=$(tp "$REFILL_F" Nominal) moderate=$(tp "$REFILL_F" Moderate) heavy=$(tp "$REFILL_F" Heavy) trapping=$(tp "$REFILL_F" Trapping)"
+  echo "READING: refill pressure: $pgot"
+  if [ "$pgot" != "nominal=no moderate=no heavy=yes trapping=yes" ]; then echo "FAIL: 压力判断应为 nominal=no moderate=no heavy=yes trapping=yes"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 温度压力判断"; fi
+  # 半醒: 能力里没有 Graphics 才算; 读不到 (空输出) 不算 (不把「不知道」当半醒)。
+  dgot="full=$(dw "$REFILL_F" 'Current System Capabilities are: CPU Graphics Audio Network') dark=$(dw "$REFILL_F" 'Current System Capabilities are: CPU Network') unknown=$(dw "$REFILL_F" '')"
+  echo "READING: refill darkwake: $dgot"
+  if [ "$dgot" != "full=no dark=yes unknown=no" ]; then echo "FAIL: 半醒判断应为 full=no dark=yes unknown=no"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 半醒判断"; fi
+  w_guard=$(grep -c '^  awake_guard$\|^    awake_guard$' "$REFILL_F")
+  echo "READING: awake_guard calls=$w_guard (空闲循环 + 忙碌循环)"
+  if [ "$w_guard" != 2 ]; then echo "FAIL: awake_guard 要在空闲、忙碌两个循环里各调 1 次"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 半醒守护两个循环都接上"; fi
+  w_full=$(grep -c '^  full_wake$' "$REFILL_F"); w_caf=$(grep -c 'caffeinate -i -s -w "\$pid"' "$REFILL_F"); w_hot=$(grep -c '^  if thermal_hot; then$' "$REFILL_F")
+  echo "READING: sleep guards full_wake=$w_full caffeinate_job=$w_caf thermal_gate=$w_hot"
+  # full_wake 两处: 领活前 (jitconfig 之后) + awake_guard 里。
+  if [ "$w_full" != 2 ] || [ "$w_caf" != 1 ] || [ "$w_hot" != 1 ] || ! grep -A1 'jitconfig failed, retry in 30s' "$REFILL_F" | grep -q '^  full_wake$'; then
+    echo "FAIL: refill.sh 要在领活前 (jitconfig 之后) 和 awake_guard 里调 full_wake、作业期间 caffeinate -i -s -w \$pid、循环里有 thermal_hot 闸"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 叫醒/防睡/温度闸都接上"; fi
+  # 变异对照: 删掉年龄判断, 过期心跳必须被查出来 (变异体只跑场景, 不递归)。
+  HMUT="$WORK/route-hb-mutant.sh"
+  grep -v 'HEARTBEAT-AGE-CHECK' "$SCRIPT" > "$HMUT"
+  if grep -q 'HEARTBEAT-AGE-CHECK' "$HMUT" || ! grep -q 'HEARTBEAT-AGE-CHECK' "$SCRIPT"; then
+    echo "FAIL: 心跳变异没生效 (标记行找不到)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    ROUTE_SCRIPT="$HMUT" bash "${BASH_SOURCE[0]}" > "$WORK/hb-mutant.log" 2>&1
+    hrc=$?
+    echo "READING: mutant(no heartbeat age) rc=$hrc $(grep '^READING: pass=' "$WORK/hb-mutant.log") $(grep -c 'FAIL - 心跳过期\|FAIL - fast 标签心跳过期' "$WORK/hb-mutant.log") 个过期场景变红"
+    if [ "$hrc" = 0 ] || ! grep -q 'FAIL - 心跳过期' "$WORK/hb-mutant.log"; then
+      echo "FAIL: 心跳变异对照: 删掉年龄判断后过期场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 心跳变异对照: 删掉年龄判断后过期场景变红"
+    fi
+  fi
+fi
 
 # ── 变异对照: 比较方向改反 (-lt -> -ge), 场景必须变红。仅在测真脚本时做 (测变异体时不递归)。
 if [ -z "${ROUTE_SCRIPT:-}" ]; then

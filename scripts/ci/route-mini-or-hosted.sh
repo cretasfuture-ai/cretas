@@ -9,6 +9,7 @@
 #   1. fork PR (非 merge_group 且 head 仓库 != 本仓库)  -> hosted reason=fork      (陌生人代码不上我们的机器)
 #   2. PR 带 ci-hosted 标签                               -> hosted reason=ci-hosted-label
 #   3. 阈值不是非负整数                                   -> hosted reason=bad-threshold
+#   3b. mini 心跳 MINI_HEARTBEAT 缺失/过期 (> MINI_HEARTBEAT_MAX_AGE 秒) -> hosted reason=mini-offline
 #   4. 数 Java Gate queued/in_progress 运行里 status=queued 且带 mini 标签的作业 (排除本 run)
 #        读数失败 (gh 出错 / JSON 解析不了)               -> hosted reason=api-error (打 ::warning::, 不静默)
 #        queued <  阈值                                   -> mini   reason=below-threshold
@@ -33,6 +34,9 @@
 #   ROUTE_OUTPUT_KEY   写进 $GITHUB_OUTPUT 的键名, 默认 runner
 #   ROUTE_WORKFLOW     默认 java-gate-pr.yml
 #   GH                 gh 可执行文件 (测试注入假 gh), 默认 gh
+#   MINI_HEARTBEAT     mini 最近一次心跳的 Unix 秒 (vars.MINI_HEARTBEAT, refill.sh 每分钟写)
+#   MINI_HEARTBEAT_MAX_AGE 心跳最大年龄秒数, 默认 180
+#   ROUTE_NOW          当前 Unix 秒 (测试注入), 默认 date +%s
 set -uo pipefail
 
 THRESHOLD="${MINI_QUEUE_THRESHOLD:-4}"
@@ -75,6 +79,20 @@ fi
 case "$THRESHOLD" in
   ''|*[!0-9]*) emit hosted na bad-threshold ;;
 esac
+
+# 3b. mini 在线心跳 (2026-11-19: mini 一天失联三次, 失联时排队数是 0, 路由照样派过去, 作业卡死不回落)。
+#     mini 的补位脚本每分钟把当前 Unix 秒写进仓库变量 MINI_HEARTBEAT (refill.sh beat), workflow 经 vars 传入。
+#     没有 / 不是数字 / 超过 MINI_HEARTBEAT_MAX_AGE 秒 (默认 180 = 漏 3 次) -> hosted reason=mini-offline, 不再数排队。
+HEARTBEAT="${MINI_HEARTBEAT:-}"
+HB_MAX_AGE="${MINI_HEARTBEAT_MAX_AGE:-180}"
+HB_NOW="${ROUTE_NOW:-$(date +%s)}"
+mini_offline() {
+  echo "::warning::mini 心跳 ${1} (上限 ${HB_MAX_AGE}s), 本次 $LABEL 走托管"
+  emit hosted na mini-offline
+}
+case "$HEARTBEAT" in ''|*[!0-9]*) mini_offline "缺失或不是数字: '${HEARTBEAT}'" ;; esac
+HB_AGE=$((HB_NOW - HEARTBEAT))
+[ "$HB_AGE" -gt "$HB_MAX_AGE" ] && mini_offline "${HB_AGE}s 前"   # HEARTBEAT-AGE-CHECK
 
 # 4. 数 mini 上排队的作业。任何一步失败 -> api-error。
 count_queued() {

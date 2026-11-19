@@ -14,11 +14,11 @@ FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
 slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
 # 时段 (2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」), 北京时间:
-#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1 = PG, 槽 5 = fast)。
+#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1、2 = PG, 槽 5 = fast; 2026-11-19 Steve「白天最多总计 3 个」)。
 # ⚠️ 唯一一份时段定义: java-gate-pr.yml 的 changes 作业也调 `refill.sh --window` 决定 PG 派几片上 mini。
 FULL_FROM=22
 FULL_UNTIL=8
-DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 5}"
+DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 2 5}"
 mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_HOUR 可覆盖, 供测试)
   # ⛔ 不用 TZ=Asia/Shanghai: 没有时区数据的机器 (Git Bash 实测) 静默按 UTC 算, 时段整体错 8 小时。
   #    北京时间 = UTC + 8, 无夏令时。
@@ -49,10 +49,42 @@ idle_rank() {
   done
   echo "$r"
 }
+# 睡眠/过热 (2026-11-19 实测): 10:14 loginwindow 软件睡眠后 mini 只被定时器叫到「半醒」(DarkWake), 一直没有
+# 完全醒; 半醒里跑满 CI -> 12:40「Sleep Service Back to Sleep」、13:35「Dark Wake Thermal Emergency」, 每次失联十几
+# 分钟。所以领活前先声明一次用户活动 (caffeinate -u = 动一下鼠标, 半醒 -> 完全醒), 作业期间持有「禁止系统睡眠」
+# (caffeinate -i -s -w <pid>, 作业结束自动释放; 本机 pmset sleep 本来就是 0); 系统记了温度/性能告警就先不领新活。
+full_wake() { command -v caffeinate >/dev/null 2>&1 && caffeinate -u -t 2 >/dev/null 2>&1; }
+# 半醒检测 (Steve 2026-11-19「确保以后不会让他处于半醒状态」): pmset -g systemstate 的能力里没有 Graphics = 半醒
+# (日志里半醒是 [CDNPB], 完全醒是 [CDNVA])。补位循环半醒时也在跑, 每圈查一次, 半醒就 full_wake (= 动一下鼠标),
+# 一分钟内拉回完全醒; 不改任何电源设置。读不到 systemstate 就不动 (不把「不知道」当半醒)。
+in_darkwake() {
+  command -v pmset >/dev/null 2>&1 || return 1
+  local caps
+  caps=$(pmset -g systemstate 2>/dev/null | grep -i "capabilities") || return 1
+  [ -n "$caps" ] || return 1
+  ! printf '%s' "$caps" | grep -qi "graphics"
+}
+awake_guard() {
+  in_darkwake || return 0
+  log "darkwake detected ($(pmset -g systemstate 2>/dev/null | grep -i capabilities | tr -s ' ')), promoting to full wake"
+  full_wake
+}
+# 温度压力 (Steve 2026-11-19 问「是不是 java 长时间负载导致」): 完全醒时 2 个作业 CPU 9.2W、压力 Nominal;
+# 但晚上 5 槽长时间满载要有更早的刹车。beat 每分钟用 powermetrics 读一次压力写进 $PRESSURE_FILE
+# (Nominal/Moderate/Heavy/Trapping/Sleeping), 到 Heavy 及以上就不领新活, 手上的不打断。
+PRESSURE_FILE="${GH_GATE_PRESSURE_FILE:-/Users/rex/gh-gate/thermal-pressure}"
+thermal_hot() {  # 压力 Heavy 及以上, 或 pmset -g therm 里有告警级别 (不是「No ... recorded」) 就算热
+  grep -qiE "^(heavy|trapping|sleeping)" "$PRESSURE_FILE" 2>/dev/null && return 0
+  command -v pmset >/dev/null 2>&1 || return 1
+  pmset -g therm 2>/dev/null | grep -i "warning level" | grep -viq "no .*warning level has been recorded"
+}
+
 if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--enabled-of" ]; then if slot_enabled "${2:?slot}"; then echo yes; else echo no; fi; exit 0; fi
 if [ "${1:-}" = "--window" ]; then mini_window "${2:-}"; exit 0; fi
+if [ "${1:-}" = "--darkwake" ]; then if in_darkwake; then echo yes; else echo no; fi; exit 0; fi
+if [ "${1:-}" = "--thermal-hot" ]; then if thermal_hot; then echo yes; else echo no; fi; exit 0; fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
@@ -86,9 +118,58 @@ mini_queued() {
   cat "$QCACHE" 2>/dev/null || echo 0
 }
 
+# 在线心跳 (2026-11-19 mini 一天失联三次): 任一槽每 $HB_EVERY 秒把当前 Unix 秒写进仓库变量 MINI_HEARTBEAT;
+# changes 作业的路由读它, 超过 3 分钟没更新就整片走托管 (route-mini-or-hosted.sh reason=mini-offline)。
+# 写不出去 (mini 连不上 GitHub) 就是心跳停了, 这正是要的信号。发布构建持锁时本循环停在等锁, 也不跳 ⇒ 不领活。
+HB_STAMP=/Users/rex/gh-gate/heartbeat.stamp
+HB_EVERY=60
+beat() {
+  local age=999
+  [ -f "$HB_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$HB_STAMP") ))
+  [ "$age" -ge "$HB_EVERY" ] || return 0
+  touch "$HB_STAMP"  # 先占位: 同一分钟别的槽不再写
+  local pm p= line
+  # 先落变量再解析, 不走管道 (闸 test-pipeline-tail-swallows-rc.sh): powermetrics 失败 (sudo 不放行) 要记一行, 不是静默空值。
+  if pm=$(sudo -n powermetrics --samplers thermal -i 1000 -n 1 2>/dev/null); then
+    while IFS= read -r line; do
+      case "$line" in *"Current pressure level:"*) p=${line##*Current pressure level:}; p=${p# }; p=${p# }; break;; esac
+    done <<< "$pm"
+  else
+    log "powermetrics failed rc=$?"
+  fi
+  if [ -n "$p" ]; then
+    [ "$p" = "$(cat "$PRESSURE_FILE" 2>/dev/null)" ] || log "thermal pressure: $p"
+    echo "$p" > "$PRESSURE_FILE"
+  fi
+  gh variable set MINI_HEARTBEAT --repo "$REPO" --body "$(date +%s)" >/dev/null 2>>"$LOG" || log "heartbeat write failed"
+  reap_stale_merge_groups
+}
+
+# 失效合并组清理 (2026-11-19 Steve「加」): 合并队列每次重排都给后面的组重起整套检查, 旧组的 run 不会被取消,
+# 当天 139 个失效组 run 堵住托管机、队首等了 3 个多小时。任一槽每 $REAP_EVERY 秒在后台跑一次
+# reap-stale-merge-groups.sh (mkdir 锁防并发, 结果一行追加到 $REAP_LOG)。mini 离线时没人清, 只是回到原状。
+REAP_STAMP=/Users/rex/gh-gate/reap.stamp
+REAP_EVERY=300
+REAP_LOG=/Users/rex/gh-gate/reap.log
+reap_stale_merge_groups() {
+  local age=999
+  [ -f "$REAP_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$REAP_STAMP") ))
+  [ "$age" -ge "$REAP_EVERY" ] || return 0
+  mkdir "$REAP_STAMP.lock" 2>/dev/null || {
+    # 锁目录超过 15 分钟算持锁进程已死
+    [ -n "$(find "$REAP_STAMP.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rmdir "$REAP_STAMP.lock" 2>/dev/null
+    return 0; }
+  touch "$REAP_STAMP"
+  ( out=$(/bin/bash /Users/rex/gh-gate/reap-stale-merge-groups.sh 2>&1); rc=$?
+    printf '%s rc=%s %s\n' "$(date '+%F %T')" "$rc" "${out##*$'\n'}" >> "$REAP_LOG"
+    rmdir "$REAP_STAMP.lock" ) </dev/null >/dev/null 2>&1 &
+}
+
 log "start label=$LABEL"
 paused=0
 while :; do
+  awake_guard
+  beat
   if ! slot_enabled "$SLOT"; then
     [ "$paused" = 1 ] || log "disabled (not in $ENABLED_FILE), idle"
     paused=1; sleep 30; continue
@@ -98,6 +179,13 @@ while :; do
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
   [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null
+  if thermal_hot; then
+    [ "${hot:-0}" = 1 ] || log "thermal warning recorded, not taking new jobs: $(pmset -g therm 2>/dev/null | grep -i 'warning level' | tr '
+' ' ')"
+    hot=1; sleep 60; continue
+  fi
+  [ "${hot:-0}" = 1 ] && log "thermal warning cleared"
+  hot=0
   q=$(mini_queued); rank=$(idle_rank "$SLOT")
   if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
@@ -105,6 +193,7 @@ while :; do
         -f name="$name" -F runner_group_id=1 -f "labels[]=$LABEL" -f work_folder="../work-$SLOT" \
         -q .encoded_jit_config 2>>"$LOG")
   if [ -z "$jit" ]; then log "jitconfig failed, retry in 30s"; sleep 30; continue; fi
+  full_wake
   sudo -n -u ghgate -H /bin/bash -c '
     set -e
     rm -rf "$1"; cp -cR "$2" "$1"; cd "$1"
@@ -123,6 +212,8 @@ while :; do
     ./run.sh --jitconfig "$3"
   ' _ "$WORK" "$PKG" "$jit" "$LOCK" >> "$LOG" 2>&1 &
   pid=$!
+  # 作业期间禁止系统睡眠 (随 runner 进程退出自动释放)。
+  command -v caffeinate >/dev/null 2>&1 && caffeinate -i -s -w "$pid" >/dev/null 2>&1 &
   # 起了但 $IDLE_KILL_SEC 秒内没领到活 (别的槽先接走了) 就收掉, 并删掉这条 runner 注册。
   waited=0
   while ps -p "$pid" >/dev/null 2>&1; do  # ⛔ 不用 kill -0: pid 是 root 的 sudo, rex 发信号会 EPERM
@@ -134,6 +225,8 @@ while :; do
       [ -n "$rid" ] && gh api -X DELETE "repos/$REPO/actions/runners/$rid" 2>>"$LOG"
       break
     fi
+    awake_guard
+    beat
     pgrep -f "/Users/ghgate/slot-$SLOT/bin/Runner.Worker" >/dev/null 2>&1 && waited=-100000
     sleep 5; waited=$((waited + 5))
   done
