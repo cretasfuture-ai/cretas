@@ -180,6 +180,7 @@ scheduled_task_run_now	ROLES	factory_super_admin,permission_admin
 scheduled_task_toggle	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
 scheduled_task_update	BASE	-	REQ_ROLES:factory_super_admin,permission_admin
 shipment_confirm_create	CODES	sales:read_write
+shipment_pending_today	CODES	finance:read,procurement:read,sales:read,sales:read_write
 shortage_analyze	CODES	procurement:read,procurement:read_write,production:read,production:read_write,quality:read,quality:read_write,sales:read,sales:read_write,warehouse:read,warehouse:read_write
 source_individual_query	CODES	inventory:read,inventory:read_write,warehouse:read,warehouse:read_write
 split_order	ROLES	department_admin,dispatcher,factory_super_admin,permission_admin,sales_manager

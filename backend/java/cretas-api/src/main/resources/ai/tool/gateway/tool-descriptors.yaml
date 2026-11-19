@@ -1806,7 +1806,7 @@ descriptors:
     riskLevel: LOW
     supportsPreview: false
     requiresPermission: false
-    requiredPermissions: ["sales:read", "sales:read_write", "warehouse:read", "warehouse:read_write"]
+    requiredPermissions: ["sales:read", "sales:read_write", "finance:read", "procurement:read"]
     allowedRoles: []
     version: "1.0.0"
     domainTags: ["shipment"]
