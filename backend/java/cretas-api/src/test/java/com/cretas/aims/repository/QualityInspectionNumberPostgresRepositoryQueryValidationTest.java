@@ -40,7 +40,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * PostgreSQL proof for the quality inspection business number (V20261119_86, PROTO-QC-NUMBER).
+ * PostgreSQL proof for the quality inspection business number (V20261119_89, PROTO-QC-NUMBER).
  *
  * <p>Applies the <b>actual</b> migration through Flyway onto a Hibernate-created schema, then writes through the real
  * Spring Data repository / Hibernate mapping ({@code @Generated(INSERT)} read-back). Covers: legacy backfill
@@ -225,9 +225,9 @@ class QualityInspectionNumberPostgresRepositoryQueryValidationTest {
     private void migrate() {
         Flyway.configure().dataSource(dataSource).schemas(SCHEMA).defaultSchema(SCHEMA)
                 .locations("classpath:db/flyway").baselineOnMigrate(true).baselineVersion("20261119.85")
-                .target("20261119.86").outOfOrder(false).load().migrate();
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM flyway_schema_history WHERE version = '20261119.86' AND success",
-                Integer.class)).as("V20261119_86 must actually be applied").isEqualTo(1);
+                .target("20261119.89").outOfOrder(false).load().migrate();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM flyway_schema_history WHERE version = '20261119.89' AND success",
+                Integer.class)).as("V20261119_89 must actually be applied").isEqualTo(1);
     }
 
     private void legacyRow(String id, String factoryId, LocalDateTime createdAt, LocalDateTime deletedAt, LocalDateTime updatedAt) {

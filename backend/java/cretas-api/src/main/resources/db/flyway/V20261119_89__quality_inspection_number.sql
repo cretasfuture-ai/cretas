@@ -1,4 +1,4 @@
--- V20261119_86: 质检记录业务编号 quality_inspections.inspection_number (PROTO-QC-NUMBER)
+-- V20261119_89: 质检记录业务编号 quality_inspections.inspection_number (PROTO-QC-NUMBER)
 --
 -- 为什么: web-admin 质检列表/详情一直把内部 UUID 截前 8 位当「质检编号」给用户看 (如 3F2A9C1B),
 -- 质检员、仓管没法拿它对单、口头报号。改成按工厂按天递增的业务编号: QI-YYYYMMDD-NNNN
@@ -108,7 +108,7 @@ BEGIN
       FROM numbered n
      WHERE q.id = n.id;
     GET DIAGNOSTICS v_rows = ROW_COUNT;
-    RAISE NOTICE 'V20261119_86 quality_inspections.inspection_number backfilled % rows (all factories, incl. soft-deleted)', v_rows;
+    RAISE NOTICE 'V20261119_89 quality_inspections.inspection_number backfilled % rows (all factories, incl. soft-deleted)', v_rows;
 
     IF v_ts_trigger_enabled THEN
         EXECUTE 'ALTER TABLE quality_inspections ENABLE TRIGGER quality_inspections_update_timestamp';
