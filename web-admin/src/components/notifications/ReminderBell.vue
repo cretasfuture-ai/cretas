@@ -3,17 +3,31 @@ import { ref, onMounted, onBeforeUnmount } from 'vue';
 import { useRouter } from 'vue-router';
 import { Bell } from '@element-plus/icons-vue';
 import { getReminderBadge } from '@/api/reminder';
+import { ApiError } from '@/types/api';
 
 const router = useRouter();
 const pending = ref<number>(0);
+// 403 = 当前角色无提醒权限：隐藏铃铛并停止轮询
+const forbidden = ref(false);
 let timer: ReturnType<typeof setInterval> | null = null;
+
+function stopPolling(): void {
+  if (timer) {
+    clearInterval(timer);
+    timer = null;
+  }
+}
 
 async function refresh(): Promise<void> {
   try {
     const res = await getReminderBadge();
     pending.value = res?.data?.pending ?? 0;
-  } catch {
-    // 静默 — bell badge 失败不打扰用户
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 403) {
+      forbidden.value = true;
+      stopPolling();
+    }
+    // 其它错误静默 — bell badge 失败不打扰用户，下一轮照常重试
   }
 }
 
@@ -27,12 +41,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
+  stopPolling();
 });
 </script>
 
 <template>
-  <el-tooltip content="我的提醒" placement="bottom">
+  <el-tooltip v-if="!forbidden" content="我的提醒" placement="bottom">
     <el-badge :value="pending" :hidden="pending === 0" :max="99" class="reminder-bell">
       <el-icon class="header-action" @click="goToReminders">
         <Bell />
