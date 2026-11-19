@@ -2979,6 +2979,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # 真实结果行交给 LLM 措辞; 指标缺失直接拒答并列全字段。
             _rl_block = ""
             _rl_active = False
+            _rl_result = None  # 行级计算结果: done 之前拿它校验「一共/总共」的总数
             if request.effective_query:
                 try:
                     from smartbi.services.row_level_qa import (
@@ -3018,6 +3019,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     if _rl_out.kind in ("computed", "uncomputed"):
                         _rl_block = "\n" + _rl_out.text
                         _rl_active = True
+                        _rl_result = _rl_out.result
                 except _RlTooMany as _rl_big:
                     _rl_block = (
                         "\n## 行级计算未完成\n数据量超过行级计算上限 (" + str(_rl_big) + ")。"
@@ -3368,6 +3370,17 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # 问题 51 返工 (LSM-COSTBI-F3): 文字结论必须和图同源。LLM 文字已流出去了,
             # 对不上图数据就用代码结论覆盖 (done.answer + answer_corrected, 前端据此替换)。
             full_text, _answer_corrected = _reconcile_answer_with_question_chart(full_text, charts)
+
+            # 味美 11-19 复测: 「全月一共多少卷」答成最大品类的 52 (总数 133)。提示词里已写明合计, 小模型
+            # 仍会答错, 所以最终回答里没有代码算的合计就换掉那一句 (done.answer + answer_corrected)。
+            try:
+                from smartbi.services.row_level_qa import reconcile_answer_with_totals
+                full_text, _total_fixed = reconcile_answer_with_totals(full_text, _rl_result)
+                if _total_fixed:
+                    logger.warning("[row-level-qa] LLM answer missed the computed total; replaced by code total")
+                    _answer_corrected = True
+            except Exception as _tot_err:
+                logger.warning(f"[row-level-qa] total reconcile failed (keep answer): {_tot_err}")
 
             if charts:
                 yield _sse_event("charts", charts)

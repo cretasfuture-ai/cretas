@@ -613,7 +613,8 @@ def render_block(question: str, res: ExecResult) -> str:
     body = []
     for r in res.rows:
         body.append("| " + " | ".join(
-            _fmt(v, pct=(c in pct), code=(c in res.code_cols))
+            ("编码缺失" if (c in res.code_cols and (v is None or (isinstance(v, float) and pd.isna(v))))
+             else _fmt(v, pct=(c in pct), code=(c in res.code_cols)))
             for c, v in zip(res.columns, r)) + " |")
     lines = [
         f"## 全表精确计算结果 (权威: 服务端在该数据集全部 {res.total_rows} 行上计算)",
@@ -625,7 +626,8 @@ def render_block(question: str, res: ExecResult) -> str:
         tt = "; ".join(f"{k} = {_fmt(v)}" for k, v in res.totals.items())
         lines.append(f"全部分组合计 (所有行求和): {tt}")
         if res.asks_total:
-            top = (f"; 排名第一的一项 ({_fmt(res.rows[0][len(res.group_by)])}) 只是最大项, 不是总数"
+            top = (f"; 排名第一的分组「{'/'.join(str(v) for v in res.rows[0][:len(res.group_by)])}」"
+                   "只是最大项, 不是总数"
                    if res.mode == "grouped" and res.rows else "")
             lines.append(f"问题问的是「一共/总共/合计」: 总数以上面的合计为准{top}。")
     if res.filters_desc:
@@ -639,6 +641,50 @@ def render_block(question: str, res: ExecResult) -> str:
     if res.breakdown:
         lines.append(res.breakdown)
     return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# 回答校验: 「一共/总共」的总数必须是代码算的合计
+# ---------------------------------------------------------------------------
+
+_TOTAL_CLAUSE_WORDS = TOTAL_WORDS + ("全月", "整月", "全表")
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,；;。！？!?\n])")
+_CLAUSE_TAIL_RE = re.compile(r"[，,；;。！？!?\n]+$")
+
+
+def _total_texts(v: Any) -> List[str]:
+    f = float(v)
+    outs = {f"{f:,.2f}".rstrip("0").rstrip("."), f"{f:.2f}".rstrip("0").rstrip(".")}
+    if f == int(f):
+        outs |= {str(int(f)), f"{int(f):,}"}
+    return sorted(outs, key=len, reverse=True)
+
+
+def _has_number(text: str, v: Any) -> bool:
+    return any(re.search(r"(?<![\d.,])" + re.escape(t) + r"(?!\d|\.\d|,\d)", text) for t in _total_texts(v))
+
+
+def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tuple:
+    """问「一共/总共/合计」且已算出合计时, 最终回答里必须出现这个合计。
+
+    提示词里写了「总数以上面的合计为准」, 但小模型 (本地 qwen3:8b) 照样把最大那一组当总数:
+    味美 11-19 复测卷膜题答「全月一共 52 卷」(52 只是 FIL20-C 一个品类, 总数 133)。
+    回答里没有这个合计时: 把含「一共/总共/全月…」的那一小句换成代码结论; 找不到这样的句子就在末尾补一句更正。
+    返回 (新回答, 是否改了)。
+    """
+    if res is None or not res.asks_total or not res.totals or not answer:
+        return answer, False
+    if all(_has_number(answer, v) for v in res.totals.values()):
+        return answer, False
+    stmt = "；".join(f"{k} = {_fmt(v)}" for k, v in res.totals.items())
+    sentence = f"全部合计 {stmt}（程序对全部 {res.matched_rows} 行求和）"
+    parts = _CLAUSE_SPLIT_RE.split(answer)
+    for i, part in enumerate(parts):
+        if any(w in part for w in _TOTAL_CLAUSE_WORDS):
+            tail = _CLAUSE_TAIL_RE.search(part)
+            parts[i] = sentence + (tail.group(0) if tail else "")
+            return "".join(parts), True
+    return answer.rstrip() + f"\n\n**更正（程序核对）**：{sentence}。", True
 
 
 # ---------------------------------------------------------------------------
