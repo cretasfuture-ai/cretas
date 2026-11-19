@@ -83,7 +83,7 @@ import { AIInsightPanel } from '@/components/smartbi';
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
-import type { ChartWithMeta } from './components/chartInsight';
+import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import { chartSignalsFromOption, inferAiChartMeta } from './components/chat/aiChartMeta';
 import { historyForSource } from './components/chat/aiChatContext';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
@@ -107,6 +107,15 @@ const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+
+/**
+ * 图下「一图一分析」的金额/占比可见性 (问题 51 余项, LSM-COSTBI-Q51-SHARE-TEXT)。
+ * 改前两处 ChartInsightProvider 写死 { canViewFinance: false }: 不管谁登录, 金额类图下都写
+ * 「无成本查看权限」—— F006 工厂总监也一样。改为与成本分析页 / 经营驾驶舱同一判定
+ * (permissionStore.canViewPrice, 后端价格字段遮蔽的前端镜像), 不在本页另写角色。
+ * 无权账号照旧只说排序, 不出金额和占比。
+ */
+const chartInsightPerms = computed<UserPermissions>(() => ({ canViewFinance: permissionStore.canViewPrice === true }));
 
 /**
  * AI 对话标准 E2: 开发者遥测的显式开关。URL 带 `?aiDebug=1` 才显示意图码 / 置信度 / 耗时 / SQL / warnings /
@@ -2711,7 +2720,7 @@ function handleKeydown(event: KeyboardEvent) {
                   v-if="shouldRenderAutoChartInsight(message)"
                   :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}`"
                   :chart="messageChartWithMeta(message)"
-                  :perms="{ canViewFinance: false }"
+                  :perms="chartInsightPerms"
                   :factory-id="factoryId ?? ''"
                   depth="detailed"
                 />
@@ -2736,7 +2745,7 @@ function handleKeydown(event: KeyboardEvent) {
                     v-for="(c, ci) in message.charts"
                     :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}__${ci}`"
                     :chart="multiChartWithMeta(c)"
-                    :perms="{ canViewFinance: false }"
+                    :perms="chartInsightPerms"
                     :factory-id="factoryId ?? ''"
                     depth="detailed"
                   />

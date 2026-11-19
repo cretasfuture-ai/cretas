@@ -441,16 +441,25 @@ _PCT_TOLERANCE = 0.15  # 个百分点；LLM 常把 43.97 写成 44.0
 
 
 def _allowed_percents(shares: List[Dict[str, Any]]) -> List[float]:
+    """文字里允许出现的百分数：各项占比，以及前 k 项合计 / 其余合计 (k < 项数)。
+
+    ⛔ 不放行 100% (问题 51 余项, LSM-COSTBI-Q51-SHARE-TEXT)：改前「全部合计 = 100」和一条
+    无条件的 100.0 都在白名单里，LLM 拿每个产品自己当分母写出「各产品占比均为 100%」也算
+    「对得上」，被原样展示在 43.99% / 28.45% / 27.56% 的图上面。合计 100% 本身不是信息，
+    文字里出现 100% 就交给代码结论。
+    """
     pcts = [float(s["pct"]) for s in shares if s.get("pct") is not None]
     allowed = list(pcts)
     run = 0.0
-    for p in pcts:  # 前 k 项合计、其余合计 (LLM 常这么写)
+    for p in pcts[:-1]:  # 前 k 项合计、其余合计 (LLM 常这么写)；k = 全部时就是 100/0，不算
         run += p
         allowed.append(run)
         allowed.append(100.0 - run)
-    if pcts:
-        allowed.append(100.0)
     return allowed
+
+
+# 「均为 / 都是 X%」：一句话给所有项同一个占比，只有各项占比真的都 ≈ X 才对得上
+_UNIFORM_PCT_RE = re.compile(r"(?:均为|均是|都是|都为|皆为|均占|都占)\s*约?\s*(-?\d+(?:\.\d+)?)\s*[%％]")
 
 
 def chart_conclusion(qc: Dict[str, Any]) -> Optional[str]:
@@ -481,6 +490,10 @@ def answer_matches_chart(answer: str, qc: Dict[str, Any]) -> bool:
         return True
     if not any(s.get("pct") is not None for s in shares):
         return False  # 图没有占比口径 (含负数)，文字却报了占比
+    pcts = [float(s["pct"]) for s in shares if s.get("pct") is not None]
+    for m in _UNIFORM_PCT_RE.findall(answer or ""):
+        if not all(abs(float(m) - p) <= _PCT_TOLERANCE for p in pcts):
+            return False
     allowed = _allowed_percents(shares)
     return all(any(abs(p - a) <= _PCT_TOLERANCE for a in allowed) for p in pcts_in_text)
 
