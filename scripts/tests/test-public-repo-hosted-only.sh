@@ -42,7 +42,7 @@ MINI_PG_ROUTE = ("${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && " +
                  + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
 # 2026-11-19 Steve「22:00 后跑满, 8 点后 1 pg 1 fast」: 白天 PG 只有第 3 片可能上 mini, 夜间 (changes 输出
 # mini_window=full) 4 片都可; 汇总作业照旧走 MINI_PG_ROUTE。
-PG_SHARD_GATE = "(matrix.shard == 3 || needs.changes.outputs.mini_window == 'full') && "
+PG_SHARD_GATE = "(matrix.shard >= 2 || needs.changes.outputs.mini_window == 'full') && "
 MINI_PG_SHARD_ROUTE = ("${{ " + PG_SHARD_GATE + "needs.changes.outputs.runner_pg == 'cretas-mini-pg' && "
                        + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
 MINI_FAST_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && "

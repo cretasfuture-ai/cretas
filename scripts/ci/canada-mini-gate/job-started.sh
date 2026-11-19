@@ -15,6 +15,30 @@ URL=https://github.com/cretasfuture-ai/cretas.git
 LOCK=/Users/ghgate/mirror/.fetch.lock
 # 本钩子自己要直连 GitHub: 去掉 .env 注入的 insteadOf, 否则镜像会向自己拉取。
 unset GIT_CONFIG_COUNT GIT_CONFIG_KEY_0 GIT_CONFIG_VALUE_0
+
+# 检出目录跨任务保留 (refill.sh)。Java Gate 汇总作业 (fast-contracts / postgres-reversal-concurrency) 只
+# sparse 检出 java-gate-shard-summary.sh; 同一槽下一单是整仓分片时, actions/checkout 的
+# `git sparse-checkout disable` 关不掉 (core.sparseCheckout=true 留在 .git/config, 其余文件仍是 skip-worktree),
+# checkout 报成功, 下一步「working directory .../backend/java/cretas-api: No such file or directory」。
+# 2026-11-19 19:44 #1956 合并组 PG 两片 (work-1/work-3) 因此红, 当时 work-1/2/3/5 都卡在 sparse。
+# ⇒ 任务开始前发现工作区处于 sparse 状态就整个删掉, 让本次 checkout 从本机镜像重新取 (几秒)。
+# 只删本任务自己的 $GITHUB_WORKSPACE, 且必须在 /Users/ghgate/work-*/ 之下 (测试用 GH_GATE_WORK_ROOT 覆盖)。
+WROOT=${GH_GATE_WORK_ROOT:-/Users/ghgate}
+W=${GITHUB_WORKSPACE:-}
+case "$W" in
+  "$WROOT"/work-*/*)
+    if [ -d "$W/.git" ]; then
+      sp=$(git -C "$W" config --get core.sparseCheckout 2>/dev/null || true)
+      if [ "$sp" = true ]; then
+        if rm -rf "$W"; then echo "READING: SPARSE_RESET removed=$W"
+        else echo "READING: SPARSE_RESET failed=$W"; fi
+      else
+        echo "READING: SPARSE_RESET not_sparse=$W"
+      fi
+    fi ;;
+  *) echo "READING: SPARSE_RESET skip workspace=${W:-<empty>}" ;;
+esac
+
 [ -d "$M" ] || { echo "READING: MIRROR missing=$M"; exit 0; }
 
 # 两个槽位同时开工时串行更新 (macOS 没有 flock, 用 mkdir 原子锁; 超过 5 分钟的锁视为残留)。

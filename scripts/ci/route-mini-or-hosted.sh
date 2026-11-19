@@ -9,6 +9,7 @@
 #   1. fork PR (非 merge_group 且 head 仓库 != 本仓库)  -> hosted reason=fork      (陌生人代码不上我们的机器)
 #   2. PR 带 ci-hosted 标签                               -> hosted reason=ci-hosted-label
 #   3. 阈值不是非负整数                                   -> hosted reason=bad-threshold
+#   3b. mini 心跳 MINI_HEARTBEAT 缺失/过期 (> MINI_HEARTBEAT_MAX_AGE 秒) -> hosted reason=mini-offline
 #   4. 数 Java Gate queued/in_progress 运行里 status=queued 且带 mini 标签的作业 (排除本 run)
 #        读数失败 (gh 出错 / JSON 解析不了)               -> hosted reason=api-error (打 ::warning::, 不静默)
 #        queued <  阈值                                   -> mini   reason=below-threshold
@@ -33,6 +34,9 @@
 #   ROUTE_OUTPUT_KEY   写进 $GITHUB_OUTPUT 的键名, 默认 runner
 #   ROUTE_WORKFLOW     默认 java-gate-pr.yml
 #   GH                 gh 可执行文件 (测试注入假 gh), 默认 gh
+#   MINI_HEARTBEAT     mini 最近一次心跳的 Unix 秒 (vars.MINI_HEARTBEAT, refill.sh 每分钟写)
+#   MINI_HEARTBEAT_MAX_AGE 心跳最大年龄秒数, 默认 180
+#   ROUTE_NOW          心跳年龄的参照 Unix 秒 (测试注入); 不给则取本 run 的 run_started_at, 读不到退回 date +%s
 set -uo pipefail
 
 THRESHOLD="${MINI_QUEUE_THRESHOLD:-4}"
@@ -75,6 +79,41 @@ fi
 case "$THRESHOLD" in
   ''|*[!0-9]*) emit hosted na bad-threshold ;;
 esac
+
+# 3b. mini 在线心跳 (2026-11-19: mini 一天失联三次, 失联时排队数是 0, 路由照样派过去, 作业卡死不回落)。
+#     mini 的补位脚本每分钟把当前 Unix 秒写进仓库变量 MINI_HEARTBEAT (refill.sh beat), workflow 经 vars 传入。
+#     没有 / 不是数字 / 超过 MINI_HEARTBEAT_MAX_AGE 秒 (默认 180 = 漏 3 次) -> hosted reason=mini-offline, 不再数排队。
+HEARTBEAT="${MINI_HEARTBEAT:-}"
+HB_MAX_AGE="${MINI_HEARTBEAT_MAX_AGE:-180}"
+# ⚠️ 年龄的参照时间是「本次 run 开始」, 不是「现在」(2026-11-19 实测): vars.MINI_HEARTBEAT 在 run 创建时就定格,
+#    changes 作业要等托管机排到才跑。19:44 合并组排了 4 分钟 -> 判 240s; 20:19 #1959 排了 27 分钟 -> 判 1642s,
+#    两次 mini 都在线 (心跳都正好在 run 创建前几十秒)。托管越堵 -> 越判离线 -> 越往托管派, 自我加强。
+#    参照 = GET runs/$GITHUB_RUN_ID 的 run_started_at (重跑时是本次重跑的开始); 读不到退回「现在」(偏向托管, 安全)。
+#    代价: run 排队期间 mini 才掉线的情况看不见 —— 与「路由只在 run 开始看一次」本来就一样。
+hb_ref_time() {
+  local s=""
+  if [ -n "${ROUTE_NOW:-}" ]; then echo "$ROUTE_NOW now"; return; fi
+  if [ -n "$REPO" ] && [ -n "$RUN_ID" ]; then
+    local j
+    # 先落变量再解析, 不走管道 (闸 test-pipeline-tail-swallows-rc.sh)。
+    if j=$("$GH" api "repos/$REPO/actions/runs/$RUN_ID" 2>/dev/null); then
+      s=$(printf '%s' "$j" | jq -er '.run_started_at | fromdateiso8601' 2>/dev/null) || s=""
+      s=${s%$'\r'}
+    fi
+  fi
+  case "$s" in ''|*[!0-9]*) echo "$(date +%s) now-fallback" ;; *) echo "$s run_started_at" ;; esac
+}
+read -r HB_NOW HB_REF_SRC <<EOF_REF
+$(hb_ref_time)
+EOF_REF
+echo "READING: heartbeat_ref=$HB_REF_SRC ref=$HB_NOW heartbeat=${HEARTBEAT:-<empty>}"
+mini_offline() {
+  echo "::warning::mini 心跳 ${1} (上限 ${HB_MAX_AGE}s), 本次 $LABEL 走托管"
+  emit hosted na mini-offline
+}
+case "$HEARTBEAT" in ''|*[!0-9]*) mini_offline "缺失或不是数字: '${HEARTBEAT}'" ;; esac
+HB_AGE=$((HB_NOW - HEARTBEAT))
+[ "$HB_AGE" -gt "$HB_MAX_AGE" ] && mini_offline "${HB_AGE}s 前"   # HEARTBEAT-AGE-CHECK
 
 # 4. 数 mini 上排队的作业。任何一步失败 -> api-error。
 count_queued() {

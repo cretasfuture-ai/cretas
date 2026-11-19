@@ -418,6 +418,7 @@ class ArPostingPendingContractTest {
         when(deliveryRepo.findById(DELIVERY_ID)).thenReturn(Optional.of(d));
         when(deliveryRepo.findByIdAndFactoryIdForUpdate(DELIVERY_ID, F)).thenReturn(Optional.of(d));
         when(orderRepo.findById(ORDER_ID)).thenReturn(Optional.of(o));
+        when(orderRepo.findByIdAndFactoryId(ORDER_ID, F)).thenReturn(Optional.of(o));
         when(orderRepo.findByIdAndFactoryIdForUpdate(ORDER_ID, F)).thenReturn(Optional.of(o));
         when(itemRepo.findBySalesOrderId(ORDER_ID)).thenReturn(Collections.emptyList());
         when(deliveryRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));

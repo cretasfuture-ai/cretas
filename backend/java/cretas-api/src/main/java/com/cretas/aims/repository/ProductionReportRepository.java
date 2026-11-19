@@ -543,9 +543,11 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
             COUNT(DISTINCT t.out_unit) AS output_unit_kinds,
             COUNT(t.out_unit) AS output_unit_known,
             COUNT(*) AS report_count,
-            COUNT(DISTINCT t.batch_id) AS batch_count
+            COUNT(DISTINCT t.batch_id) AS batch_count,
+            COUNT(*) FILTER (WHERE t.src = 'STAGE') AS stage_record_count
         FROM (
             SELECT
+                'REPORT' AS src,
                 wp.id AS wp_id,
                 wp.process_name AS process_name,
                 wpt.process_order AS process_order,
@@ -575,6 +577,40 @@ public interface ProductionReportRepository extends JpaRepository<ProductionRepo
               AND NOT EXISTS (SELECT 1 FROM production_batches pb
                               WHERE pb.id = COALESCE(pr.batch_id, wpt.production_batch_id)
                                 AND pb.production_plan_id IN (:excludedPlanIds))
+            UNION ALL
+            -- PROTO-STAGE-IO: 加工环节记录 (processing_stage_records, 工位称重 / 手录环节) 兼读。
+            -- 去重口径: 批次已有任何 YIELD 报工 (不限日期窗) 就整批只用报工, 该批的环节记录不进 (同一批的同一工序不记两遍);
+            -- 只有没报工的批次才用环节记录。要求投入、产出重量都登记 (投入 0 / 空的工位累计行没有可除的分母, 不进)。
+            -- 环节记录重量一律 kg。同名工序并入报工那一行 (wp_id 取同厂同名工序), 否则按环节名单独成行。
+            SELECT
+                'STAGE' AS src,
+                (SELECT MIN(w2.id) FROM work_processes w2
+                  WHERE w2.factory_id = :factoryId AND w2.deleted_at IS NULL
+                    AND w2.process_name = COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type)) AS wp_id,
+                COALESCE(NULLIF(TRIM(sr.stage_name), ''), sr.stage_type) AS process_name,
+                1000 + COALESCE(sr.stage_order, 0) AS process_order,
+                sr.production_batch_id AS batch_id,
+                CAST(sr.input_weight AS DECIMAL(14,2)) AS input_quantity,
+                CAST(sr.output_weight AS DECIMAL(14,2)) AS output_quantity,
+                'kg' AS in_unit,
+                'kg' AS out_unit
+            FROM processing_stage_records sr
+            JOIN production_batches pb2 ON pb2.id = sr.production_batch_id AND pb2.factory_id = :factoryId
+            WHERE sr.factory_id = :factoryId
+              AND sr.deleted_at IS NULL
+              AND sr.input_weight > 0
+              AND sr.output_weight IS NOT NULL
+              AND CAST(COALESCE(sr.start_time, sr.created_at) AS DATE) BETWEEN :startDate AND :endDate
+              AND (:productTypeId = '' OR pb2.product_type_id = :productTypeId)
+              AND pb2.product_type_id NOT IN (:excludedProductTypeIds)
+              AND COALESCE(pb2.production_plan_id, '') NOT IN (:excludedPlanIds)
+              AND NOT EXISTS (SELECT 1 FROM production_reports pr2
+                              LEFT JOIN work_process_tasks wpt2 ON wpt2.id = pr2.work_process_task_id
+                                   AND wpt2.deleted_at IS NULL
+                              WHERE pr2.factory_id = :factoryId
+                                AND pr2.report_type = 'YIELD'
+                                AND pr2.deleted_at IS NULL
+                                AND COALESCE(pr2.batch_id, wpt2.production_batch_id) = sr.production_batch_id)
         ) t
         GROUP BY t.wp_id, t.process_name
         ORDER BY MIN(t.process_order)

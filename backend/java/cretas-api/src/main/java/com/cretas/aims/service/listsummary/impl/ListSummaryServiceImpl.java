@@ -235,7 +235,7 @@ public class ListSummaryServiceImpl implements ListSummaryService {
                                                           LocalDate from, LocalDate to) {
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*), COUNT(DISTINCT user_id) FROM time_clock_records " +
-                "WHERE factory_id = :fid");
+                "WHERE factory_id = :fid AND deleted_at IS NULL");
         appendStatusFilter(sql, filter);
         appendDateRange(sql, "clock_date", from, to);
         Query q = em.createNativeQuery(sql.toString());
@@ -307,7 +307,9 @@ public class ListSummaryServiceImpl implements ListSummaryService {
                 "       COUNT(*) FILTER (WHERE result = 'PASS') AS pass_cnt, " +
                 "       COUNT(*) FILTER (WHERE result = 'FAIL') AS fail_cnt, " +
                 "       COUNT(*) FILTER (WHERE result = 'CONDITIONAL') AS cond_cnt " +
-                "FROM quality_inspections WHERE factory_id = :fid");
+                "FROM quality_inspections WHERE factory_id = :fid AND deleted_at IS NULL");
+        // deleted_at IS NULL: 与列表(QualityInspection 实体 @Where)同口径, 软删记录列表看不到, 汇总也不数。
+        // 2026-11-19 LSMDEMO: 列表 39 条、页脚 71 条, 差的 32 条是软删(F006 QA 清理后复制进来的)。
         // quality_inspections 用 result 不是 status — 用专用 filter
         if (filter.containsKey("result") && filter.get("result") != null) {
             sql.append(" AND result = :resultFilter");

@@ -15,10 +15,11 @@ context didn't propagate.
 """
 from fastapi import APIRouter, HTTPException, Request
 
-from common.tenant_identity import require_same_factory
+from common.tenant_identity import caller_user_id, require_same_factory
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 import asyncpg
+import httpx
 import os
 import json
 import logging
@@ -32,7 +33,7 @@ class CompletenessResult(BaseModel):
     entity_type: str
     total_records: int
     field_completeness: Dict[str, float]  # field_name -> completion %
-    overall_completeness: float
+    overall_completeness: Optional[float] = None
     # Optional per-entity metadata (e.g. date range, unique counts) — kept
     # optional so manufacturing entities don't have to populate it.
     metadata: Optional[Dict[str, Any]] = None
@@ -43,6 +44,14 @@ class CompletenessRequest(BaseModel):
     factory_id: Optional[str] = None
     entity_types: Optional[List[str]] = None  # if None, compute all (manufacturing only)
 
+
+# 联系人/电话: 写入口径不一 (供应商表单与客户 Excel 导入只写 contact_person/phone,
+# 客户表单双写 contact_name/contact_phone), 任一列有非空白值就算「有」。
+# 值是 SQL 表达式, 有值时非 NULL、缺失时 NULL; 只在本文件里写死, 不拼用户输入。
+_CONTACT_EXPRS = {
+    "contact": "COALESCE(NULLIF(BTRIM(contact_person), ''), NULLIF(BTRIM(contact_name), ''))",
+    "phone": "COALESCE(NULLIF(BTRIM(phone), ''), NULLIF(BTRIM(contact_phone), ''))",
+}
 
 # Entity type to table/field mapping
 ENTITY_FIELD_MAP = {
@@ -87,8 +96,145 @@ ENTITY_FIELD_MAP = {
             "equipment_name", "type", "total_running_hours",
             "last_maintenance_date", "status"
         ]
-    }
+    },
+    # ── 主数据 (G4): 物料 / 客户 / 供应商 —— 设置页「主数据：条数与缺口」的数据源 ──
+    # text_fields: 文本列, 空串 / 全空白按「缺」算 (主数据里手填空格很常见, 只数 NOT NULL 会虚高)。
+    "MATERIAL_TYPE": {
+        "table": "raw_material_types",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "category", "unit", "unit_price", "storage_type", "shelf_life_days", "tax_rate"],
+        "text_fields": ["code", "name", "category", "unit", "storage_type", "tax_rate"],
+    },
+    "CUSTOMER": {
+        "table": "customers",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "type", "contact", "phone", "shipping_address",
+                   "tax_number", "payment_terms", "credit_limit", "assigned_sales_user_id"],
+        "text_fields": ["code", "name", "type", "shipping_address", "tax_number", "payment_terms"],
+        "exprs": dict(_CONTACT_EXPRS),
+    },
+    "SUPPLIER": {
+        "table": "suppliers",
+        "factory_filter": "factory_id",
+        "label_field": "name",
+        "fields": ["code", "name", "contact", "phone", "address",
+                   "tax_number", "payment_terms", "bank_name", "bank_account"],
+        "text_fields": ["code", "name", "address", "tax_number", "payment_terms", "bank_name", "bank_account"],
+        "exprs": dict(_CONTACT_EXPRS),
+    },
 }
+
+MASTER_DATA_ENTITY_TYPES = ["MATERIAL_TYPE", "CUSTOMER", "SUPPLIER"]
+
+# 主数据明细下钻 (id + 名称) 等同于吐名单, 判据必须和 Java 对应名册接口**同一个权限码**, 不在 Python 写死角色:
+# 谁有这些权限由 Java 的 L2 工厂覆盖 → L1 角色权限 → 兜底三层配置 + 个人覆盖决定 (改了最多 5 分钟后生效),
+# Python 这里只负责把权限码交给 Java 判 (见 _java_user_has_any_permission; Java 侧结果最多缓存 5 分钟)。
+# 码与 Java 的对应关系 (tests/test_completeness_master_data_endpoint.py 会读 Java 源码核对, 改一边另一边必须跟):
+#  * CUSTOMER      -> CustomerController 名单的 ROSTER_SALES_RW/R + ROSTER_FINANCE_RW/R
+#  * SUPPLIER      -> SupplierController 导出的 @RequirePermission (供应商列表本身对所有人开放, 导出是最严的一档)
+#  * MATERIAL_TYPE -> PermissionService.MATERIAL_TYPE_MAINTAIN_PERMISSION (原料类型维护)
+MASTER_DATA_DRILLDOWN_PERMISSIONS = {
+    "CUSTOMER": ["sales:read_write", "sales:read", "finance:read_write", "finance:read"],
+    "SUPPLIER": ["procurement:read", "procurement:read_write", "finance:read", "finance:read_write"],
+    "MATERIAL_TYPE": ["material_type:maintain"],
+}
+
+def _java_targets() -> List[str]:
+    """Java 的地址: 先用 java_base_url() (JAVA_API_BASE_URL / BACKEND_BASE_URL / 默认本机 10010);
+    没显式配置且默认是 10010 时, 10010 连不上再试蓝绿另一槽 10020 (与 cost_authorization 同一写法)。"""
+    from smartbi.services.factory_charts.finance_auth import java_base_url
+    base = java_base_url()
+    if not base:
+        raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+    configured = bool(os.getenv("JAVA_API_BASE_URL") or os.getenv("BACKEND_BASE_URL"))
+    targets = [base]
+    if not configured and base.endswith(":10010"):
+        targets.append(base[:-6] + ":10020")
+    return targets
+
+
+async def _java_user_has_any_permission(factory_id: str, user_id: int, codes: List[str]) -> bool:
+    """问 Java: 这个工厂里这个用户 (含岗位 + 工厂覆盖 + 个人覆盖) 有没有 codes 里任意一个权限。
+
+    Java 的判定结果最多缓存 5 分钟, 工厂/个人改权限最多 5 分钟后在这里生效。
+    Java 不可达 / 回错时抛 503, ⛔ 不当成「有权」放行, 也不退回写死的角色表。
+    """
+    headers = {"X-Internal-Key": os.getenv("INTERNAL_API_SECRET", "")}
+    targets = _java_targets()
+    for index, target in enumerate(targets):
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"{target}/api/internal/permissions/user-check",
+                    params={"factoryId": factory_id, "userId": user_id, "code": codes},
+                    headers=headers,
+                )
+        except httpx.ConnectError as exc:
+            if index + 1 < len(targets):
+                continue  # 蓝绿另一槽
+            logger.error(f"[completeness] 权限校验服务连不上: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+        except Exception as exc:  # noqa: BLE001 - 任何其它失败都按「判不了」处理
+            logger.error(f"[completeness] 权限校验服务不可用: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+        if resp.status_code == 403:
+            # 内部密钥配错 (INTERNAL_API_SECRET 两边不一致): 不是宕机, 单独打 config 级错误便于排查
+            logger.error("[completeness] config: Java 拒绝内部密钥 (INTERNAL_API_SECRET 不一致?)")
+        try:
+            resp.raise_for_status()
+            return bool(resp.json()["data"]["allowed"])
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[completeness] 权限校验回应异常: {exc}")
+            raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+    raise HTTPException(status_code=503, detail="权限校验服务暂不可用, 请稍后重试")
+# 默认只算原来的 5 个生产实体, 主数据由调用方显式要 (设置页), 不改变既有页面的返回行数。
+DEFAULT_ENTITY_TYPES = [t for t in ENTITY_FIELD_MAP if t not in MASTER_DATA_ENTITY_TYPES]
+
+
+def _count_expr(config: Dict[str, Any], field: str) -> str:
+    """COUNT 表达式: 文本列把空白当缺失。field 只来自 ENTITY_FIELD_MAP 白名单, 不拼用户输入。"""
+    expr = config.get("exprs", {}).get(field)
+    if expr:
+        return f"COUNT({expr}) as cnt_{field}"
+    if field in config.get("text_fields", []):
+        return f"COUNT(NULLIF(BTRIM({field}), '')) as cnt_{field}"
+    return f"COUNT({field}) as cnt_{field}"
+
+
+def build_completeness_query(entity_type: str) -> str:
+    config = ENTITY_FIELD_MAP[entity_type]
+    count_exprs = ", ".join(_count_expr(config, f) for f in config["fields"])
+    return f"""
+                        SELECT COUNT(*) as total, {count_exprs}
+                        FROM {config["table"]}
+                        WHERE {config["factory_filter"]} = $1 AND deleted_at IS NULL
+                    """
+
+
+def build_missing_query(entity_type: str, field: str, count: bool = False) -> str:
+    """缺失记录明细查询: entity_type / field 必须在白名单内, 否则抛 ValueError (不拼任意列名)。"""
+    config = ENTITY_FIELD_MAP.get(entity_type)
+    if config is None:
+        raise ValueError(f"unknown entity_type: {entity_type}")
+    if field not in config["fields"]:
+        raise ValueError(f"unknown field for {entity_type}: {field}")
+    label = config.get("label_field")
+    label_expr = f"{label}::text AS label" if label else "NULL::text AS label"
+    expr = config.get("exprs", {}).get(field)
+    if expr:
+        missing = f"({expr}) IS NULL"
+    elif field in config.get("text_fields", []):
+        missing = f"({field} IS NULL OR BTRIM({field}) = '')"
+    else:
+        missing = f"{field} IS NULL"
+    if count:
+        return (f"SELECT COUNT(*) FROM {config['table']} "
+                f"WHERE {config['factory_filter']} = $1 AND deleted_at IS NULL AND {missing}")
+    return (f"SELECT id::text AS id, {label_expr} FROM {config['table']} "
+            f"WHERE {config['factory_filter']} = $1 AND deleted_at IS NULL AND {missing} "
+            f"ORDER BY id LIMIT $2")
 
 
 # Restaurant POS entity types — live in smartbi_db silver layer, RLS-protected.
@@ -295,7 +441,7 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
     # Default to manufacturing entities only — POS entities must be opted in
     # explicitly by the caller (frontend selects them when tenant is restaurant)
     # so manufacturing tenants don't see spurious zero-record POS rows.
-    types_to_check = entity_types or list(ENTITY_FIELD_MAP.keys())
+    types_to_check = entity_types or DEFAULT_ENTITY_TYPES
 
     # Split entity types by datasource — manufacturing (cretas_db) vs POS (smartbi_db).
     manufacturing_types = [t for t in types_to_check if t in ENTITY_FIELD_MAP]
@@ -308,17 +454,10 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
             async with pool.acquire() as conn:
                 for entity_type in manufacturing_types:
                     config = ENTITY_FIELD_MAP[entity_type]
-                    table = config["table"]
-                    factory_col = config["factory_filter"]
                     fields = config["fields"]
 
                     # Build query: COUNT(*) and COUNT(field) for each field
-                    count_exprs = ", ".join([f"COUNT({f}) as cnt_{f}" for f in fields])
-                    query = f"""
-                        SELECT COUNT(*) as total, {count_exprs}
-                        FROM {table}
-                        WHERE {factory_col} = $1 AND deleted_at IS NULL
-                    """
+                    query = build_completeness_query(entity_type)
 
                     row = await conn.fetchrow(query, factory_id)
                     total = row["total"] if row else 0
@@ -329,7 +468,11 @@ async def compute_completeness(factory_id: str, entity_types: Optional[List[str]
                             cnt = row[f"cnt_{f}"]
                             field_completeness[f] = round(cnt / total * 100, 1)
 
-                    overall = round(sum(field_completeness.values()) / len(field_completeness), 1) if field_completeness else 0  # noqa: E501
+                    # 没有记录 (total=0) 时没有可算的完整度: 主数据返回 None 以区别于「全部缺失」的 0%;
+                    # 既有生产实体保持旧行为 (0)。
+                    overall = (round(sum(field_completeness.values()) / len(field_completeness), 1)
+                               if field_completeness
+                               else (None if entity_type in MASTER_DATA_ENTITY_TYPES else 0))  # noqa: E501
 
                     results.append(CompletenessResult(
                         entity_type=entity_type,
@@ -371,6 +514,49 @@ async def api_compute_completeness(req: CompletenessRequest, request: Request):
         #    —— 异常文本里裹着凭证，被原样返给了任何已认证调用方。
         #    详情留在服务端日志（上面这行 exc_info=True 已经记全）。
         raise HTTPException(status_code=500, detail="数据完整度计算失败，详见服务端日志")
+
+
+class MissingRecordsRequest(BaseModel):
+    factory_id: Optional[str] = None
+    entity_type: str
+    field: str
+    limit: int = 50
+
+
+@router.post("/completeness/missing")
+async def api_missing_records(req: MissingRecordsRequest, request: Request):
+    """缺失记录明细下钻 (G7): 返回某实体某字段缺失的记录 id + 名称, 最多 limit 条 (上限 200)。
+
+    返回 total_missing 是真实缺失总数 (不是 limit 截断后的条数), 前端据此显示「还有 N 条」。
+    """
+    factory_id = require_same_factory(request, req.factory_id)
+    limit = max(1, min(req.limit, 200))
+    try:
+        query = build_missing_query(req.entity_type, req.field)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="不支持的实体类型或字段")
+    # 主数据三类按权限码判 (在任何取库之前); 其余 (生产实体: 批次等) 沿用本厂可见性, 有意不加岗位门。
+    codes = MASTER_DATA_DRILLDOWN_PERMISSIONS.get(req.entity_type)
+    if codes is not None:
+        user_id = caller_user_id(request)
+        if user_id is None or not await _java_user_has_any_permission(factory_id, user_id, codes):
+            raise HTTPException(status_code=403, detail="当前账号无权查看该名单的缺失明细")
+    count_query = build_missing_query(req.entity_type, req.field, count=True)
+    pool = await _get_db_pool()
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, factory_id, limit)
+            total = await conn.fetchval(count_query, factory_id)
+        return {"success": True, "data": {
+            "entity_type": req.entity_type, "field": req.field,
+            "total_missing": int(total or 0),
+            "records": [{"id": r["id"], "label": r["label"]} for r in rows],
+        }}
+    except Exception as e:
+        logger.error(f"Completeness missing-records failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="缺失记录查询失败，详见服务端日志")
+    finally:
+        await pool.close()
 
 
 @router.get("/completeness/trend")

@@ -2,6 +2,7 @@ package com.cretas.aims.service.yield.impl;
 
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO;
 import com.cretas.aims.dto.yield.ProcessYieldAggDTO.IncomparableReason;
+import com.cretas.aims.entity.enums.ProcessingStageType;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.inventory.FgQuantityUnitConverter;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
@@ -83,7 +84,7 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
             }
 
             result.add(ProcessYieldAggDTO.builder()
-                    .processName(asStr(r.get("process_name")))
+                    .processName(displayName(asStr(r.get("process_name"))))
                     // 一侧单位混杂时, 那一侧的合计本身不成立 (0.5 kg + 3 袋), 不给数字
                     .inputQuantity(in.mixed() ? null : totalInput.setScale(2, RoundingMode.HALF_UP))
                     .outputQuantity(out.mixed() ? null : totalOutput.setScale(2, RoundingMode.HALF_UP))
@@ -95,6 +96,7 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
                     .unitComparable(reason == null)
                     .incomparableReason(reason)
                     .batchCount(toInt(r.get("batch_count")))
+                    .stageRecordCount(toInt(r.get("stage_record_count")))
                     .build());
         }
         return result;
@@ -113,6 +115,16 @@ public class YieldAnalysisServiceImpl implements YieldAnalysisService {
         int kinds = toInt(r.get(prefix + "_unit_kinds"));
         if (kinds == 1 || kinds == 2 && sameCanonical(lowest, highest)) return new Side(lowest, false);
         return Side.MIXED;
+    }
+
+    /** 环节记录没填环节名时 SQL 退回 stage_type 枚举码; 能认出就显示中文名, 认不出原样。 */
+    private static String displayName(String name) {
+        if (name == null) return null;
+        try {
+            return ProcessingStageType.valueOf(name).getName();
+        } catch (IllegalArgumentException notAStageType) {
+            return name;
+        }
     }
 
     private static String code(String raw) {

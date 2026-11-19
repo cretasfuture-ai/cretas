@@ -1,0 +1,46 @@
+# 取消「已经不在合并队列里的合并组」上还在排队/在跑的 workflow run (GitHub 侧, 不依赖 mini)。
+#
+# 为什么 (2026-11-19 实测): main 合并队列非 strict、max_entries_to_build=5, 每合入/踢出/绕过合并一个 PR
+# 就重排, 后面每个合并组换新头 SHA 整套 11 个 workflow 重跑; 旧组的 run 不会被取消。19:3x 全仓 132 个 run
+# 在排, 合并队列里只有 2 组是活的, 其余 86 个是失效组 ⇒ 托管并发 (20 job) 被占满, 正常 PR 的第一步都排不上。
+# mini 上 refill.sh 每 5 分钟跑同一个脚本 (#1945), 但 mini 离线/睡眠时没人清; 这里补 GitHub 侧:
+#   - workflow_run: Java Gate 每被请求一次 (合并组新建 = 旧组刚失效的时刻) 就清一次, 只看 merge_group 事件;
+#   - schedule: 每 10 分钟兜底 (定时在高负载时会延迟, 只当兜底);
+#   - workflow_dispatch: 手动。
+# 判定与安全边界全在 scripts/ci/canada-mini-gate/reap-stale-merge-groups.sh: 活集合 = 队列 entries 的头 SHA
+# (列 run 前后各查一次取并集), 创建不满 180 秒不动; 读不到队列/run 列表一个都不取消 (rc=2, 本作业红 = 没量到)。
+# ⚠️ 不挂在 merge_group 事件上: 那样会给每个合并组多挂一个检查; workflow_run 在默认分支上下文跑, fork 代码进不来。
+name: Merge queue reaper
+
+on:
+  workflow_run:
+    workflows: ["Java Gate"]
+    types: [requested]
+  schedule:
+    # ⛔ 不用整点 (见 artifact-reaper.yml)
+    - cron: '3-59/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: merge-queue-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci/canada-mini-gate
+      - name: Cancel runs of stale merge groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/ci/canada-mini-gate/reap-stale-merge-groups.sh

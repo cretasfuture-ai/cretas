@@ -35,17 +35,18 @@ env:
   # 2026-11-19 Steve: mini 槽 1-4 注册 cretas-mini-pg (PG 线), 槽 5 专给 fast-contracts (cretas-mini-fast)。
   # 2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」(北京时间, 时段唯一定义在
   # scripts/ci/canada-mini-gate/refill.sh 的 mini_window, changes 作业调 `refill.sh --window` 取 full/day):
-  #   day  (08-22): mini 只开槽 1 (PG) + 槽 5 (fast); PG 只派第 3 片, 阈值 MINI_PG_QUEUE_THRESHOLD (1)。
+  #   day  (08-22): mini 只开槽 1、2 (PG) + 槽 5 (fast), 共 3 个 (2026-11-19 Steve「白天最多总计 3 个」);
+  #         PG 只派第 2、3 片, 阈值 MINI_PG_QUEUE_THRESHOLD (2)。
   #   full (22-08): 槽 1-5 全开; PG 4 片都可上 mini, 阈值 MINI_PG_QUEUE_THRESHOLD_FULL (4)。
   # 时段读不到 (输出为空) 按 day 处理: 只会少派, 不会多派。
-  MINI_PG_QUEUE_THRESHOLD: '1'
+  MINI_PG_QUEUE_THRESHOLD: '2'
   MINI_PG_QUEUE_THRESHOLD_FULL: '4'
   MINI_FAST_QUEUE_THRESHOLD: '1'
 
 jobs:
   # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
   #   清单: scripts/ci/trigger-paths/java-gate-pr.txt (原 on.pull_request.paths 原样搬过去)。
-  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
   #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
@@ -53,7 +54,7 @@ jobs:
     # 2026-11-18 mini 优先、满了溢出: 本作业兼做分片路由, ⛔ 必须在托管机上 (放 mini 上的话 mini 一满它自己也排队,
     # 溢出就失效了)。路由脚本 scripts/ci/route-mini-or-hosted.sh 按标签各跑一次: 数该标签上排队的作业,
     # 少于阈值输出该标签, 否则 ubuntu-latest; 每次打一行 ROUTE=... label=...
-    #   runner_pg   cretas-mini-pg   阈值按时段 (槽 1-4; 白天只开槽 1、只派 PG 第 3 片, 夜间 4 片都可上 mini)
+    #   runner_pg   cretas-mini-pg   阈值按时段 (槽 1-4; 白天只开槽 1、2, 只派 PG 第 2、3 片, 夜间 4 片都可上 mini)
     #   runner_fast cretas-mini-fast 阈值 MINI_FAST_QUEUE_THRESHOLD (槽 5, 只派 fast 第 3 片, 其余 3 片并行在托管)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -74,13 +75,16 @@ jobs:
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
       # 路由: 脚本恒 exit 0; 读不到排队数走托管并打 ROUTE=hosted reason=api-error。
       # 本步骤自己崩了 (输出为空) 时下游表达式同样落 ubuntu-latest。
       # 时段 full/day (北京时间, 定义见 refill.sh mini_window); 失败时输出为空 = 按 day。
+      # 仓库变量 MINI_DAY_FULL=1 = 白天也按 full 派 (mini 端同时要有 ~/gh-gate/day-full, 见 refill.sh mini_window)。
       - id: window
+        env:
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
         run: echo "mini_window=$(bash scripts/ci/canada-mini-gate/refill.sh --window)" | tee -a "$GITHUB_OUTPUT"
       - id: route-pg
         env:
@@ -89,6 +93,8 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           MINI_LABEL: cretas-mini-pg
+          # mini 在线心跳 (refill.sh 每分钟写); 缺失/超过 3 分钟 -> 整片托管 (reason=mini-offline)
+          MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}
           MINI_QUEUE_THRESHOLD: ${{ steps.window.outputs.mini_window == 'full' && env.MINI_PG_QUEUE_THRESHOLD_FULL || env.MINI_PG_QUEUE_THRESHOLD }}
           ROUTE_OUTPUT_KEY: runner_pg
         run: bash scripts/ci/route-mini-or-hosted.sh
@@ -99,6 +105,8 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           MINI_LABEL: cretas-mini-fast
+          # mini 在线心跳 (refill.sh 每分钟写); 缺失/超过 3 分钟 -> 整片托管 (reason=mini-offline)
+          MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}
           MINI_QUEUE_THRESHOLD: ${{ env.MINI_FAST_QUEUE_THRESHOLD }}
           ROUTE_OUTPUT_KEY: runner_fast
         run: bash scripts/ci/route-mini-or-hosted.sh
@@ -289,7 +297,7 @@ jobs:
     # 2026-11-18 mini 优先、满了溢出: 先看 changes 作业的路由输出 (mini 排队 >= 阈值 / 读不到 -> ubuntu-latest),
     # 守卫照旧串在后面, 路由输出只能把作业从 mini 挪到托管, fork PR 无论如何落托管。
     # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
-    runs-on: ${{ (matrix.shard == 3 || needs.changes.outputs.mini_window == 'full') && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ (matrix.shard >= 2 || needs.changes.outputs.mini_window == 'full') && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false

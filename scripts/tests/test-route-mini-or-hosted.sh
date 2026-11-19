@@ -29,6 +29,9 @@ case "$path" in
   */actions/runs/*/jobs*)
     id=${path#*/actions/runs/}; id=${id%%/*}
     cat "$FAKE_FIX/jobs-$id.json" ;;
+  */actions/runs/*)
+    id=${path#*/actions/runs/}
+    cat "$FAKE_FIX/run-$id.json" ;;
   *) echo "unexpected path $path" >&2; exit 3 ;;
 esac
 SH
@@ -56,7 +59,7 @@ run_case() {
   env GH="$WORK/gh" FAKE_FIX="$FIX" FAKE_GH_LOG="$log" GITHUB_OUTPUT="$ghout" \
       GITHUB_REPOSITORY=cretasfuture-ai/cretas EVENT_NAME=pull_request \
       HEAD_REPO=cretasfuture-ai/cretas PR_LABELS='["java"]' GITHUB_RUN_ID=999 \
-      MINI_QUEUE_THRESHOLD=4 "$@" bash "$SCRIPT" > "$out" 2>&1
+      MINI_QUEUE_THRESHOLD=4 ROUTE_NOW=1000000 MINI_HEARTBEAT=999990 "$@" bash "$SCRIPT" > "$out" 2>&1
   local rc=$? ok=1 why=""
   [ "$rc" = 0 ] || { ok=0; why="rc=$rc"; }
   grep -qxF "$want_line" "$out" || { ok=0; why="$why 缺行「$want_line」"; }
@@ -110,6 +113,21 @@ run_all() {
   run_case "fast 标签: 没有排队 -> mini (阈值 1)" \
     "ROUTE=mini queued=0 threshold=1 reason=below-threshold label=cretas-mini-fast" runner_fast=cretas-mini-fast any \
     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast
+  # mini 在线心跳 (2026-11-19): 排队数是 0 也不派 mini, 而且不去数排队 (不调 gh)。
+  run_case "心跳过期 (200s > 180s) -> hosted mini-offline, 不调 gh"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=999800
+  run_case "心跳缺失 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=
+  run_case "心跳不是数字 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=abc
+  run_case "心跳正好 180s (边界, 不算过期) -> mini"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     MINI_HEARTBEAT=999820
+  run_case "fast 标签心跳过期 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=1 reason=mini-offline label=cretas-mini-fast" runner_fast=ubuntu-latest none     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast MINI_HEARTBEAT=999000
+  # 心跳年龄以本 run 的 run_started_at 为参照 (2026-11-19: vars 在 run 创建时定格, changes 在托管机排了
+  # 27 分钟 -> 按「现在」算成 1642s 误判离线)。不给 ROUTE_NOW, 走真实时间 + 假 gh 的 runs/999。
+  local now started
+  now=$(date +%s); started=$((now - 1600))
+  jq -nc --argjson s "$started" '{run_started_at: ($s | todate)}' > "$FIX/run-999.json"
+  run_case "排队 1600s 但心跳在 run 开始前 30s -> mini (按 run 开始算年龄)"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
+  run_case "心跳在 run 开始前 400s -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 400))
+  rm -f "$FIX/run-999.json"
+  run_case "读不到 run 开始时间 -> 退回按现在算 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
 }
 
 echo "== 被测: $SCRIPT"
@@ -195,9 +213,20 @@ SH
   en_all() { local i out=""; for i in 1 2 3 4 5; do out="$out$(GH_GATE_HOUR="$2" GH_GATE_ENABLED_FILE="$3" bash "$1" --enabled-of "$i" | cut -c1)"; done; echo "$out"; }
   got="day=$(en_all "$REFILL" 10 "$WORK/no-such-file") night=$(en_all "$REFILL" 23 "$WORK/no-such-file") override=$(en_all "$REFILL" 23 "$WORK/enabled-slots")"
   echo "READING: refill enabled (y/n per slot 1-5): $got"
-  if [ "$got" != "day=ynnny night=yyyyy override=nynny" ]; then
-    echo "FAIL: 启用应为 day=ynnny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
+  if [ "$got" != "day=yynny night=yyyyy override=nynny" ]; then
+    echo "FAIL: 启用应为 day=yynny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
   else echo "  ok - 按时段启用 + 覆盖文件优先"; fi
+  # 白天也全开开关 (2026-11-19 Steve「放开白天派片」): workflow 端环境变量 / mini 端文件, 任一成立白天也 full;
+  # 都不成立时上面的时段读数不变 (已由 want_win 钉住)。
+  touch "$WORK/day-full"
+  got="env=$(GH_GATE_DAY_FULL=1 bash "$REFILL" --window 12) file=$(GH_GATE_DAY_FULL_FILE="$WORK/day-full" bash "$REFILL" --window 12) off=$(GH_GATE_DAY_FULL=0 GH_GATE_DAY_FULL_FILE="$WORK/no-such-file" bash "$REFILL" --window 12)"
+  got="$got slots=$(GH_GATE_DAY_FULL_FILE="$WORK/day-full" en_all "$REFILL" 10 "$WORK/no-such-file")"
+  echo "READING: day-full switch: $got"
+  if [ "$got" != "env=full file=full off=day slots=yyyyy" ]; then
+    echo "FAIL: 白天全开开关应为 env=full file=full off=day slots=yyyyy"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 白天全开开关 (变量/文件) 生效, 关掉回到按时段"; fi
+  if grep -q 'GH_GATE_DAY_FULL: \${{ vars.MINI_DAY_FULL }}' "$WFY"; then echo "  ok - workflow 时段步骤接了 vars.MINI_DAY_FULL"
+  else echo "FAIL: java-gate-pr.yml 的 window 步骤必须把 vars.MINI_DAY_FULL 传给 GH_GATE_DAY_FULL"; REAL_FAILS=$((REAL_FAILS + 1)); fi
   # 变异对照: 去掉「< 8 点也算 full」, 凌晨必须被查出变成 day。
   WMUT="$WORK/refill-window-mutant.sh"
   sed 's/ || \[ "\$h" -lt "\$FULL_UNTIL" \]//' "$REFILL" > "$WMUT"
@@ -266,7 +295,87 @@ SH
     echo "  ok - 守卫变异对照: 删掉一处守卫后查出"
   fi
 fi
-[ "$PASSES" -ge 13 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 13)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+[ "$PASSES" -ge 18 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 18)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+
+# ── 心跳: 写端 (refill.sh) 与读端 (workflow 两条路由都传 vars.MINI_HEARTBEAT) 必须都在 (形态 D/B: 接上没有)。
+if [ -z "${ROUTE_SCRIPT:-}" ]; then
+  hb_w=$(grep -c 'gh variable set MINI_HEARTBEAT' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  hb_r=$(grep -c 'MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}' "$ROOT_DIR/.github/workflows/java-gate-pr.yml")
+  hb_c=$(grep -c '^  beat$\|^    beat$' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  echo "READING: heartbeat writer=$hb_w readers=$hb_r beat_calls=$hb_c"
+  if [ "$hb_w" != 1 ] || [ "$hb_r" != 2 ] || [ "$hb_c" != 2 ]; then
+    echo "FAIL: 心跳没接全: refill.sh 要写 1 处并在空闲/忙碌两个循环里各调 1 次 beat, workflow 两条路由都要传 vars.MINI_HEARTBEAT"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 心跳写端/读端都接上"
+  fi
+  # 睡眠/过热 (2026-11-19 半醒里跑满 -> Dark Wake Thermal Emergency): 领活前叫醒、作业期间禁止睡眠、有温度告警不领活。
+  mkdir -p "$WORK/pmsetbin"
+  printf '#!/usr/bin/env bash
+echo "$FAKE_THERM"
+' > "$WORK/pmsetbin/pmset"; chmod +x "$WORK/pmsetbin/pmset"
+  th() { PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="$2" GH_GATE_PRESSURE_FILE="$WORK/no-pressure" bash "$1" --thermal-hot; }
+  # 温度压力文件: Nominal/Moderate 不算热, Heavy 算热
+  tp() { echo "$2" > "$WORK/pressure"; PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="Note: No thermal warning level has been recorded" GH_GATE_PRESSURE_FILE="$WORK/pressure" bash "$1" --thermal-hot; }
+  dw() { PATH="$WORK/pmsetbin:$PATH" FAKE_THERM="$2" bash "$1" --darkwake; }
+  REFILL_F="$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh"
+  tgot="ok=$(th "$REFILL_F" "$(printf 'Note: No thermal warning level has been recorded
+Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'Thermal Warning Level set to 2.')"
+  echo "READING: refill thermal: $tgot"
+  if [ "$tgot" != "ok=no hot=yes" ]; then echo "FAIL: 温度判断应为 ok=no hot=yes"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 温度告警判断"; fi
+  pgot="nominal=$(tp "$REFILL_F" Nominal) moderate=$(tp "$REFILL_F" Moderate) heavy=$(tp "$REFILL_F" Heavy) trapping=$(tp "$REFILL_F" Trapping)"
+  echo "READING: refill pressure: $pgot"
+  if [ "$pgot" != "nominal=no moderate=no heavy=yes trapping=yes" ]; then echo "FAIL: 压力判断应为 nominal=no moderate=no heavy=yes trapping=yes"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 温度压力判断"; fi
+  # 半醒: 能力里没有 Graphics 才算; 读不到 (空输出) 不算 (不把「不知道」当半醒)。
+  dgot="full=$(dw "$REFILL_F" 'Current System Capabilities are: CPU Graphics Audio Network') dark=$(dw "$REFILL_F" 'Current System Capabilities are: CPU Network') unknown=$(dw "$REFILL_F" '')"
+  echo "READING: refill darkwake: $dgot"
+  if [ "$dgot" != "full=no dark=yes unknown=no" ]; then echo "FAIL: 半醒判断应为 full=no dark=yes unknown=no"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 半醒判断"; fi
+  w_guard=$(grep -c '^  awake_guard$\|^    awake_guard$' "$REFILL_F")
+  echo "READING: awake_guard calls=$w_guard (空闲循环 + 忙碌循环)"
+  if [ "$w_guard" != 2 ]; then echo "FAIL: awake_guard 要在空闲、忙碌两个循环里各调 1 次"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 半醒守护两个循环都接上"; fi
+  w_full=$(grep -c '^  full_wake$' "$REFILL_F"); w_caf=$(grep -c 'caffeinate -i -s -w "\$pid"' "$REFILL_F"); w_hot=$(grep -c '^  if thermal_hot; then$' "$REFILL_F")
+  echo "READING: sleep guards full_wake=$w_full caffeinate_job=$w_caf thermal_gate=$w_hot"
+  # full_wake 两处: 领活前 (jitconfig 之后) + awake_guard 里。
+  if [ "$w_full" != 2 ] || [ "$w_caf" != 1 ] || [ "$w_hot" != 1 ] || ! grep -A1 'jitconfig failed, retry in 30s' "$REFILL_F" | grep -q '^  full_wake$'; then
+    echo "FAIL: refill.sh 要在领活前 (jitconfig 之后) 和 awake_guard 里调 full_wake、作业期间 caffeinate -i -s -w \$pid、循环里有 thermal_hot 闸"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 叫醒/防睡/温度闸都接上"; fi
+  # 变异对照: 删掉年龄判断, 过期心跳必须被查出来 (变异体只跑场景, 不递归)。
+  HMUT="$WORK/route-hb-mutant.sh"
+  grep -v 'HEARTBEAT-AGE-CHECK' "$SCRIPT" > "$HMUT"
+  if grep -q 'HEARTBEAT-AGE-CHECK' "$HMUT" || ! grep -q 'HEARTBEAT-AGE-CHECK' "$SCRIPT"; then
+    echo "FAIL: 心跳变异没生效 (标记行找不到)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    ROUTE_SCRIPT="$HMUT" bash "${BASH_SOURCE[0]}" > "$WORK/hb-mutant.log" 2>&1
+    hrc=$?
+    echo "READING: mutant(no heartbeat age) rc=$hrc $(grep '^READING: pass=' "$WORK/hb-mutant.log") $(grep -c 'FAIL - 心跳过期\|FAIL - fast 标签心跳过期' "$WORK/hb-mutant.log") 个过期场景变红"
+    if [ "$hrc" = 0 ] || ! grep -q 'FAIL - 心跳过期' "$WORK/hb-mutant.log"; then
+      echo "FAIL: 心跳变异对照: 删掉年龄判断后过期场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 心跳变异对照: 删掉年龄判断后过期场景变红"
+    fi
+  fi
+fi
+
+# ── 变异对照: 心跳参照时间退回「现在」, 「排队 1600s」场景必须变红。
+if [ -z "${ROUTE_SCRIPT:-}" ]; then
+  RMUT="$WORK/route-ref-mutant.sh"
+  # ⚠️ 替换里不加行尾注释: 这一行后面还有 esac, 注释会把它吃掉, 变异体变成语法错误 (全红但不是变异生效)。
+  sed 's/\*) echo "\$s run_started_at" ;;/*) echo "$(date +%s) run_started_at" ;;/' "$SCRIPT" > "$RMUT"
+  if ! grep -q 'echo "$(date +%s) run_started_at"' "$RMUT" || ! bash -n "$RMUT"; then
+    echo "FAIL: 参照时间变异没生效或变异体语法错 (同步本测试的 sed)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    ROUTE_SCRIPT="$RMUT" bash "${BASH_SOURCE[0]}" > "$WORK/ref-mutant.log" 2>&1
+    rrc=$?
+    rfails=$(grep -c '^  FAIL - ' "$WORK/ref-mutant.log")
+    echo "READING: mutant(ref=now) rc=$rrc $(grep '^READING: pass=' "$WORK/ref-mutant.log") fails=$rfails"
+    # 只该红「排队 1600s」这 1 个场景 (其余场景要么给了 ROUTE_NOW, 要么本来就判离线)。
+    if [ "$rrc" = 0 ] || [ "$rfails" != 1 ] || ! grep -q 'FAIL - 排队 1600s' "$WORK/ref-mutant.log"; then
+      echo "FAIL: 参照时间变异对照: 退回按现在算后「排队 1600s」场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 参照时间变异对照: 退回按现在算后「排队 1600s」场景变红"
+    fi
+  fi
+fi
 
 # ── 变异对照: 比较方向改反 (-lt -> -ge), 场景必须变红。仅在测真脚本时做 (测变异体时不递归)。
 if [ -z "${ROUTE_SCRIPT:-}" ]; then

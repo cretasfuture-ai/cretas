@@ -6,6 +6,10 @@ const getReminderBadge = vi.fn();
 vi.mock('@/api/reminder', () => ({
   getReminderBadge: (...args: unknown[]) => getReminderBadge(...args),
 }));
+const levels: Record<string, string> = {};
+vi.mock('@/store/modules/permission', () => ({
+  usePermissionStore: () => ({ getPermissionLevel: (m: string) => levels[m] ?? 'none' }),
+}));
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 import ReminderBell from '../ReminderBell.vue';
@@ -28,6 +32,8 @@ describe('ReminderBell', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     getReminderBadge.mockReset();
+    for (const k of Object.keys(levels)) delete levels[k];
+    levels.sales = 'r';
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -61,5 +67,15 @@ describe('ReminderBell', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(getReminderBadge).toHaveBeenCalledTimes(2);
     expect(w.find('.badge').exists()).toBe(true);
+  });
+
+  it('无 sales/finance/system 权限: 不发请求、铃铛不渲染', async () => {
+    delete levels.sales;
+    levels.quality = 'rw';
+    const w = mountBell();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(getReminderBadge).not.toHaveBeenCalled();
+    expect(w.find('.badge').exists()).toBe(false);
   });
 });

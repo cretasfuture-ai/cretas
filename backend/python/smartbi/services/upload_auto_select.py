@@ -21,6 +21,11 @@ _EXPANSIONS: Tuple[Tuple[Tuple[str, ...], Tuple[str, ...]], ...] = (
     (("哪台机", "哪台设备", "设备"), ("机台",)),
     # 口径 A (Steve 11-19): 原表计划只排品项、没有数量, 「计划产量」按计划品项数答
     (("计划产量", "计划量", "计划数"), ("计划品项", "品项数")),
+    # 味美 11-19 复测: 「有哪些计划外生产」要列出具体行, 明细在 计划vs实产 表 (结论=计划外生产);
+    # 按日表只有「计划外生产品项数」一个计数, 列不出来。只在「哪些/列出」说法下加, 问天数/个数不受影响。
+    (("有哪些计划外", "哪些计划外", "列出计划外", "计划外有哪些", "计划外的有哪些", "计划外都有"),
+     ("实产", "结论", "产品编码", "计划内")),
+    (("哪些产品是计划外", "哪些产品计划外", "哪几个计划外"), ("实产", "结论", "产品编码", "计划内")),
     (("没按计划", "没有生产", "未生产", "没生产", "没完成"), ("实产", "结论")),
 )
 
@@ -38,12 +43,29 @@ def _bigrams(text: str) -> Set[str]:
     return out
 
 
+# 问题提到机台/开机/分钟这类设备口径时, 「计划…实际」问的是开机分钟, 不是计划品项
+_MACHINE_WORDS = re.compile(r"开机|停机|机台|分钟|时长|小时|设备|哪台")
+
+
+def _context_expansions(q: str) -> List[str]:
+    """需要看整句才能定的扩展词 (单个触发词会误伤别的题)。味美 11-19 复测:
+
+    · 「计划与实际差多少」: 「计划」「实际」正好是机台表的 计划开机/实际开机 列名, 抢走了选表;
+      没提开机/分钟/机台时, 口径 A 是计划品项表 (75 个品项产出 55)。
+    """
+    extra: List[str] = []
+    if "计划" in q and re.search(r"实际|实产", q) and not _MACHINE_WORDS.search(q):
+        extra += ["计划品项", "品项数", "达成率"]
+    return extra
+
+
 def question_bigrams(question: str) -> Set[str]:
     q = question or ""
     extra = []
     for triggers, adds in _EXPANSIONS:
         if any(t in q for t in triggers):
             extra.extend(adds)
+    extra.extend(_context_expansions(q))
     return _bigrams(q + " " + " ".join(extra))
 
 

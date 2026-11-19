@@ -34,6 +34,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -334,14 +335,33 @@ public class ProductionReportCorrectionServiceImpl implements ProductionReportCo
                 .stream().map(this::enrich).toList();
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public Map<String, Map<String, Object>> approvalSummaries(String factoryId, Collection<String> correctionIds) {
+        if (correctionIds == null || correctionIds.isEmpty()) return Map.of();
+        List<ProductionReportCorrection> corrections = correctionRepository.findAllById(correctionIds).stream()
+                .filter(c -> Objects.equals(factoryId, c.getFactoryId())).toList();
+        Set<Long> reportIds = corrections.stream().map(ProductionReportCorrection::getProductionReportId)
+                .filter(Objects::nonNull).collect(Collectors.toSet());
+        Map<Long, ProductionReport> reports = new java.util.HashMap<>();
+        if (!reportIds.isEmpty()) reportRepository.findAllById(reportIds).forEach(r -> reports.put(r.getId(), r));
+        Map<String, Map<String, Object>> out = new LinkedHashMap<>();
+        for (ProductionReportCorrection c : corrections) out.put(c.getId(), approvalContext(c, reports.get(c.getProductionReportId())));
+        return out;
+    }
+
     private Map<String, Object> approvalContext(ProductionReportCorrection c) {
+        return approvalContext(c, reportRepository.findById(c.getProductionReportId()).orElse(null));
+    }
+
+    private Map<String, Object> approvalContext(ProductionReportCorrection c, ProductionReport loaded) {
         Map<String, Object> context = new LinkedHashMap<>();
         context.put("correctionId", c.getId());
         context.put("reportId", c.getProductionReportId());
         context.put("planId", c.getProductionPlanId());
         context.put("batchId", c.getProductionBatchId());
         context.put("processCategory", c.getProcessCategory());
-        reportRepository.findById(c.getProductionReportId())
+        java.util.Optional.ofNullable(loaded)
                 .filter(report -> Objects.equals(c.getFactoryId(), report.getFactoryId()))
                 .ifPresent(report -> {
                     context.put("reportKind", reportKind(report));
