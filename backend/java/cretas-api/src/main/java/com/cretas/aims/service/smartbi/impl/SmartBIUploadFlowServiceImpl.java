@@ -100,6 +100,10 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
     @Autowired(required = false)
     private SmartBiPgExcelUploadRepository pgUploadRepository;
 
+    // Marks a failed-to-save upload FAILED in its own transaction (PROTO-YDWM-B2)
+    @Autowired(required = false)
+    private SmartBIUploadFailureMarker uploadFailureMarker;
+
     // Legacy MySQL upload metadata; do not use a same-ID PostgreSQL row as
     // ownership proof for the static-table path.
     @Autowired(required = false)
@@ -425,6 +429,12 @@ public class SmartBIUploadFlowServiceImpl implements SmartBIUploadFlowService {
                         aiAnalysis = (String) chartWithAnalysis.get("aiAnalysis");
                     } catch (Exception e) {
                         if (e instanceof BusinessException businessException) {
+                            // B2: 422 无可分析图表 = 保存失败。外层事务会回滚, 所以用独立事务把
+                            // 上传标 FAILED, 否则它留在数据源下拉里还会成为问数据默认源。
+                            if (Integer.valueOf(422).equals(businessException.getCode())
+                                    && uploadFailureMarker != null) {
+                                uploadFailureMarker.markFailed(factoryId, uploadId, businessException.getMessage());
+                            }
                             throw businessException;
                         }
                         log.warn("Chart generation 失败 (不影响 save): {}", e.getMessage());

@@ -661,7 +661,9 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
 
             Object sampleValue = sampleRow.get(colName);
             String inferredType = inferTypeFromValue(sampleValue);
-            boolean isTime = isTimeFieldByName(colName);
+            // 数值列 + 时长单位(分钟/小时/秒/min/h) = 时长指标, 不是时间轴 (PROTO-YDWM-B1)
+            boolean isTime = !("NUMERIC".equals(inferredType) && isDurationName(colName))
+                    && isTimeFieldByName(colName);
             boolean isMeasure = !isTime && isMeasureByName(colName, inferredType);
             boolean isDimension = !isTime && !isMeasure && isDimensionByName(colName, inferredType);
 
@@ -722,11 +724,30 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
             n.matches(".*(额|率|金|rate|amount|count|revenue|profit|sum|total).*")) {
             return true;
         }
-        return false;
+        // PROTO-YDWM-B1: 数值内容决定指标; 单位词/名字里没有金额类关键词不算理由。
+        // 编码/编号/产线号 这类数值标识仍是维度, 不当指标求和。
+        return "NUMERIC".equals(inferredType) && !isCodeLikeName(colName);
+    }
+
+    /** 数值但其实是标识: 编码/编号/代码/代号/序号/号码/…号/id/code (与 Python field_classifier 口径一致) */
+    static boolean isCodeLikeName(String colName) {
+        if (colName == null) return false;
+        return colName.trim().toLowerCase()
+                .matches(".*(编码|编号|代码|代号|序号|号码|号|id|code)$");
+    }
+
+    /** 名字带时长单位: 分钟/小时/秒/工时/时长/min/h (与 Python field_classifier 口径一致) */
+    static boolean isDurationName(String colName) {
+        if (colName == null) return false;
+        return java.util.regex.Pattern
+                .compile("(分钟|小时|分鐘|秒|工时|时长|(?<![a-z])(mins?|hours?|hrs?|h)(?![a-z]))",
+                        java.util.regex.Pattern.CASE_INSENSITIVE)
+                .matcher(colName).find();
     }
 
     private boolean isDimensionByName(String colName, String inferredType) {
         if (colName == null) return false;
+        if ("NUMERIC".equals(inferredType) && isCodeLikeName(colName)) return true;
         String n = colName.toLowerCase();
         if (n.matches(".*(门店|店铺|区域|省份|城市|大区|品牌|类别|分类|状态|类型|" +
                 "服务员|销售员|收银员|班次|桌位|账单号|订单|区域|部门|编号|名称|store|region|category|type|status).*")) {
@@ -749,6 +770,9 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
         if ("CATEGORICAL".equalsIgnoreCase(dataType)) {
             return true;
         }
+        if ("NUMERIC".equalsIgnoreCase(dataType) && isCodeLikeName(mapping.getOriginalColumn())) {
+            return true;
+        }
         if (standardField != null) {
             String lower = standardField.toLowerCase();
             return lower.matches(".*(department|region|category|product|name|部门|区域|类别|产品|名称).*");
@@ -759,6 +783,12 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
     private boolean isMeasure(FieldMappingResult mapping) {
         String dataType = mapping.getDataType();
         String subType = mapping.getSubType();
+
+        // 数值标识(编码/编号/产线号)不是指标, 与 backfill 路径及 Python 口径一致
+        if (isCodeLikeName(mapping.getOriginalColumn())
+                && !"AMOUNT".equalsIgnoreCase(subType) && !"CURRENCY".equalsIgnoreCase(subType)) {
+            return false;
+        }
 
         if ("NUMERIC".equalsIgnoreCase(dataType) || "NUMBER".equalsIgnoreCase(dataType) ||
             "INTEGER".equalsIgnoreCase(dataType) || "FLOAT".equalsIgnoreCase(dataType) ||
@@ -786,6 +816,12 @@ public class DynamicDataPersistenceServiceImpl implements DynamicDataPersistence
     private boolean isTimeField(FieldMappingResult mapping) {
         String dataType = mapping.getDataType();
         String standardField = mapping.getStandardField();
+
+        // 「醒发时间(分钟)」这类数值时长是指标, 不能被当成时间轴 (PROTO-YDWM-B1)
+        if ("NUMERIC".equalsIgnoreCase(dataType)
+                && (isDurationName(mapping.getOriginalColumn()) || isDurationName(standardField))) {
+            return false;
+        }
 
         if ("DATE".equalsIgnoreCase(dataType)) {
             return true;
