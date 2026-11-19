@@ -12,6 +12,8 @@ It uses pre-written, tested logic to process data based on configuration.
 """
 import io
 import logging
+import math
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -93,7 +95,8 @@ class FixedExecutor:
             "percentage": self._clean_percentage,
             "currency": self._clean_currency,
             "text": self._clean_text,
-            "date": self._clean_date
+            "date": self._clean_date,
+            "identifier": self._clean_identifier,
         }
         self._context_extractor = ContextExtractor()
 
@@ -162,7 +165,17 @@ class FixedExecutor:
             rows = []
             skipped = 0
 
-            for row_idx in range(data_start_row + 1, min(data_start_row + max_rows + 1, ws.max_row + 1)):
+            # 标识列(编码/批号/单号...)一律按文本保存：先整列扫一遍再逐格清洗
+            _last_row = min(data_start_row + max_rows + 1, ws.max_row + 1)
+            identifier_headers = set()
+            for col_idx, (orig_header, std_header) in enumerate(zip(original_headers, standard_headers), start=1):
+                col_values = [ws.cell(row=r, column=col_idx).value for r in range(data_start_row + 1, _last_row)]
+                if self._is_identifier_column(
+                    (std_header, orig_header), col_values, data_type_map.get(std_header, "text")
+                ):
+                    identifier_headers.add(std_header)
+
+            for row_idx in range(data_start_row + 1, _last_row):
                 row_data = {}
                 has_data = False
 
@@ -174,7 +187,7 @@ class FixedExecutor:
                         has_data = True
 
                     # Clean value based on data type
-                    data_type = data_type_map.get(std_header, "text")
+                    data_type = "identifier" if std_header in identifier_headers else data_type_map.get(std_header, "text")
                     cleaned_value = self._clean_value(value, data_type)
 
                     row_data[std_header] = cleaned_value
@@ -515,7 +528,17 @@ class FixedExecutor:
                 for col_idx in range(len(df.columns)):
                     col_name = df.columns[col_idx]
                     data_type = data_type_map.get(col_name, "text")
-                    df.iloc[:, col_idx] = df.iloc[:, col_idx].apply(lambda x: self._clean_value(x, data_type))
+                    # 标识列(编码/批号/单号...)一律按文本保存，不被抽样判成数值后
+                    # 把 "21014C" 清成 null、把前导零/整数位吃掉。
+                    orig_name = (
+                        result.original_headers[col_idx]
+                        if col_idx < len(result.original_headers) else col_name
+                    )
+                    if self._is_identifier_column(
+                        (col_name, orig_name), df.iloc[:, col_idx].tolist(), data_type
+                    ):
+                        data_type = "identifier"
+                    df.isetitem(col_idx, df.iloc[:, col_idx].apply(lambda x: self._clean_value(x, data_type)).astype(object))
 
             # Remove empty rows if configured
             if options.get("skip_empty_rows", True):
@@ -652,13 +675,26 @@ class FixedExecutor:
                     deduped_mapped.append(h)
             mapped_headers = deduped_mapped
 
+            identifier_origs = {
+                orig_header
+                for idx, orig_header in enumerate(merged_headers)
+                if self._is_identifier_column(
+                    (mapped_headers[idx], orig_header),
+                    [r.get(orig_header) for r in rows],
+                    "numeric",
+                )
+            }
+
             for row in rows:
                 mapped_row = {}
                 for idx, orig_header in enumerate(merged_headers):
                     deduped_header = mapped_headers[idx]
                     value = row.get(orig_header)
                     # 清理数据
-                    data_type = "numeric" if self._looks_numeric(value) else "text"
+                    if orig_header in identifier_origs:
+                        data_type = "identifier"
+                    else:
+                        data_type = "numeric" if self._looks_numeric(value) else "text"
                     mapped_row[deduped_header] = self._clean_value(value, data_type)
                 mapped_rows.append(mapped_row)
 
@@ -1012,6 +1048,70 @@ class FixedExecutor:
             return cleaner(value)
         except Exception:
             return value
+
+    # ---- 标识列（编码/批号/单号）按文本保存 ----
+    # 名字像标识的列。尾字是 数/量/额/率/价/重/比 的是度量（"批号数量"），不算。
+    _IDENTIFIER_NAME_RE = re.compile(
+        r"(编码|编号|批号|批次号|单号|代码|条码|货号|料号|流水号|工号|"
+        r"(?<![a-z])(code|sku|barcode|batch_?no|order_?no|lot)(?![a-z])|(^|[_\s])id$)",
+        re.IGNORECASE,
+    )
+    _MEASURE_SUFFIX_RE = re.compile(r"(数|量|额|率|价|重|比)$")
+    # 带字母的编码：只含字母数字和常见连接符，且字母数字混合（21014C、A-001）
+    _ALNUM_CODE_RE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9][A-Za-z0-9\-_/.]*$")
+
+    def _is_identifier_name(self, names) -> bool:
+        for name in names:
+            n = str(name).strip() if name is not None else ""
+            if not n:
+                continue
+            if self._MEASURE_SUFFIX_RE.search(n):
+                continue
+            if self._IDENTIFIER_NAME_RE.search(n):
+                return True
+        return False
+
+    def _is_identifier_column(self, names, values, data_type: str) -> bool:
+        """True when the column holds identifiers that must be stored as text.
+
+        1. Column name says so (产品编码/批号/单号/...) -> yes, unless it is a date column.
+        2. Column was sampled as numeric but some cell is an alphanumeric code
+           (e.g. "21014C") that float() cannot parse -> the whole column is a code
+           column; keeping it numeric would turn those cells into null.
+        Pure-measure columns (重量/数量/温度...) match neither and stay numeric.
+        """
+        if data_type == "date":
+            return False
+        if self._is_identifier_name(names):
+            return True
+        if data_type not in ("numeric", "currency", "percentage"):
+            return False
+        for v in values:
+            if isinstance(v, str):
+                t = v.strip()
+                if self._ALNUM_CODE_RE.match(t):
+                    try:
+                        float(t.replace(',', ''))
+                    except ValueError:
+                        return True
+        return False
+
+    def _clean_identifier(self, value: Any) -> Optional[str]:
+        """Identifier cell -> text, original characters preserved."""
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return str(value)
+        if isinstance(value, float):
+            if math.isnan(value):
+                return None
+            if math.isfinite(value) and value == int(value):
+                return str(int(value))
+            return repr(value)
+        s = str(value).strip()
+        if s.lower() in ('', 'nan', 'none'):
+            return None
+        return s
 
     def _clean_numeric(self, value: Any) -> Optional[float]:
         """Clean numeric value"""
