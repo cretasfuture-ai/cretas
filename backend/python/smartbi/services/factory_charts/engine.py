@@ -133,6 +133,8 @@ def _subject_id(identity_kind, identity_value):
 
 
 def _catalog_entries(datasets, can_price):
+    from smartbi.services.external_production import SOURCE_KEY
+
     entries = {}
     names_to_ids = {}
     for dataset in datasets:
@@ -155,14 +157,22 @@ def _catalog_entries(datasets, can_price):
             else:
                 kind, value = 'name', name
             sid = _subject_id(kind, value)
-            entries.setdefault(sid, {'id': sid, 'label': name, 'name': name, 'kind': kind, 'value': value})
-            names_to_ids.setdefault(name, set()).add(sid)
+            sku = row.get('产品编码') if source == SOURCE_KEY else None
+            if source == SOURCE_KEY and not sku:
+                continue
+            label = f'{name} · {sku}' if sku and name != sku else name
+            entry = {'id': sid, 'label': label, 'name': name, 'kind': kind, 'value': value}
+            if sku:
+                entry['sku'] = sku
+            entries.setdefault(sid, entry)
+            if not sku:
+                names_to_ids.setdefault(name, set()).add(sid)
     # Name-only rows are aliases only when exactly one ID-backed identity owns
     # that exact name.  This prevents a dead name-only subject and prevents
     # silently combining two same-name SKUs.
     id_by_name = {}
     for sid, entry in entries.items():
-        if entry['kind'] == 'id':
+        if entry['kind'] == 'id' and not entry.get('sku'):
             id_by_name.setdefault(entry['name'], set()).add(sid)
     for sid, entry in list(entries.items()):
         if entry['kind'] != 'name':
@@ -209,13 +219,17 @@ def analysis_subjects(datasets, can_price):
     for name, ids in names_to_ids.items():
         if len(ids) > 1:
             for sid in ids:
-                labels[sid] = f'{name} · {sid[-6:]}'
-    return sorted(({ 'id': sid, 'label': labels.get(sid, entry['label']) }
+                if not found[sid].get('sku'):
+                    labels[sid] = f'{name} · {sid[-6:]}'
+    return sorted(({ 'id': sid, 'label': labels.get(sid, entry['label']),
+                     **({'sku': entry['sku']} if entry.get('sku') else {}) }
                    for sid, entry in found.items()), key=lambda item: (item['label'], item['id']))
 
 
 def scope_datasets(datasets, request, subjects, can_price):
     """Apply an opaque subject to product-bearing frames before build()."""
+    from smartbi.services.external_production import SOURCE_KEY
+
     if not getattr(request, 'guided', False):
         return list(datasets), None, '全厂范围'
     if not getattr(request, 'analysis_subject', None):
@@ -232,6 +246,10 @@ def scope_datasets(datasets, request, subjects, can_price):
     excluded_sources = []
     for dataset in datasets:
         source = str(dataset.source).split(' · ', 1)[0].lower()
+        if bool(chosen.get('sku')) != (source == SOURCE_KEY):
+            # External SKU identity is not a verified join to native products.
+            excluded_sources.append(source)
+            continue
         product_col, identity_col = _product_columns(dataset.frame)
         if source.startswith(_UNSCOPABLE_SUBJECT_SOURCES):
             # A product-scoped answer must not retain full-factory OEE/cash
@@ -870,6 +888,8 @@ def _card_layout(option, chart_id=''):
 
 
 def build(datasets, request, can_price):
+    from . import blacklake_production
+
     candidates, unavailable = [], []
     for dataset in datasets:
         trusted_source = dataset.source.split(' · ')[0] in _TRUSTED_SOURCE_PREFIXES
@@ -886,6 +906,8 @@ def build(datasets, request, can_price):
             charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
         elif dataset.source.startswith('wip-plan-flow ·'):
             charts, gaps = wip_plan_flow_candidates(dataset, request)
+        elif dataset.source.startswith(blacklake_production.SOURCE_KEY + ' · '):
+            charts, gaps = blacklake_production.build(dataset)
         elif (dataset.source.startswith('purchase-batch-lineage ·')
               and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
               .issubset({str(column) for column in dataset.frame.columns})):
@@ -906,7 +928,7 @@ def build(datasets, request, can_price):
             charts, gaps = financial_candidates(dataset, request, can_price)
         else:
             charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused','wip-plan-flow'}
+        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused','wip-plan-flow',blacklake_production.SOURCE_KEY}
         if not dataset.frame.empty and not business_source:
             from .financial_addons import build as financial_addons
             extra, extra_gaps = financial_addons(dataset, request, can_price)

@@ -135,6 +135,37 @@ export interface ProductCostCompareResponse {
 
 // ── API functions ─────────────────────────────────────────────────────────────
 
+export interface ExternalProductionRow {
+  reportDate: string;
+  productCode: string;
+  productName: string;
+  processName: string;
+  unit: string;
+  goodQty: number;
+  defectQty: number;
+  defectRate: number | null;
+  reportCount: number;
+}
+
+export interface ExternalProductionData {
+  sourceSystem: 'blacklake';
+  sourceLabel: string;
+  snapshotCollectedAt: string;
+  stale: boolean;
+  yieldRate: null;
+  cost: null;
+  unavailableMessage: string;
+  rows: ExternalProductionRow[];
+}
+
+export function getExternalProduction(args: FactoryDateQuery, summaryOnly = false) {
+  const query = new URLSearchParams(_buildQuery(args));
+  if (summaryOnly) query.set('summaryOnly', 'true');
+  return pythonFetch<{ success: boolean; data: ExternalProductionData | null; message: string }>(
+    `/api/smartbi/factory/external-production?${query}`,
+  );
+}
+
 /**
  * GET /api/smartbi/factory/cost-structure
  * Returns daily cost breakdown (material/labor/equipment/other) + summary.

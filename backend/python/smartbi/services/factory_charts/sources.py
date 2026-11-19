@@ -244,6 +244,12 @@ async def load(factory_id, request, can_price, auth_request=None):
     results = [production_result, *remaining]
     datasets = [dataset for dataset, _ in results if dataset is not None]
     errors = [error for _, error in results if error]
+    from . import blacklake_production
+    external, external_error = await blacklake_production.load(factory_id, request)
+    if external is not None:
+        datasets.append(external)
+    if external_error is not None:
+        errors.append(external_error)
     production = production_result[0]
     # SAFETY_STOCK/interim-settle facts use the real production/FG lineage and
     # may legitimately have an IN_PROGRESS production_batches row.  Load this

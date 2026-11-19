@@ -62,6 +62,8 @@ class FactoryEtlStats:
     """Per-stage row counts for observability."""
     silver_upserted: int = 0
     silver_report_upserted: int = 0
+    external_snapshots_synced: int = 0
+    external_sync_error: Optional[str] = None
     # 源头已软删 / 已硬删批次对应的 Silver / Gold 行被清掉的数量（见 prune_soft_deleted_fact_batches）
     silver_pruned: int = 0
     silver_pruned_hard_deleted: int = 0  # silver_pruned 中源头已硬删（本厂源表无此 id）的部分
@@ -821,6 +823,18 @@ async def run_factory_etl_with_retry(
         start = time.monotonic()
         try:
             result = await run_factory_etl(cretas_pool, smartbi_pool, factory_id)
+            # The external source has independent facts and freshness. Its
+            # failure leaves the native ETL result intact and visible.
+            from smartbi.gold.external_production_etl import sync_external_production
+
+            try:
+                result.external_snapshots_synced = await sync_external_production(
+                    cretas_pool, smartbi_pool, factory_id,
+                )
+            except Exception:
+                result.external_sync_error = "黑湖生产快照同步失败"
+                result.errors.append(f"silver_external: {result.external_sync_error}")
+                logger.exception("[factory-etl] External production sync failed for %s", factory_id)
             if attempt > 1:
                 logger.info(
                     "[factory-etl] succeeded on attempt %d for %s", attempt, factory_id
