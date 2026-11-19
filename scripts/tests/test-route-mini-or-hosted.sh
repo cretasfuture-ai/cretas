@@ -178,6 +178,44 @@ SH
       echo "  ok - 名次变异对照: 改回 seq 后名次变错"
     fi
   fi
+
+  # ── Maven 缓存恢复不许在自建 runner 上跑 (2026-11-19: 5 槽共用 ~ghgate/.m2, 恢复原地解压让别的槽读到半截 jar)。
+  #    每个 actions/cache/restore 步骤块 (从它所在的「- name:」到下一个「- name:」) 必须带 self-hosted 排除守卫。
+  restore_guard_report() {  # $1 = workflow; 输出「total=<n> guarded=<m>」
+    awk '
+      /^      - name:/ { if (blk != "") flush(); blk = $0 "\n"; next }
+      blk != "" { blk = blk $0 "\n" }
+      function flush() {
+        if (blk ~ /uses: actions\/cache\/restore@/) {
+          total++
+          if (blk ~ /if: \$\{\{ runner\.environment != .self-hosted. \}\}/) guarded++
+        }
+        blk = ""
+      }
+      END { if (blk != "") flush(); printf "total=%d guarded=%d\n", total, guarded }
+    ' "$1"
+  }
+  rg_got=$(restore_guard_report "$WFY")
+  echo "READING: maven cache restore steps: $rg_got"
+  rg_total=${rg_got#total=}; rg_total=${rg_total%% *}
+  if [ "${rg_total:-0}" -lt 1 ] || [ "$rg_got" != "total=$rg_total guarded=$rg_total" ]; then
+    echo "FAIL: java-gate-pr.yml 的 actions/cache/restore 步骤必须都带 if: \${{ runner.environment != 'self-hosted' }} (且至少 1 个)"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - Maven 缓存恢复全部排除自建 runner"
+  fi
+  # 变异对照: 删掉第一处守卫, 必须查出来。
+  GMUT="$WORK/wf-mutant.yml"
+  awk 'done != 1 && /if: \$\{\{ runner\.environment != .self-hosted. \}\}/ && prev ~ /Restore Maven repository/ { done = 1; prev = $0; next } { print; prev = $0 }' "$WFY" > "$GMUT"
+  mg=$(restore_guard_report "$GMUT")
+  echo "READING: mutant(drop guard) restore steps: $mg"
+  # 变异体里删了一处守卫: 必须正好查出少一处 (guarded = total - 1)。没少 = 变异没生效或检查查不出, 都判红。
+  if [ "$mg" != "total=$rg_total guarded=$((rg_total - 1))" ]; then
+    echo "FAIL: 守卫变异对照: 删掉一处守卫后应读到 total=$rg_total guarded=$((rg_total - 1)), 实际 $mg"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 守卫变异对照: 删掉一处守卫后查出"
+  fi
 fi
 [ "$PASSES" -ge 13 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 13)"; REAL_FAILS=$((REAL_FAILS + 1)); }
 
