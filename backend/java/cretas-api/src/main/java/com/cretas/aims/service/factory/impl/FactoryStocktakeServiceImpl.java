@@ -61,6 +61,7 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -1276,8 +1277,22 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
 
     @Override
     public Page<StocktakeDTO> list(String factoryId, FactoryStocktake.Status status, Pageable pageable) {
-        return stocktakeRepo.findByFactoryIdAndOptionalStatus(factoryId, status, pageable)
-                .map(stocktake -> enrichHeader(StocktakeDTO.from(stocktake), stocktake, factoryId));
+        Page<FactoryStocktake> page = stocktakeRepo.findByFactoryIdAndOptionalStatus(factoryId, status, pageable);
+        // #1844 L-1: 仓库名整页一次查(本厂未删仓库), ⛔ 不逐行按 id 查(N+1)。
+        Map<String, String> warehouseNames = page.getContent().stream().anyMatch(s -> s.getWarehouseId() != null)
+                ? warehouseNamesOf(factoryId) : Map.of();
+        return page.map(stocktake -> enrichHeader(StocktakeDTO.from(stocktake), stocktake, factoryId, warehouseNames));
+    }
+
+    /** 本厂未删除仓库的 id → 名称; 仓库仓储未装配时返回空表(名称留 null, 不拿 id 冒充)。 */
+    private Map<String, String> warehouseNamesOf(String factoryId) {
+        if (factoryWarehouseRepository == null) return Map.of();
+        Map<String, String> names = new HashMap<>();
+        for (com.cretas.aims.entity.factory.FactoryWarehouse w
+                : factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId)) {
+            if (w.getId() != null && w.getName() != null) names.put(w.getId(), w.getName());
+        }
+        return names;
     }
 
     @Override
@@ -1793,11 +1808,25 @@ public class FactoryStocktakeServiceImpl implements FactoryStocktakeService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
 
+    /** 详情: 单条按 id 查仓库名。 */
     private StocktakeDTO enrichHeader(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
         if (factoryWarehouseRepository != null && dto.getWarehouseId() != null && dto.getWarehouseName() == null) {
             factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(dto.getWarehouseId(), factoryId)
                     .ifPresent(w -> dto.setWarehouseName(w.getName()));
         }
+        return enrichHeaderRest(dto, stocktake, factoryId);
+    }
+
+    /** 列表: 仓库名取自整页预查的 {@code warehouseNames}。 */
+    private StocktakeDTO enrichHeader(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId,
+                                      Map<String, String> warehouseNames) {
+        if (dto.getWarehouseId() != null && dto.getWarehouseName() == null) {
+            dto.setWarehouseName(warehouseNames.get(dto.getWarehouseId()));
+        }
+        return enrichHeaderRest(dto, stocktake, factoryId);
+    }
+
+    private StocktakeDTO enrichHeaderRest(StocktakeDTO dto, FactoryStocktake stocktake, String factoryId) {
         LocalDateTime effectiveCutoff = effectiveInventoryCutoff(stocktake);
         if (dto.getInventoryCutoffAt() == null) {
             dto.setInventoryCutoffAt(effectiveCutoff);

@@ -285,6 +285,10 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
     @Autowired
     private InventoryLowStockEventPublisher inventoryLowStockEventPublisher;
 
+    /** #1844 L-d: 解除来源个体挂载的留痕 (同事务写, 写不进去就回滚)。 */
+    @Autowired(required = false)
+    private com.cretas.aims.repository.datacenter.OperationLogRepository operationLogRepository;
+
     /**
      * 一物一码 (转录 6.9 行62/68/105): 批次号由编码规则原子序号系统生成, 不手填防重码。
      * optional + fail-open: 无 EncodingRule 配置时回退到默认 MB-{FACTORY}-{YYYYMMDD}-{SEQ} 格式
@@ -2280,6 +2284,74 @@ public class MaterialBatchServiceImpl implements MaterialBatchService {
 
         log.info("更正批次入库日期: factoryId={}, batchId={}, {} → {}, role={}, operatorId={}",
                 factoryId, batchId, oldReceiptDate, newReceiptDate, callerRole, operatorId);
+        return materialBatchMapper.toDTO(batch);
+    }
+
+    @Override
+    @Transactional
+    public MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
+                                                   Long operatorId, String callerRole) {
+        // 入参校验排在读批次/写库之前: 被拒的请求一次写入都没发生过。
+        String trimmedReason = reason == null ? "" : reason.trim();
+        if (trimmedReason.isEmpty()) {
+            throw new BusinessException(400, "解除原因不能为空")
+                    .withHint("解除来源个体会改变这批原料的溯源源头, 必须说明为什么解除")
+                    .withHintTarget("reason");
+        }
+        if (trimmedReason.length() > CORRECTION_REASON_MAX_LENGTH) {
+            throw new BusinessException(400,
+                    "解除原因过长(" + trimmedReason.length() + "/" + CORRECTION_REASON_MAX_LENGTH + " 字)")
+                    .withHintTarget("reason");
+        }
+        MaterialBatch batch = materialBatchRepository.findById(batchId)
+                .orElseThrow(() -> new ResourceNotFoundException("原材料批次", "id", batchId));
+        if (!factoryId.equals(batch.getFactoryId())) {
+            throw new BusinessException(403, "无权操作该批次")
+                    .withHint("请联系管理员确认批次归属或切换工厂账号");
+        }
+        DataScopeResolver.requireRecordAccess(dataScopeResolver, factoryId, batch.getCreatedBy(), "material_batches");
+
+        String oldIndividualId = batch.getSourceIndividualId();
+        if (oldIndividualId == null || oldIndividualId.isBlank()) {
+            throw new BusinessException(409, "该批次没有挂来源个体, 无需解除")
+                    .withCode("SOURCE_INDIVIDUAL_NOT_LINKED")
+                    .withHint("刷新批次列表查看最新状态");
+        }
+        // ⛔ 留痕器不在就不许改 —— 静默不留痕比报错危险。
+        if (operationLogRepository == null) {
+            throw new BusinessException(500, "操作日志不可用, 本次解除未执行")
+                    .withHint("留痕写不进去就不允许改动, 请联系技术支持");
+        }
+
+        java.util.Map<String, Object> oldValue = new java.util.HashMap<>();
+        oldValue.put("sourceIndividualId", oldIndividualId);
+        java.util.Map<String, Object> newValue = new java.util.HashMap<>();
+        newValue.put("sourceIndividualId", null);
+        java.util.Map<String, Object> diffRow = new java.util.HashMap<>();
+        diffRow.put("field", "sourceIndividualId");
+        diffRow.put("from", oldIndividualId);
+        diffRow.put("to", null);
+        com.cretas.aims.entity.datacenter.OperationLog trace = com.cretas.aims.entity.datacenter.OperationLog.builder()
+                .factoryId(factoryId)
+                .userId(operatorId)
+                .module("MATERIAL_BATCH")
+                .action("UNLINK_SOURCE_INDIVIDUAL")
+                .entityType("MaterialBatch")
+                .entityId(batchId)
+                .oldValue(oldValue)
+                .newValue(newValue)
+                .diff(java.util.List.of(diffRow))
+                .summary("解除批次 " + batch.getBatchNumber() + " 的来源个体 " + oldIndividualId
+                        + "; 原因: " + trimmedReason + "; 角色: " + callerRole)
+                .success(Boolean.TRUE)
+                .build();
+        // 同一个 @Transactional: 日志写不进去, 批次的改动一起回滚。
+        operationLogRepository.save(trace);
+
+        batch.setSourceIndividualId(null);
+        batch = materialBatchRepository.save(batch);
+        log.info("解除批次来源个体: factoryId={}, batchId={}, oldSourceIndividualId={}, role={}, operatorId={}",
+                factoryId, batchId, oldIndividualId, callerRole, operatorId);
         return materialBatchMapper.toDTO(batch);
     }
 

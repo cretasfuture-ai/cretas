@@ -321,6 +321,19 @@ public interface MaterialBatchService {
                 "correctUnitPrice 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
     }
 
+    /**
+     * 解除批次与来源个体的挂载 (#1844 终审 L-d)。
+     *
+     * <p>编辑批次 (PUT) 里 {@code sourceIndividualId} 的 null = 不改、空白 = 400, 这一语义不动;
+     * 解除走这条独立入口: 原因必填 (≤255), 带 factoryId 与数据范围校验, 同一事务写操作日志
+     * (old/new 值 + 原因), 日志写不进去就一起回滚。
+     */
+    default MaterialBatchDTO unlinkSourceIndividual(String factoryId, String batchId, String reason,
+                                                    Long operatorId, String callerRole) {
+        throw new UnsupportedOperationException(
+                "unlinkSourceIndividual 未实现 —— 这条路径必须留痕, 不允许桩实现静默放行");
+    }
+
      /**
      * 更新批次状态 (仓库页 / AI 手动改状态)。
      *
