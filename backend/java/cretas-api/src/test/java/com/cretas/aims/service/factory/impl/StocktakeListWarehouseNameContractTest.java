@@ -3,6 +3,9 @@ package com.cretas.aims.service.factory.impl;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.cretas.aims.dto.factory.StocktakeDTO;
@@ -11,7 +14,6 @@ import com.cretas.aims.entity.factory.FactoryWarehouse;
 import com.cretas.aims.repository.factory.FactoryStocktakeRepository;
 import com.cretas.aims.repository.factory.FactoryWarehouseRepository;
 import java.util.List;
-import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -28,8 +30,7 @@ class StocktakeListWarehouseNameContractTest {
         FactoryWarehouse w = new FactoryWarehouse();
         w.setId("W1");
         w.setName("主仓");
-        when(whRepo.findByIdAndFactoryIdAndDeletedAtIsNull("W1", "F1")).thenReturn(Optional.of(w));
-        when(whRepo.findByIdAndFactoryIdAndDeletedAtIsNull("GONE", "F1")).thenReturn(Optional.empty());
+        when(whRepo.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc("F1")).thenReturn(List.of(w));
         ReflectionTestUtils.setField(svc, "factoryWarehouseRepository", whRepo);
 
         FactoryStocktake a = new FactoryStocktake();
@@ -47,5 +48,8 @@ class StocktakeListWarehouseNameContractTest {
 
         assertThat(out.get(0).getWarehouseName()).isEqualTo("主仓");
         assertThat(out.get(1).getWarehouseName()).isNull();
+        // #1844 L-1: 整页一次查本厂仓库, 不逐行按 id 查 (N+1)。
+        verify(whRepo, times(1)).findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc("F1");
+        verify(whRepo, never()).findByIdAndFactoryIdAndDeletedAtIsNull(any(), any());
     }
 }
