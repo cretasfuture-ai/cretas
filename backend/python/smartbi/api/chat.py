@@ -3017,6 +3017,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                     _rl_out = await _rl_answer(
                         request.effective_query, _rl_df, _rl_names(_rl_fm, _rl_df), _rl_llm,
                         field_meta=_rl_fm,
+                        upload_key=(trusted_factory_id, _question_chart_upload_id)
+                        if _question_chart_upload_id is not None else None,
                     )
                     if _rl_out.kind == "refuse":
                         for i in range(0, len(_rl_out.text), 60):

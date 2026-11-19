@@ -5,10 +5,13 @@
 """
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from smartbi.services.upload_aggregate_cache import get_cache
 from smartbi.services.upload_auto_select import UploadCandidate
+from smartbi.services import row_level_qa
 from tests.test_weimei_retest_r3b import FILM_FIELDS, FILM_Q, PLAN_FIELDS, plan_rows
 from tests.test_weimei_retest_r4 import (  # noqa: F401  (autouse fixture 要一起导入)
     PLAN_DAY, PLAN_DAY_FIELDS, PLAN_DETAIL, _bundle, _chart_titles, _clean_agg_cache, _series_names, ask, code_rows,
@@ -46,6 +49,29 @@ async def test_p1_1_thousands_separator_inside_a_number_is_not_a_clause_boundary
     assert done["answer"] == right and done["answer_corrected"] is False        # 改前: 切坏成残留 ",000 卷"
 
 
+@pytest.mark.parametrize(("answer", "expected"), [
+    ("全月所有 A产品和 B产品一共 52 卷。全月一共 133 卷。", "全月所有 A产品和 B产品一共 133 卷。全月一共 133 卷。"),
+    ("全月一共 999 卷，另有备注共 133 字。", "全月一共 133 卷，另有备注共 133 字。"),
+    ("全月一共 999 卷和 133 字。全月一共 52 卷。", "全月一共 133 卷和 133 字。全月一共 133 卷。"),
+    ("全月报废量一共 88 卷。全月一共用了 999 卷。", "全月报废量一共 88 卷。全月一共用了 133 卷。"),
+])
+async def test_p1_1_each_whole_total_is_checked_against_its_own_metric(monkeypatch, answer, expected):
+    _, done, prompts, _ = await ask(
+        monkeypatch, FILM_Q, {5321: (two_group_rows(52, 81), FILM_FIELDS)}, answer=answer,
+        plans=[dict(GROUP_PLAN, limit=1)],
+    )
+    assert "总用量 = 133" in prompts[0]
+    assert done["answer"] == expected and done["answer_corrected"] is True
+
+
+async def test_p1_1_enumerated_subtotals_remain_local_even_when_they_cover_all_groups(monkeypatch):
+    answer = "全月 A产品 52 卷和 B产品 81 卷。全月一共 133 卷。"
+    _, done, _, _ = await ask(
+        monkeypatch, FILM_Q, {5321: (two_group_rows(52, 81), FILM_FIELDS)}, answer=answer, plans=[GROUP_PLAN],
+    )
+    assert done["answer"] == answer and done["answer_corrected"] is False
+
+
 # ============ P1-2 「计划与实际」规则: 别的指标 / 时间范围 ============
 
 PLAN_OUTPUT_FIELDS = [("日期", False, False, True), ("计划工单数", True, False, False),
@@ -61,14 +87,24 @@ def plan_output_rows():
             {"日期": "2026-10-20", "计划工单数": 4, "已完成计划工单数": 1, "计划产量kg": 500.0, "实际产量kg": 400.0}]
 
 
-async def test_p1_2_plan_vs_actual_rule_does_not_steal_a_question_about_another_metric(monkeypatch):
+@pytest.mark.parametrize("guard", ["column_role", "question_metric"])
+async def test_p1_2_plan_vs_actual_rule_does_not_steal_a_question_about_another_metric(monkeypatch, guard):
+    rows, fields = plan_output_rows(), PLAN_OUTPUT_FIELDS
+    question = "10月计划与实际差多少"
+    if guard == "question_metric":
+        rename = {"计划工单数": "原表计划品项数", "已完成计划工单数": "已产出计划品项数"}
+        rows = [{rename.get(k, k): v for k, v in row.items()} for row in rows]
+        fields = [(rename.get(n, n), m, d, t) for n, m, d, t in fields]
+        question = "10月计划与实际产量kg差多少"
     plan = {"intent": "compute", "filters": [{"col": "日期", "op": "==", "value": "2026-10"}],
             "metrics": [{"name": "计划产量", "func": "sum", "col": "计划产量kg"},
                         {"name": "实际产量", "func": "sum", "col": "实际产量kg"}]}
-    _, _, prompts, calls = await ask(monkeypatch, "10月计划与实际产量kg差多少",
-                                     {5399: (plan_output_rows(), PLAN_OUTPUT_FIELDS)}, plans=[plan], candidates=PLAN_OUTPUT)
-    assert len(calls) == 1                                  # 改前: 0 次 (规则抢走), 答 150/30 并标成品项数
-    assert "品项" not in prompts[0] and "1200" in prompts[0].replace(",", "")    # 十月计划 1200 / 实际 900
+    candidates = [replace(PLAN_OUTPUT[0], field_names=[f[0] for f in fields])]
+    _, _, prompts, calls = await ask(monkeypatch, question, {5399: (rows, fields)}, plans=[plan], candidates=candidates)
+    assert len(calls) == 1
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "命中 2 / 4 行" in block
+    assert "| 计划产量 | 实际产量 |" in block and "| 1,200 | 900 |" in block
 
 
 async def test_p1_2_plan_vs_actual_rule_keeps_the_month_scope(monkeypatch):
@@ -87,6 +123,37 @@ def day_rate_rows():
     return [dict(base, 日期="2026-09-10", 原表计划品项数=20, 已产出计划品项数=1, 计划品项达成率=0.05),
             dict(base, 日期="2026-10-05", 原表计划品项数=10, 已产出计划品项数=5, 计划品项达成率=0.5),
             dict(base, 日期="2026-10-20", 原表计划品项数=10, 已产出计划品项数=8, 计划品项达成率=0.8)]
+
+
+@pytest.mark.parametrize(("question", "date_mode", "filters", "matched", "value"), [
+    ("2025年10月计划与实际差多少", "cross_year", [{"col": "日期", "op": "==", "value": "2025-10"}], 1, 4),
+    ("2025年10月计划与实际差多少", "single_year", [{"col": "日期", "op": "==", "value": "2025-10"}], 0, "(空)"),
+    ("9月和10月计划与实际差多少", "single_year", [], 3, 40),
+    ("10月5日之后哪一周计划品项达成率最低", "single_year", [{"col": "日期", "op": ">", "value": "2026-10-05"}], 1, 10),
+    ("10月哪一周计划品项达成率最低", "no_date", [], 3, 40),
+    ("10月计划与实际差多少", "no_date", [], 3, 40),
+    ("10月计划与实际差多少", "cross_year", [{"col": "日期", "op": "==", "value": "2026-10"}], 2, 20),
+    ("10月哪一周计划品项达成率最低", "cross_year", [{"col": "日期", "op": "==", "value": "2026-10"}], 2, 20),
+    ("哪一周计划品项达成率最低", "cross_year", [], 4, 44),
+])
+async def test_p1_2_3_unsupported_time_scopes_are_left_to_the_planner(
+        monkeypatch, question, date_mode, filters, matched, value):
+    rows, fields = day_rate_rows(), PLAN_DAY_FIELDS
+    if date_mode == "cross_year":
+        rows.append(dict(rows[0], 日期="2025-10-01", 原表计划品项数=4))
+    if date_mode == "no_date":
+        # 数据集有月份标签，能通过能力检查，但无法按自然日折算周或年份。
+        rows = [{**{k: v for k, v in row.items() if k != "日期"}, "月份": row["日期"][:7]}
+                for row in rows]
+        fields = [f for f in fields if f[0] != "日期"] + [("月份", False, False, True)]
+    candidates = [replace(PLAN_DAY[0], field_names=[f[0] for f in fields])]
+    plan = {"intent": "compute", "filters": filters,
+            "metrics": [{"name": "规划器计划数", "func": "sum", "col": "原表计划品项数"}]}
+    _, _, prompts, calls = await ask(monkeypatch, question, {5334: (rows, fields)}, plans=[plan], candidates=candidates)
+    assert len(calls) == (2 if matched == 0 else 1)
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert f"命中 {matched} / {len(rows)} 行" in block
+    assert "| 规划器计划数 |" in block and f"| {value} |" in block
 
 
 async def test_p1_3_week_rollup_keeps_the_month_scope(monkeypatch):
@@ -119,6 +186,31 @@ async def test_p1_3_week_rollup_uses_the_mean_when_asked_and_never_sums_a_temper
     assert len(calls2) == 1
 
 
+@pytest.mark.parametrize("question", ["哪一周单位产量kg/人最高", "哪一周单位产量kg/人的合计最高"])
+async def test_p1_3_weekly_per_person_output_needs_a_planner(question, monkeypatch):
+    fields = [("日期", False, False, True), ("单位产量kg/人", True, False, False)]
+    rows = [{"日期": f"2026-10-{i:02d}", "单位产量kg/人": 2} for i in range(1, 11)]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    plan = {"intent": "compute", "group_by": ["周(按日期折算)"],
+            "metrics": [{"name": "每人产量均值", "func": "mean", "col": "单位产量kg/人"}]}
+    _, _, prompts, calls = await ask(monkeypatch, question, {5398: (rows, fields)}, plans=[plan], candidates=candidates)
+    assert len(calls) == 1
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "| 2026-W40 | 2 |" in block and "| 2026-W41 | 2 |" in block
+
+
+async def test_p1_3_incidental_jun_does_not_change_weekly_sum_to_mean(monkeypatch):
+    fields = [("日期", False, False, True), ("产量kg", True, False, False)]
+    rows = [{"日期": f"2026-10-{i:02d}", "产量kg": 10} for i in range(1, 11)]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, _, prompts, calls = await ask(
+        monkeypatch, "哪一周产量最高？各线均需列出", {5398: (rows, fields)}, candidates=candidates,
+    )
+    assert calls == []
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "| 2026-W41 | 60 |" in block and "| 2026-W40 | 40 |" in block
+
+
 # ============ P1-4 前缀语义: 只对日期字段 / 整列约定 ============
 
 SKU_FIELDS = PLAN_FIELDS + [("SKU", False, True, False)]
@@ -138,6 +230,44 @@ async def test_p1_4_month_prefix_match_is_for_date_fields_only(monkeypatch):
     assert "命中 0 / 12 行" in prompts[0]                      # 改前: 命中 3 行 (SKU「2026-10-SKU」被前缀吃进来)
 
 
+@pytest.mark.parametrize(("op", "matched"), [("==", 0), ("!=", 12)])
+async def test_p1_4_date_shaped_sku_uses_literal_equality(monkeypatch, op, matched):
+    fields = PLAN_FIELDS + [("SKU日期", False, True, False)]
+    rows = [dict(r, SKU日期="2026-10-05") for r in plan_rows()]
+    plan = {"intent": "compute", "filters": [{"col": "SKU日期", "op": op, "value": "2026-10"}]}
+    _, _, prompts, _ = await ask(
+        monkeypatch, "10月计划vs实产里筛选SKU日期2026-10，列出记录", {5323: (rows, fields)},
+        plans=[plan], candidates=PLAN_DETAIL,
+    )
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert f"命中 {matched} / 12 行" in block
+
+
+async def test_p1_4_invalid_iso_date_is_not_a_month_match(monkeypatch):
+    rows = [dict(r, 日期="2026-10-32") for r in plan_rows()]
+    plan = {"intent": "compute", "filters": [{"col": "日期", "op": "==", "value": "2026-10"}]}
+    _, _, prompts, calls = await ask(
+        monkeypatch, "10月计划vs实产里列出日期", {5323: (rows, PLAN_FIELDS)}, plans=[plan], candidates=PLAN_DETAIL,
+    )
+    assert len(calls) == 2
+    assert "命中 0 / 12 行" in prompts[0].split("## 全表精确计算结果")[1]
+
+
+async def test_p1_4_hash_in_ordinary_notes_is_literal(monkeypatch):
+    fields = PLAN_FIELDS + [("备注", False, True, False)]
+    rows = [dict(r, 备注="#ABC") for r in plan_rows()]
+    for value, matched in [("ABC", 0), ("#ABC", 12)]:
+        plan = {"intent": "compute", "filters": [{"col": "备注", "op": "==", "value": value}]}
+        _, _, prompts, _ = await ask(
+            monkeypatch, f"10月计划vs实产里备注是{value}的记录", {5323: (rows, fields)},
+            plans=[plan], candidates=PLAN_DETAIL,
+        )
+        block = prompts[0].split("## 全表精确计算结果")[1]
+        assert f"命中 {matched} / 12 行" in block
+        if matched:
+            assert "| #ABC |" in block and '"备注": "#ABC"' in prompts[0]
+
+
 async def test_p1_4_hash_prefix_is_stripped_only_when_the_whole_column_uses_it(monkeypatch):
     rows = code_rows("#")
     rows[0]["产品编码"] = "22002"                               # 一列里 #22002 和 22002 并存 = 两个不同的值
@@ -152,6 +282,20 @@ async def test_p1_4_hash_prefix_is_stripped_only_when_the_whole_column_uses_it(m
     assert "| #22002 |" in prompts2[0] and "命中 6 / 20 行" in prompts2[0]   # 混用的列不去前缀显示
 
 
+async def test_p1_4_filtering_first_does_not_turn_a_mixed_code_column_into_escaped(monkeypatch):
+    rows = code_rows("#")
+    rows[-1]["产品编码"] = "22002"
+    plan = {"intent": "compute", "filters": [
+        {"col": "结论", "op": "==", "value": "计划了未生产"},
+        {"col": "产品编码", "op": "==", "value": "22002"},
+    ]}
+    _, _, prompts, _ = await ask(
+        monkeypatch, "10月计划vs实产里查询未生产的产品编码22002", {5323: (rows, PLAN_FIELDS)},
+        plans=[plan], candidates=PLAN_DETAIL,
+    )
+    assert "命中 0 / 20 行" in prompts[0].split("## 全表精确计算结果")[1]
+
+
 @pytest.mark.parametrize("value", ["DEF", "#DEF"])
 async def test_p1_4_double_hash_value_is_not_matched_by_single_hash_or_bare_value(monkeypatch, value):
     rows = code_rows()
@@ -163,27 +307,78 @@ async def test_p1_4_double_hash_value_is_not_matched_by_single_hash_or_bare_valu
     assert "命中 0 / 20 行" in prompts[0]                      # 改前: 都命中 ##DEF
 
 
+async def test_p1_4_literal_double_hash_is_displayed_and_can_be_queried(monkeypatch):
+    rows = [dict(r, 产品编码="##DEF") for r in code_rows()]
+    plan = {"intent": "compute", "filters": [{"col": "产品编码", "op": "==", "value": "##DEF"}]}
+    _, _, prompts, _ = await ask(
+        monkeypatch, "10月计划vs实产里产品编码##DEF有几天", {5323: (rows, PLAN_FIELDS)},
+        plans=[plan], candidates=PLAN_DETAIL,
+    )
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "命中 20 / 20 行" in block and "| ##DEF |" in block
+    assert '"产品编码": "##DEF"' in prompts[0]
+
+
 # ============ P1-5 计划缓存: 连续两次 / 同表头不同取值 ============
 
 async def test_p1_5_zero_row_answer_is_the_same_the_second_time_it_is_asked(monkeypatch):
     plan = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "停线"}]}
     q = "10月计划vs实产里有没有停线的品项？"
     for _ in range(2):
-        _, _, prompts, _ = await ask(monkeypatch, q, {5323: (plan_rows(), PLAN_FIELDS)}, plans=[plan],
+        _, _, prompts, calls = await ask(monkeypatch, q, {5323: (plan_rows(), PLAN_FIELDS)}, plans=[plan],
                                      candidates=PLAN_DETAIL)
         assert "命中 0 / 12 行" in prompts[0] and "行级计算未完成" not in prompts[0]   # 改前: 第二次 uncomputed
+        assert len(calls) == 2 and "上一次的计划无效" in calls[1]
+        assert not row_level_qa._PLAN_CACHE
 
 
-async def test_p1_5_cached_plan_is_not_reused_on_another_upload_with_same_headers_but_other_values(monkeypatch):
+@pytest.mark.parametrize("change", ["upload_id", "column", "field_role", "filter_values"])
+async def test_p1_5_valid_plan_is_reused_only_for_a_compatible_upload(monkeypatch, change):
     q = "10月计划vs实产里哪些是计划外生产？"
     plan_a = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "计划外生产"}]}
-    _, _, p1, _ = await ask(monkeypatch, q, {5323: (plan_rows(), PLAN_FIELDS)}, plans=[plan_a], candidates=PLAN_DETAIL)
-    assert "命中 9 / 12 行" in p1[0]
-    other = [dict(r, 结论="Outside") for r in plan_rows()]
+    rows = plan_rows()
+    _, _, p1, calls1 = await ask(monkeypatch, q, {5323: (rows, PLAN_FIELDS)}, plans=[plan_a], candidates=PLAN_DETAIL)
+    assert len(calls1) == 1 and "命中 9 / 12 行" in p1[0]
     plan_b = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "Outside"}]}
-    _, _, p2, calls = await ask(monkeypatch, q, {5323: (other, PLAN_FIELDS)}, plans=[plan_b], candidates=PLAN_DETAIL)
-    assert len(calls) == 1 and "命中 12 / 12 行" in p2[0]      # 缓存的 A 计划对这份无效 -> 重新规划, 不套用
+    _, _, hit, hit_calls = await ask(monkeypatch, q, {5323: (rows, PLAN_FIELDS)}, plans=[plan_b], candidates=PLAN_DETAIL)
+    assert hit_calls == [] and "命中 9 / 12 行" in hit[0]
+
+    uid = 6999 if change == "upload_id" else 5323
+    # 旧值仍可通过严格检查，唯有 filter_values 组测试缓存失效后重规划。
+    other = [dict(r, 结论="计划外生产" if i == 0 and change != "filter_values" else "Outside")
+             for i, r in enumerate(rows)]
+    fields = PLAN_FIELDS
+    if change == "column":
+        other = [dict(r, 备注="新字段") for r in other]
+        fields = PLAN_FIELDS + [("备注", False, False, False)]
+    if change == "field_role":
+        fields = [(n, m, False if n == "计划产线" else d, t) for n, m, d, t in PLAN_FIELDS]
+    candidates = [replace(PLAN_DETAIL[0], upload_id=uid, field_names=[f[0] for f in fields])]
+    events, _, p2, calls = await ask(monkeypatch, q, {uid: (other, fields)}, plans=[plan_b], candidates=candidates)
+    expected = 12 if change == "filter_values" else 11
+    assert any(e == "data_source" and d["uploadId"] == uid for e, d in events)
+    assert len(calls) == 1 and f"命中 {expected} / 12 行" in p2[0].split("## 全表精确计算结果")[1]
+    assert "上一次的计划无效" not in calls[0]
     assert "行级计算未完成" not in p2[0]
+
+
+@pytest.mark.parametrize("intent", ["none", "no_metric"])
+async def test_p1_5_unvalidated_planner_outcomes_are_not_cached(monkeypatch, intent):
+    q = "10月计划vs实产里哪些是计划外生产？"
+    rows = plan_rows()
+    _, done, prompts, calls = await ask(
+        monkeypatch, q, {5323: (rows, PLAN_FIELDS)}, plans=[{"intent": intent}], candidates=PLAN_DETAIL,
+    )
+    assert len(calls) == 1
+    if intent == "no_metric":
+        assert done["source"] == "field_metric_mismatch_refusal"
+    else:
+        assert "## 全表精确计算结果" not in prompts[0]
+    plan = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "计划外生产"}]}
+    for uid in [6999, 5323]:
+        candidates = [replace(PLAN_DETAIL[0], upload_id=uid)]
+        _, _, computed, again = await ask(monkeypatch, q, {uid: (rows, PLAN_FIELDS)}, plans=[plan], candidates=candidates)
+        assert len(again) == 1 and "命中 9 / 12 行" in computed[0].split("## 全表精确计算结果")[1]
 
 
 # ============ P2 Top 5 相关性 ============
@@ -192,12 +387,16 @@ SCRAP_FIELDS = [("日期", False, False, True), ("产线", False, True, False), 
 SCRAP_CAND = [UploadCandidate(5397, "报废记录", "报废记录.xlsx", 6, [f[0] for f in SCRAP_FIELDS])]
 
 
-async def test_p2_single_measure_table_keeps_top5_when_the_column_is_not_recognised(monkeypatch):
+@pytest.mark.parametrize("question", ["各产线的损耗是多少", "哪条产线损耗最高"])
+async def test_p2_single_measure_table_keeps_top5_when_the_column_is_not_recognised(monkeypatch, question):
     rows = [{"日期": f"2026-10-0{i + 1}", "产线": f"线{i % 3 + 1}", "报废重量": 10.0 + i} for i in range(6)]
     get_cache().set(5397, _bundle(SCRAP_FIELDS, ["报废重量"], "报废重量",
                                   {"产线": [{"label": "线1", "total": 25.0}, {"label": "线2", "total": 20.0}]}))
-    events, _, _, _ = await ask(monkeypatch, "各产线的损耗是多少", {5397: (rows, SCRAP_FIELDS)}, candidates=SCRAP_CAND)
-    assert any(t.startswith("Top 5 产线") and "报废重量" in t for t in _chart_titles(events)), _chart_titles(events)
+    events, _, _, _ = await ask(monkeypatch, question, {5397: (rows, SCRAP_FIELDS)}, candidates=SCRAP_CAND)
+    top = next(c for e, charts in events if e == "charts" for c in charts
+               if c["title"] == "Top 5 产线 (按 报废重量)")
+    assert top["option"]["xAxis"]["data"] == ["线1", "线2"]
+    assert top["option"]["series"][0]["data"] == [25.0, 20.0]
 
 
 BUY_FIELDS = [("日期", False, False, True), ("产线", False, True, False), ("采购金额", True, False, False),

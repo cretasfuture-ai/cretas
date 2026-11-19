@@ -78,8 +78,10 @@ def prepare_data_summary(df: pd.DataFrame, field_meta=None) -> str:
     field_meta 给出时, 标识列 (编码/批号, 字段角色不是指标) 不做总计/均值/首尾变化, 样本里按文本写,
     否则 22002 会被写成「最大=260,403.00」, 小模型照抄成带千分位的编码。
     """
-    from smartbi.services.row_level_qa import identifier_columns
+    from smartbi.services.row_level_qa import hash_escaped_column, identifier_columns, strip_code_hash
     id_cols = identifier_columns([str(c) for c in df.columns], field_meta, df)
+    roles = {f.get("original_name"): f for f in (field_meta or [])}
+    hash_cols = {humanize_col(c) for c in id_cols if hash_escaped_column(df[c], roles.get(c))}
     df = humanize_df_columns(df)
     id_cols = {humanize_col(c) for c in id_cols}
     meaningful_cols = [c for c in df.columns if not is_placeholder_col(c)]
@@ -119,8 +121,7 @@ def prepare_data_summary(df: pd.DataFrame, field_meta=None) -> str:
     if len(df) > 0:
         sample_df = df.head(3).astype(object)
         for c in id_cols & set(sample_df.columns):
-            from smartbi.services.row_level_qa import hash_escaped_column, strip_code_hash
-            _strip = hash_escaped_column(df[c])
+            _strip = c in hash_cols
             sample_df[c] = sample_df[c].map(
                 lambda v: str(int(v)) if isinstance(v, float) and v == v and v == int(v)
                 else (strip_code_hash(v) if _strip and isinstance(v, str) else v))

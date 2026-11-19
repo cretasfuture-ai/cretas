@@ -17,7 +17,7 @@ RATE = "出成率(良品/(良品+废品+次品))"
 
 @pytest.fixture(autouse=True)
 def _fresh_plan_cache():
-    getattr(rl, "_PLAN_CACHE", {}).clear()
+    rl._PLAN_CACHE.clear()
     yield
 
 
@@ -103,15 +103,16 @@ async def test_2_table_with_a_real_plan_quantity_column_is_not_rerouted():
     assert out.result.rows[0][0] == "2026-10-02" and len(planner.prompts) == 1
 
 
-async def test_2_same_question_same_columns_gets_a_stable_plan_even_if_llm_samples_differ():
+async def test_2_request_without_upload_identity_uses_its_own_plan():
     df = plan_daily()
     q = "按日看哪天已产出品项最多"
-    a = {"intent": "compute", "sort_by": "已产出计划品项数", "descending": True, "limit": 1}
+    a = {"intent": "compute", "sort_by": "原表计划品项数", "descending": True, "limit": 1}
     b = {"intent": "compute", "sort_by": "实产良品kg", "descending": True, "limit": 1}
     first, _ = await ask(q, df, a, b)
-    second, p2 = await ask(q, df, b, a)       # 第二次 LLM 会给另一个计划, 但同一原话已有稳定计划
-    assert first.result.rows == second.result.rows
-    assert p2.prompts == []
+    second, p2 = await ask(q, df, b, a)
+    assert first.result.rows[0][0] == "2026-10-09"
+    assert second.result.rows[0][0] == "2026-10-01"
+    assert len(p2.prompts) == 1
 
 
 # ------------------------------ 3. 按日表问「哪一周」 ------------------------------

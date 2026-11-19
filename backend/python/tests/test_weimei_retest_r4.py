@@ -27,9 +27,10 @@ XINGFA = UploadCandidate(5336, "醒发蒸制", "味美10月-04-醒发蒸制.xlsx
 def _clean_agg_cache():
     from smartbi.services import row_level_qa as rl
     get_cache().clear()
-    rl._PLAN_CACHE.clear()          # 规划按 (原话, 表头) 缓存: 各用例的规划桩互不串
+    rl._PLAN_CACHE.clear()          # 各用例独立；同一用例的连续请求共用缓存
     yield
     get_cache().clear()
+    rl._PLAN_CACHE.clear()
 
 
 class _Acquire:
@@ -117,9 +118,13 @@ async def ask(monkeypatch, question, tables, *, answer="（桩）", plans=None, 
         calls.append(prompt)
         return json.dumps(seq[min(len(calls) - 1, len(seq) - 1)], ensure_ascii=False)
 
+    async def _log_fallback(_pool, _payload):
+        return None
+
     monkeypatch.setattr("smartbi.config.get_pg_pool", _pool)
     monkeypatch.setattr(chat_mod.InsightGenerator, "_call_llm_stream_text", _stream)
     monkeypatch.setattr(chat_mod.InsightGenerator, "_call_llm", _call)
+    monkeypatch.setattr("smartbi.services.llm_fallback_logger.log_fallback", _log_fallback)
     monkeypatch.setattr(chat_mod, "_chat_cache_get", lambda _k: None)
     monkeypatch.setattr(chat_mod, "_chat_cache_set", lambda *a: None)
     resp = await chat_mod.general_analysis_stream(chat_mod.GeneralAnalysisRequest(query=question), _Request())
@@ -223,7 +228,10 @@ async def test_5_footer_chart_does_not_fall_back_to_the_first_measure_when_quest
 async def test_5_question_about_the_primary_measure_keeps_its_footer_chart(monkeypatch):
     get_cache().set(5319, _day_bundle())
     events, _, _, _ = await ask(monkeypatch, "10月哪天的人数最多", {5319: (day_rows(), DAY_FIELDS)})
-    assert "人数" in _series_names(events) or any("人数" in t for t in _chart_titles(events))
+    top = next(c for e, charts in events if e == "charts" for c in charts
+               if c["title"] == "Top 5 周 (按 人数)")
+    assert top["option"]["xAxis"]["data"] == ["2026-W42", "2026-W40"]
+    assert top["option"]["series"][0]["data"] == [268.0, 111.0]
 
 
 async def test_5_question_that_picks_a_measure_gets_that_measure_not_the_first_one(monkeypatch):
