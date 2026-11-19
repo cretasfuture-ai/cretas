@@ -23,9 +23,18 @@ import time
 
 RUNTIME_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 MODEL = 'qwen3.8:27b'
-SYSTEM = ('你是白垩纪食品工厂助手。仅回答食品安全、生产和质量管理的通用咨询。'
-          '用中文给出简洁实用的建议，不超过300字。不能声称读取了工厂实时数据，'
-          '不能代用户执行业务操作。具体库存、订单或金额应引导使用系统查询。')
+# Authoritative persona. Mirrors backend/python/llm/f006_mini_provider.py _SYSTEM (pinned by
+# backend/python/tests/test_f006_mini_prompt_parity.py); the gateway never trusts the caller's text.
+SYSTEM = (
+    "你是「白垩纪」食品工厂管理系统里的工厂助手。「白垩纪」只是本系统的品牌名，"
+    "与古生物学、恐龙、地质年代没有任何关系，不要介绍或谈论这些。"
+    "仅回答食品安全、生产和质量管理的通用咨询，用中文给出简洁实用的建议，不超过300字。"
+    "你看不到本工厂的任何实时业务数据：不得给出任何业务数字或业务事实"
+    "（销售额、销量、营收、利润、成本、产量、出货量、库存、订单数、合格率、同比、环比、排名等），"
+    "也不得说某项业务在增长、下降、良好或不佳；不能代用户执行业务操作。"
+    "用户问到这类情况时，只回答需要先查一下真实数据，并请用户说明想查哪一项"
+    "（例如本月销售概况、出货记录、库存、生产报表）。"
+)
 LOCAL_GUIDANCE = ('补充要求：仅回答与问题有关的要点，最多4条，正文不超过200个字符（包括标点）。'
     '温控或冷链异常应先隔离受影响产品，由质检依据时间温度记录和SOP评估，不能仅凭外观、气味或口感判断安全。'
     '日期模糊须先隔离追溯，核实前不得擅改日期。生熟共台应优先改为物理分区；分时操作须先熟后生并彻底清洗消毒。')
@@ -114,12 +123,14 @@ def validate_request(raw):
     m=d.get('messages');opts=d.get('options')
     if (not isinstance(m,list) or len(m)!=2 or [x.get('role') for x in m if isinstance(x,dict)]!=['system','user']
             or any(set(x)!={'role','content'} or not isinstance(x['content'],str) for x in m)
-            or not 1<=len(m[1]['content'])<=2000 or m[0]['content']!=SYSTEM):
+            or not 1<=len(m[1]['content'])<=2000 or not 1<=len(m[0]['content'])<=2000):
         raise ValueError('request_messages')
     m[1]['content'].encode('utf-8') # Reject lone surrogates rather than truncating a malformed question.
     if (not isinstance(opts,dict) or set(opts)!={'temperature','num_predict'}
             or opts['temperature']!=0.4 or opts['num_predict']!=(768 if d['think'] else 384)):
         raise ValueError('request_options')
+    # The caller's system text is only shape-checked: the gateway always sends its own EFFECTIVE_SYSTEM,
+    # so persona drift between caller and gateway can no longer turn into a 400 (2026-11-19 boss-mini outage).
     # The caller cannot choose an engine, model path, context, tools or egress.
     return dict(model=MODEL,messages=[dict(role='system',content=EFFECTIVE_SYSTEM),m[1]],
         stream=True,stream_options={'include_usage':True},temperature=.4,top_k=20,

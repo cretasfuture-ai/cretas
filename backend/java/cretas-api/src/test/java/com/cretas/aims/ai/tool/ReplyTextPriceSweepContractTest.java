@@ -89,6 +89,12 @@ class ReplyTextPriceSweepContractTest {
         reviewed("workdesk/WageCostSummaryTool.java", Verdict.CHECKED, "totalAmount / totalPieceRate / totalHourly / totalOvertime");
         reviewed("workflow/ApprovalPendingQueryTool.java", Verdict.CHECKED, "PO 金额按 PriceSensitive.PURCHASE");
         // ── OWN_GATE: 工具自带判定 (note = 判定标识) ──
+        // OWN_GATE (2026-11-18): 金额是调用者本人的工资, 门是「只看本人」 —— 参数里出现别人就整次 DENIED 不出金额
+        //   (阴性对照见 IntentGapV3ToolsContractTest.MyWage); 不是价格可见性字段, 不走 replyShowsAmount。
+        reviewed("hr/MyWageQueryTool.java", Verdict.OWN_GATE, "otherPersonMentioned(params, self)");
+        // OWN_GATE (2026-11-18): 整个结果就是采购价 (月均价 / 涨幅排名的前后均价), doExecute 一开头按 callerMayViewPurchasePrices
+        //   (采购价可见性配置, 与 PurchaseController / PriceFieldResponseAdvice 同判定) 整次拒绝, 单原料与「涨幅排名」两条路径都在门后。
+        reviewed("workdesk/PriceHistoryQueryTool.java", Verdict.OWN_GATE, "callerMayViewPurchasePrices(context)");
         // ── NOT_PRICE_SENSITIVE ──
         reviewed("print/PrintTemplateCreateFromAITool.java", Verdict.NOT_PRICE_SENSITIVE, "给大模型的格式示例 ¥1,234.50, 不是数据");
         reviewed("rules/RuleTestEvaluateTool.java", Verdict.NOT_PRICE_SENSITIVE, "工具描述里的规则举例");
@@ -105,7 +111,7 @@ class ReplyTextPriceSweepContractTest {
     void everyToolThatWritesMoneyIntoTextIsReviewed() throws IOException {
         Set<String> found = moneyTextFiles();
         // Dedicated restaurant implementations were removed; keep an exact non-vacuous denominator.
-        assertThat(found).as("工厂目录金额文本审计分母").hasSize(27);
+        assertThat(found).as("工厂目录金额文本审计分母").hasSize(29); // 2026-11-18 +1 hr/MyWageQueryTool (本人工资), +1 workdesk/PriceHistoryQueryTool (涨幅排名文字, 门在 doExecute 开头)
 
         Set<String> unreviewed = new TreeSet<>(found);
         unreviewed.removeAll(REVIEWED.keySet());

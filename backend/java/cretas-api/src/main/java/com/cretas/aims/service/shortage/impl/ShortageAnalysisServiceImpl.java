@@ -69,6 +69,27 @@ public class ShortageAnalysisServiceImpl implements ShortageAnalysisService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ThresholdResolverService thresholdResolver;
 
+    @org.springframework.beans.factory.annotation.Autowired
+    @org.springframework.context.annotation.Lazy
+    private com.cretas.aims.service.inventory.SalesService salesService;
+
+    @Override
+    public List<com.cretas.aims.entity.inventory.SalesOrder> listOpenOrdersForOverview(String factoryId) {
+        java.util.Set<com.cretas.aims.entity.enums.SalesOrderStatus> notOpen = java.util.Set.of(
+                com.cretas.aims.entity.enums.SalesOrderStatus.DRAFT, com.cretas.aims.entity.enums.SalesOrderStatus.COMPLETED,
+                com.cretas.aims.entity.enums.SalesOrderStatus.CANCELLED, com.cretas.aims.entity.enums.SalesOrderStatus.SHORT_CLOSED,
+                com.cretas.aims.entity.enums.SalesOrderStatus.FINANCE_REJECTED);
+        List<com.cretas.aims.entity.inventory.SalesOrder> open = new ArrayList<>();
+        for (com.cretas.aims.entity.inventory.SalesOrder order : salesService.getSalesOrders(factoryId, 1, 100).getContent()) {
+            if (order.getStatus() != null && !notOpen.contains(order.getStatus())) {
+                open.add(order);
+            }
+        }
+        open.sort(java.util.Comparator.comparing(com.cretas.aims.entity.inventory.SalesOrder::getRequiredDeliveryDate,
+                java.util.Comparator.nullsLast(java.util.Comparator.naturalOrder())));
+        return open;
+    }
+
     private int productionLeadDays(String factoryId) {
         if (thresholdResolver == null) return FALLBACK_PRODUCTION_LEAD_DAYS;
         return thresholdResolver.getInteger(factoryId,

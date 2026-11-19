@@ -36,7 +36,8 @@ def test_decision_pool_rejects_an_unverified_pair(monkeypatch):
     head = llm_router._LOGPROB_ORDER[0]
     trimmed = {k: v for k, v in llm_router._LOGPROB_VERIFIED.items() if k != head}
     pool = [p for p in llm_router._LOGPROB_ORDER if p in trimmed]
-    assert head not in pool and len(pool) == len(llm_router._LOGPROB_VERIFIED) - 1
+    in_order_verified = [p for p in llm_router._LOGPROB_ORDER if p in llm_router._LOGPROB_VERIFIED]
+    assert head not in pool and len(pool) == len(in_order_verified) - 1
 
 
 def test_decision_has_no_text_floor():
@@ -102,6 +103,11 @@ def test_body_validator_moves_past_a_200_without_logprobs(monkeypatch):
         ch = body["choices"][0]
         return None if (ch.get("logprobs") or {}).get("content") else "no_logprobs"
 
+    # 决策池现在只有 aliyun_a_vl/qwen3.8-flash 一跳(qwen3.7-flash 已移出), 所以这里把链换成两跳
+    # 来测「校验器拒绝后换下一跳」; 白名单检查单独绕过, 只测校验器行为。
+    monkeypatch.setitem(llm_router.SLOT_MODELS, SLOT.DECISION,
+                        [("aliyun_a_vl", "qwen3.8-flash"), ("aliyun_b_vl", "qwen3.8-flash")])
+    monkeypatch.setattr(llm_router, "_refuse_reason", lambda a, m, today=None: None)
     out = asyncio.run(llm_router.call_chain(SLOT.DECISION, {"messages": []}, body_validator=needs_logprobs))
     assert len(calls) == 2, calls
     assert out["choices"][0]["logprobs"]["content"][0]["token"] == "B"

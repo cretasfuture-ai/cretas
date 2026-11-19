@@ -188,6 +188,12 @@ describe('显示口径 (与网页同一套)', () => {
     expect(decisionConsequence(EVENT, 'RELEASED')).toBe('放行后 1 小时 内可以领用，过了还要再处置');
     expect(decisionConsequence({ ...EVENT, recheckValidMinutes: null }, 'RELEASED')).toBe('放行后这批料不再限时');
     expect(decisionConsequence({ ...EVENT, targetType: 'RAW_MATERIAL' }, 'REJECTED')).toBe('判不合格后，整批标为不合格，不能再领用');
+    // PROTO-Q41 复审 M1/M2: 只警告档的复盘记录判不合格不自动报废; 未登记解冻的放行不豁免计时
+    expect(decisionConsequence({ ...EVENT, recordKind: 'WARN_EXCEEDED' }, 'REJECTED')).toContain('不会自动报废库存');
+    expect(decisionConsequence({ ...EVENT, recordKind: 'WARN_START_MISSING' }, 'REJECTED')).toContain('报损');
+    expect(decisionConsequence({ ...EVENT, recordKind: 'WARN_START_MISSING' }, 'RELEASED')).toContain('仍按时限计时');
+    expect(decisionConsequence({ ...EVENT, recordKind: 'BLOCKED', targetType: 'RAW_MATERIAL' }, 'REJECTED'))
+      .toBe('判不合格后，整批标为不合格，不能再领用');
   });
   it('常用结论追加不重复; 结论只有空格算没填', () => {
     expect(appendPreset('', 'A')).toBe('A');

@@ -1503,3 +1503,28 @@ class TestPlainLanguageConstraint:
         assert "英文" in prompt, (
             "build_cacheable_system_prompt must forbid English terms"
         )
+
+
+# ---------------------------------------------------------------------------
+# 食品厂语境：模板点评（tier-2 确定性）不得出现餐饮口吻
+# ---------------------------------------------------------------------------
+
+_RESTAURANT_TONE = ("客流", "午晚市", "差评", "菜品", "门店")
+
+
+class TestDeterministicInsightFactoryTone:
+    @pytest.mark.parametrize("chart_type,x_dim,values,labels", [
+        ("BAR", "product", [100.0, 80.0, 60.0, 40.0], ["甲", "乙", "丙", "丁"]),
+        ("BAR", "product", [100.0, 99.0, 100.0, 98.0], ["甲", "乙", "丙", "丁"]),
+        ("LINE", "time", [10.0, 12.0, 9.0, 15.0], ["1月", "2月", "3月", "4月"]),
+        ("SCATTER", "other", [10.0, 50.0, 90.0], ["a", "b", "c"]),
+    ])
+    def test_no_restaurant_wording(self, chart_type, x_dim, values, labels):
+        from smartbi.services.insights.chart_insight_service import _deterministic_insight
+        ctx = _make_context(chart_type=chart_type, x_dim=x_dim,
+                            series_values=values, series_labels=labels)
+        r = _deterministic_insight(ctx)
+        assert r is not None
+        text = f"{r.finding}{r.implication}{r.suggestion}"
+        for w in _RESTAURANT_TONE:
+            assert w not in text, (w, text)

@@ -25,7 +25,7 @@ describe('F006 administrator demo navigation', () => {
     expect(leaves.map(item => item.path)).toEqual(expect.arrayContaining([
       '/demo-flow', '/smart-bi/dashboard', '/smart-bi/analysis', '/production-analytics/cost',
       '/quality/label-qc', '/production/traceability', '/production/plans',
-      '/procurement/orders', '/warehouse/materials', '/production/material-flow', '/sales/orders',
+      '/procurement/orders', '/warehouse/materials', '/production/material-flow', '/sales/orders', '/crew', '/quality/inspections', '/production-analytics/cost-summary', '/analytics/ai-reports', '/warehouse/inventory-query',
     ]));
     for (const item of leaves) {
       expect(router.resolve(item.path).matched.length, item.path).toBeGreaterThan(0);

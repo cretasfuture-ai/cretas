@@ -4,6 +4,8 @@
 🔴 2026-10-25: 仓库已转 public, 自建 runner 全部退役, `self-hosted` 目标被拒绝 ——
 公开仓库里任何人都能提 PR, 自建路由会让陌生人的代码在我们的机器上执行。
 现在只用 `--check` (scripts/tests/test-public-repo-hosted-only.sh 要求结果是 hosted)。
+2026-11-18: Steve 撤销「public 禁自建」, 但本脚本仍只管整份工作流的字面量切换, 继续拒绝 self-hosted ——
+按 job 的自建例外只走 test-public-repo-hosted-only.sh 的 SELF_HOSTED_ALLOWED 登记 (带本仓库守卫, fork PR 托管)。
 
 ## 为什么不是一个组织变量
 

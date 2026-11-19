@@ -25,7 +25,7 @@
       </el-form-item>
 
       <el-form-item label="策略名称" prop="strategyName">
-        <el-input v-model="form.strategyName" placeholder="如: 叮咚批发阶梯折扣" />
+        <el-input v-model="form.strategyName" placeholder="如: 经销商阶梯折扣" />
       </el-form-item>
 
       <el-form-item label="策略类型" prop="strategyType">

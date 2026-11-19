@@ -628,4 +628,23 @@ class SkuGrossMarginToolContractTest {
         assertTrue(message(run("{\"productName\":\"卤牛肉和酱鸭成本\"}")).startsWith("按产品「卤牛肉」「酱鸭」统计："));
         assertTrue(message(run("{\"productName\":\"成本\"}")).startsWith("按全厂统计："));
     }
+
+    // ---- 2026-11-18 LSMDEMO「这个月毛利最低的产品是哪些」: 升序答最低, 文字不外露口径话术 ----
+    @Test
+    void sortOrderLowest_listsLowestMarginFirst_andMessageHasNoInternalPhrase() throws Exception {
+        type("H", "香辣鸡丁", "100");
+        type("L", "酱卤牛肉", "100");
+        sales("H", "香辣鸡丁", 1, 1, 0, "100", "100", "30");   // 70%
+        sales("L", "酱卤牛肉", 1, 1, 0, "100", "100", "80");   // 20%
+
+        JsonNode lowest = run("{\"sortOrder\":\"lowest\"}");
+        assertEquals("酱卤牛肉", lowest.get("data").get("data").get("items").get(0).get("productName").asText(), lowest.toString());
+        assertTrue(message(lowest).contains("按毛利率从低到高"), message(lowest));
+        assertFalse(message(lowest).contains("不要混着看") || message(lowest).contains("两种口径分开给"), message(lowest));
+        assertTrue(lowest.get("data").get("data").get("charts").get(0).get("title").asText().contains("最低"), lowest.toString());
+
+        // 阴性对照: 不给 sortOrder 仍是从高到低
+        JsonNode highest = run("{}");
+        assertEquals("香辣鸡丁", highest.get("data").get("data").get("items").get(0).get("productName").asText(), highest.toString());
+    }
 }

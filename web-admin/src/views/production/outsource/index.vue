@@ -13,6 +13,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import type { CsTableColumn as TableColumn, CsTabItem as TabsItem } from '@/types/csTable';
 import { useAuthStore } from '@/store/modules/auth';
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import {
   getOutsourceOrder,
   listOutsourceOrders,
@@ -43,6 +44,8 @@ const total = ref(0);
 const rows = ref<OutsourceOrderSummary[]>([]);
 const loading = ref(false);
 const loadFailed = ref(false);
+const loadError = ref('');
+const hasFilter = computed(() => !!keyword.value.trim() || statusFilter.value.length > 0);
 
 const detailVisible = ref(false);
 const detail = ref<OutsourceOrderDetail | null>(null);
@@ -101,6 +104,11 @@ const DETAIL_TABS: TabsItem[] = [
   { label: '委外厂结存', value: 'balances', slot: 'balances' },
   { label: '收发明细', value: 'movements', slot: 'movements' },
 ];
+function clearFilters() {
+  keyword.value = '';
+  statusFilter.value = [];
+  search();
+}
 function clearKeyword() {
   keyword.value = '';
   search();
@@ -128,6 +136,7 @@ async function load() {
   if (!factoryId.value) return;
   loading.value = true;
   loadFailed.value = false;
+  loadError.value = '';
   try {
     const res = await listOutsourceOrders(factoryId.value, {
       status: statusFilter.value, keyword: keyword.value, page: page.value, size: size.value,
@@ -137,11 +146,13 @@ async function load() {
       total.value = res.data.totalElements ?? 0;
     } else {
       loadFailed.value = true;
-      ElMessage.error(res.message || '委外单加载失败');
+      loadError.value = res.message || '委外单加载失败';
+      ElMessage.error(loadError.value);
     }
   } catch (e) {
     loadFailed.value = true;
-    ElMessage.error(errorText(e, '委外单加载失败，请稍后重试'));
+    loadError.value = errorText(e, '委外单加载失败，请稍后重试');
+    ElMessage.error(loadError.value);
   } finally {
     loading.value = false;
   }
@@ -216,7 +227,16 @@ watch(() => route.query.orderId, (q) => {
         class="cs-table clickable"
         @select="onRowSelect"
       >
-        <template #empty>没有符合条件的委外单</template>
+        <template #empty>
+          <ListEmptyExplain
+            :load-error="loadError"
+            :filtered="hasFilter"
+            empty-title="还没有委外单"
+            empty-hint="需要把工序交给外部加工厂时，在生产计划的「委外工序」里发起委外，生成的委外单会出现在这里。"
+            @retry="load"
+            @clear-filter="clearFilters"
+          />
+        </template>
         <template #supplier-cell="{ row }">{{ row.original.supplierName ?? row.original.supplierId }}</template>
         <template #status-cell="{ row }">
           <UBadge :color="BADGE_COLOR[ORDER_STATUS_TAG[row.original.status as OutsourceOrderStatus]]" variant="soft">{{ ORDER_STATUS_LABEL[row.original.status as OutsourceOrderStatus] }}</UBadge>

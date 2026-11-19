@@ -31,6 +31,11 @@ public final class ArApQueryResponses {
         private Long customerCount;
         private Long supplierCount;
         private List<TransactionTypeStat> transactionsByType;
+        /** 挂账净额为负的客户合计 (预收), 已在 totalReceivable 中抵减。 */
+        @PriceSensitive private BigDecimal customerPrepayments;
+        /** 未删除的挂账单据条数; 0 = 本厂尚未生成挂账单据 (区别于「余额为 0」)。 */
+        private Long ledgerEntryCount;
+        private Boolean hasLedgerEntries;
     }
 
     @Data

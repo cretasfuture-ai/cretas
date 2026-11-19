@@ -78,6 +78,7 @@ class ProductionReportProcessSecretPromptTest {
         ProcessSecretLlmCostScope scope = scope(protectedIds, planRows);
         ReflectionTestUtils.setField(service, "llmCostScope", scope);
         ReflectionTestUtils.setField(ai, "llmCostScope", scope);
+        ReflectionTestUtils.setField(service, "arApService", mock(com.cretas.aims.service.finance.ArApService.class));
         return service;
     }
 

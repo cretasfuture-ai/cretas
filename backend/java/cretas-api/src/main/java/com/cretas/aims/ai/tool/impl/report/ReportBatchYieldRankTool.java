@@ -5,6 +5,8 @@ import com.cretas.aims.entity.ProductionBatch;
 import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
+import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.yield.balance.MaterialBalanceService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +33,12 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
     @Autowired
     private ProductionBatchRepository batchRepository;
 
+    @Autowired
+    private YieldAnalysisService yieldAnalysisService;
+
+    @Autowired
+    private MaterialBalanceService materialBalanceService;
+
     @Autowired(required = false)
     private ProcessSecretLlmCostScope llmCostScope = ProcessSecretLlmCostScope.standalone();
 
@@ -43,7 +51,10 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
     public String getDescription() {
         return "查询批次出成率排行（只读）：期间内已完成批次按出成率(良品÷实际产出)从低到高或从高到低排序，"
                 + "附出成率柱图；可按产品名筛选。算不出出成率的批次（缺良品/实际数量）不进排行并说明个数。"
-                + "适用：哪个批次出成率最低/最高、各批次出成率排序、出成率差的批次。";
+                + "适用：哪个批次出成率最低/最高、各批次出成率排序、出成率差的批次。"
+                + "也能按工序答：view=loss_anomaly 最近有哪些损耗异常（批次/工序/标准vs实际偏差）、"
+                + "view=process 某工序（processName，模糊匹配）近期出成率与趋势、"
+                + "view=process_compare 本月对比上月各工序出成率、掉在哪道工序。";
     }
 
     @Override
@@ -56,7 +67,10 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                         "period", Map.of("type", "string", "description", "快捷周期: last_week / this_week / this_month / last_month；与日期同时给时以日期为准"),
                         "productName", Map.of("type", "string", "description", "产品名（可选，模糊匹配）"),
                         "order", Map.of("type", "string", "description", "lowest=出成率最低在前(默认) / highest=最高在前"),
-                        "limit", Map.of("type", "integer", "description", "返回前几名，默认 10，最多 30")
+                        "limit", Map.of("type", "integer", "description", "返回前几名，默认 10，最多 30"),
+                        "view", Map.of("type", "string", "description",
+                                "batch=批次排行(默认) / loss_anomaly=损耗异常的批次工序 / process=某工序近期出成率 / process_compare=本期对比上期各工序出成率"),
+                        "processName", Map.of("type", "string", "description", "工序名（可选，模糊匹配，如 熟制杀菌）")
                 ),
                 "required", List.of()));
     }
@@ -94,6 +108,11 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
         String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
+        View view = resolveView(factoryId, params, start, end, today);
+        if (view != View.BATCH) {
+            return processView(view, factoryId, params, startText != null || endText != null, period, start, end, today,
+                    resolveProductScope(factoryId, keyword, today));
+        }
         boolean lowestFirst = !"highest".equalsIgnoreCase(getString(params, "order", "lowest"));
         int limit = DEFAULT_LIMIT;
         Object limitRaw = params.get("limit");
@@ -169,7 +188,154 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                     "title", "批次出成率（%，" + (lowestFirst ? "最低" : "最高") + "前 " + shown.size() + "）",
                     "option", option)));
         }
-        return buildSimpleResult(message(shown, ranked.size(), completed, noYield, withheld, start, end, lowestFirst, keyword), data);
+        String text = message(shown, ranked.size(), completed, noYield, withheld, start, end, lowestFirst, keyword);
+        if (completed == 0 && withheld == 0) {
+            // 窗口 (默认的、或「最近」这类对话补的) 没数据: 不让用户以为「没有批次」, 说明最近一次已完成批次的日期 (往前看一年)
+            LocalDate latest = latestCompletedDate(factoryId, today, keyword);
+            data.put("latestCompletedBatchDate", latest == null ? null : latest.toString());
+            text = latest == null
+                    ? text + "\n近一年内也没有已完成的批次记录。"
+                    : text + "\n最近一次已完成批次是 " + latest + "，想看那段时间可以说「" + latest.getMonthValue() + "月出成率最低的批次」。";
+        }
+        return buildSimpleResult(text, data);
+    }
+
+    enum View { BATCH, LOSS_ANOMALY, PROCESS, PROCESS_COMPARE }
+
+    private static String said(Map<String, Object> params) {
+        Object o = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
+        return o == null ? "" : o.toString();
+    }
+
+    /**
+     * 选视图: 参数 view 优先; 没给 (只有路由命中, 没抽参) 时读原话 —— 「损耗」→ 损耗异常; 「为什么掉/掉在哪/对比」→ 本期对比上期;
+     * 带工序名 (参数, 或原话里出现本厂某道工序名) 且问出成率 → 该工序出成率; 其余保持批次排行 (「出成率异常的批次」等老问法不变)。
+     */
+    private View resolveView(String factoryId, Map<String, Object> params, LocalDate start, LocalDate end, LocalDate today) {
+        String v = blank(getString(params, "view"));
+        if (v != null) {
+            switch (v.toLowerCase(Locale.ROOT)) {
+                case "loss_anomaly": return View.LOSS_ANOMALY;
+                case "process": return View.PROCESS;
+                case "process_compare": return View.PROCESS_COMPARE;
+                case "batch": return View.BATCH;
+                default: break;
+            }
+        }
+        String text = said(params);
+        boolean yieldAsked = text.contains("出成率") || text.contains("出成") || text.contains("得率");
+        if (text.contains("物料平衡") || (text.contains("损耗") && text.contains("异常"))) return View.LOSS_ANOMALY;
+        // 「出成率和损耗率最低的批次」是批次排行 (原话带排名词 + 批次/出成率), 不因出现「损耗」二字进损耗异常视图
+        boolean rankAsked = text.contains("最低") || text.contains("最高") || text.contains("最差") || text.contains("最好")
+                || text.contains("排行") || text.contains("排序") || text.contains("排名");
+        if (text.contains("损耗") && !(rankAsked && (yieldAsked || text.contains("批次")))) return View.LOSS_ANOMALY;
+        if (yieldAsked && (text.contains("为什么") || text.contains("为啥") || text.contains("掉") || text.contains("下降")
+                || text.contains("降了") || text.contains("对比") || text.contains("比上月") || text.contains("哪道工序")
+                || text.contains("哪个工序"))) {
+            return View.PROCESS_COMPARE;
+        }
+        if (blank(getString(params, "processName")) != null) return View.PROCESS;
+        if (yieldAsked && text.contains("工序")) return View.PROCESS;
+        if (yieldAsked && matchedProcessName(factoryId, text, today) != null) return View.PROCESS;
+        return View.BATCH;
+    }
+
+    /** 原话里出现的本厂工序名 (近一年有按工序报工的工序; 名字至少 2 个字, 取最长的命中)。 */
+    private String matchedProcessName(String factoryId, String text, LocalDate today) {
+        if (yieldAnalysisService == null || text.isBlank()) return null;
+        java.util.List<com.cretas.aims.dto.yield.ProcessYieldAggDTO> all =
+                yieldAnalysisService.aggregateByProcess(factoryId, today.minusDays(365), today, null);
+        String best = null;
+        if (all != null) {
+            for (com.cretas.aims.dto.yield.ProcessYieldAggDTO a : all) {
+                String n = a.getProcessName();
+                if (n != null && n.trim().length() >= 2 && text.contains(n.trim()) && (best == null || n.length() > best.length())) {
+                    best = n.trim();
+                }
+            }
+        }
+        return best;
+    }
+
+    private Map<String, Object> processView(View view, String factoryId, Map<String, Object> params, boolean explicitDates,
+                                            String period, LocalDate start, LocalDate end, LocalDate today,
+                                            ProcessYieldViews.ProductScope scope) throws Exception {
+        String text = said(params);
+        String processKeyword = blank(getString(params, "processName"));
+        if (processKeyword == null && view != View.LOSS_ANOMALY) processKeyword = matchedProcessName(factoryId, text, today);
+        int limit = DEFAULT_LIMIT;
+        if (params.get("limit") instanceof Number n && n.intValue() > 0) limit = Math.min(n.intValue(), MAX_LIMIT);
+        String[] msg = new String[1];
+        Map<String, Object> data;
+        if (view == View.LOSS_ANOMALY) {
+            data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg);
+        } else if (view == View.PROCESS) {
+            data = ProcessYieldViews.processTrend(yieldAnalysisService, materialBalanceService, factoryId, start, end,
+                    processKeyword, scope, msg);
+        } else {
+            LocalDate s = start;
+            LocalDate e = end;
+            if (!explicitDates && period == null) {
+                // 没说期间: 比较 = 本月 vs 上月; 原话说「上个月」则 上月 vs 再上月
+                LocalDate[] r = ReportCostQueryTool.periodRange(text.contains("上个月") || text.contains("上月") ? "last_month" : "this_month", today);
+                s = r[0];
+                e = r[1];
+            }
+            LocalDate ps;
+            LocalDate pe;
+            if (s.getDayOfMonth() == 1 && s.getMonth() == e.getMonth() && s.getYear() == e.getYear()) {
+                ps = s.minusMonths(1);
+                pe = s.minusDays(1);
+            } else {
+                long days = java.time.temporal.ChronoUnit.DAYS.between(s, e) + 1;
+                pe = s.minusDays(1);
+                ps = pe.minusDays(days - 1);
+            }
+            data = ProcessYieldViews.processCompare(yieldAnalysisService, materialBalanceService, factoryId, s, e, ps, pe,
+                    processKeyword, scope, msg);
+        }
+        return buildSimpleResult(msg[0], data);
+    }
+
+    /**
+     * 产品名 → 工序出成率聚合要的产品类型 ID (近一年里名称含该词的批次): 唯一对应才筛; 一个都没有 (none) 整体为空并说明;
+     * 对应多个类型时聚合不筛、回复里明说 (异常批次仍按产品名筛)。
+     */
+    private ProcessYieldViews.ProductScope resolveProductScope(String factoryId, String keyword, LocalDate today) {
+        if (keyword == null) return ProcessYieldViews.ProductScope.ALL;
+        List<ProductionBatch> wide = batchRepository.findBatchesInDateRange(
+                factoryId, today.minusDays(365).atStartOfDay(), today.plusDays(1).atStartOfDay());
+        Set<String> ids = new LinkedHashSet<>();
+        boolean any = false;
+        boolean nullId = false;
+        if (wide != null) {
+            for (ProductionBatch b : wide) {
+                if ("CLERK_WIP".equals(b.getBatchType()) || b.getProductName() == null
+                        || !b.getProductName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT))) continue;
+                any = true;
+                if (b.getProductTypeId() == null) nullId = true; else ids.add(b.getProductTypeId());
+            }
+        }
+        if (!any) return new ProcessYieldViews.ProductScope(keyword, null, true);
+        if (ids.size() == 1 && !nullId) return new ProcessYieldViews.ProductScope(keyword, ids.iterator().next(), false);
+        return new ProcessYieldViews.ProductScope(keyword, null, false);
+    }
+
+    private LocalDate latestCompletedDate(String factoryId, LocalDate today, String keyword) {
+        List<ProductionBatch> wide = batchRepository.findBatchesInDateRange(
+                factoryId, today.minusDays(365).atStartOfDay(), today.plusDays(1).atStartOfDay());
+        LocalDate latest = null;
+        if (wide != null) {
+            for (ProductionBatch b : wide) {
+                if (b.getStatus() != ProductionBatchStatus.COMPLETED || "CLERK_WIP".equals(b.getBatchType())) continue;
+                if (keyword != null && (b.getProductName() == null
+                        || !b.getProductName().toLowerCase(Locale.ROOT).contains(keyword.toLowerCase(Locale.ROOT)))) continue;
+                java.time.LocalDateTime t = b.getEndTime() != null ? b.getEndTime() : b.getUpdatedAt();
+                if (t == null) continue;
+                if (latest == null || t.toLocalDate().isAfter(latest)) latest = t.toLocalDate();
+            }
+        }
+        return latest;
     }
 
     private static String message(List<Map<String, Object>> shown, int rankedCount, int completed, int noYield,

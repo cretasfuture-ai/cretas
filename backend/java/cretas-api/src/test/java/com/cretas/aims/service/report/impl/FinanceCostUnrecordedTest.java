@@ -67,8 +67,17 @@ class FinanceCostUnrecordedTest {
     @Mock
     private SupplierRepository supplierRepository;
 
+    @Mock
+    private com.cretas.aims.service.finance.ArApService arApService;
+
     @InjectMocks
     private ProductionReportServiceImpl service;
+
+    @org.junit.jupiter.api.BeforeEach
+    void wireLedgerSource() {
+        // 往来余额来自 ArApService (字段注入, @InjectMocks 走构造器时不会补)
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "arApService", arApService);
+    }
 
     private void givenPlansButNoCosts(long planCount) {
         when(productionPlanRepository.countByFactoryIdAndCreatedAtBetween(anyString(), any(), any()))
