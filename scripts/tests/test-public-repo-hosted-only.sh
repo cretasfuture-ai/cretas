@@ -40,8 +40,10 @@ SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_requ
 GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
 MINI_PG_ROUTE = ("${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && " + SAME_REPO_GUARD + GUARD_TAIL
                  + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
-# 2026-11-19 Steve「最多 1 个 PG 1 个 fast」: PG 分片也只有第 3 片可能上 mini, 汇总作业照旧走 MINI_PG_ROUTE。
-MINI_PG_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && "
+# 2026-11-19 Steve「22:00 后跑满, 8 点后 1 pg 1 fast」: 白天 PG 只有第 3 片可能上 mini, 夜间 (changes 输出
+# mini_window=full) 4 片都可; 汇总作业照旧走 MINI_PG_ROUTE。
+PG_SHARD_GATE = "(matrix.shard == 3 || needs.changes.outputs.mini_window == 'full') && "
+MINI_PG_SHARD_ROUTE = ("${{ " + PG_SHARD_GATE + "needs.changes.outputs.runner_pg == 'cretas-mini-pg' && "
                        + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
 MINI_FAST_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && "
                          + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
@@ -170,12 +172,12 @@ if not violations('java-gate-pr.yml', all_fast):
 else:
     print('  ok - 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 被判红')
 all_pg = sample.replace('probe', 'postgres-reversal-concurrency-shard').replace(
-    '[self-hosted, cretas]', MINI_PG_SHARD_ROUTE.replace('matrix.shard == 3 && ', ''))
+    '[self-hosted, cretas]', MINI_PG_SHARD_ROUTE.replace(PG_SHARD_GATE, ''))
 if not violations('java-gate-pr.yml', all_pg):
-    print('FAIL: 阴性对照: PG 4 片全派 mini (去掉 matrix.shard 限定) 没被判红')
+    print('FAIL: 阴性对照: PG 4 片不分时段全派 mini (去掉分片/时段限定) 没被判红')
     ok = False
 else:
-    print('  ok - 阴性对照: PG 4 片全派 mini (去掉 matrix.shard 限定) 被判红')
+    print('  ok - 阴性对照: PG 4 片不分时段全派 mini (去掉分片/时段限定) 被判红')
 present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
 print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
 

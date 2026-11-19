@@ -13,12 +13,28 @@ set -u
 FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
 slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
-# 启用哪些槽 (2026-11-19 Steve「目前别跑满, 最多 1 个 PG 1 个 fast」): 文件 $ENABLED_FILE 里列出槽号 (空格/换行分隔),
-# 不在里面的槽空转不领活、也不算进别的槽的名次; 文件不存在 = 全部启用。改文件即生效, 不用动 launchd。
+# 时段 (2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」), 北京时间:
+#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1 = PG, 槽 5 = fast)。
+# ⚠️ 唯一一份时段定义: java-gate-pr.yml 的 changes 作业也调 `refill.sh --window` 决定 PG 派几片上 mini。
+FULL_FROM=22
+FULL_UNTIL=8
+DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 5}"
+mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_HOUR 可覆盖, 供测试)
+  # ⛔ 不用 TZ=Asia/Shanghai: 没有时区数据的机器 (Git Bash 实测) 静默按 UTC 算, 时段整体错 8 小时。
+  #    北京时间 = UTC + 8, 无夏令时。
+  local h="${1:-${GH_GATE_HOUR:-$(( (10#$(date -u +%H) + 8) % 24 ))}}"
+  h=$((10#$h))
+  if [ "$h" -ge "$FULL_FROM" ] || [ "$h" -lt "$FULL_UNTIL" ]; then echo full; else echo day; fi
+}
+# 启用哪些槽: 手动覆盖文件 $ENABLED_FILE 存在时以它为准 (列出槽号, 空格/换行分隔); 不存在就按时段。
+# 不启用的槽空转不领活、也不算进别的槽的名次; 改文件/到点即生效, 不用动 launchd。
 ENABLED_FILE="${GH_GATE_ENABLED_FILE:-/Users/rex/gh-gate/enabled-slots}"
 slot_enabled() {
-  [ -f "$ENABLED_FILE" ] || return 0
-  case " $(tr '\n' ' ' < "$ENABLED_FILE") " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+  local list
+  if [ -f "$ENABLED_FILE" ]; then list=$(tr '\n' ' ' < "$ENABLED_FILE")
+  elif [ "$(mini_window)" = full ]; then return 0
+  else list="$DAY_SLOTS"; fi
+  case " $list " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
 # 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数): 编号比 $1 小、同标签、空闲的槽数 + 1。
 # ⛔ 不用 `seq 1 $((n-1))`: macOS (BSD) 的 `seq 1 0` 倒数输出「1 0」, 第 1 槽把自己和不存在的 0 号槽都算成空闲,
@@ -35,6 +51,8 @@ idle_rank() {
 }
 if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
+if [ "${1:-}" = "--enabled-of" ]; then if slot_enabled "${2:?slot}"; then echo yes; else echo no; fi; exit 0; fi
+if [ "${1:-}" = "--window" ]; then mini_window "${2:-}"; exit 0; fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas

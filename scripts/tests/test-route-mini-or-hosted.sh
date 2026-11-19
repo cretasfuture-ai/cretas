@@ -150,7 +150,8 @@ SH
   chmod +x "$WORK/bsdbin/seq"
   rank_of_all() {  # $1 = 被测脚本
     local i out=""
-    for i in 1 2 3 4 5; do out="$out $i=$(PATH="$WORK/bsdbin:$PATH" bash "$1" --idle-rank-of "$i" 2>&1)"; done
+    # 钉住夜间 + 无覆盖文件 (全部槽启用), 否则结论随 CI 跑的时间变。
+    for i in 1 2 3 4 5; do out="$out $i=$(PATH="$WORK/bsdbin:$PATH" GH_GATE_HOUR=23 GH_GATE_ENABLED_FILE="$WORK/no-such-file" bash "$1" --idle-rank-of "$i" 2>&1)"; done
     echo "$out"
   }
   want_rank=" 1=1 2=2 3=3 4=4 5=1"
@@ -183,6 +184,32 @@ SH
     REAL_FAILS=$((REAL_FAILS + 1))
   else
     echo "  ok - 启用名单变异对照: 删掉跳过后名次变错"
+  fi
+  # 时段 (2026-11-19 Steve「22:00 后跑满, 8 点后 1 pg 1 fast」, 北京时间): [22,8) full, [8,22) day; 边界 7/8/21/22。
+  win_all() { local h out=""; for h in 0 7 8 12 21 22 23 07 08; do out="$out $h=$(bash "$1" --window "$h")"; done; echo "$out"; }
+  want_win=" 0=full 7=full 8=day 12=day 21=day 22=full 23=full 07=full 08=day"
+  got=$(win_all "$REFILL")
+  echo "READING: refill window:$got"
+  if [ "$got" != "$want_win" ]; then echo "FAIL: 时段应为$want_win"; REAL_FAILS=$((REAL_FAILS + 1)); else echo "  ok - 时段边界正确"; fi
+  # 无覆盖文件时按时段启用: 白天只有 1 5, 夜间全部; 有覆盖文件时以文件为准 (夜间也只开文件里的)。
+  en_all() { local i out=""; for i in 1 2 3 4 5; do out="$out$(GH_GATE_HOUR="$2" GH_GATE_ENABLED_FILE="$3" bash "$1" --enabled-of "$i" | cut -c1)"; done; echo "$out"; }
+  got="day=$(en_all "$REFILL" 10 "$WORK/no-such-file") night=$(en_all "$REFILL" 23 "$WORK/no-such-file") override=$(en_all "$REFILL" 23 "$WORK/enabled-slots")"
+  echo "READING: refill enabled (y/n per slot 1-5): $got"
+  if [ "$got" != "day=ynnny night=yyyyy override=nynny" ]; then
+    echo "FAIL: 启用应为 day=ynnny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 按时段启用 + 覆盖文件优先"; fi
+  # 变异对照: 去掉「< 8 点也算 full」, 凌晨必须被查出变成 day。
+  WMUT="$WORK/refill-window-mutant.sh"
+  sed 's/ || \[ "\$h" -lt "\$FULL_UNTIL" \]//' "$REFILL" > "$WMUT"
+  mgot=$(win_all "$WMUT")
+  echo "READING: mutant(no early-morning full) window:$mgot"
+  if [ "$mgot" = "$want_win" ]; then echo "FAIL: 时段变异对照: 变异后时段仍正确 (变异没生效或测试没守住)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else echo "  ok - 时段变异对照: 去掉凌晨段后查出"; fi
+  # workflow 必须用这一份时段 (形态 D: 不许在 workflow 里另写一份小时判断)。
+  if grep -q 'refill.sh --window' "$WFY" && grep -q "needs.changes.outputs.mini_window == 'full'" "$WFY"      && grep -q "steps.window.outputs.mini_window == 'full' && env.MINI_PG_QUEUE_THRESHOLD_FULL" "$WFY"      && ! grep -qE 'TZ=|date \+%H|date -u \+%H' "$WFY"; then
+    echo "  ok - workflow 时段取自 refill.sh --window (分片 + 阈值)"
+  else
+    echo "FAIL: java-gate-pr.yml 必须调 refill.sh --window 决定 PG 分片与阈值, 且不另写小时判断"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
   # 变异对照: 把循环改回 seq 写法, 名次必须变错。
   RMUT="$WORK/refill-mutant.sh"
