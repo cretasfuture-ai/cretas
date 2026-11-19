@@ -93,7 +93,8 @@ const R = { class: { th: 'text-right', td: 'text-right' } };
 const columns: TableColumn<QualityDefect>[] = [
   { id: 'defectType', header: '缺陷类型' },
   { accessorKey: 'quantity', header: '数量', meta: R },
-  { accessorKey: 'qualityInspectionId', header: '关联质检 ID' },
+  // 显示质检业务编号, ⛔ 不显示内部 UUID (qualityInspectionId 只用于跳转/过滤)
+  { id: 'qualityInspection', header: '关联质检编号' },
   { accessorKey: 'cause', header: '原因' },
   { id: 'handlingAction', header: '处置动作' },
   { id: 'status', header: '状态' },
@@ -385,6 +386,7 @@ onMounted(load);
         <template #defectType-cell="{ row }">
           <UBadge color="primary" variant="soft">{{ DEFECT_TYPE_LABELS[String(row.original.defectType) as DefectType] || row.original.defectType }}</UBadge>
         </template>
+        <template #qualityInspection-cell="{ row }"><span class="qi-number">{{ inspectionNumberLabel({ inspectionNumber: row.original.qualityInspectionNumber }) }}</span></template>
         <template #handlingAction-cell="{ row }">{{ row.original.handlingAction || '-' }}</template>
         <template #status-cell="{ row }">
           <UBadge :color="badgeColor(statusTagType(row.original.status))" variant="soft">{{ DEFECT_STATUS_LABELS[String(row.original.status) as DefectStatus] || row.original.status }}</UBadge>
@@ -524,6 +526,7 @@ onMounted(load);
 </template>
 
 <style scoped>
+.qi-number { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .defect-list { padding: var(--cs-space-4); }
 .head-main { flex: 1; min-width: 0; display: flex; gap: var(--cs-space-3); align-items: center; }
 .head-icon { flex: none; object-fit: contain; }

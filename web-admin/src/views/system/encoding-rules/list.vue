@@ -10,6 +10,7 @@ import { get, post, put, del } from '@/api/request';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus, Edit, Delete as DeleteIcon, Refresh } from '@element-plus/icons-vue';
 import type { TableRow } from '@/types/api';
+import { ENTITY_TYPE_LABELS, SYSTEM_NUMBERED_NOTE, isSystemNumbered, selectableEntityTypes } from './encodingRuleTypes';
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
@@ -123,16 +124,11 @@ async function handleDelete(row: TableRow) {
   } catch { /* cancel */ }
 }
 
-const entityTypeMap: Record<string, string> = {
-  SALES_ORDER: '销售订单',
-  PURCHASE_ORDER: '采购订单',
-  PRODUCTION_PLAN: '生产计划',
-  PRODUCTION_BATCH: '生产批次',
-  MATERIAL_BATCH: '原材料批次',
-  SHIPMENT: '出货单',
-  TRANSFER: '调拨单',
-  QUALITY_INSPECTION: '质检记录',
-};
+const entityTypeMap = ENTITY_TYPE_LABELS;
+// 新建只给可配置的类型 (质检记录由系统自动编号, 不在其中); 编辑时类型锁定, 保留原值的显示
+const entityTypeOptions = computed(() => editingId.value
+  ? Object.entries(ENTITY_TYPE_LABELS).map(([value, label]) => ({ value, label }))
+  : selectableEntityTypes());
 </script>
 
 <template>
@@ -153,7 +149,10 @@ const entityTypeMap: Record<string, string> = {
 
       <el-table v-loading="loading" :data="tableData" stripe>
         <el-table-column label="单据类型" width="140">
-          <template #default="{ row }">{{ entityTypeMap[row.entityType] || row.entityType }}</template>
+          <template #default="{ row }">
+            {{ entityTypeMap[row.entityType] || row.entityType }}
+            <el-tag v-if="isSystemNumbered(row.entityType)" type="info" size="small">{{ SYSTEM_NUMBERED_NOTE }}</el-tag>
+          </template>
         </el-table-column>
         <el-table-column prop="ruleName" label="规则名称" min-width="160" />
         <el-table-column prop="prefix" label="前缀" width="100" />
@@ -179,8 +178,12 @@ const entityTypeMap: Record<string, string> = {
       <el-form :model="form" label-width="100px">
         <el-form-item label="单据类型" required>
           <el-select v-model="form.entityType" style="width: 100%" :disabled="!!editingId">
-            <el-option v-for="(v, k) in entityTypeMap" :key="k" :label="`${v} (${k})`" :value="k" />
+            <el-option v-for="t in entityTypeOptions" :key="t.value" :label="`${t.label} (${t.value})`" :value="t.value" />
           </el-select>
+          <div v-if="isSystemNumbered(form.entityType)" class="system-numbered-note">
+            质检记录{{ SYSTEM_NUMBERED_NOTE }}：编号按工厂按天自动生成（QI-日期-序号），无需在这里配置。
+          </div>
+          <div v-else class="system-numbered-note">质检记录由系统自动编号（QI-日期-序号），不在可配置类型中。</div>
         </el-form-item>
         <el-form-item label="规则名称" required>
           <el-input v-model="form.ruleName" placeholder="如 销售订单编号规则" />
@@ -244,6 +247,7 @@ const entityTypeMap: Record<string, string> = {
 </template>
 
 <style scoped>
+.system-numbered-note { margin-top: 6px; font-size: 12px; line-height: 1.6; color: var(--cs-muted, #909399); }
 .page-wrapper { padding: 20px; }
 .card-header { display: flex; justify-content: space-between; align-items: center; }
 .header-left { display: flex; align-items: baseline; gap: 12px; }

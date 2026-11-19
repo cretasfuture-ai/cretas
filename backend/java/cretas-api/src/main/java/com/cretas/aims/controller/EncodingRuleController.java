@@ -350,7 +350,7 @@ public class EncodingRuleController {
             Map.of("code", "MATERIAL_BATCH", "name", "原材料批次", "defaultPrefix", "MB"),
             Map.of("code", "PROCESSING_BATCH", "name", "加工批次", "defaultPrefix", "PB"),
             Map.of("code", "SHIPMENT", "name", "出货记录", "defaultPrefix", "SH"),
-            Map.of("code", "QUALITY_INSPECTION", "name", "质检记录", "defaultPrefix", "QI"),
+            // 质检记录不在这里: 由系统自动编号 (EncodingRuleService.SYSTEM_NUMBERED_ENTITY_TYPES), 配了也不生效
             Map.of("code", "DISPOSAL_RECORD", "name", "处置记录", "defaultPrefix", "DR"),
             Map.of("code", "EQUIPMENT", "name", "设备", "defaultPrefix", "EQ"),
             Map.of("code", "PRODUCTION_PLAN", "name", "生产计划", "defaultPrefix", "PP"),
