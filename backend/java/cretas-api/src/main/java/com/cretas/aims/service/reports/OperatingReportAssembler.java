@@ -33,7 +33,8 @@ public class OperatingReportAssembler {
         BigDecimal taxed = number(summary.get("totalAmountWithTax"));
         List<Map<String,Object>> ranks = rows(input.sales().get("rank"));
         List<Map<String,Object>> allSales = new ArrayList<>(ranks); allSales.add(unassigned);
-        sales.add(metric("sales.taxed", "含税销售额", taxed, "元", "销售额缺失", null, "salesperson-performance.summary.totalAmountWithTax"));
+        BigDecimal previousTaxed = number(map(input.previous().get("summary")).get("totalAmountWithTax"));
+        sales.add(metric("sales.taxed", "含税销售额", taxed, "元", "销售额缺失", null, "salesperson-performance.summary.totalAmountWithTax").withPrevious(previousTaxed));
         sales.add(metric("sales.untaxed", "未税销售额", sum(allSales, "taxableAmount"), "元", "未税销售额缺失", null, "sum(salesperson-performance.rank.taxableAmount)+unassigned.taxableAmount"));
         sales.add(metric("sales.tax", "税额", sum(allSales, "taxAmount"), "元", "税额缺失", null, "sum(salesperson-performance.rank.taxAmount)+unassigned.taxAmount"));
         BigDecimal previous = number(map(input.previous().get("summary")).get("totalAmountWithTax"));
@@ -50,7 +51,8 @@ public class OperatingReportAssembler {
         for (Map<String,Object> row : ranks) {
             String id = sellerKey(row);
             String name = text(row.get("salespersonName"), "业务员姓名缺失");
-            people.add(metric("salesperson."+id+".sales", name+" 含税销售额", number(row.get("totalAmountWithTax")), "元", "销售额缺失", assignmentCoverage, "salesperson-performance.rank["+id+"].totalAmountWithTax"));
+            people.add(metric("salesperson."+id+".sales", name+" 含税销售额", number(row.get("totalAmountWithTax")), "元", "销售额缺失", assignmentCoverage, "salesperson-performance.rank["+id+"].totalAmountWithTax")
+                    .withPrevious(number(previousPeople.getOrDefault(id,Map.of()).get("totalAmountWithTax"))));
             people.add(metric("salesperson."+id+".orders", name+" 订单数", number(row.get("orderCount")), "单", "订单数缺失", assignmentCoverage, "salesperson-performance.rank["+id+"].orderCount"));
             BigDecimal previousSales=number(previousPeople.getOrDefault(id,Map.of()).get("totalAmountWithTax"));
             BigDecimal yearSales=number(lastYearPeople.getOrDefault(id,Map.of()).get("totalAmountWithTax"));
@@ -115,7 +117,45 @@ public class OperatingReportAssembler {
         }
         sections.add(section("inventory", "存货数量", false, "取数时点公司自有批次可用余量，扣除已用与预留；按称重单位分组。非物理库存总量或历史日末结存。", quantities));
         sections.add(section("inventoryValue", "存货估值与成本覆盖", true, "按公司自有批次的库存汇总范围；价值只在完全相同余量/单位范围所有批次有单价时确认。成品与客户自有存货无同口径估值，覆盖率未知。", values));
-        return new OperatingReportSnapshot(SCHEMA,Status.SUCCESS,input.type(),input.start().toString(),input.end().toString(),input.fetchedAt(),input.receipts(),sections,null,null);
+        return new OperatingReportSnapshot(SCHEMA,Status.SUCCESS,input.type(),input.start().toString(),input.end().toString(),input.fetchedAt(),input.receipts(),attachDetails(sections,input),null,null);
+    }
+
+    /**
+     * 每个数字都带「依据从哪查」: 同一取数接口 + 同一参数。前端点数字即用它下钻到记录明细。
+     * 对不上任何已知取数接口的指标 detail 保持 null (不编造引用)。
+     * 带 previous./lastYear. 前缀的比较期指标不挂当期参数, 避免把上期数字指到当期明细。
+     */
+    static List<Section> attachDetails(List<Section> sections, Input input) {
+        String start = input.start().toString(), end = input.end().toString();
+        List<Section> out = new ArrayList<>();
+        for (Section s : sections) {
+            List<Metric> ms = new ArrayList<>();
+            for (Metric m : s.metrics()) {
+                DetailRef ref = detailFor(m.sourcePath(), start, end, input);
+                ms.add(ref == null ? m : m.withDetail(ref));
+            }
+            out.add(new Section(s.id(), s.title(), s.priceSensitive(), s.basis(), ms));
+        }
+        return out;
+    }
+
+    private static DetailRef detailFor(String path, String start, String end, Input input) {
+        if (path == null) return null;
+        Map<String,String> range = new LinkedHashMap<>(); range.put("startDate", start); range.put("endDate", end);
+        if (path.startsWith("previous.") || path.startsWith("lastYear.")) return null;
+        if (path.startsWith("salesperson-performance") || path.contains("(salesperson-performance")
+                || path.startsWith("sum(salesperson-performance")) return new DetailRef("sales-preset/salesperson-performance", range);
+        if (path.startsWith("regional-comparison")) { range.put("level", "province"); return new DetailRef("sales-preset/regional-comparison", range); }
+        // 时点类 (账龄 / 库存) 与毛利: 明细接口只能给「当前」数据 (或本就不是可调路由), 历史报告点开会对不上报告里的数字,
+        // 所以不挂 detail (和比较期指标同样处理), 不编造引用。
+        if (path.startsWith("gross-margin") || path.contains("aging.") || path.startsWith("stock-summary")) return null;
+        if (path.startsWith("income-statement")) {
+            Map<String,String> p = new LinkedHashMap<>();
+            p.put("startYear", String.valueOf(input.start().getYear())); p.put("startMonth", String.valueOf(input.start().getMonthValue()));
+            p.put("endYear", String.valueOf(input.end().getYear())); p.put("endMonth", String.valueOf(input.end().getMonthValue()));
+            return new DetailRef("finance/report/income-statement", p);
+        }
+        return null;
     }
 
     private String sellerKey(Map<String,Object> row){

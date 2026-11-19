@@ -150,6 +150,26 @@ def relevant_measure_columns(query: str, numeric_cols: List[str]) -> List[str]:
     return picked
 
 
+def measure_columns_only(cols: List[str], field_meta: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """页脚「数据驱动」只对指标列聚合: 字段定义说不是 is_measure 的列 (批号/编号等维度) 不进图。
+
+    味美 11-19 复测: 批号在库里是 TEXT 维度, 但图按 pandas 数值类型选列, 批号被当指标画进
+    「数据概览」, 页脚就写出「刀切最高, 18870.95万」(刀切行批号相加)。字段定义里没有这一列时
+    (没有角色信息) 按列名挡编码类, 其余保留。
+    """
+    from smartbi.services.row_level_qa import is_code_column
+    roles = {str(f.get("original_name")): f for f in (field_meta or []) if f.get("original_name")}
+    out: List[str] = []
+    for c in cols:
+        f = roles.get(str(c))
+        if f is not None and not f.get("is_measure"):
+            continue
+        if is_code_column(str(c)):
+            continue
+        out.append(c)
+    return out
+
+
 def asked_month(query: str) -> Optional[int]:
     m = _MONTH_RE.search(query or "")
     return int(m.group(1)) if m else None

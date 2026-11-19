@@ -128,7 +128,7 @@ class SalesServiceImplShipArTaxInclusiveTest {
         when(deliveryRecordRepository.findById(DELIVERY_ID)).thenReturn(Optional.of(delivery));
         when(deliveryRecordRepository.findByIdAndFactoryIdForUpdate(DELIVERY_ID, FACTORY_ID))
                 .thenReturn(Optional.of(delivery));
-        when(salesOrderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        when(salesOrderRepository.findByIdAndFactoryId(ORDER_ID, FACTORY_ID)).thenReturn(Optional.of(order));
         when(salesOrderRepository.findByIdAndFactoryIdForUpdate(ORDER_ID, FACTORY_ID)).thenReturn(Optional.of(order));
         when(salesOrderItemRepository.findBySalesOrderId(ORDER_ID)).thenReturn(Collections.emptyList());
         when(deliveryRecordRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));

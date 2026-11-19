@@ -101,6 +101,19 @@ if [ -f "$R" ]; then
   else echo "FAIL 接线: beat 没调清理或路径与 setup.sh 不一致"; fail=1; fi
 else echo "SKIP 接线 (只拷了被测脚本, 如在 mini 上跑兼容性)"; n=$((n+1)); fi
 
+# 接线 (形态 B): GitHub 侧 merge-queue-reaper.yml 真的调同一个脚本, 由 Java Gate 被请求时触发 (名字要对得上),
+# 有取消 run 的权限, 且不挂在 merge_group 上 (不给合并组多挂检查)。
+W=.github/workflows/merge-queue-reaper.yml
+if [ -f "$W" ]; then
+  jg=$(sed -n 's/^name: *//p' .github/workflows/java-gate-pr.yml)
+  if grep -q 'run: bash scripts/ci/canada-mini-gate/reap-stale-merge-groups.sh$' "$W" \
+     && grep -q "workflows: \[\"$jg\"\]" "$W" && grep -q 'types: \[requested\]' "$W" \
+     && grep -q "github.event.workflow_run.event == 'merge_group'" "$W" \
+     && grep -q '^  actions: write$' "$W" && ! grep -qE '^  merge_group:' "$W"; then
+    echo "PASS 接线: merge-queue-reaper.yml 在「$jg」被请求时调清理脚本, 有 actions: write, 不挂 merge_group"; n=$((n+1))
+  else echo "FAIL 接线: merge-queue-reaper.yml 触发/调用/权限不对 (Java Gate 名=$jg)"; fail=1; fi
+else echo "SKIP GitHub 侧接线 (只拷了被测脚本)"; n=$((n+1)); fi
+
 echo "cases=$n fail=$fail"
-[ "$n" -ge 13 ] || { echo "FAIL 用例数 $n < 12, 没跑完"; exit 1; }
+[ "$n" -ge 14 ] || { echo "FAIL 用例数 $n < 12, 没跑完"; exit 1; }
 exit $fail

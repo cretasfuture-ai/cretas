@@ -47,6 +47,9 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
      */
     Optional<ProductionPlan> findByIdAndFactoryId(String id, String factoryId);
 
+    /** 批量按 id 取本厂计划 (避免逐个 findByIdAndFactoryId 的 N+1)。 */
+    List<ProductionPlan> findByFactoryIdAndIdIn(String factoryId, Collection<String> ids);
+
     Optional<ProductionPlan> findByFactoryIdAndCreatedByAndClientRequestId(
             String factoryId, Long createdBy, String clientRequestId);
 

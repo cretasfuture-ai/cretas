@@ -15,6 +15,7 @@ import { useAuthStore } from '../../store/authStore';
 import { getProductionDashboard, type KPIItem, type ProductionDashboard } from '../../services/api/productionAnalyticsApiClient';
 import { getFactoryId } from '../../types/auth';
 import { formatNumberWithCommas, formatDate } from '../../utils/formatters';
+import { groupProcessBreakdown, defectRateLabel } from '../../utils/processBreakdown';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -67,6 +68,9 @@ export default function ProductionAnalysisScreen() {
     setLoading(true);
     loadData();
   }, []));
+
+  // 工序产出分布: 一工序一行, 单位分开, 占比只在同单位内算 (不跨单位求和)
+  const processGroups = groupProcessBreakdown(dashboard?.byProcess);
 
   const handleRangeChange = (key: string) => {
     setRangeKey(key as DateRangeKey);
@@ -215,20 +219,26 @@ export default function ProductionAnalysisScreen() {
             <Card style={styles.card} mode="elevated">
               <Card.Title title="工序产出分布" titleVariant="titleMedium" />
               <Card.Content>
-                {dashboard.byProcess.length > 0 ? (
-                  dashboard.byProcess.map((d, i) => {
-                    const output = Number(d.output) || 0;
-                    const totalOutput = dashboard.byProcess.reduce((s, r) => s + (Number(r.output) || 0), 0);
-                    const pct = totalOutput > 0 ? ((output / totalOutput) * 100).toFixed(1) : '0';
-                    return (
-                      <View key={i} style={styles.processRow}>
+                {processGroups.length > 0 ? (
+                  processGroups.map((g, i) => (
+                    <View key={g.process} style={styles.processGroup}>
+                      <View style={styles.processRow}>
                         <View style={[styles.processColor, { backgroundColor: PROCESS_COLORS[i % PROCESS_COLORS.length] }]} />
-                        <Text style={styles.processName}>{String(d.process_category)}</Text>
-                        <Text style={styles.processPct}>{pct}%</Text>
-                        <Text style={styles.processValue}>{formatNumberWithCommas(output)}</Text>
+                        <Text style={styles.processName}>{g.process}</Text>
                       </View>
-                    );
-                  })
+                      {g.lines.map((l) => (
+                        <View key={l.unit ?? '-'} style={styles.processUnitRow}>
+                          <Text style={styles.processValue}>
+                            {formatNumberWithCommas(l.output)} {l.unit ?? '单位未知'}
+                          </Text>
+                          <Text style={styles.processPct}>
+                            {l.sharePct === null ? '—' : `${l.sharePct.toFixed(1)}%`}
+                          </Text>
+                          <Text style={styles.processDefect}>{defectRateLabel(l)}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  ))
                 ) : (
                   <Text style={styles.noDataText}>暂无工序数据</Text>
                 )}
@@ -280,7 +290,10 @@ const styles = StyleSheet.create({
   processColor: { width: 12, height: 12, borderRadius: 6, marginRight: 8 },
   processName: { flex: 1, fontSize: 14 },
   processPct: { width: 45, fontSize: 13, fontWeight: '600', textAlign: 'right', color: '#333' },
-  processValue: { width: 60, fontSize: 12, textAlign: 'right', color: '#999' },
+  processValue: { flex: 1, fontSize: 12, color: '#666' },
+  processGroup: { paddingVertical: 4 },
+  processUnitRow: { flexDirection: 'row', alignItems: 'center', paddingLeft: 20, paddingVertical: 2 },
+  processDefect: { width: 96, fontSize: 12, textAlign: 'right', color: '#999' },
   emptyContainer: { margin: 16, padding: 40, borderRadius: 12, alignItems: 'center', backgroundColor: '#fff' },
   emptyText: { fontSize: 16, color: '#333', fontWeight: '600' },
   emptySubtext: { fontSize: 13, color: '#999', marginTop: 8 },

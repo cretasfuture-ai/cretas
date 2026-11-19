@@ -83,11 +83,34 @@ public class FactoryMaterialRequisitionController {
     public ResponseEntity<?> list(
             @PathVariable String factoryId,
             @RequestParam(required = false) Status status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String planNumber,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fromDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate toDate,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         PageRequest pg = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<FactoryMaterialRequisition> result = service.list(factoryId, status, pg);
+        boolean noNewFilter = (keyword == null || keyword.isBlank()) && (planNumber == null || planNumber.isBlank())
+                && fromDate == null && toDate == null;
+        // 没带新筛选 ⇒ 仍走原有列表 (与旧接口行为一致); 带了才走筛选查询
+        Page<FactoryMaterialRequisition> result = noNewFilter
+                ? service.list(factoryId, status, pg)
+                : service.list(factoryId, status, keyword, planNumber, fromDate, toDate, pg);
         return ResponseEntity.ok(Map.of("success", true, "data", result));
+    }
+
+    // 按物料汇总 已发 / 退回 / 净领用 (同一组筛选; 不同单位分行, 不相加)
+    @RequireModule(value = "production_plan", alsoAllowModules = {"warehouse"})
+    @GetMapping("/summary-by-material")
+    public ResponseEntity<?> summaryByMaterial(
+            @PathVariable String factoryId,
+            @RequestParam(required = false) Status status,
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String planNumber,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate fromDate,
+            @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate toDate) {
+        return ResponseEntity.ok(Map.of("success", true,
+                "data", service.summarizeByMaterial(factoryId, status, keyword, planNumber, fromDate, toDate)));
     }
 
     // 详情顺带给辅料行的配比 (确认领料自动算辅料用): 仓管读不了生产计划 / BOM, 弹窗只能从这里拿 (2026-11-10)。

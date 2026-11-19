@@ -15,7 +15,16 @@ glob 语义对齐 GitHub Actions 的 paths 过滤:
   `!p`  取反: 按顺序求值, 最后一条命中的模式决定结果 (与 GitHub 相同)
 
 判定 (⛔ 不许因为没量到而跳过 —— 宁可多跑):
-  事件不是 pull_request            ⇒ run=true (merge_group 队列跑全量; push/schedule/dispatch 行为不变)
+  事件不是 pull_request / merge_group ⇒ run=true (push/schedule/dispatch 行为不变)
+  merge_group (2026-11-19 Steve「合并组只跑改动相关检查」): base=merge_group.base_sha, head=merge_group.head_sha。
+    ⚠️ base 是合并组提交的父提交: 队首是 main, 排第 2 位起是【前一组】的提交 (实测 pr-1957 组的父 =
+    pr-1956 组的 head)。所以 diff 只是本组自己 (本 PR) 的改动, 不含排在前面的 PR。
+    🔴 安全前提: ruleset 25791147 的合并队列 grouping_strategy=ALLGREEN —— 每一组都必须自己全绿。
+    第 k 组跳过某道闸 ⇔ 本 PR 没碰它的路径 ⇒ 这道闸在第 k 组的结果等于第 k-1 组的结果, 而第 k-1 组已被要求过绿。
+    改成 HEADGREEN (只要求队头组绿) 时这个前提不成立: 前面改 Java 的 PR 会跟着后面只改文档的组一起合入,
+    Java Gate 实际没跑完 —— 改 grouping_strategy 前必须先把本脚本改回 merge_group 全量。
+    已接受的风险: 触发清单漏一条路径时, 队列不再全量兜底, 要到下一个碰到它的 PR 才发现。
+    此前 merge_group 一律全量: 一组 22 个作业 vs PR 一次 10 个, 队列每重排一次就再跑一整套。
   base/head sha 缺失、git 出错、diff 为空 ⇒ run=true 并打 ::warning::
   有任一变更文件命中                ⇒ run=true
   全部不命中                        ⇒ run=false
@@ -102,9 +111,13 @@ def changed_files(base, head, cwd=None):
     return [l.strip() for l in r.stdout.splitlines() if l.strip()], None
 
 
+# 按 diff 判定的事件; 其余事件一律 run=true。
+DIFF_EVENTS = ("pull_request", "merge_group")
+
+
 def decide(event, base, head, pats, cwd=None):
     """返回 (run, changed_n, matched_list, warning)。"""
-    if event != "pull_request":
+    if event not in DIFF_EVENTS:
         return True, None, [], None
     if not base or not head:
         return True, None, [], "base/head sha 缺失 (base=%r head=%r), 按 run=true 处理" % (base, head)

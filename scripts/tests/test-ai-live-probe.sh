@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GUARDS=scripts/ai-live-probe/ai_live_probe.py,scripts/ai-live-probe/post-deploy-hook.sh,scripts/ai-live-probe/cases.json,scripts/deploy/release-cretas.sh,scripts/deploy/deploy-smartbi-python.sh
+# GUARDS=scripts/ai-live-probe/ai_live_probe.py,scripts/ai-live-probe/post-deploy-hook.sh,scripts/ai-live-probe/cases.json,scripts/tests/lib/ai-live-probe-stub.py,scripts/deploy/release-cretas.sh,scripts/deploy/deploy-smartbi-python.sh
 # 上线后自动实测关 (scripts/ai-live-probe) 的离线测试 —— ⛔ 不连生产, 全部打本机桩服务器
 # (scripts/tests/lib/ai-live-probe-stub.py)。守三件事:
 #   A. 三态退出码: 全过 0 / 有失败 1 / 没量到 2 (服务不可达、登录失败、租户不对、0 条执行)。
@@ -33,13 +33,17 @@ done
 cat >"$TMP/cases.json" <<'EOF'
 {"cases": [{"id": "inventory_both_entries", "entries": ["execute", "stream"], "same_intent_across_entries": true,
   "turns": [{"say": "查库存", "expect": {"status_in": ["SUCCESS"], "intent": "REPORT_INVENTORY", "message_contains": ["库存"]}}]},
+ {"id": "report_work_operator", "account": "operator", "entries": ["execute", "stream"],
+  "turns": [{"say": "我要报工，产量100", "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO"], "message_contains": ["哪一道工序"]}}]},
+ {"id": "report_work_viewer_denied", "entries": ["execute", "stream"],
+  "turns": [{"say": "我要报工，产量100", "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NO_PERMISSION"], "message_contains": ["production:read_write"]}}]},
  {"id": "general_cost_question_same_status", "entries": ["execute", "stream"], "same_status_across_entries": true,
   "turns": [{"say": "怎么降低成本？", "expect": {}}]}]}
 EOF
 
 start_stub() {  # $1 = STUB_MODE
     [ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null
-    rm -f "$TMP/port" "$TMP/calls.log"
+    rm -f "$TMP/port" "$TMP/calls.log" "$TMP/calls.log.auth"
     STUB_MODE="$1" "$PY" "$STUB" "$TMP/port" "$TMP/calls.log" &
     STUB_PID=$!
     for _ in $(seq 1 50); do [ -s "$TMP/port" ] && break; sleep 0.1; done
@@ -51,6 +55,7 @@ run_probe() {  # 其余参数透传; 设 RC / OUT / RESULT
     OUT="$TMP/out.log"
     AI_PROBE_READ_USERNAME=stub_reader AI_PROBE_READ_PASSWORD=stub-pass \
     AI_PROBE_WRITE_USERNAME=stub_writer AI_PROBE_WRITE_PASSWORD=stub-pass \
+    AI_PROBE_OPERATOR_USERNAME="${OPERATOR_USER-stub_operator}" AI_PROBE_OPERATOR_PASSWORD="${OPERATOR_PASS-stub-pass}" \
         "$PY" -X utf8 "$PROBE" --base "$BASE" --server "" --cases "$TMP/cases.json" \
         --out-dir "$TMP/results" --env-file "$TMP/none.env" --lock-file "$TMP/probe.lock" "$@" >"$OUT" 2>&1
     RC=$?
@@ -91,6 +96,33 @@ expect_rc 1 "「怎么降低成本？」两入口状态分叉"
 grep -q 'FAIL.*general_cost_question_same_status#same_status' "$OUT" || { cat "$OUT"; fail "两入口状态不一致应单独记一条 FAIL"; }
 grep -q 'PASS.*general_cost_question_same_status (stream)' "$OUT" || fail "每个入口单看都过 (expect 为空), 只能靠同状态判红"
 ok "状态分叉只由 #same_status 打红"
+
+echo "A2. 一线号: 报工用例用一线号, 阴性对照用只读号"
+start_stub pass
+run_probe --no-write
+expect_rc 0 "报工 (一线号) + viewer 被拒 (只读号)"
+grep -q 'PASS.*report_work_operator (execute)' "$OUT" && grep -q 'PASS.*report_work_viewer_denied (stream)' "$OUT" || { cat "$OUT"; fail "两条报工相关用例都要真的判过"; }
+op_calls=$(grep -c ' stub-token-stub_operator$' "$TMP/calls.log.auth")
+[ "$op_calls" = 2 ] || { cat "$TMP/calls.log.auth"; fail "一线号应恰好发 2 次 AI 请求 (报工 execute + stream), 实为 $op_calls"; }
+viewer_report=$(grep -c '^/api/mobile/F006/ai-intents/execute.* stub-token-stub_reader$' "$TMP/calls.log.auth")
+[ "$viewer_report" -ge 3 ] || fail "只读号应发了 查库存/阴性对照/成本 的请求"
+ok "报工用例走 stub_operator 令牌 (2 次), viewer 阴性对照走 stub_reader 令牌"
+
+start_stub viewer_can_report
+run_probe --no-write
+expect_rc 1 "权限门失效 (viewer 也能报工) 被阴性对照抓到"
+grep -q 'FAIL.*report_work_viewer_denied' "$OUT" || { cat "$OUT"; fail "应由 report_work_viewer_denied 打红"; }
+
+start_stub pass
+OPERATOR_USER="" OPERATOR_PASS="" run_probe --no-write
+expect_rc 2 "缺一线号凭证 = 没量到 (不静默跳过)"
+grep -q '缺一线号凭证' "$OUT" || fail "要说明缺的是一线号凭证"
+! grep -q 'ai-intents' "$TMP/calls.log" || fail "缺一线号凭证时一次 AI 调用都不许发生"
+
+start_stub operator_bad_role
+run_probe --no-write
+expect_rc 2 "一线号角色不对 = 没量到"
+grep -q '不在' "$OUT" || fail "要说明角色不在一线写入角色里"
 
 start_stub bad_login
 run_probe
@@ -235,13 +267,22 @@ cases = json.load(open(sys.argv[1], encoding="utf-8"))["cases"]
 ids = [c["id"] for c in cases]
 assert len(ids) == len(set(ids)), "case id 重复"
 need = {"inventory_both_entries", "clarify_then_pick_1", "report_work_suspend_resume",
-        "report_work_lists_processes_first", "report_work_stats_is_query", "general_cost_question_same_status"}
+        "report_work_lists_processes_first", "report_work_viewer_denied", "report_work_stats_is_query", "general_cost_question_same_status"}
 assert need <= set(ids), "缺必备话术: %s" % (need - set(ids))
 for c in cases:
     assert set(c["entries"]) <= {"execute", "stream"} and c["entries"], c["id"]
     assert c["turns"] and all(t.get("say") and isinstance(t.get("expect"), dict) for t in c["turns"]), c["id"]
     for key in (c.get("pending") or {}):
         assert key in c["entries"] or key == "*", (c["id"], key)
+by_id = {c["id"]: c for c in cases}
+for cid in ("report_work_suspend_resume", "report_work_lists_processes_first"):
+    assert by_id[cid].get("account") == "operator", cid + " 必须用一线号 (viewer 被 production:read_write 拒, #1816)"
+neg = by_id["report_work_viewer_denied"]
+assert neg.get("account", "reader") == "reader" and neg["entries"] == ["execute", "stream"], "阴性对照必须用只读号、两入口"
+exp = neg["turns"][0]["expect"]
+assert exp["status_in"] == ["NO_PERMISSION"] and "production:read_write" in exp["message_contains"], exp
+for c in cases:
+    assert c.get("account", "reader") in ("reader", "operator"), c["id"]
 inv = next(c for c in cases if c["id"] == "inventory_both_entries")
 assert inv["entries"] == ["execute", "stream"] and inv["same_intent_across_entries"], "查库存必须两入口同意图"
 cost = next(c for c in cases if c["id"] == "general_cost_question_same_status")
@@ -249,6 +290,6 @@ assert cost["entries"] == ["execute", "stream"] and cost.get("same_status_across
 assert cost["turns"][0]["say"] == "怎么降低成本？", cost["turns"][0]["say"]
 print("cases=%d ok" % len(cases))
 EOF
-ok "cases.json 含 6 条必备话术, pending 只挂在存在的入口上"
+ok "cases.json 含 7 条必备话术, pending 只挂在存在的入口上"
 
 echo "PASS: test-ai-live-probe"

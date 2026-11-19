@@ -205,6 +205,16 @@ class IndicatorCenterValueVisibilityContractTest {
         }
     }
 
+    /** 递归找值为 80 的数值/文本节点 (被隐藏的阈值 GREEN >= 80)。 */
+    private static boolean containsEighty(JsonNode n) {
+        if (n.isNumber()) return new BigDecimal(n.asText()).compareTo(new BigDecimal("80")) == 0;
+        if (n.isTextual()) return n.asText().matches("80(\\.0+)?");
+        for (JsonNode c : n) {
+            if (containsEighty(c)) return true;
+        }
+        return false;
+    }
+
     @ParameterizedTest(name = "{0}")
     @EnumSource(Account.class)
     @DisplayName("列表 lastValue / {code}/value / versions / recompute: 金额类按口径, 良品率照常")
@@ -245,9 +255,11 @@ class IndicatorCenterValueVisibilityContractTest {
         if (!account.sees) {
             assertTrue(r.get("message").asText().contains("按当前账号的权限配置不显示"), "如实说, 不说没配置: " + r);
         }
-        // 只看业务字段 (data/message), 不扫整串: 响应里的 timestamp 纳秒段会偶然含 "80" 让本断言抖动
-        String bizPart = r.path("data").toString() + "|" + r.path("message").asText();
-        assertFalse(!account.sees && bizPart.contains("80"), r.toString());
+        // 解析后只在 data / message 结构里找阈值 80 (数值节点或文本节点); 不扫整串 (timestamp 纳秒段会偶然含 "80" 致抖动)。
+        // 看不到 => 不得出现; 看得到 => 必须出现 (阳性对照, 证明探测器本身能发现它)
+        assertEquals(account.sees, containsEighty(r.path("data")), "/thresholds data: " + r);
+        assertFalse(containsEighty(r.path("message")), "/thresholds message: " + r);
+        assertEquals(account.sees, containsEighty(detail.path("thresholds")), "detail.thresholds: " + detail);
 
         assertEquals(1, call(mvc, get(BASE + "/thresholds/FACTORY_YIELD_RATE")).get("data").size(), "良品率阈值照常");
         assertEquals(1, call(mvc, get(BASE + "/FACTORY_YIELD_RATE")).get("data").get("thresholds").size());

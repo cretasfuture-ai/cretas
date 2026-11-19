@@ -39,3 +39,4 @@ test-intent-acceptance-leak-gate.sh
 test-remote-java-build.sh
 test-route-mini-or-hosted.sh
 test-fast-shard-context-cache-cap.sh
+test-mini-job-started-sparse-reset.sh

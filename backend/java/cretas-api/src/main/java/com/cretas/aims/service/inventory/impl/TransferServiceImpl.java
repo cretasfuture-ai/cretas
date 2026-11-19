@@ -749,7 +749,30 @@ public class TransferServiceImpl implements TransferService {
         populateCurrentStock(transfer);
         // fool-proof-design Rule 2 — populate 申请人/审批人姓名 for detail-page display (裸 userId → 姓名).
         populateRequestApproveNames(transfer);
+        // #1844 L-2: 详情也回填调出/调入仓库名(与 InternalTransfer 上「列表/详情」的注释一致)。
+        fillWarehouseNamesForDetail(factoryId, transfer);
         return transfer;
+    }
+
+    /**
+     * 详情只有两个仓库 id, 按 id + 本厂查(最多两次), 不拉整厂仓库表。
+     * 跨厂调拨里对方工厂的仓库查不到, 名称留 null —— ⛔ 不拿 id 冒充, 也不跨厂读名称。
+     */
+    private void fillWarehouseNamesForDetail(String factoryId, InternalTransfer transfer) {
+        if (factoryWarehouseRepository == null || transfer == null) {
+            return;
+        }
+        transfer.setSourceWarehouseName(warehouseNameOrNull(factoryId, transfer.getSourceWarehouseId()));
+        transfer.setTargetWarehouseName(warehouseNameOrNull(factoryId, transfer.getTargetWarehouseId()));
+    }
+
+    private String warehouseNameOrNull(String factoryId, String warehouseId) {
+        if (warehouseId == null) {
+            return null;
+        }
+        return factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId)
+                .map(com.cretas.aims.entity.factory.FactoryWarehouse::getName)
+                .orElse(null);
     }
 
     /**

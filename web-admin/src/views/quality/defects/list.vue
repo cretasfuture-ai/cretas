@@ -17,6 +17,7 @@ import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { CsTableColumn as TableColumn } from '@/types/csTable';
 import { badgeColor } from '@/utils/csBadge';
+import { formatDateTime } from '@/utils/dateFormat';
 import iconDefects from '@/assets/quality/icon-defects.webp';
 import { inspectionNumberLabel, hasInspectionNumber } from '../inspectionNumber';
 import {
@@ -388,6 +389,7 @@ onMounted(load);
         </template>
         <template #qualityInspection-cell="{ row }"><span class="qi-number">{{ inspectionNumberLabel({ inspectionNumber: row.original.qualityInspectionNumber }) }}</span></template>
         <template #handlingAction-cell="{ row }">{{ row.original.handlingAction || '-' }}</template>
+        <template #createdAt-cell="{ row }">{{ formatDateTime(row.original.createdAt) }}</template>
         <template #status-cell="{ row }">
           <UBadge :color="badgeColor(statusTagType(row.original.status))" variant="soft">{{ DEFECT_STATUS_LABELS[String(row.original.status) as DefectStatus] || row.original.status }}</UBadge>
         </template>
