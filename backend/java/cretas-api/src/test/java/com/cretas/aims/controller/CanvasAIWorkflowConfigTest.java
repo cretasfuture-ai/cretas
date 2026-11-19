@@ -91,6 +91,45 @@ class CanvasAIWorkflowConfigTest {
         verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
     }
 
+    /**
+     * BP-38: 「检查投入与产出单位、数量换算是否完整」曾生成 253 项整画布替换补丁。
+     * 检查意图必须只回结论文字: 即便模型仍交回一份规格 JSON, 也不能变成 diff。
+     */
+    @Test
+    void workflowCheckIntentReturnsConclusionTextAndNoDiff() throws Exception {
+        CanvasAIController.AIRequest request = workflowRequest();
+        request.setMessage("检查投入与产出单位、数量换算是否完整");
+        request.setParams(Map.of(
+                "intent", "check",
+                "context", Map.of("definition", Map.of("nodes", List.of(), "edges", List.of()))));
+        when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        when(dashScopeClient.chatLowTemp(prompt.capture(), eq("检查投入与产出单位、数量换算是否完整")))
+                .thenReturn("{\"steps\":[{\"process\":\"卤制\"}]}");
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertFalse(response.isApplied());
+        assertTrue(response.getDiffs().isEmpty(), "检查类问题不许带回任何补丁/规格 diff");
+        assertTrue(prompt.getValue().contains("READ-ONLY"), "检查意图必须用只读提示词");
+        assertFalse(prompt.getValue().contains("Output shape (JSON only"), "检查意图不许套规格提示词");
+        verify(workflowTool, never()).execute(any(ToolCall.class), anyMap());
+    }
+
+    @Test
+    void workflowWithoutCheckIntentStillUsesSpecRoute() throws Exception {
+        CanvasAIController.AIRequest request = workflowRequest();
+        when(toolRegistry.getExecutor(TOOL_NAME)).thenReturn(Optional.of(workflowTool));
+        ArgumentCaptor<String> prompt = ArgumentCaptor.forClass(String.class);
+        when(dashScopeClient.chatLowTemp(prompt.capture(), any(String.class)))
+                .thenReturn("{\"steps\":[{\"process\":\"卤制\"}]}");
+
+        CanvasAIController.AIResponse response = controller.chat("F006", null, request).getData();
+
+        assertEquals(1, response.getDiffs().size());
+        assertFalse(prompt.getValue().contains("READ-ONLY"));
+    }
+
     @Test
     void invalidWorkflowSpecReturnsNoDiffAndNeverExecutes() throws Exception {
         CanvasAIController.AIRequest request = workflowRequest();

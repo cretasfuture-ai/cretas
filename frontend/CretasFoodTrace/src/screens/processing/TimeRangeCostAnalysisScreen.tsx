@@ -167,9 +167,13 @@ export default function TimeRangeCostAnalysisScreen() {
       if (response.data) {
         const backendData = response.data;
         const transformedData = {
-          totalCost: Number(backendData.totalCost || 0),
-          totalBatches: 0, // 后端未提供批次数量
-          avgCostPerBatch: 0, // 后端未提供平均成本
+          // 成本未录时后端给 null (不是 0), 原样保留, 显示「—」
+          totalCost: backendData.totalCost == null ? null : Number(backendData.totalCost),
+          // 完工计划数 / 平均每计划成本: 口径与总成本一致 (结束时间在区间内的计划); 后端给 null 就显示「—」
+          planCount: backendData.planCount ?? null,
+          avgCostPerPlan: backendData.avgCostPerPlan == null ? null : Number(backendData.avgCostPerPlan),
+          // 有完工计划没录成本时平均值算不出, 后端给原因
+          avgCostPerPlanNote: backendData.avgCostPerPlanNote ?? null,
           costBreakdown: {
             rawMaterials: Number(backendData.materialCost || 0),
             labor: Number(backendData.laborCost || 0),
@@ -376,7 +380,7 @@ export default function TimeRangeCostAnalysisScreen() {
                 <View style={styles.summaryGrid}>
                   <View style={styles.summaryItem}>
                     <Text variant="headlineMedium" style={styles.summaryValue}>
-                      {formatCurrency(costSummary.totalCost)}
+                      {costSummary.totalCost == null ? '—' : formatCurrency(costSummary.totalCost)}
                     </Text>
                     <Text variant="bodySmall" style={styles.summaryLabel}>
                       总成本
@@ -384,21 +388,26 @@ export default function TimeRangeCostAnalysisScreen() {
                   </View>
                   <View style={styles.summaryItem}>
                     <Text variant="headlineMedium" style={styles.summaryValue}>
-                      {costSummary.totalBatches}
+                      {costSummary.planCount == null ? '—' : String(costSummary.planCount)}
                     </Text>
                     <Text variant="bodySmall" style={styles.summaryLabel}>
-                      批次数量
+                      完工计划数
                     </Text>
                   </View>
                   <View style={styles.summaryItem}>
                     <Text variant="headlineMedium" style={styles.summaryValue}>
-                      {formatCurrency(costSummary.avgCostPerBatch)}
+                      {costSummary.avgCostPerPlan == null ? '—' : formatCurrency(costSummary.avgCostPerPlan)}
                     </Text>
                     <Text variant="bodySmall" style={styles.summaryLabel}>
-                      平均单批成本
+                      平均每计划成本
                     </Text>
                   </View>
                 </View>
+                {costSummary.avgCostPerPlan == null && costSummary.avgCostPerPlanNote ? (
+                  <Text variant="bodySmall" style={styles.summaryLabel}>
+                    {costSummary.avgCostPerPlanNote}
+                  </Text>
+                ) : null}
               </Card.Content>
             </Card>
 

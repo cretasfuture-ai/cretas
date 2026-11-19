@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
@@ -280,7 +281,7 @@ const columns = computed<CsTableColumn<TableRow>[]>(() => {
         title="收款列表暂时没取到，请点「搜索」重试。" />
 
       <UTable :data="tableData" :columns="columns" :loading="loading" class="cs-table" data-testid="payment-table">
-        <template #empty>暂无收款记录</template>
+        <template #empty><ListEmptyExplain empty-title="还没有收款记录" empty-hint="客户付款后，点右上角登记收款并关联销售订单；登记后会出现在这里。" /></template>
         <template #amount-cell="{ row }"><span class="num">{{ formatAmount(row.original.amount as number | null) }}</span></template>
         <template #paymentMethod-cell="{ row }">{{ methodText(row.original.paymentMethod) }}</template>
         <template #paymentReference-cell="{ row }">{{ row.original.paymentReference || '—' }}</template>

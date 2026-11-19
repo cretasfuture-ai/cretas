@@ -327,3 +327,15 @@ def test_production_parent_router_mounts_exact_authenticated_pilot(monkeypatch):
     result = request(api, headers())
     assert result.status_code == 200 and "检查冷链。" in result.text
     assert observed == [("如何检查冷链？", False)]
+
+
+def test_upstream_http_error_logs_status_and_body_prefix(monkeypatch, caplog):
+    # 2026-11-19: 网关 400 invalid_request 之前只记 HTTPStatusError 类型, 看不出上游拒绝了什么。
+    # 真流式响应(与生产一致): 错误体必须在流关闭前读出来。
+    install_model(monkeypatch, [{"error": "invalid_request", "pad": "x" * 400}], status=400)
+    with caplog.at_level("WARNING", logger=provider.logger.name):
+        events = collect()
+    assert events[-1]["code"] == "MINI_UNAVAILABLE"
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "upstream_status=400" in text and "invalid_request" in text
+    assert "x" * 201 not in text

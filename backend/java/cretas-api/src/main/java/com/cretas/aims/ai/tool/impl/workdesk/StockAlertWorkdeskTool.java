@@ -1,6 +1,9 @@
 package com.cretas.aims.ai.tool.impl.workdesk;
 
 import com.cretas.aims.ai.tool.AbstractBusinessTool;
+import com.cretas.aims.entity.SupplierMaterial;
+import com.cretas.aims.repository.SupplierMaterialRepository;
+import com.cretas.aims.repository.SupplierRepository;
 import com.cretas.aims.service.MaterialBatchService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +42,12 @@ public class StockAlertWorkdeskTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBatchService materialBatchService;
+
+    @Autowired
+    private SupplierMaterialRepository supplierMaterialRepository;
+
+    @Autowired
+    private SupplierRepository supplierRepository;
 
     @Override
     public String getToolName() {
@@ -132,9 +141,21 @@ public class StockAlertWorkdeskTool extends AbstractBusinessTool {
                         stripZeros(recommend), unitStr));
             }
 
-            // 推荐供应商 (如果 service 返回了)
+            // 推荐供应商: 该原料已维护的供应关系里, 启用的优先、首选的优先 (不比价: 系统里没有真实报价, 不编价格)
             if (w.containsKey("preferredSupplier")) {
                 item.put("preferredSupplier", w.get("preferredSupplier"));
+            }
+            Map<String, Object> supplier = recommendSupplier(factoryId, (String) w.get("materialTypeId"));
+            if (supplier != null) {
+                item.put("recommendedSupplier", supplier);
+                String hint = item.get("displayHint") == null ? null : item.get("displayHint").toString();
+                if (hint != null) {
+                    item.put("displayHint", hint + ", 推荐供应商 " + supplier.get("name")
+                            + (Boolean.TRUE.equals(supplier.get("preferred")) ? " (首选)" : "")
+                            + (supplier.get("leadTimeDays") != null ? ", 交期约 " + supplier.get("leadTimeDays") + " 天" : ""));
+                }
+            } else {
+                item.put("supplierNote", "该原料还没有维护供应商，暂时无法推荐");
             }
             filtered.add(item);
         }
@@ -172,6 +193,30 @@ public class StockAlertWorkdeskTool extends AbstractBusinessTool {
             message = sb.toString();
         }
         return buildSimpleResult(message, data);
+    }
+
+    /** 推荐供应商: 取该原料启用中的供应关系 (首选优先); 没有维护 = null (不编)。 */
+    private Map<String, Object> recommendSupplier(String factoryId, String materialTypeId) {
+        if (materialTypeId == null) {
+            return null;
+        }
+        for (SupplierMaterial link : supplierMaterialRepository
+                .findByFactoryIdAndMaterialTypeIdOrderByActiveDescPreferredDescCreatedAtDesc(factoryId, materialTypeId)) {
+            if (!Boolean.TRUE.equals(link.getActive()) || link.getSupplierId() == null) {
+                continue;
+            }
+            var supplier = supplierRepository.findByIdAndFactoryId(link.getSupplierId(), factoryId).orElse(null);
+            if (supplier == null || supplier.getName() == null) {
+                continue;
+            }
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("supplierId", supplier.getId());
+            out.put("name", supplier.getName());
+            out.put("preferred", Boolean.TRUE.equals(link.getPreferred()));
+            out.put("leadTimeDays", link.getLeadTimeDays());
+            return out;
+        }
+        return null;
     }
 
     private static String nullToEmpty(String s) {

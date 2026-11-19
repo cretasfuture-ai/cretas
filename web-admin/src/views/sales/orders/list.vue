@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useAiEntryLink } from '@/composables/useAiEntryLink';
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
+import { SALES_PIN_MIN_WIDTH, salesColumnPinning } from './salesColumnPinning';
 import { useRouter, useRoute } from 'vue-router';
 import OrderDeliveryDatePicker from './components/OrderDeliveryDatePicker.vue';
 const deliveryDatePicker = ref<InstanceType<typeof OrderDeliveryDatePicker>>();
@@ -1010,7 +1011,14 @@ const SORTABLE_COLUMN_LABELS: Record<string, string> = {
 const SORTABLE_COLUMN_IDS = Object.keys(SORTABLE_COLUMN_LABELS);
 const sorting = ref<{ id: string; desc: boolean }[]>([]);
 const expanded = ref<Record<string, boolean>>({});
-const columnPinning = ref({ left: [], right: ['actions'] as string[] });
+const viewportWidth = ref(typeof window === 'undefined' ? SALES_PIN_MIN_WIDTH : window.innerWidth);
+const onSalesResize = () => { viewportWidth.value = window.innerWidth; };
+onMounted(() => window.addEventListener('resize', onSalesResize));
+onBeforeUnmount(() => window.removeEventListener('resize', onSalesResize));
+const columnPinning = computed({
+  get: () => salesColumnPinning(viewportWidth.value),
+  set: () => { /* 固定列由视口宽度决定，不接受表格回写 */ },
+});
 
 const R = { class: { th: 'text-right', td: 'text-right' } };
 const sortText = (a: { getValue: (id: string) => unknown }, b: { getValue: (id: string) => unknown }, id: string) =>

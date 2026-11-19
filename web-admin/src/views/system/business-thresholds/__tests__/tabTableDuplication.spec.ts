@@ -76,7 +76,7 @@ function mountThresholds() {
 }
 
 function tableRowKeys(wrapper: ReturnType<typeof mountThresholds>): string[] {
-  return wrapper.findAll('.el-table__row .key-cell').map((n) => n.text());
+  return wrapper.findAll('.el-table__row .key-cell').map((n) => n.attributes('data-key') ?? '');
 }
 
 describe('业务阈值配置 — tab 与表格不再共享重复渲染', () => {

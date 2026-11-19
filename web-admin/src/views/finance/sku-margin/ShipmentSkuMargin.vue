@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { getShipmentSkuMargin, type ShipmentSkuMargin, type ShipmentSkuMarginRow } from '@/api/financeReport';
+import { SHIPMENT_COST_SOURCE_INCOMPLETE } from '@/api/financeReportCodes';
 import { fmtMoney, fmtPct } from './skuMarginData';
 import { useRoute } from 'vue-router';
 import { readSourceLocation, shipmentSourceUrl } from './shipmentMarginNavigation';
@@ -14,6 +15,7 @@ const props = defineProps<{
 }>();
 const data = ref<ShipmentSkuMargin | null>(null);
 const error = ref('');
+const costIncomplete = ref(false);
 const loading = ref(false);
 const selected = ref<ShipmentSkuMarginRow | null>(null);
 const sourceVisible = ref(false);
@@ -51,6 +53,7 @@ watch(() => [props.factoryId, ...period.value, props.refreshKey], async () => {
   sourceNotice.value = '';
   data.value = null;
   error.value = '';
+  costIncomplete.value = false;
   if (!props.factoryId) { loading.value = false; return; }
   loading.value = true;
   try {
@@ -59,7 +62,10 @@ watch(() => [props.factoryId, ...period.value, props.refreshKey], async () => {
     if (!response.success || !response.data) throw new Error(response.message || '未能读取实际出货毛利');
     data.value = response.data;
   } catch (cause) {
-    if (current === sequence) error.value = cause instanceof Error ? cause.message : '读取失败，请稍后重试';
+    if (current === sequence) {
+      if ((cause as { code?: unknown } | null)?.code === SHIPMENT_COST_SOURCE_INCOMPLETE) costIncomplete.value = true;
+      else error.value = cause instanceof Error ? cause.message : '读取失败，请稍后重试';
+    }
   } finally {
     if (current === sequence) loading.value = false;
   }
@@ -144,7 +150,14 @@ function traceUrl(batchNumber: string): string {
     </p>
     <p v-if="loading" class="basis" data-testid="shipment-margin-loading">加载中…</p>
     <UAlert v-if="sourceNotice" :title="sourceNotice" color="warning" variant="soft" icon="i-lucide-triangle-alert" class="mb-3" data-type="warning" />
-    <UAlert v-if="error" :title="error" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-3" data-type="error" />
+    <UAlert v-if="costIncomplete" color="warning" variant="soft" icon="i-lucide-triangle-alert" class="mb-3"
+      data-type="warning" data-testid="shipment-margin-cost-incomplete"
+      title="本期有出货记录缺扣库批次或单位，暂不能计算 SKU 毛利">
+      <template #description>
+        请到<a href="/warehouse/shipments" data-testid="shipment-margin-fix-link">「出货管理」</a>补齐出货扣库批次和单位后重试。
+      </template>
+    </UAlert>
+    <UAlert v-else-if="error" :title="error" color="error" variant="soft" icon="i-lucide-circle-alert" class="mb-3" data-type="error" />
     <template v-else-if="data">
       <dl class="totals">
         <div><dt>出货收入</dt><dd>{{ fmtMoney(data.totalRevenue) }}</dd></div>

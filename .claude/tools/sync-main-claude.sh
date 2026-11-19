@@ -20,6 +20,15 @@ main_root="$(cd "$(dirname "$common")" 2>/dev/null && { pwd -W 2>/dev/null || pw
 
 G() { git -C "$main_root" "$@"; }
 
+# $2 这个 blob 是否在 origin/main 上出现过（查最近 200 个改过 $1 的提交）。
+was_on_main() {
+  local c
+  for c in $(G log --format=%H -n 200 origin/main -- "$1" 2>/dev/null); do
+    [ "$(G rev-parse -q --verify "$c:$1" 2>/dev/null)" = "$2" ] && return 0
+  done
+  return 1
+}
+
 # 取最新 origin/main（失败就用本地已有的，不报错）
 if command -v timeout >/dev/null 2>&1; then
   timeout 25 git -C "$main_root" fetch -q origin main 2>/dev/null
@@ -45,7 +54,10 @@ while IFS=$'\t' read -r status path; do
   if [ -f "$f" ]; then wt_blob="$(G hash-object -- "$path" 2>/dev/null)"; else wt_blob=""; fi
 
   [ "$wt_blob" = "$new_blob" ] && continue                       # 已经是最新
-  if [ -n "$wt_blob" ] && [ "$wt_blob" != "$head_blob" ]; then   # 本地改过
+  # 本地改过 = 既不是主目录 HEAD 版，也不是 origin/main 历史上的任何一版。
+  # 后一条是 2026-11-18 补的：上一轮同步写进来的是旧一版 origin/main，只比 HEAD 会把它当成本地改动，
+  # 同一个文件第二次改就永远同步不上（organizer SKILL 在主目录停在 #1840 版，连续两次被 SKIP）。
+  if [ -n "$wt_blob" ] && [ "$wt_blob" != "$head_blob" ] && ! was_on_main "$path" "$wt_blob"; then
     echo "sync-main-claude: SKIP local edit: $path"; skipped=$((skipped+1)); continue
   fi
   changed=$((changed+1))

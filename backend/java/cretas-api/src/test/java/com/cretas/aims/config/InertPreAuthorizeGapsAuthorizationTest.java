@@ -145,6 +145,8 @@ class InertPreAuthorizeGapsAuthorizationTest {
             registry.registerSingleton("aiEnterpriseService", aiEnterprise);
             registry.registerSingleton("operatingReadAccess",
                     mock(com.cretas.aims.service.reports.OperatingReportReadAccess.class));
+            registry.registerSingleton("operatingReportExporter",
+                    mock(com.cretas.aims.service.reports.OperatingReportExporter.class));
             registry.registerSingleton("basicAIService", mock(com.cretas.aims.service.AIAnalysisService.class));
             registry.registerSingleton("mobileService", mobileService);
             registry.registerSingleton("aiContextService", mock(com.cretas.aims.service.AIContextService.class));

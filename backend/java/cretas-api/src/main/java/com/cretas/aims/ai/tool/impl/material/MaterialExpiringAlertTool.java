@@ -29,6 +29,10 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
      */
     private static final int DEFAULT_WARNING_DAYS = 7;
 
+    /** 复合问法「快过期的有哪些？库存够不够？」第二问的触发词; 同时带出低库存预警 (同 material_low_stock_alert 的服务)。 */
+    private static final java.util.regex.Pattern LOW_STOCK_WORDS =
+            java.util.regex.Pattern.compile("库存.{0,4}(不够|不足|偏低|太低|快没|不多)|(不够|不足|缺).{0,2}库存|低库存|安全库存");
+
     @Autowired
     private MaterialBatchService materialBatchService;
 
@@ -102,6 +106,10 @@ public class MaterialExpiringAlertTool extends AbstractBusinessTool {
             result.put("batches", batchList);
         }
 
+        Object said = params.get("originalUserInput") != null ? params.get("originalUserInput") : params.get("userInput");
+        if (said instanceof String text && LOW_STOCK_WORDS.matcher(text).find()) {
+            result.put("lowStockWarnings", materialBatchService.getLowStockWarnings(factoryId));
+        }
         return result;
     }
 
