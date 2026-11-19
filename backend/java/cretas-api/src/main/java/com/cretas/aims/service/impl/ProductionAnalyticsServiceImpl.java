@@ -24,7 +24,7 @@ public class ProductionAnalyticsServiceImpl {
     public ProductionDashboardResponse getProductionDashboard(String factoryId, LocalDate startDate, LocalDate endDate) {
         List<Map<String, Object>> dailyTrend = reportRepo.getDailyProductionTrend(factoryId, startDate, endDate);
         List<Map<String, Object>> byProduct = reportRepo.getProductBreakdown(factoryId, startDate, endDate);
-        List<Map<String, Object>> byProcess = reportRepo.getProcessBreakdown(factoryId, startDate, endDate);
+        List<Map<String, Object>> byProcess = mergeProcessRows(reportRepo.getProcessBreakdown(factoryId, startDate, endDate));
         Map<String, Object> summary = reportRepo.getProgressSummary(factoryId, startDate, endDate);
 
         // 计算环比
@@ -51,8 +51,97 @@ public class ProductionAnalyticsServiceImpl {
         return reportRepo.getProductBreakdown(factoryId, startDate, endDate);
     }
 
+    /** 工序 × 单位一行 (见 {@link #mergeProcessRows})。 */
     public List<Map<String, Object>> getByProcess(String factoryId, LocalDate startDate, LocalDate endDate) {
-        return reportRepo.getProcessBreakdown(factoryId, startDate, endDate);
+        return mergeProcessRows(reportRepo.getProcessBreakdown(factoryId, startDate, endDate));
+    }
+
+    /** 不良率状态: 没人清点过不良 (不知道) / 已清点 / 清点过但产量为 0 (算不出)。 */
+    public static final String DEFECT_NOT_COUNTED = "NOT_COUNTED";
+    public static final String DEFECT_COUNTED = "COUNTED";
+    public static final String DEFECT_NO_OUTPUT = "NO_OUTPUT";
+
+    /**
+     * 把仓库按 (来源, 工序, 单位) 拆的行合并成「工序 × 单位」一行 (不同单位永远不相加)。复审 M5:
+     * <ul>
+     *   <li>output = 各来源产出之和 (同单位), report_count / defect_counted_count 同理, sources 列出来源。</li>
+     *   <li>defect 只算清点过不良的笔; 一笔都没清点 ⇒ defect = null、defectRate = null、
+     *       defectStatus = NOT_COUNTED (「无数据」), 与「清点了、零不良」(defectRate = 0, COUNTED) 分开。</li>
+     *   <li>不良率分母 = 清点过的笔的总产量: 称重 YIELD 的产出是良品 (不含不良) ⇒ 分母 = 良品 + 不良;
+     *       进度 PROGRESS 沿用原口径 ⇒ 分母 = 产出。分母为 0 ⇒ null + NO_OUTPUT。</li>
+     * </ul>
+     */
+    static List<Map<String, Object>> mergeProcessRows(List<Map<String, Object>> rows) {
+        Map<List<Object>, Map<String, Object>> merged = new LinkedHashMap<>();
+        Map<List<Object>, BigDecimal[]> rateParts = new HashMap<>();   // [defect, base]
+        for (Map<String, Object> r : rows) {
+            Object process = r.get("process_category");
+            Object unit = r.get("unit");
+            List<Object> key = Arrays.asList(process, unit);
+            Map<String, Object> m = merged.computeIfAbsent(key, k -> {
+                Map<String, Object> n = new LinkedHashMap<>();
+                n.put("process_category", process);
+                n.put("unit", unit);
+                n.put("output", BigDecimal.ZERO);
+                n.put("good", null);
+                n.put("defect", null);
+                n.put("report_count", 0L);
+                n.put("defect_counted_count", 0L);
+                n.put("sources", new ArrayList<String>());
+                return n;
+            });
+            BigDecimal output = dec(r.get("output"));
+            BigDecimal good = dec(r.get("good"));
+            BigDecimal defect = dec(r.get("defect"));
+            BigDecimal countedOutput = dec(r.get("counted_output"));
+            long counted = r.get("defect_counted_count") == null ? 0L : ((Number) r.get("defect_counted_count")).longValue();
+            m.put("output", ((BigDecimal) m.get("output")).add(output == null ? BigDecimal.ZERO : output));
+            if (good != null) m.put("good", m.get("good") == null ? good : ((BigDecimal) m.get("good")).add(good));
+            m.put("report_count", (Long) m.get("report_count")
+                    + (r.get("report_count") == null ? 0L : ((Number) r.get("report_count")).longValue()));
+            m.put("defect_counted_count", (Long) m.get("defect_counted_count") + counted);
+            @SuppressWarnings("unchecked")
+            List<String> sources = (List<String>) m.get("sources");
+            if (r.get("source") != null) sources.add(r.get("source").toString());
+            if (counted > 0 && defect != null) {
+                m.put("defect", m.get("defect") == null ? defect : ((BigDecimal) m.get("defect")).add(defect));
+                BigDecimal base = countedOutput == null ? BigDecimal.ZERO : countedOutput;
+                if ("YIELD".equals(r.get("source"))) base = base.add(defect);
+                BigDecimal[] parts = rateParts.computeIfAbsent(key, k -> new BigDecimal[]{BigDecimal.ZERO, BigDecimal.ZERO});
+                parts[0] = parts[0].add(defect);
+                parts[1] = parts[1].add(base);
+            }
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<List<Object>, Map<String, Object>> e : merged.entrySet()) {
+            Map<String, Object> m = e.getValue();
+            BigDecimal[] parts = rateParts.get(e.getKey());
+            if (parts == null) {
+                m.put("defectRate", null);
+                m.put("defectStatus", DEFECT_NOT_COUNTED);
+            } else {
+                BigDecimal rate = defectRate(parts[0], parts[1]);
+                m.put("defectRate", rate);
+                m.put("defectStatus", rate == null ? DEFECT_NO_OUTPUT : DEFECT_COUNTED);
+            }
+            out.add(m);
+        }
+        return out;
+    }
+
+    private static BigDecimal dec(Object v) {
+        if (v == null) return null;
+        if (v instanceof BigDecimal b) return b;
+        return new BigDecimal(v.toString());
+    }
+
+    /** 零分母 / 缺值 → null, 其余 4 位小数 (0.0125 = 1.25%)。 */
+    static BigDecimal defectRate(Object defect, Object base) {
+        if (defect == null || base == null) return null;
+        BigDecimal d = new BigDecimal(defect.toString());
+        BigDecimal o = new BigDecimal(base.toString());
+        if (o.signum() <= 0) return null;
+        return d.divide(o, 4, RoundingMode.HALF_UP);
     }
 
     // ==================== 人效分析 ====================
