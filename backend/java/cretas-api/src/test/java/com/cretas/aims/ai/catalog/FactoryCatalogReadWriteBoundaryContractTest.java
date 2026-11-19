@@ -44,7 +44,10 @@ class FactoryCatalogReadWriteBoundaryContractTest {
         verifyNoMoreInteractions(sales);
         assertThat(read.getAccessMode()).isEqualTo(ToolExecutor.AccessMode.READ);
         assertThat(read.getRequiredPermissions()).contains("sales:read");
-        assertThat(read.getAlsoRequiredPermissions()).containsExactly("sales_order");
+        // Mirrors SalesController#listOrders; no module code posing as a permission (admitted nobody but super admins).
+        assertThat(read.getRequiredPermissions())
+                .containsExactlyInAnyOrder("sales:read", "sales:read_write", "finance:read", "procurement:read");
+        assertThat(read.getAlsoRequiredPermissions()).isEmpty();
     }
 
     @Test
