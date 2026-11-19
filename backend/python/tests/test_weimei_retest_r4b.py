@@ -127,7 +127,7 @@ SKU_FIELDS = PLAN_FIELDS + [("SKU", False, True, False)]
 def sku_rows():
     rows = plan_rows()
     for i, r in enumerate(rows):
-        r["SKU"] = "2026-10-SKU" if i < 3 else "OTHER"
+        r["SKU"] = "2026-10-SKU" if i < 3 else ("2026-10-05" if i < 6 else "OTHER")   # 后者: 长得像日期的 SKU, 但这列不是日期字段
     return rows
 
 
@@ -154,7 +154,9 @@ async def test_p1_4_hash_prefix_is_stripped_only_when_the_whole_column_uses_it(m
 
 @pytest.mark.parametrize("value", ["DEF", "#DEF"])
 async def test_p1_4_double_hash_value_is_not_matched_by_single_hash_or_bare_value(monkeypatch, value):
-    rows = code_rows("##")
+    rows = code_rows()
+    for r in rows:
+        r["产品编码"] = "##DEF"                                  # 真实值就是两个 #
     plan = {"intent": "compute", "filters": [{"col": "产品编码", "op": "==", "value": value}]}
     _, _, prompts, _ = await ask(monkeypatch, "10月计划vs实产里产品编码" + value + "有几天", {5323: (rows, PLAN_FIELDS)},
                                  plans=[plan], candidates=PLAN_DETAIL)
@@ -194,7 +196,7 @@ async def test_p2_single_measure_table_keeps_top5_when_the_column_is_not_recogni
     rows = [{"日期": f"2026-10-0{i + 1}", "产线": f"线{i % 3 + 1}", "报废重量": 10.0 + i} for i in range(6)]
     get_cache().set(5397, _bundle(SCRAP_FIELDS, ["报废重量"], "报废重量",
                                   {"产线": [{"label": "线1", "total": 25.0}, {"label": "线2", "total": 20.0}]}))
-    events, _, _, _ = await ask(monkeypatch, "哪条产线损耗最高", {5397: (rows, SCRAP_FIELDS)}, candidates=SCRAP_CAND)
+    events, _, _, _ = await ask(monkeypatch, "各产线的损耗是多少", {5397: (rows, SCRAP_FIELDS)}, candidates=SCRAP_CAND)
     assert any(t.startswith("Top 5 产线") and "报废重量" in t for t in _chart_titles(events)), _chart_titles(events)
 
 
@@ -216,6 +218,8 @@ async def test_p2_explicit_other_metric_beats_the_money_default(monkeypatch):
 def test_p2_relevance_cases():
     from smartbi.services.question_chart import top5_chart_relevant as rel
     assert rel("哪条产线损耗最高", ["报废重量"], "报废重量") is True                  # 单指标: 问什么都是它
+    assert rel("各产线的损耗是多少", ["报废重量"], "报废重量") is True                # 单指标 (问法里没有排名词也保留)
+    assert rel("各产线的损耗是多少", ["人数", "良品kg"], "人数") is False             # 多指标、识别不到、非排名非概览: 不出
     assert rel("当日说明有什么特殊情况", ["人数", "良品kg"], "人数") is False          # 与指标无关
     assert rel("哪个产线最高", ["人数", "良品kg"], "人数") is True                      # 排名类问法: 识别不到列也保留
     assert rel("10月哪天废品最多", ["采购金额", "废品kg"], "采购金额") is False          # 明确问另一列
