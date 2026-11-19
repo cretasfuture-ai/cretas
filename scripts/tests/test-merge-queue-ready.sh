@@ -8,7 +8,8 @@
 #       必需检查会永远挂起; ⇒ pull_request 不带 paths, 改由 changes 作业判定, 原作业按 run 跳过
 #       (被 if 跳过的作业对必需检查算通过);
 #   (b) 在 merge_group 事件上也运行; 2026-11-19 起合并组也按 diff 判定 (base/head 取 merge_group 的
-#       base_sha/head_sha), 只跑改动相关的检查。
+#       base_sha/head_sha, base 是父提交 = main 或前一组), 只跑改动相关的检查。
+#       🔴 安全前提是合并队列 grouping_strategy=ALLGREEN (每组都要自己全绿), 详见 changed-paths.py 文件头。
 #
 # 本闸钉:
 #   1. 11 个 PR workflow 都有 `merge_group: types: [checks_requested]`;

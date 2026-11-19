@@ -63,7 +63,7 @@ concurrency:
 jobs:
   # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
   #   清单: scripts/ci/trigger-paths/rn-gate.txt (原 on.pull_request.paths 原样搬过去)。
-  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
   #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
