@@ -77,7 +77,7 @@ public final class PhraseShortcutEligibility {
             // BP 原话): 句中条件正是它的输入, 不是第二个子问 (2026-11-18 prod [SSE-EarlyPhrase] residual 被拦落到澄清)
             return true;
         }
-        if ("PRODUCT_SALES_RANKING".equals(intentCode) && IntentKnowledgeBase.GROWTH_BREAKDOWN_PHRASES.contains(phrase)) {
+        if ("PRODUCT_PRODUCT_SALES_RANKING".equals(intentCode) && IntentKnowledgeBase.GROWTH_BREAKDOWN_PHRASES.contains(phrase)) {
             // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」: 两个月和百分数是增量拆分工具自己从原话解析的输入, 不是第二个子问
             return true;
         }
