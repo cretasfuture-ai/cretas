@@ -683,6 +683,17 @@ function sortTopLevelMenu(items: MenuItem[]): MenuItem[] {
 export const menuConfig: MenuItem[] = sortTopLevelMenu(rawMenuConfig);
 
 /**
+ * roles 恰为 ['platform_admin'] 但不进「平台工具」的叶子:
+ *   · /system/llm-usage 已在「平台管理」组里, 不重复;
+ *   · /system/permission-matrix 读写的是工厂级 (L2) 表头, 页面要 factoryId; 平台账号不进工厂时打开即报错,
+ *     所以不放进平台侧栏 (PR #1872 终审 M-1)。平台编辑 L1 走平台自己的角色权限入口。
+ */
+export const PLATFORM_TOOLS_EXCLUDED_PATHS: ReadonlySet<string> = new Set([
+  '/system/llm-usage',
+  '/system/permission-matrix',
+]);
+
+/**
  * Platform operators have a separate daily workspace. Keep this list made
  * from real platform routes; factory operations are intentionally not part of
  * the platform sidebar. A factory read-only context switches back to the
@@ -710,7 +721,7 @@ export const platformMenuConfig: MenuItem[] = [
     module: 'system',
     roles: ['platform_admin'],
     children: collectPlatformOnlyItems(menuConfig)
-      .filter((item) => item.path !== '/system/llm-usage'),
+      .filter((item) => !PLATFORM_TOOLS_EXCLUDED_PATHS.has(item.path)),
   },
 ];
 
