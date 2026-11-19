@@ -369,10 +369,7 @@ public class PurchaseOrderPdfServiceImpl implements PurchaseOrderPdfService {
 
     private static String formatTaxRate(BigDecimal value) {
         if (value == null) return "-";
-        BigDecimal percent = value.compareTo(BigDecimal.ONE) <= 0
-                ? value.multiply(BigDecimal.valueOf(100))
-                : value;
-        return percent.stripTrailingZeros().toPlainString() + "%";
+        return value.stripTrailingZeros().toPlainString() + "%";
     }
 
     private static void addKVCell(PdfPTable table, String label, String value, Font labelFont, Font valueFont) {

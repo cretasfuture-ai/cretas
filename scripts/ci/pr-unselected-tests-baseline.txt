@@ -874,7 +874,6 @@ backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PaymentR
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseExceptionServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseInvoiceChaseServiceTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseInvoiceServiceTest.java
-backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseOrderPdfServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseOverReceivePolicyTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseRequisitionServiceImplTest.java
 backend/java/cretas-api/src/test/java/com/cretas/aims/service/inventory/PurchaseServiceImplConfirmReceiveOverReceiveTest.java

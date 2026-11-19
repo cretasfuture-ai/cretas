@@ -281,12 +281,41 @@ const commonTaxRateOptions = [
   { label: '13%', value: 13 },
 ];
 
+const confirmingTaxRate = ref(false);
+
+function isFractionalTaxRate(rate: number): boolean {
+  return rate > 0 && rate < 1;
+}
+
+async function confirmFractionalTaxRate(rate: number, materialName: string): Promise<number | null> {
+  const percent = Number((rate * 100).toPrecision(15));
+  if (percent < 1) {
+    ElMessage.warning(`税率请按百分数填写，${rate} 换算为 ${percent}%，请填写 0 或 1–100 之间的税率`);
+    return null;
+  }
+  if (confirmingTaxRate.value) return null;
+  confirmingTaxRate.value = true;
+  try {
+    await ElMessageBox.confirm(
+      `税率请按百分数填写。输入的是 ${rate}，是否指 ${percent}%？`,
+      materialName ? `确认采购税率 · ${materialName}` : '确认采购税率',
+      { confirmButtonText: `使用 ${percent}%`, cancelButtonText: '取消', type: 'warning' },
+    );
+    return percent;
+  } catch {
+    return null;
+  } finally {
+    confirmingTaxRate.value = false;
+  }
+}
+
 function validateTaxRate(rate: unknown): string | null {
-  if (rate == null || rate === '') return '请选择税率（免税请选择 0%）';
+  if (rate == null || String(rate).trim() === '') return '请选择税率（免税请选择 0%）';
   const numeric = Number(rate);
   if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
     return '税率必须是 0-100 之间的数字';
   }
+  if (isFractionalTaxRate(numeric)) return '税率请按百分数填写，例如 13% 填 13，免税填 0';
   return null;
 }
 
@@ -637,7 +666,13 @@ function onTaxIncludedPriceEdited(item: ProcurementOrderItem): void {
     ? 'MANUAL' : 'MISSING';
 }
 
-function onTaxRateEdited(item: ProcurementOrderItem): void {
+async function onTaxRateEdited(item: ProcurementOrderItem, rate: number | string | null): Promise<void> {
+  if (confirmingTaxRate.value) return;
+  if (isFractionalTaxRate(Number(rate))) {
+    rate = await confirmFractionalTaxRate(Number(rate), item.materialName || '');
+    if (rate === null || !dialogVisible.value || !form.value.items.includes(item)) return;
+  }
+  item.taxRate = rate;
   // 改税率: 含税单价是用户录的, 保持不变; 未税单价按新税率反算, 税额/含税金额随之重算。
   item.unitPrice = purchaseUntaxedUnitPrice(item.taxIncludedUnitPrice, item.taxRate);
   item.lineAmount = null;
@@ -932,7 +967,7 @@ function removeItem(index: number) {
 const submitting = ref(false);
 
 async function handleCreate() {
-  if (submitting.value) return; // P-2: prevent double-submit
+  if (submitting.value || confirmingTaxRate.value) return;
   if (createdOrderId.value) {
     submitting.value = true;
     try {
@@ -1335,16 +1370,18 @@ const forwardEntityLabel = ref('');
 function guardPurchaseAiQuote(params: TableRow): string | null {
   if (!Array.isArray(params.items)) return null;
   for (const [index, item] of (params.items as TableRow[]).entries()) {
-    const price = item.taxIncludedUnitPrice ?? item.unitPrice;
-    if (price == null || price === '') continue;
     const match = resolveReferenceByName(String(item.materialName || ''), materials.value);
     if (match.status !== 'MATCHED') continue; // Existing reference checks handle this.
     const material = materials.value.find((row) => String(row.id) === match.id);
     const configuredRate = materialTaxRate(material?.taxRate);
     const suppliedRate = materialTaxRate(item.taxRate);
+    // 歧义税率由填单动作确认，确认后再校验档案税率和报价。
+    if (suppliedRate !== null && isFractionalTaxRate(suppliedRate)) continue;
     if (configuredRate !== null && suppliedRate !== null && suppliedRate !== configuredRate) {
       return `第 ${index + 1} 行 AI 识别税率 ${suppliedRate}% 与原料档案 ${configuredRate}% 不同，请继续修改；如需使用其他税率，请到普通采购表单核对办理。系统未创建采购单。`;
     }
+    const price = item.taxIncludedUnitPrice ?? item.unitPrice;
+    if (price == null || price === '') continue;
     const rate = configuredRate ?? suppliedRate;
     if (rate === null) continue;
     const rawQuantityUnit = item.quantityUnit || item.unit;
@@ -1363,6 +1400,21 @@ function guardPurchaseAiQuote(params: TableRow): string | null {
 }
 
 async function handleAiFill(params: TableRow) {
+  if (confirmingTaxRate.value) return;
+  if (Array.isArray(params.items)) {
+    const confirmedItems: TableRow[] = [];
+    for (const item of params.items as TableRow[]) {
+      const suppliedRate = materialTaxRate(item.taxRate);
+      if (suppliedRate === null || !isFractionalTaxRate(suppliedRate)) {
+        confirmedItems.push(item);
+        continue;
+      }
+      const confirmed = await confirmFractionalTaxRate(suppliedRate, String(item.materialName || ''));
+      if (confirmed === null) return;
+      confirmedItems.push({ ...item, taxRate: confirmed });
+    }
+    params = { ...params, items: confirmedItems };
+  }
   const quoteWarning = guardPurchaseAiQuote(params);
   if (quoteWarning) { ElMessage.warning(quoteWarning); return; }
   resetForm();
@@ -1924,14 +1976,14 @@ async function handleAiFill(params: TableRow) {
           <div class="tax-select-cell" style="width: 110px">
             <el-tooltip :disabled="!validateTaxRate(item.taxRate)" :content="validateTaxRate(item.taxRate) || ''" placement="top">
               <el-select
-                v-model="item.taxRate"
+                :model-value="item.taxRate"
                 placeholder="请选择税率"
                 filterable
                 allow-create
                 default-first-option
                 style="width: 100%"
                 :class="{ 'is-error-select': validateTaxRate(item.taxRate) }"
-                @update:model-value="onTaxRateEdited(item)"
+                @update:model-value="onTaxRateEdited(item, $event)"
               >
                 <el-option
                   v-for="opt in commonTaxRateOptions"
@@ -1973,7 +2025,7 @@ async function handleAiFill(params: TableRow) {
       </el-form>
       <template #footer>
         <el-button @click="closeOrderEditor">取消</el-button>
-        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" @click="handleCreate">
+        <el-button :data-testid="isEditing ? 'purchase-link-sales-submit' : 'purchase-create-submit'" type="primary" :loading="submitting" :disabled="confirmingTaxRate" @click="handleCreate">
           {{ createdOrderId ? (attachmentQueue.failed ? '重试附件并完成' : '完成') : (isEditing ? '保存修改' : '创建') }}
         </el-button>
       </template>
