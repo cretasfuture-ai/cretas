@@ -465,6 +465,8 @@ export interface AnalysisResult {
   // Present only when source !== 'materialized_cache' (i.e. LLM fallback
   // actually ran). FE uses it to POST feedback.
   log_id?: number | null;
+  /** A9: 后端已把建议里数据没有的金额改写, `answer` 是改写后的终稿, 前端须覆盖已流出的文字 */
+  answer_replaced?: boolean;
 }
 
 /**

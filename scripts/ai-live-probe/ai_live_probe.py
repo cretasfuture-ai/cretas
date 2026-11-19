@@ -28,6 +28,10 @@
 凭证 ⛔ 不打印、不落盘到结果文件、不进 git:
   只读号: AI_PROBE_READ_USERNAME/PASSWORD → FACTORY_EVAL_USERNAME/PASSWORD → (--server) ssh 读服务器 .env.prod
   写入号: AI_PROBE_WRITE_USERNAME/PASSWORD → --env-file (默认 ~/.cretas/ai-live-probe.env)
+  一线号 (cases.json 里 "account": "operator" 的用例, 如报工): AI_PROBE_OPERATOR_USERNAME/PASSWORD → --env-file;
+    必须是 F006 的一线写入角色 (OPERATOR_ROLES), 否则 rc=2。只读号 (viewer) 说写意图会被 production:read_write 拦下 (#1816),
+    所以报工的正向用例不能用它; 反向 (viewer 被拒) 另有 report_work_viewer_denied。
+    用到一线号的用例而凭证缺失 ⇒ rc=2 没量到, ⛔ 不静默跳过。
 
 用法
   python3 scripts/ai-live-probe/ai_live_probe.py                       # 全套 (读 + 写), 结果写 ~/.cretas/ai-live-probe-results/
@@ -197,6 +201,18 @@ def resolve_read_creds(server: str) -> Tuple[Optional[str], Optional[str], str]:
         kv = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
         if kv.get("FACTORY_EVAL_USERNAME") and kv.get("FACTORY_EVAL_PASSWORD"):
             return kv["FACTORY_EVAL_USERNAME"], kv["FACTORY_EVAL_PASSWORD"], "ssh:.env.prod"
+    return None, None, "missing"
+
+
+OPERATOR_ROLES = {"operator", "yield_operator", "group_leader", "team_leader", "workshop_supervisor"}
+
+
+def resolve_operator_creds(env_file: str) -> Tuple[Optional[str], Optional[str], str]:
+    if os.environ.get("AI_PROBE_OPERATOR_USERNAME") and os.environ.get("AI_PROBE_OPERATOR_PASSWORD"):
+        return os.environ["AI_PROBE_OPERATOR_USERNAME"], os.environ["AI_PROBE_OPERATOR_PASSWORD"], "env"
+    kv = read_env_file(env_file)
+    if kv.get("AI_PROBE_OPERATOR_USERNAME") and kv.get("AI_PROBE_OPERATOR_PASSWORD"):
+        return kv["AI_PROBE_OPERATOR_USERNAME"], kv["AI_PROBE_OPERATOR_PASSWORD"], "file"
     return None, None, "missing"
 
 
@@ -671,6 +687,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             raise NotMeasured("缺只读评测号凭证 (AI_PROBE_READ_* / FACTORY_EVAL_* / ssh .env.prod 都没取到)")
         reader = login(http, user, pwd, "只读评测号")
         header["read_account"] = {"username": reader["username"], "role": reader["role"], "factoryId": reader["factoryId"], "creds_source": src}
+        accounts = {"reader": reader}
+        if any(c.get("account") == "operator" for c in cases):
+            ouser, opwd, osrc = resolve_operator_creds(args.env_file)
+            if not ouser:
+                raise NotMeasured(f"缺一线号凭证 (AI_PROBE_OPERATOR_* 或 {args.env_file}) —— 报工用例没量到, 不是断言失败")
+            accounts["operator"] = login(http, ouser, opwd, "一线号")
+            if accounts["operator"]["role"] not in OPERATOR_ROLES:
+                raise NotMeasured(f"一线号角色 {accounts['operator']['role']} 不在 {sorted(OPERATOR_ROLES)} —— 没量到")
+            header["operator_account"] = {"username": accounts["operator"]["username"], "role": accounts["operator"]["role"],
+                                          "factoryId": accounts["operator"]["factoryId"], "creds_source": osrc}
         emit(header)
 
         if args.expect_python_commit:
@@ -683,7 +709,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             per_entry = {}
             for entry in case["entries"]:
                 check_deadline(f"case {case['id']} ({entry})")
-                rec = run_case(http, reader["token"], case, entry)
+                acct = case.get("account", "reader")
+                rec = run_case(http, accounts[acct]["token"], case, entry)
+                rec["account"] = accounts[acct]["username"]
                 per_entry[entry] = rec
                 emit(rec)
             if case.get("same_intent_across_entries") and len(per_entry) == 2:

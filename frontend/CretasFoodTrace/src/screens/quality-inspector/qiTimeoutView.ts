@@ -5,7 +5,13 @@
 import type { ProcessTimeLimitDecision, ProcessTimeLimitEvent } from '../../services/api/processTimeLimitApi';
 import { PROCESS_TIME_START_LABELS } from '../../services/api/processTimeLimitApi';
 import { displayUnit } from '../../utils/packagingUnitConversion';
-import { formatDuration, parseBackendTime } from '../../utils/processTimeLimit';
+import {
+  REVIEW_REJECT_TIP,
+  START_MISSING_RELEASE_TIP,
+  formatDuration,
+  isReviewRecord,
+  parseBackendTime,
+} from '../../utils/processTimeLimit';
 
 /** 与网页同一份常用结论 (fool-proof Rule 3: 一点即填, 仍可改写)。 */
 export const RELEASE_PRESETS = ['复检感官合格', '中心温度复测合格', '微生物复检合格'];
@@ -46,15 +52,17 @@ export function startText(item: Pick<ProcessTimeLimitEvent, 'startAt' | 'startEv
 
 /** 选中一个处置结果之后, 立刻告诉他后果 (fool-proof Rule 1)。 */
 export function decisionConsequence(
-  item: Pick<ProcessTimeLimitEvent, 'recheckValidMinutes' | 'targetType' | 'expiredQuantity' | 'unit'>,
+  item: Pick<ProcessTimeLimitEvent, 'recheckValidMinutes' | 'targetType' | 'expiredQuantity' | 'unit' | 'recordKind'>,
   decision: ProcessTimeLimitDecision | null,
 ): string {
   if (!decision) return '';
   if (decision === 'RELEASED') {
+    if (item.recordKind === 'WARN_START_MISSING') return START_MISSING_RELEASE_TIP;
     return item.recheckValidMinutes == null
       ? '放行后这批料不再限时'
       : `放行后 ${formatDuration(item.recheckValidMinutes)} 内可以领用，过了还要再处置`;
   }
+  if (isReviewRecord(item)) return REVIEW_REJECT_TIP;
   return item.targetType === 'SEMI_FINISHED'
     ? `判不合格后，超时的 ${timeoutQuantity(item)} 从库存转出，不能再领用`
     : '判不合格后，整批标为不合格，不能再领用';

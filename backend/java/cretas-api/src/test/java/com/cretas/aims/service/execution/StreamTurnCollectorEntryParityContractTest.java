@@ -1142,6 +1142,25 @@ class StreamTurnCollectorEntryParityContractTest {
         assertThat(view.item()).as("只读: 不进「等我确认」").isNull();
     }
 
+    @Test
+    @DisplayName("#1816 L1: 写意图的权限码取自迁移层 (V20261119_88 跑完后的值), 经真实编排器门面 → DELEGATED; 置空 → 「没有登记」不交办")
+    void digitalCrewAskUsesTheMigratedPermissionThroughTheRealOrchestrator() throws Exception {
+        String migrated = com.cretas.aims.ai.catalog.WriteIntentPermissionSources.migratedPermissions().get("RECEIVE_CONFIRM_CREATE");
+        assertThat(migrated).as("迁移层登记了入库确认的权限码").isNotBlank();
+        CrewRun run = crewAsk(true, migrated, "keeper");
+        assertThat(run.view.kind()).isEqualTo("DELEGATED");
+        assertThat(run.view.status()).isEqualTo("READ_MODE_WRITE_BLOCKED");
+        assertThat(run.view.item().requiredPermission()).isEqualTo(migrated);
+        assertThat(run.harness.streamRuns()).as("经门面走的是流式管线").isEqualTo(1);
+        assertThat(run.harness.executedIntents).as("执行层 0 次").isEmpty();
+
+        // 阴性对照: 同一条路径, 意图没登记权限码 ⇒ 不交办 (这就是 2026-11-17 实测到的现象)
+        CrewRun blank = crewAsk(true, null, "keeper");
+        assertThat(blank.view.kind()).isNotEqualTo("DELEGATED");
+        assertThat(blank.view.item()).isNull();
+        assertThat(blank.harness.executedIntents).isEmpty();
+    }
+
     private record CrewRun(DigitalCrewService.AskView view, Harness harness) { }
 
     private static DigitalCrewService.AskView crewAskWith(Harness h, String input) throws Exception {
@@ -1156,7 +1175,8 @@ class StreamTurnCollectorEntryParityContractTest {
                     mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
                     mock(DigitalCrewDelegationLockRepository.class), users, mock(PermissionService.class), h.facade(),
                     h.recognizer, mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
-                    mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+                    mock(FactoryBusinessTypeResolver.class), mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
+                    mock(PlatformTransactionManager.class));
             view = crew.ask(FACTORY, new DigitalCrewService.Actor(AuthenticatedActorType.FACTORY_USER, USER, ROLE),
                     "planner", input, SESSION);
         }
@@ -1166,12 +1186,16 @@ class StreamTurnCollectorEntryParityContractTest {
     }
 
     private static CrewRun crewAsk(boolean hasWritePermission) throws Exception {
+        return crewAsk(hasWritePermission, "production:read_write", "planner");
+    }
+
+    private static CrewRun crewAsk(boolean hasWritePermission, String requiredPermission, String member) throws Exception {
         String input = "那批到货的鸡腿帮我登记进系统";
         Harness h = new Harness(Entry.EXECUTE);
-        h.writeIntent.setRequiredPermission("production:read_write");
+        h.writeIntent.setRequiredPermission(requiredPermission);
         if (!hasWritePermission) {
             when(h.permissionGate.check(eq(h.writeIntent), eq(USER), eq(ROLE)))
-                    .thenReturn(IntentPermissionGate.PermissionCheck.denied("production:read_write"));
+                    .thenReturn(IntentPermissionGate.PermissionCheck.denied(requiredPermission));
         }
         h.recognizerAnswers(IntentMatchResult.builder().userInput(input).bestMatch(h.writeIntent)
                 .matchMethod(IntentMatchResult.MatchMethod.SEMANTIC).confidence(0.93)
@@ -1196,9 +1220,10 @@ class StreamTurnCollectorEntryParityContractTest {
                     mock(DigitalCrewRoleMappingRepository.class), mock(DigitalCrewSettingLogRepository.class),
                     locks, users, mock(PermissionService.class), h.facade(), h.recognizer,
                     mock(PreviewTokenService.class), mock(FactoryCapabilityPackSelector.class),
-                    mock(FactoryBusinessTypeResolver.class), mock(PlatformTransactionManager.class));
+                    mock(FactoryBusinessTypeResolver.class), mock(com.cretas.aims.service.crew.DigitalCrewExecutionGate.class),
+                    mock(PlatformTransactionManager.class));
             view = crew.ask(FACTORY, new DigitalCrewService.Actor(AuthenticatedActorType.FACTORY_USER, USER, ROLE),
-                    "planner", input, SESSION);
+                    member, input, SESSION);
         }
         assertThat(h.recognitionCalls()).as("阳性对照: 识别跑了").isEqualTo(1);
         return new CrewRun(view, h);

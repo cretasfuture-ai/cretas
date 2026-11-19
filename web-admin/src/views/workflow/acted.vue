@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /** Personal OA "已处理": only instances on which the current user acted. */
 import { ref, onMounted, computed } from 'vue';
 import { enumLabel } from '@/utils/enumDisplay';
@@ -150,7 +151,8 @@ onMounted(load);
         </div>
       </template>
 
-      <el-table v-loading="loading" :data="instances" stripe empty-text="暂无您处理过的审批">
+      <el-table v-loading="loading" :data="instances" stripe>
+        <template #empty><ListEmptyExplain empty-title="您还没有处理过审批" empty-hint="您审批通过或驳回过的单据会出现在这里。" /></template>
         <el-table-column label="业务摘要" min-width="280">
           <template #default="{ row }"><span class="biz-summary">{{ row.businessSummary }}</span></template>
         </el-table-column>

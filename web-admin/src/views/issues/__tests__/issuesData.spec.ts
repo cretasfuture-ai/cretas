@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
-  CATEGORY_DEFS, RENDERED_CATEGORIES, READ_TIMEOUT_MS, categoryBadge, createIssuesLoader, issueStatus,
+  CATEGORY_DEFS, RENDERED_CATEGORIES, READ_TIMEOUT_MS, categoryBadge, createIssuesLoader, issueStatus, ownerRoleLabel,
   type IssuesContext,
 } from '../issuesData';
 
@@ -164,6 +164,30 @@ describe('发现的问题：处置标记与角标', () => {
     expect(issueStatus(s1, L.S.dispositions)).toBe('closed');
     L.applyDisposition({ sourceType: 'SHORTAGE_CASE', sourceId: 's1', status: 'OPEN', conclusion: null, conclusionLabel: null, reason: null, title: s1.title, linkPath: null, assigneeUserId: null, actorType: 'FACTORY_USER', actorId: 1, actedAt: '' });
     expect(issueStatus(s1, L.S.dispositions)).toBe('open');
+  });
+});
+
+describe('发现的问题：「找谁」显示中文角色名（BP 问题 44）', () => {
+  it('ownerRole 角色码 ⇒ ROLE_LABELS 中文；有 ownerName 用人名；未知码原样显示、不臆造中文', async () => {
+    const a = makeGet({
+      '/shortage-cases': () => ok([
+        { id: 's1', salesOrderNumber: 'SO-1', ownerRole: 'production_manager' },
+        { id: 's9', salesOrderNumber: 'SO-9', ownerRole: 'zz_unknown_role' },
+      ]),
+      '/delivery-risks': () => ok([{ id: 'r1', orderNumber: 'SO-7', riskLevel: 'RISK', ownerRole: 'procurement_manager' }]),
+      '/process-param-deviation/cases': () => ok([{ id: 'p1', ownerRole: 'quality_manager', ownerName: '张三' }]),
+    });
+    const L = createIssuesLoader({ get: a.get as never });
+    await L.load(ctx());
+    const owner = (k: string) => L.S.issues.find((i) => i.key === k)?.owner;
+    expect(owner('SHORTAGE_CASE:s1')).toBe('生产经理');
+    expect(owner('DELIVERY_RISK:r1')).toBe('采购主管');
+    expect(owner('PROCESS_PARAM_DEVIATION:p1')).toBe('张三');
+    // 阴性对照：未登记的码原样给出，不是「未知状态（…）」也不是编出来的中文
+    expect(owner('SHORTAGE_CASE:s9')).toBe('zz_unknown_role');
+    expect(ownerRoleLabel(null)).toBe('');
+    // 页面上不再出现任何英文角色码
+    expect(L.S.issues.map((i) => i.owner ?? '').filter((o) => /^[a-z]+(_[a-z]+)+$/.test(o) && o !== 'zz_unknown_role')).toEqual([]);
   });
 });
 

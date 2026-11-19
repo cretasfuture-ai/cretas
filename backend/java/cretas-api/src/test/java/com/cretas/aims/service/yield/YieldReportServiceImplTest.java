@@ -4995,4 +4995,173 @@ class YieldReportServiceImplTest {
         verify(reportRepo).save(cap.capture());
         assertThat(cap.getValue().getGoodQuantity()).isEqualByComparingTo("1000");
     }
+
+    // ==================== 生产缺口补齐: 称重报工服务端校验 / 副产品目录 / 不良分摊 / 撤销单笔 ====================
+
+    private YieldReportRequest legacyReq(String in, String out) {
+        WorkProcessTask t = task(10L, 2, "WP-LU");
+        t.setAssignedTo(5L);
+        when(taskRepo.findByFactoryIdAndId("F006", 10L)).thenReturn(Optional.of(t));
+        when(processRepo.findById("WP-LU")).thenReturn(Optional.empty());
+        when(reportRepo.findYieldReportsByBatch(anyString(), eq(1L))).thenReturn(List.of());
+        when(reportRepo.findYieldReportsByTask("F006", 10L)).thenReturn(List.of());
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> { ProductionReport r = i.getArgument(0); r.setId(99L); return r; });
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(10L);
+        req.setInputQuantity(new BigDecimal(in)); req.setInputUnit("kg");
+        req.setOutputQuantity(new BigDecimal(out)); req.setOutputUnit("kg");
+        return req;
+    }
+
+    @Test
+    void submitReport_rejectsSegmentWithSameStartAndEnd() {
+        YieldReportRequest req = legacyReq("100", "90");
+        YieldReportRequest.LaborSegment seg = new YieldReportRequest.LaborSegment();
+        seg.setStartTime("08:00"); seg.setEndTime("08:00"); seg.setHeadcount(3);
+        req.setLaborSegments(List.of(seg));
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("结束时间不能和开始时间相同");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_byproductMustBeInProductCatalog() {
+        YieldReportRequest req = legacyReq("100", "80");
+        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
+        bp.setProductTypeId("PT-GHOST"); bp.setName("肥油"); bp.setQuantity(new BigDecimal("3")); bp.setUnit("kg");
+        req.setByproducts(List.of(bp));
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, req))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("不在产品目录");
+        verify(reportRepo, never()).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_multipleCatalogByproductsAreStoredWithProductTypeId() {
+        YieldReportRequest req = legacyReq("100", "80");
+        YieldReportRequest.Byproduct a = new YieldReportRequest.Byproduct();
+        a.setProductTypeId("PT-1"); a.setName("肥油"); a.setQuantity(new BigDecimal("3")); a.setUnit("kg");
+        YieldReportRequest.Byproduct b = new YieldReportRequest.Byproduct();
+        b.setProductTypeId("PT-2"); b.setName("骨头"); b.setQuantity(new BigDecimal("4")); b.setUnit("kg");
+        req.setByproducts(List.of(a, b));
+        ProductType p1 = new ProductType(); p1.setId("PT-1"); p1.setIsActive(true);
+        ProductType p2 = new ProductType(); p2.setId("PT-2"); p2.setIsActive(true);
+        when(productTypeRepo.findByFactoryIdAndIdIn(eq("F006"), any())).thenReturn(List.of(p1, p2));
+
+        svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getByproducts()).hasSize(2);
+        assertThat(cap.getValue().getByproducts().get(1)).containsEntry("productTypeId", "PT-2");
+    }
+
+    @Test
+    void submitReport_defectBreakdownStoredAndCappedByTotalDefect() {
+        YieldReportRequest ok = legacyReq("100", "80");
+        ok.setDefectQuantity(new BigDecimal("5"));
+        YieldReportRequest.DefectShare d1 = new YieldReportRequest.DefectShare();
+        d1.setDefectId("D-1"); d1.setKg(new BigDecimal("3"));
+        YieldReportRequest.DefectShare d2 = new YieldReportRequest.DefectShare();
+        d2.setDefectId("D-2"); d2.setKg(new BigDecimal("2"));
+        ok.setDefectBreakdown(List.of(d1, d2));
+        svc.submitReport("F006", 1L, 5L, ok);
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getCustomFields()).containsKey("defectBreakdown")
+                .containsEntry("defectBreakdownCheck", "COMPARED");
+
+        // 合计 3+3=6 > 总不良 5 → 拒绝
+        YieldReportRequest bad = legacyReq("100", "80");
+        bad.setDefectQuantity(new BigDecimal("5"));
+        YieldReportRequest.DefectShare d3 = new YieldReportRequest.DefectShare();
+        d3.setDefectId("D-3"); d3.setKg(new BigDecimal("3"));
+        bad.setDefectBreakdown(List.of(d1, d3));
+        assertThatThrownBy(() -> svc.submitReport("F006", 1L, 5L, bad))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("超过了不良总量");
+    }
+
+    @Test
+    void submitReport_defectBreakdownInOtherUnitIsNotComparedButFlagged() {
+        // 复审 M4: 产出单位是盒, 不良 2 盒, 分摊 3kg —— kg 与盒比不出结论: 不拒绝、不当成已核对, 标 UNIT_MISMATCH
+        YieldReportRequest req = legacyReq("100", "80");
+        req.setOutputUnit("盒");
+        req.setDefectQuantity(new BigDecimal("2"));
+        YieldReportRequest.DefectShare d = new YieldReportRequest.DefectShare();
+        d.setDefectId("D-1"); d.setKg(new BigDecimal("3"));
+        req.setDefectBreakdown(List.of(d));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        ArgumentCaptor<ProductionReport> cap = ArgumentCaptor.forClass(ProductionReport.class);
+        verify(reportRepo).save(cap.capture());
+        assertThat(cap.getValue().getCustomFields()).containsEntry("defectBreakdownCheck", "UNIT_MISMATCH");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> lines = (List<Map<String, Object>>) cap.getValue().getCustomFields().get("defectBreakdown");
+        assertThat(lines.get(0)).containsEntry("unit", "kg");
+        assertThat(out.get("defectBreakdownCheck")).isEqualTo("UNIT_MISMATCH");
+    }
+
+    @Test
+    void submitReport_outputStageHintCountsPriorByproductsAndFlagsMixedUnits() {
+        // 复审 M6: 投入 100kg; 此前一笔产出 40 + 不良 5 + 料头 6 (kg); 本笔 50 ⇒ 101 > 100。
+        // 旧实现此前各笔不计副产品 ⇒ 95, 漏提示。
+        setupPhaseTask(new BigDecimal("1.5000"));
+        ProductionReport input = ProductionReport.builder().reportKind("INPUT")
+                .inputQuantity(new BigDecimal("100")).inputUnit("kg").build();
+        ProductionReport priorOut = ProductionReport.builder().reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("40")).outputUnit("kg").defectQuantity(new BigDecimal("5"))
+                .byproducts(List.of(Map.of("name", "料头", "quantity", 6, "unit", "kg"))).build();
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(input, priorOut));
+        when(reportRepo.save(any(ProductionReport.class))).thenAnswer(i -> {
+            ProductionReport r = i.getArgument(0); r.setId(604L); return r;
+        });
+        YieldReportRequest req = new YieldReportRequest();
+        req.setWorkProcessTaskId(60L);
+        req.setReportKind("OUTPUT");
+        req.setMarkComplete(false);
+        req.setOutputQuantity(new BigDecimal("50"));
+        req.setOutputUnit("kg");
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(out.get("outputExceedsInput")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("producedTotal")).isEqualByComparingTo("101");
+
+        // 此前那笔的副产品单位是「个」: 不可比 ⇒ 不提示, 标 UNIT_MISMATCH
+        ProductionReport priorPieces = ProductionReport.builder().reportKind("OUTPUT")
+                .outputQuantity(new BigDecimal("40")).outputUnit("kg")
+                .byproducts(List.of(Map.of("name", "骨头", "quantity", "3", "unit", "个"))).build();
+        when(reportRepo.findYieldReportsByTask("F006", 60L)).thenReturn(List.of(input, priorPieces));
+        Map<String, Object> mixed = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(mixed).doesNotContainKey("outputExceedsInput")
+                .containsEntry("outputInputCheck", "UNIT_MISMATCH");
+    }
+
+    @Test
+    void submitReport_outputAboveInput_savesAndReturnsHintInsteadOfBlocking() {
+        YieldReportRequest req = legacyReq("100", "90");
+        req.setDefectQuantity(new BigDecimal("8"));
+        YieldReportRequest.Byproduct bp = new YieldReportRequest.Byproduct();
+        bp.setName("料头"); bp.setQuantity(new BigDecimal("5")); bp.setUnit("kg");   // 90+8+5=103>100
+
+        req.setByproducts(List.of(bp));
+
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+
+        assertThat(out.get("reportId")).isEqualTo(99L);                       // 照常保存
+        assertThat(out.get("outputExceedsInput")).isEqualTo(true);
+        assertThat((BigDecimal) out.get("producedTotal")).isEqualByComparingTo("103");
+        assertThat((BigDecimal) out.get("inputQuantity")).isEqualByComparingTo("100");
+        verify(reportRepo).save(any(ProductionReport.class));
+    }
+
+    @Test
+    void submitReport_outputWithinInput_hasNoHintField() {
+        YieldReportRequest req = legacyReq("100", "92");
+        req.setDefectQuantity(new BigDecimal("8"));   // 刚好 100
+        Map<String, Object> out = svc.submitReport("F006", 1L, 5L, req);
+        assertThat(out).doesNotContainKey("outputExceedsInput");
+    }
 }

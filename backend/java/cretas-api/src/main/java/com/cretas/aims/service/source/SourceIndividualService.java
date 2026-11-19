@@ -7,6 +7,8 @@ import com.cretas.aims.dto.source.SourceIndividualLookupResult;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.entity.source.SourceIndividual;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.entity.MaterialBatch;
+import com.cretas.aims.repository.MaterialBatchRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,6 +39,9 @@ import java.util.UUID;
 public class SourceIndividualService {
 
     private final SourceIndividualRepository repository;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private MaterialBatchRepository materialBatchRepository;
 
     // ── 读 ────────────────────────────────────────────────────────────────
 
@@ -105,6 +110,10 @@ public class SourceIndividualService {
         }
 
         String newId = UUID.randomUUID().toString();
+        // 新 id 由服务端随机生成, 不可能已有后代 ⇒ 建档不会成环, 不做成环校验;
+        // 但父本/母本两行要按 id 有序加锁, 与 update 的有序加锁同序, 避免交叉等待。
+        lockInIdOrder(factoryId, java.util.Arrays.asList(
+                trimToNull(request.getSireIndividualId()), trimToNull(request.getDamIndividualId())));
         String sireId = requireParentInSameFactory(factoryId, request.getSireIndividualId(), newId, "父本");
         String damId = requireParentInSameFactory(factoryId, request.getDamIndividualId(), newId, "母本");
 
@@ -119,6 +128,8 @@ public class SourceIndividualService {
                 .breed(trimToNull(request.getBreed()))
                 .sex(trimToNull(request.getSex()))
                 .birthDate(request.getBirthDate())
+                .individualType(requireValidType(request.getIndividualType()))
+                .entryDate(request.getEntryDate())
                 .originFarm(trimToNull(request.getOriginFarm()))
                 .externalGeneBankId(trimToNull(request.getExternalGeneBankId()))
                 .dnaSampleCode(trimToNull(request.getDnaSampleCode()))
@@ -157,6 +168,13 @@ public class SourceIndividualService {
 
     @Transactional
     public SourceIndividualDTO update(String factoryId, String id, UpdateSourceIndividualRequest request) {
+        if (request.getSireIndividualId() != null || request.getDamIndividualId() != null) {
+            // 改系谱: 先按 id 有序锁住「自己 + 新父本/母本 + 它们的全部祖先」, 锁后重读父本指针判成环。
+            // ⚠️ 必须排在 require() 之前: 锁查询把自己这一行载入持久化上下文, require 拿到的是加锁时的最新值。
+            lockPedigreeAndRejectCycle(factoryId, id,
+                    pedigreeParent(request.getSireIndividualId(), id, "父本"),
+                    pedigreeParent(request.getDamIndividualId(), id, "母本"));
+        }
         SourceIndividual entity = require(factoryId, id);
 
         // partial body: 只写回非 null 的字段 (语义与 UpdateMaterialBatchRequest 一致)。
@@ -174,6 +192,12 @@ public class SourceIndividualService {
         }
         if (request.getBirthDate() != null) {
             entity.setBirthDate(request.getBirthDate());
+        }
+        if (request.getIndividualType() != null) {
+            entity.setIndividualType(requireValidType(request.getIndividualType()));
+        }
+        if (request.getEntryDate() != null) {
+            entity.setEntryDate(request.getEntryDate());
         }
         if (request.getOriginFarm() != null) {
             entity.setOriginFarm(trimToNull(request.getOriginFarm()));
@@ -204,10 +228,99 @@ public class SourceIndividualService {
         return toDTO(repository.saveAndFlush(entity));
     }
 
-    /** 软删 —— 实体类上的 {@code @SQLDelete} 把它翻译成 {@code UPDATE … SET deleted_at = NOW()}。 */
+    /**
+     * 撤销: 必填原因(≤255); 已被原料批次引用、或已被别的个体当作父本/母本的个体不许撤销
+     * (撤销会让它从溯源链/系谱里消失); 先落原因/撤销人/时间再软删, 行保留,
+     * 可经 {@link #listRevoked} 查回。
+     *
+     * <p>🔴 先 {@code FOR UPDATE} 锁住个体行再查引用 —— 挂批次({@link #requireLinkable})和
+     * 挂系谱({@code requireParentInSameFactory})也锁同一行, 三者在这一行上串行。
+     * ⛔ 这里不再提供不查引用、不留原因的「直接软删」入口。
+     */
     @Transactional
-    public void softDelete(String factoryId, String id) {
-        repository.delete(require(factoryId, id));
+    public SourceIndividualDTO revoke(String factoryId, String id, String reason, String revokedBy) {
+        String r = reason == null ? null : reason.trim();
+        if (!StringUtils.hasText(r)) {
+            throw new BusinessException(400, "撤销原因不能为空");
+        }
+        if (r.length() > 255) {
+            throw new BusinessException(400, "撤销原因最长 255 字");
+        }
+        SourceIndividual entity = repository.lockByIdAndFactoryId(id, factoryId)
+                .orElseThrow(() -> new BusinessException(404, "源头个体档案不存在: " + id));
+        List<SourceIndividual> offspring = repository.findOffspring(factoryId, id);
+        if (!offspring.isEmpty()) {
+            String codes = offspring.stream().limit(5).map(SourceIndividual::getIndividualCode)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, "已作为 " + offspring.size() + " 头个体(" + codes
+                    + (offspring.size() > 5 ? " 等" : "") + ")的父本/母本，不能撤销")
+                    .withCode("IN_USE_PEDIGREE")
+                    .withHint("先改正这些后代档案里的父本/母本, 再撤销该个体档案");
+        }
+        List<MaterialBatch> used = materialBatchRepository
+                .findByFactoryIdAndSourceIndividualIdOrderByReceiptDateDesc(factoryId, id);
+        if (!used.isEmpty()) {
+            String batchNos = used.stream().limit(5).map(MaterialBatch::getBatchNumber)
+                    .collect(java.util.stream.Collectors.joining("、"));
+            throw new BusinessException(409, "已被批次 " + batchNos
+                    + (used.size() > 5 ? " 等 " + used.size() + " 个批次" : "") + " 使用，不能撤销")
+                    .withCode("IN_USE")
+                    .withHint("先处理引用它的批次, 再撤销该个体档案");
+        }
+        entity.setRevokeReason(r);
+        entity.setRevokedBy(revokedBy);
+        entity.setRevokedAt(java.time.LocalDateTime.now());
+        SourceIndividualDTO dto = toDTO(repository.saveAndFlush(entity));
+        repository.delete(entity);
+        return dto;
+    }
+
+    /** 已撤销档案(只读), 带 factory_id。 */
+    @Transactional(readOnly = true)
+    public List<SourceIndividualDTO> listRevoked(String factoryId) {
+        return repository.findRevokedByFactoryId(factoryId).stream()
+                .map(SourceIndividualService::toDTO).toList();
+    }
+
+    /**
+     * 原料批次要挂这头个体前的校验: 必须是<b>本厂、未撤销</b>的档案, 否则拒绝。
+     *
+     * <p>库上 {@code material_batches.source_individual_id} 没有 FK(V20261101_42 刻意不加),
+     * 所以这是唯一一道闸。⚠️ 必须在调用方的写事务里调用 —— 这里对个体行加的
+     * {@code FOR UPDATE} 要一直持有到批次落库提交, 才能和 {@link #revoke} 串行。
+     *
+     * @return 归一化后的 id(空/空白 = 不挂个体, 返回 {@code null})
+     * @throws BusinessException 409 已撤销 / 400 不存在或不属于本工厂
+     */
+    @Transactional
+    public String requireLinkable(String factoryId, String rawId) {
+        String id = trimToNull(rawId);
+        if (id == null) {
+            return null;
+        }
+        if (repository.lockByIdAndFactoryId(id, factoryId).isPresent()) {
+            return id;
+        }
+        if (repository.countDeletedByIdAndFactoryId(id, factoryId) > 0) {
+            throw new BusinessException(409, "源头个体档案已撤销, 不能再挂到批次上: " + id)
+                    .withCode("SOURCE_INDIVIDUAL_REVOKED")
+                    .withHint("刷新个体列表, 选一个有效的个体档案");
+        }
+        throw new BusinessException(400, "源头个体档案不存在或不属于本工厂: " + id)
+                .withCode("SOURCE_INDIVIDUAL_NOT_FOUND")
+                .withHintTarget("sourceIndividualId");
+    }
+
+    private static String requireValidType(String raw) {
+        String t = trimToNull(raw);
+        if (t == null) {
+            return null;
+        }
+        String upper = t.toUpperCase();
+        if (!upper.equals("LIVE") && !upper.equals("CARCASS")) {
+            throw new BusinessException(400, "个体类型只能是 LIVE(活体) 或 CARCASS(胴体): " + raw);
+        }
+        return upper;
     }
 
     // ── 内部 ──────────────────────────────────────────────────────────────
@@ -256,13 +369,127 @@ public class SourceIndividualService {
             throw new BusinessException(422, role + "不能指向个体自己")
                     .withCode("INVALID_PEDIGREE");
         }
-        if (repository.findByIdAndFactoryId(parentId, factoryId).isEmpty()) {
+        // 锁父本行: 与 revoke 的 FOR UPDATE 串行, 防止「刚通过校验, 父本就被撤销」。
+        if (repository.lockByIdAndFactoryId(parentId, factoryId).isEmpty()) {
             throw new BusinessException(422,
                     role + "个体档案不存在或不属于本工厂: " + parentId)
                     .withCode("INVALID_PEDIGREE")
                     .withHint("先建立" + role + "的个体档案, 再回来填这一栏");
         }
         return parentId;
+    }
+
+    /** 一条系谱边的上限保护: 祖先超过这么多仍没走完, 视为数据异常, 拒绝而不是放行。 */
+    private static final int MAX_PEDIGREE_NODES = 10_000;
+    /** 加锁后祖先集合仍在变(别人同时改系谱)的重试轮数; 用尽就拒绝, ⛔ 不在没锁全的情况下放行。 */
+    private static final int MAX_PEDIGREE_LOCK_ROUNDS = 3;
+
+    /** 请求里的父本/母本: null = 不改, 空白 = 清空(都不需要成环校验); 指向自己直接 422。 */
+    private static String pedigreeParent(String raw, String selfId, String role) {
+        String parentId = trimToNull(raw);
+        if (parentId != null && parentId.equals(selfId)) {
+            throw new BusinessException(422, role + "不能指向个体自己")
+                    .withCode("INVALID_PEDIGREE");
+        }
+        return parentId;
+    }
+
+    /**
+     * 系谱成环校验 (#1844 终审 L-a)。
+     *
+     * <p>把 {@code selfId} 的父本/母本设成 P 时, 如果 P 的祖先链(父本、母本两条都走)里已经有 selfId,
+     * 写进去就成环 —— 409 {@code PEDIGREE_CYCLE}, 说清是哪一头。
+     *
+     * <p>🔴 并发: 两人同时把 X、A 设成对方的父本时, 只「各锁父本行」会交叉等待(PG 40P01 → 500)。
+     * 这里把「自己 + 新父本 + 新父本的全部祖先」<b>按 id 排序</b>后逐行 {@code FOR UPDATE}:
+     * 两边锁序一致, 后到的一方等先到的一方提交, 然后在<b>锁后</b>重读父本指针(标量查询, 不吃持久化上下文缓存),
+     * 看到对方刚写的那条边 ⇒ 稳定得到 409, 而不是死锁。
+     * 写系谱的一方总会锁住被改的那一行(自己), 而校验方锁住了它看到的整条祖先链, 所以任何一条会补成环的边
+     * 都要和校验方在某一行上串行。锁后祖先集合变大(加锁前后有人改了链)时: 新增的 id 全部排在已锁最大 id
+     * 之后才补锁再查(锁序仍单调), 否则直接 409 {@code PEDIGREE_BUSY} —— ⛔ 不乱序补锁 (#1968 L-1);
+     * 最多 {@link #MAX_PEDIGREE_LOCK_ROUNDS} 轮。
+     */
+    private void lockPedigreeAndRejectCycle(String factoryId, String selfId, String sireId, String damId) {
+        List<String> parents = java.util.stream.Stream.of(sireId, damId)
+                .filter(java.util.Objects::nonNull).distinct().toList();
+        java.util.Set<String> want = new java.util.TreeSet<>();
+        want.add(selfId);
+        want.addAll(ancestorsIncluding(factoryId, parents));
+        java.util.Set<String> locked = new java.util.HashSet<>();
+        java.util.Map<String, String> codes = new java.util.HashMap<>();
+        for (int round = 0; round < MAX_PEDIGREE_LOCK_ROUNDS; round++) {
+            for (String lockId : want) {
+                if (locked.add(lockId)) {
+                    repository.lockByIdAndFactoryId(lockId, factoryId)
+                            .ifPresent(si -> codes.put(si.getId(), si.getIndividualCode()));
+                }
+            }
+            if (!codes.containsKey(selfId)) {
+                throw new BusinessException(404, "源头个体档案不存在: " + selfId);
+            }
+            // 锁后重读: 逐个父本判, 才能说清是父本还是母本那一侧成环。
+            java.util.Set<String> seen = new java.util.HashSet<>();
+            for (String parentId : parents) {
+                java.util.Set<String> chain = ancestorsIncluding(factoryId, List.of(parentId));
+                if (chain.contains(selfId)) {
+                    String role = parentId.equals(sireId) ? "父本" : "母本";
+                    String parentCode = codes.getOrDefault(parentId, parentId);
+                    throw new BusinessException(409, role + "「" + parentCode + "」是「" + codes.get(selfId)
+                            + "」的后代, 设为" + role + "会让系谱成环")
+                            .withCode("PEDIGREE_CYCLE")
+                            .withHint("核对耳标/档案编号, 一头个体不能同时是另一头的祖先和后代")
+                            .withHintTarget(role.equals("父本") ? "sireIndividualId" : "damIndividualId");
+                }
+                seen.addAll(chain);
+            }
+            java.util.TreeSet<String> missing = new java.util.TreeSet<>(seen);
+            missing.removeAll(locked);
+            if (missing.isEmpty()) {
+                return;
+            }
+            // #1968 L-1: 补锁只许「全部排在已锁最大 id 之后」—— 否则就是乱序加锁, 能和按序加锁的事务交叉等待
+            // (PG 40P01 → 500)。⛔ 不乱序补锁, 直接 409 让用户重试。
+            if (missing.first().compareTo(java.util.Collections.max(locked)) < 0) {
+                throw pedigreeBusy();
+            }
+            want = missing;
+        }
+        throw pedigreeBusy();
+    }
+
+    private static BusinessException pedigreeBusy() {
+        return new BusinessException(409, "系谱正在被同时修改, 本次未保存")
+                .withCode("PEDIGREE_BUSY")
+                .withHint("稍后重试");
+    }
+
+    /** {@code starts} 本身 + 沿父本、母本两条链向上的全部祖先(本厂、未撤销)。 */
+    private java.util.Set<String> ancestorsIncluding(String factoryId, java.util.Collection<String> starts) {
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>(starts);
+        java.util.List<String> frontier = new java.util.ArrayList<>(starts);
+        while (!frontier.isEmpty()) {
+            if (seen.size() > MAX_PEDIGREE_NODES) {
+                throw new BusinessException(409, "系谱层级过多, 无法完成成环校验, 本次未保存")
+                        .withCode("PEDIGREE_TOO_DEEP");
+            }
+            java.util.List<String> next = new java.util.ArrayList<>();
+            for (Object[] row : repository.findParentLinks(factoryId, frontier)) {
+                for (int i = 1; i <= 2; i++) {
+                    Object parent = row[i];
+                    if (parent != null && seen.add(parent.toString())) {
+                        next.add(parent.toString());
+                    }
+                }
+            }
+            frontier = next;
+        }
+        return seen;
+    }
+
+    /** 按 id 排序逐行 {@code FOR UPDATE}(跳过 null); 与 {@link #lockPedigreeAndRejectCycle} 同一锁序。 */
+    private void lockInIdOrder(String factoryId, java.util.Collection<String> ids) {
+        ids.stream().filter(java.util.Objects::nonNull).distinct().sorted()
+                .forEach(lockId -> repository.lockByIdAndFactoryId(lockId, factoryId));
     }
 
     private SourceIndividual require(String factoryId, String id) {
@@ -313,6 +540,11 @@ public class SourceIndividualService {
                 .damIndividualId(e.getDamIndividualId())
                 .extAttributes(e.getExtAttributes())
                 .notes(e.getNotes())
+                .individualType(e.getIndividualType())
+                .entryDate(e.getEntryDate())
+                .revokeReason(e.getRevokeReason())
+                .revokedBy(e.getRevokedBy())
+                .revokedAt(e.getRevokedAt())
                 .createdAt(e.getCreatedAt())
                 .updatedAt(e.getUpdatedAt())
                 .version(e.getVersion())

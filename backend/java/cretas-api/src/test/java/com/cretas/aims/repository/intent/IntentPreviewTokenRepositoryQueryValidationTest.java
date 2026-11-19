@@ -42,18 +42,18 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
         assertThat(repository.claimForExecution(
                 token.getToken(), "OTHER", token.getTenantId(), token.getUserId(),
                 token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
-                token.getDescriptorVersion(), token.getExecutionMode(), "claim-wrong", now, now,
+                token.getDescriptorVersion(), token.getExecutionMode(), "", "", "claim-wrong", now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING)).isZero();
 
         assertThat(repository.claimForExecution(
                 token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
                 token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
-                token.getDescriptorVersion(), token.getExecutionMode(), "claim-owner", now, now,
+                token.getDescriptorVersion(), token.getExecutionMode(), "", "", "claim-owner", now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING)).isEqualTo(1);
         assertThat(repository.claimForExecution(
                 token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
                 token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
-                token.getDescriptorVersion(), token.getExecutionMode(), "claim-second", now, now,
+                token.getDescriptorVersion(), token.getExecutionMode(), "", "", "claim-second", now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING)).isZero();
 
         assertThat(repository.findByTokenAndClaimIdAndStatus(
@@ -73,6 +73,42 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
                 .get()
                 .extracting(IntentPreviewToken::getStatus)
                 .isEqualTo(TokenStatus.CONFIRMED);
+    }
+
+    /**
+     * 认领绑业务对象: 凭据签发时记的对象类型 / 对象 ID 在原子认领的 WHERE 里。换对象认领 0 行且凭据仍待确认
+     * (不被消耗), 对的对象才认领到; 没记对象的凭据只按空串匹配 (COALESCE), 不会被任意对象认领。
+     */
+    @Test
+    void atomicClaimIsBoundToTheIssuedBusinessObject() throws Exception {
+        LocalDateTime now = LocalDateTime.now();
+        IntentPreviewToken token = persistBound("token-subject", now.plusMinutes(5), "SALES_ORDER", "SO-1");
+
+        assertThat(claimAs(token, "SALES_ORDER", "SO-2", "claim-other-id", now))
+                .as("换对象 ID 不得认领").isZero();
+        assertThat(claimAs(token, "PURCHASE_ORDER", "SO-1", "claim-other-type", now))
+                .as("换对象类型不得认领").isZero();
+        assertThat(claimAs(token, "", "", "claim-no-subject", now))
+                .as("不说对象不得认领有对象的凭据").isZero();
+        assertThat(repository.findByToken(token.getToken())).get()
+                .extracting(IntentPreviewToken::getStatus)
+                .as("换对象的尝试不消耗凭据").isEqualTo(TokenStatus.PENDING);
+        assertThat(claimAs(token, "SALES_ORDER", "SO-1", "claim-right", now))
+                .as("对的对象认领到 (阳性对照)").isEqualTo(1);
+
+        IntentPreviewToken unbound = persistBound("token-no-subject", now.plusMinutes(5));
+        assertThat(claimAs(unbound, "SALES_ORDER", "SO-1", "claim-any", now))
+                .as("没记对象的凭据不能被任意对象认领").isZero();
+        assertThat(claimAs(unbound, "", "", "claim-empty", now)).isEqualTo(1);
+    }
+
+    private int claimAs(IntentPreviewToken token, String entityType, String entityId,
+                        String claimId, LocalDateTime now) {
+        return repository.claimForExecution(
+                token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
+                token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
+                token.getDescriptorVersion(), token.getExecutionMode(), entityType, entityId,
+                claimId, now, now, TokenStatus.PENDING, TokenStatus.EXECUTING);
     }
 
     @Test
@@ -97,7 +133,7 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
         assertThat(repository.claimForExecution(
                 stale.getToken(), stale.getFactoryId(), stale.getTenantId(), stale.getUserId(),
                 stale.getCommandDigest(), stale.getParametersHash(), stale.getToolName(),
-                stale.getDescriptorVersion(), stale.getExecutionMode(), "claim-again", now, now,
+                stale.getDescriptorVersion(), stale.getExecutionMode(), "", "", "claim-again", now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING)).isZero();
         assertThat(repository.resolveClaim(stale.getToken(), "someone-else", TokenStatus.EXECUTING,
                 TokenStatus.OUTCOME_UNKNOWN, TokenStatus.CONFIRMED, now, "x")).isZero();
@@ -109,7 +145,7 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
         assertThat(repository.claimForExecution(
                 token.getToken(), token.getFactoryId(), token.getTenantId(), token.getUserId(),
                 token.getCommandDigest(), token.getParametersHash(), token.getToolName(),
-                token.getDescriptorVersion(), token.getExecutionMode(), claimId, claimedAt,
+                token.getDescriptorVersion(), token.getExecutionMode(), "", "", claimId, claimedAt,
                 LocalDateTime.now(), TokenStatus.PENDING, TokenStatus.EXECUTING)).isEqualTo(1);
     }
 
@@ -152,6 +188,11 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
     }
 
     private IntentPreviewToken persistBound(String tokenValue, LocalDateTime expiresAt) throws Exception {
+        return persistBound(tokenValue, expiresAt, null, null);
+    }
+
+    private IntentPreviewToken persistBound(String tokenValue, LocalDateTime expiresAt,
+                                            String entityType, String entityId) throws Exception {
         JsonNode parameters = objectMapper.readTree("{\"amount\":1.00,\"enabled\":true}");
         String parametersHash = ToolCommandDigest.parametersHash(parameters);
         String commandDigest = ToolCommandDigest.commandDigest(
@@ -163,6 +204,8 @@ class IntentPreviewTokenRepositoryQueryValidationTest {
                 .tenantId("F-JPA-CONFIRM")
                 .userId(42L)
                 .intentCode("ORDER_CREATE")
+                .entityType(entityType)
+                .entityId(entityId)
                 .toolName("order_create")
                 .descriptorVersion("1.2.3")
                 .executionMode(ToolExecutionMode.EXECUTE)

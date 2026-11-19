@@ -301,7 +301,10 @@ public class JwtAuthInterceptor implements HandlerInterceptor {
         // Internal API: validate shared secret (Python→Java calls)
         if (requestUri.startsWith("/api/internal/")) {
             String internalKey = request.getHeader("X-Internal-Key");
-            if (INTERNAL_API_SECRET.isEmpty() || !INTERNAL_API_SECRET.equals(internalKey)) {
+            // 恒定时间比较, 不用 String.equals (逐字节短路会泄露密钥前缀长度)
+            if (INTERNAL_API_SECRET.isEmpty() || internalKey == null || !java.security.MessageDigest.isEqual(
+                    INTERNAL_API_SECRET.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    internalKey.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
                 log.warn("内部API认证失败: uri={}, key={}", requestUri,
                         internalKey != null ? "provided-but-invalid" : "missing");
                 sendForbiddenResponse(response, "内部API认证失败");

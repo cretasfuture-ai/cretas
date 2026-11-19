@@ -23,6 +23,8 @@ export interface ProcessYieldAgg {
   unitComparable: boolean;
   incomparableReason?: IncomparableReason | null;
   batchCount: number;
+  /** 合计里来自加工环节记录 (processing_stage_records) 的条数; 旧后端无此字段。 */
+  stageRecordCount?: number;
 }
 
 /** 'unitless' / 空串 / null 都算「没有单位」, 返回 null; 否则返回给用户看的单位 (box → 盒 等走 displayProcessUnit)。 */

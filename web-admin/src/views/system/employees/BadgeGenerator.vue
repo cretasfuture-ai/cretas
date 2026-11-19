@@ -5,6 +5,7 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Printer, Select, Check } from '@element-plus/icons-vue';
 import QRCode from 'qrcode';
+import { ROLE_LABELS } from '@/utils/enumDisplay';
 
 // ---------- types ----------
 interface Employee {
@@ -39,29 +40,9 @@ const qrCanvasRefs = ref<Record<number, HTMLCanvasElement>>({});
 const factoryName = ref(authStore.factoryName || '');
 
 // ---------- role map ----------
-const roleMap: Record<string, string> = {
-  factory_super_admin: '工厂总监',
-  hr_admin: 'HR管理员',
-  procurement_manager: '采购主管',
-  sales_manager: '销售主管',
-  dispatcher: '调度员',
-  production_manager: '生产主管',
-  warehouse_manager: '仓储主管',
-  equipment_admin: '设备管理员',
-  quality_manager: '质量经理',
-  finance_manager: '财务主管',
-  workshop_supervisor: '车间主任',
-  quality_inspector: '质检员',
-  operator: '操作员',
-  warehouse_worker: '仓库员',
-  permission_admin: '权限管理员',
-  department_admin: '部门管理员',
-  viewer: '查看者',
-  unactivated: '未激活',
-};
-
+// 角色中文名统一走 enumDisplay.ROLE_LABELS (单一来源), 不在页面另抄。
 function getRoleText(role: string): string {
-  return roleMap[role] || role;
+  return ROLE_LABELS[role] || role;
 }
 
 // ---------- data loading ----------

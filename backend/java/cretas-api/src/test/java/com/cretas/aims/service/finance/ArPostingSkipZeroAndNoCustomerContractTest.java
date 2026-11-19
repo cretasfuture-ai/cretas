@@ -58,8 +58,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * #1768 (D-S3) 口径补丁, Steve 2026-11-16: 零金额发货(赠品/样品)与没有客户的订单<b>按正常跳过</b> ——
- * 不写待补账(连 PENDING 意图行也不写)、不发告警、不调挂账。真正的挂账失败保持 #1768 行为(待补账 + 告警)。
+ * #1768 (D-S3) 口径补丁, Steve 2026-11-16 复核口径(#1795):
+ * <ul>
+ *   <li>零金额发货(赠品/样品, 发货行与订单行单价都确定为 0) = <b>无需挂账</b>: 不调挂账、不告警、没有 PENDING 待补账,
+ *       但在发货事务内留一行 RESOLVED、原因以 {@code ZERO_AMOUNT:} 开头的追溯行; 追溯行写失败则发货整体回滚、不告警。</li>
+ *   <li>没有客户的订单、查不到本厂订单(含别厂订单 id)、真正的挂账失败: 仍按失败处理(待补账 PENDING + 告警, 发货不回滚)。</li>
+ *   <li>缺价回填(Steve 2026-11-17): 发货行单价为 null 时按来源订单行单价回填计入应收; 订单行也没价则按失败处理。</li>
+ * </ul>
  *
  * <p>全部走产品真实入口 {@code SalesServiceImpl#shipDelivery}, 放在真事务里调用(挂账走 afterCommit, 与生产一致),
  * 待补账服务与仓库是真实 Hibernate / H2。
@@ -96,7 +101,7 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     @Test
-    @DisplayName("赠品/样品(有明细, 发货行与订单行单价都为 0; 0 与 0.00 都算零): 按正常跳过 —— 无待补账行、无告警、不调挂账")
+    @DisplayName("赠品/样品(有明细, 发货行与订单行单价都为 0; 0 与 0.00 都算零): 无需挂账 —— 只留一行 RESOLVED/ZERO_AMOUNT 追溯行, 无 PENDING 待补账、无告警、不调挂账")
     void giftShipmentIsSkippedWithoutPendingOrAlert() {
         for (String zero : new String[]{"0", "0.00"}) {
             clean();
@@ -230,6 +235,140 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
     }
 
     @Test
+    @DisplayName("追溯行幂等按原因查库: 同一发运单已有一行别的 RESOLVED(挂账成功关闭的意图行)时, 重复调用仍只写一行 ZERO_AMOUNT")
+    void zeroAmountTraceIdempotentWhenOtherResolvedRowExists() {
+        // 先插一行同发运单、原因不是 ZERO_AMOUNT 的 RESOLVED: 「取任意一行 RESOLVED 再比原因」会取到它而漏判
+        ArPostingPending other = new ArPostingPending();
+        other.setFactoryId(F);
+        other.setDeliveryId(DELIVERY_ID);
+        other.setStatus(ArPostingPendingStatus.RESOLVED);
+        other.setFailureReason("自动挂账成功, 意图行自动关闭");
+        other.setResolvedAt(java.time.LocalDateTime.now());
+        pendingRepo.saveAndFlush(other);
+
+        for (int i = 0; i < 3; i++) {
+            service.recordNoPostingNeeded(F, DELIVERY_ID, "DN-1", ORDER_ID, "CUST-1", 5L,
+                    BigDecimal.ZERO, 7L, "ZERO_AMOUNT", "零金额发货");
+        }
+
+        List<ArPostingPending> zero = pendingRepo.findAll().stream()
+                .filter(r -> r.getFailureReason().startsWith("ZERO_AMOUNT:")).toList();
+        assertThat(zero).as("ZERO_AMOUNT 追溯行只一行").hasSize(1);
+        assertThat(pendingRepo.findAll()).as("别的 RESOLVED 行原样保留").hasSize(2);
+        // 真 JPA 上跑派生查询: 前缀里的 _ 按字面匹配(不当 LIKE 通配), 别的工厂 / 别的状态查不到
+        assertThat(pendingRepo.existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+                F, DELIVERY_ID, ArPostingPendingStatus.RESOLVED, "ZERO_AMOUNT:")).isTrue();
+        assertThat(pendingRepo.existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+                F, DELIVERY_ID, ArPostingPendingStatus.RESOLVED, "ZEROXAMOUNT:")).as("_ 不当通配符").isFalse();
+        assertThat(pendingRepo.existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+                "F-OTHER", DELIVERY_ID, ArPostingPendingStatus.RESOLVED, "ZERO_AMOUNT:")).isFalse();
+        assertThat(pendingRepo.existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+                F, DELIVERY_ID, ArPostingPendingStatus.PENDING, "ZERO_AMOUNT:")).isFalse();
+    }
+
+    @Test
+    @DisplayName("零金额追溯行写入失败: 异常抛出、整个发货事务回滚(同事务的标记行也没了), 不写待补账、不告警、不调挂账")
+    void zeroAmountTraceWriteFailureRollsBackShipmentWithoutAlert() {
+        ArApService arApService = mock(ArApService.class);
+        SalesServiceImpl sales = salesServiceWithLine(arApService, "0", "0");
+        ArPostingPendingService failing = Mockito.spy(service);
+        Mockito.doThrow(new IllegalStateException("追溯行写入失败(模拟)")).when(failing).recordNoPostingNeeded(
+                any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        ReflectionTestUtils.setField(sales, "receivablePendingService", failing);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> new TransactionTemplate(tm).execute(st -> {
+                    // 同一发货事务里先写一行标记: 事务真回滚的话它不会留下
+                    service.recordNoPostingNeeded(F, "DLV-MARKER", "DN-M", ORDER_ID, "CUST-1", 5L,
+                            BigDecimal.ZERO, 7L, "MARKER", "同事务标记行");
+                    return sales.shipDelivery(F, DELIVERY_ID, 7L);
+                }))
+                .hasMessageContaining("追溯行写入失败");
+
+        verify(failing).recordNoPostingNeeded(eq(F), eq(DELIVERY_ID), any(), any(), any(), any(), any(), any(),
+                eq("ZERO_AMOUNT"), any());
+        assertThat(pendingRepo.findAll()).as("发货事务回滚: 标记行与待补账都没有").isEmpty();
+        verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
+        verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("租户: 挂账段按 id + factoryId 查订单; 本厂查不到(别厂订单 id)时按失败处理(待补账 + 告警), 不用裸 findById 读到的订单挂账")
+    void orderOfOtherFactoryIsNotFoundAndTreatedAsFailure() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ArApTransaction());
+        SalesServiceImpl sales = salesService(arApService, "CUST-OTHER", new BigDecimal("200.00"));
+        SalesOrderRepository orderRepo = (SalesOrderRepository) ReflectionTestUtils.getField(sales, "salesOrderRepository");
+        // 裸 findById 仍能读到这张订单(别厂订单就是这个形状); 带 factoryId 的查询在本厂查不到。
+        // 注: 生产上发货入口 lockSalesOrderForDelivery 已按 factoryId 加锁, 别厂订单在更前面就被拦;
+        // 这里钉的是挂账段自己的租户边界(纵深防御), 所以加锁桩保持命中, 只让挂账段的查询查不到。
+        when(orderRepo.findByIdAndFactoryId(ORDER_ID, F)).thenReturn(Optional.empty());
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        List<ArPostingPending> open = openPending();
+        assertThat(open).hasSize(1);
+        assertThat(open.get(0).getFailureReason()).contains("不属于本工厂");
+        assertThat(open.get(0).getCustomerId()).as("不把别厂订单的客户写进待补账").isNull();
+        verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
+        verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("缺价回填: 混合发货里发货行单价为 null 的那行按订单行价(100)回填, 应收 = 5×20 + 5×100 = 600, 发货行价与头额同步")
+    void missingShipLinePriceIsBackfilledFromOrderLine() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ArApTransaction());
+        SalesServiceImpl sales = salesServiceWithLines(arApService,
+                new String[]{"20", "20"}, new String[]{null, "100"});
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        verify(arApService).recordReceivableIfAbsent(eq(F), eq("CUST-1"), eq(ORDER_ID), eq("SALES_DELIVERY"),
+                eq(DELIVERY_ID), eq(new BigDecimal("600.00")), any(), any(), any());
+        assertThat(shipped.getItems().get(1).getUnitPrice()).as("缺价行已回填").isEqualByComparingTo("100");
+        assertThat(shipped.getTotalAmount()).as("头额按回填后重算").isEqualByComparingTo("600");
+        assertThat(openPending()).isEmpty();
+        verify(notificationService, never()).notifyRole(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("缺价回填: 订单行也没价 → 不按 0 计入(不挂少了的 100), 按失败: 待补账 + 告警, 发货成功")
+    void missingShipLinePriceWithoutOrderPriceIsFailure() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ArApTransaction());
+        SalesServiceImpl sales = salesServiceWithLines(arApService,
+                new String[]{"20", "20"}, new String[]{null, null});
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        assertThat(shipped.getStatus()).isEqualTo(SalesDeliveryStatus.SHIPPED);
+        verify(arApService, never()).recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        List<ArPostingPending> open = openPending();
+        assertThat(open).hasSize(1);
+        assertThat(open.get(0).getFailureReason()).contains("缺单价");
+        verify(notificationService).notifyRole(eq(F), eq("finance_manager"), contains("挂账失败"), anyString());
+    }
+
+    @Test
+    @DisplayName("缺价回填不影响正常价: 发货行有价(30)而订单行价不同(100) → 按发货行价挂 150, 不被订单行覆盖")
+    void pricedShipLineIsNotOverwritten() {
+        ArApService arApService = mock(ArApService.class);
+        when(arApService.recordReceivableIfAbsent(any(), any(), any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new ArApTransaction());
+        SalesServiceImpl sales = salesServiceWithLine(arApService, "30", "100");
+
+        SalesDeliveryRecord shipped = shipInTx(sales);
+
+        verify(arApService).recordReceivableIfAbsent(eq(F), eq("CUST-1"), eq(ORDER_ID), eq("SALES_DELIVERY"),
+                eq(DELIVERY_ID), eq(new BigDecimal("150.00")), any(), any(), any());
+        assertThat(shipped.getItems().get(0).getUnitPrice()).isEqualByComparingTo("30");
+    }
+
+    @Test
     @DisplayName("阳性对照: 真实挂账失败(抛 BusinessException) 仍写待补账 + 发严重告警, 发货不回滚")
     void realPostingFailureStillRecordsPendingAndAlerts() {
         ArApService arApService = mock(ArApService.class);
@@ -268,6 +407,7 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         SalesServiceImpl sales = salesService(arApService, "CUST-1", new BigDecimal("200.00"));
         SalesOrderRepository orderRepo = (SalesOrderRepository) ReflectionTestUtils.getField(sales, "salesOrderRepository");
         when(orderRepo.findById(ORDER_ID)).thenReturn(Optional.empty());
+        when(orderRepo.findByIdAndFactoryId(ORDER_ID, F)).thenReturn(Optional.empty());
 
         shipInTx(sales);
 
@@ -354,20 +494,32 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
      * 成品库存给一个足量批次, 让 shipDelivery 真走完扣库存再到挂账段。
      */
     private SalesServiceImpl salesServiceWithLine(ArApService arApService, String shipLinePrice, String orderLinePrice) {
-        SalesOrderItem oi = new SalesOrderItem();
-        ReflectionTestUtils.setField(oi, "id", 501L);
-        oi.setProductTypeId("PT-ARSKIP");
-        oi.setQuantity(new BigDecimal("5"));
-        oi.setUnit("盒");
-        oi.setUnitPrice(orderLinePrice == null ? null : new BigDecimal(orderLinePrice));
+        return salesServiceWithLines(arApService, new String[]{shipLinePrice, orderLinePrice});
+    }
 
-        SalesDeliveryItem di = new SalesDeliveryItem();
-        di.setSalesOrderItemId(501L);
-        di.setProductTypeId("PT-ARSKIP");
-        di.setProductName("样品");
-        di.setUnit("盒");
-        di.setDeliveredQuantity(new BigDecimal("5"));
-        di.setUnitPrice(new BigDecimal(shipLinePrice));
+    /** 多行发货: 每行 {发货行单价, 订单行单价}(null = 缺价/没维护), 每行 5 盒, 订单行 id 从 501 起。 */
+    private SalesServiceImpl salesServiceWithLines(ArApService arApService, String[]... lines) {
+        List<SalesOrderItem> orderItems = new ArrayList<>();
+        List<SalesDeliveryItem> deliveryItems = new ArrayList<>();
+        for (int i = 0; i < lines.length; i++) {
+            long lineId = 501L + i;
+            SalesOrderItem oi = new SalesOrderItem();
+            ReflectionTestUtils.setField(oi, "id", lineId);
+            oi.setProductTypeId("PT-ARSKIP");
+            oi.setQuantity(new BigDecimal("5"));
+            oi.setUnit("盒");
+            oi.setUnitPrice(lines[i][1] == null ? null : new BigDecimal(lines[i][1]));
+            orderItems.add(oi);
+
+            SalesDeliveryItem di = new SalesDeliveryItem();
+            di.setSalesOrderItemId(lineId);
+            di.setProductTypeId("PT-ARSKIP");
+            di.setProductName("样品" + (i + 1));
+            di.setUnit("盒");
+            di.setDeliveredQuantity(new BigDecimal("5"));
+            di.setUnitPrice(lines[i][0] == null ? null : new BigDecimal(lines[i][0]));
+            deliveryItems.add(di);
+        }
 
         FinishedGoodsBatch batch = new FinishedGoodsBatch();
         ReflectionTestUtils.setField(batch, "id", "FGB-ARSKIP-1");
@@ -380,8 +532,7 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         when(fgRepo.findShippableBatchesAllWarehousesExcluding(any(), any(), any())).thenReturn(new ArrayList<>(List.of(batch)));
         when(fgRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-        return build(arApService, "CUST-1", BigDecimal.ZERO,
-                new ArrayList<>(List.of(di)), new ArrayList<>(List.of(oi)), fgRepo);
+        return build(arApService, "CUST-1", BigDecimal.ZERO, deliveryItems, orderItems, fgRepo);
     }
 
     private SalesServiceImpl build(ArApService arApService, String customerId, BigDecimal deliveryTotal,
@@ -414,8 +565,12 @@ class ArPostingSkipZeroAndNoCustomerContractTest {
         when(deliveryRepo.findById(DELIVERY_ID)).thenReturn(Optional.of(d));
         when(deliveryRepo.findByIdAndFactoryIdForUpdate(DELIVERY_ID, F)).thenReturn(Optional.of(d));
         when(orderRepo.findById(ORDER_ID)).thenReturn(Optional.of(o));
+        when(orderRepo.findByIdAndFactoryId(ORDER_ID, F)).thenReturn(Optional.of(o));
         when(orderRepo.findByIdAndFactoryIdForUpdate(ORDER_ID, F)).thenReturn(Optional.of(o));
         when(itemRepo.findBySalesOrderId(ORDER_ID)).thenReturn(orderItems.isEmpty() ? Collections.emptyList() : orderItems);
+        // 缺价回填只按 salesOrderId + factoryId 查订单行(别的工厂查不到)
+        when(itemRepo.findBySalesOrderIdAndSalesOrderFactoryId(ORDER_ID, F))
+                .thenReturn(orderItems.isEmpty() ? Collections.emptyList() : orderItems);
         when(deliveryRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(orderRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
 

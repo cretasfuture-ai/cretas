@@ -576,6 +576,7 @@
               :context="selectedNodeContext"
               :context-label="aiContextLabel"
               :quick-prompts="aiQuickPrompts"
+              :is-check-only="isWorkflowCheckOnlyRequest"
               :preview-spec="previewWorkflowSpec"
               :apply-spec="applyWorkflowAIDraft"
               @apply-draft="applyWorkflowAIDraft"
@@ -1161,6 +1162,8 @@ import {
   workflowAiStableJson,
   type WorkflowAiPreview,
 } from './workflowAiPreview';
+import { fillOmittedSpecFields, preserveExistingWorkflowValues } from './workflowAiPreserve';
+import { isWorkflowCheckOnlyRequest } from './workflowAiIntent';
 import WorkflowMaterialNode from './WorkflowMaterialNode.vue';
 import WorkflowProcessNode from './WorkflowProcessNode.vue';
 import WorkflowAuxiliaryNode from './WorkflowAuxiliaryNode.vue';
@@ -7103,8 +7106,11 @@ async function applyWorkflowAIDraft(
       return (await applyPreparedWorkflowDefinition(applied, identity))
         ? { status: 'applied' } : { status: 'aborted' };
     } else {
-      const compiled = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity);
-      return compiled ? { status: 'applied' } : { status: 'aborted' };
+      // BP-38: 也走「编译出定义 → 保留现有字段 → 应用」, 不再由编译器直接覆写画布。
+      const compiled = await compileWorkflowSpec(payload.spec as WorkflowSpec, identity, false, false);
+      if (!compiled) return { status: 'aborted' };
+      return (await applyPreparedWorkflowDefinition(compiled, identity))
+        ? { status: 'applied' } : { status: 'aborted' };
     }
   }
   if (!Array.isArray(payload.patches)) {
@@ -7260,11 +7266,15 @@ function projectCompiledDefinitionMetadata(input: ProductProcessWorkflowDefiniti
  * 产出 SKU 先不自动建, 留待用户绑定 (安全)。
  */
 async function compileWorkflowSpec(
-  spec: WorkflowSpec,
+  aiSpec: WorkflowSpec,
   identity: WorkflowIdentity,
   dryRun = false,
   commit = true,
 ): Promise<ProductProcessWorkflowDefinition | null> {
+  // BP-38: 编译器从零建图。模型没写的投入/产出/入口原料先按当前画布补上,
+  // 建完再把能对上号的旧字段(单位、辅料、物料绑定…)补回去 —— 没说的不动。
+  const canvasBeforeCompile = currentDefinition();
+  const spec = fillOmittedSpecFields(canvasBeforeCompile, aiSpec);
   const operationGeneration = loadGeneration;
   const canContinue = () => loadGeneration === operationGeneration
     && isLoadedIdentityCurrent(identity) && canEdit.value;
@@ -7684,9 +7694,13 @@ async function compileWorkflowSpec(
         id: edge.id, source: edge.source, sourceHandle: edge.sourceHandle || 'output',
         target: edge.target, targetHandle: edge.targetHandle || 'input',
       }));
-      compiledDefinition = projectCompiledDefinitionMetadata({
+      const kept = preserveExistingWorkflowValues(canvasBeforeCompile, projectCompiledDefinitionMetadata({
         ...currentDefinition(), nodes: compiledNodes, edges: compiledEdges,
-      });
+      }));
+      compiledDefinition = kept.definition;
+      if (kept.preserved > 0) {
+        specNotices.push(`清空 ${kept.preserved} 项现有配置（AI 没有给出这些值，如单位、辅料、物料绑定），已保留原值`);
+      }
     } else {
       flowNodes.value = nodes;
       flowEdges.value = edges;

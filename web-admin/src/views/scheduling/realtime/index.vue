@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { CS_TOKENS } from '@/styles/csTokens';
 /**
  * 实时监控大屏
@@ -19,6 +20,7 @@ import echarts from '@/utils/echarts';
 // chart-insight: BAR (progress → RANKING) + PIE (probability → PROPORTION)
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
+import { formatWorkerCount, lineUtilizationDisplay, probabilityChartPoints, progressChartPoints } from './dashboardDisplay';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 
 const authStore = useAuthStore();
@@ -26,6 +28,7 @@ const factoryId = computed(() => authStore.factoryId);
 
 const loading = ref(false);
 const dashboard = ref<SchedulingDashboard | null>(null);
+const lineUtilization = computed(() => lineUtilizationDisplay(dashboard.value));
 const todayPlans = ref<SchedulingPlan[]>([]);
 const selectedPlanId = ref<string | null>(null);
 const refreshInterval = ref<number | null>(null);
@@ -175,10 +178,11 @@ function updateCharts() {
 function updateProgressChart() {
   if (!progressChart.value || !dashboard.value?.todaySchedules) return;
 
-  const schedules = dashboard.value.todaySchedules;
-  const data = schedules.map(s => ({
-    name: s.batchNumber,
-    value: s.completionRate || 0,
+  // 没有完成率的行 (工作流批次) 不画: 画成 0% 会被当成「真的没进度」
+  const { points, skipped } = progressChartPoints(dashboard.value.todaySchedules);
+  const data = points.map(s => ({
+    name: s.name,
+    value: s.value,
     itemStyle: {
       color: s.status === 'completed' ? '#67C23A' :
              s.status === 'in_progress' ? '#E6A23C' :
@@ -188,7 +192,7 @@ function updateProgressChart() {
 
   const option: echarts.EChartsOption = {
     title: {
-      text: '排程进度',
+      text: skipped > 0 ? `排程进度（${skipped} 条无完成率未画）` : '排程进度',
       left: 'center',
       textStyle: { fontSize: 14 }
     },
@@ -242,20 +246,21 @@ function updateProgressChart() {
 function updateProbabilityChart() {
   if (!probabilityChart.value || !dashboard.value?.todaySchedules) return;
 
-  const schedules = dashboard.value.todaySchedules;
-  const data = schedules.map(s => ({
-    value: (s.predictedCompletionProb || 0) * 100,
-    name: s.batchNumber,
+  // 没有预测概率的行 (工作流批次) 不画: 记成 0 会把概率分布拉低
+  const { points, skipped } = probabilityChartPoints(dashboard.value.todaySchedules);
+  const data = points.map(s => ({
+    value: s.value,
+    name: s.name,
     itemStyle: {
-      color: (s.predictedCompletionProb || 0) >= 0.9 ? '#67C23A' :
-             (s.predictedCompletionProb || 0) >= 0.7 ? '#E6A23C' :
-             (s.predictedCompletionProb || 0) >= 0.5 ? '#F56C6C' : '#909399'
+      color: (s.probability ?? 0) >= 0.9 ? '#67C23A' :
+             (s.probability ?? 0) >= 0.7 ? '#E6A23C' :
+             (s.probability ?? 0) >= 0.5 ? '#F56C6C' : '#909399'
     }
   }));
 
   const option: echarts.EChartsOption = {
     title: {
-      text: '完成概率分布',
+      text: skipped > 0 ? `完成概率分布（${skipped} 条无预测未画）` : '完成概率分布',
       left: 'center',
       textStyle: { fontSize: 14 }
     },
@@ -316,7 +321,7 @@ function getStatusText(status: string) {
   return map[status] || status;
 }
 
-function formatTime(time: string) {
+function formatTime(time?: string | null) {
   if (!time) return '-';
   return new Date(time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
@@ -386,8 +391,11 @@ function getProbabilityColor(prob: number) {
         <div class="stat-content">
           <el-icon class="stat-icon" style="color: var(--el-color-warning)"><TrendCharts /></el-icon>
           <div class="stat-info">
-            <div class="stat-value">{{ ((dashboard.lineStats?.utilizationRate || 0) * 100).toFixed(0) }}%</div>
+            <div class="stat-value" :title="lineUtilization.title">
+              {{ lineUtilization.value }}
+            </div>
             <div class="stat-label">产线利用率</div>
+            <div v-if="lineUtilization.hint" class="stat-hint">{{ lineUtilization.hint }}</div>
           </div>
         </div>
       </el-card>
@@ -436,11 +444,14 @@ function getProbabilityColor(prob: number) {
               {{ getStatusText(schedule.status) }}
             </el-tag>
           </div>
-          <div class="tile-line">{{ schedule.productionLineName }}</div>
-          <div class="tile-time">
-            {{ formatTime(schedule.plannedStartTime) }} - {{ formatTime(schedule.plannedEndTime) }}
+          <div class="tile-line">
+            {{ schedule.productionLineName || '未指定产线' }}
+            <el-tag v-if="schedule.source === 'WORKFLOW_BATCH'" size="small" type="info">工作流批次</el-tag>
           </div>
-          <div class="tile-progress">
+          <div class="tile-time">
+            {{ formatTime(schedule.plannedStartTime || schedule.actualStartTime) }} - {{ formatTime(schedule.plannedEndTime) }}
+          </div>
+          <div v-if="schedule.targetQuantity != null" class="tile-progress">
             <el-progress
               :percentage="schedule.completionRate || 0"
               :stroke-width="8"
@@ -454,12 +465,12 @@ function getProbabilityColor(prob: number) {
             </div>
             <div class="workers">
               <el-icon><User /></el-icon>
-              {{ schedule.assignedWorkerCount || 0 }}
+              {{ formatWorkerCount(schedule.assignedWorkerCount) }}
             </div>
           </div>
         </div>
       </div>
-      <el-empty v-else description="暂无排程数据" />
+      <ListEmptyExplain empty-title="当前没有进行中的排程" empty-hint="生产订单排程并下达到产线后，这里实时显示各产线的排程与人员；没有排程说明产线暂未安排生产。" />
     </el-card>
 
     <!-- 告警列表 -->
@@ -535,7 +546,7 @@ function getProbabilityColor(prob: number) {
 }
 
 .stat-card {
-  background: #16213e;
+  background: var(--el-bg-color-overlay);
   border: none;
 
   &.warning {
@@ -560,12 +571,18 @@ function getProbabilityColor(prob: number) {
     .stat-value {
       font-size: 32px;
       font-weight: 700;
-      color: #fff;
+      color: var(--el-text-color-primary);
     }
 
     .stat-label {
       font-size: 12px;
       color: #909399;
+    }
+
+    .stat-hint {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--el-color-warning);
     }
   }
 }

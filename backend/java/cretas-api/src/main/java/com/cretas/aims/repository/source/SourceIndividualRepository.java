@@ -4,7 +4,9 @@ import com.cretas.aims.entity.enums.DnaVerificationStatus;
 import com.cretas.aims.entity.source.SourceIndividual;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -40,6 +42,24 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
 
     Optional<SourceIndividual> findByIdAndFactoryId(String id, String factoryId);
 
+    /**
+     * 同 {@link #findByIdAndFactoryId}, 但对个体行加 {@code SELECT … FOR UPDATE}。
+     *
+     * <p>撤销与「批次/系谱挂上这头个体」两边<b>都走这一条</b>, 才能在同一行上串行:
+     * 先拿到锁的一方提交后, 另一方才继续 —— 撤销方随后查得到刚提交的批次(409),
+     * 挂载方在 PG READ COMMITTED 下重新判定 {@code deleted_at IS NULL}, 查不到即拒。
+     * ⛔ 只给一边加锁等于没加(撤销只把 version 加 1, 建批次不写个体行, 乐观锁挡不住)。
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT si FROM SourceIndividual si WHERE si.id = :id AND si.factoryId = :factoryId")
+    Optional<SourceIndividual> lockByIdAndFactoryId(@Param("id") String id,
+                                                    @Param("factoryId") String factoryId);
+
+    /** 本厂是否有这条<b>已撤销</b>档案(native 绕过 @Where), 只用来把拒绝原因说准。 */
+    @Query(value = "SELECT COUNT(*) FROM source_individuals WHERE id = :id AND factory_id = :factoryId "
+            + "AND deleted_at IS NOT NULL", nativeQuery = true)
+    long countDeletedByIdAndFactoryId(@Param("id") String id, @Param("factoryId") String factoryId);
+
     Page<SourceIndividual> findByFactoryId(String factoryId, Pageable pageable);
 
     /**
@@ -60,6 +80,12 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
     Page<SourceIndividual> searchByKeyword(@Param("factoryId") String factoryId,
                                            @Param("keyword") String keyword,
                                            Pageable pageable);
+
+    /** 已撤销(软删)档案; native 才能绕过实体上的 @Where, 必须带 factory_id。 */
+    @Query(value = "SELECT * FROM source_individuals WHERE factory_id = :factoryId "
+            + "AND deleted_at IS NOT NULL AND revoke_reason IS NOT NULL ORDER BY revoked_at DESC",
+            nativeQuery = true)
+    List<SourceIndividual> findRevokedByFactoryId(@Param("factoryId") String factoryId);
 
     boolean existsByFactoryIdAndIndividualCode(String factoryId, String individualCode);
 
@@ -82,6 +108,18 @@ public interface SourceIndividualRepository extends JpaRepository<SourceIndividu
             """)
     List<SourceIndividual> findOffspring(@Param("factoryId") String factoryId,
                                          @Param("parentId") String parentId);
+
+    /**
+     * 系谱成环校验用: 一批个体各自的 {@code [id, sire_individual_id, dam_individual_id]}。
+     *
+     * <p>🔴 刻意是<b>标量投影</b>而不是返回实体: 成环校验在加锁<b>之后</b>要重读父本指针,
+     * 返回实体时 Hibernate 会把持久化上下文里早先载入的旧实例原样还回来(行已被别的事务改过也看不到),
+     * 标量投影每次都按列从库里读。带 factory_id; 已撤销个体由实体 {@code @Where} 排除。
+     */
+    @Query("SELECT si.id, si.sireIndividualId, si.damIndividualId FROM SourceIndividual si "
+            + "WHERE si.factoryId = :factoryId AND si.id IN :ids")
+    List<Object[]> findParentLinks(@Param("factoryId") String factoryId,
+                                   @Param("ids") java.util.Collection<String> ids);
 
     /**
      * 同一父本的全部个体(<b>含调用方自己</b> —— 排除自身是服务层的事, 这里如实返回)。

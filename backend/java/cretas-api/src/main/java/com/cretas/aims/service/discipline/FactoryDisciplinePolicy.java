@@ -139,6 +139,26 @@ public class FactoryDisciplinePolicy {
         return v < 0 ? DEFAULT_THAW_BACKFILL_MAX_MINUTES : v;
     }
 
+    // ===================== 工序时限超时拦不拦 (PROTO-Q41, 2026-11-18) =====================
+
+    /**
+     * 只认 0 / 1: 1 = 拦; 0 / 没配 = 默认只警告 (Steve 2026-11-18 拍板: 超时 / 未登记开始解冻照常投料、留复盘记录、带警告)。
+     * 其它值 (2、true、1.0、空串) 按默认处理并打 warn 日志 —— 写错的值不静默。按原字符串读, 不经 getInteger
+     * (那条路解析失败会悄悄回到兜底值)。
+     */
+    public boolean timeLimitBlockOnExceed(String factoryId) {
+        String raw = thresholds.getString(factoryId, ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, "0");
+        String v = raw == null ? "" : raw.trim();
+        if ("1".equals(v)) {
+            return true;
+        }
+        if (!"0".equals(v)) {
+            log.warn("纪律配置认不出, 按默认 (只警告) 处理: factoryId={} key={} value={} (只认 0 / 1)",
+                    factoryId, ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, raw);
+        }
+        return false;
+    }
+
     // ===================== A14 补录窗口 =====================
 
     /**

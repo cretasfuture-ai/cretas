@@ -110,6 +110,9 @@ class ProcessTimeLimitServiceContractTest {
         when(eventRepo.findByFactoryIdAndTargetTypeAndTargetIdAndStatus(eq(F), anyString(), anyString(),
                 eq(ProcessTimeLimitEvent.Status.RELEASED))).thenReturn(releases);
         when(markRepo.findByTargets(eq(F), anyString(), any())).thenReturn(List.of());
+        // PROTO-Q41: 本类原有用例都是「超时拦截」档 (工厂开关开); 只警告 (默认) 档见 ProcessTimeLimitWarnOnlyContractTest
+        service.setDisciplinePolicy(com.cretas.aims.service.discipline.DisciplineFixtures.policy(java.util.Map.of(
+                com.cretas.aims.service.canvas.ThresholdKeys.PRODUCTION_TIME_LIMIT_BLOCK_ON_EXCEED, "1")));
     }
 
     private WorkflowTaskPort port(String sku, String kind, Map<String, Object> config) {

@@ -244,6 +244,23 @@ public class CanvasAIController {
             Selected node id: %s
             """;
 
+    // BP-38: 检查类问题的只读通道。只回中文结论, 不出规格/补丁; 前端也会丢弃检查请求带回的任何 diff。
+    private static final String WORKFLOW_CHECK_EMPTY_REPLY = "AI 没有给出检查结论，请重试。画布没有任何改动。";
+    private static final String PRODUCT_PROCESS_WORKFLOW_CHECK_PROMPT = """
+            You are a READ-ONLY reviewer of a product-process Workflow definition. The user asks you
+            to CHECK something (units, quantity conversion, SKU upstream/downstream, split/merge, ...).
+            Answer in concise Simplified Chinese plain text only:
+            - First line: 结论：没有发现问题 / 发现 N 个问题.
+            - Then a numbered list. Each item names the process or material, the field
+              (投入单位/产出单位/换算规则/辅料用量/端口物料绑定/SKU 绑定/...) and what is wrong or missing.
+            - If a value is absent in the definition, say it is 未配置; never guess values.
+            You cannot change anything. NEVER output JSON, specs, patches, nodes, edges or ids, and never
+            suggest replacing or regenerating the whole canvas. Suggest manual fixes in words only.
+
+            Current definition: %s
+            Selected node id: %s
+            """;
+
     // D3: narrow route for work-process catalog (create/update work-process master data)
     private static final String WORK_PROCESS_CATALOG_MODULE = "work_process_catalog";
     private static final String WORK_PROCESS_CATALOG_TOOL = "canvas_work_process_catalog";
@@ -522,6 +539,21 @@ public class CanvasAIController {
             refused.setReply(EGRESS_REFUSED_REPLY);
             return refused;
         }
+        // BP-38: 「检查…是否完整」这类问题只要结论, 不许走规格→整画布重建那条路。
+        // 以前所有消息都套 SPEC 提示词, 模型只能交一份残缺规格, 前端照它重建画布,
+        // 把已有单位 / 辅料 / 端口绑定全部清空。检查意图走只读提示词, 只回文字, diffs 恒为空。
+        if (isWorkflowCheckIntent(requestParams)) {
+            String checkPrompt = PRODUCT_PROCESS_WORKFLOW_CHECK_PROMPT.formatted(
+                    redacted.text(0),
+                    redacted.text(2));
+            String conclusion = redacted.restore(Objects.toString(
+                    dashScopeClient.chatLowTemp(checkPrompt, redacted.text(1)), "").trim());
+            AIResponse checked = new AIResponse();
+            checked.setApplied(false);
+            checked.setDiffs(List.of());
+            checked.setReply(conclusion.isBlank() ? WORKFLOW_CHECK_EMPTY_REPLY : conclusion);
+            return checked;
+        }
         // 弃补丁: 让 LLM 只产出语义规格 (rawMaterials + steps), 前端确定性编译成图。
         String prompt = PRODUCT_PROCESS_WORKFLOW_SPEC_PROMPT.formatted(
                 redacted.text(0),
@@ -552,6 +584,11 @@ public class CanvasAIController {
                 "params", diffParams,
                 "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
         return response;
+    }
+
+    /** 前端检查类问题带 {@code params.intent = "check"}; 只认这一个显式标记, 不在后端再猜一份关键词表。 */
+    static boolean isWorkflowCheckIntent(Map<String, Object> requestParams) {
+        return requestParams != null && "check".equals(requestParams.get("intent"));
     }
 
     private AIResponse workflowPatchFailureResponse() {
@@ -1059,8 +1096,10 @@ public class CanvasAIController {
                         ToolExecutionSource.HTTP_CONTROLLER,
                         ToolExecutionMode.EXECUTE,
                         Optional.of(ToolCommandDigest.persistentSecretFingerprint(token)),
+                        // 认领绑业务对象: 画布凭据签发时记的是 (CANVAS_DIFF, 工具名), 这里按本次提交的工具说出期望值
                         Optional.of(new ConfirmationProof(token, bound.commandDigest(),
-                                bound.expiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant())),
+                                bound.expiresAt().atZone(java.time.ZoneId.systemDefault()).toInstant(),
+                                "CANVAS_DIFF", submittedTool)),
                         Optional.empty(),
                         Instant.now().plusSeconds(30));
             } catch (RuntimeException invalidCommand) {

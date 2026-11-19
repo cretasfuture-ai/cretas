@@ -3728,6 +3728,10 @@ public class SalesServiceImpl implements SalesService {
         assertHaccpReleaseAllowed(factoryId, record);
 
 
+        // 缺价回填(Steve 2026-11-17): 发货行单价为 null(前端缺价/被遮时不再发 0, #1791/#1796)
+        // → 按来源订单行单价回填并计入发货单金额; 订单行也没价的保持 null, 下方挂账段按失败处理(待补账 + 告警)。
+        backfillMissingDeliveryUnitPrices(factoryId, record);
+
         // FIFO 扣减成品库存
         for (SalesDeliveryItem item : record.getItems()) {
             // 🔴 userId 一路透传到血缘边: 出货边的 operator_id 原本硬编码 null,
@@ -3760,13 +3764,16 @@ public class SalesServiceImpl implements SalesService {
             Long receivableOwnerId = null;
             RuntimeException prepFailure = null;
             java.util.function.Supplier<ArApTransaction> poster = null;
+            BigDecimal zeroAmountTraceValue = null; // 非 null = 零金额发货, 需写 RESOLVED/ZERO_AMOUNT 追溯行
             try {
-                SalesOrder order = salesOrderRepository.findById(record.getSalesOrderId()).orElse(null);
+                // 租户: 按 id + factoryId 查(#1789 遗留的裸 findById 会读到别厂订单); 别厂/不存在一律按挂账失败处理
+                SalesOrder order = salesOrderRepository
+                        .findByIdAndFactoryId(record.getSalesOrderId(), factoryId).orElse(null);
                 receivableCustomerId = order != null ? order.getCustomerId() : null;
                 receivableOwnerId = order != null ? order.getCreatedBy() : null;
                 if (order == null) {
-                    // 发货了却查不到销售订单: 不是「无事发生」, 必须留待补账线索
-                    throw new IllegalStateException("无法自动挂账: 销售订单不存在 " + record.getSalesOrderId());
+                    // 发货了却查不到(本厂的)销售订单: 不是「无事发生」, 必须留待补账线索
+                    throw new IllegalStateException("无法自动挂账: 销售订单不存在或不属于本工厂 " + record.getSalesOrderId());
                 }
                 if (!hasText(order.getCustomerId())) {
                     // Steve 2026-11-16 复核口径: 没有客户的订单仍按失败处理(待补账 + 告警), 不静默;
@@ -3833,20 +3840,20 @@ public class SalesServiceImpl implements SalesService {
                         // ⇒ 正确形态 = Σ(实发量 × 单价 × (1 + 税率/100)), 税率从
                         //   sales_delivery_items.salesOrderItemId → sales_order_items.taxRate 借。
                         //   与采购侧 PurchaseServiceImpl#taxInclusiveReceivedValue 同一范式与同一取整。
+                        // 缺价回填后仍缺价(订单行也没价): ⛔ 不能按 0 计入(混合发货会少挂这一行的钱), 按失败处理
+                        String unpricedLine = firstUnpricedDeliveryLine(record);
+                        if (unpricedLine != null) {
+                            throw new IllegalStateException("无法自动挂账: 发货行缺单价且来源订单行也没有单价("
+                                    + unpricedLine + "), 请补单价后补账");
+                        }
                         BigDecimal shippedValue = taxInclusiveShippedValue(order, record);
                         if (isKnownZeroShipmentValue(order, record, shippedValue)) {
-                            // Steve 2026-11-16 口径: 零金额发货(赠品/样品)按正常跳过 —— 不写待补账、不告警。
+                            // Steve 2026-11-16 复核口径: 零金额发货(赠品/样品)无需挂账 —— 不调挂账、不告警,
+                            // 但留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表), 写入在下方 try 之外。
                             // 只放开真赠品/样品: 发货行与订单行单价都确定为 0; 缺价/误录/空明细算出的 0 仍按失败处理。
                             log.info("应收自动挂账跳过(零金额发货, 无需挂账): factoryId={}, salesOrderId={}, deliveryId={}, 实发含税={}",
                                     factoryId, order.getId(), record.getId(), shippedValue);
-                            // 追溯: 在发货事务内留一行 RESOLVED / ZERO_AMOUNT(不告警、不进默认的待处理列表),
-                            // 以后查「这单为什么没有应收」有据可循, 不沉默丢失。
-                            if (receivablePendingService != null) {
-                                receivablePendingService.recordNoPostingNeeded(factoryId, record.getId(),
-                                        record.getDeliveryNumber(), record.getSalesOrderId(), order.getCustomerId(),
-                                        order.getCreatedBy(), shippedValue, userId, "ZERO_AMOUNT",
-                                        "零金额发货(发货行与订单行单价均为 0, 赠品/样品), 无需挂账");
-                            }
+                            zeroAmountTraceValue = shippedValue;
                         } else {
                             postedShippedValue = shippedValue;
                             final SalesOrder postOrder = order;
@@ -3874,6 +3881,16 @@ public class SalesServiceImpl implements SalesService {
                 }
             } catch (RuntimeException e) {
                 prepFailure = e; // 算金额/查订单阶段的失败也要落待补账, 不能静默
+            }
+            // 零金额追溯行【故意放在上面的 try/catch 之外】: 它是发货事务的一部分(与发货同提交/同回滚),
+            // 写失败就让异常直接抛出、整个发货回滚 —— ⛔ 不能被上面的 catch 当成「挂账失败」:
+            // 那样会给一张本就无需挂账的单写 PENDING 待补账 + 发「挂账失败」告警(误报), 而且 DB 异常时
+            // 发货事务多半已被标 rollback-only / PG aborted, 发货照样提交不了, 只是死得更难看。
+            if (zeroAmountTraceValue != null && receivablePendingService != null) {
+                receivablePendingService.recordNoPostingNeeded(factoryId, record.getId(),
+                        record.getDeliveryNumber(), record.getSalesOrderId(), receivableCustomerId,
+                        receivableOwnerId, zeroAmountTraceValue, userId, "ZERO_AMOUNT",
+                        "零金额发货(发货行与订单行单价均为 0, 赠品/样品), 无需挂账");
             }
             // D-S3 (Steve 2026-11-15): 发货已成功, 挂账失败不回滚发货, 也不能静默。
             // 挂账放到发货事务【提交之后】的独立事务里做: 挂账的任何失败(含 DB 异常/PG 事务 aborted)
@@ -6154,7 +6171,69 @@ public class SalesServiceImpl implements SalesService {
     }
 
     /**
-     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 口径: 按正常跳过, 不写待补账、不告警。
+     * 缺价回填(Steve 2026-11-17): 发货行单价为 null 时, 按来源订单行(按 salesOrderItemId 对上)的单价回填,
+     * 并按「Σ 实发量 × 单价」重算发货单头额。订单行按 salesOrderId + factoryId 查(不读别厂订单行)。
+     * 订单行也没价 / 对不上订单行的保持 null —— ⛔ 不记 0, 挂账段由 {@link #firstUnpricedDeliveryLine} 按失败处理。
+     * 发货行已有价(含确定的 0)的一律不动。
+     */
+    private void backfillMissingDeliveryUnitPrices(String factoryId, SalesDeliveryRecord record) {
+        if (salesOrderItemRepository == null || record == null || record.getItems() == null
+                || record.getSalesOrderId() == null
+                || record.getItems().stream().noneMatch(i -> i.getUnitPrice() == null)) {
+            return;
+        }
+        List<SalesOrderItem> orderLines = salesOrderItemRepository
+                .findBySalesOrderIdAndSalesOrderFactoryId(record.getSalesOrderId(), factoryId);
+        java.util.Map<Long, SalesOrderItem> lineById = new java.util.HashMap<>();
+        if (orderLines != null) {
+            for (SalesOrderItem oi : orderLines) {
+                if (oi != null && oi.getId() != null) {
+                    lineById.put(oi.getId(), oi);
+                }
+            }
+        }
+        boolean changed = false;
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() != null || item.getSalesOrderItemId() == null) {
+                continue;
+            }
+            SalesOrderItem oi = lineById.get(item.getSalesOrderItemId());
+            if (oi != null && oi.getUnitPrice() != null) {
+                item.setUnitPrice(oi.getUnitPrice());
+                changed = true;
+                log.info("发货行缺单价, 按订单行单价回填: factoryId={}, deliveryId={}, salesOrderItemId={}, unitPrice={}",
+                        factoryId, record.getId(), oi.getId(), oi.getUnitPrice());
+            }
+        }
+        if (changed) {
+            BigDecimal total = BigDecimal.ZERO;
+            for (SalesDeliveryItem item : record.getItems()) {
+                if (item.getUnitPrice() != null && item.getDeliveredQuantity() != null) {
+                    total = total.add(item.getDeliveredQuantity().multiply(item.getUnitPrice()));
+                }
+            }
+            record.setTotalAmount(total);
+        }
+    }
+
+    /** 回填后仍缺单价(且实发量非 0)的第一行的产品名; 全有价返回 null。 */
+    static String firstUnpricedDeliveryLine(SalesDeliveryRecord record) {
+        if (record == null || record.getItems() == null) {
+            return null;
+        }
+        for (SalesDeliveryItem item : record.getItems()) {
+            if (item.getUnitPrice() == null && item.getDeliveredQuantity() != null
+                    && item.getDeliveredQuantity().signum() != 0) {
+                return item.getProductName() != null ? item.getProductName()
+                        : (item.getProductTypeId() != null ? item.getProductTypeId() : "未知产品");
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 本次发货是否<b>真赠品/样品</b>(应收确定为 0), Steve 2026-11-16 复核口径: 无需挂账 —— 不调挂账、不告警,
+     * 发货事务内留一行 RESOLVED / ZERO_AMOUNT 追溯行(不进默认的待处理列表)。
      *
      * <p>四条同时成立才放行, 否则按失败(待补账 + 告警), 由人补价/核对:
      * <ol>

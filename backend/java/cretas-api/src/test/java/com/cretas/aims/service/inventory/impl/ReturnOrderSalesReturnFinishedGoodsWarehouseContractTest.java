@@ -263,6 +263,7 @@ class ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest {
         SalesOrderItem orderLine = new SalesOrderItem();
         orderLine.setId(11L);
         orderLine.setProductTypeId(productTypeId);
+        orderLine.setUnitPrice(new BigDecimal("10.00")); // 缺价回填(11-17): 来源订单行有价
         orderLine.setUnit(orderUnit);
         when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId("SO-001", FACTORY))
                 .thenReturn(List.of(orderLine));
@@ -431,6 +432,7 @@ class ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest {
         SalesOrderItem orderLine = new SalesOrderItem();
         orderLine.setId(11L);
         orderLine.setProductTypeId("PT-001");
+        orderLine.setUnitPrice(new BigDecimal("10.00")); // 缺价回填(11-17): 来源订单行有价
         orderLine.setUnit("kg");
         when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId("SO-001", FACTORY))
                 .thenReturn(List.of(orderLine));
@@ -503,10 +505,12 @@ class ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest {
         SalesOrderItem firstLine = new SalesOrderItem();
         firstLine.setId(31L);
         firstLine.setProductTypeId("PT-A");
+        firstLine.setUnitPrice(new BigDecimal("10.00")); // 缺价回填(11-17): 来源订单行有价
         firstLine.setUnit("kg");
         SalesOrderItem secondLine = new SalesOrderItem();
         secondLine.setId(32L);
         secondLine.setProductTypeId("PT-B");
+        secondLine.setUnitPrice(new BigDecimal("10.00")); // 缺价回填(11-17): 来源订单行有价
         secondLine.setUnit("kg");
         when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId("SO-001", FACTORY))
                 .thenReturn(List.of(firstLine, secondLine));
@@ -672,6 +676,7 @@ class ReturnOrderSalesReturnFinishedGoodsWarehouseContractTest {
         SalesOrderItem orderLine = new SalesOrderItem();
         orderLine.setId(11L);
         orderLine.setProductTypeId("PT-001");
+        orderLine.setUnitPrice(new BigDecimal("10.00")); // 缺价回填(11-17): 来源订单行有价
         orderLine.setUnit("kg");
         when(salesOrderItemRepository.findBySalesOrderIdAndSalesOrderFactoryId("SO-001", FACTORY))
                 .thenReturn(List.of(orderLine));

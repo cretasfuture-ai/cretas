@@ -15,6 +15,13 @@ public interface ArPostingPendingRepository extends JpaRepository<ArPostingPendi
     Optional<ArPostingPending> findFirstByFactoryIdAndDeliveryIdAndStatus(
             String factoryId, String deliveryId, ArPostingPendingStatus status);
 
+    /**
+     * 「无需挂账」追溯行的幂等判定: failure_reason LIKE '{prefix}%'(Spring Data 会转义 prefix 里的 _ 与 %,
+     * 所以 "ZERO_AMOUNT:" 按字面匹配)。见 {@code ArPostingPendingService#recordNoPostingNeeded}。
+     */
+    boolean existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+            String factoryId, String deliveryId, ArPostingPendingStatus status, String failureReasonPrefix);
+
     Page<ArPostingPending> findByFactoryIdOrderByCreatedAtDesc(String factoryId, Pageable pageable);
 
     Page<ArPostingPending> findByFactoryIdAndStatusOrderByCreatedAtDesc(

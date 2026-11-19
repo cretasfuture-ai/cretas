@@ -11,6 +11,8 @@
 import { ref, computed, onMounted, watch, nextTick } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { ElMessage } from 'element-plus';
+import DateWindowFallbackNotice from '@/components/common/DateWindowFallbackNotice.vue';
+import { resolveWindowWithFallback, type DateWindow } from '@/utils/dateWindowFallback';
 import { Search } from '@element-plus/icons-vue';
 import {
   getLaborAchievementSummary,
@@ -20,6 +22,12 @@ import {
   type LaborAchievementAlert,
 } from '@/api/laborEfficiency';
 import { get } from '@/api/request';
+import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
+import {
+  buildLaborProductInsight,
+  buildLaborBatchInsight,
+  buildLaborStepInsight,
+} from '@/utils/chartPageInsights';
 
 // Lazy-load ECharts to keep bundle small
 let echarts: typeof import('echarts') | null = null;
@@ -76,33 +84,57 @@ const selectedProductTypeId = ref<string | null>(null);
 
 const summaryList = ref<LaborAchievementSummaryDTO[]>([]);
 const loading = ref(false);
+// 默认「近30天」没数据时回退到最近有数据的 30 天窗口并明示；用户可一键切回原窗口。
+const windowNotice = ref('');
+const windowFellBack = ref(false);
+let originalWindow: DateWindow | null = null;
 
-async function loadData() {
+async function fetchSummary(w: DateWindow): Promise<LaborAchievementSummaryDTO[]> {
+  const res = await getLaborAchievementSummary(factoryId.value, w.start, w.end, selectedProductTypeId.value || null);
+  if (!res.success || !res.data) throw new Error(res.message || '加载失败');
+  return res.data;
+}
+
+async function loadData(opts: { fallback?: boolean } = {}) {
   if (!factoryId.value) return;
   if (!dateRange.value?.[0] || !dateRange.value?.[1]) {
     ElMessage({ message: '请选择日期范围', type: 'warning', duration: 3000 });
     return;
   }
   loading.value = true;
+  windowNotice.value = '';
+  windowFellBack.value = false;
   try {
-    const res = await getLaborAchievementSummary(
-      factoryId.value,
-      dateRange.value[0],
-      dateRange.value[1],
-      selectedProductTypeId.value || null,
-    );
-    if (res.success && res.data) {
-      summaryList.value = res.data;
-      await nextTick();
-      renderCharts();
+    const original: DateWindow = { start: dateRange.value[0], end: dateRange.value[1] };
+    if (opts.fallback) {
+      const outcome = await resolveWindowWithFallback({
+        original, windowLabel: '最近 30 天', fetchWindow: fetchSummary,
+        hasData: (rows) => rows.some((r) => (r.batchCount ?? 0) > 0),
+      });
+      summaryList.value = outcome.data;
+      windowNotice.value = outcome.notice;
+      windowFellBack.value = outcome.fellBack;
+      if (outcome.fellBack) {
+        originalWindow = outcome.originalWindow;
+        dateRange.value = [outcome.window.start, outcome.window.end];
+      }
     } else {
-      ElMessage({ message: res.message || '加载失败', type: 'error', duration: 0, showClose: true });
+      summaryList.value = await fetchSummary(original);
     }
-  } catch {
-    ElMessage({ message: '网络错误，请重试', type: 'error', duration: 0, showClose: true });
+    await nextTick();
+    renderCharts();
+  } catch (e) {
+    summaryList.value = [];
+    ElMessage({ message: e instanceof Error && e.message ? e.message : '加载失败', type: 'error', duration: 0, showClose: true });
   } finally {
     loading.value = false;
   }
+}
+
+function restoreOriginalWindow() {
+  if (!originalWindow) return;
+  dateRange.value = [originalWindow.start, originalWindow.end];
+  void loadData();
 }
 
 // ============================================================================
@@ -116,6 +148,26 @@ const batchTrendChartRef = ref<HTMLElement | null>(null);
 const perProductRows = computed(() =>
   summaryList.value.filter(r => r.productTypeId !== null),
 );
+
+// 批次趋势图的数据源与上限（画图和分析共用）
+const BATCH_CHART_CAP = 30;
+const trendSourceRow = computed(() => summaryList.value.find(r => r.productTypeId === null) ?? summaryList.value[0]);
+
+// 一图一分析（问题 40）：和各图同一份数据现算
+const productInsight = computed(() => buildLaborProductInsight(
+  perProductRows.value.map(r => ({ name: r.productName, rate: r.achievementRatePct ?? null, alert: r.achievementAlert })),
+));
+const batchInsight = computed(() => {
+  const src = trendSourceRow.value;
+  if (!src?.batchItems?.length) return null;
+  return buildLaborBatchInsight(
+    src.batchItems.slice(0, BATCH_CHART_CAP).map(b => ({ name: b.batchNumber, rate: b.achievementRatePct ?? null, alert: b.achievementAlert })),
+    { shownCap: BATCH_CHART_CAP, totalBatches: src.batchItems.length, productName: src.productName },
+  );
+});
+const stepInsight = computed(() => buildLaborStepInsight(
+  (currentStepBreakdown.value?.steps ?? []).map(s => ({ name: s.processName, actual: s.actualWorkMinutes ?? null, planned: s.plannedWorkMinutes ?? null })),
+));
 
 async function renderCharts() {
   const ec = await loadECharts();
@@ -167,10 +219,10 @@ async function renderCharts() {
   }
 
   // Chart 2: Batch-level trend for the first summary row (or overall row)
-  const trendSource = summaryList.value.find(r => r.productTypeId === null) ?? summaryList.value[0];
+  const trendSource = trendSourceRow.value;
   if (batchTrendChartRef.value && trendSource?.batchItems?.length) {
     const chart = ec.init(batchTrendChartRef.value);
-    const items = trendSource.batchItems.slice(0, 30); // cap display at 30 batches
+    const items = trendSource.batchItems.slice(0, BATCH_CHART_CAP); // cap display at 30 batches
     const batchNums = items.map(b => b.batchNumber);
     const rates = items.map(b => b.achievementRatePct ?? null);
 
@@ -342,7 +394,7 @@ function achievementRateClass(rate: number | null, alert: LaborAchievementAlert 
 
 onMounted(async () => {
   await loadProductTypes();
-  await loadData();
+  await loadData({ fallback: true });
 });
 </script>
 
@@ -359,6 +411,8 @@ onMounted(async () => {
       title="达成率 = 实际工时 / 计划工时 × 100%。计划工时取自工序配置 estimatedMinutes；未配置时显示 —。成本字段对非财务角色不可见。"
       style="margin-bottom: 16px"
     />
+
+    <DateWindowFallbackNotice :notice="windowNotice" :fell-back="windowFellBack" @restore="restoreOriginalWindow" />
 
     <!-- 查询条件 -->
     <el-card shadow="never" class="filter-card">
@@ -390,7 +444,7 @@ onMounted(async () => {
           </el-select>
         </el-form-item>
         <el-form-item>
-          <el-button type="primary" :icon="Search" :loading="loading" @click="loadData">
+          <el-button type="primary" :icon="Search" :loading="loading" @click="loadData()">
             查询
           </el-button>
         </el-form-item>
@@ -444,11 +498,13 @@ onMounted(async () => {
       <el-col :span="12" :xs="24">
         <el-card shadow="never" class="chart-card">
           <div ref="achievementChartRef" style="height: 300px" />
+          <ChartInsight :insight="productInsight" depth="detailed" data-testid="labor-insight-product" />
         </el-card>
       </el-col>
       <el-col :span="12" :xs="24">
         <el-card shadow="never" class="chart-card">
           <div ref="batchTrendChartRef" style="height: 300px" />
+          <ChartInsight :insight="batchInsight" depth="detailed" data-testid="labor-insight-batch" />
         </el-card>
       </el-col>
     </el-row>
@@ -526,7 +582,8 @@ onMounted(async () => {
           </el-descriptions>
 
           <!-- Step 工时对比图 -->
-          <div ref="stepChartRef" style="height: 220px; margin-bottom: 16px" />
+          <div ref="stepChartRef" style="height: 220px; margin-bottom: 8px" />
+          <ChartInsight :insight="stepInsight" depth="detailed" style="margin-bottom: 16px" data-testid="labor-insight-step" />
 
           <!-- Step 明细表 -->
           <el-table :data="currentStepBreakdown.steps" size="small" border>

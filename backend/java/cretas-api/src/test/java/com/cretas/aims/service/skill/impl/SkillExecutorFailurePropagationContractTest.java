@@ -60,7 +60,8 @@ class SkillExecutorFailurePropagationContractTest {
         SkillResult result = executor.execute(skill("batch-query", List.of(tool.getToolName())), context(Map.of()));
 
         assertThat(result.isSuccess()).isFalse();
-        assertThat(result.getMessage()).contains("batchNumber");
+        // 性质: 给一线用户的话说中文称呼「批次号」, 不外露内部字段名 batchNumber (字段名只留在 missingParameters 里给程序读)
+        assertThat(result.getMessage()).contains("批次号").doesNotContain("batchNumber");
         assertThat(result.getData()).isInstanceOf(Map.class);
         assertThat(((Map<?, ?>) result.getData()).get("status")).isEqualTo("NEED_MORE_INFO");
         assertThat(tool.calls.get()).isZero();

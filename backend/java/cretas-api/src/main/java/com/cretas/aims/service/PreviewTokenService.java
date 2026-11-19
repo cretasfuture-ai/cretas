@@ -144,6 +144,18 @@ public interface PreviewTokenService {
                            String expectedCommandDigest);
 
     /**
+     * Gateway claim bound to the business object the caller is about to execute against.
+     * Besides everything {@link #claimToken(String, String, Long, String)} binds, the token's
+     * issued entity type and entity id must equal the expected ones — inside the atomic claim
+     * predicate, so a token issued for one object can never be claimed for another, and a
+     * mismatched attempt leaves the token PENDING for its rightful object. {@code null}
+     * expectations mean "issued without that value" and match only a token that has none.
+     */
+    ClaimResult claimTokenForSubject(String token, String factoryId, Long userId,
+                                     String expectedCommandDigest,
+                                     String expectedEntityType, String expectedEntityId);
+
+    /**
      * Resolves an execution lease. Success must be written only after the real Tool response is
      * successful; failures are terminal in this phase and are not retried automatically.
      */

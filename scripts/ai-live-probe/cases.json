@@ -34,14 +34,15 @@
     },
     {
       "id": "report_work_suspend_resume",
+      "account": "operator",
       "title": "报工挂起后「继续报工」恢复",
       "entries": ["execute", "stream"],
-      "_note": "#1715 上线 (prod Java cb93478e) 后两入口都能挂起恢复; 普通入口恢复轮回 CONVERSATION_CONTINUE, 流式回 NEED_MORE_INFO",
+      "_note": "账号 = F006 一线写入号 (见 report_work_lists_processes_first)。插话选「本周生产报表」(一线号能查生产报表; 查库存 operator 无权限, 会 PERMISSION_DENIED)。#1715 上线 (prod Java cb93478e) 后两入口都能挂起恢复; 普通入口恢复轮回 CONVERSATION_CONTINUE, 流式回 NEED_MORE_INFO",
       "turns": [
         {"say": "我要报工，产量100",
          "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"]}},
-        {"say": "先看下库存",
-         "expect": {"intent": "REPORT_INVENTORY", "status_in": ["SUCCESS", "COMPLETED"]}},
+        {"say": "本周生产报表",
+         "expect": {"intent": "REPORT_PRODUCTION", "status_in": ["SUCCESS", "COMPLETED"]}},
         {"say": "继续报工",
          "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE",
                     "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION", "CONVERSATION_CONTINUE"],
@@ -50,9 +51,10 @@
     },
     {
       "id": "report_work_lists_processes_first",
+      "account": "operator",
       "title": "报工第 1 轮先列可报工序 (不再要「工序任务编号」), 回「1」后出写确认卡",
       "entries": ["execute", "stream"],
-      "_note": "#1715 上线 (prod Java cb93478e) 后生效。F006 只读评测号能看到 ≥1 道可报工序 (QA- 数据); 只停在写确认卡, 不确认",
+      "_note": "#1715 上线后生效。账号 = F006 一线写入号 (operator, AI_PROBE_OPERATOR_*): #1816 起报工写意图要 production:read_write, 只读评测号 viewer 会被拒; 只停在写确认卡, 不确认、不落库",
       "turns": [
         {"say": "我要报工，产量100",
          "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NEED_MORE_INFO", "NEED_CLARIFICATION"],
@@ -60,6 +62,17 @@
                     "message_not_contains": ["工序任务编号", "taskId"], "need_session_id": true}},
         {"say": "1",
          "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["WRITE_CONFIRM_REQUIRED"]}}
+      ]
+    },
+    {
+      "id": "report_work_viewer_denied",
+      "title": "阴性对照: 只读号说「我要报工」被 production:read_write 拦下 (#1816)",
+      "entries": ["execute", "stream"],
+      "_note": "只读评测号 f006_eval (viewer) 没有 production 写权限; 证明报工写意图的权限门在起作用 (没有它, viewer 会走到写确认卡)。只识别, 不写库",
+      "turns": [
+        {"say": "我要报工，产量100",
+         "expect": {"intent": "WORK_PROCESS_TASK_COMPLETE", "status_in": ["NO_PERMISSION"],
+                    "message_contains": ["production:read_write"], "message_not_contains": ["哪一道工序"]}}
       ]
     },
     {

@@ -42,4 +42,6 @@ public class ProcessYieldAggDTO {
     /** unitComparable=false 时的原因; 可比时 null。 */
     private IncomparableReason incomparableReason;
     private Integer batchCount;
+    /** 合计里来自「加工环节记录」(processing_stage_records) 的条数; 0 表示全部来自报工。前端据此标明来源。 */
+    private Integer stageRecordCount;
 }

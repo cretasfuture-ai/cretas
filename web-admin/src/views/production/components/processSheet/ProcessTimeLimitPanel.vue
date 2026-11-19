@@ -23,6 +23,7 @@ import {
   parseBackendTime,
   remainingMinutesAt,
   remainingText,
+  timeLimitBlocks,
 } from '@/utils/processTimeLimit';
 
 const props = defineProps<{
@@ -219,7 +220,12 @@ defineExpose({ reload });
           <td>
             <div v-if="row.reason">{{ row.reason }}</div>
             <div v-if="hasPartialExpiry(row)" data-testid="time-limit-partial">
-              可领 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}
+              <template v-if="timeLimitBlocks(row)">
+                可领 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}
+              </template>
+              <template v-else>
+                未超时 {{ qty(row.drawableQuantity, row) }}，已超时 {{ qty(row.expiredQuantity, row) }}（本厂只警告，都能投料）
+              </template>
             </div>
           </td>
           <td class="time-limit-actions">

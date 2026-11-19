@@ -13,7 +13,7 @@ import Page from '../index.vue';
 
 const planSummary = {
   planId: 'P1', planNumber: 'PLAN-QA-09', productTypeId: 'SKU', productName: '卤牛肉', planStatus: 'COMPLETED',
-  comparable: true, comparabilityReason: '1 项无法比较, 未计入合计 (见各项原因)', snapshotCapturedAt: '2026-11-03T16:00:00',
+  comparable: true, comparabilityReason: '1 项无法比较, 未计入合计; 主因: 快照里这项没有单价 (涉及 1 项)', snapshotCapturedAt: '2026-11-03T16:00:00',
   outputQuantity: 80, outputUnit: 'kg', outputKg: 80, standardCost: 1000, actualCost: 1200, totalVariance: 200,
   varianceRate: 20, priceVariance: 200, usageVariance: 0, substituteVariance: 0, laborVariance: 0,
   reworkVariance: 32.34, reworkStatus: 'COMPARABLE', reworkQuantityText: '2.5 kg',

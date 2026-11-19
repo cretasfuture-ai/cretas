@@ -21,6 +21,12 @@ MODEL = "qwen3.8:27b"
 PROVIDER = "mac-mini"
 OLLAMA_URL = "http://127.0.0.1:11435/api/chat"
 TOTAL_TIMEOUT_S = 55
+# Aurora 网关 (scripts/ops/f006_aurora_runtime.py REQUEST_SECONDS) 的整次请求墙钟上限。
+GATEWAY_WALL_S = 50
+# 网关先回 200 头, 之后要等模型处理完提问才出第一行 (Aurora 实测 285 token 约 18s、388 token 约 24s,
+# 按次冷启动)。读超时须长于网关墙钟, 让网关自己的超时错误帧先到; 又须短于总期限 55s。原 28s 会在
+# 网关仍在期限内时先把连接掐断 (2026-11-19)。
+READ_TIMEOUT_S = 52
 _inflight = asyncio.Lock()
 # 与 Java ChatBusinessFactGuard.PERSONA / NO_DATA_RULES 同一口径 (Java 侧另有输出闸兜底):
 # 「白垩纪」是公司名不是古生物; 这条通道没有任何工厂数据, 不得给业务数字或业务事实。
@@ -79,11 +85,13 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
             async with asyncio.timeout(TOTAL_TIMEOUT_S):
                 async with httpx.AsyncClient(
                     trust_env=False, follow_redirects=False,
-                    timeout=httpx.Timeout(28, connect=3, pool=1),
+                    timeout=httpx.Timeout(READ_TIMEOUT_S, connect=3, pool=1),
                     limits=httpx.Limits(max_connections=1, max_keepalive_connections=1),
                 ) as client:
                     attempted = True
                     async with client.stream("POST", OLLAMA_URL, json=payload) as response:
+                        if response.is_error:
+                            await response.aread()  # 先读完错误体, 流关闭后 except 里才取得到
                         response.raise_for_status()
                         yield {"type": "meta", "provider": PROVIDER, "model": MODEL,
                                "thinking": enable_thinking, "correlationId": correlation}
@@ -135,9 +143,17 @@ async def stream_question(question: str, enable_thinking: bool) -> AsyncIterator
         status = 504
         yield {"type": "error", "code": "MINI_TIMEOUT", "message": "本地 AI 响应超时，请重试"}
     except (httpx.HTTPError, ValueError, TypeError) as exc:
+        # 2026-11-19: 上游 4xx/5xx 只记状态码和响应体前 200 字 (网关错误体不含提问/回答原文)
+        upstream = ""
+        if isinstance(exc, httpx.HTTPStatusError):
+            try:
+                body = exc.response.text[:200]
+            except Exception:
+                body = "<unreadable>"
+            upstream = " upstream_status=%s upstream_body=%r" % (exc.response.status_code, body)
         # 2026-11-17: 原因只记异常类型 (不记内容, 可能含回答原文), 便于从日志区分「连不上」与「回答格式不对」
         try:
-            logger.warning("f006_boss_question failed correlation=%s reason=%s", correlation, type(exc).__name__)
+            logger.warning("f006_boss_question failed correlation=%s reason=%s%s", correlation, type(exc).__name__, upstream)
         except Exception:
             pass
         yield {"type": "error", "code": "MINI_UNAVAILABLE",

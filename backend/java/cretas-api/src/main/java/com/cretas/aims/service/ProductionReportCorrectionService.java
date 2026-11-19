@@ -21,6 +21,8 @@ public interface ProductionReportCorrectionService {
     Page<Map<String, Object>> listCorrectable(String factoryId, Pageable pageable);
     void assertNoPendingForPlan(String factoryId, String planId);
     Map<String, Object> approvalSummary(String factoryId, String correctionId);
+    /** 批量版 approvalSummary: 一次查出一批审批摘要 (key=correctionId); 不属于本厂/不存在的 id 不在结果里。 */
+    Map<String, Map<String, Object>> approvalSummaries(String factoryId, Collection<String> correctionIds);
     List<ProductionReportCorrectionDTO> approvedForProducts(String factoryId, Collection<String> productTypeIds);
     List<ProductionReportCorrectionDTO> approvedForPlans(String factoryId, Collection<String> productionPlanIds);
 }

@@ -97,7 +97,7 @@ concurrency:
 jobs:
   # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
   #   清单: scripts/ci/trigger-paths/python-gate.txt (原 on.pull_request.paths 原样搬过去)。
-  #   pull_request 以外的事件 (merge_group / push / schedule / workflow_dispatch) 一律 run=true;
+  #   pull_request / merge_group 按 diff 判, 其余事件 (push / schedule / workflow_dispatch) 一律 run=true;
   #   取不到 diff 也 run=true —— 宁可多跑, ⛔ 不因为没量到而跳过。
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
@@ -115,8 +115,8 @@ jobs:
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/python-gate.txt
 
   pytest:
@@ -259,6 +259,13 @@ jobs:
             $EXCLUDES \
             -k "not e2e and not integration" \
             --tb=short
+
+      - name: Factory ETL prune real PostgreSQL semantics (q49 + hard-delete)
+        # 真 PG 才能证明「活批次不删 / 他厂不动 / agg 只删失去全部事实行的键 / 汇总行 batch_count==fact 行数」。
+        # 这组测试带 integration 标记，上面的主 pytest 步骤 `-k "not integration"` 不跑它；
+        # 入口脚本断言恰好执行 14 条、0 失败、0 跳过（日志里 grep PRUNE_PG_GATE 与 test_factory_etl_prune_pg）。
+        run: |
+          bash "$GITHUB_WORKSPACE/scripts/ci/run-with-test-postgres.sh" python smartbi/tests/ci_prune_pg_gate.py
 
       - name: Factory AgentOps real PostgreSQL migration and trace contracts
         run: |

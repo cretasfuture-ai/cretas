@@ -208,10 +208,12 @@ public class PlanCostVarianceService {
             outLines.forEach(PlanCostVarianceService::mask);
         }
         boolean hideReworkMoney = maskPrice && !rework.usages().isEmpty();
+        String primaryCause = primaryIncomparableCause(outLines);
+        String causeSuffix = primaryCause == null ? " (见各项原因)" : "; 主因: " + primaryCause;
         String reason = !result.comparable()
-                ? "没有任何一项能完整比较: 见各项原因"
+                ? "没有任何一项能完整比较" + causeSuffix
                 : result.incomparableCount() > 0
-                        ? result.incomparableCount() + " 项无法比较, 未计入合计 (见各项原因)"
+                        ? result.incomparableCount() + " 项无法比较, 未计入合计" + causeSuffix
                         : null;
         return dto.comparable(result.comparable())
                 .comparabilityReason(reason)
@@ -611,6 +613,48 @@ public class PlanCostVarianceService {
 
     static final String RECIPE_DECLARES_REWORK_REASON =
             "锁定配方登记了回料用量, 但开计划时的快照没有回料标准价, 回料差无法比较";
+
+    /** 主料算不出标准投入时, 调料行的原因是它派生出来的, 记到主料的根因上。 */
+    static final String DERIVED_FROM_PRIMARY = PlanCostVarianceCalculator.DERIVED_FROM_PRIMARY_REASON;
+
+    /**
+     * 「无法比较」的主因 (LSM-COSTBI 第 11 项): 以前只说「见各项原因」, 用户得逐行翻。
+     * 统计未完整比较的行 (INCOMPARABLE / PARTIAL) 上的原因, 出现最多的就是主因;
+     * 调料的「算不出主料标准投入」是主料原因派生的, 计到主料根因 (如「锁定的配方没有出成率」) 上。
+     * 返回「原因 (涉及 N 项)」, 没有可说的原因时返回 null。
+     */
+    static String primaryIncomparableCause(List<PlanCostVarianceDTO.Line> lines) {
+        if (lines == null || lines.isEmpty()) return null;
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        String rootOfDerived = null;
+        int derived = 0;
+        for (PlanCostVarianceDTO.Line line : lines) {
+            if (line == null || line.getReasons() == null) continue;
+            String status = line.getStatus();
+            if (!PlanCostVarianceDTO.STATUS_INCOMPARABLE.equals(status)
+                    && !PlanCostVarianceDTO.STATUS_PARTIAL.equals(status)) continue;
+            java.util.Set<String> seen = new java.util.LinkedHashSet<>(line.getReasons());
+            for (String r : seen) {
+                if (r == null || r.isBlank()) continue;
+                if (DERIVED_FROM_PRIMARY.equals(r)) {
+                    derived++;
+                    continue;
+                }
+                counts.merge(r, 1, Integer::sum);
+            }
+        }
+        if (derived > 0) {
+            rootOfDerived = counts.keySet().stream()
+                    .filter(r -> r.contains("出成率") || r.contains("标准投入") || r.contains("实际产量"))
+                    .findFirst().orElse(null);
+            if (rootOfDerived != null) counts.merge(rootOfDerived, derived, Integer::sum);
+            else counts.merge(DERIVED_FROM_PRIMARY, derived, Integer::sum);
+        }
+        return counts.entrySet().stream()
+                .max(java.util.Map.Entry.comparingByValue())
+                .map(e -> e.getKey() + " (涉及 " + e.getValue() + " 项)")
+                .orElse(null);
+    }
 
     /**
      * 标准回料: 锁定配方 (不可变版本) 不含回料行 → null (标准回料用量就是 0, 配方说的);

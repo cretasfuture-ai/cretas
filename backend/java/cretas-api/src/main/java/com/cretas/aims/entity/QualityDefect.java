@@ -63,6 +63,13 @@ public class QualityDefect extends BaseEntity {
     @Column(name = "quality_inspection_id", nullable = false, length = 191)
     private String qualityInspectionId;
 
+    /**
+     * 关联质检记录的业务编号 QI-YYYYMMDD-NNNN (只读展示, 不落本表)。由 QualityDefectServiceImpl 的列表入口
+     * 按本厂批量回填; null = 质检记录没有编号 (或不属于本厂), 前端显示「未编号」, ⛔ 不显示 UUID。
+     */
+    @Transient
+    private String qualityInspectionNumber;
+
     /** 关联物料 ID (FK raw_material_types.id) — 可选 */
     @Column(name = "material_id", length = 191)
     private String materialId;

@@ -327,3 +327,25 @@ def test_production_parent_router_mounts_exact_authenticated_pilot(monkeypatch):
     result = request(api, headers())
     assert result.status_code == 200 and "检查冷链。" in result.text
     assert observed == [("如何检查冷链？", False)]
+
+
+def test_upstream_http_error_logs_status_and_body_prefix(monkeypatch, caplog):
+    # 2026-11-19: 网关 400 invalid_request 之前只记 HTTPStatusError 类型, 看不出上游拒绝了什么。
+    # 真流式响应(与生产一致): 错误体必须在流关闭前读出来。
+    install_model(monkeypatch, [{"error": "invalid_request", "pad": "x" * 400}], status=400)
+    with caplog.at_level("WARNING", logger=provider.logger.name):
+        events = collect()
+    assert events[-1]["code"] == "MINI_UNAVAILABLE"
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "upstream_status=400" in text and "invalid_request" in text
+    assert "x" * 201 not in text
+
+
+def test_client_read_timeout_outlasts_gateway_wall_but_not_total_deadline(monkeypatch):
+    # 2026-11-19: 网关回 200 头后要等提问处理完才出第一行 (Aurora 实测 18-24s, 长问题更久);
+    # 读超时 28s 会在网关 50s 期限内先断。真实传给 httpx 的读超时必须在 (50, 55) 之间。
+    observed = install_model(monkeypatch, [frame("先检查温度。", done=True, done_reason="stop")])
+    assert collect()[-1]["type"] == "done"
+    timeout = observed["client"][0]["timeout"]
+    assert provider.GATEWAY_WALL_S < timeout.read < provider.TOTAL_TIMEOUT_S
+    assert timeout.connect == 3 and timeout.pool == 1

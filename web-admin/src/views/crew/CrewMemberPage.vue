@@ -35,11 +35,13 @@ async function loadMember() {
 watch([key, () => auth.factoryId], () => { void loadMember(); sessionId.value = null; last.value = null; response.value = ''; }, { immediate: true });
 
 const quick = computed(() => {
+  // 与后端 DigitalCrewCatalog.QUICK_QUESTIONS 逐字一致: 整句点中即直连对应读意图 (不靠识别层猜);
+  // 不绑「近 7 天」这类窗口, 说「最近」, 由工具在默认窗口无数据时说明。契约测试钉住两边一致。
   const q: Record<string, string[]> = {
-    planner: ['今天各产线的生产进度', '这周有哪些批次缺料'],
-    keeper: ['哪些原料批次 7 天内到期', '今天有哪些待收货'],
-    inspector: ['最近一周的质检不合格有哪些', '今天待检的批次'],
-    clerk: ['这周待处理的销售订单', '最近的采购订单'],
+    planner: ['各产线的生产进度', '在制品批次有哪些'],
+    keeper: ['最近的原料批次', '待收货清单'],
+    inspector: ['最近的质量报表', '待质检批次'],
+    clerk: ['最近的销售订单', '最近的采购订单'],
     accountant: ['本月成本最高的产品', '这个月的毛利情况'],
   };
   return q[key.value] || [];

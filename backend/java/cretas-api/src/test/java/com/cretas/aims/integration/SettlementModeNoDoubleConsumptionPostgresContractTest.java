@@ -124,7 +124,9 @@ class SettlementModeNoDoubleConsumptionPostgresContractTest {
             SettlementSemiStockingService.class, FinishedGoodsFeedServiceImpl.class,
             CustomerSuppliedSettlementCoverageGuard.class, UnitContractServiceImpl.class,
             SupplyChainOrchestrator.class, BatchConsumptionServiceImpl.class, MaterialBatchServiceImpl.class,
-            FactoryDisciplinePolicy.class, ThresholdResolverServiceImpl.class})
+            FactoryDisciplinePolicy.class, ThresholdResolverServiceImpl.class,
+            // #1844: MaterialBatchServiceImpl 建/改批次挂来源个体时必须过真实的 requireLinkable (只依赖 JPA 仓储)
+            com.cretas.aims.service.source.SourceIndividualService.class})
     static class Runtime { }
 
     @DynamicPropertySource

@@ -15,6 +15,7 @@ import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import { formatNumber } from '@/utils/format-number';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
+import { materialReceiptDateText } from './materialBatchReceipt';
 import echarts from '@/utils/echarts';
 import type { ECharts } from 'echarts/core';
 import {
@@ -22,6 +23,9 @@ import {
   summarizeQuantity,
   type QuantitySummary,
 } from './quantitySummary';
+import ChartInsightProvider from '@/views/smart-bi/components/ChartInsightProvider.vue';
+import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
+import { supplyChainInsightChart, type ListSource } from './supplyChainInsight';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -53,6 +57,27 @@ const summary = ref({
   salesTotal: 0,
 });
 
+// ---------- 一图一分析（问题 40）：各环节取数情况 + FLOW 族现算 ----------
+const notLoaded = (): ListSource => ({ ok: false, listed: 0, total: 0 });
+const sources = ref<{ purchase: ListSource | null; material: ListSource; batches: ListSource; sales: ListSource }>({
+  purchase: null, material: notLoaded(), batches: notLoaded(), sales: notLoaded(),
+});
+const loaded = ref(false);
+const insightPerms = computed<UserPermissions>(() => ({ canViewFinance: canViewPrice.value }));
+const sankeyInsight = computed(() => (loaded.value
+  ? supplyChainInsightChart({
+    ...summary.value,
+    sources: sources.value,
+    canViewPurchasePrice: canViewPurchasePrice.value,
+    canViewPrice: canViewPrice.value,
+  })
+  : null));
+function listSource(res: PromiseSettledResult<{ success: boolean; data?: { content?: unknown[]; totalElements?: number } | null }>): ListSource {
+  if (res.status !== 'fulfilled' || !res.value.success || !res.value.data) return notLoaded();
+  const listed = res.value.data.content?.length ?? 0;
+  return { ok: true, listed, total: res.value.data.totalElements ?? listed };
+}
+
 // ---------- detail tab data ----------
 const purchaseOrders = ref<PurchaseOrder[]>([]);
 const materialBatches = ref<MaterialBatch[]>([]);
@@ -76,7 +101,8 @@ interface MaterialBatch {
   quantity: number;
   unit: string;
   status: string;
-  receivedDate: string;
+  receiptDate?: string | null;
+  inboundDate?: string | null;
 }
 
 interface ProductionBatch {
@@ -142,6 +168,14 @@ async function loadAllData() {
         `/${factoryId.value}/sales/orders`, silentCfg
       ),
     ]);
+
+    sources.value = {
+      purchase: canReadPurchaseOrders.value ? listSource(purchaseRes) : null,
+      material: listSource(materialRes),
+      batches: listSource(batchRes),
+      sales: listSource(salesRes),
+    };
+    loaded.value = true;
 
     // Purchase
     if (purchaseRes.status === 'fulfilled' && purchaseRes.value.success && purchaseRes.value.data) {
@@ -224,6 +258,11 @@ function renderSankeyChart() {
     tooltip: {
       trigger: 'item' as const,
       triggerOn: 'mousemove' as const,
+      // 连线宽度是各环节自身归一化后的示意值（单位不同，不可互比）；提示框显示目标环节的真实读数
+      formatter: (p: { dataType?: string; name?: string; data?: { target?: string } }) => {
+        const node = p.dataType === 'edge' ? p.data?.target : p.name;
+        return `${node ?? ''}：${stageReading(node)}`;
+      },
     },
     series: [{
       type: 'sankey' as const,
@@ -267,6 +306,22 @@ function renderSankeyChart() {
   };
 
   chartInstance.setOption(option);
+}
+
+function quantityReading(q: QuantitySummary): string {
+  return q.value !== null ? `${formatNumber(q.value, 2)}${q.unit ?? ''}` : quantitySummaryFallback(q);
+}
+function stageReading(node?: string): string {
+  const s = summary.value;
+  switch (node) {
+    case '采购': return canViewPurchasePrice.value && s.purchaseTotal !== null ? `¥${formatNumber(s.purchaseTotal)}` : '—';
+    case '入库': return `${formatNumber(s.receivedQuantity, 0)}批`;
+    case '领用': return quantityReading(s.consumedQuantity);
+    case '生产': return `${formatNumber(s.productionBatches, 0)}批`;
+    case '成品': return quantityReading(s.finishedGoods);
+    case '出库': return canViewPrice.value ? `¥${formatNumber(s.salesTotal)}` : '—';
+    default: return '';
+  }
 }
 
 // Resize chart on window resize
@@ -380,6 +435,14 @@ function salesStatusText(status: unknown): string {
       <div class="sankey-section" v-loading="loading">
         <h3 class="section-title">供应链流向</h3>
         <div ref="sankeyChartRef" class="sankey-chart" />
+        <ChartInsightProvider
+          :chart="sankeyInsight"
+          :perms="insightPerms"
+          :factory-id="factoryId || ''"
+          :auto-tier2="false"
+          depth="detailed"
+          class="sankey-insight"
+        />
       </div>
 
       <!-- Summary Cards -->
@@ -491,7 +554,9 @@ function salesStatusText(status: unknown): string {
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column prop="receivedDate" label="入库时间" width="180" :formatter="formatDateTimeCell" />
+              <el-table-column label="入库时间" width="180">
+                <template #default="{ row }">{{ materialReceiptDateText(row) }}</template>
+              </el-table-column>
             </el-table>
           </el-tab-pane>
 
@@ -629,6 +694,9 @@ function salesStatusText(status: unknown): string {
   margin-bottom: 24px;
 }
 
+.sankey-insight {
+  margin-top: 8px;
+}
 .sankey-chart {
   width: 100%;
   height: 260px;

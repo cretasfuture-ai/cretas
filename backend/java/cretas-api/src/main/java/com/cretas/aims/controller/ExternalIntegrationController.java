@@ -35,4 +35,11 @@ public class ExternalIntegrationController {
                                                                                @PathVariable String system) {
         return ApiResponse.success(service.reportComparison(factoryId, system));
     }
+
+    @GetMapping("/{system}/data-issues")
+    @RequirePermission({"production:read"})
+    public ApiResponse<ExternalIntegrationService.DataIssues> dataIssues(@PathVariable String factoryId,
+                                                                         @PathVariable String system) {
+        return ApiResponse.success(service.dataIssues(factoryId, system));
+    }
 }

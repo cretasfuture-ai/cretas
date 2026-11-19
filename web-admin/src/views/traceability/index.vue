@@ -41,13 +41,14 @@ import { getSalesOrderDocumentTrace } from '@/api/documentTrace';
 import type { BusinessDocumentTrace, TraceDocument } from '@/types/businessDocumentTrace';
 import { documentTraceTarget, traceDocumentLabel } from '@/utils/documentTraceNavigation';
 import { displayProcessUnit } from '@/utils/processSheetUnits';
-import { formatDateTime } from '@/utils/dateFormat';
+import { formatDateTime, formatLocalDateTimeMinute } from '@/utils/dateFormat';
 import { bannerText, summarizeSourceIndividuals } from './lineageBanner';
 import {
   depthLabel,
   emptySectionsLine,
   formatQueryTime,
   formatTimeRange,
+  formatStageLossRate,
   isBlank,
   boxGapLines,
   qualityStatusCellText,
@@ -382,10 +383,18 @@ async function loadRecallImpact() {
   }
 }
 watch(() => trace.value?.production.batchNumber, () => { void loadRecallImpact(); });
-function boxText(totals?: BoxTotals | null): string {
+function boxText(totals?: BoxTotals | null, kind: 'stock' | 'shipped' = 'stock'): string {
   if (!totals) return '无法折算：本次没有算出箱数';
   if (totals.complete && totals.totalBoxQuantity != null) return `${totals.totalBoxQuantity} 箱`;
   const known = totals.knownBoxSubtotal != null ? `；已能折算的部分 ${totals.knownBoxSubtotal} 箱` : '';
+  // B8: 追溯范围里根本没有成品批次 / 发货单时, 缺的不是箱规 —— 如实说缺什么, 不让人去补箱规
+  const codes = new Set((recallImpact.value?.boxExposure?.gaps ?? []).map((g) => g.code));
+  if (codes.has('FINISHED_BATCH_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有成品入库批次，箱数按成品入库与发货记录折算，与箱规无关）${known}`;
+  }
+  if (kind === 'shipped' && codes.has('SHIPMENT_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有可核验的发货单）${known}`;
+  }
   return `无法折算（${totals.unknownSourceCount} 项缺少箱规或发货扣减数据）${known}`;
 }
 const boxGapMessages = computed(() => boxGapLines(recallImpact.value?.boxExposure?.gaps ?? []));
@@ -398,7 +407,7 @@ const productionRows = computed(() => {
     { label: '批次号', value: p.batchNumber },
     { label: '产品名称', value: traceProductName(p.productName) },
     { label: '生产工厂', value: p.factoryName },
-    { label: '生产日期', value: p.productionDate },
+    { label: '生产日期', value: formatLocalDateTimeMinute(p.productionDate) },
     { label: '负责人', value: p.supervisorName ?? '' },
     { label: '设备', value: p.equipmentName ?? '' },
     { label: '总产量（含不良）', value: p.quantity != null ? `${p.quantity} ${p.unit || ''}`.trim() : '' },
@@ -461,6 +470,12 @@ const queryTimeText = computed(() => formatQueryTime(trace.value?.queryTime));
 
 function percent(rate?: number | null): string {
   return rate == null ? '' : `${(rate * 100).toFixed(1)}%`;
+}
+function stageLoss(stage: ProcessingStageInfo) {
+  const legacyUnit = stage.stageType === 'PROCESS_SHEET' ? '' : 'kg';
+  const inUnit = stage.inputUnit || legacyUnit;
+  const outUnit = stage.outputUnit || legacyUnit;
+  return formatStageLossRate(stage.inputWeight, stage.outputWeight, inUnit === outUnit);
 }
 function processQuantities(stage: ProcessingStageInfo): string {
   if (stage.inputWeight == null || stage.outputWeight == null) return '';
@@ -577,7 +592,9 @@ function openIndividual(id: string) {
         <el-table-column label="产品" min-width="140">
           <template #default="{ row }">{{ traceProductName(row.productName) }}</template>
         </el-table-column>
-        <el-table-column prop="productionDate" label="生产日期" min-width="130" />
+        <el-table-column label="生产日期" min-width="130">
+          <template #default="{ row }">{{ formatLocalDateTimeMinute(row.productionDate) }}</template>
+        </el-table-column>
         <el-table-column label="质量" min-width="100">
           <template #default="{ row }"><span data-testid="recent-batch-quality">{{ qualityStatusCellText(row.qualityStatus) }}</span></template>
         </el-table-column>
@@ -791,7 +808,9 @@ function openIndividual(id: string) {
             </template>
           </el-table-column>
           <el-table-column label="损耗率" width="100">
-            <template #default="{ row }">{{ percent(row.lossRate) }}</template>
+            <template #default="{ row }">
+              <span :title="stageLoss(row).reason" data-testid="stage-loss-rate">{{ stageLoss(row).text }}</span>
+            </template>
           </el-table-column>
           <el-table-column label="合格率" width="100">
             <template #default="{ row }">{{ percent(row.passRate) }}</template>
@@ -831,7 +850,7 @@ function openIndividual(id: string) {
         <p v-else-if="recallImpactError" data-testid="recall-box-error">召回影响面暂时取不到：{{ recallImpactError }}</p>
         <template v-else-if="recallImpact">
           <p data-testid="recall-box-stock">在库箱数：{{ boxText(recallImpact.boxExposure?.stock) }}</p>
-          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped) }}</p>
+          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped, 'shipped') }}</p>
           <ul v-if="boxGapMessages.length > 0" data-testid="recall-box-gaps">
             <li v-for="(m, i) in boxGapMessages" :key="i">{{ m }}</li>
           </ul>
@@ -845,7 +864,7 @@ function openIndividual(id: string) {
         </template>
         <el-table :data="qualityInspections" size="default" data-testid="quality-table">
           <el-table-column label="检验编号" width="140">
-            <template #default="{ row }">质检 #{{ row.inspectionId?.slice(-8) || '-' }}</template>
+            <template #default="{ $index }">质检 第{{ $index + 1 }}次</template>
           </el-table-column>
           <el-table-column label="检验日期" width="120">
             <template #default="{ row }">{{ dateOnly(row.inspectionDate) }}</template>

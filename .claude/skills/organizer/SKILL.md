@@ -49,7 +49,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 每个切片只维护一份任务说明、一条在飞记录和一份证据索引。ACTIVE 的 ID/状态/Owner/Base/scope 与阻塞摘要 ≤ 300 字，详情进 `docs/dispatch/archive/`；不要求模型、effort、编排方式等固定列。
 - 只在完成、阻塞、范围/接口变化或需裁决时通知。等待 CI/PR 使用一个有截止条件的监视；不主动逐线重复询问、不叠加固定轮询。
 - 🔴 **会话间消息要少发**（Steve 2026-11-18）：每条跨会话消息都会叫醒对方跑一整轮，花费主要是重读上下文，和消息长短关系不大，所以要减的是条数，不是字数。
-  - 执行线只在四种时候给 organizer 发消息：**PR 已开**（附 PR 号，发一次）、**阻塞或需要裁决**、**无 PR 的线交付完成**、**被点名要求的回执**（如交班后确认接上）。⛔ 不发「收到」「开始做了」「rebase 完了」「修完推上去了在等 CI」这类进度：PR 监视按头 SHA 自己看得到。
+  - 执行线只在四种时候给 organizer 发消息：**PR 已开**（附 PR 号，发一次）、**阻塞或需要裁决**、**无 PR 的线交付完成**（含拼包档只推分支的线，附分支名）、**被点名要求的回执**（如交班后确认接上）。⛔ 不发「收到」「开始做了」「rebase 完了」「修完推上去了在等 CI」这类进度：PR 监视按头 SHA 自己看得到。
   - organizer 发出的消息，对方不必回的，末尾写「不用回复」（CI 红了让它修、转告信息、裁决结果）；需要回的写明回什么（如「只回 PR 号」）。几件事合成一条发，不连发。
   - 派线的任务包、交班后发给执行线的「我是现任 organizer」消息里都带上这条回报口径。
   - 依据：11-18 一周效果检查，organizer 花费 23% 来自会话间消息；11-11 起各批 organizer 被会话间消息叫醒约 580 次，每次平均约 $0.3（按标价折算的额度），其中「rebase 完了 / 已推等 CI / 阶段进度」这类监视本来就能看到的占相当一部分。
@@ -59,8 +59,17 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   - 监视的停止条件：全部 SUCCESS/SKIPPED 即停，出现 FAILURE/CANCELLED/TIMED_OUT 即停，检查名为空（冲突或还没触发）不算绿。超时设 ≥ 60 分钟。gh 网络错误（`unexpected EOF`）要重试，不能当成结论。PR 头 SHA 变了，按新头重新判断。
   - 停了马上处理：红了通知对应会话定位修复（写「修完推上去即可，不用回复」）；绿了由 organizer 自己合并发布（Steve 2026-11-11：有 organizer 的批次合并/发布归 organizer），不给执行线发消息，合并后它由 `auto_archive_on_pr_close` 收走。超时或网络退出不算结论，重新挂上。会话分叉或重启后，后台监视会丢，要重新挂。
 - **合并排队**：同时有多个 PR 变绿时，organizer 定先后。前一个合并后，后一个合入新 main，CI 重新全绿后再合。不让各会话抢着合。几个修复差不多同时绿时，尽量合批，在最终的 main 上构建一次、发布一次。
+- 🔴 **拼包：同批低风险小改动拼一个 PR，CI 只跑一次**（Steve 2026-11-18 拍板；红线不拼）。工具 `bash .claude/tools/bundle-prs.sh`，在临时 worktree 里拼，不动当前目录、不打断在跑的监视。
+  - **派线时就定档**：任务包写明「拼包档」或「单独 PR 档」。拼包档的执行线**只推分支、不开 PR**，做完按「无 PR 的线交付完成」回一次（附分支名和目标检查读数）；每个小改动各开 PR 会各跑一遍全量 CI（Java Gate 中位 54 分钟），拼包的省钱主要省在这里。来不及定档、已经开了 PR 的也能拼。
+  - **能拼**：同一批次、非红线、各自目标检查已过、没有红检查的改动，一包 ≤ 6 项。**不拼**：红线（权限/安全、跨租户、生产写入、库存/账务、迁移/entity/repository、workflows、`scripts/deploy`、AGENTS/.agents/.codex）一律单独 PR、单独终审——脚本按路径挡；要 `--phase build` 预传或独立终审的照原流程。
+  - **按 CI 面分包**：碰 Java 的拼一包，只碰 web/Python/RN/文档的拼另一包，别让前端小改等 54 分钟的 Java Gate。一般两包够用，不要一项一包。
+  - **步骤**：`bundle-prs.sh create --name <短名> --title "<批次> 集成：…" <PR号|branch:分支名>...`（先 `--dry-run` 看冲突也行）→ 对集成 PR 挂 `pr-watch-merge.sh` → 合并后 `bundle-prs.sh close <集成PR号>` 批量关原 PR（原 PR 拼完又推了提交的不关，报 DRIFT，新提交进下一包）→ 在最终 main 上发布一次。原 PR 关闭后对应执行会话由 `auto_archive_on_pr_close` 收走；只推分支的线由 organizer 归档。
+  - **红了**：看失败检查属于哪一项的改动，剔掉那一项重拼（`--name` 换新），被剔的那项退回执行线单独修；⛔ 不在集成分支上直接修别人的代码。**冲突**：脚本报出与哪项冲突就停，先拼不冲突的，冲突那项让执行线 rebase 后进下一包。生成文件（如 soft-delete-orphans.sql 文件头）冲突照「并行线 PR 冲突在生成文件」的做法在集成分支重生成。
+  - 合并队列开通后照样拼包：拼包省的是每个 PR 自己那一轮 CI，队列省的是合并前的 update-branch 重绿，两者叠加。
+  - 依据：11-18 成本BI 第 4 任手工拼 #1859（6 个 PR，无冲突，一轮 CI）；但 6 个 PR 拼之前已各自跑过一轮全量 CI，若派线时就定拼包档，这 6 轮可以全省。
 - 🔴 **全机资源预算**（Steve 2026-11-18）：几个批次的 organizer 共用这一台 Windows，各派各的线时彼此看不见，所以每任 organizer 派线、开构建前都按全机算，不只算自己这批：
   - **本机 Java 构建（mvn）同时最多 2 个**，所有批次合计。开构建前先数：`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter \"Name='java.exe'\" | ? CommandLine -match 'plexus-classworlds').Count"`；已有 2 个就排队，先做别的步骤或等它结束。执行线和子代理的任务包里写上这条。Mac mini 构建车道（`canada-mini`，国内、M4 Pro 64GB）配好后，构建优先放到 mini 上。
+  - **在 mini 上干活的规矩**（Steve 2026-11-18）：只经 ssh 跑命令，⛔ 不开桌面/GUI 程序、不在 mini 上开 Claude 会话（那边有人用自己的账号）；动手前看 `~/cretas-build/.build.lock` 有没有人占着，测速/实验这类非发布的活别长时间占锁挡别人的远程构建；用完当场清掉自己留下的临时目录、代码副本、私有 Maven 仓库和测试库（`du -sh` 记一下清了多少），不留后台进程。依据：11-18 降本第 8 任的 CI 测速占着构建锁，意图批次的 `--remote-build` 被挡住；测速目录留了 1.7G。
   - **派新线前先体检**：`bash .claude/tools/worktree-hygiene.sh --check` 超过 30，或可用内存低于约 8GB，先回收或排队，不开新线、新子代理。
   - **每任交班时归档自己名下已交付、空闲的会话**（规则同「执行线收尾归现任」）；子代理的 worktree 用完由派它的 organizer 收。
   - 依据：2026-11-18 00:09 桌面应用卡死重启。应用主进程反复阻塞在拉起 git 上，单次 1–5 秒，累计约 78 分钟。当时同时跑着 6 个 Maven（每个约 2GB）和 44–46 个 worktree，应用要给每个未归档会话的目录轮询 git 状态和 PR 检查，子进程约 170 个，内存约 12GB。
@@ -78,7 +87,7 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
 - 🔴 **交班流程**（Steve 2026-11-13；这一节取代此前零散的交班条款）。三条底线：**会话 id 只用系统给的**（自己的用 `get_session self`，对方的用消息的 `from` 地址），⛔ 交接文件、笔记目录名、记忆里的 id 一律不抄；**每条在飞执行线都要回执**才算接上；**老 organizer 确认交接完整后才归档它**。依据：本周 organizer 花费 $550 里 $271（49%）是被别的会话消息/通知唤醒的回合，交过班的 organizer 被叫醒 246 次；11-13 意图批次的新 organizer 把笔记目录名里的前任 id 当成自己的报给执行线；同日 #1652 在交班间隙一度无人盯 CI。
 
   **老 organizer（交出方）**
-  1. 写交接到 `~/.claude/context-handoff/handoff/`（仓库外，≤ 15 行）：在飞执行线（会话 id + 在做什么 + PR 号）、仍在挂的 PR 监视、合并排队、待 Steve 裁决、Base SHA、试过但放弃的路、下一步第一个动作。
+  1. 写交接到 `~/.claude/context-handoff/handoff/`（仓库外，≤ 15 行）：在飞执行线（会话 id + 在做什么 + PR 号）、仍在挂的 PR 监视、合并排队、待 Steve 裁决、Base SHA、试过但放弃的路、下一步第一个动作。另写一行**额度读数**：`get_usage` 的周额度% + `python C:/Users/Steve/agent-queue/tools/burn.py <当前%> <周窗口开始UTC> <重置UTC>` 的近 24h 速度与推算用完时间，以及本批在跑的 Claude 执行线 / Codex 执行线各几条。
   2. `start_session` 开新 organizer（Opus、medium，用 `title` 起名「Organizer｜<批次>｜第 N+1 任｜<MM-DD>」，**`initiation: "user_asked"`**——Steve 2026-11-16 在对话里明确要求「organizer 自动开，不用我点卡片确认」，这是他本人的指示，⛔ 不传 `offer` / `own_initiative`，那两种必出卡片），开完 `get_session` 核对模型。
      - 🔴 **不出卡片的唯一办法是挑对回合**：应用在「被别的会话消息 / 定时 / 后台通知叫醒的回合」里一律拒绝直接开会话，只能出卡片，这是应用限制，⛔ 不要绕。所以到收口点时先看本回合是谁叫醒的：是 Steve 自己发的消息 → 当场开；是别的会话 / 通知叫醒的 → **不开、不出卡片**，继续守着在飞 PR，记一行「待交班」，等 Steve 下一条桌面端消息那一轮再开（300K 软线本来就允许拖到下个边界；Remote Control 发来的回合同样开不了）。只有过了 400K 硬线且 Steve 长时间没发消息，才退回出卡片并说一行「新 organizer 是卡片 <task_id>，请点开」。
   3. 在新 organizer 发来「已接手」之前：**不 detach、不停 CI 监视、不停手**。不要替新 organizer 给执行线转述它的 id。
@@ -88,10 +97,11 @@ description: Claude Code 多会话协调：用户说 /organizer，或任务确�
   1. `get_session self` 取自己的 id；`set_session_title self` 改名（如开卡片时没起好名）；**`set_pinned self true` 把自己置顶**（置顶的会话不受「PR 合并自动归档」影响）。
      - 🔴 依据（2026-11-16）：意图第 8 任、原型第 15 任都被自己合并的 PR（#1782/#1780）触发 `auto_archive_on_pr_close` 归档，两个批次一度无人管；同期置顶的降本第 5 任 PR 合并后没被归档。⛔ 不要关这个应用设置（执行会话靠它回收）。另外 organizer 自己开/合的 PR（台账 fastlane 等）合并前先 `unbind_pr`，别让 PR 绑在 organizer 会话上。
   2. 读交接，对照 `ACTIVE.md` 和真实 Git/PR 状态核对（交接只是线索，以实际为准），为在飞 PR 重新挂监视。
+     - 🔴 **接手时重新评估 Claude/Codex 分摊**（Steve 2026-11-19）：自己再跑一次 `get_usage` + `burn.py`，按 `C:/Users/Steve/agent-queue/RULES-claude-codex-balance.md` 第 5 节定档（绿/黄/红/切换），据此决定本批接下来哪些执行走 Codex 任务卡、哪些留 Claude（只留红线终审与浏览器验收）；交接里在跑的 Claude 执行线做完手上 PR 就收，不续派。organizer 本身仍是 Claude，只有 ≥95% 且推算重置前用完才切 Codex（须由降本 organizer 先问 Steve 并得到明确同意——他还有 reset 可用）。
   3. 亲自给每条在飞执行线发 SendMessage：「我是现任 organizer，请回一句确认接上；之后只在 PR 已开/阻塞/完成时回复这条消息的发件人，进度不用报」——⛔ 消息里不写 id，对方按 `from` 地址回复，系统填的地址不会错。每条线回复后才算接上；没回复的线列进回执。这些线收不到自动结束通知给你，所以要求它们主动汇报。
   4. 给老 organizer 发接手回执：交接里的每一项一行，写明已接住/怎么处理；每条执行线是否已回执。等它回「完整」或补漏。
   5. 老 organizer 确认后归档它：先 `set_pinned false`，再 `archive_session`（reason「已交班给 <你的 id>」）。注意：归档前用 `get_session` 核对每条在飞执行线和你自己都已 `detached: true`，否则会被连带归档（空闲且无开着 PR 的会被一起归档）；老 organizer 回「完整」的那一轮还没结束时归档会被拒，等它发来「已 detach、已停手」再归档；正在跑的会话会被拒，下个合并点再试，还不行就报 Steve。更早几任 organizer 名下没有在飞执行线的一并归档。前任标题不是「Organizer｜」也照样归档（2026-11-18：BP 协调会话「产品与传统软件对比研究」被就地提升出的 BP 第 2 任接手后一直置顶没归档，因为它不叫 Organizer，没人认领这一步）；指示别的会话就地接任 organizer 的，接任方负责归档前任。机械提醒：`session-health.js` 在 organizer 会话里每 10 分钟扫一次本机会话记录，列出「交班遗留」（已改名「[已交班…」没归档的，和现任 Organizer 的 spawnedFrom 前任没归档的），看到就处理或转给对应现任。机械兜底：用户级 PreToolUse hook `archive-guard`（脚本 `.claude/hooks/archive-guard.js`，从主目录副本运行）在目标名下还有未 detach 的子会话时直接拒绝并列出它们；被拒就按提示 detach 或先单独归档子会话，⛔ 不绕过。
-  6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。
+  6. 给 Steve 一份 ≤ 6 行的接手报告：接住了几项、哪些线已回执、老 organizer 是否确认完整并已归档。另附一行额度读数与定档（周额度%、近 24h 速度、推算用完时间、档位、本批 Claude/Codex 执行线条数）。
   - **执行线收尾归现任**（Steve 2026-11-14）：交班 detach 出去的执行线没有父会话，但仍归现任 organizer 收尾。PR 合并或关闭的会话由应用设置 `auto_archive_on_pr_close`（11-14 已开）自动归档；没有 PR 的线（设计、验收、原型、一次性检查）交付后由现任归档，归档前确认 worktree 干净且没有未推提交。依据：11-14 有 21 个已合并或已交班的会话空闲没人归档，每个占一个 claude 进程（约 100–400MB），这批会话 CLI 合计约 4GB 内存。
   - **会话命名**：organizer「Organizer｜<批次>｜第 N 任｜<MM-DD>」；交班后的老 organizer「[已交班→第 N+1 任] <原名>」；执行会话「<批次>·<线名>：<做什么>」。
 - **纠正两次仍不对就重开**：执行会话被纠正两次还没对上，不做第三次纠正；organizer 把错在哪、正确口径写成新任务说明，开干净的执行会话重做。

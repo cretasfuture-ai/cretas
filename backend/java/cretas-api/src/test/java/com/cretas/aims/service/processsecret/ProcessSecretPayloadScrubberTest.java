@@ -236,6 +236,26 @@ class ProcessSecretPayloadScrubberTest {
     }
 
     @Test
+    void processYieldViewKeysOfReportBatchYieldRankToolAreHiddenForSecretProducts() throws Exception {
+        // report_batch_yield_rank view=process/process_compare 的「上一期」汇总键: 跨批汇总, 任何路由都不给
+        ObjectNode trend = tree("{'productTypeId':'P17','processName':'熟制杀菌','avgYieldRate':80.0,"
+                + "'previousAvgYieldRate':90.0,'previousAvgLossRate':10.0}");
+        assertThat(scrubber.scrub(trend, user(5), F, Set.of(), "GET /x", false)).isTrue();
+        assertThat(trend.get("previousAvgYieldRate").isNull()).isTrue();
+        assertThat(trend.get("previousAvgLossRate").isNull()).isTrue();
+        assertThat(trend.get("avgYieldRate").isNull()).isTrue();
+
+        // view=loss_anomaly 的单批偏差: 单据视图可看, 汇总视图里隐藏
+        ObjectNode doc = tree("{'productTypeId':'P17','batchNumber':'B1','deviationPct':30.0}");
+        assertThat(scrubber.scrub(doc, user(5), F, Set.of(), "GET /batches/1/yield", false)).isFalse();
+        assertThat(doc.get("deviationPct").asDouble()).isEqualTo(30.0);
+        ObjectNode agg = tree("{'productTypeId':'P17','batchNumber':'B1','deviationPct':30.0}");
+        assertThat(scrubber.scrub(agg, user(5), F, Set.of(), "GET /production-analytics/by-product", true)).isTrue();
+        assertThat(agg.get("deviationPct").isNull()).isTrue();
+        assertThat(agg.get("batchNumber").asText()).isEqualTo("B1");
+    }
+
+    @Test
     void ownersSeeEverythingAndPlatformStaffSeeNoMeasuredYieldAnywhere() throws Exception {
         ObjectNode owner = tree(ONE_BATCH);
         assertThat(scrubber.scrub(owner, user(OWNER), F, Set.of(), "GET /production-analytics/x", true)).isFalse();

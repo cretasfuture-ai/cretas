@@ -73,9 +73,7 @@ const BASELINE: ReadonlySet<string> = new Set([
   // 📌 已登记挂账：详见该文件里那段注释（后端实体上没有这些列，等后端下发）
   'views/procurement/orders/detail.vue :: order.paymentDueDate',
   'views/procurement/orders/detail.vue :: order.unpaidAmount',
-  'views/scheduling/index.vue :: dashboard.todaySchedules',
-  'views/scheduling/realtime/index.vue :: dashboard.lineStats',
-  'views/scheduling/realtime/index.vue :: dashboard.todaySchedules',
+  // [PROTO-SCHED-DASH] 调度 Dashboard 的 todaySchedules / lineStats 已由后端 SchedulingDashboardDTO 产出, 移出存量
 ]);
 
 function walk(dir: string, ext: string, out: string[] = []): string[] {

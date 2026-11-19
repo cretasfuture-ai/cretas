@@ -179,15 +179,35 @@ public class QualityDefectServiceImpl implements QualityDefectService {
         Page<QualityDefect> result = defectRepository.findByFilters(
                 factoryId, status, defectType, qualityInspectionId, materialId,
                 fromDate, toDate, pageable);
+        attachInspectionNumbers(factoryId, result.getContent());
         return PageResponse.of(result.getContent(), result.getNumber() + 1,
                 result.getSize(), result.getTotalElements());
+    }
+
+    /** 列表展示用: 一次查回本厂这些质检记录的业务编号, 填到 qualityInspectionNumber (@Transient, 不落库)。 */
+    private void attachInspectionNumbers(String factoryId, List<QualityDefect> defects) {
+        if (defects == null || defects.isEmpty()) return;
+        java.util.Set<String> ids = defects.stream().map(QualityDefect::getQualityInspectionId)
+                .filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        if (ids.isEmpty()) return;
+        Map<String, String> numbers = new java.util.HashMap<>();
+        for (Object[] row : inspectionRepository.findInspectionNumbersByFactoryIdAndIdIn(factoryId, ids)) {
+            if (row != null && row.length >= 2 && row[0] != null && row[1] != null) {
+                numbers.put(row[0].toString(), row[1].toString());
+            }
+        }
+        for (QualityDefect defect : defects) {
+            defect.setQualityInspectionNumber(numbers.get(defect.getQualityInspectionId()));
+        }
     }
 
     @Override
     @Transactional(readOnly = true)
     public List<QualityDefect> listByInspection(String factoryId, String qualityInspectionId) {
-        return defectRepository.findByFactoryIdAndQualityInspectionId(
+        List<QualityDefect> defects = defectRepository.findByFactoryIdAndQualityInspectionId(
                 factoryId, qualityInspectionId);
+        attachInspectionNumbers(factoryId, defects);
+        return defects;
     }
 
     @Override

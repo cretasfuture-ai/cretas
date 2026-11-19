@@ -10,16 +10,17 @@
  */
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { ElMessage, ElMessageBox } from 'element-plus';
+import { ElMessage } from 'element-plus';
 import { Plus, Refresh, Search } from '@element-plus/icons-vue';
 import type { FormInstance } from 'element-plus';
 import { useAuthStore } from '@/store/modules/auth';
 import { usePermissionStore } from '@/store/modules/permission';
 import {
   DNA_STATUS_LABELS,
+  REVOKE_REASON_MAX_LENGTH,
   createSourceIndividual,
-  deleteSourceIndividual,
   listSourceIndividuals,
+  revokeSourceIndividual,
   updateSourceIndividual,
   type DnaVerificationStatus,
   type SourceIndividual,
@@ -228,23 +229,47 @@ async function handleSubmit() {
   }
 }
 
-async function handleDelete(row: SourceIndividual) {
-  if (!factoryId.value) return;
+// ── 撤销(取代旧的无原因删除) ────────────────────────────────────────────
+// 后端要求原因(≤255)放请求体; 被原料批次引用或已作为父本/母本时回 409 并点名。
+// 409 的原话显示在弹窗里, 弹窗不关 —— 用户要据此去处理那几个批次/后代。
+const revokeVisible = ref(false);
+const revokeTarget = ref<SourceIndividual | null>(null);
+const revokeReason = ref('');
+const revokeError = ref('');
+const revoking = ref(false);
+
+function openRevoke(row: SourceIndividual) {
+  revokeTarget.value = row;
+  revokeReason.value = '';
+  revokeError.value = '';
+  revokeVisible.value = true;
+}
+
+async function submitRevoke() {
+  const target = revokeTarget.value;
+  if (!factoryId.value || !target) return;
+  const reason = revokeReason.value.trim();
+  if (!reason) {
+    revokeError.value = '请填写撤销原因';
+    return;
+  }
+  if (reason.length > REVOKE_REASON_MAX_LENGTH) {
+    revokeError.value = `撤销原因最长 ${REVOKE_REASON_MAX_LENGTH} 字`;
+    return;
+  }
+  revokeError.value = '';
+  revoking.value = true;
   try {
-    await ElMessageBox.confirm(`确认删除个体档案 ${row.individualCode}？`, '删除个体档案', {
-      type: 'warning',
-      confirmButtonText: '删除',
-      cancelButtonText: '取消',
-    });
-    const res = await deleteSourceIndividual(factoryId.value, row.id);
+    const res = await revokeSourceIndividual(factoryId.value, target.id, reason);
     if (res.success) {
-      ElMessage.success('个体档案已删除');
+      ElMessage.success(`个体档案 ${target.individualCode} 已撤销`);
+      revokeVisible.value = false;
       await loadData();
     }
   } catch (error) {
-    if (error === 'cancel' || error === 'close') return;
-    const message = String((error as Error)?.message || '删除失败');
-    ElMessage({ message, type: 'error', duration: 0, showClose: true });
+    revokeError.value = String((error as Error)?.message || '撤销失败');
+  } finally {
+    revoking.value = false;
   }
 }
 </script>
@@ -308,7 +333,7 @@ async function handleDelete(row: SourceIndividual) {
         <el-table-column v-if="canWrite" label="操作" width="120" fixed="right">
           <template #default="{ row }">
             <el-button data-activity-action="source-individual.edit.open" link type="primary" @click="handleEdit(row)">编辑</el-button>
-            <el-button data-activity-action="source-individual.delete" link type="danger" @click="handleDelete(row)">删除</el-button>
+            <el-button data-activity-action="source-individual.revoke.open" link type="danger" @click="openRevoke(row)">撤销</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -434,6 +459,43 @@ async function handleDelete(row: SourceIndividual) {
         <el-button data-activity-action="source-individual.save" type="primary" :loading="saving" @click="handleSubmit">保存</el-button>
       </template>
     </el-drawer>
+
+    <el-dialog v-model="revokeVisible" title="撤销个体档案" width="480px" destroy-on-close>
+      <p class="revoke-target">
+        撤销 <strong>{{ revokeTarget?.individualCode }}</strong> 后，列表里不再显示，撤销原因、撤销人和时间会留档。
+        已被原料批次使用或已作为父本/母本的个体不能撤销。
+      </p>
+      <el-input
+        v-model="revokeReason"
+        data-testid="revoke-reason"
+        type="textarea"
+        :rows="3"
+        :maxlength="REVOKE_REASON_MAX_LENGTH"
+        show-word-limit
+        placeholder="必填，例如：录入错误 / 重复建档"
+      />
+      <el-alert
+        v-if="revokeError"
+        data-testid="revoke-error"
+        class="revoke-error"
+        :title="revokeError"
+        type="error"
+        :closable="false"
+        show-icon
+      />
+      <template #footer>
+        <el-button @click="revokeVisible = false">取消</el-button>
+        <el-button
+          data-activity-action="source-individual.revoke"
+          data-testid="revoke-submit"
+          type="danger"
+          :loading="revoking"
+          @click="submitRevoke"
+        >
+          确认撤销
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -487,5 +549,14 @@ async function handleDelete(row: SourceIndividual) {
 
 .full-width {
   width: 100%;
+}
+
+.revoke-target {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
+.revoke-error {
+  margin-top: 12px;
 }
 </style>

@@ -156,14 +156,21 @@ public class ArPostingPendingService {
     /**
      * 「无需挂账」的追溯行(如零金额发货): 在调用方(发货)事务内写一行 RESOLVED, 原因 = reasonCode + 说明,
      * 不告警、不进默认的待处理(PENDING)列表; 同一发运单同一 reasonCode 只留一行(幂等)。
+     *
+     * <p>幂等判定在库里按 factoryId + deliveryId + status=RESOLVED + failure_reason LIKE '{reasonCode}:%' 查,
+     * 存在即不插。⛔ 不能「取任意一行 RESOLVED 再在内存里比原因」: 同一发运单已有别的 RESOLVED 行
+     * (如挂账成功后关闭的意图行)时会取到那一行而漏判, 再插一行。
+     *
+     * <p><b>并发幂等依赖调用方</b>: 本方法自己不加锁, 也⛔ 不靠唯一索引兜底(唯一冲突会让整个发货事务回滚,
+     * 一张追溯行不值得拖垮发货)。唯一调用方 {@code SalesServiceImpl#shipDelivery} 在同一事务里先持有该发运单的
+     * 行锁({@code findByIdAndFactoryIdForUpdate}), 同一发运单的两次确认在锁上串行, 后者能看到前者已提交的行。
+     * 新增调用方必须同样先持有发运单行锁。本方法的任何异常都随调用方事务抛出(发货一起回滚), 不在这里吞掉。
      */
     public void recordNoPostingNeeded(String factoryId, String deliveryId, String deliveryNumber,
                                       String salesOrderId, String customerId, Long ownerId, BigDecimal amount,
                                       Long operatedBy, String reasonCode, String note) {
-        boolean exists = repository
-                .findFirstByFactoryIdAndDeliveryIdAndStatus(factoryId, deliveryId, ArPostingPendingStatus.RESOLVED)
-                .filter(r -> r.getFailureReason() != null && r.getFailureReason().startsWith(reasonCode + ":"))
-                .isPresent();
+        boolean exists = repository.existsByFactoryIdAndDeliveryIdAndStatusAndFailureReasonStartingWith(
+                factoryId, deliveryId, ArPostingPendingStatus.RESOLVED, reasonCode + ":");
         if (exists) {
             return;
         }

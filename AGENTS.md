@@ -1,6 +1,6 @@
 # AGENTS.md
 
-开工先读根目录 `CLAUDE.md` 及其常驻清单里的 `.claude/rules/*.md`（Claude 与 Codex 共用正文；`.codex/rules/` 同名文件是指针，`ci-runner-routing.md` 为逐字副本，闸 `scripts/ci/check_shared_agent_rules.py`）。项目概览、端口、开发命令、API 路径、核心原则以 `CLAUDE.md` 为准，本文件只放 Codex 专属约束，不重复它们。
+开工先读根目录 `CLAUDE.md` 及其常驻清单里的 `.claude/rules/*.md`（Claude 与 Codex 共用正文；`.codex/rules/` 同名文件是指针，[CI runner 路由规则](.claude/rules/ci-runner-routing.md) 有逐字副本，由 `scripts/ci/check_shared_agent_rules.py` 校验）。项目概览、端口、开发命令、API 路径、核心原则以 `CLAUDE.md` 为准，本文件只放 Codex 专属约束，不重复它们。
 
 本文件每个会话整份加载，有字节预算（闸 `scripts/ci/check_resident_rules.py`）。挪出的原文逐字在 `docs/ops/codex-agents-reference.md`（发布命令、子代理、交接、JPA/CI 门禁、生产验收；到对应场景先读那一节）；瘦身前全文存档 `docs/rules-casebook/agents-md-pre-slim-20261113.md`。
 
@@ -60,3 +60,7 @@
 ## UX Flow Gate
 
 低技术素养角色（操作员/仓管/质检员）的 RN 屏幕、或报工/入库/出库/盘点/质检/扫码收货/发货功能，提出方案或实施计划前必须调用 `ux-flow` skill（触发词见 `.agents/skills/ux-flow/SKILL.md`），「UX Flow Analysis」缺失不得进入实施规划。
+
+## 任务卡执行线
+
+需要在 Windows 终端派发独立 Codex 交互会话时，按 `tools/agent-dispatch/README.md` 操作。先登记 ACTIVE 的任务、Owner、Base SHA、范围和验收命令，再投递任务卡。用 `status.ps1` 接手队列，按 `ledger.jsonl` 核对状态变化。执行线提交回执并开 PR，合并由协调者处理。

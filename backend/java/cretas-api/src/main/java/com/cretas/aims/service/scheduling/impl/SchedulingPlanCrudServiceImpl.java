@@ -684,13 +684,254 @@ public class SchedulingPlanCrudServiceImpl implements SchedulingPlanCrudService 
 
     // ==================== Dashboard ====================
 
+    /** 工作流批次进今日排程的状态: 在产 (PRODUCING 是 IN_PROGRESS 的旧写法) + 已完工。PAUSED / CANCELLED 不进。 */
+    static final List<ProductionBatchStatus> DASHBOARD_ACTIVE_BATCH_STATUSES =
+        List.of(ProductionBatchStatus.IN_PROGRESS, ProductionBatchStatus.PRODUCING, ProductionBatchStatus.COMPLETED);
+    /** 「跨日在产」只数此刻仍在产的。 */
+    static final List<ProductionBatchStatus> DASHBOARD_RUNNING_BATCH_STATUSES =
+        List.of(ProductionBatchStatus.IN_PROGRESS, ProductionBatchStatus.PRODUCING);
+    static final String SOURCE_SCHEDULE = "SCHEDULE";
+    static final String SOURCE_WORKFLOW_BATCH = "WORKFLOW_BATCH";
+    /** 「今天」按业务时区算, 不跟 JVM 默认时区。 */
+    static final java.time.ZoneId BUSINESS_ZONE = java.time.ZoneId.of("Asia/Shanghai");
+    /** 已签到 = 这几个派工状态 (assigned 没签到, absent 缺勤)。 */
+    private static final Set<WorkerAssignment.AssignmentStatus> CHECKED_IN_STATUSES = EnumSet.of(
+        WorkerAssignment.AssignmentStatus.checked_in, WorkerAssignment.AssignmentStatus.working,
+        WorkerAssignment.AssignmentStatus.checked_out);
+
     @Override
     public SchedulingDashboardDTO getDashboard(String factoryId, LocalDate date) {
-        log.debug("getDashboard: factoryId={}, date={}", factoryId, date);
+        return getDashboard(factoryId, date, LocalDate.now(BUSINESS_ZONE));
+    }
+
+    /**
+     * 调度 Dashboard。⛔ 所有查询带 factoryId; 量不到的给 null 并在 unavailableReasons 写原因, 不用 0 兜底。
+     * {@code today} 单独传入只为测试能固定「今天」; 生产入口见 {@link #getDashboard(String, LocalDate)}。
+     *
+     * <h3>口径 (PR 正文同步)</h3>
+     * <ul>
+     *   <li><b>今日排程 todaySchedules</b> = ① 本厂当天调度计划 (scheduling_plans.plan_date = date, 未删、未取消)
+     *       上未取消的排程行 (source=SCHEDULE, 已完成的行也算) + ② 本厂 date 当天<b>有活动</b>的正式批次
+     *       (source=WORKFLOW_BATCH): 当天开工 / 当天完工 / 当天有报工 (production_reports) / 当天有加工环节记录
+     *       (processing_stage_records), 状态为 IN_PROGRESS/PRODUCING/COMPLETED, 不含 CLERK_WIP。
+     *       工作流开批次直接 IN_PROGRESS, 不经过调度计划, 只看 ① 永远是 0。按「当天活动」取, 看历史日期 / 明天时
+     *       不会混进「今天此刻在产」的批次; 几周前开工、当天没有任何动静的批次也不算。
+     *       <br>去重: ② 里的批次若已被 ① 的某一行引用 (line_schedules.batch_id), 或它所属的生产计划已被 ① 中
+     *       <i>没有挂批次</i> 的行引用 (APS 按计划排的行), 就不再列 —— 同一份活只算一次。</li>
+     *   <li><b>跨日在产 carryOverIdleBatches</b> (只在 date = 今天时统计): 今天之前开工、此刻仍在产、今天没有任何活动、
+     *       也没被 ① 覆盖的批次数。它们不进今日排程, 也不进利用率。date ≠ 今天 → null (过去某天「当时在产」量不到)。</li>
+     *   <li><b>排程计数</b>: totalSchedules = 今日排程条数; inProgress / completed = ① 对应状态的行 + ② 对应状态的批次;
+     *       pending / delayed 只来自 ①。</li>
+     *   <li><b>计划统计 planStats</b>: 只数调度计划 (每厂每天至多一份), 已取消不计。工作流批次不是调度计划, 不计入。</li>
+     *   <li><b>产线利用率 utilizationRate</b> = 今日有任务的启用产线数 ÷ 启用产线数 (产线占用率, 不是工时利用率)。
+     *       「有任务」= ① 的行落在这条线, 或 ② 的批次所属生产计划的建议产线是这条线。② 中没有产线归属的批次不计入,
+     *       条数写进 lineStats.unattributedBatches 并在 unavailableReasons 说明; 今日任务全都没有产线归属 → null;
+     *       没有启用产线 → null。工时口径量不到: 班次时长没有落库。</li>
+     *   <li><b>平均效率 averageEfficiency</b> 恒为 null: line_schedules.actual_efficiency 两个写入口径不一致
+     *       (完工按 完成/计划×100 写百分数, 报进度按 完成/应完成 写比值), 混在一起求平均没有意义。</li>
+     *   <li><b>人员 workerStats</b>: 只数 ① 的派工 (按工人去重); 工作流批次没有派工记录。平均绩效没有任何打分 → null。</li>
+     *   <li><b>告警</b>: alerts = 本厂未处理的告警; totalAlerts = unresolvedAlerts = 其条数; criticalAlerts = 其中严重级。</li>
+     * </ul>
+     * 工作流批次行的数量字段 (计划/完成量) 不填: 批次计划量按计划单位、完成量可能已换成产出单位, 不能直接相除。
+     */
+    public SchedulingDashboardDTO getDashboard(String factoryId, LocalDate date, LocalDate today) {
+        log.debug("getDashboard: factoryId={}, date={}, today={}", factoryId, date, today);
+        Map<String, String> unavailable = new LinkedHashMap<>();
+        LocalDateTime dayStart = date.atStartOfDay();
+        LocalDateTime dayEnd = date.plusDays(1).atStartOfDay();
+
+        // ① 调度计划上的排程行
+        List<LineSchedule> scheduleRows = scheduleRepository.findDashboardRows(
+            factoryId, date, SchedulingPlan.PlanStatus.cancelled, LineSchedule.ScheduleStatus.cancelled);
+        List<LineScheduleDTO> todaySchedules = new ArrayList<>(enrichScheduleDTOs(scheduleRows));
+        todaySchedules.forEach(dto -> dto.setSource(SOURCE_SCHEDULE));
+
+        // ② 当天有活动、没被 ① 覆盖的工作流批次
+        Set<Long> scheduledBatchIds = scheduleRows.stream().map(LineSchedule::getBatchId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        Set<String> scheduledPlanIdsWithoutBatch = scheduleRows.stream()
+            .filter(r -> r.getBatchId() == null).map(LineSchedule::getProductionPlanId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        java.util.function.Predicate<ProductionBatch> notCoveredBySchedule = b ->
+            !scheduledBatchIds.contains(b.getId())
+                && (b.getProductionPlanId() == null || !scheduledPlanIdsWithoutBatch.contains(b.getProductionPlanId()));
+        List<ProductionBatch> activeOnDay = batchRepository.findActiveOnDayForDashboard(
+            factoryId, DASHBOARD_ACTIVE_BATCH_STATUSES, ProductionBatchStatus.COMPLETED, date, dayStart, dayEnd);
+        List<ProductionBatch> workflowBatches = activeOnDay.stream().filter(notCoveredBySchedule).toList();
+
+        // 跨日在产: 只有看今天时有意义
+        Integer carryOverIdle = null;
+        if (date.equals(today)) {
+            Set<Long> activeIds = activeOnDay.stream().map(ProductionBatch::getId).collect(Collectors.toSet());
+            carryOverIdle = (int) batchRepository
+                .findRunningForDashboard(factoryId, DASHBOARD_RUNNING_BATCH_STATUSES, dayStart).stream()
+                .filter(b -> !activeIds.contains(b.getId()))
+                .filter(notCoveredBySchedule)
+                .count();
+            if (carryOverIdle > 0) {
+                unavailable.put("carryOverIdleBatches", "跨日在产 " + carryOverIdle
+                    + " 个 (今日无活动), 不计入今日排程与利用率");
+            }
+        } else {
+            unavailable.put("carryOverIdleBatches", "只在查看今天时统计; 过去某天当时有哪些批次在产量不到");
+        }
+
+        Map<String, String[]> planRefs = new HashMap<>();   // planId -> [planNumber, suggestedLineId]
+        Set<String> batchPlanIds = workflowBatches.stream().map(ProductionBatch::getProductionPlanId)
+            .filter(Objects::nonNull).collect(Collectors.toSet());
+        if (!batchPlanIds.isEmpty()) {
+            for (Object[] row : productionPlanRepository.findDashboardPlanRefsByFactoryIdAndIdIn(factoryId, batchPlanIds)) {
+                planRefs.put((String) row[0], new String[]{(String) row[1], (String) row[2]});
+            }
+        }
+
+        // 产线 (只要本厂启用中的)
+        List<ProductionLine> activeLines = lineRepository
+            .findByFactoryIdAndStatusAndDeletedAtIsNull(factoryId, ProductionLine.LineStatus.active);
+        Map<String, ProductionLine> activeLineById = activeLines.stream()
+            .collect(Collectors.toMap(ProductionLine::getId, Function.identity(), (a, b) -> a));
+
+        Set<String> occupiedLineIds = new HashSet<>();
+        scheduleRows.stream().map(LineSchedule::getProductionLineId).filter(Objects::nonNull)
+            .forEach(occupiedLineIds::add);
+        int unattributed = 0;
+        for (ProductionBatch batch : workflowBatches) {
+            String[] ref = batch.getProductionPlanId() == null ? null : planRefs.get(batch.getProductionPlanId());
+            String lineId = ref == null ? null : ref[1];
+            if (lineId != null) {
+                occupiedLineIds.add(lineId);
+            } else {
+                unattributed++;
+            }
+            todaySchedules.add(toWorkflowBatchRow(batch, ref, lineId == null ? null : activeLineById.get(lineId)));
+        }
+        occupiedLineIds.retainAll(activeLineById.keySet());
+
+        BigDecimal utilization = null;
+        boolean allTasksUnattributed = scheduleRows.isEmpty() && !workflowBatches.isEmpty()
+            && unattributed == workflowBatches.size();
+        if (activeLines.isEmpty()) {
+            unavailable.put("lineStats.utilizationRate", "本厂没有启用中的产线, 利用率没有分母");
+        } else if (allTasksUnattributed) {
+            unavailable.put("lineStats.utilizationRate",
+                "今日 " + unattributed + " 个批次都未指定产线, 量不到产线利用率");
+        } else {
+            utilization = BigDecimal.valueOf(occupiedLineIds.size())
+                .divide(BigDecimal.valueOf(activeLines.size()), 4, java.math.RoundingMode.HALF_UP);
+        }
+        if (unattributed > 0 && !allTasksUnattributed) {
+            unavailable.put("lineStats.unattributedBatches", unattributed + " 个批次未指定产线, 未计入利用率");
+        }
+        unavailable.put("lineStats.averageEfficiency",
+            "排程实际效率有两种写入口径 (百分数 / 比值), 混在一起求平均没有意义, 暂不汇总");
+
+        // 人员: 只有 ① 有派工
+        Set<String> scheduleIds = scheduleRows.stream().map(LineSchedule::getId).collect(Collectors.toSet());
+        List<WorkerAssignment> assignments = scheduleIds.isEmpty() ? Collections.emptyList()
+            : assignmentRepository.findByFactoryIdAndScheduleIdIn(factoryId, scheduleIds);
+        Set<Long> assigned = new HashSet<>();
+        Set<Long> checkedIn = new HashSet<>();
+        Set<Long> temporary = new HashSet<>();
+        List<Integer> scores = new ArrayList<>();
+        for (WorkerAssignment a : assignments) {
+            if (a.getUserId() == null) continue;
+            assigned.add(a.getUserId());
+            if (a.getStatus() != null && CHECKED_IN_STATUSES.contains(a.getStatus())) checkedIn.add(a.getUserId());
+            if (Boolean.TRUE.equals(a.getIsTemporary())) temporary.add(a.getUserId());
+            if (a.getPerformanceScore() != null) scores.add(a.getPerformanceScore());
+        }
+        BigDecimal avgPerformance = null;
+        if (scores.isEmpty()) {
+            unavailable.put("workerStats.averagePerformance", "今日派工还没有任何绩效打分");
+        } else {
+            avgPerformance = BigDecimal.valueOf(scores.stream().mapToInt(Integer::intValue).sum())
+                .divide(BigDecimal.valueOf(scores.size()), 1, java.math.RoundingMode.HALF_UP);
+        }
+        if (!workflowBatches.isEmpty()) {
+            unavailable.put("workerStats.workflowBatches",
+                "工作流直接开出的批次没有派工记录, 到岗人数只含调度排程上的派工");
+        }
+
+        // 计划
+        Optional<SchedulingPlan> dayPlan = planRepository.findByFactoryIdAndPlanDateAndDeletedAtIsNull(factoryId, date)
+            .filter(p -> p.getStatus() != SchedulingPlan.PlanStatus.cancelled);
+        SchedulingPlan.PlanStatus planStatus = dayPlan.map(SchedulingPlan::getStatus).orElse(null);
+        SchedulingDashboardDTO.PlanStats planStats = SchedulingDashboardDTO.PlanStats.builder()
+            .totalPlans(dayPlan.isPresent() ? 1 : 0)
+            .draftPlans(planStatus == SchedulingPlan.PlanStatus.draft ? 1 : 0)
+            .confirmedPlans(planStatus == SchedulingPlan.PlanStatus.confirmed ? 1 : 0)
+            .inProgressPlans(planStatus == SchedulingPlan.PlanStatus.in_progress ? 1 : 0)
+            .completedPlans(planStatus == SchedulingPlan.PlanStatus.completed ? 1 : 0)
+            .build();
+
+        // 告警
+        List<SchedulingAlertDTO> alerts = alertRepository.findByFactoryIdAndIsResolvedFalseOrderByCreatedAtDesc(factoryId)
+            .stream().map(this::toAlertDTO).toList();
+        int critical = (int) alerts.stream().filter(a -> "critical".equals(a.getSeverity())).count();
+
+        int workflowCompleted = (int) workflowBatches.stream()
+            .filter(b -> b.getStatus() == ProductionBatchStatus.COMPLETED).count();
+        int inProgressRows = countRows(scheduleRows, LineSchedule.ScheduleStatus.in_progress)
+            + (workflowBatches.size() - workflowCompleted);
+        int completedRows = countRows(scheduleRows, LineSchedule.ScheduleStatus.completed) + workflowCompleted;
+
         return SchedulingDashboardDTO.builder()
-            .date(date).totalPlans(0).confirmedPlans(0).inProgressPlans(0).completedPlans(0)
-            .totalSchedules(0).pendingSchedules(0).inProgressSchedules(0).completedSchedules(0)
-            .delayedSchedules(0).totalAlerts(0).criticalAlerts(0).build();
+            .date(date)
+            .planStats(planStats)
+            .totalPlans(planStats.getTotalPlans())
+            .confirmedPlans(planStats.getConfirmedPlans())
+            .inProgressPlans(planStats.getInProgressPlans())
+            .completedPlans(planStats.getCompletedPlans())
+            .todaySchedules(todaySchedules)
+            .totalSchedules(todaySchedules.size())
+            .pendingSchedules(countRows(scheduleRows, LineSchedule.ScheduleStatus.pending))
+            .inProgressSchedules(inProgressRows)
+            .completedSchedules(completedRows)
+            .delayedSchedules(countRows(scheduleRows, LineSchedule.ScheduleStatus.delayed))
+            .carryOverIdleBatches(carryOverIdle)
+            .workerStats(SchedulingDashboardDTO.WorkerStats.builder()
+                .totalAssigned(assigned.size()).checkedIn(checkedIn.size())
+                .temporaryWorkers(temporary.size()).averagePerformance(avgPerformance).build())
+            .totalWorkers(assigned.size())
+            .checkedInWorkers(checkedIn.size())
+            .temporaryWorkers(temporary.size())
+            .lineStats(SchedulingDashboardDTO.LineStats.builder()
+                .activeLines(activeLines.size()).occupiedLines(occupiedLineIds.size())
+                .unattributedBatches(unattributed)
+                .utilizationRate(utilization).averageEfficiency(null).build())
+            .productionLines(activeLines.stream().map(ProductionLineDTO::fromEntity).toList())
+            .alerts(alerts)
+            .totalAlerts(alerts.size())
+            .unresolvedAlerts(alerts.size())
+            .criticalAlerts(critical)
+            .unavailableReasons(unavailable)
+            .build();
+    }
+
+    private static int countRows(List<LineSchedule> rows, LineSchedule.ScheduleStatus status) {
+        return (int) rows.stream().filter(r -> r.getStatus() == status).count();
+    }
+
+    /** 工作流批次 → 今日排程里的一行。数量不填 (单位可能不一致, 见 getDashboard 口径)。 */
+    private static LineScheduleDTO toWorkflowBatchRow(ProductionBatch batch, String[] planRef, ProductionLine line) {
+        LineScheduleDTO dto = new LineScheduleDTO();
+        dto.setId("batch-" + batch.getId());
+        dto.setSource(SOURCE_WORKFLOW_BATCH);
+        dto.setBatchId(batch.getId());
+        dto.setBatchNumber(batch.getBatchNumber());
+        dto.setProductionPlanId(batch.getProductionPlanId());
+        dto.setPlanNumber(planRef == null ? null : planRef[0]);
+        if (line != null) {
+            dto.setProductionLineId(line.getId());
+            dto.setProductionLineName(line.getName());
+        }
+        dto.setActualStartTime(batch.getStartTime());
+        boolean done = batch.getStatus() == ProductionBatchStatus.COMPLETED;
+        dto.setActualEndTime(done ? batch.getEndTime() : null);
+        dto.setStatus(done ? LineSchedule.ScheduleStatus.completed.name() : LineSchedule.ScheduleStatus.in_progress.name());
+        dto.setWorkerAssignments(Collections.emptyList());
+        dto.setIsDelayed(false);
+        return dto;
     }
 
     @Override

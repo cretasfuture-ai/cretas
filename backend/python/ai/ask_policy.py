@@ -3,7 +3,8 @@
 Luna 主路径在问 Choice 的同时问一道判断题「这一轮是否必须先问」(decision.ask_probability)。
 判断题用哪套规则、概率多少才先问、读写各自的门槛, 合起来叫一个「档」:
 
-  conservative 保守 = 多问。#1711 的 v3: 规则按史浩禾 39 题校 (decision.ASK_PREDICATE_RULES), 先问门槛 0.6。
+  conservative 保守 = 多问。史浩禾口径: 规则 (decision.ASK_PREDICATE_RULES) 与先问门槛 0.3 按他的 300 题答案重校
+                (2026-11-19; 此前是 #1711 的 v3, 只按他前 39 题校, 门槛 0.6)。与 Steve 答案有争议的题在金标里单列。
   aggressive   激进 = 少问。按 Steve 自答 300 题校 (decision.ASK_PREDICATE_RULES_AGGRESSIVE), 默认档。
 
 两档都**不放宽写操作**: 写目标只交给 Java, 由 Java 一律先出确认卡, 逐笔确认。

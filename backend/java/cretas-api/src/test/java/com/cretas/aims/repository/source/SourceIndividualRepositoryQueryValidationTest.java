@@ -185,6 +185,32 @@ class SourceIndividualRepositoryQueryValidationTest {
 
     // ── helpers ────────────────────────────────────────────────────────────
 
+    @Test
+    @DisplayName("系谱指针标量查询: 返回本厂活档案的 [id, 父本, 母本], 不串别厂、不含已撤销")
+    void findParentLinksIsScopedAndSkipsRevoked() {
+        SourceIndividual sire = persist(FACTORY, "SI-PL-S", "4440001", "CATTLE");
+        SourceIndividual dam = persist(FACTORY, "SI-PL-D", "4440002", "CATTLE");
+        SourceIndividual child = persist(FACTORY, "SI-PL-C", "4440003", "CATTLE");
+        child.setSireIndividualId(sire.getId());
+        child.setDamIndividualId(dam.getId());
+        SourceIndividual foreign = persist(OTHER_FACTORY, "SI-PL-X", "4440004", "CATTLE");
+        SourceIndividual revoked = persist(FACTORY, "SI-PL-R", "4440005", "CATTLE");
+        flushAndClear();
+        entityManager.getEntityManager()
+                .createNativeQuery("UPDATE source_individuals SET deleted_at = CURRENT_TIMESTAMP WHERE id = :id")
+                .setParameter("id", revoked.getId())
+                .executeUpdate();
+
+        List<Object[]> rows = repository.findParentLinks(FACTORY,
+                List.of(child.getId(), sire.getId(), foreign.getId(), revoked.getId()));
+
+        assertThat(rows).extracting(r -> (String) r[0])
+                .containsExactlyInAnyOrder(child.getId(), sire.getId());
+        Object[] childRow = rows.stream().filter(r -> child.getId().equals(r[0])).findFirst().orElseThrow();
+        assertThat(childRow[1]).isEqualTo(sire.getId());
+        assertThat(childRow[2]).isEqualTo(dam.getId());
+    }
+
     private static List<String> codesOf(Page<SourceIndividual> page) {
         return page.getContent().stream().map(SourceIndividual::getIndividualCode).toList();
     }

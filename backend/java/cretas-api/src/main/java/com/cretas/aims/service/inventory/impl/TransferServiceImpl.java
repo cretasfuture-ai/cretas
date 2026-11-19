@@ -73,6 +73,8 @@ public class TransferServiceImpl implements TransferService {
     private final RawMaterialTypeRepository rawMaterialTypeRepository;
     @Autowired
     private WarehouseTransferMovementRepository warehouseMovementRepository;
+    @Autowired(required = false)
+    private com.cretas.aims.repository.factory.FactoryWarehouseRepository factoryWarehouseRepository;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -747,7 +749,30 @@ public class TransferServiceImpl implements TransferService {
         populateCurrentStock(transfer);
         // fool-proof-design Rule 2 — populate 申请人/审批人姓名 for detail-page display (裸 userId → 姓名).
         populateRequestApproveNames(transfer);
+        // #1844 L-2: 详情也回填调出/调入仓库名(与 InternalTransfer 上「列表/详情」的注释一致)。
+        fillWarehouseNamesForDetail(factoryId, transfer);
         return transfer;
+    }
+
+    /**
+     * 详情只有两个仓库 id, 按 id + 本厂查(最多两次), 不拉整厂仓库表。
+     * 跨厂调拨里对方工厂的仓库查不到, 名称留 null —— ⛔ 不拿 id 冒充, 也不跨厂读名称。
+     */
+    private void fillWarehouseNamesForDetail(String factoryId, InternalTransfer transfer) {
+        if (factoryWarehouseRepository == null || transfer == null) {
+            return;
+        }
+        transfer.setSourceWarehouseName(warehouseNameOrNull(factoryId, transfer.getSourceWarehouseId()));
+        transfer.setTargetWarehouseName(warehouseNameOrNull(factoryId, transfer.getTargetWarehouseId()));
+    }
+
+    private String warehouseNameOrNull(String factoryId, String warehouseId) {
+        if (warehouseId == null) {
+            return null;
+        }
+        return factoryWarehouseRepository.findByIdAndFactoryIdAndDeletedAtIsNull(warehouseId, factoryId)
+                .map(com.cretas.aims.entity.factory.FactoryWarehouse::getName)
+                .orElse(null);
     }
 
     /**
@@ -956,7 +981,25 @@ public class TransferServiceImpl implements TransferService {
         Page<InternalTransfer> result = (statuses == null || statuses.isEmpty())
                 ? transferRepository.findByFactoryId(factoryId, pageRequest)
                 : transferRepository.findByFactoryIdAndStatusIn(factoryId, statuses, pageRequest);
+        fillWarehouseNames(factoryId, result.getContent());
         return PageResponse.of(result.getContent(), page, size, result.getTotalElements());
+    }
+
+    /** 回填调出/调入仓库名; 仓库不属于本厂或已删除时留 null。 */
+    private void fillWarehouseNames(String factoryId, List<InternalTransfer> transfers) {
+        if (factoryWarehouseRepository == null || transfers == null || transfers.isEmpty()) {
+            return;
+        }
+        java.util.Map<String, String> names = new java.util.HashMap<>();
+        factoryWarehouseRepository.findByFactoryIdAndDeletedAtIsNullOrderByCodeAsc(factoryId).forEach(w -> {
+            if (w.getId() != null && w.getName() != null) {
+                names.put(w.getId(), w.getName());
+            }
+        });
+        for (InternalTransfer t : transfers) {
+            t.setSourceWarehouseName(names.get(t.getSourceWarehouseId()));
+            t.setTargetWarehouseName(names.get(t.getTargetWarehouseId()));
+        }
     }
 
     // ==================== 状态机流转 ====================

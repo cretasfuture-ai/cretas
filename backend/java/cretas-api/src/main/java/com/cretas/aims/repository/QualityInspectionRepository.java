@@ -69,7 +69,8 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      * web-admin 质检记录列表: 批次 / 结果(可多个) / 日期区间 / 关键词 / 批量批次号, 全部在分页之前由数据库过滤
      * (2026-11-14: 前端一直在传 keyword, 后端没声明, 静默不过滤 —— 与 2026-08-28 的 result 同一类坑)。
      *
-     * <p>关键词匹配: 质检编号前缀 (界面显示 id 前 8 位大写) 或 生产批次号包含; 批量批次号是精确匹配。
+     * <p>关键词匹配: 质检编号包含 (inspection_number, 如 QI-20261119-0003 / 20261119 / 0003)、
+     * 内部 id 前缀 (旧界面显示过 id 前 8 位, 保留可搜) 或 生产批次号包含; 批量批次号是精确匹配。
      * 每个条件是「布尔标志 + 永远非空的值」(null 在 PG 上绑不出类型, 见 #1357)。
      * 批次子查询带 factory_id。{@code keyword} 里的 % _ 由调用方去掉。</p>
      */
@@ -97,7 +98,8 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
            "AND (:byResult = false OR UPPER(q.result) IN :results) " +
            "AND (:byFrom = false OR q.inspectionDate >= :dateFrom) " +
            "AND (:byTo = false OR q.inspectionDate <= :dateTo) " +
-           "AND (:byKeyword = false OR UPPER(q.id) LIKE CONCAT(:keyword, '%') " +
+           "AND (:byKeyword = false OR UPPER(q.inspectionNumber) LIKE CONCAT('%', :keyword, '%') " +
+           "     OR UPPER(q.id) LIKE CONCAT(:keyword, '%') " +
            "     OR q.productionBatchId IN (SELECT b.id FROM ProductionBatch b WHERE b.factoryId = :factoryId " +
            "                                AND UPPER(b.batchNumber) LIKE CONCAT('%', :keyword, '%'))) " +
            "AND (:byNos = false OR q.productionBatchId IN (SELECT b2.id FROM ProductionBatch b2 " +
@@ -436,4 +438,14 @@ public interface QualityInspectionRepository extends JpaRepository<QualityInspec
      */
     @Query("SELECT q FROM QualityInspection q WHERE q.id IN :ids")
     List<QualityInspection> findByIdIn(@Param("ids") Collection<String> ids);
+
+    /**
+     * 不良记录列表回填「关联质检编号」: 本厂内这些质检记录的 [id, inspection_number]。
+     * 原生 SQL 故意不过 @Where —— 质检记录被软删后编号仍然是它的编号 (号不复用), 不良记录照样显示;
+     * ⚠️ factory_id 谓词是租户边界: 别厂的质检记录 id 即使被挂到本厂不良上也拿不到它的编号。
+     */
+    @Query(value = "SELECT q.id, q.inspection_number FROM quality_inspections q "
+            + "WHERE q.factory_id = :factoryId AND q.id IN (:ids)", nativeQuery = true)
+    List<Object[]> findInspectionNumbersByFactoryIdAndIdIn(@Param("factoryId") String factoryId,
+                                                            @Param("ids") Collection<String> ids);
 }

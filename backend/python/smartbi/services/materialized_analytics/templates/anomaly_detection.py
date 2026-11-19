@@ -56,7 +56,7 @@ class AnomalyDetection(AnalysisTemplate):
             action_rec = format_action_rec(
                 object_target=f"{measure} ±{self.SIGMA}σ 外 {len(outliers)} 条异常",
                 benefit_range="排查异常根因 + 修订 SOP 可降低再次发生 30-50%",
-                prerequisite="按异常时段 / 门店逐条复盘 + 召开根因分析会",
+                prerequisite="按异常时段 / 维度逐条复盘 + 召开根因分析会",
                 timeline="本周内",
             )
         else:

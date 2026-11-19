@@ -109,7 +109,7 @@ class WipBatchQcRejectionGuardContractTest {
                         ? new ArrayList<>(timeLimitRejections) : List.of());
 
         warehouse = new MaterialBatchServiceImpl(batches, null, null, mock(MaterialBatchMapper.class),
-                null, null, null, null);
+                org.mockito.Mockito.mock(com.cretas.aims.repository.MaterialConsumptionRepository.class), null, null, null);
         ReflectionTestUtils.setField(warehouse, "qcReleaseRecordRepository", records);
         ReflectionTestUtils.setField(warehouse, "processTimeLimitEventRepository", timeLimits);
         // 纪律排查 A3 放行闸叠加在本闸之后: 这里测「判不合格不能改回可用」, 放行规则配成允许手动放行,
