@@ -77,6 +77,19 @@ public interface FactoryMaterialRequisitionService {
     /** 分页列表, status 可为 null. */
     Page<FactoryMaterialRequisition> list(String factoryId, Status status, Pageable pageable);
 
+    /** 带 关键词 / 计划号 / 需求日期范围 的列表。 */
+    Page<FactoryMaterialRequisition> list(String factoryId, Status status, String keyword, String planNumber,
+                                          java.time.LocalDate fromDate, java.time.LocalDate toDate, Pageable pageable);
+
+    /** 一行 = 一种物料 (按单位分开, 不同单位不相加): 已备 / 已发 / 退回 / 净领用 (= 已发 − 退回)。 */
+    record MaterialSummaryRow(String materialTypeId, String materialName, String unit,
+                              java.math.BigDecimal pickedQty, java.math.BigDecimal issuedQty,
+                              java.math.BigDecimal returnedQty, java.math.BigDecimal netIssuedQty) {
+    }
+
+    List<MaterialSummaryRow> summarizeByMaterial(String factoryId, Status status, String keyword, String planNumber,
+                                                 java.time.LocalDate fromDate, java.time.LocalDate toDate);
+
     /** 按计划反查. */
     List<FactoryMaterialRequisition> listByPlan(String factoryId, String productionPlanId);
 

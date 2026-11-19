@@ -2,6 +2,8 @@ package com.cretas.aims.dto;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.cretas.aims.config.EnumCoercionJacksonConfig;
+import com.cretas.aims.config.PriceSensitiveJacksonConfig;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
 import com.cretas.aims.entity.enums.InventoryOwnership;
 import com.cretas.aims.entity.enums.MaterialBatchStatus;
@@ -9,9 +11,21 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.autoconfigure.jackson.JacksonAutoConfiguration;
+import org.springframework.boot.test.context.SpringBootTest;
 
-/** 可用量与库存汇总同口径(仅 AVAILABLE 且自有批次有值), 质量状态由批次状态推导。 */
+/**
+ * 可用量与库存汇总同口径(仅 AVAILABLE 且自有批次有值), 质量状态由批次状态推导。
+ *
+ * <p>#1844 终审 L-5: JSON 断言用<b>生产注入的</b> ObjectMapper(Boot Jackson 自动配置 +
+ * spring.jackson.* + 本仓 Jackson 配置类), ⛔ 不 new。
+ */
+@SpringBootTest(classes = {JacksonAutoConfiguration.class, EnumCoercionJacksonConfig.class,
+        PriceSensitiveJacksonConfig.class}, webEnvironment = SpringBootTest.WebEnvironment.NONE)
 class MaterialBatchDtoAvailabilityContractTest {
+
+    @Autowired ObjectMapper objectMapper;
 
     private static MaterialBatchDTO dto(String current, String unsettled, MaterialBatchStatus status) {
         MaterialBatchDTO d = new MaterialBatchDTO();
@@ -78,9 +92,15 @@ class MaterialBatchDtoAvailabilityContractTest {
     }
 
     @Test
+    void injectedMapperIsTheProductionOne() throws Exception {
+        // 仪器自检: 注入的 mapper 带本仓 EnumCoercionJacksonConfig 定制(空串枚举 → null);
+        // new ObjectMapper() 在这里会抛 InvalidFormatException。
+        assertThat(objectMapper.readValue("\"\"", MaterialBatchStatus.class)).isNull();
+    }
+
+    @Test
     void jsonExposesAvailableReasonQualityAndRemaining() throws Exception {
-        JsonNode n = new ObjectMapper().findAndRegisterModules()
-                .valueToTree(dto("100", "30", MaterialBatchStatus.AVAILABLE));
+        JsonNode n = objectMapper.valueToTree(dto("100", "30", MaterialBatchStatus.AVAILABLE));
         assertThat(n.get("availableQuantity").decimalValue()).isEqualByComparingTo("70");
         assertThat(n.get("qualityStatus").asText()).isEqualTo("NORMAL");
         assertThat(n.get("remainingQuantity").decimalValue()).isEqualByComparingTo("100");

@@ -42,6 +42,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -248,6 +249,75 @@ class SourceIndividualLinkGuardContractTest {
                 });
         verify(batchRepoMock, never()).save(any());
         assertThat(existing.getSourceIndividualId()).isNull();
+    }
+
+    private MaterialBatch linkedBatch(String batchId, String individualId) {
+        MaterialBatch existing = new MaterialBatch();
+        existing.setId(batchId);
+        existing.setFactoryId(FACTORY);
+        existing.setStatus(MaterialBatchStatus.AVAILABLE);
+        existing.setReceiptQuantity(new BigDecimal("10"));
+        existing.setUsedQuantity(BigDecimal.ZERO);
+        existing.setReservedQuantity(BigDecimal.ZERO);
+        existing.setCreatedBy(1L);
+        existing.setSourceIndividualId(individualId);
+        when(batchRepoMock.findById(batchId)).thenReturn(Optional.of(existing));
+        return existing;
+    }
+
+    @Test
+    @DisplayName("#1968 M-2: 已挂 A 的批次经编辑改挂 B → 409 SOURCE_INDIVIDUAL_ALREADY_LINKED「请先解除挂载」, 不落库, 仍挂 A")
+    void updateCannotSwapAnExistingLink() {
+        String a = create(FACTORY, "L-SW-A").getId();
+        String b = create(FACTORY, "L-SW-B").getId();
+        em.flush();
+        MaterialBatch existing = linkedBatch("MB-LINK-SWAP", a);
+
+        UpdateMaterialBatchRequest req = new UpdateMaterialBatchRequest();
+        req.setSourceIndividualId(b);
+        assertThatThrownBy(() -> batchService.updateMaterialBatch(FACTORY, "MB-LINK-SWAP", req))
+                .isInstanceOfSatisfying(BusinessException.class, e -> {
+                    assertThat(e.getCode()).isEqualTo(409);
+                    assertThat(e.getErrorCode()).isEqualTo("SOURCE_INDIVIDUAL_ALREADY_LINKED");
+                    assertThat(e.getMessage()).contains("请先解除挂载");
+                });
+        verify(batchRepoMock, never()).save(any());
+        assertThat(existing.getSourceIndividualId()).isEqualTo(a);
+    }
+
+    @Test
+    @DisplayName("#1968 L-8 阳性对照: 未挂载的批次经编辑挂上本厂在档个体 → 保存且真的挂上 (不被误报 ALREADY_LINKED)")
+    void updateLinksAnUnlinkedBatch() {
+        String a = create(FACTORY, "L-SW-NEW").getId();
+        em.flush();
+        MaterialBatch existing = linkedBatch("MB-LINK-NEW", null);
+
+        UpdateMaterialBatchRequest req = new UpdateMaterialBatchRequest();
+        req.setSourceIndividualId(a);
+        batchService.updateMaterialBatch(FACTORY, "MB-LINK-NEW", req);
+
+        assertThat(existing.getSourceIndividualId()).isEqualTo(a);
+        verify(batchRepoMock).save(existing);
+    }
+
+    @Test
+    @DisplayName("#1968 M-2 阳性对照: 回显同一个个体 id / 不传(null=不改) 照常保存, 挂载不变")
+    void updateEchoingTheSameLinkOrOmittingItStillSaves() {
+        String a = create(FACTORY, "L-SW-C").getId();
+        em.flush();
+        MaterialBatch existing = linkedBatch("MB-LINK-SAME", a);
+
+        UpdateMaterialBatchRequest echo = new UpdateMaterialBatchRequest();
+        echo.setSourceIndividualId(" " + a + " ");
+        echo.setNotes("补备注");
+        batchService.updateMaterialBatch(FACTORY, "MB-LINK-SAME", echo);
+        assertThat(existing.getSourceIndividualId()).isEqualTo(a);
+
+        UpdateMaterialBatchRequest omit = new UpdateMaterialBatchRequest();
+        omit.setNotes("再补一次");
+        batchService.updateMaterialBatch(FACTORY, "MB-LINK-SAME", omit);
+        assertThat(existing.getSourceIndividualId()).isEqualTo(a);
+        verify(batchRepoMock, times(2)).save(existing);
     }
 
     // ── M-B: 系谱引用 ───────────────────────────────────────────────
