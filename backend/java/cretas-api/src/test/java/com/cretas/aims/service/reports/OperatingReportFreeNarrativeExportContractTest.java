@@ -28,7 +28,7 @@ class OperatingReportFreeNarrativeExportContractTest {
         String out = "{\"conclusions\":[{\"text\":\"卤鸡爪毛利率最高，为{{marginHigh.p2.rate}}，酱卤牛肉只有{{marginHigh.p1.rate}}，建议优先压缩牛肉成本。\",\"refs\":[\"marginHigh.p2.rate\",\"marginHigh.p1.rate\"]}]}";
         var insights = codec.parseModelOutput(out, snap);
         String text = codec.render(snap.withInsights(insights), true);
-        assertTrue(text.contains("卤鸡爪毛利率最高，为55.26%，酱卤牛肉只有39.9%"), text);
+        assertTrue(text.contains("卤鸡爪毛利率最高，为55%，酱卤牛肉只有40%"), text);
         assertTrue(text.contains("建议优先压缩牛肉成本"));
     }
 
@@ -54,8 +54,8 @@ class OperatingReportFreeNarrativeExportContractTest {
     @Test void narrativeIsHiddenForReadersWhoCannotSeePricesAndForMaskedProducts() {
         var narrative = new Insight(InsightKind.NARRATIVE, null, null, "牛肉只有{{marginHigh.p1.rate}}", List.of("marginHigh.p1.rate"));
         var snap = snapshot("12", List.of(narrative));
-        assertFalse(codec.render(snap, false).contains("39.9"));
-        assertTrue(codec.render(snap, true).contains("牛肉只有39.9%"));
+        assertFalse(codec.render(snap, false).contains("40%"));
+        assertTrue(codec.render(snap, true).contains("牛肉只有40%"));
         // 引用的指标被遮 → 整条不显示
         var maskedMetric = new Metric("marginHigh.p1.rate", "酱卤牛肉 毛利率", null, "%", "已保密", null, "q");
         var masked = new OperatingReportSnapshot(SCHEMA, Status.SUCCESS, "monthly", "2026-10-01", "2026-10-31", "t", List.of(),
@@ -94,7 +94,7 @@ class OperatingReportFreeNarrativeExportContractTest {
             StringBuilder all = new StringBuilder();
             for (var slide : show.getSlides()) for (var shape : slide.getShapes())
                 if (shape instanceof org.apache.poi.xslf.usermodel.XSLFTextShape t) all.append(t.getText()).append('\n');
-            assertTrue(all.toString().contains("55.26%"), all.toString());
+            assertTrue(all.toString().contains("55%"), all.toString());
         }
     }
 }
