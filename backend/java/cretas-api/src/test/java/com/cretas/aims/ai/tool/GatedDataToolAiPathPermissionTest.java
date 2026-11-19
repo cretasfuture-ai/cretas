@@ -248,14 +248,14 @@ public class GatedDataToolAiPathPermissionTest {
         // Positive control: a tool with no gate that reads finance data only through a helper must be refused.
         Map<String, Set<GatedDataScan.DataMethod>> via = new TreeMap<>();
         Set<GatedDataScan.DataMethod> calls = GatedDataScan.callsOfTool(
-                com.cretas.aims.ai.tool.impl.helpercontrol.UngatedHelperDelegatingTool.class, via);
+                com.cretas.aims.gatedcontrol.UngatedHelperDelegatingTool.class, via);
         assertThat(via).containsKey("HelperReadingBalanceSheet");
         GatedDataScan.DataMethod reached = via.get("HelperReadingBalanceSheet").iterator().next();
         assertThat(scan.servedBy.get(reached)).as("%s is served by a read endpoint", reached).isNotEmpty();
         assertThat(scan.servedBy.get(reached)).allMatch(GatedDataScan.Endpoint::gated);
         String control = "helper_control_ungated";
         scan.toolCalls.put(control, calls);
-        scan.instances.put(control, new com.cretas.aims.ai.tool.impl.helpercontrol.UngatedHelperDelegatingTool());
+        scan.instances.put(control, new com.cretas.aims.gatedcontrol.UngatedHelperDelegatingTool());
         try {
             assertThat(classify(control, scan.instances.get(control))).as("ungated tool reading gated data via helper")
                     .isNotNull().contains("has no gate");

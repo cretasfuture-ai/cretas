@@ -1,4 +1,4 @@
-package com.cretas.aims.ai.tool.impl.helpercontrol;
+package com.cretas.aims.ai.tool.helpercontrol;
 
 import com.cretas.aims.service.finance.BalanceSheetService;
 

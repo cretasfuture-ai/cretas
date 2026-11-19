@@ -1,13 +1,15 @@
-package com.cretas.aims.ai.tool.impl.helpercontrol;
+package com.cretas.aims.gatedcontrol;
 
 import com.cretas.aims.ai.dto.ToolCall;
 import com.cretas.aims.ai.tool.ToolExecutor;
+import com.cretas.aims.ai.tool.helpercontrol.HelperReadingBalanceSheet;
 
 import java.util.Map;
 
 /**
  * Positive control for GatedDataToolAiPathPermissionTest: a READ tool with no gate whose own code touches no
- * data owner, and reads the balance sheet only through {@link HelperReadingBalanceSheet}. Lives in test-classes,
+ * data owner, and reads the balance sheet only through {@link HelperReadingBalanceSheet}. Lives in test-classes and
+ * outside com.cretas.aims.ai.tool (so the tool-count / access-mode / descriptor scans never see it),
  * so the production scan never registers it; the gate test feeds it to the classifier by hand and expects red.
  */
 public class UngatedHelperDelegatingTool implements ToolExecutor {

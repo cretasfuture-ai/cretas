@@ -352,7 +352,9 @@ final class GatedDataScan {
         Set<DataMethod> deep = new HashSet<>();
         Set<String> ownClasses = new HashSet<>();
         List<MethodRef> frontier = new ArrayList<>();
-        for (Class<?> k = c; k != null && k.getName().startsWith("com.cretas.aims.ai.tool.impl"); k = k.getSuperclass()) {
+        // The tool class itself always counts (the positive-control stub lives outside every tool scan package);
+        // superclasses only while under ai.tool.impl, as before.
+        for (Class<?> k = c; k != null && (k == c || k.getName().startsWith("com.cretas.aims.ai.tool.impl")); k = k.getSuperclass()) {
             for (Class<?> part : withNested(k)) {
                 ownClasses.add(internal(part));
                 // The tool class and its direct nested classes (what the scan always read) vs. nested-in-nested.
