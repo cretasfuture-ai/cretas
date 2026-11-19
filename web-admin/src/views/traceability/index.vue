@@ -383,10 +383,18 @@ async function loadRecallImpact() {
   }
 }
 watch(() => trace.value?.production.batchNumber, () => { void loadRecallImpact(); });
-function boxText(totals?: BoxTotals | null): string {
+function boxText(totals?: BoxTotals | null, kind: 'stock' | 'shipped' = 'stock'): string {
   if (!totals) return '无法折算：本次没有算出箱数';
   if (totals.complete && totals.totalBoxQuantity != null) return `${totals.totalBoxQuantity} 箱`;
   const known = totals.knownBoxSubtotal != null ? `；已能折算的部分 ${totals.knownBoxSubtotal} 箱` : '';
+  // B8: 追溯范围里根本没有成品批次 / 发货单时, 缺的不是箱规 —— 如实说缺什么, 不让人去补箱规
+  const codes = new Set((recallImpact.value?.boxExposure?.gaps ?? []).map((g) => g.code));
+  if (codes.has('FINISHED_BATCH_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有成品入库批次，箱数按成品入库与发货记录折算，与箱规无关）${known}`;
+  }
+  if (kind === 'shipped' && codes.has('SHIPMENT_SCOPE_EMPTY')) {
+    return `无法折算（追溯范围内没有可核验的发货单）${known}`;
+  }
   return `无法折算（${totals.unknownSourceCount} 项缺少箱规或发货扣减数据）${known}`;
 }
 const boxGapMessages = computed(() => boxGapLines(recallImpact.value?.boxExposure?.gaps ?? []));
@@ -842,7 +850,7 @@ function openIndividual(id: string) {
         <p v-else-if="recallImpactError" data-testid="recall-box-error">召回影响面暂时取不到：{{ recallImpactError }}</p>
         <template v-else-if="recallImpact">
           <p data-testid="recall-box-stock">在库箱数：{{ boxText(recallImpact.boxExposure?.stock) }}</p>
-          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped) }}</p>
+          <p data-testid="recall-box-shipped">已发箱数：{{ boxText(recallImpact.boxExposure?.shipped, 'shipped') }}</p>
           <ul v-if="boxGapMessages.length > 0" data-testid="recall-box-gaps">
             <li v-for="(m, i) in boxGapMessages" :key="i">{{ m }}</li>
           </ul>

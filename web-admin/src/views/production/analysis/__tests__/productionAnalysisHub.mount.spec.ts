@@ -74,7 +74,7 @@ function mountHub() {
 }
 
 describe('生产分析 hub —— 6 个视角逐一挂载真实子页面 (LIUSHANMEN IA 收拢)', () => {
-  it('默认 tab (BOM达成率分析): 只有这一个子组件被真实挂载, 并调用它自己原来的接口', async () => {
+  it('默认 tab (BOM用量对比): 只有这一个子组件被真实挂载, 并调用它自己原来的接口', async () => {
     mockRoute.query = { tab: 'bom-achievement' };
     const wrapper = mountHub();
     await flushPromises();
@@ -136,7 +136,7 @@ describe('生产分析 hub —— 6 个视角逐一挂载真实子页面 (LIUSHA
     const outerHeader = wrapper.find('.el-tabs__header');
     const labels = outerHeader.findAll('.el-tabs__item').map((n) => n.text());
     expect(labels).toEqual([
-      '车间实时生产报表', '生产数据分析', 'BOM达成率分析',
+      '车间实时生产报表', '生产数据分析', 'BOM用量对比',
       '工序投入产出对比', '人效双口径对比', '成品出厂核算',
     ]);
     wrapper.unmount();
@@ -149,7 +149,7 @@ describe('生产分析 hub —— 6 个视角逐一挂载真实子页面 (LIUSHA
     await flushPromises();
     const outerHeader = wrapper.find('.el-tabs__header');
     const labels = outerHeader.findAll('.el-tabs__item').map((n) => n.text());
-    expect(labels).toEqual(['BOM达成率分析', '工序投入产出对比', '人效双口径对比']);
+    expect(labels).toEqual(['BOM用量对比', '工序投入产出对比', '人效双口径对比']);
     expect(labels).not.toContain('车间实时生产报表');
     expect(labels).not.toContain('生产数据分析');
     expect(labels).not.toContain('成品出厂核算');
@@ -163,7 +163,7 @@ describe('生产分析 hub —— 6 个视角逐一挂载真实子页面 (LIUSHA
     await flushPromises();
     const outerHeader = wrapper.find('.el-tabs__header');
     const labels = outerHeader.findAll('.el-tabs__item').map((n) => n.text());
-    expect(labels).toEqual(['BOM达成率分析', '工序投入产出对比', '人效双口径对比']);
+    expect(labels).toEqual(['BOM用量对比', '工序投入产出对比', '人效双口径对比']);
     wrapper.unmount();
   });
 
