@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
  * B1 数值列(温度/分钟/架次/小料kg)要能当指标, 编码/编号/产线号仍是维度, 与 Python field_classifier 口径一致。
  * B2 confirm 保存 422 的上传要被标成 FAILED (独立事务), 不再留在数据源下拉里当默认源。
  */
-class SmartBIUploadMeasureAndFailureB1B2Test {
+class SmartBIUploadMeasureAndFailureB1B2ContractTest {
 
     // ---------------- B1: DynamicDataPersistenceServiceImpl ----------------
 
