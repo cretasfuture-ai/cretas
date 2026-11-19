@@ -29,6 +29,9 @@ case "$path" in
   */actions/runs/*/jobs*)
     id=${path#*/actions/runs/}; id=${id%%/*}
     cat "$FAKE_FIX/jobs-$id.json" ;;
+  */actions/runs/*)
+    id=${path#*/actions/runs/}
+    cat "$FAKE_FIX/run-$id.json" ;;
   *) echo "unexpected path $path" >&2; exit 3 ;;
 esac
 SH
@@ -116,6 +119,15 @@ run_all() {
   run_case "心跳不是数字 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=abc
   run_case "心跳正好 180s (边界, 不算过期) -> mini"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     MINI_HEARTBEAT=999820
   run_case "fast 标签心跳过期 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=1 reason=mini-offline label=cretas-mini-fast" runner_fast=ubuntu-latest none     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast MINI_HEARTBEAT=999000
+  # 心跳年龄以本 run 的 run_started_at 为参照 (2026-11-19: vars 在 run 创建时定格, changes 在托管机排了
+  # 27 分钟 -> 按「现在」算成 1642s 误判离线)。不给 ROUTE_NOW, 走真实时间 + 假 gh 的 runs/999。
+  local now started
+  now=$(date +%s); started=$((now - 1600))
+  jq -nc --argjson s "$started" '{run_started_at: ($s | todate)}' > "$FIX/run-999.json"
+  run_case "排队 1600s 但心跳在 run 开始前 30s -> mini (按 run 开始算年龄)"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
+  run_case "心跳在 run 开始前 400s -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 400))
+  rm -f "$FIX/run-999.json"
+  run_case "读不到 run 开始时间 -> 退回按现在算 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
 }
 
 echo "== 被测: $SCRIPT"
@@ -329,6 +341,27 @@ Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'T
       echo "FAIL: 心跳变异对照: 删掉年龄判断后过期场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
     else
       echo "  ok - 心跳变异对照: 删掉年龄判断后过期场景变红"
+    fi
+  fi
+fi
+
+# ── 变异对照: 心跳参照时间退回「现在」, 「排队 1600s」场景必须变红。
+if [ -z "${ROUTE_SCRIPT:-}" ]; then
+  RMUT="$WORK/route-ref-mutant.sh"
+  # ⚠️ 替换里不加行尾注释: 这一行后面还有 esac, 注释会把它吃掉, 变异体变成语法错误 (全红但不是变异生效)。
+  sed 's/\*) echo "\$s run_started_at" ;;/*) echo "$(date +%s) run_started_at" ;;/' "$SCRIPT" > "$RMUT"
+  if ! grep -q 'echo "$(date +%s) run_started_at"' "$RMUT" || ! bash -n "$RMUT"; then
+    echo "FAIL: 参照时间变异没生效或变异体语法错 (同步本测试的 sed)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    ROUTE_SCRIPT="$RMUT" bash "${BASH_SOURCE[0]}" > "$WORK/ref-mutant.log" 2>&1
+    rrc=$?
+    rfails=$(grep -c '^  FAIL - ' "$WORK/ref-mutant.log")
+    echo "READING: mutant(ref=now) rc=$rrc $(grep '^READING: pass=' "$WORK/ref-mutant.log") fails=$rfails"
+    # 只该红「排队 1600s」这 1 个场景 (其余场景要么给了 ROUTE_NOW, 要么本来就判离线)。
+    if [ "$rrc" = 0 ] || [ "$rfails" != 1 ] || ! grep -q 'FAIL - 排队 1600s' "$WORK/ref-mutant.log"; then
+      echo "FAIL: 参照时间变异对照: 退回按现在算后「排队 1600s」场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 参照时间变异对照: 退回按现在算后「排队 1600s」场景变红"
     fi
   fi
 fi
