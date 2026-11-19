@@ -86,9 +86,23 @@ mini_queued() {
   cat "$QCACHE" 2>/dev/null || echo 0
 }
 
+# 在线心跳 (2026-11-19 mini 一天失联三次): 任一槽每 $HB_EVERY 秒把当前 Unix 秒写进仓库变量 MINI_HEARTBEAT;
+# changes 作业的路由读它, 超过 3 分钟没更新就整片走托管 (route-mini-or-hosted.sh reason=mini-offline)。
+# 写不出去 (mini 连不上 GitHub) 就是心跳停了, 这正是要的信号。发布构建持锁时本循环停在等锁, 也不跳 ⇒ 不领活。
+HB_STAMP=/Users/rex/gh-gate/heartbeat.stamp
+HB_EVERY=60
+beat() {
+  local age=999
+  [ -f "$HB_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$HB_STAMP") ))
+  [ "$age" -ge "$HB_EVERY" ] || return 0
+  touch "$HB_STAMP"  # 先占位: 同一分钟别的槽不再写
+  gh variable set MINI_HEARTBEAT --repo "$REPO" --body "$(date +%s)" >/dev/null 2>>"$LOG" || log "heartbeat write failed"
+}
+
 log "start label=$LABEL"
 paused=0
 while :; do
+  beat
   if ! slot_enabled "$SLOT"; then
     [ "$paused" = 1 ] || log "disabled (not in $ENABLED_FILE), idle"
     paused=1; sleep 30; continue
@@ -134,6 +148,7 @@ while :; do
       [ -n "$rid" ] && gh api -X DELETE "repos/$REPO/actions/runners/$rid" 2>>"$LOG"
       break
     fi
+    beat
     pgrep -f "/Users/ghgate/slot-$SLOT/bin/Runner.Worker" >/dev/null 2>&1 && waited=-100000
     sleep 5; waited=$((waited + 5))
   done

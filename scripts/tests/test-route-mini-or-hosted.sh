@@ -56,7 +56,7 @@ run_case() {
   env GH="$WORK/gh" FAKE_FIX="$FIX" FAKE_GH_LOG="$log" GITHUB_OUTPUT="$ghout" \
       GITHUB_REPOSITORY=cretasfuture-ai/cretas EVENT_NAME=pull_request \
       HEAD_REPO=cretasfuture-ai/cretas PR_LABELS='["java"]' GITHUB_RUN_ID=999 \
-      MINI_QUEUE_THRESHOLD=4 "$@" bash "$SCRIPT" > "$out" 2>&1
+      MINI_QUEUE_THRESHOLD=4 ROUTE_NOW=1000000 MINI_HEARTBEAT=999990 "$@" bash "$SCRIPT" > "$out" 2>&1
   local rc=$? ok=1 why=""
   [ "$rc" = 0 ] || { ok=0; why="rc=$rc"; }
   grep -qxF "$want_line" "$out" || { ok=0; why="$why 缺行「$want_line」"; }
@@ -110,6 +110,12 @@ run_all() {
   run_case "fast 标签: 没有排队 -> mini (阈值 1)" \
     "ROUTE=mini queued=0 threshold=1 reason=below-threshold label=cretas-mini-fast" runner_fast=cretas-mini-fast any \
     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast
+  # mini 在线心跳 (2026-11-19): 排队数是 0 也不派 mini, 而且不去数排队 (不调 gh)。
+  run_case "心跳过期 (200s > 180s) -> hosted mini-offline, 不调 gh"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=999800
+  run_case "心跳缺失 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=
+  run_case "心跳不是数字 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini-pg" runner=ubuntu-latest none     MINI_HEARTBEAT=abc
+  run_case "心跳正好 180s (边界, 不算过期) -> mini"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini-pg" runner=cretas-mini-pg any     MINI_HEARTBEAT=999820
+  run_case "fast 标签心跳过期 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=1 reason=mini-offline label=cretas-mini-fast" runner_fast=ubuntu-latest none     MINI_LABEL=cretas-mini-fast MINI_QUEUE_THRESHOLD=1 ROUTE_OUTPUT_KEY=runner_fast MINI_HEARTBEAT=999000
 }
 
 echo "== 被测: $SCRIPT"
@@ -266,7 +272,36 @@ SH
     echo "  ok - 守卫变异对照: 删掉一处守卫后查出"
   fi
 fi
-[ "$PASSES" -ge 13 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 13)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+[ "$PASSES" -ge 18 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 18)"; REAL_FAILS=$((REAL_FAILS + 1)); }
+
+# ── 心跳: 写端 (refill.sh) 与读端 (workflow 两条路由都传 vars.MINI_HEARTBEAT) 必须都在 (形态 D/B: 接上没有)。
+if [ -z "${ROUTE_SCRIPT:-}" ]; then
+  hb_w=$(grep -c 'gh variable set MINI_HEARTBEAT' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  hb_r=$(grep -c 'MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}' "$ROOT_DIR/.github/workflows/java-gate-pr.yml")
+  hb_c=$(grep -c '^  beat$\|^    beat$' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  echo "READING: heartbeat writer=$hb_w readers=$hb_r beat_calls=$hb_c"
+  if [ "$hb_w" != 1 ] || [ "$hb_r" != 2 ] || [ "$hb_c" != 2 ]; then
+    echo "FAIL: 心跳没接全: refill.sh 要写 1 处并在空闲/忙碌两个循环里各调 1 次 beat, workflow 两条路由都要传 vars.MINI_HEARTBEAT"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 心跳写端/读端都接上"
+  fi
+  # 变异对照: 删掉年龄判断, 过期心跳必须被查出来 (变异体只跑场景, 不递归)。
+  HMUT="$WORK/route-hb-mutant.sh"
+  grep -v 'HEARTBEAT-AGE-CHECK' "$SCRIPT" > "$HMUT"
+  if grep -q 'HEARTBEAT-AGE-CHECK' "$HMUT" || ! grep -q 'HEARTBEAT-AGE-CHECK' "$SCRIPT"; then
+    echo "FAIL: 心跳变异没生效 (标记行找不到)"; REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    ROUTE_SCRIPT="$HMUT" bash "${BASH_SOURCE[0]}" > "$WORK/hb-mutant.log" 2>&1
+    hrc=$?
+    echo "READING: mutant(no heartbeat age) rc=$hrc $(grep '^READING: pass=' "$WORK/hb-mutant.log") $(grep -c 'FAIL - 心跳过期\|FAIL - fast 标签心跳过期' "$WORK/hb-mutant.log") 个过期场景变红"
+    if [ "$hrc" = 0 ] || ! grep -q 'FAIL - 心跳过期' "$WORK/hb-mutant.log"; then
+      echo "FAIL: 心跳变异对照: 删掉年龄判断后过期场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+    else
+      echo "  ok - 心跳变异对照: 删掉年龄判断后过期场景变红"
+    fi
+  fi
+fi
 
 # ── 变异对照: 比较方向改反 (-lt -> -ge), 场景必须变红。仅在测真脚本时做 (测变异体时不递归)。
 if [ -z "${ROUTE_SCRIPT:-}" ]; then
