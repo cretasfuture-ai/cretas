@@ -12,7 +12,7 @@
  * RBAC: 成本字段 (totalMaterialCost 等) 后端按 canViewPrice 角色脱敏返 null,
  *       调用方自行决定是否渲染成本区。
  */
-import { ref, computed, onScopeDispose, type Ref, type ComputedRef } from 'vue';
+import { ref, shallowRef, computed, onScopeDispose, type Ref, type ComputedRef } from 'vue';
 import {
   getExternalProduction,
   getFactoryCostStructure,
@@ -32,7 +32,8 @@ export interface ProductionGoldDateQuery {
 }
 
 export function useExternalProduction(factoryId: Ref<string>, summaryOnly = false) {
-  const data = ref<ExternalProductionData | null>(null);
+  // The snapshot is replaced as a whole. Preserve its null-only yieldRate and cost fields.
+  const data = shallowRef<ExternalProductionData | null>(null);
   const error = ref('');
   let revision = 0;
   let loadedFactory = '';
