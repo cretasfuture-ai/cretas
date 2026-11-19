@@ -4586,6 +4586,10 @@ public class PurchaseServiceImpl implements PurchaseService {
         if (taxRate.compareTo(BigDecimal.ZERO) < 0 || taxRate.compareTo(new BigDecimal("100")) > 0) {
             throw new BusinessException(400, "采购税率必须在0到100之间").withHintTarget("taxRate");
         }
+        if (taxRate.signum() > 0 && taxRate.compareTo(BigDecimal.ONE) < 0) {
+            throw new BusinessException(400, "采购税率请按百分数填写，例如 13% 填 13，免税填 0")
+                    .withHintTarget("taxRate");
+        }
         item.setTaxRate(taxRate);
         snapshotPurchaseAmounts(item);
     }
