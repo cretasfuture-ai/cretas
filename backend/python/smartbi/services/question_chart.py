@@ -109,6 +109,47 @@ def _measure_column(df, query: str) -> Optional[str]:
     return None
 
 
+# 问题里的指标说法 -> 列名里会出现的词 (只匹配列的「基础名」, 括号里的公式不算)
+_METRIC_SYNONYMS: List[Tuple[Tuple[str, ...], Tuple[str, ...]]] = [
+    (("产量", "产出", "生产了", "出品", "良品"), ("良品", "产量", "产出")),
+    (("出成率", "良率"), ("出成率", "良率")),
+    (("废品",), ("废品",)),
+    (("次品",), ("次品",)),
+    (("人数", "多少人"), ("人数",)),
+    (("出勤", "人均"), ("出勤",)),
+    (("批次", "多少批"), ("批次",)),
+    (("产能", "利用率"), ("产能",)),
+    (("停机",), ("停机",)),
+    (("成本", "毛利", "利润"), ("成本", "毛利", "利润")),
+]
+
+
+def _column_base_name(col: str) -> str:
+    """去掉括号里的公式和结尾的英文单位: 出成率(良品/(良品+废品+次品)) -> 出成率, 良品kg -> 良品。"""
+    base = re.split(r"[（(]", str(col), maxsplit=1)[0]
+    return re.sub(r"[A-Za-z]+$", "", base).strip()
+
+
+def relevant_measure_columns(query: str, numeric_cols: List[str]) -> List[str]:
+    """问题点名的指标对应哪几列 (保持列原顺序); 一列都对不上返回 [] (调用方保持原来的默认选列)。
+
+    问「哪天产量最高」就该是 良品kg, 而不是永远取表里前 3 个数值列 (人数/出勤率/批次数)。
+    """
+    q = query or ""
+    picked: List[str] = []
+    for col in numeric_cols:
+        base = _column_base_name(col)
+        hit = len(base) >= 2 and base in q
+        if not hit:
+            for triggers, col_words in _METRIC_SYNONYMS:
+                if any(t in q for t in triggers) and any(w in base for w in col_words):
+                    hit = True
+                    break
+        if hit:
+            picked.append(col)
+    return picked
+
+
 def asked_month(query: str) -> Optional[int]:
     m = _MONTH_RE.search(query or "")
     return int(m.group(1)) if m else None
