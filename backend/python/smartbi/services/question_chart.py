@@ -174,37 +174,43 @@ def measure_columns_only(cols: List[str], field_meta: Optional[List[Dict[str, An
 
 
 _OVERVIEW_WORDS = ("概况", "概览", "整体", "总体", "总结", "怎么样", "如何", "报告", "洞察", "分析一下", "看一下", "看看")
+_RANKING_WORDS = ("最高", "最多", "最大", "最低", "最少", "最小", "排名", "排行", "哪个", "哪些", "哪条", "哪台",
+                  "哪天", "哪家", "哪种", "哪类", "top", "Top", "TOP")
+_MONEY_DEFAULT_WORDS = ("销售金额", "销售额", "营业额", "营业收入", "实收", "主营业务收入", "金额")
 
 
-def is_unrelated_to_measures(query: str, matched_measures: bool) -> bool:
-    """问题没点出任何指标列、也不是概览类问法 -> 兜底「数据概览」图 (前 3 个数值列) 与问题无关, 不该出。
+def is_unrelated_to_measures(query: str, matched_measures: bool, measure_count: Optional[int] = None) -> bool:
+    """问题没点出任何指标列 -> 兜底「数据概览」图 (前 3 个数值列) 与问题无关, 不该出。
 
-    问题已匹配到指标列时永远相关; 空问题/概览类问法 (概况/整体/怎么样…) 仍保留概览图。
+    区分两种「没匹配上」: 问题明确问的是别的指标 (matched_measures=True 且没选它, 由调用方处理),
+    和我们识别不出问的是哪一列。后者只在问题确实与指标无关时才不出图:
+    只有一个指标列 (问什么都是它)、排名类问法 (哪条产线损耗最高)、概览类问法 (概况/整体) 都保留。
     """
     q = (query or "").strip()
     if matched_measures or not q:
         return False
+    if measure_count is not None and measure_count <= 1:
+        return False
+    if any(w in q for w in _RANKING_WORDS):
+        return False
     return not any(w in q for w in _OVERVIEW_WORDS)
-
-
-_MONEY_DEFAULT_WORDS = ("销售金额", "销售额", "营业额", "营业收入", "实收", "主营业务收入", "金额")
 
 
 def top5_chart_relevant(query: str, measures: List[str], primary_measure: Optional[str]) -> bool:
     """库里聚合的「Top 5 维度 (按 primary_measure)」图该不该配给这个问题。
 
-    primary_measure 是金额类关键词命中的 (销售额/金额…) 时保持原样 (金额是默认口径)。
-    否则它只是「第一个指标列」(味美日汇总永远是 人数, 页脚就固定讲「各周人数」):
-    问题点名的指标里有它才出; 点名了别的指标就不出 (由按问题选列的图负责); 什么都没点名且不是概览问法也不出。
+    1. 问题明确点名了指标: 有 primary_measure 才出, 点名的是别的指标就不出 (金额类默认口径不再抢占);
+    2. 识别不到问的是哪一列: 只有一个指标 / 金额类默认口径 / 排名类问法 / 概览类问法才保留;
+       与指标无关的问题 (如问「当日说明有什么特殊情况」) 不出, 否则页脚固定讲第一个指标 (味美日汇总的「各周人数」)。
     """
     if not primary_measure:
         return False
-    if any(w in primary_measure for w in _MONEY_DEFAULT_WORDS):
-        return True
     asked = relevant_measure_columns(query or "", list(measures or []))
     if asked:
         return primary_measure in asked
-    return not is_unrelated_to_measures(query or "", False)
+    if len(measures or []) <= 1 or any(w in primary_measure for w in _MONEY_DEFAULT_WORDS):
+        return True
+    return not is_unrelated_to_measures(query or "", False, len(measures or []))
 
 
 def asked_month(query: str) -> Optional[int]:

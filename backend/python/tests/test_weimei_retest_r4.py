@@ -157,6 +157,7 @@ async def test_1_stale_cached_aggregate_bundle_with_batch_number_as_measure_no_l
     stale = _bundle(STALE_XINGFA_FIELDS, ["批号", "架次", "醒发分钟", "温度℃", "湿度%"], "批号",
                     {"品类": [{"label": "刀切", "total": 188709501.0}, {"label": "花卷", "total": 94000000.0},
                               {"label": "刮包60", "total": 47505600.0}]})
+    stale["agg_lines"].append("- 批号 总计: 188,709,501")        # 旧包里的数: 下面的阳性对照证明它进得了提示词
     get_cache().set(5336, stale)
     events, done, prompts, _ = await ask(monkeypatch, "10月醒发平均多少分钟？温湿度有无异常？",
                                          {5336: (xingfa_rows(), XINGFA_FIELDS)})
@@ -171,9 +172,12 @@ async def test_1_stale_cached_aggregate_bundle_with_batch_number_as_measure_no_l
 async def test_1_fresh_bundle_with_unchanged_roles_is_still_used_not_recomputed(monkeypatch):
     fresh = _bundle(XINGFA_FIELDS, ["架次", "醒发分钟", "温度℃", "湿度%"], "架次",
                     {"品类": [{"label": "刀切", "total": 99.0}, {"label": "花卷", "total": 80.0}]})
+    fresh["agg_lines"].append("- 架次 总计: 188,709,501")          # 仪器: 缓存包里的数确实会进提示词
     get_cache().set(5336, fresh)
-    await ask(monkeypatch, "10月醒发平均多少分钟？温湿度有无异常？", {5336: (xingfa_rows(), XINGFA_FIELDS)})
+    _, _, prompts, _ = await ask(monkeypatch, "10月醒发平均多少分钟？温湿度有无异常？",
+                                 {5336: (xingfa_rows(), XINGFA_FIELDS)})
     assert get_cache().get(5336) is fresh                         # 角色没变: 缓存包原样保留 (不白白重算)
+    assert "188,709,501" in "".join(prompts)                      # 阳性对照: 同样的装置下, 缓存包里的数读得到
 
 
 def test_1_bundle_staleness_compares_roles_of_shared_fields_only():

@@ -507,13 +507,19 @@ def bundle_is_stale_for_field_meta(bundle: Optional[Dict[str, Any]], field_meta:
     if not bundle or not field_meta:
         return False
     cached = {str(f.get("original_name")): f for f in (bundle.get("field_meta") or []) if f.get("original_name")}
-    for f in field_meta:
-        old = cached.get(str(f.get("original_name")))
+    fresh = {str(f.get("original_name")): f for f in field_meta if f.get("original_name")}
+    for name, f in fresh.items():
+        old = cached.get(name)
         if old is None:
+            # 新增了指标列: 缓存包里没有它的合计。(没有语义名的占位列由多级表头过滤丢掉, 不算)
+            if f.get("is_measure") and not _UNNAMED_PAT.match(name):
+                return True
             continue
         if any(bool(old.get(k)) != bool(f.get(k)) for k in ("is_measure", "is_dimension", "is_time")):
             return True
-    return False
+    # 缓存包里的指标列在现在的字段定义里已经没有了
+    return any(old.get("is_measure") and name not in fresh and not _UNNAMED_PAT.match(name)
+               for name, old in cached.items())
 
 
 async def load_bundle_from_db(pool, upload_id: int) -> Optional[Dict[str, Any]]:

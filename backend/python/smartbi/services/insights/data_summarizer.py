@@ -119,10 +119,11 @@ def prepare_data_summary(df: pd.DataFrame, field_meta=None) -> str:
     if len(df) > 0:
         sample_df = df.head(3).astype(object)
         for c in id_cols & set(sample_df.columns):
-            from smartbi.services.row_level_qa import strip_code_hash
+            from smartbi.services.row_level_qa import hash_escaped_column, strip_code_hash
+            _strip = hash_escaped_column(df[c])
             sample_df[c] = sample_df[c].map(
                 lambda v: str(int(v)) if isinstance(v, float) and v == v and v == int(v)
-                else (strip_code_hash(v) if isinstance(v, str) else v))
+                else (strip_code_hash(v) if _strip and isinstance(v, str) else v))
         sample_rows = sample_df.to_dict('records')
         sample_text = json.dumps(sample_rows, ensure_ascii=False, default=str)
         if len(sample_text) < 1500:

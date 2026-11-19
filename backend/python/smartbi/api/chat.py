@@ -4319,6 +4319,7 @@ def _build_charts_for_query(query: str, df, data: list, field_meta: Optional[lis
     # 页脚「数据驱动」按图里的数现算: 图的指标要跟问题相关 (问产量就画良品, 不是永远取前 3 个数值列)。
     # 对不上任何列时保持原来的默认选列。
     _asked_cols = []
+    _n_measures_before = len(numeric_cols)
     try:
         from smartbi.services.question_chart import relevant_measure_columns
         _asked_cols = relevant_measure_columns(query or "", numeric_cols)
@@ -4368,7 +4369,8 @@ def _build_charts_for_query(query: str, df, data: list, field_meta: Optional[lis
     _skip_unrelated_overview = False
     try:
         from smartbi.services.question_chart import is_unrelated_to_measures
-        _skip_unrelated_overview = bool(field_meta) and is_unrelated_to_measures(query or "", bool(_asked_cols))
+        _skip_unrelated_overview = bool(field_meta) and is_unrelated_to_measures(
+            query or "", bool(_asked_cols), _n_measures_before)
     except Exception as _ov_err:
         logger.warning(f"[chart] overview relevance check failed (keep chart): {_ov_err}")
 
