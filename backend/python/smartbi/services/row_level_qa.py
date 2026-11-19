@@ -670,7 +670,7 @@ class ValueNotFound(PlanError):
 
 def _apply_filter(
     df: pd.DataFrame, f: dict, strict_values: bool = True, *,
-    source: Optional[pd.Series] = None, role: Optional[dict] = None, hash_escaped: bool = False,
+    role: Optional[dict] = None, hash_escaped: bool = False,
 ) -> pd.Series:
     col, op, val = f["col"], f["op"], f["value"]
     s = df[col]
@@ -679,7 +679,7 @@ def _apply_filter(
     ):
         sv0, v0 = s.astype(str).str.strip(), val.strip()
         if (_MONTH_PREFIX_RE.fullmatch(v0) and _has_date_role(s, role)
-                and _valid_date_prefix(source if source is not None else s, v0)):
+                and _valid_date_prefix(s, v0)):
             matches = s.notna() & (sv0.str[:len(v0)] == v0)
             if matches.any() or op == "!=" or not strict_values:
                 return matches if op == "==" else ~matches
@@ -773,15 +773,17 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
                 f"「{m['reweighted_from']}」不能逐行取平均, 已按其列头公式用全部行加权计算 "
                 f"(Σ{'+'.join(m['num'])} / Σ{'+'.join(m['den'])})"
             )
-    work = df
+    matched_mask = pd.Series(True, index=df.index)
     fdesc: List[str] = []
     for f in plan["filters"]:
         col = f["col"]
-        work = work[_apply_filter(
-            work, f, strict_values, source=df[col], role=roles.get(col), hash_escaped=col in hash_cols,
-        )]
+        # 校验各条件在原表中的取值，再求交集；空交集是有效的计算结果。
+        matched_mask &= _apply_filter(
+            df, f, strict_values, role=roles.get(col), hash_escaped=col in hash_cols,
+        )
         fdesc.append(f"{f['col']} {f['op']} {f['value']!r}" if f["op"] != "notnull"
                      else f"{f['col']} 非空")
+    work = df[matched_mask] if fdesc else df
     matched = len(work)
     gb, metrics = plan["group_by"], plan["metrics"]
     pct_cols: set = set()

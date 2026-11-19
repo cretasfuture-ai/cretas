@@ -72,6 +72,16 @@ async def test_p1_1_enumerated_subtotals_remain_local_even_when_they_cover_all_g
     assert done["answer"] == answer and done["answer_corrected"] is False
 
 
+async def test_review_8_corrects_every_global_total_and_keeps_interleaved_subtotals(monkeypatch):
+    answer = "全月一共 52 卷。A产品一共 52 卷。全表总用量为 81 卷。B产品一共 81 卷。整月合计 133 卷。"
+    expected = "全月一共 133 卷。A产品一共 52 卷。全表总用量为 133 卷。B产品一共 81 卷。整月合计 133 卷。"
+    _, done, prompts, _ = await ask(
+        monkeypatch, FILM_Q, {5321: (two_group_rows(52, 81), FILM_FIELDS)}, answer=answer, plans=[GROUP_PLAN],
+    )
+    assert "总用量 = 133" in prompts[0]
+    assert done["answer"] == expected and done["answer_corrected"] is True
+
+
 # ============ P1-2 「计划与实际」规则: 别的指标 / 时间范围 ============
 
 PLAN_OUTPUT_FIELDS = [("日期", False, False, True), ("计划工单数", True, False, False),
@@ -211,6 +221,28 @@ async def test_p1_3_incidental_jun_does_not_change_weekly_sum_to_mean(monkeypatc
     assert "| 2026-W41 | 60 |" in block and "| 2026-W40 | 40 |" in block
 
 
+async def test_review_6_weekly_ranking_preserves_both_date_bounds(monkeypatch):
+    fields = [("日期", False, False, True), ("良品产量kg", True, False, False)]
+    rows = [{"日期": "2026-09-30", "良品产量kg": 800}]
+    rows += [{"日期": f"2026-10-{day:02d}", "良品产量kg": kg}
+             for day, kg in [(1, 10), (5, 20), (15, 30), (16, 900), (23, 1000)]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    plan = {"intent": "compute", "filters": [
+        {"col": "日期", "op": ">=", "value": "2026-10-01"},
+        {"col": "日期", "op": "<=", "value": "2026-10-15"},
+    ], "group_by": ["周(按日期折算)"],
+        "metrics": [{"name": "良品区间合计", "func": "sum", "col": "良品产量kg"}]}
+    _, _, prompts, calls = await ask(
+        monkeypatch, "10月1日到10月15日，哪一周良品产量最高", {5398: (rows, fields)},
+        plans=[plan], candidates=candidates,
+    )
+    assert len(calls) == 1
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "命中 3 / 6 行" in block
+    ranking = [line for line in block.splitlines() if line.startswith("| 2026-W")]
+    assert ranking == ["| 2026-W42 | 30 |", "| 2026-W41 | 20 |", "| 2026-W40 | 10 |"]
+
+
 # ============ P1-4 前缀语义: 只对日期字段 / 整列约定 ============
 
 SKU_FIELDS = PLAN_FIELDS + [("SKU", False, True, False)]
@@ -317,6 +349,47 @@ async def test_p1_4_literal_double_hash_is_displayed_and_can_be_queried(monkeypa
     block = prompts[0].split("## 全表精确计算结果")[1]
     assert "命中 20 / 20 行" in block and "| ##DEF |" in block
     assert '"产品编码": "##DEF"' in prompts[0]
+
+
+def _disjoint_filter_rows():
+    rows = code_rows()[:2]
+    rows[0].update(产品编码="#A-01", 计划产线="A线", 日期="2026-10-01", 结论="实际A")
+    rows[1].update(产品编码="#B-02", 计划产线="B线", 日期="2026-11-01", 结论="实际B")
+    return rows
+
+
+@pytest.mark.parametrize(("column", "value"), [
+    ("产品编码", "#A-01"), ("产品编码", "A-01"), ("日期", "2026-10"),
+])
+@pytest.mark.parametrize("reverse_order", [False, True])
+async def test_review_7_existing_values_can_have_an_empty_intersection(monkeypatch, column, value, reverse_order):
+    filters = [{"col": "计划产线", "op": "==", "value": "B线"}, {"col": column, "op": "==", "value": value}]
+    if reverse_order:
+        filters.reverse()
+    plan = {"intent": "compute", "filters": filters}
+    alternate = {"intent": "compute", "filters": [filters[0]]}
+    question = f"计划明细里 B 线且{column}为{value}有几行"
+    tables = {5323: (_disjoint_filter_rows(), PLAN_FIELDS)}
+    _, _, prompts, calls = await ask(monkeypatch, question, tables, plans=[plan, alternate], candidates=PLAN_DETAIL)
+    assert len(calls) == 1
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert "命中 0 / 2 行" in block and "无满足条件的行" in block
+    _, _, cached, cache_calls = await ask(monkeypatch, question, tables, plans=[alternate], candidates=PLAN_DETAIL)
+    assert cache_calls == [] and "命中 0 / 2 行" in cached[0].split("## 全表精确计算结果")[1]
+
+
+async def test_review_7_missing_value_is_validated_after_an_empty_intersection(monkeypatch):
+    filters = [{"col": "计划产线", "op": "==", "value": "B线"},
+               {"col": "产品编码", "op": "==", "value": "A-01"}]
+    invalid = {"intent": "compute", "filters": [*filters, {"col": "结论", "op": "==", "value": "未知"}]}
+    corrected = {"intent": "compute", "filters": filters}
+    _, _, prompts, calls = await ask(
+        monkeypatch, "计划明细里 B 线的 A-01 产品有几行", {5323: (_disjoint_filter_rows(), PLAN_FIELDS)},
+        plans=[invalid, corrected], candidates=PLAN_DETAIL,
+    )
+    assert len(calls) == 2 and "字段「结论」没有取值「未知」" in calls[1]
+    assert "实际A / 实际B" in calls[1]
+    assert "命中 0 / 2 行" in prompts[0].split("## 全表精确计算结果")[1]
 
 
 # ============ P1-5 计划缓存: 连续两次 / 同表头不同取值 ============
