@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# GUARDS=scripts/ci/route-mini-or-hosted.sh,scripts/ci/canada-mini-gate/refill.sh,.github/workflows/java-gate-pr.yml,.github/workflows/rn-gate.yml,.github/workflows/web-admin-gate.yml
+# GUARDS=scripts/ci/route-mini-or-hosted.sh,scripts/ci/canada-mini-gate/refill.sh,scripts/ci/canada-mini-gate/queue-snapshot.sh,scripts/ci/canada-mini-gate/setup.sh,scripts/ci/canada-mini-gate/rollout.md,.github/workflows/java-gate-pr.yml,.github/workflows/rn-gate.yml,.github/workflows/web-admin-gate.yml
 # 场景测试: mini 共用槽池路由 (mini 优先, 满了溢出托管)。用假 gh 驱动, 不碰网络。
 #   少于阈值 -> mini / 达到阈值 -> hosted / API 出错 -> hosted / 返回结构不对 -> hosted /
-#   fork -> hosted (且不调 gh) / ci-hosted 标签 -> hosted (且不调 gh) / merge_group -> 照常计数 /
+#   fork、ci-hosted、来源未确认的合并组、过期心跳、零容量和完整重跑都走托管。
 #   阈值按时段 (day 2 / full 3) / 排队数把所有 mini 标签 (公共 + 旧 pg/fast)、所有上 mini 的 workflow 一起算。
 # 计数口径: 只数 $MINI_WORKFLOWS 的 run 里 status=queued 且带任一 mini 标签的作业, 排除本 run。
 # 2026-11-19 21:5x Steve「不跑5个了……重点是这4个槽不要只给pg用」+「其他检查也上 mini」: 槽 1-4 共用,
-# refill.sh 的排队口径 (同一份 fixture 跑它的 jq 过滤式) 与名次 (全部启用槽里排) 一并核对。
+# refill.sh 和路由跑同一份多页 fixture，另核对容量、空闲名次、清理计划和缓存隔离。
 # 末尾自带变异对照: 比较方向改反 / 只数公共标签 / 删掉槽数上限 / 删掉心跳年龄等, 都必须变红 (变异没生效就判红, 硬约束 C)。
 set -uo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -17,27 +17,41 @@ WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 FIX="$WORK/fix"
 mkdir -p "$FIX"
-# 变异体放在 $WORK/mut 下, 旁边复制一份 canada-mini-gate/refill.sh, 让「时段取自 refill.sh」的场景照常可跑。
-mutant_dir() { mkdir -p "$WORK/mut/canada-mini-gate"; cp "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh" "$WORK/mut/canada-mini-gate/refill.sh"; }
+# Keep the same runtime dependencies next to mutated routers or refill scripts.
+GATE="$ROOT_DIR/scripts/ci/canada-mini-gate"
+mutant_dir() {
+  mkdir -p "$WORK/mut/canada-mini-gate"
+  cp "$GATE/refill.sh" "$GATE/queue-snapshot.sh" "$WORK/mut/canada-mini-gate/"
+}
 
 # ── 假 gh: `gh api <path>` -> 按路径取 fixture; FAKE_GH_FAIL=1 时一律失败; 每次调用记一行。
 cat > "$WORK/gh" <<'SH'
 #!/usr/bin/env bash
 echo "$*" >> "$FAKE_GH_LOG"
-[ "${FAKE_GH_FAIL:-0}" = "1" ] && { echo "HTTP 502: Bad Gateway" >&2; exit 1; }
-[ "$1" = "api" ] || exit 2
-path="$2"
+[ "${FAKE_GH_FAIL:-0}" = 1 ] && exit 1
+[ "$1" = api ] || exit 2
+shift
+paginate=0
+if [ "$1" = --paginate ]; then paginate=1; shift; fi
+path="$1"; shift
+filter=
+if [ "${1:-}" = -q ]; then filter="$2"; fi
 case "$path" in
-  */actions/runs\?status=queued*)      cat "$FAKE_FIX/runs-queued.json" ;;
-  */actions/runs\?status=in_progress*) cat "$FAKE_FIX/runs-in_progress.json" ;;
-  */actions/runs/*/jobs*)
-    id=${path#*/actions/runs/}; id=${id%%/*}
-    cat "$FAKE_FIX/jobs-$id.json" ;;
-  */actions/runs/*)
-    id=${path#*/actions/runs/}
-    cat "$FAKE_FIX/run-$id.json" ;;
+  graphql) cat "$FAKE_FIX/group.json"; exit $? ;;
+  */actions/runs\?status=queued*) file=runs-queued ;;
+  */actions/runs\?status=in_progress*) file=runs-in_progress ;;
+  */actions/runs/*/jobs*) id=${path#*/actions/runs/}; file=jobs-${id%%/*} ;;
   *) echo "unexpected path $path" >&2; exit 3 ;;
 esac
+page() {
+  if [ -n "$filter" ]; then jq -r "$filter" "$1"; else cat "$1"; fi
+}
+page "$FAKE_FIX/$file.json" || exit 1
+if [ "$paginate" = 1 ] && [ -f "$FAKE_FIX/$file-2.json" ]; then
+  [ "${FAKE_GH_PAGE_FAIL:-}" != "$file" ] || exit 1
+  [ "${FAKE_GH_TRUNCATED:-}" != "$file" ] || exit 0
+  page "$FAKE_FIX/$file-2.json" || exit 1
+fi
 SH
 chmod +x "$WORK/gh"
 
@@ -54,6 +68,22 @@ write_fixtures() {
   # 103: 2 个排队的 mini 作业 —— 只有把 ops-script-tests.yml 放进清单时才计
   printf '%s' '{"jobs":[{"status":"queued","labels":["cretas-mini"]},{"status":"queued","labels":["cretas-mini"]}]}' > "$FIX/jobs-103.json"
   printf '%s' '{"jobs":[{"status":"queued","labels":["cretas-mini"]},{"status":"queued","labels":["cretas-mini"]},{"status":"queued","labels":["cretas-mini"]},{"status":"queued","labels":["cretas-mini"]},{"status":"queued","labels":["cretas-mini-pg"]}]}' > "$FIX/jobs-999.json"
+  local file
+  for file in "$FIX"/runs-*.json; do
+    jq '.total_count = (.workflow_runs | length)' "$file" > "$file.tmp" && mv "$file.tmp" "$file" || exit 2
+  done
+  for file in "$FIX"/jobs-*.json; do
+    jq '.jobs |= (to_entries | map(.value + {id: (.key + 1)})) | .total_count = (.jobs | length)' "$file" > "$file.tmp" && mv "$file.tmp" "$file" || exit 2
+  done
+}
+
+write_paged_fixtures() {
+  # Page 1 has exactly 100 irrelevant runs/jobs, page 2 has the only work.
+  jq -n '{total_count:101, workflow_runs:[range(200;300) | {id:.,path:".github/workflows/ops-script-tests.yml"}]}' > "$FIX/runs-queued.json" || exit 2
+  jq -n '{total_count:101, workflow_runs:[{id:102,path:".github/workflows/web-admin-gate.yml"}]}' > "$FIX/runs-queued-2.json" || exit 2
+  printf '%s\n' '{"total_count":0,"workflow_runs":[]}' > "$FIX/runs-in_progress.json"
+  jq -n '{total_count:102, jobs:[range(300;400) | {id:.,status:"queued",labels:["ubuntu-latest"]}]}' > "$FIX/jobs-102.json" || exit 2
+  jq -n '{total_count:102,jobs:[{id:400,status:"queued",labels:["cretas-mini"]},{id:401,status:"queued",labels:["cretas-mini-fast"]}]}' > "$FIX/jobs-102-2.json" || exit 2
 }
 
 FAILS=0
@@ -67,13 +97,17 @@ run_case() {
   env GH="$WORK/gh" FAKE_FIX="$FIX" FAKE_GH_LOG="$log" GITHUB_OUTPUT="$ghout" \
       GITHUB_REPOSITORY=cretasfuture-ai/cretas EVENT_NAME=pull_request \
       HEAD_REPO=cretasfuture-ai/cretas PR_LABELS='["java"]' GITHUB_RUN_ID=999 \
-      MINI_WINDOW=day MINI_QUEUE_THRESHOLD=4 ROUTE_NOW=1000000 MINI_HEARTBEAT=999990 "$@" bash "$SCRIPT" > "$out" 2>&1
+      MINI_WINDOW=day MINI_QUEUE_THRESHOLD=4 ROUTE_NOW=1000000 MINI_POOL_V2_ENABLED=1 MINI_POOL_CAPACITY=999990:3:2 "$@" bash "$SCRIPT" > "$out" 2>&1
   local rc=$? ok=1 why=""
   [ "$rc" = 0 ] || { ok=0; why="rc=$rc"; }
   grep -qxF "$want_line" "$out" || { ok=0; why="$why 缺行「$want_line」"; }
   [ "$(grep -c '^ROUTE=' "$out")" = 1 ] || { ok=0; why="$why ROUTE 行不是恰好 1 条"; }
   grep -qxF "$want_runner" "$ghout" || { ok=0; why="$why GITHUB_OUTPUT 没有 $want_runner"; }
-  grep -qE '^mini_window=(day|full)$' "$ghout" || { ok=0; why="$why GITHUB_OUTPUT 没有 mini_window"; }
+  grep -qE '^mini_window=(day|full)$' "$ghout" || { ok=0; why="$why missing mini_window"; }
+  grep -qxF route_policy=v2 "$ghout" || { ok=0; why="$why missing route_policy"; }
+  if [ -n "${WANT_GROUP:-}" ]; then
+    grep -qxF "mini_group_verified=$WANT_GROUP" "$ghout" || { ok=0; why="$why wrong merge group verification output"; }
+  fi
   case "$want_calls" in
     none) [ ! -s "$log" ] || { ok=0; why="$why 不该调 gh 却调了"; } ;;
     any)  [ -s "$log" ] || { ok=0; why="$why 该调 gh 却没调"; } ;;
@@ -111,33 +145,82 @@ run_all() {
     "ROUTE=hosted queued=na threshold=4 reason=fork label=cretas-mini window=day" runner=ubuntu-latest none HEAD_REPO=stranger/cretas
   run_case "ci-hosted 标签 -> hosted 且不调 gh" \
     "ROUTE=hosted queued=na threshold=4 reason=ci-hosted-label label=cretas-mini window=day" runner=ubuntu-latest none PR_LABELS='["java","ci-hosted"]'
-  run_case "merge_group (无 head 仓库) -> 照常计数 -> mini" \
-    "ROUTE=mini queued=3 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any EVENT_NAME=merge_group HEAD_REPO=
+  local group_git="$WORK/group-git" base first head
+  mkdir -p "$group_git"
+  git -C "$group_git" init -q || exit 2
+  git -C "$group_git" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m base || exit 2
+  base=$(git -C "$group_git" rev-parse HEAD) || exit 2
+  git -C "$group_git" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m first || exit 2
+  first=$(git -C "$group_git" rev-parse HEAD) || exit 2
+  git -C "$group_git" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -q --allow-empty -m second || exit 2
+  head=$(git -C "$group_git" rev-parse HEAD) || exit 2
+  local group_env=(EVENT_NAME=merge_group HEAD_REPO= "GIT_DIR=$group_git/.git" "GROUP_BASE_SHA=$base" "GROUP_HEAD_SHA=$head" GROUP_BASE_REF=refs/heads/main)
+  jq -n --arg first "$first" --arg head "$head" '
+    def row($pos; $oid; $pr): {position:$pos, headCommit:{oid:$oid}, pullRequest:{number:$pr,
+      headRepository:{nameWithOwner:"cretasfuture-ai/cretas"}, labels:{nodes:[],pageInfo:{hasNextPage:false}}}};
+    {data:{repository:{mergeQueue:{entries:{nodes:[row(1;$first;1),row(2;$head;2)]}}}}}' > "$FIX/group-original.json" || exit 2
+  cp "$FIX/group-original.json" "$FIX/group.json"
+  WANT_GROUP=true run_case "合并组 2 个 PR 均确认同仓 -> mini" \
+    "ROUTE=mini queued=3 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any "${group_env[@]}"
+  local why expr
+  for why in fork missing-repo missing-member wrong-commit; do
+    case "$why" in
+      fork) expr='.[0].pullRequest.headRepository.nameWithOwner = "fork/cretas"' ;;
+      missing-repo) expr='.[0].pullRequest.headRepository = null' ;;
+      missing-member) expr='del(.[0])' ;;
+      wrong-commit) expr='.[0].headCommit.oid = "other"' ;;
+    esac
+    jq ".data.repository.mergeQueue.entries.nodes |= ($expr)" "$FIX/group-original.json" > "$FIX/group.json" || exit 2
+    WANT_GROUP=false run_case "合并组前序 $why -> 整组托管" \
+      "ROUTE=hosted queued=na threshold=4 reason=group-unverified label=cretas-mini window=day" runner=ubuntu-latest any "${group_env[@]}"
+  done
+  WANT_GROUP=false run_case "合并组队列查询失败 -> 整组托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=group-unverified label=cretas-mini window=day" runner=ubuntu-latest any "${group_env[@]}" FAKE_GH_FAIL=1
+  jq '.data.repository.mergeQueue.entries.nodes[0].pullRequest.labels.nodes = [{name:"ci-hosted"}]' "$FIX/group-original.json" > "$FIX/group.json" || exit 2
+  WANT_GROUP=false run_case "合并组前序 PR 有 ci-hosted -> 整组托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=ci-hosted-label label=cretas-mini window=day" runner=ubuntu-latest any "${group_env[@]}"
+  for event in pull_request merge_group; do
+    run_case "$event 完整重跑 -> 托管" \
+      "ROUTE=hosted queued=na threshold=4 reason=retry-hosted label=cretas-mini window=day" runner=ubuntu-latest none EVENT_NAME="$event" GITHUB_RUN_ATTEMPT=2
+  done
+  run_case "新标签未开放 -> 托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=rollout-disabled label=cretas-mini window=day" runner=ubuntu-latest none MINI_POOL_V2_ENABLED=
   run_case "阈值不是整数 -> hosted" \
     "ROUTE=hosted queued=na threshold=abc reason=bad-threshold label=cretas-mini window=day" runner=ubuntu-latest none MINI_QUEUE_THRESHOLD=abc
   # 结构不对 (令牌失效时 API 回 {"message":...}) 不许当成 0 排队。
   printf '%s' '{"message":"Bad credentials"}' > "$FIX/runs-queued.json"
   run_case "返回结构不对 -> hosted (不当成 0)" \
     "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest any
-  # 都没有运行 -> 0 排队 -> mini
-  printf '%s' '{"workflow_runs":[]}' > "$FIX/runs-queued.json"
-  printf '%s' '{"workflow_runs":[]}' > "$FIX/runs-in_progress.json"
+  printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$FIX/runs-queued.json"
+  printf '%s' '{"total_count":0,"workflow_runs":[]}' > "$FIX/runs-in_progress.json"
   run_case "没有运行 -> queued=0 -> mini" \
     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any
-  # mini 在线心跳 (2026-11-19): 排队数是 0 也不派 mini, 而且不去数排队 (不调 gh)。
-  run_case "心跳过期 (200s > 180s) -> hosted mini-offline, 不调 gh"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none     MINI_HEARTBEAT=999800
-  run_case "心跳缺失 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none     MINI_HEARTBEAT=
-  run_case "心跳不是数字 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none     MINI_HEARTBEAT=abc
-  run_case "心跳正好 180s (边界, 不算过期) -> mini"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any     MINI_HEARTBEAT=999820
-  # 心跳年龄以本 run 的 run_started_at 为参照 (2026-11-19: vars 在 run 创建时定格, changes 在托管机排了
-  # 27 分钟 -> 按「现在」算成 1642s 误判离线)。不给 ROUTE_NOW, 走真实时间 + 假 gh 的 runs/999。
-  local now started
-  now=$(date +%s); started=$((now - 1600))
-  jq -nc --argjson s "$started" '{run_started_at: ($s | todate)}' > "$FIX/run-999.json"
-  run_case "排队 1600s 但心跳在 run 开始前 30s -> mini (按 run 开始算年龄)"     "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
-  run_case "心跳在 run 开始前 400s -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 400))
-  rm -f "$FIX/run-999.json"
-  run_case "读不到 run 开始时间 -> 退回按现在算 -> hosted mini-offline"     "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest any     ROUTE_NOW= MINI_HEARTBEAT=$((started - 30))
+  run_case "同一心跳在 run 启动时仍新鲜 -> mini" \
+    "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any ROUTE_NOW=999830 MINI_POOL_CAPACITY=999800:3:2
+  run_case "派发时心跳过期 (即使 run 启动时正常) -> 托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none MINI_POOL_CAPACITY=999800:3:2
+  run_case "心跳缺失 -> hosted mini-offline" \
+    "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none MINI_POOL_CAPACITY=
+  run_case "旧格式心跳 -> hosted mini-offline" \
+    "ROUTE=hosted queued=na threshold=4 reason=mini-offline label=cretas-mini window=day" runner=ubuntu-latest none MINI_POOL_CAPACITY=999990
+  run_case "心跳正好 180s -> mini" \
+    "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any MINI_POOL_CAPACITY=999820:3:2
+  run_case "发布锁或暂停令空闲容量为零 -> 托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=mini-full label=cretas-mini window=day" runner=ubuntu-latest none MINI_POOL_CAPACITY=999990:0:0
+  jq -n '{total_count:1,workflow_runs:[{id:101,path:".github/workflows/java-gate-pr.yml"}]}' > "$FIX/runs-in_progress.json"
+  jq -n '{total_count:3,jobs:[range(1;4) | {id:.,status:"in_progress",labels:["cretas-mini"]}]}' > "$FIX/jobs-101.json"
+  run_case "实时槽满且排队为零 -> 托管" \
+    "ROUTE=hosted queued=0 threshold=4 reason=mini-full label=cretas-mini window=day" runner=ubuntu-latest any
+  write_paged_fixtures
+  run_case "目标 run 和 mini job 都只在第 2 页 -> 阈值命中" \
+    "ROUTE=hosted queued=2 threshold=2 reason=mini-full label=cretas-mini window=day" runner=ubuntu-latest any MINI_QUEUE_THRESHOLD=2
+  for failure in runs-queued jobs-102; do
+    run_case "第 2 页失败 ($failure) -> 未量到" \
+      "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest any FAKE_GH_PAGE_FAIL="$failure"
+  done
+  run_case "分页少于 API 总数 -> 未量到" \
+    "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest any FAKE_GH_TRUNCATED=runs-queued
+  rm -f "$FIX/runs-queued-2.json" "$FIX/jobs-102-2.json"
 }
 
 echo "== 被测: $SCRIPT"
@@ -183,76 +266,86 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
     echo "FAIL: workflow 的 runs-on 里还有旧标签 cretas-mini-pg / cretas-mini-fast"; REAL_FAILS=$((REAL_FAILS + 1))
   else echo "  ok - runs-on 里没有旧标签"; fi
 
-  # ── refill 的排队计数 (gh -q 过滤式) 跑同一份 fixture, 必须与路由脚本同数: 3 (101 的旧 pg + 旧 fast, 102 的公共)。
+  refill_count() {
+    env GH="$WORK/gh" FAKE_FIX="$FIX" FAKE_GH_LOG="$WORK/refill-gh.log" \
+      GITHUB_REPOSITORY=cretasfuture-ai/cretas "$@"
+  }
   write_fixtures
-  refill_count() {  # $1 = refill 脚本; 不排除 999 (mini 上数的是全部排队), 期望 3 + 999 的 5 = 8
-    local rf jf ids id n total=0
-    rf=$(bash "$1" --runs-filter); jf=$(bash "$1" --jobs-filter)
-    ids=$( { jq -r "$rf" "$FIX/runs-queued.json"; jq -r "$rf" "$FIX/runs-in_progress.json"; } | tr -d '\r') || { echo err; return; }
-    for id in $ids; do n=$(jq -r "$jf" "$FIX/jobs-$id.json" | tr -d '\r') || { echo err; return; }; total=$((total + n)); done
-    echo "ids=$(echo $ids) queued=$total"
-  }
-  got=$(refill_count "$REFILL")
-  echo "READING: refill queue count on fixtures: $got"
-  if [ "$got" != "ids=101 102 999 queued=8" ]; then
-    echo "FAIL: refill 排队计数应为 ids=101 102 999 queued=8 (共用槽池: 全部 mini 标签, 只取清单里的 workflow)"
-    REAL_FAILS=$((REAL_FAILS + 1))
-  else echo "  ok - refill 排队计数: 全部 mini 标签、只取清单 workflow"; fi
-  # 变异对照: refill 排队标签只留 cretas-mini-pg (= 改动前「PG 槽只数 PG 标签」), 计数必须变。
-  QMUT="$WORK/refill-queue-mutant.sh"
-  sed 's/^MINI_LABELS="cretas-mini cretas-mini-pg cretas-mini-fast"$/MINI_LABELS="cretas-mini-pg"/' "$REFILL" > "$QMUT"
-  mgot=$(refill_count "$QMUT")
-  echo "READING: mutant(refill counts pg label only): $mgot"
-  if ! grep -q '^MINI_LABELS="cretas-mini-pg"$' "$QMUT" || [ "$mgot" = "$got" ]; then
-    echo "FAIL: refill 排队标签变异没生效或计数没变 (同步本测试的 sed)"; REAL_FAILS=$((REAL_FAILS + 1))
-  else echo "  ok - refill 排队标签变异对照: 只数 PG 标签后计数变了"; fi
+  got=$(refill_count bash "$REFILL" --queue-snapshot)
+  if [ "$got" = "8 1" ]; then echo "  ok - refill counts all three labels ($got)"; else
+    echo "FAIL: refill expected 8 queued, 1 busy, got [$got]"; REAL_FAILS=$((REAL_FAILS + 1)); fi
+  write_paged_fixtures
+  got=$(refill_count bash "$REFILL" --queue-snapshot)
+  incomplete=$(refill_count env FAKE_GH_PAGE_FAIL=jobs-102 bash "$REFILL" --queue-snapshot)
+  incomplete_rc=$?
+  if [ "$got" = "2 0" ] && [ "$incomplete_rc" = 1 ] && [ -z "$incomplete" ]; then
+    echo "  ok - refill counted 2 from page 2; failed job page yielded rc=1 and no partial value"
+  else
+    echo "FAIL: refill pagination got=[$got] incomplete=[$incomplete] rc=$incomplete_rc"; REAL_FAILS=$((REAL_FAILS + 1))
+  fi
+  mutant_dir
+  sed 's/api --paginate/api/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+  missing_page=$(refill_count bash "$WORK/mut/canada-mini-gate/refill.sh" --queue-snapshot)
+  missing_page_rc=$?
+  if [ "$missing_page_rc" = 1 ] && [ -z "$missing_page" ]; then
+    echo "  ok - pagination mutation (old single-page API) is red: refill outputs no snapshot rc=1"
+  else
+    echo "FAIL: pagination mutation returned [$missing_page] rc=$missing_page_rc"; REAL_FAILS=$((REAL_FAILS + 1))
+  fi
+  rm -f "$FIX/runs-queued-2.json" "$FIX/jobs-102-2.json"
 
-  # ── 空闲名次 (2026-11-19 run 44403277567: macOS `seq 1 0` 倒数输出「1 0」, 槽 1 名次成 3, 只剩 1 个排队作业时
-  #    PG 槽全不起)。PATH 前面放一个按 BSD 行为倒数的假 seq, 让 Linux 上也能复现; 全部槽空闲时名次必须是
-  #    全部启用槽里的序号: 1=1 2=2 3=3 4=4 (共用槽池, 不再按标签分组)。
-  mkdir -p "$WORK/bsdbin"
-  cat > "$WORK/bsdbin/seq" <<'SH'
+  mkdir -p "$WORK/bin" "$WORK/agents"
+  cat > "$WORK/bin/launchctl" <<'SH'
 #!/usr/bin/env bash
-a=$1; b=$2
-if [ "$a" -le "$b" ]; then i=$a; while [ "$i" -le "$b" ]; do echo "$i"; i=$((i + 1)); done
-else i=$a; while [ "$i" -ge "$b" ]; do echo "$i"; i=$((i - 1)); done; fi
+[ "$1" = list ] || exit 2
+printf '%s\n' "100 0 com.cretas.gh-gate-1" "101 0 com.cretas.gh-gate-2" "102 0 com.cretas.gh-gate-3" \
+  "- 0 com.cretas.gh-gate-4" "103 0 com.cretas.gh-gate-5" "104 0 com.cretas.gh-gate-12"
 SH
-  chmod +x "$WORK/bsdbin/seq"
-  rank_of_all() {  # $1 = 被测脚本
-    local i out=""
-    # 钉住夜间 + 无覆盖文件 (全部槽启用), 否则结论随 CI 跑的时间变。
-    for i in 1 2 3 4; do out="$out $i=$(PATH="$WORK/bsdbin:$PATH" GH_GATE_HOUR=23 GH_GATE_DAY_FULL_FILE="$WORK/no-such-file" GH_GATE_ENABLED_FILE="$WORK/no-such-file" bash "$1" --idle-rank-of "$i" 2>&1)"; done
-    echo "$out"
+  cat > "$WORK/bin/pgrep" <<'SH'
+#!/usr/bin/env bash
+[[ "$*" == *"slot-${TEST_BUSY_SLOT:-none}/"* ]]
+SH
+  chmod +x "$WORK/bin/launchctl" "$WORK/bin/pgrep"
+  touch "$WORK/agents/com.cretas.gh-gate-4.plist" "$WORK/agents/com.cretas.gh-gate-14.plist"
+  setup_plan() {
+    PATH="$WORK/bin:$PATH" GH_GATE_AGENTS_DIR="$WORK/agents" bash "$1" --plan-cleanup 2
   }
-  want_rank=" 1=1 2=2 3=3 4=4"
-  got=$(rank_of_all "$REFILL")
-  echo "READING: refill idle ranks (BSD seq):$got"
-  if [ "$got" != "$want_rank" ]; then
-    echo "FAIL: refill.sh 空闲名次应为$want_rank"
-    REAL_FAILS=$((REAL_FAILS + 1))
+  planned=$(setup_plan "$GATE/setup.sh")
+  expected=$(printf '%s\n' com.cretas.gh-gate-{3,4,5,12,14})
+  sed 's/if (slot + 0 > limit)/if (slot + 0 > limit \&\& slot + 0 >= 5)/' "$GATE/setup.sh" > "$WORK/setup-mutant.sh"
+  old_plan=$(setup_plan "$WORK/setup-mutant.sh")
+  old_expected=$(printf '%s\n' com.cretas.gh-gate-{5,12,14})
+  if [ "$planned" = "$expected" ] && [ "$old_plan" = "$old_expected" ]; then
+    echo "  ok - setup 2 cleans 3,4,5,12,14; old lower bound mutation misses 3,4"
   else
-    echo "  ok - refill 空闲名次在 BSD seq 下正确 (全部启用槽里排)"
+    echo "FAIL: setup cleanup plan=[$planned] old=[$old_plan]"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
-  # 启用名单: 只启用 2 和 4 时, 停用的 1、3 不算进名次 ⇒ 2=1 4=2; 变异对照: 删掉名次里的 slot_enabled 跳过 ⇒ 2=2 4=4。
+  busy_plan=$(TEST_BUSY_SLOT=3 setup_plan "$GATE/setup.sh" 2>&1)
+  busy_rc=$?
+  if [ "$busy_rc" = 1 ] && [[ "$busy_plan" == *'槽 3 仍有 Runner.Listener 或 Runner.Worker'* ]]; then
+    echo "  ok - setup 2 aborts before cleanup when slot 3 is still active"
+  else
+    echo "FAIL: setup busy cleanup rc=$busy_rc output=[$busy_plan]"; REAL_FAILS=$((REAL_FAILS + 1))
+  fi
+  capacity() {
+    PATH="$WORK/bin:$PATH" GH_GATE_HOUR=23 GH_GATE_DAY_FULL_FILE="$WORK/no-such-file" \
+      GH_GATE_ENABLED_FILE="$WORK/no-such-file" GH_GATE_RELEASE_LOCK="$WORK/no-such-lock" \
+      GH_GATE_PRESSURE_FILE="$1" TEST_BUSY_SLOT=2 bash "$REFILL" --capacity
+  }
+  printf '%s\n' Heavy > "$WORK/heavy"
+  if [ "$(capacity "$WORK/no-such-file")" = 3:2 ] && [ "$(capacity "$WORK/heavy")" = 0:0 ]; then
+    echo "  ok - loaded+enabled capacity 3:2; thermal pause 0:0"
+  else
+    echo "FAIL: mini capacity normal/paused values unexpected"; REAL_FAILS=$((REAL_FAILS + 1))
+  fi
+  # Missing, disabled and busy lower-numbered slots do not count towards rank.
   printf '2\n4\n' > "$WORK/enabled-slots"
-  en_rank() { echo " 2=$(GH_GATE_ENABLED_FILE="$WORK/enabled-slots" bash "$1" --idle-rank-of 2) 4=$(GH_GATE_ENABLED_FILE="$WORK/enabled-slots" bash "$1" --idle-rank-of 4)"; }
-  got=$(en_rank "$REFILL")
-  echo "READING: refill idle ranks (enabled 2 4):$got"
-  if [ "$got" != " 2=1 4=2" ]; then
-    echo "FAIL: 只启用 2 4 时名次应为 2=1 4=2"
-    REAL_FAILS=$((REAL_FAILS + 1))
+  rank=$(PATH="$WORK/bin:$PATH" GH_GATE_ENABLED_FILE="$WORK/enabled-slots" bash "$REFILL" --idle-rank-of 3)
+  busy_rank=$(PATH="$WORK/bin:$PATH" GH_GATE_ENABLED_FILE="$WORK/enabled-slots" TEST_BUSY_SLOT=2 bash "$REFILL" --idle-rank-of 3)
+  if [ "$rank" = 2 ] && [ "$busy_rank" = 1 ]; then
+    echo "  ok - only loaded, enabled and idle slots count towards rank"
   else
-    echo "  ok - 启用名单: 停用的槽不算进名次"
-  fi
-  EMUT="$WORK/refill-enabled-mutant.sh"
-  grep -v '^    slot_enabled "\$k" || continue$' "$REFILL" > "$EMUT"
-  mgot=$(en_rank "$EMUT")
-  echo "READING: mutant(no enabled skip) idle ranks:$mgot"
-  if [ "$mgot" != " 2=2 4=4" ]; then
-    echo "FAIL: 启用名单变异对照: 删掉跳过后应读到 2=2 4=4, 实际$mgot (变异没生效或测试没守住)"
-    REAL_FAILS=$((REAL_FAILS + 1))
-  else
-    echo "  ok - 启用名单变异对照: 删掉跳过后名次变错"
+    echo "FAIL: slot 3 idle/busy ranks: $rank / $busy_rank"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
   # 时段 (2026-11-19 Steve「22:00 后跑满, 8 点后 1 pg 1 fast」, 北京时间): [22,8) full, [8,22) day; 边界 7/8/21/22。
   win_all() { local h out=""; for h in 0 7 8 12 21 22 23 07 08; do out="$out $h=$(GH_GATE_DAY_FULL_FILE="$WORK/no-such-file" bash "$1" --window "$h")"; done; echo "$out"; }
@@ -297,8 +390,8 @@ SH
   grep -q 'refill.sh' "$SCRIPT" && grep -q -- '--window' "$SCRIPT" || wf_ok=0
   for wf in $actual_wfs; do
     f="$WFDIR/$wf"
-    grep -q 'run: bash scripts/ci/route-mini-or-hosted.sh' "$f" && grep -q 'GH_GATE_DAY_FULL: \${{ vars.MINI_DAY_FULL }}' "$f" \
-      && [ "$(grep -c 'MINI_HEARTBEAT: \${{ vars.MINI_HEARTBEAT }}' "$f")" = 1 ] \
+    grep -q 'timeout 45s bash .*scripts/ci/route-mini-or-hosted.sh' "$f" && grep -q 'GH_GATE_DAY_FULL: \${{ vars.MINI_DAY_FULL }}' "$f" \
+      && [ "$(grep -c 'MINI_POOL_CAPACITY: \${{ vars.MINI_POOL_CAPACITY }}' "$f")" = 1 ] \
       && grep -q 'runner: \${{ steps.route.outputs.runner }}' "$f" && ! grep -qE 'TZ=|date \+%H|date -u \+%H' "$f" || { wf_ok=0; echo "  ✗ $wf 的 changes 路由没接全"; }
   done
   grep -q "mini_window: \${{ steps.route.outputs.mini_window }}" "$WFY" && grep -q "needs.changes.outputs.mini_window == 'full'" "$WFY" || wf_ok=0
@@ -307,23 +400,6 @@ SH
   else
     echo "FAIL: mini workflow 的 changes 路由没接全, 或 workflow 里另写了小时判断"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
-  # 变异对照: 名次循环改回 seq 写法, 名次必须变错。
-  RMUT="$WORK/refill-mutant.sh"
-  sed 's/for ((k = 1; k < s; k++)); do/for k in $(seq 1 $((s - 1))); do/' "$REFILL" > "$RMUT"
-  if ! grep -q 'for k in \$(seq 1' "$RMUT"; then
-    echo "FAIL: 名次变异没生效 (循环行找不到, 同步本测试的 sed)"
-    REAL_FAILS=$((REAL_FAILS + 1))
-  else
-    mgot=$(rank_of_all "$RMUT")
-    echo "READING: mutant(seq) idle ranks:$mgot"
-    if [ "$mgot" = "$want_rank" ]; then
-      echo "FAIL: 名次变异对照: 改回 seq 后名次仍正确 —— 测试没复现 BSD 行为"
-      REAL_FAILS=$((REAL_FAILS + 1))
-    else
-      echo "  ok - 名次变异对照: 改回 seq 后名次变错"
-    fi
-  fi
-
   # ── 缓存恢复不许在自建 runner 上跑 (2026-11-19: 各槽共用 ~ghgate/.m2, 恢复原地解压让别的槽读到半截 jar)。
   #    Java Gate 每个 actions/cache/restore 步骤块必须带 self-hosted 排除守卫。
   restore_guard_report() {  # $1 = workflow; 输出「total=<n> guarded=<m>」
@@ -374,9 +450,9 @@ SH
 fi
 [ "$PASSES" -ge 21 ] || { echo "FAIL: 阳性对照: 只跑通 $PASSES 个场景 (预期 >= 21)"; REAL_FAILS=$((REAL_FAILS + 1)); }
 
-# ── 心跳: 写端 (refill.sh) 与读端 (每个 mini workflow 的路由步骤传 vars.MINI_HEARTBEAT, 上面已核) 必须都在 (形态 D/B)。
+# ── 心跳: 写端 (refill.sh) 与读端 (每个 mini workflow 的路由步骤传 vars.MINI_POOL_CAPACITY, 上面已核) 必须都在 (形态 D/B)。
 if [ -z "${ROUTE_SCRIPT:-}" ]; then
-  hb_w=$(grep -c 'gh variable set MINI_HEARTBEAT' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
+  hb_w=$(grep -c 'gh variable set MINI_POOL_CAPACITY' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
   hb_c=$(grep -c '^  beat$\|^    beat$' "$ROOT_DIR/scripts/ci/canada-mini-gate/refill.sh")
   echo "READING: heartbeat writer=$hb_w beat_calls=$hb_c"
   if [ "$hb_w" != 1 ] || [ "$hb_c" != 2 ]; then
@@ -428,8 +504,8 @@ Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'T
   else
     ROUTE_SCRIPT="$HMUT" bash "${BASH_SOURCE[0]}" > "$WORK/hb-mutant.log" 2>&1
     hrc=$?
-    echo "READING: mutant(no heartbeat age) rc=$hrc $(grep '^READING: pass=' "$WORK/hb-mutant.log") $(grep -c 'FAIL - 心跳过期' "$WORK/hb-mutant.log") 个过期场景变红"
-    if [ "$hrc" = 0 ] || ! grep -q 'FAIL - 心跳过期' "$WORK/hb-mutant.log"; then
+    echo "READING: mutant(no heartbeat age) rc=$hrc $(grep '^READING: pass=' "$WORK/hb-mutant.log") $(grep -c 'FAIL - 派发时心跳过期' "$WORK/hb-mutant.log") 个过期场景变红"
+    if [ "$hrc" = 0 ] || ! grep -q 'FAIL - 派发时心跳过期' "$WORK/hb-mutant.log"; then
       echo "FAIL: 心跳变异对照: 删掉年龄判断后过期场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
     else
       echo "  ok - 心跳变异对照: 删掉年龄判断后过期场景变红"
@@ -437,26 +513,31 @@ Note: No performance warning level has been recorded')") hot=$(th "$REFILL_F" 'T
   fi
 fi
 
-# ── 变异对照: 心跳参照时间退回「现在」, 「排队 1600s」场景必须变红。
+# Each variant must fail the named decision, with a readable red assertion.
 if [ -z "${ROUTE_SCRIPT:-}" ]; then
-  mutant_dir
-  RMUT="$WORK/mut/route-ref-mutant.sh"
-  # ⚠️ 替换里不加行尾注释: 这一行后面还有 esac, 注释会把它吃掉, 变异体变成语法错误 (全红但不是变异生效)。
-  sed 's/\*) echo "\$s run_started_at" ;;/*) echo "$(date +%s) run_started_at" ;;/' "$SCRIPT" > "$RMUT"
-  if ! grep -q 'echo "$(date +%s) run_started_at"' "$RMUT" || ! bash -n "$RMUT"; then
-    echo "FAIL: 参照时间变异没生效或变异体语法错 (同步本测试的 sed)"; REAL_FAILS=$((REAL_FAILS + 1))
-  else
-    ROUTE_SCRIPT="$RMUT" bash "${BASH_SOURCE[0]}" > "$WORK/ref-mutant.log" 2>&1
-    rrc=$?
-    rfails=$(grep -c '^  FAIL - ' "$WORK/ref-mutant.log")
-    echo "READING: mutant(ref=now) rc=$rrc $(grep '^READING: pass=' "$WORK/ref-mutant.log") fails=$rfails"
-    # 只该红「排队 1600s」这 1 个场景 (其余场景要么给了 ROUTE_NOW, 要么本来就判离线)。
-    if [ "$rrc" = 0 ] || [ "$rfails" != 1 ] || ! grep -q 'FAIL - 排队 1600s' "$WORK/ref-mutant.log"; then
-      echo "FAIL: 参照时间变异对照: 退回按现在算后「排队 1600s」场景仍绿"; REAL_FAILS=$((REAL_FAILS + 1))
+  for mutation in busy retry merge_group pagination; do
+    mutant_dir
+    target="$WORK/mut/route-$mutation.sh"
+    case "$mutation" in
+      busy) sed '/BUSY-SLOT-CHECK/d' "$SCRIPT" > "$target"; expected_red="实时槽满且排队为零" ;;
+      retry) sed '/GITHUB_RUN_ATTEMPT/d' "$SCRIPT" > "$target"; expected_red="pull_request 完整重跑" ;;
+      merge_group)
+        sed 's/group=$(verify_merge_group 2>\/dev\/null) || emit hosted na group-unverified/group=unchecked/' "$SCRIPT" > "$target"
+        expected_red="合并组前序 fork" ;;
+      pagination)
+        cp "$SCRIPT" "$target"
+        sed 's/api --paginate/api/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+        expected_red="目标 run 和 mini job 都只在第 2 页" ;;
+    esac
+    ROUTE_SCRIPT="$target" bash "${BASH_SOURCE[0]}" > "$WORK/$mutation.log" 2>&1
+    rc=$?
+    if [ "$rc" = 1 ] && grep -Fq "FAIL - $expected_red" "$WORK/$mutation.log"; then
+      red=$(grep -F "FAIL - $expected_red" "$WORK/$mutation.log")
+      echo "  ok - $mutation mutation rc=$rc: $red"
     else
-      echo "  ok - 参照时间变异对照: 退回按现在算后「排队 1600s」场景变红"
+      echo "FAIL: $mutation mutant did not fail the target case (rc=$rc)"; REAL_FAILS=$((REAL_FAILS + 1))
     fi
-  fi
+  done
 fi
 
 # ── 变异对照: 路由排队口径只数公共标签 (旧 pg/fast 标签的排队作业不算进共用槽池), 「少于阈值」等场景必须变红。

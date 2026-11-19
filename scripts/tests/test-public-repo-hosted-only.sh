@@ -10,7 +10,7 @@
 #   3. Java 重任务在托管 16 GB 机器上显式给堆 (不给就退回 3g, fast-contracts 在这个类序下 OOM)。
 # 阳性对照: 扫到的 job 数 >= 25; 阴性对照: 一段带 [self-hosted, cretas] 的样本必须被判红。
 # 2026-11-18 例外 (Steve 撤销「公开仓库禁自建 runner」): 只放行 SELF_HOSTED_ALLOWED 里逐字登记的表达式,
-# 且表达式必须带「本仓库分支或合并队列」守卫 (fork PR 落托管)。阴性对照: 去掉守卫的同名 job 必须被判红。
+# 且必须校验本仓库 PR 或经可信路由逐项验证的合并组。阴性对照只改合法 job 的 runs-on。
 set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 PY=${PYTHON:-python3}
@@ -32,13 +32,17 @@ FORMERLY_SELF_HOSTED = {
     'artifact-reaper.yml', 'reap-orphan-testenvs.yml', 'fresh-db-progress.yml',
 }
 # 自建路由白名单: (工作流, job) -> runs-on 原文。只放行本仓库分支 PR / 合并队列; fork PR 必须落 ubuntu-latest。
-SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+LEGACY_GROUP_GUARD = "(github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository)"
+SAME_REPO_GUARD = ("((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)"
+                   " || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true'))")
+ROUTE_OUTPUT = "needs.changes.outputs.runner == 'cretas-mini' && "
+POLICY_VERSION = "needs.changes.outputs.route_policy == 'v2' && "
 # 2026-11-18 mini 优先、满了溢出: 先读 changes 作业 (托管机上) 的路由输出, 守卫照旧串在后面 ——
 # 路由输出只能把作业从 mini 挪到托管, 不能让 fork PR 上 mini。
 # 2026-11-19 21:5x Steve「不跑5个了……这4个槽不要只给pg用」+「其他检查也上 mini」: mini 改为最多 4 槽的共用槽池,
 # 公共标签 cretas-mini, changes 作业只输出一个 runner (cretas-mini | ubuntu-latest) 与 mini_window。
 GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
-MINI_ROUTE_CORE = ("needs.changes.outputs.runner == 'cretas-mini' && " + SAME_REPO_GUARD + GUARD_TAIL
+MINI_ROUTE_CORE = (ROUTE_OUTPUT + POLICY_VERSION + SAME_REPO_GUARD + GUARD_TAIL
                    + " && 'cretas-mini' || 'ubuntu-latest' }}")
 MINI_ROUTE = "${{ " + MINI_ROUTE_CORE
 # 白天 PG 只派第 2、3 片, 夜间 (mini_window=full) 4 片都可; fast 白天只派第 3 片, 夜间第 2、3 片 (第 0 片在 mini 上 OOM)。
@@ -46,7 +50,6 @@ PG_SHARD_GATE = "(matrix.shard >= 2 || needs.changes.outputs.mini_window == 'ful
 FAST_SHARD_GATE = "(matrix.shard == 3 || (matrix.shard == 2 && needs.changes.outputs.mini_window == 'full')) && "
 MINI_PG_SHARD_ROUTE = "${{ " + PG_SHARD_GATE + MINI_ROUTE_CORE
 MINI_FAST_SHARD_ROUTE = "${{ " + FAST_SHARD_GATE + MINI_ROUTE_CORE
-UNROUTED = "${{ " + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini' || 'ubuntu-latest' }}"
 # Java Gate: PG 4 片分片 + 汇总, fast-contracts 4 片分片 + 汇总; RN Gate jest、Web Admin Gate vitest (2026-11-19)。
 # 判定/路由作业 changes 必须是托管字面量 (放 mini 上的话 mini 一满它自己也排队, 溢出失效), 所以不在白名单里。
 SELF_HOSTED_ALLOWED = {
@@ -132,64 +135,99 @@ if missing:
     print('FAIL: 阳性对照: 这些 Java 重任务 job 没扫到: %s' % missing)
     ok = False
 
-sample = 'on: push\njobs:\n  probe:\n    runs-on: [self-hosted, cretas]\n    steps: []\n'
-if not violations('negative-control.yml', sample):
-    print('FAIL: 阴性对照: [self-hosted, cretas] 没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: [self-hosted, cretas] 被判红')
+def rejects_runs_on(wf, job, baseline, target, replacement, name):
+    original = violations(wf, baseline)
+    changed = baseline.replace('    runs-on: ' + target + '\n', '    runs-on: ' + replacement + '\n', 1)
+    expected = [f'{wf}/{job} runs-on {replacement!r} is not a GitHub-hosted label']
+    result = violations(wf, changed)
+    if original or changed == baseline or result != expected:
+        print(f'FAIL: {name}: baseline={original}, result={result}, expected={expected}')
+        return False
+    print(f'  ok - {name}: {wf}/{job} only reports runs-on')
+    return True
 
-guardless = ('on: push\njobs:\n  postgres-reversal-concurrency-shard:\n'
-             "    runs-on: ${{ !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}\n"
-             '    timeout-minutes: 40\n    env:\n      CRETAS_JAVA_FORK_XMX: 10g\n    steps: []\n')
-if not violations('java-gate-pr.yml', guardless):
-    print('FAIL: 阴性对照: 不带本仓库守卫的自建路由没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: 不带本仓库守卫的自建路由被判红')
-elsewhere = sample.replace('[self-hosted, cretas]', list(SELF_HOSTED_ALLOWED.values())[0])
-if not violations('negative-control.yml', elsewhere):
-    print('FAIL: 阴性对照: 白名单表达式挪到未登记的 job 没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: 白名单表达式挪到未登记的 job 被判红')
-unrouted = sample.replace('probe', 'fast-contracts-shard').replace('[self-hosted, cretas]', UNROUTED)
-if not violations('java-gate-pr.yml', unrouted):
-    print('FAIL: 阴性对照: 不读路由输出 (mini 满了不溢出) 的旧表达式没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: 不读路由输出的旧表达式被判红')
-for wf in MINI_WORKFLOWS:
-    changes_block = dict(jobs((WF / wf).read_text(encoding='utf-8'))).get('changes', '')
-    print('READING: %s/changes runs-on=%r' % (wf, runs_on(changes_block)))
-    if (runs_on(changes_block) != 'ubuntu-latest' or 'route-mini-or-hosted.sh' not in changes_block
-            or 'runner: ${{ steps.route.outputs.runner }}' not in changes_block
-            or 'MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}' not in changes_block):
-        print('FAIL: %s/changes 必须跑在 ubuntu-latest, 调 route-mini-or-hosted.sh (传 vars.MINI_HEARTBEAT) 并输出 runner' % wf)
-        ok = False
-all_fast = sample.replace('probe', 'fast-contracts-shard').replace(
-    '[self-hosted, cretas]', MINI_FAST_SHARD_ROUTE.replace(FAST_SHARD_GATE, ''))
-if not violations('java-gate-pr.yml', all_fast):
-    print('FAIL: 阴性对照: fast 4 片全派 mini (去掉分片/时段限定) 没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: fast 4 片全派 mini (去掉分片/时段限定) 被判红')
-all_pg = sample.replace('probe', 'postgres-reversal-concurrency-shard').replace(
-    '[self-hosted, cretas]', MINI_PG_SHARD_ROUTE.replace(PG_SHARD_GATE, ''))
-if not violations('java-gate-pr.yml', all_pg):
-    print('FAIL: 阴性对照: PG 4 片不分时段全派 mini (去掉分片/时段限定) 没被判红')
-    ok = False
-else:
-    print('  ok - 阴性对照: PG 4 片不分时段全派 mini (去掉分片/时段限定) 被判红')
-# 2026-11-19 新登记的 RN jest / Web vitest: 去掉本仓库守卫、或不读路由输出, 都必须被判红。
-for wf, job in (('rn-gate.yml', 'jest'), ('web-admin-gate.yml', 'vitest')):
-    no_guard = sample.replace('probe', job).replace('[self-hosted, cretas]', MINI_ROUTE.replace(SAME_REPO_GUARD + ' && ', ''))
-    no_route = sample.replace('probe', job).replace('[self-hosted, cretas]', UNROUTED)
-    if no_guard == sample or not violations(wf, no_guard) or not violations(wf, no_route):
-        print('FAIL: 阴性对照: %s/%s 去掉本仓库守卫或不读路由输出没被判红' % (wf, job))
+
+probe = 'on: push\njobs:\n  probe:\n    runs-on: ubuntu-latest\n    steps: []\n'
+ok &= rejects_runs_on('negative-control.yml', 'probe', probe, 'ubuntu-latest', '[self-hosted, cretas]', 'plain self-hosted')
+ok &= rejects_runs_on('negative-control.yml', 'probe', probe, 'ubuntu-latest', MINI_ROUTE, 'unregistered job')
+for (wf, job), allowed in SELF_HOSTED_ALLOWED.items():
+    text = (WF / wf).read_text(encoding='utf-8')
+    block = dict(jobs(text)).get(job, '')
+    baseline = f'on: push\njobs:\n  {job}:\n{block.rstrip()}\n'
+    # Keep timeout and Java heap from a genuinely legal job. Change just runs-on.
+    for label, old, new in (
+        ('merge_group fallback restored', SAME_REPO_GUARD, LEGACY_GROUP_GUARD),
+        ('repository guard removed', SAME_REPO_GUARD + ' && ', ''),
+        ('runner decision removed', ROUTE_OUTPUT, ''),
+        ('rollout policy removed', POLICY_VERSION, ''),
+    ):
+        ok &= rejects_runs_on(wf, job, baseline, allowed, allowed.replace(old, new), label)
+    shard_gate = {'fast-contracts-shard': FAST_SHARD_GATE, 'postgres-reversal-concurrency-shard': PG_SHARD_GATE}.get(job)
+    if shard_gate:
+        ok &= rejects_runs_on(wf, job, baseline, allowed, allowed.replace(shard_gate, ''), 'shard gate removed')
+
+# Reproduce the old false-green control: a hosted job with only the unrelated
+# timeout or heap error satisfies an "any violation" assertion.
+for wf, job, remove, unrelated in (
+    ('rn-gate.yml', 'jest', r'^    timeout-minutes:.*\n', 'has no timeout-minutes'),
+    ('web-admin-gate.yml', 'vitest', r'^    timeout-minutes:.*\n', 'has no timeout-minutes'),
+    ('java-gate-pr.yml', 'fast-contracts-shard', r'^      CRETAS_JAVA_FORK_XMX:.*\n', 'does not set CRETAS_JAVA_FORK_XMX in its job env'),
+):
+    block = dict(jobs((WF / wf).read_text(encoding='utf-8')))[job]
+    hosted = f'on: push\njobs:\n  {job}:\n{block.rstrip()}\n'.replace(SELF_HOSTED_ALLOWED[wf, job], 'ubuntu-latest')
+    incomplete = re.sub(remove, '', hosted, count=1, flags=re.M)
+    result = violations(wf, incomplete)
+    if violations(wf, hosted) or result != [f'{wf}/{job} {unrelated}']:
+        print(f'FAIL: invalid baseline control: {wf}/{job}: {result}')
         ok = False
     else:
-        print('  ok - 阴性对照: %s/%s 去掉本仓库守卫 / 不读路由输出都被判红' % (wf, job))
+        print(f'  ok - {wf}/{job} old any-violation test would accept a hosted job: {unrelated}')
+
+for wf in MINI_WORKFLOWS:
+    text = (WF / wf).read_text(encoding='utf-8')
+    changes = dict(jobs(text)).get('changes', '')
+    print('READING: %s/changes runs-on=%r' % (wf, runs_on(changes)))
+    required = ('route-mini-or-hosted.sh', 'git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA"',
+                'git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main',
+                'MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}',
+                "vars.MINI_POOL_V2_ENABLED == '1'", 'outputs.runner', 'outputs.route_policy', 'outputs.mini_group_verified',
+                'continue-on-error: true', 'timeout 45s bash')
+    if (runs_on(changes) != 'ubuntu-latest' or any(part not in changes for part in required)
+            or not 0 <= changes.find('- id: route') < changes.find('- id: filter')):
+        print(f'FAIL: {wf}/changes trusted hosted route wiring is incomplete')
+        ok = False
+    trigger = re.search(r'(?m)^  pull_request:\n    types: \[([^\n]+)\]', text)
+    if not trigger or 'labeled' not in trigger.group(1).split(', '):
+        print(f'FAIL: {wf} misses pull_request labeled recovery trigger')
+        ok = False
+
+
+def rollout_errors(steps):
+    required = (
+        ('关闭新路由', ('MINI_POOL_V2_ENABLED', '排队和运行', '分页')),
+        ('先验证双标签消费者', ('`online`', '`cretas-mini`', '`cretas-mini-pg`', '`cretas-mini-fast`', 'runner_name')),
+        ('排空槽 5', ('从 `enabled-slots` 移除 5', 'Runner.Listener', 'Runner.Worker', '`busy`', '作业结论')),
+        ('停止并清理槽 5', ('完成排空后', 'launchctl bootout', '离线且空闲', '槽 1–4')),
+        ('最后开放新路由', ('前四步完成', '组织层访问控制', 'MINI_POOL_V2_ENABLED=1', 'runner_name')),
+    )
+    return [name for index, (name, evidence) in enumerate(required)
+            if index >= len(steps) or steps[index][0] != name
+            or any(reading not in steps[index][1] for reading in evidence)]
+
+
+rollout = (ROOT / 'scripts/ci/canada-mini-gate/rollout.md').read_text(encoding='utf-8')
+steps = re.findall(r'^\d+\. \*\*([^*]+)。\*\* ([^\n]+)', rollout, re.M)
+wrong_order = rollout_errors(steps[:2] + steps[3:4] + steps[2:3] + steps[4:])
+early_open = rollout_errors(steps[-1:] + steps[:-1])
+if rollout_errors(steps) or '排空槽 5' not in wrong_order or '关闭新路由' not in early_open:
+    print('FAIL: rollout must verify both generations, then drain and retire slot 5 before activation')
+    ok = False
+else:
+    print('  ok - rollout drain-before-stop and enable-last; stop-before-drain and enable-first mutations are red')
+if any(proof not in rollout for proof in ('**5 分钟**', 'gh run rerun <run-id>', 'run_attempt > 1', 'reason=retry-hosted')):
+    print('FAIL: rollout is missing the timed hosted recovery and its readback')
+    ok = False
+
 present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
 print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
 # 登记了但 workflow 里找不到 = 登记表过期 (改名/删除后白名单还放行一个不存在的 job), 判红。

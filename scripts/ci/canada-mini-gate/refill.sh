@@ -18,10 +18,6 @@ MAX_SLOTS=4
 MINI_LABELS="cretas-mini cretas-mini-pg cretas-mini-fast"
 # 有作业会上 mini 的 workflow (排队只数这些 run, 省 API 额度)。⚠️ 与 route-mini-or-hosted.sh 的 MINI_WORKFLOWS 逐字一致 (闸核对)。
 MINI_WORKFLOWS="java-gate-pr.yml rn-gate.yml web-admin-gate.yml"
-# 排队计数口径: 全仓 run 里只取 $MINI_WORKFLOWS 的 (path 末段), 再数带任一 $MINI_LABELS 的排队作业 (共用槽池, 不分标签)。
-# 用 gh 自带的 jq (-q), 不依赖 mini 上装 jq; 两份清单是不含引号的常量, 直接拼进过滤式。测试用 --runs-filter / --jobs-filter 取出来跑 fixture。
-RUNS_FILTER=".workflow_runs[] | select(((.path // \"\") | split(\"/\") | last) as \$p | (\"$MINI_WORKFLOWS\" | split(\" \")) | index(\$p) != null) | .id"
-JOBS_FILTER="[.jobs[] | select(.status == \"queued\" and ((.labels // []) as \$j | any((\"$MINI_LABELS\" | split(\" \"))[]; . as \$x | \$j | index(\$x) != null)))] | length"
 slot_labels() { echo "$MINI_LABELS"; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
 # 时段 (2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」), 北京时间:
@@ -59,9 +55,10 @@ slot_enabled() {
 # ⛔ 不用 `seq 1 $((n-1))`: macOS (BSD) 的 `seq 1 0` 倒数输出「1 0」, 第 1 槽把自己和不存在的 0 号槽都算成空闲,
 #    名次变 3; 只剩 1 个排队作业时 4 个 PG 槽全不起 (2026-11-19 run 44403277567 汇总作业卡 1.5 小时, 队列超时踢出)。
 idle_rank() {
-  local s="$1" k r=1
-  for ((k = 1; k < s; k++)); do
-    slot_enabled "$k" || continue
+  local s="$1" k slots r=1
+  slots=$(pool_slots) || return 1
+  for k in $slots; do
+    [ "$k" -lt "$s" ] || continue
     slot_busy "$k" || r=$((r + 1))
   done
   echo "$r"
@@ -96,52 +93,82 @@ thermal_hot() {  # 压力 Heavy 及以上, 或 pmset -g therm 里有告警级别
   pmset -g therm 2>/dev/null | grep -i "warning level" | grep -viq "no .*warning level has been recorded"
 }
 
+LOCK="${GH_GATE_RELEASE_LOCK:-/Users/rex/cretas-build/.build.lock}"
+lock_held() { [ -d "$LOCK" ] && ps -p "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" >/dev/null 2>&1; }
+
+pool_slots() {
+  local agents pid status label slot
+  agents=$(launchctl list) || return 1
+  while read -r pid status label; do
+    case "$label" in com.cretas.gh-gate-*) slot=${label##*-} ;; *) continue ;; esac
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    slot_enabled "$slot" && echo "$slot"
+  done <<< "$agents"
+  return 0
+}
+
+pool_capacity() {
+  local slots slot eligible=0 idle=0
+  if lock_held || thermal_hot || in_darkwake; then echo '0:0'; return; fi
+  slots=$(pool_slots) || return 1
+  for slot in $slots; do
+    eligible=$((eligible + 1))
+    slot_busy "$slot" || idle=$((idle + 1))
+  done
+  echo "$eligible:$idle"
+}
+
 if [ "${1:-}" = "--labels-of" ]; then slot_labels "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--queue-labels" ]; then echo "$MINI_LABELS"; exit 0; fi
 if [ "${1:-}" = "--workflows" ]; then echo "$MINI_WORKFLOWS"; exit 0; fi
 if [ "${1:-}" = "--max-slots" ]; then echo "$MAX_SLOTS"; exit 0; fi
-if [ "${1:-}" = "--runs-filter" ]; then printf '%s\n' "$RUNS_FILTER"; exit 0; fi
-if [ "${1:-}" = "--jobs-filter" ]; then printf '%s\n' "$JOBS_FILTER"; exit 0; fi
-if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
+if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit $?; fi
 if [ "${1:-}" = "--enabled-of" ]; then if slot_enabled "${2:?slot}"; then echo yes; else echo no; fi; exit 0; fi
 if [ "${1:-}" = "--window" ]; then mini_window "${2:-}"; exit 0; fi
 if [ "${1:-}" = "--darkwake" ]; then if in_darkwake; then echo yes; else echo no; fi; exit 0; fi
 if [ "${1:-}" = "--thermal-hot" ]; then if thermal_hot; then echo yes; else echo no; fi; exit 0; fi
+if [ "${1:-}" = "--capacity" ]; then pool_capacity; exit $?; fi
+source "$(dirname "${BASH_SOURCE[0]}")/queue-snapshot.sh" || exit 1
+if [ "${1:-}" = "--queue-snapshot" ]; then
+  mini_queue_snapshot "${GITHUB_REPOSITORY:?repository}" "" "$MINI_WORKFLOWS" "$MINI_LABELS"
+  exit $?
+fi
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
 LABEL=$(slot_labels "$SLOT")
 PKG=/Users/ghgate/runner-pkg
 WORK=/Users/ghgate/slot-$SLOT
-LOCK=/Users/rex/cretas-build/.build.lock
 LOG=/Users/rex/gh-gate/slot-$SLOT.log
 
 log() { echo "$(date '+%F %T') slot=$SLOT $*" >> "$LOG"; }
-lock_held() { [ -d "$LOCK" ] && ps -p "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" >/dev/null 2>&1; }
 
 # 按需起 runner (Steve 2026-11-18「没跑的时候不占内存, 用的时候才占」): 空闲时只有这个循环 (~10MB),
 # 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等任一 mini 标签 ($MINI_LABELS) 的 job 数 >= 本槽在全部启用槽里的
 # 空闲名次才起。排队数缓存在 $QCACHE, 20 秒内各槽共用一次查询 (省 API 额度)。
-QCACHE=/Users/rex/gh-gate/queued-mini.cache
+QCACHE=/Users/rex/gh-gate/queue-snapshot.cache
 IDLE_KILL_SEC=180
+fresh_queue_cache() {
+  local touched
+  touched=$(stat -f %m "$QCACHE" 2>/dev/null) || return 1
+  [ "$(( $(date +%s) - touched ))" -lt 20 ]
+}
 mini_queued() {
-  local age=999 n=0 r c
-  [ -f "$QCACHE" ] && age=$(( $(date +%s) - $(stat -f %m "$QCACHE") ))
-  if [ "$age" -ge 20 ] && mkdir "$QCACHE.lock" 2>/dev/null; then
-    for r in $( { gh api "repos/$REPO/actions/runs?status=queued&per_page=100" -q "$RUNS_FILTER"
-                  gh api "repos/$REPO/actions/runs?status=in_progress&per_page=100" -q "$RUNS_FILTER"; } 2>>"$LOG"); do
-      c=$(gh api "repos/$REPO/actions/runs/$r/jobs?filter=latest&per_page=100" -q "$JOBS_FILTER" 2>>"$LOG") || continue
-      n=$((n + ${c:-0}))
-    done
-    echo "$n" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
+  local snapshot
+  if ! fresh_queue_cache && mkdir "$QCACHE.lock" 2>/dev/null; then
+    if ! snapshot=$(mini_queue_snapshot "$REPO" "" "$MINI_WORKFLOWS" "$MINI_LABELS" 2>>"$LOG"); then
+      log "queue snapshot unavailable"
+      snapshot=unavailable
+    fi
+    printf '%s\n' "$snapshot" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
     rmdir "$QCACHE.lock"
   fi
-  cat "$QCACHE" 2>/dev/null || echo 0
+  fresh_queue_cache && IFS= read -r snapshot < "$QCACHE" || return 1
+  [[ "$snapshot" =~ ^[0-9]+\ [0-9]+$ ]] || return 1
+  echo "${snapshot% *}"
 }
 
-# 在线心跳 (2026-11-19 mini 一天失联三次): 任一槽每 $HB_EVERY 秒把当前 Unix 秒写进仓库变量 MINI_HEARTBEAT;
-# changes 作业的路由读它, 超过 3 分钟没更新就整片走托管 (route-mini-or-hosted.sh reason=mini-offline)。
-# 写不出去 (mini 连不上 GitHub) 就是心跳停了, 这正是要的信号。发布构建持锁时本循环停在等锁, 也不跳 ⇒ 不领活。
+# Publish dispatchable capacity, including zero while paused or full.
 HB_STAMP=/Users/rex/gh-gate/heartbeat.stamp
 HB_EVERY=60
 beat() {
@@ -149,7 +176,7 @@ beat() {
   [ -f "$HB_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$HB_STAMP") ))
   [ "$age" -ge "$HB_EVERY" ] || return 0
   touch "$HB_STAMP"  # 先占位: 同一分钟别的槽不再写
-  local pm p= line
+  local pm p= line capacity
   # 先落变量再解析, 不走管道 (闸 test-pipeline-tail-swallows-rc.sh): powermetrics 失败 (sudo 不放行) 要记一行, 不是静默空值。
   if pm=$(sudo -n powermetrics --samplers thermal -i 1000 -n 1 2>/dev/null); then
     while IFS= read -r line; do
@@ -162,7 +189,11 @@ beat() {
     [ "$p" = "$(cat "$PRESSURE_FILE" 2>/dev/null)" ] || log "thermal pressure: $p"
     echo "$p" > "$PRESSURE_FILE"
   fi
-  gh variable set MINI_HEARTBEAT --repo "$REPO" --body "$(date +%s)" >/dev/null 2>>"$LOG" || log "heartbeat write failed"
+  if capacity=$(pool_capacity 2>>"$LOG"); then
+    gh variable set MINI_POOL_CAPACITY --repo "$REPO" --body "$(date +%s):$capacity" >/dev/null 2>>"$LOG" || log "heartbeat write failed"
+  else
+    log "capacity snapshot unavailable"
+  fi
   reap_stale_merge_groups
 }
 
@@ -197,7 +228,7 @@ while :; do
   fi
   [ "$paused" = 1 ] && log "enabled again"
   paused=0
-  if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
+  if lock_held; then log "release build holds lock, wait"; sleep 15; continue; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
   [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null
   if thermal_hot; then
@@ -207,8 +238,9 @@ while :; do
   fi
   [ "${hot:-0}" = 1 ] && log "thermal warning cleared"
   hot=0
-  q=$(mini_queued); rank=$(idle_rank "$SLOT")
-  if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
+  q=$(mini_queued) || { sleep 20; continue; }
+  rank=$(idle_rank "$SLOT") || { sleep 20; continue; }
+  if [ "$q" -lt "$rank" ] || ! slot_enabled "$SLOT" || lock_held || thermal_hot; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
   # 每个槽注册全部 mini 标签 ($MINI_LABELS: 公共 cretas-mini + 旧 cretas-mini-pg / cretas-mini-fast), 什么作业都能领。
   lab_args=(); for l in $LABEL; do lab_args+=(-f "labels[]=$l"); done

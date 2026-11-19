@@ -53,6 +53,7 @@ on:
   # pull_request 不带 paths (合并队列/必需检查要求每个 PR 都报告结果); 触发路径清单在
   # scripts/ci/trigger-paths/rn-gate.txt, 由下面的 changes 作业判定原作业跑不跑。
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   merge_group:
     types: [checks_requested]
 
@@ -68,39 +69,56 @@ jobs:
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
   # 2026-11-19 (Steve「其他检查也上 mini」): 本作业兼做 mini 路由, ⛔ 必须留在托管机上 (放 mini 上 mini 一满它自己也排队)。
-  # route-mini-or-hosted.sh 数 mini 共用槽池上排队的作业, 少于按时段的阈值输出 runner=cretas-mini, 否则 ubuntu-latest。
+  # 可信 base 路由验证合并组来源、心跳、空闲槽与队列，再输出 runner。
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
       actions: read   # 路由脚本读运行/作业列表
+      pull-requests: read  # merge_group 的 PR 元数据
     outputs:
       run: ${{ steps.filter.outputs.run }}
       runner: ${{ steps.route.outputs.runner }}
+      route_policy: ${{ steps.route.outputs.route_policy }}
+      mini_group_verified: ${{ steps.route.outputs.mini_group_verified }}
     steps:
       - uses: actions/checkout@v4
         with:
           # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
           fetch-depth: 0
           filter: blob:none
+      # Run only code from the protected base, before the candidate's path filter.
+      - id: route
+        if: ${{ vars.MINI_POOL_V2_ENABLED == '1' && (github.event.pull_request.base.ref == 'main' || github.event.merge_group.base_ref == 'refs/heads/main') }}
+        continue-on-error: true # missing route outputs select GitHub-hosted
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
+          MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}
+          MINI_POOL_V2_ENABLED: ${{ vars.MINI_POOL_V2_ENABLED }}
+        run: |
+          [[ "$TRUSTED_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main
+          route_dir=$(mktemp -d)
+          trap 'rm -rf "$route_dir"' EXIT
+          timeout 45s git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA" scripts/ci/route-mini-or-hosted.sh scripts/ci/canada-mini-gate
+          tar -xf "$route_dir/router.tar" -C "$route_dir"
+          timeout 45s bash "$route_dir/scripts/ci/route-mini-or-hosted.sh"
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/rn-gate.txt
-      # 路由: 脚本恒 exit 0; 读不到排队数 / mini 心跳过期 -> ubuntu-latest。本 run 不跑下游 (run=false) 就不查, 省 API 额度。
-      - id: route
-        if: ${{ steps.filter.outputs.run != 'false' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
-          MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}
-        run: bash scripts/ci/route-mini-or-hosted.sh
 
   jest:
     needs: changes
@@ -124,7 +142,7 @@ jobs:
     # 2026-11-19 (Steve「其他检查也上 mini」): 本仓库分支 PR / 合并队列且 changes 路由给了 cretas-mini 时跑 canada-mini
     # 共用槽池 (macOS arm64; setup-node 装 darwin node), 否则托管; fork PR / ci-hosted 标签一律托管。表达式逐字登记在
     # scripts/tests/test-public-repo-hosted-only.sh 的 SELF_HOSTED_ALLOWED。
-    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
+    runs-on: ${{ needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     # 2026-09-15: 没有超时 + jest 在 CI 下 maxWorkers=50% (WSL 报 16 核 → 8 个 worker, RN 的 jest
     #   每个 ~1G) → 撞主 runner 的 cgroup MemoryHigh=7G 被节流 → 一个 job 跑了 20 小时, runner 连
     #   GitHub 的取消指令都收不到 (TLS 超时), 显示 offline, 之后所有 Java job 落到 4G 的 extra 上 OOM。
