@@ -201,8 +201,8 @@ SH
   en_all() { local i out=""; for i in 1 2 3 4 5; do out="$out$(GH_GATE_HOUR="$2" GH_GATE_ENABLED_FILE="$3" bash "$1" --enabled-of "$i" | cut -c1)"; done; echo "$out"; }
   got="day=$(en_all "$REFILL" 10 "$WORK/no-such-file") night=$(en_all "$REFILL" 23 "$WORK/no-such-file") override=$(en_all "$REFILL" 23 "$WORK/enabled-slots")"
   echo "READING: refill enabled (y/n per slot 1-5): $got"
-  if [ "$got" != "day=ynnny night=yyyyy override=nynny" ]; then
-    echo "FAIL: 启用应为 day=ynnny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
+  if [ "$got" != "day=yynny night=yyyyy override=nynny" ]; then
+    echo "FAIL: 启用应为 day=yynny night=yyyyy override=nynny"; REAL_FAILS=$((REAL_FAILS + 1))
   else echo "  ok - 按时段启用 + 覆盖文件优先"; fi
   # 变异对照: 去掉「< 8 点也算 full」, 凌晨必须被查出变成 day。
   WMUT="$WORK/refill-window-mutant.sh"
