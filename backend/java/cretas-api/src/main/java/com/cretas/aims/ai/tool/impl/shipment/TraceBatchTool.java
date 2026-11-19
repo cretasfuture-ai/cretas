@@ -69,6 +69,9 @@ public class TraceBatchTool extends AbstractBusinessTool {
         schema.put("properties", properties);
         // 批次号与销售单号二选一，见 validateRequiredParams
         schema.put("required", Arrays.asList("batchNumber"));
+        // 抽参 / 填槽两处都要把销售单号也抽出来 (只认 required 会反问「请提供生产批次号」, 见 ToolParameterGroups)
+        schema.put(com.cretas.aims.ai.tool.ToolParameterGroups.ANY_OF_KEY,
+                List.of(List.of("batchNumber", "salesOrderNo")));
 
         return schema;
     }

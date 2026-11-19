@@ -34,6 +34,19 @@ final class ProcessYieldViews {
     static final String BASIS = "口径：出成率 = 工序产出合计 ÷ 投入合计；损耗率 = 1 − 出成率；"
             + "异常批次 = 该批次该工序的物料平衡未解释差额占投入超过黄线（默认 5%，超 15% 为红，按本厂配置）。";
 
+    /**
+     * 本次回答实际用的异常线写进口径: 与「发现的问题」页同一个本厂损耗告警阈值时写明来源,
+     * 没配置才是物料平衡默认 (BP 问题 28: 两处口径不一致, 页上 3% 已立单, 这里 5% 答没有异常)。
+     */
+    static String basis(Balance b) {
+        if (!b.fromAlertThreshold()) {
+            return BASIS;
+        }
+        return "口径：出成率 = 工序产出合计 ÷ 投入合计；损耗率 = 1 − 出成率；"
+                + "异常批次 = 该批次该工序的物料平衡未解释差额占投入超过 " + pct(b.warnPct())
+                + "（本厂「发现的问题」损耗告警阈值，与问题页同一个来源）。";
+    }
+
     /** 一条异常 (批次, 工序)。 */
     record Abnormal(String batchNumber, String productName, String processName, String level,
                     BigDecimal input, BigDecimal output, String unit, BigDecimal deviationPct) {
@@ -80,11 +93,22 @@ final class ProcessYieldViews {
         return yield.aggregateByProcess(factoryId, s, e, scope.typeId());
     }
 
-    record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows) {}
+    record Balance(BigDecimal warnPct, BigDecimal redPct, List<Abnormal> abnormal, int incomparableRows,
+                   boolean fromAlertThreshold) {}
 
     static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
                            ProductScope scope) {
-        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end);
+        return balance(service, factoryId, start, end, scope, null);
+    }
+
+    /**
+     * @param alertPct 本厂「发现的问题」损耗告警阈值 (百分数, 如 3); 非空时以它为异常线, 与问题页同一个来源;
+     *                 null = 没配置, 用本厂物料平衡阈值 (默认 5%)。BP 问题 28: 问题页对熟制杀菌偏离 3.7% (阈值 3%) 已立单,
+     *                 这里却按 5% 答「没有异常」。
+     */
+    static Balance balance(MaterialBalanceService service, String factoryId, LocalDate start, LocalDate end,
+                           ProductScope scope, BigDecimal alertPct) {
+        MaterialBalanceService.BatchBalance bb = service.blocksByBatch(factoryId, start, end, alertPct);
         List<Abnormal> out = new ArrayList<>();
         int incomparable = 0;
         for (MaterialBalanceTableDTO.PlanBlock block : bb.blocks()) {
@@ -101,7 +125,7 @@ final class ProcessYieldViews {
             }
         }
         out.sort(Comparator.comparing((Abnormal a) -> a.deviationPct() == null ? BigDecimal.ZERO : a.deviationPct()).reversed());
-        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable);
+        return new Balance(bb.warnPct(), bb.redPct(), out, incomparable, alertPct != null);
     }
 
     static boolean nameMatches(String processName, String keyword) {
@@ -157,8 +181,8 @@ final class ProcessYieldViews {
     // ---------------- 损耗异常 ----------------
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
                                            LocalDate end, int limit, String processKeyword, ProductScope scope,
-                                           String[] textOut) {
-        Balance b = balance(service, factoryId, start, end, scope);
+                                           String[] textOut, BigDecimal alertPct) {
+        Balance b = balance(service, factoryId, start, end, scope, alertPct);
         List<String> known = names(null, b);
         List<Abnormal> all = new ArrayList<>();
         for (Abnormal a : b.abnormal()) {
@@ -175,7 +199,7 @@ final class ProcessYieldViews {
         data.put("abnormalCount", all.size());
         data.put("incomparableCount", b.incomparableRows());
         data.put("rows", rows);
-        data.put("basis", BASIS);
+        data.put("basis", basis(b));
 
         StringBuilder sb = new StringBuilder();
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
@@ -198,7 +222,7 @@ final class ProcessYieldViews {
         if (b.incomparableRows() > 0) {
             sb.append("\n另有 ").append(b.incomparableRows()).append(" 个批次工序单位不可比或没登记投入，没算偏差。");
         }
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(b));
         textOut[0] = sb.toString();
         return data;
     }
@@ -206,13 +230,13 @@ final class ProcessYieldViews {
     // ---------------- 某工序近期出成率 ----------------
     static Map<String, Object> processTrend(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
                                             LocalDate start, LocalDate end, String processKeyword, ProductScope scope,
-                                            String[] textOut) {
+                                            String[] textOut, BigDecimal alertPct) {
         long days = java.time.temporal.ChronoUnit.DAYS.between(start, end) + 1;
         LocalDate prevEnd = start.minusDays(1);
         LocalDate prevStart = prevEnd.minusDays(days - 1);
         List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
         List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
-        Balance bal = balance(balance, factoryId, start, end, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope, alertPct);
         List<String> known = names(curAll, bal);
         known.addAll(names(prev, bal));
         List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
@@ -235,7 +259,7 @@ final class ProcessYieldViews {
         data.put("productKeyword", scope.keyword());
         data.put("productFilteredYield", scope.active() && !scope.yieldUnfiltered());
         data.put("rows", rows);
-        data.put("basis", BASIS);
+        data.put("basis", basis(bal));
 
         StringBuilder sb = new StringBuilder();
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
@@ -262,7 +286,7 @@ final class ProcessYieldViews {
             appendAbnormalLines(sb, bal, rows.stream().map(r -> String.valueOf(r.get("processName"))).toList(), known);
         }
         sb.append(scope.note());
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(bal));
         textOut[0] = sb.toString();
         return data;
     }
@@ -270,10 +294,11 @@ final class ProcessYieldViews {
     // ---------------- 本月 vs 上月: 掉在哪道工序 ----------------
     static Map<String, Object> processCompare(YieldAnalysisService yield, MaterialBalanceService balance, String factoryId,
                                               LocalDate start, LocalDate end, LocalDate prevStart, LocalDate prevEnd,
-                                              String processKeyword, ProductScope scope, String[] textOut) {
+                                              String processKeyword, ProductScope scope, String[] textOut,
+                                              BigDecimal alertPct) {
         List<ProcessYieldAggDTO> curAll = aggregate(yield, factoryId, start, end, scope);
         List<ProcessYieldAggDTO> prev = aggregate(yield, factoryId, prevStart, prevEnd, scope);
-        Balance bal = balance(balance, factoryId, start, end, scope);
+        Balance bal = balance(balance, factoryId, start, end, scope, alertPct);
         List<String> known = names(curAll, bal);
         known.addAll(names(prev, bal));
         List<ProcessYieldAggDTO> cur = filter(curAll, processKeyword, known);
@@ -313,7 +338,7 @@ final class ProcessYieldViews {
         data.put("biggestDropProcess", worst == null ? null : worst.get("processName"));
         data.put("biggestDropBatches", worstBatches);
         data.put("notComparableProcessCount", notComparable);
-        data.put("basis", BASIS);
+        data.put("basis", basis(bal));
 
         StringBuilder sb = new StringBuilder();
         sb.append(scope.active() ? "「" + scope.keyword() + "」" : "").append("本期 ").append(start).append(" 至 ").append(end).append(" 对比上期 ").append(prevStart).append(" 至 ")
@@ -348,7 +373,7 @@ final class ProcessYieldViews {
             }
         }
         sb.append(scope.note());
-        sb.append("\n").append(BASIS);
+        sb.append("\n").append(basis(bal));
         textOut[0] = sb.toString();
         return data;
     }

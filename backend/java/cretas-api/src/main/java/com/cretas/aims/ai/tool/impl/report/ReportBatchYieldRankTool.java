@@ -6,6 +6,7 @@ import com.cretas.aims.entity.enums.ProductionBatchStatus;
 import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
 import com.cretas.aims.service.yield.YieldAnalysisService;
+import com.cretas.aims.service.shortage.CostDeviationScanService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -38,6 +39,10 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     @Autowired
     private MaterialBalanceService materialBalanceService;
+
+    /** 「发现的问题」页损耗异常的告警阈值来源; 问句里的「损耗异常」与它同一个线 (BP 问题 28)。 */
+    @Autowired(required = false)
+    private CostDeviationScanService costDeviationScanService;
 
     @Autowired(required = false)
     private ProcessSecretLlmCostScope llmCostScope = ProcessSecretLlmCostScope.standalone();
@@ -267,11 +272,13 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         if (params.get("limit") instanceof Number n && n.intValue() > 0) limit = Math.min(n.intValue(), MAX_LIMIT);
         String[] msg = new String[1];
         Map<String, Object> data;
+        BigDecimal alertPct = alertBalancePct(factoryId);
         if (view == View.LOSS_ANOMALY) {
-            data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg);
+            data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg,
+                    alertPct);
         } else if (view == View.PROCESS) {
             data = ProcessYieldViews.processTrend(yieldAnalysisService, materialBalanceService, factoryId, start, end,
-                    processKeyword, scope, msg);
+                    processKeyword, scope, msg, alertPct);
         } else {
             LocalDate s = start;
             LocalDate e = end;
@@ -292,9 +299,19 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
                 ps = pe.minusDays(days - 1);
             }
             data = ProcessYieldViews.processCompare(yieldAnalysisService, materialBalanceService, factoryId, s, e, ps, pe,
-                    processKeyword, scope, msg);
+                    processKeyword, scope, msg, alertPct);
         }
         return buildSimpleResult(msg[0], data);
+    }
+
+    /**
+     * 本厂「发现的问题」损耗(物料平衡)告警阈值, 百分数; 工厂配的优先, 其次系统默认, 都没有 = null
+     * (null 时用物料平衡自己的阈值, 回答里写明用的是哪个)。
+     */
+    private BigDecimal alertBalancePct(String factoryId) {
+        if (costDeviationScanService == null) return null;
+        CostDeviationScanService.EffectiveThresholds eff = costDeviationScanService.effectiveThresholds(factoryId);
+        return eff == null || eff.thresholds() == null ? null : eff.thresholds().balancePct();
     }
 
     /**

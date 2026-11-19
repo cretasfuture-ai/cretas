@@ -60,6 +60,20 @@ public class ProductSalesRankingTool extends AbstractBusinessTool {
         return List.of("startDate", "endDate");
     }
 
+    /**
+     * 「X月比Y月涨了, 哪个客户 / 产品带来的」两个月都在原话里, 工具自己解析, 不再要预处理给出 startDate / endDate
+     * (没给就追问「请提供开始日期」, 把一个已经问清楚的问题又问回去)。
+     */
+    @Override
+    protected List<String> validateRequiredParams(Map<String, Object> params) {
+        String said = getString(params, "originalUserInput") != null
+                ? getString(params, "originalUserInput") : getString(params, "userInput");
+        if (growthPeriods(said, LocalDate.now()) != null) {
+            return new ArrayList<>();
+        }
+        return super.validateRequiredParams(params);
+    }
+
     private Map<String, Object> executeRanking(String factoryId, Map<String, Object> params,
                                                Map<String, Object> context, boolean preview) {
         Map<String, Object> growth = tryGrowthBreakdown(factoryId, params, context, preview, LocalDate.now());

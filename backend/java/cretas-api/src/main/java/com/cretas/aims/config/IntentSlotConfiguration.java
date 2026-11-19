@@ -325,6 +325,30 @@ public class IntentSlotConfiguration {
                         .build()
         ));
 
+        // 追溯（TRACE_FULL / TRACE_BATCH）：批次号与销售单号二选一，两个都不单独必填（BP 问题 39）。
+        // 以前槽位取自 schema.required 只有 batchNumber，标签「销售单号不要填这里」，
+        // 「追溯销售单 DEMO-20261105-SO-001」被反问「请提供生产批次号」。销售单号用规则整串抽出
+        // （含 DEMO- 这类前缀，不截断），批次号交给 LLM；两个都没有由 Tool 自己追问。
+        for (String traceIntent : Arrays.asList("TRACE_FULL", "TRACE_BATCH")) {
+            registerSlots(traceIntent, Arrays.asList(
+                    RequiredSlot.builder()
+                            .name("salesOrderNo")
+                            .label("销售单号（用户说「追溯销售单/订单 X」里的 X，形如 SO-20261105-001、DEMO-20261105-SO-001，整串原样提取；没提就 null）")
+                            .type("TEXT")
+                            .required(false)
+                            .pattern("(?i)(?<![A-Za-z0-9])((?:[A-Za-z0-9]+-)*SO-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)")
+                            .priority(1)
+                            .build(),
+                    RequiredSlot.builder()
+                            .name("batchNumber")
+                            .label("生产批次号（用户原文里的批次编号，整串原样提取，不要截掉前缀；销售单号不填这里；没提就 null）")
+                            .type("TEXT")
+                            .required(false)
+                            .priority(2)
+                            .build()
+            ));
+        }
+
         // 源头个体：三个入口都不单独必填（required=false ⇒ 不追问，只抽参）
         registerSlots("SOURCE_INDIVIDUAL_QUERY", Arrays.asList(
                 RequiredSlot.builder()

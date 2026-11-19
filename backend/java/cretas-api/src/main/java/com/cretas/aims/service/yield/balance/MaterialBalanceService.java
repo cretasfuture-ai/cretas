@@ -55,11 +55,24 @@ public class MaterialBalanceService {
     public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {}
 
     public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate) {
+        return blocksByBatch(factoryId, startDate, endDate, null);
+    }
+
+    /**
+     * @param warnOverridePct 黄线覆盖值 (百分数, 如 3): 非空时用它作黄线 (红线取原红线与它的较大者), 其余同上。
+     *                        供对话「损耗异常」与「发现的问题」页用同一个本厂告警阈值 (BP 问题 28)。
+     */
+    public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate,
+                                      BigDecimal warnOverridePct) {
         ProcessSecretAggregateExclusions.Scope excluded =
                 aggregateExclusions.forCurrentCaller(factoryId, "material balance by batch");
         List<Map<String, Object>> rows = reportRepo.findYieldReportsForBalance(factoryId, startDate, endDate,
                 "", excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
         Thresholds t = thresholdProvider.forFactory(factoryId);
+        if (warnOverridePct != null && warnOverridePct.signum() > 0) {
+            BigDecimal warn = warnOverridePct.divide(HUNDRED);
+            t = new Thresholds(warn, t.red().max(warn));
+        }
         Map<String, List<Map<String, Object>>> byBatch = new LinkedHashMap<>();
         for (Map<String, Object> r : rows) {
             String no = str(r.get("batch_number"));
