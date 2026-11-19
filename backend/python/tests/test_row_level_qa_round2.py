@@ -116,23 +116,37 @@ async def test_2_same_question_same_columns_gets_a_stable_plan_even_if_llm_sampl
 
 # ------------------------------ 3. 按日表问「哪一周」 ------------------------------
 
-async def test_3_week_question_on_daily_table_says_so_and_lists_all_tied_days():
+async def test_3_week_question_on_daily_table_is_rolled_up_by_week_by_the_program():
+    """按日表问「哪一周」: 程序由日期折算 ISO 周后按周汇总 (不再把某一天说成某一周), 且不经 LLM 采样。"""
     plan = {"intent": "compute", "sort_by": "计划品项达成率", "descending": False, "limit": 1}
-    out, _ = await ask("哪一周计划品项达成率最低？是多少？", plan_daily(), plan)
-    dates = {r[0] for r in out.result.rows}
-    assert dates == {"2026-10-23", "2026-10-30"}              # 并列最低全部列出
-    assert any("按日表" in n for n in out.result.notes)
-    assert "按日表" in out.text and "并列" in out.text
+    out, planner = await ask("哪一周计划品项达成率最低？是多少？", plan_daily(), plan)
+    assert planner.prompts == []                                # 确定性: 同一问题每次一致
+    weeks = {r[0]: r[1] for r in out.result.rows}
+    # 10/01,10/02 -> W40 (8/11); 10/09 -> W41 (4/7); 10/23 -> W43 (1/4); 10/30 -> W44 (1/4)
+    assert out.result.rows[0][0] in ("2026-W43", "2026-W44") and abs(out.result.rows[0][1] - 0.25) < 1e-9
+    assert abs(weeks["2026-W40"] - 8 / 11) < 1e-9 and abs(weeks["2026-W41"] - 4 / 7) < 1e-9
+    assert any("按日表" in n and "按周汇总" in n for n in out.result.notes)
+    assert "25.00%" in out.text and "2026-W41" in out.text      # 率按加权百分数给出
+
+
+async def test_3_week_rollup_weights_the_rate_instead_of_averaging_daily_rates():
+    df = pd.DataFrame([("2026-10-05", 10, 1), ("2026-10-06", 1, 1)], columns=["日期", "原表计划品项数", "已产出计划品项数"])
+    df["计划品项达成率"] = df["已产出计划品项数"] / df["原表计划品项数"]       # 逐日 0.1 / 1.0, 简单平均 0.55
+    out, _ = await ask("哪一周计划品项达成率最低", df, {"intent": "none"})
+    assert abs(out.result.rows[0][1] - 2 / 11) < 1e-9           # 加权 2/11, 不是 0.55
 
 
 async def test_3_planner_that_groups_by_a_nonexistent_week_column_is_retried_once():
+    # 没有可解析日期列、没法折算周: 仍走规划器; 字段对不上时交回重写一次
+    df = plan_daily().rename(columns={"日期": "当天"})
     bad = {"intent": "compute", "group_by": ["周"],
            "metrics": [{"name": "达成率", "func": "mean", "col": "计划品项达成率"}], "sort_by": "达成率"}
     good = {"intent": "compute", "sort_by": "计划品项达成率", "descending": False, "limit": 1}
-    out, planner = await ask("哪一周计划品项达成率最低？", plan_daily(), bad, good)
-    assert out.kind == "computed"                              # 以前: 字段不存在 -> uncomputed -> 「数据未提供对应日期」
+    out, planner = await ask("哪一周计划品项达成率最低？", df, bad, good)
+    assert out.kind == "computed"
     assert len(planner.prompts) == 2 and "字段不存在: 周" in planner.prompts[1]
-    assert "没有「周」列" in planner.prompts[0]                 # 首次提示词就告知是按日表
+    assert "没有「周」列" in planner.prompts[0]
+    assert any("按日表" in n for n in out.result.notes)         # 折算不了周就明说是按日表
 
 
 # ------------------------------ 4. 缺口 = 计划 − 产出 ------------------------------

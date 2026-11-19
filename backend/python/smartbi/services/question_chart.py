@@ -121,6 +121,9 @@ _METRIC_SYNONYMS: List[Tuple[Tuple[str, ...], Tuple[str, ...]]] = [
     (("产能", "利用率"), ("产能",)),
     (("停机",), ("停机",)),
     (("成本", "毛利", "利润"), ("成本", "毛利", "利润")),
+    (("醒发", "发酵"), ("醒发",)),
+    (("温湿度", "温度"), ("温度",)),
+    (("温湿度", "湿度"), ("湿度",)),
 ]
 
 
@@ -168,6 +171,40 @@ def measure_columns_only(cols: List[str], field_meta: Optional[List[Dict[str, An
             continue
         out.append(c)
     return out
+
+
+_OVERVIEW_WORDS = ("概况", "概览", "整体", "总体", "总结", "怎么样", "如何", "报告", "洞察", "分析一下", "看一下", "看看")
+
+
+def is_unrelated_to_measures(query: str, matched_measures: bool) -> bool:
+    """问题没点出任何指标列、也不是概览类问法 -> 兜底「数据概览」图 (前 3 个数值列) 与问题无关, 不该出。
+
+    问题已匹配到指标列时永远相关; 空问题/概览类问法 (概况/整体/怎么样…) 仍保留概览图。
+    """
+    q = (query or "").strip()
+    if matched_measures or not q:
+        return False
+    return not any(w in q for w in _OVERVIEW_WORDS)
+
+
+_MONEY_DEFAULT_WORDS = ("销售金额", "销售额", "营业额", "营业收入", "实收", "主营业务收入", "金额")
+
+
+def top5_chart_relevant(query: str, measures: List[str], primary_measure: Optional[str]) -> bool:
+    """库里聚合的「Top 5 维度 (按 primary_measure)」图该不该配给这个问题。
+
+    primary_measure 是金额类关键词命中的 (销售额/金额…) 时保持原样 (金额是默认口径)。
+    否则它只是「第一个指标列」(味美日汇总永远是 人数, 页脚就固定讲「各周人数」):
+    问题点名的指标里有它才出; 点名了别的指标就不出 (由按问题选列的图负责); 什么都没点名且不是概览问法也不出。
+    """
+    if not primary_measure:
+        return False
+    if any(w in primary_measure for w in _MONEY_DEFAULT_WORDS):
+        return True
+    asked = relevant_measure_columns(query or "", list(measures or []))
+    if asked:
+        return primary_measure in asked
+    return not is_unrelated_to_measures(query or "", False)
 
 
 def asked_month(query: str) -> Optional[int]:

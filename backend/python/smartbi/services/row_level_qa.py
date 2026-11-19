@@ -192,6 +192,32 @@ def is_code_column(name: str) -> bool:
     return bool(_CODE_NAME_RE.search(str(name)))
 
 
+def identifier_columns(columns: Sequence[str], field_meta: Optional[Sequence[dict]],
+                       df: Optional[pd.DataFrame] = None) -> set:
+    """编码/批号类标识列: 按字段角色判断 (字段定义里是维度、不是指标也不是时间), 没有角色信息的列才退回列名词表。
+
+    标识列的数值不是量: 不加千分位 (22002 不能写成 22,002), 不做求和/均值/首尾变化。
+    给了 df 时, 角色是维度的数值列还要求值都是 >=1000 的整数才算标识: 小整数 (如被误标成维度的计数列)
+    不会被格式化出千分位, 没有需要保护的东西, 也不该因此丢掉它的统计。
+    字段定义说是指标的列, 即使列名带「编号」也仍按列名挡 (旧上传把批号存成数值时角色是指标)。
+    """
+    roles = {str(f.get("original_name")): f for f in (field_meta or []) if f.get("original_name")}
+    out = set()
+    for c in columns:
+        f = roles.get(str(c))
+        if f is not None and f.get("is_dimension") and not f.get("is_measure") and not f.get("is_time"):
+            if df is not None and c in df.columns:
+                num = pd.to_numeric(df[c], errors="coerce").dropna()
+                if len(num) and (num != num.round()).any() | (num.abs().max() < 1000):
+                    # 数值列但不像标识 (带小数 / 都是小数): 不挡
+                    if not is_code_column(str(c)):
+                        continue
+            out.add(c)
+        elif is_code_column(str(c)):
+            out.add(c)
+    return out
+
+
 def asks_week_on_non_week_table(question: str, df: pd.DataFrame) -> bool:
     if not _WEEK_ASK_RE.search(question or ""):
         return False
@@ -229,6 +255,73 @@ def gap_column_name(pair: tuple) -> str:
     return f"缺口数({pair[0]}-{pair[1]})"
 
 
+WEEK_ROLLUP_COL = "周(按日期折算)"
+_LOW_WORDS = ("最低", "最少", "最小", "最差", "最弱", "最短")
+_HIGH_WORDS = ("最高", "最多", "最大", "最好", "最强", "最长")
+
+
+def with_week_column(df: pd.DataFrame, question: str) -> pd.DataFrame:
+    """按日表被问「哪一周/每周」: 由日期列折算 ISO 周 (2026-W41) 加一列, 让程序按周汇总。
+
+    表里已经有周列、问题不涉及周、没有可解析的日期列时原样返回 (按日表的提示仍由 execute_plan 给出)。
+    """
+    if not asks_week_on_non_week_table(question, df) or WEEK_ROLLUP_COL in df.columns:
+        return df
+    for c in df.columns:
+        if "日期" not in str(c) and "date" not in str(c).lower():
+            continue
+        s = df[c]
+        d = pd.to_datetime(s.astype(str).str.strip().where(s.notna()), errors="coerce")
+        if s.notna().sum() == 0 or d.notna().sum() < 0.8 * s.notna().sum():
+            continue
+        iso = d.dt.isocalendar()
+        label = iso["year"].astype("Int64").astype(str) + "-W" + iso["week"].astype("Int64").astype(str).str.zfill(2)
+        out = df.copy()
+        out[WEEK_ROLLUP_COL] = label.where(d.notna(), None)
+        return out
+    return df
+
+
+def week_rollup_plan(question: str, df: pd.DataFrame) -> Optional[dict]:
+    """按日表问「哪一周 X 最低/最高」: 按折算周汇总后排序的确定性计划 (不经 LLM, 同一问题每次一致)。
+
+    X 取问题点名的列: 率列按「分子/分母」加权 (计划品项达成率 = 已产出计划品项数 / 原表计划品项数,
+    或列头自带公式), 其余数值列求和。认不准指标返回 None (退回 LLM 规划, 周列已在表里)。
+    """
+    if WEEK_ROLLUP_COL not in df.columns:
+        return None
+    q = question or ""
+    cols = [str(c) for c in df.columns]
+    base = lambda c: re.split(r"[（(]", c, maxsplit=1)[0].strip()  # noqa: E731
+    named = sorted((c for c in cols if c != WEEK_ROLLUP_COL and len(base(c)) >= 2 and base(c) in q),
+                   key=lambda c: -len(base(c)))
+    if not named:
+        return None
+    col = named[0]
+    if "率" in base(col):
+        pair = _plan_count_columns(cols) if "计划" in base(col) else None
+        derived = derive_ratio_from_header(col, cols)
+        if pair:
+            num, den = [pair[1]], [pair[0]]
+        elif derived:
+            num, den = derived
+        else:
+            return None
+        metric = {"name": base(col) + "(按周加权)", "func": "ratio", "num": num, "den": den}
+        how = f"按周加权 = Σ{'+'.join(num)} / Σ{'+'.join(den)}, 不是逐日比率的平均"
+    else:
+        metric = {"name": base(col) + "(按周合计)", "func": "sum", "col": col}
+        how = f"按周求和「{col}」"
+    low = any(w in q for w in _LOW_WORDS)
+    return {
+        "intent": "compute", "group_by": [WEEK_ROLLUP_COL], "metrics": [metric],
+        "sort_by": metric["name"], "descending": not low, "limit": 10,
+        "note": f"这张表是按日表 (没有「周」列), 已由日期折算 ISO 周 (周一至周日) 后按周汇总: {how}; "
+                "回答须说明是按日表按周汇总的结果; 没有数据的周 (值为空) 不参与排名",
+    }
+
+
+_PLAN_VS_ACTUAL_RE = re.compile(r"计划\s*(与|和|跟|对比|对照|vs|VS)\s*实际")
 _PLAN_QTY_WORDS = ("产量", "数量", "kg", "公斤", "重量")
 
 
@@ -251,6 +344,26 @@ def rule_based_plan(question: str, df: pd.DataFrame) -> Optional[tuple]:
                 "intent": "compute", "sort_by": pair[0], "descending": True, "limit": 1,
                 "note": f"原表计划没有数量列 (只有「{pair[0]}」), 按计划品项数回答, 不是计划产量; "
                         "不得拿实产良品顶替计划产量",
+            })
+    if _PLAN_VS_ACTUAL_RE.search(q) and not _WEEK_ASK_RE.search(q) and not re.search(r"哪[一天个]|每天|各天|逐日|哪些", q):
+        # 「计划与实际差多少」: 整月口径 = 品项数合计 + 按品项加权的达成率 (不是逐日达成率的均值)
+        pair = _plan_count_columns(cols)
+        if pair:
+            gap = gap_column_name(pair)
+            metrics = [
+                {"name": "计划品项数合计", "func": "sum", "col": pair[0]},
+                {"name": "已产出品项数合计", "func": "sum", "col": pair[1]},
+            ]
+            if gap in cols:
+                metrics.append({"name": "缺口合计(计划-产出)", "func": "sum", "col": gap})
+            metrics.append({"name": "品项达成率(按合计加权)", "func": "ratio", "num": [pair[1]], "den": [pair[0]]})
+            outside = [c for c in cols if "计划外" in c and "数" in c]
+            if len(outside) == 1:
+                metrics.append({"name": "计划外品项数合计", "func": "sum", "col": outside[0]})
+            return ("plan", {
+                "intent": "compute", "metrics": metrics,
+                "note": f"原表计划没有数量, 按品项数回答: 达成率 = Σ{pair[1]} / Σ{pair[0]} (不是逐日达成率的平均); "
+                        "不得给逐日均值或自行推算天数",
             })
     if any(w in q for w in _GAP_ASK_WORDS):
         pair = _plan_count_columns(cols)
@@ -412,9 +525,40 @@ class ExecResult:
     asks_total: bool = False
 
 
-def _apply_filter(df: pd.DataFrame, f: dict) -> pd.Series:
+def strip_code_hash(s: str) -> str:
+    """导入方为防编码被当数字, 给编码统一加了「#」前缀 (#21014C): 展示时去掉, 库里的值不动。"""
+    return s[1:] if len(s) > 1 and s.startswith("#") and s[1:].strip() else s
+
+
+_MONTH_PREFIX_RE = re.compile(r"\d{4}-\d{2}(-\d{2})?")
+
+
+class ValueNotFound(PlanError):
+    """等值筛选的取值在该列里根本没出现 (多半是规划器把「10月」写成 日期=='2026-10' 这类)。"""
+
+
+def _apply_filter(df: pd.DataFrame, f: dict, strict_values: bool = True) -> pd.Series:
     col, op, val = f["col"], f["op"], f["value"]
     s = df[col]
+    if op in ("==", "!=") and isinstance(val, str) and s.dtype == object:
+        sv0, v0 = s.astype(str).str.strip(), val.strip()
+        if v0 and not (sv0 == v0).any() and sv0.str.startswith("#").any():
+            # 库里的编码带「#」前缀、问题/规划里没有 (展示时已去掉): 去前缀后再比
+            m = sv0.str.lstrip("#") == v0.lstrip("#")
+            if m.any():
+                return m if op == "==" else ~m
+        if v0 and not (sv0 == v0).any():
+            # 月/日前缀 (2026-10 对 2026-10-01...) 是前缀匹配, 不是等值: 味美「10月有哪些计划外生产」被规划成
+            # 日期=='2026-10' 命中 0 行, 回答「10月没有计划外生产」。
+            if _MONTH_PREFIX_RE.fullmatch(v0):
+                m = sv0.str.startswith(v0) & s.notna()
+                if m.any():
+                    return m if op == "==" else ~m
+            if strict_values and op == "==" and s.notna().any():
+                uniq = list(dict.fromkeys(sv0[s.notna()].tolist()))
+                shown = " / ".join(u[:20] for u in uniq[:12])
+                raise ValueNotFound(
+                    f"字段「{col}」没有取值「{v0}」(现有取值: {shown}{' …' if len(uniq) > 12 else ''})")
     if op == "notnull":
         return s.notna() & (s.astype(str).str.strip() != "")
     if op == "contains":
@@ -455,7 +599,7 @@ def _fmt(v: Any, pct: bool = False, code: bool = False) -> str:
     if code:  # 编码/ID 类列: 原样, 不加千分位, 不带 .0
         if isinstance(v, float) and v == int(v):
             return str(int(v))
-        return str(v)
+        return strip_code_hash(str(v))
     if pct:
         return f"{v * 100:.2f}%"
     if isinstance(v, bool):
@@ -468,10 +612,11 @@ def _fmt(v: Any, pct: bool = False, code: bool = False) -> str:
     return s if len(s) <= 40 else s[:40] + "…"
 
 
-def execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
-    res = _execute_plan(df, plan, question)
+def execute_plan(df: pd.DataFrame, plan: dict, question: str = "",
+                 field_meta: Optional[Sequence[dict]] = None, strict_values: bool = True) -> ExecResult:
+    res = _execute_plan(df, plan, question, strict_values)
     res.asks_total = asks_total(question)
-    res.code_cols = {c for c in res.columns if is_code_column(c)}
+    res.code_cols = set(identifier_columns(res.columns, field_meta, df))
     if asks_week_on_non_week_table(question, df):
         res.notes.append(
             "当前数据源是按日表 (没有「周」列), 未按周汇总; 以下是按日结果, "
@@ -479,7 +624,7 @@ def execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult
     return res
 
 
-def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResult:
+def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "", strict_values: bool = True) -> ExecResult:
     total = len(df)
     notes: List[str] = []
     if plan["note"]:
@@ -493,7 +638,7 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str = "") -> ExecResul
     work = df
     fdesc: List[str] = []
     for f in plan["filters"]:
-        work = work[_apply_filter(work, f)]
+        work = work[_apply_filter(work, f, strict_values)]
         fdesc.append(f"{f['col']} {f['op']} {f['value']!r}" if f["op"] != "notnull"
                      else f"{f['col']} 非空")
     matched = len(work)
@@ -674,17 +819,51 @@ def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tupl
     """
     if res is None or not res.asks_total or not res.totals or not answer:
         return answer, False
-    if all(_has_number(answer, v) for v in res.totals.values()):
-        return answer, False
     stmt = "；".join(f"{k} = {_fmt(v)}" for k, v in res.totals.items())
     sentence = f"全部合计 {stmt}（程序对全部 {res.matched_rows} 行求和）"
     parts = _CLAUSE_SPLIT_RE.split(answer)
+    # 味美 11-19 上线复测: 结论写「全月一共 52 卷」, 正文另一处写了「全月总用量 133 卷」。整段里有 133 不等于
+    # 结论对: 逐句看, 含「一共/总共/合计…」又带着结果表里某个具体值 (最大项 52) 却没有合计数的那一句要换掉。
+    shown = [c for r in res.rows for c in r if isinstance(c, (int, float)) and not isinstance(c, bool)
+             and not pd.isna(c)]
+    for i, part in enumerate(parts):
+        if not any(w in part for w in TOTAL_WORDS):
+            continue
+        if any(_has_number(part, v) for v in res.totals.values()):
+            continue
+        if any(_has_number(part, v) for v in shown):
+            tail = _CLAUSE_TAIL_RE.search(part)
+            parts[i] = sentence + (tail.group(0) if tail else "")
+            return "".join(parts), True
+    if all(_has_number(answer, v) for v in res.totals.values()):
+        return answer, False
     for i, part in enumerate(parts):
         if any(w in part for w in _TOTAL_CLAUSE_WORDS):
             tail = _CLAUSE_TAIL_RE.search(part)
             parts[i] = sentence + (tail.group(0) if tail else "")
             return "".join(parts), True
     return answer.rstrip() + f"\n\n**更正（程序核对）**：{sentence}。", True
+
+
+def strip_code_separators(answer: str, res: Optional[ExecResult]) -> tuple:
+    """回答里的编码/批号值被模型写成带千分位 (22,002) 时, 改回原样 (22002)。
+
+    只改结果表里标识列出现过的值, 不碰同样位数的普通数量。返回 (新回答, 是否改了)。
+    """
+    if res is None or not answer or not res.code_cols:
+        return answer, False
+    values = set()
+    for r in res.rows:
+        for c, v in zip(res.columns, r):
+            if c in res.code_cols and v is not None and not (isinstance(v, float) and pd.isna(v)):
+                t = _fmt(v, code=True)
+                if t.isdigit() and len(t) >= 4:
+                    values.add(t)
+    out = answer
+    for t in sorted(values, key=len, reverse=True):
+        grouped = f"{int(t):,}"
+        out = re.sub(r"(?<![\d.,])" + re.escape(grouped) + r"(?![\d]|,\d|\.\d)(?!\s*(?:kg|KG|公斤|吨|元|%|个|卷|箱|分钟|台|批|人|天|次|趟))", t, out)
+    return out, out != answer
 
 
 # ---------------------------------------------------------------------------
@@ -712,6 +891,7 @@ async def answer_row_level(
     df: pd.DataFrame,
     field_names: Sequence[str],
     llm_call: LlmCall,
+    field_meta: Optional[Sequence[dict]] = None,
 ) -> RowLevelOutcome:
     """对整份数据做行级计算; 返回拒答 / 已计算段落 / 未能计算 / 无需计算。
 
@@ -721,8 +901,13 @@ async def answer_row_level(
         return RowLevelOutcome("none")
 
     df = with_gap_columns(df)
+    df = with_week_column(df, question)
 
-    rule = rule_based_plan(question, df)  # 确定性规则: 不经 LLM, 同一问题每次一致
+    # 确定性规则: 不经 LLM, 同一问题每次一致 (按日表问「哪一周」先按周汇总)
+    rule = rule_based_plan(question, df)
+    wk = week_rollup_plan(question, df)
+    if wk and not (rule and rule[0] == "refuse"):
+        rule = ("plan", wk)
     if rule and rule[0] == "refuse":
         return RowLevelOutcome("refuse", build_refusal(rule[1], field_names))
 
@@ -733,7 +918,7 @@ async def answer_row_level(
     if rule and rule[0] == "plan":
         try:
             vplan = validate_plan(rule[1], df)
-            res = execute_plan(df, vplan, question)
+            res = execute_plan(df, vplan, question, field_meta)
         except PlanError as e:
             return RowLevelOutcome("uncomputed", UNCOMPUTED_NOTE.format(reason=str(e)), plan=rule[1])
         return RowLevelOutcome("computed", render_block(question, res), plan=vplan, result=res)
@@ -763,7 +948,8 @@ async def answer_row_level(
                 str(plan.get("missing") or "被问的"), field_names), plan=plan)
         try:
             vplan = validate_plan(plan, df)
-            res = execute_plan(df, vplan, question)
+            # 第一次严格 (筛选值在列里不存在就报错交回规划器重写); 重写后仍然没有 -> 如实按 0 行回答
+            res = execute_plan(df, vplan, question, field_meta, strict_values=(attempt == 1))
         except PlanError as e:
             if attempt == 1 and cached is None:
                 # 字段对不上 (如在按日表上 group_by 周): 把错误和真实字段交回规划器重写一次,
