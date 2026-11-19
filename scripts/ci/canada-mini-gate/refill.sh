@@ -13,6 +13,13 @@ set -u
 FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
 slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
+# 启用哪些槽 (2026-11-19 Steve「目前别跑满, 最多 1 个 PG 1 个 fast」): 文件 $ENABLED_FILE 里列出槽号 (空格/换行分隔),
+# 不在里面的槽空转不领活、也不算进别的槽的名次; 文件不存在 = 全部启用。改文件即生效, 不用动 launchd。
+ENABLED_FILE="${GH_GATE_ENABLED_FILE:-/Users/rex/gh-gate/enabled-slots}"
+slot_enabled() {
+  [ -f "$ENABLED_FILE" ] || return 0
+  case " $(tr '\n' ' ' < "$ENABLED_FILE") " in *" $1 "*) return 0 ;; *) return 1 ;; esac
+}
 # 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数): 编号比 $1 小、同标签、空闲的槽数 + 1。
 # ⛔ 不用 `seq 1 $((n-1))`: macOS (BSD) 的 `seq 1 0` 倒数输出「1 0」, 第 1 槽把自己和不存在的 0 号槽都算成空闲,
 #    名次变 3; 只剩 1 个排队作业时 4 个 PG 槽全不起 (2026-11-19 run 44403277567 汇总作业卡 1.5 小时, 队列超时踢出)。
@@ -21,6 +28,7 @@ idle_rank() {
   lbl=$(slot_label "$s")
   for ((k = 1; k < s; k++)); do
     [ "$(slot_label "$k")" = "$lbl" ] || continue
+    slot_enabled "$k" || continue
     slot_busy "$k" || r=$((r + 1))
   done
   echo "$r"
@@ -61,7 +69,14 @@ mini_queued() {
 }
 
 log "start label=$LABEL"
+paused=0
 while :; do
+  if ! slot_enabled "$SLOT"; then
+    [ "$paused" = 1 ] || log "disabled (not in $ENABLED_FILE), idle"
+    paused=1; sleep 30; continue
+  fi
+  [ "$paused" = 1 ] && log "enabled again"
+  paused=0
   if lock_held; then log "release build holds lock, wait"; while lock_held; do sleep 15; done; fi
   # 残留的陈旧锁目录 (持锁进程已死) 超过 2 分钟就清掉
   [ -d "$QCACHE.lock" ] && [ -n "$(find "$QCACHE.lock" -maxdepth 0 -mmin +2 2>/dev/null)" ] && rmdir "$QCACHE.lock" 2>/dev/null

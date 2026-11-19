@@ -33,7 +33,9 @@ permissions:
 env:
   # mini 优先、满了溢出的阈值: 该标签上排队作业数 >= 它就走托管。
   # 2026-11-19 Steve: mini 槽 1-4 注册 cretas-mini-pg (PG 线), 槽 5 专给 fast-contracts (cretas-mini-fast)。
-  MINI_PG_QUEUE_THRESHOLD: '4'
+  # 2026-11-19 Steve「目前别跑满, 最多 1 个 PG 1 个 fast」: mini 只开槽 1 (PG) 和槽 5 (fast), PG 也只派第 3 片,
+  # 阈值 1 = 该标签上已有排队就整片走托管。
+  MINI_PG_QUEUE_THRESHOLD: '1'
   MINI_FAST_QUEUE_THRESHOLD: '1'
 
 jobs:
@@ -47,7 +49,7 @@ jobs:
     # 2026-11-18 mini 优先、满了溢出: 本作业兼做分片路由, ⛔ 必须在托管机上 (放 mini 上的话 mini 一满它自己也排队,
     # 溢出就失效了)。路由脚本 scripts/ci/route-mini-or-hosted.sh 按标签各跑一次: 数该标签上排队的作业,
     # 少于阈值输出该标签, 否则 ubuntu-latest; 每次打一行 ROUTE=... label=...
-    #   runner_pg   cretas-mini-pg   阈值 MINI_PG_QUEUE_THRESHOLD   (槽 1-4)
+    #   runner_pg   cretas-mini-pg   阈值 MINI_PG_QUEUE_THRESHOLD   (槽 1-4, 目前只开槽 1; 只派 PG 第 3 片, 其余 3 片托管)
     #   runner_fast cretas-mini-fast 阈值 MINI_FAST_QUEUE_THRESHOLD (槽 5, 只派 fast 第 3 片, 其余 3 片并行在托管)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -279,7 +281,7 @@ jobs:
     # 2026-11-18 mini 优先、满了溢出: 先看 changes 作业的路由输出 (mini 排队 >= 阈值 / 读不到 -> ubuntu-latest),
     # 守卫照旧串在后面, 路由输出只能把作业从 mini 挪到托管, fork PR 无论如何落托管。
     # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
-    runs-on: ${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.shard == 3 && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false

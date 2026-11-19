@@ -40,6 +40,9 @@ SAME_REPO_GUARD = "(github.event_name == 'merge_group' || github.event.pull_requ
 GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
 MINI_PG_ROUTE = ("${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && " + SAME_REPO_GUARD + GUARD_TAIL
                  + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
+# 2026-11-19 Steve「最多 1 个 PG 1 个 fast」: PG 分片也只有第 3 片可能上 mini, 汇总作业照旧走 MINI_PG_ROUTE。
+MINI_PG_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && "
+                       + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubuntu-latest' }}")
 MINI_FAST_SHARD_ROUTE = ("${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && "
                          + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-fast' || 'ubuntu-latest' }}")
 MINI_FAST_SUMMARY_ROUTE = ("${{ needs.changes.outputs.runner_fast == 'cretas-mini-fast' && " + SAME_REPO_GUARD + GUARD_TAIL
@@ -48,7 +51,7 @@ UNROUTED = "${{ " + SAME_REPO_GUARD + GUARD_TAIL + " && 'cretas-mini-pg' || 'ubu
 # PG 线 4 片分片 + 汇总, fast-contracts 4 片分片 + 汇总。判定/路由作业 changes 必须是托管字面量
 # (放 mini 上的话 mini 一满它自己也排队, 溢出失效), 所以不在白名单里。
 SELF_HOSTED_ALLOWED = {
-    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_ROUTE,
+    ('java-gate-pr.yml', 'postgres-reversal-concurrency-shard'): MINI_PG_SHARD_ROUTE,
     ('java-gate-pr.yml', 'postgres-reversal-concurrency'): MINI_PG_ROUTE,
     ('java-gate-pr.yml', 'fast-contracts-shard'): MINI_FAST_SHARD_ROUTE,
     ('java-gate-pr.yml', 'fast-contracts'): MINI_FAST_SUMMARY_ROUTE,
@@ -166,6 +169,13 @@ if not violations('java-gate-pr.yml', all_fast):
     ok = False
 else:
     print('  ok - 阴性对照: fast 4 片全派第 5 槽 (去掉 matrix.shard 限定) 被判红')
+all_pg = sample.replace('probe', 'postgres-reversal-concurrency-shard').replace(
+    '[self-hosted, cretas]', MINI_PG_SHARD_ROUTE.replace('matrix.shard == 3 && ', ''))
+if not violations('java-gate-pr.yml', all_pg):
+    print('FAIL: 阴性对照: PG 4 片全派 mini (去掉 matrix.shard 限定) 没被判红')
+    ok = False
+else:
+    print('  ok - 阴性对照: PG 4 片全派 mini (去掉 matrix.shard 限定) 被判红')
 present = [k for k in SELF_HOSTED_ALLOWED if k in seen]
 print('READING: self_hosted_allowed_present=%d/%d' % (len(present), len(SELF_HOSTED_ALLOWED)))
 

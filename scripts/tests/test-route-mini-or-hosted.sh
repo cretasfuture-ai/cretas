@@ -162,6 +162,28 @@ SH
   else
     echo "  ok - refill 空闲名次在 BSD seq 下正确"
   fi
+  # 启用名单 (2026-11-19 Steve「最多 1 个 PG 1 个 fast」): 只启用 2 和 5 时, 槽 1 停用不算进槽 2 的名次 ⇒ 2=1 5=1;
+  # 变异对照: 删掉名次里的 slot_enabled 跳过, 槽 2 名次必须变成 2。
+  printf '2\n5\n' > "$WORK/enabled-slots"
+  en_rank() { echo " 2=$(GH_GATE_ENABLED_FILE="$WORK/enabled-slots" bash "$1" --idle-rank-of 2) 5=$(GH_GATE_ENABLED_FILE="$WORK/enabled-slots" bash "$1" --idle-rank-of 5)"; }
+  got=$(en_rank "$REFILL")
+  echo "READING: refill idle ranks (enabled 2 5):$got"
+  if [ "$got" != " 2=1 5=1" ]; then
+    echo "FAIL: 只启用 2 5 时名次应为 2=1 5=1"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 启用名单: 停用的槽不算进名次"
+  fi
+  EMUT="$WORK/refill-enabled-mutant.sh"
+  grep -v '^    slot_enabled "\$k" || continue$' "$REFILL" > "$EMUT"
+  mgot=$(en_rank "$EMUT")
+  echo "READING: mutant(no enabled skip) idle ranks:$mgot"
+  if [ "$mgot" != " 2=2 5=1" ]; then
+    echo "FAIL: 启用名单变异对照: 删掉跳过后应读到 2=2 5=1, 实际$mgot (变异没生效或测试没守住)"
+    REAL_FAILS=$((REAL_FAILS + 1))
+  else
+    echo "  ok - 启用名单变异对照: 删掉跳过后名次变错"
+  fi
   # 变异对照: 把循环改回 seq 写法, 名次必须变错。
   RMUT="$WORK/refill-mutant.sh"
   sed 's/for ((k = 1; k < s; k++)); do/for k in $(seq 1 $((s - 1))); do/' "$REFILL" > "$RMUT"
