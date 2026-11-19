@@ -22,7 +22,7 @@ from smartbi.services.semantic_mapper import FieldMapping, SemanticMappingResult
 from smartbi.services.structure_detector import StructureDetector
 
 # 「物料」列名刻意不含 编码/批号 等关键词，只靠值判断
-HEADERS = ["日期", "物料", "金额", "重量(kg)"]
+COERCE_TEST_HEADERS = ["日期", "物料", "金额", "重量(kg)"]
 
 
 def _amount(i: int) -> float:
@@ -33,7 +33,7 @@ def _amount(i: int) -> float:
 def _uploaded_rows_as_stored() -> pd.DataFrame:
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.append(HEADERS)
+    ws.append(COERCE_TEST_HEADERS)
     for i in range(1, 31):
         code = {22: "21014C", 24: "26004+24004"}.get(i, 21000 + i)
         weight = "-" if i == 5 else 300.0 + i  # 度量列里的占位符
@@ -44,7 +44,7 @@ def _uploaded_rows_as_stored() -> pd.DataFrame:
 
     structure = asyncio.run(StructureDetector().detect(content, force_method="rule"))
     mapping = SemanticMappingResult(
-        field_mappings=[FieldMapping(original=h, standard=None, confidence=1.0, method="rule") for h in HEADERS]
+        field_mappings=[FieldMapping(original=h, standard=None, confidence=1.0, method="rule") for h in COERCE_TEST_HEADERS]
     )
     extracted = FixedExecutor().execute_with_pandas(content, structure, mapping, options={"calculate_stats": False})
     assert extracted.success, extracted.error
