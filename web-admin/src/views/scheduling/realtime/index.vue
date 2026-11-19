@@ -317,7 +317,7 @@ function getStatusText(status: string) {
   return map[status] || status;
 }
 
-function formatTime(time: string) {
+function formatTime(time?: string | null) {
   if (!time) return '-';
   return new Date(time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
@@ -387,7 +387,12 @@ function getProbabilityColor(prob: number) {
         <div class="stat-content">
           <el-icon class="stat-icon" style="color: var(--el-color-warning)"><TrendCharts /></el-icon>
           <div class="stat-info">
-            <div class="stat-value">{{ ((dashboard.lineStats?.utilizationRate || 0) * 100).toFixed(0) }}%</div>
+            <div
+              class="stat-value"
+              :title="dashboard.unavailableReasons?.['lineStats.utilizationRate'] || '今日有任务的启用产线 ÷ 启用产线'"
+            >
+              {{ dashboard.lineStats?.utilizationRate == null ? '暂无数据' : `${(dashboard.lineStats.utilizationRate * 100).toFixed(0)}%` }}
+            </div>
             <div class="stat-label">产线利用率</div>
           </div>
         </div>
@@ -437,11 +442,14 @@ function getProbabilityColor(prob: number) {
               {{ getStatusText(schedule.status) }}
             </el-tag>
           </div>
-          <div class="tile-line">{{ schedule.productionLineName }}</div>
-          <div class="tile-time">
-            {{ formatTime(schedule.plannedStartTime) }} - {{ formatTime(schedule.plannedEndTime) }}
+          <div class="tile-line">
+            {{ schedule.productionLineName || '未指定产线' }}
+            <el-tag v-if="schedule.source === 'WORKFLOW_BATCH'" size="small" type="info">工作流批次</el-tag>
           </div>
-          <div class="tile-progress">
+          <div class="tile-time">
+            {{ formatTime(schedule.plannedStartTime || schedule.actualStartTime) }} - {{ formatTime(schedule.plannedEndTime) }}
+          </div>
+          <div v-if="schedule.targetQuantity != null" class="tile-progress">
             <el-progress
               :percentage="schedule.completionRate || 0"
               :stroke-width="8"

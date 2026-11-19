@@ -739,6 +739,17 @@ public interface ProductionPlanRepository extends JpaRepository<ProductionPlan, 
             @Param("planIds") Collection<String> planIds);
 
     /**
+     * 调度 Dashboard: 工作流批次所属计划的编号与建议产线 (批次本身不存产线 id)。
+     *
+     * @return 每行 {@code [String planId, String planNumber, String suggestedProductionLineId]}
+     */
+    @Query("SELECT p.id, p.planNumber, p.suggestedProductionLineId FROM ProductionPlan p "
+            + "WHERE p.factoryId = :factoryId AND p.id IN :planIds")
+    List<Object[]> findDashboardPlanRefsByFactoryIdAndIdIn(
+            @Param("factoryId") String factoryId,
+            @Param("planIds") Collection<String> planIds);
+
+    /**
      * 本厂有没有一份未取消的计划从这个时刻开始 —— 插单时段没有存计划 id,
      * 确认插单时计划的 startTime 取自时段 (与强制插单被拒时找时段的判据同一个)。
      */

@@ -110,7 +110,16 @@ function getStatusText(status: string) {
   return map[status] || status;
 }
 
-function formatTime(time: string) {
+/** 量不到的指标后端给 null: 显示「暂无数据」, 原因放在 title 里, 不用 0 兜底。 */
+function percentOrNone(value: number | null | undefined) {
+  return value === null || value === undefined ? '暂无数据' : `${(value * 100).toFixed(0)}%`;
+}
+
+function reasonOf(key: string) {
+  return dashboard.value?.unavailableReasons?.[key] ?? '';
+}
+
+function formatTime(time?: string | null) {
   if (!time) return '-';
   return new Date(time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
@@ -173,7 +182,9 @@ function getProbabilityColor(prob: number) {
         </div>
         <div class="stat-details">
           <span>临时工 {{ dashboard?.workerStats?.temporaryWorkers || 0 }}</span>
-          <span>平均绩效 {{ (dashboard?.workerStats?.averagePerformance || 0).toFixed(1) }}</span>
+          <span :title="reasonOf('workerStats.averagePerformance')">
+            平均绩效 {{ dashboard?.workerStats?.averagePerformance == null ? '暂无数据' : dashboard.workerStats.averagePerformance.toFixed(1) }}
+          </span>
         </div>
       </el-card>
 
@@ -186,8 +197,12 @@ function getProbabilityColor(prob: number) {
           <div class="stat-label">活跃产线</div>
         </div>
         <div class="stat-details">
-          <span>利用率 {{ ((dashboard?.lineStats?.utilizationRate || 0) * 100).toFixed(0) }}%</span>
-          <span>效率 {{ ((dashboard?.lineStats?.averageEfficiency || 0) * 100).toFixed(0) }}%</span>
+          <span :title="reasonOf('lineStats.utilizationRate') || '今日有任务的启用产线 ÷ 启用产线'">
+            利用率 {{ percentOrNone(dashboard?.lineStats?.utilizationRate) }}
+          </span>
+          <span :title="reasonOf('lineStats.averageEfficiency')">
+            效率 {{ percentOrNone(dashboard?.lineStats?.averageEfficiency) }}
+          </span>
         </div>
       </el-card>
 
@@ -230,19 +245,20 @@ function getProbabilityColor(prob: number) {
             class="schedule-item"
           >
             <div class="schedule-time">
-              <span class="time-start">{{ formatTime(schedule.plannedStartTime) }}</span>
+              <span class="time-start">{{ formatTime(schedule.plannedStartTime || schedule.actualStartTime) }}</span>
               <span class="time-separator">-</span>
               <span class="time-end">{{ formatTime(schedule.plannedEndTime) }}</span>
             </div>
             <div class="schedule-info">
               <div class="info-line">
-                <span class="line-name">{{ schedule.productionLineName }}</span>
+                <span class="line-name">{{ schedule.productionLineName || '未指定产线' }}</span>
+                <el-tag v-if="schedule.source === 'WORKFLOW_BATCH'" size="small" type="info">工作流批次</el-tag>
                 <el-tag :color="getStatusColor(schedule.status)" size="small" effect="dark">
                   {{ getStatusText(schedule.status) }}
                 </el-tag>
               </div>
               <div class="info-batch">{{ schedule.batchNumber }}</div>
-              <div class="info-progress">
+              <div v-if="schedule.targetQuantity != null" class="info-progress">
                 <el-progress
                   :percentage="schedule.completionRate || 0"
                   :stroke-width="6"
@@ -262,7 +278,7 @@ function getProbabilityColor(prob: number) {
             </div>
             <div class="schedule-workers">
               <el-icon><User /></el-icon>
-              <span>{{ schedule.assignedWorkerCount || 0 }} 人</span>
+              <span>{{ schedule.assignedWorkerCount == null ? '-' : schedule.assignedWorkerCount + ' 人' }}</span>
             </div>
           </div>
         </div>

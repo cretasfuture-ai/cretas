@@ -452,6 +452,19 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByIdInAndFactoryId(@Param("ids") Collection<Long> ids, @Param("factoryId") String factoryId);
 
     /**
+     * 调度 Dashboard: 本厂在 {@code before} 之前开工、此刻仍在产 (statuses) 的正式批次 ——
+     * 工作流开批次直接 IN_PROGRESS + startTime, 不经过调度计划。不含 CLERK_WIP 中间工件 (同
+     * {@link #findByFactoryIdAndProductionPlanIdIn} 口径)。软删由实体上的 @Where 过滤。
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.status IN :statuses "
+           + "AND b.startTime IS NOT NULL AND b.startTime < :before "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') ORDER BY b.startTime, b.id")
+    java.util.List<ProductionBatch> findRunningForDashboard(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") Collection<com.cretas.aims.entity.enums.ProductionBatchStatus> statuses,
+            @Param("before") java.time.LocalDateTime before);
+
+    /**
      * 单元 F (F006 REQ-21): 查工厂下属于一组生产计划的全部批次 (按订单聚合出成率用).
      * 调用方先用 {@code ProductionPlanRepository.findByFactoryIdAndSourceOrderId} 取订单的计划 ids,
      * 再用本方法取这些计划下的全部批次。空集合 → 空列表 (Spring Data IN-空 行为)。
