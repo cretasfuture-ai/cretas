@@ -53,12 +53,25 @@ class CiGuestRetired(unittest.TestCase):
         with mock.patch.object(m.subprocess,'run',side_effect=calls) as run:
             result=m.active_build()
         self.assertEqual(run.call_count,len(calls),'unexpected extra/missing subprocess call')
+        if guest is not None:
+            command=run.call_args.args[0]
+            self.assertEqual(command[:6],['/opt/homebrew/bin/colima','ssh','-p','ci','--','python3'])
+            self.assertIn('Runner.Worker',command[-1])
         return result
     def row(self,name,status):return json.dumps(dict(name=name,status=status))+'\n'
     def test_stopped_ci_is_idle_without_guest_probe(self):
         self.assertFalse(self.run_gate((0,self.row('ci','Stopped'))))
     def test_absent_ci_is_idle_when_other_instances_listed(self):
         self.assertFalse(self.run_gate((0,self.row('default','Running'))))
+    def test_row_without_name_is_busy(self):
+        listing=self.row('default','Running')+'{"status":"Stopped"}\n'
+        self.assertTrue(self.run_gate((0,listing)))
+    def test_row_with_unreadable_status_is_busy(self):
+        for row in ['{"name":"default"}\n',self.row('default',None),self.row('default',42),
+                    self.row('default',''),self.row('default',' '),self.row('default','unexpected')]:
+            for valid_row in [self.row('other','Running'),self.row('ci','Stopped')]:
+                with self.subTest(row=row,valid_row=valid_row):
+                    self.assertTrue(self.run_gate((0,valid_row+row)))
     def test_running_ci_falls_through_to_guest_probe(self):
         listing=(0,self.row('default','Stopped')+self.row('ci','Running'))
         self.assertFalse(self.run_gate(listing,(0,self.IDLE)))
