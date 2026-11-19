@@ -23,6 +23,9 @@
 --   worker_assignments        -> WorkerAssignment       (无 updatedAt)
 --
 -- 幂等: 表不存在 (全新库, 表由别处建) 或触发器已摘, 都什么也不做; 重复执行无副作用。
+-- 拿不到表锁 5 秒即失败, 不让迁移排队卡住签到/日志等高频表 (Opus 终审 M1, 同 V20261120_97)
+SET LOCAL lock_timeout = '5s';
+
 DO $$
 DECLARE
     t text;
