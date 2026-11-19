@@ -4,6 +4,7 @@ import com.cretas.aims.ai.client.DashScopeClient;
 import com.cretas.aims.ai.dto.ChatCompletionResponse;
 import com.cretas.aims.ai.dto.Tool;
 import com.cretas.aims.ai.dto.ToolCall;
+import com.cretas.aims.ai.tool.ToolParameterGroups;
 import com.cretas.aims.ai.tool.ToolExecutor;
 import com.cretas.aims.ai.tool.ToolRbacEnforcer;
 import com.cretas.aims.ai.tool.ToolRegistry;
@@ -2680,16 +2681,26 @@ public class ToolDispatchService {
             // ⛔ 只对显式声明 x-llm-extract-optional=true 的工具抽可选参数 (organizer 审 #967):
             // 这里每次工具执行都会进来, 不加开关等于给所有只有可选参数的读工具每次多一次大模型调用 (延迟 + 费用)。
             boolean optionalOnly = requiredParams == null || requiredParams.isEmpty();
-            if (optionalOnly && !Boolean.TRUE.equals(parametersSchema.get(EXTRACT_OPTIONAL_FLAG))) {
+            boolean extractOptional = Boolean.TRUE.equals(parametersSchema.get(EXTRACT_OPTIONAL_FLAG));
+            boolean hasAnyOfGroups = !ToolParameterGroups.groups(parametersSchema).isEmpty();
+            if (optionalOnly && !extractOptional && !hasAnyOfGroups) {
                 return extractedParams;
             }
-            Collection<String> candidates = optionalOnly ? properties.keySet() : requiredParams;
+            Collection<String> candidates = optionalOnly
+                    ? (extractOptional ? properties.keySet() : List.<String>of())
+                    : requiredParams;
+            java.util.function.Predicate<String> given = p -> existingParams.containsKey(p)
+                    && existingParams.get(p) != null
+                    && !(existingParams.get(p) instanceof String s && s.trim().isEmpty());
             List<String> missingParams = candidates.stream()
-                    .filter(p -> !existingParams.containsKey(p) ||
-                                 existingParams.get(p) == null ||
-                                 (existingParams.get(p) instanceof String &&
-                                  ((String) existingParams.get(p)).trim().isEmpty()))
+                    .filter(given.negate())
                     .collect(Collectors.toList());
+            // 「至少给一个」组 (见 ToolParameterGroups): 必填已齐也要抽, 否则问句里的客户名 / 销售单号到不了工具
+            for (String name : ToolParameterGroups.missingMembers(parametersSchema, given)) {
+                if (!missingParams.contains(name)) {
+                    missingParams.add(name);
+                }
+            }
 
             if (missingParams.isEmpty()) {
                 return extractedParams;

@@ -105,6 +105,9 @@ public class BatchTraceByCustomerDateTool extends AbstractBusinessTool {
 
         schema.put("properties", properties);
         schema.put("required", List.of("date"));
+        // 日期齐了也要抽客户: 只认 required 时问句里的客户名到不了工具, 工具反问「哪个客户」(见 ToolParameterGroups)
+        schema.put(com.cretas.aims.ai.tool.ToolParameterGroups.ANY_OF_KEY,
+                List.of(List.of("customerId", "customerName")));
         return schema;
     }
 
