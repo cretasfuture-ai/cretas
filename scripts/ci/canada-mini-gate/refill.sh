@@ -5,27 +5,38 @@
 # - 例外: 代码检出目录 ~ghgate/work-N 跨任务保留 (actions/checkout 每次 clean+reset)。2026-11-18 实测每单在全新
 #   目录整仓克隆时 mini→GitHub 拉取超时 (curl 56 / early EOF), PG 第 0 片死在 checkout; 保留后只做增量拉取。
 # - 发布优先: 发布构建持有 ~/cretas-build/.build.lock 时不领新任务。
-# 用法: refill.sh <槽位号>      (--label-of <槽位号> 打印该槽标签, --idle-rank-of <槽位号> 打印空闲名次, 供仓库测试核对)
+# 用法: refill.sh <槽位号>      (--labels-of <槽位号> 打印该槽注册的标签, --idle-rank-of <槽位号> 打印空闲名次,
+#        --queue-labels / --workflows 打印排队计数口径, 供仓库测试核对)
 set -u
-# 槽号 -> 标签 (2026-11-19 Steve: 第 5 槽专给 fast-contracts): GH_GATE_FAST_SLOTS 里的槽注册 cretas-mini-fast,
-# 其余槽 (1-4) 注册 cretas-mini-pg。⚠️ 标签与 java-gate-pr.yml 里 route-pg / route-fast 的 MINI_LABEL 一致,
-# 闸 scripts/tests/test-route-mini-or-hosted.sh 核对两边。
-FAST_SLOTS="${GH_GATE_FAST_SLOTS:-5}"
-slot_label() { case " $FAST_SLOTS " in *" $1 "*) echo cretas-mini-fast ;; *) echo cretas-mini-pg ;; esac; }
+# 共用槽池 (2026-11-19 21:5x Steve「不跑5个了 反正留出来4个就够了 5个怕出问题……重点是这4个槽不要只给pg用」):
+# 最多 $MAX_SLOTS 个槽 (1-4, 没有槽 5: 4 槽同跑实测负载峰值 14.8 / 14 核, 温度到过 Moderate), 每个槽什么都领 ——
+# 所有上 mini 的作业 (Java Gate 的 PG / fast 分片与汇总, 以及别的检查) 一律 runs-on 公共标签 cretas-mini。
+# 槽同时注册旧标签 cretas-mini-pg / cretas-mini-fast: 合并本改动之前创建、还在排队的 run 仍写着旧标签,
+# 没有它们就永远没人接。⚠️ 标签与 route-mini-or-hosted.sh 的 MINI_LABEL / MINI_COUNT_LABELS、各 workflow 的
+# runs-on 一致, 闸 scripts/tests/test-route-mini-or-hosted.sh 核对。
+MAX_SLOTS=4
+MINI_LABELS="cretas-mini cretas-mini-pg cretas-mini-fast"
+# 有作业会上 mini 的 workflow (排队只数这些 run, 省 API 额度)。⚠️ 与 route-mini-or-hosted.sh 的 MINI_WORKFLOWS 逐字一致 (闸核对)。
+MINI_WORKFLOWS="java-gate-pr.yml rn-gate.yml web-admin-gate.yml"
+# 排队计数口径: 全仓 run 里只取 $MINI_WORKFLOWS 的 (path 末段), 再数带任一 $MINI_LABELS 的排队作业 (共用槽池, 不分标签)。
+# 用 gh 自带的 jq (-q), 不依赖 mini 上装 jq; 两份清单是不含引号的常量, 直接拼进过滤式。测试用 --runs-filter / --jobs-filter 取出来跑 fixture。
+RUNS_FILTER=".workflow_runs[] | select(((.path // \"\") | split(\"/\") | last) as \$p | (\"$MINI_WORKFLOWS\" | split(\" \")) | index(\$p) != null) | .id"
+JOBS_FILTER="[.jobs[] | select(.status == \"queued\" and ((.labels // []) as \$j | any((\"$MINI_LABELS\" | split(\" \"))[]; . as \$x | \$j | index(\$x) != null)))] | length"
+slot_labels() { echo "$MINI_LABELS"; }
 slot_busy() { pgrep -f "/Users/ghgate/slot-$1/bin/Runner.Listener" >/dev/null 2>&1; }
 # 时段 (2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」), 北京时间:
-#   full = [22:00, 08:00) 全部槽; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1、2 = PG, 槽 5 = fast; 2026-11-19 Steve「白天最多总计 3 个」)。
-# ⚠️ 唯一一份时段定义: java-gate-pr.yml 的 changes 作业也调 `refill.sh --window` 决定 PG 派几片上 mini。
+#   full = [22:00, 08:00) 槽 1-4 全开; day = [08:00, 22:00) 只开 $DAY_SLOTS (槽 1-3; 2026-11-19 Steve「白天最多总计 3 个」)。
+# ⚠️ 唯一一份时段定义: 各 workflow changes 作业里的 route-mini-or-hosted.sh 也调 `refill.sh --window` 决定阈值与派几片上 mini。
 FULL_FROM=22
 FULL_UNTIL=8
-DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 2 5}"
+DAY_SLOTS="${GH_GATE_DAY_SLOTS:-1 2 3}"
 DAY_FULL_FILE="${GH_GATE_DAY_FULL_FILE:-/Users/rex/gh-gate/day-full}"
 mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_HOUR 可覆盖, 供测试)
   # ⛔ 不用 TZ=Asia/Shanghai: 没有时区数据的机器 (Git Bash 实测) 静默按 UTC 算, 时段整体错 8 小时。
   #    北京时间 = UTC + 8, 无夏令时。
   # 白天也全开开关 (2026-11-19 Steve「放开白天派片」): 两端各一个, 要一起开关 ——
   #   workflow (托管机上调 --window): 仓库变量 MINI_DAY_FULL=1 -> 环境变量 GH_GATE_DAY_FULL=1;
-  #   mini (槽启用): 文件 $DAY_FULL_FILE 存在。任一成立就整天按 full (PG 4 片都派、5 槽全开), 删掉即恢复按时段。
+  #   mini (槽启用): 文件 $DAY_FULL_FILE 存在。任一成立就整天按 full (多派分片、4 槽全开), 删掉即恢复按时段。
   if [ "${GH_GATE_DAY_FULL:-}" = 1 ] || [ -f "$DAY_FULL_FILE" ]; then echo full; return 0; fi
   local h="${1:-${GH_GATE_HOUR:-$(( (10#$(date -u +%H) + 8) % 24 ))}}"
   h=$((10#$h))
@@ -33,22 +44,23 @@ mini_window() {  # [小时 0-23]; 不给就取北京时间当前小时 (GH_GATE_
 }
 # 启用哪些槽: 手动覆盖文件 $ENABLED_FILE 存在时以它为准 (列出槽号, 空格/换行分隔); 不存在就按时段。
 # 不启用的槽空转不领活、也不算进别的槽的名次; 改文件/到点即生效, 不用动 launchd。
+# 槽号 > $MAX_SLOTS 一律不启用 (覆盖文件里写了也不行): 旧的槽 5 launchd 服务没卸掉时也只是空转。
 ENABLED_FILE="${GH_GATE_ENABLED_FILE:-/Users/rex/gh-gate/enabled-slots}"
 slot_enabled() {
   local list
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -ge 1 ] && [ "$1" -le "$MAX_SLOTS" ] || return 1   # MAX-SLOTS-CAP
   if [ -f "$ENABLED_FILE" ]; then list=$(tr '\n' ' ' < "$ENABLED_FILE")
   elif [ "$(mini_window)" = full ]; then return 0
   else list="$DAY_SLOTS"; fi
   case " $list " in *" $1 "*) return 0 ;; *) return 1 ;; esac
 }
-# 名次只在同标签的槽里排 (fast 槽不和 PG 槽抢同一份排队数): 编号比 $1 小、同标签、空闲的槽数 + 1。
+# 名次在全部启用的槽里排 (共用槽池, 一份排队数): 编号比 $1 小、启用、空闲的槽数 + 1。
 # ⛔ 不用 `seq 1 $((n-1))`: macOS (BSD) 的 `seq 1 0` 倒数输出「1 0」, 第 1 槽把自己和不存在的 0 号槽都算成空闲,
 #    名次变 3; 只剩 1 个排队作业时 4 个 PG 槽全不起 (2026-11-19 run 44403277567 汇总作业卡 1.5 小时, 队列超时踢出)。
 idle_rank() {
-  local s="$1" lbl k r=1
-  lbl=$(slot_label "$s")
+  local s="$1" k r=1
   for ((k = 1; k < s; k++)); do
-    [ "$(slot_label "$k")" = "$lbl" ] || continue
     slot_enabled "$k" || continue
     slot_busy "$k" || r=$((r + 1))
   done
@@ -75,7 +87,7 @@ awake_guard() {
   full_wake
 }
 # 温度压力 (Steve 2026-11-19 问「是不是 java 长时间负载导致」): 完全醒时 2 个作业 CPU 9.2W、压力 Nominal;
-# 但晚上 5 槽长时间满载要有更早的刹车。beat 每分钟用 powermetrics 读一次压力写进 $PRESSURE_FILE
+# 但晚上 4 槽长时间满载要有更早的刹车。beat 每分钟用 powermetrics 读一次压力写进 $PRESSURE_FILE
 # (Nominal/Moderate/Heavy/Trapping/Sleeping), 到 Heavy 及以上就不领新活, 手上的不打断。
 PRESSURE_FILE="${GH_GATE_PRESSURE_FILE:-/Users/rex/gh-gate/thermal-pressure}"
 thermal_hot() {  # 压力 Heavy 及以上, 或 pmset -g therm 里有告警级别 (不是「No ... recorded」) 就算热
@@ -84,7 +96,12 @@ thermal_hot() {  # 压力 Heavy 及以上, 或 pmset -g therm 里有告警级别
   pmset -g therm 2>/dev/null | grep -i "warning level" | grep -viq "no .*warning level has been recorded"
 }
 
-if [ "${1:-}" = "--label-of" ]; then slot_label "${2:?slot}"; exit 0; fi
+if [ "${1:-}" = "--labels-of" ]; then slot_labels "${2:?slot}"; exit 0; fi
+if [ "${1:-}" = "--queue-labels" ]; then echo "$MINI_LABELS"; exit 0; fi
+if [ "${1:-}" = "--workflows" ]; then echo "$MINI_WORKFLOWS"; exit 0; fi
+if [ "${1:-}" = "--max-slots" ]; then echo "$MAX_SLOTS"; exit 0; fi
+if [ "${1:-}" = "--runs-filter" ]; then printf '%s\n' "$RUNS_FILTER"; exit 0; fi
+if [ "${1:-}" = "--jobs-filter" ]; then printf '%s\n' "$JOBS_FILTER"; exit 0; fi
 if [ "${1:-}" = "--idle-rank-of" ]; then idle_rank "${2:?slot}"; exit 0; fi
 if [ "${1:-}" = "--enabled-of" ]; then if slot_enabled "${2:?slot}"; then echo yes; else echo no; fi; exit 0; fi
 if [ "${1:-}" = "--window" ]; then mini_window "${2:-}"; exit 0; fi
@@ -93,7 +110,7 @@ if [ "${1:-}" = "--thermal-hot" ]; then if thermal_hot; then echo yes; else echo
 SLOT="${1:?slot}"
 export PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 REPO=cretasfuture-ai/cretas
-LABEL=$(slot_label "$SLOT")
+LABEL=$(slot_labels "$SLOT")
 PKG=/Users/ghgate/runner-pkg
 WORK=/Users/ghgate/slot-$SLOT
 LOCK=/Users/rex/cretas-build/.build.lock
@@ -103,18 +120,17 @@ log() { echo "$(date '+%F %T') slot=$SLOT $*" >> "$LOG"; }
 lock_held() { [ -d "$LOCK" ] && ps -p "$(cat "$LOCK/pid" 2>/dev/null || echo 0)" >/dev/null 2>&1; }
 
 # 按需起 runner (Steve 2026-11-18「没跑的时候不占内存, 用的时候才占」): 空闲时只有这个循环 (~10MB),
-# 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等 $LABEL 的 job 数 >= 本槽在同标签空闲槽里的名次才起。
-# 排队数按标签缓存在 $QCACHE, 20 秒内同标签各槽共用一次查询 (省 API 额度)。
-QCACHE=/Users/rex/gh-gate/queued-$LABEL.cache
+# 不常驻 Runner.Listener (~120MB/槽)。GitHub 上排队等任一 mini 标签 ($MINI_LABELS) 的 job 数 >= 本槽在全部启用槽里的
+# 空闲名次才起。排队数缓存在 $QCACHE, 20 秒内各槽共用一次查询 (省 API 额度)。
+QCACHE=/Users/rex/gh-gate/queued-mini.cache
 IDLE_KILL_SEC=180
 mini_queued() {
   local age=999 n=0 r c
   [ -f "$QCACHE" ] && age=$(( $(date +%s) - $(stat -f %m "$QCACHE") ))
   if [ "$age" -ge 20 ] && mkdir "$QCACHE.lock" 2>/dev/null; then
-    for r in $( { gh api "repos/$REPO/actions/workflows/java-gate-pr.yml/runs?status=queued&per_page=30" -q '.workflow_runs[].id'
-                  gh api "repos/$REPO/actions/workflows/java-gate-pr.yml/runs?status=in_progress&per_page=30" -q '.workflow_runs[].id'; } 2>>"$LOG"); do
-      c=$(gh api "repos/$REPO/actions/runs/$r/jobs?per_page=100" \
-            -q "[.jobs[]|select(.status==\"queued\" and (.labels|index(\"$LABEL\")))]|length" 2>>"$LOG") || continue
+    for r in $( { gh api "repos/$REPO/actions/runs?status=queued&per_page=100" -q "$RUNS_FILTER"
+                  gh api "repos/$REPO/actions/runs?status=in_progress&per_page=100" -q "$RUNS_FILTER"; } 2>>"$LOG"); do
+      c=$(gh api "repos/$REPO/actions/runs/$r/jobs?filter=latest&per_page=100" -q "$JOBS_FILTER" 2>>"$LOG") || continue
       n=$((n + ${c:-0}))
     done
     echo "$n" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
@@ -194,8 +210,10 @@ while :; do
   q=$(mini_queued); rank=$(idle_rank "$SLOT")
   if [ "${q:-0}" -lt "$rank" ]; then sleep 20; continue; fi
   name="canada-mini-gate-$SLOT-$(date +%m%d%H%M%S)"
+  # 每个槽注册全部 mini 标签 ($MINI_LABELS: 公共 cretas-mini + 旧 cretas-mini-pg / cretas-mini-fast), 什么作业都能领。
+  lab_args=(); for l in $LABEL; do lab_args+=(-f "labels[]=$l"); done
   jit=$(gh api -X POST "repos/$REPO/actions/runners/generate-jitconfig" \
-        -f name="$name" -F runner_group_id=1 -f "labels[]=$LABEL" -f work_folder="../work-$SLOT" \
+        -f name="$name" -F runner_group_id=1 "${lab_args[@]}" -f work_folder="../work-$SLOT" \
         -q .encoded_jit_config 2>>"$LOG")
   if [ -z "$jit" ]; then log "jitconfig failed, retry in 30s"; sleep 30; continue; fi
   full_wake
