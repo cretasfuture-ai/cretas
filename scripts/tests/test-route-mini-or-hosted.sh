@@ -167,8 +167,10 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
     echo "  ok - 4 个槽同一组标签, 路由与 refill 排队口径一致"
   fi
   # workflow 清单: 路由 == refill == 实际 runs-on 写着 'cretas-mini' 的 workflow 集合 (新搬一个上 mini 漏登记就红)。
-  actual_wfs=$(cd "$WFDIR" && grep -l "&& 'cretas-mini' || 'ubuntu-latest' }}" ./*.yml | sed 's|^\./||' | sort | tr '\n' ' ' | sed 's/ $//')
   sorted() { printf '%s\n' $1 | sort | tr '\n' ' ' | sed 's/ $//'; }
+  # 先落变量再整理, 不走管道 (闸 test-pipeline-tail-swallows-rc.sh); grep 一个都没有 (rc=1) 时为空, 下面判红。
+  wf_hits=$(cd "$WFDIR" && grep -l "&& 'cretas-mini' || 'ubuntu-latest' }}" ./*.yml) || wf_hits=""
+  actual_wfs=$(sorted "${wf_hits//.\//}")
   echo "READING: workflows with mini runs-on=[$actual_wfs]"
   if [ -z "$actual_wfs" ] || [ "$(sorted "$route_wfs")" != "$actual_wfs" ] || [ "$(sorted "$refill_wfs")" != "$actual_wfs" ]; then
     echo "FAIL: 路由脚本 MINI_WORKFLOWS / refill MINI_WORKFLOWS 必须等于 runs-on 里有 cretas-mini 的 workflow 集合"
