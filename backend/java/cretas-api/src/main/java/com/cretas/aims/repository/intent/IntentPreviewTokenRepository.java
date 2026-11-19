@@ -42,6 +42,11 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
      * <p>The expected digest is recomputed by the service from persisted bindings before this
      * update. Factory, tenant, user, status and expiry remain database predicates so a stale read
      * or concurrent request cannot bypass them.</p>
+     *
+     * <p>The business object the token was issued for (entity type / entity id) is part of the
+     * claim predicate too: a token issued for one object can never be claimed to execute against
+     * another. Absent values are compared as the empty string ({@code COALESCE}), so callers pass
+     * {@code ""} for "issued without an object id" — never {@code null}.</p>
      */
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Query("UPDATE IntentPreviewToken t SET t.status = :executingStatus, " +
@@ -50,6 +55,8 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
            "AND t.userId = :userId AND t.commandDigest = :expectedCommandDigest " +
            "AND t.parametersHash = :expectedParametersHash AND t.toolName = :expectedToolName " +
            "AND t.descriptorVersion = :expectedDescriptorVersion AND t.executionMode = :expectedMode " +
+           "AND COALESCE(t.entityType, '') = :expectedEntityType " +
+           "AND COALESCE(t.entityId, '') = :expectedEntityId " +
            "AND t.status = :pendingStatus AND t.expiresAt > :now")
     int claimForExecution(@Param("token") String token,
                           @Param("factoryId") String factoryId,
@@ -60,6 +67,8 @@ public interface IntentPreviewTokenRepository extends JpaRepository<IntentPrevie
                           @Param("expectedToolName") String expectedToolName,
                           @Param("expectedDescriptorVersion") String expectedDescriptorVersion,
                           @Param("expectedMode") ToolExecutionMode expectedMode,
+                          @Param("expectedEntityType") String expectedEntityType,
+                          @Param("expectedEntityId") String expectedEntityId,
                           @Param("claimId") String claimId,
                           @Param("claimedAt") LocalDateTime claimedAt,
                           @Param("now") LocalDateTime now,

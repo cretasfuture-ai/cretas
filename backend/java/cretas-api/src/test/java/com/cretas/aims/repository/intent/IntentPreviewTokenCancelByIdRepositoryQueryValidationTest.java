@@ -148,7 +148,7 @@ class IntentPreviewTokenCancelByIdRepositoryQueryValidationTest {
         Integer n = tx.execute(s -> repository.claimForExecution(
                 t.getToken(), t.getFactoryId(), t.getTenantId(), t.getUserId(),
                 t.getCommandDigest(), t.getParametersHash(), t.getToolName(),
-                t.getDescriptorVersion(), t.getExecutionMode(), claimId, now, now,
+                t.getDescriptorVersion(), t.getExecutionMode(), "", "", claimId, now, now,
                 TokenStatus.PENDING, TokenStatus.EXECUTING));
         return n == null ? -1 : n;
     }

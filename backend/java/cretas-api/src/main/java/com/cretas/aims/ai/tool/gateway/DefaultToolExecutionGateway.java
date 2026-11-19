@@ -23,11 +23,27 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Production fail-closed implementation of the governed Tool execution boundary. */
 @Component
 @RequiredArgsConstructor
 public class DefaultToolExecutionGateway implements ToolExecutionGateway {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(DefaultToolExecutionGateway.class);
+
+    /**
+     * 签发时就没有「预览 → 隔一段时间再确认」窗口的凭据类型, 空快照时豁免执行前核对 (白名单, 只收不放):
+     * 自动任务在触发当刻按授权铸凭据; 画布配置走服务端方案绑定 (300s 内并发覆盖另记待办)。
+     * 另外只新建记录的工具 ({@link ToolExecutor#previewCreatesNewRecordOnly()}) 也豁免。
+     * 其余空快照一律照常核对 → 「无法核对」拒绝, 与老入口同口径 (fail-closed)。
+     */
+    static final Set<String> EMPTY_SNAPSHOT_EXEMPT_ENTITY_TYPES = Set.of("AUTONOMOUS_GRANT", "CANVAS_DIFF");
+
+    /** 豁免执行前核对的次数 (留痕; 每次另有一条 info 日志)。 */
+    private final AtomicLong recheckExemptions = new AtomicLong();
 
     private static final int LEGACY_FAILURE_STATUS_MAX_LENGTH = 64;
     private static final int LEGACY_FAILURE_MESSAGE_MAX_LENGTH = 1_000;
@@ -205,6 +221,13 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
                     "Confirmation rejected");
         }
         Lease lease = leaseOptional.get();
+
+        // 执行前业务状态核对: 与老确认入口同一份规则 (PreviewStateRecheck)。凭据认领之后、工具执行之前。
+        Optional<ToolExecutionResult> staleBusinessState = recheckBusinessState(
+                command, current, resolved, lease, idempotencyRecord, auditEventId);
+        if (staleBusinessState.isPresent()) {
+            return staleBusinessState.get();
+        }
 
         try {
             JsonNode payload = executeResolved(
@@ -424,16 +447,8 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
         }
         JsonNode payload;
         try {
-            String arguments = objectMapper.writeValueAsString(command.parameters());
-            ToolCall toolCall = ToolCall.of(
-                    command.requestId(), command.toolName(), arguments);
-            ToolExecutor executor = resolved.executor();
-            try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
-                    PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
-                String rawResponse = executor.preview(
-                        toolCall, trustedExecutionContext(command, current, resolved));
-                payload = objectMapper.readTree(rawResponse);
-            }
+            payload = objectMapper.readTree(
+                    previewResolved(command, current, resolved, command.parameters()));
         } catch (Exception previewFailure) {
             return finishPreview(
                     command,
@@ -498,6 +513,120 @@ public class DefaultToolExecutionGateway implements ToolExecutionGateway {
 
     private static boolean canViewPrices(RehydratedPrincipal current) {
         return Boolean.TRUE.equals(current.executionContext().get("canViewPrices"));
+    }
+
+    /** The gateway's only preview call site: same trusted user, price scope and egress context as execution. */
+    private String previewResolved(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            JsonNode parameters) throws Exception {
+        String arguments = objectMapper.writeValueAsString(parameters);
+        ToolCall toolCall = ToolCall.of(command.requestId(), command.toolName(), arguments);
+        ToolExecutor executor = resolved.executor();
+        try (SecurityUtils.Scope trustedUser = trustedUserScope(current);
+                PriceSensitiveContext.Scope ignored = PriceSensitiveContext.scopedSpecs(hiddenPriceSpecs(current))) {
+            return executor.preview(toolCall, trustedExecutionContext(command, current, resolved));
+        }
+    }
+
+    /**
+     * 执行前业务状态核对 (与老入口 {@code IntentExecutionOrchestrator.confirm} 同一份规则
+     * {@link PreviewStateRecheck#recheck}): 凭据记下了预览时的改前值时, 用凭据绑定的参数重跑一次只读预览,
+     * 预览之后对象被改过 / 前提不再成立 / 重读失败 / 无法核对 → 本次不执行工具, 凭据记失败 (确定没写入),
+     * 回执 {@code status=PREVIEW_STALE} (重新预览能解决) 或 {@code CONFIRM_NOT_SUPPORTED} 与老入口一致。
+     *
+     * <p>凭据没有记改前值 (空快照) 时, 只有白名单豁免 ({@link #exemptFromRecheck}): 只新建记录的工具、
+     * 自动任务凭据、画布配置凭据; 豁免每次打 info 日志并计数。其余空快照照常核对, 得到「无法核对」→
+     * {@code CONFIRM_NOT_SUPPORTED}, 与老入口一致。</p>
+     */
+    private Optional<ToolExecutionResult> recheckBusinessState(
+            ToolExecutionCommand command,
+            RehydratedPrincipal current,
+            ResolvedTool resolved,
+            Lease lease,
+            ToolExecutionIdempotencyRecord idempotencyRecord,
+            String auditEventId) {
+        if (!hasRecordedPriorState(lease.recordedPriorState())
+                && exemptFromRecheck(resolved.executor(), lease.issuedEntityType())) {
+            long exemptions = recheckExemptions.incrementAndGet();
+            log.info("执行前业务状态核对豁免 (空快照白名单): tool={}, entityType={}, source={}, exemptions={}",
+                    command.toolName(), lease.issuedEntityType(), command.source(), exemptions);
+            return Optional.empty();
+        }
+        PreviewStateRecheck.ConfirmStateCheck check;
+        try {
+            Map<String, Object> boundParameters = objectMapper.convertValue(
+                    lease.persistedParameters(),
+                    new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() { });
+            check = PreviewStateRecheck.recheck(
+                    resolved.executor(),
+                    lease.recordedPriorState(),
+                    boundParameters,
+                    // 重跑预览用凭据里原样持久化的参数 (就是随后要执行的那一份), 不经 Map 往返改数字表示
+                    ignoredCopy -> previewResolved(command, current, resolved, lease.persistedParameters()),
+                    objectMapper);
+        } catch (RuntimeException recheckUnavailable) {
+            // 核对本身出错: 工具还没被调用, 按「重读失败」拒绝 (fail-closed), 不让凭据停在执行中
+            check = PreviewStateRecheck.ConfirmStateCheck.reject(
+                    PreviewStateRecheck.ConfirmStateCheck.REREAD_FAILED, java.util.List.of(),
+                    PreviewStateRecheck.REREAD_FAILED_MESSAGE);
+        }
+        if (check.proceed()) {
+            return Optional.empty();
+        }
+        // 工具没被调用: 凭据记确定的失败 (不是结果不明), 与老入口一致。释放失败重试一次;
+        // 仍失败则留痕, 账本记 CONFIRMATION_RESOLUTION_UNCERTAIN (凭据停在执行中, 由对账任务收成「结果不明」,
+        // 用户照提示重新预览; 工具没被调用, 不存在写入半态)。
+        boolean released = safelyResolve(lease, false) || safelyResolve(lease, false);
+        if (!released) {
+            log.warn("执行前核对未通过但凭据释放失败, 凭据将由对账收口: tool={}, code={}",
+                    command.toolName(), check.code());
+        }
+        // 账本结果码与回执口径一致: 重新预览能解决 → PREVIEW_STALE; 无法核对 → CONFIRM_NOT_SUPPORTED
+        GatewayResultCode ledgerCode = !released
+                ? GatewayResultCode.CONFIRMATION_RESOLUTION_UNCERTAIN
+                : check.repreviewHelps() ? GatewayResultCode.PREVIEW_STALE : GatewayResultCode.CONFIRM_NOT_SUPPORTED;
+        ObjectNode stale = JsonNodeFactory.instance.objectNode();
+        stale.put("success", false);
+        stale.put("status", check.responseStatus());
+        stale.put("reason", check.code());
+        stale.set("changedFields", objectMapper.valueToTree(check.changedFields()));
+        stale.put("needsRepreview", check.repreviewHelps());
+        stale.put("message", check.message());
+        return Optional.of(finishReserved(
+                command,
+                idempotencyRecord,
+                auditEventId,
+                ToolExecutionIdempotencyRecord.State.FAILED,
+                ToolExecutionStatus.FAILED,
+                ledgerCode,
+                stale,
+                check.message()));
+    }
+
+    /** 空快照豁免白名单: 只新建记录的工具, 或签发即执行 / 另有服务端绑定的凭据类型。 */
+    static boolean exemptFromRecheck(ToolExecutor executor, String issuedEntityType) {
+        return executor.previewCreatesNewRecordOnly()
+                || (issuedEntityType != null && EMPTY_SNAPSHOT_EXEMPT_ENTITY_TYPES.contains(issuedEntityType));
+    }
+
+    /** 自本进程启动以来豁免执行前核对的次数。 */
+    long recheckExemptionCount() {
+        return recheckExemptions.get();
+    }
+
+    private boolean hasRecordedPriorState(String recordedPriorStateJson) {
+        if (recordedPriorStateJson == null || recordedPriorStateJson.isBlank()) {
+            return false;
+        }
+        try {
+            JsonNode recorded = objectMapper.readTree(recordedPriorStateJson);
+            // 读不出 / 不是对象: 记了却无法核对, 交给 recheck 按 REREAD_FAILED 拒绝 (fail-closed)
+            return recorded == null || !recorded.isObject() || recorded.size() > 0;
+        } catch (Exception unreadable) {
+            return true;
+        }
     }
 
     private ToolExecutionResult finishPreview(
