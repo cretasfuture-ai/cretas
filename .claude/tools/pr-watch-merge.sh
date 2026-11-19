@@ -11,6 +11,7 @@
 #   0 MERGED (或 --no-merge 时 GREEN: 全绿且不落后)
 #   1 RED        有检查 fail/cancel (列出名字), 不合并
 #   2 UNMEASURED 超时 / update 次数用完 / 合并命令失败 / 一直读不到检查 —— 不是结论, 要人看
+#                必需检查缺席或分支规则读不到时继续等, 超时同样返回 2。
 #   3 CONFLICT   和 base 冲突
 #   4 CLOSED     PR 被关了
 # 规矩 (全局 CLAUDE.md「等 CI」): 检查为空不算绿; 网络错误重试不当结论; 头 SHA 变了按新头判断; ⛔ 不带红合并。
@@ -41,6 +42,18 @@ say() { [ "$1" != "$last" ] && echo "$(date +%H:%M:%S) $1"; last="$1"; }
 finish() { echo "RESULT=$1 pr=$PR ${2:-}"; exit "$3"; }
 expired() { [ $(( $(date +%s) - START )) -ge "$TIMEOUT_SEC" ]; }
 nap() { sleep "$INTERVAL"; }
+# 每页先验证结构, 再输出标记和 context。合法的空规则页也有标记。
+required_checks() {
+  "$GH" api "repos/{owner}/{repo}/rules/branches/$1" --paginate --jq '
+    if type != "array" or any(.[]; (.type | type) != "string")
+    then error("invalid branch rules response") else . end
+    | [ .[] | select(.type == "required_status_checks")
+        | .parameters.required_status_checks
+        | if type != "array" then error("invalid required checks list") else .[] end
+        | .context
+        | if type != "string" or length == 0 then error("invalid required check context") else "context=" + . end ]
+    | ["rules-page"] + . | .[]' 2>&1
+}
 # 一次 GraphQL 读: "<base 有队列 true|false> <state> <isInMergeQueue> <mergeCommit oid>"
 qstate() {
   "$GH" api graphql -F owner='{owner}' -F name='{repo}' -F n="$PR" -F b="$1" \
@@ -92,9 +105,9 @@ while :; do
   checks=$("$GH" pr checks "$PR" --json bucket,name --jq '.[]|.bucket+"\t"+.name' 2>&1)
   crc=$?
   # gh pr checks: 有 pending 时退出码 8, 有失败时 1; 以输出为准, 输出不像检查列表才当网络错误
-  if [ -z "$checks" ]; then say "head=${head:0:10} no checks yet"; nap; continue; fi
-  bad=0; fail=""; pend=0; pass=0
-  while IFS=$'\t' read -r bucket name; do
+  if [ "$crc" -eq 1 ] && [[ "$checks" == "no checks reported on the '"*"' branch" ]]; then checks=""; fi
+  bad=0; fail=""; pend=0; pass=0; seen_names=$'\n'
+  while [ -n "$checks" ] && IFS=$'\t' read -r bucket name; do
     case "$bucket" in
       pass) pass=$((pass+1));;
       skipping) ;;
@@ -102,10 +115,31 @@ while :; do
       fail|cancel) fail="$fail${fail:+,}$name";;
       *) bad=1;;
     esac
+    seen_names+="$name"$'\n'
   done <<<"$checks"
   if [ "$bad" = 1 ]; then neterr=$((neterr+1)); say "checks unreadable (rc=$crc retry #$neterr): ${checks:0:80}"; nap; continue; fi
   [ -n "$fail" ] && finish RED "head=$head failed=$fail" 1
-  if [ "$pend" -gt 0 ] || [ "$pass" -eq 0 ]; then say "head=${head:0:10} pending=$pend pass=$pass"; nap; continue; fi
+  if ! rules=$(required_checks "$base") || [[ "$rules" != rules-page && "$rules" != rules-page$'\n'* ]]; then
+    neterr=$((neterr+1)); say "required rules unreadable base=$base (retry #$neterr): ${rules:0:120}"; nap; continue
+  fi
+  required=0; missing=""
+  while IFS= read -r rule; do
+    [[ "$rule" == context=* ]] || continue
+    name=${rule#context=}
+    required=$((required+1))
+    if [[ "$seen_names" != *$'\n'"$name"$'\n'* ]]; then
+      missing="$missing${missing:+,}$name"
+    fi
+  done <<<"$rules"
+  if [ -n "$missing" ]; then say "head=${head:0:10} pending=$pend pass=$pass missing=$missing"; nap; continue; fi
+  if [ -z "$checks" ]; then say "head=${head:0:10} no checks yet"; nap; continue; fi
+  if [ "$pend" -gt 0 ] || { [ "$pass" -eq 0 ] && [ "$required" -eq 0 ]; }; then
+    say "head=${head:0:10} pending=$pend pass=$pass"; nap; continue
+  fi
+  # gh pr checks 按 PR 查询, 避免检查读取期间换头后用这批结果判绿。
+  if ! checked_head=$("$GH" pr view "$PR" --json headRefOid --jq .headRefOid 2>&1) || [ "$checked_head" != "$head" ]; then
+    say "head=${head:0:10} unable to confirm checks head: ${checked_head:0:80}"; nap; continue
+  fi
 
   # 全绿: base 开了合并队列 -> 入队 (不 update-branch, 队列在最新 base 上重跑)
   # GraphQL 报错时 jq 会把 mergeQueue!=null 算成 false (data 为 null), 不能当「没开队列」:
