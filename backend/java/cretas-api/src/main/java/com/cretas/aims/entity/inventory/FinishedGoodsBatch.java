@@ -267,6 +267,10 @@ public class FinishedGoodsBatch extends BaseEntity {
     @JoinColumn(name = "product_type_id", referencedColumnName = "id", insertable = false, updatable = false)
     private ProductType productType;
 
+    /** 仓库名 (列表接口按 warehouse_id 回填, 不持久化; 查不到仓库时保持 null, 不拿 ID 冒充)。 */
+    @Transient
+    private String warehouseName;
+
     // ==================== 计算属性 ====================
 
     /** 可用库存 = 生产入库 - 已发货 - 预留 */

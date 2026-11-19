@@ -76,6 +76,21 @@ public class SourceIndividualDTO {
     @Schema(description = "备注")
     private String notes;
 
+    @Schema(description = "个体类型 LIVE(活体)/CARCASS(胴体)")
+    private String individualType;
+
+    @Schema(description = "入场日期")
+    private LocalDate entryDate;
+
+    @Schema(description = "撤销原因 (仅撤销后有值)")
+    private String revokeReason;
+
+    @Schema(description = "撤销人 (仅撤销后有值)")
+    private String revokedBy;
+
+    @Schema(description = "撤销时间 (仅撤销后有值)")
+    private LocalDateTime revokedAt;
+
     @Schema(description = "创建时间")
     private LocalDateTime createdAt;
 

@@ -1,4 +1,4 @@
-import { del, get, post, put } from './request';
+import { get, post, put } from './request';
 import type { LineageNode } from './traceability';
 
 /**
@@ -40,6 +40,10 @@ export interface SourceIndividual {
   damIndividualId?: string | null;
   extAttributes?: Record<string, unknown> | null;
   notes?: string | null;
+  /** 撤销信息: 仅撤销接口 / 已撤销列表返回时有值。 */
+  revokeReason?: string | null;
+  revokedBy?: string | null;
+  revokedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
   version?: number;
@@ -180,6 +184,18 @@ export function updateSourceIndividual(
   return put<SourceIndividual>(`/${factoryId}/source-individuals/${id}`, payload);
 }
 
-export function deleteSourceIndividual(factoryId: string, id: string) {
-  return del<void>(`/${factoryId}/source-individuals/${id}`);
+/** 撤销原因最长字数, 与后端 RevokeSourceIndividualRequest 的 @Size(max = 255) 一致。 */
+export const REVOKE_REASON_MAX_LENGTH = 255;
+
+/**
+ * 撤销个体档案(取代旧的无原因删除): 原因必填、≤255, 放请求体。
+ * 被原料批次引用或已作为父本/母本时后端回 409 并点名 —— `_silent: true`,
+ * 由页面把后端原话显示在撤销弹窗里, 不再另弹 toast。
+ */
+export function revokeSourceIndividual(factoryId: string, id: string, reason: string) {
+  return post<SourceIndividual>(
+    `/${factoryId}/source-individuals/${encodeURIComponent(id)}/revoke`,
+    { reason: reason.trim() },
+    { _silent: true }
+  );
 }

@@ -108,10 +108,9 @@ public class MaterialBatchDTO {
      * (「账面」vs「已减报工预扣的可投料量」)。前端应<b>并排</b>显示
      * {@code 可用 = max(0, currentQuantity − unsettledConsumption)}。
      *
-     * <p>{@code null} = 未查询该批次的预扣量 (仅 {@code WarehouseInventoryController
-     * #queryByWarehouse} 填充此字段, 其它端点保持 null; 调用方按 0 处理, 即 可用==账面)。
+     * <p>{@code null} = 未查询该批次的预扣量 (批次列表与 {@code WarehouseInventoryController#queryByWarehouse} 填充, 其它端点保持 null, 此时 availableQuantity 也为 null)。
      */
-    @Schema(description = "报工在途未结单预扣量 (可用数量 = 当前数量 − 本字段; 仅分仓库存查询端点填充, 其余端点为 null)")
+    @Schema(description = "报工在途未结单预扣量 (可用数量 = 当前数量 − 本字段; 批次列表与分仓库存查询端点填充, 其余端点为 null)")
     private BigDecimal unsettledConsumption;
 
     @Schema(description = "单位")
@@ -296,5 +295,67 @@ public class MaterialBatchDTO {
     @Schema(description = "剩余数量(前端别名)")
     public BigDecimal getRemainingQuantity() {
         return currentQuantity;
+    }
+
+    /**
+     * 统一「可用」口径, 与 {@code MaterialBatchRepository#sumAvailableQuantityByMaterialType}
+     * 同一套过滤: 只有 status=AVAILABLE 且自有(ownership 为空或 COMPANY_OWNED)的批次才有可用量,
+     * 否则为 0, 原因见 {@link #getAvailableQuantityReason()}。
+     * 可用批次: {@code max(0, currentQuantity − unsettledConsumption)}。
+     * {@code currentQuantity} 或 {@code unsettledConsumption} 为 null(该端点没查预扣)时返回 null,
+     * ⛔ 不退成账面数冒充可用, 也不返回 0 冒充「已无库存」。
+     * 目前批次列表与分仓库存查询两个端点填 unsettledConsumption, 其它端点本字段为 null。
+     */
+    @JsonProperty("availableQuantity")
+    @Schema(description = "可用数量(与库存汇总同口径: 仅 AVAILABLE 且自有批次有值, 否则 0 并见 availableQuantityReason; "
+            + "未查询预扣的端点为 null)")
+    public BigDecimal getAvailableQuantity() {
+        if (currentQuantity == null) {
+            return null;
+        }
+        if (getAvailableQuantityReason() != null) {
+            return BigDecimal.ZERO;
+        }
+        if (unsettledConsumption == null) {
+            return null;
+        }
+        return currentQuantity.subtract(unsettledConsumption).max(BigDecimal.ZERO);
+    }
+
+    /** 可用量为 0 的原因: STATUS_NOT_AVAILABLE / CUSTOMER_OWNED; 正常可用或状态未知为 null。 */
+    @JsonProperty("availableQuantityReason")
+    @Schema(description = "可用量为 0 的原因: STATUS_NOT_AVAILABLE(状态不是可用) / CUSTOMER_OWNED(客户自有); 否则为空")
+    public String getAvailableQuantityReason() {
+        if (status != null && status != MaterialBatchStatus.AVAILABLE) {
+            return "STATUS_NOT_AVAILABLE";
+        }
+        if (ownership != null && ownership != InventoryOwnership.COMPANY_OWNED) {
+            return "CUSTOMER_OWNED";
+        }
+        return null;
+    }
+
+    /**
+     * 质量状态 (由批次状态推导, 不是独立存储的字段; 口径已由 Steve 按推荐裁定):
+     * INSPECTING → PENDING (待检), DEFECTIVE/SCRAPPED → REJECTED, EXPIRED → EXPIRED,
+     * status 缺失 → null, 其余 → NORMAL。
+     */
+    @JsonProperty("qualityStatus")
+    @Schema(description = "质量状态: PENDING/REJECTED/EXPIRED/NORMAL, 由批次状态推导")
+    public String getQualityStatus() {
+        if (status == null) {
+            return null;
+        }
+        switch (status) {
+            case INSPECTING:
+                return "PENDING";
+            case DEFECTIVE:
+            case SCRAPPED:
+                return "REJECTED";
+            case EXPIRED:
+                return "EXPIRED";
+            default:
+                return "NORMAL";
+        }
     }
 }
