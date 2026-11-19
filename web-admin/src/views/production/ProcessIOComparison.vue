@@ -37,6 +37,7 @@ interface ProcessIORow {
   outputUnit: string | null;
   incomparableReason: IncomparableReason | null;
   batchCount: number;
+  stageRecordCount: number;
 }
 
 interface ProductType {
@@ -179,6 +180,7 @@ async function loadData() {
         outputUnit: r.outputUnit !== undefined ? r.outputUnit : (r.unit ?? null),
         incomparableReason: r.incomparableReason ?? null,
         batchCount: r.batchCount,
+        stageRecordCount: r.stageRecordCount ?? 0,
       }));
     } else {
       tableData.value = [];
@@ -305,7 +307,14 @@ function handleReset() {
         border
         style="width: 100%"
       >
-        <el-table-column prop="processName" label="工序名称" min-width="150" show-overflow-tooltip />
+        <el-table-column label="工序名称" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }">
+            <span>{{ row.processName }}</span>
+            <el-tag v-if="row.stageRecordCount > 0" size="small" type="info" class="ml-1" data-testid="stage-record-source">
+              含 {{ row.stageRecordCount }} 条加工环节记录
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column label="投入量" width="150" align="right">
           <template #default="{ row }">
             {{ formatQuantity(row.inputQuantity, displayProcessUnit(row.inputUnit)) }}
