@@ -60,3 +60,7 @@
 ## UX Flow Gate
 
 低技术素养角色（操作员/仓管/质检员）的 RN 屏幕、或报工/入库/出库/盘点/质检/扫码收货/发货功能，提出方案或实施计划前必须调用 `ux-flow` skill（触发词见 `.agents/skills/ux-flow/SKILL.md`），「UX Flow Analysis」缺失不得进入实施规划。
+
+## 任务卡执行线
+
+需要在 Windows 终端派发独立 Codex 交互会话时，按 `tools/agent-dispatch/README.md` 操作。先登记 ACTIVE 的任务、Owner、Base SHA、范围和验收命令，再投递任务卡。用 `status.ps1` 接手队列，按 `ledger.jsonl` 核对状态变化。执行线提交回执并开 PR，合并由协调者处理。

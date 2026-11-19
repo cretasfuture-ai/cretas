@@ -1,0 +1,4 @@
+{
+  "routine": { "model": "gpt-6.2-sol", "effort": "medium" },
+  "redline": { "model": "gpt-6.2-sol", "effort": "high" }
+}
