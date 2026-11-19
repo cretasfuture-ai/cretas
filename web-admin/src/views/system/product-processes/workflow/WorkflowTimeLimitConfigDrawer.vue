@@ -12,8 +12,8 @@
     <div class="time-limit-drawer">
       <p class="time-limit-drawer__scope" data-testid="time-limit-drawer-scope">
         给投入的料定一个「最多放多久」。不打开就是不限时。
-        默认超时只警告：照常投料，系统记一条超时记录供复盘，质检员可复检放行或判不合格。
-        本厂在「业务阈值」把 production.time_limit.block_on_exceed 设为 1（超时拦截）后，超时的料才不能领用，要质检员复检放行或判不合格。
+        默认超时只警告：照常投料，系统记一条超时记录供复盘。
+        本厂在「业务阈值」把「工序时限超时拦不拦领用」设为 1（超时拦截）后，超时的料才不能领用，要质检员复检放行或判不合格。
       </p>
       <section
         v-for="(port, index) in ports"
