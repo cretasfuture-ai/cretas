@@ -77,7 +77,7 @@ public class OperatingReportGenerator {
             int excludedProducts=((Number)promptHigh.get("excludedProtectedProductCount")).intValue();
             OperatingReportSnapshot promptSnapshot=assembler.assemble(new OperatingReportAssembler.Input(input.type(),input.start(),input.end(),
                     input.fetchedAt(),input.receipts(),input.sales(),input.previous(),input.lastYear(),input.region(),promptHigh,promptLow,
-                    input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage()));
+                    input.aging(),input.income(),input.inventory(),input.inventoryCostCoverage())).withoutDetails();
             stage=OperatingReportSnapshot.Failure.MODEL_UNAVAILABLE;
             String system="你是食品工厂经营分析助手，面向老板写简短的经营判断和建议。只能依据下方「经营指标快照」里的指标写结论；快照里没有的事实一律不写。数字不许自己写：需要引用数字时写成 {{指标id}} 占位（指标id逐字取自快照），系统会替换成真实值；正文里不要出现任何阿拉伯数字或中文数量词（如「三成」「两倍」），可以写产品名、业务员名、地区名等快照里出现的名称。只返回 JSON 对象，形如 {\"conclusions\":[{\"text\":\"...\",\"refs\":[\"指标id\"]}]}，每条严格含 text 与 refs 两个字段，text 不超过 150 字，refs 列出该条用到的全部指标id，text 里的每个 {{指标id}} 必须在 refs 里。";
             String prompt="请写 3 到 6 条结论，每条是业务判断加可执行建议，例如：哪个产品毛利最高或最低、环比同比变化说明什么、应收账龄风险、成本覆盖不全对判断的影响、该做什么。环比或同比有变化时，要说清变化主要来自哪些业务员、地区或产品（只用快照里有的名称，快照里没有依据就说明依据不足，不要编原因）。用老板听得懂的业务语言，text 里不要出现指标id、字段名、接口名或英文代码，指标id 只能写在 {{ }} 占位和 refs 里。只用值不为 null 的指标做占位；成本或毛利数据缺失时就说明缺什么、先补什么，不要猜。若订单数为 0，说明本期没有订单这一事实，不要写「数据缺失」。禁止其他字段。\n";
