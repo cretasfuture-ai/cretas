@@ -20,6 +20,25 @@ describe('scheduling wire DTO mapping', () => {
     expect(schedule.workerAssignments[0].role).toBeUndefined();
   });
 
+  it('keeps dashboard nulls as null and passes the workflow-batch row source through', async () => {
+    get.mockResolvedValue({ success: true, data: {
+      planStats: { totalPlans: 0, draftPlans: 0, confirmedPlans: 0, inProgressPlans: 0, completedPlans: 0 },
+      workerStats: { totalAssigned: 0, checkedIn: 0, temporaryWorkers: 0, averagePerformance: null },
+      lineStats: { activeLines: 2, occupiedLines: 1, utilizationRate: 0.5, averageEfficiency: null },
+      alerts: [],
+      todaySchedules: [{ id: 'batch-7', source: 'WORKFLOW_BATCH', batchId: 7, batchNumber: 'B-7', status: 'in_progress', actualStartTime: '2026-11-19T08:00:00' }],
+      unavailableReasons: { 'lineStats.averageEfficiency': '暂不汇总' },
+    }, message: 'OK' });
+    const { getSchedulingDashboard } = await import('../scheduling');
+    const result = await getSchedulingDashboard('F-REAL', '2026-11-19');
+    expect(get).toHaveBeenCalledWith('/F-REAL/scheduling/dashboard', { params: { date: '2026-11-19' } });
+    expect(result.data.lineStats.averageEfficiency).toBeNull();
+    expect(result.data.workerStats.averagePerformance).toBeNull();
+    expect(result.data.unavailableReasons?.['lineStats.averageEfficiency']).toBe('暂不汇总');
+    expect(result.data.todaySchedules[0]).toMatchObject({ id: 'batch-7', source: 'WORKFLOW_BATCH', batchNumber: 'B-7' });
+    expect(result.data.todaySchedules[0].targetQuantity).toBeUndefined();
+  });
+
   it('sends AssignWorkerRequest.workerIds and maps the response', async () => {
     post.mockResolvedValue({ success: true, data: [{ id: 'A-2', scheduleId: 'S-1', userId: 88, status: 'assigned' }], message: 'OK' });
     const { assignWorkers } = await import('../scheduling');

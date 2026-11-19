@@ -29,6 +29,18 @@ public interface LineScheduleRepository extends JpaRepository<LineSchedule, Stri
     List<LineSchedule> findByProductionLineIdAndStatus(
         String productionLineId, LineSchedule.ScheduleStatus status);
 
+    /**
+     * 调度 Dashboard 今日排程: 本厂这一天调度计划 (未删、未取消) 上的排程行, 已取消的行不算。
+     * 不按排程行状态再筛 —— 待开始 / 进行中 / 已完成 / 延误都是「当天的排程」。
+     */
+    @Query("SELECT ls FROM LineSchedule ls JOIN ls.plan sp WHERE sp.factoryId = :factoryId "
+           + "AND sp.planDate = :planDate AND sp.deletedAt IS NULL AND sp.status <> :cancelledPlan "
+           + "AND ls.status <> :cancelledRow ORDER BY ls.plannedStartTime, ls.sequenceOrder")
+    List<LineSchedule> findDashboardRows(@Param("factoryId") String factoryId,
+                                         @Param("planDate") java.time.LocalDate planDate,
+                                         @Param("cancelledPlan") com.cretas.aims.entity.SchedulingPlan.PlanStatus cancelledPlan,
+                                         @Param("cancelledRow") LineSchedule.ScheduleStatus cancelledRow);
+
     @Query("SELECT ls FROM LineSchedule ls WHERE ls.plan.factoryId = :factoryId " +
            "AND ls.status = :status ORDER BY ls.plannedStartTime")
     List<LineSchedule> findByFactoryIdAndStatus(

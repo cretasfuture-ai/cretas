@@ -152,7 +152,11 @@ export interface LineSchedule {
   dailyAllocations?: DailyAllocations | null;
   /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
   version?: number;
+  /** SCHEDULE = 调度排程行; WORKFLOW_BATCH = 工作流直接开出的在产批次 (仅调度 Dashboard, 无计划时间/数量) */
+  source?: LineScheduleSource;
 }
+
+export type LineScheduleSource = 'SCHEDULE' | 'WORKFLOW_BATCH';
 
 export interface WorkerAssignment {
   id: string;
@@ -243,15 +247,26 @@ export interface SchedulingDashboard {
     totalAssigned: number;
     checkedIn: number;
     temporaryWorkers: number;
-    averagePerformance: number;
+    /** 今日派工还没有任何绩效打分 → null (原因见 unavailableReasons) */
+    averagePerformance: number | null;
   };
   lineStats: {
     activeLines: number;
-    utilizationRate: number;
-    averageEfficiency: number;
+    /** 今日有任务的启用产线数 */
+    occupiedLines?: number;
+    /** 今日排程里没有产线归属的批次数 (未计入利用率) */
+    unattributedBatches?: number;
+    /** 有任务的启用产线 ÷ 启用产线 (0~1); 没有启用产线或今日任务全都没有产线 → null */
+    utilizationRate: number | null;
+    /** 后端暂不汇总 → null (原因见 unavailableReasons) */
+    averageEfficiency: number | null;
   };
   alerts: SchedulingAlert[];
   todaySchedules: LineSchedule[];
+  /** 跨日在产且今日无活动的批次数 (不进今日排程与利用率); 只在看今天时有值, 否则 null */
+  carryOverIdleBatches?: number | null;
+  /** 取值为 null 的指标 → 原因, 键如 "lineStats.utilizationRate" */
+  unavailableReasons?: Record<string, string>;
 }
 
 interface SchedulingWireWorkerAssignment {
@@ -295,6 +310,7 @@ interface SchedulingWireLineSchedule {
   dailyAllocations?: DailyAllocations | null;
   /** 乐观锁版本号: 改排程时原样回传, 别人先改过就返回 409。 */
   version?: number;
+  source?: LineScheduleSource;
 }
 
 function mapWorkerAssignment(wire: SchedulingWireWorkerAssignment): WorkerAssignment {
@@ -340,6 +356,7 @@ export function mapSchedulingLineSchedule(wire: SchedulingWireLineSchedule): Lin
     taskTimeline: wire.taskTimeline ?? null,
     dailyAllocations: wire.dailyAllocations ?? null,
     version: wire.version,
+    source: wire.source,
   };
 }
 
