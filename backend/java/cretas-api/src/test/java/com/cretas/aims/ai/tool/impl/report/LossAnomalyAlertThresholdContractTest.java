@@ -8,7 +8,9 @@ import com.cretas.aims.repository.ProductionBatchRepository;
 import com.cretas.aims.repository.ProductionReportRepository;
 import com.cretas.aims.service.processsecret.ProcessSecretAggregateExclusions;
 import com.cretas.aims.service.processsecret.ProcessSecretLlmCostScope;
-import com.cretas.aims.service.shortage.CostDeviationScanService;
+import com.cretas.aims.repository.FactorySettingsRepository;
+import com.cretas.aims.service.shortage.CostDeviationScanDefaults;
+import com.cretas.aims.service.shortage.CostDeviationThresholdService;
 import com.cretas.aims.service.yield.YieldAnalysisService;
 import com.cretas.aims.service.yield.balance.MaterialBalanceCalculator;
 import com.cretas.aims.service.yield.balance.MaterialBalanceService;
@@ -118,12 +120,19 @@ class LossAnomalyAlertThresholdContractTest {
         balanceRow("B-J3", "酱卤牛肉", "清洗", 1, "100", "70");        // 偏差 30%: 红
     }
 
-    private void alertThresholdIs(String balancePct) {
-        CostDeviationScanService scan = mock(CostDeviationScanService.class);
+    /** 本厂配置的物料平衡告警阈值 (null = 未配置), 系统默认 (空串 = 无); 走真实的 CostDeviationThresholdService, 只桩仓库。 */
+    private void alertThresholdIs(String balancePct, String defaultBalancePct) {
+        FactorySettingsRepository settings = mock(FactorySettingsRepository.class);
         BigDecimal pct = balancePct == null ? null : new BigDecimal(balancePct);
-        when(scan.effectiveThresholds("F1")).thenReturn(new CostDeviationScanService.EffectiveThresholds(
-                new CostDeviationScanService.Thresholds(null, pct), pct == null ? null : "FACTORY"));
-        ReflectionTestUtils.setField(tool, "costDeviationScanService", scan);
+        List<Object[]> rows = new ArrayList<>();
+        rows.add(new Object[]{null, pct});
+        when(settings.findCostDeviationThresholdsByFactoryId("F1")).thenReturn(rows);
+        ReflectionTestUtils.setField(tool, "costDeviationThresholdService", new CostDeviationThresholdService(settings,
+                new CostDeviationScanDefaults("", defaultBalancePct)));
+    }
+
+    private void alertThresholdIs(String balancePct) {
+        alertThresholdIs(balancePct, "");
     }
 
     private JsonNode run(String args) throws Exception {
@@ -162,6 +171,30 @@ class LossAnomalyAlertThresholdContractTest {
         assertEquals(1, r.get("data").get("data").get("abnormalCount").asInt(), msg);   // 只有 30% 的
         assertTrue(msg.contains("B-J3") && !msg.contains("B-J1"), msg);
         assertTrue(msg.contains("标准 ≤ 5%") && msg.contains("默认 5%"), msg);
+    }
+
+    @Test
+    void aSystemDefaultAlertThresholdIsUsedButStatedAsDefaultNotAsTheFactorysOwn() throws Exception {
+        alertThresholdIs(null, "3");
+
+        JsonNode r = run("{\"userInput\":\"最近有哪些损耗异常\"}");
+
+        String msg = r.get("data").get("message").asText();
+        assertEquals(2, r.get("data").get("data").get("abnormalCount").asInt(), msg);   // 问题页同一条 3% 线
+        assertTrue(msg.contains("标准 ≤ 3%") && msg.contains("系统默认") && msg.contains("本厂未单独配置"), msg);
+        assertFalse(msg.contains("本厂在「发现的问题」配置"), "默认值不能说成本厂配置: " + msg);
+    }
+
+    @Test
+    void aFactoryConfiguredAlertThresholdIsStatedAsTheFactorysOwn() throws Exception {
+        alertThresholdIs("3", "4");
+
+        JsonNode r = run("{\"userInput\":\"最近有哪些损耗异常\"}");
+
+        String msg = r.get("data").get("message").asText();
+        assertEquals(2, r.get("data").get("data").get("abnormalCount").asInt(), msg);   // 本厂 3% 优先于默认 4%
+        assertTrue(msg.contains("标准 ≤ 3%") && msg.contains("本厂在「发现的问题」配置"), msg);
+        assertFalse(msg.contains("系统默认"), msg);
     }
 
     @Test
