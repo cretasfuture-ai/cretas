@@ -38,6 +38,8 @@ done
 
 mkdir -p /Users/rex/gh-gate
 cp /tmp/gh-gate-refill.sh /Users/rex/gh-gate/refill.sh && chmod 755 /Users/rex/gh-gate/refill.sh
+# 失效合并组清理 (refill.sh beat 每 5 分钟后台调用); 先 scp 到 /tmp/gh-gate-reap.sh
+[ -f /tmp/gh-gate-reap.sh ] && cp /tmp/gh-gate-reap.sh /Users/rex/gh-gate/reap-stale-merge-groups.sh && chmod 755 /Users/rex/gh-gate/reap-stale-merge-groups.sh
 for i in $(seq 1 "$SLOTS"); do  # 按需起, 空闲不占内存; 槽 5 的检出目录 ~ghgate/work-5 由运维从 ~ghgate/seed 预置
   plist=/Users/rex/Library/LaunchAgents/com.cretas.gh-gate-$i.plist
   cat > "$plist" <<PL

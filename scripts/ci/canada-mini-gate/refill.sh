@@ -142,6 +142,27 @@ beat() {
     echo "$p" > "$PRESSURE_FILE"
   fi
   gh variable set MINI_HEARTBEAT --repo "$REPO" --body "$(date +%s)" >/dev/null 2>>"$LOG" || log "heartbeat write failed"
+  reap_stale_merge_groups
+}
+
+# 失效合并组清理 (2026-11-19 Steve「加」): 合并队列每次重排都给后面的组重起整套检查, 旧组的 run 不会被取消,
+# 当天 139 个失效组 run 堵住托管机、队首等了 3 个多小时。任一槽每 $REAP_EVERY 秒在后台跑一次
+# reap-stale-merge-groups.sh (mkdir 锁防并发, 结果一行追加到 $REAP_LOG)。mini 离线时没人清, 只是回到原状。
+REAP_STAMP=/Users/rex/gh-gate/reap.stamp
+REAP_EVERY=300
+REAP_LOG=/Users/rex/gh-gate/reap.log
+reap_stale_merge_groups() {
+  local age=999
+  [ -f "$REAP_STAMP" ] && age=$(( $(date +%s) - $(stat -f %m "$REAP_STAMP") ))
+  [ "$age" -ge "$REAP_EVERY" ] || return 0
+  mkdir "$REAP_STAMP.lock" 2>/dev/null || {
+    # 锁目录超过 15 分钟算持锁进程已死
+    [ -n "$(find "$REAP_STAMP.lock" -maxdepth 0 -mmin +15 2>/dev/null)" ] && rmdir "$REAP_STAMP.lock" 2>/dev/null
+    return 0; }
+  touch "$REAP_STAMP"
+  ( out=$(/bin/bash /Users/rex/gh-gate/reap-stale-merge-groups.sh 2>&1); rc=$?
+    printf '%s rc=%s %s\n' "$(date '+%F %T')" "$rc" "${out##*$'\n'}" >> "$REAP_LOG"
+    rmdir "$REAP_STAMP.lock" ) </dev/null >/dev/null 2>&1 &
 }
 
 log "start label=$LABEL"
