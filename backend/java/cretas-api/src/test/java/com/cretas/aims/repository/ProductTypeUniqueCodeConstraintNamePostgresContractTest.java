@@ -24,9 +24,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 真 PostgreSQL: product_types (factory_id, code) 唯一约束必须叫 uk_product_types_factory_code ——
  * GlobalExceptionHandler 靠这个名字给 SKU 编码冲突提示「留空自动生成」(#1873)。
  *
- * <p>prod 的表是 Hibernate 按未命名 @UniqueConstraint 建的, 实名是随机串 (只有唯一索引, 没有约束);
- * 迁移 V20261119_97 要把它改名。本用例: ① 实体建出的 schema 就是这个名字; ② 模拟 prod 的随机名唯一索引,
- * 跑迁移原文后改成目标名; ③ 再跑一次不报错不改动 (幂等)。
+ * <p>prod 的表是 Hibernate 按未命名 @UniqueConstraint 建的唯一约束, 实名是随机串;
+ * 迁移 V20261119_97 要把它改名。本用例: ① 实体建出的 schema 就是这个名字; ② 模拟 prod 的随机名唯一约束
+ * (prod 实际形态, 走迁移分支 1), 跑迁移原文后改成目标名; ③ 只有随机名唯一索引时 (分支 2) 同样改名, 再跑一次幂等。
  */
 @DataJpaTest(showSql = false)
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
@@ -59,16 +59,31 @@ class ProductTypeUniqueCodeConstraintNamePostgresContractTest {
 
     @AfterEach
     void restoreEntityShape() {
-        // 恢复成实体建出的形态 (命名约束), 不影响同库后续用例
+        // 每条用例后都恢复成实体建出的形态 (命名唯一约束), 不依赖用例执行顺序, 不影响同库后续用例
+        jdbc.execute("ALTER TABLE product_types DROP CONSTRAINT IF EXISTS " + PROD_LIKE_RANDOM);
         jdbc.execute("DROP INDEX IF EXISTS " + PROD_LIKE_RANDOM);
-        if (relationCount(TARGET) == 0) {
-            jdbc.execute("ALTER TABLE product_types ADD CONSTRAINT " + TARGET + " UNIQUE (factory_id, code)");
-        }
+        jdbc.execute("ALTER TABLE product_types DROP CONSTRAINT IF EXISTS " + TARGET);
+        jdbc.execute("DROP INDEX IF EXISTS " + TARGET);
+        jdbc.execute("ALTER TABLE product_types ADD CONSTRAINT " + TARGET + " UNIQUE (factory_id, code)");
     }
 
     @Test
     void entityCreatedSchemaUsesTheNameTheExceptionHandlerMatches() {
         assertThat(uniqueNamesOnProductTypes()).as("实体建出的 product_types 唯一约束名").contains(TARGET);
+    }
+
+    @Test
+    void migrationRenamesProdShapedRandomUniqueConstraint() throws Exception {
+        // prod 实际形态: Hibernate 随机名唯一约束 (pg_constraint contype='u')
+        jdbc.execute("ALTER TABLE product_types RENAME CONSTRAINT " + TARGET + " TO " + PROD_LIKE_RANDOM);
+        assertThat(constraintCount(TARGET)).isZero();
+        assertThat(constraintCount(PROD_LIKE_RANDOM)).isEqualTo(1);
+
+        jdbc.execute(migrationSql());
+
+        assertThat(constraintCount(PROD_LIKE_RANDOM)).as("随机名约束应已改名").isZero();
+        assertThat(constraintCount(TARGET)).as("改名后的唯一约束").isEqualTo(1);
+        assertThat(relationCount(TARGET)).as("底层索引随约束一起改名").isEqualTo(1);
     }
 
     @Test
@@ -79,7 +94,7 @@ class ProductTypeUniqueCodeConstraintNamePostgresContractTest {
         assertThat(relationCount(TARGET)).isZero();
         assertThat(relationCount(PROD_LIKE_RANDOM)).isEqualTo(1);
 
-        String sql = new String(new ClassPathResource(MIGRATION).getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        String sql = migrationSql();
         jdbc.execute(sql);
 
         assertThat(relationCount(PROD_LIKE_RANDOM)).as("随机名索引应已改名").isZero();
@@ -87,6 +102,17 @@ class ProductTypeUniqueCodeConstraintNamePostgresContractTest {
 
         jdbc.execute(sql); // 幂等: 已是目标名, 不报错
         assertThat(relationCount(TARGET)).isEqualTo(1);
+    }
+
+    private String migrationSql() throws java.io.IOException {
+        return new String(new ClassPathResource(MIGRATION).getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    }
+
+    private int constraintCount(String name) {
+        Integer n = jdbc.queryForObject(
+                "SELECT count(*) FROM pg_constraint WHERE conrelid = 'product_types'::regclass "
+                        + "AND contype = 'u' AND conname = ?", Integer.class, name);
+        return n == null ? 0 : n;
     }
 
     private int relationCount(String name) {
