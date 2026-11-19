@@ -52,7 +52,38 @@ public class MaterialBalanceService {
     }
 
     /** 按批次拆开的物料平衡: 每个块只含一个批次 (批次号原样), 同一套阈值与保密排除。 */
-    public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {}
+    public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks,
+                               int reportCount) {
+        public BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {
+            this(warnPct, redPct, blocks, blocks == null ? 0 : blocks.size());
+        }
+    }
+
+    /**
+     * 窗口 [startDate, endDate] 之前 (含 endDate) 最近一次有 YIELD 报工的日期; 往前最多看 lookbackDays 天, 没有返回 null。
+     * 同一套保密排除。给对话「窗口内没有报工」时说明最近一次报工是哪天 (BP 问题 28)。
+     */
+    public LocalDate latestReportDate(String factoryId, LocalDate endDate, int lookbackDays) {
+        ProcessSecretAggregateExclusions.Scope excluded =
+                aggregateExclusions.forCurrentCaller(factoryId, "material balance latest report date");
+        List<Map<String, Object>> rows = reportRepo.findYieldReportsForBalance(factoryId, endDate.minusDays(lookbackDays),
+                endDate, "", excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
+        LocalDate latest = null;
+        if (rows != null) {
+            for (Map<String, Object> r : rows) {
+                LocalDate d = toDate(r.get("report_date"));
+                if (d != null && (latest == null || d.isAfter(latest))) latest = d;
+            }
+        }
+        return latest;
+    }
+
+    private static LocalDate toDate(Object o) {
+        if (o instanceof LocalDate d) return d;
+        if (o instanceof java.sql.Date d) return d.toLocalDate();
+        if (o instanceof java.util.Date d) return new java.sql.Date(d.getTime()).toLocalDate();
+        return null;
+    }
 
     public BatchBalance blocksByBatch(String factoryId, LocalDate startDate, LocalDate endDate) {
         return blocksByBatch(factoryId, startDate, endDate, null);
@@ -84,7 +115,7 @@ public class MaterialBalanceService {
             blocks.addAll(build(group, t).getPlans());
         }
         return new BatchBalance(t.warn().multiply(HUNDRED).stripTrailingZeros(),
-                t.red().multiply(HUNDRED).stripTrailingZeros(), blocks);
+                t.red().multiply(HUNDRED).stripTrailingZeros(), blocks, rows == null ? 0 : rows.size());
     }
 
     public MaterialBalanceTableDTO build(List<Map<String, Object>> rows, Thresholds t) {

@@ -3140,6 +3140,12 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
+        // BP 问题 28 复测: 带期间说法 (一个月 / 30 天 / 本月) 的损耗异常没有短语, admin 落到 REPORT_ANOMALY (答原料过期 / 设备维护),
+        // finance 落到澄清; 窗口由工具按用户说的期间走 (守卫 YieldLossProcessRoutingContractTest)
+        for (String period : new String[]{"最近一个月", "近一个月", "最近30天", "近30天", "这个月", "本月"}) {
+            phraseToIntentMapping.put(period + "有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+            phraseToIntentMapping.put(period + "损耗异常", "REPORT_BATCH_YIELD_RANK");
+        }
         phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
@@ -8253,7 +8259,9 @@ public class IntentKnowledgeBase {
             "|本季度|上季度|第[一二三四1-4]季度" +
             "|本星期|这周|本周|上星期|上周" +
             "|本年度|本年|今年|去年|前年" +
-            "|最近\\d{1,3}\\s*[天日周月年]|近\\d{1,3}\\s*[天日周月年]" +
+            // 数字可带空格、可写汉字 (「近 30 天」「最近一个月」「近两周」): 句首时间词不算条件, 同「近30天」(BP 问题 28)
+            "|最近\\s*(?:\\d{1,3}|[一二两三四五六七八九十]{1,3})\\s*个?\\s*[天日周月年]" +
+            "|近\\s*(?:\\d{1,3}|[一二两三四五六七八九十]{1,3})\\s*个?\\s*[天日周月年]" +
             "|\\d{4}\\s*[年/\\-]\\s*(?:1[0-2]|0?[1-9])\\s*月?" +
             "|\\d{4}\\s*年" +
             ")的?"

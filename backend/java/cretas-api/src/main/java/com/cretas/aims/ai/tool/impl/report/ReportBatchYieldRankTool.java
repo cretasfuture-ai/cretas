@@ -115,11 +115,23 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         if (start.isAfter(end)) {
             throw new IllegalArgumentException("开始日期不能晚于结束日期");
         }
+        if (end.isAfter(today) && !start.isAfter(today)) {
+            // 「本周」等预处理给到周日: 未来的日子没有数据, 回答里不写成已经查过
+            end = today;
+        }
         String keyword = ReportToolSchemas.productKeyword(getString(params, "productName"));
         View view = resolveView(factoryId, params, start, end, today);
+        String windowNotice = null;
+        if (view == View.LOSS_ANOMALY && isBareRecentWindow(params, startText, endText, period, start, end, today)) {
+            // 全局「最近」= 含今天 7 天, 对低频的报工 / 损耗异常太窄 (BP 问题 28: F006 最后一天报工 11-05, 7 天窗口一条都没有);
+            // 只对损耗异常视图放宽到 30 天, 与工具默认和「发现的问题」扫描回看天数一致; 用户给了日期/期间的不动
+            start = today.minusDays(29);
+            end = today;
+            windowNotice = "「最近」按近 30 天（" + start + " 至 " + end + "）查。";
+        }
         if (view != View.BATCH) {
             return processView(view, factoryId, params, startText != null || endText != null, period, start, end, today,
-                    resolveProductScope(factoryId, keyword, today));
+                    resolveProductScope(factoryId, keyword, today), windowNotice);
         }
         boolean lowestFirst = !"highest".equalsIgnoreCase(getString(params, "order", "lowest"));
         int limit = DEFAULT_LIMIT;
@@ -248,6 +260,24 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         return View.BATCH;
     }
 
+    /** 「最近」后面跟了数量 (最近7天 / 最近三个月 / 最近2周): 用户给了明确期间, 不属于笼统的「最近」。 */
+    private static final java.util.regex.Pattern RECENT_WITH_COUNT = java.util.regex.Pattern.compile(
+            "最近\\s*[0-9０-９一二两三四五六七八九十几半]");
+
+    /**
+     * 窗口是不是全局预处理对笼统「最近」补的那 7 天: 原话有「最近」且没跟数量、没说期间词 (本月/上月/本周/某月某日),
+     * 没带 period, 且日期正好是 今天-6 ~ 今天。用户明确给的日期、期间一律不是。
+     */
+    static boolean isBareRecentWindow(Map<String, Object> params, String startText, String endText, String period,
+                                      LocalDate start, LocalDate end, LocalDate today) {
+        if (period != null || startText == null || endText == null) return false;
+        if (!start.equals(today.minusDays(6)) || !end.equals(today)) return false;
+        String text = said(params);
+        if (!text.contains("最近") || RECENT_WITH_COUNT.matcher(text).find()) return false;
+        // 「最近」之外还说了别的期间: 以用户说的为准 (预处理哪个范围排第一不由这里猜)
+        return !java.util.regex.Pattern.compile("本月|这个月|上个月|上月|本周|这周|上周|今年|去年|本季|[0-9０-９]+\\s*[月日号]|[0-9０-９]+\\s*天").matcher(text).find();
+    }
+
     /** 原话里出现的本厂工序名 (近一年有按工序报工的工序; 名字至少 2 个字, 取最长的命中)。 */
     private String matchedProcessName(String factoryId, String text, LocalDate today) {
         if (yieldAnalysisService == null || text.isBlank()) return null;
@@ -267,7 +297,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
 
     private Map<String, Object> processView(View view, String factoryId, Map<String, Object> params, boolean explicitDates,
                                             String period, LocalDate start, LocalDate end, LocalDate today,
-                                            ProcessYieldViews.ProductScope scope) throws Exception {
+                                            ProcessYieldViews.ProductScope scope, String windowNotice) throws Exception {
         String text = said(params);
         String processKeyword = blank(getString(params, "processName"));
         if (processKeyword == null && view != View.LOSS_ANOMALY) processKeyword = matchedProcessName(factoryId, text, today);
@@ -278,7 +308,7 @@ public class ReportBatchYieldRankTool extends AbstractBusinessTool {
         ProcessYieldViews.AlertLine alert = alertLine(factoryId);
         if (view == View.LOSS_ANOMALY) {
             data = ProcessYieldViews.lossAnomaly(materialBalanceService, factoryId, start, end, limit, processKeyword, scope, msg,
-                    alert);
+                    alert, windowNotice);
         } else if (view == View.PROCESS) {
             data = ProcessYieldViews.processTrend(yieldAnalysisService, materialBalanceService, factoryId, start, end,
                     processKeyword, scope, msg, alert);

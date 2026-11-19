@@ -1,6 +1,7 @@
 package com.cretas.aims.ai.tool.impl.report;
 
 import com.cretas.aims.config.IntentKnowledgeBase;
+import com.cretas.aims.service.execution.PhraseShortcutEligibility;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -8,6 +9,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * BP 问题 28 (2026-11-18 复测): 「最近有哪些损耗异常」被判成质检, 答「质检不合格率 0%」。
@@ -33,6 +35,20 @@ class YieldLossProcessRoutingContractTest {
         String intent = route(q);
         assertEquals("REPORT_BATCH_YIELD_RANK", intent, q);
         assertFalse(intent.startsWith("QUALITY"), "损耗异常不得进质检意图: " + q);
+    }
+
+    /** BP 问题 28 复测: 「最近一个月有哪些损耗异常」admin 落到 REPORT_ANOMALY (答原料过期/设备维护), finance 落到澄清。 */
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "最近一个月有哪些损耗异常", "近一个月有哪些损耗异常", "近30天有哪些损耗异常", "近 30 天有哪些损耗异常",
+            "最近30天有哪些损耗异常", "这个月有哪些损耗异常", "本月有哪些损耗异常", "本月有哪些损耗异常？",
+            "最近一个月 有哪些损耗异常", "近一个月，有哪些损耗异常?", "本月 有哪些 损耗异常 ？"})
+    void periodQualifiedLossAnomalyGoesToTheYieldTool(String q) {
+        assertEquals("REPORT_BATCH_YIELD_RANK", route(q), q);
+        // 生产入口是短语快捷通道: 命中的短语拿掉后整句不能还剩「一个月 / 30天」这类字 (否则判带条件, 交给决策层 → 落到异常/澄清)
+        java.util.Map.Entry<String, String> hit = kb.matchPhraseHit(q, "FACTORY").orElseThrow();
+        assertTrue(PhraseShortcutEligibility.isUnconditionedSimple(q, hit.getKey(), hit.getValue()),
+                q + " 命中短语「" + hit.getKey() + "」, 整句还剩条件字, 快捷通道会放弃");
     }
 
     @ParameterizedTest
