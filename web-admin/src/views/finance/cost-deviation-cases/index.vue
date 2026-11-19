@@ -99,7 +99,9 @@ function qty(v: number | null | undefined): string {
 }
 function amountText(c: CostDeviationCase): string {
   if (c.priceMasked) return '无权查看';
-  return c.amountVariance == null ? UNKNOWN : `¥${c.amountVariance}`;
+  if (c.amountVariance == null) return UNKNOWN;
+  // 物料平衡的金额 = 未解释差额 × 开计划时主料单价, 是估算
+  return c.sourceType === 'MATERIAL_BALANCE' ? `约 ¥${c.amountVariance}（估）` : `¥${c.amountVariance}`;
 }
 
 async function loadThresholds() {
@@ -307,7 +309,7 @@ onMounted(() => {
           </UTable>
 
           <h3>影响</h3>
-          <p>涉及批次 {{ detail.impact.batchCount }} 个; 差异金额: {{ detail.impact.amount == null ? (detail.impact.amountNote ?? UNKNOWN) : `¥${detail.impact.amount}` }}</p>
+          <p>涉及批次 {{ detail.impact.batchCount }} 个; 差异金额: {{ detail.impact.amount == null ? (detail.impact.amountNote ?? UNKNOWN) : `¥${detail.impact.amount}` + (detail.impact.amountNote ? `（${detail.impact.amountNote}）` : '') }}</p>
           <p v-if="detail.impact.unitCostImpact != null">单位成本影响: ¥{{ detail.impact.unitCostImpact }} / {{ detail.impact.outputUnit }}</p>
           <p v-if="detail.case.sourceType === 'MATERIAL_BALANCE'">未解释数量合计: {{ qty(detail.impact.unexplainedQty) }} {{ detail.impact.unexplainedUnit ?? '' }}</p>
           <p v-if="detail.case.unknownItemCount > 0">另有 {{ detail.case.unknownItemCount }} 项算不出, 实际影响可能更大或更小</p>

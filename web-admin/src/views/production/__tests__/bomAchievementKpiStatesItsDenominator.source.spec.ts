@@ -42,7 +42,7 @@ describe('BOM达成率 KPI: 说清分母', () => {
   it('阳性对照: 真的读到了那个屏, 且它确实有四张 KPI 卡', () => {
     const src = readFileSync(SCREEN, 'utf8');
     expect(src.length, '源码读成空 ⇒ 下面全是恒真式').toBeGreaterThan(2000);
-    for (const label of ['总批次数', '平均达成率', '最低达成率', '用量偏差批次数']) {
+    for (const label of ['总批次数', '平均用量比', '最低用量比', '用量偏差批次数']) {
       expect(src, `应有「${label}」卡`).toContain(label);
     }
   });

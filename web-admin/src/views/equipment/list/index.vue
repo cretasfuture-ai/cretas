@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { equipmentStatusTagType, equipmentStatusText } from './equipmentStatus';
 import { ref, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -82,41 +83,9 @@ function handleSizeChange(size: number) {
   loadData();
 }
 
-function getStatusType(status: string) {
-  const map: Record<string, string> = {
-    RUNNING: 'success',
-    ACTIVE: 'success',
-    ONLINE: 'success',
-    IDLE: 'info',
-    STANDBY: 'info',
-    INACTIVE: 'info',
-    OFFLINE: 'info',
-    DISABLED: 'info',
-    MAINTENANCE: 'warning',
-    FAULT: 'danger',
-    ERROR: 'danger',
-    STOPPED: 'warning',
-  };
-  return map[status?.toUpperCase()] || 'info';
-}
-
-function getStatusText(status: string) {
-  const map: Record<string, string> = {
-    RUNNING: '运行中',
-    ACTIVE: '运行中',
-    ONLINE: '在线',
-    IDLE: '空闲',
-    STANDBY: '待机',
-    INACTIVE: '停用',
-    OFFLINE: '离线',
-    DISABLED: '已禁用',
-    MAINTENANCE: '维护中',
-    FAULT: '故障',
-    ERROR: '故障',
-    STOPPED: '已停止',
-  };
-  return map[status?.toUpperCase()] || status;
-}
+// 设备状态标签见 ./equipmentStatus.ts（LSMDEMO 复测：scrapped 显示英文原文）
+const getStatusType = equipmentStatusTagType;
+const getStatusText = equipmentStatusText;
 
 const detailVisible = ref(false);
 const detailData = ref<TableRow>({});

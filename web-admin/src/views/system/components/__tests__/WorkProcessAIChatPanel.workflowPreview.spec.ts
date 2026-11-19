@@ -86,6 +86,50 @@ describe('workflow spec preview at the actual chat entry', () => {
     wrapper.unmount();
   });
 
+  it('BP-38: rows that clear existing config are red and block apply until each one is confirmed', async () => {
+    const rows = [
+      { path: 'canvas.nodes.PROCESS:卤制#0.inputUnit', text: '工序「卤制」 · 投入单位：kg → 未设置', clears: true as const },
+      { path: 'canvas.edges.removed[0]', text: '删除连接：原料「卤汁」 → 工序「卤制」', clears: true as const },
+      { path: 'canvas.nodes.PROCESS:卤制#0.reportingRequired', text: '工序「卤制」 · 是否报工：免报 → 报工' },
+    ];
+    const applySpec = vi.fn(async () => ({ status: 'applied' as const }));
+    const wrapper = mount(WorkProcessAIChatPanel, {
+      props: { factoryId: 'F006', productTypeId: 'PT-PIG-400', endpoint: '/workflow-ai', moduleCode: 'product_process_workflow_config',
+        previewSpec: () => ({ ok: true as const, rows, revision: 'r1' }), applySpec },
+      global: { stubs: {
+        ElPopover: { template: '<div><slot name="reference"/><slot/></div>' },
+        ElInput: { props: ['modelValue'], emits: ['update:modelValue'], template: '<textarea :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)"/>' },
+        ElButton: { template: '<button><slot/></button>' }, ElIcon: true, ElTag: true, ElDropdown: true,
+      } },
+    });
+    await send(wrapper);
+    const red = wrapper.findAll('[data-testid="workflow-change-row"][data-clears="true"]');
+    expect(red).toHaveLength(2);
+    expect(red.every(row => row.classes('workflow-change-row--clears'))).toBe(true);
+    expect(wrapper.get('[data-testid="workflow-clears-hint"]').text()).toContain('还剩 2 项未确认');
+    const boxes = wrapper.findAll('[data-testid="workflow-clear-confirm"]');
+    expect(boxes).toHaveLength(2);
+
+    // 一项都没确认: 直接调用应用也拦下
+    await (wrapper.vm as unknown as { applySpecProposal: (diff: unknown, id: unknown) => Promise<void> })
+      .applySpecProposal((wrapper.vm as unknown as { messages: Array<{ diffPreview?: unknown[] }> }).messages.at(-1)!.diffPreview![0],
+        { factoryId: 'F006', productTypeId: 'PT-PIG-400' });
+    expect(applySpec).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('尚未逐项确认');
+
+    await boxes[0].setValue(true);
+    await wrapper.get('[data-testid="workflow-spec-apply"]').trigger('click');
+    await flushPromises();
+    expect(applySpec).not.toHaveBeenCalled(); // 只确认了一项
+    expect(wrapper.get('[data-testid="workflow-clears-hint"]').text()).toContain('还剩 1 项未确认');
+
+    await boxes[1].setValue(true);
+    await wrapper.get('[data-testid="workflow-spec-apply"]').trigger('click');
+    await flushPromises();
+    expect(applySpec).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
   it('uses the real apply callback once, blocks double-send while awaiting, and aborts on late permission loss', async () => {
     let resolveApply!: (result: { status: 'applied' | 'aborted' }) => void;
     const applySpec = vi.fn(() => new Promise<{ status: 'applied' | 'aborted' }>(resolve => { resolveApply = resolve; }));

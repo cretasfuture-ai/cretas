@@ -485,7 +485,13 @@ const agingColumns = computed<CsTableColumn<TxRow>[]>(() => [
           <template #overview>
             <UAlert v-if="overviewLoading" color="info" variant="soft" icon="i-lucide-info" title="正在读取财务概览…" />
             <UAlert v-else-if="overviewError" color="error" variant="soft" icon="i-lucide-circle-alert" :title="overviewError" />
-            <div v-else-if="overview" class="stat-cards" data-testid="arap-overview">
+            <template v-else-if="overview">
+            <!-- PROTO-DEMO-ARAP: 区分「没有挂账单据」与「挂账后余额为 0」(经营分析页往来余额与本页同一份后端实现) -->
+            <UAlert v-if="overview.hasLedgerEntries === false"
+              color="warning" variant="soft" icon="i-lucide-info" class="mb-3" data-testid="arap-no-ledger"
+              title="本厂尚未生成挂账单据"
+              description="应收按已发货/已确认未收款挂账，应付按已入库/已确认未付款挂账；下面的 ¥0 表示「没有挂账单据」，不是「已全部结清」。" />
+            <div class="stat-cards" data-testid="arap-overview">
               <div class="stat-card ar">
                 <div class="stat-label">应收总额</div>
                 <div class="stat-value">{{ formatAmount(overview.totalReceivable) }}</div>
@@ -509,6 +515,7 @@ const agingColumns = computed<CsTableColumn<TxRow>[]>(() => [
                 <div class="stat-sub">{{ overdueCount(overview) }} 笔逾期（应收+应付）</div>
               </div>
             </div>
+            </template>
             <div v-else class="empty">暂无数据</div>
           </template>
 

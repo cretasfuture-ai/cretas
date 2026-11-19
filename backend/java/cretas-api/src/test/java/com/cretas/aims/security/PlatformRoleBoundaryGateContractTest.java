@@ -53,7 +53,9 @@ class PlatformRoleBoundaryGateContractTest {
     /** Writes only fixed values, or a throwaway object that is never stored. */
     private static final Map<String, String> FIXED_WRITERS = Map.of(
             "service/impl/UserServiceImpl#provisionDefaultUsers", "fixed factory roles only",
-            "service/platform/PlatformFactoryAccessService#roleLevels", "synthetic User, never stored");
+            "service/platform/PlatformFactoryAccessService#roleLevels", "synthetic User, never stored",
+            "controller/permission/PermissionMatrixController#writeCell",
+            "synthetic audit actor copied from the typed platform AuthenticatedActor, never stored");
 
     private static final String DEFINITION = "defines the role set or enum";
     private static final String PLATFORM_IDENTITY_FIRST = "behind a typed platform actor or /api/platform";

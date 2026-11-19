@@ -72,8 +72,9 @@ ACTION_REC_GUARD_CLAUSE = (
     "\n\n可执行建议强制规则（违反将被视为不合格回答）：\n"
     "1. 回答必须以可执行的建议结尾，不能仅描述数据。每条建议必须同时满足：\n"
     "   (a) 具体对象 — 指明 [具体店名/品类/菜品/员工/客群/渠道]，禁止笼统的'重点关注'/'加强管理';\n"
-    "   (b) 数字化收益 — 含 [收益区间]，例如 '预计提升营业额 3-5%' / '节约成本 5-10万/月' /"
-    " '降低退单率 2 个百分点';\n"
+    "   (b) 收益只写数据里有的 — 只许引用「当前数据」里出现过的数字；数据里没有金额/成本列时，"
+    "不得写任何金额（元/万元/万/月）或收益区间，改写 '需要成本数据才能估算金额'；"
+    "数据里有金额列时可引用其中真实的数字或按它算出的数；\n"
     "   (c) 前置条件 — 写明 [需先做什么]，例如 '先完成服务员推销话术培训' /"
     " '需要区域经理确认营销预算上限' / '上传当月折扣明细';\n"
     "   (d) 时间窗口 — 写明 [实施时长]，例如 '本月内' / '下季度' / '14 天试点'。\n"
@@ -185,6 +186,80 @@ def detect_numeric_hallucination(
     if not violations:
         return None
     return "疑似数字幻觉（LLM 输出的金额超出聚合上下文范围）：" + "；".join(violations)
+
+
+# =============================================================================
+# 行动建议里的金额必须在数据里找得到（A9, 2026-11-19）
+#
+# 实测：表里没有任何金额，建议却写「减少资源浪费 5-8 万/月」。提示词只能降低概率，
+# 这里做后置校验：建议段里的「数字+元/万元/万/千元/亿」，数字在 LLM 实际拿到的数据文本
+# 里找不到（原值或按 万/亿 折算后）就改写成「需要成本数据才能估算金额」，不留编造金额。
+# 只处理建议段，结论/发现段的算术结果不动（宁漏不错）。
+# =============================================================================
+
+_MONEY_UNITS = {"亿": 100_000_000.0, "万元": 10_000.0, "万": 10_000.0, "千元": 1_000.0, "元": 1.0}
+_NUM = r"\d+(?:,\d{3})*(?:\.\d+)?"
+# 「5-8万」「5~8万元」「12.5万」「3000元」；范围的单位写在最后
+_MONEY_CLAIM = re.compile(
+    rf"(?P<lo>{_NUM})(?:\s*(?:-|~|～|—|至|到)\s*(?P<hi>{_NUM}))?\s*(?P<unit>亿|万元|万|千元|元)(?![人件台吨个批家条箱公斤趟天])"
+    r"(?:\s*/\s*(?:月|年|天|日|周|季度))?"
+)
+_REC_HEADING = re.compile(r"行动建议|可执行建议|改进建议|建议[:：]?\s*$|^\s*#+\s*建议|\*\*建议")
+MONEY_NEEDS_COST_DATA = "需要成本数据才能估算金额"
+
+
+def _support_numbers(support_text: str) -> List[float]:
+    """Every number the LLM was given, plus 万/亿-expanded forms (「12.5万」→125000)."""
+    out: List[float] = []
+    for m in re.finditer(rf"({_NUM})\s*(亿|万)?", support_text or ""):
+        try:
+            v = float(m.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        out.append(v)
+        if m.group(2):
+            out.append(v * _MONEY_UNITS[m.group(2)])
+    return out
+
+
+def _is_supported(value: float, support: List[float]) -> bool:
+    for s in support:
+        if s == value or (s != 0 and abs(s - value) / abs(s) <= 0.01):
+            return True
+    return False
+
+
+def strip_unsupported_money_claims(answer: str, support_text: str) -> tuple[str, List[str]]:
+    """Rewrite money claims in the recommendation section that the data cannot back.
+
+    Returns (new_answer, removed_claims). `removed_claims` is empty when nothing
+    changed. A claim is supported when every number in it (as written, or scaled
+    by its 万/亿/千元 unit) matches a number that appears in `support_text`.
+    """
+    if not answer:
+        return answer, []
+    lines = answer.split("\n")
+    start = next((i for i, ln in enumerate(lines) if _REC_HEADING.search(ln)), None)
+    if start is None:
+        return answer, []
+    support = _support_numbers(support_text)
+    removed: List[str] = []
+
+    def _repl(m: "re.Match[str]") -> str:
+        mult = _MONEY_UNITS[m.group("unit")]
+        nums = [m.group("lo")] + ([m.group("hi")] if m.group("hi") else [])
+        for raw in nums:
+            v = float(raw.replace(",", ""))
+            if not (_is_supported(v * mult, support) or _is_supported(v, support) and mult == 1.0):
+                removed.append(m.group(0))
+                return MONEY_NEEDS_COST_DATA
+        return m.group(0)
+
+    for i in range(start, len(lines)):
+        lines[i] = _MONEY_CLAIM.sub(_repl, lines[i])
+    if not removed:
+        return answer, []
+    return "\n".join(lines), removed
 
 
 # =============================================================================

@@ -1582,6 +1582,31 @@ public class ArApServiceImpl implements ArApService {
         return new ArrayList<>(agingMap.values());
     }
 
+    @Override
+    public List<Map<String, Object>> getOverdueReceivableDocuments(String factoryId) {
+        List<Long> owners = scopeOwners(factoryId);
+        if (owners != null && owners.isEmpty()) return List.of();
+        LocalDate today = LocalDate.now();
+        List<ArApTransaction> invoices = owners == null
+                ? transactionRepository.findOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31))
+                : transactionRepository.findScopedOverdueReceivables(factoryId, LocalDate.of(9999, 12, 31), owners);
+        List<Map<String, Object>> docs = new ArrayList<>();
+        for (ArApTransaction invoice : invoices) {
+            BigDecimal amt = effectiveOutstanding(invoice);
+            if (amt.signum() <= 0) continue;
+            // 与 getBucket 同判据: 到期日早于今天才算逾期
+            if (invoice.getDueDate() == null || !invoice.getDueDate().isBefore(today)) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("transactionNumber", invoice.getTransactionNumber());
+            row.put("counterpartyName", invoice.getCounterpartyName());
+            row.put("outstanding", amt);
+            row.put("dueDate", invoice.getDueDate());
+            row.put("daysOverdue", ChronoUnit.DAYS.between(invoice.getDueDate(), today));
+            docs.add(row);
+        }
+        return docs;
+    }
+
     private BigDecimal effectiveOutstanding(ArApTransaction invoice) {
         // 已知发票按剩余未清金额统计。历史 NEEDS_RECONCILIATION 的 NULL 仍保守取原值，
         // 与现有 open-item 回填政策一致，不能把未知欠款当成已结清。
@@ -1612,6 +1637,9 @@ public class ArApServiceImpl implements ArApService {
             overview.put("customerCount", 0L);
             overview.put("supplierCount", 0L);
             overview.put("transactionsByType", List.of());
+            overview.put("customerPrepayments", BigDecimal.ZERO);
+            overview.put("ledgerEntryCount", 0L);
+            overview.put("hasLedgerEntries", false);
             return overview;
         }
 
@@ -1668,6 +1696,13 @@ public class ArApServiceImpl implements ArApService {
                 .count();
         overview.put("payableCount", payableCounterpartyCount);
         overview.put("receivableCount", receivableCounterpartyCount);
+        // 客户预收 = 挂账净额为负的客户 (先收款后发货)。totalReceivable 是净额, 已抵减这部分;
+        // 单独给出是为了让经营分析页说清「应收净额里抵掉了多少预收」, 与本页同一份挂账数据。
+        overview.put("customerPrepayments", receivableRows.stream()
+                .map(row -> row[2] instanceof BigDecimal value ? value : BigDecimal.ZERO)
+                .filter(value -> value.signum() < 0)
+                .map(BigDecimal::negate)
+                .reduce(BigDecimal.ZERO, BigDecimal::add));
 
         // 🔴 2026-08-28 逐屏走查: 屏上「本月交易笔数 0 / 客户 0 / 供应商 0」, 而正下方
         //   「交易记录 共 32 条」全在本月 —— **同屏自相矛盾**。
@@ -1703,6 +1738,14 @@ public class ArApServiceImpl implements ArApService {
             typeStats.add(stat);
         }
         overview.put("transactionsByType", typeStats);
+        // PROTO-DEMO-ARAP: 区分「本厂没有挂账单据」与「挂账后余额为 0」。应收应付只按挂账单据
+        // (ar_ap_transactions, 未删除) 统计; 没有单据时页面要如实说「尚未生成挂账单据」, 不能读成「¥0 已结清」,
+        // 也不能拿客户/供应商主数据上的 current_balance 缓存去凑数。
+        long ledgerEntryCount = stats.stream()
+                .mapToLong(row -> row[1] instanceof Number n ? n.longValue() : 0L)
+                .sum();
+        overview.put("ledgerEntryCount", ledgerEntryCount);
+        overview.put("hasLedgerEntries", ledgerEntryCount > 0);
 
         return overview;
     }

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/store/modules/auth';
@@ -687,7 +688,8 @@ function getDisposalReason(row: TableRow): string {
         <el-button :icon="Refresh" @click="handleRefresh">重置</el-button>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty><ListEmptyExplain empty-title="还没有废弃/报废处理单" empty-hint="不良品或过期物料需要报废时，点右上角新建处理单，审批通过后才会扣减库存。" /></template>
         <el-table-column label="记录编号" width="160">
           <template #default="{ row }">
             {{ getRecordNumber(row) }}

@@ -38,10 +38,16 @@ public final class RushOrderRequestParser {
     public static Optional<SaidQuantity> quantityFromText(String text) {
         if (text == null) return Optional.empty();
         Matcher m = QUANTITY.matcher(text);
-        if (!m.find()) return Optional.empty();
-        BigDecimal v = parseNumber(m.group(1));
-        if (v == null || v.signum() <= 0) return Optional.empty();
-        return Optional.of(new SaidQuantity(v, m.group(2)));
+        // 「插一个急单 酱牛肉 2 吨」里的「一个」是量词口语, 不是数量: 跳过「一个急单」(只有它就是没说数量)
+        while (m.find()) {
+            BigDecimal v = parseNumber(m.group(1));
+            if (v == null || v.signum() <= 0) continue;
+            SaidQuantity q = new SaidQuantity(v, m.group(2));
+            boolean article = "个".equals(m.group(2)) && ("一".equals(m.group(1)) || "1".equals(m.group(1)))
+                    && text.startsWith("急单", m.end());
+            if (!article) return Optional.of(q);
+        }
+        return Optional.empty();
     }
 
     /** 参数里的数量: 数字或数字字符串, 其它返回 null。 */
@@ -130,6 +136,60 @@ public final class RushOrderRequestParser {
             return Optional.of(said.value());
         }
         return Optional.empty();
+    }
+
+    /** 用户说的是重量 (吨 / 斤 / 千克族)。 */
+    public static boolean isWeightUnit(String unit) {
+        if (unit == null) return false;
+        String u = unit.trim().toLowerCase(Locale.ROOT);
+        return isKgFamily(u) || TO_KG.containsKey(u);
+    }
+
+    /** 重量 → 千克; 不是重量单位返回 empty。 */
+    public static Optional<BigDecimal> toKg(SaidQuantity said) {
+        if (said == null || said.value() == null || !isWeightUnit(said.unit())) return Optional.empty();
+        String u = said.unit().trim().toLowerCase(Locale.ROOT);
+        BigDecimal f = isKgFamily(u) ? BigDecimal.ONE : TO_KG.get(u);
+        return Optional.of(said.value().multiply(f).stripTrailingZeros());
+    }
+
+    /** 换算结果: 产品单位数量 + 面向用户的换算式。 */
+    public record Conversion(BigDecimal quantity, String formula) {
+    }
+
+    /**
+     * 重量按产品每单位的千克数换成产品单位 (如 2 吨 / 0.25 千克每盒 = 8000 盒)。不整除时向上取整并写明。
+     * 用户说的不是重量或 kgPerUnit 缺失 / 非正 → empty。
+     */
+    public static Optional<Conversion> weightToUnits(SaidQuantity said, BigDecimal kgPerUnit, String productUnit) {
+        Optional<BigDecimal> kg = toKg(said);
+        if (kg.isEmpty() || kgPerUnit == null || kgPerUnit.signum() <= 0 || productUnit == null) return Optional.empty();
+        BigDecimal exact = kg.get().divide(kgPerUnit, 6, java.math.RoundingMode.HALF_UP).stripTrailingZeros();
+        BigDecimal units = exact.setScale(0, java.math.RoundingMode.CEILING);
+        String kgText = kg.get().toPlainString();
+        String formula = plainNum(said.value()) + " " + said.unit() + " = " + kgText + " 千克 ÷ "
+                + kgPerUnit.stripTrailingZeros().toPlainString() + " 千克/" + productUnit + " = "
+                + (exact.compareTo(units) == 0 ? "" : exact.toPlainString() + "，向上取整为 ")
+                + units.toPlainString() + " " + productUnit;
+        return Optional.of(new Conversion(units, formula));
+    }
+
+    private static String plainNum(BigDecimal v) {
+        return v.stripTrailingZeros().toPlainString();
+    }
+
+    private static final Pattern SPEC_WEIGHT = Pattern.compile("(\\d+(?:\\.\\d+)?)\\s*(kg|千克|公斤|g|克)(?![a-zA-Z*×x])",
+            Pattern.CASE_INSENSITIVE);
+
+    /** 从「演示·酱卤牛肉250g」这类名称 / 规格文字里读单件重量 (千克); 读不出 (或是 310g*42袋 这类多包装) 返回 empty。 */
+    public static Optional<BigDecimal> kgFromSpecText(String text) {
+        if (text == null) return Optional.empty();
+        Matcher m = SPEC_WEIGHT.matcher(text);
+        if (!m.find()) return Optional.empty();
+        BigDecimal v = new BigDecimal(m.group(1));
+        String u = m.group(2).toLowerCase(Locale.ROOT);
+        BigDecimal kg = u.equals("g") || u.equals("克") ? v.divide(new BigDecimal("1000")) : v;
+        return kg.signum() > 0 ? Optional.of(kg.stripTrailingZeros()) : Optional.empty();
     }
 
     /**

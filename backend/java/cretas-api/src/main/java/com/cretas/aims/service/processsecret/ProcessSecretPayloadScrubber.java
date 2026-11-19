@@ -91,13 +91,17 @@ public class ProcessSecretPayloadScrubber {
     public static final Set<String> SINGLE_RUN_ACTUAL_FIELDS = Set.of(
             "yieldRate", "actualYieldRate", "stepYieldRate", "cumulativeYieldRate", "realYieldRate",
             "asOfYieldRate", "sourceConsumedRatio", "weightSharePct", "lossRate",
-            "overFeedRate", "actualSharePercent", "batchYield");
+            "overFeedRate", "actualSharePercent", "batchYield",
+            // 物料平衡单批偏差 (未解释差额占投入, report_batch_yield_rank view=loss_anomaly)
+            "deviationPct");
 
     /** 只出现在跨批汇总里的实测值 (日 / 加权 / 平均 / KPI / 按产品指标): 一律按配比类隐藏。 */
     public static final Set<String> AGGREGATE_ACTUAL_FIELDS = Set.of(
             "todayYieldRate", "weightedYieldRate", "netYieldRate", "goodOutputRate", "avgLossRate",
             "lossPercentage", "scrapRate", "scrapLossRate", "avgYieldRate", "averageYieldRate", "monthlyYieldRate",
-            "yieldRateChange");
+            "yieldRateChange",
+            // 出成率按工序视图 (report_batch_yield_rank view=process/process_compare): 上一期的跨批汇总
+            "previousAvgYieldRate", "previousAvgLossRate");
 
     /**
      * 汇总视图: {@code /api/mobile/{factoryId}/<模块>} 的模块段是这些之一 (出成率分析页、工厂指标、看板、报表),

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 /**
  * 调度计划列表
  * 支持搜索、筛选、创建、查看详情
@@ -232,7 +233,8 @@ function getProbabilityClass(prob: number) {
       </div>
 
       <!-- 数据表格 -->
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无数据" stripe border style="width: 100%">
+      <el-table :data="tableData" v-loading="loading" stripe border style="width: 100%">
+        <template #empty><ListEmptyExplain empty-title="还没有调度计划" empty-hint="生产订单排程后会生成调度计划；先在「生产计划」里下达订单，再来这里查看。" /></template>
         <el-table-column prop="planDate" label="计划日期" width="120" align="center">
           <template #default="{ row }">
             <div class="date-cell">

@@ -35,7 +35,9 @@ describe('procurement order PDF buttons', () => {
     const source = readView('detail.vue');
 
     expect(source).toContain('v-if="canViewPrice" prop="unitPrice"');
-    expect(source).toContain('v-if="canViewPrice" label="小计"');
+    expect(source).toContain('v-if="canViewPrice" label="未税小计"');
+    expect(source).toContain('v-if="canViewPrice" label="税额"');
+    expect(source).toContain('v-if="canViewPrice" label="含税小计"');
     expect(source).toContain('<el-collapse v-if="canViewPrice"');
   });
 

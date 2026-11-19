@@ -5,7 +5,9 @@ import { get } from '@/api/request';
 import { ElMessage } from 'element-plus';
 import { Search, Refresh } from '@element-plus/icons-vue';
 import { formatDateTimeCell } from '@/utils/tableFormatters';
-import { summarizeBatch, toMaterialDetail, type MaterialDetail } from './bomAchievementSummary';
+import {
+  summarizeBatch, toMaterialDetail, fetchAllPages, mapWithConcurrency, KPI_BATCH_CAP, type MaterialDetail,
+} from './bomAchievementSummary';
 
 // ---------- auth ----------
 const authStore = useAuthStore();
@@ -13,8 +15,15 @@ const factoryId = computed(() => authStore.factoryId);
 
 // ---------- state ----------
 const loading = ref(false);
-const tableData = ref<BatchRow[]>([]);
+// B6: KPI 基于「全部批次」, 表格只是对全量结果做前端分页 (之前 KPI 只算当前页那 10 条)
+const allRows = ref<BatchRow[]>([]);
+const truncated = ref(false);
+const serverTotal = ref(0);
 const pagination = ref({ page: 1, size: 10, total: 0 });
+const tableData = computed(() => {
+  const start = (pagination.value.page - 1) * pagination.value.size;
+  return allRows.value.slice(start, start + pagination.value.size);
+});
 const dateRange = ref<[string, string] | null>(null);
 
 // Per-batch expanded detail (materialConsumptions)
@@ -49,7 +58,7 @@ interface ConsumptionSummary {
 
 // ---------- KPI ----------
 const kpi = computed(() => {
-  const rows = tableData.value;
+  const rows = allRows.value;
   const total = rows.length;
   if (total === 0) return { total: 0, avgRate: null as number | null, overConsumptionCount: 0, minRate: null as number | null };
 
@@ -96,28 +105,29 @@ async function loadData() {
 
   loading.value = true;
   try {
-    const params: Record<string, unknown> = {
-      page: pagination.value.page,
-      size: pagination.value.size,
-      status: 'COMPLETED',
-    };
-    if (dateRange.value && dateRange.value[0]) {
-      params.startDate = dateRange.value[0];
-      params.endDate = dateRange.value[1];
-    }
-
-    const response = await get<{
-      content: BatchRow[];
-      totalElements: number;
-    }>(`/${factoryId.value}/processing/batches`, { params });
-
-    if (response.success && response.data) {
-      const batches = response.data.content || [];
-      // Fetch consumption summaries in parallel
-      const enriched = await Promise.all(batches.map(enrichBatch));
-      tableData.value = enriched;
-      pagination.value.total = response.data.totalElements || 0;
-    }
+    const all = await fetchAllPages<BatchRow>(async (page, size) => {
+      const params: Record<string, unknown> = { page, size, status: 'COMPLETED' };
+      if (dateRange.value && dateRange.value[0]) {
+        params.startDate = dateRange.value[0];
+        params.endDate = dateRange.value[1];
+      }
+      const response = await get<{
+        content: BatchRow[];
+        totalElements: number;
+      }>(`/${factoryId.value}/processing/batches`, { params });
+      if (!response.success || !response.data) {
+        // 读不到就报错, 不拿已读到的前几页冒充全部
+        throw new Error('加载批次数据失败');
+      }
+      return { content: response.data.content || [], totalElements: response.data.totalElements || 0 };
+    });
+    // 每个批次的物料汇总都要读 (KPI 要算全部), 限并发
+    allRows.value = await mapWithConcurrency(all.items, 8, enrichBatch);
+    truncated.value = all.truncated;
+    serverTotal.value = all.totalElements;
+    pagination.value.total = allRows.value.length;
+    const lastPage = Math.max(1, Math.ceil(allRows.value.length / pagination.value.size));
+    if (pagination.value.page > lastPage) pagination.value.page = lastPage;
   } catch (error: any) {
     console.error('Failed to load batches:', error);
     if (!error?.actionHint) ElMessage.error('加载批次数据失败');
@@ -180,7 +190,8 @@ async function enrichBatch(batch: BatchRow): Promise<BatchRow> {
 const kpiCaliber = computed(() => {
   const k = kpi.value;
   if (k.total === 0) return '';
-  if (k.ratedCount === 0) return '无批次有计划数据, 算不出达成率';
+  if (truncated.value) return `仅基于最近 ${KPI_BATCH_CAP} 个批次（共 ${serverTotal.value} 个）`;
+  if (k.ratedCount === 0) return '无批次有计划数据, 算不出用量比';
   if (k.ratedCount === k.total) return `基于全部 ${k.total} 个批次`;
   return `仅基于 ${k.ratedCount}/${k.total} 个有计划数据的批次`;
 });
@@ -262,15 +273,14 @@ function handleReset() {
   handleSearch();
 }
 
+// 全量已在内存里, 翻页不重新请求 (KPI 不随页变)
 function handlePageChange(page: number) {
   pagination.value.page = page;
-  loadData();
 }
 
 function handleSizeChange(size: number) {
   pagination.value.size = size;
   pagination.value.page = 1;
-  loadData();
 }
 </script>
 
@@ -280,7 +290,7 @@ function handleSizeChange(size: number) {
       <template #header>
         <div class="card-header">
           <div class="header-left">
-            <span class="page-title">BOM达成率分析</span>
+            <span class="page-title">BOM用量对比</span>
             <span class="data-count">共 {{ pagination.total }} 条记录</span>
           </div>
           <div class="header-right">
@@ -308,7 +318,7 @@ function handleSizeChange(size: number) {
           <div class="kpi-value" :style="{ color: kpi.avgRate != null ? getRateColor(kpi.avgRate) : 'var(--cs-muted)' }">
             {{ kpi.avgRate != null ? kpi.avgRate + '%' : '—' }}
           </div>
-          <div class="kpi-label">平均达成率</div>
+          <div class="kpi-label">平均用量比</div>
           <!-- ⚠️ 分母必须写出来: 上一轮修完「不再编 100%」之后, 卡片上仍然是
                「总批次数 8」紧挨着「平均达成率 100%」, 而那个 100% 只来自 1 个批次。
                不编数字只是第一步, **不说分母仍然会误导**。 -->
@@ -323,7 +333,7 @@ function handleSizeChange(size: number) {
           <div class="kpi-value" :style="{ color: kpi.minRate != null ? getRateColor(kpi.minRate) : 'var(--cs-muted)' }">
             {{ kpi.minRate != null ? kpi.minRate + '%' : '—' }}
           </div>
-          <div class="kpi-label">最低达成率</div>
+          <div class="kpi-label">最低用量比</div>
           <div class="kpi-caliber">{{ kpiCaliber }}</div>
         </el-card>
       </div>
@@ -399,7 +409,7 @@ function handleSizeChange(size: number) {
             <template v-else>{{ row.actualTotal != null ? row.actualTotal : '-' }}</template>
           </template>
         </el-table-column>
-        <el-table-column label="达成率" width="120" align="center">
+        <el-table-column label="用量比（实际÷BOM理论）" width="170" align="center">
           <template #default="{ row }">
             <el-tag
               :type="getRateTagType(row.achievementRate)"

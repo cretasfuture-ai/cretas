@@ -164,7 +164,7 @@ export default function QIHomeScreen() {
               </View>
               <View style={styles.actionCopy}>
                 <Text style={styles.actionTitle}>超时处置</Text>
-                <Text style={styles.actionHint}>超时被拦下的料，复检后放行或判不合格</Text>
+                <Text style={styles.actionHint}>超时投料留下的记录，复检后放行或判不合格</Text>
               </View>
               <Ionicons name="chevron-forward" size={24} color={QI_COLORS.textSecondary} />
             </View>

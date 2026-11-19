@@ -425,6 +425,115 @@ describe('ProductProcessWorkflowEditor process branch integration', () => {
     }
   });
 
+  describe('BP-38 Workflow AI 不清空已有配置 / 检查只给结论', () => {
+    const LU_CATALOG = {
+      id: 'WP-LU', processName: '卤制', processCategory: '熟制', unit: 'kg', outputUnit: 'kg',
+      estimatedMinutes: 30, sortOrder: 2, isActive: true, standardYieldMin: null, standardYieldMax: null,
+      needsInput: true, defaultOutputMaterialKind: 'SEMI_FINISHED', semiFinishedOutputCode: null,
+      standardHourlyRate: null, customFieldSchema: null,
+      createdAt: '2026-07-10T00:00:00Z', updatedAt: '2026-07-10T00:00:00Z',
+    };
+    const luWorkflow = () => ({
+      success: true,
+      data: {
+        id: 1, productTypeId: 'PT-PIG-400', schemaVersion: 1, status: 'DRAFT', version: 5, lockVersion: 0,
+        revisionId: 72, revisionHash: 'revision-lu',
+        nodes: [
+          { id: 'raw', kind: 'RAW_MATERIAL', position: { x: 16, y: 32 },
+            data: { name: '猪蹄原料', skuId: 'RM-PIG', skuCode: 'RM-PIG', bound: true, baseUnit: 'kg' } },
+          { id: 'raw-brine', kind: 'RAW_MATERIAL', position: { x: 16, y: 200 },
+            data: { name: '卤汁', skuId: 'RM-BRINE', skuCode: 'RM-BRINE', bound: true, baseUnit: 'kg' } },
+          { id: 'proc-lu', kind: 'PROCESS', position: { x: 300, y: 32 }, data: {
+            workProcessId: 'WP-LU', processName: '卤制', processCategory: '熟制',
+            inputUnit: 'kg', outputUnit: 'kg', reportingRequired: true, reportingSelectionMode: 'ACTUAL_IO',
+            conversionRule: { mode: 'ACTUAL_WEIGHT' },
+            materialBindings: [{ materialTypeId: 'RM-STAR-ANISE', materialName: '八角', dosagePerKgG: 2, unit: 'g' }],
+            ports: [
+              { id: 'in-main', direction: 'INPUT', materialNodeId: 'raw', materialName: '猪蹄原料', skuId: 'RM-PIG', materialKind: 'RAW_MATERIAL', unit: 'kg', ordinal: 0 },
+              { id: 'in-brine', direction: 'INPUT', materialNodeId: 'raw-brine', materialName: '卤汁', skuId: 'RM-BRINE', materialKind: 'RAW_MATERIAL', unit: 'kg', ordinal: 1 },
+              { id: 'out-main', direction: 'OUTPUT', materialNodeId: 'semi-lu', materialName: '卤肉', skuId: 'SKU-SEMI', materialKind: 'SEMI_FINISHED', unit: 'kg', ordinal: 0 },
+            ],
+          } },
+          { id: 'semi-lu', kind: 'SEMI_FINISHED', position: { x: 600, y: 32 },
+            data: { name: '卤肉', skuId: 'SKU-SEMI', skuCode: 'SKU-SEMI', bound: true, baseUnit: 'kg' } },
+        ],
+        edges: [
+          { id: 'e1', source: 'raw', sourceHandle: 'output', target: 'proc-lu', targetHandle: 'in-main' },
+          { id: 'e2', source: 'raw-brine', sourceHandle: 'output', target: 'proc-lu', targetHandle: 'in-brine' },
+          { id: 'e3', source: 'proc-lu', sourceHandle: 'out-main', target: 'semi-lu', targetHandle: 'input' },
+        ],
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+    });
+    // 模型只交回一份残缺规格: 没有入口原料、额外投入、辅料、单位
+    const partialSpecReply = () => ({ data: { reply: '已生成可审核的 Workflow 本地补丁', diffs: [{
+      type: 'PRODUCT_PROCESS_WORKFLOW_SPEC',
+      params: { spec: { steps: [{ process: '卤制', outputs: [{ name: '卤肉' }] }] } },
+      description: '已生成可审核的 Workflow 本地补丁',
+    }] } });
+    const aiChatCalls = () => apiMocks.post.mock.calls.filter(call => String(call[0]).endsWith('/ai/chat'));
+
+    beforeEach(() => {
+      Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: vi.fn() });
+      apiMocks.getActiveWorkProcesses.mockResolvedValue({ success: true, data: [LU_CATALOG] });
+      apiMocks.getWorkProcessCategories.mockResolvedValue({ success: true, data: ['熟制', '加工', '包装'] });
+      apiMocks.getProductProcessWorkflow.mockResolvedValue(luWorkflow());
+    });
+
+    it('残缺规格应用后, 卤制的投入单位、辅料八角、端口物料绑定都保留原值, 预览里没有清空行', async () => {
+      const wrapper = await mountEditorWrapper(false, true);
+      const vm = wrapper.vm as unknown as EditorVm;
+      const panel = wrapper.getComponent(WorkProcessAIChatPanel);
+      const chat = panel.vm as unknown as { input: string; send: () => Promise<void> };
+      apiMocks.post.mockResolvedValue(partialSpecReply());
+      chat.input = '卤制改成必须报工';
+      await chat.send();
+      await flushPromises();
+      expect(aiChatCalls()).toHaveLength(1);
+      expect(aiChatCalls()[0][1].params.intent).toBeUndefined();
+      const rows = panel.findAll('[data-testid="workflow-change-row"]');
+      expect(rows.filter(row => row.attributes('data-clears') === 'true').map(row => row.text())).toEqual([]);
+      expect(rows.map(row => row.text()).filter(text => /→ (未设置|空值|空字符串|未绑定)/.test(text))).toEqual([]);
+      await panel.get('[data-testid="workflow-spec-apply"]').trigger('click');
+      await flushPromises();
+      const after = vm.currentDefinition();
+      const proc = after.nodes.find(node => node.kind === 'PROCESS')!;
+      const data = proc.data as Record<string, unknown>;
+      expect(data.processName).toBe('卤制');
+      expect(data.inputUnit).toBe('kg');
+      expect(data.materialBindings).toEqual([{ materialTypeId: 'RM-STAR-ANISE', materialName: '八角', dosagePerKgG: 2, unit: 'g' }]);
+      const ids = new Set(after.nodes.map(node => node.id));
+      const ports = data.ports as Array<Record<string, unknown>>;
+      expect(ports).toHaveLength(3);
+      ports.forEach(port => expect(ids.has(String(port.materialNodeId))).toBe(true));
+      expect(ports.map(port => port.skuId).sort()).toEqual(['RM-BRINE', 'RM-PIG', 'SKU-SEMI']);
+      const brine = after.nodes.find(node => (node.data as Record<string, unknown>).name === '卤汁');
+      expect(brine?.data).toMatchObject({ skuId: 'RM-BRINE', bound: true, baseUnit: 'kg' });
+    });
+
+    it('检查类快捷问题只回结论文字: 请求带 intent=check, 即便带回方案也不预览、无应用按钮、画布不动', async () => {
+      const wrapper = await mountEditorWrapper(false, true);
+      const vm = wrapper.vm as unknown as EditorVm;
+      const panel = wrapper.getComponent(WorkProcessAIChatPanel);
+      const chat = panel.vm as unknown as { runQuickPrompt: (prompt: string) => Promise<void> };
+      const prompt = (panel.props('quickPrompts') as string[]).find(item => item.includes('单位、数量换算'));
+      expect(prompt).toBe('检查投入与产出单位、数量换算是否完整');
+      const before = JSON.stringify(vm.currentDefinition());
+      const reply = partialSpecReply();
+      reply.data.reply = '结论：发现 1 个问题\n1. 工序「卤制」产出「卤肉」没有配置换算规则';
+      apiMocks.post.mockResolvedValue(reply);
+      await chat.runQuickPrompt(prompt!);
+      await flushPromises();
+      expect(aiChatCalls()).toHaveLength(1);
+      expect(aiChatCalls()[0][1].params.intent).toBe('check');
+      expect(panel.findAll('[data-testid="workflow-change-row"]')).toHaveLength(0);
+      expect(panel.find('[data-testid="workflow-spec-apply"]').exists()).toBe(false);
+      expect(panel.find('[data-testid="workflow-spec-preview"]').exists()).toBe(false);
+      expect(panel.text()).toContain('结论：发现 1 个问题');
+      expect(JSON.stringify(vm.currentDefinition())).toBe(before);
+    });
+  });
+
   it('adds the process, derived finished output, and both edges in one undo snapshot', async () => {
     const vm = await mountEditor();
     vm.openAddProcess('raw');

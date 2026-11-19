@@ -125,6 +125,18 @@ describe('scheduling detail real wire mount', () => {
     } finally { wrapper.unmount(); prompt.mockRestore(); }
   });
 
+  it('甘特图下方一图一分析按真实排程现算（完成概率缺失不按 0 标红）', async () => {
+    const wrapper = mountReasonPage();
+    try {
+      await flushPromises();
+      const t = wrapper.get('[data-testid="gantt-insight"]').text();
+      expect(t).toContain('图中 1 个排程分布在 1 条产线');
+      expect(t).toContain('待开始 1、延期/风险 0');
+      expect(t).toContain('没有排程标红');
+      expect(t).toContain('1 个未完成排程暂无完成概率');
+    } finally { wrapper.unmount(); }
+  });
+
   it('mounts the real API mapper and displays DTO target quantity and worker count', async () => {
     const box = { template: '<div><slot name="header"/><slot/></div>' };
     const wrapper = mount(Detail, { global: {

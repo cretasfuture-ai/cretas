@@ -26,9 +26,9 @@ OUT = ROOT / "backend/java/cretas-api/src/main/resources/ai/intent-domain-table.
 # Python 决策层读的同步副本 (逐字节相同, 由 backend/python/tests/test_intent_domain_scope_contract.py 钉住)
 PY_OUT = ROOT / "backend/python/ai/data/intent-domain-table.json"
 
-CATALOG_VERSION = "2026-11-18.2"
+CATALOG_VERSION = "2026-11-18.3"
 # 本版表内容的摘要 (content_sha256)。改了规则 / 人工清单 / 业务词 / 次域 ⇒ 生成脚本 rc=1, 直到同时升 CATALOG_VERSION 并更新这里。
-CONTENT_SHA256 = "9344407d7dd01478d54eab9c717d099010d4009b3d9c968882bf7e881c48daed"
+CONTENT_SHA256 = "9eb4f114db623495b3a125d471c874f35e23dc92e0d0aa50aa98b7273707e241"
 
 DOMAINS = [
     ("PRODUCTION", "生产", "生产计划/批次/工序任务/排产/产能/生产效率与出成率"),

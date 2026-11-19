@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import ListEmptyExplain from '@/components/common/ListEmptyExplain.vue';
 import { ref, computed, onMounted } from 'vue';
 import { useAuthStore } from '@/store/modules/auth';
 import { get } from '@/api/request';
@@ -100,7 +101,8 @@ function handlePageChange(page: number) { pagination.value.page = page; loadData
         <el-button :icon="Refresh" @click="handleFilterReset">重置</el-button>
       </div>
 
-      <el-table :data="tableData" v-loading="loading" empty-text="暂无日志" stripe border>
+      <el-table :data="tableData" v-loading="loading" stripe border>
+        <template #empty><ListEmptyExplain empty-title="所选条件下没有日志" empty-hint="系统日志按时间记录登录与关键操作；可放宽时间范围或清除筛选条件。" /></template>
         <el-table-column prop="action" label="操作类型" width="140" show-overflow-tooltip />
         <el-table-column prop="username" label="操作人" width="120" />
         <el-table-column prop="message" label="描述" min-width="200" show-overflow-tooltip />

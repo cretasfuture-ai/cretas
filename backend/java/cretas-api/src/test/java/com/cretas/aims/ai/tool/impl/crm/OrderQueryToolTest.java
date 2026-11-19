@@ -27,7 +27,7 @@ class OrderQueryToolTest {
                 .doExecute("F001", Map.of("orderId", "SO-ID-1"), Map.of());
 
         assertThat(result.get("source")).isEqualTo("sales_orders");
-        assertThat(result.get("order")).isSameAs(order);
+        assertThat(result.get("order")).isEqualTo(OrderListTool.toSummary(order));
         verify(salesService).getSalesOrderById("F001", "SO-ID-1");
     }
 }

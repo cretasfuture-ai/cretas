@@ -33,9 +33,15 @@ public record OperatingReportSnapshot(
         Failure(String reason) { this.reason = reason; }
         public String reason() { return reason; }
     }
-    public enum InsightKind { MISSING_VALUE, INCOMPLETE_COVERAGE, REVIEW_RECORDED_VALUE }
+    public enum InsightKind { MISSING_VALUE, INCOMPLETE_COVERAGE, REVIEW_RECORDED_VALUE, NARRATIVE }
     public enum Action { VERIFY_COST, VERIFY_ADDRESS, VERIFY_SALESPERSON, FOLLOW_UP_COLLECTION, REVIEW_PROFIT, REVIEW_INVENTORY, REVIEW_SALES }
-    public record Insight(InsightKind kind, String metricId, Action action) { }
+    /**
+     * kind=NARRATIVE: 模型写的自由业务结论 {@code text}, 数字只能用 {@code {{指标id}}} 占位, 读取时由服务按真实指标值替换;
+     * {@code refs} 是正文引用的指标 id。其余 kind 是旧版「指标 x 动作」枚举 (历史快照仍按它渲染)。
+     */
+    public record Insight(InsightKind kind, String metricId, Action action, String text, List<String> refs) {
+        public Insight(InsightKind kind, String metricId, Action action) { this(kind, metricId, action, null, null); }
+    }
     public record SourceReceipt(String endpoint, String fetchedAt, String basis) { }
     public record Section(String id, String title, boolean priceSensitive, String basis, List<Metric> metrics) { }
     public record Metric(String id, String label, BigDecimal value, String unit,
