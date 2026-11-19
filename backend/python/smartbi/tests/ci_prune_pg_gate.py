@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-EXPECTED = 8
+EXPECTED = 14
 
 
 class _Count:
