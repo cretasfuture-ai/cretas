@@ -105,6 +105,43 @@ class GenericBatchReferenceClarifyContractTest {
         verify(shipmentRecordRepository, never()).findByFactoryIdAndBatchNumber(anyString(), anyString());
     }
 
+    private static final String LONG_BATCH = "PB-PLAN-1794990356144-60B63614-56643";
+
+    @Test
+    void generatedLongBatchNumberIsShownAsShortLabelButCandidateKeepsFullNumber() throws Exception {
+        when(productionBatchRepository.findByFactoryId(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(
+                        batch(LONG_BATCH, "藤椒掌中宝200g", LocalDateTime.of(2026, 11, 18, 10, 0)),
+                        batch(REAL_BATCH, "卤猪蹄", LocalDateTime.of(2026, 11, 18, 9, 0)))));
+
+        JsonNode out = run(fullTrace, "成品批次");
+        String message = out.path("data").path("message").asText();
+        if (message.isEmpty()) message = out.toString();
+        assertThat(message).doesNotContain("1794990356144");
+        assertThat(out.path("data").path("data").path("candidates").get(0).path("batchNumber").asText())
+                .isEqualTo(LONG_BATCH);
+        assertThat(message).contains("PB-PLAN-…56643").contains("藤椒掌中宝200g").contains("2026-11-18")
+                .contains(REAL_BATCH);
+        // 回传给后续工具的参数仍是完整号
+        assertThat(out.toString()).contains("\"label\":\"PB-PLAN-…56643\"");
+        assertThat(BatchReferenceClarifier.displayLabel(REAL_BATCH)).isEqualTo(REAL_BATCH);
+    }
+
+    @Test
+    void pickingByShortLabelStillTracesByFullBatchNumber() throws Exception {
+        when(productionBatchRepository.findByFactoryId(anyString(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(batch(LONG_BATCH, "藤椒掌中宝200g", LocalDateTime.of(2026, 11, 18, 10, 0)))));
+        TraceabilityDTO.FullTraceResponse trace = new TraceabilityDTO.FullTraceResponse();
+        trace.setMaterials(List.of());
+        when(traceabilityService.getFullTrace(FACTORY_ID, LONG_BATCH)).thenReturn(trace);
+        when(shipmentRecordRepository.findByFactoryIdAndBatchNumber(FACTORY_ID, LONG_BATCH)).thenReturn(List.of());
+
+        run(fullTrace, "PB-PLAN-…56643");
+        run(fullTrace, "…56643");
+
+        verify(traceabilityService, org.mockito.Mockito.times(2)).getFullTrace(FACTORY_ID, LONG_BATCH);
+    }
+
     @Test
     void realBatchNumberStillQueriesAndShowsFullNumberVerbatim() throws Exception {
         TraceabilityDTO.MaterialInfo m = new TraceabilityDTO.MaterialInfo();

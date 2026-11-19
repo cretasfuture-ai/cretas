@@ -3383,6 +3383,8 @@ public class ProcessingServiceImpl implements ProcessingService {
             ProductionBatch productionBatch) {
         Map<String, Object> map = new HashMap<>();
         map.put("id", inspection.getId());
+        // 给用户看的质检编号 (QI-YYYYMMDD-NNNN, 数据库发号); null = 未编号, 前端显示「未编号」, 不拿 id 截一段顶替
+        map.put("inspectionNumber", inspection.getInspectionNumber());
         map.put("productionBatchId", inspection.getProductionBatchId());
         map.put("inspectorId", inspection.getInspectorId());
         // 质检记录列表把 inspectorId 这个**数字主键**直接摆给用户看(列名就叫「质检员ID」)。

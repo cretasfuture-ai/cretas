@@ -46,7 +46,8 @@ import AiOperationCard from './components/chat/AiOperationCard.vue';
 import { buildBackendColumnLabels, resolveColumnLabel, columnMinWidth } from './components/chat/aiTableColumns';
 import { listFactoryTemplates, type FactoryTemplate } from '@/api/smartbi/materialized';
 import { getTemplateTitle } from './composables/useTemplateMap';
-import { pickDefaultDataSource } from './composables/useDataSourceSelect';
+import { ALL_DATA_SOURCE_ID, ALL_DATA_SOURCE_LABEL, onlyCompletedUploads, pickInitialDataSourceId } from './composables/useDataSourceSelect';
+import { useBusinessMode } from '@/composables/useBusinessMode';
 import { buildWelcomeText, quickQuestionsFor } from './aiQueryGreeting';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -83,7 +84,7 @@ import { AIInsightPanel } from '@/components/smartbi';
 import SmartBIEmptyState from '@/components/smartbi/SmartBIEmptyState.vue';
 import MaterializedAnalysisPanel from '@/components/smart-bi/MaterializedAnalysisPanel.vue';
 import ChartInsightProvider from './components/ChartInsightProvider.vue';
-import type { ChartWithMeta } from './components/chartInsight';
+import type { ChartWithMeta, UserPermissions } from './components/chartInsight';
 import { chartSignalsFromOption, inferAiChartMeta } from './components/chat/aiChartMeta';
 import { historyForSource } from './components/chat/aiChatContext';
 import { sanitizeCustomerAiText } from './components/chat/customerAiText';
@@ -107,6 +108,15 @@ const route = useRoute();
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+
+/**
+ * 图下「一图一分析」的金额/占比可见性 (问题 51 余项, LSM-COSTBI-Q51-SHARE-TEXT)。
+ * 改前两处 ChartInsightProvider 写死 { canViewFinance: false }: 不管谁登录, 金额类图下都写
+ * 「无成本查看权限」—— F006 工厂总监也一样。改为与成本分析页 / 经营驾驶舱同一判定
+ * (permissionStore.canViewPrice, 后端价格字段遮蔽的前端镜像), 不在本页另写角色。
+ * 无权账号照旧只说排序, 不出金额和占比。
+ */
+const chartInsightPerms = computed<UserPermissions>(() => ({ canViewFinance: permissionStore.canViewPrice === true }));
 
 /**
  * AI 对话标准 E2: 开发者遥测的显式开关。URL 带 `?aiDebug=1` 才显示意图码 / 置信度 / 耗时 / SQL / warnings /
@@ -173,6 +183,8 @@ interface ChatMessage {
   // P2 guardrail (Apr 24 2026): backend flags numeric hallucination in
   // LLM output (e.g. "合计 3.4 亿" on a 36M dataset).
   warning?: string | null;
+  /** 「全部数据」时后端按问题自动选用的数据表名 (SSE data_source 事件) */
+  autoSourceLabel?: string | null;
   // D1 (Apr 26 2026): set when backend response contains 25s timeout marker.
   // FE shows a "重试" button so user doesn't need to retype.
   truncated?: boolean;
@@ -435,6 +447,13 @@ const currentTableType = ref<string>('');
 // 数据源：自动加载最新上传作为分析上下文
 const dataSources = ref<UploadHistoryItem[]>([]);
 const selectedUploadId = ref<number | null>(null);
+const { isRestaurant: isRestaurantTenant } = useBusinessMode();
+/** 实际发给后端的上传 id: 「全部数据」(0) 与未选一样记 null。 */
+const effectiveUploadId = computed<number | null>(() => selectedUploadId.value || null);
+/** 问题落在上传数据上: 选了具体表, 或选了「全部数据」且确有上传 (后端按问题选表)。 */
+const hasUploadScope = computed<boolean>(() =>
+  Boolean(selectedUploadId.value)
+  || (selectedUploadId.value === ALL_DATA_SOURCE_ID && dataSources.value.length > 0));
 const dataSourceLabel = computed(() => {
   if (!selectedUploadId.value) return '';
   const item = dataSources.value.find(d => d.id === selectedUploadId.value);
@@ -1008,7 +1027,8 @@ onMounted(async () => {
   try {
     const res = await getUploadHistory({ status: 'COMPLETED' });
     if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-      const deduped = deduplicateUploads(res.data);
+      // 味美 11-19 (B2): 保存失败的上传不进下拉
+      const deduped = deduplicateUploads(onlyCompletedUploads(res.data));
       dataSources.value = deduped;
 
       // #8 (2026-06-02): 默认数据源选择. 之前的逻辑会在最新非评价上传超过 1 小时时
@@ -1018,9 +1038,10 @@ onMounted(async () => {
       // 修复: pickDefaultDataSource 永远优先非评价、完整的上传 (POS/销售/财务数据),
       // 仅在完全没有非评价上传时才回退评价文件; 同名文件优先完整文件 (避开 _part1/(1)
       // 等分卷). 详见 composables/useDataSourceSelect.ts.
-      const chosen = pickDefaultDataSource(deduped);
-      if (chosen) {
-        selectedUploadId.value = chosen.id;
+      // 味美 11-19 (B3): 工厂默认「全部数据」(后端按问题选表), 餐饮仍按 #8 规则选默认文件。
+      const chosenId = pickInitialDataSourceId(deduped, isRestaurantTenant.value);
+      if (chosenId !== null) {
+        selectedUploadId.value = chosenId;
       }
     }
   } catch (e) {
@@ -1226,7 +1247,7 @@ async function tryJavaIntentChat(
   // 问题 51: 咨询页选了数据源 ⇒ 整个跳过 Java 意图层, 直接走上传数据问答 (Python)。
   // 否则 Java 会把「各产品的销售额占比」当成 indicator_code/操作类/生产看板吃掉。
   // 操作页(有写权限)或没有数据源仍走 Java, 写操作预览/确认链不变。
-  const hasAnalysisData = Boolean(selectedUploadId.value) || currentData.value.length > 0;
+  const hasAnalysisData = hasUploadScope.value || currentData.value.length > 0;
   if (chooseAiQueryRoute({
     tab: activeAiTab.value,
     hasAnyWrite: hasAnyWrite.value,
@@ -1607,7 +1628,7 @@ async function tryJavaIntentChat(
     // Java didn't recognize intent — fall to Python if uploaded data present.
     const hasDataSource =
       currentData.value.length > 0 ||
-      Boolean(selectedUploadId.value);
+      hasUploadScope.value;
     if (!hasDataSource) {
       msg.content = customerSafeAnswer(
         res.message || res.formattedText || '没有理解您的问题，请补充具体的门店、菜品、指标和时间范围。',
@@ -1709,7 +1730,7 @@ async function handleSendMessage() {
     role: 'user',
     content: query,
     timestamp: new Date(),
-    sourceUploadId: selectedUploadId.value ?? null,
+    sourceUploadId: effectiveUploadId.value,
   };
   chatHistory.value.push(userMessage);
 
@@ -1724,7 +1745,7 @@ async function handleSendMessage() {
     content: '',
     timestamp: new Date(),
     loading: true,
-    sourceUploadId: selectedUploadId.value ?? null,
+    sourceUploadId: effectiveUploadId.value,
   };
   chatHistory.value.push(loadingMessage);
 
@@ -1751,7 +1772,7 @@ async function handleSendMessage() {
   // placeholder, and the current user message just pushed above.
   const historyForContext = historyForSource(
     chatHistory.value,
-    selectedUploadId.value,
+    effectiveUploadId.value,
     ['welcome', assistantId, userMessage.id],
   );
 
@@ -1835,6 +1856,13 @@ async function handleSendMessage() {
       chunkBuffer += text;
       if (!chunkFlushTimer) {
         chunkFlushTimer = setTimeout(flushChunkBuffer, 16);
+      }
+    },
+
+    onDataSource(info: { uploadId: number; label: string; autoSelected?: boolean }) {
+      const idx = getMessageIndex();
+      if (idx !== -1 && info?.autoSelected && info.label) {
+        chatHistory.value[idx].autoSourceLabel = info.label;
       }
     },
 
@@ -1998,7 +2026,7 @@ async function handleSendMessage() {
 // NL2SQL 查询处理
 async function handleNL2SQLQuery(query: string) {
   if (!selectedUploadId.value) {
-    ElMessage.warning('请先选择数据源');
+    ElMessage.warning('SQL 直查要先在右上角选一张具体的数据表');
     return;
   }
 
@@ -2522,6 +2550,13 @@ function handleKeydown(event: KeyboardEvent) {
           style="width: 280px; margin-right: 8px"
         >
           <el-option
+            v-if="!isRestaurantTenant"
+            :key="ALL_DATA_SOURCE_ID"
+            :label="ALL_DATA_SOURCE_LABEL"
+            :value="ALL_DATA_SOURCE_ID"
+            data-testid="ds-option-all"
+          />
+          <el-option
             v-for="ds in dataSources"
             :key="ds.id"
             :label="formatDataSourceLabel(ds)"
@@ -2652,6 +2687,12 @@ function handleKeydown(event: KeyboardEvent) {
                 <div v-else-if="message.role === 'assistant' && message.streaming" class="message-text streaming-text">{{ customerSafeAnswer(message.content) }}</div>
                 <div v-else-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message.content)"></div>
                 <div v-else class="message-text">{{ message.content }}</div>
+                <!-- 味美 11-19 (B3): 「全部数据」时后端按问题选了哪张表, 明说出来 -->
+                <div
+                  v-if="message.role === 'assistant' && !message.loading && message.autoSourceLabel"
+                  class="message-auto-source"
+                  data-testid="aiq-auto-source"
+                >本题按问题自动选用数据表「{{ message.autoSourceLabel }}」；不对的话请在右上角换数据源。</div>
 
                 <!-- AI Chat Unification (2026-05-13): user-clicked xlsx download -->
                 <div v-if="message.role === 'assistant' && message.downloadAttachment" class="download-attachment-bar">
@@ -2711,7 +2752,7 @@ function handleKeydown(event: KeyboardEvent) {
                   v-if="shouldRenderAutoChartInsight(message)"
                   :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}`"
                   :chart="messageChartWithMeta(message)"
-                  :perms="{ canViewFinance: false }"
+                  :perms="chartInsightPerms"
                   :factory-id="factoryId ?? ''"
                   depth="detailed"
                 />
@@ -2736,7 +2777,7 @@ function handleKeydown(event: KeyboardEvent) {
                     v-for="(c, ci) in message.charts"
                     :key="`insight-${message.id}-${message.sourceUploadId ?? 'all'}__${ci}`"
                     :chart="multiChartWithMeta(c)"
-                    :perms="{ canViewFinance: false }"
+                    :perms="chartInsightPerms"
                     :factory-id="factoryId ?? ''"
                     depth="detailed"
                   />
@@ -3346,6 +3387,12 @@ function handleKeydown(event: KeyboardEvent) {
   .message-insights {
     margin-top: 16px;
     max-width: 500px;
+  }
+
+  .message-auto-source {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
   }
 
   .message-warning {
