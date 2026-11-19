@@ -36,13 +36,14 @@ LEGACY_GROUP_GUARD = "(github.event_name == 'merge_group' || github.event.pull_r
 SAME_REPO_GUARD = ("((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)"
                    " || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true'))")
 ROUTE_OUTPUT = "needs.changes.outputs.runner == 'cretas-mini' && "
+FIRST_ATTEMPT = "github.run_attempt == '1' && "
 POLICY_VERSION = "needs.changes.outputs.route_policy == 'v2' && "
 # 2026-11-18 mini 优先、满了溢出: 先读 changes 作业 (托管机上) 的路由输出, 守卫照旧串在后面 ——
 # 路由输出只能把作业从 mini 挪到托管, 不能让 fork PR 上 mini。
 # 2026-11-19 21:5x Steve「不跑5个了……这4个槽不要只给pg用」+「其他检查也上 mini」: mini 改为最多 4 槽的共用槽池,
 # 公共标签 cretas-mini, changes 作业只输出一个 runner (cretas-mini | ubuntu-latest) 与 mini_window。
 GUARD_TAIL = " && !contains(github.event.pull_request.labels.*.name, 'ci-hosted')"
-MINI_ROUTE_CORE = (ROUTE_OUTPUT + POLICY_VERSION + SAME_REPO_GUARD + GUARD_TAIL
+MINI_ROUTE_CORE = (FIRST_ATTEMPT + ROUTE_OUTPUT + POLICY_VERSION + SAME_REPO_GUARD + GUARD_TAIL
                    + " && 'cretas-mini' || 'ubuntu-latest' }}")
 MINI_ROUTE = "${{ " + MINI_ROUTE_CORE
 # 白天 PG 只派第 2、3 片, 夜间 (mini_window=full) 4 片都可; fast 白天只派第 3 片, 夜间第 2、3 片 (第 0 片在 mini 上 OOM)。
@@ -159,6 +160,7 @@ for (wf, job), allowed in SELF_HOSTED_ALLOWED.items():
         ('merge_group fallback restored', SAME_REPO_GUARD, LEGACY_GROUP_GUARD),
         ('repository guard removed', SAME_REPO_GUARD + ' && ', ''),
         ('runner decision removed', ROUTE_OUTPUT, ''),
+        ('rerun guard removed (attempt 1 outputs reused)', FIRST_ATTEMPT, ''),
         ('rollout policy removed', POLICY_VERSION, ''),
     ):
         ok &= rejects_runs_on(wf, job, baseline, allowed, allowed.replace(old, new), label)
@@ -183,6 +185,30 @@ for wf, job, remove, unrelated in (
     else:
         print(f'  ok - {wf}/{job} old any-violation test would accept a hosted job: {unrelated}')
 
+REQUIRED_LABEL_CHECKS = {
+    'java-gate-pr.yml': ('fast-contracts', 'postgres-reversal-concurrency'),
+    'rn-gate.yml': ('jest',),
+    'web-admin-gate.yml': ('vitest',),
+}
+
+
+def label_wiring_errors(wf, text, group_guard, job_condition, ignored):
+    blocks = dict(jobs(text))
+    bad = []
+    if not re.search(r'^  group: .*' + re.escape(group_guard), text, re.M):
+        bad.append('label run shares active PR concurrency group')
+    if job_condition not in blocks['changes']:
+        bad.append('unrelated label can run changes')
+    for job, block in blocks.items():
+        if job != 'changes' and "needs.changes.result != 'skipped'" not in block:
+            bad.append(f'unrelated label can run {job}')
+    for job in REQUIRED_LABEL_CHECKS[wf]:
+        name = f"    name: ${{{{ ({ignored}) && '{job} (ignored label)' || '{job}' }}}}"
+        if name not in blocks[job]:
+            bad.append(f'unrelated label can publish required check {job}')
+    return bad
+
+
 for wf in MINI_WORKFLOWS:
     text = (WF / wf).read_text(encoding='utf-8')
     changes = dict(jobs(text)).get('changes', '')
@@ -190,7 +216,8 @@ for wf in MINI_WORKFLOWS:
     required = ('route-mini-or-hosted.sh', 'git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA"',
                 'git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main',
                 'MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}',
-                "vars.MINI_POOL_V2_ENABLED == '1'", 'outputs.runner', 'outputs.route_policy', 'outputs.mini_group_verified',
+                "github.event.label.name != 'ci-hosted'",  # A recovery label always bypasses mini routing.
+                "vars.MINI_POOL_V2_ENABLED == '1'", "vars.MINI_POOL_V2_ENABLED == '0'", 'outputs.runner', 'outputs.route_policy', 'outputs.mini_group_verified',
                 'continue-on-error: true', 'timeout 45s bash')
     if (runs_on(changes) != 'ubuntu-latest' or any(part not in changes for part in required)
             or not 0 <= changes.find('- id: route') < changes.find('- id: filter')):
@@ -200,6 +227,23 @@ for wf in MINI_WORKFLOWS:
     if not trigger or 'labeled' not in trigger.group(1).split(', '):
         print(f'FAIL: {wf} misses pull_request labeled recovery trigger')
         ok = False
+    labels = ('ci-hosted', 'java-full-ready') if wf == 'java-gate-pr.yml' else ('ci-hosted',)
+    ignored = "github.event.action == 'labeled'" + ''.join(f" && github.event.label.name != '{label}'" for label in labels)
+    accepted = "github.event.action != 'labeled'" + ''.join(f" || github.event.label.name == '{label}'" for label in labels)
+    group_guard = f"({ignored} && format('ignored-label-{{0}}', github.run_id)) || "
+    job_condition = f"    if: ${{{{ {accepted} }}}}"
+    actual = label_wiring_errors(wf, text, group_guard, job_condition, ignored)
+    bad_group = label_wiring_errors(wf, text.replace(group_guard, '', 1), group_guard, job_condition, ignored)
+    bad_filter = label_wiring_errors(wf, text.replace(job_condition, '', 1), group_guard, job_condition, ignored)
+    job = REQUIRED_LABEL_CHECKS[wf][0]
+    bad_name = label_wiring_errors(wf, text.replace(f"'{job} (ignored label)'", f"'{job}'", 1), group_guard, job_condition, ignored)
+    if (actual or bad_group != ['label run shares active PR concurrency group']
+            or bad_filter != ['unrelated label can run changes']
+            or bad_name != [f'unrelated label can publish required check {job}']):
+        print(f'FAIL: {wf} label wiring: actual={actual}, concurrency={bad_group}, filter={bad_filter}, check name={bad_name}')
+        ok = False
+    else:
+        print(f'  ok - {wf} labels {labels}; concurrency, job filter, and required-check-name mutations are red')
 
 
 def rollout_errors(steps):
@@ -208,7 +252,8 @@ def rollout_errors(steps):
         ('先验证双标签消费者', ('`online`', '`cretas-mini`', '`cretas-mini-pg`', '`cretas-mini-fast`', 'runner_name')),
         ('排空槽 5', ('从 `enabled-slots` 移除 5', 'Runner.Listener', 'Runner.Worker', '`busy`', '作业结论')),
         ('停止并清理槽 5', ('完成排空后', 'launchctl bootout', '离线且空闲', '槽 1–4')),
-        ('最后开放新路由', ('前四步完成', '组织层访问控制', 'MINI_POOL_V2_ENABLED=1', 'runner_name')),
+        ('最后开放新路由', ('前四步完成', 'security backlog', '不阻塞开放', 'MINI_POOL_V2_ENABLED=0',
+                       'GITHUB_TOKEN', 'headCommit', 'MINI_POOL_V2_ENABLED=1', 'runner_name')),
     )
     return [name for index, (name, evidence) in enumerate(required)
             if index >= len(steps) or steps[index][0] != name

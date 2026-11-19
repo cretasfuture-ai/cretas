@@ -27,12 +27,10 @@ mutant_dir() {
 # ── 假 gh: `gh api <path>` -> 按路径取 fixture; FAKE_GH_FAIL=1 时一律失败; 每次调用记一行。
 cat > "$WORK/gh" <<'SH'
 #!/usr/bin/env bash
-echo "$*" >> "$FAKE_GH_LOG"
+printf '%s %s\n' "$1" "$2" >> "$FAKE_GH_LOG"
 [ "${FAKE_GH_FAIL:-0}" = 1 ] && exit 1
 [ "$1" = api ] || exit 2
 shift
-paginate=0
-if [ "$1" = --paginate ]; then paginate=1; shift; fi
 path="$1"; shift
 filter=
 if [ "${1:-}" = -q ]; then filter="$2"; fi
@@ -43,15 +41,19 @@ case "$path" in
   */actions/runs/*/jobs*) id=${path#*/actions/runs/}; file=jobs-${id%%/*} ;;
   *) echo "unexpected path $path" >&2; exit 3 ;;
 esac
-page() {
-  if [ -n "$filter" ]; then jq -r "$filter" "$1"; else cat "$1"; fi
-}
-page "$FAKE_FIX/$file.json" || exit 1
-if [ "$paginate" = 1 ] && [ -f "$FAKE_FIX/$file-2.json" ]; then
+page=${path##*&page=}
+if [ "$page" = 1 ]; then
+  fixture="$FAKE_FIX/$file.json"
+else
+  [[ "$page" =~ ^[1-9][0-9]*$ ]] || exit 3
   [ "${FAKE_GH_PAGE_FAIL:-}" != "$file" ] || exit 1
-  [ "${FAKE_GH_TRUNCATED:-}" != "$file" ] || exit 0
-  page "$FAKE_FIX/$file-2.json" || exit 1
+  fixture="$FAKE_FIX/$file-$page.json"
+  if [ "${FAKE_GH_TRUNCATED:-}" = "$file" ]; then
+    jq -r '"total " + (.total_count | tostring)' "$fixture"
+    exit $?
+  fi
 fi
+jq -r "$filter" "$fixture"
 SH
 chmod +x "$WORK/gh"
 
@@ -86,9 +88,25 @@ write_paged_fixtures() {
   jq -n '{total_count:102,jobs:[{id:400,status:"queued",labels:["cretas-mini"]},{id:401,status:"queued",labels:["cretas-mini-fast"]}]}' > "$FIX/jobs-102-2.json" || exit 2
 }
 
+write_budget_fixtures() {
+  local count="$1" extra_pages="$2" i id
+  jq -n --argjson count "$count" '{total_count:$count,workflow_runs:[range(200;200+$count) | {id:.,path:".github/workflows/java-gate-pr.yml"}]}' > "$FIX/runs-queued.json" || exit 2
+  # The same run can appear in both status lists as it starts. Count it once.
+  printf '%s\n' '{"total_count":1,"workflow_runs":[{"id":200,"path":".github/workflows/java-gate-pr.yml"}]}' > "$FIX/runs-in_progress.json"
+  for ((i = 0; i < count; i++)); do
+    id=$((200 + i))
+    if [ "$i" -lt "$extra_pages" ]; then
+      jq -n '{total_count:101,jobs:[range(1;101) | {id:.,status:"queued",labels:["ubuntu-latest"]}]}' > "$FIX/jobs-$id.json" || exit 2
+      printf '%s\n' '{"total_count":101,"jobs":[{"id":101,"status":"queued","labels":["ubuntu-latest"]}]}' > "$FIX/jobs-$id-2.json"
+    else
+      printf '%s\n' '{"total_count":0,"jobs":[]}' > "$FIX/jobs-$id.json"
+    fi
+  done
+}
+
 FAILS=0
 PASSES=0
-# run_case <名字> <期望 ROUTE 行> <期望 GITHUB_OUTPUT 行 key=value> <期望 gh 调用: any|none> [env 赋值...]
+# run_case <名字> <期望 ROUTE 行> <期望 GITHUB_OUTPUT 行 key=value> <期望 gh 调用: any|none|次数> [env 赋值...]
 # 默认钉住 MINI_WINDOW=day + MINI_QUEUE_THRESHOLD=4 (场景各自覆盖), 结论不随 CI 跑的时间变。
 run_case() {
   local name="$1" want_line="$2" want_runner="$3" want_calls="$4"; shift 4
@@ -111,6 +129,9 @@ run_case() {
   case "$want_calls" in
     none) [ ! -s "$log" ] || { ok=0; why="$why 不该调 gh 却调了"; } ;;
     any)  [ -s "$log" ] || { ok=0; why="$why 该调 gh 却没调"; } ;;
+    *) local calls
+       calls=$(wc -l < "$log")
+       [ "$calls" -eq "$want_calls" ] || { ok=0; why="$why gh 调用 $calls，预期 $want_calls"; } ;;
   esac
   if grep -q 'runs/103/jobs' "$log" && [ "${WANT_103:-0}" != 1 ]; then ok=0; why="$why 不在清单里的 run 103 也被拉了作业"; fi
   if [ "$ok" = 1 ]; then
@@ -162,6 +183,10 @@ run_all() {
   cp "$FIX/group-original.json" "$FIX/group.json"
   WANT_GROUP=true run_case "合并组 2 个 PR 均确认同仓 -> mini" \
     "ROUTE=mini queued=3 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini any "${group_env[@]}"
+  WANT_GROUP=true run_case "开关为 0 时仅用 GraphQL 核验合并组，作业仍托管" \
+    "ROUTE=hosted queued=na threshold=4 reason=rollout-disabled label=cretas-mini window=day" runner=ubuntu-latest 1 "${group_env[@]}" MINI_POOL_V2_ENABLED=0 MINI_POOL_CAPACITY=
+  WANT_GROUP=false run_case "开关为 0 时 GraphQL 不可读，不能当作核验通过" \
+    "ROUTE=hosted queued=na threshold=4 reason=group-unverified label=cretas-mini window=day" runner=ubuntu-latest 1 "${group_env[@]}" MINI_POOL_V2_ENABLED=0 FAKE_GH_FAIL=1
   local why expr
   for why in fork missing-repo missing-member wrong-commit; do
     case "$why" in
@@ -221,6 +246,18 @@ run_all() {
   run_case "分页少于 API 总数 -> 未量到" \
     "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest any FAKE_GH_TRUNCATED=runs-queued
   rm -f "$FIX/runs-queued-2.json" "$FIX/jobs-102-2.json"
+  write_budget_fixtures 12 0
+  run_case "12 个不同 active run（跨状态去重）可完整读取" \
+    "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini 14
+  write_budget_fixtures 13 0
+  run_case "13 个 active run 超限且不查询 jobs" \
+    "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest 2
+  write_budget_fixtures 12 2
+  run_case "16 个 REST 页正好用完整份快照" \
+    "ROUTE=mini queued=0 threshold=4 reason=below-threshold label=cretas-mini window=day" runner=cretas-mini 16
+  write_budget_fixtures 12 3
+  run_case "第 17 页超出 REST 预算且不发送" \
+    "ROUTE=hosted queued=na threshold=4 reason=api-error label=cretas-mini window=day" runner=ubuntu-latest 16
 }
 
 echo "== 被测: $SCRIPT"
@@ -284,7 +321,7 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
     echo "FAIL: refill pagination got=[$got] incomplete=[$incomplete] rc=$incomplete_rc"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
   mutant_dir
-  sed 's/api --paginate/api/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+  sed 's/&page=\$page"/\&page=1"/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
   missing_page=$(refill_count bash "$WORK/mut/canada-mini-gate/refill.sh" --queue-snapshot)
   missing_page_rc=$?
   if [ "$missing_page_rc" = 1 ] && [ -z "$missing_page" ]; then
@@ -293,6 +330,15 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
     echo "FAIL: pagination mutation returned [$missing_page] rc=$missing_page_rc"; REAL_FAILS=$((REAL_FAILS + 1))
   fi
   rm -f "$FIX/runs-queued-2.json" "$FIX/jobs-102-2.json"
+  write_budget_fixtures 13 0
+  : > "$WORK/refill-gh.log"
+  over_limit=$(refill_count bash "$REFILL" --queue-snapshot)
+  over_limit_rc=$?
+  if [ "$over_limit_rc" = 1 ] && [ -z "$over_limit" ] && [ "$(wc -l < "$WORK/refill-gh.log")" -eq 2 ]; then
+    echo "  ok - refill refuses 13 active runs with only 2 list reads and no snapshot"
+  else
+    echo "FAIL: refill active-run cap rc=$over_limit_rc output=[$over_limit]"; REAL_FAILS=$((REAL_FAILS + 1))
+  fi
 
   mkdir -p "$WORK/bin" "$WORK/agents"
   cat > "$WORK/bin/launchctl" <<'SH'
@@ -515,7 +561,7 @@ fi
 
 # Each variant must fail the named decision, with a readable red assertion.
 if [ -z "${ROUTE_SCRIPT:-}" ]; then
-  for mutation in busy retry merge_group pagination; do
+  for mutation in busy retry merge_group pagination active-cap rest-cap; do
     mutant_dir
     target="$WORK/mut/route-$mutation.sh"
     case "$mutation" in
@@ -526,8 +572,16 @@ if [ -z "${ROUTE_SCRIPT:-}" ]; then
         expected_red="合并组前序 fork" ;;
       pagination)
         cp "$SCRIPT" "$target"
-        sed 's/api --paginate/api/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+        sed 's/&page=\$page"/\&page=1"/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
         expected_red="目标 run 和 mini job 都只在第 2 页" ;;
+      active-cap)
+        cp "$SCRIPT" "$target"
+        sed 's/active_limit=12/active_limit=13/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+        expected_red="13 个 active run 超限" ;;
+      rest-cap)
+        cp "$SCRIPT" "$target"
+        sed 's/requests_left=16/requests_left=17/' "$GATE/queue-snapshot.sh" > "$WORK/mut/canada-mini-gate/queue-snapshot.sh"
+        expected_red="第 17 页超出 REST 预算" ;;
     esac
     ROUTE_SCRIPT="$target" bash "${BASH_SOURCE[0]}" > "$WORK/$mutation.log" 2>&1
     rc=$?

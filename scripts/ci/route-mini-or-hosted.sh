@@ -69,12 +69,24 @@ verify_merge_group() {
   ' <<< "$response"
 }
 
+check_merge_group() {
+  local group
+  group=$(verify_merge_group 2>/dev/null) || emit hosted na group-unverified
+  [ "$group" != ci-hosted ] || emit hosted na ci-hosted-label
+  echo "READING: verified_merge_group_prs=$group head=${GROUP_HEAD_SHA:-}"
+  GROUP_VERIFIED=true
+}
+
 case "${EVENT_NAME:-}" in
   pull_request) [ -n "$REPO" ] && [ "${HEAD_REPO:-}" = "$REPO" ] || emit hosted na fork ;;
   merge_group) ;;
   *) emit hosted na unsupported-event ;;
 esac
 [ "${GITHUB_RUN_ATTEMPT:-1}" = 1 ] || emit hosted na retry-hosted
+# Explicit 0 is a hosted-only merge queue probe using the real workflow token.
+if [ "${MINI_POOL_V2_ENABLED:-}" = 0 ] && [ "$EVENT_NAME" = merge_group ]; then
+  check_merge_group
+fi
 [ "${MINI_POOL_V2_ENABLED:-}" = 1 ] || emit hosted na rollout-disabled
 if jq -e 'index("ci-hosted") != null' <<< "${PR_LABELS:-[]}" >/dev/null 2>&1; then
   emit hosted na ci-hosted-label
@@ -96,10 +108,7 @@ read_capacity || emit hosted na mini-offline
 [ "$IDLE" -gt 0 ] || emit hosted na mini-full
 
 if [ "${EVENT_NAME:-}" = merge_group ]; then
-  group=$(verify_merge_group 2>/dev/null) || emit hosted na group-unverified
-  [ "$group" != ci-hosted ] || emit hosted na ci-hosted-label
-  echo "READING: verified_merge_group_prs=$group"
-  GROUP_VERIFIED=true
+  check_merge_group
 fi
 
 if ! source "$GATE_DIR/queue-snapshot.sh"; then emit hosted na api-error; fi

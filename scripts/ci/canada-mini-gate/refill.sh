@@ -156,11 +156,14 @@ fresh_queue_cache() {
 mini_queued() {
   local snapshot
   if ! fresh_queue_cache && mkdir "$QCACHE.lock" 2>/dev/null; then
-    if ! snapshot=$(mini_queue_snapshot "$REPO" "" "$MINI_WORKFLOWS" "$MINI_LABELS" 2>>"$LOG"); then
-      log "queue snapshot unavailable"
-      snapshot=unavailable
+    # Another slot may have refreshed the cache just before releasing this lock.
+    if ! fresh_queue_cache; then
+      if ! snapshot=$(mini_queue_snapshot "$REPO" "" "$MINI_WORKFLOWS" "$MINI_LABELS" 2>>"$LOG"); then
+        log "queue snapshot unavailable"
+        snapshot=unavailable
+      fi
+      printf '%s\n' "$snapshot" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
     fi
-    printf '%s\n' "$snapshot" > "$QCACHE.tmp" && mv "$QCACHE.tmp" "$QCACHE"
     rmdir "$QCACHE.lock"
   fi
   fresh_queue_cache && IFS= read -r snapshot < "$QCACHE" || return 1
