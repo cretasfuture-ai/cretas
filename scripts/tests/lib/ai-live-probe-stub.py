@@ -16,6 +16,8 @@
   write_on_say       说话那一轮就落库了 (没等确认) ⇒ rc=1, 且套件不得再去确认
   leftovers          预置两条 QA-PROBE- 残留: 一条 2 小时前 (该删), 一条刚写 (别人在跑, 不许删)
   confirm_drop       正规确认写入了但连接被掐断 (无答复) ⇒ rc=1, 且不许再重放
+  operator_bad_role  一线号登录回的角色是 viewer (不是一线写入角色) => rc=2
+  viewer_can_report  只读号说「我要报工」也放行 (权限门失效) => 阴性对照 report_work_viewer_denied 要红
   slow               每个 AI 请求慢 2 秒 (配合 --deadline-seconds 证明整体 deadline)
 
 端口写到 argv[1] 指定的文件; 每个请求一行写进 argv[2] (方法 + 路径) 供测试数调用次数。
@@ -42,7 +44,14 @@ def respond_result(intent, status="SUCCESS", message="ok", ai_mode="READ", **ext
     return data
 
 
-def recognize(text, entry):
+def recognize(text, entry, token=""):
+    if text == "我要报工，产量100":
+        # 一线号 (token 含 operator) 才有 production:read_write; 只读号被拒 (#1816)
+        if "operator" in token or MODE == "viewer_can_report":
+            return respond_result("WORK_PROCESS_TASK_COMPLETE", status="NEED_MORE_INFO", ai_mode="WRITE",
+                                  message="您要给哪一道工序报工？\n1. 已报 1kg")
+        return respond_result("WORK_PROCESS_TASK_COMPLETE", status="NO_PERMISSION",
+                              message="您没有权限执行此操作。需要权限: production:read_write，请联系工厂管理员开通。")
     if text == "查库存":
         if entry == "stream" and MODE == "stream_drift":
             return respond_result("REPORT_DASHBOARD_OVERVIEW", message="仪表盘")
@@ -101,6 +110,12 @@ class Handler(BaseHTTPRequestHandler):
     def _log(self):
         with open(LOG_FILE, "a", encoding="utf-8") as fh:
             fh.write("%s %s\n" % (self.command, self.path))
+        # 每个请求用的是谁的令牌 (桩的令牌 = stub-token-<用户名>), 供测试证明「哪个用例用了哪个号」
+        with open(LOG_FILE + ".auth", "a", encoding="utf-8") as fh:
+            fh.write("%s %s\n" % (self.path, self._token()))
+
+    def _token(self):
+        return (self.headers.get("Authorization") or "").replace("Bearer ", "")
 
     def do_GET(self):
         self._log()
@@ -131,12 +146,14 @@ class Handler(BaseHTTPRequestHandler):
             if MODE == "bad_login":
                 return self._send(401, {"success": False, "message": "bad"})
             factory = "LIUSHANMEN" if MODE == "wrong_tenant" else "F006"
-            return self._send(200, {"success": True, "data": {"accessToken": "stub-token", "factoryId": factory,
-                                                              "username": body.get("username"), "role": "viewer"}})
+            user = body.get("username") or ""
+            role = "operator" if "operator" in user and MODE != "operator_bad_role" else "viewer"
+            return self._send(200, {"success": True, "data": {"accessToken": "stub-token-" + user, "factoryId": factory,
+                                                              "username": user, "role": role}})
         if self.path == "/api/mobile/F006/ai-intents/execute":
-            return self._send(200, {"success": True, "data": recognize(body.get("userInput"), "execute")})
+            return self._send(200, {"success": True, "data": recognize(body.get("userInput"), "execute", self._token())})
         if self.path == "/api/mobile/F006/ai-intents/execute/stream":
-            data = recognize(body.get("userInput"), "stream")
+            data = recognize(body.get("userInput"), "stream", self._token())
             data["sessionId"] = body.get("sessionId")
             return self._send(200, [("start", {"sessionId": body.get("sessionId")}), ("result", data),
                                     ("complete", {"status": data["status"]})], sse=True)
