@@ -42,6 +42,11 @@ public class LineScheduleDTO {
     private LocalDateTime updatedAt;
     /** 乐观锁版本号; 改排程 (PUT /schedules/{id}) 时原样回传。 */
     private Long version;
+    /**
+     * 这一行从哪来: SCHEDULE = 调度计划的排程行; WORKFLOW_BATCH = 没走调度、由工作流直接开出的在产批次
+     * (只出现在调度 Dashboard 的今日排程里, id 为 "batch-{批次id}", 不能拿去改排程)。
+     */
+    private String source;
 
     // 关联数据
     private List<WorkerAssignmentDTO> workerAssignments;

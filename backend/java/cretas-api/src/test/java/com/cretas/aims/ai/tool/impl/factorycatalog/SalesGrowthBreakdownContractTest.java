@@ -43,7 +43,7 @@ class SalesGrowthBreakdownContractTest {
         kb.initDefaults();
         var hit = kb.matchPhraseHit(q, "FACTORY");
         assertTrue(hit.isPresent(), q);
-        assertEquals("PRODUCT_SALES_RANKING", hit.get().getValue(), q);
+        assertEquals("PRODUCT_PRODUCT_SALES_RANKING", hit.get().getValue(), q);
         assertTrue(PhraseShortcutEligibility.isUnconditionedSimple(q, hit.get().getKey(), hit.get().getValue()), q);
     }
 

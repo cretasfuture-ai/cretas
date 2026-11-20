@@ -9,6 +9,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import type { ShippedGrossProfit } from '@/api/financeReport';
 import fixture from './fixtures-lsmdemo-finance-profit.json';
 
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
@@ -33,8 +34,25 @@ import FinanceAnalysis from '../FinanceAnalysis.vue';
 
 const stubs = { teleport: true, TemplateGrid: true, UnlockMoreCTA: true, DynamicChartRenderer: true, ChartInsightProvider: true, ElAlert: { props: ['title'], template: '<div class="el-alert-stub">{{ title }}<slot /></div>' }, ChartTypeSelector: true, CapabilityGate: { template: '<div><slot /></div>' } };
 
-async function mountWith(resp: unknown) {
+const noShipment: ShippedGrossProfit = {
+  periodStart: '2026-11-12',
+  periodEnd: '2026-11-18',
+  status: 'NO_SHIPMENT',
+  shipmentLineCount: 0,
+  revenue: null,
+  cost: null,
+  grossProfit: null,
+  marginRate: null,
+  unavailableReason: '缺少发货确认数据',
+  revenueBasis: '发货收入按实发数量和不含税单价计算',
+  costBasis: '销售成本按实际出库批次计算',
+};
+
+async function mountWith(resp: unknown, shippedProfit = noShipment) {
   mocks.get.mockImplementation(async (url: string) => {
+    if (url === '/LSMDEMO/finance/report/shipped-gross-profit') {
+      return { success: true, data: shippedProfit };
+    }
     if (url.includes('/smart-bi/analysis/finance')) {
       if (resp instanceof Error) throw resp;
       return resp;
@@ -53,6 +71,8 @@ beforeEach(() => { mocks.get.mockReset(); });
 describe('FinanceAnalysis × LSMDEMO 真实响应', () => {
   it('毛利/净利算不出 (null) ⇒ 显示「—」并说明缺什么、按什么数据算, 不显示编出来的 0', async () => {
     const w = await mountWith(fixture);
+    expect(w.get('[data-testid="shipped-gp-profit"]').text()).toBe('—');
+    expect(w.get('[data-testid="shipped-gp-profit-note"]').text()).toContain('缺少发货确认数据');
     expect(w.get('[data-testid="fa-gross-profit"]').text()).toBe('—');
     const why = w.get('[data-testid="fa-gross-profit-why"]').text();
     expect(why).toContain('缺少收入或成本数据');
@@ -67,7 +87,21 @@ describe('FinanceAnalysis × LSMDEMO 真实响应', () => {
       if (m.metricCode === 'GROSS_PROFIT') m.value = 12345;
       if (m.metricCode === 'NET_PROFIT') m.value = 678;
     }
-    const w = await mountWith(withValue);
+    const w = await mountWith(withValue, {
+      ...noShipment,
+      status: 'OK',
+      shipmentLineCount: 1,
+      revenue: 1000,
+      cost: 800,
+      grossProfit: 200,
+      marginRate: 20,
+      unavailableReason: null,
+    });
+    const systemCard = w.get('[data-testid="shipped-gp-card"]');
+    expect(systemCard.get('[data-testid="shipped-gp-profit"]').text()).toContain('200.00');
+    expect(systemCard.get('[data-testid="shipped-gp-profit-note"]').text()).toBe('毛利率 20.00%');
+    expect(w.findAll('[data-testid="shipped-gp-card"], [data-testid="fa-gross-profit"]')[0].element)
+      .toBe(systemCard.element);
     expect(w.get('[data-testid="fa-gross-profit"]').text()).toContain('1.2万元');
     expect(w.find('[data-testid="fa-gross-profit-why"]').exists()).toBe(false);
     expect(w.get('[data-testid="fa-net-profit"]').text()).toContain('678');

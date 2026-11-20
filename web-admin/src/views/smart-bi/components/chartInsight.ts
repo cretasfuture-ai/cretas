@@ -209,6 +209,9 @@ function isPctMetric(meta: ChartMeta): boolean {
 function fmtValue(v: number, meta: ChartMeta, pointUnit?: string): string {
   if (isPctMetric(meta)) return `${v.toFixed(1)}%`;
   if (isMoneyMetric(meta)) return `¥${fmtNum(v)}${pointUnit ? `/${pointUnit}` : ''}`;
+  if (!pointUnit && FINANCE_METRICS.has(meta.yMetric) && meta.unit?.endsWith('元')) {
+    return `${v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${meta.unit}`;
+  }
   const unit = pointUnit ?? meta.unit ?? '';
   return `${fmtNum(v)}${unit}`;
 }

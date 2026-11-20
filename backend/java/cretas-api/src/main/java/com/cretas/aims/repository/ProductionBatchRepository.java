@@ -452,6 +452,43 @@ public interface ProductionBatchRepository extends JpaRepository<ProductionBatch
     java.util.List<ProductionBatch> findByIdInAndFactoryId(@Param("ids") Collection<Long> ids, @Param("factoryId") String factoryId);
 
     /**
+     * 调度 Dashboard 今日排程里的工作流批次: 本厂 {@code day} 当天<b>有活动</b>的正式批次 (状态在 statuses 内)。
+     * 「有活动」= 当天开工 / 当天完工 (COMPLETED 且 endTime 落在当天) / 当天有报工 (production_reports.report_date)
+     * / 当天有加工环节记录 (processing_stage_records 的开始、结束或录入时间落在当天)。子查询都带 factory_id。
+     * 不含 CLERK_WIP 中间工件 (同 {@link #findByFactoryIdAndProductionPlanIdIn} 口径)。软删由实体 @Where 过滤。
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.status IN :statuses "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') AND ("
+           + "  (b.startTime >= :dayStart AND b.startTime < :dayEnd) "
+           + "  OR (b.status = :completed AND b.endTime >= :dayStart AND b.endTime < :dayEnd) "
+           + "  OR EXISTS (SELECT 1 FROM ProductionReport r WHERE r.factoryId = :factoryId AND r.batchId = b.id "
+           + "             AND r.reportDate = :day AND r.deletedAt IS NULL) "
+           + "  OR EXISTS (SELECT 1 FROM ProcessingStageRecord s WHERE s.factoryId = :factoryId "
+           + "             AND s.productionBatchId = b.id AND ((s.startTime >= :dayStart AND s.startTime < :dayEnd) "
+           + "             OR (s.endTime >= :dayStart AND s.endTime < :dayEnd) "
+           + "             OR (s.createdAt >= :dayStart AND s.createdAt < :dayEnd)))"
+           + ") ORDER BY b.startTime, b.id")
+    java.util.List<ProductionBatch> findActiveOnDayForDashboard(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") Collection<com.cretas.aims.entity.enums.ProductionBatchStatus> statuses,
+            @Param("completed") com.cretas.aims.entity.enums.ProductionBatchStatus completed,
+            @Param("day") java.time.LocalDate day,
+            @Param("dayStart") java.time.LocalDateTime dayStart,
+            @Param("dayEnd") java.time.LocalDateTime dayEnd);
+
+    /**
+     * 调度 Dashboard「跨日在产」计数的候选: 本厂在 {@code before} 之前开工、此刻仍在产 (statuses) 的正式批次。
+     * 调用方再减去当天有活动的那些。不含 CLERK_WIP。软删由实体上的 @Where 过滤。
+     */
+    @Query("SELECT b FROM ProductionBatch b WHERE b.factoryId = :factoryId AND b.status IN :statuses "
+           + "AND b.startTime IS NOT NULL AND b.startTime < :before "
+           + "AND (b.batchType IS NULL OR b.batchType <> 'CLERK_WIP') ORDER BY b.startTime, b.id")
+    java.util.List<ProductionBatch> findRunningForDashboard(
+            @Param("factoryId") String factoryId,
+            @Param("statuses") Collection<com.cretas.aims.entity.enums.ProductionBatchStatus> statuses,
+            @Param("before") java.time.LocalDateTime before);
+
+    /**
      * 单元 F (F006 REQ-21): 查工厂下属于一组生产计划的全部批次 (按订单聚合出成率用).
      * 调用方先用 {@code ProductionPlanRepository.findByFactoryIdAndSourceOrderId} 取订单的计划 ids,
      * 再用本方法取这些计划下的全部批次。空集合 → 空列表 (Spring Data IN-空 行为)。

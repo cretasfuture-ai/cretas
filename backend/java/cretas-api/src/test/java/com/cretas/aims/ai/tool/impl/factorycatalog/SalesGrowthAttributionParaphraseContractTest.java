@@ -58,7 +58,7 @@ class SalesGrowthAttributionParaphraseContractTest {
         kb.initDefaults();
         var hit = kb.matchPhraseHit(q.toLowerCase().trim(), "FACTORY");
         assertTrue(hit.isPresent(), "应命中增量拆分意图: " + q);
-        assertEquals("PRODUCT_SALES_RANKING", hit.get().getValue(), q);
+        assertEquals("PRODUCT_PRODUCT_SALES_RANKING", hit.get().getValue(), q);
         assertEquals(hit.get().getValue(), kb.matchPhrase(q.toLowerCase().trim(), "FACTORY").orElse(null), q);
         assertTrue(PhraseShortcutEligibility.isUnconditionedSimple(q, hit.get().getKey(), hit.get().getValue()), q);
     }

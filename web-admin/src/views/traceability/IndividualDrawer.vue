@@ -21,15 +21,19 @@ import {
   getSourceIndividualDetail,
   type SourceIndividualBatchSummary,
   type SourceIndividualDetail,
+  type SourceIndividualDownstream,
+  type SourceIndividualPreviouslyLinkedBatch,
   type SourceIndividualSummary,
 } from '@/api/sourceIndividual';
 import type { LineageNode } from '@/api/traceability';
+import { formatDateTime } from '@/utils/dateFormat';
 import { dnaStatusLabel, dnaStatusTag, joinPresent } from './traceDisplay';
 import LineageNodeRow from './LineageNodeRow.vue';
 
 const props = defineProps<{
   individualId: string | null;
   factoryId: string;
+  hideEdit?: boolean;
 }>();
 
 const visible = defineModel<boolean>({ default: false });
@@ -41,11 +45,15 @@ const stack = ref<string[]>([]);
 const detail = ref<SourceIndividualDetail | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+let requestSequence = 0;
 
 watch(
-  () => [visible.value, props.individualId] as const,
+  () => [visible.value, props.individualId, props.factoryId] as const,
   ([open, id]) => {
-    if (!open || !id) return;
+    if (!open || !id) {
+      requestSequence += 1;
+      return;
+    }
     // 每次从外面打开都是一条新的路径: 清栈、从 props 给的 id 开始。
     stack.value = [];
     if (currentId.value === id) {
@@ -63,25 +71,29 @@ watch(currentId, (id) => {
 });
 
 async function load(id: string) {
-  if (!props.factoryId) {
+  const sequence = ++requestSequence;
+  const factoryId = props.factoryId;
+  if (!factoryId) {
     error.value = '当前账号没有工厂信息，无法读取个体档案';
     detail.value = null;
+    loading.value = false;
     return;
   }
   loading.value = true;
   error.value = null;
   detail.value = null;
   try {
-    const res = await getSourceIndividualDetail(props.factoryId, id);
+    const res = await getSourceIndividualDetail(factoryId, id);
+    if (sequence !== requestSequence) return;
     if (res.success && res.data) {
       detail.value = res.data;
     } else {
       error.value = res.message || '个体档案读取失败';
     }
   } catch (e) {
-    error.value = String((e as Error)?.message || '个体档案读取失败');
+    if (sequence === requestSequence) error.value = String((e as Error)?.message || '个体档案读取失败');
   } finally {
-    loading.value = false;
+    if (sequence === requestSequence) loading.value = false;
   }
 }
 
@@ -151,16 +163,26 @@ function batchNode(b: SourceIndividualBatchSummary): LineageNode {
   };
 }
 
+function historicalBatchNode(batch: SourceIndividualPreviouslyLinkedBatch): LineageNode {
+  return {
+    nodeType: 'MATERIAL_BATCH',
+    nodeId: batch.batchId,
+    batchNumber: batch.batchNumber || `批次 ID ${batch.batchId}`,
+  };
+}
+
 /** 「去了哪」按链的方向排: 原料批次 → 生产批次 → 成品 → 出货。只列真有内容的段。 */
-const whereaboutGroups = computed(() => {
-  const d = detail.value?.downstream;
-  if (!d) return [] as Array<{ key: string; label: string; nodes: LineageNode[] }>;
+function downstreamGroups(d?: SourceIndividualDownstream) {
+  if (!d) return [];
   return [
     { key: 'production', label: '生产批次', nodes: d.productionBatches },
     { key: 'finished', label: '成品批次', nodes: d.finishedBatches },
     { key: 'shipments', label: '出货', nodes: d.shipments },
   ].filter((g) => g.nodes.length > 0);
-});
+}
+
+const whereaboutGroups = computed(() => downstreamGroups(detail.value?.downstream));
+const historicalGroups = computed(() => downstreamGroups(detail.value?.previouslyLinkedDownstream));
 </script>
 
 <template>
@@ -170,7 +192,7 @@ const whereaboutGroups = computed(() => {
         <el-button v-if="stack.length > 0" text :icon="ArrowLeft" data-testid="drawer-back" @click="goBack">返回</el-button>
         <span class="drawer-header__title" data-testid="drawer-title">{{ title }}</span>
         <el-button
-          v-if="individual"
+          v-if="individual && !hideEdit"
           size="small"
           :icon="Edit"
           data-testid="drawer-edit"
@@ -256,9 +278,9 @@ const whereaboutGroups = computed(() => {
       <section class="drawer-section">
         <h4 class="section-title">去了哪</h4>
         <el-timeline class="whereabouts">
-          <el-timeline-item type="primary" placement="top" timestamp="原料批次" data-testid="drawer-batches">
+          <el-timeline-item type="primary" placement="top" timestamp="当前挂载的原料批次" data-testid="drawer-batches">
             <p v-if="detail.batches.length === 0" class="muted" data-testid="drawer-batches-empty">
-              尚未挂到任何原料批次
+              当前没有挂载的原料批次
             </p>
             <LineageNodeRow v-for="b in detail.batches" :key="b.id" :node="batchNode(b)" :show-quantity="false">
               <!-- 条件挂在 slot 上: 没入库日期就不传 slot, 行里不留一个空 div -->
@@ -283,6 +305,34 @@ const whereaboutGroups = computed(() => {
               :node="node"
               :show-quantity="false"
             />
+          </el-timeline-item>
+          <el-timeline-item
+            v-if="detail.previouslyLinkedBatches?.length"
+            type="info"
+            hollow
+            placement="top"
+            timestamp="曾挂载"
+            data-testid="drawer-previously-linked"
+          >
+            <LineageNodeRow
+              v-for="batch in detail.previouslyLinkedBatches"
+              :key="batch.batchId"
+              :node="historicalBatchNode(batch)"
+              :show-quantity="false"
+            >
+              <div>解除时间：{{ formatDateTime(batch.unlinkedAt) }}</div>
+              <div>原因：{{ batch.reason || '日志未提供' }}</div>
+              <div>操作人：{{ batch.operatorId != null ? `用户 #${batch.operatorId}` : '日志未提供' }}</div>
+            </LineageNodeRow>
+            <div v-for="group in historicalGroups" :key="group.key">
+              <p class="meta">曾挂载批次的{{ group.label }}</p>
+              <LineageNodeRow
+                v-for="node in group.nodes"
+                :key="`${node.nodeType}#${node.nodeId}`"
+                :node="node"
+                :show-quantity="false"
+              />
+            </div>
           </el-timeline-item>
         </el-timeline>
       </section>

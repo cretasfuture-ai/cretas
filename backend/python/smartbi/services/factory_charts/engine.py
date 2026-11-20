@@ -5,6 +5,7 @@ No restaurant templates and no arbitrary numeric-column recommendations.
 import re
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 
 import pandas as pd
@@ -16,6 +17,9 @@ from smartbi.services.financial.base import _sanitize_for_json
 from smartbi.services.financial_dashboard import FinancialDashboardService
 from .metrics import Series, display, grouped, number
 from .newstock_buckets import CONTRACT_KEY, contract as stock_count_contract, positive_balance, prepare_rows as prepare_stock_rows
+
+
+logger = logging.getLogger(__name__)
 
 
 ALIASES = {
@@ -133,6 +137,8 @@ def _subject_id(identity_kind, identity_value):
 
 
 def _catalog_entries(datasets, can_price):
+    from smartbi.services.external_production import SOURCE_KEY
+
     entries = {}
     names_to_ids = {}
     for dataset in datasets:
@@ -155,14 +161,22 @@ def _catalog_entries(datasets, can_price):
             else:
                 kind, value = 'name', name
             sid = _subject_id(kind, value)
-            entries.setdefault(sid, {'id': sid, 'label': name, 'name': name, 'kind': kind, 'value': value})
-            names_to_ids.setdefault(name, set()).add(sid)
+            sku = row.get('产品编码') if source == SOURCE_KEY else None
+            if source == SOURCE_KEY and not sku:
+                continue
+            label = f'{name} · {sku}' if sku and name != sku else name
+            entry = {'id': sid, 'label': label, 'name': name, 'kind': kind, 'value': value}
+            if sku:
+                entry['sku'] = sku
+            entries.setdefault(sid, entry)
+            if not sku:
+                names_to_ids.setdefault(name, set()).add(sid)
     # Name-only rows are aliases only when exactly one ID-backed identity owns
     # that exact name.  This prevents a dead name-only subject and prevents
     # silently combining two same-name SKUs.
     id_by_name = {}
     for sid, entry in entries.items():
-        if entry['kind'] == 'id':
+        if entry['kind'] == 'id' and not entry.get('sku'):
             id_by_name.setdefault(entry['name'], set()).add(sid)
     for sid, entry in list(entries.items()):
         if entry['kind'] != 'name':
@@ -209,13 +223,17 @@ def analysis_subjects(datasets, can_price):
     for name, ids in names_to_ids.items():
         if len(ids) > 1:
             for sid in ids:
-                labels[sid] = f'{name} · {sid[-6:]}'
-    return sorted(({ 'id': sid, 'label': labels.get(sid, entry['label']) }
+                if not found[sid].get('sku'):
+                    labels[sid] = f'{name} · {sid[-6:]}'
+    return sorted(({ 'id': sid, 'label': labels.get(sid, entry['label']),
+                     **({'sku': entry['sku']} if entry.get('sku') else {}) }
                    for sid, entry in found.items()), key=lambda item: (item['label'], item['id']))
 
 
 def scope_datasets(datasets, request, subjects, can_price):
     """Apply an opaque subject to product-bearing frames before build()."""
+    from smartbi.services.external_production import SOURCE_KEY
+
     if not getattr(request, 'guided', False):
         return list(datasets), None, '全厂范围'
     if not getattr(request, 'analysis_subject', None):
@@ -232,6 +250,10 @@ def scope_datasets(datasets, request, subjects, can_price):
     excluded_sources = []
     for dataset in datasets:
         source = str(dataset.source).split(' · ', 1)[0].lower()
+        if bool(chosen.get('sku')) != (source == SOURCE_KEY):
+            # External SKU identity is not a verified join to native products.
+            excluded_sources.append(source)
+            continue
         product_col, identity_col = _product_columns(dataset.frame)
         if source.startswith(_UNSCOPABLE_SUBJECT_SOURCES):
             # A product-scoped answer must not retain full-factory OEE/cash
@@ -869,53 +891,74 @@ def _card_layout(option, chart_id=''):
             axis['nameGap'] = 28
 
 
+def _build_dataset(dataset, request, can_price):
+    from . import blacklake_production
+
+    source_key = dataset.source.split(' · ', 1)[0]
+    trusted_source = source_key in _TRUSTED_SOURCE_PREFIXES
+    if dataset.frame.empty:
+        return [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
+    if dataset.source.startswith(('cashflow ·', 'receivables ·')):
+        charts, gaps = [], []
+    elif dataset.source.startswith(('production-inspection-fused ·', 'uploaded-production-inspection-fused ·')):
+        charts, gaps = [], []
+    elif dataset.source.startswith('historical-inventory ·'):
+        charts, gaps = historical_inventory(dataset)
+    elif dataset.source.startswith('commerce-joint ·'):
+        from .commerce_joint import build as build_commerce_joint
+        charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
+    elif dataset.source.startswith('wip-plan-flow ·'):
+        charts, gaps = wip_plan_flow_candidates(dataset, request)
+    elif dataset.source.startswith(blacklake_production.SOURCE_KEY + ' · '):
+        charts, gaps = blacklake_production.build(dataset)
+    elif (dataset.source.startswith('purchase-batch-lineage ·')
+          and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
+          .issubset({str(column) for column in dataset.frame.columns})):
+        from .trusted_business_metrics import build as trusted_business_metrics
+        from .purchase_inventory import build as build_purchase_inventory
+        charts, gaps = trusted_business_metrics(
+            dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
+        )
+        optional, optional_gaps = build_purchase_inventory(dataset.frame, request, can_price, dataset.source)
+        charts.extend(optional)
+        gaps.extend(optional_gaps)
+    elif trusted_source:
+        from .trusted_business_metrics import build as trusted_business_metrics
+        charts, gaps = trusted_business_metrics(
+            dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
+        )
+    elif dataset.financial:
+        charts, gaps = financial_candidates(dataset, request, can_price)
+    else:
+        charts, gaps = factory_candidates(dataset, request, can_price)
+    business_source = trusted_source or source_key in {
+        'production', 'sales', 'purchase', 'quality', 'process', 'inventory', 'historical-inventory',
+        'production-inspection-fused', 'uploaded-production-inspection-fused', 'wip-plan-flow', blacklake_production.SOURCE_KEY,
+    }
+    if not business_source:
+        from .financial_addons import build as financial_addons
+        extra, extra_gaps = financial_addons(dataset, request, can_price)
+        charts.extend(extra)
+        gaps.extend(extra_gaps)
+    return charts, gaps
+
+
 def build(datasets, request, can_price):
     candidates, unavailable = [], []
     for dataset in datasets:
-        trusted_source = dataset.source.split(' · ')[0] in _TRUSTED_SOURCE_PREFIXES
-        if dataset.frame.empty:
-            charts, gaps = [], [{'id': dataset.source, 'title': dataset.source, 'missing': ['所选期间没有来源记录']}]
-        elif dataset.source.startswith(('cashflow ·', 'receivables ·')):
-            charts, gaps = [], []
-        elif dataset.source.startswith(('production-inspection-fused ·', 'uploaded-production-inspection-fused ·')):
-            charts, gaps = [], []
-        elif dataset.source.startswith('historical-inventory ·'):
-            charts, gaps = historical_inventory(dataset)
-        elif dataset.source.startswith('commerce-joint ·'):
-            from .commerce_joint import build as build_commerce_joint
-            charts, gaps = build_commerce_joint(dataset.frame, request, can_price)
-        elif dataset.source.startswith('wip-plan-flow ·'):
-            charts, gaps = wip_plan_flow_candidates(dataset, request)
-        elif (dataset.source.startswith('purchase-batch-lineage ·')
-              and {"批次已用数量", "批次预留数量", "批次入库数量", "批次数量单位"}
-              .issubset({str(column) for column in dataset.frame.columns})):
-            from .trusted_business_metrics import build as trusted_business_metrics
-            from .purchase_inventory import build as build_purchase_inventory
-            charts, gaps = trusted_business_metrics(
-                dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
-            )
-            optional, optional_gaps = build_purchase_inventory(dataset.frame, request, can_price, dataset.source)
-            charts.extend(optional)
-            gaps.extend(optional_gaps)
-        elif trusted_source:
-            from .trusted_business_metrics import build as trusted_business_metrics
-            charts, gaps = trusted_business_metrics(
-                dataset.frame, columns(dataset.frame), request, can_price, dataset.source, dataset
-            )
-        elif dataset.financial:
-            charts, gaps = financial_candidates(dataset, request, can_price)
-        else:
-            charts, gaps = factory_candidates(dataset, request, can_price)
-        business_source = trusted_source or dataset.source.split(' · ')[0] in {'production','sales','purchase','quality','process','inventory','historical-inventory','production-inspection-fused','uploaded-production-inspection-fused','wip-plan-flow'}
-        if not dataset.frame.empty and not business_source:
-            from .financial_addons import build as financial_addons
-            extra, extra_gaps = financial_addons(dataset, request, can_price)
-            charts.extend(extra)
-            gaps.extend(extra_gaps)
+        source_key = dataset.source.split(' · ', 1)[0]
+        try:
+            charts, gaps = _build_dataset(dataset, request, can_price)
+        except Exception:
+            logger.exception('Factory chart build failed for source %s', source_key)
+            charts, gaps = [], [{
+                'id': 'dataset-build', 'title': dataset.source,
+                'missing': ['该数据源的图表生成失败，请重试或联系管理员'], 'error': True,
+            }]
         if getattr(request, 'guided', False) and not getattr(request, 'analysis_subject', None):
             charts = [chart for chart in charts if not str(chart.get('id', '')).startswith(_GUIDED_SPECIALIZED_PREFIXES)]
         # Sources with the same metric stay distinct and auditable.
-        prefix = re.sub(r'[^a-z0-9]+', '-', dataset.source.split(' · ')[0].lower()).strip('-')
+        prefix = re.sub(r'[^a-z0-9]+', '-', source_key.lower()).strip('-')
         for chart in charts:
             _analysis_metadata(chart)
             if chart['chart']['echartsOption'].get('_factoryUnavailable'):

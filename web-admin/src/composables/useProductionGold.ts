@@ -12,20 +12,76 @@
  * RBAC: 成本字段 (totalMaterialCost 等) 后端按 canViewPrice 角色脱敏返 null,
  *       调用方自行决定是否渲染成本区。
  */
-import { ref, computed, type Ref, type ComputedRef } from 'vue';
+import { ref, shallowRef, computed, onScopeDispose, type Ref, type ComputedRef } from 'vue';
 import {
+  getExternalCost,
+  getExternalProduction,
   getFactoryCostStructure,
   getFactoryYieldTrend,
   getFactoryProductCostCompare,
   type CostStructureData,
   type YieldTrendData,
   type ProductCostCompareData,
+  type FactoryDateQuery,
 } from '@/api/smartbi/factoryGold';
+import type { PythonServiceError } from '@/api/smartbi/common';
 
 export interface ProductionGoldDateQuery {
   /** YYYY-MM-DD. undefined = 全部历史. */
   startDate?: string;
   endDate?: string;
+}
+
+export function useExternalProduction(factoryId: Ref<string>, summaryOnly = false) {
+  return useExternalSnapshot(factoryId, args => getExternalProduction(args, summaryOnly), '黑湖生产数据读取失败，请重试');
+}
+
+export function useExternalCost(factoryId: Ref<string>) {
+  return useExternalSnapshot(factoryId, getExternalCost, '黑湖成本数据读取失败，请重试');
+}
+
+function useExternalSnapshot<T>(
+  factoryId: Ref<string>,
+  fetchSnapshot: (args: FactoryDateQuery) => Promise<{ success: boolean; data: T | null; message: string }>,
+  failureMessage: string,
+) {
+  const data = shallowRef<T | null>(null);
+  const error = ref('');
+  let revision = 0;
+  let loadedFactory = '';
+  onScopeDispose(() => { revision++; });
+
+  async function load(query: ProductionGoldDateQuery): Promise<'external' | 'native' | 'failed' | 'obsolete'> {
+    const factory = factoryId.value;
+    const requestRevision = ++revision;
+    const current = () => revision === requestRevision && factoryId.value === factory;
+    if (factory !== loadedFactory) data.value = null;
+    error.value = '';
+    if (!factory) return 'native';
+    try {
+      const result = await fetchSnapshot({ factoryId: factory, ...query });
+      if (!current()) return 'obsolete';
+      if (!result.success) {
+        data.value = null;
+        error.value = result.message || failureMessage;
+        return 'failed';
+      }
+      loadedFactory = factory;
+      data.value = result.data;
+      return result.data ? 'external' : 'native';
+    } catch (cause: unknown) {
+      if (!current()) return 'obsolete';
+      data.value = null;
+      // The existing production pages can be available to roles outside the
+      // external analytics permission. Their native reads keep their own gates.
+      if ((cause as PythonServiceError)?.status !== 403) {
+        error.value = failureMessage;
+      }
+      return 'failed';
+    }
+  }
+
+  return { data, error, load };
 }
 
 export interface UseProductionGoldReturn {
@@ -41,6 +97,7 @@ export interface UseProductionGoldReturn {
   hasProducts: ComputedRef<boolean>;
   hasCostRows: ComputedRef<boolean>;
 
+  reset: () => void;
   reload: (query: ProductionGoldDateQuery) => Promise<void>;
 }
 
@@ -51,6 +108,17 @@ export function useProductionGold(factoryId: Ref<string>): UseProductionGoldRetu
   const costData = ref<CostStructureData | null>(null);
   const yieldData = ref<YieldTrendData | null>(null);
   const productData = ref<ProductCostCompareData | null>(null);
+  let revision = 0;
+  onScopeDispose(() => { revision++; });
+
+  function reset() {
+    revision++;
+    loading.value = false;
+    loadError.value = '';
+    costData.value = null;
+    yieldData.value = null;
+    productData.value = null;
+  }
 
   // ── Derived empty checks ──────────────────────────────────────────────────────
   const hasCostRows = computed(() => (costData.value?.rows?.length ?? 0) > 0);
@@ -60,6 +128,8 @@ export function useProductionGold(factoryId: Ref<string>): UseProductionGoldRetu
 
   async function reload(query: ProductionGoldDateQuery = {}): Promise<void> {
     const fid = factoryId.value;
+    const requestRevision = ++revision;
+    const current = () => requestRevision === revision && factoryId.value === fid;
     if (!fid) {
       loadError.value = '无法获取工厂 ID，请重新登录';
       return;
@@ -76,6 +146,7 @@ export function useProductionGold(factoryId: Ref<string>): UseProductionGoldRetu
         getFactoryYieldTrend(args),
         getFactoryProductCostCompare(args),
       ]);
+      if (!current()) return;
 
       if (costRes.success) {
         costData.value = costRes.data;
@@ -97,10 +168,11 @@ export function useProductionGold(factoryId: Ref<string>): UseProductionGoldRetu
         loadError.value = costRes.message || '加载成本数据失败';
       }
     } catch (e: unknown) {
+      if (!current()) return;
       const msg = e instanceof Error ? e.message : '加载生产 gold 数据失败';
       loadError.value = msg;
     } finally {
-      loading.value = false;
+      if (current()) loading.value = false;
     }
   }
 
@@ -114,6 +186,7 @@ export function useProductionGold(factoryId: Ref<string>): UseProductionGoldRetu
     hasYieldTrend,
     hasProducts,
     hasCostRows,
+    reset,
     reload,
   };
 }

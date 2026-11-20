@@ -7,31 +7,31 @@
  * KPI 行保留 Java 路径 (MoM 对比数据 gold 无法提供).
  * gold_read_cache 由 Python 层自动处理，前端无需额外操作。
  */
-import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { ref, onMounted, onBeforeUnmount, computed, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { Refresh } from '@element-plus/icons-vue';
 import echarts from '@/utils/echarts';
 import { useAuthStore } from '@/store/modules/auth';
 import { getProductionDashboard, type KPIItem, type ProductionDashboard } from '@/api/productionAnalytics';
-import { useProductionGold } from '@/composables/useProductionGold';
+import { useExternalProduction, useProductionGold } from '@/composables/useProductionGold';
 import ChartInsight from '@/views/smart-bi/components/ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
 import type { ChartWithMeta } from '@/views/smart-bi/components/chartInsight';
 import { toDateString } from '@/utils/dateFormat';
 import { processPieByUnit } from './processPieByUnit';
+import BlacklakeProductionAnalysis from './BlacklakeProductionAnalysis.vue';
 
 // ==================== 状态 ====================
 
 // KPI row comes from Java (MoM comparison not available in gold)
-const kpiLoading = ref(false);
 const dashboard = ref<ProductionDashboard | null>(null);
 
 const authStore = useAuthStore();
 const factoryId = computed(() => authStore.factoryId);
 
-const dateRange = ref<[Date, Date]>([
-  new Date(Date.now() - 6 * 86400000),
-  new Date(),
+const dateRange = ref<[string, string]>([
+  toDateString(new Date(Date.now() - 6 * 86400000)),
+  toDateString(new Date()),
 ]);
 
 const shortcuts = [
@@ -40,56 +40,67 @@ const shortcuts = [
   { text: '近30日', value: () => [new Date(Date.now() - 29 * 86400000), new Date()] as [Date, Date] },
 ];
 
-function fmtDate(d: Date | string): string {
-  if (typeof d === 'string') return d.split('T')[0];
-  return toDateString(d);
-}
-
 function getQueryDates() {
-  const [start, end] = dateRange.value;
-  return { startDate: fmtDate(start), endDate: fmtDate(end) };
+  const [startDate, endDate] = dateRange.value;
+  return { startDate, endDate };
 }
 
 // ==================== Gold 数据源 (A4 迁移) ====================
 
 const gold = useProductionGold(factoryId);
+const external = useExternalProduction(factoryId);
 
-// Expose gold loading flag for unified spinner
-const loading = computed(() => kpiLoading.value || gold.loading.value);
+const loading = ref(false);
+let loadRevision = 0;
 
 // ==================== 数据加载 ====================
 
-async function loadKpi() {
-  kpiLoading.value = true;
+async function loadKpi(query: ReturnType<typeof getQueryDates>, current: () => boolean) {
   try {
-    const { startDate, endDate } = getQueryDates();
-    const res = await getProductionDashboard({ startDate, endDate });
+    const res = await getProductionDashboard(query);
+    if (!current()) return;
     if (res.success && res.data) {
       dashboard.value = res.data;
     } else {
       ElMessage.warning(res.message || '加载 KPI 失败');
     }
   } catch (e: unknown) {
+    if (!current()) return;
     if (!(e as { actionHint?: unknown })?.actionHint) ElMessage.error('加载生产 KPI 失败');
     console.error(e);
-  } finally {
-    kpiLoading.value = false;
   }
 }
 
 async function loadData() {
-  const { startDate, endDate } = getQueryDates();
-  // Parallel: KPI (Java) + gold (Python)
-  await Promise.all([
-    loadKpi(),
-    gold.reload({ startDate, endDate }),
-  ]);
-  renderCharts();
+  const query = getQueryDates();
+  const revision = ++loadRevision;
+  const factory = factoryId.value;
+  const current = () => revision === loadRevision && factory === factoryId.value;
+  loading.value = true;
+  dashboard.value = null;
+  gold.reset();
+  if (renderTimer) clearTimeout(renderTimer);
+  try {
+    const source = await external.load(query);
+    if (!current() || source === 'obsolete') return;
+    if (source === 'external') {
+      trendChart?.dispose();
+      yieldChart?.dispose();
+      productChart?.dispose();
+      processChart?.dispose();
+      return;
+    }
+    await Promise.all([loadKpi(query, current), gold.reload(query)]);
+    if (current()) renderCharts();
+  } finally {
+    if (current()) loading.value = false;
+  }
 }
 
 function onDateChange() {
   loadData();
 }
+watch(factoryId, loadData, { flush: 'sync' });
 
 // ==================== Gold 错误提示 ====================
 
@@ -403,6 +414,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  loadRevision++;
   if (resizeRaf) cancelAnimationFrame(resizeRaf);
   resizeObserver?.disconnect();
   if (renderTimer) clearTimeout(renderTimer);
@@ -418,7 +430,7 @@ onBeforeUnmount(() => {
   <div class="production-analysis" v-loading="loading">
     <!-- 顶部控件 -->
     <div class="toolbar">
-      <h2 class="page-title">生产数据分析 <span v-if="gold.hasAnyData.value" class="data-badge">· gold 数据源</span></h2>
+      <h2 class="page-title">生产数据分析 <span v-if="!external.data.value && gold.hasAnyData.value" class="data-badge">· gold 数据源</span></h2>
       <div class="toolbar-actions">
         <el-date-picker
           v-model="dateRange"
@@ -427,14 +439,18 @@ onBeforeUnmount(() => {
           start-placeholder="开始日期"
           end-placeholder="结束日期"
           :shortcuts="shortcuts"
+          :clearable="false"
           value-format="YYYY-MM-DD"
           @change="onDateChange"
           style="width: 280px"
         />
-        <el-button :icon="Refresh" @click="loadData" circle />
+        <el-button :icon="Refresh" @click="loadData" aria-label="刷新生产数据" circle />
       </div>
     </div>
 
+    <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" />
+    <BlacklakeProductionAnalysis v-if="external.data.value" :data="external.data.value" />
+    <template v-else>
     <!-- KPI 卡片 -->
     <div class="kpi-grid" v-if="dashboard?.kpis?.length">
       <div
@@ -504,6 +520,7 @@ onBeforeUnmount(() => {
       v-if="!loading && !gold.hasAnyData.value && !dashboard?.kpis?.length"
       description="暂无生产数据 — 请先提交生产报工并确认 gold ETL 已运行"
     />
+    </template>
   </div>
 </template>
 

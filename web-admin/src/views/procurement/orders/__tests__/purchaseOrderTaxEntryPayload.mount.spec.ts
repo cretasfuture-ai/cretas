@@ -19,6 +19,8 @@ const harness = vi.hoisted(() => ({
   listSupplierMaterials: vi.fn(),
   listSupplierPurchaseSpecs: vi.fn(),
   message: vi.fn(),
+  warning: vi.fn(),
+  confirm: vi.fn(),
 }));
 
 const route = reactive({ path: '/procurement/orders', fullPath: '/procurement/orders', query: {} as Record<string, unknown> });
@@ -50,9 +52,9 @@ vi.mock('@/api/supplierManagement', () => ({
 }));
 vi.mock('element-plus', () => ({
   ElMessage: Object.assign((...a: unknown[]) => harness.message(...a), {
-    success: vi.fn(), warning: vi.fn(), error: vi.fn(), info: vi.fn(),
+    success: vi.fn(), warning: (...a: unknown[]) => harness.warning(...a), error: vi.fn(), info: vi.fn(),
   }),
-  ElMessageBox: { confirm: vi.fn().mockResolvedValue('confirm') },
+  ElMessageBox: { confirm: (...args: unknown[]) => harness.confirm(...args) },
 }));
 
 import PurchaseOrderList from '../list.vue';
@@ -104,10 +106,10 @@ const BOX_RELATION = {
   purchaseUnit: '个', baseUnit: '个', defaultPurchasePrice: 0.65, active: true,
 };
 
-function routeGet() {
+function routeGet(materialTaxRate: string | null = null) {
   harness.get.mockImplementation(async (url: string) => {
     if (url.endsWith('/raw-material-types/active')) {
-      return { success: true, data: [{ id: 'mat-box', name: '演示·250g食品盒', unit: '个', taxRate: null }] };
+      return { success: true, data: [{ id: 'mat-box', name: '演示·250g食品盒', unit: '个', taxRate: materialTaxRate }] };
     }
     if (/\/suppliers(\?|$)/.test(url) || url.endsWith('/suppliers/active')) {
       return { success: true, data: { content: [SUPPLIER], totalElements: 1 } };
@@ -163,7 +165,7 @@ async function typeTaxIncludedPrice(wrapper: Wrapper, value: number) {
   await flushPromises();
 }
 
-async function pickTaxRate(wrapper: Wrapper, value: number) {
+async function pickTaxRate(wrapper: Wrapper, value: number | string) {
   byPlaceholder(wrapper, 'ElSelect', '请选择税率').vm.$emit('update:modelValue', value);
   await flushPromises();
 }
@@ -176,9 +178,15 @@ function formTotals(wrapper: Wrapper) {
   };
 }
 
+function purchaseCreates() {
+  return harness.post.mock.calls.filter(([path]) => path === '/F006/purchase/orders');
+}
+
 describe('PROTO-DEMO-PO-TAX 采购单录入含税单价 → 提交载荷 (挂载真实 list.vue)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    harness.confirm.mockReset();
+    harness.confirm.mockResolvedValue('confirm');
     route.query = {};
     routeGet();
     harness.listSupplierMaterials.mockResolvedValue([BOX_RELATION]);
@@ -207,7 +215,7 @@ describe('PROTO-DEMO-PO-TAX 采购单录入含税单价 → 提交载荷 (挂载
 
     await vm.handleCreate();
     await flushPromises();
-    const creates = harness.post.mock.calls.filter(([path]) => path === '/F006/purchase/orders');
+    const creates = purchaseCreates();
     expect(creates).toHaveLength(1);
     const payload = creates[0][1] as { items: Array<Record<string, unknown>> };
     expect(payload.items).toHaveLength(1);
@@ -233,10 +241,95 @@ describe('PROTO-DEMO-PO-TAX 采购单录入含税单价 → 提交载荷 (挂载
 
     await vm.handleCreate();
     await flushPromises();
-    const creates = harness.post.mock.calls.filter(([path]) => path === '/F006/purchase/orders');
+    const creates = purchaseCreates();
     expect(creates).toHaveLength(1);
     expect((creates[0][1] as { items: Array<Record<string, unknown>> }).items[0])
       .toMatchObject({ unitPrice: 1.7699, taxRate: 13 });
+    wrapper.unmount();
+  });
+
+  it('手输 0.13 时等待确认，确认前提交被拦，确认后按 13% 反算并提交', async () => {
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = await openWithBoxLine(wrapper);
+    await typeTaxIncludedPrice(wrapper, 2);
+    let confirm!: (action: string) => void;
+    harness.confirm.mockReturnValueOnce(new Promise<string>((resolve) => { confirm = resolve; }));
+
+    await pickTaxRate(wrapper, '0.13');
+    expect(harness.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('是否指 13%？'), expect.any(String), expect.any(Object));
+    expect(vm.form.items[0].taxRate).toBeNull();
+    await vm.handleCreate();
+    expect(purchaseCreates()).toHaveLength(0);
+
+    confirm('confirm');
+    await flushPromises();
+    expect(vm.form.items[0].taxRate).toBe(13);
+    await vm.handleCreate();
+    expect(harness.post).toHaveBeenCalledWith('/F006/purchase/orders', expect.objectContaining({
+      items: [expect.objectContaining({ unitPrice: 1.7699, taxRate: 13 })],
+    }));
+    wrapper.unmount();
+  });
+
+  it('手输 0.13 后取消，保留原税率和未税单价', async () => {
+    const wrapper = mountList();
+    await flushPromises();
+    const vm = await openWithBoxLine(wrapper);
+    await pickTaxRate(wrapper, 9);
+    await typeTaxIncludedPrice(wrapper, 2);
+    harness.confirm.mockRejectedValueOnce('cancel');
+
+    await pickTaxRate(wrapper, '0.13');
+    expect(harness.confirm).toHaveBeenCalledTimes(1);
+    expect(vm.form.items[0]).toMatchObject({ taxRate: 9, unitPrice: 1.8349 });
+    expect(purchaseCreates()).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it.each([false, true])('AI 识别 0.13，用户确认=%s 后才进表单', async (accepted) => {
+    const wrapper = mountList();
+    await flushPromises();
+    const aiEntry = wrapper.findComponent({ name: 'AiEntryDrawer' });
+    expect(aiEntry.exists()).toBe(true);
+    if (!accepted) harness.confirm.mockRejectedValueOnce('cancel');
+    aiEntry.vm.$emit('fill-form', {
+      supplierName: SUPPLIER.name,
+      items: [{ materialName: BOX_RELATION.materialName, quantity: 10, unit: '个', taxRate: 0.13, unitPrice: 2 }],
+    });
+    await flushPromises();
+
+    expect(harness.confirm).toHaveBeenCalledWith(
+      expect.stringContaining('是否指 13%？'), expect.stringContaining(BOX_RELATION.materialName), expect.any(Object));
+    const vm = wrapper.vm as unknown as Vm;
+    if (accepted) {
+      expect(vm.form.items[0]).toMatchObject({ taxRate: 13, unitPrice: 1.7699 });
+      await vm.handleCreate();
+      expect(harness.post).toHaveBeenCalledWith('/F006/purchase/orders', expect.objectContaining({
+        items: [expect.objectContaining({ unitPrice: 1.7699, taxRate: 13 })],
+      }));
+    } else {
+      expect(vm.form.items[0].taxRate).toBeNull();
+      expect(purchaseCreates()).toHaveLength(0);
+    }
+    wrapper.unmount();
+  });
+
+  it('AI 确认的税率与档案不一致时，即使尚无报价也会提示冲突', async () => {
+    routeGet('TAX_9');
+    const wrapper = mountList();
+    await flushPromises();
+    wrapper.findComponent({ name: 'AiEntryDrawer' }).vm.$emit('fill-form', {
+      supplierName: SUPPLIER.name,
+      items: [{ materialName: BOX_RELATION.materialName, quantity: 10, unit: '个', taxRate: 0.13 }],
+    });
+    await flushPromises();
+
+    expect(harness.confirm).toHaveBeenCalledTimes(1);
+    expect(harness.warning).toHaveBeenCalledWith(expect.stringContaining('13% 与原料档案 9% 不同'));
+    expect(wrapper.find('[data-stub="dialog"]').exists()).toBe(false);
+    expect(purchaseCreates()).toHaveLength(0);
     wrapper.unmount();
   });
 });

@@ -61,12 +61,15 @@ import type { UserPermissions } from '@/views/smart-bi/components/chartInsight';
 import ChartSortControl from '@/components/common/ChartSortControl.vue';
 import { sortChartRows, tableSortBy, TABLE_SORT_ORDERS, type ChartSortMode } from '@/utils/chartSort';
 import type { ProductCostItem } from '@/api/smartbi/factoryGold';
+import { useExternalCost } from '@/composables/useProductionGold';
+import BlacklakeCostAnalysis from './BlacklakeCostAnalysis.vue';
 
 // ── Stores ────────────────────────────────────────────────────────────────────
 
 const authStore = useAuthStore();
 const permissionStore = usePermissionStore();
 const factoryId = computed(() => authStore.factoryId);
+const external = useExternalCost(factoryId);
 const canViewPrice = computed(() => permissionStore.canViewPrice);
 
 // ── Date range ────────────────────────────────────────────────────────────────
@@ -413,9 +416,23 @@ function renderAll() {
 
 // ── Data loading ──────────────────────────────────────────────────────────────
 
+let loadRevision = 0;
+
 async function loadData() {
   const fid = factoryId.value;
+  const revision = ++loadRevision;
+  const current = () => revision === loadRevision && fid === factoryId.value;
+  if (renderTimer) clearTimeout(renderTimer);
+  costData.value = null;
+  yieldData.value = null;
+  productData.value = null;
+  prevCostData.value = null;
+  prevYieldData.value = null;
+  prevProductData.value = null;
+  productTypes.value = {};
   if (!fid) {
+    loading.value = false;
+    await external.load({});
     loadError.value = '无法获取工厂 ID，请重新登录';
     return;
   }
@@ -424,6 +441,16 @@ async function loadData() {
   const { startDate, endDate } = getQueryDates();
 
   try {
+    const source = await external.load({ startDate, endDate });
+    if (!current() || source === 'obsolete') return;
+    if (source === 'external') {
+      costPieChart?.dispose();
+      costTrendChart?.dispose();
+      yieldTrendChart?.dispose();
+      productBarChart?.dispose();
+      costPieChart = costTrendChart = yieldTrendChart = productBarChart = null;
+      return;
+    }
     const prev = previousRange(startDate, endDate);
     // 上期只用于一图一分析的环比：失败就当没有上期（不写环比），不影响本期展示。
     const prevQuery = { factoryId: fid, ...prev };
@@ -436,6 +463,7 @@ async function loadData() {
       getFactoryYieldTrend(prevQuery).catch((): null => null),
       getFactoryProductCostCompare(prevQuery).catch((): null => null),
     ]);
+    if (!current()) return;
     prevCostData.value = prevCostRes?.success && prevCostRes.data?.rows?.length ? prevCostRes.data : null;
     prevYieldData.value = prevYieldRes?.success && prevYieldRes.data?.trend?.length ? prevYieldRes.data : null;
     prevProductData.value = prevProductRes?.success && prevProductRes.data?.products?.length ? prevProductRes.data : null;
@@ -471,11 +499,12 @@ async function loadData() {
 
     renderAll();
   } catch (e: unknown) {
+    if (!current()) return;
     const msg = e instanceof Error ? e.message : '加载成本数据失败';
     loadError.value = msg;
     ElMessage.error(msg);
   } finally {
-    loading.value = false;
+    if (current()) loading.value = false;
   }
 }
 
@@ -554,6 +583,7 @@ function handleResize() {
 }
 
 watch(productSortMode, () => renderProductBar());
+watch(factoryId, loadData, { flush: 'sync' });
 
 onMounted(() => {
   loadData();
@@ -565,6 +595,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  loadRevision++;
   if (resizeRaf) cancelAnimationFrame(resizeRaf);
   resizeObserver?.disconnect();
   if (renderTimer) clearTimeout(renderTimer);
@@ -589,6 +620,7 @@ onBeforeUnmount(() => {
           start-placeholder="开始日期"
           end-placeholder="结束日期"
           :shortcuts="shortcuts"
+          :clearable="false"
           value-format="YYYY-MM-DD"
           @change="onDateChange"
           style="width: 280px"
@@ -605,9 +637,12 @@ onBeforeUnmount(() => {
       :closable="false"
       class="fca-error"
     />
+    <el-alert v-if="external.error.value" :title="external.error.value" type="warning" :closable="false" class="fca-error" />
+    <BlacklakeCostAnalysis v-if="external.data.value" v-loading="loading" :data="external.data.value"
+      :can-view-price="canViewPrice" />
 
     <!-- ── 全局空状态: 无任何 gold 数据 ────────────────────── -->
-    <template v-if="!loading && !loadError && !hasAnyData">
+    <template v-else-if="!loading && !loadError && !hasAnyData">
       <div class="fca-empty-state">
         <el-icon class="fca-empty-icon"><i class="fca-empty-icon-char">📊</i></el-icon>
         <div class="fca-empty-title">该工厂暂无生产成本数据</div>

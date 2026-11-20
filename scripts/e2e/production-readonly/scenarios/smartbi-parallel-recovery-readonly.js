@@ -1,7 +1,7 @@
 'use strict';
 const { runReadOnlyPageScenario } = require('./_shared');
 const { inspectCommercePage } = require('./smartbi-focused-acceptance-readonly');
-const PATH = '/api/mobile/F006/smart-bi/factory-analysis';
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 const QUESTION = '联合看客户渠道销售、发货和库存';
 
 async function inspect(page, _body, ctx) {
@@ -13,7 +13,7 @@ async function inspect(page, _body, ctx) {
   let onFailed; let timer;
   const failed = new Promise((resolve, reject) => {
     onFailed = request => {
-      if (request.method() === 'POST' && new URL(request.url()).pathname === PATH) resolve(request);
+      if (request.method() === 'POST' && isFactoryAnalysisUrl(request.url(), ctx.expectedFactoryId)) resolve(request);
     };
     page.on('requestfailed', onFailed);
     timer = setTimeout(() => reject(new Error('Expected offline analysis request was not observed')), 15_000);

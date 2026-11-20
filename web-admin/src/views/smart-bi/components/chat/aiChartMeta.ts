@@ -41,6 +41,7 @@ const UNIT_PATTERNS: Array<[RegExp, string]> = [
 ];
 
 const MONEY_WORDS = /元|金额|营收|收入|销售额|营业额|成本|费用|利润|毛利|价|客单/;
+const SCALED_YUAN_UNIT = /(?:亿|千万|百万|十万|万|千|百)元/;
 const RATE_WORDS = /率|占比|比例|%|％|pct|percent|ratio/i;
 const REVIEW_WORDS = /评价|口碑|差评|星级|服务分|环境分|好评|低星|点评|美团/;
 const REST_REVENUE_WORDS = /收入|营收|营业额|销售额|堂食|外卖|客单/;
@@ -49,8 +50,12 @@ function detectUnit(text: string): string | undefined {
   // 括号里写明的单位优先:「良品（kg）」「时长(分钟)」
   const paren = text.match(/[（(]\s*([^）)\s]{1,4})\s*[）)]/);
   if (paren) {
+    const moneyUnit = paren[1].match(SCALED_YUAN_UNIT)?.[0];
+    if (moneyUnit) return moneyUnit;
     for (const [re, unit] of UNIT_PATTERNS) if (re.test(paren[1])) return unit;
   }
+  const moneyUnit = text.match(SCALED_YUAN_UNIT)?.[0];
+  if (moneyUnit) return moneyUnit;
   for (const [re, unit] of UNIT_PATTERNS) if (re.test(text)) return unit;
   return undefined;
 }
@@ -74,11 +79,13 @@ export function inferAiChartMeta(input: AiChartMetaInput): NonNullable<ChartMeta
   const legacyText = `${allText} ${input.content ?? ''}`;
   const isReview = REVIEW_WORDS.test(legacyText);
   const unit = detectUnit(metricText);
+  const scaledMoney = unit !== undefined && SCALED_YUAN_UNIT.test(unit);
   // 饼图扇区值是绝对值, 占比由分析自己除合计, 永不判成 pct (LSM-COSTBI-F3 #1901: 金额 62031.8 曾被写成 62031.8%)。
   // values 未提供 (旧调用方只给系列名) 时不做数值范围核对; 提供了 (含空数组) 就必须都在 0–100。
   const isPct = chartType !== 'pie' && RATE_WORDS.test(metricText) && !unit
     && (input.values === undefined || looksLikePercentValues(input.values));
-  const isMoney = !isPct && !unit && (MONEY_WORDS.test(metricText) || (!hasClue && REST_REVENUE_WORDS.test(text)));
+  const isMoney = scaledMoney || (!isPct && !unit
+    && (MONEY_WORDS.test(metricText) || (!hasClue && REST_REVENUE_WORDS.test(text))));
 
   const xDim: ChartMeta['xDim'] = chartType === 'line'
     ? 'time'
@@ -92,7 +99,7 @@ export function inferAiChartMeta(input: AiChartMetaInput): NonNullable<ChartMeta
 
   const yMetric: ChartMeta['yMetric'] = isPct
     ? 'pct'
-    : isReview
+    : isReview && !scaledMoney
       ? 'count'
       : isMoney
         ? 'revenue'
@@ -104,7 +111,7 @@ export function inferAiChartMeta(input: AiChartMetaInput): NonNullable<ChartMeta
     aggregation: /平均|均值/.test(metricText) ? 'avg' : 'sum',
     domain: isReview || REST_REVENUE_WORDS.test(legacyText) ? 'restaurant' : 'factory',
   };
-  // 带单位的指标: 用图自己认出的单位; 金额走 ¥ 默认, 百分比走 %, 其余不加单位
+  // 万元等显式金额单位照原样传递，无显式单位的金额仍走 ¥。
   if (unit && yMetric !== 'pct') meta.unit = unit;
   return meta;
 }

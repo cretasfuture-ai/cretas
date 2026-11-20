@@ -15,7 +15,7 @@ import { pythonFetch, PYTHON_LLM_TIMEOUT_MS } from './common';
 
 // ── Shared query builder ──────────────────────────────────────────────────────
 
-interface FactoryDateQuery {
+export interface FactoryDateQuery {
   factoryId: string;
   startDate?: string; // YYYY-MM-DD; omit = all history
   endDate?: string;
@@ -134,6 +134,111 @@ export interface ProductCostCompareResponse {
 }
 
 // ── API functions ─────────────────────────────────────────────────────────────
+
+export interface ExternalProductionRow {
+  reportDate: string;
+  productCode: string;
+  productName: string;
+  processName: string;
+  unit: string;
+  goodQty: number;
+  defectQty: number;
+  defectRate: number | null;
+  reportCount: number;
+}
+
+export interface ExternalProductionData {
+  sourceSystem: 'blacklake';
+  sourceLabel: string;
+  snapshotCollectedAt: string;
+  stale: boolean;
+  yieldRate: null;
+  cost: null;
+  unavailableMessage: string;
+  rows: ExternalProductionRow[];
+}
+
+export function getExternalProduction(args: FactoryDateQuery, summaryOnly = false) {
+  const query = new URLSearchParams(_buildQuery(args));
+  if (summaryOnly) query.set('summaryOnly', 'true');
+  return pythonFetch<{ success: boolean; data: ExternalProductionData | null; message: string }>(
+    `/api/smartbi/factory/external-production?${query}`,
+  );
+}
+
+export interface ExternalIssueQuantity {
+  unit: string | null;
+  quantity: number;
+}
+
+export interface ExternalCostMetrics {
+  materialCost: number | null;
+  materialCostMissingOrders: number;
+  laborCost: number | null;
+  laborCostMissingOrders: number;
+  totalCost: number | null;
+  costMissingOrders: number;
+  unitCosts: Array<{ unit: string; cost: number }>;
+  unitCostMissingOrders: number;
+  inputByUnit: ExternalIssueQuantity[];
+  issuedMaterialCost: number | null;
+  yieldRate: number | null;
+  yieldComparableOrders: number;
+  workOrderCount: number;
+  priceMissingCount: number | null;
+  valuationIssueCount: number | null;
+  overheadMissingCount: number;
+}
+
+export interface ExternalWorkOrderCost {
+  workOrderCode: string;
+  costDate: string;
+  productCode: string;
+  productName: string | null;
+  outputUnit: string | null;
+  outputQty: number | null;
+  materialCost: number | null;
+  laborCost: number | null;
+  totalCost: number | null;
+  unitCost: number | null;
+  inputByUnit: ExternalIssueQuantity[];
+  yieldRate: number | null;
+  yieldUnavailableReason: 'missing_issue' | 'incompatible_units' | 'missing_output' |
+    'snapshot_mismatch' | 'nonpositive_input' | null;
+}
+
+export interface ExternalMaterialIssue {
+  lineId: string;
+  issueDate: string;
+  workOrderCode: string | null;
+  materialCode: string;
+  materialName: string | null;
+  unit: string | null;
+  quantity: number;
+  effectiveUnitPrice: number | null;
+  issueCost: number | null;
+  priceSource: 'reported' | 'moving_avg' | 'price_missing' | 'invalid_valuation';
+}
+
+export interface ExternalCostData {
+  sourceSystem: 'blacklake';
+  sourceLabel: string;
+  costCollectedAt: string | null;
+  issueCollectedAt: string | null;
+  stale: boolean;
+  permissionMessage: string | null;
+  summary: ExternalCostMetrics | null;
+  daily: Array<ExternalCostMetrics & { costDate: string }>;
+  products: Array<ExternalCostMetrics & { productCode: string; productName: string | null }>;
+  workOrders: ExternalWorkOrderCost[];
+  materialIssues: ExternalMaterialIssue[];
+}
+
+export function getExternalCost(args: FactoryDateQuery) {
+  return pythonFetch<{ success: boolean; data: ExternalCostData | null; message: string }>(
+    `/api/smartbi/factory/external-cost?${_buildQuery(args)}`,
+  );
+}
 
 /**
  * GET /api/smartbi/factory/cost-structure

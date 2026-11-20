@@ -4058,15 +4058,15 @@ public class IntentKnowledgeBase {
         // === v13.0: 新增 Modifier 相关短语映射 ===
 
         // ---- RANKING (排名/排行) ----
-        phraseToIntentMapping.put("销售排名", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("订单排名", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("销售前十", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("销售TOP10", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("销售前10", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售排名", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("订单排名", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售前十", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售TOP10", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售前10", "PRODUCT_PRODUCT_SALES_RANKING");
         // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」(LSMDEMO 2026-11-18 BP 问题 47): 原来落到要 indicator_code 的指标 Skill 被追问;
         // 产品销售排行工具自己从原话解析两个月并按客户 / 产品拆增量, 句中的月份与百分数不算「带条件」(见 GROWTH_BREAKDOWN_PHRASES)。
         for (String p : GROWTH_BREAKDOWN_PHRASES) {
-            phraseToIntentMapping.put(p, "PRODUCT_SALES_RANKING");
+            phraseToIntentMapping.put(p, "PRODUCT_PRODUCT_SALES_RANKING");
         }
         phraseToIntentMapping.put("发货排名", "SHIPMENT_RANKING");
         phraseToIntentMapping.put("出货排名", "SHIPMENT_RANKING");
@@ -4160,9 +4160,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("迟到超过3次的员工", "ATTENDANCE_ANOMALY");
 
         // ---- 隐式查询短语 ----
-        phraseToIntentMapping.put("哪些卖得好", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("什么最畅销", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("最赚钱的产品", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("哪些卖得好", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("什么最畅销", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("最赚钱的产品", "PRODUCT_PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("谁干得最好", "ATTENDANCE_RANKING");
         phraseToIntentMapping.put("谁效率最高", "ATTENDANCE_RANKING");
         phraseToIntentMapping.put("哪个供应商最好", "SUPPLIER_RANKING");
@@ -4281,9 +4281,9 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("排除退货的订单", "ORDER_LIST");
 
         // ---- 比较查询 (comparison_query) ----
-        phraseToIntentMapping.put("销量最高的产品", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("卖得最好的", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("销量最好的", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销量最高的产品", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("卖得最好的", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销量最好的", "PRODUCT_PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("效率最低的产线", "PROCESSING_RANKING");
         phraseToIntentMapping.put("效率最差的", "PROCESSING_RANKING");
         phraseToIntentMapping.put("产能最低的", "PROCESSING_RANKING");
@@ -4874,7 +4874,7 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("客户订单排名", "CUSTOMER_STATS");
         phraseToIntentMapping.put("客户金额排名", "CUSTOMER_STATS");
         phraseToIntentMapping.put("下单排名", "CUSTOMER_STATS");
-        phraseToIntentMapping.put("金额排名", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("金额排名", "PRODUCT_PRODUCT_SALES_RANKING");
 
         // Case B8: "设备故障次数统计" → EQUIPMENT_STATS (当前: "设备故障"被duplicate覆盖到ALERT_LIST)
         phraseToIntentMapping.put("设备故障统计", "EQUIPMENT_STATS");
@@ -5347,8 +5347,8 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("发通知", "NOTIFICATION_SEND_WECHAT");
         // X1: 销售
         phraseToIntentMapping.put("本月销售额统计", "SALES_STATS");  // 7 chars, beats "本月销售额"(5)
-        phraseToIntentMapping.put("销售排名", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("产品销售排名", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售排名", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("产品销售排名", "PRODUCT_PRODUCT_SALES_RANKING");
         phraseToIntentMapping.put("回款状态", "PAYMENT_STATUS_QUERY");
         phraseToIntentMapping.put("客户回款", "PAYMENT_STATUS_QUERY");
         // X3: 溯源
@@ -5656,9 +5656,9 @@ public class IntentKnowledgeBase {
         // v29: 销售对比/统计
         phraseToIntentMapping.put("销售对比", "REPORT_TRENDS");
         phraseToIntentMapping.put("销售额统计", "REPORT_KPI");
-        phraseToIntentMapping.put("销量排名", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("销售排名", "PRODUCT_SALES_RANKING");
-        phraseToIntentMapping.put("产品排名", "PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销量排名", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("销售排名", "PRODUCT_PRODUCT_SALES_RANKING");
+        phraseToIntentMapping.put("产品排名", "PRODUCT_PRODUCT_SALES_RANKING");
 
         // v29: 同比/环比
         phraseToIntentMapping.put("同比", "REPORT_TRENDS");
@@ -8153,7 +8153,13 @@ public class IntentKnowledgeBase {
         // 0. 「X月比Y月涨了…主要是哪个客户 / 产品带来的」换着说 (拉动 / 贡献 / 靠 / 涨的原因…) 也是同一个问题:
         //    固定短语表只认几种说法, 换个说法就落到识别层被判成订单列表 (BP 问题 47, 11-19 追问答成 15 张订单)。
         if (isGrowthAttribution(input)) {
-            return Optional.of(Map.entry(GROWTH_BREAKDOWN_PHRASES.get(0), "PRODUCT_SALES_RANKING"));
+            return Optional.of(Map.entry(GROWTH_BREAKDOWN_PHRASES.get(0), "PRODUCT_PRODUCT_SALES_RANKING"));
+        }
+
+        // 0b. 「9 月 20 号发给 X 的 Y，是哪批原料做的」: 按日期 + 客户反查批次。决策模型按角色给的结果不稳定
+        //     (sales_manager 判成出货列表漏掉当天出货, 见 BP 问题 34 复测), 说法本身没有歧义, 走确定性短语。
+        if (isCustomerDateTrace(input)) {
+            return Optional.of(Map.entry(CUSTOMER_DATE_TRACE_PHRASE, "BATCH_TRACE_BY_CUSTOMER"));
         }
 
         // 1. Use the shared factory phrase map. Restaurant-specific mappings
@@ -8208,6 +8214,27 @@ public class IntentKnowledgeBase {
                 && GROWTH_WORD.matcher(input).find()
                 && (input.contains("客户") || input.contains("产品"))
                 && GROWTH_ATTRIBUTION_CUE.matcher(input).find();
+    }
+
+    /** 按日期 + 客户反查批次的归一短语 (只用于 matchPhraseHit 返回的命中短语 / 短语快捷放行判定, 不进短语表)。 */
+    public static final String CUSTOMER_DATE_TRACE_PHRASE = "发给客户的是哪批";
+
+    private static final java.util.regex.Pattern TRACE_DATE = java.util.regex.Pattern.compile(
+            "\\d{1,2}\\s*月\\s*\\d{1,2}\\s*[日号]");
+    private static final java.util.regex.Pattern TRACE_SHIPPED_TO = java.util.regex.Pattern.compile(
+            "(?:发给|发往|卖给|送给|送到|发到)\\s*\\S+");
+    private static final java.util.regex.Pattern TRACE_WHICH_BATCH = java.util.regex.Pattern.compile(
+            "哪\\s*(?:一)?批|哪个批次|什么批次");
+
+    /**
+     * 「X 月 Y 号发给 客户 的 产品, 是哪批 (原料) 做的」: 日期 + 发给某客户 + 问哪批, 三个条件缺一不可
+     * (阴性: 没有「哪批」是出货查询, 没有日期或客户是批次追溯的别的问法)。空格、全角标点不影响。
+     */
+    public static boolean isCustomerDateTrace(String input) {
+        if (input == null) return false;
+        return TRACE_DATE.matcher(input).find()
+                && TRACE_SHIPPED_TO.matcher(input).find()
+                && TRACE_WHICH_BATCH.matcher(input).find();
     }
 
     public static boolean isReportWorkSentence(String input) {

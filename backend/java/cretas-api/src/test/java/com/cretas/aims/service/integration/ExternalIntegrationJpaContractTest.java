@@ -110,6 +110,86 @@ class ExternalIntegrationJpaContractTest {
                 Map.of("report_output", rows));
     }
 
+    private static Map<String, Object> cost() {
+        return Map.ofEntries(
+                Map.entry("workOrderCode", "WO-01"), Map.entry("costDate", "2026-11-14"),
+                Map.entry("productCode", "CP-01"), Map.entry("productName", "成品"),
+                Map.entry("outputUnit", "KG"), Map.entry("outputQty", "10.25"),
+                Map.entry("materialCost", "93.123456"), Map.entry("laborCost", "5.55"),
+                Map.entry("otherCost", "0"), Map.entry("totalCost", "98.673456"),
+                Map.entry("unitCost", "9.626679"));
+    }
+
+    private static Map<String, Object> issue() {
+        var row = new HashMap<String, Object>();
+        row.put("lineId", "123");
+        row.put("issueDate", "2026-11-13");
+        row.put("workOrderCode", null);
+        row.put("materialCode", "M-01");
+        row.put("materialName", "原料");
+        row.put("unit", "公斤");
+        row.put("quantity", "11.0");
+        row.put("costUnitPrice", 0);
+        row.put("signedCostAmount", "0");
+        row.put("movingAveragePrice", "8.123456");
+        return row;
+    }
+
+    private static ExternalIntegrationService.PushRequest costRequest(String dataset, List<Map<String, Object>> rows) {
+        return new ExternalIntegrationService.PushRequest("blacklake", ORG, "2026-11-15T00:01:00Z",
+                "run-cost", Map.of(dataset, rows));
+    }
+
+    @Test
+    void costDatasetsPersistExactAmountsAndReplayOnlyInsideAuthorizedFactory() throws Exception {
+        String token = authorize(LSM);
+        var request = new ExternalIntegrationService.PushRequest("blacklake", ORG,
+                "2026-11-15T00:01:00Z", "run-cost",
+                Map.of("project_cost", List.of(cost()), "production_issue", List.of(issue())));
+
+        assertThat(service.push(token, request).datasets()).hasSize(2);
+        assertThat(service.push(token, request).datasets())
+                .allSatisfy(result -> assertThat(result.duplicate()).isTrue());
+        em.clear();
+        for (var dataset : request.datasets().entrySet()) {
+            var saved = snapshots.findByFactoryIdAndSystemAndDatasetAndCollectedAt(
+                    LSM, "blacklake", dataset.getKey(), java.time.LocalDateTime.of(2026, 11, 15, 0, 1))
+                    .orElseThrow();
+            assertThat(saved.getRowCount()).isEqualTo(1);
+            assertThat(new ObjectMapper().readTree(saved.getPayload()))
+                    .isEqualTo(new ObjectMapper().valueToTree(dataset.getValue()));
+            assertThat(snapshots.findByFactoryIdAndSystemAndDatasetAndCollectedAt(
+                    F6, "blacklake", dataset.getKey(), saved.getCollectedAt())).isEmpty();
+        }
+    }
+
+    @Test
+    void costSchemaRejectsPersonnelMalformedNumbersAndRepeatedIdentity() {
+        String token = authorize(LSM);
+        var badCost = new HashMap<>(cost());
+        badCost.put("workerHourlyWage", "1234");
+        assertThatThrownBy(() -> service.push(token, costRequest("project_cost", List.of(badCost))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("workerHourlyWage");
+
+        var badIssue = issue();
+        badIssue.put("quantity", "NaN");
+        assertThatThrownBy(() -> service.push(token, costRequest("production_issue", List.of(badIssue))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("quantity");
+        badIssue.put("quantity", "11.0");
+        badIssue.put("issueDate", "2026-02-30");
+        assertThatThrownBy(() -> service.push(token, costRequest("production_issue", List.of(badIssue))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("issueDate");
+        assertThatThrownBy(() -> service.push(token, costRequest("project_cost", List.of(cost(), cost()))))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("重复");
+        var missing = new HashMap<String, List<Map<String, Object>>>();
+        missing.put("production_issue", null);
+        var missingRows = new ExternalIntegrationService.PushRequest(
+                "blacklake", ORG, "2026-11-15T00:01:00Z", "run-cost", missing);
+        assertThatThrownBy(() -> service.push(token, missingRows))
+                .isInstanceOf(BusinessException.class).hasMessageContaining("必须是明细数组");
+        assertThat(snapshots.findAll()).isEmpty();
+    }
+
     @Test
     void aPushLandsOnlyInTheTokensFactoryAndTheNegativeFactorySeesNothing() {
         String token = authorize(LSM);

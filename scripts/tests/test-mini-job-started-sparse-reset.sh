@@ -4,11 +4,13 @@
 # canada-mini 任务开始钩子: 工作区留在 sparse 状态时整个删掉 (2026-11-19 #1956 合并组 PG 两片
 # 「working directory .../backend/java/cretas-api: No such file or directory」)。
 # 场景:
-#   1. sparse 工作区 (在 work-*/ 下) ⇒ 删掉, 打 SPARSE_RESET removed=
+#   1. sparse 工作区 (在 work-*/ 下) ⇒ 删掉后重建空目录, 打 SPARSE_RESET removed=
+#      (2026-11-19 23:1x: 只删不建时 actions/checkout 以工作区为 cwd 起 node 报「No such file」, 合并队列 PG/fast 分片红)
 #   2. 非 sparse 工作区 ⇒ 保留, 打 not_sparse=
 #   3. 不在 work-*/ 下的 sparse 目录 ⇒ 不删, 打 skip
 #   4. GITHUB_WORKSPACE 为空 ⇒ skip, 钩子照常跑到镜像检查 (MIRROR missing 一行, 证明跑完了)
-#   变异: 判定改成永不为真 ⇒ 场景 1 必须红 (证明断言守着删除行为)。
+#   变异: 判定改成永不为真 ⇒ 场景 1 必须红 (证明断言守着删除行为);
+#         去掉重建 (mkdir -p) ⇒ 场景 1 必须红 (证明断言守着「目录还在」)。
 # 用 SUT_BASH=/bin/bash 可在 mini 上验 bash 3.2。
 set -u
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
@@ -46,7 +48,8 @@ scenarios() {  # $1 = sut; 返回失败数
   [ "$(git -C "$T/gh/work-1/cretas/cretas" config --get core.sparseCheckout)" = true ] || { echo "  前提不成立: 构造的仓库不是 sparse"; return 99; }
   out=$(run_hook "$sut" "$T/gh/work-1/cretas/cretas")
   echo "    READING s1: $(echo "$out" | grep SPARSE_RESET)"
-  { [ ! -e "$T/gh/work-1/cretas/cretas" ] && echo "$out" | grep -q "SPARSE_RESET removed="; } || bad=$((bad+1))
+  { [ -d "$T/gh/work-1/cretas/cretas" ] && [ ! -e "$T/gh/work-1/cretas/cretas/.git" ] && [ -z "$(ls -A "$T/gh/work-1/cretas/cretas")" ] \
+    && echo "$out" | grep -q "SPARSE_RESET removed="; } || bad=$((bad+1))
 
   mkrepo "$T/gh/work-2/cretas/cretas" full
   out=$(run_hook "$sut" "$T/gh/work-2/cretas/cretas")
@@ -74,6 +77,13 @@ sed 's/if \[ "\$sp" = true \]; then/if [ "$sp" = never ]; then  # MUTANT/' "$SUT
 grep -q MUTANT "$M" || { echo "  FAIL - 变异没打上"; fail=1; }
 scenarios "$M"; mrc=$?
 check "变异后场景 1 判红 (失败数=$mrc, 应 >=1)" "$([ $mrc -ge 1 ] && [ $mrc != 99 ] && echo 0 || echo 1)"
+
+echo "== 变异: 删除后不重建工作区"
+M2="$T/mutant2.sh"
+sed 's/ \&\& mkdir -p "\$W"; then/ \&\& true; then/; s/^\(# canada-mini.*\)$/  # MUTANT/' "$SUT" > "$M2"
+grep -q MUTANT "$M2" || { echo "  FAIL - 变异 2 没打上"; fail=1; }
+scenarios "$M2"; mrc2=$?
+check "变异 2 后场景 1 判红 (失败数=$mrc2, 应 >=1)" "$([ $mrc2 -ge 1 ] && [ $mrc2 != 99 ] && echo 0 || echo 1)"
 
 [ $fail = 0 ] && echo "PASS: job-started sparse 重置" || echo "FAIL: job-started sparse 重置"
 exit $fail

@@ -40,6 +40,7 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -537,6 +538,9 @@ public class ExternalIntegrationService {
         for (Map.Entry<String, List<Map<String, Object>>> entry : body.datasets().entrySet()) {
             ExternalDataset dataset = ExternalDataset.of(entry.getKey())
                     .orElseThrow(() -> new BusinessException(400, "不接收的数据集: " + entry.getKey()));
+            if (entry.getValue() == null && dataset.keyField() != null) {
+                throw new BusinessException(400, dataset.code() + " 必须是明细数组");
+            }
             List<Map<String, Object>> rows = entry.getValue() == null ? List.of() : entry.getValue();
             validateRows(dataset, rows);
             String payload = canonical(rows);
@@ -595,6 +599,7 @@ public class ExternalIntegrationService {
         if (rows.size() > MAX_ROWS_PER_DATASET) {
             throw new BusinessException(413, dataset.code() + " 超过 " + MAX_ROWS_PER_DATASET + " 行，拒收");
         }
+        Set<Object> keys = new HashSet<>();
         for (int i = 0; i < rows.size(); i++) {
             Map<String, Object> r = rows.get(i);
             if (r == null) throw new BusinessException(400, dataset.code() + " 第 " + (i + 1) + " 行为空");
@@ -613,8 +618,24 @@ public class ExternalIntegrationService {
                             + "」超过 200 字，拒收");
                 }
             }
-            if (dataset == ExternalDataset.REPORT_OUTPUT && parseDate(r.get("reportDate")) == null) {
-                throw new BusinessException(400, "report_output 第 " + (i + 1) + " 行 reportDate 不是 YYYY-MM-DD");
+            Object dateValue = r.get(dataset.dateField());
+            LocalDate businessDate = parseDate(dateValue);
+            if (businessDate == null || (dataset.keyField() != null
+                    && (businessDate.getYear() < 1 || ((String) dateValue).length() != 10))) {
+                throw new BusinessException(400, dataset.code() + " 第 " + (i + 1) + " 行 "
+                        + dataset.dateField() + " 不是 YYYY-MM-DD");
+            }
+            if (dataset.keyField() != null) {
+                for (String field : dataset.allowedFields()) {
+                    if (!r.containsKey(field) || !dataset.validValue(field, r.get(field))) {
+                        throw new BusinessException(400, dataset.code() + " 第 " + (i + 1)
+                                + " 行字段「" + field + "」缺失或格式错误");
+                    }
+                }
+                if (!keys.add(r.get(dataset.keyField()))) {
+                    throw new BusinessException(400, dataset.code() + " 第 " + (i + 1)
+                            + " 行字段「" + dataset.keyField() + "」重复");
+                }
             }
         }
     }

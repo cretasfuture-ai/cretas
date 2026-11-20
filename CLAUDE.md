@@ -62,7 +62,7 @@ API 基础路径：Java `/api/mobile/*`（业务 `/api/mobile/{factoryId}/*`）�
 - `worktree-and-main-only-deploy.md` - worktree 隔离 + prod 只从 main 部署（发布命令/fastlane 分档/离线部署在 `deploy-backend` skill 的 `references/main-only-deploy-details.md`）
 - 🔴 凭证：⛔ 密码/密钥/`.env` 不进代码和 git，一律环境变量注入；真值位置见按路径加载的 `CREDENTIAL-MANAGEMENT.md`
 - `measurement-and-wiring.md` - 量对东西 / 接上没有 / 变异打在被守的行为上（硬约束 1–9 + 形态 A–E 判据；全部实测案例在 `docs/rules-casebook/measurement-and-wiring-cases.md`，编号一致）
-- 🔴 CI 全部 `ubuntu-latest`（仓库 public），⛔ 任何 job 不许指向自建 runner；闸 `test-public-repo-hosted-only.sh`。细则见按路径加载的 `ci-runner-routing.md`
+- 🔴 CI 默认使用 GitHub 托管 runner。仅 [CI runner 路由规则](.claude/rules/ci-runner-routing.md) 登记的作业可使用 `canada-mini`，外部 PR 一律走托管。门禁为 `scripts/tests/test-public-repo-hosted-only.sh`。
 - `windows-shell-and-paths.md` - Windows 上 **空格才是根因，中文不是**（实测对照：纯 ASCII 带空格不加引号失败 / 纯中文无空格成功）。新建文件目录不带空格；路径变量一律加引号（`Program Files` 改不掉，PATH 上 26/61 条带空格）；命令发给对的 shell；精确字符不经过 shell
 
 规则正文统一在 `.claude/rules/`；`.codex/rules/` 同名文件是指针，只有 `ci-runner-routing.md` 保留由脚本钉住的逐字副本。Claude-only organizer 不复制到 Codex；Codex 的执行与子代理边界见 `AGENTS.md`，共同执行/验证原则见 `execution-and-verification.md`。superpowers 插件在本仓库已关闭（`.claude/settings.json`），按本仓库规则执行。

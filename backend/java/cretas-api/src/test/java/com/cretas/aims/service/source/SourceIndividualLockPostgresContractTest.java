@@ -7,6 +7,7 @@ import com.cretas.aims.entity.enums.MaterialBatchStatus;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.integration.DisposablePostgresTargetGuard;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -83,6 +84,7 @@ class SourceIndividualLockPostgresContractTest {
 
     @Autowired SourceIndividualRepository repository;
     @Autowired MaterialBatchRepository materialBatchRepository;
+    @Autowired OperationLogRepository operationLogRepository;
     @Autowired PlatformTransactionManager txManager;
     @Autowired JdbcTemplate jdbc;
     @PersistenceContext EntityManager entityManager;
@@ -92,7 +94,7 @@ class SourceIndividualLockPostgresContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceIndividualService(repository);
+        service = new SourceIndividualService(repository, operationLogRepository);
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
         tx = new TransactionTemplate(txManager);
         // 仪器自检: 这条用例真的连在 PostgreSQL 上, 不是 H2。

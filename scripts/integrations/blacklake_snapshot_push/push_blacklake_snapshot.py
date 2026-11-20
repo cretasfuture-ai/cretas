@@ -2,7 +2,7 @@
 
 采集仍在本机（计划任务 Cretas-Blacklake-Daily-0800 写 monitor.sqlite3），本脚本只做三件事：
   1. 只读打开 monitor.sqlite3，取最近一次 success 的采集轮；
-  2. 把黑湖报工投影成白名单字段并按「报工日 × 产品 × 工序 × 单位」汇总（⛔ 不带人员、工资、工时字段）；
+  2. 按白名单投影报工、工单成本和生产领料，只保留工单汇总人工成本；
   3. 用平台签发的专用推送凭证 POST 到 47 的 /api/public/external-snapshots/push。
 
 凭据不出本机：推送凭证只存在本机 DPAPI 文件（当前 Windows 用户才能解开），⛔ 不进命令行参数、不进日志、不进仓库。
@@ -23,15 +23,18 @@ import argparse
 import ctypes
 import ctypes.wintypes
 import json
+import logging
 import os
 import sqlite3
 import sys
 import urllib.error
 import urllib.request
-from collections import OrderedDict
-from datetime import datetime, timezone
+from collections import Counter, OrderedDict
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 SYSTEM = "blacklake"
 DATASET = "report_output"
@@ -104,7 +107,7 @@ def latest_success_cycle(db: Path) -> tuple[dict, dict]:
         payload_row = conn.execute("SELECT payload FROM content WHERE hash = ?", (row[2],)).fetchone()
         if not payload_row:
             raise LookupError("成功采集轮的内容缺失: " + row[2])
-        return {"id": row[0], "finished": row[1]}, json.loads(payload_row[0])
+        return {"id": row[0], "finished": row[1]}, json.loads(payload_row[0], parse_float=Decimal)
     finally:
         conn.close()
 
@@ -177,23 +180,175 @@ def project_report_output(payload: dict) -> list[dict]:
     return rows
 
 
+_COST_AMOUNTS = {
+    "materialCost": "actualMaterialCost",
+    "laborCost": "actualLaborCost",
+    "otherCost": "actualOtherCost",
+    "totalCost": "totalActualCost",
+    "unitCost": "actualUnitCost",
+}
+_ISSUE_AMOUNTS = {
+    "quantity": "qty",
+    "costUnitPrice": "costUnitPrice",
+    "signedCostAmount": "changedCostAmountSigned",
+    "movingAveragePrice": "movingWeightedAverageCost",
+}
+
+
+def _text(value, field: str, *, nullable: bool = False) -> str | None:
+    if value is None and nullable:
+        return None
+    if not isinstance(value, (str, int)) or isinstance(value, bool):
+        raise ValueError(f"{field} 不是文本")
+    result = str(value).strip()
+    if not result and nullable:
+        return None
+    if not result or len(result) > 200:
+        raise ValueError(f"{field} 为空或过长")
+    return result
+
+
+def _business_date(value, field: str) -> str:
+    try:
+        return date.fromisoformat(_text(value, field)[:10]).isoformat()
+    except ValueError:
+        raise ValueError(f"{field} 不是有效业务日期") from None
+
+
+def _amounts(row: dict, fields: dict[str, str], *, required: tuple[str, ...] = ()) -> dict:
+    result = {}
+    for field, source in fields.items():
+        value = row.get(source)
+        if value is None or value == "":
+            if field in required:
+                raise ValueError(f"{source} 缺失")
+            result[field] = None
+            continue
+        amount = _dec(value)
+        if amount is None or not -100 <= amount.adjusted() <= 100 or amount.as_tuple().exponent < -100:
+            raise ValueError(f"{source} 不是有效数值")
+        number = format(amount, "f")
+        if len(number) > 200:
+            raise ValueError(f"{source} 超过数值长度上限")
+        result[field] = number
+    return result
+
+
+def _source_rows(data: dict, key: str) -> list[dict]:
+    rows = data[key]
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        raise ValueError(f"{key} 不是有效的明细数组")
+    return rows
+
+
+def _project_index(data: dict) -> dict[str, dict]:
+    projects = {}
+    ids = set()
+    for project in _source_rows(data, "project") if "project" in data else []:
+        code = _text(project.get("projectCode"), "projectCode")
+        identity = _text(project.get("id"), "project.id")
+        if code in projects or identity in ids:
+            raise ValueError("project 工单编码或 ID 重复")
+        projects[code] = project
+        ids.add(identity)
+    return projects
+
+
+def _matched_project(projects: dict[str, dict], code: str | None, identity) -> dict:
+    project = projects.get(code)
+    return project if project and str(project["id"]) == str(identity) else {}
+
+
+def project_work_order_cost(data: dict, projects: dict[str, dict]) -> list[dict]:
+    candidates = [
+        (_text(cost.get("projectCode"), "projectCode"), cost)
+        for cost in _source_rows(data, "project_cost")
+        if cost.get("deleted") is not True
+    ]
+    counts = Counter(code for code, _ in candidates)
+    duplicated = [count for count in counts.values() if count > 1]
+    if duplicated:
+        logger.warning("project_cost：跳过 %d 个重复工单键（共 %d 行）", len(duplicated), sum(duplicated))
+
+    rows = []
+    for code, cost in candidates:
+        # Neither record establishes which costing version should win.
+        if counts[code] > 1:
+            continue
+        project = _matched_project(projects, code, cost.get("projectId"))
+        business_date = (project.get("actualEndTime") or project.get("actualStartTime")
+                         or project.get("createTime") or cost.get("createdAt"))
+        project_unit = _text(project.get("projectUnit"), "projectUnit", nullable=True)
+        cost_unit = _text(cost.get("unitName"), "unitName", nullable=True)
+        amounts = _amounts(cost, _COST_AMOUNTS)
+        if project_unit and cost_unit and project_unit.casefold() != cost_unit.casefold():
+            # The reported unit cost has a different denominator unit.
+            amounts["unitCost"] = None
+        rows.append({
+            "workOrderCode": code,
+            "costDate": _business_date(business_date, "costDate"),
+            "productCode": _text(cost.get("productCode"), "productCode"),
+            "productName": _text(cost.get("productName"), "productName", nullable=True),
+            "outputUnit": project_unit,
+            # project_cost.realAmount is a costing quantity and can differ
+            # from the actual final good output used for yield.
+            **_amounts(project, {"outputQty": "numberofGoodProducts"}),
+            **amounts,
+        })
+    return sorted(rows, key=lambda row: row["workOrderCode"])
+
+
+def project_production_issue(data: dict, projects: dict[str, dict]) -> list[dict]:
+    rows = []
+    for order in _source_rows(data, "stock_order"):
+        if str(order.get("bizType")) != "32" or str(order.get("orderStatus")) != "1":
+            continue
+        issue_date = _business_date(order.get("bizAt"), "bizAt")
+        order_id = _text(order.get("id"), "stockOrder.id")
+        for detail in _source_rows(order, "orderDetails"):
+            detail_id = _text(detail.get("id"), "stockOrderDetail.id")
+            line_id = f"{order_id}:{detail_id}"
+            if ":" in order_id or ":" in detail_id or len(line_id) > 200:
+                raise ValueError("领料单据与明细复合键格式错误")
+            code = _text(detail.get("associatedBizOrderCode"), "workOrderCode", nullable=True)
+            linked = (str(detail.get("associatedBizOrderType")) == "10"
+                      and _matched_project(projects, code, detail.get("associatedBizOrderId")))
+            rows.append({
+                "lineId": line_id,
+                "issueDate": issue_date,
+                "workOrderCode": code if linked else None,
+                "materialCode": _text(detail.get("productCode"), "materialCode"),
+                "materialName": _text(detail.get("productName"), "materialName", nullable=True),
+                "unit": _text(detail.get("unitName"), "unit", nullable=True),
+                **_amounts(detail, _ISSUE_AMOUNTS, required=("quantity",)),
+            })
+    return sorted(rows, key=lambda row: row["lineId"])
+
+
 def build_request(config: dict, cycle: dict, payload: dict) -> dict:
     finished = datetime.fromisoformat(cycle["finished"])
     if finished.tzinfo is None:
         finished = finished.replace(tzinfo=timezone.utc)
-    rows = project_report_output(payload)
-    if len(rows) > MAX_ROWS:
-        raise SystemExit(f"汇总后 {len(rows)} 行，超过服务端上限 {MAX_ROWS}")
+    source = payload.get("data") or {}
+    datasets = {DATASET: project_report_output(payload)}
+    projects = _project_index(source) if "project_cost" in source or "stock_order" in source else {}
+    if "project_cost" in source:
+        datasets["project_cost"] = project_work_order_cost(source, projects)
+    if "stock_order" in source:
+        datasets["production_issue"] = project_production_issue(source, projects)
+    for name, rows in datasets.items():
+        if len(rows) > MAX_ROWS:
+            raise SystemExit(f"{name} 汇总后 {len(rows)} 行，超过服务端上限 {MAX_ROWS}")
     body = {
         "system": SYSTEM,
         "sourceOrgId": str(config["source_factory_id"]),
         "collectedAt": finished.astimezone(timezone.utc).isoformat(timespec="seconds"),
         "collectorRunId": str(cycle["id"])[:80],
-        "datasets": {DATASET: rows},
+        "datasets": datasets,
     }
     size = len(encode_body(body))
     if size > MAX_BODY_BYTES:
-        raise SystemExit(f"请求体 {size} 字节，超过服务端上限 {MAX_BODY_BYTES}（{len(rows)} 行）")
+        raise SystemExit(f"请求体 {size} 字节，超过服务端上限 {MAX_BODY_BYTES}")
     return body
 
 
@@ -248,10 +403,12 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "unmeasured", "reason": str(e)}, ensure_ascii=False))
         return 2
     rows = len(body["datasets"][DATASET])
+    counts = {name: len(lines) for name, lines in body["datasets"].items()}
     if args.out:
         args.out.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
     if args.dry_run:
-        print(json.dumps({"status": "dry-run", "collectedAt": body["collectedAt"], "rows": rows}, ensure_ascii=False))
+        print(json.dumps({"status": "dry-run", "collectedAt": body["collectedAt"], "rows": rows,
+                          "datasetRows": counts}, ensure_ascii=False))
         return 0
     token = load_token(args.token_file)
     if not token:
@@ -264,7 +421,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     ok = code == 200 and resp.get("success") is True
     print(json.dumps({"status": "pushed" if ok else "rejected", "http": code, "collectedAt": body["collectedAt"],
-                      "rows": rows, "message": resp.get("message"), "data": resp.get("data") if ok else None},
+                      "rows": rows, "datasetRows": counts, "message": resp.get("message"),
+                      "data": resp.get("data") if ok else None},
                      ensure_ascii=False))
     return 0 if ok else 1
 

@@ -4,6 +4,7 @@ import com.cretas.aims.dto.source.CreateSourceIndividualRequest;
 import com.cretas.aims.dto.source.UpdateSourceIndividualRequest;
 import com.cretas.aims.exception.BusinessException;
 import com.cretas.aims.repository.MaterialBatchRepository;
+import com.cretas.aims.repository.datacenter.OperationLogRepository;
 import com.cretas.aims.repository.source.SourceIndividualRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -59,7 +60,7 @@ class SourceIndividualPedigreeCycleContractTest {
 
     @BeforeEach
     void setUp() {
-        service = new SourceIndividualService(repository);
+        service = new SourceIndividualService(repository, org.mockito.Mockito.mock(OperationLogRepository.class));
         ReflectionTestUtils.setField(service, "materialBatchRepository", materialBatchRepository);
         tx = new TransactionTemplate(txManager);
         factory = "F-PC-" + UUID.randomUUID().toString().substring(0, 8);

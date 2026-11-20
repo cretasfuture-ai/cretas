@@ -5,8 +5,8 @@
 #
 # 要把检查设成「必需」并开合并队列, 每个检查必须:
 #   (a) 在 pull_request 上【总是】报告结果 —— workflow 级 paths 过滤掉的 run 根本不出现,
-#       必需检查会永远挂起; ⇒ pull_request 不带 paths, 改由 changes 作业判定, 原作业按 run 跳过
-#       (被 if 跳过的作业对必需检查算通过);
+#       必需检查会永远挂起; ⇒ pull_request 不带 paths, 改由 changes 作业判定, 下游按 run 跳过工作。
+#       动态命名的必需检查仅跳过步骤，GitHub 才会展开检查名;
 #   (b) 在 merge_group 事件上也运行; 2026-11-19 起合并组也按 diff 判定 (base/head 取 merge_group 的
 #       base_sha/head_sha, base 是父提交 = main 或前一组), 只跑改动相关的检查。
 #       🔴 安全前提是合并队列 grouping_strategy=ALLGREEN (每组都要自己全绿), 详见 changed-paths.py 文件头。
@@ -15,8 +15,9 @@
 #   1. 11 个 PR workflow 都有 `merge_group: types: [checks_requested]`;
 #   2. 9 个原带 paths 的 workflow: pull_request 不再有 paths / paths-ignore; 有 changes 作业
 #      (托管 runner 字面量 + timeout + outputs.run + 调 changed-paths.py 读自己的清单);
-#      每个非 changes 作业 needs changes, if 用 fail-safe 写法 `needs.changes.outputs.run != 'false'`
-#      并带 `!cancelled()` 或 `always()` (changes 自己失败时下游照跑, ⛔ 不让仪器坏掉变成「跳过=通过」);
+#      每个非 changes 作业 needs changes, if 带 `!cancelled()` 或 `always()`;
+#      `needs.changes.outputs.run != 'false'` 用在作业级，动态命名的四个必需检查在步骤级过滤，
+#      并先显式拒绝 changes 失败 (⛔ 不让仪器坏掉变成「跳过=通过」);
 #      filter 步骤 BASE_SHA/HEAD_SHA 接 `pull_request.*.sha || merge_group.*_sha`;
 #      清单文件存在、含 changed-paths.py 与自身; 若 push 仍带 paths, 必须与清单 (去掉两条仪器行) 逐条相同 (形态 D);
 #   3. concurrency group 在 merge_group 下仍唯一 (含 github.ref), 否则队列运行互相取消;
@@ -55,6 +56,9 @@ PLAIN = ["secret-regression", "source-hygiene"]
 MG_BASE = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
 MG_HEAD = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
 INFRA = ["scripts/ci/changed-paths.py"]  # + scripts/ci/trigger-paths/<name>.txt
+PATH_GUARD = "needs.changes.outputs.run != 'false'"
+STEP_FILTERED = {("java-gate-pr", "fast-contracts"), ("java-gate-pr", "postgres-reversal-concurrency"),
+                 ("rn-gate", "jest"), ("web-admin-gate", "vitest")}
 
 problems = []
 checks = 0
@@ -145,8 +149,19 @@ def filtered_problems(name, doc, patterns_file_text=None):
         cond = str((job or {}).get("if", ""))
         if "changes" not in needs_of(job):
             bad.append("%s/%s: 没有 needs changes" % (name, jn))
-        if "needs.changes.outputs.run != 'false'" not in cond:
-            bad.append("%s/%s: if 没用 fail-safe 判定 `needs.changes.outputs.run != 'false'` (实得 %r)" % (name, jn, cond))
+        if (name, jn) in STEP_FILTERED:
+            if "needs.changes.outputs.run" in cond:
+                bad.append(f"{name}/{jn}: 路径过滤跳过整个作业，动态名称无法求值")
+            steps = job.get("steps") or []
+            guard = steps[0] if steps else {}
+            if (guard.get("if") != "${{ needs.changes.result != 'success' }}"
+                    or not str(guard.get("run", "")).rstrip().endswith("\nexit 1")
+                    or guard.get("continue-on-error", False) is not False):
+                bad.append(f"{name}/{jn}: 首个步骤必须显式拒绝 changes 失败")
+            if len(steps) < 2 or any(PATH_GUARD not in str(step.get("if", "")) for step in steps[1:]):
+                bad.append(f"{name}/{jn}: 工作步骤缺少 fail-safe 路径过滤")
+        elif PATH_GUARD not in cond:
+            bad.append(f"{name}/{jn}: if 没用 fail-safe 判定 `{PATH_GUARD}` (实得 {cond!r})")
         if "!cancelled()" not in cond and "always()" not in cond:
             bad.append("%s/%s: if 缺 !cancelled()/always() —— changes 失败时下游会被跳过 (=必需检查通过)" % (name, jn))
     return bad
@@ -214,9 +229,9 @@ neg += bool(filtered_problems("web-admin-gate", d))
 d = copy.deepcopy(docs["java-gate-pr"])
 d["jobs"]["fast-contracts"]["needs"] = "fast-contracts-shard"
 neg += bool(filtered_problems("java-gate-pr", d))
-d = copy.deepcopy(docs["rn-gate"])
-d["jobs"]["jest"]["if"] = "${{ needs.changes.outputs.run == 'true' }}"
-neg += bool(filtered_problems("rn-gate", d))
+d = copy.deepcopy(docs["python-gate"])
+d["jobs"]["pytest"]["if"] = "${{ !cancelled() && needs.changes.outputs.run == 'true' }}"
+neg += bool(filtered_problems("python-gate", d))
 d = copy.deepcopy(docs["ops-script-tests"])
 d["concurrency"]["group"] = "x-${{ github.event.pull_request.number }}"
 neg += bool(concurrency_problems("neg", d))
@@ -226,11 +241,20 @@ neg += bool(filtered_problems("fresh-db-progress", d))
 d = copy.deepcopy(docs["python-gate"])
 [s for s in d["jobs"]["changes"]["steps"] if s.get("id") == "filter"][0]["env"]["BASE_SHA"] =     "${{ github.event.pull_request.base.sha }}"
 neg += bool(filtered_problems("python-gate", d))
-print("READING: negative_controls_red=%d/7" % neg)
-if neg != 7:
-    problems.append("阴性对照只有 %d/7 判红 —— 判定函数恒真" % neg)
+d = copy.deepcopy(docs["rn-gate"])
+d["jobs"]["jest"]["if"] = "${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}"
+neg += filtered_problems("rn-gate", d) == ["rn-gate/jest: 路径过滤跳过整个作业，动态名称无法求值"]
+d = copy.deepcopy(docs["web-admin-gate"])
+d["jobs"]["vitest"]["steps"][0]["continue-on-error"] = True
+neg += filtered_problems("web-admin-gate", d) == ["web-admin-gate/vitest: 首个步骤必须显式拒绝 changes 失败"]
+d = copy.deepcopy(docs["java-gate-pr"])
+d["jobs"]["fast-contracts"]["steps"][-1].pop("if")
+neg += filtered_problems("java-gate-pr", d) == ["java-gate-pr/fast-contracts: 工作步骤缺少 fail-safe 路径过滤"]
+print("READING: negative_controls_red=%d/10" % neg)
+if neg != 10:
+    problems.append("阴性对照只有 %d/10 判红 —— 判定函数恒真" % neg)
 ok("阴性对照: 去 merge_group / 加回 paths / 拿掉 needs / if 用 == 'true' / group 只用 PR 号 / 删 changes / "
-   "filter 不接 merge_group sha 都会红")
+   "filter 不接 merge_group sha / 作业级路径过滤 / 忽略 changes 失败 / 工作步骤缺路径过滤都会红")
 
 # ── 4. changed-paths.py 单测 ────────────────────────────────────────────────────
 def run_cp(args, cwd, env_extra=None):

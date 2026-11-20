@@ -2139,6 +2139,13 @@ public class ResultFormatterServiceImpl implements ResultFormatterService {
             case "grossProfit" -> "毛利";
             case "marginRate" -> "毛利率(%)";
             case "costCoverage" -> "成本覆盖率(%)";
+            // 趋势分析兜底摘要 (ProcessingServiceImpl 趋势分析的 5 条序列 + 周期天数): 原先直接露英文字段名 (BP 问题 47)
+            case "period" -> "统计周期(天)";
+            case "productionTrend" -> "产量趋势数据点";
+            case "qualityTrend" -> "质量趋势数据点";
+            case "costTrend" -> "成本趋势数据点";
+            case "materialTrend" -> "原料趋势数据点";
+            case "equipmentTrend" -> "设备趋势数据点";
             default -> key;
         };
     }

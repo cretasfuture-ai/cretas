@@ -28,10 +28,18 @@ import logging
 from datetime import date
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
+from common.tenant_identity import require_same_factory
 from smartbi.gold.factory_production_etl import batch_yield_rate
+from smartbi.services.external_production import (
+    external_cost_payload,
+    external_production_payload,
+    load_external_cost,
+    load_external_production,
+)
 from smartbi.services.factory_charts import cost_scope as process_secret
+from smartbi_compat._rbac_role import ANALYTICS_READ_ROLES
 from smartbi_compat._rbac_strip import PRICE_VIEW_ROLES, strip_price_for_role
 
 logger = logging.getLogger(__name__)
@@ -334,6 +342,62 @@ def _row_to_dict(row) -> dict:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@router.get("/external-production")
+async def external_production(
+    request: Request,
+    factory_id: str | None = None,
+    startDate: date | None = None,
+    endDate: date | None = None,
+    summaryOnly: bool = False,
+):
+    """Return Blacklake data when the selected period has no native production."""
+    tenant = require_same_factory(request, factory_id)
+    if _get_role(request) not in ANALYTICS_READ_ROLES:
+        raise HTTPException(403, "当前身份没有经营分析查看权限")
+    if startDate and endDate and startDate > endDate:
+        raise HTTPException(422, "开始日期不能晚于结束日期")
+    try:
+        data = await load_external_production(tenant, startDate, endDate, summary_only=summaryOnly)
+    except ValueError as exc:
+        return {"success": False, "data": None, "message": str(exc)}
+    except Exception:
+        logger.exception("[external-production] read failed for %s", tenant)
+        return {"success": False, "data": None, "message": "黑湖生产数据读取失败，请重试"}
+    return {"success": True, "data": external_production_payload(data) if data else None, "message": ""}
+
+
+@router.get("/external-cost")
+async def external_cost(
+    request: Request,
+    factory_id: str | None = None,
+    startDate: date | None = None,
+    endDate: date | None = None,
+):
+    tenant = require_same_factory(request, factory_id)
+    role = _get_role(request)
+    if role not in ANALYTICS_READ_ROLES:
+        raise HTTPException(403, "当前身份没有经营分析查看权限")
+    if startDate and endDate and startDate > endDate:
+        raise HTTPException(422, "开始日期不能晚于结束日期")
+    try:
+        data = await load_external_cost(tenant, startDate, endDate)
+    except Exception:
+        logger.exception("[external-cost] read failed for %s", tenant)
+        return {"success": False, "data": None, "message": "黑湖成本数据读取失败，请重试"}
+    if data is None:
+        return {"success": True, "data": None, "message": ""}
+    permission_message = None
+    if not _can_view_cost(role):
+        permission_message = "当前身份没有成本查看权限"
+    elif data.work_orders or data.issues:
+        # Blacklake's product codes are not Cretas product IDs. Until a
+        # verified mapping exists, only full factory cost access is sufficient.
+        scope = await process_secret.resolve_cost_scope(request, tenant, [])
+        if not scope.is_full:
+            permission_message = scope.reason or "当前成本授权范围不包含全部黑湖工单"
+    return {"success": True, "data": external_cost_payload(data, permission_message=permission_message), "message": ""}
+
 
 @router.get("/cost-structure")
 async def cost_structure(

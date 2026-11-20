@@ -61,6 +61,18 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Pin Aliyun SDK transitive ranges to avoid Maven metadata lookups. -->
+            <dependency>
+                <groupId>com.aliyun</groupId>
+                <artifactId>aliyun-java-sdk-core</artifactId>
+                <version>4.5.10</version>
+            </dependency>
+            <dependency>
+                <groupId>com.aliyun</groupId>
+                <artifactId>tea</artifactId>
+                <version>1.2.7</version>
+            </dependency>
+
             <!-- gRPC BOM for consistent version management -->
             <dependency>
                 <groupId>io.grpc</groupId>

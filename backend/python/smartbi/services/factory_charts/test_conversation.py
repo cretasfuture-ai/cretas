@@ -1,4 +1,6 @@
 import json
+import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -81,7 +83,7 @@ def test_engine_known_trusted_families_have_generic_labels_before_source_prefix(
 
 
 @pytest.mark.asyncio
-async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
+async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch):
     async def call(_slot, payload, **kwargs):
         import json as _json
         assert kwargs['timeout'] == 6 and kwargs['total_timeout'] == 10
@@ -104,17 +106,62 @@ async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
     ])
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one'] and mode['mode'] == 'rule'
 
-    async def duplicate(_slot, _payload, **kwargs):
+    async def raw_ids(_slot, _payload, **kwargs):
         return {'choices': [{'message': {'content': '{"selected_ids":["one","two"]}'}}]}
 
-    monkeypatch.setattr('common.llm_router.call_chain', duplicate)
+    monkeypatch.setattr('common.llm_router.call_chain', raw_ids)
     selected, mode = await conversation.plan('看多维度', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产', 'metric': '产量', 'unit': 'kg'},
         {'id': 'two', 'familyId': 'production.output', 'chartType': 'bar', 'domain': '生产', 'metric': '产量', 'unit': 'kg'},
     ])
     assert selected == [] and mode['mode'] == 'unavailable'
+
+
+@pytest.mark.parametrize(
+    'families, expected, duplicates',
+    [
+        pytest.param(['output', 'quality', 'output'], ['candidate-0', 'candidate-1'], 1, id='three-selections'),
+        pytest.param(['output', 'quality', 'output', 'stock', 'cost'],
+                     ['candidate-0', 'candidate-1', 'candidate-3', 'candidate-4'], 1, id='limit-after-dedup'),
+        pytest.param(['output', 'quality', 'sales', 'stock', 'cost'], [], 0, id='five-distinct-families'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_plan_validates_count_after_family_dedup(monkeypatch, caplog, families, expected, duplicates):
+    catalog = [
+        {'id': f'candidate-{index}', 'familyId': family, 'chartType': 'line' if index < 2 else 'bar'}
+        for index, family in enumerate(families)
+    ]
+    validations = []
+
+    async def fake_call(_slot, payload, *, content_validator, **kwargs):
+        provider_catalog = json.loads(payload['messages'][1]['content'])['catalog']
+        content = json.dumps({'selected_ids': [item['id'] for item in provider_catalog]})
+        rejection = content_validator(content)
+        validations.append(rejection)
+        if rejection:
+            raise LLMChainExhausted('chart', [f'fake/chart: invalid_{rejection}'])
+        return {'choices': [{'message': {'content': content}}]}
+
+    monkeypatch.setattr('common.llm_router.call_chain', fake_call)
+    with caplog.at_level(logging.INFO, logger=conversation.__name__):
+        selected, mode = await conversation.plan('看图表', catalog)
+
+    if expected:
+        assert mode['mode'] == 'ai'
+        assert selected == expected
+        assert validations == [None]
+        assert caplog.messages.count(
+            f'Factory conversation planner removed {duplicates} duplicate chart selections by family'
+        ) == 1
+    else:
+        assert selected == []
+        assert mode == {'mode': 'unavailable', 'reason': '当前授权目录没有与问题匹配的图表'}
+        assert validations == ['planner selection count invalid']
+        assert any(record.levelno == logging.WARNING and 'fake/chart: invalid_planner selection count invalid'
+                   in record.getMessage() for record in caplog.records)
 
 
 def _planner_catalog():
@@ -171,7 +218,7 @@ async def test_mixed_duplicate_family_and_quota_chain_gets_one_retry(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_duplicate_family_second_failure_is_unavailable_without_third_call(monkeypatch):
+async def test_duplicate_family_second_failure_uses_rules_without_third_call(monkeypatch):
     calls = 0
 
     async def call(_slot, _payload, **_kwargs):
@@ -183,7 +230,7 @@ async def test_duplicate_family_second_failure_is_unavailable_without_third_call
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 2
 
 
@@ -204,7 +251,7 @@ async def test_quota_timeout_and_other_invalid_do_not_trigger_replan(monkeypatch
 
         monkeypatch.setattr('common.llm_router.call_chain', call)
         selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
-        assert selected == [] and mode['mode'] == 'unavailable'
+        assert selected == ['one', 'two'] and mode['mode'] == 'rule'
         assert calls == 1
 
 
@@ -223,7 +270,7 @@ async def test_non_router_exception_with_errors_attribute_does_not_replan(monkey
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 1
 
 
@@ -242,12 +289,12 @@ async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatc
     monkeypatch.setattr('common.llm_router.call_chain', call)
     selected, mode = await conversation.plan('看生产和质量', _planner_catalog())
 
-    assert selected == [] and mode['mode'] == 'unavailable'
+    assert selected == ['one', 'two'] and mode['mode'] == 'rule'
     assert calls == 1
 
 
 @pytest.mark.asyncio
-async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch):
+async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(monkeypatch, caplog):
     calls = []
     oversized_metric = 'x' * 49200
 
@@ -266,8 +313,8 @@ async def test_retry_payload_over_50kb_is_rejected_without_second_provider_call(
         'domain': '生产', 'metric': oversized_metric, 'unit': 'kg',
     }])
 
-    assert selected == [] and mode['mode'] == 'unavailable'
-    assert '超过安全上限' in mode['reason']
+    assert selected == ['large'] and mode['mode'] == 'rule'
+    assert 'planner correction payload exceeds 50000 bytes' in caplog.text
     assert len(calls) == 1
 
 
@@ -321,6 +368,40 @@ def test_generic_product_language_and_year_in_product_label_do_not_become_subjec
     scope = {'year': 2026, 'period_type': 'all', 'start_month': 1, 'end_month': 12, 'guided': True}
     resolved, error = conversation.resolve_period('产品2025成本', scope)
     assert not error and resolved == scope
+
+
+_LIUSHANMEN_QUESTIONS_PATH = Path(__file__).resolve().parents[5] / 'docs/smartbi/liushanmen-blacklake/questions.md'
+_LIUSHANMEN_QUESTIONS = [
+    line.split('|', 2)[1].strip()
+    for line in _LIUSHANMEN_QUESTIONS_PATH.read_text(encoding='utf-8').splitlines()
+    if line.startswith('| 11 月')
+]
+_LIUSHANMEN_PRODUCT = 'blacklake-product'
+_LIUSHANMEN_SUBJECTS = [{'id': _LIUSHANMEN_PRODUCT, 'label': '牛肉丝 · C P2026100002', 'sku': 'C P2026100002'}]
+
+
+@pytest.mark.parametrize(
+    'number, question',
+    enumerate(_LIUSHANMEN_QUESTIONS, start=1),
+    ids=[f'question-{number:02d}' for number in range(1, 13)],
+)
+def test_liushanmen_question_product_scope(number, question):
+    expected = _LIUSHANMEN_PRODUCT if number in {3, 8, 10} else None
+    assert conversation.resolve_subject(question, _LIUSHANMEN_SUBJECTS) == (expected, None)
+
+
+@pytest.mark.parametrize('question, expected', [
+    ('哪几个产品良品量最多？', (None, None)),
+    ('良品量最多的产品是哪几个？', (None, None)),
+    ('产品有哪些？', (None, None)),
+    ('什么产品卖得最好？', (None, None)),
+    ('有多少产品入库？', (None, None)),
+    ('产品 C P2026100002 的良品量？', (_LIUSHANMEN_PRODUCT, None)),
+    ('产品：牛肉丝', (_LIUSHANMEN_PRODUCT, None)),
+    ('产品：未知品', (None, '问题中的产品不在当前工厂授权数据目录中')),
+])
+def test_generic_and_explicit_product_phrases(question, expected):
+    assert conversation.resolve_subject(question, _LIUSHANMEN_SUBJECTS) == expected
 
 
 def test_relative_periods_are_supported_or_fail_closed():
@@ -880,6 +961,8 @@ def test_context_source_and_upload_are_immutable_metadata():
 async def test_commerce_joint_asgi_uses_every_real_relationship_without_production_subject(monkeypatch, failure):
     from . import test_commerce_joint as fixture
     from .trusted_business_sources import COMMERCE_JOINT_SOURCE
+    conversation.clear_contexts()
+    provider_calls = []
     frame, gaps = fixture.prepared([fixture.sale('l1', 'o1')],
                                    [fixture.shipment('l1', 'o1', 'b1')],
                                    [fixture.inventory('b1', available='7')])
@@ -923,6 +1006,7 @@ async def test_commerce_joint_asgi_uses_every_real_relationship_without_producti
 
     async def provider(_slot, payload, **kwargs):
         catalog = json.loads(payload['messages'][1]['content'])['catalog']
+        provider_calls.append(catalog)
         assert {item['familyId'] for item in catalog} == expected
         ids = [item['id'] for item in catalog]
         content = json.dumps({'selected_ids': ids[:1] if failure == 'provider_omits' else ids})
@@ -941,15 +1025,17 @@ async def test_commerce_joint_asgi_uses_every_real_relationship_without_producti
     app.include_router(api.router)
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
         result = await client.post('/factory-analysis', json={'question': '联合看客户渠道销售、发货和库存'})
+    assert len(provider_calls) == 1
     if failure == 'permission_denied':
         assert result.status_code == 403
         return
     assert result.status_code == 200
     data = result.json()['data']
-    if failure:
+    if failure == 'fresh_source_missing':
         assert data['status'] == 'unavailable' and not data['facts'] and not data['recommendations']
     else:
         assert data['status'] == 'answered'
+        assert data['plannerMode']['mode'] == ('rule' if failure == 'provider_omits' else 'ai')
         assert {item['analysis']['familyId'] for item in data['recommendations']} == expected
         assert any(fact['value'] == 7 for fact in data['facts'])
         assert any('分别核验' in text for text in data['limitations'])

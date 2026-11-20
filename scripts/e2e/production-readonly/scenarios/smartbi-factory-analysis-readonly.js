@@ -1,6 +1,7 @@
 'use strict';
 
 const { runReadOnlyPageScenario } = require('./_shared');
+const { assertFactoryAnalysisFactory, isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 const {
   FOLLOWUP_ROUNDS,
   lifecycleBaseline,
@@ -10,7 +11,6 @@ const {
 } = require('./smartbi-factory-analysis-lifecycle');
 
 const PATH = '/smart-bi/analysis?tab=query&mode=factory';
-const ANALYSIS_PATH = /^\/api\/mobile\/[^/]+\/smart-bi\/factory-analysis\/?$/;
 const DETAILS_PATH = '/smartbi-api/api/smartbi/financial-dashboard/factory-details';
 const QUESTION = '汇总当前库存、生产和销售表现';
 const JOINT_QUESTION = '关联生产、检验和成本做多表分析';
@@ -25,8 +25,8 @@ function endpointPath(url) {
   try { return new URL(url).pathname; } catch { return String(url || '').split('?')[0]; }
 }
 
-function isAnalysisResponse(response) {
-  return response.request().method() === 'POST' && ANALYSIS_PATH.test(endpointPath(response.url()));
+function isAnalysisResponse(response, expectedFactoryId) {
+  return response.request().method() === 'POST' && isFactoryAnalysisUrl(response.url(), expectedFactoryId);
 }
 
 function isDetailsResponse(response) {
@@ -78,7 +78,9 @@ async function runFactoryAnalysisLifecycle(page, inspectCtx, initialBody, initia
       rounds.push({ round, pass: false, reason: 'missing-followup-control' });
       break;
     }
-    const responsePromise = page.waitForResponse(isAnalysisResponse, { timeout: 30_000 });
+    const responsePromise = page.waitForResponse(
+      response => isAnalysisResponse(response, inspectCtx.expectedFactoryId), { timeout: 30_000 },
+    );
     await followup.click();
     const response = await responsePromise;
     const body = await responseBody(response);
@@ -343,7 +345,7 @@ function qualitySemantic(value) {
   return /(quality|inspection|defect|良品|质量|检验|不良|production\.fused)/iu.test(String(value || ''));
 }
 
-function summaryFromResponse(status, body, request) {
+function summaryFromResponse(status, body, request, expectedFactoryId = 'F006') {
   const data = body?.data || {};
   const recommendations = Array.isArray(data.recommendations) ? data.recommendations : [];
   const facts = Array.isArray(data.facts) ? data.facts : [];
@@ -364,7 +366,7 @@ function summaryFromResponse(status, body, request) {
     answered: data.status === 'answered',
     unavailable: data.status === 'unavailable',
     clarification: data.status === 'clarification',
-    factoryScope: data.factoryId === 'F006',
+    factoryScope: data.factoryId === expectedFactoryId,
     source: data.source || null,
     period: periodSignature(data.period),
     recommendationCount: recommendations.length,
@@ -405,7 +407,7 @@ function assessJoint({ initial, selected, ui, details, exportAttempt }) {
     initialClarification: initialSummary.clarification === true,
     selectedSubjectRetried: selected?.attempted === true,
     selectedSubjectProvided: selectedSummary.requestSubjectPresent === true,
-    selectedFactoryF006: selectedSummary.factoryScope === true,
+    selectedFactoryScope: selectedSummary.factoryScope === true,
     selectedSourceBusiness: selectedSummary.source === 'business',
     selectedAnswered: selectedSummary.answered === true,
     fusedFamily: hasFused,
@@ -441,7 +443,7 @@ function assess({ initial, followup, ui, details, exportAttempt, joint, uploaded
   const checks = {
     initialHttp200: initialSummary.http200 === true,
     initialSuccess: initialSummary.envelopeSuccess === true,
-    factoryF006: initialSummary.factoryScope === true && followupSummary.factoryScope === true,
+    factoryScope: initialSummary.factoryScope === true && followupSummary.factoryScope === true,
     sourceBusiness: initialSummary.source === 'business' && followupSummary.source === 'business',
     samePeriod: Boolean(initialSummary.period) && initialSummary.period === followupSummary.period,
     answeredWithChartsAndFacts: initialAnswered && initialSummary.recommendationCount > 0 && initialSummary.factCount > 0,
@@ -596,6 +598,10 @@ async function downloadExportFormats(page, answer, evidenceDir, prefix, timeout 
 }
 
 async function run(ctx) {
+  const { expectedFactoryId, loginEvidence } = ctx;
+  assertFactoryAnalysisFactory(expectedFactoryId);
+  if (loginEvidence?.factoryId !== expectedFactoryId) throw new Error('Factory AI acceptance requires a matching authenticated factory');
+  const matchesAnalysisResponse = response => isAnalysisResponse(response, expectedFactoryId);
   return runReadOnlyPageScenario(ctx, {
     id: 'smartbi-factory-analysis-readonly',
     path: PATH,
@@ -603,11 +609,10 @@ async function run(ctx) {
     timeoutMs: 60_000,
     appMountTimeoutMs: 90_000,
     inspect: async (page, _body, inspectCtx) => {
-      if (inspectCtx.expectedFactoryId !== 'F006') throw new Error('Factory AI acceptance is limited to F006');
       await page.getByTestId('factory-analysis-chat').waitFor({ timeout: 60_000 });
       const initialResponse = await waitForResponse(
         page,
-        isAnalysisResponse,
+        matchesAnalysisResponse,
         async () => {
           await page.getByTestId('factory-analysis-input').fill(QUESTION);
           await page.getByTestId('factory-analysis-submit').click();
@@ -616,7 +621,7 @@ async function run(ctx) {
       const initialBody = await responseBody(initialResponse);
       const initial = {
         status: initialResponse.status(),
-        summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse)),
+        summary: summaryFromResponse(initialResponse.status(), initialBody, requestBody(initialResponse), expectedFactoryId),
       };
 
       const uploadedJoint = validateUploadedJointOptions(
@@ -656,7 +661,7 @@ async function run(ctx) {
           const detailResponse = await responsePromise;
           const detailBody = detailResponse ? await responseBody(detailResponse) : {};
           details.success = Boolean(detailResponse && detailResponse.status() === 200 && detailBody.success === true
-            && detailBody.data?.factoryId === 'F006' && Array.isArray(detailBody.data?.rows));
+            && detailBody.data?.factoryId === expectedFactoryId && Array.isArray(detailBody.data?.rows));
           details.drawerVisible = await page.locator('.el-drawer:visible').count() > 0;
         }
       }
@@ -682,11 +687,11 @@ async function run(ctx) {
         : false;
       let followup = { summary: {} };
       if (await followupButton.count()) {
-        const followupResponse = await waitForResponse(page, isAnalysisResponse, () => followupButton.click());
+        const followupResponse = await waitForResponse(page, matchesAnalysisResponse, () => followupButton.click());
         const followupBody = await responseBody(followupResponse);
         followup = {
           status: followupResponse.status(),
-          summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse)),
+          summary: summaryFromResponse(followupResponse.status(), followupBody, requestBody(followupResponse), expectedFactoryId),
         };
       }
 
@@ -704,7 +709,7 @@ async function run(ctx) {
       if (await newAnalysisButton.count()) {
         const jointInitialResponse = await waitForResponse(
           page,
-          isAnalysisResponse,
+          matchesAnalysisResponse,
           async () => {
             await newAnalysisButton.click();
             await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
@@ -714,7 +719,7 @@ async function run(ctx) {
         const jointInitialBody = await responseBody(jointInitialResponse);
         jointInitial = {
           status: jointInitialResponse.status(),
-          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse)),
+          summary: summaryFromResponse(jointInitialResponse.status(), jointInitialBody, requestBody(jointInitialResponse), expectedFactoryId),
         };
 
         const subjects = Array.isArray(jointInitialBody?.data?.subjects) ? jointInitialBody.data.subjects : [];
@@ -730,12 +735,12 @@ async function run(ctx) {
           await subjectOption.click();
           const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
           await retryButton.waitFor({ timeout: 15_000 });
-          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          const selectedResponse = await waitForResponse(page, matchesAnalysisResponse, () => retryButton.click());
           jointSelectedBody = await responseBody(selectedResponse);
           jointSelected = {
             attempted: true,
             status: selectedResponse.status(),
-            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse)),
+            summary: summaryFromResponse(selectedResponse.status(), jointSelectedBody, requestBody(selectedResponse), expectedFactoryId),
           };
 
           if (jointSelected.summary.fusedCount > 0) {
@@ -752,7 +757,7 @@ async function run(ctx) {
                 const detailsResponse = await detailsPromise;
                 const detailBody = detailsResponse ? await responseBody(detailsResponse) : {};
                 jointDetails.success = Boolean(detailsResponse && detailsResponse.status() === 200
-                  && detailBody.success === true && detailBody.data?.factoryId === 'F006'
+                  && detailBody.success === true && detailBody.data?.factoryId === expectedFactoryId
                   && Array.isArray(detailBody.data?.rows));
                 if (await page.locator('.el-drawer:visible').count()) await page.keyboard.press('Escape').catch(() => {});
               }
@@ -783,7 +788,7 @@ async function run(ctx) {
         }
         const uploadedInitialResponse = await waitForResponse(
           page,
-          isAnalysisResponse,
+          matchesAnalysisResponse,
           async () => {
             await page.getByTestId('factory-analysis-input').fill(JOINT_QUESTION);
             await page.getByTestId('factory-analysis-submit').click();
@@ -802,7 +807,7 @@ async function run(ctx) {
           await subjectControl.click();
           await page.locator('[role="option"], .el-select-dropdown__item').filter({ hasText: subject.label }).first().click();
           const retryButton = page.getByRole('button', { name: '按当前产品重试', exact: true });
-          const selectedResponse = await waitForResponse(page, isAnalysisResponse, () => retryButton.click());
+          const selectedResponse = await waitForResponse(page, matchesAnalysisResponse, () => retryButton.click());
           uploadedSelected = { attempted: true, body: await responseBody(selectedResponse), request: requestBody(selectedResponse) };
           uploadedJoint.subjectId = selectedSubjectId;
           const uploadedCandidate = (uploadedSelected.body?.data?.recommendations || []).find(isFusedCandidate) || uploadedSelected.body?.data?.recommendations?.[0];
@@ -857,7 +862,7 @@ async function run(ctx) {
           }
           const followupButtons = page.locator('.followups:visible .el-button');
           const followupButton = followupButtons.filter({ hasText: '质量' }).first();
-          const followupResponse = await waitForResponse(page, isAnalysisResponse, async () => {
+          const followupResponse = await waitForResponse(page, matchesAnalysisResponse, async () => {
             if (await followupButton.count()) await followupButton.click();
             else {
               await page.getByTestId('factory-analysis-input').fill('再看质量指标');
@@ -934,6 +939,7 @@ module.exports = {
   assessUploadedJoint,
   id: 'smartbi-factory-analysis-readonly',
   defaultEnabled: false,
+  validateFactory: assertFactoryAnalysisFactory,
   run,
   assess,
   assessJoint,
