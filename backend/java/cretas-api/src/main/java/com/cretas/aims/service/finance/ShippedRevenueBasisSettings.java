@@ -56,6 +56,7 @@ public final class ShippedRevenueBasisSettings {
     }
 
     private static BusinessException invalidSettings() {
-        return new BusinessException(409, "工厂生产设置格式异常，请修复设置后重新查询发货收入口径");
+        return new BusinessException(409, "工厂生产设置格式异常")
+                .withHint("请联系工厂管理员修复生产设置后重新查询发货收入口径");
     }
 }

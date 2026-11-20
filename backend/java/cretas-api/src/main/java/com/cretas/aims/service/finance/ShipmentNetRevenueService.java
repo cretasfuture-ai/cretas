@@ -103,7 +103,8 @@ public class ShipmentNetRevenueService {
     }
 
     private static BusinessException missing(String message) {
-        return new BusinessException(409, message);
+        return new BusinessException(409, message)
+                .withHint("请核对销售订单、发运单或退货单的缺失凭据后重新查询");
     }
 
     record Adjustments(BigDecimal discount, BigDecimal returns, boolean hasReturns) {}
