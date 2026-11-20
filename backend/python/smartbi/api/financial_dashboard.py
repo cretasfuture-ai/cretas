@@ -236,7 +236,6 @@ async def factory_recommendations(request: FactoryRecommendationRequest, http_re
     if subject_gap:
         gaps.append(subject_gap)
     errors.extend({'source': gap['title'], 'message': gap['missing'][0]} for gap in gaps if gap.get('error'))
-    gaps = [gap for gap in gaps if not gap.get('error')]
     candidates, order = await ranking.rank(candidates, request.use_ai, cache_scope=f'{factory_id}:{role}')
     # These three legacy gaps describe missing capture, not missing data in
     # unrelated datasets. Remove each only after its trusted business adapter

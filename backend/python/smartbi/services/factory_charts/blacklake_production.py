@@ -78,8 +78,8 @@ async def load(factory_id, request):
             "产品编码": row["product_code"],
             "工序": row["process_name"],
             "单位": row["unit"],
-            "良品数": row["good_qty"],
-            "不良数": row["defect_qty"],
+            "良品数": float(row["good_qty"]),
+            "不良数": float(row["defect_qty"]),
         }
         for row in data.rows
     ])
@@ -107,7 +107,7 @@ def build(dataset):
     for unit, unit_rows in frame[frame["单位"].ne("")].groupby("单位"):
         # Separate stage comparison: the points are comparable within a unit,
         # but summing across stages would count some production more than once.
-        stages = unit_rows[unit_rows["工序"].ne("")].groupby("工序")[["良品数", "不良数"]].sum()
+        stages = unit_rows[unit_rows["工序"].ne("")].groupby("工序")[["良品数", "不良数"]].sum(numeric_only=False)
         for metric, key in (("良品数", "good"), ("不良数", "defects")):
             add(f"process.{key}@{unit}", f"按工序{metric}", unit,
                 [(stage, float(qty)) for stage, qty in stages[metric].items()],
@@ -119,7 +119,9 @@ def build(dataset):
             aggregate="nonadditive")
 
         finished = unit_rows[unit_rows["工序"].eq(FINISHED_PROCESS)]
-        daily = finished.groupby("日期")[["良品数", "不良数"]].sum()
+        if finished.empty:
+            continue
+        daily = finished.groupby("日期")[["良品数", "不良数"]].sum(numeric_only=False)
         for metric, key in (("良品数", "good"), ("不良数", "defects")):
             add(f"finished.{key}@{unit}", f"成品入库每日{metric}", unit,
                 [(day, float(qty)) for day, qty in daily[metric].items()],
@@ -132,7 +134,7 @@ def build(dataset):
                 "line", scope=f"仅纳入成品入库工序，按 {unit} 计算不良÷（良品＋不良）", source_unit=unit,
                 aggregate="ratio", weights=(float(defect), float(good + defect)))
 
-        ranking = finished[finished["产品编码"].ne("")].groupby("产品编码")["良品数"].sum()
+        ranking = finished[finished["产品编码"].ne("")].groupby("产品编码")["良品数"].sum(numeric_only=False)
         names = finished.groupby("产品编码")["产品"].first()
         points = [(f"{names[code]} · {code}" if names[code] != code else code, float(qty))
                   for code, qty in ranking.sort_values(ascending=False, kind="stable").items()]
