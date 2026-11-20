@@ -11,11 +11,6 @@
       loading:    boolean (optional) — when true and no insight yet, shows loading placeholder
       factory-id: string (optional) — required for feedback submission; if absent, buttons hidden
 
-    Badge text:
-      source='rules'    → "数据驱动"
-      source='template' → "数据驱动·经验模板"
-      source='llm'      → "AI生成"
-      source='cache'    → "数据驱动·已缓存"
   -->
 
   <!-- Loading state: no insight yet, Tier 2 in flight -->
@@ -26,10 +21,6 @@
 
   <!-- Insight present -->
   <div v-else-if="insight" class="chart-insight-container">
-    <div class="chart-insight-badge" :class="`badge-source--${insight.source}`">
-      <span class="badge-dot" aria-hidden="true"></span>
-      {{ badgeText }}
-    </div>
     <div class="chart-insight-body">
       <!-- Finding: always shown -->
       <div class="chart-insight-finding">{{ insight.finding }}</div>
@@ -124,24 +115,6 @@ const props = withDefaults(
   },
 );
 
-/**
- * Badge text mapped from insight source:
- *   rules    → "数据驱动"
- *   template → "数据驱动·经验模板"
- *   llm      → "AI生成"
- *   cache    → "数据驱动·已缓存"
- */
-const badgeText = computed<string>(() => {
-  if (!props.insight) return '数据驱动';
-  switch (props.insight.source) {
-    case 'rules':    return '数据驱动';
-    case 'cache':    return '数据驱动·已缓存';
-    case 'template': return '数据驱动·经验模板';
-    case 'llm':      return 'AI生成';
-    default:         return '数据驱动';
-  }
-});
-
 // G4: feedback state machine — idle → submitting → done
 type VoteState = 'idle' | 'submitting' | 'done';
 const voteState = ref<VoteState>('idle');
@@ -171,7 +144,7 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
   gap: 6px;
   padding: 6px 10px;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: 12px;
   color: #909399;
   font-style: italic;
 }
@@ -200,54 +173,15 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
   background: linear-gradient(135deg, #f0f7ff 0%, #f6f9ff 100%);
   border-left: 3px solid var(--cs-primary);
   border-radius: 0 6px 6px 0;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   color: #4a5568;
-}
-
-/* LLM-generated insight uses a warmer accent */
-.chart-insight-container:has(.badge-source--llm) {
-  background: linear-gradient(135deg, #fff7f0 0%, #fffaf6 100%);
-  border-left-color: #e6a23c;
-}
-
-/* Template insight uses a teal accent */
-.chart-insight-container:has(.badge-source--template) {
-  background: linear-gradient(135deg, #f0faf5 0%, #f6fff9 100%);
-  border-left-color: #67c23a;
-}
-
-.chart-insight-badge {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--cs-primary);
-  white-space: nowrap;
-  padding-top: 1px;
-}
-
-.badge-source--llm {
-  color: #e6a23c;
-}
-
-.badge-source--template {
-  color: #67c23a;
-}
-
-.badge-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: currentColor;
-  display: inline-block;
 }
 
 .chart-insight-body {
   flex: 1;
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chart-insight-finding {
@@ -258,13 +192,13 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
 .chart-insight-implication {
   margin-top: 3px;
   color: #4a5568;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .chart-insight-suggestion {
   margin-top: 3px;
   color: #718096;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .suggestion-prefix {
@@ -299,7 +233,7 @@ async function handleVote(vote: 'up' | 'down'): Promise<void> {
 }
 
 .feedback-ack {
-  font-size: 10px;
+  font-size: 12px;
   color: #909399;
   white-space: nowrap;
 }

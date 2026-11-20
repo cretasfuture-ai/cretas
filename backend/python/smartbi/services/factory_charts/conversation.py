@@ -37,6 +37,7 @@ PLANNER_CACHE_TTL_SECONDS = 600.0
 MAX_PLANNER_CACHE_ENTRIES = 128
 _PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
+_BLACKLAKE_UNIT_COST_GAP = "黑湖数据缺少制造成本，无法计算单位成本"
 _cache_monotonic = time.monotonic
 
 
@@ -500,7 +501,7 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
     if re.search(r"单位成本|\bunit cost\b", question, re.I) and selected and all(
         str(candidate.get("source", "")).split(" · ", 1)[0] == SOURCE_KEY for candidate in selected
     ):
-        limitations.append("黑湖数据缺少制造成本，无法计算单位成本")
+        limitations.append(_BLACKLAKE_UNIT_COST_GAP)
     for candidate in selected:
         findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         explicit = findings.get("limitations") if isinstance(findings.get("limitations"), list) else []
@@ -524,23 +525,48 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
 
 def render_answer(question: str, selected: Sequence[Mapping[str, Any]], facts: Sequence[Mapping[str, Any]],
                   limitations: Sequence[str]) -> str:
-    lines = [f"已根据问题“{question[:1000]}”从当前授权图表目录选择 {len(selected)} 类分析。"]
-    if facts:
-        lines.append("可信事实：" + "；".join(
-            f"{fact['label']}={fact['value']}{fact['unit']}（来源：{fact['source']}）" for fact in facts[:8]
-        ))
-    else:
-        lines.append("当前选中的图表没有可直接呈现的 KPI 事实，请打开图表明细复核原始记录。")
+    from smartbi.services.external_production import UNAVAILABLE_MESSAGE
+
+    titles = {str(item.get("id", "")): item.get("title") or item.get("metric") for item in selected}
+    readings = []
+    for fact in facts:
+        value = fact["value"]
+        if value is None or value == "":
+            continue
+        label = fact["label"]
+        title = titles.get(fact["candidateId"])
+        if title and label in {"合计", "累计口径"}:
+            label = f"{title}（{label}）"
+        readings.append(f"{label}为{value}{fact['unit']}")
+    lines = ["；".join(readings[:8]) + "。" if readings else "暂无可直接汇总的数值，请查看下方图表明细。"]
+    if _BLACKLAKE_UNIT_COST_GAP in limitations:
+        lines.insert(0, _BLACKLAKE_UNIT_COST_GAP + "。")
+    elif UNAVAILABLE_MESSAGE in limitations and re.search(r"出成率|\byield rate\b", question, re.I):
+        lines.insert(0, UNAVAILABLE_MESSAGE + "出成率。")
+    elif selected and re.search(r"每天|每日|逐日", question):
+        from .metrics import display
+
+        first = selected[0]
+        rows = first.get("tableData")
+        title = first.get("title")
+        if title and isinstance(rows, list) and 1 <= len(rows) <= 8 and all(
+            isinstance(row, Mapping)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(row.get("label", "")))
+            and isinstance(row.get("value"), (int, float))
+            for row in rows
+        ):
+            unit = first.get("unit") or ""
+            daily = "，".join(f"{row['label']}为{display(row['value'])}{unit}" for row in rows)
+            lines.insert(0, f"{title}：{daily}。")
     findings = []
     for candidate in selected:
-        source = str(candidate.get("source", ""))
         raw_findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         for bucket in ("good", "attention", "suggestions"):
             values = raw_findings.get(bucket) if isinstance(raw_findings.get(bucket), list) else []
             labels = {"good": "做得好", "attention": "需关注", "suggestions": "建议"}
-            findings.extend(f"{labels[bucket]}：{str(value)}（来源：{source}）" for value in values[:2] if value)
+            findings.extend(f"{labels[bucket]}：{value}" for value in values[:2] if value)
     if findings:
-        lines.append("可信发现：" + "；".join(findings[:8]))
+        lines.append("分析：" + "；".join(findings[:8]))
     if limitations:
         lines.append("限制：" + "；".join(limitations[:4]))
     return "\n".join(lines)

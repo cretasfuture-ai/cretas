@@ -739,8 +739,6 @@ async def _render_factory_analysis_turn(request: FactoryAnalysisRequest, http_re
                 limitations.extend(str(item) for item in missing[:8] if item)
         limitations = list(dict.fromkeys(limitations))[:16]
     answer = conversation.render_answer(request.question, selected, facts, limitations)
-    if planner_mode.get('mode') == 'rule':
-        answer = planner_mode['reason'] + '。\n' + answer
     conversation.touch_context(context, request.question, selected_ids, unresolved_product=False,
                                unresolved_period=False, period_error=None, scope=scope)
     return _analysis_response(recommendation_data, factory_id=factory_id, source=context.source,

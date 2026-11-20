@@ -172,9 +172,27 @@ describe('BP 环形图销售收入', () => {
 
   it('页脚保留原表的万元口径和小数精度', async () => {
     replyChart = WAN_YUAN_PIE;
-    const text = insightText(await askShareAs('factory_super_admin'));
+    const w = await askShareAs('factory_super_admin');
+    expect(chatAnalysisStreamMock).toHaveBeenCalledTimes(1);
+    const text = insightText(w);
     expect(text).toContain('酱牛肉占17.2%（161.90 万元）');
+    expect(text).toContain('前3项合计占47.7%，其余5项占52.3%');
     expect(text).not.toContain('¥');
+    const footer = w.get('.chart-insight-container').text();
+    expect(footer).not.toMatch(/数据驱动|各项较分散|一起看比只盯一项/);
+    expect(w.get('.chart-insight-suggestion').text()).toContain('酱牛肉和卤鸭脖合计占33.4%，先从这两项核对本期订单的销量和成交单价');
+  });
+
+  it('饼图没有可计算的切片时显示缺数据，不生成读数', async () => {
+    replyChart = {
+      ...WAN_YUAN_PIE,
+      option: { ...WAN_YUAN_PIE.option, series: [{ ...WAN_YUAN_PIE.option.series[0], data: [] }] },
+    };
+    const w = await askShareAs('factory_super_admin');
+    expect(h.setOption).toHaveBeenCalled();
+    expect(w.text()).toContain('暂无可计算占比的数据。');
+    expect(w.find('.chart-insight-finding').exists()).toBe(false);
+    expect(w.find('.chart-insight-suggestion').exists()).toBe(false);
   });
 
   it('万元列仍受价格查看权限控制', async () => {

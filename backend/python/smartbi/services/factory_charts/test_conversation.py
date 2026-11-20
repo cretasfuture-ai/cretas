@@ -602,8 +602,10 @@ async def test_first_turn_asgi_applies_relative_year_and_month(monkeypatch):
 def test_answer_contains_trusted_findings_and_stock_question_has_no_joint_warning():
     selected = [_candidate('inventory.stock:bar', 'inventory.stock', value='20')]
     selected[0]['findings'] = {'good': ['库存已记录'], 'attention': ['不代表原因'], 'suggestions': ['回查明细']}
-    answer = conversation.render_answer('看库存', selected, conversation.facts_for(selected), [])
-    assert '可信发现' in answer and '库存已记录' in answer and '来源：production · trusted' in answer
+    facts = conversation.facts_for(selected)
+    answer = conversation.render_answer('看库存', selected, facts, [])
+    assert '分析：' in answer and '库存已记录' in answer
+    assert 'production · trusted' not in answer and facts[0]['source'] == 'production · trusted'
     catalog = [{'id': 'inventory.stock:bar', 'familyId': 'inventory.stock'}]
     assert not any('生产-质量-成本' in item for item in conversation.limitations_for(selected, catalog, '看库存'))
 
@@ -635,7 +637,14 @@ def test_joint_intent_and_findings_use_chinese_labels():
     assert not conversation.is_joint_intent('看库存')
     answer = conversation.render_answer(
         '看质量', [_candidate('quality.time-trend', 'quality.time-trend')], [], [])
-    assert '需关注：' in answer or '可信发现' not in answer
+    assert '需关注：' in answer or '分析：' not in answer
+
+
+def test_answer_reports_missing_values_without_substituting_zero():
+    selected = [_candidate('production:line', 'production.output', value=None)]
+    answer = conversation.render_answer('看产量', selected, conversation.facts_for(selected), [])
+    assert answer.splitlines()[0] == '暂无可直接汇总的数值，请查看下方图表明细。'
+    assert '为0' not in answer and '为None' not in answer
 
 
 @pytest.mark.asyncio
