@@ -311,24 +311,40 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
         from common.llm_router import call_chain, SLOT, LLMChainExhausted
-        provider_lookup = {alias: item for item, alias in ((item, aliases[str(item["id"])]) for item in semantic)}
+        provider_lookup = {aliases[str(item["id"])]: item for item in semantic}
+
+        def validated_selection(content: Any) -> tuple[list[str], int]:
+            parsed = _parse_llm_json(content)
+            if set(parsed) - {"selected_ids", "selectedIds", "reason"}:
+                raise ValueError("planner envelope contains unknown fields")
+            selected_aliases = parsed.get("selected_ids", parsed.get("selectedIds"))
+            if not isinstance(selected_aliases, list) or not selected_aliases:
+                raise ValueError("planner selection count invalid")
+
+            families: set[str] = set()
+            selected: list[str] = []
+            for alias in selected_aliases:
+                if not isinstance(alias, str) or alias not in provider_lookup:
+                    raise ValueError("planner alias outside eligible catalogue")
+                item = provider_lookup[alias]
+                family = str(item.get("familyId") or alias)
+                if family not in families:
+                    families.add(family)
+                    selected.append(str(item["id"]))
+
+            if not 1 <= len(selected) <= MAX_SELECTED_CHARTS:
+                raise ValueError("planner selection count invalid")
+            if not required_families.issubset(families):
+                raise ValueError("planner omitted requested joint relationship")
+            return selected, len(selected_aliases) - len(selected)
+
         def content_validator(content: str) -> Optional[str]:
             try:
-                checked = _parse_llm_json(content)
-                selected_aliases = checked.get("selected_ids", checked.get("selectedIds"))
-                if set(checked) - {"selected_ids", "selectedIds", "reason"}:
-                    return "planner envelope contains unknown fields"
-                if not isinstance(selected_aliases, list) or not selected_aliases or len(selected_aliases) > MAX_SELECTED_CHARTS:
-                    return "planner selection count invalid"
-                if len(set(selected_aliases)) != len(selected_aliases) or any(value not in provider_lookup for value in selected_aliases):
-                    return "planner alias outside eligible catalogue"
-                if len({str(provider_lookup[value].get("familyId") or value) for value in selected_aliases}) != len(selected_aliases):
-                    return "planner selected duplicate chart family"
-                if not required_families.issubset({provider_lookup[value].get("familyId") for value in selected_aliases}):
-                    return "planner omitted requested joint relationship"
+                validated_selection(content)
                 return None
-            except Exception as exc:
+            except ValueError as exc:
                 return str(exc)
+
         def _duplicate_family_failure(exc: Exception) -> bool:
             if not isinstance(exc, LLMChainExhausted):
                 return False
@@ -377,28 +393,12 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 response = await _call(retry_payload)
         choices = response.get("choices") if isinstance(response, Mapping) else None
         content = choices[0].get("message", {}).get("content") if choices else None
-        parsed = _parse_llm_json(content)
-        if set(parsed) - {"selected_ids", "selectedIds", "reason"}:
-            raise ValueError("planner envelope contains unknown fields")
-        selected_aliases = parsed.get("selected_ids", parsed.get("selectedIds"))
-        selected = [next(real for real, alias in aliases.items() if alias == value) for value in selected_aliases] if isinstance(selected_aliases, list) and all(value in aliases.values() for value in selected_aliases) else []
-        if not isinstance(selected, list) or not selected or len(selected) > MAX_SELECTED_CHARTS:
-            raise ValueError("planner selection count invalid")
-        if any(not isinstance(value, str) or not value for value in selected):
-            raise ValueError("planner id invalid")
-        if len(set(selected)) != len(selected):
-            raise ValueError("planner ids duplicated")
-        lookup = {str(item.get("id")): item for item in semantic}
-        if any(value not in lookup for value in selected):
-            raise ValueError("planner selected id outside eligible catalogue")
-        families = {str(lookup[value].get("familyId") or value) for value in selected}
-        if len(families) > MAX_SELECTED_CHARTS or len(families) != len(selected):
-            raise ValueError("planner selected too many chart families")
-        if not required_families.issubset(families):
-            raise ValueError("planner omitted requested joint relationship")
+        selected, duplicate_count = validated_selection(content)
+        if duplicate_count:
+            logger.info("Factory conversation planner removed %d duplicate chart selections by family", duplicate_count)
         return selected, {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
     except Exception as exc:
-        logger.info("Factory conversation planner unavailable (%s)", type(exc).__name__)
+        logger.warning("Factory conversation planner unavailable (%s): %s", type(exc).__name__, exc)
         return [], {"mode": "unavailable", "reason": "AI图表规划暂不可用或回复未通过候选校验"}
 
 
@@ -548,8 +548,11 @@ def resolve_subject(question: str, subjects: Sequence[Mapping[str, Any]], explic
     # A product/SKU marker makes an unknown product explicit.  Generic
     # analysis words are excluded so normal questions keep factory scope.
     generic = re.search(r"(?:按|以|从|看)?产品(?:维度|类别|名称|排名|比较|分析|成本|产量|质量)|哪个产品|哪些产品", question)
-    marker = re.search(r"(?:产品|SKU|sku)[：:\s-]*([^，。！？?\s]{1,40})", question)
-    generic_prefixes = ("分析", "趋势", "质量", "成本", "产量", "销售", "采购", "比较", "哪个", "哪些", "高", "低", "变化", "结构", "排名", "按", "类别", "名称", "维度")
+    marker = re.search(r"(?:(?<!哪几个)(?<!什么)(?<!多少)产品|SKU|sku)[：:\s-]*([^，。！？?\s]{1,40})", question)
+    generic_prefixes = (
+        "分析", "趋势", "质量", "成本", "产量", "销售", "采购", "比较", "哪个", "哪些", "高", "低",
+        "变化", "结构", "排名", "按", "类别", "名称", "维度", "哪几个", "是哪几个", "有哪些",
+    )
     if marker and not generic and not marker.group(1).startswith(generic_prefixes):
         token = marker.group(1)
         base_matches = [(item_id, label) for item_id, label in entries

@@ -1,4 +1,6 @@
 import json
+import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -106,15 +108,60 @@ async def test_plan_accepts_only_existing_ids_and_fails_closed(monkeypatch):
     ])
     assert selected == [] and mode['mode'] == 'unavailable'
 
-    async def duplicate(_slot, _payload, **kwargs):
+    async def raw_ids(_slot, _payload, **kwargs):
         return {'choices': [{'message': {'content': '{"selected_ids":["one","two"]}'}}]}
 
-    monkeypatch.setattr('common.llm_router.call_chain', duplicate)
+    monkeypatch.setattr('common.llm_router.call_chain', raw_ids)
     selected, mode = await conversation.plan('看多维度', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产', 'metric': '产量', 'unit': 'kg'},
         {'id': 'two', 'familyId': 'production.output', 'chartType': 'bar', 'domain': '生产', 'metric': '产量', 'unit': 'kg'},
     ])
     assert selected == [] and mode['mode'] == 'unavailable'
+
+
+@pytest.mark.parametrize(
+    'families, expected, duplicates',
+    [
+        pytest.param(['output', 'quality', 'output'], ['candidate-0', 'candidate-1'], 1, id='three-selections'),
+        pytest.param(['output', 'quality', 'output', 'stock', 'cost'],
+                     ['candidate-0', 'candidate-1', 'candidate-3', 'candidate-4'], 1, id='limit-after-dedup'),
+        pytest.param(['output', 'quality', 'sales', 'stock', 'cost'], [], 0, id='five-distinct-families'),
+    ],
+)
+@pytest.mark.asyncio
+async def test_plan_validates_count_after_family_dedup(monkeypatch, caplog, families, expected, duplicates):
+    catalog = [
+        {'id': f'candidate-{index}', 'familyId': family, 'chartType': 'line' if index < 2 else 'bar'}
+        for index, family in enumerate(families)
+    ]
+    validations = []
+
+    async def fake_call(_slot, payload, *, content_validator, **kwargs):
+        provider_catalog = json.loads(payload['messages'][1]['content'])['catalog']
+        content = json.dumps({'selected_ids': [item['id'] for item in provider_catalog]})
+        rejection = content_validator(content)
+        validations.append(rejection)
+        if rejection:
+            raise LLMChainExhausted('chart', [f'fake/chart: invalid_{rejection}'])
+        return {'choices': [{'message': {'content': content}}]}
+
+    monkeypatch.setattr('common.llm_router.call_chain', fake_call)
+    with caplog.at_level(logging.INFO, logger=conversation.__name__):
+        selected, mode = await conversation.plan('看图表', catalog)
+
+    if expected:
+        assert mode['mode'] == 'ai'
+        assert selected == expected
+        assert validations == [None]
+        assert caplog.messages.count(
+            f'Factory conversation planner removed {duplicates} duplicate chart selections by family'
+        ) == 1
+    else:
+        assert selected == []
+        assert mode == {'mode': 'unavailable', 'reason': 'AI图表规划暂不可用或回复未通过候选校验'}
+        assert validations == ['planner selection count invalid']
+        assert any(record.levelno == logging.WARNING and 'fake/chart: invalid_planner selection count invalid'
+                   in record.getMessage() for record in caplog.records)
 
 
 def _planner_catalog():
@@ -321,6 +368,40 @@ def test_generic_product_language_and_year_in_product_label_do_not_become_subjec
     scope = {'year': 2026, 'period_type': 'all', 'start_month': 1, 'end_month': 12, 'guided': True}
     resolved, error = conversation.resolve_period('产品2025成本', scope)
     assert not error and resolved == scope
+
+
+_LIUSHANMEN_QUESTIONS_PATH = Path(__file__).resolve().parents[5] / 'docs/smartbi/liushanmen-blacklake/questions.md'
+_LIUSHANMEN_QUESTIONS = [
+    line.split('|', 2)[1].strip()
+    for line in _LIUSHANMEN_QUESTIONS_PATH.read_text(encoding='utf-8').splitlines()
+    if line.startswith('| 11 月')
+]
+_LIUSHANMEN_PRODUCT = 'blacklake-product'
+_LIUSHANMEN_SUBJECTS = [{'id': _LIUSHANMEN_PRODUCT, 'label': '牛肉丝 · C P2026100002', 'sku': 'C P2026100002'}]
+
+
+@pytest.mark.parametrize(
+    'number, question',
+    enumerate(_LIUSHANMEN_QUESTIONS, start=1),
+    ids=[f'question-{number:02d}' for number in range(1, 13)],
+)
+def test_liushanmen_question_product_scope(number, question):
+    expected = _LIUSHANMEN_PRODUCT if number in {3, 8, 10} else None
+    assert conversation.resolve_subject(question, _LIUSHANMEN_SUBJECTS) == (expected, None)
+
+
+@pytest.mark.parametrize('question, expected', [
+    ('哪几个产品良品量最多？', (None, None)),
+    ('良品量最多的产品是哪几个？', (None, None)),
+    ('产品有哪些？', (None, None)),
+    ('什么产品卖得最好？', (None, None)),
+    ('有多少产品入库？', (None, None)),
+    ('产品 C P2026100002 的良品量？', (_LIUSHANMEN_PRODUCT, None)),
+    ('产品：牛肉丝', (_LIUSHANMEN_PRODUCT, None)),
+    ('产品：未知品', (None, '问题中的产品不在当前工厂授权数据目录中')),
+])
+def test_generic_and_explicit_product_phrases(question, expected):
+    assert conversation.resolve_subject(question, _LIUSHANMEN_SUBJECTS) == expected
 
 
 def test_relative_periods_are_supported_or_fail_closed():
