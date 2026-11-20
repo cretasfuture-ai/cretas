@@ -343,7 +343,7 @@ describe('PROPORTION family (U2 — PIE)', () => {
     expect(result).not.toBeNull();
     // Must mention top share and front-2 share
     expect(result!.finding).toBe('堂食占60.0%（¥60万），是最大一项；其次外卖30.0%、自取10.0%。');
-    expect(result!.suggestion).toBe('堂食每降1%，合计约降0.60%，先从堂食查起。');
+    expect(result!.suggestion).toContain('堂食占合计的60.0%，先从这一项核对本期订单的销量和成交单价');
   });
 
   it('PIE <2 slices → null (data insufficient)', () => {
@@ -463,6 +463,16 @@ describe('COMPARISON family (U2)', () => {
     expect(result!.finding).toMatch(/较/);
   });
 
+  it('COMPARISON: 建议给出差距最大的具体项目和核对步骤', () => {
+    const chart = makeComparison(
+      { name: '本年', values: [150_000, 180_000, 200_000] },
+      { name: '上年', values: [120_000, 130_000, 140_000] },
+    );
+    chart.config = { ...chart.config, xAxis: { data: ['1月', '2月', '3月'] } };
+    expect(buildComparisonInsight(chart, financePerms)?.suggestion)
+      .toBe('3月的差距最大（42.9%），先核对两组在这一项的统计范围和原始明细。');
+  });
+
   it('COMPARISON via buildChartInsight (chartType=comparison)', () => {
     const chart = makeComparison(
       { name: '今年', values: [500_000] },
@@ -555,6 +565,14 @@ describe('KPI family (U2 — 🔴 finance ¥ guard)', () => {
     expect(result).not.toBeNull();
     expect(result!.finding).toMatch(/达成/);
     expect(result!.finding).toMatch(/\d+(\.\d+)?%/);
+  });
+
+  it('KPI: 建议说明实际差距和核对步骤，刚好达标时无额外建议', () => {
+    const belowTarget = buildKpiInsight(makeKpi(75_000, 100_000), financePerms);
+    expect(belowTarget?.suggestion).toBe('距离目标还差25.0个百分点，按明细核对哪些任务还没有完成。');
+    const onTarget = buildKpiInsight(makeKpi(100_000, 100_000), financePerms);
+    expect(onTarget?.finding).toContain('达成100.0%');
+    expect(onTarget?.suggestion).toBeUndefined();
   });
 
   it('KPI 100%+ achievement → ≥100% wording', () => {
