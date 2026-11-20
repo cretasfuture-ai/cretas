@@ -52,7 +52,7 @@ const snapshot: ExternalProductionData = {
 const costMetrics: ExternalCostMetrics = {
   totalCost: 1234.56, materialCost: 1011.23, laborCost: 223.33, costMissingOrders: 0,
   materialCostMissingOrders: 0, laborCostMissingOrders: 0,
-  unitCosts: [{ unit: '盒', cost: 12.3456, workOrderCount: 1, zeroUnitCostOrders: 0, zeroMaterialCostOrders: 0 }],
+  unitCosts: [{ unit: '盒', cost: 12.3456, workOrderCount: 1, zeroMaterialCostOrders: 0 }],
   unitCostMissingOrders: 0,
   inputByUnit: [{ unit: 'kg', quantity: 8.2 }], issuedMaterialCost: 37.72,
   yieldRate: null, yieldComparableOrders: 0, workOrderCount: 1, priceMissingCount: 1, valuationIssueCount: 1,
@@ -179,7 +179,7 @@ describe('黑湖生产分析页面', () => {
     expect(bodies.find(body => body.y_metric === 'cost' && body.x_dim === 'product')?.series_values)
       .toEqual([1234.56]);
     expect(cost.text()).toContain('不含制费');
-    expect(cost.text()).toContain('异常零单价不计入平均单位成本');
+    expect(cost.text()).toContain('有产出的零单价工单按缺失处理，未计入平均单位成本');
     cost.unmount();
     production.unmount();
   });
@@ -349,7 +349,7 @@ describe('黑湖生产分析页面', () => {
     page.unmount();
   });
 
-  it('趋势标注有来源依据的材料冲销并保留负值，明细区分缺失与有效零单价', async () => {
+  it('趋势标注有来源依据的材料冲销并保留负值，明细区分缺失与无产出的零单价', async () => {
     pythonFetch.mockResolvedValue({
       success: true,
       data: {
@@ -360,7 +360,7 @@ describe('黑湖生产分析页面', () => {
         ],
         workOrders: [
           { ...costSnapshot.workOrders[0], workOrderCode: 'MISSING-UNIT-COST', unitCost: null },
-          { ...costSnapshot.workOrders[0], workOrderCode: 'VALID-ZERO-COST', unitCost: 0, totalCost: 0 },
+          { ...costSnapshot.workOrders[0], workOrderCode: 'NO-OUTPUT-ZERO', unitCost: 0, totalCost: 0, outputQty: 0 },
         ],
       },
     });
@@ -371,7 +371,7 @@ describe('黑湖生产分析页面', () => {
     expect(analysis.text()).not.toContain('2026-11-05');
     const rows = analysis.findAll('tr');
     expect(rows.find(row => row.text().includes('MISSING-UNIT-COST'))?.text()).toContain('缺失');
-    expect(rows.find(row => row.text().includes('VALID-ZERO-COST'))?.text()).toContain('0.0000');
+    expect(rows.find(row => row.text().includes('NO-OUTPUT-ZERO'))?.text()).toContain('0.0000');
     expect(latestChart('总成本')).toEqual(expect.objectContaining({
       series: [
         expect.objectContaining({ data: [-140601.74, -8] }),
@@ -408,20 +408,20 @@ describe('黑湖生产分析页面', () => {
   });
 
   it('每袋成本展示样本口径，产品出成率展示可比工单数，说明领料金额与材料成本的范围差异', async () => {
+    const bag = { unit: '袋', cost: 0.181027, workOrderCount: 1, zeroMaterialCostOrders: 1 };
+    const partial = { unit: '盒', cost: 12.3456, workOrderCount: 2, zeroMaterialCostOrders: 1 };
     pythonFetch.mockResolvedValue({
       success: true,
       data: {
         ...costSnapshot,
         summary: {
-          ...costMetrics, issuedMaterialCost: 1700, workOrderCount: 5,
-          unitCosts: [
-            ...costMetrics.unitCosts,
-            { unit: '袋', cost: 0.16731018, workOrderCount: 3, zeroUnitCostOrders: 2, zeroMaterialCostOrders: 3 },
-          ],
+          ...costMetrics, issuedMaterialCost: 1700, workOrderCount: 5, unitCostMissingOrders: 2,
+          unitCosts: [partial, bag],
         },
         products: [
           { ...costSnapshot.products[0], productName: '牛腩样例', yieldRate: 100, yieldComparableOrders: 2, workOrderCount: 2 },
           { ...costSnapshot.products[0], productCode: 'P2', productName: '不可比样例', yieldRate: null },
+          { ...costSnapshot.products[0], productCode: 'BAG', productName: '袋装样例', unitCosts: [bag] },
         ],
       },
     });
@@ -429,14 +429,18 @@ describe('黑湖生产分析页面', () => {
     await flushPromises();
     const analysis = page.getComponent(BlacklakeCostAnalysis);
     const cards = analysis.findAll('.unit-cost');
-    expect(cards[1].text()).toContain('0.1673 / 袋');
-    expect(cards[1].text()).toContain('3 单 · 黑湖单价为 0 2 单');
-    expect(cards[1].text()).toContain('黑湖材料成本为 0 3 单');
-    expect(cards[0].text()).not.toContain('黑湖单价为 0');
+    const laborOnly = '黑湖未计材料成本，仅含人工';
+    expect(cards[1].text()).toContain('0.1810 / 袋');
+    expect(cards[1].text()).toContain(`1 单 · ${laborOnly}`);
+    expect(cards[0].text()).toContain('2 单');
+    expect(cards[0].text()).not.toContain(laborOnly);
+    expect(analysis.text()).toContain('单位成本缺失 2 单，未计入平均');
     expect(analysis.text()).toContain('黑湖单价按同单位的实际产出量加权');
     const rows = analysis.findAll('tr');
     const comparable = rows.find(row => row.text().includes('牛腩样例'));
     const incomparable = rows.find(row => row.text().includes('不可比样例'));
+    expect(rows.find(row => row.text().includes('袋装样例'))?.text()).toContain(laborOnly);
+    expect(comparable?.text()).not.toContain(laborOnly);
     expect(comparable?.text()).toContain('100.0%');
     expect(comparable?.text()).toContain('2 / 2 单可比');
     expect(incomparable?.text()).toContain('0 / 1 单可比');

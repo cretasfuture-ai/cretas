@@ -182,7 +182,6 @@ export interface ExternalCostMetrics {
     unit: string;
     cost: number;
     workOrderCount: number;
-    zeroUnitCostOrders: number;
     zeroMaterialCostOrders: number;
   }>;
   unitCostMissingOrders: number;

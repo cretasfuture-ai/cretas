@@ -372,7 +372,7 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
         assert summary["issuedMaterialCost"] == Decimal("31.43125")
         assert summary["unitCosts"] == [{
             "unit": "KG", "cost": Decimal("13.2257"), "workOrderCount": 1,
-            "zeroUnitCostOrders": 0, "zeroMaterialCostOrders": 0,
+            "zeroMaterialCostOrders": 0,
         }]
         assert summary["costMissingOrders"] == 0 and summary["unitCostMissingOrders"] == 1
         assert summary["materialCostMissingOrders"] == summary["laborCostMissingOrders"] == 0
@@ -435,11 +435,12 @@ async def test_nightly_external_cost_reaches_http_including_decimal_yield_price_
 
 
 @pytest.mark.asyncio
-async def test_external_cost_preserves_valid_zero_and_signed_material_credit(stores, full_cost_access):
+async def test_external_cost_excludes_zero_unit_cost_and_preserves_signed_material_credit(stores, full_cost_access):
     bronze, source, target = stores
     await bronze.execute("INSERT INTO factory_external_integrations VALUES ($1, 'blacklake', 'ACTIVE')", FACTORY)
     await _snapshot(bronze, FACTORY, COLLECTED, [
         _work_order("ZERO-TOTAL", qty="2", total="0", material="0", labor="0", unit_cost="0"),
+        _work_order("ZERO-OUTPUT", qty="0", total="0", material="0", labor="0", unit_cost="0"),
         _work_order("REPORTED", qty="8", total="80", unit_cost="10"),
         _work_order("PLACEHOLDER-ZERO", qty="480", total="39738.99", unit_cost="0"),
         _work_order("CREDIT", day="2026-11-04", total="-140600", material="-152933", labor="12333", unit_cost="-16"),
@@ -459,15 +460,15 @@ async def test_external_cost_preserves_valid_zero_and_signed_material_credit(sto
     assert response.status_code == 200
     payload = response.json()["data"]
     by_order = {row["workOrderCode"]: row for row in payload["workOrders"]}
-    assert by_order["ZERO-TOTAL"]["unitCost"] == 0
+    assert by_order["ZERO-TOTAL"]["unitCost"] is None
+    assert by_order["ZERO-OUTPUT"]["unitCost"] == 0
     assert by_order["PLACEHOLDER-ZERO"]["unitCost"] is None
     assert by_order["CREDIT"]["unitCost"] == -16
     daily = {row["costDate"]: row for row in payload["daily"]}
     assert daily[DAY]["unitCosts"] == [{
-        "unit": "KG", "cost": 8, "workOrderCount": 2,
-        "zeroUnitCostOrders": 1, "zeroMaterialCostOrders": 1,
+        "unit": "KG", "cost": 10, "workOrderCount": 1, "zeroMaterialCostOrders": 0,
     }]
-    assert daily[DAY]["unitCostMissingOrders"] == 1
+    assert daily[DAY]["unitCostMissingOrders"] == 2
     assert daily[DAY]["hasMaterialCredit"] is False
     assert daily["2026-11-04"]["hasMaterialCredit"] is True
     assert daily["2026-11-04"]["materialCost"] == -152933
@@ -506,9 +507,16 @@ async def test_external_cost_explains_unit_samples_yield_and_issue_scope(stores,
     summary = payload["summary"]
     per_bag = next(item for item in summary["unitCosts"] if item["unit"] == "袋")
     assert per_bag == {
-        "unit": "袋", "cost": pytest.approx(Decimal("0.16731018581081")), "workOrderCount": 3,
-        "zeroUnitCostOrders": 2, "zeroMaterialCostOrders": 3,
+        "unit": "袋", "cost": Decimal("0.181027"), "workOrderCount": 1, "zeroMaterialCostOrders": 1,
     }
+    assert summary["unitCostMissingOrders"] == payload["daily"][0]["unitCostMissingOrders"] == 2
+    assert payload["daily"][0]["unitCosts"] == summary["unitCosts"]
+    bag_products = {row["productCode"]: row for row in payload["products"] if row["productCode"].startswith("BAG-")}
+    assert bag_products["BAG-A"]["unitCosts"] == [per_bag]
+    by_order = {row["workOrderCode"]: row for row in payload["workOrders"]}
+    for code, qty in (("BAG-B", 207), ("BAG-C", 107)):
+        assert bag_products[code]["unitCostMissingOrders"] == 1 and bag_products[code]["unitCosts"] == []
+        assert by_order[code]["outputQty"] == qty and by_order[code]["unitCost"] is None
     mass_product = next(product for product in payload["products"] if product["productCode"] == CODE)
     assert mass_product["yieldRate"] == 100
     assert mass_product["yieldComparableOrders"] == mass_product["workOrderCount"] == 2

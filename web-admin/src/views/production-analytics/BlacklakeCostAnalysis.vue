@@ -47,7 +47,7 @@ const snapshots = computed(() => {
   ].filter((item): item is { label: string; at: string } => item.at !== null);
 });
 const materialCreditDays = computed(() => props.data.daily.filter(row => row.hasMaterialCredit));
-const basis = '采用黑湖工单汇总，不含制费。缺价和待核行不计入领料金额，异常零单价不计入平均单位成本。';
+const basis = '采用黑湖工单汇总，不含制费。缺价和待核行不计入领料金额。有产出的零单价工单按缺失处理，未计入平均单位成本。';
 const negativeOrders = computed(() => props.data.workOrders
   .filter(row => (row.materialCost ?? 0) < 0 || (row.totalCost ?? 0) < 0));
 const trendInsight = computed(() => {
@@ -72,8 +72,9 @@ const quantity = (value: number | null, unit: string | null) =>
   value == null ? '—' : `${fmtQty(value, 3)} ${unit || '（单位未提供）'}`;
 const quantities = (items: ExternalIssueQuantity[]) =>
   items.map(item => quantity(item.quantity, item.unit)).join(' / ') || '—';
-const unitCosts = (items: ExternalCostMetrics['unitCosts']) =>
-  items.map(item => `${money(item.cost, 4)}/${item.unit}`).join(' / ') || '—';
+const laborOnlyLabel = '黑湖未计材料成本，仅含人工';
+const isLaborOnly = (item: ExternalCostMetrics['unitCosts'][number]) =>
+  item.zeroMaterialCostOrders > 0 && item.zeroMaterialCostOrders === item.workOrderCount;
 const orderYield = (order: ExternalWorkOrderCost) => order.yieldUnavailableReason
   ? yieldReasons[order.yieldUnavailableReason] : fmtPercent(order.yieldRate);
 
@@ -196,8 +197,7 @@ onBeforeUnmount(() => {
           <div v-for="item in data.summary.unitCosts" :key="item.unit" class="unit-cost">
             <strong>{{ money(item.cost, 4) }}</strong> / {{ item.unit }}
             <div v-if="item.workOrderCount" class="basis">
-              {{ item.workOrderCount }} 单<template v-if="item.zeroUnitCostOrders"> · 黑湖单价为 0 {{ item.zeroUnitCostOrders }} 单</template>
-              <template v-if="item.zeroMaterialCostOrders"> · 黑湖材料成本为 0 {{ item.zeroMaterialCostOrders }} 单</template>
+              {{ item.workOrderCount }} 单<template v-if="isLaborOnly(item)"> · {{ laborOnlyLabel }}</template>
             </div>
           </div>
           <strong v-if="!data.summary.unitCosts.length">—</strong>
@@ -253,7 +253,11 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column prop="unitCosts" label="平均单位成本" min-width="150" sortable="custom">
             <template #default="{ row }">
-              {{ unitCosts(row.unitCosts) }}
+              <div v-for="item in row.unitCosts" :key="item.unit">
+                {{ money(item.cost, 4) }}/{{ item.unit }}
+                <div v-if="isLaborOnly(item)" class="basis">{{ laborOnlyLabel }}</div>
+              </div>
+              <template v-if="!row.unitCosts.length">—</template>
               <div v-if="row.unitCostMissingOrders" class="basis">单位成本缺失 {{ row.unitCostMissingOrders }} 单</div>
             </template>
           </el-table-column>

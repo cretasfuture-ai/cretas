@@ -238,7 +238,7 @@ def _sum_present(values) -> Decimal | None:
 
 def _reported_unit_cost(order) -> Decimal | None:
     cost = order["unit_cost"]
-    if cost == 0 and (order["total_cost"] or 0) > 0 and (order["output_qty"] or 0) > 0:
+    if cost == 0 and (order["output_qty"] or 0) > 0:
         return None
     return cost
 
@@ -268,7 +268,6 @@ def _cost_metrics(entries: list, issues: list, *, issue_snapshot_available: bool
                 "unit": unit,
                 "cost": sum(qty * cost for qty, cost, _ in orders) / sum(qty for qty, *_ in orders),
                 "workOrderCount": len(orders),
-                "zeroUnitCostOrders": sum(cost == 0 for _, cost, _ in orders),
                 "zeroMaterialCostOrders": sum(material == 0 for _, _, material in orders),
             }
             for unit, orders in sorted(orders_by_unit.items())
