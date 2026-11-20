@@ -497,6 +497,31 @@ def compute_aggregates_from_polars(
 _TABLE = "smart_bi_pg_upload_aggregate_cache"
 
 
+def bundle_is_stale_for_field_meta(bundle: Optional[Dict[str, Any]], field_meta: Optional[List[Dict[str, Any]]]) -> bool:
+    """缓存的聚合包是按「当时的字段角色」算的; 字段定义后来改了 (如批号由指标改成维度) 就是过期的。
+
+    味美 11-19: 醒发表 5336 的聚合包 (L2 持久化) 按旧角色把 批号 当成指标, primary_measure=批号,
+    页脚 Top5 把批号按品类求和 (刀切 18870.95万)。#1956 只在现算图时看新角色, 缓存包照旧被用。
+    比较两边都有的字段的 (is_measure, is_dimension, is_time); 任何一个不同即过期。没有字段定义可比 -> 不判过期。
+    """
+    if not bundle or not field_meta:
+        return False
+    cached = {str(f.get("original_name")): f for f in (bundle.get("field_meta") or []) if f.get("original_name")}
+    fresh = {str(f.get("original_name")): f for f in field_meta if f.get("original_name")}
+    for name, f in fresh.items():
+        old = cached.get(name)
+        if old is None:
+            # 新增了指标列: 缓存包里没有它的合计。(没有语义名的占位列由多级表头过滤丢掉, 不算)
+            if f.get("is_measure") and not _UNNAMED_PAT.match(name):
+                return True
+            continue
+        if any(bool(old.get(k)) != bool(f.get(k)) for k in ("is_measure", "is_dimension", "is_time")):
+            return True
+    # 缓存包里的指标列在现在的字段定义里已经没有了
+    return any(old.get("is_measure") and name not in fresh and not _UNNAMED_PAT.match(name)
+               for name, old in cached.items())
+
+
 async def load_bundle_from_db(pool, upload_id: int) -> Optional[Dict[str, Any]]:
     """Try to read a cached bundle from the DB table.
 

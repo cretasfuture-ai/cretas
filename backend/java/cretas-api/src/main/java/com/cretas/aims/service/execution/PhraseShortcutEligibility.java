@@ -41,6 +41,10 @@ public final class PhraseShortcutEligibility {
 
     private static final Pattern PUNCT_AND_SPACE = Pattern.compile("[\\s\\p{P}\\p{S}　]+");
 
+    // 只放行损耗异常约定的滚动窗口，且写法由 TimeNormalizationRules 完整识别。
+    private static final Pattern LOSS_ANOMALY_PERIOD = Pattern.compile(
+            "^(?:最近|近)\\s*(?:一\\s*个月|30\\s*天)的?");
+
     /** 不改变查询范围的语气 / 礼貌 / 指代当下的词。⛔ 不含时间段 (本月 / 上个月)、不含任何名词。 */
     private static final Pattern FILLER = Pattern.compile(
             "帮我|帮忙|麻烦|请你|请|给我|我想|我要|想要|一下|看看|看下|查查|现在|目前|当前|一共|总共"
@@ -89,7 +93,10 @@ public final class PhraseShortcutEligibility {
             // 「10月比9月涨了8.2%, 主要是哪个客户、哪个产品带来的」: 两个月和百分数是增量拆分工具自己从原话解析的输入, 不是第二个子问
             return true;
         }
-        String rest = residual(input, phrase);
+        boolean lossAnomaly = "REPORT_BATCH_YIELD_RANK".equals(intentCode) && phrase.contains("损耗异常");
+        String rest = lossAnomaly
+                ? withoutPhrase(normalizeLossAnomaly(input), normalizeLossAnomaly(phrase))
+                : residual(input, phrase);
         if (intentCode != null && DATE_RANGE_OK_INTENTS.contains(intentCode)) {
             // 「11月1日到18日销售额是多少」: 区间本身是工具的 startDate/endDate, 不是第二个子问 (2026-11-18 LSMDEMO:
             // 这句被当成带条件交给决策层, 落到要 indicator_code 的指标工具)
@@ -126,6 +133,15 @@ public final class PhraseShortcutEligibility {
 
     private static String normalize(String text) {
         return PUNCT_AND_SPACE.matcher(IntentKnowledgeBase.stripLeadingTime(text.toLowerCase())).replaceAll("");
+    }
+
+    private static String normalizeLossAnomaly(String text) {
+        String trimmed = text.toLowerCase().trim();
+        var period = LOSS_ANOMALY_PERIOD.matcher(trimmed);
+        if (period.find()) {
+            return PUNCT_AND_SPACE.matcher(trimmed.substring(period.end())).replaceAll("");
+        }
+        return normalize(text);
     }
 
     private static String withoutPhrase(String normalized, String p) {

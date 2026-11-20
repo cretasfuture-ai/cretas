@@ -552,8 +552,8 @@ class InsightGenerator:
             excel_context=excel_context, kb_context=kb_context,
         )
 
-    def _prepare_data_summary(self, df):
-        return ds.prepare_data_summary(df)
+    def _prepare_data_summary(self, df, field_meta=None):
+        return ds.prepare_data_summary(df, field_meta=field_meta)
 
     def _prepare_metrics_summary(self, metrics):
         return ds.prepare_metrics_summary(metrics)

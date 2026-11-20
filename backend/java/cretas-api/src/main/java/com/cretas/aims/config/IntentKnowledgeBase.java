@@ -3140,6 +3140,12 @@ public class IntentKnowledgeBase {
         phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常", "REPORT_BATCH_YIELD_RANK");
+        // BP 问题 28 复测: 带期间说法 (一个月 / 30 天 / 本月) 的损耗异常没有短语, admin 落到 REPORT_ANOMALY (答原料过期 / 设备维护),
+        // finance 落到澄清; 窗口由工具按用户说的期间走 (守卫 YieldLossProcessRoutingContractTest)
+        for (String period : new String[]{"最近一个月", "近一个月", "最近30天", "近30天", "这个月", "本月"}) {
+            phraseToIntentMapping.put(period + "有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+            phraseToIntentMapping.put(period + "损耗异常", "REPORT_BATCH_YIELD_RANK");
+        }
         phraseToIntentMapping.put("物料平衡异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("各工序出成率", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("工序出成率", "REPORT_BATCH_YIELD_RANK");
