@@ -2722,7 +2722,7 @@ class LLMChainExhausted(RuntimeError):
 
     @property
     def timed_out(self) -> bool:
-        return any(error.endswith((": timeout", ": total_timeout")) for error in self.errors)
+        return any(error.endswith((": timeout", ": total_timeout", ": http 504")) for error in self.errors)
 
 
 def _no_candidates_reason(slot: SLOT, chain: Optional[List[str]], tag: str) -> str:

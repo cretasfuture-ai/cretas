@@ -302,16 +302,19 @@ async def test_background_planner_accepts_aurora_after_12_seconds(timed_planner,
 
 
 @pytest.mark.asyncio
-async def test_http_timeout_with_no_matching_chart_reports_rule(configured_router, monkeypatch):
+@pytest.mark.parametrize("background", [False, True])
+async def test_http_timeout_with_no_matching_chart_reports_rule(configured_router, monkeypatch, background):
     from smartbi.services.factory_charts import conversation
 
     class TimedOutClient:
         async def post(self, *_args, **_kwargs):
+            if background:
+                return httpx.Response(504, json={"error": "inference_timeout"})
             raise httpx.ReadTimeout("test timeout")
 
     monkeypatch.setattr(llm_router, "get_llm_http_client", TimedOutClient)
 
-    chosen, result = await conversation.plan("企鹅生活在哪里？", CATALOG)
+    chosen, result = await conversation.plan("企鹅生活在哪里？", CATALOG, background=background)
 
     assert chosen == []
     assert result["mode"] == "rule"
