@@ -39,7 +39,9 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.time.Instant;
 import java.util.*;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestController
@@ -253,7 +255,9 @@ public class CanvasAIController {
             - First line: 结论：没有发现问题 / 发现 N 个问题.
             - Then a numbered list. Each item names the process or material, the field
               (投入单位/产出单位/换算规则/辅料用量/端口物料绑定/SKU 绑定/...) and what is wrong or missing.
-            - If a value is absent in the definition, say it is 未配置; never guess values.
+            - Use Chinese business terms only: conversionRule → 换算规则; ACTUAL_WEIGHT → 按实际重量;
+              processCategory → 工艺类别. If a value is absent or null, say 未填写; never guess values.
+              Refer to processes by their processName and materials by their names, without internal IDs.
             You cannot change anything. NEVER output JSON, specs, patches, nodes, edges or ids, and never
             suggest replacing or regenerating the whole canvas. Suggest manual fixes in words only.
 
@@ -551,7 +555,8 @@ public class CanvasAIController {
             AIResponse checked = new AIResponse();
             checked.setApplied(false);
             checked.setDiffs(List.of());
-            checked.setReply(conclusion.isBlank() ? WORKFLOW_CHECK_EMPTY_REPLY : conclusion);
+            checked.setReply(conclusion.isBlank() ? WORKFLOW_CHECK_EMPTY_REPLY
+                    : localizeWorkflowCheckConclusion(conclusion, definition));
             return checked;
         }
         // 弃补丁: 让 LLM 只产出语义规格 (rawMaterials + steps), 前端确定性编译成图。
@@ -584,6 +589,30 @@ public class CanvasAIController {
                 "params", diffParams,
                 "description", PRODUCT_PROCESS_WORKFLOW_REPLY)));
         return response;
+    }
+
+    private String localizeWorkflowCheckConclusion(String conclusion, Object definition) {
+        Map<String, String> terms = new HashMap<>(Map.of(
+                "conversionRule", "换算规则", "ACTUAL_WEIGHT", "按实际重量",
+                "FIXED_RATIO", "按固定比例", "SUM_OUTPUTS", "按产出合计", "FORMULA", "按公式计算",
+                "processCategory", "工艺类别", "null", "未填写"));
+        if (readStringObjectMap(definition).get("nodes") instanceof List<?> nodes) {
+            for (Object entry : nodes) {
+                Map<String, Object> node = readStringObjectMap(entry);
+                Map<String, Object> data = readStringObjectMap(node.get("data"));
+                Object name = data.getOrDefault("processName", data.get("materialName"));
+                if (node.get("id") instanceof String id && !id.isBlank()
+                        && name instanceof String label && !label.isBlank()) {
+                    terms.putIfAbsent(id, label);
+                }
+            }
+        }
+        String tokens = terms.keySet().stream().sorted(Comparator.comparingInt(String::length).reversed())
+                .map(Pattern::quote).collect(Collectors.joining("|"));
+        // 单次替换，保留工序名里的原始字符，且不误改其他英文单词的一部分。
+        Pattern internalTerms = Pattern.compile("(?<![A-Za-z0-9_:`])(`?)(" + tokens
+                + ")\\1(?![A-Za-z0-9_:`])");
+        return internalTerms.matcher(conclusion).replaceAll(match -> Matcher.quoteReplacement(terms.get(match.group(2))));
     }
 
     /** 前端检查类问题带 {@code params.intent = "check"}; 只认这一个显式标记, 不在后端再猜一份关键词表。 */
