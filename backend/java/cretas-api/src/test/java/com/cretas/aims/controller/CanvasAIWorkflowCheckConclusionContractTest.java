@@ -38,11 +38,12 @@ class CanvasAIWorkflowCheckConclusionContractTest {
         request.setModuleCode("product_process_workflow_config");
         List<Map<String, Object>> nodes = List.of(
                 Map.of("id", "p:L3:pa", "data", Map.of("processName", "拼装分装")),
-                Map.of("id", "p:L3:pc1", "data", Map.of("processName", "清洗去毛")));
+                Map.of("id", "p:L3:pc1", "data", Map.of("processName", "清洗去毛")),
+                Map.of("id", "m:L3:out", "data", Map.of("name", "拼装成品")));
         request.setParams(Map.of("intent", "check", "context", Map.of("definition", Map.of("nodes", nodes))));
         when(client.chatLowTemp(anyString(), eq(question))).thenReturn("""
                 结论：发现 2 个问题。
-                1. `p:L3:pa` 的 `conversionRule` 为 `ACTUAL_WEIGHT`，请核对每盒净重。
+                1. `p:L3:pa` 的 `conversionRule` 为 `ACTUAL_WEIGHT`，请核对 `m:L3:out` 的每盒净重。
                 2. p:L3:pc1：processCategory:null。
                 """);
 
@@ -50,7 +51,7 @@ class CanvasAIWorkflowCheckConclusionContractTest {
 
         assertEquals("""
                 结论：发现 2 个问题。
-                1. 拼装分装 的 换算规则 为 按实际重量，请核对每盒净重。
+                1. 拼装分装 的 换算规则 为 按实际重量，请核对 拼装成品 的每盒净重。
                 2. 清洗去毛：工艺类别:未填写。""", response.getReply());
         assertTrue(response.getDiffs().isEmpty());
         assertFalse(response.isApplied());

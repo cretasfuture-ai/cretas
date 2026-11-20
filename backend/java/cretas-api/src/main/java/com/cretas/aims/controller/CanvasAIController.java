@@ -600,7 +600,7 @@ public class CanvasAIController {
             for (Object entry : nodes) {
                 Map<String, Object> node = readStringObjectMap(entry);
                 Map<String, Object> data = readStringObjectMap(node.get("data"));
-                Object name = data.getOrDefault("processName", data.get("materialName"));
+                Object name = data.getOrDefault("processName", data.get("name"));
                 if (node.get("id") instanceof String id && !id.isBlank()
                         && name instanceof String label && !label.isBlank()) {
                     terms.putIfAbsent(id, label);
