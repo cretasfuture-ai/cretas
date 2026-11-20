@@ -45,6 +45,7 @@ const noShipment: ShippedGrossProfit = {
   marginRate: null,
   unavailableReason: '缺少发货确认数据',
   revenueBasis: '发货收入按实发数量和不含税单价计算',
+  basis: 'GROSS' as const,
   costBasis: '销售成本按实际出库批次计算',
 };
 

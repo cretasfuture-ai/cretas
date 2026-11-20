@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance;
 
 import com.cretas.aims.dto.finance.report.IncomeStatementDTO;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.Query;
@@ -29,7 +30,8 @@ class ShipmentSkuMarginServiceTest {
         salesReturnCosts=mock(SalesReturnCostService.class);
         EntityManager em=mock(EntityManager.class); Query lock=mock(Query.class,RETURNS_SELF);
         when(em.createNativeQuery(anyString())).thenReturn(lock);
-        service=new ShipmentSkuMarginService(repo,jdbc,financial,em,salesReturnCosts);
+        service=new ShipmentSkuMarginService(repo,jdbc,financial,em,salesReturnCosts,
+                mock(FactorySettingsRepository.class), mock(ShipmentNetRevenueService.class));
         lenient().when(salesReturnCosts.returnedRevenue(anyString(),any(),any())).thenReturn(BigDecimal.ZERO);
         lenient().when(salesReturnCosts.returnedCost(anyString(),any(),any())).thenReturn(BigDecimal.ZERO);
         when(financial.generate(F,2026,10,2026,10)).thenReturn(statement("720","346.12",0));

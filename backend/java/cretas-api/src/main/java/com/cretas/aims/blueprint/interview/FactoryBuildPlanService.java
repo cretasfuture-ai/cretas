@@ -343,6 +343,15 @@ public class FactoryBuildPlanService {
             addPolicyChange(out, "缺料未解决时拦住开工", pol.getBlockStartOnOpenShortage(), has);
             addPolicyChange(out, "报工前必须有领料单", pol.getRequireRequisitionBeforeReport(), has);
             addPolicyChange(out, "报工默认可跳过工序报工", pol.getSkipProcessReportingDefault(), has);
+            if (pol.getShippedRevenueBasis() != null) {
+                PlannedChange c = new PlannedChange();
+                c.setGroup("模块开关");
+                c.setKey("发货收入口径");
+                c.setDetail(pol.getShippedRevenueBasis().label());
+                c.setExists(has);
+                c.setAction("覆盖");
+                out.add(c);
+            }
             if (pol.getMaterialBalanceWarnPct() != null || pol.getMaterialBalanceRedPct() != null) {
                 PlannedChange c = new PlannedChange();
                 c.setGroup("模块开关");

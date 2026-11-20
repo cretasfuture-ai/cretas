@@ -2,7 +2,9 @@ package com.cretas.aims.service.finance;
 
 import com.cretas.aims.dto.finance.report.ShipmentSkuMarginDTO;
 import com.cretas.aims.dto.finance.report.ShippedGrossProfitDTO;
+import com.cretas.aims.dto.finance.report.ShippedRevenueBasis;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
@@ -22,16 +24,21 @@ public class ShipmentSkuMarginService {
     private final IncomeStatementService incomeStatements;
     private final EntityManager entityManager;
     private final SalesReturnCostService salesReturnCosts;
+    private final FactorySettingsRepository factorySettings;
+    private final ShipmentNetRevenueService netRevenue;
 
+    static final String CONFIRMED_LINE_FILTER = """
+        COALESCE(r.record_role,'LEGACY')<>'MASTER' AND r.status IN ('SHIPPED','DELIVERED')
+          AND i.deleted_at IS NULL AND r.deleted_at IS NULL AND i.delivered_quantity>0
+        """;
     // Delivery unitPrice is the saved untaxed shipment price (same basis as netShippedValue).
     static final String LINES_SQL = """
         SELECT i.id, i.product_type_id, COALESCE(NULLIF(i.product_name,''),p.name) AS product_name,
                i.unit, i.delivered_quantity, i.unit_price
         FROM sales_delivery_items i JOIN sales_delivery_records r ON r.id=i.delivery_record_id
         LEFT JOIN product_types p ON p.id=i.product_type_id AND p.factory_id=r.factory_id AND p.deleted_at IS NULL
-        WHERE r.factory_id=? AND r.delivery_date BETWEEN ? AND ?
-          AND COALESCE(r.record_role,'LEGACY')<>'MASTER' AND r.status IN ('SHIPPED','DELIVERED')
-          AND i.deleted_at IS NULL AND r.deleted_at IS NULL AND i.delivered_quantity>0
+        WHERE r.factory_id=? AND r.delivery_date BETWEEN ? AND ? AND
+        """ + CONFIRMED_LINE_FILTER + """
         ORDER BY i.id
         """;
 
@@ -48,30 +55,17 @@ public class ShipmentSkuMarginService {
         return result;
     }
 
-    /**
-     * 经营分析「财务」区块的系统毛利 (Steve 2026-11-18 口径): 收入 = 已确认发货的发运单实发不含税金额
-     * (与应收挂账同一批发运单), 成本 = 这些发运单实际出库批次成本。与 {@link #generate} 同一份收入行、
-     * 同一份成本来源、同一个取整, 只是不要求完整会计月, 且算不全时按缺什么如实降级而不是整体报错:
-     * <ul>
-     *   <li>没有已发货明细 → {@code NO_SHIPMENT}, 收入/毛利都为 null (⛔ 不回退到订单金额);</li>
-     *   <li>有明细缺售价 → {@code PRICE_MISSING}, 收入为 null;</li>
-     *   <li>收入可算但出库批次/成本不完整 → {@code COST_INCOMPLETE}, 给收入, 成本/毛利为 null
-     *       (⛔ 不用计划成本或 0 凑)。</li>
-     * </ul>
-     */
+    /** 经营分析「财务」区块的系统毛利，销售成本取本期发货的实际出库批次成本。 */
     @Transactional(readOnly = true)
     public ShippedGrossProfitDTO summarize(String factoryId, LocalDate start, LocalDate end) {
         validatePeriod(factoryId, start, end);
         ProductionCostConsistency.lockFactory(entityManager, factoryId);
+        ShippedRevenueBasis basis = ShippedRevenueBasisSettings.read(
+                factorySettings.findProductionSettingsByFactoryId(factoryId));
         List<Line> lines = shippedLines(factoryId, start, end);
         ShippedGrossProfitDTO.ShippedGrossProfitDTOBuilder out = ShippedGrossProfitDTO.builder()
                 .periodStart(start).periodEnd(end).shipmentLineCount(lines.size())
-                .revenueBasis(ShippedGrossProfitDTO.REVENUE_BASIS).costBasis(ShippedGrossProfitDTO.COST_BASIS);
-        if (lines.isEmpty()) {
-            return out.status(ShippedGrossProfitDTO.NO_SHIPMENT)
-                    .unavailableReason("缺少发货确认数据：所选期间没有已确认发货（已发货 / 已签收）的发运单，毛利无法计算；未发货的订单金额不计入收入")
-                    .build();
-        }
+                .basis(basis).revenueBasis(basis.description()).costBasis(ShippedGrossProfitDTO.COST_BASIS);
         long missingPrice = lines.stream().filter(l -> l.price == null).count();
         if (missingPrice > 0) {
             return out.status(ShippedGrossProfitDTO.PRICE_MISSING)
@@ -80,18 +74,35 @@ public class ShipmentSkuMarginService {
         }
         BigDecimal revenue = lines.stream().map(ShipmentSkuMarginService::lineRevenue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        out.revenue(money(revenue));
-        Core core;
+        boolean hasReturns = false;
+        if (basis == ShippedRevenueBasis.NET) {
+            try {
+                var adjustments = netRevenue.adjustments(factoryId, start, end);
+                revenue = revenue.subtract(adjustments.discount()).subtract(adjustments.returns());
+                hasReturns = adjustments.hasReturns();
+            } catch (BusinessException e) {
+                return out.status(ShippedGrossProfitDTO.ADJUSTMENT_INCOMPLETE)
+                        .unavailableReason(e.getMessage()).build();
+            }
+        }
+        if (lines.isEmpty() && !hasReturns) {
+            return out.status(ShippedGrossProfitDTO.NO_SHIPMENT)
+                    .unavailableReason("缺少发货确认数据：所选期间没有已确认发货（已发货 / 已签收）的发运单，毛利无法计算；未发货的订单金额不计入收入")
+                    .build();
+        }
+        revenue = money(revenue);
+        out.revenue(revenue);
+        BigDecimal cost;
         try {
-            core = margin(factoryId, start, end, lines);
+            cost = lines.isEmpty() ? money(BigDecimal.ZERO) : margin(factoryId, start, end, lines).result().getTotalCost();
         } catch (BusinessException e) {
             return out.status(ShippedGrossProfitDTO.COST_INCOMPLETE)
                     .unavailableReason("发货收入已算出，但出库批次成本不完整，毛利无法计算：" + e.getMessage())
                     .build();
         }
-        ShipmentSkuMarginDTO m = core.result();
-        return out.status(ShippedGrossProfitDTO.OK).revenue(m.getTotalRevenue()).cost(m.getTotalCost())
-                .grossProfit(m.getGrossProfit()).marginRate(m.getMarginRate()).build();
+        BigDecimal profit = revenue.subtract(cost);
+        return out.status(ShippedGrossProfitDTO.OK).cost(cost).grossProfit(profit)
+                .marginRate(rate(profit, revenue)).build();
     }
 
     private static void validatePeriod(String factoryId, LocalDate start, LocalDate end) {
@@ -109,7 +120,11 @@ public class ShipmentSkuMarginService {
 
     /** 一行发货收入 = 实发数量 × 发货不含税单价, 分位取整。generate 与 summarize 共用这一处。 */
     private static BigDecimal lineRevenue(Line line) {
-        return money(line.quantity.multiply(line.price));
+        return lineRevenue(line.quantity, line.price);
+    }
+
+    static BigDecimal lineRevenue(BigDecimal quantity, BigDecimal price) {
+        return money(quantity.multiply(price));
     }
 
     private record Core(ShipmentSkuMarginDTO result, BigDecimal revenue, BigDecimal rawCost) {}

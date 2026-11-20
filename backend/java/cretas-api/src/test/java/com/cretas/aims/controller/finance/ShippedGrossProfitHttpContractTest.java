@@ -3,6 +3,7 @@ package com.cretas.aims.controller.finance;
 import com.cretas.aims.config.PriceSensitiveJacksonConfig;
 import com.cretas.aims.entity.User;
 import com.cretas.aims.exception.BusinessException;
+import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.UserRepository;
 import com.cretas.aims.repository.inventory.SalesDeliveryItemRepository;
 import com.cretas.aims.security.PriceFieldResponseAdvice;
@@ -46,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * {@code GET /api/mobile/{factoryId}/finance/report/shipped-gross-profit}
  * → FinanceReportController → ShipmentSkuMarginService#summarize → 真实收入行 SQL (H2) + 真实价格脱敏 advice。
  *
- * <p>Steve 2026-11-18 口径: 收入 = 发货收入 (已确认发货的发运单, 与应收挂账同一批), ⛔ 不用订单金额;
+ * <p>GROSS 按已确认发货的实发金额汇总。
  * 没有发货确认数据时金额为 null 并说明「缺少发货确认数据」。每个用例都在库里放一张金额大得多的
  * 销售订单 (含未发货) 和一家外厂的已发货发运单, 两者都不得进入收入 (订单口径 / 跨厂阴性对照)。
  */
@@ -85,7 +86,8 @@ class ShippedGrossProfitHttpContractTest {
         Query lock = mock(Query.class, RETURNS_SELF);
         when(em.createNativeQuery(anyString())).thenReturn(lock);
         service = new ShipmentSkuMarginService(repo, jdbc, mock(IncomeStatementService.class), em,
-                mock(SalesReturnCostService.class));
+                mock(SalesReturnCostService.class), mock(FactorySettingsRepository.class),
+                mock(com.cretas.aims.service.finance.ShipmentNetRevenueService.class));
     }
 
     @AfterEach
@@ -131,6 +133,7 @@ class ShippedGrossProfitHttpContractTest {
         movements(m(1, "A", "a", "9", "15.2913"), m(2, "B", "b", "14", "6.4165"), m(2, "B", "c", "16", "7.4165"));
         call(true)
                 .andExpect(jsonPath("$.data.status").value("OK"))
+                .andExpect(jsonPath("$.data.basis").value("GROSS"))
                 .andExpect(jsonPath("$.data.shipmentLineCount").value(2))
                 .andExpect(jsonPath("$.data.revenue").value(720.00))     // 不是订单 5000, 不含外厂 99999 / 母单 / 草稿
                 .andExpect(jsonPath("$.data.cost").value(346.12))
@@ -205,6 +208,7 @@ class ShippedGrossProfitHttpContractTest {
         movements(m(1, "A", "a", "9", "15.2913"));
         call(false)
                 .andExpect(jsonPath("$.data.status").value("OK"))
+                .andExpect(jsonPath("$.data.basis").value("GROSS"))
                 .andExpect(jsonPath("$.data.shipmentLineCount").value(1))
                 .andExpect(jsonPath("$.data.revenue").value(nullValue()))
                 .andExpect(jsonPath("$.data.cost").value(nullValue()))

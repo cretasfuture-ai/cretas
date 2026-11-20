@@ -22,6 +22,13 @@ def test_unasked_or_default_answers_produce_nothing():
     assert g._factory_policy("物料平衡提醒线：不说就用默认") == {}
 
 
+def test_shipped_revenue_basis_requires_an_explicit_choice():
+    assert g._factory_policy("发货收入口径：折扣前，未扣退货") == {"shippedRevenueBasis": "GROSS"}
+    assert g._factory_policy("发货收入口径：扣折扣与退货后净额") == {"shippedRevenueBasis": "NET"}
+    assert g._factory_policy("发货收入口径：按系统默认") == {}
+    assert g._factory_policy("发货收入口径：待财务决定") == {}
+
+
 def test_balance_lines_that_are_not_two_ordered_numbers_are_not_guessed():
     for ans in ("差5%", "差15%提醒、差5%报警", "差5%、10%、20%", "差0%、10%", "差50%、150%"):
         assert g._factory_policy("物料平衡提醒线：" + ans) == {}, ans

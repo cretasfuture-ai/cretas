@@ -14,6 +14,7 @@
  * @since 2026-05-22 (Canvas Phase B)
  */
 import request from './request'
+import type { ShippedRevenueBasis } from './financeReport'
 
 // ==================== Types ====================
 
@@ -170,6 +171,7 @@ export interface FactorySettings {
   requireRequisitionBeforeReport?: boolean
   /** S4-08 缺料时拦开工 (默认 false = 开工照旧) */
   blockStartOnOpenShortage?: boolean
+  shippedRevenueBasis?: ShippedRevenueBasis
   /** 纪律排查 B1–B3/B11/B15 允许本人审批 (默认 false = 四眼; true = 提交人可自批但须写原因并留痕) */
   allowSelfApproval?: boolean
   /** 纪律排查 B11 改价审批阈值: 降价超过此百分比需审批 (默认 10) */

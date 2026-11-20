@@ -1045,6 +1045,8 @@ _POLICY_SKIP_REPORT = re.compile('工序报工能不能默认跳过[：:][ \\t]*
 
 _POLICY_BALANCE = re.compile('物料平衡提醒线[：:][ \\t]*([^\\n]*)')
 
+_POLICY_SHIPPED_REVENUE = re.compile('发货收入口径[：:][ \\t]*([^\\n]*)')
+
 _POLICY_INSPECT = re.compile('哪些产品要先检验[：:][ \\t]*([^\\n]*)')
 
 _POLICY_REWORK = re.compile('回料比例上限[：:][ \\t]*([^\\n]*)')
@@ -1065,12 +1067,15 @@ def _policy_choice(pattern, description, yes_prefix, no_prefix):
     return None
 
 def _factory_policy(description: str):
-    """厂规: 缺料拦截 / 领料单 / 跳过工序报工 / 物料平衡线。没问到的键**不出现**(服务端不覆盖现值)。"""
+    """厂规只写明确选择，未回答的字段保留工厂现值。"""
     out = {}
     for key, pat, yes, no in (('blockStartOnOpenShortage', _POLICY_SHORTAGE, '拦住', '不拦'), ('requireRequisitionBeforeReport', _POLICY_REQUISITION, '必须先有', '不用'), ('skipProcessReportingDefault', _POLICY_SKIP_REPORT, '可以默认跳过', '不跳过')):
         v = _policy_choice(pat, description, yes, no)
         if v is not None:
             out[key] = v
+    gross_basis = _policy_choice(_POLICY_SHIPPED_REVENUE, description, '折扣前，未扣退货', '扣折扣与退货后净额')
+    if gross_basis is not None:
+        out['shippedRevenueBasis'] = 'GROSS' if gross_basis else 'NET'
     m = _POLICY_BALANCE.search(description or '')
     if m:
         ans = m.group(1).strip()
@@ -1410,6 +1415,8 @@ async def generate_configuration(request: FactoryInitRequest):
         policy = _factory_policy(request.factory_description)
         if policy:
             parsed['suggestedData']['policy'] = policy
+        elif isinstance(parsed['suggestedData'].get('policy'), dict):
+            parsed['suggestedData']['policy'].pop('shippedRevenueBasis', None)
         logger.info('Factory init: policy(问到的厂规)=%s', policy)
         _bal = _POLICY_BALANCE.search(request.factory_description or '')
         _bal_ans = _bal.group(1).strip() if _bal else ''

@@ -176,10 +176,12 @@ export function getShipmentSkuMargin(factoryId: string, periodStart: string, per
 }
 
 /**
- * 经营分析「财务」区块的系统毛利 (Steve 2026-11-18: 收入 = 发货收入, 与应收挂账同一批发运单)。
+ * 经营分析「财务」区块的系统毛利，发货收入按工厂配置的口径计算。
  * 金额按工厂权限配置的财务读可见, 无权时为 null (status / 条数 / 原因照常返回)。
  */
-export type ShippedGrossProfitStatus = 'OK' | 'NO_SHIPMENT' | 'PRICE_MISSING' | 'COST_INCOMPLETE';
+export type ShippedRevenueBasis = 'GROSS' | 'NET';
+export type ShippedGrossProfitStatus =
+  'OK' | 'NO_SHIPMENT' | 'PRICE_MISSING' | 'ADJUSTMENT_INCOMPLETE' | 'COST_INCOMPLETE';
 
 export interface ShippedGrossProfit {
   periodStart: string;
@@ -191,6 +193,7 @@ export interface ShippedGrossProfit {
   grossProfit: number | null;
   marginRate: number | null;
   unavailableReason: string | null;
+  basis: ShippedRevenueBasis;
   revenueBasis: string;
   costBasis: string;
 }

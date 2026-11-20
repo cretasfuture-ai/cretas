@@ -2,6 +2,7 @@ package com.cretas.aims.controller;
 
 import com.cretas.aims.config.RequireRole;
 import com.cretas.aims.dto.common.ApiResponse;
+import com.cretas.aims.dto.finance.report.ShippedRevenueBasis;
 import com.cretas.aims.entity.FactorySchedulingConfig;
 import com.cretas.aims.entity.FactorySettings;
 import com.cretas.aims.entity.FactoryTempWorker;
@@ -15,6 +16,7 @@ import com.cretas.aims.repository.FactorySettingsRepository;
 import com.cretas.aims.repository.FactoryTempWorkerRepository;
 import com.cretas.aims.repository.WagePolicyRepository;
 import com.cretas.aims.repository.hr.HrInsuranceConfigRepository;
+import com.cretas.aims.service.finance.ShippedRevenueBasisSettings;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -579,6 +581,7 @@ public class CanvasFactoryConfigController {
                             "skipProcessReportingDefault", false,
                             "requireRequisitionBeforeReport", false,
                             "blockStartOnOpenShortage", false,
+                            ShippedRevenueBasisSettings.KEY, ShippedRevenueBasis.DEFAULT.name(),
                             "allowSelfApproval", false,
                             "version", 0));
         }
@@ -648,6 +651,10 @@ public class CanvasFactoryConfigController {
         // S4-08 缺料时拦开工 (默认关 = 六膳门 N1)
         if (body.containsKey("blockStartOnOpenShortage")) {
             settings.setBlockStartOnOpenShortage(booleanField(body, "blockStartOnOpenShortage", false));
+        }
+        if (body.containsKey(ShippedRevenueBasisSettings.KEY)) {
+            ShippedRevenueBasisSettings.write(settings,
+                    ShippedRevenueBasisSettings.validate(body.get(ShippedRevenueBasisSettings.KEY)));
         }
         // 纪律排查 B1–B3/B11/B15 允许本人审批 (默认关 = 四眼)
         if (body.containsKey("allowSelfApproval")) {
@@ -821,6 +828,7 @@ public class CanvasFactoryConfigController {
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
+        m.put(ShippedRevenueBasisSettings.KEY, ShippedRevenueBasisSettings.read(s.getProductionSettings()).name());
         m.put("allowSelfApproval", s.getAllowSelfApproval());
         m.put("priceDecreaseApprovalPct", s.getPriceDecreaseApprovalPct());
         m.put("priceIncreaseApprovalPct", s.getPriceIncreaseApprovalPct());
