@@ -68,9 +68,16 @@ JSON child row. Missing/forged proof, a non-NULL value or cross-schema parent
 still refuses before mutation. Parent columns, PK/UNIQUE definitions, indexes
 and triggers remain independently compared against the protected schema archive;
 no shared parent rows enter the package or become tenant-owned.
-FK parent identifiers, schema, ordinal column pairing and update/delete rules
-are read from PostgreSQL catalogs, independently of table ownership. Export
-does not grant privileges to make metadata visible; business-row RLS remains.
+FK enumeration and ordinal column pairing use PostgreSQL catalogs, including
+when the exporter has only SELECT on a child table. A COPY table can supply a
+schema-only dependency, and its rows are never part of the ZIP inventory. The
+exporter checks both database scopes for cross-tenant hits before the first ZIP
+entry and reports constraint relationships and counts without row keys.
+
+Existing v2 packages with legacy constraint descriptors and internal FKs use
+the original constraint dictionary for exact target comparison. The CLI
+independently checks the target catalog for cross-schema FKs on that path.
+Legacy descriptors cannot authorize an external FK or a zero-reference proof.
 
 Both empty destinations are checked before the first schema restore. Rows and
 migration rows share a transaction per database. PostgreSQL sequence changes

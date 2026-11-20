@@ -366,10 +366,17 @@ public class FactoryDataService {
             manifest.put("requestedFileFormats", requestedFormats.stream().map(Enum::name).toList());
             manifest.put("fileFormats", fmt.stream().map(Enum::name).toList());
             FactoryDataPackageWriter writer = new FactoryDataPackageWriter(out);
-            List<Map<String, Object>> dbManifests = new ArrayList<>();
-            for (Database db : Database.values()) {
-                dbManifests.add(withSnapshot(db, conn -> exportDatabase(conn, db, factoryId, fmt, writer)));
-            }
+            // Resolve both databases before the first ZIP entry. Keep those snapshots open
+            // until their rows have been written so the guard and writer see the same data.
+            List<Map<String, Object>> dbManifests = withSnapshot(Database.CRETAS, cretas ->
+                    withSnapshot(Database.SMARTBI, smartbi -> {
+                        FactoryDataScope cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
+                        FactoryDataScope smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
+                        rejectForeignHits(cretas, cretasScope);
+                        rejectForeignHits(smartbi, smartbiScope);
+                        return List.of(exportDatabase(cretas, cretasScope, factoryId, fmt, writer),
+                                exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer));
+                    }));
             manifest.put("databases", dbManifests);
             manifest.put("attachments", exportAttachments(factoryId, mode, writer));
             writer.writeText("README.txt", readme(factoryId, factory.name(), mode, fmt));
@@ -401,9 +408,25 @@ public class FactoryDataService {
         }
     }
 
-    private Map<String, Object> exportDatabase(Connection conn, Database db, String factoryId, Set<Format> formats,
+    private void rejectForeignHits(Connection conn, FactoryDataScope scope) throws SQLException {
+        List<ForeignHit> hits = scope.foreignHits();
+        if (hits.isEmpty()) return;
+        Set<String> childTables = hits.stream().map(ForeignHit::table).collect(Collectors.toSet());
+        List<Map<String, Object>> constraints = FactoryDataSchemaMetadata.constraints(conn, schema, childTables);
+        Map<String, Long> counts = hits.stream().collect(Collectors.groupingBy(hit -> {
+            List<String> names = constraints.stream()
+                    .filter(c -> "FOREIGN KEY".equals(c.get("type")) && hit.table().equals(c.get("table"))
+                            && java.util.Objects.equals(hit.viaTable(), c.get("referencedTable")))
+                    .map(c -> String.valueOf(c.get("name"))).distinct().sorted().toList();
+            return hit.table() + " -> " + hit.viaTable() + " (" + hit.kind() + ", 关联外键=" + names + ")";
+        }, java.util.TreeMap::new, Collectors.counting()));
+        // ForeignHit.detail and rowKey may carry another tenant's values.
+        throw new IllegalStateException(scope.database() + " 库有 " + hits.size() + " 条跨租户命中，拒绝导出: " + counts);
+    }
+
+    private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,
                                                FactoryDataPackageWriter writer) throws SQLException {
-        FactoryDataScope scope = FactoryDataScopeResolver.resolveVisible(conn, db, schema, factoryId);
+        Database db = scope.database();
         String dir = db.name().toLowerCase();
         List<Map<String, Object>> tables = new ArrayList<>();
         List<Map<String, Object>> notExported = new ArrayList<>();

@@ -134,6 +134,12 @@ class PureContract(unittest.TestCase):
             "database": "CRETAS", "tables": [{"table": "factory_configurations"}]}]}
         return output, manifest
 
+    @staticmethod
+    def _checked_metadata(package, manifest):
+        schema, migrations = restore.metadata_for(package, "CRETAS")
+        restore.validate_external_reference_proofs(package, manifest, "CRETAS", schema)
+        return schema, migrations
+
     def test_external_fk_zero_proof_is_factory_and_rows_bound(self):
         proof = {"table": "factory_configurations", "constraint": "fk_factory_template",
                  "column": "template_id", "referencedTable": "factory_templates",
@@ -142,7 +148,7 @@ class PureContract(unittest.TestCase):
                  "factoryId": "F006", "referencingRows": 0}
         output, manifest = self._external_fk_archive(proof)
         with zipfile.ZipFile(output) as package:
-            schema, migrations = restore.metadata_for(package, "CRETAS", manifest)
+            schema, migrations = self._checked_metadata(package, manifest)
             self.assertEqual(schema["externalReferences"][0]["referencingRows"], 0)
             self.assertEqual(migrations["fingerprint"], "migration-fingerprint")
 
@@ -165,19 +171,19 @@ class PureContract(unittest.TestCase):
                 output, manifest = self._external_fk_archive(proof)
                 with zipfile.ZipFile(output) as package:
                     with self.assertRaises(restore.RestoreRefused):
-                        restore.metadata_for(package, "CRETAS", manifest)
+                        self._checked_metadata(package, manifest)
         output, manifest = self._external_fk_archive(valid, template_id=42)
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
         output, manifest = self._external_fk_archive(valid, constraints=[])
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
         output, manifest = self._external_fk_archive()
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
         constraint = {"table": "factory_configurations", "name": "fk_factory_template",
                       "type": "FOREIGN KEY", "column": "template_id",
                       "referencedTable": "factory_templates", "referencedColumn": "id",
@@ -185,17 +191,17 @@ class PureContract(unittest.TestCase):
         output, manifest = self._external_fk_archive(valid, constraints=[constraint])
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
         constraint_without_schema = dict(constraint)
         constraint_without_schema.pop("referencedSchema")
         output, manifest = self._external_fk_archive(valid, constraints=[constraint_without_schema])
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
         output, manifest = self._external_fk_archive(valid, source_schema=None)
         with zipfile.ZipFile(output) as package:
             with self.assertRaises(restore.RestoreRefused):
-                restore.metadata_for(package, "CRETAS", manifest)
+                self._checked_metadata(package, manifest)
 
 
 @unittest.skipUnless(ARGS, "explicit owned PG arguments required")

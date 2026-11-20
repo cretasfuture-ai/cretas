@@ -342,11 +342,28 @@ class FactoryErasurePostgresContractTest {
     }
 
     @Test
+    void crossTenantLinkRefusesExportBeforeWritingZipBytes() throws Exception {
+        exec(main, "INSERT INTO " + schema + ".sales_orders (id, factory_id, note) VALUES (42424242, '"
+                + FB + "', 'other-tenant-order');"
+                + "INSERT INTO " + schema + ".order_links VALUES (87654321, 10, 42424242)");
+        FactoryDataService service = data();
+        long request = service.startExport(OPERATOR, FA);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FA,
+                AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("1 条跨租户命中")
+                .hasMessageContaining("order_links_other_order_id_fkey")
+                .satisfies(error -> assertThat(error.getMessage()).doesNotContain(FB, "42424242", "87654321"));
+        assertThat(output.size()).isZero();
+    }
+
+    @Test
     void linkRowThatAlsoReferencesAnotherFactoryBlocksErasure() throws Exception {
-        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30);"
-                + "INSERT INTO " + schema + ".factory_links (id, from_factory, to_factory) VALUES (1, '" + FA + "', '" + FB + "')");
         FactoryErasureService erasure = erasure();
         long requestId = requestAndWait(erasure, true);
+        exec(main, "INSERT INTO " + schema + ".order_links (id, order_id, other_order_id) VALUES (1, 10, 30);"
+                + "INSERT INTO " + schema + ".factory_links (id, from_factory, to_factory) VALUES (1, '" + FA + "', '" + FB + "')");
         var preview = data().preview(OPERATOR, FA);
         assertThat(preview.databases().get(0).foreignHits())
                 .anyMatch(h -> h.table().equals("order_links") && h.kind() == FactoryDataScope.ForeignKind.OTHER_TENANT)

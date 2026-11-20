@@ -46,6 +46,8 @@ public final class FactoryDataSchemaMetadata {
             ps.executeQuery().close();
         }
         Set<String> names = tables.stream().map(TableScope::table).collect(Collectors.toCollection(TreeSet::new));
+        Set<String> exportedNames = tables.stream().filter(table -> table.category().exported())
+                .map(TableScope::table).collect(Collectors.toSet());
         Map<String, Object> structure = new LinkedHashMap<>();
         structure.put("format", "cretas-factory-source-schema/2");
         structure.put("database", database.name());
@@ -72,7 +74,7 @@ public final class FactoryDataSchemaMetadata {
         structure.put("columns", columnMetadata);
         structure.put("constraints", constraintMetadata);
         List<Map<String, Object>> externalReferences = externalReferences(conn, schema,
-                constraintMetadata, names, tables, factoryId);
+                constraintMetadata, exportedNames, tables, factoryId);
         if (externalReferences.stream().anyMatch(row -> !"SCHEMA_ONLY_ZERO_REFERENCES".equals(row.get("action")))) {
             throw new IllegalStateException("导出表存在未随包提供的外部外键，拒绝生成可恢复包: " + externalReferences);
         }
@@ -166,28 +168,36 @@ public final class FactoryDataSchemaMetadata {
         }
     }
 
-    private static List<Map<String, Object>> constraints(Connection conn, String schema, Set<String> tables)
+    static List<Map<String, Object>> constraints(Connection conn, String schema, Set<String> tables)
             throws SQLException {
         if (tables.isEmpty()) return List.of();
-        String sql = "SELECT tc.table_name, tc.constraint_name, tc.constraint_type, kcu.column_name, "
-                + "kcu.ordinal_position, parent.relname AS referenced_table, parent_column.attname AS referenced_column, "
-                + "CASE pc.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' "
-                + "WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS update_rule, "
-                + "CASE pc.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE' "
-                + "WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS delete_rule, "
-                + "parent_namespace.nspname AS referenced_schema, md5(pg_get_constraintdef(pc.oid)) AS definition_fingerprint "
-                + "FROM information_schema.table_constraints tc "
-                + "LEFT JOIN information_schema.key_column_usage kcu ON kcu.constraint_schema = tc.constraint_schema "
-                + "AND kcu.constraint_name = tc.constraint_name AND kcu.table_name = tc.table_name "
-                + "JOIN pg_namespace child_namespace ON child_namespace.nspname = tc.table_schema "
-                + "JOIN pg_class child ON child.relnamespace = child_namespace.oid AND child.relname = tc.table_name "
-                + "LEFT JOIN pg_constraint pc ON pc.conrelid = child.oid AND pc.conname = tc.constraint_name "
-                + "LEFT JOIN pg_class parent ON pc.contype = 'f' AND parent.oid = pc.confrelid "
-                + "LEFT JOIN pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace "
-                + "LEFT JOIN pg_attribute parent_column ON parent_column.attrelid = parent.oid "
-                + "AND parent_column.attnum = pc.confkey[kcu.ordinal_position] AND NOT parent_column.attisdropped "
-                + "WHERE tc.table_schema = ? AND tc.table_name IN ("
-                + placeholders(tables.size()) + ") ORDER BY tc.table_name, tc.constraint_name, kcu.ordinal_position";
+        // information_schema.table_constraints hides constraints from SELECT-only roles.
+        // NOT NULL is represented by the column metadata for this descriptor shape.
+        String sql = """
+                SELECT child.relname AS table_name, pc.conname AS constraint_name,
+                       CASE pc.contype WHEN 'f' THEN 'FOREIGN KEY' WHEN 'p' THEN 'PRIMARY KEY'
+                         WHEN 'u' THEN 'UNIQUE' WHEN 'c' THEN 'CHECK' END AS constraint_type,
+                       child_column.attname AS column_name, key_column.ordinality::integer AS ordinal_position,
+                       parent.relname AS referenced_table, parent_column.attname AS referenced_column,
+                       CASE pc.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                         WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS update_rule,
+                       CASE pc.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                         WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS delete_rule,
+                       parent_namespace.nspname AS referenced_schema,
+                       md5(pg_get_constraintdef(pc.oid)) AS definition_fingerprint
+                FROM pg_catalog.pg_constraint pc
+                JOIN pg_catalog.pg_class child ON child.oid = pc.conrelid
+                JOIN pg_catalog.pg_namespace child_namespace ON child_namespace.oid = child.relnamespace
+                LEFT JOIN LATERAL unnest(pc.conkey) WITH ORDINALITY key_column(attnum, ordinality) ON pc.contype <> 'c'
+                LEFT JOIN pg_catalog.pg_attribute child_column ON child_column.attrelid = child.oid
+                  AND child_column.attnum = key_column.attnum AND NOT child_column.attisdropped
+                LEFT JOIN pg_catalog.pg_class parent ON pc.contype = 'f' AND parent.oid = pc.confrelid
+                LEFT JOIN pg_catalog.pg_namespace parent_namespace ON parent_namespace.oid = parent.relnamespace
+                LEFT JOIN pg_catalog.pg_attribute parent_column ON parent_column.attrelid = parent.oid
+                  AND parent_column.attnum = pc.confkey[key_column.ordinality::integer] AND NOT parent_column.attisdropped
+                WHERE pc.contype IN ('f', 'p', 'u', 'c')
+                  AND child_namespace.nspname = ? AND child.relname IN (%s)
+                """.formatted(placeholders(tables.size()));
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             int i = 1;
             ps.setString(i++, schema);
@@ -197,12 +207,7 @@ public final class FactoryDataSchemaMetadata {
                 while (rs.next()) {
                     Map<String, Object> row = new LinkedHashMap<>();
                     row.put("table", rs.getString("table_name"));
-                    String constraintName = rs.getString("constraint_name");
-                    if ("CHECK".equals(rs.getString("constraint_type"))
-                            && constraintName != null && constraintName.matches("\\d+_\\d+_\\d+_not_null")) {
-                        constraintName = "__NOT_NULL__";
-                    }
-                    row.put("name", constraintName);
+                    row.put("name", rs.getString("constraint_name"));
                     row.put("type", rs.getString("constraint_type"));
                     row.put("column", rs.getString("column_name"));
                     row.put("ordinal", rs.getObject("ordinal_position"));
@@ -212,6 +217,11 @@ public final class FactoryDataSchemaMetadata {
                     row.put("updateRule", rs.getString("update_rule"));
                     row.put("deleteRule", rs.getString("delete_rule"));
                     row.put("definitionFingerprint", rs.getString("definition_fingerprint"));
+                    if ("FOREIGN KEY".equals(row.get("type"))
+                            && row.values().stream().anyMatch(java.util.Objects::isNull)) {
+                        throw new IllegalStateException("外键目录描述不完整，拒绝导出: "
+                                + row.get("table") + "." + row.get("name"));
+                    }
                     out.add(row);
                 }
                 out.sort(java.util.Comparator.comparing((Map<String, Object> row) -> String.valueOf(row.get("table")))
@@ -597,13 +607,13 @@ public final class FactoryDataSchemaMetadata {
     }
 
     private static List<Map<String, Object>> externalReferences(Connection conn, String schema,
-            List<Map<String, Object>> constraints, Set<String> tables, List<TableScope> scopes,
+            List<Map<String, Object>> constraints, Set<String> exportedTables, List<TableScope> scopes,
             String factoryId) throws SQLException {
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> c : constraints) {
             if (!"FOREIGN KEY".equals(c.get("type")) || c.get("referencedTable") == null) continue;
             String referenced = String.valueOf(c.get("referencedTable"));
-            if (tables.contains(referenced)) continue;
+            if (exportedTables.contains(referenced)) continue;
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("table", c.get("table"));
             row.put("constraint", c.get("name"));
