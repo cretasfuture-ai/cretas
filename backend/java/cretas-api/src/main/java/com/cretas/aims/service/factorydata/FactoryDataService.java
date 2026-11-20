@@ -43,7 +43,7 @@ import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Supplier;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -389,12 +389,13 @@ public class FactoryDataService {
                 var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
                 // Both preflights finish before the first ZIP entry. SMARTBI only
                 // receives heartbeat queries while CRETAS owns the writer.
-                var cretasManifest = withSnapshotHeartbeat(smartbi, () -> withSnapshot(Database.CRETAS, cretas -> {
-                    var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
-                    rejectForeignHits(cretas, cretasScope);
-                    var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
-                    return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata);
-                }));
+                var cretasManifest = withSnapshotHeartbeat(smartbi, failure ->
+                        withSnapshot(Database.CRETAS, 0, failure, cretas -> {
+                            var cretasScope = FactoryDataScopeResolver.resolveVisible(cretas, Database.CRETAS, schema, factoryId);
+                            rejectForeignHits(cretas, cretasScope);
+                            var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
+                            return exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata);
+                        }));
                 return List.of(cretasManifest, exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
             });
             manifest.put("databases", dbManifests);
@@ -454,7 +455,8 @@ public class FactoryDataService {
                 new ArrayList<>(scope.tables().values()), factoryId);
     }
 
-    private static <T> T withSnapshotHeartbeat(Connection waiting, Supplier<T> work) throws SQLException {
+    private static <T> T withSnapshotHeartbeat(Connection waiting, Function<AtomicReference<Throwable>, T> work)
+            throws SQLException {
         long idleMillis;
         try (PreparedStatement ps = waiting.prepareStatement(
                 "SELECT setting::bigint FROM pg_catalog.pg_settings WHERE name = 'idle_in_transaction_session_timeout'");
@@ -462,7 +464,7 @@ public class FactoryDataService {
             if (!rs.next()) throw new SQLException("无法读取快照事务空闲阈值");
             idleMillis = rs.getLong(1);
         }
-        if (idleMillis == 0) return work.get();
+        if (idleMillis == 0) return work.apply(null);
         long interval = Math.max(1, idleMillis / 3);
         var failure = new AtomicReference<Throwable>();
         T result = null;
@@ -481,7 +483,7 @@ public class FactoryDataService {
                 }
             }, interval, interval, TimeUnit.MILLISECONDS);
             try {
-                result = work.get();
+                result = work.apply(failure);
             } catch (RuntimeException | Error e) {
                 recordSnapshotFailure(failure, e);
             }
@@ -832,6 +834,11 @@ public class FactoryDataService {
     }
 
     private <T> T withSnapshot(Database db, int networkTimeoutMs, SnapshotWork<T> work) {
+        return withSnapshot(db, networkTimeoutMs, null, work);
+    }
+
+    private <T> T withSnapshot(Database db, int networkTimeoutMs, AtomicReference<Throwable> concurrentFailure,
+                               SnapshotWork<T> work) {
         try (Connection conn = dataSource(db).getConnection()) {
             if (networkTimeoutMs > 0) {
                 int existingTimeout = conn.getNetworkTimeout();
@@ -846,20 +853,32 @@ public class FactoryDataService {
             conn.setReadOnly(true);
             // Resource cleanup suppresses a rollback failure on the original error.
             try (SnapshotRollback rollback = conn::rollback) {
-                // 主库连接池设了 idle_in_transaction_session_timeout=30s: 导出边读边往 HTTP 客户端写,
-                // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
-                try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
-                    ps.execute();
+                try {
+                    // 主库连接池设了 idle_in_transaction_session_timeout=30s: 导出边读边往 HTTP 客户端写,
+                    // 客户端慢时这个只读事务会「空闲」超过 30 秒被服务器杀掉。本事务内放宽到 15 分钟。
+                    try (PreparedStatement ps = conn.prepareStatement("SET LOCAL idle_in_transaction_session_timeout = '15min'")) {
+                        ps.execute();
+                    }
+                    // Keep pg_get_* name resolution identical to the protected
+                    // baseline while retaining a parameterized tenant schema.
+                    try (PreparedStatement ps = conn.prepareStatement(
+                            "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
+                        ps.setString(1, schema);
+                        ps.executeQuery().close();
+                    }
+                    // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
+                    return work.run(conn);
+                } catch (SQLException e) {
+                    if (concurrentFailure == null) throw e;
+                    var readFailure = new IllegalStateException(db + " 库读取失败: " + e.getMessage(), e);
+                    concurrentFailure.compareAndSet(null, readFailure);
+                    throw readFailure;
+                } catch (RuntimeException | Error e) {
+                    // Claim the primary failure before rollback. If the heartbeat failed first,
+                    // the caller adds this error once, with its rollback failure already attached.
+                    if (concurrentFailure != null) concurrentFailure.compareAndSet(null, e);
+                    throw e;
                 }
-                // Keep pg_get_* name resolution identical to the protected
-                // baseline while retaining a parameterized tenant schema.
-                try (PreparedStatement ps = conn.prepareStatement(
-                        "SELECT set_config('search_path', quote_ident(?) || ', pg_catalog', true)")) {
-                    ps.setString(1, schema);
-                    ps.executeQuery().close();
-                }
-                // SmartBI 行级安全的租户变量由 FactoryDataScopeResolver.resolveVisible 在本事务内设置
-                return work.run(conn);
             }
         } catch (SQLException e) {
             throw new IllegalStateException(db + " 库读取失败: " + e.getMessage(), e);

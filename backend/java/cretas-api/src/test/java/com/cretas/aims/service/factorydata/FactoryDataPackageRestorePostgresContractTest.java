@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.UnaryOperator;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -449,6 +450,63 @@ class FactoryDataPackageRestorePostgresContractTest {
         assertFailedExport(service, request, bytes);
     }
 
+    @Test
+    void cretasZipFailureRemainsTheCauseWhenHeartbeatFailsDuringRollback() throws Exception {
+        setUpSources();
+        CountDownLatch heartbeatEntered = new CountDownLatch(1);
+        CountDownLatch rollbackEntered = new CountDownLatch(1);
+        CountDownLatch heartbeatAboutToThrow = new CountDownLatch(1);
+        var heartbeatThread = new AtomicReference<Thread>();
+        var writeFailure = new IOException("CRETAS ZIP write failed before rollback");
+        var heartbeatFailure = new IllegalStateException("SmartBI heartbeat failed during CRETAS rollback");
+        var rollbackFailure = new SQLException("CRETAS snapshot rollback failed");
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeatThread.set(Thread.currentThread());
+            heartbeatEntered.countDown();
+            awaitBarrier(rollbackEntered);
+            heartbeatAboutToThrow.countDown();
+            throw heartbeatFailure;
+        }, null);
+        DataSource cretas = interceptConnection(source, (method, args) -> {
+            if ("rollback".equals(method)) {
+                rollbackEntered.countDown();
+                awaitBarrier(heartbeatAboutToThrow);
+                // The failed scheduled task has returned to the idle executor before rollback throws.
+                Thread thread = heartbeatThread.get();
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (thread.getState() != Thread.State.WAITING && System.nanoTime() < deadline) {
+                    TimeUnit.MILLISECONDS.sleep(5);
+                }
+                assertThat(thread.getState()).as("SmartBI heartbeat finished during CRETAS rollback")
+                        .isEqualTo(Thread.State.WAITING);
+                throw rollbackFailure;
+            }
+        });
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema);
+        long request = service.startExport(OPERATOR, FACTORY);
+        var bytes = new ByteArrayOutputStream();
+        OutputStream output = afterHeartbeat(bytes, heartbeatEntered, writeFailure);
+
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> service.writeExport(request, OPERATOR,
+                FACTORY, FactoryDataService.AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output));
+        assertFailedExport(service, request, bytes);
+        assertThat(failure).hasRootCause(writeFailure);
+        assertThat(failure.getSuppressed()).hasSize(2).contains(rollbackFailure)
+                .anySatisfy(heartbeat -> assertThat(heartbeat).hasMessageContaining("快照心跳失败")
+                        .hasRootCause(heartbeatFailure));
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row ->
+                assertThat(row.errorMessage()).contains(writeFailure.getMessage()));
+    }
+
+    private static void awaitBarrier(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).as("snapshot failure ordering barrier").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
+
     private static void assertFailedExport(FactoryDataService service, long request, ByteArrayOutputStream bytes) {
         assertThat(bytes.toString(StandardCharsets.ISO_8859_1)).doesNotContain("manifest.json");
         assertThat(service.ledger().find(request)).hasValueSatisfying(row -> {
@@ -499,6 +557,26 @@ class FactoryDataPackageRestorePostgresContractTest {
 
     private static DataSource interceptHeartbeat(DataSource original, UnaryOperator<String> heartbeat,
                                                  SQLException rollbackFailure, AtomicBoolean shortenedTimeout) {
+        return interceptConnection(original, (method, args) -> {
+            if ("prepareStatement".equals(method)) {
+                if ("SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
+                    args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
+                    shortenedTimeout.set(true);
+                } else if ("SELECT 1".equals(args[0])) {
+                    args[0] = heartbeat.apply((String) args[0]);
+                }
+            } else if ("rollback".equals(method) && rollbackFailure != null) {
+                throw rollbackFailure;
+            }
+        });
+    }
+
+    @FunctionalInterface
+    private interface SnapshotCall {
+        void beforeCall(String method, Object[] args) throws Exception;
+    }
+
+    private static DataSource interceptConnection(DataSource original, SnapshotCall call) {
         return new DelegatingDataSource(original) {
             @Override
             public Connection getConnection() throws SQLException {
@@ -507,16 +585,7 @@ class FactoryDataPackageRestorePostgresContractTest {
                 // the production SET LOCAL so PostgreSQL enforces the deadline.
                 return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
                         new Class<?>[]{Connection.class}, (proxy, method, args) -> {
-                            if ("prepareStatement".equals(method.getName())) {
-                                if ("SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
-                                    args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
-                                    shortenedTimeout.set(true);
-                                } else if ("SELECT 1".equals(args[0])) {
-                                    args[0] = heartbeat.apply((String) args[0]);
-                                }
-                            } else if ("rollback".equals(method.getName()) && rollbackFailure != null) {
-                                throw rollbackFailure;
-                            }
+                            call.beforeCall(method.getName(), args);
                             try {
                                 return method.invoke(real, args);
                             } catch (InvocationTargetException e) {
