@@ -24,7 +24,7 @@ from typing import Any, Mapping, Optional, Sequence
 
 from fastapi import HTTPException
 
-from .planner_catalog import catalog_limit, shortlist
+from .planner_catalog import catalog_limit, rule_selection, shortlist
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
 PLANNER_CACHE_TTL_SECONDS = 600.0
 MAX_PLANNER_CACHE_ENTRIES = 128
-_PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...]]] = OrderedDict()
+_PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
 _cache_monotonic = time.monotonic
 
@@ -257,7 +257,7 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                factory_id: Optional[str] = None,
                authorized_subjects: Sequence[Mapping[str, Any]] = (),
                authorized_recommendations: Sequence[Mapping[str, Any]] = ()) -> tuple[list[str], dict[str, Any]]:
-    """Ask the approved chart LLM to select existing ids, fail closed."""
+    """Prefer the approved chart model and use rules if it cannot select chart IDs."""
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
     question = unicodedata.normalize("NFC", question.strip())
@@ -279,7 +279,6 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         semantic = [item for item in semantic if item.get("familyId") in required_families]
     limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
     cache_key = None
-    ai_mode = {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表", "cache": "miss"}
     if factory_id:
         cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
                                     authorized_subjects, required_families, limit)
@@ -287,7 +286,8 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         if cached is not None and cached[0] > _cache_monotonic():
             _PLAN_CACHE[cache_key] = cached
             logger.info("Factory conversation planner cache hit")
-            return list(cached[1]), {**ai_mode, "cache": "hit"}
+            return list(cached[1]), {**cached[2], "cache": "hit"}
+    rule_catalog = semantic
     semantic = shortlist(question, semantic, required_families, limit)
     logger.info("Factory conversation planner catalogue prefilter: %d -> %d",
                 len(authorized_catalog), len(semantic))
@@ -315,9 +315,11 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         "max_tokens": 900,
         "enable_thinking": False,
     }
-    if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
-        return [], {"mode": "unavailable", "reason": "图表规划请求超过安全上限"}
+    unavailable_reason = "当前授权目录没有与问题匹配的图表"
     try:
+        if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
+            unavailable_reason = "图表规划请求超过安全上限，当前授权目录没有与问题匹配的图表"
+            raise ValueError("planner payload exceeds 50000 bytes")
         from common.llm_metrics import llm_caller_context
         from common.llm_redactor import redaction_scope
         def _sensitive_values() -> dict[str, list[str]]:
@@ -439,22 +441,27 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                     ),
                 })
                 if len(json.dumps(retry_payload, ensure_ascii=False).encode("utf-8")) > 50000:
-                    return [], {"mode": "unavailable", "reason": "图表规划纠正请求超过安全上限"}
+                    unavailable_reason = "图表规划纠正请求超过安全上限，当前授权目录没有与问题匹配的图表"
+                    raise ValueError("planner correction payload exceeds 50000 bytes") from first_error
                 response = await _call(retry_payload)
         choices = response.get("choices") if isinstance(response, Mapping) else None
         content = choices[0].get("message", {}).get("content") if choices else None
         selected, duplicate_count = validated_selection(content)
         if duplicate_count:
             logger.info("Factory conversation planner removed %d duplicate chart selections by family", duplicate_count)
-        if cache_key is not None:
-            _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected))
-            _PLAN_CACHE.move_to_end(cache_key)
-            if len(_PLAN_CACHE) > MAX_PLANNER_CACHE_ENTRIES:
-                _PLAN_CACHE.popitem(last=False)
-        return selected, ai_mode
+        mode = {"mode": "ai", "reason": "AI仅在当前授权目录中规划图表"}
     except Exception as exc:
-        logger.warning("Factory conversation planner unavailable (%s): %s", type(exc).__name__, exc)
-        return [], {"mode": "unavailable", "reason": "AI图表规划暂不可用或回复未通过候选校验"}
+        logger.warning("Factory conversation AI planner failed (%s): %s", type(exc).__name__, exc)
+        selected = rule_selection(question, rule_catalog, required_families, MAX_SELECTED_CHARTS)
+        if not selected:
+            return [], {"mode": "unavailable", "reason": unavailable_reason}
+        mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
+    if cache_key is not None:
+        _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)
+        _PLAN_CACHE.move_to_end(cache_key)
+        if len(_PLAN_CACHE) > MAX_PLANNER_CACHE_ENTRIES:
+            _PLAN_CACHE.popitem(last=False)
+    return selected, {**mode, "cache": "miss"}
 
 
 def facts_for(selected: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -487,7 +494,13 @@ def facts_for(selected: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Mapping[str, Any]],
                     question: str = "") -> list[str]:
+    from smartbi.services.external_production import SOURCE_KEY
+
     limitations: list[str] = []
+    if re.search(r"单位成本|\bunit cost\b", question, re.I) and selected and all(
+        str(candidate.get("source", "")).split(" · ", 1)[0] == SOURCE_KEY for candidate in selected
+    ):
+        limitations.append("黑湖数据缺少制造成本，无法计算单位成本")
     for candidate in selected:
         findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         explicit = findings.get("limitations") if isinstance(findings.get("limitations"), list) else []
