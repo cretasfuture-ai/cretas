@@ -8,6 +8,8 @@ import java.io.OutputStream;
 import java.time.Clock;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.function.Supplier;
 
 /** 给别的包的真实 PG 测试用: 用测试 schema 构造整厂导出服务 (包内构造器)。 */
 public final class FactoryDataServiceFixture {
@@ -15,12 +17,29 @@ public final class FactoryDataServiceFixture {
     private FactoryDataServiceFixture() {}
 
     public static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema) {
+        // The protected restore contract also uses this fixture with the legacy exporter class.
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(), schema);
+    }
+
+    static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema,
+                                     int smartbiNetworkTimeoutMs) {
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
+                schema, smartbiNetworkTimeoutMs);
+    }
+
+    static FactoryDataService create(DataSource main, DataSource smartbi, Set<Long> operators, String schema,
+                                     Supplier<ScheduledExecutorService> heartbeatExecutor) {
+        return new FactoryDataService(main, smartbiProvider(smartbi), new NoAttachments(),
+                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
+                schema, FactoryDataService.DEFAULT_SMARTBI_NETWORK_TIMEOUT_MS, heartbeatExecutor);
+    }
+
+    private static ObjectProvider<DataSource> smartbiProvider(DataSource smartbi) {
         DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
         beans.registerSingleton("smartbiPostgresDataSource", smartbi);
-        ObjectProvider<DataSource> provider = beans.getBeanProvider(DataSource.class);
-        return new FactoryDataService(main, provider, new NoAttachments(),
-                new FactoryDataRequestLedger(main, Clock.systemDefaultZone()), operators, Clock.systemDefaultZone(),
-                schema);
+        return beans.getBeanProvider(DataSource.class);
     }
 
     public static String mainSchema(String schema) {

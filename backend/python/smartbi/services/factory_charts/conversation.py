@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -35,8 +36,11 @@ MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
 PLANNER_CACHE_TTL_SECONDS = 600.0
 MAX_PLANNER_CACHE_ENTRIES = 128
+PLANNER_DEADLINE_SECONDS = 20.0
+BACKGROUND_PLANNER_DEADLINE_SECONDS = 60.0
 _PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
+_BLACKLAKE_UNIT_COST_GAP = "黑湖数据缺少制造成本，无法计算单位成本"
 _cache_monotonic = time.monotonic
 
 
@@ -239,7 +243,7 @@ def _sanitized_history(history: Sequence[Mapping[str, Any]] | None,
     return result
 
 
-def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit):
+def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit, background):
     owner = history.owner if isinstance(history, _OwnedHistory) else None
     return factory_id, hashlib.sha256(json.dumps({
         "owner": owner,
@@ -249,6 +253,7 @@ def _plan_cache_key(factory_id, question, catalog, history, subjects, required_f
         "requiredFamilies": sorted(required_families),
         "history": _sanitized_history(history),
         "limit": limit,
+        "background": background,
     }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -256,8 +261,10 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                history: Sequence[Mapping[str, Any]] | None = None,
                factory_id: Optional[str] = None,
                authorized_subjects: Sequence[Mapping[str, Any]] = (),
-               authorized_recommendations: Sequence[Mapping[str, Any]] = ()) -> tuple[list[str], dict[str, Any]]:
-    """Prefer the approved chart model and use rules if it cannot select chart IDs."""
+               authorized_recommendations: Sequence[Mapping[str, Any]] = (),
+               *, background: bool | None = None) -> tuple[list[str], dict[str, Any]]:
+    """Plan with Rex by default, or with Aurora for designated background callers."""
+    started = _planner_monotonic()
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
     question = unicodedata.normalize("NFC", question.strip())
@@ -278,10 +285,12 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
             return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
         semantic = [item for item in semantic if item.get("familyId") in required_families]
     limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
+    if background is None:
+        background = os.getenv("SMARTBI_CHART_PLANNER_BACKGROUND") == "1"
     cache_key = None
     if factory_id:
         cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
-                                    authorized_subjects, required_families, limit)
+                                    authorized_subjects, required_families, limit, background)
         cached = _PLAN_CACHE.pop(cache_key, None)
         if cached is not None and cached[0] > _cache_monotonic():
             _PLAN_CACHE[cache_key] = cached
@@ -315,6 +324,24 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         "max_tokens": 900,
         "enable_thinking": False,
     }
+    from common.llm_router import (
+        CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS,
+        CHART_PLAN_CHAIN_TIMEOUT_SECONDS,
+        LLMChainExhausted,
+        SLOT,
+        call_chain,
+    )
+    if background:
+        attempt_timeout = CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS
+        deadline_seconds = BACKGROUND_PLANNER_DEADLINE_SECONDS
+    else:
+        attempt_timeout = CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_CHAIN_TIMEOUT_SECONDS
+        deadline_seconds = PLANNER_DEADLINE_SECONDS
+    deadline = started + deadline_seconds
     unavailable_reason = "当前授权目录没有与问题匹配的图表"
     try:
         if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
@@ -362,7 +389,6 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                         for child in value: collect_chart_strings(child)
                 collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
-        from common.llm_router import call_chain, SLOT, LLMChainExhausted
         provider_lookup = {aliases[str(item["id"])]: item for item in semantic}
 
         def validated_selection(content: Any) -> tuple[list[str], int]:
@@ -408,7 +434,6 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
 
         with redaction_scope() as scope, llm_caller_context("factory_chart_conversation", factory_id=factory_id):
             scope.register_values(_sensitive_values())
-            deadline = _planner_monotonic() + 12.0
 
             async def _call(request: Mapping[str, Any]) -> Mapping[str, Any]:
                 remaining = deadline - _planner_monotonic()
@@ -418,9 +443,10 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                     call_chain(
                         SLOT.CHART,
                         request,
-                        timeout=min(6.0, remaining),
-                        total_timeout=min(10.0, remaining),
+                        timeout=min(attempt_timeout, remaining),
+                        total_timeout=min(chain_timeout, remaining),
                         content_validator=content_validator,
+                        chart_background=background,
                     ),
                     timeout=remaining,
                 )
@@ -454,7 +480,11 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         logger.warning("Factory conversation AI planner failed (%s): %s", type(exc).__name__, exc)
         selected = rule_selection(question, rule_catalog, required_families, MAX_SELECTED_CHARTS)
         if not selected:
-            return [], {"mode": "unavailable", "reason": unavailable_reason}
+            timed_out = isinstance(exc, asyncio.TimeoutError) or (
+                isinstance(exc, LLMChainExhausted) and exc.timed_out
+            )
+            reason = "AI 规划超时，关键词规则未命中" if timed_out else unavailable_reason
+            return [], {"mode": "unavailable", "reason": reason}
         mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
     if cache_key is not None:
         _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)
@@ -500,7 +530,7 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
     if re.search(r"单位成本|\bunit cost\b", question, re.I) and selected and all(
         str(candidate.get("source", "")).split(" · ", 1)[0] == SOURCE_KEY for candidate in selected
     ):
-        limitations.append("黑湖数据缺少制造成本，无法计算单位成本")
+        limitations.append(_BLACKLAKE_UNIT_COST_GAP)
     for candidate in selected:
         findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         explicit = findings.get("limitations") if isinstance(findings.get("limitations"), list) else []
@@ -524,23 +554,48 @@ def limitations_for(selected: Sequence[Mapping[str, Any]], catalog: Sequence[Map
 
 def render_answer(question: str, selected: Sequence[Mapping[str, Any]], facts: Sequence[Mapping[str, Any]],
                   limitations: Sequence[str]) -> str:
-    lines = [f"已根据问题“{question[:1000]}”从当前授权图表目录选择 {len(selected)} 类分析。"]
-    if facts:
-        lines.append("可信事实：" + "；".join(
-            f"{fact['label']}={fact['value']}{fact['unit']}（来源：{fact['source']}）" for fact in facts[:8]
-        ))
-    else:
-        lines.append("当前选中的图表没有可直接呈现的 KPI 事实，请打开图表明细复核原始记录。")
+    from smartbi.services.external_production import UNAVAILABLE_MESSAGE
+
+    titles = {str(item.get("id", "")): item.get("title") or item.get("metric") for item in selected}
+    readings = []
+    for fact in facts:
+        value = fact["value"]
+        if value is None or value == "":
+            continue
+        label = fact["label"]
+        title = titles.get(fact["candidateId"])
+        if title and label in {"合计", "累计口径"}:
+            label = f"{title}（{label}）"
+        readings.append(f"{label}为{value}{fact['unit']}")
+    lines = ["；".join(readings[:8]) + "。" if readings else "暂无可直接汇总的数值，请查看下方图表明细。"]
+    if _BLACKLAKE_UNIT_COST_GAP in limitations:
+        lines.insert(0, _BLACKLAKE_UNIT_COST_GAP + "。")
+    elif UNAVAILABLE_MESSAGE in limitations and re.search(r"出成率|\byield rate\b", question, re.I):
+        lines.insert(0, UNAVAILABLE_MESSAGE + "出成率。")
+    elif selected and re.search(r"每天|每日|逐日", question):
+        from .metrics import display
+
+        first = selected[0]
+        rows = first.get("tableData")
+        title = first.get("title")
+        if title and isinstance(rows, list) and 1 <= len(rows) <= 8 and all(
+            isinstance(row, Mapping)
+            and re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(row.get("label", "")))
+            and isinstance(row.get("value"), (int, float))
+            for row in rows
+        ):
+            unit = first.get("unit") or ""
+            daily = "，".join(f"{row['label']}为{display(row['value'])}{unit}" for row in rows)
+            lines.insert(0, f"{title}：{daily}。")
     findings = []
     for candidate in selected:
-        source = str(candidate.get("source", ""))
         raw_findings = candidate.get("findings") if isinstance(candidate.get("findings"), Mapping) else {}
         for bucket in ("good", "attention", "suggestions"):
             values = raw_findings.get(bucket) if isinstance(raw_findings.get(bucket), list) else []
             labels = {"good": "做得好", "attention": "需关注", "suggestions": "建议"}
-            findings.extend(f"{labels[bucket]}：{str(value)}（来源：{source}）" for value in values[:2] if value)
+            findings.extend(f"{labels[bucket]}：{value}" for value in values[:2] if value)
     if findings:
-        lines.append("可信发现：" + "；".join(findings[:8]))
+        lines.append("分析：" + "；".join(findings[:8]))
     if limitations:
         lines.append("限制：" + "；".join(limitations[:4]))
     return "\n".join(lines)

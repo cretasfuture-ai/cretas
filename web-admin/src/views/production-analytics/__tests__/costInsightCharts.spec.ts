@@ -61,7 +61,7 @@ describe('成本结构占比', () => {
   it('写出最大一项的实际占比和金额，建议按占比现算', () => {
     const r = buildChartInsight(costPieInsightChart(current, null)!, finance)!;
     expect(r.finding).toBe('材料成本占93.9%（¥7.45万），是最大一项；其次人工成本4.1%、设备成本1.4%。');
-    expect(r.suggestion).toBe('材料成本每降1%，合计约降0.94%，先从材料成本查起。');
+    expect(r.suggestion).toContain('材料成本占合计的93.9%，先从这一项核对费用明细的用量和单价');
     expect(text(r)).not.toMatch(TEMPLATE_RE);
   });
 

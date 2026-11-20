@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.jdbc.datasource.DelegatingDataSource;
 
@@ -17,13 +19,16 @@ import java.io.ByteArrayOutputStream;
 import java.io.FilterOutputStream;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -32,7 +37,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
+import java.util.function.UnaryOperator;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
@@ -390,7 +401,399 @@ class FactoryDataPackageRestorePostgresContractTest {
         }
     }
 
+    @Test
+    void waitingHeartbeatHasANetworkReadDeadlineWhenCretasZipWriteFails() throws Exception {
+        setUpSources();
+        CountDownLatch heartbeatStarted = new CountDownLatch(1);
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeatStarted.countDown();
+            // A real PostgreSQL response delayed beyond the socket read limit, within the query timeout.
+            return "SELECT pg_sleep(4)";
+        }, null);
+        FactoryDataService service = FactoryDataServiceFixture.create(source, waiting, Set.of(1L), sourceSchema, 1_500);
+        long request = service.startExport(OPERATOR, FACTORY);
+        IOException writeFailure = new IOException("CRETAS ZIP write failed");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        OutputStream output = afterHeartbeat(bytes, heartbeatStarted, writeFailure);
+
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FACTORY, FactoryDataService.AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON), output))
+                .hasRootCause(writeFailure)
+                .satisfies(error -> assertThat(error.getSuppressed())
+                        .as("SmartBI 心跳须在 JDBC 套接字读超时后结束并回传异常")
+                        .anySatisfy(heartbeat -> assertThat(heartbeat)
+                                .hasMessageContaining("快照心跳失败")
+                                .hasRootCauseInstanceOf(SocketTimeoutException.class)));
+        assertFailedExport(service, request, bytes);
+    }
+
+    @Test
+    void runtimeHeartbeatFailureRemainsTheCauseWhenSnapshotRollbackFails() throws Exception {
+        setUpSources();
+        CountDownLatch heartbeatStarted = new CountDownLatch(1);
+        AtomicInteger heartbeats = new AtomicInteger();
+        RuntimeException heartbeatFailure = new IllegalStateException("SmartBI heartbeat wrapper failed");
+        SQLException rollbackFailure = new SQLException("SmartBI snapshot rollback failed");
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeats.incrementAndGet();
+            heartbeatStarted.countDown();
+            throw heartbeatFailure;
+        }, rollbackFailure);
+        FactoryDataService service = FactoryDataServiceFixture.create(source, waiting, Set.of(1L), sourceSchema);
+        long request = service.startExport(OPERATOR, FACTORY);
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        OutputStream output = afterHeartbeat(bytes, heartbeatStarted, null);
+
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FACTORY, FactoryDataService.AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON), output))
+                .hasMessageContaining("快照心跳失败")
+                .hasRootCause(heartbeatFailure)
+                .satisfies(error -> assertThat(error.getSuppressed()).containsExactly(rollbackFailure));
+        assertThat(heartbeats).hasValue(1);
+        assertThat(bytes.size()).isPositive();
+        assertThat(bytes.toString(StandardCharsets.ISO_8859_1)).doesNotContain("smartbi/json/");
+        assertFailedExport(service, request, bytes);
+    }
+
+    @Test
+    void cretasZipFailureRemainsTheCauseWhenHeartbeatFailsDuringRollback() throws Exception {
+        setUpSources();
+        CountDownLatch heartbeatEntered = new CountDownLatch(1);
+        CountDownLatch rollbackEntered = new CountDownLatch(1);
+        var heartbeatExecutor = new HeartbeatCompletion();
+        var writeFailure = new IOException("CRETAS ZIP write failed before rollback");
+        var heartbeatFailure = new IllegalStateException("SmartBI heartbeat failed during CRETAS rollback");
+        var rollbackFailure = new SQLException("CRETAS snapshot rollback failed");
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeatEntered.countDown();
+            awaitBarrier(rollbackEntered);
+            throw heartbeatFailure;
+        }, null);
+        DataSource cretas = interceptConnection(source, (method, args) -> {
+            if ("rollback".equals(method)) {
+                rollbackEntered.countDown();
+                awaitBarrier(heartbeatExecutor.completed);
+                throw rollbackFailure;
+            }
+        });
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
+                () -> heartbeatExecutor);
+        long request = service.startExport(OPERATOR, FACTORY);
+        var bytes = new ByteArrayOutputStream();
+        OutputStream output = afterHeartbeat(bytes, heartbeatEntered, writeFailure);
+
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> service.writeExport(request, OPERATOR,
+                FACTORY, FactoryDataService.AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output));
+        assertFailedExport(service, request, bytes);
+        assertThat(failure).hasRootCause(writeFailure);
+        assertThat(failure.getSuppressed()).hasSize(2).contains(rollbackFailure)
+                .anySatisfy(heartbeat -> assertThat(heartbeat).hasMessageContaining("快照心跳失败")
+                        .hasRootCause(heartbeatFailure));
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row ->
+                assertThat(row.errorMessage()).contains(writeFailure.getMessage()));
+    }
+
+    @Test
+    void zipFailureDuringTableWritePrecedesHeartbeatDuringStatementClose() throws Exception {
+        setUpSources();
+        var heartbeatEntered = new CountDownLatch(1);
+        var statementCloseEntered = new CountDownLatch(1);
+        var heartbeatExecutor = new HeartbeatCompletion();
+        var zipWriteFailed = new AtomicBoolean();
+        var statementClosed = new AtomicBoolean();
+        var rollbackStarted = new AtomicBoolean();
+        var writeFailure = new IOException("CRETAS ZIP write failed before statement close");
+        var heartbeatFailure = new IllegalStateException("SmartBI heartbeat failed during CRETAS statement close");
+        var closeFailure = new SQLException("CRETAS table statement close failed");
+        var rollbackFailure = new SQLException("CRETAS snapshot rollback failed");
+        DataSource waiting = interceptHeartbeat(smartbiSource, sql -> {
+            heartbeatEntered.countDown();
+            awaitBarrier(statementCloseEntered);
+            throw heartbeatFailure;
+        }, null);
+        DataSource cretas = interceptConnection(source, (method, args) -> {
+            if ("rollback".equals(method)) {
+                assertThat(statementClosed).isTrue();
+                rollbackStarted.set(true);
+                throw rollbackFailure;
+            }
+        }, real -> (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
+                new Class<?>[]{PreparedStatement.class}, (statement, method, args) -> {
+                    if ("close".equals(method.getName()) && zipWriteFailed.get()) {
+                        assertThat(rollbackStarted).isFalse();
+                        statementCloseEntered.countDown();
+                        awaitBarrier(heartbeatExecutor.completed);
+                        real.close();
+                        statementClosed.set(true);
+                        throw closeFailure;
+                    }
+                    return invokeJdbc(real, method, args);
+                }));
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
+                () -> heartbeatExecutor);
+        long request = service.startExport(OPERATOR, FACTORY);
+        var bytes = new ByteArrayOutputStream();
+        var output = new FilterOutputStream(bytes) {
+            @Override public void write(int value) throws IOException {
+                awaitBarrier(heartbeatEntered);
+                zipWriteFailed.set(true);
+                throw writeFailure;
+            }
+        };
+
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> service.writeExport(request, OPERATOR,
+                FACTORY, FactoryDataService.AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON), output));
+        assertThat(statementClosed).isTrue();
+        assertThat(rollbackStarted).isTrue();
+        assertThat(heartbeatExecutor.isTerminated()).isTrue();
+        assertFailedExport(service, request, bytes);
+        assertThat(failure).hasRootCause(writeFailure);
+        assertThat(failure.getSuppressed()).hasSize(3).contains(closeFailure, rollbackFailure)
+                .anySatisfy(heartbeat -> assertThat(heartbeat).hasMessageContaining("快照心跳失败")
+                        .hasRootCause(heartbeatFailure));
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row ->
+                assertThat(row.errorMessage()).contains(writeFailure.getMessage()));
+    }
+
+    private static final class HeartbeatCompletion extends ScheduledThreadPoolExecutor {
+        private final CountDownLatch completed = new CountDownLatch(1);
+
+        private HeartbeatCompletion() {
+            super(1, Thread.ofVirtual().factory());
+        }
+
+        @Override protected void afterExecute(Runnable task, Throwable failure) {
+            completed.countDown();
+        }
+    }
+
+    private enum ExportFault { HEARTBEAT_QUERY, CRETAS_READ, ZIP_WRITE, HEARTBEAT, STATEMENT_CLOSE, ROLLBACK }
+
+    @ParameterizedTest(name = "{0} before {1}")
+    @CsvSource({
+            "HEARTBEAT_QUERY, HEARTBEAT",
+            "HEARTBEAT_QUERY, STATEMENT_CLOSE",
+            "HEARTBEAT_QUERY, ROLLBACK",
+            "CRETAS_READ, HEARTBEAT",
+            "CRETAS_READ, STATEMENT_CLOSE",
+            "CRETAS_READ, ROLLBACK",
+            "ZIP_WRITE, HEARTBEAT",
+            "ZIP_WRITE, STATEMENT_CLOSE",
+            "ZIP_WRITE, ROLLBACK",
+            // R3's other ordering: CRETAS writes while the failed heartbeat statement is closing.
+            "HEARTBEAT_QUERY, ZIP_WRITE"
+    })
+    void exportRecordsFirstFaultBeforeCleanup(ExportFault first, ExportFault second) throws Exception {
+        setUpSources();
+        var faults = new ExportFaults(first, second);
+        DataSource waiting = interceptConnection(smartbiSource, (method, args) -> {
+            if ("prepareStatement".equals(method)
+                    && "SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
+                args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
+            }
+        }, (sql, statement) -> "SELECT 1".equals(sql) ? faults.heartbeatStatement(statement) : statement);
+        DataSource cretas = interceptConnection(source, (method, args) -> {
+            if ("rollback".equals(method)) faults.rollback();
+        }, (sql, statement) -> sql.startsWith("SELECT * FROM ") && faults.firstTable.compareAndSet(false, true)
+                ? faults.cretasTableStatement(statement) : statement);
+        FactoryDataService service = FactoryDataServiceFixture.create(cretas, waiting, Set.of(1L), sourceSchema,
+                () -> faults.executor);
+        long request = service.startExport(OPERATOR, FACTORY);
+        var bytes = new ByteArrayOutputStream();
+
+        Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> service.writeExport(request, OPERATOR,
+                FACTORY, FactoryDataService.AttachmentMode.SKIP, Set.of(FactoryDataService.Format.JSON),
+                faults.output(bytes)));
+        assertThat(faults.executor.isTerminated()).isTrue();
+        assertFailedExport(service, request, bytes);
+        assertThat(failure).hasRootCause(faults.primary);
+        assertThat(failure.getSuppressed()).singleElement().satisfies(suppressed -> {
+            if (second == ExportFault.ZIP_WRITE || (second == ExportFault.HEARTBEAT && first != ExportFault.HEARTBEAT_QUERY)) {
+                assertThat(suppressed).hasRootCause(faults.secondary);
+            } else {
+                assertThat(suppressed).isSameAs(faults.secondary);
+            }
+        });
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row -> assertThat(row.errorMessage())
+                .contains(faults.primary.getMessage()).doesNotContain(faults.secondary.getMessage()));
+    }
+
+    private static final class ExportFaults {
+        private final ExportFault first;
+        private final ExportFault second;
+        private final Exception primary;
+        private final Exception secondary;
+        private final HeartbeatCompletion executor = new HeartbeatCompletion();
+        private final CountDownLatch heartbeatEntered = new CountDownLatch(1);
+        private final CountDownLatch heartbeatClosing = new CountDownLatch(1);
+        private final CountDownLatch tableClosing = new CountDownLatch(1);
+        private final AtomicBoolean firstTable = new AtomicBoolean();
+
+        private ExportFaults(ExportFault first, ExportFault second) {
+            this.first = first;
+            this.second = second;
+            primary = first == ExportFault.ZIP_WRITE ? new IOException("first ZIP write")
+                    : new SQLException("first " + first);
+            secondary = second == ExportFault.ZIP_WRITE ? new IOException("later ZIP write")
+                    : new SQLException("later " + second);
+        }
+
+        private PreparedStatement heartbeatStatement(PreparedStatement real) {
+            return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
+                    new Class<?>[]{PreparedStatement.class}, (proxy, method, args) -> {
+                        if ("executeQuery".equals(method.getName())) {
+                            heartbeatEntered.countDown();
+                            if (first == ExportFault.HEARTBEAT_QUERY) throw primary;
+                            if (second == ExportFault.HEARTBEAT) {
+                                awaitBarrier(tableClosing);
+                                throw secondary;
+                            }
+                        } else if ("close".equals(method.getName()) && first == ExportFault.HEARTBEAT_QUERY) {
+                            heartbeatClosing.countDown();
+                            if (second == ExportFault.ZIP_WRITE) awaitBarrier(tableClosing);
+                            real.close();
+                            if (second == ExportFault.HEARTBEAT) throw secondary;
+                            return null;
+                        }
+                        return invokeJdbc(real, method, args);
+                    });
+        }
+
+        private PreparedStatement cretasTableStatement(PreparedStatement real) {
+            return (PreparedStatement) Proxy.newProxyInstance(PreparedStatement.class.getClassLoader(),
+                    new Class<?>[]{PreparedStatement.class}, (proxy, method, args) -> {
+                        if ("close".equals(method.getName())) {
+                            tableClosing.countDown();
+                            if (second == ExportFault.HEARTBEAT && first != ExportFault.HEARTBEAT_QUERY) {
+                                awaitBarrier(executor.completed);
+                            }
+                            real.close();
+                            if (second == ExportFault.STATEMENT_CLOSE) {
+                                if (first == ExportFault.HEARTBEAT_QUERY) awaitBarrier(executor.completed);
+                                throw secondary;
+                            }
+                            return null;
+                        }
+                        Object result = invokeJdbc(real, method, args);
+                        if (first == ExportFault.CRETAS_READ && "executeQuery".equals(method.getName())) {
+                            return Proxy.newProxyInstance(ResultSet.class.getClassLoader(),
+                                    new Class<?>[]{ResultSet.class}, (rows, call, parameters) -> {
+                                        if ("next".equals(call.getName())) {
+                                            awaitBarrier(heartbeatEntered);
+                                            throw primary;
+                                        }
+                                        return invokeJdbc(result, call, parameters);
+                                    });
+                        }
+                        return result;
+                    });
+        }
+
+        private void rollback() throws Exception {
+            if (second == ExportFault.ROLLBACK) {
+                if (first == ExportFault.HEARTBEAT_QUERY) awaitBarrier(executor.completed);
+                throw secondary;
+            }
+        }
+
+        private OutputStream output(ByteArrayOutputStream bytes) {
+            if (first == ExportFault.ZIP_WRITE) return afterHeartbeat(bytes, heartbeatEntered, (IOException) primary);
+            if (second == ExportFault.ZIP_WRITE) return afterHeartbeat(bytes, heartbeatClosing, (IOException) secondary);
+            if (first == ExportFault.HEARTBEAT_QUERY) return afterHeartbeat(bytes, heartbeatEntered, null);
+            return bytes;
+        }
+    }
+
+    private static void awaitBarrier(CountDownLatch latch) {
+        try {
+            assertThat(latch.await(10, TimeUnit.SECONDS)).as("snapshot failure ordering barrier").isTrue();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(e);
+        }
+    }
+
+    private static void assertFailedExport(FactoryDataService service, long request, ByteArrayOutputStream bytes) {
+        assertThat(bytes.toString(StandardCharsets.ISO_8859_1)).doesNotContain("manifest.json");
+        assertThat(service.ledger().find(request)).hasValueSatisfying(row -> {
+            assertThat(row.status()).isEqualTo(FactoryDataRequestLedger.Status.FAILED);
+            assertThat(row.packageSha256()).isNull();
+        });
+    }
+
+    private static OutputStream afterHeartbeat(ByteArrayOutputStream bytes, CountDownLatch heartbeatStarted,
+                                               IOException writeFailure) {
+        return new FilterOutputStream(bytes) {
+            private boolean firstWrite = true;
+
+            private void beforeWrite() throws IOException {
+                if (!firstWrite) return;
+                firstWrite = false;
+                try {
+                    if (!heartbeatStarted.await(10, TimeUnit.SECONDS)) {
+                        throw new IOException("未进入 SmartBI 心跳");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("等待 SmartBI 心跳时被中断", e);
+                }
+                if (writeFailure != null) throw writeFailure;
+            }
+
+            @Override public void write(int value) throws IOException {
+                beforeWrite();
+                out.write(value);
+            }
+
+            @Override public void write(byte[] data, int offset, int length) throws IOException {
+                beforeWrite();
+                out.write(data, offset, length);
+            }
+        };
+    }
+
     private static DataSource shortIdleTimeout(DataSource original, AtomicBoolean shortenedTimeout) {
+        return interceptHeartbeat(original, UnaryOperator.identity(), null, shortenedTimeout);
+    }
+
+    private static DataSource interceptHeartbeat(DataSource original, UnaryOperator<String> heartbeat,
+                                                 SQLException rollbackFailure) {
+        return interceptHeartbeat(original, heartbeat, rollbackFailure, new AtomicBoolean());
+    }
+
+    private static DataSource interceptHeartbeat(DataSource original, UnaryOperator<String> heartbeat,
+                                                 SQLException rollbackFailure, AtomicBoolean shortenedTimeout) {
+        return interceptConnection(original, (method, args) -> {
+            if ("prepareStatement".equals(method)) {
+                if ("SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
+                    args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
+                    shortenedTimeout.set(true);
+                } else if ("SELECT 1".equals(args[0])) {
+                    args[0] = heartbeat.apply((String) args[0]);
+                }
+            } else if ("rollback".equals(method) && rollbackFailure != null) {
+                throw rollbackFailure;
+            }
+        });
+    }
+
+    @FunctionalInterface
+    private interface SnapshotCall {
+        void beforeCall(String method, Object[] args) throws Exception;
+    }
+
+    private static DataSource interceptConnection(DataSource original, SnapshotCall call) {
+        return interceptConnection(original, call, UnaryOperator.identity());
+    }
+
+    private static DataSource interceptConnection(DataSource original, SnapshotCall call,
+                                                  UnaryOperator<PreparedStatement> wrapTableStatement) {
+        return interceptConnection(original, call, (sql, statement) ->
+                sql.startsWith("SELECT * FROM ") ? wrapTableStatement.apply(statement) : statement);
+    }
+
+    private static DataSource interceptConnection(DataSource original, SnapshotCall call,
+                                                  BiFunction<String, PreparedStatement, PreparedStatement> wrapStatement) {
         return new DelegatingDataSource(original) {
             @Override
             public Connection getConnection() throws SQLException {
@@ -399,19 +802,24 @@ class FactoryDataPackageRestorePostgresContractTest {
                 // the production SET LOCAL so PostgreSQL enforces the deadline.
                 return (Connection) Proxy.newProxyInstance(Connection.class.getClassLoader(),
                         new Class<?>[]{Connection.class}, (proxy, method, args) -> {
+                            call.beforeCall(method.getName(), args);
+                            Object result = invokeJdbc(real, method, args);
                             if ("prepareStatement".equals(method.getName())
-                                    && "SET LOCAL idle_in_transaction_session_timeout = '15min'".equals(args[0])) {
-                                args[0] = "SET LOCAL idle_in_transaction_session_timeout = '2s'";
-                                shortenedTimeout.set(true);
+                                    && args[0] instanceof String sql) {
+                                return wrapStatement.apply(sql, (PreparedStatement) result);
                             }
-                            try {
-                                return method.invoke(real, args);
-                            } catch (InvocationTargetException e) {
-                                throw e.getCause();
-                            }
+                            return result;
                         });
             }
         };
+    }
+
+    private static Object invokeJdbc(Object target, Method method, Object[] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException e) {
+            throw e.getCause();
+        }
     }
 
     @Test

@@ -38,13 +38,15 @@
       and the watcher inside useChartInsight re-evaluates insight state.
   -->
   <ChartInsight :insight="displayInsight" :loading="loading" :depth="depth" :factory-id="factoryId" />
-  <p v-if="unavailableText && !loading && !displayInsight" role="status">{{ unavailableText }}</p>
+  <p v-if="emptyPie" role="status">暂无可计算占比的数据。</p>
+  <p v-else-if="unavailableText && !loading && !displayInsight" role="status">{{ unavailableText }}</p>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import ChartInsight from './ChartInsight.vue';
 import { useChartInsight } from '@/composables/useChartInsight';
+import { extractPieSlices } from './chartInsight';
 import type { ChartWithMeta, InsightResult, UserPermissions } from './chartInsight';
 
 const props = withDefaults(
@@ -98,9 +100,12 @@ const props = withDefaults(
  * the parent v-for updates), this getter returns a new value and the composable's
  * deep watcher fires, re-evaluating insight state for this instance.
  */
+const emptyPie = computed(() => props.chart?.chartType?.toLowerCase() === 'pie'
+  && !extractPieSlices(props.chart.config).some(({ value }) => value > 0));
+
 const { insight, loading } = useChartInsight(
   // source: reactive getter — returns { chart } when chart prop is non-null, null otherwise
-  () => (props.chart != null ? { chart: props.chart } : null),
+  () => (props.chart != null && !emptyPie.value ? { chart: props.chart } : null),
   // perms: reactive getter — re-reads props.perms on each evaluation
   () => props.perms,
   {
