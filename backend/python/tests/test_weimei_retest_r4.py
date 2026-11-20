@@ -67,6 +67,8 @@ class FakeConn:
                 return [{"original_name": n, "standard_name": n, "is_measure": m, "is_dimension": d, "is_time": t}
                         for n, m, d, t in fields]
             if "FROM smart_bi_dynamic_data d" in sql and "d.row_data" in sql:
+                if "LIMIT 200" in sql:
+                    rows = rows[:200]
                 return [{"row_data": json.dumps(r, ensure_ascii=False)} for r in rows]
         return []
 
@@ -102,7 +104,8 @@ def _parse_sse(body: str):
     return events
 
 
-async def ask(monkeypatch, question, tables, *, answer="（桩）", plans=None, candidates=None):
+async def ask(monkeypatch, question, tables, *, answer="（桩）", plans=None, candidates=None,
+              sheet_id=None, computed_blocks=None):
     """plans: 规划器依次返回的计划 (最后一个重复); 返回 (events, done, 注入 LLM 的提示词列表, 规划器调用次数)。"""
     prompts, calls = [], []
     seq = list(plans or [{"intent": "none"}])
@@ -127,7 +130,19 @@ async def ask(monkeypatch, question, tables, *, answer="（桩）", plans=None, 
     monkeypatch.setattr("smartbi.services.llm_fallback_logger.log_fallback", _log_fallback)
     monkeypatch.setattr(chat_mod, "_chat_cache_get", lambda _k: None)
     monkeypatch.setattr(chat_mod, "_chat_cache_set", lambda *a: None)
-    resp = await chat_mod.general_analysis_stream(chat_mod.GeneralAnalysisRequest(query=question), _Request())
+    if computed_blocks is not None:
+        from smartbi.services import row_level_qa
+
+        original = row_level_qa.answer_row_level
+
+        async def record_computation(*args, **kwargs):
+            outcome = await original(*args, **kwargs)
+            computed_blocks.append(outcome.text)
+            return outcome
+
+        monkeypatch.setattr(row_level_qa, "answer_row_level", record_computation)
+    resp = await chat_mod.general_analysis_stream(
+        chat_mod.GeneralAnalysisRequest(query=question, sheet_id=sheet_id), _Request())
     body = ""
     async for chunk in resp.body_iterator:
         body += chunk.decode() if isinstance(chunk, bytes) else chunk
@@ -263,7 +278,8 @@ async def test_3_a_clause_with_the_total_word_and_an_unrelated_number_is_left_al
 
 # ============ 4. 计划外生产: 「10月」被规划成 日期=='2026-10' 命中 0 行 ============
 
-OUTSIDE_Q = "10月有哪些计划外生产？"
+# 用自由问法保留规划器的日期与取值校验覆盖。原问法走直接作答，由 complete 测试覆盖。
+OUTSIDE_Q = "10月哪些产品是计划外生产的"
 
 
 async def test_4_month_written_as_date_equality_still_lists_the_nine_rows(monkeypatch):
@@ -315,9 +331,10 @@ PLAN_DETAIL = [c for c in WEIMEI if c.upload_id == 5323]
     {"intent": "compute", "metrics": [{"name": "均值", "func": "mean", "col": "计划品项达成率"}]},   # 浏览器那次的写法
 ])
 async def test_12_plan_vs_actual_is_the_weighted_item_rate_whatever_the_planner_says(monkeypatch, llm_plan):
-    _, _, prompts, calls = await ask(monkeypatch, "10月计划与实际差多少？", {5334: (plan_day_rows(), PLAN_DAY_FIELDS)},
-                                     plans=[llm_plan], candidates=PLAN_DAY)
-    block = prompts[0]
+    blocks = []
+    _, _, _, calls = await ask(monkeypatch, "10月计划与实际差多少？", {5334: (plan_day_rows(), PLAN_DAY_FIELDS)},
+                               plans=[llm_plan], candidates=PLAN_DAY, computed_blocks=blocks)
+    block = blocks[0]
     assert "计划品项数合计 | 已产出品项数合计 | 缺口合计(计划-产出)" in block
     assert "| 75 | 55 | 20 | 73.33% | 9 |" in block                  # 改前(浏览器): 均值 0.80 + 「37 天」
     assert calls == []                                              # 不经规划器: 同一问题每次一致
@@ -335,10 +352,11 @@ async def test_4_week_question_on_daily_table_is_rolled_up_by_the_program(monkey
     rows = [{"日期": d, "原表计划品项数": p, "已产出计划品项数": o, "计划品项达成率": o / p, "计划外生产品项数": 0,
              "备注": None, "实产良品kg": 1.0}
             for d, p, o in [("2026-10-05", 10, 1), ("2026-10-09", 2, 2), ("2026-10-23", 4, 3), ("2026-10-30", 4, 2)]]
-    _, _, prompts, calls = await ask(monkeypatch, "哪一周计划品项达成率最低？", {5334: (rows, PLAN_DAY_FIELDS)},
-                                     plans=[{"intent": "compute", "sort_by": "计划品项达成率", "limit": 1}],
-                                     candidates=PLAN_DAY)
-    block = prompts[0]
+    blocks = []
+    _, _, _, calls = await ask(monkeypatch, "哪一周计划品项达成率最低？", {5334: (rows, PLAN_DAY_FIELDS)},
+                               plans=[{"intent": "compute", "sort_by": "计划品项达成率", "limit": 1}],
+                               candidates=PLAN_DAY, computed_blocks=blocks)
+    block = blocks[0]
     assert "| 2026-W41 | 25.00% |" in block                        # W41 = 10/05+10/09: (1+2)/(10+2) 加权; 逐日平均会是 55%
     assert block.index("2026-W41") < block.index("2026-W44") < block.index("2026-W43")   # 升序: 最低在前
     assert "按日表" in block and "按周汇总" in block
@@ -357,11 +375,13 @@ def code_rows(prefix=""):
 CODE_PLAN = {"intent": "compute", "filters": [{"col": "结论", "op": "==", "value": "计划了未生产"}],
              "group_by": ["产品编码"], "metrics": [{"name": "次数", "func": "count", "col": None}],
              "sort_by": "次数", "descending": True, "limit": 5}
-CODE_Q = "10月哪些产品计划了但没有生产？哪个最多？"
+# 自由问法的 LLM 样本和编码纠正仍独立验证。
+CODE_Q = "10月计划vs实产里哪些产品计划了但没有生产？哪个最多？"
 
 
 async def test_3_code_column_is_not_summarised_as_a_number_in_the_prompt(monkeypatch):
-    _, _, prompts, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)}, plans=[CODE_PLAN])
+    _, _, prompts, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)},
+                                 plans=[CODE_PLAN], candidates=PLAN_DETAIL)
     p = prompts[0]
     assert "260,403" not in p and "22,002" not in p                 # 改前: 产品编码: 最大=260,403.00, 最小=22,002.00
     assert "产品编码: 总计" not in p and "- 产品编码:" not in p
@@ -371,7 +391,8 @@ async def test_3_code_column_is_not_summarised_as_a_number_in_the_prompt(monkeyp
 
 async def test_3_answer_that_writes_the_code_with_a_thousands_separator_is_corrected(monkeypatch):
     wrong = "产品编码 22,002 最多，其次是 260,403，共 3 次。"
-    _, done, _, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)}, answer=wrong, plans=[CODE_PLAN])
+    _, done, _, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)},
+                              answer=wrong, plans=[CODE_PLAN], candidates=PLAN_DETAIL)
     assert "22002" in done["answer"] and "260403" in done["answer"]
     assert "22,002" not in done["answer"] and "260,403" not in done["answer"]
     assert done["answer_corrected"] is True
@@ -379,7 +400,8 @@ async def test_3_answer_that_writes_the_code_with_a_thousands_separator_is_corre
 
 async def test_3_a_quantity_that_merely_looks_like_a_code_keeps_its_separator(monkeypatch):
     text = "产品编码 22,002 最多；良品合计 22,002 kg。"
-    _, done, _, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)}, answer=text, plans=[CODE_PLAN])
+    _, done, _, _ = await ask(monkeypatch, CODE_Q, {5323: (code_rows(), PLAN_FIELDS)},
+                              answer=text, plans=[CODE_PLAN], candidates=PLAN_DETAIL)
     assert done["answer"] == "产品编码 22002 最多；良品合计 22,002 kg。"      # 带单位的数量不动
 
 

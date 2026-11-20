@@ -80,15 +80,13 @@ def blacklake_app(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("question", "required_text"), [
-    ("11 月每天成品入库的良品量是多少？", ("按问题关键词从授权图表目录选择",)),
-    ("11 月出成率是多少？", ("黑湖数据不含投入量，无法计算",)),
-    ("11 月成品入库单位成本是多少？", (
-        "黑湖数据不含投入量，无法计算", "黑湖数据缺少制造成本，无法计算单位成本",
-    )),
+@pytest.mark.parametrize(("question", "opening"), [
+    ("11 月每天成品入库的良品量是多少？", "成品入库每日良品数：2026-11-18为12.5KG，2026-11-19为3.5KG。"),
+    ("11 月出成率是多少？", "黑湖数据不含投入量，无法计算出成率。"),
+    ("11 月成品入库单位成本是多少？", "黑湖数据缺少制造成本，无法计算单位成本。"),
 ])
 async def test_blacklake_rule_plan_reaches_factory_analysis_response(blacklake_app, monkeypatch,
-                                                                   question, required_text):
+                                                                   question, opening):
     app, _, _, _ = blacklake_app
     conversation.clear_contexts()
     provider = AsyncMock(side_effect=LLMChainExhausted("chart", ["fixture: timeout"]))
@@ -103,8 +101,11 @@ async def test_blacklake_rule_plan_reaches_factory_analysis_response(blacklake_a
     first = data["recommendations"][0]
     assert first["id"] == data["selectedIds"][0]
     assert first["analysis"]["familyId"] == "blacklake-production.finished.good"
-    assert all(text in data["answer"] for text in required_text)
-    if "无法计算" in "".join(required_text):
+    assert "授权图表目录" not in data["answer"]
+    assert data["answer"].startswith(opening)
+    assert data["facts"][0]["value"] == "16" and data["facts"][0]["unit"] == "KG"
+    if "无法计算" in opening:
+        assert "黑湖数据不含投入量，无法计算" in data["answer"]
         assert all(fact["candidateId"].startswith("blacklake-production.finished.good")
                    for fact in data["facts"])
 

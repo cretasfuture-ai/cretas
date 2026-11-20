@@ -4,10 +4,11 @@
  * 点节点 = 看详情 + 高亮它的整条上下游链路, 其余变淡。边的组装规则与缺口见 `traceGraph.ts`。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { VueFlow, Handle, Position, useVueFlow, type Edge, type Node } from '@vue-flow/core';
+import { VueFlow, Handle, Position, useVueFlow, type Dimensions, type Edge, type Node, type NodeChange } from '@vue-flow/core';
 import { Background } from '@vue-flow/background';
 import { Controls, ControlButton } from '@vue-flow/controls';
 import type { FullTraceResponse } from '@/api/traceability';
+import { APP_SCROLL_SELECTOR } from '@/utils/returnNavigation';
 import {
   buildTraceGraph,
   chainOf,
@@ -58,21 +59,49 @@ watch(() => props.trace, () => { selectedId.value = null; });
 
 const chain = computed(() => (selectedId.value ? chainOf(graph.value, selectedId.value) : null));
 
-const positions = computed(() => {
+const nodeSizes = ref(new Map<string, Dimensions>());
+function updateNodeSizes(changes: NodeChange[]) {
+  for (const change of changes) {
+    if (change.type === 'remove') nodeSizes.value.delete(change.id);
+    if (change.type !== 'dimensions') continue;
+    const previous = nodeSizes.value.get(change.id);
+    if (previous?.width !== change.dimensions.width || previous.height !== change.dimensions.height) {
+      nodeSizes.value.set(change.id, change.dimensions);
+    }
+  }
+}
+
+const layout = computed(() => {
   const byCol = new Map<number, TraceGraphNode[]>();
   for (const n of graph.value.nodes) {
     if (!byCol.has(n.column)) byCol.set(n.column, []);
     byCol.get(n.column)!.push(n);
   }
-  const maxRows = Math.max(1, ...[...byCol.values()].map((v) => v.length));
-  const totalH = maxRows * NODE_H + (maxRows - 1) * ROW_GAP;
-  const map = new Map<string, { x: number; y: number }>();
-  for (const [col, list] of byCol) {
-    const h = list.length * NODE_H + (list.length - 1) * ROW_GAP;
-    const offset = (totalH - h) / 2;
-    list.forEach((n, i) => map.set(n.id, { x: col * (NODE_W + COL_GAP), y: offset + i * (NODE_H + ROW_GAP) }));
+  const columns = [...byCol.entries()].sort(([a], [b]) => a - b).map(([index, nodes]) => {
+    const cards = nodes.map(({ id }) => ({
+      id,
+      width: nodeSizes.value.get(id)?.width || NODE_W,
+      height: nodeSizes.value.get(id)?.height || NODE_H,
+    }));
+    const width = Math.max(...cards.map(card => card.width));
+    const height = cards.reduce((sum, card) => sum + card.height, (cards.length - 1) * ROW_GAP);
+    return { index, cards, width, height };
+  });
+  const height = Math.max(0, ...columns.map(column => column.height));
+  const positions = new Map<string, { x: number; y: number }>();
+  let width = 0;
+  let nextColumn = 0;
+  for (const column of columns) {
+    const x = width + (nextColumn ? COL_GAP : 0) + (column.index - nextColumn) * (NODE_W + COL_GAP);
+    let y = (height - column.height) / 2;
+    for (const card of column.cards) {
+      positions.set(card.id, { x, y });
+      y += card.height + ROW_GAP;
+    }
+    width = x + column.width;
+    nextColumn = column.index + 1;
   }
-  return map;
+  return { positions, width, height };
 });
 
 // 画布视窗留在固定栏下方。图在可读下限仍放不下时，保留完整的可滚动区域。
@@ -81,24 +110,17 @@ const controlsEl = ref<HTMLElement | null>(null);
 const legendEl = ref<HTMLElement | null>(null);
 const containerW = ref(0);
 const topInset = ref(0);
+const legendHeight = ref(0);
+const verticalGutter = ref(0);
 const horizontalScrollbar = ref(0);
 const availableHeight = ref(MAX_CANVAS_HEIGHT);
 const { setViewport } = useVueFlow(FLOW_ID);
-const graphSize = computed(() => {
-  let w = 0;
-  let h = 0;
-  for (const { x, y } of positions.value.values()) {
-    w = Math.max(w, x + NODE_W);
-    h = Math.max(h, y + NODE_H);
-  }
-  return { w, h };
-});
 const zoom = computed(() => Math.min(
-  dagFitZoom(containerW.value, graphSize.value.w),
-  dagFitZoom(Math.max(1, availableHeight.value - horizontalScrollbar.value - 2), graphSize.value.h),
+  dagFitZoom(containerW.value, layout.value.width),
+  dagFitZoom(Math.max(1, availableHeight.value - horizontalScrollbar.value - 2), layout.value.height),
 ));
-const graphWidth = computed(() => Math.ceil(graphSize.value.w * zoom.value) + 2 * FIT_PADDING);
-const graphHeight = computed(() => Math.ceil(graphSize.value.h * zoom.value) + 2 * FIT_PADDING);
+const graphWidth = computed(() => Math.ceil(layout.value.width * zoom.value) + 2 * FIT_PADDING + verticalGutter.value);
+const graphHeight = computed(() => Math.ceil(layout.value.height * zoom.value) + 2 * FIT_PADDING);
 const canvasHeight = computed(() => Math.min(
   availableHeight.value,
   Math.max(360, graphHeight.value + horizontalScrollbar.value + 2),
@@ -114,6 +136,8 @@ function measureCanvas() {
   const el = canvasEl.value;
   if (!el?.clientWidth) return;
   containerW.value = el.clientWidth;
+  // 横向滚到底时，滚动条预留槽不能占用尾节点的留白。
+  verticalGutter.value = Math.max(0, el.offsetWidth - el.clientWidth - 2 * el.clientLeft);
   horizontalScrollbar.value = Math.max(0, el.offsetHeight - el.clientHeight - 2 * el.clientTop);
   let bottom = 0;
   for (const bar of fixedBars()) {
@@ -123,12 +147,12 @@ function measureCanvas() {
     }
   }
   const legend = legendEl.value;
-  const legendHeight = legend ? legend.offsetHeight + (parseFloat(getComputedStyle(legend).marginBottom) || 0) : 0;
-  topInset.value = bottom + legendHeight;
+  legendHeight.value = legend ? legend.offsetHeight + (parseFloat(getComputedStyle(legend).marginBottom) || 0) : 0;
+  topInset.value = bottom;
   const toolbarHeight = controlsEl.value?.offsetHeight ?? 0;
   availableHeight.value = Math.max(1, Math.min(
     MAX_CANVAS_HEIGHT,
-    window.innerHeight - topInset.value - toolbarHeight - 2 * FIT_PADDING,
+    window.innerHeight - topInset.value - legendHeight.value - toolbarHeight - 2 * FIT_PADDING,
   ));
 }
 
@@ -137,7 +161,7 @@ function applyViewport() {
   if (!el) return;
   el.scrollLeft = 0;
   el.scrollTop = 0;
-  const y = Math.max(FIT_PADDING, (el.clientHeight - graphSize.value.h * zoom.value) / 2);
+  const y = Math.max(FIT_PADDING, (el.clientHeight - layout.value.height * zoom.value) / 2);
   void setViewport({ x: FIT_PADDING, y, zoom: zoom.value });
 }
 
@@ -145,12 +169,19 @@ async function fitTrace() {
   measureCanvas();
   await nextTick();
   applyViewport();
-  const el = canvasEl.value;
-  if (!el) return;
-  const bounds = el.getBoundingClientRect();
-  const bottom = controlsEl.value?.getBoundingClientRect().bottom ?? bounds.bottom;
-  if (bounds.top < topInset.value + FIT_PADDING || bottom > window.innerHeight - FIT_PADDING) {
-    el.scrollIntoView?.({ block: 'start', inline: 'nearest', behavior: 'instant' });
+  const legend = legendEl.value;
+  const toolbar = controlsEl.value;
+  if (!legend || !toolbar) return;
+
+  // 页面和参考窗的滚动容器不同；直接对齐图例，避开悬浮栏遮住的区域。
+  const content = legend.closest<HTMLElement>(APP_SCROLL_SELECTOR);
+  const scrollPane = content && content.scrollHeight > content.clientHeight ? content : null;
+  const paneBounds = scrollPane?.getBoundingClientRect();
+  const safeTop = Math.max(topInset.value, paneBounds?.top ?? 0) + FIT_PADDING;
+  const safeBottom = Math.min(window.innerHeight, paneBounds?.bottom ?? window.innerHeight) - FIT_PADDING;
+  const top = legend.getBoundingClientRect().top;
+  if (top < safeTop || toolbar.getBoundingClientRect().bottom > safeBottom) {
+    (scrollPane ?? window).scrollBy({ top: top - safeTop, behavior: 'instant' });
   }
 }
 
@@ -186,7 +217,7 @@ const flowNodes = computed<Node[]>(() =>
   graph.value.nodes.map((n) => ({
     id: n.id,
     type: 'trace',
-    position: positions.value.get(n.id) ?? { x: 0, y: 0 },
+    position: layout.value.positions.get(n.id) ?? { x: 0, y: 0 },
     data: { node: n, state: stateOf(n.id) },
     draggable: false,
     selectable: false,
@@ -278,7 +309,7 @@ const STATE_CLASS: Record<NodeState, string> = {
     <div
       ref="canvasEl"
       class="trace-dag-canvas w-full overflow-auto rounded-lg border border-slate-200 bg-slate-50"
-      :style="{ height: `${canvasHeight}px`, scrollMarginTop: `${topInset + FIT_PADDING}px` }"
+      :style="{ height: `${canvasHeight}px` }"
       data-testid="trace-dag-canvas"
       role="region"
       aria-label="追溯线画布"
@@ -298,12 +329,13 @@ const STATE_CLASS: Record<NodeState, string> = {
         :nodes-connectable="false"
         :elements-selectable="false"
         @init="applyViewport"
+        @nodes-change="updateNodeSizes"
         @pane-click="selectedId = null"
       >
         <template #node-trace="{ id, data }">
           <div
-            class="cursor-pointer overflow-hidden rounded-lg border bg-white p-2 text-left"
-            :style="{ width: `${NODE_W}px`, minHeight: `${NODE_H}px` }"
+            class="w-max cursor-pointer whitespace-nowrap rounded-lg border bg-white p-2 text-left"
+            :style="{ minWidth: `${NODE_W}px`, minHeight: `${NODE_H}px` }"
             :class="STATE_CLASS[data.state as NodeState]"
             :data-testid="`dag-node-${id}`"
             :data-node-id="id"
@@ -317,13 +349,13 @@ const STATE_CLASS: Record<NodeState, string> = {
           >
             <Handle type="target" :position="Position.Left" />
             <div class="mb-1 flex items-center justify-between gap-1">
-              <span class="truncate font-semibold text-slate-500" :style="{ fontSize: `${DAG_FONT.label}px` }" data-testid="dag-node-kind">{{ KIND_LABEL[data.node.kind as TraceNodeKind] }}</span>
+              <span class="font-semibold text-slate-500" :style="{ fontSize: `${DAG_FONT.label}px` }" data-testid="dag-node-kind">{{ KIND_LABEL[data.node.kind as TraceNodeKind] }}</span>
               <span class="rounded px-1.5 py-0.5" :class="TONE_CLASS[data.node.tone]" :style="{ fontSize: `${DAG_FONT.label}px` }" data-testid="dag-node-status">{{ data.node.statusText }}</span>
             </div>
-            <div class="truncate font-semibold text-slate-900" :style="{ fontSize: `${DAG_FONT.title}px`, lineHeight: 1.4 }" :title="data.node.title" data-testid="dag-node-title">{{ data.node.title }}</div>
+            <div class="font-semibold text-slate-900" :style="{ fontSize: `${DAG_FONT.title}px`, lineHeight: 1.4 }" :title="data.node.title" data-testid="dag-node-title">{{ data.node.title }}</div>
             <div v-for="l in data.node.lines" :key="l.label" class="flex justify-between gap-2 text-slate-600" :style="{ fontSize: `${DAG_FONT.line}px`, lineHeight: 1.45 }" data-testid="dag-node-line">
               <span class="shrink-0">{{ l.label }}</span>
-              <span class="truncate" :class="{ 'text-slate-400': l.value === '未记录' }">{{ l.value }}</span>
+              <span :class="{ 'text-slate-400': l.value === '未记录' }">{{ l.value }}</span>
             </div>
             <Handle type="source" :position="Position.Right" />
           </div>

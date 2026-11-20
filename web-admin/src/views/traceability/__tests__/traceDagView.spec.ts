@@ -174,6 +174,35 @@ describe('BP-53 质检节点不显示内部短码', () => {
 });
 
 describe('BP-53 默认视图字号与要点', () => {
+  it('在节点上完整展示长批次号、六位数量和投入产出数值', async () => {
+    const batchNumber = 'DEMO-20261105-MB-001-3';
+    const material = cattleNode(3, { batchNumber, quantity: 123456.78 });
+    const trace = baseTrace({
+      lineage: {
+        rootType: 'PRODUCTION_BATCH', rootId: 'pb-1',
+        ancestors: [{ depth: 1, nodes: [material] }], descendants: [], maxDepth: 1, nodeCount: 1,
+      },
+      processingStages: [{
+        stageType: 'PACK', stageName: '包装', stageOrder: 1,
+        inputWeight: 123456.78, inputUnit: 'kg', outputWeight: 654321.09, outputUnit: 'kg',
+      }],
+    });
+    const w = await mountDag(trace);
+    try {
+      const upstream = w.get('[data-node-id="up:1:MATERIAL_BATCH:mb-3"]');
+      const title = upstream.get('[data-testid="dag-node-title"]');
+      const quantity = upstream.findAll('[data-testid="dag-node-line"]').find(row => row.text().startsWith('数量'))!.get('span:last-child');
+      const stage = w.get('[data-node-id="stage:0"]');
+      const weights = stage.findAll('[data-testid="dag-node-line"]').find(row => row.text().startsWith('投入→产出'))!.get('span:last-child');
+      for (const [field, expected] of [[title, batchNumber], [quantity, '123456.78 kg'], [weights, '123456.78kg → 654321.09kg']] as const) {
+        expect(field.text()).toBe(expected);
+        expect.soft(field.classes(), expected).not.toContain('truncate');
+      }
+    } finally {
+      w.unmount();
+    }
+  });
+
   it('基准字号 × 最低缩放: 主标题 ≥14px, 次要信息 ≥12px', () => {
     expect(DAG_FONT.title * DAG_MIN_ZOOM).toBeGreaterThanOrEqual(14);
     expect(DAG_FONT.line * DAG_MIN_ZOOM).toBeGreaterThanOrEqual(12);
@@ -227,20 +256,21 @@ describe('BP-54 默认缩放不低于可读下限', () => {
     document.body.append(shell);
     const trace = richTrace();
     const w = mount(TraceDagView, { props: { trace }, attachTo: main });
+    vi.stubGlobal('scrollBy', ({ top = 0 }: ScrollToOptions) => { canvasTop -= top; });
     try {
       const canvas = w.get<HTMLElement>('[data-testid="trace-dag-canvas"]').element;
       const canvasBounds = () => new DOMRect(0, canvasTop, screenWidth, parseFloat(canvas.style.height));
       vi.spyOn(canvas, 'getBoundingClientRect').mockImplementation(canvasBounds);
       Object.defineProperty(canvas, 'clientHeight', { get: () => canvasBounds().height });
-      Object.defineProperty(canvas, 'scrollIntoView', {
-        value: () => { canvasTop = parseFloat(canvas.style.scrollMarginTop); },
-      });
+      const legend = w.get<HTMLElement>('[data-testid="trace-dag-columns"]').element;
+      vi.spyOn(legend, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, canvasTop, screenWidth, 0));
       await nextTick();
       const flow = useVueFlow('trace-dag-flow');
       await flow.setViewport({ x: 260, y: 72, zoom: 1.3 });
       await w.get('[data-testid="trace-dag-fit"]').trigger('click');
       await vi.waitFor(() => {
         const bounds = canvasBounds();
+        expect(bounds.top).toBe(barBottom + 12);
         const viewport = flow.viewport.value;
         const rendered = w.findAll('[data-node-id]');
         expect(rendered).toHaveLength(buildTraceGraph(trace).nodes.length);
