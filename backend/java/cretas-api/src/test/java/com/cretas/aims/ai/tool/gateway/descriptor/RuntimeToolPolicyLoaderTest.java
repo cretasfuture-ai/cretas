@@ -21,11 +21,11 @@ class RuntimeToolPolicyLoaderTest {
     private final RuntimeToolPolicyLoader loader = new RuntimeToolPolicyLoader();
 
     @Test
-    void loadsAllFifteenCompleteExplicitRuntimePolicies() {
+    void loadsAllSixteenCompleteExplicitRuntimePolicies() {
         RuntimeToolPolicyManifest manifest = loader.loadDefault();
 
         assertThat(manifest.schemaVersion()).isEqualTo(1);
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(15);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(16);
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .containsExactly(
@@ -43,7 +43,8 @@ class RuntimeToolPolicyLoaderTest {
                         "material_batch_query",
                         "material_expired_query",
                         "smartbi_factory_analysis",
-                        "alert_rule_toggle");
+                        "alert_rule_toggle",
+                        "factory_shortage_config_update");
         assertThat(manifest.policies()).allSatisfy(policy -> {
             assertThat(policy.provenance()).isEqualTo(DescriptorProvenance.EXPLICIT);
             assertThat(policy.requiredPermissions().isEmpty() && policy.allowedRoles().isEmpty())
@@ -139,7 +140,7 @@ class RuntimeToolPolicyLoaderTest {
         assertThat(manifest.policies())
                 .extracting(RuntimeToolPolicyEntry::toolName)
                 .noneMatch(name -> name.startsWith("restaurant_"));
-        assertThat(manifest.expectedPolicyCount()).isEqualTo(15);
+        assertThat(manifest.expectedPolicyCount()).isEqualTo(16);
     }
 
     @Test
