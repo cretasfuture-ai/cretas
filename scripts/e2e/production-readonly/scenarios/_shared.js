@@ -50,7 +50,7 @@ async function runReadOnlyPageScenario(ctx, definition) {
         result.screenshots.push(...screenshots);
       }
     }
-    if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id));
+    if (definition.screenshot) result.screenshots.push(await ctx.screenshot(definition.id, definition.screenshotOptions));
     // ⚠️ 「应用压根没挂载」与「挂载了但缺 landmark」必须分开报 —— 下一步动作相反:
     //    前者去查前端加载(构建/资源/首屏), 后者去查这条场景的期望或页面本身。
     //    ⛔ 都折叠成 UNVERIFIED/tool 就是把「没量到」塞进了「判不了」。

@@ -1,6 +1,7 @@
 'use strict';
 
 const { redactText, sanitizeUrl } = require('./sanitizer');
+const { isFactoryAnalysisUrl } = require('../config/factory-analysis-scope');
 
 const DEFAULT_NOISE_RULES = [
   { id: 'favicon', pattern: /favicon\.ico/i },
@@ -85,7 +86,7 @@ function installConsoleRecorder(context, options = {}) {
   return {
     expectClientOfflineResourceError(request) {
       const url = sanitizeUrl(request.url());
-      if (request.method() !== 'POST' || !/\/api\/mobile\/F006\/smart-bi\/factory-analysis\/?$/u.test(url)
+      if (request.method() !== 'POST' || !isFactoryAnalysisUrl(url)
         || !/^net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(String(request.failure()?.errorText || ''))) throw new Error('Unverified offline console exception');
       const matched = accepted.filter(item => item.type === 'error' && sanitizeUrl(item.location) === url
         && /^Failed to load resource: net::ERR_INTERNET_DISCONNECTED(?:\.Inspector)?$/u.test(item.text));
