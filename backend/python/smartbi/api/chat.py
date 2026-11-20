@@ -2991,6 +2991,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # 真实结果行交给 LLM 措辞; 指标缺失直接拒答并列全字段。
             _rl_block = ""
             _rl_active = False
+            _rl_text_answer = None
             _rl_result = None  # 行级计算结果: done 之前拿它校验「一共/总共」的总数
             if request.effective_query:
                 try:
@@ -3031,6 +3032,8 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                             "processingTimeMs": int((time.time() - start_time) * 1000),
                         })
                         return
+                    if _rl_out.kind == "text_listing":
+                        _rl_text_answer = _rl_out.text
                     if _rl_out.kind in ("computed", "uncomputed"):
                         _rl_block = "\n" + _rl_out.text
                         _rl_active = True
@@ -3127,6 +3130,7 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
             # LLM costing 10-12s; cache hit returns in 200ms.
             _llm_cache_hit = None
             if (request.allow_tenant_data_fallback
+                    and _rl_text_answer is None
                     and not _rl_active  # 行级计算过的问题不读旧缓存 (旧答案可能是样本猜的)
                     and not chat_session_parent and _session_factory_id
                     and request.effective_query):
@@ -3149,26 +3153,31 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                 except Exception as _lac_err:
                     logger.warning(f"[llm-cache] lookup failed (non-fatal): {_lac_err}")
 
-            if _llm_cache_hit:
-                # Stream cached answer as if it were freshly generated.
-                _cached_text = _llm_cache_hit["answer_text"]
-                yield _sse_event("status", "正在读取近期分析结果...")
+            if _rl_text_answer is not None or _llm_cache_hit:
+                if _rl_text_answer is not None:
+                    _ready_text = _rl_text_answer
+                    _ready_meta = {"source": "row_level_text", "charts": []}
+                else:
+                    yield _sse_event("status", "正在读取近期分析结果...")
+                    _ready_text = _llm_cache_hit["answer_text"]
+                    _ready_meta = {
+                        "source": "llm_answer_cache",
+                        "charts": _llm_cache_hit.get("charts", []),
+                        "warning": _llm_cache_hit.get("warning"),
+                        "cache_hit_count": _llm_cache_hit["hit_count"],
+                    }
                 _chunk_size = 80
-                for i in range(0, len(_cached_text), _chunk_size):
-                    yield _sse_event("chunk", _cached_text[i:i + _chunk_size])
-                if _llm_cache_hit.get("charts"):
-                    yield _sse_event("charts", _llm_cache_hit["charts"])
+                for i in range(0, len(_ready_text), _chunk_size):
+                    yield _sse_event("chunk", _ready_text[i:i + _chunk_size])
+                if _ready_meta["charts"]:
+                    yield _sse_event("charts", _ready_meta["charts"])
                 yield _sse_event("done", {
                     "success": True,
-                    "answer": _cached_text,
-                    "charts": _llm_cache_hit.get("charts", []),
-                    "warning": _llm_cache_hit.get("warning"),
-                    "source": "llm_answer_cache",
-                    "cache_hit_count": _llm_cache_hit["hit_count"],
+                    "answer": _ready_text,
+                    **_ready_meta,
                     "processingTimeMs": int((time.time() - start_time) * 1000),
                 })
-                # Still write back v2 conv-memory parent context if session_id
-                # provided (cache hit ≠ skip session writeback).
+                # 直接作答或命中缓存时也保留下一轮需要的会话上下文。
                 if _session_can_persist:
                     try:
                         from smartbi.services.chat_session_service import ChatSessionService
@@ -3179,14 +3188,14 @@ async def general_analysis_stream(request: GeneralAnalysisRequest, http_request:
                                 session_id=request.session_id,
                                 factory_id=_session_factory_id,
                                 parent_query=request.effective_query or "",
-                                parent_answer_summary=_cached_text,
+                                parent_answer_summary=_ready_text,
                                 parent_template_code=None,
                                 parent_upload_id=upload_id,
                                 user_id=_session_user_id,  # H2 binding
                             ))
                     except Exception as _e:
-                        logger.warning(f"[chat-session] cache-hit writeback failed: {_e}")
-                return  # early exit — cache served the answer
+                        logger.warning(f"[chat-session] ready-answer writeback failed: {_e}")
+                return
 
             # ── Stream LLM response ──
             # v5 fix (Apr 26 2026): rollback P1-enhanced wait_for(__anext__())
