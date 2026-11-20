@@ -8,18 +8,22 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import lombok.extern.slf4j.Slf4j;
 
 /** The shipped-profit policy shares the existing versioned factory settings row. */
+@Slf4j
 public final class ShippedRevenueBasisSettings {
     public static final String KEY = "shippedRevenueBasis";
     private static final JsonMapper JSON = JsonMapper.builder()
-            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS).build();
+            .enable(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS)
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS)
+            .build();
 
     private ShippedRevenueBasisSettings() {}
 
-    public static ShippedRevenueBasis read(String productionSettings) {
-        JsonNode value = parse(productionSettings).get(KEY);
-        return value == null || value.isNull() ? ShippedRevenueBasis.DEFAULT : validate(value.asText());
+    public static ShippedRevenueBasis read(String factoryId, String productionSettings) {
+        ShippedRevenueBasis basis = storedBasis(factoryId, productionSettings);
+        return basis == null ? ShippedRevenueBasis.DEFAULT : basis;
     }
 
     public static void write(FactorySettings settings, ShippedRevenueBasis basis) {
@@ -27,22 +31,48 @@ public final class ShippedRevenueBasisSettings {
     }
 
     /** An older settings client can replace its known fields without clearing this policy. */
-    public static String preserveOnUpdate(String previous, String incoming) {
-        JsonNode basis = parse(previous).get(KEY);
-        return basis == null || basis.isNull() ? incoming : withBasis(incoming, validate(basis.asText()));
+    public static String preserveOnUpdate(String factoryId, String previous, String incoming) {
+        ShippedRevenueBasis basis = storedBasis(factoryId, previous);
+        return basis == null ? incoming : withBasis(incoming, basis);
     }
 
     public static ShippedRevenueBasis validate(Object value) {
+        ShippedRevenueBasis basis = knownBasis(value);
+        if (basis != null) return basis;
+        throw new BusinessException(400, "发货收入口径必须选 GROSS（折扣前）或 NET（扣折扣与退货后）");
+    }
+
+    private static ShippedRevenueBasis knownBasis(Object value) {
         if (value instanceof String name) {
             for (var basis : ShippedRevenueBasis.values()) {
                 if (basis.name().equals(name)) return basis;
             }
         }
-        throw new BusinessException(400, "发货收入口径必须选 GROSS（折扣前）或 NET（扣折扣与退货后）");
+        return null;
+    }
+
+    private static ShippedRevenueBasis storedBasis(String factoryId, String settings) {
+        ObjectNode object = parse(settings);
+        if (object == null) {
+            log.warn("Ignoring malformed production_settings for shipped revenue basis: factoryId={}", factoryId);
+            return null;
+        }
+        JsonNode value = object.get(KEY);
+        if (value == null || value.isNull()) return null;
+        ShippedRevenueBasis basis = knownBasis(value.textValue());
+        if (basis == null) {
+            log.warn("Ignoring unknown shippedRevenueBasis in production_settings: factoryId={}", factoryId);
+        }
+        return basis;
     }
 
     private static String withBasis(String settings, ShippedRevenueBasis basis) {
-        return parse(settings).put(KEY, basis.name()).toString();
+        ObjectNode object = parse(settings);
+        if (object == null) {
+            throw new BusinessException(409, "工厂生产设置格式异常")
+                    .withHint("请在生产设置中重新保存后再修改发货收入口径");
+        }
+        return object.put(KEY, basis.name()).toString();
     }
 
     private static ObjectNode parse(String settings) {
@@ -50,13 +80,8 @@ public final class ShippedRevenueBasisSettings {
         try {
             if (JSON.readTree(settings) instanceof ObjectNode object) return object;
         } catch (JsonProcessingException e) {
-            throw invalidSettings();
+            return null;
         }
-        throw invalidSettings();
-    }
-
-    private static BusinessException invalidSettings() {
-        return new BusinessException(409, "工厂生产设置格式异常")
-                .withHint("请联系工厂管理员修复生产设置后重新查询发货收入口径");
+        return null;
     }
 }

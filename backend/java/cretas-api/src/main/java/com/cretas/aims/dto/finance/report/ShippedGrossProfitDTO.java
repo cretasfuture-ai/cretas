@@ -22,11 +22,12 @@ public class ShippedGrossProfitDTO {
     public static final String PRICE_MISSING = "PRICE_MISSING";
     /** 净额所需的折扣或退货凭据缺失。 */
     public static final String ADJUSTMENT_INCOMPLETE = "ADJUSTMENT_INCOMPLETE";
-    /** 收入可算, 但实际出库批次 / 成本不完整: 成本、毛利显示「—」。 */
+    /** 收入可算, 但实际出库或退货回库的批次成本不完整: 成本、毛利显示「—」。 */
     public static final String COST_INCOMPLETE = "COST_INCOMPLETE";
 
     public static final String COST_BASIS =
             "销售成本：这些发运单实际出库的成品批次单位成本 × 出库数量（与销售成本结转同源）";
+    public static final String NET_COST_BASIS = COST_BASIS + "，扣本期已完成销售退货的回库批次成本";
 
     private LocalDate periodStart;
     private LocalDate periodEnd;

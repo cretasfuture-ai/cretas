@@ -180,7 +180,7 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
                                                                           FactorySettingsDTO.ProductionSettings prodSettings) {
         FactorySettings settings = getSettingsEntity(factoryId);
         settings.setProductionSettings(ShippedRevenueBasisSettings
-                .preserveOnUpdate(settings.getProductionSettings(), toJsonString(prodSettings)));
+                .preserveOnUpdate(factoryId, settings.getProductionSettings(), toJsonString(prodSettings)));
         settingsRepository.save(settings);
 
         log.info("更新生产设置成功: factoryId={}", factoryId);
@@ -524,7 +524,8 @@ public class FactorySettingsServiceImpl implements FactorySettingsService {
         // 更新生产设置
         if (dto.getProductionSettings() != null) {
             settings.setProductionSettings(ShippedRevenueBasisSettings
-                    .preserveOnUpdate(settings.getProductionSettings(), toJsonString(dto.getProductionSettings())));
+                    .preserveOnUpdate(settings.getFactoryId(), settings.getProductionSettings(),
+                            toJsonString(dto.getProductionSettings())));
         }
 
         // 更新库存设置

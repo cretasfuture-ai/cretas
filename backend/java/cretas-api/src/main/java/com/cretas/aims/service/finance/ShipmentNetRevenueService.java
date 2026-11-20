@@ -60,7 +60,7 @@ public class ShipmentNetRevenueService {
             }
             returnedRevenue = returnedRevenue.add(amount);
         }
-        return new Adjustments(discounts, returnedRevenue, !completed.isEmpty());
+        return new Adjustments(discounts, returnedRevenue);
     }
 
     private BigDecimal allocatedDiscount(String factoryId, LocalDate start, LocalDate end) {
@@ -107,5 +107,5 @@ public class ShipmentNetRevenueService {
                 .withHint("请核对销售订单、发运单或退货单的缺失凭据后重新查询");
     }
 
-    record Adjustments(BigDecimal discount, BigDecimal returns, boolean hasReturns) {}
+    record Adjustments(BigDecimal discount, BigDecimal returns) {}
 }

@@ -2,6 +2,7 @@ package com.cretas.aims.service.finance;
 
 import com.cretas.aims.config.PriceSensitiveJacksonConfig;
 import com.cretas.aims.controller.CanvasFactoryConfigController;
+import com.cretas.aims.controller.FactorySettingsController;
 import com.cretas.aims.controller.finance.FinanceReportController;
 import com.cretas.aims.dto.FactorySettingsDTO;
 import com.cretas.aims.dto.finance.report.ShippedGrossProfitDTO;
@@ -15,9 +16,13 @@ import com.cretas.aims.entity.enums.ReturnOrderStatus;
 import com.cretas.aims.entity.enums.ReturnType;
 import com.cretas.aims.entity.enums.SalesDeliveryStatus;
 import com.cretas.aims.entity.enums.SalesOrderStatus;
+import com.cretas.aims.entity.enums.VoucherStatus;
+import com.cretas.aims.entity.enums.VoucherType;
 import com.cretas.aims.entity.factory.FactoryWarehouse;
+import com.cretas.aims.entity.finance.Voucher;
 import com.cretas.aims.entity.inventory.FinishedGoodsBatch;
 import com.cretas.aims.entity.inventory.ReturnOrder;
+import com.cretas.aims.entity.inventory.ReturnOrderItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryItem;
 import com.cretas.aims.entity.inventory.SalesDeliveryRecord;
 import com.cretas.aims.entity.inventory.SalesOrder;
@@ -32,12 +37,16 @@ import com.cretas.aims.security.PriceFieldResponseAdvice;
 import com.cretas.aims.security.PriceSensitiveContext;
 import com.cretas.aims.service.PermissionService;
 import com.cretas.aims.service.impl.FactorySettingsServiceImpl;
+import com.cretas.aims.service.inventory.ReturnedGoodsCostResolver;
+import com.cretas.aims.service.unit.impl.UnitContractServiceImpl;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.domain.EntityScan;
 import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
@@ -52,6 +61,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 
 import java.math.BigDecimal;
@@ -78,7 +88,8 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standal
 @ActiveProfiles("test")
 @EntityScan("com.cretas.aims.entity")
 @EnableJpaRepositories("com.cretas.aims.repository")
-@Import({ShipmentSkuMarginService.class, ShipmentNetRevenueService.class})
+@Import({ShipmentSkuMarginService.class, ShipmentNetRevenueService.class, SalesReturnCostService.class,
+        ReturnedGoodsCostResolver.class, UnitContractServiceImpl.class})
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class ShippedGrossProfitPostgresContractTest {
     private static final String F = "F-GP-BASIS";
@@ -106,7 +117,6 @@ class ShippedGrossProfitPostgresContractTest {
     @Autowired JdbcTemplate jdbc;
     @Autowired FactorySettingsRepository settings;
     @Autowired ShipmentSkuMarginService service;
-    @MockBean SalesReturnCostService reconciliationOnly;
     @MockBean IncomeStatementService incomeStatements;
 
     @BeforeEach
@@ -131,8 +141,7 @@ class ShippedGrossProfitPostgresContractTest {
     @Test
     void netSubtractsPartialShipmentDiscountAndOnlyThisPeriodsCompletedUntaxedSalesReturns() throws Exception {
         Tenant tenant = scenario();
-        var config = standaloneSetup(new CanvasFactoryConfigController(null, null, null, null, null, settings))
-                .setControllerAdvice(new GlobalExceptionHandler()).build();
+        var config = canvasConfig();
         config.perform(get(SETTINGS_URL)).andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.shippedRevenueBasis").value("GROSS"));
         config.perform(put(SETTINGS_URL).contentType(MediaType.APPLICATION_JSON)
@@ -154,9 +163,13 @@ class ShippedGrossProfitPostgresContractTest {
         var result = service.summarize(F, START, END); // 120 - 12 (30 × 120 / 300) - 7
         assertThat(result.getBasis()).isEqualTo(ShippedRevenueBasis.NET);
         assertThat(result.getRevenueBasis()).contains("扣折扣与退货后净额", "不含税");
-        assertAmounts(result, "101", "36", "65", "64.36");
+        assertThat(result.getCostBasis()).contains("扣本期已完成销售退货的回库批次成本");
+        assertAmounts(result, "101", "32.50", "68.50", "67.82");
         report(tenant.user(), true).andExpect(jsonPath("$.data.basis").value("NET"))
-                .andExpect(jsonPath("$.data.revenue").value(101.00));
+                .andExpect(jsonPath("$.data.revenue").value(101.00))
+                .andExpect(jsonPath("$.data.cost").value(32.50))
+                .andExpect(jsonPath("$.data.grossProfit").value(68.50))
+                .andExpect(jsonPath("$.data.marginRate").value(67.82));
         report(tenant.user(), false).andExpect(jsonPath("$.data.basis").value("NET"))
                 .andExpect(jsonPath("$.data.revenueBasis", containsString("扣折扣与退货后净额")))
                 .andExpect(jsonPath("$.data.shipmentLineCount").value(2))
@@ -164,6 +177,54 @@ class ShippedGrossProfitPostgresContractTest {
                 .andExpect(jsonPath("$.data.cost").value(nullValue()))
                 .andExpect(jsonPath("$.data.grossProfit").value(nullValue()))
                 .andExpect(jsonPath("$.data.marginRate").value(nullValue()));
+    }
+
+    @Test
+    void netReportsIncompleteCostWhenCompletedPhysicalReturnLacksInboundBatch() {
+        scenario();
+        jdbc.update("UPDATE factory_settings SET production_settings=? WHERE factory_id=?",
+                "{\"shippedRevenueBasis\":\"NET\"}", F);
+        jdbc.update("UPDATE finished_goods_batches SET deleted_at=CURRENT_TIMESTAMP WHERE batch_number=? AND factory_id=?",
+                "RTN-current-1", F);
+        var result = service.summarize(F, START, END);
+        assertThat(result.getStatus()).isEqualTo("COST_INCOMPLETE");
+        assertThat(result.getUnavailableReason()).contains("退货回库批次成本不完整", "缺少回库证据");
+        assertThat(result.getRevenue()).isEqualByComparingTo("101");
+        assertThat(result.getCost()).isNull();
+        assertThat(result.getGrossProfit()).isNull();
+        assertThat(result.getMarginRate()).isNull();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{", "null", "[]", "{\"shippedRevenueBasis\":\"net\"}", "{\"shippedRevenueBasis\":42}"})
+    void corruptStoredBasisKeepsGrossReportAndConfigReadableAndLegacySaveCanRepair(String corruptSettings) throws Exception {
+        Tenant tenant = scenario();
+        jdbc.update("UPDATE factory_settings SET production_settings=? WHERE factory_id=?", corruptSettings, F);
+        report(tenant.user(), true).andExpect(jsonPath("$.data.basis").value("GROSS"))
+                .andExpect(jsonPath("$.data.revenue").value(120))
+                .andExpect(jsonPath("$.data.cost").value(36))
+                .andExpect(jsonPath("$.data.grossProfit").value(84))
+                .andExpect(jsonPath("$.data.marginRate").value(70));
+
+        var config = canvasConfig();
+        config.perform(get(SETTINGS_URL)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shippedRevenueBasis").value("GROSS"));
+        config.perform(put(SETTINGS_URL).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"shippedRevenueBasis\":\"net\",\"version\":0}"))
+                .andExpect(status().isBadRequest());
+        assertThat(settings.findProductionSettingsByFactoryId(F)).isEqualTo(corruptSettings);
+
+        var legacySettings = new FactorySettingsServiceImpl(settings, new ObjectMapper(), mock(FactoryRepository.class));
+        var legacy = standaloneSetup(new FactorySettingsController(legacySettings, null))
+                .setControllerAdvice(new GlobalExceptionHandler()).build();
+        legacy.perform(put("/api/mobile/{factoryId}/settings/production", F)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"defaultBatchSize\":140}"))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.data.defaultBatchSize").value(140));
+        flush();
+        assertThat(legacySettings.getProductionSettings(F).getDefaultBatchSize()).isEqualTo(140);
+        assertThat(settings.findProductionSettingsByFactoryId(F)).doesNotContain("shippedRevenueBasis");
+        config.perform(get(SETTINGS_URL)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.shippedRevenueBasis").value("GROSS"));
     }
 
     @Test
@@ -212,18 +273,25 @@ class ShippedGrossProfitPostgresContractTest {
     }
 
     @Test
-    void netIncludesReturnsFromOlderShipmentsEvenWhenThereAreNoCurrentShipments() {
+    void netReturnsNoShipmentAndNoAmountsWhenOnlyEarlierShipmentsAreReturned() {
         Tenant tenant = tenant(F);
+        var order = order(tenant, "old", "20", "0");
+        shipment(tenant, order, "old", START.minusDays(1), orderItem(tenant, order, "2", "10"), "2", "10");
         basis(F, ShippedRevenueBasis.NET);
         flush();
         assertThat(service.summarize(F, START, END).getStatus()).isEqualTo("NO_SHIPMENT");
-        addReturn(tenant, "only-return", END, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "7", false);
+        var returned = addReturn(tenant, "only-return", END, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "7", false);
+        returned.setSourceOrderId(order.getId());
+        restock(tenant, returned, em.find(FinishedGoodsBatch.class, tenant.batch()));
         flush();
         var result = service.summarize(F, START, END);
-        assertThat(result.getStatus()).isEqualTo("OK");
+        assertThat(result.getStatus()).isEqualTo("NO_SHIPMENT");
+        assertThat(result.getUnavailableReason()).contains("所选期间没有已确认发货");
         assertThat(result.getShipmentLineCount()).isZero();
-        assertThat(result.getRevenue()).isEqualByComparingTo("-7");
-        assertThat(result.getCost()).isEqualByComparingTo("0");
+        assertThat(result.getRevenue()).isNull();
+        assertThat(result.getCost()).isNull();
+        assertThat(result.getGrossProfit()).isNull();
+        assertThat(result.getMarginRate()).isNull();
     }
 
     private Tenant scenario() {
@@ -237,20 +305,23 @@ class ShippedGrossProfitPostgresContractTest {
         var order = order(tenant, "order", "300", "30");
         var first = orderItem(tenant, order, "8", "25");
         var second = orderItem(tenant, order, "10", "10");
-        shipment(tenant, order, "prior", START.minusDays(1), first, "4", "25");
+        var priorBatch = batch(tenant, "prior", "3.50");
+        shipment(tenant, order, "prior", START.minusDays(1), first, "4", "25", priorBatch.getId());
         var current = shipment(tenant, order, "current", START, first, "4", "25");
-        shipmentLine(tenant, current, second, "2", "10");
+        shipmentLine(tenant, current, second, "2", "10", tenant.batch());
         shipment(tenant, order, "later", END.plusDays(1), second, "8", "10");
         var foreign = order(other, "order", "999", "700");
         shipment(other, foreign, "foreign", START, orderItem(other, foreign, "1", "999"), "1", "999");
 
-        addReturn(tenant, "current", END, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "7", false);
-        addReturn(tenant, "prior", START.minusDays(1), ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", false);
-        addReturn(tenant, "later", END.plusDays(1), ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", false);
-        addReturn(tenant, "draft", START, ReturnType.SALES_RETURN, ReturnOrderStatus.DRAFT, "400", false);
-        addReturn(tenant, "purchase", START, ReturnType.PURCHASE_RETURN, ReturnOrderStatus.COMPLETED, "400", false);
-        addReturn(tenant, "deleted", START, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", true);
-        addReturn(other, "foreign", START, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "500", false);
+        var currentReturn = addReturn(tenant, "current", END, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "7", false);
+        currentReturn.setSourceOrderId(order.getId());
+        restock(tenant, currentReturn, priorBatch);
+        addReturn(tenant, "prior", START.minusDays(1), ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", false).setWithGoods(true);
+        addReturn(tenant, "later", END.plusDays(1), ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", false).setWithGoods(true);
+        addReturn(tenant, "draft", START, ReturnType.SALES_RETURN, ReturnOrderStatus.DRAFT, "400", false).setWithGoods(true);
+        addReturn(tenant, "purchase", START, ReturnType.PURCHASE_RETURN, ReturnOrderStatus.COMPLETED, "400", false).setWithGoods(true);
+        addReturn(tenant, "deleted", START, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "400", true).setWithGoods(true);
+        addReturn(other, "foreign", START, ReturnType.SALES_RETURN, ReturnOrderStatus.COMPLETED, "500", false).setWithGoods(true);
         flush();
         return tenant;
     }
@@ -289,18 +360,9 @@ class ShippedGrossProfitPostgresContractTest {
         warehouse.setName("测试成品仓");
         warehouse.setType(FactoryWarehouse.WarehouseType.FINISHED);
         em.persist(warehouse);
-        FinishedGoodsBatch batch = new FinishedGoodsBatch();
-        batch.setId(id + "-batch");
-        batch.setFactoryId(id);
-        batch.setProductTypeId(product.getId());
-        batch.setBatchNumber("B1");
-        batch.setWarehouseId(warehouse.getId());
-        batch.setUnit("盒");
-        batch.setProducedQuantity(new BigDecimal("100"));
-        batch.setUnitCost(new BigDecimal("6"));
-        batch.setStatus("AVAILABLE");
-        em.persist(batch);
-        return new Tenant(id, user, customer.getId(), product.getId(), batch.getId());
+        var tenant = new Tenant(id, user, customer.getId(), product.getId(), id + "-batch-B1");
+        batch(tenant, "B1", "6");
+        return tenant;
     }
 
     private SalesOrder order(Tenant tenant, String suffix, String value, String discount) {
@@ -331,6 +393,11 @@ class ShippedGrossProfitPostgresContractTest {
 
     private SalesDeliveryRecord shipment(Tenant tenant, SalesOrder order, String suffix, LocalDate date,
                                          SalesOrderItem sourceLine, String qty, String price) {
+        return shipment(tenant, order, suffix, date, sourceLine, qty, price, tenant.batch());
+    }
+
+    private SalesDeliveryRecord shipment(Tenant tenant, SalesOrder order, String suffix, LocalDate date,
+                                         SalesOrderItem sourceLine, String qty, String price, String sourceBatchId) {
         var record = new SalesDeliveryRecord();
         record.setId(tenant.id() + "-delivery-" + suffix);
         record.setFactoryId(tenant.id());
@@ -341,11 +408,12 @@ class ShippedGrossProfitPostgresContractTest {
         record.setShippedBy(tenant.user().getId());
         record.setStatus(SalesDeliveryStatus.SHIPPED);
         em.persist(record);
-        shipmentLine(tenant, record, sourceLine, qty, price);
+        shipmentLine(tenant, record, sourceLine, qty, price, sourceBatchId);
         return record;
     }
 
-    private void shipmentLine(Tenant tenant, SalesDeliveryRecord record, SalesOrderItem sourceLine, String qty, String price) {
+    private void shipmentLine(Tenant tenant, SalesDeliveryRecord record, SalesOrderItem sourceLine, String qty,
+                              String price, String sourceBatchId) {
         var line = new SalesDeliveryItem();
         line.setDeliveryRecordId(record.getId());
         line.setSalesOrderItemId(sourceLine.getId());
@@ -357,7 +425,7 @@ class ShippedGrossProfitPostgresContractTest {
         var edge = new BatchLineageEdge();
         edge.setFactoryId(tenant.id());
         edge.setSourceType("FINISHED_BATCH");
-        edge.setSourceId(tenant.batch());
+        edge.setSourceId(sourceBatchId);
         edge.setTargetType("SHIPMENT_RECORD");
         edge.setTargetId(record.getId());
         edge.setEdgeType("FINISHED_TO_SHIPMENT");
@@ -369,8 +437,8 @@ class ShippedGrossProfitPostgresContractTest {
         em.persist(edge);
     }
 
-    private void addReturn(Tenant tenant, String suffix, LocalDate date, ReturnType type, ReturnOrderStatus status,
-                           String amount, boolean deleted) {
+    private ReturnOrder addReturn(Tenant tenant, String suffix, LocalDate date, ReturnType type, ReturnOrderStatus status,
+                                  String amount, boolean deleted) {
         var order = new ReturnOrder();
         order.setId(tenant.id() + "-return-" + suffix);
         order.setFactoryId(tenant.id());
@@ -382,8 +450,57 @@ class ShippedGrossProfitPostgresContractTest {
         order.setReturnDate(date);
         order.setTotalAmount(amount == null ? null : new BigDecimal(amount));
         order.setTaxAmount(new BigDecimal("0.91"));
+        order.setWithGoods(false);
         if (deleted) order.setDeletedAt(LocalDateTime.now());
         em.persist(order);
+        return order;
+    }
+
+    private FinishedGoodsBatch batch(Tenant tenant, String suffix, String unitCost) {
+        var batch = new FinishedGoodsBatch();
+        batch.setId(tenant.id() + "-batch-" + suffix);
+        batch.setFactoryId(tenant.id());
+        batch.setProductTypeId(tenant.product());
+        batch.setBatchNumber(suffix);
+        batch.setWarehouseId(tenant.id() + "-warehouse");
+        batch.setUnit("盒");
+        batch.setProducedQuantity(new BigDecimal("100"));
+        batch.setUnitCost(new BigDecimal(unitCost));
+        batch.setStatus("AVAILABLE");
+        em.persist(batch);
+        return batch;
+    }
+
+    private void restock(Tenant tenant, ReturnOrder order, FinishedGoodsBatch source) {
+        order.setWithGoods(true);
+        var item = new ReturnOrderItem();
+        item.setReturnOrderId(order.getId());
+        item.setProductTypeId(tenant.product());
+        item.setQuantity(BigDecimal.ONE);
+        item.setBatchNumber(source.getBatchNumber());
+        item.setSourceFinishedGoodsBatchId(source.getId());
+        em.persist(item);
+
+        var returned = batch(tenant, "RTN-" + order.getReturnNumber() + "-1", source.getUnitCost().toPlainString());
+        returned.setReturnOrderItemId(item.getId());
+        returned.setProducedQuantity(item.getQuantity());
+
+        var voucher = new Voucher();
+        voucher.setFactoryId(tenant.id());
+        voucher.setVoucherNumber("RV-" + order.getReturnNumber());
+        voucher.setVoucherType(VoucherType.RETURN);
+        voucher.setVoucherDate(order.getReturnDate());
+        voucher.setSourceBusinessType("RETURN_ORDER");
+        voucher.setSourceBusinessId(order.getId());
+        voucher.setTotalDebit(order.getTotalAmount());
+        voucher.setTotalCredit(order.getTotalAmount());
+        voucher.setStatus(VoucherStatus.POSTED);
+        em.persist(voucher);
+    }
+
+    private MockMvc canvasConfig() {
+        return standaloneSetup(new CanvasFactoryConfigController(null, null, null, null, null, settings))
+                .setControllerAdvice(new GlobalExceptionHandler()).build();
     }
 
     private void basis(String factoryId, ShippedRevenueBasis basis) {
@@ -427,7 +544,7 @@ class ShippedGrossProfitPostgresContractTest {
         var mapper = new ObjectMapper().findAndRegisterModules()
                 .registerModule(new PriceSensitiveJacksonConfig().priceSensitiveJacksonModule());
         return standaloneSetup(new FinanceReportController(null, incomeStatements, null, service))
-                .setControllerAdvice(advice)
+                .setControllerAdvice(advice, new GlobalExceptionHandler())
                 .setMessageConverters(new MappingJackson2HttpMessageConverter(mapper)).build()
                 .perform(get("/api/mobile/{factoryId}/finance/report/shipped-gross-profit", F)
                         .requestAttr("userId", actor.getId())

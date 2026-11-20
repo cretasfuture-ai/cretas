@@ -112,7 +112,8 @@ class BuildPolicySwitchesContractTest {
             assertThat(change.getDetail()).isEqualTo("扣折扣与退货后净额");
         });
         FactorySettings saved = applyAndCapture(p);
-        assertThat(ShippedRevenueBasisSettings.read(saved.getProductionSettings())).isEqualTo(ShippedRevenueBasis.NET);
+        assertThat(ShippedRevenueBasisSettings.read(saved.getFactoryId(), saved.getProductionSettings()))
+                .isEqualTo(ShippedRevenueBasis.NET);
         assertThat(saved.getProductionSettings()).contains("\"defaultBatchSize\":120");
     }
 
@@ -172,7 +173,8 @@ class BuildPolicySwitchesContractTest {
         assertThat(saved.getBlockStartOnOpenShortage()).isTrue();
         assertThat(saved.getMaterialBalanceWarnPct()).isEqualByComparingTo("4");
         assertThat(saved.getMaterialBalanceRedPct()).isEqualByComparingTo("9");
-        assertThat(ShippedRevenueBasisSettings.read(saved.getProductionSettings())).isEqualTo(ShippedRevenueBasis.NET);
+        assertThat(ShippedRevenueBasisSettings.read(saved.getFactoryId(), saved.getProductionSettings()))
+                .isEqualTo(ShippedRevenueBasis.NET);
     }
 
     @Test

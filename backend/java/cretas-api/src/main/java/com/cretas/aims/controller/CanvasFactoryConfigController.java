@@ -828,7 +828,8 @@ public class CanvasFactoryConfigController {
         m.put("skipProcessReportingDefault", s.getSkipProcessReportingDefault());
         m.put("requireRequisitionBeforeReport", s.getRequireRequisitionBeforeReport());
         m.put("blockStartOnOpenShortage", s.getBlockStartOnOpenShortage());
-        m.put(ShippedRevenueBasisSettings.KEY, ShippedRevenueBasisSettings.read(s.getProductionSettings()).name());
+        m.put(ShippedRevenueBasisSettings.KEY,
+                ShippedRevenueBasisSettings.read(s.getFactoryId(), s.getProductionSettings()).name());
         m.put("allowSelfApproval", s.getAllowSelfApproval());
         m.put("priceDecreaseApprovalPct", s.getPriceDecreaseApprovalPct());
         m.put("priceIncreaseApprovalPct", s.getPriceIncreaseApprovalPct());

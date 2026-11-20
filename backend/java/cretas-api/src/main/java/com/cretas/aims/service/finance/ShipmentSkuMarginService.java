@@ -55,17 +55,24 @@ public class ShipmentSkuMarginService {
         return result;
     }
 
-    /** 经营分析「财务」区块的系统毛利，销售成本取本期发货的实际出库批次成本。 */
+    /** 经营分析系统毛利取本期发货实际出库成本，净额口径另扣本期销售退货回库成本。 */
     @Transactional(readOnly = true)
     public ShippedGrossProfitDTO summarize(String factoryId, LocalDate start, LocalDate end) {
         validatePeriod(factoryId, start, end);
         ProductionCostConsistency.lockFactory(entityManager, factoryId);
         ShippedRevenueBasis basis = ShippedRevenueBasisSettings.read(
-                factorySettings.findProductionSettingsByFactoryId(factoryId));
+                factoryId, factorySettings.findProductionSettingsByFactoryId(factoryId));
         List<Line> lines = shippedLines(factoryId, start, end);
+        boolean net = basis == ShippedRevenueBasis.NET;
         ShippedGrossProfitDTO.ShippedGrossProfitDTOBuilder out = ShippedGrossProfitDTO.builder()
                 .periodStart(start).periodEnd(end).shipmentLineCount(lines.size())
-                .basis(basis).revenueBasis(basis.description()).costBasis(ShippedGrossProfitDTO.COST_BASIS);
+                .basis(basis).revenueBasis(basis.description())
+                .costBasis(net ? ShippedGrossProfitDTO.NET_COST_BASIS : ShippedGrossProfitDTO.COST_BASIS);
+        if (lines.isEmpty()) {
+            return out.status(ShippedGrossProfitDTO.NO_SHIPMENT)
+                    .unavailableReason("缺少发货确认数据：所选期间没有已确认发货（已发货 / 已签收）的发运单，毛利无法计算；未发货的订单金额不计入收入")
+                    .build();
+        }
         long missingPrice = lines.stream().filter(l -> l.price == null).count();
         if (missingPrice > 0) {
             return out.status(ShippedGrossProfitDTO.PRICE_MISSING)
@@ -74,32 +81,35 @@ public class ShipmentSkuMarginService {
         }
         BigDecimal revenue = lines.stream().map(ShipmentSkuMarginService::lineRevenue)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
-        boolean hasReturns = false;
-        if (basis == ShippedRevenueBasis.NET) {
+        if (net) {
             try {
                 var adjustments = netRevenue.adjustments(factoryId, start, end);
                 revenue = revenue.subtract(adjustments.discount()).subtract(adjustments.returns());
-                hasReturns = adjustments.hasReturns();
             } catch (BusinessException e) {
                 return out.status(ShippedGrossProfitDTO.ADJUSTMENT_INCOMPLETE)
                         .unavailableReason(e.getMessage()).build();
             }
         }
-        if (lines.isEmpty() && !hasReturns) {
-            return out.status(ShippedGrossProfitDTO.NO_SHIPMENT)
-                    .unavailableReason("缺少发货确认数据：所选期间没有已确认发货（已发货 / 已签收）的发运单，毛利无法计算；未发货的订单金额不计入收入")
-                    .build();
-        }
         revenue = money(revenue);
         out.revenue(revenue);
         BigDecimal cost;
         try {
-            cost = lines.isEmpty() ? money(BigDecimal.ZERO) : margin(factoryId, start, end, lines).result().getTotalCost();
+            cost = margin(factoryId, start, end, lines).rawCost();
         } catch (BusinessException e) {
             return out.status(ShippedGrossProfitDTO.COST_INCOMPLETE)
                     .unavailableReason("发货收入已算出，但出库批次成本不完整，毛利无法计算：" + e.getMessage())
                     .build();
         }
+        if (net) {
+            try {
+                cost = cost.subtract(salesReturnCosts.returnedCost(factoryId, start, end));
+            } catch (BusinessException e) {
+                return out.status(ShippedGrossProfitDTO.COST_INCOMPLETE)
+                        .unavailableReason("发货净收入已算出，但退货回库批次成本不完整，毛利无法计算：" + e.getMessage())
+                        .build();
+            }
+        }
+        cost = money(cost);
         BigDecimal profit = revenue.subtract(cost);
         return out.status(ShippedGrossProfitDTO.OK).cost(cost).grossProfit(profit)
                 .marginRate(rate(profit, revenue)).build();
