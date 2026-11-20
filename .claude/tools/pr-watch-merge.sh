@@ -17,7 +17,7 @@
 # 规矩 (全局 CLAUDE.md「等 CI」): 检查为空不算绿; 网络错误重试不当结论; 头 SHA 变了按新头判断; ⛔ 不带红合并。
 # 合并用 --match-head-commit, 合并前一刻头变了会被 GitHub 拒绝。
 # 合并队列 (Steve 2026-11-18 拍板开): base 开了队列时, 全绿后不 update-branch (队列自己在最新 base 上叠合重跑),
-#   `gh pr merge` 只是入队, PR 仍 OPEN; 之后查 isInMergeQueue 等到 MERGED 或出队。出队 = RED (队列里的检查没过),
+#   `gh pr merge` 只是入队, PR 仍 OPEN; 之后查 isInMergeQueue 等到 MERGED 或确认出队。仍 OPEN 时等一轮复查, 确认出队才报 RED。
 #   入队命令后连续 3 轮都不在队列也没合并 = UNMEASURED (没入上队, 要人看)。RESULT 行带 queue=on。
 set -u
 
@@ -62,7 +62,7 @@ qstate() {
 }
 # 入队并等结果 (不返回, 一定 finish)
 enqueue_and_wait() {
-  local out mrc q qon s inq sha seen=0 miss=0
+  local out mrc q qon s inq sha seen=0 miss=0 dequeued=0
   say "head=${head:0:10} green, base $base has merge queue -> enqueue"
   # 直接用 enqueuePullRequest 入队: `gh pr merge` 在队列分支上走 enablePullRequestAutoMerge,
   # 本仓库没开 auto-merge 会被拒 (2026-11-18 #1866 实测 "Auto merge is not allowed")。
@@ -81,8 +81,14 @@ enqueue_and_wait() {
       OPEN) ;;
       *) neterr=$((neterr+1)); say "queue state unreadable (retry #$neterr): ${q:0:80}"; continue;;
     esac
-    if [ "$inq" = true ]; then seen=1; say "head=${head:0:10} in merge queue"
-    elif [ "$seen" = 1 ]; then finish RED "head=$head reason=dequeued-from-merge-queue queue=on" 1
+    if [ "$inq" = true ]; then
+      seen=1
+      dequeued=0
+      say "head=${head:0:10} in merge queue"
+    elif [ "$seen" = 1 ]; then
+      [ "$dequeued" = 1 ] && finish RED "head=$head reason=dequeued-from-merge-queue queue=on" 1
+      dequeued=1
+      say "head=${head:0:10} left merge queue while OPEN, checking again"
     else miss=$((miss+1)); [ "$miss" -ge 3 ] && finish UNMEASURED "reason=not-enqueued rc=$mrc out=${out:0:120} queue=on" 2
     fi
   done
