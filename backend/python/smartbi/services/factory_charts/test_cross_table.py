@@ -145,12 +145,20 @@ async def test_loader_bounds_join_to_authorized_product_and_preserves_later_insp
             ('production', 'fact_production_batch', production.frame.to_dict('records')),
             ('join', 'ANY($2::text[])', quality.frame.to_dict('records')),
             ('quality', 'quality_inspections qi', []), ('sales', 'sales_orders so', []),
-            ('purchase', 'purchase_receive_records pr', []), ('process', 'fact_production_report', [])]
+            ('purchase', 'purchase_receive_records pr', []), ('process', 'fact_production_report', []),
+            ('external_cost_integration', 'factory_external_integrations', [
+                {'factory_id': 'F006', 'external_system': 'blacklake', 'status': 'SUSPENDED'},
+                {'factory_id': 'F006', 'external_system': 'other', 'status': 'ACTIVE'},
+                {'factory_id': 'LIUSHANMEN', 'external_system': 'blacklake', 'status': 'ACTIVE'},
+            ])]
     pool = await fake_loader(rows, calls)
     monkeypatch.setattr(sources.config, 'get_pg_pool', pool)
     monkeypatch.setattr(sources.config, 'get_cretas_pool', pool)
     datasets, errors, _ = await sources.load('F006', request(), True, auth_request=auth_request)
     assert not errors
+    eligibility_calls = [(call[1], call[3]) for call in calls if call[0] == 'fetchval']
+    assert eligibility_calls == [('external_snapshot_metadata', ('F006',)), ('external_cost_integration', ('F006',))]
+    assert not any(dataset.source.startswith('blacklake-cost') for dataset in datasets)
     join_calls = [c for c in calls if c[0] == 'fetch' and c[1] == 'join']
     assert len(join_calls) == 1 and join_calls[0][3] == ('F006', ['101'])
     assert 'qi.factory_id=$1' in join_calls[0][2] and '$3' not in join_calls[0][2]
