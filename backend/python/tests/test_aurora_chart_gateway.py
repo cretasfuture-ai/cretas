@@ -17,6 +17,9 @@ _PATH = Path(__file__).resolve().parents[3] / "scripts/ops/aurora_chart_gateway.
 _SPEC = spec_from_file_location("aurora_chart_gateway", _PATH)
 gateway = module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gateway)
+_CHECK_SPEC = spec_from_file_location("aurora_chart_check", _PATH.with_name("aurora_chart_check.py"))
+chart_check = module_from_spec(_CHECK_SPEC)
+_CHECK_SPEC.loader.exec_module(chart_check)
 _BENCHMARK_SPEC = spec_from_file_location(
     "benchmark_aurora_chart", Path(__file__).with_name("benchmark_aurora_chart.py"),
 )
@@ -115,6 +118,28 @@ def test_chart_gateway_translates_and_forwards_only_the_authenticated_fixed_mode
         **REQUEST, "stream": True, "format": "json", "think": False, "keep_alive": 0,
         "options": {"temperature": 0, "seed": 1234, "num_predict": 900},
     })]
+
+
+def test_operator_checker_uses_actual_loopback_gateway_protocol(proxy, monkeypatch):
+    _, _, requests, port, *_ = proxy
+    monkeypatch.setattr(chart_check, "PORT", port)
+    token = "unit-test-chart"
+    chart_check.check_protocol(token)
+    assert requests == []
+    with pytest.raises(ValueError, match="chart_model_contract_failed"):
+        chart_check.check_protocol("wrong-token")
+    assert requests == []
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "0.0.0.0"])
+def test_operator_checker_rejects_public_listener(host, monkeypatch):
+    monkeypatch.setattr(chart_check.subprocess, "check_output",
+                        lambda *_args, **_kwargs: f"LISTEN 0 128 {host}:11440 0.0.0.0:*\n")
+    if host == "127.0.0.1":
+        chart_check.check_listener()
+    else:
+        with pytest.raises(ValueError, match="chart_listener_not_exclusively_loopback"):
+            chart_check.check_listener()
 
 
 @pytest.mark.parametrize("contents", [

@@ -61,6 +61,7 @@ import os
 import tempfile
 import time
 from enum import Enum
+from pathlib import Path
 from threading import Lock
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from urllib.request import getproxies
@@ -413,6 +414,8 @@ _LOCAL_PAIR: Tuple[str, str] = ("local_canada", "qwen3:8b")
 # The opt-in, on-demand chart gateway has its own fixed local pair. Keeping it
 # out of the general registry also keeps unattended registry inference off Aurora.
 _AURORA_CHART_PAIR: Tuple[str, str] = ("aurora_chart", "qwen3:14b")
+CHART_ATTEMPT_TIMEOUT_SECONDS = 52.0
+CHART_CHAIN_TIMEOUT_SECONDS = 56.0
 
 # 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
 # ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
@@ -1120,6 +1123,8 @@ def slot_has_usable_provider(slot: "SLOT") -> bool:
         if not api_key:
             continue
         configured += 1
+        if not _chart_cloud_allowed(slot, account):
+            continue
         if _refuse_reason(account, model, today) is not None:
             continue
         if _cb_is_open_readonly(f"{account}/{model}"):
@@ -1639,7 +1644,7 @@ _SLOT_POOLS: Dict[SLOT, List[Tuple[str, str]]] = {
     # SIMPLE_TEXT — low-risk rewrite / summary / classification only.
     # ⚠️ 它「低风险」不代表可以没有兜底: 低风险指的是**任务**, 不是**可用性**。
     SLOT.SIMPLE_TEXT: list(_FAST_TEXT_POOL),
-    # CHART — 独立 Aurora 网关，阿里云 A 为唯一后备。
+    # CHART — 独立 Aurora 网关。A 账号后备仅在确认免费额度保护后启用。
     SLOT.CHART: [_AURORA_CHART_PAIR, ("aliyun_a_vl", "qwen3.8-flash")],
     # MAPPER — 短 JSON 字段映射。契约是「短 JSON, 快而有界」, 由
     # test_mapper_uses_bounded_fast_models_without_max_or_reasoners 强制:
@@ -2514,10 +2519,59 @@ _BUDGET_AWARE_FAST_SLOTS = frozenset({
 _FAST_SLOT_RESERVE_RATIO = 0.40
 _FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
 _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
-_AURORA_CHART_ATTEMPT_TIMEOUT_SECONDS = 52.0  # 40 项目录的 14B 实测 p95 46.30s
+
+
+def _chart_cloud_allowed(slot: SLOT, account: str) -> bool:
+    # The account's console must enforce free-tier-only before this is enabled.
+    if slot is not SLOT.CHART or not account.startswith("aliyun_"):
+        return True
+    return account == "aliyun_a_vl" and os.getenv("LLM_CHART_ALIYUN_A_FREE_ONLY_CONFIRMED") == "1"
+
+
+def _f006_lease_is_idle() -> bool:
+    """Read the same host lease as the F006 worker without taking a write lock."""
+    lease = Path(tempfile.gettempdir()) / "cretas-f006-mini-pilot" / "inflight.sqlite"
+    try:
+        try:
+            info = lease.stat()
+        except FileNotFoundError:
+            # Verify the kernel's lock view is available even before the first F006 request.
+            Path("/proc/locks").read_text(encoding="ascii")
+            return True
+        identity = (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)
+        for row in Path("/proc/locks").read_text(encoding="ascii").splitlines():
+            fields = row.replace(" -> ", " ").split()
+            major, minor, inode = fields[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) == identity:
+                return False
+    except (OSError, ValueError, IndexError):
+        return False
+    return True
+
+
+class _F006ChartPriority(Exception):
+    pass
+
+
+async def _post_while_f006_idle(client, url, *, headers, payload, timeout):
+    if not _f006_lease_is_idle():
+        raise _F006ChartPriority
+    request = asyncio.create_task(client.post(url, headers=headers, json=payload, timeout=httpx.Timeout(timeout)))
+    try:
+        while not (await asyncio.wait((request,), timeout=0.2))[0]:
+            if not _f006_lease_is_idle():
+                raise _F006ChartPriority
+        if not _f006_lease_is_idle():
+            raise _F006ChartPriority
+        return await request
+    finally:
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
 
 
 def _has_callable_fallback(
+    slot: SLOT,
     slot_chain: List[Tuple[str, str]],
     start_index: int,
 ) -> bool:
@@ -2525,6 +2579,7 @@ def _has_callable_fallback(
     for account, model in slot_chain[start_index:]:
         if (
             model
+            and _chart_cloud_allowed(slot, account)
             and _refuse_reason(account, model) is None
             and not _cb_should_skip(f"{account}/{model}")
             and not _quota_should_skip(f"{account}/{model}")
@@ -2591,6 +2646,7 @@ def _note_empty_key(tag: str, account: str, errors: list) -> None:
             )
     errors.append(f"{account}: empty_api_key")
 
+
 def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
     """这条链上**有没有一家 provider 配了非空 key**。
 
@@ -2616,6 +2672,8 @@ def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
     """
     try:
         for account, _model in _build_chain(slot):
+            if not _chart_cloud_allowed(slot, account):
+                continue
             _base_url, api_key = _provider_config(account)
             if api_key:
                 return True
@@ -2688,7 +2746,7 @@ async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
-    timeout: float = 30.0,
+    timeout: Optional[float] = None,
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
@@ -2707,7 +2765,7 @@ async def _call_chain_attempts(
     slot: SLOT,
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
-    timeout: float = 30.0,
+    timeout: Optional[float] = None,
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
@@ -2731,9 +2789,8 @@ async def _call_chain_attempts(
     so the caller supplies the predicate. A raising predicate is treated as
     "reject this candidate", never propagated to the user.
 
-    Per-call timeout: 30s default (Apr 28 2026 optimization, was 120s).
-    Worst-case full 4-provider cascade = 120s. qwen-plus typical 15-30s, so
-    30s is comfortable margin while failing fast on overloaded providers.
+    Per-call timeout defaults to 30s. Chart requests default to 52s per
+    attempt and a 56s chain budget. Explicit caller budgets take precedence.
     Callers with an interactive latency contract may also set ``total_timeout``;
     it is a wall-clock budget for the entire provider cascade, not another
     per-provider allowance.
@@ -2744,6 +2801,10 @@ async def _call_chain_attempts(
     Returns parsed JSON response from the first successful provider.
     Raises RuntimeError if all providers exhaust.
     """
+    if timeout is None:
+        timeout = CHART_ATTEMPT_TIMEOUT_SECONDS if slot is SLOT.CHART else 30.0
+    if slot is SLOT.CHART and total_timeout is None:
+        total_timeout = CHART_CHAIN_TIMEOUT_SECONDS
     slot_chain = SLOT_MODELS.get(slot, [])
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
@@ -2768,6 +2829,9 @@ async def _call_chain_attempts(
             errors.append("chain: total_timeout")
             break
         if not model:
+            continue
+        if not _chart_cloud_allowed(slot, account):
+            errors.append(f"{account}/{model}: free_only_not_confirmed")
             continue
         # ⛔ Unified billing-safety gate (allowlist ∧ ¬denylist ∧ ¬expired ∧ ¬stale).
         # SAME helper in call_chain_stream so the two paths cannot drift. The router
@@ -2828,14 +2892,16 @@ async def _call_chain_attempts(
                 timeout,
                 remaining,
                 has_callable_fallback=_has_callable_fallback(
+                    slot,
                     slot_chain,
                     candidate_index + 1,
                 ),
             )
             if holds_local:
                 request_timeout = min(request_timeout, _LOCAL_ATTEMPT_TIMEOUT_S)
-            if account == _AURORA_CHART_PAIR[0]:
-                request_timeout = min(request_timeout, _AURORA_CHART_ATTEMPT_TIMEOUT_SECONDS)
+            is_aurora_chart = account == _AURORA_CHART_PAIR[0]
+            if is_aurora_chart:
+                request_timeout = min(request_timeout, CHART_ATTEMPT_TIMEOUT_SECONDS)
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -2844,7 +2910,12 @@ async def _call_chain_attempts(
             # commit message claim about "TOTAL timeout / 7.5s per phase" was
             # wrong. Keeping the explicit form matches `call_chain_stream`
             # below for readability — no behavior change.
-            if account == "anthropic":
+            if is_aurora_chart:
+                post = _post_while_f006_idle(
+                    _client_for(account), f"{base_url}/chat/completions",
+                    headers=headers, payload=req_payload, timeout=request_timeout,
+                )
+            elif account == "anthropic":
                 post = _post_anthropic(_client_for(account), slot, model, base_url, headers, req_payload,
                                        request_timeout)
             else:
@@ -2941,6 +3012,9 @@ async def _call_chain_attempts(
             # endpoint may transiently be broken. Net: we try all providers.
             continue
 
+        except _F006ChartPriority:
+            errors.append(f"{account}/{model}: f006_priority")
+            continue
         except _UntranslatableRequest as e:
             # 请求形状这一家表达不了(音频/文件/强制工具) —— 供应商本身是好的, 不记熔断, 换下一家
             logger.warning(f"[llm_router] {account}/{model} cannot serve this request shape: {e}")
@@ -3359,6 +3433,9 @@ async def _call_chain_stream_attempts(
             errors.append(f"{account}/{model}: non_stream_only")
             continue
         if not model:
+            continue
+        if not _chart_cloud_allowed(slot, account):
+            errors.append(f"{account}/{model}: free_only_not_confirmed")
             continue
         # ⛔ Unified billing-safety gate — SAME _refuse_reason as call_chain. This
         # path historically LACKED the expiry gate (billing-audit CRITICAL 3); now

@@ -142,6 +142,8 @@ def infer(payload, downstream):
     watcher = threading.Thread(target=monitor, daemon=True)
     watcher.start()
     try:
+        if idle_gateway_revision() != revision:
+            raise Busy("f006_gateway_changed")
         upstream.request("POST", "/api/chat", json.dumps(payload), {"Content-Type": "application/json"})
         response = upstream.getresponse()
         if response.status != 200:
