@@ -147,6 +147,8 @@ def _public_family_label(value: Any, family_id: str, metric: str) -> Optional[st
 
 def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Strip values/rows while retaining the complete eligible chart catalogue."""
+    from smartbi.services.external_production import SOURCE_KEY
+
     result: list[dict[str, Any]] = []
     for candidate in recommendations:
         cid = candidate.get("id")
@@ -175,6 +177,8 @@ def semantic_catalog(recommendations: Sequence[Mapping[str, Any]]) -> list[dict[
         family_label = _public_family_label(analysis.get("familyLabel"), family_id, metric)
         if family_label:
             item["familyLabel"] = family_label
+        if item["sourceKey"] == SOURCE_KEY and analysis.get("sourceQuantityUnit"):
+            item["sourceQuantityUnit"] = str(analysis["sourceQuantityUnit"])
         result.append(item)
     return result
 
@@ -273,6 +277,9 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                 if isinstance(value, str):
                     values["product"].append(value)
                     values["product"].append(value.split(" · ", 1)[0])
+                    sku = item.get("sku")
+                    if isinstance(sku, str) and sku:
+                        values["product"].append(sku)
             for candidate in authorized_recommendations:
                 for field in ("title", "label"):
                     value = candidate.get(field) if isinstance(candidate, Mapping) else None
@@ -530,6 +537,14 @@ def resolve_subject(question: str, subjects: Sequence[Mapping[str, Any]], explic
         return exact[0][0], None
     if len(exact) > 1:
         return None, "产品名称对应多个授权产品，请选择明确的产品"
+    sku_matches = [
+        str(item["id"]) for item in subjects if item.get("id") and item.get("sku")
+        and re.search(r"(?<![A-Za-z0-9])" + re.escape(str(item["sku"])) + r"(?![A-Za-z0-9])", question)
+    ]
+    if len(sku_matches) == 1:
+        return sku_matches[0], None
+    if sku_matches:
+        return None, "问题中包含多个授权产品，请选择明确的产品"
     # A product/SKU marker makes an unknown product explicit.  Generic
     # analysis words are excluded so normal questions keep factory scope.
     generic = re.search(r"(?:按|以|从|看)?产品(?:维度|类别|名称|排名|比较|分析|成本|产量|质量)|哪个产品|哪些产品", question)
