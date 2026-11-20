@@ -3136,6 +3136,8 @@ public class IntentKnowledgeBase {
         // 2026-11-18 BP 问题 28: 损耗异常 / 某工序出成率 / 出成率为什么掉了 走出成率工具的工序视图
         // (「最近有哪些损耗异常」以前没有短语 → 决策层判成质检, 答「质检不合格率 0%」; 守卫 YieldLossProcessRoutingContractTest)
         phraseToIntentMapping.put("最近有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("最近有没有损耗异常", "REPORT_BATCH_YIELD_RANK");
+        phraseToIntentMapping.put("有没有损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("有哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("哪些损耗异常", "REPORT_BATCH_YIELD_RANK");
         phraseToIntentMapping.put("损耗异常的批次", "REPORT_BATCH_YIELD_RANK");
