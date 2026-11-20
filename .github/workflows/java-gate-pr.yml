@@ -24,24 +24,19 @@ on:
 concurrency:
   # merge_group 下没有 pull_request.number: 若只用它, 所有队列运行同组互相取消 ⇒ 回落到 github.ref
   # (队列分支 gh-readonly-queue/... 每个合并组唯一)。
-  group: java-pr-gate-${{ github.event.pull_request.number || github.ref }}
+  # An unrelated label must never cancel a queued or running gate for this PR.
+  group: java-pr-gate-${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready' && format('ignored-label-{0}', github.run_id)) || github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
-env:
-  # mini 优先、满了溢出的阈值: 该标签上排队作业数 >= 它就走托管。
-  # 2026-11-19 Steve: mini 槽 1-4 注册 cretas-mini-pg (PG 线), 槽 5 专给 fast-contracts (cretas-mini-fast)。
-  # 2026-11-19 Steve「晚上 22:00 之后恢复跑满 runner, 8 点之后变成 1 pg 1 fast」(北京时间, 时段唯一定义在
-  # scripts/ci/canada-mini-gate/refill.sh 的 mini_window, changes 作业调 `refill.sh --window` 取 full/day):
-  #   day  (08-22): mini 只开槽 1、2 (PG) + 槽 5 (fast), 共 3 个 (2026-11-19 Steve「白天最多总计 3 个」);
-  #         PG 只派第 2、3 片, 阈值 MINI_PG_QUEUE_THRESHOLD (2)。
-  #   full (22-08): 槽 1-5 全开; PG 4 片都可上 mini, 阈值 MINI_PG_QUEUE_THRESHOLD_FULL (4)。
-  # 时段读不到 (输出为空) 按 day 处理: 只会少派, 不会多派。
-  MINI_PG_QUEUE_THRESHOLD: '2'
-  MINI_PG_QUEUE_THRESHOLD_FULL: '4'
-  MINI_FAST_QUEUE_THRESHOLD: '1'
+# mini 共用槽池 (2026-11-19 21:5x Steve「不跑5个了……重点是这4个槽不要只给pg用」): 最多 4 个槽, 每个槽什么都领,
+# 上 mini 的作业一律 runs-on 公共标签 cretas-mini。时段 (北京时间, 唯一定义在 scripts/ci/canada-mini-gate/refill.sh
+# 的 mini_window) 与排队阈值都由 changes 作业里的 route-mini-or-hosted.sh 决定, 输出 runner / mini_window:
+#   day  (08-22): mini 启用槽 1-3 (Steve「白天最多总计 3 个」); PG 派第 2、3 片, fast 派第 3 片 (共 3 个 Java 作业)。
+#   full (22-08): 槽 1-4 全开; PG 4 片 + fast 第 2、3 片 (共 6 个)。
+# 时段读不到按 day: 只会少派, 不会多派。fast 第 0 片不上 mini (2026-11-19 它在 mini 上有 OOM)。
 
 jobs:
   # 合并队列准备 (2026-11-12): 判断这次 PR 有没有改到本闸的触发路径。
@@ -51,78 +46,71 @@ jobs:
   # 下游作业的 if 写成 `!cancelled() && needs.changes.outputs.run != 'false'`: 本作业自己失败
   # (输出为空) 时下游照跑, ⛔ 不让判定仪器坏掉变成「被跳过 = 必需检查通过」。
   changes:
-    # 2026-11-18 mini 优先、满了溢出: 本作业兼做分片路由, ⛔ 必须在托管机上 (放 mini 上的话 mini 一满它自己也排队,
-    # 溢出就失效了)。路由脚本 scripts/ci/route-mini-or-hosted.sh 按标签各跑一次: 数该标签上排队的作业,
-    # 少于阈值输出该标签, 否则 ubuntu-latest; 每次打一行 ROUTE=... label=...
-    #   runner_pg   cretas-mini-pg   阈值按时段 (槽 1-4; 白天只开槽 1、2, 只派 PG 第 2、3 片, 夜间 4 片都可上 mini)
-    #   runner_fast cretas-mini-fast 阈值 MINI_FAST_QUEUE_THRESHOLD (槽 5, 只派 fast 第 3 片, 其余 3 片并行在托管)
+    if: ${{ github.event.action != 'labeled' || github.event.label.name == 'ci-hosted' || github.event.label.name == 'java-full-ready' }}
+    # 可信 base 路由验证合并组来源、心跳、空闲槽与队列，再输出 runner / mini_window。
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       actions: read   # 路由脚本读 Java Gate 运行/作业列表
+      pull-requests: read  # merge_group 的 PR 元数据
     outputs:
       run: ${{ steps.filter.outputs.run }}
-      runner_pg: ${{ steps.route-pg.outputs.runner_pg }}
-      runner_fast: ${{ steps.route-fast.outputs.runner_fast }}
-      mini_window: ${{ steps.window.outputs.mini_window }}
+      runner: ${{ steps.route.outputs.runner }}
+      route_policy: ${{ steps.route.outputs.route_policy }}
+      mini_group_verified: ${{ steps.route.outputs.mini_group_verified }}
+      mini_window: ${{ steps.route.outputs.mini_window }}
     steps:
       - uses: actions/checkout@v4
         with:
           # 三点 diff 要 merge-base; 只要提交与树, blob 按需取。
           fetch-depth: 0
           filter: blob:none
+      # Run only code from the protected base, before the candidate's path filter.
+      - id: route
+        if: ${{ github.event.label.name != 'ci-hosted' && ((vars.MINI_POOL_V2_ENABLED == '1' && github.event.pull_request.base.ref == 'main') || ((vars.MINI_POOL_V2_ENABLED == '0' || vars.MINI_POOL_V2_ENABLED == '1') && github.event.merge_group.base_ref == 'refs/heads/main')) }}
+        continue-on-error: true # missing route outputs select GitHub-hosted
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          GROUP_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          GROUP_BASE_REF: ${{ github.event.merge_group.base_ref }}
+          TRUSTED_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
+          MINI_POOL_CAPACITY: ${{ vars.MINI_POOL_CAPACITY }}
+          MINI_POOL_V2_ENABLED: ${{ vars.MINI_POOL_V2_ENABLED }}
+        run: |
+          [[ "$TRUSTED_BASE_SHA" =~ ^[a-f0-9]{40}$ ]]
+          git merge-base --is-ancestor "$TRUSTED_BASE_SHA" refs/remotes/origin/main
+          route_dir=$(mktemp -d)
+          trap 'rm -rf "$route_dir"' EXIT
+          timeout 45s git archive --output="$route_dir/router.tar" "$TRUSTED_BASE_SHA" scripts/ci/route-mini-or-hosted.sh scripts/ci/canada-mini-gate
+          tar -xf "$route_dir/router.tar" -C "$route_dir"
+          timeout 45s bash "$route_dir/scripts/ci/route-mini-or-hosted.sh"
       - id: filter
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: python3 scripts/ci/changed-paths.py --patterns scripts/ci/trigger-paths/java-gate-pr.txt
-      # 路由: 脚本恒 exit 0; 读不到排队数走托管并打 ROUTE=hosted reason=api-error。
-      # 本步骤自己崩了 (输出为空) 时下游表达式同样落 ubuntu-latest。
-      # 时段 full/day (北京时间, 定义见 refill.sh mini_window); 失败时输出为空 = 按 day。
-      # 仓库变量 MINI_DAY_FULL=1 = 白天也按 full 派 (mini 端同时要有 ~/gh-gate/day-full, 见 refill.sh mini_window)。
-      - id: window
-        env:
-          GH_GATE_DAY_FULL: ${{ vars.MINI_DAY_FULL }}
-        run: echo "mini_window=$(bash scripts/ci/canada-mini-gate/refill.sh --window)" | tee -a "$GITHUB_OUTPUT"
-      - id: route-pg
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          MINI_LABEL: cretas-mini-pg
-          # mini 在线心跳 (refill.sh 每分钟写); 缺失/超过 3 分钟 -> 整片托管 (reason=mini-offline)
-          MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}
-          MINI_QUEUE_THRESHOLD: ${{ steps.window.outputs.mini_window == 'full' && env.MINI_PG_QUEUE_THRESHOLD_FULL || env.MINI_PG_QUEUE_THRESHOLD }}
-          ROUTE_OUTPUT_KEY: runner_pg
-        run: bash scripts/ci/route-mini-or-hosted.sh
-      - id: route-fast
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          MINI_LABEL: cretas-mini-fast
-          # mini 在线心跳 (refill.sh 每分钟写); 缺失/超过 3 分钟 -> 整片托管 (reason=mini-offline)
-          MINI_HEARTBEAT: ${{ vars.MINI_HEARTBEAT }}
-          MINI_QUEUE_THRESHOLD: ${{ env.MINI_FAST_QUEUE_THRESHOLD }}
-          ROUTE_OUTPUT_KEY: runner_fast
-        run: bash scripts/ci/route-mini-or-hosted.sh
 
   fast-contracts-shard:
     needs: changes
     # 最终候选的全量已经包含这些测试；2 台 runner 上再跑一份只会与全量争槽。
     # merge_group 下没有标签 ⇒ !contains(...) 为真, 队列里照跑快速门禁。
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-fast-patterns.txt 按类名哈希取模分 4 片并行;
     # 原 job 名 fast-contracts 由下面的汇总 job 保留 (分支保护/各会话判据不变)。
     name: fast-contracts-shard (${{ matrix.shard }}/4)
-    # 2026-11-18 (Steve「直接开始接托管那边的部分」) 上 canada-mini; 2026-11-19 Steve 改为 mini 第 5 槽 (标签
-    # cretas-mini-fast) 专给 fast: 只有第 3 片可能派去 mini (该标签没有排队时), 其余 3 片并行在托管, 不因串行变慢。
+    # 2026-11-18 (Steve「直接开始接托管那边的部分」) 上 canada-mini; 2026-11-19 21:5x 改为共用槽池 (标签 cretas-mini):
+    # 白天只派第 3 片, 夜间 (mini_window=full) 派第 2、3 片; 其余并行在托管。近 60 次成功 run 实测 fast 一片
+    # mini 7.2 分钟 vs 托管 12.6 分钟 + 排队 17-20 分钟, 夜里槽多就多派一片。
     # (不派第 0 片: 2026-11-19 它在 mini 上有 OOM, 另一条线在查。) fork PR / ci-hosted 仍托管。
-    runs-on: ${{ matrix.shard == 3 && needs.changes.outputs.runner_fast == 'cretas-mini-fast' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-fast' || 'ubuntu-latest' }}
+    runs-on: ${{ (matrix.shard == 3 || (matrix.shard == 2 && needs.changes.outputs.mini_window == 'full')) && github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -228,7 +216,7 @@ jobs:
       # Maven 仓库缓存由 maven-cache-warm.yml 在 main 上跑过一次真实 mvn test 后写入（key 含 pom 哈希）。
       # 不再用 setup-java 的 `cache: maven`: 它的 key 一旦存在就不可覆盖, main 上那份 158MB 只含部分依赖,
       # 实测 2026-11-12 每片仍要从 central 现下 1160 个文件（约 2 分钟）。命中不了就退化成现状, 不会更慢。
-      # ⛔ 自建 runner (canada-mini) 不恢复: 5 个槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
+      # ⛔ 自建 runner (canada-mini) 不恢复: 各槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
       # 缓存原地解压到别的槽正在读的仓库上。2026-11-19 run 44403277567: PG 第 0 片 22:48:52 恢复完开始编译,
       # 22:48:56 读到 spring-integration-core-6.2.11.jar「zip END header not found」, 同时槽 1/2/4 还在解压
       # (到 22:48:56 / 22:49:01 才结束); 事后扫 376 个 jar 全部完好。Maven 自己下载是临时文件 + 原子改名,
@@ -289,15 +277,15 @@ jobs:
 
   postgres-reversal-concurrency-shard:
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}
     name: postgres-reversal-concurrency-shard (${{ matrix.shard }}/4)
     # 2026-11-18 (Steve 撤销「公开仓库禁自建 runner」, 前提实测更快): 本仓库分支的 PR 和合并队列跑在
-    # canada-mini 自建 runner (标签 cretas-mini-pg, 2 台); fork PR 一律托管 (陌生人代码不上我们的机器)。
+    # canada-mini 自建 runner (共用槽池标签 cretas-mini, 最多 4 槽); fork PR 一律托管 (陌生人代码不上我们的机器)。
     # 逃生口: 给 PR 打 `ci-hosted` 标签 = 回托管 (mini 离线时 job 会一直排队, 不会自动回落)。
     # 2026-11-18 mini 优先、满了溢出: 先看 changes 作业的路由输出 (mini 排队 >= 阈值 / 读不到 -> ubuntu-latest),
     # 守卫照旧串在后面, 路由输出只能把作业从 mini 挪到托管, fork PR 无论如何落托管。
     # ⚠️ 这一行是闸 scripts/tests/test-public-repo-hosted-only.sh 里唯一放行的表达式, 逐字钉住。
-    runs-on: ${{ (matrix.shard >= 2 || needs.changes.outputs.mini_window == 'full') && needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ (matrix.shard >= 2 || needs.changes.outputs.mini_window == 'full') && github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     # 分片 (2026-11-10): 类清单 scripts/ci/java-gate-pg-tests.txt (一行一类, 新类追加到文件末尾)。
     strategy:
       fail-fast: false
@@ -403,7 +391,7 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      # ⛔ 自建 runner (canada-mini) 不恢复: 5 个槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
+      # ⛔ 自建 runner (canada-mini) 不恢复: 各槽共用常驻的 ~ghgate/.m2 (本来就是热的), 恢复会把 158MB
       # 缓存原地解压到别的槽正在读的仓库上。2026-11-19 run 44403277567: PG 第 0 片 22:48:52 恢复完开始编译,
       # 22:48:56 读到 spring-integration-core-6.2.11.jar「zip END header not found」, 同时槽 1/2/4 还在解压
       # (到 22:48:56 / 22:49:01 才结束); 事后扫 376 个 jar 全部完好。Maven 自己下载是临时文件 + 原子改名,
@@ -456,9 +444,10 @@ jobs:
   # ⚠️ 判 `!= 'false'` 而不是 `== 'true'`: changes 作业自己失败 (输出为空) 时汇总照跑, 此时分片
   #    结论不是 success ⇒ 红; ⛔ 不让判定仪器坏掉变成整道闸被跳过。
   fast-contracts:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'fast-contracts (ignored label)' || 'fast-contracts' }}
     needs: [changes, fast-contracts-shard]
-    if: ${{ always() && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
-    runs-on: ${{ needs.changes.outputs.runner_fast == 'cretas-mini-fast' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-fast' || 'ubuntu-latest' }}
+    if: ${{ always() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' && !contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    runs-on: ${{ github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     timeout-minutes: 5
     # actions: read 只给判定脚本查「同一头 SHA 上有没有更新的 run」(被并发组取消 ⇒ 结论交给那条)。
     permissions:
@@ -478,11 +467,12 @@ jobs:
         run: bash scripts/ci/java-gate-shard-summary.sh fast-contracts "$RESULT"
 
   postgres-reversal-concurrency:
+    name: ${{ (github.event.action == 'labeled' && github.event.label.name != 'ci-hosted' && github.event.label.name != 'java-full-ready') && 'postgres-reversal-concurrency (ignored label)' || 'postgres-reversal-concurrency' }}
     needs: [changes, postgres-reversal-concurrency-shard]
-    if: ${{ always() && needs.changes.outputs.run != 'false' }}
+    if: ${{ always() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' }}
     # 和 PG 分片同一条自建路由 (见 postgres-reversal-concurrency-shard 注释): PG 这条线首尾的小作业也在 mini 上,
     # 否则托管机排队 (2026-11-18 实测全仓 94 个 run 在排) 时, 分片要等托管机上的这个作业, mini 省下的排队又被吃回去。
-    runs-on: ${{ needs.changes.outputs.runner_pg == 'cretas-mini-pg' && (github.event_name == 'merge_group' || github.event.pull_request.head.repo.full_name == github.repository) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini-pg' || 'ubuntu-latest' }}
+    runs-on: ${{ github.run_attempt == '1' && needs.changes.outputs.runner == 'cretas-mini' && needs.changes.outputs.route_policy == 'v2' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'merge_group' && needs.changes.outputs.mini_group_verified == 'true')) && !contains(github.event.pull_request.labels.*.name, 'ci-hosted') && 'cretas-mini' || 'ubuntu-latest' }}
     timeout-minutes: 5
     # actions: read 只给判定脚本查「同一头 SHA 上有没有更新的 run」(被并发组取消 ⇒ 结论交给那条)。
     permissions:
@@ -505,6 +495,6 @@ jobs:
   final-full-suite:
     needs: changes
     # 仅 java-full-ready 标签时运行 (merge_group 下没有标签 ⇒ 不跑, 队列跑快速门禁)。
-    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
+    if: ${{ !cancelled() && needs.changes.result != 'skipped' && needs.changes.outputs.run != 'false' && contains(github.event.pull_request.labels.*.name, 'java-full-ready') }}
     uses: ./.github/workflows/java-full-nightly.yml
     # 不传 write_baseline：PR 永远不许改已知红基线。

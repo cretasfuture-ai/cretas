@@ -7,7 +7,7 @@ const listSource = readFileSync(resolve(__dirname, '..', 'list.vue'), 'utf8');
 describe('procurement order tax rate create entry', () => {
   it('exposes per-line taxRate input and validation in the normal create dialog', () => {
     expect(listSource).toContain('taxRate?: number | string | null');
-    expect(listSource).toContain('v-model="item.taxRate"');
+    expect(listSource).toContain(':model-value="item.taxRate"');
     expect(listSource).toContain('placeholder="请选择税率"');
     expect(listSource).toContain('0%');
     expect(listSource).toContain('9%');

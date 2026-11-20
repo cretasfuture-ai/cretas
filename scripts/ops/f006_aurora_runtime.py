@@ -80,10 +80,14 @@ def ci_guest_state():
         try:row=json.loads(line)
         except ValueError:return 'unknown'
         if not isinstance(row,dict):return 'unknown'
-        states[row.get('name')]=row.get('status')
+        name=row.get('name')
+        status=row.get('status')
+        if not isinstance(name,str) or not name or name!=name.strip():return 'unknown'
+        # Colima forwards Lima instance statuses. An empty or unknown status makes the list unreadable.
+        if status not in ('Uninitialized','Installing','Broken','Stopped','Running'):return 'unknown'
+        states[name]=status
     if not states:return 'unknown'
-    if 'ci' not in states:return 'absent'
-    return states['ci'] if isinstance(states['ci'],str) and states['ci'] else 'unknown'
+    return states.get('ci','absent')
 
 
 def active_build():
