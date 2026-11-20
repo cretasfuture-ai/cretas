@@ -94,6 +94,28 @@ async def test_review_8_corrects_every_global_total_and_keeps_interleaved_subtot
     assert done["answer"] == expected and done["answer_corrected"] is True
 
 
+@pytest.mark.parametrize("topic", ["A产品方面", "其中A产品", "A产品中的", "A产品这一类", "A产品的话"])
+async def test_r3_scoped_group_total_is_left_alone_across_the_comma(monkeypatch, topic):
+    answer = f"{topic}，全月一共 52 卷。全月所有 A产品和 B产品一共 133 卷。"
+    _, done, prompts, calls = await ask(
+        monkeypatch, FILM_Q, {5321: (two_group_rows(52, 81), FILM_FIELDS)}, answer=answer,
+        plans=[dict(GROUP_PLAN, limit=1)],
+    )
+    assert len(calls) == 1 and "总用量 = 133" in prompts[0]
+    assert done["answer"] == answer and done["answer_corrected"] is False
+
+
+async def test_r3_bare_group_answer_can_precede_a_whole_table_total(monkeypatch):
+    answer = "用量最大的是FIL20-C，全月一共52卷。"
+    rows = [dict(row, 卷膜编码=label) for row, label in zip(two_group_rows(52, 81), ("FIL20-C", "FIL30-C"))]
+    _, done, prompts, calls = await ask(
+        monkeypatch, FILM_Q, {5321: (rows, FILM_FIELDS)}, answer=answer, plans=[GROUP_PLAN],
+    )
+    assert len(calls) == 1 and "总用量 = 133" in prompts[0]
+    assert done["answer"] == "用量最大的是FIL20-C，全月一共133卷。"
+    assert done["answer_corrected"] is True
+
+
 # ============ P1-2 「计划与实际」规则: 别的指标 / 时间范围 ============
 
 PLAN_OUTPUT_FIELDS = [("日期", False, False, True), ("计划工单数", True, False, False),
@@ -240,6 +262,28 @@ async def test_weekly_additive_flow_is_summed_for_whitelisted_question(monkeypat
     assert [line for line in block.splitlines() if line.startswith("| 2026-W")] == ranking
 
 
+@pytest.mark.parametrize(("metric", "column"), [("单件重量", "单件重量kg"), ("醒发用时", "醒发用时kg"),
+                                                ("单件产量", "单件产量kg")])
+async def test_r3_weekly_sum_requires_an_additive_flow_column(monkeypatch, metric, column):
+    fields = [("日期", False, False, True), (column, True, False, False)]
+    rows = [{"日期": date, column: value} for date, value in
+            [("2026-10-01", 10), ("2026-10-02", 10), ("2026-10-05", 15)]]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    plan = {"intent": "compute", "group_by": [row_level_qa.WEEK_ROLLUP_COL],
+            "metrics": [{"name": "周均值", "func": "mean", "col": column}],
+            "sort_by": "周均值", "descending": True}
+    _, done, prompts, calls = await ask(
+        monkeypatch, f"10月哪一周{metric}最高", {5398: (rows, fields)}, candidates=candidates,
+        plans=[plan], answer="2026-W41 最高，为 15。",
+    )
+    assert len(calls) == 1 and row_level_qa.WEEK_ROLLUP_COL in calls[0]
+    block = prompts[0].split("## 全表精确计算结果")[1]
+    assert [line for line in block.splitlines() if line.startswith("| 2026-W")] == [
+        "| 2026-W41 | 15 |", "| 2026-W40 | 10 |",
+    ]
+    assert done["answer"] == "2026-W41 最高，为 15。"
+
+
 @pytest.mark.parametrize("non_additive", [False, True])
 async def test_weekly_header_ratio_requires_two_additive_count_columns(monkeypatch, non_additive):
     denominator = "库存件数" if non_additive else "生产件数"
@@ -255,6 +299,31 @@ async def test_weekly_header_ratio_requires_two_additive_count_columns(monkeypat
     else:
         assert calls == []
         assert "| 2026-W41 | 25.00% |" in prompts[0]
+
+
+@pytest.mark.parametrize("numerator_columns", [("合格品项数",), (), ("合格品项数A", "合格品项数B")],
+                         ids=["explicit-pair", "missing", "ambiguous-prefix"])
+async def test_r3_weekly_ratio_uses_the_explicit_formula_or_calls_planner(monkeypatch, numerator_columns):
+    ratio = "计划品项达成率(合格品项数/抽检品项数)"
+    rows = [{"日期": date, "原表计划品项数": planned, "已产出计划品项数": 8,
+             "抽检品项数": inspected, ratio: 8 / inspected, **dict.fromkeys(numerator_columns, 8)}
+            for date, planned, inspected in [("2026-10-01", 10, 40), ("2026-10-05", 40, 10)]]
+    fields = [("日期", False, False, True)] + [(name, True, False, False) for name in rows[0] if name != "日期"]
+    candidates = [replace(TEMP_CAND[0], field_names=[f[0] for f in fields])]
+    _, done, prompts, calls = await ask(
+        monkeypatch, "10月哪一周计划品项达成率最高", {5398: (rows, fields)}, candidates=candidates,
+    )
+    if numerator_columns == ("合格品项数",):
+        assert calls == []
+        block = prompts[0].split("## 全表精确计算结果")[1]
+        assert "Σ合格品项数 / Σ抽检品项数" in block
+        assert [line for line in block.splitlines() if line.startswith("| 2026-W")] == [
+            "| 2026-W41 | 80.00% |", "| 2026-W40 | 20.00% |",
+        ]
+    else:
+        assert len(calls) == 1 and ratio in calls[0]
+        assert "## 全表精确计算结果" not in prompts[0]
+    assert done["answer"] == "（桩）"
 
 
 async def test_cross_year_weekly_ranking_uses_iso_week_groups_from_planner(monkeypatch):

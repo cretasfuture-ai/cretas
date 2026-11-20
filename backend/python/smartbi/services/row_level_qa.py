@@ -262,10 +262,8 @@ _LOW_WORDS = ("最低", "最少", "最小", "最差", "最弱", "最短")
 _HIGH_WORDS = ("最高", "最多", "最大", "最好", "最强", "最长")
 _MONTH_PREFIX = r"(?:(?P<month>1[0-2]|[1-9])\s*月\s*[,，]?\s*)?"
 _DAY_VALUE_RE = re.compile(r"^(\d{4}[-/]\d{1,2}[-/]\d{1,2})(?=$|[T ])")
-_ADDITIVE_RE = re.compile(
-    r"(?:重量|产量|数量|用量|件数|个数|次数|趟次|品项数|工单数|订单数|批次数?|kg|公斤|吨|卷|箱)$",
-    re.IGNORECASE,
-)
+_FLOW_RE = re.compile(r"产量|产出|数量|件数|卷数|箱数|金额|用量|人次|工时")
+_NON_FLOW_RE = re.compile(r"单件|均|比|重量|规格")
 _SNAPSHOT = r"累计|累积|库存|存量|余额|期初|期末|结存|结余|剩余|在库|存货|在制|时点"
 _NON_ADDITIVE_RE = re.compile(_SNAPSHOT + r"|单位|单价|每|人均|均值|平均|温度|湿度|浓度|率|比例|占比|百分比|[/／%％]")
 _COUNT_RE = re.compile(r"(?:数量|件数|个数|次数|趟次|品项数|工单数|订单数|批次数?)$")
@@ -341,7 +339,10 @@ def _additive_column(column: str, df: pd.DataFrame, roles: dict, *, counts_only:
     if role.get("is_time") or (role.get("is_dimension") and not role.get("is_measure")):
         return False
     label = re.sub(r"[（(](?:kg|公斤|吨|卷|箱|件|个|次)[）)]$", "", column, flags=re.IGNORECASE)
-    if not (_COUNT_RE if counts_only else _ADDITIVE_RE).search(label):
+    if counts_only:
+        if not _COUNT_RE.search(label):
+            return False
+    elif not _FLOW_RE.search(column) or _NON_FLOW_RE.search(column):
         return False
     values = _to_num(df[column].dropna())
     if values.empty or not values.notna().all():
@@ -350,18 +351,20 @@ def _additive_column(column: str, df: pd.DataFrame, roles: dict, *, counts_only:
 
 
 def _weekly_ratio_columns(column: str, columns: Sequence[str]) -> Optional[tuple]:
+    if re.search(r"[（(].*[/／].*[）)]", column):
+        normalized = column.translate(str.maketrans("（）／", "()/"))
+        formula = _FORMULA_RE.search(normalized)
+        term = r"[^()+/\-×*％%\s]+"
+        terms = rf"{term}(?:\s*\+\s*{term})*"
+        quotient = rf"\s*(?:{term}|\(\s*{terms}\s*\))\s*/\s*(?:{term}|\(\s*{terms}\s*\))\s*"
+        if not formula or not re.fullmatch(quotient, formula[1]):
+            return None
+        return derive_ratio_from_header(normalized, columns, exact=True)
     if _metric_base(column) == "计划品项达成率":
         pair = _plan_count_columns(columns)
         if pair and all("品项" in c for c in pair):
             return [pair[1]], [pair[0]]
-    formula = _FORMULA_RE.search(column)
-    if not formula:
-        return None
-    term = r"[^()+/\-×*％%\s]+"
-    terms = rf"{term}(?:\s*\+\s*{term})*"
-    if not re.fullmatch(rf"\s*(?:{term}|\(\s*{terms}\s*\))\s*/\s*(?:{term}|\(\s*{terms}\s*\))\s*", formula[1]):
-        return None
-    return derive_ratio_from_header(column, columns)
+    return None
 
 
 def week_rollup_plan(question: str, df: pd.DataFrame, field_meta: Optional[Sequence[dict]]) -> Optional[dict]:
@@ -521,10 +524,10 @@ def _to_num(s: pd.Series) -> pd.Series:
 _FORMULA_RE = re.compile(r"[（(]\s*(.+)\s*[）)]\s*$")
 
 
-def derive_ratio_from_header(col: str, columns: Sequence[str]) -> Optional[tuple]:
+def derive_ratio_from_header(col: str, columns: Sequence[str], *, exact: bool = False) -> Optional[tuple]:
     """列头自带公式 (如 出成率(良品/(良品+废品+次品))) 时, 解出 (分子列, 分母列)。
 
-    token 按「字段名以它开头」对应到实际列 (良品 -> 良品kg)。解不出返回 None。
+    默认允许唯一前缀匹配 (良品 -> 良品kg)，确定性周汇总要求完整列名。解不出返回 None。
     """
     m = _FORMULA_RE.search(col)
     if not m or "/" not in m.group(1):
@@ -538,7 +541,7 @@ def derive_ratio_from_header(col: str, columns: Sequence[str]) -> Optional[tuple
     def to_cols(toks: List[str]) -> Optional[List[str]]:
         out: List[str] = []
         for t in toks:
-            cands = [c for c in columns if c != col and (c == t or c.startswith(t))]
+            cands = [c for c in columns if c != col and (c == t or (not exact and c.startswith(t)))]
             if len(cands) != 1:
                 return None
             out.append(cands[0])
@@ -818,8 +821,8 @@ def _execute_plan(df: pd.DataFrame, plan: dict, question: str, strict_values: bo
         # astype(object): 混合 int/float 列 .values 会整体升成 float (编码 22002 -> 22002.0 -> 22,002)
         res = ExecResult(cols, shown.astype(object).values.tolist(), total, matched, fdesc, notes,
                          group_by=gb, mode="grouped")
-        if len(gb) == 1 and asks_total(question):
-            res.all_group_labels = out[gb[0]].tolist()
+        if asks_total(question):
+            res.all_group_labels = [label for group in gb for label in out[group].drop_duplicates()]
         res.notes.append(f"共 {len(out)} 个分组, 展示前 {len(shown)} 个")
         res.pct_cols = pct_cols
         for m in metrics:  # 一共/总共/合计: 全部分组的求和, 不是排名第一的那一项
@@ -956,13 +959,30 @@ def render_block(question: str, res: ExecResult) -> str:
 # ---------------------------------------------------------------------------
 
 _CLAUSE_SPLIT_RE = re.compile(r"(?<=[，,；;。！？!?\n])")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[；;。！？!?])|(?<=\.)(?=\s|$)")
 _THOUSANDS_COMMA_RE = re.compile(r"(?<=\d),(?=\d)")
 _PROTECT = "\x01"
 _TOTAL_SCOPE_RE = re.compile(r"(?:全月|整月|全表)\s*(?:所有\s*)?|所有\s*")
 _TOTAL_VERB = r"(?:一共|总共|合计|总计|共计|共)"
 _CLAIM_NUMBER = r"(?P<number>[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
-_CLAIM_END = r"\s*[，,；;。！？!?\n]?"
+_CLAIM_END = r"\s*[，,；;。.!！?？\n]?"
 _UNIT_RE = re.compile(r"[（(]([^()（）]+)[）)]$|((?i:kg)|公斤|吨|元|卷|箱|分钟|台|批|人|次|件|个)$")
+
+
+def _local_total_scope(labels: Optional[list], answer: str) -> Optional[re.Pattern]:
+    suffix = r"方面|中的|这一类|的话"
+    if not re.search(rf"其中|{suffix}", answer):
+        return None
+    text = answer.casefold()
+    names = {name for label in labels or [] if (name := str(label).strip()) and name.casefold() in text}
+    if not names:
+        return None
+    group = "(?:" + "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True)) + ")"
+    return re.compile(
+        rf"其中\s*[「“\"]?{group}(?![A-Za-z0-9_])"
+        rf"|(?<![A-Za-z0-9_]){group}[」”\"]?\s*(?:{suffix})",
+        re.IGNORECASE,
+    )
 
 
 def _all_groups_prefix(claim: str, labels: Optional[list]) -> int:
@@ -983,7 +1003,16 @@ def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tupl
     if res is None or not res.asks_total or not res.totals or not answer:
         return answer, False
     protected = _THOUSANDS_COMMA_RE.sub(_PROTECT, answer)
-    parts = [part.replace(_PROTECT, ",") for part in _CLAUSE_SPLIT_RE.split(protected)]
+    local_scope = _local_total_scope(res.all_group_labels, answer)
+    parts = []
+    for sentence in _SENTENCE_SPLIT_RE.split(protected):
+        local = local_scope.search(sentence.replace(_PROTECT, ",")) if local_scope else None
+        offset = 0
+        for clause in _CLAUSE_SPLIT_RE.split(sentence):
+            offset += len(clause)
+            if clause:
+                before_local = local is None or offset <= local.start()
+                parts.append((clause.replace(_PROTECT, ","), local is not None, before_local))
     units = {}
     for name, column in res.total_columns.items():
         match = _UNIT_RE.search(column)
@@ -992,12 +1021,15 @@ def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tupl
 
     seen = set()
     updated = []
-    for index, part in enumerate(parts):
+    for index, (part, is_local, before_local) in enumerate(parts):
+        if not before_local:
+            updated.append(part)
+            continue
         claim_start = len(part) - len(part.lstrip())
         scope = _TOTAL_SCOPE_RE.match(part, claim_start)
         if scope:
             claim_start = scope.end()
-            if "所有" in scope[0]:
+            if "所有" in scope[0] and len(res.group_by) == 1:
                 claim_start += _all_groups_prefix(part[claim_start:], res.all_group_labels)
         elif index != 0 or not part[claim_start:].startswith("总计"):
             updated.append(part)
@@ -1025,10 +1057,13 @@ def reconcile_answer_with_totals(answer: str, res: Optional[ExecResult]) -> tupl
                 candidates[name] = (match, value)
         if len(candidates) == 1:
             name, (match, value) = next(iter(candidates.items()))
-            seen.add(name)
             left, right = match.span("number")
             expected = _fmt(value)
-            if float(match["number"].replace(",", "")) != float(expected.replace(",", "")):
+            # A correct total can be followed by a subgroup detail in the same sentence.
+            if float(match["number"].replace(",", "")) == float(expected.replace(",", "")):
+                seen.add(name)
+            elif not is_local:
+                seen.add(name)
                 part = part[:claim_start + left] + expected + part[claim_start + right:]
         updated.append(part)
     out = "".join(updated)
