@@ -39,6 +39,8 @@ const NODE_H = DAG_NODE_H;
 const COL_GAP = DAG_COL_GAP;
 const ROW_GAP = DAG_ROW_GAP;
 const FLOW_ID = 'trace-dag-flow';
+const FIT_PADDING = 12;
+const MAX_CANVAS_HEIGHT = 720;
 
 const KIND_LABEL: Record<TraceNodeKind, string> = {
   upstream: '上游',
@@ -73,43 +75,105 @@ const positions = computed(() => {
   return map;
 });
 
-// —— 自适应: 默认缩放跟容器宽度走 (有下限保可读), 容器高度跟图高走 ——
+// 画布视窗留在固定栏下方。图在可读下限仍放不下时，保留完整的可滚动区域。
 const canvasEl = ref<HTMLElement | null>(null);
+const controlsEl = ref<HTMLElement | null>(null);
+const legendEl = ref<HTMLElement | null>(null);
 const containerW = ref(0);
+const topInset = ref(0);
+const horizontalScrollbar = ref(0);
+const availableHeight = ref(MAX_CANVAS_HEIGHT);
 const { setViewport } = useVueFlow(FLOW_ID);
 const graphSize = computed(() => {
-  let cols = 0;
-  let rows = 1;
-  const count = new Map<number, number>();
-  for (const n of graph.value.nodes) {
-    cols = Math.max(cols, n.column + 1);
-    count.set(n.column, (count.get(n.column) ?? 0) + 1);
+  let w = 0;
+  let h = 0;
+  for (const { x, y } of positions.value.values()) {
+    w = Math.max(w, x + NODE_W);
+    h = Math.max(h, y + NODE_H);
   }
-  for (const c of count.values()) rows = Math.max(rows, c);
-  return { w: cols * NODE_W + Math.max(0, cols - 1) * COL_GAP, h: rows * NODE_H + (rows - 1) * ROW_GAP };
+  return { w, h };
 });
-const zoom = computed(() => dagFitZoom(containerW.value, graphSize.value.w));
-const canvasHeight = computed(() => Math.min(720, Math.max(360, Math.round(graphSize.value.h * zoom.value + 40))));
-function applyViewport() {
-  const y = Math.max(12, (canvasHeight.value - graphSize.value.h * zoom.value) / 2);
-  void setViewport({ x: 12, y, zoom: zoom.value });
+const zoom = computed(() => Math.min(
+  dagFitZoom(containerW.value, graphSize.value.w),
+  dagFitZoom(Math.max(1, availableHeight.value - horizontalScrollbar.value - 2), graphSize.value.h),
+));
+const graphWidth = computed(() => Math.ceil(graphSize.value.w * zoom.value) + 2 * FIT_PADDING);
+const graphHeight = computed(() => Math.ceil(graphSize.value.h * zoom.value) + 2 * FIT_PADDING);
+const canvasHeight = computed(() => Math.min(
+  availableHeight.value,
+  Math.max(360, graphHeight.value + horizontalScrollbar.value + 2),
+));
+
+function fixedBars(): Iterable<HTMLElement> {
+  return canvasEl.value?.closest('.app-main')?.querySelectorAll<HTMLElement>(
+    ':scope > .app-header, :scope > .workspace-tabs',
+  ) ?? [];
 }
+
+function measureCanvas() {
+  const el = canvasEl.value;
+  if (!el?.clientWidth) return;
+  containerW.value = el.clientWidth;
+  horizontalScrollbar.value = Math.max(0, el.offsetHeight - el.clientHeight - 2 * el.clientTop);
+  let bottom = 0;
+  for (const bar of fixedBars()) {
+    const { position, top } = getComputedStyle(bar);
+    if (position === 'sticky' || position === 'fixed') {
+      bottom = Math.max(bottom, (parseFloat(top) || 0) + bar.getBoundingClientRect().height);
+    }
+  }
+  const legend = legendEl.value;
+  const legendHeight = legend ? legend.offsetHeight + (parseFloat(getComputedStyle(legend).marginBottom) || 0) : 0;
+  topInset.value = bottom + legendHeight;
+  const toolbarHeight = controlsEl.value?.offsetHeight ?? 0;
+  availableHeight.value = Math.max(1, Math.min(
+    MAX_CANVAS_HEIGHT,
+    window.innerHeight - topInset.value - toolbarHeight - 2 * FIT_PADDING,
+  ));
+}
+
+function applyViewport() {
+  const el = canvasEl.value;
+  if (!el) return;
+  el.scrollLeft = 0;
+  el.scrollTop = 0;
+  const y = Math.max(FIT_PADDING, (el.clientHeight - graphSize.value.h * zoom.value) / 2);
+  void setViewport({ x: FIT_PADDING, y, zoom: zoom.value });
+}
+
+async function fitTrace() {
+  measureCanvas();
+  await nextTick();
+  applyViewport();
+  const el = canvasEl.value;
+  if (!el) return;
+  const bounds = el.getBoundingClientRect();
+  const bottom = controlsEl.value?.getBoundingClientRect().bottom ?? bounds.bottom;
+  if (bounds.top < topInset.value + FIT_PADDING || bottom > window.innerHeight - FIT_PADDING) {
+    el.scrollIntoView?.({ block: 'start', inline: 'nearest', behavior: 'instant' });
+  }
+}
+
 let observer: ResizeObserver | null = null;
 onMounted(() => {
   const el = canvasEl.value;
   if (!el) return;
-  containerW.value = el.clientWidth;
+  measureCanvas();
+  window.addEventListener('resize', measureCanvas);
   if (typeof ResizeObserver !== 'undefined') {
-    observer = new ResizeObserver((entries) => {
-      const w = Math.round(entries[0]?.contentRect.width ?? el.clientWidth);
-      if (w !== containerW.value) containerW.value = w;
-    });
+    observer = new ResizeObserver(measureCanvas);
     observer.observe(el);
+    if (controlsEl.value) observer.observe(controlsEl.value);
+    if (legendEl.value) observer.observe(legendEl.value);
+    for (const bar of fixedBars()) observer.observe(bar);
   }
   void nextTick(applyViewport);
 });
-onBeforeUnmount(() => observer?.disconnect());
-watch([zoom, canvasHeight, () => props.trace], () => { void nextTick(applyViewport); });
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', measureCanvas);
+  observer?.disconnect();
+});
+watch([zoom, canvasHeight, () => props.trace], applyViewport, { flush: 'post' });
 
 type NodeState = 'selected' | 'chain' | 'dim' | 'normal';
 function stateOf(id: string): NodeState {
@@ -207,23 +271,29 @@ const STATE_CLASS: Record<NodeState, string> = {
 
 <template>
   <div data-testid="trace-dag">
-    <div class="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500" data-testid="trace-dag-columns">
+    <div ref="legendEl" class="mb-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500" data-testid="trace-dag-columns">
       <span v-for="(c, i) in graph.columns.filter(Boolean)" :key="i">{{ c }}</span>
       <span class="ml-auto">节点上直接显示要点；点节点看完整详情并高亮上下游链路，再点一次取消</span>
     </div>
     <div
       ref="canvasEl"
-      class="trace-dag-canvas w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50"
-      :style="{ height: `${canvasHeight}px` }"
+      class="trace-dag-canvas w-full overflow-auto rounded-lg border border-slate-200 bg-slate-50"
+      :style="{ height: `${canvasHeight}px`, scrollMarginTop: `${topInset + FIT_PADDING}px` }"
       data-testid="trace-dag-canvas"
+      role="region"
+      aria-label="追溯线画布"
+      tabindex="0"
     >
       <VueFlow
         :id="FLOW_ID"
         :nodes="flowNodes"
         :edges="flowEdges"
-        :default-viewport="{ x: 12, y: 12, zoom }"
+        :default-viewport="{ x: FIT_PADDING, y: FIT_PADDING, zoom }"
         :min-zoom="DAG_MIN_ZOOM"
         :max-zoom="1.5"
+        :style="{ minWidth: `${graphWidth}px`, minHeight: `${graphHeight}px` }"
+        :zoom-on-scroll="false"
+        :prevent-scrolling="false"
         :nodes-draggable="false"
         :nodes-connectable="false"
         :elements-selectable="false"
@@ -259,17 +329,18 @@ const STATE_CLASS: Record<NodeState, string> = {
           </div>
         </template>
         <Background pattern-color="#e2e8f0" :gap="20" />
-        <Controls>
-          <!-- 「适应」: 整图装得下才整图适应, 装不下按可读下限缩放并回到起点 (与默认视图一致), 不再缩到字读不出 -->
-          <template #control-fit-view>
-            <ControlButton title="适应（装不下时保持可读缩放并回到起点）" data-testid="trace-dag-fit" @click="applyViewport">
-              <svg viewBox="0 0 32 30" width="14" height="14" aria-hidden="true">
-                <path fill="currentColor" d="M3 4h9v3H6v6H3zM29 4h-9v3h6v6h3zM3 26h9v-3H6v-6H3zM29 26h-9v-3h6v-6h3z" />
-              </svg>
-            </ControlButton>
-          </template>
-        </Controls>
       </VueFlow>
+    </div>
+    <div ref="controlsEl" class="pt-2">
+      <Controls class="trace-dag-controls">
+        <template #control-fit-view>
+          <ControlButton title="适应（装不下时可滚动查看）" data-testid="trace-dag-fit" @click="fitTrace">
+            <svg viewBox="0 0 32 30" width="14" height="14" aria-hidden="true">
+              <path fill="currentColor" d="M3 4h9v3H6v6H3zM29 4h-9v3h6v6h3zM3 26h9v-3H6v-6H3zM29 26h-9v-3h6v-6h3z" />
+            </svg>
+          </ControlButton>
+        </template>
+      </Controls>
     </div>
 
     <div
@@ -301,3 +372,16 @@ const STATE_CLASS: Record<NodeState, string> = {
     </div>
   </div>
 </template>
+
+<style scoped>
+.trace-dag-canvas {
+  scrollbar-gutter: stable;
+}
+
+.trace-dag-controls {
+  position: static;
+  display: flex;
+  width: fit-content;
+  margin: 0;
+}
+</style>
