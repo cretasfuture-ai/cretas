@@ -266,6 +266,56 @@ class DateFilterChatEntryContractTest {
                 "batch_number", "PB-POSITIVE", "report_date", LOSS_TODAY, "product_name", "酱牛肉",
                 "process_name", "熟制杀菌", "input_quantity", BigDecimal.valueOf(100),
                 "output_quantity", BigDecimal.valueOf(80), "input_unit", "kg", "output_unit", "kg")));
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+        IntentExecuteResponse response = runSse(recognizer, sentence);
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        verify(recognizer, never()).recognizeIntentWithConfidence(
+                anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any(), any());
+        verify(reports).findYieldReportsForBalance(eq(F), eq(LocalDate.parse(from)), eq(LOSS_TODAY),
+                eq(""), any(), any());
+        var result = mapper.valueToTree(response.getResultData());
+        var data = result.path("data");
+        var period = data.path("period");
+        var applied = result.path("appliedTimeRange");
+        assertThat(period.path("startDate").asText()).isEqualTo(from);
+        assertThat(period.path("endDate").asText()).isEqualTo(LOSS_TODAY.toString());
+        assertThat(applied.path("from").asText()).isEqualTo(period.path("startDate").asText());
+        assertThat(applied.path("to").asText()).isEqualTo(period.path("endDate").asText());
+        assertThat(data.path("windowWidened").asBoolean()).isEqualTo(widened);
+        assertThat(data.path("abnormalCount").asInt()).isEqualTo(1);
+        assertThat(response.getMessage()).contains(from + " 至 " + LOSS_TODAY, "PB-POSITIVE");
+    }
+
+    @Test
+    void lossAnomalySseDistinguishesUnbatchedReportsFromNoReports() throws Exception {
+        LocalDate start = LocalDate.of(2026, 11, 16);
+        ProductionReportRepository reports = mock(ProductionReportRepository.class);
+        when(reports.findYieldReportsForBalance(F, start, LOSS_TODAY, "",
+                ProcessSecretAggregateExclusions.Scope.EMPTY.productTypeIdsOrSentinel(),
+                ProcessSecretAggregateExclusions.Scope.EMPTY.planIdsOrSentinel()))
+                .thenReturn(List.of(Map.of("report_date", LOSS_TODAY.minusDays(1)),
+                        Map.of("report_date", LOSS_TODAY, "batch_number", " ")));
+        when(reports.findYieldReportsForBalance(eq(F), any(), eq(start.minusDays(1)), eq(""), any(), any()))
+                .thenReturn(List.of(Map.of("report_date", start.minusDays(1))));
+        AIIntentService recognizer = configureLossAnomalySse(reports);
+        IntentExecuteResponse response = runSse(recognizer, "本周有哪些损耗异常");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
+        assertThat(response.getMessage()).contains("有 2 条报工", "缺少批次号", "近一年有 1 条报工", "没法判断")
+                .doesNotContain("没有任何报工记录", "近一年也没有报工记录");
+        var data = mapper.valueToTree(response.getResultData()).path("data");
+        assertThat(data.path("reportCountInWindow").asInt(-1)).isZero();
+        assertThat(data.path("unbatchedReportCountInWindow").asInt(-1)).isEqualTo(2);
+        assertThat(data.path("noReportsInWindow").isBoolean()).isTrue();
+        assertThat(data.path("noReportsInWindow").asBoolean()).isFalse();
+        assertThat(data.path("latestReportDate").isNull()).isTrue();
+        assertThat(data.path("abnormalNearLatestReport").isNull()).isTrue();
+    }
+
+    private AIIntentService configureLossAnomalySse(ProductionReportRepository reports) {
         ProcessSecretAggregateExclusions exclusions = mock(ProcessSecretAggregateExclusions.class);
         when(exclusions.forCurrentCaller(eq(F), anyString())).thenReturn(ProcessSecretAggregateExclusions.Scope.EMPTY);
         MaterialBalanceThresholdProvider thresholds = mock(MaterialBalanceThresholdProvider.class);
@@ -289,25 +339,7 @@ class DateFilterChatEntryContractTest {
 
         AIIntentService recognizer = mock(AIIntentService.class);
         configureSseIntent(recognizer, "REPORT_BATCH_YIELD_RANK", tool);
-        IntentExecuteResponse response = runSse(recognizer, sentence);
-
-        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
-        assertThat(response.getIntentCode()).isEqualTo("REPORT_BATCH_YIELD_RANK");
-        verify(recognizer, never()).recognizeIntentWithConfidence(
-                anyString(), anyString(), anyInt(), any(), anyString(), any(), any(), any(), any());
-        verify(reports).findYieldReportsForBalance(eq(F), eq(LocalDate.parse(from)), eq(LOSS_TODAY),
-                eq(""), any(), any());
-        var result = mapper.valueToTree(response.getResultData());
-        var data = result.path("data");
-        var period = data.path("period");
-        var applied = result.path("appliedTimeRange");
-        assertThat(period.path("startDate").asText()).isEqualTo(from);
-        assertThat(period.path("endDate").asText()).isEqualTo(LOSS_TODAY.toString());
-        assertThat(applied.path("from").asText()).isEqualTo(period.path("startDate").asText());
-        assertThat(applied.path("to").asText()).isEqualTo(period.path("endDate").asText());
-        assertThat(data.path("windowWidened").asBoolean()).isEqualTo(widened);
-        assertThat(data.path("abnormalCount").asInt()).isEqualTo(1);
-        assertThat(response.getMessage()).contains(from + " 至 " + LOSS_TODAY, "PB-POSITIVE");
+        return recognizer;
     }
 
     @ParameterizedTest

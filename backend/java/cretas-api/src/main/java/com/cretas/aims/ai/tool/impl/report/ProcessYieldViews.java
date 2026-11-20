@@ -16,6 +16,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Predicate;
 
 /**
  * 出成率「按工序」三种问法的取数与文字 (BP 问题 28, 2026-11-18), 由 {@link ReportBatchYieldRankTool} 调用:
@@ -211,15 +212,18 @@ final class ProcessYieldViews {
 
     // ---------------- 损耗异常 ----------------
     private static BatchReports lossReports(MaterialBalanceService service, String factoryId, LocalDate start,
-                                            LocalDate end, ProductScope scope, String processKeyword) {
+                                            LocalDate end, ProductScope scope) {
         BatchReports reports = service.batchReports(factoryId, start, end);
-        if (scope.active()) reports = reports.forProducts(scope::productMatches);
-        if (processKeyword == null) return reports;
+        return scope.active() ? reports.forProducts(scope::productMatches) : reports;
+    }
+
+    private static Predicate<String> lossProcessMatch(BatchReports batchReports, String processKeyword) {
+        if (processKeyword == null) return name -> true;
         String keyword = normalize(processKeyword);
-        boolean exact = reports.processNames().stream().anyMatch(name -> name != null && normalize(name).equals(keyword));
-        return reports.forProcesses(name -> exact
-                ? name != null && normalize(name).equals(keyword)
-                : nameMatches(name, processKeyword));
+        Predicate<String> exactMatch = name -> name != null && normalize(name).equals(keyword);
+        return batchReports.processNames().stream().anyMatch(exactMatch)
+                ? exactMatch
+                : name -> nameMatches(name, processKeyword);
     }
 
     private static Balance lossBalance(MaterialBalanceService service, BatchReports reports,
@@ -230,10 +234,14 @@ final class ProcessYieldViews {
     static Map<String, Object> lossAnomaly(MaterialBalanceService service, String factoryId, LocalDate start,
                                            LocalDate end, int limit, String processKeyword, ProductScope scope,
                                            String[] textOut, AlertLine alert, String windowNotice) {
-        BatchReports reports = lossReports(service, factoryId, start, end, scope, processKeyword);
+        BatchReports window = lossReports(service, factoryId, start, end, scope);
+        BatchReports scoped = window.forProcesses(lossProcessMatch(window.withBatchNumber(), processKeyword));
+        BatchReports reports = scoped.withBatchNumber();
+        int unbatched = scoped.size() - reports.size();
         Balance b = lossBalance(service, reports, alert);
         if (reports.size() == 0) {
-            return noReportsInWindow(service, factoryId, start, end, scope, processKeyword, textOut, alert, b, windowNotice);
+            return noBatchReportsInWindow(service, factoryId, start, end, scope, processKeyword,
+                    textOut, alert, b, windowNotice, unbatched);
         }
         List<Abnormal> all = b.abnormal();
         List<Abnormal> shown = all.size() > limit ? all.subList(0, limit) : all;
@@ -249,6 +257,7 @@ final class ProcessYieldViews {
         data.put("rows", rows);
         data.put("basis", basis(b));
         data.put("reportCountInWindow", reports.size());
+        data.put("unbatchedReportCountInWindow", unbatched);
         data.put("windowWidened", windowNotice != null);
 
         StringBuilder sb = new StringBuilder();
@@ -270,6 +279,9 @@ final class ProcessYieldViews {
                         .append(a.unit() == null ? "" : a.unit());
             }
         }
+        if (unbatched > 0) {
+            sb.append("\n另有 ").append(unbatched).append(" 条报工缺少批次号，未纳入批次损耗分析。");
+        }
         if (b.incomparableRows() > 0) {
             sb.append("\n另有 ").append(b.incomparableRows()).append(" 个批次工序单位不可比或没登记投入，没算偏差。");
         }
@@ -279,29 +291,32 @@ final class ProcessYieldViews {
     }
 
     /**
-     * 窗口内一条 YIELD 报工都没有: 不能答「没有损耗异常」(那是没数据, 不是没异常)。说明最近一次报工是哪天、
-     * 该日前 7 天内超阈值的批次工序个数, 并提示改问「本月」「近 30 天」(BP 问题 28)。
+     * 窗口内没有可归批次的报工时，说明无报工或缺少批次号。回查最近一次可归批次的报工及其七天异常数。
      */
-    private static Map<String, Object> noReportsInWindow(MaterialBalanceService service, String factoryId, LocalDate start,
-                                                         LocalDate end, ProductScope scope, String processKeyword, String[] textOut,
-                                                         AlertLine alert, Balance empty, String windowNotice) {
+    private static Map<String, Object> noBatchReportsInWindow(MaterialBalanceService service, String factoryId,
+                                                              LocalDate start, LocalDate end, ProductScope scope,
+                                                              String processKeyword, String[] textOut, AlertLine alert,
+                                                              Balance empty, String windowNotice, int unbatched) {
         LocalDate historyStart = start.minusDays(365);
         // 多读六天，最近报工若正好在回溯边界，也能计算以该日为末日的完整七天。
-        BatchReports history = lossReports(service, factoryId, historyStart.minusDays(6), start.minusDays(1),
-                scope, processKeyword);
-        LocalDate latest = history.since(historyStart).latestDate();
+        BatchReports historyReports = lossReports(service, factoryId, historyStart.minusDays(6), start.minusDays(1), scope);
+        Predicate<String> matches = lossProcessMatch(historyReports.since(historyStart).withBatchNumber(), processKeyword);
+        BatchReports history = historyReports.forProcesses(matches);
+        BatchReports batchHistory = history.withBatchNumber();
+        LocalDate latest = batchHistory.since(historyStart).latestDate();
         Integer nearby = null;
         LocalDate nearFrom = null;
         if (latest != null) {
             nearFrom = latest.minusDays(6);
-            nearby = lossBalance(service, history.since(nearFrom), alert).abnormal().size();
+            nearby = lossBalance(service, batchHistory.since(nearFrom), alert).abnormal().size();
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("view", "loss_anomaly");
         data.put("productKeyword", scope.keyword());
         data.put("period", Map.of("startDate", start.toString(), "endDate", end.toString()));
-        data.put("noReportsInWindow", true);
+        data.put("noReportsInWindow", unbatched == 0);
         data.put("reportCountInWindow", 0);
+        data.put("unbatchedReportCountInWindow", unbatched);
         data.put("latestReportDate", latest == null ? null : latest.toString());
         data.put("abnormalNearLatestReport", nearby);
         data.put("windowWidened", windowNotice != null);
@@ -312,12 +327,23 @@ final class ProcessYieldViews {
         StringBuilder sb = new StringBuilder();
         if (windowNotice != null) sb.append(windowNotice).append("\n");
         sb.append(start).append(" 至 ").append(end).append(scope.active() ? "「" + scope.keyword() + "」" : "")
-                .append(processKeyword != null ? "「" + processKeyword + "」" : "")
-                .append(" 这段时间没有任何报工记录，没法判断有没有损耗异常（不等于没有异常）。");
-        if (latest == null) {
-            sb.append("所问期间之前，近一年也没有报工记录。");
+                .append(processKeyword != null ? "「" + processKeyword + "」" : "");
+        if (unbatched == 0) {
+            sb.append(" 这段时间没有任何报工记录");
         } else {
-            sb.append("所问期间之前最近一次报工是 ").append(latest).append("，").append(nearFrom).append(" 至 ").append(latest)
+            sb.append(" 这段时间有 ").append(unbatched).append(" 条报工，因缺少批次号无法纳入批次损耗分析");
+        }
+        sb.append("，没法判断有没有损耗异常（不等于没有异常）。");
+        if (latest == null) {
+            int historyCount = history.since(historyStart).size();
+            if (historyCount == 0) {
+                sb.append("所问期间之前，近一年也没有报工记录。");
+            } else {
+                sb.append("所问期间之前，近一年有 ").append(historyCount)
+                        .append(" 条报工，因缺少批次号无法纳入批次损耗分析。");
+            }
+        } else {
+            sb.append("所问期间之前最近一次可归批次的报工是 ").append(latest).append("，").append(nearFrom).append(" 至 ").append(latest)
                     .append(" 有 ").append(nearby).append(" 个批次工序的未解释差额超过 ").append(pct(empty.warnPct()))
                     .append("。想看那段时间可以问「本月有哪些损耗异常」或「近 30 天有哪些损耗异常」，或直接说日期。");
         }

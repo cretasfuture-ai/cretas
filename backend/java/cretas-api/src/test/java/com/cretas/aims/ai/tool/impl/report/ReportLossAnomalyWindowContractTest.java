@@ -212,11 +212,34 @@ class ReportLossAnomalyWindowContractTest {
         report("2026-10-29", "BEFORE-THE-SEVEN-DAYS", "熟制杀菌", "100", "80");
 
         JsonNode r = run("酱牛肉熟制杀菌有哪些损耗异常", "2026-11-06", "2026-11-19", "酱牛肉", "熟制杀菌");
-        assertTrue(data(r).path("noReportsInWindow").asBoolean(), msg(r));
+        assertTrue(data(r).path("noReportsInWindow").isBoolean(), msg(r));
+        assertFalse(data(r).path("noReportsInWindow").asBoolean(), msg(r));
         assertEquals(0, data(r).path("reportCountInWindow").asInt(-1));
+        assertEquals(1, data(r).path("unbatchedReportCountInWindow").asInt(-1));
         assertEquals("2026-11-05", data(r).path("latestReportDate").asText());
         assertEquals(2, data(r).path("abnormalNearLatestReport").asInt(-1));
+        assertTrue(msg(r).contains("有 1 条报工") && msg(r).contains("缺少批次号"), msg(r));
         assertTrue(msg(r).contains("2026-11-05") && msg(r).contains("2 个批次工序"), msg(r));
+    }
+
+    @Test
+    void historyPaddingDoesNotDecideExactProcessMatching() throws Exception {
+        report("2025-11-05", "BEFORE-HISTORY", "杀菌", "100", "80");
+        JsonNode r = run("酱牛肉杀菌有哪些损耗异常", "2026-11-06", "2026-11-19", "酱牛肉", "杀菌");
+        assertEquals("2026-11-05", data(r).path("latestReportDate").asText(), msg(r));
+        assertEquals(2, data(r).path("abnormalNearLatestReport").asInt(-1), msg(r));
+        assertTrue(msg(r).contains("2 个批次工序"), msg(r));
+    }
+
+    @Test
+    void sevenDayHistoryIncludesPaddingUnderTheSameProcessMatch() throws Exception {
+        reports.clear();
+        report("2025-11-06", "HISTORY-START", "熟制杀菌", "100", "80");
+        report("2025-10-31", "SEVENTH-DAY", "熟制杀菌", "100", "80");
+        report("2025-11-05", "BEFORE-HISTORY", "杀菌", "100", "80");
+        JsonNode r = run("酱牛肉杀菌有哪些损耗异常", "2026-11-06", "2026-11-19", "酱牛肉", "杀菌");
+        assertEquals("2025-11-06", data(r).path("latestReportDate").asText(), msg(r));
+        assertEquals(3, data(r).path("abnormalNearLatestReport").asInt(-1), msg(r));
     }
 
     @Test

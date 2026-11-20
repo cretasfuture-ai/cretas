@@ -55,7 +55,7 @@ public class MaterialBalanceService {
     /** 按批次拆开的物料平衡: 每个块只含一个批次 (批次号原样), 同一套阈值与保密排除。 */
     public record BatchBalance(BigDecimal warnPct, BigDecimal redPct, List<MaterialBalanceTableDTO.PlanBlock> blocks) {}
 
-    /** 已按工厂、日期和工艺保密范围读取，且可以归到批次的 YIELD 报工。 */
+    /** 已按工厂、日期和工艺保密范围读取的 YIELD 报工。 */
     public static final class BatchReports {
         private final String factoryId;
         private final List<Map<String, Object>> rows;
@@ -67,6 +67,10 @@ public class MaterialBalanceService {
 
         public int size() {
             return rows.size();
+        }
+
+        public BatchReports withBatchNumber() {
+            return new BatchReports(factoryId, rows.stream().filter(MaterialBalanceService::hasBatchNumber).toList());
         }
 
         public BatchReports forProducts(Predicate<String> matches) {
@@ -123,10 +127,12 @@ public class MaterialBalanceService {
                 aggregateExclusions.forCurrentCaller(factoryId, "material balance by batch");
         List<Map<String, Object>> rows = reportRepo.findYieldReportsForBalance(factoryId, startDate, endDate,
                 "", excluded.productTypeIdsOrSentinel(), excluded.planIdsOrSentinel());
-        return new BatchReports(factoryId, rows.stream().filter(row -> {
-            String batchNumber = str(row.get("batch_number"));
-            return batchNumber != null && !batchNumber.isBlank();
-        }).toList());
+        return new BatchReports(factoryId, rows);
+    }
+
+    private static boolean hasBatchNumber(Map<String, Object> row) {
+        String batchNumber = str(row.get("batch_number"));
+        return batchNumber != null && !batchNumber.isBlank();
     }
 
     public BatchBalance blocksByBatch(BatchReports reports, BigDecimal warnOverridePct) {
@@ -137,6 +143,7 @@ public class MaterialBalanceService {
         }
         Map<String, List<Map<String, Object>>> byBatch = new LinkedHashMap<>();
         for (Map<String, Object> r : reports.rows) {
+            if (!hasBatchNumber(r)) continue;
             String no = str(r.get("batch_number"));
             byBatch.computeIfAbsent(no, k -> new ArrayList<>()).add(r);
         }
