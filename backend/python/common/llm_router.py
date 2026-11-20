@@ -11,6 +11,7 @@ retains its separate LLM_WAREHOUSE_V41_ENABLED=1 gate.
 🔴 2026-11-12 (LLM-PROVIDER-SWITCH, Steve 定稿「长期是阿里云模型配合本地模型」): 链 = 阿里云 + 本地
 local_canada/qwen3:8b; 实测本地胜任的槽(`_LOCAL_FIRST_SLOTS`: chat / simple_text / chart / mapper)本地第一,
 其余阿里云第一、本地兜底。本地一跳有并发上限(`_LOCAL_MAX_INFLIGHT`), 忙时直接换阿里云不排队。
+工厂问数显式选用本地规划通道，前台使用 Rex，后台使用独立 Aurora 网关。
 OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `common.llm_anthropic`), 但**默认不进任何链**:
 只在配了出口 `LLM_EGRESS_PROXY` + key 时可选启用(意图细选 Luna = `call_decision_choice`;
 生成链另需 `LLM_PAID_GENERATIVE=1`, 追加在阿里云与本地之后)。
@@ -18,7 +19,7 @@ OpenAI / Anthropic 的提供方代码在(Anthropic 走原生 Messages API, `comm
 ⚠️ 2026-10-07: `aistore` / `deepseek` / `zhipu` 三类账号已整体清出(Steve 复审裁定
 「清掉死通道, 大模型后备只留我们自己的阿里云账号」, 见 `_REGISTRY_AUDIT_DATE` 上方)。
 今天在册的只有 aliyun_a_vl / aliyun_b_vl 两个云账号(2026-11-03 aliyun_c 下线, Steve 裁定)加
-自有机器上的 local_canada; 文本槽的链全部来自 `_TEXT_TAIL`。下面 09-15 那段是当时的订正, 存档。
+自有机器上的 local_canada 和 aurora_chart。下面 09-15 那段是当时的订正, 存档。
 
 ⚠️ 2026-09-15 订正: 上面原文写的是「≥10 个模型横跨 aliyun_c → aliyun_b →
 aliyun_a → zhipu」。那条链**早就不存在了** —— `_provider_config` 里的通用文本
@@ -60,8 +61,10 @@ import os
 import tempfile
 import time
 from enum import Enum
+from pathlib import Path
 from threading import Lock
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
+from urllib.request import getproxies
 
 import httpx
 
@@ -408,6 +411,13 @@ def decision_choice_enabled() -> bool:
 _LOCAL_FIRST_SLOTS: frozenset = frozenset()  # 在 SLOT 定义之后填, 见下方 _LOCAL_FIRST_SLOT_NAMES
 _LOCAL_FIRST_SLOT_NAMES: Tuple[str, ...] = ("chat", "simple_text", "chart", "mapper")
 _LOCAL_PAIR: Tuple[str, str] = ("local_canada", "qwen3:8b")
+# The opt-in, on-demand chart gateway has its own fixed local pair. Keeping it
+# out of the general registry also keeps unattended registry inference off Aurora.
+_AURORA_CHART_PAIR: Tuple[str, str] = ("aurora_chart", "qwen3:14b")
+CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS = 15.0
+CHART_PLAN_CHAIN_TIMEOUT_SECONDS = 18.0
+CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS = 52.0
+CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS = 56.0
 
 # 付费账号的标价(美元 / 百万 token, 输入, 输出; 2026-11-12 官方定价页)。用途: ① 日费用估算;
 # ② 计费护栏 —— test_paid_models_stay_in_the_cheap_tier 钉住「任何付费条目单价不超过上限」,
@@ -966,6 +976,10 @@ def _refuse_reason(account: str, model: str,
     call-time expiry hard-drop. The expiry drop MUST happen here, not just via sort:
     an ascending-expiry sort puts the most-expired model at the HEAD (tried first) —
     refusing at call time is the actual billing guard (billing-audit CRITICAL 1)."""
+    if account == _AURORA_CHART_PAIR[0]:
+        if (account, model) != _AURORA_CHART_PAIR:
+            return "not_allowlisted"
+        return "provider_disabled" if account in _DISABLED_ACCOUNTS else None
     today = today or _today()
     if _registry_stale(today) and (account, model) not in _MINIMAL_SAFE_SET:
         return "registry_stale"          # fail SAFE: only minimal set until re-audit
@@ -2195,6 +2209,14 @@ def _validate_output(slot: SLOT, content: str) -> Optional[str]:
 
 def _provider_config(account: str) -> Tuple[str, str]:
     """Return (base_url, api_key) for a provider account."""
+    if account == _AURORA_CHART_PAIR[0]:
+        endpoint = os.getenv("LLM_AURORA_CHART_BASE_URL", "").strip().rstrip("/")
+        token = os.getenv("LLM_AURORA_CHART_TOKEN", "").strip()
+        # Pin the only destination so an incorrect setting cannot use F006,
+        # another loopback service, or a public endpoint.
+        if endpoint == "http://127.0.0.1:11440/v1" and token and _aurora_chart_direct_route():
+            return endpoint, token
+        return "", ""
     mapping = {
         # aliyun_c (May 14 2026): 3rd Aliyun bailian account — brand-new free
         # quota intact (1M/SKU per Steve console screenshot). Sits at chain
@@ -2329,7 +2351,7 @@ DEFAULT_CHAIN: List[str] = [
     # 2026-11-12: OpenAI / Anthropic 只在可选启用时出现在链上(见 `_PAID_ACCOUNTS`)。
     "aliyun_a_vl", "aliyun_b_vl", "anthropic", "openai",
     # 2026-11-03: 自有机器上的本地模型兜底(Steve 裁定), 见 `_TEXT_TAIL`。
-    "local_canada",
+    "local_canada", _AURORA_CHART_PAIR[0],
 ]
 
 
@@ -2367,6 +2389,14 @@ def _client_for(account: str) -> Any:
     if account in _EGRESS_PROXY_ACCOUNTS and egress_proxy_url():
         return get_llm_proxied_http_client()
     return get_llm_http_client()
+
+
+def _aurora_chart_direct_route() -> bool:
+    # The shared redacting client reads proxy settings at process startup.
+    # Check the same environment before allowing a loopback bearer request.
+    proxies = getproxies()
+    bypass = {host.strip() for host in proxies.get("no", "").split(",")}
+    return not (proxies.get("http") or proxies.get("all")) or bool(bypass & {"*", "127.0.0.1"})
 
 
 def _auth_headers(account: str, api_key: str) -> Dict[str, str]:
@@ -2489,6 +2519,48 @@ _FAST_SLOT_RESERVE_CAP_SECONDS = 1.0
 _MIN_ATTEMPT_TIMEOUT_SECONDS = 0.05
 
 
+def _f006_lease_is_idle() -> bool:
+    """Read the same host lease as the F006 worker without taking a write lock."""
+    lease = Path(tempfile.gettempdir()) / "cretas-f006-mini-pilot" / "inflight.sqlite"
+    try:
+        try:
+            info = lease.stat()
+        except FileNotFoundError:
+            # Verify the kernel's lock view is available even before the first F006 request.
+            Path("/proc/locks").read_text(encoding="ascii")
+            return True
+        identity = (os.major(info.st_dev), os.minor(info.st_dev), info.st_ino)
+        for row in Path("/proc/locks").read_text(encoding="ascii").splitlines():
+            fields = row.replace(" -> ", " ").split()
+            major, minor, inode = fields[5].split(":")
+            if (int(major, 16), int(minor, 16), int(inode)) == identity:
+                return False
+    except (OSError, ValueError, IndexError):
+        return False
+    return True
+
+
+class _F006ChartPriority(Exception):
+    pass
+
+
+async def _post_while_f006_idle(client, url, *, headers, payload, timeout):
+    if not _f006_lease_is_idle():
+        raise _F006ChartPriority
+    request = asyncio.create_task(client.post(url, headers=headers, json=payload, timeout=httpx.Timeout(timeout)))
+    try:
+        while not (await asyncio.wait((request,), timeout=0.2))[0]:
+            if not _f006_lease_is_idle():
+                raise _F006ChartPriority
+        if not _f006_lease_is_idle():
+            raise _F006ChartPriority
+        return await request
+    finally:
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+
+
 def _has_callable_fallback(
     slot_chain: List[Tuple[str, str]],
     start_index: int,
@@ -2550,12 +2622,19 @@ def _note_empty_key(tag: str, account: str, errors: list) -> None:
     """
     if account not in _EMPTY_KEY_WARNED:
         _EMPTY_KEY_WARNED.add(account)
-        logger.warning(
-            f"[{tag}] {account}: **API key 为空**, 该账号在链上但每次都会被跳过。"
-            f" ⇒ 查它的环境变量是不是存在但值为空(`存在` 不等于 `有值`)。"
-            f" 本进程内该账号只提示这一次。"
-        )
+        if account == _AURORA_CHART_PAIR[0]:
+            logger.warning(
+                "[%s] %s: LLM_AURORA_CHART_BASE_URL、LLM_AURORA_CHART_TOKEN 或回环代理豁免未就绪，跳过本跳",
+                tag, account,
+            )
+        else:
+            logger.warning(
+                f"[{tag}] {account}: **API key 为空**, 该账号在链上但每次都会被跳过。"
+                f" ⇒ 查它的环境变量是不是存在但值为空(`存在` 不等于 `有值`)。"
+                f" 本进程内该账号只提示这一次。"
+            )
     errors.append(f"{account}: empty_api_key")
+
 
 def providers_ready(slot: SLOT = SLOT.CHAT) -> Optional[bool]:
     """这条链上**有没有一家 provider 配了非空 key**。
@@ -2629,6 +2708,10 @@ class LLMChainExhausted(RuntimeError):
         self.errors = list(errors)
         super().__init__(f"[llm_router] All providers exhausted for {slot}: {'; '.join(errors)}")
 
+    @property
+    def timed_out(self) -> bool:
+        return any(error.endswith((": timeout", ": total_timeout", ": http 504")) for error in self.errors)
+
 
 def _no_candidates_reason(slot: SLOT, chain: Optional[List[str]], tag: str) -> str:
     """链在**发出任何请求之前**就是空的时, 给出一条能读懂的原因并 ERROR 日志。
@@ -2654,17 +2737,20 @@ async def call_chain(
     slot: SLOT,
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
-    timeout: float = 30.0,
+    timeout: Optional[float] = None,
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+    *,
+    chart_background: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """见 ``_call_chain_attempts``。先查好本厂工艺保密产品名 (在每次尝试的超时之外, 库慢不会被当成供应商超时
     去熔断健康的供应商; 换下一家重试也不再查库); 查不了抛 EgressRedactionError, 一个字节都不发。"""
     names_token = await prefetch_names_for_request()
     try:
         return await _call_chain_attempts(slot, payload, chain, timeout, total_timeout,
-                                          content_validator, body_validator)
+                                          content_validator, body_validator,
+                                          chart_background=chart_background)
     finally:
         reset_prefetched_names(names_token)
 
@@ -2673,10 +2759,12 @@ async def _call_chain_attempts(
     slot: SLOT,
     payload: Dict[str, Any],
     chain: Optional[List[str]] = None,
-    timeout: float = 30.0,
+    timeout: Optional[float] = None,
     total_timeout: Optional[float] = None,
     content_validator: Optional[Callable[[str], Optional[str]]] = None,
     body_validator: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None,
+    *,
+    chart_background: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Call LLM via provider chain with automatic fallback on 403 FreeTierOnly / 429.
@@ -2697,9 +2785,9 @@ async def _call_chain_attempts(
     so the caller supplies the predicate. A raising predicate is treated as
     "reject this candidate", never propagated to the user.
 
-    Per-call timeout: 30s default (Apr 28 2026 optimization, was 120s).
-    Worst-case full 4-provider cascade = 120s. qwen-plus typical 15-30s, so
-    30s is comfortable margin while failing fast on overloaded providers.
+    Per-call timeout defaults to 30s. Factory chart planning opts in through
+    ``chart_background``: False selects Rex (15s attempt, 18s chain) and True
+    selects Aurora (52s attempt, 56s chain). None uses the shared CHART chain.
     Callers with an interactive latency contract may also set ``total_timeout``;
     it is a wall-clock budget for the entire provider cascade, not another
     per-provider allowance.
@@ -2711,6 +2799,20 @@ async def _call_chain_attempts(
     Raises RuntimeError if all providers exhaust.
     """
     slot_chain = SLOT_MODELS.get(slot, [])
+    is_factory_chart_plan = slot is SLOT.CHART and chart_background is not None
+    if is_factory_chart_plan:
+        if chart_background:
+            slot_chain = [_AURORA_CHART_PAIR]
+            attempt_limit = CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+            chain_limit = CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS
+        else:
+            slot_chain = [_LOCAL_PAIR]
+            attempt_limit = CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS
+            chain_limit = CHART_PLAN_CHAIN_TIMEOUT_SECONDS
+        timeout = attempt_limit if timeout is None else min(timeout, attempt_limit)
+        total_timeout = chain_limit if total_timeout is None or total_timeout <= 0 else min(total_timeout, chain_limit)
+    elif timeout is None:
+        timeout = 30.0
     if chain is not None:
         # Optional account-filter override (legacy callers pass account names).
         slot_chain = [(ac, m) for (ac, m) in slot_chain if ac in chain]
@@ -2721,7 +2823,6 @@ async def _call_chain_attempts(
     # stable sort over _SLOT_POOLS + _TEXT_TAIL, see _build_chain's docstring) — this
     # function does NOT re-sort it. _refuse_reason drops expired/unsafe entries so
     # heads auto-switch as grants lapse, without anyone hand-reordering the list.
-    client = get_llm_http_client()
     errors: List[str] = []
     deadline = (
         time.monotonic() + total_timeout
@@ -2780,7 +2881,6 @@ async def _call_chain_attempts(
             _normalize_payload_for_provider({**payload, "model": model}, account),
         )
         headers = _auth_headers(account, api_key)
-        client = _client_for(account)
         holds_local = False
         if account == _LOCAL_ACCOUNT:
             if not _local_try_acquire():
@@ -2800,8 +2900,9 @@ async def _call_chain_attempts(
                     candidate_index + 1,
                 ),
             )
-            if holds_local:
+            if holds_local and not is_factory_chart_plan:
                 request_timeout = min(request_timeout, _LOCAL_ATTEMPT_TIMEOUT_S)
+            is_aurora_chart = account == _AURORA_CHART_PAIR[0]
             # Apr 28 2026 (post-review P1, then reviewer round 2 correction):
             # API consistency only — bare `timeout=timeout` and
             # `timeout=httpx.Timeout(timeout)` are EQUIVALENT in httpx (a bare
@@ -2810,11 +2911,16 @@ async def _call_chain_attempts(
             # commit message claim about "TOTAL timeout / 7.5s per phase" was
             # wrong. Keeping the explicit form matches `call_chain_stream`
             # below for readability — no behavior change.
-            if account == "anthropic":
-                post = _post_anthropic(client, slot, model, base_url, headers, req_payload,
+            if is_aurora_chart:
+                post = _post_while_f006_idle(
+                    _client_for(account), f"{base_url}/chat/completions",
+                    headers=headers, payload=req_payload, timeout=request_timeout,
+                )
+            elif account == "anthropic":
+                post = _post_anthropic(_client_for(account), slot, model, base_url, headers, req_payload,
                                        request_timeout)
             else:
-                post = client.post(
+                post = _client_for(account).post(
                     f"{base_url}/chat/completions",
                     headers=headers,
                     json=req_payload,
@@ -2879,6 +2985,9 @@ async def _call_chain_attempts(
                 logger.info(f"[llm_router] slot={slot.value} OK via {account}/{model}")
                 return body_json
 
+            if account == _AURORA_CHART_PAIR[0] and resp.status_code == 429:
+                errors.append(f"{account}/{model}: local_busy")
+                continue
             if _is_quota_exhausted(resp.status_code, body_text):
                 _cb_record_failure(cb_key)
                 _quota_record_exhausted(cb_key)
@@ -2904,6 +3013,9 @@ async def _call_chain_attempts(
             # endpoint may transiently be broken. Net: we try all providers.
             continue
 
+        except _F006ChartPriority:
+            errors.append(f"{account}/{model}: f006_priority")
+            continue
         except _UntranslatableRequest as e:
             # 请求形状这一家表达不了(音频/文件/强制工具) —— 供应商本身是好的, 不记熔断, 换下一家
             logger.warning(f"[llm_router] {account}/{model} cannot serve this request shape: {e}")
@@ -2928,7 +3040,8 @@ async def _call_chain_attempts(
                 f"[llm_router] {account}/{model} exception "
                 f"(cb_fails={fails}/{CB_THRESHOLD}): {e}"
             )
-            errors.append(f"{account}/{model}: {type(e).__name__}")
+            reason = "timeout" if is_factory_chart_plan and isinstance(e, httpx.TimeoutException) else type(e).__name__
+            errors.append(f"{account}/{model}: {reason}")
             continue
         finally:
             if holds_local:
@@ -3317,6 +3430,10 @@ async def _call_chain_stream_attempts(
     payload.setdefault("stream_options", {"include_usage": True})
 
     for account, model in slot_chain:
+        # The dedicated chart gateway produces a complete JSON plan.
+        if account == _AURORA_CHART_PAIR[0]:
+            errors.append(f"{account}/{model}: non_stream_only")
+            continue
         if not model:
             continue
         # ⛔ Unified billing-safety gate — SAME _refuse_reason as call_chain. This

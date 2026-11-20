@@ -273,7 +273,7 @@ _OUR_ALIYUN_ACCOUNTS = frozenset({"aliyun_a_vl", "aliyun_b_vl"})
 
 #: 2026-11-03 Steve 追加裁定: 自有机器上的本地模型(加拿大 Mac mini)也算「我们自己的」。
 #: ⛔ 这不是把死通道请回来 —— 它没有计费面, 数据不出我们自己的机器。
-_OUR_MACHINE_ACCOUNTS = frozenset({"local_canada"})
+_OUR_MACHINE_ACCOUNTS = frozenset({"local_canada", "aurora_chart"})
 _OUR_ACCOUNTS = _OUR_ALIYUN_ACCOUNTS | _OUR_MACHINE_ACCOUNTS
 
 

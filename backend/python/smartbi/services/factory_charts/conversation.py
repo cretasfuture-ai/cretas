@@ -13,6 +13,7 @@ import copy
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import time
@@ -35,6 +36,8 @@ MAX_SELECTED_CHARTS = 4
 MAX_PLANNER_CATALOG = 512
 PLANNER_CACHE_TTL_SECONDS = 600.0
 MAX_PLANNER_CACHE_ENTRIES = 128
+PLANNER_DEADLINE_SECONDS = 20.0
+BACKGROUND_PLANNER_DEADLINE_SECONDS = 60.0
 _PLAN_CACHE: OrderedDict[tuple[str, str], tuple[float, tuple[str, ...], dict[str, str]]] = OrderedDict()
 _planner_monotonic = time.monotonic
 _cache_monotonic = time.monotonic
@@ -239,7 +242,7 @@ def _sanitized_history(history: Sequence[Mapping[str, Any]] | None,
     return result
 
 
-def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit):
+def _plan_cache_key(factory_id, question, catalog, history, subjects, required_families, limit, background):
     owner = history.owner if isinstance(history, _OwnedHistory) else None
     return factory_id, hashlib.sha256(json.dumps({
         "owner": owner,
@@ -249,6 +252,7 @@ def _plan_cache_key(factory_id, question, catalog, history, subjects, required_f
         "requiredFamilies": sorted(required_families),
         "history": _sanitized_history(history),
         "limit": limit,
+        "background": background,
     }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -256,8 +260,10 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                history: Sequence[Mapping[str, Any]] | None = None,
                factory_id: Optional[str] = None,
                authorized_subjects: Sequence[Mapping[str, Any]] = (),
-               authorized_recommendations: Sequence[Mapping[str, Any]] = ()) -> tuple[list[str], dict[str, Any]]:
-    """Prefer the approved chart model and use rules if it cannot select chart IDs."""
+               authorized_recommendations: Sequence[Mapping[str, Any]] = (),
+               *, background: bool | None = None) -> tuple[list[str], dict[str, Any]]:
+    """Plan with Rex by default, or with Aurora for designated background callers."""
+    started = _planner_monotonic()
     if not catalog:
         return [], {"mode": "unavailable", "reason": "当前授权数据没有合格图表"}
     question = unicodedata.normalize("NFC", question.strip())
@@ -278,10 +284,12 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
             return [], {"mode": "unavailable", "reason": "当前授权目录缺少本问题所需的已验证联合关系"}
         semantic = [item for item in semantic if item.get("familyId") in required_families]
     limit = max(len(required_families), catalog_limit(MAX_PLANNER_CATALOG))
+    if background is None:
+        background = os.getenv("SMARTBI_CHART_PLANNER_BACKGROUND") == "1"
     cache_key = None
     if factory_id:
         cache_key = _plan_cache_key(factory_id, question, authorized_catalog, history,
-                                    authorized_subjects, required_families, limit)
+                                    authorized_subjects, required_families, limit, background)
         cached = _PLAN_CACHE.pop(cache_key, None)
         if cached is not None and cached[0] > _cache_monotonic():
             _PLAN_CACHE[cache_key] = cached
@@ -315,6 +323,24 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         "max_tokens": 900,
         "enable_thinking": False,
     }
+    from common.llm_router import (
+        CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS,
+        CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS,
+        CHART_PLAN_CHAIN_TIMEOUT_SECONDS,
+        LLMChainExhausted,
+        SLOT,
+        call_chain,
+    )
+    if background:
+        attempt_timeout = CHART_PLAN_BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_BACKGROUND_CHAIN_TIMEOUT_SECONDS
+        deadline_seconds = BACKGROUND_PLANNER_DEADLINE_SECONDS
+    else:
+        attempt_timeout = CHART_PLAN_ATTEMPT_TIMEOUT_SECONDS
+        chain_timeout = CHART_PLAN_CHAIN_TIMEOUT_SECONDS
+        deadline_seconds = PLANNER_DEADLINE_SECONDS
+    deadline = started + deadline_seconds
     unavailable_reason = "当前授权目录没有与问题匹配的图表"
     try:
         if len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) > 50000:
@@ -362,7 +388,6 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                         for child in value: collect_chart_strings(child)
                 collect_chart_strings(chart)
             return {key: list(dict.fromkeys(items)) for key, items in values.items() if items}
-        from common.llm_router import call_chain, SLOT, LLMChainExhausted
         provider_lookup = {aliases[str(item["id"])]: item for item in semantic}
 
         def validated_selection(content: Any) -> tuple[list[str], int]:
@@ -408,7 +433,6 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
 
         with redaction_scope() as scope, llm_caller_context("factory_chart_conversation", factory_id=factory_id):
             scope.register_values(_sensitive_values())
-            deadline = _planner_monotonic() + 12.0
 
             async def _call(request: Mapping[str, Any]) -> Mapping[str, Any]:
                 remaining = deadline - _planner_monotonic()
@@ -418,9 +442,10 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
                     call_chain(
                         SLOT.CHART,
                         request,
-                        timeout=min(6.0, remaining),
-                        total_timeout=min(10.0, remaining),
+                        timeout=min(attempt_timeout, remaining),
+                        total_timeout=min(chain_timeout, remaining),
                         content_validator=content_validator,
+                        chart_background=background,
                     ),
                     timeout=remaining,
                 )
@@ -454,7 +479,11 @@ async def plan(question: str, catalog: Sequence[Mapping[str, Any]],
         logger.warning("Factory conversation AI planner failed (%s): %s", type(exc).__name__, exc)
         selected = rule_selection(question, rule_catalog, required_families, MAX_SELECTED_CHARTS)
         if not selected:
-            return [], {"mode": "unavailable", "reason": unavailable_reason}
+            timed_out = isinstance(exc, asyncio.TimeoutError) or (
+                isinstance(exc, LLMChainExhausted) and exc.timed_out
+            )
+            reason = "AI 规划超时，关键词规则未命中" if timed_out else unavailable_reason
+            return [], {"mode": "unavailable", "reason": reason}
         mode = {"mode": "rule", "reason": "按问题关键词从授权图表目录选择"}
     if cache_key is not None:
         _PLAN_CACHE[cache_key] = (_cache_monotonic() + PLANNER_CACHE_TTL_SECONDS, tuple(selected), mode)

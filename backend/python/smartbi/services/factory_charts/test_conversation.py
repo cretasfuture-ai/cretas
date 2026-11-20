@@ -83,10 +83,11 @@ def test_engine_known_trusted_families_have_generic_labels_before_source_prefix(
 
 
 @pytest.mark.asyncio
-async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch):
+@pytest.mark.parametrize(('background', 'attempt', 'chain'), [(False, 15, 18), (True, 52, 56)])
+async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeypatch, background, attempt, chain):
     async def call(_slot, payload, **kwargs):
         import json as _json
-        assert kwargs['timeout'] == 6 and kwargs['total_timeout'] == 10
+        assert (kwargs['timeout'], kwargs['total_timeout'], kwargs['chart_background']) == (attempt, chain, background)
         assert '10' not in payload['messages'][1]['content']
         alias = _json.loads(payload['messages'][1]['content'])['catalog'][0]['id']
         return {'choices': [{'message': {'content': '{"selected_ids":["' + alias + '"]}'}}]}
@@ -95,7 +96,7 @@ async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeyp
     selected, mode = await conversation.plan('看产量', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
-    ])
+    ], background=background)
     assert selected == ['one'] and mode['mode'] == 'ai'
 
     async def outside(_slot, _payload, **kwargs):
@@ -105,7 +106,7 @@ async def test_plan_accepts_only_existing_ids_and_can_recover_with_rules(monkeyp
     selected, mode = await conversation.plan('看产量', [
         {'id': 'one', 'familyId': 'production.output', 'chartType': 'line', 'domain': '生产',
          'metric': '产量', 'unit': 'kg'},
-    ])
+    ], background=background)
     assert selected == ['one'] and mode['mode'] == 'rule'
 
     async def raw_ids(_slot, _payload, **kwargs):
@@ -276,7 +277,7 @@ async def test_non_router_exception_with_errors_attribute_does_not_replan(monkey
 
 @pytest.mark.asyncio
 async def test_duplicate_family_does_not_replan_after_shared_deadline(monkeypatch):
-    clock = iter([0.0, 0.0, 12.1])
+    clock = iter([0.0, 0.0, 20.1])
     monkeypatch.setattr(conversation, '_planner_monotonic', lambda: next(clock))
     calls = 0
 
@@ -861,6 +862,45 @@ async def test_initial_generic_catalog_is_guided_current_year_and_explicit_join_
     assert captured and captured[0].guided is True
     assert captured[0].period_type == 'all'
     assert captured[0].year == __import__('datetime').date.today().year
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('question', 'status', 'mode'), [
+    ('看产量', 'answered', 'rule'),
+    ('企鹅生活在哪里？', 'unavailable', 'unavailable'),
+])
+async def test_factory_analysis_timeout_reports_the_actual_rule_result(monkeypatch, question, status, mode):
+    candidate = _candidate('production.output:line', 'production.output')
+
+    async def recommendations(_request, _http_request):
+        return {'success': True, 'data': {
+            'factoryId': 'F006', 'source': 'business', 'sourceLabel': '本厂业务系统',
+            'period': {'label': '全部历史'}, 'recommendations': [candidate],
+        }}
+
+    async def timed_out(_slot, _payload, **_kwargs):
+        raise LLMChainExhausted('chart', ['local_canada/qwen3:8b: timeout'])
+
+    monkeypatch.setattr(api, 'factory_recommendations', recommendations)
+    monkeypatch.setattr('common.llm_router.call_chain', timed_out)
+    app = FastAPI()
+
+    @app.middleware('http')
+    async def trusted_identity(request, call_next):
+        request.state.factory_id, request.state.user_id, request.state.role = 'F006', 1309, 'factory_super_admin'
+        return await call_next(request)
+
+    app.include_router(api.router)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
+        response = await client.post('/factory-analysis', json={'question': question})
+    assert response.status_code == 200
+    data = response.json()['data']
+    assert (data['status'], data['plannerMode']['mode']) == (status, mode)
+    if status == 'unavailable':
+        assert data['selectedIds'] == []
+        assert data['plannerMode']['reason'] == 'AI 规划超时，关键词规则未命中'
+    else:
+        assert data['selectedIds'] == [candidate['id']]
 
 
 @pytest.mark.asyncio
