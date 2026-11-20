@@ -374,8 +374,10 @@ public class FactoryDataService {
                         FactoryDataScope smartbiScope = FactoryDataScopeResolver.resolveVisible(smartbi, Database.SMARTBI, schema, factoryId);
                         rejectForeignHits(cretas, cretasScope);
                         rejectForeignHits(smartbi, smartbiScope);
-                        return List.of(exportDatabase(cretas, cretasScope, factoryId, fmt, writer),
-                                exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer));
+                        var cretasMetadata = captureExportMetadata(cretas, cretasScope, factoryId);
+                        var smartbiMetadata = captureExportMetadata(smartbi, smartbiScope, factoryId);
+                        return List.of(exportDatabase(cretas, cretasScope, factoryId, fmt, writer, cretasMetadata),
+                                exportDatabase(smartbi, smartbiScope, factoryId, fmt, writer, smartbiMetadata));
                     }));
             manifest.put("databases", dbManifests);
             manifest.put("attachments", exportAttachments(factoryId, mode, writer));
@@ -424,16 +426,21 @@ public class FactoryDataService {
         throw new IllegalStateException(scope.database() + " 库有 " + hits.size() + " 条跨租户命中，拒绝导出: " + counts);
     }
 
+    private FactoryDataSchemaMetadata.Snapshot captureExportMetadata(Connection conn, FactoryDataScope scope,
+                                                                     String factoryId) throws SQLException {
+        return FactoryDataSchemaMetadata.capture(conn, scope.database(), schema,
+                new ArrayList<>(scope.tables().values()), factoryId);
+    }
+
     private Map<String, Object> exportDatabase(Connection conn, FactoryDataScope scope, String factoryId, Set<Format> formats,
-                                               FactoryDataPackageWriter writer) throws SQLException {
+                                               FactoryDataPackageWriter writer,
+                                               FactoryDataSchemaMetadata.Snapshot sourceMetadata) throws SQLException {
         Database db = scope.database();
         String dir = db.name().toLowerCase();
         List<Map<String, Object>> tables = new ArrayList<>();
         List<Map<String, Object>> notExported = new ArrayList<>();
         long rows = 0;
         Map<String, Object> m = new LinkedHashMap<>();
-        FactoryDataSchemaMetadata.Snapshot sourceMetadata =
-                FactoryDataSchemaMetadata.capture(conn, db, schema, new ArrayList<>(scope.tables().values()), factoryId);
         try (FactoryDataXlsxBook book = formats.contains(Format.XLSX)
                 ? new FactoryDataXlsxBook(writer.redactionKey()) : null) {
             for (TableScope ts : scope.tables().values()) {

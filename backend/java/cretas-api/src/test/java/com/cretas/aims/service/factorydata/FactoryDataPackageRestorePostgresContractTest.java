@@ -38,7 +38,8 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 @EnabledIfEnvironmentVariable(named = "CRETAS_WORKFLOW_PG_VERIFY", matches = "true")
 class FactoryDataPackageRestorePostgresContractTest {
     private record CliRun(int exitCode, JsonNode receipt, String output) {}
-    private enum CliScenario { COPY_REFERENCE, FORGED_PROOF, LEGACY_INTERNAL_FK, LEGACY_NO_FK }
+    private enum CliScenario { COPY_REFERENCE, FORGED_PROOF, LEGACY_INTERNAL_FK, LEGACY_NO_FK,
+        TAMPERED_LEGACY_DESCRIPTOR, DISGUISED_CURRENT_DESCRIPTOR }
     // Reviewed origin/main before this PR introduced per-FK referencedSchema.
     private static final String LEGACY_MAIN = "a585126e8de2404e307c3d68582b631b854a1daf";
     private record DatabaseIdentity(String name, long oid) {}
@@ -253,16 +254,33 @@ class FactoryDataPackageRestorePostgresContractTest {
 
     @Test
     void selectOnlyRoleCannotHideANonNullExternalForeignKey() throws Exception {
+        assertReadOnlyExternalReferenceRefused(true, true);
+    }
+
+    @Test
+    void hiddenExternalParentColumnsRefuseZeroReferenceExport() throws Exception {
+        assertReadOnlyExternalReferenceRefused(false, false);
+    }
+
+    @Test
+    void hiddenExternalParentColumnsRefuseNonNullReferenceExport() throws Exception {
+        assertReadOnlyExternalReferenceRefused(true, false);
+    }
+
+    private void assertReadOnlyExternalReferenceRefused(boolean nonNullReference, boolean parentVisible) throws Exception {
         setUpSources();
         String role = sourceSchema + "_read";
         exec(smartbiSource, "SET search_path = " + q(sourceSchema) + ";"
                 + "CREATE TABLE global_templates(id bigint PRIMARY KEY); INSERT INTO global_templates VALUES (77);"
                 + "ALTER TABLE smart_bi_uploads ADD COLUMN template_id bigint CONSTRAINT select_only_template_fk "
-                + "REFERENCES global_templates(id); UPDATE smart_bi_uploads SET template_id=77;"
+                + "REFERENCES global_templates(id);"
                 + "CREATE ROLE " + q(role) + " LOGIN PASSWORD 'fixture-only' NOSUPERUSER NOBYPASSRLS;");
         try {
+            if (nonNullReference) exec(smartbiSource, "UPDATE " + q(sourceSchema) + ".smart_bi_uploads SET template_id=77");
             exec(smartbiSource, "GRANT USAGE ON SCHEMA " + q(sourceSchema) + " TO " + q(role)
                     + "; GRANT SELECT ON ALL TABLES IN SCHEMA " + q(sourceSchema) + " TO " + q(role));
+            if (!parentVisible) exec(smartbiSource, "REVOKE SELECT ON " + q(sourceSchema)
+                    + ".global_templates FROM " + q(role));
             PGSimpleDataSource reader = dataSource(smartbiSource.getUrl());
             reader.setUser(role);
             reader.setPassword("fixture-only");
@@ -270,16 +288,40 @@ class FactoryDataPackageRestorePostgresContractTest {
                  ResultSet rows = statement.executeQuery("SELECT NOT has_table_privilege('" + sourceSchema
                          + ".smart_bi_uploads', 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'),"
                          + " NOT EXISTS (SELECT FROM information_schema.table_constraints WHERE table_schema='"
-                         + sourceSchema + "' AND constraint_name='select_only_template_fk')")) {
+                         + sourceSchema + "' AND constraint_name='select_only_template_fk'),"
+                         + " has_any_column_privilege('" + sourceSchema + ".global_templates', 'SELECT,INSERT,UPDATE,REFERENCES'),"
+                         + " EXISTS (SELECT FROM information_schema.columns WHERE table_schema='" + sourceSchema
+                         + "' AND table_name='global_templates')")) {
                 assertThat(rows.next()).isTrue();
                 assertThat(rows.getBoolean(1)).isTrue();
                 assertThat(rows.getBoolean(2)).isTrue();
+                assertThat(rows.getBoolean(3)).isEqualTo(parentVisible);
+                assertThat(rows.getBoolean(4)).isEqualTo(parentVisible);
             }
             FactoryDataService service = FactoryDataServiceFixture.create(source, reader, Set.of(1L), sourceSchema);
-            assertExportRefusedBeforeManifest(service, "select_only_template_fk");
+            assertExportRefusedBeforeManifest(service, parentVisible ? "select_only_template_fk"
+                    : "表列描述不完整，拒绝生成可恢复包: global_templates");
         } finally {
             exec(smartbiSource, "DROP OWNED BY " + q(role) + "; DROP ROLE " + q(role));
         }
+    }
+
+    @Test
+    void directlySelectedOrderReferencingAnotherFactoryUserRefusesBeforeZip() throws Exception {
+        setUpSources();
+        exec(source, "SET search_path = " + q(sourceSchema) + ";"
+                + "INSERT INTO users(id, factory_id, username) VALUES (42424242, 'FB_RESTORE', 'other-creator');"
+                + "UPDATE sales_orders SET created_by=42424242 WHERE factory_id='" + FACTORY + "'");
+        FactoryDataService service = FactoryDataServiceFixture.create(source, smartbiSource, Set.of(1L), sourceSchema);
+        long request = service.startExport(OPERATOR, FACTORY);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertThatThrownBy(() -> service.writeExport(request, OPERATOR, FACTORY, FactoryDataService.AttachmentMode.SKIP,
+                Set.of(FactoryDataService.Format.JSON), output))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("包内外键父行未选中")
+                .hasMessageContaining("child=sales_orders, parent=users, name=sales_orders_created_by_fkey]=1")
+                .satisfies(error -> assertThat(error.getMessage()).doesNotContain("FB_RESTORE", "42424242", "other-creator"));
+        assertThat(output.size()).isZero();
     }
 
     @Test
@@ -415,6 +457,16 @@ class FactoryDataPackageRestorePostgresContractTest {
         verifyProtectedCli(CliScenario.LEGACY_NO_FK);
     }
 
+    @Test
+    void alteredLegacyExportFingerprintRefusesOfflinePreflight() throws Exception {
+        verifyProtectedCli(CliScenario.TAMPERED_LEGACY_DESCRIPTOR);
+    }
+
+    @Test
+    void currentExportDisguisedAsLegacyRefusesOfflinePreflight() throws Exception {
+        verifyProtectedCli(CliScenario.DISGUISED_CURRENT_DESCRIPTOR);
+    }
+
     private void verifyProtectedCli(CliScenario scenario) throws Exception {
         assumeTrue("true".equalsIgnoreCase(System.getenv("CRETAS_WORKFLOW_CLI_VERIFY")));
         String pgBin = System.getenv("CRETAS_WORKFLOW_PG_BIN");
@@ -434,9 +486,12 @@ class FactoryDataPackageRestorePostgresContractTest {
         String systemId = systemIdentifier(dataSource(url()));
         verifyOwnedConnection(python, script, host, port, pgUser, systemId, pgBin, ownershipReceipt);
         setUpSources();
-        boolean legacy = scenario == CliScenario.LEGACY_INTERNAL_FK || scenario == CliScenario.LEGACY_NO_FK;
+        boolean legacy = scenario == CliScenario.LEGACY_INTERNAL_FK || scenario == CliScenario.LEGACY_NO_FK
+                || scenario == CliScenario.TAMPERED_LEGACY_DESCRIPTOR;
+        boolean descriptorTampering = scenario == CliScenario.TAMPERED_LEGACY_DESCRIPTOR
+                || scenario == CliScenario.DISGUISED_CURRENT_DESCRIPTOR;
         if (scenario == CliScenario.COPY_REFERENCE) addCopyForeignKey();
-        if (legacy) prepareLegacySources(scenario == CliScenario.LEGACY_NO_FK);
+        if (legacy || descriptorTampering) prepareLegacySources(scenario == CliScenario.LEGACY_NO_FK);
         int postgresMajor = serverMajor(source);
         Path work = Files.createTempDirectory("factory-export-cli-");
         Path packagePath = work.resolve("java-export.zip");
@@ -454,8 +509,6 @@ class FactoryDataPackageRestorePostgresContractTest {
             else Files.write(packagePath, exportPackage(source, smartbiSource, sourceSchema));
             dump(pgBin, host, port, pgUser, "postgres", cretasDump);
             dump(pgBin, host, port, pgUser, smartbiDb, smartbiDump);
-            exec(source, "CREATE DATABASE " + q(cretasTarget) + "; CREATE DATABASE " + q(smartbiTarget));
-            Map<String, DatabaseIdentity> happyDatabaseIds = databaseOids(source, Map.of("CRETAS", cretasTarget, "SMARTBI", smartbiTarget));
             Map<String, byte[]> packageFiles = unzip(Files.readAllBytes(packagePath));
             if (scenario == CliScenario.COPY_REFERENCE) assertCopyReferenceProof(packageFiles);
             if (legacy) assertLegacyFixture(packageFiles, scenario == CliScenario.LEGACY_NO_FK);
@@ -475,6 +528,14 @@ class FactoryDataPackageRestorePostgresContractTest {
                     json.readTree(packageFiles.get("cretas/metadata/migrations.json")), postgresMajor);
             writeSidecar(smartbiDump, json.readTree(packageFiles.get("smartbi/metadata/schema.json")),
                     json.readTree(packageFiles.get("smartbi/metadata/migrations.json")), postgresMajor);
+            if (descriptorTampering) {
+                assertDescriptorTamperingRefused(python, script, packagePath, packageFiles, cretasDump, smartbiDump,
+                        baselineManifest, host, port, pgUser, systemId, cretasTarget, smartbiTarget, pgBin,
+                        ownershipReceipt, scenario);
+                return;
+            }
+            exec(source, "CREATE DATABASE " + q(cretasTarget) + "; CREATE DATABASE " + q(smartbiTarget));
+            Map<String, DatabaseIdentity> happyDatabaseIds = databaseOids(source, Map.of("CRETAS", cretasTarget, "SMARTBI", smartbiTarget));
             if (scenario == CliScenario.FORGED_PROOF) {
                 long before = targetSessions(cretasTarget, smartbiTarget);
                 Path forgedPackage = work.resolve("forged-export.zip");
@@ -546,6 +607,33 @@ class FactoryDataPackageRestorePostgresContractTest {
                     + "; DROP DATABASE IF EXISTS " + q(mismatchCretasTarget) + "; DROP DATABASE IF EXISTS " + q(mismatchSmartbiTarget));
             deleteTree(work);
         }
+    }
+
+    private void assertDescriptorTamperingRefused(String python, Path script, Path original, Map<String, byte[]> files,
+            Path cretasDump, Path smartbiDump, Path baseline, String host, String port, String pgUser, String systemId,
+            String cretasTarget, String smartbiTarget, String pgBin, String ownershipReceipt, CliScenario scenario) throws Exception {
+        CliRun valid = runCli(python, script, original, cretasDump, smartbiDump, baseline, host, port, pgUser, systemId,
+                cretasTarget, smartbiTarget, pgBin, ownershipReceipt, null, false);
+        assertThat(valid.exitCode()).as(valid.output()).isZero();
+        assertThat(valid.output()).contains("VALIDATED_ONLY");
+        String entry = "cretas/metadata/schema.json";
+        JsonNode schema = json.readTree(files.get(entry));
+        if (scenario == CliScenario.DISGUISED_CURRENT_DESCRIPTOR) {
+            for (JsonNode constraint : schema.get("constraints")) {
+                assertThat(((com.fasterxml.jackson.databind.node.ObjectNode) constraint).remove("referencedSchema")).isNotNull();
+            }
+        } else {
+            var constraint = (com.fasterxml.jackson.databind.node.ObjectNode) schema.get("constraints").get(0);
+            constraint.put("definitionFingerprint", "00000000000000000000000000000000");
+        }
+        Path tampered = original.resolveSibling("tampered-descriptor.zip");
+        rewritePackageEntry(tampered, files, entry, json.writeValueAsBytes(schema));
+        CliRun refused = runCli(python, script, tampered, cretasDump, smartbiDump, baseline, host, port, pgUser, systemId,
+                cretasTarget, smartbiTarget, pgBin, ownershipReceipt, null, false);
+        assertThat(refused.exitCode()).as(refused.output()).isNotZero();
+        assertThat(refused.output()).contains("源结构描述重算指纹与声明或受保护 baseline 不匹配");
+        assertThat(databaseExists(source, cretasTarget)).isFalse();
+        assertThat(databaseExists(source, smartbiTarget)).isFalse();
     }
 
     private void assertCopyReferenceProof(Map<String, byte[]> packageFiles) throws Exception {
@@ -643,7 +731,10 @@ class FactoryDataPackageRestorePostgresContractTest {
         String path = "cretas/json/factory_configurations.json";
         JsonNode table = json.readTree(files.get(path));
         ((com.fasterxml.jackson.databind.node.ObjectNode) table.get(0)).put("template_id", 1);
-        byte[] body = json.writeValueAsBytes(table);
+        rewritePackageEntry(output, files, path, json.writeValueAsBytes(table));
+    }
+
+    private void rewritePackageEntry(Path output, Map<String, byte[]> files, String path, byte[] body) throws Exception {
         files.put(path, body);
         String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(body));
         JsonNode manifest = json.readTree(files.get("manifest.json"));
@@ -653,6 +744,10 @@ class FactoryDataPackageRestorePostgresContractTest {
             }
         }
         for (JsonNode db : manifest.get("databases")) {
+            JsonNode sourceSchema = db.get("sourceSchema");
+            if (path.equals(sourceSchema.get("path").asText())) {
+                ((com.fasterxml.jackson.databind.node.ObjectNode) sourceSchema).put("sha256", sha);
+            }
             for (JsonNode tableEntry : db.get("tables")) {
                 for (JsonNode file : tableEntry.get("files")) {
                     if (path.equals(file.get("path").asText())) {
@@ -729,12 +824,21 @@ class FactoryDataPackageRestorePostgresContractTest {
                                Path baseline, String host, String port, String pgUser, String systemId,
                                String cretasTarget, String smartbiTarget,
                                String pgBin, String ownershipReceipt, Path receipt) throws Exception {
+        return runCli(python, script, packageFile, cretasDump, smartbiDump, baseline, host, port, pgUser, systemId,
+                cretasTarget, smartbiTarget, pgBin, ownershipReceipt, receipt, true);
+    }
+
+    private static CliRun runCli(String python, Path script, Path packageFile, Path cretasDump, Path smartbiDump,
+                               Path baseline, String host, String port, String pgUser, String systemId,
+                               String cretasTarget, String smartbiTarget, String pgBin, String ownershipReceipt,
+                               Path receipt, boolean apply) throws Exception {
         List<String> command = new java.util.ArrayList<>(List.of(python, script.toString(), "--package", packageFile.toString(),
                 "--cretas-schema-baseline", cretasDump.toString(), "--smartbi-schema-baseline", smartbiDump.toString(),
                 "--baseline-manifest", baseline.toString(), "--target-host", host, "--target-port", port,
                 "--target-user", pgUser, "--target-system-id", systemId, "--cretas-target-db", cretasTarget,
                 "--smartbi-target-db", smartbiTarget, "--pg-bin", pgBin,
-                "--ownership-receipt", ownershipReceipt, "--apply"));
+                "--ownership-receipt", ownershipReceipt));
+        if (apply) command.add("--apply");
         if (receipt != null) {
             command.add("--receipt");
             command.add(receipt.toString());

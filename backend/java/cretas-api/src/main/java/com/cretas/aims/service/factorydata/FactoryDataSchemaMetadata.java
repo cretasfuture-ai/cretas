@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.StringJoiner;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
 
@@ -29,6 +30,7 @@ public final class FactoryDataSchemaMetadata {
             .configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
     public record Snapshot(Map<String, Object> schema, Map<String, Object> migrations) {}
+    private record InternalForeignKey(String child, String parent, String name) {}
 
     /**
      * Reads metadata from the same repeatable-read source connection as the rows.
@@ -46,14 +48,13 @@ public final class FactoryDataSchemaMetadata {
             ps.executeQuery().close();
         }
         Set<String> names = tables.stream().map(TableScope::table).collect(Collectors.toCollection(TreeSet::new));
-        Set<String> exportedNames = tables.stream().filter(table -> table.category().exported())
-                .map(TableScope::table).collect(Collectors.toSet());
+        Map<String, TableScope> exportedTables = tables.stream().filter(table -> table.category().exported())
+                .collect(Collectors.toMap(TableScope::table, table -> table));
         Map<String, Object> structure = new LinkedHashMap<>();
         structure.put("format", "cretas-factory-source-schema/2");
         structure.put("database", database.name());
         structure.put("sourceSchema", schema);
         structure.put("tables", tableScopes(tables));
-        structure.put("columns", columns(conn, schema, names));
         List<Map<String, Object>> constraintMetadata = constraints(conn, schema, names);
         rejectCrossSchemaReferences(constraintMetadata, schema);
         Set<String> dependencyNames = constraintMetadata.stream()
@@ -65,16 +66,18 @@ public final class FactoryDataSchemaMetadata {
         Set<String> structureNames = new TreeSet<>(names);
         structureNames.addAll(dependencyNames);
         List<Map<String, Object>> columnMetadata = columns(conn, schema, structureNames);
+        requireCompleteColumnMetadata(conn, schema, structureNames, columnMetadata);
         // Schema-only dependencies retain PK/UNIQUE definitions even when
         // this tenant needs no row from the referenced table.
         constraintMetadata = constraints(conn, schema, structureNames);
         rejectCrossSchemaReferences(constraintMetadata, schema);
         validateColumnTypes(columnMetadata);
         validateRedactionConstraints(conn, schema, columnMetadata, constraintMetadata);
+        rejectMissingInternalParents(conn, database, schema, constraintMetadata, exportedTables, factoryId);
         structure.put("columns", columnMetadata);
         structure.put("constraints", constraintMetadata);
         List<Map<String, Object>> externalReferences = externalReferences(conn, schema,
-                constraintMetadata, exportedNames, tables, factoryId);
+                constraintMetadata, exportedTables.keySet(), tables, factoryId);
         if (externalReferences.stream().anyMatch(row -> !"SCHEMA_ONLY_ZERO_REFERENCES".equals(row.get("action")))) {
             throw new IllegalStateException("导出表存在未随包提供的外部外键，拒绝生成可恢复包: " + externalReferences);
         }
@@ -113,6 +116,87 @@ public final class FactoryDataSchemaMetadata {
             out.add(row);
         }
         return out;
+    }
+
+    private static void requireCompleteColumnMetadata(Connection conn, String schema, Set<String> tables,
+                                                      List<Map<String, Object>> columns) throws SQLException {
+        if (tables.isEmpty()) return;
+        Map<String, Set<Object>> described = columns.stream().collect(Collectors.groupingBy(
+                column -> (String) column.get("table"), Collectors.mapping(column -> column.get("column"), Collectors.toSet())));
+        Set<String> unverified = new TreeSet<>(tables);
+        // A non-owner can see only part of information_schema.columns. Compare
+        // with the whole attribute inventory without reading any table rows.
+        String sql = """
+                SELECT relation.relname, attribute.attname
+                FROM pg_catalog.pg_namespace namespace
+                JOIN pg_catalog.pg_class relation ON relation.relnamespace = namespace.oid
+                LEFT JOIN pg_catalog.pg_attribute attribute ON attribute.attrelid = relation.oid
+                  AND attribute.attnum > 0 AND NOT attribute.attisdropped
+                WHERE namespace.nspname = ? AND relation.relname IN (%s)
+                """.formatted(placeholders(tables.size()));
+        try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, schema);
+            int index = 2;
+            for (String table : tables) ps.setString(index++, table);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String table = rs.getString(1);
+                    String column = rs.getString(2);
+                    unverified.remove(table);
+                    if (column != null && !described.getOrDefault(table, Set.of()).contains(column)) {
+                        throw new IllegalStateException("表列描述不完整，拒绝生成可恢复包: " + table);
+                    }
+                }
+            }
+        }
+        if (!unverified.isEmpty()) {
+            throw new IllegalStateException("无法从目录核实表列描述，拒绝生成可恢复包: " + unverified);
+        }
+    }
+
+    private static void rejectMissingInternalParents(Connection conn, Database database, String schema,
+            List<Map<String, Object>> constraints, Map<String, TableScope> exported, String factoryId) throws SQLException {
+        Map<InternalForeignKey, List<Map<String, Object>>> foreignKeys = new LinkedHashMap<>();
+        for (Map<String, Object> constraint : constraints) {
+            if (!"FOREIGN KEY".equals(constraint.get("type"))) continue;
+            TableScope child = exported.get(constraint.get("table"));
+            TableScope parent = exported.get(constraint.get("referencedTable"));
+            if (child == null || parent == null || child.rows() == 0) continue;
+            var key = new InternalForeignKey(child.table(), parent.table(), (String) constraint.get("name"));
+            foreignKeys.computeIfAbsent(key, ignored -> new ArrayList<>()).add(constraint);
+        }
+        Map<InternalForeignKey, Long> missing = new LinkedHashMap<>();
+        for (var fk : foreignKeys.entrySet()) {
+            InternalForeignKey key = fk.getKey();
+            var child = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.child()), factoryId, "c.");
+            var parent = FactoryDataScopeResolver.ownedRows(conn, exported.get(key.parent()), factoryId, "p.");
+            StringJoiner referenced = new StringJoiner(" AND ");
+            StringJoiner nonNull = new StringJoiner(" AND ");
+            for (Map<String, Object> pair : fk.getValue()) {
+                String childColumn = "c." + FactoryDataScopeResolver.q((String) pair.get("column"));
+                String parentColumn = "p." + FactoryDataScopeResolver.q((String) pair.get("referencedColumn"));
+                referenced.add(parentColumn + " = " + childColumn);
+                nonNull.add(childColumn + " IS NOT NULL");
+            }
+            String qualifier = FactoryDataScopeResolver.q(schema) + ".";
+            String sql = "SELECT count(*) FROM " + qualifier + FactoryDataScopeResolver.q(key.child())
+                    + " c WHERE (" + child.sql() + ") AND " + nonNull
+                    + " AND NOT EXISTS (SELECT 1 FROM " + qualifier + FactoryDataScopeResolver.q(key.parent())
+                    + " p WHERE (" + parent.sql() + ") AND " + referenced + ")";
+            List<Object> params = new ArrayList<>(child.params());
+            params.addAll(parent.params());
+            try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                FactoryDataScopeResolver.bind(ps, params);
+                try (ResultSet rs = ps.executeQuery()) {
+                    rs.next();
+                    long count = rs.getLong(1);
+                    if (count != 0) missing.put(key, count);
+                }
+            }
+        }
+        if (!missing.isEmpty()) {
+            throw new IllegalStateException(database + " 库存在包内外键父行未选中，拒绝导出: " + missing);
+        }
     }
 
     private static List<Map<String, Object>> columns(Connection conn, String schema, Set<String> tables)

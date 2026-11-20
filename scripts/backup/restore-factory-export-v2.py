@@ -788,6 +788,25 @@ def read_target_structure(conn, schema: dict[str, Any]) -> dict[str, Any]:
             "triggers": triggers, "sequences": sequences}
 
 
+def schema_descriptor_fingerprint(schema: dict[str, Any]) -> str:
+    stable = {k: v for k, v in schema.items() if k not in {"fingerprint", "snapshot", "tables"}}
+    stable["tables"] = [{k: v for k, v in table.items() if k not in {"rows", "depth"}}
+                        for table in schema.get("tables", [])]
+    try:
+        encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as exc:
+        raise fail("源结构描述无法计算指纹") from exc
+    return sha256_bytes(encoded)
+
+
+def validate_schema_fingerprint(database: str, schema: dict[str, Any],
+                                sidecar: dict[str, Any], baseline: dict[str, Any]) -> None:
+    fingerprint = schema_descriptor_fingerprint(schema)
+    if any(value != fingerprint for value in (schema["fingerprint"], sidecar.get("schemaFingerprint"),
+                                              baseline.get("schemaFingerprint"))):
+        raise fail(f"{database} 源结构描述重算指纹与声明或受保护 baseline 不匹配")
+
+
 def structural_fingerprint(conn, schema: dict[str, Any]) -> str:
     actual_structure = read_target_structure(conn, schema)
     result = copy.deepcopy(schema)
@@ -803,13 +822,7 @@ def structural_fingerprint(conn, schema: dict[str, Any]) -> str:
             raise fail(f"目标 {label} 完整定义与源描述不一致")
         result[label] = actual
     result["columns"] = columns
-    stable = {k: v for k, v in result.items() if k not in {"fingerprint", "snapshot", "tables"}}
-    stable_tables = []
-    for table in result.get("tables", []):
-        stable_tables.append({k: v for k, v in table.items() if k not in {"rows", "depth"}})
-    stable["tables"] = stable_tables
-    encoded = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return schema_descriptor_fingerprint(result)
 
 
 def import_rows(conn, archive: zipfile.ZipFile, database: str, manifest: dict[str, Any], schema: dict[str, Any]) -> None:
@@ -1103,8 +1116,7 @@ def main() -> int:
         validate_database_manifest(archive, manifest, database, schema)
         info = baseline_info(baseline)
         expected = baseline_manifest.get(database, {})
-        if info.get("schemaFingerprint") != schema["fingerprint"] or expected.get("schemaFingerprint") != schema["fingerprint"]:
-            raise fail(f"{database} schema fingerprint 不匹配")
+        validate_schema_fingerprint(database, schema, info, expected)
         if info.get("migrationFingerprint") != migrations["fingerprint"] or expected.get("migrationFingerprint") != migrations["fingerprint"]:
             raise fail(f"{database} migration fingerprint 不匹配")
         listing = run_tool(args.pg_bin, "pg_restore", ["--list", str(baseline)])

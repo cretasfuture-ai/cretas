@@ -25,6 +25,25 @@ ARGS = None
 
 
 class PureContract(unittest.TestCase):
+    def test_legacy_descriptor_cannot_reuse_a_protected_fingerprint(self):
+        current = {"tables": [{"table": "orders", "rows": 1, "depth": 0}],
+                   "constraints": [{"table": "orders", "name": "orders_pk", "type": "PRIMARY KEY",
+                                    "referencedSchema": None, "definitionFingerprint": "original"}]}
+        legacy = copy.deepcopy(current)
+        legacy["constraints"][0].pop("referencedSchema")
+        forged_legacy = copy.deepcopy(legacy)
+        forged_legacy["constraints"][0]["definitionFingerprint"] = "changed"
+        for legitimate, tampered in ((current, legacy), (legacy, forged_legacy)):
+            with self.subTest(legitimate=legitimate):
+                trusted = restore.schema_descriptor_fingerprint(legitimate)
+                baseline = {"schemaFingerprint": trusted}
+                legitimate["fingerprint"] = trusted
+                restore.validate_schema_fingerprint("CRETAS", legitimate, baseline, baseline)
+                tampered["fingerprint"] = trusted
+                self.assertTrue(restore.legacy_constraint_descriptors(tampered["constraints"]))
+                with self.assertRaisesRegex(restore.RestoreRefused, "重算指纹"):
+                    restore.validate_schema_fingerprint("CRETAS", tampered, baseline, baseline)
+
     def test_decimal_exact_beyond_context_precision(self):
         value = Decimal("123456789012345678901234567890.12345678901234567890")
         self.assertEqual(restore.typed_value(value, {"dataType": "numeric"}),
