@@ -28,9 +28,6 @@ public final class BusinessQueryPhrases {
     private static final Pattern EXPIRY_LIST = Pattern.compile(
             "(?:需要[，,]\\h*)?(?:(?:请|帮我)?查(?:看|一下)?\\h*)?(?:未来\\h*)?"
                     + EXPIRY_WITHIN_DAYS + "(?:原料|物料|原材料)?批次(?:有哪些)?" + END);
-    private static final Pattern EXPIRY_MATERIALS = Pattern.compile(
-            "(?:查(?:询|看|一下)?\\h*)?(?:未来\\h*)?"
-                    + EXPIRY_WITHIN_DAYS + "(?:原料|物料|原材料)" + END);
     private static final String WEEK_EXPIRY = "(?:这周|本周)\\h*(?:还?有)?哪些(?:原料|物料|原材料)\\h*(?:快|即将|要)(?:过期|到期)(?:了)?";
     private static final Pattern EXPIRY_WEEK = Pattern.compile(WEEK_EXPIRY + END);
     private static final Pattern EXPIRY_DISPOSAL = Pattern.compile(
@@ -56,11 +53,6 @@ public final class BusinessQueryPhrases {
 
     public static boolean productionDemandQuestion(String input) {
         return input != null && PRODUCTION_DEMAND.matcher(input.strip()).matches();
-    }
-
-    public static Optional<Integer> futureExpiryDays(String input) {
-        return argument(EXPIRY_LIST, input).or(() -> argument(EXPIRY_MATERIALS, input))
-                .map(TimeNormalizationRules::parseCount);
     }
 
     public static Optional<String> costProductName(String input) {

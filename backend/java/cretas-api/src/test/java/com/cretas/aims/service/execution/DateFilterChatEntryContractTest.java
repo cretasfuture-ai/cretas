@@ -7,6 +7,7 @@ import com.cretas.aims.ai.tool.ToolRegistry;
 import com.cretas.aims.ai.tool.WriteGuardService;
 import com.cretas.aims.ai.tool.impl.crm.OrderListTool;
 import com.cretas.aims.ai.tool.impl.crm.OrderQueryTool;
+import com.cretas.aims.ai.tool.impl.material.MaterialBatchQueryTool;
 import com.cretas.aims.ai.tool.impl.material.MaterialExpiringAlertTool;
 import com.cretas.aims.ai.tool.impl.purchase.PurchaseOrderListTool;
 import com.cretas.aims.ai.tool.impl.quality.QualityCheckQueryTool;
@@ -20,6 +21,7 @@ import com.cretas.aims.dto.common.PageRequest;
 import com.cretas.aims.dto.common.PageResponse;
 import com.cretas.aims.dto.intent.IntentMatchResult;
 import com.cretas.aims.dto.material.MaterialBatchDTO;
+import com.cretas.aims.dto.material.MaterialBatchListFilter;
 import com.cretas.aims.entity.QualityInspection;
 import com.cretas.aims.entity.MaterialBatch;
 import com.cretas.aims.entity.RawMaterialType;
@@ -229,14 +231,21 @@ class DateFilterChatEntryContractTest {
             "需要，查一下 3 天内到期的批次|3|false",
             "查询7天内到期的原料|7|true",
             "7天内到期的原料|7|true",
-            "查未来七天内到期的原料|7|true"})
+            "查未来七天内到期的原料|7|true",
+            "未来7天内有哪些原料到期|7|true",
+            "7天内到期的批次|7|false",
+            "一周内过期的原料|7|true",
+            "查一下 7 天内到期的批次|7|false",
+            "未来三天有哪些临期原料|3|false",
+            "十天后有哪些原料到期|10|true"})
     void expiryQuestionPassesFutureWindowFromOriginalTextThroughDispatch(
             String question, int days, boolean recognitionBranch) throws Exception {
         LocalDate today = LocalDate.now();
         LocalDate end = today.plusDays(days);
         MaterialBatchService service = mock(MaterialBatchService.class);
         when(service.getExpiringBatches(F, days)).thenReturn(List.of(
-                expiryBatch("今日到期", today), expiryBatch("末日到期", end),
+                expiryBatch("今日到期", today), expiryBatch("后天批次", today.plusDays(2)),
+                expiryBatch("末日到期", end),
                 expiryBatch("超出范围", end.plusDays(1)), expiryBatch("昨日到期", today.minusDays(1))));
         MaterialExpiringAlertTool tool = withMapper(new MaterialExpiringAlertTool());
         ReflectionTestUtils.setField(tool, "materialBatchService", service);
@@ -247,10 +256,28 @@ class DateFilterChatEntryContractTest {
         assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
         verify(service).getExpiringBatches(F, days);
         String reply = new ResultFormatterServiceImpl().format(response);
-        assertThat(reply).contains(today + " 至 " + end, "今日到期", "末日到期", "8kg")
+        assertThat(reply).contains(today + " 至 " + end, "今日到期", "后天批次", "末日到期", "8kg")
                 .doesNotContain("超出范围", "昨日到期", "不能按时间筛选");
         assertThat(preprocessor.preprocessRulesOnly(days + " 天内已发货的订单").getPrimaryTimeRange()
                 .getEnd().toLocalDate()).isEqualTo(today);
+    }
+
+    @Test
+    void recentReceiptsKeepTheirPastWindowThroughDispatch() throws Exception {
+        LocalDate today = LocalDate.now();
+        LocalDate start = today.minusDays(6);
+        MaterialBatchService service = mock(MaterialBatchService.class);
+        MaterialBatchListFilter filter = new MaterialBatchListFilter(null, start, today);
+        when(service.getMaterialBatchList(eq(F), any(PageRequest.class), eq(filter)))
+                .thenReturn(PageResponse.of(List.of(), 1, 20, 0L));
+        MaterialBatchQueryTool tool = withMapper(new MaterialBatchQueryTool());
+        ReflectionTestUtils.setField(tool, "materialBatchService", service);
+
+        var response = run(tool, "MATERIAL_BATCH_QUERY", "MATERIAL",
+                "最近 7 天入库的批次", true, "factory_super_admin");
+
+        assertThat(response.getStatus()).as(response.getMessage()).isEqualTo("SUCCESS");
+        verify(service).getMaterialBatchList(eq(F), any(PageRequest.class), eq(filter));
     }
 
     private static MaterialBatchDTO expiryBatch(String name, LocalDate expiry) {
